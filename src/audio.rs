@@ -37,16 +37,33 @@ pub struct AudioHandle {
 }
 
 impl AudioHandle {
+    /// Clear the current buffer and begin appending microphone samples.
     pub fn start_recording(&self) {
         self.buffer.lock().clear();
         self.recording.store(true, Ordering::SeqCst);
     }
 
+    /// Stop recording and take ownership of the buffered samples.
+    ///
+    /// # Returns
+    ///
+    /// The captured mono PCM samples at [`TARGET_RATE`].
     pub fn stop_recording(&self) -> Vec<f32> {
         self.recording.store(false, Ordering::SeqCst);
         std::mem::take(&mut *self.buffer.lock())
     }
 
+    /// Copy samples recorded after `from`.
+    ///
+    /// # Panics
+    ///
+    /// This function does not intentionally panic; the start index is checked
+    /// before slicing the buffer.
+    ///
+    /// # Returns
+    ///
+    /// A snapshot of the buffer from `from` onward, or an empty vector if
+    /// `from` is past the current end.
     pub fn snapshot_from(&self, from: usize) -> Vec<f32> {
         let buf = self.buffer.lock();
         if from >= buf.len() {
@@ -56,6 +73,11 @@ impl AudioHandle {
         }
     }
 
+    /// Return the number of samples currently held in the shared buffer.
+    ///
+    /// # Returns
+    ///
+    /// The current buffer length in samples at [`TARGET_RATE`].
     pub fn len(&self) -> usize {
         self.buffer.lock().len()
     }
@@ -71,6 +93,22 @@ pub struct AudioCapture {
 }
 
 impl AudioCapture {
+    /// Open the default input device and start the capture stream.
+    ///
+    /// # Returns
+    ///
+    /// A live capture stream plus a cloneable [`AudioHandle`] for controlling
+    /// recording.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if no input device is available, the device exposes no
+    /// usable input format, the resampler cannot be created, or the stream
+    /// cannot be started.
+    ///
+    /// # Panics
+    ///
+    /// This function does not intentionally panic.
     pub fn open() -> Result<Self> {
         let host = cpal::default_host();
         let device = host

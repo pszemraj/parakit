@@ -58,6 +58,14 @@ pub struct Cleaner {
 
 impl Cleaner {
     /// Compile all default rules whose name is not in `disabled`.
+    ///
+    /// # Returns
+    ///
+    /// A cleaner containing the default-enabled rules that were not disabled.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any enabled rule contains an invalid regex pattern.
     pub fn new(disabled: &HashSet<String>) -> Result<Self> {
         let mut rules = Vec::with_capacity(DEFAULT_RULES.len());
         for r in DEFAULT_RULES {
@@ -75,6 +83,10 @@ impl Cleaner {
     }
 
     /// Apply all enabled rules in order. Idempotent for stable input.
+    ///
+    /// # Returns
+    ///
+    /// The cleaned transcript.
     pub fn clean(&self, input: &str) -> String {
         let mut s = input.to_string();
         for r in &self.rules {
@@ -87,10 +99,19 @@ impl Cleaner {
     }
 
     /// Number of active rules (after disable filtering).
+    ///
+    /// # Returns
+    ///
+    /// The number of active cleanup rules.
     pub fn len(&self) -> usize {
         self.rules.len()
     }
 
+    /// Report whether this cleaner has no active rules.
+    ///
+    /// # Returns
+    ///
+    /// `true` when no cleanup rules are active.
     pub fn is_empty(&self) -> bool {
         self.rules.is_empty()
     }
@@ -133,6 +154,14 @@ fn is_opening_punct(c: char) -> bool {
 
 /// Validate a single rule name exists in `DEFAULT_RULES`. Used by the CLI to
 /// fail fast on `--disable-rule typoname`.
+///
+/// # Returns
+///
+/// `Ok(())` when the rule name is present.
+///
+/// # Errors
+///
+/// Returns an error describing the unknown name when no matching rule exists.
 pub fn assert_rule_name_exists(name: &str) -> Result<()> {
     if DEFAULT_RULES.iter().any(|r| r.name == name) {
         Ok(())
@@ -175,6 +204,7 @@ pub fn print_rule_list() {
 //   - The final whitespace/punctuation cleanup MUST run last.
 // =============================================================================
 
+/// Built-in transcript cleanup rules in application order.
 pub const DEFAULT_RULES: &[Rule] = &[
     // -------------------------------------------------------------------------
     // Filler words at sentence start ("So, I think..." → "I think...")

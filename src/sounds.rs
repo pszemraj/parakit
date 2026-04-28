@@ -29,6 +29,15 @@ pub struct Sounds {
 }
 
 impl Sounds {
+    /// Start the sound cue thread when sound cues are enabled.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the cue thread cannot be spawned.
+    ///
+    /// # Returns
+    ///
+    /// A cloneable handle for sending non-blocking cue requests.
     pub fn new(enabled: bool) -> Self {
         if !enabled {
             return Self { tx: None };
@@ -97,14 +106,17 @@ impl Sounds {
         Self { tx: Some(tx) }
     }
 
+    /// Play the recording-start cue.
     pub fn start(&self) {
         self.send(Cue::Start);
     }
 
+    /// Play the successful-transcription cue.
     pub fn success(&self) {
         self.send(Cue::Success);
     }
 
+    /// Play the error cue.
     pub fn error(&self) {
         self.send(Cue::Error);
     }

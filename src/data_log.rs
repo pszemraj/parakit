@@ -9,9 +9,12 @@ use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+/// On-disk format used for transcription logs.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum LogFormat {
+    /// Newline-delimited JSON records.
     Jsonl,
+    /// Tab-separated records.
     Tsv,
 }
 
@@ -44,6 +47,7 @@ struct LogState {
     file: BufWriter<File>,
 }
 
+/// Synchronous transcription logger with lazy daily file rotation.
 pub struct DataLogger {
     dir: PathBuf,
     format: LogFormat,
@@ -51,6 +55,18 @@ pub struct DataLogger {
 }
 
 impl DataLogger {
+    /// Build a logger for `dir` using the requested format.
+    ///
+    /// Files are opened lazily on the first write.
+    ///
+    /// # Arguments
+    ///
+    /// * `dir` - Directory that will receive daily log files.
+    /// * `format` - File format to use for new log records.
+    ///
+    /// # Returns
+    ///
+    /// A logger ready to write records.
     pub fn new(dir: PathBuf, format: LogFormat) -> Self {
         Self {
             dir,
@@ -59,6 +75,18 @@ impl DataLogger {
         }
     }
 
+    /// Write one transcription record.
+    ///
+    /// Logging failures are printed to stderr and never propagated to the
+    /// caller, because logging must not crash or block dictation.
+    ///
+    /// # Arguments
+    ///
+    /// * `audio_secs` - Duration of the recorded utterance in seconds.
+    /// * `infer` - Time spent running model inference.
+    /// * `raw` - Raw transcript returned by the model.
+    /// * `cleaned` - Transcript after cleanup rules were applied.
+    /// * `rules_active` - Number of cleanup rules active for this transcript.
     pub fn log(
         &self,
         audio_secs: f32,

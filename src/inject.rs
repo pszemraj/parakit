@@ -20,6 +20,16 @@ pub struct Injector {
 }
 
 impl Injector {
+    /// Create an injector backed by the platform's synthetic keyboard API.
+    ///
+    /// # Returns
+    ///
+    /// A ready-to-use text injector.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `enigo` cannot initialize the platform keyboard
+    /// backend.
     pub fn new() -> Result<Self> {
         let enigo = Enigo::new(&Settings::default())
             .map_err(|e| anyhow::anyhow!("failed to init enigo: {e:?}"))?;
@@ -27,6 +37,15 @@ impl Injector {
     }
 
     /// Type the given text as synthetic keystrokes at the focused cursor.
+    ///
+    /// # Returns
+    ///
+    /// `Ok(())` when the text was accepted by the platform backend.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the platform backend rejects the synthetic typing
+    /// request.
     pub fn type_text(&mut self, text: &str) -> Result<()> {
         if text.is_empty() {
             return Ok(());

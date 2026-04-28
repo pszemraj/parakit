@@ -3,13 +3,25 @@
 use anyhow::{Context, Result};
 use std::path::Path;
 
+/// Transcription mode used by the daemon.
 #[derive(Clone, Copy, Debug)]
 pub enum Mode {
+    /// Transcribe the full utterance after the hotkey is released.
     Batch,
+    /// Emit partial transcripts while recording.
     Streaming { chunk_secs: f32 },
 }
 
 impl Mode {
+    /// Parse a CLI mode string.
+    ///
+    /// # Returns
+    ///
+    /// The parsed transcription mode.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for unknown modes or invalid streaming chunk sizes.
     pub fn parse(s: &str) -> Result<Self> {
         match s {
             "batch" => Ok(Mode::Batch),
@@ -36,6 +48,16 @@ pub struct Engine {
 }
 
 impl Engine {
+    /// Open a GGUF model through CrispASR.
+    ///
+    /// # Returns
+    ///
+    /// An initialized transcription engine.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the model path is not UTF-8 or CrispASR cannot load
+    /// the model.
     pub fn open<P: AsRef<Path>>(model_path: P) -> Result<Self> {
         let path_str = model_path
             .as_ref()
@@ -47,6 +69,15 @@ impl Engine {
         Ok(Self { session })
     }
 
+    /// Transcribe 16 kHz mono PCM samples.
+    ///
+    /// # Returns
+    ///
+    /// The concatenated transcript text from all returned segments.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if CrispASR rejects the audio or inference fails.
     pub fn transcribe(&self, pcm: &[f32]) -> Result<String> {
         let segments = self
             .session
