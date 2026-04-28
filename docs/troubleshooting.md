@@ -63,8 +63,14 @@ headers. The failing line usually looks like:
 fatal error: spirv/unified1/spirv.hpp: No such file or directory
 ```
 
-Install the distro package or SDK component that provides SPIR-V headers, then
-retry:
+Install the distro package or SDK component that provides SPIR-V headers. On
+Ubuntu/Debian, the missing package is usually `spirv-headers`:
+
+```bash
+sudo nala install spirv-headers
+```
+
+Then retry:
 
 ```bash
 cargo build --release --features vulkan

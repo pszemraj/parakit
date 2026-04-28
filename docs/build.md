@@ -19,9 +19,15 @@ audio, keyboard hooks, synthetic typing, CMake, and backend SDKs.
 
 For CUDA, install the CUDA Toolkit and ensure `nvcc` is on `PATH`.
 
-For Vulkan, install Vulkan headers, loader, tools, shader compiler, and SPIR-V
-headers. A system can have `glslc` and `vulkan.pc` installed and still fail if
-the SPIR-V headers are missing.
+For Vulkan on Ubuntu/Debian, install the loader/dev package, tools, shader
+compiler, SPIR-V tools, SPIR-V headers, and a driver:
+
+```bash
+sudo nala install libvulkan-dev vulkan-tools glslc spirv-tools spirv-headers mesa-vulkan-drivers
+```
+
+`spirv-tools` and `spirv-headers` are different packages. A system can have
+`glslc` and `vulkan.pc` installed and still fail if `spirv-headers` is missing.
 
 ## Cargo Features
 
