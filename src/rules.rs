@@ -107,10 +107,7 @@ pub fn assert_rule_name_exists(name: &str) -> Result<()> {
 
 /// Print all rules to stdout (used by `--list-rules`).
 pub fn print_rule_list() {
-    println!(
-        "{:<32}  {:<8}  {}",
-        "name", "default", "description"
-    );
+    println!("{:<32}  {:<8}  {}", "name", "default", "description");
     println!("{}", "-".repeat(80));
     for r in DEFAULT_RULES {
         println!(
@@ -620,10 +617,7 @@ mod tests {
     #[test]
     fn um_uh_removed() {
         let c = cleaner_with_all_defaults();
-        assert_eq!(
-            c.clean("I, um, think this works"),
-            "I think this works"
-        );
+        assert_eq!(c.clean("I, um, think this works"), "I think this works");
         assert_eq!(c.clean("uh, hello there"), "hello there");
     }
 
@@ -645,7 +639,10 @@ mod tests {
     #[test]
     fn cause_becomes_because() {
         let c = cleaner_with_all_defaults();
-        assert_eq!(c.clean("I left 'cause it was late"), "I left because it was late");
+        assert_eq!(
+            c.clean("I left 'cause it was late"),
+            "I left because it was late"
+        );
     }
 
     #[test]

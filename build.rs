@@ -46,7 +46,10 @@ fn main() {
     // 3. Locate the CrispASR source tree.
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
     let src_dir = locate_source(&manifest_dir);
-    println!("cargo:rerun-if-changed={}/CMakeLists.txt", src_dir.display());
+    println!(
+        "cargo:rerun-if-changed={}/CMakeLists.txt",
+        src_dir.display()
+    );
 
     // 4. Run cmake. The `cmake` crate handles incremental builds, MSVC
     //    detection on Windows, generator selection, parallelism, and
@@ -130,7 +133,11 @@ fn main() {
 
 /// Returns true if the named cargo feature is enabled.
 fn cargo_feature(name: &str) -> bool {
-    env::var(format!("CARGO_FEATURE_{}", name.to_uppercase().replace('-', "_"))).is_ok()
+    env::var(format!(
+        "CARGO_FEATURE_{}",
+        name.to_uppercase().replace('-', "_")
+    ))
+    .is_ok()
 }
 
 /// Find the CrispASR source. Order:
@@ -156,9 +163,17 @@ fn locate_source(manifest_dir: &Path) -> PathBuf {
     }
 
     // Try to init the submodule.
-    eprintln!("parakit build.rs: vendor/CrispASR is empty, running `git submodule update --init`...");
+    eprintln!(
+        "parakit build.rs: vendor/CrispASR is empty, running `git submodule update --init`..."
+    );
     let status = Command::new("git")
-        .args(["submodule", "update", "--init", "--recursive", "vendor/CrispASR"])
+        .args([
+            "submodule",
+            "update",
+            "--init",
+            "--recursive",
+            "vendor/CrispASR",
+        ])
         .current_dir(manifest_dir)
         .status();
 
