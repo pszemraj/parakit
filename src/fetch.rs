@@ -11,7 +11,8 @@ use reqwest::header::{HeaderMap, HeaderValue, RANGE, USER_AGENT};
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::ffi::OsStr;
+use std::env;
+use std::ffi::{OsStr, OsString};
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -455,13 +456,10 @@ fn ensure_q8(
         options,
         format_args!("parakit: quantizing F16 GGUF to Q8_0"),
     );
-    run_command(
-        Command::new(quantize_bin)
-            .arg(&paths.f16)
-            .arg(&paths.q8)
-            .arg("q8_0"),
-        "quantize GGUF to Q8_0",
-    )?;
+    let mut command = Command::new(quantize_bin);
+    command.arg(&paths.f16).arg(&paths.q8).arg("q8_0");
+    add_bundled_library_path(&mut command, quantize_bin);
+    run_command(&mut command, "quantize GGUF to Q8_0")?;
 
     let q8_sha = hash_file(&paths.q8)?;
     manifest.q8_input_sha256 = Some(f16_sha.to_string());
@@ -627,6 +625,40 @@ fn quantize_version(quantize_bin: &Path, crispasr_sha: &str) -> String {
     format!("crispasr {crispasr_sha}; binary-mtime {metadata}")
 }
 
+fn add_bundled_library_path(command: &mut Command, executable: &Path) {
+    let Some(install_dir) = executable.parent().and_then(Path::parent) else {
+        return;
+    };
+    let lib_dir = install_dir.join("lib");
+    if lib_dir.is_dir() {
+        prepend_env_path(command, dynamic_library_path_var(), &lib_dir);
+    }
+}
+
+fn dynamic_library_path_var() -> &'static str {
+    if cfg!(target_os = "windows") {
+        "PATH"
+    } else if cfg!(target_os = "macos") {
+        "DYLD_LIBRARY_PATH"
+    } else {
+        "LD_LIBRARY_PATH"
+    }
+}
+
+fn prepend_env_path(command: &mut Command, key: &str, dir: &Path) {
+    if let Some(joined) = joined_path_with_prepended(dir, env::var_os(key)) {
+        command.env(key, joined);
+    }
+}
+
+fn joined_path_with_prepended(dir: &Path, existing: Option<OsString>) -> Option<OsString> {
+    let mut paths = vec![dir.to_path_buf()];
+    if let Some(existing) = existing {
+        paths.extend(env::split_paths(&existing));
+    }
+    env::join_paths(paths).ok()
+}
+
 fn run_command(command: &mut Command, label: &str) -> Result<()> {
     let status = command
         .status()
@@ -712,8 +744,8 @@ where
 }
 
 fn find_on_path(name: String) -> Option<PathBuf> {
-    let paths = std::env::var_os("PATH")?;
-    std::env::split_paths(&paths)
+    let paths = env::var_os("PATH")?;
+    env::split_paths(&paths)
         .map(|dir| dir.join(&name))
         .find(|path| path.is_file())
 }
@@ -783,5 +815,18 @@ mod tests {
 
         assert!(!src.exists());
         assert_eq!(std::fs::read(&dst).unwrap(), b"new");
+    }
+
+    #[test]
+    fn prepend_env_path_keeps_existing_entries() {
+        let dir = Path::new("target/tmp/parakit-fetch-tests/lib");
+        let existing =
+            env::join_paths([Path::new("target/tmp/a"), Path::new("target/tmp/b")]).unwrap();
+        let joined = joined_path_with_prepended(dir, Some(existing)).unwrap();
+        let paths: Vec<_> = env::split_paths(&joined).collect();
+
+        assert_eq!(paths[0], dir);
+        assert_eq!(paths[1], Path::new("target/tmp/a"));
+        assert_eq!(paths[2], Path::new("target/tmp/b"));
     }
 }

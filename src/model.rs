@@ -21,7 +21,7 @@ pub const SOURCE_GGUF_QUANT: &str = "F16";
 pub const HOSTED_Q8_URL: &str = "https://huggingface.co/pszemraj/parakeet-tdt-0.6b-v3-gguf/resolve/main/parakeet-tdt-0.6b-v3-Q8_0.gguf";
 /// Expected SHA256 for the default hosted Q8_0 GGUF.
 pub const HOSTED_Q8_SHA256: &str =
-    "e8bc983c89342a1f36a5bfa1a7a2dc6fab8f9ebdc2e305738f36e3ff60cbc313";
+    "10f38dd9ce69ce555a413d9b4201ae5d93c2d7cadc91a285f4bfeeec6eee635a";
 /// File name for the downloaded official NeMo checkpoint.
 pub const NEMO_FILENAME: &str = "parakeet-tdt-0.6b-v3.nemo";
 /// File name for the intermediate F16 GGUF.

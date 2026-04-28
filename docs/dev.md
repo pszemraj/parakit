@@ -72,13 +72,16 @@ update `HOSTED_Q8_SHA256` in `src/model.rs` if the Q8_0 bytes changed.
 
 ## Local Artifact Notes
 
-The ignored local file `models/parakeet-tdt-0.6b-v3-q8_0.gguf` was present
-during the hosted-fetch migration and appeared to be a real 711 MB Q8_0 GGUF.
-Its SHA256 was:
+The source-rebuilt upload candidates are written under
+`target/tmp/source-cache/parakit/models/` when running:
 
-```text
-e8bc983c89342a1f36a5bfa1a7a2dc6fab8f9ebdc2e305738f36e3ff60cbc313
+```bash
+XDG_CACHE_HOME=$PWD/target/tmp/source-cache parakit fetch --from-source --keep-f16 --keep-nemo
 ```
+
+The source-built Q8_0 should be uploaded with the F16 artifact. The older
+ignored local file `models/parakeet-tdt-0.6b-v3-q8_0.gguf` is not the canonical
+hosted artifact.
 
 The file `target/tmp/gguf-tests/q8.gguf` is only a tiny unit-test fixture for
 GGUF dtype parsing.
