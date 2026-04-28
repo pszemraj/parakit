@@ -12,11 +12,12 @@ parakit doctor
 parakit
 ```
 
-`parakit doctor` checks desktop hotkey permissions without downloading or
-loading a model. On the first real run, parakit downloads the default Q8_0 GGUF
-into the model cache before opening the microphone. Confirm that the model
-loads, `Ctrl+Space` records, text injection works, and errors are visible in the
-terminal.
+`parakit doctor` checks the active hotkey backend without downloading or
+loading a model. On Linux/X11 it probes desktop hotkey registration first and
+reports evdev access only as a fallback. On the first real run, parakit
+downloads the default Q8_0 GGUF into the model cache before opening the
+microphone. Confirm that the model loads, `Ctrl+Space` records, text injection
+works, and errors are visible in the terminal.
 
 ## Background Launch
 

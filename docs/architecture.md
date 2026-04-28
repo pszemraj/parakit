@@ -8,7 +8,7 @@ parakit keeps the daemon thread-based. There is no async runtime.
 main thread
   parses CLI
   opens AudioCapture
-  runs rdev::grab
+  runs the hotkey backend
   sends Start/Stop/StreamChunk events
 
 cpal callback thread
@@ -57,8 +57,11 @@ The layout is driven by platform and library constraints:
   its own thread.
 - `crispasr::Session` is `Send` but not `Sync`, so the worker owns `Engine`
   directly. Do not wrap it in `Arc<Engine>`.
-- `rdev::grab` is used instead of `rdev::listen` so the literal Space key can
-  be suppressed before it reaches the focused application.
+- Linux/X11 uses a desktop hotkey registration first. The low-level
+  `rdev::grab` backend remains available as a fallback when evdev input access
+  is explicitly granted.
+- The active hotkey backend must suppress the literal Space key before it
+  reaches the focused application.
 
 Cross-thread communication uses atomics, mutex-protected buffers, and
 crossbeam channels.

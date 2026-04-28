@@ -24,7 +24,7 @@ export PATH="$HOME/.cargo/bin:$PATH"
 
 parakit doctor
 
-# First run checks hotkey permissions, then downloads the default Q8_0 GGUF.
+# First run checks the hotkey backend, then downloads the default Q8_0 GGUF.
 parakit
 ```
 
@@ -88,7 +88,10 @@ parakit --test-rules "So, um, the the cat ran like, you know, fast"
 ```
 
 The hotkey is fixed at `Ctrl+Space`. The literal space is suppressed before it
-reaches the focused application.
+reaches the focused application. On Linux/X11, parakit uses a desktop hotkey
+registration first, so ordinary X11 sessions do not need `/dev/input` access.
+The low-level evdev backend is only a fallback; it requires explicit input
+device permissions.
 
 ## Model Setup
 
@@ -143,6 +146,6 @@ packages in `requirements-convert.txt`.
 
 MIT. See [`LICENSE`](LICENSE).
 
-`crispasr`, `cpal`, `rdev`, `enigo`, `rodio`, `rubato`, `regex`, `clap`,
-and other dependencies have their own licenses (mostly MIT/Apache-2.0).
-The bundled CrispASR library is also MIT-licensed.
+`crispasr`, `cpal`, `global-hotkey`, `rdev`, `enigo`, `rodio`, `rubato`,
+`regex`, `clap`, and other dependencies have their own licenses (mostly
+MIT/Apache-2.0). The bundled CrispASR library is also MIT-licensed.

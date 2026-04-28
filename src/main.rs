@@ -14,9 +14,9 @@
 //! In streaming mode there's an additional periodic Tick that sends partial
 //! chunks to the worker while recording is active.
 //!
-//! NOTE: rdev::grab on Linux requires X11 (Wayland blocks synthetic input
-//! interception). On macOS it requires Accessibility permission. Windows
-//! works out of the box.
+//! On Linux/X11 the daemon uses a desktop hotkey registration first. The
+//! low-level rdev grab remains as a fallback for sessions that explicitly
+//! grant evdev input access.
 
 mod daemon;
 
@@ -329,14 +329,15 @@ fn model_dtype_label(path: &std::path::Path) -> String {
 // Hotkey grab
 // =============================================================================
 //
-// rdev::grab gives us a callback per event with the option to suppress
-// passthrough by returning None. We track Ctrl modifier state and Space
-// edges. When Ctrl is held and Space is pressed, we start; when Space is
-// released (regardless of Ctrl), we stop.
+// Linux/X11 first uses a desktop hotkey registration. That avoids direct
+// /dev/input access on ordinary desktop sessions. rdev::grab remains the
+// fallback because it can intercept before applications receive events, but on
+// Linux it requires explicit evdev permissions.
 //
 // Static state is unfortunately required because rdev::grab takes a
 // `Fn(Event) -> Option<Event>` and runs it across multiple thread contexts
-// in the listener implementation. We use atomics + a shared sender.
+// in the listener implementation. We use atomics + a shared sender. The X11
+// desktop backend reuses the same state helpers so behavior stays identical.
 
 use once_cell::sync::OnceCell;
 static GRAB_TX: OnceCell<Sender<Event_>> = OnceCell::new();
@@ -344,6 +345,69 @@ static GRAB_AUDIO: OnceCell<AudioHandle> = OnceCell::new();
 static CTRL_HELD: AtomicBool = AtomicBool::new(false);
 static SPACE_HELD: AtomicBool = AtomicBool::new(false);
 
+#[cfg(target_os = "linux")]
+fn run_grab_loop(tx: Sender<Event_>, audio: AudioHandle) {
+    let _ = GRAB_TX.set(tx);
+    let _ = GRAB_AUDIO.set(audio);
+
+    if daemon::preflight::linux_x11_desktop_hotkey_candidate() {
+        match run_x11_desktop_hotkey_loop() {
+            Ok(()) => return,
+            Err(err) => {
+                eprintln!("parakit: X11 desktop hotkey backend failed: {err:#}");
+                if !daemon::preflight::linux_evdev_fallback_available() {
+                    eprintln!("{}", linux_no_hotkey_backend_help());
+                    std::process::exit(2);
+                }
+                eprintln!("parakit: falling back to rdev evdev grab");
+            }
+        }
+    }
+
+    if let Err(e) = rdev::grab(grab_callback) {
+        eprintln!("parakit: rdev::grab failed: {e:?}\n{}", grab_failure_help());
+        std::process::exit(2);
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn run_x11_desktop_hotkey_loop() -> Result<()> {
+    use global_hotkey::hotkey::{Code, HotKey, Modifiers};
+    use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
+
+    let manager = GlobalHotKeyManager::new().context("could not create global hotkey manager")?;
+    let hotkey = HotKey::new(Some(Modifiers::CONTROL), Code::Space);
+    manager
+        .register(hotkey)
+        .context("could not register Ctrl+Space; another desktop shortcut may already own it")?;
+
+    let receiver = GlobalHotKeyEvent::receiver();
+    loop {
+        let event = receiver
+            .recv()
+            .context("global hotkey event channel closed")?;
+        if event.id != hotkey.id() {
+            continue;
+        }
+
+        match event.state {
+            HotKeyState::Pressed => {
+                CTRL_HELD.store(true, Ordering::SeqCst);
+                if !SPACE_HELD.swap(true, Ordering::SeqCst) {
+                    start_hotkey_recording();
+                }
+            }
+            HotKeyState::Released => {
+                CTRL_HELD.store(false, Ordering::SeqCst);
+                if SPACE_HELD.swap(false, Ordering::SeqCst) {
+                    stop_hotkey_recording();
+                }
+            }
+        }
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
 fn run_grab_loop(tx: Sender<Event_>, audio: AudioHandle) {
     let _ = GRAB_TX.set(tx);
     let _ = GRAB_AUDIO.set(audio);
@@ -355,17 +419,35 @@ fn run_grab_loop(tx: Sender<Event_>, audio: AudioHandle) {
 }
 
 #[cfg(target_os = "linux")]
+fn linux_no_hotkey_backend_help() -> String {
+    let session = std::env::var("XDG_SESSION_TYPE").unwrap_or_else(|_| "unknown".to_string());
+    let display = std::env::var("DISPLAY").unwrap_or_else(|_| "<unset>".to_string());
+    let user = std::env::var("USER").unwrap_or_else(|_| "$USER".to_string());
+
+    format!(
+        "No usable Linux hotkey backend is available.\n\
+         Current session: XDG_SESSION_TYPE={session}, DISPLAY={display}\n\
+         Preferred path: use an Xorg/X11 session so parakit can register\n\
+         Ctrl+Space through the desktop without /dev/input access.\n\
+         Fallback path: grant evdev access, then log out completely and back in:\n\
+           sudo usermod -aG input {user}\n\
+         If Ctrl+Space is already owned by the desktop or input method, disable\n\
+         that shortcut and restart parakit."
+    )
+}
+
+#[cfg(target_os = "linux")]
 fn grab_failure_help() -> String {
     let session = std::env::var("XDG_SESSION_TYPE").unwrap_or_else(|_| "unknown".to_string());
     let display = std::env::var("DISPLAY").unwrap_or_else(|_| "<unset>".to_string());
     let user = std::env::var("USER").unwrap_or_else(|_| "$USER".to_string());
 
     format!(
-        "Linux hotkey capture requires X11 plus read access to /dev/input/event*.\n\
+        "The evdev fallback requires read access to /dev/input/event*.\n\
          Current session: XDG_SESSION_TYPE={session}, DISPLAY={display}\n\
-         If the session is Wayland, log into an Xorg/X11 session.\n\
-         If the session is X11 and this is PermissionDenied, add your user to\n\
-         the input group, then log out completely and log back in:\n\
+         Prefer an Xorg/X11 session so parakit can use the desktop hotkey\n\
+         backend without evdev permissions. Otherwise add your user to the\n\
+         input group, then log out completely and log back in:\n\
            sudo usermod -aG input {user}\n\
          Verify the new login session with:\n\
            id -nG | tr ' ' '\\n' | grep '^input$'\n\
@@ -391,6 +473,21 @@ fn grab_failure_help() -> String {
         .to_string()
 }
 
+fn start_hotkey_recording() {
+    if let Some(audio) = GRAB_AUDIO.get() {
+        audio.start_recording();
+    }
+    if let Some(tx) = GRAB_TX.get() {
+        let _ = tx.send(Event_::Start);
+    }
+}
+
+fn stop_hotkey_recording() {
+    if let Some(tx) = GRAB_TX.get() {
+        let _ = tx.send(Event_::Stop);
+    }
+}
+
 fn grab_callback(event: Event) -> Option<Event> {
     match event.event_type {
         EventType::KeyPress(Key::ControlLeft) | EventType::KeyPress(Key::ControlRight) => {
@@ -401,9 +498,7 @@ fn grab_callback(event: Event) -> Option<Event> {
             CTRL_HELD.store(false, Ordering::SeqCst);
             // If user released Ctrl while still holding Space, end the recording.
             if SPACE_HELD.swap(false, Ordering::SeqCst) {
-                if let Some(tx) = GRAB_TX.get() {
-                    let _ = tx.send(Event_::Stop);
-                }
+                stop_hotkey_recording();
                 return None;
             }
             Some(event)
@@ -411,12 +506,7 @@ fn grab_callback(event: Event) -> Option<Event> {
         EventType::KeyPress(Key::Space) => {
             if CTRL_HELD.load(Ordering::SeqCst) {
                 if !SPACE_HELD.swap(true, Ordering::SeqCst) {
-                    if let Some(audio) = GRAB_AUDIO.get() {
-                        audio.start_recording();
-                    }
-                    if let Some(tx) = GRAB_TX.get() {
-                        let _ = tx.send(Event_::Start);
-                    }
+                    start_hotkey_recording();
                 }
                 return None; // suppress so the literal space doesn't reach apps
             }
@@ -424,9 +514,7 @@ fn grab_callback(event: Event) -> Option<Event> {
         }
         EventType::KeyRelease(Key::Space) => {
             if SPACE_HELD.swap(false, Ordering::SeqCst) {
-                if let Some(tx) = GRAB_TX.get() {
-                    let _ = tx.send(Event_::Stop);
-                }
+                stop_hotkey_recording();
                 return None;
             }
             Some(event)

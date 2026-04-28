@@ -1,6 +1,6 @@
 # Troubleshooting
 
-## `rdev::grab` Fails
+## Hotkey Does Not Start
 
 Run the preflight check first:
 
@@ -8,8 +8,22 @@ Run the preflight check first:
 parakit doctor
 ```
 
-On Linux, the daemon requires X11. Wayland compositors generally block global
-key interception and synthetic input from regular client applications.
+On Linux, the preferred path is an X11 desktop hotkey registration. This avoids
+direct `/dev/input/event*` access and is the path ordinary GNOME/KDE/X11 users
+should get.
+
+A healthy X11 setup looks like:
+
+```text
+primary:        X11 desktop hotkey
+primary status: OK
+fallback:       rdev evdev grab
+status:         OK (desktop hotkey backend)
+```
+
+If `primary status` says the shortcut is unavailable, another desktop shortcut
+or input method may already own `Ctrl+Space`. Disable that binding and rerun
+`parakit doctor`.
 
 Check the session type:
 
@@ -17,12 +31,13 @@ Check the session type:
 echo "$XDG_SESSION_TYPE"
 ```
 
-Use an X11 session for the daemon.
+Use an X11 session when possible. Wayland compositors generally block global
+hotkeys and synthetic input from regular client applications unless the
+compositor exposes its own shortcut mechanism.
 
-If the session is X11 and `parakit doctor` reports `permission denied` on
-`/dev/input/event*`, the hotkey backend cannot read low-level input devices.
-Add the desktop user to the `input` group, then start a completely new login
-session:
+If the X11 backend is unavailable or you need the low-level fallback,
+`rdev::grab` must read evdev devices. Add the desktop user to the `input`
+group, then start a completely new login session:
 
 ```bash
 sudo usermod -aG input "$USER"
@@ -45,8 +60,9 @@ terminal and the built binary.
 
 ## Literal Space Appears In The Target App
 
-parakit uses `rdev::grab`, not `rdev::listen`, so `Ctrl+Space` should suppress
-the literal Space event. If a Space appears:
+The X11 desktop backend and the evdev fallback both register an intercepting
+hotkey, so `Ctrl+Space` should suppress the literal Space event. If a Space
+appears:
 
 - confirm another process is not also handling the same hotkey;
 - confirm the daemon is the process receiving keyboard events;
