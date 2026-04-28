@@ -1,0 +1,2 @@
+vendor/** linguist-vendored
+scripts/transcribe_nemo_parakeet.py linguist-vendored

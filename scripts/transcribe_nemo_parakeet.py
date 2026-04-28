@@ -12,10 +12,16 @@ import json
 import time
 from pathlib import Path
 
+import nemo.collections.asr as nemo_asr
+import torch
+
+DEFAULT_MODEL = "nvidia/parakeet-tdt-0.6b-v3"
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Transcribe WAV files with NVIDIA NeMo Parakeet."
+        description="Transcribe WAV files with NVIDIA NeMo Parakeet.",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument(
         "audio",
@@ -25,7 +31,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--model",
-        default="nvidia/parakeet-tdt-0.6b-v3",
+        default=DEFAULT_MODEL,
         help="NeMo/Hugging Face model name.",
     )
     parser.add_argument(
@@ -50,9 +56,6 @@ def extract_text(result: object) -> str:
 
 def main() -> None:
     args = parse_args()
-
-    import torch
-    import nemo.collections.asr as nemo_asr
 
     use_cuda = args.device == "cuda" or (
         args.device == "auto" and torch.cuda.is_available()
