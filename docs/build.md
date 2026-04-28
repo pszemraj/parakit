@@ -34,10 +34,10 @@ sudo nala install libvulkan-dev vulkan-tools glslc spirv-tools spirv-headers mes
 | Command | Behavior |
 | --- | --- |
 | `cargo build --release` | CPU-only bundled CrispASR build. |
-| `cargo install --path . --locked` | Installs the release binary to Cargo's bin directory, usually `~/.cargo/bin`. |
-| `cargo install --path . --locked --features cuda` | Installs a CUDA-enabled release binary. |
-| `cargo install --path . --locked --features vulkan` | Installs a Vulkan-enabled release binary. |
-| `cargo install --path . --locked --features metal` | Installs a Metal-enabled release binary on macOS. |
+| `cargo install --path .` | Installs the release binary to Cargo's bin directory, usually `~/.cargo/bin`. |
+| `cargo install --path . --features cuda` | Installs a CUDA-enabled release binary. |
+| `cargo install --path . --features vulkan` | Installs a Vulkan-enabled release binary. |
+| `cargo install --path . --features metal` | Installs a Metal-enabled release binary on macOS. |
 | `cargo build --release --features cuda` | Builds ggml with CUDA support. |
 | `cargo build --release --features vulkan` | Builds ggml with Vulkan support. |
 | `cargo build --release --features metal` | Builds ggml with Metal support on macOS. |
@@ -47,6 +47,11 @@ sudo nala install libvulkan-dev vulkan-tools glslc spirv-tools spirv-headers mes
 The `daemon` feature is enabled by default and includes desktop/audio
 dependencies. The file transcription example remains useful on machines where
 daemon dependencies are not installed.
+
+Add `--locked` for CI or local reproducibility checks when you want Cargo to
+use exactly the dependency versions already recorded in `Cargo.lock`. Leave it
+off for the normal user install path so Cargo can resolve platform-specific
+lockfile drift instead of failing before build.
 
 ## Bundled CrispASR
 

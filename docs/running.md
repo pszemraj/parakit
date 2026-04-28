@@ -25,7 +25,7 @@ parakit --quiet &
 Install the binary onto `PATH` from the repository:
 
 ```bash
-cargo install --path . --locked
+cargo install --path .
 ```
 
 Cargo installs to `~/.cargo/bin` by default. Add it to `PATH` if needed:

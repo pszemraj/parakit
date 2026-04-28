@@ -19,7 +19,7 @@ Repository: [github.com/pszemraj/parakit](https://github.com/pszemraj/parakit)
 git clone --recurse-submodules https://github.com/pszemraj/parakit.git
 cd parakit
 
-cargo install --path . --locked
+cargo install --path .
 export PATH="$HOME/.cargo/bin:$PATH"
 
 # One-time Python deps for converting NVIDIA's official .nemo checkpoint.
@@ -34,9 +34,9 @@ parakit
 
 `cargo install --path .` builds the release binary and installs it into
 Cargo's binary directory, usually `~/.cargo/bin`. Use
-`cargo install --path . --locked --features cuda` for CUDA; replace `cuda`
-with `vulkan` or `metal` for those backends. Native dependencies and backend
-notes are in [docs/build.md](docs/build.md).
+`cargo install --path . --features cuda` for CUDA; replace `cuda` with
+`vulkan` or `metal` for those backends. Native dependencies and backend notes
+are in [docs/build.md](docs/build.md).
 
 Foreground startup prints the resolved model and waits for the hotkey:
 
