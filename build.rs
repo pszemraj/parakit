@@ -14,7 +14,8 @@
 //!     without needing LD_LIBRARY_PATH.
 //!
 //! Escape hatches (any one of these skips the bundled build):
-//!   - `--no-default-features`              : the user takes responsibility.
+//!   - `--no-default-features`              : the user takes responsibility for
+//!     providing libcrispasr; add `--features daemon` when building the daemon.
 //!   - `CRISPASR_LIB_DIR=/path/to/libdir`   : link-search path override.
 //!   - `CRISPASR_SRC_DIR=/path/to/source`   : use this checkout instead of the vendored source.
 
@@ -232,8 +233,8 @@ fn locate_source(manifest_dir: &Path) -> PathBuf {
                 git clone https://github.com/CrispStrobe/CrispASR vendor/CrispASR\n\
            3. Point at an existing checkout:\n\
                 CRISPASR_SRC_DIR=/path/to/CrispASR cargo build\n\
-           4. Use a system-installed library and skip the build entirely:\n\
-                cargo build --no-default-features\n\
+           4. Use a system-installed library and skip the bundled build:\n\
+                cargo build --no-default-features --features daemon\n\
               (or set CRISPASR_LIB_DIR=/path/to/libdir to override the search path)\n"
     );
 }

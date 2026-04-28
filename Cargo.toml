@@ -2,9 +2,14 @@
 name = "parakit"
 version = "0.1.0"
 edition = "2021"
-description = "Push-to-talk dictation daemon backed by CrispASR / Parakeet-TDT."
+rust-version = "1.87"
+description = "Push-to-talk desktop dictation daemon backed by NVIDIA Parakeet through CrispASR."
 license = "MIT"
+readme = "README.md"
 repository = "https://github.com/pszemraj/parakit.git"
+keywords = ["asr", "dictation", "parakeet", "speech-to-text"]
+categories = ["command-line-utilities", "multimedia::audio"]
+publish = false
 default-run = "parakit"
 
 [[bin]]
@@ -17,12 +22,9 @@ required-features = ["daemon"]
 clap = { version = "4.5", features = ["derive"] }
 directories = "6"
 
-# Inference — the actual model runtime.
-# CrispASR's Rust crates aren't published to crates.io, so we pull them
-# from upstream. Recommended pin via the bundled submodule:
+# Inference runtime. CrispASR's Rust crates are supplied by the pinned
+# submodule rather than crates.io.
 crispasr = { path = "vendor/CrispASR/crispasr", default-features = false }
-# Production alternative if you don't want to vendor the source:
-#   crispasr = { git = "https://github.com/CrispStrobe/CrispASR.git", tag = "v0.5.3", default-features = false }
 
 # Audio capture
 cpal = { version = "0.15", optional = true }
@@ -72,9 +74,9 @@ default = ["bundled", "daemon"]
 daemon = ["dep:cpal", "dep:enigo", "dep:rdev", "dep:rodio"]
 
 # Build libcrispasr from `vendor/CrispASR` via cmake. On by default.
-# Disable with `--no-default-features` if you have libcrispasr installed
-# system-wide (e.g. via `make install` from a separate CrispASR checkout)
-# or want to point at a build via CRISPASR_LIB_DIR.
+# Disable with `--no-default-features --features daemon` to build the daemon
+# against an existing libcrispasr installation. Set CRISPASR_LIB_DIR if the
+# library is not in the platform linker search path.
 bundled = []
 
 # GPU backends. Each implies `bundled` because crispasr-sys does NOT

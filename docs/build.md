@@ -1,8 +1,8 @@
 # Build
 
-parakit is a Rust binary that links to CrispASR. With the default `bundled`
-feature, `build.rs` builds the vendored CrispASR submodule with CMake and links
-the resulting shared libraries into the Rust binary.
+parakit is a Rust 1.87+ binary that links to CrispASR. With the default
+`bundled` feature, `build.rs` builds the vendored CrispASR submodule with CMake
+and links the resulting shared libraries into the Rust binary.
 
 ## Native Dependencies
 
@@ -37,7 +37,8 @@ sudo nala install libvulkan-dev vulkan-tools glslc spirv-tools spirv-headers mes
 | `cargo build --release --features cuda` | Builds ggml with CUDA support. |
 | `cargo build --release --features vulkan` | Builds ggml with Vulkan support. |
 | `cargo build --release --features metal` | Builds ggml with Metal support on macOS. |
-| `cargo build --release --no-default-features` | Links against an existing system `libcrispasr`; set `CRISPASR_LIB_DIR` if needed. |
+| `cargo build --release --no-default-features --features daemon` | Builds the daemon against an existing `libcrispasr`; set `CRISPASR_LIB_DIR` if needed. |
+| `cargo build --release --no-default-features --example transcribe-file` | Builds only the file transcription helper against an existing `libcrispasr`. |
 
 The `daemon` feature is enabled by default and includes desktop/audio
 dependencies. The file transcription example remains useful on machines where
