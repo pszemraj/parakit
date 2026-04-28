@@ -18,9 +18,7 @@
 //! interception). On macOS it requires Accessibility permission. Windows
 //! works out of the box.
 
-mod audio;
-mod inject;
-mod sounds;
+mod daemon;
 
 use anyhow::{Context, Result};
 use clap::Parser;
@@ -36,9 +34,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crate::audio::{AudioCapture, AudioHandle, TARGET_RATE};
-use crate::inject::Injector;
-use crate::sounds::Sounds;
+use crate::daemon::audio::{AudioCapture, AudioHandle, TARGET_RATE};
+use crate::daemon::inject::Injector;
+use crate::daemon::sounds::Sounds;
 
 // =============================================================================
 // CLI

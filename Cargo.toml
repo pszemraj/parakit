@@ -12,10 +12,6 @@ name = "parakit"
 path = "src/main.rs"
 required-features = ["daemon"]
 
-[[example]]
-name = "transcribe-file"
-path = "tools/transcribe-file.rs"
-
 [dependencies]
 # CLI parsing
 clap = { version = "4.5", features = ["derive"] }

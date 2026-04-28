@@ -6,7 +6,7 @@ target user.
 
 ## File-Based parakit Transcription
 
-Use the Rust file helper to run the same CrispASR engine and cleanup pipeline
+Use the Rust example to run the same CrispASR engine and cleanup pipeline
 without the hotkey daemon:
 
 ```bash

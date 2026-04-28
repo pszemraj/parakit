@@ -68,13 +68,13 @@ crossbeam channels.
 | Module | Responsibility |
 | --- | --- |
 | `src/main.rs` | CLI, hotkey state machine, worker thread, streaming ticker. |
-| `src/audio.rs` | Microphone capture, mono mixdown, resampling, shared buffer. |
+| `src/daemon/audio.rs` | Microphone capture, mono mixdown, resampling, shared buffer. |
 | `src/inference.rs` | CrispASR session wrapper and short-audio padding. |
 | `src/rules.rs` | Built-in transcript cleanup rules. |
-| `src/inject.rs` | Synthetic typing through Enigo. |
-| `src/sounds.rs` | Generated audio cue thread. |
+| `src/daemon/inject.rs` | Synthetic typing through Enigo. |
+| `src/daemon/sounds.rs` | Generated audio cue thread. |
 | `src/data_log.rs` | JSONL/TSV transcription logging. |
-| `tools/transcribe-file.rs` | File-based smoke and quality checks. |
+| `examples/transcribe-file.rs` | File-based smoke and quality checks. |
 | `scripts/transcribe_nemo_parakeet.py` | NeMo reference transcription helper. |
 
 ## Failure Policy
