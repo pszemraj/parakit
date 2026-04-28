@@ -98,6 +98,8 @@ https://huggingface.co/pszemraj/parakeet-tdt-0.6b-v3-gguf
 ```
 
 The downloaded GGUF is SHA256-verified before it is accepted.
+The same hosted repository can also hold BF16 and other quantized GGUF files;
+the current startup default remains Q8_0.
 
 The final model is cached at:
 

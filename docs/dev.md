@@ -16,6 +16,39 @@ model setup.
 `-m <path>` is the escape hatch for local experiments and always disables
 automatic model fetch.
 
+## Hosted Repo Layout
+
+The hosted Hugging Face repo should use standard GGUF file names:
+
+```text
+parakeet-tdt-0.6b-v3-BF16.gguf
+parakeet-tdt-0.6b-v3-Q8_0.gguf
+parakeet-tdt-0.6b-v3-Q6_K.gguf
+parakeet-tdt-0.6b-v3-Q5_K_M.gguf
+parakeet-tdt-0.6b-v3-Q4_K_M.gguf
+```
+
+The current daemon default is Q8_0. BF16 is the source GGUF for future local
+re-quantization when a requested quant is not already hosted.
+
+Do not use unrelated file names, nested directories, or model-card-only links
+for artifacts the CLI needs. The Rust side builds hosted names from the shared
+stem `parakeet-tdt-0.6b-v3` and a quant suffix such as `Q8_0`.
+
+## Future Quantization Flow
+
+The intended later CLI behavior is:
+
+1. If the requested quant exists in the hosted repo, download and verify that
+   GGUF directly.
+2. If it does not exist, download the hosted BF16 GGUF, then run
+   `crispasr-quantize` locally to create the requested quant in the cache.
+3. Record the source BF16 checksum, target quant, quantizer identity, and output
+   checksum in `manifest.json`.
+
+This keeps Python out of the normal user path. Python remains only for
+rebuilding BF16 from NVIDIA's `.nemo` when maintaining the hosted artifacts.
+
 ## Source Rebuild
 
 The reproducible rebuild path is explicit:
@@ -49,7 +82,10 @@ GGUF dtype parsing.
 
 - Port the `.nemo` to GGUF converter to Rust so source rebuilds do not need
   Python.
-- Add a release checklist for regenerating, validating, uploading, and
-  checksum-pinning hosted GGUF artifacts.
+- Add a release checklist for regenerating, validating, uploading, and checksum
+  pinning hosted GGUF artifacts.
+- Add `parakit fetch --quant <QUANT>` after the BF16 artifact is hosted. Keep
+  Q8_0 as the default unless quality, memory, or startup data justifies changing
+  it.
 - Add an empty-cache smoke test that runs against the hosted Hugging Face
   artifact after upload.
