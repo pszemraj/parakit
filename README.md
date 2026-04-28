@@ -150,10 +150,10 @@ findable at runtime. Easiest options:
 ## Usage
 
 ```bash
-# Default — verbose, batch mode, cleaning on, sounds on
+# Foreground: verbose, batch mode, cleaning on, sounds on
 parakit -m models/parakeet-tdt-0.6b-v3.gguf
 
-# Daemonized in background
+# Background daemon: no stdout, errors/warnings still go to stderr
 parakit -m models/parakeet-tdt-0.6b-v3.gguf --quiet &
 
 # Log raw/cleaned transcription pairs for later cleanup-model training
@@ -181,6 +181,50 @@ parakit --test-rules "So, um, the the the cat ran like, you know, fast"
 
 The hotkey is `Ctrl+Space`. The literal space is suppressed from reaching
 the focused application.
+
+### Running In The Background
+
+Use foreground mode first to confirm the model path, hotkey grab, audio input,
+text injection, and sound cues work:
+
+```bash
+./target/release/parakit -m "$PWD/models/parakeet-tdt-0.6b-v3-Q5_K_M.gguf"
+```
+
+For normal use, launch with `--quiet` and background the process. Quiet mode
+writes nothing to stdout; real errors and warnings still go to stderr.
+
+```bash
+./target/release/parakit -m "$PWD/models/parakeet-tdt-0.6b-v3-Q5_K_M.gguf" --quiet &
+```
+
+To start it from any directory, put the binary somewhere on `PATH` and use an
+absolute model path:
+
+```bash
+mkdir -p "$HOME/.local/bin" "$HOME/.local/share/parakit/models"
+cp target/release/parakit "$HOME/.local/bin/parakit"
+cp models/parakeet-tdt-0.6b-v3-Q5_K_M.gguf "$HOME/.local/share/parakit/models/"
+
+parakit -m "$HOME/.local/share/parakit/models/parakeet-tdt-0.6b-v3-Q5_K_M.gguf" --quiet &
+```
+
+If the daemon should survive closing the terminal, detach it from the shell:
+
+```bash
+parakit -m "$HOME/.local/share/parakit/models/parakeet-tdt-0.6b-v3-Q5_K_M.gguf" --quiet &
+disown
+```
+
+Or keep stderr in a file with `nohup`:
+
+```bash
+mkdir -p "$HOME/.local/state/parakit"
+nohup parakit -m "$HOME/.local/share/parakit/models/parakeet-tdt-0.6b-v3-Q5_K_M.gguf" \
+  --quiet >/dev/null 2>>"$HOME/.local/state/parakit/parakit.err" &
+```
+
+Stop the background daemon with `pkill parakit` or `kill <pid>`.
 
 ### Quality comparison tools
 

@@ -62,8 +62,8 @@ struct Cli {
     #[arg(long, default_value = "batch")]
     mode: String,
 
-    /// Quiet mode — suppress all stdout. Suitable for backgrounding.
-    /// Errors still go to stderr.
+    /// Quiet mode: suppress stdout. Errors and warnings still go to stderr.
+    /// Suitable for backgrounding the daemon.
     #[arg(long, short = 'q')]
     quiet: bool,
 
@@ -129,7 +129,9 @@ fn main() -> Result<()> {
 
     // Special command modes: print rules / test rules.
     if cli.list_rules {
-        rules::print_rule_list();
+        if !cli.quiet {
+            rules::print_rule_list();
+        }
         return Ok(());
     }
     if let Some(input) = &cli.test_rules {
@@ -144,11 +146,13 @@ fn main() -> Result<()> {
         };
         let raw = input.as_str();
         let cleaned = cleaner.as_ref().map(|c| c.clean(raw));
-        println!("Raw:     {}", raw);
-        if let Some(cleaned) = cleaned {
-            println!("Clean:   {}", cleaned);
-        } else {
-            println!("Clean:   <cleaning disabled>");
+        if !cli.quiet {
+            println!("Raw:     {}", raw);
+            if let Some(cleaned) = cleaned {
+                println!("Clean:   {}", cleaned);
+            } else {
+                println!("Clean:   <cleaning disabled>");
+            }
         }
         return Ok(());
     }
