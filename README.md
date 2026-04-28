@@ -13,28 +13,12 @@ partial stutters, and punctuation spacing.
 
 Repository: [github.com/pszemraj/parakit](https://github.com/pszemraj/parakit)
 
-## Status
-
-| Platform | Status |
-| --- | --- |
-| Linux X11 | Supported. |
-| Linux Wayland | Not supported for the daemon. Most compositors block global key grabs from regular clients. |
-| Windows | Supported, with DLL placement requirements after build. |
-| macOS | Expected to work with Accessibility and Input Monitoring permissions. |
-
-See [docs/troubleshooting.md](docs/troubleshooting.md) for platform-specific
-notes.
-
 ## Quickstart
 
 ```bash
 git clone --recurse-submodules https://github.com/pszemraj/parakit.git
 cd parakit
 
-# Choose one backend.
-cargo build --release --features cuda
-cargo build --release --features vulkan
-cargo build --release --features metal
 cargo build --release
 
 # One-time Python deps for converting NVIDIA's official .nemo checkpoint.
@@ -47,22 +31,21 @@ python -m pip install -r requirements-convert.txt
 ./target/release/parakit
 ```
 
-Expected foreground output is plain status text:
+Use `--features cuda`, `--features vulkan`, or `--features metal` for an
+accelerated build. Native dependencies and backend notes are in
+[docs/build.md](docs/build.md).
+
+Foreground startup prints the resolved model and waits for the hotkey:
 
 ```text
 parakit
   model:    /home/user/.cache/parakit/models/parakeet-tdt-0.6b-v3-Q8_0.gguf
-  dtype:    Q8_0 (640 MB)
+  dtype:    Q8_0
   mode:     Batch
   cleaning: on (72 rules)
   sounds:   on
   logging:  off
-  audio:    48000 Hz hardware (resampling), 16000 Hz target
 Ready: hold Ctrl+Space to dictate. Ctrl+C in this terminal to exit.
-parakit: recording...
-parakit: transcribing (3.42s audio, 3.61s wall)...
-Raw:    So, um, the the cat sat on the mat.
-Clean:  The cat sat on the mat  (212ms)
 ```
 
 For normal use, run it quietly in the background:
@@ -101,8 +84,8 @@ parakit --list-rules
 parakit --test-rules "So, um, the the cat ran like, you know, fast"
 ```
 
-The hotkey is fixed at `Ctrl+Space`. The literal space is suppressed so it
-does not reach the focused application.
+The hotkey is fixed at `Ctrl+Space`. The literal space is suppressed before it
+reaches the focused application.
 
 ## Model Setup
 

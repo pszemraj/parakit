@@ -2,7 +2,7 @@
 
 ## `rdev::grab` Fails
 
-On Linux, the daemon requires X11. Wayland compositors generally prevent global
+On Linux, the daemon requires X11. Wayland compositors generally block global
 key interception and synthetic input from regular client applications.
 
 Check the session type:
@@ -39,17 +39,8 @@ synthetic typing resemble keylogger behavior. Whitelist the binary when needed.
 
 ## Shared Libraries Cannot Be Found
 
-On Linux, inspect dynamic linking:
-
-```bash
-ldd target/debug/parakit | grep -E "whisper|ggml"
-readelf -d target/debug/parakit | grep -E "RPATH|RUNPATH"
-```
-
-Expected:
-
-- dependencies resolve under `target/debug/build/parakit-*/out/lib`;
-- `readelf` reports `RPATH`, not only `RUNPATH`.
+On Linux, run the dynamic-linking checks in
+[build.md](build.md#runtime-library-paths).
 
 If this regresses, inspect `build.rs::emit_rpath` and confirm
 `--disable-new-dtags` is still emitted for Linux/BSD builds.
@@ -77,22 +68,18 @@ cargo build --release --features vulkan
 ```
 
 Until those headers are available, default builds and CUDA builds can still
-work.
+work. The full Vulkan dependency set is in
+[build.md](build.md#native-dependencies).
 
 ## Windows DLL Loading
 
-After a Windows build, copy generated DLLs next to the executable:
-
-```powershell
-copy target\release\build\parakit-*\out\lib\*.dll target\release\
-```
-
-or add that `out\lib` directory to `PATH`.
+After a Windows build, make generated DLLs findable as described in
+[build.md](build.md#windows-dlls).
 
 ## Model Cache Problems
 
-With the default model path, parakit expects `parakit fetch` to populate the
-platform cache first:
+With the default model path, parakit expects
+[`parakit fetch`](../README.md#model-setup) to populate the cache first:
 
 ```bash
 parakit fetch

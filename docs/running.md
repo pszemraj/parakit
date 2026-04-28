@@ -23,7 +23,8 @@ Quiet mode suppresses stdout. Errors and warnings still go to stderr.
 ```
 
 To launch from any directory, install the binary somewhere on `PATH`. The
-default model is resolved from the platform cache populated by `parakit fetch`:
+default model is resolved from the cache populated by
+[`parakit fetch`](../README.md#model-setup):
 
 ```bash
 mkdir -p "$HOME/.local/bin"
