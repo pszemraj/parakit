@@ -11,6 +11,8 @@ NVIDIA's [Parakeet-TDT-0.6B-v3](https://huggingface.co/nvidia/parakeet-tdt-0.6b-
 model. It includes an optional cleanup pass for filler words, repeated words,
 partial stutters, and punctuation spacing.
 
+Repository: [github.com/pszemraj/parakit](https://github.com/pszemraj/parakit)
+
 ## Status
 
 | Platform | Status |
@@ -26,7 +28,7 @@ notes.
 ## Quickstart
 
 ```bash
-git clone --recurse-submodules <repo-url> parakit
+git clone --recurse-submodules https://github.com/pszemraj/parakit.git
 cd parakit
 
 # Choose one backend.

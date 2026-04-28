@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 description = "Push-to-talk dictation daemon backed by CrispASR / Parakeet-TDT."
 license = "MIT"
-repository = "https://github.com/yourname/parakit"
+repository = "https://github.com/pszemraj/parakit.git"
 default-run = "parakit"
 
 [[bin]]
