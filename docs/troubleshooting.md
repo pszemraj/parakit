@@ -78,13 +78,15 @@ After a Windows build, make generated DLLs findable as described in
 
 ## Model Cache Problems
 
-With the default model path, parakit expects
-[`parakit fetch`](../README.md#model-setup) to populate the cache first:
+With no `-m` path, parakit downloads the default model on first run and stores
+it in the cache described in [Model Setup](../README.md#model-setup):
 
 ```bash
-parakit fetch
 parakit --quiet &
 ```
+
+Use `parakit fetch --force` to redownload the hosted Q8_0 GGUF after a failed
+or interrupted fetch.
 
 If you pass `-m <path>`, that custom model path always wins. Relative custom
 paths are resolved from the shell's current working directory at launch time.

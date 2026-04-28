@@ -24,7 +24,7 @@ use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand};
 use crossbeam_channel::{bounded, Receiver, Sender};
 use parakit::data_log::{DataLogger, LogFormat};
-use parakit::fetch::{self, FetchOptions};
+use parakit::fetch::{self, FetchOptions, FetchSource};
 use parakit::gguf;
 use parakit::inference::{Engine, Mode};
 use parakit::model;
@@ -110,22 +110,26 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Commands {
-    /// Download, convert, and quantize the official Parakeet model to Q8_0.
+    /// Download the default hosted Parakeet Q8_0 GGUF.
     Fetch(FetchCli),
 }
 
 #[derive(Args, Debug)]
 struct FetchCli {
-    /// Ignore cached artifacts and rebuild every step.
+    /// Ignore cached artifacts and download or rebuild again.
     #[arg(long)]
     force: bool,
 
-    /// Keep the downloaded 2.4 GB .nemo checkpoint after Q8_0 is produced.
+    /// Rebuild Q8_0 locally from NVIDIA's official .nemo checkpoint.
     #[arg(long)]
+    from_source: bool,
+
+    /// Keep the downloaded 2.4 GB .nemo checkpoint after source rebuild.
+    #[arg(long, requires = "from_source")]
     keep_nemo: bool,
 
-    /// Keep the intermediate F16 GGUF after Q8_0 is produced.
-    #[arg(long)]
+    /// Keep the intermediate F16 GGUF after source rebuild.
+    #[arg(long, requires = "from_source")]
     keep_f16: bool,
 }
 
@@ -162,6 +166,12 @@ fn run() -> Result<()> {
     if let Some(Commands::Fetch(fetch_cli)) = &cli.command {
         fetch::run(FetchOptions {
             force: fetch_cli.force,
+            quiet: cli.quiet,
+            source: if fetch_cli.from_source {
+                FetchSource::OfficialNemo
+            } else {
+                FetchSource::HostedQ8
+            },
             keep_nemo: fetch_cli.keep_nemo,
             keep_f16: fetch_cli.keep_f16,
         })?;
@@ -215,7 +225,10 @@ fn run() -> Result<()> {
         .map(|dir| Arc::new(DataLogger::new(dir, cli.log_format)));
 
     let sounds = Sounds::new(!cli.no_sounds);
-    let model_path = model::resolve_model_path(cli.model.as_deref())?;
+    let model_path = match cli.model.as_deref() {
+        Some(path) => model::resolve_model_path(Some(path))?,
+        None => fetch::ensure_default_model(cli.quiet)?,
+    };
     let model_dtype = model_dtype_label(&model_path);
     let engine = Engine::open(&model_path)
         .with_context(|| format!("could not open model {}", model_path.display()))?;

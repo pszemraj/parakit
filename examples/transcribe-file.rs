@@ -6,6 +6,7 @@
 use anyhow::{anyhow, Context, Result};
 use clap::Parser;
 use parakit::constants::TARGET_RATE;
+use parakit::fetch;
 use parakit::inference::Engine;
 use parakit::model;
 use parakit::rules::{self, Cleaner};
@@ -57,7 +58,10 @@ fn main() -> Result<()> {
     wav.samples = resample_to_target(wav.samples, original_rate)?;
     let audio_secs = wav.samples.len() as f32 / TARGET_RATE as f32;
 
-    let model_path = model::resolve_model_path(cli.model.as_deref())?;
+    let model_path = match cli.model.as_deref() {
+        Some(path) => model::resolve_model_path(Some(path))?,
+        None => fetch::ensure_default_model(false)?,
+    };
     let engine = Engine::open(&model_path)
         .with_context(|| format!("could not open model {}", model_path.display()))?;
 

@@ -22,13 +22,7 @@ cd parakit
 cargo install --path .
 export PATH="$HOME/.cargo/bin:$PATH"
 
-# One-time Python deps for converting NVIDIA's official .nemo checkpoint.
-python -m pip install -r requirements-convert.txt
-
-# Download, convert, and quantize the official model to cached Q8_0 GGUF.
-parakit fetch
-
-# Run in the foreground first.
+# First run downloads the default Q8_0 GGUF into the model cache.
 parakit
 ```
 
@@ -63,10 +57,14 @@ logging, and process management examples.
 ## Common Commands
 
 ```bash
-# Rebuild cached model artifacts from the official checkpoint.
+# Download the hosted default model again.
 parakit fetch --force
-parakit fetch --keep-nemo
-parakit fetch --keep-f16
+
+# Rebuild Q8_0 locally from NVIDIA's official checkpoint.
+python -m pip install -r requirements-convert.txt
+parakit fetch --from-source
+parakit fetch --from-source --keep-nemo
+parakit fetch --from-source --keep-f16
 
 # Run with transcription logging.
 parakit --log-dir ~/.parakit/logs
@@ -92,11 +90,14 @@ reaches the focused application.
 
 ## Model Setup
 
-`parakit fetch` owns the canonical model pipeline:
+When no `-m` path is supplied, startup ensures the default Q8_0 model exists
+and then loads it. The default model is downloaded from:
 
-1. download NVIDIA's official `.nemo` checkpoint;
-2. convert it to an intermediate F16 GGUF with CrispASR's converter;
-3. quantize it to the default Q8_0 GGUF with `crispasr-quantize`.
+```text
+https://huggingface.co/pszemraj/parakeet-tdt-0.6b-v3-gguf
+```
+
+The downloaded GGUF is SHA256-verified before it is accepted.
 
 The final model is cached at:
 
@@ -109,8 +110,13 @@ The final model is cached at:
 `%LOCALAPPDATA%\parakit\Cache\models\`.
 
 The downloaded `.nemo` and intermediate F16 GGUF are deleted after a successful
-fetch unless `--keep-nemo` or `--keep-f16` is passed. `-m <path>` always
-overrides the cached model.
+source rebuild unless `--keep-nemo` or `--keep-f16` is passed. `-m <path>`
+always overrides the cached model and disables automatic fetch.
+
+`parakit fetch --from-source` is the reproducible maintainer path: download
+NVIDIA's official `.nemo`, convert it to GGUF with CrispASR's Python converter,
+then quantize it to Q8_0 with `crispasr-quantize`. It requires the Python
+packages in `requirements-convert.txt`.
 
 ## Documentation
 
@@ -126,6 +132,8 @@ overrides the cached model.
   comparison workflow.
 - [docs/troubleshooting.md](docs/troubleshooting.md): common build and
   runtime failures.
+- [docs/dev.md](docs/dev.md): model artifact policy, source rebuild notes, and
+  project TODOs.
 
 ## License
 

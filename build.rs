@@ -60,7 +60,7 @@ fn main() {
         // Skip tests. Build examples because CrispASR's quantizer lives there.
         .define("WHISPER_BUILD_TESTS", "OFF")
         // CrispASR's GGUF requantizer lives under examples/. We build the
-        // examples tree so `crispasr-quantize` is available to `parakit fetch`.
+        // examples tree so source rebuilds can invoke `crispasr-quantize`.
         .define("WHISPER_BUILD_EXAMPLES", "ON")
         .define("GGML_BUILD_TESTS", "OFF")
         .define("GGML_BUILD_EXAMPLES", "OFF")
@@ -138,7 +138,7 @@ fn main() {
         );
     } else {
         println!(
-            "cargo:warning=crispasr-quantize was not installed at {}; `parakit fetch` will look on PATH",
+            "cargo:warning=crispasr-quantize was not installed at {}; source rebuilds will look on PATH",
             quantize_bin.display()
         );
     }

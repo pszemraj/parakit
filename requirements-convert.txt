@@ -1,7 +1,8 @@
-# Python dependencies for `parakit fetch` conversion step.
+# Python dependencies for the maintainer source-rebuild path:
+# `parakit fetch --from-source`.
 #
-# The Rust daemon does not use these packages at runtime. They are only needed
-# to run vendor/CrispASR/models/convert-parakeet-to-gguf.py.
+# The Rust daemon and default hosted-model fetch do not use these packages.
+# They are only needed to run vendor/CrispASR/models/convert-parakeet-to-gguf.py.
 gguf
 numpy
 sentencepiece

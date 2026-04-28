@@ -1,14 +1,21 @@
-//! Canonical Parakeet model names, cache paths, and model path resolution.
+//! Canonical Parakeet model names, cache paths, and model path helpers.
 
 use anyhow::{Context, Result};
 use directories::BaseDirs;
 use std::path::{Path, PathBuf};
 
 /// Upstream Hugging Face repository for the official NVIDIA checkpoint.
-pub const SOURCE_REPO_URL: &str = "https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3";
+pub const OFFICIAL_NEMO_REPO_URL: &str = "https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3";
 /// Direct download URL for the official `.nemo` checkpoint.
-pub const SOURCE_NEMO_URL: &str =
+pub const OFFICIAL_NEMO_URL: &str =
     "https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3/resolve/main/parakeet-tdt-0.6b-v3.nemo";
+/// Owner-hosted GGUF repository used by the default end-user fetch path.
+pub const HOSTED_GGUF_REPO_URL: &str = "https://huggingface.co/pszemraj/parakeet-tdt-0.6b-v3-gguf";
+/// Direct download URL for the default hosted Q8_0 GGUF.
+pub const HOSTED_Q8_URL: &str = "https://huggingface.co/pszemraj/parakeet-tdt-0.6b-v3-gguf/resolve/main/parakeet-tdt-0.6b-v3-Q8_0.gguf";
+/// Expected SHA256 for the default hosted Q8_0 GGUF.
+pub const HOSTED_Q8_SHA256: &str =
+    "e8bc983c89342a1f36a5bfa1a7a2dc6fab8f9ebdc2e305738f36e3ff60cbc313";
 /// File name for the downloaded official NeMo checkpoint.
 pub const NEMO_FILENAME: &str = "parakeet-tdt-0.6b-v3.nemo";
 /// File name for the intermediate F16 GGUF.
@@ -59,10 +66,10 @@ pub fn cached_q8_model_path() -> Result<PathBuf> {
     Ok(models_dir()?.join(Q8_FILENAME))
 }
 
-/// Resolve the model path for daemon startup.
+/// Resolve a model path without downloading anything.
 ///
-/// Explicit `-m/--model` paths always win. Without an explicit path, parakit
-/// uses the canonical cached Q8_0 model produced by `parakit fetch`.
+/// Explicit `-m/--model` paths always win. Without an explicit path, this
+/// returns the canonical cached Q8_0 model if it exists.
 ///
 /// # Returns
 ///
@@ -71,8 +78,9 @@ pub fn cached_q8_model_path() -> Result<PathBuf> {
 ///
 /// # Errors
 ///
-/// Returns an actionable error when no explicit model was supplied and the
-/// canonical cached model does not exist.
+/// Returns an actionable error when no explicit model was supplied and no
+/// canonical cached model exists. Daemon startup normally uses
+/// `fetch::ensure_default_model` instead so it can populate this cache.
 pub fn resolve_model_path(explicit: Option<&Path>) -> Result<PathBuf> {
     if let Some(path) = explicit {
         return Ok(path.to_path_buf());
@@ -84,7 +92,7 @@ pub fn resolve_model_path(explicit: Option<&Path>) -> Result<PathBuf> {
     }
 
     Err(anyhow::anyhow!(
-        "No cached model found. Run `parakit fetch` first. Expected: {}",
+        "No cached model found at {}",
         cached.display()
     ))
 }
@@ -102,6 +110,8 @@ mod tests {
     #[test]
     fn canonical_filenames_are_q8_only() {
         assert_eq!(Q8_FILENAME, "parakeet-tdt-0.6b-v3-Q8_0.gguf");
-        assert!(SOURCE_NEMO_URL.ends_with(NEMO_FILENAME));
+        assert!(OFFICIAL_NEMO_URL.ends_with(NEMO_FILENAME));
+        assert!(HOSTED_Q8_URL.ends_with(Q8_FILENAME));
+        assert_eq!(HOSTED_Q8_SHA256.len(), 64);
     }
 }

@@ -16,8 +16,9 @@ cargo run --example transcribe-file -- \
 
 The helper accepts WAV input, mixes to mono, resamples to 16 kHz, runs
 `Engine::transcribe`, applies cleanup unless disabled, and prints raw and
-cleaned text. It uses the cached Q8_0 model by default. Pass `--model
-/path/to/model.gguf` only when comparing a specific custom GGUF.
+cleaned text. It uses the cached Q8_0 model by default and downloads it first
+if needed. Pass `--model /path/to/model.gguf` only when comparing a specific
+custom GGUF.
 
 ## NeMo Reference Helper
 
@@ -62,8 +63,8 @@ Not acceptable:
 - many wrong words in a short utterance.
 
 If F16 differs materially from the reference, inspect CrispASR's Parakeet
-preprocessor first. If F16 matches but Q8_0 is worse, treat that as a fetch or
-quantizer regression before trusting the cached model.
+preprocessor first. If F16 matches but Q8_0 is worse, treat that as an artifact
+or quantizer regression before trusting the cached model.
 
 ## Runtime Smoke Checks
 

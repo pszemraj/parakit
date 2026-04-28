@@ -1,7 +1,8 @@
-//! Model acquisition pipeline for the official NVIDIA Parakeet checkpoint.
+//! Model acquisition for the default Parakeet GGUF and source rebuilds.
 
 use crate::model::{
-    models_dir, F16_FILENAME, MANIFEST_FILENAME, NEMO_FILENAME, Q8_FILENAME, SOURCE_NEMO_URL,
+    models_dir, F16_FILENAME, HOSTED_Q8_SHA256, HOSTED_Q8_URL, MANIFEST_FILENAME, NEMO_FILENAME,
+    OFFICIAL_NEMO_URL, Q8_FILENAME,
 };
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::{SecondsFormat, Utc};
@@ -21,13 +22,26 @@ use std::process::{Command, Stdio};
 pub struct FetchOptions {
     /// Ignore existing cache entries and rebuild all artifacts.
     pub force: bool,
+    /// Suppress stdout status messages.
+    pub quiet: bool,
+    /// Which acquisition path to use.
+    pub source: FetchSource,
     /// Keep the downloaded `.nemo` after the final Q8_0 model is produced.
     pub keep_nemo: bool,
     /// Keep the intermediate F16 GGUF after the final Q8_0 model is produced.
     pub keep_f16: bool,
 }
 
-/// Run the full official-checkpoint to Q8_0 GGUF pipeline.
+/// Model acquisition source for `parakit fetch`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FetchSource {
+    /// Download the owner-hosted Q8_0 GGUF.
+    HostedQ8,
+    /// Rebuild Q8_0 locally from NVIDIA's official `.nemo` checkpoint.
+    OfficialNemo,
+}
+
+/// Ensure the default hosted Q8_0 model is present in the cache.
 ///
 /// # Returns
 ///
@@ -35,9 +49,104 @@ pub struct FetchOptions {
 ///
 /// # Errors
 ///
-/// Returns an error if the model cannot be downloaded, converted, quantized, or
-/// written into the platform cache directory.
+/// Returns an error if the model cannot be downloaded, verified, or written
+/// into the platform cache directory.
+pub fn ensure_default_model(quiet: bool) -> Result<PathBuf> {
+    run(FetchOptions {
+        force: false,
+        quiet,
+        source: FetchSource::HostedQ8,
+        keep_nemo: false,
+        keep_f16: false,
+    })
+}
+
+/// Run a model acquisition pipeline.
+///
+/// # Returns
+///
+/// The canonical cached Q8_0 model path.
+///
+/// # Errors
+///
+/// Returns an error if the model cannot be downloaded, verified, converted,
+/// quantized, or written into the platform cache directory.
 pub fn run(options: FetchOptions) -> Result<PathBuf> {
+    match options.source {
+        FetchSource::HostedQ8 => run_hosted_q8(options),
+        FetchSource::OfficialNemo => run_official_nemo(options),
+    }
+}
+
+fn run_hosted_q8(options: FetchOptions) -> Result<PathBuf> {
+    let paths = FetchPaths::new()?;
+    std::fs::create_dir_all(&paths.models_dir)
+        .with_context(|| format!("create {}", paths.models_dir.display()))?;
+    let mut manifest = Manifest::load(&paths.manifest)?.unwrap_or_default();
+    let partial = paths.q8.with_extension("gguf.part");
+
+    if options.force {
+        remove_if_exists(&paths.q8)?;
+        remove_if_exists(&partial)?;
+    } else if paths.q8.is_file() {
+        let current = hash_file(&paths.q8)?;
+        if current == HOSTED_Q8_SHA256 {
+            if !manifest.hosted_current(&paths.q8) {
+                manifest.mark_hosted_ready(&paths.q8);
+                manifest.save(&paths.manifest)?;
+            }
+            status(
+                options,
+                format_args!("parakit: cached model is current: {}", paths.q8.display()),
+            );
+            return Ok(paths.q8);
+        }
+        status(
+            options,
+            format_args!(
+                "parakit: cached model checksum mismatch, replacing: {}",
+                paths.q8.display()
+            ),
+        );
+        remove_if_exists(&paths.q8)?;
+    }
+
+    status(
+        options,
+        format_args!("parakit: downloading {}", HOSTED_Q8_URL),
+    );
+    download_with_resume(HOSTED_Q8_URL, &partial)?;
+    let mut downloaded_sha = hash_file(&partial)?;
+    if downloaded_sha != HOSTED_Q8_SHA256 {
+        status(
+            options,
+            format_args!("parakit: downloaded partial checksum mismatch, restarting download"),
+        );
+        remove_if_exists(&partial)?;
+        download_with_resume(HOSTED_Q8_URL, &partial)?;
+        downloaded_sha = hash_file(&partial)?;
+    }
+    if downloaded_sha != HOSTED_Q8_SHA256 {
+        remove_if_exists(&partial)?;
+        bail!(
+            "downloaded model checksum mismatch for {}: expected {}, got {}",
+            HOSTED_Q8_URL,
+            HOSTED_Q8_SHA256,
+            downloaded_sha
+        );
+    }
+
+    move_into_place(&partial, &paths.q8)?;
+    manifest.mark_hosted_ready(&paths.q8);
+    manifest.save(&paths.manifest)?;
+    status(
+        options,
+        format_args!("parakit: model ready: {}", paths.q8.display()),
+    );
+    Ok(paths.q8)
+}
+
+fn run_official_nemo(options: FetchOptions) -> Result<PathBuf> {
     let paths = FetchPaths::new()?;
     std::fs::create_dir_all(&paths.models_dir)
         .with_context(|| format!("create {}", paths.models_dir.display()))?;
@@ -65,7 +174,13 @@ pub fn run(options: FetchOptions) -> Result<PathBuf> {
         &quantize_bin,
         &quantize_version,
     )? {
-        println!("parakit: cached model is current: {}", paths.q8.display());
+        status(
+            options,
+            format_args!(
+                "parakit: cached source-built model is current: {}",
+                paths.q8.display()
+            ),
+        );
         cleanup_intermediates(&paths, options)?;
         return Ok(paths.q8);
     }
@@ -76,7 +191,7 @@ pub fn run(options: FetchOptions) -> Result<PathBuf> {
         Some(python_with_converter_deps()?)
     };
 
-    let nemo_sha = ensure_nemo(&paths, &mut manifest)?;
+    let nemo_sha = ensure_nemo(&paths, &mut manifest, options)?;
     manifest.save(&paths.manifest)?;
 
     let f16_sha = ensure_f16(
@@ -86,6 +201,7 @@ pub fn run(options: FetchOptions) -> Result<PathBuf> {
         &crispasr_sha,
         &nemo_sha,
         preflight_python.as_deref(),
+        options,
     )?;
     manifest.save(&paths.manifest)?;
 
@@ -95,12 +211,16 @@ pub fn run(options: FetchOptions) -> Result<PathBuf> {
         &quantize_bin,
         &quantize_version,
         &f16_sha,
+        options,
     )?;
     manifest.q8_sha256 = Some(q8_sha);
     manifest.save(&paths.manifest)?;
 
     cleanup_intermediates(&paths, options)?;
-    println!("parakit: model ready: {}", paths.q8.display());
+    status(
+        options,
+        format_args!("parakit: model ready: {}", paths.q8.display()),
+    );
     Ok(paths.q8)
 }
 
@@ -127,13 +247,17 @@ impl FetchPaths {
 }
 
 #[derive(Debug, Default, Deserialize, Serialize)]
+#[serde(default)]
 struct Manifest {
+    acquisition: String,
     source_url: String,
+    source_sha256: Option<String>,
     nemo_sha256: Option<String>,
     f16_input_sha256: Option<String>,
     f16_sha256: Option<String>,
     q8_input_sha256: Option<String>,
     q8_sha256: Option<String>,
+    q8_output_path: String,
     converter_script: String,
     converter_crispasr_git_sha: String,
     crispasr_quantize_bin: String,
@@ -162,6 +286,33 @@ impl Manifest {
         Ok(())
     }
 
+    fn hosted_current(&self, q8_path: &Path) -> bool {
+        self.acquisition == "hosted-q8"
+            && self.source_url == HOSTED_Q8_URL
+            && self.source_sha256.as_deref() == Some(HOSTED_Q8_SHA256)
+            && self.q8_sha256.as_deref() == Some(HOSTED_Q8_SHA256)
+            && self.q8_output_path == q8_path.display().to_string()
+    }
+
+    fn mark_hosted_ready(&mut self, q8_path: &Path) {
+        self.acquisition = "hosted-q8".to_string();
+        self.source_url = HOSTED_Q8_URL.to_string();
+        self.source_sha256 = Some(HOSTED_Q8_SHA256.to_string());
+        self.q8_sha256 = Some(HOSTED_Q8_SHA256.to_string());
+        self.q8_output_path = q8_path.display().to_string();
+        self.downloaded_at = Some(now_utc());
+        self.nemo_sha256 = None;
+        self.f16_input_sha256 = None;
+        self.f16_sha256 = None;
+        self.q8_input_sha256 = None;
+        self.converter_script.clear();
+        self.converter_crispasr_git_sha.clear();
+        self.crispasr_quantize_bin.clear();
+        self.crispasr_quantize_version.clear();
+        self.converted_at = None;
+        self.quantized_at = None;
+    }
+
     fn final_current(
         &self,
         q8_path: &Path,
@@ -170,7 +321,10 @@ impl Manifest {
         quantize_bin: &Path,
         quantize_version: &str,
     ) -> Result<bool> {
-        if self.source_url != SOURCE_NEMO_URL || !q8_path.is_file() {
+        if self.acquisition != "official-nemo"
+            || self.source_url != OFFICIAL_NEMO_URL
+            || !q8_path.is_file()
+        {
             return Ok(false);
         }
         if self.converter_script != converter_script.display().to_string()
@@ -187,21 +341,33 @@ impl Manifest {
     }
 }
 
-fn ensure_nemo(paths: &FetchPaths, manifest: &mut Manifest) -> Result<String> {
+fn ensure_nemo(
+    paths: &FetchPaths,
+    manifest: &mut Manifest,
+    options: FetchOptions,
+) -> Result<String> {
     if paths.nemo.is_file() {
         let current = hash_file(&paths.nemo)?;
-        if manifest.source_url == SOURCE_NEMO_URL
+        if manifest.source_url == OFFICIAL_NEMO_URL
             && manifest.nemo_sha256.as_deref() == Some(&current)
         {
-            println!("parakit: using cached checkpoint: {}", paths.nemo.display());
+            status(
+                options,
+                format_args!("parakit: using cached checkpoint: {}", paths.nemo.display()),
+            );
             return Ok(current);
         }
     }
 
-    println!("parakit: downloading {}", SOURCE_NEMO_URL);
-    download_with_resume(SOURCE_NEMO_URL, &paths.nemo)?;
+    status(
+        options,
+        format_args!("parakit: downloading {}", OFFICIAL_NEMO_URL),
+    );
+    download_with_resume(OFFICIAL_NEMO_URL, &paths.nemo)?;
     let sha = hash_file(&paths.nemo)?;
-    manifest.source_url = SOURCE_NEMO_URL.to_string();
+    manifest.acquisition = "official-nemo".to_string();
+    manifest.source_url = OFFICIAL_NEMO_URL.to_string();
+    manifest.source_sha256 = Some(sha.clone());
     manifest.nemo_sha256 = Some(sha.clone());
     manifest.downloaded_at = Some(now_utc());
     Ok(sha)
@@ -214,6 +380,7 @@ fn ensure_f16(
     crispasr_sha: &str,
     nemo_sha: &str,
     preflight_python: Option<&Path>,
+    options: FetchOptions,
 ) -> Result<String> {
     if paths.f16.is_file()
         && manifest.f16_input_sha256.as_deref() == Some(nemo_sha)
@@ -222,7 +389,10 @@ fn ensure_f16(
     {
         let current = hash_file(&paths.f16)?;
         if manifest.f16_sha256.as_deref() == Some(&current) {
-            println!("parakit: using cached F16 GGUF: {}", paths.f16.display());
+            status(
+                options,
+                format_args!("parakit: using cached F16 GGUF: {}", paths.f16.display()),
+            );
             return Ok(current);
         }
     }
@@ -234,7 +404,10 @@ fn ensure_f16(
         None => python_with_converter_deps()?,
     };
     remove_if_exists(&paths.f16)?;
-    println!("parakit: converting .nemo to F16 GGUF");
+    status(
+        options,
+        format_args!("parakit: converting .nemo to F16 GGUF"),
+    );
     run_command(
         Command::new(&python)
             .arg(converter_script)
@@ -260,6 +433,7 @@ fn ensure_q8(
     quantize_bin: &Path,
     quantize_version: &str,
     f16_sha: &str,
+    options: FetchOptions,
 ) -> Result<String> {
     if paths.q8.is_file()
         && manifest.q8_input_sha256.as_deref() == Some(f16_sha)
@@ -268,13 +442,19 @@ fn ensure_q8(
     {
         let current = hash_file(&paths.q8)?;
         if manifest.q8_sha256.as_deref() == Some(&current) {
-            println!("parakit: using cached Q8_0 GGUF: {}", paths.q8.display());
+            status(
+                options,
+                format_args!("parakit: using cached Q8_0 GGUF: {}", paths.q8.display()),
+            );
             return Ok(current);
         }
     }
 
     remove_if_exists(&paths.q8)?;
-    println!("parakit: quantizing F16 GGUF to Q8_0");
+    status(
+        options,
+        format_args!("parakit: quantizing F16 GGUF to Q8_0"),
+    );
     run_command(
         Command::new(quantize_bin)
             .arg(&paths.f16)
@@ -286,6 +466,7 @@ fn ensure_q8(
     let q8_sha = hash_file(&paths.q8)?;
     manifest.q8_input_sha256 = Some(f16_sha.to_string());
     manifest.q8_sha256 = Some(q8_sha.clone());
+    manifest.q8_output_path = paths.q8.display().to_string();
     manifest.crispasr_quantize_bin = quantize_bin.display().to_string();
     manifest.crispasr_quantize_version = quantize_version.to_string();
     manifest.quantized_at = Some(now_utc());
@@ -457,6 +638,23 @@ fn run_command(command: &mut Command, label: &str) -> Result<()> {
     }
 }
 
+fn move_into_place(src: &Path, dst: &Path) -> Result<()> {
+    remove_if_exists(dst)?;
+    std::fs::rename(src, dst).with_context(|| {
+        format!(
+            "move verified model from {} to {}",
+            src.display(),
+            dst.display()
+        )
+    })
+}
+
+fn status(options: FetchOptions, message: std::fmt::Arguments<'_>) {
+    if !options.quiet {
+        println!("{message}");
+    }
+}
+
 fn hash_file(path: &Path) -> Result<String> {
     let mut file = File::open(path).with_context(|| format!("open {}", path.display()))?;
     let mut hasher = Sha256::new();
@@ -545,10 +743,45 @@ mod tests {
     fn fetch_options_are_copyable() {
         let opts = FetchOptions {
             force: false,
+            quiet: true,
+            source: FetchSource::HostedQ8,
             keep_nemo: true,
             keep_f16: false,
         };
         let copy = opts;
         assert!(copy.keep_nemo);
+        assert!(copy.quiet);
+        assert_eq!(copy.source, FetchSource::HostedQ8);
+    }
+
+    #[test]
+    fn hosted_manifest_records_default_model() {
+        let mut manifest = Manifest::default();
+        let path = Path::new("target/tmp/parakit-fetch-tests/model.gguf");
+        manifest.mark_hosted_ready(path);
+
+        assert!(manifest.hosted_current(path));
+        assert_eq!(manifest.acquisition, "hosted-q8");
+        assert_eq!(manifest.source_url, HOSTED_Q8_URL);
+        assert_eq!(manifest.source_sha256.as_deref(), Some(HOSTED_Q8_SHA256));
+        assert_eq!(manifest.q8_sha256.as_deref(), Some(HOSTED_Q8_SHA256));
+        assert!(manifest.nemo_sha256.is_none());
+        assert!(manifest.f16_sha256.is_none());
+    }
+
+    #[test]
+    fn move_into_place_replaces_existing_file() {
+        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target/tmp/parakit-fetch-tests/move-into-place");
+        std::fs::create_dir_all(&dir).unwrap();
+        let src = dir.join("model.gguf.part");
+        let dst = dir.join("model.gguf");
+        std::fs::write(&src, b"new").unwrap();
+        std::fs::write(&dst, b"old").unwrap();
+
+        move_into_place(&src, &dst).unwrap();
+
+        assert!(!src.exists());
+        assert_eq!(std::fs::read(&dst).unwrap(), b"new");
     }
 }

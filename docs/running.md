@@ -11,8 +11,9 @@ Run the foreground path first after an install or model change:
 parakit
 ```
 
-Confirm that the model loads, the microphone opens, `Ctrl+Space` records, text
-injection works, and errors are visible in the terminal.
+On the first run, parakit downloads the default Q8_0 GGUF into the model cache
+before opening the microphone. Confirm that the model loads, `Ctrl+Space`
+records, text injection works, and errors are visible in the terminal.
 
 ## Background Launch
 
@@ -34,13 +35,9 @@ Cargo installs to `~/.cargo/bin` by default. Add it to `PATH` if needed:
 export PATH="$HOME/.cargo/bin:$PATH"
 ```
 
-The default model is resolved from the cache populated by
-[`parakit fetch`](../README.md#model-setup):
-
-```bash
-parakit fetch
-parakit --quiet &
-```
+If the default model is not cached yet, `parakit --quiet &` downloads it before
+starting the daemon. No stdout is printed in quiet mode; download and startup
+errors still go to stderr.
 
 Detach it from the current shell:
 
