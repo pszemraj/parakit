@@ -1,4 +1,4 @@
-//! parakit — a push-to-talk dictation daemon.
+//! parakit - a push-to-talk dictation daemon.
 //!
 //! Architecture:
 //!   - Main thread: parse CLI, set up subsystems, then run the rdev grab loop.
@@ -9,7 +9,7 @@
 //!     transcription off the hotkey thread so input stays responsive.
 //!
 //! State machine (single-recording-at-a-time invariant):
-//!   Idle ──[Ctrl+Space ↓]──> Recording ──[Ctrl+Space ↑]──> Transcribing ──> Idle
+//!   Idle --[Ctrl+Space down]--> Recording --[Ctrl+Space up]--> Transcribing --> Idle
 //!
 //! In streaming mode there's an additional periodic Tick that sends partial
 //! chunks to the worker while recording is active.
@@ -213,7 +213,7 @@ fn main() -> Result<()> {
         None
     };
 
-    // SIGINT handler — set Quit on Ctrl+C in the terminal.
+    // SIGINT handler - set Quit on Ctrl+C in the terminal.
     let tx_sig = tx.clone();
     let streaming_alive_sig = Arc::clone(&streaming_alive);
     ctrlc_handler(move || {
@@ -224,7 +224,7 @@ fn main() -> Result<()> {
     // Hotkey grab loop. Blocks forever (until grab returns or process exits).
     log.line(&format!(
         "{} hold {} to dictate. Ctrl+C in this terminal to exit.",
-        "Ready —".green().bold(),
+        "Ready:".green().bold(),
         "Ctrl+Space".yellow().bold()
     ));
 
@@ -361,7 +361,7 @@ fn worker_loop(ctx: WorkerCtx) {
                 consumed_samples = 0;
                 recording_started_at = Some(Instant::now());
                 sounds.start();
-                log.line("🎙️  listening...");
+                log.line("Recording...");
             }
             Event_::StreamChunk => {
                 if let Mode::Streaming { .. } = mode {
@@ -416,13 +416,8 @@ fn worker_loop(ctx: WorkerCtx) {
                 };
 
                 let secs = pcm.len() as f32 / TARGET_RATE as f32;
-                if secs < 0.20 {
-                    log.line(&format!("⚠️  too short ({secs:.2}s), ignoring."));
-                    continue;
-                }
-
                 log.line(&format!(
-                    "🤔  transcribing ({:.2}s of audio, {:.2}s wall)...",
+                    "Transcribing ({:.2}s audio, {:.2}s wall)...",
                     secs,
                     dur_audio.as_secs_f32()
                 ));
@@ -448,7 +443,7 @@ fn worker_loop(ctx: WorkerCtx) {
                         }
                     }
                     Ok(_) => {
-                        log.line("🤷  no speech detected.");
+                        log.line("No speech detected.");
                         sounds.success();
                     }
                     Err(e) => {
@@ -542,7 +537,7 @@ impl Logger {
 
     fn error(&self, msg: &str) {
         // Errors always go to stderr regardless of --quiet.
-        eprintln!("{} {}", "✗".red().bold(), msg);
+        eprintln!("{} {}", "error:".red().bold(), msg);
     }
 
     fn transcript(&self, raw: &str, cleaned: &str, infer: Duration) {
@@ -576,7 +571,7 @@ impl Logger {
         if raw == cleaned {
             println!("{}  {}", "+".cyan(), cleaned);
         } else {
-            println!("{}  {}  →  {}", "+".cyan(), raw.dimmed(), cleaned);
+            println!("{}  {}  =>  {}", "+".cyan(), raw.dimmed(), cleaned);
         }
     }
 

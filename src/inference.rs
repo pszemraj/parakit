@@ -1,7 +1,16 @@
 //! Inference wrapper around a `crispasr::Session`.
 
+use crate::constants::TARGET_RATE;
 use anyhow::{Context, Result};
+use std::borrow::Cow;
 use std::path::Path;
+
+/// Minimum PCM length sent to CrispASR.
+///
+/// Very short captures can collapse to too few feature frames for the model
+/// pipeline. Right-padding with silence keeps the hotkey behavior predictable
+/// without dropping the user's utterance.
+const MIN_INFERENCE_SAMPLES: usize = TARGET_RATE as usize;
 
 /// Transcription mode used by the daemon.
 #[derive(Clone, Copy, Debug)]
@@ -79,9 +88,10 @@ impl Engine {
     ///
     /// Returns an error if CrispASR rejects the audio or inference fails.
     pub fn transcribe(&self, pcm: &[f32]) -> Result<String> {
+        let pcm = pad_short_pcm(pcm);
         let segments = self
             .session
-            .transcribe(pcm)
+            .transcribe(pcm.as_ref())
             .map_err(|e| anyhow::anyhow!("crispasr transcribe failed: {e}"))?;
         let mut out = String::new();
         for seg in segments {
@@ -91,5 +101,35 @@ impl Engine {
             out.push_str(seg.text.trim());
         }
         Ok(out)
+    }
+}
+
+fn pad_short_pcm(pcm: &[f32]) -> Cow<'_, [f32]> {
+    if pcm.len() >= MIN_INFERENCE_SAMPLES {
+        return Cow::Borrowed(pcm);
+    }
+
+    let mut padded = Vec::with_capacity(MIN_INFERENCE_SAMPLES);
+    padded.extend_from_slice(pcm);
+    padded.resize(MIN_INFERENCE_SAMPLES, 0.0);
+    Cow::Owned(padded)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn short_pcm_is_padded_with_silence() {
+        let padded = pad_short_pcm(&[0.25, -0.25]);
+        assert_eq!(padded.len(), MIN_INFERENCE_SAMPLES);
+        assert_eq!(&padded[..2], &[0.25, -0.25]);
+        assert!(padded[2..].iter().all(|sample| *sample == 0.0));
+    }
+
+    #[test]
+    fn long_pcm_is_borrowed_without_copying() {
+        let pcm = vec![0.0; MIN_INFERENCE_SAMPLES];
+        assert!(matches!(pad_short_pcm(&pcm), Cow::Borrowed(_)));
     }
 }
