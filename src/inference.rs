@@ -65,11 +65,17 @@ impl Engine {
     ///
     /// # Errors
     ///
-    /// Returns an error if the model path is not UTF-8 or CrispASR cannot load
-    /// the model.
+    /// Returns an error if the model path is not a file, is not UTF-8, or
+    /// CrispASR cannot load the model.
     pub fn open<P: AsRef<Path>>(model_path: P) -> Result<Self> {
-        let path_str = model_path
-            .as_ref()
+        let path = model_path.as_ref();
+        if !path.is_file() {
+            return Err(anyhow::anyhow!(
+                "model path is not a file: {}",
+                path.display()
+            ));
+        }
+        let path_str = path
             .to_str()
             .ok_or_else(|| anyhow::anyhow!("model path is not valid UTF-8"))?;
         let session = crispasr::Session::open(path_str)
@@ -131,5 +137,14 @@ mod tests {
     fn long_pcm_is_borrowed_without_copying() {
         let pcm = vec![0.0; MIN_INFERENCE_SAMPLES];
         assert!(matches!(pad_short_pcm(&pcm), Cow::Borrowed(_)));
+    }
+
+    #[test]
+    fn missing_model_path_fails_before_crispasr() {
+        let err = match Engine::open("target/tmp/definitely-missing-parakit-model.gguf") {
+            Ok(_) => panic!("missing model path should fail"),
+            Err(err) => err,
+        };
+        assert!(err.to_string().contains("model path is not a file"));
     }
 }
