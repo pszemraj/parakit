@@ -19,15 +19,16 @@
 //! works out of the box.
 
 mod audio;
-mod inference;
 mod inject;
-mod rules;
 mod sounds;
 
 use anyhow::{Context, Result};
 use clap::Parser;
 use colored::Colorize;
 use crossbeam_channel::{bounded, Receiver, Sender};
+use parakit::data_log::{DataLogger, LogFormat};
+use parakit::inference::{Engine, Mode};
+use parakit::rules::{self, Cleaner};
 use rdev::{Event, EventType, Key};
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -36,9 +37,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::audio::{AudioCapture, AudioHandle, TARGET_RATE};
-use crate::inference::{Engine, Mode};
 use crate::inject::Injector;
-use crate::rules::Cleaner;
 use crate::sounds::Sounds;
 
 // =============================================================================
@@ -96,14 +95,13 @@ struct Cli {
     #[arg(long, default_value = "ctrl+space", hide = true)]
     hotkey: String,
 
-    // -------------------------------------------------------------------------
-    // TODO(transcription-logging):
-    //   Add --log-dir <PATH> and --log-format <text|json> flags here that, when
-    //   set, append every (timestamp, raw, cleaned) tuple to a rotating file.
-    //   Goal is to gather a personal corpus of pre/post-cleanup pairs to train
-    //   a small text-to-text cleanup model that subsumes the regex rules.
-    //   See README ("Future work / training data") for the plan.
-    // -------------------------------------------------------------------------
+    /// Directory for transcription logs. One file is written per local day.
+    #[arg(long, value_name = "DIR")]
+    log_dir: Option<PathBuf>,
+
+    /// Transcription log format. Used only when --log-dir is set.
+    #[arg(long, default_value = "jsonl", value_parser = clap::value_parser!(LogFormat))]
+    log_format: LogFormat,
 }
 
 // =============================================================================
@@ -165,6 +163,11 @@ fn main() -> Result<()> {
     } else {
         Some(Arc::new(Cleaner::new(&disabled)?))
     };
+    let rules_active = cleaner.as_deref().map_or(0, Cleaner::len);
+    let data_log = cli
+        .log_dir
+        .clone()
+        .map(|dir| Arc::new(DataLogger::new(dir, cli.log_format)));
 
     let sounds = Sounds::new(!cli.no_sounds);
     let engine = Engine::open(&cli.model)
@@ -185,6 +188,8 @@ fn main() -> Result<()> {
         engine,
         audio: audio.clone(),
         cleaner: cleaner.clone(),
+        data_log: data_log.clone(),
+        rules_active,
         sounds: sounds.clone(),
         log: Arc::clone(&log),
         mode,
@@ -318,6 +323,8 @@ struct WorkerCtx {
     engine: Engine,
     audio: AudioHandle,
     cleaner: Option<Arc<Cleaner>>,
+    data_log: Option<Arc<DataLogger>>,
+    rules_active: usize,
     sounds: Sounds,
     log: Arc<Logger>,
     mode: Mode,
@@ -333,6 +340,8 @@ fn worker_loop(ctx: WorkerCtx) {
         engine,
         audio,
         cleaner,
+        data_log,
+        rules_active,
         sounds,
         log,
         mode,
@@ -355,12 +364,24 @@ fn worker_loop(ctx: WorkerCtx) {
                     let chunk = audio.snapshot_from(consumed_samples);
                     if !chunk.is_empty() {
                         consumed_samples += chunk.len();
+                        let infer_started = Instant::now();
                         match engine.transcribe(&chunk) {
                             Ok(raw) if !raw.trim().is_empty() => {
+                                let infer_elapsed = infer_started.elapsed();
                                 let cleaned = match &cleaner {
                                     Some(c) => c.clean(&raw),
                                     None => raw.clone(),
                                 };
+                                if let Some(data_log) = &data_log {
+                                    let chunk_secs = chunk.len() as f32 / TARGET_RATE as f32;
+                                    data_log.log(
+                                        chunk_secs,
+                                        infer_elapsed,
+                                        &raw,
+                                        &cleaned,
+                                        rules_active,
+                                    );
+                                }
                                 log.streaming_partial(&raw, &cleaned);
                                 if let Err(e) = type_text(&cleaned) {
                                     log.error(&format!("type failed: {e:#}"));
@@ -405,14 +426,15 @@ fn worker_loop(ctx: WorkerCtx) {
                 let infer_started = Instant::now();
                 match engine.transcribe(to_transcribe) {
                     Ok(raw) if !raw.trim().is_empty() => {
+                        let infer_elapsed = infer_started.elapsed();
                         let cleaned = match &cleaner {
                             Some(c) => c.clean(&raw),
                             None => raw.clone(),
                         };
-                        // TODO(transcription-logging): when --log-dir is set,
-                        // append (timestamp, raw, cleaned, audio_secs, infer_ms)
-                        // to a rotating file here.
-                        log.transcript(&raw, &cleaned, infer_started.elapsed());
+                        if let Some(data_log) = &data_log {
+                            data_log.log(secs, infer_elapsed, &raw, &cleaned, rules_active);
+                        }
+                        log.transcript(&raw, &cleaned, infer_elapsed);
                         match type_text(&cleaned) {
                             Ok(_) => sounds.success(),
                             Err(e) => {
@@ -531,11 +553,7 @@ impl Logger {
                 format!("({:.0}ms)", infer.as_secs_f32() * 1000.0).dimmed()
             );
         } else {
-            println!(
-                "{}  {}",
-                "Raw:".dimmed(),
-                raw.dimmed()
-            );
+            println!("{}  {}", "Raw:".dimmed(), raw.dimmed());
             println!(
                 "{}  {}  {}",
                 "Clean:".green().bold(),
@@ -558,13 +576,7 @@ impl Logger {
         }
     }
 
-    fn banner(
-        &self,
-        cli: &Cli,
-        mode: &Mode,
-        cleaner: Option<&Cleaner>,
-        capture: &AudioCapture,
-    ) {
+    fn banner(&self, cli: &Cli, mode: &Mode, cleaner: Option<&Cleaner>, capture: &AudioCapture) {
         if !self.verbose {
             return;
         }
@@ -579,6 +591,13 @@ impl Logger {
             }
         );
         println!("  sounds:   {}", if cli.no_sounds { "off" } else { "on" });
+        println!(
+            "  logging:  {}",
+            match &cli.log_dir {
+                Some(dir) => format!("{:?} to {}", cli.log_format, dir.display()),
+                None => "off".to_string(),
+            }
+        );
         println!(
             "  audio:    {} Hz hardware{}, {} Hz target",
             capture.hw_rate,

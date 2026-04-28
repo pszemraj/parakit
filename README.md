@@ -156,6 +156,10 @@ parakit -m models/parakeet-tdt-0.6b-v3.gguf
 # Daemonized in background
 parakit -m models/parakeet-tdt-0.6b-v3.gguf --quiet &
 
+# Log raw/cleaned transcription pairs for later cleanup-model training
+parakit -m models/parakeet-tdt-0.6b-v3.gguf --log-dir ~/.parakit/logs
+parakit -m models/parakeet-tdt-0.6b-v3.gguf --log-dir ~/.parakit/logs --log-format tsv
+
 # Streaming mode (experimental — chunks during recording)
 parakit -m models/parakeet-tdt-0.6b-v3.gguf --mode streaming
 parakit -m models/parakeet-tdt-0.6b-v3.gguf --mode streaming:2.5  # 2.5s chunks
@@ -177,6 +181,23 @@ parakit --test-rules "So, um, the the the cat ran like, you know, fast"
 
 The hotkey is `Ctrl+Space`. The literal space is suppressed from reaching
 the focused application.
+
+### Quality comparison tools
+
+For A/B checks on real dictation clips, parakit includes a WAV-only debugging
+example and a separate NeMo reference script:
+
+```bash
+cargo run --example transcribe-file -- \
+  --model models/parakeet-tdt-0.6b-v3.gguf \
+  --audio clips/example.wav
+
+python scripts/transcribe_nemo_parakeet.py clips/example.wav
+```
+
+The Rust example uses the same CrispASR `Engine` and cleaning pipeline as the
+daemon. The Python script uses NVIDIA NeMo's
+`nvidia/parakeet-tdt-0.6b-v3` reference path and is only for validation.
 
 ### Sounds
 

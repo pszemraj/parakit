@@ -24,7 +24,7 @@ use rubato::{
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-pub const TARGET_RATE: u32 = 16_000;
+pub use parakit::constants::TARGET_RATE;
 
 /// Reserves enough capacity for ~10 minutes of recording at 16 kHz.
 const PREALLOC_CAPACITY: usize = TARGET_RATE as usize * 60 * 10;
@@ -118,14 +118,9 @@ impl AudioCapture {
                 oversampling_factor: 256,
                 window: WindowFunction::BlackmanHarris2,
             };
-            let resampler = SincFixedIn::<f32>::new(
-                TARGET_RATE as f64 / hw_rate as f64,
-                2.0,
-                params,
-                1024,
-                1,
-            )
-            .context("failed to construct resampler")?;
+            let resampler =
+                SincFixedIn::<f32>::new(TARGET_RATE as f64 / hw_rate as f64, 2.0, params, 1024, 1)
+                    .context("failed to construct resampler")?;
             Some(ResamplerState::new(resampler, 1024))
         } else {
             None
