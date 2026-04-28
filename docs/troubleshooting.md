@@ -2,6 +2,12 @@
 
 ## `rdev::grab` Fails
 
+Run the preflight check first:
+
+```bash
+parakit doctor
+```
+
 On Linux, the daemon requires X11. Wayland compositors generally block global
 key interception and synthetic input from regular client applications.
 
@@ -12,6 +18,27 @@ echo "$XDG_SESSION_TYPE"
 ```
 
 Use an X11 session for the daemon.
+
+If the session is X11 and `parakit doctor` reports `permission denied` on
+`/dev/input/event*`, the hotkey backend cannot read low-level input devices.
+Add the desktop user to the `input` group, then start a completely new login
+session:
+
+```bash
+sudo usermod -aG input "$USER"
+```
+
+Log out and back in, or reboot. A terminal or tmux server that was already
+running before the group change keeps the old group list, so restart tmux and
+launch parakit from a fresh shell. Verify the new session:
+
+```bash
+id -nG | tr ' ' '\n' | grep '^input$'
+```
+
+Do not run parakit with `sudo` as a normal workaround. The keyboard hook might
+open, but audio, X11, and synthetic typing are owned by the regular desktop
+session and can fail in different ways.
 
 On macOS, grant Accessibility and Input Monitoring permissions to both the
 terminal and the built binary.

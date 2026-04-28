@@ -8,12 +8,15 @@ when launched with `--quiet` and shell job control.
 Run the foreground path first after an install or model change:
 
 ```bash
+parakit doctor
 parakit
 ```
 
-On the first run, parakit downloads the default Q8_0 GGUF into the model cache
-before opening the microphone. Confirm that the model loads, `Ctrl+Space`
-records, text injection works, and errors are visible in the terminal.
+`parakit doctor` checks desktop hotkey permissions without downloading or
+loading a model. On the first real run, parakit downloads the default Q8_0 GGUF
+into the model cache before opening the microphone. Confirm that the model
+loads, `Ctrl+Space` records, text injection works, and errors are visible in the
+terminal.
 
 ## Background Launch
 

@@ -22,7 +22,9 @@ cd parakit
 cargo install --path .
 export PATH="$HOME/.cargo/bin:$PATH"
 
-# First run downloads the default Q8_0 GGUF into the model cache.
+parakit doctor
+
+# First run checks hotkey permissions, then downloads the default Q8_0 GGUF.
 parakit
 ```
 

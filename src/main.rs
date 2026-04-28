@@ -112,6 +112,8 @@ struct Cli {
 enum Commands {
     /// Download the default hosted Parakeet Q8_0 GGUF.
     Fetch(FetchCli),
+    /// Check desktop permissions and runtime prerequisites without starting.
+    Doctor,
 }
 
 #[derive(Args, Debug)]
@@ -163,19 +165,29 @@ fn main() {
 fn run() -> Result<()> {
     let cli = Cli::parse();
 
-    if let Some(Commands::Fetch(fetch_cli)) = &cli.command {
-        fetch::run(FetchOptions {
-            force: fetch_cli.force,
-            quiet: cli.quiet,
-            source: if fetch_cli.from_source {
-                FetchSource::OfficialNemo
-            } else {
-                FetchSource::HostedQ8
-            },
-            keep_nemo: fetch_cli.keep_nemo,
-            keep_f16: fetch_cli.keep_f16,
-        })?;
-        return Ok(());
+    if let Some(command) = &cli.command {
+        match command {
+            Commands::Fetch(fetch_cli) => {
+                fetch::run(FetchOptions {
+                    force: fetch_cli.force,
+                    quiet: cli.quiet,
+                    source: if fetch_cli.from_source {
+                        FetchSource::OfficialNemo
+                    } else {
+                        FetchSource::HostedQ8
+                    },
+                    keep_nemo: fetch_cli.keep_nemo,
+                    keep_f16: fetch_cli.keep_f16,
+                })?;
+                return Ok(());
+            }
+            Commands::Doctor => {
+                if daemon::preflight::print_doctor(!cli.quiet) {
+                    return Ok(());
+                }
+                anyhow::bail!("doctor found blocking desktop permission issues");
+            }
+        }
     }
 
     // Special command modes: print rules / test rules.
@@ -207,6 +219,8 @@ fn run() -> Result<()> {
         }
         return Ok(());
     }
+
+    daemon::preflight::ensure_hotkey_ready()?;
 
     let mode = Mode::parse(&cli.mode)?;
     let disabled: HashSet<String> = cli.disable_rule.iter().cloned().collect();
@@ -335,16 +349,46 @@ fn run_grab_loop(tx: Sender<Event_>, audio: AudioHandle) {
     let _ = GRAB_AUDIO.set(audio);
 
     if let Err(e) = rdev::grab(grab_callback) {
-        eprintln!(
-            "parakit: rdev::grab failed: {:?}\n\
-             On Linux, this requires X11 (not Wayland) and may need\n\
-             your user added to the `input` group:\n  sudo usermod -aG input $USER\n\
-             On macOS, grant Accessibility + Input Monitoring permissions.\n\
-             On Windows, just rerun.",
-            e
-        );
+        eprintln!("parakit: rdev::grab failed: {e:?}\n{}", grab_failure_help());
         std::process::exit(2);
     }
+}
+
+#[cfg(target_os = "linux")]
+fn grab_failure_help() -> String {
+    let session = std::env::var("XDG_SESSION_TYPE").unwrap_or_else(|_| "unknown".to_string());
+    let display = std::env::var("DISPLAY").unwrap_or_else(|_| "<unset>".to_string());
+    let user = std::env::var("USER").unwrap_or_else(|_| "$USER".to_string());
+
+    format!(
+        "Linux hotkey capture requires X11 plus read access to /dev/input/event*.\n\
+         Current session: XDG_SESSION_TYPE={session}, DISPLAY={display}\n\
+         If the session is Wayland, log into an Xorg/X11 session.\n\
+         If the session is X11 and this is PermissionDenied, add your user to\n\
+         the input group, then log out completely and log back in:\n\
+           sudo usermod -aG input {user}\n\
+         Verify the new login session with:\n\
+           id -nG | tr ' ' '\\n' | grep '^input$'\n\
+         Restart tmux, terminals, or user services that were started before the\n\
+         group change. Avoid running parakit with sudo; audio, X11, and text\n\
+         injection usually belong to the regular desktop user."
+    )
+}
+
+#[cfg(target_os = "macos")]
+fn grab_failure_help() -> String {
+    "macOS hotkey capture requires Accessibility and Input Monitoring permissions for both the terminal and the parakit binary.".to_string()
+}
+
+#[cfg(target_os = "windows")]
+fn grab_failure_help() -> String {
+    "Windows usually allows the hotkey hook. If security software blocked parakit, whitelist the binary and rerun it.".to_string()
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+fn grab_failure_help() -> String {
+    "Global hotkey capture is platform-specific and may need OS-level input permissions."
+        .to_string()
 }
 
 fn grab_callback(event: Event) -> Option<Event> {
