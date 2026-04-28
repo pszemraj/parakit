@@ -34,6 +34,10 @@ sudo nala install libvulkan-dev vulkan-tools glslc spirv-tools spirv-headers mes
 | Command | Behavior |
 | --- | --- |
 | `cargo build --release` | CPU-only bundled CrispASR build. |
+| `cargo install --path . --locked` | Installs the release binary to Cargo's bin directory, usually `~/.cargo/bin`. |
+| `cargo install --path . --locked --features cuda` | Installs a CUDA-enabled release binary. |
+| `cargo install --path . --locked --features vulkan` | Installs a Vulkan-enabled release binary. |
+| `cargo install --path . --locked --features metal` | Installs a Metal-enabled release binary on macOS. |
 | `cargo build --release --features cuda` | Builds ggml with CUDA support. |
 | `cargo build --release --features vulkan` | Builds ggml with Vulkan support. |
 | `cargo build --release --features metal` | Builds ggml with Metal support on macOS. |

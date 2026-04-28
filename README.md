@@ -19,21 +19,24 @@ Repository: [github.com/pszemraj/parakit](https://github.com/pszemraj/parakit)
 git clone --recurse-submodules https://github.com/pszemraj/parakit.git
 cd parakit
 
-cargo build --release
+cargo install --path . --locked
+export PATH="$HOME/.cargo/bin:$PATH"
 
 # One-time Python deps for converting NVIDIA's official .nemo checkpoint.
 python -m pip install -r requirements-convert.txt
 
 # Download, convert, and quantize the official model to cached Q8_0 GGUF.
-./target/release/parakit fetch
+parakit fetch
 
 # Run in the foreground first.
-./target/release/parakit
+parakit
 ```
 
-Use `--features cuda`, `--features vulkan`, or `--features metal` for an
-accelerated build. Native dependencies and backend notes are in
-[docs/build.md](docs/build.md).
+`cargo install --path .` builds the release binary and installs it into
+Cargo's binary directory, usually `~/.cargo/bin`. Use
+`cargo install --path . --locked --features cuda` for CUDA; replace `cuda`
+with `vulkan` or `metal` for those backends. Native dependencies and backend
+notes are in [docs/build.md](docs/build.md).
 
 Foreground startup prints the resolved model and waits for the hotkey:
 
@@ -51,7 +54,7 @@ Ready: hold Ctrl+Space to dictate. Ctrl+C in this terminal to exit.
 For normal use, run it quietly in the background:
 
 ```bash
-./target/release/parakit --quiet &
+parakit --quiet &
 ```
 
 See [docs/running.md](docs/running.md) for background launch, `nohup`,

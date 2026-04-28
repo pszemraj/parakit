@@ -5,10 +5,10 @@ when launched with `--quiet` and shell job control.
 
 ## Foreground Check
 
-Run the foreground path first after a build or model change:
+Run the foreground path first after an install or model change:
 
 ```bash
-./target/release/parakit
+parakit
 ```
 
 Confirm that the model loads, the microphone opens, `Ctrl+Space` records, text
@@ -19,17 +19,25 @@ injection works, and errors are visible in the terminal.
 Quiet mode suppresses stdout. Errors and warnings still go to stderr.
 
 ```bash
-./target/release/parakit --quiet &
+parakit --quiet &
 ```
 
-To launch from any directory, install the binary somewhere on `PATH`. The
-default model is resolved from the cache populated by
+Install the binary onto `PATH` from the repository:
+
+```bash
+cargo install --path . --locked
+```
+
+Cargo installs to `~/.cargo/bin` by default. Add it to `PATH` if needed:
+
+```bash
+export PATH="$HOME/.cargo/bin:$PATH"
+```
+
+The default model is resolved from the cache populated by
 [`parakit fetch`](../README.md#model-setup):
 
 ```bash
-mkdir -p "$HOME/.local/bin"
-cp target/release/parakit "$HOME/.local/bin/parakit"
-
 parakit fetch
 parakit --quiet &
 ```
