@@ -1,0 +1,8 @@
+# Python dependencies for `parakit fetch` conversion step.
+#
+# The Rust daemon does not use these packages at runtime. They are only needed
+# to run vendor/CrispASR/models/convert-parakeet-to-gguf.py.
+gguf
+numpy
+sentencepiece
+torch

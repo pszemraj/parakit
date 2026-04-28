@@ -15,6 +15,7 @@ required-features = ["daemon"]
 [dependencies]
 # CLI parsing
 clap = { version = "4.5", features = ["derive"] }
+directories = "6"
 
 # Inference — the actual model runtime.
 # CrispASR's Rust crates aren't published to crates.io, so we pull them
@@ -49,9 +50,12 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "serd
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
-# Logging / pretty output
+# Downloading and checksums for `parakit fetch`
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
+sha2 = "0.10"
+
+# Error handling
 anyhow = "1.0"
-colored = "2.1"
 
 # Threading conveniences
 crossbeam-channel = "0.5"

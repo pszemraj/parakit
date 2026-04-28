@@ -89,13 +89,15 @@ copy target\release\build\parakit-*\out\lib\*.dll target\release\
 
 or add that `out\lib` directory to `PATH`.
 
-## Model Path Problems
+## Model Cache Problems
 
-Use absolute model paths for background launches:
+With the default model path, parakit expects `parakit fetch` to populate the
+platform cache first:
 
 ```bash
-parakit -m "$HOME/.local/share/parakit/models/parakeet-tdt-0.6b-v3-Q5_K_M.gguf" --quiet &
+parakit fetch
+parakit --quiet &
 ```
 
-Relative paths are resolved from the shell's current working directory at
-launch time.
+If you pass `-m <path>`, that custom model path always wins. Relative custom
+paths are resolved from the shell's current working directory at launch time.

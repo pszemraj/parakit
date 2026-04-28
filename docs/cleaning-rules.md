@@ -42,13 +42,13 @@ Whitespace and punctuation cleanup should stay at the end.
 Disable one rule:
 
 ```bash
-parakit -m models/parakeet.gguf --disable-rule lead-so-comma
+parakit --disable-rule lead-so-comma
 ```
 
 Disable multiple rules:
 
 ```bash
-parakit -m models/parakeet.gguf \
+parakit \
   --disable-rule lead-so-comma \
   --disable-rule fix-trailing-period
 ```
@@ -56,7 +56,7 @@ parakit -m models/parakeet.gguf \
 Disable the whole cleanup pass:
 
 ```bash
-parakit -m models/parakeet.gguf --no-cleaning
+parakit --no-cleaning
 ```
 
 ## Adding Rules

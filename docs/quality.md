@@ -11,13 +11,13 @@ without the hotkey daemon:
 
 ```bash
 cargo run --example transcribe-file -- \
-  --model models/parakeet-tdt-0.6b-v3.gguf \
   --audio clips/example.wav
 ```
 
 The helper accepts WAV input, mixes to mono, resamples to 16 kHz, runs
 `Engine::transcribe`, applies cleanup unless disabled, and prints raw and
-cleaned text.
+cleaned text. It uses the cached Q8_0 model by default. Pass `--model
+/path/to/model.gguf` only when comparing a specific custom GGUF.
 
 ## NeMo Reference Helper
 
@@ -45,7 +45,7 @@ Compare:
 
 1. NeMo or another trusted Parakeet reference implementation.
 2. parakit with an F16 GGUF model.
-3. parakit with the intended quantized model, such as Q5_K_M.
+3. parakit with the canonical cached Q8_0 GGUF model.
 
 Acceptable differences:
 
@@ -62,8 +62,8 @@ Not acceptable:
 - many wrong words in a short utterance.
 
 If F16 differs materially from the reference, inspect CrispASR's Parakeet
-preprocessor first. If F16 matches but Q5_K_M is worse, prefer F16 for daily
-use.
+preprocessor first. If F16 matches but Q8_0 is worse, treat that as a fetch or
+quantizer regression before trusting the cached model.
 
 ## Runtime Smoke Checks
 

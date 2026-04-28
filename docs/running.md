@@ -8,7 +8,7 @@ when launched with `--quiet` and shell job control.
 Run the foreground path first after a build or model change:
 
 ```bash
-./target/release/parakit -m "$PWD/models/parakeet-tdt-0.6b-v3-Q5_K_M.gguf"
+./target/release/parakit
 ```
 
 Confirm that the model loads, the microphone opens, `Ctrl+Space` records, text
@@ -19,24 +19,24 @@ injection works, and errors are visible in the terminal.
 Quiet mode suppresses stdout. Errors and warnings still go to stderr.
 
 ```bash
-./target/release/parakit -m "$PWD/models/parakeet-tdt-0.6b-v3-Q5_K_M.gguf" --quiet &
+./target/release/parakit --quiet &
 ```
 
-To launch from any directory, install the binary somewhere on `PATH` and use an
-absolute model path:
+To launch from any directory, install the binary somewhere on `PATH`. The
+default model is resolved from the platform cache populated by `parakit fetch`:
 
 ```bash
-mkdir -p "$HOME/.local/bin" "$HOME/.local/share/parakit/models"
+mkdir -p "$HOME/.local/bin"
 cp target/release/parakit "$HOME/.local/bin/parakit"
-cp models/parakeet-tdt-0.6b-v3-Q5_K_M.gguf "$HOME/.local/share/parakit/models/"
 
-parakit -m "$HOME/.local/share/parakit/models/parakeet-tdt-0.6b-v3-Q5_K_M.gguf" --quiet &
+parakit fetch
+parakit --quiet &
 ```
 
 Detach it from the current shell:
 
 ```bash
-parakit -m "$HOME/.local/share/parakit/models/parakeet-tdt-0.6b-v3-Q5_K_M.gguf" --quiet &
+parakit --quiet &
 disown
 ```
 
@@ -44,8 +44,7 @@ Keep stderr in a file with `nohup`:
 
 ```bash
 mkdir -p "$HOME/.local/state/parakit"
-nohup parakit -m "$HOME/.local/share/parakit/models/parakeet-tdt-0.6b-v3-Q5_K_M.gguf" \
-  --quiet >/dev/null 2>>"$HOME/.local/state/parakit/parakit.err" &
+nohup parakit --quiet >/dev/null 2>>"$HOME/.local/state/parakit/parakit.err" &
 ```
 
 Stop the daemon:
@@ -77,8 +76,8 @@ warnings. Those still go to stderr.
 `--log-dir` records text pairs for later cleanup-model training:
 
 ```bash
-parakit -m models/parakeet.gguf --log-dir "$HOME/.parakit/logs"
-parakit -m models/parakeet.gguf --log-dir "$HOME/.parakit/logs" --log-format tsv
+parakit --log-dir "$HOME/.parakit/logs"
+parakit --log-dir "$HOME/.parakit/logs" --log-format tsv
 ```
 
 One file is written per local day:
@@ -102,7 +101,7 @@ but never abort transcription. Audio is not logged.
 Batch mode is the default:
 
 ```bash
-parakit -m models/parakeet.gguf --mode batch
+parakit --mode batch
 ```
 
 It records the full utterance and transcribes once on hotkey release. This is
@@ -111,8 +110,8 @@ the recommended mode.
 Streaming mode sends chunks while the hotkey is still held:
 
 ```bash
-parakit -m models/parakeet.gguf --mode streaming
-parakit -m models/parakeet.gguf --mode streaming:2.5
+parakit --mode streaming
+parakit --mode streaming:2.5
 ```
 
 Streaming reduces perceived latency but can split words at chunk boundaries.
@@ -130,5 +129,5 @@ parakit generates short cue tones in-process:
 Disable cues:
 
 ```bash
-parakit -m models/parakeet.gguf --no-sounds
+parakit --no-sounds
 ```

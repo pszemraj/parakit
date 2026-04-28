@@ -37,28 +37,30 @@ cargo build --release --features vulkan
 cargo build --release --features metal
 cargo build --release
 
-# Download a GGUF model.
-huggingface-cli download CrispStrobe/parakeet-tdt-0.6b-v3-gguf \
-  --include "*Q5_K_M.gguf" \
-  --local-dir ./models
+# One-time Python deps for converting NVIDIA's official .nemo checkpoint.
+python -m pip install -r requirements-convert.txt
+
+# Download, convert, and quantize the official model to cached Q8_0 GGUF.
+./target/release/parakit fetch
 
 # Run in the foreground first.
-./target/release/parakit -m models/parakeet-tdt-0.6b-v3-Q5_K_M.gguf
+./target/release/parakit
 ```
 
 Expected foreground output is plain status text:
 
 ```text
 parakit
-  model:    models/parakeet-tdt-0.6b-v3-Q5_K_M.gguf
+  model:    /home/user/.cache/parakit/models/parakeet-tdt-0.6b-v3-Q8_0.gguf
+  dtype:    Q8_0 (640 MB)
   mode:     Batch
   cleaning: on (72 rules)
   sounds:   on
   logging:  off
   audio:    48000 Hz hardware (resampling), 16000 Hz target
 Ready: hold Ctrl+Space to dictate. Ctrl+C in this terminal to exit.
-Recording...
-Transcribing (3.42s audio, 3.61s wall)...
+parakit: recording...
+parakit: transcribing (3.42s audio, 3.61s wall)...
 Raw:    So, um, the the cat sat on the mat.
 Clean:  The cat sat on the mat  (212ms)
 ```
@@ -66,7 +68,7 @@ Clean:  The cat sat on the mat  (212ms)
 For normal use, run it quietly in the background:
 
 ```bash
-./target/release/parakit -m "$PWD/models/parakeet-tdt-0.6b-v3-Q5_K_M.gguf" --quiet &
+./target/release/parakit --quiet &
 ```
 
 See [docs/running.md](docs/running.md) for background launch, `nohup`,
@@ -75,16 +77,24 @@ logging, and process management examples.
 ## Common Commands
 
 ```bash
+# Rebuild cached model artifacts from the official checkpoint.
+parakit fetch --force
+parakit fetch --keep-nemo
+parakit fetch --keep-f16
+
 # Run with transcription logging.
-parakit -m models/parakeet-tdt-0.6b-v3.gguf --log-dir ~/.parakit/logs
-parakit -m models/parakeet-tdt-0.6b-v3.gguf --log-dir ~/.parakit/logs --log-format tsv
+parakit --log-dir ~/.parakit/logs
+parakit --log-dir ~/.parakit/logs --log-format tsv
 
 # Disable sounds or cleanup.
-parakit -m models/parakeet-tdt-0.6b-v3.gguf --no-sounds
-parakit -m models/parakeet-tdt-0.6b-v3.gguf --no-cleaning
+parakit --no-sounds
+parakit --no-cleaning
 
 # Disable one cleanup rule.
-parakit -m models/parakeet-tdt-0.6b-v3.gguf --disable-rule lead-so-comma
+parakit --disable-rule lead-so-comma
+
+# Use a custom GGUF instead of the cached Q8_0.
+parakit -m /path/to/model.gguf
 
 # Inspect or test cleanup rules without starting the daemon.
 parakit --list-rules
@@ -93,6 +103,28 @@ parakit --test-rules "So, um, the the cat ran like, you know, fast"
 
 The hotkey is fixed at `Ctrl+Space`. The literal space is suppressed so it
 does not reach the focused application.
+
+## Model Setup
+
+`parakit fetch` owns the canonical model pipeline:
+
+1. download NVIDIA's official `.nemo` checkpoint;
+2. convert it to an intermediate F16 GGUF with CrispASR's converter;
+3. quantize it to the default Q8_0 GGUF with `crispasr-quantize`.
+
+The final model is cached at:
+
+```text
+~/.cache/parakit/models/parakeet-tdt-0.6b-v3-Q8_0.gguf
+```
+
+`XDG_CACHE_HOME` is honored on Linux. macOS uses
+`~/Library/Caches/parakit/models/`, and Windows uses
+`%LOCALAPPDATA%\parakit\Cache\models\`.
+
+The downloaded `.nemo` and intermediate F16 GGUF are deleted after a successful
+fetch unless `--keep-nemo` or `--keep-f16` is passed. `-m <path>` always
+overrides the cached model.
 
 ## Documentation
 

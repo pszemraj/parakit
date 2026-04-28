@@ -69,6 +69,9 @@ crossbeam channels.
 | --- | --- |
 | `src/main.rs` | CLI, hotkey state machine, worker thread, streaming ticker. |
 | `src/daemon/audio.rs` | Microphone capture, mono mixdown, resampling, shared buffer. |
+| `src/fetch.rs` | Official `.nemo` download, conversion, quantization, and manifest handling. |
+| `src/model.rs` | Cache path conventions and default model resolution. |
+| `src/gguf.rs` | Minimal GGUF dtype reader for startup reporting. |
 | `src/inference.rs` | CrispASR session wrapper and short-audio padding. |
 | `src/rules.rs` | Built-in transcript cleanup rules. |
 | `src/daemon/inject.rs` | Synthetic typing through Enigo. |

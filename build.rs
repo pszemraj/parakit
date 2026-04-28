@@ -56,9 +56,11 @@ fn main() {
     let mut cfg = cmake::Config::new(&src_dir);
     cfg.profile("Release")
         .define("BUILD_SHARED_LIBS", "ON")
-        // Skip tests and examples — saves several minutes on first build.
+        // Skip tests. Build examples because CrispASR's quantizer lives there.
         .define("WHISPER_BUILD_TESTS", "OFF")
-        .define("WHISPER_BUILD_EXAMPLES", "OFF")
+        // CrispASR's GGUF requantizer lives under examples/. We build the
+        // examples tree so `crispasr-quantize` is available to `parakit fetch`.
+        .define("WHISPER_BUILD_EXAMPLES", "ON")
         .define("GGML_BUILD_TESTS", "OFF")
         .define("GGML_BUILD_EXAMPLES", "OFF")
         // Bake an `$ORIGIN` (Linux/BSD) or `@loader_path` (macOS) rpath into
@@ -127,6 +129,19 @@ fn main() {
         println!("cargo:rustc-link-search=native={}", bin_dir.display());
     }
 
+    let quantize_bin = bin_dir.join(exe_name("crispasr-quantize"));
+    if quantize_bin.is_file() {
+        println!(
+            "cargo:rustc-env=CRISPASR_QUANTIZE_BIN={}",
+            quantize_bin.display()
+        );
+    } else {
+        println!(
+            "cargo:warning=crispasr-quantize was not installed at {}; `parakit fetch` will look on PATH",
+            quantize_bin.display()
+        );
+    }
+
     // 6. Bake the lib path into the binary's rpath so we don't need
     //    LD_LIBRARY_PATH / DYLD_FALLBACK_LIBRARY_PATH at runtime.
     //    No-op on Windows — see README for the DLL placement guidance.
@@ -155,6 +170,14 @@ fn target_is_apple() -> bool {
         env::var("CARGO_CFG_TARGET_OS").unwrap_or_default().as_str(),
         "macos" | "ios"
     )
+}
+
+fn exe_name(name: &str) -> String {
+    if env::var("CARGO_CFG_TARGET_OS").unwrap_or_default() == "windows" {
+        format!("{name}.exe")
+    } else {
+        name.to_string()
+    }
 }
 
 /// Find the CrispASR source. Order:

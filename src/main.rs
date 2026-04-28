@@ -21,11 +21,13 @@
 mod daemon;
 
 use anyhow::{Context, Result};
-use clap::Parser;
-use colored::Colorize;
+use clap::{Args, Parser, Subcommand};
 use crossbeam_channel::{bounded, Receiver, Sender};
 use parakit::data_log::{DataLogger, LogFormat};
+use parakit::fetch::{self, FetchOptions};
+use parakit::gguf;
 use parakit::inference::{Engine, Mode};
+use parakit::model;
 use parakit::rules::{self, Cleaner};
 use rdev::{Event, EventType, Key};
 use std::collections::HashSet;
@@ -50,9 +52,13 @@ use crate::daemon::sounds::Sounds;
     long_about = "Push-to-talk dictation daemon. Hold Ctrl+Space to record, release to transcribe and inject text at the cursor.\n\nDefault mode is verbose (prints raw + cleaned text). Pass --quiet for daemon mode."
 )]
 struct Cli {
-    /// Path to the GGUF model file.
-    #[arg(short = 'm', long, default_value = "parakeet-tdt-0.6b-v3.gguf")]
-    model: PathBuf,
+    /// Subcommand to run instead of the push-to-talk daemon.
+    #[command(subcommand)]
+    command: Option<Commands>,
+
+    /// Path to a GGUF model file. Overrides the cached Q8_0 model.
+    #[arg(short = 'm', long, value_name = "PATH")]
+    model: Option<PathBuf>,
 
     /// Inference mode. `batch` (default) records all audio then transcribes once.
     /// `streaming` transcribes chunks during recording (experimental, finicky).
@@ -102,6 +108,27 @@ struct Cli {
     log_format: LogFormat,
 }
 
+#[derive(Subcommand, Debug)]
+enum Commands {
+    /// Download, convert, and quantize the official Parakeet model to Q8_0.
+    Fetch(FetchCli),
+}
+
+#[derive(Args, Debug)]
+struct FetchCli {
+    /// Ignore cached artifacts and rebuild every step.
+    #[arg(long)]
+    force: bool,
+
+    /// Keep the downloaded 2.4 GB .nemo checkpoint after Q8_0 is produced.
+    #[arg(long)]
+    keep_nemo: bool,
+
+    /// Keep the intermediate F16 GGUF after Q8_0 is produced.
+    #[arg(long)]
+    keep_f16: bool,
+}
+
 // =============================================================================
 // Events sent to the worker thread
 // =============================================================================
@@ -122,8 +149,24 @@ enum Event_ {
 // main
 // =============================================================================
 
-fn main() -> Result<()> {
+fn main() {
+    if let Err(err) = run() {
+        eprintln!("parakit: error: {err:#}");
+        std::process::exit(1);
+    }
+}
+
+fn run() -> Result<()> {
     let cli = Cli::parse();
+
+    if let Some(Commands::Fetch(fetch_cli)) = &cli.command {
+        fetch::run(FetchOptions {
+            force: fetch_cli.force,
+            keep_nemo: fetch_cli.keep_nemo,
+            keep_f16: fetch_cli.keep_f16,
+        })?;
+        return Ok(());
+    }
 
     // Special command modes: print rules / test rules.
     if cli.list_rules {
@@ -172,14 +215,23 @@ fn main() -> Result<()> {
         .map(|dir| Arc::new(DataLogger::new(dir, cli.log_format)));
 
     let sounds = Sounds::new(!cli.no_sounds);
-    let engine = Engine::open(&cli.model)
-        .with_context(|| format!("could not open model {}", cli.model.display()))?;
+    let model_path = model::resolve_model_path(cli.model.as_deref())?;
+    let model_dtype = model_dtype_label(&model_path);
+    let engine = Engine::open(&model_path)
+        .with_context(|| format!("could not open model {}", model_path.display()))?;
     let capture = AudioCapture::open()?;
     let audio = capture.handle.clone();
     let log = Arc::new(Logger::new(!cli.quiet));
 
     // Banner.
-    log.banner(&cli, &mode, cleaner.as_deref(), &capture);
+    log.banner(
+        &cli,
+        &model_path,
+        &model_dtype,
+        &mode,
+        cleaner.as_deref(),
+        &capture,
+    );
 
     // Worker thread takes exclusive ownership of `engine`. `crispasr::Session`
     // is `Send` but not `Sync`, which is fine: only one thread ever calls
@@ -220,11 +272,7 @@ fn main() -> Result<()> {
     });
 
     // Hotkey grab loop. Blocks forever (until grab returns or process exits).
-    log.line(&format!(
-        "{} hold {} to dictate. Ctrl+C in this terminal to exit.",
-        "Ready:".green().bold(),
-        "Ctrl+Space".yellow().bold()
-    ));
+    log.line("Ready: hold Ctrl+Space to dictate. Ctrl+C in this terminal to exit.");
 
     run_grab_loop(tx, audio);
 
@@ -235,6 +283,19 @@ fn main() -> Result<()> {
     }
     let _ = worker.join();
     Ok(())
+}
+
+fn model_dtype_label(path: &std::path::Path) -> String {
+    let dtype = gguf::detect_dtype(path)
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| "unknown".to_string());
+    let size = path
+        .metadata()
+        .ok()
+        .map(|meta| format!(" ({:.0} MB)", meta.len() as f64 / 1_000_000.0))
+        .unwrap_or_default();
+    format!("{dtype}{size}")
 }
 
 // =============================================================================
@@ -359,7 +420,7 @@ fn worker_loop(ctx: WorkerCtx) {
                 consumed_samples = 0;
                 recording_started_at = Some(Instant::now());
                 sounds.start();
-                log.line("Recording...");
+                log.line("parakit: recording...");
             }
             Event_::StreamChunk => {
                 if let Mode::Streaming { .. } = mode {
@@ -415,7 +476,7 @@ fn worker_loop(ctx: WorkerCtx) {
 
                 let secs = pcm.len() as f32 / TARGET_RATE as f32;
                 log.line(&format!(
-                    "Transcribing ({:.2}s audio, {:.2}s wall)...",
+                    "parakit: transcribing ({:.2}s audio, {:.2}s wall)...",
                     secs,
                     dur_audio.as_secs_f32()
                 ));
@@ -441,7 +502,7 @@ fn worker_loop(ctx: WorkerCtx) {
                         }
                     }
                     Ok(_) => {
-                        log.line("No speech detected.");
+                        log.line("parakit: no speech detected");
                         sounds.success();
                     }
                     Err(e) => {
@@ -535,7 +596,7 @@ impl Logger {
 
     fn error(&self, msg: &str) {
         // Errors always go to stderr regardless of --quiet.
-        eprintln!("{} {}", "error:".red().bold(), msg);
+        eprintln!("parakit: error: {msg}");
     }
 
     fn transcript(&self, raw: &str, cleaned: &str, infer: Duration) {
@@ -543,19 +604,13 @@ impl Logger {
             return;
         }
         if raw == cleaned {
-            println!(
-                "{} {}  {}",
-                "Text:".bold(),
-                cleaned,
-                format!("({:.0}ms)", infer.as_secs_f32() * 1000.0).dimmed()
-            );
+            println!("Text: {}  ({:.0}ms)", cleaned, infer.as_secs_f32() * 1000.0);
         } else {
-            println!("{}  {}", "Raw:".dimmed(), raw.dimmed());
+            println!("Raw:    {raw}");
             println!(
-                "{}  {}  {}",
-                "Clean:".green().bold(),
+                "Clean:  {}  ({:.0}ms)",
                 cleaned,
-                format!("({:.0}ms)", infer.as_secs_f32() * 1000.0).dimmed()
+                infer.as_secs_f32() * 1000.0
             );
         }
     }
@@ -567,18 +622,27 @@ impl Logger {
         let raw = raw.trim();
         let cleaned = cleaned.trim();
         if raw == cleaned {
-            println!("{}  {}", "+".cyan(), cleaned);
+            println!("+  {}", cleaned);
         } else {
-            println!("{}  {}  =>  {}", "+".cyan(), raw.dimmed(), cleaned);
+            println!("+  {}  =>  {}", raw, cleaned);
         }
     }
 
-    fn banner(&self, cli: &Cli, mode: &Mode, cleaner: Option<&Cleaner>, capture: &AudioCapture) {
+    fn banner(
+        &self,
+        cli: &Cli,
+        model_path: &std::path::Path,
+        model_dtype: &str,
+        mode: &Mode,
+        cleaner: Option<&Cleaner>,
+        capture: &AudioCapture,
+    ) {
         if !self.verbose {
             return;
         }
-        println!("{}", "parakit".bold().cyan());
-        println!("  model:    {}", cli.model.display());
+        println!("parakit");
+        println!("  model:    {}", model_path.display());
+        println!("  dtype:    {}", model_dtype);
         println!("  mode:     {:?}", mode);
         println!(
             "  cleaning: {}",

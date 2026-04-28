@@ -7,6 +7,7 @@ use anyhow::{anyhow, Context, Result};
 use clap::Parser;
 use parakit::constants::TARGET_RATE;
 use parakit::inference::Engine;
+use parakit::model;
 use parakit::rules::{self, Cleaner};
 use rubato::{
     Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction,
@@ -21,9 +22,9 @@ use std::time::Instant;
     about = "Transcribe a WAV file through parakit's CrispASR engine."
 )]
 struct Cli {
-    /// Path to the GGUF model file.
+    /// Path to a GGUF model file. Overrides the cached Q8_0 model.
     #[arg(short = 'm', long)]
-    model: PathBuf,
+    model: Option<PathBuf>,
 
     /// Path to a WAV file. The tool mixes to mono and resamples to 16 kHz.
     #[arg(short = 'a', long)]
@@ -56,8 +57,9 @@ fn main() -> Result<()> {
     wav.samples = resample_to_target(wav.samples, original_rate)?;
     let audio_secs = wav.samples.len() as f32 / TARGET_RATE as f32;
 
-    let engine = Engine::open(&cli.model)
-        .with_context(|| format!("could not open model {}", cli.model.display()))?;
+    let model_path = model::resolve_model_path(cli.model.as_deref())?;
+    let engine = Engine::open(&model_path)
+        .with_context(|| format!("could not open model {}", model_path.display()))?;
 
     let started = Instant::now();
     let raw = engine.transcribe(&wav.samples)?;

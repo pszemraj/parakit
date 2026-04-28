@@ -54,7 +54,9 @@ crispasr = { path = "vendor/CrispASR/crispasr", default-features = false }
 The same submodule provides the Rust bindings and the C/C++ library source.
 `build.rs` configures CMake, builds CrispASR, installs shared libraries under
 `target/<profile>/build/parakit-*/out/lib`, and exposes that directory to
-Cargo's linker.
+Cargo's linker. It also builds CrispASR's `crispasr-quantize` tool under
+`target/<profile>/build/parakit-*/out/bin` so `parakit fetch` can produce the
+canonical Q8_0 model from the official NVIDIA checkpoint.
 
 Feature selection maps to CMake options:
 
