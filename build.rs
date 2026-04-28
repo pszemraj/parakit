@@ -16,8 +16,7 @@
 //! Escape hatches (any one of these skips the bundled build):
 //!   - `--no-default-features`              : the user takes responsibility.
 //!   - `CRISPASR_LIB_DIR=/path/to/libdir`   : link-search path override.
-//!   - `CRISPASR_SRC_DIR=/path/to/source`   : use this checkout instead of
-//!                                            `vendor/CrispASR` for the build.
+//!   - `CRISPASR_SRC_DIR=/path/to/source`   : use this checkout instead of the vendored source.
 
 use std::env;
 use std::path::{Path, PathBuf};
@@ -72,14 +71,25 @@ fn main() {
         .define("CMAKE_BUILD_WITH_INSTALL_RPATH", "ON")
         .define("CMAKE_INSTALL_RPATH_USE_LINK_PATH", "ON");
 
-    if cargo_feature("cuda") {
-        cfg.define("GGML_CUDA", "ON");
-    }
-    if cargo_feature("metal") {
-        cfg.define("GGML_METAL", "ON");
-    }
-    if cargo_feature("vulkan") {
-        cfg.define("GGML_VULKAN", "ON");
+    let cuda_enabled = cargo_feature("cuda");
+    let metal_enabled = cargo_feature("metal");
+    let vulkan_enabled = cargo_feature("vulkan");
+
+    cfg.define("GGML_CUDA", if cuda_enabled { "ON" } else { "OFF" });
+    cfg.define("GGML_VULKAN", if vulkan_enabled { "ON" } else { "OFF" });
+    if metal_enabled {
+        if target_is_apple() {
+            cfg.define("GGML_METAL", "ON");
+        } else if cuda_enabled || vulkan_enabled {
+            cfg.define("GGML_METAL", "OFF");
+            println!(
+                "cargo:warning=ignoring unsupported metal feature on non-Apple target during multi-backend build"
+            );
+        } else {
+            panic!("the metal feature is only supported on Apple targets");
+        }
+    } else {
+        cfg.define("GGML_METAL", "OFF");
     }
 
     let install_dir = cfg.build();
@@ -138,6 +148,13 @@ fn cargo_feature(name: &str) -> bool {
         name.to_uppercase().replace('-', "_")
     ))
     .is_ok()
+}
+
+fn target_is_apple() -> bool {
+    matches!(
+        env::var("CARGO_CFG_TARGET_OS").unwrap_or_default().as_str(),
+        "macos" | "ios"
+    )
 }
 
 /// Find the CrispASR source. Order:

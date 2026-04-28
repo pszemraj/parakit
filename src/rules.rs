@@ -83,13 +83,52 @@ impl Cleaner {
                 s = replaced.into_owned();
             }
         }
-        s
+        capitalize_sentence_starts(&s)
     }
 
     /// Number of active rules (after disable filtering).
     pub fn len(&self) -> usize {
         self.rules.len()
     }
+
+    pub fn is_empty(&self) -> bool {
+        self.rules.is_empty()
+    }
+}
+
+fn capitalize_sentence_starts(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut capitalize_next = true;
+
+    for c in s.chars() {
+        if capitalize_next {
+            if c.is_alphabetic() {
+                out.extend(c.to_uppercase());
+                capitalize_next = false;
+                continue;
+            }
+            out.push(c);
+            if is_sentence_boundary(c) || c.is_whitespace() || is_opening_punct(c) {
+                continue;
+            }
+            continue;
+        }
+
+        out.push(c);
+        if is_sentence_boundary(c) {
+            capitalize_next = true;
+        }
+    }
+
+    out
+}
+
+fn is_sentence_boundary(c: char) -> bool {
+    matches!(c, '.' | '!' | '?')
+}
+
+fn is_opening_punct(c: char) -> bool {
+    matches!(c, '"' | '\'' | '(' | '[' | '{' | '<')
 }
 
 /// Validate a single rule name exists in `DEFAULT_RULES`. Used by the CLI to
@@ -107,7 +146,7 @@ pub fn assert_rule_name_exists(name: &str) -> Result<()> {
 
 /// Print all rules to stdout (used by `--list-rules`).
 pub fn print_rule_list() {
-    println!("{:<32}  {:<8}  {}", "name", "default", "description");
+    println!("{:<32}  {:<8}  description", "name", "default");
     println!("{}", "-".repeat(80));
     for r in DEFAULT_RULES {
         println!(
@@ -618,22 +657,22 @@ mod tests {
     fn um_uh_removed() {
         let c = cleaner_with_all_defaults();
         assert_eq!(c.clean("I, um, think this works"), "I think this works");
-        assert_eq!(c.clean("uh, hello there"), "hello there");
+        assert_eq!(c.clean("uh, hello there"), "Hello there");
     }
 
     #[test]
     fn repeated_words_collapsed() {
         let c = cleaner_with_all_defaults();
-        assert_eq!(c.clean("the the the cat"), "the cat");
+        assert_eq!(c.clean("the the the cat"), "The cat");
         assert_eq!(c.clean("I I I think"), "I think");
-        assert_eq!(c.clean("we we ran"), "we ran");
+        assert_eq!(c.clean("we we ran"), "We ran");
     }
 
     #[test]
     fn partial_stutter_should() {
         let c = cleaner_with_all_defaults();
-        assert_eq!(c.clean("we sh sh should go"), "we should go");
-        assert_eq!(c.clean("we sh-sh-should go"), "we should go");
+        assert_eq!(c.clean("we sh sh should go"), "We should go");
+        assert_eq!(c.clean("we sh-sh-should go"), "We should go");
     }
 
     #[test]
@@ -648,7 +687,7 @@ mod tests {
     #[test]
     fn whitespace_cleanup() {
         let c = cleaner_with_all_defaults();
-        assert_eq!(c.clean("hello   world ,  foo ."), "hello world, foo.");
+        assert_eq!(c.clean("hello   world ,  foo ."), "Hello world, foo.");
     }
 
     #[test]
@@ -657,7 +696,31 @@ mod tests {
         disabled.insert("filler-um-uh".to_string());
         let c = Cleaner::new(&disabled).unwrap();
         // um/uh should survive
-        assert_eq!(c.clean("hello, um, world"), "hello, um, world");
+        assert_eq!(c.clean("hello, um, world"), "Hello, um, world");
+    }
+
+    #[test]
+    fn sentence_starts_are_capitalized_after_cleaning() {
+        let c = cleaner_with_all_defaults();
+        assert_eq!(
+            c.clean("So, the cat ran. then it slept. \"then it woke.\""),
+            "The cat ran. Then it slept. \"Then it woke.\""
+        );
+    }
+
+    #[test]
+    fn capitalization_is_idempotent_for_existing_sentence_case() {
+        let c = cleaner_with_all_defaults();
+        let input = "Already capitalized. Still capitalized!";
+        assert_eq!(c.clean(input), input);
+    }
+
+    #[test]
+    fn capitalization_handles_leading_whitespace() {
+        assert_eq!(
+            capitalize_sentence_starts("   hello there"),
+            "   Hello there"
+        );
     }
 
     #[test]

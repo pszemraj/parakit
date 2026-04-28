@@ -357,7 +357,7 @@ fn worker_loop(ctx: WorkerCtx) {
                 consumed_samples = 0;
                 recording_started_at = Some(Instant::now());
                 sounds.start();
-                log.line(&"🎙️  listening...".to_string());
+                log.line("🎙️  listening...");
             }
             Event_::StreamChunk => {
                 if let Mode::Streaming { .. } = mode {
@@ -444,7 +444,7 @@ fn worker_loop(ctx: WorkerCtx) {
                         }
                     }
                     Ok(_) => {
-                        log.line(&"🤷  no speech detected.".to_string());
+                        log.line("🤷  no speech detected.");
                         sounds.success();
                     }
                     Err(e) => {
