@@ -14,7 +14,7 @@ $ parakit -m parakeet-tdt-0.6b-v3.gguf
 parakit
   model:    parakeet-tdt-0.6b-v3.gguf
   mode:     Batch
-  cleaning: on (56 rules)
+  cleaning: on (72 rules)
   sounds:   on
   audio:    48000 Hz hardware (resampling), 16000 Hz target
 Ready — hold Ctrl+Space to dictate. Ctrl+C in this terminal to exit.

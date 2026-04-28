@@ -183,7 +183,7 @@ mod tests {
                         Duration::from_millis(187),
                         &format!("raw {thread_id} {i}"),
                         &format!("cleaned {thread_id} {i}"),
-                        56,
+                        72,
                     );
                 }
             }));
@@ -199,7 +199,7 @@ mod tests {
         assert_eq!(contents.lines().count(), 1000);
         for line in contents.lines() {
             let value: serde_json::Value = serde_json::from_str(line).expect("valid jsonl");
-            assert_eq!(value["rules_active"], 56);
+            assert_eq!(value["rules_active"], 72);
         }
     }
 

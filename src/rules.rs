@@ -235,10 +235,44 @@ pub const DEFAULT_RULES: &[Rule] = &[
         replacement: "$1$2",
         default_enabled: true,
     },
-
     // -------------------------------------------------------------------------
     // Mid-sentence filler (", you know,", ", like,", ", I mean,")
     // -------------------------------------------------------------------------
+    Rule {
+        name: "mid-not-like-you-know",
+        description: "Replace 'not like, you know,' / 'not like, I mean,' with 'not'",
+        pattern: r#"(?i)\bnot\s+like\s*,?\s*(?:you know(?: what i mean)?|i mean)\s*,?\s*"#,
+        replacement: "not ",
+        default_enabled: true,
+    },
+    Rule {
+        name: "mid-like-you-know",
+        description: "Strip 'like, you know,' / 'like, I mean,' filler phrases",
+        pattern: r#"(?i)\blike\s*,?\s*(?:you know(?: what i mean)?|i mean)\s*,?\s*"#,
+        replacement: "",
+        default_enabled: true,
+    },
+    Rule {
+        name: "mid-as-in-like",
+        description: "Replace 'as in like X' with 'as in X'",
+        pattern: r#"(?i)\bas\s+in\s+like\s+([A-Za-z0-9][A-Za-z0-9'-]*)\b"#,
+        replacement: "as in $1",
+        default_enabled: true,
+    },
+    Rule {
+        name: "mid-its-actually-like",
+        description: "Replace \"it's actually like X\" with \"it's actually X\"",
+        pattern: r#"(?i)\b(it'?s|that'?s|there'?s|here'?s)\s+(actually|basically|literally)\s+like\s+([A-Za-z0-9][A-Za-z0-9'-]*)\b"#,
+        replacement: "$1 $2 $3",
+        default_enabled: true,
+    },
+    Rule {
+        name: "mid-is-actually-like",
+        description: "Replace 'is actually like X' with 'is actually X'",
+        pattern: r#"(?i)\b(is|was|are|were|am|be|been|being)\s+(actually|basically|literally)\s+like\s+([A-Za-z0-9][A-Za-z0-9'-]*)\b"#,
+        replacement: "$1 $2 $3",
+        default_enabled: true,
+    },
     Rule {
         name: "mid-you-know",
         description: "Strip mid-sentence ', you know,' / ', you know what I mean,'",
@@ -295,7 +329,6 @@ pub const DEFAULT_RULES: &[Rule] = &[
         replacement: "$1 $2",
         default_enabled: true,
     },
-
     // -------------------------------------------------------------------------
     // Filler interjections: um, uh, erm
     // -------------------------------------------------------------------------
@@ -306,7 +339,6 @@ pub const DEFAULT_RULES: &[Rule] = &[
         replacement: " ",
         default_enabled: true,
     },
-
     // -------------------------------------------------------------------------
     // Repeated word stutters ("the the the" → "the", "I I I" → "I")
     // Note: "I" is special-cased to keep the capital.
@@ -494,17 +526,84 @@ pub const DEFAULT_RULES: &[Rule] = &[
         default_enabled: true,
     },
     Rule {
+        name: "stutter-did",
+        description: "Collapse repeated 'did did' → 'did'",
+        pattern: r#"(?i)\b(did)(?:\s+did)+\b"#,
+        replacement: "$1",
+        default_enabled: true,
+    },
+    Rule {
+        name: "stutter-can",
+        description: "Collapse repeated 'can can' → 'can'",
+        pattern: r#"(?i)\b(can)(?:\s+can)+\b"#,
+        replacement: "$1",
+        default_enabled: true,
+    },
+    Rule {
+        name: "stutter-will",
+        description: "Collapse repeated 'will will' → 'will'",
+        pattern: r#"(?i)\b(will)(?:\s+will)+\b"#,
+        replacement: "$1",
+        default_enabled: true,
+    },
+    Rule {
+        name: "stutter-has",
+        description: "Collapse repeated 'has has' → 'has'",
+        pattern: r#"(?i)\b(has)(?:\s+has)+\b"#,
+        replacement: "$1",
+        default_enabled: true,
+    },
+    Rule {
+        name: "stutter-had",
+        description: "Collapse repeated 'had had' → 'had'",
+        pattern: r#"(?i)\b(had)(?:\s+had)+\b"#,
+        replacement: "$1",
+        default_enabled: true,
+    },
+    Rule {
+        name: "stutter-no",
+        description: "Collapse repeated 'no no' → 'no'",
+        pattern: r#"(?i)\b(no)(?:\s+no)+\b"#,
+        replacement: "$1",
+        default_enabled: true,
+    },
+    Rule {
         name: "stutter-have",
         description: "Collapse repeated 'have have' → 'have'",
         pattern: r#"(?i)\b(have)(?:\s+have)+\b"#,
         replacement: "$1",
         default_enabled: true,
     },
-
     // -------------------------------------------------------------------------
     // Single-letter / partial-word stutters ("sh sh sh should" → "should")
     // These are common in real speech and ASR captures them literally.
     // -------------------------------------------------------------------------
+    Rule {
+        name: "single-letter-stutter",
+        description: "Strip repeated single-letter starts before a word beginning with that letter",
+        pattern: concat!(
+            r#"(?i)\b(?:t\s+){2,}(t\w*)\b"#,
+            r#"|(?:s\s+){2,}(s\w*)\b"#,
+            r#"|(?:f\s+){2,}(f\w*)\b"#,
+            r#"|(?:w\s+){2,}(w\w*)\b"#,
+            r#"|(?:i\s+){2,}(i\w*)\b"#,
+            r#"|(?:a\s+){2,}(a\w*)\b"#,
+            r#"|(?:p\s+){2,}(p\w*)\b"#,
+            r#"|(?:m\s+){2,}(m\w*)\b"#,
+            r#"|(?:c\s+){2,}(c\w*)\b"#,
+            r#"|(?:d\s+){2,}(d\w*)\b"#,
+            r#"|(?:b\s+){2,}(b\w*)\b"#,
+            r#"|(?:h\s+){2,}(h\w*)\b"#,
+            r#"|(?:n\s+){2,}(n\w*)\b"#,
+            r#"|(?:o\s+){2,}(o\w*)\b"#,
+            r#"|(?:l\s+){2,}(l\w*)\b"#,
+            r#"|(?:r\s+){2,}(r\w*)\b"#,
+            r#"|(?:g\s+){2,}(g\w*)\b"#,
+            r#"|(?:y\s+){2,}(y\w*)\b"#,
+        ),
+        replacement: "$1$2$3$4$5$6$7$8$9$10$11$12$13$14$15$16$17$18",
+        default_enabled: true,
+    },
     Rule {
         name: "partial-stutter-should",
         description: "Strip partial-word stutter before 'should'",
@@ -554,7 +653,6 @@ pub const DEFAULT_RULES: &[Rule] = &[
         replacement: "$1",
         default_enabled: true,
     },
-
     // -------------------------------------------------------------------------
     // Casual contractions
     // -------------------------------------------------------------------------
@@ -586,7 +684,6 @@ pub const DEFAULT_RULES: &[Rule] = &[
         replacement: "$1 '$2",
         default_enabled: true,
     },
-
     // -------------------------------------------------------------------------
     // Final whitespace and punctuation cleanup. MUST run last.
     // -------------------------------------------------------------------------
@@ -620,12 +717,10 @@ pub const DEFAULT_RULES: &[Rule] = &[
     },
     Rule {
         name: "fix-trailing-period",
-        description: "Drop a single trailing period (Murmure-style — short utterances usually don't want one)",
+        description: "Drop a single trailing period for dictation-friendly short utterances",
         pattern: r#"\.$"#,
         replacement: "",
-        // Off by default — many people DO want trailing periods. Flip to `true`
-        // if you prefer no trailing punctuation.
-        default_enabled: false,
+        default_enabled: true,
     },
 ];
 
@@ -649,8 +744,8 @@ mod tests {
     #[test]
     fn lead_so_removed() {
         let c = cleaner_with_all_defaults();
-        assert_eq!(c.clean("So, I think this works."), "I think this works.");
-        assert_eq!(c.clean("So I think this works."), "I think this works.");
+        assert_eq!(c.clean("So, I think this works."), "I think this works");
+        assert_eq!(c.clean("So I think this works."), "I think this works");
     }
 
     #[test]
@@ -687,7 +782,7 @@ mod tests {
     #[test]
     fn whitespace_cleanup() {
         let c = cleaner_with_all_defaults();
-        assert_eq!(c.clean("hello   world ,  foo ."), "Hello world, foo.");
+        assert_eq!(c.clean("hello   world ,  foo ."), "Hello world, foo");
     }
 
     #[test]
@@ -721,6 +816,32 @@ mod tests {
             capitalize_sentence_starts("   hello there"),
             "   Hello there"
         );
+    }
+
+    #[test]
+    fn single_letter_stutter() {
+        let c = cleaner_with_all_defaults();
+        assert_eq!(c.clean("t t t think"), "Think");
+        assert_eq!(c.clean("I w w w want this"), "I want this");
+        assert_eq!(c.clean("s s s sure"), "Sure");
+    }
+
+    #[test]
+    fn like_filler_combos() {
+        let c = cleaner_with_all_defaults();
+        assert_eq!(c.clean("it's like, you know, hard"), "It's hard");
+        assert_eq!(c.clean("not like, you know,"), "Not");
+        assert_eq!(c.clean("as in like tuple"), "As in tuple");
+        assert_eq!(c.clean("it's actually like hard"), "It's actually hard");
+        assert_eq!(c.clean("is basically like broken"), "Is basically broken");
+    }
+
+    #[test]
+    fn additional_stutters() {
+        let c = cleaner_with_all_defaults();
+        assert_eq!(c.clean("did did happen"), "Did happen");
+        assert_eq!(c.clean("no no no problem"), "No problem");
+        assert_eq!(c.clean("has has changed"), "Has changed");
     }
 
     #[test]
