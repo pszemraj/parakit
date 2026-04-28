@@ -1,0 +1,5 @@
+[submodule "vendor/CrispASR"]
+	path = vendor/CrispASR
+	url = https://github.com/CrispStrobe/CrispASR.git
+	branch = v0.5.3
+	shallow = true

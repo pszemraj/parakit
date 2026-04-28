@@ -1,0 +1,75 @@
+[package]
+name = "parakit"
+version = "0.1.0"
+edition = "2021"
+description = "Push-to-talk dictation daemon backed by CrispASR / Parakeet-TDT."
+license = "MIT"
+repository = "https://github.com/yourname/parakit"
+default-run = "parakit"
+
+[[bin]]
+name = "parakit"
+path = "src/main.rs"
+
+[dependencies]
+# CLI parsing
+clap = { version = "4.5", features = ["derive"] }
+
+# Inference — the actual model runtime.
+# CrispASR's Rust crates aren't published to crates.io, so we pull them
+# from upstream. Recommended pin via the bundled submodule:
+crispasr = { path = "vendor/CrispASR/crispasr", default-features = false }
+# Production alternative if you don't want to vendor the source:
+#   crispasr = { git = "https://github.com/CrispStrobe/CrispASR.git", tag = "v0.5.3", default-features = false }
+
+# Audio capture
+cpal = "0.15"
+rubato = "0.15"        # high-quality resampler (sinc, asynchronous)
+
+# Lock-free or mutex-protected shared state
+parking_lot = "0.12"
+
+# Global push-to-talk hotkey (intercepting, not just listening — so Ctrl+Space
+# doesn't insert a literal space into the focused app)
+rdev = { version = "0.5", features = ["unstable_grab"] }
+
+# Synthetic typing at cursor (no clipboard)
+enigo = "0.2"
+
+# Audio cues (start/stop/error tones, generated programmatically)
+rodio = { version = "0.19", default-features = false, features = ["wav"] }
+
+# Text cleaning rules
+regex = "1.10"
+once_cell = "1.19"
+
+# Logging / pretty output
+anyhow = "1.0"
+colored = "2.1"
+
+# Threading conveniences
+crossbeam-channel = "0.5"
+
+[features]
+default = ["bundled"]
+
+# Build libcrispasr from `vendor/CrispASR` via cmake. On by default.
+# Disable with `--no-default-features` if you have libcrispasr installed
+# system-wide (e.g. via `make install` from a separate CrispASR checkout)
+# or want to point at a build via CRISPASR_LIB_DIR.
+bundled = []
+
+# GPU backends. Each implies `bundled` because crispasr-sys does NOT
+# rebuild the C library — the choice of backend has to happen at the
+# CrispASR cmake level, which only matters when we're the ones building it.
+cuda    = ["bundled", "crispasr/cuda"]
+metal   = ["bundled", "crispasr/metal"]
+vulkan  = ["bundled", "crispasr/vulkan"]
+
+[build-dependencies]
+cmake = "0.1"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
