@@ -1,28 +1,22 @@
 # Running parakit
 
-parakit is a foreground CLI process by default. It becomes a background daemon
-when launched with `--quiet` and shell job control.
+parakit runs in the foreground by default. Use that mode once after install,
+then run it quietly in the background for daily use.
 
-## Foreground Check
-
-Run the foreground path first after an install or model change:
+## First Run
 
 ```bash
 parakit doctor
 parakit
 ```
 
-`parakit doctor` checks the active hotkey backend and reports the microphone
-parakit would use. It does not download or load a model. On Linux/X11 it probes
-desktop hotkey registration first and reports evdev access only as a fallback.
-It also reports the compiled ggml CPU/backend flags so CPU performance issues
-can be debugged without rebuilding.
-On the first real run, parakit downloads the default Q8_0 GGUF into the model
-cache before opening the microphone. Confirm that the model loads,
-`Ctrl+Space` records, text insertion works, and errors are visible in the
-terminal.
+`parakit doctor` checks hotkey access, selected microphone, and compiled backend
+flags. It does not download or load the model.
 
-Normal startup is concise:
+The first real `parakit` run downloads the default Q8_0 GGUF if it is not
+already cached, then opens the microphone and hotkey backend.
+
+Normal startup:
 
 ```text
 parakit
@@ -32,68 +26,51 @@ parakit
 Ready: hold Ctrl+Space to dictate.
 ```
 
-Use `--verbose` when debugging startup, backend selection, or latency:
+Use `--verbose` only when debugging startup, backend selection, or latency:
 
 ```bash
 parakit --verbose
 parakit --threads 8 --verbose
 ```
 
-Verbose mode includes full paths, CrispASR backend, thread count, and timing
-lines for inference, cleanup, insertion, and total post-release latency. It
-also prints the build flags reported by the bundled CrispASR/ggml build.
-
-## Background Launch
-
-Quiet mode suppresses stdout. Errors and warnings still go to stderr.
+## Background Use
 
 ```bash
 parakit --quiet &
 ```
 
-If the default model is not cached yet, `parakit --quiet &` downloads it before
-starting the daemon. No stdout is printed in quiet mode; download and startup
-errors still go to stderr.
+`--quiet` suppresses normal stdout, including startup lines and transcripts.
+Errors and warnings still go to stderr.
 
-Detach it from the current shell:
+Detach from the current shell:
 
 ```bash
 parakit --quiet &
 disown
 ```
 
-Keep stderr in a file with `nohup`:
+Keep stderr in a file:
 
 ```bash
 mkdir -p "$HOME/.local/state/parakit"
 nohup parakit --quiet >/dev/null 2>>"$HOME/.local/state/parakit/parakit.err" &
 ```
 
-Stop the daemon:
+Stop it:
 
 ```bash
 pkill parakit
 ```
 
-or:
-
-```bash
-pgrep parakit
-kill <pid>
-```
-
 ## Model Cache
 
-When no `-m` path is supplied, startup ensures the default Q8_0 model exists
-and then loads it. The hosted GGUF is SHA256-verified before it is accepted.
-
-The default model is downloaded from:
+With no `-m`, parakit uses the hosted Q8_0 model from:
 
 ```text
 https://huggingface.co/pszemraj/parakeet-tdt-0.6b-v3-gguf
 ```
 
-The final model is cached at:
+Linux cache path:
 
 ```text
 ~/.cache/parakit/models/parakeet-tdt-0.6b-v3-Q8_0.gguf
@@ -103,111 +80,70 @@ The final model is cached at:
 `~/Library/Caches/parakit/models/`, and Windows uses
 `%LOCALAPPDATA%\parakit\Cache\models\`.
 
-Use `parakit cache` to list cached GGUF files, dtypes, sizes, and the default
-Q8_0 checksum status. Use `parakit cache dir` for scripts that need only the
-cache directory.
-
-`-m <path>` always overrides the cached model and disables automatic fetch.
-Relative custom paths are resolved from the shell's current working directory
-at launch time.
-
-## Quiet Mode
-
-`--quiet` is intended for normal background use.
-
-It suppresses startup status, ready messages, transcript output, streaming
-partials, `--list-rules`, and `--test-rules`.
-
-It does not suppress startup errors, model load errors, audio device errors,
-insertion errors, transcription logging write failures, or sound device
-warnings. Those still go to stderr.
-
-## Microphone Selection
-
-parakit follows the operating system default input device. Monitor, loopback,
-virtual, null, dummy, BlackHole, Soundflower, and similar sources are avoided
-unless no physical-looking input is available.
-
-If the default input changes while parakit is running, the daemon switches when
-idle and prints the new microphone in normal mode. If the active stream fails
-or a device disappears, parakit keeps running and retries with the best
-available input.
-
-The microphone line reports the opened input stream rate and the 16 kHz model
-target. A 48 kHz USB microphone should therefore look like:
-
-```text
-mic:   RODE NT-USB+ Mono, 48000 Hz input -> 16000 Hz model, mono, F32
-```
-
-## Transcription Logging
-
-`--log-dir` records text pairs for later cleanup-model training:
+Useful commands:
 
 ```bash
-parakit --log-dir "$HOME/.parakit/logs"
-parakit --log-dir "$HOME/.parakit/logs" --log-format tsv
+parakit fetch --force
+parakit cache
+parakit cache dir
+parakit -m /path/to/model.gguf
 ```
 
-One file is written per local day:
+`-m <path>` always wins and disables automatic fetch.
 
-```text
-parakit-YYYY-MM-DD.jsonl
-parakit-YYYY-MM-DD.tsv
-```
+## Microphone
 
-JSONL schema:
+parakit follows the OS default input device and avoids monitor/loopback/virtual
+sources unless no better input is available.
 
-```json
-{"ts":"2026-04-27T15:32:11.842Z","audio_secs":4.21,"infer_ms":187,"raw":"...","cleaned":"...","rules_active":72}
-```
+If the default input changes while parakit is idle, the daemon switches and
+prints the new microphone unless `--quiet` is set. If an active stream fails,
+parakit keeps running and retries.
 
-Logging is synchronous and flushed per record. Failures are reported to stderr
-but never abort transcription. Audio is not logged.
+## Insertion
 
-## Modes
-
-Batch mode is the default:
+Batch mode is the default and recommended mode:
 
 ```bash
 parakit --mode batch
 ```
 
-It records the full utterance and transcribes once on hotkey release. This is
-the recommended mode. Batch insertion uses the system clipboard and then sends
-the configured paste shortcut. parakit restores the previous clipboard when the
-previous contents were text; non-text clipboard contents can be replaced.
+It transcribes once on hotkey release, writes the transcript to the system
+clipboard, sends the configured paste shortcut, then restores the previous text
+clipboard when possible. Clipboard managers may still keep the transient
+transcript in history.
 
-The default paste shortcut is terminal-friendly:
+Paste modes:
 
 ```bash
-parakit --paste-mode terminal  # default: Ctrl+Shift+V on Linux/Windows, Cmd+V on macOS
+parakit --paste-mode terminal  # Ctrl+Shift+V on Linux/Windows, Cmd+V on macOS
 parakit --paste-mode standard  # Ctrl+V on Linux/Windows, Cmd+V on macOS
 ```
 
-macOS uses `Cmd+V` for both modes because terminal paste is normally exposed
-through the application paste shortcut there.
-
-Streaming mode sends chunks while the hotkey is still held:
+Streaming mode is experimental:
 
 ```bash
 parakit --mode streaming
 parakit --mode streaming:2.5
 ```
 
-Streaming reduces perceived latency but can split words at chunk boundaries.
-Parakeet-TDT is primarily an offline model, so batch mode should be used for
-quality checks.
+It sends chunks while the hotkey is held and can split words at chunk
+boundaries. Use batch mode for quality checks.
 
-## Sounds
+## Logging And Sounds
 
-parakit generates short cue tones in-process:
+Text-only transcription logging:
 
-- start: recording began;
-- success: transcription was inserted;
-- error: transcription or insertion failed.
+```bash
+parakit --log-dir "$HOME/.parakit/logs"
+parakit --log-dir "$HOME/.parakit/logs" --log-format tsv
+```
 
-Disable cues:
+One JSONL or TSV file is written per local day. Records include timestamp,
+audio seconds, inference milliseconds, raw text, cleaned text, and active rule
+count. Audio is never logged.
+
+Disable cue tones:
 
 ```bash
 parakit --no-sounds

@@ -1,46 +1,38 @@
 # Development Notes
 
-## Model Artifact Policy
+## Model Artifacts
 
-End-user startup uses the hosted Q8_0 GGUF from:
+End-user startup uses the hosted Q8_0 GGUF:
 
 ```text
 https://huggingface.co/pszemraj/parakeet-tdt-0.6b-v3-gguf
 ```
 
 The binary downloads `parakeet-tdt-0.6b-v3-Q8_0.gguf`, verifies the compiled-in
-SHA256, writes it to the platform model cache, and then starts the daemon. The
-default `parakit` command must not require Python, NeMo, PyTorch, or manual
-model setup.
+SHA256, writes it to the platform model cache, and starts the daemon. The
+default `parakit` command must not require Python, NeMo, PyTorch, or manual model
+setup.
 
 `-m <path>` is the escape hatch for local experiments and always disables
 automatic model fetch.
 
-## Hosted Repo Layout
+Hosted files should use standard GGUF names:
 
-The hosted Hugging Face repo should use standard GGUF file names:
+| File | Role |
+| --- | --- |
+| `parakeet-tdt-0.6b-v3-Q8_0.gguf` | Default user artifact. |
+| `parakeet-tdt-0.6b-v3-F16.gguf` | Source GGUF for future local re-quantization. |
+| `parakeet-tdt-0.6b-v3-Q6_K.gguf`, etc. | Optional hosted quants. |
 
-```text
-parakeet-tdt-0.6b-v3-F16.gguf
-parakeet-tdt-0.6b-v3-Q8_0.gguf
-parakeet-tdt-0.6b-v3-Q6_K.gguf
-parakeet-tdt-0.6b-v3-Q5_K_M.gguf
-parakeet-tdt-0.6b-v3-Q4_K_M.gguf
-```
+The Rust side builds hosted names from the shared stem
+`parakeet-tdt-0.6b-v3` and a quant suffix. Avoid unrelated names, nested
+directories, or model-card-only links for CLI artifacts.
 
-The current daemon default is Q8_0. F16 is the source GGUF for future local
-re-quantization when a requested quant is not already hosted.
+The current Parakeet converter, loader, and `crispasr-quantize` path are built
+around F16/F32 tensors. Treat BF16 as future work until it has explicit support
+and validation.
 
-The vendored Parakeet converter currently writes an F16/F32 GGUF; the
-Parakeet loader and `crispasr-quantize` path are also written around F16/F32
-tensors. Treat BF16 as a future artifact format only after the converter,
-loader, and quantizer have explicit BF16 support and validation.
-
-Do not use unrelated file names, nested directories, or model-card-only links
-for artifacts the CLI needs. The Rust side builds hosted names from the shared
-stem `parakeet-tdt-0.6b-v3` and a quant suffix such as `Q8_0`.
-
-## Future Quantization Flow
+## Future Quantization
 
 The intended later CLI behavior is:
 
@@ -51,12 +43,11 @@ The intended later CLI behavior is:
 3. Record the source F16 checksum, target quant, quantizer identity, and output
    checksum in `manifest.json`.
 
-This keeps Python out of the normal user path. Python remains only for
-rebuilding F16 from NVIDIA's `.nemo` when maintaining the hosted artifacts.
+Python should remain outside the normal user path.
 
 ## Source Rebuild
 
-The reproducible rebuild path is explicit:
+Maintainers can rebuild from NVIDIA's `.nemo` checkpoint:
 
 ```bash
 python -m pip install -r requirements-convert.txt
@@ -67,24 +58,8 @@ That path downloads NVIDIA's official `.nemo`, converts it with
 `vendor/CrispASR/models/convert-parakeet-to-gguf.py`, and quantizes the
 intermediate GGUF with `crispasr-quantize`.
 
-After rebuilding a release artifact, update the hosted Hugging Face repo, then
-update `HOSTED_Q8_SHA256` in `src/model.rs` if the Q8_0 bytes changed.
-
-## Local Artifact Notes
-
-The source-rebuilt upload candidates are written under
-`target/tmp/source-cache/parakit/models/` when running:
-
-```bash
-XDG_CACHE_HOME=$PWD/target/tmp/source-cache parakit fetch --from-source --keep-f16 --keep-nemo
-```
-
-The source-built Q8_0 should be uploaded with the F16 artifact. The older
-ignored local file `models/parakeet-tdt-0.6b-v3-q8_0.gguf` is not the canonical
-hosted artifact.
-
-The file `target/tmp/gguf-tests/q8.gguf` is only a tiny unit-test fixture for
-GGUF dtype parsing.
+After rebuilding a release artifact, upload F16 and Q8_0 to the hosted repo.
+Update `HOSTED_Q8_SHA256` in `src/model.rs` if the Q8_0 bytes changed.
 
 ## TODOs
 
@@ -101,8 +76,6 @@ GGUF dtype parsing.
   transcript entries in clipboard history entirely would be nice to have, but it
   is not required while clipboard managers record the transient paste payload as
   an earlier history item.
-- Add a release checklist for regenerating, validating, uploading, and checksum
-  pinning hosted GGUF artifacts.
 - Add `parakit fetch --quant <QUANT>` after the F16 artifact is hosted. Keep
   Q8_0 as the default unless quality, memory, or startup data justifies changing
   it.

@@ -1,13 +1,12 @@
 # Build
 
-parakit is a Rust 1.87+ binary that links to CrispASR. With the default
-`bundled` feature, `build.rs` builds the vendored CrispASR submodule with CMake
-and links the resulting shared libraries into the Rust binary.
+parakit is a Rust 1.87+ binary that links to the vendored CrispASR submodule.
+The default build is CPU-only and local-machine optimized.
 
 ## Native Dependencies
 
-Rust dependencies are handled by Cargo. Native packages are still required for
-audio, keyboard hooks, text insertion, CMake, and backend SDKs.
+Cargo handles Rust packages. System packages are still needed for audio,
+keyboard hooks, text insertion, CMake, and optional accelerator SDKs.
 
 | OS | Packages |
 | --- | --- |
@@ -17,79 +16,56 @@ audio, keyboard hooks, text insertion, CMake, and backend SDKs.
 | Windows | Visual Studio 2022 with the "Desktop development with C++" workload. |
 | macOS | Xcode command line tools plus `cmake autoconf automake libtool pkg-config`. |
 
-For CUDA, install the CUDA Toolkit and ensure `nvcc` is on `PATH`.
+CUDA builds need the CUDA Toolkit with `nvcc` on `PATH`.
 
-For Vulkan on Ubuntu/Debian, install the loader/dev package, tools, shader
-compiler, SPIR-V tools, SPIR-V headers, and a driver:
+Vulkan builds on Ubuntu/Debian need:
 
 ```bash
-sudo nala install libvulkan-dev vulkan-tools glslc spirv-tools spirv-headers mesa-vulkan-drivers
+sudo apt install libvulkan-dev vulkan-tools glslc spirv-tools spirv-headers mesa-vulkan-drivers
 ```
 
-`spirv-tools` and `spirv-headers` are different packages. A system can have
-`glslc` and `vulkan.pc` installed and still fail if `spirv-headers` is missing.
+`spirv-headers` provides `spirv/unified1/spirv.hpp`; it is not the same package
+as `spirv-tools`.
 
-## Cargo Features
+## Install Commands
 
-| Command | Behavior |
-| --- | --- |
-| `cargo build --release` | CPU-only bundled CrispASR build. |
-| `cargo install --path .` | Installs the release binary to Cargo's bin directory, usually `~/.cargo/bin`. |
-| `cargo install --path . --features cuda` | Installs a CUDA-enabled release binary. |
-| `cargo install --path . --features vulkan` | Installs a Vulkan-enabled release binary. |
-| `cargo install --path . --features metal` | Installs a Metal-enabled release binary on macOS. |
-| `cargo build --release --features cuda` | Builds ggml with CUDA support. |
-| `cargo build --release --features vulkan` | Builds ggml with Vulkan support. |
-| `cargo build --release --features metal` | Builds ggml with Metal support on macOS. |
-| `cargo build --release --no-default-features --features daemon` | Builds the daemon against an existing `libcrispasr`; set `CRISPASR_LIB_DIR` if needed. |
-| `cargo build --release --no-default-features --example transcribe-file` | Builds only the file transcription helper against an existing `libcrispasr`. |
+```bash
+cargo install --path .
+PARAKIT_BLAS=auto cargo install --path .
+cargo install --path . --features cuda
+cargo install --path . --features vulkan
+cargo install --path . --features metal
+```
 
-The `daemon` feature is enabled by default and includes desktop/audio
-dependencies. The file transcription example remains useful on machines where
-daemon dependencies are not installed.
+`cargo install --path .` installs the release binary to Cargo's bin directory,
+usually `~/.cargo/bin`.
 
-Add `--locked` for CI or local reproducibility checks when you want Cargo to
-use exactly the dependency versions already recorded in `Cargo.lock`. Leave it
-off for the normal user install path so Cargo can resolve platform-specific
-lockfile drift instead of failing before build.
+Add `--locked` for CI or reproducibility checks when Cargo must use the exact
+versions in `Cargo.lock`. Leave it off for normal local installs.
 
-## CPU Build Policy
+## CPU Builds
 
-Source builds are optimized for the machine doing the build. The bundled CMake
-path sets ggml's CPU backend to:
+The bundled CMake path enables ggml native CPU code, OpenMP, and CPU repacking.
+On Linux with GCC or Clang this usually means `-march=native` for the local
+machine.
 
-- `GGML_NATIVE=ON`
-- `GGML_OPENMP=ON`
-- `GGML_CPU_REPACK=ON`
-- `GGML_BLAS=OFF` unless explicitly requested
-
-On Linux with GCC or Clang this means the ggml CPU backend is compiled with
-`-march=native` and OpenMP when the toolchain supports it. That is intentional:
-the default user path is `cargo install --path .` for the local machine.
-
-Generic portable binaries are a release/CI concern for later. They should be
-built separately rather than weakening local source builds.
-
-Inspect the actual compiled flags:
+Inspect the compiled flags:
 
 ```bash
 parakit doctor
 parakit --verbose
 ```
 
-For CPU thread sweeps without the daemon:
+Benchmark different thread counts without the daemon:
 
 ```bash
 cargo run --release --example transcribe-file -- --audio path/to/sample.wav --threads 8 --repeat 3
 ```
 
-## Optional BLAS and MKL
+## BLAS And MKL
 
-Native ggml kernels are the default because they are predictable and require no
-extra runtime libraries. BLAS/MKL is opt-in: it can be faster for some large
-matrix paths, but it adds platform-specific build and runtime dependencies.
-
-Set `PARAKIT_BLAS` while building:
+Native ggml kernels are the default. BLAS/MKL can help some matrix paths but
+adds system-library dependencies.
 
 ```bash
 PARAKIT_BLAS=auto cargo install --path .
@@ -102,105 +78,69 @@ Supported values:
 
 | Value | Behavior |
 | --- | --- |
-| unset, `off` | Default. Build native/OpenMP CPU kernels without BLAS. |
-| `auto` | Use Apple Accelerate on macOS, otherwise use MKL if `mkl-sdl.pc` is visible to `pkg-config`, otherwise OpenBLAS if `openblas.pc` or `openblas64.pc` is visible, otherwise stay off. |
-| `openblas` | Build with `GGML_BLAS=ON` and `GGML_BLAS_VENDOR=OpenBLAS`. |
-| `mkl` | Build with CrispASR's `COHERE_MKL=ON`, which forces ggml BLAS to `Intel10_64lp`. |
-| `generic` | Build with `GGML_BLAS=ON` and `GGML_BLAS_VENDOR=Generic`. |
-| `accelerate` | Use Apple Accelerate. Apple targets only. |
+| unset, `off` | Native/OpenMP CPU kernels without BLAS. |
+| `auto` | Apple Accelerate on macOS; otherwise MKL if `mkl-sdl.pc` is visible; otherwise OpenBLAS if `openblas.pc` or `openblas64.pc` is visible; otherwise off. |
+| `openblas` | `GGML_BLAS=ON`, `GGML_BLAS_VENDOR=OpenBLAS`. |
+| `mkl` | CrispASR `COHERE_MKL=ON`, ggml `Intel10_64lp`. |
+| `generic` | `GGML_BLAS=ON`, `GGML_BLAS_VENDOR=Generic`. |
+| `accelerate` | Apple Accelerate. Apple targets only. |
 
-Ubuntu/Debian OpenBLAS setup:
+Ubuntu/Debian OpenBLAS:
 
 ```bash
-sudo nala install libopenblas-dev
+sudo apt install libopenblas-dev
 PARAKIT_BLAS=openblas cargo install --path .
 ```
 
-MKL setup depends on how Intel oneAPI or the distro package is installed. The
-important check is that CMake can find MKL. For `PARAKIT_BLAS=auto`, `pkg-config`
-must also see `mkl-sdl`:
+The selected mode is printed during explicit BLAS builds and later shown by
+`parakit doctor`.
 
-```bash
-pkg-config --exists mkl-sdl
-PARAKIT_BLAS=mkl cargo install --path .
-```
+## CrispASR And Backends
 
-The selected BLAS mode is printed during explicit BLAS builds and later shown
-by:
-
-```bash
-parakit doctor
-parakit --verbose
-```
-
-## Bundled CrispASR
-
-The repository vendors CrispASR as a git submodule:
-
-```toml
-crispasr = { path = "vendor/CrispASR/crispasr", default-features = false }
-```
-
-The same submodule provides the Rust bindings and the C/C++ library source.
-`build.rs` configures CMake, builds CrispASR, installs shared libraries under
-`target/<profile>/build/parakit-*/out/lib`, and exposes that directory to
-Cargo's linker. It also builds CrispASR's `crispasr-quantize` tool under
-`target/<profile>/build/parakit-*/out/bin` for the source-rebuild path:
+The repository vendors CrispASR as a git submodule. `build.rs` builds it with
+CMake, installs shared libraries under
+`target/<profile>/build/parakit-*/out/lib`, and builds `crispasr-quantize` for
 `parakit fetch --from-source`.
 
-Feature selection maps to CMake options:
+Feature mapping:
 
 | Cargo feature | CMake option |
 | --- | --- |
-| `cuda` | `-DGGML_CUDA=ON` |
-| `vulkan` | `-DGGML_VULKAN=ON` |
-| `metal` | `-DGGML_METAL=ON` |
-
-The bundled build report also records CUDA architecture metadata when CMake
-exposes it. Use `cargo build --release --features cuda -vv` if CUDA
-configuration fails before that report is available.
+| `cuda` | `GGML_CUDA=ON` |
+| `vulkan` | `GGML_VULKAN=ON` |
+| `metal` | `GGML_METAL=ON` |
 
 ## Runtime Library Paths
 
-On Linux and BSD, parakit needs a transitive rpath because the binary loads
-`libwhisper.so`, which then loads sibling `libggml*.so` files.
+Linux/BSD builds must use transitive `RPATH`, not `RUNPATH`, so
+`libwhisper.so` can find sibling `libggml*.so` files.
 
-`build.rs` sets:
-
-- `CMAKE_INSTALL_RPATH=$ORIGIN`
-- `CMAKE_BUILD_WITH_INSTALL_RPATH=ON`
-- `-Wl,--disable-new-dtags`
-
-The last flag keeps the binary on `DT_RPATH` instead of `DT_RUNPATH`.
-`DT_RUNPATH` is not transitive and can fail at runtime even when direct
-dependencies resolve.
-
-After a Linux build, verify:
+Verify:
 
 ```bash
 ldd target/debug/parakit | grep -E "whisper|ggml"
 readelf -d target/debug/parakit | grep -E "RPATH|RUNPATH"
 ```
 
-The library paths should point into `target/debug/build/parakit-*/out/lib`,
-and `readelf` should report `RPATH`.
+The library paths should point into `target/debug/build/parakit-*/out/lib`, and
+`readelf` should report `RPATH`.
 
 ## Windows DLLs
 
-Windows does not have rpath. After building, make the generated DLLs findable:
+Windows has no rpath. After building, copy generated DLLs next to the binary or
+put the generated `out\lib` directory on `PATH`:
 
 ```powershell
 cargo build --release
 copy target\release\build\parakit-*\out\lib\*.dll target\release\
 ```
 
-Alternatively, add the generated `out\lib` directory to `PATH`.
-
-Security software may flag the daemon because it combines a global keyboard
-hook with programmatic text insertion. That behavior is expected for this kind
-of tool.
+Security software may flag global hooks plus text insertion. Whitelist the
+binary if needed.
 
 ## Updating CrispASR
+
+Keep submodule updates separate from parakit code changes:
 
 ```bash
 cd vendor/CrispASR
@@ -210,5 +150,3 @@ cd ../..
 git add vendor/CrispASR
 cargo build
 ```
-
-Keep submodule updates separate from parakit code changes.

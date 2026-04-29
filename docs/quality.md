@@ -1,8 +1,7 @@
 # Quality Checks
 
-Build success does not prove transcription quality. parakit exists because ASR
-preprocessing details matter, so quality checks should use real audio from the
-target user.
+Build success does not prove transcription quality. Use real user audio, not
+synthetic TTS.
 
 ## File-Based parakit Transcription
 
@@ -14,11 +13,10 @@ cargo run --example transcribe-file -- \
   --audio clips/example.wav
 ```
 
-The helper accepts WAV input, mixes to mono, resamples to 16 kHz, runs
-`Engine::transcribe`, applies cleanup unless disabled, and prints raw and
-cleaned text. It uses the cached Q8_0 model by default and downloads it first
-if needed. Pass `--model /path/to/model.gguf` only when comparing a specific
-custom GGUF.
+The helper accepts WAV input, uses the same `Engine` path as the daemon, applies
+cleanup unless disabled, and prints raw and cleaned text. It uses the cached
+Q8_0 model by default. Pass `--model /path/to/model.gguf` only when comparing a
+specific custom GGUF.
 
 ## NeMo Reference Helper
 
@@ -34,7 +32,7 @@ immediately.
 
 ## Recommended A/B Procedure
 
-Use 5 to 10 real clips:
+Use 5 to 10 real clips that cover:
 
 - short and long utterances;
 - clean and noisy audio;
@@ -42,7 +40,7 @@ Use 5 to 10 real clips:
 - normal dictation pace;
 - at least one clip with hesitations or restarts.
 
-Compare:
+Compare against:
 
 1. NeMo, parakeet-mlx, or another trusted Parakeet reference implementation.
 2. parakit with an F16 GGUF model.
@@ -63,8 +61,8 @@ Not acceptable:
 - many wrong words in a short utterance.
 
 If F16 differs materially from the reference, inspect CrispASR's Parakeet
-preprocessor first. If F16 matches but Q8_0 is worse, treat that as an artifact
-or quantizer regression before trusting the cached model.
+preprocessor first. If F16 matches but Q8_0 is worse, suspect the hosted
+artifact or quantizer path.
 
 Parakeet-v3 auto-detects language. It has no parakit language flag today, so
 non-English or code-switched dictation should be checked against real clips
@@ -73,8 +71,7 @@ change language detection behavior.
 
 ## Runtime Smoke Checks
 
-After quality parity is established, run the daemon in foreground mode and
-exercise real applications:
+Run the daemon in foreground mode and exercise real applications:
 
 - terminal;
 - browser text fields;

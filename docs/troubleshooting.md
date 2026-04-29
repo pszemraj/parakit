@@ -1,187 +1,125 @@
 # Troubleshooting
 
-## Hotkey Does Not Start
-
-Run the preflight check first:
+Start with:
 
 ```bash
 parakit doctor
 ```
 
-`parakit doctor` also reports the microphone selected for capture. If the
-hotkey status is OK but audio is unavailable, fix the desktop/audio-server
-input device before starting the daemon.
+It reports hotkey access, selected microphone, and build flags without loading
+the model.
 
-On Linux, the preferred path is an X11 desktop hotkey registration. This avoids
-direct `/dev/input/event*` access and is the path ordinary GNOME/KDE/X11 users
-should get.
+## Hotkey Problems
 
-A healthy X11 setup looks like:
+On Linux, the preferred path is the X11 desktop hotkey backend. Wayland usually
+blocks global hotkeys and synthetic input for regular client applications.
+
+Healthy X11 output looks like:
 
 ```text
 primary:        X11 desktop hotkey
 primary status: OK
-fallback:       rdev evdev grab
 status:         OK (desktop hotkey backend)
 ```
 
-If `primary status` says the shortcut is unavailable, another desktop shortcut
-or input method may already own `Ctrl+Space`. Disable that binding and rerun
-`parakit doctor`.
+If `Ctrl+Space` is unavailable, another desktop shortcut or input method may
+own it. Disable that binding and rerun `parakit doctor`.
 
-Check the session type:
-
-```bash
-echo "$XDG_SESSION_TYPE"
-```
-
-Use an X11 session when possible. Wayland compositors generally block global
-hotkeys and synthetic input from regular client applications unless the
-compositor exposes its own shortcut mechanism.
-
-If the X11 backend is unavailable or you need the low-level fallback,
-`rdev::grab` must read evdev devices. Add the desktop user to the `input`
-group, then start a completely new login session:
+If parakit must use the low-level evdev fallback, grant input access and start a
+new login session:
 
 ```bash
 sudo usermod -aG input "$USER"
-```
-
-Log out and back in, or reboot. A terminal or tmux server that was already
-running before the group change keeps the old group list, so restart tmux and
-launch parakit from a fresh shell. Verify the new session:
-
-```bash
 id -nG | tr ' ' '\n' | grep '^input$'
 ```
 
-Do not run parakit with `sudo` as a normal workaround. The keyboard hook might
-open, but audio, X11, and synthetic typing are owned by the regular desktop
-session and can fail in different ways.
+Log out and back in, or reboot. Restart tmux and terminals that were open before
+the group change. Avoid running parakit with `sudo`; audio, X11, and text
+insertion usually belong to the regular desktop user.
+
+If the hotkey stops after lock/unlock, parakit should refresh the X11
+registration within a few seconds. If it does not, rerun with `--verbose` and
+check whether `Ctrl+Space` became owned by the desktop or input method.
 
 On macOS, grant Accessibility and Input Monitoring permissions to both the
 terminal and the built binary.
 
-## Literal Space Appears In The Target App
+## Literal Space Appears
 
-The X11 desktop backend and the evdev fallback both register an intercepting
-hotkey, so `Ctrl+Space` should suppress the literal Space event. If a Space
-appears:
+The active backend should suppress the literal Space in `Ctrl+Space`. If a
+space reaches the focused app:
 
-- confirm another process is not also handling the same hotkey;
-- confirm the daemon is the process receiving keyboard events;
+- confirm only one parakit process is running;
+- confirm no desktop/input-method shortcut also handles `Ctrl+Space`;
 - retry in foreground mode to inspect errors;
 - avoid Wayland sessions.
 
-## Hotkey Stops After Lock Or Unlock
-
-On Linux/X11, screen lock can temporarily replace or interfere with passive
-desktop hotkey grabs. parakit refreshes its X11 registration while idle, so the
-hotkey should recover within a few seconds after unlock.
-
-If it stays dead:
-
-- leave parakit in foreground or rerun with `--verbose` while reproducing;
-- run `parakit doctor` after unlocking;
-- check whether `Ctrl+Space` became owned by the desktop or input method;
-- use the evdev fallback only after granting input permissions as described in
-  [Hotkey Does Not Start](#hotkey-does-not-start).
-
 ## Text Does Not Insert
 
-Batch insertion writes the transcript to the system clipboard and sends the
-configured paste shortcut. parakit restores the previous clipboard when the
-previous contents were text.
+Batch insertion writes the transcript to the clipboard, sends the paste
+shortcut, then restores the previous text clipboard when possible. Clipboard
+managers may still record the transient transcript.
 
-The default `--paste-mode terminal` sends `Ctrl+Shift+V` on Linux and Windows,
-which matches terminal emulators. Use `--paste-mode standard` for apps that
-only accept `Ctrl+V`.
+The default paste mode is terminal-friendly:
 
-Clipboard managers may still record the transient transcript before parakit
-restores the previous text clipboard.
+```bash
+parakit --paste-mode terminal
+parakit --paste-mode standard
+```
 
-Streaming partial insertion uses Enigo synthetic typing. On Linux, X11 is the
-supported path. Wayland usually blocks synthetic key events.
+Use `standard` for apps that only accept `Ctrl+V`.
 
-On macOS, check Accessibility and Input Monitoring permissions.
+Streaming insertion uses synthetic typing. On Linux, X11 is the supported path.
+Wayland usually blocks synthetic key events.
 
-On Windows, security software can flag the binary because global hooks and
-synthetic typing resemble keylogger behavior. Whitelist the binary when needed.
+On Windows, security software can flag global hooks plus text insertion.
+Whitelist the binary when needed.
 
-## Wrong Microphone Or Sample Rate
+## Wrong Microphone
 
-parakit uses the OS default input when it is usable and physical-looking. It
-avoids monitor and virtual sources unless no better input exists.
+parakit follows the OS default input and avoids monitor/virtual sources when it
+can.
 
-List the audio server's current sources on PipeWire/PulseAudio systems:
+On PipeWire/PulseAudio:
 
 ```bash
 pactl list sources | grep -E 'Description:|Sample Specification:' | grep -v monitor
-```
-
-Then run:
-
-```bash
 parakit doctor
 ```
 
-The reported microphone line should match the desired input. If it does not,
-change the default input in the desktop sound settings or with `pavucontrol`,
-then wait a few seconds or restart parakit.
+If the reported microphone is wrong, change the default input in desktop sound
+settings or `pavucontrol`, then wait a few seconds or restart parakit.
 
-## Shared Libraries Cannot Be Found
+## Build And Model Issues
 
-On Linux, run the dynamic-linking checks in
+Shared library loading on Linux:
+
+```bash
+ldd target/debug/parakit | grep -E "whisper|ggml"
+readelf -d target/debug/parakit | grep -E "RPATH|RUNPATH"
+```
+
+The paths should point into `target/debug/build/parakit-*/out/lib`, and
+`readelf` should report `RPATH`. More detail is in
 [build.md](build.md#runtime-library-paths).
 
-If this regresses, inspect `build.rs::emit_rpath` and confirm
-`--disable-new-dtags` is still emitted for Linux/BSD builds.
-
-## Vulkan Build Fails On `spirv/unified1/spirv.hpp`
-
-The Vulkan backend can find `glslc` and `vulkan.pc` while still missing SPIR-V
-headers. The failing line usually looks like:
-
-```text
-fatal error: spirv/unified1/spirv.hpp: No such file or directory
-```
-
-Install the distro package or SDK component that provides SPIR-V headers. On
-Ubuntu/Debian, the missing package is usually `spirv-headers`:
+Vulkan failing on `spirv/unified1/spirv.hpp` means `spirv-headers` is missing:
 
 ```bash
-sudo nala install spirv-headers
-```
-
-Then retry:
-
-```bash
+sudo apt install spirv-headers
 cargo build --release --features vulkan
 ```
 
-Until those headers are available, default builds and CUDA builds can still
-work. The full Vulkan dependency set is in
-[build.md](build.md#native-dependencies).
-
-## Windows DLL Loading
-
-After a Windows build, make generated DLLs findable as described in
+Windows builds need generated DLLs next to the executable or on `PATH`; see
 [build.md](build.md#windows-dlls).
 
-## Model Cache Problems
-
-With no `-m` path, parakit downloads the default model on first run and stores
-it in the cache described in [running.md](running.md#model-cache):
+Model cache commands:
 
 ```bash
-parakit --quiet &
+parakit fetch --force
+parakit cache
+parakit cache dir
 ```
 
-Use `parakit fetch --force` to redownload the hosted Q8_0 GGUF after a failed
-or interrupted fetch.
-
-Use `parakit cache` to inspect cached GGUF files, sizes, dtypes, and the Q8_0
-checksum. Use `parakit cache dir` to print only the cache directory.
-
-If you pass `-m <path>`, that custom model path always wins. Relative custom
-paths are resolved from the shell's current working directory at launch time.
+With no `-m`, parakit downloads the default Q8_0 model on first run. A custom
+`-m <path>` always wins and disables automatic fetch.
