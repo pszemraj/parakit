@@ -41,7 +41,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::daemon::audio::{AudioCapture, AudioHandle, TARGET_RATE};
-use crate::daemon::inject::Injector;
+use crate::daemon::inject::{Injector, PasteMode};
 use crate::daemon::logging::{BannerInfo, LogLevel, Logger};
 use crate::daemon::sounds::Sounds;
 
@@ -83,6 +83,10 @@ struct Cli {
     /// CPU inference threads. Defaults to the OS available parallelism.
     #[arg(long, value_name = "N")]
     threads: Option<NonZeroUsize>,
+
+    /// Batch paste shortcut style. `terminal` uses Ctrl+Shift+V on Linux/Windows.
+    #[arg(long, value_enum, default_value_t = PasteMode::Terminal)]
+    paste_mode: PasteMode,
 
     /// Disable the audio cues (start / success / error tones).
     #[arg(long)]
@@ -317,6 +321,7 @@ fn run() -> Result<()> {
             Some(dir) => format!("{:?} to {}", cli.log_format, dir.display()),
             None => "off".to_string(),
         },
+        insertion: format!("batch paste ({})", cli.paste_mode.label()),
         threads: engine.threads(),
         backend: engine.backend().to_string(),
     });
@@ -335,6 +340,7 @@ fn run() -> Result<()> {
         sounds: sounds.clone(),
         log: Arc::clone(&log),
         mode,
+        paste_mode: cli.paste_mode,
         rx,
     });
 
@@ -786,6 +792,7 @@ struct WorkerCtx {
     sounds: Sounds,
     log: Arc<Logger>,
     mode: Mode,
+    paste_mode: PasteMode,
     rx: Receiver<Event_>,
 }
 
@@ -803,6 +810,7 @@ fn worker_loop(ctx: WorkerCtx) {
         sounds,
         log,
         mode,
+        paste_mode,
         rx,
     } = ctx;
 
@@ -889,7 +897,7 @@ fn worker_loop(ctx: WorkerCtx) {
                         }
                         log.transcript(&raw, &cleaned, infer_elapsed);
                         let insert_started = Instant::now();
-                        match paste_batch_text(&cleaned) {
+                        match paste_batch_text(&cleaned, paste_mode) {
                             Ok(_) => {
                                 let insert_elapsed = insert_started.elapsed();
                                 log.verbose(format!(
@@ -923,9 +931,9 @@ fn worker_loop(ctx: WorkerCtx) {
     }
 }
 
-fn paste_batch_text(text: &str) -> Result<()> {
+fn paste_batch_text(text: &str, mode: PasteMode) -> Result<()> {
     let mut injector = Injector::new()?;
-    injector.paste_text(text)
+    injector.paste_text(text, mode)
 }
 
 fn type_streaming_text(text: &str) -> Result<()> {

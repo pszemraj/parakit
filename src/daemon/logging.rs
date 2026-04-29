@@ -86,6 +86,7 @@ impl Logger {
             anstream::println!("  rules: {}", info.cleaning);
             anstream::println!("  sounds: {}", info.sounds);
             anstream::println!("  logging: {}", info.transcription_logging);
+            anstream::println!("  insert: {}", info.insertion);
             anstream::println!("  threads: {}", info.threads);
             anstream::println!("  backend: {}", info.backend);
         }
@@ -133,15 +134,15 @@ impl Logger {
             anstream::println!(
                 "{} {}  {}",
                 style_clean("Text:"),
-                cleaned,
+                style_clean_text(cleaned),
                 style_dim(format!("({infer_ms:.0}ms)"))
             );
         } else {
-            anstream::println!("{}    {raw}", style_raw("Raw:"));
+            anstream::println!("{}    {}", style_raw("Raw:"), style_raw_text(raw));
             anstream::println!(
                 "{}  {}  {}",
                 style_clean("Clean:"),
-                cleaned,
+                style_clean_text(cleaned),
                 style_dim(format!("({infer_ms:.0}ms)"))
             );
         }
@@ -160,9 +161,15 @@ impl Logger {
         let raw = raw.trim();
         let cleaned = cleaned.trim();
         if raw == cleaned {
-            anstream::println!("{} {cleaned}", style_clean("+"));
+            anstream::println!("{} {}", style_clean("+"), style_clean_text(cleaned));
         } else {
-            anstream::println!("{} {raw} => {cleaned}", style_raw("+"));
+            anstream::println!(
+                "{} {} {} {}",
+                style_raw("+"),
+                style_raw_text(raw),
+                style_dim("=>"),
+                style_clean_text(cleaned)
+            );
         }
     }
 }
@@ -185,6 +192,8 @@ pub(crate) struct BannerInfo<'a> {
     pub(crate) sounds: &'a str,
     /// Transcription logging state.
     pub(crate) transcription_logging: String,
+    /// Text insertion state.
+    pub(crate) insertion: String,
     /// Inference thread count.
     pub(crate) threads: usize,
     /// CrispASR backend label.
@@ -209,6 +218,20 @@ fn style_raw(text: impl Display) -> String {
 
 fn style_clean(text: impl Display) -> String {
     paint(text, Style::new().fg_color(Some(AnsiColor::Green.into())))
+}
+
+fn style_raw_text(text: impl Display) -> String {
+    paint(
+        text,
+        Style::new().fg_color(Some(AnsiColor::BrightYellow.into())),
+    )
+}
+
+fn style_clean_text(text: impl Display) -> String {
+    paint(
+        text,
+        Style::new().fg_color(Some(AnsiColor::BrightGreen.into())),
+    )
 }
 
 fn style_warn(text: impl Display) -> String {

@@ -76,8 +76,15 @@ appears:
 ## Text Does Not Insert
 
 Batch insertion writes the transcript to the system clipboard and sends the
-platform paste shortcut. parakit restores the previous clipboard when the
+configured paste shortcut. parakit restores the previous clipboard when the
 previous contents were text.
+
+The default `--paste-mode terminal` sends `Ctrl+Shift+V` on Linux and Windows,
+which matches terminal emulators. Use `--paste-mode standard` for apps that
+only accept `Ctrl+V`.
+
+Clipboard managers may still record the transient transcript before parakit
+restores the previous text clipboard.
 
 Streaming partial insertion uses Enigo synthetic typing. On Linux, X11 is the
 supported path. Wayland usually blocks synthetic key events.

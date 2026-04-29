@@ -16,8 +16,32 @@
 
 use anyhow::{Context, Result};
 use arboard::Clipboard;
+use clap::ValueEnum;
 use enigo::{Direction, Enigo, Key, Keyboard, Settings};
 use std::{thread, time::Duration};
+
+/// Paste shortcut style for batch transcript insertion.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub(crate) enum PasteMode {
+    /// Terminal-friendly paste: `Ctrl+Shift+V` on Linux/Windows, `Cmd+V` on macOS.
+    Terminal,
+    /// GUI-app paste: `Ctrl+V` on Linux/Windows, `Cmd+V` on macOS.
+    Standard,
+}
+
+impl PasteMode {
+    /// Return the short label used in verbose startup output.
+    ///
+    /// # Returns
+    ///
+    /// A stable lowercase mode label.
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Terminal => "terminal",
+            Self::Standard => "standard",
+        }
+    }
+}
 
 /// Open a text insertion handle.
 pub struct Injector {
@@ -50,6 +74,11 @@ impl Injector {
     /// The text clipboard is restored when the previous clipboard contents were
     /// also text. Non-text clipboard contents may be replaced by the transcript.
     ///
+    /// # Arguments
+    ///
+    /// * `text` - Transcript text to insert.
+    /// * `mode` - Paste shortcut style to send after updating the clipboard.
+    ///
     /// # Returns
     ///
     /// `Ok(())` when the clipboard was populated and the paste shortcut was
@@ -59,7 +88,7 @@ impl Injector {
     ///
     /// Returns an error if the clipboard cannot be opened, the transcript
     /// cannot be copied, or the platform backend rejects the paste shortcut.
-    pub fn paste_text(&mut self, text: &str) -> Result<()> {
+    pub fn paste_text(&mut self, text: &str, mode: PasteMode) -> Result<()> {
         if text.is_empty() {
             return Ok(());
         }
@@ -73,7 +102,7 @@ impl Injector {
             previous.filter(|p| p != text)
         };
 
-        self.paste_clipboard()?;
+        self.paste_clipboard(mode)?;
 
         if let Some(previous) = previous {
             thread::sleep(Duration::from_millis(120));
@@ -116,34 +145,48 @@ impl Injector {
             .expect("clipboard was initialized above"))
     }
 
-    fn paste_clipboard(&mut self) -> Result<()> {
-        let modifier = paste_modifier();
-        self.enigo
-            .key(modifier, Direction::Press)
-            .map_err(|e| anyhow::anyhow!("enigo paste modifier press failed: {e:?}"))?;
+    fn paste_clipboard(&mut self, mode: PasteMode) -> Result<()> {
+        let modifiers = paste_modifiers(mode);
+        let mut failure = None;
+        for key in modifiers {
+            if let Err(e) = self.enigo.key(*key, Direction::Press) {
+                failure = Some(anyhow::anyhow!("enigo paste modifier press failed: {e:?}"));
+                break;
+            }
+        }
 
-        let click = self.enigo.key(Key::Unicode('v'), Direction::Click);
-        let release = self.enigo.key(modifier, Direction::Release);
+        if failure.is_none() {
+            failure = self
+                .enigo
+                .key(Key::Unicode('v'), Direction::Click)
+                .err()
+                .map(|e| anyhow::anyhow!("enigo paste key failed: {e:?}"));
+        }
 
-        click
-            .map_err(|e| anyhow::anyhow!("enigo paste key failed: {e:?}"))
-            .context("could not send paste shortcut")?;
-        release
-            .map_err(|e| anyhow::anyhow!("enigo paste modifier release failed: {e:?}"))
-            .context("could not release paste shortcut modifier")?;
+        for key in modifiers.iter().rev() {
+            if let Err(e) = self.enigo.key(*key, Direction::Release) {
+                failure.get_or_insert_with(|| {
+                    anyhow::anyhow!("enigo paste modifier release failed: {e:?}")
+                });
+            }
+        }
 
-        Ok(())
+        match failure {
+            Some(err) => Err(err).context("could not send paste shortcut"),
+            None => Ok(()),
+        }
     }
 }
 
-fn paste_modifier() -> Key {
-    #[cfg(target_os = "macos")]
-    {
-        Key::Meta
-    }
+#[cfg(target_os = "macos")]
+fn paste_modifiers(_mode: PasteMode) -> &'static [Key] {
+    &[Key::Meta]
+}
 
-    #[cfg(not(target_os = "macos"))]
-    {
-        Key::Control
+#[cfg(not(target_os = "macos"))]
+fn paste_modifiers(mode: PasteMode) -> &'static [Key] {
+    match mode {
+        PasteMode::Standard => &[Key::Control],
+        PasteMode::Terminal => &[Key::Control, Key::Shift],
     }
 }

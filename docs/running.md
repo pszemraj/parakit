@@ -155,8 +155,17 @@ parakit --mode batch
 
 It records the full utterance and transcribes once on hotkey release. This is
 the recommended mode. Batch insertion uses the system clipboard and then sends
-the platform paste shortcut. parakit restores the previous clipboard when the
+the configured paste shortcut. parakit restores the previous clipboard when the
 previous contents were text; non-text clipboard contents can be replaced.
+
+The default paste shortcut is terminal-friendly:
+
+```bash
+parakit --paste-mode terminal  # default: Ctrl+Shift+V on Linux/Windows
+parakit --paste-mode standard  # Ctrl+V on Linux/Windows
+```
+
+macOS uses `Cmd+V` for both modes.
 
 Streaming mode sends chunks while the hotkey is still held:
 
