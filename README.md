@@ -1,38 +1,71 @@
 # parakit
 
-Push-to-talk dictation for desktop use.
+Local push-to-talk dictation for desktop workflows.
 
-Hold `Ctrl+Space`, speak, release, and parakit inserts the transcript at the
-current cursor. Batch mode uses one clipboard paste instead of typing the
-transcript character by character.
+Hold `Ctrl+Space`, speak, release, and parakit inserts the transcript into the
+focused application. It runs locally with
+[CrispASR](https://github.com/CrispStrobe/CrispASR) and NVIDIA's
+[Parakeet-TDT-0.6B-v3](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3)
+model.
 
-parakit is backed by [CrispASR](https://github.com/CrispStrobe/CrispASR) and
-NVIDIA's [Parakeet-TDT-0.6B-v3](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3)
-model. It includes an optional cleanup pass for filler words, repeated words,
-partial stutters, and punctuation spacing.
+Core behavior:
+
+- fixed `Ctrl+Space` push-to-talk hotkey;
+- automatic first-run model download for the default Q8_0 GGUF;
+- CPU by default, with CUDA, Vulkan, and Metal build options;
+- terminal-friendly paste mode by default;
+- follows the current default input microphone;
+- optional cleanup rules for filler words, repeated words, partial stutters,
+  capitalization, and punctuation spacing;
+- optional JSONL/TSV transcription logging of `(raw, cleaned)` text pairs.
 
 Repository: [github.com/pszemraj/parakit](https://github.com/pszemraj/parakit)
 
 ## Install
+
+Install native build dependencies first. On Ubuntu/Debian:
+
+```bash
+sudo apt install cmake build-essential pkg-config libasound2-dev libudev-dev \
+  libxtst-dev libxdo-dev libxi-dev libx11-dev libevdev-dev libgomp1 \
+  autoconf libtool
+```
+
+Then build and install:
 
 ```bash
 git clone --recurse-submodules https://github.com/pszemraj/parakit.git
 cd parakit
 
 cargo install --path .
-export PATH="$HOME/.cargo/bin:$PATH"
+```
 
+For many local CPU installs, this is a better build command because it enables
+BLAS when MKL/OpenBLAS/Accelerate is available and falls back to the native ggml
+CPU kernels when it is not:
+
+```bash
+PARAKIT_BLAS=auto cargo install --path .
+```
+
+Cargo installs the binary into Cargo's bin directory, usually `~/.cargo/bin`.
+Make sure that directory is on `PATH`:
+
+```bash
+export PATH="$HOME/.cargo/bin:$PATH"
+```
+
+Check the environment and start the daemon:
+
+```bash
 parakit doctor
 parakit
 ```
 
-`cargo install --path .` builds the release binary and installs it into
-Cargo's binary directory, usually `~/.cargo/bin`.
-
 The first `parakit` run downloads the default Q8_0 GGUF model if it is not
 already cached. No `-m` argument is needed for normal use.
 
-Backend builds:
+Backend-specific builds:
 
 ```bash
 cargo install --path . --features cuda
@@ -40,8 +73,8 @@ cargo install --path . --features vulkan
 cargo install --path . --features metal
 ```
 
-Native dependencies, optional BLAS/MKL builds, rpath details, and Windows DLL
-handling are covered in [docs/build.md](docs/build.md).
+More dependency lists, `PARAKIT_BLAS` options, backend SDK notes, rpath details,
+and Windows DLL handling are covered in [docs/build.md](docs/build.md).
 
 ## Run
 
@@ -60,11 +93,6 @@ For normal use, run it quietly in the background:
 ```bash
 parakit --quiet &
 ```
-
-The hotkey is fixed at `Ctrl+Space`. The literal space is suppressed before it
-reaches the focused application. On Linux/X11, parakit uses a desktop hotkey
-registration first, so ordinary X11 sessions do not need `/dev/input` access.
-The low-level evdev backend is only a fallback.
 
 See [docs/running.md](docs/running.md) for background launch, model cache,
 logging, microphone selection, paste modes, sounds, and streaming mode.
