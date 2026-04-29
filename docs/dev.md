@@ -99,9 +99,11 @@ GGUF dtype parsing.
   primary mode. Synthetic typing makes sense for incremental partials, but
   batch mode should remain a one-shot paste unless real-use testing shows that
   clipboard behavior is worse than typed insertion.
-- Track clipboard-manager behavior for paste insertion. parakit restores the
-  previous text clipboard, but clipboard history tools can still record the
-  transient transcript as the previous history item.
+- Track clipboard-manager behavior for paste insertion. The required behavior is
+  that the user's original text clipboard is restored after insertion. Avoiding
+  transcript entries in clipboard history entirely would be nice to have, but it
+  is not required while clipboard managers record the transient paste payload as
+  an earlier history item.
 - Add a release checklist for regenerating, validating, uploading, and checksum
   pinning hosted GGUF artifacts.
 - Add `parakit fetch --quant <QUANT>` after the F16 artifact is hosted. Keep
