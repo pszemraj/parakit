@@ -13,7 +13,7 @@ keyboard hooks, text insertion, CMake, and optional accelerator SDKs.
 | Ubuntu 24.04 | `cmake build-essential libasound2-dev libudev-dev libxtst-dev libxdo-dev libxi-dev libx11-dev libevdev-dev libgomp1 pkg-config autoconf libtool` |
 | Fedora | `cmake gcc-c++ alsa-lib-devel libudev-devel libXtst-devel libxdo-devel libXi-devel libX11-devel libevdev-devel pkgconf autoconf libtool` |
 | Arch | `cmake base-devel alsa-lib libxtst xdotool libxi libx11 libevdev pkgconf autoconf libtool` |
-| Windows | Visual Studio 2022 with the "Desktop development with C++" workload. |
+| Windows | Visual Studio 2022 with the "Desktop development with C++" workload, plus CMake on `PATH`. |
 | macOS | Xcode command line tools plus `cmake autoconf automake libtool pkg-config`. |
 
 CUDA builds need the CUDA Toolkit with `nvcc` on `PATH`.
@@ -30,6 +30,7 @@ as `spirv-tools`.
 ## Install Commands
 
 ```bash
+git submodule update --init --recursive
 cargo install --path .
 PARAKIT_BLAS=auto cargo install --path .
 cargo install --path . --features cuda
@@ -42,6 +43,16 @@ usually `~/.cargo/bin`.
 
 Add `--locked` for CI or reproducibility checks when Cargo must use the exact
 versions in `Cargo.lock`. Leave it off for normal local installs.
+
+On Windows, use the repository installer instead of raw `cargo install`:
+
+```powershell
+pwsh -ExecutionPolicy Bypass -File scripts/install-windows.ps1
+pwsh -ExecutionPolicy Bypass -File scripts/install-windows.ps1 -Features cuda
+```
+
+The script initializes the CrispASR submodule, runs `cargo install --path .`,
+and copies generated native DLLs next to the installed `parakit.exe`.
 
 ## CPU Builds
 
@@ -127,12 +138,13 @@ The library paths should point into `target/debug/build/parakit-*/out/lib`, and
 
 ## Windows DLLs
 
-Windows has no rpath. After building, copy generated DLLs next to the binary or
-put the generated `out\lib` directory on `PATH`:
+Windows has no rpath. The PowerShell installer handles this for
+`cargo install`. If building manually, copy generated DLLs next to the binary or
+put the generated `out\bin` directory on `PATH`:
 
 ```powershell
 cargo build --release
-copy target\release\build\parakit-*\out\lib\*.dll target\release\
+copy target\release\build\parakit-*\out\bin\*.dll target\release\
 ```
 
 Security software may flag global hooks plus text insertion. Whitelist the

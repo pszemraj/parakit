@@ -1,8 +1,9 @@
 //! Builds (or locates) the CrispASR C library and tells the linker where it is.
 //!
 //! Default behavior (with the `bundled` feature on, which is the default):
-//!   - Vendored source is at `vendor/CrispASR/`. If empty, attempt to init the
-//!     git submodule. If that also fails, error out with clear instructions.
+//!   - Vendored source is at `vendor/CrispASR/`. Cargo must see that submodule
+//!     before dependency resolution because the `crispasr` Rust crate is a path
+//!     dependency.
 //!   - Configure & build via the `cmake` crate. Output is cached in
 //!     `OUT_DIR` so subsequent `cargo build` invocations are incremental.
 //!   - Backend selection (`cuda` / `metal` / `vulkan`) is driven by parakit's
@@ -18,6 +19,10 @@
 //!     providing libcrispasr; add `--features daemon` when building the daemon.
 //!   - `CRISPASR_LIB_DIR=/path/to/libdir`   : link-search path override.
 //!   - `CRISPASR_SRC_DIR=/path/to/source`   : use this checkout instead of the vendored source.
+//!
+//! These still require Cargo to load the `crispasr` Rust path dependency unless
+//! the manifest is changed, so a missing submodule must be fixed before Cargo
+//! can start this script.
 
 use std::collections::BTreeMap;
 use std::env;
@@ -122,6 +127,14 @@ fn main() {
         lib_dir
     } else if lib_dir_alt.is_dir() {
         lib_dir_alt
+    } else if target_is_windows() {
+        std::fs::create_dir_all(&lib_dir).unwrap_or_else(|err| {
+            panic!(
+                "failed to create Windows import-library dir {}: {err}",
+                lib_dir.display()
+            )
+        });
+        lib_dir
     } else {
         panic!(
             "expected install dir to contain lib/ or lib64/, got {}",
@@ -129,12 +142,16 @@ fn main() {
         );
     };
 
-    create_crispasr_alias(&final_lib_dir);
+    let bin_dir = install_dir.join("bin");
+    if target_is_windows() {
+        prepare_windows_artifacts(&install_dir, &final_lib_dir, &bin_dir);
+    } else {
+        create_crispasr_alias(&final_lib_dir);
+    }
 
     println!("cargo:rustc-link-search=native={}", final_lib_dir.display());
 
     // Windows DLLs land in bin/, not lib/. Add it for completeness.
-    let bin_dir = install_dir.join("bin");
     if bin_dir.is_dir() {
         println!("cargo:rustc-link-search=native={}", bin_dir.display());
     }
@@ -154,7 +171,8 @@ fn main() {
 
     // 6. Bake the lib path into the binary's rpath so we don't need
     //    LD_LIBRARY_PATH / DYLD_FALLBACK_LIBRARY_PATH at runtime.
-    //    No-op on Windows — see README for the DLL placement guidance.
+    //    No-op on Windows; DLLs are copied into the profile dir above and the
+    //    Windows installer script copies them next to the installed exe.
     emit_rpath(&final_lib_dir);
 
     // 7. Re-export the install path. Useful for `cargo run` on macOS
@@ -435,8 +453,12 @@ fn target_is_apple() -> bool {
     )
 }
 
+fn target_is_windows() -> bool {
+    env::var("CARGO_CFG_TARGET_OS").unwrap_or_default() == "windows"
+}
+
 fn exe_name(name: &str) -> String {
-    if env::var("CARGO_CFG_TARGET_OS").unwrap_or_default() == "windows" {
+    if target_is_windows() {
         format!("{name}.exe")
     } else {
         name.to_string()
@@ -448,6 +470,10 @@ fn exe_name(name: &str) -> String {
 ///   2. vendor/CrispASR (git submodule)
 ///   3. Try `git submodule update --init --recursive vendor/CrispASR` and retry
 ///   4. Fail with actionable error
+///
+/// In normal builds Cargo resolves the `crispasr` path dependency before this
+/// function can run, so a completely missing submodule still has to be fixed
+/// with `git submodule update --init --recursive` or `scripts/install-windows.ps1`.
 fn locate_source(manifest_dir: &Path) -> PathBuf {
     if let Ok(d) = env::var("CRISPASR_SRC_DIR") {
         let p = PathBuf::from(d);
@@ -501,6 +527,181 @@ fn locate_source(manifest_dir: &Path) -> PathBuf {
     );
 }
 
+fn prepare_windows_artifacts(install_dir: &Path, lib_dir: &Path, bin_dir: &Path) {
+    std::fs::create_dir_all(lib_dir).unwrap_or_else(|err| {
+        panic!(
+            "failed to create Windows import-library dir {}: {err}",
+            lib_dir.display()
+        )
+    });
+    std::fs::create_dir_all(bin_dir).unwrap_or_else(|err| {
+        panic!(
+            "failed to create Windows runtime DLL dir {}: {err}",
+            bin_dir.display()
+        )
+    });
+
+    copy_windows_runtime_dlls(install_dir, bin_dir);
+
+    let (whisper_import, crispasr_import) = windows_import_library_names();
+    copy_named_artifact(install_dir, whisper_import, lib_dir);
+
+    let whisper_import_path = lib_dir.join(whisper_import);
+    let crispasr_import_path = lib_dir.join(crispasr_import);
+    let _ = std::fs::remove_file(&crispasr_import_path);
+    std::fs::copy(&whisper_import_path, &crispasr_import_path).unwrap_or_else(|err| {
+        panic!(
+            "failed to create {} from {}: {err}",
+            crispasr_import_path.display(),
+            whisper_import_path.display()
+        )
+    });
+
+    copy_named_artifact(install_dir, "whisper.dll", bin_dir);
+    let whisper_dll = bin_dir.join("whisper.dll");
+    let crispasr_dll = bin_dir.join("crispasr.dll");
+    let _ = std::fs::remove_file(&crispasr_dll);
+    std::fs::copy(&whisper_dll, &crispasr_dll).unwrap_or_else(|err| {
+        panic!(
+            "failed to create {} from {}: {err}",
+            crispasr_dll.display(),
+            whisper_dll.display()
+        )
+    });
+
+    copy_runtime_dlls_to_profile_dir(bin_dir);
+}
+
+fn windows_import_library_names() -> (&'static str, &'static str) {
+    if env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default() == "gnu" {
+        ("libwhisper.dll.a", "libcrispasr.dll.a")
+    } else {
+        ("whisper.lib", "crispasr.lib")
+    }
+}
+
+fn copy_windows_runtime_dlls(install_dir: &Path, bin_dir: &Path) {
+    let mut dlls = Vec::new();
+    collect_files_with_extension(&install_dir.join("build"), "dll", &mut dlls);
+    collect_files_with_extension(bin_dir, "dll", &mut dlls);
+    dlls.sort();
+    dlls.dedup();
+
+    for dll in dlls {
+        let Some(name) = dll.file_name() else {
+            continue;
+        };
+        let dest = bin_dir.join(name);
+        if dll != dest {
+            std::fs::copy(&dll, &dest).unwrap_or_else(|err| {
+                panic!(
+                    "failed to copy Windows runtime DLL {} to {}: {err}",
+                    dll.display(),
+                    dest.display()
+                )
+            });
+        }
+    }
+}
+
+fn copy_named_artifact(install_dir: &Path, file_name: &str, dest_dir: &Path) {
+    if dest_dir.join(file_name).is_file() {
+        return;
+    }
+
+    let mut matches = Vec::new();
+    collect_files_named(install_dir, file_name, &mut matches);
+    matches.sort();
+
+    let Some(src) = matches.into_iter().next() else {
+        panic!(
+            "CrispASR build did not produce {file_name}. \
+             Check the Windows CMake output with `cargo build -vv`."
+        );
+    };
+
+    std::fs::copy(&src, dest_dir.join(file_name)).unwrap_or_else(|err| {
+        panic!(
+            "failed to copy {} to {}: {err}",
+            src.display(),
+            dest_dir.display()
+        )
+    });
+}
+
+fn copy_runtime_dlls_to_profile_dir(bin_dir: &Path) {
+    let Some(profile_dir) = cargo_profile_dir() else {
+        return;
+    };
+    let Ok(entries) = std::fs::read_dir(bin_dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path
+            .extension()
+            .is_some_and(|ext| ext.to_string_lossy().eq_ignore_ascii_case("dll"))
+        {
+            let Some(name) = path.file_name() else {
+                continue;
+            };
+            let dest = profile_dir.join(name);
+            std::fs::copy(&path, &dest).unwrap_or_else(|err| {
+                panic!(
+                    "failed to copy runtime DLL {} to {}: {err}",
+                    path.display(),
+                    dest.display()
+                )
+            });
+        }
+    }
+}
+
+fn cargo_profile_dir() -> Option<PathBuf> {
+    let out_dir = PathBuf::from(env::var("OUT_DIR").ok()?);
+    let build_dir = out_dir.parent()?.parent()?;
+    if build_dir.file_name()? != "build" {
+        return None;
+    }
+    build_dir.parent().map(Path::to_path_buf)
+}
+
+fn collect_files_named(root: &Path, file_name: &str, out: &mut Vec<PathBuf>) {
+    collect_files(root, &mut |path| {
+        if path
+            .file_name()
+            .is_some_and(|name| name.to_string_lossy().eq_ignore_ascii_case(file_name))
+        {
+            out.push(path.to_path_buf());
+        }
+    });
+}
+
+fn collect_files_with_extension(root: &Path, extension: &str, out: &mut Vec<PathBuf>) {
+    collect_files(root, &mut |path| {
+        if path
+            .extension()
+            .is_some_and(|ext| ext.to_string_lossy().eq_ignore_ascii_case(extension))
+        {
+            out.push(path.to_path_buf());
+        }
+    });
+}
+
+fn collect_files(root: &Path, visit: &mut impl FnMut(&Path)) {
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_files(&path, visit);
+        } else if path.is_file() {
+            visit(&path);
+        }
+    }
+}
+
 /// Tell the linker to bake `dir` into the binary's rpath.
 /// On Linux/BSD we ALSO emit `--disable-new-dtags` so the resulting
 /// DT_RPATH (rather than DT_RUNPATH) applies transitively to the
@@ -542,21 +743,20 @@ fn install_rpath_token() -> &'static str {
     }
 }
 
-/// Ensure `lib_dir` contains `libcrispasr.{so,dylib,dll}` as an alias
+/// Ensure `lib_dir` contains `libcrispasr.{so,dylib}` as an alias
 /// for the canonical `libwhisper.*` produced by CrispASR's CMake.
 ///
 /// On Unix we use a relative symlink so the install dir is relocatable.
-/// On Windows we copy the DLL because creating symlinks requires
-/// administrator privileges by default.
+/// Windows uses [`prepare_windows_artifacts`] instead because MSVC needs an
+/// import library at link time and DLLs at runtime.
 ///
-/// Idempotent — if the alias already exists and points at libwhisper,
-/// we leave it alone. If it exists but points somewhere wrong, we recreate.
+/// Idempotent: the alias is recreated every time so stale aliases do not
+/// survive a backend or submodule change.
 fn create_crispasr_alias(lib_dir: &Path) {
     let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
 
     let (whisper_name, alias_name) = match target_os.as_str() {
         "macos" | "ios" => ("libwhisper.dylib", "libcrispasr.dylib"),
-        "windows" => ("whisper.dll", "crispasr.dll"),
         _ => ("libwhisper.so", "libcrispasr.so"),
     };
 

@@ -31,25 +31,42 @@ sudo apt install cmake build-essential pkg-config libasound2-dev libudev-dev \
   autoconf libtool
 ```
 
-Then build and install:
+Clone the repository:
 
 ```bash
 git clone --recurse-submodules https://github.com/pszemraj/parakit.git
 cd parakit
+git submodule update --init --recursive
+```
 
+Linux/macOS:
+
+```bash
 cargo install --path .
 ```
 
-For many local CPU installs, this is a better build command because it enables
-BLAS when MKL/OpenBLAS/Accelerate is available and falls back to the native ggml
-CPU kernels when it is not:
+For many local CPU installs, use `PARAKIT_BLAS=auto`. It enables BLAS when
+MKL/OpenBLAS/Accelerate is available and falls back to native ggml CPU kernels
+when it is not:
 
 ```bash
 PARAKIT_BLAS=auto cargo install --path .
 ```
 
-Cargo installs the binary into Cargo's bin directory, usually `~/.cargo/bin`.
-Make sure that directory is on `PATH`:
+Windows PowerShell:
+
+```powershell
+pwsh -ExecutionPolicy Bypass -File scripts/install-windows.ps1
+```
+
+The Windows installer initializes the submodule, runs `cargo install --path .`,
+and copies generated native DLLs next to the installed `parakit.exe`.
+
+Cargo installs the binary into Cargo's bin directory, usually `~/.cargo/bin` on
+Linux/macOS or `%USERPROFILE%\.cargo\bin` on Windows. Make sure that directory
+is on `PATH`.
+
+Linux/macOS:
 
 ```bash
 export PATH="$HOME/.cargo/bin:$PATH"

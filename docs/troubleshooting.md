@@ -92,6 +92,24 @@ settings or `pavucontrol`, then wait a few seconds or restart parakit.
 
 ## Build And Model Issues
 
+Missing CrispASR path dependency:
+
+```text
+failed to read vendor\CrispASR\crispasr\Cargo.toml
+```
+
+The git submodule is missing. Fix the existing checkout:
+
+```bash
+git submodule update --init --recursive
+```
+
+On Windows, prefer:
+
+```powershell
+pwsh -ExecutionPolicy Bypass -File scripts/install-windows.ps1
+```
+
 Shared library loading on Linux:
 
 ```bash
