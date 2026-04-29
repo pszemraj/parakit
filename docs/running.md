@@ -51,18 +51,6 @@ Quiet mode suppresses stdout. Errors and warnings still go to stderr.
 parakit --quiet &
 ```
 
-Install the binary onto `PATH` from the repository:
-
-```bash
-cargo install --path .
-```
-
-Cargo installs to `~/.cargo/bin` by default. Add it to `PATH` if needed:
-
-```bash
-export PATH="$HOME/.cargo/bin:$PATH"
-```
-
 If the default model is not cached yet, `parakit --quiet &` downloads it before
 starting the daemon. No stdout is printed in quiet mode; download and startup
 errors still go to stderr.
@@ -93,6 +81,35 @@ or:
 pgrep parakit
 kill <pid>
 ```
+
+## Model Cache
+
+When no `-m` path is supplied, startup ensures the default Q8_0 model exists
+and then loads it. The hosted GGUF is SHA256-verified before it is accepted.
+
+The default model is downloaded from:
+
+```text
+https://huggingface.co/pszemraj/parakeet-tdt-0.6b-v3-gguf
+```
+
+The final model is cached at:
+
+```text
+~/.cache/parakit/models/parakeet-tdt-0.6b-v3-Q8_0.gguf
+```
+
+`XDG_CACHE_HOME` is honored on Linux. macOS uses
+`~/Library/Caches/parakit/models/`, and Windows uses
+`%LOCALAPPDATA%\parakit\Cache\models\`.
+
+Use `parakit cache` to list cached GGUF files, dtypes, sizes, and the default
+Q8_0 checksum status. Use `parakit cache dir` for scripts that need only the
+cache directory.
+
+`-m <path>` always overrides the cached model and disables automatic fetch.
+Relative custom paths are resolved from the shell's current working directory
+at launch time.
 
 ## Quiet Mode
 

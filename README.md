@@ -13,7 +13,7 @@ partial stutters, and punctuation spacing.
 
 Repository: [github.com/pszemraj/parakit](https://github.com/pszemraj/parakit)
 
-## Quickstart
+## Install
 
 ```bash
 git clone --recurse-submodules https://github.com/pszemraj/parakit.git
@@ -23,16 +23,27 @@ cargo install --path .
 export PATH="$HOME/.cargo/bin:$PATH"
 
 parakit doctor
-
-# First run checks the hotkey backend, then downloads the default Q8_0 GGUF.
 parakit
 ```
 
 `cargo install --path .` builds the release binary and installs it into
-Cargo's binary directory, usually `~/.cargo/bin`. Use
-`cargo install --path . --features cuda` for CUDA; replace `cuda` with
-`vulkan` or `metal` for those backends. Native dependencies and backend notes
-are in [docs/build.md](docs/build.md).
+Cargo's binary directory, usually `~/.cargo/bin`.
+
+The first `parakit` run downloads the default Q8_0 GGUF model if it is not
+already cached. No `-m` argument is needed for normal use.
+
+Backend builds:
+
+```bash
+cargo install --path . --features cuda
+cargo install --path . --features vulkan
+cargo install --path . --features metal
+```
+
+Native dependencies, optional BLAS/MKL builds, rpath details, and Windows DLL
+handling are covered in [docs/build.md](docs/build.md).
+
+## Run
 
 Foreground startup prints the model file, precision, and selected microphone:
 
@@ -50,13 +61,19 @@ For normal use, run it quietly in the background:
 parakit --quiet &
 ```
 
-See [docs/running.md](docs/running.md) for background launch, `nohup`,
-logging, and process management examples.
+The hotkey is fixed at `Ctrl+Space`. The literal space is suppressed before it
+reaches the focused application. On Linux/X11, parakit uses a desktop hotkey
+registration first, so ordinary X11 sessions do not need `/dev/input` access.
+The low-level evdev backend is only a fallback.
 
-## Common Commands
+See [docs/running.md](docs/running.md) for background launch, model cache,
+logging, microphone selection, paste modes, sounds, and streaming mode.
+
+## Commands
 
 ```bash
-# Download the hosted default model again.
+# Download or redownload the hosted default model.
+parakit fetch
 parakit fetch --force
 
 # Inspect the model cache.
@@ -66,12 +83,6 @@ parakit cache dir
 # Show diagnostic startup paths, backend details, and timings.
 parakit --verbose
 parakit --threads 8 --verbose
-
-# Rebuild Q8_0 locally from NVIDIA's official checkpoint.
-python -m pip install -r requirements-convert.txt
-parakit fetch --from-source
-parakit fetch --from-source --keep-nemo
-parakit fetch --from-source --keep-f16
 
 # Run with transcription logging.
 parakit --log-dir ~/.parakit/logs
@@ -92,54 +103,15 @@ parakit --list-rules
 parakit --test-rules "So, um, the the cat ran like, you know, fast"
 ```
 
-The hotkey is fixed at `Ctrl+Space`. The literal space is suppressed before it
-reaches the focused application. On Linux/X11, parakit uses a desktop hotkey
-registration first, so ordinary X11 sessions do not need `/dev/input` access.
-The low-level evdev backend is only a fallback; it requires explicit input
-device permissions.
-
-## Model Setup
-
-When no `-m` path is supplied, startup ensures the default Q8_0 model exists
-and then loads it. The default model is downloaded from:
-
-```text
-https://huggingface.co/pszemraj/parakeet-tdt-0.6b-v3-gguf
-```
-
-The downloaded GGUF is SHA256-verified before it is accepted.
-The same hosted repository can also hold F16 and other quantized GGUF files;
-the current startup default remains Q8_0.
-
-The final model is cached at:
-
-```text
-~/.cache/parakit/models/parakeet-tdt-0.6b-v3-Q8_0.gguf
-```
-
-`XDG_CACHE_HOME` is honored on Linux. macOS uses
-`~/Library/Caches/parakit/models/`, and Windows uses
-`%LOCALAPPDATA%\parakit\Cache\models\`.
-
-The downloaded `.nemo` and intermediate F16 GGUF are deleted after a successful
-source rebuild unless `--keep-nemo` or `--keep-f16` is passed. `-m <path>`
-always overrides the cached model and disables automatic fetch.
-
-Use `parakit cache` to list cached GGUF files, dtypes, sizes, and the default
-Q8_0 checksum status. Use `parakit cache dir` for scripts that need the cache
-directory.
-
-`parakit fetch --from-source` is the reproducible maintainer path: download
-NVIDIA's official `.nemo`, convert it to GGUF with CrispASR's Python converter,
-then quantize it to Q8_0 with `crispasr-quantize`. It requires the Python
-packages in `requirements-convert.txt`.
+Maintainer source rebuilds from NVIDIA's `.nemo` checkpoint are described in
+[docs/dev.md](docs/dev.md#source-rebuild).
 
 ## Documentation
 
 - [docs/build.md](docs/build.md): dependencies, backend features, bundled
   CrispASR, rpath, and Windows DLL handling.
 - [docs/running.md](docs/running.md): foreground/background launch, quiet
-  mode, logging, sounds, and runtime modes.
+  mode, model cache, logging, paste modes, and runtime modes.
 - [docs/architecture.md](docs/architecture.md): thread model, event flow,
   module boundaries, and ownership constraints.
 - [docs/cleaning-rules.md](docs/cleaning-rules.md): cleanup rule behavior,

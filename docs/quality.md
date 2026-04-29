@@ -66,6 +66,11 @@ If F16 differs materially from the reference, inspect CrispASR's Parakeet
 preprocessor first. If F16 matches but Q8_0 is worse, treat that as an artifact
 or quantizer regression before trusting the cached model.
 
+Parakeet-v3 auto-detects language. It has no parakit language flag today, so
+non-English or code-switched dictation should be checked against real clips
+before relying on it. Accents, noise, proper nouns, and technical vocabulary can
+change language detection behavior.
+
 ## Runtime Smoke Checks
 
 After quality parity is established, run the daemon in foreground mode and

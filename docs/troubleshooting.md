@@ -157,7 +157,7 @@ After a Windows build, make generated DLLs findable as described in
 ## Model Cache Problems
 
 With no `-m` path, parakit downloads the default model on first run and stores
-it in the cache described in [Model Setup](../README.md#model-setup):
+it in the cache described in [running.md](running.md#model-cache):
 
 ```bash
 parakit --quiet &
