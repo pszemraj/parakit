@@ -73,6 +73,20 @@ appears:
 - retry in foreground mode to inspect errors;
 - avoid Wayland sessions.
 
+## Hotkey Stops After Lock Or Unlock
+
+On Linux/X11, screen lock can temporarily replace or interfere with passive
+desktop hotkey grabs. parakit refreshes its X11 registration while idle, so the
+hotkey should recover within a few seconds after unlock.
+
+If it stays dead:
+
+- leave parakit in foreground or rerun with `--verbose` while reproducing;
+- run `parakit doctor` after unlocking;
+- check whether `Ctrl+Space` became owned by the desktop or input method;
+- use the evdev fallback only after granting input permissions as described in
+  [Hotkey Does Not Start](#hotkey-does-not-start).
+
 ## Text Does Not Insert
 
 Batch insertion writes the transcript to the system clipboard and sends the

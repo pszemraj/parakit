@@ -66,6 +66,8 @@ The layout is driven by platform and library constraints:
 - Linux/X11 uses a desktop hotkey registration first. The low-level
   `rdev::grab` backend remains available as a fallback when evdev input access
   is explicitly granted.
+- The X11 hotkey backend refreshes its desktop registration while idle so a
+  screen lock/unlock transition can recover without restarting parakit.
 - The active hotkey backend must suppress the literal Space key before it
   reaches the focused application.
 
@@ -77,6 +79,7 @@ crossbeam channels.
 | Module | Responsibility |
 | --- | --- |
 | `src/main.rs` | CLI, hotkey state machine, worker thread, streaming ticker. |
+| `src/daemon/hotkey.rs` | X11 desktop hotkey, rdev fallback, hotkey state helpers. |
 | `src/daemon/audio_manager.rs` | Microphone selection, capture, mono mixdown, resampling, stream restart, shared buffer. |
 | `src/fetch.rs` | Hosted Q8_0 download, source rebuilds, checksum verification, and manifest handling. |
 | `src/model.rs` | Model names, hosted GGUF naming, cache paths, hosted URLs, and checksum constants. |

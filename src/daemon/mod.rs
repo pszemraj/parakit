@@ -3,7 +3,9 @@
 /// Microphone capture and shared recording buffer.
 #[path = "audio_manager.rs"]
 pub(crate) mod audio;
-/// Synthetic typing at the focused cursor.
+/// Push-to-talk hotkey backends.
+pub(crate) mod hotkey;
+/// Text insertion at the focused cursor.
 pub(crate) mod inject;
 /// Terminal-aware daemon logging.
 pub(crate) mod logging;

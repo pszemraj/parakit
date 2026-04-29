@@ -1,10 +1,12 @@
 //! parakit - a push-to-talk dictation daemon.
 //!
 //! Architecture:
-//!   - Main thread: parse CLI, set up subsystems, then run the rdev grab loop.
-//!     The grab loop is blocking and runs forever until SIGINT.
-//!   - cpal audio thread: continuously captures from the mic, appends to a
-//!     shared buffer when `recording` is true.
+//!   - Main thread: parse CLI, set up subsystems, then run the hotkey backend.
+//!     The hotkey loop is blocking and runs forever until SIGINT.
+//!   - Audio manager thread: owns the live cpal stream and follows the default
+//!     input device.
+//!   - cpal callback thread: receives mic samples and appends to a shared
+//!     buffer when `recording` is true.
 //!   - Worker thread: receives Event messages via crossbeam-channel, runs
 //!     transcription off the hotkey thread so input stays responsive.
 //!
@@ -29,7 +31,6 @@ use parakit::gguf;
 use parakit::inference::{default_thread_count, Engine, Mode};
 use parakit::model;
 use parakit::rules::{self, Cleaner};
-use rdev::{Event, EventType, Key};
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::fs::File;
@@ -368,7 +369,7 @@ fn run() -> Result<()> {
     // Hotkey grab loop. Blocks forever (until grab returns or process exits).
     log.ready();
 
-    run_grab_loop(tx, audio);
+    daemon::hotkey::run_grab_loop(tx, audio);
 
     // Tear down.
     if let Some(t) = streaming_thread {
@@ -578,204 +579,6 @@ fn format_file_size(bytes: u64) -> String {
         format!("{:.0} MB", bytes as f64 / 1_000_000.0)
     } else {
         format!("{} KB", bytes / 1000)
-    }
-}
-
-// =============================================================================
-// Hotkey grab
-// =============================================================================
-//
-// Linux/X11 first uses a desktop hotkey registration. That avoids direct
-// /dev/input access on ordinary desktop sessions. rdev::grab remains the
-// fallback because it can intercept before applications receive events, but on
-// Linux it requires explicit evdev permissions.
-//
-// Static state is unfortunately required because rdev::grab takes a
-// `Fn(Event) -> Option<Event>` and runs it across multiple thread contexts
-// in the listener implementation. We use atomics + a shared sender. The X11
-// desktop backend reuses the same state helpers so behavior stays identical.
-
-use once_cell::sync::OnceCell;
-static GRAB_TX: OnceCell<Sender<Event_>> = OnceCell::new();
-static GRAB_AUDIO: OnceCell<AudioHandle> = OnceCell::new();
-static CTRL_HELD: AtomicBool = AtomicBool::new(false);
-static SPACE_HELD: AtomicBool = AtomicBool::new(false);
-
-#[cfg(target_os = "linux")]
-fn run_grab_loop(tx: Sender<Event_>, audio: AudioHandle) {
-    let _ = GRAB_TX.set(tx);
-    let _ = GRAB_AUDIO.set(audio);
-
-    if daemon::preflight::linux_x11_desktop_hotkey_candidate() {
-        match run_x11_desktop_hotkey_loop() {
-            Ok(()) => return,
-            Err(err) => {
-                eprintln!("parakit: X11 desktop hotkey backend failed: {err:#}");
-                if !daemon::preflight::linux_evdev_fallback_available() {
-                    eprintln!("{}", linux_no_hotkey_backend_help());
-                    std::process::exit(2);
-                }
-                eprintln!("parakit: falling back to rdev evdev grab");
-            }
-        }
-    }
-
-    if let Err(e) = rdev::grab(grab_callback) {
-        eprintln!("parakit: rdev::grab failed: {e:?}\n{}", grab_failure_help());
-        std::process::exit(2);
-    }
-}
-
-#[cfg(target_os = "linux")]
-fn run_x11_desktop_hotkey_loop() -> Result<()> {
-    use global_hotkey::hotkey::{Code, HotKey, Modifiers};
-    use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
-
-    let manager = GlobalHotKeyManager::new().context("could not create global hotkey manager")?;
-    let hotkey = HotKey::new(Some(Modifiers::CONTROL), Code::Space);
-    manager
-        .register(hotkey)
-        .context("could not register Ctrl+Space; another desktop shortcut may already own it")?;
-
-    let receiver = GlobalHotKeyEvent::receiver();
-    loop {
-        let event = receiver
-            .recv()
-            .context("global hotkey event channel closed")?;
-        if event.id != hotkey.id() {
-            continue;
-        }
-
-        match event.state {
-            HotKeyState::Pressed => {
-                CTRL_HELD.store(true, Ordering::SeqCst);
-                if !SPACE_HELD.swap(true, Ordering::SeqCst) {
-                    start_hotkey_recording();
-                }
-            }
-            HotKeyState::Released => {
-                CTRL_HELD.store(false, Ordering::SeqCst);
-                if SPACE_HELD.swap(false, Ordering::SeqCst) {
-                    stop_hotkey_recording();
-                }
-            }
-        }
-    }
-}
-
-#[cfg(not(target_os = "linux"))]
-fn run_grab_loop(tx: Sender<Event_>, audio: AudioHandle) {
-    let _ = GRAB_TX.set(tx);
-    let _ = GRAB_AUDIO.set(audio);
-
-    if let Err(e) = rdev::grab(grab_callback) {
-        eprintln!("parakit: rdev::grab failed: {e:?}\n{}", grab_failure_help());
-        std::process::exit(2);
-    }
-}
-
-#[cfg(target_os = "linux")]
-fn linux_no_hotkey_backend_help() -> String {
-    let session = std::env::var("XDG_SESSION_TYPE").unwrap_or_else(|_| "unknown".to_string());
-    let display = std::env::var("DISPLAY").unwrap_or_else(|_| "<unset>".to_string());
-    let user = std::env::var("USER").unwrap_or_else(|_| "$USER".to_string());
-
-    format!(
-        "No usable Linux hotkey backend is available.\n\
-         Current session: XDG_SESSION_TYPE={session}, DISPLAY={display}\n\
-         Preferred path: use an Xorg/X11 session so parakit can register\n\
-         Ctrl+Space through the desktop without /dev/input access.\n\
-         Fallback path: grant evdev access, then log out completely and back in:\n\
-           sudo usermod -aG input {user}\n\
-         If Ctrl+Space is already owned by the desktop or input method, disable\n\
-         that shortcut and restart parakit."
-    )
-}
-
-#[cfg(target_os = "linux")]
-fn grab_failure_help() -> String {
-    let session = std::env::var("XDG_SESSION_TYPE").unwrap_or_else(|_| "unknown".to_string());
-    let display = std::env::var("DISPLAY").unwrap_or_else(|_| "<unset>".to_string());
-    let user = std::env::var("USER").unwrap_or_else(|_| "$USER".to_string());
-
-    format!(
-        "The evdev fallback requires read access to /dev/input/event*.\n\
-         Current session: XDG_SESSION_TYPE={session}, DISPLAY={display}\n\
-         Prefer an Xorg/X11 session so parakit can use the desktop hotkey\n\
-         backend without evdev permissions. Otherwise add your user to the\n\
-         input group, then log out completely and log back in:\n\
-           sudo usermod -aG input {user}\n\
-         Verify the new login session with:\n\
-           id -nG | tr ' ' '\\n' | grep '^input$'\n\
-         Restart tmux, terminals, or user services that were started before the\n\
-         group change. Avoid running parakit with sudo; audio, X11, and text\n\
-         insertion usually belongs to the regular desktop user."
-    )
-}
-
-#[cfg(target_os = "macos")]
-fn grab_failure_help() -> String {
-    "macOS hotkey capture requires Accessibility and Input Monitoring permissions for both the terminal and the parakit binary.".to_string()
-}
-
-#[cfg(target_os = "windows")]
-fn grab_failure_help() -> String {
-    "Windows usually allows the hotkey hook. If security software blocked parakit, whitelist the binary and rerun it.".to_string()
-}
-
-#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-fn grab_failure_help() -> String {
-    "Global hotkey capture is platform-specific and may need OS-level input permissions."
-        .to_string()
-}
-
-fn start_hotkey_recording() {
-    if let Some(audio) = GRAB_AUDIO.get() {
-        audio.start_recording();
-    }
-    if let Some(tx) = GRAB_TX.get() {
-        let _ = tx.send(Event_::Start);
-    }
-}
-
-fn stop_hotkey_recording() {
-    if let Some(tx) = GRAB_TX.get() {
-        let _ = tx.send(Event_::Stop);
-    }
-}
-
-fn grab_callback(event: Event) -> Option<Event> {
-    match event.event_type {
-        EventType::KeyPress(Key::ControlLeft) | EventType::KeyPress(Key::ControlRight) => {
-            CTRL_HELD.store(true, Ordering::SeqCst);
-            Some(event)
-        }
-        EventType::KeyRelease(Key::ControlLeft) | EventType::KeyRelease(Key::ControlRight) => {
-            CTRL_HELD.store(false, Ordering::SeqCst);
-            // If user released Ctrl while still holding Space, end the recording.
-            if SPACE_HELD.swap(false, Ordering::SeqCst) {
-                stop_hotkey_recording();
-                return None;
-            }
-            Some(event)
-        }
-        EventType::KeyPress(Key::Space) => {
-            if CTRL_HELD.load(Ordering::SeqCst) {
-                if !SPACE_HELD.swap(true, Ordering::SeqCst) {
-                    start_hotkey_recording();
-                }
-                return None; // suppress so the literal space doesn't reach apps
-            }
-            Some(event)
-        }
-        EventType::KeyRelease(Key::Space) => {
-            if SPACE_HELD.swap(false, Ordering::SeqCst) {
-                stop_hotkey_recording();
-                return None;
-            }
-            Some(event)
-        }
-        _ => Some(event),
     }
 }
 
