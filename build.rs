@@ -27,6 +27,7 @@ use std::process::Command;
 fn main() {
     println!("cargo:rerun-if-env-changed=CRISPASR_LIB_DIR");
     println!("cargo:rerun-if-env-changed=CRISPASR_SRC_DIR");
+    println!("cargo:rerun-if-env-changed=PARAKIT_BLAS");
     println!("cargo:rerun-if-changed=build.rs");
 
     // 1. Honor an explicit lib-dir override regardless of feature flags.
@@ -63,7 +64,6 @@ fn main() {
         .define("GGML_NATIVE", "ON")
         .define("GGML_OPENMP", "ON")
         .define("GGML_CPU_REPACK", "ON")
-        .define("GGML_BLAS", "OFF")
         // Skip tests. Build examples because CrispASR's quantizer lives there.
         .define("WHISPER_BUILD_TESTS", "OFF")
         // CrispASR's GGUF requantizer lives under examples/. We build the
@@ -85,6 +85,7 @@ fn main() {
     let metal_enabled = cargo_feature("metal");
     let vulkan_enabled = cargo_feature("vulkan");
 
+    configure_blas(&mut cfg);
     cfg.define("GGML_CUDA", if cuda_enabled { "ON" } else { "OFF" });
     cfg.define("GGML_VULKAN", if vulkan_enabled { "ON" } else { "OFF" });
     if metal_enabled {
@@ -177,6 +178,8 @@ fn emit_build_report(install_dir: &Path) {
         "GGML_OPENMP",
         "GGML_CPU_REPACK",
         "GGML_BLAS",
+        "GGML_BLAS_VENDOR",
+        "COHERE_MKL",
         "GGML_CUDA",
         "GGML_VULKAN",
         "GGML_METAL",
@@ -194,6 +197,144 @@ fn emit_build_report(install_dir: &Path) {
             build_dir.display()
         );
     }
+}
+
+fn configure_blas(cfg: &mut cmake::Config) {
+    let blas = BlasConfig::from_env();
+    cfg.define("GGML_BLAS", if blas.enabled { "ON" } else { "OFF" });
+    cfg.define("COHERE_MKL", if blas.cohere_mkl { "ON" } else { "OFF" });
+    if let Some(vendor) = blas.vendor {
+        cfg.define("GGML_BLAS_VENDOR", vendor);
+        if blas.cohere_mkl {
+            cfg.define("BLA_VENDOR", vendor);
+        }
+    }
+
+    println!(
+        "cargo:rustc-env=PARAKIT_BUILD_BLAS_REQUEST={}",
+        blas.requested
+    );
+    println!(
+        "cargo:rustc-env=PARAKIT_BUILD_BLAS_SELECTED={}",
+        blas.selected
+    );
+    if blas.explicit {
+        println!(
+            "cargo:warning=parakit build: PARAKIT_BLAS={} selected {}",
+            blas.requested, blas.selected
+        );
+    }
+}
+
+struct BlasConfig {
+    requested: String,
+    selected: &'static str,
+    enabled: bool,
+    vendor: Option<&'static str>,
+    cohere_mkl: bool,
+    explicit: bool,
+}
+
+impl BlasConfig {
+    fn from_env() -> Self {
+        let raw = env::var("PARAKIT_BLAS").unwrap_or_else(|_| "off".to_string());
+        let requested = raw.trim().to_ascii_lowercase();
+        let explicit = env::var("PARAKIT_BLAS").is_ok();
+        match requested.as_str() {
+            "" | "0" | "false" | "no" | "none" | "off" => Self::off(raw, explicit),
+            "auto" => Self::auto(raw),
+            "mkl" | "intel" | "intel-mkl" => Self::mkl(raw, explicit),
+            "openblas" => Self::openblas(raw, explicit),
+            "accelerate" | "apple" => Self::accelerate(raw, explicit),
+            "1" | "true" | "yes" | "on" | "blas" | "generic" | "system" => {
+                Self::generic(raw, explicit)
+            }
+            other => panic!(
+                "unsupported PARAKIT_BLAS={other}. Use off, auto, openblas, mkl, accelerate, or generic."
+            ),
+        }
+    }
+
+    fn auto(raw: String) -> Self {
+        if target_is_apple() {
+            return Self::accelerate(raw, true);
+        }
+        if pkg_config_exists("mkl-sdl") {
+            return Self::mkl(raw, true);
+        }
+        if pkg_config_exists("openblas") || pkg_config_exists("openblas64") {
+            return Self::openblas(raw, true);
+        }
+        println!(
+            "cargo:warning=parakit build: PARAKIT_BLAS=auto found no MKL/OpenBLAS pkg-config metadata; building without BLAS"
+        );
+        Self::off(raw, true)
+    }
+
+    fn off(requested: String, explicit: bool) -> Self {
+        Self {
+            requested,
+            selected: "off",
+            enabled: false,
+            vendor: None,
+            cohere_mkl: false,
+            explicit,
+        }
+    }
+
+    fn generic(requested: String, explicit: bool) -> Self {
+        Self {
+            requested,
+            selected: "generic",
+            enabled: true,
+            vendor: Some("Generic"),
+            cohere_mkl: false,
+            explicit,
+        }
+    }
+
+    fn openblas(requested: String, explicit: bool) -> Self {
+        Self {
+            requested,
+            selected: "openblas",
+            enabled: true,
+            vendor: Some("OpenBLAS"),
+            cohere_mkl: false,
+            explicit,
+        }
+    }
+
+    fn mkl(requested: String, explicit: bool) -> Self {
+        Self {
+            requested,
+            selected: "mkl",
+            enabled: true,
+            vendor: Some("Intel10_64lp"),
+            cohere_mkl: true,
+            explicit,
+        }
+    }
+
+    fn accelerate(requested: String, explicit: bool) -> Self {
+        if !target_is_apple() {
+            panic!("PARAKIT_BLAS=accelerate is only supported on Apple targets");
+        }
+        Self {
+            requested,
+            selected: "accelerate",
+            enabled: true,
+            vendor: Some("Apple"),
+            cohere_mkl: false,
+            explicit,
+        }
+    }
+}
+
+fn pkg_config_exists(package: &str) -> bool {
+    Command::new("pkg-config")
+        .args(["--exists", package])
+        .status()
+        .is_ok_and(|status| status.success())
 }
 
 fn read_cmake_cache(path: &Path) -> BTreeMap<String, String> {

@@ -16,7 +16,7 @@ pub fn diagnostic_lines() -> Vec<String> {
         build_value("GGML_NATIVE"),
         build_value("GGML_OPENMP"),
         build_value("GGML_CPU_REPACK"),
-        build_value("GGML_BLAS")
+        blas_label()
     ));
     lines.push(format!(
         "cpu flags:      {}",
@@ -38,12 +38,30 @@ pub fn diagnostic_lines() -> Vec<String> {
     lines
 }
 
+fn blas_label() -> String {
+    let enabled = build_value("GGML_BLAS");
+    let selected = option_env!("PARAKIT_BUILD_BLAS_SELECTED").unwrap_or("unknown");
+    let vendor = option_env!("PARAKIT_BUILD_GGML_BLAS_VENDOR").unwrap_or("");
+    let cohere_mkl = build_value("COHERE_MKL");
+    if enabled == "OFF" || selected == "off" {
+        return "OFF".to_string();
+    }
+    if vendor.is_empty() {
+        format!("{enabled} ({selected})")
+    } else if cohere_mkl == "ON" {
+        format!("{enabled} ({selected}, vendor={vendor}, cohere_mkl=ON)")
+    } else {
+        format!("{enabled} ({selected}, vendor={vendor})")
+    }
+}
+
 fn build_value(key: &str) -> &'static str {
     match key {
         "GGML_NATIVE" => option_env!("PARAKIT_BUILD_GGML_NATIVE").unwrap_or("unknown"),
         "GGML_OPENMP" => option_env!("PARAKIT_BUILD_GGML_OPENMP").unwrap_or("unknown"),
         "GGML_CPU_REPACK" => option_env!("PARAKIT_BUILD_GGML_CPU_REPACK").unwrap_or("unknown"),
         "GGML_BLAS" => option_env!("PARAKIT_BUILD_GGML_BLAS").unwrap_or("unknown"),
+        "COHERE_MKL" => option_env!("PARAKIT_BUILD_COHERE_MKL").unwrap_or("unknown"),
         "GGML_CUDA" => option_env!("PARAKIT_BUILD_GGML_CUDA").unwrap_or("unknown"),
         "GGML_VULKAN" => option_env!("PARAKIT_BUILD_GGML_VULKAN").unwrap_or("unknown"),
         "GGML_METAL" => option_env!("PARAKIT_BUILD_GGML_METAL").unwrap_or("unknown"),

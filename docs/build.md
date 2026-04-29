@@ -61,7 +61,7 @@ path sets ggml's CPU backend to:
 - `GGML_NATIVE=ON`
 - `GGML_OPENMP=ON`
 - `GGML_CPU_REPACK=ON`
-- `GGML_BLAS=OFF`
+- `GGML_BLAS=OFF` unless explicitly requested
 
 On Linux with GCC or Clang this means the ggml CPU backend is compiled with
 `-march=native` and OpenMP when the toolchain supports it. That is intentional:
@@ -81,6 +81,56 @@ For CPU thread sweeps without the daemon:
 
 ```bash
 cargo run --release --example transcribe-file -- --audio path/to/sample.wav --threads 8 --repeat 3
+```
+
+## Optional BLAS and MKL
+
+Native ggml kernels are the default because they are predictable and require no
+extra runtime libraries. BLAS/MKL is opt-in: it can be faster for some large
+matrix paths, but it adds platform-specific build and runtime dependencies.
+
+Set `PARAKIT_BLAS` while building:
+
+```bash
+PARAKIT_BLAS=auto cargo install --path .
+PARAKIT_BLAS=openblas cargo install --path .
+PARAKIT_BLAS=mkl cargo install --path .
+PARAKIT_BLAS=generic cargo install --path .
+```
+
+Supported values:
+
+| Value | Behavior |
+| --- | --- |
+| unset, `off` | Default. Build native/OpenMP CPU kernels without BLAS. |
+| `auto` | Use Apple Accelerate on macOS, otherwise use MKL if `mkl-sdl.pc` is visible to `pkg-config`, otherwise OpenBLAS if `openblas.pc` or `openblas64.pc` is visible, otherwise stay off. |
+| `openblas` | Build with `GGML_BLAS=ON` and `GGML_BLAS_VENDOR=OpenBLAS`. |
+| `mkl` | Build with CrispASR's `COHERE_MKL=ON`, which forces ggml BLAS to `Intel10_64lp`. |
+| `generic` | Build with `GGML_BLAS=ON` and `GGML_BLAS_VENDOR=Generic`. |
+| `accelerate` | Use Apple Accelerate. Apple targets only. |
+
+Ubuntu/Debian OpenBLAS setup:
+
+```bash
+sudo nala install libopenblas-dev
+PARAKIT_BLAS=openblas cargo install --path .
+```
+
+MKL setup depends on how Intel oneAPI or the distro package is installed. The
+important check is that CMake can find MKL. For `PARAKIT_BLAS=auto`, `pkg-config`
+must also see `mkl-sdl`:
+
+```bash
+pkg-config --exists mkl-sdl
+PARAKIT_BLAS=mkl cargo install --path .
+```
+
+The selected BLAS mode is printed during explicit BLAS builds and later shown
+by:
+
+```bash
+parakit doctor
+parakit --verbose
 ```
 
 ## Bundled CrispASR
