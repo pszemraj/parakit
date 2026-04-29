@@ -90,12 +90,18 @@ fn run_hosted_q8(options: FetchOptions) -> Result<PathBuf> {
         remove_if_exists(&paths.q8)?;
         remove_if_exists(&partial)?;
     } else if paths.q8.is_file() {
+        if manifest.hosted_current(&paths.q8) {
+            status(
+                options,
+                format_args!("parakit: cached model is current: {}", paths.q8.display()),
+            );
+            return Ok(paths.q8);
+        }
+
         let current = hash_file(&paths.q8)?;
         if current == HOSTED_Q8_SHA256 {
-            if !manifest.hosted_current(&paths.q8) {
-                manifest.mark_hosted_ready(&paths.q8);
-                manifest.save(&paths.manifest)?;
-            }
+            manifest.mark_hosted_ready(&paths.q8);
+            manifest.save(&paths.manifest)?;
             status(
                 options,
                 format_args!("parakit: cached model is current: {}", paths.q8.display()),

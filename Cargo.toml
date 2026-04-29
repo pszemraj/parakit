@@ -21,6 +21,8 @@ required-features = ["daemon"]
 # CLI parsing
 clap = { version = "4.5", features = ["derive"] }
 directories = "6"
+anstream = "1.0"
+anstyle = "1.0"
 
 # Inference runtime. CrispASR's Rust crates are supplied by the pinned
 # submodule rather than crates.io.
@@ -59,6 +61,7 @@ sha2 = "0.10"
 
 # Error handling
 anyhow = "1.0"
+libc = "0.2"
 
 # Threading conveniences
 crossbeam-channel = "0.5"

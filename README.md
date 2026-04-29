@@ -34,17 +34,14 @@ Cargo's binary directory, usually `~/.cargo/bin`. Use
 `vulkan` or `metal` for those backends. Native dependencies and backend notes
 are in [docs/build.md](docs/build.md).
 
-Foreground startup prints the resolved model and waits for the hotkey:
+Foreground startup prints the model file, precision, and selected microphone:
 
 ```text
 parakit
-  model:    /home/user/.cache/parakit/models/parakeet-tdt-0.6b-v3-Q8_0.gguf
-  dtype:    Q8_0
-  mode:     Batch
-  cleaning: on (72 rules)
-  sounds:   on
-  logging:  off
-Ready: hold Ctrl+Space to dictate. Ctrl+C in this terminal to exit.
+  model: parakeet-tdt-0.6b-v3-Q8_0.gguf
+  dtype: Q8_0 (745 MB)
+  mic:   RODE NT-USB+ Mono, 48000 Hz input -> 16000 Hz model, mono, F32
+Ready: hold Ctrl+Space to dictate.
 ```
 
 For normal use, run it quietly in the background:
@@ -61,6 +58,14 @@ logging, and process management examples.
 ```bash
 # Download the hosted default model again.
 parakit fetch --force
+
+# Inspect the model cache.
+parakit cache
+parakit cache dir
+
+# Show diagnostic startup paths, backend details, and timings.
+parakit --verbose
+parakit --threads 8 --verbose
 
 # Rebuild Q8_0 locally from NVIDIA's official checkpoint.
 python -m pip install -r requirements-convert.txt
@@ -119,6 +124,10 @@ The final model is cached at:
 The downloaded `.nemo` and intermediate F16 GGUF are deleted after a successful
 source rebuild unless `--keep-nemo` or `--keep-f16` is passed. `-m <path>`
 always overrides the cached model and disables automatic fetch.
+
+Use `parakit cache` to list cached GGUF files, dtypes, sizes, and the default
+Q8_0 checksum status. Use `parakit cache dir` for scripts that need the cache
+directory.
 
 `parakit fetch --from-source` is the reproducible maintainer path: download
 NVIDIA's official `.nemo`, convert it to GGUF with CrispASR's Python converter,

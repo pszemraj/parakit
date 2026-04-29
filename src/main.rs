@@ -26,18 +26,23 @@ use crossbeam_channel::{bounded, Receiver, Sender};
 use parakit::data_log::{DataLogger, LogFormat};
 use parakit::fetch::{self, FetchOptions, FetchSource};
 use parakit::gguf;
-use parakit::inference::{Engine, Mode};
+use parakit::inference::{default_thread_count, Engine, Mode};
 use parakit::model;
 use parakit::rules::{self, Cleaner};
 use rdev::{Event, EventType, Key};
+use sha2::{Digest, Sha256};
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::fs::File;
+use std::io::Read;
+use std::num::NonZeroUsize;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::daemon::audio::{AudioCapture, AudioHandle, TARGET_RATE};
 use crate::daemon::inject::Injector;
+use crate::daemon::logging::{BannerInfo, LogLevel, Logger};
 use crate::daemon::sounds::Sounds;
 
 // =============================================================================
@@ -49,7 +54,7 @@ use crate::daemon::sounds::Sounds;
     name = "parakit",
     version,
     about = "Push-to-talk dictation daemon (Parakeet-TDT via CrispASR).",
-    long_about = "Push-to-talk dictation daemon. Hold Ctrl+Space to record, release to transcribe and inject text at the cursor.\n\nDefault mode is verbose (prints raw + cleaned text). Pass --quiet for daemon mode."
+    long_about = "Push-to-talk dictation daemon. Hold Ctrl+Space to record, release to transcribe and inject text at the cursor.\n\nDefault mode prints concise status and transcripts. Pass --verbose for diagnostic paths and timings, or --quiet for background daemon mode."
 )]
 struct Cli {
     /// Subcommand to run instead of the push-to-talk daemon.
@@ -70,6 +75,14 @@ struct Cli {
     /// Suitable for backgrounding the daemon.
     #[arg(long, short = 'q')]
     quiet: bool,
+
+    /// Verbose diagnostics: paths, backend details, and timing lines.
+    #[arg(long, short = 'v', conflicts_with = "quiet")]
+    verbose: bool,
+
+    /// CPU inference threads. Defaults to the OS available parallelism.
+    #[arg(long, value_name = "N")]
+    threads: Option<NonZeroUsize>,
 
     /// Disable the audio cues (start / success / error tones).
     #[arg(long)]
@@ -112,8 +125,25 @@ struct Cli {
 enum Commands {
     /// Download the default hosted Parakeet Q8_0 GGUF.
     Fetch(FetchCli),
+    /// Inspect the parakit model cache.
+    Cache(CacheCli),
     /// Check desktop permissions and runtime prerequisites without starting.
     Doctor,
+}
+
+#[derive(Args, Debug)]
+struct CacheCli {
+    /// Cache subcommand. Defaults to `list`.
+    #[command(subcommand)]
+    command: Option<CacheCommand>,
+}
+
+#[derive(Subcommand, Debug)]
+enum CacheCommand {
+    /// List cached model artifacts.
+    List,
+    /// Print the model cache directory.
+    Dir,
 }
 
 #[derive(Args, Debug)]
@@ -164,6 +194,7 @@ fn main() {
 
 fn run() -> Result<()> {
     let cli = Cli::parse();
+    let log = Arc::new(Logger::new(log_level(&cli)));
 
     if let Some(command) = &cli.command {
         match command {
@@ -179,6 +210,10 @@ fn run() -> Result<()> {
                     keep_nemo: fetch_cli.keep_nemo,
                     keep_f16: fetch_cli.keep_f16,
                 })?;
+                return Ok(());
+            }
+            Commands::Cache(cache_cli) => {
+                run_cache_command(cache_cli, cli.quiet)?;
                 return Ok(());
             }
             Commands::Doctor => {
@@ -221,6 +256,7 @@ fn run() -> Result<()> {
     }
 
     daemon::preflight::ensure_hotkey_ready()?;
+    log.verbose("parakit: hotkey preflight passed");
 
     let mode = Mode::parse(&cli.mode)?;
     let disabled: HashSet<String> = cli.disable_rule.iter().cloned().collect();
@@ -241,24 +277,49 @@ fn run() -> Result<()> {
     let sounds = Sounds::new(!cli.no_sounds);
     let model_path = match cli.model.as_deref() {
         Some(path) => model::resolve_model_path(Some(path))?,
-        None => fetch::ensure_default_model(cli.quiet)?,
+        None => fetch::ensure_default_model(cli.quiet || !cli.verbose)?,
     };
     let model_dtype = model_dtype_label(&model_path);
-    let engine = Engine::open(&model_path)
+    let threads = cli
+        .threads
+        .map(NonZeroUsize::get)
+        .unwrap_or_else(default_thread_count);
+    let open_started = Instant::now();
+    let engine = open_engine(&model_path, threads, cli.verbose)
         .with_context(|| format!("could not open model {}", model_path.display()))?;
-    let capture = AudioCapture::open()?;
+    log.verbose(format!(
+        "parakit: model opened in {:.0}ms with backend={} threads={}",
+        open_started.elapsed().as_secs_f32() * 1000.0,
+        engine.backend(),
+        engine.threads()
+    ));
+
+    let capture = AudioCapture::open(Arc::clone(&log))?;
     let audio = capture.handle.clone();
-    let log = Arc::new(Logger::new(!cli.quiet));
+    let mic_info = capture
+        .mic_info()
+        .context("audio manager started without reporting a microphone")?;
 
     // Banner.
-    log.banner(
-        &cli,
-        &model_path,
-        &model_dtype,
-        &mode,
-        cleaner.as_deref(),
-        &capture,
-    );
+    let model_name = model_file_name(&model_path);
+    log.banner(BannerInfo {
+        model_name: &model_name,
+        model_path: &model_path,
+        dtype: &model_dtype,
+        mic: &mic_info,
+        mode: format!("{:?}", mode),
+        cleaning: match cleaner.as_deref() {
+            Some(c) => format!("on ({} rules)", c.len()),
+            None => "off".to_string(),
+        },
+        sounds: if cli.no_sounds { "off" } else { "on" },
+        transcription_logging: match &cli.log_dir {
+            Some(dir) => format!("{:?} to {}", cli.log_format, dir.display()),
+            None => "off".to_string(),
+        },
+        threads: engine.threads(),
+        backend: engine.backend().to_string(),
+    });
 
     // Worker thread takes exclusive ownership of `engine`. `crispasr::Session`
     // is `Send` but not `Sync`, which is fine: only one thread ever calls
@@ -299,7 +360,7 @@ fn run() -> Result<()> {
     });
 
     // Hotkey grab loop. Blocks forever (until grab returns or process exits).
-    log.line("Ready: hold Ctrl+Space to dictate. Ctrl+C in this terminal to exit.");
+    log.ready();
 
     run_grab_loop(tx, audio);
 
@@ -323,6 +384,195 @@ fn model_dtype_label(path: &std::path::Path) -> String {
         .map(|meta| format!(" ({:.0} MB)", meta.len() as f64 / 1_000_000.0))
         .unwrap_or_default();
     format!("{dtype}{size}")
+}
+
+fn log_level(cli: &Cli) -> LogLevel {
+    if cli.quiet {
+        LogLevel::Quiet
+    } else if cli.verbose {
+        LogLevel::Verbose
+    } else {
+        LogLevel::Normal
+    }
+}
+
+fn model_file_name(path: &Path) -> String {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .map(str::to_string)
+        .unwrap_or_else(|| path.display().to_string())
+}
+
+fn open_engine(path: &Path, threads: usize, verbose: bool) -> Result<Engine> {
+    if verbose {
+        return Engine::open_with_threads(path, threads);
+    }
+    with_stderr_suppressed(|| Engine::open_with_threads(path, threads))
+}
+
+#[cfg(unix)]
+fn with_stderr_suppressed<T>(f: impl FnOnce() -> Result<T>) -> Result<T> {
+    use std::os::fd::FromRawFd;
+
+    struct RestoreStderr {
+        saved: i32,
+        drain: Option<std::thread::JoinHandle<()>>,
+    }
+
+    impl Drop for RestoreStderr {
+        fn drop(&mut self) {
+            unsafe {
+                libc::dup2(self.saved, libc::STDERR_FILENO);
+                libc::close(self.saved);
+            }
+            if let Some(drain) = self.drain.take() {
+                let _ = drain.join();
+            }
+        }
+    }
+
+    let mut pipe_fds = [0_i32; 2];
+    unsafe {
+        if libc::pipe(pipe_fds.as_mut_ptr()) != 0 {
+            return f();
+        }
+    }
+    let read_fd = pipe_fds[0];
+    let write_fd = pipe_fds[1];
+    let saved = unsafe { libc::dup(libc::STDERR_FILENO) };
+    if saved < 0 {
+        unsafe {
+            libc::close(read_fd);
+            libc::close(write_fd);
+        }
+        return f();
+    }
+    if unsafe { libc::dup2(write_fd, libc::STDERR_FILENO) } < 0 {
+        unsafe {
+            libc::close(saved);
+            libc::close(read_fd);
+            libc::close(write_fd);
+        }
+        return f();
+    }
+    unsafe {
+        libc::close(write_fd);
+    }
+
+    let drain = std::thread::spawn(move || unsafe {
+        let mut file = File::from_raw_fd(read_fd);
+        let mut buf = [0_u8; 8192];
+        while matches!(file.read(&mut buf), Ok(n) if n > 0) {}
+    });
+    let _restore = RestoreStderr {
+        saved,
+        drain: Some(drain),
+    };
+    f()
+}
+
+#[cfg(not(unix))]
+fn with_stderr_suppressed<T>(f: impl FnOnce() -> Result<T>) -> Result<T> {
+    f()
+}
+
+fn run_cache_command(cache: &CacheCli, quiet: bool) -> Result<()> {
+    if quiet {
+        return Ok(());
+    }
+    match cache.command.as_ref().unwrap_or(&CacheCommand::List) {
+        CacheCommand::Dir => {
+            println!("{}", model::models_dir()?.display());
+        }
+        CacheCommand::List => print_cache_list()?,
+    }
+    Ok(())
+}
+
+fn print_cache_list() -> Result<()> {
+    let dir = model::models_dir()?;
+    println!("parakit cache");
+    println!("  dir: {}", dir.display());
+    if !dir.is_dir() {
+        println!("  models: none");
+        return Ok(());
+    }
+
+    let mut entries = std::fs::read_dir(&dir)
+        .with_context(|| format!("read cache dir {}", dir.display()))?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "gguf"))
+        .collect::<Vec<_>>();
+    entries.sort();
+
+    if entries.is_empty() {
+        println!("  models: none");
+        return Ok(());
+    }
+
+    println!("  models:");
+    for path in entries {
+        let name = model_file_name(&path);
+        let dtype = gguf::detect_dtype(&path)
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| "unknown".to_string());
+        let size = path
+            .metadata()
+            .map(|meta| format_file_size(meta.len()))
+            .unwrap_or_else(|_| "unknown size".to_string());
+        let default_marker = if name == model::Q8_FILENAME {
+            " default"
+        } else {
+            ""
+        };
+        let checksum = if name == model::Q8_FILENAME {
+            match hash_file_hex(&path) {
+                Ok(hash) if hash == model::HOSTED_Q8_SHA256 => "sha256 ok".to_string(),
+                Ok(hash) => format!("sha256 mismatch ({hash})"),
+                Err(err) => format!("sha256 unavailable ({err})"),
+            }
+        } else {
+            "sha256 not checked".to_string()
+        };
+        println!("    {name}{default_marker}: {dtype}, {size}, {checksum}");
+    }
+    Ok(())
+}
+
+fn hash_file_hex(path: &Path) -> Result<String> {
+    let mut file = File::open(path).with_context(|| format!("open {}", path.display()))?;
+    let mut hasher = Sha256::new();
+    let mut buf = [0_u8; 1024 * 1024];
+    loop {
+        let n = file.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    Ok(hex_digest(&hasher.finalize()))
+}
+
+fn hex_digest(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        out.push(HEX[(byte >> 4) as usize] as char);
+        out.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    out
+}
+
+fn format_file_size(bytes: u64) -> String {
+    if bytes >= 1_000_000_000 {
+        format!("{:.2} GB", bytes as f64 / 1_000_000_000.0)
+    } else if bytes >= 1_000_000 {
+        format!("{:.0} MB", bytes as f64 / 1_000_000.0)
+    } else {
+        format!("{} KB", bytes / 1000)
+    }
 }
 
 // =============================================================================
@@ -605,12 +855,14 @@ fn worker_loop(ctx: WorkerCtx) {
                 }
             }
             Event_::Stop => {
+                let stop_started = Instant::now();
                 let dur_audio = recording_started_at
                     .take()
                     .map(|t| t.elapsed())
                     .unwrap_or(Duration::ZERO);
 
                 let pcm = audio.stop_recording();
+                let capture_stop_elapsed = stop_started.elapsed();
 
                 // In streaming mode we may have already injected most of the
                 // audio. Only transcribe the unconsumed tail.
@@ -620,26 +872,36 @@ fn worker_loop(ctx: WorkerCtx) {
                 };
 
                 let secs = pcm.len() as f32 / TARGET_RATE as f32;
-                log.line(&format!(
-                    "parakit: transcribing ({:.2}s audio, {:.2}s wall)...",
-                    secs,
-                    dur_audio.as_secs_f32()
-                ));
+                log.transcribing(secs, dur_audio.as_secs_f32());
 
                 let infer_started = Instant::now();
                 match engine.transcribe(to_transcribe) {
                     Ok(raw) if !raw.trim().is_empty() => {
                         let infer_elapsed = infer_started.elapsed();
+                        let clean_started = Instant::now();
                         let cleaned = match &cleaner {
                             Some(c) => c.clean(&raw),
                             None => raw.clone(),
                         };
+                        let clean_elapsed = clean_started.elapsed();
                         if let Some(data_log) = &data_log {
                             data_log.log(secs, infer_elapsed, &raw, &cleaned, rules_active);
                         }
                         log.transcript(&raw, &cleaned, infer_elapsed);
+                        let inject_started = Instant::now();
                         match type_text(&cleaned) {
-                            Ok(_) => sounds.success(),
+                            Ok(_) => {
+                                let inject_elapsed = inject_started.elapsed();
+                                log.verbose(format!(
+                                    "parakit: timings stop={}ms infer={}ms clean={}ms inject={}ms total={}ms",
+                                    capture_stop_elapsed.as_secs_f32() * 1000.0,
+                                    infer_elapsed.as_secs_f32() * 1000.0,
+                                    clean_elapsed.as_secs_f32() * 1000.0,
+                                    inject_elapsed.as_secs_f32() * 1000.0,
+                                    stop_started.elapsed().as_secs_f32() * 1000.0
+                                ));
+                                sounds.success();
+                            }
                             Err(e) => {
                                 log.error(&format!("type failed: {e:#}"));
                                 sounds.error();
@@ -718,101 +980,4 @@ fn ctrlc_handler<F: FnMut() + Send + 'static>(mut f: F) {
                 f(); // never reached in this minimal impl
             }
         });
-}
-
-// =============================================================================
-// Logging
-// =============================================================================
-
-struct Logger {
-    verbose: bool,
-}
-
-impl Logger {
-    fn new(verbose: bool) -> Self {
-        Self { verbose }
-    }
-
-    fn line(&self, msg: &str) {
-        if self.verbose {
-            println!("{}", msg);
-        }
-    }
-
-    fn error(&self, msg: &str) {
-        // Errors always go to stderr regardless of --quiet.
-        eprintln!("parakit: error: {msg}");
-    }
-
-    fn transcript(&self, raw: &str, cleaned: &str, infer: Duration) {
-        if !self.verbose {
-            return;
-        }
-        if raw == cleaned {
-            println!("Text: {}  ({:.0}ms)", cleaned, infer.as_secs_f32() * 1000.0);
-        } else {
-            println!("Raw:    {raw}");
-            println!(
-                "Clean:  {}  ({:.0}ms)",
-                cleaned,
-                infer.as_secs_f32() * 1000.0
-            );
-        }
-    }
-
-    fn streaming_partial(&self, raw: &str, cleaned: &str) {
-        if !self.verbose {
-            return;
-        }
-        let raw = raw.trim();
-        let cleaned = cleaned.trim();
-        if raw == cleaned {
-            println!("+  {}", cleaned);
-        } else {
-            println!("+  {}  =>  {}", raw, cleaned);
-        }
-    }
-
-    fn banner(
-        &self,
-        cli: &Cli,
-        model_path: &std::path::Path,
-        model_dtype: &str,
-        mode: &Mode,
-        cleaner: Option<&Cleaner>,
-        capture: &AudioCapture,
-    ) {
-        if !self.verbose {
-            return;
-        }
-        println!("parakit");
-        println!("  model:    {}", model_path.display());
-        println!("  dtype:    {}", model_dtype);
-        println!("  mode:     {:?}", mode);
-        println!(
-            "  cleaning: {}",
-            match cleaner {
-                Some(c) => format!("on ({} rules)", c.len()),
-                None => "off".to_string(),
-            }
-        );
-        println!("  sounds:   {}", if cli.no_sounds { "off" } else { "on" });
-        println!(
-            "  logging:  {}",
-            match &cli.log_dir {
-                Some(dir) => format!("{:?} to {}", cli.log_format, dir.display()),
-                None => "off".to_string(),
-            }
-        );
-        println!(
-            "  audio:    {} Hz hardware{}, {} Hz target",
-            capture.hw_rate,
-            if capture.resampling {
-                " (resampling)"
-            } else {
-                ""
-            },
-            TARGET_RATE
-        );
-    }
 }

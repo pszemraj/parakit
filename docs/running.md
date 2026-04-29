@@ -12,12 +12,33 @@ parakit doctor
 parakit
 ```
 
-`parakit doctor` checks the active hotkey backend without downloading or
-loading a model. On Linux/X11 it probes desktop hotkey registration first and
-reports evdev access only as a fallback. On the first real run, parakit
-downloads the default Q8_0 GGUF into the model cache before opening the
-microphone. Confirm that the model loads, `Ctrl+Space` records, text injection
-works, and errors are visible in the terminal.
+`parakit doctor` checks the active hotkey backend and reports the microphone
+parakit would use. It does not download or load a model. On Linux/X11 it probes
+desktop hotkey registration first and reports evdev access only as a fallback.
+On the first real run, parakit downloads the default Q8_0 GGUF into the model
+cache before opening the microphone. Confirm that the model loads,
+`Ctrl+Space` records, text injection works, and errors are visible in the
+terminal.
+
+Normal startup is concise:
+
+```text
+parakit
+  model: parakeet-tdt-0.6b-v3-Q8_0.gguf
+  dtype: Q8_0 (745 MB)
+  mic:   RODE NT-USB+ Mono, 48000 Hz input -> 16000 Hz model, mono, F32
+Ready: hold Ctrl+Space to dictate.
+```
+
+Use `--verbose` when debugging startup, backend selection, or latency:
+
+```bash
+parakit --verbose
+parakit --threads 8 --verbose
+```
+
+Verbose mode includes full paths, CrispASR backend, thread count, and timing
+lines for inference, cleanup, injection, and total post-release latency.
 
 ## Background Launch
 
@@ -80,6 +101,24 @@ partials, `--list-rules`, and `--test-rules`.
 It does not suppress startup errors, model load errors, audio device errors,
 injection errors, transcription logging write failures, or sound device
 warnings. Those still go to stderr.
+
+## Microphone Selection
+
+parakit follows the operating system default input device. Monitor, loopback,
+virtual, null, dummy, BlackHole, Soundflower, and similar sources are avoided
+unless no physical-looking input is available.
+
+If the default input changes while parakit is running, the daemon switches when
+idle and prints the new microphone in normal mode. If the active stream fails
+or a device disappears, parakit keeps running and retries with the best
+available input.
+
+The microphone line reports the opened input stream rate and the 16 kHz model
+target. A 48 kHz USB microphone should therefore look like:
+
+```text
+mic:   RODE NT-USB+ Mono, 48000 Hz input -> 16000 Hz model, mono, F32
+```
 
 ## Transcription Logging
 

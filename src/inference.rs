@@ -54,6 +54,8 @@ impl Mode {
 /// that: only the worker thread ever calls `transcribe`.
 pub struct Engine {
     session: crispasr::Session,
+    backend: String,
+    threads: usize,
 }
 
 impl Engine {
@@ -63,11 +65,38 @@ impl Engine {
     ///
     /// An initialized transcription engine.
     ///
+    /// # Arguments
+    ///
+    /// * `model_path` - GGUF model file to load.
+    /// * `threads` - CPU inference thread count requested from CrispASR.
+    ///
     /// # Errors
     ///
     /// Returns an error if the model path is not a file, is not UTF-8, or
     /// CrispASR cannot load the model.
     pub fn open<P: AsRef<Path>>(model_path: P) -> Result<Self> {
+        Self::open_with_threads(model_path, default_thread_count())
+    }
+
+    /// Open a GGUF model with a requested CPU thread count.
+    ///
+    /// # Arguments
+    ///
+    /// * `model_path` - GGUF model file to load.
+    /// * `threads` - CPU inference thread count requested from CrispASR.
+    ///
+    /// # Returns
+    ///
+    /// An initialized transcription engine.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the model path is not a file, is not UTF-8, the
+    /// thread count is zero, or CrispASR cannot load the model.
+    pub fn open_with_threads<P: AsRef<Path>>(model_path: P, threads: usize) -> Result<Self> {
+        if threads == 0 {
+            return Err(anyhow::anyhow!("thread count must be at least 1"));
+        }
         let path = model_path.as_ref();
         if !path.is_file() {
             return Err(anyhow::anyhow!(
@@ -78,10 +107,44 @@ impl Engine {
         let path_str = path
             .to_str()
             .ok_or_else(|| anyhow::anyhow!("model path is not valid UTF-8"))?;
-        let session = crispasr::Session::open(path_str)
-            .map_err(|e| anyhow::anyhow!("crispasr open failed: {e}"))
-            .with_context(|| format!("failed to open model {}", path_str))?;
-        Ok(Self { session })
+        let detected_backend = crispasr::Session::detect_backend(path_str).ok();
+        let session = match detected_backend.as_deref() {
+            Some(backend) if !backend.is_empty() => {
+                crispasr::Session::open_with_backend(path_str, backend, threads as i32)
+            }
+            _ => crispasr::Session::open(path_str),
+        }
+        .map_err(|e| anyhow::anyhow!("crispasr open failed: {e}"))
+        .with_context(|| format!("failed to open model {}", path_str))?;
+        let backend = session.backend();
+        Ok(Self {
+            session,
+            backend,
+            threads,
+        })
+    }
+
+    /// Return the CrispASR backend used for this model.
+    ///
+    /// # Returns
+    ///
+    /// A backend label such as `parakeet`, or `unknown` if CrispASR did not
+    /// report one.
+    pub fn backend(&self) -> &str {
+        if self.backend.is_empty() {
+            "unknown"
+        } else {
+            &self.backend
+        }
+    }
+
+    /// Return the requested inference thread count.
+    ///
+    /// # Returns
+    ///
+    /// The thread count passed to CrispASR when opening the session.
+    pub fn threads(&self) -> usize {
+        self.threads
     }
 
     /// Transcribe 16 kHz mono PCM samples.
@@ -108,6 +171,17 @@ impl Engine {
         }
         Ok(out)
     }
+}
+
+/// Return the default CPU thread count for inference.
+///
+/// # Returns
+///
+/// The available OS parallelism, falling back to four threads when unavailable.
+pub fn default_thread_count() -> usize {
+    std::thread::available_parallelism()
+        .map(usize::from)
+        .unwrap_or(4)
 }
 
 fn pad_short_pcm(pcm: &[f32]) -> Cow<'_, [f32]> {

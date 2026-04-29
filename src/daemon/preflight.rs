@@ -28,10 +28,23 @@ pub fn ensure_hotkey_ready() -> Result<()> {
 /// `true` when no blocking hotkey problem was detected.
 pub fn print_doctor(verbose: bool) -> bool {
     let report = hotkey_report();
-    if verbose {
-        println!("{}", report.details);
+    if !verbose {
+        return !report.blocking;
     }
-    !report.blocking
+
+    let mic = super::audio::probe_default_input();
+    println!("{}", report.details.trim_end());
+    match &mic {
+        Ok(mic) => {
+            println!("  mic:            {}", mic.summary());
+            println!("  audio status:   OK");
+        }
+        Err(err) => {
+            println!("  mic:            unavailable ({err:#})");
+            println!("  audio status:   FAIL");
+        }
+    }
+    !report.blocking && mic.is_ok()
 }
 
 struct HotkeyReport {

@@ -8,6 +8,10 @@ Run the preflight check first:
 parakit doctor
 ```
 
+`parakit doctor` also reports the microphone selected for capture. If the
+hotkey status is OK but audio is unavailable, fix the desktop/audio-server
+input device before starting the daemon.
+
 On Linux, the preferred path is an X11 desktop hotkey registration. This avoids
 direct `/dev/input/event*` access and is the path ordinary GNOME/KDE/X11 users
 should get.
@@ -80,6 +84,27 @@ On macOS, check Accessibility and Input Monitoring permissions.
 On Windows, security software can flag the binary because global hooks and
 synthetic typing resemble keylogger behavior. Whitelist the binary when needed.
 
+## Wrong Microphone Or Sample Rate
+
+parakit uses the OS default input when it is usable and physical-looking. It
+avoids monitor and virtual sources unless no better input exists.
+
+List the audio server's current sources on PipeWire/PulseAudio systems:
+
+```bash
+pactl list sources | grep -E 'Description:|Sample Specification:' | grep -v monitor
+```
+
+Then run:
+
+```bash
+parakit doctor
+```
+
+The reported microphone line should match the desired input. If it does not,
+change the default input in the desktop sound settings or with `pavucontrol`,
+then wait a few seconds or restart parakit.
+
 ## Shared Libraries Cannot Be Found
 
 On Linux, run the dynamic-linking checks in
@@ -130,6 +155,9 @@ parakit --quiet &
 
 Use `parakit fetch --force` to redownload the hosted Q8_0 GGUF after a failed
 or interrupted fetch.
+
+Use `parakit cache` to inspect cached GGUF files, sizes, dtypes, and the Q8_0
+checksum. Use `parakit cache dir` to print only the cache directory.
 
 If you pass `-m <path>`, that custom model path always wins. Relative custom
 paths are resolved from the shell's current working directory at launch time.

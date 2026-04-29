@@ -7,9 +7,13 @@ parakit keeps the daemon thread-based. There is no async runtime.
 ```text
 main thread
   parses CLI
-  opens AudioCapture
   runs the hotkey backend
   sends Start/Stop/StreamChunk events
+
+audio manager thread
+  owns the current cpal::Stream
+  follows the OS default input device
+  reopens capture when the active device changes or fails
 
 cpal callback thread
   receives microphone samples
@@ -51,8 +55,8 @@ final stop event transcribes only the unconsumed tail.
 
 The layout is driven by platform and library constraints:
 
-- `cpal::Stream` is not reliably `Send`, so `AudioCapture` stays on the main
-  thread.
+- `cpal::Stream` is not reliably `Send`, so the live stream stays on the audio
+  manager thread that created it.
 - `rodio::OutputStream` is not reliably `Send`, so the sound stream lives on
   its own thread.
 - `crispasr::Session` is `Send` but not `Sync`, so the worker owns `Engine`
@@ -71,7 +75,7 @@ crossbeam channels.
 | Module | Responsibility |
 | --- | --- |
 | `src/main.rs` | CLI, hotkey state machine, worker thread, streaming ticker. |
-| `src/daemon/audio.rs` | Microphone capture, mono mixdown, resampling, shared buffer. |
+| `src/daemon/audio_manager.rs` | Microphone selection, capture, mono mixdown, resampling, stream restart, shared buffer. |
 | `src/fetch.rs` | Hosted Q8_0 download, source rebuilds, checksum verification, and manifest handling. |
 | `src/model.rs` | Model names, hosted GGUF naming, cache paths, hosted URLs, and checksum constants. |
 | `src/gguf.rs` | Minimal GGUF dtype reader for startup reporting. |
