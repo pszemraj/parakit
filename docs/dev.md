@@ -92,9 +92,6 @@ GGUF dtype parsing.
   Python.
 - Investigate whether Murmure starts partial inference before the hotkey is
   released and whether that explains perceived CPU latency differences.
-- Audit CPU feature flags and ggml backend selection for release builds. Confirm
-  AVX2/FMA/AVX-512 detection where available before assuming the CPU path is
-  fully optimized.
 - Revisit true streaming cursor insertion if streaming becomes a supported
   primary mode. Synthetic typing makes sense for incremental partials, but
   batch mode should remain a one-shot paste unless real-use testing shows that

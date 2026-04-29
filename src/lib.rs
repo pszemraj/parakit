@@ -1,5 +1,7 @@
 //! Shared parakit modules used by the daemon and debugging tools.
 
+/// Build-time CrispASR and ggml diagnostics.
+pub mod build_info;
 /// Shared audio and model constants.
 pub mod constants;
 /// Transcription log writer for raw/cleaned text pairs.

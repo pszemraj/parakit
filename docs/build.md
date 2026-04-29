@@ -53,6 +53,36 @@ use exactly the dependency versions already recorded in `Cargo.lock`. Leave it
 off for the normal user install path so Cargo can resolve platform-specific
 lockfile drift instead of failing before build.
 
+## CPU Build Policy
+
+Source builds are optimized for the machine doing the build. The bundled CMake
+path sets ggml's CPU backend to:
+
+- `GGML_NATIVE=ON`
+- `GGML_OPENMP=ON`
+- `GGML_CPU_REPACK=ON`
+- `GGML_BLAS=OFF`
+
+On Linux with GCC or Clang this means the ggml CPU backend is compiled with
+`-march=native` and OpenMP when the toolchain supports it. That is intentional:
+the default user path is `cargo install --path .` for the local machine.
+
+Generic portable binaries are a release/CI concern for later. They should be
+built separately rather than weakening local source builds.
+
+Inspect the actual compiled flags:
+
+```bash
+parakit doctor
+parakit --verbose
+```
+
+For CPU thread sweeps without the daemon:
+
+```bash
+cargo run --release --example transcribe-file -- --audio path/to/sample.wav --threads 8 --repeat 3
+```
+
 ## Bundled CrispASR
 
 The repository vendors CrispASR as a git submodule:
@@ -75,6 +105,10 @@ Feature selection maps to CMake options:
 | `cuda` | `-DGGML_CUDA=ON` |
 | `vulkan` | `-DGGML_VULKAN=ON` |
 | `metal` | `-DGGML_METAL=ON` |
+
+The bundled build report also records CUDA architecture metadata when CMake
+exposes it. Use `cargo build --release --features cuda -vv` if CUDA
+configuration fails before that report is available.
 
 ## Runtime Library Paths
 

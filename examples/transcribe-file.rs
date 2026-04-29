@@ -7,6 +7,8 @@ use anyhow::{anyhow, Context, Result};
 use clap::Parser;
 use parakit::constants::TARGET_RATE;
 use parakit::fetch;
+use parakit::gguf;
+use parakit::inference::default_thread_count;
 use parakit::inference::Engine;
 use parakit::model;
 use parakit::rules::{self, Cleaner};
@@ -14,8 +16,9 @@ use rubato::{
     Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction,
 };
 use std::collections::HashSet;
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -30,6 +33,14 @@ struct Cli {
     /// Path to a WAV file. The tool mixes to mono and resamples to 16 kHz.
     #[arg(short = 'a', long)]
     audio: PathBuf,
+
+    /// CPU inference threads. Defaults to the OS available parallelism.
+    #[arg(long, value_name = "N")]
+    threads: Option<NonZeroUsize>,
+
+    /// Repeat inference on the same loaded model for timing comparisons.
+    #[arg(long, default_value = "1")]
+    repeat: NonZeroUsize,
 
     /// Disable all text cleaning rules.
     #[arg(long)]
@@ -62,23 +73,57 @@ fn main() -> Result<()> {
         Some(path) => model::resolve_model_path(Some(path))?,
         None => fetch::ensure_default_model(false)?,
     };
-    let engine = Engine::open(&model_path)
+    let threads = cli
+        .threads
+        .map(NonZeroUsize::get)
+        .unwrap_or_else(default_thread_count);
+    let engine = Engine::open_with_threads(&model_path, threads)
         .with_context(|| format!("could not open model {}", model_path.display()))?;
+    let dtype = gguf::detect_dtype(&model_path)
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| "unknown".to_string());
 
-    let started = Instant::now();
-    let raw = engine.transcribe(&wav.samples)?;
-    let infer = started.elapsed();
-    let cleaned = cleaner
-        .as_ref()
-        .map_or_else(|| raw.clone(), |c| c.clean(&raw));
-
+    println!("model:   {}", model_path.display());
+    println!("dtype:   {dtype}");
+    println!("backend: {}", engine.backend());
+    println!("threads: {}", engine.threads());
     println!("audio:   {:.2}s", audio_secs);
     println!("source:  {} Hz", original_rate);
-    println!("infer:   {:.0}ms", infer.as_secs_f32() * 1000.0);
-    println!("Raw:     {}", raw);
-    println!("Clean:   {}", cleaned);
+
+    let mut timings = Vec::with_capacity(cli.repeat.get());
+    for idx in 1..=cli.repeat.get() {
+        let started = Instant::now();
+        let raw = engine.transcribe(&wav.samples)?;
+        let infer = started.elapsed();
+        timings.push(infer);
+        let cleaned = cleaner
+            .as_ref()
+            .map_or_else(|| raw.clone(), |c| c.clean(&raw));
+
+        if cli.repeat.get() > 1 {
+            println!("run:     {idx}/{}", cli.repeat);
+        }
+        println!("infer:   {:.0}ms", infer.as_secs_f32() * 1000.0);
+        println!("rtf:     {:.2}x", realtime_factor(audio_secs, infer));
+        println!("Raw:     {}", raw);
+        println!("Clean:   {}", cleaned);
+    }
+
+    if timings.len() > 1 {
+        let avg_ms =
+            timings.iter().map(Duration::as_secs_f32).sum::<f32>() * 1000.0 / timings.len() as f32;
+        println!("avg:     {avg_ms:.0}ms");
+    }
 
     Ok(())
+}
+
+fn realtime_factor(audio_secs: f32, infer: Duration) -> f32 {
+    if infer.is_zero() {
+        return f32::INFINITY;
+    }
+    audio_secs / infer.as_secs_f32()
 }
 
 struct WavData {

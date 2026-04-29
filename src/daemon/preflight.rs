@@ -1,6 +1,7 @@
 //! Runtime preflight checks for desktop input and hotkey permissions.
 
 use anyhow::{bail, Result};
+use parakit::build_info;
 use std::fmt::Write as _;
 
 /// Run blocking daemon preflight checks before expensive startup work.
@@ -43,6 +44,10 @@ pub fn print_doctor(verbose: bool) -> bool {
             println!("  mic:            unavailable ({err:#})");
             println!("  audio status:   FAIL");
         }
+    }
+    println!("  build:");
+    for line in build_info::diagnostic_lines() {
+        println!("    {line}");
     }
     !report.blocking && mic.is_ok()
 }

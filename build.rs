@@ -19,6 +19,7 @@
 //!   - `CRISPASR_LIB_DIR=/path/to/libdir`   : link-search path override.
 //!   - `CRISPASR_SRC_DIR=/path/to/source`   : use this checkout instead of the vendored source.
 
+use std::collections::BTreeMap;
 use std::env;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -57,6 +58,12 @@ fn main() {
     let mut cfg = cmake::Config::new(&src_dir);
     cfg.profile("Release")
         .define("BUILD_SHARED_LIBS", "ON")
+        // parakit is normally built from source for the machine it runs on.
+        // Make the CPU policy explicit instead of relying on ggml defaults.
+        .define("GGML_NATIVE", "ON")
+        .define("GGML_OPENMP", "ON")
+        .define("GGML_CPU_REPACK", "ON")
+        .define("GGML_BLAS", "OFF")
         // Skip tests. Build examples because CrispASR's quantizer lives there.
         .define("WHISPER_BUILD_TESTS", "OFF")
         // CrispASR's GGUF requantizer lives under examples/. We build the
@@ -96,6 +103,7 @@ fn main() {
     }
 
     let install_dir = cfg.build();
+    emit_build_report(&install_dir);
 
     // 5. CrispASR's CMake builds `libwhisper.{so,dylib,dll}` as the umbrella
     //    shared library — every backend (parakeet, voxtral, qwen3, ...) is a
@@ -155,6 +163,119 @@ fn main() {
         "cargo:rustc-env=CRISPASR_INSTALL_DIR={}",
         install_dir.display()
     );
+}
+
+fn emit_build_report(install_dir: &Path) {
+    let build_dir = install_dir.join("build");
+    let cache_path = build_dir.join("CMakeCache.txt");
+    let cache = read_cmake_cache(&cache_path);
+    let cpu_flags = read_cpu_flags(&build_dir);
+
+    emit_env_from_cache(&cache, "CMAKE_BUILD_TYPE", "PARAKIT_BUILD_CMAKE_BUILD_TYPE");
+    for key in [
+        "GGML_NATIVE",
+        "GGML_OPENMP",
+        "GGML_CPU_REPACK",
+        "GGML_BLAS",
+        "GGML_CUDA",
+        "GGML_VULKAN",
+        "GGML_METAL",
+        "CMAKE_CUDA_ARCHITECTURES",
+    ] {
+        let env_key = format!("PARAKIT_BUILD_{key}");
+        emit_env_from_cache(&cache, key, &env_key);
+    }
+
+    if let Some(flags) = cpu_flags {
+        println!("cargo:rustc-env=PARAKIT_BUILD_CPU_FLAGS={flags}");
+    } else {
+        println!(
+            "cargo:warning=could not read ggml CPU flags from {}",
+            build_dir.display()
+        );
+    }
+}
+
+fn read_cmake_cache(path: &Path) -> BTreeMap<String, String> {
+    let Ok(text) = std::fs::read_to_string(path) else {
+        println!(
+            "cargo:warning=could not read CMake cache at {}; build diagnostics will be sparse",
+            path.display()
+        );
+        return BTreeMap::new();
+    };
+
+    let mut values = BTreeMap::new();
+    for line in text.lines() {
+        if line.is_empty() || line.starts_with('#') || line.starts_with("//") {
+            continue;
+        }
+        let Some((key_with_type, value)) = line.split_once('=') else {
+            continue;
+        };
+        let key = key_with_type
+            .split_once(':')
+            .map_or(key_with_type, |(key, _)| key);
+        values.insert(key.to_string(), value.to_string());
+    }
+    values
+}
+
+fn read_cpu_flags(build_dir: &Path) -> Option<String> {
+    let flags_path = build_dir.join("ggml/src/CMakeFiles/ggml-cpu.dir/flags.make");
+    let text = std::fs::read_to_string(flags_path).ok()?;
+    let mut cxx_flags = None;
+    let mut c_flags = None;
+    for line in text.lines() {
+        if let Some((key, value)) = line.split_once(" = ") {
+            match key {
+                "CXX_FLAGS" => cxx_flags = Some(value),
+                "C_FLAGS" => c_flags = Some(value),
+                _ => {}
+            }
+        }
+    }
+
+    let flags = cxx_flags.or(c_flags)?;
+    Some(summarize_cpu_flags(flags))
+}
+
+fn summarize_cpu_flags(flags: &str) -> String {
+    let interesting = [
+        "-O3",
+        "-march=native",
+        "-fopenmp",
+        "-mavx512bf16",
+        "-mavx512vnni",
+        "-mavx512f",
+        "-mavx2",
+        "-mfma",
+        "-mf16c",
+        "-mbmi2",
+        "-mavx",
+        "-msse4.2",
+        "/arch:AVX512",
+        "/arch:AVX2",
+        "/arch:AVX",
+        "/arch:SSE4.2",
+    ];
+    let mut found = Vec::new();
+    for flag in interesting {
+        if flags.split_whitespace().any(|part| part == flag) {
+            found.push(flag);
+        }
+    }
+    if found.is_empty() {
+        "none detected".to_string()
+    } else {
+        found.join(" ")
+    }
+}
+
+fn emit_env_from_cache(cache: &BTreeMap<String, String>, cache_key: &str, env_key: &str) {
+    if let Some(value) = cache.get(cache_key) {
+        println!("cargo:rustc-env={env_key}={value}");
+    }
 }
 
 /// Returns true if the named cargo feature is enabled.

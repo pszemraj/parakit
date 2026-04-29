@@ -2,6 +2,7 @@
 
 use anstyle::{AnsiColor, Style};
 use chrono::{SecondsFormat, Utc};
+use parakit::build_info;
 use std::fmt::Display;
 use std::path::Path;
 use std::time::Duration;
@@ -89,6 +90,10 @@ impl Logger {
             anstream::println!("  insert: {}", info.insertion);
             anstream::println!("  threads: {}", info.threads);
             anstream::println!("  backend: {}", info.backend);
+            anstream::println!("  build:");
+            for line in build_info::diagnostic_lines() {
+                anstream::println!("    {line}");
+            }
         }
     }
 

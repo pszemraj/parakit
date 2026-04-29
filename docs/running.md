@@ -15,6 +15,8 @@ parakit
 `parakit doctor` checks the active hotkey backend and reports the microphone
 parakit would use. It does not download or load a model. On Linux/X11 it probes
 desktop hotkey registration first and reports evdev access only as a fallback.
+It also reports the compiled ggml CPU/backend flags so CPU performance issues
+can be debugged without rebuilding.
 On the first real run, parakit downloads the default Q8_0 GGUF into the model
 cache before opening the microphone. Confirm that the model loads,
 `Ctrl+Space` records, text insertion works, and errors are visible in the
@@ -38,7 +40,8 @@ parakit --threads 8 --verbose
 ```
 
 Verbose mode includes full paths, CrispASR backend, thread count, and timing
-lines for inference, cleanup, insertion, and total post-release latency.
+lines for inference, cleanup, insertion, and total post-release latency. It
+also prints the build flags reported by the bundled CrispASR/ggml build.
 
 ## Background Launch
 
@@ -161,11 +164,12 @@ previous contents were text; non-text clipboard contents can be replaced.
 The default paste shortcut is terminal-friendly:
 
 ```bash
-parakit --paste-mode terminal  # default: Ctrl+Shift+V on Linux/Windows
-parakit --paste-mode standard  # Ctrl+V on Linux/Windows
+parakit --paste-mode terminal  # default: Ctrl+Shift+V on Linux/Windows, Cmd+V on macOS
+parakit --paste-mode standard  # Ctrl+V on Linux/Windows, Cmd+V on macOS
 ```
 
-macOS uses `Cmd+V` for both modes.
+macOS uses `Cmd+V` for both modes because terminal paste is normally exposed
+through the application paste shortcut there.
 
 Streaming mode sends chunks while the hotkey is still held:
 
