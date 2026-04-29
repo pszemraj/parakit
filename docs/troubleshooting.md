@@ -73,11 +73,14 @@ appears:
 - retry in foreground mode to inspect errors;
 - avoid Wayland sessions.
 
-## Text Does Not Inject
+## Text Does Not Insert
 
-Injection uses Enigo synthetic typing, not clipboard paste.
+Batch insertion writes the transcript to the system clipboard and sends the
+platform paste shortcut. parakit restores the previous clipboard when the
+previous contents were text.
 
-On Linux, X11 is the supported path. Wayland usually blocks this.
+Streaming partial insertion uses Enigo synthetic typing. On Linux, X11 is the
+supported path. Wayland usually blocks synthetic key events.
 
 On macOS, check Accessibility and Input Monitoring permissions.
 

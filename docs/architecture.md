@@ -23,7 +23,7 @@ cpal callback thread
 
 worker thread
   owns Engine
-  runs transcribe -> clean -> inject
+  runs transcribe -> clean -> insert
   writes optional transcription logs
   sends sound cues
 
@@ -49,7 +49,9 @@ being rejected. This keeps behavior consistent with the file-transcription
 helper and avoids treating quick utterances as a separate error class.
 
 In streaming mode, a ticker sends `StreamChunk` events while recording. The
-final stop event transcribes only the unconsumed tail.
+final stop event transcribes only the unconsumed tail. Batch mode inserts the
+final transcript with clipboard paste. Streaming partials still use synthetic
+typing because they are incremental cursor updates.
 
 ## Ownership Constraints
 
@@ -81,7 +83,7 @@ crossbeam channels.
 | `src/gguf.rs` | Minimal GGUF dtype reader for startup reporting. |
 | `src/inference.rs` | CrispASR session wrapper and short-audio padding. |
 | `src/rules.rs` | Built-in transcript cleanup rules. |
-| `src/daemon/inject.rs` | Synthetic typing through Enigo. |
+| `src/daemon/inject.rs` | Batch clipboard paste and streaming synthetic typing. |
 | `src/daemon/sounds.rs` | Generated audio cue thread. |
 | `src/data_log.rs` | JSONL/TSV transcription logging. |
 | `examples/transcribe-file.rs` | File-based smoke and quality checks. |
@@ -100,4 +102,4 @@ Runtime failures are reported and the daemon continues when possible:
 - a sound cue cannot play;
 - a log record cannot be written;
 - one transcription fails;
-- one text injection fails.
+- one text insertion fails.

@@ -17,7 +17,7 @@ parakit would use. It does not download or load a model. On Linux/X11 it probes
 desktop hotkey registration first and reports evdev access only as a fallback.
 On the first real run, parakit downloads the default Q8_0 GGUF into the model
 cache before opening the microphone. Confirm that the model loads,
-`Ctrl+Space` records, text injection works, and errors are visible in the
+`Ctrl+Space` records, text insertion works, and errors are visible in the
 terminal.
 
 Normal startup is concise:
@@ -38,7 +38,7 @@ parakit --threads 8 --verbose
 ```
 
 Verbose mode includes full paths, CrispASR backend, thread count, and timing
-lines for inference, cleanup, injection, and total post-release latency.
+lines for inference, cleanup, insertion, and total post-release latency.
 
 ## Background Launch
 
@@ -99,7 +99,7 @@ It suppresses startup status, ready messages, transcript output, streaming
 partials, `--list-rules`, and `--test-rules`.
 
 It does not suppress startup errors, model load errors, audio device errors,
-injection errors, transcription logging write failures, or sound device
+insertion errors, transcription logging write failures, or sound device
 warnings. Those still go to stderr.
 
 ## Microphone Selection
@@ -154,7 +154,9 @@ parakit --mode batch
 ```
 
 It records the full utterance and transcribes once on hotkey release. This is
-the recommended mode.
+the recommended mode. Batch insertion uses the system clipboard and then sends
+the platform paste shortcut. parakit restores the previous clipboard when the
+previous contents were text; non-text clipboard contents can be replaced.
 
 Streaming mode sends chunks while the hotkey is still held:
 
@@ -172,8 +174,8 @@ quality checks.
 parakit generates short cue tones in-process:
 
 - start: recording began;
-- success: transcription was injected;
-- error: transcription or injection failed.
+- success: transcription was inserted;
+- error: transcription or insertion failed.
 
 Disable cues:
 

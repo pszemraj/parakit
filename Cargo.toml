@@ -40,7 +40,9 @@ parking_lot = "0.12"
 # preferred when available.
 rdev = { version = "0.5", features = ["unstable_grab"], optional = true }
 
-# Synthetic typing at cursor (no clipboard)
+# Text insertion at cursor. Batch mode uses clipboard paste; streaming keeps
+# synthetic typing for partial chunks.
+arboard = { version = "3.4", default-features = false, optional = true }
 enigo = { version = "0.2", optional = true }
 
 # Audio cues (start/stop/error tones, generated programmatically)
@@ -80,7 +82,14 @@ default = ["bundled", "daemon"]
 # Live push-to-talk daemon dependencies. Keeping this as a feature lets the
 # WAV-only transcribe-file example build on machines missing desktop/audio dev
 # packages while preserving default daemon behavior.
-daemon = ["dep:cpal", "dep:enigo", "dep:global-hotkey", "dep:rdev", "dep:rodio"]
+daemon = [
+  "dep:arboard",
+  "dep:cpal",
+  "dep:enigo",
+  "dep:global-hotkey",
+  "dep:rdev",
+  "dep:rodio",
+]
 
 # Build libcrispasr from `vendor/CrispASR` via cmake. On by default.
 # Disable with `--no-default-features --features daemon` to build the daemon

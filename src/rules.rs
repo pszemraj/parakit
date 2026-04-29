@@ -1,4 +1,4 @@
-//! Text-cleaning rules applied to raw ASR output before injection.
+//! Text-cleaning rules applied to raw ASR output before insertion.
 //!
 //! Rules are baked into this file, not loaded from a config. Adding or editing
 //! a rule = editing this file. This is intentional: it makes the rule set easy

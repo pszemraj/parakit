@@ -2,9 +2,9 @@
 
 Push-to-talk dictation for desktop use.
 
-Hold `Ctrl+Space`, speak, release, and parakit types the transcript at the
-current cursor. Text is inserted with synthetic keystrokes; the clipboard is
-not used.
+Hold `Ctrl+Space`, speak, release, and parakit inserts the transcript at the
+current cursor. Batch mode uses one clipboard paste instead of typing the
+transcript character by character.
 
 parakit is backed by [CrispASR](https://github.com/CrispStrobe/CrispASR) and
 NVIDIA's [Parakeet-TDT-0.6B-v3](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3)

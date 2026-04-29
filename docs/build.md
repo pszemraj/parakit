@@ -7,7 +7,7 @@ and links the resulting shared libraries into the Rust binary.
 ## Native Dependencies
 
 Rust dependencies are handled by Cargo. Native packages are still required for
-audio, keyboard hooks, synthetic typing, CMake, and backend SDKs.
+audio, keyboard hooks, text insertion, CMake, and backend SDKs.
 
 | OS | Packages |
 | --- | --- |
@@ -113,7 +113,8 @@ copy target\release\build\parakit-*\out\lib\*.dll target\release\
 Alternatively, add the generated `out\lib` directory to `PATH`.
 
 Security software may flag the daemon because it combines a global keyboard
-hook with synthetic typing. That behavior is expected for this kind of tool.
+hook with programmatic text insertion. That behavior is expected for this kind
+of tool.
 
 ## Updating CrispASR
 

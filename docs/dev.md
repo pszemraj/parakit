@@ -90,6 +90,10 @@ GGUF dtype parsing.
 
 - Port the `.nemo` to GGUF converter to Rust so source rebuilds do not need
   Python.
+- Revisit true streaming cursor insertion if streaming becomes a supported
+  primary mode. Synthetic typing makes sense for incremental partials, but
+  batch mode should remain a one-shot paste unless real-use testing shows that
+  clipboard behavior is worse than typed insertion.
 - Add a release checklist for regenerating, validating, uploading, and checksum
   pinning hosted GGUF artifacts.
 - Add `parakit fetch --quant <QUANT>` after the F16 artifact is hosted. Keep

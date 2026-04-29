@@ -1,7 +1,7 @@
 # Cleaning Rules
 
 parakit applies a deterministic regex cleanup pass after ASR and before text
-injection. Rules are code in `src/rules.rs`; there is no rule config file.
+insertion. Rules are code in `src/rules.rs`; there is no rule config file.
 
 ## What Rules Do
 

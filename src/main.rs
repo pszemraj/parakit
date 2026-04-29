@@ -54,7 +54,7 @@ use crate::daemon::sounds::Sounds;
     name = "parakit",
     version,
     about = "Push-to-talk dictation daemon (Parakeet-TDT via CrispASR).",
-    long_about = "Push-to-talk dictation daemon. Hold Ctrl+Space to record, release to transcribe and inject text at the cursor.\n\nDefault mode prints concise status and transcripts. Pass --verbose for diagnostic paths and timings, or --quiet for background daemon mode."
+    long_about = "Push-to-talk dictation daemon. Hold Ctrl+Space to record, release to transcribe and insert text at the cursor.\n\nDefault mode prints concise status and transcripts. Pass --verbose for diagnostic paths and timings, or --quiet for background daemon mode."
 )]
 struct Cli {
     /// Subcommand to run instead of the push-to-talk daemon.
@@ -88,7 +88,7 @@ struct Cli {
     #[arg(long)]
     no_sounds: bool,
 
-    /// Disable all text cleaning rules (raw transcript injected as-is).
+    /// Disable all text cleaning rules (raw transcript inserted as-is).
     #[arg(long)]
     no_cleaning: bool,
 
@@ -703,7 +703,7 @@ fn grab_failure_help() -> String {
            id -nG | tr ' ' '\\n' | grep '^input$'\n\
          Restart tmux, terminals, or user services that were started before the\n\
          group change. Avoid running parakit with sudo; audio, X11, and text\n\
-         injection usually belong to the regular desktop user."
+         insertion usually belongs to the regular desktop user."
     )
 }
 
@@ -841,7 +841,7 @@ fn worker_loop(ctx: WorkerCtx) {
                                     );
                                 }
                                 log.streaming_partial(&raw, &cleaned);
-                                if let Err(e) = type_text(&cleaned) {
+                                if let Err(e) = type_streaming_text(&cleaned) {
                                     log.error(&format!("type failed: {e:#}"));
                                     sounds.error();
                                 }
@@ -864,7 +864,7 @@ fn worker_loop(ctx: WorkerCtx) {
                 let pcm = audio.stop_recording();
                 let capture_stop_elapsed = stop_started.elapsed();
 
-                // In streaming mode we may have already injected most of the
+                // In streaming mode we may have already inserted most of the
                 // audio. Only transcribe the unconsumed tail.
                 let to_transcribe: &[f32] = match mode {
                     Mode::Streaming { .. } => &pcm[consumed_samples.min(pcm.len())..],
@@ -888,22 +888,22 @@ fn worker_loop(ctx: WorkerCtx) {
                             data_log.log(secs, infer_elapsed, &raw, &cleaned, rules_active);
                         }
                         log.transcript(&raw, &cleaned, infer_elapsed);
-                        let inject_started = Instant::now();
-                        match type_text(&cleaned) {
+                        let insert_started = Instant::now();
+                        match paste_batch_text(&cleaned) {
                             Ok(_) => {
-                                let inject_elapsed = inject_started.elapsed();
+                                let insert_elapsed = insert_started.elapsed();
                                 log.verbose(format!(
-                                    "parakit: timings stop={}ms infer={}ms clean={}ms inject={}ms total={}ms",
+                                    "parakit: timings stop={}ms infer={}ms clean={}ms insert={}ms total={}ms",
                                     capture_stop_elapsed.as_secs_f32() * 1000.0,
                                     infer_elapsed.as_secs_f32() * 1000.0,
                                     clean_elapsed.as_secs_f32() * 1000.0,
-                                    inject_elapsed.as_secs_f32() * 1000.0,
+                                    insert_elapsed.as_secs_f32() * 1000.0,
                                     stop_started.elapsed().as_secs_f32() * 1000.0
                                 ));
                                 sounds.success();
                             }
                             Err(e) => {
-                                log.error(&format!("type failed: {e:#}"));
+                                log.error(&format!("paste failed: {e:#}"));
                                 sounds.error();
                             }
                         }
@@ -923,7 +923,12 @@ fn worker_loop(ctx: WorkerCtx) {
     }
 }
 
-fn type_text(text: &str) -> Result<()> {
+fn paste_batch_text(text: &str) -> Result<()> {
+    let mut injector = Injector::new()?;
+    injector.paste_text(text)
+}
+
+fn type_streaming_text(text: &str) -> Result<()> {
     let mut injector = Injector::new()?;
     injector.type_text(text)
 }
