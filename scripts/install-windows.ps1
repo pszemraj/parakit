@@ -7,7 +7,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$RepoRoot = Resolve-Path (Join-Path $ScriptDir "..")
+$RepoRoot = (Resolve-Path (Join-Path $ScriptDir "..")).Path
 Set-Location $RepoRoot
 
 function Require-Command {
@@ -53,7 +53,12 @@ if (-not (Test-Path $CargoBin)) {
     throw "Cargo bin directory does not exist: $CargoBin"
 }
 
-$BuildRoot = Join-Path $RepoRoot "target\release\build"
+$TargetDir = if ($env:CARGO_TARGET_DIR) {
+    $env:CARGO_TARGET_DIR
+} else {
+    Join-Path $RepoRoot "target"
+}
+$BuildRoot = Join-Path $TargetDir "release\build"
 if (-not (Test-Path $BuildRoot)) {
     Write-Warning "Build directory not found: $BuildRoot"
     exit 0
