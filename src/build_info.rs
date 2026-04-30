@@ -1,5 +1,11 @@
 //! Build-time CrispASR and ggml configuration reported by `build.rs`.
 
+macro_rules! build_value {
+    ($key:literal) => {
+        option_env!($key).unwrap_or("unknown")
+    };
+}
+
 /// Return a concise build summary for diagnostics.
 ///
 /// # Returns
@@ -13,9 +19,9 @@ pub fn diagnostic_lines() -> Vec<String> {
     ));
     lines.push(format!(
         "cpu:            native={}, openmp={}, repack={}, blas={}",
-        ggml_native(),
-        ggml_openmp(),
-        ggml_cpu_repack(),
+        build_value!("PARAKIT_BUILD_GGML_NATIVE"),
+        build_value!("PARAKIT_BUILD_GGML_OPENMP"),
+        build_value!("PARAKIT_BUILD_GGML_CPU_REPACK"),
         blas_label()
     ));
     lines.push(format!(
@@ -24,9 +30,9 @@ pub fn diagnostic_lines() -> Vec<String> {
     ));
     lines.push(format!(
         "accelerators:   cuda={}, vulkan={}, metal={}",
-        ggml_cuda(),
-        ggml_vulkan(),
-        ggml_metal()
+        build_value!("PARAKIT_BUILD_GGML_CUDA"),
+        build_value!("PARAKIT_BUILD_GGML_VULKAN"),
+        build_value!("PARAKIT_BUILD_GGML_METAL")
     ));
 
     if let Some(arch) = option_env!("PARAKIT_BUILD_CMAKE_CUDA_ARCHITECTURES") {
@@ -39,10 +45,10 @@ pub fn diagnostic_lines() -> Vec<String> {
 }
 
 fn blas_label() -> String {
-    let enabled = ggml_blas();
+    let enabled = build_value!("PARAKIT_BUILD_GGML_BLAS");
     let selected = option_env!("PARAKIT_BUILD_BLAS_SELECTED").unwrap_or("unknown");
     let vendor = option_env!("PARAKIT_BUILD_GGML_BLAS_VENDOR").unwrap_or("");
-    let cohere_mkl = cohere_mkl();
+    let cohere_mkl = build_value!("PARAKIT_BUILD_COHERE_MKL");
     if enabled == "OFF" || selected == "off" {
         return "OFF".to_string();
     }
@@ -53,36 +59,4 @@ fn blas_label() -> String {
     } else {
         format!("{enabled} ({selected}, vendor={vendor})")
     }
-}
-
-fn ggml_native() -> &'static str {
-    option_env!("PARAKIT_BUILD_GGML_NATIVE").unwrap_or("unknown")
-}
-
-fn ggml_openmp() -> &'static str {
-    option_env!("PARAKIT_BUILD_GGML_OPENMP").unwrap_or("unknown")
-}
-
-fn ggml_cpu_repack() -> &'static str {
-    option_env!("PARAKIT_BUILD_GGML_CPU_REPACK").unwrap_or("unknown")
-}
-
-fn ggml_blas() -> &'static str {
-    option_env!("PARAKIT_BUILD_GGML_BLAS").unwrap_or("unknown")
-}
-
-fn cohere_mkl() -> &'static str {
-    option_env!("PARAKIT_BUILD_COHERE_MKL").unwrap_or("unknown")
-}
-
-fn ggml_cuda() -> &'static str {
-    option_env!("PARAKIT_BUILD_GGML_CUDA").unwrap_or("unknown")
-}
-
-fn ggml_vulkan() -> &'static str {
-    option_env!("PARAKIT_BUILD_GGML_VULKAN").unwrap_or("unknown")
-}
-
-fn ggml_metal() -> &'static str {
-    option_env!("PARAKIT_BUILD_GGML_METAL").unwrap_or("unknown")
 }

@@ -213,6 +213,25 @@ pub fn print_rule_list() {
 //   - The final whitespace/punctuation cleanup MUST run last.
 // =============================================================================
 
+macro_rules! stutter_rule {
+    ($name:literal, $word:literal) => {
+        Rule {
+            name: concat!("stutter-", $name),
+            description: concat!(
+                "Collapse repeated '",
+                $word,
+                " ",
+                $word,
+                "' → '",
+                $word,
+                "'"
+            ),
+            pattern: concat!(r#"(?i)\b("#, $word, r#")(?:\s+"#, $word, r#")+\b"#),
+            replacement: "$1",
+        }
+    };
+}
+
 /// Built-in transcript cleanup rules in application order.
 pub const DEFAULT_RULES: &[Rule] = &[
     // -------------------------------------------------------------------------
@@ -366,198 +385,38 @@ pub const DEFAULT_RULES: &[Rule] = &[
         pattern: r#"(?i)\b(i)(?:\s+i)+\b"#,
         replacement: "I",
     },
-    Rule {
-        name: "stutter-the",
-        description: "Collapse repeated 'the the' → 'the'",
-        pattern: r#"(?i)\b(the)(?:\s+the)+\b"#,
-        replacement: "$1",
-    },
-    Rule {
-        name: "stutter-a",
-        description: "Collapse repeated 'a a' → 'a'",
-        pattern: r#"(?i)\b(a)(?:\s+a)+\b"#,
-        replacement: "$1",
-    },
-    Rule {
-        name: "stutter-an",
-        description: "Collapse repeated 'an an' → 'an'",
-        pattern: r#"(?i)\b(an)(?:\s+an)+\b"#,
-        replacement: "$1",
-    },
-    Rule {
-        name: "stutter-and",
-        description: "Collapse repeated 'and and' → 'and'",
-        pattern: r#"(?i)\b(and)(?:\s+and)+\b"#,
-        replacement: "$1",
-    },
-    Rule {
-        name: "stutter-but",
-        description: "Collapse repeated 'but but' → 'but'",
-        pattern: r#"(?i)\b(but)(?:\s+but)+\b"#,
-        replacement: "$1",
-    },
-    Rule {
-        name: "stutter-or",
-        description: "Collapse repeated 'or or' → 'or'",
-        pattern: r#"(?i)\b(or)(?:\s+or)+\b"#,
-        replacement: "$1",
-    },
-    Rule {
-        name: "stutter-so",
-        description: "Collapse repeated 'so so' → 'so'",
-        pattern: r#"(?i)\b(so)(?:\s+so)+\b"#,
-        replacement: "$1",
-    },
-    Rule {
-        name: "stutter-to",
-        description: "Collapse repeated 'to to' → 'to'",
-        pattern: r#"(?i)\b(to)(?:\s+to)+\b"#,
-        replacement: "$1",
-    },
-    Rule {
-        name: "stutter-of",
-        description: "Collapse repeated 'of of' → 'of'",
-        pattern: r#"(?i)\b(of)(?:\s+of)+\b"#,
-        replacement: "$1",
-    },
-    Rule {
-        name: "stutter-in",
-        description: "Collapse repeated 'in in' → 'in'",
-        pattern: r#"(?i)\b(in)(?:\s+in)+\b"#,
-        replacement: "$1",
-    },
-    Rule {
-        name: "stutter-on",
-        description: "Collapse repeated 'on on' → 'on'",
-        pattern: r#"(?i)\b(on)(?:\s+on)+\b"#,
-        replacement: "$1",
-    },
-    Rule {
-        name: "stutter-we",
-        description: "Collapse repeated 'we we' → 'we'",
-        pattern: r#"(?i)\b(we)(?:\s+we)+\b"#,
-        replacement: "$1",
-    },
-    Rule {
-        name: "stutter-you",
-        description: "Collapse repeated 'you you' → 'you'",
-        pattern: r#"(?i)\b(you)(?:\s+you)+\b"#,
-        replacement: "$1",
-    },
-    Rule {
-        name: "stutter-he",
-        description: "Collapse repeated 'he he' → 'he'",
-        pattern: r#"(?i)\b(he)(?:\s+he)+\b"#,
-        replacement: "$1",
-    },
-    Rule {
-        name: "stutter-she",
-        description: "Collapse repeated 'she she' → 'she'",
-        pattern: r#"(?i)\b(she)(?:\s+she)+\b"#,
-        replacement: "$1",
-    },
-    Rule {
-        name: "stutter-they",
-        description: "Collapse repeated 'they they' → 'they'",
-        pattern: r#"(?i)\b(they)(?:\s+they)+\b"#,
-        replacement: "$1",
-    },
-    Rule {
-        name: "stutter-it",
-        description: "Collapse repeated 'it it' → 'it'",
-        pattern: r#"(?i)\b(it)(?:\s+it)+\b"#,
-        replacement: "$1",
-    },
-    Rule {
-        name: "stutter-this",
-        description: "Collapse repeated 'this this' → 'this'",
-        pattern: r#"(?i)\b(this)(?:\s+this)+\b"#,
-        replacement: "$1",
-    },
-    Rule {
-        name: "stutter-that",
-        description: "Collapse repeated 'that that' → 'that'",
-        pattern: r#"(?i)\b(that)(?:\s+that)+\b"#,
-        replacement: "$1",
-    },
-    Rule {
-        name: "stutter-my",
-        description: "Collapse repeated 'my my' → 'my'",
-        pattern: r#"(?i)\b(my)(?:\s+my)+\b"#,
-        replacement: "$1",
-    },
-    Rule {
-        name: "stutter-is",
-        description: "Collapse repeated 'is is' → 'is'",
-        pattern: r#"(?i)\b(is)(?:\s+is)+\b"#,
-        replacement: "$1",
-    },
-    Rule {
-        name: "stutter-was",
-        description: "Collapse repeated 'was was' → 'was'",
-        pattern: r#"(?i)\b(was)(?:\s+was)+\b"#,
-        replacement: "$1",
-    },
-    Rule {
-        name: "stutter-are",
-        description: "Collapse repeated 'are are' → 'are'",
-        pattern: r#"(?i)\b(are)(?:\s+are)+\b"#,
-        replacement: "$1",
-    },
-    Rule {
-        name: "stutter-were",
-        description: "Collapse repeated 'were were' → 'were'",
-        pattern: r#"(?i)\b(were)(?:\s+were)+\b"#,
-        replacement: "$1",
-    },
-    Rule {
-        name: "stutter-do",
-        description: "Collapse repeated 'do do' → 'do'",
-        pattern: r#"(?i)\b(do)(?:\s+do)+\b"#,
-        replacement: "$1",
-    },
-    Rule {
-        name: "stutter-did",
-        description: "Collapse repeated 'did did' → 'did'",
-        pattern: r#"(?i)\b(did)(?:\s+did)+\b"#,
-        replacement: "$1",
-    },
-    Rule {
-        name: "stutter-can",
-        description: "Collapse repeated 'can can' → 'can'",
-        pattern: r#"(?i)\b(can)(?:\s+can)+\b"#,
-        replacement: "$1",
-    },
-    Rule {
-        name: "stutter-will",
-        description: "Collapse repeated 'will will' → 'will'",
-        pattern: r#"(?i)\b(will)(?:\s+will)+\b"#,
-        replacement: "$1",
-    },
-    Rule {
-        name: "stutter-has",
-        description: "Collapse repeated 'has has' → 'has'",
-        pattern: r#"(?i)\b(has)(?:\s+has)+\b"#,
-        replacement: "$1",
-    },
-    Rule {
-        name: "stutter-had",
-        description: "Collapse repeated 'had had' → 'had'",
-        pattern: r#"(?i)\b(had)(?:\s+had)+\b"#,
-        replacement: "$1",
-    },
-    Rule {
-        name: "stutter-no",
-        description: "Collapse repeated 'no no' → 'no'",
-        pattern: r#"(?i)\b(no)(?:\s+no)+\b"#,
-        replacement: "$1",
-    },
-    Rule {
-        name: "stutter-have",
-        description: "Collapse repeated 'have have' → 'have'",
-        pattern: r#"(?i)\b(have)(?:\s+have)+\b"#,
-        replacement: "$1",
-    },
+    stutter_rule!("the", "the"),
+    stutter_rule!("a", "a"),
+    stutter_rule!("an", "an"),
+    stutter_rule!("and", "and"),
+    stutter_rule!("but", "but"),
+    stutter_rule!("or", "or"),
+    stutter_rule!("so", "so"),
+    stutter_rule!("to", "to"),
+    stutter_rule!("of", "of"),
+    stutter_rule!("in", "in"),
+    stutter_rule!("on", "on"),
+    stutter_rule!("we", "we"),
+    stutter_rule!("you", "you"),
+    stutter_rule!("he", "he"),
+    stutter_rule!("she", "she"),
+    stutter_rule!("they", "they"),
+    stutter_rule!("it", "it"),
+    stutter_rule!("this", "this"),
+    stutter_rule!("that", "that"),
+    stutter_rule!("my", "my"),
+    stutter_rule!("is", "is"),
+    stutter_rule!("was", "was"),
+    stutter_rule!("are", "are"),
+    stutter_rule!("were", "were"),
+    stutter_rule!("do", "do"),
+    stutter_rule!("did", "did"),
+    stutter_rule!("can", "can"),
+    stutter_rule!("will", "will"),
+    stutter_rule!("has", "has"),
+    stutter_rule!("had", "had"),
+    stutter_rule!("no", "no"),
+    stutter_rule!("have", "have"),
     // -------------------------------------------------------------------------
     // Single-letter / partial-word stutters ("sh sh sh should" → "should")
     // These are common in real speech and ASR captures them literally.

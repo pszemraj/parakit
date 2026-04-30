@@ -564,6 +564,13 @@ struct WorkerCtx {
     rx: Receiver<Event_>,
 }
 
+struct TranscriptResult {
+    raw: String,
+    cleaned: String,
+    infer_elapsed: Duration,
+    clean_elapsed: Duration,
+}
+
 fn spawn_worker(ctx: WorkerCtx) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || worker_loop(ctx))
 }
@@ -598,31 +605,25 @@ fn worker_loop(ctx: WorkerCtx) {
                 let chunk = audio.snapshot_from(consumed_samples);
                 if !chunk.is_empty() {
                     consumed_samples += chunk.len();
-                    let infer_started = Instant::now();
-                    match engine.transcribe(&chunk) {
-                        Ok(raw) if !raw.trim().is_empty() => {
-                            let infer_elapsed = infer_started.elapsed();
-                            let cleaned = match &cleaner {
-                                Some(c) => c.clean(&raw),
-                                None => raw.clone(),
-                            };
+                    match transcribe_clean(&engine, &chunk, cleaner.as_deref()) {
+                        Ok(Some(transcript)) => {
                             if let Some(data_log) = &data_log {
                                 let chunk_secs = chunk.len() as f32 / TARGET_RATE as f32;
                                 data_log.log(
                                     chunk_secs,
-                                    infer_elapsed,
-                                    &raw,
-                                    &cleaned,
+                                    transcript.infer_elapsed,
+                                    &transcript.raw,
+                                    &transcript.cleaned,
                                     rules_active,
                                 );
                             }
-                            log.streaming_partial(&raw, &cleaned);
-                            if let Err(e) = type_streaming_text(&cleaned) {
+                            log.streaming_partial(&transcript.raw, &transcript.cleaned);
+                            if let Err(e) = type_streaming_text(&transcript.cleaned) {
                                 log.error(&format!("type failed: {e:#}"));
                                 sounds.error();
                             }
                         }
-                        Ok(_) => {}
+                        Ok(None) => {}
                         Err(e) => {
                             log.error(&format!("transcribe (chunk) failed: {e:#}"));
                         }
@@ -649,29 +650,31 @@ fn worker_loop(ctx: WorkerCtx) {
                 let secs = pcm.len() as f32 / TARGET_RATE as f32;
                 log.transcribing(secs, dur_audio.as_secs_f32());
 
-                let infer_started = Instant::now();
-                match engine.transcribe(to_transcribe) {
-                    Ok(raw) if !raw.trim().is_empty() => {
-                        let infer_elapsed = infer_started.elapsed();
-                        let clean_started = Instant::now();
-                        let cleaned = match &cleaner {
-                            Some(c) => c.clean(&raw),
-                            None => raw.clone(),
-                        };
-                        let clean_elapsed = clean_started.elapsed();
+                match transcribe_clean(&engine, to_transcribe, cleaner.as_deref()) {
+                    Ok(Some(transcript)) => {
                         if let Some(data_log) = &data_log {
-                            data_log.log(secs, infer_elapsed, &raw, &cleaned, rules_active);
+                            data_log.log(
+                                secs,
+                                transcript.infer_elapsed,
+                                &transcript.raw,
+                                &transcript.cleaned,
+                                rules_active,
+                            );
                         }
-                        log.transcript(&raw, &cleaned, infer_elapsed);
+                        log.transcript(
+                            &transcript.raw,
+                            &transcript.cleaned,
+                            transcript.infer_elapsed,
+                        );
                         let insert_started = Instant::now();
-                        match paste_batch_text(&cleaned, paste_mode) {
+                        match paste_batch_text(&transcript.cleaned, paste_mode) {
                             Ok(_) => {
                                 let insert_elapsed = insert_started.elapsed();
                                 log.verbose(format!(
                                     "parakit: timings stop={}ms infer={}ms clean={}ms insert={}ms total={}ms",
                                     capture_stop_elapsed.as_secs_f32() * 1000.0,
-                                    infer_elapsed.as_secs_f32() * 1000.0,
-                                    clean_elapsed.as_secs_f32() * 1000.0,
+                                    transcript.infer_elapsed.as_secs_f32() * 1000.0,
+                                    transcript.clean_elapsed.as_secs_f32() * 1000.0,
                                     insert_elapsed.as_secs_f32() * 1000.0,
                                     stop_started.elapsed().as_secs_f32() * 1000.0
                                 ));
@@ -683,7 +686,7 @@ fn worker_loop(ctx: WorkerCtx) {
                             }
                         }
                     }
-                    Ok(_) => {
+                    Ok(None) => {
                         log.line("parakit: no speech detected");
                         sounds.success();
                     }
@@ -695,6 +698,31 @@ fn worker_loop(ctx: WorkerCtx) {
             }
         }
     }
+}
+
+fn transcribe_clean(
+    engine: &Engine,
+    pcm: &[f32],
+    cleaner: Option<&Cleaner>,
+) -> Result<Option<TranscriptResult>> {
+    let infer_started = Instant::now();
+    let raw = engine.transcribe(pcm)?;
+    let infer_elapsed = infer_started.elapsed();
+    if raw.trim().is_empty() {
+        return Ok(None);
+    }
+
+    let clean_started = Instant::now();
+    let cleaned = match cleaner {
+        Some(c) => c.clean(&raw),
+        None => raw.clone(),
+    };
+    Ok(Some(TranscriptResult {
+        raw,
+        cleaned,
+        infer_elapsed,
+        clean_elapsed: clean_started.elapsed(),
+    }))
 }
 
 fn paste_batch_text(text: &str, mode: PasteMode) -> Result<()> {

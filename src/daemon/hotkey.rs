@@ -62,15 +62,7 @@ impl HotkeyState {
         match key {
             Key::Space if self.ctrl_only() => {
                 self.suppress_space_release = true;
-                let debounce_ok = self
-                    .last_start
-                    .is_none_or(|last| now.duration_since(last) >= HOTKEY_DEBOUNCE);
-                if !self.recording && debounce_ok {
-                    self.recording = true;
-                    self.last_start = Some(now);
-                    return (Some(HotkeyAction::Start), true);
-                }
-                (None, true)
+                (self.start_recording(now), true)
             }
             Key::Space if self.recording => (None, true),
             _ => (None, false),
@@ -84,8 +76,7 @@ impl HotkeyState {
         match key {
             Key::Space if was_recording => {
                 self.suppress_space_release = false;
-                self.recording = false;
-                (Some(HotkeyAction::Stop), true)
+                (self.stop_recording(), true)
             }
             Key::Space if suppress_space_release => {
                 self.suppress_space_release = false;
@@ -94,8 +85,7 @@ impl HotkeyState {
             Key::ControlLeft | Key::ControlRight if was_recording && !self.ctrl_held() => {
                 self.space = false;
                 self.suppress_space_release = false;
-                self.recording = false;
-                (Some(HotkeyAction::Stop), true)
+                (self.stop_recording(), true)
             }
             _ => (None, false),
         }
@@ -105,6 +95,17 @@ impl HotkeyState {
         self.ctrl_left = true;
         self.space = true;
         self.suppress_space_release = true;
+        self.start_recording(now)
+    }
+
+    fn desktop_release(&mut self) -> Option<HotkeyAction> {
+        self.ctrl_left = false;
+        self.space = false;
+        self.suppress_space_release = false;
+        self.stop_recording()
+    }
+
+    fn start_recording(&mut self, now: Instant) -> Option<HotkeyAction> {
         let debounce_ok = self
             .last_start
             .is_none_or(|last| now.duration_since(last) >= HOTKEY_DEBOUNCE);
@@ -117,10 +118,7 @@ impl HotkeyState {
         }
     }
 
-    fn desktop_release(&mut self) -> Option<HotkeyAction> {
-        self.ctrl_left = false;
-        self.space = false;
-        self.suppress_space_release = false;
+    fn stop_recording(&mut self) -> Option<HotkeyAction> {
         if self.recording {
             self.recording = false;
             Some(HotkeyAction::Stop)
@@ -400,8 +398,6 @@ fn run_x11_desktop_hotkey_loop() -> anyhow::Result<()> {
                         }
                     }
                 }
-            } else {
-                next_refresh = Instant::now() + X11_HOTKEY_REFRESH;
             }
         }
     }
