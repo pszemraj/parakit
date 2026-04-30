@@ -50,6 +50,12 @@ parakit --quiet &
 `--quiet` suppresses normal stdout, including startup lines and transcripts.
 Errors and warnings still go to stderr.
 
+On Linux, start parakit from a terminal or tmux server created in the current
+desktop login. A tmux server that survives GNOME logout/login can keep stale
+`DISPLAY` or `XAUTHORITY` values, which breaks the X11 hotkey backend. Restart
+tmux after logging back in, or use `--hotkey-backend evdev` after granting
+evdev input access.
+
 Detach from the current shell:
 
 ```bash

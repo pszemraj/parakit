@@ -111,6 +111,9 @@ For normal use, run it quietly in the background:
 parakit --quiet &
 ```
 
+On Linux, launch it from the current desktop login. Old tmux servers can keep
+stale X11 auth after logout/login; see [docs/running.md](docs/running.md).
+
 See [docs/running.md](docs/running.md) for background launch, model cache,
 logging, microphone selection, paste modes, sounds, and streaming mode.
 
