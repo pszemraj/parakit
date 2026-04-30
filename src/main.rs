@@ -13,34 +13,33 @@
 //! State machine (single-recording-at-a-time invariant):
 //!   Idle --[Ctrl+Space down]--> Recording --[Ctrl+Space up]--> Transcribing --> Idle
 //!
-//! In streaming mode there's an additional periodic Tick that sends partial
-//! chunks to the worker while recording is active.
-//!
-//! On Linux, `auto` uses the low-level rdev grab when evdev permissions are
-//! complete; otherwise it uses a desktop X11 hotkey registration.
+//! On Linux, `auto` uses the low-level rdev evdev grab. The legacy X11 desktop
+//! hotkey backend is disabled from the daemon critical path.
 
 mod daemon;
 
 use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand};
-use crossbeam_channel::{bounded, Receiver, Sender};
+use crossbeam_channel::{unbounded, Receiver};
 use parakit::data_log::{DataLogger, LogFormat};
 use parakit::fetch::{self, FetchOptions, FetchSource};
 use parakit::gguf;
 use parakit::inference::{default_thread_count, Engine, Mode};
 use parakit::model;
 use parakit::rules::{self, Cleaner};
+use rubato::{
+    Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction,
+};
 #[cfg(unix)]
 use std::fs::File;
 #[cfg(unix)]
 use std::io::Read;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crate::daemon::audio::{AudioCapture, AudioHandle, TARGET_RATE};
+use crate::daemon::audio::{AudioCapture, TARGET_RATE};
 use crate::daemon::hotkey::HotkeyBackend;
 use crate::daemon::inject::{Injector, PasteMode};
 use crate::daemon::logging::{BannerInfo, LogLevel, Logger};
@@ -66,9 +65,8 @@ struct Cli {
     #[arg(short = 'm', long, value_name = "PATH")]
     model: Option<PathBuf>,
 
-    /// Inference mode. `batch` (default) records all audio then transcribes once.
-    /// `streaming` transcribes chunks during recording (experimental, finicky).
-    /// `streaming:N` sets chunk seconds (default 4.0).
+    /// Inference mode. `batch` records all audio then transcribes once.
+    /// `streaming` parses for compatibility but is temporarily disabled.
     #[arg(long, default_value = "batch")]
     mode: String,
 
@@ -112,9 +110,11 @@ struct Cli {
     #[arg(long, value_name = "INPUT")]
     test_rules: Option<String>,
 
-    /// Linux hotkey backend. `auto` prefers evdev when all input devices are
-    /// readable because it survives desktop session churn; otherwise it uses
-    /// the X11 desktop hotkey.
+    /// Hidden validation path: send a WAV through the daemon PTT worker without insertion.
+    #[arg(long, hide = true, value_name = "WAV")]
+    simulate_ptt_audio: Option<PathBuf>,
+
+    /// Linux hotkey backend. `auto` uses the evdev/rdev grab path.
     #[cfg(target_os = "linux")]
     #[arg(long, value_enum, default_value_t = HotkeyBackend::Auto)]
     hotkey_backend: HotkeyBackend,
@@ -187,13 +187,20 @@ struct DoctorCli {
 // =============================================================================
 
 enum Event_ {
-    /// Hotkey pressed: start a new recording session.
-    Start,
-    /// Hotkey released: finalize the recording, transcribe, type.
-    Stop,
-    /// Streaming mode only: a chunk boundary was reached. Snapshot the buffer
-    /// from `consumed_samples` and transcribe that slice.
-    StreamChunk,
+    /// Recording began at this instant.
+    RecordingStarted {
+        /// Monotonic timestamp captured by the hotkey coordinator.
+        started_at: Instant,
+    },
+    /// Recording ended and the captured PCM moved out of the audio buffer.
+    RecordingStopped {
+        /// Monotonic timestamp captured when recording started.
+        started_at: Instant,
+        /// Monotonic timestamp captured when recording stopped.
+        stopped_at: Instant,
+        /// Owned 16 kHz mono PCM for this utterance.
+        pcm: Vec<f32>,
+    },
 }
 
 // =============================================================================
@@ -210,6 +217,10 @@ fn main() {
 fn run() -> Result<()> {
     let cli = Cli::parse();
     let log = Arc::new(Logger::new(log_level(&cli)));
+    #[cfg(target_os = "linux")]
+    let hotkey_backend = cli.hotkey_backend;
+    #[cfg(not(target_os = "linux"))]
+    let hotkey_backend = HotkeyBackend::Auto;
 
     if let Some(command) = &cli.command {
         match command {
@@ -232,10 +243,15 @@ fn run() -> Result<()> {
                 return Ok(());
             }
             Commands::Doctor(doctor_cli) => {
-                if daemon::preflight::print_doctor(!cli.quiet, cli.paste_mode, doctor_cli.deep) {
+                if daemon::preflight::print_doctor(
+                    !cli.quiet,
+                    cli.paste_mode,
+                    doctor_cli.deep,
+                    hotkey_backend,
+                ) {
                     return Ok(());
                 }
-                anyhow::bail!("doctor found blocking desktop permission issues");
+                anyhow::bail!("doctor found blocking runtime permission issues");
             }
         }
     }
@@ -261,13 +277,27 @@ fn run() -> Result<()> {
         }
         return Ok(());
     }
+    if let Some(audio_path) = &cli.simulate_ptt_audio {
+        return run_ptt_audio_simulation(&cli, Arc::clone(&log), audio_path);
+    }
 
-    daemon::preflight::ensure_hotkey_ready()?;
-    log.verbose("parakit: hotkey preflight passed");
+    #[cfg(target_os = "linux")]
+    let _daemon_lock = daemon::preflight::acquire_singleton_lock()?;
+
+    daemon::preflight::ensure_hotkey_ready(hotkey_backend)?;
+    log.verbose(format!(
+        "parakit: hotkey preflight passed ({})",
+        hotkey_backend.label()
+    ));
     daemon::inject::preflight(cli.paste_mode).context("text insertion preflight failed")?;
     log.verbose("parakit: insertion preflight passed");
 
     let mode: Mode = cli.mode.parse()?;
+    if matches!(mode, Mode::Streaming { .. }) {
+        anyhow::bail!(
+            "streaming mode is temporarily disabled while Linux batch dictation is stabilized"
+        );
+    }
     let cleaner = rules::build_cleaner(cli.no_cleaning, &cli.disable_rule)?.map(Arc::new);
     let data_log = cli
         .log_dir
@@ -326,48 +356,222 @@ fn run() -> Result<()> {
     // is `Send` but not `Sync`, which is fine: only one thread ever calls
     // `transcribe`, and the grab callback / streaming ticker only post
     // events on a channel.
-    let (tx, rx) = bounded::<Event_>(64);
+    let (tx, rx) = unbounded::<Event_>();
     let worker = spawn_worker(WorkerCtx {
         engine,
-        audio: audio.clone(),
         cleaner,
         data_log,
         sounds: sounds.clone(),
         log: Arc::clone(&log),
-        mode,
         paste_mode: cli.paste_mode,
+        insert_transcripts: true,
         rx,
     });
-
-    // Streaming chunk timer (if applicable).
-    let streaming_alive = Arc::new(AtomicBool::new(true));
-    let streaming_thread = if let Mode::Streaming { chunk_secs } = mode {
-        Some(spawn_streaming_ticker(
-            tx.clone(),
-            audio.clone(),
-            Arc::clone(&streaming_alive),
-            chunk_secs,
-        ))
-    } else {
-        None
-    };
 
     // Hotkey grab loop. Blocks forever (until grab returns or process exits).
     log.ready();
 
-    #[cfg(target_os = "linux")]
-    let hotkey_backend = cli.hotkey_backend;
-    #[cfg(not(target_os = "linux"))]
-    let hotkey_backend = HotkeyBackend::Auto;
     daemon::hotkey::run_grab_loop(tx, audio, hotkey_backend, Arc::clone(&log));
 
     // Tear down.
-    if let Some(t) = streaming_thread {
-        streaming_alive.store(false, Ordering::SeqCst);
-        let _ = t.join();
-    }
     let _ = worker.join();
     Ok(())
+}
+
+fn run_ptt_audio_simulation(cli: &Cli, log: Arc<Logger>, audio_path: &Path) -> Result<()> {
+    let mode: Mode = cli.mode.parse()?;
+    if matches!(mode, Mode::Streaming { .. }) {
+        anyhow::bail!(
+            "streaming mode is temporarily disabled while Linux batch dictation is stabilized"
+        );
+    }
+
+    let cleaner = rules::build_cleaner(cli.no_cleaning, &cli.disable_rule)?.map(Arc::new);
+    let data_log = cli
+        .log_dir
+        .clone()
+        .map(|dir| Arc::new(DataLogger::new(dir, cli.log_format)));
+    let sounds = Sounds::new(false);
+
+    let mut wav = read_wav_mono(audio_path)?;
+    let source_rate = wav.sample_rate;
+    wav.samples = resample_to_target(wav.samples, source_rate)?;
+    let audio_secs = wav.samples.len() as f32 / TARGET_RATE as f32;
+
+    let model_path = match cli.model.as_deref() {
+        Some(path) => model::resolve_model_path(Some(path))?,
+        None => fetch::ensure_default_model(cli.quiet || !cli.verbose)?,
+    };
+    let threads = cli
+        .threads
+        .map(NonZeroUsize::get)
+        .unwrap_or_else(default_thread_count);
+    let engine = open_engine(&model_path, threads, cli.verbose)
+        .with_context(|| format!("could not open model {}", model_path.display()))?;
+
+    let msg = format!(
+        "parakit: simulating PTT from {} ({audio_secs:.2}s, {source_rate} Hz source)",
+        audio_path.display()
+    );
+    log.line(&msg);
+
+    let (tx, rx) = unbounded::<Event_>();
+    let worker = spawn_worker(WorkerCtx {
+        engine,
+        cleaner,
+        data_log,
+        sounds,
+        log,
+        paste_mode: cli.paste_mode,
+        insert_transcripts: false,
+        rx,
+    });
+
+    let started_at = Instant::now();
+    let stopped_at = started_at + Duration::from_secs_f32(audio_secs);
+    tx.send(Event_::RecordingStarted { started_at })
+        .context("could not send simulated PTT start event")?;
+    tx.send(Event_::RecordingStopped {
+        started_at,
+        stopped_at,
+        pcm: wav.samples,
+    })
+    .context("could not send simulated PTT stop event")?;
+    drop(tx);
+    worker
+        .join()
+        .map_err(|_| anyhow::anyhow!("PTT simulation worker panicked"))?;
+    Ok(())
+}
+
+struct WavData {
+    samples: Vec<f32>,
+    sample_rate: u32,
+}
+
+fn read_wav_mono(path: &Path) -> Result<WavData> {
+    let mut reader = hound::WavReader::open(path)
+        .with_context(|| format!("failed to open {}", path.display()))?;
+    let spec = reader.spec();
+    if spec.channels == 0 {
+        anyhow::bail!("{} has zero channels", path.display());
+    }
+
+    let samples = match spec.sample_format {
+        hound::SampleFormat::Float => {
+            if spec.bits_per_sample != 32 {
+                anyhow::bail!(
+                    "unsupported float WAV depth {} in {}",
+                    spec.bits_per_sample,
+                    path.display()
+                );
+            }
+            reader
+                .samples::<f32>()
+                .collect::<std::result::Result<Vec<_>, _>>()
+                .context("failed to read float WAV samples")?
+        }
+        hound::SampleFormat::Int => read_int_samples(&mut reader, spec.bits_per_sample)?,
+    };
+
+    Ok(WavData {
+        samples: mix_to_mono(&samples, spec.channels as usize),
+        sample_rate: spec.sample_rate,
+    })
+}
+
+fn read_int_samples<R: std::io::Read>(
+    reader: &mut hound::WavReader<R>,
+    bits_per_sample: u16,
+) -> Result<Vec<f32>> {
+    match bits_per_sample {
+        1..=8 => {
+            let scale = (1_i32 << (bits_per_sample - 1)) as f32;
+            reader
+                .samples::<i8>()
+                .map(|s| s.map(|v| v as f32 / scale))
+                .collect::<std::result::Result<Vec<_>, _>>()
+                .context("failed to read 8-bit WAV samples")
+        }
+        9..=16 => {
+            let scale = (1_i32 << (bits_per_sample - 1)) as f32;
+            reader
+                .samples::<i16>()
+                .map(|s| s.map(|v| v as f32 / scale))
+                .collect::<std::result::Result<Vec<_>, _>>()
+                .context("failed to read 16-bit WAV samples")
+        }
+        17..=32 => {
+            let scale = (1_i64 << (bits_per_sample - 1)) as f32;
+            reader
+                .samples::<i32>()
+                .map(|s| s.map(|v| v as f32 / scale))
+                .collect::<std::result::Result<Vec<_>, _>>()
+                .context("failed to read 24/32-bit WAV samples")
+        }
+        other => Err(anyhow::anyhow!("unsupported integer WAV depth {other}")),
+    }
+}
+
+fn mix_to_mono(samples: &[f32], channels: usize) -> Vec<f32> {
+    if channels == 1 {
+        return samples.to_vec();
+    }
+
+    let frames = samples.len() / channels;
+    let mut mono = Vec::with_capacity(frames);
+    for frame in samples.chunks_exact(channels) {
+        let sum: f32 = frame.iter().copied().sum();
+        mono.push(sum / channels as f32);
+    }
+    mono
+}
+
+fn resample_to_target(samples: Vec<f32>, source_rate: u32) -> Result<Vec<f32>> {
+    if source_rate == TARGET_RATE {
+        return Ok(samples);
+    }
+    if samples.is_empty() {
+        return Ok(samples);
+    }
+
+    let params = SincInterpolationParameters {
+        sinc_len: 128,
+        f_cutoff: 0.95,
+        interpolation: SincInterpolationType::Linear,
+        oversampling_factor: 256,
+        window: WindowFunction::BlackmanHarris2,
+    };
+    let chunk_size = 1024;
+    let mut resampler = SincFixedIn::<f32>::new(
+        TARGET_RATE as f64 / source_rate as f64,
+        2.0,
+        params,
+        chunk_size,
+        1,
+    )
+    .context("failed to construct resampler")?;
+
+    let expected_len =
+        (samples.len() as f64 * TARGET_RATE as f64 / source_rate as f64).ceil() as usize;
+    let mut output = Vec::with_capacity(expected_len);
+
+    for chunk in samples.chunks(chunk_size) {
+        let mut padded = chunk.to_vec();
+        if padded.len() < chunk_size {
+            padded.resize(chunk_size, 0.0);
+        }
+        let input_frames = vec![padded];
+        let output_frames = resampler
+            .process(&input_frames, None)
+            .context("failed to resample WAV chunk")?;
+        if let Some(ch0) = output_frames.first() {
+            output.extend_from_slice(ch0);
+        }
+    }
+
+    output.truncate(expected_len.min(output.len()));
+    Ok(output)
 }
 
 fn model_dtype_label(path: &std::path::Path) -> String {
@@ -554,13 +758,12 @@ fn format_file_size(bytes: u64) -> String {
 
 struct WorkerCtx {
     engine: Engine,
-    audio: AudioHandle,
     cleaner: Option<Arc<Cleaner>>,
     data_log: Option<Arc<DataLogger>>,
     sounds: Sounds,
     log: Arc<Logger>,
-    mode: Mode,
     paste_mode: PasteMode,
+    insert_transcripts: bool,
     rx: Receiver<Event_>,
 }
 
@@ -578,79 +781,48 @@ fn spawn_worker(ctx: WorkerCtx) -> std::thread::JoinHandle<()> {
 fn worker_loop(ctx: WorkerCtx) {
     let WorkerCtx {
         engine,
-        audio,
         cleaner,
         data_log,
         sounds,
         log,
-        mode,
         paste_mode,
+        insert_transcripts,
         rx,
     } = ctx;
 
     let rules_active = cleaner.as_deref().map_or(0, Cleaner::active_rule_count);
-    let mut consumed_samples: usize = 0; // for streaming
-    let mut recording_started_at: Option<Instant> = None;
+    let mut injector = if insert_transcripts {
+        match Injector::new() {
+            Ok(injector) => Some(injector),
+            Err(err) => {
+                log.error(&format!(
+                    "insertion backend unavailable at worker startup: {err:#}"
+                ));
+                None
+            }
+        }
+    } else {
+        None
+    };
 
     while let Ok(ev) = rx.recv() {
         match ev {
-            Event_::Start => {
-                consumed_samples = 0;
-                recording_started_at = Some(Instant::now());
+            Event_::RecordingStarted { started_at } => {
+                let _recording_started_at = started_at;
                 sounds.start();
                 log.line("parakit: recording...");
             }
-            Event_::StreamChunk => {
-                debug_assert!(matches!(mode, Mode::Streaming { .. }));
-                let chunk = audio.snapshot_from(consumed_samples);
-                if !chunk.is_empty() {
-                    consumed_samples += chunk.len();
-                    match transcribe_clean(&engine, &chunk, cleaner.as_deref()) {
-                        Ok(Some(transcript)) => {
-                            if let Some(data_log) = &data_log {
-                                let chunk_secs = chunk.len() as f32 / TARGET_RATE as f32;
-                                data_log.log(
-                                    chunk_secs,
-                                    transcript.infer_elapsed,
-                                    &transcript.raw,
-                                    &transcript.cleaned,
-                                    rules_active,
-                                );
-                            }
-                            log.streaming_partial(&transcript.raw, &transcript.cleaned);
-                            if let Err(e) = type_streaming_text(&transcript.cleaned) {
-                                log.error(&format!("type failed: {e:#}"));
-                                sounds.error();
-                            }
-                        }
-                        Ok(None) => {}
-                        Err(e) => {
-                            log.error(&format!("transcribe (chunk) failed: {e:#}"));
-                        }
-                    }
-                }
-            }
-            Event_::Stop => {
+            Event_::RecordingStopped {
+                started_at,
+                stopped_at,
+                pcm,
+            } => {
                 let stop_started = Instant::now();
-                let dur_audio = recording_started_at
-                    .take()
-                    .map(|t| t.elapsed())
-                    .unwrap_or(Duration::ZERO);
-
-                let pcm = audio.stop_recording();
-                let capture_stop_elapsed = stop_started.elapsed();
-
-                // In streaming mode we may have already inserted most of the
-                // audio. Only transcribe the unconsumed tail.
-                let to_transcribe: &[f32] = match mode {
-                    Mode::Streaming { .. } => &pcm[consumed_samples.min(pcm.len())..],
-                    Mode::Batch => &pcm,
-                };
-
                 let secs = pcm.len() as f32 / TARGET_RATE as f32;
-                log.transcribing(secs, dur_audio.as_secs_f32());
+                let wall_secs = stopped_at.duration_since(started_at).as_secs_f32();
+                log.transcribing(secs, wall_secs);
 
-                match transcribe_clean(&engine, to_transcribe, cleaner.as_deref()) {
+                match transcribe_clean(&engine, &pcm, cleaner.as_deref()) {
                     Ok(Some(transcript)) => {
                         if let Some(data_log) = &data_log {
                             data_log.log(
@@ -666,13 +838,21 @@ fn worker_loop(ctx: WorkerCtx) {
                             &transcript.cleaned,
                             transcript.infer_elapsed,
                         );
+                        if !insert_transcripts {
+                            log.verbose("parakit: insertion skipped for PTT audio simulation");
+                            sounds.success();
+                            continue;
+                        }
                         let insert_started = Instant::now();
-                        match paste_batch_text(&transcript.cleaned, paste_mode) {
+                        let insert_result = match injector.as_mut() {
+                            Some(injector) => injector.paste_text(&transcript.cleaned, paste_mode),
+                            None => Err(anyhow::anyhow!("insertion backend was not initialized")),
+                        };
+                        match insert_result {
                             Ok(_) => {
                                 let insert_elapsed = insert_started.elapsed();
                                 log.verbose(format!(
-                                    "parakit: timings stop={}ms infer={}ms clean={}ms insert={}ms total={}ms",
-                                    capture_stop_elapsed.as_secs_f32() * 1000.0,
+                                    "parakit: timings infer={}ms clean={}ms insert={}ms total={}ms",
                                     transcript.infer_elapsed.as_secs_f32() * 1000.0,
                                     transcript.clean_elapsed.as_secs_f32() * 1000.0,
                                     insert_elapsed.as_secs_f32() * 1000.0,
@@ -683,6 +863,7 @@ fn worker_loop(ctx: WorkerCtx) {
                             Err(e) => {
                                 log.error(&format!("paste failed: {e:#}"));
                                 sounds.error();
+                                injector = Injector::new().ok();
                             }
                         }
                     }
@@ -723,41 +904,4 @@ fn transcribe_clean(
         infer_elapsed,
         clean_elapsed: clean_started.elapsed(),
     }))
-}
-
-fn paste_batch_text(text: &str, mode: PasteMode) -> Result<()> {
-    let mut injector = Injector::new()?;
-    injector.paste_text(text, mode)
-}
-
-fn type_streaming_text(text: &str) -> Result<()> {
-    let mut injector = Injector::new()?;
-    injector.type_text(text)
-}
-
-// =============================================================================
-// Streaming ticker
-// =============================================================================
-
-fn spawn_streaming_ticker(
-    tx: Sender<Event_>,
-    audio: AudioHandle,
-    alive: Arc<AtomicBool>,
-    chunk_secs: f32,
-) -> std::thread::JoinHandle<()> {
-    let chunk_samples = (chunk_secs * TARGET_RATE as f32) as usize;
-    std::thread::spawn(move || {
-        let mut last_len = 0usize;
-        while alive.load(Ordering::SeqCst) {
-            std::thread::sleep(Duration::from_millis(250));
-            let cur = audio.len();
-            if cur >= last_len + chunk_samples {
-                last_len = cur;
-                let _ = tx.send(Event_::StreamChunk);
-            }
-            if cur < last_len {
-                last_len = 0;
-            }
-        }
-    })
 }

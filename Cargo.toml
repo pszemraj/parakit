@@ -31,17 +31,17 @@ crispasr = { path = "vendor/CrispASR/crispasr", default-features = false }
 # Audio capture
 cpal = { version = "0.15", optional = true }
 rubato = "0.15"        # high-quality resampler (sinc, asynchronous)
+hound = "3.5"          # WAV decoding for examples and daemon validation runs
 
 # Lock-free or mutex-protected shared state
 parking_lot = "0.12"
 
-# Low-level push-to-talk hotkey fallback. On Linux this reads evdev devices,
-# so it needs explicit /dev/input access. The X11 desktop backend below is
-# preferred when available.
+# Low-level push-to-talk hotkey capture. On Linux this reads evdev devices,
+# so it needs explicit /dev/input access.
 rdev = { version = "0.5", features = ["unstable_grab"], optional = true }
 
-# Text insertion at cursor. Batch mode uses clipboard paste; streaming keeps
-# synthetic typing for partial chunks.
+# Text insertion at cursor. Batch mode uses clipboard paste; direct mode uses
+# synthetic typing.
 arboard = { version = "3.4", default-features = false, optional = true }
 enigo = { version = "0.2", optional = true }
 
@@ -69,9 +69,8 @@ libc = "0.2"
 crossbeam-channel = "0.5"
 
 [target.'cfg(target_os = "linux")'.dependencies]
-# Direct X11 desktop hotkey registration. This avoids evdev permissions on
-# ordinary Xorg sessions and gives us explicit connection/grab errors.
-x11rb = { version = "0.13", features = ["xinput", "xkb", "xtest"], optional = true }
+# X11 paste and smoke-test utilities. Hotkey capture uses rdev/evdev on Linux.
+x11rb = { version = "0.13", features = ["xtest"], optional = true }
 
 [features]
 default = ["bundled", "daemon"]
@@ -103,10 +102,6 @@ vulkan  = ["bundled", "crispasr/vulkan"]
 
 [build-dependencies]
 cmake = "0.1"
-
-[dev-dependencies]
-# WAV decoding for the file-transcription debugging example.
-hound = "3.5"
 
 [profile.release]
 opt-level = 3

@@ -1,52 +1,53 @@
-//! Push-to-talk hotkey backends.
+//! Push-to-talk hotkey backend.
 //!
-//! Linux `auto` uses the low-level rdev evdev grab when all input devices are
-//! readable; otherwise it uses a desktop X11 hotkey registration. evdev is more
-//! resilient across desktop session churn, but requires explicit permissions.
+//! Linux v1 uses the low-level `rdev::grab` evdev path for hotkey capture.
+//! The custom X11 `XGrabKey` backend is intentionally out of the daemon
+//! critical path; X11 remains only for insertion support.
 
 use super::{audio::AudioHandle, logging::Logger};
 use crate::Event_;
-use anyhow::Context;
 use crossbeam_channel::Sender;
-use once_cell::sync::OnceCell;
 use rdev::{Event, EventType, Key};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-static GRAB_TX: OnceCell<Sender<Event_>> = OnceCell::new();
-static GRAB_AUDIO: OnceCell<AudioHandle> = OnceCell::new();
-static HOTKEY_STATE: OnceCell<Mutex<HotkeyState>> = OnceCell::new();
-
-#[cfg(target_os = "linux")]
-const X11_HOTKEY_REFRESH: Duration = Duration::from_secs(5);
-#[cfg(target_os = "linux")]
-const X11_HOTKEY_REFRESH_FAILURE_LIMIT: u32 = 3;
-#[cfg(target_os = "linux")]
-const X11_AUTOREPEAT_RELEASE_DELAY: Duration = Duration::from_millis(80);
 const HOTKEY_DEBOUNCE: Duration = Duration::from_millis(150);
 
 /// Hotkey backend preference.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, clap::ValueEnum)]
 pub(crate) enum HotkeyBackend {
-    /// Prefer the most stable available backend.
+    /// Prefer the Linux-stable evdev grab backend.
     Auto,
-    /// Force the X11 desktop hotkey backend.
+    /// Legacy desktop hotkey backend. Disabled on Linux v1.
     Desktop,
     /// Force the low-level evdev grab backend.
     Evdev,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum HotkeyAction {
-    Start,
-    Stop,
+impl HotkeyBackend {
+    /// Return the stable label used in diagnostics.
+    ///
+    /// # Returns
+    ///
+    /// The lowercase backend label.
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Desktop => "desktop",
+            Self::Evdev => "evdev",
+        }
+    }
 }
 
-#[cfg(target_os = "linux")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum X11AutorepeatMode {
-    Detectable,
-    SoftwareFilter,
+enum HotkeyAction {
+    Start {
+        started_at: Instant,
+    },
+    Stop {
+        started_at: Instant,
+        stopped_at: Instant,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -62,6 +63,7 @@ struct HotkeyState {
     space: bool,
     suppress_space_release: bool,
     recording: bool,
+    started_at: Option<Instant>,
     last_start: Option<Instant>,
 }
 
@@ -73,45 +75,29 @@ impl HotkeyState {
                 self.suppress_space_release = true;
                 (self.start_recording(now), true)
             }
-            Key::Space if self.recording => (None, true),
+            Key::Space if self.recording || self.suppress_space_release => (None, true),
             _ => (None, false),
         }
     }
 
-    fn release(&mut self, key: Key) -> (Option<HotkeyAction>, bool) {
+    fn release(&mut self, key: Key, now: Instant) -> (Option<HotkeyAction>, bool) {
         let was_recording = self.recording;
         let suppress_space_release = self.suppress_space_release;
         self.set_key(key, false);
         match key {
             Key::Space if was_recording => {
                 self.suppress_space_release = false;
-                (self.stop_recording(), true)
+                (self.stop_recording(now), true)
             }
             Key::Space if suppress_space_release => {
                 self.suppress_space_release = false;
                 (None, true)
             }
             Key::ControlLeft | Key::ControlRight if was_recording && !self.ctrl_held() => {
-                self.space = false;
-                self.suppress_space_release = false;
-                (self.stop_recording(), true)
+                (self.stop_recording(now), false)
             }
             _ => (None, false),
         }
-    }
-
-    fn desktop_press(&mut self, now: Instant) -> Option<HotkeyAction> {
-        self.ctrl_left = true;
-        self.space = true;
-        self.suppress_space_release = true;
-        self.start_recording(now)
-    }
-
-    fn desktop_release(&mut self) -> Option<HotkeyAction> {
-        self.ctrl_left = false;
-        self.space = false;
-        self.suppress_space_release = false;
-        self.stop_recording()
     }
 
     fn start_recording(&mut self, now: Instant) -> Option<HotkeyAction> {
@@ -120,30 +106,25 @@ impl HotkeyState {
             .is_none_or(|last| now.duration_since(last) >= HOTKEY_DEBOUNCE);
         if !self.recording && debounce_ok {
             self.recording = true;
+            self.started_at = Some(now);
             self.last_start = Some(now);
-            Some(HotkeyAction::Start)
+            Some(HotkeyAction::Start { started_at: now })
         } else {
             None
         }
     }
 
-    fn stop_recording(&mut self) -> Option<HotkeyAction> {
-        if self.recording {
-            self.recording = false;
-            Some(HotkeyAction::Stop)
-        } else {
-            None
+    fn stop_recording(&mut self, stopped_at: Instant) -> Option<HotkeyAction> {
+        if !self.recording {
+            return None;
         }
-    }
 
-    fn reset_after_backend_loss(&mut self) -> Option<HotkeyAction> {
-        let was_recording = self.recording;
-        *self = Self::default();
-        was_recording.then_some(HotkeyAction::Stop)
-    }
-
-    fn is_recording(&self) -> bool {
-        self.recording
+        self.recording = false;
+        let started_at = self.started_at.take().unwrap_or(stopped_at);
+        Some(HotkeyAction::Stop {
+            started_at,
+            stopped_at,
+        })
     }
 
     fn ctrl_held(&self) -> bool {
@@ -179,131 +160,14 @@ impl HotkeyState {
     }
 }
 
-#[cfg(target_os = "linux")]
-#[derive(Clone, Copy, Debug)]
-struct X11ReleaseFilter {
-    pending_release: Option<Instant>,
-    delay: Duration,
-}
-
-#[cfg(target_os = "linux")]
-impl X11ReleaseFilter {
-    fn new(delay: Duration) -> Self {
-        Self {
-            pending_release: None,
-            delay,
-        }
-    }
-
-    fn delay_release(&mut self, now: Instant) {
-        self.pending_release = Some(now + self.delay);
-    }
-
-    fn cancel_if_repeat(&mut self, now: Instant) -> bool {
-        if self.pending_release.is_some_and(|deadline| now < deadline) {
-            self.pending_release = None;
-            true
-        } else {
-            false
-        }
-    }
-
-    fn take_due_release(&mut self, now: Instant) -> bool {
-        if self.pending_release.is_some_and(|deadline| now >= deadline) {
-            self.pending_release = None;
-            true
-        } else {
-            false
-        }
-    }
-}
-
-#[cfg(target_os = "linux")]
-#[derive(Clone, Copy, Debug)]
-struct X11DesktopHotkeyState {
-    state: HotkeyState,
-    release_filter: Option<X11ReleaseFilter>,
-}
-
-#[cfg(target_os = "linux")]
-impl X11DesktopHotkeyState {
-    fn new(autorepeat_mode: X11AutorepeatMode) -> Self {
-        let mut desktop = Self {
-            state: HotkeyState::default(),
-            release_filter: None,
-        };
-        desktop.set_autorepeat_mode(autorepeat_mode);
-        desktop
-    }
-
-    fn set_autorepeat_mode(&mut self, autorepeat_mode: X11AutorepeatMode) {
-        self.release_filter = match autorepeat_mode {
-            X11AutorepeatMode::Detectable => None,
-            X11AutorepeatMode::SoftwareFilter => {
-                Some(X11ReleaseFilter::new(X11_AUTOREPEAT_RELEASE_DELAY))
-            }
-        };
-    }
-
-    fn press(&mut self, now: Instant) -> Vec<HotkeyAction> {
-        let mut actions = self.release_if_due(now);
-        if self
-            .release_filter
-            .as_mut()
-            .is_some_and(|filter| filter.cancel_if_repeat(now))
-        {
-            return actions;
-        }
-        if let Some(action) = self.state.desktop_press(now) {
-            actions.push(action);
-        }
-        actions
-    }
-
-    fn release(&mut self, now: Instant) -> Vec<HotkeyAction> {
-        if let Some(filter) = self.release_filter.as_mut() {
-            filter.delay_release(now);
-            Vec::new()
-        } else {
-            self.state.desktop_release().into_iter().collect()
-        }
-    }
-
-    fn release_if_due(&mut self, now: Instant) -> Vec<HotkeyAction> {
-        if self
-            .release_filter
-            .as_mut()
-            .is_some_and(|filter| filter.take_due_release(now))
-        {
-            self.state.desktop_release().into_iter().collect()
-        } else {
-            Vec::new()
-        }
-    }
-
-    fn reset_after_backend_loss(&mut self) -> Option<HotkeyAction> {
-        if let Some(filter) = self.release_filter.as_mut() {
-            filter.pending_release = None;
-        }
-        self.state.reset_after_backend_loss()
-    }
-
-    fn is_recording(&self) -> bool {
-        self.state.is_recording()
-    }
-}
-
-fn hotkey_state() -> &'static Mutex<HotkeyState> {
-    HOTKEY_STATE.get_or_init(|| Mutex::new(HotkeyState::default()))
-}
-
 /// Run the platform hotkey loop until the process exits.
 ///
 /// # Arguments
 ///
-/// * `tx` - Worker event channel used to post start and stop events.
-/// * `audio` - Audio capture handle toggled by the hotkey state.
+/// * `tx` - Worker event channel used to post recording events.
+/// * `audio` - Audio capture handle controlled by the hotkey coordinator.
 /// * `backend` - Linux backend preference.
+/// * `log` - Logger used for backend diagnostics.
 #[cfg(target_os = "linux")]
 pub(crate) fn run_grab_loop(
     tx: Sender<Event_>,
@@ -311,64 +175,19 @@ pub(crate) fn run_grab_loop(
     backend: HotkeyBackend,
     log: Arc<Logger>,
 ) {
-    let _ = GRAB_TX.set(tx);
-    let _ = GRAB_AUDIO.set(audio);
-
     match backend {
-        HotkeyBackend::Auto => run_auto_hotkey_loop(&log),
-        HotkeyBackend::Desktop => run_desktop_hotkey_loop_or_exit(&log),
-        HotkeyBackend::Evdev => run_evdev_grab_loop_or_exit(),
-    }
-}
-
-#[cfg(target_os = "linux")]
-fn run_auto_hotkey_loop(log: &Logger) {
-    if super::preflight::linux_evdev_fallback_available() {
-        match rdev::grab(grab_callback) {
-            Ok(()) => return,
-            Err(err) => {
-                eprintln!("parakit: rdev evdev grab failed: {err:?}");
-                eprintln!("parakit: trying X11 desktop hotkey backend");
-            }
+        HotkeyBackend::Auto | HotkeyBackend::Evdev => {
+            log.verbose("parakit: Linux hotkey backend: evdev/rdev grab");
+            run_rdev_grab_loop_or_exit(tx, audio);
         }
-    }
-
-    if super::preflight::linux_x11_desktop_hotkey_candidate() {
-        match run_x11_desktop_hotkey_loop(log) {
-            Ok(()) => return,
-            Err(err) => {
-                eprintln!("parakit: X11 desktop hotkey backend failed: {err:#}");
-                if !super::preflight::linux_evdev_fallback_available() {
-                    eprintln!("{}", linux_no_hotkey_backend_help());
-                    std::process::exit(2);
-                }
-                eprintln!("parakit: falling back to rdev evdev grab");
-            }
+        HotkeyBackend::Desktop => {
+            eprintln!(
+                "parakit: --hotkey-backend desktop is disabled in the Linux-stable path.\n\
+                 Use --hotkey-backend evdev after granting /dev/input access.\n\
+                 Future no-/dev/input desktop hotkeys should use global-hotkey or the XDG portal."
+            );
+            std::process::exit(2);
         }
-    }
-
-    run_evdev_grab_loop_or_exit();
-}
-
-#[cfg(target_os = "linux")]
-fn run_desktop_hotkey_loop_or_exit(log: &Logger) {
-    if !super::preflight::linux_x11_desktop_hotkey_candidate() {
-        eprintln!("{}", linux_no_hotkey_backend_help());
-        std::process::exit(2);
-    }
-
-    if let Err(err) = run_x11_desktop_hotkey_loop(log) {
-        eprintln!("parakit: X11 desktop hotkey backend failed: {err:#}");
-        eprintln!("{}", linux_no_hotkey_backend_help());
-        std::process::exit(2);
-    }
-}
-
-#[cfg(target_os = "linux")]
-fn run_evdev_grab_loop_or_exit() {
-    if let Err(e) = rdev::grab(grab_callback) {
-        eprintln!("parakit: rdev::grab failed: {e:?}\n{}", grab_failure_help());
-        std::process::exit(2);
     }
 }
 
@@ -376,9 +195,10 @@ fn run_evdev_grab_loop_or_exit() {
 ///
 /// # Arguments
 ///
-/// * `tx` - Worker event channel used to post start and stop events.
-/// * `audio` - Audio capture handle toggled by the hotkey state.
+/// * `tx` - Worker event channel used to post recording events.
+/// * `audio` - Audio capture handle controlled by the hotkey coordinator.
 /// * `_backend` - Ignored backend preference on platforms with one backend.
+/// * `_log` - Logger unused on non-Linux platforms.
 #[cfg(not(target_os = "linux"))]
 pub(crate) fn run_grab_loop(
     tx: Sender<Event_>,
@@ -386,273 +206,88 @@ pub(crate) fn run_grab_loop(
     _backend: HotkeyBackend,
     _log: Arc<Logger>,
 ) {
-    let _ = GRAB_TX.set(tx);
-    let _ = GRAB_AUDIO.set(audio);
+    run_rdev_grab_loop_or_exit(tx, audio);
+}
 
-    if let Err(e) = rdev::grab(grab_callback) {
+fn run_rdev_grab_loop_or_exit(tx: Sender<Event_>, audio: AudioHandle) {
+    let state = Arc::new(Mutex::new(HotkeyState::default()));
+    let callback_state = Arc::clone(&state);
+    let callback_audio = audio.clone();
+    let callback_tx = tx.clone();
+
+    if let Err(e) = rdev::grab(move |event| {
+        handle_grab_event(event, &callback_state, &callback_audio, &callback_tx)
+    }) {
         eprintln!("parakit: rdev::grab failed: {e:?}\n{}", grab_failure_help());
         std::process::exit(2);
     }
 }
 
-#[cfg(target_os = "linux")]
-fn run_x11_desktop_hotkey_loop(log: &Logger) -> anyhow::Result<()> {
-    use super::x11;
-    use x11rb::connection::Connection;
-    use x11rb::protocol::xproto::{ConnectionExt, GrabMode, Keycode, Window};
-    use x11rb::protocol::Event as X11Event;
-    use x11rb::rust_connection::RustConnection;
+fn handle_grab_event(
+    event: Event,
+    state: &Arc<Mutex<HotkeyState>>,
+    audio: &AudioHandle,
+    tx: &Sender<Event_>,
+) -> Option<Event> {
+    let now = Instant::now();
+    let (action, suppress) = match event.event_type {
+        EventType::KeyPress(key) => state
+            .lock()
+            .expect("hotkey state lock poisoned")
+            .press(key, now),
+        EventType::KeyRelease(key) => state
+            .lock()
+            .expect("hotkey state lock poisoned")
+            .release(key, now),
+        _ => return Some(event),
+    };
 
-    struct X11HotkeyBackend {
-        conn: RustConnection,
-        root: Window,
-        keycode: Keycode,
-        autorepeat_mode: X11AutorepeatMode,
+    if let Some(action) = action {
+        dispatch_hotkey_action(action, audio, tx);
     }
 
-    impl X11HotkeyBackend {
-        fn new(log: Option<&Logger>) -> anyhow::Result<Self> {
-            let (conn, screen_num) =
-                RustConnection::connect(None).context("could not connect to the X11 display")?;
-            let root = x11::root_window(&conn, screen_num)?;
-            let keycode = x11::keycode_for_keysym(&conn, x11::SPACE_KEYSYM)?;
-            let (autorepeat_mode, unavailable_reason) = x11_autorepeat_mode(&conn);
-            if let Some(log) = log {
-                log_x11_autorepeat_mode(log, autorepeat_mode, unavailable_reason.as_deref());
-            }
-            let backend = Self {
-                conn,
-                root,
-                keycode,
-                autorepeat_mode,
-            };
-            backend
-                .grab()
-                .context("could not register Ctrl+Space; another shortcut may already own it")?;
-            Ok(backend)
-        }
-
-        fn grab(&self) -> anyhow::Result<()> {
-            for mods in x11::ctrl_grab_mods() {
-                let result = self
-                    .conn
-                    .grab_key(
-                        false,
-                        self.root,
-                        mods,
-                        self.keycode,
-                        GrabMode::ASYNC,
-                        GrabMode::ASYNC,
-                    )
-                    .context("could not send XGrabKey request")?;
-                if let Err(err) = result.check() {
-                    self.ungrab();
-                    return Err(anyhow::anyhow!(err)).context("XGrabKey rejected Ctrl+Space");
-                }
-            }
-            self.conn.flush().context("could not flush XGrabKey")?;
-            Ok(())
-        }
-
-        fn ungrab(&self) {
-            for mods in x11::ctrl_grab_mods() {
-                if let Ok(result) = self.conn.ungrab_key(self.keycode, self.root, mods) {
-                    result.ignore_error();
-                }
-            }
-            let _ = self.conn.flush();
-        }
-
-        fn refresh(&mut self, log: &Logger) -> anyhow::Result<()> {
-            let previous_autorepeat_mode = self.autorepeat_mode;
-            self.ungrab();
-            match Self::new(None) {
-                Ok(replacement) => {
-                    if replacement.autorepeat_mode != previous_autorepeat_mode {
-                        log_x11_autorepeat_mode(log, replacement.autorepeat_mode, None);
-                    }
-                    *self = replacement;
-                    Ok(())
-                }
-                Err(err) => {
-                    let _ = self.grab();
-                    Err(err)
-                }
-            }
-        }
-
-        fn poll_event(&self) -> anyhow::Result<Option<X11Event>> {
-            self.conn
-                .poll_for_event()
-                .context("X11 hotkey event polling failed")
-        }
-    }
-
-    let mut backend = X11HotkeyBackend::new(Some(log))?;
-    let mut x11_hotkey_state = X11DesktopHotkeyState::new(backend.autorepeat_mode);
-    let mut next_refresh = Instant::now() + X11_HOTKEY_REFRESH;
-    let mut refresh_failures = 0_u32;
-
-    loop {
-        for action in x11_hotkey_state.release_if_due(Instant::now()) {
-            dispatch_hotkey_action(action);
-        }
-
-        match backend.poll_event()? {
-            Some(event) => match event {
-                X11Event::KeyPress(event) if event.detail == backend.keycode => {
-                    for action in x11_hotkey_state.press(Instant::now()) {
-                        dispatch_hotkey_action(action);
-                    }
-                    refresh_failures = 0;
-                }
-                X11Event::KeyRelease(event) if event.detail == backend.keycode => {
-                    for action in x11_hotkey_state.release(Instant::now()) {
-                        dispatch_hotkey_action(action);
-                    }
-                    refresh_failures = 0;
-                }
-                _ => {}
-            },
-            None => {
-                std::thread::sleep(Duration::from_millis(25));
-            }
-        }
-
-        if Instant::now() >= next_refresh {
-            next_refresh = Instant::now() + X11_HOTKEY_REFRESH;
-            if !x11_hotkey_state.is_recording() {
-                match backend.refresh(log) {
-                    Ok(()) => {
-                        x11_hotkey_state.set_autorepeat_mode(backend.autorepeat_mode);
-                        refresh_failures = 0;
-                    }
-                    Err(err) => {
-                        if let Some(action) = x11_hotkey_state.reset_after_backend_loss() {
-                            dispatch_hotkey_action(action);
-                        }
-                        refresh_failures += 1;
-                        if refresh_failures >= X11_HOTKEY_REFRESH_FAILURE_LIMIT {
-                            return Err(err).context(
-                                "X11 hotkey refresh failed repeatedly after desktop/session churn",
-                            );
-                        }
-                    }
-                }
-            }
-        }
+    if suppress {
+        None
+    } else {
+        Some(event)
     }
 }
 
-#[cfg(target_os = "linux")]
-fn x11_autorepeat_mode(
-    conn: &x11rb::rust_connection::RustConnection,
-) -> (X11AutorepeatMode, Option<String>) {
-    match enable_xkb_detectable_autorepeat(conn) {
-        Ok(true) => (X11AutorepeatMode::Detectable, None),
-        Ok(false) => (X11AutorepeatMode::SoftwareFilter, None),
-        Err(err) => (X11AutorepeatMode::SoftwareFilter, Some(format!("{err:#}"))),
-    }
-}
-
-#[cfg(target_os = "linux")]
-fn log_x11_autorepeat_mode(
-    log: &Logger,
-    mode: X11AutorepeatMode,
-    unavailable_reason: Option<&str>,
-) {
-    match (mode, unavailable_reason) {
-        (X11AutorepeatMode::Detectable, _) => {
-            log.verbose("parakit: X11 XKB detectable autorepeat enabled");
+fn dispatch_hotkey_action(action: HotkeyAction, audio: &AudioHandle, tx: &Sender<Event_>) {
+    match action {
+        HotkeyAction::Start { started_at } => {
+            audio.start_recording();
+            let _ = tx.send(Event_::RecordingStarted { started_at });
         }
-        (X11AutorepeatMode::SoftwareFilter, Some(reason)) => {
-            log.verbose(format!(
-                "parakit: X11 XKB detectable autorepeat unavailable ({reason}); using software release filter"
-            ));
-        }
-        (X11AutorepeatMode::SoftwareFilter, None) => {
-            log.verbose(
-                "parakit: X11 XKB detectable autorepeat unavailable; using software release filter",
-            );
+        HotkeyAction::Stop {
+            started_at,
+            stopped_at,
+        } => {
+            let pcm = audio.stop_recording();
+            let _ = tx.send(Event_::RecordingStopped {
+                started_at,
+                stopped_at,
+                pcm,
+            });
         }
     }
-}
-
-#[cfg(target_os = "linux")]
-fn enable_xkb_detectable_autorepeat(
-    conn: &x11rb::rust_connection::RustConnection,
-) -> anyhow::Result<bool> {
-    use x11rb::protocol::xkb::{BoolCtrl, ConnectionExt as XkbConnectionExt, PerClientFlag};
-
-    const XKB_USE_CORE_KBD: u16 = 0x0100;
-
-    let extension = XkbConnectionExt::xkb_use_extension(conn, 1, 0)
-        .context("could not request XKB extension")?
-        .reply()
-        .context("could not read XKB extension reply")?;
-    if !extension.supported {
-        return Ok(false);
-    }
-
-    let flag = PerClientFlag::DETECTABLE_AUTO_REPEAT;
-    let reply = XkbConnectionExt::xkb_per_client_flags(
-        conn,
-        XKB_USE_CORE_KBD,
-        flag,
-        flag,
-        BoolCtrl::default(),
-        BoolCtrl::default(),
-        BoolCtrl::default(),
-    )
-    .context("could not request XKB per-client flags")?
-    .reply()
-    .context("could not read XKB per-client flags reply")?;
-
-    Ok(reply.supported.contains(flag) && reply.value.contains(flag))
-}
-
-#[cfg(target_os = "linux")]
-fn linux_no_hotkey_backend_help() -> String {
-    let session = std::env::var("XDG_SESSION_TYPE").unwrap_or_else(|_| "unknown".to_string());
-    let display = std::env::var("DISPLAY").unwrap_or_else(|_| "<unset>".to_string());
-    let xauthority = std::env::var("XAUTHORITY").unwrap_or_else(|_| "<unset>".to_string());
-    let user = std::env::var("USER").unwrap_or_else(|_| "$USER".to_string());
-
-    format!(
-        "No usable Linux hotkey backend is available.\n\
-         Current session: XDG_SESSION_TYPE={session}, DISPLAY={display}, XAUTHORITY={xauthority}\n\
-         Preferred path: use an Xorg/X11 session so parakit can register\n\
-         Ctrl+Space through the desktop without /dev/input access.\n\
-         If this started after GNOME logout/login, restart tmux, terminals,\n\
-         and user services from the new desktop session so DISPLAY/XAUTHORITY\n\
-         are fresh.\n\
-         Session-stable path: grant evdev access, then log out completely and back in:\n\
-           sudo usermod -aG input {user}\n\
-         Then run: parakit --hotkey-backend evdev\n\
-         If Ctrl+Space is already owned by the desktop or input method, disable\n\
-         that shortcut and restart parakit."
-    )
 }
 
 #[cfg(target_os = "linux")]
 fn grab_failure_help() -> String {
     let session = std::env::var("XDG_SESSION_TYPE").unwrap_or_else(|_| "unknown".to_string());
     let display = std::env::var("DISPLAY").unwrap_or_else(|_| "<unset>".to_string());
-    let xauthority = std::env::var("XAUTHORITY").unwrap_or_else(|_| "<unset>".to_string());
     let user = std::env::var("USER").unwrap_or_else(|_| "$USER".to_string());
 
     format!(
-        "The evdev fallback requires read access to /dev/input/event*.\n\
-         Current session: XDG_SESSION_TYPE={session}, DISPLAY={display}, XAUTHORITY={xauthority}\n\
-         Prefer an Xorg/X11 session so parakit can use the desktop hotkey\n\
-         backend without evdev permissions. Otherwise add your user to the\n\
-         input group, then log out completely and log back in:\n\
+        "Linux hotkey capture uses evdev through rdev::grab.\n\
+         Current session: XDG_SESSION_TYPE={session}, DISPLAY={display}\n\
+         Fix:\n\
            sudo usermod -aG input {user}\n\
-         Verify the new login session with:\n\
+         Then log out completely and log back in, or reboot.\n\
+         Verify the fresh session with:\n\
            id -nG | tr ' ' '\\n' | grep '^input$'\n\
-         Restart tmux, terminals, or user services that were started before the\n\
-         group change. Avoid running parakit with sudo; audio, X11, and text\n\
-         insertion usually belongs to the regular desktop user."
+         Do not run parakit with sudo; audio, clipboard, and insertion belong to the desktop user."
     )
 }
 
@@ -672,60 +307,6 @@ fn grab_failure_help() -> String {
         .to_string()
 }
 
-fn start_hotkey_recording() {
-    if let Some(audio) = GRAB_AUDIO.get() {
-        audio.start_recording();
-    }
-    if let Some(tx) = GRAB_TX.get() {
-        let _ = tx.send(Event_::Start);
-    }
-}
-
-fn stop_hotkey_recording() {
-    if let Some(tx) = GRAB_TX.get() {
-        let _ = tx.send(Event_::Stop);
-    }
-}
-
-fn dispatch_hotkey_action(action: HotkeyAction) {
-    match action {
-        HotkeyAction::Start => start_hotkey_recording(),
-        HotkeyAction::Stop => stop_hotkey_recording(),
-    }
-}
-
-fn grab_callback(event: Event) -> Option<Event> {
-    match event.event_type {
-        EventType::KeyPress(key) => {
-            let (action, suppress) = hotkey_state()
-                .lock()
-                .expect("hotkey state lock poisoned")
-                .press(key, Instant::now());
-            if let Some(action) = action {
-                dispatch_hotkey_action(action);
-            }
-            if suppress {
-                return None;
-            }
-            Some(event)
-        }
-        EventType::KeyRelease(key) => {
-            let (action, suppress) = hotkey_state()
-                .lock()
-                .expect("hotkey state lock poisoned")
-                .release(key);
-            if let Some(action) = action {
-                dispatch_hotkey_action(action);
-            }
-            if suppress {
-                return None;
-            }
-            Some(event)
-        }
-        _ => Some(event),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -741,22 +322,61 @@ mod tests {
         assert_eq!(state.press(Key::ControlLeft, now), (None, false));
         assert_eq!(
             state.press(Key::Space, now + Duration::from_millis(10)),
-            (Some(HotkeyAction::Start), true)
+            (
+                Some(HotkeyAction::Start {
+                    started_at: now + Duration::from_millis(10)
+                }),
+                true
+            )
         );
-        assert_eq!(state.release(Key::Space), (Some(HotkeyAction::Stop), true));
+        assert_eq!(
+            state.release(Key::Space, now + Duration::from_millis(300)),
+            (
+                Some(HotkeyAction::Stop {
+                    started_at: now + Duration::from_millis(10),
+                    stopped_at: now + Duration::from_millis(300)
+                }),
+                true
+            )
+        );
     }
 
     #[test]
-    fn ctrl_release_before_space_stops() {
+    fn ctrl_release_before_space_stops_without_suppressing_ctrl_release() {
         let now = base_time();
         let mut state = HotkeyState::default();
         state.press(Key::ControlLeft, now);
         state.press(Key::Space, now + Duration::from_millis(10));
         assert_eq!(
-            state.release(Key::ControlLeft),
-            (Some(HotkeyAction::Stop), true)
+            state.release(Key::ControlLeft, now + Duration::from_millis(50)),
+            (
+                Some(HotkeyAction::Stop {
+                    started_at: now + Duration::from_millis(10),
+                    stopped_at: now + Duration::from_millis(50)
+                }),
+                false
+            )
         );
-        assert!(!state.is_recording());
+        assert!(!state.recording);
+    }
+
+    #[test]
+    fn space_release_after_ctrl_release_is_still_suppressed() {
+        let now = base_time();
+        let mut state = HotkeyState::default();
+        state.press(Key::ControlLeft, now);
+        state.press(Key::Space, now + Duration::from_millis(10));
+        state.release(Key::ControlLeft, now + Duration::from_millis(50));
+
+        assert_eq!(
+            state.press(Key::Space, now + Duration::from_millis(60)),
+            (None, true)
+        );
+        assert_eq!(
+            state.release(Key::Space, now + Duration::from_millis(70)),
+            (None, true)
+        );
+        assert!(!state.recording);
     }
 
     #[test]
@@ -766,13 +386,18 @@ mod tests {
         state.press(Key::ControlLeft, now);
         assert_eq!(
             state.press(Key::Space, now + Duration::from_millis(10)),
-            (Some(HotkeyAction::Start), true)
+            (
+                Some(HotkeyAction::Start {
+                    started_at: now + Duration::from_millis(10)
+                }),
+                true
+            )
         );
         assert_eq!(
             state.press(Key::Space, now + Duration::from_millis(20)),
             (None, true)
         );
-        assert!(state.is_recording());
+        assert!(state.recording);
     }
 
     #[test]
@@ -781,70 +406,16 @@ mod tests {
         let mut state = HotkeyState::default();
         state.press(Key::ControlLeft, now);
         state.press(Key::Space, now + Duration::from_millis(10));
-        state.release(Key::Space);
+        state.release(Key::Space, now + Duration::from_millis(20));
         assert_eq!(
             state.press(Key::Space, now + Duration::from_millis(80)),
             (None, true)
         );
-        assert_eq!(state.release(Key::Space), (None, true));
-        assert!(!state.is_recording());
-    }
-
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn x11_autorepeat_sequence_is_one_recording_window() {
-        let now = base_time();
-        let mut state = X11DesktopHotkeyState::new(X11AutorepeatMode::SoftwareFilter);
-        let mut actions = Vec::new();
-
-        actions.extend(state.press(now));
-        actions.extend(state.release(now + Duration::from_millis(10)));
-        actions.extend(state.press(now + Duration::from_millis(20)));
-        actions.extend(state.release(now + Duration::from_millis(30)));
-        actions.extend(state.press(now + Duration::from_millis(40)));
-        actions.extend(state.release(now + Duration::from_millis(50)));
-        assert!(state.is_recording());
-
-        actions.extend(
-            state.release_if_due(now + Duration::from_millis(50) + X11_AUTOREPEAT_RELEASE_DELAY),
-        );
-        assert_eq!(actions, vec![HotkeyAction::Start, HotkeyAction::Stop]);
-        assert!(!state.is_recording());
-    }
-
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn x11_real_release_stops_after_filter_deadline() {
-        let now = base_time();
-        let mut state = X11DesktopHotkeyState::new(X11AutorepeatMode::SoftwareFilter);
-        assert_eq!(state.press(now), vec![HotkeyAction::Start]);
-        assert!(state.release(now + Duration::from_millis(10)).is_empty());
-        assert!(state
-            .release_if_due(
-                now + Duration::from_millis(10) + X11_AUTOREPEAT_RELEASE_DELAY
-                    - Duration::from_millis(1),
-            )
-            .is_empty());
-        assert!(state.is_recording());
-
         assert_eq!(
-            state.release_if_due(now + Duration::from_millis(10) + X11_AUTOREPEAT_RELEASE_DELAY,),
-            vec![HotkeyAction::Stop]
+            state.release(Key::Space, now + Duration::from_millis(90)),
+            (None, true)
         );
-        assert!(!state.is_recording());
-    }
-
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn x11_detectable_autorepeat_release_stops_immediately() {
-        let now = base_time();
-        let mut state = X11DesktopHotkeyState::new(X11AutorepeatMode::Detectable);
-        assert_eq!(state.press(now), vec![HotkeyAction::Start]);
-        assert_eq!(
-            state.release(now + Duration::from_millis(10)),
-            vec![HotkeyAction::Stop]
-        );
-        assert!(!state.is_recording());
+        assert!(!state.recording);
     }
 
     #[test]
@@ -857,7 +428,7 @@ mod tests {
             state.press(Key::Space, now + Duration::from_millis(10)),
             (None, false)
         );
-        assert!(!state.is_recording());
+        assert!(!state.recording);
     }
 
     #[test]
@@ -865,6 +436,16 @@ mod tests {
         let now = base_time();
         let mut state = HotkeyState::default();
         assert_eq!(state.press(Key::KeyA, now), (None, false));
-        assert_eq!(state.release(Key::KeyA), (None, false));
+        assert_eq!(
+            state.release(Key::KeyA, now + Duration::from_millis(10)),
+            (None, false)
+        );
+    }
+
+    #[test]
+    fn backend_labels_are_stable() {
+        assert_eq!(HotkeyBackend::Auto.label(), "auto");
+        assert_eq!(HotkeyBackend::Desktop.label(), "desktop");
+        assert_eq!(HotkeyBackend::Evdev.label(), "evdev");
     }
 }

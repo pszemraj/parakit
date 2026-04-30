@@ -152,31 +152,6 @@ impl Logger {
             );
         }
     }
-
-    /// Print a streaming partial transcript.
-    ///
-    /// # Arguments
-    ///
-    /// * `raw` - Partial transcript returned by the model.
-    /// * `cleaned` - Partial transcript after optional cleanup rules.
-    pub(crate) fn streaming_partial(&self, raw: &str, cleaned: &str) {
-        if self.level == LogLevel::Quiet {
-            return;
-        }
-        let raw = raw.trim();
-        let cleaned = cleaned.trim();
-        if raw == cleaned {
-            anstream::println!("{} {}", style_clean("+"), style_clean_text(cleaned));
-        } else {
-            anstream::println!(
-                "{} {} {} {}",
-                style_raw("+"),
-                style_raw_text(raw),
-                style_dim("=>"),
-                style_clean_text(cleaned)
-            );
-        }
-    }
 }
 
 /// Startup fields rendered by [`Logger::banner`].

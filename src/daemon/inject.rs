@@ -1,8 +1,8 @@
 //! Insert text at the cursor position.
 //!
 //! Batch mode uses the clipboard plus the platform paste shortcut so the final
-//! transcript appears as a single insertion. Streaming mode still uses
-//! `enigo::Keyboard::text()` for partial chunks, which:
+//! transcript appears as a single insertion. Direct mode uses
+//! `enigo::Keyboard::text()`, which:
 //!   - Windows: synthesizes Unicode keystrokes via `SendInput` with
 //!     `KEYEVENTF_UNICODE`. Works for any character; no keyboard layout
 //!     translation required.
@@ -17,13 +17,19 @@
 use anyhow::{Context, Result};
 use arboard::Clipboard;
 use clap::ValueEnum;
-use enigo::{Direction, Enigo, Key, Keyboard, Settings};
+#[cfg(not(target_os = "linux"))]
+use enigo::Direction;
+#[cfg(any(test, not(target_os = "linux")))]
+use enigo::Key;
+use enigo::{Enigo, Keyboard, Settings};
 #[cfg(target_os = "linux")]
 use std::sync::OnceLock;
 use std::{
     thread,
     time::{Duration, Instant},
 };
+#[cfg(target_os = "linux")]
+use x11rb::connection::Connection as _;
 
 /// Paste shortcut style for batch transcript insertion.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
@@ -66,13 +72,19 @@ impl PasteMode {
 /// Returns an error if the keyboard, clipboard, or platform paste support is
 /// unavailable.
 pub(crate) fn preflight(mode: PasteMode) -> Result<()> {
-    let _keyboard = Enigo::new(&Settings::default())
-        .map_err(|e| anyhow::anyhow!("failed to init enigo: {e:?}"))?;
+    if insertion_needs_enigo(mode) {
+        let _keyboard = Enigo::new(&Settings::default())
+            .map_err(|e| anyhow::anyhow!("failed to init enigo: {e:?}"))?;
+    }
     if mode != PasteMode::Direct {
         let _clipboard = Clipboard::new().context("could not open system clipboard")?;
         platform_paste_preflight()?;
     }
     Ok(())
+}
+
+fn insertion_needs_enigo(mode: PasteMode) -> bool {
+    mode == PasteMode::Direct || cfg!(not(target_os = "linux"))
 }
 
 /// Exercise the configured insertion backend without inserting into the user's
@@ -133,8 +145,10 @@ impl TextClipboard for Clipboard {
 
 /// Open a text insertion handle.
 pub struct Injector {
-    enigo: Enigo,
+    enigo: Option<Enigo>,
     clipboard: Option<Clipboard>,
+    #[cfg(target_os = "linux")]
+    x11_paste: Option<LinuxX11Paste>,
 }
 
 impl Injector {
@@ -149,11 +163,11 @@ impl Injector {
     /// Returns an error if `enigo` cannot initialize the platform keyboard
     /// backend.
     pub fn new() -> Result<Self> {
-        let enigo = Enigo::new(&Settings::default())
-            .map_err(|e| anyhow::anyhow!("failed to init enigo: {e:?}"))?;
         Ok(Self {
-            enigo,
+            enigo: None,
             clipboard: None,
+            #[cfg(target_os = "linux")]
+            x11_paste: None,
         })
     }
 
@@ -213,30 +227,49 @@ impl Injector {
         if text.is_empty() {
             return Ok(());
         }
-        self.enigo
+        self.keyboard()?
             .text(text)
             .map_err(|e| anyhow::anyhow!("enigo type failed: {e:?}"))
             .context("could not type text at cursor")
     }
 
+    #[cfg(target_os = "linux")]
+    fn paste_clipboard(&mut self, mode: PasteMode) -> Result<()> {
+        if self.x11_paste.is_none() {
+            self.x11_paste = Some(LinuxX11Paste::open()?);
+        }
+
+        let result = self
+            .x11_paste
+            .as_ref()
+            .expect("X11 paste backend was just initialized")
+            .send_paste_chord(mode);
+        if result.is_err() {
+            self.x11_paste = None;
+        }
+        result
+    }
+
+    #[cfg(not(target_os = "linux"))]
     fn paste_clipboard(&mut self, mode: PasteMode) -> Result<()> {
         let modifiers = paste_modifiers(mode);
         let mut failure = None;
+        let enigo = self.keyboard()?;
         for key in modifiers {
-            if let Err(e) = self.enigo.key(*key, Direction::Press) {
+            if let Err(e) = enigo.key(*key, Direction::Press) {
                 failure = Some(anyhow::anyhow!("enigo paste modifier press failed: {e:?}"));
                 break;
             }
         }
 
         if failure.is_none() {
-            failure = paste_key_click(&mut self.enigo)
+            failure = paste_key_click(enigo)
                 .err()
                 .map(|e| anyhow::anyhow!("enigo paste key failed: {e:?}"));
         }
 
         for key in modifiers.iter().rev() {
-            if let Err(e) = self.enigo.key(*key, Direction::Release) {
+            if let Err(e) = enigo.key(*key, Direction::Release) {
                 failure.get_or_insert_with(|| {
                     anyhow::anyhow!("enigo paste modifier release failed: {e:?}")
                 });
@@ -247,6 +280,16 @@ impl Injector {
             Some(err) => Err(err).context("could not send paste shortcut"),
             None => Ok(()),
         }
+    }
+
+    fn keyboard(&mut self) -> Result<&mut Enigo> {
+        if self.enigo.is_none() {
+            self.enigo = Some(
+                Enigo::new(&Settings::default())
+                    .map_err(|e| anyhow::anyhow!("failed to init enigo: {e:?}"))?,
+            );
+        }
+        Ok(self.enigo.as_mut().expect("enigo was just initialized"))
     }
 }
 
@@ -307,7 +350,16 @@ fn paste_modifiers(mode: PasteMode) -> &'static [Key] {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(all(test, target_os = "linux"))]
+fn paste_modifiers(mode: PasteMode) -> &'static [Key] {
+    match mode {
+        PasteMode::Standard => &[Key::Control],
+        PasteMode::Terminal => &[Key::Control, Key::Shift],
+        PasteMode::Direct => &[],
+    }
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 fn paste_modifiers(mode: PasteMode) -> &'static [Key] {
     match mode {
         PasteMode::Standard => &[Key::Control],
@@ -370,11 +422,6 @@ fn clipboard_restore_delay() -> Duration {
     }
 }
 
-#[cfg(target_os = "linux")]
-fn paste_key_click(_enigo: &mut Enigo) -> Result<()> {
-    linux_x11_click_v_key()
-}
-
 #[cfg(target_os = "windows")]
 fn paste_key_click(enigo: &mut Enigo) -> Result<()> {
     enigo
@@ -398,36 +445,119 @@ fn paste_key_click(enigo: &mut Enigo) -> Result<()> {
 }
 
 #[cfg(target_os = "linux")]
-fn linux_cached_v_keycode() -> Result<u8> {
-    static V_KEYCODE: OnceLock<Result<u8, String>> = OnceLock::new();
-    V_KEYCODE
-        .get_or_init(|| {
-            super::x11::keycode_for_keysym_on_default_display(super::x11::V_KEYSYM)
-                .map_err(|err| format!("{err:#}"))
-        })
-        .clone()
-        .map_err(anyhow::Error::msg)
+const CONTROL_L_KEYSYM: u32 = 0xffe3;
+#[cfg(target_os = "linux")]
+const SHIFT_L_KEYSYM: u32 = 0xffe1;
+
+#[cfg(target_os = "linux")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct X11KeyStep {
+    keysym: u32,
+    press: bool,
 }
 
 #[cfg(target_os = "linux")]
-fn linux_x11_click_v_key() -> Result<()> {
-    use x11rb::connection::Connection;
+struct LinuxX11Paste {
+    conn: x11rb::rust_connection::RustConnection,
+    root: u32,
+}
+
+#[cfg(target_os = "linux")]
+impl LinuxX11Paste {
+    fn open() -> Result<Self> {
+        use x11rb::rust_connection::RustConnection;
+
+        let (conn, screen_num) =
+            RustConnection::connect(None).context("could not connect to X11")?;
+        let root = super::x11::root_window(&conn, screen_num)?;
+        Ok(Self { conn, root })
+    }
+
+    fn send_paste_chord(&self, mode: PasteMode) -> Result<()> {
+        for step in linux_paste_chord_steps(mode) {
+            let keycode = linux_cached_keycode(step.keysym)?;
+            x11_fake_key(&self.conn, self.root, keycode, step.press)?;
+        }
+
+        self.conn
+            .flush()
+            .context("could not flush XTest paste chord")?;
+        Ok(())
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn linux_paste_chord_steps(mode: PasteMode) -> Vec<X11KeyStep> {
+    let mut steps = vec![X11KeyStep {
+        keysym: CONTROL_L_KEYSYM,
+        press: true,
+    }];
+    if mode == PasteMode::Terminal {
+        steps.push(X11KeyStep {
+            keysym: SHIFT_L_KEYSYM,
+            press: true,
+        });
+    }
+    steps.push(X11KeyStep {
+        keysym: super::x11::V_KEYSYM,
+        press: true,
+    });
+    steps.push(X11KeyStep {
+        keysym: super::x11::V_KEYSYM,
+        press: false,
+    });
+    if mode == PasteMode::Terminal {
+        steps.push(X11KeyStep {
+            keysym: SHIFT_L_KEYSYM,
+            press: false,
+        });
+    }
+    steps.push(X11KeyStep {
+        keysym: CONTROL_L_KEYSYM,
+        press: false,
+    });
+    steps
+}
+
+#[cfg(target_os = "linux")]
+fn linux_cached_keycode(keysym: u32) -> Result<u8> {
+    static KEYCODES: OnceLock<
+        std::sync::Mutex<std::collections::BTreeMap<u32, Result<u8, String>>>,
+    > = OnceLock::new();
+    let keycodes =
+        KEYCODES.get_or_init(|| std::sync::Mutex::new(std::collections::BTreeMap::new()));
+    let mut keycodes = keycodes
+        .lock()
+        .map_err(|_| anyhow::anyhow!("X11 keycode cache lock poisoned"))?;
+    if let Some(result) = keycodes.get(&keysym) {
+        return result.clone().map_err(anyhow::Error::msg);
+    }
+
+    let result =
+        super::x11::keycode_for_keysym_on_default_display(keysym).map_err(|err| format!("{err:#}"));
+    keycodes.insert(keysym, result.clone());
+    result.map_err(anyhow::Error::msg)
+}
+
+#[cfg(target_os = "linux")]
+fn x11_fake_key(
+    conn: &x11rb::rust_connection::RustConnection,
+    root: u32,
+    keycode: u8,
+    press: bool,
+) -> Result<()> {
     use x11rb::protocol::xproto::{KEY_PRESS_EVENT, KEY_RELEASE_EVENT};
     use x11rb::protocol::xtest::ConnectionExt as XtestConnectionExt;
-    use x11rb::rust_connection::RustConnection;
 
-    let keycode = linux_cached_v_keycode()?;
-    let (conn, screen_num) = RustConnection::connect(None).context("could not connect to X11")?;
-    let root = super::x11::root_window(&conn, screen_num)?;
-    conn.xtest_fake_input(KEY_PRESS_EVENT, keycode, 0, root, 0, 0, 0)
-        .context("could not send XTest key press")?
+    let event_type = if press {
+        KEY_PRESS_EVENT
+    } else {
+        KEY_RELEASE_EVENT
+    };
+    conn.xtest_fake_input(event_type, keycode, 0, root, 0, 0, 0)
+        .context("could not send XTest key event")?
         .check()
-        .context("X11 rejected XTest key press")?;
-    conn.xtest_fake_input(KEY_RELEASE_EVENT, keycode, 0, root, 0, 0, 0)
-        .context("could not send XTest key release")?
-        .check()
-        .context("X11 rejected XTest key release")?;
-    conn.flush().context("could not flush XTest paste key")?;
+        .context("X11 rejected XTest key event")?;
     Ok(())
 }
 
@@ -446,18 +576,13 @@ fn linux_x11_xtest_preflight() -> Result<()> {
 
 #[cfg(target_os = "linux")]
 fn linux_x11_paste_smoke_test(mode: PasteMode) -> Result<()> {
-    const XI_ALL_MASTER_DEVICES: u16 = 1;
-
     use x11rb::connection::Connection;
-    use x11rb::protocol::xinput::{
-        ConnectionExt as XinputConnectionExt, EventMask as XiEventMask, XIEventMask,
-    };
     use x11rb::protocol::xproto::{
         ConnectionExt, CreateWindowAux, EventMask, InputFocus, WindowClass,
     };
     use x11rb::rust_connection::RustConnection;
 
-    let v_keycode = linux_cached_v_keycode()?;
+    let v_keycode = linux_cached_keycode(super::x11::V_KEYSYM)?;
     let (conn, screen_num) = RustConnection::connect(None).context("could not connect to X11")?;
     let screen = super::x11::screen(&conn, screen_num)?;
     let previous_focus = conn
@@ -472,10 +597,6 @@ fn linux_x11_paste_smoke_test(mode: PasteMode) -> Result<()> {
         .background_pixel(screen.white_pixel)
         .override_redirect(1)
         .event_mask(EventMask::KEY_PRESS | EventMask::KEY_RELEASE);
-    let raw_key_mask = [XiEventMask {
-        deviceid: XI_ALL_MASTER_DEVICES,
-        mask: vec![XIEventMask::RAW_KEY_PRESS | XIEventMask::RAW_KEY_RELEASE],
-    }];
 
     conn.create_window(
         screen.root_depth,
@@ -501,10 +622,6 @@ fn linux_x11_paste_smoke_test(mode: PasteMode) -> Result<()> {
         .context("could not focus X11 smoke-test window")?
         .check()
         .context("X11 rejected smoke-test focus change")?;
-    conn.xinput_xi_select_events(screen.root, &raw_key_mask)
-        .context("could not subscribe to XInput raw key events")?
-        .check()
-        .context("X11 rejected XInput raw key event subscription")?;
     conn.flush()
         .context("could not flush X11 smoke-test setup")?;
     linux_wait_for_focus(&conn, window)?;
@@ -600,24 +717,6 @@ fn linux_wait_for_v_key_events(
                         saw_release = true;
                     }
                 }
-                Event::XinputRawKeyPress(event) => {
-                    observed.push(format!(
-                        "raw-press:detail={},device={},source={}",
-                        event.detail, event.deviceid, event.sourceid
-                    ));
-                    if event.detail == u32::from(v_keycode) {
-                        saw_press = true;
-                    }
-                }
-                Event::XinputRawKeyRelease(event) => {
-                    observed.push(format!(
-                        "raw-release:detail={},device={},source={}",
-                        event.detail, event.deviceid, event.sourceid
-                    ));
-                    if event.detail == u32::from(v_keycode) {
-                        saw_release = true;
-                    }
-                }
                 _ => {}
             }
         }
@@ -708,6 +807,67 @@ mod tests {
         assert_eq!(PasteMode::Terminal.label(), "terminal");
         assert_eq!(PasteMode::Standard.label(), "standard");
         assert_eq!(PasteMode::Direct.label(), "direct");
+    }
+
+    #[test]
+    fn linux_standard_paste_does_not_need_enigo() {
+        #[cfg(target_os = "linux")]
+        assert!(!insertion_needs_enigo(PasteMode::Standard));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_xtest_paste_chord_steps_are_ordered() {
+        assert_eq!(
+            linux_paste_chord_steps(PasteMode::Standard),
+            vec![
+                X11KeyStep {
+                    keysym: CONTROL_L_KEYSYM,
+                    press: true
+                },
+                X11KeyStep {
+                    keysym: crate::daemon::x11::V_KEYSYM,
+                    press: true
+                },
+                X11KeyStep {
+                    keysym: crate::daemon::x11::V_KEYSYM,
+                    press: false
+                },
+                X11KeyStep {
+                    keysym: CONTROL_L_KEYSYM,
+                    press: false
+                },
+            ]
+        );
+        assert_eq!(
+            linux_paste_chord_steps(PasteMode::Terminal),
+            vec![
+                X11KeyStep {
+                    keysym: CONTROL_L_KEYSYM,
+                    press: true
+                },
+                X11KeyStep {
+                    keysym: SHIFT_L_KEYSYM,
+                    press: true
+                },
+                X11KeyStep {
+                    keysym: crate::daemon::x11::V_KEYSYM,
+                    press: true
+                },
+                X11KeyStep {
+                    keysym: crate::daemon::x11::V_KEYSYM,
+                    press: false
+                },
+                X11KeyStep {
+                    keysym: SHIFT_L_KEYSYM,
+                    press: false
+                },
+                X11KeyStep {
+                    keysym: CONTROL_L_KEYSYM,
+                    press: false
+                },
+            ]
+        );
     }
 
     #[cfg(not(target_os = "macos"))]

@@ -22,8 +22,10 @@ use super::logging::Logger;
 
 pub use parakit::constants::TARGET_RATE;
 
-/// Reserves enough capacity for about 10 minutes of recording at 16 kHz.
-const PREALLOC_CAPACITY: usize = TARGET_RATE as usize * 60 * 10;
+/// Reusable capacity for ordinary dictation bursts.
+const RECORDING_CAPACITY: usize = TARGET_RATE as usize * 90;
+/// Hard cap for one held recording to prevent unbounded memory growth.
+const MAX_RECORDING_SAMPLES: usize = TARGET_RATE as usize * 60 * 5;
 const DEVICE_POLL_INTERVAL: Duration = Duration::from_secs(2);
 
 /// Send-Sync handle that worker threads use to control and read the buffer.
@@ -36,8 +38,13 @@ pub struct AudioHandle {
 impl AudioHandle {
     /// Clear the current buffer and begin appending microphone samples.
     pub fn start_recording(&self) {
-        self.buffer.lock().clear();
-        self.recording.store(true, Ordering::SeqCst);
+        let mut buf = self.buffer.lock();
+        let capacity = buf.capacity();
+        if capacity < RECORDING_CAPACITY {
+            buf.reserve_exact(RECORDING_CAPACITY - capacity);
+        }
+        buf.clear();
+        self.recording.store(true, Ordering::Release);
     }
 
     /// Stop recording and take ownership of the buffered samples.
@@ -46,37 +53,11 @@ impl AudioHandle {
     ///
     /// The captured mono PCM samples at [`TARGET_RATE`].
     pub fn stop_recording(&self) -> Vec<f32> {
-        self.recording.store(false, Ordering::SeqCst);
-        std::mem::take(&mut *self.buffer.lock())
-    }
-
-    /// Copy samples recorded after `from`.
-    ///
-    /// # Panics
-    ///
-    /// This function does not intentionally panic; the start index is checked
-    /// before slicing the buffer.
-    ///
-    /// # Returns
-    ///
-    /// A snapshot of the buffer from `from` onward, or an empty vector if
-    /// `from` is past the current end.
-    pub fn snapshot_from(&self, from: usize) -> Vec<f32> {
-        let buf = self.buffer.lock();
-        if from >= buf.len() {
-            Vec::new()
-        } else {
-            buf[from..].to_vec()
-        }
-    }
-
-    /// Return the number of samples currently held in the shared buffer.
-    ///
-    /// # Returns
-    ///
-    /// The current buffer length in samples at [`TARGET_RATE`].
-    pub fn len(&self) -> usize {
-        self.buffer.lock().len()
+        self.recording.store(false, Ordering::Release);
+        std::mem::replace(
+            &mut *self.buffer.lock(),
+            Vec::with_capacity(RECORDING_CAPACITY),
+        )
     }
 }
 
@@ -139,7 +120,7 @@ impl AudioCapture {
     ///
     /// Returns an error if no usable input device can be opened.
     pub fn open(log: Arc<Logger>) -> Result<Self> {
-        let buffer = Arc::new(Mutex::new(Vec::with_capacity(PREALLOC_CAPACITY)));
+        let buffer = Arc::new(Mutex::new(Vec::with_capacity(RECORDING_CAPACITY)));
         let recording = Arc::new(AtomicBool::new(false));
         let current = Arc::new(Mutex::new(None));
         let alive = Arc::new(AtomicBool::new(true));
@@ -242,12 +223,13 @@ fn audio_manager_loop(ctx: AudioManagerCtx) {
             continue;
         }
 
-        match selected_mic_info(&host) {
-            Ok(next) if next != live.info => {
+        match selected_mic_identity(&host) {
+            Ok(next) if next != live.identity => {
+                let next_info = mic_info_from_identity(&next);
                 ctx.log.verbose(format!(
                     "parakit: selected input changed from {} to {}",
                     live.info.summary(),
-                    next.summary()
+                    next_info.summary()
                 ));
                 drop(live);
                 live = reopen_until_success(&host, &ctx);
@@ -286,6 +268,7 @@ fn reopen_until_success(host: &cpal::Host, ctx: &AudioManagerCtx) -> LiveStream 
 
 struct LiveStream {
     info: MicInfo,
+    identity: MicIdentity,
     _stream: Stream,
 }
 
@@ -310,7 +293,9 @@ fn open_live_stream(
     stream_error: Arc<Mutex<Option<String>>>,
 ) -> Result<LiveStream> {
     let selected = select_input_device(host)?;
-    let info = mic_info_from_config(&selected.name, &selected.config, selected.is_default);
+    let identity = mic_identity_from_config(&selected.name, &selected.config);
+    let mut info = mic_info_from_identity(&identity);
+    enhance_mic_info(&mut info, selected.is_default);
 
     let hw_rate = selected.config.sample_rate().0;
     let channels = selected.config.channels() as usize;
@@ -396,6 +381,7 @@ fn open_live_stream(
     stream.play().context("stream.play() failed")?;
     Ok(LiveStream {
         info,
+        identity,
         _stream: stream,
     })
 }
@@ -423,6 +409,14 @@ struct SelectedInput {
     name: String,
     config: cpal::SupportedStreamConfig,
     is_default: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct MicIdentity {
+    name: String,
+    input_rate: u32,
+    channels: u16,
+    sample_format: String,
 }
 
 fn select_input_device(host: &cpal::Host) -> Result<SelectedInput> {
@@ -497,28 +491,34 @@ fn select_input_device(host: &cpal::Host) -> Result<SelectedInput> {
 
 fn selected_mic_info(host: &cpal::Host) -> Result<MicInfo> {
     let selected = select_input_device(host)?;
-    Ok(mic_info_from_config(
-        &selected.name,
-        &selected.config,
-        selected.is_default,
-    ))
+    let identity = mic_identity_from_config(&selected.name, &selected.config);
+    let mut info = mic_info_from_identity(&identity);
+    enhance_mic_info(&mut info, selected.is_default);
+    Ok(info)
 }
 
-fn mic_info_from_config(
-    name: &str,
-    config: &cpal::SupportedStreamConfig,
-    is_default: bool,
-) -> MicInfo {
-    let input_rate = config.sample_rate().0;
-    let mut info = MicInfo {
+fn selected_mic_identity(host: &cpal::Host) -> Result<MicIdentity> {
+    let selected = select_input_device(host)?;
+    Ok(mic_identity_from_config(&selected.name, &selected.config))
+}
+
+fn mic_identity_from_config(name: &str, config: &cpal::SupportedStreamConfig) -> MicIdentity {
+    MicIdentity {
         name: name.to_string(),
-        input_rate,
+        input_rate: config.sample_rate().0,
         channels: config.channels(),
         sample_format: format!("{:?}", config.sample_format()),
-        resampling: input_rate != TARGET_RATE,
-    };
-    enhance_mic_info(&mut info, is_default);
-    info
+    }
+}
+
+fn mic_info_from_identity(identity: &MicIdentity) -> MicInfo {
+    MicInfo {
+        name: identity.name.clone(),
+        input_rate: identity.input_rate,
+        channels: identity.channels,
+        sample_format: identity.sample_format.clone(),
+        resampling: identity.input_rate != TARGET_RATE,
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -753,7 +753,7 @@ where
                     return;
                 }
 
-                buffer.lock().extend_from_slice(to_push);
+                append_recording_samples(&buffer, to_push);
             },
             err_fn,
             None,
@@ -761,6 +761,17 @@ where
         .context("failed to build input stream")?;
 
     Ok(stream)
+}
+
+fn append_recording_samples(buffer: &Mutex<Vec<f32>>, samples: &[f32]) {
+    let mut buf = buffer.lock();
+    if buf.len() >= MAX_RECORDING_SAMPLES {
+        return;
+    }
+
+    let remaining = MAX_RECORDING_SAMPLES - buf.len();
+    let n = samples.len().min(remaining);
+    buf.extend_from_slice(&samples[..n]);
 }
 
 #[cfg(test)]
@@ -791,6 +802,35 @@ mod tests {
             mic.summary(),
             "RODE NT-USB+ Mono, 48000 Hz input -> 16000 Hz model, mono, F32"
         );
+    }
+
+    #[test]
+    fn audio_handle_reuses_recording_capacity_after_stop() {
+        let handle = AudioHandle {
+            buffer: Arc::new(Mutex::new(Vec::new())),
+            recording: Arc::new(AtomicBool::new(false)),
+        };
+
+        handle.start_recording();
+        {
+            let mut buffer = handle.buffer.lock();
+            assert!(buffer.capacity() >= RECORDING_CAPACITY);
+            buffer.extend_from_slice(&[0.25, -0.25]);
+        }
+
+        let pcm = handle.stop_recording();
+        assert_eq!(pcm, vec![0.25, -0.25]);
+        assert!(handle.buffer.lock().capacity() >= RECORDING_CAPACITY);
+    }
+
+    #[test]
+    fn append_recording_samples_honors_hard_cap() {
+        let buffer = Mutex::new(vec![0.0; MAX_RECORDING_SAMPLES - 1]);
+        append_recording_samples(&buffer, &[1.0, 2.0, 3.0]);
+
+        let buffer = buffer.lock();
+        assert_eq!(buffer.len(), MAX_RECORDING_SAMPLES);
+        assert_eq!(buffer[MAX_RECORDING_SAMPLES - 1], 1.0);
     }
 
     #[cfg(target_os = "linux")]

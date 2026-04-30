@@ -4,9 +4,14 @@ use anyhow::{bail, Result};
 use parakit::build_info;
 use std::fmt::Write as _;
 
+use super::hotkey::HotkeyBackend;
 use super::inject::{self, PasteMode};
 
 /// Run blocking daemon preflight checks before expensive startup work.
+///
+/// # Arguments
+///
+/// * `backend` - Selected hotkey backend to validate.
 ///
 /// # Returns
 ///
@@ -16,8 +21,8 @@ use super::inject::{self, PasteMode};
 ///
 /// Returns an actionable error when the global hotkey backend is known to be
 /// unavailable in the current desktop session.
-pub fn ensure_hotkey_ready() -> Result<()> {
-    let report = hotkey_report();
+pub fn ensure_hotkey_ready(backend: HotkeyBackend) -> Result<()> {
+    let report = startup_hotkey_report(backend);
     if report.blocking {
         bail!("{}", report.summary);
     }
@@ -31,25 +36,36 @@ pub fn ensure_hotkey_ready() -> Result<()> {
 /// * `verbose` - Print diagnostic details when true.
 /// * `paste_mode` - Insertion mode to validate.
 /// * `deep` - Run the platform insertion smoke test when true.
+/// * `backend` - Selected hotkey backend to validate.
 ///
 /// # Returns
 ///
 /// `true` when no blocking problem was detected.
-pub fn print_doctor(verbose: bool, paste_mode: PasteMode, deep: bool) -> bool {
-    let report = hotkey_report();
+pub fn print_doctor(
+    verbose: bool,
+    paste_mode: PasteMode,
+    deep: bool,
+    backend: HotkeyBackend,
+) -> bool {
+    let report = hotkey_report(backend);
+    let daemon_lock = singleton_lock_probe();
     let mic = super::audio::probe_default_input();
     let insertion = if deep {
         inject::smoke_test(paste_mode)
     } else {
         inject::preflight(paste_mode)
     };
-    let ok = !report.blocking && mic.is_ok() && insertion.is_ok();
+    let ok = !report.blocking && daemon_lock.is_ok() && mic.is_ok() && insertion.is_ok();
 
     if !verbose {
         return ok;
     }
 
     println!("{}", report.details.trim_end());
+    match &daemon_lock {
+        Ok(()) => println!("  daemon lock:   OK"),
+        Err(err) => println!("  daemon lock:   FAIL ({err:#})"),
+    }
     match &mic {
         Ok(mic) => {
             println!("  mic:            {}", mic.summary());
@@ -78,8 +94,155 @@ struct HotkeyReport {
     details: String,
 }
 
+#[cfg(not(target_os = "linux"))]
+fn startup_hotkey_report(backend: HotkeyBackend) -> HotkeyReport {
+    hotkey_report(backend)
+}
+
 #[cfg(target_os = "linux")]
-fn hotkey_report() -> HotkeyReport {
+/// Acquire the per-user daemon lock.
+///
+/// # Returns
+///
+/// An open lock file. Keep it alive for the daemon lifetime.
+///
+/// # Errors
+///
+/// Returns an error if the runtime directory cannot be created, the lock file
+/// cannot be opened, or another process already holds the lock.
+pub(crate) fn acquire_singleton_lock() -> Result<std::fs::File> {
+    acquire_singleton_lock_at(&singleton_lock_path())
+}
+
+#[cfg(target_os = "linux")]
+fn singleton_lock_probe() -> Result<()> {
+    let lock = acquire_singleton_lock()?;
+    drop(lock);
+    Ok(())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn singleton_lock_probe() -> Result<()> {
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn singleton_lock_path() -> std::path::PathBuf {
+    let runtime_dir = std::env::var_os("XDG_RUNTIME_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir);
+    runtime_dir.join("parakit").join("parakit.lock")
+}
+
+#[cfg(target_os = "linux")]
+fn acquire_singleton_lock_at(path: &std::path::Path) -> Result<std::fs::File> {
+    use anyhow::Context as _;
+    use std::fs::{create_dir_all, OpenOptions};
+    use std::os::fd::AsRawFd;
+
+    if let Some(parent) = path.parent() {
+        create_dir_all(parent)
+            .with_context(|| format!("create daemon lock dir {}", parent.display()))?;
+    }
+    let file = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(path)
+        .with_context(|| format!("open daemon lock {}", path.display()))?;
+
+    let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+    if rc != 0 {
+        bail!(
+            "another parakit daemon is already running or lock is held: {}",
+            path.display()
+        );
+    }
+
+    Ok(file)
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Clone, Copy, Debug)]
+struct LinuxHotkeyAvailability {
+    evdev_ready: bool,
+}
+
+#[cfg(target_os = "linux")]
+fn linux_hotkey_startup_blocked(
+    backend: HotkeyBackend,
+    availability: LinuxHotkeyAvailability,
+) -> bool {
+    match backend {
+        HotkeyBackend::Auto | HotkeyBackend::Evdev => !availability.evdev_ready,
+        HotkeyBackend::Desktop => true,
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn linux_hotkey_success_label(
+    backend: HotkeyBackend,
+    _availability: LinuxHotkeyAvailability,
+) -> &'static str {
+    match backend {
+        HotkeyBackend::Auto => "evdev backend",
+        HotkeyBackend::Evdev => "evdev backend",
+        HotkeyBackend::Desktop => unreachable!("desktop backend is disabled on Linux"),
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn startup_hotkey_report(backend: HotkeyBackend) -> HotkeyReport {
+    let session = std::env::var("XDG_SESSION_TYPE").unwrap_or_else(|_| "unknown".to_string());
+    let display = std::env::var("DISPLAY").unwrap_or_else(|_| "<unset>".to_string());
+    let xauthority = std::env::var("XAUTHORITY").unwrap_or_else(|_| "<unset>".to_string());
+    let user = std::env::var("USER").unwrap_or_else(|_| "$USER".to_string());
+    let evdev = evdev_report();
+    let evdev_ready = evdev.grab_likely_available();
+    let availability = LinuxHotkeyAvailability { evdev_ready };
+    let blocking = linux_hotkey_startup_blocked(backend, availability);
+
+    let summary = if blocking {
+        let mut summary = String::new();
+        writeln!(&mut summary, "hotkey preflight failed before model startup").unwrap();
+        writeln!(&mut summary, "selected backend: {}", backend.label()).unwrap();
+        writeln!(
+            &mut summary,
+            "session: XDG_SESSION_TYPE={session}, DISPLAY={display}, XAUTHORITY={xauthority}"
+        )
+        .unwrap();
+        if backend == HotkeyBackend::Desktop {
+            writeln!(
+                &mut summary,
+                "desktop backend: disabled in the Linux-stable path"
+            )
+            .unwrap();
+        }
+        writeln!(
+            &mut summary,
+            "evdev backend: {} device(s), {} readable, {} permission denied",
+            evdev.event_devices, evdev.readable, evdev.denied
+        )
+        .unwrap();
+        write_linux_fix(&mut summary, &user);
+        summary
+    } else {
+        format!(
+            "hotkey preflight passed with {}",
+            linux_hotkey_success_label(backend, availability)
+        )
+    };
+
+    HotkeyReport {
+        blocking,
+        details: summary.clone(),
+        summary,
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn hotkey_report(backend: HotkeyBackend) -> HotkeyReport {
     let session = std::env::var("XDG_SESSION_TYPE").unwrap_or_else(|_| "unknown".to_string());
     let display = std::env::var("DISPLAY").unwrap_or_else(|_| "<unset>".to_string());
     let xauthority = std::env::var("XAUTHORITY").unwrap_or_else(|_| "<unset>".to_string());
@@ -92,13 +255,8 @@ fn hotkey_report() -> HotkeyReport {
         Err("X11 desktop hotkey backend needs DISPLAY set and a non-Wayland session".to_string())
     };
     let evdev_ready = evdev.grab_likely_available();
-    let running_parakit = running_parakit_processes();
-    let x11_owned_by_parakit = x11_probe
-        .as_ref()
-        .err()
-        .is_some_and(|err| err.contains("XGrabKey rejected Ctrl+Space"))
-        && !running_parakit.is_empty();
-    let blocking = x11_probe.is_err() && !x11_owned_by_parakit && !evdev_ready;
+    let availability = LinuxHotkeyAvailability { evdev_ready };
+    let blocking = linux_hotkey_startup_blocked(backend, availability);
 
     let mut details = String::new();
     writeln!(&mut details, "parakit doctor").unwrap();
@@ -108,16 +266,15 @@ fn hotkey_report() -> HotkeyReport {
     )
     .unwrap();
     writeln!(&mut details, "  xauthority:     {xauthority}").unwrap();
-    writeln!(&mut details, "  desktop:        X11 desktop hotkey").unwrap();
+    writeln!(&mut details, "  selected:       {}", backend.label()).unwrap();
+    writeln!(
+        &mut details,
+        "  desktop:        disabled for Linux-stable hotkey capture"
+    )
+    .unwrap();
     match &x11_probe {
-        Ok(()) => writeln!(&mut details, "  desktop status: OK").unwrap(),
-        Err(_) if x11_owned_by_parakit => writeln!(
-            &mut details,
-            "  desktop status: OK (Ctrl+Space already owned by running parakit pid(s): {})",
-            format_pids(&running_parakit)
-        )
-        .unwrap(),
-        Err(err) => writeln!(&mut details, "  desktop status: unavailable ({err})").unwrap(),
+        Ok(()) => writeln!(&mut details, "  desktop probe:  X11 Ctrl+Space available").unwrap(),
+        Err(err) => writeln!(&mut details, "  desktop probe:  unavailable ({err})").unwrap(),
     }
     writeln!(
         &mut details,
@@ -140,23 +297,19 @@ fn hotkey_report() -> HotkeyReport {
 
     if blocking {
         writeln!(&mut details, "  status:         FAIL").unwrap();
+        if backend == HotkeyBackend::Desktop {
+            writeln!(
+                &mut details,
+                "  reason:         desktop backend is disabled in the Linux-stable path"
+            )
+            .unwrap();
+        }
         write_linux_fix(&mut details, &user);
     } else if evdev_ready {
         writeln!(
             &mut details,
-            "  status:         OK (evdev backend preferred)"
-        )
-        .unwrap();
-    } else if x11_owned_by_parakit {
-        writeln!(
-            &mut details,
-            "  status:         OK (running daemon owns desktop hotkey)"
-        )
-        .unwrap();
-    } else if x11_probe.is_ok() {
-        writeln!(
-            &mut details,
-            "  status:         OK (desktop hotkey backend)"
+            "  status:         OK ({})",
+            linux_hotkey_success_label(backend, availability)
         )
         .unwrap();
     }
@@ -164,6 +317,7 @@ fn hotkey_report() -> HotkeyReport {
     let summary = if blocking {
         let mut summary = String::new();
         writeln!(&mut summary, "hotkey preflight failed before model startup").unwrap();
+        writeln!(&mut summary, "selected backend: {}", backend.label()).unwrap();
         writeln!(
             &mut summary,
             "session: XDG_SESSION_TYPE={session}, DISPLAY={display}, XAUTHORITY={xauthority}"
@@ -171,11 +325,11 @@ fn hotkey_report() -> HotkeyReport {
         .unwrap();
         writeln!(
             &mut summary,
-            "desktop backend: {}",
+            "desktop backend: disabled in the Linux-stable path ({})",
             x11_probe
                 .as_ref()
-                .map(|_| "OK".to_string())
-                .unwrap_or_else(|err| format!("unavailable ({err})"))
+                .map(|_| "X11 probe available".to_string())
+                .unwrap_or_else(|err| format!("X11 probe unavailable: {err}"))
         )
         .unwrap();
         writeln!(
@@ -186,17 +340,13 @@ fn hotkey_report() -> HotkeyReport {
         .unwrap();
         write_linux_fix(&mut summary, &user);
         summary
-    } else if x11_owned_by_parakit {
-        format!(
-            "hotkey preflight skipped because running parakit pid(s) already own Ctrl+Space: {}",
-            format_pids(&running_parakit)
-        )
     } else if evdev_ready {
-        "hotkey preflight passed with evdev backend preferred".to_string()
-    } else if x11_probe.is_ok() {
-        "hotkey preflight passed with X11 desktop backend".to_string()
+        format!(
+            "hotkey preflight passed with {}",
+            linux_hotkey_success_label(backend, availability)
+        )
     } else {
-        unreachable!("non-blocking Linux hotkey report requires X11 or evdev readiness")
+        unreachable!("non-blocking Linux hotkey report requires evdev readiness")
     };
 
     HotkeyReport {
@@ -275,52 +425,6 @@ fn evdev_report() -> EvdevReport {
 }
 
 #[cfg(target_os = "linux")]
-fn running_parakit_processes() -> Vec<u32> {
-    use std::fs;
-    use std::path::Path;
-
-    let self_pid = std::process::id();
-    let mut pids = Vec::new();
-    let Ok(entries) = fs::read_dir("/proc") else {
-        return pids;
-    };
-
-    for entry in entries.flatten() {
-        let Some(pid) = entry
-            .file_name()
-            .to_str()
-            .and_then(|name| name.parse::<u32>().ok())
-        else {
-            continue;
-        };
-        if pid == self_pid {
-            continue;
-        }
-
-        let cmdline = fs::read(entry.path().join("cmdline")).unwrap_or_default();
-        let first_arg = cmdline.split(|byte| *byte == 0).next().unwrap_or_default();
-        let first_arg = String::from_utf8_lossy(first_arg);
-        let binary_name = Path::new(first_arg.as_ref())
-            .file_name()
-            .and_then(|name| name.to_str());
-        if binary_name == Some("parakit") {
-            pids.push(pid);
-        }
-    }
-
-    pids.sort_unstable();
-    pids
-}
-
-#[cfg(target_os = "linux")]
-fn format_pids(pids: &[u32]) -> String {
-    pids.iter()
-        .map(u32::to_string)
-        .collect::<Vec<_>>()
-        .join(", ")
-}
-
-#[cfg(target_os = "linux")]
 /// Return whether the current environment can plausibly use X11 hotkeys.
 ///
 /// # Returns
@@ -330,18 +434,6 @@ pub(crate) fn linux_x11_desktop_hotkey_candidate() -> bool {
     let session = std::env::var("XDG_SESSION_TYPE").unwrap_or_default();
     let display = std::env::var("DISPLAY").unwrap_or_default();
     !display.is_empty() && (session.is_empty() || session.eq_ignore_ascii_case("x11"))
-}
-
-#[cfg(target_os = "linux")]
-/// Return whether the rdev evdev fallback is likely able to grab every input
-/// device.
-///
-/// # Returns
-///
-/// `true` when `/dev/input/event*` devices exist and none fail with permission
-/// or other open errors.
-pub(crate) fn linux_evdev_fallback_available() -> bool {
-    evdev_report().grab_likely_available()
 }
 
 #[cfg(target_os = "linux")]
@@ -386,13 +478,13 @@ fn probe_x11_desktop_hotkey() -> std::result::Result<(), String> {
 fn write_linux_fix(out: &mut String, user: &str) {
     writeln!(
         out,
-        "fix:\n  - Preferred: use an Xorg/X11 session and make sure Ctrl+Space is not already bound by the desktop or input method.\n  - If this happened after GNOME logout/login, restart tmux, terminals, and user services from the new desktop session so DISPLAY/XAUTHORITY are fresh.\n  - Session-stable path: grant the desktop user read access to /dev/input/event*:\n      sudo usermod -aG input {user}\n  - After changing groups, log out completely and log back in, or reboot.\n  - Verify the fresh session:\n      id -nG | tr ' ' '\\n' | grep '^input$'\n  - Then run: parakit --hotkey-backend evdev\n  - Do not run parakit with sudo as the normal workaround."
+        "fix:\n  - Grant the desktop user read access to /dev/input/event*:\n      sudo usermod -aG input {user}\n  - After changing groups, log out completely and log back in, or reboot.\n  - Verify the fresh session:\n      id -nG | tr ' ' '\\n' | grep '^input$'\n  - Then run: parakit --hotkey-backend evdev\n  - Do not run parakit with sudo; audio, clipboard, and insertion belong to the desktop user.\n  - The Linux desktop hotkey backend is disabled until it is replaced by global-hotkey or the XDG portal."
     )
     .unwrap();
 }
 
 #[cfg(target_os = "macos")]
-fn hotkey_report() -> HotkeyReport {
+fn hotkey_report(_backend: HotkeyBackend) -> HotkeyReport {
     let details = "parakit doctor\n  hotkey backend: rdev::grab\n  status:         manual check\n  fix: grant Accessibility and Input Monitoring permissions to both the terminal and the parakit binary.".to_string();
     HotkeyReport {
         blocking: false,
@@ -402,7 +494,7 @@ fn hotkey_report() -> HotkeyReport {
 }
 
 #[cfg(target_os = "windows")]
-fn hotkey_report() -> HotkeyReport {
+fn hotkey_report(_backend: HotkeyBackend) -> HotkeyReport {
     let details = "parakit doctor\n  hotkey backend: rdev::grab\n  status:         OK unless security software blocks the binary.".to_string();
     HotkeyReport {
         blocking: false,
@@ -412,11 +504,76 @@ fn hotkey_report() -> HotkeyReport {
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-fn hotkey_report() -> HotkeyReport {
+fn hotkey_report(_backend: HotkeyBackend) -> HotkeyReport {
     let details = "parakit doctor\n  hotkey backend: rdev::grab\n  status:         unsupported platform preflight".to_string();
     HotkeyReport {
         blocking: false,
         summary: details.clone(),
         details,
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn availability(evdev_ready: bool) -> LinuxHotkeyAvailability {
+        LinuxHotkeyAvailability { evdev_ready }
+    }
+
+    #[test]
+    fn auto_requires_evdev_readiness() {
+        assert!(!linux_hotkey_startup_blocked(
+            HotkeyBackend::Auto,
+            availability(true)
+        ));
+        assert!(linux_hotkey_startup_blocked(
+            HotkeyBackend::Auto,
+            availability(false)
+        ));
+    }
+
+    #[test]
+    fn forced_evdev_requires_evdev_readiness() {
+        assert!(!linux_hotkey_startup_blocked(
+            HotkeyBackend::Evdev,
+            availability(true)
+        ));
+        assert!(linux_hotkey_startup_blocked(
+            HotkeyBackend::Evdev,
+            availability(false)
+        ));
+    }
+
+    #[test]
+    fn forced_desktop_is_disabled() {
+        assert!(linux_hotkey_startup_blocked(
+            HotkeyBackend::Desktop,
+            availability(true)
+        ));
+        assert!(linux_hotkey_startup_blocked(
+            HotkeyBackend::Desktop,
+            availability(false)
+        ));
+    }
+
+    #[test]
+    fn singleton_lock_blocks_second_holder() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock before UNIX epoch")
+            .as_nanos();
+        let path = std::path::PathBuf::from(format!(
+            "target/tmp/parakit-lock-test-{}-{unique}/parakit.lock",
+            std::process::id()
+        ));
+
+        let first = acquire_singleton_lock_at(&path).expect("first lock should succeed");
+        let second = acquire_singleton_lock_at(&path);
+        assert!(second.is_err());
+        drop(first);
+        let third = acquire_singleton_lock_at(&path).expect("lock should release after drop");
+        drop(third);
     }
 }
