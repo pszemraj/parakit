@@ -1,9 +1,8 @@
 //! Push-to-talk hotkey backends.
 //!
-//! Linux/X11 first uses a desktop hotkey registration. That avoids direct
-//! `/dev/input` access on ordinary desktop sessions. The low-level rdev grab
-//! remains as a fallback because it can intercept before applications receive
-//! events, but on Linux it requires explicit evdev permissions.
+//! Linux `auto` uses the low-level rdev evdev grab when all input devices are
+//! readable; otherwise it uses a desktop X11 hotkey registration. evdev is more
+//! resilient across desktop session churn, but requires explicit permissions.
 
 use super::audio::AudioHandle;
 use crate::Event_;
@@ -20,6 +19,19 @@ static SPACE_HELD: AtomicBool = AtomicBool::new(false);
 
 #[cfg(target_os = "linux")]
 const X11_HOTKEY_REFRESH: std::time::Duration = std::time::Duration::from_secs(5);
+#[cfg(target_os = "linux")]
+const X11_HOTKEY_REFRESH_FAILURE_LIMIT: u32 = 3;
+
+/// Hotkey backend preference.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, clap::ValueEnum)]
+pub(crate) enum HotkeyBackend {
+    /// Prefer the most stable available backend.
+    Auto,
+    /// Force the X11 desktop hotkey backend.
+    Desktop,
+    /// Force the low-level evdev grab backend.
+    Evdev,
+}
 
 /// Run the platform hotkey loop until the process exits.
 ///
@@ -27,10 +39,30 @@ const X11_HOTKEY_REFRESH: std::time::Duration = std::time::Duration::from_secs(5
 ///
 /// * `tx` - Worker event channel used to post start and stop events.
 /// * `audio` - Audio capture handle toggled by the hotkey state.
+/// * `backend` - Linux backend preference.
 #[cfg(target_os = "linux")]
-pub(crate) fn run_grab_loop(tx: Sender<Event_>, audio: AudioHandle) {
+pub(crate) fn run_grab_loop(tx: Sender<Event_>, audio: AudioHandle, backend: HotkeyBackend) {
     let _ = GRAB_TX.set(tx);
     let _ = GRAB_AUDIO.set(audio);
+
+    match backend {
+        HotkeyBackend::Auto => run_auto_hotkey_loop(),
+        HotkeyBackend::Desktop => run_desktop_hotkey_loop_or_exit(),
+        HotkeyBackend::Evdev => run_evdev_grab_loop_or_exit(),
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn run_auto_hotkey_loop() {
+    if super::preflight::linux_evdev_fallback_available() {
+        match rdev::grab(grab_callback) {
+            Ok(()) => return,
+            Err(err) => {
+                eprintln!("parakit: rdev evdev grab failed: {err:?}");
+                eprintln!("parakit: trying X11 desktop hotkey backend");
+            }
+        }
+    }
 
     if super::preflight::linux_x11_desktop_hotkey_candidate() {
         match run_x11_desktop_hotkey_loop() {
@@ -46,6 +78,25 @@ pub(crate) fn run_grab_loop(tx: Sender<Event_>, audio: AudioHandle) {
         }
     }
 
+    run_evdev_grab_loop_or_exit();
+}
+
+#[cfg(target_os = "linux")]
+fn run_desktop_hotkey_loop_or_exit() {
+    if !super::preflight::linux_x11_desktop_hotkey_candidate() {
+        eprintln!("{}", linux_no_hotkey_backend_help());
+        std::process::exit(2);
+    }
+
+    if let Err(err) = run_x11_desktop_hotkey_loop() {
+        eprintln!("parakit: X11 desktop hotkey backend failed: {err:#}");
+        eprintln!("{}", linux_no_hotkey_backend_help());
+        std::process::exit(2);
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn run_evdev_grab_loop_or_exit() {
     if let Err(e) = rdev::grab(grab_callback) {
         eprintln!("parakit: rdev::grab failed: {e:?}\n{}", grab_failure_help());
         std::process::exit(2);
@@ -58,8 +109,9 @@ pub(crate) fn run_grab_loop(tx: Sender<Event_>, audio: AudioHandle) {
 ///
 /// * `tx` - Worker event channel used to post start and stop events.
 /// * `audio` - Audio capture handle toggled by the hotkey state.
+/// * `_backend` - Ignored backend preference on platforms with one backend.
 #[cfg(not(target_os = "linux"))]
-pub(crate) fn run_grab_loop(tx: Sender<Event_>, audio: AudioHandle) {
+pub(crate) fn run_grab_loop(tx: Sender<Event_>, audio: AudioHandle, _backend: HotkeyBackend) {
     let _ = GRAB_TX.set(tx);
     let _ = GRAB_AUDIO.set(audio);
 
@@ -115,6 +167,7 @@ fn run_x11_desktop_hotkey_loop() -> anyhow::Result<()> {
     let mut backend = X11HotkeyBackend::new()?;
     let receiver = GlobalHotKeyEvent::receiver();
     let mut next_refresh = Instant::now() + X11_HOTKEY_REFRESH;
+    let mut refresh_failures = 0_u32;
 
     loop {
         let timeout = next_refresh
@@ -127,6 +180,7 @@ fn run_x11_desktop_hotkey_loop() -> anyhow::Result<()> {
                     continue;
                 }
 
+                refresh_failures = 0;
                 match event.state {
                     HotKeyState::Pressed => {
                         CTRL_HELD.store(true, Ordering::SeqCst);
@@ -145,7 +199,18 @@ fn run_x11_desktop_hotkey_loop() -> anyhow::Result<()> {
             Err(RecvTimeoutError::Timeout) => {
                 next_refresh = Instant::now() + X11_HOTKEY_REFRESH;
                 if !SPACE_HELD.load(Ordering::SeqCst) {
-                    let _ = backend.refresh();
+                    match backend.refresh() {
+                        Ok(()) => refresh_failures = 0,
+                        Err(err) => {
+                            reset_hotkey_state_after_backend_loss();
+                            refresh_failures += 1;
+                            if refresh_failures >= X11_HOTKEY_REFRESH_FAILURE_LIMIT {
+                                return Err(err).context(
+                                    "X11 hotkey refresh failed repeatedly after desktop/session churn",
+                                );
+                            }
+                        }
+                    }
                 }
             }
             Err(RecvTimeoutError::Disconnected) => {
@@ -222,6 +287,14 @@ fn start_hotkey_recording() {
 fn stop_hotkey_recording() {
     if let Some(tx) = GRAB_TX.get() {
         let _ = tx.send(Event_::Stop);
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn reset_hotkey_state_after_backend_loss() {
+    CTRL_HELD.store(false, Ordering::SeqCst);
+    if SPACE_HELD.swap(false, Ordering::SeqCst) {
+        stop_hotkey_recording();
     }
 }
 

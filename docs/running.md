@@ -33,6 +33,14 @@ parakit --verbose
 parakit --threads 8 --verbose
 ```
 
+On Linux, `--hotkey-backend auto` uses evdev first only when all input devices
+are readable; otherwise it uses the X11 desktop hotkey. Use evdev explicitly
+when the daemon must survive desktop logout/login churn:
+
+```bash
+parakit --hotkey-backend evdev
+```
+
 ## Background Use
 
 ```bash

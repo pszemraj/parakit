@@ -16,9 +16,8 @@
 //! In streaming mode there's an additional periodic Tick that sends partial
 //! chunks to the worker while recording is active.
 //!
-//! On Linux/X11 the daemon uses a desktop hotkey registration first. The
-//! low-level rdev grab remains as a fallback for sessions that explicitly
-//! grant evdev input access.
+//! On Linux, `auto` uses the low-level rdev grab when evdev permissions are
+//! complete; otherwise it uses a desktop X11 hotkey registration.
 
 mod daemon;
 
@@ -42,6 +41,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::daemon::audio::{AudioCapture, AudioHandle, TARGET_RATE};
+use crate::daemon::hotkey::HotkeyBackend;
 use crate::daemon::inject::{Injector, PasteMode};
 use crate::daemon::logging::{BannerInfo, LogLevel, Logger};
 use crate::daemon::sounds::Sounds;
@@ -116,6 +116,13 @@ struct Cli {
     /// keymap in main.)
     #[arg(long, default_value = "ctrl+space", hide = true)]
     hotkey: String,
+
+    /// Linux hotkey backend. `auto` prefers evdev when all input devices are
+    /// readable because it survives desktop session churn; otherwise it uses
+    /// the X11 desktop hotkey.
+    #[cfg(target_os = "linux")]
+    #[arg(long, value_enum, default_value_t = HotkeyBackend::Auto)]
+    hotkey_backend: HotkeyBackend,
 
     /// Directory for transcription logs. One file is written per local day.
     #[arg(long, value_name = "DIR")]
@@ -369,7 +376,11 @@ fn run() -> Result<()> {
     // Hotkey grab loop. Blocks forever (until grab returns or process exits).
     log.ready();
 
-    daemon::hotkey::run_grab_loop(tx, audio);
+    #[cfg(target_os = "linux")]
+    let hotkey_backend = cli.hotkey_backend;
+    #[cfg(not(target_os = "linux"))]
+    let hotkey_backend = HotkeyBackend::Auto;
+    daemon::hotkey::run_grab_loop(tx, audio, hotkey_backend);
 
     // Tear down.
     if let Some(t) = streaming_thread {

@@ -11,22 +11,24 @@ the model.
 
 ## Hotkey Problems
 
-On Linux, the preferred path is the X11 desktop hotkey backend. Wayland usually
-blocks global hotkeys and synthetic input for regular client applications.
+On Linux, `auto` uses evdev when all input devices are readable; otherwise it
+uses the X11 desktop hotkey backend. Wayland usually blocks global hotkeys and
+synthetic input for regular client applications.
 
-Healthy X11 output looks like:
+Healthy X11 output without evdev access looks like:
 
 ```text
-primary:        X11 desktop hotkey
-primary status: OK
+desktop:        X11 desktop hotkey
+desktop status: OK
+evdev:          rdev grab (partial permissions)
 status:         OK (desktop hotkey backend)
 ```
 
 If `Ctrl+Space` is unavailable, another desktop shortcut or input method may
 own it. Disable that binding and rerun `parakit doctor`.
 
-If parakit must use the low-level evdev fallback, grant input access and start a
-new login session:
+If parakit must use the low-level evdev backend, every `/dev/input/event*`
+device needs to be readable by the desktop user:
 
 ```bash
 sudo usermod -aG input "$USER"
@@ -37,9 +39,17 @@ Log out and back in, or reboot. Restart tmux and terminals that were open before
 the group change. Avoid running parakit with `sudo`; audio, X11, and text
 insertion usually belong to the regular desktop user.
 
-If the hotkey stops after lock/unlock, parakit should refresh the X11
-registration within a few seconds. If it does not, rerun with `--verbose` and
-check whether `Ctrl+Space` became owned by the desktop or input method.
+The X11 desktop backend is tied to the current desktop session. parakit
+refreshes the registration while idle and exits with an error if the refresh
+keeps failing instead of staying alive with a dead shortcut. For a daemon that
+must survive GNOME logout/login churn, grant evdev access and run:
+
+```bash
+parakit --hotkey-backend evdev
+```
+
+`auto` uses evdev first when the full evdev grab appears usable, otherwise it
+uses the X11 desktop backend.
 
 On macOS, grant Accessibility and Input Monitoring permissions to both the
 terminal and the built binary.

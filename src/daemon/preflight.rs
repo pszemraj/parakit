@@ -70,8 +70,8 @@ fn hotkey_report() -> HotkeyReport {
     } else {
         Err("X11 desktop hotkey backend needs DISPLAY set and a non-Wayland session".to_string())
     };
-    let evdev_available = evdev.readable > 0;
-    let blocking = x11_probe.is_err() && !evdev_available;
+    let evdev_ready = evdev.grab_likely_available();
+    let blocking = x11_probe.is_err() && !evdev_ready;
 
     let mut details = String::new();
     writeln!(&mut details, "parakit doctor").unwrap();
@@ -80,12 +80,17 @@ fn hotkey_report() -> HotkeyReport {
         "  session:        XDG_SESSION_TYPE={session}, DISPLAY={display}"
     )
     .unwrap();
-    writeln!(&mut details, "  primary:        X11 desktop hotkey").unwrap();
+    writeln!(&mut details, "  desktop:        X11 desktop hotkey").unwrap();
     match &x11_probe {
-        Ok(()) => writeln!(&mut details, "  primary status: OK").unwrap(),
-        Err(err) => writeln!(&mut details, "  primary status: unavailable ({err})").unwrap(),
+        Ok(()) => writeln!(&mut details, "  desktop status: OK").unwrap(),
+        Err(err) => writeln!(&mut details, "  desktop status: unavailable ({err})").unwrap(),
     }
-    writeln!(&mut details, "  fallback:       rdev evdev grab").unwrap();
+    writeln!(
+        &mut details,
+        "  evdev:          rdev grab ({})",
+        evdev.status_label()
+    )
+    .unwrap();
     writeln!(
         &mut details,
         "  input devices:  {} event device(s), {} readable, {} permission denied",
@@ -102,6 +107,12 @@ fn hotkey_report() -> HotkeyReport {
     if blocking {
         writeln!(&mut details, "  status:         FAIL").unwrap();
         write_linux_fix(&mut details, &user);
+    } else if evdev_ready {
+        writeln!(
+            &mut details,
+            "  status:         OK (evdev backend preferred)"
+        )
+        .unwrap();
     } else if x11_probe.is_ok() {
         writeln!(
             &mut details,
@@ -109,7 +120,11 @@ fn hotkey_report() -> HotkeyReport {
         )
         .unwrap();
     } else {
-        writeln!(&mut details, "  status:         OK (evdev fallback)").unwrap();
+        writeln!(
+            &mut details,
+            "  status:         OK (desktop hotkey backend; evdev fallback incomplete)"
+        )
+        .unwrap();
     }
 
     let summary = if blocking {
@@ -122,7 +137,7 @@ fn hotkey_report() -> HotkeyReport {
         .unwrap();
         writeln!(
             &mut summary,
-            "primary backend: {}",
+            "desktop backend: {}",
             x11_probe
                 .as_ref()
                 .map(|_| "OK".to_string())
@@ -131,16 +146,18 @@ fn hotkey_report() -> HotkeyReport {
         .unwrap();
         writeln!(
             &mut summary,
-            "evdev fallback: {} device(s), {} readable, {} permission denied",
+            "evdev backend: {} device(s), {} readable, {} permission denied",
             evdev.event_devices, evdev.readable, evdev.denied
         )
         .unwrap();
         write_linux_fix(&mut summary, &user);
         summary
+    } else if evdev_ready {
+        "hotkey preflight passed with evdev backend preferred".to_string()
     } else if x11_probe.is_ok() {
         "hotkey preflight passed with X11 desktop backend".to_string()
     } else {
-        "hotkey preflight passed with evdev fallback".to_string()
+        "hotkey preflight passed with X11 desktop backend; evdev fallback is incomplete".to_string()
     };
 
     HotkeyReport {
@@ -156,6 +173,23 @@ struct EvdevReport {
     readable: usize,
     denied: usize,
     other_errors: Vec<String>,
+}
+
+#[cfg(target_os = "linux")]
+impl EvdevReport {
+    fn grab_likely_available(&self) -> bool {
+        self.event_devices > 0 && self.denied == 0 && self.other_errors.is_empty()
+    }
+
+    fn status_label(&self) -> &'static str {
+        if self.grab_likely_available() {
+            "ready"
+        } else if self.readable > 0 {
+            "partial permissions"
+        } else {
+            "unavailable"
+        }
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -214,13 +248,15 @@ pub(crate) fn linux_x11_desktop_hotkey_candidate() -> bool {
 }
 
 #[cfg(target_os = "linux")]
-/// Return whether the rdev evdev fallback can open at least one event device.
+/// Return whether the rdev evdev fallback is likely able to grab every input
+/// device.
 ///
 /// # Returns
 ///
-/// `true` when at least one `/dev/input/event*` device can be opened.
+/// `true` when `/dev/input/event*` devices exist and none fail with permission
+/// or other open errors.
 pub(crate) fn linux_evdev_fallback_available() -> bool {
-    evdev_report().readable > 0
+    evdev_report().grab_likely_available()
 }
 
 #[cfg(target_os = "linux")]

@@ -129,6 +129,9 @@ parakit cache dir
 parakit --verbose
 parakit --threads 8 --verbose
 
+# Linux: force the session-stable evdev hotkey backend.
+parakit --hotkey-backend evdev
+
 # Run with transcription logging.
 parakit --log-dir ~/.parakit/logs
 parakit --log-dir ~/.parakit/logs --log-format tsv

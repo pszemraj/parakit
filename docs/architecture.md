@@ -38,10 +38,10 @@ final stop event transcribes only the unconsumed tail.
   its own thread.
 - `crispasr::Session` is `Send` but not `Sync`, so the worker owns `Engine`
   directly. Do not wrap it in `Arc<Engine>`.
-- Linux/X11 uses a desktop hotkey registration first. `rdev::grab` remains as
-  the evdev fallback.
-- The X11 hotkey backend refreshes while idle so lock/unlock transitions can
-  recover.
+- Linux `auto` uses the evdev backend first when all input devices are readable;
+  otherwise it uses an X11 desktop hotkey registration.
+- The X11 hotkey backend refreshes while idle and fails over instead of staying
+  alive with a dead shortcut after desktop session churn.
 - The active hotkey backend must suppress the literal Space key before it
   reaches the focused application.
 
