@@ -11,11 +11,10 @@ use parakit::gguf;
 use parakit::inference::default_thread_count;
 use parakit::inference::Engine;
 use parakit::model;
-use parakit::rules::{self, Cleaner};
+use parakit::rules;
 use rubato::{
     Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction,
 };
-use std::collections::HashSet;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -54,15 +53,7 @@ struct Cli {
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    let disabled: HashSet<String> = cli.disable_rule.iter().cloned().collect();
-    for name in &cli.disable_rule {
-        rules::assert_rule_name_exists(name)?;
-    }
-    let cleaner = if cli.no_cleaning {
-        None
-    } else {
-        Some(Cleaner::new(&disabled)?)
-    };
+    let cleaner = rules::build_cleaner(cli.no_cleaning, &cli.disable_rule)?;
 
     let mut wav = read_wav_mono(&cli.audio)?;
     let original_rate = wav.sample_rate;

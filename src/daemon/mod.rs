@@ -13,3 +13,6 @@ pub(crate) mod logging;
 pub(crate) mod preflight;
 /// Generated start/success/error sound cues.
 pub(crate) mod sounds;
+/// Shared X11 helpers for Linux desktop hotkeys and insertion checks.
+#[cfg(target_os = "linux")]
+pub(crate) mod x11;

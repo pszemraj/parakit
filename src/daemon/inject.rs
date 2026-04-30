@@ -300,8 +300,11 @@ fn sleep_if_nonzero(delay: Duration) {
 }
 
 #[cfg(target_os = "macos")]
-fn paste_modifiers(_mode: PasteMode) -> &'static [Key] {
-    &[Key::Meta]
+fn paste_modifiers(mode: PasteMode) -> &'static [Key] {
+    match mode {
+        PasteMode::Standard | PasteMode::Terminal => &[Key::Meta],
+        PasteMode::Direct => &[],
+    }
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -369,7 +372,7 @@ fn clipboard_restore_delay() -> Duration {
 
 #[cfg(target_os = "linux")]
 fn paste_key_click(_enigo: &mut Enigo) -> Result<()> {
-    linux_x11_click_keysym(b'v' as u32)
+    linux_x11_click_v_key()
 }
 
 #[cfg(target_os = "windows")]
@@ -395,56 +398,27 @@ fn paste_key_click(enigo: &mut Enigo) -> Result<()> {
 }
 
 #[cfg(target_os = "linux")]
-fn linux_cached_keycode_for_keysym(keysym: u32) -> Result<u8> {
+fn linux_cached_v_keycode() -> Result<u8> {
     static V_KEYCODE: OnceLock<Result<u8, String>> = OnceLock::new();
     V_KEYCODE
-        .get_or_init(|| linux_keycode_for_keysym(keysym).map_err(|err| format!("{err:#}")))
+        .get_or_init(|| {
+            super::x11::keycode_for_keysym_on_default_display(super::x11::V_KEYSYM)
+                .map_err(|err| format!("{err:#}"))
+        })
         .clone()
         .map_err(anyhow::Error::msg)
 }
 
 #[cfg(target_os = "linux")]
-fn linux_keycode_for_keysym(keysym: u32) -> Result<u8> {
-    use x11rb::connection::Connection;
-    use x11rb::protocol::xproto::ConnectionExt;
-    use x11rb::rust_connection::RustConnection;
-
-    let (conn, _) = RustConnection::connect(None).context("could not connect to X11")?;
-    let setup = conn.setup();
-    let min_keycode = setup.min_keycode;
-    let max_keycode = setup.max_keycode;
-    let count = max_keycode - min_keycode + 1;
-    let mapping = conn
-        .get_keyboard_mapping(min_keycode, count)
-        .context("could not request X11 keyboard mapping")?
-        .reply()
-        .context("could not read X11 keyboard mapping")?;
-    let keysyms_per_keycode = mapping.keysyms_per_keycode as usize;
-
-    for (offset, keysyms) in mapping.keysyms.chunks(keysyms_per_keycode).enumerate() {
-        if keysyms.contains(&keysym) {
-            return Ok(min_keycode + offset as u8);
-        }
-    }
-
-    anyhow::bail!("could not map X11 keysym {keysym} to a keycode")
-}
-
-#[cfg(target_os = "linux")]
-fn linux_x11_click_keysym(keysym: u32) -> Result<()> {
+fn linux_x11_click_v_key() -> Result<()> {
     use x11rb::connection::Connection;
     use x11rb::protocol::xproto::{KEY_PRESS_EVENT, KEY_RELEASE_EVENT};
     use x11rb::protocol::xtest::ConnectionExt as XtestConnectionExt;
     use x11rb::rust_connection::RustConnection;
 
-    let keycode = linux_cached_keycode_for_keysym(keysym)?;
+    let keycode = linux_cached_v_keycode()?;
     let (conn, screen_num) = RustConnection::connect(None).context("could not connect to X11")?;
-    let root = conn
-        .setup()
-        .roots
-        .get(screen_num)
-        .ok_or_else(|| anyhow::anyhow!("X11 display did not expose the requested screen"))?
-        .root;
+    let root = super::x11::root_window(&conn, screen_num)?;
     conn.xtest_fake_input(KEY_PRESS_EVENT, keycode, 0, root, 0, 0, 0)
         .context("could not send XTest key press")?
         .check()
@@ -483,13 +457,9 @@ fn linux_x11_paste_smoke_test(mode: PasteMode) -> Result<()> {
     };
     use x11rb::rust_connection::RustConnection;
 
-    let v_keycode = linux_cached_keycode_for_keysym(b'v' as u32)?;
+    let v_keycode = linux_cached_v_keycode()?;
     let (conn, screen_num) = RustConnection::connect(None).context("could not connect to X11")?;
-    let screen = conn
-        .setup()
-        .roots
-        .get(screen_num)
-        .ok_or_else(|| anyhow::anyhow!("X11 display did not expose the requested screen"))?;
+    let screen = super::x11::screen(&conn, screen_num)?;
     let previous_focus = conn
         .get_input_focus()
         .context("could not request current X11 input focus")?
@@ -549,7 +519,7 @@ fn linux_x11_paste_smoke_test(mode: PasteMode) -> Result<()> {
         injector
             .paste_clipboard(mode)
             .context("configured paste shortcut failed during smoke test")?;
-        linux_wait_for_v_key_events(&conn, window, v_keycode, true)
+        linux_wait_for_v_key_events(&conn, window, v_keycode)
     })();
 
     let cleanup_result = (|| {
@@ -597,7 +567,6 @@ fn linux_wait_for_v_key_events(
     conn: &x11rb::rust_connection::RustConnection,
     window: u32,
     v_keycode: u8,
-    accept_raw: bool,
 ) -> Result<()> {
     use x11rb::connection::Connection;
     use x11rb::protocol::Event;
@@ -636,7 +605,7 @@ fn linux_wait_for_v_key_events(
                         "raw-press:detail={},device={},source={}",
                         event.detail, event.deviceid, event.sourceid
                     ));
-                    if accept_raw && event.detail == u32::from(v_keycode) {
+                    if event.detail == u32::from(v_keycode) {
                         saw_press = true;
                     }
                 }
@@ -645,7 +614,7 @@ fn linux_wait_for_v_key_events(
                         "raw-release:detail={},device={},source={}",
                         event.detail, event.deviceid, event.sourceid
                     ));
-                    if accept_raw && event.detail == u32::from(v_keycode) {
+                    if event.detail == u32::from(v_keycode) {
                         saw_release = true;
                     }
                 }

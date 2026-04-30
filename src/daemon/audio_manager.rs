@@ -171,10 +171,9 @@ impl AudioCapture {
             })
             .context("spawn audio manager")?;
 
-        let first = ready_rx
+        ready_rx
             .recv()
             .context("audio manager stopped before reporting startup")??;
-        *current.lock() = Some(first);
 
         Ok(Self {
             handle,
@@ -219,8 +218,8 @@ fn audio_manager_loop(ctx: AudioManagerCtx) {
         Arc::clone(&ctx.stream_error),
     ) {
         Ok(live) => {
-            let _ = ctx.ready.send(Ok(live.info.clone()));
             *ctx.current.lock() = Some(live.info.clone());
+            let _ = ctx.ready.send(Ok(live.info.clone()));
             live
         }
         Err(err) => {

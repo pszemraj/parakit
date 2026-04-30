@@ -159,12 +159,6 @@ fn hotkey_report() -> HotkeyReport {
             "  status:         OK (desktop hotkey backend)"
         )
         .unwrap();
-    } else {
-        writeln!(
-            &mut details,
-            "  status:         OK (desktop hotkey backend; evdev fallback incomplete)"
-        )
-        .unwrap();
     }
 
     let summary = if blocking {
@@ -202,7 +196,7 @@ fn hotkey_report() -> HotkeyReport {
     } else if x11_probe.is_ok() {
         "hotkey preflight passed with X11 desktop backend".to_string()
     } else {
-        "hotkey preflight passed with X11 desktop backend; evdev fallback is incomplete".to_string()
+        unreachable!("non-blocking Linux hotkey report requires X11 or evdev readiness")
     };
 
     HotkeyReport {
@@ -353,43 +347,11 @@ pub(crate) fn linux_evdev_fallback_available() -> bool {
 #[cfg(target_os = "linux")]
 fn probe_x11_desktop_hotkey() -> std::result::Result<(), String> {
     use x11rb::connection::Connection;
-    use x11rb::protocol::xproto::{ConnectionExt, GrabMode, Keycode, ModMask, Window};
+    use x11rb::protocol::xproto::{ConnectionExt, GrabMode, Keycode, Window};
     use x11rb::rust_connection::RustConnection;
 
-    const SPACE_KEYSYM: u32 = 0x0020;
-
-    fn space_keycode(conn: &RustConnection) -> std::result::Result<Keycode, String> {
-        let setup = conn.setup();
-        let min_keycode = setup.min_keycode;
-        let max_keycode = setup.max_keycode;
-        let count = max_keycode - min_keycode + 1;
-        let mapping = conn
-            .get_keyboard_mapping(min_keycode, count)
-            .map_err(|err| err.to_string())?
-            .reply()
-            .map_err(|err| err.to_string())?;
-        let keysyms_per_keycode = mapping.keysyms_per_keycode as usize;
-
-        for (offset, keysyms) in mapping.keysyms.chunks(keysyms_per_keycode).enumerate() {
-            if keysyms.contains(&SPACE_KEYSYM) {
-                return Ok(min_keycode + offset as u8);
-            }
-        }
-
-        Err("could not map the X11 Space keysym to a keycode".to_string())
-    }
-
-    fn grab_mods() -> [ModMask; 4] {
-        [
-            ModMask::CONTROL,
-            ModMask::CONTROL | ModMask::M2,
-            ModMask::CONTROL | ModMask::LOCK,
-            ModMask::CONTROL | ModMask::M2 | ModMask::LOCK,
-        ]
-    }
-
     fn ungrab(conn: &RustConnection, root: Window, keycode: Keycode) {
-        for mods in grab_mods() {
+        for mods in super::x11::ctrl_grab_mods() {
             if let Ok(result) = conn.ungrab_key(keycode, root, mods) {
                 result.ignore_error();
             }
@@ -398,15 +360,11 @@ fn probe_x11_desktop_hotkey() -> std::result::Result<(), String> {
     }
 
     let (conn, screen_num) = RustConnection::connect(None).map_err(|err| err.to_string())?;
-    let root = conn
-        .setup()
-        .roots
-        .get(screen_num)
-        .ok_or_else(|| "X11 display did not expose the requested screen".to_string())?
-        .root;
-    let keycode = space_keycode(&conn)?;
+    let root = super::x11::root_window(&conn, screen_num).map_err(|err| err.to_string())?;
+    let keycode = super::x11::keycode_for_keysym(&conn, super::x11::SPACE_KEYSYM)
+        .map_err(|err| err.to_string())?;
 
-    for mods in grab_mods() {
+    for mods in super::x11::ctrl_grab_mods() {
         match conn
             .grab_key(false, root, mods, keycode, GrabMode::ASYNC, GrabMode::ASYNC)
             .map_err(|err| err.to_string())?
@@ -460,15 +418,5 @@ fn hotkey_report() -> HotkeyReport {
         blocking: false,
         summary: details.clone(),
         details,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn doctor_result_is_boolean() {
-        let _ = print_doctor(false, PasteMode::Terminal, false);
     }
 }

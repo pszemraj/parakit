@@ -30,9 +30,9 @@ use parakit::gguf;
 use parakit::inference::{default_thread_count, Engine, Mode};
 use parakit::model;
 use parakit::rules::{self, Cleaner};
-use sha2::{Digest, Sha256};
-use std::collections::HashSet;
+#[cfg(unix)]
 use std::fs::File;
+#[cfg(unix)]
 use std::io::Read;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
@@ -111,12 +111,6 @@ struct Cli {
     ///   `parakit --test-rules "So, um, the the cat ran"`
     #[arg(long, value_name = "INPUT")]
     test_rules: Option<String>,
-
-    /// Override the push-to-talk hotkey. Currently only `ctrl+space` is supported.
-    /// (Left as a flag for future expansion; changing it requires editing the
-    /// keymap in main.)
-    #[arg(long, default_value = "ctrl+space", hide = true)]
-    hotkey: String,
 
     /// Linux hotkey backend. `auto` prefers evdev when all input devices are
     /// readable because it survives desktop session churn; otherwise it uses
@@ -254,15 +248,7 @@ fn run() -> Result<()> {
         return Ok(());
     }
     if let Some(input) = &cli.test_rules {
-        let disabled: HashSet<String> = cli.disable_rule.iter().cloned().collect();
-        for name in &cli.disable_rule {
-            rules::assert_rule_name_exists(name)?;
-        }
-        let cleaner = if cli.no_cleaning {
-            None
-        } else {
-            Some(Cleaner::new(&disabled)?)
-        };
+        let cleaner = rules::build_cleaner(cli.no_cleaning, &cli.disable_rule)?;
         let raw = input.as_str();
         let cleaned = cleaner.as_ref().map(|c| c.clean(raw));
         if !cli.quiet {
@@ -281,17 +267,8 @@ fn run() -> Result<()> {
     daemon::inject::preflight(cli.paste_mode).context("text insertion preflight failed")?;
     log.verbose("parakit: insertion preflight passed");
 
-    let mode = Mode::parse(&cli.mode)?;
-    let disabled: HashSet<String> = cli.disable_rule.iter().cloned().collect();
-    for name in &cli.disable_rule {
-        rules::assert_rule_name_exists(name)?;
-    }
-    let cleaner = if cli.no_cleaning {
-        None
-    } else {
-        Some(Arc::new(Cleaner::new(&disabled)?))
-    };
-    let rules_active = cleaner.as_deref().map_or(0, Cleaner::len);
+    let mode: Mode = cli.mode.parse()?;
+    let cleaner = rules::build_cleaner(cli.no_cleaning, &cli.disable_rule)?.map(Arc::new);
     let data_log = cli
         .log_dir
         .clone()
@@ -332,7 +309,7 @@ fn run() -> Result<()> {
         mic: &mic_info,
         mode: format!("{:?}", mode),
         cleaning: match cleaner.as_deref() {
-            Some(c) => format!("on ({} rules)", c.len()),
+            Some(c) => format!("on ({} rules)", c.active_rule_count()),
             None => "off".to_string(),
         },
         sounds: if cli.no_sounds { "off" } else { "on" },
@@ -353,9 +330,8 @@ fn run() -> Result<()> {
     let worker = spawn_worker(WorkerCtx {
         engine,
         audio: audio.clone(),
-        cleaner: cleaner.clone(),
-        data_log: data_log.clone(),
-        rules_active,
+        cleaner,
+        data_log,
         sounds: sounds.clone(),
         log: Arc::clone(&log),
         mode,
@@ -549,7 +525,7 @@ fn print_cache_list() -> Result<()> {
             ""
         };
         let checksum = if name == model::Q8_FILENAME {
-            match hash_file_hex(&path) {
+            match parakit::checksum::sha256_file_hex(&path) {
                 Ok(hash) if hash == model::HOSTED_Q8_SHA256 => "sha256 ok".to_string(),
                 Ok(hash) => format!("sha256 mismatch ({hash})"),
                 Err(err) => format!("sha256 unavailable ({err})"),
@@ -560,30 +536,6 @@ fn print_cache_list() -> Result<()> {
         println!("    {name}{default_marker}: {dtype}, {size}, {checksum}");
     }
     Ok(())
-}
-
-fn hash_file_hex(path: &Path) -> Result<String> {
-    let mut file = File::open(path).with_context(|| format!("open {}", path.display()))?;
-    let mut hasher = Sha256::new();
-    let mut buf = [0_u8; 1024 * 1024];
-    loop {
-        let n = file.read(&mut buf)?;
-        if n == 0 {
-            break;
-        }
-        hasher.update(&buf[..n]);
-    }
-    Ok(hex_digest(&hasher.finalize()))
-}
-
-fn hex_digest(bytes: &[u8]) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        out.push(HEX[(byte >> 4) as usize] as char);
-        out.push(HEX[(byte & 0x0f) as usize] as char);
-    }
-    out
 }
 
 fn format_file_size(bytes: u64) -> String {
@@ -605,7 +557,6 @@ struct WorkerCtx {
     audio: AudioHandle,
     cleaner: Option<Arc<Cleaner>>,
     data_log: Option<Arc<DataLogger>>,
-    rules_active: usize,
     sounds: Sounds,
     log: Arc<Logger>,
     mode: Mode,
@@ -623,7 +574,6 @@ fn worker_loop(ctx: WorkerCtx) {
         audio,
         cleaner,
         data_log,
-        rules_active,
         sounds,
         log,
         mode,
@@ -631,6 +581,7 @@ fn worker_loop(ctx: WorkerCtx) {
         rx,
     } = ctx;
 
+    let rules_active = cleaner.as_deref().map_or(0, Cleaner::active_rule_count);
     let mut consumed_samples: usize = 0; // for streaming
     let mut recording_started_at: Option<Instant> = None;
 
@@ -643,38 +594,37 @@ fn worker_loop(ctx: WorkerCtx) {
                 log.line("parakit: recording...");
             }
             Event_::StreamChunk => {
-                if let Mode::Streaming { .. } = mode {
-                    let chunk = audio.snapshot_from(consumed_samples);
-                    if !chunk.is_empty() {
-                        consumed_samples += chunk.len();
-                        let infer_started = Instant::now();
-                        match engine.transcribe(&chunk) {
-                            Ok(raw) if !raw.trim().is_empty() => {
-                                let infer_elapsed = infer_started.elapsed();
-                                let cleaned = match &cleaner {
-                                    Some(c) => c.clean(&raw),
-                                    None => raw.clone(),
-                                };
-                                if let Some(data_log) = &data_log {
-                                    let chunk_secs = chunk.len() as f32 / TARGET_RATE as f32;
-                                    data_log.log(
-                                        chunk_secs,
-                                        infer_elapsed,
-                                        &raw,
-                                        &cleaned,
-                                        rules_active,
-                                    );
-                                }
-                                log.streaming_partial(&raw, &cleaned);
-                                if let Err(e) = type_streaming_text(&cleaned) {
-                                    log.error(&format!("type failed: {e:#}"));
-                                    sounds.error();
-                                }
+                debug_assert!(matches!(mode, Mode::Streaming { .. }));
+                let chunk = audio.snapshot_from(consumed_samples);
+                if !chunk.is_empty() {
+                    consumed_samples += chunk.len();
+                    let infer_started = Instant::now();
+                    match engine.transcribe(&chunk) {
+                        Ok(raw) if !raw.trim().is_empty() => {
+                            let infer_elapsed = infer_started.elapsed();
+                            let cleaned = match &cleaner {
+                                Some(c) => c.clean(&raw),
+                                None => raw.clone(),
+                            };
+                            if let Some(data_log) = &data_log {
+                                let chunk_secs = chunk.len() as f32 / TARGET_RATE as f32;
+                                data_log.log(
+                                    chunk_secs,
+                                    infer_elapsed,
+                                    &raw,
+                                    &cleaned,
+                                    rules_active,
+                                );
                             }
-                            Ok(_) => {}
-                            Err(e) => {
-                                log.error(&format!("transcribe (chunk) failed: {e:#}"));
+                            log.streaming_partial(&raw, &cleaned);
+                            if let Err(e) = type_streaming_text(&cleaned) {
+                                log.error(&format!("type failed: {e:#}"));
+                                sounds.error();
                             }
+                        }
+                        Ok(_) => {}
+                        Err(e) => {
+                            log.error(&format!("transcribe (chunk) failed: {e:#}"));
                         }
                     }
                 }

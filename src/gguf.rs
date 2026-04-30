@@ -19,6 +19,17 @@ const GGUF_TYPE_ARRAY: u32 = 9;
 const GGUF_TYPE_UINT64: u32 = 10;
 const GGUF_TYPE_INT64: u32 = 11;
 const GGUF_TYPE_FLOAT64: u32 = 12;
+const COMMON_DTYPE_NAMES: &[(u32, &str)] = &[
+    (0, "F32"),
+    (1, "F16"),
+    (2, "Q4_0"),
+    (3, "Q4_1"),
+    (10, "Q2_K"),
+    (11, "Q3_K"),
+    (12, "Q4_K"),
+    (13, "Q5_K"),
+    (14, "Q6_K"),
+];
 
 /// Detect the GGUF file dtype from `general.file_type` or tensor metadata.
 ///
@@ -93,42 +104,28 @@ fn dominant_tensor_type(file: &mut File, tensor_count: u64) -> Result<Option<&'s
 }
 
 fn file_type_name(file_type: u32) -> Option<&'static str> {
-    match file_type {
-        0 => Some("F32"),
-        1 => Some("F16"),
-        2 => Some("Q4_0"),
-        3 => Some("Q4_1"),
-        7 => Some("Q8_0"),
-        8 => Some("Q5_0"),
-        9 => Some("Q5_1"),
-        10 => Some("Q2_K"),
-        11 => Some("Q3_K"),
-        12 => Some("Q4_K"),
-        13 => Some("Q5_K"),
-        14 => Some("Q6_K"),
-        24 => Some("BF16"),
-        25 => Some("MXFP4"),
-        26 => Some("NVFP4"),
-        _ => None,
-    }
+    dtype_name(
+        file_type,
+        &[
+            (7, "Q8_0"),
+            (8, "Q5_0"),
+            (9, "Q5_1"),
+            (24, "BF16"),
+            (25, "MXFP4"),
+            (26, "NVFP4"),
+        ],
+    )
 }
 
 fn tensor_type_name(tensor_type: u32) -> Option<&'static str> {
-    match tensor_type {
-        0 => Some("F32"),
-        1 => Some("F16"),
-        2 => Some("Q4_0"),
-        3 => Some("Q4_1"),
-        6 => Some("Q5_0"),
-        7 => Some("Q5_1"),
-        8 => Some("Q8_0"),
-        10 => Some("Q2_K"),
-        11 => Some("Q3_K"),
-        12 => Some("Q4_K"),
-        13 => Some("Q5_K"),
-        14 => Some("Q6_K"),
-        _ => None,
-    }
+    dtype_name(tensor_type, &[(6, "Q5_0"), (7, "Q5_1"), (8, "Q8_0")])
+}
+
+fn dtype_name(code: u32, extras: &[(u32, &'static str)]) -> Option<&'static str> {
+    extras
+        .iter()
+        .chain(COMMON_DTYPE_NAMES.iter())
+        .find_map(|(candidate, name)| (*candidate == code).then_some(*name))
 }
 
 fn skip_value(file: &mut File, value_type: u32) -> Result<()> {

@@ -13,9 +13,9 @@ pub fn diagnostic_lines() -> Vec<String> {
     ));
     lines.push(format!(
         "cpu:            native={}, openmp={}, repack={}, blas={}",
-        build_value("GGML_NATIVE"),
-        build_value("GGML_OPENMP"),
-        build_value("GGML_CPU_REPACK"),
+        ggml_native(),
+        ggml_openmp(),
+        ggml_cpu_repack(),
         blas_label()
     ));
     lines.push(format!(
@@ -24,9 +24,9 @@ pub fn diagnostic_lines() -> Vec<String> {
     ));
     lines.push(format!(
         "accelerators:   cuda={}, vulkan={}, metal={}",
-        build_value("GGML_CUDA"),
-        build_value("GGML_VULKAN"),
-        build_value("GGML_METAL")
+        ggml_cuda(),
+        ggml_vulkan(),
+        ggml_metal()
     ));
 
     if let Some(arch) = option_env!("PARAKIT_BUILD_CMAKE_CUDA_ARCHITECTURES") {
@@ -39,10 +39,10 @@ pub fn diagnostic_lines() -> Vec<String> {
 }
 
 fn blas_label() -> String {
-    let enabled = build_value("GGML_BLAS");
+    let enabled = ggml_blas();
     let selected = option_env!("PARAKIT_BUILD_BLAS_SELECTED").unwrap_or("unknown");
     let vendor = option_env!("PARAKIT_BUILD_GGML_BLAS_VENDOR").unwrap_or("");
-    let cohere_mkl = build_value("COHERE_MKL");
+    let cohere_mkl = cohere_mkl();
     if enabled == "OFF" || selected == "off" {
         return "OFF".to_string();
     }
@@ -55,16 +55,34 @@ fn blas_label() -> String {
     }
 }
 
-fn build_value(key: &str) -> &'static str {
-    match key {
-        "GGML_NATIVE" => option_env!("PARAKIT_BUILD_GGML_NATIVE").unwrap_or("unknown"),
-        "GGML_OPENMP" => option_env!("PARAKIT_BUILD_GGML_OPENMP").unwrap_or("unknown"),
-        "GGML_CPU_REPACK" => option_env!("PARAKIT_BUILD_GGML_CPU_REPACK").unwrap_or("unknown"),
-        "GGML_BLAS" => option_env!("PARAKIT_BUILD_GGML_BLAS").unwrap_or("unknown"),
-        "COHERE_MKL" => option_env!("PARAKIT_BUILD_COHERE_MKL").unwrap_or("unknown"),
-        "GGML_CUDA" => option_env!("PARAKIT_BUILD_GGML_CUDA").unwrap_or("unknown"),
-        "GGML_VULKAN" => option_env!("PARAKIT_BUILD_GGML_VULKAN").unwrap_or("unknown"),
-        "GGML_METAL" => option_env!("PARAKIT_BUILD_GGML_METAL").unwrap_or("unknown"),
-        _ => "unknown",
-    }
+fn ggml_native() -> &'static str {
+    option_env!("PARAKIT_BUILD_GGML_NATIVE").unwrap_or("unknown")
+}
+
+fn ggml_openmp() -> &'static str {
+    option_env!("PARAKIT_BUILD_GGML_OPENMP").unwrap_or("unknown")
+}
+
+fn ggml_cpu_repack() -> &'static str {
+    option_env!("PARAKIT_BUILD_GGML_CPU_REPACK").unwrap_or("unknown")
+}
+
+fn ggml_blas() -> &'static str {
+    option_env!("PARAKIT_BUILD_GGML_BLAS").unwrap_or("unknown")
+}
+
+fn cohere_mkl() -> &'static str {
+    option_env!("PARAKIT_BUILD_COHERE_MKL").unwrap_or("unknown")
+}
+
+fn ggml_cuda() -> &'static str {
+    option_env!("PARAKIT_BUILD_GGML_CUDA").unwrap_or("unknown")
+}
+
+fn ggml_vulkan() -> &'static str {
+    option_env!("PARAKIT_BUILD_GGML_VULKAN").unwrap_or("unknown")
+}
+
+fn ggml_metal() -> &'static str {
+    option_env!("PARAKIT_BUILD_GGML_METAL").unwrap_or("unknown")
 }

@@ -23,7 +23,6 @@
 //!     description: "What this rule does",
 //!     pattern: r"(?i)\bmyword\b",
 //!     replacement: "yourword",
-//!     default_enabled: true,
 //! },
 //! ```
 //!
@@ -42,7 +41,6 @@ pub struct Rule {
     pub description: &'static str,
     pub pattern: &'static str,
     pub replacement: &'static str,
-    pub default_enabled: bool,
 }
 
 /// Compiled at startup.
@@ -69,7 +67,7 @@ impl Cleaner {
     pub fn new(disabled: &HashSet<String>) -> Result<Self> {
         let mut rules = Vec::with_capacity(DEFAULT_RULES.len());
         for r in DEFAULT_RULES {
-            if !r.default_enabled || disabled.contains(r.name) {
+            if disabled.contains(r.name) {
                 continue;
             }
             let re = Regex::new(r.pattern)
@@ -98,23 +96,39 @@ impl Cleaner {
         capitalize_sentence_starts(&s)
     }
 
-    /// Number of active rules (after disable filtering).
+    /// Number of active rules after disable filtering.
     ///
     /// # Returns
     ///
     /// The number of active cleanup rules.
-    pub fn len(&self) -> usize {
+    pub fn active_rule_count(&self) -> usize {
         self.rules.len()
     }
+}
 
-    /// Report whether this cleaner has no active rules.
-    ///
-    /// # Returns
-    ///
-    /// `true` when no cleanup rules are active.
-    pub fn is_empty(&self) -> bool {
-        self.rules.is_empty()
+/// Build the standard cleaner configuration used by CLIs.
+///
+/// # Arguments
+///
+/// * `no_cleaning` - Disable cleaning after validating rule names.
+/// * `disabled_rules` - Rule names supplied by repeated `--disable-rule`.
+///
+/// # Returns
+///
+/// `None` when cleaning is disabled, otherwise a compiled cleaner.
+///
+/// # Errors
+///
+/// Returns an error for unknown rule names or invalid rule regexes.
+pub fn build_cleaner(no_cleaning: bool, disabled_rules: &[String]) -> Result<Option<Cleaner>> {
+    for name in disabled_rules {
+        assert_rule_name_exists(name)?;
     }
+    if no_cleaning {
+        return Ok(None);
+    }
+    let disabled: HashSet<String> = disabled_rules.iter().cloned().collect();
+    Cleaner::new(&disabled).map(Some)
 }
 
 fn capitalize_sentence_starts(s: &str) -> String {
@@ -175,15 +189,10 @@ pub fn assert_rule_name_exists(name: &str) -> Result<()> {
 
 /// Print all rules to stdout (used by `--list-rules`).
 pub fn print_rule_list() {
-    println!("{:<32}  {:<8}  description", "name", "default");
+    println!("{:<32}  description", "name");
     println!("{}", "-".repeat(80));
     for r in DEFAULT_RULES {
-        println!(
-            "{:<32}  {:<8}  {}",
-            r.name,
-            if r.default_enabled { "on" } else { "off" },
-            r.description
-        );
+        println!("{:<32}  {}", r.name, r.description);
     }
 }
 
@@ -214,56 +223,48 @@ pub const DEFAULT_RULES: &[Rule] = &[
         description: "Remove leading 'So,' at sentence start",
         pattern: r#"(?i)(^\s*|[.!?\n]\s*)((?:["'(\[]\s*)*)(?:so,\s+)+"#,
         replacement: "$1$2",
-        default_enabled: true,
     },
     Rule {
         name: "lead-so-pronoun",
         description: "Remove leading 'So ' before a pronoun/conjunction (no comma)",
         pattern: r#"(?i)(^\s*|[.!?\n]\s*)((?:["'(\[]\s*)*)so\s+(i|we|you|he|she|they|it|this|there|then|and|but|the|a|an|my|our|your)\b"#,
         replacement: "$1$2$3",
-        default_enabled: true,
     },
     Rule {
         name: "lead-well-comma",
         description: "Remove leading 'Well,' at sentence start",
         pattern: r#"(?i)(^\s*|[.!?\n]\s*)((?:["'(\[]\s*)*)(?:well,\s+)+"#,
         replacement: "$1$2",
-        default_enabled: true,
     },
     Rule {
         name: "lead-well-pronoun",
         description: "Remove leading 'Well ' before a pronoun/conjunction",
         pattern: r#"(?i)(^\s*|[.!?\n]\s*)((?:["'(\[]\s*)*)well\s+(i|we|you|he|she|they|it|this|that|there|then|and|but|maybe|actually)\b"#,
         replacement: "$1$2$3",
-        default_enabled: true,
     },
     Rule {
         name: "lead-like-comma",
         description: "Remove leading 'Like,' at sentence start",
         pattern: r#"(?i)(^\s*|[.!?\n]\s*)((?:["'(\[]\s*)*)(?:like,\s+)+"#,
         replacement: "$1$2",
-        default_enabled: true,
     },
     Rule {
         name: "lead-like-pronoun",
         description: "Remove leading 'Like ' before a pronoun/article (filler use)",
         pattern: r#"(?i)(^\s*|[.!?\n]\s*)((?:["'(\[]\s*)*)like\s+(i|we|you|he|she|they|it|this|that|there|the|a|an|my|our|your|some|any)\b"#,
         replacement: "$1$2$3",
-        default_enabled: true,
     },
     Rule {
         name: "lead-you-know",
         description: "Remove leading 'You know,' / 'You know what I mean,'",
         pattern: r#"(?i)(^\s*|[.!?\n]\s*)((?:["'(\[]\s*)*)(?:you know(?: what i mean)?[, ]+)+"#,
         replacement: "$1$2",
-        default_enabled: true,
     },
     Rule {
         name: "lead-i-mean",
         description: "Remove leading 'I mean,'",
         pattern: r#"(?i)(^\s*|[.!?\n]\s*)((?:["'(\[]\s*)*)(?:i mean,\s+)+"#,
         replacement: "$1$2",
-        default_enabled: true,
     },
     // -------------------------------------------------------------------------
     // Mid-sentence filler (", you know,", ", like,", ", I mean,")
@@ -273,91 +274,78 @@ pub const DEFAULT_RULES: &[Rule] = &[
         description: "Replace 'not like, you know,' / 'not like, I mean,' with 'not'",
         pattern: r#"(?i)\bnot\s+like\s*,?\s*(?:you know(?: what i mean)?|i mean)\s*,?\s*"#,
         replacement: "not ",
-        default_enabled: true,
     },
     Rule {
         name: "mid-like-you-know",
         description: "Strip 'like, you know,' / 'like, I mean,' filler phrases",
         pattern: r#"(?i)\blike\s*,?\s*(?:you know(?: what i mean)?|i mean)\s*,?\s*"#,
         replacement: "",
-        default_enabled: true,
     },
     Rule {
         name: "mid-as-in-like",
         description: "Replace 'as in like X' with 'as in X'",
         pattern: r#"(?i)\bas\s+in\s+like\s+([A-Za-z0-9][A-Za-z0-9'-]*)\b"#,
         replacement: "as in $1",
-        default_enabled: true,
     },
     Rule {
         name: "mid-its-actually-like",
         description: "Replace \"it's actually like X\" with \"it's actually X\"",
         pattern: r#"(?i)\b(it'?s|that'?s|there'?s|here'?s)\s+(actually|basically|literally)\s+like\s+([A-Za-z0-9][A-Za-z0-9'-]*)\b"#,
         replacement: "$1 $2 $3",
-        default_enabled: true,
     },
     Rule {
         name: "mid-is-actually-like",
         description: "Replace 'is actually like X' with 'is actually X'",
         pattern: r#"(?i)\b(is|was|are|were|am|be|been|being)\s+(actually|basically|literally)\s+like\s+([A-Za-z0-9][A-Za-z0-9'-]*)\b"#,
         replacement: "$1 $2 $3",
-        default_enabled: true,
     },
     Rule {
         name: "mid-you-know",
         description: "Strip mid-sentence ', you know,' / ', you know what I mean,'",
         pattern: r#"(?i),\s*you know(?: what i mean)?[, ]+"#,
         replacement: " ",
-        default_enabled: true,
     },
     Rule {
         name: "mid-i-mean",
         description: "Strip mid-sentence ', I mean,'",
         pattern: r#"(?i),\s*i mean,\s*"#,
         replacement: " ",
-        default_enabled: true,
     },
     Rule {
         name: "mid-like-comma",
         description: "Strip mid-sentence ', like,'",
         pattern: r#"(?i),\s*like,\s*"#,
         replacement: " ",
-        default_enabled: true,
     },
     Rule {
         name: "mid-i-dont-know",
         description: "Strip mid-sentence ', I don't know,'",
         pattern: r#"(?i),\s*i don'?t know,\s*"#,
         replacement: " ",
-        default_enabled: true,
     },
     Rule {
         name: "mid-like-noun",
         description: "Replace ', like X' with ' X' when X is a content word",
         pattern: r#"(?i),\s*like\s+([A-Za-z0-9][A-Za-z0-9'-]*)\b"#,
         replacement: " $1",
-        default_enabled: true,
     },
     Rule {
         name: "mid-is-like",
         description: "Replace 'is like X' / 'was like X' (filler) with 'is X'",
         pattern: r#"(?i)\b(is|was|are|were|am|be|been|being)\s+like\s+([A-Za-z0-9][A-Za-z0-9'-]*)\b"#,
         replacement: "$1 $2",
-        default_enabled: true,
     },
     Rule {
         name: "mid-its-like",
         description: "Replace \"it's like X\" / \"that's like X\" with \"it's X\"",
         pattern: r#"(?i)\b(it'?s|that'?s|there'?s|here'?s)\s+like\s+([A-Za-z0-9][A-Za-z0-9'-]*)\b"#,
         replacement: "$1 $2",
-        default_enabled: true,
     },
     Rule {
         name: "mid-conj-like",
         description: "Replace 'and/but/or/so like X' with 'and/but/or/so X'",
         pattern: r#"(?i)\b(and|but|or|so)\s+like\s+([A-Za-z0-9][A-Za-z0-9'-]*)\b"#,
         replacement: "$1 $2",
-        default_enabled: true,
     },
     // -------------------------------------------------------------------------
     // Filler interjections: um, uh, erm
@@ -367,7 +355,6 @@ pub const DEFAULT_RULES: &[Rule] = &[
         description: "Remove 'um', 'uh', 'erm' (with surrounding commas/space)",
         pattern: r#"(?i),?\s*\b(?:u[hm]+|er+m*)\b\s*,?"#,
         replacement: " ",
-        default_enabled: true,
     },
     // -------------------------------------------------------------------------
     // Repeated word stutters ("the the the" → "the", "I I I" → "I")
@@ -378,231 +365,198 @@ pub const DEFAULT_RULES: &[Rule] = &[
         description: "Collapse repeated 'I I I' → 'I'",
         pattern: r#"(?i)\b(i)(?:\s+i)+\b"#,
         replacement: "I",
-        default_enabled: true,
     },
     Rule {
         name: "stutter-the",
         description: "Collapse repeated 'the the' → 'the'",
         pattern: r#"(?i)\b(the)(?:\s+the)+\b"#,
         replacement: "$1",
-        default_enabled: true,
     },
     Rule {
         name: "stutter-a",
         description: "Collapse repeated 'a a' → 'a'",
         pattern: r#"(?i)\b(a)(?:\s+a)+\b"#,
         replacement: "$1",
-        default_enabled: true,
     },
     Rule {
         name: "stutter-an",
         description: "Collapse repeated 'an an' → 'an'",
         pattern: r#"(?i)\b(an)(?:\s+an)+\b"#,
         replacement: "$1",
-        default_enabled: true,
     },
     Rule {
         name: "stutter-and",
         description: "Collapse repeated 'and and' → 'and'",
         pattern: r#"(?i)\b(and)(?:\s+and)+\b"#,
         replacement: "$1",
-        default_enabled: true,
     },
     Rule {
         name: "stutter-but",
         description: "Collapse repeated 'but but' → 'but'",
         pattern: r#"(?i)\b(but)(?:\s+but)+\b"#,
         replacement: "$1",
-        default_enabled: true,
     },
     Rule {
         name: "stutter-or",
         description: "Collapse repeated 'or or' → 'or'",
         pattern: r#"(?i)\b(or)(?:\s+or)+\b"#,
         replacement: "$1",
-        default_enabled: true,
     },
     Rule {
         name: "stutter-so",
         description: "Collapse repeated 'so so' → 'so'",
         pattern: r#"(?i)\b(so)(?:\s+so)+\b"#,
         replacement: "$1",
-        default_enabled: true,
     },
     Rule {
         name: "stutter-to",
         description: "Collapse repeated 'to to' → 'to'",
         pattern: r#"(?i)\b(to)(?:\s+to)+\b"#,
         replacement: "$1",
-        default_enabled: true,
     },
     Rule {
         name: "stutter-of",
         description: "Collapse repeated 'of of' → 'of'",
         pattern: r#"(?i)\b(of)(?:\s+of)+\b"#,
         replacement: "$1",
-        default_enabled: true,
     },
     Rule {
         name: "stutter-in",
         description: "Collapse repeated 'in in' → 'in'",
         pattern: r#"(?i)\b(in)(?:\s+in)+\b"#,
         replacement: "$1",
-        default_enabled: true,
     },
     Rule {
         name: "stutter-on",
         description: "Collapse repeated 'on on' → 'on'",
         pattern: r#"(?i)\b(on)(?:\s+on)+\b"#,
         replacement: "$1",
-        default_enabled: true,
     },
     Rule {
         name: "stutter-we",
         description: "Collapse repeated 'we we' → 'we'",
         pattern: r#"(?i)\b(we)(?:\s+we)+\b"#,
         replacement: "$1",
-        default_enabled: true,
     },
     Rule {
         name: "stutter-you",
         description: "Collapse repeated 'you you' → 'you'",
         pattern: r#"(?i)\b(you)(?:\s+you)+\b"#,
         replacement: "$1",
-        default_enabled: true,
     },
     Rule {
         name: "stutter-he",
         description: "Collapse repeated 'he he' → 'he'",
         pattern: r#"(?i)\b(he)(?:\s+he)+\b"#,
         replacement: "$1",
-        default_enabled: true,
     },
     Rule {
         name: "stutter-she",
         description: "Collapse repeated 'she she' → 'she'",
         pattern: r#"(?i)\b(she)(?:\s+she)+\b"#,
         replacement: "$1",
-        default_enabled: true,
     },
     Rule {
         name: "stutter-they",
         description: "Collapse repeated 'they they' → 'they'",
         pattern: r#"(?i)\b(they)(?:\s+they)+\b"#,
         replacement: "$1",
-        default_enabled: true,
     },
     Rule {
         name: "stutter-it",
         description: "Collapse repeated 'it it' → 'it'",
         pattern: r#"(?i)\b(it)(?:\s+it)+\b"#,
         replacement: "$1",
-        default_enabled: true,
     },
     Rule {
         name: "stutter-this",
         description: "Collapse repeated 'this this' → 'this'",
         pattern: r#"(?i)\b(this)(?:\s+this)+\b"#,
         replacement: "$1",
-        default_enabled: true,
     },
     Rule {
         name: "stutter-that",
         description: "Collapse repeated 'that that' → 'that'",
         pattern: r#"(?i)\b(that)(?:\s+that)+\b"#,
         replacement: "$1",
-        default_enabled: true,
     },
     Rule {
         name: "stutter-my",
         description: "Collapse repeated 'my my' → 'my'",
         pattern: r#"(?i)\b(my)(?:\s+my)+\b"#,
         replacement: "$1",
-        default_enabled: true,
     },
     Rule {
         name: "stutter-is",
         description: "Collapse repeated 'is is' → 'is'",
         pattern: r#"(?i)\b(is)(?:\s+is)+\b"#,
         replacement: "$1",
-        default_enabled: true,
     },
     Rule {
         name: "stutter-was",
         description: "Collapse repeated 'was was' → 'was'",
         pattern: r#"(?i)\b(was)(?:\s+was)+\b"#,
         replacement: "$1",
-        default_enabled: true,
     },
     Rule {
         name: "stutter-are",
         description: "Collapse repeated 'are are' → 'are'",
         pattern: r#"(?i)\b(are)(?:\s+are)+\b"#,
         replacement: "$1",
-        default_enabled: true,
     },
     Rule {
         name: "stutter-were",
         description: "Collapse repeated 'were were' → 'were'",
         pattern: r#"(?i)\b(were)(?:\s+were)+\b"#,
         replacement: "$1",
-        default_enabled: true,
     },
     Rule {
         name: "stutter-do",
         description: "Collapse repeated 'do do' → 'do'",
         pattern: r#"(?i)\b(do)(?:\s+do)+\b"#,
         replacement: "$1",
-        default_enabled: true,
     },
     Rule {
         name: "stutter-did",
         description: "Collapse repeated 'did did' → 'did'",
         pattern: r#"(?i)\b(did)(?:\s+did)+\b"#,
         replacement: "$1",
-        default_enabled: true,
     },
     Rule {
         name: "stutter-can",
         description: "Collapse repeated 'can can' → 'can'",
         pattern: r#"(?i)\b(can)(?:\s+can)+\b"#,
         replacement: "$1",
-        default_enabled: true,
     },
     Rule {
         name: "stutter-will",
         description: "Collapse repeated 'will will' → 'will'",
         pattern: r#"(?i)\b(will)(?:\s+will)+\b"#,
         replacement: "$1",
-        default_enabled: true,
     },
     Rule {
         name: "stutter-has",
         description: "Collapse repeated 'has has' → 'has'",
         pattern: r#"(?i)\b(has)(?:\s+has)+\b"#,
         replacement: "$1",
-        default_enabled: true,
     },
     Rule {
         name: "stutter-had",
         description: "Collapse repeated 'had had' → 'had'",
         pattern: r#"(?i)\b(had)(?:\s+had)+\b"#,
         replacement: "$1",
-        default_enabled: true,
     },
     Rule {
         name: "stutter-no",
         description: "Collapse repeated 'no no' → 'no'",
         pattern: r#"(?i)\b(no)(?:\s+no)+\b"#,
         replacement: "$1",
-        default_enabled: true,
     },
     Rule {
         name: "stutter-have",
         description: "Collapse repeated 'have have' → 'have'",
         pattern: r#"(?i)\b(have)(?:\s+have)+\b"#,
         replacement: "$1",
-        default_enabled: true,
     },
     // -------------------------------------------------------------------------
     // Single-letter / partial-word stutters ("sh sh sh should" → "should")
@@ -632,56 +586,48 @@ pub const DEFAULT_RULES: &[Rule] = &[
             r#"|(?:y\s+){2,}(y\w*)\b"#,
         ),
         replacement: "$1$2$3$4$5$6$7$8$9$10$11$12$13$14$15$16$17$18",
-        default_enabled: true,
     },
     Rule {
         name: "partial-stutter-should",
         description: "Strip partial-word stutter before 'should'",
         pattern: r#"(?i)\b(?:s|so|sh|sho)(?:[- ]+(?:s|so|sh|sho)){1,3}[- ]+(should)\b"#,
         replacement: "$1",
-        default_enabled: true,
     },
     Rule {
         name: "partial-stutter-think",
         description: "Strip partial-word stutter before 'think/thinking/this/that'",
         pattern: r#"(?i)\b(?:t|th|thi)(?:[- ]+(?:t|th|thi)){1,3}[- ]+(think(?:ing)?|thing|this|that|these|those)\b"#,
         replacement: "$1",
-        default_enabled: true,
     },
     Rule {
         name: "partial-stutter-because",
         description: "Strip partial-word stutter before 'because'",
         pattern: r#"(?i)\b(?:b|be|bec)(?:[- ]+(?:b|be|bec)){1,3}[- ]+(because)\b"#,
         replacement: "$1",
-        default_enabled: true,
     },
     Rule {
         name: "partial-stutter-definitely",
         description: "Strip partial-word stutter before 'definitely'",
         pattern: r#"(?i)\b(?:d|de|def)(?:[- ]+(?:d|de|def)){1,3}[- ]+(definitely)\b"#,
         replacement: "$1",
-        default_enabled: true,
     },
     Rule {
         name: "partial-stutter-make",
         description: "Strip partial-word stutter before 'make'",
         pattern: r#"(?i)\b(?:m|ma|mak)(?:[- ]+(?:m|ma|mak)){1,3}[- ]+(make)\b"#,
         replacement: "$1",
-        default_enabled: true,
     },
     Rule {
         name: "partial-stutter-sure",
         description: "Strip partial-word stutter before 'sure'",
         pattern: r#"(?i)\b(?:s|su|sur)(?:[- ]+(?:s|su|sur)){1,3}[- ]+(sure)\b"#,
         replacement: "$1",
-        default_enabled: true,
     },
     Rule {
         name: "partial-stutter-change",
         description: "Strip partial-word stutter before 'change/changing/changed'",
         pattern: r#"(?i)\b(?:c|ch)(?:[- ]+(?:c|ch)){1,3}[- ]+(chang(?:e|ed|es|ing))\b"#,
         replacement: "$1",
-        default_enabled: true,
     },
     // -------------------------------------------------------------------------
     // Casual contractions
@@ -691,28 +637,24 @@ pub const DEFAULT_RULES: &[Rule] = &[
         description: "'cause at sentence start → 'Because'",
         pattern: r#"(?i)(^|[.!?\n]\s*)((?:["(\[]\s*)*)['\u{2019}]cause\b"#,
         replacement: "${1}${2}Because",
-        default_enabled: true,
     },
     Rule {
         name: "cause-to-because-mid",
         description: "Mid-sentence 'cause → because (after a word)",
         pattern: r#"(?i)([A-Za-z])['\u{2019}]cause\b"#,
         replacement: "$1 because",
-        default_enabled: true,
     },
     Rule {
         name: "cause-to-because-bare",
         description: "Bare 'cause anywhere → because",
         pattern: r#"(?i)['\u{2019}]cause\b"#,
         replacement: "because",
-        default_enabled: true,
     },
     Rule {
         name: "casual-em-til-round",
         description: "'em / 'til / 'round / 'bout etc. — keep contraction with proper apostrophe",
         pattern: r#"(?i)([A-Za-z])['\u{2019}](em|til|round|bout|cept|nother)\b"#,
         replacement: "$1 '$2",
-        default_enabled: true,
     },
     // -------------------------------------------------------------------------
     // Final whitespace and punctuation cleanup. MUST run last.
@@ -722,35 +664,30 @@ pub const DEFAULT_RULES: &[Rule] = &[
         description: "Remove space before punctuation (',' '.' ';' ':' '!' '?')",
         pattern: r#"\s+([,.;:!?])"#,
         replacement: "$1",
-        default_enabled: true,
     },
     Rule {
         name: "fix-collapse-spaces",
         description: "Collapse runs of spaces/tabs into one space",
         pattern: r#"[ \t]{2,}"#,
         replacement: " ",
-        default_enabled: true,
     },
     Rule {
         name: "fix-trim",
         description: "Trim leading and trailing whitespace",
         pattern: r#"^\s+|\s+$"#,
         replacement: "",
-        default_enabled: true,
     },
     Rule {
         name: "fix-leading-comma",
         description: "Remove a comma left at the very start of the output",
         pattern: r#"^\s*,\s*"#,
         replacement: "",
-        default_enabled: true,
     },
     Rule {
         name: "fix-trailing-period",
         description: "Drop a single trailing period for dictation-friendly short utterances",
         pattern: r#"\.$"#,
         replacement: "",
-        default_enabled: true,
     },
 ];
 
@@ -764,6 +701,13 @@ mod tests {
 
     fn cleaner_with_all_defaults() -> Cleaner {
         Cleaner::new(&HashSet::new()).expect("default rules must compile")
+    }
+
+    fn assert_clean_cases(cases: &[(&str, &str)]) {
+        let c = cleaner_with_all_defaults();
+        for (input, expected) in cases {
+            assert_eq!(c.clean(input), *expected, "input: {input}");
+        }
     }
 
     #[test]
@@ -787,10 +731,14 @@ mod tests {
 
     #[test]
     fn repeated_words_collapsed() {
-        let c = cleaner_with_all_defaults();
-        assert_eq!(c.clean("the the the cat"), "The cat");
-        assert_eq!(c.clean("I I I think"), "I think");
-        assert_eq!(c.clean("we we ran"), "We ran");
+        assert_clean_cases(&[
+            ("the the the cat", "The cat"),
+            ("I I I think", "I think"),
+            ("we we ran", "We ran"),
+            ("did did happen", "Did happen"),
+            ("no no no problem", "No problem"),
+            ("has has changed", "Has changed"),
+        ]);
     }
 
     #[test]
@@ -802,11 +750,11 @@ mod tests {
 
     #[test]
     fn cause_becomes_because() {
-        let c = cleaner_with_all_defaults();
-        assert_eq!(
-            c.clean("I left 'cause it was late"),
-            "I left because it was late"
-        );
+        assert_clean_cases(&[
+            ("'cause it was late", "Because it was late"),
+            ("that's'cause it works", "That's because it works"),
+            ("I left 'cause it was late", "I left because it was late"),
+        ]);
     }
 
     #[test]
@@ -850,28 +798,22 @@ mod tests {
 
     #[test]
     fn single_letter_stutter() {
-        let c = cleaner_with_all_defaults();
-        assert_eq!(c.clean("t t t think"), "Think");
-        assert_eq!(c.clean("I w w w want this"), "I want this");
-        assert_eq!(c.clean("s s s sure"), "Sure");
+        assert_clean_cases(&[
+            ("t t t think", "Think"),
+            ("I w w w want this", "I want this"),
+            ("s s s sure", "Sure"),
+        ]);
     }
 
     #[test]
     fn like_filler_combos() {
-        let c = cleaner_with_all_defaults();
-        assert_eq!(c.clean("it's like, you know, hard"), "It's hard");
-        assert_eq!(c.clean("not like, you know,"), "Not");
-        assert_eq!(c.clean("as in like tuple"), "As in tuple");
-        assert_eq!(c.clean("it's actually like hard"), "It's actually hard");
-        assert_eq!(c.clean("is basically like broken"), "Is basically broken");
-    }
-
-    #[test]
-    fn additional_stutters() {
-        let c = cleaner_with_all_defaults();
-        assert_eq!(c.clean("did did happen"), "Did happen");
-        assert_eq!(c.clean("no no no problem"), "No problem");
-        assert_eq!(c.clean("has has changed"), "Has changed");
+        assert_clean_cases(&[
+            ("it's like, you know, hard", "It's hard"),
+            ("not like, you know,", "Not"),
+            ("as in like tuple", "As in tuple"),
+            ("it's actually like hard", "It's actually hard"),
+            ("is basically like broken", "Is basically broken"),
+        ]);
     }
 
     #[test]

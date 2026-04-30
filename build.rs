@@ -468,8 +468,7 @@ fn exe_name(name: &str) -> String {
 /// Find the CrispASR source. Order:
 ///   1. CRISPASR_SRC_DIR (explicit override)
 ///   2. vendor/CrispASR (git submodule)
-///   3. Try `git submodule update --init --recursive vendor/CrispASR` and retry
-///   4. Fail with actionable error
+///   3. Fail with actionable error
 ///
 /// In normal builds Cargo resolves the `crispasr` path dependency before this
 /// function can run, so a completely missing submodule still has to be fixed
@@ -488,25 +487,6 @@ fn locate_source(manifest_dir: &Path) -> PathBuf {
 
     let vendored = manifest_dir.join("vendor/CrispASR");
     if vendored.join("CMakeLists.txt").is_file() {
-        return vendored;
-    }
-
-    // Try to init the submodule.
-    eprintln!(
-        "parakit build.rs: vendor/CrispASR is empty, running `git submodule update --init`..."
-    );
-    let status = Command::new("git")
-        .args([
-            "submodule",
-            "update",
-            "--init",
-            "--recursive",
-            "vendor/CrispASR",
-        ])
-        .current_dir(manifest_dir)
-        .status();
-
-    if matches!(status, Ok(s) if s.success()) && vendored.join("CMakeLists.txt").is_file() {
         return vendored;
     }
 
@@ -776,18 +756,15 @@ fn create_crispasr_alias(lib_dir: &Path) {
     // if the user changed something in vendor/CrispASR.
     let _ = std::fs::remove_file(&alias_path);
 
-    let result = match target_os.as_str() {
-        "windows" => std::fs::copy(&whisper_path, &alias_path).map(|_| ()),
-        _ => {
-            #[cfg(unix)]
-            {
-                // Relative symlink keeps the install dir relocatable.
-                std::os::unix::fs::symlink(whisper_name, &alias_path)
-            }
-            #[cfg(not(unix))]
-            {
-                std::fs::copy(&whisper_path, &alias_path).map(|_| ())
-            }
+    let result = {
+        #[cfg(unix)]
+        {
+            // Relative symlink keeps the install dir relocatable.
+            std::os::unix::fs::symlink(whisper_name, &alias_path)
+        }
+        #[cfg(not(unix))]
+        {
+            std::fs::copy(&whisper_path, &alias_path).map(|_| ())
         }
     };
 

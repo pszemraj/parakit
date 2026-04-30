@@ -68,9 +68,6 @@ libc = "0.2"
 # Threading conveniences
 crossbeam-channel = "0.5"
 
-# WAV decoding for the file-transcription debugging example
-hound = "3.5"
-
 [target.'cfg(target_os = "linux")'.dependencies]
 # Direct X11 desktop hotkey registration. This avoids evdev permissions on
 # ordinary Xorg sessions and gives us explicit connection/grab errors.
@@ -106,6 +103,10 @@ vulkan  = ["bundled", "crispasr/vulkan"]
 
 [build-dependencies]
 cmake = "0.1"
+
+[dev-dependencies]
+# WAV decoding for the file-transcription debugging example.
+hound = "3.5"
 
 [profile.release]
 opt-level = 3

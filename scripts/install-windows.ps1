@@ -38,11 +38,11 @@ $TargetDir = if ($env:CARGO_TARGET_DIR) {
     Join-Path $RepoRoot "target"
 }
 
-$DllRoot = Join-Path $TargetDir "release\build\parakit-*\out"
-$Dlls = Get-ChildItem -Path $DllRoot -Recurse -Filter "*.dll" -File -ErrorAction SilentlyContinue
+$ProfileDir = Join-Path $TargetDir "release"
+$Dlls = Get-ChildItem -Path $ProfileDir -Filter "*.dll" -File -ErrorAction SilentlyContinue
 
 if (-not $Dlls) {
-    Write-Warning "No generated DLLs found. If parakit.exe fails to start, add target\release\build\parakit-*\out\bin to PATH."
+    Write-Warning "No generated DLLs found in $ProfileDir. If parakit.exe fails to start, run `cargo build -vv` and inspect the CrispASR install output."
     exit 0
 }
 

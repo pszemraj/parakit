@@ -6,7 +6,7 @@ use parking_lot::Mutex;
 use serde::Serialize;
 use std::fs::{create_dir_all, File, OpenOptions};
 use std::io::{BufWriter, Write};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::Duration;
 
 /// On-disk format used for transcription logs.
@@ -158,18 +158,13 @@ impl DataLogger {
         create_dir_all(&self.dir)
             .with_context(|| format!("failed to create log dir {}", self.dir.display()))?;
         let path = self.dir.join(file_name(date, self.format));
-        let file = append_file(&path)
+        let file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
             .with_context(|| format!("failed to open log file {}", path.display()))?;
         Ok(BufWriter::new(file))
     }
-}
-
-fn append_file(path: &Path) -> Result<File> {
-    OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)
-        .map_err(Into::into)
 }
 
 fn file_name(date: NaiveDate, format: LogFormat) -> String {

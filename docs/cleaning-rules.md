@@ -69,7 +69,6 @@ Rule {
     description: "Map 'weights and biases' to 'wandb'",
     pattern: r"(?i)\bweights and biases\b",
     replacement: "wandb",
-    default_enabled: true,
 },
 ```
 

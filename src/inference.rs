@@ -4,6 +4,7 @@ use crate::constants::TARGET_RATE;
 use anyhow::{Context, Result};
 use std::borrow::Cow;
 use std::path::Path;
+use std::str::FromStr;
 
 /// Minimum PCM length sent to CrispASR.
 ///
@@ -21,22 +22,18 @@ pub enum Mode {
     Streaming { chunk_secs: f32 },
 }
 
-impl Mode {
-    /// Parse a CLI mode string.
-    ///
-    /// # Returns
-    ///
-    /// The parsed transcription mode.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error for unknown modes or invalid streaming chunk sizes.
-    pub fn parse(s: &str) -> Result<Self> {
+impl FromStr for Mode {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self> {
         match s {
             "batch" => Ok(Mode::Batch),
             "streaming" => Ok(Mode::Streaming { chunk_secs: 4.0 }),
             other if other.starts_with("streaming:") => {
                 let secs: f32 = other.trim_start_matches("streaming:").parse()?;
+                if !secs.is_finite() || secs <= 0.0 {
+                    anyhow::bail!("streaming chunk seconds must be positive and finite");
+                }
                 Ok(Mode::Streaming { chunk_secs: secs })
             }
             other => Err(anyhow::anyhow!(
@@ -211,6 +208,31 @@ mod tests {
     fn long_pcm_is_borrowed_without_copying() {
         let pcm = vec![0.0; MIN_INFERENCE_SAMPLES];
         assert!(matches!(pad_short_pcm(&pcm), Cow::Borrowed(_)));
+    }
+
+    #[test]
+    fn parses_valid_modes() {
+        assert!(matches!("batch".parse::<Mode>().unwrap(), Mode::Batch));
+        match "streaming".parse::<Mode>().unwrap() {
+            Mode::Streaming { chunk_secs } => assert_eq!(chunk_secs, 4.0),
+            Mode::Batch => panic!("expected streaming mode"),
+        }
+        match "streaming:2.5".parse::<Mode>().unwrap() {
+            Mode::Streaming { chunk_secs } => assert_eq!(chunk_secs, 2.5),
+            Mode::Batch => panic!("expected streaming mode"),
+        }
+    }
+
+    #[test]
+    fn rejects_invalid_streaming_chunk_sizes() {
+        for mode in [
+            "streaming:0",
+            "streaming:-1",
+            "streaming:NaN",
+            "streaming:inf",
+        ] {
+            assert!(mode.parse::<Mode>().is_err(), "{mode} should fail");
+        }
     }
 
     #[test]

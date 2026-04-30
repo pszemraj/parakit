@@ -10,11 +10,10 @@ use reqwest::blocking::Client;
 use reqwest::header::{HeaderMap, HeaderValue, RANGE, USER_AGENT};
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use std::env;
 use std::ffi::{OsStr, OsString};
 use std::fs::{File, OpenOptions};
-use std::io::{Read, Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -98,7 +97,7 @@ fn run_hosted_q8(options: FetchOptions) -> Result<PathBuf> {
             return Ok(paths.q8);
         }
 
-        let current = hash_file(&paths.q8)?;
+        let current = crate::checksum::sha256_file_hex(&paths.q8)?;
         if current == HOSTED_Q8_SHA256 {
             manifest.mark_hosted_ready(&paths.q8);
             manifest.save(&paths.manifest)?;
@@ -123,7 +122,7 @@ fn run_hosted_q8(options: FetchOptions) -> Result<PathBuf> {
         format_args!("parakit: downloading {}", HOSTED_Q8_URL),
     );
     download_with_resume(HOSTED_Q8_URL, &partial)?;
-    let mut downloaded_sha = hash_file(&partial)?;
+    let mut downloaded_sha = crate::checksum::sha256_file_hex(&partial)?;
     if downloaded_sha != HOSTED_Q8_SHA256 {
         status(
             options,
@@ -131,7 +130,7 @@ fn run_hosted_q8(options: FetchOptions) -> Result<PathBuf> {
         );
         remove_if_exists(&partial)?;
         download_with_resume(HOSTED_Q8_URL, &partial)?;
-        downloaded_sha = hash_file(&partial)?;
+        downloaded_sha = crate::checksum::sha256_file_hex(&partial)?;
     }
     if downloaded_sha != HOSTED_Q8_SHA256 {
         remove_if_exists(&partial)?;
@@ -212,7 +211,7 @@ fn run_official_nemo(options: FetchOptions) -> Result<PathBuf> {
     )?;
     manifest.save(&paths.manifest)?;
 
-    let q8_sha = ensure_q8(
+    ensure_q8(
         &paths,
         &mut manifest,
         &quantize_bin,
@@ -220,7 +219,6 @@ fn run_official_nemo(options: FetchOptions) -> Result<PathBuf> {
         &f16_sha,
         options,
     )?;
-    manifest.q8_sha256 = Some(q8_sha);
     manifest.save(&paths.manifest)?;
 
     cleanup_intermediates(&paths, options)?;
@@ -258,7 +256,6 @@ impl FetchPaths {
 struct Manifest {
     acquisition: String,
     source_url: String,
-    source_sha256: Option<String>,
     nemo_sha256: Option<String>,
     f16_input_sha256: Option<String>,
     f16_sha256: Option<String>,
@@ -296,7 +293,6 @@ impl Manifest {
     fn hosted_current(&self, q8_path: &Path) -> bool {
         self.acquisition == "hosted-q8"
             && self.source_url == HOSTED_Q8_URL
-            && self.source_sha256.as_deref() == Some(HOSTED_Q8_SHA256)
             && self.q8_sha256.as_deref() == Some(HOSTED_Q8_SHA256)
             && self.q8_output_path == q8_path.display().to_string()
     }
@@ -304,7 +300,6 @@ impl Manifest {
     fn mark_hosted_ready(&mut self, q8_path: &Path) {
         self.acquisition = "hosted-q8".to_string();
         self.source_url = HOSTED_Q8_URL.to_string();
-        self.source_sha256 = Some(HOSTED_Q8_SHA256.to_string());
         self.q8_sha256 = Some(HOSTED_Q8_SHA256.to_string());
         self.q8_output_path = q8_path.display().to_string();
         self.downloaded_at = Some(now_utc());
@@ -344,7 +339,7 @@ impl Manifest {
         let Some(recorded_q8) = &self.q8_sha256 else {
             return Ok(false);
         };
-        Ok(hash_file(q8_path)? == *recorded_q8)
+        Ok(crate::checksum::sha256_file_hex(q8_path)? == *recorded_q8)
     }
 }
 
@@ -354,7 +349,7 @@ fn ensure_nemo(
     options: FetchOptions,
 ) -> Result<String> {
     if paths.nemo.is_file() {
-        let current = hash_file(&paths.nemo)?;
+        let current = crate::checksum::sha256_file_hex(&paths.nemo)?;
         if manifest.source_url == OFFICIAL_NEMO_URL
             && manifest.nemo_sha256.as_deref() == Some(&current)
         {
@@ -371,10 +366,9 @@ fn ensure_nemo(
         format_args!("parakit: downloading {}", OFFICIAL_NEMO_URL),
     );
     download_with_resume(OFFICIAL_NEMO_URL, &paths.nemo)?;
-    let sha = hash_file(&paths.nemo)?;
+    let sha = crate::checksum::sha256_file_hex(&paths.nemo)?;
     manifest.acquisition = "official-nemo".to_string();
     manifest.source_url = OFFICIAL_NEMO_URL.to_string();
-    manifest.source_sha256 = Some(sha.clone());
     manifest.nemo_sha256 = Some(sha.clone());
     manifest.downloaded_at = Some(now_utc());
     Ok(sha)
@@ -394,7 +388,7 @@ fn ensure_f16(
         && manifest.converter_script == converter_script.display().to_string()
         && manifest.converter_crispasr_git_sha == crispasr_sha
     {
-        let current = hash_file(&paths.f16)?;
+        let current = crate::checksum::sha256_file_hex(&paths.f16)?;
         if manifest.f16_sha256.as_deref() == Some(&current) {
             status(
                 options,
@@ -425,7 +419,7 @@ fn ensure_f16(
         "convert Parakeet .nemo to GGUF",
     )?;
 
-    let f16_sha = hash_file(&paths.f16)?;
+    let f16_sha = crate::checksum::sha256_file_hex(&paths.f16)?;
     manifest.f16_input_sha256 = Some(nemo_sha.to_string());
     manifest.f16_sha256 = Some(f16_sha.clone());
     manifest.converter_script = converter_script.display().to_string();
@@ -447,7 +441,7 @@ fn ensure_q8(
         && manifest.crispasr_quantize_bin == quantize_bin.display().to_string()
         && manifest.crispasr_quantize_version == quantize_version
     {
-        let current = hash_file(&paths.q8)?;
+        let current = crate::checksum::sha256_file_hex(&paths.q8)?;
         if manifest.q8_sha256.as_deref() == Some(&current) {
             status(
                 options,
@@ -467,7 +461,7 @@ fn ensure_q8(
     add_bundled_library_path(&mut command, quantize_bin);
     run_command(&mut command, "quantize GGUF to Q8_0")?;
 
-    let q8_sha = hash_file(&paths.q8)?;
+    let q8_sha = crate::checksum::sha256_file_hex(&paths.q8)?;
     manifest.q8_input_sha256 = Some(f16_sha.to_string());
     manifest.q8_sha256 = Some(q8_sha.clone());
     manifest.q8_output_path = paths.q8.display().to_string();
@@ -693,30 +687,6 @@ fn status(options: FetchOptions, message: std::fmt::Arguments<'_>) {
     }
 }
 
-fn hash_file(path: &Path) -> Result<String> {
-    let mut file = File::open(path).with_context(|| format!("open {}", path.display()))?;
-    let mut hasher = Sha256::new();
-    let mut buf = [0_u8; 1024 * 1024];
-    loop {
-        let n = file.read(&mut buf)?;
-        if n == 0 {
-            break;
-        }
-        hasher.update(&buf[..n]);
-    }
-    Ok(hex_digest(&hasher.finalize()))
-}
-
-fn hex_digest(bytes: &[u8]) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        out.push(HEX[(byte >> 4) as usize] as char);
-        out.push(HEX[(byte & 0x0f) as usize] as char);
-    }
-    out
-}
-
 fn cleanup_intermediates(paths: &FetchPaths, options: FetchOptions) -> Result<()> {
     if !options.keep_nemo {
         remove_if_exists(&paths.nemo)?;
@@ -773,26 +743,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn sha256_hex_formatter_is_lowercase() {
-        assert_eq!(hex_digest(&[0, 10, 255]), "000aff");
-    }
-
-    #[test]
-    fn fetch_options_are_copyable() {
-        let opts = FetchOptions {
-            force: false,
-            quiet: true,
-            source: FetchSource::HostedQ8,
-            keep_nemo: true,
-            keep_f16: false,
-        };
-        let copy = opts;
-        assert!(copy.keep_nemo);
-        assert!(copy.quiet);
-        assert_eq!(copy.source, FetchSource::HostedQ8);
-    }
-
-    #[test]
     fn hosted_manifest_records_default_model() {
         let mut manifest = Manifest::default();
         let path = Path::new("target/tmp/parakit-fetch-tests/model.gguf");
@@ -801,7 +751,6 @@ mod tests {
         assert!(manifest.hosted_current(path));
         assert_eq!(manifest.acquisition, "hosted-q8");
         assert_eq!(manifest.source_url, HOSTED_Q8_URL);
-        assert_eq!(manifest.source_sha256.as_deref(), Some(HOSTED_Q8_SHA256));
         assert_eq!(manifest.q8_sha256.as_deref(), Some(HOSTED_Q8_SHA256));
         assert!(manifest.nemo_sha256.is_none());
         assert!(manifest.f16_sha256.is_none());

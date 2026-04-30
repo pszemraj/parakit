@@ -2,6 +2,8 @@
 
 /// Build-time CrispASR and ggml diagnostics.
 pub mod build_info;
+/// File checksum helpers.
+pub mod checksum;
 /// Shared audio and model constants.
 pub mod constants;
 /// Transcription log writer for raw/cleaned text pairs.

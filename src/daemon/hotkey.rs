@@ -266,12 +266,11 @@ pub(crate) fn run_grab_loop(tx: Sender<Event_>, audio: AudioHandle, _backend: Ho
 
 #[cfg(target_os = "linux")]
 fn run_x11_desktop_hotkey_loop() -> anyhow::Result<()> {
+    use super::x11;
     use x11rb::connection::Connection;
-    use x11rb::protocol::xproto::{ConnectionExt, GrabMode, Keycode, ModMask, Window};
+    use x11rb::protocol::xproto::{ConnectionExt, GrabMode, Keycode, Window};
     use x11rb::protocol::Event as X11Event;
     use x11rb::rust_connection::RustConnection;
-
-    const SPACE_KEYSYM: u32 = 0x0020;
 
     struct X11HotkeyBackend {
         conn: RustConnection,
@@ -283,13 +282,8 @@ fn run_x11_desktop_hotkey_loop() -> anyhow::Result<()> {
         fn new() -> anyhow::Result<Self> {
             let (conn, screen_num) =
                 RustConnection::connect(None).context("could not connect to the X11 display")?;
-            let root = conn
-                .setup()
-                .roots
-                .get(screen_num)
-                .context("X11 display did not expose the requested screen")?
-                .root;
-            let keycode = space_keycode(&conn)?;
+            let root = x11::root_window(&conn, screen_num)?;
+            let keycode = x11::keycode_for_keysym(&conn, x11::SPACE_KEYSYM)?;
             let backend = Self {
                 conn,
                 root,
@@ -301,17 +295,8 @@ fn run_x11_desktop_hotkey_loop() -> anyhow::Result<()> {
             Ok(backend)
         }
 
-        fn grab_mods() -> [ModMask; 4] {
-            [
-                ModMask::CONTROL,
-                ModMask::CONTROL | ModMask::M2,
-                ModMask::CONTROL | ModMask::LOCK,
-                ModMask::CONTROL | ModMask::M2 | ModMask::LOCK,
-            ]
-        }
-
         fn grab(&self) -> anyhow::Result<()> {
-            for mods in Self::grab_mods() {
+            for mods in x11::ctrl_grab_mods() {
                 let result = self
                     .conn
                     .grab_key(
@@ -333,7 +318,7 @@ fn run_x11_desktop_hotkey_loop() -> anyhow::Result<()> {
         }
 
         fn ungrab(&self) {
-            for mods in Self::grab_mods() {
+            for mods in x11::ctrl_grab_mods() {
                 if let Ok(result) = self.conn.ungrab_key(self.keycode, self.root, mods) {
                     result.ignore_error();
                 }
@@ -360,27 +345,6 @@ fn run_x11_desktop_hotkey_loop() -> anyhow::Result<()> {
                 .poll_for_event()
                 .context("X11 hotkey event polling failed")
         }
-    }
-
-    fn space_keycode(conn: &RustConnection) -> anyhow::Result<Keycode> {
-        let setup = conn.setup();
-        let min_keycode = setup.min_keycode;
-        let max_keycode = setup.max_keycode;
-        let count = max_keycode - min_keycode + 1;
-        let mapping = conn
-            .get_keyboard_mapping(min_keycode, count)
-            .context("could not request X11 keyboard mapping")?
-            .reply()
-            .context("could not read X11 keyboard mapping")?;
-        let keysyms_per_keycode = mapping.keysyms_per_keycode as usize;
-
-        for (offset, keysyms) in mapping.keysyms.chunks(keysyms_per_keycode).enumerate() {
-            if keysyms.contains(&SPACE_KEYSYM) {
-                return Ok(min_keycode + offset as u8);
-            }
-        }
-
-        anyhow::bail!("could not map the X11 Space keysym to a keycode")
     }
 
     let mut backend = X11HotkeyBackend::new()?;
