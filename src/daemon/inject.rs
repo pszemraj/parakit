@@ -234,11 +234,8 @@ fn clipboard_restore_delay() -> Duration {
 }
 
 #[cfg(target_os = "linux")]
-fn paste_key_click(enigo: &mut Enigo) -> Result<()> {
-    let keycode = linux_cached_keycode_for_keysym(b'v' as u32)?;
-    enigo
-        .raw(keycode as u16, Direction::Click)
-        .map_err(|e| anyhow::anyhow!("{e:?}"))
+fn paste_key_click(_enigo: &mut Enigo) -> Result<()> {
+    linux_x11_click_keysym(b'v' as u32)
 }
 
 #[cfg(target_os = "windows")]
@@ -297,6 +294,23 @@ fn linux_keycode_for_keysym(keysym: u32) -> Result<u8> {
     }
 
     anyhow::bail!("could not map X11 keysym {keysym} to a keycode")
+}
+
+#[cfg(target_os = "linux")]
+fn linux_x11_click_keysym(keysym: u32) -> Result<()> {
+    use x11rb::connection::Connection;
+    use x11rb::protocol::xproto::{KEY_PRESS_EVENT, KEY_RELEASE_EVENT};
+    use x11rb::protocol::xtest::ConnectionExt as XtestConnectionExt;
+    use x11rb::rust_connection::RustConnection;
+
+    let keycode = linux_cached_keycode_for_keysym(keysym)?;
+    let (conn, _) = RustConnection::connect(None).context("could not connect to X11")?;
+    conn.xtest_fake_input(KEY_PRESS_EVENT, keycode, 0, x11rb::NONE, 0, 0, 0)
+        .context("could not send XTest key press")?;
+    conn.xtest_fake_input(KEY_RELEASE_EVENT, keycode, 0, x11rb::NONE, 0, 0, 0)
+        .context("could not send XTest key release")?;
+    conn.flush().context("could not flush XTest paste key")?;
+    Ok(())
 }
 
 #[cfg(test)]
