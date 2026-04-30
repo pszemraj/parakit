@@ -12,10 +12,8 @@ parakit
 ```
 
 `parakit doctor` checks hotkey access, selected microphone, insertion support,
-and compiled backend flags. It does not download or load the model.
-`parakit doctor --deep` also runs an active insertion smoke test. On Linux/X11
-it briefly focuses a tiny probe window and verifies the X server observes the
-paste key event while that window owns focus.
+and compiled backend flags without downloading or loading the model. `--deep`
+adds an active insertion smoke test.
 
 The first real `parakit` run downloads the default Q8_0 GGUF if it is not
 already cached, then opens the microphone and hotkey backend.
@@ -47,8 +45,8 @@ disown
 `--quiet` suppresses normal stdout, including startup lines and transcripts.
 Errors and warnings still go to stderr.
 
-On Linux, start parakit from a terminal in the current desktop session. See
-[linux-desktop.md](linux-desktop.md) for tmux, X11 auth, and evdev details.
+On Linux, start parakit from a terminal in the current desktop session. Tmux,
+X11 auth, and evdev details are in [linux-desktop.md](linux-desktop.md).
 
 Keep stderr in a file:
 
@@ -65,27 +63,17 @@ pkill parakit
 
 ## Model Cache
 
-With no `-m`, parakit uses the hosted Q8_0 model from:
-
-```text
-https://huggingface.co/pszemraj/parakeet-tdt-0.6b-v3-gguf
-```
-
-Linux cache path:
-
-```text
-~/.cache/parakit/models/parakeet-tdt-0.6b-v3-Q8_0.gguf
-```
-
-`XDG_CACHE_HOME` is honored on Linux. macOS uses
-`~/Library/Caches/parakit/models/`, and Windows uses
-`%LOCALAPPDATA%\parakit\Cache\models\`.
+With no `-m`, parakit uses the hosted Q8_0 model from
+<https://huggingface.co/pszemraj/parakeet-tdt-0.6b-v3-gguf>. `XDG_CACHE_HOME`
+is honored on Linux. macOS uses `~/Library/Caches/parakit/models/`; Windows
+uses `%LOCALAPPDATA%\parakit\Cache\models\`.
 
 Useful commands:
 
 ```bash
 parakit fetch --force
 parakit cache
+parakit cache list
 parakit cache dir
 parakit -m /path/to/model.gguf
 ```

@@ -1,24 +1,20 @@
 # Troubleshooting
 
-Start with:
+Start with diagnostics:
 
 ```bash
 parakit doctor
 parakit doctor --deep
 ```
 
-It reports hotkey access, selected microphone, insertion support, and build
-flags without loading the model.
-
-`--deep` runs an active insertion smoke test. On Linux/X11 it briefly focuses a
-tiny probe window, sends the configured paste shortcut, and verifies the X
-server observes the paste key event while that window owns focus.
+`doctor` does not load the model. `--deep` adds an active insertion smoke test.
+Normal launch behavior is covered in [running.md](running.md).
 
 ## Hotkey Problems
 
 On Linux, `auto` uses evdev when all input devices are readable; otherwise it
-uses the X11 desktop hotkey backend. Wayland usually blocks global hotkeys and
-synthetic input for regular client applications.
+uses the X11 desktop hotkey backend. Wayland usually blocks this class of
+desktop automation.
 
 Healthy X11 output without evdev access looks like:
 
@@ -33,8 +29,8 @@ If `Ctrl+Space` is unavailable, another desktop shortcut or input method may
 own it. Disable that binding and rerun `parakit doctor`.
 
 If `doctor` reports `Connection refused` for X11 after a logout/login, restart
-the terminal or tmux server from the current desktop session. If you need the
-daemon to survive desktop session churn, use the evdev backend. See
+the terminal or tmux server from the current desktop session. Use the evdev
+backend when the daemon must survive desktop session churn; see
 [linux-desktop.md](linux-desktop.md).
 
 On macOS, grant Accessibility and Input Monitoring permissions to both the
@@ -53,10 +49,10 @@ space reaches the focused app:
 ## Text Does Not Insert
 
 Batch insertion writes the transcript to the clipboard, sends the paste
-shortcut, then restores the previous text clipboard when possible. Clipboard
-managers may still record the transient transcript.
+shortcut, then restores the previous text clipboard when possible. See
+[running.md#insertion](running.md#insertion) for paste modes.
 
-The default paste mode is terminal-friendly:
+Useful checks:
 
 ```bash
 parakit doctor --deep
@@ -65,11 +61,9 @@ parakit --paste-mode standard
 parakit --paste-mode direct
 ```
 
-Use `standard` for apps that only accept `Ctrl+V`. Use `direct` only when an
-app refuses clipboard paste entirely.
-
-Streaming insertion uses synthetic typing. On Linux, X11 is the supported path.
-Wayland usually blocks synthetic key events.
+Use `standard` for apps that only accept `Ctrl+V`; use `direct` only when an
+app refuses clipboard paste entirely. Streaming insertion uses synthetic typing
+and is not the recommended path for reliability testing.
 
 On Windows, paste shortcuts are sent with `SendInput`. Windows blocks synthetic
 input into higher-integrity processes, so a normal parakit process cannot paste
