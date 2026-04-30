@@ -56,9 +56,11 @@ The default paste mode is terminal-friendly:
 ```bash
 parakit --paste-mode terminal
 parakit --paste-mode standard
+parakit --paste-mode direct
 ```
 
-Use `standard` for apps that only accept `Ctrl+V`.
+Use `standard` for apps that only accept `Ctrl+V`. Use `direct` only when an
+app refuses clipboard paste entirely.
 
 Streaming insertion uses synthetic typing. On Linux, X11 is the supported path.
 Wayland usually blocks synthetic key events.

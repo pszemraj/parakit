@@ -76,6 +76,10 @@ Update `HOSTED_Q8_SHA256` in `src/model.rs` if the Q8_0 bytes changed.
   transcript entries in clipboard history entirely would be nice to have, but it
   is not required while clipboard managers record the transient paste payload as
   an earlier history item.
+- Revisit native Windows/macOS hotkey backends if `rdev::grab` corrupts input
+  when combined with Enigo insertion. Keep the binding fixed to `Ctrl+Space`,
+  avoid per-tick settings reads, use adaptive idle polling if polling is needed,
+  and build any macOS layout keymap on the main thread.
 - Add `parakit fetch --quant <QUANT>` after the F16 artifact is hosted. Keep
   Q8_0 as the default unless quality, memory, or startup data justifies changing
   it.

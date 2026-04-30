@@ -18,6 +18,8 @@ use anyhow::{Context, Result};
 use arboard::Clipboard;
 use clap::ValueEnum;
 use enigo::{Direction, Enigo, Key, Keyboard, Settings};
+#[cfg(target_os = "linux")]
+use std::sync::OnceLock;
 use std::{thread, time::Duration};
 
 /// Paste shortcut style for batch transcript insertion.
@@ -27,6 +29,8 @@ pub(crate) enum PasteMode {
     Terminal,
     /// GUI-app paste: `Ctrl+V` on Linux/Windows, `Cmd+V` on macOS.
     Standard,
+    /// Type text directly without using the clipboard.
+    Direct,
 }
 
 impl PasteMode {
@@ -39,6 +43,7 @@ impl PasteMode {
         match self {
             Self::Terminal => "terminal",
             Self::Standard => "standard",
+            Self::Direct => "direct",
         }
     }
 }
@@ -91,6 +96,9 @@ impl Injector {
     pub fn paste_text(&mut self, text: &str, mode: PasteMode) -> Result<()> {
         if text.is_empty() {
             return Ok(());
+        }
+        if mode == PasteMode::Direct {
+            return self.type_text(text);
         }
 
         let previous = {
@@ -187,6 +195,7 @@ fn paste_modifiers(mode: PasteMode) -> &'static [Key] {
     match mode {
         PasteMode::Standard => &[Key::Control],
         PasteMode::Terminal => &[Key::Control, Key::Shift],
+        PasteMode::Direct => &[],
     }
 }
 
@@ -224,23 +233,47 @@ fn clipboard_restore_delay() -> Duration {
     }
 }
 
+#[cfg(target_os = "linux")]
 fn paste_key_click(enigo: &mut Enigo) -> Result<()> {
-    #[cfg(target_os = "linux")]
-    {
-        if let Some(keycode) = linux_keycode_for_keysym(b'v' as u32)? {
-            return enigo
-                .raw(keycode as u16, Direction::Click)
-                .map_err(|e| anyhow::anyhow!("{e:?}"));
-        }
-    }
+    let keycode = linux_cached_keycode_for_keysym(b'v' as u32)?;
+    enigo
+        .raw(keycode as u16, Direction::Click)
+        .map_err(|e| anyhow::anyhow!("{e:?}"))
+}
 
+#[cfg(target_os = "windows")]
+fn paste_key_click(enigo: &mut Enigo) -> Result<()> {
+    enigo
+        .key(Key::V, Direction::Click)
+        .map_err(|e| anyhow::anyhow!("{e:?}"))
+}
+
+#[cfg(target_os = "macos")]
+fn paste_key_click(enigo: &mut Enigo) -> Result<()> {
+    const MACOS_V_KEYCODE: u16 = 9;
+    enigo
+        .raw(MACOS_V_KEYCODE, Direction::Click)
+        .map_err(|e| anyhow::anyhow!("{e:?}"))
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
+fn paste_key_click(enigo: &mut Enigo) -> Result<()> {
     enigo
         .key(Key::Unicode('v'), Direction::Click)
         .map_err(|e| anyhow::anyhow!("{e:?}"))
 }
 
 #[cfg(target_os = "linux")]
-fn linux_keycode_for_keysym(keysym: u32) -> Result<Option<u8>> {
+fn linux_cached_keycode_for_keysym(keysym: u32) -> Result<u8> {
+    static V_KEYCODE: OnceLock<Result<u8, String>> = OnceLock::new();
+    V_KEYCODE
+        .get_or_init(|| linux_keycode_for_keysym(keysym).map_err(|err| format!("{err:#}")))
+        .clone()
+        .map_err(anyhow::Error::msg)
+}
+
+#[cfg(target_os = "linux")]
+fn linux_keycode_for_keysym(keysym: u32) -> Result<u8> {
     use x11rb::connection::Connection;
     use x11rb::protocol::xproto::ConnectionExt;
     use x11rb::rust_connection::RustConnection;
@@ -259,9 +292,27 @@ fn linux_keycode_for_keysym(keysym: u32) -> Result<Option<u8>> {
 
     for (offset, keysyms) in mapping.keysyms.chunks(keysyms_per_keycode).enumerate() {
         if keysyms.contains(&keysym) {
-            return Ok(Some(min_keycode + offset as u8));
+            return Ok(min_keycode + offset as u8);
         }
     }
 
-    Ok(None)
+    anyhow::bail!("could not map X11 keysym {keysym} to a keycode")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn paste_mode_labels_are_stable() {
+        assert_eq!(PasteMode::Terminal.label(), "terminal");
+        assert_eq!(PasteMode::Standard.label(), "standard");
+        assert_eq!(PasteMode::Direct.label(), "direct");
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn direct_mode_has_no_paste_modifiers() {
+        assert!(paste_modifiers(PasteMode::Direct).is_empty());
+    }
 }

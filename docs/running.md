@@ -115,7 +115,11 @@ Paste modes:
 ```bash
 parakit --paste-mode terminal  # Ctrl+Shift+V on Linux/Windows, Cmd+V on macOS
 parakit --paste-mode standard  # Ctrl+V on Linux/Windows, Cmd+V on macOS
+parakit --paste-mode direct    # synthetic typing, no clipboard
 ```
+
+Use `direct` only as an app-compatibility fallback. It is slower and can be
+less reliable for non-ASCII text.
 
 Streaming mode is experimental:
 

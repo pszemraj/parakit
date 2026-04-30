@@ -60,7 +60,7 @@ crossbeam channels.
 | `src/gguf.rs` | Minimal GGUF dtype reader for startup reporting. |
 | `src/inference.rs` | CrispASR session wrapper and short-audio padding. |
 | `src/rules.rs` | Built-in transcript cleanup rules. |
-| `src/daemon/inject.rs` | Batch clipboard paste and streaming synthetic typing. |
+| `src/daemon/inject.rs` | Batch paste/direct insertion and streaming synthetic typing. |
 | `src/daemon/sounds.rs` | Generated audio cue thread. |
 | `src/data_log.rs` | JSONL/TSV transcription logging. |
 | `examples/transcribe-file.rs` | File-based smoke and quality checks. |

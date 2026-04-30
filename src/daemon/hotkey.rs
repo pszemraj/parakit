@@ -10,17 +10,18 @@ use anyhow::Context;
 use crossbeam_channel::Sender;
 use once_cell::sync::OnceCell;
 use rdev::{Event, EventType, Key};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 static GRAB_TX: OnceCell<Sender<Event_>> = OnceCell::new();
 static GRAB_AUDIO: OnceCell<AudioHandle> = OnceCell::new();
-static CTRL_HELD: AtomicBool = AtomicBool::new(false);
-static SPACE_HELD: AtomicBool = AtomicBool::new(false);
+static HOTKEY_STATE: OnceCell<Mutex<HotkeyState>> = OnceCell::new();
 
 #[cfg(target_os = "linux")]
-const X11_HOTKEY_REFRESH: std::time::Duration = std::time::Duration::from_secs(5);
+const X11_HOTKEY_REFRESH: Duration = Duration::from_secs(5);
 #[cfg(target_os = "linux")]
 const X11_HOTKEY_REFRESH_FAILURE_LIMIT: u32 = 3;
+const HOTKEY_DEBOUNCE: Duration = Duration::from_millis(150);
 
 /// Hotkey backend preference.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, clap::ValueEnum)]
@@ -31,6 +32,148 @@ pub(crate) enum HotkeyBackend {
     Desktop,
     /// Force the low-level evdev grab backend.
     Evdev,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum HotkeyAction {
+    Start,
+    Stop,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct HotkeyState {
+    ctrl_left: bool,
+    ctrl_right: bool,
+    shift_left: bool,
+    shift_right: bool,
+    alt: bool,
+    alt_gr: bool,
+    meta_left: bool,
+    meta_right: bool,
+    space: bool,
+    suppress_space_release: bool,
+    recording: bool,
+    last_start: Option<Instant>,
+}
+
+impl HotkeyState {
+    fn press(&mut self, key: Key, now: Instant) -> (Option<HotkeyAction>, bool) {
+        self.set_key(key, true);
+        match key {
+            Key::Space if self.ctrl_only() => {
+                self.suppress_space_release = true;
+                let debounce_ok = self
+                    .last_start
+                    .is_none_or(|last| now.duration_since(last) >= HOTKEY_DEBOUNCE);
+                if !self.recording && debounce_ok {
+                    self.recording = true;
+                    self.last_start = Some(now);
+                    return (Some(HotkeyAction::Start), true);
+                }
+                (None, true)
+            }
+            Key::Space if self.recording => (None, true),
+            _ => (None, false),
+        }
+    }
+
+    fn release(&mut self, key: Key) -> (Option<HotkeyAction>, bool) {
+        let was_recording = self.recording;
+        let suppress_space_release = self.suppress_space_release;
+        self.set_key(key, false);
+        match key {
+            Key::Space if was_recording => {
+                self.suppress_space_release = false;
+                self.recording = false;
+                (Some(HotkeyAction::Stop), true)
+            }
+            Key::Space if suppress_space_release => {
+                self.suppress_space_release = false;
+                (None, true)
+            }
+            Key::ControlLeft | Key::ControlRight if was_recording && !self.ctrl_held() => {
+                self.space = false;
+                self.suppress_space_release = false;
+                self.recording = false;
+                (Some(HotkeyAction::Stop), true)
+            }
+            _ => (None, false),
+        }
+    }
+
+    fn desktop_press(&mut self, now: Instant) -> Option<HotkeyAction> {
+        self.ctrl_left = true;
+        self.space = true;
+        self.suppress_space_release = true;
+        let debounce_ok = self
+            .last_start
+            .is_none_or(|last| now.duration_since(last) >= HOTKEY_DEBOUNCE);
+        if !self.recording && debounce_ok {
+            self.recording = true;
+            self.last_start = Some(now);
+            Some(HotkeyAction::Start)
+        } else {
+            None
+        }
+    }
+
+    fn desktop_release(&mut self) -> Option<HotkeyAction> {
+        self.ctrl_left = false;
+        self.space = false;
+        self.suppress_space_release = false;
+        if self.recording {
+            self.recording = false;
+            Some(HotkeyAction::Stop)
+        } else {
+            None
+        }
+    }
+
+    fn reset_after_backend_loss(&mut self) -> Option<HotkeyAction> {
+        let was_recording = self.recording;
+        *self = Self::default();
+        was_recording.then_some(HotkeyAction::Stop)
+    }
+
+    fn is_recording(&self) -> bool {
+        self.recording
+    }
+
+    fn ctrl_held(&self) -> bool {
+        self.ctrl_left || self.ctrl_right
+    }
+
+    fn extra_modifier_held(&self) -> bool {
+        self.shift_left
+            || self.shift_right
+            || self.alt
+            || self.alt_gr
+            || self.meta_left
+            || self.meta_right
+    }
+
+    fn ctrl_only(&self) -> bool {
+        self.ctrl_held() && !self.extra_modifier_held()
+    }
+
+    fn set_key(&mut self, key: Key, pressed: bool) {
+        match key {
+            Key::ControlLeft => self.ctrl_left = pressed,
+            Key::ControlRight => self.ctrl_right = pressed,
+            Key::ShiftLeft => self.shift_left = pressed,
+            Key::ShiftRight => self.shift_right = pressed,
+            Key::Alt => self.alt = pressed,
+            Key::AltGr => self.alt_gr = pressed,
+            Key::MetaLeft => self.meta_left = pressed,
+            Key::MetaRight => self.meta_right = pressed,
+            Key::Space => self.space = pressed,
+            _ => {}
+        }
+    }
+}
+
+fn hotkey_state() -> &'static Mutex<HotkeyState> {
+    HOTKEY_STATE.get_or_init(|| Mutex::new(HotkeyState::default()))
 }
 
 /// Run the platform hotkey loop until the process exits.
@@ -123,7 +266,6 @@ pub(crate) fn run_grab_loop(tx: Sender<Event_>, audio: AudioHandle, _backend: Ho
 
 #[cfg(target_os = "linux")]
 fn run_x11_desktop_hotkey_loop() -> anyhow::Result<()> {
-    use std::time::{Duration, Instant};
     use x11rb::connection::Connection;
     use x11rb::protocol::xproto::{ConnectionExt, GrabMode, Keycode, ModMask, Window};
     use x11rb::protocol::Event as X11Event;
@@ -204,7 +346,6 @@ fn run_x11_desktop_hotkey_loop() -> anyhow::Result<()> {
             match Self::new() {
                 Ok(replacement) => {
                     *self = replacement;
-                    CTRL_HELD.store(false, Ordering::SeqCst);
                     Ok(())
                 }
                 Err(err) => {
@@ -250,16 +391,22 @@ fn run_x11_desktop_hotkey_loop() -> anyhow::Result<()> {
         match backend.poll_event()? {
             Some(event) => match event {
                 X11Event::KeyPress(event) if event.detail == backend.keycode => {
-                    CTRL_HELD.store(true, Ordering::SeqCst);
-                    if !SPACE_HELD.swap(true, Ordering::SeqCst) {
-                        start_hotkey_recording();
+                    if let Some(action) = hotkey_state()
+                        .lock()
+                        .expect("hotkey state lock poisoned")
+                        .desktop_press(Instant::now())
+                    {
+                        dispatch_hotkey_action(action);
                     }
                     refresh_failures = 0;
                 }
                 X11Event::KeyRelease(event) if event.detail == backend.keycode => {
-                    CTRL_HELD.store(false, Ordering::SeqCst);
-                    if SPACE_HELD.swap(false, Ordering::SeqCst) {
-                        stop_hotkey_recording();
+                    if let Some(action) = hotkey_state()
+                        .lock()
+                        .expect("hotkey state lock poisoned")
+                        .desktop_release()
+                    {
+                        dispatch_hotkey_action(action);
                     }
                     refresh_failures = 0;
                 }
@@ -272,7 +419,11 @@ fn run_x11_desktop_hotkey_loop() -> anyhow::Result<()> {
 
         if Instant::now() >= next_refresh {
             next_refresh = Instant::now() + X11_HOTKEY_REFRESH;
-            if !SPACE_HELD.load(Ordering::SeqCst) {
+            if !hotkey_state()
+                .lock()
+                .expect("hotkey state lock poisoned")
+                .is_recording()
+            {
                 match backend.refresh() {
                     Ok(()) => refresh_failures = 0,
                     Err(err) => {
@@ -368,45 +519,138 @@ fn stop_hotkey_recording() {
     }
 }
 
+fn dispatch_hotkey_action(action: HotkeyAction) {
+    match action {
+        HotkeyAction::Start => start_hotkey_recording(),
+        HotkeyAction::Stop => stop_hotkey_recording(),
+    }
+}
+
 #[cfg(target_os = "linux")]
 fn reset_hotkey_state_after_backend_loss() {
-    CTRL_HELD.store(false, Ordering::SeqCst);
-    if SPACE_HELD.swap(false, Ordering::SeqCst) {
-        stop_hotkey_recording();
+    if let Some(action) = hotkey_state()
+        .lock()
+        .expect("hotkey state lock poisoned")
+        .reset_after_backend_loss()
+    {
+        dispatch_hotkey_action(action);
     }
 }
 
 fn grab_callback(event: Event) -> Option<Event> {
     match event.event_type {
-        EventType::KeyPress(Key::ControlLeft) | EventType::KeyPress(Key::ControlRight) => {
-            CTRL_HELD.store(true, Ordering::SeqCst);
-            Some(event)
-        }
-        EventType::KeyRelease(Key::ControlLeft) | EventType::KeyRelease(Key::ControlRight) => {
-            CTRL_HELD.store(false, Ordering::SeqCst);
-            // If user released Ctrl while still holding Space, end the recording.
-            if SPACE_HELD.swap(false, Ordering::SeqCst) {
-                stop_hotkey_recording();
+        EventType::KeyPress(key) => {
+            let (action, suppress) = hotkey_state()
+                .lock()
+                .expect("hotkey state lock poisoned")
+                .press(key, Instant::now());
+            if let Some(action) = action {
+                dispatch_hotkey_action(action);
+            }
+            if suppress {
                 return None;
             }
             Some(event)
         }
-        EventType::KeyPress(Key::Space) => {
-            if CTRL_HELD.load(Ordering::SeqCst) {
-                if !SPACE_HELD.swap(true, Ordering::SeqCst) {
-                    start_hotkey_recording();
-                }
-                return None;
+        EventType::KeyRelease(key) => {
+            let (action, suppress) = hotkey_state()
+                .lock()
+                .expect("hotkey state lock poisoned")
+                .release(key);
+            if let Some(action) = action {
+                dispatch_hotkey_action(action);
             }
-            Some(event)
-        }
-        EventType::KeyRelease(Key::Space) => {
-            if SPACE_HELD.swap(false, Ordering::SeqCst) {
-                stop_hotkey_recording();
+            if suppress {
                 return None;
             }
             Some(event)
         }
         _ => Some(event),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn base_time() -> Instant {
+        Instant::now()
+    }
+
+    #[test]
+    fn ctrl_space_starts_and_stops() {
+        let now = base_time();
+        let mut state = HotkeyState::default();
+        assert_eq!(state.press(Key::ControlLeft, now), (None, false));
+        assert_eq!(
+            state.press(Key::Space, now + Duration::from_millis(10)),
+            (Some(HotkeyAction::Start), true)
+        );
+        assert_eq!(state.release(Key::Space), (Some(HotkeyAction::Stop), true));
+    }
+
+    #[test]
+    fn ctrl_release_before_space_stops() {
+        let now = base_time();
+        let mut state = HotkeyState::default();
+        state.press(Key::ControlLeft, now);
+        state.press(Key::Space, now + Duration::from_millis(10));
+        assert_eq!(
+            state.release(Key::ControlLeft),
+            (Some(HotkeyAction::Stop), true)
+        );
+        assert!(!state.is_recording());
+    }
+
+    #[test]
+    fn repeated_space_press_while_held_is_suppressed_without_restart() {
+        let now = base_time();
+        let mut state = HotkeyState::default();
+        state.press(Key::ControlLeft, now);
+        assert_eq!(
+            state.press(Key::Space, now + Duration::from_millis(10)),
+            (Some(HotkeyAction::Start), true)
+        );
+        assert_eq!(
+            state.press(Key::Space, now + Duration::from_millis(20)),
+            (None, true)
+        );
+        assert!(state.is_recording());
+    }
+
+    #[test]
+    fn rapid_double_press_is_ignored_and_suppressed() {
+        let now = base_time();
+        let mut state = HotkeyState::default();
+        state.press(Key::ControlLeft, now);
+        state.press(Key::Space, now + Duration::from_millis(10));
+        state.release(Key::Space);
+        assert_eq!(
+            state.press(Key::Space, now + Duration::from_millis(80)),
+            (None, true)
+        );
+        assert_eq!(state.release(Key::Space), (None, true));
+        assert!(!state.is_recording());
+    }
+
+    #[test]
+    fn ctrl_shift_space_does_not_start_or_suppress() {
+        let now = base_time();
+        let mut state = HotkeyState::default();
+        state.press(Key::ControlLeft, now);
+        state.press(Key::ShiftLeft, now + Duration::from_millis(5));
+        assert_eq!(
+            state.press(Key::Space, now + Duration::from_millis(10)),
+            (None, false)
+        );
+        assert!(!state.is_recording());
+    }
+
+    #[test]
+    fn unrelated_keys_pass_through() {
+        let now = base_time();
+        let mut state = HotkeyState::default();
+        assert_eq!(state.press(Key::KeyA, now), (None, false));
+        assert_eq!(state.release(Key::KeyA), (None, false));
     }
 }

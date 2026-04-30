@@ -85,7 +85,8 @@ struct Cli {
     #[arg(long, value_name = "N")]
     threads: Option<NonZeroUsize>,
 
-    /// Batch paste shortcut style. `terminal` uses Ctrl+Shift+V on Linux/Windows.
+    /// Batch insertion style. `terminal` uses Ctrl+Shift+V on Linux/Windows;
+    /// `direct` types text without touching the clipboard.
     #[arg(long, value_enum, default_value_t = PasteMode::Terminal)]
     paste_mode: PasteMode,
 
