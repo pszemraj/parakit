@@ -147,8 +147,10 @@ cargo build --release
 copy target\release\build\parakit-*\out\bin\*.dll target\release\
 ```
 
-Security software may flag global hooks plus text insertion. Whitelist the
-binary if needed.
+Windows text insertion uses `SendInput`. It can inject only into applications
+running at the same or a lower integrity level, so a non-elevated parakit cannot
+paste into an elevated administrator app. Security software may also flag global
+hooks plus text insertion; whitelist the binary if needed.
 
 ## Updating CrispASR
 

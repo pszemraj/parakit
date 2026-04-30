@@ -71,8 +71,10 @@ app refuses clipboard paste entirely.
 Streaming insertion uses synthetic typing. On Linux, X11 is the supported path.
 Wayland usually blocks synthetic key events.
 
-On Windows, security software can flag global hooks plus text insertion.
-Whitelist the binary when needed.
+On Windows, paste shortcuts are sent with `SendInput`. Windows blocks synthetic
+input into higher-integrity processes, so a normal parakit process cannot paste
+into an administrator/elevated target application. Security software can also
+flag global hooks plus text insertion; whitelist the binary when needed.
 
 ## Wrong Microphone
 
