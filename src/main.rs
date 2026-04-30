@@ -359,7 +359,7 @@ fn run() -> Result<()> {
     let hotkey_backend = cli.hotkey_backend;
     #[cfg(not(target_os = "linux"))]
     let hotkey_backend = HotkeyBackend::Auto;
-    daemon::hotkey::run_grab_loop(tx, audio, hotkey_backend);
+    daemon::hotkey::run_grab_loop(tx, audio, hotkey_backend, Arc::clone(&log));
 
     // Tear down.
     if let Some(t) = streaming_thread {
