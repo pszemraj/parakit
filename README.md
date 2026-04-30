@@ -79,6 +79,9 @@ parakit doctor
 parakit
 ```
 
+Use `parakit doctor --deep` when validating a new desktop/session; it actively
+checks the insertion backend without loading the model.
+
 The first `parakit` run downloads the default Q8_0 GGUF model if it is not
 already cached. No `-m` argument is needed for normal use.
 

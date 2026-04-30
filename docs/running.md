@@ -7,11 +7,15 @@ then run it quietly in the background for daily use.
 
 ```bash
 parakit doctor
+parakit doctor --deep
 parakit
 ```
 
 `parakit doctor` checks hotkey access, selected microphone, insertion support,
 and compiled backend flags. It does not download or load the model.
+`parakit doctor --deep` also runs an active insertion smoke test. On Linux/X11
+it briefly focuses a tiny probe window and verifies the X server observes the
+paste key event while that window owns focus.
 
 The first real `parakit` run downloads the default Q8_0 GGUF if it is not
 already cached, then opens the microphone and hotkey backend.

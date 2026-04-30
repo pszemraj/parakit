@@ -4,10 +4,15 @@ Start with:
 
 ```bash
 parakit doctor
+parakit doctor --deep
 ```
 
 It reports hotkey access, selected microphone, insertion support, and build
 flags without loading the model.
+
+`--deep` runs an active insertion smoke test. On Linux/X11 it briefly focuses a
+tiny probe window, sends the configured paste shortcut, and verifies the X
+server observes the paste key event while that window owns focus.
 
 ## Hotkey Problems
 
@@ -54,6 +59,7 @@ managers may still record the transient transcript.
 The default paste mode is terminal-friendly:
 
 ```bash
+parakit doctor --deep
 parakit --paste-mode terminal
 parakit --paste-mode standard
 parakit --paste-mode direct

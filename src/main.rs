@@ -141,7 +141,7 @@ enum Commands {
     /// Inspect the parakit model cache.
     Cache(CacheCli),
     /// Check desktop permissions and runtime prerequisites without starting.
-    Doctor,
+    Doctor(DoctorCli),
 }
 
 #[derive(Args, Debug)]
@@ -176,6 +176,16 @@ struct FetchCli {
     /// Keep the intermediate F16 GGUF after source rebuild.
     #[arg(long, requires = "from_source")]
     keep_f16: bool,
+}
+
+#[derive(Args, Debug)]
+struct DoctorCli {
+    /// Run active smoke tests in addition to passive preflight checks.
+    ///
+    /// On Linux/X11 this briefly focuses a tiny probe window and verifies the
+    /// configured paste shortcut reaches it.
+    #[arg(long)]
+    deep: bool,
 }
 
 // =============================================================================
@@ -227,8 +237,8 @@ fn run() -> Result<()> {
                 run_cache_command(cache_cli, cli.quiet)?;
                 return Ok(());
             }
-            Commands::Doctor => {
-                if daemon::preflight::print_doctor(!cli.quiet) {
+            Commands::Doctor(doctor_cli) => {
+                if daemon::preflight::print_doctor(!cli.quiet, cli.paste_mode, doctor_cli.deep) {
                     return Ok(());
                 }
                 anyhow::bail!("doctor found blocking desktop permission issues");

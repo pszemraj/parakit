@@ -24,19 +24,31 @@ pub fn ensure_hotkey_ready() -> Result<()> {
     Ok(())
 }
 
-/// Run hotkey diagnostics and return whether daemon startup should proceed.
+/// Run diagnostics and return whether daemon startup should proceed.
+///
+/// # Arguments
+///
+/// * `verbose` - Print diagnostic details when true.
+/// * `paste_mode` - Insertion mode to validate.
+/// * `deep` - Run the platform insertion smoke test when true.
 ///
 /// # Returns
 ///
-/// `true` when no blocking hotkey problem was detected.
-pub fn print_doctor(verbose: bool) -> bool {
+/// `true` when no blocking problem was detected.
+pub fn print_doctor(verbose: bool, paste_mode: PasteMode, deep: bool) -> bool {
     let report = hotkey_report();
+    let mic = super::audio::probe_default_input();
+    let insertion = if deep {
+        inject::smoke_test(paste_mode)
+    } else {
+        inject::preflight(paste_mode)
+    };
+    let ok = !report.blocking && mic.is_ok() && insertion.is_ok();
+
     if !verbose {
-        return !report.blocking;
+        return ok;
     }
 
-    let mic = super::audio::probe_default_input();
-    let insertion = inject::preflight(PasteMode::Terminal);
     println!("{}", report.details.trim_end());
     match &mic {
         Ok(mic) => {
@@ -49,14 +61,15 @@ pub fn print_doctor(verbose: bool) -> bool {
         }
     }
     match &insertion {
-        Ok(()) => println!("  insertion:     OK (terminal paste)"),
+        Ok(()) if deep => println!("  insertion:     OK ({} smoke test)", paste_mode.label()),
+        Ok(()) => println!("  insertion:     OK ({} preflight)", paste_mode.label()),
         Err(err) => println!("  insertion:     FAIL ({err:#})"),
     }
     println!("  build:");
     for line in build_info::diagnostic_lines() {
         println!("    {line}");
     }
-    !report.blocking && mic.is_ok() && insertion.is_ok()
+    ok
 }
 
 struct HotkeyReport {
@@ -456,6 +469,6 @@ mod tests {
 
     #[test]
     fn doctor_result_is_boolean() {
-        let _ = print_doctor(false);
+        let _ = print_doctor(false, PasteMode::Terminal, false);
     }
 }

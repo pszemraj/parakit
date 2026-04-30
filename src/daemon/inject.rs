@@ -20,7 +20,10 @@ use clap::ValueEnum;
 use enigo::{Direction, Enigo, Key, Keyboard, Settings};
 #[cfg(target_os = "linux")]
 use std::sync::OnceLock;
-use std::{thread, time::Duration};
+use std::{
+    thread,
+    time::{Duration, Instant},
+};
 
 /// Paste shortcut style for batch transcript insertion.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
@@ -70,6 +73,29 @@ pub(crate) fn preflight(mode: PasteMode) -> Result<()> {
         platform_paste_preflight()?;
     }
     Ok(())
+}
+
+/// Exercise the configured insertion backend without inserting into the user's
+/// focused application.
+///
+/// # Arguments
+///
+/// * `mode` - Insertion mode to validate.
+///
+/// # Returns
+///
+/// `Ok(())` when the backend can initialize and the platform smoke test passes.
+///
+/// # Errors
+///
+/// Returns an error when the keyboard, clipboard, or platform event backend
+/// fails the validation.
+pub(crate) fn smoke_test(mode: PasteMode) -> Result<()> {
+    preflight(mode)?;
+    if mode == PasteMode::Direct {
+        return Ok(());
+    }
+    platform_paste_smoke_test(mode)
 }
 
 trait TextClipboard {
@@ -297,6 +323,16 @@ fn platform_paste_preflight() -> Result<()> {
     Ok(())
 }
 
+#[cfg(target_os = "linux")]
+fn platform_paste_smoke_test(mode: PasteMode) -> Result<()> {
+    linux_x11_paste_smoke_test(mode)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn platform_paste_smoke_test(_mode: PasteMode) -> Result<()> {
+    Ok(())
+}
+
 fn clipboard_settle_delay() -> Duration {
     #[cfg(target_os = "linux")]
     {
@@ -402,11 +438,21 @@ fn linux_x11_click_keysym(keysym: u32) -> Result<()> {
     use x11rb::rust_connection::RustConnection;
 
     let keycode = linux_cached_keycode_for_keysym(keysym)?;
-    let (conn, _) = RustConnection::connect(None).context("could not connect to X11")?;
-    conn.xtest_fake_input(KEY_PRESS_EVENT, keycode, 0, x11rb::NONE, 0, 0, 0)
-        .context("could not send XTest key press")?;
-    conn.xtest_fake_input(KEY_RELEASE_EVENT, keycode, 0, x11rb::NONE, 0, 0, 0)
-        .context("could not send XTest key release")?;
+    let (conn, screen_num) = RustConnection::connect(None).context("could not connect to X11")?;
+    let root = conn
+        .setup()
+        .roots
+        .get(screen_num)
+        .ok_or_else(|| anyhow::anyhow!("X11 display did not expose the requested screen"))?
+        .root;
+    conn.xtest_fake_input(KEY_PRESS_EVENT, keycode, 0, root, 0, 0, 0)
+        .context("could not send XTest key press")?
+        .check()
+        .context("X11 rejected XTest key press")?;
+    conn.xtest_fake_input(KEY_RELEASE_EVENT, keycode, 0, root, 0, 0, 0)
+        .context("could not send XTest key release")?
+        .check()
+        .context("X11 rejected XTest key release")?;
     conn.flush().context("could not flush XTest paste key")?;
     Ok(())
 }
@@ -422,6 +468,200 @@ fn linux_x11_xtest_preflight() -> Result<()> {
         .reply()
         .context("XTest extension is unavailable")?;
     Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn linux_x11_paste_smoke_test(mode: PasteMode) -> Result<()> {
+    const XI_ALL_MASTER_DEVICES: u16 = 1;
+
+    use x11rb::connection::Connection;
+    use x11rb::protocol::xinput::{
+        ConnectionExt as XinputConnectionExt, EventMask as XiEventMask, XIEventMask,
+    };
+    use x11rb::protocol::xproto::{
+        ConnectionExt, CreateWindowAux, EventMask, InputFocus, WindowClass,
+    };
+    use x11rb::rust_connection::RustConnection;
+
+    let v_keycode = linux_cached_keycode_for_keysym(b'v' as u32)?;
+    let (conn, screen_num) = RustConnection::connect(None).context("could not connect to X11")?;
+    let screen = conn
+        .setup()
+        .roots
+        .get(screen_num)
+        .ok_or_else(|| anyhow::anyhow!("X11 display did not expose the requested screen"))?;
+    let previous_focus = conn
+        .get_input_focus()
+        .context("could not request current X11 input focus")?
+        .reply()
+        .context("could not read current X11 input focus")?;
+    let window = conn
+        .generate_id()
+        .context("could not allocate X11 smoke-test window id")?;
+    let window_aux = CreateWindowAux::new()
+        .background_pixel(screen.white_pixel)
+        .override_redirect(1)
+        .event_mask(EventMask::KEY_PRESS | EventMask::KEY_RELEASE);
+    let raw_key_mask = [XiEventMask {
+        deviceid: XI_ALL_MASTER_DEVICES,
+        mask: vec![XIEventMask::RAW_KEY_PRESS | XIEventMask::RAW_KEY_RELEASE],
+    }];
+
+    conn.create_window(
+        screen.root_depth,
+        window,
+        screen.root,
+        0,
+        0,
+        1,
+        1,
+        0,
+        WindowClass::INPUT_OUTPUT,
+        x11rb::COPY_FROM_PARENT,
+        &window_aux,
+    )
+    .context("could not create X11 smoke-test window")?
+    .check()
+    .context("X11 rejected smoke-test window creation")?;
+    conn.map_window(window)
+        .context("could not map X11 smoke-test window")?
+        .check()
+        .context("X11 rejected smoke-test window mapping")?;
+    conn.set_input_focus(InputFocus::PARENT, window, x11rb::CURRENT_TIME)
+        .context("could not focus X11 smoke-test window")?
+        .check()
+        .context("X11 rejected smoke-test focus change")?;
+    conn.xinput_xi_select_events(screen.root, &raw_key_mask)
+        .context("could not subscribe to XInput raw key events")?
+        .check()
+        .context("X11 rejected XInput raw key event subscription")?;
+    conn.flush()
+        .context("could not flush X11 smoke-test setup")?;
+    linux_wait_for_focus(&conn, window)?;
+    while conn
+        .poll_for_event()
+        .context("could not drain X11 smoke-test setup events")?
+        .is_some()
+    {}
+
+    let smoke_result = (|| {
+        let mut injector = Injector::new()?;
+        injector
+            .paste_clipboard(mode)
+            .context("configured paste shortcut failed during smoke test")?;
+        linux_wait_for_v_key_events(&conn, window, v_keycode, true)
+    })();
+
+    let cleanup_result = (|| {
+        conn.set_input_focus(
+            previous_focus.revert_to,
+            previous_focus.focus,
+            x11rb::CURRENT_TIME,
+        )
+        .context("could not restore previous X11 input focus")?
+        .check()
+        .context("X11 rejected previous focus restore")?;
+        conn.destroy_window(window)
+            .context("could not destroy X11 smoke-test window")?
+            .check()
+            .context("X11 rejected smoke-test window cleanup")?;
+        conn.flush()
+            .context("could not flush X11 smoke-test cleanup")
+    })();
+
+    smoke_result.and(cleanup_result)
+}
+
+#[cfg(target_os = "linux")]
+fn linux_wait_for_focus(conn: &x11rb::rust_connection::RustConnection, window: u32) -> Result<()> {
+    use x11rb::protocol::xproto::ConnectionExt;
+
+    let deadline = Instant::now() + Duration::from_millis(750);
+    while Instant::now() < deadline {
+        let focus = conn
+            .get_input_focus()
+            .context("could not request X11 smoke-test focus")?
+            .reply()
+            .context("could not read X11 smoke-test focus")?;
+        if focus.focus == window {
+            return Ok(());
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+
+    anyhow::bail!("X11 smoke-test window did not receive input focus")
+}
+
+#[cfg(target_os = "linux")]
+fn linux_wait_for_v_key_events(
+    conn: &x11rb::rust_connection::RustConnection,
+    window: u32,
+    v_keycode: u8,
+    accept_raw: bool,
+) -> Result<()> {
+    use x11rb::connection::Connection;
+    use x11rb::protocol::Event;
+
+    let deadline = Instant::now() + Duration::from_millis(750);
+    let mut saw_press = false;
+    let mut saw_release = false;
+    let mut observed = Vec::new();
+
+    while Instant::now() < deadline {
+        while let Some(event) = conn
+            .poll_for_event()
+            .context("could not poll X11 smoke-test events")?
+        {
+            match event {
+                Event::KeyPress(event) => {
+                    observed.push(format!(
+                        "press:event={},detail={},state={:?}",
+                        event.event, event.detail, event.state
+                    ));
+                    if event.event == window && event.detail == v_keycode {
+                        saw_press = true;
+                    }
+                }
+                Event::KeyRelease(event) => {
+                    observed.push(format!(
+                        "release:event={},detail={},state={:?}",
+                        event.event, event.detail, event.state
+                    ));
+                    if event.event == window && event.detail == v_keycode {
+                        saw_release = true;
+                    }
+                }
+                Event::XinputRawKeyPress(event) => {
+                    observed.push(format!(
+                        "raw-press:detail={},device={},source={}",
+                        event.detail, event.deviceid, event.sourceid
+                    ));
+                    if accept_raw && event.detail == u32::from(v_keycode) {
+                        saw_press = true;
+                    }
+                }
+                Event::XinputRawKeyRelease(event) => {
+                    observed.push(format!(
+                        "raw-release:detail={},device={},source={}",
+                        event.detail, event.deviceid, event.sourceid
+                    ));
+                    if accept_raw && event.detail == u32::from(v_keycode) {
+                        saw_release = true;
+                    }
+                }
+                _ => {}
+            }
+        }
+        if saw_press && saw_release {
+            return Ok(());
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+
+    anyhow::bail!(
+        "X11 smoke test did not observe the paste key event (target_window={window}, target_keycode={v_keycode}, press={saw_press}, release={saw_release}, observed=[{}])",
+        observed.join(", ")
+    )
 }
 
 #[cfg(test)]

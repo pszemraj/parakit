@@ -74,7 +74,7 @@ hound = "3.5"
 [target.'cfg(target_os = "linux")'.dependencies]
 # Direct X11 desktop hotkey registration. This avoids evdev permissions on
 # ordinary Xorg sessions and gives us explicit connection/grab errors.
-x11rb = { version = "0.13", features = ["xtest"], optional = true }
+x11rb = { version = "0.13", features = ["xinput", "xtest"], optional = true }
 
 [features]
 default = ["bundled", "daemon"]
