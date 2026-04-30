@@ -33,35 +33,18 @@ parakit --verbose
 parakit --threads 8 --verbose
 ```
 
-On Linux, `--hotkey-backend auto` uses evdev first only when all input devices
-are readable; otherwise it uses the X11 desktop hotkey. Use evdev explicitly
-when the daemon must survive desktop logout/login churn:
-
-```bash
-parakit --hotkey-backend evdev
-```
-
 ## Background Use
-
-```bash
-parakit --quiet &
-```
-
-`--quiet` suppresses normal stdout, including startup lines and transcripts.
-Errors and warnings still go to stderr.
-
-On Linux, start parakit from a terminal or tmux server created in the current
-desktop login. A tmux server that survives GNOME logout/login can keep stale
-`DISPLAY` or `XAUTHORITY` values, which breaks the X11 hotkey backend. Restart
-tmux after logging back in, or use `--hotkey-backend evdev` after granting
-evdev input access.
-
-Detach from the current shell:
 
 ```bash
 parakit --quiet &
 disown
 ```
+
+`--quiet` suppresses normal stdout, including startup lines and transcripts.
+Errors and warnings still go to stderr.
+
+On Linux, start parakit from a terminal in the current desktop session. See
+[linux-desktop.md](linux-desktop.md) for tmux, X11 auth, and evdev details.
 
 Keep stderr in a file:
 

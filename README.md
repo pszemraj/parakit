@@ -105,14 +105,13 @@ parakit
 Ready: hold Ctrl+Space to dictate.
 ```
 
-For normal use, run it quietly in the background:
+For normal use, start it from a terminal in the current desktop session and
+detach it:
 
 ```bash
 parakit --quiet &
+disown
 ```
-
-On Linux, launch it from the current desktop login. Old tmux servers can keep
-stale X11 auth after logout/login; see [docs/running.md](docs/running.md).
 
 See [docs/running.md](docs/running.md) for background launch, model cache,
 logging, microphone selection, paste modes, sounds, and streaming mode.
@@ -131,9 +130,6 @@ parakit cache dir
 # Show diagnostic startup paths, backend details, and timings.
 parakit --verbose
 parakit --threads 8 --verbose
-
-# Linux: force the session-stable evdev hotkey backend.
-parakit --hotkey-backend evdev
 
 # Run with transcription logging.
 parakit --log-dir ~/.parakit/logs
@@ -163,6 +159,8 @@ Maintainer source rebuilds from NVIDIA's `.nemo` checkpoint are described in
   CrispASR, rpath, and Windows DLL handling.
 - [docs/running.md](docs/running.md): foreground/background launch, quiet
   mode, model cache, logging, paste modes, and runtime modes.
+- [docs/linux-desktop.md](docs/linux-desktop.md): Linux hotkey backends,
+  desktop session auth, tmux, and evdev setup.
 - [docs/architecture.md](docs/architecture.md): thread model, event flow,
   module boundaries, and ownership constraints.
 - [docs/cleaning-rules.md](docs/cleaning-rules.md): cleanup rule behavior,

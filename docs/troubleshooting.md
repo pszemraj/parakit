@@ -27,34 +27,10 @@ status:         OK (desktop hotkey backend)
 If `Ctrl+Space` is unavailable, another desktop shortcut or input method may
 own it. Disable that binding and rerun `parakit doctor`.
 
-If parakit must use the low-level evdev backend, every `/dev/input/event*`
-device needs to be readable by the desktop user:
-
-```bash
-sudo usermod -aG input "$USER"
-id -nG | tr ' ' '\n' | grep '^input$'
-```
-
-Log out and back in, or reboot. Restart tmux and terminals that were open before
-the group change. Avoid running parakit with `sudo`; audio, X11, and text
-insertion usually belong to the regular desktop user.
-
-The X11 desktop backend is tied to the current desktop session. parakit
-refreshes the registration while idle and exits with an error if the refresh
-keeps failing instead of staying alive with a dead shortcut. For a daemon that
-must survive GNOME logout/login churn, grant evdev access and run:
-
-```bash
-parakit --hotkey-backend evdev
-```
-
-`auto` uses evdev first when the full evdev grab appears usable, otherwise it
-uses the X11 desktop backend.
-
-If `doctor` reports `Connection refused` for X11 after a logout/login, the
-terminal or tmux server may still have stale `DISPLAY`/`XAUTHORITY` values from
-the old desktop session. Restart those shells from the current desktop session
-or use the evdev backend.
+If `doctor` reports `Connection refused` for X11 after a logout/login, restart
+the terminal or tmux server from the current desktop session. If you need the
+daemon to survive desktop session churn, use the evdev backend. See
+[linux-desktop.md](linux-desktop.md).
 
 On macOS, grant Accessibility and Input Monitoring permissions to both the
 terminal and the built binary.
