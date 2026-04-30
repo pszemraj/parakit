@@ -72,9 +72,9 @@ crossbeam-channel = "0.5"
 hound = "3.5"
 
 [target.'cfg(target_os = "linux")'.dependencies]
-# X11 desktop hotkey registration. This avoids evdev permissions on normal
-# GNOME/KDE/X11 sessions and matches the path used by Tauri-style apps.
-global-hotkey = { version = "0.7", optional = true }
+# Direct X11 desktop hotkey registration. This avoids evdev permissions on
+# ordinary Xorg sessions and gives us explicit connection/grab errors.
+x11rb = { version = "0.13", optional = true }
 
 [features]
 default = ["bundled", "daemon"]
@@ -86,9 +86,9 @@ daemon = [
   "dep:arboard",
   "dep:cpal",
   "dep:enigo",
-  "dep:global-hotkey",
   "dep:rdev",
   "dep:rodio",
+  "dep:x11rb",
 ]
 
 # Build libcrispasr from `vendor/CrispASR` via cmake. On by default.

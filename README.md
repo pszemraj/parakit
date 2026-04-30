@@ -175,6 +175,6 @@ Maintainer source rebuilds from NVIDIA's `.nemo` checkpoint are described in
 
 MIT. See [`LICENSE`](LICENSE).
 
-`crispasr`, `cpal`, `global-hotkey`, `rdev`, `enigo`, `rodio`, `rubato`,
+`crispasr`, `cpal`, `x11rb`, `rdev`, `enigo`, `rodio`, `rubato`,
 `regex`, `clap`, and other dependencies have their own licenses (mostly
 MIT/Apache-2.0). The bundled CrispASR library is also MIT-licensed.

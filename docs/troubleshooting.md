@@ -51,6 +51,11 @@ parakit --hotkey-backend evdev
 `auto` uses evdev first when the full evdev grab appears usable, otherwise it
 uses the X11 desktop backend.
 
+If `doctor` reports `Connection refused` for X11 after a logout/login, the
+terminal or tmux server may still have stale `DISPLAY`/`XAUTHORITY` values from
+the old desktop session. Restart those shells from the current desktop session
+or use the evdev backend.
+
 On macOS, grant Accessibility and Input Monitoring permissions to both the
 terminal and the built binary.
 

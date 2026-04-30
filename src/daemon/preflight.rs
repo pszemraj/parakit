@@ -62,6 +62,7 @@ struct HotkeyReport {
 fn hotkey_report() -> HotkeyReport {
     let session = std::env::var("XDG_SESSION_TYPE").unwrap_or_else(|_| "unknown".to_string());
     let display = std::env::var("DISPLAY").unwrap_or_else(|_| "<unset>".to_string());
+    let xauthority = std::env::var("XAUTHORITY").unwrap_or_else(|_| "<unset>".to_string());
     let user = std::env::var("USER").unwrap_or_else(|_| "$USER".to_string());
     let evdev = evdev_report();
     let x11_candidate = linux_x11_desktop_hotkey_candidate();
@@ -80,6 +81,7 @@ fn hotkey_report() -> HotkeyReport {
         "  session:        XDG_SESSION_TYPE={session}, DISPLAY={display}"
     )
     .unwrap();
+    writeln!(&mut details, "  xauthority:     {xauthority}").unwrap();
     writeln!(&mut details, "  desktop:        X11 desktop hotkey").unwrap();
     match &x11_probe {
         Ok(()) => writeln!(&mut details, "  desktop status: OK").unwrap(),
@@ -132,7 +134,7 @@ fn hotkey_report() -> HotkeyReport {
         writeln!(&mut summary, "hotkey preflight failed before model startup").unwrap();
         writeln!(
             &mut summary,
-            "session: XDG_SESSION_TYPE={session}, DISPLAY={display}"
+            "session: XDG_SESSION_TYPE={session}, DISPLAY={display}, XAUTHORITY={xauthority}"
         )
         .unwrap();
         writeln!(
@@ -261,13 +263,75 @@ pub(crate) fn linux_evdev_fallback_available() -> bool {
 
 #[cfg(target_os = "linux")]
 fn probe_x11_desktop_hotkey() -> std::result::Result<(), String> {
-    use global_hotkey::hotkey::{Code, HotKey, Modifiers};
-    use global_hotkey::GlobalHotKeyManager;
+    use x11rb::connection::Connection;
+    use x11rb::protocol::xproto::{ConnectionExt, GrabMode, Keycode, ModMask, Window};
+    use x11rb::rust_connection::RustConnection;
 
-    let manager = GlobalHotKeyManager::new().map_err(|err| err.to_string())?;
-    let hotkey = HotKey::new(Some(Modifiers::CONTROL), Code::Space);
-    manager.register(hotkey).map_err(|err| err.to_string())?;
-    manager.unregister(hotkey).map_err(|err| err.to_string())?;
+    const SPACE_KEYSYM: u32 = 0x0020;
+
+    fn space_keycode(conn: &RustConnection) -> std::result::Result<Keycode, String> {
+        let setup = conn.setup();
+        let min_keycode = setup.min_keycode;
+        let max_keycode = setup.max_keycode;
+        let count = max_keycode - min_keycode + 1;
+        let mapping = conn
+            .get_keyboard_mapping(min_keycode, count)
+            .map_err(|err| err.to_string())?
+            .reply()
+            .map_err(|err| err.to_string())?;
+        let keysyms_per_keycode = mapping.keysyms_per_keycode as usize;
+
+        for (offset, keysyms) in mapping.keysyms.chunks(keysyms_per_keycode).enumerate() {
+            if keysyms.contains(&SPACE_KEYSYM) {
+                return Ok(min_keycode + offset as u8);
+            }
+        }
+
+        Err("could not map the X11 Space keysym to a keycode".to_string())
+    }
+
+    fn grab_mods() -> [ModMask; 4] {
+        [
+            ModMask::CONTROL,
+            ModMask::CONTROL | ModMask::M2,
+            ModMask::CONTROL | ModMask::LOCK,
+            ModMask::CONTROL | ModMask::M2 | ModMask::LOCK,
+        ]
+    }
+
+    fn ungrab(conn: &RustConnection, root: Window, keycode: Keycode) {
+        for mods in grab_mods() {
+            if let Ok(result) = conn.ungrab_key(keycode, root, mods) {
+                result.ignore_error();
+            }
+        }
+        let _ = conn.flush();
+    }
+
+    let (conn, screen_num) = RustConnection::connect(None).map_err(|err| err.to_string())?;
+    let root = conn
+        .setup()
+        .roots
+        .get(screen_num)
+        .ok_or_else(|| "X11 display did not expose the requested screen".to_string())?
+        .root;
+    let keycode = space_keycode(&conn)?;
+
+    for mods in grab_mods() {
+        match conn
+            .grab_key(false, root, mods, keycode, GrabMode::ASYNC, GrabMode::ASYNC)
+            .map_err(|err| err.to_string())?
+            .check()
+        {
+            Ok(()) => {}
+            Err(err) => {
+                ungrab(&conn, root, keycode);
+                return Err(format!("XGrabKey rejected Ctrl+Space: {err}"));
+            }
+        }
+    }
+    conn.flush().map_err(|err| err.to_string())?;
+    ungrab(&conn, root, keycode);
     Ok(())
 }
 
@@ -275,7 +339,7 @@ fn probe_x11_desktop_hotkey() -> std::result::Result<(), String> {
 fn write_linux_fix(out: &mut String, user: &str) {
     writeln!(
         out,
-        "fix:\n  - Preferred: use an Xorg/X11 session and make sure Ctrl+Space is not already bound by the desktop or input method.\n  - Fallback: grant the desktop user read access to /dev/input/event*:\n      sudo usermod -aG input {user}\n  - After changing groups, log out completely and log back in, or reboot.\n  - Restart tmux, terminals, and user services started before the group change.\n  - Verify the fresh session:\n      id -nG | tr ' ' '\\n' | grep '^input$'\n  - Do not run parakit with sudo as the normal workaround."
+        "fix:\n  - Preferred: use an Xorg/X11 session and make sure Ctrl+Space is not already bound by the desktop or input method.\n  - If this happened after GNOME logout/login, restart tmux, terminals, and user services from the new desktop session so DISPLAY/XAUTHORITY are fresh.\n  - Session-stable path: grant the desktop user read access to /dev/input/event*:\n      sudo usermod -aG input {user}\n  - After changing groups, log out completely and log back in, or reboot.\n  - Verify the fresh session:\n      id -nG | tr ' ' '\\n' | grep '^input$'\n  - Then run: parakit --hotkey-backend evdev\n  - Do not run parakit with sudo as the normal workaround."
     )
     .unwrap();
 }

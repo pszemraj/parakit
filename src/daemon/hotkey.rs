@@ -123,33 +123,84 @@ pub(crate) fn run_grab_loop(tx: Sender<Event_>, audio: AudioHandle, _backend: Ho
 
 #[cfg(target_os = "linux")]
 fn run_x11_desktop_hotkey_loop() -> anyhow::Result<()> {
-    use crossbeam_channel::RecvTimeoutError;
-    use global_hotkey::HotKeyState;
-    use global_hotkey::{hotkey::Code, hotkey::HotKey, hotkey::Modifiers, GlobalHotKeyEvent};
     use std::time::{Duration, Instant};
+    use x11rb::connection::Connection;
+    use x11rb::protocol::xproto::{ConnectionExt, GrabMode, Keycode, ModMask, Window};
+    use x11rb::protocol::Event as X11Event;
+    use x11rb::rust_connection::RustConnection;
+
+    const SPACE_KEYSYM: u32 = 0x0020;
 
     struct X11HotkeyBackend {
-        manager: global_hotkey::GlobalHotKeyManager,
-        hotkey: HotKey,
+        conn: RustConnection,
+        root: Window,
+        keycode: Keycode,
     }
 
     impl X11HotkeyBackend {
         fn new() -> anyhow::Result<Self> {
-            let manager = global_hotkey::GlobalHotKeyManager::new()
-                .map_err(|err| anyhow::anyhow!(err))
-                .context("could not create global hotkey manager")?;
-            let hotkey = HotKey::new(Some(Modifiers::CONTROL), Code::Space);
-            manager
-                .register(hotkey)
-                .map_err(|err| anyhow::anyhow!(err))
-                .context(
-                    "could not register Ctrl+Space; another desktop shortcut may already own it",
-                )?;
-            Ok(Self { manager, hotkey })
+            let (conn, screen_num) =
+                RustConnection::connect(None).context("could not connect to the X11 display")?;
+            let root = conn
+                .setup()
+                .roots
+                .get(screen_num)
+                .context("X11 display did not expose the requested screen")?
+                .root;
+            let keycode = space_keycode(&conn)?;
+            let backend = Self {
+                conn,
+                root,
+                keycode,
+            };
+            backend
+                .grab()
+                .context("could not register Ctrl+Space; another shortcut may already own it")?;
+            Ok(backend)
+        }
+
+        fn grab_mods() -> [ModMask; 4] {
+            [
+                ModMask::CONTROL,
+                ModMask::CONTROL | ModMask::M2,
+                ModMask::CONTROL | ModMask::LOCK,
+                ModMask::CONTROL | ModMask::M2 | ModMask::LOCK,
+            ]
+        }
+
+        fn grab(&self) -> anyhow::Result<()> {
+            for mods in Self::grab_mods() {
+                let result = self
+                    .conn
+                    .grab_key(
+                        false,
+                        self.root,
+                        mods,
+                        self.keycode,
+                        GrabMode::ASYNC,
+                        GrabMode::ASYNC,
+                    )
+                    .context("could not send XGrabKey request")?;
+                if let Err(err) = result.check() {
+                    self.ungrab();
+                    return Err(anyhow::anyhow!(err)).context("XGrabKey rejected Ctrl+Space");
+                }
+            }
+            self.conn.flush().context("could not flush XGrabKey")?;
+            Ok(())
+        }
+
+        fn ungrab(&self) {
+            for mods in Self::grab_mods() {
+                if let Ok(result) = self.conn.ungrab_key(self.keycode, self.root, mods) {
+                    result.ignore_error();
+                }
+            }
+            let _ = self.conn.flush();
         }
 
         fn refresh(&mut self) -> anyhow::Result<()> {
-            let _ = self.manager.unregister(self.hotkey);
+            self.ungrab();
             match Self::new() {
                 Ok(replacement) => {
                     *self = replacement;
@@ -157,64 +208,85 @@ fn run_x11_desktop_hotkey_loop() -> anyhow::Result<()> {
                     Ok(())
                 }
                 Err(err) => {
-                    let _ = self.manager.register(self.hotkey);
+                    let _ = self.grab();
                     Err(err)
                 }
             }
         }
+
+        fn poll_event(&self) -> anyhow::Result<Option<X11Event>> {
+            self.conn
+                .poll_for_event()
+                .context("X11 hotkey event polling failed")
+        }
+    }
+
+    fn space_keycode(conn: &RustConnection) -> anyhow::Result<Keycode> {
+        let setup = conn.setup();
+        let min_keycode = setup.min_keycode;
+        let max_keycode = setup.max_keycode;
+        let count = max_keycode - min_keycode + 1;
+        let mapping = conn
+            .get_keyboard_mapping(min_keycode, count)
+            .context("could not request X11 keyboard mapping")?
+            .reply()
+            .context("could not read X11 keyboard mapping")?;
+        let keysyms_per_keycode = mapping.keysyms_per_keycode as usize;
+
+        for (offset, keysyms) in mapping.keysyms.chunks(keysyms_per_keycode).enumerate() {
+            if keysyms.contains(&SPACE_KEYSYM) {
+                return Ok(min_keycode + offset as u8);
+            }
+        }
+
+        anyhow::bail!("could not map the X11 Space keysym to a keycode")
     }
 
     let mut backend = X11HotkeyBackend::new()?;
-    let receiver = GlobalHotKeyEvent::receiver();
     let mut next_refresh = Instant::now() + X11_HOTKEY_REFRESH;
     let mut refresh_failures = 0_u32;
 
     loop {
-        let timeout = next_refresh
-            .checked_duration_since(Instant::now())
-            .unwrap_or(Duration::ZERO);
-
-        match receiver.recv_timeout(timeout) {
-            Ok(event) => {
-                if event.id != backend.hotkey.id() {
-                    continue;
-                }
-
-                refresh_failures = 0;
-                match event.state {
-                    HotKeyState::Pressed => {
-                        CTRL_HELD.store(true, Ordering::SeqCst);
-                        if !SPACE_HELD.swap(true, Ordering::SeqCst) {
-                            start_hotkey_recording();
-                        }
+        match backend.poll_event()? {
+            Some(event) => match event {
+                X11Event::KeyPress(event) if event.detail == backend.keycode => {
+                    CTRL_HELD.store(true, Ordering::SeqCst);
+                    if !SPACE_HELD.swap(true, Ordering::SeqCst) {
+                        start_hotkey_recording();
                     }
-                    HotKeyState::Released => {
-                        CTRL_HELD.store(false, Ordering::SeqCst);
-                        if SPACE_HELD.swap(false, Ordering::SeqCst) {
-                            stop_hotkey_recording();
-                        }
-                    }
+                    refresh_failures = 0;
                 }
+                X11Event::KeyRelease(event) if event.detail == backend.keycode => {
+                    CTRL_HELD.store(false, Ordering::SeqCst);
+                    if SPACE_HELD.swap(false, Ordering::SeqCst) {
+                        stop_hotkey_recording();
+                    }
+                    refresh_failures = 0;
+                }
+                _ => {}
+            },
+            None => {
+                std::thread::sleep(Duration::from_millis(25));
             }
-            Err(RecvTimeoutError::Timeout) => {
+        }
+
+        if Instant::now() >= next_refresh {
+            next_refresh = Instant::now() + X11_HOTKEY_REFRESH;
+            if !SPACE_HELD.load(Ordering::SeqCst) {
+                match backend.refresh() {
+                    Ok(()) => refresh_failures = 0,
+                    Err(err) => {
+                        reset_hotkey_state_after_backend_loss();
+                        refresh_failures += 1;
+                        if refresh_failures >= X11_HOTKEY_REFRESH_FAILURE_LIMIT {
+                            return Err(err).context(
+                                "X11 hotkey refresh failed repeatedly after desktop/session churn",
+                            );
+                        }
+                    }
+                }
+            } else {
                 next_refresh = Instant::now() + X11_HOTKEY_REFRESH;
-                if !SPACE_HELD.load(Ordering::SeqCst) {
-                    match backend.refresh() {
-                        Ok(()) => refresh_failures = 0,
-                        Err(err) => {
-                            reset_hotkey_state_after_backend_loss();
-                            refresh_failures += 1;
-                            if refresh_failures >= X11_HOTKEY_REFRESH_FAILURE_LIMIT {
-                                return Err(err).context(
-                                    "X11 hotkey refresh failed repeatedly after desktop/session churn",
-                                );
-                            }
-                        }
-                    }
-                }
-            }
-            Err(RecvTimeoutError::Disconnected) => {
-                anyhow::bail!("global hotkey event channel closed");
             }
         }
     }
@@ -224,15 +296,20 @@ fn run_x11_desktop_hotkey_loop() -> anyhow::Result<()> {
 fn linux_no_hotkey_backend_help() -> String {
     let session = std::env::var("XDG_SESSION_TYPE").unwrap_or_else(|_| "unknown".to_string());
     let display = std::env::var("DISPLAY").unwrap_or_else(|_| "<unset>".to_string());
+    let xauthority = std::env::var("XAUTHORITY").unwrap_or_else(|_| "<unset>".to_string());
     let user = std::env::var("USER").unwrap_or_else(|_| "$USER".to_string());
 
     format!(
         "No usable Linux hotkey backend is available.\n\
-         Current session: XDG_SESSION_TYPE={session}, DISPLAY={display}\n\
+         Current session: XDG_SESSION_TYPE={session}, DISPLAY={display}, XAUTHORITY={xauthority}\n\
          Preferred path: use an Xorg/X11 session so parakit can register\n\
          Ctrl+Space through the desktop without /dev/input access.\n\
-         Fallback path: grant evdev access, then log out completely and back in:\n\
+         If this started after GNOME logout/login, restart tmux, terminals,\n\
+         and user services from the new desktop session so DISPLAY/XAUTHORITY\n\
+         are fresh.\n\
+         Session-stable path: grant evdev access, then log out completely and back in:\n\
            sudo usermod -aG input {user}\n\
+         Then run: parakit --hotkey-backend evdev\n\
          If Ctrl+Space is already owned by the desktop or input method, disable\n\
          that shortcut and restart parakit."
     )
@@ -242,11 +319,12 @@ fn linux_no_hotkey_backend_help() -> String {
 fn grab_failure_help() -> String {
     let session = std::env::var("XDG_SESSION_TYPE").unwrap_or_else(|_| "unknown".to_string());
     let display = std::env::var("DISPLAY").unwrap_or_else(|_| "<unset>".to_string());
+    let xauthority = std::env::var("XAUTHORITY").unwrap_or_else(|_| "<unset>".to_string());
     let user = std::env::var("USER").unwrap_or_else(|_| "$USER".to_string());
 
     format!(
         "The evdev fallback requires read access to /dev/input/event*.\n\
-         Current session: XDG_SESSION_TYPE={session}, DISPLAY={display}\n\
+         Current session: XDG_SESSION_TYPE={session}, DISPLAY={display}, XAUTHORITY={xauthority}\n\
          Prefer an Xorg/X11 session so parakit can use the desktop hotkey\n\
          backend without evdev permissions. Otherwise add your user to the\n\
          input group, then log out completely and log back in:\n\
