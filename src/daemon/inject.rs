@@ -102,10 +102,11 @@ impl Injector {
             previous.filter(|p| p != text)
         };
 
+        thread::sleep(clipboard_settle_delay());
         self.paste_clipboard(mode)?;
 
         if let Some(previous) = previous {
-            thread::sleep(Duration::from_millis(120));
+            thread::sleep(clipboard_restore_delay());
             if let Some(clipboard) = &mut self.clipboard {
                 let _ = clipboard.set_text(previous);
             }
@@ -156,9 +157,7 @@ impl Injector {
         }
 
         if failure.is_none() {
-            failure = self
-                .enigo
-                .key(Key::Unicode('v'), Direction::Click)
+            failure = paste_key_click(&mut self.enigo)
                 .err()
                 .map(|e| anyhow::anyhow!("enigo paste key failed: {e:?}"));
         }
@@ -189,4 +188,80 @@ fn paste_modifiers(mode: PasteMode) -> &'static [Key] {
         PasteMode::Standard => &[Key::Control],
         PasteMode::Terminal => &[Key::Control, Key::Shift],
     }
+}
+
+fn clipboard_settle_delay() -> Duration {
+    #[cfg(target_os = "linux")]
+    {
+        Duration::from_millis(150)
+    }
+    #[cfg(target_os = "macos")]
+    {
+        Duration::from_millis(200)
+    }
+    #[cfg(target_os = "windows")]
+    {
+        Duration::from_millis(50)
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+    {
+        Duration::from_millis(100)
+    }
+}
+
+fn clipboard_restore_delay() -> Duration {
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        Duration::from_millis(200)
+    }
+    #[cfg(target_os = "windows")]
+    {
+        Duration::from_millis(100)
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+    {
+        Duration::from_millis(150)
+    }
+}
+
+fn paste_key_click(enigo: &mut Enigo) -> Result<()> {
+    #[cfg(target_os = "linux")]
+    {
+        if let Some(keycode) = linux_keycode_for_keysym(b'v' as u32)? {
+            return enigo
+                .raw(keycode as u16, Direction::Click)
+                .map_err(|e| anyhow::anyhow!("{e:?}"));
+        }
+    }
+
+    enigo
+        .key(Key::Unicode('v'), Direction::Click)
+        .map_err(|e| anyhow::anyhow!("{e:?}"))
+}
+
+#[cfg(target_os = "linux")]
+fn linux_keycode_for_keysym(keysym: u32) -> Result<Option<u8>> {
+    use x11rb::connection::Connection;
+    use x11rb::protocol::xproto::ConnectionExt;
+    use x11rb::rust_connection::RustConnection;
+
+    let (conn, _) = RustConnection::connect(None).context("could not connect to X11")?;
+    let setup = conn.setup();
+    let min_keycode = setup.min_keycode;
+    let max_keycode = setup.max_keycode;
+    let count = max_keycode - min_keycode + 1;
+    let mapping = conn
+        .get_keyboard_mapping(min_keycode, count)
+        .context("could not request X11 keyboard mapping")?
+        .reply()
+        .context("could not read X11 keyboard mapping")?;
+    let keysyms_per_keycode = mapping.keysyms_per_keycode as usize;
+
+    for (offset, keysyms) in mapping.keysyms.chunks(keysyms_per_keycode).enumerate() {
+        if keysyms.contains(&keysym) {
+            return Ok(Some(min_keycode + offset as u8));
+        }
+    }
+
+    Ok(None)
 }

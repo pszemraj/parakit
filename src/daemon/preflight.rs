@@ -72,7 +72,13 @@ fn hotkey_report() -> HotkeyReport {
         Err("X11 desktop hotkey backend needs DISPLAY set and a non-Wayland session".to_string())
     };
     let evdev_ready = evdev.grab_likely_available();
-    let blocking = x11_probe.is_err() && !evdev_ready;
+    let running_parakit = running_parakit_processes();
+    let x11_owned_by_parakit = x11_probe
+        .as_ref()
+        .err()
+        .is_some_and(|err| err.contains("XGrabKey rejected Ctrl+Space"))
+        && !running_parakit.is_empty();
+    let blocking = x11_probe.is_err() && !x11_owned_by_parakit && !evdev_ready;
 
     let mut details = String::new();
     writeln!(&mut details, "parakit doctor").unwrap();
@@ -85,6 +91,12 @@ fn hotkey_report() -> HotkeyReport {
     writeln!(&mut details, "  desktop:        X11 desktop hotkey").unwrap();
     match &x11_probe {
         Ok(()) => writeln!(&mut details, "  desktop status: OK").unwrap(),
+        Err(_) if x11_owned_by_parakit => writeln!(
+            &mut details,
+            "  desktop status: OK (Ctrl+Space already owned by running parakit pid(s): {})",
+            format_pids(&running_parakit)
+        )
+        .unwrap(),
         Err(err) => writeln!(&mut details, "  desktop status: unavailable ({err})").unwrap(),
     }
     writeln!(
@@ -113,6 +125,12 @@ fn hotkey_report() -> HotkeyReport {
         writeln!(
             &mut details,
             "  status:         OK (evdev backend preferred)"
+        )
+        .unwrap();
+    } else if x11_owned_by_parakit {
+        writeln!(
+            &mut details,
+            "  status:         OK (running daemon owns desktop hotkey)"
         )
         .unwrap();
     } else if x11_probe.is_ok() {
@@ -154,6 +172,11 @@ fn hotkey_report() -> HotkeyReport {
         .unwrap();
         write_linux_fix(&mut summary, &user);
         summary
+    } else if x11_owned_by_parakit {
+        format!(
+            "hotkey preflight skipped because running parakit pid(s) already own Ctrl+Space: {}",
+            format_pids(&running_parakit)
+        )
     } else if evdev_ready {
         "hotkey preflight passed with evdev backend preferred".to_string()
     } else if x11_probe.is_ok() {
@@ -235,6 +258,52 @@ fn evdev_report() -> EvdevReport {
         denied,
         other_errors,
     }
+}
+
+#[cfg(target_os = "linux")]
+fn running_parakit_processes() -> Vec<u32> {
+    use std::fs;
+    use std::path::Path;
+
+    let self_pid = std::process::id();
+    let mut pids = Vec::new();
+    let Ok(entries) = fs::read_dir("/proc") else {
+        return pids;
+    };
+
+    for entry in entries.flatten() {
+        let Some(pid) = entry
+            .file_name()
+            .to_str()
+            .and_then(|name| name.parse::<u32>().ok())
+        else {
+            continue;
+        };
+        if pid == self_pid {
+            continue;
+        }
+
+        let cmdline = fs::read(entry.path().join("cmdline")).unwrap_or_default();
+        let first_arg = cmdline.split(|byte| *byte == 0).next().unwrap_or_default();
+        let first_arg = String::from_utf8_lossy(first_arg);
+        let binary_name = Path::new(first_arg.as_ref())
+            .file_name()
+            .and_then(|name| name.to_str());
+        if binary_name == Some("parakit") {
+            pids.push(pid);
+        }
+    }
+
+    pids.sort_unstable();
+    pids
+}
+
+#[cfg(target_os = "linux")]
+fn format_pids(pids: &[u32]) -> String {
+    pids.iter()
+        .map(u32::to_string)
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 #[cfg(target_os = "linux")]
