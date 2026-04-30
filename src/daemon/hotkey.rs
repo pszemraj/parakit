@@ -1,15 +1,19 @@
 //! Push-to-talk hotkey backend.
 //!
-//! Linux v1 uses the low-level `rdev::grab` evdev path for hotkey capture.
+//! Linux v1 uses a narrow evdev grab for keyboard hotkey capture.
 //! The custom X11 `XGrabKey` backend is intentionally out of the daemon
 //! critical path; X11 remains only for insertion support.
 
 use super::{audio::AudioHandle, logging::Logger};
 use crate::Event_;
 use crossbeam_channel::Sender;
-use rdev::{Event, EventType, Key};
+#[cfg(not(target_os = "linux"))]
+use rdev::Event;
+use rdev::{EventType, Key};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+#[cfg(target_os = "linux")]
+use std::{fs::File, io, path::PathBuf};
 
 const HOTKEY_DEBOUNCE: Duration = Duration::from_millis(150);
 
@@ -177,8 +181,8 @@ pub(crate) fn run_grab_loop(
 ) {
     match backend {
         HotkeyBackend::Auto | HotkeyBackend::Evdev => {
-            log.verbose("parakit: Linux hotkey backend: evdev/rdev grab");
-            run_rdev_grab_loop_or_exit(tx, audio);
+            log.verbose("parakit: Linux hotkey backend: evdev keyboard grab");
+            run_linux_evdev_grab_loop_or_exit(tx, audio, log);
         }
         HotkeyBackend::Desktop => {
             eprintln!(
@@ -209,6 +213,7 @@ pub(crate) fn run_grab_loop(
     run_rdev_grab_loop_or_exit(tx, audio);
 }
 
+#[cfg(not(target_os = "linux"))]
 fn run_rdev_grab_loop_or_exit(tx: Sender<Event_>, audio: AudioHandle) {
     let state = Arc::new(Mutex::new(HotkeyState::default()));
     let callback_state = Arc::clone(&state);
@@ -223,14 +228,286 @@ fn run_rdev_grab_loop_or_exit(tx: Sender<Event_>, audio: AudioHandle) {
     }
 }
 
+#[cfg(target_os = "linux")]
+fn run_linux_evdev_grab_loop_or_exit(tx: Sender<Event_>, audio: AudioHandle, log: Arc<Logger>) {
+    if let Err(err) = run_linux_evdev_grab_loop(tx, audio, Arc::clone(&log)) {
+        eprintln!(
+            "parakit: evdev keyboard grab failed: {err:#}\n{}",
+            grab_failure_help()
+        );
+        std::process::exit(2);
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn run_linux_evdev_grab_loop(
+    tx: Sender<Event_>,
+    audio: AudioHandle,
+    log: Arc<Logger>,
+) -> io::Result<()> {
+    let mut devices = open_keyboard_devices(&log)?;
+    if devices.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "no readable Ctrl+Space keyboard event devices found",
+        ));
+    }
+
+    let mut grabbed = Vec::new();
+    let mut skipped_busy = Vec::new();
+    for mut device in devices.drain(..) {
+        match device.device.grab(evdev_rs::GrabMode::Grab) {
+            Ok(()) => grabbed.push(device),
+            Err(err) if err.kind() == io::ErrorKind::ResourceBusy => {
+                skipped_busy.push(device.label);
+            }
+            Err(err) => {
+                return Err(io::Error::new(
+                    err.kind(),
+                    format!("could not grab {}: {err}", device.label),
+                ));
+            }
+        }
+    }
+
+    if !skipped_busy.is_empty() {
+        log.verbose(format!(
+            "parakit: skipped busy keyboard device(s): {}",
+            skipped_busy.join(", ")
+        ));
+    }
+
+    if grabbed.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::ResourceBusy,
+            format!(
+                "all Ctrl+Space keyboard event devices are already grabbed: {}",
+                skipped_busy.join(", ")
+            ),
+        ));
+    }
+
+    log.verbose(format!(
+        "parakit: grabbed keyboard event device(s): {}",
+        grabbed
+            .iter()
+            .map(|device| device.label.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    ));
+
+    let state = Arc::new(Mutex::new(HotkeyState::default()));
+    let epoll_fd = epoll::create(true)?;
+    for (idx, device) in grabbed.iter().enumerate() {
+        let fd = device.raw_fd()?;
+        epoll::ctl(
+            epoll_fd,
+            epoll::ControlOptions::EPOLL_CTL_ADD,
+            fd,
+            epoll::Event::new(epoll::Events::EPOLLIN, idx as u64),
+        )?;
+    }
+
+    let result = linux_evdev_event_loop(epoll_fd, &mut grabbed, &state, &audio, &tx);
+
+    for device in &mut grabbed {
+        let _ = device.device.grab(evdev_rs::GrabMode::Ungrab);
+    }
+    let _ = epoll::close(epoll_fd);
+
+    result
+}
+
+#[cfg(target_os = "linux")]
+struct LinuxKeyboardDevice {
+    label: String,
+    device: evdev_rs::Device,
+    output: evdev_rs::UInputDevice,
+}
+
+#[cfg(target_os = "linux")]
+impl LinuxKeyboardDevice {
+    fn raw_fd(&self) -> io::Result<std::os::fd::RawFd> {
+        use std::os::fd::IntoRawFd;
+
+        self.device
+            .fd()
+            .map(IntoRawFd::into_raw_fd)
+            .ok_or_else(|| io::Error::other(format!("{} has no file descriptor", self.label)))
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn linux_evdev_event_loop(
+    epoll_fd: std::os::fd::RawFd,
+    devices: &mut [LinuxKeyboardDevice],
+    state: &Arc<Mutex<HotkeyState>>,
+    audio: &AudioHandle,
+    tx: &Sender<Event_>,
+) -> io::Result<()> {
+    let mut epoll_buffer = [epoll::Event::new(epoll::Events::empty(), 0); 8];
+    loop {
+        let num_events = epoll::wait(epoll_fd, -1, &mut epoll_buffer)?;
+        for event in &epoll_buffer[..num_events] {
+            let idx = event.data as usize;
+            let Some(device) = devices.get_mut(idx) else {
+                continue;
+            };
+
+            while device.device.has_event_pending() {
+                let (_, input_event) = match device.device.next_event(evdev_rs::ReadFlag::NORMAL) {
+                    Ok(event) => event,
+                    Err(err) if err.kind() == io::ErrorKind::WouldBlock => break,
+                    Err(err) => return Err(err),
+                };
+
+                let suppress = linux_evdev_event_suppressed(&input_event, state, audio, tx);
+                if !suppress {
+                    device.output.write_event(&input_event)?;
+                }
+            }
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn linux_evdev_event_suppressed(
+    event: &evdev_rs::InputEvent,
+    state: &Arc<Mutex<HotkeyState>>,
+    audio: &AudioHandle,
+    tx: &Sender<Event_>,
+) -> bool {
+    let Some(event_type) = linux_evdev_key_event_type(event) else {
+        return false;
+    };
+
+    handle_key_event(event_type, state, audio, tx)
+}
+
+#[cfg(target_os = "linux")]
+fn linux_evdev_key_event_type(event: &evdev_rs::InputEvent) -> Option<EventType> {
+    use evdev_rs::enums::EventCode;
+
+    let key = match &event.event_code {
+        EventCode::EV_KEY(key) => linux_evdev_key_to_rdev(key.clone())?,
+        _ => return None,
+    };
+    match event.value {
+        0 => Some(EventType::KeyRelease(key)),
+        1 | 2 => Some(EventType::KeyPress(key)),
+        _ => None,
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn linux_evdev_key_to_rdev(key: evdev_rs::enums::EV_KEY) -> Option<Key> {
+    use evdev_rs::enums::EV_KEY;
+
+    match key {
+        EV_KEY::KEY_LEFTCTRL => Some(Key::ControlLeft),
+        EV_KEY::KEY_RIGHTCTRL => Some(Key::ControlRight),
+        EV_KEY::KEY_LEFTSHIFT => Some(Key::ShiftLeft),
+        EV_KEY::KEY_RIGHTSHIFT => Some(Key::ShiftRight),
+        EV_KEY::KEY_LEFTALT => Some(Key::Alt),
+        EV_KEY::KEY_RIGHTALT => Some(Key::AltGr),
+        EV_KEY::KEY_LEFTMETA => Some(Key::MetaLeft),
+        EV_KEY::KEY_RIGHTMETA => Some(Key::MetaRight),
+        EV_KEY::KEY_SPACE => Some(Key::Space),
+        _ => None,
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn open_keyboard_devices(log: &Logger) -> io::Result<Vec<LinuxKeyboardDevice>> {
+    use evdev_rs::enums::{EventCode, EV_KEY};
+
+    let mut out = Vec::new();
+    for path in linux_event_device_paths()? {
+        let file = match File::open(&path) {
+            Ok(file) => file,
+            Err(err) if err.kind() == io::ErrorKind::PermissionDenied => continue,
+            Err(err) => return Err(err),
+        };
+        let device = match evdev_rs::Device::new_from_fd(file) {
+            Ok(device) => device,
+            Err(err) => {
+                log.verbose(format!("parakit: skipped {} ({err})", path.display()));
+                continue;
+            }
+        };
+
+        let has_space = device.has_event_code(&EventCode::EV_KEY(EV_KEY::KEY_SPACE));
+        let has_ctrl = device.has_event_code(&EventCode::EV_KEY(EV_KEY::KEY_LEFTCTRL))
+            || device.has_event_code(&EventCode::EV_KEY(EV_KEY::KEY_RIGHTCTRL));
+        if !has_space || !has_ctrl {
+            continue;
+        }
+
+        let label = linux_device_label(&path, &device);
+        let output = evdev_rs::UInputDevice::create_from_device(&device).map_err(|err| {
+            io::Error::new(
+                err.kind(),
+                format!("could not create uinput forwarding device for {label}: {err}"),
+            )
+        })?;
+        out.push(LinuxKeyboardDevice {
+            label,
+            device,
+            output,
+        });
+    }
+    Ok(out)
+}
+
+#[cfg(target_os = "linux")]
+fn linux_event_device_paths() -> io::Result<Vec<PathBuf>> {
+    let mut paths = Vec::new();
+    for entry in std::fs::read_dir("/dev/input")? {
+        let entry = entry?;
+        let path = entry.path();
+        if path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with("event"))
+        {
+            paths.push(path);
+        }
+    }
+    paths.sort();
+    Ok(paths)
+}
+
+#[cfg(target_os = "linux")]
+fn linux_device_label(path: &std::path::Path, device: &evdev_rs::Device) -> String {
+    match device.name() {
+        Some(name) if !name.is_empty() => format!("{} ({name})", path.display()),
+        _ => path.display().to_string(),
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
 fn handle_grab_event(
     event: Event,
     state: &Arc<Mutex<HotkeyState>>,
     audio: &AudioHandle,
     tx: &Sender<Event_>,
 ) -> Option<Event> {
+    let suppress = handle_key_event(event.event_type, state, audio, tx);
+    if suppress {
+        None
+    } else {
+        Some(event)
+    }
+}
+
+fn handle_key_event(
+    event_type: EventType,
+    state: &Arc<Mutex<HotkeyState>>,
+    audio: &AudioHandle,
+    tx: &Sender<Event_>,
+) -> bool {
     let now = Instant::now();
-    let (action, suppress) = match event.event_type {
+    let (action, suppress) = match event_type {
         EventType::KeyPress(key) => state
             .lock()
             .expect("hotkey state lock poisoned")
@@ -239,18 +516,14 @@ fn handle_grab_event(
             .lock()
             .expect("hotkey state lock poisoned")
             .release(key, now),
-        _ => return Some(event),
+        _ => return false,
     };
 
     if let Some(action) = action {
         dispatch_hotkey_action(action, audio, tx);
     }
 
-    if suppress {
-        None
-    } else {
-        Some(event)
-    }
+    suppress
 }
 
 fn dispatch_hotkey_action(action: HotkeyAction, audio: &AudioHandle, tx: &Sender<Event_>) {
@@ -280,13 +553,15 @@ fn grab_failure_help() -> String {
     let user = std::env::var("USER").unwrap_or_else(|_| "$USER".to_string());
 
     format!(
-        "Linux hotkey capture uses evdev through rdev::grab.\n\
+        "Linux hotkey capture uses an evdev keyboard grab.\n\
          Current session: XDG_SESSION_TYPE={session}, DISPLAY={display}\n\
-         Fix:\n\
+         Checks:\n\
+           id -nG | tr ' ' '\\n' | grep '^input$'\n\
+           ls -l /dev/uinput /dev/input/event* | head\n\
+         If event devices are not readable, run:\n\
            sudo usermod -aG input {user}\n\
          Then log out completely and log back in, or reboot.\n\
-         Verify the fresh session with:\n\
-           id -nG | tr ' ' '\\n' | grep '^input$'\n\
+         If /dev/uinput is not writable by your user, add a uinput udev rule.\n\
          Do not run parakit with sudo; audio, clipboard, and insertion belong to the desktop user."
     )
 }

@@ -69,7 +69,11 @@ libc = "0.2"
 crossbeam-channel = "0.5"
 
 [target.'cfg(target_os = "linux")'.dependencies]
-# X11 paste and smoke-test utilities. Hotkey capture uses rdev/evdev on Linux.
+# Linux hotkey capture uses a narrow evdev/uinput grab for keyboard devices.
+epoll = { version = "4.4", optional = true }
+evdev-rs = { version = "0.4", optional = true }
+
+# X11 paste and smoke-test utilities.
 x11rb = { version = "0.13", features = ["xtest"], optional = true }
 
 [features]
@@ -82,6 +86,8 @@ daemon = [
   "dep:arboard",
   "dep:cpal",
   "dep:enigo",
+  "dep:epoll",
+  "dep:evdev-rs",
   "dep:rdev",
   "dep:rodio",
   "dep:x11rb",

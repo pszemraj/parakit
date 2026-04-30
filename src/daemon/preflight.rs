@@ -221,10 +221,13 @@ fn startup_hotkey_report(backend: HotkeyBackend) -> HotkeyReport {
         }
         writeln!(
             &mut summary,
-            "evdev backend: {} device(s), {} readable, {} permission denied",
-            evdev.event_devices, evdev.readable, evdev.denied
+            "evdev backend: {} device(s), {} readable, {} Ctrl+Space keyboard candidate(s), {} permission denied",
+            evdev.event_devices, evdev.readable, evdev.hotkey_keyboards, evdev.denied
         )
         .unwrap();
+        if let Some(err) = &evdev.uinput_error {
+            writeln!(&mut summary, "uinput: unavailable ({err})").unwrap();
+        }
         write_linux_fix(&mut summary, &user);
         summary
     } else {
@@ -278,7 +281,7 @@ fn hotkey_report(backend: HotkeyBackend) -> HotkeyReport {
     }
     writeln!(
         &mut details,
-        "  evdev:          rdev grab ({})",
+        "  evdev:          keyboard grab ({})",
         evdev.status_label()
     )
     .unwrap();
@@ -288,6 +291,16 @@ fn hotkey_report(backend: HotkeyBackend) -> HotkeyReport {
         evdev.event_devices, evdev.readable, evdev.denied
     )
     .unwrap();
+    writeln!(
+        &mut details,
+        "  hotkey devices: {} Ctrl+Space keyboard candidate(s)",
+        evdev.hotkey_keyboards
+    )
+    .unwrap();
+    match &evdev.uinput_error {
+        Some(err) => writeln!(&mut details, "  uinput:        unavailable ({err})").unwrap(),
+        None => writeln!(&mut details, "  uinput:        writable").unwrap(),
+    };
     if !evdev.other_errors.is_empty() {
         writeln!(&mut details, "  input errors:").unwrap();
         for err in &evdev.other_errors {
@@ -334,10 +347,13 @@ fn hotkey_report(backend: HotkeyBackend) -> HotkeyReport {
         .unwrap();
         writeln!(
             &mut summary,
-            "evdev backend: {} device(s), {} readable, {} permission denied",
-            evdev.event_devices, evdev.readable, evdev.denied
+            "evdev backend: {} device(s), {} readable, {} Ctrl+Space keyboard candidate(s), {} permission denied",
+            evdev.event_devices, evdev.readable, evdev.hotkey_keyboards, evdev.denied
         )
         .unwrap();
+        if let Some(err) = &evdev.uinput_error {
+            writeln!(&mut summary, "uinput: unavailable ({err})").unwrap();
+        }
         write_linux_fix(&mut summary, &user);
         summary
     } else if evdev_ready {
@@ -360,19 +376,30 @@ fn hotkey_report(backend: HotkeyBackend) -> HotkeyReport {
 struct EvdevReport {
     event_devices: usize,
     readable: usize,
+    hotkey_keyboards: usize,
     denied: usize,
+    uinput_writable: bool,
+    uinput_error: Option<String>,
     other_errors: Vec<String>,
 }
 
 #[cfg(target_os = "linux")]
 impl EvdevReport {
     fn grab_likely_available(&self) -> bool {
-        self.event_devices > 0 && self.denied == 0 && self.other_errors.is_empty()
+        self.event_devices > 0
+            && self.hotkey_keyboards > 0
+            && self.denied == 0
+            && self.uinput_writable
+            && self.other_errors.is_empty()
     }
 
     fn status_label(&self) -> &'static str {
         if self.grab_likely_available() {
             "ready"
+        } else if !self.uinput_writable {
+            "uinput unavailable"
+        } else if self.hotkey_keyboards == 0 {
+            "no keyboard candidates"
         } else if self.readable > 0 {
             "partial permissions"
         } else {
@@ -383,11 +410,13 @@ impl EvdevReport {
 
 #[cfg(target_os = "linux")]
 fn evdev_report() -> EvdevReport {
-    use std::fs::{self, File};
+    use evdev_rs::enums::{EventCode, EV_KEY};
+    use std::fs::{self, File, OpenOptions};
     use std::io::ErrorKind;
 
     let mut event_devices = 0_usize;
     let mut readable = 0_usize;
+    let mut hotkey_keyboards = 0_usize;
     let mut denied = 0_usize;
     let mut other_errors = Vec::new();
 
@@ -405,7 +434,19 @@ fn evdev_report() -> EvdevReport {
 
                 event_devices += 1;
                 match File::open(&path) {
-                    Ok(_) => readable += 1,
+                    Ok(file) => {
+                        readable += 1;
+                        if let Ok(device) = evdev_rs::Device::new_from_fd(file) {
+                            let has_space =
+                                device.has_event_code(&EventCode::EV_KEY(EV_KEY::KEY_SPACE));
+                            let has_ctrl = device
+                                .has_event_code(&EventCode::EV_KEY(EV_KEY::KEY_LEFTCTRL))
+                                || device.has_event_code(&EventCode::EV_KEY(EV_KEY::KEY_RIGHTCTRL));
+                            if has_space && has_ctrl {
+                                hotkey_keyboards += 1;
+                            }
+                        }
+                    }
                     Err(err) if err.kind() == ErrorKind::PermissionDenied => denied += 1,
                     Err(err) => other_errors.push(format!("{}: {err}", path.display())),
                 }
@@ -416,10 +457,18 @@ fn evdev_report() -> EvdevReport {
         }
     }
 
+    let (uinput_writable, uinput_error) = match OpenOptions::new().write(true).open("/dev/uinput") {
+        Ok(_) => (true, None),
+        Err(err) => (false, Some(err.to_string())),
+    };
+
     EvdevReport {
         event_devices,
         readable,
+        hotkey_keyboards,
         denied,
+        uinput_writable,
+        uinput_error,
         other_errors,
     }
 }
@@ -478,7 +527,7 @@ fn probe_x11_desktop_hotkey() -> std::result::Result<(), String> {
 fn write_linux_fix(out: &mut String, user: &str) {
     writeln!(
         out,
-        "fix:\n  - Grant the desktop user read access to /dev/input/event*:\n      sudo usermod -aG input {user}\n  - After changing groups, log out completely and log back in, or reboot.\n  - Verify the fresh session:\n      id -nG | tr ' ' '\\n' | grep '^input$'\n  - Then run: parakit --hotkey-backend evdev\n  - Do not run parakit with sudo; audio, clipboard, and insertion belong to the desktop user.\n  - The Linux desktop hotkey backend is disabled until it is replaced by global-hotkey or the XDG portal."
+        "fix:\n  - Grant the desktop user read access to /dev/input/event*:\n      sudo usermod -aG input {user}\n  - Ensure /dev/uinput is writable by the desktop user. On many distros this needs a uinput udev rule.\n  - After changing groups or udev rules, log out completely and log back in, or reboot.\n  - Verify the fresh session:\n      id -nG | tr ' ' '\\n' | grep '^input$'\n      ls -l /dev/uinput /dev/input/event* | head\n  - Then run: parakit --hotkey-backend evdev\n  - Do not run parakit with sudo; audio, clipboard, and insertion belong to the desktop user.\n  - The Linux desktop hotkey backend is disabled until it is replaced by global-hotkey or the XDG portal."
     )
     .unwrap();
 }
