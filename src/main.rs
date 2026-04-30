@@ -190,8 +190,6 @@ enum Event_ {
     /// Streaming mode only: a chunk boundary was reached. Snapshot the buffer
     /// from `consumed_samples` and transcribe that slice.
     StreamChunk,
-    /// Shutdown.
-    Quit,
 }
 
 // =============================================================================
@@ -270,6 +268,8 @@ fn run() -> Result<()> {
 
     daemon::preflight::ensure_hotkey_ready()?;
     log.verbose("parakit: hotkey preflight passed");
+    daemon::inject::preflight(cli.paste_mode).context("text insertion preflight failed")?;
+    log.verbose("parakit: insertion preflight passed");
 
     let mode = Mode::parse(&cli.mode)?;
     let disabled: HashSet<String> = cli.disable_rule.iter().cloned().collect();
@@ -365,14 +365,6 @@ fn run() -> Result<()> {
     } else {
         None
     };
-
-    // SIGINT handler - set Quit on Ctrl+C in the terminal.
-    let tx_sig = tx.clone();
-    let streaming_alive_sig = Arc::clone(&streaming_alive);
-    ctrlc_handler(move || {
-        let _ = tx_sig.send(Event_::Quit);
-        streaming_alive_sig.store(false, Ordering::SeqCst);
-    });
 
     // Hotkey grab loop. Blocks forever (until grab returns or process exits).
     log.ready();
@@ -741,7 +733,6 @@ fn worker_loop(ctx: WorkerCtx) {
                     }
                 }
             }
-            Event_::Quit => break,
         }
     }
 }
@@ -781,31 +772,4 @@ fn spawn_streaming_ticker(
             }
         }
     })
-}
-
-// =============================================================================
-// SIGINT
-// =============================================================================
-
-fn ctrlc_handler<F: FnMut() + Send + 'static>(mut f: F) {
-    // Minimal handler: spawn a thread that polls a flag set by signal-hook,
-    // or just use the Rust stdlib if available. We'll use ctrlc-equivalent
-    // via a thread that catches Ctrl+C.
-    //
-    // To avoid adding the `ctrlc` crate, we use a simple SIGINT handler via
-    // signal-hook would still be a dep. Instead, the rdev::grab loop holds
-    // the main thread; the user can also send SIGTERM. For a more robust
-    // shutdown in production, add a `ctrlc` dep.
-    let _ = std::thread::Builder::new()
-        .name("parakit-sigwait".into())
-        .spawn(move || {
-            // Best-effort: just sleep forever. The OS will tear down the
-            // process on Ctrl+C since we don't install a handler.
-            // If you need cleaner shutdown, add the `ctrlc` crate and call it
-            // here.
-            loop {
-                std::thread::sleep(Duration::from_secs(3600));
-                f(); // never reached in this minimal impl
-            }
-        });
 }

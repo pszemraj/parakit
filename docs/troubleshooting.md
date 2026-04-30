@@ -6,8 +6,8 @@ Start with:
 parakit doctor
 ```
 
-It reports hotkey access, selected microphone, and build flags without loading
-the model.
+It reports hotkey access, selected microphone, insertion support, and build
+flags without loading the model.
 
 ## Hotkey Problems
 

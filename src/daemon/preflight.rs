@@ -4,6 +4,8 @@ use anyhow::{bail, Result};
 use parakit::build_info;
 use std::fmt::Write as _;
 
+use super::inject::{self, PasteMode};
+
 /// Run blocking daemon preflight checks before expensive startup work.
 ///
 /// # Returns
@@ -34,6 +36,7 @@ pub fn print_doctor(verbose: bool) -> bool {
     }
 
     let mic = super::audio::probe_default_input();
+    let insertion = inject::preflight(PasteMode::Terminal);
     println!("{}", report.details.trim_end());
     match &mic {
         Ok(mic) => {
@@ -45,11 +48,15 @@ pub fn print_doctor(verbose: bool) -> bool {
             println!("  audio status:   FAIL");
         }
     }
+    match &insertion {
+        Ok(()) => println!("  insertion:     OK (terminal paste)"),
+        Err(err) => println!("  insertion:     FAIL ({err:#})"),
+    }
     println!("  build:");
     for line in build_info::diagnostic_lines() {
         println!("    {line}");
     }
-    !report.blocking && mic.is_ok()
+    !report.blocking && mic.is_ok() && insertion.is_ok()
 }
 
 struct HotkeyReport {

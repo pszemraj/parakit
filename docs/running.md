@@ -10,8 +10,8 @@ parakit doctor
 parakit
 ```
 
-`parakit doctor` checks hotkey access, selected microphone, and compiled backend
-flags. It does not download or load the model.
+`parakit doctor` checks hotkey access, selected microphone, insertion support,
+and compiled backend flags. It does not download or load the model.
 
 The first real `parakit` run downloads the default Q8_0 GGUF if it is not
 already cached, then opens the microphone and hotkey backend.

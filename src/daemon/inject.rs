@@ -48,6 +48,63 @@ impl PasteMode {
     }
 }
 
+/// Check whether the configured insertion path can be initialized.
+///
+/// # Arguments
+///
+/// * `mode` - Insertion mode to probe.
+///
+/// # Returns
+///
+/// `Ok(())` when the required insertion resources are available.
+///
+/// # Errors
+///
+/// Returns an error if the keyboard, clipboard, or platform paste support is
+/// unavailable.
+pub(crate) fn preflight(mode: PasteMode) -> Result<()> {
+    let _keyboard = Enigo::new(&Settings::default())
+        .map_err(|e| anyhow::anyhow!("failed to init enigo: {e:?}"))?;
+    if mode != PasteMode::Direct {
+        let _clipboard = Clipboard::new().context("could not open system clipboard")?;
+        platform_paste_preflight()?;
+    }
+    Ok(())
+}
+
+trait TextClipboard {
+    /// Return the current text clipboard contents.
+    ///
+    /// # Returns
+    ///
+    /// The current text clipboard value.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the clipboard is unavailable or does not hold text.
+    fn get_text(&mut self) -> Result<String>;
+    /// Replace the current text clipboard contents.
+    ///
+    /// # Returns
+    ///
+    /// `Ok(())` when the clipboard accepted the new text.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the clipboard cannot be written.
+    fn set_text(&mut self, text: String) -> Result<()>;
+}
+
+impl TextClipboard for Clipboard {
+    fn get_text(&mut self) -> Result<String> {
+        Clipboard::get_text(self).context("could not read system clipboard")
+    }
+
+    fn set_text(&mut self, text: String) -> Result<()> {
+        Clipboard::set_text(self, text).context("could not write system clipboard")
+    }
+}
+
 /// Open a text insertion handle.
 pub struct Injector {
     enigo: Enigo,
@@ -101,26 +158,19 @@ impl Injector {
             return self.type_text(text);
         }
 
-        let previous = {
-            let clipboard = self.text_clipboard()?;
-            let previous = clipboard.get_text().ok();
-            clipboard
-                .set_text(text.to_owned())
-                .context("could not copy transcript to clipboard")?;
-            previous.filter(|p| p != text)
+        let mut clipboard = match self.clipboard.take() {
+            Some(clipboard) => clipboard,
+            None => Clipboard::new().context("could not open system clipboard")?,
         };
-
-        thread::sleep(clipboard_settle_delay());
-        self.paste_clipboard(mode)?;
-
-        if let Some(previous) = previous {
-            thread::sleep(clipboard_restore_delay());
-            if let Some(clipboard) = &mut self.clipboard {
-                let _ = clipboard.set_text(previous);
-            }
-        }
-
-        Ok(())
+        let result = paste_with_clipboard_swap(
+            &mut clipboard,
+            text,
+            || self.paste_clipboard(mode),
+            clipboard_settle_delay(),
+            clipboard_restore_delay(),
+        );
+        self.clipboard = Some(clipboard);
+        result
     }
 
     /// Type the given text as synthetic keystrokes at the focused cursor.
@@ -141,17 +191,6 @@ impl Injector {
             .text(text)
             .map_err(|e| anyhow::anyhow!("enigo type failed: {e:?}"))
             .context("could not type text at cursor")
-    }
-
-    fn text_clipboard(&mut self) -> Result<&mut Clipboard> {
-        if self.clipboard.is_none() {
-            let clipboard = Clipboard::new().context("could not open system clipboard")?;
-            self.clipboard = Some(clipboard);
-        }
-        Ok(self
-            .clipboard
-            .as_mut()
-            .expect("clipboard was initialized above"))
     }
 
     fn paste_clipboard(&mut self, mode: PasteMode) -> Result<()> {
@@ -185,6 +224,55 @@ impl Injector {
     }
 }
 
+fn paste_with_clipboard_swap<C, P>(
+    clipboard: &mut C,
+    text: &str,
+    mut paste: P,
+    settle_delay: Duration,
+    restore_delay: Duration,
+) -> Result<()>
+where
+    C: TextClipboard,
+    P: FnMut() -> Result<()>,
+{
+    if text.is_empty() {
+        return Ok(());
+    }
+
+    let previous = clipboard
+        .get_text()
+        .ok()
+        .filter(|previous| previous != text);
+    clipboard
+        .set_text(text.to_owned())
+        .context("could not copy transcript to clipboard")?;
+
+    sleep_if_nonzero(settle_delay);
+    let paste_result = paste();
+
+    let restore_result = if let Some(previous) = previous {
+        sleep_if_nonzero(restore_delay);
+        clipboard
+            .set_text(previous)
+            .map_err(|err| anyhow::anyhow!("could not restore previous clipboard text: {err:#}"))
+    } else {
+        Ok(())
+    };
+
+    match (paste_result, restore_result) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(paste_err), Ok(())) => Err(paste_err),
+        (Ok(()), Err(restore_err)) => Err(restore_err),
+        (Err(paste_err), Err(restore_err)) => Err(paste_err.context(format!("{restore_err:#}"))),
+    }
+}
+
+fn sleep_if_nonzero(delay: Duration) {
+    if !delay.is_zero() {
+        thread::sleep(delay);
+    }
+}
+
 #[cfg(target_os = "macos")]
 fn paste_modifiers(_mode: PasteMode) -> &'static [Key] {
     &[Key::Meta]
@@ -197,6 +285,16 @@ fn paste_modifiers(mode: PasteMode) -> &'static [Key] {
         PasteMode::Terminal => &[Key::Control, Key::Shift],
         PasteMode::Direct => &[],
     }
+}
+
+#[cfg(target_os = "linux")]
+fn platform_paste_preflight() -> Result<()> {
+    linux_x11_xtest_preflight()
+}
+
+#[cfg(not(target_os = "linux"))]
+fn platform_paste_preflight() -> Result<()> {
+    Ok(())
 }
 
 fn clipboard_settle_delay() -> Duration {
@@ -313,9 +411,88 @@ fn linux_x11_click_keysym(keysym: u32) -> Result<()> {
     Ok(())
 }
 
+#[cfg(target_os = "linux")]
+fn linux_x11_xtest_preflight() -> Result<()> {
+    use x11rb::protocol::xtest::ConnectionExt as XtestConnectionExt;
+    use x11rb::rust_connection::RustConnection;
+
+    let (conn, _) = RustConnection::connect(None).context("could not connect to X11")?;
+    conn.xtest_get_version(2, 2)
+        .context("could not request XTest version")?
+        .reply()
+        .context("XTest extension is unavailable")?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    #[derive(Debug)]
+    struct MockClipboard {
+        text: Option<String>,
+        events: Rc<RefCell<Vec<String>>>,
+        fail_next_set: bool,
+        fail_on_set: Option<String>,
+    }
+
+    impl MockClipboard {
+        fn new(text: impl Into<String>) -> Self {
+            Self {
+                text: Some(text.into()),
+                events: Rc::new(RefCell::new(Vec::new())),
+                fail_next_set: false,
+                fail_on_set: None,
+            }
+        }
+
+        fn empty() -> Self {
+            Self {
+                text: None,
+                events: Rc::new(RefCell::new(Vec::new())),
+                fail_next_set: false,
+                fail_on_set: None,
+            }
+        }
+
+        fn fail_next_set(mut self) -> Self {
+            self.fail_next_set = true;
+            self
+        }
+
+        fn fail_on_set(mut self, text: impl Into<String>) -> Self {
+            self.fail_on_set = Some(text.into());
+            self
+        }
+
+        fn events(&self) -> Rc<RefCell<Vec<String>>> {
+            Rc::clone(&self.events)
+        }
+    }
+
+    impl TextClipboard for MockClipboard {
+        fn get_text(&mut self) -> Result<String> {
+            self.events.borrow_mut().push("read".to_string());
+            self.text
+                .clone()
+                .ok_or_else(|| anyhow::anyhow!("clipboard is not text"))
+        }
+
+        fn set_text(&mut self, text: String) -> Result<()> {
+            self.events.borrow_mut().push(format!("set:{text}"));
+            if self.fail_next_set {
+                self.fail_next_set = false;
+                anyhow::bail!("clipboard write failed");
+            }
+            if self.fail_on_set.as_deref() == Some(text.as_str()) {
+                anyhow::bail!("clipboard write failed for {text}");
+            }
+            self.text = Some(text);
+            Ok(())
+        }
+    }
 
     #[test]
     fn paste_mode_labels_are_stable() {
@@ -328,5 +505,143 @@ mod tests {
     #[test]
     fn direct_mode_has_no_paste_modifiers() {
         assert!(paste_modifiers(PasteMode::Direct).is_empty());
+    }
+
+    #[test]
+    fn failed_paste_restores_previous_clipboard() {
+        let mut clipboard = MockClipboard::new("old clipboard");
+        let events = clipboard.events();
+        let result = paste_with_clipboard_swap(
+            &mut clipboard,
+            "dictated text",
+            || {
+                events.borrow_mut().push("paste".to_string());
+                Err(anyhow::anyhow!("paste failed"))
+            },
+            Duration::ZERO,
+            Duration::ZERO,
+        );
+
+        assert!(result.is_err());
+        assert_eq!(clipboard.text.as_deref(), Some("old clipboard"));
+        assert_eq!(
+            events.borrow().as_slice(),
+            ["read", "set:dictated text", "paste", "set:old clipboard"]
+        );
+    }
+
+    #[test]
+    fn successful_paste_restores_previous_clipboard() {
+        let mut clipboard = MockClipboard::new("old clipboard");
+        let events = clipboard.events();
+        paste_with_clipboard_swap(
+            &mut clipboard,
+            "dictated text",
+            || {
+                events.borrow_mut().push("paste".to_string());
+                Ok(())
+            },
+            Duration::ZERO,
+            Duration::ZERO,
+        )
+        .expect("paste should succeed");
+
+        assert_eq!(clipboard.text.as_deref(), Some("old clipboard"));
+        assert_eq!(
+            events.borrow().as_slice(),
+            ["read", "set:dictated text", "paste", "set:old clipboard"]
+        );
+    }
+
+    #[test]
+    fn same_clipboard_text_is_not_rewritten_after_paste() {
+        let mut clipboard = MockClipboard::new("dictated text");
+        let events = clipboard.events();
+        paste_with_clipboard_swap(
+            &mut clipboard,
+            "dictated text",
+            || {
+                events.borrow_mut().push("paste".to_string());
+                Ok(())
+            },
+            Duration::ZERO,
+            Duration::ZERO,
+        )
+        .expect("paste should succeed");
+
+        assert_eq!(clipboard.text.as_deref(), Some("dictated text"));
+        assert_eq!(
+            events.borrow().as_slice(),
+            ["read", "set:dictated text", "paste"]
+        );
+    }
+
+    #[test]
+    fn empty_text_does_not_touch_clipboard_or_paste() {
+        let mut clipboard = MockClipboard::empty();
+        let events = clipboard.events();
+        let mut pasted = false;
+        paste_with_clipboard_swap(
+            &mut clipboard,
+            "",
+            || {
+                pasted = true;
+                Ok(())
+            },
+            Duration::ZERO,
+            Duration::ZERO,
+        )
+        .expect("empty paste should be a no-op");
+
+        assert!(!pasted);
+        assert!(clipboard.text.is_none());
+        assert!(events.borrow().is_empty());
+    }
+
+    #[test]
+    fn transcript_clipboard_write_failure_does_not_paste_or_restore() {
+        let mut clipboard = MockClipboard::new("old clipboard").fail_next_set();
+        let events = clipboard.events();
+        let mut pasted = false;
+        let result = paste_with_clipboard_swap(
+            &mut clipboard,
+            "dictated text",
+            || {
+                pasted = true;
+                events.borrow_mut().push("paste".to_string());
+                Ok(())
+            },
+            Duration::ZERO,
+            Duration::ZERO,
+        );
+
+        assert!(result.is_err());
+        assert!(!pasted);
+        assert_eq!(clipboard.text.as_deref(), Some("old clipboard"));
+        assert_eq!(events.borrow().as_slice(), ["read", "set:dictated text"]);
+    }
+
+    #[test]
+    fn restore_failure_is_reported_after_successful_paste() {
+        let mut clipboard = MockClipboard::new("old clipboard").fail_on_set("old clipboard");
+        let events = clipboard.events();
+        let result = paste_with_clipboard_swap(
+            &mut clipboard,
+            "dictated text",
+            || {
+                events.borrow_mut().push("paste".to_string());
+                Ok(())
+            },
+            Duration::ZERO,
+            Duration::ZERO,
+        );
+
+        let err = result.expect_err("restore failure should be reported");
+        assert!(format!("{err:#}").contains("could not restore previous clipboard text"));
+        assert_eq!(clipboard.text.as_deref(), Some("dictated text"));
+        assert_eq!(
+            events.borrow().as_slice(),
+            ["read", "set:dictated text", "paste", "set:old clipboard"]
+        );
     }
 }
