@@ -377,7 +377,6 @@ impl EvdevReport {
     fn grab_likely_available(&self) -> bool {
         self.event_devices > 0
             && self.hotkey_keyboards > 0
-            && self.denied == 0
             && self.uinput_writable
             && self.other_errors.is_empty()
     }
@@ -553,6 +552,38 @@ mod tests {
     fn forced_desktop_is_disabled() {
         assert!(linux_hotkey_startup_blocked(HotkeyBackend::Desktop, true));
         assert!(linux_hotkey_startup_blocked(HotkeyBackend::Desktop, false));
+    }
+
+    #[test]
+    fn evdev_readiness_allows_denied_non_candidates() {
+        let report = EvdevReport {
+            event_devices: 4,
+            readable: 1,
+            hotkey_keyboards: 1,
+            denied: 3,
+            uinput_writable: true,
+            uinput_error: None,
+            other_errors: Vec::new(),
+        };
+
+        assert!(report.grab_likely_available());
+        assert_eq!(report.status_label(), "ready");
+    }
+
+    #[test]
+    fn evdev_readiness_still_requires_hotkey_candidate() {
+        let report = EvdevReport {
+            event_devices: 4,
+            readable: 1,
+            hotkey_keyboards: 0,
+            denied: 3,
+            uinput_writable: true,
+            uinput_error: None,
+            other_errors: Vec::new(),
+        };
+
+        assert!(!report.grab_likely_available());
+        assert_eq!(report.status_label(), "no keyboard candidates");
     }
 
     #[test]

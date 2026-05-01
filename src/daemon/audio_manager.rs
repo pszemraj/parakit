@@ -32,11 +32,14 @@ const DEVICE_POLL_INTERVAL: Duration = Duration::from_secs(2);
 pub struct AudioHandle {
     buffer: Arc<Mutex<Vec<f32>>>,
     recording: Arc<AtomicBool>,
+    pipeline: Arc<Mutex<CapturePipeline>>,
 }
 
 impl AudioHandle {
     /// Clear the current buffer and begin appending microphone samples.
     pub fn start_recording(&self) {
+        let mut pipeline = self.pipeline.lock();
+        pipeline.reset_recording();
         let mut buf = self.buffer.lock();
         let capacity = buf.capacity();
         if capacity < RECORDING_CAPACITY {
@@ -53,10 +56,13 @@ impl AudioHandle {
     /// The captured mono PCM samples at [`TARGET_RATE`].
     pub fn stop_recording(&self) -> Vec<f32> {
         self.recording.store(false, Ordering::Release);
-        std::mem::replace(
-            &mut *self.buffer.lock(),
-            Vec::with_capacity(RECORDING_CAPACITY),
-        )
+        let mut pipeline = self.pipeline.lock();
+        let mut flushed = Vec::new();
+        pipeline.finish_recording(&mut flushed);
+
+        let mut buf = self.buffer.lock();
+        append_samples_bounded(&mut buf, &flushed);
+        std::mem::replace(&mut *buf, Vec::with_capacity(RECORDING_CAPACITY))
     }
 }
 
@@ -121,6 +127,7 @@ impl AudioCapture {
     pub fn open(log: Arc<Logger>) -> Result<Self> {
         let buffer = Arc::new(Mutex::new(Vec::with_capacity(RECORDING_CAPACITY)));
         let recording = Arc::new(AtomicBool::new(false));
+        let pipeline = Arc::new(Mutex::new(CapturePipeline::default()));
         let current = Arc::new(Mutex::new(None));
         let alive = Arc::new(AtomicBool::new(true));
         let stream_error = Arc::new(Mutex::new(None));
@@ -128,6 +135,7 @@ impl AudioCapture {
         let handle = AudioHandle {
             buffer: Arc::clone(&buffer),
             recording: Arc::clone(&recording),
+            pipeline: Arc::clone(&pipeline),
         };
 
         let (ready_tx, ready_rx) = bounded::<Result<MicInfo>>(1);
@@ -142,6 +150,7 @@ impl AudioCapture {
                 audio_manager_loop(AudioManagerCtx {
                     buffer,
                     recording,
+                    pipeline,
                     current: thread_current,
                     alive: thread_alive,
                     stream_error: thread_error,
@@ -182,6 +191,7 @@ impl Drop for AudioCapture {
 struct AudioManagerCtx {
     buffer: Arc<Mutex<Vec<f32>>>,
     recording: Arc<AtomicBool>,
+    pipeline: Arc<Mutex<CapturePipeline>>,
     current: Arc<Mutex<Option<MicInfo>>>,
     alive: Arc<AtomicBool>,
     stream_error: Arc<Mutex<Option<String>>>,
@@ -195,6 +205,7 @@ fn audio_manager_loop(ctx: AudioManagerCtx) {
         &host,
         Arc::clone(&ctx.buffer),
         Arc::clone(&ctx.recording),
+        Arc::clone(&ctx.pipeline),
         Arc::clone(&ctx.stream_error),
     ) {
         Ok(live) => {
@@ -214,6 +225,7 @@ fn audio_manager_loop(ctx: AudioManagerCtx) {
         if let Some(err) = ctx.stream_error.lock().take() {
             ctx.log
                 .warn(format!("microphone stream failed ({err}); reopening"));
+            drop(live);
             live = reopen_until_success(&host, &ctx);
             continue;
         }
@@ -249,6 +261,7 @@ fn reopen_until_success(host: &cpal::Host, ctx: &AudioManagerCtx) -> LiveStream 
             host,
             Arc::clone(&ctx.buffer),
             Arc::clone(&ctx.recording),
+            Arc::clone(&ctx.pipeline),
             Arc::clone(&ctx.stream_error),
         ) {
             Ok(live) => {
@@ -289,17 +302,17 @@ fn open_live_stream(
     host: &cpal::Host,
     buffer: Arc<Mutex<Vec<f32>>>,
     recording: Arc<AtomicBool>,
+    pipeline: Arc<Mutex<CapturePipeline>>,
     stream_error: Arc<Mutex<Option<String>>>,
 ) -> Result<LiveStream> {
     let selected = select_input_device(host)?;
-    let identity = mic_identity_from_config(&selected.name, &selected.config);
-    let mut info = mic_info_from_identity(&identity);
-    enhance_mic_info(&mut info, selected.is_default);
+    let (info, identity) = mic_snapshot_from_selected(&selected);
 
     let hw_rate = selected.config.sample_rate().0;
     let channels = selected.config.channels() as usize;
     let stream_config: StreamConfig = selected.config.config();
     let resampler_state = make_resampler(hw_rate)?;
+    pipeline.lock().set_resampler(resampler_state);
 
     let stream = match selected.config.sample_format() {
         SampleFormat::I8 => build_stream::<i8>(
@@ -308,7 +321,7 @@ fn open_live_stream(
             channels,
             buffer,
             recording,
-            resampler_state,
+            Arc::clone(&pipeline),
             stream_error,
         )?,
         SampleFormat::I16 => build_stream::<i16>(
@@ -317,7 +330,7 @@ fn open_live_stream(
             channels,
             buffer,
             recording,
-            resampler_state,
+            Arc::clone(&pipeline),
             stream_error,
         )?,
         SampleFormat::I32 => build_stream::<i32>(
@@ -326,7 +339,7 @@ fn open_live_stream(
             channels,
             buffer,
             recording,
-            resampler_state,
+            Arc::clone(&pipeline),
             stream_error,
         )?,
         SampleFormat::U8 => build_stream::<u8>(
@@ -335,7 +348,7 @@ fn open_live_stream(
             channels,
             buffer,
             recording,
-            resampler_state,
+            Arc::clone(&pipeline),
             stream_error,
         )?,
         SampleFormat::U16 => build_stream::<u16>(
@@ -344,7 +357,7 @@ fn open_live_stream(
             channels,
             buffer,
             recording,
-            resampler_state,
+            Arc::clone(&pipeline),
             stream_error,
         )?,
         SampleFormat::U32 => build_stream::<u32>(
@@ -353,7 +366,7 @@ fn open_live_stream(
             channels,
             buffer,
             recording,
-            resampler_state,
+            Arc::clone(&pipeline),
             stream_error,
         )?,
         SampleFormat::F32 => build_stream::<f32>(
@@ -362,7 +375,7 @@ fn open_live_stream(
             channels,
             buffer,
             recording,
-            resampler_state,
+            Arc::clone(&pipeline),
             stream_error,
         )?,
         SampleFormat::F64 => build_stream::<f64>(
@@ -371,7 +384,7 @@ fn open_live_stream(
             channels,
             buffer,
             recording,
-            resampler_state,
+            Arc::clone(&pipeline),
             stream_error,
         )?,
         other => return Err(anyhow!("unsupported sample format: {:?}", other)),
@@ -411,6 +424,7 @@ struct SelectedInput {
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct MicIdentity {
     name: String,
+    source_id: Option<String>,
     input_rate: u32,
     channels: u16,
     sample_format: String,
@@ -488,20 +502,26 @@ fn select_input_device(host: &cpal::Host) -> Result<SelectedInput> {
 
 fn selected_mic_info(host: &cpal::Host) -> Result<MicInfo> {
     let selected = select_input_device(host)?;
-    let identity = mic_identity_from_config(&selected.name, &selected.config);
-    let mut info = mic_info_from_identity(&identity);
-    enhance_mic_info(&mut info, selected.is_default);
-    Ok(info)
+    Ok(mic_snapshot_from_selected(&selected).0)
 }
 
 fn selected_mic_identity(host: &cpal::Host) -> Result<MicIdentity> {
     let selected = select_input_device(host)?;
-    Ok(mic_identity_from_config(&selected.name, &selected.config))
+    Ok(mic_snapshot_from_selected(&selected).1)
+}
+
+fn mic_snapshot_from_selected(selected: &SelectedInput) -> (MicInfo, MicIdentity) {
+    let raw_identity = mic_identity_from_config(&selected.name, &selected.config);
+    let mut info = mic_info_from_identity(&raw_identity);
+    let source_id = enhance_mic_info(&mut info, selected.is_default);
+    let identity = mic_identity_from_info(&info, source_id);
+    (info, identity)
 }
 
 fn mic_identity_from_config(name: &str, config: &cpal::SupportedStreamConfig) -> MicIdentity {
     MicIdentity {
         name: name.to_string(),
+        source_id: None,
         input_rate: config.sample_rate().0,
         channels: config.channels(),
         sample_format: format!("{:?}", config.sample_format()),
@@ -518,14 +538,23 @@ fn mic_info_from_identity(identity: &MicIdentity) -> MicInfo {
     }
 }
 
-#[cfg(target_os = "linux")]
-fn enhance_mic_info(info: &mut MicInfo, is_default: bool) {
-    if !is_default && info.name != "default" {
-        return;
+fn mic_identity_from_info(info: &MicInfo, source_id: Option<String>) -> MicIdentity {
+    MicIdentity {
+        name: info.name.clone(),
+        source_id,
+        input_rate: info.input_rate,
+        channels: info.channels,
+        sample_format: info.sample_format.clone(),
     }
-    let Some(source) = pactl_default_source_info() else {
-        return;
-    };
+}
+
+#[cfg(target_os = "linux")]
+fn enhance_mic_info(info: &mut MicInfo, is_default: bool) -> Option<String> {
+    if !is_default && info.name != "default" {
+        return None;
+    }
+    let source = pactl_default_source_info()?;
+    let source_id = source.name.clone();
     info.name = source.description.unwrap_or(source.name);
     if let Some(rate) = source.rate {
         info.input_rate = rate;
@@ -537,10 +566,13 @@ fn enhance_mic_info(info: &mut MicInfo, is_default: bool) {
         info.sample_format = format;
     }
     info.resampling = info.input_rate != TARGET_RATE;
+    Some(source_id)
 }
 
 #[cfg(not(target_os = "linux"))]
-fn enhance_mic_info(_info: &mut MicInfo, _is_default: bool) {}
+fn enhance_mic_info(_info: &mut MicInfo, _is_default: bool) -> Option<String> {
+    None
+}
 
 #[cfg(target_os = "linux")]
 #[derive(Debug, Default, Eq, PartialEq)]
@@ -655,7 +687,41 @@ pub fn is_virtual_input_name(name: &str) -> bool {
     patterns.iter().any(|pattern| lower.contains(pattern))
 }
 
-/// Per-callback state for the resampler.
+#[derive(Default)]
+struct CapturePipeline {
+    resampler: Option<ResamplerState>,
+}
+
+impl CapturePipeline {
+    fn set_resampler(&mut self, resampler: Option<ResamplerState>) {
+        self.resampler = resampler;
+    }
+
+    fn reset_recording(&mut self) {
+        if let Some(resampler) = &mut self.resampler {
+            resampler.reset_recording();
+        }
+    }
+
+    fn process<'a>(&mut self, input: &'a [f32], out: &'a mut Vec<f32>) -> &'a [f32] {
+        match &mut self.resampler {
+            Some(resampler) => {
+                out.clear();
+                resampler.process(input, out);
+                out
+            }
+            None => input,
+        }
+    }
+
+    fn finish_recording(&mut self, out: &mut Vec<f32>) {
+        if let Some(resampler) = &mut self.resampler {
+            resampler.flush_recording(out);
+        }
+    }
+}
+
+/// Per-stream state for resampling one recording at a time.
 struct ResamplerState {
     resampler: SincFixedIn<f32>,
     scratch: Vec<f32>,
@@ -675,16 +741,36 @@ impl ResamplerState {
         self.scratch.extend_from_slice(input);
         while self.scratch.len() >= self.chunk_size {
             let drained: Vec<f32> = self.scratch.drain(..self.chunk_size).collect();
-            let input_frames = vec![drained];
-            match self.resampler.process(&input_frames, None) {
-                Ok(out_frames) => {
-                    if let Some(ch0) = out_frames.into_iter().next() {
-                        out.extend_from_slice(&ch0);
-                    }
+            self.process_chunk(drained, out);
+        }
+    }
+
+    fn flush_recording(&mut self, out: &mut Vec<f32>) {
+        if !self.scratch.is_empty() {
+            let mut padded = Vec::with_capacity(self.chunk_size);
+            padded.extend_from_slice(&self.scratch);
+            padded.resize(self.chunk_size, 0.0);
+            self.scratch.clear();
+            self.process_chunk(padded, out);
+        }
+        self.resampler.reset();
+    }
+
+    fn reset_recording(&mut self) {
+        self.scratch.clear();
+        self.resampler.reset();
+    }
+
+    fn process_chunk(&mut self, chunk: Vec<f32>, out: &mut Vec<f32>) {
+        let input_frames = vec![chunk];
+        match self.resampler.process(&input_frames, None) {
+            Ok(out_frames) => {
+                if let Some(ch0) = out_frames.into_iter().next() {
+                    out.extend_from_slice(&ch0);
                 }
-                Err(e) => {
-                    eprintln!("parakit: resampler error (dropped chunk): {e}");
-                }
+            }
+            Err(e) => {
+                eprintln!("parakit: resampler error (dropped chunk): {e}");
             }
         }
     }
@@ -696,7 +782,7 @@ fn build_stream<T>(
     channels: usize,
     buffer: Arc<Mutex<Vec<f32>>>,
     recording: Arc<AtomicBool>,
-    mut resampler: Option<ResamplerState>,
+    pipeline: Arc<Mutex<CapturePipeline>>,
     stream_error: Arc<Mutex<Option<String>>>,
 ) -> Result<Stream>
 where
@@ -737,14 +823,8 @@ where
                     }
                 }
 
-                let to_push: &[f32] = match &mut resampler {
-                    Some(r) => {
-                        resampled_scratch.clear();
-                        r.process(&mono_scratch, &mut resampled_scratch);
-                        &resampled_scratch
-                    }
-                    None => &mono_scratch,
-                };
+                let mut pipeline = pipeline.lock();
+                let to_push = pipeline.process(&mono_scratch, &mut resampled_scratch);
 
                 if to_push.is_empty() {
                     return;
@@ -762,6 +842,10 @@ where
 
 fn append_recording_samples(buffer: &Mutex<Vec<f32>>, samples: &[f32]) {
     let mut buf = buffer.lock();
+    append_samples_bounded(&mut buf, samples);
+}
+
+fn append_samples_bounded(buf: &mut Vec<f32>, samples: &[f32]) {
     if buf.len() >= MAX_RECORDING_SAMPLES {
         return;
     }
@@ -806,6 +890,7 @@ mod tests {
         let handle = AudioHandle {
             buffer: Arc::new(Mutex::new(Vec::new())),
             recording: Arc::new(AtomicBool::new(false)),
+            pipeline: Arc::new(Mutex::new(CapturePipeline::default())),
         };
 
         handle.start_recording();
@@ -828,6 +913,51 @@ mod tests {
         let buffer = buffer.lock();
         assert_eq!(buffer.len(), MAX_RECORDING_SAMPLES);
         assert_eq!(buffer[MAX_RECORDING_SAMPLES - 1], 1.0);
+    }
+
+    #[test]
+    fn mic_identity_uses_enhanced_info_fields() {
+        let info = MicInfo {
+            name: "RODE NT-USB+ Mono".to_string(),
+            input_rate: 48_000,
+            channels: 1,
+            sample_format: "s24le".to_string(),
+            resampling: true,
+        };
+
+        assert_eq!(
+            mic_identity_from_info(
+                &info,
+                Some("alsa_input.usb-RODE_NT-USB-00.mono-fallback".to_string())
+            ),
+            MicIdentity {
+                name: "RODE NT-USB+ Mono".to_string(),
+                source_id: Some("alsa_input.usb-RODE_NT-USB-00.mono-fallback".to_string()),
+                input_rate: 48_000,
+                channels: 1,
+                sample_format: "s24le".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn resampler_flushes_and_resets_tail_between_recordings() {
+        let mut pipeline = CapturePipeline {
+            resampler: make_resampler(48_000).expect("resampler"),
+        };
+        let mut out = Vec::new();
+        let mut scratch = Vec::new();
+        let input = vec![0.1; 100];
+
+        assert!(pipeline.process(&input, &mut scratch).is_empty());
+        pipeline.finish_recording(&mut out);
+        assert!(!out.is_empty());
+        assert!(pipeline.resampler.as_ref().unwrap().scratch.is_empty());
+
+        let flushed_len = out.len();
+        pipeline.reset_recording();
+        pipeline.finish_recording(&mut out);
+        assert_eq!(out.len(), flushed_len);
     }
 
     #[cfg(target_os = "linux")]

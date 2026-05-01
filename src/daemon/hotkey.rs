@@ -423,7 +423,7 @@ fn open_keyboard_devices(log: &Logger) -> io::Result<Vec<LinuxKeyboardDevice>> {
 
     let mut out = Vec::new();
     for path in linux_event_device_paths()? {
-        let file = match File::open(&path) {
+        let file = match open_evdev_input(&path) {
             Ok(file) => file,
             Err(err) if err.kind() == io::ErrorKind::PermissionDenied => continue,
             Err(err) => return Err(err),
@@ -457,6 +457,16 @@ fn open_keyboard_devices(log: &Logger) -> io::Result<Vec<LinuxKeyboardDevice>> {
         });
     }
     Ok(out)
+}
+
+#[cfg(target_os = "linux")]
+fn open_evdev_input(path: &std::path::Path) -> io::Result<File> {
+    use std::os::unix::fs::OpenOptionsExt;
+
+    std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK)
+        .open(path)
 }
 
 #[cfg(target_os = "linux")]
@@ -712,5 +722,29 @@ mod tests {
         assert_eq!(HotkeyBackend::Auto.label(), "auto");
         assert_eq!(HotkeyBackend::Desktop.label(), "desktop");
         assert_eq!(HotkeyBackend::Evdev.label(), "evdev");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn evdev_input_files_are_opened_nonblocking() {
+        use std::os::fd::AsRawFd;
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock before UNIX epoch")
+            .as_nanos();
+        let dir = PathBuf::from(format!(
+            "target/tmp/parakit-hotkey-test-{}-{unique}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).expect("create test directory");
+        let path = dir.join("event-test");
+        std::fs::write(&path, b"").expect("create test input file");
+
+        let file = open_evdev_input(&path).expect("open test input file");
+        let flags = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_GETFL) };
+        assert_ne!(flags, -1);
+        assert_ne!(flags & libc::O_NONBLOCK, 0);
     }
 }
