@@ -548,7 +548,7 @@ fn python_with_converter_deps() -> Result<PathBuf> {
     }
 
     bail!(
-        "Conversion requires Python 3 with torch, numpy, gguf, and sentencepiece. Install with: pip install -r requirements-convert.txt"
+        "Conversion requires Python 3 with torch, numpy, gguf, and sentencepiece. Install with: pip install -r scripts/requirements-convert.txt"
     );
 }
 
@@ -560,7 +560,7 @@ fn find_python() -> Result<PathBuf> {
         return Ok(PathBuf::from("python"));
     }
     bail!(
-        "Conversion requires Python 3. Install Python from https://www.python.org/downloads/ and then run: pip install -r requirements-convert.txt"
+        "Conversion requires Python 3. Install Python from https://www.python.org/downloads/ and then run: pip install -r scripts/requirements-convert.txt"
     );
 }
 

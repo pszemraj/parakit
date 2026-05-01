@@ -50,7 +50,7 @@ Python should remain outside the normal user path.
 Maintainers can rebuild from NVIDIA's `.nemo` checkpoint:
 
 ```bash
-python -m pip install -r requirements-convert.txt
+python -m pip install -r scripts/requirements-convert.txt
 parakit fetch --from-source --keep-f16 --keep-nemo
 ```
 
@@ -61,27 +61,15 @@ intermediate GGUF with `crispasr-quantize`.
 After rebuilding a release artifact, upload F16 and Q8_0 to the hosted repo.
 Update `HOSTED_Q8_SHA256` in `src/model.rs` if the Q8_0 bytes changed.
 
-## TODOs
+## Updating CrispASR
 
-- Port the `.nemo` to GGUF converter to Rust so source rebuilds do not need
-  Python.
-- Investigate whether Murmure starts partial inference before the hotkey is
-  released and whether that explains perceived CPU latency differences.
-- Revisit true streaming cursor insertion if streaming becomes a supported
-  primary mode. Synthetic typing makes sense for incremental partials, but
-  batch mode should remain a one-shot paste unless real-use testing shows that
-  clipboard behavior is worse than typed insertion.
-- Track clipboard-manager behavior for paste insertion. The required behavior is
-  that the user's original text clipboard is restored after insertion. Avoiding
-  transcript entries in clipboard history entirely would be nice to have, but it
-  is not required while clipboard managers record the transient paste payload as
-  an earlier history item.
-- Revisit native Windows/macOS hotkey backends if `rdev::grab` corrupts input
-  when combined with Enigo insertion. Keep the binding fixed to `Ctrl+Space`,
-  avoid per-tick settings reads, use adaptive idle polling if polling is needed,
-  and build any macOS layout keymap on the main thread.
-- Add `parakit fetch --quant <QUANT>` after the F16 artifact is hosted. Keep
-  Q8_0 as the default unless quality, memory, or startup data justifies changing
-  it.
-- Add an empty-cache smoke test that runs against the hosted Hugging Face
-  artifact after upload.
+Keep submodule updates separate from parakit code changes:
+
+```bash
+cd vendor/CrispASR
+git fetch
+git checkout <tag-or-commit>
+cd ../..
+git add vendor/CrispASR
+cargo build
+```

@@ -1,4 +1,4 @@
-//! WAV ingestion helpers shared by examples and daemon validation paths.
+//! WAV ingestion helpers shared by quality tools and daemon validation paths.
 
 use crate::constants::TARGET_RATE;
 use anyhow::{Context, Result};

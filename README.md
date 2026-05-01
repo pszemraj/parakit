@@ -1,27 +1,16 @@
 # parakit
 
-Local push-to-talk dictation for desktop workflows. Hold `Ctrl+Space`, speak,
+Local push-to-talk dictation for desktop work. Hold `Ctrl+Space`, speak,
 release, and parakit inserts the transcript into the focused application.
 
-parakit runs NVIDIA's
-[Parakeet-TDT-0.6B-v3](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3)
-locally through [CrispASR](https://github.com/CrispStrobe/CrispASR). The first
-daemon run downloads the default hosted Q8_0 GGUF model and caches it.
-
-Core behavior:
-
-- fixed `Ctrl+Space` push-to-talk;
-- automatic first-run model download;
-- terminal-friendly paste mode by default;
-- follows the current default input microphone;
-- optional cleanup rules and JSONL/TSV text logging.
-
-Repository: [github.com/pszemraj/parakit](https://github.com/pszemraj/parakit)
+parakit runs NVIDIA's Parakeet-TDT-0.6B-v3 locally through the vendored
+CrispASR runtime. The first daemon run downloads the default Q8_0 GGUF model
+and caches it; normal use does not need a `-m` model argument.
 
 ## Install
 
-Install the native dependencies in [docs/build.md](docs/build.md), then clone
-and build:
+Install the native packages for your OS from [docs/build.md](docs/build.md),
+then build from source:
 
 ```bash
 git clone --recurse-submodules https://github.com/pszemraj/parakit.git
@@ -30,63 +19,36 @@ git submodule update --init --recursive
 cargo install --path .
 ```
 
-Windows PowerShell:
-
-```powershell
-pwsh -ExecutionPolicy Bypass -File scripts/install-windows.ps1
-```
-
-Cargo installs the binary into Cargo's bin directory, usually `~/.cargo/bin` on
-Linux/macOS or `%USERPROFILE%\.cargo\bin` on Windows. Make sure that directory
-is on `PATH`.
-
-Linux/macOS:
+Make sure Cargo's bin directory is on `PATH`:
 
 ```bash
 export PATH="$HOME/.cargo/bin:$PATH"
 ```
 
-Check the environment and start the daemon:
+Windows support is experimental. Build requirements and DLL notes are in
+[docs/build.md](docs/build.md).
+
+## First Run
 
 ```bash
 parakit doctor && parakit
 ```
 
-No `-m` argument is needed for normal use. CPU tuning, accelerator builds, BLAS,
-and Windows DLL handling are covered in [docs/build.md](docs/build.md).
-
-## Run
-
-For daily use, start it from the current desktop session and detach it:
+For daily background use, start it from the current desktop session:
 
 ```bash
 parakit --quiet &
 disown
 ```
 
-See [docs/running.md](docs/running.md) for foreground output, background
-launch, model cache, logging, microphone selection, paste modes, sounds, and
-disabled streaming mode.
+## Learn More
 
-## Common Tasks
-
-- Runtime options, logging, model cache commands, paste modes, and custom
-  models: [docs/running.md](docs/running.md)
-- Linux input permissions, tmux, X11, and `/dev/uinput`:
-  [docs/linux-desktop.md](docs/linux-desktop.md)
-- Cleanup rule behavior and rule testing:
-  [docs/cleaning-rules.md](docs/cleaning-rules.md)
-- File transcription and quality checks:
-  [docs/quality.md](docs/quality.md)
-- Common failures:
-  [docs/troubleshooting.md](docs/troubleshooting.md)
-- Maintainer source rebuilds from NVIDIA's `.nemo` checkpoint:
-  [docs/dev.md#source-rebuild](docs/dev.md#source-rebuild)
+- Build and native dependencies: [docs/build.md](docs/build.md)
+- Running, model cache, logging, and paste modes: [docs/running.md](docs/running.md)
+- Linux X11, evdev, and `/dev/uinput`: [docs/linux-desktop.md](docs/linux-desktop.md)
+- Cleanup rules: [docs/cleaning-rules.md](docs/cleaning-rules.md)
+- Troubleshooting: [docs/troubleshooting.md](docs/troubleshooting.md)
 
 ## License
 
-MIT. See [`LICENSE`](LICENSE).
-
-`crispasr`, `cpal`, `x11rb`, `rdev`, `enigo`, `rodio`, `rubato`,
-`regex`, `clap`, and other dependencies have their own licenses (mostly
-MIT/Apache-2.0). The bundled CrispASR library is also MIT-licensed.
+MIT. See [LICENSE](LICENSE).

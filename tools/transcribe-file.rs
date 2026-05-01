@@ -1,7 +1,7 @@
 //! Transcribe one WAV file through parakit's real CrispASR engine.
 //!
-//! This helper is used for quality checks against other Parakeet
-//! implementations without starting the hotkey daemon.
+//! This maintainer tool is registered as a Cargo example target so it is easy
+//! to run during validation without being installed as an end-user binary.
 
 use anyhow::{Context, Result};
 use clap::Parser;

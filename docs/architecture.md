@@ -68,8 +68,8 @@ crossbeam channels.
 | `src/daemon/inject.rs` | Batch paste/direct insertion. |
 | `src/daemon/sounds.rs` | Generated audio cue thread. |
 | `src/data_log.rs` | JSONL/TSV transcription logging. |
-| `src/audio_file.rs` | WAV decoding, mono mixing, and file resampling for examples and PTT simulation. |
-| `examples/transcribe-file.rs` | File-based smoke and quality checks. |
+| `src/audio_file.rs` | WAV decoding, mono mixing, and file resampling for quality tools and PTT simulation. |
+| `tools/transcribe-file.rs` | File-based smoke and quality checks. |
 | `scripts/transcribe_nemo_parakeet.py` | NeMo reference transcription helper. |
 
 ## Failure Policy

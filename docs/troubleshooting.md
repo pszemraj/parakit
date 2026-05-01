@@ -85,10 +85,11 @@ The git submodule is missing. Fix the existing checkout:
 git submodule update --init --recursive
 ```
 
-On Windows, prefer:
+On Windows, initialize the submodule before building:
 
 ```powershell
-pwsh -ExecutionPolicy Bypass -File scripts/install-windows.ps1
+git submodule update --init --recursive
+cargo build --release
 ```
 
 Shared library loading on Linux:

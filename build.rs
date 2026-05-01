@@ -171,8 +171,7 @@ fn main() {
 
     // 6. Bake the lib path into the binary's rpath so we don't need
     //    LD_LIBRARY_PATH / DYLD_FALLBACK_LIBRARY_PATH at runtime.
-    //    No-op on Windows; DLLs are copied into the profile dir above and the
-    //    Windows installer script copies them next to the installed exe.
+    //    No-op on Windows; DLLs are copied into the profile dir above.
     emit_rpath(&final_lib_dir);
 
     // 7. Re-export the install path. Useful for `cargo run` on macOS
@@ -472,7 +471,7 @@ fn exe_name(name: &str) -> String {
 ///
 /// In normal builds Cargo resolves the `crispasr` path dependency before this
 /// function can run, so a completely missing submodule still has to be fixed
-/// with `git submodule update --init --recursive` or `scripts/install-windows.ps1`.
+/// with `git submodule update --init --recursive`.
 fn locate_source(manifest_dir: &Path) -> PathBuf {
     if let Ok(d) = env::var("CRISPASR_SRC_DIR") {
         let p = PathBuf::from(d);

@@ -17,6 +17,10 @@ name = "parakit"
 path = "src/main.rs"
 required-features = ["daemon"]
 
+[[example]]
+name = "transcribe-file"
+path = "tools/transcribe-file.rs"
+
 [dependencies]
 # CLI parsing
 clap = { version = "4.5", features = ["derive"] }
@@ -31,7 +35,7 @@ crispasr = { path = "vendor/CrispASR/crispasr", default-features = false }
 # Audio capture
 cpal = { version = "0.15", optional = true }
 rubato = "0.15"        # high-quality resampler (sinc, asynchronous)
-hound = "3.5"          # WAV decoding for examples and daemon validation runs
+hound = "3.5"          # WAV decoding for quality tools and daemon validation runs
 
 # Lock-free or mutex-protected shared state
 parking_lot = "0.12"
@@ -79,8 +83,8 @@ x11rb = { version = "0.13", features = ["xtest"], optional = true }
 default = ["bundled", "daemon"]
 
 # Live push-to-talk daemon dependencies. Keeping this as a feature lets the
-# WAV-only transcribe-file example build on machines missing desktop/audio dev
-# packages while preserving default daemon behavior.
+# The WAV-only transcribe-file quality target builds on machines missing
+# desktop/audio dev packages while preserving default daemon behavior.
 daemon = [
   "dep:arboard",
   "dep:cpal",

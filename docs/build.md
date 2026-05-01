@@ -27,7 +27,7 @@ sudo apt install libvulkan-dev vulkan-tools glslc spirv-tools spirv-headers mesa
 `spirv-headers` provides `spirv/unified1/spirv.hpp`; it is not the same package
 as `spirv-tools`.
 
-## Install Commands
+## Install
 
 ```bash
 git submodule update --init --recursive
@@ -44,15 +44,15 @@ usually `~/.cargo/bin`.
 Add `--locked` for CI or reproducibility checks when Cargo must use the exact
 versions in `Cargo.lock`. Leave it off for normal local installs.
 
-On Windows, use the repository installer instead of raw `cargo install`:
+Windows support is experimental. Prefer a normal Rust build first:
 
 ```powershell
-pwsh -ExecutionPolicy Bypass -File scripts/install-windows.ps1
-pwsh -ExecutionPolicy Bypass -File scripts/install-windows.ps1 -Features cuda
+git submodule update --init --recursive
+cargo build --release
 ```
 
-The script initializes the CrispASR submodule, runs `cargo install --path .`,
-and copies generated native DLLs next to the installed `parakit.exe`.
+If `parakit.exe` cannot find generated CrispASR DLLs, copy them next to the
+binary as described in [Windows DLLs](#windows-dlls).
 
 ## CPU Builds
 
@@ -67,7 +67,8 @@ parakit doctor
 parakit --verbose doctor
 ```
 
-Benchmark different thread counts without the daemon:
+Benchmark different thread counts without the daemon by running the WAV quality
+target:
 
 ```bash
 cargo run --release --example transcribe-file -- --audio path/to/sample.wav --threads 8 --repeat 3
@@ -138,9 +139,9 @@ The library paths should point into `target/debug/build/parakit-*/out/lib`, and
 
 ## Windows DLLs
 
-Windows has no rpath. The PowerShell installer handles this for
-`cargo install`. If building manually, copy generated DLLs next to the binary or
-put the generated `out\bin` directory on `PATH`:
+Windows has no rpath. If the built executable cannot find CrispASR DLLs, copy
+generated DLLs next to the binary or put the generated `out\bin` directory on
+`PATH`:
 
 ```powershell
 cargo build --release
@@ -151,16 +152,3 @@ Windows text insertion uses `SendInput`. It can inject only into applications
 running at the same or a lower integrity level, so a non-elevated parakit cannot
 paste into an elevated administrator app. Security software may also flag global
 hooks plus text insertion; whitelist the binary if needed.
-
-## Updating CrispASR
-
-Keep submodule updates separate from parakit code changes:
-
-```bash
-cd vendor/CrispASR
-git fetch
-git checkout <tag-or-commit>
-cd ../..
-git add vendor/CrispASR
-cargo build
-```

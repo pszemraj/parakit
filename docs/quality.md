@@ -1,11 +1,11 @@
-# Quality Checks
+# Validation
 
 Build success does not prove transcription quality. Use real user audio, not
 synthetic TTS.
 
-## File-Based parakit Transcription
+## WAV Quality Target
 
-Use the Rust example to run the same CrispASR engine and cleanup pipeline
+Use the Rust WAV target to run the same CrispASR engine and cleanup pipeline
 without the hotkey daemon:
 
 ```bash
@@ -16,7 +16,8 @@ cargo run --example transcribe-file -- \
 The helper accepts WAV input, uses the same `Engine` path as the daemon, applies
 cleanup unless disabled, and prints raw and cleaned text. It uses the cached
 Q8_0 model by default. Pass `--model /path/to/model.gguf` only when comparing a
-specific custom GGUF.
+specific custom GGUF. The source lives at `tools/transcribe-file.rs`; it is a
+Cargo example target so it is not installed as an end-user binary.
 
 ## PTT Worker Simulation
 
