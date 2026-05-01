@@ -1,18 +1,14 @@
 # parakit
 
-Local push-to-talk dictation for desktop work. Hold `Ctrl+Space`, speak,
-release, and parakit inserts the transcript into the focused application.
+Local push-to-talk dictation for desktop work. Hold `Ctrl+Space`, speak, release, and parakit inserts the transcript into the focused application.
 
-parakit runs NVIDIA's Parakeet-TDT-0.6B-v3 locally through the vendored
-CrispASR runtime. After startup preflights pass, the first successful daemon
-startup downloads the default Q8_0 GGUF model and caches it; normal use does
-not need a `-m` model argument.
+parakit runs NVIDIA's Parakeet-TDT-0.6B-v3 locally through the vendored CrispASR runtime. After startup preflights pass, the first successful daemon startup downloads the default Q8_0 GGUF model and caches it; normal use does not need a `-m` model argument.
 
 ## Install
 
 Install the native, OS-specific packages needed[^1] as explained in [docs/build.md](docs/build.md), then:
 
-[^1]: these are mostly audio stream handling + monitoring (if shortcut pressed) related
+[^1]: These are mostly for audio streaming, hotkey monitoring, and text insertion.
 
 ```bash
 git clone --recurse-submodules https://github.com/pszemraj/parakit.git
@@ -34,14 +30,14 @@ Run the doctor subcommand and start up the daemon.
 parakit doctor && parakit
 ```
 
-If `doctor` finds issues with the setup/build, it will exit 1 and display detials on what is wrong. Otherwise, the following `parakit` starts up the daemon and you're ready to try it:
+If `doctor` finds issues with the setup/build, it will exit 1 and display details on what is wrong. Otherwise, the following `parakit` starts up the daemon and you're ready to try it:
 
-1. Switch to anywhere else, and put the cursor where you want to dictate into
-2. press & hold CTRL+space, say something, then let go of CTRL+space
-  - sounds are played to indicate: started listening for dictation, finished listening, or an error
-3. observe your dictated text appear at your cursor
+1. Switch to another app or text field, and put the cursor where you want text inserted.
+2. Press and hold `Ctrl+Space`, say something, then release.
+   - Sounds indicate start, stop, or error states.
+3. Watch the dictated text appear at your cursor.
 
-More details are in the console outputs. That's it! For info on how to run parakit as a background process & other adv options, see [docs/running.md](docs/running.md)
+More details are in the console outputs. That's it! For info on how to run parakit as a background process and other advanced options, see [docs/running.md](docs/running.md).
 
 **gotcha:** Linux insertion requires an X11 session[^2]
 

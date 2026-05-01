@@ -8,13 +8,9 @@ End-user startup uses the hosted Q8_0 GGUF:
 https://huggingface.co/pszemraj/parakeet-tdt-0.6b-v3-gguf
 ```
 
-The binary downloads `parakeet-tdt-0.6b-v3-Q8_0.gguf`, verifies the compiled-in
-SHA256, writes it to the platform model cache, and starts the daemon after
-startup preflights pass. The default `parakit` command must not require Python,
-NeMo, PyTorch, or manual model setup.
+The binary downloads `parakeet-tdt-0.6b-v3-Q8_0.gguf`, verifies the compiled-in SHA256, writes it to the platform model cache, and starts the daemon after startup preflights pass. The default `parakit` command must not require Python, NeMo, PyTorch, or manual model setup.
 
-`-m <path>` is the escape hatch for local experiments and always disables
-automatic model fetch.
+`-m <path>` is the escape hatch for local experiments and always disables automatic model fetch.
 
 Hosted release files:
 
@@ -23,13 +19,9 @@ Hosted release files:
 | `parakeet-tdt-0.6b-v3-Q8_0.gguf` | Default user artifact. |
 | `parakeet-tdt-0.6b-v3-F16.gguf` | Source GGUF kept for maintainers and future re-quantization work. |
 
-The CLI has no quant selector. Q8_0 is the default hosted model, and `-m <path>`
-is the only supported model override. Avoid unrelated names, nested directories,
-or model-card-only links for release artifacts.
+The CLI has no quant selector. Q8_0 is the default hosted model, and `-m <path>` is the only supported model override. Avoid unrelated names, nested directories, or model-card-only links for release artifacts.
 
-The Parakeet converter, loader, and `crispasr-quantize` path are built around
-F16/F32 tensors. Treat BF16 as future work until it has explicit support and
-validation.
+The Parakeet converter, loader, and `crispasr-quantize` path are built around F16/F32 tensors. Treat BF16 as future work until it has explicit support and validation.
 
 ## Source Rebuild
 
@@ -40,12 +32,9 @@ python -m pip install -r scripts/requirements-convert.txt
 parakit fetch --from-source --keep-f16 --keep-nemo
 ```
 
-That path downloads NVIDIA's official `.nemo`, converts it with
-`vendor/CrispASR/models/convert-parakeet-to-gguf.py`, and quantizes the
-intermediate GGUF with `crispasr-quantize`.
+That path downloads NVIDIA's official `.nemo`, converts it with `vendor/CrispASR/models/convert-parakeet-to-gguf.py`, and quantizes the intermediate GGUF with `crispasr-quantize`.
 
-After rebuilding a release artifact, upload F16 and Q8_0 to the hosted repo and
-update `HOSTED_Q8_SHA256` in `src/model.rs` if the Q8_0 bytes changed.
+After rebuilding a release artifact, upload F16 and Q8_0 to the hosted repo and update `HOSTED_Q8_SHA256` in `src/model.rs` if the Q8_0 bytes changed.
 
 ## Updating CrispASR
 

@@ -1,38 +1,28 @@
 # Validation
 
-Build success does not prove transcription quality. Use real user audio, not
-synthetic TTS.
+Build success does not prove transcription quality. Use real user audio, not synthetic TTS.
 
 ## WAV Quality Target
 
-Use the Rust WAV target to run the same CrispASR engine and cleanup pipeline
-without the hotkey daemon:
+Use the Rust WAV target to run the same CrispASR engine and cleanup pipeline without the hotkey daemon:
 
 ```bash
 cargo run --example transcribe-file -- \
   --audio clips/example.wav
 ```
 
-The helper accepts WAV input, uses the same `Engine` path as the daemon, applies
-cleanup unless disabled, and prints raw and cleaned text. It uses the cached
-Q8_0 model by default. Pass `--model /path/to/model.gguf` only when comparing a
-specific custom GGUF. The source lives at `tools/transcribe-file.rs`; it is a
-Cargo example target so it is not installed as an end-user binary.
+The helper accepts WAV input, uses the same `Engine` path as the daemon, applies cleanup unless disabled, and prints raw and cleaned text. It uses the cached Q8_0 model by default. Pass `--model /path/to/model.gguf` only when comparing a specific custom GGUF. The source lives at `tools/transcribe-file.rs`; it is a Cargo example target so it is not installed as an end-user binary.
 
 ## PTT Worker Simulation
 
-Use the hidden simulation path when you need the daemon worker flow without a
-live keyboard, microphone, or text insertion:
+Use the hidden simulation path when you need the daemon worker flow without a live keyboard, microphone, or text insertion:
 
 ```bash
 cargo run -- --paste-mode direct \
   --simulate-ptt-audio target/tmp/ptt-audio/Sitrep_2602_20_0145_first60.wav
 ```
 
-It reads a WAV, resamples it to the model rate, sends
-`RecordingStarted`/`RecordingStopped` events with owned PCM, runs inference and
-cleanup, and prints the transcript. It does not test evdev capture or paste
-insertion.
+It reads a WAV, resamples it to the model rate, sends `RecordingStarted`/`RecordingStopped` events with owned PCM, runs inference and cleanup, and prints the transcript. It does not test evdev capture or paste insertion.
 
 ## NeMo Reference Helper
 
@@ -42,9 +32,7 @@ The Python helper runs NVIDIA NeMo's official Parakeet path:
 python scripts/transcribe_nemo_parakeet.py clips/example.wav
 ```
 
-Install details are in [scripts/README.md](../scripts/README.md). The script
-has hard imports for PyTorch and NeMo so a broken reference environment fails
-immediately.
+Install details are in [scripts/README.md](../scripts/README.md). The script has hard imports for PyTorch and NeMo so a broken reference environment fails immediately.
 
 ## Recommended A/B Procedure
 
@@ -76,14 +64,9 @@ Not acceptable:
 - repeated substitutions across clips;
 - many wrong words in a short utterance.
 
-If F16 differs materially from the reference, inspect CrispASR's Parakeet
-preprocessor first. If F16 matches but Q8_0 is worse, suspect the hosted
-artifact or quantizer path.
+If F16 differs materially from the reference, inspect CrispASR's Parakeet preprocessor first. If F16 matches but Q8_0 is worse, suspect the hosted artifact or quantizer path.
 
-Parakeet-v3 auto-detects language. It has no parakit language flag today, so
-non-English or code-switched dictation should be checked against real clips
-before relying on it. Accents, noise, proper nouns, and technical vocabulary can
-change language detection behavior.
+Parakeet-v3 auto-detects language. It has no parakit language flag today, so non-English or code-switched dictation should be checked against real clips before relying on it. Accents, noise, proper nouns, and technical vocabulary can change language detection behavior.
 
 ## Runtime Smoke Checks
 

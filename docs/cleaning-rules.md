@@ -1,7 +1,6 @@
 # Cleaning Rules
 
-parakit applies a deterministic regex cleanup pass after ASR and before text
-insertion. Rules are code in `src/rules.rs`; there is no rule config file.
+parakit applies a deterministic regex cleanup pass after ASR and before text insertion. Rules are code in `src/rules.rs`; there is no rule config file.
 
 ## What Rules Do
 
@@ -29,11 +28,9 @@ parakit --test-rules "So, um, the the cat ran."
 
 ## Rule Order
 
-Rules run in the order they appear in `DEFAULT_RULES`. The output of one rule
-is the input to the next.
+Rules run in the order they appear in `DEFAULT_RULES`. The output of one rule is the input to the next.
 
-Specific rules should appear before generic rules. For example, a rule for
-`it's actually like X` must run before a broader `it's like X` rule.
+Specific rules should appear before generic rules. For example, a rule for `it's actually like X` must run before a broader `it's like X` rule.
 
 Whitespace and punctuation cleanup should stay at the end.
 
@@ -79,8 +76,7 @@ Rules use Rust's `regex` crate:
 - capture replacement uses `$1`, `$2`, and so on;
 - use `(?i)` for case-insensitive matches.
 
-Personal vocabulary belongs in code when it is useful for the user, but it
-should not become a default rule unless it generalizes to normal dictation.
+Personal vocabulary belongs in code when it is useful for the user, but it should not become a default rule unless it generalizes to normal dictation.
 
 ## Regression Workflow
 

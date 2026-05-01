@@ -1,12 +1,10 @@
 # Build
 
-parakit is a Rust 1.87+ binary that links to the vendored CrispASR submodule.
-The default build is CPU-only and local-machine optimized.
+parakit is a Rust 1.87+ binary that links to the vendored CrispASR submodule. The default build is CPU-only and local-machine optimized.
 
 ## Native Dependencies
 
-Cargo handles Rust packages. System packages are still needed for audio,
-keyboard hooks, text insertion, CMake, and optional accelerator SDKs.
+Cargo handles Rust packages. System packages are still needed for audio, keyboard hooks, text insertion, CMake, and optional accelerator SDKs.
 
 | OS | Packages |
 | --- | --- |
@@ -24,8 +22,7 @@ Vulkan builds on Ubuntu/Debian need:
 sudo apt install libvulkan-dev vulkan-tools glslc spirv-tools spirv-headers mesa-vulkan-drivers
 ```
 
-`spirv-headers` provides `spirv/unified1/spirv.hpp`; it is not the same package
-as `spirv-tools`.
+`spirv-headers` provides `spirv/unified1/spirv.hpp`; it is not the same package as `spirv-tools`.
 
 ## Install
 
@@ -34,11 +31,9 @@ git submodule update --init --recursive
 cargo install --path .
 ```
 
-`cargo install --path .` installs the release binary to Cargo's bin directory,
-usually `~/.cargo/bin`.
+`cargo install --path .` installs the release binary to Cargo's bin directory, usually `~/.cargo/bin`.
 
-Add `--locked` for CI or reproducibility checks when Cargo must use the exact
-versions in `Cargo.lock`. Leave it off for normal local installs.
+Add `--locked` for CI or reproducibility checks when Cargo must use the exact versions in `Cargo.lock`. Leave it off for normal local installs.
 
 Optional accelerator builds:
 
@@ -56,14 +51,11 @@ git submodule update --init --recursive
 cargo build --release
 ```
 
-If `parakit.exe` cannot find generated CrispASR DLLs, copy them next to the
-binary as described in [Windows DLLs](#windows-dlls).
+If `parakit.exe` cannot find generated CrispASR DLLs, copy them next to the binary as described in [Windows DLLs](#windows-dlls).
 
 ## CPU Builds
 
-The bundled CMake path enables ggml native CPU code, OpenMP, and CPU repacking.
-On Linux with GCC or Clang this usually means `-march=native` for the local
-machine.
+The bundled CMake path enables ggml native CPU code, OpenMP, and CPU repacking. On Linux with GCC or Clang this usually means `-march=native` for the local machine.
 
 Inspect the compiled flags:
 
@@ -72,8 +64,7 @@ parakit doctor
 parakit --verbose doctor
 ```
 
-Benchmark different thread counts without the daemon by running the WAV quality
-target described in [quality.md#wav-quality-target](quality.md#wav-quality-target):
+Benchmark different thread counts without the daemon by running the WAV quality target described in [quality.md#wav-quality-target](quality.md#wav-quality-target):
 
 ```bash
 cargo run --release --example transcribe-file -- --audio path/to/sample.wav --threads 8 --repeat 3
@@ -81,8 +72,7 @@ cargo run --release --example transcribe-file -- --audio path/to/sample.wav --th
 
 ## BLAS And MKL
 
-Native ggml kernels are the default. BLAS/MKL can help some matrix paths but
-adds system-library dependencies.
+Native ggml kernels are the default. BLAS/MKL can help some matrix paths but adds system-library dependencies.
 
 ```bash
 PARAKIT_BLAS=auto cargo install --path .
@@ -109,15 +99,11 @@ sudo apt install libopenblas-dev
 PARAKIT_BLAS=openblas cargo install --path .
 ```
 
-The selected mode is printed during explicit BLAS builds and later shown by
-`parakit doctor`.
+The selected mode is printed during explicit BLAS builds and later shown by `parakit doctor`.
 
 ## CrispASR And Backends
 
-The repository vendors CrispASR as a git submodule. `build.rs` builds it with
-CMake, installs shared libraries under
-`target/<profile>/build/parakit-*/out/lib`, and builds `crispasr-quantize` for
-`parakit fetch --from-source`.
+The repository vendors CrispASR as a git submodule. `build.rs` builds it with CMake, installs shared libraries under `target/<profile>/build/parakit-*/out/lib`, and builds `crispasr-quantize` for `parakit fetch --from-source`.
 
 Feature mapping:
 
@@ -129,8 +115,7 @@ Feature mapping:
 
 ## Runtime Library Paths
 
-Linux/BSD builds must use transitive `RPATH`, not `RUNPATH`, so
-`libwhisper.so` can find sibling `libggml*.so` files.
+Linux/BSD builds must use transitive `RPATH`, not `RUNPATH`, so `libwhisper.so` can find sibling `libggml*.so` files.
 
 Verify:
 
@@ -139,21 +124,15 @@ ldd target/debug/parakit | grep -E "whisper|ggml"
 readelf -d target/debug/parakit | grep -E "RPATH|RUNPATH"
 ```
 
-The library paths should point into `target/debug/build/parakit-*/out/lib`, and
-`readelf` should report `RPATH`.
+The library paths should point into `target/debug/build/parakit-*/out/lib`, and `readelf` should report `RPATH`.
 
 ## Windows DLLs
 
-Windows has no rpath. If the built executable cannot find CrispASR DLLs, copy
-generated DLLs next to the binary or put the generated `out\bin` directory on
-`PATH`:
+Windows has no rpath. If the built executable cannot find CrispASR DLLs, copy generated DLLs next to the binary or put the generated `out\bin` directory on `PATH`:
 
 ```powershell
 cargo build --release
 copy target\release\build\parakit-*\out\bin\*.dll target\release\
 ```
 
-Windows text insertion uses `SendInput`. It can inject only into applications
-running at the same or a lower integrity level, so a non-elevated parakit cannot
-paste into an elevated administrator app. Security software may also flag global
-hooks plus text insertion; whitelist the binary if needed.
+Windows text insertion uses `SendInput`. It can inject only into applications running at the same or a lower integrity level, so a non-elevated parakit cannot paste into an elevated administrator app. Security software may also flag global hooks plus text insertion; whitelist the binary if needed.

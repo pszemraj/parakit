@@ -8,23 +8,17 @@ parakit --verbose doctor
 parakit doctor --deep
 ```
 
-It exits `0` when startup should proceed and `1` when a blocking issue remains.
-Launch behavior is in [running.md](running.md).
+It exits `0` when startup should proceed and `1` when a blocking issue remains. Launch behavior is in [running.md](running.md).
 
 ## Hotkey Problems
 
-Linux backend, X11 session, evdev, and `/dev/uinput` setup are in
-[linux-desktop.md](linux-desktop.md). If `Ctrl+Space` is unavailable, another
-desktop shortcut, input method, or keyboard remapper may own it. Disable that
-binding and rerun `parakit doctor`.
+Linux backend, X11 session, evdev, and `/dev/uinput` setup are in [linux-desktop.md](linux-desktop.md). If `Ctrl+Space` is unavailable, another desktop shortcut, input method, or keyboard remapper may own it. Disable that binding and rerun `parakit doctor`.
 
-On macOS, grant Accessibility and Input Monitoring permissions to both the
-terminal and the built binary.
+On macOS, grant Accessibility and Input Monitoring permissions to both the terminal and the built binary.
 
 ## Literal Space Appears
 
-The active backend should suppress the literal Space in `Ctrl+Space`. If a
-space reaches the focused app:
+The active backend should suppress the literal Space in `Ctrl+Space`. If a space reaches the focused app:
 
 - confirm only one parakit process is running;
 - confirm no desktop/input-method shortcut also handles `Ctrl+Space`;
@@ -35,20 +29,13 @@ space reaches the focused app:
 
 Paste modes are described in [running.md#insertion](running.md#insertion).
 
-Run `parakit doctor --deep` for an active insertion smoke test. On Linux, use
-an X11 session; Wayland is rejected because XTest cannot insert into focused
-native Wayland applications. Use `standard` for apps that only accept `Ctrl+V`;
-use `direct` only when an app refuses clipboard paste entirely.
+Run `parakit doctor --deep` for an active insertion smoke test. On Linux, use an X11 session; Wayland is rejected because XTest cannot insert into focused native Wayland applications. Use `standard` for apps that only accept `Ctrl+V`; use `direct` only when an app refuses clipboard paste entirely.
 
-On Windows, paste shortcuts are sent with `SendInput`. Windows blocks synthetic
-input into higher-integrity processes, so a normal parakit process cannot paste
-into an administrator/elevated target application. Security software can also
-flag global hooks plus text insertion; whitelist the binary when needed.
+On Windows, paste shortcuts are sent with `SendInput`. Windows blocks synthetic input into higher-integrity processes, so a normal parakit process cannot paste into an administrator/elevated target application. Security software can also flag global hooks plus text insertion; whitelist the binary when needed.
 
 ## Wrong Microphone
 
-parakit follows the OS default input and avoids monitor/virtual sources when it
-can.
+parakit follows the OS default input and avoids monitor/virtual sources when it can.
 
 On PipeWire/PulseAudio:
 
@@ -58,11 +45,7 @@ pactl list sources | grep -E 'Description:|Sample Specification:' | grep -v moni
 parakit doctor
 ```
 
-If the reported microphone is wrong, change the default input in desktop sound
-settings or `pavucontrol`, then wait a few seconds. When `pactl` is available,
-parakit uses the default source identity to detect this change even if CPAL
-continues to report a generic `default` input. Restart parakit if the audio
-server itself is not reporting the new default source.
+If the reported microphone is wrong, change the default input in desktop sound settings or `pavucontrol`, then wait a few seconds. When `pactl` is available, parakit uses the default source identity to detect this change even if CPAL continues to report a generic `default` input. Restart parakit if the audio server itself is not reporting the new default source.
 
 ## Build And Model Issues
 
@@ -85,18 +68,15 @@ git submodule update --init --recursive
 cargo build --release
 ```
 
-For shared library loading failures on Linux, check
-[build.md#runtime-library-paths](build.md#runtime-library-paths).
+For shared library loading failures on Linux, check [build.md#runtime-library-paths](build.md#runtime-library-paths).
 
-Vulkan failing on `spirv/unified1/spirv.hpp` means `spirv-headers` is missing.
-Install it and rebuild with the Vulkan feature:
+Vulkan failing on `spirv/unified1/spirv.hpp` means `spirv-headers` is missing. Install it and rebuild with the Vulkan feature:
 
 ```bash
 sudo apt install spirv-headers
 cargo build --release --features vulkan
 ```
 
-Windows builds need generated DLLs next to the executable or on `PATH`; see
-[build.md#windows-dlls](build.md#windows-dlls).
+Windows builds need generated DLLs next to the executable or on `PATH`; see [build.md#windows-dlls](build.md#windows-dlls).
 
 Model cache behavior and commands are in [running.md#model-cache](running.md#model-cache).

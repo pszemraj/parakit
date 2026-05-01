@@ -1,7 +1,6 @@
 # Running parakit
 
-parakit runs in the foreground by default. Use that mode once after install,
-then run it quietly in the background for daily use.
+parakit runs in the foreground by default. Use that mode once after install, then run it quietly in the background for daily use.
 
 ## First Run
 
@@ -9,10 +8,7 @@ then run it quietly in the background for daily use.
 parakit doctor && parakit
 ```
 
-`parakit doctor` checks hotkey access, the selected microphone, insertion
-support, and daemon lock state without downloading or loading the model. It
-exits `0` when startup should proceed and `1` when a blocking issue remains, so
-it can be used directly in shell conditionals.
+`parakit doctor` checks hotkey access, the selected microphone, insertion support, and daemon lock state without downloading or loading the model. It exits `0` when startup should proceed and `1` when a blocking issue remains, so it can be used directly in shell conditionals.
 
 Useful variants:
 
@@ -22,14 +18,9 @@ parakit --quiet doctor
 parakit doctor --deep
 ```
 
-`--verbose` and `--quiet` are global flags, so they go before `doctor`.
-On Linux, Wayland sessions fail insertion preflight even when XWayland exposes a
-`DISPLAY`; use an X11 session.
+`--verbose` and `--quiet` are global flags, so they go before `doctor`. On Linux, Wayland sessions fail insertion preflight even when XWayland exposes a `DISPLAY`; use an X11 session.
 
-The daemon checks the hotkey backend, insertion backend, and singleton lock
-before any model download. If those preflights pass, the first successful
-startup downloads the default Q8_0 GGUF if it is not already cached, opens the
-model, and starts the microphone and hotkey loop.
+The daemon checks the hotkey backend, insertion backend, and singleton lock before any model download. If those preflights pass, the first successful startup downloads the default Q8_0 GGUF if it is not already cached, opens the model, and starts the microphone and hotkey loop.
 
 Normal startup:
 
@@ -55,11 +46,9 @@ parakit --quiet &
 disown
 ```
 
-`--quiet` suppresses normal stdout, including startup lines and transcripts.
-Errors and warnings still go to stderr.
+`--quiet` suppresses normal stdout, including startup lines and transcripts. Errors and warnings still go to stderr.
 
-On Linux, start parakit from a terminal in the current desktop session. Tmux,
-X11 auth, and evdev details are in [linux-desktop.md](linux-desktop.md).
+On Linux, start parakit from a terminal in the current desktop session. Tmux, X11 auth, and evdev details are in [linux-desktop.md](linux-desktop.md).
 
 Keep stderr in a file:
 
@@ -76,10 +65,7 @@ pkill parakit
 
 ## Model Cache
 
-With no `-m`, parakit uses the hosted Q8_0 model from
-<https://huggingface.co/pszemraj/parakeet-tdt-0.6b-v3-gguf>. `XDG_CACHE_HOME`
-is honored on Linux. macOS uses `~/Library/Caches/parakit/models/`; Windows
-uses `%LOCALAPPDATA%\parakit\Cache\models\`.
+With no `-m`, parakit uses the hosted Q8_0 model from <https://huggingface.co/pszemraj/parakeet-tdt-0.6b-v3-gguf>. `XDG_CACHE_HOME` is honored on Linux. macOS uses `~/Library/Caches/parakit/models/`; Windows uses `%LOCALAPPDATA%\parakit\Cache\models\`.
 
 Useful commands:
 
@@ -95,15 +81,9 @@ parakit -m /path/to/model.gguf
 
 ## Microphone
 
-parakit follows the OS default input device and avoids monitor/loopback/virtual
-sources unless no better input is available.
+parakit follows the OS default input device and avoids monitor/loopback/virtual sources unless no better input is available.
 
-If the default input changes while parakit is idle, the daemon switches and
-prints the new microphone unless `--quiet` is set. On Linux PulseAudio/PipeWire
-systems, parakit also checks the `pactl` default source identity when CPAL
-reports a generic `default` input, so changing the desktop default source is
-detected even when the CPAL device name stays the same. If an active stream
-fails, parakit keeps running and retries.
+If the default input changes while parakit is idle, the daemon switches and prints the new microphone unless `--quiet` is set. On Linux PulseAudio/PipeWire systems, parakit also checks the `pactl` default source identity when CPAL reports a generic `default` input, so changing the desktop default source is detected even when the CPAL device name stays the same. If an active stream fails, parakit keeps running and retries.
 
 ## Insertion
 
@@ -113,10 +93,7 @@ Batch mode is the default and recommended mode:
 parakit --mode batch
 ```
 
-It transcribes once on hotkey release, writes the transcript to the system
-clipboard, sends the configured paste shortcut, then restores the previous text
-clipboard when possible. Clipboard managers may still keep the transient
-transcript in history.
+It transcribes once on hotkey release, writes the transcript to the system clipboard, sends the configured paste shortcut, then restores the previous text clipboard when possible. Clipboard managers may still keep the transient transcript in history.
 
 Paste modes:
 
@@ -126,11 +103,9 @@ parakit --paste-mode standard  # Ctrl+V on Linux/Windows, Cmd+V on macOS
 parakit --paste-mode direct    # synthetic typing, no clipboard
 ```
 
-Use `direct` only as an app-compatibility fallback. It is slower and can be
-less reliable for non-ASCII text. On Linux it still requires an X11 session.
+Use `direct` only as an app-compatibility fallback. It is slower and can be less reliable for non-ASCII text. On Linux it still requires an X11 session.
 
-Streaming mode is temporarily disabled while Linux batch dictation is being
-stabilized. Use batch mode for quality checks.
+Streaming mode is temporarily disabled while Linux batch dictation is being stabilized. Use batch mode for quality checks.
 
 ## Logging And Sounds
 
@@ -141,9 +116,7 @@ parakit --log-dir "$HOME/.parakit/logs"
 parakit --log-dir "$HOME/.parakit/logs" --log-format tsv
 ```
 
-One JSONL or TSV file is written per local day. Records include timestamp,
-audio seconds, inference milliseconds, raw text, cleaned text, and active rule
-count. Audio is never logged.
+One JSONL or TSV file is written per local day. Records include timestamp, audio seconds, inference milliseconds, raw text, cleaned text, and active rule count. Audio is never logged.
 
 Disable cue tones:
 

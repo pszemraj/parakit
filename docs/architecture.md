@@ -24,30 +24,21 @@ Transcribing
 Idle
 ```
 
-Very short captures are right-padded with silence before inference instead of
-being rejected.
+Very short captures are right-padded with silence before inference instead of being rejected.
 
-Live capture keeps resampler state inside the audio pipeline. Starting a new
-recording resets that state, and stopping a recording flushes any partial
-resampler input into the same utterance before the worker sees the PCM buffer.
+Live capture keeps resampler state inside the audio pipeline. Starting a new recording resets that state, and stopping a recording flushes any partial resampler input into the same utterance before the worker sees the PCM buffer.
 
 Streaming mode is currently disabled while the Linux batch path is stabilized.
 
 ## Ownership Constraints
 
-- `cpal::Stream` is not reliably `Send`, so the live stream stays on the audio
-  manager thread.
-- `rodio::OutputStream` is not reliably `Send`, so the sound stream lives on
-  its own thread.
-- `crispasr::Session` is `Send` but not `Sync`, so the worker owns `Engine`
-  directly. Do not wrap it in `Arc<Engine>`.
-- Linux hotkey capture uses evdev; Linux text insertion uses X11/XTest and
-  rejects Wayland sessions.
-- The active hotkey backend must suppress the literal Space key before it
-  reaches the focused application.
+- `cpal::Stream` is not reliably `Send`, so the live stream stays on the audio manager thread.
+- `rodio::OutputStream` is not reliably `Send`, so the sound stream lives on its own thread.
+- `crispasr::Session` is `Send` but not `Sync`, so the worker owns `Engine` directly. Do not wrap it in `Arc<Engine>`.
+- Linux hotkey capture uses evdev; Linux text insertion uses X11/XTest and rejects Wayland sessions.
+- The active hotkey backend must suppress the literal Space key before it reaches the focused application.
 
-Cross-thread communication uses atomics, mutex-protected buffers, and
-crossbeam channels.
+Cross-thread communication uses atomics, mutex-protected buffers, and crossbeam channels.
 
 ## Module Map
 
@@ -70,8 +61,6 @@ crossbeam channels.
 
 ## Failure Policy
 
-Startup failures stop the process when the model, microphone, or hotkey backend
-cannot be opened.
+Startup failures stop the process when the model, microphone, or hotkey backend cannot be opened.
 
-Runtime failures are reported and the daemon continues when possible: sound
-cues, log writes, individual transcriptions, and text insertion failures.
+Runtime failures are reported and the daemon continues when possible: sound cues, log writes, individual transcriptions, and text insertion failures.
