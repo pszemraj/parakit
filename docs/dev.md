@@ -2,11 +2,7 @@
 
 ## Model Artifacts
 
-End-user startup uses the hosted Q8_0 GGUF:
-
-```text
-https://huggingface.co/pszemraj/parakeet-tdt-0.6b-v3-gguf
-```
+End-user startup uses the hosted [Q8_0 GGUF](https://huggingface.co/pszemraj/parakeet-tdt-0.6b-v3-gguf).
 
 The binary downloads `parakeet-tdt-0.6b-v3-Q8_0.gguf`, verifies the compiled-in SHA256, writes it to the platform model cache, and starts the daemon after startup preflights pass. The default `parakit` command must not require Python, NeMo, PyTorch, or manual model setup.
 
@@ -32,11 +28,11 @@ python -m pip install -r scripts/requirements-convert.txt
 parakit fetch --from-source --keep-f16 --keep-nemo
 ```
 
-That path downloads NVIDIA's official `.nemo`, converts it with `vendor/CrispASR/models/convert-parakeet-to-gguf.py`, and quantizes the intermediate GGUF with `crispasr-quantize`.
+That path downloads [NVIDIA's official `.nemo`](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3), converts it with `vendor/CrispASR/models/convert-parakeet-to-gguf.py`, and quantizes the intermediate GGUF with `crispasr-quantize`.
 
 After rebuilding a release artifact, upload F16 and Q8_0 to the hosted repo and update `HOSTED_Q8_SHA256` in `src/model.rs` if the Q8_0 bytes changed.
 
-## Updating CrispASR
+## Updating [CrispASR](https://github.com/CrispStrobe/CrispASR)
 
 Keep submodule updates separate from parakit code changes:
 

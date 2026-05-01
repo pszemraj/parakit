@@ -4,7 +4,7 @@ Build success does not prove transcription quality. Use real user audio, not syn
 
 ## WAV Quality Target
 
-Use the Rust WAV target to run the same CrispASR engine and cleanup pipeline without the hotkey daemon:
+Use the Rust WAV target to run the same [CrispASR](https://github.com/CrispStrobe/CrispASR) engine and cleanup pipeline without the hotkey daemon:
 
 ```bash
 cargo run --example transcribe-file -- \
@@ -26,7 +26,7 @@ It reads a WAV, resamples it to the model rate, sends `RecordingStarted`/`Record
 
 ## NeMo Reference Helper
 
-The Python helper runs NVIDIA NeMo's official Parakeet path:
+The Python helper runs NVIDIA NeMo's official [Parakeet-TDT-0.6B-v3](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3) path:
 
 ```bash
 python scripts/transcribe_nemo_parakeet.py clips/example.wav

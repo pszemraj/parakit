@@ -47,10 +47,10 @@ Cross-thread communication uses atomics, mutex-protected buffers, and crossbeam 
 | `src/main.rs` | CLI, worker thread, batch PTT simulation helper. |
 | `src/daemon/hotkey.rs` | Linux evdev keyboard grab, non-Linux rdev grab, hotkey state helpers. |
 | `src/daemon/audio_manager.rs` | Microphone selection, capture, mono mixdown, resampling, stream restart, shared buffer. |
-| `src/fetch.rs` | Hosted Q8_0 download, source rebuilds, checksum verification. |
+| `src/fetch.rs` | Hosted [Q8_0 GGUF](https://huggingface.co/pszemraj/parakeet-tdt-0.6b-v3-gguf) download, source rebuilds, checksum verification. |
 | `src/model.rs` | Model names, hosted GGUF naming, cache paths, hosted URLs, and checksum constants. |
 | `src/gguf.rs` | Minimal GGUF dtype reader for startup reporting. |
-| `src/inference.rs` | CrispASR session wrapper and short-audio padding. |
+| `src/inference.rs` | [CrispASR](https://github.com/CrispStrobe/CrispASR) session wrapper and short-audio padding. |
 | `src/rules.rs` | Built-in transcript cleanup rules. |
 | `src/daemon/inject.rs` | Batch paste/direct insertion. |
 | `src/daemon/sounds.rs` | Generated audio cue thread. |

@@ -49,7 +49,7 @@ If the reported microphone is wrong, change the default input in desktop sound s
 
 ## Build And Model Issues
 
-Missing CrispASR path dependency:
+Missing [CrispASR](https://github.com/CrispStrobe/CrispASR) path dependency:
 
 ```text
 failed to read vendor\CrispASR\crispasr\Cargo.toml

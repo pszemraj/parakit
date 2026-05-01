@@ -2,7 +2,7 @@
 
 Local push-to-talk dictation for desktop work. Hold `Ctrl+Space`, speak, release, and parakit inserts the transcript into the focused application.
 
-parakit runs NVIDIA's Parakeet-TDT-0.6B-v3 locally through the vendored CrispASR runtime. After startup preflights pass, the first successful daemon startup downloads the default Q8_0 GGUF model and caches it; normal use does not need a `-m` model argument.
+parakit runs [NVIDIA Parakeet-TDT-0.6B-v3](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3) locally through the vendored [CrispASR](https://github.com/CrispStrobe/CrispASR) runtime. The default model is a [Q8_0 GGUF build hosted at pszemraj/parakeet-tdt-0.6b-v3-gguf](https://huggingface.co/pszemraj/parakeet-tdt-0.6b-v3-gguf).
 
 ## Install
 
@@ -37,7 +37,9 @@ If `doctor` finds issues with the setup/build, it will exit 1 and display detail
    - Sounds indicate start, stop, or error states.
 3. Watch the dictated text appear at your cursor.
 
-More details are in the console outputs. That's it! For info on how to run parakit as a background process and other advanced options, see [docs/running.md](docs/running.md).
+For background mode, model cache paths, logging, and paste options, see [docs/running.md](docs/running.md).
+
+On first successful startup, parakit downloads the default model once if it is not already cached. A custom `-m /path/to/model.gguf` still works for local experiments.
 
 **gotcha:** Linux insertion requires an X11 session[^2]
 

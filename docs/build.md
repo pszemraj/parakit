@@ -1,6 +1,6 @@
 # Build
 
-parakit is a Rust 1.87+ binary that links to the vendored CrispASR submodule. The default build is CPU-only and local-machine optimized.
+parakit is a Rust 1.87+ binary that links to the vendored [CrispASR](https://github.com/CrispStrobe/CrispASR) submodule. The default build is CPU-only and local-machine optimized.
 
 ## Native Dependencies
 
@@ -103,7 +103,7 @@ The selected mode is printed during explicit BLAS builds and later shown by `par
 
 ## CrispASR And Backends
 
-The repository vendors CrispASR as a git submodule. `build.rs` builds it with CMake, installs shared libraries under `target/<profile>/build/parakit-*/out/lib`, and builds `crispasr-quantize` for `parakit fetch --from-source`.
+The repository vendors [CrispASR](https://github.com/CrispStrobe/CrispASR) as a git submodule. `build.rs` builds it with CMake, installs shared libraries under `target/<profile>/build/parakit-*/out/lib`, and builds `crispasr-quantize` for `parakit fetch --from-source`.
 
 Feature mapping:
 

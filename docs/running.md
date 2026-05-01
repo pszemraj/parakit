@@ -65,7 +65,7 @@ pkill parakit
 
 ## Model Cache
 
-With no `-m`, parakit uses the hosted Q8_0 model from <https://huggingface.co/pszemraj/parakeet-tdt-0.6b-v3-gguf>. `XDG_CACHE_HOME` is honored on Linux. macOS uses `~/Library/Caches/parakit/models/`; Windows uses `%LOCALAPPDATA%\parakit\Cache\models\`.
+With no `-m`, parakit uses the hosted [Q8_0 GGUF model](https://huggingface.co/pszemraj/parakeet-tdt-0.6b-v3-gguf). `XDG_CACHE_HOME` is honored on Linux. macOS uses `~/Library/Caches/parakit/models/`; Windows uses `%LOCALAPPDATA%\parakit\Cache\models\`.
 
 Useful commands:
 
