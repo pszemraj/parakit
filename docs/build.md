@@ -64,7 +64,7 @@ Inspect the compiled flags:
 
 ```bash
 parakit doctor
-parakit --verbose
+parakit --verbose doctor
 ```
 
 Benchmark different thread counts without the daemon:

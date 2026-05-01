@@ -4,9 +4,8 @@ parakit needs a desktop input backend for `Ctrl+Space`.
 
 Default behavior:
 
-- `auto` uses the evdev backend when all `/dev/input/event*` devices are
-  readable.
-- Otherwise it uses the X11 desktop hotkey backend.
+- `auto` uses the Linux evdev keyboard grab backend.
+- The old X11 desktop hotkey backend is disabled in the Linux-stable path.
 - Wayland usually blocks desktop global hotkeys and synthetic input for regular
   applications.
 
@@ -28,16 +27,15 @@ Fix that by starting a new terminal or tmux server from the current desktop
 session, then rerun:
 
 ```bash
-parakit doctor
-parakit --quiet &
+parakit doctor && parakit --quiet &
 disown
 ```
 
 ## Evdev Backend
 
-The evdev backend is more stable across desktop session churn, but it needs
-read access to all input event devices. Use it when you want parakit to keep
-working across lock/logout/session restarts:
+The evdev backend needs readable `/dev/input/event*` devices and writable
+`/dev/uinput`. Use it when you want parakit to keep working across
+lock/logout/session restarts:
 
 ```bash
 sudo usermod -aG input "$USER"
@@ -50,10 +48,10 @@ id -nG | tr ' ' '\n' | grep '^input$'
 parakit doctor
 ```
 
-When `doctor` reports `evdev: rdev grab (ready)`, run:
+When `doctor` reports `hotkey OK`, run:
 
 ```bash
-parakit --hotkey-backend evdev --quiet &
+parakit doctor && parakit --hotkey-backend evdev --quiet &
 disown
 ```
 

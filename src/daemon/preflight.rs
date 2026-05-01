@@ -33,6 +33,7 @@ pub fn ensure_hotkey_ready(backend: HotkeyBackend) -> Result<()> {
 ///
 /// # Arguments
 ///
+/// * `quiet` - Suppress stdout when true.
 /// * `verbose` - Print diagnostic details when true.
 /// * `paste_mode` - Insertion mode to validate.
 /// * `deep` - Run the platform insertion smoke test when true.
@@ -42,6 +43,7 @@ pub fn ensure_hotkey_ready(backend: HotkeyBackend) -> Result<()> {
 ///
 /// `true` when no blocking problem was detected.
 pub fn print_doctor(
+    quiet: bool,
     verbose: bool,
     paste_mode: PasteMode,
     deep: bool,
@@ -57,16 +59,92 @@ pub fn print_doctor(
     };
     let ok = !report.blocking && daemon_lock.is_ok() && mic.is_ok() && insertion.is_ok();
 
-    if !verbose {
+    if quiet {
         return ok;
     }
 
+    if verbose {
+        print_doctor_details(&report, &daemon_lock, &mic, &insertion, paste_mode, deep);
+    } else {
+        print_doctor_summary(
+            &report,
+            &daemon_lock,
+            &mic,
+            &insertion,
+            paste_mode,
+            deep,
+            ok,
+        );
+    }
+
+    ok
+}
+
+struct HotkeyReport {
+    blocking: bool,
+    status: String,
+    summary: String,
+    details: String,
+}
+
+fn print_doctor_summary(
+    report: &HotkeyReport,
+    daemon_lock: &Result<()>,
+    mic: &Result<super::audio::MicInfo>,
+    insertion: &Result<()>,
+    paste_mode: PasteMode,
+    deep: bool,
+    ok: bool,
+) {
+    println!("parakit doctor: {}", if ok { "OK" } else { "FAIL" });
+    print_status_line("hotkey", !report.blocking, &report.status);
+    match daemon_lock {
+        Ok(()) => print_status_line("daemon", true, "no existing daemon lock"),
+        Err(err) => print_status_line("daemon", false, &format!("{err:#}")),
+    }
+    match mic {
+        Ok(mic) => print_status_line("mic", true, &mic.summary()),
+        Err(err) => print_status_line("mic", false, &format!("{err:#}")),
+    }
+    let insertion_label = if deep {
+        format!("{} smoke test", paste_mode.label())
+    } else {
+        format!("{} preflight", paste_mode.label())
+    };
+    match insertion {
+        Ok(()) => print_status_line("insertion", true, &insertion_label),
+        Err(err) => print_status_line("insertion", false, &format!("{err:#}")),
+    }
+
+    if ok {
+        println!("  run:       parakit");
+        println!("  shell:     parakit doctor && parakit");
+    } else {
+        println!("  details:   parakit --verbose doctor");
+    }
+}
+
+fn print_status_line(label: &str, ok: bool, detail: &str) {
+    println!(
+        "  {label:<10} {} ({detail})",
+        if ok { "OK " } else { "FAIL" }
+    );
+}
+
+fn print_doctor_details(
+    report: &HotkeyReport,
+    daemon_lock: &Result<()>,
+    mic: &Result<super::audio::MicInfo>,
+    insertion: &Result<()>,
+    paste_mode: PasteMode,
+    deep: bool,
+) {
     println!("{}", report.details.trim_end());
-    match &daemon_lock {
+    match daemon_lock {
         Ok(()) => println!("  daemon lock:   OK"),
         Err(err) => println!("  daemon lock:   FAIL ({err:#})"),
     }
-    match &mic {
+    match mic {
         Ok(mic) => {
             println!("  mic:            {}", mic.summary());
             println!("  audio status:   OK");
@@ -76,7 +154,7 @@ pub fn print_doctor(
             println!("  audio status:   FAIL");
         }
     }
-    match &insertion {
+    match insertion {
         Ok(()) if deep => println!("  insertion:     OK ({} smoke test)", paste_mode.label()),
         Ok(()) => println!("  insertion:     OK ({} preflight)", paste_mode.label()),
         Err(err) => println!("  insertion:     FAIL ({err:#})"),
@@ -85,13 +163,6 @@ pub fn print_doctor(
     for line in build_info::diagnostic_lines() {
         println!("    {line}");
     }
-    ok
-}
-
-struct HotkeyReport {
-    blocking: bool,
-    summary: String,
-    details: String,
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -186,8 +257,8 @@ fn linux_hotkey_success_label(
     _availability: LinuxHotkeyAvailability,
 ) -> &'static str {
     match backend {
-        HotkeyBackend::Auto => "evdev backend",
-        HotkeyBackend::Evdev => "evdev backend",
+        HotkeyBackend::Auto => "evdev keyboard grab",
+        HotkeyBackend::Evdev => "evdev keyboard grab",
         HotkeyBackend::Desktop => unreachable!("desktop backend is disabled on Linux"),
     }
 }
@@ -202,6 +273,7 @@ fn startup_hotkey_report(backend: HotkeyBackend) -> HotkeyReport {
     let evdev_ready = evdev.grab_likely_available();
     let availability = LinuxHotkeyAvailability { evdev_ready };
     let blocking = linux_hotkey_startup_blocked(backend, availability);
+    let status = linux_hotkey_status(backend, &evdev, availability, blocking);
 
     let summary = if blocking {
         let mut summary = String::new();
@@ -239,6 +311,7 @@ fn startup_hotkey_report(backend: HotkeyBackend) -> HotkeyReport {
 
     HotkeyReport {
         blocking,
+        status,
         details: summary.clone(),
         summary,
     }
@@ -260,6 +333,7 @@ fn hotkey_report(backend: HotkeyBackend) -> HotkeyReport {
     let evdev_ready = evdev.grab_likely_available();
     let availability = LinuxHotkeyAvailability { evdev_ready };
     let blocking = linux_hotkey_startup_blocked(backend, availability);
+    let status = linux_hotkey_status(backend, &evdev, availability, blocking);
 
     let mut details = String::new();
     writeln!(&mut details, "parakit doctor").unwrap();
@@ -367,6 +441,7 @@ fn hotkey_report(backend: HotkeyBackend) -> HotkeyReport {
 
     HotkeyReport {
         blocking,
+        status,
         summary,
         details,
     }
@@ -406,6 +481,46 @@ impl EvdevReport {
             "unavailable"
         }
     }
+}
+
+#[cfg(target_os = "linux")]
+fn linux_hotkey_status(
+    backend: HotkeyBackend,
+    evdev: &EvdevReport,
+    availability: LinuxHotkeyAvailability,
+    blocking: bool,
+) -> String {
+    if backend == HotkeyBackend::Desktop {
+        return "desktop backend disabled on Linux".to_string();
+    }
+
+    if !blocking {
+        return format!(
+            "{} ready",
+            linux_hotkey_success_label(backend, availability)
+        );
+    }
+
+    if !evdev.uinput_writable {
+        return "uinput unavailable".to_string();
+    }
+    if evdev.hotkey_keyboards == 0 {
+        return format!(
+            "no Ctrl+Space keyboard device found ({} input device(s) readable)",
+            evdev.readable
+        );
+    }
+    if evdev.denied > 0 {
+        return format!(
+            "input permissions incomplete ({} permission denied)",
+            evdev.denied
+        );
+    }
+    if !evdev.other_errors.is_empty() {
+        return "input device scan errors".to_string();
+    }
+
+    "evdev keyboard grab unavailable".to_string()
 }
 
 #[cfg(target_os = "linux")]
@@ -537,6 +652,7 @@ fn hotkey_report(_backend: HotkeyBackend) -> HotkeyReport {
     let details = "parakit doctor\n  hotkey backend: rdev::grab\n  status:         manual check\n  fix: grant Accessibility and Input Monitoring permissions to both the terminal and the parakit binary.".to_string();
     HotkeyReport {
         blocking: false,
+        status: "manual permission check required".to_string(),
         summary: details.clone(),
         details,
     }
@@ -547,6 +663,7 @@ fn hotkey_report(_backend: HotkeyBackend) -> HotkeyReport {
     let details = "parakit doctor\n  hotkey backend: rdev::grab\n  status:         OK unless security software blocks the binary.".to_string();
     HotkeyReport {
         blocking: false,
+        status: "global hook available unless blocked by security software".to_string(),
         summary: details.clone(),
         details,
     }
@@ -557,6 +674,7 @@ fn hotkey_report(_backend: HotkeyBackend) -> HotkeyReport {
     let details = "parakit doctor\n  hotkey backend: rdev::grab\n  status:         unsupported platform preflight".to_string();
     HotkeyReport {
         blocking: false,
+        status: "unsupported platform preflight".to_string(),
         summary: details.clone(),
         details,
     }

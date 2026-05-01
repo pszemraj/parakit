@@ -6,14 +6,15 @@ then run it quietly in the background for daily use.
 ## First Run
 
 ```bash
-parakit doctor
-parakit doctor --deep
-parakit
+parakit doctor && parakit
 ```
 
-`parakit doctor` checks hotkey access, selected microphone, insertion support,
-and compiled backend flags without downloading or loading the model. `--deep`
-adds an active insertion smoke test.
+`parakit doctor` checks hotkey access, the selected microphone, insertion
+support, and daemon lock state without downloading or loading the model. It
+exits `0` when startup should proceed and `1` when a blocking issue remains, so
+it can be used directly in shell conditionals. `parakit --verbose doctor`
+prints backend and build details. `parakit doctor --deep` adds an active
+insertion smoke test.
 
 The first real `parakit` run downloads the default Q8_0 GGUF if it is not
 already cached, then opens the microphone and hotkey backend.
@@ -113,15 +114,15 @@ parakit --paste-mode direct    # synthetic typing, no clipboard
 Use `direct` only as an app-compatibility fallback. It is slower and can be
 less reliable for non-ASCII text.
 
-Streaming mode is experimental:
+Streaming mode is temporarily disabled while Linux batch dictation is being
+stabilized:
 
 ```bash
 parakit --mode streaming
 parakit --mode streaming:2.5
 ```
 
-It sends chunks while the hotkey is held and can split words at chunk
-boundaries. Use batch mode for quality checks.
+Use batch mode for quality checks.
 
 ## Logging And Sounds
 

@@ -13,7 +13,7 @@
 //! State machine (single-recording-at-a-time invariant):
 //!   Idle --[Ctrl+Space down]--> Recording --[Ctrl+Space up]--> Transcribing --> Idle
 //!
-//! On Linux, `auto` uses the low-level rdev evdev grab. The legacy X11 desktop
+//! On Linux, `auto` uses a narrow evdev keyboard grab. The legacy X11 desktop
 //! hotkey backend is disabled from the daemon critical path.
 
 mod daemon;
@@ -114,7 +114,7 @@ struct Cli {
     #[arg(long, hide = true, value_name = "WAV")]
     simulate_ptt_audio: Option<PathBuf>,
 
-    /// Linux hotkey backend. `auto` uses the evdev/rdev grab path.
+    /// Linux hotkey backend. `auto` uses the evdev keyboard grab path.
     #[cfg(target_os = "linux")]
     #[arg(long, value_enum, default_value_t = HotkeyBackend::Auto)]
     hotkey_backend: HotkeyBackend,
@@ -134,7 +134,7 @@ enum Commands {
     Fetch(FetchCli),
     /// Inspect the parakit model cache.
     Cache(CacheCli),
-    /// Check desktop permissions and runtime prerequisites without starting.
+    /// Check runtime prerequisites without starting. Exits 0 when ready, 1 when blocked.
     Doctor(DoctorCli),
 }
 
@@ -243,15 +243,17 @@ fn run() -> Result<()> {
                 return Ok(());
             }
             Commands::Doctor(doctor_cli) => {
-                if daemon::preflight::print_doctor(
-                    !cli.quiet,
+                let ok = daemon::preflight::print_doctor(
+                    cli.quiet,
+                    cli.verbose,
                     cli.paste_mode,
                     doctor_cli.deep,
                     hotkey_backend,
-                ) {
+                );
+                if ok {
                     return Ok(());
                 }
-                anyhow::bail!("doctor found blocking runtime permission issues");
+                std::process::exit(1);
             }
         }
     }

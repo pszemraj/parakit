@@ -63,8 +63,7 @@ export PATH="$HOME/.cargo/bin:$PATH"
 Check the environment and start the daemon:
 
 ```bash
-parakit doctor
-parakit
+parakit doctor && parakit
 ```
 
 No `-m` argument is needed for normal use.

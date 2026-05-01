@@ -4,29 +4,34 @@ Start with diagnostics:
 
 ```bash
 parakit doctor
+parakit --verbose doctor
 parakit doctor --deep
 ```
 
-`doctor` does not load the model. `--deep` adds an active insertion smoke test.
-Normal launch behavior is covered in [running.md](running.md).
+`doctor` does not load the model. It exits `0` when the daemon should start and
+`1` when a blocking issue remains, so `parakit doctor && parakit` is the safe
+launch pattern. `parakit --verbose doctor` prints backend and build details.
+`parakit doctor --deep` adds an active insertion smoke test. Normal launch
+behavior is covered in [running.md](running.md).
 
 ## Hotkey Problems
 
-On Linux, `auto` uses evdev when all input devices are readable; otherwise it
-uses the X11 desktop hotkey backend. Wayland usually blocks this class of
-desktop automation.
+On Linux, `auto` uses the evdev keyboard grab backend. The old X11 desktop
+hotkey backend is disabled in the Linux-stable path. Wayland usually blocks
+this class of desktop automation.
 
-Healthy X11 output without evdev access looks like:
+Healthy default output looks like:
 
 ```text
-desktop:        X11 desktop hotkey
-desktop status: OK
-evdev:          rdev grab (partial permissions)
-status:         OK (desktop hotkey backend)
+parakit doctor: OK
+  hotkey    OK  (evdev keyboard grab ready)
+  daemon    OK  (no existing daemon lock)
+  mic       OK  (...)
+  insertion OK  (terminal preflight)
 ```
 
-If `Ctrl+Space` is unavailable, another desktop shortcut or input method may
-own it. Disable that binding and rerun `parakit doctor`.
+If `Ctrl+Space` is unavailable, another desktop shortcut, input method, or
+keyboard remapper may own it. Disable that binding and rerun `parakit doctor`.
 
 If `doctor` reports `Connection refused` for X11 after a logout/login, restart
 the terminal or tmux server from the current desktop session. Use the evdev
