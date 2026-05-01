@@ -138,7 +138,7 @@ impl Logger {
         if raw == cleaned {
             anstream::println!(
                 "{} {}  {}",
-                style_clean("Text:"),
+                style_clean("Clean:"),
                 style_clean_text(cleaned),
                 style_dim(format!("({infer_ms:.0}ms)"))
             );
