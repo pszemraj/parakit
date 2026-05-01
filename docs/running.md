@@ -95,8 +95,11 @@ parakit follows the OS default input device and avoids monitor/loopback/virtual
 sources unless no better input is available.
 
 If the default input changes while parakit is idle, the daemon switches and
-prints the new microphone unless `--quiet` is set. If an active stream fails,
-parakit keeps running and retries.
+prints the new microphone unless `--quiet` is set. On Linux PulseAudio/PipeWire
+systems, parakit also checks the `pactl` default source identity when CPAL
+reports a generic `default` input, so changing the desktop default source is
+detected even when the CPAL device name stays the same. If an active stream
+fails, parakit keeps running and retries.
 
 ## Insertion
 

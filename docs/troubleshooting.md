@@ -60,12 +60,16 @@ can.
 On PipeWire/PulseAudio:
 
 ```bash
+pactl get-default-source
 pactl list sources | grep -E 'Description:|Sample Specification:' | grep -v monitor
 parakit doctor
 ```
 
 If the reported microphone is wrong, change the default input in desktop sound
-settings or `pavucontrol`, then wait a few seconds or restart parakit.
+settings or `pavucontrol`, then wait a few seconds. When `pactl` is available,
+parakit uses the default source identity to detect this change even if CPAL
+continues to report a generic `default` input. Restart parakit if the audio
+server itself is not reporting the new default source.
 
 ## Build And Model Issues
 

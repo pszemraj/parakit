@@ -36,8 +36,10 @@ disown
 
 ## Evdev Backend
 
-The evdev backend needs readable `/dev/input/event*` devices and writable
-`/dev/uinput`.
+The evdev backend needs at least one readable keyboard event device that exposes
+both `Ctrl` and `Space`, plus writable `/dev/uinput`. `parakit doctor` reports
+unreadable non-keyboard event devices, but they do not block startup when a
+usable hotkey keyboard candidate is readable.
 
 ```bash
 sudo usermod -aG input "$USER"

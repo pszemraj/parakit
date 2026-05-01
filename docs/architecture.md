@@ -27,6 +27,10 @@ Idle
 Very short captures are right-padded with silence before inference instead of
 being rejected.
 
+Live capture keeps resampler state inside the audio pipeline. Starting a new
+recording resets that state, and stopping a recording flushes any partial
+resampler input into the same utterance before the worker sees the PCM buffer.
+
 Streaming mode is currently disabled while the Linux batch path is stabilized.
 
 ## Ownership Constraints
@@ -39,6 +43,9 @@ Streaming mode is currently disabled while the Linux batch path is stabilized.
   directly. Do not wrap it in `Arc<Engine>`.
 - Linux `auto` uses a narrow evdev keyboard grab and skips busy physical
   devices when a usable virtual keyboard device is available.
+- Linux evdev readiness requires a readable `Ctrl+Space` keyboard candidate and
+  writable `/dev/uinput`; unreadable unrelated event devices are diagnostic
+  noise, not a startup blocker.
 - The X11 desktop hotkey backend is disabled in the Linux-stable path.
 - The active hotkey backend must suppress the literal Space key before it
   reaches the focused application.
