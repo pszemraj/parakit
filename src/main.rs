@@ -278,6 +278,8 @@ fn run() -> Result<()> {
         return run_ptt_audio_simulation(&cli, Arc::clone(&log), audio_path);
     }
 
+    validate_batch_mode(&cli.mode)?;
+
     #[cfg(target_os = "linux")]
     let _daemon_lock = daemon::preflight::acquire_singleton_lock()?;
 
@@ -289,7 +291,6 @@ fn run() -> Result<()> {
     daemon::inject::preflight(cli.paste_mode).context("text insertion preflight failed")?;
     log.verbose("parakit: insertion preflight passed");
 
-    validate_batch_mode(&cli.mode)?;
     let cleaner = rules::build_cleaner(cli.no_cleaning, &cli.disable_rule)?.map(Arc::new);
     let data_log = cli
         .log_dir
@@ -713,13 +714,19 @@ fn worker_loop(ctx: WorkerCtx) {
                             continue;
                         }
                         let insert_started = Instant::now();
-                        let insert_result = match injector.as_mut() {
-                            Some(injector) => injector.paste_text(&transcript.cleaned, paste_mode),
-                            None => Err(anyhow::anyhow!("insertion backend was not initialized")),
-                        };
+                        let insert_result = paste_transcript_with_rebuilt_injector(
+                            &mut injector,
+                            &transcript.cleaned,
+                            paste_mode,
+                        );
                         match insert_result {
-                            Ok(_) => {
+                            Ok(rebuilt_injector) => {
                                 let insert_elapsed = insert_started.elapsed();
+                                if rebuilt_injector {
+                                    log.verbose(
+                                        "parakit: insertion backend rebuilt and paste retry succeeded",
+                                    );
+                                }
                                 log.verbose(format!(
                                     "parakit: timings infer={}ms clean={}ms insert={}ms total={}ms",
                                     transcript.infer_elapsed.as_secs_f32() * 1000.0,
@@ -732,7 +739,6 @@ fn worker_loop(ctx: WorkerCtx) {
                             Err(e) => {
                                 log.error(&format!("paste failed: {e:#}"));
                                 sounds.error();
-                                injector = Injector::new().ok();
                             }
                         }
                     }
@@ -748,6 +754,47 @@ fn worker_loop(ctx: WorkerCtx) {
             }
         }
     }
+}
+
+fn paste_transcript_with_rebuilt_injector(
+    injector: &mut Option<Injector>,
+    text: &str,
+    mode: PasteMode,
+) -> Result<bool> {
+    let first_attempt = match injector.as_mut() {
+        Some(injector) => injector.paste_text(text, mode),
+        None => Err(anyhow::anyhow!("insertion backend was not initialized")),
+    };
+    let Err(first_error) = first_attempt else {
+        return Ok(false);
+    };
+
+    if !paste_failure_should_retry(mode, &first_error) {
+        return Err(first_error);
+    }
+
+    let mut rebuilt =
+        Injector::new().context("could not reinitialize insertion backend after paste failure")?;
+    match rebuilt.paste_text(text, mode) {
+        Ok(()) => {
+            *injector = Some(rebuilt);
+            Ok(true)
+        }
+        Err(retry_error) => {
+            *injector = Some(rebuilt);
+            Err(anyhow::anyhow!(
+                "initial paste failed: {first_error:#}; retry after rebuilding insertion backend failed: {retry_error:#}"
+            ))
+        }
+    }
+}
+
+fn paste_failure_should_retry(mode: PasteMode, error: &anyhow::Error) -> bool {
+    if mode == PasteMode::Direct {
+        return false;
+    }
+
+    !format!("{error:#}").contains(daemon::inject::CLIPBOARD_RESTORE_ERROR)
 }
 
 fn transcribe_clean(
@@ -773,4 +820,36 @@ fn transcribe_clean(
         infer_elapsed,
         clean_elapsed: clean_started.elapsed(),
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn paste_retry_is_limited_to_batch_failures_before_clipboard_restore() {
+        let paste_error = anyhow::anyhow!("could not send paste shortcut");
+        assert!(paste_failure_should_retry(
+            PasteMode::Terminal,
+            &paste_error
+        ));
+
+        let restore_error = anyhow::anyhow!("{}: lost", daemon::inject::CLIPBOARD_RESTORE_ERROR);
+        assert!(!paste_failure_should_retry(
+            PasteMode::Terminal,
+            &restore_error
+        ));
+
+        let direct_error = anyhow::anyhow!("could not type text at cursor");
+        assert!(!paste_failure_should_retry(
+            PasteMode::Direct,
+            &direct_error
+        ));
+    }
+
+    #[test]
+    fn streaming_mode_is_rejected_with_required_message() {
+        let err = validate_batch_mode("streaming").expect_err("streaming should be disabled");
+        assert!(format!("{err:#}").contains("streaming mode is temporarily disabled"));
+    }
 }

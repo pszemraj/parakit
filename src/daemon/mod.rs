@@ -11,6 +11,9 @@ pub(crate) mod inject;
 pub(crate) mod logging;
 /// Runtime checks for desktop input permissions.
 pub(crate) mod preflight;
+/// Desktop session compatibility checks.
+#[cfg(target_os = "linux")]
+pub(crate) mod session;
 /// Generated start/success/error sound cues.
 pub(crate) mod sounds;
 /// Shared X11 helpers for Linux desktop hotkeys and insertion checks.

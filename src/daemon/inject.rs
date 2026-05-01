@@ -31,6 +31,9 @@ use std::{
 #[cfg(target_os = "linux")]
 use x11rb::connection::Connection as _;
 
+/// Error label used when paste succeeded but previous clipboard restore failed.
+pub(crate) const CLIPBOARD_RESTORE_ERROR: &str = "could not restore previous clipboard text";
+
 /// Paste shortcut style for batch transcript insertion.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 pub(crate) enum PasteMode {
@@ -72,6 +75,9 @@ impl PasteMode {
 /// Returns an error if the keyboard, clipboard, or platform paste support is
 /// unavailable.
 pub(crate) fn preflight(mode: PasteMode) -> Result<()> {
+    #[cfg(target_os = "linux")]
+    super::session::ensure_text_insertion_supported()?;
+
     if insertion_needs_enigo(mode) {
         let _keyboard = Enigo::new(&Settings::default())
             .map_err(|e| anyhow::anyhow!("failed to init enigo: {e:?}"))?;
@@ -160,9 +166,12 @@ impl Injector {
     ///
     /// # Errors
     ///
-    /// Returns an error if `enigo` cannot initialize the platform keyboard
-    /// backend.
+    /// Returns an error if the current desktop session is unsupported or if
+    /// `enigo` cannot initialize the platform keyboard backend.
     pub fn new() -> Result<Self> {
+        #[cfg(target_os = "linux")]
+        super::session::ensure_text_insertion_supported()?;
+
         Ok(Self {
             enigo: None,
             clipboard: None,
@@ -323,7 +332,7 @@ where
         sleep_if_nonzero(restore_delay);
         clipboard
             .set_text(previous)
-            .map_err(|err| anyhow::anyhow!("could not restore previous clipboard text: {err:#}"))
+            .map_err(|err| anyhow::anyhow!("{CLIPBOARD_RESTORE_ERROR}: {err:#}"))
     } else {
         Ok(())
     };
