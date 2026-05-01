@@ -812,53 +812,28 @@ mod tests {
         assert_eq!(
             linux_paste_chord_steps(PasteMode::Standard),
             vec![
-                X11KeyStep {
-                    keysym: CONTROL_L_KEYSYM,
-                    press: true
-                },
-                X11KeyStep {
-                    keysym: crate::daemon::x11::V_KEYSYM,
-                    press: true
-                },
-                X11KeyStep {
-                    keysym: crate::daemon::x11::V_KEYSYM,
-                    press: false
-                },
-                X11KeyStep {
-                    keysym: CONTROL_L_KEYSYM,
-                    press: false
-                },
+                x11_key_step(CONTROL_L_KEYSYM, true),
+                x11_key_step(crate::daemon::x11::V_KEYSYM, true),
+                x11_key_step(crate::daemon::x11::V_KEYSYM, false),
+                x11_key_step(CONTROL_L_KEYSYM, false),
             ]
         );
         assert_eq!(
             linux_paste_chord_steps(PasteMode::Terminal),
             vec![
-                X11KeyStep {
-                    keysym: CONTROL_L_KEYSYM,
-                    press: true
-                },
-                X11KeyStep {
-                    keysym: SHIFT_L_KEYSYM,
-                    press: true
-                },
-                X11KeyStep {
-                    keysym: crate::daemon::x11::V_KEYSYM,
-                    press: true
-                },
-                X11KeyStep {
-                    keysym: crate::daemon::x11::V_KEYSYM,
-                    press: false
-                },
-                X11KeyStep {
-                    keysym: SHIFT_L_KEYSYM,
-                    press: false
-                },
-                X11KeyStep {
-                    keysym: CONTROL_L_KEYSYM,
-                    press: false
-                },
+                x11_key_step(CONTROL_L_KEYSYM, true),
+                x11_key_step(SHIFT_L_KEYSYM, true),
+                x11_key_step(crate::daemon::x11::V_KEYSYM, true),
+                x11_key_step(crate::daemon::x11::V_KEYSYM, false),
+                x11_key_step(SHIFT_L_KEYSYM, false),
+                x11_key_step(CONTROL_L_KEYSYM, false),
             ]
         );
+    }
+
+    #[cfg(target_os = "linux")]
+    fn x11_key_step(keysym: u32, press: bool) -> X11KeyStep {
+        X11KeyStep { keysym, press }
     }
 
     #[cfg(not(target_os = "linux"))]
@@ -867,141 +842,135 @@ mod tests {
         assert!(paste_modifiers(PasteMode::Direct).is_empty());
     }
 
-    #[test]
-    fn failed_paste_restores_previous_clipboard() {
-        let mut clipboard = MockClipboard::new("old clipboard");
-        let events = clipboard.events();
-        let result = paste_with_clipboard_swap(
-            &mut clipboard,
-            "dictated text",
-            || {
-                events.borrow_mut().push("paste".to_string());
-                Err(anyhow::anyhow!("paste failed"))
-            },
-            Duration::ZERO,
-            Duration::ZERO,
-        );
-
-        assert!(result.is_err());
-        assert_eq!(clipboard.text.as_deref(), Some("old clipboard"));
-        assert_eq!(
-            events.borrow().as_slice(),
-            ["read", "set:dictated text", "paste", "set:old clipboard"]
-        );
+    struct ClipboardCase {
+        name: &'static str,
+        initial: Option<&'static str>,
+        transcript: &'static str,
+        paste_error: Option<&'static str>,
+        fail_next_set: bool,
+        fail_on_set: Option<&'static str>,
+        expected_text: Option<&'static str>,
+        expected_events: &'static [&'static str],
+        error_contains: Option<&'static str>,
     }
 
     #[test]
-    fn successful_paste_restores_previous_clipboard() {
-        let mut clipboard = MockClipboard::new("old clipboard");
-        let events = clipboard.events();
-        paste_with_clipboard_swap(
-            &mut clipboard,
-            "dictated text",
-            || {
-                events.borrow_mut().push("paste".to_string());
-                Ok(())
+    fn clipboard_swap_cases_are_stable() {
+        let cases = [
+            ClipboardCase {
+                name: "failed paste restores previous clipboard",
+                initial: Some("old clipboard"),
+                transcript: "dictated text",
+                paste_error: Some("paste failed"),
+                fail_next_set: false,
+                fail_on_set: None,
+                expected_text: Some("old clipboard"),
+                expected_events: &["read", "set:dictated text", "paste", "set:old clipboard"],
+                error_contains: Some("paste failed"),
             },
-            Duration::ZERO,
-            Duration::ZERO,
-        )
-        .expect("paste should succeed");
-
-        assert_eq!(clipboard.text.as_deref(), Some("old clipboard"));
-        assert_eq!(
-            events.borrow().as_slice(),
-            ["read", "set:dictated text", "paste", "set:old clipboard"]
-        );
-    }
-
-    #[test]
-    fn same_clipboard_text_is_not_rewritten_after_paste() {
-        let mut clipboard = MockClipboard::new("dictated text");
-        let events = clipboard.events();
-        paste_with_clipboard_swap(
-            &mut clipboard,
-            "dictated text",
-            || {
-                events.borrow_mut().push("paste".to_string());
-                Ok(())
+            ClipboardCase {
+                name: "successful paste restores previous clipboard",
+                initial: Some("old clipboard"),
+                transcript: "dictated text",
+                paste_error: None,
+                fail_next_set: false,
+                fail_on_set: None,
+                expected_text: Some("old clipboard"),
+                expected_events: &["read", "set:dictated text", "paste", "set:old clipboard"],
+                error_contains: None,
             },
-            Duration::ZERO,
-            Duration::ZERO,
-        )
-        .expect("paste should succeed");
-
-        assert_eq!(clipboard.text.as_deref(), Some("dictated text"));
-        assert_eq!(
-            events.borrow().as_slice(),
-            ["read", "set:dictated text", "paste"]
-        );
-    }
-
-    #[test]
-    fn empty_text_does_not_touch_clipboard_or_paste() {
-        let mut clipboard = MockClipboard::empty();
-        let events = clipboard.events();
-        let mut pasted = false;
-        paste_with_clipboard_swap(
-            &mut clipboard,
-            "",
-            || {
-                pasted = true;
-                Ok(())
+            ClipboardCase {
+                name: "same clipboard text is not rewritten after paste",
+                initial: Some("dictated text"),
+                transcript: "dictated text",
+                paste_error: None,
+                fail_next_set: false,
+                fail_on_set: None,
+                expected_text: Some("dictated text"),
+                expected_events: &["read", "set:dictated text", "paste"],
+                error_contains: None,
             },
-            Duration::ZERO,
-            Duration::ZERO,
-        )
-        .expect("empty paste should be a no-op");
-
-        assert!(!pasted);
-        assert!(clipboard.text.is_none());
-        assert!(events.borrow().is_empty());
-    }
-
-    #[test]
-    fn transcript_clipboard_write_failure_does_not_paste_or_restore() {
-        let mut clipboard = MockClipboard::new("old clipboard").fail_next_set();
-        let events = clipboard.events();
-        let mut pasted = false;
-        let result = paste_with_clipboard_swap(
-            &mut clipboard,
-            "dictated text",
-            || {
-                pasted = true;
-                events.borrow_mut().push("paste".to_string());
-                Ok(())
+            ClipboardCase {
+                name: "empty text does not touch clipboard or paste",
+                initial: None,
+                transcript: "",
+                paste_error: None,
+                fail_next_set: false,
+                fail_on_set: None,
+                expected_text: None,
+                expected_events: &[],
+                error_contains: None,
             },
-            Duration::ZERO,
-            Duration::ZERO,
-        );
-
-        assert!(result.is_err());
-        assert!(!pasted);
-        assert_eq!(clipboard.text.as_deref(), Some("old clipboard"));
-        assert_eq!(events.borrow().as_slice(), ["read", "set:dictated text"]);
-    }
-
-    #[test]
-    fn restore_failure_is_reported_after_successful_paste() {
-        let mut clipboard = MockClipboard::new("old clipboard").fail_on_set("old clipboard");
-        let events = clipboard.events();
-        let result = paste_with_clipboard_swap(
-            &mut clipboard,
-            "dictated text",
-            || {
-                events.borrow_mut().push("paste".to_string());
-                Ok(())
+            ClipboardCase {
+                name: "transcript clipboard write failure does not paste or restore",
+                initial: Some("old clipboard"),
+                transcript: "dictated text",
+                paste_error: None,
+                fail_next_set: true,
+                fail_on_set: None,
+                expected_text: Some("old clipboard"),
+                expected_events: &["read", "set:dictated text"],
+                error_contains: Some("could not copy transcript to clipboard"),
             },
-            Duration::ZERO,
-            Duration::ZERO,
-        );
+            ClipboardCase {
+                name: "restore failure is reported after successful paste",
+                initial: Some("old clipboard"),
+                transcript: "dictated text",
+                paste_error: None,
+                fail_next_set: false,
+                fail_on_set: Some("old clipboard"),
+                expected_text: Some("dictated text"),
+                expected_events: &["read", "set:dictated text", "paste", "set:old clipboard"],
+                error_contains: Some("could not restore previous clipboard text"),
+            },
+        ];
 
-        let err = result.expect_err("restore failure should be reported");
-        assert!(format!("{err:#}").contains("could not restore previous clipboard text"));
-        assert_eq!(clipboard.text.as_deref(), Some("dictated text"));
-        assert_eq!(
-            events.borrow().as_slice(),
-            ["read", "set:dictated text", "paste", "set:old clipboard"]
-        );
+        for case in cases {
+            let mut clipboard = match case.initial {
+                Some(text) => MockClipboard::new(text),
+                None => MockClipboard::empty(),
+            };
+            if case.fail_next_set {
+                clipboard = clipboard.fail_next_set();
+            }
+            if let Some(text) = case.fail_on_set {
+                clipboard = clipboard.fail_on_set(text);
+            }
+
+            let events = clipboard.events();
+            let result = paste_with_clipboard_swap(
+                &mut clipboard,
+                case.transcript,
+                || {
+                    events.borrow_mut().push("paste".to_string());
+                    match case.paste_error {
+                        Some(message) => Err(anyhow::anyhow!("{message}")),
+                        None => Ok(()),
+                    }
+                },
+                Duration::ZERO,
+                Duration::ZERO,
+            );
+
+            match case.error_contains {
+                Some(fragment) => {
+                    let err = result.expect_err(case.name);
+                    assert!(format!("{err:#}").contains(fragment), "{}", case.name);
+                }
+                None => result.expect(case.name),
+            }
+            assert_eq!(
+                clipboard.text.as_deref(),
+                case.expected_text,
+                "{}",
+                case.name
+            );
+            assert_eq!(
+                events.borrow().as_slice(),
+                case.expected_events,
+                "{}",
+                case.name
+            );
+        }
     }
 }

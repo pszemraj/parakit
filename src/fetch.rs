@@ -29,10 +29,6 @@ pub struct FetchOptions {
     pub quiet: bool,
     /// Which acquisition path to use.
     pub source: FetchSource,
-    /// Keep the downloaded `.nemo` after the final Q8_0 model is produced.
-    pub keep_nemo: bool,
-    /// Keep the intermediate F16 GGUF after the final Q8_0 model is produced.
-    pub keep_f16: bool,
 }
 
 /// Model acquisition source for `parakit fetch`.
@@ -41,7 +37,12 @@ pub enum FetchSource {
     /// Download the owner-hosted Q8_0 GGUF.
     HostedQ8,
     /// Rebuild Q8_0 locally from NVIDIA's official `.nemo` checkpoint.
-    OfficialNemo,
+    OfficialNemo {
+        /// Keep the downloaded `.nemo` after the final Q8_0 model is produced.
+        keep_nemo: bool,
+        /// Keep the intermediate F16 GGUF after the final Q8_0 model is produced.
+        keep_f16: bool,
+    },
 }
 
 /// Ensure the default hosted Q8_0 model is present in the cache.
@@ -59,8 +60,6 @@ pub fn ensure_default_model(quiet: bool) -> Result<PathBuf> {
         force: false,
         quiet,
         source: FetchSource::HostedQ8,
-        keep_nemo: false,
-        keep_f16: false,
     })
 }
 
@@ -77,7 +76,7 @@ pub fn ensure_default_model(quiet: bool) -> Result<PathBuf> {
 pub fn run(options: FetchOptions) -> Result<PathBuf> {
     match options.source {
         FetchSource::HostedQ8 => run_hosted_q8(options),
-        FetchSource::OfficialNemo => run_official_nemo(options),
+        FetchSource::OfficialNemo { .. } => run_official_nemo(options),
     }
 }
 
@@ -691,11 +690,17 @@ fn status(options: FetchOptions, message: std::fmt::Arguments<'_>) {
 }
 
 fn cleanup_intermediates(paths: &FetchPaths, options: FetchOptions) -> Result<()> {
-    if !options.keep_nemo {
-        remove_if_exists(&paths.nemo)?;
-    }
-    if !options.keep_f16 {
-        remove_if_exists(&paths.f16)?;
+    if let FetchSource::OfficialNemo {
+        keep_nemo,
+        keep_f16,
+    } = options.source
+    {
+        if !keep_nemo {
+            remove_if_exists(&paths.nemo)?;
+        }
+        if !keep_f16 {
+            remove_if_exists(&paths.f16)?;
+        }
     }
     Ok(())
 }

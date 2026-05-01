@@ -223,12 +223,13 @@ fn run() -> Result<()> {
                     force: fetch_cli.force,
                     quiet: cli.quiet,
                     source: if fetch_cli.from_source {
-                        FetchSource::OfficialNemo
+                        FetchSource::OfficialNemo {
+                            keep_nemo: fetch_cli.keep_nemo,
+                            keep_f16: fetch_cli.keep_f16,
+                        }
                     } else {
                         FetchSource::HostedQ8
                     },
-                    keep_nemo: fetch_cli.keep_nemo,
-                    keep_f16: fetch_cli.keep_f16,
                 })?;
                 return Ok(());
             }

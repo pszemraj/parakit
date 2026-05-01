@@ -22,7 +22,7 @@ use super::inject::{self, PasteMode};
 /// Returns an actionable error when the global hotkey backend is known to be
 /// unavailable in the current desktop session.
 pub fn ensure_hotkey_ready(backend: HotkeyBackend) -> Result<()> {
-    let report = startup_hotkey_report(backend);
+    let report = hotkey_report(backend);
     if report.blocking {
         bail!("{}", report.summary);
     }
@@ -165,11 +165,6 @@ fn print_doctor_details(
     }
 }
 
-#[cfg(not(target_os = "linux"))]
-fn startup_hotkey_report(backend: HotkeyBackend) -> HotkeyReport {
-    hotkey_report(backend)
-}
-
 #[cfg(target_os = "linux")]
 /// Acquire the per-user daemon lock.
 ///
@@ -248,59 +243,6 @@ fn linux_hotkey_success_label(backend: HotkeyBackend) -> &'static str {
         HotkeyBackend::Auto => "evdev keyboard grab",
         HotkeyBackend::Evdev => "evdev keyboard grab",
         HotkeyBackend::Desktop => unreachable!("desktop backend is disabled on Linux"),
-    }
-}
-
-#[cfg(target_os = "linux")]
-fn startup_hotkey_report(backend: HotkeyBackend) -> HotkeyReport {
-    let session = std::env::var("XDG_SESSION_TYPE").unwrap_or_else(|_| "unknown".to_string());
-    let display = std::env::var("DISPLAY").unwrap_or_else(|_| "<unset>".to_string());
-    let xauthority = std::env::var("XAUTHORITY").unwrap_or_else(|_| "<unset>".to_string());
-    let user = std::env::var("USER").unwrap_or_else(|_| "$USER".to_string());
-    let evdev = evdev_report();
-    let evdev_ready = evdev.grab_likely_available();
-    let blocking = linux_hotkey_startup_blocked(backend, evdev_ready);
-    let status = linux_hotkey_status(backend, &evdev, blocking);
-
-    let summary = if blocking {
-        let mut summary = String::new();
-        writeln!(&mut summary, "hotkey preflight failed before model startup").unwrap();
-        writeln!(&mut summary, "selected backend: {}", backend.label()).unwrap();
-        writeln!(
-            &mut summary,
-            "session: XDG_SESSION_TYPE={session}, DISPLAY={display}, XAUTHORITY={xauthority}"
-        )
-        .unwrap();
-        if backend == HotkeyBackend::Desktop {
-            writeln!(
-                &mut summary,
-                "desktop backend: disabled in the Linux-stable path"
-            )
-            .unwrap();
-        }
-        writeln!(
-            &mut summary,
-            "evdev backend: {} device(s), {} readable, {} Ctrl+Space keyboard candidate(s), {} permission denied",
-            evdev.event_devices, evdev.readable, evdev.hotkey_keyboards, evdev.denied
-        )
-        .unwrap();
-        if let Some(err) = &evdev.uinput_error {
-            writeln!(&mut summary, "uinput: unavailable ({err})").unwrap();
-        }
-        write_linux_fix(&mut summary, &user);
-        summary
-    } else {
-        format!(
-            "hotkey preflight passed with {}",
-            linux_hotkey_success_label(backend)
-        )
-    };
-
-    HotkeyReport {
-        blocking,
-        status,
-        details: summary.clone(),
-        summary,
     }
 }
 
