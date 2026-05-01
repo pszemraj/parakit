@@ -21,15 +21,8 @@ Repository: [github.com/pszemraj/parakit](https://github.com/pszemraj/parakit)
 
 ## Install
 
-Install native build dependencies first. Ubuntu/Debian:
-
-```bash
-sudo apt install cmake build-essential pkg-config libasound2-dev libudev-dev \
-  libxtst-dev libxdo-dev libxi-dev libx11-dev libevdev-dev libgomp1 \
-  autoconf libtool
-```
-
-Clone and build:
+Install the native dependencies in [docs/build.md](docs/build.md), then clone
+and build:
 
 ```bash
 git clone --recurse-submodules https://github.com/pszemraj/parakit.git
@@ -68,28 +61,10 @@ parakit doctor && parakit
 
 No `-m` argument is needed for normal use.
 
-Backend-specific builds:
-
-```bash
-cargo install --path . --features cuda
-cargo install --path . --features vulkan
-cargo install --path . --features metal
-```
-
 More dependency lists, `PARAKIT_BLAS` options, backend SDK notes, rpath details,
 and Windows DLL handling are covered in [docs/build.md](docs/build.md).
 
 ## Run
-
-Foreground startup prints the model file, precision, and selected microphone:
-
-```text
-parakit
-  model: parakeet-tdt-0.6b-v3-Q8_0.gguf
-  dtype: Q8_0 (745 MB)
-  mic:   RODE NT-USB+ Mono, 48000 Hz input -> 16000 Hz model, mono, F32
-Ready: hold Ctrl+Space to dictate.
-```
 
 For daily use, start it from the current desktop session and detach it:
 
@@ -98,8 +73,9 @@ parakit --quiet &
 disown
 ```
 
-See [docs/running.md](docs/running.md) for background launch, model cache,
-logging, microphone selection, paste modes, sounds, and disabled streaming mode.
+See [docs/running.md](docs/running.md) for foreground output, background
+launch, model cache, logging, microphone selection, paste modes, sounds, and
+disabled streaming mode.
 
 ## Commands
 

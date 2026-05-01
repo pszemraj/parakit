@@ -10,33 +10,18 @@ parakit doctor --deep
 
 `doctor` does not load the model. It exits `0` when the daemon should start and
 `1` when a blocking issue remains, so `parakit doctor && parakit` is the safe
-launch pattern. `parakit --verbose doctor` prints backend and build details.
-`parakit doctor --deep` adds an active insertion smoke test. Normal launch
-behavior is covered in [running.md](running.md).
+launch pattern. Normal launch behavior is covered in [running.md](running.md).
 
 ## Hotkey Problems
 
-On Linux, `auto` uses the evdev keyboard grab backend. The old X11 desktop
-hotkey backend is disabled in the Linux-stable path. Wayland usually blocks
-this class of desktop automation.
-
-Healthy default output looks like:
-
-```text
-parakit doctor: OK
-  hotkey    OK  (evdev keyboard grab ready)
-  daemon    OK  (no existing daemon lock)
-  mic       OK  (...)
-  insertion OK  (terminal preflight)
-```
+Linux backend and permission setup is in
+[linux-desktop.md](linux-desktop.md).
 
 If `Ctrl+Space` is unavailable, another desktop shortcut, input method, or
 keyboard remapper may own it. Disable that binding and rerun `parakit doctor`.
 
-If `doctor` reports `Connection refused` for X11 after a logout/login, restart
-the terminal or tmux server from the current desktop session. Use the evdev
-backend when the daemon must survive desktop session churn; see
-[linux-desktop.md](linux-desktop.md).
+If `doctor` reports `Connection refused` for X11 after a logout/login, start a
+new terminal or tmux server from the current desktop session.
 
 On macOS, grant Accessibility and Input Monitoring permissions to both the
 terminal and the built binary.
@@ -49,7 +34,7 @@ space reaches the focused app:
 - confirm only one parakit process is running;
 - confirm no desktop/input-method shortcut also handles `Ctrl+Space`;
 - retry in foreground mode to inspect errors;
-- avoid Wayland sessions.
+- use an X11 session for Linux insertion.
 
 ## Text Does Not Insert
 
@@ -57,18 +42,10 @@ Batch insertion writes the transcript to the clipboard, sends the paste
 shortcut, then restores the previous text clipboard when possible. See
 [running.md#insertion](running.md#insertion) for paste modes.
 
-Useful checks:
-
-```bash
-parakit doctor --deep
-parakit --paste-mode terminal
-parakit --paste-mode standard
-parakit --paste-mode direct
-```
-
-Use `standard` for apps that only accept `Ctrl+V`; use `direct` only when an
-app refuses clipboard paste entirely. Streaming mode is disabled while batch
-dictation is stabilized.
+Run `parakit doctor --deep` for an active insertion smoke test. Use `standard`
+for apps that only accept `Ctrl+V`; use `direct` only when an app refuses
+clipboard paste entirely. Streaming mode is disabled while batch dictation is
+stabilized.
 
 On Windows, paste shortcuts are sent with `SendInput`. Windows blocks synthetic
 input into higher-integrity processes, so a normal parakit process cannot paste

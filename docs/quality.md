@@ -18,6 +18,21 @@ cleanup unless disabled, and prints raw and cleaned text. It uses the cached
 Q8_0 model by default. Pass `--model /path/to/model.gguf` only when comparing a
 specific custom GGUF.
 
+## PTT Worker Simulation
+
+Use the hidden simulation path when you need the daemon worker flow without a
+live keyboard, microphone, or text insertion:
+
+```bash
+cargo run -- --paste-mode direct \
+  --simulate-ptt-audio target/tmp/ptt-audio/Sitrep_2602_20_0145_first60.wav
+```
+
+It reads a WAV, resamples it to the model rate, sends
+`RecordingStarted`/`RecordingStopped` events with owned PCM, runs inference and
+cleanup, and prints the transcript. It does not test evdev capture or paste
+insertion.
+
 ## NeMo Reference Helper
 
 The Python helper runs NVIDIA NeMo's official Parakeet path:

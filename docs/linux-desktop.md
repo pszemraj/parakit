@@ -4,10 +4,13 @@ parakit needs a desktop input backend for `Ctrl+Space`.
 
 Default behavior:
 
-- `auto` uses the Linux evdev keyboard grab backend.
-- The old X11 desktop hotkey backend is disabled in the Linux-stable path.
-- Wayland usually blocks desktop global hotkeys and synthetic input for regular
-  applications.
+- `auto` and `evdev` use the Linux evdev keyboard grab backend.
+- `desktop` exits with an error on Linux.
+- Hotkey capture reads evdev devices, so it is not an X11 global shortcut.
+- Linux paste insertion uses X11/XTest. Use an X11 session for the full
+  dictate-and-insert workflow.
+- Wayland hotkey capture may work with evdev permissions, but insertion is
+  compositor-dependent and not a supported Linux path today.
 
 ## X11 Sessions
 
@@ -34,17 +37,27 @@ disown
 ## Evdev Backend
 
 The evdev backend needs readable `/dev/input/event*` devices and writable
-`/dev/uinput`. Use it when you want parakit to keep working across
-lock/logout/session restarts:
+`/dev/uinput`.
 
 ```bash
 sudo usermod -aG input "$USER"
+```
+
+Many distros also need a udev rule for `/dev/uinput`:
+
+```bash
+printf 'KERNEL=="uinput", GROUP="input", MODE="0660", OPTIONS+="static_node=uinput"\n' | \
+  sudo tee /etc/udev/rules.d/70-uinput.rules
+sudo modprobe uinput
+sudo udevadm control --reload-rules
+sudo udevadm trigger /dev/uinput
 ```
 
 Log out completely and log back in, or reboot. Then verify:
 
 ```bash
 id -nG | tr ' ' '\n' | grep '^input$'
+test -w /dev/uinput
 parakit doctor
 ```
 
