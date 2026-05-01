@@ -21,15 +21,13 @@ mod daemon;
 use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand};
 use crossbeam_channel::{unbounded, Receiver};
+use parakit::audio_file::{read_wav_mono, resample_to_target};
 use parakit::data_log::{DataLogger, LogFormat};
 use parakit::fetch::{self, FetchOptions, FetchSource};
 use parakit::gguf;
-use parakit::inference::{default_thread_count, Engine, Mode};
+use parakit::inference::{default_thread_count, Engine};
 use parakit::model;
 use parakit::rules::{self, Cleaner};
-use rubato::{
-    Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction,
-};
 #[cfg(unix)]
 use std::fs::File;
 #[cfg(unix)]
@@ -65,8 +63,7 @@ struct Cli {
     #[arg(short = 'm', long, value_name = "PATH")]
     model: Option<PathBuf>,
 
-    /// Inference mode. `batch` records all audio then transcribes once.
-    /// `streaming` parses for compatibility but is temporarily disabled.
+    /// Inference mode. Only `batch` is currently supported.
     #[arg(long, default_value = "batch")]
     mode: String,
 
@@ -188,10 +185,7 @@ struct DoctorCli {
 
 enum Event_ {
     /// Recording began at this instant.
-    RecordingStarted {
-        /// Monotonic timestamp captured by the hotkey coordinator.
-        started_at: Instant,
-    },
+    RecordingStarted,
     /// Recording ended and the captured PCM moved out of the audio buffer.
     RecordingStopped {
         /// Monotonic timestamp captured when recording started.
@@ -294,12 +288,7 @@ fn run() -> Result<()> {
     daemon::inject::preflight(cli.paste_mode).context("text insertion preflight failed")?;
     log.verbose("parakit: insertion preflight passed");
 
-    let mode: Mode = cli.mode.parse()?;
-    if matches!(mode, Mode::Streaming { .. }) {
-        anyhow::bail!(
-            "streaming mode is temporarily disabled while Linux batch dictation is stabilized"
-        );
-    }
+    validate_batch_mode(&cli.mode)?;
     let cleaner = rules::build_cleaner(cli.no_cleaning, &cli.disable_rule)?.map(Arc::new);
     let data_log = cli
         .log_dir
@@ -308,7 +297,7 @@ fn run() -> Result<()> {
 
     let sounds = Sounds::new(!cli.no_sounds);
     let model_path = match cli.model.as_deref() {
-        Some(path) => model::resolve_model_path(Some(path))?,
+        Some(path) => path.to_path_buf(),
         None => fetch::ensure_default_model(cli.quiet || !cli.verbose)?,
     };
     let model_dtype = model_dtype_label(&model_path);
@@ -339,7 +328,7 @@ fn run() -> Result<()> {
         model_path: &model_path,
         dtype: &model_dtype,
         mic: &mic_info,
-        mode: format!("{:?}", mode),
+        mode: cli.mode.clone(),
         cleaning: match cleaner.as_deref() {
             Some(c) => format!("on ({} rules)", c.active_rule_count()),
             None => "off".to_string(),
@@ -356,8 +345,7 @@ fn run() -> Result<()> {
 
     // Worker thread takes exclusive ownership of `engine`. `crispasr::Session`
     // is `Send` but not `Sync`, which is fine: only one thread ever calls
-    // `transcribe`, and the grab callback / streaming ticker only post
-    // events on a channel.
+    // `transcribe`, and the hotkey path only posts events on a channel.
     let (tx, rx) = unbounded::<Event_>();
     let worker = spawn_worker(WorkerCtx {
         engine,
@@ -381,12 +369,7 @@ fn run() -> Result<()> {
 }
 
 fn run_ptt_audio_simulation(cli: &Cli, log: Arc<Logger>, audio_path: &Path) -> Result<()> {
-    let mode: Mode = cli.mode.parse()?;
-    if matches!(mode, Mode::Streaming { .. }) {
-        anyhow::bail!(
-            "streaming mode is temporarily disabled while Linux batch dictation is stabilized"
-        );
-    }
+    validate_batch_mode(&cli.mode)?;
 
     let cleaner = rules::build_cleaner(cli.no_cleaning, &cli.disable_rule)?.map(Arc::new);
     let data_log = cli
@@ -401,7 +384,7 @@ fn run_ptt_audio_simulation(cli: &Cli, log: Arc<Logger>, audio_path: &Path) -> R
     let audio_secs = wav.samples.len() as f32 / TARGET_RATE as f32;
 
     let model_path = match cli.model.as_deref() {
-        Some(path) => model::resolve_model_path(Some(path))?,
+        Some(path) => path.to_path_buf(),
         None => fetch::ensure_default_model(cli.quiet || !cli.verbose)?,
     };
     let threads = cli
@@ -431,7 +414,7 @@ fn run_ptt_audio_simulation(cli: &Cli, log: Arc<Logger>, audio_path: &Path) -> R
 
     let started_at = Instant::now();
     let stopped_at = started_at + Duration::from_secs_f32(audio_secs);
-    tx.send(Event_::RecordingStarted { started_at })
+    tx.send(Event_::RecordingStarted)
         .context("could not send simulated PTT start event")?;
     tx.send(Event_::RecordingStopped {
         started_at,
@@ -446,136 +429,6 @@ fn run_ptt_audio_simulation(cli: &Cli, log: Arc<Logger>, audio_path: &Path) -> R
     Ok(())
 }
 
-struct WavData {
-    samples: Vec<f32>,
-    sample_rate: u32,
-}
-
-fn read_wav_mono(path: &Path) -> Result<WavData> {
-    let mut reader = hound::WavReader::open(path)
-        .with_context(|| format!("failed to open {}", path.display()))?;
-    let spec = reader.spec();
-    if spec.channels == 0 {
-        anyhow::bail!("{} has zero channels", path.display());
-    }
-
-    let samples = match spec.sample_format {
-        hound::SampleFormat::Float => {
-            if spec.bits_per_sample != 32 {
-                anyhow::bail!(
-                    "unsupported float WAV depth {} in {}",
-                    spec.bits_per_sample,
-                    path.display()
-                );
-            }
-            reader
-                .samples::<f32>()
-                .collect::<std::result::Result<Vec<_>, _>>()
-                .context("failed to read float WAV samples")?
-        }
-        hound::SampleFormat::Int => read_int_samples(&mut reader, spec.bits_per_sample)?,
-    };
-
-    Ok(WavData {
-        samples: mix_to_mono(&samples, spec.channels as usize),
-        sample_rate: spec.sample_rate,
-    })
-}
-
-fn read_int_samples<R: std::io::Read>(
-    reader: &mut hound::WavReader<R>,
-    bits_per_sample: u16,
-) -> Result<Vec<f32>> {
-    match bits_per_sample {
-        1..=8 => {
-            let scale = (1_i32 << (bits_per_sample - 1)) as f32;
-            reader
-                .samples::<i8>()
-                .map(|s| s.map(|v| v as f32 / scale))
-                .collect::<std::result::Result<Vec<_>, _>>()
-                .context("failed to read 8-bit WAV samples")
-        }
-        9..=16 => {
-            let scale = (1_i32 << (bits_per_sample - 1)) as f32;
-            reader
-                .samples::<i16>()
-                .map(|s| s.map(|v| v as f32 / scale))
-                .collect::<std::result::Result<Vec<_>, _>>()
-                .context("failed to read 16-bit WAV samples")
-        }
-        17..=32 => {
-            let scale = (1_i64 << (bits_per_sample - 1)) as f32;
-            reader
-                .samples::<i32>()
-                .map(|s| s.map(|v| v as f32 / scale))
-                .collect::<std::result::Result<Vec<_>, _>>()
-                .context("failed to read 24/32-bit WAV samples")
-        }
-        other => Err(anyhow::anyhow!("unsupported integer WAV depth {other}")),
-    }
-}
-
-fn mix_to_mono(samples: &[f32], channels: usize) -> Vec<f32> {
-    if channels == 1 {
-        return samples.to_vec();
-    }
-
-    let frames = samples.len() / channels;
-    let mut mono = Vec::with_capacity(frames);
-    for frame in samples.chunks_exact(channels) {
-        let sum: f32 = frame.iter().copied().sum();
-        mono.push(sum / channels as f32);
-    }
-    mono
-}
-
-fn resample_to_target(samples: Vec<f32>, source_rate: u32) -> Result<Vec<f32>> {
-    if source_rate == TARGET_RATE {
-        return Ok(samples);
-    }
-    if samples.is_empty() {
-        return Ok(samples);
-    }
-
-    let params = SincInterpolationParameters {
-        sinc_len: 128,
-        f_cutoff: 0.95,
-        interpolation: SincInterpolationType::Linear,
-        oversampling_factor: 256,
-        window: WindowFunction::BlackmanHarris2,
-    };
-    let chunk_size = 1024;
-    let mut resampler = SincFixedIn::<f32>::new(
-        TARGET_RATE as f64 / source_rate as f64,
-        2.0,
-        params,
-        chunk_size,
-        1,
-    )
-    .context("failed to construct resampler")?;
-
-    let expected_len =
-        (samples.len() as f64 * TARGET_RATE as f64 / source_rate as f64).ceil() as usize;
-    let mut output = Vec::with_capacity(expected_len);
-
-    for chunk in samples.chunks(chunk_size) {
-        let mut padded = chunk.to_vec();
-        if padded.len() < chunk_size {
-            padded.resize(chunk_size, 0.0);
-        }
-        let input_frames = vec![padded];
-        let output_frames = resampler
-            .process(&input_frames, None)
-            .context("failed to resample WAV chunk")?;
-        if let Some(ch0) = output_frames.first() {
-            output.extend_from_slice(ch0);
-        }
-    }
-
-    output.truncate(expected_len.min(output.len()));
-    Ok(output)
-}
-
 fn model_dtype_label(path: &std::path::Path) -> String {
     let dtype = gguf::detect_dtype(path)
         .ok()
@@ -587,6 +440,20 @@ fn model_dtype_label(path: &std::path::Path) -> String {
         .map(|meta| format!(" ({:.0} MB)", meta.len() as f64 / 1_000_000.0))
         .unwrap_or_default();
     format!("{dtype}{size}")
+}
+
+fn validate_batch_mode(mode: &str) -> Result<()> {
+    match mode {
+        "batch" => Ok(()),
+        other if other == "streaming" || other.starts_with("streaming:") => {
+            anyhow::bail!(
+                "streaming mode is temporarily disabled while Linux batch dictation is stabilized"
+            )
+        }
+        other => anyhow::bail!(
+            "unknown mode '{other}'. Expected 'batch'. Streaming is temporarily disabled."
+        ),
+    }
 }
 
 fn log_level(cli: &Cli) -> LogLevel {
@@ -809,8 +676,7 @@ fn worker_loop(ctx: WorkerCtx) {
 
     while let Ok(ev) = rx.recv() {
         match ev {
-            Event_::RecordingStarted { started_at } => {
-                let _recording_started_at = started_at;
+            Event_::RecordingStarted => {
                 sounds.start();
                 log.line("parakit: recording...");
             }

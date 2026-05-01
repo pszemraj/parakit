@@ -570,11 +570,6 @@ mod tests {
     }
 
     #[test]
-    fn all_default_rules_compile() {
-        cleaner_with_all_defaults();
-    }
-
-    #[test]
     fn lead_so_removed() {
         let c = cleaner_with_all_defaults();
         assert_eq!(c.clean("So, I think this works."), "I think this works");

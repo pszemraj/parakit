@@ -8,7 +8,7 @@
 //! Implementation note: rodio's `OutputStream` is `!Send`, so we run a
 //! dedicated sound thread that owns the stream and listens on a channel.
 //! [`Sounds`] is then a thin `Send + Sync` wrapper around the channel
-//! sender, so the rdev callback and the worker thread can both poke it.
+//! sender, so the hotkey and worker threads can both poke it.
 
 use crossbeam_channel::{bounded, Sender};
 use rodio::source::Source;

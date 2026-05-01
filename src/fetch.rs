@@ -17,6 +17,9 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
+const ACQ_HOSTED_Q8: &str = "hosted-q8";
+const ACQ_OFFICIAL_NEMO: &str = "official-nemo";
+
 /// Options for `parakit fetch`.
 #[derive(Clone, Copy, Debug)]
 pub struct FetchOptions {
@@ -291,14 +294,14 @@ impl Manifest {
     }
 
     fn hosted_current(&self, q8_path: &Path) -> bool {
-        self.acquisition == "hosted-q8"
+        self.acquisition == ACQ_HOSTED_Q8
             && self.source_url == HOSTED_Q8_URL
             && self.q8_sha256.as_deref() == Some(HOSTED_Q8_SHA256)
             && self.q8_output_path == q8_path.display().to_string()
     }
 
     fn mark_hosted_ready(&mut self, q8_path: &Path) {
-        self.acquisition = "hosted-q8".to_string();
+        self.acquisition = ACQ_HOSTED_Q8.to_string();
         self.source_url = HOSTED_Q8_URL.to_string();
         self.q8_sha256 = Some(HOSTED_Q8_SHA256.to_string());
         self.q8_output_path = q8_path.display().to_string();
@@ -323,7 +326,7 @@ impl Manifest {
         quantize_bin: &Path,
         quantize_version: &str,
     ) -> Result<bool> {
-        if self.acquisition != "official-nemo"
+        if self.acquisition != ACQ_OFFICIAL_NEMO
             || self.source_url != OFFICIAL_NEMO_URL
             || !q8_path.is_file()
         {
@@ -367,7 +370,7 @@ fn ensure_nemo(
     );
     download_with_resume(OFFICIAL_NEMO_URL, &paths.nemo)?;
     let sha = crate::checksum::sha256_file_hex(&paths.nemo)?;
-    manifest.acquisition = "official-nemo".to_string();
+    manifest.acquisition = ACQ_OFFICIAL_NEMO.to_string();
     manifest.source_url = OFFICIAL_NEMO_URL.to_string();
     manifest.nemo_sha256 = Some(sha.clone());
     manifest.downloaded_at = Some(now_utc());
@@ -749,7 +752,7 @@ mod tests {
         manifest.mark_hosted_ready(path);
 
         assert!(manifest.hosted_current(path));
-        assert_eq!(manifest.acquisition, "hosted-q8");
+        assert_eq!(manifest.acquisition, ACQ_HOSTED_Q8);
         assert_eq!(manifest.source_url, HOSTED_Q8_URL);
         assert_eq!(manifest.q8_sha256.as_deref(), Some(HOSTED_Q8_SHA256));
         assert!(manifest.nemo_sha256.is_none());

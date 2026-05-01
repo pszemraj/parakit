@@ -2,28 +2,11 @@
 
 use anyhow::{Context, Result};
 use x11rb::connection::Connection;
-use x11rb::protocol::xproto::{ConnectionExt, Keycode, ModMask, Screen, Window};
+use x11rb::protocol::xproto::{ConnectionExt, Keycode, Screen, Window};
 use x11rb::rust_connection::RustConnection;
 
-/// X11 keysym for Space.
-pub(crate) const SPACE_KEYSYM: u32 = 0x0020;
 /// X11 keysym for lowercase `v`.
 pub(crate) const V_KEYSYM: u32 = b'v' as u32;
-
-/// Return the X11 grab masks that make Ctrl+Space work across NumLock/CapsLock
-/// state.
-///
-/// # Returns
-///
-/// Modifier masks for Control alone and Control with NumLock/CapsLock variants.
-pub(crate) fn ctrl_grab_mods() -> [ModMask; 4] {
-    [
-        ModMask::CONTROL,
-        ModMask::CONTROL | ModMask::M2,
-        ModMask::CONTROL | ModMask::LOCK,
-        ModMask::CONTROL | ModMask::M2 | ModMask::LOCK,
-    ]
-}
 
 /// Return the requested X11 screen.
 ///

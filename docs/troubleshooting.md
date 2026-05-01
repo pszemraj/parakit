@@ -67,8 +67,8 @@ parakit --paste-mode direct
 ```
 
 Use `standard` for apps that only accept `Ctrl+V`; use `direct` only when an
-app refuses clipboard paste entirely. Streaming insertion uses synthetic typing
-and is not the recommended path for reliability testing.
+app refuses clipboard paste entirely. Streaming mode is disabled while batch
+dictation is stabilized.
 
 On Windows, paste shortcuts are sent with `SendInput`. Windows blocks synthetic
 input into higher-integrity processes, so a normal parakit process cannot paste

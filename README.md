@@ -99,7 +99,7 @@ disown
 ```
 
 See [docs/running.md](docs/running.md) for background launch, model cache,
-logging, microphone selection, paste modes, sounds, and streaming mode.
+logging, microphone selection, paste modes, sounds, and disabled streaming mode.
 
 ## Commands
 

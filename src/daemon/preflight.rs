@@ -235,27 +235,15 @@ fn acquire_singleton_lock_at(path: &std::path::Path) -> Result<std::fs::File> {
 }
 
 #[cfg(target_os = "linux")]
-#[derive(Clone, Copy, Debug)]
-struct LinuxHotkeyAvailability {
-    evdev_ready: bool,
-}
-
-#[cfg(target_os = "linux")]
-fn linux_hotkey_startup_blocked(
-    backend: HotkeyBackend,
-    availability: LinuxHotkeyAvailability,
-) -> bool {
+fn linux_hotkey_startup_blocked(backend: HotkeyBackend, evdev_ready: bool) -> bool {
     match backend {
-        HotkeyBackend::Auto | HotkeyBackend::Evdev => !availability.evdev_ready,
+        HotkeyBackend::Auto | HotkeyBackend::Evdev => !evdev_ready,
         HotkeyBackend::Desktop => true,
     }
 }
 
 #[cfg(target_os = "linux")]
-fn linux_hotkey_success_label(
-    backend: HotkeyBackend,
-    _availability: LinuxHotkeyAvailability,
-) -> &'static str {
+fn linux_hotkey_success_label(backend: HotkeyBackend) -> &'static str {
     match backend {
         HotkeyBackend::Auto => "evdev keyboard grab",
         HotkeyBackend::Evdev => "evdev keyboard grab",
@@ -271,9 +259,8 @@ fn startup_hotkey_report(backend: HotkeyBackend) -> HotkeyReport {
     let user = std::env::var("USER").unwrap_or_else(|_| "$USER".to_string());
     let evdev = evdev_report();
     let evdev_ready = evdev.grab_likely_available();
-    let availability = LinuxHotkeyAvailability { evdev_ready };
-    let blocking = linux_hotkey_startup_blocked(backend, availability);
-    let status = linux_hotkey_status(backend, &evdev, availability, blocking);
+    let blocking = linux_hotkey_startup_blocked(backend, evdev_ready);
+    let status = linux_hotkey_status(backend, &evdev, blocking);
 
     let summary = if blocking {
         let mut summary = String::new();
@@ -305,7 +292,7 @@ fn startup_hotkey_report(backend: HotkeyBackend) -> HotkeyReport {
     } else {
         format!(
             "hotkey preflight passed with {}",
-            linux_hotkey_success_label(backend, availability)
+            linux_hotkey_success_label(backend)
         )
     };
 
@@ -324,16 +311,9 @@ fn hotkey_report(backend: HotkeyBackend) -> HotkeyReport {
     let xauthority = std::env::var("XAUTHORITY").unwrap_or_else(|_| "<unset>".to_string());
     let user = std::env::var("USER").unwrap_or_else(|_| "$USER".to_string());
     let evdev = evdev_report();
-    let x11_candidate = linux_x11_desktop_hotkey_candidate();
-    let x11_probe = if x11_candidate {
-        probe_x11_desktop_hotkey()
-    } else {
-        Err("X11 desktop hotkey backend needs DISPLAY set and a non-Wayland session".to_string())
-    };
     let evdev_ready = evdev.grab_likely_available();
-    let availability = LinuxHotkeyAvailability { evdev_ready };
-    let blocking = linux_hotkey_startup_blocked(backend, availability);
-    let status = linux_hotkey_status(backend, &evdev, availability, blocking);
+    let blocking = linux_hotkey_startup_blocked(backend, evdev_ready);
+    let status = linux_hotkey_status(backend, &evdev, blocking);
 
     let mut details = String::new();
     writeln!(&mut details, "parakit doctor").unwrap();
@@ -349,10 +329,6 @@ fn hotkey_report(backend: HotkeyBackend) -> HotkeyReport {
         "  desktop:        disabled for Linux-stable hotkey capture"
     )
     .unwrap();
-    match &x11_probe {
-        Ok(()) => writeln!(&mut details, "  desktop probe:  X11 Ctrl+Space available").unwrap(),
-        Err(err) => writeln!(&mut details, "  desktop probe:  unavailable ({err})").unwrap(),
-    }
     writeln!(
         &mut details,
         "  evdev:          keyboard grab ({})",
@@ -396,7 +372,7 @@ fn hotkey_report(backend: HotkeyBackend) -> HotkeyReport {
         writeln!(
             &mut details,
             "  status:         OK ({})",
-            linux_hotkey_success_label(backend, availability)
+            linux_hotkey_success_label(backend)
         )
         .unwrap();
     }
@@ -412,11 +388,7 @@ fn hotkey_report(backend: HotkeyBackend) -> HotkeyReport {
         .unwrap();
         writeln!(
             &mut summary,
-            "desktop backend: disabled in the Linux-stable path ({})",
-            x11_probe
-                .as_ref()
-                .map(|_| "X11 probe available".to_string())
-                .unwrap_or_else(|err| format!("X11 probe unavailable: {err}"))
+            "desktop backend: disabled in the Linux-stable path"
         )
         .unwrap();
         writeln!(
@@ -433,7 +405,7 @@ fn hotkey_report(backend: HotkeyBackend) -> HotkeyReport {
     } else if evdev_ready {
         format!(
             "hotkey preflight passed with {}",
-            linux_hotkey_success_label(backend, availability)
+            linux_hotkey_success_label(backend)
         )
     } else {
         unreachable!("non-blocking Linux hotkey report requires evdev readiness")
@@ -484,21 +456,13 @@ impl EvdevReport {
 }
 
 #[cfg(target_os = "linux")]
-fn linux_hotkey_status(
-    backend: HotkeyBackend,
-    evdev: &EvdevReport,
-    availability: LinuxHotkeyAvailability,
-    blocking: bool,
-) -> String {
+fn linux_hotkey_status(backend: HotkeyBackend, evdev: &EvdevReport, blocking: bool) -> String {
     if backend == HotkeyBackend::Desktop {
         return "desktop backend disabled on Linux".to_string();
     }
 
     if !blocking {
-        return format!(
-            "{} ready",
-            linux_hotkey_success_label(backend, availability)
-        );
+        return format!("{} ready", linux_hotkey_success_label(backend));
     }
 
     if !evdev.uinput_writable {
@@ -589,56 +553,6 @@ fn evdev_report() -> EvdevReport {
 }
 
 #[cfg(target_os = "linux")]
-/// Return whether the current environment can plausibly use X11 hotkeys.
-///
-/// # Returns
-///
-/// `true` when `DISPLAY` is set and the session is X11 or unspecified.
-pub(crate) fn linux_x11_desktop_hotkey_candidate() -> bool {
-    let session = std::env::var("XDG_SESSION_TYPE").unwrap_or_default();
-    let display = std::env::var("DISPLAY").unwrap_or_default();
-    !display.is_empty() && (session.is_empty() || session.eq_ignore_ascii_case("x11"))
-}
-
-#[cfg(target_os = "linux")]
-fn probe_x11_desktop_hotkey() -> std::result::Result<(), String> {
-    use x11rb::connection::Connection;
-    use x11rb::protocol::xproto::{ConnectionExt, GrabMode, Keycode, Window};
-    use x11rb::rust_connection::RustConnection;
-
-    fn ungrab(conn: &RustConnection, root: Window, keycode: Keycode) {
-        for mods in super::x11::ctrl_grab_mods() {
-            if let Ok(result) = conn.ungrab_key(keycode, root, mods) {
-                result.ignore_error();
-            }
-        }
-        let _ = conn.flush();
-    }
-
-    let (conn, screen_num) = RustConnection::connect(None).map_err(|err| err.to_string())?;
-    let root = super::x11::root_window(&conn, screen_num).map_err(|err| err.to_string())?;
-    let keycode = super::x11::keycode_for_keysym(&conn, super::x11::SPACE_KEYSYM)
-        .map_err(|err| err.to_string())?;
-
-    for mods in super::x11::ctrl_grab_mods() {
-        match conn
-            .grab_key(false, root, mods, keycode, GrabMode::ASYNC, GrabMode::ASYNC)
-            .map_err(|err| err.to_string())?
-            .check()
-        {
-            Ok(()) => {}
-            Err(err) => {
-                ungrab(&conn, root, keycode);
-                return Err(format!("XGrabKey rejected Ctrl+Space: {err}"));
-            }
-        }
-    }
-    conn.flush().map_err(|err| err.to_string())?;
-    ungrab(&conn, root, keycode);
-    Ok(())
-}
-
-#[cfg(target_os = "linux")]
 fn write_linux_fix(out: &mut String, user: &str) {
     writeln!(
         out,
@@ -685,44 +599,18 @@ mod tests {
     use super::*;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    fn availability(evdev_ready: bool) -> LinuxHotkeyAvailability {
-        LinuxHotkeyAvailability { evdev_ready }
-    }
-
     #[test]
-    fn auto_requires_evdev_readiness() {
-        assert!(!linux_hotkey_startup_blocked(
-            HotkeyBackend::Auto,
-            availability(true)
-        ));
-        assert!(linux_hotkey_startup_blocked(
-            HotkeyBackend::Auto,
-            availability(false)
-        ));
-    }
-
-    #[test]
-    fn forced_evdev_requires_evdev_readiness() {
-        assert!(!linux_hotkey_startup_blocked(
-            HotkeyBackend::Evdev,
-            availability(true)
-        ));
-        assert!(linux_hotkey_startup_blocked(
-            HotkeyBackend::Evdev,
-            availability(false)
-        ));
+    fn auto_and_evdev_require_evdev_readiness() {
+        for backend in [HotkeyBackend::Auto, HotkeyBackend::Evdev] {
+            assert!(!linux_hotkey_startup_blocked(backend, true));
+            assert!(linux_hotkey_startup_blocked(backend, false));
+        }
     }
 
     #[test]
     fn forced_desktop_is_disabled() {
-        assert!(linux_hotkey_startup_blocked(
-            HotkeyBackend::Desktop,
-            availability(true)
-        ));
-        assert!(linux_hotkey_startup_blocked(
-            HotkeyBackend::Desktop,
-            availability(false)
-        ));
+        assert!(linux_hotkey_startup_blocked(HotkeyBackend::Desktop, true));
+        assert!(linux_hotkey_startup_blocked(HotkeyBackend::Desktop, false));
     }
 
     #[test]

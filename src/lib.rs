@@ -1,5 +1,7 @@
 //! Shared parakit modules used by the daemon and debugging tools.
 
+/// WAV decoding and resampling helpers.
+pub mod audio_file;
 /// Build-time CrispASR and ggml diagnostics.
 pub mod build_info;
 /// File checksum helpers.
@@ -14,7 +16,7 @@ pub mod fetch;
 pub mod gguf;
 /// CrispASR-backed transcription engine.
 pub mod inference;
-/// Canonical model names, cache paths, and model path resolution.
+/// Canonical model names and cache paths.
 pub mod model;
 /// Regex-based transcript cleanup rules.
 pub mod rules;

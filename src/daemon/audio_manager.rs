@@ -9,10 +9,9 @@ use anyhow::{anyhow, Context, Result};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{SampleFormat, Stream, StreamConfig};
 use crossbeam_channel::bounded;
+use parakit::audio_file::resampler_params;
 use parking_lot::Mutex;
-use rubato::{
-    Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction,
-};
+use rubato::{Resampler, SincFixedIn};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
@@ -391,16 +390,14 @@ fn make_resampler(hw_rate: u32) -> Result<Option<ResamplerState>> {
         return Ok(None);
     }
 
-    let params = SincInterpolationParameters {
-        sinc_len: 128,
-        f_cutoff: 0.95,
-        interpolation: SincInterpolationType::Linear,
-        oversampling_factor: 256,
-        window: WindowFunction::BlackmanHarris2,
-    };
-    let resampler =
-        SincFixedIn::<f32>::new(TARGET_RATE as f64 / hw_rate as f64, 2.0, params, 1024, 1)
-            .context("failed to construct resampler")?;
+    let resampler = SincFixedIn::<f32>::new(
+        TARGET_RATE as f64 / hw_rate as f64,
+        2.0,
+        resampler_params(),
+        1024,
+        1,
+    )
+    .context("failed to construct resampler")?;
     Ok(Some(ResamplerState::new(resampler, 1024)))
 }
 

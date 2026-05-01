@@ -4,7 +4,6 @@ use crate::constants::TARGET_RATE;
 use anyhow::{Context, Result};
 use std::borrow::Cow;
 use std::path::Path;
-use std::str::FromStr;
 
 /// Minimum PCM length sent to CrispASR.
 ///
@@ -12,36 +11,6 @@ use std::str::FromStr;
 /// pipeline. Right-padding with silence keeps the hotkey behavior predictable
 /// without dropping the user's utterance.
 const MIN_INFERENCE_SAMPLES: usize = TARGET_RATE as usize;
-
-/// Transcription mode used by the daemon.
-#[derive(Clone, Copy, Debug)]
-pub enum Mode {
-    /// Transcribe the full utterance after the hotkey is released.
-    Batch,
-    /// Emit partial transcripts while recording.
-    Streaming { chunk_secs: f32 },
-}
-
-impl FromStr for Mode {
-    type Err = anyhow::Error;
-
-    fn from_str(s: &str) -> Result<Self> {
-        match s {
-            "batch" => Ok(Mode::Batch),
-            "streaming" => Ok(Mode::Streaming { chunk_secs: 4.0 }),
-            other if other.starts_with("streaming:") => {
-                let secs: f32 = other.trim_start_matches("streaming:").parse()?;
-                if !secs.is_finite() || secs <= 0.0 {
-                    anyhow::bail!("streaming chunk seconds must be positive and finite");
-                }
-                Ok(Mode::Streaming { chunk_secs: secs })
-            }
-            other => Err(anyhow::anyhow!(
-                "unknown mode '{other}'. Expected 'batch' or 'streaming' or 'streaming:<seconds>'"
-            )),
-        }
-    }
-}
 
 /// Thin wrapper so the rest of the code never touches `crispasr` directly.
 ///
@@ -56,25 +25,6 @@ pub struct Engine {
 }
 
 impl Engine {
-    /// Open a GGUF model through CrispASR.
-    ///
-    /// # Returns
-    ///
-    /// An initialized transcription engine.
-    ///
-    /// # Arguments
-    ///
-    /// * `model_path` - GGUF model file to load.
-    /// * `threads` - CPU inference thread count requested from CrispASR.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the model path is not a file, is not UTF-8, or
-    /// CrispASR cannot load the model.
-    pub fn open<P: AsRef<Path>>(model_path: P) -> Result<Self> {
-        Self::open_with_threads(model_path, default_thread_count())
-    }
-
     /// Open a GGUF model with a requested CPU thread count.
     ///
     /// # Arguments
@@ -211,33 +161,11 @@ mod tests {
     }
 
     #[test]
-    fn parses_valid_modes() {
-        assert!(matches!("batch".parse::<Mode>().unwrap(), Mode::Batch));
-        match "streaming".parse::<Mode>().unwrap() {
-            Mode::Streaming { chunk_secs } => assert_eq!(chunk_secs, 4.0),
-            Mode::Batch => panic!("expected streaming mode"),
-        }
-        match "streaming:2.5".parse::<Mode>().unwrap() {
-            Mode::Streaming { chunk_secs } => assert_eq!(chunk_secs, 2.5),
-            Mode::Batch => panic!("expected streaming mode"),
-        }
-    }
-
-    #[test]
-    fn rejects_invalid_streaming_chunk_sizes() {
-        for mode in [
-            "streaming:0",
-            "streaming:-1",
-            "streaming:NaN",
-            "streaming:inf",
-        ] {
-            assert!(mode.parse::<Mode>().is_err(), "{mode} should fail");
-        }
-    }
-
-    #[test]
     fn missing_model_path_fails_before_crispasr() {
-        let err = match Engine::open("target/tmp/definitely-missing-parakit-model.gguf") {
+        let err = match Engine::open_with_threads(
+            "target/tmp/definitely-missing-parakit-model.gguf",
+            1,
+        ) {
             Ok(_) => panic!("missing model path should fail"),
             Err(err) => err,
         };

@@ -19,7 +19,7 @@ use arboard::Clipboard;
 use clap::ValueEnum;
 #[cfg(not(target_os = "linux"))]
 use enigo::Direction;
-#[cfg(any(test, not(target_os = "linux")))]
+#[cfg(not(target_os = "linux"))]
 use enigo::Key;
 use enigo::{Enigo, Keyboard, Settings};
 #[cfg(target_os = "linux")]
@@ -346,15 +346,6 @@ fn sleep_if_nonzero(delay: Duration) {
 fn paste_modifiers(mode: PasteMode) -> &'static [Key] {
     match mode {
         PasteMode::Standard | PasteMode::Terminal => &[Key::Meta],
-        PasteMode::Direct => &[],
-    }
-}
-
-#[cfg(all(test, target_os = "linux"))]
-fn paste_modifiers(mode: PasteMode) -> &'static [Key] {
-    match mode {
-        PasteMode::Standard => &[Key::Control],
-        PasteMode::Terminal => &[Key::Control, Key::Shift],
         PasteMode::Direct => &[],
     }
 }
@@ -870,7 +861,7 @@ mod tests {
         );
     }
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(target_os = "linux"))]
     #[test]
     fn direct_mode_has_no_paste_modifiers() {
         assert!(paste_modifiers(PasteMode::Direct).is_empty());

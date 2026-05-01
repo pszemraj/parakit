@@ -45,9 +45,7 @@ impl HotkeyBackend {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum HotkeyAction {
-    Start {
-        started_at: Instant,
-    },
+    Start,
     Stop {
         started_at: Instant,
         stopped_at: Instant,
@@ -64,7 +62,6 @@ struct HotkeyState {
     alt_gr: bool,
     meta_left: bool,
     meta_right: bool,
-    space: bool,
     suppress_space_release: bool,
     recording: bool,
     started_at: Option<Instant>,
@@ -112,7 +109,7 @@ impl HotkeyState {
             self.recording = true;
             self.started_at = Some(now);
             self.last_start = Some(now);
-            Some(HotkeyAction::Start { started_at: now })
+            Some(HotkeyAction::Start)
         } else {
             None
         }
@@ -124,7 +121,10 @@ impl HotkeyState {
         }
 
         self.recording = false;
-        let started_at = self.started_at.take().unwrap_or(stopped_at);
+        let started_at = self
+            .started_at
+            .take()
+            .expect("recording state requires a start timestamp");
         Some(HotkeyAction::Stop {
             started_at,
             stopped_at,
@@ -158,7 +158,7 @@ impl HotkeyState {
             Key::AltGr => self.alt_gr = pressed,
             Key::MetaLeft => self.meta_left = pressed,
             Key::MetaRight => self.meta_right = pressed,
-            Key::Space => self.space = pressed,
+            Key::Space => {}
             _ => {}
         }
     }
@@ -528,9 +528,9 @@ fn handle_key_event(
 
 fn dispatch_hotkey_action(action: HotkeyAction, audio: &AudioHandle, tx: &Sender<Event_>) {
     match action {
-        HotkeyAction::Start { started_at } => {
+        HotkeyAction::Start => {
             audio.start_recording();
-            let _ = tx.send(Event_::RecordingStarted { started_at });
+            let _ = tx.send(Event_::RecordingStarted);
         }
         HotkeyAction::Stop {
             started_at,
@@ -597,12 +597,7 @@ mod tests {
         assert_eq!(state.press(Key::ControlLeft, now), (None, false));
         assert_eq!(
             state.press(Key::Space, now + Duration::from_millis(10)),
-            (
-                Some(HotkeyAction::Start {
-                    started_at: now + Duration::from_millis(10)
-                }),
-                true
-            )
+            (Some(HotkeyAction::Start), true)
         );
         assert_eq!(
             state.release(Key::Space, now + Duration::from_millis(300)),
@@ -661,12 +656,7 @@ mod tests {
         state.press(Key::ControlLeft, now);
         assert_eq!(
             state.press(Key::Space, now + Duration::from_millis(10)),
-            (
-                Some(HotkeyAction::Start {
-                    started_at: now + Duration::from_millis(10)
-                }),
-                true
-            )
+            (Some(HotkeyAction::Start), true)
         );
         assert_eq!(
             state.press(Key::Space, now + Duration::from_millis(20)),
