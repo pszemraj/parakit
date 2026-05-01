@@ -10,7 +10,9 @@ not need a `-m` model argument.
 
 ## Install
 
-Install the native packages for your OS from [docs/build.md](docs/build.md), then:
+Install the native, OS-specific packages needed[^1] as explained in [docs/build.md](docs/build.md), then:
+
+[^1]: these are mostly audio stream handling + monitoring (if shortcut pressed) related
 
 ```bash
 git clone --recurse-submodules https://github.com/pszemraj/parakit.git
@@ -26,12 +28,24 @@ export PATH="$HOME/.cargo/bin:$PATH"
 
 ## First Run
 
+Run the doctor subcommand and start up the daemon.
+
 ```bash
 parakit doctor && parakit
 ```
 
-Linux insertion requires an X11 session. Wayland sessions are rejected because
-XTest cannot insert into focused native Wayland applications.
+If `doctor` finds issues with the setup/build, it will exit 1 and display detials on what is wrong. Otherwise, the following `parakit` starts up the daemon and you're ready to try it:
+
+1. Switch to anywhere else, and put the cursor where you want to dictate into
+2. press & hold CTRL+space, say something, then let go of CTRL+space
+  - sounds are played to indicate: started listening for dictation, finished listening, or an error
+3. observe your dictated text appear at your cursor
+
+More details are in the console outputs. That's it! For info on how to run parakit as a background process & other adv options, see [docs/running.md](docs/running.md)
+
+**gotcha:** Linux insertion requires an X11 session[^2]
+
+[^2]: Wayland sessions are rejected because XTest cannot insert into focused native Wayland applications. This is a common limitation across dictation tools
 
 ## Docs
 
