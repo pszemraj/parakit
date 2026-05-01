@@ -23,9 +23,13 @@ parakit doctor --deep
 ```
 
 `--verbose` and `--quiet` are global flags, so they go before `doctor`.
+On Linux, Wayland sessions fail insertion preflight even when XWayland exposes a
+`DISPLAY`; use an X11 session.
 
-The first real `parakit` run downloads the default Q8_0 GGUF if it is not
-already cached, then opens the microphone and hotkey backend.
+The daemon checks the hotkey backend, insertion backend, and singleton lock
+before any model download. If those preflights pass, the first successful
+startup downloads the default Q8_0 GGUF if it is not already cached, opens the
+model, and starts the microphone and hotkey loop.
 
 Normal startup:
 
@@ -123,7 +127,7 @@ parakit --paste-mode direct    # synthetic typing, no clipboard
 ```
 
 Use `direct` only as an app-compatibility fallback. It is slower and can be
-less reliable for non-ASCII text.
+less reliable for non-ASCII text. On Linux it still requires an X11 session.
 
 Streaming mode is temporarily disabled while Linux batch dictation is being
 stabilized. Use batch mode for quality checks.

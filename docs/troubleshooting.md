@@ -1,6 +1,6 @@
 # Troubleshooting
 
-Start with diagnostics:
+Start with diagnostics. `doctor` does not load the model.
 
 ```bash
 parakit doctor
@@ -8,20 +8,15 @@ parakit --verbose doctor
 parakit doctor --deep
 ```
 
-`doctor` does not load the model. It exits `0` when the daemon should start and
-`1` when a blocking issue remains, so `parakit doctor && parakit` is the safe
-launch pattern. Normal launch behavior is covered in [running.md](running.md).
+It exits `0` when startup should proceed and `1` when a blocking issue remains.
+Launch behavior is in [running.md](running.md).
 
 ## Hotkey Problems
 
-Linux backend and permission setup is in
-[linux-desktop.md](linux-desktop.md).
-
-If `Ctrl+Space` is unavailable, another desktop shortcut, input method, or
-keyboard remapper may own it. Disable that binding and rerun `parakit doctor`.
-
-If `doctor` reports `Connection refused` for X11 after a logout/login, start a
-new terminal or tmux server from the current desktop session.
+Linux backend, X11 session, evdev, and `/dev/uinput` setup are in
+[linux-desktop.md](linux-desktop.md). If `Ctrl+Space` is unavailable, another
+desktop shortcut, input method, or keyboard remapper may own it. Disable that
+binding and rerun `parakit doctor`.
 
 On macOS, grant Accessibility and Input Monitoring permissions to both the
 terminal and the built binary.
@@ -38,14 +33,12 @@ space reaches the focused app:
 
 ## Text Does Not Insert
 
-Batch insertion writes the transcript to the clipboard, sends the paste
-shortcut, then restores the previous text clipboard when possible. See
-[running.md#insertion](running.md#insertion) for paste modes.
+Paste modes are described in [running.md#insertion](running.md#insertion).
 
-Run `parakit doctor --deep` for an active insertion smoke test. Use `standard`
-for apps that only accept `Ctrl+V`; use `direct` only when an app refuses
-clipboard paste entirely. Streaming mode is disabled while batch dictation is
-stabilized.
+Run `parakit doctor --deep` for an active insertion smoke test. On Linux, use
+an X11 session; Wayland is rejected because XTest cannot insert into focused
+native Wayland applications. Use `standard` for apps that only accept `Ctrl+V`;
+use `direct` only when an app refuses clipboard paste entirely.
 
 On Windows, paste shortcuts are sent with `SendInput`. Windows blocks synthetic
 input into higher-integrity processes, so a normal parakit process cannot paste
@@ -92,18 +85,11 @@ git submodule update --init --recursive
 cargo build --release
 ```
 
-Shared library loading on Linux:
+For shared library loading failures on Linux, check
+[build.md#runtime-library-paths](build.md#runtime-library-paths).
 
-```bash
-ldd target/debug/parakit | grep -E "whisper|ggml"
-readelf -d target/debug/parakit | grep -E "RPATH|RUNPATH"
-```
-
-The paths should point into `target/debug/build/parakit-*/out/lib`, and
-`readelf` should report `RPATH`. More detail is in
-[build.md](build.md#runtime-library-paths).
-
-Vulkan failing on `spirv/unified1/spirv.hpp` means `spirv-headers` is missing:
+Vulkan failing on `spirv/unified1/spirv.hpp` means `spirv-headers` is missing.
+Install it and rebuild with the Vulkan feature:
 
 ```bash
 sudo apt install spirv-headers
@@ -111,15 +97,6 @@ cargo build --release --features vulkan
 ```
 
 Windows builds need generated DLLs next to the executable or on `PATH`; see
-[build.md](build.md#windows-dlls).
+[build.md#windows-dlls](build.md#windows-dlls).
 
-Model cache commands:
-
-```bash
-parakit fetch --force
-parakit cache
-parakit cache dir
-```
-
-With no `-m`, parakit downloads the default Q8_0 model on first run. A custom
-`-m <path>` always wins and disables automatic fetch.
+Model cache behavior and commands are in [running.md#model-cache](running.md#model-cache).

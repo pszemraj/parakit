@@ -7,8 +7,9 @@ real audio clips.
 
 Model card: <https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3>
 
-`requirements.txt` is for the NeMo reference helper. `requirements-convert.txt`
-is only for maintainer source rebuilds from NVIDIA's `.nemo` checkpoint.
+`requirements.txt` belongs to the NeMo reference helper.
+`requirements-convert.txt` belongs to maintainer source rebuilds described in
+[../docs/dev.md#source-rebuild](../docs/dev.md#source-rebuild).
 
 ## NeMo Reference Setup
 
@@ -16,8 +17,8 @@ Use a separate Python environment. NeMo and PyTorch are heavy dependencies and
 should not be installed just to run the Rust daemon.
 
 ```bash
-python -m venv .venv-nemo
-source .venv-nemo/bin/activate
+python -m venv target/tmp/.venv-nemo
+source target/tmp/.venv-nemo/bin/activate
 python -m pip install --upgrade pip
 python -m pip install -r scripts/requirements.txt
 ```
@@ -40,13 +41,3 @@ The script prints one JSON object per input file:
 
 Missing `torch` or `nemo` imports fail immediately. That is intentional: this
 script has one job, and a broken reference environment should be obvious.
-
-## Source-Rebuild Converter Setup
-
-Use this only when rebuilding hosted GGUF artifacts from NVIDIA's official
-checkpoint:
-
-```bash
-python -m pip install -r scripts/requirements-convert.txt
-parakit fetch --from-source --keep-f16 --keep-nemo
-```

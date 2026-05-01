@@ -41,12 +41,8 @@ Streaming mode is currently disabled while the Linux batch path is stabilized.
   its own thread.
 - `crispasr::Session` is `Send` but not `Sync`, so the worker owns `Engine`
   directly. Do not wrap it in `Arc<Engine>`.
-- Linux `auto` uses a narrow evdev keyboard grab and skips busy physical
-  devices when a usable virtual keyboard device is available.
-- Linux evdev readiness requires a readable `Ctrl+Space` keyboard candidate and
-  writable `/dev/uinput`; unreadable unrelated event devices are diagnostic
-  noise, not a startup blocker.
-- The X11 desktop hotkey backend is disabled in the Linux-stable path.
+- Linux hotkey capture uses evdev; Linux text insertion uses X11/XTest and
+  rejects Wayland sessions.
 - The active hotkey backend must suppress the literal Space key before it
   reaches the focused application.
 

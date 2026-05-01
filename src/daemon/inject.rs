@@ -9,8 +9,8 @@
 //!   - Linux X11: uses `XTestFakeKeyEvent` plus a temporary keymap remap
 //!     for non-keyboard characters. Works for ASCII/Latin reliably; some
 //!     emoji or rare scripts may not pass through cleanly.
-//!   - Linux Wayland: limited and depends on the compositor. Most do not
-//!     allow synthetic key events from a regular client. Use X11.
+//!   - Linux Wayland: unsupported. Startup preflight rejects Wayland sessions
+//!     because XTest cannot insert into focused native Wayland applications.
 //!   - macOS: synthesizes via the CGEvent API. Requires the launcher to
 //!     be granted "Input Monitoring" + "Accessibility" permissions.
 

@@ -32,10 +32,6 @@ as `spirv-tools`.
 ```bash
 git submodule update --init --recursive
 cargo install --path .
-PARAKIT_BLAS=auto cargo install --path .
-cargo install --path . --features cuda
-cargo install --path . --features vulkan
-cargo install --path . --features metal
 ```
 
 `cargo install --path .` installs the release binary to Cargo's bin directory,
@@ -43,6 +39,15 @@ usually `~/.cargo/bin`.
 
 Add `--locked` for CI or reproducibility checks when Cargo must use the exact
 versions in `Cargo.lock`. Leave it off for normal local installs.
+
+Optional accelerator builds:
+
+```bash
+PARAKIT_BLAS=auto cargo install --path .
+cargo install --path . --features cuda
+cargo install --path . --features vulkan
+cargo install --path . --features metal  # Apple targets only
+```
 
 Windows support is experimental. Prefer a normal Rust build first:
 
@@ -68,7 +73,7 @@ parakit --verbose doctor
 ```
 
 Benchmark different thread counts without the daemon by running the WAV quality
-target:
+target described in [quality.md#wav-quality-target](quality.md#wav-quality-target):
 
 ```bash
 cargo run --release --example transcribe-file -- --audio path/to/sample.wav --threads 8 --repeat 3

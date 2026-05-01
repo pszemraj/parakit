@@ -7,10 +7,10 @@ Default behavior:
 - `auto` and `evdev` use the Linux evdev keyboard grab backend.
 - `desktop` exits with an error on Linux.
 - Hotkey capture reads evdev devices, so it is not an X11 global shortcut.
-- Linux paste insertion uses X11/XTest. Use an X11 session for the full
-  dictate-and-insert workflow.
-- Wayland hotkey capture may work with evdev permissions, but insertion is
-  compositor-dependent and not a supported Linux path today.
+- Linux insertion uses X11/XTest and requires an X11 session for every paste
+  mode, including `direct`.
+- Wayland sessions are rejected during startup. An XWayland `DISPLAY` is not
+  enough because XTest cannot insert into focused native Wayland applications.
 
 ## X11 Sessions
 
