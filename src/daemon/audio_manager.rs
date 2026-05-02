@@ -175,6 +175,7 @@ impl CaptureState {
         }
         self.buffer.clear();
         self.buffer.extend(self.pre_roll.iter().copied());
+        self.pre_roll.clear();
     }
 
     fn push_pre_roll(&mut self, samples: &[f32]) {
@@ -434,6 +435,11 @@ fn open_live_stream(
         Arc::clone(&stream_alive),
     )
     .context("spawn audio drain")?;
+    let drain = AudioDrain {
+        alive: stream_alive,
+        wake: wake_tx.clone(),
+        thread: Some(drain),
+    };
 
     let stream = match selected.config.sample_format() {
         SampleFormat::I8 => build_stream::<i8>(
@@ -516,11 +522,7 @@ fn open_live_stream(
         info,
         identity,
         _stream: stream,
-        _drain: AudioDrain {
-            alive: stream_alive,
-            wake: wake_tx,
-            thread: Some(drain),
-        },
+        _drain: drain,
     })
 }
 
@@ -951,9 +953,21 @@ fn append_processed_samples(
     samples: &[f32],
 ) {
     let observed_epoch = session_epoch.load(Ordering::Acquire);
+    append_processed_samples_observed(state, session_epoch, observed_epoch, samples);
+}
+
+fn append_processed_samples_observed(
+    state: &Mutex<CaptureState>,
+    session_epoch: &AtomicU64,
+    observed_epoch: u64,
+    samples: &[f32],
+) {
     let mut state = state.lock();
-    state.push_pre_roll(samples);
-    if observed_epoch != 0 && session_epoch.load(Ordering::Acquire) == observed_epoch {
+    let current_epoch = session_epoch.load(Ordering::Acquire);
+
+    if observed_epoch == 0 && current_epoch == 0 {
+        state.push_pre_roll(samples);
+    } else if observed_epoch != 0 && current_epoch == observed_epoch {
         state.append_recording(samples);
     }
 }

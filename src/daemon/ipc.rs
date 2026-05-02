@@ -3,10 +3,14 @@
 use anyhow::{bail, Context, Result};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
+#[cfg(unix)]
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::thread::{self, JoinHandle};
+#[cfg(unix)]
+use std::thread;
+use std::thread::JoinHandle;
+#[cfg(unix)]
 use std::time::Duration;
 
 use super::{
@@ -177,12 +181,12 @@ fn spawn_server_impl(
     log: Arc<Logger>,
 ) -> Result<IpcServer> {
     use std::io::ErrorKind;
+    use std::os::unix::fs::PermissionsExt;
     use std::os::unix::net::UnixListener;
 
     let path = preflight::control_socket_path()?;
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("create daemon socket dir {}", parent.display()))?;
+        ensure_private_socket_dir(parent)?;
     }
     match std::fs::remove_file(&path) {
         Ok(()) => {}
@@ -192,6 +196,8 @@ fn spawn_server_impl(
 
     let listener = UnixListener::bind(&path)
         .with_context(|| format!("bind daemon control socket {}", path.display()))?;
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+        .with_context(|| format!("restrict daemon control socket {}", path.display()))?;
     let thread = thread::Builder::new()
         .name("parakit-ipc".into())
         .spawn(move || {
@@ -265,6 +271,43 @@ fn read_command(
     serde_json::from_str(&line).map_err(|err| IpcResponse::Err {
         message: format!("invalid control command: {err}"),
     })
+}
+
+#[cfg(unix)]
+fn ensure_private_socket_dir(path: &std::path::Path) -> Result<()> {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+    std::fs::create_dir_all(path)
+        .with_context(|| format!("create daemon socket dir {}", path.display()))?;
+    let meta = std::fs::symlink_metadata(path)
+        .with_context(|| format!("inspect daemon socket dir {}", path.display()))?;
+    if !meta.file_type().is_dir() {
+        bail!("daemon socket path is not a directory: {}", path.display());
+    }
+    let euid = unsafe { libc::geteuid() };
+    if meta.uid() != euid {
+        bail!(
+            "daemon socket dir {} is not owned by the current user",
+            path.display()
+        );
+    }
+
+    if meta.permissions().mode() & 0o777 != 0o700 {
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
+            .with_context(|| format!("restrict daemon socket dir {}", path.display()))?;
+    }
+    let mode = std::fs::symlink_metadata(path)
+        .with_context(|| format!("reinspect daemon socket dir {}", path.display()))?
+        .permissions()
+        .mode()
+        & 0o777;
+    if mode != 0o700 {
+        bail!(
+            "daemon socket dir {} must have mode 0700, got {mode:o}",
+            path.display()
+        );
+    }
+    Ok(())
 }
 
 fn handle_command(
@@ -396,5 +439,28 @@ mod tests {
                 last_transcript_len: Some(5),
             } if phase == "recording"
         ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn socket_dir_is_restricted_to_owner() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = PathBuf::from("target/tmp/ipc-private-dir-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("test dir should be created");
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755))
+            .expect("test dir permissions should be set");
+
+        ensure_private_socket_dir(&dir).expect("socket dir should be restricted");
+
+        let mode = std::fs::metadata(&dir)
+            .expect("test dir metadata")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o700);
+
+        std::fs::remove_dir_all(&dir).expect("test dir should be removed");
     }
 }

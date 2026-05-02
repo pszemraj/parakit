@@ -24,23 +24,29 @@ pub(crate) fn inspect_current_target() -> TargetDecision {
 fn inspect_current_target_impl() -> TargetDecision {
     let x11_class = current_x11_wm_class().ok().flatten();
     let atspi = current_atspi_focus();
+    target_decision(x11_class.as_deref(), atspi)
+}
 
+#[cfg(target_os = "linux")]
+fn target_decision(x11_class: Option<&str>, atspi: Option<AtspiFocus>) -> TargetDecision {
     if let Some(focus) = atspi {
         if focus.password {
             return TargetDecision::Block("password field");
         }
-        if x11_class.as_deref().is_some_and(is_file_manager_class) && !focus.editable {
-            return TargetDecision::CopyOnly("file manager target is not editable");
-        }
-        return TargetDecision::Allow;
     }
 
-    if let Some(class) = x11_class.as_deref() {
-        if is_file_manager_class(class) {
-            return TargetDecision::CopyOnly("file manager target could not be verified editable");
-        }
+    if let Some(class) = x11_class {
         if is_desktop_shell_class(class) {
             return TargetDecision::CopyOnly("desktop shell target");
+        }
+        if is_file_manager_class(class) {
+            return match atspi {
+                Some(focus) if focus.editable => TargetDecision::Allow,
+                Some(_) => TargetDecision::CopyOnly("file manager target is not editable"),
+                None => {
+                    TargetDecision::CopyOnly("file manager target could not be verified editable")
+                }
+            };
         }
     }
 
@@ -199,6 +205,36 @@ mod tests {
         assert!(is_desktop_shell_class("gnome-shell"));
         assert!(is_desktop_shell_class("plasmashell"));
         assert!(!is_desktop_shell_class("kitty"));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn shell_class_stays_copy_only_even_with_atspi_focus() {
+        assert_eq!(
+            target_decision(
+                Some("gnome-shell"),
+                Some(AtspiFocus {
+                    password: false,
+                    editable: true,
+                }),
+            ),
+            TargetDecision::CopyOnly("desktop shell target")
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn password_atspi_focus_blocks_before_copy_only_class_checks() {
+        assert_eq!(
+            target_decision(
+                Some("gnome-shell"),
+                Some(AtspiFocus {
+                    password: true,
+                    editable: true,
+                }),
+            ),
+            TargetDecision::Block("password field")
+        );
     }
 
     #[cfg(target_os = "linux")]

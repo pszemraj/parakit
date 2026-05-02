@@ -62,19 +62,50 @@ fn append_processed_samples_honors_hard_cap() {
 }
 
 #[test]
-fn stale_audio_chunks_are_kept_as_pre_roll_but_not_recording() {
+fn stale_audio_chunks_are_dropped_from_recording_and_pre_roll() {
     let state = Mutex::new(CaptureState::new());
     let session_epoch = AtomicU64::new(1);
 
     append_processed_samples(&state, &session_epoch, &[0.1, 0.2]);
     session_epoch.store(0, Ordering::Release);
-    append_processed_samples(&state, &session_epoch, &[0.3, 0.4]);
+    append_processed_samples_observed(&state, &session_epoch, 1, &[0.3, 0.4]);
 
     let state = state.lock();
     assert_eq!(state.buffer.as_slice(), &[0.1, 0.2]);
+    assert!(state.pre_roll.is_empty());
+}
+
+#[test]
+fn active_recording_samples_do_not_refresh_pre_roll() {
+    let state = Mutex::new(CaptureState::new());
+    let session_epoch = AtomicU64::new(0);
+
+    append_processed_samples(&state, &session_epoch, &[0.1, 0.2]);
+    session_epoch.store(1, Ordering::Release);
+    append_processed_samples(&state, &session_epoch, &[0.8, 0.9]);
+
+    let state = state.lock();
+    assert_eq!(state.buffer.as_slice(), &[0.8, 0.9]);
     assert_eq!(
         state.pre_roll.iter().copied().collect::<Vec<_>>(),
-        &[0.1, 0.2, 0.3, 0.4]
+        &[0.1, 0.2]
+    );
+}
+
+#[test]
+fn idle_observed_chunks_are_dropped_if_recording_starts_before_append() {
+    let state = Mutex::new(CaptureState::new());
+    let session_epoch = AtomicU64::new(0);
+
+    append_processed_samples(&state, &session_epoch, &[0.1, 0.2]);
+    session_epoch.store(1, Ordering::Release);
+    append_processed_samples_observed(&state, &session_epoch, 0, &[0.3, 0.4]);
+
+    let state = state.lock();
+    assert!(state.buffer.is_empty());
+    assert_eq!(
+        state.pre_roll.iter().copied().collect::<Vec<_>>(),
+        &[0.1, 0.2]
     );
 }
 
@@ -96,6 +127,29 @@ fn stop_recording_keeps_final_chunk_already_inside_pipeline() {
 }
 
 #[test]
+fn audio_drain_drop_stops_thread() {
+    let ring = HeapRb::<f32>::new(8);
+    let (_producer, consumer) = ring.split();
+    let (wake_tx, wake_rx) = bounded::<()>(1);
+    let alive = Arc::new(AtomicBool::new(true));
+    let thread = spawn_audio_drain(
+        consumer,
+        wake_rx,
+        Arc::new(Mutex::new(CaptureState::new())),
+        Arc::new(AtomicU64::new(0)),
+        CapturePipeline::default(),
+        Arc::clone(&alive),
+    )
+    .expect("audio drain should spawn");
+
+    drop(AudioDrain {
+        alive,
+        wake: wake_tx,
+        thread: Some(thread),
+    });
+}
+
+#[test]
 fn start_recording_seeds_buffer_with_pre_roll() {
     let handle = AudioHandle::test_handle();
     append_processed_samples(&handle.state, &handle.session_epoch, &[0.1, 0.2, 0.3]);
@@ -104,6 +158,20 @@ fn start_recording_seeds_buffer_with_pre_roll() {
     let pcm = handle.stop_recording();
 
     assert_eq!(pcm, vec![0.1, 0.2, 0.3]);
+}
+
+#[test]
+fn start_recording_consumes_pre_roll() {
+    let handle = AudioHandle::test_handle();
+    append_processed_samples(&handle.state, &handle.session_epoch, &[0.1, 0.2, 0.3]);
+
+    handle.start_recording();
+    let first = handle.stop_recording();
+    handle.start_recording();
+    let second = handle.stop_recording();
+
+    assert_eq!(first, vec![0.1, 0.2, 0.3]);
+    assert!(second.is_empty());
 }
 
 #[test]
