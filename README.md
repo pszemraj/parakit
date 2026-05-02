@@ -37,11 +37,7 @@ If `doctor` finds issues with the setup/build, it will exit 1 and display detail
 
 For background mode, model cache paths, logging, and paste options, see [docs/running.md](docs/running.md).
 
-Linux currently requires an X11 session for the default hotkey and insertion path; see [docs/linux-desktop.md](docs/linux-desktop.md).
-
-## Bluetooth Microphones
-
-Bluetooth microphones and Bluetooth headset microphones are allowed, but they are a poor fit for push-to-talk dictation. Headset profiles often add buffering, clip the beginning of speech, change sample rates or routes unexpectedly, and apply aggressive gain or noise processing. Bluetooth output is fine; Bluetooth input is not recommended.
+Linux currently requires an X11 session for desktop hotkeys and text insertion; see [docs/linux-desktop.md](docs/linux-desktop.md).
 
 ## Docs
 
@@ -49,8 +45,12 @@ Bluetooth microphones and Bluetooth headset microphones are allowed, but they ar
 - Running, model cache, logging, and paste modes: [docs/running.md](docs/running.md)
 - Linux X11 and experimental evdev-proxy setup: [docs/linux-desktop.md](docs/linux-desktop.md)
 - Cleanup rules: [docs/cleaning-rules.md](docs/cleaning-rules.md)
+- Validation and quality checks: [docs/quality.md](docs/quality.md)
+- Architecture and deferred platform work: [docs/architecture.md](docs/architecture.md)
+- Maintainer notes: [docs/dev.md](docs/dev.md)
+- Python helpers: [scripts/README.md](scripts/README.md)
 - Troubleshooting: [docs/troubleshooting.md](docs/troubleshooting.md)
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+Project code is MIT. See [LICENSE](LICENSE). Downloaded model files keep their upstream licenses; Parakeet-TDT-0.6B-v3 weights are CC-BY-4.0.

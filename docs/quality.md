@@ -46,7 +46,7 @@ Use 5 to 10 real clips that cover:
 
 Compare against:
 
-1. NeMo, parakeet-mlx, or another trusted Parakeet reference implementation.
+1. NeMo or another trusted Parakeet reference implementation.
 2. parakit with an F16 GGUF model.
 3. parakit with the cached Q8_0 GGUF model.
 

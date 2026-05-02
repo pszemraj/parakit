@@ -48,7 +48,7 @@ parakit doctor
 
 If the reported microphone is wrong, change the default input in desktop sound settings or `pavucontrol`, then wait a few seconds and rerun `parakit doctor`. Restart parakit if the audio server itself is not reporting the new default source.
 
-Bluetooth microphones are allowed, but headset profiles can be slow and low quality.
+Bluetooth microphone policy is in [running.md#microphone](running.md#microphone).
 
 ## Build And Model Issues
 

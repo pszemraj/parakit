@@ -8,9 +8,9 @@ Cargo handles Rust packages. System packages are still needed for audio, keyboar
 
 | OS | Packages |
 | --- | --- |
-| Ubuntu 24.04 | `cmake build-essential libasound2-dev libudev-dev libxtst-dev libxdo-dev libxi-dev libx11-dev libevdev-dev libgomp1 pkg-config autoconf libtool` |
-| Fedora | `cmake gcc-c++ alsa-lib-devel libudev-devel libXtst-devel libxdo-devel libXi-devel libX11-devel libevdev-devel pkgconf autoconf libtool` |
-| Arch | `cmake base-devel alsa-lib libxtst xdotool libxi libx11 libevdev pkgconf autoconf libtool` |
+| Ubuntu 24.04 | `cmake build-essential libasound2-dev libudev-dev libxtst-dev libxdo-dev libxi-dev libx11-dev libxkbcommon-dev libevdev-dev libgomp1 pkg-config autoconf libtool` |
+| Fedora | `cmake gcc-c++ alsa-lib-devel libudev-devel libXtst-devel libxdo-devel libXi-devel libX11-devel libxkbcommon-devel libevdev-devel pkgconf autoconf libtool` |
+| Arch | `cmake base-devel alsa-lib libxtst xdotool libxi libx11 libxkbcommon libevdev pkgconf autoconf libtool` |
 | Windows | Visual Studio 2022 with the "Desktop development with C++" workload, plus CMake on `PATH`. |
 | macOS | Xcode command line tools plus `cmake autoconf automake libtool pkg-config`. |
 
@@ -51,9 +51,7 @@ git submodule update --init --recursive
 cargo build --release
 ```
 
-If `parakit.exe` cannot find generated CrispASR DLLs, copy them next to the binary as described in [Windows DLLs](#windows-dlls).
-
-TODO: Windows daemon support still needs the readiness work tracked in [architecture.md#deferred-windows-work](architecture.md#deferred-windows-work). Treat Windows builds as source/build validation until that work is complete.
+If `parakit.exe` cannot find generated CrispASR DLLs, copy them next to the binary as described in [Windows DLLs](#windows-dlls). Treat Windows builds as source/build validation until the daemon work in [architecture.md#deferred-windows-work](architecture.md#deferred-windows-work) is complete.
 
 ## CPU Builds
 

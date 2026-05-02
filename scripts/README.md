@@ -2,8 +2,6 @@
 
 `transcribe_nemo_parakeet.py` is a validation helper, not part of the parakit daemon. It runs NVIDIA NeMo's official [Parakeet-TDT-0.6B-v3](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3) model path so we can compare parakit's GGUF/[CrispASR](https://github.com/CrispStrobe/CrispASR) output against a known reference on the same real audio clips.
 
-Model card: [nvidia/parakeet-tdt-0.6b-v3](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3)
-
 `requirements.txt` belongs to the NeMo reference helper. `requirements-convert.txt` belongs to maintainer source rebuilds described in [../docs/dev.md#source-rebuild](../docs/dev.md#source-rebuild).
 
 ## NeMo Reference Setup

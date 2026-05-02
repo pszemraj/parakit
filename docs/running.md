@@ -20,9 +20,7 @@ parakit doctor --deep
 
 `--verbose` and `--quiet` are global flags, so they go before `doctor`. On Linux, Wayland sessions fail insertion preflight even when XWayland exposes a `DISPLAY`; use an X11 session.
 
-The daemon checks the hotkey backend, insertion backend, and singleton lock before any model download. If those preflights pass, it opens the microphone, warns when the selected source looks like Bluetooth, downloads the default Q8_0 GGUF if it is not already cached, opens the model, and starts the hotkey loop.
-
-On Linux, `--hotkey-backend auto` uses the registered X11 global hotkey backend. `x11-listen` is available for passive debugging, and `evdev-proxy-experimental` is explicit opt-in for the old evdev/uinput proxy path.
+The daemon checks the hotkey backend, insertion backend, and singleton lock before any model download. If those preflights pass, it opens the microphone, warns when the selected source looks like Bluetooth, downloads the default Q8_0 GGUF if it is not already cached, opens the model, and starts the hotkey loop. Linux backend details are in [linux-desktop.md](linux-desktop.md).
 
 Normal startup:
 
@@ -85,7 +83,7 @@ parakit -m /path/to/model.gguf
 
 parakit follows the OS default input device and avoids monitor/loopback/virtual sources unless no better input is available.
 
-If the default input changes while parakit is idle, the daemon switches and prints the new microphone unless `--quiet` is set. On Linux PulseAudio/PipeWire systems, parakit also checks the `pactl` default source identity when CPAL reports a generic `default` input, so changing the desktop default source is detected even when the CPAL device name stays the same. If an active stream fails, parakit keeps running and retries.
+If the default input changes while parakit is idle, the daemon switches and prints the new microphone unless `--quiet` is set. Idle polling is CPAL-only and does not shell out to `pactl`. On Linux PulseAudio/PipeWire systems, startup, probe, and stream reopen paths use `pactl` only to enrich generic `default` source names for human-readable logs and Bluetooth warnings. If an active stream fails, parakit keeps running and retries.
 
 Bluetooth microphones are allowed, but parakit prints a warning because headset profiles often add latency and reduce speech quality. The warning still goes to stderr in `--quiet` mode.
 
