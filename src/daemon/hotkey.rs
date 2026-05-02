@@ -19,12 +19,6 @@ use std::time::{Duration, Instant};
 use std::{fs::File, io, path::PathBuf};
 
 const HOTKEY_DEBOUNCE: Duration = Duration::from_millis(150);
-#[cfg(target_os = "linux")]
-const SPACE_KEYSYM: u32 = b' ' as u32;
-#[cfg(target_os = "linux")]
-const CONTROL_L_KEYSYM: u32 = 0xffe3;
-#[cfg(target_os = "linux")]
-const CONTROL_R_KEYSYM: u32 = 0xffe4;
 
 /// Hotkey backend preference.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, clap::ValueEnum)]
@@ -99,13 +93,33 @@ impl HotkeyBackend {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum HotkeyAction {
-    Start {
-        started_at: Instant,
-    },
-    Stop {
-        started_at: Instant,
-        stopped_at: Instant,
-    },
+    Start { started_at: Instant },
+    Stop { stopped_at: Instant },
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct RecordingLatch {
+    started_at: Option<Instant>,
+}
+
+impl RecordingLatch {
+    fn is_recording(&self) -> bool {
+        self.started_at.is_some()
+    }
+
+    fn start(&mut self, now: Instant) -> Option<HotkeyAction> {
+        if self.is_recording() {
+            return None;
+        }
+        self.started_at = Some(now);
+        Some(HotkeyAction::Start { started_at: now })
+    }
+
+    fn stop(&mut self, stopped_at: Instant) -> Option<HotkeyAction> {
+        self.started_at
+            .take()
+            .map(|_| HotkeyAction::Stop { stopped_at })
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -120,8 +134,7 @@ struct HotkeyState {
     meta_right: bool,
     space: bool,
     suppress_space_release: bool,
-    recording: bool,
-    started_at: Option<Instant>,
+    recording: RecordingLatch,
     last_start: Option<Instant>,
 }
 
@@ -130,7 +143,7 @@ impl HotkeyState {
         let space_was_held = self.space;
         self.set_key(key, true);
         match key {
-            Key::Space if self.recording || self.suppress_space_release || space_was_held => {
+            Key::Space if self.is_recording() || self.suppress_space_release || space_was_held => {
                 (None, true)
             }
             Key::Space if self.ctrl_only() => {
@@ -142,7 +155,7 @@ impl HotkeyState {
     }
 
     fn release(&mut self, key: Key, now: Instant) -> (Option<HotkeyAction>, bool) {
-        let was_recording = self.recording;
+        let was_recording = self.is_recording();
         let suppress_space_release = self.suppress_space_release;
         self.set_key(key, false);
         match key {
@@ -165,30 +178,20 @@ impl HotkeyState {
         let debounce_ok = self
             .last_start
             .is_none_or(|last| now.duration_since(last) >= HOTKEY_DEBOUNCE);
-        if !self.recording && debounce_ok {
-            self.recording = true;
-            self.started_at = Some(now);
+        if !self.is_recording() && debounce_ok {
             self.last_start = Some(now);
-            Some(HotkeyAction::Start { started_at: now })
+            self.recording.start(now)
         } else {
             None
         }
     }
 
     fn stop_recording(&mut self, stopped_at: Instant) -> Option<HotkeyAction> {
-        if !self.recording {
-            return None;
-        }
+        self.recording.stop(stopped_at)
+    }
 
-        self.recording = false;
-        let started_at = self
-            .started_at
-            .take()
-            .expect("recording state requires a start timestamp");
-        Some(HotkeyAction::Stop {
-            started_at,
-            stopped_at,
-        })
+    fn is_recording(&self) -> bool {
+        self.recording.is_recording()
     }
 
     fn ctrl_held(&self) -> bool {
@@ -221,37 +224,6 @@ impl HotkeyState {
             Key::Space => self.space = pressed,
             _ => {}
         }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Default)]
-struct RegisteredHotkeyLatch {
-    recording: bool,
-    started_at: Option<Instant>,
-}
-
-impl RegisteredHotkeyLatch {
-    fn press(&mut self, now: Instant) -> Option<HotkeyAction> {
-        if self.recording {
-            return None;
-        }
-        self.recording = true;
-        self.started_at = Some(now);
-        Some(HotkeyAction::Start { started_at: now })
-    }
-
-    fn release(&mut self, now: Instant) -> Option<HotkeyAction> {
-        if !self.recording {
-            return None;
-        }
-        self.recording = false;
-        Some(HotkeyAction::Stop {
-            started_at: self
-                .started_at
-                .take()
-                .expect("registered hotkey state requires a start timestamp"),
-            stopped_at: now,
-        })
     }
 }
 
@@ -360,7 +332,7 @@ fn run_linux_registered_hotkey_loop(tx: Sender<HotkeyTransition>) -> anyhow::Res
         .map_err(|err| anyhow::anyhow!("register Ctrl+Space: {err}"))?;
 
     let receiver = GlobalHotKeyEvent::receiver();
-    let mut latch = RegisteredHotkeyLatch::default();
+    let mut latch = RecordingLatch::default();
     let physical = X11PhysicalHotkeyProbe::open().ok();
     loop {
         let event = receiver
@@ -372,7 +344,7 @@ fn run_linux_registered_hotkey_loop(tx: Sender<HotkeyTransition>) -> anyhow::Res
 
         let now = Instant::now();
         let action = match event.state {
-            RegisteredHotKeyState::Pressed => latch.press(now),
+            RegisteredHotKeyState::Pressed => latch.start(now),
             RegisteredHotKeyState::Released => {
                 if physical
                     .as_ref()
@@ -381,7 +353,7 @@ fn run_linux_registered_hotkey_loop(tx: Sender<HotkeyTransition>) -> anyhow::Res
                 {
                     continue;
                 }
-                latch.release(now)
+                latch.stop(now)
             }
         };
         if let Some(action) = action {
@@ -403,11 +375,11 @@ impl X11PhysicalHotkeyProbe {
     fn open() -> anyhow::Result<Self> {
         let (conn, _) = x11rb::rust_connection::RustConnection::connect(None)
             .context("could not connect to X11 for physical hotkey probe")?;
-        let space = super::x11::keycode_for_keysym(&conn, SPACE_KEYSYM)
+        let space = super::x11::keycode_for_keysym(&conn, super::x11::SPACE_KEYSYM)
             .context("could not resolve X11 Space keycode")?;
-        let ctrl_l = super::x11::keycode_for_keysym(&conn, CONTROL_L_KEYSYM)
+        let ctrl_l = super::x11::keycode_for_keysym(&conn, super::x11::CONTROL_L_KEYSYM)
             .context("could not resolve X11 Control_L keycode")?;
-        let ctrl_r = super::x11::keycode_for_keysym(&conn, CONTROL_R_KEYSYM)
+        let ctrl_r = super::x11::keycode_for_keysym(&conn, super::x11::CONTROL_R_KEYSYM)
             .context("could not resolve X11 Control_R keycode")?;
 
         Ok(Self {
@@ -781,7 +753,7 @@ fn handle_key_event(
 fn send_hotkey_transition(action: HotkeyAction, tx: &Sender<HotkeyTransition>) {
     let transition = match action {
         HotkeyAction::Start { started_at } => HotkeyTransition::Pressed { at: started_at },
-        HotkeyAction::Stop { stopped_at, .. } => HotkeyTransition::Released { at: stopped_at },
+        HotkeyAction::Stop { stopped_at } => HotkeyTransition::Released { at: stopped_at },
     };
     let _ = tx.send(transition);
 }

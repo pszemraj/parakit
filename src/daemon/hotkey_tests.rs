@@ -24,7 +24,6 @@ fn ctrl_space_starts_and_stops() {
         state.release(Key::Space, now + Duration::from_millis(300)),
         (
             Some(HotkeyAction::Stop {
-                started_at: now + Duration::from_millis(10),
                 stopped_at: now + Duration::from_millis(300)
             }),
             true
@@ -42,13 +41,12 @@ fn ctrl_release_before_space_stops_without_suppressing_ctrl_release() {
         state.release(Key::ControlLeft, now + Duration::from_millis(50)),
         (
             Some(HotkeyAction::Stop {
-                started_at: now + Duration::from_millis(10),
                 stopped_at: now + Duration::from_millis(50)
             }),
             false
         )
     );
-    assert!(!state.recording);
+    assert!(!state.is_recording());
 }
 
 #[test]
@@ -80,7 +78,7 @@ fn held_space_after_ctrl_release_does_not_restart_after_debounce() {
         ),
         (None, true)
     );
-    assert!(!state.recording);
+    assert!(!state.is_recording());
 }
 
 #[test]
@@ -95,7 +93,6 @@ fn ctrl_repress_while_space_held_does_not_restart_recording() {
         state.release(Key::ControlLeft, now + Duration::from_millis(50)),
         (
             Some(HotkeyAction::Stop {
-                started_at: now + Duration::from_millis(10),
                 stopped_at: now + Duration::from_millis(50),
             }),
             false,
@@ -111,7 +108,7 @@ fn ctrl_repress_while_space_held_does_not_restart_recording() {
         (None, true)
     );
 
-    assert!(!state.recording);
+    assert!(!state.is_recording());
 
     assert_eq!(
         state.release(Key::Space, now + Duration::from_millis(80)),
@@ -137,26 +134,25 @@ fn repeated_space_press_while_held_is_suppressed_without_restart() {
         state.press(Key::Space, now + Duration::from_millis(20)),
         (None, true)
     );
-    assert!(state.recording);
+    assert!(state.is_recording());
 }
 
 #[test]
 fn registered_hotkey_press_release_starts_and_stops_once() {
     let now = base_time();
-    let mut state = RegisteredHotkeyLatch::default();
+    let mut state = RecordingLatch::default();
     assert_eq!(
-        state.press(now),
+        state.start(now),
         Some(HotkeyAction::Start { started_at: now })
     );
-    assert_eq!(state.press(now + Duration::from_millis(10)), None);
+    assert_eq!(state.start(now + Duration::from_millis(10)), None);
     assert_eq!(
-        state.release(now + Duration::from_millis(300)),
+        state.stop(now + Duration::from_millis(300)),
         Some(HotkeyAction::Stop {
-            started_at: now,
             stopped_at: now + Duration::from_millis(300)
         })
     );
-    assert_eq!(state.release(now + Duration::from_millis(310)), None);
+    assert_eq!(state.stop(now + Duration::from_millis(310)), None);
 }
 
 #[test]
@@ -167,7 +163,6 @@ fn hotkey_actions_emit_logical_transitions_only() {
     send_hotkey_transition(HotkeyAction::Start { started_at: now }, &tx);
     send_hotkey_transition(
         HotkeyAction::Stop {
-            started_at: now,
             stopped_at: now + Duration::from_millis(250),
         },
         &tx,
@@ -198,7 +193,7 @@ fn rapid_double_press_is_ignored_and_suppressed() {
         state.release(Key::Space, now + Duration::from_millis(90)),
         (None, true)
     );
-    assert!(!state.recording);
+    assert!(!state.is_recording());
 }
 
 #[test]
@@ -211,7 +206,7 @@ fn ctrl_shift_space_does_not_start_or_suppress() {
         state.press(Key::Space, now + Duration::from_millis(10)),
         (None, false)
     );
-    assert!(!state.recording);
+    assert!(!state.is_recording());
 }
 
 #[test]

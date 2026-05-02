@@ -29,8 +29,6 @@ Empty or near-silent captures are skipped before inference. Short non-silent cap
 
 Live capture keeps resampler state inside the audio pipeline. Starting a new recording resets that state, and stopping a recording flushes any partial resampler input into the same utterance before the worker sees the PCM buffer. Recording uses a session epoch so stale CPAL callbacks from a stopped stream cannot append into the next utterance.
 
-Streaming mode is currently disabled while the Linux batch path is stabilized.
-
 ## Ownership Constraints
 
 - `cpal::Stream` is not reliably `Send`, so the live stream stays on the audio manager thread.

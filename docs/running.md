@@ -91,13 +91,7 @@ Bluetooth microphones are allowed, but parakit prints a warning because headset 
 
 ## Insertion
 
-Batch mode is the default and recommended mode:
-
-```bash
-parakit --mode batch
-```
-
-It transcribes once on hotkey release, writes the transcript to the system clipboard, sends the configured paste shortcut, then restores the previous text clipboard when possible. Clipboard managers may still keep the transient transcript in history.
+parakit transcribes once on hotkey release, writes the transcript to the system clipboard, sends the configured paste shortcut, then restores the previous text clipboard when possible. Clipboard managers may still keep the transient transcript in history.
 
 On Linux/X11, parakit records the focused X11 window when recording starts. If focus changes before release, it copies the transcript to the clipboard and does not paste into the new target.
 
@@ -110,8 +104,6 @@ parakit --paste-mode direct    # synthetic typing, no clipboard
 ```
 
 Use `direct` only as an app-compatibility fallback. It is slower and can be less reliable for non-ASCII text. On Linux it still requires an X11 session.
-
-Streaming mode is temporarily disabled while Linux batch dictation is being stabilized. Use batch mode for quality checks.
 
 ## Logging And Sounds
 

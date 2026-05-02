@@ -87,21 +87,21 @@ fn linux_xtest_paste_chord_steps_are_ordered() {
     assert_eq!(
         linux_paste_chord_steps(PasteMode::Standard),
         vec![
-            x11_key_step(CONTROL_L_KEYSYM, true),
+            x11_key_step(crate::daemon::x11::CONTROL_L_KEYSYM, true),
             x11_key_step(crate::daemon::x11::V_KEYSYM, true),
             x11_key_step(crate::daemon::x11::V_KEYSYM, false),
-            x11_key_step(CONTROL_L_KEYSYM, false),
+            x11_key_step(crate::daemon::x11::CONTROL_L_KEYSYM, false),
         ]
     );
     assert_eq!(
         linux_paste_chord_steps(PasteMode::Terminal),
         vec![
-            x11_key_step(CONTROL_L_KEYSYM, true),
-            x11_key_step(SHIFT_L_KEYSYM, true),
+            x11_key_step(crate::daemon::x11::CONTROL_L_KEYSYM, true),
+            x11_key_step(crate::daemon::x11::SHIFT_L_KEYSYM, true),
             x11_key_step(crate::daemon::x11::V_KEYSYM, true),
             x11_key_step(crate::daemon::x11::V_KEYSYM, false),
-            x11_key_step(SHIFT_L_KEYSYM, false),
-            x11_key_step(CONTROL_L_KEYSYM, false),
+            x11_key_step(crate::daemon::x11::SHIFT_L_KEYSYM, false),
+            x11_key_step(crate::daemon::x11::CONTROL_L_KEYSYM, false),
         ]
     );
 }

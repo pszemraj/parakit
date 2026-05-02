@@ -50,7 +50,7 @@ pub fn sha256_file_hex(path: &Path) -> Result<String> {
 /// # Panics
 ///
 /// Does not panic.
-pub fn hex_digest(bytes: &[u8]) -> String {
+fn hex_digest(bytes: &[u8]) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut out = String::with_capacity(bytes.len() * 2);
     for byte in bytes {

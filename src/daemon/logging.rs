@@ -81,7 +81,6 @@ impl Logger {
         anstream::println!("  mic:   {}", info.mic.summary());
         if self.is_verbose() {
             anstream::println!("  path:  {}", info.model_path.display());
-            anstream::println!("  mode:  {}", info.mode);
             anstream::println!("  rules: {}", info.cleaning);
             anstream::println!("  sounds: {}", info.sounds);
             anstream::println!("  logging: {}", info.transcription_logging);
@@ -162,8 +161,6 @@ pub(crate) struct BannerInfo<'a> {
     pub(crate) dtype: &'a str,
     /// Selected microphone.
     pub(crate) mic: &'a MicInfo,
-    /// Mode label.
-    pub(crate) mode: String,
     /// Cleaning state label.
     pub(crate) cleaning: String,
     /// Sounds state label.

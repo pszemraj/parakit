@@ -288,62 +288,44 @@ impl BlasConfig {
         Self::off(raw, true)
     }
 
-    fn off(requested: String, explicit: bool) -> Self {
+    fn new(
+        requested: String,
+        selected: &'static str,
+        vendor: Option<&'static str>,
+        cohere_mkl: bool,
+        explicit: bool,
+    ) -> Self {
         Self {
             requested,
-            selected: "off",
-            enabled: false,
-            vendor: None,
-            cohere_mkl: false,
+            selected,
+            enabled: vendor.is_some(),
+            vendor,
+            cohere_mkl,
             explicit,
         }
+    }
+
+    fn off(requested: String, explicit: bool) -> Self {
+        Self::new(requested, "off", None, false, explicit)
     }
 
     fn generic(requested: String, explicit: bool) -> Self {
-        Self {
-            requested,
-            selected: "generic",
-            enabled: true,
-            vendor: Some("Generic"),
-            cohere_mkl: false,
-            explicit,
-        }
+        Self::new(requested, "generic", Some("Generic"), false, explicit)
     }
 
     fn openblas(requested: String, explicit: bool) -> Self {
-        Self {
-            requested,
-            selected: "openblas",
-            enabled: true,
-            vendor: Some("OpenBLAS"),
-            cohere_mkl: false,
-            explicit,
-        }
+        Self::new(requested, "openblas", Some("OpenBLAS"), false, explicit)
     }
 
     fn mkl(requested: String, explicit: bool) -> Self {
-        Self {
-            requested,
-            selected: "mkl",
-            enabled: true,
-            vendor: Some("Intel10_64lp"),
-            cohere_mkl: true,
-            explicit,
-        }
+        Self::new(requested, "mkl", Some("Intel10_64lp"), true, explicit)
     }
 
     fn accelerate(requested: String, explicit: bool) -> Self {
         if !target_is_apple() {
             panic!("PARAKIT_BLAS=accelerate is only supported on Apple targets");
         }
-        Self {
-            requested,
-            selected: "accelerate",
-            enabled: true,
-            vendor: Some("Apple"),
-            cohere_mkl: false,
-            explicit,
-        }
+        Self::new(requested, "accelerate", Some("Apple"), false, explicit)
     }
 }
 

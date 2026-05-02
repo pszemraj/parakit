@@ -598,11 +598,6 @@ fn paste_key_click(enigo: &mut Enigo) -> Result<()> {
 }
 
 #[cfg(target_os = "linux")]
-const CONTROL_L_KEYSYM: u32 = 0xffe3;
-#[cfg(target_os = "linux")]
-const SHIFT_L_KEYSYM: u32 = 0xffe1;
-
-#[cfg(target_os = "linux")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct X11KeyStep {
     keysym: u32,
@@ -644,12 +639,12 @@ impl LinuxX11Paste {
 #[cfg(target_os = "linux")]
 fn linux_paste_chord_steps(mode: PasteMode) -> Vec<X11KeyStep> {
     let mut steps = vec![X11KeyStep {
-        keysym: CONTROL_L_KEYSYM,
+        keysym: super::x11::CONTROL_L_KEYSYM,
         press: true,
     }];
     if mode == PasteMode::Terminal {
         steps.push(X11KeyStep {
-            keysym: SHIFT_L_KEYSYM,
+            keysym: super::x11::SHIFT_L_KEYSYM,
             press: true,
         });
     }
@@ -663,12 +658,12 @@ fn linux_paste_chord_steps(mode: PasteMode) -> Vec<X11KeyStep> {
     });
     if mode == PasteMode::Terminal {
         steps.push(X11KeyStep {
-            keysym: SHIFT_L_KEYSYM,
+            keysym: super::x11::SHIFT_L_KEYSYM,
             press: false,
         });
     }
     steps.push(X11KeyStep {
-        keysym: CONTROL_L_KEYSYM,
+        keysym: super::x11::CONTROL_L_KEYSYM,
         press: false,
     });
     steps

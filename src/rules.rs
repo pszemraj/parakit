@@ -232,6 +232,25 @@ macro_rules! stutter_rule {
     };
 }
 
+macro_rules! partial_stutter_rule {
+    ($name:literal, $label:literal, $prefixes:literal, $target:literal) => {
+        Rule {
+            name: concat!("partial-stutter-", $name),
+            description: concat!("Strip partial-word stutter before '", $label, "'"),
+            pattern: concat!(
+                r#"(?i)\b(?:"#,
+                $prefixes,
+                r#")(?:[- ]+(?:"#,
+                $prefixes,
+                r#")){1,3}[- ]+("#,
+                $target,
+                r#")\b"#
+            ),
+            replacement: "$1",
+        }
+    };
+}
+
 /// Built-in transcript cleanup rules in application order.
 pub const DEFAULT_RULES: &[Rule] = &[
     // -------------------------------------------------------------------------
@@ -446,48 +465,23 @@ pub const DEFAULT_RULES: &[Rule] = &[
         ),
         replacement: "$1$2$3$4$5$6$7$8$9$10$11$12$13$14$15$16$17$18",
     },
-    Rule {
-        name: "partial-stutter-should",
-        description: "Strip partial-word stutter before 'should'",
-        pattern: r#"(?i)\b(?:s|so|sh|sho)(?:[- ]+(?:s|so|sh|sho)){1,3}[- ]+(should)\b"#,
-        replacement: "$1",
-    },
-    Rule {
-        name: "partial-stutter-think",
-        description: "Strip partial-word stutter before 'think/thinking/this/that'",
-        pattern: r#"(?i)\b(?:t|th|thi)(?:[- ]+(?:t|th|thi)){1,3}[- ]+(think(?:ing)?|thing|this|that|these|those)\b"#,
-        replacement: "$1",
-    },
-    Rule {
-        name: "partial-stutter-because",
-        description: "Strip partial-word stutter before 'because'",
-        pattern: r#"(?i)\b(?:b|be|bec)(?:[- ]+(?:b|be|bec)){1,3}[- ]+(because)\b"#,
-        replacement: "$1",
-    },
-    Rule {
-        name: "partial-stutter-definitely",
-        description: "Strip partial-word stutter before 'definitely'",
-        pattern: r#"(?i)\b(?:d|de|def)(?:[- ]+(?:d|de|def)){1,3}[- ]+(definitely)\b"#,
-        replacement: "$1",
-    },
-    Rule {
-        name: "partial-stutter-make",
-        description: "Strip partial-word stutter before 'make'",
-        pattern: r#"(?i)\b(?:m|ma|mak)(?:[- ]+(?:m|ma|mak)){1,3}[- ]+(make)\b"#,
-        replacement: "$1",
-    },
-    Rule {
-        name: "partial-stutter-sure",
-        description: "Strip partial-word stutter before 'sure'",
-        pattern: r#"(?i)\b(?:s|su|sur)(?:[- ]+(?:s|su|sur)){1,3}[- ]+(sure)\b"#,
-        replacement: "$1",
-    },
-    Rule {
-        name: "partial-stutter-change",
-        description: "Strip partial-word stutter before 'change/changing/changed'",
-        pattern: r#"(?i)\b(?:c|ch)(?:[- ]+(?:c|ch)){1,3}[- ]+(chang(?:e|ed|es|ing))\b"#,
-        replacement: "$1",
-    },
+    partial_stutter_rule!("should", "should", "s|so|sh|sho", "should"),
+    partial_stutter_rule!(
+        "think",
+        "think/thinking/this/that",
+        "t|th|thi",
+        "think(?:ing)?|thing|this|that|these|those"
+    ),
+    partial_stutter_rule!("because", "because", "b|be|bec", "because"),
+    partial_stutter_rule!("definitely", "definitely", "d|de|def", "definitely"),
+    partial_stutter_rule!("make", "make", "m|ma|mak", "make"),
+    partial_stutter_rule!("sure", "sure", "s|su|sur", "sure"),
+    partial_stutter_rule!(
+        "change",
+        "change/changing/changed",
+        "c|ch",
+        "chang(?:e|ed|es|ing)"
+    ),
     // -------------------------------------------------------------------------
     // Casual contractions
     // -------------------------------------------------------------------------

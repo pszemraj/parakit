@@ -5,6 +5,14 @@ use x11rb::connection::Connection;
 use x11rb::protocol::xproto::{ConnectionExt, Keycode, Screen, Window};
 use x11rb::rust_connection::RustConnection;
 
+/// X11 keysym for Space.
+pub(crate) const SPACE_KEYSYM: u32 = b' ' as u32;
+/// X11 keysym for left Control.
+pub(crate) const CONTROL_L_KEYSYM: u32 = 0xffe3;
+/// X11 keysym for right Control.
+pub(crate) const CONTROL_R_KEYSYM: u32 = 0xffe4;
+/// X11 keysym for left Shift.
+pub(crate) const SHIFT_L_KEYSYM: u32 = 0xffe1;
 /// X11 keysym for lowercase `v`.
 pub(crate) const V_KEYSYM: u32 = b'v' as u32;
 

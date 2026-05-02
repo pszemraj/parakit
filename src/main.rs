@@ -65,10 +65,6 @@ struct Cli {
     #[arg(short = 'm', long, value_name = "PATH")]
     model: Option<PathBuf>,
 
-    /// Inference mode. Only `batch` is currently supported.
-    #[arg(long, default_value = "batch")]
-    mode: String,
-
     /// Quiet mode: suppress stdout. Errors and warnings still go to stderr.
     /// Suitable for backgrounding the daemon.
     #[arg(long, short = 'q')]
@@ -282,8 +278,6 @@ fn run() -> Result<()> {
         return run_ptt_audio_simulation(&cli, Arc::clone(&log), audio_path);
     }
 
-    validate_batch_mode(&cli.mode)?;
-
     #[cfg(target_os = "linux")]
     daemon::session::ensure_x11_session_supported()?;
 
@@ -338,7 +332,6 @@ fn run() -> Result<()> {
         model_path: &model_path,
         dtype: &model_dtype,
         mic: &mic_info,
-        mode: cli.mode.clone(),
         cleaning: match cleaner.as_deref() {
             Some(c) => format!("on ({} rules)", c.active_rule_count()),
             None => "off".to_string(),
@@ -398,8 +391,6 @@ fn warn_about_bluetooth_mic_if_needed(log: &Logger, mic_info: &daemon::audio::Mi
 }
 
 fn run_ptt_audio_simulation(cli: &Cli, log: Arc<Logger>, audio_path: &Path) -> Result<()> {
-    validate_batch_mode(&cli.mode)?;
-
     let cleaner = rules::build_cleaner(cli.no_cleaning, &cli.disable_rule)?.map(Arc::new);
     let data_log = cli
         .log_dir
@@ -470,20 +461,6 @@ fn model_dtype_label(path: &std::path::Path) -> String {
         .map(|meta| format!(" ({:.0} MB)", meta.len() as f64 / 1_000_000.0))
         .unwrap_or_default();
     format!("{dtype}{size}")
-}
-
-fn validate_batch_mode(mode: &str) -> Result<()> {
-    match mode {
-        "batch" => Ok(()),
-        other if other == "streaming" || other.starts_with("streaming:") => {
-            anyhow::bail!(
-                "streaming mode is temporarily disabled while Linux batch dictation is stabilized"
-            )
-        }
-        other => anyhow::bail!(
-            "unknown mode '{other}'. Expected 'batch'. Streaming is temporarily disabled."
-        ),
-    }
 }
 
 fn log_level(cli: &Cli) -> LogLevel {
@@ -934,12 +911,6 @@ mod tests {
             PasteMode::Direct,
             &direct_error
         ));
-    }
-
-    #[test]
-    fn streaming_mode_is_rejected_with_required_message() {
-        let err = validate_batch_mode("streaming").expect_err("streaming should be disabled");
-        assert!(format!("{err:#}").contains("streaming mode is temporarily disabled"));
     }
 
     #[test]
