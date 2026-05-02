@@ -1,7 +1,6 @@
 //! Unit tests for live audio selection and recording buffer helpers.
 
 use super::*;
-use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
@@ -34,76 +33,77 @@ fn mic_summary_reports_input_and_model_rates() {
 
 #[test]
 fn audio_handle_reuses_recording_capacity_after_stop() {
-    let handle = AudioHandle {
-        buffer: Arc::new(Mutex::new(Vec::new())),
-        session_epoch: Arc::new(AtomicU64::new(0)),
-        next_session_epoch: Arc::new(AtomicU64::new(0)),
-        pipeline: Arc::new(Mutex::new(CapturePipeline::default())),
-    };
+    let handle = AudioHandle::test_handle();
 
     handle.start_recording();
     {
-        let mut buffer = handle.buffer.lock();
-        assert!(buffer.capacity() >= RECORDING_CAPACITY);
-        buffer.extend_from_slice(&[0.25, -0.25]);
+        let mut state = handle.state.lock();
+        assert!(state.buffer.capacity() >= RECORDING_CAPACITY);
+        state.buffer.extend_from_slice(&[0.25, -0.25]);
     }
 
     let pcm = handle.stop_recording();
     assert_eq!(pcm, vec![0.25, -0.25]);
-    assert!(handle.buffer.lock().capacity() >= RECORDING_CAPACITY);
+    assert!(handle.state.lock().buffer.capacity() >= RECORDING_CAPACITY);
 }
 
 #[test]
-fn append_recording_samples_honors_hard_cap() {
-    let buffer = Mutex::new(vec![0.0; MAX_RECORDING_SAMPLES - 1]);
+fn append_processed_samples_honors_hard_cap() {
+    let state = Mutex::new(CaptureState {
+        buffer: vec![0.0; MAX_RECORDING_SAMPLES - 1],
+        pre_roll: VecDeque::new(),
+    });
     let session_epoch = AtomicU64::new(1);
-    append_recording_samples(&buffer, &session_epoch, 1, &[1.0, 2.0, 3.0]);
+    append_processed_samples(&state, &session_epoch, &[1.0, 2.0, 3.0]);
 
-    let buffer = buffer.lock();
-    assert_eq!(buffer.len(), MAX_RECORDING_SAMPLES);
-    assert_eq!(buffer[MAX_RECORDING_SAMPLES - 1], 1.0);
+    let state = state.lock();
+    assert_eq!(state.buffer.len(), MAX_RECORDING_SAMPLES);
+    assert_eq!(state.buffer[MAX_RECORDING_SAMPLES - 1], 1.0);
 }
 
 #[test]
-fn stale_audio_callback_chunks_are_dropped() {
-    let buffer = Mutex::new(Vec::new());
+fn stale_audio_chunks_are_kept_as_pre_roll_but_not_recording() {
+    let state = Mutex::new(CaptureState::new());
     let session_epoch = AtomicU64::new(1);
 
-    append_recording_samples(&buffer, &session_epoch, 1, &[0.1, 0.2]);
-    session_epoch.store(2, Ordering::Release);
-    append_recording_samples(&buffer, &session_epoch, 1, &[0.3, 0.4]);
+    append_processed_samples(&state, &session_epoch, &[0.1, 0.2]);
+    session_epoch.store(0, Ordering::Release);
+    append_processed_samples(&state, &session_epoch, &[0.3, 0.4]);
 
-    assert_eq!(buffer.lock().as_slice(), &[0.1, 0.2]);
+    let state = state.lock();
+    assert_eq!(state.buffer.as_slice(), &[0.1, 0.2]);
+    assert_eq!(
+        state.pre_roll.iter().copied().collect::<Vec<_>>(),
+        &[0.1, 0.2, 0.3, 0.4]
+    );
 }
 
 #[test]
 fn stop_recording_keeps_final_chunk_already_inside_pipeline() {
-    let handle = AudioHandle {
-        buffer: Arc::new(Mutex::new(Vec::new())),
-        session_epoch: Arc::new(AtomicU64::new(0)),
-        next_session_epoch: Arc::new(AtomicU64::new(0)),
-        pipeline: Arc::new(Mutex::new(CapturePipeline::default())),
-    };
+    let handle = AudioHandle::test_handle();
 
     handle.start_recording();
-    let observed_epoch = handle.session_epoch.load(Ordering::Acquire);
-    let pipeline_guard = handle.pipeline.lock();
     let stopper = {
         let handle = handle.clone();
         thread::spawn(move || handle.stop_recording())
     };
 
-    thread::sleep(Duration::from_millis(25));
-    append_recording_samples(
-        &handle.buffer,
-        &handle.session_epoch,
-        observed_epoch,
-        &[0.7],
-    );
-    drop(pipeline_guard);
+    thread::sleep(Duration::from_millis(5));
+    append_processed_samples(&handle.state, &handle.session_epoch, &[0.7]);
 
     let pcm = stopper.join().expect("stop thread should not panic");
     assert_eq!(pcm, vec![0.7]);
+}
+
+#[test]
+fn start_recording_seeds_buffer_with_pre_roll() {
+    let handle = AudioHandle::test_handle();
+    append_processed_samples(&handle.state, &handle.session_epoch, &[0.1, 0.2, 0.3]);
+
+    handle.start_recording();
+    let pcm = handle.stop_recording();
+
+    assert_eq!(pcm, vec![0.1, 0.2, 0.3]);
 }
 
 #[test]

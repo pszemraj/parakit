@@ -8,10 +8,15 @@
 use anyhow::{anyhow, Context, Result};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{SampleFormat, Stream, StreamConfig};
-use crossbeam_channel::bounded;
+use crossbeam_channel::{bounded, Receiver, Sender};
 use parakit::audio_file::resampler_params;
 use parking_lot::Mutex;
+use ringbuf::{
+    traits::{Consumer, Producer, Split},
+    HeapCons, HeapProd, HeapRb,
+};
 use rubato::{Resampler, SincFixedIn};
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
@@ -25,28 +30,26 @@ pub use parakit::constants::TARGET_RATE;
 const RECORDING_CAPACITY: usize = TARGET_RATE as usize * 90;
 /// Hard cap for one held recording to prevent unbounded memory growth.
 const MAX_RECORDING_SAMPLES: usize = TARGET_RATE as usize * 60 * 5;
+const PRE_ROLL_SAMPLES: usize = TARGET_RATE as usize * 350 / 1000;
+const AUDIO_RING_SECONDS: usize = 6;
+const AUDIO_RING_MIN_CAPACITY: usize = TARGET_RATE as usize * AUDIO_RING_SECONDS;
+const AUDIO_DRAIN_GRACE: Duration = Duration::from_millis(35);
+const AUDIO_DRAIN_IDLE_SLEEP: Duration = Duration::from_millis(5);
 const DEVICE_POLL_INTERVAL: Duration = Duration::from_secs(2);
 
 /// Send-Sync handle that worker threads use to control and read the buffer.
 #[derive(Clone)]
 pub struct AudioHandle {
-    buffer: Arc<Mutex<Vec<f32>>>,
+    state: Arc<Mutex<CaptureState>>,
     session_epoch: Arc<AtomicU64>,
     next_session_epoch: Arc<AtomicU64>,
-    pipeline: Arc<Mutex<CapturePipeline>>,
 }
 
 impl AudioHandle {
-    /// Clear the current buffer and begin appending microphone samples.
+    /// Clear the current buffer, seed it with pre-roll, and begin recording.
     pub fn start_recording(&self) {
-        let mut pipeline = self.pipeline.lock();
-        pipeline.reset_recording();
-        let mut buf = self.buffer.lock();
-        let capacity = buf.capacity();
-        if capacity < RECORDING_CAPACITY {
-            buf.reserve_exact(RECORDING_CAPACITY - capacity);
-        }
-        buf.clear();
+        let mut state = self.state.lock();
+        state.begin_recording();
         let next = self
             .next_session_epoch
             .fetch_add(1, Ordering::AcqRel)
@@ -61,19 +64,11 @@ impl AudioHandle {
     ///
     /// The captured mono PCM samples at [`TARGET_RATE`].
     pub fn stop_recording(&self) -> Vec<f32> {
-        // Take the pipeline lock before closing the epoch. A callback that
-        // already entered the pipeline before this stop boundary owns real
-        // final audio and should be allowed to append it. A callback that only
-        // observed the old epoch but has not reached the pipeline yet will see
-        // the epoch close below and drop its chunk.
-        let mut pipeline = self.pipeline.lock();
+        // Give the SPSC drain thread one small callback window to move already
+        // captured audio out of the ring before closing the active epoch.
+        thread::sleep(AUDIO_DRAIN_GRACE);
         self.session_epoch.store(0, Ordering::Release);
-        let mut flushed = Vec::new();
-        pipeline.finish_recording(&mut flushed);
-
-        let mut buf = self.buffer.lock();
-        append_samples_bounded(&mut buf, &flushed);
-        std::mem::replace(&mut *buf, Vec::with_capacity(RECORDING_CAPACITY))
+        self.state.lock().take_recording()
     }
 }
 
@@ -86,10 +81,9 @@ impl AudioHandle {
     /// A handle with an empty buffer, closed epoch, and default capture pipeline.
     pub(crate) fn test_handle() -> Self {
         Self {
-            buffer: Arc::new(Mutex::new(Vec::new())),
+            state: Arc::new(Mutex::new(CaptureState::new())),
             session_epoch: Arc::new(AtomicU64::new(0)),
             next_session_epoch: Arc::new(AtomicU64::new(0)),
-            pipeline: Arc::new(Mutex::new(CapturePipeline::default())),
         }
     }
 }
@@ -158,6 +152,52 @@ pub struct AudioCapture {
     _thread: JoinHandle<()>,
 }
 
+#[derive(Default)]
+struct CaptureState {
+    buffer: Vec<f32>,
+    pre_roll: VecDeque<f32>,
+}
+
+impl CaptureState {
+    fn new() -> Self {
+        Self {
+            buffer: Vec::with_capacity(RECORDING_CAPACITY),
+            pre_roll: VecDeque::with_capacity(PRE_ROLL_SAMPLES),
+        }
+    }
+
+    fn begin_recording(&mut self) {
+        if self.buffer.capacity() < RECORDING_CAPACITY {
+            self.buffer
+                .reserve_exact(RECORDING_CAPACITY - self.buffer.capacity());
+        }
+        self.buffer.clear();
+        self.buffer.extend(self.pre_roll.iter().copied());
+    }
+
+    fn push_pre_roll(&mut self, samples: &[f32]) {
+        if samples.len() >= PRE_ROLL_SAMPLES {
+            self.pre_roll.clear();
+            self.pre_roll
+                .extend(samples[samples.len() - PRE_ROLL_SAMPLES..].iter().copied());
+            return;
+        }
+        let excess = self.pre_roll.len() + samples.len();
+        if excess > PRE_ROLL_SAMPLES {
+            self.pre_roll.drain(..excess - PRE_ROLL_SAMPLES);
+        }
+        self.pre_roll.extend(samples.iter().copied());
+    }
+
+    fn append_recording(&mut self, samples: &[f32]) {
+        append_samples_bounded(&mut self.buffer, samples);
+    }
+
+    fn take_recording(&mut self) -> Vec<f32> {
+        std::mem::replace(&mut self.buffer, Vec::with_capacity(RECORDING_CAPACITY))
+    }
+}
+
 impl AudioCapture {
     /// Open the best available input device and start the manager thread.
     ///
@@ -169,18 +209,16 @@ impl AudioCapture {
     ///
     /// Returns an error if no usable input device can be opened.
     pub fn open(log: Arc<Logger>) -> Result<Self> {
-        let buffer = Arc::new(Mutex::new(Vec::with_capacity(RECORDING_CAPACITY)));
+        let state = Arc::new(Mutex::new(CaptureState::new()));
         let session_epoch = Arc::new(AtomicU64::new(0));
-        let pipeline = Arc::new(Mutex::new(CapturePipeline::default()));
         let current = Arc::new(Mutex::new(None));
         let alive = Arc::new(AtomicBool::new(true));
         let stream_error = Arc::new(Mutex::new(None));
 
         let handle = AudioHandle {
-            buffer: Arc::clone(&buffer),
+            state: Arc::clone(&state),
             session_epoch: Arc::clone(&session_epoch),
             next_session_epoch: Arc::new(AtomicU64::new(0)),
-            pipeline: Arc::clone(&pipeline),
         };
 
         let (ready_tx, ready_rx) = bounded::<Result<MicInfo>>(1);
@@ -193,9 +231,8 @@ impl AudioCapture {
             .name("parakit-audio".into())
             .spawn(move || {
                 audio_manager_loop(AudioManagerCtx {
-                    buffer,
+                    state,
                     session_epoch,
-                    pipeline,
                     current: thread_current,
                     alive: thread_alive,
                     stream_error: thread_error,
@@ -234,9 +271,8 @@ impl Drop for AudioCapture {
 }
 
 struct AudioManagerCtx {
-    buffer: Arc<Mutex<Vec<f32>>>,
+    state: Arc<Mutex<CaptureState>>,
     session_epoch: Arc<AtomicU64>,
-    pipeline: Arc<Mutex<CapturePipeline>>,
     current: Arc<Mutex<Option<MicInfo>>>,
     alive: Arc<AtomicBool>,
     stream_error: Arc<Mutex<Option<String>>>,
@@ -248,9 +284,8 @@ fn audio_manager_loop(ctx: AudioManagerCtx) {
     let host = cpal::default_host();
     let mut live = match open_live_stream(
         &host,
-        Arc::clone(&ctx.buffer),
+        Arc::clone(&ctx.state),
         Arc::clone(&ctx.session_epoch),
-        Arc::clone(&ctx.pipeline),
         Arc::clone(&ctx.stream_error),
     ) {
         Ok(live) => {
@@ -304,9 +339,8 @@ fn reopen_until_success(host: &cpal::Host, ctx: &AudioManagerCtx) -> LiveStream 
     loop {
         match open_live_stream(
             host,
-            Arc::clone(&ctx.buffer),
+            Arc::clone(&ctx.state),
             Arc::clone(&ctx.session_epoch),
-            Arc::clone(&ctx.pipeline),
             Arc::clone(&ctx.stream_error),
         ) {
             Ok(live) => {
@@ -327,6 +361,23 @@ struct LiveStream {
     info: MicInfo,
     identity: MicIdentity,
     _stream: Stream,
+    _drain: AudioDrain,
+}
+
+struct AudioDrain {
+    alive: Arc<AtomicBool>,
+    wake: Sender<()>,
+    thread: Option<JoinHandle<()>>,
+}
+
+impl Drop for AudioDrain {
+    fn drop(&mut self) {
+        self.alive.store(false, Ordering::Release);
+        let _ = self.wake.try_send(());
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
 }
 
 /// Probe the currently selected input without opening a stream.
@@ -345,9 +396,8 @@ pub fn probe_default_input() -> Result<MicInfo> {
 
 fn open_live_stream(
     host: &cpal::Host,
-    buffer: Arc<Mutex<Vec<f32>>>,
+    state: Arc<Mutex<CaptureState>>,
     session_epoch: Arc<AtomicU64>,
-    pipeline: Arc<Mutex<CapturePipeline>>,
     stream_error: Arc<Mutex<Option<String>>>,
 ) -> Result<LiveStream> {
     let selected = select_input_device(host)?;
@@ -356,81 +406,96 @@ fn open_live_stream(
     let hw_rate = selected.config.sample_rate().0;
     let channels = selected.config.channels() as usize;
     let stream_config: StreamConfig = selected.config.config();
-    let resampler_state = make_resampler(hw_rate)?;
-    pipeline.lock().set_resampler(resampler_state);
+    let pipeline = CapturePipeline {
+        resampler: make_resampler(hw_rate)?,
+    };
+    let ring = HeapRb::<f32>::new(audio_ring_capacity(hw_rate));
+    let (producer, consumer) = ring.split();
+    let (wake_tx, wake_rx) = bounded::<()>(1);
+    let stream_alive = Arc::new(AtomicBool::new(true));
+    let dropped_ring_samples = Arc::new(AtomicU64::new(0));
+    let drain = spawn_audio_drain(
+        consumer,
+        wake_rx,
+        Arc::clone(&state),
+        Arc::clone(&session_epoch),
+        pipeline,
+        Arc::clone(&stream_alive),
+    )
+    .context("spawn audio drain")?;
 
     let stream = match selected.config.sample_format() {
         SampleFormat::I8 => build_stream::<i8>(
             &selected.device,
             &stream_config,
             channels,
-            buffer,
-            session_epoch,
-            Arc::clone(&pipeline),
+            producer,
             stream_error,
+            Arc::clone(&dropped_ring_samples),
+            wake_tx.clone(),
         )?,
         SampleFormat::I16 => build_stream::<i16>(
             &selected.device,
             &stream_config,
             channels,
-            buffer,
-            session_epoch,
-            Arc::clone(&pipeline),
+            producer,
             stream_error,
+            Arc::clone(&dropped_ring_samples),
+            wake_tx.clone(),
         )?,
         SampleFormat::I32 => build_stream::<i32>(
             &selected.device,
             &stream_config,
             channels,
-            buffer,
-            session_epoch,
-            Arc::clone(&pipeline),
+            producer,
             stream_error,
+            Arc::clone(&dropped_ring_samples),
+            wake_tx.clone(),
         )?,
         SampleFormat::U8 => build_stream::<u8>(
             &selected.device,
             &stream_config,
             channels,
-            buffer,
-            session_epoch,
-            Arc::clone(&pipeline),
+            producer,
             stream_error,
+            Arc::clone(&dropped_ring_samples),
+            wake_tx.clone(),
         )?,
         SampleFormat::U16 => build_stream::<u16>(
             &selected.device,
             &stream_config,
             channels,
-            buffer,
-            session_epoch,
-            Arc::clone(&pipeline),
+            producer,
             stream_error,
+            Arc::clone(&dropped_ring_samples),
+            wake_tx.clone(),
         )?,
         SampleFormat::U32 => build_stream::<u32>(
             &selected.device,
             &stream_config,
             channels,
-            buffer,
-            session_epoch,
-            Arc::clone(&pipeline),
+            producer,
             stream_error,
+            Arc::clone(&dropped_ring_samples),
+            wake_tx.clone(),
         )?,
         SampleFormat::F32 => build_stream::<f32>(
             &selected.device,
             &stream_config,
             channels,
-            buffer,
-            session_epoch,
-            Arc::clone(&pipeline),
+            producer,
             stream_error,
+            Arc::clone(&dropped_ring_samples),
+            wake_tx.clone(),
         )?,
         SampleFormat::F64 => build_stream::<f64>(
             &selected.device,
             &stream_config,
             channels,
-            buffer,
-            session_epoch,
-            Arc::clone(&pipeline),
+            producer,
             stream_error,
+            Arc::clone(&dropped_ring_samples),
+            wake_tx.clone(),
         )?,
         other => return Err(anyhow!("unsupported sample format: {:?}", other)),
     };
@@ -440,7 +505,58 @@ fn open_live_stream(
         info,
         identity,
         _stream: stream,
+        _drain: AudioDrain {
+            alive: stream_alive,
+            wake: wake_tx,
+            thread: Some(drain),
+        },
     })
+}
+
+fn audio_ring_capacity(hw_rate: u32) -> usize {
+    (hw_rate as usize * AUDIO_RING_SECONDS).max(AUDIO_RING_MIN_CAPACITY)
+}
+
+fn spawn_audio_drain(
+    consumer: HeapCons<f32>,
+    wake_rx: Receiver<()>,
+    state: Arc<Mutex<CaptureState>>,
+    session_epoch: Arc<AtomicU64>,
+    pipeline: CapturePipeline,
+    alive: Arc<AtomicBool>,
+) -> std::io::Result<JoinHandle<()>> {
+    thread::Builder::new()
+        .name("parakit-audio-drain".into())
+        .spawn(move || audio_drain_loop(consumer, wake_rx, state, session_epoch, pipeline, alive))
+}
+
+fn audio_drain_loop(
+    mut consumer: HeapCons<f32>,
+    wake_rx: Receiver<()>,
+    state: Arc<Mutex<CaptureState>>,
+    session_epoch: Arc<AtomicU64>,
+    mut pipeline: CapturePipeline,
+    alive: Arc<AtomicBool>,
+) {
+    let mut input = vec![0.0_f32; 8192];
+    let mut resampled = Vec::with_capacity(8192);
+    while alive.load(Ordering::Acquire) {
+        let mut drained_any = false;
+        loop {
+            let n = consumer.pop_slice(&mut input);
+            if n == 0 {
+                break;
+            }
+            drained_any = true;
+            let processed = pipeline.process(&input[..n], &mut resampled);
+            if !processed.is_empty() {
+                append_processed_samples(&state, &session_epoch, processed);
+            }
+        }
+        if !drained_any {
+            let _ = wake_rx.recv_timeout(AUDIO_DRAIN_IDLE_SLEEP);
+        }
+    }
 }
 
 fn make_resampler(hw_rate: u32) -> Result<Option<ResamplerState>> {
@@ -766,10 +882,7 @@ struct CapturePipeline {
 }
 
 impl CapturePipeline {
-    fn set_resampler(&mut self, resampler: Option<ResamplerState>) {
-        self.resampler = resampler;
-    }
-
+    #[cfg(test)]
     fn reset_recording(&mut self) {
         if let Some(resampler) = &mut self.resampler {
             resampler.reset_recording();
@@ -787,6 +900,7 @@ impl CapturePipeline {
         }
     }
 
+    #[cfg(test)]
     fn finish_recording(&mut self, out: &mut Vec<f32>) {
         if let Some(resampler) = &mut self.resampler {
             resampler.flush_recording(out);
@@ -818,6 +932,7 @@ impl ResamplerState {
         }
     }
 
+    #[cfg(test)]
     fn flush_recording(&mut self, out: &mut Vec<f32>) {
         if !self.scratch.is_empty() {
             let mut padded = Vec::with_capacity(self.chunk_size);
@@ -829,6 +944,7 @@ impl ResamplerState {
         self.resampler.reset();
     }
 
+    #[cfg(test)]
     fn reset_recording(&mut self) {
         self.scratch.clear();
         self.resampler.reset();
@@ -853,17 +969,16 @@ fn build_stream<T>(
     device: &cpal::Device,
     config: &StreamConfig,
     channels: usize,
-    buffer: Arc<Mutex<Vec<f32>>>,
-    session_epoch: Arc<AtomicU64>,
-    pipeline: Arc<Mutex<CapturePipeline>>,
+    mut producer: HeapProd<f32>,
     stream_error: Arc<Mutex<Option<String>>>,
+    dropped_ring_samples: Arc<AtomicU64>,
+    wake: Sender<()>,
 ) -> Result<Stream>
 where
     T: cpal::SizedSample + cpal::FromSample<f32> + 'static,
     f32: cpal::FromSample<T>,
 {
     let mut mono_scratch: Vec<f32> = Vec::with_capacity(8192);
-    let mut resampled_scratch: Vec<f32> = Vec::with_capacity(8192);
     let err_state = Arc::clone(&stream_error);
     let err_fn = move |err: cpal::StreamError| {
         *err_state.lock() = Some(err.to_string());
@@ -873,11 +988,6 @@ where
         .build_input_stream(
             config,
             move |data: &[T], _: &cpal::InputCallbackInfo| {
-                let observed_epoch = session_epoch.load(Ordering::Acquire);
-                if observed_epoch == 0 {
-                    return;
-                }
-
                 mono_scratch.clear();
                 if channels == 1 {
                     mono_scratch.reserve(data.len());
@@ -897,17 +1007,12 @@ where
                     }
                 }
 
-                let mut pipeline = pipeline.lock();
-                if session_epoch.load(Ordering::Acquire) != observed_epoch {
-                    return;
+                let pushed = producer.push_slice(&mono_scratch);
+                if pushed < mono_scratch.len() {
+                    dropped_ring_samples
+                        .fetch_add((mono_scratch.len() - pushed) as u64, Ordering::Relaxed);
                 }
-                let to_push = pipeline.process(&mono_scratch, &mut resampled_scratch);
-
-                if to_push.is_empty() {
-                    return;
-                }
-
-                append_recording_samples(&buffer, &session_epoch, observed_epoch, to_push);
+                let _ = wake.try_send(());
             },
             err_fn,
             None,
@@ -917,20 +1022,17 @@ where
     Ok(stream)
 }
 
-fn append_recording_samples(
-    buffer: &Mutex<Vec<f32>>,
+fn append_processed_samples(
+    state: &Mutex<CaptureState>,
     session_epoch: &AtomicU64,
-    observed_epoch: u64,
     samples: &[f32],
 ) {
-    if session_epoch.load(Ordering::Acquire) != observed_epoch {
-        return;
+    let observed_epoch = session_epoch.load(Ordering::Acquire);
+    let mut state = state.lock();
+    state.push_pre_roll(samples);
+    if observed_epoch != 0 && session_epoch.load(Ordering::Acquire) == observed_epoch {
+        state.append_recording(samples);
     }
-    let mut buf = buffer.lock();
-    if session_epoch.load(Ordering::Acquire) != observed_epoch {
-        return;
-    }
-    append_samples_bounded(&mut buf, samples);
 }
 
 fn append_samples_bounded(buf: &mut Vec<f32>, samples: &[f32]) {

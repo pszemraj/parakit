@@ -39,6 +39,7 @@ hound = "3.5"          # WAV decoding for quality tools and daemon validation ru
 
 # Lock-free or mutex-protected shared state
 parking_lot = "0.12"
+ringbuf = "0.4"
 
 # Per-user daemon singleton lock
 fs2 = "0.4"
