@@ -288,11 +288,13 @@ struct ClipboardCase {
     name: &'static str,
     initial: Option<&'static str>,
     transcript: &'static str,
+    guard_allows: bool,
     paste_error: Option<&'static str>,
     fail_next_set: bool,
     fail_on_set: Option<&'static str>,
     expected_text: Option<&'static str>,
     expected_events: &'static [&'static str],
+    expected_outcome: Option<PasteOutcome>,
     error_contains: Option<&'static str>,
 }
 
@@ -303,66 +305,109 @@ fn clipboard_swap_cases_are_stable() {
             name: "failed paste restores previous clipboard",
             initial: Some("old clipboard"),
             transcript: "dictated text",
+            guard_allows: true,
             paste_error: Some("paste failed"),
             fail_next_set: false,
             fail_on_set: None,
             expected_text: Some("old clipboard"),
-            expected_events: &["read", "set:dictated text", "paste", "set:old clipboard"],
+            expected_events: &[
+                "read",
+                "set:dictated text",
+                "guard",
+                "paste",
+                "set:old clipboard",
+            ],
+            expected_outcome: None,
             error_contains: Some("paste failed"),
         },
         ClipboardCase {
             name: "successful paste restores previous clipboard",
             initial: Some("old clipboard"),
             transcript: "dictated text",
+            guard_allows: true,
             paste_error: None,
             fail_next_set: false,
             fail_on_set: None,
             expected_text: Some("old clipboard"),
-            expected_events: &["read", "set:dictated text", "paste", "set:old clipboard"],
+            expected_events: &[
+                "read",
+                "set:dictated text",
+                "guard",
+                "paste",
+                "set:old clipboard",
+            ],
+            expected_outcome: Some(PasteOutcome::Pasted),
             error_contains: None,
         },
         ClipboardCase {
             name: "same clipboard text is not rewritten after paste",
             initial: Some("dictated text"),
             transcript: "dictated text",
+            guard_allows: true,
             paste_error: None,
             fail_next_set: false,
             fail_on_set: None,
             expected_text: Some("dictated text"),
-            expected_events: &["read", "set:dictated text", "paste"],
+            expected_events: &["read", "set:dictated text", "guard", "paste"],
+            expected_outcome: Some(PasteOutcome::Pasted),
+            error_contains: None,
+        },
+        ClipboardCase {
+            name: "guard blocks paste and leaves transcript on clipboard",
+            initial: Some("old clipboard"),
+            transcript: "dictated text",
+            guard_allows: false,
+            paste_error: None,
+            fail_next_set: false,
+            fail_on_set: None,
+            expected_text: Some("dictated text"),
+            expected_events: &["read", "set:dictated text", "guard"],
+            expected_outcome: Some(PasteOutcome::CopiedOnly),
             error_contains: None,
         },
         ClipboardCase {
             name: "empty text does not touch clipboard or paste",
             initial: None,
             transcript: "",
+            guard_allows: true,
             paste_error: None,
             fail_next_set: false,
             fail_on_set: None,
             expected_text: None,
             expected_events: &[],
+            expected_outcome: Some(PasteOutcome::Pasted),
             error_contains: None,
         },
         ClipboardCase {
             name: "transcript clipboard write failure does not paste or restore",
             initial: Some("old clipboard"),
             transcript: "dictated text",
+            guard_allows: true,
             paste_error: None,
             fail_next_set: true,
             fail_on_set: None,
             expected_text: Some("old clipboard"),
             expected_events: &["read", "set:dictated text"],
+            expected_outcome: None,
             error_contains: Some("could not copy transcript to clipboard"),
         },
         ClipboardCase {
             name: "restore failure is reported after successful paste",
             initial: Some("old clipboard"),
             transcript: "dictated text",
+            guard_allows: true,
             paste_error: None,
             fail_next_set: false,
             fail_on_set: Some("old clipboard"),
             expected_text: Some("dictated text"),
-            expected_events: &["read", "set:dictated text", "paste", "set:old clipboard"],
+            expected_events: &[
+                "read",
+                "set:dictated text",
+                "guard",
+                "paste",
+                "set:old clipboard",
+            ],
+            expected_outcome: None,
             error_contains: Some("could not restore previous clipboard text"),
         },
     ];
@@ -380,7 +425,7 @@ fn clipboard_swap_cases_are_stable() {
         }
 
         let events = clipboard.events();
-        let result = paste_with_clipboard_swap(
+        let result = paste_with_clipboard_swap_guarded(
             &mut clipboard,
             case.transcript,
             || {
@@ -392,6 +437,10 @@ fn clipboard_swap_cases_are_stable() {
             },
             Duration::ZERO,
             Duration::ZERO,
+            || {
+                events.borrow_mut().push("guard".to_string());
+                Ok(case.guard_allows)
+            },
         );
 
         match case.error_contains {
@@ -399,7 +448,7 @@ fn clipboard_swap_cases_are_stable() {
                 let err = result.expect_err(case.name);
                 assert!(format!("{err:#}").contains(fragment), "{}", case.name);
             }
-            None => result.expect(case.name),
+            None => assert_eq!(result.expect(case.name), case.expected_outcome.unwrap()),
         }
         assert_eq!(
             clipboard.text.as_deref(),
@@ -414,66 +463,4 @@ fn clipboard_swap_cases_are_stable() {
             case.name
         );
     }
-}
-
-#[test]
-fn guarded_clipboard_swap_leaves_transcript_when_guard_blocks_paste() {
-    let mut clipboard = MockClipboard::new("old clipboard");
-    let events = clipboard.events();
-    let result = paste_with_clipboard_swap_guarded(
-        &mut clipboard,
-        "dictated text",
-        || {
-            events.borrow_mut().push("paste".to_string());
-            Ok(())
-        },
-        Duration::ZERO,
-        Duration::ZERO,
-        || {
-            events.borrow_mut().push("guard".to_string());
-            Ok(false)
-        },
-    )
-    .expect("guarded copy-only fallback should succeed");
-
-    assert_eq!(result, PasteOutcome::CopiedOnly);
-    assert_eq!(clipboard.text.as_deref(), Some("dictated text"));
-    assert_eq!(
-        events.borrow().as_slice(),
-        &["read", "set:dictated text", "guard"]
-    );
-}
-
-#[test]
-fn guarded_clipboard_swap_pastes_and_restores_when_guard_passes() {
-    let mut clipboard = MockClipboard::new("old clipboard");
-    let events = clipboard.events();
-    let result = paste_with_clipboard_swap_guarded(
-        &mut clipboard,
-        "dictated text",
-        || {
-            events.borrow_mut().push("paste".to_string());
-            Ok(())
-        },
-        Duration::ZERO,
-        Duration::ZERO,
-        || {
-            events.borrow_mut().push("guard".to_string());
-            Ok(true)
-        },
-    )
-    .expect("guarded paste should succeed");
-
-    assert_eq!(result, PasteOutcome::Pasted);
-    assert_eq!(clipboard.text.as_deref(), Some("old clipboard"));
-    assert_eq!(
-        events.borrow().as_slice(),
-        &[
-            "read",
-            "set:dictated text",
-            "guard",
-            "paste",
-            "set:old clipboard"
-        ]
-    );
 }

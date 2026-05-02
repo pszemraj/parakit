@@ -546,8 +546,7 @@ fn linux_hotkey_status(
 
 #[cfg(target_os = "linux")]
 fn evdev_report() -> EvdevReport {
-    use evdev_rs::enums::{EventCode, EV_KEY};
-    use std::fs::{self, File, OpenOptions};
+    use std::fs::{File, OpenOptions};
     use std::io::ErrorKind;
 
     let mut event_devices = 0_usize;
@@ -556,31 +555,17 @@ fn evdev_report() -> EvdevReport {
     let mut denied = 0_usize;
     let mut other_errors = Vec::new();
 
-    match fs::read_dir("/dev/input") {
-        Ok(entries) => {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if !path
-                    .file_name()
-                    .and_then(|name| name.to_str())
-                    .is_some_and(|name| name.starts_with("event"))
-                {
-                    continue;
-                }
-
+    match super::hotkey::linux_event_device_paths() {
+        Ok(paths) => {
+            for path in paths {
                 event_devices += 1;
                 match File::open(&path) {
                     Ok(file) => {
                         readable += 1;
-                        if let Ok(device) = evdev_rs::Device::new_from_fd(file) {
-                            let has_space =
-                                device.has_event_code(&EventCode::EV_KEY(EV_KEY::KEY_SPACE));
-                            let has_ctrl = device
-                                .has_event_code(&EventCode::EV_KEY(EV_KEY::KEY_LEFTCTRL))
-                                || device.has_event_code(&EventCode::EV_KEY(EV_KEY::KEY_RIGHTCTRL));
-                            if has_space && has_ctrl {
-                                hotkey_keyboards += 1;
-                            }
+                        if evdev_rs::Device::new_from_fd(file)
+                            .is_ok_and(|device| super::hotkey::linux_device_has_ctrl_space(&device))
+                        {
+                            hotkey_keyboards += 1;
                         }
                     }
                     Err(err) if err.kind() == ErrorKind::PermissionDenied => denied += 1,

@@ -480,24 +480,6 @@ fn send_paste_shortcut_with_cleanup<S: PasteShortcutSink>(
     }
 }
 
-#[cfg(test)]
-fn paste_with_clipboard_swap<C, P>(
-    clipboard: &mut C,
-    text: &str,
-    paste: P,
-    settle_delay: Duration,
-    restore_delay: Duration,
-) -> Result<()>
-where
-    C: TextClipboard,
-    P: FnMut() -> Result<()>,
-{
-    paste_with_clipboard_swap_guarded(clipboard, text, paste, settle_delay, restore_delay, || {
-        Ok(true)
-    })
-    .map(|_| ())
-}
-
 fn paste_with_clipboard_swap_guarded<C, P, G>(
     clipboard: &mut C,
     text: &str,

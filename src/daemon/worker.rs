@@ -364,6 +364,7 @@ fn focus_allows_insertion(focus: Option<&FocusSnapshot>, log: &Logger) -> bool {
 }
 
 /// Sanitizer decision for transcript insertion.
+#[derive(Debug, Eq, PartialEq)]
 pub(crate) enum PastePlan {
     /// Text may be pasted normally.
     Paste(String),
@@ -527,51 +528,51 @@ mod tests {
     }
 
     #[test]
-    fn paste_sanitizer_strips_unsafe_controls() {
-        match sanitize_for_paste("hello\0\r\nworld\x07", PasteMode::Standard) {
-            PastePlan::Paste(text) => assert_eq!(text, "hello\nworld"),
-            _ => panic!("standard sanitized text should remain pasteable"),
-        }
-    }
-
-    #[test]
-    fn terminal_sanitizer_strips_trailing_newlines() {
-        match sanitize_for_paste("cargo test\n\n", PasteMode::Terminal) {
-            PastePlan::Paste(text) => assert_eq!(text, "cargo test"),
-            _ => panic!("single terminal line should remain pasteable"),
-        }
-    }
-
-    #[test]
-    fn terminal_sanitizer_blocks_multiline_paste_but_keeps_clipboard_text() {
-        match sanitize_for_paste("first\nsecond", PasteMode::Terminal) {
-            PastePlan::CopyOnly { text, reason } => {
-                assert_eq!(text, "first\nsecond");
-                assert_eq!(reason, "multiline terminal transcript");
-            }
-            _ => panic!("multiline terminal text should be copy-only"),
-        }
-    }
-
-    #[test]
-    fn paste_sanitizer_skips_empty_output() {
-        match sanitize_for_paste("\0\x07\n", PasteMode::Standard) {
-            PastePlan::Skip { reason } => {
-                assert_eq!(reason, "empty transcript after sanitization");
-            }
-            _ => panic!("empty sanitized transcript should be skipped"),
-        }
-    }
-
-    #[test]
-    fn terminal_sanitizer_blocks_long_terminal_paste() {
+    fn paste_sanitizer_cases_are_stable() {
         let raw = "a".repeat(TERMINAL_MAX_PASTE_CHARS + 1);
-        match sanitize_for_paste(&raw, PasteMode::Terminal) {
-            PastePlan::CopyOnly { text, reason } => {
-                assert_eq!(text.len(), TERMINAL_MAX_PASTE_CHARS + 1);
-                assert_eq!(reason, "terminal transcript too long");
-            }
-            _ => panic!("overlong terminal text should be copy-only"),
+        let cases = [
+            (
+                "standard controls",
+                "hello\0\r\nworld\x07".to_string(),
+                PasteMode::Standard,
+                PastePlan::Paste("hello\nworld".to_string()),
+            ),
+            (
+                "terminal trailing newlines",
+                "cargo test\n\n".to_string(),
+                PasteMode::Terminal,
+                PastePlan::Paste("cargo test".to_string()),
+            ),
+            (
+                "terminal multiline copy-only",
+                "first\nsecond".to_string(),
+                PasteMode::Terminal,
+                PastePlan::CopyOnly {
+                    text: "first\nsecond".to_string(),
+                    reason: "multiline terminal transcript",
+                },
+            ),
+            (
+                "empty standard skip",
+                "\0\x07\n".to_string(),
+                PasteMode::Standard,
+                PastePlan::Skip {
+                    reason: "empty transcript after sanitization",
+                },
+            ),
+            (
+                "long terminal copy-only",
+                raw.clone(),
+                PasteMode::Terminal,
+                PastePlan::CopyOnly {
+                    text: raw,
+                    reason: "terminal transcript too long",
+                },
+            ),
+        ];
+
+        for (name, raw, mode, expected) in cases {
+            assert_eq!(sanitize_for_paste(&raw, mode), expected, "{name}");
         }
     }
 }

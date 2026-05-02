@@ -425,7 +425,6 @@ fn open_live_stream(
     let (producer, consumer) = ring.split();
     let (wake_tx, wake_rx) = bounded::<()>(1);
     let stream_alive = Arc::new(AtomicBool::new(true));
-    let dropped_ring_samples = Arc::new(AtomicU64::new(0));
     let drain = spawn_audio_drain(
         consumer,
         wake_rx,
@@ -448,7 +447,6 @@ fn open_live_stream(
             channels,
             producer,
             stream_error,
-            Arc::clone(&dropped_ring_samples),
             wake_tx.clone(),
         )?,
         SampleFormat::I16 => build_stream::<i16>(
@@ -457,7 +455,6 @@ fn open_live_stream(
             channels,
             producer,
             stream_error,
-            Arc::clone(&dropped_ring_samples),
             wake_tx.clone(),
         )?,
         SampleFormat::I32 => build_stream::<i32>(
@@ -466,7 +463,6 @@ fn open_live_stream(
             channels,
             producer,
             stream_error,
-            Arc::clone(&dropped_ring_samples),
             wake_tx.clone(),
         )?,
         SampleFormat::U8 => build_stream::<u8>(
@@ -475,7 +471,6 @@ fn open_live_stream(
             channels,
             producer,
             stream_error,
-            Arc::clone(&dropped_ring_samples),
             wake_tx.clone(),
         )?,
         SampleFormat::U16 => build_stream::<u16>(
@@ -484,7 +479,6 @@ fn open_live_stream(
             channels,
             producer,
             stream_error,
-            Arc::clone(&dropped_ring_samples),
             wake_tx.clone(),
         )?,
         SampleFormat::U32 => build_stream::<u32>(
@@ -493,7 +487,6 @@ fn open_live_stream(
             channels,
             producer,
             stream_error,
-            Arc::clone(&dropped_ring_samples),
             wake_tx.clone(),
         )?,
         SampleFormat::F32 => build_stream::<f32>(
@@ -502,7 +495,6 @@ fn open_live_stream(
             channels,
             producer,
             stream_error,
-            Arc::clone(&dropped_ring_samples),
             wake_tx.clone(),
         )?,
         SampleFormat::F64 => build_stream::<f64>(
@@ -511,7 +503,6 @@ fn open_live_stream(
             channels,
             producer,
             stream_error,
-            Arc::clone(&dropped_ring_samples),
             wake_tx.clone(),
         )?,
         other => return Err(anyhow!("unsupported sample format: {:?}", other)),
@@ -689,10 +680,7 @@ fn selected_mic_identity(host: &cpal::Host) -> Result<MicIdentity> {
 fn mic_snapshot_from_selected(selected: &SelectedInput) -> (MicInfo, MicIdentity) {
     let raw_identity = raw_mic_identity_from_selected(selected);
     let mut info = mic_info_from_identity(&raw_identity);
-    let source_id = enhance_mic_info(&mut info, selected.is_default);
-    if let Some(source_id) = source_id {
-        info.source_id = Some(source_id);
-    }
+    enhance_mic_info(&mut info, selected.is_default);
     (info, raw_identity)
 }
 
@@ -722,11 +710,13 @@ fn mic_info_from_identity(identity: &MicIdentity) -> MicInfo {
 }
 
 #[cfg(target_os = "linux")]
-fn enhance_mic_info(info: &mut MicInfo, is_default: bool) -> Option<String> {
+fn enhance_mic_info(info: &mut MicInfo, is_default: bool) {
     if !is_default && info.name != "default" {
-        return None;
+        return;
     }
-    let source = pactl_default_source_info()?;
+    let Some(source) = pactl_default_source_info() else {
+        return;
+    };
     let source_id = source.name.clone();
     info.name = source.description.unwrap_or(source.name);
     if let Some(rate) = source.rate {
@@ -738,15 +728,12 @@ fn enhance_mic_info(info: &mut MicInfo, is_default: bool) -> Option<String> {
     if let Some(format) = source.sample_format {
         info.sample_format = format;
     }
-    info.source_id = Some(source_id.clone());
+    info.source_id = Some(source_id);
     info.resampling = info.input_rate != TARGET_RATE;
-    Some(source_id)
 }
 
 #[cfg(not(target_os = "linux"))]
-fn enhance_mic_info(_info: &mut MicInfo, _is_default: bool) -> Option<String> {
-    None
-}
+fn enhance_mic_info(_info: &mut MicInfo, _is_default: bool) {}
 
 /// Return whether a device name looks like a monitor or virtual input.
 ///
@@ -896,7 +883,6 @@ fn build_stream<T>(
     channels: usize,
     mut producer: HeapProd<f32>,
     stream_error: Arc<Mutex<Option<String>>>,
-    dropped_ring_samples: Arc<AtomicU64>,
     wake: Sender<()>,
 ) -> Result<Stream>
 where
@@ -932,11 +918,7 @@ where
                     }
                 }
 
-                let pushed = producer.push_slice(&mono_scratch);
-                if pushed < mono_scratch.len() {
-                    dropped_ring_samples
-                        .fetch_add((mono_scratch.len() - pushed) as u64, Ordering::Relaxed);
-                }
+                let _ = producer.push_slice(&mono_scratch);
                 let _ = wake.try_send(());
             },
             err_fn,

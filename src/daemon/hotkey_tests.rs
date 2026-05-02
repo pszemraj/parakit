@@ -222,16 +222,22 @@ fn unrelated_keys_pass_through() {
 
 #[test]
 fn backend_labels_are_stable() {
-    assert_eq!(HotkeyBackend::Auto.label(), "auto");
-    assert_eq!(HotkeyBackend::Desktop.label(), "desktop");
+    for (backend, label) in [
+        (HotkeyBackend::Auto, "auto"),
+        (HotkeyBackend::Desktop, "desktop"),
+    ] {
+        assert_eq!(backend.label(), label);
+    }
     #[cfg(target_os = "linux")]
-    {
-        assert_eq!(HotkeyBackend::X11GlobalHotkey.label(), "x11-global-hotkey");
-        assert_eq!(HotkeyBackend::X11Listen.label(), "x11-listen");
-        assert_eq!(
-            HotkeyBackend::EvdevProxyExperimental.label(),
-            "evdev-proxy-experimental"
-        );
+    for (backend, label) in [
+        (HotkeyBackend::X11GlobalHotkey, "x11-global-hotkey"),
+        (HotkeyBackend::X11Listen, "x11-listen"),
+        (
+            HotkeyBackend::EvdevProxyExperimental,
+            "evdev-proxy-experimental",
+        ),
+    ] {
+        assert_eq!(backend.label(), label);
     }
 }
 
@@ -266,17 +272,17 @@ fn x11_keymap_bit_probe_detects_down_keycodes() {
 #[cfg(target_os = "linux")]
 #[test]
 fn linux_backend_routing_helpers_classify_backends() {
-    assert!(HotkeyBackend::Auto.uses_registered_x11());
-    assert!(HotkeyBackend::Desktop.uses_registered_x11());
-    assert!(HotkeyBackend::X11GlobalHotkey.uses_registered_x11());
-    assert!(!HotkeyBackend::X11Listen.uses_registered_x11());
-    assert!(!HotkeyBackend::EvdevProxyExperimental.uses_registered_x11());
-
-    assert!(HotkeyBackend::X11Listen.uses_passive_x11_listen());
-    assert!(!HotkeyBackend::X11GlobalHotkey.uses_passive_x11_listen());
-
-    assert!(HotkeyBackend::EvdevProxyExperimental.uses_evdev_proxy());
-    assert!(!HotkeyBackend::X11Listen.uses_evdev_proxy());
+    for (backend, registered, passive, evdev) in [
+        (HotkeyBackend::Auto, true, false, false),
+        (HotkeyBackend::Desktop, true, false, false),
+        (HotkeyBackend::X11GlobalHotkey, true, false, false),
+        (HotkeyBackend::X11Listen, false, true, false),
+        (HotkeyBackend::EvdevProxyExperimental, false, false, true),
+    ] {
+        assert_eq!(backend.uses_registered_x11(), registered);
+        assert_eq!(backend.uses_passive_x11_listen(), passive);
+        assert_eq!(backend.uses_evdev_proxy(), evdev);
+    }
 }
 
 #[cfg(target_os = "linux")]

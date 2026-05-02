@@ -626,8 +626,6 @@ fn linux_evdev_key_to_rdev(key: evdev_rs::enums::EV_KEY) -> Option<Key> {
 
 #[cfg(target_os = "linux")]
 fn open_keyboard_devices(log: &Logger) -> io::Result<Vec<LinuxKeyboardDevice>> {
-    use evdev_rs::enums::{EventCode, EV_KEY};
-
     let mut out = Vec::new();
     for path in linux_event_device_paths()? {
         let file = match open_evdev_input(&path) {
@@ -643,10 +641,7 @@ fn open_keyboard_devices(log: &Logger) -> io::Result<Vec<LinuxKeyboardDevice>> {
             }
         };
 
-        let has_space = device.has_event_code(&EventCode::EV_KEY(EV_KEY::KEY_SPACE));
-        let has_ctrl = device.has_event_code(&EventCode::EV_KEY(EV_KEY::KEY_LEFTCTRL))
-            || device.has_event_code(&EventCode::EV_KEY(EV_KEY::KEY_RIGHTCTRL));
-        if !has_space || !has_ctrl {
+        if !linux_device_has_ctrl_space(&device) {
             continue;
         }
 
@@ -667,6 +662,21 @@ fn open_keyboard_devices(log: &Logger) -> io::Result<Vec<LinuxKeyboardDevice>> {
 }
 
 #[cfg(target_os = "linux")]
+/// Return whether an evdev device can produce the configured Ctrl+Space chord.
+///
+/// # Returns
+///
+/// `true` when the device advertises Space and either Ctrl key.
+pub(crate) fn linux_device_has_ctrl_space(device: &evdev_rs::Device) -> bool {
+    use evdev_rs::enums::{EventCode, EV_KEY};
+
+    let has_space = device.has_event_code(&EventCode::EV_KEY(EV_KEY::KEY_SPACE));
+    let has_ctrl = device.has_event_code(&EventCode::EV_KEY(EV_KEY::KEY_LEFTCTRL))
+        || device.has_event_code(&EventCode::EV_KEY(EV_KEY::KEY_RIGHTCTRL));
+    has_space && has_ctrl
+}
+
+#[cfg(target_os = "linux")]
 fn open_evdev_input(path: &std::path::Path) -> io::Result<File> {
     use std::os::unix::fs::OpenOptionsExt;
 
@@ -677,7 +687,16 @@ fn open_evdev_input(path: &std::path::Path) -> io::Result<File> {
 }
 
 #[cfg(target_os = "linux")]
-fn linux_event_device_paths() -> io::Result<Vec<PathBuf>> {
+/// Return sorted Linux evdev event device paths.
+///
+/// # Returns
+///
+/// Paths named `event*` under `/dev/input`.
+///
+/// # Errors
+///
+/// Returns an error if `/dev/input` cannot be read.
+pub(crate) fn linux_event_device_paths() -> io::Result<Vec<PathBuf>> {
     let mut paths = Vec::new();
     for entry in std::fs::read_dir("/dev/input")? {
         let entry = entry?;

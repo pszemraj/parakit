@@ -5,14 +5,25 @@ use std::thread;
 use std::time::Duration;
 
 #[test]
-fn virtual_input_names_are_filtered() {
-    assert!(is_virtual_input_name(
-        "Monitor of USB Speech Mic Analog Stereo"
-    ));
-    assert!(is_virtual_input_name("BlackHole 2ch"));
-    assert!(is_virtual_input_name("PulseAudio Loopback"));
-    assert!(!is_virtual_input_name("USB Speech Mic Mono"));
-    assert!(!is_virtual_input_name("Bluetooth Test Headset"));
+fn input_name_classifiers_are_stable() {
+    for (name, virtual_input, bluetooth) in [
+        ("Monitor of USB Speech Mic Analog Stereo", true, false),
+        ("BlackHole 2ch", true, false),
+        ("PulseAudio Loopback", true, false),
+        ("USB Speech Mic Mono", false, false),
+        ("Bluetooth Test Headset", false, true),
+        (
+            "bluez_input.00_11_22_33_44_55.headset-head-unit",
+            false,
+            true,
+        ),
+        ("WH-1000XM4 Hands-Free AG Audio", false, true),
+        ("AirPods Pro", false, true),
+        ("Pixel Buds Pro", false, true),
+    ] {
+        assert_eq!(is_virtual_input_name(name), virtual_input, "{name}");
+        assert_eq!(is_bluetooth_input_name(name), bluetooth, "{name}");
+    }
 }
 
 #[test]
@@ -150,17 +161,6 @@ fn audio_drain_drop_stops_thread() {
 }
 
 #[test]
-fn start_recording_seeds_buffer_with_pre_roll() {
-    let handle = AudioHandle::test_handle();
-    append_processed_samples(&handle.state, &handle.session_epoch, &[0.1, 0.2, 0.3]);
-
-    handle.start_recording();
-    let pcm = handle.stop_recording();
-
-    assert_eq!(pcm, vec![0.1, 0.2, 0.3]);
-}
-
-#[test]
 fn start_recording_consumes_pre_roll() {
     let handle = AudioHandle::test_handle();
     append_processed_samples(&handle.state, &handle.session_epoch, &[0.1, 0.2, 0.3]);
@@ -176,18 +176,6 @@ fn start_recording_consumes_pre_roll() {
 
 #[test]
 fn bluetooth_input_names_are_detected_but_not_virtual() {
-    for name in [
-        "Bluetooth Test Headset",
-        "bluez_input.00_11_22_33_44_55.headset-head-unit",
-        "WH-1000XM4 Hands-Free AG Audio",
-        "AirPods Pro",
-        "Pixel Buds Pro",
-    ] {
-        assert!(is_bluetooth_input_name(name), "{name}");
-        assert!(!is_virtual_input_name(name), "{name}");
-    }
-    assert!(!is_bluetooth_input_name("USB Speech Mic Mono"));
-
     let by_name = MicInfo {
         name: "Bluetooth Test Headset".to_string(),
         input_rate: 16_000,

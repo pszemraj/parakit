@@ -232,20 +232,23 @@ fn handle_client(
     paste_mode: PasteMode,
     log: &Logger,
 ) {
-    let response = match read_command(&stream).and_then(|command| {
+    let outcome = match read_command(&stream).and_then(|command| {
         handle_command(command, Arc::clone(state), paste_mode).map_err(|err| IpcResponse::Err {
             message: format!("{err:#}"),
         })
     }) {
-        Ok(response) => response,
-        Err(response) => response,
+        Ok(outcome) => outcome,
+        Err(response) => CommandOutcome {
+            response,
+            stop_after_response: false,
+        },
     };
 
-    if let Err(err) = write_response(&mut stream, &response) {
+    if let Err(err) = write_response(&mut stream, &outcome.response) {
         log.warn(format!("control socket response failed: {err:#}"));
     }
 
-    if matches!(response, IpcResponse::Ok { ref message } if message == "stopping") {
+    if outcome.stop_after_response {
         let socket_path = preflight::control_socket_path().ok();
         thread::spawn(move || {
             thread::sleep(Duration::from_millis(50));
@@ -310,55 +313,66 @@ fn ensure_private_socket_dir(path: &std::path::Path) -> Result<()> {
     Ok(())
 }
 
+struct CommandOutcome {
+    response: IpcResponse,
+    stop_after_response: bool,
+}
+
 fn handle_command(
     command: IpcCommand,
     state: Arc<SharedState>,
     paste_mode: PasteMode,
-) -> Result<IpcResponse> {
+) -> Result<CommandOutcome> {
     match command {
-        IpcCommand::Status => Ok(state.status()),
-        IpcCommand::Stop => Ok(IpcResponse::Ok {
-            message: "stopping".to_string(),
+        IpcCommand::Status => Ok(CommandOutcome {
+            response: state.status(),
+            stop_after_response: false,
+        }),
+        IpcCommand::Stop => Ok(CommandOutcome {
+            response: IpcResponse::Ok {
+                message: "stopping".to_string(),
+            },
+            stop_after_response: true,
         }),
         IpcCommand::PasteLast => {
             let text = state
                 .last_transcript()
                 .context("no transcript has been captured in this daemon session")?;
             let result = paste_text(&text, paste_mode)?;
-            Ok(IpcResponse::Ok {
-                message: match result {
-                    IpcPasteResult::Pasted => "pasted last transcript",
-                    IpcPasteResult::CopiedOnly => "copied last transcript",
-                }
-                .to_string(),
+            Ok(CommandOutcome {
+                response: IpcResponse::Ok {
+                    message: match result {
+                        PasteOutcome::Pasted => "pasted last transcript",
+                        PasteOutcome::CopiedOnly => "copied last transcript",
+                    }
+                    .to_string(),
+                },
+                stop_after_response: false,
             })
         }
         IpcCommand::TestPaste { text } => {
             let result = paste_text(&text, paste_mode)?;
-            Ok(IpcResponse::Ok {
-                message: match result {
-                    IpcPasteResult::Pasted => "test paste sent",
-                    IpcPasteResult::CopiedOnly => "test text copied",
-                }
-                .to_string(),
+            Ok(CommandOutcome {
+                response: IpcResponse::Ok {
+                    message: match result {
+                        PasteOutcome::Pasted => "test paste sent",
+                        PasteOutcome::CopiedOnly => "test text copied",
+                    }
+                    .to_string(),
+                },
+                stop_after_response: false,
             })
         }
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum IpcPasteResult {
-    Pasted,
-    CopiedOnly,
-}
-
-fn paste_text(text: &str, paste_mode: PasteMode) -> Result<IpcPasteResult> {
+fn paste_text(text: &str, paste_mode: PasteMode) -> Result<PasteOutcome> {
     let mut injector = Injector::new().context("could not initialize insertion backend")?;
     let text = match sanitize_for_paste(text, paste_mode) {
         PastePlan::Paste(text) => text,
         PastePlan::CopyOnly { text, .. } => {
             injector.copy_text(&text)?;
-            return Ok(IpcPasteResult::CopiedOnly);
+            return Ok(PasteOutcome::CopiedOnly);
         }
         PastePlan::Skip { reason } => anyhow::bail!("paste text skipped by sanitizer: {reason}"),
     };
@@ -367,7 +381,7 @@ fn paste_text(text: &str, paste_mode: PasteMode) -> Result<IpcPasteResult> {
         super::target::TargetDecision::Allow => {}
         super::target::TargetDecision::CopyOnly(_) => {
             injector.copy_text(&text)?;
-            return Ok(IpcPasteResult::CopiedOnly);
+            return Ok(PasteOutcome::CopiedOnly);
         }
         super::target::TargetDecision::Block(reason) => {
             anyhow::bail!("target safety blocked paste: {reason}");
@@ -381,10 +395,7 @@ fn paste_text(text: &str, paste_mode: PasteMode) -> Result<IpcPasteResult> {
             None => Ok(false),
         })
         .context("could not send paste command")?;
-    Ok(match outcome {
-        PasteOutcome::Pasted => IpcPasteResult::Pasted,
-        PasteOutcome::CopiedOnly => IpcPasteResult::CopiedOnly,
-    })
+    Ok(outcome)
 }
 
 #[cfg(unix)]
