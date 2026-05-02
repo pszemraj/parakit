@@ -7,7 +7,7 @@ Default behavior:
 - `auto` and `desktop` register `Ctrl+Space` with the X11 session through `global-hotkey`.
 - `x11-global-hotkey` forces the same registered X11 backend as `auto`.
 - `x11-listen` passively observes X11 key events with `rdev::listen`. It does not grab, suppress, or forward keys, so `Ctrl+Space` can also reach the focused application.
-- `evdev-proxy-experimental` uses the experimental evdev/uinput keyboard proxy. `evdev-proxy` and `evdev` are compatibility aliases.
+- `evdev-proxy-experimental` uses the experimental evdev/uinput keyboard proxy. `evdev-proxy` is a compatibility alias.
 - The default path does not read `/dev/input` and does not require `/dev/uinput`.
 - Linux insertion uses X11/XTest and requires an X11 session for every paste mode, including `direct`.
 - Wayland sessions are rejected during startup. An XWayland `DISPLAY` is not enough because XTest cannot insert into focused native Wayland applications.

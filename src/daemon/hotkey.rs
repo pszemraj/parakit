@@ -4,6 +4,8 @@
 //! and the evdev/uinput keyboard proxy remain explicit non-default backends.
 
 use super::{logging::Logger, recording::HotkeyTransition};
+#[cfg(target_os = "linux")]
+use anyhow::Context as _;
 use crossbeam_channel::Sender;
 #[cfg(target_os = "linux")]
 use global_hotkey::{
@@ -17,6 +19,12 @@ use std::time::{Duration, Instant};
 use std::{fs::File, io, path::PathBuf};
 
 const HOTKEY_DEBOUNCE: Duration = Duration::from_millis(150);
+#[cfg(target_os = "linux")]
+const SPACE_KEYSYM: u32 = b' ' as u32;
+#[cfg(target_os = "linux")]
+const CONTROL_L_KEYSYM: u32 = 0xffe3;
+#[cfg(target_os = "linux")]
+const CONTROL_R_KEYSYM: u32 = 0xffe4;
 
 /// Hotkey backend preference.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, clap::ValueEnum)]
@@ -35,11 +43,7 @@ pub(crate) enum HotkeyBackend {
     X11Listen,
     /// Force the experimental low-level evdev/uinput keyboard proxy backend.
     #[cfg(target_os = "linux")]
-    #[value(
-        name = "evdev-proxy-experimental",
-        alias = "evdev-proxy",
-        alias = "evdev"
-    )]
+    #[value(name = "evdev-proxy-experimental", alias = "evdev-proxy")]
     EvdevProxyExperimental,
 }
 
@@ -87,7 +91,7 @@ impl HotkeyBackend {
     ///
     /// # Returns
     ///
-    /// `true` for `evdev-proxy-experimental` and its CLI aliases.
+    /// `true` for `evdev-proxy-experimental` and its explicit proxy alias.
     pub(crate) fn uses_evdev_proxy(self) -> bool {
         matches!(self, Self::EvdevProxyExperimental)
     }
@@ -357,6 +361,7 @@ fn run_linux_registered_hotkey_loop(tx: Sender<HotkeyTransition>) -> anyhow::Res
 
     let receiver = GlobalHotKeyEvent::receiver();
     let mut latch = RegisteredHotkeyLatch::default();
+    let physical = X11PhysicalHotkeyProbe::open().ok();
     loop {
         let event = receiver
             .recv()
@@ -368,12 +373,71 @@ fn run_linux_registered_hotkey_loop(tx: Sender<HotkeyTransition>) -> anyhow::Res
         let now = Instant::now();
         let action = match event.state {
             RegisteredHotKeyState::Pressed => latch.press(now),
-            RegisteredHotKeyState::Released => latch.release(now),
+            RegisteredHotKeyState::Released => {
+                if physical
+                    .as_ref()
+                    .and_then(|probe| probe.ctrl_space_down().ok())
+                    .unwrap_or(false)
+                {
+                    continue;
+                }
+                latch.release(now)
+            }
         };
         if let Some(action) = action {
             send_hotkey_transition(action, &tx);
         }
     }
+}
+
+#[cfg(target_os = "linux")]
+struct X11PhysicalHotkeyProbe {
+    conn: x11rb::rust_connection::RustConnection,
+    space: u8,
+    ctrl_l: u8,
+    ctrl_r: u8,
+}
+
+#[cfg(target_os = "linux")]
+impl X11PhysicalHotkeyProbe {
+    fn open() -> anyhow::Result<Self> {
+        let (conn, _) = x11rb::rust_connection::RustConnection::connect(None)
+            .context("could not connect to X11 for physical hotkey probe")?;
+        let space = super::x11::keycode_for_keysym(&conn, SPACE_KEYSYM)
+            .context("could not resolve X11 Space keycode")?;
+        let ctrl_l = super::x11::keycode_for_keysym(&conn, CONTROL_L_KEYSYM)
+            .context("could not resolve X11 Control_L keycode")?;
+        let ctrl_r = super::x11::keycode_for_keysym(&conn, CONTROL_R_KEYSYM)
+            .context("could not resolve X11 Control_R keycode")?;
+
+        Ok(Self {
+            conn,
+            space,
+            ctrl_l,
+            ctrl_r,
+        })
+    }
+
+    fn ctrl_space_down(&self) -> anyhow::Result<bool> {
+        use x11rb::protocol::xproto::ConnectionExt as _;
+
+        let reply = self
+            .conn
+            .query_keymap()
+            .context("could not query X11 keymap")?
+            .reply()
+            .context("could not read X11 keymap")?;
+
+        Ok(keycode_down(&reply.keys, self.space)
+            && (keycode_down(&reply.keys, self.ctrl_l) || keycode_down(&reply.keys, self.ctrl_r)))
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn keycode_down(keys: &[u8; 32], keycode: u8) -> bool {
+    let idx = usize::from(keycode / 8);
+    let bit = keycode % 8;
+    keys.get(idx).is_some_and(|byte| byte & (1_u8 << bit) != 0)
 }
 
 #[cfg(target_os = "linux")]

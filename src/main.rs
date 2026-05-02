@@ -187,10 +187,7 @@ struct DoctorCli {
 
 enum WorkerEvent {
     /// Recording began at this instant.
-    RecordingStarted {
-        /// Focus target captured before audio recording began.
-        focus: Option<FocusSnapshot>,
-    },
+    RecordingStarted,
     /// Recording ended and the captured PCM moved out of the audio buffer.
     RecordingStopped {
         /// Monotonic timestamp captured when recording started.
@@ -199,6 +196,8 @@ enum WorkerEvent {
         stopped_at: Instant,
         /// Owned 16 kHz mono PCM for this utterance.
         pcm: Vec<f32>,
+        /// Focus target captured before audio recording began.
+        focus_at_start: Option<FocusSnapshot>,
     },
 }
 
@@ -444,12 +443,13 @@ fn run_ptt_audio_simulation(cli: &Cli, log: Arc<Logger>, audio_path: &Path) -> R
 
     let started_at = Instant::now();
     let stopped_at = started_at + Duration::from_secs_f32(audio_secs);
-    tx.send(WorkerEvent::RecordingStarted { focus: None })
+    tx.send(WorkerEvent::RecordingStarted)
         .context("could not send simulated PTT start event")?;
     tx.send(WorkerEvent::RecordingStopped {
         started_at,
         stopped_at,
         pcm: wav.samples,
+        focus_at_start: None,
     })
     .context("could not send simulated PTT stop event")?;
     drop(tx);
@@ -703,12 +703,9 @@ fn worker_loop(ctx: WorkerCtx) {
     } else {
         None
     };
-    let mut recording_focus: Option<FocusSnapshot> = None;
-
     while let Ok(ev) = rx.recv() {
         match ev {
-            WorkerEvent::RecordingStarted { focus } => {
-                recording_focus = focus;
+            WorkerEvent::RecordingStarted => {
                 sounds.start();
                 log.line("parakit: recording...");
             }
@@ -716,6 +713,7 @@ fn worker_loop(ctx: WorkerCtx) {
                 started_at,
                 stopped_at,
                 pcm,
+                focus_at_start,
             } => {
                 let stop_started = Instant::now();
                 let secs = pcm.len() as f32 / TARGET_RATE as f32;
@@ -725,7 +723,6 @@ fn worker_loop(ctx: WorkerCtx) {
                         "parakit: skipped silent capture ({secs:.2}s audio, {wall_secs:.2}s wall)"
                     ));
                     log.line("parakit: no speech detected");
-                    recording_focus = None;
                     sounds.success();
                     continue;
                 }
@@ -749,7 +746,6 @@ fn worker_loop(ctx: WorkerCtx) {
                         );
                         if !insert_transcripts {
                             log.verbose("parakit: insertion skipped for PTT audio simulation");
-                            recording_focus = None;
                             sounds.success();
                             continue;
                         }
@@ -758,7 +754,7 @@ fn worker_loop(ctx: WorkerCtx) {
                             &mut injector,
                             &transcript.cleaned,
                             paste_mode,
-                            recording_focus.as_ref(),
+                            focus_at_start.as_ref(),
                             &log,
                         );
                         match insert_result {
@@ -778,15 +774,12 @@ fn worker_loop(ctx: WorkerCtx) {
                                 sounds.error();
                             }
                         }
-                        recording_focus = None;
                     }
                     Ok(None) => {
-                        recording_focus = None;
                         log.line("parakit: no speech detected");
                         sounds.success();
                     }
                     Err(e) => {
-                        recording_focus = None;
                         log.error(&format!("transcribe failed: {e:#}"));
                         sounds.error();
                     }

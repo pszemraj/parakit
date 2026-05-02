@@ -61,8 +61,13 @@ impl AudioHandle {
     ///
     /// The captured mono PCM samples at [`TARGET_RATE`].
     pub fn stop_recording(&self) -> Vec<f32> {
-        self.session_epoch.store(0, Ordering::Release);
+        // Take the pipeline lock before closing the epoch. A callback that
+        // already entered the pipeline before this stop boundary owns real
+        // final audio and should be allowed to append it. A callback that only
+        // observed the old epoch but has not reached the pipeline yet will see
+        // the epoch close below and drop its chunk.
         let mut pipeline = self.pipeline.lock();
+        self.session_epoch.store(0, Ordering::Release);
         let mut flushed = Vec::new();
         pipeline.finish_recording(&mut flushed);
 
@@ -530,15 +535,23 @@ fn selected_mic_info(host: &cpal::Host) -> Result<MicInfo> {
 
 fn selected_mic_identity(host: &cpal::Host) -> Result<MicIdentity> {
     let selected = select_input_device(host)?;
-    Ok(mic_snapshot_from_selected(&selected).1)
+    // This runs from the idle device poll. Keep it raw and CPAL-only: enriched
+    // Linux info shells out to pactl and must stay on startup/reopen paths.
+    Ok(raw_mic_identity_from_selected(&selected))
 }
 
 fn mic_snapshot_from_selected(selected: &SelectedInput) -> (MicInfo, MicIdentity) {
-    let raw_identity = mic_identity_from_config(&selected.name, &selected.config);
+    let raw_identity = raw_mic_identity_from_selected(selected);
     let mut info = mic_info_from_identity(&raw_identity);
     let source_id = enhance_mic_info(&mut info, selected.is_default);
-    let identity = mic_identity_from_info(&info, source_id);
-    (info, identity)
+    if let Some(source_id) = source_id {
+        info.source_id = Some(source_id);
+    }
+    (info, raw_identity)
+}
+
+fn raw_mic_identity_from_selected(selected: &SelectedInput) -> MicIdentity {
+    mic_identity_from_config(&selected.name, &selected.config)
 }
 
 fn mic_identity_from_config(name: &str, config: &cpal::SupportedStreamConfig) -> MicIdentity {
@@ -559,16 +572,6 @@ fn mic_info_from_identity(identity: &MicIdentity) -> MicInfo {
         sample_format: identity.sample_format.clone(),
         source_id: identity.source_id.clone(),
         resampling: identity.input_rate != TARGET_RATE,
-    }
-}
-
-fn mic_identity_from_info(info: &MicInfo, source_id: Option<String>) -> MicIdentity {
-    MicIdentity {
-        name: info.name.clone(),
-        source_id,
-        input_rate: info.input_rate,
-        channels: info.channels,
-        sample_format: info.sample_format.clone(),
     }
 }
 

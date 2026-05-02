@@ -2,6 +2,8 @@
 
 use super::*;
 use std::sync::Arc;
+use std::thread;
+use std::time::Duration;
 
 #[test]
 fn virtual_input_names_are_filtered() {
@@ -75,6 +77,36 @@ fn stale_audio_callback_chunks_are_dropped() {
 }
 
 #[test]
+fn stop_recording_keeps_final_chunk_already_inside_pipeline() {
+    let handle = AudioHandle {
+        buffer: Arc::new(Mutex::new(Vec::new())),
+        session_epoch: Arc::new(AtomicU64::new(0)),
+        next_session_epoch: Arc::new(AtomicU64::new(0)),
+        pipeline: Arc::new(Mutex::new(CapturePipeline::default())),
+    };
+
+    handle.start_recording();
+    let observed_epoch = handle.session_epoch.load(Ordering::Acquire);
+    let pipeline_guard = handle.pipeline.lock();
+    let stopper = {
+        let handle = handle.clone();
+        thread::spawn(move || handle.stop_recording())
+    };
+
+    thread::sleep(Duration::from_millis(25));
+    append_recording_samples(
+        &handle.buffer,
+        &handle.session_epoch,
+        observed_epoch,
+        &[0.7],
+    );
+    drop(pipeline_guard);
+
+    let pcm = stopper.join().expect("stop thread should not panic");
+    assert_eq!(pcm, vec![0.7]);
+}
+
+#[test]
 fn bluetooth_input_names_are_detected_but_not_virtual() {
     for name in [
         "Bluetooth Test Headset",
@@ -107,32 +139,6 @@ fn bluetooth_input_names_are_detected_but_not_virtual() {
         resampling: false,
     };
     assert!(by_source.looks_bluetooth());
-}
-
-#[test]
-fn mic_identity_uses_enhanced_info_fields() {
-    let info = MicInfo {
-        name: "USB Speech Mic Mono".to_string(),
-        input_rate: 48_000,
-        channels: 1,
-        sample_format: "s24le".to_string(),
-        source_id: None,
-        resampling: true,
-    };
-
-    assert_eq!(
-        mic_identity_from_info(
-            &info,
-            Some("alsa_input.usb-Test_Speech_Mic-00.mono-fallback".to_string())
-        ),
-        MicIdentity {
-            name: "USB Speech Mic Mono".to_string(),
-            source_id: Some("alsa_input.usb-Test_Speech_Mic-00.mono-fallback".to_string()),
-            input_rate: 48_000,
-            channels: 1,
-            sample_format: "s24le".to_string(),
-        }
-    );
 }
 
 #[test]

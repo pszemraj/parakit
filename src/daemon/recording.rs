@@ -55,14 +55,15 @@ fn recording_coordinator_loop(
     audio: AudioHandle,
 ) {
     let mut started_at = None;
+    let mut focus_at_start = None;
 
     while let Ok(transition) = rx.recv() {
         match transition {
             HotkeyTransition::Pressed { at } if started_at.is_none() => {
-                let focus = FocusSnapshot::capture().ok();
+                focus_at_start = FocusSnapshot::capture().ok();
                 audio.start_recording();
                 started_at = Some(at);
-                let _ = tx.send(WorkerEvent::RecordingStarted { focus });
+                let _ = tx.send(WorkerEvent::RecordingStarted);
             }
             HotkeyTransition::Pressed { .. } => {}
             HotkeyTransition::Released { at } => {
@@ -74,6 +75,7 @@ fn recording_coordinator_loop(
                     started_at: start,
                     stopped_at: at,
                     pcm,
+                    focus_at_start: focus_at_start.take(),
                 });
             }
         }

@@ -254,7 +254,18 @@ fn linux_backend_aliases_parse_to_stable_variants() {
         HotkeyBackend::EvdevProxyExperimental
     );
     assert_eq!(parse("evdev-proxy"), HotkeyBackend::EvdevProxyExperimental);
-    assert_eq!(parse("evdev"), HotkeyBackend::EvdevProxyExperimental);
+    assert!(<HotkeyBackend as clap::ValueEnum>::from_str("evdev", false).is_err());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn x11_keymap_bit_probe_detects_down_keycodes() {
+    let mut keys = [0_u8; 32];
+    keys[4] = 0b0010_0000;
+
+    assert!(keycode_down(&keys, 37));
+    assert!(!keycode_down(&keys, 36));
+    assert!(!keycode_down(&keys, 255));
 }
 
 #[cfg(target_os = "linux")]
