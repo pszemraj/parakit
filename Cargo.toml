@@ -40,8 +40,8 @@ hound = "3.5"          # WAV decoding for quality tools and daemon validation ru
 # Lock-free or mutex-protected shared state
 parking_lot = "0.12"
 
-# Low-level push-to-talk hotkey capture. On Linux this reads evdev devices,
-# so it needs explicit /dev/input access.
+# Low-level push-to-talk hotkey capture. On Linux this remains available only
+# through the explicit evdev-proxy backend.
 rdev = { version = "0.5", features = ["unstable_grab"], optional = true }
 
 # Text insertion at cursor. Batch mode uses clipboard paste; direct mode uses
@@ -72,7 +72,10 @@ libc = "0.2"
 crossbeam-channel = "0.5"
 
 [target.'cfg(target_os = "linux")'.dependencies]
-# Linux hotkey capture uses a narrow evdev/uinput grab for keyboard devices.
+# Linux default hotkey capture registers Ctrl+Space with the X11 desktop.
+global-hotkey = { version = "0.8", optional = true }
+
+# Experimental Linux evdev/uinput keyboard proxy backend.
 epoll = { version = "4.4", optional = true }
 evdev-rs = { version = "0.4", optional = true }
 
@@ -91,6 +94,7 @@ daemon = [
   "dep:enigo",
   "dep:epoll",
   "dep:evdev-rs",
+  "dep:global-hotkey",
   "dep:rdev",
   "dep:rodio",
   "dep:x11rb",

@@ -13,8 +13,8 @@
 //! State machine (single-recording-at-a-time invariant):
 //!   Idle --[Ctrl+Space down]--> Recording --[Ctrl+Space up]--> Transcribing --> Idle
 //!
-//! On Linux, `auto` uses a narrow evdev keyboard grab. The legacy X11 desktop
-//! hotkey backend is disabled from the daemon critical path.
+//! On Linux, `auto` registers Ctrl+Space with the X11 desktop. The evdev/uinput
+//! keyboard proxy is explicit and experimental.
 
 mod daemon;
 
@@ -39,7 +39,7 @@ use std::time::{Duration, Instant};
 
 use crate::daemon::audio::{AudioCapture, TARGET_RATE};
 use crate::daemon::hotkey::HotkeyBackend;
-use crate::daemon::inject::{Injector, PasteMode};
+use crate::daemon::inject::{FocusSnapshot, Injector, PasteMode};
 use crate::daemon::logging::{BannerInfo, LogLevel, Logger};
 use crate::daemon::sounds::Sounds;
 
@@ -111,7 +111,7 @@ struct Cli {
     #[arg(long, hide = true, value_name = "WAV")]
     simulate_ptt_audio: Option<PathBuf>,
 
-    /// Linux hotkey backend. `auto` uses the evdev keyboard grab path.
+    /// Linux hotkey backend. `auto` registers Ctrl+Space with the X11 session.
     #[cfg(target_os = "linux")]
     #[arg(long, value_enum, default_value_t = HotkeyBackend::Auto)]
     hotkey_backend: HotkeyBackend,
@@ -185,7 +185,10 @@ struct DoctorCli {
 
 enum Event_ {
     /// Recording began at this instant.
-    RecordingStarted,
+    RecordingStarted {
+        /// Focus target captured before audio recording began.
+        focus: Option<FocusSnapshot>,
+    },
     /// Recording ended and the captured PCM moved out of the audio buffer.
     RecordingStopped {
         /// Monotonic timestamp captured when recording started.
@@ -281,6 +284,9 @@ fn run() -> Result<()> {
     validate_batch_mode(&cli.mode)?;
 
     #[cfg(target_os = "linux")]
+    daemon::session::ensure_x11_session_supported()?;
+
+    #[cfg(target_os = "linux")]
     let _daemon_lock = daemon::preflight::acquire_singleton_lock()?;
 
     daemon::preflight::ensure_hotkey_ready(hotkey_backend)?;
@@ -298,6 +304,19 @@ fn run() -> Result<()> {
         .map(|dir| Arc::new(DataLogger::new(dir, cli.log_format)));
 
     let sounds = Sounds::new(!cli.no_sounds);
+
+    let capture = AudioCapture::open(Arc::clone(&log))?;
+    let audio = capture.handle.clone();
+    let mic_info = capture
+        .mic_info()
+        .context("audio manager started without reporting a microphone")?;
+    if mic_info.looks_bluetooth() {
+        log.warn(format!(
+            "selected microphone appears to be Bluetooth ({}); use a wired or local mic if latency or quality is poor",
+            mic_info.summary()
+        ));
+    }
+
     let model_path = match cli.model.as_deref() {
         Some(path) => path.to_path_buf(),
         None => fetch::ensure_default_model(cli.quiet || !cli.verbose)?,
@@ -316,12 +335,6 @@ fn run() -> Result<()> {
         engine.backend(),
         engine.threads()
     ));
-
-    let capture = AudioCapture::open(Arc::clone(&log))?;
-    let audio = capture.handle.clone();
-    let mic_info = capture
-        .mic_info()
-        .context("audio manager started without reporting a microphone")?;
 
     // Banner.
     let model_name = model_file_name(&model_path);
@@ -416,7 +429,7 @@ fn run_ptt_audio_simulation(cli: &Cli, log: Arc<Logger>, audio_path: &Path) -> R
 
     let started_at = Instant::now();
     let stopped_at = started_at + Duration::from_secs_f32(audio_secs);
-    tx.send(Event_::RecordingStarted)
+    tx.send(Event_::RecordingStarted { focus: None })
         .context("could not send simulated PTT start event")?;
     tx.send(Event_::RecordingStopped {
         started_at,
@@ -675,10 +688,12 @@ fn worker_loop(ctx: WorkerCtx) {
     } else {
         None
     };
+    let mut recording_focus: Option<FocusSnapshot> = None;
 
     while let Ok(ev) = rx.recv() {
         match ev {
-            Event_::RecordingStarted => {
+            Event_::RecordingStarted { focus } => {
+                recording_focus = focus;
                 sounds.start();
                 log.line("parakit: recording...");
             }
@@ -690,6 +705,15 @@ fn worker_loop(ctx: WorkerCtx) {
                 let stop_started = Instant::now();
                 let secs = pcm.len() as f32 / TARGET_RATE as f32;
                 let wall_secs = stopped_at.duration_since(started_at).as_secs_f32();
+                if capture_should_skip(&pcm) {
+                    log.verbose(format!(
+                        "parakit: skipped silent capture ({secs:.2}s audio, {wall_secs:.2}s wall)"
+                    ));
+                    log.line("parakit: no speech detected");
+                    recording_focus = None;
+                    sounds.success();
+                    continue;
+                }
                 log.transcribing(secs, wall_secs);
 
                 match transcribe_clean(&engine, &pcm, cleaner.as_deref()) {
@@ -710,6 +734,7 @@ fn worker_loop(ctx: WorkerCtx) {
                         );
                         if !insert_transcripts {
                             log.verbose("parakit: insertion skipped for PTT audio simulation");
+                            recording_focus = None;
                             sounds.success();
                             continue;
                         }
@@ -718,6 +743,8 @@ fn worker_loop(ctx: WorkerCtx) {
                             &mut injector,
                             &transcript.cleaned,
                             paste_mode,
+                            recording_focus.as_ref(),
+                            &log,
                         );
                         match insert_result {
                             Ok(rebuilt_injector) => {
@@ -741,12 +768,15 @@ fn worker_loop(ctx: WorkerCtx) {
                                 sounds.error();
                             }
                         }
+                        recording_focus = None;
                     }
                     Ok(None) => {
+                        recording_focus = None;
                         log.line("parakit: no speech detected");
                         sounds.success();
                     }
                     Err(e) => {
+                        recording_focus = None;
                         log.error(&format!("transcribe failed: {e:#}"));
                         sounds.error();
                     }
@@ -760,7 +790,24 @@ fn paste_transcript_with_rebuilt_injector(
     injector: &mut Option<Injector>,
     text: &str,
     mode: PasteMode,
+    focus: Option<&FocusSnapshot>,
+    log: &Logger,
 ) -> Result<bool> {
+    if !focus_allows_insertion(focus, log) {
+        match injector.as_mut() {
+            Some(injector) => injector.copy_text(text),
+            None => {
+                let mut rebuilt = Injector::new()
+                    .context("could not initialize insertion backend for clipboard fallback")?;
+                let result = rebuilt.copy_text(text);
+                *injector = Some(rebuilt);
+                result
+            }
+        }
+        .context("focus changed; transcript copied to clipboard fallback")?;
+        return Ok(false);
+    }
+
     let first_attempt = match injector.as_mut() {
         Some(injector) => injector.paste_text(text, mode),
         None => Err(anyhow::anyhow!("insertion backend was not initialized")),
@@ -785,6 +832,29 @@ fn paste_transcript_with_rebuilt_injector(
             Err(anyhow::anyhow!(
                 "initial paste failed: {first_error:#}; retry after rebuilding insertion backend failed: {retry_error:#}"
             ))
+        }
+    }
+}
+
+fn focus_allows_insertion(focus: Option<&FocusSnapshot>, log: &Logger) -> bool {
+    let Some(focus) = focus else {
+        log.warn("recording focus was unavailable; copied transcript to clipboard without pasting");
+        return false;
+    };
+
+    match focus.matches_current() {
+        Ok(true) => true,
+        Ok(false) => {
+            log.warn(
+                "focus changed during recording; copied transcript to clipboard without pasting",
+            );
+            false
+        }
+        Err(err) => {
+            log.warn(format!(
+                "could not verify recording focus ({err:#}); copied transcript to clipboard without pasting"
+            ));
+            false
         }
     }
 }
@@ -822,6 +892,25 @@ fn transcribe_clean(
     }))
 }
 
+const SILENCE_PEAK_THRESHOLD: f32 = 0.001;
+const SILENCE_RMS_THRESHOLD: f32 = 0.0005;
+
+fn capture_should_skip(pcm: &[f32]) -> bool {
+    if pcm.is_empty() {
+        return true;
+    }
+
+    let mut peak = 0.0_f32;
+    let mut sum_squares = 0.0_f64;
+    for sample in pcm {
+        let abs = sample.abs();
+        peak = peak.max(abs);
+        sum_squares += f64::from(*sample) * f64::from(*sample);
+    }
+    let rms = (sum_squares / pcm.len() as f64).sqrt() as f32;
+    peak < SILENCE_PEAK_THRESHOLD && rms < SILENCE_RMS_THRESHOLD
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -851,5 +940,14 @@ mod tests {
     fn streaming_mode_is_rejected_with_required_message() {
         let err = validate_batch_mode("streaming").expect_err("streaming should be disabled");
         assert!(format!("{err:#}").contains("streaming mode is temporarily disabled"));
+    }
+
+    #[test]
+    fn silence_gate_skips_empty_and_quiet_audio_only() {
+        assert!(capture_should_skip(&[]));
+        assert!(capture_should_skip(&[0.0; 160]));
+        assert!(capture_should_skip(&[0.0001; 160]));
+        assert!(!capture_should_skip(&[0.0, 0.2]));
+        assert!(!capture_should_skip(&[0.01; 16]));
     }
 }

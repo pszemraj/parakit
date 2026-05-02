@@ -230,19 +230,23 @@ fn acquire_singleton_lock_at(path: &std::path::Path) -> Result<std::fs::File> {
 }
 
 #[cfg(target_os = "linux")]
-fn linux_hotkey_startup_blocked(backend: HotkeyBackend, evdev_ready: bool) -> bool {
-    match backend {
-        HotkeyBackend::Auto | HotkeyBackend::Evdev => !evdev_ready,
-        HotkeyBackend::Desktop => true,
+fn linux_hotkey_startup_blocked(
+    backend: HotkeyBackend,
+    registered_ready: bool,
+    evdev_ready: bool,
+) -> bool {
+    if backend.uses_registered_x11() {
+        !registered_ready
+    } else {
+        !evdev_ready
     }
 }
 
 #[cfg(target_os = "linux")]
 fn linux_hotkey_success_label(backend: HotkeyBackend) -> &'static str {
     match backend {
-        HotkeyBackend::Auto => "evdev keyboard grab",
-        HotkeyBackend::Evdev => "evdev keyboard grab",
-        HotkeyBackend::Desktop => unreachable!("desktop backend is disabled on Linux"),
+        HotkeyBackend::Auto | HotkeyBackend::Desktop => "registered X11 Ctrl+Space",
+        HotkeyBackend::EvdevProxy => "evdev/uinput keyboard proxy",
     }
 }
 
@@ -252,10 +256,18 @@ fn hotkey_report(backend: HotkeyBackend) -> HotkeyReport {
     let display = std::env::var("DISPLAY").unwrap_or_else(|_| "<unset>".to_string());
     let xauthority = std::env::var("XAUTHORITY").unwrap_or_else(|_| "<unset>".to_string());
     let user = std::env::var("USER").unwrap_or_else(|_| "$USER".to_string());
-    let evdev = evdev_report();
-    let evdev_ready = evdev.grab_likely_available();
-    let blocking = linux_hotkey_startup_blocked(backend, evdev_ready);
-    let status = linux_hotkey_status(backend, &evdev, blocking);
+    let registered = if backend.uses_registered_x11() {
+        Some(super::hotkey::registered_hotkey_probe())
+    } else {
+        None
+    };
+    let registered_ready = registered.as_ref().is_some_and(|result| result.is_ok());
+    let evdev = (!backend.uses_registered_x11()).then(evdev_report);
+    let evdev_ready = evdev
+        .as_ref()
+        .is_some_and(EvdevReport::grab_likely_available);
+    let blocking = linux_hotkey_startup_blocked(backend, registered_ready, evdev_ready);
+    let status = linux_hotkey_status(backend, registered.as_ref(), evdev.as_ref(), blocking);
 
     let mut details = String::new();
     writeln!(&mut details, "parakit doctor").unwrap();
@@ -266,51 +278,59 @@ fn hotkey_report(backend: HotkeyBackend) -> HotkeyReport {
     .unwrap();
     writeln!(&mut details, "  xauthority:     {xauthority}").unwrap();
     writeln!(&mut details, "  selected:       {}", backend.label()).unwrap();
-    writeln!(
-        &mut details,
-        "  desktop:        disabled for Linux-stable hotkey capture"
-    )
-    .unwrap();
-    writeln!(
-        &mut details,
-        "  evdev:          keyboard grab ({})",
-        evdev.status_label()
-    )
-    .unwrap();
-    writeln!(
-        &mut details,
-        "  input devices:  {} event device(s), {} readable, {} permission denied",
-        evdev.event_devices, evdev.readable, evdev.denied
-    )
-    .unwrap();
-    writeln!(
-        &mut details,
-        "  hotkey devices: {} Ctrl+Space keyboard candidate(s)",
-        evdev.hotkey_keyboards
-    )
-    .unwrap();
-    match &evdev.uinput_error {
-        Some(err) => writeln!(&mut details, "  uinput:        unavailable ({err})").unwrap(),
-        None => writeln!(&mut details, "  uinput:        writable").unwrap(),
-    };
-    if !evdev.other_errors.is_empty() {
-        writeln!(&mut details, "  input errors:").unwrap();
-        for err in &evdev.other_errors {
-            writeln!(&mut details, "    {err}").unwrap();
+    match registered.as_ref() {
+        Some(Ok(())) => writeln!(&mut details, "  registered:     Ctrl+Space available").unwrap(),
+        Some(Err(err)) => {
+            writeln!(&mut details, "  registered:     unavailable ({err:#})").unwrap();
         }
+        None => writeln!(&mut details, "  registered:     not selected").unwrap(),
+    }
+
+    if let Some(evdev) = &evdev {
+        writeln!(
+            &mut details,
+            "  evdev-proxy:    keyboard grab ({})",
+            evdev.status_label()
+        )
+        .unwrap();
+        writeln!(
+            &mut details,
+            "  input devices:  {} event device(s), {} readable, {} permission denied",
+            evdev.event_devices, evdev.readable, evdev.denied
+        )
+        .unwrap();
+        writeln!(
+            &mut details,
+            "  hotkey devices: {} Ctrl+Space keyboard candidate(s)",
+            evdev.hotkey_keyboards
+        )
+        .unwrap();
+        match &evdev.uinput_error {
+            Some(err) => writeln!(&mut details, "  uinput:         unavailable ({err})").unwrap(),
+            None => writeln!(&mut details, "  uinput:         writable").unwrap(),
+        };
+        if !evdev.other_errors.is_empty() {
+            writeln!(&mut details, "  input errors:").unwrap();
+            for err in &evdev.other_errors {
+                writeln!(&mut details, "    {err}").unwrap();
+            }
+        }
+    } else {
+        writeln!(
+            &mut details,
+            "  evdev-proxy:    not selected (/dev/input and /dev/uinput not checked)"
+        )
+        .unwrap();
     }
 
     if blocking {
         writeln!(&mut details, "  status:         FAIL").unwrap();
-        if backend == HotkeyBackend::Desktop {
-            writeln!(
-                &mut details,
-                "  reason:         desktop backend is disabled in the Linux-stable path"
-            )
-            .unwrap();
+        if backend.uses_registered_x11() {
+            write_registered_linux_fix(&mut details);
+        } else {
+            write_evdev_linux_fix(&mut details, &user);
         }
-        write_linux_fix(&mut details, &user);
-    } else if evdev_ready {
+    } else {
         writeln!(
             &mut details,
             "  status:         OK ({})",
@@ -328,29 +348,29 @@ fn hotkey_report(backend: HotkeyBackend) -> HotkeyReport {
             "session: XDG_SESSION_TYPE={session}, DISPLAY={display}, XAUTHORITY={xauthority}"
         )
         .unwrap();
-        writeln!(
-            &mut summary,
-            "desktop backend: disabled in the Linux-stable path"
-        )
-        .unwrap();
-        writeln!(
-            &mut summary,
-            "evdev backend: {} device(s), {} readable, {} Ctrl+Space keyboard candidate(s), {} permission denied",
-            evdev.event_devices, evdev.readable, evdev.hotkey_keyboards, evdev.denied
-        )
-        .unwrap();
-        if let Some(err) = &evdev.uinput_error {
-            writeln!(&mut summary, "uinput: unavailable ({err})").unwrap();
+        if backend.uses_registered_x11() {
+            if let Some(Err(err)) = registered.as_ref() {
+                writeln!(&mut summary, "registered hotkey: unavailable ({err:#})").unwrap();
+            }
+            write_registered_linux_fix(&mut summary);
+        } else if let Some(evdev) = &evdev {
+            writeln!(
+                &mut summary,
+                "evdev-proxy backend: {} device(s), {} readable, {} Ctrl+Space keyboard candidate(s), {} permission denied",
+                evdev.event_devices, evdev.readable, evdev.hotkey_keyboards, evdev.denied
+            )
+            .unwrap();
+            if let Some(err) = &evdev.uinput_error {
+                writeln!(&mut summary, "uinput: unavailable ({err})").unwrap();
+            }
+            write_evdev_linux_fix(&mut summary, &user);
         }
-        write_linux_fix(&mut summary, &user);
         summary
-    } else if evdev_ready {
+    } else {
         format!(
             "hotkey preflight passed with {}",
             linux_hotkey_success_label(backend)
         )
-    } else {
-        unreachable!("non-blocking Linux hotkey report requires evdev readiness")
     };
 
     HotkeyReport {
@@ -397,15 +417,26 @@ impl EvdevReport {
 }
 
 #[cfg(target_os = "linux")]
-fn linux_hotkey_status(backend: HotkeyBackend, evdev: &EvdevReport, blocking: bool) -> String {
-    if backend == HotkeyBackend::Desktop {
-        return "desktop backend disabled on Linux".to_string();
-    }
-
+fn linux_hotkey_status(
+    backend: HotkeyBackend,
+    registered: Option<&Result<()>>,
+    evdev: Option<&EvdevReport>,
+    blocking: bool,
+) -> String {
     if !blocking {
         return format!("{} ready", linux_hotkey_success_label(backend));
     }
 
+    if backend.uses_registered_x11() {
+        return match registered {
+            Some(Err(err)) => format!("registered Ctrl+Space unavailable ({err:#})"),
+            _ => "registered Ctrl+Space unavailable".to_string(),
+        };
+    }
+
+    let Some(evdev) = evdev else {
+        return "evdev-proxy unavailable".to_string();
+    };
     if !evdev.uinput_writable {
         return "uinput unavailable".to_string();
     }
@@ -425,7 +456,7 @@ fn linux_hotkey_status(backend: HotkeyBackend, evdev: &EvdevReport, blocking: bo
         return "input device scan errors".to_string();
     }
 
-    "evdev keyboard grab unavailable".to_string()
+    "evdev/uinput keyboard proxy unavailable".to_string()
 }
 
 #[cfg(target_os = "linux")]
@@ -494,10 +525,19 @@ fn evdev_report() -> EvdevReport {
 }
 
 #[cfg(target_os = "linux")]
-fn write_linux_fix(out: &mut String, user: &str) {
+fn write_registered_linux_fix(out: &mut String) {
     writeln!(
         out,
-        "fix:\n  - Grant the desktop user read access to /dev/input/event*:\n      sudo usermod -aG input {user}\n  - Ensure /dev/uinput is writable by the desktop user. On many distros this needs a uinput udev rule.\n  - After changing groups or udev rules, log out completely and log back in, or reboot.\n  - Verify the fresh session:\n      id -nG | tr ' ' '\\n' | grep '^input$'\n      ls -l /dev/uinput /dev/input/event* | head\n  - Then run: parakit --hotkey-backend evdev\n  - Do not run parakit with sudo; audio, clipboard, and insertion belong to the desktop user.\n  - The Linux desktop hotkey backend is disabled until it is replaced by global-hotkey or the XDG portal."
+        "fix:\n  - Use an X11 session; Wayland is intentionally rejected.\n  - Disable any desktop shortcut, input method, or remapper that already owns Ctrl+Space.\n  - Re-run: parakit doctor\n  - The experimental evdev/uinput keyboard proxy is available with: parakit --hotkey-backend evdev-proxy"
+    )
+    .unwrap();
+}
+
+#[cfg(target_os = "linux")]
+fn write_evdev_linux_fix(out: &mut String, user: &str) {
+    writeln!(
+        out,
+        "fix:\n  - Grant the desktop user read access to /dev/input/event*:\n      sudo usermod -aG input {user}\n  - Ensure /dev/uinput is writable by the desktop user. On many distros this needs a uinput udev rule.\n  - After changing groups or udev rules, log out completely and log back in, or reboot.\n  - Verify the fresh session:\n      id -nG | tr ' ' '\\n' | grep '^input$'\n      ls -l /dev/uinput /dev/input/event* | head\n  - Then run: parakit --hotkey-backend evdev-proxy\n  - Do not run parakit with sudo; audio, clipboard, and insertion belong to the desktop user."
     )
     .unwrap();
 }
@@ -541,17 +581,25 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
-    fn auto_and_evdev_require_evdev_readiness() {
-        for backend in [HotkeyBackend::Auto, HotkeyBackend::Evdev] {
-            assert!(!linux_hotkey_startup_blocked(backend, true));
-            assert!(linux_hotkey_startup_blocked(backend, false));
+    fn registered_backends_require_registered_hotkey_readiness() {
+        for backend in [HotkeyBackend::Auto, HotkeyBackend::Desktop] {
+            assert!(!linux_hotkey_startup_blocked(backend, true, false));
+            assert!(linux_hotkey_startup_blocked(backend, false, true));
         }
     }
 
     #[test]
-    fn forced_desktop_is_disabled() {
-        assert!(linux_hotkey_startup_blocked(HotkeyBackend::Desktop, true));
-        assert!(linux_hotkey_startup_blocked(HotkeyBackend::Desktop, false));
+    fn evdev_proxy_requires_evdev_readiness() {
+        assert!(!linux_hotkey_startup_blocked(
+            HotkeyBackend::EvdevProxy,
+            false,
+            true
+        ));
+        assert!(linux_hotkey_startup_blocked(
+            HotkeyBackend::EvdevProxy,
+            true,
+            false
+        ));
     }
 
     #[test]

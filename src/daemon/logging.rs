@@ -59,11 +59,9 @@ impl Logger {
         }
     }
 
-    /// Print a warning line unless stdout is quiet.
+    /// Print a warning line to stderr regardless of quiet mode.
     pub(crate) fn warn(&self, msg: impl Display) {
-        if self.level != LogLevel::Quiet {
-            anstream::println!("{} {msg}", style_warn("parakit: warning:"));
-        }
+        anstream::eprintln!("{} {msg}", style_warn("parakit: warning:"));
     }
 
     /// Print an error line to stderr regardless of quiet mode.

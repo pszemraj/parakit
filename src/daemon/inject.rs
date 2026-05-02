@@ -30,6 +30,8 @@ use std::{
 };
 #[cfg(target_os = "linux")]
 use x11rb::connection::Connection as _;
+#[cfg(target_os = "linux")]
+use x11rb::protocol::xproto::ConnectionExt as _;
 
 /// Error label used when paste succeeded but previous clipboard restore failed.
 pub(crate) const CLIPBOARD_RESTORE_ERROR: &str = "could not restore previous clipboard text";
@@ -149,6 +151,82 @@ impl TextClipboard for Clipboard {
     }
 }
 
+/// Focus owner captured when recording begins.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct FocusSnapshot {
+    #[cfg(target_os = "linux")]
+    focus: u32,
+}
+
+impl FocusSnapshot {
+    /// Capture the current focus owner for later drift checks.
+    ///
+    /// # Returns
+    ///
+    /// A focus snapshot that can be compared before insertion.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the platform focus cannot be read or has no
+    /// concrete target window.
+    pub(crate) fn capture() -> Result<Self> {
+        #[cfg(target_os = "linux")]
+        {
+            let (conn, _) = x11rb::rust_connection::RustConnection::connect(None)
+                .context("could not connect to X11")?;
+            let focus = conn
+                .get_input_focus()
+                .context("could not request current X11 input focus")?
+                .reply()
+                .context("could not read current X11 input focus")?
+                .focus;
+            if !linux_focus_is_insertable(focus) {
+                anyhow::bail!("X11 input focus is not an insertable application window");
+            }
+            Ok(Self { focus })
+        }
+
+        #[cfg(not(target_os = "linux"))]
+        {
+            Ok(Self {})
+        }
+    }
+
+    /// Return whether the current focus still matches this snapshot.
+    ///
+    /// # Returns
+    ///
+    /// `Ok(true)` when it is safe to insert into the original target.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the current focus cannot be read.
+    pub(crate) fn matches_current(&self) -> Result<bool> {
+        #[cfg(target_os = "linux")]
+        {
+            let (conn, _) = x11rb::rust_connection::RustConnection::connect(None)
+                .context("could not connect to X11")?;
+            let current = conn
+                .get_input_focus()
+                .context("could not request current X11 input focus")?
+                .reply()
+                .context("could not read current X11 input focus")?
+                .focus;
+            Ok(current == self.focus)
+        }
+
+        #[cfg(not(target_os = "linux"))]
+        {
+            Ok(true)
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn linux_focus_is_insertable(focus: u32) -> bool {
+    focus != x11rb::NONE && focus != u32::from(x11rb::protocol::xproto::InputFocus::POINTER_ROOT)
+}
+
 /// Open a text insertion handle.
 pub struct Injector {
     enigo: Option<Enigo>,
@@ -218,6 +296,30 @@ impl Injector {
             clipboard_settle_delay(),
             clipboard_restore_delay(),
         );
+        self.clipboard = Some(clipboard);
+        result
+    }
+
+    /// Copy text to the clipboard without sending any paste or type event.
+    ///
+    /// # Returns
+    ///
+    /// `Ok(())` when the clipboard contains `text`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the clipboard cannot be opened or written.
+    pub fn copy_text(&mut self, text: &str) -> Result<()> {
+        if text.is_empty() {
+            return Ok(());
+        }
+        let mut clipboard = match self.clipboard.take() {
+            Some(clipboard) => clipboard,
+            None => Clipboard::new().context("could not open system clipboard")?,
+        };
+        let result = clipboard
+            .set_text(text.to_owned())
+            .context("could not copy transcript to clipboard");
         self.clipboard = Some(clipboard);
         result
     }
@@ -457,6 +559,13 @@ struct X11KeyStep {
 }
 
 #[cfg(target_os = "linux")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ResolvedX11KeyStep {
+    keycode: u8,
+    press: bool,
+}
+
+#[cfg(target_os = "linux")]
 struct LinuxX11Paste {
     conn: x11rb::rust_connection::RustConnection,
     root: u32,
@@ -474,15 +583,12 @@ impl LinuxX11Paste {
     }
 
     fn send_paste_chord(&self, mode: PasteMode) -> Result<()> {
-        for step in linux_paste_chord_steps(mode) {
-            let keycode = linux_cached_keycode(step.keysym)?;
-            x11_fake_key(&self.conn, self.root, keycode, step.press)?;
-        }
-
-        self.conn
-            .flush()
-            .context("could not flush XTest paste chord")?;
-        Ok(())
+        let steps = linux_resolved_paste_chord_steps(mode)?;
+        let mut sink = X11ConnectionKeySink {
+            conn: &self.conn,
+            root: self.root,
+        };
+        send_x11_key_steps(&mut sink, &steps)
     }
 }
 
@@ -520,6 +626,19 @@ fn linux_paste_chord_steps(mode: PasteMode) -> Vec<X11KeyStep> {
 }
 
 #[cfg(target_os = "linux")]
+fn linux_resolved_paste_chord_steps(mode: PasteMode) -> Result<Vec<ResolvedX11KeyStep>> {
+    linux_paste_chord_steps(mode)
+        .into_iter()
+        .map(|step| {
+            Ok(ResolvedX11KeyStep {
+                keycode: linux_cached_keycode(step.keysym)?,
+                press: step.press,
+            })
+        })
+        .collect()
+}
+
+#[cfg(target_os = "linux")]
 fn linux_cached_keycode(keysym: u32) -> Result<u8> {
     static KEYCODES: OnceLock<
         std::sync::Mutex<std::collections::BTreeMap<u32, Result<u8, String>>>,
@@ -540,25 +659,120 @@ fn linux_cached_keycode(keysym: u32) -> Result<u8> {
 }
 
 #[cfg(target_os = "linux")]
-fn x11_fake_key(
-    conn: &x11rb::rust_connection::RustConnection,
-    root: u32,
-    keycode: u8,
-    press: bool,
-) -> Result<()> {
-    use x11rb::protocol::xproto::{KEY_PRESS_EVENT, KEY_RELEASE_EVENT};
-    use x11rb::protocol::xtest::ConnectionExt as XtestConnectionExt;
+trait X11KeySink {
+    /// Send a key press or release event.
+    ///
+    /// # Arguments
+    ///
+    /// * `keycode` - X11 keycode to send.
+    /// * `press` - `true` for key press, `false` for key release.
+    ///
+    /// # Returns
+    ///
+    /// `Ok(())` when the sink accepted the key event.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the backend rejects the key event.
+    fn key(&mut self, keycode: u8, press: bool) -> Result<()>;
+    /// Flush queued key events to the X11 server.
+    ///
+    /// # Returns
+    ///
+    /// `Ok(())` when pending key events have been submitted.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the backend cannot flush pending events.
+    fn flush(&mut self) -> Result<()>;
+}
 
-    let event_type = if press {
-        KEY_PRESS_EVENT
-    } else {
-        KEY_RELEASE_EVENT
-    };
-    conn.xtest_fake_input(event_type, keycode, 0, root, 0, 0, 0)
-        .context("could not send XTest key event")?
-        .check()
-        .context("X11 rejected XTest key event")?;
+#[cfg(target_os = "linux")]
+struct X11ConnectionKeySink<'a> {
+    conn: &'a x11rb::rust_connection::RustConnection,
+    root: u32,
+}
+
+#[cfg(target_os = "linux")]
+impl X11KeySink for X11ConnectionKeySink<'_> {
+    fn key(&mut self, keycode: u8, press: bool) -> Result<()> {
+        use x11rb::protocol::xproto::{KEY_PRESS_EVENT, KEY_RELEASE_EVENT};
+        use x11rb::protocol::xtest::ConnectionExt as XtestConnectionExt;
+
+        let event_type = if press {
+            KEY_PRESS_EVENT
+        } else {
+            KEY_RELEASE_EVENT
+        };
+        self.conn
+            .xtest_fake_input(event_type, keycode, 0, self.root, 0, 0, 0)
+            .context("could not send XTest key event")?
+            .check()
+            .context("X11 rejected XTest key event")?;
+        Ok(())
+    }
+
+    fn flush(&mut self) -> Result<()> {
+        self.conn
+            .flush()
+            .context("could not flush XTest paste chord")
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn send_x11_key_steps<S: X11KeySink>(sink: &mut S, steps: &[ResolvedX11KeyStep]) -> Result<()> {
+    let mut pressed = Vec::new();
+    for step in steps {
+        if let Err(err) = sink.key(step.keycode, step.press) {
+            let cleanup = release_pressed_x11_keys(sink, &mut pressed);
+            return combine_primary_cleanup_error(
+                err.context("could not send XTest paste chord"),
+                cleanup,
+            );
+        }
+
+        if step.press {
+            pressed.push(step.keycode);
+        } else if let Some(index) = pressed.iter().rposition(|key| *key == step.keycode) {
+            pressed.remove(index);
+        }
+    }
+
+    if let Err(err) = sink.flush() {
+        let cleanup = release_pressed_x11_keys(sink, &mut pressed);
+        return combine_primary_cleanup_error(err, cleanup);
+    }
+
     Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn release_pressed_x11_keys<S: X11KeySink>(sink: &mut S, pressed: &mut Vec<u8>) -> Result<()> {
+    let mut cleanup_error = None;
+    while let Some(keycode) = pressed.pop() {
+        if let Err(err) = sink.key(keycode, false) {
+            cleanup_error.get_or_insert_with(|| err.context("could not release XTest key"));
+        }
+    }
+
+    if cleanup_error.is_none() {
+        cleanup_error = sink.flush().err();
+    }
+
+    match cleanup_error {
+        Some(err) => Err(err),
+        None => Ok(()),
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn combine_primary_cleanup_error(primary: anyhow::Error, cleanup: Result<()>) -> Result<()> {
+    match cleanup {
+        Ok(()) => Err(primary),
+        Err(cleanup_err) => Err(anyhow::anyhow!(
+            "{primary:#}; cleanup while releasing pressed XTest keys failed: {cleanup_err:#}"
+        )),
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -733,253 +947,5 @@ fn linux_wait_for_v_key_events(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::cell::RefCell;
-    use std::rc::Rc;
-
-    #[derive(Debug)]
-    struct MockClipboard {
-        text: Option<String>,
-        events: Rc<RefCell<Vec<String>>>,
-        fail_next_set: bool,
-        fail_on_set: Option<String>,
-    }
-
-    impl MockClipboard {
-        fn new(text: impl Into<String>) -> Self {
-            Self {
-                text: Some(text.into()),
-                events: Rc::new(RefCell::new(Vec::new())),
-                fail_next_set: false,
-                fail_on_set: None,
-            }
-        }
-
-        fn empty() -> Self {
-            Self {
-                text: None,
-                events: Rc::new(RefCell::new(Vec::new())),
-                fail_next_set: false,
-                fail_on_set: None,
-            }
-        }
-
-        fn fail_next_set(mut self) -> Self {
-            self.fail_next_set = true;
-            self
-        }
-
-        fn fail_on_set(mut self, text: impl Into<String>) -> Self {
-            self.fail_on_set = Some(text.into());
-            self
-        }
-
-        fn events(&self) -> Rc<RefCell<Vec<String>>> {
-            Rc::clone(&self.events)
-        }
-    }
-
-    impl TextClipboard for MockClipboard {
-        fn get_text(&mut self) -> Result<String> {
-            self.events.borrow_mut().push("read".to_string());
-            self.text
-                .clone()
-                .ok_or_else(|| anyhow::anyhow!("clipboard is not text"))
-        }
-
-        fn set_text(&mut self, text: String) -> Result<()> {
-            self.events.borrow_mut().push(format!("set:{text}"));
-            if self.fail_next_set {
-                self.fail_next_set = false;
-                anyhow::bail!("clipboard write failed");
-            }
-            if self.fail_on_set.as_deref() == Some(text.as_str()) {
-                anyhow::bail!("clipboard write failed for {text}");
-            }
-            self.text = Some(text);
-            Ok(())
-        }
-    }
-
-    #[test]
-    fn paste_mode_labels_are_stable() {
-        assert_eq!(PasteMode::Terminal.label(), "terminal");
-        assert_eq!(PasteMode::Standard.label(), "standard");
-        assert_eq!(PasteMode::Direct.label(), "direct");
-    }
-
-    #[test]
-    fn linux_standard_paste_does_not_need_enigo() {
-        #[cfg(target_os = "linux")]
-        assert!(!insertion_needs_enigo(PasteMode::Standard));
-    }
-
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn linux_xtest_paste_chord_steps_are_ordered() {
-        assert_eq!(
-            linux_paste_chord_steps(PasteMode::Standard),
-            vec![
-                x11_key_step(CONTROL_L_KEYSYM, true),
-                x11_key_step(crate::daemon::x11::V_KEYSYM, true),
-                x11_key_step(crate::daemon::x11::V_KEYSYM, false),
-                x11_key_step(CONTROL_L_KEYSYM, false),
-            ]
-        );
-        assert_eq!(
-            linux_paste_chord_steps(PasteMode::Terminal),
-            vec![
-                x11_key_step(CONTROL_L_KEYSYM, true),
-                x11_key_step(SHIFT_L_KEYSYM, true),
-                x11_key_step(crate::daemon::x11::V_KEYSYM, true),
-                x11_key_step(crate::daemon::x11::V_KEYSYM, false),
-                x11_key_step(SHIFT_L_KEYSYM, false),
-                x11_key_step(CONTROL_L_KEYSYM, false),
-            ]
-        );
-    }
-
-    #[cfg(target_os = "linux")]
-    fn x11_key_step(keysym: u32, press: bool) -> X11KeyStep {
-        X11KeyStep { keysym, press }
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    #[test]
-    fn direct_mode_has_no_paste_modifiers() {
-        assert!(paste_modifiers(PasteMode::Direct).is_empty());
-    }
-
-    struct ClipboardCase {
-        name: &'static str,
-        initial: Option<&'static str>,
-        transcript: &'static str,
-        paste_error: Option<&'static str>,
-        fail_next_set: bool,
-        fail_on_set: Option<&'static str>,
-        expected_text: Option<&'static str>,
-        expected_events: &'static [&'static str],
-        error_contains: Option<&'static str>,
-    }
-
-    #[test]
-    fn clipboard_swap_cases_are_stable() {
-        let cases = [
-            ClipboardCase {
-                name: "failed paste restores previous clipboard",
-                initial: Some("old clipboard"),
-                transcript: "dictated text",
-                paste_error: Some("paste failed"),
-                fail_next_set: false,
-                fail_on_set: None,
-                expected_text: Some("old clipboard"),
-                expected_events: &["read", "set:dictated text", "paste", "set:old clipboard"],
-                error_contains: Some("paste failed"),
-            },
-            ClipboardCase {
-                name: "successful paste restores previous clipboard",
-                initial: Some("old clipboard"),
-                transcript: "dictated text",
-                paste_error: None,
-                fail_next_set: false,
-                fail_on_set: None,
-                expected_text: Some("old clipboard"),
-                expected_events: &["read", "set:dictated text", "paste", "set:old clipboard"],
-                error_contains: None,
-            },
-            ClipboardCase {
-                name: "same clipboard text is not rewritten after paste",
-                initial: Some("dictated text"),
-                transcript: "dictated text",
-                paste_error: None,
-                fail_next_set: false,
-                fail_on_set: None,
-                expected_text: Some("dictated text"),
-                expected_events: &["read", "set:dictated text", "paste"],
-                error_contains: None,
-            },
-            ClipboardCase {
-                name: "empty text does not touch clipboard or paste",
-                initial: None,
-                transcript: "",
-                paste_error: None,
-                fail_next_set: false,
-                fail_on_set: None,
-                expected_text: None,
-                expected_events: &[],
-                error_contains: None,
-            },
-            ClipboardCase {
-                name: "transcript clipboard write failure does not paste or restore",
-                initial: Some("old clipboard"),
-                transcript: "dictated text",
-                paste_error: None,
-                fail_next_set: true,
-                fail_on_set: None,
-                expected_text: Some("old clipboard"),
-                expected_events: &["read", "set:dictated text"],
-                error_contains: Some("could not copy transcript to clipboard"),
-            },
-            ClipboardCase {
-                name: "restore failure is reported after successful paste",
-                initial: Some("old clipboard"),
-                transcript: "dictated text",
-                paste_error: None,
-                fail_next_set: false,
-                fail_on_set: Some("old clipboard"),
-                expected_text: Some("dictated text"),
-                expected_events: &["read", "set:dictated text", "paste", "set:old clipboard"],
-                error_contains: Some("could not restore previous clipboard text"),
-            },
-        ];
-
-        for case in cases {
-            let mut clipboard = match case.initial {
-                Some(text) => MockClipboard::new(text),
-                None => MockClipboard::empty(),
-            };
-            if case.fail_next_set {
-                clipboard = clipboard.fail_next_set();
-            }
-            if let Some(text) = case.fail_on_set {
-                clipboard = clipboard.fail_on_set(text);
-            }
-
-            let events = clipboard.events();
-            let result = paste_with_clipboard_swap(
-                &mut clipboard,
-                case.transcript,
-                || {
-                    events.borrow_mut().push("paste".to_string());
-                    match case.paste_error {
-                        Some(message) => Err(anyhow::anyhow!("{message}")),
-                        None => Ok(()),
-                    }
-                },
-                Duration::ZERO,
-                Duration::ZERO,
-            );
-
-            match case.error_contains {
-                Some(fragment) => {
-                    let err = result.expect_err(case.name);
-                    assert!(format!("{err:#}").contains(fragment), "{}", case.name);
-                }
-                None => result.expect(case.name),
-            }
-            assert_eq!(
-                clipboard.text.as_deref(),
-                case.expected_text,
-                "{}",
-                case.name
-            );
-            assert_eq!(
-                events.borrow().as_slice(),
-                case.expected_events,
-                "{}",
-                case.name
-            );
-        }
-    }
-}
+#[path = "inject_tests.rs"]
+mod inject_tests;

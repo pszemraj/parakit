@@ -12,7 +12,7 @@ use crossbeam_channel::bounded;
 use parakit::audio_file::resampler_params;
 use parking_lot::Mutex;
 use rubato::{Resampler, SincFixedIn};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
@@ -31,7 +31,8 @@ const DEVICE_POLL_INTERVAL: Duration = Duration::from_secs(2);
 #[derive(Clone)]
 pub struct AudioHandle {
     buffer: Arc<Mutex<Vec<f32>>>,
-    recording: Arc<AtomicBool>,
+    session_epoch: Arc<AtomicU64>,
+    next_session_epoch: Arc<AtomicU64>,
     pipeline: Arc<Mutex<CapturePipeline>>,
 }
 
@@ -46,7 +47,12 @@ impl AudioHandle {
             buf.reserve_exact(RECORDING_CAPACITY - capacity);
         }
         buf.clear();
-        self.recording.store(true, Ordering::Release);
+        let next = self
+            .next_session_epoch
+            .fetch_add(1, Ordering::AcqRel)
+            .wrapping_add(1)
+            .max(1);
+        self.session_epoch.store(next, Ordering::Release);
     }
 
     /// Stop recording and take ownership of the buffered samples.
@@ -55,7 +61,7 @@ impl AudioHandle {
     ///
     /// The captured mono PCM samples at [`TARGET_RATE`].
     pub fn stop_recording(&self) -> Vec<f32> {
-        self.recording.store(false, Ordering::Release);
+        self.session_epoch.store(0, Ordering::Release);
         let mut pipeline = self.pipeline.lock();
         let mut flushed = Vec::new();
         pipeline.finish_recording(&mut flushed);
@@ -77,6 +83,8 @@ pub struct MicInfo {
     pub channels: u16,
     /// CPAL sample format label.
     pub sample_format: String,
+    /// PulseAudio/PipeWire source name when available.
+    pub source_id: Option<String>,
     /// Whether the stream is resampled to the Parakeet target rate.
     pub resampling: bool,
 }
@@ -103,6 +111,20 @@ impl MicInfo {
             self.name, rate_label, channel_label, self.sample_format
         )
     }
+
+    /// Return whether this input appears to be a Bluetooth microphone.
+    ///
+    /// # Returns
+    ///
+    /// `true` when the source name or device label contains common Bluetooth
+    /// identifiers.
+    pub fn looks_bluetooth(&self) -> bool {
+        mic_label_looks_bluetooth(&self.name)
+            || self
+                .source_id
+                .as_deref()
+                .is_some_and(mic_label_looks_bluetooth)
+    }
 }
 
 /// Live audio capture manager.
@@ -126,7 +148,7 @@ impl AudioCapture {
     /// Returns an error if no usable input device can be opened.
     pub fn open(log: Arc<Logger>) -> Result<Self> {
         let buffer = Arc::new(Mutex::new(Vec::with_capacity(RECORDING_CAPACITY)));
-        let recording = Arc::new(AtomicBool::new(false));
+        let session_epoch = Arc::new(AtomicU64::new(0));
         let pipeline = Arc::new(Mutex::new(CapturePipeline::default()));
         let current = Arc::new(Mutex::new(None));
         let alive = Arc::new(AtomicBool::new(true));
@@ -134,7 +156,8 @@ impl AudioCapture {
 
         let handle = AudioHandle {
             buffer: Arc::clone(&buffer),
-            recording: Arc::clone(&recording),
+            session_epoch: Arc::clone(&session_epoch),
+            next_session_epoch: Arc::new(AtomicU64::new(0)),
             pipeline: Arc::clone(&pipeline),
         };
 
@@ -149,7 +172,7 @@ impl AudioCapture {
             .spawn(move || {
                 audio_manager_loop(AudioManagerCtx {
                     buffer,
-                    recording,
+                    session_epoch,
                     pipeline,
                     current: thread_current,
                     alive: thread_alive,
@@ -190,7 +213,7 @@ impl Drop for AudioCapture {
 
 struct AudioManagerCtx {
     buffer: Arc<Mutex<Vec<f32>>>,
-    recording: Arc<AtomicBool>,
+    session_epoch: Arc<AtomicU64>,
     pipeline: Arc<Mutex<CapturePipeline>>,
     current: Arc<Mutex<Option<MicInfo>>>,
     alive: Arc<AtomicBool>,
@@ -204,7 +227,7 @@ fn audio_manager_loop(ctx: AudioManagerCtx) {
     let mut live = match open_live_stream(
         &host,
         Arc::clone(&ctx.buffer),
-        Arc::clone(&ctx.recording),
+        Arc::clone(&ctx.session_epoch),
         Arc::clone(&ctx.pipeline),
         Arc::clone(&ctx.stream_error),
     ) {
@@ -230,7 +253,7 @@ fn audio_manager_loop(ctx: AudioManagerCtx) {
             continue;
         }
 
-        if ctx.recording.load(Ordering::Relaxed) {
+        if ctx.session_epoch.load(Ordering::Relaxed) != 0 {
             continue;
         }
 
@@ -260,7 +283,7 @@ fn reopen_until_success(host: &cpal::Host, ctx: &AudioManagerCtx) -> LiveStream 
         match open_live_stream(
             host,
             Arc::clone(&ctx.buffer),
-            Arc::clone(&ctx.recording),
+            Arc::clone(&ctx.session_epoch),
             Arc::clone(&ctx.pipeline),
             Arc::clone(&ctx.stream_error),
         ) {
@@ -301,7 +324,7 @@ pub fn probe_default_input() -> Result<MicInfo> {
 fn open_live_stream(
     host: &cpal::Host,
     buffer: Arc<Mutex<Vec<f32>>>,
-    recording: Arc<AtomicBool>,
+    session_epoch: Arc<AtomicU64>,
     pipeline: Arc<Mutex<CapturePipeline>>,
     stream_error: Arc<Mutex<Option<String>>>,
 ) -> Result<LiveStream> {
@@ -320,7 +343,7 @@ fn open_live_stream(
             &stream_config,
             channels,
             buffer,
-            recording,
+            session_epoch,
             Arc::clone(&pipeline),
             stream_error,
         )?,
@@ -329,7 +352,7 @@ fn open_live_stream(
             &stream_config,
             channels,
             buffer,
-            recording,
+            session_epoch,
             Arc::clone(&pipeline),
             stream_error,
         )?,
@@ -338,7 +361,7 @@ fn open_live_stream(
             &stream_config,
             channels,
             buffer,
-            recording,
+            session_epoch,
             Arc::clone(&pipeline),
             stream_error,
         )?,
@@ -347,7 +370,7 @@ fn open_live_stream(
             &stream_config,
             channels,
             buffer,
-            recording,
+            session_epoch,
             Arc::clone(&pipeline),
             stream_error,
         )?,
@@ -356,7 +379,7 @@ fn open_live_stream(
             &stream_config,
             channels,
             buffer,
-            recording,
+            session_epoch,
             Arc::clone(&pipeline),
             stream_error,
         )?,
@@ -365,7 +388,7 @@ fn open_live_stream(
             &stream_config,
             channels,
             buffer,
-            recording,
+            session_epoch,
             Arc::clone(&pipeline),
             stream_error,
         )?,
@@ -374,7 +397,7 @@ fn open_live_stream(
             &stream_config,
             channels,
             buffer,
-            recording,
+            session_epoch,
             Arc::clone(&pipeline),
             stream_error,
         )?,
@@ -383,7 +406,7 @@ fn open_live_stream(
             &stream_config,
             channels,
             buffer,
-            recording,
+            session_epoch,
             Arc::clone(&pipeline),
             stream_error,
         )?,
@@ -534,6 +557,7 @@ fn mic_info_from_identity(identity: &MicIdentity) -> MicInfo {
         input_rate: identity.input_rate,
         channels: identity.channels,
         sample_format: identity.sample_format.clone(),
+        source_id: identity.source_id.clone(),
         resampling: identity.input_rate != TARGET_RATE,
     }
 }
@@ -565,6 +589,7 @@ fn enhance_mic_info(info: &mut MicInfo, is_default: bool) -> Option<String> {
     if let Some(format) = source.sample_format {
         info.sample_format = format;
     }
+    info.source_id = Some(source_id.clone());
     info.resampling = info.input_rate != TARGET_RATE;
     Some(source_id)
 }
@@ -687,6 +712,21 @@ pub fn is_virtual_input_name(name: &str) -> bool {
     patterns.iter().any(|pattern| lower.contains(pattern))
 }
 
+fn mic_label_looks_bluetooth(label: &str) -> bool {
+    let lower = label.to_lowercase();
+    let patterns = [
+        "bluetooth",
+        "bluez",
+        "headset_head_unit",
+        "handsfree",
+        "hands-free",
+        "hfp",
+        "hsp",
+        "a2dp",
+    ];
+    patterns.iter().any(|pattern| lower.contains(pattern))
+}
+
 #[derive(Default)]
 struct CapturePipeline {
     resampler: Option<ResamplerState>,
@@ -781,7 +821,7 @@ fn build_stream<T>(
     config: &StreamConfig,
     channels: usize,
     buffer: Arc<Mutex<Vec<f32>>>,
-    recording: Arc<AtomicBool>,
+    session_epoch: Arc<AtomicU64>,
     pipeline: Arc<Mutex<CapturePipeline>>,
     stream_error: Arc<Mutex<Option<String>>>,
 ) -> Result<Stream>
@@ -800,7 +840,8 @@ where
         .build_input_stream(
             config,
             move |data: &[T], _: &cpal::InputCallbackInfo| {
-                if !recording.load(Ordering::Relaxed) {
+                let observed_epoch = session_epoch.load(Ordering::Acquire);
+                if observed_epoch == 0 {
                     return;
                 }
 
@@ -824,13 +865,16 @@ where
                 }
 
                 let mut pipeline = pipeline.lock();
+                if session_epoch.load(Ordering::Acquire) != observed_epoch {
+                    return;
+                }
                 let to_push = pipeline.process(&mono_scratch, &mut resampled_scratch);
 
                 if to_push.is_empty() {
                     return;
                 }
 
-                append_recording_samples(&buffer, to_push);
+                append_recording_samples(&buffer, &session_epoch, observed_epoch, to_push);
             },
             err_fn,
             None,
@@ -840,8 +884,19 @@ where
     Ok(stream)
 }
 
-fn append_recording_samples(buffer: &Mutex<Vec<f32>>, samples: &[f32]) {
+fn append_recording_samples(
+    buffer: &Mutex<Vec<f32>>,
+    session_epoch: &AtomicU64,
+    observed_epoch: u64,
+    samples: &[f32],
+) {
+    if session_epoch.load(Ordering::Acquire) != observed_epoch {
+        return;
+    }
     let mut buf = buffer.lock();
+    if session_epoch.load(Ordering::Acquire) != observed_epoch {
+        return;
+    }
     append_samples_bounded(&mut buf, samples);
 }
 
@@ -856,134 +911,5 @@ fn append_samples_bounded(buf: &mut Vec<f32>, samples: &[f32]) {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn virtual_input_names_are_filtered() {
-        assert!(is_virtual_input_name(
-            "Monitor of RODE NT-USB+ Analog Stereo"
-        ));
-        assert!(is_virtual_input_name("BlackHole 2ch"));
-        assert!(is_virtual_input_name("PulseAudio Loopback"));
-        assert!(!is_virtual_input_name("RODE NT-USB+ Mono"));
-        assert!(!is_virtual_input_name("Bluetooth Headset"));
-    }
-
-    #[test]
-    fn mic_summary_reports_input_and_model_rates() {
-        let mic = MicInfo {
-            name: "RODE NT-USB+ Mono".to_string(),
-            input_rate: 48_000,
-            channels: 1,
-            sample_format: "F32".to_string(),
-            resampling: true,
-        };
-        assert_eq!(
-            mic.summary(),
-            "RODE NT-USB+ Mono, 48000 Hz input -> 16000 Hz model, mono, F32"
-        );
-    }
-
-    #[test]
-    fn audio_handle_reuses_recording_capacity_after_stop() {
-        let handle = AudioHandle {
-            buffer: Arc::new(Mutex::new(Vec::new())),
-            recording: Arc::new(AtomicBool::new(false)),
-            pipeline: Arc::new(Mutex::new(CapturePipeline::default())),
-        };
-
-        handle.start_recording();
-        {
-            let mut buffer = handle.buffer.lock();
-            assert!(buffer.capacity() >= RECORDING_CAPACITY);
-            buffer.extend_from_slice(&[0.25, -0.25]);
-        }
-
-        let pcm = handle.stop_recording();
-        assert_eq!(pcm, vec![0.25, -0.25]);
-        assert!(handle.buffer.lock().capacity() >= RECORDING_CAPACITY);
-    }
-
-    #[test]
-    fn append_recording_samples_honors_hard_cap() {
-        let buffer = Mutex::new(vec![0.0; MAX_RECORDING_SAMPLES - 1]);
-        append_recording_samples(&buffer, &[1.0, 2.0, 3.0]);
-
-        let buffer = buffer.lock();
-        assert_eq!(buffer.len(), MAX_RECORDING_SAMPLES);
-        assert_eq!(buffer[MAX_RECORDING_SAMPLES - 1], 1.0);
-    }
-
-    #[test]
-    fn mic_identity_uses_enhanced_info_fields() {
-        let info = MicInfo {
-            name: "RODE NT-USB+ Mono".to_string(),
-            input_rate: 48_000,
-            channels: 1,
-            sample_format: "s24le".to_string(),
-            resampling: true,
-        };
-
-        assert_eq!(
-            mic_identity_from_info(
-                &info,
-                Some("alsa_input.usb-RODE_NT-USB-00.mono-fallback".to_string())
-            ),
-            MicIdentity {
-                name: "RODE NT-USB+ Mono".to_string(),
-                source_id: Some("alsa_input.usb-RODE_NT-USB-00.mono-fallback".to_string()),
-                input_rate: 48_000,
-                channels: 1,
-                sample_format: "s24le".to_string(),
-            }
-        );
-    }
-
-    #[test]
-    fn resampler_flushes_and_resets_tail_between_recordings() {
-        let mut pipeline = CapturePipeline {
-            resampler: make_resampler(48_000).expect("resampler"),
-        };
-        let mut out = Vec::new();
-        let mut scratch = Vec::new();
-        let input = vec![0.1; 100];
-
-        assert!(pipeline.process(&input, &mut scratch).is_empty());
-        pipeline.finish_recording(&mut out);
-        assert!(!out.is_empty());
-        assert!(pipeline.resampler.as_ref().unwrap().scratch.is_empty());
-
-        let flushed_len = out.len();
-        pipeline.reset_recording();
-        pipeline.finish_recording(&mut out);
-        assert_eq!(out.len(), flushed_len);
-    }
-
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn pactl_source_parser_extracts_description_and_rate() {
-        let sources = parse_pactl_sources(
-            r#"Source #42
-    Name: alsa_input.usb-RODE_NT-USB-00.mono-fallback
-    Description: RODE NT-USB+ Mono
-    Sample Specification: s24le 1ch 48000Hz
-Source #43
-    Name: alsa_output.pci-0000_00.monitor
-    Description: Monitor of HDMI Audio
-    Sample Specification: s32le 2ch 48000Hz
-"#,
-        );
-        assert_eq!(sources.len(), 2);
-        assert_eq!(
-            sources[0],
-            PactlSourceInfo {
-                name: "alsa_input.usb-RODE_NT-USB-00.mono-fallback".to_string(),
-                description: Some("RODE NT-USB+ Mono".to_string()),
-                rate: Some(48_000),
-                channels: Some(1),
-                sample_format: Some("s24le".to_string()),
-            }
-        );
-    }
-}
+#[path = "audio_manager_tests.rs"]
+mod audio_manager_tests;

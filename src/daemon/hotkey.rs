@@ -1,12 +1,16 @@
 //! Push-to-talk hotkey backend.
 //!
-//! Linux v1 uses a narrow evdev grab for keyboard hotkey capture.
-//! The custom X11 `XGrabKey` backend is intentionally out of the daemon
-//! critical path; X11 remains only for insertion support.
+//! Linux defaults to a registered X11 desktop hotkey. The evdev/uinput
+//! keyboard proxy remains available only as an explicit experimental backend.
 
-use super::{audio::AudioHandle, logging::Logger};
+use super::{audio::AudioHandle, inject::FocusSnapshot, logging::Logger};
 use crate::Event_;
 use crossbeam_channel::Sender;
+#[cfg(target_os = "linux")]
+use global_hotkey::{
+    hotkey::{Code, HotKey, Modifiers},
+    GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState as RegisteredHotKeyState,
+};
 #[cfg(not(target_os = "linux"))]
 use rdev::Event;
 use rdev::{EventType, Key};
@@ -20,12 +24,13 @@ const HOTKEY_DEBOUNCE: Duration = Duration::from_millis(150);
 /// Hotkey backend preference.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, clap::ValueEnum)]
 pub(crate) enum HotkeyBackend {
-    /// Prefer the Linux-stable evdev grab backend.
+    /// Prefer the platform desktop hotkey backend.
     Auto,
-    /// Legacy desktop hotkey backend. Disabled on Linux v1.
+    /// Force the platform desktop hotkey backend.
     Desktop,
-    /// Force the low-level evdev grab backend.
-    Evdev,
+    /// Force the experimental low-level evdev/uinput keyboard proxy backend.
+    #[cfg_attr(target_os = "linux", value(alias = "evdev"))]
+    EvdevProxy,
 }
 
 impl HotkeyBackend {
@@ -38,8 +43,18 @@ impl HotkeyBackend {
         match self {
             Self::Auto => "auto",
             Self::Desktop => "desktop",
-            Self::Evdev => "evdev",
+            Self::EvdevProxy => "evdev-proxy",
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    /// Return whether this Linux backend uses the registered X11 hotkey path.
+    ///
+    /// # Returns
+    ///
+    /// `true` for `auto` and `desktop`, `false` for `evdev-proxy`.
+    pub(crate) fn uses_registered_x11(self) -> bool {
+        matches!(self, Self::Auto | Self::Desktop)
     }
 }
 
@@ -62,6 +77,7 @@ struct HotkeyState {
     alt_gr: bool,
     meta_left: bool,
     meta_right: bool,
+    space: bool,
     suppress_space_release: bool,
     recording: bool,
     started_at: Option<Instant>,
@@ -70,13 +86,16 @@ struct HotkeyState {
 
 impl HotkeyState {
     fn press(&mut self, key: Key, now: Instant) -> (Option<HotkeyAction>, bool) {
+        let space_was_held = self.space;
         self.set_key(key, true);
         match key {
-            Key::Space if self.ctrl_only() => {
+            Key::Space if self.ctrl_only() && !space_was_held => {
                 self.suppress_space_release = true;
                 (self.start_recording(now), true)
             }
-            Key::Space if self.recording || self.suppress_space_release => (None, true),
+            Key::Space if self.recording || self.suppress_space_release || space_was_held => {
+                (None, true)
+            }
             _ => (None, false),
         }
     }
@@ -158,9 +177,40 @@ impl HotkeyState {
             Key::AltGr => self.alt_gr = pressed,
             Key::MetaLeft => self.meta_left = pressed,
             Key::MetaRight => self.meta_right = pressed,
-            Key::Space => {}
+            Key::Space => self.space = pressed,
             _ => {}
         }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct RegisteredHotkeyLatch {
+    recording: bool,
+    started_at: Option<Instant>,
+}
+
+impl RegisteredHotkeyLatch {
+    fn press(&mut self, now: Instant) -> Option<HotkeyAction> {
+        if self.recording {
+            return None;
+        }
+        self.recording = true;
+        self.started_at = Some(now);
+        Some(HotkeyAction::Start)
+    }
+
+    fn release(&mut self, now: Instant) -> Option<HotkeyAction> {
+        if !self.recording {
+            return None;
+        }
+        self.recording = false;
+        Some(HotkeyAction::Stop {
+            started_at: self
+                .started_at
+                .take()
+                .expect("registered hotkey state requires a start timestamp"),
+            stopped_at: now,
+        })
     }
 }
 
@@ -180,17 +230,13 @@ pub(crate) fn run_grab_loop(
     log: Arc<Logger>,
 ) {
     match backend {
-        HotkeyBackend::Auto | HotkeyBackend::Evdev => {
-            log.verbose("parakit: Linux hotkey backend: evdev keyboard grab");
-            run_linux_evdev_grab_loop_or_exit(tx, audio, log);
+        HotkeyBackend::Auto | HotkeyBackend::Desktop => {
+            log.verbose("parakit: Linux hotkey backend: registered X11 Ctrl+Space");
+            run_linux_registered_hotkey_loop_or_exit(tx, audio, log);
         }
-        HotkeyBackend::Desktop => {
-            eprintln!(
-                "parakit: --hotkey-backend desktop is disabled in the Linux-stable path.\n\
-                 Use --hotkey-backend evdev after granting /dev/input access.\n\
-                 Future no-/dev/input desktop hotkeys should use global-hotkey or the XDG portal."
-            );
-            std::process::exit(2);
+        HotkeyBackend::EvdevProxy => {
+            log.verbose("parakit: Linux hotkey backend: evdev/uinput keyboard proxy");
+            run_linux_evdev_grab_loop_or_exit(tx, audio, log);
         }
     }
 }
@@ -226,6 +272,85 @@ fn run_rdev_grab_loop_or_exit(tx: Sender<Event_>, audio: AudioHandle) {
         eprintln!("parakit: rdev::grab failed: {e:?}\n{}", grab_failure_help());
         std::process::exit(2);
     }
+}
+
+#[cfg(target_os = "linux")]
+fn run_linux_registered_hotkey_loop_or_exit(
+    tx: Sender<Event_>,
+    audio: AudioHandle,
+    log: Arc<Logger>,
+) {
+    if let Err(err) = run_linux_registered_hotkey_loop(tx, audio, Arc::clone(&log)) {
+        eprintln!(
+            "parakit: registered X11 hotkey failed: {err:#}\n{}",
+            registered_hotkey_failure_help()
+        );
+        std::process::exit(2);
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn run_linux_registered_hotkey_loop(
+    tx: Sender<Event_>,
+    audio: AudioHandle,
+    _log: Arc<Logger>,
+) -> anyhow::Result<()> {
+    super::session::ensure_x11_session_supported()?;
+    let manager =
+        GlobalHotKeyManager::new().map_err(|err| anyhow::anyhow!("init hotkey manager: {err}"))?;
+    let hotkey = ctrl_space_hotkey();
+    manager
+        .register(hotkey)
+        .map_err(|err| anyhow::anyhow!("register Ctrl+Space: {err}"))?;
+
+    let receiver = GlobalHotKeyEvent::receiver();
+    let mut latch = RegisteredHotkeyLatch::default();
+    loop {
+        let event = receiver
+            .recv()
+            .map_err(|err| anyhow::anyhow!("hotkey event channel closed: {err}"))?;
+        if event.id != hotkey.id() {
+            continue;
+        }
+
+        let now = Instant::now();
+        let action = match event.state {
+            RegisteredHotKeyState::Pressed => latch.press(now),
+            RegisteredHotKeyState::Released => latch.release(now),
+        };
+        if let Some(action) = action {
+            dispatch_hotkey_action(action, &audio, &tx);
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+/// Probe whether the default registered `Ctrl+Space` hotkey can be claimed.
+///
+/// # Returns
+///
+/// `Ok(())` when the X11 session accepted the registration and unregister.
+///
+/// # Errors
+///
+/// Returns an error when X11 is unavailable or the hotkey is already owned.
+pub(crate) fn registered_hotkey_probe() -> anyhow::Result<()> {
+    super::session::ensure_x11_session_supported()?;
+    let manager =
+        GlobalHotKeyManager::new().map_err(|err| anyhow::anyhow!("init hotkey manager: {err}"))?;
+    let hotkey = ctrl_space_hotkey();
+    manager
+        .register(hotkey)
+        .map_err(|err| anyhow::anyhow!("register Ctrl+Space: {err}"))?;
+    manager
+        .unregister(hotkey)
+        .map_err(|err| anyhow::anyhow!("unregister Ctrl+Space: {err}"))?;
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn ctrl_space_hotkey() -> HotKey {
+    HotKey::new(Some(Modifiers::CONTROL), Code::Space)
 }
 
 #[cfg(target_os = "linux")]
@@ -539,8 +664,9 @@ fn handle_key_event(
 fn dispatch_hotkey_action(action: HotkeyAction, audio: &AudioHandle, tx: &Sender<Event_>) {
     match action {
         HotkeyAction::Start => {
+            let focus = FocusSnapshot::capture().ok();
             audio.start_recording();
-            let _ = tx.send(Event_::RecordingStarted);
+            let _ = tx.send(Event_::RecordingStarted { focus });
         }
         HotkeyAction::Stop {
             started_at,
@@ -557,13 +683,29 @@ fn dispatch_hotkey_action(action: HotkeyAction, audio: &AudioHandle, tx: &Sender
 }
 
 #[cfg(target_os = "linux")]
+fn registered_hotkey_failure_help() -> String {
+    let session = std::env::var("XDG_SESSION_TYPE").unwrap_or_else(|_| "unknown".to_string());
+    let display = std::env::var("DISPLAY").unwrap_or_else(|_| "<unset>".to_string());
+
+    format!(
+        "Linux default hotkey capture registers Ctrl+Space with the X11 session.\n\
+         Current session: XDG_SESSION_TYPE={session}, DISPLAY={display}\n\
+         Checks:\n\
+           parakit --verbose doctor\n\
+           confirm no desktop shortcut or input method already owns Ctrl+Space\n\
+         Use an X11 session. Wayland is intentionally rejected.\n\
+         The experimental evdev/uinput keyboard proxy is available with --hotkey-backend evdev-proxy."
+    )
+}
+
+#[cfg(target_os = "linux")]
 fn grab_failure_help() -> String {
     let session = std::env::var("XDG_SESSION_TYPE").unwrap_or_else(|_| "unknown".to_string());
     let display = std::env::var("DISPLAY").unwrap_or_else(|_| "<unset>".to_string());
     let user = std::env::var("USER").unwrap_or_else(|_| "$USER".to_string());
 
     format!(
-        "Linux hotkey capture uses an evdev keyboard grab.\n\
+        "The evdev-proxy backend uses an evdev keyboard grab and uinput forwarding device.\n\
          Current session: XDG_SESSION_TYPE={session}, DISPLAY={display}\n\
          Checks:\n\
            id -nG | tr ' ' '\\n' | grep '^input$'\n\
@@ -649,6 +791,10 @@ mod tests {
         state.release(Key::ControlLeft, now + Duration::from_millis(50));
 
         assert_eq!(
+            state.press(Key::ControlLeft, now + Duration::from_millis(55)),
+            (None, false)
+        );
+        assert_eq!(
             state.press(Key::Space, now + Duration::from_millis(60)),
             (None, true)
         );
@@ -673,6 +819,52 @@ mod tests {
             (None, true)
         );
         assert!(state.recording);
+    }
+
+    #[test]
+    fn ctrl_repress_while_space_is_held_does_not_restart() {
+        let now = base_time();
+        let mut state = HotkeyState::default();
+        state.press(Key::ControlLeft, now);
+        assert_eq!(
+            state.press(Key::Space, now + Duration::from_millis(10)),
+            (Some(HotkeyAction::Start), true)
+        );
+        assert_eq!(
+            state.release(Key::ControlLeft, now + Duration::from_millis(30)),
+            (
+                Some(HotkeyAction::Stop {
+                    started_at: now + Duration::from_millis(10),
+                    stopped_at: now + Duration::from_millis(30)
+                }),
+                false
+            )
+        );
+        assert_eq!(
+            state.press(Key::ControlLeft, now + Duration::from_millis(40)),
+            (None, false)
+        );
+        assert_eq!(
+            state.press(Key::Space, now + Duration::from_millis(50)),
+            (None, true)
+        );
+        assert!(!state.recording);
+    }
+
+    #[test]
+    fn registered_hotkey_press_release_starts_and_stops_once() {
+        let now = base_time();
+        let mut state = RegisteredHotkeyLatch::default();
+        assert_eq!(state.press(now), Some(HotkeyAction::Start));
+        assert_eq!(state.press(now + Duration::from_millis(10)), None);
+        assert_eq!(
+            state.release(now + Duration::from_millis(300)),
+            Some(HotkeyAction::Stop {
+                started_at: now,
+                stopped_at: now + Duration::from_millis(300)
+            })
+        );
+        assert_eq!(state.release(now + Duration::from_millis(310)), None);
     }
 
     #[test]
@@ -721,7 +913,7 @@ mod tests {
     fn backend_labels_are_stable() {
         assert_eq!(HotkeyBackend::Auto.label(), "auto");
         assert_eq!(HotkeyBackend::Desktop.label(), "desktop");
-        assert_eq!(HotkeyBackend::Evdev.label(), "evdev");
+        assert_eq!(HotkeyBackend::EvdevProxy.label(), "evdev-proxy");
     }
 
     #[cfg(target_os = "linux")]
