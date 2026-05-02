@@ -22,6 +22,8 @@ parakit doctor --deep
 
 The daemon checks the hotkey backend, insertion backend, and singleton lock before any model download. If those preflights pass, it opens the microphone, warns when the selected source looks like Bluetooth, downloads the default Q8_0 GGUF if it is not already cached, opens the model, and starts the hotkey loop.
 
+On Linux, `--hotkey-backend auto` uses the registered X11 global hotkey backend. `x11-listen` is available for passive debugging, and `evdev-proxy-experimental` is explicit opt-in for the old evdev/uinput proxy path.
+
 Normal startup:
 
 ```text

@@ -119,11 +119,11 @@ impl MicInfo {
     /// `true` when the source name or device label contains common Bluetooth
     /// identifiers.
     pub fn looks_bluetooth(&self) -> bool {
-        mic_label_looks_bluetooth(&self.name)
+        is_bluetooth_input_name(&self.name)
             || self
                 .source_id
                 .as_deref()
-                .is_some_and(mic_label_looks_bluetooth)
+                .is_some_and(is_bluetooth_input_name)
     }
 }
 
@@ -712,17 +712,30 @@ pub fn is_virtual_input_name(name: &str) -> bool {
     patterns.iter().any(|pattern| lower.contains(pattern))
 }
 
-fn mic_label_looks_bluetooth(label: &str) -> bool {
-    let lower = label.to_lowercase();
+/// Return whether an input name or source id looks like a Bluetooth microphone.
+///
+/// # Returns
+///
+/// `true` for common Bluetooth transport, profile, and headset labels.
+pub fn is_bluetooth_input_name(name: &str) -> bool {
+    let lower = name.to_lowercase();
     let patterns = [
         "bluetooth",
         "bluez",
         "headset_head_unit",
+        "headset-head-unit",
         "handsfree",
         "hands-free",
+        "hands free",
         "hfp",
         "hsp",
         "a2dp",
+        "airpod",
+        "earbud",
+        "earbuds",
+        "galaxy buds",
+        "pixel buds",
+        "freebuds",
     ];
     patterns.iter().any(|pattern| lower.contains(pattern))
 }

@@ -75,7 +75,19 @@ fn stale_audio_callback_chunks_are_dropped() {
 }
 
 #[test]
-fn bluetooth_detection_uses_name_and_source_id_without_virtual_filtering() {
+fn bluetooth_input_names_are_detected_but_not_virtual() {
+    for name in [
+        "Bluetooth Test Headset",
+        "bluez_input.00_11_22_33_44_55.headset-head-unit",
+        "WH-1000XM4 Hands-Free AG Audio",
+        "AirPods Pro",
+        "Pixel Buds Pro",
+    ] {
+        assert!(is_bluetooth_input_name(name), "{name}");
+        assert!(!is_virtual_input_name(name), "{name}");
+    }
+    assert!(!is_bluetooth_input_name("USB Speech Mic Mono"));
+
     let by_name = MicInfo {
         name: "Bluetooth Test Headset".to_string(),
         input_rate: 16_000,

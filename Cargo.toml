@@ -40,8 +40,11 @@ hound = "3.5"          # WAV decoding for quality tools and daemon validation ru
 # Lock-free or mutex-protected shared state
 parking_lot = "0.12"
 
-# Low-level push-to-talk hotkey capture. On Linux this remains available only
-# through the explicit evdev-proxy backend.
+# Per-user daemon singleton lock
+fs2 = "0.4"
+
+# Passive key listening for the Linux x11-listen backend and legacy non-Linux
+# desktop hotkey hooks.
 rdev = { version = "0.5", features = ["unstable_grab"], optional = true }
 
 # Text insertion at cursor. Batch mode uses clipboard paste; direct mode uses

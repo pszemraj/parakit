@@ -1,7 +1,7 @@
 //! Recording coordinator between hotkey backends and the worker thread.
 
 use super::{audio::AudioHandle, inject::FocusSnapshot};
-use crate::Event_;
+use crate::WorkerEvent;
 use crossbeam_channel::{Receiver, Sender};
 use std::thread::{self, JoinHandle};
 use std::time::Instant;
@@ -41,7 +41,7 @@ pub(crate) enum HotkeyTransition {
 /// Returns an error if the coordinator thread cannot be spawned.
 pub(crate) fn spawn_recording_coordinator(
     rx: Receiver<HotkeyTransition>,
-    tx: Sender<Event_>,
+    tx: Sender<WorkerEvent>,
     audio: AudioHandle,
 ) -> std::io::Result<JoinHandle<()>> {
     thread::Builder::new()
@@ -51,7 +51,7 @@ pub(crate) fn spawn_recording_coordinator(
 
 fn recording_coordinator_loop(
     rx: Receiver<HotkeyTransition>,
-    tx: Sender<Event_>,
+    tx: Sender<WorkerEvent>,
     audio: AudioHandle,
 ) {
     let mut started_at = None;
@@ -62,7 +62,7 @@ fn recording_coordinator_loop(
                 let focus = FocusSnapshot::capture().ok();
                 audio.start_recording();
                 started_at = Some(at);
-                let _ = tx.send(Event_::RecordingStarted { focus });
+                let _ = tx.send(WorkerEvent::RecordingStarted { focus });
             }
             HotkeyTransition::Pressed { .. } => {}
             HotkeyTransition::Released { at } => {
@@ -70,7 +70,7 @@ fn recording_coordinator_loop(
                     continue;
                 };
                 let pcm = audio.stop_recording();
-                let _ = tx.send(Event_::RecordingStopped {
+                let _ = tx.send(WorkerEvent::RecordingStopped {
                     started_at: start,
                     stopped_at: at,
                     pcm,

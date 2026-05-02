@@ -185,7 +185,7 @@ struct DoctorCli {
 // Events sent to the worker thread
 // =============================================================================
 
-enum Event_ {
+enum WorkerEvent {
     /// Recording began at this instant.
     RecordingStarted {
         /// Focus target captured before audio recording began.
@@ -288,7 +288,6 @@ fn run() -> Result<()> {
     #[cfg(target_os = "linux")]
     daemon::session::ensure_x11_session_supported()?;
 
-    #[cfg(target_os = "linux")]
     let _daemon_lock = daemon::preflight::acquire_singleton_lock()?;
 
     daemon::preflight::ensure_hotkey_ready(hotkey_backend)?;
@@ -312,12 +311,7 @@ fn run() -> Result<()> {
     let mic_info = capture
         .mic_info()
         .context("audio manager started without reporting a microphone")?;
-    if mic_info.looks_bluetooth() {
-        log.warn(format!(
-            "selected microphone appears to be Bluetooth ({}); use a wired or local mic if latency or quality is poor",
-            mic_info.summary()
-        ));
-    }
+    warn_about_bluetooth_mic_if_needed(&log, &mic_info);
 
     let model_path = match cli.model.as_deref() {
         Some(path) => path.to_path_buf(),
@@ -363,7 +357,7 @@ fn run() -> Result<()> {
     // Worker thread takes exclusive ownership of `engine`. `crispasr::Session`
     // is `Send` but not `Sync`, which is fine: only one thread ever calls
     // `transcribe`, and the hotkey path only posts transitions on a channel.
-    let (tx, rx) = unbounded::<Event_>();
+    let (tx, rx) = unbounded::<WorkerEvent>();
     let worker = spawn_worker(WorkerCtx {
         engine,
         cleaner,
@@ -387,6 +381,21 @@ fn run() -> Result<()> {
     let _ = coordinator.join();
     let _ = worker.join();
     Ok(())
+}
+
+/// Warn when the selected microphone appears to be Bluetooth.
+///
+/// # Arguments
+///
+/// * `log` - Logger used for the warning.
+/// * `mic_info` - Selected microphone metadata.
+fn warn_about_bluetooth_mic_if_needed(log: &Logger, mic_info: &daemon::audio::MicInfo) {
+    if mic_info.looks_bluetooth() {
+        log.warn(format!(
+            "selected microphone appears to be Bluetooth ({}); use a wired or local mic if latency or quality is poor",
+            mic_info.summary()
+        ));
+    }
 }
 
 fn run_ptt_audio_simulation(cli: &Cli, log: Arc<Logger>, audio_path: &Path) -> Result<()> {
@@ -421,7 +430,7 @@ fn run_ptt_audio_simulation(cli: &Cli, log: Arc<Logger>, audio_path: &Path) -> R
     );
     log.line(&msg);
 
-    let (tx, rx) = unbounded::<Event_>();
+    let (tx, rx) = unbounded::<WorkerEvent>();
     let worker = spawn_worker(WorkerCtx {
         engine,
         cleaner,
@@ -435,9 +444,9 @@ fn run_ptt_audio_simulation(cli: &Cli, log: Arc<Logger>, audio_path: &Path) -> R
 
     let started_at = Instant::now();
     let stopped_at = started_at + Duration::from_secs_f32(audio_secs);
-    tx.send(Event_::RecordingStarted { focus: None })
+    tx.send(WorkerEvent::RecordingStarted { focus: None })
         .context("could not send simulated PTT start event")?;
-    tx.send(Event_::RecordingStopped {
+    tx.send(WorkerEvent::RecordingStopped {
         started_at,
         stopped_at,
         pcm: wav.samples,
@@ -654,7 +663,7 @@ struct WorkerCtx {
     log: Arc<Logger>,
     paste_mode: PasteMode,
     insert_transcripts: bool,
-    rx: Receiver<Event_>,
+    rx: Receiver<WorkerEvent>,
 }
 
 struct TranscriptResult {
@@ -698,12 +707,12 @@ fn worker_loop(ctx: WorkerCtx) {
 
     while let Ok(ev) = rx.recv() {
         match ev {
-            Event_::RecordingStarted { focus } => {
+            WorkerEvent::RecordingStarted { focus } => {
                 recording_focus = focus;
                 sounds.start();
                 log.line("parakit: recording...");
             }
-            Event_::RecordingStopped {
+            WorkerEvent::RecordingStopped {
                 started_at,
                 stopped_at,
                 pcm,

@@ -1,7 +1,7 @@
 //! Push-to-talk hotkey backend.
 //!
-//! Linux defaults to a registered X11 desktop hotkey. The evdev/uinput
-//! keyboard proxy remains available only as an explicit experimental backend.
+//! Linux defaults to a registered X11 desktop hotkey. Passive X11 listening
+//! and the evdev/uinput keyboard proxy remain explicit non-default backends.
 
 use super::{logging::Logger, recording::HotkeyTransition};
 use crossbeam_channel::Sender;
@@ -10,9 +10,7 @@ use global_hotkey::{
     hotkey::{Code, HotKey, Modifiers},
     GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState as RegisteredHotKeyState,
 };
-#[cfg(not(target_os = "linux"))]
-use rdev::Event;
-use rdev::{EventType, Key};
+use rdev::{Event, EventType, Key};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 #[cfg(target_os = "linux")]
@@ -27,9 +25,22 @@ pub(crate) enum HotkeyBackend {
     Auto,
     /// Force the platform desktop hotkey backend.
     Desktop,
+    /// Force the registered X11 global hotkey backend.
+    #[cfg(target_os = "linux")]
+    #[value(name = "x11-global-hotkey")]
+    X11GlobalHotkey,
+    /// Force the passive X11 event listener backend.
+    #[cfg(target_os = "linux")]
+    #[value(name = "x11-listen")]
+    X11Listen,
     /// Force the experimental low-level evdev/uinput keyboard proxy backend.
-    #[cfg_attr(target_os = "linux", value(alias = "evdev"))]
-    EvdevProxy,
+    #[cfg(target_os = "linux")]
+    #[value(
+        name = "evdev-proxy-experimental",
+        alias = "evdev-proxy",
+        alias = "evdev"
+    )]
+    EvdevProxyExperimental,
 }
 
 impl HotkeyBackend {
@@ -42,7 +53,12 @@ impl HotkeyBackend {
         match self {
             Self::Auto => "auto",
             Self::Desktop => "desktop",
-            Self::EvdevProxy => "evdev-proxy",
+            #[cfg(target_os = "linux")]
+            Self::X11GlobalHotkey => "x11-global-hotkey",
+            #[cfg(target_os = "linux")]
+            Self::X11Listen => "x11-listen",
+            #[cfg(target_os = "linux")]
+            Self::EvdevProxyExperimental => "evdev-proxy-experimental",
         }
     }
 
@@ -51,9 +67,29 @@ impl HotkeyBackend {
     ///
     /// # Returns
     ///
-    /// `true` for `auto` and `desktop`, `false` for `evdev-proxy`.
+    /// `true` for `auto`, `desktop`, and `x11-global-hotkey`.
     pub(crate) fn uses_registered_x11(self) -> bool {
-        matches!(self, Self::Auto | Self::Desktop)
+        matches!(self, Self::Auto | Self::Desktop | Self::X11GlobalHotkey)
+    }
+
+    #[cfg(target_os = "linux")]
+    /// Return whether this Linux backend passively listens for X11 events.
+    ///
+    /// # Returns
+    ///
+    /// `true` for `x11-listen`.
+    pub(crate) fn uses_passive_x11_listen(self) -> bool {
+        matches!(self, Self::X11Listen)
+    }
+
+    #[cfg(target_os = "linux")]
+    /// Return whether this Linux backend uses the experimental evdev proxy.
+    ///
+    /// # Returns
+    ///
+    /// `true` for `evdev-proxy-experimental` and its CLI aliases.
+    pub(crate) fn uses_evdev_proxy(self) -> bool {
+        matches!(self, Self::EvdevProxyExperimental)
     }
 }
 
@@ -90,12 +126,12 @@ impl HotkeyState {
         let space_was_held = self.space;
         self.set_key(key, true);
         match key {
-            Key::Space if self.ctrl_only() && !space_was_held => {
-                self.suppress_space_release = true;
-                (self.start_recording(now), true)
-            }
             Key::Space if self.recording || self.suppress_space_release || space_was_held => {
                 (None, true)
+            }
+            Key::Space if self.ctrl_only() => {
+                self.suppress_space_release = true;
+                (self.start_recording(now), true)
             }
             _ => (None, false),
         }
@@ -229,12 +265,19 @@ pub(crate) fn run_grab_loop(
     log: Arc<Logger>,
 ) {
     match backend {
-        HotkeyBackend::Auto | HotkeyBackend::Desktop => {
+        HotkeyBackend::Auto | HotkeyBackend::Desktop | HotkeyBackend::X11GlobalHotkey => {
             log.verbose("parakit: Linux hotkey backend: registered X11 Ctrl+Space");
             run_linux_registered_hotkey_loop_or_exit(tx);
         }
-        HotkeyBackend::EvdevProxy => {
-            log.verbose("parakit: Linux hotkey backend: evdev/uinput keyboard proxy");
+        HotkeyBackend::X11Listen => {
+            log.verbose("parakit: Linux hotkey backend: passive X11 Ctrl+Space listen");
+            run_linux_x11_listen_or_exit(tx);
+        }
+        HotkeyBackend::EvdevProxyExperimental => {
+            log.warn(
+                "evdev-proxy is experimental; it grabs keyboard devices and forwards unsuppressed input through uinput",
+            );
+            log.verbose("parakit: Linux hotkey backend: experimental evdev/uinput keyboard proxy");
             run_linux_evdev_grab_loop_or_exit(tx, log);
         }
     }
@@ -278,6 +321,28 @@ fn run_linux_registered_hotkey_loop_or_exit(tx: Sender<HotkeyTransition>) {
         );
         std::process::exit(2);
     }
+}
+
+#[cfg(target_os = "linux")]
+fn run_linux_x11_listen_or_exit(tx: Sender<HotkeyTransition>) {
+    if let Err(err) = run_linux_x11_listen_loop(tx) {
+        eprintln!(
+            "parakit: passive X11 hotkey listen failed: {err:#}\n{}",
+            x11_listen_failure_help()
+        );
+        std::process::exit(2);
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn run_linux_x11_listen_loop(tx: Sender<HotkeyTransition>) -> anyhow::Result<()> {
+    super::session::ensure_x11_session_supported()?;
+
+    let state = Arc::new(Mutex::new(HotkeyState::default()));
+    let callback_state = Arc::clone(&state);
+    let callback_tx = tx.clone();
+    rdev::listen(move |event| handle_listen_event(event, &callback_state, &callback_tx))
+        .map_err(|err| anyhow::anyhow!("rdev::listen: {err:?}"))
 }
 
 #[cfg(target_os = "linux")]
@@ -601,6 +666,15 @@ fn linux_device_label(path: &std::path::Path, device: &evdev_rs::Device) -> Stri
     }
 }
 
+#[cfg(target_os = "linux")]
+fn handle_listen_event(
+    event: Event,
+    state: &Arc<Mutex<HotkeyState>>,
+    tx: &Sender<HotkeyTransition>,
+) {
+    let _ = handle_key_event(event.event_type, state, tx);
+}
+
 #[cfg(not(target_os = "linux"))]
 fn handle_grab_event(
     event: Event,
@@ -665,6 +739,21 @@ fn registered_hotkey_failure_help() -> String {
 }
 
 #[cfg(target_os = "linux")]
+fn x11_listen_failure_help() -> String {
+    let session = std::env::var("XDG_SESSION_TYPE").unwrap_or_else(|_| "unknown".to_string());
+    let display = std::env::var("DISPLAY").unwrap_or_else(|_| "<unset>".to_string());
+
+    format!(
+        "The x11-listen backend passively observes Ctrl+Space with rdev::listen.\n\
+         Current session: XDG_SESSION_TYPE={session}, DISPLAY={display}\n\
+         Checks:\n\
+           parakit --verbose doctor --hotkey-backend x11-listen\n\
+         Use an X11 session. Wayland is intentionally rejected.\n\
+         This backend does not grab, suppress, or forward keyboard events."
+    )
+}
+
+#[cfg(target_os = "linux")]
 fn grab_failure_help() -> String {
     let session = std::env::var("XDG_SESSION_TYPE").unwrap_or_else(|_| "unknown".to_string());
     let display = std::env::var("DISPLAY").unwrap_or_else(|_| "<unset>".to_string());
@@ -701,224 +790,5 @@ fn grab_failure_help() -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn base_time() -> Instant {
-        Instant::now()
-    }
-
-    #[test]
-    fn ctrl_space_starts_and_stops() {
-        let now = base_time();
-        let mut state = HotkeyState::default();
-        assert_eq!(state.press(Key::ControlLeft, now), (None, false));
-        assert_eq!(
-            state.press(Key::Space, now + Duration::from_millis(10)),
-            (
-                Some(HotkeyAction::Start {
-                    started_at: now + Duration::from_millis(10)
-                }),
-                true
-            )
-        );
-        assert_eq!(
-            state.release(Key::Space, now + Duration::from_millis(300)),
-            (
-                Some(HotkeyAction::Stop {
-                    started_at: now + Duration::from_millis(10),
-                    stopped_at: now + Duration::from_millis(300)
-                }),
-                true
-            )
-        );
-    }
-
-    #[test]
-    fn ctrl_release_before_space_stops_without_suppressing_ctrl_release() {
-        let now = base_time();
-        let mut state = HotkeyState::default();
-        state.press(Key::ControlLeft, now);
-        state.press(Key::Space, now + Duration::from_millis(10));
-        assert_eq!(
-            state.release(Key::ControlLeft, now + Duration::from_millis(50)),
-            (
-                Some(HotkeyAction::Stop {
-                    started_at: now + Duration::from_millis(10),
-                    stopped_at: now + Duration::from_millis(50)
-                }),
-                false
-            )
-        );
-        assert!(!state.recording);
-    }
-
-    #[test]
-    fn held_space_after_ctrl_release_does_not_restart_after_debounce() {
-        let now = base_time();
-        let mut state = HotkeyState::default();
-        state.press(Key::ControlLeft, now);
-        state.press(Key::Space, now + Duration::from_millis(10));
-        state.release(Key::ControlLeft, now + Duration::from_millis(50));
-
-        assert_eq!(
-            state.press(
-                Key::ControlLeft,
-                now + HOTKEY_DEBOUNCE + Duration::from_millis(10)
-            ),
-            (None, false)
-        );
-        assert_eq!(
-            state.press(
-                Key::Space,
-                now + HOTKEY_DEBOUNCE + Duration::from_millis(20)
-            ),
-            (None, true)
-        );
-        assert_eq!(
-            state.release(
-                Key::Space,
-                now + HOTKEY_DEBOUNCE + Duration::from_millis(30)
-            ),
-            (None, true)
-        );
-        assert!(!state.recording);
-    }
-
-    #[test]
-    fn repeated_space_press_while_held_is_suppressed_without_restart() {
-        let now = base_time();
-        let mut state = HotkeyState::default();
-        state.press(Key::ControlLeft, now);
-        assert_eq!(
-            state.press(Key::Space, now + Duration::from_millis(10)),
-            (
-                Some(HotkeyAction::Start {
-                    started_at: now + Duration::from_millis(10)
-                }),
-                true
-            )
-        );
-        assert_eq!(
-            state.press(Key::Space, now + Duration::from_millis(20)),
-            (None, true)
-        );
-        assert!(state.recording);
-    }
-
-    #[test]
-    fn registered_hotkey_press_release_starts_and_stops_once() {
-        let now = base_time();
-        let mut state = RegisteredHotkeyLatch::default();
-        assert_eq!(
-            state.press(now),
-            Some(HotkeyAction::Start { started_at: now })
-        );
-        assert_eq!(state.press(now + Duration::from_millis(10)), None);
-        assert_eq!(
-            state.release(now + Duration::from_millis(300)),
-            Some(HotkeyAction::Stop {
-                started_at: now,
-                stopped_at: now + Duration::from_millis(300)
-            })
-        );
-        assert_eq!(state.release(now + Duration::from_millis(310)), None);
-    }
-
-    #[test]
-    fn hotkey_actions_emit_logical_transitions_only() {
-        let now = base_time();
-        let (tx, rx) = crossbeam_channel::unbounded();
-
-        send_hotkey_transition(HotkeyAction::Start { started_at: now }, &tx);
-        send_hotkey_transition(
-            HotkeyAction::Stop {
-                started_at: now,
-                stopped_at: now + Duration::from_millis(250),
-            },
-            &tx,
-        );
-
-        assert_eq!(rx.recv().unwrap(), HotkeyTransition::Pressed { at: now });
-        assert_eq!(
-            rx.recv().unwrap(),
-            HotkeyTransition::Released {
-                at: now + Duration::from_millis(250)
-            }
-        );
-        assert!(rx.try_recv().is_err());
-    }
-
-    #[test]
-    fn rapid_double_press_is_ignored_and_suppressed() {
-        let now = base_time();
-        let mut state = HotkeyState::default();
-        state.press(Key::ControlLeft, now);
-        state.press(Key::Space, now + Duration::from_millis(10));
-        state.release(Key::Space, now + Duration::from_millis(20));
-        assert_eq!(
-            state.press(Key::Space, now + Duration::from_millis(80)),
-            (None, true)
-        );
-        assert_eq!(
-            state.release(Key::Space, now + Duration::from_millis(90)),
-            (None, true)
-        );
-        assert!(!state.recording);
-    }
-
-    #[test]
-    fn ctrl_shift_space_does_not_start_or_suppress() {
-        let now = base_time();
-        let mut state = HotkeyState::default();
-        state.press(Key::ControlLeft, now);
-        state.press(Key::ShiftLeft, now + Duration::from_millis(5));
-        assert_eq!(
-            state.press(Key::Space, now + Duration::from_millis(10)),
-            (None, false)
-        );
-        assert!(!state.recording);
-    }
-
-    #[test]
-    fn unrelated_keys_pass_through() {
-        let now = base_time();
-        let mut state = HotkeyState::default();
-        assert_eq!(state.press(Key::KeyA, now), (None, false));
-        assert_eq!(
-            state.release(Key::KeyA, now + Duration::from_millis(10)),
-            (None, false)
-        );
-    }
-
-    #[test]
-    fn backend_labels_are_stable() {
-        assert_eq!(HotkeyBackend::Auto.label(), "auto");
-        assert_eq!(HotkeyBackend::Desktop.label(), "desktop");
-        assert_eq!(HotkeyBackend::EvdevProxy.label(), "evdev-proxy");
-    }
-
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn evdev_input_files_are_opened_nonblocking() {
-        use std::os::fd::AsRawFd;
-        use std::time::{SystemTime, UNIX_EPOCH};
-
-        let unique = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("clock before UNIX epoch")
-            .as_nanos();
-        let dir = PathBuf::from(format!(
-            "target/tmp/parakit-hotkey-test-{}-{unique}",
-            std::process::id()
-        ));
-        std::fs::create_dir_all(&dir).expect("create test directory");
-        let path = dir.join("event-test");
-        std::fs::write(&path, b"").expect("create test input file");
-
-        let file = open_evdev_input(&path).expect("open test input file");
-        let flags = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_GETFL) };
-        assert_ne!(flags, -1);
-        assert_ne!(flags & libc::O_NONBLOCK, 0);
-    }
-}
+#[path = "hotkey_tests.rs"]
+mod tests;

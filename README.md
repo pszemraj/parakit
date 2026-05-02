@@ -39,6 +39,10 @@ For background mode, model cache paths, logging, and paste options, see [docs/ru
 
 Linux currently requires an X11 session for the default hotkey and insertion path; see [docs/linux-desktop.md](docs/linux-desktop.md).
 
+## Bluetooth Microphones
+
+Bluetooth microphones and Bluetooth headset microphones are allowed, but they are a poor fit for push-to-talk dictation. Headset profiles often add buffering, clip the beginning of speech, change sample rates or routes unexpectedly, and apply aggressive gain or noise processing. Bluetooth output is fine; Bluetooth input is not recommended.
+
 ## Docs
 
 - Build and native dependencies: [docs/build.md](docs/build.md)

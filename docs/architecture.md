@@ -37,8 +37,8 @@ Streaming mode is currently disabled while the Linux batch path is stabilized.
 - `rodio::OutputStream` is not reliably `Send`, so the sound stream lives on its own thread.
 - `crispasr::Session` is `Send` but not `Sync`, so the worker owns `Engine` directly. Do not wrap it in `Arc<Engine>`.
 - Hotkey backends emit only logical press/release transitions. They do not call audio, ASR, clipboard, or insertion code.
-- Linux `auto` and `desktop` hotkeys register `Ctrl+Space` with X11 through `global-hotkey`; `evdev-proxy` is the explicit experimental evdev/uinput path. Linux text insertion uses X11/XTest and rejects Wayland sessions.
-- The active hotkey backend must suppress the literal Space key before it reaches the focused application.
+- Linux `auto`, `desktop`, and `x11-global-hotkey` register `Ctrl+Space` with X11 through `global-hotkey`; `x11-listen` is passive debugging, and `evdev-proxy-experimental` is the explicit experimental evdev/uinput path. Linux text insertion uses X11/XTest and rejects Wayland sessions.
+- Normal dictation hotkey backends must suppress the literal Space key before it reaches the focused application. The passive `x11-listen` backend is for debugging and does not suppress keys.
 
 Cross-thread communication uses atomics, mutex-protected buffers, and crossbeam channels.
 
@@ -70,4 +70,4 @@ Runtime failures are reported and the daemon continues when possible: sound cues
 
 ## Deferred Windows Work
 
-TODO: Before Windows daemon support is considered ready, replace `rdev::grab` with a passive or registered hotkey backend, add a foreground-window focus guard, add a cross-platform singleton lock, make `doctor --deep` exercise Windows insertion honestly, and validate the daemon path on Windows CI plus a real desktop session.
+TODO: Before Windows daemon support is considered ready, replace `rdev::grab` with a passive or registered hotkey backend, add a foreground-window focus guard, make `doctor --deep` exercise Windows insertion honestly, and validate the daemon path on Windows CI plus a real desktop session.
