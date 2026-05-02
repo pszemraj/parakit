@@ -160,30 +160,3 @@ fn resampler_flushes_and_resets_tail_between_recordings() {
     pipeline.finish_recording(&mut out);
     assert_eq!(out.len(), flushed_len);
 }
-
-#[cfg(target_os = "linux")]
-#[test]
-fn pactl_source_parser_extracts_description_and_rate() {
-    let sources = parse_pactl_sources(
-        r#"Source #42
-    Name: alsa_input.usb-Test_Speech_Mic-00.mono-fallback
-    Description: USB Speech Mic Mono
-    Sample Specification: s24le 1ch 48000Hz
-Source #43
-    Name: alsa_output.pci-0000_00.monitor
-    Description: Monitor of HDMI Audio
-    Sample Specification: s32le 2ch 48000Hz
-"#,
-    );
-    assert_eq!(sources.len(), 2);
-    assert_eq!(
-        sources[0],
-        PactlSourceInfo {
-            name: "alsa_input.usb-Test_Speech_Mic-00.mono-fallback".to_string(),
-            description: Some("USB Speech Mic Mono".to_string()),
-            rate: Some(48_000),
-            channels: Some(1),
-            sample_format: Some("s24le".to_string()),
-        }
-    );
-}

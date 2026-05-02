@@ -7,8 +7,8 @@
 //!     start/stop calls and owned PCM worker events.
 //!   - Audio manager thread: owns the live cpal stream and follows the default
 //!     input device.
-//!   - cpal callback thread: receives mic samples and appends to a shared
-//!     buffer for the active recording epoch.
+//!   - cpal callback thread: mixes mic samples to mono and pushes them into a
+//!     bounded SPSC ring for the audio drain thread.
 //!   - Worker thread: receives Event messages via crossbeam-channel, runs
 //!     transcription off the hotkey thread so input stays responsive.
 //!
@@ -22,14 +22,14 @@ mod daemon;
 
 use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand};
-use crossbeam_channel::{bounded, unbounded, Receiver};
+use crossbeam_channel::{bounded, unbounded};
 use parakit::audio_file::{read_wav_mono, resample_to_target};
 use parakit::data_log::{DataLogger, LogFormat};
 use parakit::fetch::{self, FetchOptions, FetchSource};
 use parakit::gguf;
 use parakit::inference::{default_thread_count, Engine};
 use parakit::model;
-use parakit::rules::{self, Cleaner};
+use parakit::rules;
 #[cfg(unix)]
 use std::fs::File;
 #[cfg(unix)]
@@ -41,9 +41,11 @@ use std::time::{Duration, Instant};
 
 use crate::daemon::audio::{AudioCapture, TARGET_RATE};
 use crate::daemon::hotkey::HotkeyBackend;
-use crate::daemon::inject::{FocusSnapshot, Injector, PasteMode};
+use crate::daemon::inject::PasteMode;
 use crate::daemon::logging::{BannerInfo, LogLevel, Logger};
+use crate::daemon::notifications::Notifier;
 use crate::daemon::sounds::Sounds;
+use crate::daemon::worker::{spawn_worker, WorkerCtx, WorkerEvent, WORKER_QUEUE_CAPACITY};
 
 // =============================================================================
 // CLI
@@ -131,6 +133,14 @@ enum Commands {
     Cache(CacheCli),
     /// Check runtime prerequisites without starting. Exits 0 when ready, 1 when blocked.
     Doctor(DoctorCli),
+    /// Query a running daemon over the local control socket.
+    Status,
+    /// Stop a running daemon over the local control socket.
+    Stop,
+    /// Paste the last transcript remembered by the running daemon.
+    PasteLast,
+    /// Exercise clipboard staging and paste without recording microphone audio.
+    TestPaste(TestPasteCli),
 }
 
 #[derive(Args, Debug)]
@@ -177,29 +187,11 @@ struct DoctorCli {
     deep: bool,
 }
 
-// =============================================================================
-// Events sent to the worker thread
-// =============================================================================
-
-enum WorkerEvent {
-    /// Recording began at this instant.
-    RecordingStarted,
-    /// Recording ended and the captured PCM moved out of the audio buffer.
-    RecordingStopped {
-        /// Monotonic timestamp captured when recording started.
-        started_at: Instant,
-        /// Monotonic timestamp captured when recording stopped.
-        stopped_at: Instant,
-        /// Owned 16 kHz mono PCM for this utterance.
-        pcm: Vec<f32>,
-        /// Focus target captured before audio recording began.
-        focus_at_start: Option<FocusSnapshot>,
-    },
+#[derive(Args, Debug)]
+struct TestPasteCli {
+    /// Text to insert through the running daemon's paste path.
+    text: String,
 }
-
-const WORKER_QUEUE_CAPACITY: usize = 2;
-const MAX_PASTE_CHARS: usize = 20_000;
-const TERMINAL_MAX_PASTE_CHARS: usize = 2_000;
 
 // =============================================================================
 // main
@@ -215,6 +207,7 @@ fn main() {
 fn run() -> Result<()> {
     let cli = Cli::parse();
     let log = Arc::new(Logger::new(log_level(&cli)));
+    let notifier = Notifier::new(Arc::clone(&log));
     #[cfg(target_os = "linux")]
     let hotkey_backend = cli.hotkey_backend;
     #[cfg(not(target_os = "linux"))]
@@ -253,6 +246,27 @@ fn run() -> Result<()> {
                     return Ok(());
                 }
                 std::process::exit(1);
+            }
+            Commands::Status => {
+                daemon::ipc::run_client(daemon::ipc::IpcCommand::Status, cli.quiet)?;
+                return Ok(());
+            }
+            Commands::Stop => {
+                daemon::ipc::run_client(daemon::ipc::IpcCommand::Stop, cli.quiet)?;
+                return Ok(());
+            }
+            Commands::PasteLast => {
+                daemon::ipc::run_client(daemon::ipc::IpcCommand::PasteLast, cli.quiet)?;
+                return Ok(());
+            }
+            Commands::TestPaste(test_paste) => {
+                daemon::ipc::run_client(
+                    daemon::ipc::IpcCommand::TestPaste {
+                        text: test_paste.text.clone(),
+                    },
+                    cli.quiet,
+                )?;
+                return Ok(());
             }
         }
     }
@@ -294,6 +308,10 @@ fn run() -> Result<()> {
     ));
     daemon::inject::preflight(cli.paste_mode).context("text insertion preflight failed")?;
     log.verbose("parakit: insertion preflight passed");
+    let ipc_state = Arc::new(daemon::ipc::SharedState::new());
+    let _ipc_server =
+        daemon::ipc::spawn_server(Arc::clone(&ipc_state), cli.paste_mode, Arc::clone(&log))
+            .context("start daemon control socket")?;
 
     let cleaner = rules::build_cleaner(cli.no_cleaning, &cli.disable_rule)?.map(Arc::new);
     let data_log = cli
@@ -303,7 +321,7 @@ fn run() -> Result<()> {
 
     let sounds = Sounds::new(!cli.no_sounds);
 
-    let capture = AudioCapture::open(Arc::clone(&log))?;
+    let capture = AudioCapture::open(Arc::clone(&log), notifier.clone())?;
     let audio = capture.handle.clone();
     let mic_info = capture
         .mic_info()
@@ -360,6 +378,8 @@ fn run() -> Result<()> {
         data_log,
         sounds: sounds.clone(),
         log: Arc::clone(&log),
+        notifier: notifier.clone(),
+        state: Arc::clone(&ipc_state),
         paste_mode: cli.paste_mode,
         insert_transcripts: true,
         rx,
@@ -369,6 +389,7 @@ fn run() -> Result<()> {
         .context("spawn recording coordinator")?;
 
     // Hotkey grab loop. Blocks forever (until grab returns or process exits).
+    ipc_state.set_phase("idle");
     log.ready();
 
     daemon::hotkey::run_grab_loop(hotkey_tx, hotkey_backend, Arc::clone(&log));
@@ -431,6 +452,8 @@ fn run_ptt_audio_simulation(cli: &Cli, log: Arc<Logger>, audio_path: &Path) -> R
         data_log,
         sounds,
         log,
+        notifier: Notifier::new(Arc::new(Logger::new(LogLevel::Quiet))),
+        state: Arc::new(daemon::ipc::SharedState::new()),
         paste_mode: cli.paste_mode,
         insert_transcripts: false,
         rx,
@@ -629,425 +652,5 @@ fn format_file_size(bytes: u64) -> String {
         format!("{:.0} MB", bytes as f64 / 1_000_000.0)
     } else {
         format!("{} KB", bytes / 1000)
-    }
-}
-
-// =============================================================================
-// Worker thread
-// =============================================================================
-
-struct WorkerCtx {
-    engine: Engine,
-    cleaner: Option<Arc<Cleaner>>,
-    data_log: Option<Arc<DataLogger>>,
-    sounds: Sounds,
-    log: Arc<Logger>,
-    paste_mode: PasteMode,
-    insert_transcripts: bool,
-    rx: Receiver<WorkerEvent>,
-}
-
-struct TranscriptResult {
-    raw: String,
-    cleaned: String,
-    infer_elapsed: Duration,
-    clean_elapsed: Duration,
-}
-
-fn spawn_worker(ctx: WorkerCtx) -> std::thread::JoinHandle<()> {
-    std::thread::spawn(move || worker_loop(ctx))
-}
-
-fn worker_loop(ctx: WorkerCtx) {
-    let WorkerCtx {
-        engine,
-        cleaner,
-        data_log,
-        sounds,
-        log,
-        paste_mode,
-        insert_transcripts,
-        rx,
-    } = ctx;
-
-    let rules_active = cleaner.as_deref().map_or(0, Cleaner::active_rule_count);
-    let mut injector = if insert_transcripts {
-        match Injector::new() {
-            Ok(injector) => Some(injector),
-            Err(err) => {
-                log.error(&format!(
-                    "insertion backend unavailable at worker startup: {err:#}"
-                ));
-                None
-            }
-        }
-    } else {
-        None
-    };
-    while let Ok(ev) = rx.recv() {
-        match ev {
-            WorkerEvent::RecordingStarted => {
-                sounds.start();
-                log.line("parakit: recording...");
-            }
-            WorkerEvent::RecordingStopped {
-                started_at,
-                stopped_at,
-                pcm,
-                focus_at_start,
-            } => {
-                let stop_started = Instant::now();
-                let secs = pcm.len() as f32 / TARGET_RATE as f32;
-                let wall_secs = stopped_at.duration_since(started_at).as_secs_f32();
-                if capture_should_skip(&pcm) {
-                    log.verbose(format!(
-                        "parakit: skipped silent capture ({secs:.2}s audio, {wall_secs:.2}s wall)"
-                    ));
-                    log.line("parakit: no speech detected");
-                    sounds.success();
-                    continue;
-                }
-                log.transcribing(secs, wall_secs);
-
-                match transcribe_clean(&engine, &pcm, cleaner.as_deref()) {
-                    Ok(Some(transcript)) => {
-                        if let Some(data_log) = &data_log {
-                            data_log.log(
-                                secs,
-                                transcript.infer_elapsed,
-                                &transcript.raw,
-                                &transcript.cleaned,
-                                rules_active,
-                            );
-                        }
-                        log.transcript(
-                            &transcript.raw,
-                            &transcript.cleaned,
-                            transcript.infer_elapsed,
-                        );
-                        if !insert_transcripts {
-                            log.verbose("parakit: insertion skipped for PTT audio simulation");
-                            sounds.success();
-                            continue;
-                        }
-                        let insert_started = Instant::now();
-                        let insert_result = match sanitize_for_paste(
-                            &transcript.cleaned,
-                            paste_mode,
-                        ) {
-                            PastePlan::Paste(text) => paste_transcript(
-                                &mut injector,
-                                &text,
-                                paste_mode,
-                                focus_at_start.as_ref(),
-                                &log,
-                            ),
-                            PastePlan::CopyOnly { text, reason } => {
-                                log.warn(format!(
-                                    "paste blocked by sanitizer ({reason}); transcript copied to clipboard"
-                                ));
-                                copy_transcript_to_clipboard(&mut injector, &text)
-                                    .context("sanitized transcript clipboard fallback failed")
-                            }
-                            PastePlan::Skip { reason } => {
-                                log.warn(format!("paste skipped by sanitizer: {reason}"));
-                                Ok(())
-                            }
-                        };
-                        match insert_result {
-                            Ok(()) => {
-                                let insert_elapsed = insert_started.elapsed();
-                                log.verbose(format!(
-                                    "parakit: timings infer={}ms clean={}ms insert={}ms total={}ms",
-                                    transcript.infer_elapsed.as_secs_f32() * 1000.0,
-                                    transcript.clean_elapsed.as_secs_f32() * 1000.0,
-                                    insert_elapsed.as_secs_f32() * 1000.0,
-                                    stop_started.elapsed().as_secs_f32() * 1000.0
-                                ));
-                                sounds.success();
-                            }
-                            Err(e) => {
-                                log.error(&format!("paste failed: {e:#}"));
-                                sounds.error();
-                            }
-                        }
-                    }
-                    Ok(None) => {
-                        log.line("parakit: no speech detected");
-                        sounds.success();
-                    }
-                    Err(e) => {
-                        log.error(&format!("transcribe failed: {e:#}"));
-                        sounds.error();
-                    }
-                }
-            }
-        }
-    }
-}
-
-fn paste_transcript(
-    injector: &mut Option<Injector>,
-    text: &str,
-    mode: PasteMode,
-    focus: Option<&FocusSnapshot>,
-    log: &Logger,
-) -> Result<()> {
-    if !focus_allows_insertion(focus, log) {
-        copy_transcript_to_clipboard(injector, text)
-            .context("focus changed; transcript copied to clipboard fallback")?;
-        return Ok(());
-    }
-
-    if injector.is_none() {
-        *injector = Some(Injector::new().context("could not initialize insertion backend")?);
-    }
-
-    let paste_result = injector
-        .as_mut()
-        .expect("insertion backend was just initialized")
-        .paste_text_guarded(text, mode, || Ok(focus_allows_insertion(focus, log)));
-    let paste_error = match paste_result {
-        Ok(daemon::inject::PasteOutcome::Pasted | daemon::inject::PasteOutcome::CopiedOnly) => {
-            return Ok(());
-        }
-        Err(err) => err,
-    };
-
-    if paste_failure_uses_clipboard_fallback(mode, &paste_error) {
-        copy_transcript_to_clipboard(injector, text).map_err(|copy_error| {
-            anyhow::anyhow!("{paste_error:#}; clipboard fallback also failed: {copy_error:#}")
-        })?;
-        return Err(
-            paste_error.context("transcript copied to clipboard fallback after paste failure")
-        );
-    }
-
-    Err(paste_error)
-}
-
-fn copy_transcript_to_clipboard(injector: &mut Option<Injector>, text: &str) -> Result<()> {
-    match injector.as_mut() {
-        Some(injector) => injector.copy_text(text),
-        None => {
-            let mut rebuilt = Injector::new()
-                .context("could not initialize insertion backend for clipboard fallback")?;
-            let result = rebuilt.copy_text(text);
-            *injector = Some(rebuilt);
-            result
-        }
-    }
-}
-
-fn paste_failure_uses_clipboard_fallback(mode: PasteMode, error: &anyhow::Error) -> bool {
-    mode != PasteMode::Direct
-        && !format!("{error:#}").contains(daemon::inject::CLIPBOARD_RESTORE_ERROR)
-}
-
-fn focus_allows_insertion(focus: Option<&FocusSnapshot>, log: &Logger) -> bool {
-    let Some(focus) = focus else {
-        log.warn("recording focus was unavailable; copied transcript to clipboard without pasting");
-        return false;
-    };
-
-    match focus.matches_current() {
-        Ok(true) => true,
-        Ok(false) => {
-            log.warn(
-                "focus changed before insertion; copied transcript to clipboard without pasting",
-            );
-            false
-        }
-        Err(err) => {
-            log.warn(format!(
-                "could not verify recording focus ({err:#}); copied transcript to clipboard without pasting"
-            ));
-            false
-        }
-    }
-}
-
-enum PastePlan {
-    Paste(String),
-    CopyOnly { text: String, reason: &'static str },
-    Skip { reason: &'static str },
-}
-
-fn sanitize_for_paste(raw: &str, mode: PasteMode) -> PastePlan {
-    let normalized = raw.replace("\r\n", "\n").replace('\r', "\n");
-    let mut text = String::with_capacity(normalized.len());
-    for ch in normalized.chars() {
-        match ch {
-            '\0' => {}
-            '\t' | '\n' => text.push(ch),
-            ch if ch.is_ascii_control() => {}
-            _ => text.push(ch),
-        }
-    }
-
-    if text.trim().is_empty() {
-        return PastePlan::Skip {
-            reason: "empty transcript after sanitization",
-        };
-    }
-
-    if mode == PasteMode::Terminal {
-        while text.ends_with('\n') {
-            text.pop();
-        }
-        if text.trim().is_empty() {
-            return PastePlan::Skip {
-                reason: "empty terminal transcript after sanitization",
-            };
-        }
-        if text.contains('\n') {
-            return PastePlan::CopyOnly {
-                text,
-                reason: "multiline terminal transcript",
-            };
-        }
-        if text.chars().count() > TERMINAL_MAX_PASTE_CHARS {
-            return PastePlan::CopyOnly {
-                text,
-                reason: "terminal transcript too long",
-            };
-        }
-    }
-
-    if text.chars().count() > MAX_PASTE_CHARS {
-        return PastePlan::CopyOnly {
-            text,
-            reason: "transcript too long",
-        };
-    }
-
-    PastePlan::Paste(text)
-}
-
-fn transcribe_clean(
-    engine: &Engine,
-    pcm: &[f32],
-    cleaner: Option<&Cleaner>,
-) -> Result<Option<TranscriptResult>> {
-    let infer_started = Instant::now();
-    let raw = engine.transcribe(pcm)?;
-    let infer_elapsed = infer_started.elapsed();
-    if raw.trim().is_empty() {
-        return Ok(None);
-    }
-
-    let clean_started = Instant::now();
-    let cleaned = match cleaner {
-        Some(c) => c.clean(&raw),
-        None => raw.clone(),
-    };
-    Ok(Some(TranscriptResult {
-        raw,
-        cleaned,
-        infer_elapsed,
-        clean_elapsed: clean_started.elapsed(),
-    }))
-}
-
-const SILENCE_PEAK_THRESHOLD: f32 = 0.001;
-const SILENCE_RMS_THRESHOLD: f32 = 0.0005;
-
-fn capture_should_skip(pcm: &[f32]) -> bool {
-    if pcm.is_empty() {
-        return true;
-    }
-
-    let mut peak = 0.0_f32;
-    let mut sum_squares = 0.0_f64;
-    for sample in pcm {
-        let abs = sample.abs();
-        peak = peak.max(abs);
-        sum_squares += f64::from(*sample) * f64::from(*sample);
-    }
-    let rms = (sum_squares / pcm.len() as f64).sqrt() as f32;
-    peak < SILENCE_PEAK_THRESHOLD && rms < SILENCE_RMS_THRESHOLD
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn paste_failures_use_clipboard_fallback_only_when_safe() {
-        let paste_error = anyhow::anyhow!("could not send paste shortcut");
-        assert!(paste_failure_uses_clipboard_fallback(
-            PasteMode::Terminal,
-            &paste_error
-        ));
-
-        let restore_error = anyhow::anyhow!("{}: lost", daemon::inject::CLIPBOARD_RESTORE_ERROR);
-        assert!(!paste_failure_uses_clipboard_fallback(
-            PasteMode::Terminal,
-            &restore_error
-        ));
-
-        let direct_error = anyhow::anyhow!("could not type text at cursor");
-        assert!(!paste_failure_uses_clipboard_fallback(
-            PasteMode::Direct,
-            &direct_error
-        ));
-    }
-
-    #[test]
-    fn silence_gate_skips_empty_and_quiet_audio_only() {
-        assert!(capture_should_skip(&[]));
-        assert!(capture_should_skip(&[0.0; 160]));
-        assert!(capture_should_skip(&[0.0001; 160]));
-        assert!(!capture_should_skip(&[0.0, 0.2]));
-        assert!(!capture_should_skip(&[0.01; 16]));
-    }
-
-    #[test]
-    fn paste_sanitizer_strips_unsafe_controls() {
-        match sanitize_for_paste("hello\0\r\nworld\x07", PasteMode::Standard) {
-            PastePlan::Paste(text) => assert_eq!(text, "hello\nworld"),
-            _ => panic!("standard sanitized text should remain pasteable"),
-        }
-    }
-
-    #[test]
-    fn terminal_sanitizer_strips_trailing_newlines() {
-        match sanitize_for_paste("cargo test\n\n", PasteMode::Terminal) {
-            PastePlan::Paste(text) => assert_eq!(text, "cargo test"),
-            _ => panic!("single terminal line should remain pasteable"),
-        }
-    }
-
-    #[test]
-    fn terminal_sanitizer_blocks_multiline_paste_but_keeps_clipboard_text() {
-        match sanitize_for_paste("first\nsecond", PasteMode::Terminal) {
-            PastePlan::CopyOnly { text, reason } => {
-                assert_eq!(text, "first\nsecond");
-                assert_eq!(reason, "multiline terminal transcript");
-            }
-            _ => panic!("multiline terminal text should be copy-only"),
-        }
-    }
-
-    #[test]
-    fn paste_sanitizer_skips_empty_output() {
-        match sanitize_for_paste("\0\x07\n", PasteMode::Standard) {
-            PastePlan::Skip { reason } => {
-                assert_eq!(reason, "empty transcript after sanitization");
-            }
-            _ => panic!("empty sanitized transcript should be skipped"),
-        }
-    }
-
-    #[test]
-    fn terminal_sanitizer_blocks_long_terminal_paste() {
-        let raw = "a".repeat(TERMINAL_MAX_PASTE_CHARS + 1);
-        match sanitize_for_paste(&raw, PasteMode::Terminal) {
-            PastePlan::CopyOnly { text, reason } => {
-                assert_eq!(text.len(), TERMINAL_MAX_PASTE_CHARS + 1);
-                assert_eq!(reason, "terminal transcript too long");
-            }
-            _ => panic!("overlong terminal text should be copy-only"),
-        }
     }
 }

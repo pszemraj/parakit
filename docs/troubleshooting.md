@@ -10,6 +10,13 @@ parakit doctor --deep
 
 It exits `0` when startup should proceed and `1` when a blocking issue remains. Launch behavior is in [running.md](running.md).
 
+If a daemon is already running, use the control socket before starting another copy:
+
+```bash
+parakit status
+parakit stop
+```
+
 ## Hotkey Problems
 
 Linux X11 session and backend setup are in [linux-desktop.md](linux-desktop.md). The default backend registers `Ctrl+Space` with X11 and does not need `/dev/input` or `/dev/uinput`. If `Ctrl+Space` is unavailable, another desktop shortcut, input method, or keyboard remapper may own it. Disable that binding and rerun `parakit doctor`.
@@ -28,11 +35,17 @@ The active backend should suppress the literal Space in `Ctrl+Space`. If a space
 
 ## Text Does Not Insert
 
-Paste modes and focus-change behavior are described in [running.md#insertion](running.md#insertion).
+Paste modes, focus-change behavior, target safety checks, and copy-only fallback are described in [running.md#insertion](running.md#insertion).
 
 Run `parakit doctor --deep` for an active insertion smoke test. On Linux, use an X11 session; Wayland details are in [linux-desktop.md](linux-desktop.md). Use `standard` for apps that only accept `Ctrl+V`; use `direct` only when an app refuses clipboard paste entirely.
 
 On Windows, paste shortcuts are sent with `SendInput`. Windows blocks synthetic input into higher-integrity processes, so a normal parakit process cannot paste into an administrator/elevated target application. Security software can also flag global hooks plus text insertion; whitelist the binary when needed.
+
+If paste is blocked but the transcript was copied, focus the intended field and run:
+
+```bash
+parakit paste-last
+```
 
 ## Wrong Microphone
 

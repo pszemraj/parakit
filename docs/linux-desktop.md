@@ -32,6 +32,10 @@ disown
 
 If `doctor` reports that `Ctrl+Space` could not be registered, disable any desktop shortcut, input method, or keyboard remapper that already owns that chord and rerun `parakit doctor`.
 
+## Target Safety
+
+On X11, parakit compares the focused window captured at PTT-down with the focused window at paste time. It also uses AT-SPI when available to block password fields and to distinguish editable file-manager fields from file-manager body views. If AT-SPI is unavailable, known file-manager windows fall back to copy-only instead of paste.
+
 ## Passive X11 Listen
 
 The `x11-listen` backend is for debugging hotkey state without registering or grabbing the chord:

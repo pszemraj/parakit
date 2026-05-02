@@ -1,7 +1,6 @@
 //! Recording coordinator between hotkey backends and the worker thread.
 
-use super::{audio::AudioHandle, inject::FocusSnapshot};
-use crate::WorkerEvent;
+use super::{audio::AudioHandle, inject::FocusSnapshot, worker::WorkerEvent};
 use crossbeam_channel::{Receiver, RecvTimeoutError, Sender, TrySendError};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};

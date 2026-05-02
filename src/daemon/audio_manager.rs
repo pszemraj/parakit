@@ -22,7 +22,9 @@ use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
-use super::logging::Logger;
+use super::{logging::Logger, notifications::Notifier};
+#[cfg(target_os = "linux")]
+use crate::daemon::audio_pactl::pactl_default_source_info;
 
 pub use parakit::constants::TARGET_RATE;
 
@@ -205,10 +207,15 @@ impl AudioCapture {
     ///
     /// A live capture manager plus a cloneable [`AudioHandle`].
     ///
+    /// # Arguments
+    ///
+    /// * `log` - Logger used for device-change and recovery messages.
+    /// * `notifier` - Desktop notification helper for microphone failures.
+    ///
     /// # Errors
     ///
     /// Returns an error if no usable input device can be opened.
-    pub fn open(log: Arc<Logger>) -> Result<Self> {
+    pub fn open(log: Arc<Logger>, notifier: Notifier) -> Result<Self> {
         let state = Arc::new(Mutex::new(CaptureState::new()));
         let session_epoch = Arc::new(AtomicU64::new(0));
         let current = Arc::new(Mutex::new(None));
@@ -237,6 +244,7 @@ impl AudioCapture {
                     alive: thread_alive,
                     stream_error: thread_error,
                     log: thread_log,
+                    notifier,
                     ready: ready_tx,
                 });
             })
@@ -277,6 +285,7 @@ struct AudioManagerCtx {
     alive: Arc<AtomicBool>,
     stream_error: Arc<Mutex<Option<String>>>,
     log: Arc<Logger>,
+    notifier: Notifier,
     ready: crossbeam_channel::Sender<Result<MicInfo>>,
 }
 
@@ -305,8 +314,10 @@ fn audio_manager_loop(ctx: AudioManagerCtx) {
         if let Some(err) = ctx.stream_error.lock().take() {
             ctx.log
                 .warn(format!("microphone stream failed ({err}); reopening"));
+            ctx.notifier.microphone_unavailable(&err);
             drop(live);
             live = reopen_until_success(&host, &ctx);
+            ctx.notifier.microphone_recovered(&live.info);
             continue;
         }
 
@@ -733,94 +744,6 @@ fn enhance_mic_info(info: &mut MicInfo, is_default: bool) -> Option<String> {
 #[cfg(not(target_os = "linux"))]
 fn enhance_mic_info(_info: &mut MicInfo, _is_default: bool) -> Option<String> {
     None
-}
-
-#[cfg(target_os = "linux")]
-#[derive(Debug, Default, Eq, PartialEq)]
-struct PactlSourceInfo {
-    name: String,
-    description: Option<String>,
-    rate: Option<u32>,
-    channels: Option<u16>,
-    sample_format: Option<String>,
-}
-
-#[cfg(target_os = "linux")]
-fn pactl_default_source_info() -> Option<PactlSourceInfo> {
-    let default = std::process::Command::new("pactl")
-        .args(["get-default-source"])
-        .output()
-        .ok()?;
-    if !default.status.success() {
-        return None;
-    }
-    let default_name = String::from_utf8_lossy(&default.stdout).trim().to_string();
-    if default_name.is_empty() {
-        return None;
-    }
-
-    let sources = std::process::Command::new("pactl")
-        .args(["list", "sources"])
-        .output()
-        .ok()?;
-    if !sources.status.success() {
-        return None;
-    }
-    let sources = String::from_utf8_lossy(&sources.stdout);
-    parse_pactl_sources(&sources)
-        .into_iter()
-        .find(|source| source.name == default_name)
-}
-
-#[cfg(target_os = "linux")]
-fn parse_pactl_sources(text: &str) -> Vec<PactlSourceInfo> {
-    let mut out = Vec::new();
-    let mut current: Option<PactlSourceInfo> = None;
-
-    for line in text.lines() {
-        if line.starts_with("Source #") {
-            if let Some(source) = current.take() {
-                out.push(source);
-            }
-            current = Some(PactlSourceInfo::default());
-            continue;
-        }
-
-        let Some(source) = current.as_mut() else {
-            continue;
-        };
-        let trimmed = line.trim_start();
-        if let Some(name) = trimmed.strip_prefix("Name: ") {
-            source.name = name.trim().to_string();
-        } else if let Some(description) = trimmed.strip_prefix("Description: ") {
-            source.description = Some(description.trim().to_string());
-        } else if let Some(spec) = trimmed.strip_prefix("Sample Specification: ") {
-            let (sample_format, channels, rate) = parse_sample_spec(spec.trim());
-            source.sample_format = sample_format;
-            source.channels = channels;
-            source.rate = rate;
-        }
-    }
-
-    if let Some(source) = current {
-        out.push(source);
-    }
-    out
-}
-
-#[cfg(target_os = "linux")]
-fn parse_sample_spec(spec: &str) -> (Option<String>, Option<u16>, Option<u32>) {
-    let mut parts = spec.split_whitespace();
-    let sample_format = parts.next().map(str::to_string);
-    let channels = parts
-        .next()
-        .and_then(|part| part.strip_suffix("ch"))
-        .and_then(|part| part.parse().ok());
-    let rate = parts
-        .next()
-        .and_then(|part| part.strip_suffix("Hz"))
-        .and_then(|part| part.parse().ok());
-    (sample_format, channels, rate)
 }
 
 /// Return whether a device name looks like a monitor or virtual input.

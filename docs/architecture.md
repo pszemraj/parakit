@@ -1,6 +1,6 @@
 # Architecture
 
-parakit keeps the daemon thread-based. There is no async runtime.
+parakit keeps the daemon thread-based. There is no long-running async runtime.
 
 ## Thread Model
 
@@ -8,9 +8,11 @@ parakit keeps the daemon thread-based. There is no async runtime.
 main thread                  CLI, setup, and blocking hotkey backend
 recording coordinator thread hotkey transition -> focus snapshot -> audio start/stop -> PCM handoff
 audio manager thread         owns the current cpal::Stream and follows the default mic
-cpal callback thread         mixes, resamples, and appends samples for the active epoch
+cpal callback thread         mixes input to mono and pushes frames into a bounded SPSC ring
+audio drain thread           drains ring -> resamples -> updates pre-roll and active recording
 worker thread                owns Engine and runs transcribe -> clean -> insert
 sound thread                 owns rodio::OutputStream and plays cue tones
+IPC thread                   handles status, stop, paste-last, and test-paste commands
 ```
 
 ## State Machine
@@ -21,13 +23,13 @@ Idle
 Recording
   Ctrl+Space up
 Transcribing
-  worker finishes
+  paste, copy-only fallback, block, or skip
 Idle
 ```
 
 Empty or near-silent captures are skipped before inference. Short non-silent captures are right-padded with silence before inference instead of being rejected.
 
-Live capture keeps resampler state inside the audio pipeline. Starting a new recording resets that state, and stopping a recording flushes any partial resampler input into the same utterance before the worker sees the PCM buffer. Recording uses a session epoch so stale CPAL callbacks from a stopped stream cannot append into the next utterance.
+Live capture keeps the microphone stream open and drains callback audio through a bounded single-producer/single-consumer ring buffer. The drain thread owns resampling, keeps a 350 ms rolling pre-roll buffer, and seeds each recording with that pre-roll before appending live samples. Recording uses a session epoch so stale drained samples from a stopped utterance cannot append into the next utterance.
 
 ## Ownership Constraints
 
@@ -44,10 +46,15 @@ Cross-thread communication uses atomics, mutex-protected buffers, and crossbeam 
 
 | Path | Responsibility |
 | --- | --- |
-| `src/main.rs` | CLI, worker thread, batch PTT simulation helper. |
+| `src/main.rs` | CLI, daemon setup, and batch PTT simulation helper. |
 | `src/daemon/hotkey.rs` | Hotkey backends and hotkey state helpers. |
 | `src/daemon/recording.rs` | Hotkey transition coordinator, focus snapshot, audio start/stop, and PCM handoff. |
-| `src/daemon/audio_manager.rs` | Microphone selection, capture, mono mixdown, resampling, stream restart, shared buffer. |
+| `src/daemon/audio_manager.rs` | Microphone selection, live stream ownership, ring-buffer drain, pre-roll, resampling, and restart. |
+| `src/daemon/audio_pactl.rs` | Linux `pactl` parsing for startup/reopen microphone display details. |
+| `src/daemon/worker.rs` | ASR worker, paste sanitizer, target safety, clipboard fallback, and insertion circuit breaker. |
+| `src/daemon/ipc.rs` | Local control socket for `status`, `stop`, `paste-last`, and `test-paste`. |
+| `src/daemon/notifications.rs` | Desktop notifications for copy-only, microphone, and insertion fallback events. |
+| `src/daemon/target.rs` | X11 and AT-SPI target safety inspection before paste. |
 | `src/fetch.rs` | Hosted [Q8_0 GGUF](https://huggingface.co/pszemraj/parakeet-tdt-0.6b-v3-gguf) download, source rebuilds, checksum verification. |
 | `src/model.rs` | Model names, hosted GGUF naming, cache paths, hosted URLs, and checksum constants. |
 | `src/gguf.rs` | Minimal GGUF dtype reader for startup reporting. |
@@ -69,15 +76,3 @@ Runtime failures are reported and the daemon continues when possible: sound cues
 ## Deferred Windows Work
 
 TODO: Before Windows daemon support is considered ready, replace `rdev::grab` with a passive or registered hotkey backend, add a foreground-window focus guard, make `doctor --deep` exercise Windows insertion honestly, and validate the daemon path on Windows CI plus a real desktop session.
-
-## Deferred Daemon Hardening
-
-TODO: Add a warm-stream pre-roll buffer so the first 250-500 ms before PTT-down can be included in the utterance.
-
-TODO: Move CPAL callback handoff to a bounded SPSC ring buffer if live testing shows dropouts or before turning parakit into a long-running service by default.
-
-TODO: Add desktop notifications for copy-only fallback, microphone loss/recovery, and repeated insertion failures.
-
-TODO: Add local IPC for `status`, `stop`, `paste-last`, and `test-paste`; split environment doctor checks from singleton daemon startup checks so `doctor` remains useful while a daemon is running.
-
-TODO: Add AT-SPI target inspection for password fields, file-manager body views, and editable-state checks before broadening paste support beyond the Linux/X11 terminal/text-editor MVP.

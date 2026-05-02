@@ -74,10 +74,17 @@ libc = "0.2"
 
 # Threading conveniences
 crossbeam-channel = "0.5"
+futures-lite = "2"
 
 [target.'cfg(target_os = "linux")'.dependencies]
+# Linux target safety inspection through AT-SPI plus X11 WM_CLASS.
+atspi = { version = "0.29", optional = true }
+
 # Linux default hotkey capture registers Ctrl+Space with the X11 desktop.
 global-hotkey = { version = "0.8", optional = true }
+
+# Desktop notifications for safe copy-only fallbacks and microphone recovery.
+notify-rust = { version = "4", optional = true }
 
 # Experimental Linux evdev/uinput keyboard proxy backend.
 epoll = { version = "4.4", optional = true }
@@ -90,15 +97,17 @@ x11rb = { version = "0.13", features = ["xtest"], optional = true }
 default = ["bundled", "daemon"]
 
 # Live push-to-talk daemon dependencies. Keeping this as a feature lets the
-# The WAV-only transcribe-file quality target builds on machines missing
+# WAV-only transcribe-file quality target build on machines missing
 # desktop/audio dev packages while preserving default daemon behavior.
 daemon = [
   "dep:arboard",
+  "dep:atspi",
   "dep:cpal",
   "dep:enigo",
   "dep:epoll",
   "dep:evdev-rs",
   "dep:global-hotkey",
+  "dep:notify-rust",
   "dep:rdev",
   "dep:rodio",
   "dep:x11rb",

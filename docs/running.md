@@ -8,7 +8,7 @@ parakit runs in the foreground by default. Use that mode once after install, the
 parakit doctor && parakit
 ```
 
-`parakit doctor` checks hotkey access, the selected microphone, insertion support, and daemon lock state without downloading or loading the model. It exits `0` when startup should proceed and `1` when a blocking issue remains, so it can be used directly in shell conditionals.
+`parakit doctor` checks hotkey access, the selected microphone, and insertion support without downloading or loading the model. It reports an already-running daemon but does not treat the daemon lock as an environment failure. It exits `0` when startup should proceed and `1` when a blocking issue remains, so it can be used directly in shell conditionals.
 
 Useful variants:
 
@@ -60,8 +60,23 @@ nohup parakit --quiet >/dev/null 2>>"$HOME/.local/state/parakit/parakit.err" &
 Stop it:
 
 ```bash
-pkill parakit
+parakit stop
 ```
+
+`parakit stop` uses the local control socket. `pkill parakit` is still a last-resort option if the process is wedged before the socket starts.
+
+## Control Socket
+
+When the daemon is running, these commands talk to it through a per-user Unix socket under the parakit runtime directory:
+
+```bash
+parakit status
+parakit stop
+parakit paste-last
+parakit test-paste "hello from parakit"
+```
+
+`paste-last` keeps only the latest transcript in daemon memory. `test-paste` runs clipboard staging, target safety checks, and the paste chord without using the microphone.
 
 ## Model Cache
 
@@ -81,7 +96,7 @@ parakit -m /path/to/model.gguf
 
 ## Microphone
 
-parakit follows the OS default input device and avoids monitor/loopback/virtual sources unless no better input is available.
+parakit follows the OS default input device and avoids monitor/loopback/virtual sources unless no better input is available. The microphone stream stays warm while the daemon is running; a bounded ring buffer feeds a drain thread that keeps 350 ms of pre-roll so the beginning of an utterance is less likely to be clipped.
 
 If the default input changes while parakit is idle, the daemon switches when CPAL reports a changed selected device identity and prints the new microphone unless `--quiet` is set. Idle polling is CPAL-only and does not shell out to `pactl`. On Linux PulseAudio/PipeWire systems, startup, probe, and stream reopen paths use `pactl` only to enrich generic `default` source names for human-readable logs and Bluetooth warnings. If an active stream fails, parakit keeps running and retries.
 
@@ -91,7 +106,7 @@ Bluetooth microphones are allowed, but parakit prints a warning because headset 
 
 parakit transcribes once on hotkey release, writes the transcript to the system clipboard, sends the configured paste shortcut, then restores the previous text clipboard when possible. Clipboard managers may still keep the transient transcript in history.
 
-On Linux/X11, parakit records the focused X11 window when recording starts. If focus changes before insertion, it copies the transcript to the clipboard and does not paste into the new target. Terminal mode strips trailing newlines and blocks multiline terminal paste by copying the transcript instead.
+On Linux/X11, parakit records the focused X11 window when recording starts. If focus changes before insertion, it copies the transcript to the clipboard and does not paste into the new target. Just before paste, it also inspects the current target: AT-SPI password fields are blocked without copying, file-manager body views are copy-only unless AT-SPI reports an editable focused element, and desktop shell targets are copy-only. Terminal mode strips trailing newlines and blocks multiline terminal paste by copying the transcript instead.
 
 Paste modes:
 

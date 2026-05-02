@@ -61,7 +61,7 @@ pub fn print_doctor(
     } else {
         inject::preflight(paste_mode)
     };
-    let ok = !report.blocking && daemon_lock.is_ok() && mic.is_ok() && insertion.is_ok();
+    let ok = !report.blocking && mic.is_ok() && insertion.is_ok();
 
     if quiet {
         return ok;
@@ -104,7 +104,7 @@ fn print_doctor_summary(
     print_status_line("hotkey", !report.blocking, &report.status);
     match daemon_lock {
         Ok(()) => print_status_line("daemon", true, "no existing daemon lock"),
-        Err(err) => print_status_line("daemon", false, &format!("{err:#}")),
+        Err(err) => print_status_line("daemon", true, &format!("already running ({err:#})")),
     }
     match mic {
         Ok(mic) => print_status_line("mic", true, &mic.summary()),
@@ -146,7 +146,7 @@ fn print_doctor_details(
     println!("{}", report.details.trim_end());
     match daemon_lock {
         Ok(()) => println!("  daemon lock:   OK"),
-        Err(err) => println!("  daemon lock:   FAIL ({err:#})"),
+        Err(err) => println!("  daemon lock:   held by running daemon ({err:#})"),
     }
     match mic {
         Ok(mic) => {
@@ -203,6 +203,19 @@ impl Drop for DaemonLock {
 
 fn singleton_lock_path() -> Result<PathBuf> {
     Ok(daemon_runtime_dir()?.join("parakit.lock"))
+}
+
+/// Return the per-user daemon control socket path.
+///
+/// # Returns
+///
+/// A Unix-domain socket path under the daemon runtime directory.
+///
+/// # Errors
+///
+/// Returns an error when the runtime directory cannot be determined.
+pub(crate) fn control_socket_path() -> Result<PathBuf> {
+    Ok(daemon_runtime_dir()?.join("control.sock"))
 }
 
 /// Return the per-user daemon runtime directory.
