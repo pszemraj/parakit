@@ -22,7 +22,7 @@ mod daemon;
 
 use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand};
-use crossbeam_channel::{unbounded, Receiver};
+use crossbeam_channel::{bounded, unbounded, Receiver};
 use parakit::audio_file::{read_wav_mono, resample_to_target};
 use parakit::data_log::{DataLogger, LogFormat};
 use parakit::fetch::{self, FetchOptions, FetchSource};
@@ -197,6 +197,10 @@ enum WorkerEvent {
     },
 }
 
+const WORKER_QUEUE_CAPACITY: usize = 2;
+const MAX_PASTE_CHARS: usize = 20_000;
+const TERMINAL_MAX_PASTE_CHARS: usize = 2_000;
+
 // =============================================================================
 // main
 // =============================================================================
@@ -349,7 +353,7 @@ fn run() -> Result<()> {
     // Worker thread takes exclusive ownership of `engine`. `crispasr::Session`
     // is `Send` but not `Sync`, which is fine: only one thread ever calls
     // `transcribe`, and the hotkey path only posts transitions on a channel.
-    let (tx, rx) = unbounded::<WorkerEvent>();
+    let (tx, rx) = bounded::<WorkerEvent>(WORKER_QUEUE_CAPACITY);
     let worker = spawn_worker(WorkerCtx {
         engine,
         cleaner,
@@ -420,7 +424,7 @@ fn run_ptt_audio_simulation(cli: &Cli, log: Arc<Logger>, audio_path: &Path) -> R
     );
     log.line(&msg);
 
-    let (tx, rx) = unbounded::<WorkerEvent>();
+    let (tx, rx) = bounded::<WorkerEvent>(WORKER_QUEUE_CAPACITY);
     let worker = spawn_worker(WorkerCtx {
         engine,
         cleaner,
@@ -727,13 +731,29 @@ fn worker_loop(ctx: WorkerCtx) {
                             continue;
                         }
                         let insert_started = Instant::now();
-                        let insert_result = paste_transcript(
-                            &mut injector,
+                        let insert_result = match sanitize_for_paste(
                             &transcript.cleaned,
                             paste_mode,
-                            focus_at_start.as_ref(),
-                            &log,
-                        );
+                        ) {
+                            PastePlan::Paste(text) => paste_transcript(
+                                &mut injector,
+                                &text,
+                                paste_mode,
+                                focus_at_start.as_ref(),
+                                &log,
+                            ),
+                            PastePlan::CopyOnly { text, reason } => {
+                                log.warn(format!(
+                                    "paste blocked by sanitizer ({reason}); transcript copied to clipboard"
+                                ));
+                                copy_transcript_to_clipboard(&mut injector, &text)
+                                    .context("sanitized transcript clipboard fallback failed")
+                            }
+                            PastePlan::Skip { reason } => {
+                                log.warn(format!("paste skipped by sanitizer: {reason}"));
+                                Ok(())
+                            }
+                        };
                         match insert_result {
                             Ok(()) => {
                                 let insert_elapsed = insert_started.elapsed();
@@ -786,9 +806,12 @@ fn paste_transcript(
     let paste_result = injector
         .as_mut()
         .expect("insertion backend was just initialized")
-        .paste_text(text, mode);
-    let Err(paste_error) = paste_result else {
-        return Ok(());
+        .paste_text_guarded(text, mode, || Ok(focus_allows_insertion(focus, log)));
+    let paste_error = match paste_result {
+        Ok(daemon::inject::PasteOutcome::Pasted | daemon::inject::PasteOutcome::CopiedOnly) => {
+            return Ok(());
+        }
+        Err(err) => err,
     };
 
     if paste_failure_uses_clipboard_fallback(mode, &paste_error) {
@@ -831,7 +854,7 @@ fn focus_allows_insertion(focus: Option<&FocusSnapshot>, log: &Logger) -> bool {
         Ok(true) => true,
         Ok(false) => {
             log.warn(
-                "focus changed during recording; copied transcript to clipboard without pasting",
+                "focus changed before insertion; copied transcript to clipboard without pasting",
             );
             false
         }
@@ -842,6 +865,63 @@ fn focus_allows_insertion(focus: Option<&FocusSnapshot>, log: &Logger) -> bool {
             false
         }
     }
+}
+
+enum PastePlan {
+    Paste(String),
+    CopyOnly { text: String, reason: &'static str },
+    Skip { reason: &'static str },
+}
+
+fn sanitize_for_paste(raw: &str, mode: PasteMode) -> PastePlan {
+    let normalized = raw.replace("\r\n", "\n").replace('\r', "\n");
+    let mut text = String::with_capacity(normalized.len());
+    for ch in normalized.chars() {
+        match ch {
+            '\0' => {}
+            '\t' | '\n' => text.push(ch),
+            ch if ch.is_ascii_control() => {}
+            _ => text.push(ch),
+        }
+    }
+
+    if text.trim().is_empty() {
+        return PastePlan::Skip {
+            reason: "empty transcript after sanitization",
+        };
+    }
+
+    if mode == PasteMode::Terminal {
+        while text.ends_with('\n') {
+            text.pop();
+        }
+        if text.trim().is_empty() {
+            return PastePlan::Skip {
+                reason: "empty terminal transcript after sanitization",
+            };
+        }
+        if text.contains('\n') {
+            return PastePlan::CopyOnly {
+                text,
+                reason: "multiline terminal transcript",
+            };
+        }
+        if text.chars().count() > TERMINAL_MAX_PASTE_CHARS {
+            return PastePlan::CopyOnly {
+                text,
+                reason: "terminal transcript too long",
+            };
+        }
+    }
+
+    if text.chars().count() > MAX_PASTE_CHARS {
+        return PastePlan::CopyOnly {
+            text,
+            reason: "transcript too long",
+        };
+    }
+
+    PastePlan::Paste(text)
 }
 
 fn transcribe_clean(
@@ -920,5 +1000,54 @@ mod tests {
         assert!(capture_should_skip(&[0.0001; 160]));
         assert!(!capture_should_skip(&[0.0, 0.2]));
         assert!(!capture_should_skip(&[0.01; 16]));
+    }
+
+    #[test]
+    fn paste_sanitizer_strips_unsafe_controls() {
+        match sanitize_for_paste("hello\0\r\nworld\x07", PasteMode::Standard) {
+            PastePlan::Paste(text) => assert_eq!(text, "hello\nworld"),
+            _ => panic!("standard sanitized text should remain pasteable"),
+        }
+    }
+
+    #[test]
+    fn terminal_sanitizer_strips_trailing_newlines() {
+        match sanitize_for_paste("cargo test\n\n", PasteMode::Terminal) {
+            PastePlan::Paste(text) => assert_eq!(text, "cargo test"),
+            _ => panic!("single terminal line should remain pasteable"),
+        }
+    }
+
+    #[test]
+    fn terminal_sanitizer_blocks_multiline_paste_but_keeps_clipboard_text() {
+        match sanitize_for_paste("first\nsecond", PasteMode::Terminal) {
+            PastePlan::CopyOnly { text, reason } => {
+                assert_eq!(text, "first\nsecond");
+                assert_eq!(reason, "multiline terminal transcript");
+            }
+            _ => panic!("multiline terminal text should be copy-only"),
+        }
+    }
+
+    #[test]
+    fn paste_sanitizer_skips_empty_output() {
+        match sanitize_for_paste("\0\x07\n", PasteMode::Standard) {
+            PastePlan::Skip { reason } => {
+                assert_eq!(reason, "empty transcript after sanitization");
+            }
+            _ => panic!("empty sanitized transcript should be skipped"),
+        }
+    }
+
+    #[test]
+    fn terminal_sanitizer_blocks_long_terminal_paste() {
+        let raw = "a".repeat(TERMINAL_MAX_PASTE_CHARS + 1);
+        match sanitize_for_paste(&raw, PasteMode::Terminal) {
+            PastePlan::CopyOnly { text, reason } => {
+                assert_eq!(text.len(), TERMINAL_MAX_PASTE_CHARS + 1);
+                assert_eq!(reason, "terminal transcript too long");
+            }
+            _ => panic!("overlong terminal text should be copy-only"),
+        }
     }
 }

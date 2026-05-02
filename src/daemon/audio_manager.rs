@@ -77,6 +77,23 @@ impl AudioHandle {
     }
 }
 
+#[cfg(test)]
+impl AudioHandle {
+    /// Build an isolated audio handle for coordinator and buffer unit tests.
+    ///
+    /// # Returns
+    ///
+    /// A handle with an empty buffer, closed epoch, and default capture pipeline.
+    pub(crate) fn test_handle() -> Self {
+        Self {
+            buffer: Arc::new(Mutex::new(Vec::new())),
+            session_epoch: Arc::new(AtomicU64::new(0)),
+            next_session_epoch: Arc::new(AtomicU64::new(0)),
+            pipeline: Arc::new(Mutex::new(CapturePipeline::default())),
+        }
+    }
+}
+
 /// Summary of the active microphone stream.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MicInfo {

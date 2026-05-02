@@ -69,3 +69,15 @@ Runtime failures are reported and the daemon continues when possible: sound cues
 ## Deferred Windows Work
 
 TODO: Before Windows daemon support is considered ready, replace `rdev::grab` with a passive or registered hotkey backend, add a foreground-window focus guard, make `doctor --deep` exercise Windows insertion honestly, and validate the daemon path on Windows CI plus a real desktop session.
+
+## Deferred Daemon Hardening
+
+TODO: Add a warm-stream pre-roll buffer so the first 250-500 ms before PTT-down can be included in the utterance.
+
+TODO: Move CPAL callback handoff to a bounded SPSC ring buffer if live testing shows dropouts or before turning parakit into a long-running service by default.
+
+TODO: Add desktop notifications for copy-only fallback, microphone loss/recovery, and repeated insertion failures.
+
+TODO: Add local IPC for `status`, `stop`, `paste-last`, and `test-paste`; split environment doctor checks from singleton daemon startup checks so `doctor` remains useful while a daemon is running.
+
+TODO: Add AT-SPI target inspection for password fields, file-manager body views, and editable-state checks before broadening paste support beyond the Linux/X11 terminal/text-editor MVP.

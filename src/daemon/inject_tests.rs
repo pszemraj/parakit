@@ -415,3 +415,65 @@ fn clipboard_swap_cases_are_stable() {
         );
     }
 }
+
+#[test]
+fn guarded_clipboard_swap_leaves_transcript_when_guard_blocks_paste() {
+    let mut clipboard = MockClipboard::new("old clipboard");
+    let events = clipboard.events();
+    let result = paste_with_clipboard_swap_guarded(
+        &mut clipboard,
+        "dictated text",
+        || {
+            events.borrow_mut().push("paste".to_string());
+            Ok(())
+        },
+        Duration::ZERO,
+        Duration::ZERO,
+        || {
+            events.borrow_mut().push("guard".to_string());
+            Ok(false)
+        },
+    )
+    .expect("guarded copy-only fallback should succeed");
+
+    assert_eq!(result, PasteOutcome::CopiedOnly);
+    assert_eq!(clipboard.text.as_deref(), Some("dictated text"));
+    assert_eq!(
+        events.borrow().as_slice(),
+        &["read", "set:dictated text", "guard"]
+    );
+}
+
+#[test]
+fn guarded_clipboard_swap_pastes_and_restores_when_guard_passes() {
+    let mut clipboard = MockClipboard::new("old clipboard");
+    let events = clipboard.events();
+    let result = paste_with_clipboard_swap_guarded(
+        &mut clipboard,
+        "dictated text",
+        || {
+            events.borrow_mut().push("paste".to_string());
+            Ok(())
+        },
+        Duration::ZERO,
+        Duration::ZERO,
+        || {
+            events.borrow_mut().push("guard".to_string());
+            Ok(true)
+        },
+    )
+    .expect("guarded paste should succeed");
+
+    assert_eq!(result, PasteOutcome::Pasted);
+    assert_eq!(clipboard.text.as_deref(), Some("old clipboard"));
+    assert_eq!(
+        events.borrow().as_slice(),
+        &[
+            "read",
+            "set:dictated text",
+            "guard",
+            "paste",
+            "set:old clipboard"
+        ]
+    );
+}

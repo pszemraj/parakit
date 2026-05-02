@@ -83,7 +83,7 @@ parakit -m /path/to/model.gguf
 
 parakit follows the OS default input device and avoids monitor/loopback/virtual sources unless no better input is available.
 
-If the default input changes while parakit is idle, the daemon switches and prints the new microphone unless `--quiet` is set. Idle polling is CPAL-only and does not shell out to `pactl`. On Linux PulseAudio/PipeWire systems, startup, probe, and stream reopen paths use `pactl` only to enrich generic `default` source names for human-readable logs and Bluetooth warnings. If an active stream fails, parakit keeps running and retries.
+If the default input changes while parakit is idle, the daemon switches when CPAL reports a changed selected device identity and prints the new microphone unless `--quiet` is set. Idle polling is CPAL-only and does not shell out to `pactl`. On Linux PulseAudio/PipeWire systems, startup, probe, and stream reopen paths use `pactl` only to enrich generic `default` source names for human-readable logs and Bluetooth warnings. If an active stream fails, parakit keeps running and retries.
 
 Bluetooth microphones are allowed, but parakit prints a warning because headset profiles often add latency and reduce speech quality. The warning still goes to stderr in `--quiet` mode.
 
@@ -91,7 +91,7 @@ Bluetooth microphones are allowed, but parakit prints a warning because headset 
 
 parakit transcribes once on hotkey release, writes the transcript to the system clipboard, sends the configured paste shortcut, then restores the previous text clipboard when possible. Clipboard managers may still keep the transient transcript in history.
 
-On Linux/X11, parakit records the focused X11 window when recording starts. If focus changes before release, it copies the transcript to the clipboard and does not paste into the new target.
+On Linux/X11, parakit records the focused X11 window when recording starts. If focus changes before insertion, it copies the transcript to the clipboard and does not paste into the new target. Terminal mode strips trailing newlines and blocks multiline terminal paste by copying the transcript instead.
 
 Paste modes:
 

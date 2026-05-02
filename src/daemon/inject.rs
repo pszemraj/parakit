@@ -64,6 +64,15 @@ impl PasteMode {
     }
 }
 
+/// Result of a guarded paste attempt.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PasteOutcome {
+    /// The paste chord or direct typing path was sent.
+    Pasted,
+    /// The transcript was left on the clipboard and no synthetic input was sent.
+    CopiedOnly,
+}
+
 /// Check whether the configured insertion path can be initialized.
 ///
 /// # Arguments
@@ -261,10 +270,13 @@ impl Injector {
         })
     }
 
-    /// Paste the given text as one batch insertion at the focused cursor.
+    /// Paste text, but re-run a caller-supplied safety check immediately before
+    /// synthetic input is sent.
     ///
     /// The text clipboard is restored when the previous clipboard contents were
     /// also text. Non-text clipboard contents may be replaced by the transcript.
+    /// The guard runs after clipboard staging and settle delay, which closes the
+    /// focus-drift race between the initial daemon preflight and the XTest chord.
     ///
     /// # Arguments
     ///
@@ -273,31 +285,43 @@ impl Injector {
     ///
     /// # Returns
     ///
-    /// `Ok(())` when the clipboard was populated and the paste shortcut was
-    /// accepted by the platform backend.
+    /// [`PasteOutcome::Pasted`] when synthetic input was sent, or
+    /// [`PasteOutcome::CopiedOnly`] when the guard blocked insertion after the
+    /// transcript was copied to the clipboard.
     ///
     /// # Errors
     ///
-    /// Returns an error if the clipboard cannot be opened, the transcript
-    /// cannot be copied, or the platform backend rejects the paste shortcut.
-    pub fn paste_text(&mut self, text: &str, mode: PasteMode) -> Result<()> {
+    /// Returns an error if clipboard staging, the guard, direct typing, or the
+    /// paste shortcut fails.
+    pub fn paste_text_guarded(
+        &mut self,
+        text: &str,
+        mode: PasteMode,
+        mut before_chord: impl FnMut() -> Result<bool>,
+    ) -> Result<PasteOutcome> {
         if text.is_empty() {
-            return Ok(());
+            return Ok(PasteOutcome::Pasted);
         }
         if mode == PasteMode::Direct {
-            return self.type_text(text);
+            if before_chord()? {
+                self.type_text(text)?;
+                return Ok(PasteOutcome::Pasted);
+            }
+            self.copy_text(text)?;
+            return Ok(PasteOutcome::CopiedOnly);
         }
 
         let mut clipboard = match self.clipboard.take() {
             Some(clipboard) => clipboard,
             None => Clipboard::new().context("could not open system clipboard")?,
         };
-        let result = paste_with_clipboard_swap(
+        let result = paste_with_clipboard_swap_guarded(
             &mut clipboard,
             text,
             || self.paste_clipboard(mode),
             clipboard_settle_delay(),
             clipboard_restore_delay(),
+            before_chord,
         );
         self.clipboard = Some(clipboard);
         result
@@ -455,10 +479,11 @@ fn send_paste_shortcut_with_cleanup<S: PasteShortcutSink>(
     }
 }
 
+#[cfg(test)]
 fn paste_with_clipboard_swap<C, P>(
     clipboard: &mut C,
     text: &str,
-    mut paste: P,
+    paste: P,
     settle_delay: Duration,
     restore_delay: Duration,
 ) -> Result<()>
@@ -466,8 +491,27 @@ where
     C: TextClipboard,
     P: FnMut() -> Result<()>,
 {
+    paste_with_clipboard_swap_guarded(clipboard, text, paste, settle_delay, restore_delay, || {
+        Ok(true)
+    })
+    .map(|_| ())
+}
+
+fn paste_with_clipboard_swap_guarded<C, P, G>(
+    clipboard: &mut C,
+    text: &str,
+    mut paste: P,
+    settle_delay: Duration,
+    restore_delay: Duration,
+    mut before_chord: G,
+) -> Result<PasteOutcome>
+where
+    C: TextClipboard,
+    P: FnMut() -> Result<()>,
+    G: FnMut() -> Result<bool>,
+{
     if text.is_empty() {
-        return Ok(());
+        return Ok(PasteOutcome::Pasted);
     }
 
     let previous = clipboard
@@ -479,6 +523,10 @@ where
         .context("could not copy transcript to clipboard")?;
 
     sleep_if_nonzero(settle_delay);
+    if !before_chord()? {
+        return Ok(PasteOutcome::CopiedOnly);
+    }
+
     let paste_result = paste();
 
     let restore_result = if let Some(previous) = previous {
@@ -491,7 +539,7 @@ where
     };
 
     match (paste_result, restore_result) {
-        (Ok(()), Ok(())) => Ok(()),
+        (Ok(()), Ok(())) => Ok(PasteOutcome::Pasted),
         (Err(paste_err), Ok(())) => Err(paste_err),
         (Ok(()), Err(restore_err)) => Err(restore_err),
         (Err(paste_err), Err(restore_err)) => Err(paste_err.context(format!("{restore_err:#}"))),
