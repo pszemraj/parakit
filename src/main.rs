@@ -754,7 +754,7 @@ fn worker_loop(ctx: WorkerCtx) {
                             continue;
                         }
                         let insert_started = Instant::now();
-                        let insert_result = paste_transcript_with_rebuilt_injector(
+                        let insert_result = paste_transcript(
                             &mut injector,
                             &transcript.cleaned,
                             paste_mode,
@@ -762,13 +762,8 @@ fn worker_loop(ctx: WorkerCtx) {
                             &log,
                         );
                         match insert_result {
-                            Ok(rebuilt_injector) => {
+                            Ok(()) => {
                                 let insert_elapsed = insert_started.elapsed();
-                                if rebuilt_injector {
-                                    log.verbose(
-                                        "parakit: insertion backend rebuilt and paste retry succeeded",
-                                    );
-                                }
                                 log.verbose(format!(
                                     "parakit: timings infer={}ms clean={}ms insert={}ms total={}ms",
                                     transcript.infer_elapsed.as_secs_f32() * 1000.0,
@@ -801,54 +796,59 @@ fn worker_loop(ctx: WorkerCtx) {
     }
 }
 
-fn paste_transcript_with_rebuilt_injector(
+fn paste_transcript(
     injector: &mut Option<Injector>,
     text: &str,
     mode: PasteMode,
     focus: Option<&FocusSnapshot>,
     log: &Logger,
-) -> Result<bool> {
+) -> Result<()> {
     if !focus_allows_insertion(focus, log) {
-        match injector.as_mut() {
-            Some(injector) => injector.copy_text(text),
-            None => {
-                let mut rebuilt = Injector::new()
-                    .context("could not initialize insertion backend for clipboard fallback")?;
-                let result = rebuilt.copy_text(text);
-                *injector = Some(rebuilt);
-                result
-            }
-        }
-        .context("focus changed; transcript copied to clipboard fallback")?;
-        return Ok(false);
+        copy_transcript_to_clipboard(injector, text)
+            .context("focus changed; transcript copied to clipboard fallback")?;
+        return Ok(());
     }
 
-    let first_attempt = match injector.as_mut() {
-        Some(injector) => injector.paste_text(text, mode),
-        None => Err(anyhow::anyhow!("insertion backend was not initialized")),
-    };
-    let Err(first_error) = first_attempt else {
-        return Ok(false);
+    if injector.is_none() {
+        *injector = Some(Injector::new().context("could not initialize insertion backend")?);
+    }
+
+    let paste_result = injector
+        .as_mut()
+        .expect("insertion backend was just initialized")
+        .paste_text(text, mode);
+    let Err(paste_error) = paste_result else {
+        return Ok(());
     };
 
-    if !paste_failure_should_retry(mode, &first_error) {
-        return Err(first_error);
+    if paste_failure_uses_clipboard_fallback(mode, &paste_error) {
+        copy_transcript_to_clipboard(injector, text).map_err(|copy_error| {
+            anyhow::anyhow!("{paste_error:#}; clipboard fallback also failed: {copy_error:#}")
+        })?;
+        return Err(
+            paste_error.context("transcript copied to clipboard fallback after paste failure")
+        );
     }
 
-    let mut rebuilt =
-        Injector::new().context("could not reinitialize insertion backend after paste failure")?;
-    match rebuilt.paste_text(text, mode) {
-        Ok(()) => {
+    Err(paste_error)
+}
+
+fn copy_transcript_to_clipboard(injector: &mut Option<Injector>, text: &str) -> Result<()> {
+    match injector.as_mut() {
+        Some(injector) => injector.copy_text(text),
+        None => {
+            let mut rebuilt = Injector::new()
+                .context("could not initialize insertion backend for clipboard fallback")?;
+            let result = rebuilt.copy_text(text);
             *injector = Some(rebuilt);
-            Ok(true)
-        }
-        Err(retry_error) => {
-            *injector = Some(rebuilt);
-            Err(anyhow::anyhow!(
-                "initial paste failed: {first_error:#}; retry after rebuilding insertion backend failed: {retry_error:#}"
-            ))
+            result
         }
     }
+}
+
+fn paste_failure_uses_clipboard_fallback(mode: PasteMode, error: &anyhow::Error) -> bool {
+    mode != PasteMode::Direct
+        && !format!("{error:#}").contains(daemon::inject::CLIPBOARD_RESTORE_ERROR)
 }
 
 fn focus_allows_insertion(focus: Option<&FocusSnapshot>, log: &Logger) -> bool {
@@ -872,14 +872,6 @@ fn focus_allows_insertion(focus: Option<&FocusSnapshot>, log: &Logger) -> bool {
             false
         }
     }
-}
-
-fn paste_failure_should_retry(mode: PasteMode, error: &anyhow::Error) -> bool {
-    if mode == PasteMode::Direct {
-        return false;
-    }
-
-    !format!("{error:#}").contains(daemon::inject::CLIPBOARD_RESTORE_ERROR)
 }
 
 fn transcribe_clean(
@@ -931,21 +923,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn paste_retry_is_limited_to_batch_failures_before_clipboard_restore() {
+    fn paste_failures_use_clipboard_fallback_only_when_safe() {
         let paste_error = anyhow::anyhow!("could not send paste shortcut");
-        assert!(paste_failure_should_retry(
+        assert!(paste_failure_uses_clipboard_fallback(
             PasteMode::Terminal,
             &paste_error
         ));
 
         let restore_error = anyhow::anyhow!("{}: lost", daemon::inject::CLIPBOARD_RESTORE_ERROR);
-        assert!(!paste_failure_should_retry(
+        assert!(!paste_failure_uses_clipboard_fallback(
             PasteMode::Terminal,
             &restore_error
         ));
 
         let direct_error = anyhow::anyhow!("could not type text at cursor");
-        assert!(!paste_failure_should_retry(
+        assert!(!paste_failure_uses_clipboard_fallback(
             PasteMode::Direct,
             &direct_error
         ));
