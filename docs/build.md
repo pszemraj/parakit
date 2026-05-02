@@ -99,7 +99,7 @@ sudo apt install libopenblas-dev
 PARAKIT_BLAS=openblas cargo install --path .
 ```
 
-The selected mode is printed during explicit BLAS builds and later shown by `parakit doctor`.
+Explicit BLAS builds print the selected mode, and `parakit doctor` reports it.
 
 ## CrispASR And Backends
 

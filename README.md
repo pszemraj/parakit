@@ -6,9 +6,7 @@ parakit runs [NVIDIA Parakeet-TDT-0.6B-v3](https://huggingface.co/nvidia/parakee
 
 ## Install
 
-Install the native, OS-specific packages needed[^1] as explained in [docs/build.md](docs/build.md), then:
-
-[^1]: These are mostly for audio streaming, hotkey monitoring, and text insertion.
+Install the native packages in [docs/build.md](docs/build.md), then:
 
 ```bash
 git clone --recurse-submodules https://github.com/pszemraj/parakit.git
@@ -39,11 +37,7 @@ If `doctor` finds issues with the setup/build, it will exit 1 and display detail
 
 For background mode, model cache paths, logging, and paste options, see [docs/running.md](docs/running.md).
 
-On first successful startup, parakit downloads the default model once if it is not already cached. A custom `-m /path/to/model.gguf` still works for local experiments.
-
-**gotcha:** Linux uses an X11 session for the default registered hotkey and text insertion[^2]
-
-[^2]: Wayland sessions are rejected because the current Linux desktop path uses X11 hotkey registration and XTest insertion. This is a common limitation across dictation tools.
+Linux currently requires an X11 session for the default hotkey and insertion path; see [docs/linux-desktop.md](docs/linux-desktop.md).
 
 ## Docs
 

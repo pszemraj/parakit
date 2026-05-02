@@ -19,10 +19,10 @@ Use the hidden simulation path when you need the daemon worker flow without a li
 
 ```bash
 cargo run -- \
-  --simulate-ptt-audio target/tmp/ptt-audio/Sitrep_2602_20_0145_first60.wav
+  --simulate-ptt-audio target/tmp/ptt-audio/example.wav
 ```
 
-It reads a WAV, resamples it to the model rate, sends `RecordingStarted`/`RecordingStopped` events with owned PCM, runs inference and cleanup, and prints the transcript. It does not test registered hotkeys, evdev-proxy capture, or paste insertion.
+Use a real WAV with a known transcript. The command resamples it to the model rate, sends `RecordingStarted`/`RecordingStopped` events with owned PCM, runs inference and cleanup, and prints the transcript. It does not test registered hotkeys, evdev-proxy capture, or paste insertion.
 
 ## NeMo Reference Helper
 
