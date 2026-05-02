@@ -18,7 +18,7 @@ The helper accepts WAV input, uses the same `Engine` path as the daemon, applies
 Use the hidden simulation path when you need the daemon worker flow without a live keyboard, microphone, or text insertion:
 
 ```bash
-cargo run -- --paste-mode direct \
+cargo run -- \
   --simulate-ptt-audio target/tmp/ptt-audio/Sitrep_2602_20_0145_first60.wav
 ```
 

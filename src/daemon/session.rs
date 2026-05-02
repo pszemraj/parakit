@@ -33,20 +33,6 @@ pub(crate) fn ensure_x11_session_supported() -> Result<()> {
     Ok(())
 }
 
-/// Ensure the current Linux desktop session can receive synthetic insertion.
-///
-/// # Returns
-///
-/// `Ok(())` when text insertion should be allowed to initialize.
-///
-/// # Errors
-///
-/// Returns an error for Wayland sessions because the Linux insertion backend
-/// uses X11/XTest and cannot insert into focused native Wayland applications.
-pub(crate) fn ensure_text_insertion_supported() -> Result<()> {
-    ensure_x11_session_supported()
-}
-
 fn linux_session_type_is_wayland(session_type: Option<&str>) -> bool {
     session_type.is_some_and(|value| value.eq_ignore_ascii_case("wayland"))
 }

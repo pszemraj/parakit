@@ -32,6 +32,8 @@ use std::{
 use x11rb::connection::Connection as _;
 #[cfg(target_os = "linux")]
 use x11rb::protocol::xproto::ConnectionExt as _;
+#[cfg(target_os = "linux")]
+use x11rb::rust_connection::RustConnection;
 
 /// Error label used when paste succeeded but previous clipboard restore failed.
 pub(crate) const CLIPBOARD_RESTORE_ERROR: &str = "could not restore previous clipboard text";
@@ -78,7 +80,7 @@ impl PasteMode {
 /// unavailable.
 pub(crate) fn preflight(mode: PasteMode) -> Result<()> {
     #[cfg(target_os = "linux")]
-    super::session::ensure_text_insertion_supported()?;
+    super::session::ensure_x11_session_supported()?;
 
     if insertion_needs_enigo(mode) {
         let _keyboard = Enigo::new(&Settings::default())
@@ -172,14 +174,7 @@ impl FocusSnapshot {
     pub(crate) fn capture() -> Result<Self> {
         #[cfg(target_os = "linux")]
         {
-            let (conn, _) = x11rb::rust_connection::RustConnection::connect(None)
-                .context("could not connect to X11")?;
-            let focus = conn
-                .get_input_focus()
-                .context("could not request current X11 input focus")?
-                .reply()
-                .context("could not read current X11 input focus")?
-                .focus;
+            let focus = linux_current_input_focus_on_default_display()?;
             if !linux_focus_is_insertable(focus) {
                 anyhow::bail!("X11 input focus is not an insertable application window");
             }
@@ -204,15 +199,7 @@ impl FocusSnapshot {
     pub(crate) fn matches_current(&self) -> Result<bool> {
         #[cfg(target_os = "linux")]
         {
-            let (conn, _) = x11rb::rust_connection::RustConnection::connect(None)
-                .context("could not connect to X11")?;
-            let current = conn
-                .get_input_focus()
-                .context("could not request current X11 input focus")?
-                .reply()
-                .context("could not read current X11 input focus")?
-                .focus;
-            Ok(current == self.focus)
+            Ok(linux_current_input_focus_on_default_display()? == self.focus)
         }
 
         #[cfg(not(target_os = "linux"))]
@@ -225,6 +212,22 @@ impl FocusSnapshot {
 #[cfg(target_os = "linux")]
 fn linux_focus_is_insertable(focus: u32) -> bool {
     focus != x11rb::NONE && focus != u32::from(x11rb::protocol::xproto::InputFocus::POINTER_ROOT)
+}
+
+#[cfg(target_os = "linux")]
+fn linux_current_input_focus_on_default_display() -> Result<u32> {
+    let (conn, _) = RustConnection::connect(None).context("could not connect to X11")?;
+    linux_current_input_focus(&conn)
+}
+
+#[cfg(target_os = "linux")]
+fn linux_current_input_focus(conn: &RustConnection) -> Result<u32> {
+    Ok(conn
+        .get_input_focus()
+        .context("could not request current X11 input focus")?
+        .reply()
+        .context("could not read current X11 input focus")?
+        .focus)
 }
 
 /// Open a text insertion handle.
@@ -248,7 +251,7 @@ impl Injector {
     /// `enigo` cannot initialize the platform keyboard backend.
     pub fn new() -> Result<Self> {
         #[cfg(target_os = "linux")]
-        super::session::ensure_text_insertion_supported()?;
+        super::session::ensure_x11_session_supported()?;
 
         Ok(Self {
             enigo: None,
@@ -567,15 +570,13 @@ struct ResolvedX11KeyStep {
 
 #[cfg(target_os = "linux")]
 struct LinuxX11Paste {
-    conn: x11rb::rust_connection::RustConnection,
+    conn: RustConnection,
     root: u32,
 }
 
 #[cfg(target_os = "linux")]
 impl LinuxX11Paste {
     fn open() -> Result<Self> {
-        use x11rb::rust_connection::RustConnection;
-
         let (conn, screen_num) =
             RustConnection::connect(None).context("could not connect to X11")?;
         let root = super::x11::root_window(&conn, screen_num)?;
@@ -874,17 +875,10 @@ fn linux_x11_paste_smoke_test(mode: PasteMode) -> Result<()> {
 }
 
 #[cfg(target_os = "linux")]
-fn linux_wait_for_focus(conn: &x11rb::rust_connection::RustConnection, window: u32) -> Result<()> {
-    use x11rb::protocol::xproto::ConnectionExt;
-
+fn linux_wait_for_focus(conn: &RustConnection, window: u32) -> Result<()> {
     let deadline = Instant::now() + Duration::from_millis(750);
     while Instant::now() < deadline {
-        let focus = conn
-            .get_input_focus()
-            .context("could not request X11 smoke-test focus")?
-            .reply()
-            .context("could not read X11 smoke-test focus")?;
-        if focus.focus == window {
+        if linux_current_input_focus(conn)? == window {
             return Ok(());
         }
         thread::sleep(Duration::from_millis(10));

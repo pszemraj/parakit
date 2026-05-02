@@ -138,30 +138,32 @@ impl X11KeySink for MockX11KeySink {
 }
 
 #[cfg(target_os = "linux")]
+fn three_pressed_key_steps() -> [ResolvedX11KeyStep; 3] {
+    [
+        ResolvedX11KeyStep {
+            keycode: 1,
+            press: true,
+        },
+        ResolvedX11KeyStep {
+            keycode: 2,
+            press: true,
+        },
+        ResolvedX11KeyStep {
+            keycode: 3,
+            press: true,
+        },
+    ]
+}
+
+#[cfg(target_os = "linux")]
 #[test]
 fn xtest_cleanup_releases_pressed_keys_after_primary_error() {
     let mut sink = MockX11KeySink {
         fail_on: Some((3, true)),
         ..MockX11KeySink::default()
     };
-    let err = send_x11_key_steps(
-        &mut sink,
-        &[
-            ResolvedX11KeyStep {
-                keycode: 1,
-                press: true,
-            },
-            ResolvedX11KeyStep {
-                keycode: 2,
-                press: true,
-            },
-            ResolvedX11KeyStep {
-                keycode: 3,
-                press: true,
-            },
-        ],
-    )
-    .expect_err("primary failure should be reported");
+    let err = send_x11_key_steps(&mut sink, &three_pressed_key_steps())
+        .expect_err("primary failure should be reported");
 
     assert!(format!("{err:#}").contains("primary failure"));
     assert_eq!(
@@ -178,24 +180,8 @@ fn xtest_cleanup_reports_primary_and_cleanup_errors() {
         fail_cleanup_on: Some(2),
         ..MockX11KeySink::default()
     };
-    let err = send_x11_key_steps(
-        &mut sink,
-        &[
-            ResolvedX11KeyStep {
-                keycode: 1,
-                press: true,
-            },
-            ResolvedX11KeyStep {
-                keycode: 2,
-                press: true,
-            },
-            ResolvedX11KeyStep {
-                keycode: 3,
-                press: true,
-            },
-        ],
-    )
-    .expect_err("primary and cleanup failures should be reported");
+    let err = send_x11_key_steps(&mut sink, &three_pressed_key_steps())
+        .expect_err("primary and cleanup failures should be reported");
     let message = format!("{err:#}");
     assert!(message.contains("primary failure"));
     assert!(message.contains("cleanup while releasing pressed XTest keys failed"));

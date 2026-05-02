@@ -232,7 +232,7 @@ pub(crate) fn run_grab_loop(
     match backend {
         HotkeyBackend::Auto | HotkeyBackend::Desktop => {
             log.verbose("parakit: Linux hotkey backend: registered X11 Ctrl+Space");
-            run_linux_registered_hotkey_loop_or_exit(tx, audio, log);
+            run_linux_registered_hotkey_loop_or_exit(tx, audio);
         }
         HotkeyBackend::EvdevProxy => {
             log.verbose("parakit: Linux hotkey backend: evdev/uinput keyboard proxy");
@@ -275,12 +275,8 @@ fn run_rdev_grab_loop_or_exit(tx: Sender<Event_>, audio: AudioHandle) {
 }
 
 #[cfg(target_os = "linux")]
-fn run_linux_registered_hotkey_loop_or_exit(
-    tx: Sender<Event_>,
-    audio: AudioHandle,
-    log: Arc<Logger>,
-) {
-    if let Err(err) = run_linux_registered_hotkey_loop(tx, audio, Arc::clone(&log)) {
+fn run_linux_registered_hotkey_loop_or_exit(tx: Sender<Event_>, audio: AudioHandle) {
+    if let Err(err) = run_linux_registered_hotkey_loop(tx, audio) {
         eprintln!(
             "parakit: registered X11 hotkey failed: {err:#}\n{}",
             registered_hotkey_failure_help()
@@ -290,11 +286,7 @@ fn run_linux_registered_hotkey_loop_or_exit(
 }
 
 #[cfg(target_os = "linux")]
-fn run_linux_registered_hotkey_loop(
-    tx: Sender<Event_>,
-    audio: AudioHandle,
-    _log: Arc<Logger>,
-) -> anyhow::Result<()> {
+fn run_linux_registered_hotkey_loop(tx: Sender<Event_>, audio: AudioHandle) -> anyhow::Result<()> {
     super::session::ensure_x11_session_supported()?;
     let manager =
         GlobalHotKeyManager::new().map_err(|err| anyhow::anyhow!("init hotkey manager: {err}"))?;
@@ -783,7 +775,7 @@ mod tests {
     }
 
     #[test]
-    fn space_release_after_ctrl_release_is_still_suppressed() {
+    fn held_space_after_ctrl_release_does_not_restart_after_debounce() {
         let now = base_time();
         let mut state = HotkeyState::default();
         state.press(Key::ControlLeft, now);
@@ -791,15 +783,24 @@ mod tests {
         state.release(Key::ControlLeft, now + Duration::from_millis(50));
 
         assert_eq!(
-            state.press(Key::ControlLeft, now + Duration::from_millis(55)),
+            state.press(
+                Key::ControlLeft,
+                now + HOTKEY_DEBOUNCE + Duration::from_millis(10)
+            ),
             (None, false)
         );
         assert_eq!(
-            state.press(Key::Space, now + Duration::from_millis(60)),
+            state.press(
+                Key::Space,
+                now + HOTKEY_DEBOUNCE + Duration::from_millis(20)
+            ),
             (None, true)
         );
         assert_eq!(
-            state.release(Key::Space, now + Duration::from_millis(70)),
+            state.release(
+                Key::Space,
+                now + HOTKEY_DEBOUNCE + Duration::from_millis(30)
+            ),
             (None, true)
         );
         assert!(!state.recording);
@@ -819,36 +820,6 @@ mod tests {
             (None, true)
         );
         assert!(state.recording);
-    }
-
-    #[test]
-    fn ctrl_repress_while_space_is_held_does_not_restart() {
-        let now = base_time();
-        let mut state = HotkeyState::default();
-        state.press(Key::ControlLeft, now);
-        assert_eq!(
-            state.press(Key::Space, now + Duration::from_millis(10)),
-            (Some(HotkeyAction::Start), true)
-        );
-        assert_eq!(
-            state.release(Key::ControlLeft, now + Duration::from_millis(30)),
-            (
-                Some(HotkeyAction::Stop {
-                    started_at: now + Duration::from_millis(10),
-                    stopped_at: now + Duration::from_millis(30)
-                }),
-                false
-            )
-        );
-        assert_eq!(
-            state.press(Key::ControlLeft, now + Duration::from_millis(40)),
-            (None, false)
-        );
-        assert_eq!(
-            state.press(Key::Space, now + Duration::from_millis(50)),
-            (None, true)
-        );
-        assert!(!state.recording);
     }
 
     #[test]

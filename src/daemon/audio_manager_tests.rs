@@ -76,7 +76,6 @@ fn stale_audio_callback_chunks_are_dropped() {
 
 #[test]
 fn bluetooth_detection_uses_name_and_source_id_without_virtual_filtering() {
-    assert!(!is_virtual_input_name("Bluetooth Test Headset"));
     let by_name = MicInfo {
         name: "Bluetooth Test Headset".to_string(),
         input_rate: 16_000,

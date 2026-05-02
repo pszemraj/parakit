@@ -581,38 +581,38 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
-    fn registered_backends_require_registered_hotkey_readiness() {
-        for backend in [HotkeyBackend::Auto, HotkeyBackend::Desktop] {
-            assert!(!linux_hotkey_startup_blocked(backend, true, false));
-            assert!(linux_hotkey_startup_blocked(backend, false, true));
+    fn selected_hotkey_backend_controls_readiness() {
+        let cases = [
+            (HotkeyBackend::Auto, true, false, false),
+            (HotkeyBackend::Auto, false, true, true),
+            (HotkeyBackend::Desktop, true, false, false),
+            (HotkeyBackend::Desktop, false, true, true),
+            (HotkeyBackend::EvdevProxy, false, true, false),
+            (HotkeyBackend::EvdevProxy, true, false, true),
+        ];
+        for (backend, registered_ready, evdev_ready, expected) in cases {
+            assert_eq!(
+                linux_hotkey_startup_blocked(backend, registered_ready, evdev_ready),
+                expected
+            );
         }
     }
 
-    #[test]
-    fn evdev_proxy_requires_evdev_readiness() {
-        assert!(!linux_hotkey_startup_blocked(
-            HotkeyBackend::EvdevProxy,
-            false,
-            true
-        ));
-        assert!(linux_hotkey_startup_blocked(
-            HotkeyBackend::EvdevProxy,
-            true,
-            false
-        ));
-    }
-
-    #[test]
-    fn evdev_readiness_allows_denied_non_candidates() {
-        let report = EvdevReport {
+    fn evdev_report_with_hotkey_keyboards(hotkey_keyboards: usize) -> EvdevReport {
+        EvdevReport {
             event_devices: 4,
             readable: 1,
-            hotkey_keyboards: 1,
+            hotkey_keyboards,
             denied: 3,
             uinput_writable: true,
             uinput_error: None,
             other_errors: Vec::new(),
-        };
+        }
+    }
+
+    #[test]
+    fn evdev_readiness_allows_denied_non_candidates() {
+        let report = evdev_report_with_hotkey_keyboards(1);
 
         assert!(report.grab_likely_available());
         assert_eq!(report.status_label(), "ready");
@@ -620,15 +620,7 @@ mod tests {
 
     #[test]
     fn evdev_readiness_still_requires_hotkey_candidate() {
-        let report = EvdevReport {
-            event_devices: 4,
-            readable: 1,
-            hotkey_keyboards: 0,
-            denied: 3,
-            uinput_writable: true,
-            uinput_error: None,
-            other_errors: Vec::new(),
-        };
+        let report = evdev_report_with_hotkey_keyboards(0);
 
         assert!(!report.grab_likely_available());
         assert_eq!(report.status_label(), "no keyboard candidates");
