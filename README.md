@@ -1,8 +1,8 @@
 # parakit
 
-Local push-to-talk dictation for desktop work. Hold `Ctrl+Space`, speak, release, and parakit inserts the transcript into the focused application.
+Local push-to-talk dictation built from **Para**keet and a desktop dictation **kit**. Hold `Ctrl+Space`, speak, release, and parakit inserts the transcript into the focused application.
 
-parakit runs [NVIDIA Parakeet-TDT-0.6B-v3](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3) locally through the vendored [CrispASR](https://github.com/CrispStrobe/CrispASR) runtime. The default model is a [Q8_0 GGUF build hosted at pszemraj/parakeet-tdt-0.6b-v3-gguf](https://huggingface.co/pszemraj/parakeet-tdt-0.6b-v3-gguf).
+parakit runs [NVIDIA Parakeet-TDT-0.6B-v3](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3) locally through the vendored [CrispASR](https://github.com/CrispStrobe/CrispASR) runtime. The default model is a Q8_0 GGUF build hosted at [pszemraj/parakeet-tdt-0.6b-v3-gguf](https://huggingface.co/pszemraj/parakeet-tdt-0.6b-v3-gguf).
 
 ## Install
 
