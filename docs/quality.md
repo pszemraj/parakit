@@ -22,7 +22,7 @@ cargo run -- --paste-mode direct \
   --simulate-ptt-audio target/tmp/ptt-audio/Sitrep_2602_20_0145_first60.wav
 ```
 
-It reads a WAV, resamples it to the model rate, sends `RecordingStarted`/`RecordingStopped` events with owned PCM, runs inference and cleanup, and prints the transcript. It does not test evdev capture or paste insertion.
+It reads a WAV, resamples it to the model rate, sends `RecordingStarted`/`RecordingStopped` events with owned PCM, runs inference and cleanup, and prints the transcript. It does not test registered hotkeys, evdev-proxy capture, or paste insertion.
 
 ## NeMo Reference Helper
 
@@ -83,8 +83,10 @@ Check:
 - `Ctrl+Space` does not leak a literal space;
 - rapid double-presses do not wedge the state machine;
 - Ctrl release before Space stops recording;
+- focus changes copy to clipboard without pasting into the new target;
 - very short captures are padded and transcribed instead of rejected;
 - `--quiet` emits no stdout;
+- warnings still go to stderr in quiet mode;
 - sounds still play in quiet mode unless `--no-sounds` is set;
 - logging writes raw and cleaned text without crashing the daemon.
 

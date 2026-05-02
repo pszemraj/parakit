@@ -12,7 +12,7 @@ It exits `0` when startup should proceed and `1` when a blocking issue remains. 
 
 ## Hotkey Problems
 
-Linux backend, X11 session, evdev, and `/dev/uinput` setup are in [linux-desktop.md](linux-desktop.md). If `Ctrl+Space` is unavailable, another desktop shortcut, input method, or keyboard remapper may own it. Disable that binding and rerun `parakit doctor`.
+Linux X11 session and backend setup are in [linux-desktop.md](linux-desktop.md). The default backend registers `Ctrl+Space` with X11 and does not need `/dev/input` or `/dev/uinput`. If `Ctrl+Space` is unavailable, another desktop shortcut, input method, or keyboard remapper may own it. Disable that binding and rerun `parakit doctor`.
 
 On macOS, grant Accessibility and Input Monitoring permissions to both the terminal and the built binary.
 
@@ -22,6 +22,7 @@ The active backend should suppress the literal Space in `Ctrl+Space`. If a space
 
 - confirm only one parakit process is running;
 - confirm no desktop/input-method shortcut also handles `Ctrl+Space`;
+- if you selected `evdev-proxy`, confirm `/dev/uinput` is writable and the input device can be grabbed;
 - retry in foreground mode to inspect errors;
 - use an X11 session for Linux insertion.
 
@@ -30,6 +31,8 @@ The active backend should suppress the literal Space in `Ctrl+Space`. If a space
 Paste modes are described in [running.md#insertion](running.md#insertion).
 
 Run `parakit doctor --deep` for an active insertion smoke test. On Linux, use an X11 session; Wayland is rejected because XTest cannot insert into focused native Wayland applications. Use `standard` for apps that only accept `Ctrl+V`; use `direct` only when an app refuses clipboard paste entirely.
+
+If focus changes during recording, parakit copies the transcript to the clipboard and skips paste to avoid inserting into the wrong application.
 
 On Windows, paste shortcuts are sent with `SendInput`. Windows blocks synthetic input into higher-integrity processes, so a normal parakit process cannot paste into an administrator/elevated target application. Security software can also flag global hooks plus text insertion; whitelist the binary when needed.
 
@@ -46,6 +49,8 @@ parakit doctor
 ```
 
 If the reported microphone is wrong, change the default input in desktop sound settings or `pavucontrol`, then wait a few seconds. When `pactl` is available, parakit uses the default source identity to detect this change even if CPAL continues to report a generic `default` input. Restart parakit if the audio server itself is not reporting the new default source.
+
+Bluetooth microphones are not filtered as virtual inputs, but parakit warns when the selected source looks Bluetooth because headset profiles can be slow and low quality.
 
 ## Build And Model Issues
 

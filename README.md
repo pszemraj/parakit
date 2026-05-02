@@ -41,15 +41,15 @@ For background mode, model cache paths, logging, and paste options, see [docs/ru
 
 On first successful startup, parakit downloads the default model once if it is not already cached. A custom `-m /path/to/model.gguf` still works for local experiments.
 
-**gotcha:** Linux insertion requires an X11 session[^2]
+**gotcha:** Linux uses an X11 session for the default registered hotkey and text insertion[^2]
 
-[^2]: Wayland sessions are rejected because XTest cannot insert into focused native Wayland applications. This is a common limitation across dictation tools
+[^2]: Wayland sessions are rejected because the current Linux desktop path uses X11 hotkey registration and XTest insertion. This is a common limitation across dictation tools.
 
 ## Docs
 
 - Build and native dependencies: [docs/build.md](docs/build.md)
 - Running, model cache, logging, and paste modes: [docs/running.md](docs/running.md)
-- Linux X11, evdev, and `/dev/uinput`: [docs/linux-desktop.md](docs/linux-desktop.md)
+- Linux X11 and experimental evdev-proxy setup: [docs/linux-desktop.md](docs/linux-desktop.md)
 - Cleanup rules: [docs/cleaning-rules.md](docs/cleaning-rules.md)
 - Troubleshooting: [docs/troubleshooting.md](docs/troubleshooting.md)
 

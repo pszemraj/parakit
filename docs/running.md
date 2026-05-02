@@ -20,7 +20,7 @@ parakit doctor --deep
 
 `--verbose` and `--quiet` are global flags, so they go before `doctor`. On Linux, Wayland sessions fail insertion preflight even when XWayland exposes a `DISPLAY`; use an X11 session.
 
-The daemon checks the hotkey backend, insertion backend, and singleton lock before any model download. If those preflights pass, the first successful startup downloads the default Q8_0 GGUF if it is not already cached, opens the model, and starts the microphone and hotkey loop.
+The daemon checks the hotkey backend, insertion backend, and singleton lock before any model download. If those preflights pass, it opens the microphone, warns when the selected source looks like Bluetooth, downloads the default Q8_0 GGUF if it is not already cached, opens the model, and starts the hotkey loop.
 
 Normal startup:
 
@@ -28,7 +28,7 @@ Normal startup:
 parakit
   model: parakeet-tdt-0.6b-v3-Q8_0.gguf
   dtype: Q8_0 (745 MB)
-  mic:   RODE NT-USB+ Mono, 48000 Hz input -> 16000 Hz model, mono, F32
+  mic:   USB Speech Mic Mono, 48000 Hz input -> 16000 Hz model, mono, F32
 Ready: hold Ctrl+Space to dictate.
 ```
 
@@ -85,6 +85,8 @@ parakit follows the OS default input device and avoids monitor/loopback/virtual 
 
 If the default input changes while parakit is idle, the daemon switches and prints the new microphone unless `--quiet` is set. On Linux PulseAudio/PipeWire systems, parakit also checks the `pactl` default source identity when CPAL reports a generic `default` input, so changing the desktop default source is detected even when the CPAL device name stays the same. If an active stream fails, parakit keeps running and retries.
 
+Bluetooth microphones are allowed, but parakit prints a warning because headset profiles often add latency and reduce speech quality. The warning still goes to stderr in `--quiet` mode.
+
 ## Insertion
 
 Batch mode is the default and recommended mode:
@@ -94,6 +96,8 @@ parakit --mode batch
 ```
 
 It transcribes once on hotkey release, writes the transcript to the system clipboard, sends the configured paste shortcut, then restores the previous text clipboard when possible. Clipboard managers may still keep the transient transcript in history.
+
+On Linux/X11, parakit records the focused X11 window when recording starts. If focus changes before release, it copies the transcript to the clipboard and does not paste into the new target.
 
 Paste modes:
 
