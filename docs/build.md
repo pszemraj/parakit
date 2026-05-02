@@ -4,13 +4,13 @@ parakit is a Rust 1.87+ binary that links to the vendored [CrispASR](https://git
 
 ## Native Dependencies
 
-Cargo handles Rust packages. System packages are still needed for audio, keyboard hooks, text insertion, CMake, and optional accelerator SDKs.
+Cargo handles Rust packages. System packages are still needed for audio, desktop input, X11/XTest insertion, CMake, and optional accelerator SDKs.
 
 | OS | Packages |
 | --- | --- |
-| Ubuntu 24.04 | `cmake build-essential libasound2-dev libudev-dev libxtst-dev libxdo-dev libxi-dev libx11-dev libxkbcommon-dev libevdev-dev libgomp1 pkg-config autoconf libtool` |
-| Fedora | `cmake gcc-c++ alsa-lib-devel libudev-devel libXtst-devel libxdo-devel libXi-devel libX11-devel libxkbcommon-devel libevdev-devel pkgconf autoconf libtool` |
-| Arch | `cmake base-devel alsa-lib libxtst xdotool libxi libx11 libxkbcommon libevdev pkgconf autoconf libtool` |
+| Ubuntu 24.04 | `cmake build-essential libasound2-dev libudev-dev libxtst-dev libxi-dev libx11-dev libxkbcommon-dev libevdev-dev libgomp1 pkg-config autoconf libtool` |
+| Fedora | `cmake gcc-c++ alsa-lib-devel libudev-devel libXtst-devel libXi-devel libX11-devel libxkbcommon-devel libevdev-devel pkgconf autoconf libtool` |
+| Arch | `cmake base-devel alsa-lib libxtst libxi libx11 libxkbcommon libevdev pkgconf autoconf libtool` |
 | Windows | Visual Studio 2022 with the "Desktop development with C++" workload, plus CMake on `PATH`. |
 | macOS | Xcode command line tools plus `cmake autoconf automake libtool pkg-config`. |
 

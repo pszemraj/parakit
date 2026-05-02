@@ -29,7 +29,7 @@ The active backend should suppress the literal Space in `Ctrl+Space`. If a space
 
 - confirm only one parakit process is running;
 - confirm no desktop/input-method shortcut also handles `Ctrl+Space`;
-- if you selected `evdev-proxy`, confirm `/dev/uinput` is writable and the input device can be grabbed;
+- if you selected `evdev-proxy-experimental`, confirm `/dev/uinput` is writable and the input device can be grabbed;
 - retry in foreground mode to inspect errors;
 - use an X11 session for Linux insertion.
 
