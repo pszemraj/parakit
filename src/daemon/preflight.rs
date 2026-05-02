@@ -555,10 +555,10 @@ fn hotkey_report(_backend: HotkeyBackend) -> HotkeyReport {
 
 #[cfg(target_os = "windows")]
 fn hotkey_report(_backend: HotkeyBackend) -> HotkeyReport {
-    let details = "parakit doctor\n  hotkey backend: rdev::grab\n  status:         OK unless security software blocks the binary.".to_string();
+    let details = "parakit doctor\n  hotkey backend: rdev::grab\n  status:         experimental; source check only\n  note:           Windows daemon support still needs passive hotkey capture, a foreground-window paste guard, and manual validation.".to_string();
     HotkeyReport {
         blocking: false,
-        status: "global hook available unless blocked by security software".to_string(),
+        status: "experimental Windows hotkey backend".to_string(),
         summary: details.clone(),
         details,
     }

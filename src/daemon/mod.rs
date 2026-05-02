@@ -11,6 +11,8 @@ pub(crate) mod inject;
 pub(crate) mod logging;
 /// Runtime checks for desktop input permissions.
 pub(crate) mod preflight;
+/// Coordinator between hotkey transitions and audio recording events.
+pub(crate) mod recording;
 /// Desktop session compatibility checks.
 #[cfg(target_os = "linux")]
 pub(crate) mod session;

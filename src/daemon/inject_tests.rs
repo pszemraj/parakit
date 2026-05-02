@@ -194,6 +194,96 @@ fn direct_mode_has_no_paste_modifiers() {
     assert!(paste_modifiers(PasteMode::Direct).is_empty());
 }
 
+#[cfg(not(target_os = "linux"))]
+#[derive(Default)]
+struct MockPasteShortcutSink {
+    events: Vec<String>,
+    fail_press: Option<&'static str>,
+    fail_release: Option<&'static str>,
+    fail_paste: bool,
+}
+
+#[cfg(not(target_os = "linux"))]
+impl PasteShortcutSink for MockPasteShortcutSink {
+    fn key(&mut self, key: Key, direction: Direction) -> Result<()> {
+        let key = mock_key_label(key);
+        let direction = mock_direction_label(direction);
+        self.events.push(format!("{direction}:{key}"));
+        if direction == "press" && self.fail_press == Some(key) {
+            anyhow::bail!("press failed for {key}");
+        }
+        if direction == "release" && self.fail_release == Some(key) {
+            anyhow::bail!("release failed for {key}");
+        }
+        Ok(())
+    }
+
+    fn paste_key(&mut self) -> Result<()> {
+        self.events.push("paste".to_string());
+        if self.fail_paste {
+            anyhow::bail!("paste failed");
+        }
+        Ok(())
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn mock_key_label(key: Key) -> &'static str {
+    match key {
+        Key::Control => "control",
+        Key::Shift => "shift",
+        Key::Meta => "meta",
+        _ => "other",
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn mock_direction_label(direction: Direction) -> &'static str {
+    match direction {
+        Direction::Press => "press",
+        Direction::Release => "release",
+        Direction::Click => "click",
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+#[test]
+fn paste_shortcut_releases_only_successfully_pressed_modifiers() {
+    let mut sink = MockPasteShortcutSink {
+        fail_press: Some("shift"),
+        ..MockPasteShortcutSink::default()
+    };
+    let err = send_paste_shortcut_with_cleanup(&mut sink, &[Key::Control, Key::Shift])
+        .expect_err("failed modifier press should be reported");
+
+    assert!(format!("{err:#}").contains("press failed for shift"));
+    assert_eq!(
+        sink.events,
+        vec!["press:control", "press:shift", "release:control"]
+    );
+}
+
+#[cfg(not(target_os = "linux"))]
+#[test]
+fn paste_shortcut_reports_primary_and_modifier_cleanup_errors() {
+    let mut sink = MockPasteShortcutSink {
+        fail_release: Some("control"),
+        fail_paste: true,
+        ..MockPasteShortcutSink::default()
+    };
+    let err = send_paste_shortcut_with_cleanup(&mut sink, &[Key::Control])
+        .expect_err("paste and cleanup failures should be reported");
+    let message = format!("{err:#}");
+
+    assert!(message.contains("paste failed"));
+    assert!(message.contains("paste modifier cleanup also failed"));
+    assert!(message.contains("release failed for control"));
+    assert_eq!(
+        sink.events,
+        vec!["press:control", "paste", "release:control"]
+    );
+}
+
 struct ClipboardCase {
     name: &'static str,
     initial: Option<&'static str>,

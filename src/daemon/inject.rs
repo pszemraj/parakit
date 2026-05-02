@@ -366,34 +366,10 @@ impl Injector {
 
     #[cfg(not(target_os = "linux"))]
     fn paste_clipboard(&mut self, mode: PasteMode) -> Result<()> {
-        let modifiers = paste_modifiers(mode);
-        let mut failure = None;
         let enigo = self.keyboard()?;
-        for key in modifiers {
-            if let Err(e) = enigo.key(*key, Direction::Press) {
-                failure = Some(anyhow::anyhow!("enigo paste modifier press failed: {e:?}"));
-                break;
-            }
-        }
-
-        if failure.is_none() {
-            failure = paste_key_click(enigo)
-                .err()
-                .map(|e| anyhow::anyhow!("enigo paste key failed: {e:?}"));
-        }
-
-        for key in modifiers.iter().rev() {
-            if let Err(e) = enigo.key(*key, Direction::Release) {
-                failure.get_or_insert_with(|| {
-                    anyhow::anyhow!("enigo paste modifier release failed: {e:?}")
-                });
-            }
-        }
-
-        match failure {
-            Some(err) => Err(err).context("could not send paste shortcut"),
-            None => Ok(()),
-        }
+        let mut sink = EnigoPasteShortcutSink { enigo };
+        send_paste_shortcut_with_cleanup(&mut sink, paste_modifiers(mode))
+            .context("could not send paste shortcut")
     }
 
     fn keyboard(&mut self) -> Result<&mut Enigo> {
@@ -404,6 +380,78 @@ impl Injector {
             );
         }
         Ok(self.enigo.as_mut().expect("enigo was just initialized"))
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+trait PasteShortcutSink {
+    /// Send a modifier key press or release.
+    /// # Arguments
+    /// * `key` - Modifier key to press or release.
+    /// * `direction` - Press or release direction to send.
+    /// # Returns
+    /// `Ok(())` when the backend accepted the synthetic key event.
+    /// # Errors
+    /// Returns an error when the platform rejects the synthetic key event.
+    fn key(&mut self, key: Key, direction: Direction) -> Result<()>;
+
+    /// Click the platform paste key.
+    /// # Returns
+    /// `Ok(())` when the backend accepted the synthetic paste key event.
+    /// # Errors
+    /// Returns an error when the platform rejects the synthetic paste key.
+    fn paste_key(&mut self) -> Result<()>;
+}
+
+#[cfg(not(target_os = "linux"))]
+struct EnigoPasteShortcutSink<'a> {
+    enigo: &'a mut Enigo,
+}
+
+#[cfg(not(target_os = "linux"))]
+impl PasteShortcutSink for EnigoPasteShortcutSink<'_> {
+    fn key(&mut self, key: Key, direction: Direction) -> Result<()> {
+        self.enigo
+            .key(key, direction)
+            .map_err(|e| anyhow::anyhow!("{e:?}"))
+    }
+
+    fn paste_key(&mut self) -> Result<()> {
+        paste_key_click(self.enigo)
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn send_paste_shortcut_with_cleanup<S: PasteShortcutSink>(
+    sink: &mut S,
+    modifiers: &[Key],
+) -> Result<()> {
+    let mut pressed = Vec::with_capacity(modifiers.len());
+    let paste_result = (|| -> Result<()> {
+        for key in modifiers {
+            sink.key(*key, Direction::Press)
+                .context("enigo paste modifier press failed")?;
+            pressed.push(*key);
+        }
+
+        sink.paste_key().context("enigo paste key failed")?;
+        Ok(())
+    })();
+
+    let mut cleanup_error = None;
+    for key in pressed.into_iter().rev() {
+        if let Err(err) = sink.key(key, Direction::Release) {
+            cleanup_error.get_or_insert_with(|| err.context("enigo paste modifier release failed"));
+        }
+    }
+
+    match (paste_result, cleanup_error) {
+        (Ok(()), None) => Ok(()),
+        (Err(err), None) => Err(err),
+        (Ok(()), Some(cleanup)) => Err(cleanup).context("paste modifier cleanup failed"),
+        (Err(err), Some(cleanup)) => Err(anyhow::anyhow!(
+            "{err:#}; paste modifier cleanup also failed: {cleanup:#}"
+        )),
     }
 }
 

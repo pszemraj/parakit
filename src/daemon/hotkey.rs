@@ -3,8 +3,7 @@
 //! Linux defaults to a registered X11 desktop hotkey. The evdev/uinput
 //! keyboard proxy remains available only as an explicit experimental backend.
 
-use super::{audio::AudioHandle, inject::FocusSnapshot, logging::Logger};
-use crate::Event_;
+use super::{logging::Logger, recording::HotkeyTransition};
 use crossbeam_channel::Sender;
 #[cfg(target_os = "linux")]
 use global_hotkey::{
@@ -60,7 +59,9 @@ impl HotkeyBackend {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum HotkeyAction {
-    Start,
+    Start {
+        started_at: Instant,
+    },
     Stop {
         started_at: Instant,
         stopped_at: Instant,
@@ -128,7 +129,7 @@ impl HotkeyState {
             self.recording = true;
             self.started_at = Some(now);
             self.last_start = Some(now);
-            Some(HotkeyAction::Start)
+            Some(HotkeyAction::Start { started_at: now })
         } else {
             None
         }
@@ -196,7 +197,7 @@ impl RegisteredHotkeyLatch {
         }
         self.recording = true;
         self.started_at = Some(now);
-        Some(HotkeyAction::Start)
+        Some(HotkeyAction::Start { started_at: now })
     }
 
     fn release(&mut self, now: Instant) -> Option<HotkeyAction> {
@@ -218,25 +219,23 @@ impl RegisteredHotkeyLatch {
 ///
 /// # Arguments
 ///
-/// * `tx` - Worker event channel used to post recording events.
-/// * `audio` - Audio capture handle controlled by the hotkey coordinator.
+/// * `tx` - Coordinator channel used to post logical hotkey transitions.
 /// * `backend` - Linux backend preference.
 /// * `log` - Logger used for backend diagnostics.
 #[cfg(target_os = "linux")]
 pub(crate) fn run_grab_loop(
-    tx: Sender<Event_>,
-    audio: AudioHandle,
+    tx: Sender<HotkeyTransition>,
     backend: HotkeyBackend,
     log: Arc<Logger>,
 ) {
     match backend {
         HotkeyBackend::Auto | HotkeyBackend::Desktop => {
             log.verbose("parakit: Linux hotkey backend: registered X11 Ctrl+Space");
-            run_linux_registered_hotkey_loop_or_exit(tx, audio);
+            run_linux_registered_hotkey_loop_or_exit(tx);
         }
         HotkeyBackend::EvdevProxy => {
             log.verbose("parakit: Linux hotkey backend: evdev/uinput keyboard proxy");
-            run_linux_evdev_grab_loop_or_exit(tx, audio, log);
+            run_linux_evdev_grab_loop_or_exit(tx, log);
         }
     }
 }
@@ -245,38 +244,34 @@ pub(crate) fn run_grab_loop(
 ///
 /// # Arguments
 ///
-/// * `tx` - Worker event channel used to post recording events.
-/// * `audio` - Audio capture handle controlled by the hotkey coordinator.
+/// * `tx` - Coordinator channel used to post logical hotkey transitions.
 /// * `_backend` - Ignored backend preference on platforms with one backend.
 /// * `_log` - Logger unused on non-Linux platforms.
 #[cfg(not(target_os = "linux"))]
 pub(crate) fn run_grab_loop(
-    tx: Sender<Event_>,
-    audio: AudioHandle,
+    tx: Sender<HotkeyTransition>,
     _backend: HotkeyBackend,
     _log: Arc<Logger>,
 ) {
-    run_rdev_grab_loop_or_exit(tx, audio);
+    run_rdev_grab_loop_or_exit(tx);
 }
 
 #[cfg(not(target_os = "linux"))]
-fn run_rdev_grab_loop_or_exit(tx: Sender<Event_>, audio: AudioHandle) {
+fn run_rdev_grab_loop_or_exit(tx: Sender<HotkeyTransition>) {
     let state = Arc::new(Mutex::new(HotkeyState::default()));
     let callback_state = Arc::clone(&state);
-    let callback_audio = audio.clone();
     let callback_tx = tx.clone();
 
-    if let Err(e) = rdev::grab(move |event| {
-        handle_grab_event(event, &callback_state, &callback_audio, &callback_tx)
-    }) {
+    if let Err(e) = rdev::grab(move |event| handle_grab_event(event, &callback_state, &callback_tx))
+    {
         eprintln!("parakit: rdev::grab failed: {e:?}\n{}", grab_failure_help());
         std::process::exit(2);
     }
 }
 
 #[cfg(target_os = "linux")]
-fn run_linux_registered_hotkey_loop_or_exit(tx: Sender<Event_>, audio: AudioHandle) {
-    if let Err(err) = run_linux_registered_hotkey_loop(tx, audio) {
+fn run_linux_registered_hotkey_loop_or_exit(tx: Sender<HotkeyTransition>) {
+    if let Err(err) = run_linux_registered_hotkey_loop(tx) {
         eprintln!(
             "parakit: registered X11 hotkey failed: {err:#}\n{}",
             registered_hotkey_failure_help()
@@ -286,7 +281,7 @@ fn run_linux_registered_hotkey_loop_or_exit(tx: Sender<Event_>, audio: AudioHand
 }
 
 #[cfg(target_os = "linux")]
-fn run_linux_registered_hotkey_loop(tx: Sender<Event_>, audio: AudioHandle) -> anyhow::Result<()> {
+fn run_linux_registered_hotkey_loop(tx: Sender<HotkeyTransition>) -> anyhow::Result<()> {
     super::session::ensure_x11_session_supported()?;
     let manager =
         GlobalHotKeyManager::new().map_err(|err| anyhow::anyhow!("init hotkey manager: {err}"))?;
@@ -311,7 +306,7 @@ fn run_linux_registered_hotkey_loop(tx: Sender<Event_>, audio: AudioHandle) -> a
             RegisteredHotKeyState::Released => latch.release(now),
         };
         if let Some(action) = action {
-            dispatch_hotkey_action(action, &audio, &tx);
+            send_hotkey_transition(action, &tx);
         }
     }
 }
@@ -346,8 +341,8 @@ fn ctrl_space_hotkey() -> HotKey {
 }
 
 #[cfg(target_os = "linux")]
-fn run_linux_evdev_grab_loop_or_exit(tx: Sender<Event_>, audio: AudioHandle, log: Arc<Logger>) {
-    if let Err(err) = run_linux_evdev_grab_loop(tx, audio, Arc::clone(&log)) {
+fn run_linux_evdev_grab_loop_or_exit(tx: Sender<HotkeyTransition>, log: Arc<Logger>) {
+    if let Err(err) = run_linux_evdev_grab_loop(tx, Arc::clone(&log)) {
         eprintln!(
             "parakit: evdev keyboard grab failed: {err:#}\n{}",
             grab_failure_help()
@@ -357,11 +352,7 @@ fn run_linux_evdev_grab_loop_or_exit(tx: Sender<Event_>, audio: AudioHandle, log
 }
 
 #[cfg(target_os = "linux")]
-fn run_linux_evdev_grab_loop(
-    tx: Sender<Event_>,
-    audio: AudioHandle,
-    log: Arc<Logger>,
-) -> io::Result<()> {
+fn run_linux_evdev_grab_loop(tx: Sender<HotkeyTransition>, log: Arc<Logger>) -> io::Result<()> {
     let mut devices = open_keyboard_devices(&log)?;
     if devices.is_empty() {
         return Err(io::Error::new(
@@ -425,7 +416,7 @@ fn run_linux_evdev_grab_loop(
         )?;
     }
 
-    let result = linux_evdev_event_loop(epoll_fd, &mut grabbed, &state, &audio, &tx);
+    let result = linux_evdev_event_loop(epoll_fd, &mut grabbed, &state, &tx);
 
     for device in &mut grabbed {
         let _ = device.device.grab(evdev_rs::GrabMode::Ungrab);
@@ -459,8 +450,7 @@ fn linux_evdev_event_loop(
     epoll_fd: std::os::fd::RawFd,
     devices: &mut [LinuxKeyboardDevice],
     state: &Arc<Mutex<HotkeyState>>,
-    audio: &AudioHandle,
-    tx: &Sender<Event_>,
+    tx: &Sender<HotkeyTransition>,
 ) -> io::Result<()> {
     let mut epoll_buffer = [epoll::Event::new(epoll::Events::empty(), 0); 8];
     loop {
@@ -478,7 +468,7 @@ fn linux_evdev_event_loop(
                     Err(err) => return Err(err),
                 };
 
-                let suppress = linux_evdev_event_suppressed(&input_event, state, audio, tx);
+                let suppress = linux_evdev_event_suppressed(&input_event, state, tx);
                 if !suppress {
                     device.output.write_event(&input_event)?;
                 }
@@ -491,14 +481,13 @@ fn linux_evdev_event_loop(
 fn linux_evdev_event_suppressed(
     event: &evdev_rs::InputEvent,
     state: &Arc<Mutex<HotkeyState>>,
-    audio: &AudioHandle,
-    tx: &Sender<Event_>,
+    tx: &Sender<HotkeyTransition>,
 ) -> bool {
     let Some(event_type) = linux_evdev_key_event_type(event) else {
         return false;
     };
 
-    handle_key_event(event_type, state, audio, tx)
+    handle_key_event(event_type, state, tx)
 }
 
 #[cfg(target_os = "linux")]
@@ -616,10 +605,9 @@ fn linux_device_label(path: &std::path::Path, device: &evdev_rs::Device) -> Stri
 fn handle_grab_event(
     event: Event,
     state: &Arc<Mutex<HotkeyState>>,
-    audio: &AudioHandle,
-    tx: &Sender<Event_>,
+    tx: &Sender<HotkeyTransition>,
 ) -> Option<Event> {
-    let suppress = handle_key_event(event.event_type, state, audio, tx);
+    let suppress = handle_key_event(event.event_type, state, tx);
     if suppress {
         None
     } else {
@@ -630,8 +618,7 @@ fn handle_grab_event(
 fn handle_key_event(
     event_type: EventType,
     state: &Arc<Mutex<HotkeyState>>,
-    audio: &AudioHandle,
-    tx: &Sender<Event_>,
+    tx: &Sender<HotkeyTransition>,
 ) -> bool {
     let now = Instant::now();
     let (action, suppress) = match event_type {
@@ -647,31 +634,18 @@ fn handle_key_event(
     };
 
     if let Some(action) = action {
-        dispatch_hotkey_action(action, audio, tx);
+        send_hotkey_transition(action, tx);
     }
 
     suppress
 }
 
-fn dispatch_hotkey_action(action: HotkeyAction, audio: &AudioHandle, tx: &Sender<Event_>) {
-    match action {
-        HotkeyAction::Start => {
-            let focus = FocusSnapshot::capture().ok();
-            audio.start_recording();
-            let _ = tx.send(Event_::RecordingStarted { focus });
-        }
-        HotkeyAction::Stop {
-            started_at,
-            stopped_at,
-        } => {
-            let pcm = audio.stop_recording();
-            let _ = tx.send(Event_::RecordingStopped {
-                started_at,
-                stopped_at,
-                pcm,
-            });
-        }
-    }
+fn send_hotkey_transition(action: HotkeyAction, tx: &Sender<HotkeyTransition>) {
+    let transition = match action {
+        HotkeyAction::Start { started_at } => HotkeyTransition::Pressed { at: started_at },
+        HotkeyAction::Stop { stopped_at, .. } => HotkeyTransition::Released { at: stopped_at },
+    };
+    let _ = tx.send(transition);
 }
 
 #[cfg(target_os = "linux")]
@@ -741,7 +715,12 @@ mod tests {
         assert_eq!(state.press(Key::ControlLeft, now), (None, false));
         assert_eq!(
             state.press(Key::Space, now + Duration::from_millis(10)),
-            (Some(HotkeyAction::Start), true)
+            (
+                Some(HotkeyAction::Start {
+                    started_at: now + Duration::from_millis(10)
+                }),
+                true
+            )
         );
         assert_eq!(
             state.release(Key::Space, now + Duration::from_millis(300)),
@@ -813,7 +792,12 @@ mod tests {
         state.press(Key::ControlLeft, now);
         assert_eq!(
             state.press(Key::Space, now + Duration::from_millis(10)),
-            (Some(HotkeyAction::Start), true)
+            (
+                Some(HotkeyAction::Start {
+                    started_at: now + Duration::from_millis(10)
+                }),
+                true
+            )
         );
         assert_eq!(
             state.press(Key::Space, now + Duration::from_millis(20)),
@@ -826,7 +810,10 @@ mod tests {
     fn registered_hotkey_press_release_starts_and_stops_once() {
         let now = base_time();
         let mut state = RegisteredHotkeyLatch::default();
-        assert_eq!(state.press(now), Some(HotkeyAction::Start));
+        assert_eq!(
+            state.press(now),
+            Some(HotkeyAction::Start { started_at: now })
+        );
         assert_eq!(state.press(now + Duration::from_millis(10)), None);
         assert_eq!(
             state.release(now + Duration::from_millis(300)),
@@ -836,6 +823,30 @@ mod tests {
             })
         );
         assert_eq!(state.release(now + Duration::from_millis(310)), None);
+    }
+
+    #[test]
+    fn hotkey_actions_emit_logical_transitions_only() {
+        let now = base_time();
+        let (tx, rx) = crossbeam_channel::unbounded();
+
+        send_hotkey_transition(HotkeyAction::Start { started_at: now }, &tx);
+        send_hotkey_transition(
+            HotkeyAction::Stop {
+                started_at: now,
+                stopped_at: now + Duration::from_millis(250),
+            },
+            &tx,
+        );
+
+        assert_eq!(rx.recv().unwrap(), HotkeyTransition::Pressed { at: now });
+        assert_eq!(
+            rx.recv().unwrap(),
+            HotkeyTransition::Released {
+                at: now + Duration::from_millis(250)
+            }
+        );
+        assert!(rx.try_recv().is_err());
     }
 
     #[test]

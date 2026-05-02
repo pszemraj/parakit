@@ -53,6 +53,8 @@ cargo build --release
 
 If `parakit.exe` cannot find generated CrispASR DLLs, copy them next to the binary as described in [Windows DLLs](#windows-dlls).
 
+TODO: Windows daemon support still needs the readiness work tracked in [architecture.md#deferred-windows-work](architecture.md#deferred-windows-work). Treat Windows builds as source/build validation until that work is complete.
+
 ## CPU Builds
 
 The bundled CMake path enables ggml native CPU code, OpenMP, and CPU repacking. On Linux with GCC or Clang this usually means `-march=native` for the local machine.

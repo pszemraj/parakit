@@ -3,10 +3,12 @@
 //! Architecture:
 //!   - Main thread: parse CLI, set up subsystems, then run the hotkey backend.
 //!     The hotkey loop is blocking and runs forever until SIGINT.
+//!   - Recording coordinator thread: converts hotkey transitions into audio
+//!     start/stop calls and owned PCM worker events.
 //!   - Audio manager thread: owns the live cpal stream and follows the default
 //!     input device.
 //!   - cpal callback thread: receives mic samples and appends to a shared
-//!     buffer when `recording` is true.
+//!     buffer for the active recording epoch.
 //!   - Worker thread: receives Event messages via crossbeam-channel, runs
 //!     transcription off the hotkey thread so input stays responsive.
 //!
@@ -360,7 +362,7 @@ fn run() -> Result<()> {
 
     // Worker thread takes exclusive ownership of `engine`. `crispasr::Session`
     // is `Send` but not `Sync`, which is fine: only one thread ever calls
-    // `transcribe`, and the hotkey path only posts events on a channel.
+    // `transcribe`, and the hotkey path only posts transitions on a channel.
     let (tx, rx) = unbounded::<Event_>();
     let worker = spawn_worker(WorkerCtx {
         engine,
@@ -372,13 +374,17 @@ fn run() -> Result<()> {
         insert_transcripts: true,
         rx,
     });
+    let (hotkey_tx, hotkey_rx) = unbounded();
+    let coordinator = daemon::recording::spawn_recording_coordinator(hotkey_rx, tx, audio)
+        .context("spawn recording coordinator")?;
 
     // Hotkey grab loop. Blocks forever (until grab returns or process exits).
     log.ready();
 
-    daemon::hotkey::run_grab_loop(tx, audio, hotkey_backend, Arc::clone(&log));
+    daemon::hotkey::run_grab_loop(hotkey_tx, hotkey_backend, Arc::clone(&log));
 
     // Tear down.
+    let _ = coordinator.join();
     let _ = worker.join();
     Ok(())
 }
