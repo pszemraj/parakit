@@ -59,11 +59,9 @@ impl Logger {
         }
     }
 
-    /// Print a warning line unless stdout is quiet.
+    /// Print a warning line to stderr regardless of quiet mode.
     pub(crate) fn warn(&self, msg: impl Display) {
-        if self.level != LogLevel::Quiet {
-            anstream::println!("{} {msg}", style_warn("parakit: warning:"));
-        }
+        anstream::eprintln!("{} {msg}", style_warn("parakit: warning:"));
     }
 
     /// Print an error line to stderr regardless of quiet mode.
@@ -83,7 +81,6 @@ impl Logger {
         anstream::println!("  mic:   {}", info.mic.summary());
         if self.is_verbose() {
             anstream::println!("  path:  {}", info.model_path.display());
-            anstream::println!("  mode:  {}", info.mode);
             anstream::println!("  rules: {}", info.cleaning);
             anstream::println!("  sounds: {}", info.sounds);
             anstream::println!("  logging: {}", info.transcription_logging);
@@ -164,8 +161,6 @@ pub(crate) struct BannerInfo<'a> {
     pub(crate) dtype: &'a str,
     /// Selected microphone.
     pub(crate) mic: &'a MicInfo,
-    /// Mode label.
-    pub(crate) mode: String,
     /// Cleaning state label.
     pub(crate) cleaning: String,
     /// Sounds state label.

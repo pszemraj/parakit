@@ -4,13 +4,13 @@ parakit is a Rust 1.87+ binary that links to the vendored [CrispASR](https://git
 
 ## Native Dependencies
 
-Cargo handles Rust packages. System packages are still needed for audio, keyboard hooks, text insertion, CMake, and optional accelerator SDKs.
+Cargo handles Rust packages. System packages are still needed for audio, desktop input, X11/XTest insertion, CMake, and optional accelerator SDKs.
 
 | OS | Packages |
 | --- | --- |
-| Ubuntu 24.04 | `cmake build-essential libasound2-dev libudev-dev libxtst-dev libxdo-dev libxi-dev libx11-dev libevdev-dev libgomp1 pkg-config autoconf libtool` |
-| Fedora | `cmake gcc-c++ alsa-lib-devel libudev-devel libXtst-devel libxdo-devel libXi-devel libX11-devel libevdev-devel pkgconf autoconf libtool` |
-| Arch | `cmake base-devel alsa-lib libxtst xdotool libxi libx11 libevdev pkgconf autoconf libtool` |
+| Ubuntu 24.04 | `cmake build-essential libasound2-dev libudev-dev libxtst-dev libxi-dev libx11-dev libxkbcommon-dev libevdev-dev libgomp1 pkg-config autoconf libtool` |
+| Fedora | `cmake gcc-c++ alsa-lib-devel libudev-devel libXtst-devel libXi-devel libX11-devel libxkbcommon-devel libevdev-devel pkgconf autoconf libtool` |
+| Arch | `cmake base-devel alsa-lib libxtst libxi libx11 libxkbcommon libevdev pkgconf autoconf libtool` |
 | Windows | Visual Studio 2022 with the "Desktop development with C++" workload, plus CMake on `PATH`. |
 | macOS | Xcode command line tools plus `cmake autoconf automake libtool pkg-config`. |
 
@@ -32,6 +32,7 @@ cargo install --path .
 ```
 
 `cargo install --path .` installs the release binary to Cargo's bin directory, usually `~/.cargo/bin`.
+Developer installs built this way depend on the generated CrispASR shared libraries under Cargo's build output. Do not delete the repository `target/` tree and treat GitHub auto-generated source archives as unsupported because they do not include the CrispASR submodule. A public release must ship either a source archive with submodules or a binary bundle whose shared libraries are colocated with the executable.
 
 Add `--locked` for CI or reproducibility checks when Cargo must use the exact versions in `Cargo.lock`. Leave it off for normal local installs.
 
@@ -51,7 +52,7 @@ git submodule update --init --recursive
 cargo build --release
 ```
 
-If `parakit.exe` cannot find generated CrispASR DLLs, copy them next to the binary as described in [Windows DLLs](#windows-dlls).
+If `parakit.exe` cannot find generated CrispASR DLLs, copy them next to the binary as described in [Windows DLLs](#windows-dlls). Treat Windows builds as source/build validation until the daemon work in [architecture.md#deferred-windows-work](architecture.md#deferred-windows-work) is complete.
 
 ## CPU Builds
 
@@ -64,10 +65,11 @@ parakit doctor
 parakit --verbose doctor
 ```
 
-Benchmark different thread counts without the daemon by running the WAV quality target described in [quality.md#wav-quality-target](quality.md#wav-quality-target):
+Benchmark different thread counts with the daemon-free WAV quality target described in [quality.md#wav-quality-target](quality.md#wav-quality-target):
 
 ```bash
-cargo run --release --example transcribe-file -- --audio path/to/sample.wav --threads 8 --repeat 3
+cargo run --release --no-default-features --features bundled --example transcribe-file -- \
+  --audio path/to/sample.wav --threads 8 --repeat 3
 ```
 
 ## BLAS And MKL
@@ -99,7 +101,7 @@ sudo apt install libopenblas-dev
 PARAKIT_BLAS=openblas cargo install --path .
 ```
 
-The selected mode is printed during explicit BLAS builds and later shown by `parakit doctor`.
+Explicit BLAS builds print the selected mode, and `parakit doctor` reports it.
 
 ## CrispASR And Backends
 

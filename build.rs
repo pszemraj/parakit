@@ -35,6 +35,8 @@ fn main() {
     println!("cargo:rerun-if-env-changed=PARAKIT_BLAS");
     println!("cargo:rerun-if-changed=build.rs");
 
+    build_alsa_silencer();
+
     // 1. Honor an explicit lib-dir override regardless of feature flags.
     //    crispasr-sys reads CRISPASR_LIB_DIR too — we add to its search path
     //    here so `cargo build` works without the user re-exporting the var.
@@ -183,6 +185,22 @@ fn main() {
     );
 }
 
+fn build_alsa_silencer() {
+    if env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("linux")
+        || env::var("CARGO_FEATURE_DAEMON").is_err()
+    {
+        return;
+    }
+
+    let shim = "src/daemon/alsa_silence.c";
+    println!("cargo:rerun-if-changed={shim}");
+    cc::Build::new()
+        .file(shim)
+        .warnings(true)
+        .compile("parakit_alsa_silence");
+    println!("cargo:rustc-link-lib=asound");
+}
+
 fn emit_build_report(install_dir: &Path) {
     let build_dir = install_dir.join("build");
     let cache_path = build_dir.join("CMakeCache.txt");
@@ -254,12 +272,12 @@ struct BlasConfig {
 
 impl BlasConfig {
     fn from_env() -> Self {
-        let raw = env::var("PARAKIT_BLAS").unwrap_or_else(|_| "off".to_string());
+        let raw = env::var("PARAKIT_BLAS").unwrap_or_else(|_| "auto".to_string());
         let requested = raw.trim().to_ascii_lowercase();
         let explicit = env::var("PARAKIT_BLAS").is_ok();
         match requested.as_str() {
             "" | "0" | "false" | "no" | "none" | "off" => Self::off(raw, explicit),
-            "auto" => Self::auto(raw),
+            "auto" => Self::auto(raw, explicit),
             "mkl" | "intel" | "intel-mkl" => Self::mkl(raw, explicit),
             "openblas" => Self::openblas(raw, explicit),
             "accelerate" | "apple" => Self::accelerate(raw, explicit),
@@ -272,78 +290,60 @@ impl BlasConfig {
         }
     }
 
-    fn auto(raw: String) -> Self {
+    fn auto(raw: String, explicit: bool) -> Self {
         if target_is_apple() {
-            return Self::accelerate(raw, true);
+            return Self::accelerate(raw, explicit);
         }
         if pkg_config_exists("mkl-sdl") {
-            return Self::mkl(raw, true);
+            return Self::mkl(raw, explicit);
         }
         if pkg_config_exists("openblas") || pkg_config_exists("openblas64") {
-            return Self::openblas(raw, true);
+            return Self::openblas(raw, explicit);
         }
         println!(
             "cargo:warning=parakit build: PARAKIT_BLAS=auto found no MKL/OpenBLAS pkg-config metadata; building without BLAS"
         );
-        Self::off(raw, true)
+        Self::off(raw, explicit)
+    }
+
+    fn new(
+        requested: String,
+        selected: &'static str,
+        vendor: Option<&'static str>,
+        cohere_mkl: bool,
+        explicit: bool,
+    ) -> Self {
+        Self {
+            requested,
+            selected,
+            enabled: vendor.is_some(),
+            vendor,
+            cohere_mkl,
+            explicit,
+        }
     }
 
     fn off(requested: String, explicit: bool) -> Self {
-        Self {
-            requested,
-            selected: "off",
-            enabled: false,
-            vendor: None,
-            cohere_mkl: false,
-            explicit,
-        }
+        Self::new(requested, "off", None, false, explicit)
     }
 
     fn generic(requested: String, explicit: bool) -> Self {
-        Self {
-            requested,
-            selected: "generic",
-            enabled: true,
-            vendor: Some("Generic"),
-            cohere_mkl: false,
-            explicit,
-        }
+        Self::new(requested, "generic", Some("Generic"), false, explicit)
     }
 
     fn openblas(requested: String, explicit: bool) -> Self {
-        Self {
-            requested,
-            selected: "openblas",
-            enabled: true,
-            vendor: Some("OpenBLAS"),
-            cohere_mkl: false,
-            explicit,
-        }
+        Self::new(requested, "openblas", Some("OpenBLAS"), false, explicit)
     }
 
     fn mkl(requested: String, explicit: bool) -> Self {
-        Self {
-            requested,
-            selected: "mkl",
-            enabled: true,
-            vendor: Some("Intel10_64lp"),
-            cohere_mkl: true,
-            explicit,
-        }
+        Self::new(requested, "mkl", Some("Intel10_64lp"), true, explicit)
     }
 
     fn accelerate(requested: String, explicit: bool) -> Self {
         if !target_is_apple() {
             panic!("PARAKIT_BLAS=accelerate is only supported on Apple targets");
         }
-        Self {
-            requested,
-            selected: "accelerate",
-            enabled: true,
-            vendor: Some("Apple"),
-            cohere_mkl: false,
-            explicit,
-        }
+        Self::new(requested, "accelerate", Some("Apple"), false, explicit)
     }
 }
 

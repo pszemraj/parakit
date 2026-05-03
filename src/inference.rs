@@ -124,11 +124,32 @@ impl Engine {
 ///
 /// # Returns
 ///
-/// The available OS parallelism, falling back to four threads when unavailable.
+/// A conservative count based on OS parallelism, falling back to two.
 pub fn default_thread_count() -> usize {
-    std::thread::available_parallelism()
+    let available = std::thread::available_parallelism()
         .map(usize::from)
-        .unwrap_or(4)
+        .unwrap_or(4);
+    recommended_thread_count(available)
+}
+
+/// Convert available logical parallelism into an interactive-daemon default.
+///
+/// # Returns
+///
+/// Roughly half the available logical CPUs, capped at six. Explicit
+/// `--threads` values bypass this default.
+///
+/// # Panics
+///
+/// This function does not panic because the clamp bounds are fixed and valid.
+pub fn recommended_thread_count(available_threads: usize) -> usize {
+    let available_threads = available_threads.max(1);
+    if available_threads == 1 {
+        return 1;
+    }
+    let half = available_threads / 2;
+    let capped = half.clamp(2, 6);
+    capped.min(available_threads)
 }
 
 fn pad_short_pcm(pcm: &[f32]) -> Cow<'_, [f32]> {
@@ -170,5 +191,22 @@ mod tests {
             Err(err) => err,
         };
         assert!(err.to_string().contains("model path is not a file"));
+    }
+
+    #[test]
+    fn recommended_threads_keep_small_systems_valid() {
+        assert_eq!(recommended_thread_count(0), 1);
+        assert_eq!(recommended_thread_count(1), 1);
+        assert_eq!(recommended_thread_count(2), 2);
+        assert_eq!(recommended_thread_count(3), 2);
+        assert_eq!(recommended_thread_count(4), 2);
+    }
+
+    #[test]
+    fn recommended_threads_are_capped_on_larger_systems() {
+        assert_eq!(recommended_thread_count(8), 4);
+        assert_eq!(recommended_thread_count(12), 6);
+        assert_eq!(recommended_thread_count(16), 6);
+        assert_eq!(recommended_thread_count(32), 6);
     }
 }

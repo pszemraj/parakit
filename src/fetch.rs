@@ -88,21 +88,14 @@ fn run_hosted_q8(options: FetchOptions) -> Result<PathBuf> {
     let partial = paths.q8.with_extension("gguf.part");
 
     if options.force {
-        remove_if_exists(&paths.q8)?;
         remove_if_exists(&partial)?;
     } else if paths.q8.is_file() {
-        if manifest.hosted_current(&paths.q8) {
-            status(
-                options,
-                format_args!("parakit: cached model is current: {}", paths.q8.display()),
-            );
-            return Ok(paths.q8);
-        }
-
         let current = crate::checksum::sha256_file_hex(&paths.q8)?;
         if current == HOSTED_Q8_SHA256 {
-            manifest.mark_hosted_ready(&paths.q8);
-            manifest.save(&paths.manifest)?;
+            if !manifest.hosted_current(&paths.q8) {
+                manifest.mark_hosted_ready(&paths.q8);
+                manifest.save(&paths.manifest)?;
+            }
             status(
                 options,
                 format_args!("parakit: cached model is current: {}", paths.q8.display()),
@@ -116,7 +109,6 @@ fn run_hosted_q8(options: FetchOptions) -> Result<PathBuf> {
                 paths.q8.display()
             ),
         );
-        remove_if_exists(&paths.q8)?;
     }
 
     status(
@@ -174,7 +166,6 @@ fn run_official_nemo(options: FetchOptions) -> Result<PathBuf> {
     if options.force {
         remove_if_exists(&paths.nemo)?;
         remove_if_exists(&paths.f16)?;
-        remove_if_exists(&paths.q8)?;
     } else if manifest.final_current(
         &paths.q8,
         &converter_script,
@@ -438,7 +429,8 @@ fn ensure_q8(
     f16_sha: &str,
     options: FetchOptions,
 ) -> Result<String> {
-    if paths.q8.is_file()
+    if !options.force
+        && paths.q8.is_file()
         && manifest.q8_input_sha256.as_deref() == Some(f16_sha)
         && manifest.crispasr_quantize_bin == quantize_bin.display().to_string()
         && manifest.crispasr_quantize_version == quantize_version
@@ -453,17 +445,22 @@ fn ensure_q8(
         }
     }
 
-    remove_if_exists(&paths.q8)?;
+    let tmp_q8 = paths.q8.with_extension("gguf.quantizing");
+    remove_if_exists(&tmp_q8)?;
     status(
         options,
         format_args!("parakit: quantizing F16 GGUF to Q8_0"),
     );
     let mut command = Command::new(quantize_bin);
-    command.arg(&paths.f16).arg(&paths.q8).arg("q8_0");
+    command.arg(&paths.f16).arg(&tmp_q8).arg("q8_0");
     add_bundled_library_path(&mut command, quantize_bin);
-    run_command(&mut command, "quantize GGUF to Q8_0")?;
+    if let Err(err) = run_command(&mut command, "quantize GGUF to Q8_0") {
+        let _ = remove_if_exists(&tmp_q8);
+        return Err(err);
+    }
 
-    let q8_sha = crate::checksum::sha256_file_hex(&paths.q8)?;
+    let q8_sha = crate::checksum::sha256_file_hex(&tmp_q8)?;
+    move_into_place(&tmp_q8, &paths.q8)?;
     manifest.q8_input_sha256 = Some(f16_sha.to_string());
     manifest.q8_sha256 = Some(q8_sha.clone());
     manifest.q8_output_path = paths.q8.display().to_string();
@@ -673,14 +670,28 @@ fn run_command(command: &mut Command, label: &str) -> Result<()> {
 }
 
 fn move_into_place(src: &Path, dst: &Path) -> Result<()> {
-    remove_if_exists(dst)?;
-    std::fs::rename(src, dst).with_context(|| {
-        format!(
-            "move verified model from {} to {}",
-            src.display(),
-            dst.display()
-        )
-    })
+    #[cfg(unix)]
+    {
+        std::fs::rename(src, dst).with_context(|| {
+            format!(
+                "move verified model from {} to {}",
+                src.display(),
+                dst.display()
+            )
+        })
+    }
+
+    #[cfg(not(unix))]
+    {
+        remove_if_exists(dst)?;
+        std::fs::rename(src, dst).with_context(|| {
+            format!(
+                "move verified model from {} to {}",
+                src.display(),
+                dst.display()
+            )
+        })
+    }
 }
 
 fn status(options: FetchOptions, message: std::fmt::Arguments<'_>) {

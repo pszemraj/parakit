@@ -2,9 +2,27 @@
 
 use anyhow::{Context, Result};
 use x11rb::connection::Connection;
-use x11rb::protocol::xproto::{ConnectionExt, Keycode, Screen, Window};
+use x11rb::protocol::xproto::{AtomEnum, ConnectionExt, Keycode, Screen, Window};
 use x11rb::rust_connection::RustConnection;
 
+/// X11 keysym for Space.
+pub(crate) const SPACE_KEYSYM: u32 = b' ' as u32;
+/// X11 keysym for left Control.
+pub(crate) const CONTROL_L_KEYSYM: u32 = 0xffe3;
+/// X11 keysym for right Control.
+pub(crate) const CONTROL_R_KEYSYM: u32 = 0xffe4;
+/// X11 keysym for left Shift.
+pub(crate) const SHIFT_L_KEYSYM: u32 = 0xffe1;
+/// X11 keysym for right Shift.
+pub(crate) const SHIFT_R_KEYSYM: u32 = 0xffe2;
+/// X11 keysym for left Alt.
+pub(crate) const ALT_L_KEYSYM: u32 = 0xffe9;
+/// X11 keysym for right Alt.
+pub(crate) const ALT_R_KEYSYM: u32 = 0xffea;
+/// X11 keysym for left Super.
+pub(crate) const SUPER_L_KEYSYM: u32 = 0xffeb;
+/// X11 keysym for right Super.
+pub(crate) const SUPER_R_KEYSYM: u32 = 0xffec;
 /// X11 keysym for lowercase `v`.
 pub(crate) const V_KEYSYM: u32 = b'v' as u32;
 
@@ -83,20 +101,33 @@ pub(crate) fn keycode_for_keysym(conn: &RustConnection, keysym: u32) -> Result<K
     anyhow::bail!("could not map X11 keysym {keysym} to a keycode")
 }
 
-/// Map an X11 keysym to a keycode on the default display.
+/// Return the EWMH active toplevel window when the window manager exposes it.
 ///
 /// # Arguments
 ///
-/// * `keysym` - X11 keysym to resolve.
+/// * `conn` - Active X11 connection.
+/// * `root` - Root window for the active screen.
 ///
 /// # Returns
 ///
-/// The first matching keycode.
+/// The active toplevel window, or `None` when unavailable.
 ///
 /// # Errors
 ///
-/// Returns an error if X11 cannot be opened or the key mapping cannot be read.
-pub(crate) fn keycode_for_keysym_on_default_display(keysym: u32) -> Result<Keycode> {
-    let (conn, _) = RustConnection::connect(None).context("could not connect to X11")?;
-    keycode_for_keysym(&conn, keysym)
+/// Returns an error when X11 rejects the atom or property request.
+pub(crate) fn active_window(conn: &RustConnection, root: Window) -> Result<Option<Window>> {
+    let atom = conn
+        .intern_atom(false, b"_NET_ACTIVE_WINDOW")
+        .context("could not request X11 _NET_ACTIVE_WINDOW atom")?
+        .reply()
+        .context("could not read X11 _NET_ACTIVE_WINDOW atom")?
+        .atom;
+    let reply = conn
+        .get_property(false, root, atom, AtomEnum::WINDOW, 0, 1)
+        .context("could not request X11 _NET_ACTIVE_WINDOW")?
+        .reply()
+        .context("could not read X11 _NET_ACTIVE_WINDOW")?;
+    Ok(reply
+        .value32()
+        .and_then(|mut values| values.find(|window| *window != x11rb::NONE)))
 }

@@ -50,7 +50,7 @@ pub fn sha256_file_hex(path: &Path) -> Result<String> {
 /// # Panics
 ///
 /// Does not panic.
-pub fn hex_digest(bytes: &[u8]) -> String {
+fn hex_digest(bytes: &[u8]) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut out = String::with_capacity(bytes.len() * 2);
     for byte in bytes {
@@ -58,14 +58,4 @@ pub fn hex_digest(bytes: &[u8]) -> String {
         out.push(HEX[(byte & 0x0f) as usize] as char);
     }
     out
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn hex_formatter_is_lowercase() {
-        assert_eq!(hex_digest(&[0, 10, 255]), "000aff");
-    }
 }

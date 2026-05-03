@@ -1,4 +1,6 @@
 /target
-Cargo.lock
+/local-scratch
+/AGENTS.md
 *.gguf
+*.nemo
 .DS_Store

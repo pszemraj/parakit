@@ -7,22 +7,22 @@ Build success does not prove transcription quality. Use real user audio, not syn
 Use the Rust WAV target to run the same [CrispASR](https://github.com/CrispStrobe/CrispASR) engine and cleanup pipeline without the hotkey daemon:
 
 ```bash
-cargo run --example transcribe-file -- \
+cargo run --no-default-features --features bundled --example transcribe-file -- \
   --audio clips/example.wav
 ```
 
-The helper accepts WAV input, uses the same `Engine` path as the daemon, applies cleanup unless disabled, and prints raw and cleaned text. It uses the cached Q8_0 model by default. Pass `--model /path/to/model.gguf` only when comparing a specific custom GGUF. The source lives at `tools/transcribe-file.rs`; it is a Cargo example target so it is not installed as an end-user binary.
+The helper accepts WAV input, uses the same `Engine` path as the daemon, applies cleanup unless disabled, and prints raw and cleaned text. This command avoids live daemon desktop/audio dependencies while keeping the bundled CrispASR build. It uses the cached Q8_0 model by default. Pass `--model /path/to/model.gguf` only when comparing a specific custom GGUF. The source lives at `tools/transcribe-file.rs`; it is a Cargo example target so it is not installed as an end-user binary.
 
 ## PTT Worker Simulation
 
 Use the hidden simulation path when you need the daemon worker flow without a live keyboard, microphone, or text insertion:
 
 ```bash
-cargo run -- --paste-mode direct \
-  --simulate-ptt-audio target/tmp/ptt-audio/Sitrep_2602_20_0145_first60.wav
+cargo run -- \
+  --simulate-ptt-audio target/tmp/ptt-audio/example.wav
 ```
 
-It reads a WAV, resamples it to the model rate, sends `RecordingStarted`/`RecordingStopped` events with owned PCM, runs inference and cleanup, and prints the transcript. It does not test evdev capture or paste insertion.
+Use a real WAV with a known transcript. The command resamples it to the model rate, sends `RecordingStarted`/`RecordingStopped` events with owned PCM, runs inference and cleanup, and prints the transcript. It does not test registered hotkeys, evdev-proxy capture, or paste insertion.
 
 ## NeMo Reference Helper
 
@@ -46,7 +46,7 @@ Use 5 to 10 real clips that cover:
 
 Compare against:
 
-1. NeMo, parakeet-mlx, or another trusted Parakeet reference implementation.
+1. NeMo or another trusted Parakeet reference implementation.
 2. parakit with an F16 GGUF model.
 3. parakit with the cached Q8_0 GGUF model.
 
@@ -81,10 +81,13 @@ Run the daemon in foreground mode and exercise real applications:
 Check:
 
 - `Ctrl+Space` does not leak a literal space;
+- holding `Ctrl+Space` for 3 to 5 seconds produces exactly one recording start and one stop;
 - rapid double-presses do not wedge the state machine;
 - Ctrl release before Space stops recording;
+- focus changes do not paste into the new target;
 - very short captures are padded and transcribed instead of rejected;
 - `--quiet` emits no stdout;
+- warnings still go to stderr in quiet mode;
 - sounds still play in quiet mode unless `--no-sounds` is set;
 - logging writes raw and cleaned text without crashing the daemon.
 

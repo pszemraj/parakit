@@ -4,9 +4,11 @@ parakit needs a desktop input backend for `Ctrl+Space`.
 
 Default behavior:
 
-- `auto` and `evdev` use the Linux evdev keyboard grab backend.
-- `desktop` exits with an error on Linux.
-- Hotkey capture reads evdev devices, so it is not an X11 global shortcut.
+- `auto` and `desktop` register `Ctrl+Space` with the X11 session through `global-hotkey`.
+- `x11-global-hotkey` forces the same registered X11 backend as `auto`.
+- `x11-listen` passively observes X11 key events with `rdev::listen`. It does not grab, suppress, or forward keys, so `Ctrl+Space` can also reach the focused application.
+- `evdev-proxy-experimental` uses the experimental evdev/uinput keyboard proxy. `evdev-proxy` exists for old scripts.
+- The default path does not read `/dev/input` and does not require `/dev/uinput`.
 - Linux insertion uses X11/XTest and requires an X11 session for every paste mode, including `direct`.
 - Wayland sessions are rejected during startup. An XWayland `DISPLAY` is not enough because XTest cannot insert into focused native Wayland applications.
 
@@ -28,9 +30,28 @@ parakit doctor && parakit --quiet &
 disown
 ```
 
-## Evdev Backend
+If `doctor` reports that `Ctrl+Space` could not be registered, disable any desktop shortcut, input method, or keyboard remapper that already owns that chord and rerun `parakit doctor`. Ubuntu/GNOME IBus commonly uses `Ctrl+Space` to switch input methods, so check IBus first when the registered backend is intermittent after login, suspend, or an input-method state change.
 
-The evdev backend needs at least one readable keyboard event device that exposes both `Ctrl` and `Space`, plus writable `/dev/uinput`. `parakit doctor` reports unreadable non-keyboard event devices, but they do not block startup when a usable hotkey keyboard candidate is readable.
+## Focus Guard
+
+On X11, parakit compares the active window captured at PTT-down with the active window at paste time. If focus clearly changes, no paste chord is sent and supported previous clipboard contents are preserved or restored unless `--keep-transcript-clipboard` is set. If X11 focus capture or recheck is unavailable, parakit pastes anyway so a transient focus-query failure does not silently drop dictation. Parakit does not inspect application internals with AT-SPI in the v0.1 daemon path; normal desktop apps, Electron apps, browsers, editors, and terminals are handled by clipboard staging plus one paste chord.
+
+## Passive X11 Listen
+
+The `x11-listen` backend is for debugging hotkey state without registering or grabbing the chord:
+
+```bash
+parakit --hotkey-backend x11-listen doctor
+parakit --hotkey-backend x11-listen --quiet &
+```
+
+Because this backend is passive, it cannot prevent the literal Space key from reaching the focused application. Use the default registered backend for normal dictation.
+
+## Evdev Proxy
+
+The evdev-proxy experimental backend is for testing the old keyboard proxy path. It grabs a physical keyboard event device, suppresses the `Ctrl+Space` chord, and forwards other key events through `/dev/uinput`.
+
+Only this backend needs at least one readable keyboard event device that exposes both `Ctrl` and `Space`, plus writable `/dev/uinput`. `parakit --hotkey-backend evdev-proxy-experimental doctor` reports unreadable non-keyboard event devices, but they do not block startup when a usable hotkey keyboard candidate is readable.
 
 ```bash
 sudo usermod -aG input "$USER"
@@ -51,13 +72,13 @@ Log out completely and log back in, or reboot. Then verify:
 ```bash
 id -nG | tr ' ' '\n' | grep '^input$'
 test -w /dev/uinput
-parakit doctor
+parakit --hotkey-backend evdev-proxy-experimental doctor
 ```
 
 When `doctor` reports `hotkey OK`, run:
 
 ```bash
-parakit doctor && parakit --hotkey-backend evdev --quiet &
+parakit --hotkey-backend evdev-proxy-experimental doctor && parakit --hotkey-backend evdev-proxy-experimental --quiet &
 disown
 ```
 
