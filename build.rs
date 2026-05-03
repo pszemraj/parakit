@@ -35,6 +35,8 @@ fn main() {
     println!("cargo:rerun-if-env-changed=PARAKIT_BLAS");
     println!("cargo:rerun-if-changed=build.rs");
 
+    build_alsa_silencer();
+
     // 1. Honor an explicit lib-dir override regardless of feature flags.
     //    crispasr-sys reads CRISPASR_LIB_DIR too — we add to its search path
     //    here so `cargo build` works without the user re-exporting the var.
@@ -181,6 +183,22 @@ fn main() {
         "cargo:rustc-env=CRISPASR_INSTALL_DIR={}",
         install_dir.display()
     );
+}
+
+fn build_alsa_silencer() {
+    if env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("linux")
+        || env::var("CARGO_FEATURE_DAEMON").is_err()
+    {
+        return;
+    }
+
+    let shim = "src/daemon/alsa_silence.c";
+    println!("cargo:rerun-if-changed={shim}");
+    cc::Build::new()
+        .file(shim)
+        .warnings(true)
+        .compile("parakit_alsa_silence");
+    println!("cargo:rustc-link-lib=asound");
 }
 
 fn emit_build_report(install_dir: &Path) {

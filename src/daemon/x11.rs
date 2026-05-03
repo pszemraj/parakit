@@ -90,21 +90,3 @@ pub(crate) fn keycode_for_keysym(conn: &RustConnection, keysym: u32) -> Result<K
 
     anyhow::bail!("could not map X11 keysym {keysym} to a keycode")
 }
-
-/// Map an X11 keysym to a keycode on the default display.
-///
-/// # Arguments
-///
-/// * `keysym` - X11 keysym to resolve.
-///
-/// # Returns
-///
-/// The first matching keycode.
-///
-/// # Errors
-///
-/// Returns an error if X11 cannot be opened or the key mapping cannot be read.
-pub(crate) fn keycode_for_keysym_on_default_display(keysym: u32) -> Result<Keycode> {
-    let (conn, _) = RustConnection::connect(None).context("could not connect to X11")?;
-    keycode_for_keysym(&conn, keysym)
-}

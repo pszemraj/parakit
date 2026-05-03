@@ -127,6 +127,7 @@ metal   = ["bundled", "crispasr/metal"]
 vulkan  = ["bundled", "crispasr/vulkan"]
 
 [build-dependencies]
+cc = "1"
 cmake = "0.1"
 
 [profile.release]

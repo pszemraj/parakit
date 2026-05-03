@@ -2006,6 +2006,7 @@ dependencies = [
  "anyhow",
  "arboard",
  "atspi",
+ "cc",
  "chrono",
  "clap",
  "cmake",

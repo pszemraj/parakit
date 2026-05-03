@@ -37,7 +37,7 @@ pub(crate) enum WorkerEvent {
         /// Owned 16 kHz mono PCM for this utterance.
         pcm: Vec<f32>,
         /// Focus target captured before audio recording began.
-        focus_at_start: Option<FocusSnapshot>,
+        focus_at_start: Option<Box<FocusSnapshot>>,
     },
 }
 
@@ -98,7 +98,15 @@ fn worker_loop(ctx: WorkerCtx) {
     let rules_active = cleaner.as_deref().map_or(0, Cleaner::active_rule_count);
     let mut injector = if insert_transcripts {
         match Injector::new() {
-            Ok(injector) => Some(injector),
+            Ok(mut injector) => match injector.prepare_for_mode(paste_mode) {
+                Ok(()) => Some(injector),
+                Err(err) => {
+                    log.error(&format!(
+                        "insertion backend unavailable at worker startup: {err:#}"
+                    ));
+                    None
+                }
+            },
             Err(err) => {
                 log.error(&format!(
                     "insertion backend unavailable at worker startup: {err:#}"
@@ -184,7 +192,7 @@ fn worker_loop(ctx: WorkerCtx) {
                                 &mut injector,
                                 &text,
                                 paste_mode,
-                                focus_at_start.as_ref(),
+                                focus_at_start.as_deref(),
                                 &log,
                                 &notifier,
                             ),
@@ -295,6 +303,22 @@ fn paste_transcript(
 
     if injector.is_none() {
         *injector = Some(Injector::new().context("could not initialize insertion backend")?);
+    }
+    let prepare_result = injector
+        .as_mut()
+        .expect("insertion backend was just initialized")
+        .prepare_for_mode(mode);
+    if let Err(err) = prepare_result {
+        if mode != PasteMode::Direct {
+            log.warn(format!(
+                "paste backend unavailable ({err:#}); transcript copied to clipboard"
+            ));
+            copy_transcript_to_clipboard(injector, text)
+                .context("paste backend unavailable and clipboard fallback failed")?;
+            notifier.transcript_copied("Paste backend was unavailable.");
+            return Ok(InsertOutcome::CopiedOnly);
+        }
+        return Err(err.context("could not prepare direct insertion backend"));
     }
 
     let paste_result = injector

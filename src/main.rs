@@ -205,6 +205,9 @@ fn main() {
 }
 
 fn run() -> Result<()> {
+    #[cfg(target_os = "linux")]
+    daemon::alsa::install_error_silencer();
+
     let cli = Cli::parse();
     let log = Arc::new(Logger::new(log_level(&cli)));
     let notifier = Notifier::new(Arc::clone(&log));

@@ -95,7 +95,7 @@ fn recording_coordinator_loop_with_max_utterance(
                             started_at: start,
                             stopped_at: at,
                             pcm,
-                            focus_at_start: focus_at_start.take(),
+                            focus_at_start: focus_at_start.take().map(Box::new),
                         }
                     ),
                     WorkerSendStatus::Disconnected
@@ -115,7 +115,7 @@ fn recording_coordinator_loop_with_max_utterance(
                             started_at: start,
                             stopped_at: Instant::now(),
                             pcm,
-                            focus_at_start: focus_at_start.take(),
+                            focus_at_start: focus_at_start.take().map(Box::new),
                         }
                     ),
                     WorkerSendStatus::Disconnected

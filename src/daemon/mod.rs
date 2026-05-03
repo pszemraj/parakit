@@ -1,5 +1,8 @@
 //! Daemon-only subsystems used by the `parakit` binary.
 
+/// Linux libasound stderr handling.
+#[cfg(target_os = "linux")]
+pub(crate) mod alsa;
 /// Microphone capture and shared recording buffer.
 #[path = "audio_manager.rs"]
 pub(crate) mod audio;

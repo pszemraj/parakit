@@ -388,6 +388,9 @@ fn paste_text(text: &str, paste_mode: PasteMode) -> Result<PasteOutcome> {
         }
     }
 
+    injector
+        .prepare_for_mode(paste_mode)
+        .context("could not prepare insertion backend")?;
     let focus = FocusSnapshot::capture().ok();
     let outcome = injector
         .paste_text_guarded(&text, paste_mode, || match focus.as_ref() {

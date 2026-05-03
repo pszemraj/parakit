@@ -23,8 +23,8 @@ pub(super) fn linux_x11_paste_smoke_test(mode: PasteMode) -> Result<()> {
         ConnectionExt, CreateWindowAux, EventMask, InputFocus, WindowClass,
     };
 
-    let v_keycode = super::linux_cached_keycode(super::super::x11::V_KEYSYM)?;
     let (conn, screen_num) = RustConnection::connect(None).context("could not connect to X11")?;
+    let v_keycode = super::super::x11::keycode_for_keysym(&conn, super::super::x11::V_KEYSYM)?;
     let screen = super::super::x11::screen(&conn, screen_num)?;
     let previous_focus = conn
         .get_input_focus()

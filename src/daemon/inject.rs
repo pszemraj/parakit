@@ -23,7 +23,6 @@ use enigo::Direction;
 use enigo::Key;
 use enigo::{Enigo, Keyboard, Settings};
 #[cfg(target_os = "linux")]
-use std::sync::OnceLock;
 use std::{thread, time::Duration};
 #[cfg(target_os = "linux")]
 use x11rb::connection::Connection as _;
@@ -89,15 +88,9 @@ pub(crate) enum PasteOutcome {
 /// Returns an error if the keyboard, clipboard, or platform paste support is
 /// unavailable.
 pub(crate) fn preflight(mode: PasteMode) -> Result<()> {
-    #[cfg(target_os = "linux")]
-    super::session::ensure_x11_session_supported()?;
-
-    if insertion_needs_enigo(mode) {
-        let _keyboard = Enigo::new(&Settings::default())
-            .map_err(|e| anyhow::anyhow!("failed to init enigo: {e:?}"))?;
-    }
+    let mut injector = Injector::new()?;
+    injector.prepare_for_mode(mode)?;
     if mode != PasteMode::Direct {
-        let _clipboard = Clipboard::new().context("could not open system clipboard")?;
         platform_paste_preflight()?;
     }
     Ok(())
@@ -164,10 +157,11 @@ impl TextClipboard for Clipboard {
 }
 
 /// Focus owner captured when recording begins.
-#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct FocusSnapshot {
     #[cfg(target_os = "linux")]
     focus: u32,
+    #[cfg(target_os = "linux")]
+    conn: RustConnection,
 }
 
 impl FocusSnapshot {
@@ -184,11 +178,13 @@ impl FocusSnapshot {
     pub(crate) fn capture() -> Result<Self> {
         #[cfg(target_os = "linux")]
         {
-            let focus = linux_current_input_focus_on_default_display()?;
+            let (conn, _) = RustConnection::connect(None)
+                .context("could not connect to X11 while capturing recording focus")?;
+            let focus = linux_current_input_focus(&conn)?;
             if !linux_focus_is_insertable(focus) {
                 anyhow::bail!("X11 input focus is not an insertable application window");
             }
-            Ok(Self { focus })
+            Ok(Self { focus, conn })
         }
 
         #[cfg(not(target_os = "linux"))]
@@ -209,7 +205,9 @@ impl FocusSnapshot {
     pub(crate) fn matches_current(&self) -> Result<bool> {
         #[cfg(target_os = "linux")]
         {
-            Ok(linux_current_input_focus_on_default_display()? == self.focus)
+            Ok(linux_current_input_focus(&self.conn)
+                .context("could not query the X11 focus connection captured at recording start")?
+                == self.focus)
         }
 
         #[cfg(not(target_os = "linux"))]
@@ -222,12 +220,6 @@ impl FocusSnapshot {
 #[cfg(target_os = "linux")]
 fn linux_focus_is_insertable(focus: u32) -> bool {
     focus != x11rb::NONE && focus != u32::from(x11rb::protocol::xproto::InputFocus::POINTER_ROOT)
-}
-
-#[cfg(target_os = "linux")]
-fn linux_current_input_focus_on_default_display() -> Result<u32> {
-    let (conn, _) = RustConnection::connect(None).context("could not connect to X11")?;
-    linux_current_input_focus(&conn)
 }
 
 #[cfg(target_os = "linux")]
@@ -269,6 +261,45 @@ impl Injector {
             #[cfg(target_os = "linux")]
             x11_paste: None,
         })
+    }
+
+    /// Initialize the platform resources needed for `mode`.
+    ///
+    /// Linux keeps the X11 paste connection and resolved keycodes warm so a
+    /// long-running daemon does not have to rediscover the display during the
+    /// narrow paste window after transcription.
+    ///
+    /// # Arguments
+    ///
+    /// * `mode` - Insertion mode that will be used later.
+    ///
+    /// # Returns
+    ///
+    /// `Ok(())` when the required keyboard, clipboard, and paste handles are
+    /// ready.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a required platform handle cannot be opened.
+    pub fn prepare_for_mode(&mut self, mode: PasteMode) -> Result<()> {
+        if insertion_needs_enigo(mode) {
+            let _keyboard = self.keyboard()?;
+        }
+
+        if mode != PasteMode::Direct {
+            if self.clipboard.is_none() {
+                self.clipboard = Some(Clipboard::new().context("could not open system clipboard")?);
+            }
+
+            #[cfg(target_os = "linux")]
+            if self.x11_paste.is_none() {
+                self.x11_paste = Some(
+                    LinuxX11Paste::open().context("could not initialize X11 paste connection")?,
+                );
+            }
+        }
+
+        Ok(())
     }
 
     /// Paste text, but re-run a caller-supplied safety check immediately before
@@ -646,6 +677,8 @@ struct ResolvedX11KeyStep {
 struct LinuxX11Paste {
     conn: RustConnection,
     root: u32,
+    standard_steps: Vec<ResolvedX11KeyStep>,
+    terminal_steps: Vec<ResolvedX11KeyStep>,
 }
 
 #[cfg(target_os = "linux")]
@@ -654,16 +687,27 @@ impl LinuxX11Paste {
         let (conn, screen_num) =
             RustConnection::connect(None).context("could not connect to X11")?;
         let root = super::x11::root_window(&conn, screen_num)?;
-        Ok(Self { conn, root })
+        let standard_steps = linux_resolved_paste_chord_steps(&conn, PasteMode::Standard)?;
+        let terminal_steps = linux_resolved_paste_chord_steps(&conn, PasteMode::Terminal)?;
+        Ok(Self {
+            conn,
+            root,
+            standard_steps,
+            terminal_steps,
+        })
     }
 
     fn send_paste_chord(&self, mode: PasteMode) -> Result<()> {
-        let steps = linux_resolved_paste_chord_steps(mode)?;
+        let steps = match mode {
+            PasteMode::Standard => &self.standard_steps,
+            PasteMode::Terminal => &self.terminal_steps,
+            PasteMode::Direct => anyhow::bail!("direct mode does not use the X11 paste chord"),
+        };
         let mut sink = X11ConnectionKeySink {
             conn: &self.conn,
             root: self.root,
         };
-        send_x11_key_steps(&mut sink, &steps)
+        send_x11_key_steps(&mut sink, steps)
     }
 }
 
@@ -701,36 +745,19 @@ fn linux_paste_chord_steps(mode: PasteMode) -> Vec<X11KeyStep> {
 }
 
 #[cfg(target_os = "linux")]
-fn linux_resolved_paste_chord_steps(mode: PasteMode) -> Result<Vec<ResolvedX11KeyStep>> {
+fn linux_resolved_paste_chord_steps(
+    conn: &RustConnection,
+    mode: PasteMode,
+) -> Result<Vec<ResolvedX11KeyStep>> {
     linux_paste_chord_steps(mode)
         .into_iter()
         .map(|step| {
             Ok(ResolvedX11KeyStep {
-                keycode: linux_cached_keycode(step.keysym)?,
+                keycode: super::x11::keycode_for_keysym(conn, step.keysym)?,
                 press: step.press,
             })
         })
         .collect()
-}
-
-#[cfg(target_os = "linux")]
-fn linux_cached_keycode(keysym: u32) -> Result<u8> {
-    static KEYCODES: OnceLock<
-        std::sync::Mutex<std::collections::BTreeMap<u32, Result<u8, String>>>,
-    > = OnceLock::new();
-    let keycodes =
-        KEYCODES.get_or_init(|| std::sync::Mutex::new(std::collections::BTreeMap::new()));
-    let mut keycodes = keycodes
-        .lock()
-        .map_err(|_| anyhow::anyhow!("X11 keycode cache lock poisoned"))?;
-    if let Some(result) = keycodes.get(&keysym) {
-        return result.clone().map_err(anyhow::Error::msg);
-    }
-
-    let result =
-        super::x11::keycode_for_keysym_on_default_display(keysym).map_err(|err| format!("{err:#}"));
-    keycodes.insert(keysym, result.clone());
-    result.map_err(anyhow::Error::msg)
 }
 
 #[cfg(target_os = "linux")]
