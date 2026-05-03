@@ -483,7 +483,6 @@ fn run_ptt_audio_simulation(cli: &Cli, log: Arc<Logger>, audio_path: &Path) -> R
         stopped_at,
         pcm: wav.samples,
         focus_at_start: None,
-        target_at_start: None,
     })
     .context("could not send simulated PTT stop event")?;
     drop(tx);

@@ -35,7 +35,7 @@ The active backend should suppress the literal Space in `Ctrl+Space`. If a space
 
 ## Text Does Not Insert
 
-Paste modes, focus-change behavior, target safety checks, and copy-only fallback are described in [running.md#insertion](running.md#insertion).
+Paste modes, focus-change behavior, paste sanitization, and copy-only fallback are described in [running.md#insertion](running.md#insertion).
 
 Run `parakit doctor --deep` for an active insertion smoke test. On Linux, use an X11 session; Wayland details are in [linux-desktop.md](linux-desktop.md). Use `standard` for apps that only accept `Ctrl+V`; use `direct` only when an app refuses clipboard paste entirely.
 

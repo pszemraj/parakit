@@ -1,8 +1,6 @@
 //! Recording coordinator between hotkey backends and the worker thread.
 
-use super::{
-    audio::AudioHandle, inject::FocusSnapshot, target::TargetSnapshot, worker::WorkerEvent,
-};
+use super::{audio::AudioHandle, inject::FocusSnapshot, worker::WorkerEvent};
 use crossbeam_channel::{Receiver, RecvTimeoutError, Sender, TrySendError};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
@@ -68,18 +66,15 @@ fn recording_coordinator_loop_with_max_utterance(
 ) {
     let mut started_at = None;
     let mut focus_at_start = None;
-    let mut target_at_start = None;
 
     while let Some(event) = next_coordinator_event(&rx, started_at, max_utterance) {
         match event {
             CoordinatorEvent::Hotkey(HotkeyTransition::Pressed { at }) if started_at.is_none() => {
                 focus_at_start = FocusSnapshot::capture().ok();
-                target_at_start = Some(TargetSnapshot::capture(focus_at_start.as_ref()));
                 match send_worker_event(&tx, WorkerEvent::RecordingStarted) {
                     WorkerSendStatus::Sent => {}
                     WorkerSendStatus::Full => {
                         focus_at_start = None;
-                        target_at_start = None;
                         continue;
                     }
                     WorkerSendStatus::Disconnected => break,
@@ -101,7 +96,6 @@ fn recording_coordinator_loop_with_max_utterance(
                             stopped_at: at,
                             pcm,
                             focus_at_start: focus_at_start.take().map(Box::new),
-                            target_at_start: target_at_start.take().map(Box::new),
                         }
                     ),
                     WorkerSendStatus::Disconnected
@@ -122,7 +116,6 @@ fn recording_coordinator_loop_with_max_utterance(
                             stopped_at: Instant::now(),
                             pcm,
                             focus_at_start: focus_at_start.take().map(Box::new),
-                            target_at_start: target_at_start.take().map(Box::new),
                         }
                     ),
                     WorkerSendStatus::Disconnected

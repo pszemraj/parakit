@@ -28,8 +28,6 @@ pub(crate) mod recording;
 pub(crate) mod session;
 /// Generated start/success/error sound cues.
 pub(crate) mod sounds;
-/// Paste-target safety inspection.
-pub(crate) mod target;
 /// Transcription worker, sanitizer, and paste safety flow.
 pub(crate) mod worker;
 /// Shared X11 helpers for Linux desktop hotkeys and insertion checks.

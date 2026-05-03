@@ -408,21 +408,6 @@ fn paste_text(text: &str, paste_mode: PasteMode) -> Result<PasteOutcome> {
     };
 
     let focus = FocusSnapshot::capture().ok();
-    let target = super::target::TargetSnapshot::capture(focus.as_ref());
-
-    match super::target::inspect_recording_target(Some(&target)) {
-        super::target::TargetDecision::Allow => {}
-        super::target::TargetDecision::CopyOnly(_) => {
-            if paste_mode == PasteMode::Direct {
-                anyhow::bail!("direct insertion blocked by target safety");
-            }
-            injector.copy_text(&text)?;
-            return Ok(PasteOutcome::CopiedOnly);
-        }
-        super::target::TargetDecision::Block(reason) => {
-            anyhow::bail!("target safety blocked paste: {reason}");
-        }
-    }
 
     injector
         .prepare_for_mode(paste_mode)
@@ -433,13 +418,7 @@ fn paste_text(text: &str, paste_mode: PasteMode) -> Result<PasteOutcome> {
                 if !snapshot.matches_current()? {
                     return Ok(false);
                 }
-                match super::target::inspect_recording_target(Some(&target)) {
-                    super::target::TargetDecision::Allow => Ok(true),
-                    super::target::TargetDecision::CopyOnly(_) => Ok(false),
-                    super::target::TargetDecision::Block(reason) => {
-                        anyhow::bail!("target safety blocked paste: {reason}")
-                    }
-                }
+                Ok(true)
             }
             None => Ok(false),
         })

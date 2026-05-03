@@ -32,9 +32,9 @@ disown
 
 If `doctor` reports that `Ctrl+Space` could not be registered, disable any desktop shortcut, input method, or keyboard remapper that already owns that chord and rerun `parakit doctor`.
 
-## Target Safety
+## Focus Guard
 
-On X11, parakit compares the focused window captured at PTT-down with the focused window at paste time. It also uses AT-SPI when available to block password fields and to distinguish editable file-manager fields from file-manager body views. If AT-SPI is unavailable, known file-manager windows fall back to copy-only instead of paste.
+On X11, parakit compares the focused window captured at PTT-down with the focused window at paste time. If focus changes, the transcript is copied to the clipboard and no paste chord is sent. Parakit does not inspect application internals with AT-SPI in the v0.1 daemon path; normal desktop apps, Electron apps, browsers, editors, and terminals are handled by clipboard staging plus one paste chord.
 
 ## Passive X11 Listen
 

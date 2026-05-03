@@ -162,8 +162,6 @@ pub(crate) struct FocusSnapshot {
     focus: u32,
     #[cfg(target_os = "linux")]
     conn: RustConnection,
-    #[cfg(target_os = "linux")]
-    wm_class: Option<String>,
 }
 
 impl FocusSnapshot {
@@ -180,22 +178,13 @@ impl FocusSnapshot {
     pub(crate) fn capture() -> Result<Self> {
         #[cfg(target_os = "linux")]
         {
-            let (conn, screen_num) = RustConnection::connect(None)
+            let (conn, _) = RustConnection::connect(None)
                 .context("could not connect to X11 while capturing recording focus")?;
             let focus = linux_current_input_focus(&conn)?;
             if !linux_focus_is_insertable(focus) {
                 anyhow::bail!("X11 input focus is not an insertable application window");
             }
-            let root = super::x11::root_window(&conn, screen_num)
-                .context("could not read X11 root window for focus snapshot")?;
-            let wm_class = super::x11::wm_class_for_window(&conn, root, focus)
-                .ok()
-                .flatten();
-            Ok(Self {
-                focus,
-                conn,
-                wm_class,
-            })
+            Ok(Self { focus, conn })
         }
 
         #[cfg(not(target_os = "linux"))]
@@ -224,23 +213,6 @@ impl FocusSnapshot {
         #[cfg(not(target_os = "linux"))]
         {
             Ok(true)
-        }
-    }
-
-    /// Return the X11 `WM_CLASS` captured at recording start.
-    ///
-    /// # Returns
-    ///
-    /// The captured class half when the focused window exposed one.
-    pub(crate) fn wm_class(&self) -> Option<&str> {
-        #[cfg(target_os = "linux")]
-        {
-            self.wm_class.as_deref()
-        }
-
-        #[cfg(not(target_os = "linux"))]
-        {
-            None
         }
     }
 }

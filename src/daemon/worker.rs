@@ -14,7 +14,6 @@ use super::ipc::SharedState;
 use super::logging::Logger;
 use super::notifications::Notifier;
 use super::sounds::Sounds;
-use super::target::TargetSnapshot;
 
 /// Maximum number of worker events that may queue while ASR or paste is busy.
 pub(crate) const WORKER_QUEUE_CAPACITY: usize = 2;
@@ -39,8 +38,6 @@ pub(crate) enum WorkerEvent {
         pcm: Vec<f32>,
         /// Focus target captured before audio recording began.
         focus_at_start: Option<Box<FocusSnapshot>>,
-        /// Paste-target metadata captured before audio recording began.
-        target_at_start: Option<Box<TargetSnapshot>>,
     },
 }
 
@@ -134,7 +131,6 @@ fn worker_loop(ctx: WorkerCtx) {
                 stopped_at,
                 pcm,
                 focus_at_start,
-                target_at_start,
             } => {
                 let stop_started = Instant::now();
                 let secs = pcm.len() as f32 / TARGET_RATE as f32;
@@ -203,7 +199,6 @@ fn worker_loop(ctx: WorkerCtx) {
                                     &text,
                                     paste_mode,
                                     focus_at_start.as_deref(),
-                                    target_at_start.as_deref(),
                                     &log,
                                     &notifier,
                                 ),
@@ -297,7 +292,6 @@ fn paste_transcript(
     text: &str,
     mode: PasteMode,
     focus: Option<&FocusSnapshot>,
-    target: Option<&TargetSnapshot>,
     log: &Logger,
     notifier: &Notifier,
 ) -> Result<InsertOutcome> {
@@ -310,33 +304,6 @@ fn paste_transcript(
             .context("focus changed; transcript copied to clipboard fallback")?;
         notifier.transcript_copied("Focus changed before insertion.");
         return Ok(InsertOutcome::CopiedOnly);
-    }
-
-    match super::target::inspect_recording_target(target) {
-        super::target::TargetDecision::Allow => {}
-        super::target::TargetDecision::CopyOnly(reason) => {
-            if mode == PasteMode::Direct {
-                log.warn(format!(
-                    "direct insertion blocked by target safety ({reason}); transcript was not copied"
-                ));
-                notifier.paste_blocked(reason);
-                return Ok(InsertOutcome::Blocked);
-            }
-            log.warn(format!(
-                "paste blocked by target safety ({reason}); transcript copied to clipboard"
-            ));
-            copy_transcript_to_clipboard(injector, text)
-                .context("target safety clipboard fallback failed")?;
-            notifier.transcript_copied(reason);
-            return Ok(InsertOutcome::CopiedOnly);
-        }
-        super::target::TargetDecision::Block(reason) => {
-            log.warn(format!(
-                "paste blocked by target safety ({reason}); transcript was not copied"
-            ));
-            notifier.paste_blocked(reason);
-            return Ok(InsertOutcome::Blocked);
-        }
     }
 
     if injector.is_none() {
@@ -362,27 +329,7 @@ fn paste_transcript(
     let paste_result = injector
         .as_mut()
         .expect("insertion backend was just initialized")
-        .paste_text_guarded(text, mode, || {
-            if !focus_allows_insertion(focus, log) {
-                return Ok(false);
-            }
-            match super::target::inspect_recording_target(target) {
-                super::target::TargetDecision::Allow => Ok(true),
-                super::target::TargetDecision::CopyOnly(reason) => {
-                    log.warn(format!(
-                        "paste blocked by target safety immediately before chord ({reason}); transcript copied to clipboard"
-                    ));
-                    Ok(false)
-                }
-                super::target::TargetDecision::Block(reason) => {
-                    log.warn(format!(
-                        "paste blocked by target safety immediately before chord ({reason}); transcript was not copied"
-                    ));
-                    notifier.paste_blocked(reason);
-                    Err(anyhow::anyhow!("paste blocked by target safety: {reason}"))
-                }
-            }
-        });
+        .paste_text_guarded(text, mode, || Ok(focus_allows_insertion(focus, log)));
     let paste_error = match paste_result {
         Ok(super::inject::PasteOutcome::Pasted) => return Ok(InsertOutcome::Pasted),
         Ok(super::inject::PasteOutcome::CopiedOnly) => {
@@ -423,9 +370,7 @@ fn copy_transcript_to_clipboard(injector: &mut Option<Injector>, text: &str) -> 
 
 fn paste_failure_uses_clipboard_fallback(mode: PasteMode, error: &anyhow::Error) -> bool {
     let message = format!("{error:#}");
-    mode != PasteMode::Direct
-        && !message.contains(super::inject::CLIPBOARD_RESTORE_ERROR)
-        && !message.contains("paste blocked by target safety")
+    mode != PasteMode::Direct && !message.contains(super::inject::CLIPBOARD_RESTORE_ERROR)
 }
 
 fn focus_allows_insertion(focus: Option<&FocusSnapshot>, log: &Logger) -> bool {

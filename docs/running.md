@@ -76,7 +76,7 @@ parakit paste-last
 parakit test-paste "hello from parakit"
 ```
 
-`paste-last` keeps only the latest transcript in daemon memory. `test-paste` runs clipboard staging, target safety checks, and the paste chord without using the microphone.
+`paste-last` keeps only the latest transcript in daemon memory. `test-paste` runs clipboard staging, focus checks, paste sanitization, and the paste chord without using the microphone.
 
 ## Model Cache
 
@@ -106,7 +106,7 @@ Bluetooth microphones are allowed, but parakit prints a warning because headset 
 
 parakit transcribes once on hotkey release, writes the transcript to the system clipboard, then sends the configured paste shortcut. The transcript remains on the clipboard after paste; restoring the previous clipboard on a fixed timer is unsafe because a slow target can read the restored text instead of the transcript.
 
-On Linux/X11, parakit records the focused X11 window when recording starts. If focus changes before insertion, it copies the transcript to the clipboard and does not paste into the new target. Just before paste, it also inspects the current target: AT-SPI password fields are blocked without copying, file-manager body views are copy-only unless AT-SPI reports an editable focused element, and desktop shell targets are copy-only. Terminal mode strips trailing newlines and blocks multiline terminal paste by copying the transcript instead.
+On Linux/X11, parakit records the focused X11 window when recording starts. If focus changes before insertion, it copies the transcript to the clipboard and does not paste into the new target. It checks focus again immediately before the paste chord. Terminal mode strips trailing newlines and blocks multiline terminal paste by copying the transcript instead.
 
 Paste modes:
 
