@@ -1,5 +1,11 @@
 //! PulseAudio/PipeWire source enrichment through `pactl`.
 
+use std::process::{Command, Output, Stdio};
+use std::thread;
+use std::time::{Duration, Instant};
+
+const PACTL_TIMEOUT: Duration = Duration::from_millis(750);
+
 /// Human-readable source details parsed from `pactl list sources`.
 #[derive(Debug, Default, Eq, PartialEq)]
 pub(crate) struct PactlSourceInfo {
@@ -22,10 +28,7 @@ pub(crate) struct PactlSourceInfo {
 /// Parsed details for the default source, or `None` when `pactl` is missing or
 /// the output cannot be matched.
 pub(crate) fn pactl_default_source_info() -> Option<PactlSourceInfo> {
-    let default = std::process::Command::new("pactl")
-        .args(["get-default-source"])
-        .output()
-        .ok()?;
+    let default = pactl_output(&["get-default-source"])?;
     if !default.status.success() {
         return None;
     }
@@ -34,10 +37,7 @@ pub(crate) fn pactl_default_source_info() -> Option<PactlSourceInfo> {
         return None;
     }
 
-    let sources = std::process::Command::new("pactl")
-        .args(["list", "sources"])
-        .output()
-        .ok()?;
+    let sources = pactl_output(&["list", "sources"])?;
     if !sources.status.success() {
         return None;
     }
@@ -45,6 +45,27 @@ pub(crate) fn pactl_default_source_info() -> Option<PactlSourceInfo> {
     parse_pactl_sources(&sources)
         .into_iter()
         .find(|source| source.name == default_name)
+}
+
+fn pactl_output(args: &[&str]) -> Option<Output> {
+    let mut child = Command::new("pactl")
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    let deadline = Instant::now() + PACTL_TIMEOUT;
+    loop {
+        match child.try_wait().ok()? {
+            Some(_) => return child.wait_with_output().ok(),
+            None if Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+            None => thread::sleep(Duration::from_millis(10)),
+        }
+    }
 }
 
 fn parse_pactl_sources(text: &str) -> Vec<PactlSourceInfo> {

@@ -1,5 +1,7 @@
 //! Paste-target safety inspection.
 
+use super::inject::FocusSnapshot;
+
 /// Decision returned by target safety inspection.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum TargetDecision {
@@ -11,20 +13,39 @@ pub(crate) enum TargetDecision {
     Block(&'static str),
 }
 
-/// Inspect the currently focused target before staging transcript text.
+/// Inspect the target captured at recording start.
+///
+/// # Arguments
+///
+/// * `focus` - Recording-start focus snapshot that already passed the drift
+///   guard.
 ///
 /// # Returns
 ///
 /// A conservative insertion decision.
-pub(crate) fn inspect_current_target() -> TargetDecision {
-    inspect_current_target_impl()
+pub(crate) fn inspect_recording_target(focus: Option<&FocusSnapshot>) -> TargetDecision {
+    inspect_recording_target_impl(focus)
 }
 
 #[cfg(target_os = "linux")]
-fn inspect_current_target_impl() -> TargetDecision {
-    let x11_class = current_x11_wm_class().ok().flatten();
+fn inspect_recording_target_impl(focus: Option<&FocusSnapshot>) -> TargetDecision {
     let atspi = current_atspi_focus();
-    target_decision(x11_class.as_deref(), atspi)
+    recording_target_decision(focus.and_then(FocusSnapshot::wm_class), atspi)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn inspect_recording_target_impl(_focus: Option<&FocusSnapshot>) -> TargetDecision {
+    TargetDecision::Allow
+}
+
+#[cfg(target_os = "linux")]
+fn recording_target_decision(x11_class: Option<&str>, atspi: Option<AtspiFocus>) -> TargetDecision {
+    let decision = target_decision(x11_class, atspi);
+    if x11_class.is_none() && decision == TargetDecision::Allow {
+        TargetDecision::CopyOnly("target window class unavailable")
+    } else {
+        decision
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -48,13 +69,16 @@ fn target_decision(x11_class: Option<&str>, atspi: Option<AtspiFocus>) -> Target
                 }
             };
         }
+        if is_terminal_class(class) {
+            return TargetDecision::Allow;
+        }
+        return match atspi {
+            Some(focus) if focus.editable => TargetDecision::Allow,
+            Some(_) => TargetDecision::CopyOnly("target is not editable"),
+            None => TargetDecision::CopyOnly("target accessibility state unavailable"),
+        };
     }
 
-    TargetDecision::Allow
-}
-
-#[cfg(not(target_os = "linux"))]
-fn inspect_current_target_impl() -> TargetDecision {
     TargetDecision::Allow
 }
 
@@ -105,68 +129,6 @@ fn current_atspi_focus() -> Option<AtspiFocus> {
     })
 }
 
-#[cfg(target_os = "linux")]
-fn current_x11_wm_class() -> anyhow::Result<Option<String>> {
-    use anyhow::Context as _;
-    use x11rb::protocol::xproto::{AtomEnum, ConnectionExt as _};
-    use x11rb::rust_connection::RustConnection;
-
-    let (conn, screen_num) = RustConnection::connect(None).context("could not connect to X11")?;
-    let root = super::x11::root_window(&conn, screen_num)?;
-    let mut window = conn
-        .get_input_focus()
-        .context("could not request X11 input focus")?
-        .reply()
-        .context("could not read X11 input focus")?
-        .focus;
-    if window == x11rb::NONE
-        || window == u32::from(x11rb::protocol::xproto::InputFocus::POINTER_ROOT)
-    {
-        return Ok(None);
-    }
-
-    let wm_class = conn
-        .intern_atom(false, b"WM_CLASS")
-        .context("could not request X11 WM_CLASS atom")?
-        .reply()
-        .context("could not read X11 WM_CLASS atom")?
-        .atom;
-
-    for _ in 0..32 {
-        let reply = conn
-            .get_property(false, window, wm_class, AtomEnum::STRING, 0, 1024)
-            .context("could not request X11 WM_CLASS")?
-            .reply()
-            .context("could not read X11 WM_CLASS")?;
-        if let Some(class) = parse_wm_class(&reply.value) {
-            return Ok(Some(class));
-        }
-        if window == root {
-            break;
-        }
-        let tree = conn
-            .query_tree(window)
-            .context("could not request X11 window tree")?
-            .reply()
-            .context("could not read X11 window tree")?;
-        if tree.parent == x11rb::NONE || tree.parent == window {
-            break;
-        }
-        window = tree.parent;
-    }
-
-    Ok(None)
-}
-
-#[cfg(target_os = "linux")]
-fn parse_wm_class(value: &[u8]) -> Option<String> {
-    let mut parts = value
-        .split(|byte| *byte == 0)
-        .filter(|part| !part.is_empty())
-        .filter_map(|part| std::str::from_utf8(part).ok());
-    parts.next_back().map(str::to_string)
-}
-
 fn is_file_manager_class(class: &str) -> bool {
     let lower = class.to_lowercase();
     [
@@ -189,6 +151,29 @@ fn is_desktop_shell_class(class: &str) -> bool {
         .any(|pattern| lower.contains(pattern))
 }
 
+fn is_terminal_class(class: &str) -> bool {
+    let lower = class.to_lowercase();
+    [
+        "gnome-terminal",
+        "org.gnome.terminal",
+        "org.gnome.console",
+        "kgx",
+        "kitty",
+        "alacritty",
+        "foot",
+        "urxvt",
+        "xterm",
+        "st-256color",
+        "org.kde.konsole",
+        "wezterm",
+        "tilix",
+        "terminator",
+        "ptyxis",
+    ]
+    .iter()
+    .any(|pattern| lower.contains(pattern))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -207,6 +192,14 @@ mod tests {
         assert!(!is_desktop_shell_class("kitty"));
     }
 
+    #[test]
+    fn terminal_classes_are_known_safe_without_atspi() {
+        assert!(is_terminal_class("kitty"));
+        assert!(is_terminal_class("org.gnome.Console"));
+        assert!(is_terminal_class("Alacritty"));
+        assert!(!is_terminal_class("Code"));
+    }
+
     #[cfg(target_os = "linux")]
     #[test]
     fn shell_class_stays_copy_only_even_with_atspi_focus() {
@@ -219,6 +212,35 @@ mod tests {
                 }),
             ),
             TargetDecision::CopyOnly("desktop shell target")
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn non_terminal_targets_need_accessibility_state() {
+        assert_eq!(
+            target_decision(Some("firefox"), None),
+            TargetDecision::CopyOnly("target accessibility state unavailable")
+        );
+        assert_eq!(
+            target_decision(
+                Some("firefox"),
+                Some(AtspiFocus {
+                    password: false,
+                    editable: false,
+                }),
+            ),
+            TargetDecision::CopyOnly("target is not editable")
+        );
+        assert_eq!(
+            target_decision(
+                Some("firefox"),
+                Some(AtspiFocus {
+                    password: false,
+                    editable: true,
+                }),
+            ),
+            TargetDecision::Allow
         );
     }
 
@@ -241,8 +263,38 @@ mod tests {
     #[test]
     fn wm_class_parser_uses_class_half() {
         assert_eq!(
-            parse_wm_class(b"org.gnome.Nautilus\0org.gnome.Nautilus\0"),
+            crate::daemon::x11::parse_wm_class(b"org.gnome.Nautilus\0org.gnome.Nautilus\0"),
             Some("org.gnome.Nautilus".to_string())
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn missing_recording_target_class_is_copy_only() {
+        assert_eq!(
+            recording_target_decision(
+                None,
+                Some(AtspiFocus {
+                    password: false,
+                    editable: true,
+                }),
+            ),
+            TargetDecision::CopyOnly("target window class unavailable")
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn password_blocks_even_without_recording_target_class() {
+        assert_eq!(
+            recording_target_decision(
+                None,
+                Some(AtspiFocus {
+                    password: true,
+                    editable: true,
+                }),
+            ),
+            TargetDecision::Block("password field")
         );
     }
 }

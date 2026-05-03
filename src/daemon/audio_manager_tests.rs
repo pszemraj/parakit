@@ -1,8 +1,6 @@
 //! Unit tests for live audio selection and recording buffer helpers.
 
 use super::*;
-use std::thread;
-use std::time::Duration;
 
 #[test]
 fn input_name_classifiers_are_stable() {
@@ -121,19 +119,13 @@ fn idle_observed_chunks_are_dropped_if_recording_starts_before_append() {
 }
 
 #[test]
-fn stop_recording_keeps_final_chunk_already_inside_pipeline() {
+fn stop_recording_without_drain_takes_buffered_samples() {
     let handle = AudioHandle::test_handle();
 
     handle.start_recording();
-    let stopper = {
-        let handle = handle.clone();
-        thread::spawn(move || handle.stop_recording())
-    };
-
-    thread::sleep(Duration::from_millis(5));
     append_processed_samples(&handle.state, &handle.session_epoch, &[0.7]);
 
-    let pcm = stopper.join().expect("stop thread should not panic");
+    let pcm = handle.stop_recording();
     assert_eq!(pcm, vec![0.7]);
 }
 
@@ -142,16 +134,72 @@ fn audio_drain_drop_stops_thread() {
     let ring = HeapRb::<f32>::new(8);
     let (_producer, consumer) = ring.split();
     let (wake_tx, wake_rx) = bounded::<()>(1);
+    let (_control_tx, control_rx) = bounded::<AudioControl>(1);
     let alive = Arc::new(AtomicBool::new(true));
     let thread = spawn_audio_drain(
         consumer,
         wake_rx,
+        control_rx,
         Arc::new(Mutex::new(CaptureState::new())),
         Arc::new(AtomicU64::new(0)),
         CapturePipeline::default(),
         Arc::clone(&alive),
     )
     .expect("audio drain should spawn");
+
+    drop(AudioDrain {
+        alive,
+        wake: wake_tx,
+        thread: Some(thread),
+    });
+}
+
+#[test]
+fn stop_recording_flushes_resampler_tail_and_keeps_next_pre_roll_clean() {
+    let ring = HeapRb::<f32>::new(48_000);
+    let (mut producer, consumer) = ring.split();
+    let (wake_tx, wake_rx) = bounded::<()>(1);
+    let (control_tx, control_rx) = bounded::<AudioControl>(4);
+    let state = Arc::new(Mutex::new(CaptureState::new()));
+    let session_epoch = Arc::new(AtomicU64::new(0));
+    let alive = Arc::new(AtomicBool::new(true));
+    let thread = spawn_audio_drain(
+        consumer,
+        wake_rx,
+        control_rx,
+        Arc::clone(&state),
+        Arc::clone(&session_epoch),
+        CapturePipeline {
+            resampler: make_resampler(48_000).expect("resampler"),
+        },
+        Arc::clone(&alive),
+    )
+    .expect("audio drain should spawn");
+    let handle = AudioHandle {
+        state,
+        session_epoch,
+        next_session_epoch: Arc::new(AtomicU64::new(0)),
+        control: Arc::new(Mutex::new(Some(control_tx))),
+    };
+
+    handle.start_recording();
+    let short_tail = vec![0.25; 100];
+    let pushed = producer.push_slice(&short_tail);
+    assert_eq!(pushed, short_tail.len());
+    let _ = wake_tx.try_send(());
+
+    let first = handle.stop_recording();
+    assert!(
+        !first.is_empty(),
+        "stop must flush the partial resampler chunk"
+    );
+
+    handle.start_recording();
+    let second = handle.stop_recording();
+    assert!(
+        second.is_empty(),
+        "flushed recording tail must not seed the next pre-roll"
+    );
 
     drop(AudioDrain {
         alive,

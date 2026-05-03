@@ -162,6 +162,8 @@ pub(crate) struct FocusSnapshot {
     focus: u32,
     #[cfg(target_os = "linux")]
     conn: RustConnection,
+    #[cfg(target_os = "linux")]
+    wm_class: Option<String>,
 }
 
 impl FocusSnapshot {
@@ -178,13 +180,22 @@ impl FocusSnapshot {
     pub(crate) fn capture() -> Result<Self> {
         #[cfg(target_os = "linux")]
         {
-            let (conn, _) = RustConnection::connect(None)
+            let (conn, screen_num) = RustConnection::connect(None)
                 .context("could not connect to X11 while capturing recording focus")?;
             let focus = linux_current_input_focus(&conn)?;
             if !linux_focus_is_insertable(focus) {
                 anyhow::bail!("X11 input focus is not an insertable application window");
             }
-            Ok(Self { focus, conn })
+            let root = super::x11::root_window(&conn, screen_num)
+                .context("could not read X11 root window for focus snapshot")?;
+            let wm_class = super::x11::wm_class_for_window(&conn, root, focus)
+                .ok()
+                .flatten();
+            Ok(Self {
+                focus,
+                conn,
+                wm_class,
+            })
         }
 
         #[cfg(not(target_os = "linux"))]
@@ -213,6 +224,23 @@ impl FocusSnapshot {
         #[cfg(not(target_os = "linux"))]
         {
             Ok(true)
+        }
+    }
+
+    /// Return the X11 `WM_CLASS` captured at recording start.
+    ///
+    /// # Returns
+    ///
+    /// The captured class half when the focused window exposed one.
+    pub(crate) fn wm_class(&self) -> Option<&str> {
+        #[cfg(target_os = "linux")]
+        {
+            self.wm_class.as_deref()
+        }
+
+        #[cfg(not(target_os = "linux"))]
+        {
+            None
         }
     }
 }
@@ -305,10 +333,9 @@ impl Injector {
     /// Paste text, but re-run a caller-supplied safety check immediately before
     /// synthetic input is sent.
     ///
-    /// The text clipboard is restored when the previous clipboard contents were
-    /// also text. Non-text clipboard contents may be replaced by the transcript.
-    /// The guard runs after clipboard staging and settle delay, which closes the
-    /// focus-drift race between the initial daemon preflight and the XTest chord.
+    /// The transcript remains on the clipboard after paste. Restoring the
+    /// previous clipboard on a fixed timer is unsafe because slow targets can
+    /// read the restored text instead of the transcript.
     ///
     /// # Arguments
     ///
@@ -339,8 +366,7 @@ impl Injector {
                 self.type_text(text)?;
                 return Ok(PasteOutcome::Pasted);
             }
-            self.copy_text(text)?;
-            return Ok(PasteOutcome::CopiedOnly);
+            anyhow::bail!("direct insertion blocked by safety guard");
         }
 
         let mut clipboard = match self.clipboard.take() {
@@ -352,7 +378,6 @@ impl Injector {
             text,
             || self.paste_clipboard(mode),
             clipboard_settle_delay(),
-            clipboard_restore_delay(),
             before_chord,
         );
         self.clipboard = Some(clipboard);
@@ -516,7 +541,6 @@ fn paste_with_clipboard_swap_guarded<C, P, G>(
     text: &str,
     mut paste: P,
     settle_delay: Duration,
-    restore_delay: Duration,
     mut before_chord: G,
 ) -> Result<PasteOutcome>
 where
@@ -537,26 +561,36 @@ where
         .context("could not copy transcript to clipboard")?;
 
     sleep_if_nonzero(settle_delay);
-    if !before_chord()? {
-        return Ok(PasteOutcome::CopiedOnly);
+    match before_chord() {
+        Ok(true) => {}
+        Ok(false) => return Ok(PasteOutcome::CopiedOnly),
+        Err(err) => {
+            let restore_result = restore_or_clear_clipboard(clipboard, previous);
+            return match restore_result {
+                Ok(()) => Err(err),
+                Err(restore_err) => Err(err.context(format!("{restore_err:#}"))),
+            };
+        }
     }
 
     let paste_result = paste();
+    match paste_result {
+        Ok(()) => Ok(PasteOutcome::Pasted),
+        Err(paste_err) => Err(paste_err),
+    }
+}
 
-    let restore_result = if let Some(previous) = previous {
-        sleep_if_nonzero(restore_delay);
-        clipboard
+fn restore_or_clear_clipboard<C: TextClipboard>(
+    clipboard: &mut C,
+    previous: Option<String>,
+) -> Result<()> {
+    match previous {
+        Some(previous) => clipboard
             .set_text(previous)
-            .map_err(|err| anyhow::anyhow!("{CLIPBOARD_RESTORE_ERROR}: {err:#}"))
-    } else {
-        Ok(())
-    };
-
-    match (paste_result, restore_result) {
-        (Ok(()), Ok(())) => Ok(PasteOutcome::Pasted),
-        (Err(paste_err), Ok(())) => Err(paste_err),
-        (Ok(()), Err(restore_err)) => Err(restore_err),
-        (Err(paste_err), Err(restore_err)) => Err(paste_err.context(format!("{restore_err:#}"))),
+            .map_err(|err| anyhow::anyhow!("{CLIPBOARD_RESTORE_ERROR}: {err:#}")),
+        None => clipboard.set_text(String::new()).map_err(|err| {
+            anyhow::anyhow!("could not clear blocked transcript from clipboard: {err:#}")
+        }),
     }
 }
 
@@ -619,21 +653,6 @@ fn clipboard_settle_delay() -> Duration {
     #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
     {
         Duration::from_millis(100)
-    }
-}
-
-fn clipboard_restore_delay() -> Duration {
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    {
-        Duration::from_millis(200)
-    }
-    #[cfg(target_os = "windows")]
-    {
-        Duration::from_millis(100)
-    }
-    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-    {
-        Duration::from_millis(150)
     }
 }
 

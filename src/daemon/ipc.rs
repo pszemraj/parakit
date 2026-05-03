@@ -20,6 +20,9 @@ use super::{
     worker::{sanitize_for_paste, PastePlan},
 };
 
+#[cfg(unix)]
+const IPC_CLIENT_TIMEOUT: Duration = Duration::from_millis(750);
+
 /// Command sent by helper subcommands to the running daemon.
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -203,7 +206,13 @@ fn spawn_server_impl(
         .spawn(move || {
             for stream in listener.incoming() {
                 match stream {
-                    Ok(stream) => handle_client(stream, &state, paste_mode, &log),
+                    Ok(stream) => {
+                        let state = Arc::clone(&state);
+                        let log = Arc::clone(&log);
+                        let _ = thread::Builder::new()
+                            .name("parakit-ipc-client".into())
+                            .spawn(move || handle_client(stream, &state, paste_mode, &log));
+                    }
                     Err(err) => log.warn(format!("control socket failed: {err}")),
                 }
             }
@@ -232,6 +241,8 @@ fn handle_client(
     paste_mode: PasteMode,
     log: &Logger,
 ) {
+    let _ = stream.set_read_timeout(Some(IPC_CLIENT_TIMEOUT));
+    let _ = stream.set_write_timeout(Some(IPC_CLIENT_TIMEOUT));
     let outcome = match read_command(&stream).and_then(|command| {
         handle_command(command, Arc::clone(state), paste_mode).map_err(|err| IpcResponse::Err {
             message: format!("{err:#}"),
@@ -371,15 +382,23 @@ fn paste_text(text: &str, paste_mode: PasteMode) -> Result<PasteOutcome> {
     let text = match sanitize_for_paste(text, paste_mode) {
         PastePlan::Paste(text) => text,
         PastePlan::CopyOnly { text, .. } => {
+            if paste_mode == PasteMode::Direct {
+                anyhow::bail!("direct insertion blocked by sanitizer");
+            }
             injector.copy_text(&text)?;
             return Ok(PasteOutcome::CopiedOnly);
         }
         PastePlan::Skip { reason } => anyhow::bail!("paste text skipped by sanitizer: {reason}"),
     };
 
-    match super::target::inspect_current_target() {
+    let focus = FocusSnapshot::capture().ok();
+
+    match super::target::inspect_recording_target(focus.as_ref()) {
         super::target::TargetDecision::Allow => {}
         super::target::TargetDecision::CopyOnly(_) => {
+            if paste_mode == PasteMode::Direct {
+                anyhow::bail!("direct insertion blocked by target safety");
+            }
             injector.copy_text(&text)?;
             return Ok(PasteOutcome::CopiedOnly);
         }
@@ -391,10 +410,20 @@ fn paste_text(text: &str, paste_mode: PasteMode) -> Result<PasteOutcome> {
     injector
         .prepare_for_mode(paste_mode)
         .context("could not prepare insertion backend")?;
-    let focus = FocusSnapshot::capture().ok();
     let outcome = injector
         .paste_text_guarded(&text, paste_mode, || match focus.as_ref() {
-            Some(snapshot) => snapshot.matches_current(),
+            Some(snapshot) => {
+                if !snapshot.matches_current()? {
+                    return Ok(false);
+                }
+                match super::target::inspect_recording_target(focus.as_ref()) {
+                    super::target::TargetDecision::Allow => Ok(true),
+                    super::target::TargetDecision::CopyOnly(_) => Ok(false),
+                    super::target::TargetDecision::Block(reason) => {
+                        anyhow::bail!("target safety blocked paste: {reason}")
+                    }
+                }
+            }
             None => Ok(false),
         })
         .context("could not send paste command")?;
@@ -418,6 +447,12 @@ fn send_command(command: IpcCommand) -> Result<IpcResponse> {
     let path = preflight::control_socket_path()?;
     let mut stream = UnixStream::connect(&path)
         .with_context(|| format!("connect daemon control socket {}", path.display()))?;
+    stream
+        .set_read_timeout(Some(IPC_CLIENT_TIMEOUT))
+        .context("set daemon control socket read timeout")?;
+    stream
+        .set_write_timeout(Some(IPC_CLIENT_TIMEOUT))
+        .context("set daemon control socket write timeout")?;
     serde_json::to_writer(&mut stream, &command).context("serialize control command")?;
     stream
         .write_all(b"\n")
@@ -476,5 +511,28 @@ mod tests {
         assert_eq!(mode, 0o700);
 
         std::fs::remove_dir_all(&dir).expect("test dir should be removed");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn partial_client_command_times_out() {
+        use super::super::logging::{LogLevel, Logger};
+        use std::io::Write as _;
+        use std::os::unix::net::UnixStream;
+        use std::time::Instant;
+
+        let (mut client, server) = UnixStream::pair().expect("unix stream pair");
+        client
+            .write_all(b"{")
+            .expect("partial command should write");
+
+        let state = Arc::new(SharedState::new());
+        let started = Instant::now();
+        let handler = thread::spawn(move || {
+            let log = Logger::new(LogLevel::Quiet);
+            handle_client(server, &state, PasteMode::Terminal, &log);
+        });
+        handler.join().expect("handler should return after timeout");
+        assert!(started.elapsed() < Duration::from_secs(2));
     }
 }

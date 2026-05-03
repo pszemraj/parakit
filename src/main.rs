@@ -299,6 +299,15 @@ fn run() -> Result<()> {
         return run_ptt_audio_simulation(&cli, Arc::clone(&log), audio_path);
     }
 
+    if let Some(path) = cli.model.as_deref() {
+        if !path.is_file() {
+            return Err(anyhow::anyhow!(
+                "model path is not a file: {}",
+                path.display()
+            ));
+        }
+    }
+
     #[cfg(target_os = "linux")]
     daemon::session::ensure_x11_session_supported()?;
 
@@ -336,7 +345,7 @@ fn run() -> Result<()> {
 
     let model_path = match cli.model.as_deref() {
         Some(path) => path.to_path_buf(),
-        None => fetch::ensure_default_model(cli.quiet || !cli.verbose)?,
+        None => fetch::ensure_default_model(cli.quiet)?,
     };
     let model_dtype = model_dtype_label(&model_path);
     let threads = cli

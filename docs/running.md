@@ -104,7 +104,7 @@ Bluetooth microphones are allowed, but parakit prints a warning because headset 
 
 ## Insertion
 
-parakit transcribes once on hotkey release, writes the transcript to the system clipboard, sends the configured paste shortcut, then restores the previous text clipboard when possible. Clipboard managers may still keep the transient transcript in history.
+parakit transcribes once on hotkey release, writes the transcript to the system clipboard, then sends the configured paste shortcut. The transcript remains on the clipboard after paste; restoring the previous clipboard on a fixed timer is unsafe because a slow target can read the restored text instead of the transcript.
 
 On Linux/X11, parakit records the focused X11 window when recording starts. If focus changes before insertion, it copies the transcript to the clipboard and does not paste into the new target. Just before paste, it also inspects the current target: AT-SPI password fields are blocked without copying, file-manager body views are copy-only unless AT-SPI reports an editable focused element, and desktop shell targets are copy-only. Terminal mode strips trailing newlines and blocks multiline terminal paste by copying the transcript instead.
 

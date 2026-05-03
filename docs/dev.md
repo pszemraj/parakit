@@ -32,6 +32,10 @@ That path downloads [NVIDIA's official `.nemo`](https://huggingface.co/nvidia/pa
 
 After rebuilding a release artifact, upload F16 and Q8_0 to the hosted repo and update `HOSTED_Q8_SHA256` in `src/model.rs` if the Q8_0 bytes changed.
 
+## File Size Exceptions
+
+`src/daemon/audio_manager.rs` is temporarily over the 1k LoC target because it owns one tightly coupled runtime boundary: CPAL stream recovery, the SPSC drain thread, resampler flushing, and recording/pre-roll state. Split it after the v0.1 safety branch into smaller `audio/stream.rs`, `audio/drain.rs`, and `audio/device.rs` modules without changing behavior.
+
 ## Updating [CrispASR](https://github.com/CrispStrobe/CrispASR)
 
 Keep submodule updates separate from parakit code changes:
