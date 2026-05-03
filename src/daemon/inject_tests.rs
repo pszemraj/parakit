@@ -307,21 +307,13 @@ fn xtest_cleanup_releases_pressed_keys_after_primary_error() {
         fail_on: Some((3, true)),
         ..MockX11KeySink::default()
     };
-    let err = send_x11_key_steps(&mut sink, &three_pressed_key_steps(), &[9, 8])
+    let err = send_x11_key_steps(&mut sink, &three_pressed_key_steps())
         .expect_err("primary failure should be reported");
 
     assert!(format!("{err:#}").contains("primary failure"));
     assert_eq!(
         sink.events,
-        vec![
-            (1, true),
-            (2, true),
-            (3, true),
-            (2, false),
-            (1, false),
-            (9, false),
-            (8, false)
-        ]
+        vec![(1, true), (2, true), (3, true), (2, false), (1, false)]
     );
 }
 
@@ -333,7 +325,7 @@ fn xtest_cleanup_reports_primary_and_cleanup_errors() {
         fail_cleanup_on: Some(2),
         ..MockX11KeySink::default()
     };
-    let err = send_x11_key_steps(&mut sink, &three_pressed_key_steps(), &[9, 8])
+    let err = send_x11_key_steps(&mut sink, &three_pressed_key_steps())
         .expect_err("primary and cleanup failures should be reported");
     let message = format!("{err:#}");
     assert!(message.contains("primary failure"));
@@ -343,7 +335,7 @@ fn xtest_cleanup_reports_primary_and_cleanup_errors() {
 
 #[cfg(target_os = "linux")]
 #[test]
-fn xtest_success_flushes_modifiers_after_chord() {
+fn xtest_success_releases_only_chord_keys() {
     let mut sink = MockX11KeySink::default();
     let steps = [
         ResolvedX11KeyStep {
@@ -372,7 +364,7 @@ fn xtest_success_flushes_modifiers_after_chord() {
         },
     ];
 
-    send_x11_key_steps(&mut sink, &steps, &[1, 2, 9]).expect("paste chord should succeed");
+    send_x11_key_steps(&mut sink, &steps).expect("paste chord should succeed");
 
     assert_eq!(
         sink.events,
@@ -382,10 +374,7 @@ fn xtest_success_flushes_modifiers_after_chord() {
             (3, true),
             (3, false),
             (2, false),
-            (1, false),
-            (1, false),
-            (2, false),
-            (9, false)
+            (1, false)
         ]
     );
 }
