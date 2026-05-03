@@ -111,7 +111,7 @@ fn print_doctor_summary(
         Err(err) => print_status_line("mic", false, &format!("{err:#}")),
     }
     let insertion_label = if deep {
-        format!("{} smoke test", paste_mode.label())
+        format!("{} guarded smoke test", paste_mode.label())
     } else {
         format!("{} preflight", paste_mode.label())
     };
@@ -159,7 +159,10 @@ fn print_doctor_details(
         }
     }
     match insertion {
-        Ok(()) if deep => println!("  insertion:     OK ({} smoke test)", paste_mode.label()),
+        Ok(()) if deep => println!(
+            "  insertion:     OK ({} guarded smoke test)",
+            paste_mode.label()
+        ),
         Ok(()) => println!("  insertion:     OK ({} preflight)", paste_mode.label()),
         Err(err) => println!("  insertion:     FAIL ({err:#})"),
     }

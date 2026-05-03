@@ -84,7 +84,7 @@ Check:
 - holding `Ctrl+Space` for 3 to 5 seconds produces exactly one recording start and one stop;
 - rapid double-presses do not wedge the state machine;
 - Ctrl release before Space stops recording;
-- focus changes copy to clipboard without pasting into the new target;
+- focus changes do not paste into the new target;
 - very short captures are padded and transcribed instead of rejected;
 - `--quiet` emits no stdout;
 - warnings still go to stderr in quiet mode;

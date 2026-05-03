@@ -104,9 +104,9 @@ Bluetooth microphones are allowed, but parakit prints a warning because headset 
 
 ## Insertion
 
-parakit transcribes once on hotkey release, writes the transcript to the system clipboard, then sends the configured paste shortcut. The transcript remains on the clipboard after paste; restoring the previous clipboard on a fixed timer is unsafe because a slow target can read the restored text instead of the transcript.
+parakit transcribes once on hotkey release, writes the transcript to the system clipboard, then sends the configured paste shortcut. By default it waits for the target to consume the paste and restores the previous text clipboard. If the previous clipboard held non-text content such as an image or copied files, that content cannot be restored through the text-only clipboard API.
 
-On Linux/X11, parakit records the focused X11 window when recording starts. If focus changes before insertion, it copies the transcript to the clipboard and does not paste into the new target. It checks focus again immediately before the paste chord. Terminal mode strips trailing newlines and blocks multiline terminal paste by copying the transcript instead.
+On Linux/X11, parakit records the active X11 window when recording starts. If focus changes before insertion, it does not send a paste chord. It checks focus again immediately before the paste chord. Terminal mode strips trailing newlines and blocks multiline terminal paste; the transcript remains available through `parakit paste-last`.
 
 Paste modes:
 
@@ -117,6 +117,8 @@ parakit --paste-mode direct    # synthetic typing, no clipboard
 ```
 
 Use `direct` only as an app-compatibility fallback. It is slower and can be less reliable for non-ASCII text. On Linux it still requires an X11 session.
+
+Use `--keep-transcript-clipboard` when you want successful pastes and blocked fallback text to remain on the clipboard. The default is to restore the previous text clipboard.
 
 ## Logging And Sounds
 

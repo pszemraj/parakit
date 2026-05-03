@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use super::audio::TARGET_RATE;
-use super::inject::{FocusSnapshot, Injector, PasteMode};
+use super::inject::{ClipboardPolicy, FocusSnapshot, Injector, PasteMode};
 use super::ipc::SharedState;
 use super::logging::Logger;
 use super::notifications::Notifier;
@@ -59,6 +59,9 @@ pub(crate) struct WorkerCtx {
     pub(crate) state: Arc<SharedState>,
     /// Paste chord mode.
     pub(crate) paste_mode: PasteMode,
+    /// Leave transcript text on the clipboard after paste/fallback instead of
+    /// restoring previous clipboard text.
+    pub(crate) keep_transcript_clipboard: bool,
     /// Whether transcripts should be inserted after inference.
     pub(crate) insert_transcripts: bool,
     /// Worker event receiver.
@@ -91,6 +94,7 @@ fn worker_loop(ctx: WorkerCtx) {
         notifier,
         state,
         paste_mode,
+        keep_transcript_clipboard,
         insert_transcripts,
         rx,
     } = ctx;
@@ -181,23 +185,22 @@ fn worker_loop(ctx: WorkerCtx) {
                                         notifier.paste_disabled_for_session();
                                         Ok(InsertOutcome::Blocked)
                                     } else {
-                                        match copy_transcript_to_clipboard(&mut injector, &text)
-                                            .context("clipboard-only mode copy failed")
-                                        {
-                                            Ok(()) => {
-                                                notifier.transcript_copied(
-                                                "Paste is disabled for this session after repeated failures.",
-                                            );
-                                                Ok(InsertOutcome::CopiedOnly)
-                                            }
-                                            Err(err) => Err(err),
-                                        }
+                                        copy_or_block_transcript(
+                                            &mut injector,
+                                            &text,
+                                            keep_transcript_clipboard,
+                                            "paste-disabled clipboard copy failed",
+                                            "Paste is disabled for this session after repeated failures.",
+                                            &log,
+                                            &notifier,
+                                        )
                                     }
                                 }
                                 PastePlan::Paste(text) => paste_transcript(
                                     &mut injector,
                                     &text,
                                     paste_mode,
+                                    keep_transcript_clipboard,
                                     focus_at_start.as_deref(),
                                     &log,
                                     &notifier,
@@ -210,18 +213,16 @@ fn worker_loop(ctx: WorkerCtx) {
                                         notifier.paste_blocked(reason);
                                         Ok(InsertOutcome::Blocked)
                                     } else {
-                                        log.warn(format!(
-                                        "paste blocked by sanitizer ({reason}); transcript copied to clipboard"
-                                    ));
-                                        match copy_transcript_to_clipboard(&mut injector, &text)
-                                            .context("sanitized transcript clipboard fallback failed")
-                                        {
-                                            Ok(()) => {
-                                                notifier.transcript_copied(reason);
-                                                Ok(InsertOutcome::CopiedOnly)
-                                            }
-                                            Err(err) => Err(err),
-                                        }
+                                        log.warn(format!("paste blocked by sanitizer ({reason})"));
+                                        copy_or_block_transcript(
+                                            &mut injector,
+                                            &text,
+                                            keep_transcript_clipboard,
+                                            "sanitized transcript clipboard fallback failed",
+                                            reason,
+                                            &log,
+                                            &notifier,
+                                        )
                                     }
                                 }
                                 PastePlan::Skip { reason } => {
@@ -234,7 +235,9 @@ fn worker_loop(ctx: WorkerCtx) {
                             Ok(outcome) => {
                                 if matches!(
                                     outcome,
-                                    InsertOutcome::Pasted | InsertOutcome::CopiedOnly
+                                    InsertOutcome::Pasted
+                                        | InsertOutcome::CopiedOnly
+                                        | InsertOutcome::Blocked
                                 ) {
                                     state.set_last_transcript(transcript.cleaned.clone());
                                 }
@@ -291,6 +294,7 @@ fn paste_transcript(
     injector: &mut Option<Injector>,
     text: &str,
     mode: PasteMode,
+    keep_transcript_clipboard: bool,
     focus: Option<&FocusSnapshot>,
     log: &Logger,
     notifier: &Notifier,
@@ -300,10 +304,15 @@ fn paste_transcript(
             notifier.paste_blocked("Focus changed before insertion.");
             return Ok(InsertOutcome::Blocked);
         }
-        copy_transcript_to_clipboard(injector, text)
-            .context("focus changed; transcript copied to clipboard fallback")?;
-        notifier.transcript_copied("Focus changed before insertion.");
-        return Ok(InsertOutcome::CopiedOnly);
+        return copy_or_block_transcript(
+            injector,
+            text,
+            keep_transcript_clipboard,
+            "focus changed clipboard fallback failed",
+            "Focus changed before insertion.",
+            log,
+            notifier,
+        );
     }
 
     if injector.is_none() {
@@ -316,12 +325,17 @@ fn paste_transcript(
     if let Err(err) = prepare_result {
         if mode != PasteMode::Direct {
             log.warn(format!(
-                "paste backend unavailable ({err:#}); transcript copied to clipboard"
+                "paste backend unavailable ({err:#}); automatic paste skipped"
             ));
-            copy_transcript_to_clipboard(injector, text)
-                .context("paste backend unavailable and clipboard fallback failed")?;
-            notifier.transcript_copied("Paste backend was unavailable.");
-            return Ok(InsertOutcome::CopiedOnly);
+            return copy_or_block_transcript(
+                injector,
+                text,
+                keep_transcript_clipboard,
+                "paste backend unavailable and clipboard fallback failed",
+                "Paste backend was unavailable.",
+                log,
+                notifier,
+            );
         }
         return Err(err.context("could not prepare direct insertion backend"));
     }
@@ -329,7 +343,12 @@ fn paste_transcript(
     let paste_result = injector
         .as_mut()
         .expect("insertion backend was just initialized")
-        .paste_text_guarded(text, mode, || Ok(focus_allows_insertion(focus, log)));
+        .paste_text_guarded(
+            text,
+            mode,
+            clipboard_policy(keep_transcript_clipboard),
+            || Ok(focus_allows_insertion(focus, log)),
+        );
     let paste_error = match paste_result {
         Ok(super::inject::PasteOutcome::Pasted) => return Ok(InsertOutcome::Pasted),
         Ok(super::inject::PasteOutcome::CopiedOnly) => {
@@ -340,10 +359,14 @@ fn paste_transcript(
             notifier.transcript_copied("Focus changed immediately before paste.");
             return Ok(InsertOutcome::CopiedOnly);
         }
+        Ok(super::inject::PasteOutcome::Blocked) => {
+            notifier.paste_blocked("Focus changed immediately before paste.");
+            return Ok(InsertOutcome::Blocked);
+        }
         Err(err) => err,
     };
 
-    if paste_failure_uses_clipboard_fallback(mode, &paste_error) {
+    if paste_failure_uses_clipboard_fallback(mode, &paste_error, keep_transcript_clipboard) {
         copy_transcript_to_clipboard(injector, text).map_err(|copy_error| {
             anyhow::anyhow!("{paste_error:#}; clipboard fallback also failed: {copy_error:#}")
         })?;
@@ -353,6 +376,27 @@ fn paste_transcript(
     }
 
     Err(paste_error)
+}
+
+fn copy_or_block_transcript(
+    injector: &mut Option<Injector>,
+    text: &str,
+    keep_transcript_clipboard: bool,
+    copy_context: &'static str,
+    reason: &'static str,
+    log: &Logger,
+    notifier: &Notifier,
+) -> Result<InsertOutcome> {
+    if keep_transcript_clipboard {
+        copy_transcript_to_clipboard(injector, text).context(copy_context)?;
+        notifier.transcript_copied(reason);
+        return Ok(InsertOutcome::CopiedOnly);
+    }
+    log.warn(format!(
+        "automatic paste skipped ({reason}); transcript kept in daemon memory only"
+    ));
+    notifier.paste_blocked(reason);
+    Ok(InsertOutcome::Blocked)
 }
 
 fn copy_transcript_to_clipboard(injector: &mut Option<Injector>, text: &str) -> Result<()> {
@@ -368,28 +412,40 @@ fn copy_transcript_to_clipboard(injector: &mut Option<Injector>, text: &str) -> 
     }
 }
 
-fn paste_failure_uses_clipboard_fallback(mode: PasteMode, error: &anyhow::Error) -> bool {
+fn paste_failure_uses_clipboard_fallback(
+    mode: PasteMode,
+    error: &anyhow::Error,
+    keep_transcript_clipboard: bool,
+) -> bool {
     let message = format!("{error:#}");
-    mode != PasteMode::Direct && !message.contains(super::inject::CLIPBOARD_RESTORE_ERROR)
+    keep_transcript_clipboard
+        && mode != PasteMode::Direct
+        && !message.contains(super::inject::CLIPBOARD_RESTORE_ERROR)
+}
+
+fn clipboard_policy(keep_transcript_clipboard: bool) -> ClipboardPolicy {
+    if keep_transcript_clipboard {
+        ClipboardPolicy::KeepTranscript
+    } else {
+        ClipboardPolicy::RestorePrevious
+    }
 }
 
 fn focus_allows_insertion(focus: Option<&FocusSnapshot>, log: &Logger) -> bool {
     let Some(focus) = focus else {
-        log.warn("recording focus was unavailable; copied transcript to clipboard without pasting");
+        log.warn("recording focus was unavailable; automatic paste skipped");
         return false;
     };
 
     match focus.matches_current() {
         Ok(true) => true,
         Ok(false) => {
-            log.warn(
-                "focus changed before insertion; copied transcript to clipboard without pasting",
-            );
+            log.warn("focus changed before insertion; automatic paste skipped");
             false
         }
         Err(err) => {
             log.warn(format!(
-                "could not verify recording focus ({err:#}); copied transcript to clipboard without pasting"
+                "could not verify recording focus ({err:#}); automatic paste skipped"
             ));
             false
         }
@@ -432,7 +488,7 @@ enum InsertOutcome {
 ///
 /// # Returns
 ///
-/// A paste, copy-only, or skip decision.
+/// A paste, copy, block, or skip decision.
 pub(crate) fn sanitize_for_paste(raw: &str, mode: PasteMode) -> PastePlan {
     let normalized = raw.replace("\r\n", "\n").replace('\r', "\n");
     let mut text = String::with_capacity(normalized.len());
@@ -534,20 +590,28 @@ mod tests {
         let paste_error = anyhow::anyhow!("could not send paste shortcut");
         assert!(paste_failure_uses_clipboard_fallback(
             PasteMode::Terminal,
-            &paste_error
+            &paste_error,
+            true
+        ));
+        assert!(!paste_failure_uses_clipboard_fallback(
+            PasteMode::Terminal,
+            &paste_error,
+            false
         ));
 
         let restore_error =
             anyhow::anyhow!("{}: lost", super::super::inject::CLIPBOARD_RESTORE_ERROR);
         assert!(!paste_failure_uses_clipboard_fallback(
             PasteMode::Terminal,
-            &restore_error
+            &restore_error,
+            true
         ));
 
         let direct_error = anyhow::anyhow!("could not type text at cursor");
         assert!(!paste_failure_uses_clipboard_fallback(
             PasteMode::Direct,
-            &direct_error
+            &direct_error,
+            true
         ));
     }
 

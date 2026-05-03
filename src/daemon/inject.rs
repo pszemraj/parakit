@@ -71,6 +71,17 @@ pub(crate) enum PasteOutcome {
     Pasted,
     /// The transcript was left on the clipboard and no synthetic input was sent.
     CopiedOnly,
+    /// No paste chord was sent and the previous clipboard was restored or cleared.
+    Blocked,
+}
+
+/// Clipboard retention policy after staging text for paste.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ClipboardPolicy {
+    /// Restore the previous text clipboard after paste or guarded cancellation.
+    RestorePrevious,
+    /// Leave the transcript on the clipboard after paste or guarded cancellation.
+    KeepTranscript,
 }
 
 /// Check whether the configured insertion path can be initialized.
@@ -332,9 +343,9 @@ impl Injector {
     /// Paste text, but re-run a caller-supplied safety check immediately before
     /// synthetic input is sent.
     ///
-    /// The transcript remains on the clipboard after paste. Restoring the
-    /// previous clipboard on a fixed timer is unsafe because slow targets can
-    /// read the restored text instead of the transcript.
+    /// By default the previous text clipboard is restored after the paste
+    /// consume delay. Callers may opt into leaving the transcript on the
+    /// clipboard for workflows that prefer that behavior.
     ///
     /// # Arguments
     ///
@@ -343,9 +354,11 @@ impl Injector {
     ///
     /// # Returns
     ///
-    /// [`PasteOutcome::Pasted`] when synthetic input was sent, or
-    /// [`PasteOutcome::CopiedOnly`] when the guard blocked insertion after the
-    /// transcript was copied to the clipboard.
+    /// [`PasteOutcome::Pasted`] when synthetic input was sent,
+    /// [`PasteOutcome::CopiedOnly`] when the guard blocked insertion and the
+    /// transcript was intentionally left on the clipboard, or
+    /// [`PasteOutcome::Blocked`] when no input was sent and the previous
+    /// clipboard was restored.
     ///
     /// # Errors
     ///
@@ -355,6 +368,7 @@ impl Injector {
         &mut self,
         text: &str,
         mode: PasteMode,
+        clipboard_policy: ClipboardPolicy,
         mut before_chord: impl FnMut() -> Result<bool>,
     ) -> Result<PasteOutcome> {
         if text.is_empty() {
@@ -377,6 +391,8 @@ impl Injector {
             text,
             || self.paste_clipboard(mode),
             clipboard_settle_delay(),
+            clipboard_restore_delay(),
+            clipboard_policy,
             before_chord,
         );
         self.clipboard = Some(clipboard);
@@ -540,6 +556,8 @@ fn paste_with_clipboard_swap_guarded<C, P, G>(
     text: &str,
     mut paste: P,
     settle_delay: Duration,
+    restore_delay: Duration,
+    clipboard_policy: ClipboardPolicy,
     mut before_chord: G,
 ) -> Result<PasteOutcome>
 where
@@ -551,10 +569,7 @@ where
         return Ok(PasteOutcome::Pasted);
     }
 
-    let previous = clipboard
-        .get_text()
-        .ok()
-        .filter(|previous| previous != text);
+    let previous = clipboard.get_text().ok();
     clipboard
         .set_text(text.to_owned())
         .context("could not copy transcript to clipboard")?;
@@ -562,9 +577,11 @@ where
     sleep_if_nonzero(settle_delay);
     match before_chord() {
         Ok(true) => {}
-        Ok(false) => return Ok(PasteOutcome::CopiedOnly),
+        Ok(false) => {
+            return finish_blocked_clipboard(clipboard, previous, clipboard_policy);
+        }
         Err(err) => {
-            let restore_result = restore_or_clear_clipboard(clipboard, previous);
+            let restore_result = restore_or_clear_clipboard(clipboard, previous, clipboard_policy);
             return match restore_result {
                 Ok(()) => Err(err),
                 Err(restore_err) => Err(err.context(format!("{restore_err:#}"))),
@@ -574,15 +591,41 @@ where
 
     let paste_result = paste();
     match paste_result {
-        Ok(()) => Ok(PasteOutcome::Pasted),
-        Err(paste_err) => Err(paste_err),
+        Ok(()) => {
+            sleep_if_nonzero(restore_delay);
+            restore_or_clear_clipboard(clipboard, previous, clipboard_policy)?;
+            Ok(PasteOutcome::Pasted)
+        }
+        Err(paste_err) => {
+            let restore_result = restore_or_clear_clipboard(clipboard, previous, clipboard_policy);
+            match restore_result {
+                Ok(()) => Err(paste_err),
+                Err(restore_err) => Err(paste_err.context(format!("{restore_err:#}"))),
+            }
+        }
     }
+}
+
+fn finish_blocked_clipboard<C: TextClipboard>(
+    clipboard: &mut C,
+    previous: Option<String>,
+    clipboard_policy: ClipboardPolicy,
+) -> Result<PasteOutcome> {
+    restore_or_clear_clipboard(clipboard, previous, clipboard_policy)?;
+    Ok(match clipboard_policy {
+        ClipboardPolicy::RestorePrevious => PasteOutcome::Blocked,
+        ClipboardPolicy::KeepTranscript => PasteOutcome::CopiedOnly,
+    })
 }
 
 fn restore_or_clear_clipboard<C: TextClipboard>(
     clipboard: &mut C,
     previous: Option<String>,
+    clipboard_policy: ClipboardPolicy,
 ) -> Result<()> {
+    if clipboard_policy == ClipboardPolicy::KeepTranscript {
+        return Ok(());
+    }
     match previous {
         Some(previous) => clipboard
             .set_text(previous)
@@ -655,6 +698,25 @@ fn clipboard_settle_delay() -> Duration {
     }
 }
 
+fn clipboard_restore_delay() -> Duration {
+    #[cfg(target_os = "linux")]
+    {
+        Duration::from_millis(200)
+    }
+    #[cfg(target_os = "macos")]
+    {
+        Duration::from_millis(200)
+    }
+    #[cfg(target_os = "windows")]
+    {
+        Duration::from_millis(100)
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+    {
+        Duration::from_millis(150)
+    }
+}
+
 #[cfg(target_os = "windows")]
 fn paste_key_click(enigo: &mut Enigo) -> Result<()> {
     enigo
@@ -697,6 +759,7 @@ struct LinuxX11Paste {
     root: u32,
     standard_steps: Vec<ResolvedX11KeyStep>,
     terminal_steps: Vec<ResolvedX11KeyStep>,
+    modifier_flush_steps: Vec<u8>,
 }
 
 #[cfg(target_os = "linux")]
@@ -707,11 +770,13 @@ impl LinuxX11Paste {
         let root = super::x11::root_window(&conn, screen_num)?;
         let standard_steps = linux_resolved_paste_chord_steps(&conn, PasteMode::Standard)?;
         let terminal_steps = linux_resolved_paste_chord_steps(&conn, PasteMode::Terminal)?;
+        let modifier_flush_steps = linux_modifier_flush_keycodes(&conn);
         Ok(Self {
             conn,
             root,
             standard_steps,
             terminal_steps,
+            modifier_flush_steps,
         })
     }
 
@@ -725,7 +790,7 @@ impl LinuxX11Paste {
             conn: &self.conn,
             root: self.root,
         };
-        send_x11_key_steps(&mut sink, steps)
+        send_x11_key_steps(&mut sink, steps, &self.modifier_flush_steps)
     }
 }
 
@@ -776,6 +841,30 @@ fn linux_resolved_paste_chord_steps(
             })
         })
         .collect()
+}
+
+#[cfg(target_os = "linux")]
+fn linux_modifier_flush_keycodes(conn: &RustConnection) -> Vec<u8> {
+    [
+        super::x11::CONTROL_L_KEYSYM,
+        super::x11::CONTROL_R_KEYSYM,
+        super::x11::SHIFT_L_KEYSYM,
+        super::x11::SHIFT_R_KEYSYM,
+        super::x11::ALT_L_KEYSYM,
+        super::x11::ALT_R_KEYSYM,
+        super::x11::META_L_KEYSYM,
+        super::x11::META_R_KEYSYM,
+        super::x11::SUPER_L_KEYSYM,
+        super::x11::SUPER_R_KEYSYM,
+    ]
+    .into_iter()
+    .filter_map(|keysym| super::x11::keycode_for_keysym(conn, keysym).ok())
+    .fold(Vec::new(), |mut keycodes, keycode| {
+        if !keycodes.contains(&keycode) {
+            keycodes.push(keycode);
+        }
+        keycodes
+    })
 }
 
 #[cfg(target_os = "linux")]
@@ -840,11 +929,16 @@ impl X11KeySink for X11ConnectionKeySink<'_> {
 }
 
 #[cfg(target_os = "linux")]
-fn send_x11_key_steps<S: X11KeySink>(sink: &mut S, steps: &[ResolvedX11KeyStep]) -> Result<()> {
+fn send_x11_key_steps<S: X11KeySink>(
+    sink: &mut S,
+    steps: &[ResolvedX11KeyStep],
+    modifier_flush_keycodes: &[u8],
+) -> Result<()> {
     let mut pressed = Vec::new();
     for step in steps {
         if let Err(err) = sink.key(step.keycode, step.press) {
-            let cleanup = release_pressed_x11_keys(sink, &mut pressed);
+            let cleanup =
+                release_pressed_and_flush_modifiers(sink, &mut pressed, modifier_flush_keycodes);
             return combine_primary_cleanup_error(
                 err.context("could not send XTest paste chord"),
                 cleanup,
@@ -859,11 +953,30 @@ fn send_x11_key_steps<S: X11KeySink>(sink: &mut S, steps: &[ResolvedX11KeyStep])
     }
 
     if let Err(err) = sink.flush() {
-        let cleanup = release_pressed_x11_keys(sink, &mut pressed);
+        let cleanup =
+            release_pressed_and_flush_modifiers(sink, &mut pressed, modifier_flush_keycodes);
         return combine_primary_cleanup_error(err, cleanup);
     }
 
-    Ok(())
+    flush_x11_modifiers(sink, modifier_flush_keycodes)
+}
+
+#[cfg(target_os = "linux")]
+fn release_pressed_and_flush_modifiers<S: X11KeySink>(
+    sink: &mut S,
+    pressed: &mut Vec<u8>,
+    modifier_flush_keycodes: &[u8],
+) -> Result<()> {
+    let release_result = release_pressed_x11_keys(sink, pressed);
+    let flush_result = flush_x11_modifiers(sink, modifier_flush_keycodes);
+    match (release_result, flush_result) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(err), Ok(())) => Err(err),
+        (Ok(()), Err(err)) => Err(err),
+        (Err(release_err), Err(flush_err)) => Err(anyhow::anyhow!(
+            "{release_err:#}; modifier flush also failed: {flush_err:#}"
+        )),
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -879,6 +992,23 @@ fn release_pressed_x11_keys<S: X11KeySink>(sink: &mut S, pressed: &mut Vec<u8>) 
         cleanup_error = sink.flush().err();
     }
 
+    match cleanup_error {
+        Some(err) => Err(err),
+        None => Ok(()),
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn flush_x11_modifiers<S: X11KeySink>(sink: &mut S, keycodes: &[u8]) -> Result<()> {
+    let mut cleanup_error = None;
+    for keycode in keycodes {
+        if let Err(err) = sink.key(*keycode, false) {
+            cleanup_error.get_or_insert_with(|| err.context("could not flush XTest modifier key"));
+        }
+    }
+    if cleanup_error.is_none() {
+        cleanup_error = sink.flush().err();
+    }
     match cleanup_error {
         Some(err) => Err(err),
         None => Ok(()),

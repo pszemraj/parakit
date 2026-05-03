@@ -162,13 +162,21 @@ fn xtest_cleanup_releases_pressed_keys_after_primary_error() {
         fail_on: Some((3, true)),
         ..MockX11KeySink::default()
     };
-    let err = send_x11_key_steps(&mut sink, &three_pressed_key_steps())
+    let err = send_x11_key_steps(&mut sink, &three_pressed_key_steps(), &[9, 8])
         .expect_err("primary failure should be reported");
 
     assert!(format!("{err:#}").contains("primary failure"));
     assert_eq!(
         sink.events,
-        vec![(1, true), (2, true), (3, true), (2, false), (1, false)]
+        vec![
+            (1, true),
+            (2, true),
+            (3, true),
+            (2, false),
+            (1, false),
+            (9, false),
+            (8, false)
+        ]
     );
 }
 
@@ -180,12 +188,61 @@ fn xtest_cleanup_reports_primary_and_cleanup_errors() {
         fail_cleanup_on: Some(2),
         ..MockX11KeySink::default()
     };
-    let err = send_x11_key_steps(&mut sink, &three_pressed_key_steps())
+    let err = send_x11_key_steps(&mut sink, &three_pressed_key_steps(), &[9, 8])
         .expect_err("primary and cleanup failures should be reported");
     let message = format!("{err:#}");
     assert!(message.contains("primary failure"));
     assert!(message.contains("cleanup while releasing pressed XTest keys failed"));
     assert!(message.contains("cleanup failure"));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn xtest_success_flushes_modifiers_after_chord() {
+    let mut sink = MockX11KeySink::default();
+    let steps = [
+        ResolvedX11KeyStep {
+            keycode: 1,
+            press: true,
+        },
+        ResolvedX11KeyStep {
+            keycode: 2,
+            press: true,
+        },
+        ResolvedX11KeyStep {
+            keycode: 3,
+            press: true,
+        },
+        ResolvedX11KeyStep {
+            keycode: 3,
+            press: false,
+        },
+        ResolvedX11KeyStep {
+            keycode: 2,
+            press: false,
+        },
+        ResolvedX11KeyStep {
+            keycode: 1,
+            press: false,
+        },
+    ];
+
+    send_x11_key_steps(&mut sink, &steps, &[1, 2, 9]).expect("paste chord should succeed");
+
+    assert_eq!(
+        sink.events,
+        vec![
+            (1, true),
+            (2, true),
+            (3, true),
+            (3, false),
+            (2, false),
+            (1, false),
+            (1, false),
+            (2, false),
+            (9, false)
+        ]
+    );
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -302,33 +359,45 @@ struct ClipboardCase {
 fn clipboard_swap_cases_are_stable() {
     let cases = [
         ClipboardCase {
-            name: "failed paste leaves transcript available as clipboard fallback",
+            name: "failed paste restores previous clipboard by default",
             initial: Some("old clipboard"),
             transcript: "dictated text",
             guard_allows: true,
             paste_error: Some("paste failed"),
             fail_next_set: false,
             fail_on_set: None,
-            expected_text: Some("dictated text"),
-            expected_events: &["read", "set:dictated text", "guard", "paste"],
+            expected_text: Some("old clipboard"),
+            expected_events: &[
+                "read",
+                "set:dictated text",
+                "guard",
+                "paste",
+                "set:old clipboard",
+            ],
             expected_outcome: None,
             error_contains: Some("paste failed"),
         },
         ClipboardCase {
-            name: "successful paste leaves transcript on clipboard",
+            name: "successful paste restores previous clipboard",
             initial: Some("old clipboard"),
             transcript: "dictated text",
             guard_allows: true,
             paste_error: None,
             fail_next_set: false,
             fail_on_set: None,
-            expected_text: Some("dictated text"),
-            expected_events: &["read", "set:dictated text", "guard", "paste"],
+            expected_text: Some("old clipboard"),
+            expected_events: &[
+                "read",
+                "set:dictated text",
+                "guard",
+                "paste",
+                "set:old clipboard",
+            ],
             expected_outcome: Some(PasteOutcome::Pasted),
             error_contains: None,
         },
         ClipboardCase {
-            name: "same clipboard text is not rewritten after paste",
+            name: "same clipboard text remains available after paste",
             initial: Some("dictated text"),
             transcript: "dictated text",
             guard_allows: true,
@@ -336,21 +405,27 @@ fn clipboard_swap_cases_are_stable() {
             fail_next_set: false,
             fail_on_set: None,
             expected_text: Some("dictated text"),
-            expected_events: &["read", "set:dictated text", "guard", "paste"],
+            expected_events: &[
+                "read",
+                "set:dictated text",
+                "guard",
+                "paste",
+                "set:dictated text",
+            ],
             expected_outcome: Some(PasteOutcome::Pasted),
             error_contains: None,
         },
         ClipboardCase {
-            name: "guard blocks paste and leaves transcript on clipboard",
+            name: "guard blocks paste and restores previous clipboard",
             initial: Some("old clipboard"),
             transcript: "dictated text",
             guard_allows: false,
             paste_error: None,
             fail_next_set: false,
             fail_on_set: None,
-            expected_text: Some("dictated text"),
-            expected_events: &["read", "set:dictated text", "guard"],
-            expected_outcome: Some(PasteOutcome::CopiedOnly),
+            expected_text: Some("old clipboard"),
+            expected_events: &["read", "set:dictated text", "guard", "set:old clipboard"],
+            expected_outcome: Some(PasteOutcome::Blocked),
             error_contains: None,
         },
         ClipboardCase {
@@ -405,6 +480,8 @@ fn clipboard_swap_cases_are_stable() {
                 }
             },
             Duration::ZERO,
+            Duration::ZERO,
+            ClipboardPolicy::RestorePrevious,
             || {
                 events.borrow_mut().push("guard".to_string());
                 Ok(case.guard_allows)
@@ -429,6 +506,40 @@ fn clipboard_swap_cases_are_stable() {
             case.expected_events,
             "{}",
             case.name
+        );
+    }
+}
+
+#[test]
+fn clipboard_keep_transcript_policy_leaves_text_after_paste_and_guard_block() {
+    for guard_allows in [true, false] {
+        let mut clipboard = MockClipboard::new("old clipboard");
+        let events = clipboard.events();
+        let result = paste_with_clipboard_swap_guarded(
+            &mut clipboard,
+            "dictated text",
+            || {
+                events.borrow_mut().push("paste".to_string());
+                Ok(())
+            },
+            Duration::ZERO,
+            Duration::ZERO,
+            ClipboardPolicy::KeepTranscript,
+            || {
+                events.borrow_mut().push("guard".to_string());
+                Ok(guard_allows)
+            },
+        )
+        .expect("clipboard keep policy should not fail");
+
+        assert_eq!(clipboard.text.as_deref(), Some("dictated text"));
+        assert_eq!(
+            result,
+            if guard_allows {
+                PasteOutcome::Pasted
+            } else {
+                PasteOutcome::CopiedOnly
+            }
         );
     }
 }

@@ -148,9 +148,10 @@ impl Drop for IpcServer {
 pub(crate) fn spawn_server(
     state: Arc<SharedState>,
     paste_mode: PasteMode,
+    keep_transcript_clipboard: bool,
     log: Arc<Logger>,
 ) -> Result<IpcServer> {
-    spawn_server_impl(state, paste_mode, log)
+    spawn_server_impl(state, paste_mode, keep_transcript_clipboard, log)
 }
 
 /// Run one IPC client command and print a concise response.
@@ -197,6 +198,7 @@ pub(crate) fn run_client(command: IpcCommand, quiet: bool) -> Result<()> {
 fn spawn_server_impl(
     state: Arc<SharedState>,
     paste_mode: PasteMode,
+    keep_transcript_clipboard: bool,
     log: Arc<Logger>,
 ) -> Result<IpcServer> {
     use std::io::ErrorKind;
@@ -227,7 +229,15 @@ fn spawn_server_impl(
                         let log = Arc::clone(&log);
                         let _ = thread::Builder::new()
                             .name("parakit-ipc-client".into())
-                            .spawn(move || handle_client(stream, &state, paste_mode, &log));
+                            .spawn(move || {
+                                handle_client(
+                                    stream,
+                                    &state,
+                                    paste_mode,
+                                    keep_transcript_clipboard,
+                                    &log,
+                                )
+                            });
                     }
                     Err(err) => log.warn(format!("control socket failed: {err}")),
                 }
@@ -245,6 +255,7 @@ fn spawn_server_impl(
 fn spawn_server_impl(
     _state: Arc<SharedState>,
     _paste_mode: PasteMode,
+    _keep_transcript_clipboard: bool,
     _log: Arc<Logger>,
 ) -> Result<IpcServer> {
     bail!("local daemon IPC is not implemented on this platform")
@@ -255,12 +266,19 @@ fn handle_client(
     mut stream: std::os::unix::net::UnixStream,
     state: &Arc<SharedState>,
     paste_mode: PasteMode,
+    keep_transcript_clipboard: bool,
     log: &Logger,
 ) {
     let _ = stream.set_read_timeout(Some(IPC_CLIENT_TIMEOUT));
     let _ = stream.set_write_timeout(Some(IPC_CLIENT_TIMEOUT));
     let outcome = match read_command(&stream).and_then(|command| {
-        handle_command(command, Arc::clone(state), paste_mode).map_err(|err| IpcResponse::Err {
+        handle_command(
+            command,
+            Arc::clone(state),
+            paste_mode,
+            keep_transcript_clipboard,
+        )
+        .map_err(|err| IpcResponse::Err {
             message: format!("{err:#}"),
         })
     }) {
@@ -349,6 +367,7 @@ fn handle_command(
     command: IpcCommand,
     state: Arc<SharedState>,
     paste_mode: PasteMode,
+    keep_transcript_clipboard: bool,
 ) -> Result<CommandOutcome> {
     match command {
         IpcCommand::Status => Ok(CommandOutcome {
@@ -365,12 +384,14 @@ fn handle_command(
             let text = state
                 .last_transcript()
                 .context("no transcript has been captured in this daemon session")?;
-            let result = state.with_insertion_lock(|| paste_text(&text, paste_mode))?;
+            let result = state
+                .with_insertion_lock(|| paste_text(&text, paste_mode, keep_transcript_clipboard))?;
             Ok(CommandOutcome {
                 response: IpcResponse::Ok {
                     message: match result {
                         PasteOutcome::Pasted => "pasted last transcript",
                         PasteOutcome::CopiedOnly => "copied last transcript",
+                        PasteOutcome::Blocked => "paste blocked",
                     }
                     .to_string(),
                 },
@@ -378,12 +399,14 @@ fn handle_command(
             })
         }
         IpcCommand::TestPaste { text } => {
-            let result = state.with_insertion_lock(|| paste_text(&text, paste_mode))?;
+            let result = state
+                .with_insertion_lock(|| paste_text(&text, paste_mode, keep_transcript_clipboard))?;
             Ok(CommandOutcome {
                 response: IpcResponse::Ok {
                     message: match result {
                         PasteOutcome::Pasted => "test paste sent",
                         PasteOutcome::CopiedOnly => "test text copied",
+                        PasteOutcome::Blocked => "test paste blocked",
                     }
                     .to_string(),
                 },
@@ -393,7 +416,11 @@ fn handle_command(
     }
 }
 
-fn paste_text(text: &str, paste_mode: PasteMode) -> Result<PasteOutcome> {
+fn paste_text(
+    text: &str,
+    paste_mode: PasteMode,
+    keep_transcript_clipboard: bool,
+) -> Result<PasteOutcome> {
     let mut injector = Injector::new().context("could not initialize insertion backend")?;
     let text = match sanitize_for_paste(text, paste_mode) {
         PastePlan::Paste(text) => text,
@@ -401,8 +428,11 @@ fn paste_text(text: &str, paste_mode: PasteMode) -> Result<PasteOutcome> {
             if paste_mode == PasteMode::Direct {
                 anyhow::bail!("direct insertion blocked by sanitizer");
             }
-            injector.copy_text(&text)?;
-            return Ok(PasteOutcome::CopiedOnly);
+            if keep_transcript_clipboard {
+                injector.copy_text(&text)?;
+                return Ok(PasteOutcome::CopiedOnly);
+            }
+            return Ok(PasteOutcome::Blocked);
         }
         PastePlan::Skip { reason } => anyhow::bail!("paste text skipped by sanitizer: {reason}"),
     };
@@ -413,15 +443,24 @@ fn paste_text(text: &str, paste_mode: PasteMode) -> Result<PasteOutcome> {
         .prepare_for_mode(paste_mode)
         .context("could not prepare insertion backend")?;
     let outcome = injector
-        .paste_text_guarded(&text, paste_mode, || match focus.as_ref() {
-            Some(snapshot) => {
-                if !snapshot.matches_current()? {
-                    return Ok(false);
+        .paste_text_guarded(
+            &text,
+            paste_mode,
+            if keep_transcript_clipboard {
+                super::inject::ClipboardPolicy::KeepTranscript
+            } else {
+                super::inject::ClipboardPolicy::RestorePrevious
+            },
+            || match focus.as_ref() {
+                Some(snapshot) => {
+                    if !snapshot.matches_current()? {
+                        return Ok(false);
+                    }
+                    Ok(true)
                 }
-                Ok(true)
-            }
-            None => Ok(false),
-        })
+                None => Ok(false),
+            },
+        )
         .context("could not send paste command")?;
     Ok(outcome)
 }
@@ -526,7 +565,7 @@ mod tests {
         let started = Instant::now();
         let handler = thread::spawn(move || {
             let log = Logger::new(LogLevel::Quiet);
-            handle_client(server, &state, PasteMode::Terminal, &log);
+            handle_client(server, &state, PasteMode::Terminal, false, &log);
         });
         handler.join().expect("handler should return after timeout");
         assert!(started.elapsed() < Duration::from_secs(2));

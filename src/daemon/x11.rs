@@ -13,8 +13,22 @@ pub(crate) const CONTROL_L_KEYSYM: u32 = 0xffe3;
 pub(crate) const CONTROL_R_KEYSYM: u32 = 0xffe4;
 /// X11 keysym for left Shift.
 pub(crate) const SHIFT_L_KEYSYM: u32 = 0xffe1;
+/// X11 keysym for right Shift.
+pub(crate) const SHIFT_R_KEYSYM: u32 = 0xffe2;
 /// X11 keysym for lowercase `v`.
 pub(crate) const V_KEYSYM: u32 = b'v' as u32;
+/// X11 keysym for left Alt.
+pub(crate) const ALT_L_KEYSYM: u32 = 0xffe9;
+/// X11 keysym for right Alt.
+pub(crate) const ALT_R_KEYSYM: u32 = 0xffea;
+/// X11 keysym for left Meta.
+pub(crate) const META_L_KEYSYM: u32 = 0xffe7;
+/// X11 keysym for right Meta.
+pub(crate) const META_R_KEYSYM: u32 = 0xffe8;
+/// X11 keysym for left Super.
+pub(crate) const SUPER_L_KEYSYM: u32 = 0xffeb;
+/// X11 keysym for right Super.
+pub(crate) const SUPER_R_KEYSYM: u32 = 0xffec;
 
 /// Return the requested X11 screen.
 ///

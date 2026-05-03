@@ -17,7 +17,7 @@ pub(crate) mod inject;
 pub(crate) mod ipc;
 /// Terminal-aware daemon logging.
 pub(crate) mod logging;
-/// Desktop notifications for copy-only and device fallbacks.
+/// Desktop notifications for optional clipboard and device fallbacks.
 pub(crate) mod notifications;
 /// Runtime checks for desktop input permissions.
 pub(crate) mod preflight;

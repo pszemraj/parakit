@@ -23,7 +23,7 @@ Idle
 Recording
   Ctrl+Space up
 Transcribing
-  paste, copy-only fallback, block, or skip
+  paste, optional clipboard fallback, block, or skip
 Idle
 ```
 
@@ -53,7 +53,7 @@ Cross-thread communication uses atomics, mutex-protected buffers, and crossbeam 
 | `src/daemon/audio_pactl.rs` | Linux `pactl` parsing for startup/reopen microphone display details. |
 | `src/daemon/worker.rs` | ASR worker, paste sanitizer, focus guard, clipboard fallback, and insertion circuit breaker. |
 | `src/daemon/ipc.rs` | Local control socket for `status`, `stop`, `paste-last`, and `test-paste`. |
-| `src/daemon/notifications.rs` | Desktop notifications for copy-only, microphone, and insertion fallback events. |
+| `src/daemon/notifications.rs` | Desktop notifications for optional clipboard fallback, microphone, and insertion fallback events. |
 | `src/fetch.rs` | Hosted [Q8_0 GGUF](https://huggingface.co/pszemraj/parakeet-tdt-0.6b-v3-gguf) download, source rebuilds, checksum verification. |
 | `src/model.rs` | Model names, hosted GGUF naming, cache paths, hosted URLs, and checksum constants. |
 | `src/gguf.rs` | Minimal GGUF dtype reader for startup reporting. |

@@ -28,7 +28,7 @@ impl Notifier {
     ///
     /// # Arguments
     ///
-    /// * `reason` - Short user-facing reason for copy-only fallback.
+    /// * `reason` - Short user-facing reason for leaving transcript text on the clipboard.
     pub(crate) fn transcript_copied(&self, reason: impl AsRef<str>) {
         self.show("Transcript copied", reason.as_ref());
     }
@@ -46,7 +46,7 @@ impl Notifier {
     pub(crate) fn paste_disabled_for_session(&self) {
         self.show(
             "Paste disabled",
-            "Repeated insertion failures switched this session to clipboard-only mode.",
+            "Repeated insertion failures disabled automatic paste for this session.",
         );
     }
 

@@ -85,6 +85,10 @@ struct Cli {
     #[arg(long, value_enum, default_value_t = PasteMode::Terminal)]
     paste_mode: PasteMode,
 
+    /// Leave dictated text on the clipboard after paste instead of restoring previous text.
+    #[arg(long)]
+    keep_transcript_clipboard: bool,
+
     /// Disable the audio cues (start / success / error tones).
     #[arg(long)]
     no_sounds: bool,
@@ -322,9 +326,13 @@ fn run() -> Result<()> {
     log.verbose("parakit: insertion preflight passed");
     let ipc_state = Arc::new(daemon::ipc::SharedState::new());
     #[cfg(unix)]
-    let _ipc_server =
-        daemon::ipc::spawn_server(Arc::clone(&ipc_state), cli.paste_mode, Arc::clone(&log))
-            .context("start daemon control socket")?;
+    let _ipc_server = daemon::ipc::spawn_server(
+        Arc::clone(&ipc_state),
+        cli.paste_mode,
+        cli.keep_transcript_clipboard,
+        Arc::clone(&log),
+    )
+    .context("start daemon control socket")?;
     #[cfg(not(unix))]
     log.verbose("parakit: local control socket unavailable on this platform");
 
@@ -378,7 +386,15 @@ fn run() -> Result<()> {
             Some(dir) => format!("{:?} to {}", cli.log_format, dir.display()),
             None => "off".to_string(),
         },
-        insertion: format!("batch paste ({})", cli.paste_mode.label()),
+        insertion: format!(
+            "batch paste ({}, {})",
+            cli.paste_mode.label(),
+            if cli.keep_transcript_clipboard {
+                "keep transcript clipboard"
+            } else {
+                "restore clipboard"
+            }
+        ),
         threads: engine.threads(),
         backend: engine.backend().to_string(),
     });
@@ -396,6 +412,7 @@ fn run() -> Result<()> {
         notifier: notifier.clone(),
         state: Arc::clone(&ipc_state),
         paste_mode: cli.paste_mode,
+        keep_transcript_clipboard: cli.keep_transcript_clipboard,
         insert_transcripts: true,
         rx,
     });
@@ -470,6 +487,7 @@ fn run_ptt_audio_simulation(cli: &Cli, log: Arc<Logger>, audio_path: &Path) -> R
         notifier: Notifier::new(Arc::new(Logger::new(LogLevel::Quiet))),
         state: Arc::new(daemon::ipc::SharedState::new()),
         paste_mode: cli.paste_mode,
+        keep_transcript_clipboard: cli.keep_transcript_clipboard,
         insert_transcripts: false,
         rx,
     });
