@@ -56,6 +56,7 @@ pub(crate) enum IpcResponse {
 #[derive(Default)]
 pub(crate) struct SharedState {
     inner: Mutex<StateSnapshot>,
+    insertion: Mutex<()>,
 }
 
 #[derive(Default)]
@@ -76,6 +77,7 @@ impl SharedState {
                 phase: "starting".to_string(),
                 last_transcript: None,
             }),
+            insertion: Mutex::new(()),
         }
     }
 
@@ -99,6 +101,20 @@ impl SharedState {
 
     fn last_transcript(&self) -> Option<String> {
         self.inner.lock().last_transcript.clone()
+    }
+
+    /// Run an insertion transaction while excluding worker and IPC paste paths.
+    ///
+    /// Clipboard staging plus a synthetic paste chord must be serialized
+    /// process-wide. Otherwise `paste-last` or `test-paste` can race the worker
+    /// clipboard transaction and paste the wrong text.
+    ///
+    /// # Returns
+    ///
+    /// The closure result.
+    pub(crate) fn with_insertion_lock<R>(&self, f: impl FnOnce() -> R) -> R {
+        let _guard = self.insertion.lock();
+        f()
     }
 }
 
@@ -349,7 +365,7 @@ fn handle_command(
             let text = state
                 .last_transcript()
                 .context("no transcript has been captured in this daemon session")?;
-            let result = paste_text(&text, paste_mode)?;
+            let result = state.with_insertion_lock(|| paste_text(&text, paste_mode))?;
             Ok(CommandOutcome {
                 response: IpcResponse::Ok {
                     message: match result {
@@ -362,7 +378,7 @@ fn handle_command(
             })
         }
         IpcCommand::TestPaste { text } => {
-            let result = paste_text(&text, paste_mode)?;
+            let result = state.with_insertion_lock(|| paste_text(&text, paste_mode))?;
             Ok(CommandOutcome {
                 response: IpcResponse::Ok {
                     message: match result {
@@ -392,8 +408,9 @@ fn paste_text(text: &str, paste_mode: PasteMode) -> Result<PasteOutcome> {
     };
 
     let focus = FocusSnapshot::capture().ok();
+    let target = super::target::TargetSnapshot::capture(focus.as_ref());
 
-    match super::target::inspect_recording_target(focus.as_ref()) {
+    match super::target::inspect_recording_target(Some(&target)) {
         super::target::TargetDecision::Allow => {}
         super::target::TargetDecision::CopyOnly(_) => {
             if paste_mode == PasteMode::Direct {
@@ -416,7 +433,7 @@ fn paste_text(text: &str, paste_mode: PasteMode) -> Result<PasteOutcome> {
                 if !snapshot.matches_current()? {
                     return Ok(false);
                 }
-                match super::target::inspect_recording_target(focus.as_ref()) {
+                match super::target::inspect_recording_target(Some(&target)) {
                     super::target::TargetDecision::Allow => Ok(true),
                     super::target::TargetDecision::CopyOnly(_) => Ok(false),
                     super::target::TargetDecision::Block(reason) => {
