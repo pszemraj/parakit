@@ -76,7 +76,7 @@ struct Cli {
     #[arg(long, short = 'v', conflicts_with = "quiet")]
     verbose: bool,
 
-    /// CPU inference threads. Defaults to the OS available parallelism.
+    /// CPU inference threads. Defaults to a conservative detected count.
     #[arg(long, value_name = "N")]
     threads: Option<NonZeroUsize>,
 
