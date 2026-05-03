@@ -19,6 +19,7 @@ use super::sounds::Sounds;
 pub(crate) const WORKER_QUEUE_CAPACITY: usize = 2;
 
 const PASTE_FAILURE_CIRCUIT_BREAKER: usize = 3;
+const PASTE_FAILURE_RESET_AFTER: Duration = Duration::from_secs(60);
 const MAX_PASTE_CHARS: usize = 20_000;
 const TERMINAL_MAX_PASTE_CHARS: usize = 2_000;
 const SILENCE_PEAK_THRESHOLD: f32 = 0.001;
@@ -121,8 +122,7 @@ fn worker_loop(ctx: WorkerCtx) {
     } else {
         None
     };
-    let mut consecutive_paste_failures = 0_usize;
-    let mut copy_only_mode = false;
+    let mut paste_circuit = PasteCircuit::default();
     while let Ok(ev) = rx.recv() {
         match ev {
             WorkerEvent::RecordingStarted => {
@@ -176,6 +176,7 @@ fn worker_loop(ctx: WorkerCtx) {
                         }
                         let insert_started = Instant::now();
                         let cleaned = transcript.cleaned.clone();
+                        paste_circuit.maybe_reenable(Instant::now(), log.as_ref());
                         let insert_result = state.with_insertion_lock(|| {
                             let result = insert_text(
                                 &mut injector,
@@ -184,7 +185,7 @@ fn worker_loop(ctx: WorkerCtx) {
                                 keep_transcript_clipboard,
                                 focus_at_start.as_deref(),
                                 (log.as_ref(), &notifier),
-                                copy_only_mode,
+                                paste_circuit.copy_only_mode,
                             );
                             if insertion_result_remembers_transcript(&result) {
                                 state.set_last_transcript(cleaned);
@@ -194,7 +195,7 @@ fn worker_loop(ctx: WorkerCtx) {
                         match insert_result {
                             Ok(outcome) => {
                                 if outcome == InsertOutcome::Pasted {
-                                    consecutive_paste_failures = 0;
+                                    paste_circuit.record_success();
                                 }
                                 let insert_elapsed = insert_started.elapsed();
                                 log.verbose(format!(
@@ -212,13 +213,8 @@ fn worker_loop(ctx: WorkerCtx) {
                                 }
                             }
                             Err(e) => {
-                                consecutive_paste_failures =
-                                    consecutive_paste_failures.saturating_add(1);
-                                if consecutive_paste_failures >= PASTE_FAILURE_CIRCUIT_BREAKER
-                                    && !copy_only_mode
-                                {
-                                    copy_only_mode = true;
-                                    notifier.paste_disabled_for_session();
+                                if paste_circuit.record_failure(Instant::now()) {
+                                    notifier.paste_temporarily_disabled();
                                 }
                                 log.error(&format!("paste failed: {e:#}"));
                                 state.set_phase("idle");
@@ -239,6 +235,52 @@ fn worker_loop(ctx: WorkerCtx) {
                 }
             }
         }
+    }
+}
+
+#[derive(Default)]
+struct PasteCircuit {
+    consecutive_failures: usize,
+    last_failure: Option<Instant>,
+    copy_only_mode: bool,
+}
+
+impl PasteCircuit {
+    fn record_success(&mut self) {
+        self.consecutive_failures = 0;
+        self.last_failure = None;
+    }
+
+    fn record_failure(&mut self, now: Instant) -> bool {
+        if self.last_failure.is_some_and(|last_failure| {
+            now.saturating_duration_since(last_failure) >= PASTE_FAILURE_RESET_AFTER
+        }) {
+            self.consecutive_failures = 0;
+            self.copy_only_mode = false;
+        }
+        self.consecutive_failures = self.consecutive_failures.saturating_add(1);
+        self.last_failure = Some(now);
+        if self.consecutive_failures >= PASTE_FAILURE_CIRCUIT_BREAKER && !self.copy_only_mode {
+            self.copy_only_mode = true;
+            return true;
+        }
+        false
+    }
+
+    fn maybe_reenable(&mut self, now: Instant, log: &Logger) {
+        if !self.copy_only_mode {
+            return;
+        }
+        let Some(last_failure) = self.last_failure else {
+            return;
+        };
+        if now.saturating_duration_since(last_failure) < PASTE_FAILURE_RESET_AFTER {
+            return;
+        }
+        self.consecutive_failures = 0;
+        self.last_failure = None;
+        self.copy_only_mode = false;
+        log.line("parakit: paste cooldown elapsed; automatic paste re-enabled");
     }
 }
 
@@ -284,7 +326,7 @@ pub(crate) fn insert_text(
                 log.warn(
                     "direct insertion disabled after repeated failures; transcript was not copied",
                 );
-                notifier.paste_disabled_for_session();
+                notifier.paste_temporarily_disabled();
                 Ok(InsertOutcome::Blocked)
             } else {
                 copy_or_block_transcript(
@@ -292,7 +334,7 @@ pub(crate) fn insert_text(
                     &text,
                     keep_transcript_clipboard,
                     "paste-disabled clipboard copy failed",
-                    "Paste is disabled for this session after repeated failures.",
+                    "Paste is temporarily disabled after repeated failures.",
                     log,
                     notifier,
                 )
@@ -477,21 +519,27 @@ fn clipboard_policy(keep_transcript_clipboard: bool) -> ClipboardPolicy {
 
 fn focus_allows_insertion(focus: Option<&FocusSnapshot>, log: &Logger) -> bool {
     let Some(focus) = focus else {
-        log.warn("recording focus was unavailable; automatic paste skipped");
-        return false;
+        // The focus guard is best effort. Dropping a transcript because X11 had
+        // a transient focus-query failure is worse than a recoverable wrong paste.
+        log.verbose("recording focus was unavailable; pasting without focus guard");
+        return true;
     };
 
-    match focus.matches_current() {
+    focus_verification_allows_insertion(focus.matches_current(), log)
+}
+
+fn focus_verification_allows_insertion(result: Result<bool>, log: &Logger) -> bool {
+    match result {
         Ok(true) => true,
         Ok(false) => {
             log.warn("focus changed before insertion; automatic paste skipped");
             false
         }
         Err(err) => {
-            log.warn(format!(
-                "could not verify recording focus ({err:#}); automatic paste skipped"
+            log.verbose(format!(
+                "could not verify recording focus ({err:#}); pasting without focus guard"
             ));
-            false
+            true
         }
     }
 }
@@ -628,7 +676,72 @@ fn capture_should_skip(pcm: &[f32]) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use super::super::logging::LogLevel;
     use super::*;
+
+    #[test]
+    fn paste_circuit_reenables_after_cooldown() {
+        let log = Logger::new(LogLevel::Quiet);
+        let mut circuit = PasteCircuit::default();
+        let start = Instant::now();
+
+        assert!(!circuit.record_failure(start));
+        assert!(!circuit.record_failure(start + Duration::from_millis(1)));
+        let last_failure = start + Duration::from_millis(2);
+        assert!(circuit.record_failure(last_failure));
+        assert!(circuit.copy_only_mode);
+
+        circuit.maybe_reenable(
+            last_failure + PASTE_FAILURE_RESET_AFTER - Duration::from_millis(1),
+            &log,
+        );
+        assert!(circuit.copy_only_mode);
+
+        circuit.maybe_reenable(last_failure + PASTE_FAILURE_RESET_AFTER, &log);
+        assert!(!circuit.copy_only_mode);
+        assert_eq!(circuit.consecutive_failures, 0);
+        assert!(circuit.last_failure.is_none());
+    }
+
+    #[test]
+    fn paste_circuit_success_clears_failures() {
+        let mut circuit = PasteCircuit::default();
+        circuit.record_failure(Instant::now());
+
+        circuit.record_success();
+
+        assert!(!circuit.copy_only_mode);
+        assert_eq!(circuit.consecutive_failures, 0);
+        assert!(circuit.last_failure.is_none());
+    }
+
+    #[test]
+    fn paste_circuit_expires_stale_partial_failures() {
+        let mut circuit = PasteCircuit::default();
+        let start = Instant::now();
+
+        assert!(!circuit.record_failure(start));
+        assert!(!circuit.record_failure(start + Duration::from_millis(1)));
+        assert!(
+            !circuit.record_failure(start + PASTE_FAILURE_RESET_AFTER + Duration::from_millis(1))
+        );
+
+        assert!(!circuit.copy_only_mode);
+        assert_eq!(circuit.consecutive_failures, 1);
+    }
+
+    #[test]
+    fn unavailable_or_unverified_focus_allows_insertion() {
+        let log = Logger::new(LogLevel::Quiet);
+
+        assert!(focus_allows_insertion(None, &log));
+        assert!(focus_verification_allows_insertion(Ok(true), &log));
+        assert!(!focus_verification_allows_insertion(Ok(false), &log));
+        assert!(focus_verification_allows_insertion(
+            Err(anyhow::anyhow!("temporary X11 failure")),
+            &log
+        ));
+    }
 
     #[test]
     fn paste_failures_use_clipboard_fallback_only_when_safe() {

@@ -70,7 +70,7 @@ pub(crate) enum PasteOutcome {
     Pasted,
     /// The transcript was left on the clipboard and no synthetic input was sent.
     CopiedOnly,
-    /// No paste chord was sent and the previous clipboard was restored or cleared.
+    /// No paste chord was sent and clipboard policy was applied.
     Blocked,
 }
 
@@ -275,10 +275,6 @@ pub(crate) struct FocusSnapshot {
     input_focus: Option<u32>,
     #[cfg(target_os = "linux")]
     active_window: Option<u32>,
-    #[cfg(target_os = "linux")]
-    root: u32,
-    #[cfg(target_os = "linux")]
-    conn: RustConnection,
 }
 
 impl FocusSnapshot {
@@ -309,8 +305,6 @@ impl FocusSnapshot {
             Ok(Self {
                 input_focus,
                 active_window,
-                root,
-                conn,
             })
         }
 
@@ -332,9 +326,13 @@ impl FocusSnapshot {
     pub(crate) fn matches_current(&self) -> Result<bool> {
         #[cfg(target_os = "linux")]
         {
+            let (conn, screen_num) = RustConnection::connect(None)
+                .context("could not reconnect to X11 while checking recording focus")?;
+            let root = super::x11::root_window(&conn, screen_num)
+                .context("could not read X11 root window for focus check")?;
             if let Some(expected) = self.active_window {
-                if let Some(current) = super::x11::active_window(&self.conn, self.root)
-                    .context("could not query the X11 active window captured at recording start")?
+                if let Some(current) = super::x11::active_window(&conn, root)
+                    .context("could not query the current X11 active window")?
                 {
                     return Ok(current == expected);
                 }
@@ -345,9 +343,11 @@ impl FocusSnapshot {
                     "X11 active window is unavailable and no input focus fallback exists"
                 );
             };
-            Ok(linux_current_input_focus(&self.conn)
-                .context("could not query the X11 focus connection captured at recording start")?
-                == expected)
+            Ok(
+                linux_current_input_focus(&conn)
+                    .context("could not query the current X11 focus")?
+                    == expected,
+            )
         }
 
         #[cfg(not(target_os = "linux"))]
@@ -566,8 +566,10 @@ impl Injector {
     fn paste_clipboard(&mut self, mode: PasteMode) -> Result<()> {
         let enigo = self.keyboard()?;
         let mut sink = EnigoPasteShortcutSink { enigo };
-        send_paste_shortcut_with_cleanup(&mut sink, paste_modifiers(mode))
-            .context("could not send paste shortcut")
+        let result = send_paste_shortcut_with_cleanup(&mut sink, paste_modifiers(mode))
+            .context("could not send paste shortcut");
+        flush_paste_modifiers(&mut sink);
+        result
     }
 
     fn keyboard(&mut self) -> Result<&mut Enigo> {
@@ -650,6 +652,13 @@ fn send_paste_shortcut_with_cleanup<S: PasteShortcutSink>(
         (Err(err), Some(cleanup)) => Err(anyhow::anyhow!(
             "{err:#}; paste modifier cleanup also failed: {cleanup:#}"
         )),
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn flush_paste_modifiers<S: PasteShortcutSink>(sink: &mut S) {
+    for key in [Key::Control, Key::Shift, Key::Alt, Key::Meta] {
+        let _ = sink.key(key, Direction::Release);
     }
 }
 
@@ -784,9 +793,7 @@ fn restore_or_clear_clipboard<C: ClipboardStore>(
         ClipboardSnapshot::Image(image) => clipboard
             .set_image(image)
             .map_err(|err| anyhow::anyhow!("{CLIPBOARD_RESTORE_ERROR}: {err:#}")),
-        ClipboardSnapshot::Unsupported => clipboard.set_text(String::new()).map_err(|err| {
-            anyhow::anyhow!("could not clear blocked transcript from clipboard: {err:#}")
-        }),
+        ClipboardSnapshot::Unsupported => Ok(()),
     }
 }
 
@@ -913,6 +920,7 @@ struct LinuxX11Paste {
     root: u32,
     standard_steps: Vec<ResolvedX11KeyStep>,
     terminal_steps: Vec<ResolvedX11KeyStep>,
+    modifier_cleanup_keycodes: Vec<u8>,
 }
 
 #[cfg(target_os = "linux")]
@@ -923,11 +931,13 @@ impl LinuxX11Paste {
         let root = super::x11::root_window(&conn, screen_num)?;
         let standard_steps = linux_resolved_paste_chord_steps(&conn, PasteMode::Standard)?;
         let terminal_steps = linux_resolved_paste_chord_steps(&conn, PasteMode::Terminal)?;
+        let modifier_cleanup_keycodes = linux_resolved_modifier_cleanup_keycodes(&conn);
         Ok(Self {
             conn,
             root,
             standard_steps,
             terminal_steps,
+            modifier_cleanup_keycodes,
         })
     }
 
@@ -941,8 +951,30 @@ impl LinuxX11Paste {
             conn: &self.conn,
             root: self.root,
         };
-        send_x11_key_steps(&mut sink, steps)
+        send_x11_paste_chord_with_modifier_flush(&mut sink, steps, &self.modifier_cleanup_keycodes)
     }
+}
+
+#[cfg(target_os = "linux")]
+fn linux_modifier_cleanup_keysyms() -> &'static [u32] {
+    &[
+        super::x11::CONTROL_L_KEYSYM,
+        super::x11::CONTROL_R_KEYSYM,
+        super::x11::SHIFT_L_KEYSYM,
+        super::x11::SHIFT_R_KEYSYM,
+        super::x11::ALT_L_KEYSYM,
+        super::x11::ALT_R_KEYSYM,
+        super::x11::SUPER_L_KEYSYM,
+        super::x11::SUPER_R_KEYSYM,
+    ]
+}
+
+#[cfg(target_os = "linux")]
+fn linux_resolved_modifier_cleanup_keycodes(conn: &RustConnection) -> Vec<u8> {
+    linux_modifier_cleanup_keysyms()
+        .iter()
+        .filter_map(|keysym| super::x11::keycode_for_keysym(conn, *keysym).ok())
+        .collect()
 }
 
 #[cfg(target_os = "linux")]
@@ -1080,6 +1112,32 @@ fn send_x11_key_steps<S: X11KeySink>(sink: &mut S, steps: &[ResolvedX11KeyStep])
     }
 
     Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn send_x11_paste_chord_with_modifier_flush<S: X11KeySink>(
+    sink: &mut S,
+    steps: &[ResolvedX11KeyStep],
+    modifier_keycodes: &[u8],
+) -> Result<()> {
+    send_x11_key_steps(sink, steps)?;
+    // Best-effort blanket releases protect against focus changes during the
+    // paste chord that leave the X server believing a modifier is still held.
+    let _ = flush_x11_modifier_releases(sink, modifier_keycodes);
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn flush_x11_modifier_releases<S: X11KeySink>(
+    sink: &mut S,
+    modifier_keycodes: &[u8],
+) -> Result<()> {
+    for keycode in modifier_keycodes {
+        sink.key(*keycode, false)
+            .context("could not send XTest modifier cleanup release")?;
+    }
+    sink.flush()
+        .context("could not flush XTest modifier cleanup")
 }
 
 #[cfg(target_os = "linux")]

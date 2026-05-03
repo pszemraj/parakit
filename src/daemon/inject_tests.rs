@@ -262,6 +262,7 @@ struct MockX11KeySink {
     events: Vec<(u8, bool)>,
     fail_on: Option<(u8, bool)>,
     fail_cleanup_on: Option<u8>,
+    flushes: usize,
 }
 
 #[cfg(target_os = "linux")]
@@ -278,6 +279,7 @@ impl X11KeySink for MockX11KeySink {
     }
 
     fn flush(&mut self) -> Result<()> {
+        self.flushes += 1;
         Ok(())
     }
 }
@@ -377,6 +379,47 @@ fn xtest_success_releases_only_chord_keys() {
             (1, false)
         ]
     );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn xtest_paste_chord_success_flushes_all_cleanup_modifiers() {
+    let mut sink = MockX11KeySink::default();
+    let steps = [
+        ResolvedX11KeyStep {
+            keycode: 1,
+            press: true,
+        },
+        ResolvedX11KeyStep {
+            keycode: 2,
+            press: true,
+        },
+        ResolvedX11KeyStep {
+            keycode: 2,
+            press: false,
+        },
+        ResolvedX11KeyStep {
+            keycode: 1,
+            press: false,
+        },
+    ];
+
+    send_x11_paste_chord_with_modifier_flush(&mut sink, &steps, &[1, 3, 4])
+        .expect("paste chord should succeed");
+
+    assert_eq!(
+        sink.events,
+        vec![
+            (1, true),
+            (2, true),
+            (2, false),
+            (1, false),
+            (1, false),
+            (3, false),
+            (4, false)
+        ]
+    );
+    assert_eq!(sink.flushes, 2);
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -748,7 +791,7 @@ fn clipboard_restore_policy_preserves_supported_non_text_payloads() {
 }
 
 #[test]
-fn unsupported_previous_clipboard_is_cleared_when_restore_is_impossible() {
+fn unsupported_previous_clipboard_leaves_staged_transcript_when_restore_is_impossible() {
     let mut clipboard = MockClipboard::unsupported();
     let events = clipboard.events();
     let result = paste_with_clipboard_swap_guarded(
@@ -766,12 +809,12 @@ fn unsupported_previous_clipboard_is_cleared_when_restore_is_impossible() {
             Ok(false)
         },
     )
-    .expect("unsupported clipboard should clear staged transcript on guard block");
+    .expect("unsupported clipboard should leave staged transcript on guard block");
 
     assert_eq!(result, PasteOutcome::Blocked);
-    assert_eq!(clipboard.text(), Some(""));
+    assert_eq!(clipboard.text(), Some("dictated text"));
     assert_eq!(
         events.borrow().as_slice(),
-        ["read", "set:dictated text", "guard", "set:"]
+        ["read", "set:dictated text", "guard"]
     );
 }

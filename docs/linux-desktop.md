@@ -30,11 +30,11 @@ parakit doctor && parakit --quiet &
 disown
 ```
 
-If `doctor` reports that `Ctrl+Space` could not be registered, disable any desktop shortcut, input method, or keyboard remapper that already owns that chord and rerun `parakit doctor`.
+If `doctor` reports that `Ctrl+Space` could not be registered, disable any desktop shortcut, input method, or keyboard remapper that already owns that chord and rerun `parakit doctor`. Ubuntu/GNOME IBus commonly uses `Ctrl+Space` to switch input methods, so check IBus first when the registered backend is intermittent after login, suspend, or an input-method state change.
 
 ## Focus Guard
 
-On X11, parakit compares the active window captured at PTT-down with the active window at paste time. If focus changes, no paste chord is sent and supported previous clipboard contents are preserved or restored unless `--keep-transcript-clipboard` is set. Parakit does not inspect application internals with AT-SPI in the v0.1 daemon path; normal desktop apps, Electron apps, browsers, editors, and terminals are handled by clipboard staging plus one paste chord.
+On X11, parakit compares the active window captured at PTT-down with the active window at paste time. If focus clearly changes, no paste chord is sent and supported previous clipboard contents are preserved or restored unless `--keep-transcript-clipboard` is set. If X11 focus capture or recheck is unavailable, parakit pastes anyway so a transient focus-query failure does not silently drop dictation. Parakit does not inspect application internals with AT-SPI in the v0.1 daemon path; normal desktop apps, Electron apps, browsers, editors, and terminals are handled by clipboard staging plus one paste chord.
 
 ## Passive X11 Listen
 

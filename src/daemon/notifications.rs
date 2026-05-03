@@ -42,11 +42,11 @@ impl Notifier {
         self.show("Paste blocked", reason.as_ref());
     }
 
-    /// Notify that paste is disabled after repeated insertion failures.
-    pub(crate) fn paste_disabled_for_session(&self) {
+    /// Notify that paste is temporarily disabled after repeated insertion failures.
+    pub(crate) fn paste_temporarily_disabled(&self) {
         self.show(
             "Paste disabled",
-            "Repeated insertion failures disabled automatic paste for this session.",
+            "Repeated insertion failures temporarily disabled automatic paste.",
         );
     }
 
