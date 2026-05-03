@@ -22,9 +22,7 @@ use enigo::Direction;
 #[cfg(not(target_os = "linux"))]
 use enigo::Key;
 use enigo::{Enigo, Keyboard, Settings};
-use std::{borrow::Cow, path::PathBuf};
-#[cfg(target_os = "linux")]
-use std::{thread, time::Duration};
+use std::{borrow::Cow, path::PathBuf, thread, time::Duration};
 #[cfg(target_os = "linux")]
 use x11rb::connection::Connection as _;
 #[cfg(target_os = "linux")]

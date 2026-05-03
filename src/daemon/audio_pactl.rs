@@ -28,14 +28,7 @@ pub(crate) struct PactlSourceInfo {
 /// Parsed details for the default source, or `None` when `pactl` is missing or
 /// the output cannot be matched.
 pub(crate) fn pactl_default_source_info() -> Option<PactlSourceInfo> {
-    let default = pactl_output(&["get-default-source"])?;
-    if !default.status.success() {
-        return None;
-    }
-    let default_name = String::from_utf8_lossy(&default.stdout).trim().to_string();
-    if default_name.is_empty() {
-        return None;
-    }
+    let default_name = pactl_default_source_name()?;
 
     let sources = pactl_output(&["list", "sources"])?;
     if !sources.status.success() {
@@ -45,6 +38,24 @@ pub(crate) fn pactl_default_source_info() -> Option<PactlSourceInfo> {
     parse_pactl_sources(&sources)
         .into_iter()
         .find(|source| source.name == default_name)
+}
+
+/// Read the current default PulseAudio/PipeWire source name with `pactl`.
+///
+/// # Returns
+///
+/// The default source name, or `None` when `pactl` is missing, times out, or
+/// returns an empty value.
+pub(crate) fn pactl_default_source_name() -> Option<String> {
+    let default = pactl_output(&["get-default-source"])?;
+    if !default.status.success() {
+        return None;
+    }
+    let default_name = String::from_utf8_lossy(&default.stdout).trim().to_string();
+    if default_name.is_empty() {
+        return None;
+    }
+    Some(default_name)
 }
 
 fn pactl_output(args: &[&str]) -> Option<Output> {

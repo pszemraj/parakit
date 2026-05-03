@@ -24,7 +24,7 @@ use std::time::Duration;
 
 use super::{logging::Logger, notifications::Notifier};
 #[cfg(target_os = "linux")]
-use crate::daemon::audio_pactl::pactl_default_source_info;
+use crate::daemon::audio_pactl::{pactl_default_source_info, pactl_default_source_name};
 
 pub use parakit::constants::TARGET_RATE;
 
@@ -846,20 +846,45 @@ fn selected_mic_info(host: &cpal::Host) -> Result<MicInfo> {
 
 fn selected_mic_identity(host: &cpal::Host) -> Result<MicIdentity> {
     let selected = select_input_device(host)?;
-    // This runs from the idle device poll. Keep it raw and CPAL-only: enriched
-    // Linux info shells out to pactl and must stay on startup/reopen paths.
-    Ok(raw_mic_identity_from_selected(&selected))
+    Ok(polled_mic_identity_from_selected(&selected))
 }
 
 fn mic_snapshot_from_selected(selected: &SelectedInput) -> (MicInfo, MicIdentity) {
     let raw_identity = raw_mic_identity_from_selected(selected);
     let mut info = mic_info_from_identity(&raw_identity);
     enhance_mic_info(&mut info, selected.is_default);
-    (info, raw_identity)
+    if info.source_id.is_none() {
+        info.source_id = default_source_id_for_identity(selected);
+    }
+    let identity = source_aware_mic_identity(raw_identity, info.source_id.clone());
+    (info, identity)
 }
 
 fn raw_mic_identity_from_selected(selected: &SelectedInput) -> MicIdentity {
     mic_identity_from_config(&selected.name, &selected.config)
+}
+
+fn polled_mic_identity_from_selected(selected: &SelectedInput) -> MicIdentity {
+    let raw_identity = raw_mic_identity_from_selected(selected);
+    source_aware_mic_identity(raw_identity, default_source_id_for_identity(selected))
+}
+
+fn source_aware_mic_identity(mut identity: MicIdentity, source_id: Option<String>) -> MicIdentity {
+    identity.source_id = source_id;
+    identity
+}
+
+#[cfg(target_os = "linux")]
+fn default_source_id_for_identity(selected: &SelectedInput) -> Option<String> {
+    if !selected.is_default && selected.name != "default" {
+        return None;
+    }
+    pactl_default_source_name()
+}
+
+#[cfg(not(target_os = "linux"))]
+fn default_source_id_for_identity(_selected: &SelectedInput) -> Option<String> {
+    None
 }
 
 fn mic_identity_from_config(name: &str, config: &cpal::SupportedStreamConfig) -> MicIdentity {

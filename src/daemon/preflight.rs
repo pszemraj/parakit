@@ -61,7 +61,7 @@ pub fn print_doctor(
     } else {
         inject::preflight(paste_mode)
     };
-    let ok = !report.blocking && mic.is_ok() && insertion.is_ok();
+    let ok = doctor_ready(&report, &daemon_lock, &mic, &insertion);
 
     if quiet {
         return ok;
@@ -104,7 +104,7 @@ fn print_doctor_summary(
     print_status_line("hotkey", !report.blocking, &report.status);
     match daemon_lock {
         Ok(()) => print_status_line("daemon", true, "no existing daemon lock"),
-        Err(err) => print_status_line("daemon", true, &format!("already running ({err:#})")),
+        Err(err) => print_status_line("daemon", false, &format!("{err:#}")),
     }
     match mic {
         Ok(mic) => print_status_line("mic", true, &mic.summary()),
@@ -146,7 +146,7 @@ fn print_doctor_details(
     println!("{}", report.details.trim_end());
     match daemon_lock {
         Ok(()) => println!("  daemon lock:   OK"),
-        Err(err) => println!("  daemon lock:   held by running daemon ({err:#})"),
+        Err(err) => println!("  daemon lock:   FAIL ({err:#})"),
     }
     match mic {
         Ok(mic) => {
@@ -170,6 +170,15 @@ fn print_doctor_details(
     for line in build_info::diagnostic_lines() {
         println!("    {line}");
     }
+}
+
+fn doctor_ready(
+    report: &HotkeyReport,
+    daemon_lock: &Result<()>,
+    mic: &Result<super::audio::MicInfo>,
+    insertion: &Result<()>,
+) -> bool {
+    !report.blocking && daemon_lock.is_ok() && mic.is_ok() && insertion.is_ok()
 }
 
 /// Acquire the per-user daemon lock.
@@ -659,6 +668,7 @@ fn hotkey_report(_backend: HotkeyBackend) -> HotkeyReport {
 
 #[cfg(test)]
 mod tests {
+    use super::super::audio::MicInfo;
     use super::*;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -714,6 +724,31 @@ mod tests {
 
         assert!(!report.grab_likely_available());
         assert_eq!(report.status_label(), "no keyboard candidates");
+    }
+
+    #[test]
+    fn doctor_ready_requires_free_daemon_lock() {
+        let report = HotkeyReport {
+            blocking: false,
+            status: "ready".to_string(),
+            summary: String::new(),
+            details: String::new(),
+        };
+        let mic = Ok(MicInfo {
+            name: "Test Mic".to_string(),
+            input_rate: 16_000,
+            channels: 1,
+            sample_format: "F32".to_string(),
+            source_id: None,
+            resampling: false,
+        });
+        let insertion = Ok(());
+
+        let free_lock = Ok(());
+        assert!(doctor_ready(&report, &free_lock, &mic, &insertion));
+
+        let held_lock: Result<()> = Err(anyhow::anyhow!("already running"));
+        assert!(!doctor_ready(&report, &held_lock, &mic, &insertion));
     }
 
     #[test]

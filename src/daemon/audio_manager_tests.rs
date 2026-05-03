@@ -258,6 +258,30 @@ fn bluetooth_input_names_are_detected_but_not_virtual() {
 }
 
 #[test]
+fn source_aware_identity_detects_default_source_switch() {
+    let raw = MicIdentity {
+        name: "default".to_string(),
+        source_id: None,
+        input_rate: 48_000,
+        channels: 2,
+        sample_format: "F32".to_string(),
+    };
+
+    let first = source_aware_mic_identity(
+        raw.clone(),
+        Some("alsa_input.usb-First_Mic-00.mono-fallback".to_string()),
+    );
+    let second = source_aware_mic_identity(
+        raw,
+        Some("alsa_input.usb-Second_Mic-00.mono-fallback".to_string()),
+    );
+
+    assert_ne!(first, second);
+    assert_eq!(first.name, "default");
+    assert_eq!(first.input_rate, 48_000);
+}
+
+#[test]
 fn resampler_flushes_and_resets_tail_between_recordings() {
     let mut pipeline = CapturePipeline {
         resampler: make_resampler(48_000).expect("resampler"),
