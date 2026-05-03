@@ -50,7 +50,7 @@ rdev = { version = "0.5", features = ["unstable_grab"], optional = true }
 
 # Text insertion at cursor. Batch mode uses clipboard paste; direct mode uses
 # synthetic typing.
-arboard = { version = "3.4", default-features = false, optional = true }
+arboard = { version = "3.4", default-features = false, features = ["image-data"], optional = true }
 enigo = { version = "0.2", optional = true }
 
 # Audio cues (start/stop/error tones, generated programmatically)

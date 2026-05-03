@@ -15,13 +15,14 @@
 //!     be granted "Input Monitoring" + "Accessibility" permissions.
 
 use anyhow::{Context, Result};
-use arboard::Clipboard;
+use arboard::{Clipboard, ImageData};
 use clap::ValueEnum;
 #[cfg(not(target_os = "linux"))]
 use enigo::Direction;
 #[cfg(not(target_os = "linux"))]
 use enigo::Key;
 use enigo::{Enigo, Keyboard, Settings};
+use std::{borrow::Cow, path::PathBuf};
 #[cfg(target_os = "linux")]
 use std::{thread, time::Duration};
 #[cfg(target_os = "linux")]
@@ -36,7 +37,7 @@ use x11rb::rust_connection::RustConnection;
 mod inject_smoke;
 
 /// Error label used when paste succeeded but previous clipboard restore failed.
-pub(crate) const CLIPBOARD_RESTORE_ERROR: &str = "could not restore previous clipboard text";
+pub(crate) const CLIPBOARD_RESTORE_ERROR: &str = "could not restore previous clipboard contents";
 
 /// Paste shortcut style for batch transcript insertion.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
@@ -78,7 +79,7 @@ pub(crate) enum PasteOutcome {
 /// Clipboard retention policy after staging text for paste.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ClipboardPolicy {
-    /// Restore the previous text clipboard after paste or guarded cancellation.
+    /// Restore previous supported clipboard contents after paste or guarded cancellation.
     RestorePrevious,
     /// Leave the transcript on the clipboard after paste or guarded cancellation.
     KeepTranscript,
@@ -134,7 +135,7 @@ pub(crate) fn smoke_test(mode: PasteMode) -> Result<()> {
     platform_paste_smoke_test(mode)
 }
 
-trait TextClipboard {
+trait ClipboardStore {
     /// Return the current text clipboard contents.
     ///
     /// # Returns
@@ -155,15 +156,118 @@ trait TextClipboard {
     ///
     /// Returns an error if the clipboard cannot be written.
     fn set_text(&mut self, text: String) -> Result<()>;
+
+    /// Return current HTML clipboard contents.
+    ///
+    /// # Returns
+    ///
+    /// The current HTML clipboard value.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the clipboard does not expose HTML data.
+    fn get_html(&mut self) -> Result<String>;
+
+    /// Replace the clipboard with HTML and an optional plain-text alternative.
+    ///
+    /// # Arguments
+    ///
+    /// * `html` - HTML payload to restore.
+    /// * `alt_text` - Optional plain-text alternative for targets that prefer text.
+    ///
+    /// # Returns
+    ///
+    /// `Ok(())` when the clipboard accepted the HTML data.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the clipboard cannot be written.
+    fn set_html(&mut self, html: String, alt_text: Option<String>) -> Result<()>;
+
+    /// Return current file-list clipboard contents.
+    ///
+    /// # Returns
+    ///
+    /// The current list of copied file paths.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the clipboard does not expose file-list data.
+    fn get_file_list(&mut self) -> Result<Vec<PathBuf>>;
+
+    /// Replace the clipboard with a file-list payload.
+    ///
+    /// # Returns
+    ///
+    /// `Ok(())` when the clipboard accepted the file list.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the clipboard cannot be written.
+    fn set_file_list(&mut self, files: &[PathBuf]) -> Result<()>;
+
+    /// Return current image clipboard contents.
+    ///
+    /// # Returns
+    ///
+    /// The current image clipboard value.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the clipboard does not expose image data.
+    fn get_image(&mut self) -> Result<ImageData<'static>>;
+
+    /// Replace the clipboard with image data.
+    ///
+    /// # Returns
+    ///
+    /// `Ok(())` when the clipboard accepted the image.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the clipboard cannot be written.
+    fn set_image(&mut self, image: ImageData<'static>) -> Result<()>;
 }
 
-impl TextClipboard for Clipboard {
+impl ClipboardStore for Clipboard {
     fn get_text(&mut self) -> Result<String> {
         Clipboard::get_text(self).context("could not read system clipboard")
     }
 
     fn set_text(&mut self, text: String) -> Result<()> {
         Clipboard::set_text(self, text).context("could not write system clipboard")
+    }
+
+    fn get_html(&mut self) -> Result<String> {
+        self.get()
+            .html()
+            .context("could not read HTML clipboard contents")
+    }
+
+    fn set_html(&mut self, html: String, alt_text: Option<String>) -> Result<()> {
+        self.set()
+            .html(html, alt_text)
+            .context("could not write HTML clipboard contents")
+    }
+
+    fn get_file_list(&mut self) -> Result<Vec<PathBuf>> {
+        self.get()
+            .file_list()
+            .context("could not read file-list clipboard contents")
+    }
+
+    fn set_file_list(&mut self, files: &[PathBuf]) -> Result<()> {
+        self.set()
+            .file_list(files)
+            .context("could not write file-list clipboard contents")
+    }
+
+    fn get_image(&mut self) -> Result<ImageData<'static>> {
+        Clipboard::get_image(self).context("could not read image clipboard contents")
+    }
+
+    fn set_image(&mut self, image: ImageData<'static>) -> Result<()> {
+        Clipboard::set_image(self, image).context("could not write image clipboard contents")
     }
 }
 
@@ -343,9 +447,9 @@ impl Injector {
     /// Paste text, but re-run a caller-supplied safety check immediately before
     /// synthetic input is sent.
     ///
-    /// By default the previous text clipboard is restored after the paste
-    /// consume delay. Callers may opt into leaving the transcript on the
-    /// clipboard for workflows that prefer that behavior.
+    /// By default the previous supported clipboard payload is restored after
+    /// the paste consume delay. Callers may opt into leaving the transcript on
+    /// the clipboard for workflows that prefer that behavior.
     ///
     /// # Arguments
     ///
@@ -561,7 +665,7 @@ fn paste_with_clipboard_swap_guarded<C, P, G>(
     mut before_chord: G,
 ) -> Result<PasteOutcome>
 where
-    C: TextClipboard,
+    C: ClipboardStore,
     P: FnMut() -> Result<()>,
     G: FnMut() -> Result<bool>,
 {
@@ -569,7 +673,7 @@ where
         return Ok(PasteOutcome::Pasted);
     }
 
-    let previous = clipboard.get_text().ok();
+    let previous = ClipboardSnapshot::capture(clipboard);
     clipboard
         .set_text(text.to_owned())
         .context("could not copy transcript to clipboard")?;
@@ -606,9 +710,9 @@ where
     }
 }
 
-fn finish_blocked_clipboard<C: TextClipboard>(
+fn finish_blocked_clipboard<C: ClipboardStore>(
     clipboard: &mut C,
-    previous: Option<String>,
+    previous: ClipboardSnapshot,
     clipboard_policy: ClipboardPolicy,
 ) -> Result<PasteOutcome> {
     restore_or_clear_clipboard(clipboard, previous, clipboard_policy)?;
@@ -618,19 +722,71 @@ fn finish_blocked_clipboard<C: TextClipboard>(
     })
 }
 
-fn restore_or_clear_clipboard<C: TextClipboard>(
+enum ClipboardSnapshot {
+    Text(String),
+    Html {
+        html: String,
+        alt_text: Option<String>,
+    },
+    FileList(Vec<PathBuf>),
+    Image(ImageData<'static>),
+    Unsupported,
+}
+
+impl ClipboardSnapshot {
+    fn capture<C: ClipboardStore>(clipboard: &mut C) -> Self {
+        if let Ok(files) = clipboard.get_file_list() {
+            return Self::FileList(files);
+        }
+
+        if let Ok(html) = clipboard.get_html() {
+            return Self::Html {
+                html,
+                alt_text: clipboard.get_text().ok(),
+            };
+        }
+
+        if let Ok(image) = clipboard.get_image() {
+            return Self::Image(owned_image(image));
+        }
+
+        match clipboard.get_text().ok() {
+            Some(text) => Self::Text(text),
+            None => Self::Unsupported,
+        }
+    }
+}
+
+fn owned_image(image: ImageData<'_>) -> ImageData<'static> {
+    ImageData {
+        width: image.width,
+        height: image.height,
+        bytes: Cow::Owned(image.bytes.into_owned()),
+    }
+}
+
+fn restore_or_clear_clipboard<C: ClipboardStore>(
     clipboard: &mut C,
-    previous: Option<String>,
+    previous: ClipboardSnapshot,
     clipboard_policy: ClipboardPolicy,
 ) -> Result<()> {
     if clipboard_policy == ClipboardPolicy::KeepTranscript {
         return Ok(());
     }
     match previous {
-        Some(previous) => clipboard
+        ClipboardSnapshot::Text(previous) => clipboard
             .set_text(previous)
             .map_err(|err| anyhow::anyhow!("{CLIPBOARD_RESTORE_ERROR}: {err:#}")),
-        None => clipboard.set_text(String::new()).map_err(|err| {
+        ClipboardSnapshot::Html { html, alt_text } => clipboard
+            .set_html(html, alt_text)
+            .map_err(|err| anyhow::anyhow!("{CLIPBOARD_RESTORE_ERROR}: {err:#}")),
+        ClipboardSnapshot::FileList(files) => clipboard
+            .set_file_list(&files)
+            .map_err(|err| anyhow::anyhow!("{CLIPBOARD_RESTORE_ERROR}: {err:#}")),
+        ClipboardSnapshot::Image(image) => clipboard
+            .set_image(image)
+            .map_err(|err| anyhow::anyhow!("{CLIPBOARD_RESTORE_ERROR}: {err:#}")),
+        ClipboardSnapshot::Unsupported => clipboard.set_text(String::new()).map_err(|err| {
             anyhow::anyhow!("could not clear blocked transcript from clipboard: {err:#}")
         }),
     }

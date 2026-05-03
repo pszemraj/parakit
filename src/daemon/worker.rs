@@ -60,7 +60,7 @@ pub(crate) struct WorkerCtx {
     /// Paste chord mode.
     pub(crate) paste_mode: PasteMode,
     /// Leave transcript text on the clipboard after paste/fallback instead of
-    /// restoring previous clipboard text.
+    /// restoring previous supported clipboard contents.
     pub(crate) keep_transcript_clipboard: bool,
     /// Whether transcripts should be inserted after inference.
     pub(crate) insert_transcripts: bool,

@@ -85,7 +85,7 @@ struct Cli {
     #[arg(long, value_enum, default_value_t = PasteMode::Terminal)]
     paste_mode: PasteMode,
 
-    /// Leave dictated text on the clipboard after paste instead of restoring previous text.
+    /// Leave dictated text on the clipboard after paste instead of restoring previous clipboard contents.
     #[arg(long)]
     keep_transcript_clipboard: bool,
 
