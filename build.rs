@@ -55,14 +55,10 @@ fn main() {
     // 3. Locate the CrispASR source tree.
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
     let src_dir = locate_source(&manifest_dir);
-    for path in [
-        "CMakeLists.txt",
-        "src/parakeet.cpp",
-        "src/parakeet.h",
-        "src/core/fastconformer.h",
-    ] {
-        println!("cargo:rerun-if-changed={}", src_dir.join(path).display());
-    }
+    println!(
+        "cargo:rerun-if-changed={}/CMakeLists.txt",
+        src_dir.display()
+    );
 
     // 4. Run cmake. The `cmake` crate handles incremental builds, MSVC
     //    detection on Windows, generator selection, parallelism, and

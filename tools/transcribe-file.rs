@@ -30,7 +30,7 @@ struct Cli {
     #[arg(short = 'a', long)]
     audio: PathBuf,
 
-    /// CPU inference threads. Defaults to a conservative detected count.
+    /// CPU inference threads. Defaults to the OS available parallelism.
     #[arg(long, value_name = "N")]
     threads: Option<NonZeroUsize>,
 

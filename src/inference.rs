@@ -124,26 +124,11 @@ impl Engine {
 ///
 /// # Returns
 ///
-/// A conservative count based on OS parallelism, falling back to four.
+/// The available OS parallelism, falling back to four threads when unavailable.
 pub fn default_thread_count() -> usize {
-    let available = std::thread::available_parallelism()
+    std::thread::available_parallelism()
         .map(usize::from)
-        .unwrap_or(4);
-    recommended_thread_count(available)
-}
-
-/// Convert available logical parallelism into an interactive-daemon default.
-///
-/// # Returns
-///
-/// The full count on small systems; otherwise roughly physical cores, capped
-/// to avoid oversubscribing ggml/OpenMP on high-thread-count machines.
-pub fn recommended_thread_count(available_threads: usize) -> usize {
-    let available_threads = available_threads.max(1);
-    if available_threads <= 4 {
-        return available_threads;
-    }
-    available_threads.div_ceil(2).min(8)
+        .unwrap_or(4)
 }
 
 fn pad_short_pcm(pcm: &[f32]) -> Cow<'_, [f32]> {
@@ -185,22 +170,5 @@ mod tests {
             Err(err) => err,
         };
         assert!(err.to_string().contains("model path is not a file"));
-    }
-
-    #[test]
-    fn recommended_threads_keep_small_systems_usable() {
-        assert_eq!(recommended_thread_count(0), 1);
-        assert_eq!(recommended_thread_count(1), 1);
-        assert_eq!(recommended_thread_count(2), 2);
-        assert_eq!(recommended_thread_count(4), 4);
-    }
-
-    #[test]
-    fn recommended_threads_are_conservative_on_larger_systems() {
-        assert_eq!(recommended_thread_count(5), 3);
-        assert_eq!(recommended_thread_count(8), 4);
-        assert_eq!(recommended_thread_count(12), 6);
-        assert_eq!(recommended_thread_count(16), 8);
-        assert_eq!(recommended_thread_count(32), 8);
     }
 }
