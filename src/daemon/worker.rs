@@ -175,27 +175,24 @@ fn worker_loop(ctx: WorkerCtx) {
                             continue;
                         }
                         let insert_started = Instant::now();
+                        let cleaned = transcript.cleaned.clone();
                         let insert_result = state.with_insertion_lock(|| {
-                            insert_text(
+                            let result = insert_text(
                                 &mut injector,
-                                &transcript.cleaned,
+                                &cleaned,
                                 paste_mode,
                                 keep_transcript_clipboard,
                                 focus_at_start.as_deref(),
                                 (log.as_ref(), &notifier),
                                 copy_only_mode,
-                            )
+                            );
+                            if insertion_result_remembers_transcript(&result) {
+                                state.set_last_transcript(cleaned);
+                            }
+                            result
                         });
                         match insert_result {
                             Ok(outcome) => {
-                                if matches!(
-                                    outcome,
-                                    InsertOutcome::Pasted
-                                        | InsertOutcome::CopiedOnly
-                                        | InsertOutcome::Blocked
-                                ) {
-                                    state.set_last_transcript(transcript.cleaned.clone());
-                                }
                                 if outcome == InsertOutcome::Pasted {
                                     consecutive_paste_failures = 0;
                                 }
@@ -243,6 +240,13 @@ fn worker_loop(ctx: WorkerCtx) {
             }
         }
     }
+}
+
+fn insertion_result_remembers_transcript(result: &Result<InsertOutcome>) -> bool {
+    matches!(
+        result,
+        Ok(InsertOutcome::Pasted | InsertOutcome::CopiedOnly | InsertOutcome::Blocked) | Err(_)
+    )
 }
 
 /// Sanitize text and run the shared paste/copy insertion transaction.
@@ -654,6 +658,25 @@ mod tests {
             &direct_error,
             true
         ));
+    }
+
+    #[test]
+    fn insertion_failures_remember_transcript_for_ipc_recovery() {
+        assert!(insertion_result_remembers_transcript(&Ok(
+            InsertOutcome::Pasted
+        )));
+        assert!(insertion_result_remembers_transcript(&Ok(
+            InsertOutcome::CopiedOnly
+        )));
+        assert!(insertion_result_remembers_transcript(&Ok(
+            InsertOutcome::Blocked
+        )));
+        assert!(insertion_result_remembers_transcript(&Err(
+            anyhow::anyhow!("paste failed")
+        )));
+        assert!(!insertion_result_remembers_transcript(&Ok(
+            InsertOutcome::Skipped
+        )));
     }
 
     #[test]

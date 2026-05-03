@@ -387,10 +387,10 @@ fn handle_command(
             stop_after_response: true,
         }),
         IpcCommand::PasteLast => {
-            let text = state
-                .last_transcript()
-                .context("no transcript has been captured in this daemon session")?;
             let result = state.with_insertion_lock(|| {
+                let text = state
+                    .last_transcript()
+                    .context("no transcript has been captured in this daemon session")?;
                 paste_text(&text, paste_mode, keep_transcript_clipboard, log, notifier)
             })?;
             Ok(CommandOutcome {

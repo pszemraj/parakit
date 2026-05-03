@@ -143,9 +143,8 @@ impl HotkeyState {
         let space_was_held = self.space;
         self.set_key(key, true);
         match key {
-            Key::Space if self.is_recording() || self.suppress_space_release || space_was_held => {
-                (None, true)
-            }
+            Key::Space if self.is_recording() || self.suppress_space_release => (None, true),
+            Key::Space if space_was_held => (None, false),
             Key::Space if self.ctrl_only() => {
                 self.suppress_space_release = true;
                 (self.start_recording(now), true)

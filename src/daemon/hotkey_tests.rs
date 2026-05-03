@@ -112,6 +112,40 @@ fn repeated_space_press_while_held_is_suppressed_without_restart() {
 }
 
 #[test]
+fn standalone_space_auto_repeat_passes_through() {
+    let now = base_time();
+    let mut state = HotkeyState::default();
+
+    assert_eq!(state.press(Key::Space, now), (None, false));
+    assert_eq!(
+        state.press(Key::Space, now + Duration::from_millis(20)),
+        (None, false)
+    );
+    assert_eq!(
+        state.release(Key::Space, now + Duration::from_millis(40)),
+        (None, false)
+    );
+    assert!(!state.is_recording());
+}
+
+#[test]
+fn space_held_before_ctrl_does_not_start_or_suppress_repeat() {
+    let now = base_time();
+    let mut state = HotkeyState::default();
+
+    assert_eq!(state.press(Key::Space, now), (None, false));
+    assert_eq!(
+        state.press(Key::ControlLeft, now + Duration::from_millis(10)),
+        (None, false)
+    );
+    assert_eq!(
+        state.press(Key::Space, now + Duration::from_millis(20)),
+        (None, false)
+    );
+    assert!(!state.is_recording());
+}
+
+#[test]
 fn registered_hotkey_press_release_starts_and_stops_once() {
     let now = base_time();
     let mut state = RecordingLatch::default();
