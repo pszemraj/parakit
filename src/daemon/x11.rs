@@ -2,7 +2,7 @@
 
 use anyhow::{Context, Result};
 use x11rb::connection::Connection;
-use x11rb::protocol::xproto::{ConnectionExt, Keycode, Screen, Window};
+use x11rb::protocol::xproto::{AtomEnum, ConnectionExt, Keycode, Screen, Window};
 use x11rb::rust_connection::RustConnection;
 
 /// X11 keysym for Space.
@@ -89,4 +89,35 @@ pub(crate) fn keycode_for_keysym(conn: &RustConnection, keysym: u32) -> Result<K
     }
 
     anyhow::bail!("could not map X11 keysym {keysym} to a keycode")
+}
+
+/// Return the EWMH active toplevel window when the window manager exposes it.
+///
+/// # Arguments
+///
+/// * `conn` - Active X11 connection.
+/// * `root` - Root window for the active screen.
+///
+/// # Returns
+///
+/// The active toplevel window, or `None` when unavailable.
+///
+/// # Errors
+///
+/// Returns an error when X11 rejects the atom or property request.
+pub(crate) fn active_window(conn: &RustConnection, root: Window) -> Result<Option<Window>> {
+    let atom = conn
+        .intern_atom(false, b"_NET_ACTIVE_WINDOW")
+        .context("could not request X11 _NET_ACTIVE_WINDOW atom")?
+        .reply()
+        .context("could not read X11 _NET_ACTIVE_WINDOW atom")?
+        .atom;
+    let reply = conn
+        .get_property(false, root, atom, AtomEnum::WINDOW, 0, 1)
+        .context("could not request X11 _NET_ACTIVE_WINDOW")?
+        .reply()
+        .context("could not read X11 _NET_ACTIVE_WINDOW")?;
+    Ok(reply
+        .value32()
+        .and_then(|mut values| values.find(|window| *window != x11rb::NONE)))
 }

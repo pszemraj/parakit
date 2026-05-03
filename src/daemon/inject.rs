@@ -159,7 +159,11 @@ impl TextClipboard for Clipboard {
 /// Focus owner captured when recording begins.
 pub(crate) struct FocusSnapshot {
     #[cfg(target_os = "linux")]
-    focus: u32,
+    input_focus: Option<u32>,
+    #[cfg(target_os = "linux")]
+    active_window: Option<u32>,
+    #[cfg(target_os = "linux")]
+    root: u32,
     #[cfg(target_os = "linux")]
     conn: RustConnection,
 }
@@ -178,13 +182,23 @@ impl FocusSnapshot {
     pub(crate) fn capture() -> Result<Self> {
         #[cfg(target_os = "linux")]
         {
-            let (conn, _) = RustConnection::connect(None)
+            let (conn, screen_num) = RustConnection::connect(None)
                 .context("could not connect to X11 while capturing recording focus")?;
+            let root = super::x11::root_window(&conn, screen_num)
+                .context("could not read X11 root window for focus snapshot")?;
             let focus = linux_current_input_focus(&conn)?;
-            if !linux_focus_is_insertable(focus) {
-                anyhow::bail!("X11 input focus is not an insertable application window");
+            let input_focus = linux_focus_is_insertable(focus).then_some(focus);
+            let active_window = super::x11::active_window(&conn, root)
+                .context("could not read X11 active window for focus snapshot")?;
+            if input_focus.is_none() && active_window.is_none() {
+                anyhow::bail!("X11 focus is not an insertable application window");
             }
-            Ok(Self { focus, conn })
+            Ok(Self {
+                input_focus,
+                active_window,
+                root,
+                conn,
+            })
         }
 
         #[cfg(not(target_os = "linux"))]
@@ -205,9 +219,22 @@ impl FocusSnapshot {
     pub(crate) fn matches_current(&self) -> Result<bool> {
         #[cfg(target_os = "linux")]
         {
+            if let Some(expected) = self.active_window {
+                if let Some(current) = super::x11::active_window(&self.conn, self.root)
+                    .context("could not query the X11 active window captured at recording start")?
+                {
+                    return Ok(current == expected);
+                }
+            }
+
+            let Some(expected) = self.input_focus else {
+                anyhow::bail!(
+                    "X11 active window is unavailable and no input focus fallback exists"
+                );
+            };
             Ok(linux_current_input_focus(&self.conn)
                 .context("could not query the X11 focus connection captured at recording start")?
-                == self.focus)
+                == expected)
         }
 
         #[cfg(not(target_os = "linux"))]
