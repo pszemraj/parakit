@@ -707,7 +707,6 @@ fn handle_audio_control(
             }
             session_epoch.store(0, Ordering::Release);
             let pcm = state.lock().take_recording();
-            while drain_audio_ring(consumer, state, session_epoch, pipeline, input, resampled) {}
             pipeline.reset_recording();
             let _ = ack.send(pcm);
         }
@@ -1021,14 +1020,19 @@ impl CapturePipeline {
 struct ResamplerState {
     resampler: SincFixedIn<f32>,
     scratch: Vec<f32>,
+    input_buf: Vec<Vec<f32>>,
+    output_buf: Vec<Vec<f32>>,
     chunk_size: usize,
 }
 
 impl ResamplerState {
     fn new(resampler: SincFixedIn<f32>, chunk_size: usize) -> Self {
+        let output_len = resampler.output_frames_max();
         Self {
             resampler,
             scratch: Vec::with_capacity(chunk_size * 4),
+            input_buf: vec![vec![0.0; chunk_size]],
+            output_buf: vec![vec![0.0; output_len]],
             chunk_size,
         }
     }
@@ -1036,18 +1040,19 @@ impl ResamplerState {
     fn process(&mut self, input: &[f32], out: &mut Vec<f32>) {
         self.scratch.extend_from_slice(input);
         while self.scratch.len() >= self.chunk_size {
-            let drained: Vec<f32> = self.scratch.drain(..self.chunk_size).collect();
-            self.process_chunk(drained, out);
+            self.input_buf[0].clear();
+            self.input_buf[0].extend(self.scratch.drain(..self.chunk_size));
+            self.process_chunk(out);
         }
     }
 
     fn flush_recording(&mut self, out: &mut Vec<f32>) {
         if !self.scratch.is_empty() {
-            let mut padded = Vec::with_capacity(self.chunk_size);
-            padded.extend_from_slice(&self.scratch);
-            padded.resize(self.chunk_size, 0.0);
+            self.input_buf[0].clear();
+            self.input_buf[0].extend_from_slice(&self.scratch);
+            self.input_buf[0].resize(self.chunk_size, 0.0);
             self.scratch.clear();
-            self.process_chunk(padded, out);
+            self.process_chunk(out);
         }
         self.resampler.reset();
     }
@@ -1057,12 +1062,14 @@ impl ResamplerState {
         self.resampler.reset();
     }
 
-    fn process_chunk(&mut self, chunk: Vec<f32>, out: &mut Vec<f32>) {
-        let input_frames = vec![chunk];
-        match self.resampler.process(&input_frames, None) {
-            Ok(out_frames) => {
-                if let Some(ch0) = out_frames.into_iter().next() {
-                    out.extend_from_slice(&ch0);
+    fn process_chunk(&mut self, out: &mut Vec<f32>) {
+        match self
+            .resampler
+            .process_into_buffer(&self.input_buf, &mut self.output_buf, None)
+        {
+            Ok((_, written)) => {
+                if let Some(ch0) = self.output_buf.first() {
+                    out.extend_from_slice(&ch0[..written]);
                 }
             }
             Err(e) => {

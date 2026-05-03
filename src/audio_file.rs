@@ -126,10 +126,10 @@ pub fn resample_to_target(samples: Vec<f32>, source_rate: u32) -> Result<Vec<f32
 /// The rubato sinc interpolation parameters.
 pub fn resampler_params() -> SincInterpolationParameters {
     SincInterpolationParameters {
-        sinc_len: 128,
+        sinc_len: 64,
         f_cutoff: 0.95,
         interpolation: SincInterpolationType::Linear,
-        oversampling_factor: 256,
+        oversampling_factor: 128,
         window: WindowFunction::BlackmanHarris2,
     }
 }

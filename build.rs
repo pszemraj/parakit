@@ -272,12 +272,12 @@ struct BlasConfig {
 
 impl BlasConfig {
     fn from_env() -> Self {
-        let raw = env::var("PARAKIT_BLAS").unwrap_or_else(|_| "off".to_string());
+        let raw = env::var("PARAKIT_BLAS").unwrap_or_else(|_| "auto".to_string());
         let requested = raw.trim().to_ascii_lowercase();
         let explicit = env::var("PARAKIT_BLAS").is_ok();
         match requested.as_str() {
             "" | "0" | "false" | "no" | "none" | "off" => Self::off(raw, explicit),
-            "auto" => Self::auto(raw),
+            "auto" => Self::auto(raw, explicit),
             "mkl" | "intel" | "intel-mkl" => Self::mkl(raw, explicit),
             "openblas" => Self::openblas(raw, explicit),
             "accelerate" | "apple" => Self::accelerate(raw, explicit),
@@ -290,20 +290,20 @@ impl BlasConfig {
         }
     }
 
-    fn auto(raw: String) -> Self {
+    fn auto(raw: String, explicit: bool) -> Self {
         if target_is_apple() {
-            return Self::accelerate(raw, true);
+            return Self::accelerate(raw, explicit);
         }
         if pkg_config_exists("mkl-sdl") {
-            return Self::mkl(raw, true);
+            return Self::mkl(raw, explicit);
         }
         if pkg_config_exists("openblas") || pkg_config_exists("openblas64") {
-            return Self::openblas(raw, true);
+            return Self::openblas(raw, explicit);
         }
         println!(
             "cargo:warning=parakit build: PARAKIT_BLAS=auto found no MKL/OpenBLAS pkg-config metadata; building without BLAS"
         );
-        Self::off(raw, true)
+        Self::off(raw, explicit)
     }
 
     fn new(

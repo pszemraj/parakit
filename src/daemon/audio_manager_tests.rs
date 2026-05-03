@@ -300,3 +300,22 @@ fn resampler_flushes_and_resets_tail_between_recordings() {
     pipeline.finish_recording(&mut out);
     assert_eq!(out.len(), flushed_len);
 }
+
+#[test]
+fn resampler_reuses_chunk_buffers_during_process_and_flush() {
+    let mut resampler = make_resampler(48_000)
+        .expect("resampler creation should succeed")
+        .expect("48 kHz input should need resampling");
+    let input_capacity = resampler.input_buf[0].capacity();
+    let output_capacity = resampler.output_buf[0].capacity();
+    let mut out = Vec::new();
+    let input = vec![0.1; resampler.chunk_size * 3 + 100];
+
+    resampler.process(&input, &mut out);
+    resampler.flush_recording(&mut out);
+
+    assert!(!out.is_empty());
+    assert_eq!(resampler.input_buf[0].capacity(), input_capacity);
+    assert_eq!(resampler.output_buf[0].capacity(), output_capacity);
+    assert!(resampler.scratch.is_empty());
+}

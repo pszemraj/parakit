@@ -137,6 +137,7 @@ fn worker_loop(ctx: WorkerCtx) {
                 focus_at_start,
             } => {
                 let stop_started = Instant::now();
+                let drain_elapsed = stop_started.saturating_duration_since(stopped_at);
                 let secs = pcm.len() as f32 / TARGET_RATE as f32;
                 let wall_secs = stopped_at.duration_since(started_at).as_secs_f32();
                 if capture_should_skip(&pcm) {
@@ -198,12 +199,16 @@ fn worker_loop(ctx: WorkerCtx) {
                                     paste_circuit.record_success();
                                 }
                                 let insert_elapsed = insert_started.elapsed();
+                                let worker_elapsed = stop_started.elapsed();
+                                let total_elapsed = drain_elapsed + worker_elapsed;
                                 log.verbose(format!(
-                                    "parakit: timings infer={}ms clean={}ms insert={}ms total={}ms",
+                                    "parakit: timings drain={}ms infer={}ms clean={}ms insert={}ms worker={}ms total={}ms",
+                                    drain_elapsed.as_secs_f32() * 1000.0,
                                     transcript.infer_elapsed.as_secs_f32() * 1000.0,
                                     transcript.clean_elapsed.as_secs_f32() * 1000.0,
                                     insert_elapsed.as_secs_f32() * 1000.0,
-                                    stop_started.elapsed().as_secs_f32() * 1000.0
+                                    worker_elapsed.as_secs_f32() * 1000.0,
+                                    total_elapsed.as_secs_f32() * 1000.0
                                 ));
                                 state.set_phase("idle");
                                 if outcome == InsertOutcome::Blocked {
