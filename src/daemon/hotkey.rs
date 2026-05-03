@@ -6,6 +6,8 @@
 use super::{logging::Logger, recording::HotkeyTransition};
 #[cfg(target_os = "linux")]
 use anyhow::Context as _;
+#[cfg(target_os = "linux")]
+use crossbeam_channel::RecvTimeoutError;
 use crossbeam_channel::Sender;
 #[cfg(target_os = "linux")]
 use global_hotkey::{
@@ -19,6 +21,8 @@ use std::time::{Duration, Instant};
 use std::{fs::File, io, path::PathBuf};
 
 const HOTKEY_DEBOUNCE: Duration = Duration::from_millis(150);
+#[cfg(target_os = "linux")]
+const REGISTERED_HOTKEY_PHYSICAL_POLL: Duration = Duration::from_millis(25);
 
 /// Hotkey backend preference.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, clap::ValueEnum)]
@@ -331,34 +335,122 @@ fn run_linux_registered_hotkey_loop(tx: Sender<HotkeyTransition>) -> anyhow::Res
         .map_err(|err| anyhow::anyhow!("register Ctrl+Space: {err}"))?;
 
     let receiver = GlobalHotKeyEvent::receiver();
-    let mut latch = RecordingLatch::default();
-    let physical = X11PhysicalHotkeyProbe::open().ok();
+    let mut latch = RegisteredHotkeyLatch::default();
+    let physical = X11PhysicalHotkeyProbe::open()
+        .context("could not initialize physical Ctrl+Space state probe")?;
     loop {
-        let event = receiver
-            .recv()
-            .map_err(|err| anyhow::anyhow!("hotkey event channel closed: {err}"))?;
+        let event = if latch.needs_physical_poll() {
+            match receiver.recv_timeout(REGISTERED_HOTKEY_PHYSICAL_POLL) {
+                Ok(event) => event,
+                Err(RecvTimeoutError::Timeout) => {
+                    let now = Instant::now();
+                    let physical_state = physical_hotkey_state(&physical);
+                    if let Some(action) = latch.physical_poll(physical_state, now) {
+                        send_hotkey_transition(action, &tx);
+                    }
+                    continue;
+                }
+                Err(RecvTimeoutError::Disconnected) => {
+                    return Err(anyhow::anyhow!("hotkey event channel closed"));
+                }
+            }
+        } else {
+            receiver
+                .recv()
+                .map_err(|err| anyhow::anyhow!("hotkey event channel closed: {err}"))?
+        };
         if event.id != hotkey.id() {
             continue;
         }
 
         let now = Instant::now();
-        let action = match event.state {
-            RegisteredHotKeyState::Pressed => latch.start(now),
-            RegisteredHotKeyState::Released => {
-                if physical
-                    .as_ref()
-                    .and_then(|probe| probe.ctrl_space_down().ok())
-                    .unwrap_or(false)
-                {
-                    continue;
-                }
-                latch.stop(now)
-            }
-        };
+        let action = latch.event(event.state, physical_hotkey_state(&physical), now);
         if let Some(action) = action {
             send_hotkey_transition(action, &tx);
         }
     }
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Clone, Copy, Debug, Default)]
+struct RegisteredHotkeyLatch {
+    recording: RecordingLatch,
+    suppress_until_space_release: bool,
+}
+
+#[cfg(target_os = "linux")]
+impl RegisteredHotkeyLatch {
+    fn needs_physical_poll(&self) -> bool {
+        self.recording.is_recording() || self.suppress_until_space_release
+    }
+
+    fn is_recording(&self) -> bool {
+        self.recording.is_recording()
+    }
+
+    fn event(
+        &mut self,
+        state: RegisteredHotKeyState,
+        physical: PhysicalHotkeyState,
+        now: Instant,
+    ) -> Option<HotkeyAction> {
+        self.sync_space_release(physical);
+        match state {
+            RegisteredHotKeyState::Pressed if self.suppress_until_space_release => None,
+            RegisteredHotKeyState::Pressed => self.recording.start(now),
+            RegisteredHotKeyState::Released => {
+                if physical.chord_down() {
+                    return None;
+                }
+                if physical.space {
+                    self.suppress_until_space_release = true;
+                }
+                self.recording.stop(now)
+            }
+        }
+    }
+
+    fn physical_poll(
+        &mut self,
+        physical: PhysicalHotkeyState,
+        now: Instant,
+    ) -> Option<HotkeyAction> {
+        self.sync_space_release(physical);
+        match self.is_recording() && !physical.chord_down() {
+            true => {
+                if physical.space {
+                    self.suppress_until_space_release = true;
+                }
+                self.recording.stop(now)
+            }
+            false => None,
+        }
+    }
+
+    fn sync_space_release(&mut self, physical: PhysicalHotkeyState) {
+        if !physical.space {
+            self.suppress_until_space_release = false;
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct PhysicalHotkeyState {
+    ctrl: bool,
+    space: bool,
+}
+
+#[cfg(target_os = "linux")]
+impl PhysicalHotkeyState {
+    fn chord_down(self) -> bool {
+        self.ctrl && self.space
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn physical_hotkey_state(physical: &X11PhysicalHotkeyProbe) -> PhysicalHotkeyState {
+    physical.state().unwrap_or_default()
 }
 
 #[cfg(target_os = "linux")]
@@ -389,7 +481,7 @@ impl X11PhysicalHotkeyProbe {
         })
     }
 
-    fn ctrl_space_down(&self) -> anyhow::Result<bool> {
+    fn state(&self) -> anyhow::Result<PhysicalHotkeyState> {
         use x11rb::protocol::xproto::ConnectionExt as _;
 
         let reply = self
@@ -399,8 +491,10 @@ impl X11PhysicalHotkeyProbe {
             .reply()
             .context("could not read X11 keymap")?;
 
-        Ok(keycode_down(&reply.keys, self.space)
-            && (keycode_down(&reply.keys, self.ctrl_l) || keycode_down(&reply.keys, self.ctrl_r)))
+        Ok(PhysicalHotkeyState {
+            ctrl: keycode_down(&reply.keys, self.ctrl_l) || keycode_down(&reply.keys, self.ctrl_r),
+            space: keycode_down(&reply.keys, self.space),
+        })
     }
 }
 
@@ -423,6 +517,8 @@ fn keycode_down(keys: &[u8; 32], keycode: u8) -> bool {
 /// Returns an error when X11 is unavailable or the hotkey is already owned.
 pub(crate) fn registered_hotkey_probe() -> anyhow::Result<()> {
     super::session::ensure_x11_session_supported()?;
+    let _physical = X11PhysicalHotkeyProbe::open()
+        .context("could not initialize physical Ctrl+Space state probe")?;
     let manager =
         GlobalHotKeyManager::new().map_err(|err| anyhow::anyhow!("init hotkey manager: {err}"))?;
     let hotkey = ctrl_space_hotkey();

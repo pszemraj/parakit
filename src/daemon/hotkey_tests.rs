@@ -163,6 +163,92 @@ fn registered_hotkey_press_release_starts_and_stops_once() {
     assert_eq!(state.stop(now + Duration::from_millis(310)), None);
 }
 
+#[cfg(target_os = "linux")]
+fn physical(ctrl: bool, space: bool) -> PhysicalHotkeyState {
+    PhysicalHotkeyState { ctrl, space }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn registered_hotkey_physical_poll_stops_when_ctrl_is_released_first() {
+    let now = base_time();
+    let mut state = RegisteredHotkeyLatch::default();
+
+    assert_eq!(
+        state.event(RegisteredHotKeyState::Pressed, physical(true, true), now),
+        Some(HotkeyAction::Start { started_at: now })
+    );
+
+    assert_eq!(
+        state.physical_poll(physical(false, true), now + Duration::from_millis(50)),
+        Some(HotkeyAction::Stop {
+            stopped_at: now + Duration::from_millis(50)
+        })
+    );
+    assert!(!state.is_recording());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn registered_hotkey_physical_poll_keeps_recording_while_chord_is_down() {
+    let now = base_time();
+    let mut state = RegisteredHotkeyLatch::default();
+
+    state.event(RegisteredHotKeyState::Pressed, physical(true, true), now);
+
+    assert_eq!(
+        state.physical_poll(physical(true, true), now + Duration::from_millis(50)),
+        None
+    );
+    assert!(state.is_recording());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn registered_hotkey_release_is_ignored_while_physical_chord_is_still_down() {
+    let now = base_time();
+    let mut state = RegisteredHotkeyLatch::default();
+
+    state.event(RegisteredHotKeyState::Pressed, physical(true, true), now);
+
+    assert_eq!(
+        state.event(
+            RegisteredHotKeyState::Released,
+            physical(true, true),
+            now + Duration::from_millis(50)
+        ),
+        None
+    );
+    assert!(state.is_recording());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn registered_hotkey_waits_for_space_release_after_ctrl_first_stop() {
+    let now = base_time();
+    let mut state = RegisteredHotkeyLatch::default();
+
+    state.event(RegisteredHotKeyState::Pressed, physical(true, true), now);
+    state.physical_poll(physical(false, true), now + Duration::from_millis(50));
+
+    assert!(!state.is_recording());
+    assert!(state.needs_physical_poll());
+    assert_eq!(
+        state.event(
+            RegisteredHotKeyState::Pressed,
+            physical(true, true),
+            now + Duration::from_millis(75)
+        ),
+        None
+    );
+
+    assert_eq!(
+        state.physical_poll(physical(false, false), now + Duration::from_millis(100)),
+        None
+    );
+    assert!(!state.needs_physical_poll());
+}
+
 #[test]
 fn hotkey_actions_emit_logical_transitions_only() {
     let now = base_time();
