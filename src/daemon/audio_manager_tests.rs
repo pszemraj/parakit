@@ -71,51 +71,63 @@ fn append_processed_samples_honors_hard_cap() {
 }
 
 #[test]
-fn stale_audio_chunks_are_dropped_from_recording_and_pre_roll() {
-    let state = Mutex::new(CaptureState::new());
-    let session_epoch = AtomicU64::new(1);
-
-    append_processed_samples(&state, &session_epoch, &[0.1, 0.2]);
-    session_epoch.store(0, Ordering::Release);
-    append_processed_samples_observed(&state, &session_epoch, 1, &[0.3, 0.4]);
-
-    let state = state.lock();
-    assert_eq!(state.buffer.as_slice(), &[0.1, 0.2]);
-    assert!(state.pre_roll.is_empty());
-}
-
-#[test]
-fn active_recording_samples_do_not_refresh_pre_roll() {
-    let state = Mutex::new(CaptureState::new());
-    let session_epoch = AtomicU64::new(0);
-
-    append_processed_samples(&state, &session_epoch, &[0.1, 0.2]);
-    session_epoch.store(1, Ordering::Release);
-    append_processed_samples(&state, &session_epoch, &[0.8, 0.9]);
-
-    let state = state.lock();
-    assert_eq!(state.buffer.as_slice(), &[0.8, 0.9]);
-    assert_eq!(
-        state.pre_roll.iter().copied().collect::<Vec<_>>(),
-        &[0.1, 0.2]
+fn append_processed_samples_respects_epoch_boundaries() {
+    assert_epoch_boundary(
+        "stale recording chunk",
+        1,
+        0,
+        Some(1),
+        &[0.3, 0.4],
+        &[0.1, 0.2],
+        &[],
+    );
+    assert_epoch_boundary(
+        "active recording does not refresh pre-roll",
+        0,
+        1,
+        None,
+        &[0.8, 0.9],
+        &[0.8, 0.9],
+        &[0.1, 0.2],
+    );
+    assert_epoch_boundary(
+        "idle chunk dropped after recording starts",
+        0,
+        1,
+        Some(0),
+        &[0.3, 0.4],
+        &[],
+        &[0.1, 0.2],
     );
 }
 
-#[test]
-fn idle_observed_chunks_are_dropped_if_recording_starts_before_append() {
+fn assert_epoch_boundary(
+    name: &str,
+    initial_epoch: u64,
+    next_epoch: u64,
+    observed_epoch: Option<u64>,
+    next_samples: &[f32],
+    expected_buffer: &[f32],
+    expected_pre_roll: &[f32],
+) {
     let state = Mutex::new(CaptureState::new());
-    let session_epoch = AtomicU64::new(0);
-
+    let session_epoch = AtomicU64::new(initial_epoch);
     append_processed_samples(&state, &session_epoch, &[0.1, 0.2]);
-    session_epoch.store(1, Ordering::Release);
-    append_processed_samples_observed(&state, &session_epoch, 0, &[0.3, 0.4]);
+    session_epoch.store(next_epoch, Ordering::Release);
+    match observed_epoch {
+        Some(observed) => {
+            append_processed_samples_observed(&state, &session_epoch, observed, next_samples)
+        }
+        None => append_processed_samples(&state, &session_epoch, next_samples),
+    }
 
     let state = state.lock();
-    assert!(state.buffer.is_empty());
-    assert_eq!(
-        state.pre_roll.iter().copied().collect::<Vec<_>>(),
-        &[0.1, 0.2]
-    );
+    assert_eq!(state.buffer, expected_buffer, "{name} buffer");
+    assert_eq!(pre_roll_vec(&state), expected_pre_roll, "{name} pre-roll");
+}
+
+fn pre_roll_vec(state: &CaptureState) -> Vec<f32> {
+    state.pre_roll.iter().copied().collect()
 }
 
 #[test]

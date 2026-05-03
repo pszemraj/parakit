@@ -49,22 +49,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn wayland_session_is_rejected_case_insensitively() {
-        assert!(linux_session_type_is_wayland(Some("wayland")));
-        assert!(linux_session_type_is_wayland(Some("Wayland")));
-    }
-
-    #[test]
-    fn non_wayland_sessions_are_allowed() {
-        assert!(!linux_session_type_is_wayland(Some("x11")));
-        assert!(!linux_session_type_is_wayland(Some("tty")));
-        assert!(!linux_session_type_is_wayland(None));
-    }
-
-    #[test]
-    fn unset_session_with_wayland_display_is_rejected() {
-        assert!(linux_session_looks_wayland(None, Some("wayland-0")));
-        assert!(!linux_session_looks_wayland(Some("x11"), Some("wayland-0")));
-        assert!(!linux_session_looks_wayland(None, None));
+    fn wayland_detection_cases_are_stable() {
+        for (session_type, wayland_display, expected) in [
+            (Some("wayland"), None, true),
+            (Some("Wayland"), None, true),
+            (Some("x11"), Some("wayland-0"), false),
+            (Some("tty"), None, false),
+            (None, Some("wayland-0"), true),
+            (None, None, false),
+        ] {
+            assert_eq!(
+                linux_session_looks_wayland(session_type, wayland_display),
+                expected
+            );
+        }
     }
 }

@@ -87,19 +87,9 @@ fn recording_coordinator_loop_with_max_utterance(
                 let Some(start) = started_at.take() else {
                     continue;
                 };
-                let pcm = audio.stop_recording();
-                if matches!(
-                    send_worker_event(
-                        &tx,
-                        WorkerEvent::RecordingStopped {
-                            started_at: start,
-                            stopped_at: at,
-                            pcm,
-                            focus_at_start: focus_at_start.take().map(Box::new),
-                        }
-                    ),
-                    WorkerSendStatus::Disconnected
-                ) {
+                if stop_and_send_recording(&tx, &audio, start, at, &mut focus_at_start)
+                    == WorkerSendStatus::Disconnected
+                {
                     break;
                 }
             }
@@ -107,19 +97,9 @@ fn recording_coordinator_loop_with_max_utterance(
                 let Some(start) = started_at.take() else {
                     continue;
                 };
-                let pcm = audio.stop_recording();
-                if matches!(
-                    send_worker_event(
-                        &tx,
-                        WorkerEvent::RecordingStopped {
-                            started_at: start,
-                            stopped_at: Instant::now(),
-                            pcm,
-                            focus_at_start: focus_at_start.take().map(Box::new),
-                        }
-                    ),
-                    WorkerSendStatus::Disconnected
-                ) {
+                if stop_and_send_recording(&tx, &audio, start, Instant::now(), &mut focus_at_start)
+                    == WorkerSendStatus::Disconnected
+                {
                     break;
                 }
             }
@@ -150,10 +130,30 @@ fn next_coordinator_event(
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum WorkerSendStatus {
     Sent,
     Full,
     Disconnected,
+}
+
+fn stop_and_send_recording(
+    tx: &Sender<WorkerEvent>,
+    audio: &AudioHandle,
+    started_at: Instant,
+    stopped_at: Instant,
+    focus_at_start: &mut Option<FocusSnapshot>,
+) -> WorkerSendStatus {
+    let pcm = audio.stop_recording();
+    send_worker_event(
+        tx,
+        WorkerEvent::RecordingStopped {
+            started_at,
+            stopped_at,
+            pcm,
+            focus_at_start: focus_at_start.take().map(Box::new),
+        },
+    )
 }
 
 fn send_worker_event(tx: &Sender<WorkerEvent>, event: WorkerEvent) -> WorkerSendStatus {

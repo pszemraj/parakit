@@ -36,6 +36,8 @@ After rebuilding a release artifact, upload F16 and Q8_0 to the hosted repo and 
 
 `src/daemon/audio_manager.rs` is temporarily over the 1k LoC target because it owns one tightly coupled runtime boundary: CPAL stream recovery, the SPSC drain thread, resampler flushing, and recording/pre-roll state. Split it after the v0.1 safety branch into smaller `audio/stream.rs`, `audio/drain.rs`, and `audio/device.rs` modules without changing behavior.
 
+`src/daemon/inject.rs` is also temporarily over the target while clipboard transaction, X11 paste-chord cleanup, focus snapshots, and smoke-test support settle. Split it into focused clipboard, X11 paste, and focus modules without changing the paste safety contract.
+
 ## Updating [CrispASR](https://github.com/CrispStrobe/CrispASR)
 
 Keep submodule updates separate from parakit code changes:

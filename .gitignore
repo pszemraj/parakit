@@ -1,3 +1,6 @@
 /target
+/local-scratch
+/AGENTS.md
 *.gguf
+*.nemo
 .DS_Store

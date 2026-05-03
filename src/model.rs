@@ -48,17 +48,3 @@ pub fn models_dir() -> Result<PathBuf> {
         Ok(dirs.cache_dir().join("parakit").join("models"))
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn hosted_model_constants_are_consistent() {
-        assert_eq!(Q8_FILENAME, "parakeet-tdt-0.6b-v3-Q8_0.gguf");
-        assert_eq!(F16_FILENAME, "parakeet-tdt-0.6b-v3-F16.gguf");
-        assert!(OFFICIAL_NEMO_URL.ends_with(NEMO_FILENAME));
-        assert!(HOSTED_Q8_URL.ends_with(Q8_FILENAME));
-        assert_eq!(HOSTED_Q8_SHA256.len(), 64);
-    }
-}

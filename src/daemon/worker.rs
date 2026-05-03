@@ -176,60 +176,15 @@ fn worker_loop(ctx: WorkerCtx) {
                         }
                         let insert_started = Instant::now();
                         let insert_result = state.with_insertion_lock(|| {
-                            match sanitize_for_paste(&transcript.cleaned, paste_mode) {
-                                PastePlan::Paste(text) if copy_only_mode => {
-                                    if paste_mode == PasteMode::Direct {
-                                        log.warn(
-                                            "direct insertion disabled after repeated failures; transcript was not copied",
-                                        );
-                                        notifier.paste_disabled_for_session();
-                                        Ok(InsertOutcome::Blocked)
-                                    } else {
-                                        copy_or_block_transcript(
-                                            &mut injector,
-                                            &text,
-                                            keep_transcript_clipboard,
-                                            "paste-disabled clipboard copy failed",
-                                            "Paste is disabled for this session after repeated failures.",
-                                            &log,
-                                            &notifier,
-                                        )
-                                    }
-                                }
-                                PastePlan::Paste(text) => paste_transcript(
-                                    &mut injector,
-                                    &text,
-                                    paste_mode,
-                                    keep_transcript_clipboard,
-                                    focus_at_start.as_deref(),
-                                    &log,
-                                    &notifier,
-                                ),
-                                PastePlan::CopyOnly { text, reason } => {
-                                    if paste_mode == PasteMode::Direct {
-                                        log.warn(format!(
-                                            "direct insertion blocked by sanitizer ({reason}); transcript was not copied"
-                                        ));
-                                        notifier.paste_blocked(reason);
-                                        Ok(InsertOutcome::Blocked)
-                                    } else {
-                                        log.warn(format!("paste blocked by sanitizer ({reason})"));
-                                        copy_or_block_transcript(
-                                            &mut injector,
-                                            &text,
-                                            keep_transcript_clipboard,
-                                            "sanitized transcript clipboard fallback failed",
-                                            reason,
-                                            &log,
-                                            &notifier,
-                                        )
-                                    }
-                                }
-                                PastePlan::Skip { reason } => {
-                                    log.warn(format!("paste skipped by sanitizer: {reason}"));
-                                    Ok(InsertOutcome::Skipped)
-                                }
-                            }
+                            insert_text(
+                                &mut injector,
+                                &transcript.cleaned,
+                                paste_mode,
+                                keep_transcript_clipboard,
+                                focus_at_start.as_deref(),
+                                (log.as_ref(), &notifier),
+                                copy_only_mode,
+                            )
                         });
                         match insert_result {
                             Ok(outcome) => {
@@ -286,6 +241,91 @@ fn worker_loop(ctx: WorkerCtx) {
                     }
                 }
             }
+        }
+    }
+}
+
+/// Sanitize text and run the shared paste/copy insertion transaction.
+///
+/// # Arguments
+///
+/// * `injector` - Reused insertion backend, created lazily when needed.
+/// * `raw_text` - Candidate transcript or IPC text.
+/// * `mode` - Paste mode used for sanitizer policy and chord selection.
+/// * `keep_transcript_clipboard` - Leave text on clipboard instead of restoring previous contents.
+/// * `focus` - Focus snapshot captured before insertion became eligible.
+/// * `ui` - Daemon logger and desktop notification wrapper.
+/// * `copy_only_mode` - Circuit-breaker flag that disables synthetic paste.
+///
+/// # Returns
+///
+/// Worker insertion outcome.
+///
+/// # Errors
+///
+/// Returns an error if clipboard staging, injector initialization, or paste fails.
+pub(crate) fn insert_text(
+    injector: &mut Option<Injector>,
+    raw_text: &str,
+    mode: PasteMode,
+    keep_transcript_clipboard: bool,
+    focus: Option<&FocusSnapshot>,
+    ui: (&Logger, &Notifier),
+    copy_only_mode: bool,
+) -> Result<InsertOutcome> {
+    let (log, notifier) = ui;
+    match sanitize_for_paste(raw_text, mode) {
+        PastePlan::Paste(text) if copy_only_mode => {
+            if mode == PasteMode::Direct {
+                log.warn(
+                    "direct insertion disabled after repeated failures; transcript was not copied",
+                );
+                notifier.paste_disabled_for_session();
+                Ok(InsertOutcome::Blocked)
+            } else {
+                copy_or_block_transcript(
+                    injector,
+                    &text,
+                    keep_transcript_clipboard,
+                    "paste-disabled clipboard copy failed",
+                    "Paste is disabled for this session after repeated failures.",
+                    log,
+                    notifier,
+                )
+            }
+        }
+        PastePlan::Paste(text) => paste_transcript(
+            injector,
+            &text,
+            mode,
+            keep_transcript_clipboard,
+            focus,
+            log,
+            notifier,
+        ),
+        PastePlan::CopyOnly { text, reason } => {
+            if mode == PasteMode::Direct {
+                log.warn(format!(
+                    "direct insertion blocked by sanitizer ({reason}); transcript was not copied"
+                ));
+                notifier.paste_blocked(reason);
+                Ok(InsertOutcome::Blocked)
+            } else {
+                log.warn(format!("paste blocked by sanitizer ({reason})"));
+                copy_or_block_transcript(
+                    injector,
+                    &text,
+                    keep_transcript_clipboard,
+                    "sanitized transcript clipboard fallback failed",
+                    reason,
+                    log,
+                    notifier,
+                )
+            }
+        }
+        PastePlan::Skip { reason } => {
+            log.warn(format!("paste skipped by sanitizer: {reason}"));
+            Ok(InsertOutcome::Skipped)
         }
     }
 }
@@ -471,8 +511,9 @@ pub(crate) enum PastePlan {
     },
 }
 
+/// Result of a worker-level insertion attempt.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum InsertOutcome {
+pub(crate) enum InsertOutcome {
     Pasted,
     CopiedOnly,
     Blocked,

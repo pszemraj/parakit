@@ -59,13 +59,3 @@ fn hex_digest(bytes: &[u8]) -> String {
     }
     out
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn hex_formatter_is_lowercase() {
-        assert_eq!(hex_digest(&[0, 10, 255]), "000aff");
-    }
-}

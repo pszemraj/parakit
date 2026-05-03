@@ -802,7 +802,7 @@ fn x11_listen_failure_help() -> String {
         "The x11-listen backend passively observes Ctrl+Space with rdev::listen.\n\
          Current session: XDG_SESSION_TYPE={session}, DISPLAY={display}\n\
          Checks:\n\
-           parakit --verbose doctor --hotkey-backend x11-listen\n\
+           parakit --verbose --hotkey-backend x11-listen doctor\n\
          Use an X11 session. Wayland is intentionally rejected.\n\
          This backend does not grab, suppress, or forward keyboard events."
     )

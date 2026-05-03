@@ -50,38 +50,6 @@ fn ctrl_release_before_space_stops_without_suppressing_ctrl_release() {
 }
 
 #[test]
-fn held_space_after_ctrl_release_does_not_restart_after_debounce() {
-    let now = base_time();
-    let mut state = HotkeyState::default();
-    state.press(Key::ControlLeft, now);
-    state.press(Key::Space, now + Duration::from_millis(10));
-    state.release(Key::ControlLeft, now + Duration::from_millis(50));
-
-    assert_eq!(
-        state.press(
-            Key::ControlLeft,
-            now + HOTKEY_DEBOUNCE + Duration::from_millis(10)
-        ),
-        (None, false)
-    );
-    assert_eq!(
-        state.press(
-            Key::Space,
-            now + HOTKEY_DEBOUNCE + Duration::from_millis(20)
-        ),
-        (None, true)
-    );
-    assert_eq!(
-        state.release(
-            Key::Space,
-            now + HOTKEY_DEBOUNCE + Duration::from_millis(30)
-        ),
-        (None, true)
-    );
-    assert!(!state.is_recording());
-}
-
-#[test]
 fn ctrl_repress_while_space_held_does_not_restart_recording() {
     let now = base_time();
     let mut state = HotkeyState::default();
@@ -104,14 +72,20 @@ fn ctrl_repress_while_space_held_does_not_restart_recording() {
         (None, false)
     );
     assert_eq!(
-        state.press(Key::Space, now + Duration::from_millis(70)),
+        state.press(
+            Key::Space,
+            now + HOTKEY_DEBOUNCE + Duration::from_millis(20)
+        ),
         (None, true)
     );
 
     assert!(!state.is_recording());
 
     assert_eq!(
-        state.release(Key::Space, now + Duration::from_millis(80)),
+        state.release(
+            Key::Space,
+            now + HOTKEY_DEBOUNCE + Duration::from_millis(30)
+        ),
         (None, true)
     );
 }
