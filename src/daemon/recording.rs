@@ -71,15 +71,20 @@ fn recording_coordinator_loop_with_max_utterance(
         match event {
             CoordinatorEvent::Hotkey(HotkeyTransition::Pressed { at }) if started_at.is_none() => {
                 focus_at_start = FocusSnapshot::capture().ok();
+                if let Err(err) = audio.start_recording() {
+                    eprintln!("parakit: error: could not start audio recording: {err:#}");
+                    focus_at_start = None;
+                    continue;
+                }
                 match send_worker_event(&tx, WorkerEvent::RecordingStarted) {
                     WorkerSendStatus::Sent => {}
                     WorkerSendStatus::Full => {
+                        let _ = audio.stop_recording();
                         focus_at_start = None;
                         continue;
                     }
                     WorkerSendStatus::Disconnected => break,
                 }
-                audio.start_recording();
                 started_at = Some(at);
             }
             CoordinatorEvent::Hotkey(HotkeyTransition::Pressed { .. }) => {}
@@ -144,7 +149,14 @@ fn stop_and_send_recording(
     stopped_at: Instant,
     focus_at_start: &mut Option<FocusSnapshot>,
 ) -> WorkerSendStatus {
-    let pcm = audio.stop_recording();
+    let pcm = match audio.stop_recording() {
+        Ok(pcm) => pcm,
+        Err(err) => {
+            eprintln!("parakit: error: could not stop audio recording: {err:#}");
+            focus_at_start.take();
+            return WorkerSendStatus::Sent;
+        }
+    };
     send_worker_event(
         tx,
         WorkerEvent::RecordingStopped {

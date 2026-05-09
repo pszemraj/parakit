@@ -8,7 +8,7 @@
 use anyhow::{anyhow, Context, Result};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{SampleFormat, Stream, StreamConfig};
-use crossbeam_channel::{bounded, Receiver, Sender};
+use crossbeam_channel::{bounded, Receiver, RecvTimeoutError, Sender};
 use parakit::audio_file::resampler_params;
 use parking_lot::Mutex;
 use ringbuf::{
@@ -51,19 +51,27 @@ pub struct AudioHandle {
 
 impl AudioHandle {
     /// Clear the current buffer, seed it with pre-roll, and begin recording.
-    pub fn start_recording(&self) {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the live audio drain accepts the command but does
+    /// not acknowledge it before the control timeout.
+    pub fn start_recording(&self) -> Result<()> {
         let next = self
             .next_session_epoch
             .fetch_add(1, Ordering::AcqRel)
             .wrapping_add(1)
             .max(1);
-        if self.send_control_start(next) {
-            return;
-        }
 
-        let mut state = self.state.lock();
-        state.begin_recording();
-        self.session_epoch.store(next, Ordering::Release);
+        match self.try_start_on_drain(next)? {
+            AudioControlAck::Acked(()) => Ok(()),
+            AudioControlAck::NoLiveDrain => {
+                let mut state = self.state.lock();
+                state.begin_recording();
+                self.session_epoch.store(next, Ordering::Release);
+                Ok(())
+            }
+        }
     }
 
     /// Stop recording and take ownership of the buffered samples.
@@ -71,37 +79,63 @@ impl AudioHandle {
     /// # Returns
     ///
     /// The captured mono PCM samples at [`TARGET_RATE`].
-    pub fn stop_recording(&self) -> Vec<f32> {
-        if let Some(pcm) = self.send_control_stop() {
-            return pcm;
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the live audio drain accepts the command but does
+    /// not acknowledge it before the control timeout.
+    pub fn stop_recording(&self) -> Result<Vec<f32>> {
+        match self.try_stop_on_drain()? {
+            AudioControlAck::Acked(pcm) => Ok(pcm),
+            AudioControlAck::NoLiveDrain => {
+                self.session_epoch.store(0, Ordering::Release);
+                Ok(self.state.lock().take_recording())
+            }
         }
-
-        self.session_epoch.store(0, Ordering::Release);
-        self.state.lock().take_recording()
     }
 
-    fn send_control_start(&self, epoch: u64) -> bool {
+    fn try_start_on_drain(&self, epoch: u64) -> Result<AudioControlAck<()>> {
         let Some(control) = self.control.lock().clone() else {
-            return false;
+            return Ok(AudioControlAck::NoLiveDrain);
         };
         let (ack_tx, ack_rx) = bounded(1);
         if control
             .send(AudioControl::Start { epoch, ack: ack_tx })
             .is_err()
         {
-            return false;
+            return Ok(AudioControlAck::NoLiveDrain);
         }
-        ack_rx.recv_timeout(AUDIO_CONTROL_TIMEOUT).is_ok()
+        recv_audio_control_ack(ack_rx, "Start").map(AudioControlAck::Acked)
     }
 
-    fn send_control_stop(&self) -> Option<Vec<f32>> {
-        let control = self.control.lock().clone()?;
+    fn try_stop_on_drain(&self) -> Result<AudioControlAck<Vec<f32>>> {
+        let Some(control) = self.control.lock().clone() else {
+            return Ok(AudioControlAck::NoLiveDrain);
+        };
         let (ack_tx, ack_rx) = bounded(1);
         if control.send(AudioControl::Stop { ack: ack_tx }).is_err() {
-            return None;
+            return Ok(AudioControlAck::NoLiveDrain);
         }
-        ack_rx.recv_timeout(AUDIO_CONTROL_TIMEOUT).ok()
+        recv_audio_control_ack(ack_rx, "Stop").map(AudioControlAck::Acked)
     }
+}
+
+enum AudioControlAck<T> {
+    Acked(T),
+    NoLiveDrain,
+}
+
+fn recv_audio_control_ack<T>(ack_rx: Receiver<T>, label: &'static str) -> Result<T> {
+    ack_rx
+        .recv_timeout(AUDIO_CONTROL_TIMEOUT)
+        .map_err(|err| match err {
+            RecvTimeoutError::Timeout => {
+                anyhow!("audio drain accepted {label} but did not acknowledge before timeout")
+            }
+            RecvTimeoutError::Disconnected => {
+                anyhow!("audio drain accepted {label} but disconnected before acknowledging")
+            }
+        })
 }
 
 #[cfg(test)]

@@ -44,14 +44,14 @@ fn mic_summary_reports_input_and_model_rates() {
 fn audio_handle_reuses_recording_capacity_after_stop() {
     let handle = AudioHandle::test_handle();
 
-    handle.start_recording();
+    handle.start_recording().expect("recording should start");
     {
         let mut state = handle.state.lock();
         assert!(state.buffer.capacity() >= RECORDING_CAPACITY);
         state.buffer.extend_from_slice(&[0.25, -0.25]);
     }
 
-    let pcm = handle.stop_recording();
+    let pcm = handle.stop_recording().expect("recording should stop");
     assert_eq!(pcm, vec![0.25, -0.25]);
     assert!(handle.state.lock().buffer.capacity() >= RECORDING_CAPACITY);
 }
@@ -134,11 +134,30 @@ fn pre_roll_vec(state: &CaptureState) -> Vec<f32> {
 fn stop_recording_without_drain_takes_buffered_samples() {
     let handle = AudioHandle::test_handle();
 
-    handle.start_recording();
+    handle.start_recording().expect("recording should start");
     append_processed_samples(&handle.state, &handle.session_epoch, &[0.7]);
 
-    let pcm = handle.stop_recording();
+    let pcm = handle.stop_recording().expect("recording should stop");
     assert_eq!(pcm, vec![0.7]);
+}
+
+#[test]
+fn sent_audio_control_start_timeout_does_not_fallback_to_direct_state() {
+    let (control_tx, _control_rx) = bounded::<AudioControl>(1);
+    let handle = AudioHandle {
+        state: Arc::new(Mutex::new(CaptureState::new())),
+        session_epoch: Arc::new(AtomicU64::new(0)),
+        next_session_epoch: Arc::new(AtomicU64::new(0)),
+        control: Arc::new(Mutex::new(Some(control_tx))),
+    };
+
+    let err = handle
+        .start_recording()
+        .expect_err("sent-but-unacked Start should fail");
+
+    assert!(format!("{err:#}").contains("accepted Start"));
+    assert_eq!(handle.session_epoch.load(Ordering::Acquire), 0);
+    assert!(handle.state.lock().buffer.is_empty());
 }
 
 #[test]
@@ -194,20 +213,20 @@ fn stop_recording_flushes_resampler_tail_and_keeps_next_pre_roll_clean() {
         control: Arc::new(Mutex::new(Some(control_tx))),
     };
 
-    handle.start_recording();
+    handle.start_recording().expect("recording should start");
     let short_tail = vec![0.25; 100];
     let pushed = producer.push_slice(&short_tail);
     assert_eq!(pushed, short_tail.len());
     let _ = wake_tx.try_send(());
 
-    let first = handle.stop_recording();
+    let first = handle.stop_recording().expect("recording should stop");
     assert!(
         !first.is_empty(),
         "stop must flush the partial resampler chunk"
     );
 
-    handle.start_recording();
-    let second = handle.stop_recording();
+    handle.start_recording().expect("recording should start");
+    let second = handle.stop_recording().expect("recording should stop");
     assert!(
         second.is_empty(),
         "flushed recording tail must not seed the next pre-roll"
@@ -225,10 +244,10 @@ fn start_recording_consumes_pre_roll() {
     let handle = AudioHandle::test_handle();
     append_processed_samples(&handle.state, &handle.session_epoch, &[0.1, 0.2, 0.3]);
 
-    handle.start_recording();
-    let first = handle.stop_recording();
-    handle.start_recording();
-    let second = handle.stop_recording();
+    handle.start_recording().expect("recording should start");
+    let first = handle.stop_recording().expect("recording should stop");
+    handle.start_recording().expect("recording should start");
+    let second = handle.stop_recording().expect("recording should stop");
 
     assert_eq!(first, vec![0.1, 0.2, 0.3]);
     assert!(second.is_empty());
