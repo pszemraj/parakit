@@ -132,18 +132,12 @@ pub fn default_thread_count() -> usize {
     recommended_thread_count(available)
 }
 
-#[cfg(target_os = "windows")]
-const RECOMMENDED_THREAD_CAP: usize = 8;
-#[cfg(not(target_os = "windows"))]
-const RECOMMENDED_THREAD_CAP: usize = 6;
-
 /// Convert available logical parallelism into an interactive-daemon default.
 ///
 /// # Returns
 ///
-/// Roughly half the available logical CPUs. Windows is capped at eight, while
-/// other platforms are capped at six. Explicit `--threads` values bypass this
-/// default.
+/// Roughly half the available logical CPUs, with guards for small machines.
+/// Explicit `--threads` values bypass this default.
 ///
 /// # Panics
 ///
@@ -153,9 +147,7 @@ pub fn recommended_thread_count(available_threads: usize) -> usize {
     if available_threads == 1 {
         return 1;
     }
-    let half = available_threads / 2;
-    let capped = half.clamp(2, RECOMMENDED_THREAD_CAP);
-    capped.min(available_threads)
+    (available_threads / 2).max(2)
 }
 
 fn pad_short_pcm(pcm: &[f32]) -> Cow<'_, [f32]> {
@@ -209,20 +201,11 @@ mod tests {
     }
 
     #[test]
-    fn recommended_threads_are_capped_on_larger_systems() {
-        #[cfg(target_os = "windows")]
-        {
-            assert_eq!(recommended_thread_count(8), 4);
-            assert_eq!(recommended_thread_count(12), 6);
-            assert_eq!(recommended_thread_count(16), 8);
-            assert_eq!(recommended_thread_count(32), 8);
-        }
-        #[cfg(not(target_os = "windows"))]
-        {
-            assert_eq!(recommended_thread_count(8), 4);
-            assert_eq!(recommended_thread_count(12), 6);
-            assert_eq!(recommended_thread_count(16), 6);
-            assert_eq!(recommended_thread_count(32), 6);
-        }
+    fn recommended_threads_scale_on_larger_systems() {
+        assert_eq!(recommended_thread_count(8), 4);
+        assert_eq!(recommended_thread_count(12), 6);
+        assert_eq!(recommended_thread_count(16), 8);
+        assert_eq!(recommended_thread_count(32), 16);
+        assert_eq!(recommended_thread_count(64), 32);
     }
 }
