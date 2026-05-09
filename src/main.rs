@@ -374,24 +374,8 @@ fn run() -> Result<()> {
         .context("audio manager started without reporting a microphone")?;
     warn_about_bluetooth_mic_if_needed(&log, &mic_info);
 
-    let model_path = match cli.model.as_deref() {
-        Some(path) => path.to_path_buf(),
-        None => fetch::ensure_default_model(cli.quiet)?,
-    };
+    let (model_path, engine) = open_cli_engine(&cli, cli.quiet, &log)?;
     let model_dtype = model_dtype_label(&model_path);
-    let threads = cli
-        .threads
-        .map(NonZeroUsize::get)
-        .unwrap_or_else(default_thread_count);
-    let open_started = Instant::now();
-    let engine = open_engine(&model_path, threads, cli.verbose)
-        .with_context(|| format!("could not open model {}", model_path.display()))?;
-    log.verbose(format!(
-        "parakit: model opened in {:.0}ms with backend={} threads={}",
-        open_started.elapsed().as_secs_f32() * 1000.0,
-        engine.backend(),
-        engine.threads()
-    ));
 
     // Banner.
     let model_name = model_file_name(&model_path);
@@ -497,23 +481,7 @@ fn run_ptt_audio_simulation(cli: &Cli, log: Arc<Logger>, audio_path: &Path) -> R
         wav.samples.len()
     ));
 
-    let model_path = match cli.model.as_deref() {
-        Some(path) => path.to_path_buf(),
-        None => fetch::ensure_default_model(cli.quiet || !cli.verbose)?,
-    };
-    let threads = cli
-        .threads
-        .map(NonZeroUsize::get)
-        .unwrap_or_else(default_thread_count);
-    let open_started = Instant::now();
-    let engine = open_engine(&model_path, threads, cli.verbose)
-        .with_context(|| format!("could not open model {}", model_path.display()))?;
-    log.verbose(format!(
-        "parakit: model opened in {:.0}ms with backend={} threads={}",
-        open_started.elapsed().as_secs_f32() * 1000.0,
-        engine.backend(),
-        engine.threads()
-    ));
+    let (_model_path, engine) = open_cli_engine(cli, cli.quiet || !cli.verbose, &log)?;
 
     let msg = format!(
         "parakit: simulating PTT from {} ({audio_secs:.2}s, {source_rate} Hz source)",
@@ -562,6 +530,27 @@ fn model_dtype_label(path: &std::path::Path) -> String {
         .map(|meta| format!(" ({:.0} MB)", meta.len() as f64 / 1_000_000.0))
         .unwrap_or_default();
     format!("{dtype}{size}")
+}
+
+fn open_cli_engine(cli: &Cli, fetch_quiet: bool, log: &Logger) -> Result<(PathBuf, Engine)> {
+    let model_path = match cli.model.as_deref() {
+        Some(path) => path.to_path_buf(),
+        None => fetch::ensure_default_model(fetch_quiet)?,
+    };
+    let threads = cli
+        .threads
+        .map(NonZeroUsize::get)
+        .unwrap_or_else(default_thread_count);
+    let open_started = Instant::now();
+    let engine = open_engine(&model_path, threads, cli.verbose)
+        .with_context(|| format!("could not open model {}", model_path.display()))?;
+    log.verbose(format!(
+        "parakit: model opened in {:.0}ms with backend={} threads={}",
+        open_started.elapsed().as_secs_f32() * 1000.0,
+        engine.backend(),
+        engine.threads()
+    ));
+    Ok((model_path, engine))
 }
 
 fn log_level(cli: &Cli) -> LogLevel {
