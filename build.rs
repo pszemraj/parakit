@@ -103,6 +103,8 @@ fn main() {
         .define("CMAKE_BUILD_WITH_INSTALL_RPATH", "ON")
         .define("CMAKE_INSTALL_RPATH_USE_LINK_PATH", "ON");
 
+    configure_windows_msvc_release(&mut cfg);
+
     let cuda_enabled = cargo_feature("cuda");
     let metal_enabled = cargo_feature("metal");
     let vulkan_enabled = cargo_feature("vulkan");
@@ -236,6 +238,10 @@ fn emit_build_report(install_dir: &Path) {
         "GGML_VULKAN",
         "GGML_METAL",
         "CMAKE_CUDA_ARCHITECTURES",
+        "CMAKE_C_FLAGS_RELEASE",
+        "CMAKE_CXX_FLAGS_RELEASE",
+        "CMAKE_ASM_FLAGS_RELEASE",
+        "GGML_CCACHE",
     ] {
         let env_key = format!("PARAKIT_BUILD_{key}");
         emit_env_from_cache(&cache, key, &env_key);
@@ -251,6 +257,25 @@ fn emit_build_report(install_dir: &Path) {
             build_dir.display()
         );
     }
+}
+
+fn configure_windows_msvc_release(cfg: &mut cmake::Config) {
+    if !target_is_windows() || env::var("CARGO_CFG_TARGET_ENV").as_deref() != Ok("msvc") {
+        return;
+    }
+
+    // The cmake crate writes Visual Studio config flags itself so it can
+    // communicate /MD vs /MT. Without setting Release flags explicitly, the
+    // generated MSVC Release project can lose /O2 and build ggml unoptimized.
+    const MSVC_RELEASE_FLAGS: &str = "/O2 /Ob2 /DNDEBUG /MD /utf-8 /W0";
+
+    cfg.define("CMAKE_C_FLAGS_RELEASE", MSVC_RELEASE_FLAGS)
+        .define("CMAKE_CXX_FLAGS_RELEASE", MSVC_RELEASE_FLAGS)
+        .define("CMAKE_ASM_FLAGS_RELEASE", MSVC_RELEASE_FLAGS)
+        // ggml enables ccache when it finds it. On Windows that has produced
+        // permission failures in normal developer shells, so keep MSVC builds
+        // direct and deterministic.
+        .define("GGML_CCACHE", "OFF");
 }
 
 fn configure_blas(cfg: &mut cmake::Config) -> BlasConfig {

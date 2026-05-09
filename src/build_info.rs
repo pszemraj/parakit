@@ -33,6 +33,11 @@ pub fn diagnostic_lines() -> Vec<String> {
         "cpu flags:      {}",
         option_env!("PARAKIT_BUILD_CPU_FLAGS").unwrap_or("unknown")
     ));
+    if let Some(flags) = option_env!("PARAKIT_BUILD_CMAKE_CXX_FLAGS_RELEASE") {
+        if !flags.is_empty() {
+            lines.push(format!("c++ release:    {flags}"));
+        }
+    }
     lines.push(format!(
         "accelerators:   cuda={}, vulkan={}, metal={}",
         build_value!("PARAKIT_BUILD_GGML_CUDA"),
