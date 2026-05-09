@@ -211,11 +211,23 @@ if "%INSTALL%"=="1" (
 )
 
 if "%INSTALL%"=="0" echo Install: skipped
-echo Current shell PATH: %ACTIVE_DIR%
 echo.
-echo Run:
+if "%INSTALL%"=="1" if "%UPDATE_USER_PATH%"=="1" goto print_path_commands
+goto print_explicit_commands
+
+:print_path_commands
+echo Open a new terminal, then run:
 echo   parakit doctor --deep
 echo   parakit
+goto finish_print
+
+:print_explicit_commands
+echo Run:
+echo   "%ACTIVE_DIR%\parakit.exe" doctor --deep
+echo   "%ACTIVE_DIR%\parakit.exe"
+goto finish_print
+
+:finish_print
 endlocal & set "PATH=%ACTIVE_DIR%;%PATH%"
 exit /b 0
 
