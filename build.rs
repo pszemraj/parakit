@@ -103,7 +103,7 @@ fn main() {
     let metal_enabled = cargo_feature("metal");
     let vulkan_enabled = cargo_feature("vulkan");
 
-    configure_blas(&mut cfg);
+    let blas = configure_blas(&mut cfg);
     cfg.define("GGML_CUDA", if cuda_enabled { "ON" } else { "OFF" });
     cfg.define("GGML_VULKAN", if vulkan_enabled { "ON" } else { "OFF" });
     if metal_enabled {
@@ -157,7 +157,7 @@ fn main() {
 
     let bin_dir = install_dir.join("bin");
     if target_is_windows() {
-        prepare_windows_artifacts(&install_dir, &final_lib_dir, &bin_dir);
+        prepare_windows_artifacts(&install_dir, &final_lib_dir, &bin_dir, &blas);
     } else {
         create_crispasr_alias(&final_lib_dir);
     }
@@ -249,7 +249,7 @@ fn emit_build_report(install_dir: &Path) {
     }
 }
 
-fn configure_blas(cfg: &mut cmake::Config) {
+fn configure_blas(cfg: &mut cmake::Config) -> BlasConfig {
     let blas = BlasConfig::from_env();
     cfg.define("GGML_BLAS", if blas.enabled { "ON" } else { "OFF" });
     cfg.define("COHERE_MKL", if blas.cohere_mkl { "ON" } else { "OFF" });
@@ -275,6 +275,7 @@ fn configure_blas(cfg: &mut cmake::Config) {
         );
     }
     configure_blas_paths(cfg, &blas);
+    blas
 }
 
 struct BlasConfig {
@@ -312,6 +313,9 @@ impl BlasConfig {
         }
         if pkg_config_exists("mkl-sdl") {
             return Self::mkl(raw, explicit);
+        }
+        if target_is_windows() && windows_openblas_root().is_some() {
+            return Self::openblas(raw, explicit);
         }
         if pkg_config_exists("openblas") || pkg_config_exists("openblas64") {
             return Self::openblas(raw, explicit);
@@ -550,7 +554,12 @@ fn locate_source(manifest_dir: &Path) -> PathBuf {
     );
 }
 
-fn prepare_windows_artifacts(install_dir: &Path, lib_dir: &Path, bin_dir: &Path) {
+fn prepare_windows_artifacts(
+    install_dir: &Path,
+    lib_dir: &Path,
+    bin_dir: &Path,
+    blas: &BlasConfig,
+) {
     std::fs::create_dir_all(lib_dir).unwrap_or_else(|err| {
         panic!(
             "failed to create Windows import-library dir {}: {err}",
@@ -592,14 +601,12 @@ fn prepare_windows_artifacts(install_dir: &Path, lib_dir: &Path, bin_dir: &Path)
         )
     });
 
-    copy_optional_windows_blas_runtime(bin_dir);
+    copy_optional_windows_blas_runtime(bin_dir, blas);
     copy_runtime_dlls_to_profile_dir(bin_dir);
 }
 
-fn copy_optional_windows_blas_runtime(bin_dir: &Path) {
-    if env::var("PARAKIT_BLAS").map(|value| value.trim().eq_ignore_ascii_case("openblas"))
-        != Ok(true)
-    {
+fn copy_optional_windows_blas_runtime(bin_dir: &Path, blas: &BlasConfig) {
+    if blas.selected != "openblas" {
         return;
     }
 
@@ -622,18 +629,24 @@ fn copy_optional_windows_blas_runtime(bin_dir: &Path) {
 fn windows_openblas_root() -> Option<PathBuf> {
     if let Ok(root) = env::var("PARAKIT_OPENBLAS_ROOT") {
         let root = PathBuf::from(root);
-        if root.join("lib/openblas.lib").is_file() {
+        if windows_openblas_root_is_usable(&root) {
             return Some(root);
         }
     }
 
     let conda = PathBuf::from(env::var("CONDA_PREFIX").ok()?);
     let root = conda.join("Library");
-    if root.join("lib/openblas.lib").is_file() {
+    if windows_openblas_root_is_usable(&root) {
         Some(root)
     } else {
         None
     }
+}
+
+fn windows_openblas_root_is_usable(root: &Path) -> bool {
+    root.join("lib/openblas.lib").is_file()
+        && root.join("include/openblas/cblas.h").is_file()
+        && root.join("bin/openblas.dll").is_file()
 }
 
 fn windows_import_library_names() -> (&'static str, &'static str) {
