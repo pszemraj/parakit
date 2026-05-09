@@ -479,10 +479,23 @@ fn run_ptt_audio_simulation(cli: &Cli, log: Arc<Logger>, audio_path: &Path) -> R
         .map(|dir| Arc::new(DataLogger::new(dir, cli.log_format)));
     let sounds = Sounds::new(false);
 
+    let load_started = Instant::now();
     let mut wav = read_wav_mono(audio_path)?;
+    let load_elapsed = load_started.elapsed();
     let source_rate = wav.sample_rate;
+    let source_samples = wav.samples.len();
+    let resample_started = Instant::now();
     wav.samples = resample_to_target(wav.samples, source_rate)?;
+    let resample_elapsed = resample_started.elapsed();
     let audio_secs = wav.samples.len() as f32 / TARGET_RATE as f32;
+    log.verbose(format!(
+        "parakit: simulated audio prepared in {:.0}ms (read/downmix {:.0}ms, resample {:.0}ms, source_samples={}, target_samples={})",
+        (load_elapsed + resample_elapsed).as_secs_f32() * 1000.0,
+        load_elapsed.as_secs_f32() * 1000.0,
+        resample_elapsed.as_secs_f32() * 1000.0,
+        source_samples,
+        wav.samples.len()
+    ));
 
     let model_path = match cli.model.as_deref() {
         Some(path) => path.to_path_buf(),
@@ -492,8 +505,15 @@ fn run_ptt_audio_simulation(cli: &Cli, log: Arc<Logger>, audio_path: &Path) -> R
         .threads
         .map(NonZeroUsize::get)
         .unwrap_or_else(default_thread_count);
+    let open_started = Instant::now();
     let engine = open_engine(&model_path, threads, cli.verbose)
         .with_context(|| format!("could not open model {}", model_path.display()))?;
+    log.verbose(format!(
+        "parakit: model opened in {:.0}ms with backend={} threads={}",
+        open_started.elapsed().as_secs_f32() * 1000.0,
+        engine.backend(),
+        engine.threads()
+    ));
 
     let msg = format!(
         "parakit: simulating PTT from {} ({audio_secs:.2}s, {source_rate} Hz source)",
