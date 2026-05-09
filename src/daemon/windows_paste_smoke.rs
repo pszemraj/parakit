@@ -28,6 +28,11 @@ const PASTE_SETTLE: Duration = Duration::from_millis(400);
 /// # Returns
 ///
 /// `Ok(())` when the sentinel reaches the owned edit window.
+///
+/// # Errors
+///
+/// Returns an error when the test window cannot be created or focused, the
+/// paste chord fails, or the edit-control text does not match the sentinel.
 pub(crate) fn windows_paste_smoke_test(mode: PasteMode) -> Result<()> {
     let sentinel = format!("parakit-smoke-{}", std::process::id());
     let window = TestEditWindow::create().context("create Windows paste smoke edit window")?;

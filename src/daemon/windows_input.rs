@@ -45,6 +45,10 @@ pub(crate) fn run_registered_hotkey_loop_or_exit(tx: Sender<HotkeyTransition>) {
 /// # Returns
 ///
 /// `Ok(())` when Windows accepted and released the registration.
+///
+/// # Errors
+///
+/// Returns an error when Ctrl+Space is already owned or cannot be registered.
 pub(crate) fn registered_hotkey_probe() -> Result<()> {
     register_ctrl_space(PARAKIT_HOTKEY_PROBE_ID)?;
     let _guard = RegisteredHotkeyGuard {
@@ -114,6 +118,11 @@ fn key_is_down(vk: VIRTUAL_KEY) -> bool {
 /// # Returns
 ///
 /// `Ok(())` when every keyboard event was accepted by `SendInput`.
+///
+/// # Errors
+///
+/// Returns an error when `SendInput` accepts only part of the event sequence,
+/// commonly because the target is elevated or input injection is blocked.
 pub(crate) fn send_paste_chord(use_shift: bool) -> Result<()> {
     let mut down = Vec::with_capacity(3);
     down.push(key_event(VK_CONTROL, false));
@@ -183,6 +192,11 @@ fn send_inputs(inputs: &[INPUT], label: &str) -> Result<()> {
     Ok(())
 }
 
+/// Return the standard Windows hotkey failure help text.
+///
+/// # Returns
+///
+/// A static diagnostic string for startup failures.
 pub(crate) fn windows_hotkey_failure_help() -> &'static str {
     "Windows hotkey capture uses RegisterHotKey(Ctrl+Space). If registration fails, another application probably owns Ctrl+Space. Close the conflicting application or add a configurable hotkey before using this backend."
 }

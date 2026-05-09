@@ -19,6 +19,11 @@ impl WindowsFocusSnapshot {
     /// # Returns
     ///
     /// A snapshot suitable for comparison immediately before insertion.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when Windows has no foreground window or the window
+    /// owner cannot be identified.
     pub(crate) fn capture() -> Result<Self> {
         let hwnd = unsafe { GetForegroundWindow() };
         if hwnd.0.is_null() {
@@ -43,6 +48,10 @@ impl WindowsFocusSnapshot {
     /// # Returns
     ///
     /// `Ok(true)` when the foreground HWND, process id, and thread id match.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when foreground-window owner metadata cannot be read.
     pub(crate) fn matches_current(self) -> Result<bool> {
         let hwnd = unsafe { GetForegroundWindow() };
         if hwnd.0.is_null() {

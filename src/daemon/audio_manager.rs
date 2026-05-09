@@ -52,6 +52,11 @@ pub struct AudioHandle {
 impl AudioHandle {
     /// Clear the current buffer, seed it with pre-roll, and begin recording.
     ///
+    /// # Returns
+    ///
+    /// `Ok(())` when recording state was started by the live drain thread or
+    /// by the no-drain fallback path.
+    ///
     /// # Errors
     ///
     /// Returns an error if the live audio drain accepts the command but does
