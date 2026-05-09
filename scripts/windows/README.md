@@ -6,7 +6,7 @@ Windows builds need an installed runnable directory, not only `parakit.exe`. Cri
 
 `cargo install --path .` is different: Cargo installs only `parakit.exe` into Cargo's bin directory. It does not copy the generated CrispASR, ggml, or OpenBLAS DLLs. Use one of these scripts when you want a normal Windows install.
 
-By default, the scripts build `target\parakit-windows-x86_64-cpu`, install it to `%LOCALAPPDATA%\Programs\parakit`, and add that install directory to the Windows User `PATH`. They do not edit the system `PATH` and do not require administrator rights.
+By default, the scripts build `target\parakit-windows-x86_64-cpu`, install it to `%LOCALAPPDATA%\Programs\parakit`, and add that install directory to the Windows User `PATH`. They do not edit the system `PATH` and do not require administrator rights. Open a new terminal after install before running `parakit` by name.
 
 ## Build
 
@@ -14,7 +14,7 @@ By default, the scripts build `target\parakit-windows-x86_64-cpu`, install it to
 scripts\windows\windows-cpu-build.bat
 ```
 
-The batch script checks for the Rust MSVC toolchain, Git, CMake, and submodules. Useful options are `--help`, `--skip-doctor`, and `--debug`.
+The batch file is a wrapper around the PowerShell implementation. It exists so Command Prompt users can run the build without writing PowerShell syntax. Useful options are `--help`, `--skip-doctor`, `--debug`, `--no-install`, and `--install-dir`.
 
 PowerShell equivalent from PowerShell:
 
@@ -27,14 +27,14 @@ Set-ExecutionPolicy -Scope Process Bypass
 
 With an active conda environment, `PARAKIT_BLAS=auto` detects OpenBLAS from `%CONDA_PREFIX%\Library`. The bundle includes `openblas.dll` when that backend is selected.
 
-After installing from Command Prompt with the batch script, the same Command Prompt can run:
+After installing, open a new terminal and run:
 
 ```text
 parakit doctor --deep
 parakit
 ```
 
-After installing from PowerShell, or after launching the batch script from PowerShell, open a new terminal before running `parakit` by name. The installer updates persistent User `PATH`; it cannot rewrite an already-running parent shell's environment.
+The installer updates persistent User `PATH`; it cannot rewrite already-running parent shells.
 
 For development-only bundle checks without installing:
 

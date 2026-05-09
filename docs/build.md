@@ -37,7 +37,7 @@ cargo install --path .
 
 Install behavior:
 
-- Windows `cargo install --path .` copies `parakit.exe` but not the generated CrispASR/ggml DLLs. Use the scripts in [../scripts/windows/README.md](../scripts/windows/README.md) for a normal Windows install; they install the runnable directory under the current user's app directory and add it to User `PATH`.
+- Windows `cargo install --path .` copies `parakit.exe` but not the generated CrispASR/ggml DLLs. Use the scripts in [../scripts/windows/README.md](../scripts/windows/README.md) for a normal Windows install.
 - Unix-like developer installs depend on the generated CrispASR shared libraries under Cargo's build output. Do not delete the repository `target/` tree.
 - GitHub auto-generated source archives are unsupported because they do not include the CrispASR submodule. A public release must ship either a source archive with submodules or a binary bundle whose shared libraries are colocated with the executable.
 
@@ -54,7 +54,7 @@ cargo install --path . --features metal  # Apple targets only
 
 ## Windows Bundles
 
-For a per-user Windows CPU install from Command Prompt:
+For a per-user Windows CPU install:
 
 ```bat
 scripts\windows\windows-cpu-build.bat
@@ -67,7 +67,7 @@ Set-ExecutionPolicy -Scope Process Bypass
 .\scripts\windows\windows-cpu-build.ps1
 ```
 
-By default, both scripts build release mode, recreate `target\parakit-windows-x86_64-cpu`, copy `parakit.exe` plus adjacent runtime DLLs, install the runnable directory to `%LOCALAPPDATA%\Programs\parakit`, add it to User `PATH`, and run `parakit doctor` unless asked to skip it. Details are in [../scripts/windows/README.md](../scripts/windows/README.md).
+Options, install location, PATH behavior, and OpenBLAS bundling are described in [../scripts/windows/README.md](../scripts/windows/README.md).
 
 ## CPU Builds
 
