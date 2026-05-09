@@ -30,6 +30,10 @@ const HWND_NOTOPMOST_RAW: isize = -2;
 const SWP_NOSIZE: u32 = 0x0001;
 const SWP_NOMOVE: u32 = 0x0002;
 const SWP_SHOWWINDOW: u32 = 0x0040;
+const WM_SYSKEYDOWN: u32 = 0x0104;
+const WM_SYSKEYUP: u32 = 0x0105;
+const WM_SYSCHAR: u32 = 0x0106;
+const WM_SYSDEADCHAR: u32 = 0x0107;
 
 #[link(name = "user32")]
 unsafe extern "system" {
@@ -373,12 +377,26 @@ fn pump_messages_for(duration: Duration) {
     let until = Instant::now() + duration;
     while Instant::now() < until {
         let mut msg = MSG::default();
-        while unsafe { PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() } {
+        while Instant::now() < until
+            && unsafe { PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() }
+        {
+            if is_alt_unlock_message(msg.message) {
+                continue;
+            }
             unsafe {
                 let _ = TranslateMessage(&msg);
                 DispatchMessageW(&msg);
             }
         }
-        thread::sleep(Duration::from_millis(10));
+        if Instant::now() < until {
+            thread::sleep(Duration::from_millis(10));
+        }
     }
+}
+
+fn is_alt_unlock_message(message: u32) -> bool {
+    matches!(
+        message,
+        WM_SYSKEYDOWN | WM_SYSKEYUP | WM_SYSCHAR | WM_SYSDEADCHAR
+    )
 }
