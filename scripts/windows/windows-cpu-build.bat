@@ -2,6 +2,7 @@
 setlocal EnableExtensions DisableDelayedExpansion
 
 set "SCRIPT_NAME=%~nx0"
+for %%I in ("%~dp0.") do set "SCRIPT_DIR=%%~fI"
 set "PROFILE=release"
 set "CARGO_PROFILE_FLAG=--release"
 set "SKIP_DOCTOR=0"
@@ -81,8 +82,12 @@ if errorlevel 1 (
     exit /b 1
 )
 
-set "SCRIPT_DIR=%~dp0"
-for %%I in ("%SCRIPT_DIR%..") do set "REPO=%%~fI"
+set "REPO="
+for /f "delims=" %%R in ('git -C "%SCRIPT_DIR%" rev-parse --show-toplevel 2^>nul') do set "REPO=%%R"
+if "%REPO%"=="" (
+    echo error: could not find the parakit git repository root from "%SCRIPT_DIR%". 1>&2
+    exit /b 1
+)
 cd /d "%REPO%" || exit /b 1
 
 if not exist "Cargo.toml" (
@@ -214,7 +219,7 @@ exit /b 0
 echo Build and bundle Parakit CPU daemon on native Windows.
 echo.
 echo Usage:
-echo   scripts\%SCRIPT_NAME% [--release] [--debug] [--skip-doctor] [--no-submodules]
+echo   scripts\windows\%SCRIPT_NAME% [--release] [--debug] [--skip-doctor] [--no-submodules]
 echo.
 echo Options:
 echo   --release        Build target\release and bundle it. This is the default.

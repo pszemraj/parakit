@@ -32,7 +32,16 @@ The Python helper runs NVIDIA NeMo's official [Parakeet-TDT-0.6B-v3](https://hug
 python scripts/transcribe_nemo_parakeet.py clips/example.wav
 ```
 
-Install details are in [scripts/README.md](../scripts/README.md). The script has hard imports for PyTorch and NeMo so a broken reference environment fails immediately.
+Use a separate Python environment. NeMo and PyTorch are heavy dependencies and are not needed for the Rust daemon:
+
+```bash
+python -m venv target/tmp/.venv-nemo
+source target/tmp/.venv-nemo/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -r scripts/requirements.txt
+```
+
+For CUDA, install the PyTorch build appropriate for the machine first if the default wheel resolver does not pick the right one. The script has hard imports for PyTorch and NeMo so a broken reference environment fails immediately.
 
 ## Recommended A/B Procedure
 

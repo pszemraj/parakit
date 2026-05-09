@@ -38,6 +38,7 @@ Live capture keeps the microphone stream open and drains callback audio through 
 - `crispasr::Session` is `Send` but not `Sync`, so the worker owns `Engine` directly. Do not wrap it in `Arc<Engine>`.
 - Hotkey backends emit only logical press/release transitions. They do not call audio, ASR, clipboard, or insertion code.
 - Linux `auto`, `desktop`, and `x11-global-hotkey` register `Ctrl+Space` with X11 through `global-hotkey`; `x11-listen` is passive debugging, and `evdev-proxy-experimental` is the explicit experimental evdev/uinput path. Linux text insertion uses X11/XTest and rejects Wayland sessions.
+- Windows registers `Ctrl+Space` with `RegisterHotKey`, pastes with `SendInput`, checks the foreground window before insertion, and uses a per-user named pipe for daemon commands.
 - Normal dictation hotkey backends must suppress the literal Space key before it reaches the focused application. The passive `x11-listen` backend is for debugging and does not suppress keys.
 
 Cross-thread communication uses atomics, mutex-protected buffers, and crossbeam channels.
@@ -53,6 +54,7 @@ Cross-thread communication uses atomics, mutex-protected buffers, and crossbeam 
 | `src/daemon/audio_pactl.rs` | Linux `pactl` parsing for startup/reopen microphone display details. |
 | `src/daemon/worker.rs` | ASR worker, paste sanitizer, focus guard, clipboard fallback, and insertion circuit breaker. |
 | `src/daemon/ipc.rs` | Local control socket for `status`, `stop`, `paste-last`, and `test-paste`. |
+| `src/daemon/windows_{focus,input,paste_smoke,security}.rs` | Windows foreground checks, registered hotkey and paste helpers, deep paste smoke test, and privilege diagnostics. |
 | `src/daemon/{preflight,session,x11,alsa}.rs` | Startup checks, session events, X11 helpers, and ALSA stderr suppression. |
 | `src/daemon/{logging,notifications,sounds}.rs` | Runtime logging, desktop notifications, and generated audio cues. |
 | `src/fetch.rs` | Hosted [Q8_0 GGUF](https://huggingface.co/pszemraj/parakeet-tdt-0.6b-v3-gguf) download, source rebuilds, checksum verification. |
@@ -71,7 +73,3 @@ Cross-thread communication uses atomics, mutex-protected buffers, and crossbeam 
 Startup failures stop the process when the model, microphone, or hotkey backend cannot be opened.
 
 Runtime failures are reported and the daemon continues when possible: sound cues, log writes, individual transcriptions, and text insertion failures.
-
-## Deferred Windows Work
-
-TODO: Before Windows daemon support is considered ready, replace `rdev::grab` with a passive or registered hotkey backend, add a foreground-window focus guard, make `doctor --deep` exercise Windows insertion honestly, and validate the daemon path on Windows CI plus a real desktop session.

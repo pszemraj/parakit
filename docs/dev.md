@@ -44,7 +44,7 @@ TODO: Move the default hotkey away from `Ctrl+Space` or make it configurable, th
 
 TODO: Add a secondary recording watchdog for missed key-release events from the registered X11 hotkey backend. The existing max-utterance timeout bounds the failure, but a silence-based stop would recover sooner when a backend misses release ordering.
 
-TODO: Upgrade `enigo` from the 0.2 line in a cross-platform validation branch. Linux batch paste uses X11 directly, but direct mode and non-Linux paste shortcuts still need real Windows/macOS desktop validation after the dependency update.
+TODO: Upgrade `enigo` from the 0.2 line in a cross-platform validation branch. Linux batch paste uses X11 directly and Windows batch paste uses `SendInput`, but direct mode and macOS paste shortcuts still need real desktop validation after the dependency update.
 
 TODO: Add an optional X11 paste inter-key hold only if real target applications miss the current XTest paste chord. The current smoke test covers X11 event delivery; app-specific compatibility should drive any delay so normal paste latency does not grow without evidence.
 

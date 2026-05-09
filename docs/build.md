@@ -2,6 +2,8 @@
 
 parakit is a Rust 1.87+ binary that links to the vendored [CrispASR](https://github.com/CrispStrobe/CrispASR) submodule. The default build is CPU-only and local-machine optimized.
 
+Command examples use a POSIX shell unless the surrounding section is Windows-specific. Windows-only commands are shown as `bat` or `powershell`.
+
 ## Native Dependencies
 
 Cargo handles Rust packages. System packages are still needed for audio, desktop input, X11/XTest insertion, CMake, and optional accelerator SDKs.
@@ -32,7 +34,7 @@ cargo install --path .
 ```
 
 `cargo install --path .` installs the release binary to Cargo's bin directory, usually `~/.cargo/bin`.
-On Windows, `cargo install --path .` copies `parakit.exe` but not the generated CrispASR/ggml DLLs, so that install location is not runnable by itself. Use the Windows bundle scripts below for a runnable Windows app directory. On Unix-like targets, developer installs built this way depend on the generated CrispASR shared libraries under Cargo's build output. Do not delete the repository `target/` tree and treat GitHub auto-generated source archives as unsupported because they do not include the CrispASR submodule. A public release must ship either a source archive with submodules or a binary bundle whose shared libraries are colocated with the executable.
+On Windows, `cargo install --path .` copies `parakit.exe` but not the generated CrispASR/ggml DLLs, so use the bundle scripts in [../scripts/windows/README.md](../scripts/windows/README.md) for a runnable app directory. On Unix-like targets, developer installs built this way depend on the generated CrispASR shared libraries under Cargo's build output. Do not delete the repository `target/` tree and treat GitHub auto-generated source archives as unsupported because they do not include the CrispASR submodule. A public release must ship either a source archive with submodules or a binary bundle whose shared libraries are colocated with the executable.
 
 Add `--locked` for CI or reproducibility checks when Cargo must use the exact versions in `Cargo.lock`. Leave it off for normal local installs.
 
@@ -45,26 +47,21 @@ cargo install --path . --features vulkan
 cargo install --path . --features metal  # Apple targets only
 ```
 
-Windows support is experimental. Prefer a normal Rust build first:
+## Windows Bundles
 
-```powershell
-git submodule update --init --recursive
-cargo build --release
-```
-
-For a runnable CPU bundle from Command Prompt:
+For a runnable Windows CPU bundle from Command Prompt:
 
 ```bat
-scripts\windows-cpu-build.bat
+scripts\windows\windows-cpu-build.bat
 ```
 
 The PowerShell equivalent is:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts/windows-cpu-build.ps1
+powershell -ExecutionPolicy Bypass -File scripts/windows/windows-cpu-build.ps1
 ```
 
-Both scripts build release mode, recreate `target\parakit-windows-x86_64-cpu`, copy `parakit.exe` plus adjacent runtime DLLs, and run `parakit doctor` unless asked to skip it. Treat Windows builds as source/build validation until the daemon work in [architecture.md#deferred-windows-work](architecture.md#deferred-windows-work) is complete.
+Both scripts build release mode, recreate `target\parakit-windows-x86_64-cpu`, copy `parakit.exe` plus adjacent runtime DLLs, and run `parakit doctor` unless asked to skip it. Details are in [../scripts/windows/README.md](../scripts/windows/README.md).
 
 ## CPU Builds
 
@@ -139,14 +136,3 @@ readelf -d target/debug/parakit | grep -E "RPATH|RUNPATH"
 ```
 
 The library paths should point into `target/debug/build/parakit-*/out/lib`, and `readelf` should report `RPATH`.
-
-## Windows DLLs
-
-Windows has no rpath. If the built executable cannot find CrispASR DLLs, copy generated DLLs next to the binary or put the generated `out\bin` directory on `PATH`:
-
-```powershell
-cargo build --release
-copy target\release\build\parakit-*\out\bin\*.dll target\release\
-```
-
-Windows text insertion uses `SendInput`. It can inject only into applications running at the same or a lower integrity level, so a non-elevated parakit cannot paste into an elevated administrator app. Security software may also flag global hooks plus text insertion; whitelist the binary if needed.

@@ -1,7 +1,7 @@
 # Build and bundle Parakit CPU daemon on native Windows.
 #
 # Usage:
-#   powershell -ExecutionPolicy Bypass -File scripts/windows-cpu-build.ps1
+#   powershell -ExecutionPolicy Bypass -File scripts/windows/windows-cpu-build.ps1
 #
 # This script intentionally does not enable CUDA. Validate the native CPU
 # daemon before adding GPU toolchain and runtime DLL complexity.
@@ -50,7 +50,7 @@ function Get-RepoRoot {
         $scriptPath = $MyInvocation.MyCommand.Path
     }
     $scriptDir = Split-Path -Parent $scriptPath
-    return (Resolve-Path (Join-Path $scriptDir "..")).Path
+    return (Resolve-Path (Join-Path $scriptDir "..\..")).Path
 }
 
 function Assert-ChildPath {

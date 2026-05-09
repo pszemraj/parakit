@@ -29,6 +29,8 @@ cd parakit
 cargo install --path .
 ```
 
+On Windows, use the bundle script instead of `cargo install` when you want a runnable app directory. See [scripts/windows/README.md](scripts/windows/README.md).
+
 Make sure Cargo's bin directory is on `PATH`:
 
 ```bash
@@ -57,13 +59,13 @@ Linux currently requires an X11 session for desktop hotkeys and text insertion; 
 ## Docs
 
 - Build and native dependencies: [docs/build.md](docs/build.md)
+- Windows bundle scripts: [scripts/windows/README.md](scripts/windows/README.md)
 - Running, control socket, model cache, logging, and paste modes: [docs/running.md](docs/running.md)
 - Linux X11 and experimental evdev-proxy setup: [docs/linux-desktop.md](docs/linux-desktop.md)
 - Cleanup rules: [docs/cleaning-rules.md](docs/cleaning-rules.md)
 - Validation and quality checks: [docs/quality.md](docs/quality.md)
 - Architecture and platform work: [docs/architecture.md](docs/architecture.md)
 - Maintainer notes: [docs/dev.md](docs/dev.md)
-- Python helpers: [scripts/README.md](scripts/README.md)
 - Troubleshooting: [docs/troubleshooting.md](docs/troubleshooting.md)
 
 ## License

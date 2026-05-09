@@ -67,7 +67,7 @@ parakit stop
 
 ## Control Socket
 
-When the daemon is running, these commands talk to it through a per-user Unix socket under the parakit runtime directory:
+When the daemon is running, these commands talk to it through local per-user IPC. Unix-like systems use a Unix socket under the parakit runtime directory; Windows uses a named pipe.
 
 ```bash
 parakit status
@@ -107,6 +107,8 @@ Bluetooth microphones are allowed, but parakit prints a warning because headset 
 parakit transcribes once on hotkey release, writes plain text to the system clipboard, then sends the configured paste shortcut. By default it waits for the target to consume the paste and restores the previous clipboard contents when the clipboard API can round-trip them. Current restore support covers text, HTML with a text alternative, copied file lists, and images. Other clipboard MIME formats are not generally restorable through `arboard`; if one was active, parakit leaves the staged transcript on the clipboard instead of overwriting an unknown format with empty text.
 
 On Linux/X11, parakit records the active X11 window when recording starts. If focus clearly changes before insertion, it does not send a paste chord. If focus capture or recheck fails because X11 is transiently unavailable, parakit pastes anyway; the transcript remains available through `parakit paste-last` either way. Terminal mode strips trailing newlines and blocks multiline terminal paste.
+
+On Windows, parakit records the foreground window at PTT-down, rechecks it before paste, and sends the paste shortcut with `SendInput`. A normal user process cannot inject into an administrator/elevated target application.
 
 Paste modes:
 
