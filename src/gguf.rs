@@ -84,6 +84,18 @@ pub fn detect_dtype(path: &Path) -> Result<Option<String>> {
     dominant_tensor_type(&mut file, tensor_count).map(|value| value.map(str::to_string))
 }
 
+/// Return the detected GGUF dtype, or `unknown` when detection is unavailable.
+///
+/// # Returns
+///
+/// A display-ready dtype label.
+pub fn dtype_label(path: &Path) -> String {
+    detect_dtype(path)
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
 fn dominant_tensor_type(file: &mut File, tensor_count: u64) -> Result<Option<&'static str>> {
     let mut counts: HashMap<u32, usize> = HashMap::new();
     for _ in 0..tensor_count {

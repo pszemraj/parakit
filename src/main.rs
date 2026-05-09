@@ -555,10 +555,7 @@ fn run_ptt_audio_simulation(cli: &Cli, log: Arc<Logger>, audio_path: &Path) -> R
 }
 
 fn model_dtype_label(path: &std::path::Path) -> String {
-    let dtype = gguf::detect_dtype(path)
-        .ok()
-        .flatten()
-        .unwrap_or_else(|| "unknown".to_string());
+    let dtype = gguf::dtype_label(path);
     let size = path
         .metadata()
         .ok()
@@ -695,10 +692,7 @@ fn print_cache_list() -> Result<()> {
     println!("  models:");
     for path in entries {
         let name = model_file_name(&path);
-        let dtype = gguf::detect_dtype(&path)
-            .ok()
-            .flatten()
-            .unwrap_or_else(|| "unknown".to_string());
+        let dtype = gguf::dtype_label(&path);
         let size = path
             .metadata()
             .map(|meta| format_file_size(meta.len()))

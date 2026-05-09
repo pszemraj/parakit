@@ -67,10 +67,7 @@ fn main() -> Result<()> {
         .unwrap_or_else(default_thread_count);
     let engine = Engine::open_with_threads(&model_path, threads)
         .with_context(|| format!("could not open model {}", model_path.display()))?;
-    let dtype = gguf::detect_dtype(&model_path)
-        .ok()
-        .flatten()
-        .unwrap_or_else(|| "unknown".to_string());
+    let dtype = gguf::dtype_label(&model_path);
 
     println!("model:   {}", model_path.display());
     println!("dtype:   {dtype}");

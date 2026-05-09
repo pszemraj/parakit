@@ -276,56 +276,32 @@ fn handle_client(
     let notifier = Notifier::new(Arc::clone(&log));
     let _ = stream.set_read_timeout(Some(IPC_CLIENT_TIMEOUT));
     let _ = stream.set_write_timeout(Some(IPC_CLIENT_TIMEOUT));
-    let outcome = match read_command(&stream).and_then(|command| {
-        handle_command(
-            command,
-            Arc::clone(state),
-            paste_mode,
-            keep_transcript_clipboard,
-            log.as_ref(),
-            &notifier,
-        )
-        .map_err(|err| IpcResponse::Err {
-            message: format!("{err:#}"),
-        })
-    }) {
-        Ok(outcome) => outcome,
-        Err(response) => CommandOutcome {
-            response,
-            stop_after_response: false,
-        },
-    };
+    let outcome = client_command_outcome(
+        read_command(&stream),
+        state,
+        paste_mode,
+        keep_transcript_clipboard,
+        log.as_ref(),
+        &notifier,
+    );
 
     if let Err(err) = write_response(&mut stream, &outcome.response) {
         log.warn(format!("control socket response failed: {err:#}"));
     }
 
     if outcome.stop_after_response {
-        let socket_path = preflight::control_socket_path().ok();
-        thread::spawn(move || {
-            thread::sleep(Duration::from_millis(50));
-            if let Some(path) = socket_path {
-                let _ = std::fs::remove_file(path);
-            }
-            std::process::exit(0);
-        });
+        schedule_exit_after_response(preflight::control_socket_path().ok());
     }
 }
 
 #[cfg(unix)]
-fn read_command(
-    stream: &std::os::unix::net::UnixStream,
-) -> std::result::Result<IpcCommand, IpcResponse> {
+fn read_command(stream: &std::os::unix::net::UnixStream) -> Result<IpcCommand> {
     let mut reader = BufReader::new(stream);
     let mut line = String::new();
     reader
         .read_line(&mut line)
-        .map_err(|err| IpcResponse::Err {
-            message: format!("read control command failed: {err}"),
-        })?;
-    serde_json::from_str(&line).map_err(|err| IpcResponse::Err {
-        message: format!("invalid control command: {err}"),
-    })
+        .context("read control command failed")?;
+    serde_json::from_str(&line).context("invalid control command")
 }
 
 #[cfg(unix)]
@@ -429,6 +405,46 @@ fn handle_command(
             })
         }
     }
+}
+
+#[cfg(any(unix, target_os = "windows"))]
+fn client_command_outcome(
+    command: Result<IpcCommand>,
+    state: &Arc<SharedState>,
+    paste_mode: PasteMode,
+    keep_transcript_clipboard: bool,
+    log: &Logger,
+    notifier: &Notifier,
+) -> CommandOutcome {
+    match command.and_then(|command| {
+        handle_command(
+            command,
+            Arc::clone(state),
+            paste_mode,
+            keep_transcript_clipboard,
+            log,
+            notifier,
+        )
+    }) {
+        Ok(outcome) => outcome,
+        Err(err) => CommandOutcome {
+            response: IpcResponse::Err {
+                message: format!("{err:#}"),
+            },
+            stop_after_response: false,
+        },
+    }
+}
+
+#[cfg(any(unix, target_os = "windows"))]
+fn schedule_exit_after_response(cleanup_path: Option<std::path::PathBuf>) {
+    thread::spawn(move || {
+        thread::sleep(Duration::from_millis(50));
+        if let Some(path) = cleanup_path {
+            let _ = std::fs::remove_file(path);
+        }
+        std::process::exit(0);
+    });
 }
 
 #[cfg(any(unix, target_os = "windows"))]
@@ -670,25 +686,14 @@ mod windows_pipe {
         log: Arc<Logger>,
     ) {
         let notifier = Notifier::new(Arc::clone(&log));
-        let outcome = match read_command(&pipe).and_then(|command| {
-            handle_command(
-                command,
-                Arc::clone(&state),
-                paste_mode,
-                keep_transcript_clipboard,
-                log.as_ref(),
-                &notifier,
-            )
-            .map_err(|err| IpcResponse::Err {
-                message: format!("{err:#}"),
-            })
-        }) {
-            Ok(outcome) => outcome,
-            Err(response) => CommandOutcome {
-                response,
-                stop_after_response: false,
-            },
-        };
+        let outcome = client_command_outcome(
+            read_command(&pipe),
+            &state,
+            paste_mode,
+            keep_transcript_clipboard,
+            log.as_ref(),
+            &notifier,
+        );
 
         if let Err(err) = write_json_line(&pipe, &outcome.response) {
             log.warn(format!("Windows daemon control response failed: {err:#}"));
@@ -699,20 +704,14 @@ mod windows_pipe {
         }
 
         if outcome.stop_after_response {
-            thread::spawn(move || {
-                thread::sleep(Duration::from_millis(50));
-                std::process::exit(0);
-            });
+            schedule_exit_after_response(None);
         }
     }
 
-    fn read_command(pipe: &PipeHandle) -> std::result::Result<IpcCommand, IpcResponse> {
-        let bytes = read_pipe_message(pipe).map_err(|err| IpcResponse::Err {
-            message: format!("read Windows daemon control command failed: {err:#}"),
-        })?;
-        serde_json::from_slice(&bytes).map_err(|err| IpcResponse::Err {
-            message: format!("invalid Windows daemon control command: {err}"),
-        })
+    fn read_command(pipe: &PipeHandle) -> Result<IpcCommand> {
+        let bytes =
+            read_pipe_message(pipe).context("read Windows daemon control command failed")?;
+        serde_json::from_slice(&bytes).context("invalid Windows daemon control command")
     }
 
     fn daemon_pipe_name() -> Result<Vec<u16>> {

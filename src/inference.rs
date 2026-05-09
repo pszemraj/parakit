@@ -192,20 +192,20 @@ mod tests {
     }
 
     #[test]
-    fn recommended_threads_keep_small_systems_valid() {
-        assert_eq!(recommended_thread_count(0), 1);
-        assert_eq!(recommended_thread_count(1), 1);
-        assert_eq!(recommended_thread_count(2), 2);
-        assert_eq!(recommended_thread_count(3), 2);
-        assert_eq!(recommended_thread_count(4), 2);
-    }
-
-    #[test]
-    fn recommended_threads_scale_on_larger_systems() {
-        assert_eq!(recommended_thread_count(8), 4);
-        assert_eq!(recommended_thread_count(12), 6);
-        assert_eq!(recommended_thread_count(16), 8);
-        assert_eq!(recommended_thread_count(32), 16);
-        assert_eq!(recommended_thread_count(64), 32);
+    fn recommended_threads_are_valid_and_scale() {
+        for (available, expected) in [
+            (0, 1),
+            (1, 1),
+            (2, 2),
+            (3, 2),
+            (4, 2),
+            (8, 4),
+            (12, 6),
+            (16, 8),
+            (32, 16),
+            (64, 32),
+        ] {
+            assert_eq!(recommended_thread_count(available), expected);
+        }
     }
 }
