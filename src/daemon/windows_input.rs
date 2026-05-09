@@ -158,6 +158,22 @@ pub(crate) fn send_paste_chord(use_shift: bool) -> Result<()> {
     send_inputs(&up, "paste chord key-up/modifier flush")
 }
 
+/// Send a short Alt tap to unlock Windows foreground activation.
+///
+/// # Returns
+///
+/// `Ok(())` when Windows accepted the synthetic Alt key events.
+///
+/// # Errors
+///
+/// Returns an error when `SendInput` rejects the event sequence.
+pub(crate) fn send_foreground_unlock_alt_tap() -> Result<()> {
+    send_inputs(
+        &[key_event(VK_MENU, false), key_event(VK_MENU, true)],
+        "foreground unlock Alt tap",
+    )
+}
+
 fn key_event(vk: VIRTUAL_KEY, key_up: bool) -> INPUT {
     INPUT {
         r#type: INPUT_KEYBOARD,
