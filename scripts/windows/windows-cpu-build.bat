@@ -128,16 +128,13 @@ if "%INSTALL%"=="1" if "%INSTALL_DIR%"=="" (
     set "INSTALL_DIR=%LOCALAPPDATA%\Programs\parakit"
 )
 
-echo parakit: repo root = %REPO%
-echo parakit: cargo profile = %PROFILE%
-
 if "%RUN_SUBMODULES%"=="1" (
-    echo parakit: initializing submodules
+    echo Updating submodules
     git submodule update --init --recursive
     if errorlevel 1 exit /b 1
 )
 
-echo parakit: building native Windows CPU %PROFILE%
+echo Building %PROFILE%
 if "%CARGO_PROFILE_FLAG%"=="" (
     cargo build --locked
 ) else (
@@ -162,7 +159,6 @@ call :assert_bundle_path "%BUNDLE_DIR%" "%TARGET_ROOT%"
 if errorlevel 1 exit /b 1
 
 if exist "%BUNDLE_DIR%" (
-    echo parakit: removing old bundle at %BUNDLE_DIR%
     rd /s /q "%BUNDLE_DIR%"
     if errorlevel 1 exit /b 1
 )
@@ -170,7 +166,7 @@ if exist "%BUNDLE_DIR%" (
 mkdir "%BUNDLE_DIR%"
 if errorlevel 1 exit /b 1
 
-echo parakit: creating bundle at %BUNDLE_DIR%
+echo Bundle: %BUNDLE_DIR%
 copy /y "%EXE%" "%BUNDLE_DIR%\" >nul
 if errorlevel 1 exit /b 1
 
@@ -196,11 +192,8 @@ if not exist "%BUNDLE_DIR%\ggml.dll" (
     exit /b 1
 )
 
-echo parakit: bundle contents
-dir /b "%BUNDLE_DIR%"
-
 if "%SKIP_DOCTOR%"=="0" (
-    echo parakit: running doctor
+    echo Running doctor
     "%BUNDLE_DIR%\parakit.exe" doctor
     if errorlevel 1 exit /b 1
 )
@@ -208,31 +201,19 @@ if "%SKIP_DOCTOR%"=="0" (
 set "ACTIVE_DIR=%BUNDLE_DIR%"
 
 if "%INSTALL%"=="1" (
-    echo parakit: installing Windows bundle
     if "%UPDATE_USER_PATH%"=="1" (
         powershell -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%\install-bundle.ps1" -BundleDir "%BUNDLE_DIR%" -InstallDir "%INSTALL_DIR%"
     ) else (
         powershell -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%\install-bundle.ps1" -BundleDir "%BUNDLE_DIR%" -InstallDir "%INSTALL_DIR%" -NoUserPath
     )
     if errorlevel 1 exit /b 1
-    set "ACTIVE_DIR=%INSTALL_DIR%"
+    for %%I in ("%INSTALL_DIR%") do set "ACTIVE_DIR=%%~fI"
 )
 
+if "%INSTALL%"=="0" echo Install: skipped
+echo Current shell PATH: %ACTIVE_DIR%
 echo.
-echo parakit: CPU Windows bundle ready:
-echo   %BUNDLE_DIR%
-echo.
-if "%INSTALL%"=="1" (
-    echo parakit: installed to:
-    echo   %INSTALL_DIR%
-    if "%UPDATE_USER_PATH%"=="1" echo parakit: install directory is on the User PATH for new terminals
-) else (
-    echo parakit: install skipped
-)
-echo.
-echo parakit: added active directory to PATH for this Command Prompt session
-echo.
-echo Next manual checks:
+echo Run:
 echo   parakit doctor --deep
 echo   parakit
 endlocal & set "PATH=%ACTIVE_DIR%;%PATH%"

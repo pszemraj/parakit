@@ -123,12 +123,10 @@ Require-Command "git" "Install Git for Windows and ensure it is on PATH."
 $repo = Get-RepoRoot
 Set-Location $repo
 
-Write-Host "parakit: repo root = $repo"
-
-Write-Host "parakit: initializing submodules"
+Write-Host "Updating submodules"
 Invoke-Checked "git" "submodule" "update" "--init" "--recursive"
 
-Write-Host "parakit: building native Windows CPU release"
+Write-Host "Building release"
 Invoke-Checked "cargo" "build" "--release" "--locked"
 
 $targetRoot = Join-Path $repo "target"
@@ -151,7 +149,7 @@ if (Test-Path -LiteralPath $bundleDir) {
 }
 New-Item -ItemType Directory -Path $bundleDir | Out-Null
 
-Write-Host "parakit: creating bundle at $bundleDir"
+Write-Host "Bundle: $bundleDir"
 Copy-Item -LiteralPath $exe -Destination $bundleDir -Force
 
 Get-ChildItem -LiteralPath $releaseDir -Filter "*.dll" -ErrorAction SilentlyContinue |
@@ -162,11 +160,8 @@ Copy-IfExists -Path (Join-Path $repo "LICENSE") -Destination $bundleDir
 
 $bundleExe = Join-Path $bundleDir "parakit.exe"
 
-Write-Host "parakit: bundle contents"
-Get-ChildItem -LiteralPath $bundleDir | Select-Object Name, Length | Format-Table -AutoSize
-
 if (-not $SkipDoctor) {
-    Write-Host "parakit: running doctor"
+    Write-Host "Running doctor"
     Invoke-Checked $bundleExe "doctor"
 }
 
@@ -179,7 +174,6 @@ if (-not $NoInstall) {
 
     $installer = Join-Path $repo "scripts\windows\install-bundle.ps1"
 
-    Write-Host "parakit: installing Windows bundle"
     if ($NoUserPath) {
         & $installer -BundleDir $bundleDir -InstallDir $InstallDir -NoUserPath
     } else {
@@ -192,23 +186,12 @@ if (-not $NoInstall) {
     $activeDir = [System.IO.Path]::GetFullPath($InstallDir)
 }
 
-Write-Host ""
-Write-Host "parakit: CPU Windows bundle ready:"
-Write-Host "  $bundleDir"
-Write-Host ""
-if (-not $NoInstall) {
-    Write-Host "parakit: installed to:"
-    Write-Host "  $activeDir"
-    if (-not $NoUserPath) {
-        Write-Host "parakit: install directory is on the User PATH for new terminals"
-    }
-} else {
-    Write-Host "parakit: install skipped"
+if ($NoInstall) {
+    Write-Host "Install: skipped"
 }
-Write-Host ""
 $env:Path = "$activeDir;$env:Path"
-Write-Host "parakit: added active directory to PATH for this PowerShell process"
+Write-Host "Current shell PATH: $activeDir"
 Write-Host ""
-Write-Host "Next manual checks:"
+Write-Host "Run:"
 Write-Host "  parakit doctor --deep"
 Write-Host "  parakit"

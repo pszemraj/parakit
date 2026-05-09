@@ -1,2 +1,4 @@
 vendor/** linguist-vendored
 scripts/transcribe_nemo_parakeet.py linguist-vendored
+*.bat text eol=crlf
+*.cmd text eol=crlf

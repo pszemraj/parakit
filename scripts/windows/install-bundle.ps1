@@ -186,7 +186,7 @@ function Install-Bundle {
         if (Test-Path -LiteralPath $marker -PathType Leaf) {
             Remove-Item -LiteralPath $Destination -Recurse -Force
         } else {
-            Write-Host "parakit: install directory exists without a parakit marker; overwriting managed files without deleting other files"
+            Write-Host "Install warning: existing unmarked directory; overwriting files only"
         }
     }
 
@@ -208,16 +208,16 @@ $installFull = Get-FullPath $InstallDir
 Assert-Bundle $bundleFull
 Assert-InstallDir $installFull
 
-Write-Host "parakit: installing bundle to $installFull"
 Install-Bundle -Source $bundleFull -Destination $installFull
+Write-Host "Installed: $installFull"
 
 if ($NoUserPath) {
-    Write-Host "parakit: skipped User PATH update"
+    Write-Host "User PATH: skipped"
 } else {
     $added = Add-UserPathEntry $installFull
     if ($added) {
-        Write-Host "parakit: added install directory to User PATH"
+        Write-Host "User PATH: added $installFull"
     } else {
-        Write-Host "parakit: install directory is already on User PATH"
+        Write-Host "User PATH: already contains $installFull"
     }
 }
