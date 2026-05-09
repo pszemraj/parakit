@@ -77,7 +77,8 @@ fn preferred_input_config_uses_mono_at_default_rate_and_format() {
         [
             stream_config_range(2, 16_000, 48_000, SampleFormat::F32),
             stream_config_range(1, 16_000, 48_000, SampleFormat::F32),
-        ],
+        ]
+        .iter(),
     )
     .expect("mono config should be selected");
 
@@ -96,10 +97,44 @@ fn preferred_input_config_keeps_default_when_mono_changes_rate_or_format() {
         [
             stream_config_range(1, 16_000, 16_000, SampleFormat::F32),
             stream_config_range(1, 48_000, 48_000, SampleFormat::I16),
-        ],
+        ]
+        .iter(),
     );
 
     assert!(selected.is_none());
+}
+
+#[test]
+fn lower_cost_config_note_reports_intentional_mono_non_selection() {
+    let default = stream_config_range(4, 48_000, 48_000, SampleFormat::F32)
+        .with_sample_rate(cpal::SampleRate(48_000));
+    let ranges = [
+        stream_config_range(1, 48_000, 48_000, SampleFormat::I16),
+        stream_config_range(1, 16_000, 16_000, SampleFormat::F32),
+    ];
+
+    assert_eq!(
+        lower_cost_mono_config_note(&default, &ranges),
+        Some(
+            "same-rate mono is available as I16, but not selected because it changes sample format"
+                .to_string()
+        )
+    );
+}
+
+#[test]
+fn lower_cost_config_note_reports_target_rate_mono_when_rate_would_change() {
+    let default = stream_config_range(4, 48_000, 48_000, SampleFormat::F32)
+        .with_sample_rate(cpal::SampleRate(48_000));
+    let ranges = [stream_config_range(1, 16_000, 16_000, SampleFormat::F32)];
+
+    assert_eq!(
+        lower_cost_mono_config_note(&default, &ranges),
+        Some(
+            "16000 Hz mono is available as F32, but not selected because the current policy preserves the OS default sample rate"
+                .to_string()
+        )
+    );
 }
 
 fn stream_config_range(

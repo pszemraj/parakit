@@ -937,29 +937,34 @@ fn select_preferred_input_config(
             );
         }
     };
+    let ranges = ranges.collect::<Vec<_>>();
 
-    match preferred_mono_config_from_ranges(&default_config, ranges) {
+    match preferred_mono_config_from_ranges(&default_config, ranges.iter()) {
         Some(config) => (
             config,
             Some(format!(
                 "selected same-rate/same-format mono input instead of {default_channels}ch default"
             )),
         ),
-        None => (
-            default_config,
-            Some(format!(
+        None => {
+            let mut note = format!(
                 "no same-rate/same-format mono input config advertised; downmixing {default_channels}ch input to mono"
-            )),
-        ),
+            );
+            if let Some(alternate) = lower_cost_mono_config_note(&default_config, &ranges) {
+                note.push_str("; ");
+                note.push_str(&alternate);
+            }
+            (default_config, Some(note))
+        }
     }
 }
 
-fn preferred_mono_config_from_ranges<I>(
+fn preferred_mono_config_from_ranges<'a, I>(
     default_config: &cpal::SupportedStreamConfig,
     ranges: I,
 ) -> Option<cpal::SupportedStreamConfig>
 where
-    I: IntoIterator<Item = cpal::SupportedStreamConfigRange>,
+    I: IntoIterator<Item = &'a cpal::SupportedStreamConfigRange>,
 {
     let default_rate = default_config.sample_rate();
     let default_format = default_config.sample_format();
@@ -970,6 +975,43 @@ where
         } else {
             None
         }
+    })
+}
+
+fn lower_cost_mono_config_note(
+    default_config: &cpal::SupportedStreamConfig,
+    ranges: &[cpal::SupportedStreamConfigRange],
+) -> Option<String> {
+    let default_rate = default_config.sample_rate();
+    let default_format = default_config.sample_format();
+    let same_rate_other_format = ranges.iter().find_map(|range| {
+        if range.channels() == 1 && range.sample_format() != default_format {
+            range.try_with_sample_rate(default_rate)
+        } else {
+            None
+        }
+    });
+    if let Some(config) = same_rate_other_format {
+        return Some(format!(
+            "same-rate mono is available as {:?}, but not selected because it changes sample format",
+            config.sample_format()
+        ));
+    }
+
+    let target_rate = cpal::SampleRate(TARGET_RATE);
+    let target_rate_mono = ranges.iter().find_map(|range| {
+        if range.channels() == 1 {
+            range.try_with_sample_rate(target_rate)
+        } else {
+            None
+        }
+    });
+    target_rate_mono.map(|config| {
+        format!(
+            "{} Hz mono is available as {:?}, but not selected because the current policy preserves the OS default sample rate",
+            TARGET_RATE,
+            config.sample_format()
+        )
     })
 }
 
