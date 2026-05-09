@@ -582,6 +582,12 @@ fn quantize_bin_path() -> Result<PathBuf> {
         return Ok(path);
     }
 
+    #[cfg(target_os = "windows")]
+    bail!(
+        "crispasr-quantize.exe was not found. Windows bundled CPU builds skip the CrispASR examples tree because the pinned server example does not compile under MSVC. Use the hosted Q8 model, or put a compatible crispasr-quantize.exe on PATH before running fetch --from-source."
+    );
+
+    #[cfg(not(target_os = "windows"))]
     bail!(
         "crispasr-quantize was not found. Rebuild parakit with bundled CrispASR enabled, or put crispasr-quantize on PATH."
     );

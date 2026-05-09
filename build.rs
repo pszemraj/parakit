@@ -63,6 +63,7 @@ fn main() {
     // 4. Run cmake. The `cmake` crate handles incremental builds, MSVC
     //    detection on Windows, generator selection, parallelism, and
     //    install-step plumbing.
+    let build_crispasr_examples = !target_is_windows();
     let mut cfg = cmake::Config::new(&src_dir);
     cfg.profile("Release")
         .define("BUILD_SHARED_LIBS", "ON")
@@ -71,11 +72,15 @@ fn main() {
         .define("GGML_NATIVE", "ON")
         .define("GGML_OPENMP", "ON")
         .define("GGML_CPU_REPACK", "ON")
-        // Skip tests. Build examples because CrispASR's quantizer lives there.
+        // Skip tests. On Unix we build examples because CrispASR's quantizer
+        // lives there. On Windows, the pinned CrispASR examples tree also
+        // builds the server target, which currently fails under MSVC before
+        // parakit can link; hosted Q8 remains the Windows CPU-first path.
         .define("WHISPER_BUILD_TESTS", "OFF")
-        // CrispASR's GGUF requantizer lives under examples/. We build the
-        // examples tree so source rebuilds can invoke `crispasr-quantize`.
-        .define("WHISPER_BUILD_EXAMPLES", "ON")
+        .define(
+            "WHISPER_BUILD_EXAMPLES",
+            if build_crispasr_examples { "ON" } else { "OFF" },
+        )
         .define("GGML_BUILD_TESTS", "OFF")
         .define("GGML_BUILD_EXAMPLES", "OFF")
         // Bake an `$ORIGIN` (Linux/BSD) or `@loader_path` (macOS) rpath into
@@ -164,7 +169,7 @@ fn main() {
             "cargo:rustc-env=CRISPASR_QUANTIZE_BIN={}",
             quantize_bin.display()
         );
-    } else {
+    } else if !target_is_windows() {
         println!(
             "cargo:warning=crispasr-quantize was not installed at {}; source rebuilds will look on PATH",
             quantize_bin.display()
@@ -226,6 +231,8 @@ fn emit_build_report(install_dir: &Path) {
 
     if let Some(flags) = cpu_flags {
         println!("cargo:rustc-env=PARAKIT_BUILD_CPU_FLAGS={flags}");
+    } else if target_is_windows() {
+        println!("cargo:rustc-env=PARAKIT_BUILD_CPU_FLAGS=unavailable on Windows CMake generator");
     } else {
         println!(
             "cargo:warning=could not read ggml CPU flags from {}",

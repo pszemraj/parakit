@@ -422,13 +422,13 @@ fn xtest_paste_chord_success_flushes_all_cleanup_modifiers() {
     assert_eq!(sink.flushes, 2);
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(all(not(target_os = "linux"), not(target_os = "windows")))]
 #[test]
 fn direct_mode_has_no_paste_modifiers() {
     assert!(paste_modifiers(PasteMode::Direct).is_empty());
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(all(not(target_os = "linux"), not(target_os = "windows")))]
 #[derive(Default)]
 struct MockPasteShortcutSink {
     events: Vec<String>,
@@ -437,7 +437,7 @@ struct MockPasteShortcutSink {
     fail_paste: bool,
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(all(not(target_os = "linux"), not(target_os = "windows")))]
 impl PasteShortcutSink for MockPasteShortcutSink {
     fn key(&mut self, key: Key, direction: Direction) -> Result<()> {
         let key = mock_key_label(key);
@@ -461,7 +461,7 @@ impl PasteShortcutSink for MockPasteShortcutSink {
     }
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(all(not(target_os = "linux"), not(target_os = "windows")))]
 fn mock_key_label(key: Key) -> &'static str {
     match key {
         Key::Control => "control",
@@ -471,7 +471,7 @@ fn mock_key_label(key: Key) -> &'static str {
     }
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(all(not(target_os = "linux"), not(target_os = "windows")))]
 fn mock_direction_label(direction: Direction) -> &'static str {
     match direction {
         Direction::Press => "press",
@@ -480,7 +480,7 @@ fn mock_direction_label(direction: Direction) -> &'static str {
     }
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(all(not(target_os = "linux"), not(target_os = "windows")))]
 #[test]
 fn paste_shortcut_releases_only_successfully_pressed_modifiers() {
     let mut sink = MockPasteShortcutSink {
@@ -497,7 +497,7 @@ fn paste_shortcut_releases_only_successfully_pressed_modifiers() {
     );
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(all(not(target_os = "linux"), not(target_os = "windows")))]
 #[test]
 fn paste_shortcut_reports_primary_and_modifier_cleanup_errors() {
     let mut sink = MockPasteShortcutSink {

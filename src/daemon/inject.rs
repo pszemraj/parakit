@@ -17,9 +17,9 @@
 use anyhow::{Context, Result};
 use arboard::{Clipboard, ImageData};
 use clap::ValueEnum;
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "windows")))]
 use enigo::Direction;
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "windows")))]
 use enigo::Key;
 use enigo::{Enigo, Keyboard, Settings};
 use std::{borrow::Cow, path::PathBuf, thread, time::Duration};
@@ -106,6 +106,12 @@ pub(crate) fn preflight(mode: PasteMode) -> Result<()> {
     Ok(())
 }
 
+#[cfg(target_os = "windows")]
+fn insertion_needs_enigo(mode: PasteMode) -> bool {
+    mode == PasteMode::Direct
+}
+
+#[cfg(not(target_os = "windows"))]
 fn insertion_needs_enigo(mode: PasteMode) -> bool {
     mode == PasteMode::Direct || cfg!(not(target_os = "linux"))
 }
@@ -275,6 +281,8 @@ pub(crate) struct FocusSnapshot {
     input_focus: Option<u32>,
     #[cfg(target_os = "linux")]
     active_window: Option<u32>,
+    #[cfg(target_os = "windows")]
+    windows: super::windows_focus::WindowsFocusSnapshot,
 }
 
 impl FocusSnapshot {
@@ -308,7 +316,14 @@ impl FocusSnapshot {
             })
         }
 
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(target_os = "windows")]
+        {
+            Ok(Self {
+                windows: super::windows_focus::WindowsFocusSnapshot::capture()?,
+            })
+        }
+
+        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
         {
             Ok(Self {})
         }
@@ -350,7 +365,12 @@ impl FocusSnapshot {
             )
         }
 
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(target_os = "windows")]
+        {
+            self.windows.matches_current()
+        }
+
+        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
         {
             Ok(true)
         }
@@ -562,7 +582,14 @@ impl Injector {
         result
     }
 
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_os = "windows")]
+    fn paste_clipboard(&mut self, mode: PasteMode) -> Result<()> {
+        let use_shift = mode == PasteMode::Terminal;
+        super::windows_input::send_paste_chord(use_shift)
+            .context("could not send Windows paste shortcut")
+    }
+
+    #[cfg(all(not(target_os = "linux"), not(target_os = "windows")))]
     fn paste_clipboard(&mut self, mode: PasteMode) -> Result<()> {
         let enigo = self.keyboard()?;
         let mut sink = EnigoPasteShortcutSink { enigo };
@@ -583,7 +610,7 @@ impl Injector {
     }
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(all(not(target_os = "linux"), not(target_os = "windows")))]
 trait PasteShortcutSink {
     /// Send a modifier key press or release.
     /// # Arguments
@@ -603,12 +630,12 @@ trait PasteShortcutSink {
     fn paste_key(&mut self) -> Result<()>;
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(all(not(target_os = "linux"), not(target_os = "windows")))]
 struct EnigoPasteShortcutSink<'a> {
     enigo: &'a mut Enigo,
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(all(not(target_os = "linux"), not(target_os = "windows")))]
 impl PasteShortcutSink for EnigoPasteShortcutSink<'_> {
     fn key(&mut self, key: Key, direction: Direction) -> Result<()> {
         self.enigo
@@ -621,7 +648,7 @@ impl PasteShortcutSink for EnigoPasteShortcutSink<'_> {
     }
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(all(not(target_os = "linux"), not(target_os = "windows")))]
 fn send_paste_shortcut_with_cleanup<S: PasteShortcutSink>(
     sink: &mut S,
     modifiers: &[Key],
@@ -655,7 +682,7 @@ fn send_paste_shortcut_with_cleanup<S: PasteShortcutSink>(
     }
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(all(not(target_os = "linux"), not(target_os = "windows")))]
 fn flush_paste_modifiers<S: PasteShortcutSink>(sink: &mut S) {
     for key in [Key::Control, Key::Shift, Key::Alt, Key::Meta] {
         let _ = sink.key(key, Direction::Release);
@@ -811,7 +838,7 @@ fn paste_modifiers(mode: PasteMode) -> &'static [Key] {
     }
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
 fn paste_modifiers(mode: PasteMode) -> &'static [Key] {
     match mode {
         PasteMode::Standard => &[Key::Control],
@@ -835,7 +862,12 @@ fn platform_paste_smoke_test(mode: PasteMode) -> Result<()> {
     inject_smoke::linux_x11_paste_smoke_test(mode)
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(target_os = "windows")]
+fn platform_paste_smoke_test(mode: PasteMode) -> Result<()> {
+    super::windows_paste_smoke::windows_paste_smoke_test(mode)
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "windows")))]
 fn platform_paste_smoke_test(_mode: PasteMode) -> Result<()> {
     Ok(())
 }
@@ -876,13 +908,6 @@ fn clipboard_restore_delay() -> Duration {
     {
         Duration::from_millis(150)
     }
-}
-
-#[cfg(target_os = "windows")]
-fn paste_key_click(enigo: &mut Enigo) -> Result<()> {
-    enigo
-        .key(Key::V, Direction::Click)
-        .map_err(|e| anyhow::anyhow!("{e:?}"))
 }
 
 #[cfg(target_os = "macos")]

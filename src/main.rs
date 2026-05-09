@@ -80,10 +80,9 @@ struct Cli {
     #[arg(long, value_name = "N")]
     threads: Option<NonZeroUsize>,
 
-    /// Batch insertion style. `terminal` uses Ctrl+Shift+V on Linux/Windows;
-    /// `direct` types text without touching the clipboard.
-    #[arg(long, value_enum, default_value_t = PasteMode::Terminal)]
-    paste_mode: PasteMode,
+    /// Batch insertion style. Defaults to terminal paste on Linux and standard paste elsewhere.
+    #[arg(long, value_enum)]
+    paste_mode: Option<PasteMode>,
 
     /// Leave dictated text on the clipboard after paste instead of restoring previous clipboard contents.
     #[arg(long)]
@@ -197,6 +196,24 @@ struct TestPasteCli {
     text: String,
 }
 
+impl Cli {
+    fn effective_paste_mode(&self) -> PasteMode {
+        self.paste_mode.unwrap_or_else(default_paste_mode)
+    }
+}
+
+fn default_paste_mode() -> PasteMode {
+    #[cfg(target_os = "linux")]
+    {
+        PasteMode::Terminal
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        PasteMode::Standard
+    }
+}
+
 // =============================================================================
 // main
 // =============================================================================
@@ -219,6 +236,7 @@ fn run() -> Result<()> {
     let hotkey_backend = cli.hotkey_backend;
     #[cfg(not(target_os = "linux"))]
     let hotkey_backend = HotkeyBackend::Auto;
+    let paste_mode = cli.effective_paste_mode();
 
     if let Some(command) = &cli.command {
         match command {
@@ -245,7 +263,7 @@ fn run() -> Result<()> {
                 let ok = daemon::preflight::print_doctor(
                     cli.quiet,
                     cli.verbose,
-                    cli.paste_mode,
+                    paste_mode,
                     doctor_cli.deep,
                     hotkey_backend,
                 );
@@ -322,13 +340,13 @@ fn run() -> Result<()> {
         "parakit: hotkey preflight passed ({})",
         hotkey_backend.label()
     ));
-    daemon::inject::preflight(cli.paste_mode).context("text insertion preflight failed")?;
+    daemon::inject::preflight(paste_mode).context("text insertion preflight failed")?;
     log.verbose("parakit: insertion preflight passed");
     let ipc_state = Arc::new(daemon::ipc::SharedState::new());
     #[cfg(unix)]
     let _ipc_server = daemon::ipc::spawn_server(
         Arc::clone(&ipc_state),
-        cli.paste_mode,
+        paste_mode,
         cli.keep_transcript_clipboard,
         Arc::clone(&log),
     )
@@ -388,7 +406,7 @@ fn run() -> Result<()> {
         },
         insertion: format!(
             "batch paste ({}, {})",
-            cli.paste_mode.label(),
+            paste_mode.label(),
             if cli.keep_transcript_clipboard {
                 "keep transcript clipboard"
             } else {
@@ -411,7 +429,7 @@ fn run() -> Result<()> {
         log: Arc::clone(&log),
         notifier: notifier.clone(),
         state: Arc::clone(&ipc_state),
-        paste_mode: cli.paste_mode,
+        paste_mode,
         keep_transcript_clipboard: cli.keep_transcript_clipboard,
         insert_transcripts: true,
         rx,
@@ -448,6 +466,7 @@ fn warn_about_bluetooth_mic_if_needed(log: &Logger, mic_info: &daemon::audio::Mi
 }
 
 fn run_ptt_audio_simulation(cli: &Cli, log: Arc<Logger>, audio_path: &Path) -> Result<()> {
+    let paste_mode = cli.effective_paste_mode();
     let cleaner = rules::build_cleaner(cli.no_cleaning, &cli.disable_rule)?.map(Arc::new);
     let data_log = cli
         .log_dir
@@ -486,7 +505,7 @@ fn run_ptt_audio_simulation(cli: &Cli, log: Arc<Logger>, audio_path: &Path) -> R
         log,
         notifier: Notifier::new(Arc::new(Logger::new(LogLevel::Quiet))),
         state: Arc::new(daemon::ipc::SharedState::new()),
-        paste_mode: cli.paste_mode,
+        paste_mode,
         keep_transcript_clipboard: cli.keep_transcript_clipboard,
         insert_transcripts: false,
         rx,

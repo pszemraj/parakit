@@ -1,18 +1,24 @@
 //! Local control socket for an already-running daemon.
 
-use anyhow::{bail, Context, Result};
+#[cfg(unix)]
+use anyhow::Context;
+use anyhow::{bail, Result};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 #[cfg(unix)]
 use std::io::{BufRead, BufReader, Write};
+#[cfg(unix)]
 use std::path::PathBuf;
+#[cfg(unix)]
 use std::sync::Arc;
 #[cfg(unix)]
 use std::thread;
+#[cfg(unix)]
 use std::thread::JoinHandle;
 #[cfg(unix)]
 use std::time::Duration;
 
+#[cfg(unix)]
 use super::{
     inject::{FocusSnapshot, PasteMode},
     logging::Logger,
@@ -92,6 +98,7 @@ impl SharedState {
         self.inner.lock().last_transcript = Some(text);
     }
 
+    #[cfg(any(unix, test))]
     fn status(&self) -> IpcResponse {
         let inner = self.inner.lock();
         IpcResponse::Status {
@@ -100,6 +107,7 @@ impl SharedState {
         }
     }
 
+    #[cfg(unix)]
     fn last_transcript(&self) -> Option<String> {
         self.inner.lock().last_transcript.clone()
     }
@@ -120,11 +128,13 @@ impl SharedState {
 }
 
 /// Running control socket server.
+#[cfg(unix)]
 pub(crate) struct IpcServer {
     path: PathBuf,
     _thread: JoinHandle<()>,
 }
 
+#[cfg(unix)]
 impl Drop for IpcServer {
     fn drop(&mut self) {
         let _ = std::fs::remove_file(&self.path);
@@ -146,6 +156,7 @@ impl Drop for IpcServer {
 /// # Errors
 ///
 /// Returns an error when the control socket cannot be bound.
+#[cfg(unix)]
 pub(crate) fn spawn_server(
     state: Arc<SharedState>,
     paste_mode: PasteMode,
@@ -252,16 +263,6 @@ fn spawn_server_impl(
     })
 }
 
-#[cfg(not(unix))]
-fn spawn_server_impl(
-    _state: Arc<SharedState>,
-    _paste_mode: PasteMode,
-    _keep_transcript_clipboard: bool,
-    _log: Arc<Logger>,
-) -> Result<IpcServer> {
-    bail!("local daemon IPC is not implemented on this platform")
-}
-
 #[cfg(unix)]
 fn handle_client(
     mut stream: std::os::unix::net::UnixStream,
@@ -362,11 +363,13 @@ fn ensure_private_socket_dir(path: &std::path::Path) -> Result<()> {
     Ok(())
 }
 
+#[cfg(unix)]
 struct CommandOutcome {
     response: IpcResponse,
     stop_after_response: bool,
 }
 
+#[cfg(unix)]
 fn handle_command(
     command: IpcCommand,
     state: Arc<SharedState>,
@@ -426,6 +429,7 @@ fn handle_command(
     }
 }
 
+#[cfg(unix)]
 fn paste_text(
     text: &str,
     paste_mode: PasteMode,
