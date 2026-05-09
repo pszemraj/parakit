@@ -184,20 +184,21 @@ impl MicInfo {
     ///
     /// A human-readable device summary.
     pub fn summary(&self) -> String {
-        let channel_label = if self.channels == 1 {
-            "mono".to_string()
-        } else {
-            format!("{}ch", self.channels)
-        };
+        let channel_label = input_channel_label(self.channels);
         let rate_label = if self.resampling {
-            format!("{} Hz input -> {} Hz model", self.input_rate, TARGET_RATE)
-        } else {
+            format!(
+                "{} Hz {} input -> {} Hz mono model",
+                self.input_rate, channel_label, TARGET_RATE
+            )
+        } else if self.channels == 1 {
             format!("{} Hz input/model", self.input_rate)
+        } else {
+            format!(
+                "{} Hz {} input -> mono model",
+                self.input_rate, channel_label
+            )
         };
-        format!(
-            "{}, {}, {}, {}",
-            self.name, rate_label, channel_label, self.sample_format
-        )
+        format!("{}, {}, {}", self.name, rate_label, self.sample_format)
     }
 
     /// Return whether this input appears to be a Bluetooth microphone.
@@ -212,6 +213,14 @@ impl MicInfo {
                 .source_id
                 .as_deref()
                 .is_some_and(is_bluetooth_input_name)
+    }
+}
+
+fn input_channel_label(channels: u16) -> String {
+    if channels == 1 {
+        "mono".to_string()
+    } else {
+        format!("{channels}ch")
     }
 }
 
@@ -816,6 +825,7 @@ fn select_input_device(host: &cpal::Host) -> Result<SelectedInput> {
             .unwrap_or_else(|| "<default input>".to_string());
         if !is_virtual_input_name(&name) {
             if let Ok(config) = device.default_input_config() {
+                let config = select_preferred_input_config(&device, config);
                 return Ok(SelectedInput {
                     device,
                     name,
@@ -837,7 +847,7 @@ fn select_input_device(host: &cpal::Host) -> Result<SelectedInput> {
             .name()
             .unwrap_or_else(|_| "<unknown input>".to_string());
         let config = match device.default_input_config() {
-            Ok(config) => config,
+            Ok(config) => select_preferred_input_config(&device, config),
             Err(_) => continue,
         };
         let selected = SelectedInput {
@@ -875,6 +885,44 @@ fn select_input_device(host: &cpal::Host) -> Result<SelectedInput> {
         .into_iter()
         .next()
         .ok_or_else(|| anyhow!("no usable input device"))
+}
+
+fn select_preferred_input_config(
+    device: &cpal::Device,
+    default_config: cpal::SupportedStreamConfig,
+) -> cpal::SupportedStreamConfig {
+    preferred_mono_input_config(device, &default_config).unwrap_or(default_config)
+}
+
+fn preferred_mono_input_config(
+    device: &cpal::Device,
+    default_config: &cpal::SupportedStreamConfig,
+) -> Option<cpal::SupportedStreamConfig> {
+    if default_config.channels() == 1 {
+        return None;
+    }
+
+    let ranges = device.supported_input_configs().ok()?;
+    preferred_mono_config_from_ranges(default_config, ranges)
+}
+
+fn preferred_mono_config_from_ranges<I>(
+    default_config: &cpal::SupportedStreamConfig,
+    ranges: I,
+) -> Option<cpal::SupportedStreamConfig>
+where
+    I: IntoIterator<Item = cpal::SupportedStreamConfigRange>,
+{
+    let default_rate = default_config.sample_rate();
+    let default_format = default_config.sample_format();
+
+    ranges.into_iter().find_map(|range| {
+        if range.channels() == 1 && range.sample_format() == default_format {
+            range.try_with_sample_rate(default_rate)
+        } else {
+            None
+        }
+    })
 }
 
 fn selected_mic_info(host: &cpal::Host) -> Result<MicInfo> {

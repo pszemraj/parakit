@@ -36,8 +36,75 @@ fn mic_summary_reports_input_and_model_rates() {
     };
     assert_eq!(
         mic.summary(),
-        "USB Speech Mic Mono, 48000 Hz input -> 16000 Hz model, mono, F32"
+        "USB Speech Mic Mono, 48000 Hz mono input -> 16000 Hz mono model, F32"
     );
+}
+
+#[test]
+fn mic_summary_makes_downmix_explicit() {
+    let mic = MicInfo {
+        name: "Microphone Array".to_string(),
+        input_rate: 48_000,
+        channels: 4,
+        sample_format: "F32".to_string(),
+        source_id: None,
+        resampling: true,
+    };
+
+    assert_eq!(
+        mic.summary(),
+        "Microphone Array, 48000 Hz 4ch input -> 16000 Hz mono model, F32"
+    );
+}
+
+#[test]
+fn preferred_input_config_uses_mono_at_default_rate_and_format() {
+    let default = stream_config_range(4, 16_000, 48_000, SampleFormat::F32)
+        .with_sample_rate(cpal::SampleRate(48_000));
+
+    let selected = preferred_mono_config_from_ranges(
+        &default,
+        [
+            stream_config_range(2, 16_000, 48_000, SampleFormat::F32),
+            stream_config_range(1, 16_000, 48_000, SampleFormat::F32),
+        ],
+    )
+    .expect("mono config should be selected");
+
+    assert_eq!(selected.channels(), 1);
+    assert_eq!(selected.sample_rate().0, 48_000);
+    assert_eq!(selected.sample_format(), SampleFormat::F32);
+}
+
+#[test]
+fn preferred_input_config_keeps_default_when_mono_changes_rate_or_format() {
+    let default = stream_config_range(4, 48_000, 48_000, SampleFormat::F32)
+        .with_sample_rate(cpal::SampleRate(48_000));
+
+    let selected = preferred_mono_config_from_ranges(
+        &default,
+        [
+            stream_config_range(1, 16_000, 16_000, SampleFormat::F32),
+            stream_config_range(1, 48_000, 48_000, SampleFormat::I16),
+        ],
+    );
+
+    assert!(selected.is_none());
+}
+
+fn stream_config_range(
+    channels: u16,
+    min_rate: u32,
+    max_rate: u32,
+    sample_format: SampleFormat,
+) -> cpal::SupportedStreamConfigRange {
+    cpal::SupportedStreamConfigRange::new(
+        channels,
+        cpal::SampleRate(min_rate),
+        cpal::SampleRate(max_rate),
+        cpal::SupportedBufferSize::Unknown,
+        sample_format,
+    )
 }
 
 #[test]
