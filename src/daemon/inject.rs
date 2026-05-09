@@ -446,17 +446,14 @@ impl Injector {
             let _keyboard = self.keyboard()?;
         }
 
-        if mode != PasteMode::Direct {
-            if self.clipboard.is_none() {
-                self.clipboard = Some(Clipboard::new().context("could not open system clipboard")?);
-            }
+        if mode != PasteMode::Direct && self.clipboard.is_none() {
+            self.clipboard = Some(Clipboard::new().context("could not open system clipboard")?);
+        }
 
-            #[cfg(target_os = "linux")]
-            if self.x11_paste.is_none() {
-                self.x11_paste = Some(
-                    LinuxX11Paste::open().context("could not initialize X11 paste connection")?,
-                );
-            }
+        #[cfg(target_os = "linux")]
+        if mode != PasteMode::Direct && self.x11_paste.is_none() {
+            self.x11_paste =
+                Some(LinuxX11Paste::open().context("could not initialize X11 paste connection")?);
         }
 
         Ok(())
