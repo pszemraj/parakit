@@ -33,6 +33,10 @@ fn main() {
     println!("cargo:rerun-if-env-changed=CRISPASR_LIB_DIR");
     println!("cargo:rerun-if-env-changed=CRISPASR_SRC_DIR");
     println!("cargo:rerun-if-env-changed=PARAKIT_BLAS");
+    println!("cargo:rerun-if-env-changed=PARAKIT_OPENBLAS_ROOT");
+    println!("cargo:rerun-if-env-changed=BLAS_INCLUDE_DIRS");
+    println!("cargo:rerun-if-env-changed=BLAS_LIBRARIES");
+    println!("cargo:rerun-if-env-changed=CONDA_PREFIX");
     println!("cargo:rerun-if-changed=build.rs");
 
     build_alsa_silencer();
@@ -266,6 +270,7 @@ fn configure_blas(cfg: &mut cmake::Config) {
             blas.requested, blas.selected
         );
     }
+    configure_blas_paths(cfg, &blas);
 }
 
 struct BlasConfig {
@@ -359,6 +364,34 @@ fn pkg_config_exists(package: &str) -> bool {
         .args(["--exists", package])
         .status()
         .is_ok_and(|status| status.success())
+}
+
+fn configure_blas_paths(cfg: &mut cmake::Config, blas: &BlasConfig) {
+    if !blas.enabled {
+        return;
+    }
+
+    if let Ok(include_dirs) = env::var("BLAS_INCLUDE_DIRS") {
+        cfg.define("BLAS_INCLUDE_DIRS", include_dirs);
+    }
+    if let Ok(libraries) = env::var("BLAS_LIBRARIES") {
+        cfg.define("BLAS_LIBRARIES", libraries);
+    }
+
+    if blas.selected == "openblas" && target_is_windows() {
+        if let Some(root) = windows_openblas_root() {
+            let lib = root.join("lib/openblas.lib");
+            let include = root.join("include/openblas");
+            if lib.is_file() && include.join("cblas.h").is_file() {
+                cfg.define("BLAS_LIBRARIES", lib.to_string_lossy().as_ref());
+                cfg.define("BLAS_INCLUDE_DIRS", include.to_string_lossy().as_ref());
+                println!(
+                    "cargo:warning=parakit build: using Windows OpenBLAS at {}",
+                    root.display()
+                );
+            }
+        }
+    }
 }
 
 fn read_cmake_cache(path: &Path) -> BTreeMap<String, String> {
@@ -555,7 +588,48 @@ fn prepare_windows_artifacts(install_dir: &Path, lib_dir: &Path, bin_dir: &Path)
         )
     });
 
+    copy_optional_windows_blas_runtime(bin_dir);
     copy_runtime_dlls_to_profile_dir(bin_dir);
+}
+
+fn copy_optional_windows_blas_runtime(bin_dir: &Path) {
+    if env::var("PARAKIT_BLAS").map(|value| value.trim().eq_ignore_ascii_case("openblas"))
+        != Ok(true)
+    {
+        return;
+    }
+
+    let Some(root) = windows_openblas_root() else {
+        return;
+    };
+    let dll = root.join("bin/openblas.dll");
+    if !dll.is_file() {
+        return;
+    }
+    std::fs::copy(&dll, bin_dir.join("openblas.dll")).unwrap_or_else(|err| {
+        panic!(
+            "failed to copy Windows OpenBLAS runtime DLL {} to {}: {err}",
+            dll.display(),
+            bin_dir.display()
+        )
+    });
+}
+
+fn windows_openblas_root() -> Option<PathBuf> {
+    if let Ok(root) = env::var("PARAKIT_OPENBLAS_ROOT") {
+        let root = PathBuf::from(root);
+        if root.join("lib/openblas.lib").is_file() {
+            return Some(root);
+        }
+    }
+
+    let conda = PathBuf::from(env::var("CONDA_PREFIX").ok()?);
+    let root = conda.join("Library");
+    if root.join("lib/openblas.lib").is_file() {
+        Some(root)
+    } else {
+        None
+    }
 }
 
 fn windows_import_library_names() -> (&'static str, &'static str) {
