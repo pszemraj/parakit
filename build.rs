@@ -74,8 +74,10 @@ fn main() {
         // parakit is normally built from source for the machine it runs on.
         // Make the CPU policy explicit instead of relying on ggml defaults.
         .define("GGML_NATIVE", "ON")
+        .define("GGML_CPU_ALL_VARIANTS", "OFF")
         .define("GGML_OPENMP", "ON")
         .define("GGML_CPU_REPACK", "ON")
+        .define("GGML_BACKEND_DL", "OFF")
         // Skip tests. On Unix we build examples because CrispASR's quantizer
         // lives there. On Windows, the pinned CrispASR examples tree also
         // builds the server target, which currently fails under MSVC before
@@ -219,8 +221,10 @@ fn emit_build_report(install_dir: &Path) {
     emit_env_from_cache(&cache, "CMAKE_BUILD_TYPE", "PARAKIT_BUILD_CMAKE_BUILD_TYPE");
     for key in [
         "GGML_NATIVE",
+        "GGML_CPU_ALL_VARIANTS",
         "GGML_OPENMP",
         "GGML_CPU_REPACK",
+        "GGML_BACKEND_DL",
         "GGML_BLAS",
         "GGML_BLAS_VENDOR",
         "COHERE_MKL",

@@ -84,6 +84,21 @@ function Copy-IfExists {
     }
 }
 
+function Invoke-Checked {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Command,
+
+        [Parameter(ValueFromRemainingArguments = $true)]
+        [string[]]$Arguments
+    )
+
+    & $Command @Arguments
+    if ($LASTEXITCODE -ne 0) {
+        throw "$Command failed with exit code $LASTEXITCODE"
+    }
+}
+
 Assert-NativeWindows
 
 Require-Command "cargo" "Install Rust with rustup using the MSVC toolchain."
@@ -97,10 +112,10 @@ Set-Location $repo
 Write-Host "parakit: repo root = $repo"
 
 Write-Host "parakit: initializing submodules"
-git submodule update --init --recursive
+Invoke-Checked "git" "submodule" "update" "--init" "--recursive"
 
 Write-Host "parakit: building native Windows CPU release"
-cargo build --release --locked
+Invoke-Checked "cargo" "build" "--release" "--locked"
 
 $targetRoot = Join-Path $repo "target"
 $releaseDir = Join-Path $targetRoot "release"
@@ -126,13 +141,8 @@ Write-Host "parakit: creating bundle at $bundleDir"
 Copy-Item -LiteralPath $exe -Destination $bundleDir -Force
 
 Get-ChildItem -LiteralPath $releaseDir -Filter "*.dll" -ErrorAction SilentlyContinue |
+    Where-Object { $_.Name -notmatch '^ggml-cpu-.+\.dll$' } |
     ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination $bundleDir -Force }
-
-$releaseBuildDir = Join-Path $releaseDir "build"
-if (Test-Path -LiteralPath $releaseBuildDir) {
-    Get-ChildItem -LiteralPath $releaseBuildDir -Filter "*.dll" -Recurse -ErrorAction SilentlyContinue |
-        ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination $bundleDir -Force }
-}
 
 Copy-IfExists -Path (Join-Path $repo "LICENSE") -Destination $bundleDir
 
@@ -143,7 +153,7 @@ Get-ChildItem -LiteralPath $bundleDir | Select-Object Name, Length | Format-Tabl
 
 if (-not $SkipDoctor) {
     Write-Host "parakit: running doctor"
-    & $bundleExe doctor
+    Invoke-Checked $bundleExe "doctor"
 }
 
 Write-Host ""
