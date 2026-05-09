@@ -331,6 +331,11 @@ fn run() -> Result<()> {
     }
 
     #[cfg(target_os = "linux")]
+    if daemon::wsl::running_under_wsl() {
+        log.warn(daemon::wsl::warning());
+    }
+
+    #[cfg(target_os = "linux")]
     daemon::session::ensure_x11_session_supported()?;
 
     let _daemon_lock = daemon::preflight::acquire_singleton_lock()?;
