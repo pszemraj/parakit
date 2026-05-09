@@ -373,12 +373,16 @@ fn pump_messages_for(duration: Duration) {
     let until = Instant::now() + duration;
     while Instant::now() < until {
         let mut msg = MSG::default();
-        while unsafe { PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() } {
+        while Instant::now() < until
+            && unsafe { PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() }
+        {
             unsafe {
                 let _ = TranslateMessage(&msg);
                 DispatchMessageW(&msg);
             }
         }
-        thread::sleep(Duration::from_millis(10));
+        if Instant::now() < until {
+            thread::sleep(Duration::from_millis(10));
+        }
     }
 }
