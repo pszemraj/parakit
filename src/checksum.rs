@@ -26,7 +26,7 @@ use std::path::Path;
 pub fn sha256_file_hex(path: &Path) -> Result<String> {
     let mut file = File::open(path).with_context(|| format!("open {}", path.display()))?;
     let mut hasher = Sha256::new();
-    let mut buf = [0_u8; 1024 * 1024];
+    let mut buf = vec![0_u8; 1024 * 1024];
     loop {
         let n = file.read(&mut buf)?;
         if n == 0 {
