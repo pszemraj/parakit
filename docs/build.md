@@ -32,7 +32,7 @@ cargo install --path .
 ```
 
 `cargo install --path .` installs the release binary to Cargo's bin directory, usually `~/.cargo/bin`.
-Developer installs built this way depend on the generated CrispASR shared libraries under Cargo's build output. Do not delete the repository `target/` tree and treat GitHub auto-generated source archives as unsupported because they do not include the CrispASR submodule. A public release must ship either a source archive with submodules or a binary bundle whose shared libraries are colocated with the executable.
+On Windows, `cargo install --path .` copies `parakit.exe` but not the generated CrispASR/ggml DLLs, so that install location is not runnable by itself. Use the Windows bundle scripts below for a runnable Windows app directory. On Unix-like targets, developer installs built this way depend on the generated CrispASR shared libraries under Cargo's build output. Do not delete the repository `target/` tree and treat GitHub auto-generated source archives as unsupported because they do not include the CrispASR submodule. A public release must ship either a source archive with submodules or a binary bundle whose shared libraries are colocated with the executable.
 
 Add `--locked` for CI or reproducibility checks when Cargo must use the exact versions in `Cargo.lock`. Leave it off for normal local installs.
 
@@ -52,7 +52,19 @@ git submodule update --init --recursive
 cargo build --release
 ```
 
-If `parakit.exe` cannot find generated CrispASR DLLs, copy them next to the binary as described in [Windows DLLs](#windows-dlls). Treat Windows builds as source/build validation until the daemon work in [architecture.md#deferred-windows-work](architecture.md#deferred-windows-work) is complete.
+For a runnable CPU bundle from Command Prompt:
+
+```bat
+scripts\windows-cpu-build.bat
+```
+
+The PowerShell equivalent is:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/windows-cpu-build.ps1
+```
+
+Both scripts build release mode, recreate `target\parakit-windows-x86_64-cpu`, copy `parakit.exe` plus adjacent runtime DLLs, and run `parakit doctor` unless asked to skip it. Treat Windows builds as source/build validation until the daemon work in [architecture.md#deferred-windows-work](architecture.md#deferred-windows-work) is complete.
 
 ## CPU Builds
 
@@ -88,7 +100,7 @@ Supported values:
 | Value | Behavior |
 | --- | --- |
 | unset, `off` | Native/OpenMP CPU kernels without BLAS. |
-| `auto` | Apple Accelerate on macOS; otherwise MKL if `mkl-sdl.pc` is visible; otherwise OpenBLAS if `openblas.pc` or `openblas64.pc` is visible; otherwise off. |
+| `auto` | Apple Accelerate on macOS; otherwise MKL if `mkl-sdl.pc` is visible; otherwise Windows conda OpenBLAS from `CONDA_PREFIX\Library`; otherwise OpenBLAS if `openblas.pc` or `openblas64.pc` is visible; otherwise off. |
 | `openblas` | `GGML_BLAS=ON`, `GGML_BLAS_VENDOR=OpenBLAS`. |
 | `mkl` | CrispASR `COHERE_MKL=ON`, ggml `Intel10_64lp`. |
 | `generic` | `GGML_BLAS=ON`, `GGML_BLAS_VENDOR=Generic`. |
