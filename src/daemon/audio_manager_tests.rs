@@ -33,6 +33,7 @@ fn mic_summary_reports_input_and_model_rates() {
         sample_format: "F32".to_string(),
         source_id: None,
         resampling: true,
+        config_note: None,
     };
     assert_eq!(
         mic.summary(),
@@ -49,11 +50,20 @@ fn mic_summary_makes_downmix_explicit() {
         sample_format: "F32".to_string(),
         source_id: None,
         resampling: true,
+        config_note: None,
     };
 
     assert_eq!(
         mic.summary(),
         "Microphone Array, 48000 Hz 4ch input -> 16000 Hz mono model, F32"
+    );
+    assert_eq!(
+        mic.detail_lines(),
+        vec![
+            "model input: 16000 Hz mono PCM".to_string(),
+            "capture path: CPAL opened 4ch; callback downmixes to mono before resampling"
+                .to_string(),
+        ]
     );
 }
 
@@ -329,6 +339,7 @@ fn bluetooth_input_names_are_detected_but_not_virtual() {
         sample_format: "F32".to_string(),
         source_id: None,
         resampling: false,
+        config_note: None,
     };
     assert!(by_name.looks_bluetooth());
 
@@ -339,6 +350,7 @@ fn bluetooth_input_names_are_detected_but_not_virtual() {
         sample_format: "F32".to_string(),
         source_id: Some("bluez_input.00_11_22_33_44_55.headset-head-unit".to_string()),
         resampling: false,
+        config_note: None,
     };
     assert!(by_source.looks_bluetooth());
 }

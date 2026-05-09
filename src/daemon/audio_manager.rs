@@ -175,6 +175,8 @@ pub struct MicInfo {
     pub source_id: Option<String>,
     /// Whether the stream is resampled to the Parakeet target rate.
     pub resampling: bool,
+    /// Human-readable note about why the opened input config was selected.
+    pub config_note: Option<String>,
 }
 
 impl MicInfo {
@@ -199,6 +201,30 @@ impl MicInfo {
             )
         };
         format!("{}, {}, {}", self.name, rate_label, self.sample_format)
+    }
+
+    /// Return detailed audio routing notes for verbose diagnostics.
+    ///
+    /// # Returns
+    ///
+    /// Lines describing the capture and model input shape.
+    pub fn detail_lines(&self) -> Vec<String> {
+        let mut lines = Vec::new();
+        lines.push(format!("model input: {} Hz mono PCM", TARGET_RATE));
+        if self.channels > 1 {
+            lines.push(format!(
+                "capture path: CPAL opened {}; callback downmixes to mono before resampling",
+                input_channel_label(self.channels)
+            ));
+        } else if self.resampling {
+            lines.push("capture path: mono input, resampling to model rate".to_string());
+        } else {
+            lines.push("capture path: mono input, no resampling".to_string());
+        }
+        if let Some(note) = &self.config_note {
+            lines.push(format!("input config: {note}"));
+        }
+        lines
     }
 
     /// Return whether this input appears to be a Bluetooth microphone.
@@ -804,6 +830,7 @@ struct SelectedInput {
     device: cpal::Device,
     name: String,
     config: cpal::SupportedStreamConfig,
+    config_note: Option<String>,
     is_default: bool,
 }
 
@@ -825,11 +852,12 @@ fn select_input_device(host: &cpal::Host) -> Result<SelectedInput> {
             .unwrap_or_else(|| "<default input>".to_string());
         if !is_virtual_input_name(&name) {
             if let Ok(config) = device.default_input_config() {
-                let config = select_preferred_input_config(&device, config);
+                let (config, config_note) = select_preferred_input_config(&device, config);
                 return Ok(SelectedInput {
                     device,
                     name,
                     config,
+                    config_note,
                     is_default: true,
                 });
             }
@@ -846,7 +874,7 @@ fn select_input_device(host: &cpal::Host) -> Result<SelectedInput> {
         let name = device
             .name()
             .unwrap_or_else(|_| "<unknown input>".to_string());
-        let config = match device.default_input_config() {
+        let (config, config_note) = match device.default_input_config() {
             Ok(config) => select_preferred_input_config(&device, config),
             Err(_) => continue,
         };
@@ -854,6 +882,7 @@ fn select_input_device(host: &cpal::Host) -> Result<SelectedInput> {
             device,
             name: name.clone(),
             config,
+            config_note,
             is_default: default_name.as_deref() == Some(name.as_str()),
         };
         if is_virtual_input_name(&name) {
@@ -890,20 +919,38 @@ fn select_input_device(host: &cpal::Host) -> Result<SelectedInput> {
 fn select_preferred_input_config(
     device: &cpal::Device,
     default_config: cpal::SupportedStreamConfig,
-) -> cpal::SupportedStreamConfig {
-    preferred_mono_input_config(device, &default_config).unwrap_or(default_config)
-}
-
-fn preferred_mono_input_config(
-    device: &cpal::Device,
-    default_config: &cpal::SupportedStreamConfig,
-) -> Option<cpal::SupportedStreamConfig> {
+) -> (cpal::SupportedStreamConfig, Option<String>) {
     if default_config.channels() == 1 {
-        return None;
+        return (default_config, None);
     }
 
-    let ranges = device.supported_input_configs().ok()?;
-    preferred_mono_config_from_ranges(default_config, ranges)
+    let default_channels = default_config.channels();
+    let ranges = match device.supported_input_configs() {
+        Ok(ranges) => ranges,
+        Err(err) => {
+            return (
+                default_config,
+                Some(format!(
+                    "could not inspect alternate input configs ({err}); downmixing {default_channels}ch input to mono"
+                )),
+            );
+        }
+    };
+
+    match preferred_mono_config_from_ranges(&default_config, ranges) {
+        Some(config) => (
+            config,
+            Some(format!(
+                "selected same-rate/same-format mono input instead of {default_channels}ch default"
+            )),
+        ),
+        None => (
+            default_config,
+            Some(format!(
+                "no same-rate/same-format mono input config advertised; downmixing {default_channels}ch input to mono"
+            )),
+        ),
+    }
 }
 
 fn preferred_mono_config_from_ranges<I>(
@@ -939,6 +986,7 @@ fn mic_snapshot_from_selected(selected: &SelectedInput) -> (MicInfo, MicIdentity
     let raw_identity = raw_mic_identity_from_selected(selected);
     let mut info = mic_info_from_identity(&raw_identity);
     enhance_mic_info(&mut info, selected.is_default);
+    info.config_note = selected.config_note.clone();
     if info.source_id.is_none() {
         info.source_id = default_source_id_for_identity(selected);
     }
@@ -991,6 +1039,7 @@ fn mic_info_from_identity(identity: &MicIdentity) -> MicInfo {
         sample_format: identity.sample_format.clone(),
         source_id: identity.source_id.clone(),
         resampling: identity.input_rate != TARGET_RATE,
+        config_note: None,
     }
 }
 

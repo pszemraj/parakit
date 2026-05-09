@@ -151,6 +151,9 @@ fn print_doctor_details(
     match mic {
         Ok(mic) => {
             println!("  mic:            {}", mic.summary());
+            for line in mic.detail_lines() {
+                println!("  audio detail:   {line}");
+            }
             println!("  audio status:   OK");
         }
         Err(err) => {
@@ -805,6 +808,7 @@ mod tests {
             sample_format: "F32".to_string(),
             source_id: None,
             resampling: false,
+            config_note: None,
         });
         let insertion = Ok(());
 

@@ -28,7 +28,7 @@ Normal startup:
 parakit
   model: parakeet-tdt-0.6b-v3-Q8_0.gguf
   dtype: Q8_0 (745 MB)
-  mic:   USB Speech Mic Mono, 48000 Hz input -> 16000 Hz model, mono, F32
+  mic:   USB Speech Mic Mono, 48000 Hz mono input -> 16000 Hz mono model, F32
 Ready: hold Ctrl+Space to dictate.
 ```
 
@@ -96,7 +96,9 @@ parakit -m /path/to/model.gguf
 
 ## Microphone
 
-parakit follows the OS default input device and avoids monitor/loopback/virtual sources unless no better input is available. The microphone stream stays warm while the daemon is running; a bounded ring buffer feeds a drain thread that keeps 350 ms of pre-roll so the beginning of an utterance is less likely to be clipped.
+parakit follows the OS default input device and avoids monitor/loopback/virtual sources unless no better input is available. When CPAL reports a mono stream with the same sample rate and sample format as the default stream, parakit opens the mono stream. Otherwise it opens the default stream and downmixes multi-channel input to mono before resampling and before model inference. The model input is always 16 kHz mono PCM.
+
+The microphone stream stays warm while the daemon is running; a bounded ring buffer feeds a drain thread that keeps 350 ms of pre-roll so the beginning of an utterance is less likely to be clipped.
 
 If the default input changes while parakit is idle, the daemon switches when CPAL reports a changed selected device identity and prints the new microphone unless `--quiet` is set. Idle polling is CPAL-only and does not shell out to `pactl`. On Linux PulseAudio/PipeWire systems, startup, probe, and stream reopen paths use `pactl` only to enrich generic `default` source names for human-readable logs and Bluetooth warnings. If an active stream fails, parakit keeps running and retries.
 
