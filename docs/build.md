@@ -28,13 +28,18 @@ sudo apt install libvulkan-dev vulkan-tools glslc spirv-tools spirv-headers mesa
 
 ## Install
 
-```bash
+```text
 git submodule update --init --recursive
 cargo install --path .
 ```
 
-`cargo install --path .` installs the release binary to Cargo's bin directory, usually `~/.cargo/bin`.
-On Windows, `cargo install --path .` copies `parakit.exe` but not the generated CrispASR/ggml DLLs, so use the scripts in [../scripts/windows/README.md](../scripts/windows/README.md). They install the runnable directory under the current user's app directory and add it to User `PATH`. On Unix-like targets, developer installs built this way depend on the generated CrispASR shared libraries under Cargo's build output. Do not delete the repository `target/` tree and treat GitHub auto-generated source archives as unsupported because they do not include the CrispASR submodule. A public release must ship either a source archive with submodules or a binary bundle whose shared libraries are colocated with the executable.
+`cargo install --path .` installs the release binary to Cargo's bin directory, usually `~/.cargo/bin` on Unix-like systems and `%USERPROFILE%\.cargo\bin` on Windows.
+
+Install behavior:
+
+- Windows `cargo install --path .` copies `parakit.exe` but not the generated CrispASR/ggml DLLs. Use the scripts in [../scripts/windows/README.md](../scripts/windows/README.md) for a normal Windows install; they install the runnable directory under the current user's app directory and add it to User `PATH`.
+- Unix-like developer installs depend on the generated CrispASR shared libraries under Cargo's build output. Do not delete the repository `target/` tree.
+- GitHub auto-generated source archives are unsupported because they do not include the CrispASR submodule. A public release must ship either a source archive with submodules or a binary bundle whose shared libraries are colocated with the executable.
 
 Add `--locked` for CI or reproducibility checks when Cargo must use the exact versions in `Cargo.lock`. Leave it off for normal local installs.
 
@@ -62,7 +67,7 @@ Set-ExecutionPolicy -Scope Process Bypass
 .\scripts\windows\windows-cpu-build.ps1
 ```
 
-Both scripts build release mode, recreate `target\parakit-windows-x86_64-cpu`, copy `parakit.exe` plus adjacent runtime DLLs, install the runnable directory to `%LOCALAPPDATA%\Programs\parakit`, add it to User `PATH`, and run `parakit doctor` unless asked to skip it. Details are in [../scripts/windows/README.md](../scripts/windows/README.md).
+By default, both scripts build release mode, recreate `target\parakit-windows-x86_64-cpu`, copy `parakit.exe` plus adjacent runtime DLLs, install the runnable directory to `%LOCALAPPDATA%\Programs\parakit`, add it to User `PATH`, and run `parakit doctor` unless asked to skip it. Details are in [../scripts/windows/README.md](../scripts/windows/README.md).
 
 ## CPU Builds
 

@@ -4,7 +4,7 @@ parakit runs in the foreground by default. Use that mode once after install, the
 
 ## First Run
 
-```bash
+```text
 parakit doctor && parakit
 ```
 
@@ -12,7 +12,7 @@ parakit doctor && parakit
 
 Useful variants:
 
-```bash
+```text
 parakit --verbose doctor
 parakit --quiet doctor
 parakit doctor --deep
@@ -69,7 +69,7 @@ parakit stop
 
 When the daemon is running, these commands talk to it through local per-user IPC. Unix-like systems use a Unix socket under the parakit runtime directory; Windows uses a named pipe.
 
-```bash
+```text
 parakit status
 parakit stop
 parakit paste-last

@@ -216,7 +216,7 @@ if "%INSTALL%"=="1" if "%UPDATE_USER_PATH%"=="1" goto print_path_commands
 goto print_explicit_commands
 
 :print_path_commands
-echo Open a new terminal, then run:
+echo Run now in this Command Prompt, or open a new terminal:
 echo   parakit doctor --deep
 echo   parakit
 goto finish_print

@@ -2,7 +2,7 @@
 
 Start with diagnostics. `doctor` does not load the model.
 
-```bash
+```text
 parakit doctor
 parakit --verbose doctor
 parakit doctor --deep
@@ -12,7 +12,7 @@ It exits `0` when startup should proceed and `1` when a blocking issue remains. 
 
 If a daemon is already running, use the control socket before starting another copy:
 
-```bash
+```text
 parakit status
 parakit stop
 ```
@@ -43,7 +43,7 @@ Windows elevated-target behavior is covered in [running.md#insertion](running.md
 
 If paste is blocked, focus the intended field and run:
 
-```bash
+```text
 parakit paste-last
 ```
 

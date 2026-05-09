@@ -6,7 +6,7 @@ Windows builds need an installed runnable directory, not only `parakit.exe`. Cri
 
 `cargo install --path .` is different: Cargo installs only `parakit.exe` into Cargo's bin directory. It does not copy the generated CrispASR, ggml, or OpenBLAS DLLs. Use one of these scripts when you want a normal Windows install.
 
-By default, the scripts build `target\parakit-windows-x86_64-cpu`, install it to `%LOCALAPPDATA%\Programs\parakit`, add that install directory to the Windows User `PATH`, and also prepend it to `PATH` for the current terminal. They do not edit the system `PATH` and do not require administrator rights.
+By default, the scripts build `target\parakit-windows-x86_64-cpu`, install it to `%LOCALAPPDATA%\Programs\parakit`, and add that install directory to the Windows User `PATH`. They do not edit the system `PATH` and do not require administrator rights.
 
 ## Build
 
@@ -27,14 +27,14 @@ Set-ExecutionPolicy -Scope Process Bypass
 
 With an active conda environment, `PARAKIT_BLAS=auto` detects OpenBLAS from `%CONDA_PREFIX%\Library`. The bundle includes `openblas.dll` when that backend is selected.
 
-After installing, open a new terminal or use the same terminal that ran the script:
+After installing from Command Prompt with the batch script, the same Command Prompt can run:
 
-```bat
+```text
 parakit doctor --deep
 parakit
 ```
 
-If you launch the PowerShell script with `powershell -File ...` from another shell, use a new terminal afterward. The script updates the persistent User `PATH`, but a child process cannot rewrite its parent shell's current environment.
+After installing from PowerShell, or after launching the batch script from PowerShell, open a new terminal before running `parakit` by name. The installer updates persistent User `PATH`; it cannot rewrite an already-running parent shell's environment.
 
 For development-only bundle checks without installing:
 
