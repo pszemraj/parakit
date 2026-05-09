@@ -3,6 +3,7 @@
 #![cfg(target_os = "windows")]
 
 use anyhow::{bail, Context, Result};
+use arboard::Clipboard;
 use std::ffi::c_void;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -19,9 +20,10 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WNDCLASSW, WS_BORDER, WS_CHILD, WS_OVERLAPPEDWINDOW, WS_TABSTOP, WS_VISIBLE,
 };
 
-use super::inject::{ClipboardPolicy, Injector, PasteMode, PasteOutcome};
+use super::inject::{restore_or_clear_clipboard, ClipboardPolicy, ClipboardSnapshot, PasteMode};
 
 const FOCUS_SETTLE: Duration = Duration::from_millis(200);
+const CLIPBOARD_SETTLE: Duration = Duration::from_millis(75);
 const PASTE_SETTLE: Duration = Duration::from_millis(400);
 const HWND_TOPMOST_RAW: isize = -1;
 const HWND_NOTOPMOST_RAW: isize = -2;
@@ -90,25 +92,33 @@ pub(crate) fn windows_paste_smoke_test(mode: PasteMode) -> Result<()> {
         .context("focus Windows paste smoke edit window")?;
     pump_messages_for(FOCUS_SETTLE);
 
-    let mut injector = Injector::new()?;
-    injector.prepare_for_mode(mode)?;
-    let outcome = injector
-        .paste_text_guarded(&sentinel, mode, ClipboardPolicy::RestorePrevious, || {
-            Ok(true)
-        })
-        .context("Windows paste smoke insertion failed")?;
-    if outcome != PasteOutcome::Pasted {
-        bail!("Windows paste smoke did not send a paste chord");
-    }
+    let mut clipboard = Clipboard::new().context("could not open system clipboard")?;
+    let previous = ClipboardSnapshot::capture(&mut clipboard);
+    let test_result = (|| -> Result<()> {
+        Clipboard::set_text(&mut clipboard, sentinel.clone())
+            .context("could not stage Windows paste smoke sentinel on clipboard")?;
+        thread::sleep(CLIPBOARD_SETTLE);
+        super::windows_input::send_paste_chord(mode == PasteMode::Terminal)
+            .context("Windows paste smoke insertion failed")?;
 
-    pump_messages_for(PASTE_SETTLE);
-    let actual = window
-        .text()
-        .context("read Windows paste smoke edit text")?;
-    if actual != sentinel {
-        bail!("Windows paste smoke inserted wrong text: expected {sentinel:?}, got {actual:?}");
+        pump_messages_for(PASTE_SETTLE);
+        let actual = window
+            .text()
+            .context("read Windows paste smoke edit text")?;
+        if actual != sentinel {
+            bail!("Windows paste smoke inserted wrong text: expected {sentinel:?}, got {actual:?}");
+        }
+        Ok(())
+    })();
+
+    let restore_result =
+        restore_or_clear_clipboard(&mut clipboard, previous, ClipboardPolicy::RestorePrevious);
+    match (test_result, restore_result) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(err), Ok(())) => Err(err),
+        (Ok(()), Err(restore_err)) => Err(restore_err),
+        (Err(err), Err(restore_err)) => Err(err.context(format!("{restore_err:#}"))),
     }
-    Ok(())
 }
 
 struct TestEditWindow {

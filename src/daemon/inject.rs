@@ -139,7 +139,8 @@ pub(crate) fn smoke_test(mode: PasteMode) -> Result<()> {
     platform_paste_smoke_test(mode)
 }
 
-trait ClipboardStore {
+/// Minimal clipboard operations used by insertion and smoke-test paths.
+pub(super) trait ClipboardStore {
     /// Return the current text clipboard contents.
     ///
     /// # Returns
@@ -753,7 +754,8 @@ fn finish_blocked_clipboard<C: ClipboardStore>(
     })
 }
 
-enum ClipboardSnapshot {
+/// Best-effort snapshot of supported clipboard payloads before staging text.
+pub(super) enum ClipboardSnapshot {
     Text(String),
     Html {
         html: String,
@@ -765,7 +767,17 @@ enum ClipboardSnapshot {
 }
 
 impl ClipboardSnapshot {
-    fn capture<C: ClipboardStore>(clipboard: &mut C) -> Self {
+    /// Capture the current clipboard payload if it is one of the supported kinds.
+    ///
+    /// # Arguments
+    ///
+    /// * `clipboard` - Clipboard backend to inspect.
+    ///
+    /// # Returns
+    ///
+    /// A supported clipboard snapshot, or [`ClipboardSnapshot::Unsupported`]
+    /// when the current payload cannot be restored by Parakit.
+    pub(super) fn capture<C: ClipboardStore>(clipboard: &mut C) -> Self {
         if let Ok(files) = clipboard.get_file_list() {
             return Self::FileList(files);
         }
@@ -796,7 +808,23 @@ fn owned_image(image: ImageData<'_>) -> ImageData<'static> {
     }
 }
 
-fn restore_or_clear_clipboard<C: ClipboardStore>(
+/// Restore a previous clipboard snapshot unless the transcript should be retained.
+///
+/// # Arguments
+///
+/// * `clipboard` - Clipboard backend to update.
+/// * `previous` - Snapshot captured before staging transcript text.
+/// * `clipboard_policy` - Policy deciding whether restoration should occur.
+///
+/// # Returns
+///
+/// `Ok(())` when restoration is skipped or the previous payload is restored.
+///
+/// # Errors
+///
+/// Returns an error if the previous supported payload cannot be written back
+/// to the clipboard.
+pub(super) fn restore_or_clear_clipboard<C: ClipboardStore>(
     clipboard: &mut C,
     previous: ClipboardSnapshot,
     clipboard_policy: ClipboardPolicy,
