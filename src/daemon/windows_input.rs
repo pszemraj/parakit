@@ -67,7 +67,7 @@ fn run_registered_hotkey_loop(tx: Sender<HotkeyTransition>) -> Result<()> {
     loop {
         let status = unsafe { GetMessageW(&mut msg, None, 0, 0) };
         if status.0 == -1 {
-            return Err(WinError::from_win32()).context("GetMessageW failed");
+            return Err(WinError::from_thread()).context("GetMessageW failed");
         }
         if status.0 == 0 {
             return Ok(());
