@@ -774,11 +774,12 @@ fn handle_audio_control(
         }
         AudioControl::Stop { ack } => {
             while drain_audio_ring(consumer, state, session_epoch, pipeline, input, resampled) {}
-            let mut flushed = Vec::new();
-            pipeline.finish_recording(&mut flushed);
-            if !flushed.is_empty() {
-                append_processed_samples(state, session_epoch, &flushed);
+            resampled.clear();
+            pipeline.finish_recording(resampled);
+            if !resampled.is_empty() {
+                append_processed_samples(state, session_epoch, resampled);
             }
+            resampled.clear();
             session_epoch.store(0, Ordering::Release);
             let pcm = state.lock().take_recording();
             pipeline.reset_recording();
@@ -1175,18 +1176,29 @@ impl ResamplerState {
 
     fn process(&mut self, input: &[f32], out: &mut Vec<f32>) {
         self.scratch.extend_from_slice(input);
-        while self.scratch.len() >= self.chunk_size {
-            self.input_buf[0].clear();
-            self.input_buf[0].extend(self.scratch.drain(..self.chunk_size));
+        let mut processed = 0;
+        while self.scratch.len().saturating_sub(processed) >= self.chunk_size {
+            self.input_buf[0]
+                .copy_from_slice(&self.scratch[processed..processed + self.chunk_size]);
             self.process_chunk(out);
+            processed += self.chunk_size;
+        }
+        if processed > 0 {
+            let remaining = self.scratch.len() - processed;
+            if remaining == 0 {
+                self.scratch.clear();
+            } else {
+                self.scratch.copy_within(processed.., 0);
+                self.scratch.truncate(remaining);
+            }
         }
     }
 
     fn flush_recording(&mut self, out: &mut Vec<f32>) {
         if !self.scratch.is_empty() {
-            self.input_buf[0].clear();
-            self.input_buf[0].extend_from_slice(&self.scratch);
-            self.input_buf[0].resize(self.chunk_size, 0.0);
+            debug_assert!(self.scratch.len() < self.chunk_size);
+            self.input_buf[0].fill(0.0);
+            self.input_buf[0][..self.scratch.len()].copy_from_slice(&self.scratch);
             self.scratch.clear();
             self.process_chunk(out);
         }
