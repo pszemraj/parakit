@@ -48,6 +48,8 @@ TODO: Upgrade `enigo` from the 0.2 line in a cross-platform validation branch. L
 
 TODO: Add an optional X11 paste inter-key hold only if real target applications miss the current XTest paste chord. The current smoke test covers X11 event delivery; app-specific compatibility should drive any delay so normal paste latency does not grow without evidence.
 
+TODO: Benchmark an opt-in Windows MSVC `/GL` + `/LTCG` build after the CPU daemon is stable. MSVC does not have a direct `/O3`; keep the default at `/O2` unless link-time optimization shows a real transcription-speed win without disruptive build time or packaging side effects.
+
 ## Updating [CrispASR](https://github.com/CrispStrobe/CrispASR)
 
 Keep submodule updates separate from parakit code changes:
