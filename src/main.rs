@@ -343,7 +343,7 @@ fn run() -> Result<()> {
     daemon::inject::preflight(paste_mode).context("text insertion preflight failed")?;
     log.verbose("parakit: insertion preflight passed");
     let ipc_state = Arc::new(daemon::ipc::SharedState::new());
-    #[cfg(unix)]
+    #[cfg(any(unix, target_os = "windows"))]
     let _ipc_server = daemon::ipc::spawn_server(
         Arc::clone(&ipc_state),
         paste_mode,
@@ -351,7 +351,7 @@ fn run() -> Result<()> {
         Arc::clone(&log),
     )
     .context("start daemon control socket")?;
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, target_os = "windows")))]
     log.verbose("parakit: local control socket unavailable on this platform");
 
     let cleaner = rules::build_cleaner(cli.no_cleaning, &cli.disable_rule)?.map(Arc::new);

@@ -1,6 +1,6 @@
 //! Local control socket for an already-running daemon.
 
-#[cfg(unix)]
+#[cfg(any(unix, target_os = "windows"))]
 use anyhow::Context;
 use anyhow::{bail, Result};
 use parking_lot::Mutex;
@@ -9,21 +9,22 @@ use serde::{Deserialize, Serialize};
 use std::io::{BufRead, BufReader, Write};
 #[cfg(unix)]
 use std::path::PathBuf;
-#[cfg(unix)]
+#[cfg(any(unix, target_os = "windows"))]
 use std::sync::Arc;
-#[cfg(unix)]
+#[cfg(any(unix, target_os = "windows"))]
 use std::thread;
-#[cfg(unix)]
+#[cfg(any(unix, target_os = "windows"))]
 use std::thread::JoinHandle;
-#[cfg(unix)]
+#[cfg(any(unix, target_os = "windows"))]
 use std::time::Duration;
 
 #[cfg(unix)]
+use super::preflight;
+#[cfg(any(unix, target_os = "windows"))]
 use super::{
     inject::{FocusSnapshot, PasteMode},
     logging::Logger,
     notifications::Notifier,
-    preflight,
     worker::{insert_text, InsertOutcome},
 };
 
@@ -98,7 +99,7 @@ impl SharedState {
         self.inner.lock().last_transcript = Some(text);
     }
 
-    #[cfg(any(unix, test))]
+    #[cfg(any(unix, target_os = "windows", test))]
     fn status(&self) -> IpcResponse {
         let inner = self.inner.lock();
         IpcResponse::Status {
@@ -107,7 +108,7 @@ impl SharedState {
         }
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, target_os = "windows"))]
     fn last_transcript(&self) -> Option<String> {
         self.inner.lock().last_transcript.clone()
     }
@@ -128,8 +129,9 @@ impl SharedState {
 }
 
 /// Running control socket server.
-#[cfg(unix)]
+#[cfg(any(unix, target_os = "windows"))]
 pub(crate) struct IpcServer {
+    #[cfg(unix)]
     path: PathBuf,
     _thread: JoinHandle<()>,
 }
@@ -156,7 +158,7 @@ impl Drop for IpcServer {
 /// # Errors
 ///
 /// Returns an error when the control socket cannot be bound.
-#[cfg(unix)]
+#[cfg(any(unix, target_os = "windows"))]
 pub(crate) fn spawn_server(
     state: Arc<SharedState>,
     paste_mode: PasteMode,
@@ -363,13 +365,13 @@ fn ensure_private_socket_dir(path: &std::path::Path) -> Result<()> {
     Ok(())
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, target_os = "windows"))]
 struct CommandOutcome {
     response: IpcResponse,
     stop_after_response: bool,
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, target_os = "windows"))]
 fn handle_command(
     command: IpcCommand,
     state: Arc<SharedState>,
@@ -429,7 +431,7 @@ fn handle_command(
     }
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, target_os = "windows"))]
 fn paste_text(
     text: &str,
     paste_mode: PasteMode,
@@ -487,7 +489,441 @@ fn send_command(command: IpcCommand) -> Result<IpcResponse> {
     serde_json::from_str(&line).context("parse daemon control response")
 }
 
-#[cfg(not(unix))]
+#[cfg(target_os = "windows")]
+fn spawn_server_impl(
+    state: Arc<SharedState>,
+    paste_mode: PasteMode,
+    keep_transcript_clipboard: bool,
+    log: Arc<Logger>,
+) -> Result<IpcServer> {
+    windows_pipe::spawn_server_impl(state, paste_mode, keep_transcript_clipboard, log)
+}
+
+#[cfg(target_os = "windows")]
+fn send_command(command: IpcCommand) -> Result<IpcResponse> {
+    windows_pipe::send_command(command)
+}
+
+#[cfg(target_os = "windows")]
+mod windows_pipe {
+    use super::*;
+    use std::{ffi::c_void, ptr::null_mut};
+    use windows::core::PCWSTR;
+    use windows::Win32::Foundation::{CloseHandle, HANDLE};
+
+    const PIPE_BUFFER_SIZE: u32 = 64 * 1024;
+    const IPC_CLIENT_TIMEOUT_MS: u32 = 750;
+    const GENERIC_READ: u32 = 0x8000_0000;
+    const GENERIC_WRITE: u32 = 0x4000_0000;
+    const OPEN_EXISTING: u32 = 3;
+    const FILE_ATTRIBUTE_NORMAL: u32 = 0x0000_0080;
+    const PIPE_ACCESS_DUPLEX: u32 = 0x0000_0003;
+    const PIPE_TYPE_MESSAGE: u32 = 0x0000_0004;
+    const PIPE_READMODE_MESSAGE: u32 = 0x0000_0002;
+    const PIPE_WAIT: u32 = 0x0000_0000;
+    const PIPE_UNLIMITED_INSTANCES: u32 = 255;
+    const ERROR_MORE_DATA: u32 = 234;
+    const ERROR_PIPE_BUSY: u32 = 231;
+    const ERROR_PIPE_CONNECTED: u32 = 535;
+    const SDDL_REVISION_1: u32 = 1;
+
+    #[repr(C)]
+    struct RawSecurityAttributes {
+        n_length: u32,
+        lp_security_descriptor: *mut c_void,
+        b_inherit_handle: i32,
+    }
+
+    #[link(name = "advapi32")]
+    unsafe extern "system" {
+        fn ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            string_security_descriptor: PCWSTR,
+            string_security_descriptor_revision: u32,
+            security_descriptor: *mut *mut c_void,
+            security_descriptor_size: *mut u32,
+        ) -> i32;
+    }
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn ConnectNamedPipe(pipe: HANDLE, overlapped: *mut c_void) -> i32;
+        fn CreateFileW(
+            file_name: PCWSTR,
+            desired_access: u32,
+            share_mode: u32,
+            security_attributes: *const RawSecurityAttributes,
+            creation_disposition: u32,
+            flags_and_attributes: u32,
+            template_file: HANDLE,
+        ) -> HANDLE;
+        fn CreateNamedPipeW(
+            name: PCWSTR,
+            open_mode: u32,
+            pipe_mode: u32,
+            max_instances: u32,
+            out_buffer_size: u32,
+            in_buffer_size: u32,
+            default_timeout: u32,
+            security_attributes: *mut RawSecurityAttributes,
+        ) -> HANDLE;
+        fn DisconnectNamedPipe(pipe: HANDLE) -> i32;
+        fn FlushFileBuffers(file: HANDLE) -> i32;
+        fn GetLastError() -> u32;
+        fn LocalFree(mem: *mut c_void) -> *mut c_void;
+        fn ReadFile(
+            file: HANDLE,
+            buffer: *mut c_void,
+            bytes_to_read: u32,
+            bytes_read: *mut u32,
+            overlapped: *mut c_void,
+        ) -> i32;
+        fn WaitNamedPipeW(name: PCWSTR, timeout: u32) -> i32;
+        fn WriteFile(
+            file: HANDLE,
+            buffer: *const c_void,
+            bytes_to_write: u32,
+            bytes_written: *mut u32,
+            overlapped: *mut c_void,
+        ) -> i32;
+    }
+
+    /// Start the Windows named-pipe daemon control server.
+    ///
+    /// # Arguments
+    ///
+    /// * `state` - Shared daemon status and last-transcript cache.
+    /// * `paste_mode` - Paste mode used by paste-related commands.
+    /// * `keep_transcript_clipboard` - Whether command insertion leaves text on
+    ///   the clipboard.
+    /// * `log` - Logger used for background transport failures.
+    ///
+    /// # Returns
+    ///
+    /// A server handle that owns the listener thread.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the per-user pipe name or listener thread cannot
+    /// be initialized.
+    pub(super) fn spawn_server_impl(
+        state: Arc<SharedState>,
+        paste_mode: PasteMode,
+        keep_transcript_clipboard: bool,
+        log: Arc<Logger>,
+    ) -> Result<IpcServer> {
+        let pipe_name = daemon_pipe_name()?;
+        let thread = thread::Builder::new()
+            .name("parakit-ipc".into())
+            .spawn(move || loop {
+                match create_server_pipe(&pipe_name).and_then(|pipe| {
+                    connect_server_pipe(&pipe)?;
+                    Ok(pipe)
+                }) {
+                    Ok(pipe) => {
+                        let state = Arc::clone(&state);
+                        let log = Arc::clone(&log);
+                        let _ = thread::Builder::new()
+                            .name("parakit-ipc-client".into())
+                            .spawn(move || {
+                                handle_client(
+                                    pipe,
+                                    state,
+                                    paste_mode,
+                                    keep_transcript_clipboard,
+                                    log,
+                                )
+                            });
+                    }
+                    Err(err) => {
+                        log.warn(format!("Windows daemon named pipe failed: {err:#}"));
+                        thread::sleep(Duration::from_millis(250));
+                    }
+                }
+            })
+            .context("spawn Windows daemon named pipe")?;
+        Ok(IpcServer { _thread: thread })
+    }
+
+    /// Send one command to the running Windows daemon.
+    ///
+    /// # Returns
+    ///
+    /// The daemon response decoded from the named-pipe reply.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the per-user named pipe is unavailable, transport
+    /// I/O fails, or the response cannot be decoded.
+    pub(super) fn send_command(command: IpcCommand) -> Result<IpcResponse> {
+        let pipe_name = daemon_pipe_name()?;
+        let pipe = connect_client_pipe(&pipe_name)?;
+        write_json_line(&pipe, &command).context("write Windows daemon control command")?;
+        let response = read_pipe_message(&pipe).context("read Windows daemon control response")?;
+        serde_json::from_slice(&response).context("parse Windows daemon control response")
+    }
+
+    fn handle_client(
+        pipe: PipeHandle,
+        state: Arc<SharedState>,
+        paste_mode: PasteMode,
+        keep_transcript_clipboard: bool,
+        log: Arc<Logger>,
+    ) {
+        let notifier = Notifier::new(Arc::clone(&log));
+        let outcome = match read_command(&pipe).and_then(|command| {
+            handle_command(
+                command,
+                Arc::clone(&state),
+                paste_mode,
+                keep_transcript_clipboard,
+                log.as_ref(),
+                &notifier,
+            )
+            .map_err(|err| IpcResponse::Err {
+                message: format!("{err:#}"),
+            })
+        }) {
+            Ok(outcome) => outcome,
+            Err(response) => CommandOutcome {
+                response,
+                stop_after_response: false,
+            },
+        };
+
+        if let Err(err) = write_json_line(&pipe, &outcome.response) {
+            log.warn(format!("Windows daemon control response failed: {err:#}"));
+        }
+        unsafe {
+            let _ = FlushFileBuffers(pipe.0);
+            let _ = DisconnectNamedPipe(pipe.0);
+        }
+
+        if outcome.stop_after_response {
+            thread::spawn(move || {
+                thread::sleep(Duration::from_millis(50));
+                std::process::exit(0);
+            });
+        }
+    }
+
+    fn read_command(pipe: &PipeHandle) -> std::result::Result<IpcCommand, IpcResponse> {
+        let bytes = read_pipe_message(pipe).map_err(|err| IpcResponse::Err {
+            message: format!("read Windows daemon control command failed: {err:#}"),
+        })?;
+        serde_json::from_slice(&bytes).map_err(|err| IpcResponse::Err {
+            message: format!("invalid Windows daemon control command: {err}"),
+        })
+    }
+
+    fn daemon_pipe_name() -> Result<Vec<u16>> {
+        let sid = super::super::windows_security::current_user_sid_string()
+            .context("read current Windows user SID for daemon pipe")?;
+        Ok(encode_wide_null(&format!(r"\\.\pipe\parakit-daemon-{sid}")))
+    }
+
+    fn create_server_pipe(pipe_name: &[u16]) -> Result<PipeHandle> {
+        let mut security = PipeSecurity::current_user_only()?;
+        let mut attributes = security.attributes();
+        let handle = unsafe {
+            CreateNamedPipeW(
+                PCWSTR(pipe_name.as_ptr()),
+                PIPE_ACCESS_DUPLEX,
+                PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT,
+                PIPE_UNLIMITED_INSTANCES,
+                PIPE_BUFFER_SIZE,
+                PIPE_BUFFER_SIZE,
+                IPC_CLIENT_TIMEOUT_MS,
+                &mut attributes,
+            )
+        };
+        if is_invalid_handle(handle) {
+            return Err(last_error("CreateNamedPipeW failed"));
+        }
+        Ok(PipeHandle(handle))
+    }
+
+    fn connect_server_pipe(pipe: &PipeHandle) -> Result<()> {
+        if unsafe { ConnectNamedPipe(pipe.0, null_mut()) } != 0 {
+            return Ok(());
+        }
+        let err = unsafe { GetLastError() };
+        if err == ERROR_PIPE_CONNECTED {
+            Ok(())
+        } else {
+            Err(win32_error("ConnectNamedPipe failed", err))
+        }
+    }
+
+    fn connect_client_pipe(pipe_name: &[u16]) -> Result<PipeHandle> {
+        if unsafe { WaitNamedPipeW(PCWSTR(pipe_name.as_ptr()), IPC_CLIENT_TIMEOUT_MS) } == 0 {
+            let err = unsafe { GetLastError() };
+            if err == ERROR_PIPE_BUSY {
+                bail!("Windows daemon control pipe is busy");
+            }
+            return Err(win32_error(
+                "connect Windows daemon control pipe failed",
+                err,
+            ));
+        }
+
+        let handle = unsafe {
+            CreateFileW(
+                PCWSTR(pipe_name.as_ptr()),
+                GENERIC_READ | GENERIC_WRITE,
+                0,
+                null_mut(),
+                OPEN_EXISTING,
+                FILE_ATTRIBUTE_NORMAL,
+                HANDLE::default(),
+            )
+        };
+        if is_invalid_handle(handle) {
+            return Err(last_error("CreateFileW Windows daemon control pipe failed"));
+        }
+        Ok(PipeHandle(handle))
+    }
+
+    fn read_pipe_message(pipe: &PipeHandle) -> Result<Vec<u8>> {
+        let mut out = Vec::new();
+        loop {
+            let mut chunk = vec![0_u8; PIPE_BUFFER_SIZE as usize];
+            let mut read = 0_u32;
+            let ok = unsafe {
+                ReadFile(
+                    pipe.0,
+                    chunk.as_mut_ptr().cast(),
+                    PIPE_BUFFER_SIZE,
+                    &mut read,
+                    null_mut(),
+                )
+            };
+            out.extend_from_slice(&chunk[..read as usize]);
+            if ok != 0 {
+                return Ok(out);
+            }
+            let err = unsafe { GetLastError() };
+            if err != ERROR_MORE_DATA {
+                return Err(win32_error(
+                    "ReadFile Windows daemon control pipe failed",
+                    err,
+                ));
+            }
+        }
+    }
+
+    fn write_json_line<T: Serialize>(pipe: &PipeHandle, value: &T) -> Result<()> {
+        let mut bytes =
+            serde_json::to_vec(value).context("serialize Windows daemon control JSON")?;
+        bytes.push(b'\n');
+        write_pipe_all(pipe, &bytes)
+    }
+
+    fn write_pipe_all(pipe: &PipeHandle, mut bytes: &[u8]) -> Result<()> {
+        while !bytes.is_empty() {
+            let chunk_len = bytes.len().min(PIPE_BUFFER_SIZE as usize);
+            let mut written = 0_u32;
+            let ok = unsafe {
+                WriteFile(
+                    pipe.0,
+                    bytes.as_ptr().cast(),
+                    chunk_len as u32,
+                    &mut written,
+                    null_mut(),
+                )
+            };
+            if ok == 0 {
+                return Err(last_error("WriteFile Windows daemon control pipe failed"));
+            }
+            if written == 0 {
+                bail!("WriteFile Windows daemon control pipe wrote zero bytes");
+            }
+            bytes = &bytes[written as usize..];
+        }
+        Ok(())
+    }
+
+    struct PipeSecurity {
+        descriptor: *mut c_void,
+    }
+
+    impl PipeSecurity {
+        fn current_user_only() -> Result<Self> {
+            let sid = super::super::windows_security::current_user_sid_string()
+                .context("read current Windows user SID for daemon pipe security")?;
+            let sddl = encode_wide_null(&format!("D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GA;;;{sid})"));
+            let mut descriptor = null_mut::<c_void>();
+            if unsafe {
+                ConvertStringSecurityDescriptorToSecurityDescriptorW(
+                    PCWSTR(sddl.as_ptr()),
+                    SDDL_REVISION_1,
+                    &mut descriptor,
+                    null_mut(),
+                )
+            } == 0
+            {
+                return Err(last_error(
+                    "ConvertStringSecurityDescriptorToSecurityDescriptorW failed",
+                ));
+            }
+            Ok(Self { descriptor })
+        }
+
+        fn attributes(&mut self) -> RawSecurityAttributes {
+            RawSecurityAttributes {
+                n_length: std::mem::size_of::<RawSecurityAttributes>() as u32,
+                lp_security_descriptor: self.descriptor,
+                b_inherit_handle: 0,
+            }
+        }
+    }
+
+    impl Drop for PipeSecurity {
+        fn drop(&mut self) {
+            if !self.descriptor.is_null() {
+                unsafe {
+                    let _ = LocalFree(self.descriptor);
+                }
+            }
+        }
+    }
+
+    struct PipeHandle(HANDLE);
+
+    unsafe impl Send for PipeHandle {}
+
+    impl Drop for PipeHandle {
+        fn drop(&mut self) {
+            unsafe {
+                let _ = CloseHandle(self.0);
+            }
+        }
+    }
+
+    fn encode_wide_null(text: &str) -> Vec<u16> {
+        text.encode_utf16().chain(std::iter::once(0)).collect()
+    }
+
+    fn invalid_handle() -> HANDLE {
+        HANDLE((-1_isize) as *mut c_void)
+    }
+
+    fn is_invalid_handle(handle: HANDLE) -> bool {
+        handle.0 == invalid_handle().0
+    }
+
+    fn last_error(label: &str) -> anyhow::Error {
+        win32_error(label, unsafe { GetLastError() })
+    }
+
+    fn win32_error(label: &str, code: u32) -> anyhow::Error {
+        anyhow::anyhow!(
+            "{label}: {}",
+            std::io::Error::from_raw_os_error(code as i32)
+        )
+    }
+}
+
+#[cfg(not(any(unix, target_os = "windows")))]
 fn send_command(_command: IpcCommand) -> Result<IpcResponse> {
     bail!("local daemon IPC is not implemented on this platform")
 }
