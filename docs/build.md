@@ -34,7 +34,7 @@ cargo install --path .
 ```
 
 `cargo install --path .` installs the release binary to Cargo's bin directory, usually `~/.cargo/bin`.
-On Windows, `cargo install --path .` copies `parakit.exe` but not the generated CrispASR/ggml DLLs, so use the bundle scripts in [../scripts/windows/README.md](../scripts/windows/README.md) for a runnable app directory. On Unix-like targets, developer installs built this way depend on the generated CrispASR shared libraries under Cargo's build output. Do not delete the repository `target/` tree and treat GitHub auto-generated source archives as unsupported because they do not include the CrispASR submodule. A public release must ship either a source archive with submodules or a binary bundle whose shared libraries are colocated with the executable.
+On Windows, `cargo install --path .` copies `parakit.exe` but not the generated CrispASR/ggml DLLs, so use the scripts in [../scripts/windows/README.md](../scripts/windows/README.md). They install the runnable directory under the current user's app directory and add it to User `PATH`. On Unix-like targets, developer installs built this way depend on the generated CrispASR shared libraries under Cargo's build output. Do not delete the repository `target/` tree and treat GitHub auto-generated source archives as unsupported because they do not include the CrispASR submodule. A public release must ship either a source archive with submodules or a binary bundle whose shared libraries are colocated with the executable.
 
 Add `--locked` for CI or reproducibility checks when Cargo must use the exact versions in `Cargo.lock`. Leave it off for normal local installs.
 
@@ -49,19 +49,20 @@ cargo install --path . --features metal  # Apple targets only
 
 ## Windows Bundles
 
-For a runnable Windows CPU bundle from Command Prompt:
+For a per-user Windows CPU install from Command Prompt:
 
 ```bat
 scripts\windows\windows-cpu-build.bat
 ```
 
-The PowerShell equivalent is:
+The PowerShell equivalent from PowerShell is:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts/windows/windows-cpu-build.ps1
+Set-ExecutionPolicy -Scope Process Bypass
+.\scripts\windows\windows-cpu-build.ps1
 ```
 
-Both scripts build release mode, recreate `target\parakit-windows-x86_64-cpu`, copy `parakit.exe` plus adjacent runtime DLLs, and run `parakit doctor` unless asked to skip it. Details are in [../scripts/windows/README.md](../scripts/windows/README.md).
+Both scripts build release mode, recreate `target\parakit-windows-x86_64-cpu`, copy `parakit.exe` plus adjacent runtime DLLs, install the runnable directory to `%LOCALAPPDATA%\Programs\parakit`, add it to User `PATH`, and run `parakit doctor` unless asked to skip it. Details are in [../scripts/windows/README.md](../scripts/windows/README.md).
 
 ## CPU Builds
 

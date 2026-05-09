@@ -3,11 +3,17 @@
 # Usage:
 #   powershell -ExecutionPolicy Bypass -File scripts/windows/windows-cpu-build.ps1
 #
+# By default this builds a repo-local bundle, installs it to the per-user
+# Windows app directory, and adds that directory to the User PATH.
+#
 # This script intentionally does not enable CUDA. Validate the native CPU
 # daemon before adding GPU toolchain and runtime DLL complexity.
 
 param(
-    [switch]$SkipDoctor
+    [switch]$SkipDoctor,
+    [switch]$NoInstall,
+    [switch]$NoUserPath,
+    [string]$InstallDir
 )
 
 $ErrorActionPreference = "Stop"
@@ -51,6 +57,14 @@ function Get-RepoRoot {
     }
     $scriptDir = Split-Path -Parent $scriptPath
     return (Resolve-Path (Join-Path $scriptDir "..\..")).Path
+}
+
+function Get-DefaultInstallDir {
+    if ([string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) {
+        return (Join-Path $env:USERPROFILE "AppData\Local\Programs\parakit")
+    }
+
+    return (Join-Path $env:LOCALAPPDATA "Programs\parakit")
 }
 
 function Assert-ChildPath {
@@ -156,12 +170,44 @@ if (-not $SkipDoctor) {
     Invoke-Checked $bundleExe "doctor"
 }
 
+$activeDir = $bundleDir
+
+if (-not $NoInstall) {
+    if ([string]::IsNullOrWhiteSpace($InstallDir)) {
+        $InstallDir = Get-DefaultInstallDir
+    }
+
+    $installer = Join-Path $repo "scripts\windows\install-bundle.ps1"
+
+    Write-Host "parakit: installing Windows bundle"
+    if ($NoUserPath) {
+        & $installer -BundleDir $bundleDir -InstallDir $InstallDir -NoUserPath
+    } else {
+        & $installer -BundleDir $bundleDir -InstallDir $InstallDir
+    }
+    if (-not $?) {
+        throw "Windows bundle install failed"
+    }
+
+    $activeDir = [System.IO.Path]::GetFullPath($InstallDir)
+}
+
 Write-Host ""
 Write-Host "parakit: CPU Windows bundle ready:"
 Write-Host "  $bundleDir"
 Write-Host ""
-$env:Path = "$bundleDir;$env:Path"
-Write-Host "parakit: added bundle to PATH for this PowerShell process"
+if (-not $NoInstall) {
+    Write-Host "parakit: installed to:"
+    Write-Host "  $activeDir"
+    if (-not $NoUserPath) {
+        Write-Host "parakit: install directory is on the User PATH for new terminals"
+    }
+} else {
+    Write-Host "parakit: install skipped"
+}
+Write-Host ""
+$env:Path = "$activeDir;$env:Path"
+Write-Host "parakit: added active directory to PATH for this PowerShell process"
 Write-Host ""
 Write-Host "Next manual checks:"
 Write-Host "  parakit doctor --deep"

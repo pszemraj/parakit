@@ -7,6 +7,9 @@ set "PROFILE=release"
 set "CARGO_PROFILE_FLAG=--release"
 set "SKIP_DOCTOR=0"
 set "RUN_SUBMODULES=1"
+set "INSTALL=1"
+set "UPDATE_USER_PATH=1"
+set "INSTALL_DIR="
 set "BUNDLE_NAME=parakit-windows-x86_64-cpu"
 
 if /I "%~1"=="--help" goto usage
@@ -41,6 +44,26 @@ if /I "%~1"=="--no-submodules" (
     shift
     goto parse_args
 )
+if /I "%~1"=="--no-install" (
+    set "INSTALL=0"
+    shift
+    goto parse_args
+)
+if /I "%~1"=="--no-user-path" (
+    set "UPDATE_USER_PATH=0"
+    shift
+    goto parse_args
+)
+if /I "%~1"=="--install-dir" (
+    if "%~2"=="" (
+        echo error: --install-dir requires a directory argument. 1>&2
+        exit /b 2
+    )
+    set "INSTALL_DIR=%~2"
+    shift
+    shift
+    goto parse_args
+)
 
 echo error: unknown option "%~1" 1>&2
 echo.
@@ -69,6 +92,8 @@ call :require cmake "Install CMake and ensure it is on PATH."
 if errorlevel 1 exit /b 1
 call :require git "Install Git for Windows and ensure it is on PATH."
 if errorlevel 1 exit /b 1
+call :require powershell "Windows PowerShell was not found on PATH."
+if errorlevel 1 exit /b 1
 
 set "RUST_HOST="
 for /f "tokens=2" %%H in ('rustc -vV ^| findstr /b /c:"host:"') do set "RUST_HOST=%%H"
@@ -93,6 +118,14 @@ cd /d "%REPO%" || exit /b 1
 if not exist "Cargo.toml" (
     echo error: Cargo.toml was not found at "%REPO%". 1>&2
     exit /b 1
+)
+
+if "%INSTALL%"=="1" if "%INSTALL_DIR%"=="" (
+    if not defined LOCALAPPDATA (
+        echo error: LOCALAPPDATA is not set; pass --install-dir or use --no-install. 1>&2
+        exit /b 1
+    )
+    set "INSTALL_DIR=%LOCALAPPDATA%\Programs\parakit"
 )
 
 echo parakit: repo root = %REPO%
@@ -172,16 +205,37 @@ if "%SKIP_DOCTOR%"=="0" (
     if errorlevel 1 exit /b 1
 )
 
+set "ACTIVE_DIR=%BUNDLE_DIR%"
+
+if "%INSTALL%"=="1" (
+    echo parakit: installing Windows bundle
+    if "%UPDATE_USER_PATH%"=="1" (
+        powershell -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%\install-bundle.ps1" -BundleDir "%BUNDLE_DIR%" -InstallDir "%INSTALL_DIR%"
+    ) else (
+        powershell -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%\install-bundle.ps1" -BundleDir "%BUNDLE_DIR%" -InstallDir "%INSTALL_DIR%" -NoUserPath
+    )
+    if errorlevel 1 exit /b 1
+    set "ACTIVE_DIR=%INSTALL_DIR%"
+)
+
 echo.
 echo parakit: CPU Windows bundle ready:
 echo   %BUNDLE_DIR%
 echo.
-echo parakit: added bundle to PATH for this Command Prompt session
+if "%INSTALL%"=="1" (
+    echo parakit: installed to:
+    echo   %INSTALL_DIR%
+    if "%UPDATE_USER_PATH%"=="1" echo parakit: install directory is on the User PATH for new terminals
+) else (
+    echo parakit: install skipped
+)
+echo.
+echo parakit: added active directory to PATH for this Command Prompt session
 echo.
 echo Next manual checks:
 echo   parakit doctor --deep
 echo   parakit
-endlocal & set "PATH=%BUNDLE_DIR%;%PATH%"
+endlocal & set "PATH=%ACTIVE_DIR%;%PATH%"
 exit /b 0
 
 :require
@@ -222,17 +276,23 @@ exit /b 0
 echo Build and bundle Parakit CPU daemon on native Windows.
 echo.
 echo Usage:
-echo   scripts\windows\%SCRIPT_NAME% [--release] [--debug] [--skip-doctor] [--no-submodules]
+echo   scripts\windows\%SCRIPT_NAME% [--release] [--debug] [--skip-doctor] [--no-submodules] [--no-install] [--no-user-path] [--install-dir DIR]
 echo.
 echo Options:
 echo   --release        Build target\release and bundle it. This is the default.
 echo   --debug          Build target\debug and bundle it into the same target bundle.
 echo   --skip-doctor    Build and bundle without running parakit doctor.
 echo   --no-submodules  Do not run git submodule update --init --recursive.
+echo   --no-install     Build the repo-local bundle without installing it.
+echo   --no-user-path   Install without adding the install directory to User PATH.
+echo   --install-dir    Install to DIR instead of %%LOCALAPPDATA%%\Programs\parakit.
 echo   -h, --help       Print this help.
 echo.
 echo The bundle is always recreated inside:
 echo   target\%BUNDLE_NAME%
+echo.
+echo By default, the bundle is installed to:
+echo   %%LOCALAPPDATA%%\Programs\parakit
 exit /b 0
 
 :usage_error
