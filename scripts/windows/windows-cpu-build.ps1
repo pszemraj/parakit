@@ -157,6 +157,7 @@ Get-ChildItem -LiteralPath $releaseDir -Filter "*.dll" -ErrorAction SilentlyCont
     ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination $bundleDir -Force }
 
 Copy-IfExists -Path (Join-Path $repo "LICENSE") -Destination $bundleDir
+Copy-IfExists -Path (Join-Path $repo "README.md") -Destination $bundleDir
 
 $bundleExe = Join-Path $bundleDir "parakit.exe"
 

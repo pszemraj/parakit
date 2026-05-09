@@ -178,6 +178,7 @@ for %%F in ("%PROFILE_DIR%\*.dll") do (
 )
 
 if exist "LICENSE" copy /y "LICENSE" "%BUNDLE_DIR%\" >nul
+if exist "README.md" copy /y "README.md" "%BUNDLE_DIR%\" >nul
 
 if not exist "%BUNDLE_DIR%\crispasr.dll" (
     echo error: crispasr.dll was not copied into the bundle. 1>&2
