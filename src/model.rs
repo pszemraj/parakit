@@ -4,6 +4,8 @@ use anyhow::{Context, Result};
 use directories::BaseDirs;
 use std::path::PathBuf;
 
+/// Environment variable that overrides the platform model cache directory.
+pub const MODELS_DIR_ENV: &str = "PARAKIT_MODELS_DIR";
 /// Direct download URL for the official `.nemo` checkpoint.
 pub const OFFICIAL_NEMO_URL: &str =
     "https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3/resolve/main/parakeet-tdt-0.6b-v3.nemo";
@@ -32,6 +34,10 @@ pub const MANIFEST_FILENAME: &str = "manifest.json";
 /// Returns an error if the operating system does not expose a usable user
 /// cache or local-data directory.
 pub fn models_dir() -> Result<PathBuf> {
+    if let Some(path) = override_models_dir()? {
+        return Ok(path);
+    }
+
     let dirs = BaseDirs::new().context("could not determine user cache directory")?;
 
     #[cfg(target_os = "windows")]
@@ -47,4 +53,14 @@ pub fn models_dir() -> Result<PathBuf> {
     {
         Ok(dirs.cache_dir().join("parakit").join("models"))
     }
+}
+
+fn override_models_dir() -> Result<Option<PathBuf>> {
+    let Some(raw) = std::env::var_os(MODELS_DIR_ENV) else {
+        return Ok(None);
+    };
+    if raw.is_empty() {
+        anyhow::bail!("{MODELS_DIR_ENV} is set but empty");
+    }
+    Ok(Some(PathBuf::from(raw)))
 }
