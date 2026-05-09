@@ -1,7 +1,7 @@
 # Build and bundle Parakit CPU daemon on native Windows.
 #
 # Usage:
-#   powershell -ExecutionPolicy Bypass -File scripts/windows/windows-cpu-build.ps1
+#   powershell -ExecutionPolicy Bypass -File scripts/windows/windows-cpu-build.ps1 [options]
 #
 # By default this builds a repo-local bundle, installs it to the per-user
 # Windows app directory, and adds that directory to the User PATH.
@@ -10,13 +10,81 @@
 # daemon before adding GPU toolchain and runtime DLL complexity.
 
 param(
-    [switch]$SkipDoctor,
-    [switch]$NoInstall,
-    [switch]$NoUserPath,
-    [string]$InstallDir
+    [Parameter(ValueFromRemainingArguments = $true)]
+    [string[]]$RawArgs
 )
 
 $ErrorActionPreference = "Stop"
+
+$Profile = "release"
+$SkipDoctor = $false
+$NoInstall = $false
+$NoUserPath = $false
+$NoSubmodules = $false
+$InstallDir = $null
+
+function Show-Usage {
+    $scriptName = Split-Path -Leaf $PSCommandPath
+    Write-Host "Build and bundle Parakit CPU daemon on native Windows."
+    Write-Host ""
+    Write-Host "Usage:"
+    Write-Host "  scripts\windows\$scriptName [--release] [--debug] [--skip-doctor] [--no-submodules] [--no-install] [--no-user-path] [--install-dir DIR]"
+    Write-Host ""
+    Write-Host "Options:"
+    Write-Host "  --release        Build target\release and bundle it. This is the default."
+    Write-Host "  --debug          Build target\debug and bundle it into the same target bundle."
+    Write-Host "  --skip-doctor    Build and bundle without running parakit doctor."
+    Write-Host "  --no-submodules  Do not run git submodule update --init --recursive."
+    Write-Host "  --no-install     Build the repo-local bundle without installing it."
+    Write-Host "  --no-user-path   Install without adding the install directory to User PATH."
+    Write-Host "  --install-dir    Install to DIR instead of `%LOCALAPPDATA`%\Programs\parakit."
+    Write-Host "  -h, --help       Print this help."
+}
+
+for ($i = 0; $i -lt $RawArgs.Count; $i++) {
+    switch -Regex ($RawArgs[$i]) {
+        '^(--help|-h|-Help)$' {
+            Show-Usage
+            exit 0
+        }
+        '^(--release|-Release)$' {
+            $Profile = "release"
+        }
+        '^(--debug|-Profile)$' {
+            if ($RawArgs[$i] -eq "-Profile") {
+                $i++
+                if ($i -ge $RawArgs.Count -or $RawArgs[$i] -notin @("release", "debug")) {
+                    throw "-Profile requires 'release' or 'debug'"
+                }
+                $Profile = $RawArgs[$i]
+            } else {
+                $Profile = "debug"
+            }
+        }
+        '^(--skip-doctor|--no-doctor|-SkipDoctor)$' {
+            $SkipDoctor = $true
+        }
+        '^(--no-submodules|-NoSubmodules)$' {
+            $NoSubmodules = $true
+        }
+        '^(--no-install|-NoInstall)$' {
+            $NoInstall = $true
+        }
+        '^(--no-user-path|-NoUserPath)$' {
+            $NoUserPath = $true
+        }
+        '^(--install-dir|-InstallDir)$' {
+            $i++
+            if ($i -ge $RawArgs.Count -or [string]::IsNullOrWhiteSpace($RawArgs[$i])) {
+                throw "$($RawArgs[$i - 1]) requires a directory argument"
+            }
+            $InstallDir = $RawArgs[$i]
+        }
+        default {
+            throw "unknown option: $($RawArgs[$i])"
+        }
+    }
+}
 
 function Require-Command {
     param(
@@ -123,15 +191,21 @@ Require-Command "git" "Install Git for Windows and ensure it is on PATH."
 $repo = Get-RepoRoot
 Set-Location $repo
 
-Write-Host "Updating submodules"
-Invoke-Checked "git" "submodule" "update" "--init" "--recursive"
+if (-not $NoSubmodules) {
+    Write-Host "Updating submodules"
+    Invoke-Checked "git" "submodule" "update" "--init" "--recursive"
+}
 
-Write-Host "Building release"
-Invoke-Checked "cargo" "build" "--release" "--locked"
+Write-Host "Building $Profile"
+$cargoArgs = @("build", "--locked")
+if ($Profile -eq "release") {
+    $cargoArgs += "--release"
+}
+Invoke-Checked "cargo" @cargoArgs
 
 $targetRoot = Join-Path $repo "target"
-$releaseDir = Join-Path $targetRoot "release"
-$exe = Join-Path $releaseDir "parakit.exe"
+$profileDir = Join-Path $targetRoot $Profile
+$exe = Join-Path $profileDir "parakit.exe"
 
 if (-not (Test-Path -LiteralPath $exe)) {
     throw "parakit.exe was not produced at $exe"
@@ -152,7 +226,7 @@ New-Item -ItemType Directory -Path $bundleDir | Out-Null
 Write-Host "Bundle: $bundleDir"
 Copy-Item -LiteralPath $exe -Destination $bundleDir -Force
 
-Get-ChildItem -LiteralPath $releaseDir -Filter "*.dll" -ErrorAction SilentlyContinue |
+Get-ChildItem -LiteralPath $profileDir -Filter "*.dll" -ErrorAction SilentlyContinue |
     Where-Object { $_.Name -notmatch '^ggml-cpu-.+\.dll$' } |
     ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination $bundleDir -Force }
 
