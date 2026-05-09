@@ -132,12 +132,19 @@ pub fn default_thread_count() -> usize {
     recommended_thread_count(available)
 }
 
+#[cfg(target_os = "windows")]
+const RECOMMENDED_THREAD_CAP: usize = 16;
+#[cfg(not(target_os = "windows"))]
+const RECOMMENDED_THREAD_CAP: usize = 6;
+
 /// Convert available logical parallelism into an interactive-daemon default.
 ///
 /// # Returns
 ///
-/// Roughly half the available logical CPUs, capped at six. Explicit
-/// `--threads` values bypass this default.
+/// On Windows, all available logical CPUs are used up to sixteen because the
+/// OpenBLAS-backed Parakeet path benefits from a higher explicit thread count.
+/// Other platforms use roughly half the available logical CPUs, capped at six.
+/// Explicit `--threads` values bypass this default.
 ///
 /// # Panics
 ///
@@ -147,9 +154,16 @@ pub fn recommended_thread_count(available_threads: usize) -> usize {
     if available_threads == 1 {
         return 1;
     }
-    let half = available_threads / 2;
-    let capped = half.clamp(2, 6);
-    capped.min(available_threads)
+    #[cfg(target_os = "windows")]
+    {
+        available_threads.min(RECOMMENDED_THREAD_CAP)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let half = available_threads / 2;
+        let capped = half.clamp(2, RECOMMENDED_THREAD_CAP);
+        capped.min(available_threads)
+    }
 }
 
 fn pad_short_pcm(pcm: &[f32]) -> Cow<'_, [f32]> {
@@ -198,15 +212,33 @@ mod tests {
         assert_eq!(recommended_thread_count(0), 1);
         assert_eq!(recommended_thread_count(1), 1);
         assert_eq!(recommended_thread_count(2), 2);
-        assert_eq!(recommended_thread_count(3), 2);
-        assert_eq!(recommended_thread_count(4), 2);
+        #[cfg(target_os = "windows")]
+        {
+            assert_eq!(recommended_thread_count(3), 3);
+            assert_eq!(recommended_thread_count(4), 4);
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            assert_eq!(recommended_thread_count(3), 2);
+            assert_eq!(recommended_thread_count(4), 2);
+        }
     }
 
     #[test]
     fn recommended_threads_are_capped_on_larger_systems() {
-        assert_eq!(recommended_thread_count(8), 4);
-        assert_eq!(recommended_thread_count(12), 6);
-        assert_eq!(recommended_thread_count(16), 6);
-        assert_eq!(recommended_thread_count(32), 6);
+        #[cfg(target_os = "windows")]
+        {
+            assert_eq!(recommended_thread_count(8), 8);
+            assert_eq!(recommended_thread_count(12), 12);
+            assert_eq!(recommended_thread_count(16), 16);
+            assert_eq!(recommended_thread_count(32), 16);
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            assert_eq!(recommended_thread_count(8), 4);
+            assert_eq!(recommended_thread_count(12), 6);
+            assert_eq!(recommended_thread_count(16), 6);
+            assert_eq!(recommended_thread_count(32), 6);
+        }
     }
 }

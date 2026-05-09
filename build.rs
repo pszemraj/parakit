@@ -63,6 +63,10 @@ fn main() {
         "cargo:rerun-if-changed={}/CMakeLists.txt",
         src_dir.display()
     );
+    println!(
+        "cargo:rerun-if-changed={}/src/parakeet.cpp",
+        src_dir.display()
+    );
 
     // 4. Run cmake. The `cmake` crate handles incremental builds, MSVC
     //    detection on Windows, generator selection, parallelism, and
