@@ -6,6 +6,8 @@ Windows builds need a runnable directory, not only `parakit.exe`. CrispASR and g
 
 `cargo install --path .` is different: Cargo installs only `parakit.exe` into Cargo's bin directory. It does not copy the generated CrispASR, ggml, or OpenBLAS DLLs. Use one of these scripts when you want `target\parakit-windows-x86_64-cpu`, a runnable Windows app directory.
 
+The scripts prepend that bundle directory to `PATH` for the terminal process they run in. They do not edit the permanent Windows user or system `PATH`.
+
 ## Build
 
 ```bat
@@ -24,11 +26,11 @@ powershell -ExecutionPolicy Bypass -File scripts/windows/windows-cpu-build.ps1
 
 With an active conda environment, `PARAKIT_BLAS=auto` detects OpenBLAS from `%CONDA_PREFIX%\Library`. The bundle includes `openblas.dll` when that backend is selected.
 
-After bundling:
+After bundling, use `parakit` by name in the same terminal:
 
 ```bat
-target\parakit-windows-x86_64-cpu\parakit.exe doctor --deep
-target\parakit-windows-x86_64-cpu\parakit.exe
+parakit doctor --deep
+parakit
 ```
 
 The daemon uses `RegisterHotKey` for `Ctrl+Space`, Windows clipboard staging, `SendInput` for the paste chord, a foreground-window focus guard, and a per-user named pipe for `status`, `stop`, `paste-last`, and `test-paste`.

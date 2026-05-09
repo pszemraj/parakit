@@ -176,9 +176,12 @@ echo.
 echo parakit: CPU Windows bundle ready:
 echo   %BUNDLE_DIR%
 echo.
+echo parakit: added bundle to PATH for this Command Prompt session
+echo.
 echo Next manual checks:
-echo   target\%BUNDLE_NAME%\parakit.exe doctor --deep
-echo   target\%BUNDLE_NAME%\parakit.exe
+echo   parakit doctor --deep
+echo   parakit
+endlocal & set "PATH=%BUNDLE_DIR%;%PATH%"
 exit /b 0
 
 :require
