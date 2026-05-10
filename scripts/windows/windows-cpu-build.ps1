@@ -23,6 +23,10 @@ $NoUserPath = $false
 $NoSubmodules = $false
 $InstallDir = $null
 
+if ($DebugPreference -ne "SilentlyContinue") {
+    $Profile = "debug"
+}
+
 function Show-Usage {
     $scriptName = Split-Path -Leaf $PSCommandPath
     $entryPoint = $env:PARAKIT_WINDOWS_BUILD_COMMAND
@@ -52,10 +56,10 @@ for ($i = 0; $i -lt $RawArgs.Count; $i++) {
             Show-Usage
             exit 0
         }
-        '^(--release|-Release)$' {
+        '^(--release|-release|-Release)$' {
             $Profile = "release"
         }
-        '^(--debug|-Profile)$' {
+        '^(--debug|-debug|-Profile|-profile)$' {
             if ($RawArgs[$i] -eq "-Profile") {
                 $i++
                 if ($i -ge $RawArgs.Count -or $RawArgs[$i] -notin @("release", "debug")) {
@@ -66,19 +70,19 @@ for ($i = 0; $i -lt $RawArgs.Count; $i++) {
                 $Profile = "debug"
             }
         }
-        '^(--skip-doctor|--no-doctor|-SkipDoctor)$' {
+        '^(--skip-doctor|-skip-doctor|--no-doctor|-no-doctor|-SkipDoctor)$' {
             $SkipDoctor = $true
         }
-        '^(--no-submodules|-NoSubmodules)$' {
+        '^(--no-submodules|-no-submodules|-NoSubmodules)$' {
             $NoSubmodules = $true
         }
-        '^(--no-install|-NoInstall)$' {
+        '^(--no-install|-no-install|-NoInstall)$' {
             $NoInstall = $true
         }
-        '^(--no-user-path|-NoUserPath)$' {
+        '^(--no-user-path|-no-user-path|-NoUserPath)$' {
             $NoUserPath = $true
         }
-        '^(--install-dir|-InstallDir)$' {
+        '^(--install-dir|-install-dir|-InstallDir)$' {
             $i++
             if ($i -ge $RawArgs.Count -or [string]::IsNullOrWhiteSpace($RawArgs[$i])) {
                 throw "$($RawArgs[$i - 1]) requires a directory argument"
