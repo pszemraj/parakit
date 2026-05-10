@@ -17,7 +17,6 @@ param(
 $ErrorActionPreference = "Stop"
 
 $Profile = "release"
-$SkipDoctor = $false
 $NoInstall = $false
 $NoUserPath = $false
 $NoSubmodules = $false
@@ -37,12 +36,11 @@ function Show-Usage {
     Write-Host "Build and bundle Parakit CPU daemon on native Windows."
     Write-Host ""
     Write-Host "Usage:"
-    Write-Host "  $entryPoint [--release] [--debug] [--skip-doctor] [--no-submodules] [--no-install] [--no-user-path] [--install-dir DIR]"
+    Write-Host "  $entryPoint [--release] [--debug] [--no-submodules] [--no-install] [--no-user-path] [--install-dir DIR]"
     Write-Host ""
     Write-Host "Options:"
     Write-Host "  --release        Build target\release and bundle it. This is the default."
     Write-Host "  --debug          Build target\debug and bundle it into the same target bundle."
-    Write-Host "  --skip-doctor    Build and bundle without running parakit doctor."
     Write-Host "  --no-submodules  Do not run git submodule update --init --recursive."
     Write-Host "  --no-install     Build the repo-local bundle without installing it."
     Write-Host "  --no-user-path   Install without adding the install directory to User PATH."
@@ -69,9 +67,6 @@ for ($i = 0; $i -lt $RawArgs.Count; $i++) {
             } else {
                 $Profile = "debug"
             }
-        }
-        '^(--skip-doctor|-skip-doctor|--no-doctor|-no-doctor|-SkipDoctor)$' {
-            $SkipDoctor = $true
         }
         '^(--no-submodules|-no-submodules|-NoSubmodules)$' {
             $NoSubmodules = $true
@@ -241,13 +236,6 @@ Get-ChildItem -LiteralPath $profileDir -Filter "*.dll" -ErrorAction SilentlyCont
 
 Copy-IfExists -Path (Join-Path $repo "LICENSE") -Destination $bundleDir
 Copy-IfExists -Path (Join-Path $repo "README.md") -Destination $bundleDir
-
-$bundleExe = Join-Path $bundleDir "parakit.exe"
-
-if (-not $SkipDoctor) {
-    Write-Host "Running doctor"
-    Invoke-Checked $bundleExe "doctor"
-}
 
 $activeDir = $bundleDir
 

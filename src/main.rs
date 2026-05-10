@@ -374,7 +374,7 @@ fn run() -> Result<()> {
         .context("audio manager started without reporting a microphone")?;
     warn_about_bluetooth_mic_if_needed(&log, &mic_info);
 
-    let (model_path, engine) = open_cli_engine(&cli, cli.quiet, &log)?;
+    let (model_path, engine) = open_cli_engine(&cli, !cli.verbose, &log)?;
     let model_dtype = model_dtype_label(&model_path);
 
     // Banner.
@@ -638,7 +638,60 @@ fn with_stderr_suppressed<T>(f: impl FnOnce() -> Result<T>) -> Result<T> {
     f()
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn with_stderr_suppressed<T>(f: impl FnOnce() -> Result<T>) -> Result<T> {
+    use std::os::windows::io::{FromRawHandle, IntoRawHandle};
+
+    const STDERR_FD: libc::c_int = 2;
+
+    struct RestoreStderr {
+        saved_fd: libc::c_int,
+        nul_fd: libc::c_int,
+    }
+
+    impl Drop for RestoreStderr {
+        fn drop(&mut self) {
+            unsafe {
+                libc::dup2(self.saved_fd, STDERR_FD);
+                libc::close(self.saved_fd);
+                libc::close(self.nul_fd);
+            }
+        }
+    }
+
+    let Ok(nul_file) = std::fs::OpenOptions::new().write(true).open("NUL") else {
+        return f();
+    };
+    let nul_handle = nul_file.into_raw_handle();
+    let nul_fd = unsafe { libc::open_osfhandle(nul_handle as isize, 0) };
+    if nul_fd < 0 {
+        unsafe {
+            drop(std::fs::File::from_raw_handle(nul_handle));
+        }
+        return f();
+    }
+
+    let saved_fd = unsafe { libc::dup(STDERR_FD) };
+    if saved_fd < 0 {
+        unsafe {
+            libc::close(nul_fd);
+        }
+        return f();
+    }
+
+    if unsafe { libc::dup2(nul_fd, STDERR_FD) } != 0 {
+        unsafe {
+            libc::close(saved_fd);
+            libc::close(nul_fd);
+        }
+        return f();
+    }
+
+    let _restore = RestoreStderr { saved_fd, nul_fd };
+    f()
+}
+
+#[cfg(not(any(unix, windows)))]
 fn with_stderr_suppressed<T>(f: impl FnOnce() -> Result<T>) -> Result<T> {
     f()
 }

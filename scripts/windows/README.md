@@ -16,7 +16,7 @@ The installer is intentionally per-user. It refuses system locations such as `C:
 scripts\windows\windows-cpu-build.bat
 ```
 
-The batch file is a wrapper around the PowerShell implementation. Both entry points accept the same options. Useful options are `--help`, `--skip-doctor`, `--debug`, `--no-install`, `--no-user-path`, and `--install-dir`.
+The batch file is a wrapper around the PowerShell implementation. Both entry points accept the same options. Useful options are `--help`, `--debug`, `--no-install`, `--no-user-path`, and `--install-dir`.
 
 PowerShell equivalent from PowerShell:
 
