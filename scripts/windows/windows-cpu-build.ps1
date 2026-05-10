@@ -268,18 +268,4 @@ if (-not $NoInstall) {
 
 if ($NoInstall) {
     Write-Host "Install: skipped"
-    Write-Host ""
-    Write-Host "Run:"
-    Write-Host "  $activeDir\parakit.exe doctor --deep"
-    Write-Host "  $activeDir\parakit.exe"
-} elseif ($NoUserPath) {
-    Write-Host ""
-    Write-Host "Run:"
-    Write-Host "  $activeDir\parakit.exe doctor --deep"
-    Write-Host "  $activeDir\parakit.exe"
-} else {
-    Write-Host ""
-    Write-Host "Open a new terminal, then run:"
-    Write-Host "  parakit doctor --deep"
-    Write-Host "  parakit"
 }

@@ -120,10 +120,7 @@ fn print_doctor_summary(
         Err(err) => print_status_line("insertion", false, &format!("{err:#}")),
     }
 
-    if ok {
-        println!("  run:       parakit");
-        println!("  shell:     parakit doctor && parakit");
-    } else {
+    if !ok {
         println!("  details:   parakit --verbose doctor");
     }
 }

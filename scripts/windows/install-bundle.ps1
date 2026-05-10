@@ -239,5 +239,4 @@ if ($NoUserPath) {
     } else {
         Write-Host "User PATH: already contains $installFull"
     }
-    Write-Host "Open a new terminal before running parakit by name."
 }
