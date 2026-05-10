@@ -47,6 +47,12 @@ If paste is blocked, focus the intended field and run:
 parakit paste-last
 ```
 
+To avoid sending a paste chord, copy the last transcript instead:
+
+```text
+parakit copy-last
+```
+
 ## Wrong Microphone
 
 Microphone selection behavior is described in [running.md#microphone](running.md#microphone).

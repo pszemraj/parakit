@@ -115,11 +115,12 @@ impl SharedState {
         self.inner.lock().last_transcript.clone()
     }
 
-    /// Run an insertion transaction while excluding worker and IPC paste paths.
+    /// Run a clipboard/insertion transaction while excluding worker and IPC
+    /// paste/copy paths.
     ///
     /// Clipboard staging plus a synthetic paste chord must be serialized
-    /// process-wide. Otherwise `paste-last` or `test-paste` can race the worker
-    /// clipboard transaction and paste the wrong text.
+    /// process-wide. Otherwise `paste-last`, `copy-last`, or `test-paste` can
+    /// race the worker clipboard transaction and paste or copy the wrong text.
     ///
     /// # Returns
     ///
@@ -150,7 +151,7 @@ impl Drop for IpcServer {
 /// # Arguments
 ///
 /// * `state` - Shared daemon status and last-transcript cache.
-/// * `paste_mode` - Paste mode used by `paste-last` and `test-paste`.
+/// * `paste_mode` - Paste mode used by paste-related commands.
 /// * `log` - Logger for socket errors.
 ///
 /// # Returns
