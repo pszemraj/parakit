@@ -70,15 +70,29 @@ function Assert-InstallDir {
         throw "Refusing to install into an unsafe directory: $full"
     }
 
-    $forbidden = @(
+    $forbiddenTrees = @(
         $env:SystemRoot,
         $env:ProgramFiles,
-        ${env:ProgramFiles(x86)},
+        ${env:ProgramFiles(x86)}
+    ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+
+    foreach ($entry in $forbiddenTrees) {
+        $entryFull = (Get-FullPath $entry).TrimEnd([System.IO.Path]::DirectorySeparatorChar)
+        $prefix = $entryFull + [System.IO.Path]::DirectorySeparatorChar
+        if (
+            $trimmed.Equals($entryFull, [System.StringComparison]::OrdinalIgnoreCase) -or
+            $trimmed.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)
+        ) {
+            throw "Refusing to install into an admin/system directory: $full"
+        }
+    }
+
+    $forbiddenExact = @(
         $env:USERPROFILE,
         $env:LOCALAPPDATA
     ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
 
-    foreach ($entry in $forbidden) {
+    foreach ($entry in $forbiddenExact) {
         $entryFull = (Get-FullPath $entry).TrimEnd([System.IO.Path]::DirectorySeparatorChar)
         if ($trimmed.Equals($entryFull, [System.StringComparison]::OrdinalIgnoreCase)) {
             throw "Refusing to install into an unsafe directory: $full"
@@ -131,7 +145,12 @@ function Add-UserPathEntry {
     }
 
     [System.Environment]::SetEnvironmentVariable("Path", $newValue, "User")
-    Broadcast-EnvironmentChange
+    try {
+        Broadcast-EnvironmentChange
+    } catch {
+        # Updating the persistent User PATH is the required operation. The
+        # shell broadcast only helps already-running Windows processes notice.
+    }
     return $true
 }
 

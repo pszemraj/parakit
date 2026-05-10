@@ -25,10 +25,15 @@ $InstallDir = $null
 
 function Show-Usage {
     $scriptName = Split-Path -Leaf $PSCommandPath
+    $entryPoint = $env:PARAKIT_WINDOWS_BUILD_COMMAND
+    if ([string]::IsNullOrWhiteSpace($entryPoint)) {
+        $entryPoint = "scripts\windows\$scriptName"
+    }
+
     Write-Host "Build and bundle Parakit CPU daemon on native Windows."
     Write-Host ""
     Write-Host "Usage:"
-    Write-Host "  scripts\windows\$scriptName [--release] [--debug] [--skip-doctor] [--no-submodules] [--no-install] [--no-user-path] [--install-dir DIR]"
+    Write-Host "  $entryPoint [--release] [--debug] [--skip-doctor] [--no-submodules] [--no-install] [--no-user-path] [--install-dir DIR]"
     Write-Host ""
     Write-Host "Options:"
     Write-Host "  --release        Build target\release and bundle it. This is the default."

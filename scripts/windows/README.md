@@ -8,13 +8,15 @@ Windows builds need an installed runnable directory, not only `parakit.exe`. Cri
 
 By default, the scripts build `target\parakit-windows-x86_64-cpu`, install it to `%LOCALAPPDATA%\Programs\parakit`, and add that install directory to the Windows User `PATH`. They do not edit the system `PATH` and do not require administrator rights. Open a new terminal after install before running `parakit` by name.
 
+The installer is intentionally per-user. It refuses system locations such as `C:\Windows` and `C:\Program Files\...`; those paths require admin rights on normal Windows systems and are the wrong default for a developer or corporate laptop.
+
 ## Build
 
 ```bat
 scripts\windows\windows-cpu-build.bat
 ```
 
-The batch file is a wrapper around the PowerShell implementation. It exists so Command Prompt users can run the build without writing PowerShell syntax. Useful options are `--help`, `--skip-doctor`, `--debug`, `--no-install`, and `--install-dir`.
+The batch file is a wrapper around the PowerShell implementation. Both entry points accept the same options. Useful options are `--help`, `--skip-doctor`, `--debug`, `--no-install`, `--no-user-path`, and `--install-dir`.
 
 PowerShell equivalent from PowerShell:
 
