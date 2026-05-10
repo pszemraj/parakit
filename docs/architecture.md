@@ -12,7 +12,7 @@ cpal callback thread         mixes input to mono and pushes frames into a bounde
 audio drain thread           drains ring -> resamples -> updates pre-roll and active recording
 worker thread                owns Engine and runs transcribe -> clean -> insert
 sound thread                 owns rodio::OutputStream and plays cue tones
-IPC thread                   handles status, stop, paste-last, and test-paste commands
+IPC thread                   handles status, stop, paste-last, copy-last, and test-paste commands
 ```
 
 ## State Machine
@@ -53,7 +53,7 @@ Cross-thread communication uses atomics, mutex-protected buffers, and crossbeam 
 | `src/daemon/audio_manager.rs` | Microphone selection, live stream ownership, ring-buffer drain, pre-roll, resampling, and restart. |
 | `src/daemon/audio_pactl.rs` | Linux `pactl` parsing for startup/reopen microphone display details. |
 | `src/daemon/worker.rs` | ASR worker, paste sanitizer, focus guard, clipboard fallback, and insertion circuit breaker. |
-| `src/daemon/ipc.rs` | Local control socket for `status`, `stop`, `paste-last`, and `test-paste`. |
+| `src/daemon/ipc.rs` | Local control socket for `status`, `stop`, `paste-last`, `copy-last`, and `test-paste`. |
 | `src/daemon/windows_{focus,input,paste_smoke,security}.rs` | Windows foreground checks, registered hotkey and paste helpers, deep paste smoke test, and privilege diagnostics. |
 | `src/daemon/{preflight,session,x11,alsa}.rs` | Startup checks, session events, X11 helpers, and ALSA stderr suppression. |
 | `src/daemon/{logging,notifications,sounds}.rs` | Runtime logging, desktop notifications, and generated audio cues. |

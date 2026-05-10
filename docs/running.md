@@ -73,10 +73,11 @@ When the daemon is running, these commands talk to it through local per-user IPC
 parakit status
 parakit stop
 parakit paste-last
+parakit copy-last
 parakit test-paste "hello from parakit"
 ```
 
-`paste-last` keeps only the latest transcript in daemon memory. `test-paste` runs clipboard staging, focus checks, paste sanitization, and the paste chord without using the microphone.
+`paste-last` and `copy-last` keep only the latest transcript in daemon memory. `test-paste` runs clipboard staging, focus checks, paste sanitization, and the paste chord without using the microphone.
 
 ## Model Cache
 
@@ -108,7 +109,7 @@ Bluetooth microphones are allowed, but parakit prints a warning because headset 
 
 parakit transcribes once on hotkey release, writes plain text to the system clipboard, then sends the configured paste shortcut. By default it waits for the target to consume the paste and restores the previous clipboard contents when the clipboard API can round-trip them. Current restore support covers text, HTML with a text alternative, copied file lists, and images. Other clipboard MIME formats are not generally restorable through `arboard`; if one was active, parakit leaves the staged transcript on the clipboard instead of overwriting an unknown format with empty text.
 
-On Linux/X11, parakit records the active X11 window when recording starts. If focus clearly changes before insertion, it does not send a paste chord. If focus capture or recheck fails because X11 is transiently unavailable, parakit pastes anyway; the transcript remains available through `parakit paste-last` either way. Terminal mode strips trailing newlines and blocks multiline terminal paste.
+On Linux/X11, parakit records the active X11 window when recording starts. If focus clearly changes before insertion, it does not send a paste chord. If focus capture or recheck fails because X11 is transiently unavailable, parakit pastes anyway; the transcript remains available through `parakit paste-last` or `parakit copy-last` either way. Terminal mode strips trailing newlines and blocks multiline terminal paste.
 
 On Windows, parakit records the foreground window at PTT-down, rechecks it before paste, and sends the paste shortcut with `SendInput`. A normal user process cannot inject into an administrator/elevated target application.
 

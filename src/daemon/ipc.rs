@@ -41,6 +41,8 @@ pub(crate) enum IpcCommand {
     Stop,
     /// Paste the most recent transcript remembered in memory.
     PasteLast,
+    /// Copy the most recent transcript remembered in memory.
+    CopyLast,
     /// Run the insertion path with caller-supplied text, without microphone use.
     TestPaste { text: String },
 }
@@ -387,6 +389,20 @@ fn handle_command(
                 stop_after_response: false,
             })
         }
+        IpcCommand::CopyLast => {
+            state.with_insertion_lock(|| {
+                let text = state
+                    .last_transcript()
+                    .context("no transcript has been captured in this daemon session")?;
+                copy_text(&text)
+            })?;
+            Ok(CommandOutcome {
+                response: IpcResponse::Ok {
+                    message: "copied last transcript".to_string(),
+                },
+                stop_after_response: false,
+            })
+        }
         IpcCommand::TestPaste { text } => {
             let result = state.with_insertion_lock(|| {
                 paste_text(&text, paste_mode, keep_transcript_clipboard, log, notifier)
@@ -467,6 +483,12 @@ fn paste_text(
         false,
     )
     .context("could not send paste command")
+}
+
+#[cfg(any(unix, target_os = "windows"))]
+fn copy_text(text: &str) -> Result<()> {
+    let mut injector = super::inject::Injector::new().context("could not initialize clipboard")?;
+    injector.copy_text(text)
 }
 
 #[cfg(unix)]

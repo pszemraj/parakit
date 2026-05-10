@@ -142,6 +142,8 @@ enum Commands {
     Stop,
     /// Paste the last transcript remembered by the running daemon.
     PasteLast,
+    /// Copy the last transcript remembered by the running daemon.
+    CopyLast,
     /// Exercise clipboard staging and paste without recording microphone audio.
     TestPaste(TestPasteCli),
 }
@@ -282,6 +284,10 @@ fn run() -> Result<()> {
             }
             Commands::PasteLast => {
                 daemon::ipc::run_client(daemon::ipc::IpcCommand::PasteLast, cli.quiet)?;
+                return Ok(());
+            }
+            Commands::CopyLast => {
+                daemon::ipc::run_client(daemon::ipc::IpcCommand::CopyLast, cli.quiet)?;
                 return Ok(());
             }
             Commands::TestPaste(test_paste) => {
