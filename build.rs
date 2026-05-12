@@ -316,6 +316,7 @@ struct BlasConfig {
     vendor: Option<&'static str>,
     cohere_mkl: bool,
     explicit: bool,
+    openblas_root: Option<PathBuf>,
 }
 
 impl BlasConfig {
@@ -327,7 +328,11 @@ impl BlasConfig {
             "" | "0" | "false" | "no" | "none" | "off" => Self::off(raw, explicit),
             "auto" => Self::auto(raw, explicit),
             "mkl" | "intel" | "intel-mkl" => Self::mkl(raw, explicit),
-            "openblas" => Self::openblas(raw, explicit),
+            "openblas" => Self::openblas(
+                raw,
+                explicit,
+                target_is_windows().then(windows_openblas_root).flatten(),
+            ),
             "accelerate" | "apple" => Self::accelerate(raw, explicit),
             "1" | "true" | "yes" | "on" | "blas" | "generic" | "system" => {
                 Self::generic(raw, explicit)
@@ -345,11 +350,13 @@ impl BlasConfig {
         if pkg_config_exists("mkl-sdl") {
             return Self::mkl(raw, explicit);
         }
-        if target_is_windows() && windows_openblas_root().is_some() {
-            return Self::openblas(raw, explicit);
+        if target_is_windows() {
+            if let Some(root) = windows_openblas_root() {
+                return Self::openblas(raw, explicit, Some(root));
+            }
         }
         if pkg_config_exists("openblas") || pkg_config_exists("openblas64") {
-            return Self::openblas(raw, explicit);
+            return Self::openblas(raw, explicit, None);
         }
         println!(
             "cargo:warning=parakit build: PARAKIT_BLAS=auto found no MKL/OpenBLAS pkg-config metadata; building without BLAS"
@@ -363,6 +370,7 @@ impl BlasConfig {
         vendor: Option<&'static str>,
         cohere_mkl: bool,
         explicit: bool,
+        openblas_root: Option<PathBuf>,
     ) -> Self {
         Self {
             requested,
@@ -371,30 +379,45 @@ impl BlasConfig {
             vendor,
             cohere_mkl,
             explicit,
+            openblas_root,
         }
     }
 
     fn off(requested: String, explicit: bool) -> Self {
-        Self::new(requested, "off", None, false, explicit)
+        Self::new(requested, "off", None, false, explicit, None)
     }
 
     fn generic(requested: String, explicit: bool) -> Self {
-        Self::new(requested, "generic", Some("Generic"), false, explicit)
+        Self::new(requested, "generic", Some("Generic"), false, explicit, None)
     }
 
-    fn openblas(requested: String, explicit: bool) -> Self {
-        Self::new(requested, "openblas", Some("OpenBLAS"), false, explicit)
+    fn openblas(requested: String, explicit: bool, root: Option<PathBuf>) -> Self {
+        Self::new(
+            requested,
+            "openblas",
+            Some("OpenBLAS"),
+            false,
+            explicit,
+            root,
+        )
     }
 
     fn mkl(requested: String, explicit: bool) -> Self {
-        Self::new(requested, "mkl", Some("Intel10_64lp"), true, explicit)
+        Self::new(requested, "mkl", Some("Intel10_64lp"), true, explicit, None)
     }
 
     fn accelerate(requested: String, explicit: bool) -> Self {
         if !target_is_apple() {
             panic!("PARAKIT_BLAS=accelerate is only supported on Apple targets");
         }
-        Self::new(requested, "accelerate", Some("Apple"), false, explicit)
+        Self::new(
+            requested,
+            "accelerate",
+            Some("Apple"),
+            false,
+            explicit,
+            None,
+        )
     }
 }
 
@@ -418,7 +441,7 @@ fn configure_blas_paths(cfg: &mut cmake::Config, blas: &BlasConfig) {
     }
 
     if blas.selected == "openblas" && target_is_windows() {
-        if let Some(root) = windows_openblas_root() {
+        if let Some(root) = blas.openblas_root.as_deref() {
             let lib = root.join("lib/openblas.lib");
             let include = root.join("include/openblas");
             if lib.is_file() && include.join("cblas.h").is_file() {
@@ -644,7 +667,7 @@ fn copy_optional_windows_blas_runtime(bin_dir: &Path, blas: &BlasConfig) {
         return;
     }
 
-    let Some(root) = windows_openblas_root() else {
+    let Some(root) = blas.openblas_root.as_deref() else {
         return;
     };
     let source_dir = root.join("bin");
@@ -852,11 +875,10 @@ fn write_windows_runtime_manifest(bin_dir: &Path, runtime_dlls: &[String], blas:
     required_files.push("parakit.exe".to_string());
     required_files.extend(runtime_dlls.iter().cloned());
 
-    let openblas_root = if blas.selected == "openblas" {
-        windows_openblas_root().map(|path| path.to_string_lossy().to_string())
-    } else {
-        None
-    };
+    let openblas_root = blas
+        .openblas_root
+        .as_deref()
+        .map(|path| path.to_string_lossy().to_string());
     let manifest = format!(
         "{{\n  \"required_files\": {},\n  \"runtime_dlls\": {},\n  \"blas\": {{\n    \"requested\": {},\n    \"selected\": {}\n  }},\n  \"openblas_root\": {}\n}}\n",
         json_array(&required_files),
