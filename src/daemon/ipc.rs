@@ -619,6 +619,12 @@ mod windows_pipe {
             bytes_read: *mut u32,
             overlapped: *mut c_void,
         ) -> i32;
+        fn SetNamedPipeHandleState(
+            named_pipe: HANDLE,
+            mode: *mut u32,
+            max_collection_count: *mut u32,
+            collect_data_timeout: *mut u32,
+        ) -> i32;
         fn WaitNamedPipeW(name: PCWSTR, timeout: u32) -> i32;
         fn WriteFile(
             file: HANDLE,
@@ -699,7 +705,7 @@ mod windows_pipe {
     pub(super) fn send_command(command: IpcCommand) -> Result<IpcResponse> {
         let pipe_name = daemon_pipe_name()?;
         let pipe = connect_client_pipe(&pipe_name)?;
-        write_json_line(&pipe, &command).context("write Windows daemon control command")?;
+        write_json_message(&pipe, &command).context("write Windows daemon control command")?;
         let response = read_pipe_message(&pipe).context("read Windows daemon control response")?;
         serde_json::from_slice(&response).context("parse Windows daemon control response")
     }
@@ -721,7 +727,7 @@ mod windows_pipe {
             &notifier,
         );
 
-        if let Err(err) = write_json_line(&pipe, &outcome.response) {
+        if let Err(err) = write_json_message(&pipe, &outcome.response) {
             log.warn(format!("Windows daemon control response failed: {err:#}"));
         }
         unsafe {
@@ -794,7 +800,13 @@ mod windows_pipe {
                 )
             };
             if !is_invalid_handle(handle) {
-                return Ok(PipeHandle(handle));
+                let pipe = PipeHandle(handle);
+                // CreateNamedPipeW makes a message-type server pipe, but a
+                // client handle returned by CreateFileW starts in byte-read
+                // mode. The reader below relies on ERROR_MORE_DATA and pipe
+                // message boundaries, so opt in before the first read.
+                set_client_message_read_mode(&pipe)?;
+                return Ok(pipe);
             }
 
             let err = unsafe { GetLastError() };
@@ -817,6 +829,24 @@ mod windows_pipe {
                                 "WaitNamedPipeW Windows daemon control pipe timed out",
                                 wait_err,
                             ));
+                        }
+                        // WaitNamedPipeW is only a readiness hint; the server
+                        // can close an instance or another client can win the
+                        // race before this client retries CreateFileW.
+                        if is_retryable_pipe_availability_error(wait_err) {
+                            let Some(sleep) = retry_sleep_duration(
+                                started,
+                                std::time::Instant::now(),
+                                IPC_CLIENT_TIMEOUT_MS,
+                                CLIENT_CONNECT_RETRY,
+                            ) else {
+                                return Err(win32_error(
+                                    "WaitNamedPipeW Windows daemon control pipe failed",
+                                    wait_err,
+                                ));
+                            };
+                            thread::sleep(sleep);
+                            continue;
                         }
                         return Err(win32_error(
                             "WaitNamedPipeW Windows daemon control pipe failed",
@@ -848,6 +878,16 @@ mod windows_pipe {
         }
     }
 
+    fn set_client_message_read_mode(pipe: &PipeHandle) -> Result<()> {
+        let mut mode = PIPE_READMODE_MESSAGE | PIPE_WAIT;
+        if unsafe { SetNamedPipeHandleState(pipe.0, &mut mode, null_mut(), null_mut()) } == 0 {
+            return Err(last_error(
+                "SetNamedPipeHandleState Windows daemon control pipe failed",
+            ));
+        }
+        Ok(())
+    }
+
     fn read_pipe_message(pipe: &PipeHandle) -> Result<Vec<u8>> {
         let mut out = Vec::new();
         loop {
@@ -873,36 +913,50 @@ mod windows_pipe {
                     err,
                 ));
             }
+            validate_pipe_message_len(out.len() + 1)?;
         }
     }
 
-    fn write_json_line<T: Serialize>(pipe: &PipeHandle, value: &T) -> Result<()> {
-        let mut bytes =
-            serde_json::to_vec(value).context("serialize Windows daemon control JSON")?;
-        bytes.push(b'\n');
-        write_pipe_all(pipe, &bytes)
+    fn write_json_message<T: Serialize>(pipe: &PipeHandle, value: &T) -> Result<()> {
+        let bytes = serde_json::to_vec(value).context("serialize Windows daemon control JSON")?;
+        write_pipe_message(pipe, &bytes)
     }
 
-    fn write_pipe_all(pipe: &PipeHandle, mut bytes: &[u8]) -> Result<()> {
-        while !bytes.is_empty() {
-            let chunk_len = bytes.len().min(PIPE_BUFFER_SIZE as usize);
-            let mut written = 0_u32;
-            let ok = unsafe {
-                WriteFile(
-                    pipe.0,
-                    bytes.as_ptr().cast(),
-                    chunk_len as u32,
-                    &mut written,
-                    null_mut(),
-                )
-            };
-            if ok == 0 {
-                return Err(last_error("WriteFile Windows daemon control pipe failed"));
-            }
-            if written == 0 {
-                bail!("WriteFile Windows daemon control pipe wrote zero bytes");
-            }
-            bytes = &bytes[written as usize..];
+    fn write_pipe_message(pipe: &PipeHandle, bytes: &[u8]) -> Result<()> {
+        validate_pipe_message_len(bytes.len())?;
+
+        // Message-type pipes frame each WriteFile call as a separate message.
+        // The control protocol sends exactly one JSON payload per message.
+        let mut written = 0_u32;
+        let ok = unsafe {
+            WriteFile(
+                pipe.0,
+                bytes.as_ptr().cast(),
+                bytes.len() as u32,
+                &mut written,
+                null_mut(),
+            )
+        };
+        if ok == 0 {
+            return Err(last_error("WriteFile Windows daemon control pipe failed"));
+        }
+        if written as usize != bytes.len() {
+            bail!(
+                "short write to Windows daemon control pipe: wrote {} of {} bytes",
+                written,
+                bytes.len()
+            );
+        }
+        Ok(())
+    }
+
+    fn validate_pipe_message_len(len: usize) -> Result<()> {
+        if len > PIPE_BUFFER_SIZE as usize {
+            bail!(
+                "Windows daemon control message is {} bytes; max supported message is {} bytes",
+                len,
+                PIPE_BUFFER_SIZE
+            );
         }
         Ok(())
     }
@@ -978,6 +1032,10 @@ mod windows_pipe {
 
     fn is_invalid_handle(handle: HANDLE) -> bool {
         handle.0 == invalid_handle().0
+    }
+
+    fn is_retryable_pipe_availability_error(error: u32) -> bool {
+        matches!(error, ERROR_FILE_NOT_FOUND | ERROR_PIPE_BUSY)
     }
 
     fn remaining_timeout_ms(
@@ -1080,6 +1138,100 @@ mod windows_pipe {
                 ),
                 Some(Duration::from_millis(5))
             );
+        }
+
+        #[test]
+        fn retryable_availability_errors_are_limited_to_normal_pipe_races() {
+            assert!(is_retryable_pipe_availability_error(ERROR_FILE_NOT_FOUND));
+            assert!(is_retryable_pipe_availability_error(ERROR_PIPE_BUSY));
+            assert!(!is_retryable_pipe_availability_error(ERROR_SEM_TIMEOUT));
+        }
+
+        #[test]
+        fn oversized_control_messages_fail_before_write() {
+            let err = validate_pipe_message_len(PIPE_BUFFER_SIZE as usize + 1)
+                .expect_err("oversized message should be rejected");
+
+            assert!(format!("{err:#}").contains("max supported message"));
+        }
+
+        #[test]
+        fn client_message_read_mode_preserves_message_boundaries() -> Result<()> {
+            let unique = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system time should be after epoch")
+                .as_nanos();
+            let pipe_name = encode_wide_null(&format!(
+                r"\\.\pipe\parakit-ipc-test-{}-{unique}",
+                std::process::id()
+            ));
+            let server_handle = unsafe {
+                CreateNamedPipeW(
+                    PCWSTR(pipe_name.as_ptr()),
+                    PIPE_ACCESS_DUPLEX,
+                    PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT,
+                    1,
+                    PIPE_BUFFER_SIZE,
+                    PIPE_BUFFER_SIZE,
+                    IPC_CLIENT_TIMEOUT_MS,
+                    null_mut(),
+                )
+            };
+            assert!(!is_invalid_handle(server_handle));
+            let server = PipeHandle(server_handle);
+
+            let client_handle = unsafe {
+                CreateFileW(
+                    PCWSTR(pipe_name.as_ptr()),
+                    GENERIC_READ | GENERIC_WRITE,
+                    0,
+                    null_mut(),
+                    OPEN_EXISTING,
+                    FILE_ATTRIBUTE_NORMAL,
+                    HANDLE::default(),
+                )
+            };
+            assert!(!is_invalid_handle(client_handle));
+            let client = PipeHandle(client_handle);
+
+            set_client_message_read_mode(&client)?;
+            connect_server_pipe(&server)?;
+
+            let payload = b"abcdef";
+            write_pipe_message(&server, payload)?;
+
+            let mut first = [0_u8; 3];
+            let mut first_read = 0_u32;
+            let ok = unsafe {
+                ReadFile(
+                    client.0,
+                    first.as_mut_ptr().cast(),
+                    first.len() as u32,
+                    &mut first_read,
+                    null_mut(),
+                )
+            };
+            assert_eq!(ok, 0);
+            assert_eq!(unsafe { GetLastError() }, ERROR_MORE_DATA);
+            assert_eq!(first_read as usize, first.len());
+
+            let mut second = [0_u8; 3];
+            let mut second_read = 0_u32;
+            let ok = unsafe {
+                ReadFile(
+                    client.0,
+                    second.as_mut_ptr().cast(),
+                    second.len() as u32,
+                    &mut second_read,
+                    null_mut(),
+                )
+            };
+            assert_ne!(ok, 0);
+            assert_eq!(second_read as usize, second.len());
+
+            assert_eq!([first, second].concat(), payload);
+
+            Ok(())
         }
     }
 }
