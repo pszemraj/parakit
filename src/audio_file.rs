@@ -7,6 +7,7 @@ use rubato::{
 };
 use std::path::Path;
 
+/// Input frame count used for sinc resampling in file and live audio paths.
 pub const RESAMPLE_CHUNK_SIZE: usize = 1024;
 
 /// Decoded mono WAV audio.
