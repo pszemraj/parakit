@@ -243,8 +243,6 @@ Get-ChildItem -LiteralPath $profileDir -Filter "*.dll" -ErrorAction SilentlyCont
 Copy-IfExists -Path (Join-Path $repo "LICENSE") -Destination $bundleDir
 Copy-IfExists -Path (Join-Path $repo "README.md") -Destination $bundleDir
 
-$activeDir = $bundleDir
-
 if (-not $NoInstall) {
     if ([string]::IsNullOrWhiteSpace($InstallDir)) {
         $InstallDir = Get-DefaultInstallDir
@@ -261,7 +259,6 @@ if (-not $NoInstall) {
         throw "Windows bundle install failed"
     }
 
-    $activeDir = [System.IO.Path]::GetFullPath($InstallDir)
 }
 
 if ($NoInstall) {
