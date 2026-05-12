@@ -6,7 +6,7 @@ Windows builds need an installed runnable directory, not only `parakit.exe`. Cri
 
 `cargo install --path .` is different: Cargo installs only `parakit.exe` into Cargo's bin directory. It does not copy the generated CrispASR, ggml, or OpenBLAS DLLs. Use one of these scripts when you want a normal Windows install.
 
-By default, the scripts build `target\parakit-windows-x86_64-cpu`, install it to `%LOCALAPPDATA%\Programs\parakit`, and add that install directory to the Windows User `PATH`. They do not edit the system `PATH` and do not require administrator rights. Open a new terminal after install before running `parakit` by name.
+By default, the scripts build `target\parakit-windows-x86_64-cpu`, install it to `%LOCALAPPDATA%\Programs\parakit`, and add that install directory to the Windows User `PATH`. They do not edit the system `PATH` and do not require administrator rights.
 
 The installer is intentionally per-user. It refuses system locations such as `C:\Windows` and `C:\Program Files\...`; those paths require admin rights on normal Windows systems and are the wrong default for a developer or corporate laptop.
 
@@ -16,7 +16,7 @@ The installer is intentionally per-user. It refuses system locations such as `C:
 scripts\windows\windows-cpu-build.bat
 ```
 
-The batch file is a wrapper around the PowerShell implementation. Both entry points accept the same options. Useful options are `--help`, `--debug`, `--no-install`, `--no-user-path`, and `--install-dir`.
+The batch file is a wrapper around the PowerShell implementation. Both entry points accept the same options; run either one with `--help` for the supported flags.
 
 PowerShell equivalent from PowerShell:
 
@@ -25,9 +25,9 @@ Set-ExecutionPolicy -Scope Process Bypass
 .\scripts\windows\windows-cpu-build.ps1
 ```
 
-## OpenBLAS
+## Runtime Manifest
 
-With an active conda environment, `PARAKIT_BLAS=auto` detects OpenBLAS from `%CONDA_PREFIX%\Library`. The bundle includes `openblas.dll` when that backend is selected.
+The build writes `parakit-runtime-manifest.json` beside `parakit.exe`. The bundle copies every file in `required_files`, and the installer validates those entries before installing. With an active conda environment, `PARAKIT_BLAS=auto` detects OpenBLAS from `%CONDA_PREFIX%\Library`; selected OpenBLAS bundles include `openblas.dll` plus adjacent known runtime DLLs such as OpenMP, gfortran, GCC, quadmath, and winpthreads libraries when present.
 
 After installing, open a new terminal and run:
 
@@ -43,5 +43,3 @@ For development-only bundle checks without installing:
 ```bat
 scripts\windows\windows-cpu-build.bat --no-install
 ```
-
-The daemon uses `RegisterHotKey` for `Ctrl+Space`, Windows clipboard staging, `SendInput` for the paste chord, a foreground-window focus guard, and a per-user named pipe for `status`, `stop`, `paste-last`, `copy-last`, and `test-paste`.

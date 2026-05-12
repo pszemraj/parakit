@@ -120,7 +120,7 @@ Explicit BLAS builds print the selected mode, and `parakit doctor` reports it.
 
 ## CrispASR And Backends
 
-The repository vendors [CrispASR](https://github.com/CrispStrobe/CrispASR) as a git submodule. `build.rs` builds it with CMake, installs shared libraries under `target/<profile>/build/parakit-*/out/lib`, and builds `crispasr-quantize` for `parakit fetch --from-source`.
+The repository vendors [CrispASR](https://github.com/CrispStrobe/CrispASR) as a git submodule. `build.rs` builds it with CMake and installs shared libraries under `target/<profile>/build/parakit-*/out/lib`. Source rebuild requirements are in [dev.md#source-rebuild](dev.md#source-rebuild).
 
 Feature mapping:
 

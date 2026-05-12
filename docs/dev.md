@@ -30,6 +30,8 @@ parakit fetch --from-source --keep-f16 --keep-nemo
 
 That path downloads [NVIDIA's official `.nemo`](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3), converts it with `vendor/CrispASR/models/convert-parakeet-to-gguf.py`, and quantizes the intermediate GGUF with `crispasr-quantize`.
 
+On Windows, the hosted Q8_0 path is the normal model setup. `fetch --from-source` requires a compatible `crispasr-quantize.exe` on `PATH` because bundled CPU builds skip the CrispASR examples tree under MSVC.
+
 After rebuilding a release artifact, upload F16 and Q8_0 to the hosted repo and update `HOSTED_Q8_SHA256` in `src/model.rs` if the Q8_0 bytes changed.
 
 ## File Size Exceptions
@@ -39,8 +41,6 @@ After rebuilding a release artifact, upload F16 and Q8_0 to the hosted repo and 
 `src/daemon/inject.rs` is also temporarily over the target while clipboard transaction, X11 paste-chord cleanup, focus snapshots, and smoke-test support settle. Split it into focused clipboard, X11 paste, and focus modules without changing the paste safety contract.
 
 `src/daemon/ipc.rs` is temporarily over the target because it owns both Unix socket IPC and Windows named-pipe IPC, including Windows ACL setup and retry policy tests. Split the Windows named-pipe transport into a dedicated module after the Windows daemon behavior settles.
-
-`build.rs` is temporarily over the target because it owns bundled CrispASR configuration, platform runtime copying, and Windows bundle manifest generation. Split Windows artifact/manifest logic out once the CPU bundle is stable.
 
 ## Deferred Daemon Safety Work
 
