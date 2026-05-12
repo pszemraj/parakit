@@ -233,12 +233,25 @@ if (Test-Path -LiteralPath $bundleDir) {
 New-Item -ItemType Directory -Path $bundleDir | Out-Null
 
 Write-Host "Bundle: $bundleDir"
-Copy-Item -LiteralPath $exe -Destination $bundleDir -Force
 Copy-Item -LiteralPath $runtimeManifest -Destination $bundleDir -Force
 
-Get-ChildItem -LiteralPath $profileDir -Filter "*.dll" -ErrorAction SilentlyContinue |
-    Where-Object { $_.Name -notmatch '^ggml-cpu-.+\.dll$' } |
-    ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination $bundleDir -Force }
+$manifest = Get-Content -LiteralPath $runtimeManifest -Raw | ConvertFrom-Json
+foreach ($required in @($manifest.required_files)) {
+    if (
+        [string]::IsNullOrWhiteSpace($required) -or
+        [System.IO.Path]::IsPathRooted($required) -or
+        $required.Contains("/") -or
+        $required.Contains("\") -or
+        $required.Contains("..")
+    ) {
+        throw "Runtime manifest required file must be a flat file name: $required"
+    }
+    $source = Join-Path $profileDir $required
+    if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
+        throw "Runtime manifest required file was not produced: $required"
+    }
+    Copy-Item -LiteralPath $source -Destination $bundleDir -Force
+}
 
 Copy-IfExists -Path (Join-Path $repo "LICENSE") -Destination $bundleDir
 Copy-IfExists -Path (Join-Path $repo "README.md") -Destination $bundleDir
