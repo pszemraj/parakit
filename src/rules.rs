@@ -486,12 +486,6 @@ pub const DEFAULT_RULES: &[Rule] = &[
     // Casual contractions
     // -------------------------------------------------------------------------
     Rule {
-        name: "cause-to-because-lead",
-        description: "'cause at sentence start → 'Because'",
-        pattern: r#"(?i)(^|[.!?\n]\s*)((?:["(\[]\s*)*)['\u{2019}]cause\b"#,
-        replacement: "${1}${2}Because",
-    },
-    Rule {
         name: "cause-to-because-mid",
         description: "Mid-sentence 'cause → because (after a word)",
         pattern: r#"(?i)([A-Za-z])['\u{2019}]cause\b"#,
