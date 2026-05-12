@@ -8,7 +8,7 @@ parakit runs in the foreground by default. Use that mode once after install, the
 parakit doctor && parakit
 ```
 
-`parakit doctor` checks hotkey access, the selected microphone, and insertion support without downloading or loading the model. It reports an already-running daemon but does not treat the daemon lock as an environment failure. It exits `0` when startup should proceed and `1` when a blocking issue remains, so it can be used directly in shell conditionals.
+`parakit doctor` checks hotkey access, the selected microphone, insertion support, and the daemon singleton lock without downloading or loading the model. An already-running daemon makes readiness fail; use `parakit status` or `parakit stop` before starting another copy. It exits `0` when startup should proceed and `1` when a blocking issue remains, so it can be used directly in shell conditionals.
 
 Useful variants:
 
@@ -81,7 +81,7 @@ parakit test-paste "hello from parakit"
 
 ## Model Cache
 
-With no `-m`, parakit uses the hosted [Q8_0 GGUF model](https://huggingface.co/pszemraj/parakeet-tdt-0.6b-v3-gguf). `XDG_CACHE_HOME` is honored on Linux. macOS uses `~/Library/Caches/parakit/models/`; Windows uses `%LOCALAPPDATA%\parakit\Cache\models\`.
+With no `-m`, parakit uses the hosted [Q8_0 GGUF model](https://huggingface.co/pszemraj/parakeet-tdt-0.6b-v3-gguf). `PARAKIT_MODELS_DIR` overrides the model directory. Without that override, `XDG_CACHE_HOME` is honored on Linux, macOS uses `~/Library/Caches/parakit/models/`, and Windows uses `%LOCALAPPDATA%\parakit\Cache\models\`.
 
 Useful commands:
 

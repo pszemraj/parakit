@@ -11,7 +11,7 @@ cargo run --no-default-features --features bundled --example transcribe-file -- 
   --audio clips/example.wav
 ```
 
-The helper accepts WAV input, uses the same `Engine` path as the daemon, applies cleanup unless disabled, and prints raw and cleaned text. This command avoids live daemon desktop/audio dependencies while keeping the bundled CrispASR build. It uses the cached Q8_0 model by default. Pass `--model /path/to/model.gguf` only when comparing a specific custom GGUF. The source lives at `tools/transcribe-file.rs`; it is a Cargo example target so it is not installed as an end-user binary.
+The helper accepts WAV input, uses the same `Engine` path as the daemon, applies cleanup unless disabled, and prints raw and cleaned text. This command avoids live daemon desktop/audio dependencies while keeping the bundled CrispASR build. Model cache behavior is in [running.md#model-cache](running.md#model-cache). Pass `--model /path/to/model.gguf` only when comparing a specific custom GGUF. The source lives at `tools/transcribe-file.rs`; it is a Cargo example target so it is not installed as an end-user binary.
 
 ## PTT Worker Simulation
 
