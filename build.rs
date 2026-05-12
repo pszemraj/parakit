@@ -745,9 +745,8 @@ fn windows_import_library_names() -> (&'static str, &'static str) {
 }
 
 fn copy_windows_runtime_dlls(install_dir: &Path, bin_dir: &Path) {
-    let mut dlls = Vec::new();
-    collect_files_with_extension(&install_dir.join("build"), "dll", &mut dlls);
-    collect_files_with_extension(bin_dir, "dll", &mut dlls);
+    let mut dlls = collect_files_with_extension(&install_dir.join("build"), "dll");
+    dlls.extend(collect_files_with_extension(bin_dir, "dll"));
     dlls.sort();
     dlls.dedup();
 
@@ -773,8 +772,7 @@ fn copy_named_artifact(install_dir: &Path, file_name: &str, dest_dir: &Path) {
         return;
     }
 
-    let mut matches = Vec::new();
-    collect_files_named(install_dir, file_name, &mut matches);
+    let mut matches = collect_files_named(install_dir, file_name);
     matches.sort();
 
     let Some(src) = matches.into_iter().next() else {
@@ -934,40 +932,34 @@ fn cargo_profile_dir() -> Option<PathBuf> {
     build_dir.parent().map(Path::to_path_buf)
 }
 
-fn collect_files_named(root: &Path, file_name: &str, out: &mut Vec<PathBuf>) {
-    collect_files(root, &mut |path| {
-        if path
-            .file_name()
+fn collect_files_named(root: &Path, file_name: &str) -> Vec<PathBuf> {
+    collect_files(root, &|path| {
+        path.file_name()
             .is_some_and(|name| name.to_string_lossy().eq_ignore_ascii_case(file_name))
-        {
-            out.push(path.to_path_buf());
-        }
-    });
+    })
 }
 
-fn collect_files_with_extension(root: &Path, extension: &str, out: &mut Vec<PathBuf>) {
-    collect_files(root, &mut |path| {
-        if path
-            .extension()
+fn collect_files_with_extension(root: &Path, extension: &str) -> Vec<PathBuf> {
+    collect_files(root, &|path| {
+        path.extension()
             .is_some_and(|ext| ext.to_string_lossy().eq_ignore_ascii_case(extension))
-        {
-            out.push(path.to_path_buf());
-        }
-    });
+    })
 }
 
-fn collect_files(root: &Path, visit: &mut impl FnMut(&Path)) {
+fn collect_files(root: &Path, matches: &impl Fn(&Path) -> bool) -> Vec<PathBuf> {
     let Ok(entries) = std::fs::read_dir(root) else {
-        return;
+        return Vec::new();
     };
+    let mut files = Vec::new();
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
-            collect_files(&path, visit);
-        } else if path.is_file() {
-            visit(&path);
+            files.extend(collect_files(&path, matches));
+        } else if path.is_file() && matches(&path) {
+            files.push(path);
         }
     }
+    files
 }
 
 /// Tell the linker to bake `dir` into the binary's rpath.
