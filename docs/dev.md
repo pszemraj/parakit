@@ -38,6 +38,10 @@ After rebuilding a release artifact, upload F16 and Q8_0 to the hosted repo and 
 
 `src/daemon/inject.rs` is also temporarily over the target while clipboard transaction, X11 paste-chord cleanup, focus snapshots, and smoke-test support settle. Split it into focused clipboard, X11 paste, and focus modules without changing the paste safety contract.
 
+`src/daemon/ipc.rs` is temporarily over the target because it owns both Unix socket IPC and Windows named-pipe IPC, including Windows ACL setup and retry policy tests. Split the Windows named-pipe transport into a dedicated module after the Windows daemon behavior settles.
+
+`build.rs` is temporarily over the target because it owns bundled CrispASR configuration, platform runtime copying, and Windows bundle manifest generation. Split Windows artifact/manifest logic out once the CPU bundle is stable.
+
 ## Deferred Daemon Safety Work
 
 TODO: Move the default hotkey away from `Ctrl+Space` or make it configurable, then add a Linux `doctor` warning for known IBus `Ctrl+Space` conflicts. Keep the current docs warning until the default/config story changes.
@@ -49,6 +53,10 @@ TODO: Upgrade `enigo` from the 0.2 line in a cross-platform validation branch. L
 TODO: Add an optional X11 paste inter-key hold only if real target applications miss the current XTest paste chord. The current smoke test covers X11 event delivery; app-specific compatibility should drive any delay so normal paste latency does not grow without evidence.
 
 TODO: Benchmark an opt-in Windows MSVC `/GL` + `/LTCG` build after the CPU daemon is stable. MSVC does not have a direct `/O3`; keep the default at `/O2` unless link-time optimization shows a real transcription-speed win without disruptive build time or packaging side effects.
+
+TODO: Add a Windows PE dependency-walker validation pass for the CPU bundle so release packaging verifies every transitive DLL dependency instead of relying only on build-time known runtime DLL names.
+
+TODO: Run the full Windows BLAS/thread benchmark matrix for CPU builds, including no BLAS, OpenBLAS with controlled OpenMP ownership, and relevant `--threads` values against the pinned voice-memo smoke file.
 
 ## Updating [CrispASR](https://github.com/CrispStrobe/CrispASR)
 
