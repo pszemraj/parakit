@@ -561,10 +561,13 @@ mod windows_pipe {
     const PIPE_READMODE_MESSAGE: u32 = 0x0000_0002;
     const PIPE_WAIT: u32 = 0x0000_0000;
     const PIPE_UNLIMITED_INSTANCES: u32 = 255;
+    const ERROR_FILE_NOT_FOUND: u32 = 2;
     const ERROR_MORE_DATA: u32 = 234;
     const ERROR_PIPE_BUSY: u32 = 231;
     const ERROR_PIPE_CONNECTED: u32 = 535;
+    const ERROR_SEM_TIMEOUT: u32 = 121;
     const SDDL_REVISION_1: u32 = 1;
+    const CLIENT_CONNECT_RETRY: Duration = Duration::from_millis(10);
 
     #[repr(C)]
     struct RawSecurityAttributes {
@@ -777,32 +780,72 @@ mod windows_pipe {
     }
 
     fn connect_client_pipe(pipe_name: &[u16]) -> Result<PipeHandle> {
-        if unsafe { WaitNamedPipeW(PCWSTR(pipe_name.as_ptr()), IPC_CLIENT_TIMEOUT_MS) } == 0 {
-            let err = unsafe { GetLastError() };
-            if err == ERROR_PIPE_BUSY {
-                bail!("Windows daemon control pipe is busy");
+        let started = std::time::Instant::now();
+        loop {
+            let handle = unsafe {
+                CreateFileW(
+                    PCWSTR(pipe_name.as_ptr()),
+                    GENERIC_READ | GENERIC_WRITE,
+                    0,
+                    null_mut(),
+                    OPEN_EXISTING,
+                    FILE_ATTRIBUTE_NORMAL,
+                    HANDLE::default(),
+                )
+            };
+            if !is_invalid_handle(handle) {
+                return Ok(PipeHandle(handle));
             }
-            return Err(win32_error(
-                "connect Windows daemon control pipe failed",
-                err,
-            ));
-        }
 
-        let handle = unsafe {
-            CreateFileW(
-                PCWSTR(pipe_name.as_ptr()),
-                GENERIC_READ | GENERIC_WRITE,
-                0,
-                null_mut(),
-                OPEN_EXISTING,
-                FILE_ATTRIBUTE_NORMAL,
-                HANDLE::default(),
-            )
-        };
-        if is_invalid_handle(handle) {
-            return Err(last_error("CreateFileW Windows daemon control pipe failed"));
+            let err = unsafe { GetLastError() };
+            match err {
+                ERROR_PIPE_BUSY => {
+                    let Some(wait_ms) = remaining_timeout_ms(
+                        started,
+                        std::time::Instant::now(),
+                        IPC_CLIENT_TIMEOUT_MS,
+                    ) else {
+                        return Err(win32_error(
+                            "CreateFileW Windows daemon control pipe failed",
+                            err,
+                        ));
+                    };
+                    if unsafe { WaitNamedPipeW(PCWSTR(pipe_name.as_ptr()), wait_ms) } == 0 {
+                        let wait_err = unsafe { GetLastError() };
+                        if wait_err == ERROR_SEM_TIMEOUT {
+                            return Err(win32_error(
+                                "WaitNamedPipeW Windows daemon control pipe timed out",
+                                wait_err,
+                            ));
+                        }
+                        return Err(win32_error(
+                            "WaitNamedPipeW Windows daemon control pipe failed",
+                            wait_err,
+                        ));
+                    }
+                }
+                ERROR_FILE_NOT_FOUND => {
+                    let Some(sleep) = retry_sleep_duration(
+                        started,
+                        std::time::Instant::now(),
+                        IPC_CLIENT_TIMEOUT_MS,
+                        CLIENT_CONNECT_RETRY,
+                    ) else {
+                        return Err(win32_error(
+                            "CreateFileW Windows daemon control pipe failed",
+                            err,
+                        ));
+                    };
+                    thread::sleep(sleep);
+                }
+                _ => {
+                    return Err(win32_error(
+                        "CreateFileW Windows daemon control pipe failed",
+                        err,
+                    ));
+                }
+            }
         }
-        Ok(PipeHandle(handle))
     }
 
     fn read_pipe_message(pipe: &PipeHandle) -> Result<Vec<u8>> {
@@ -872,7 +915,7 @@ mod windows_pipe {
         fn current_user_only() -> Result<Self> {
             let sid = super::super::windows_security::current_user_sid_string()
                 .context("read current Windows user SID for daemon pipe security")?;
-            let sddl = encode_wide_null(&format!("D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GA;;;{sid})"));
+            let sddl = encode_wide_null(&current_user_only_pipe_sddl(&sid));
             let mut descriptor = null_mut::<c_void>();
             if unsafe {
                 ConvertStringSecurityDescriptorToSecurityDescriptorW(
@@ -897,6 +940,10 @@ mod windows_pipe {
                 b_inherit_handle: 0,
             }
         }
+    }
+
+    fn current_user_only_pipe_sddl(user_sid: &str) -> String {
+        format!("D:P(A;;GA;;;SY)(A;;GA;;;{user_sid})")
     }
 
     impl Drop for PipeSecurity {
@@ -933,6 +980,31 @@ mod windows_pipe {
         handle.0 == invalid_handle().0
     }
 
+    fn remaining_timeout_ms(
+        started: std::time::Instant,
+        now: std::time::Instant,
+        timeout_ms: u32,
+    ) -> Option<u32> {
+        let timeout = Duration::from_millis(u64::from(timeout_ms));
+        let elapsed = now.saturating_duration_since(started);
+        if elapsed >= timeout {
+            return None;
+        }
+        let remaining = timeout - elapsed;
+        Some(remaining.as_millis().clamp(1, u128::from(u32::MAX)) as u32)
+    }
+
+    fn retry_sleep_duration(
+        started: std::time::Instant,
+        now: std::time::Instant,
+        timeout_ms: u32,
+        requested: Duration,
+    ) -> Option<Duration> {
+        let remaining =
+            Duration::from_millis(u64::from(remaining_timeout_ms(started, now, timeout_ms)?));
+        Some(requested.min(remaining))
+    }
+
     fn last_error(label: &str) -> anyhow::Error {
         win32_error(label, unsafe { GetLastError() })
     }
@@ -942,6 +1014,73 @@ mod windows_pipe {
             "{label}: {}",
             std::io::Error::from_raw_os_error(code as i32)
         )
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn current_user_only_sddl_excludes_built_in_admins() {
+            let sddl = current_user_only_pipe_sddl("S-1-5-21-1000");
+
+            assert_eq!(sddl, "D:P(A;;GA;;;SY)(A;;GA;;;S-1-5-21-1000)");
+            assert!(!sddl.contains(";;;BA"));
+        }
+
+        #[test]
+        fn remaining_timeout_counts_down_to_none() {
+            let started = std::time::Instant::now();
+
+            assert_eq!(
+                remaining_timeout_ms(
+                    started,
+                    started + Duration::from_millis(250),
+                    IPC_CLIENT_TIMEOUT_MS,
+                ),
+                Some(500)
+            );
+            assert_eq!(
+                remaining_timeout_ms(
+                    started,
+                    started + Duration::from_millis(749),
+                    IPC_CLIENT_TIMEOUT_MS,
+                ),
+                Some(1)
+            );
+            assert_eq!(
+                remaining_timeout_ms(
+                    started,
+                    started + Duration::from_millis(750),
+                    IPC_CLIENT_TIMEOUT_MS,
+                ),
+                None
+            );
+        }
+
+        #[test]
+        fn retry_sleep_is_capped_by_remaining_timeout() {
+            let started = std::time::Instant::now();
+
+            assert_eq!(
+                retry_sleep_duration(
+                    started,
+                    started + Duration::from_millis(100),
+                    IPC_CLIENT_TIMEOUT_MS,
+                    Duration::from_millis(10),
+                ),
+                Some(Duration::from_millis(10))
+            );
+            assert_eq!(
+                retry_sleep_duration(
+                    started,
+                    started + Duration::from_millis(745),
+                    IPC_CLIENT_TIMEOUT_MS,
+                    Duration::from_millis(10),
+                ),
+                Some(Duration::from_millis(5))
+            );
+        }
     }
 }
 
