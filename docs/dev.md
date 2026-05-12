@@ -60,6 +60,8 @@ TODO: Add a Windows PE dependency-walker validation pass for the CPU bundle so r
 
 TODO: Run the full Windows BLAS/thread benchmark matrix for CPU builds, including no BLAS, OpenBLAS with controlled OpenMP ownership, and relevant `--threads` values against the pinned voice-memo smoke file.
 
+TODO: Track upstream CrispASR [issue #88](https://github.com/CrispStrobe/CrispASR/issues/88) for Parakeet TDT greedy decode handling of blank + duration-0 predictions. Keep this upstream unless Windows validation shows Parakit needs a temporary diagnostic tail-padding workaround for long dictations before the backend fix lands.
+
 ## Updating [CrispASR](https://github.com/CrispStrobe/CrispASR)
 
 Keep submodule updates separate from parakit code changes:
