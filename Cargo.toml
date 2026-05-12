@@ -64,8 +64,10 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "serd
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
-# Downloading and checksums for `parakit fetch`
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
+# Downloading and checksums for `parakit fetch`. Native roots and system
+# proxy support keep corporate Windows installs working behind managed TLS
+# inspection and proxy policy without disabling certificate validation.
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls-native-roots", "system-proxy"] }
 sha2 = "0.10"
 
 # Error handling

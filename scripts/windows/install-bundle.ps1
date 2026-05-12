@@ -268,10 +268,16 @@ Write-Host "Installed: $installFull"
 if ($NoUserPath) {
     Write-Host "User PATH: skipped"
 } else {
-    $added = Add-UserPathEntry $installFull
-    if ($added) {
-        Write-Host "User PATH: added $installFull"
-    } else {
-        Write-Host "User PATH: already contains $installFull"
+    try {
+        $added = Add-UserPathEntry $installFull
+        if ($added) {
+            Write-Host "User PATH: added $installFull"
+        } else {
+            Write-Host "User PATH: already contains $installFull"
+        }
+    } catch {
+        Write-Warning "User PATH update failed: $($_.Exception.Message)"
+        Write-Host "User PATH: not changed"
+        Write-Host "Run directly: $(Join-Path $installFull 'parakit.exe')"
     }
 }

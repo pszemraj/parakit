@@ -185,6 +185,34 @@ function Invoke-Checked {
     }
 }
 
+function Test-CrispAsrSubmoduleReady {
+    $manifest = Join-Path $repo "vendor\CrispASR\crispasr\Cargo.toml"
+    if (-not (Test-Path -LiteralPath $manifest -PathType Leaf)) {
+        return $false
+    }
+
+    $status = & git -C $repo submodule status --recursive "vendor/CrispASR" 2>$null
+    if ($LASTEXITCODE -ne 0 -or $null -eq $status) {
+        return $true
+    }
+
+    foreach ($line in @($status)) {
+        if ($line.StartsWith("-") -or $line.StartsWith("+") -or $line.StartsWith("U")) {
+            return $false
+        }
+    }
+
+    return $true
+}
+
+function Assert-CrispAsrSubmoduleReady {
+    if (Test-CrispAsrSubmoduleReady) {
+        return
+    }
+
+    throw "CrispASR submodule is missing or not at the pinned revision. Use a checkout/source archive with vendor\CrispASR populated, or run git submodule update --init --recursive on a network that can reach the submodule remote."
+}
+
 Assert-NativeWindows
 
 Require-Command "cargo" "Install Rust with rustup using the MSVC toolchain."
@@ -195,9 +223,15 @@ Require-Command "git" "Install Git for Windows and ensure it is on PATH."
 $repo = Get-RepoRoot
 Set-Location $repo
 
-if (-not $NoSubmodules) {
+if ($NoSubmodules) {
+    Assert-CrispAsrSubmoduleReady
+    Write-Host "Submodules: using existing checkout"
+} elseif (Test-CrispAsrSubmoduleReady) {
+    Write-Host "Submodules: ready"
+} else {
     Write-Host "Updating submodules"
     Invoke-Checked "git" "submodule" "update" "--init" "--recursive"
+    Assert-CrispAsrSubmoduleReady
 }
 
 Write-Host "Building $Profile"

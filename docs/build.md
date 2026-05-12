@@ -69,6 +69,8 @@ Set-ExecutionPolicy -Scope Process Bypass
 
 Options, install location, PATH behavior, and OpenBLAS bundling are described in [../scripts/windows/README.md](../scripts/windows/README.md).
 
+The Windows scripts do not require Developer Mode. They install by copying files into a per-user directory, not by creating symlinks.
+
 ## CPU Builds
 
 The bundled CMake path enables ggml native CPU code, OpenMP, and CPU repacking. On Linux with GCC or Clang this usually means `-march=native` for the local machine.
