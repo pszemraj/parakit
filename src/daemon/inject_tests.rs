@@ -220,9 +220,9 @@ fn paste_mode_labels_are_stable() {
     assert_eq!(PasteMode::Direct.label(), "direct");
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn linux_standard_paste_does_not_need_enigo() {
-    #[cfg(target_os = "linux")]
     assert!(!insertion_needs_enigo(PasteMode::Standard));
 }
 
