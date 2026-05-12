@@ -50,6 +50,8 @@ TODO: Add a secondary recording watchdog for missed key-release events from the 
 
 TODO: Upgrade `enigo` from the 0.2 line in a cross-platform validation branch. Linux batch paste uses X11 directly and Windows batch paste uses `SendInput`, but direct mode and macOS paste shortcuts still need real desktop validation after the dependency update.
 
+TODO: In the dedicated macOS work branch, decide whether default model storage should move from `~/Library/Caches/parakit/models/` to `~/Library/Application Support/parakit/models/`. The current cache path is user-scoped and adminless, but a multi-GB model may fit durable app data semantics better than reclaimable cache semantics.
+
 TODO: Add an optional X11 paste inter-key hold only if real target applications miss the current XTest paste chord. The current smoke test covers X11 event delivery; app-specific compatibility should drive any delay so normal paste latency does not grow without evidence.
 
 TODO: Benchmark an opt-in Windows MSVC `/GL` + `/LTCG` build after the CPU daemon is stable. MSVC does not have a direct `/O3`; keep the default at `/O2` unless link-time optimization shows a real transcription-speed win without disruptive build time or packaging side effects.
