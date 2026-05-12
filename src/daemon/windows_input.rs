@@ -22,7 +22,6 @@ const PARAKIT_HOTKEY_ID: i32 = 0x504b;
 const PARAKIT_HOTKEY_PROBE_ID: i32 = PARAKIT_HOTKEY_ID + 1;
 const KEY_DOWN_MASK: i16 = i16::MIN;
 const HOTKEY_RELEASE_POLL: Duration = Duration::from_millis(10);
-const PASTE_KEY_HOLD: Duration = Duration::from_millis(50);
 const VK_V: VIRTUAL_KEY = VIRTUAL_KEY(0x56);
 
 /// Run the native Windows registered-hotkey backend forever.
@@ -124,22 +123,50 @@ fn key_is_down(vk: VIRTUAL_KEY) -> bool {
 /// Returns an error when `SendInput` accepts only part of the event sequence,
 /// commonly because the target is elevated or input injection is blocked.
 pub(crate) fn send_paste_chord(use_shift: bool) -> Result<()> {
-    let mut down = Vec::with_capacity(3);
-    down.push(key_event(VK_CONTROL, false));
-    if use_shift {
-        down.push(key_event(VK_SHIFT, false));
-    }
-    down.push(key_event(VK_V, false));
-    send_inputs(&down, "paste chord key-down")?;
+    let events = paste_chord_events(use_shift);
+    let inputs = events
+        .iter()
+        .map(|event| key_event(event.vk, event.key_up))
+        .collect::<Vec<_>>();
+    send_inputs(&inputs, "paste chord")
+}
 
-    thread::sleep(PASTE_KEY_HOLD);
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct KeyEvent {
+    vk: VIRTUAL_KEY,
+    key_up: bool,
+}
 
-    let mut up = Vec::with_capacity(14);
-    up.push(key_event(VK_V, true));
+fn paste_chord_events(use_shift: bool) -> Vec<KeyEvent> {
+    let mut events = Vec::with_capacity(if use_shift { 17 } else { 15 });
+    events.push(KeyEvent {
+        vk: VK_CONTROL,
+        key_up: false,
+    });
     if use_shift {
-        up.push(key_event(VK_SHIFT, true));
+        events.push(KeyEvent {
+            vk: VK_SHIFT,
+            key_up: false,
+        });
     }
-    up.push(key_event(VK_CONTROL, true));
+    events.push(KeyEvent {
+        vk: VK_V,
+        key_up: false,
+    });
+    events.push(KeyEvent {
+        vk: VK_V,
+        key_up: true,
+    });
+    if use_shift {
+        events.push(KeyEvent {
+            vk: VK_SHIFT,
+            key_up: true,
+        });
+    }
+    events.push(KeyEvent {
+        vk: VK_CONTROL,
+        key_up: true,
+    });
     for vk in [
         VK_CONTROL,
         VK_LCONTROL,
@@ -153,9 +180,9 @@ pub(crate) fn send_paste_chord(use_shift: bool) -> Result<()> {
         VK_LWIN,
         VK_RWIN,
     ] {
-        up.push(key_event(vk, true));
+        events.push(KeyEvent { vk, key_up: true });
     }
-    send_inputs(&up, "paste chord key-up/modifier flush")
+    events
 }
 
 /// Send a short Alt tap to unlock Windows foreground activation.
@@ -215,4 +242,56 @@ fn send_inputs(inputs: &[INPUT], label: &str) -> Result<()> {
 /// A static diagnostic string for startup failures.
 pub(crate) fn windows_hotkey_failure_help() -> &'static str {
     "Windows hotkey capture uses RegisterHotKey(Ctrl+Space). If registration fails, another application probably owns Ctrl+Space. Close the conflicting application or add a configurable hotkey before using this backend."
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn event_codes(events: &[KeyEvent]) -> Vec<(u16, bool)> {
+        events
+            .iter()
+            .map(|event| (event.vk.0, event.key_up))
+            .collect()
+    }
+
+    #[test]
+    fn standard_paste_chord_batches_core_sequence_and_cleanup() {
+        let events = paste_chord_events(false);
+
+        assert_eq!(events.len(), 15);
+        assert_eq!(
+            &event_codes(&events)[..4],
+            &[
+                (VK_CONTROL.0, false),
+                (VK_V.0, false),
+                (VK_V.0, true),
+                (VK_CONTROL.0, true),
+            ]
+        );
+        assert!(events[4..]
+            .iter()
+            .all(|event| event.key_up && event.vk != VK_V));
+    }
+
+    #[test]
+    fn terminal_paste_chord_includes_shift_in_one_batch() {
+        let events = paste_chord_events(true);
+
+        assert_eq!(events.len(), 17);
+        assert_eq!(
+            &event_codes(&events)[..6],
+            &[
+                (VK_CONTROL.0, false),
+                (VK_SHIFT.0, false),
+                (VK_V.0, false),
+                (VK_V.0, true),
+                (VK_SHIFT.0, true),
+                (VK_CONTROL.0, true),
+            ]
+        );
+        assert!(events[6..]
+            .iter()
+            .all(|event| event.key_up && event.vk != VK_V));
+    }
 }
