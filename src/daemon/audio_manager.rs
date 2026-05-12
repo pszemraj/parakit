@@ -9,7 +9,7 @@ use anyhow::{anyhow, Context, Result};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{SampleFormat, Stream, StreamConfig};
 use crossbeam_channel::{bounded, Receiver, RecvTimeoutError, Sender};
-use parakit::audio_file::resampler_params;
+use parakit::audio_file::{resampler_params, RESAMPLE_CHUNK_SIZE};
 use parking_lot::Mutex;
 use ringbuf::{
     traits::{Consumer, Producer, Split},
@@ -820,11 +820,11 @@ fn make_resampler(hw_rate: u32) -> Result<Option<ResamplerState>> {
         TARGET_RATE as f64 / hw_rate as f64,
         2.0,
         resampler_params(),
-        1024,
+        RESAMPLE_CHUNK_SIZE,
         1,
     )
     .context("failed to construct resampler")?;
-    Ok(Some(ResamplerState::new(resampler, 1024)))
+    Ok(Some(ResamplerState::new(resampler, RESAMPLE_CHUNK_SIZE)))
 }
 
 struct SelectedInput {

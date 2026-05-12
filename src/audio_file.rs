@@ -7,7 +7,7 @@ use rubato::{
 };
 use std::path::Path;
 
-const RESAMPLE_CHUNK_SIZE: usize = 1024;
+pub const RESAMPLE_CHUNK_SIZE: usize = 1024;
 
 /// Decoded mono WAV audio.
 pub struct WavData {
