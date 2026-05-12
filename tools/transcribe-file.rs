@@ -90,7 +90,11 @@ fn main() -> Result<()> {
             println!("run:     {idx}/{}", cli.repeat);
         }
         println!("infer:   {:.0}ms", infer.as_secs_f32() * 1000.0);
-        println!("rtf:     {:.2}x", realtime_factor(audio_secs, infer));
+        println!("rtf:     {:.2}x", real_time_factor(audio_secs, infer));
+        println!(
+            "speed:   {:.2}x realtime",
+            realtime_speed(audio_secs, infer)
+        );
         println!("Raw:     {}", raw);
         println!("Clean:   {}", cleaned);
     }
@@ -104,9 +108,29 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn realtime_factor(audio_secs: f32, infer: Duration) -> f32 {
+fn real_time_factor(audio_secs: f32, infer: Duration) -> f32 {
+    if audio_secs <= 0.0 {
+        return f32::INFINITY;
+    }
+    infer.as_secs_f32() / audio_secs
+}
+
+fn realtime_speed(audio_secs: f32, infer: Duration) -> f32 {
     if infer.is_zero() {
         return f32::INFINITY;
     }
     audio_secs / infer.as_secs_f32()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rtf_is_inference_time_over_audio_duration() {
+        let infer = Duration::from_millis(2_000);
+
+        assert!((real_time_factor(10.0, infer) - 0.2).abs() < f32::EPSILON);
+        assert!((realtime_speed(10.0, infer) - 5.0).abs() < f32::EPSILON);
+    }
 }
