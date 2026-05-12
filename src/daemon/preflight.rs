@@ -564,7 +564,7 @@ fn linux_hotkey_status(
         return "input device scan errors".to_string();
     }
 
-    "evdev/uinput keyboard proxy unavailable".to_string()
+    unreachable!("blocking evdev report without a failure reason")
 }
 
 #[cfg(target_os = "linux")]
