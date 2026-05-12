@@ -645,10 +645,11 @@ fn with_stderr_suppressed<T>(f: impl FnOnce() -> Result<T>) -> Result<T> {
 }
 
 #[cfg(windows)]
+const STDERR_FD: libc::c_int = 2;
+
+#[cfg(windows)]
 fn with_stderr_suppressed<T>(f: impl FnOnce() -> Result<T>) -> Result<T> {
     use std::os::windows::io::{FromRawHandle, IntoRawHandle};
-
-    const STDERR_FD: libc::c_int = 2;
 
     struct RestoreStderr {
         saved_fd: libc::c_int,
@@ -685,7 +686,9 @@ fn with_stderr_suppressed<T>(f: impl FnOnce() -> Result<T>) -> Result<T> {
         return f();
     }
 
-    if unsafe { libc::dup2(nul_fd, STDERR_FD) } != 0 {
+    // MSVCRT _dup2 returns 0 on success, while POSIX dup2 returns the
+    // destination fd. Both report failure as -1, so check the failure value.
+    if unsafe { libc::dup2(nul_fd, STDERR_FD) } == -1 {
         unsafe {
             libc::close(saved_fd);
             libc::close(nul_fd);
@@ -695,6 +698,50 @@ fn with_stderr_suppressed<T>(f: impl FnOnce() -> Result<T>) -> Result<T> {
 
     let _restore = RestoreStderr { saved_fd, nul_fd };
     f()
+}
+
+#[cfg(all(test, windows))]
+mod windows_stdio_tests {
+    use super::STDERR_FD;
+    use std::os::windows::io::{FromRawHandle, IntoRawHandle};
+
+    struct RestoreStderr {
+        saved_fd: libc::c_int,
+        nul_fd: libc::c_int,
+    }
+
+    impl Drop for RestoreStderr {
+        fn drop(&mut self) {
+            unsafe {
+                libc::dup2(self.saved_fd, STDERR_FD);
+                libc::close(self.saved_fd);
+                libc::close(self.nul_fd);
+            }
+        }
+    }
+
+    #[test]
+    fn windows_crt_dup2_reports_zero_on_success() {
+        let nul_file = std::fs::OpenOptions::new()
+            .write(true)
+            .open("NUL")
+            .expect("open NUL");
+        let nul_handle = nul_file.into_raw_handle();
+        let nul_fd = unsafe { libc::open_osfhandle(nul_handle as isize, 0) };
+        if nul_fd < 0 {
+            unsafe {
+                drop(std::fs::File::from_raw_handle(nul_handle));
+            }
+            panic!("open_osfhandle failed");
+        }
+
+        let saved_fd = unsafe { libc::dup(STDERR_FD) };
+        assert!(saved_fd >= 0, "dup stderr failed");
+        let _restore = RestoreStderr { saved_fd, nul_fd };
+
+        let result = unsafe { libc::dup2(nul_fd, STDERR_FD) };
+        assert_eq!(result, 0);
+    }
 }
 
 #[cfg(not(any(unix, windows)))]
