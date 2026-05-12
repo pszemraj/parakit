@@ -1,7 +1,7 @@
 //! Inference wrapper around a `crispasr::Session`.
 
 use crate::constants::TARGET_RATE;
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use std::borrow::Cow;
 use std::path::Path;
 
@@ -54,15 +54,18 @@ impl Engine {
         let path_str = path
             .to_str()
             .ok_or_else(|| anyhow::anyhow!("model path is not valid UTF-8"))?;
-        let detected_backend = crispasr::Session::detect_backend(path_str).ok();
-        let session = match detected_backend.as_deref() {
-            Some(backend) if !backend.is_empty() => {
-                crispasr::Session::open_with_backend(path_str, backend, threads as i32)
-            }
-            _ => crispasr::Session::open(path_str),
-        }
-        .map_err(|e| anyhow::anyhow!("crispasr open failed: {e}"))
-        .with_context(|| format!("failed to open model {}", path_str))?;
+
+        #[cfg(target_os = "windows")]
+        apply_windows_cpu_runtime_env_defaults(threads);
+
+        let detected_backend = crispasr::Session::detect_backend(path_str)
+            .map_err(|e| anyhow::anyhow!("crispasr backend detection failed: {e}"))
+            .with_context(|| format!("failed to detect backend for model {}", path_str))?;
+        let backend = validate_detected_backend(detected_backend)
+            .with_context(|| format!("failed to detect backend for model {}", path_str))?;
+        let session = crispasr::Session::open_with_backend(path_str, &backend, threads as i32)
+            .map_err(|e| anyhow::anyhow!("crispasr open failed: {e}"))
+            .with_context(|| format!("failed to open model {}", path_str))?;
         let backend = session.backend();
         Ok(Self {
             session,
@@ -120,6 +123,14 @@ impl Engine {
     }
 }
 
+fn validate_detected_backend(backend: String) -> Result<String> {
+    let backend = backend.trim();
+    if backend.is_empty() {
+        bail!("crispasr backend detection returned an empty backend");
+    }
+    Ok(backend.to_string())
+}
+
 /// Return the default CPU thread count for inference.
 ///
 /// # Returns
@@ -159,6 +170,45 @@ fn pad_short_pcm(pcm: &[f32]) -> Cow<'_, [f32]> {
     padded.extend_from_slice(pcm);
     padded.resize(MIN_INFERENCE_SAMPLES, 0.0);
     Cow::Owned(padded)
+}
+
+#[cfg(target_os = "windows")]
+fn apply_windows_cpu_runtime_env_defaults(threads: usize) {
+    for default in windows_cpu_runtime_env_defaults(threads, |key| std::env::var_os(key).is_some())
+    {
+        std::env::set_var(default.key, default.value);
+    }
+}
+
+#[cfg(any(target_os = "windows", test))]
+#[derive(Debug, Eq, PartialEq)]
+struct RuntimeEnvDefault {
+    key: &'static str,
+    value: String,
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn windows_cpu_runtime_env_defaults(
+    threads: usize,
+    mut is_set: impl FnMut(&str) -> bool,
+) -> Vec<RuntimeEnvDefault> {
+    [
+        RuntimeEnvDefault {
+            key: "OMP_NUM_THREADS",
+            value: threads.to_string(),
+        },
+        RuntimeEnvDefault {
+            key: "OPENBLAS_NUM_THREADS",
+            value: "1".to_string(),
+        },
+        RuntimeEnvDefault {
+            key: "OMP_WAIT_POLICY",
+            value: "PASSIVE".to_string(),
+        },
+    ]
+    .into_iter()
+    .filter(|default| !is_set(default.key))
+    .collect()
 }
 
 #[cfg(test)]
@@ -207,5 +257,35 @@ mod tests {
         ] {
             assert_eq!(recommended_thread_count(available), expected);
         }
+    }
+
+    #[test]
+    fn empty_detected_backend_is_rejected() {
+        let err = validate_detected_backend("  ".to_string()).expect_err("empty backend fails");
+
+        assert!(err
+            .to_string()
+            .contains("backend detection returned an empty backend"));
+    }
+
+    #[test]
+    fn runtime_env_defaults_only_fill_unset_variables() {
+        let existing = ["OPENBLAS_NUM_THREADS"];
+        let defaults =
+            windows_cpu_runtime_env_defaults(8, |key| existing.iter().any(|entry| entry == &key));
+
+        assert_eq!(
+            defaults,
+            vec![
+                RuntimeEnvDefault {
+                    key: "OMP_NUM_THREADS",
+                    value: "8".to_string(),
+                },
+                RuntimeEnvDefault {
+                    key: "OMP_WAIT_POLICY",
+                    value: "PASSIVE".to_string(),
+                },
+            ]
+        );
     }
 }
