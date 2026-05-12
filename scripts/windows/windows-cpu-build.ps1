@@ -210,9 +210,14 @@ Invoke-Checked "cargo" @cargoArgs
 $targetRoot = Join-Path $repo "target"
 $profileDir = Join-Path $targetRoot $Profile
 $exe = Join-Path $profileDir "parakit.exe"
+$runtimeManifest = Join-Path $profileDir "parakit-runtime-manifest.json"
 
 if (-not (Test-Path -LiteralPath $exe)) {
     throw "parakit.exe was not produced at $exe"
+}
+
+if (-not (Test-Path -LiteralPath $runtimeManifest -PathType Leaf)) {
+    throw "Runtime manifest was not produced at $runtimeManifest"
 }
 
 if (-not (Test-Path -LiteralPath $targetRoot)) {
@@ -229,6 +234,7 @@ New-Item -ItemType Directory -Path $bundleDir | Out-Null
 
 Write-Host "Bundle: $bundleDir"
 Copy-Item -LiteralPath $exe -Destination $bundleDir -Force
+Copy-Item -LiteralPath $runtimeManifest -Destination $bundleDir -Force
 
 Get-ChildItem -LiteralPath $profileDir -Filter "*.dll" -ErrorAction SilentlyContinue |
     Where-Object { $_.Name -notmatch '^ggml-cpu-.+\.dll$' } |

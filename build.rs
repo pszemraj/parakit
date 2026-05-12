@@ -29,6 +29,8 @@ use std::env;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+const WINDOWS_RUNTIME_MANIFEST: &str = "parakit-runtime-manifest.json";
+
 fn main() {
     println!("cargo:rerun-if-env-changed=CRISPASR_LIB_DIR");
     println!("cargo:rerun-if-env-changed=CRISPASR_SRC_DIR");
@@ -631,7 +633,10 @@ fn prepare_windows_artifacts(
     });
 
     copy_optional_windows_blas_runtime(bin_dir, blas);
+    let runtime_dlls = windows_runtime_dll_names_for_bundle(bin_dir);
+    write_windows_runtime_manifest(bin_dir, &runtime_dlls, blas);
     copy_runtime_dlls_to_profile_dir(bin_dir);
+    copy_runtime_manifest_to_profile_dir(bin_dir);
 }
 
 fn copy_optional_windows_blas_runtime(bin_dir: &Path, blas: &BlasConfig) {
@@ -642,17 +647,47 @@ fn copy_optional_windows_blas_runtime(bin_dir: &Path, blas: &BlasConfig) {
     let Some(root) = windows_openblas_root() else {
         return;
     };
-    let dll = root.join("bin/openblas.dll");
-    if !dll.is_file() {
+    let source_dir = root.join("bin");
+    let Ok(entries) = std::fs::read_dir(&source_dir) else {
         return;
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if !is_known_openblas_runtime_dll(name) {
+            continue;
+        }
+        let dest = bin_dir.join(name);
+        std::fs::copy(&path, &dest).unwrap_or_else(|err| {
+            panic!(
+                "failed to copy Windows OpenBLAS runtime DLL {} to {}: {err}",
+                path.display(),
+                dest.display()
+            )
+        });
     }
-    std::fs::copy(&dll, bin_dir.join("openblas.dll")).unwrap_or_else(|err| {
-        panic!(
-            "failed to copy Windows OpenBLAS runtime DLL {} to {}: {err}",
-            dll.display(),
-            bin_dir.display()
-        )
-    });
+}
+
+fn is_known_openblas_runtime_dll(file_name: &str) -> bool {
+    let lower = file_name.to_ascii_lowercase();
+    lower == "openblas.dll"
+        || lower == "libomp.dll"
+        || lower == "libiomp5md.dll"
+        || lower == "vcomp140.dll"
+        || dll_name_matches_prefix(&lower, "libgfortran")
+        || dll_name_matches_prefix(&lower, "libgcc_s_seh")
+        || dll_name_matches_prefix(&lower, "libquadmath")
+        || dll_name_matches_prefix(&lower, "libwinpthread")
+}
+
+fn dll_name_matches_prefix(file_name: &str, prefix: &str) -> bool {
+    file_name.starts_with(prefix) && file_name.ends_with(".dll")
 }
 
 fn windows_openblas_root() -> Option<PathBuf> {
@@ -761,6 +796,111 @@ fn copy_runtime_dlls_to_profile_dir(bin_dir: &Path) {
             });
         }
     }
+}
+
+fn copy_runtime_manifest_to_profile_dir(bin_dir: &Path) {
+    let Some(profile_dir) = cargo_profile_dir() else {
+        return;
+    };
+    let manifest = bin_dir.join(WINDOWS_RUNTIME_MANIFEST);
+    if !manifest.is_file() {
+        return;
+    }
+    std::fs::copy(&manifest, profile_dir.join(WINDOWS_RUNTIME_MANIFEST)).unwrap_or_else(|err| {
+        panic!(
+            "failed to copy runtime manifest {} to {}: {err}",
+            manifest.display(),
+            profile_dir.display()
+        )
+    });
+}
+
+fn windows_runtime_dll_names_for_bundle(bin_dir: &Path) -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir(bin_dir) else {
+        return Vec::new();
+    };
+    let mut names = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_file()
+            || !path
+                .extension()
+                .is_some_and(|ext| ext.to_string_lossy().eq_ignore_ascii_case("dll"))
+        {
+            continue;
+        }
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if should_skip_windows_bundle_dll(name) {
+            continue;
+        }
+        names.push(name.to_string());
+    }
+    names.sort();
+    names.dedup();
+    names
+}
+
+fn should_skip_windows_bundle_dll(file_name: &str) -> bool {
+    let lower = file_name.to_ascii_lowercase();
+    lower.starts_with("ggml-cpu-") && lower.ends_with(".dll")
+}
+
+fn write_windows_runtime_manifest(bin_dir: &Path, runtime_dlls: &[String], blas: &BlasConfig) {
+    let mut required_files = Vec::with_capacity(runtime_dlls.len() + 1);
+    required_files.push("parakit.exe".to_string());
+    required_files.extend(runtime_dlls.iter().cloned());
+
+    let openblas_root = if blas.selected == "openblas" {
+        windows_openblas_root().map(|path| path.to_string_lossy().to_string())
+    } else {
+        None
+    };
+    let manifest = format!(
+        "{{\n  \"required_files\": {},\n  \"runtime_dlls\": {},\n  \"blas\": {{\n    \"requested\": {},\n    \"selected\": {}\n  }},\n  \"openblas_root\": {}\n}}\n",
+        json_array(&required_files),
+        json_array(runtime_dlls),
+        json_string(&blas.requested),
+        json_string(blas.selected),
+        openblas_root
+            .as_deref()
+            .map(json_string)
+            .unwrap_or_else(|| "null".to_string())
+    );
+    let path = bin_dir.join(WINDOWS_RUNTIME_MANIFEST);
+    std::fs::write(&path, manifest).unwrap_or_else(|err| {
+        panic!(
+            "failed to write Windows runtime manifest {}: {err}",
+            path.display()
+        )
+    });
+}
+
+fn json_array(values: &[String]) -> String {
+    let escaped = values
+        .iter()
+        .map(|value| json_string(value))
+        .collect::<Vec<_>>();
+    format!("[{}]", escaped.join(", "))
+}
+
+fn json_string(value: &str) -> String {
+    let mut out = String::with_capacity(value.len() + 2);
+    out.push('"');
+    for ch in value.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            ch if ch.is_control() => out.push_str(&format!("\\u{:04x}", ch as u32)),
+            ch => out.push(ch),
+        }
+    }
+    out.push('"');
+    out
 }
 
 fn cargo_profile_dir() -> Option<PathBuf> {

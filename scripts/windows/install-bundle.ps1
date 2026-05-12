@@ -48,7 +48,42 @@ function Assert-Bundle {
         throw "Bundle directory does not exist: $Path"
     }
 
-    foreach ($required in @("parakit.exe", "crispasr.dll", "whisper.dll", "ggml.dll")) {
+    $manifestPath = Join-Path $Path "parakit-runtime-manifest.json"
+    if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
+        throw "Bundle is missing required runtime manifest: parakit-runtime-manifest.json"
+    }
+
+    try {
+        $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+    } catch {
+        throw "Bundle runtime manifest is not valid JSON: $manifestPath"
+    }
+
+    if ($null -eq $manifest.required_files) {
+        throw "Bundle runtime manifest is missing required_files"
+    }
+
+    $requiredFiles = @($manifest.required_files)
+    if ($requiredFiles.Count -eq 0) {
+        throw "Bundle runtime manifest required_files is empty"
+    }
+
+    if (-not ($requiredFiles -contains "parakit.exe")) {
+        throw "Bundle runtime manifest required_files must include parakit.exe"
+    }
+
+    foreach ($required in $requiredFiles) {
+        if ([string]::IsNullOrWhiteSpace($required)) {
+            throw "Bundle runtime manifest contains an empty required file entry"
+        }
+        if (
+            [System.IO.Path]::IsPathRooted($required) -or
+            $required.Contains("/") -or
+            $required.Contains("\") -or
+            $required.Contains("..")
+        ) {
+            throw "Bundle runtime manifest required file must be a flat file name: $required"
+        }
         $candidate = Join-Path $Path $required
         if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) {
             throw "Bundle is missing required runtime file: $required"
