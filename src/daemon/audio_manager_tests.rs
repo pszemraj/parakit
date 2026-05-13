@@ -273,11 +273,34 @@ fn sent_audio_control_start_timeout_does_not_fallback_to_direct_state() {
 }
 
 #[test]
+fn full_audio_control_queue_does_not_block_or_fallback() {
+    let (control_tx, _control_rx) = bounded::<AudioControl>(1);
+    let (ack_tx, _ack_rx) = bounded(1);
+    control_tx
+        .try_send(AudioControl::Stop { ack: ack_tx })
+        .expect("preload control queue");
+    let handle = AudioHandle {
+        state: Arc::new(Mutex::new(CaptureState::new())),
+        session_epoch: Arc::new(AtomicU64::new(0)),
+        next_session_epoch: Arc::new(AtomicU64::new(0)),
+        control: Arc::new(Mutex::new(Some(control_tx))),
+    };
+
+    let err = handle
+        .start_recording()
+        .expect_err("full control queue should fail without blocking");
+
+    assert!(format!("{err:#}").contains("control queue is full"));
+    assert_eq!(handle.session_epoch.load(Ordering::Acquire), 0);
+    assert!(handle.state.lock().buffer.is_empty());
+}
+
+#[test]
 fn audio_drain_drop_stops_thread() {
     let ring = HeapRb::<f32>::new(8);
     let (_producer, consumer) = ring.split();
     let (wake_tx, wake_rx) = bounded::<()>(1);
-    let (_control_tx, control_rx) = bounded::<AudioControl>(1);
+    let (_control_tx, control_rx) = bounded::<DrainControl>(1);
     let alive = Arc::new(AtomicBool::new(true));
     let thread = spawn_audio_drain(
         consumer,
@@ -302,7 +325,7 @@ fn stop_recording_flushes_resampler_tail_and_keeps_next_pre_roll_clean() {
     let ring = HeapRb::<f32>::new(48_000);
     let (mut producer, consumer) = ring.split();
     let (wake_tx, wake_rx) = bounded::<()>(1);
-    let (control_tx, control_rx) = bounded::<AudioControl>(4);
+    let (control_tx, control_rx) = bounded::<DrainControl>(4);
     let state = Arc::new(Mutex::new(CaptureState::new()));
     let session_epoch = Arc::new(AtomicU64::new(0));
     let alive = Arc::new(AtomicBool::new(true));
@@ -318,27 +341,20 @@ fn stop_recording_flushes_resampler_tail_and_keeps_next_pre_roll_clean() {
         Arc::clone(&alive),
     )
     .expect("audio drain should spawn");
-    let handle = AudioHandle {
-        state,
-        session_epoch,
-        next_session_epoch: Arc::new(AtomicU64::new(0)),
-        control: Arc::new(Mutex::new(Some(control_tx))),
-    };
-
-    handle.start_recording().expect("recording should start");
+    send_drain_start(&control_tx, 1, true);
     let short_tail = vec![0.25; 100];
     let pushed = producer.push_slice(&short_tail);
     assert_eq!(pushed, short_tail.len());
     let _ = wake_tx.try_send(());
 
-    let first = handle.stop_recording().expect("recording should stop");
+    let first = send_drain_stop(&control_tx);
     assert!(
         !first.is_empty(),
         "stop must flush the partial resampler chunk"
     );
 
-    handle.start_recording().expect("recording should start");
-    let second = handle.stop_recording().expect("recording should stop");
+    send_drain_start(&control_tx, 2, true);
+    let second = send_drain_stop(&control_tx);
     assert!(
         second.is_empty(),
         "flushed recording tail must not seed the next pre-roll"
@@ -349,6 +365,66 @@ fn stop_recording_flushes_resampler_tail_and_keeps_next_pre_roll_clean() {
         wake: wake_tx,
         thread: Some(thread),
     });
+}
+
+#[test]
+fn cold_start_discards_idle_pre_roll() {
+    let ring = HeapRb::<f32>::new(48_000);
+    let (mut producer, consumer) = ring.split();
+    let (wake_tx, wake_rx) = bounded::<()>(1);
+    let (control_tx, control_rx) = bounded::<DrainControl>(4);
+    let state = Arc::new(Mutex::new(CaptureState::new()));
+    let session_epoch = Arc::new(AtomicU64::new(0));
+    let alive = Arc::new(AtomicBool::new(true));
+    let thread = spawn_audio_drain(
+        consumer,
+        wake_rx,
+        control_rx,
+        state,
+        Arc::clone(&session_epoch),
+        CapturePipeline::default(),
+        Arc::clone(&alive),
+    )
+    .expect("audio drain should spawn");
+
+    let stale_pre_roll = [0.1, 0.2, 0.3];
+    assert_eq!(producer.push_slice(&stale_pre_roll), stale_pre_roll.len());
+    let _ = wake_tx.try_send(());
+
+    send_drain_start(&control_tx, 1, false);
+    let pcm = send_drain_stop(&control_tx);
+
+    assert!(
+        pcm.is_empty(),
+        "cold Windows starts should not reuse stale idle pre-roll"
+    );
+    assert_eq!(session_epoch.load(Ordering::Acquire), 0);
+
+    drop(AudioDrain {
+        alive,
+        wake: wake_tx,
+        thread: Some(thread),
+    });
+}
+
+fn send_drain_start(control_tx: &Sender<DrainControl>, epoch: u64, include_pre_roll: bool) {
+    let (ack_tx, ack_rx) = bounded(1);
+    control_tx
+        .send(DrainControl::Start {
+            epoch,
+            include_pre_roll,
+            ack: ack_tx,
+        })
+        .expect("send drain start");
+    ack_rx.recv().expect("drain start ack");
+}
+
+fn send_drain_stop(control_tx: &Sender<DrainControl>) -> Vec<f32> {
+    let (ack_tx, ack_rx) = bounded(1);
+    control_tx
+        .send(DrainControl::Stop { ack: ack_tx })
+        .expect("send drain stop");
+    ack_rx.recv().expect("drain stop ack")
 }
 
 #[test]

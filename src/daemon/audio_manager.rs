@@ -8,7 +8,7 @@
 use anyhow::{anyhow, Context, Result};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{SampleFormat, Stream, StreamConfig};
-use crossbeam_channel::{bounded, Receiver, RecvTimeoutError, Sender};
+use crossbeam_channel::{bounded, Receiver, RecvTimeoutError, Sender, TrySendError};
 use parakit::audio_file::{resampler_params, RESAMPLE_CHUNK_SIZE};
 use parking_lot::Mutex;
 use ringbuf::{
@@ -37,7 +37,7 @@ const AUDIO_RING_SECONDS: usize = 6;
 const AUDIO_RING_MIN_CAPACITY: usize = TARGET_RATE as usize * AUDIO_RING_SECONDS;
 const AUDIO_DRAIN_IDLE_SLEEP: Duration = Duration::from_millis(5);
 const AUDIO_CONTROL_TIMEOUT: Duration = Duration::from_secs(1);
-const DEVICE_POLL_INTERVAL: Duration = Duration::from_secs(2);
+const DEVICE_POLL_INTERVAL: Duration = Duration::from_secs(1);
 const DEVICE_RETRY_MAX_INTERVAL: Duration = Duration::from_secs(10);
 
 /// Send-Sync handle that worker threads use to control and read the buffer.
@@ -104,10 +104,7 @@ impl AudioHandle {
             return Ok(AudioControlAck::NoLiveDrain);
         };
         let (ack_tx, ack_rx) = bounded(1);
-        if control
-            .send(AudioControl::Start { epoch, ack: ack_tx })
-            .is_err()
-        {
+        if !try_send_audio_control(control, AudioControl::Start { epoch, ack: ack_tx })? {
             return Ok(AudioControlAck::NoLiveDrain);
         }
         recv_audio_control_ack(ack_rx, "Start").map(AudioControlAck::Acked)
@@ -118,7 +115,7 @@ impl AudioHandle {
             return Ok(AudioControlAck::NoLiveDrain);
         };
         let (ack_tx, ack_rx) = bounded(1);
-        if control.send(AudioControl::Stop { ack: ack_tx }).is_err() {
+        if !try_send_audio_control(control, AudioControl::Stop { ack: ack_tx })? {
             return Ok(AudioControlAck::NoLiveDrain);
         }
         recv_audio_control_ack(ack_rx, "Stop").map(AudioControlAck::Acked)
@@ -130,17 +127,28 @@ enum AudioControlAck<T> {
     NoLiveDrain,
 }
 
-fn recv_audio_control_ack<T>(ack_rx: Receiver<T>, label: &'static str) -> Result<T> {
-    ack_rx
-        .recv_timeout(AUDIO_CONTROL_TIMEOUT)
-        .map_err(|err| match err {
+fn try_send_audio_control(control: Sender<AudioControl>, command: AudioControl) -> Result<bool> {
+    match control.try_send(command) {
+        Ok(()) => Ok(true),
+        Err(TrySendError::Disconnected(_)) => Ok(false),
+        Err(TrySendError::Full(_)) => Err(anyhow!(
+            "audio manager control queue is full; recording command was not accepted"
+        )),
+    }
+}
+
+fn recv_audio_control_ack<T>(ack_rx: Receiver<Result<T>>, label: &'static str) -> Result<T> {
+    match ack_rx.recv_timeout(AUDIO_CONTROL_TIMEOUT) {
+        Ok(result) => result,
+        Err(err) => Err(match err {
             RecvTimeoutError::Timeout => {
                 anyhow!("audio drain accepted {label} but did not acknowledge before timeout")
             }
             RecvTimeoutError::Disconnected => {
                 anyhow!("audio drain accepted {label} but disconnected before acknowledging")
             }
-        })
+        }),
+    }
 }
 
 #[cfg(test)]
@@ -274,12 +282,22 @@ impl CaptureState {
     }
 
     fn begin_recording(&mut self) {
+        self.begin_recording_with_pre_roll(true);
+    }
+
+    fn begin_recording_without_pre_roll(&mut self) {
+        self.begin_recording_with_pre_roll(false);
+    }
+
+    fn begin_recording_with_pre_roll(&mut self, include_pre_roll: bool) {
         if self.buffer.capacity() < RECORDING_CAPACITY {
             self.buffer
                 .reserve_exact(RECORDING_CAPACITY - self.buffer.capacity());
         }
         self.buffer.clear();
-        self.buffer.extend(self.pre_roll.iter().copied());
+        if include_pre_roll {
+            self.buffer.extend(self.pre_roll.iter().copied());
+        }
         self.pre_roll.clear();
     }
 
@@ -328,6 +346,8 @@ impl AudioCapture {
         let alive = Arc::new(AtomicBool::new(true));
         let stream_error = Arc::new(Mutex::new(None));
         let control = Arc::new(Mutex::new(None));
+        let (control_tx, control_rx) = bounded::<AudioControl>(4);
+        *control.lock() = Some(control_tx);
 
         let handle = AudioHandle {
             state: Arc::clone(&state),
@@ -352,6 +372,7 @@ impl AudioCapture {
                     alive: thread_alive,
                     stream_error: thread_error,
                     control,
+                    control_rx,
                     log: thread_log,
                     notifier,
                     ready: ready_tx,
@@ -394,6 +415,7 @@ struct AudioManagerCtx {
     alive: Arc<AtomicBool>,
     stream_error: Arc<Mutex<Option<String>>>,
     control: Arc<Mutex<Option<Sender<AudioControl>>>>,
+    control_rx: Receiver<AudioControl>,
     log: Arc<Logger>,
     notifier: Notifier,
     ready: crossbeam_channel::Sender<Result<MicInfo>>,
@@ -401,15 +423,16 @@ struct AudioManagerCtx {
 
 fn audio_manager_loop(ctx: AudioManagerCtx) {
     let host = cpal::default_host();
+    let idle_policy = idle_stream_policy();
     let mut live = match open_live_stream(
         &host,
         Arc::clone(&ctx.state),
         Arc::clone(&ctx.session_epoch),
         Arc::clone(&ctx.stream_error),
+        idle_policy.paused_when_idle,
     ) {
         Ok(live) => {
             *ctx.current.lock() = Some(live.info.clone());
-            *ctx.control.lock() = Some(live.control.clone());
             let _ = ctx.ready.send(Ok(live.info.clone()));
             live
         }
@@ -420,19 +443,28 @@ fn audio_manager_loop(ctx: AudioManagerCtx) {
     };
 
     while ctx.alive.load(Ordering::SeqCst) {
-        thread::sleep(DEVICE_POLL_INTERVAL);
+        crossbeam_channel::select! {
+            recv(ctx.control_rx) -> msg => {
+                match msg {
+                    Ok(control) => {
+                        handle_manager_control(control, &mut live, &ctx, idle_policy);
+                        continue;
+                    }
+                    Err(_) => break,
+                }
+            }
+            default(DEVICE_POLL_INTERVAL) => {}
+        }
 
         if let Some(err) = ctx.stream_error.lock().take() {
             ctx.log
                 .warn(format!("microphone stream failed ({err}); reopening"));
             ctx.notifier.microphone_unavailable(&err);
-            *ctx.control.lock() = None;
             drop(live);
             let Some(next_live) = reopen_until_success(&host, &ctx) else {
                 break;
             };
             live = next_live;
-            *ctx.control.lock() = Some(live.control.clone());
             ctx.notifier.microphone_recovered(&live.info);
             continue;
         }
@@ -449,13 +481,11 @@ fn audio_manager_loop(ctx: AudioManagerCtx) {
                     live.info.summary(),
                     next_info.summary()
                 ));
-                *ctx.control.lock() = None;
                 drop(live);
                 let Some(next_live) = reopen_until_success(&host, &ctx) else {
                     break;
                 };
                 live = next_live;
-                *ctx.control.lock() = Some(live.control.clone());
                 ctx.log.mic_changed(&live.info);
             }
             Ok(_) => {}
@@ -465,6 +495,108 @@ fn audio_manager_loop(ctx: AudioManagerCtx) {
             }
         }
     }
+
+    *ctx.control.lock() = None;
+}
+
+#[derive(Clone, Copy)]
+struct IdleStreamPolicy {
+    paused_when_idle: bool,
+}
+
+fn idle_stream_policy() -> IdleStreamPolicy {
+    IdleStreamPolicy {
+        paused_when_idle: cfg!(target_os = "windows"),
+    }
+}
+
+fn handle_manager_control(
+    control: AudioControl,
+    live: &mut LiveStream,
+    ctx: &AudioManagerCtx,
+    idle_policy: IdleStreamPolicy,
+) {
+    match control {
+        AudioControl::Start { epoch, ack } => {
+            let result = start_live_recording(live, epoch, idle_policy);
+            let _ = ack.send(result);
+        }
+        AudioControl::Stop { ack } => {
+            let result = stop_live_recording(live);
+            match result {
+                Ok(pcm) => {
+                    let _ = ack.send(Ok(pcm));
+                    if let Err(err) = pause_live_stream(live, idle_policy) {
+                        ctx.log
+                            .warn(format!("could not pause idle microphone stream: {err:#}"));
+                    }
+                }
+                Err(err) => {
+                    let _ = ack.send(Err(err));
+                }
+            }
+        }
+    }
+}
+
+fn start_live_recording(
+    live: &mut LiveStream,
+    epoch: u64,
+    idle_policy: IdleStreamPolicy,
+) -> Result<()> {
+    if live.paused {
+        start_audio_drain(live, epoch, false)?;
+        if let Err(err) = live.stream.play().context("stream.play() failed") {
+            let _ = stop_live_recording(live);
+            return Err(err);
+        }
+        live.paused = false;
+        return Ok(());
+    }
+
+    start_audio_drain(live, epoch, !idle_policy.paused_when_idle)
+}
+
+fn start_audio_drain(live: &mut LiveStream, epoch: u64, include_pre_roll: bool) -> Result<()> {
+    let (ack_tx, ack_rx) = bounded(1);
+    live.drain_control
+        .send(DrainControl::Start {
+            epoch,
+            include_pre_roll,
+            ack: ack_tx,
+        })
+        .context("audio drain is not available")?;
+    recv_drain_control_ack(ack_rx, "Start")
+}
+
+fn stop_live_recording(live: &mut LiveStream) -> Result<Vec<f32>> {
+    let (ack_tx, ack_rx) = bounded(1);
+    live.drain_control
+        .send(DrainControl::Stop { ack: ack_tx })
+        .context("audio drain is not available")?;
+    recv_drain_control_ack(ack_rx, "Stop")
+}
+
+fn pause_live_stream(live: &mut LiveStream, idle_policy: IdleStreamPolicy) -> Result<()> {
+    if !idle_policy.paused_when_idle || live.paused {
+        return Ok(());
+    }
+    live.stream.pause().context("stream.pause() failed")?;
+    live.paused = true;
+    Ok(())
+}
+
+fn recv_drain_control_ack<T>(ack_rx: Receiver<T>, label: &'static str) -> Result<T> {
+    ack_rx
+        .recv_timeout(AUDIO_CONTROL_TIMEOUT)
+        .map_err(|err| match err {
+            RecvTimeoutError::Timeout => {
+                anyhow!("audio drain accepted {label} but did not acknowledge before timeout")
+            }
+            RecvTimeoutError::Disconnected => {
+                anyhow!("audio drain accepted {label} but disconnected before acknowledging")
+            }
+        })
 }
 
 fn reopen_until_success(host: &cpal::Host, ctx: &AudioManagerCtx) -> Option<LiveStream> {
@@ -476,16 +608,15 @@ fn reopen_until_success(host: &cpal::Host, ctx: &AudioManagerCtx) -> Option<Live
             Arc::clone(&ctx.state),
             Arc::clone(&ctx.session_epoch),
             Arc::clone(&ctx.stream_error),
+            idle_stream_policy().paused_when_idle,
         ) {
             Ok(live) => {
                 *ctx.current.lock() = Some(live.info.clone());
-                *ctx.control.lock() = Some(live.control.clone());
                 return Some(live);
             }
             Err(err) => {
                 attempts = attempts.saturating_add(1);
                 *ctx.current.lock() = None;
-                *ctx.control.lock() = None;
                 if attempts == 1 || attempts.is_multiple_of(30) {
                     ctx.log
                         .warn(format!("no usable microphone yet ({err:#}); retrying"));
@@ -519,14 +650,26 @@ fn sleep_while_alive(alive: &AtomicBool, duration: Duration) -> bool {
 struct LiveStream {
     info: MicInfo,
     identity: MicIdentity,
-    control: Sender<AudioControl>,
-    _stream: Stream,
+    drain_control: Sender<DrainControl>,
+    stream: Stream,
+    paused: bool,
     _drain: AudioDrain,
 }
 
 enum AudioControl {
-    Start { epoch: u64, ack: Sender<()> },
-    Stop { ack: Sender<Vec<f32>> },
+    Start { epoch: u64, ack: Sender<Result<()>> },
+    Stop { ack: Sender<Result<Vec<f32>>> },
+}
+
+enum DrainControl {
+    Start {
+        epoch: u64,
+        include_pre_roll: bool,
+        ack: Sender<()>,
+    },
+    Stop {
+        ack: Sender<Vec<f32>>,
+    },
 }
 
 struct AudioDrain {
@@ -564,6 +707,7 @@ fn open_live_stream(
     state: Arc<Mutex<CaptureState>>,
     session_epoch: Arc<AtomicU64>,
     stream_error: Arc<Mutex<Option<String>>>,
+    start_paused: bool,
 ) -> Result<LiveStream> {
     let selected = select_input_device(host)?;
     let (info, identity) = mic_snapshot_from_selected(&selected);
@@ -577,7 +721,7 @@ fn open_live_stream(
     let ring = HeapRb::<f32>::new(audio_ring_capacity(hw_rate));
     let (producer, consumer) = ring.split();
     let (wake_tx, wake_rx) = bounded::<()>(1);
-    let (control_tx, control_rx) = bounded::<AudioControl>(4);
+    let (control_tx, control_rx) = bounded::<DrainControl>(4);
     let stream_alive = Arc::new(AtomicBool::new(true));
     let drain = spawn_audio_drain(
         consumer,
@@ -663,12 +807,15 @@ fn open_live_stream(
         other => return Err(anyhow!("unsupported sample format: {:?}", other)),
     };
 
-    stream.play().context("stream.play() failed")?;
+    if !start_paused {
+        stream.play().context("stream.play() failed")?;
+    }
     Ok(LiveStream {
         info,
         identity,
-        control: control_tx,
-        _stream: stream,
+        drain_control: control_tx,
+        stream,
+        paused: start_paused,
         _drain: drain,
     })
 }
@@ -680,7 +827,7 @@ fn audio_ring_capacity(hw_rate: u32) -> usize {
 fn spawn_audio_drain(
     consumer: HeapCons<f32>,
     wake_rx: Receiver<()>,
-    control_rx: Receiver<AudioControl>,
+    control_rx: Receiver<DrainControl>,
     state: Arc<Mutex<CaptureState>>,
     session_epoch: Arc<AtomicU64>,
     pipeline: CapturePipeline,
@@ -704,7 +851,7 @@ fn spawn_audio_drain(
 fn audio_drain_loop(
     mut consumer: HeapCons<f32>,
     wake_rx: Receiver<()>,
-    control_rx: Receiver<AudioControl>,
+    control_rx: Receiver<DrainControl>,
     state: Arc<Mutex<CaptureState>>,
     session_epoch: Arc<AtomicU64>,
     mut pipeline: CapturePipeline,
@@ -756,7 +903,7 @@ fn audio_drain_loop(
 }
 
 fn handle_audio_control(
-    control: AudioControl,
+    control: DrainControl,
     consumer: &mut HeapCons<f32>,
     state: &Mutex<CaptureState>,
     session_epoch: &AtomicU64,
@@ -765,14 +912,27 @@ fn handle_audio_control(
     resampled: &mut Vec<f32>,
 ) {
     match control {
-        AudioControl::Start { epoch, ack } => {
-            while drain_audio_ring(consumer, state, session_epoch, pipeline, input, resampled) {}
+        DrainControl::Start {
+            epoch,
+            include_pre_roll,
+            ack,
+        } => {
+            if include_pre_roll {
+                while drain_audio_ring(consumer, state, session_epoch, pipeline, input, resampled) {
+                }
+            } else {
+                discard_audio_ring(consumer, input);
+            }
             pipeline.reset_recording();
-            state.lock().begin_recording();
+            if include_pre_roll {
+                state.lock().begin_recording();
+            } else {
+                state.lock().begin_recording_without_pre_roll();
+            }
             session_epoch.store(epoch, Ordering::Release);
             let _ = ack.send(());
         }
-        AudioControl::Stop { ack } => {
+        DrainControl::Stop { ack } => {
             while drain_audio_ring(consumer, state, session_epoch, pipeline, input, resampled) {}
             resampled.clear();
             pipeline.finish_recording(resampled);
@@ -786,6 +946,10 @@ fn handle_audio_control(
             let _ = ack.send(pcm);
         }
     }
+}
+
+fn discard_audio_ring(consumer: &mut HeapCons<f32>, input: &mut [f32]) {
+    while consumer.pop_slice(input) != 0 {}
 }
 
 fn drain_audio_ring(
