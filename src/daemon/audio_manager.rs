@@ -35,7 +35,7 @@ const MAX_RECORDING_SAMPLES: usize = TARGET_RATE as usize * 60 * 5;
 const PRE_ROLL_SAMPLES: usize = TARGET_RATE as usize * 350 / 1000;
 const AUDIO_RING_SECONDS: usize = 6;
 const AUDIO_RING_MIN_CAPACITY: usize = TARGET_RATE as usize * AUDIO_RING_SECONDS;
-const AUDIO_DRAIN_IDLE_SLEEP: Duration = Duration::from_millis(5);
+const DEFAULT_CALLBACK_SCRATCH_FRAMES: usize = 8192;
 const AUDIO_CONTROL_TIMEOUT: Duration = Duration::from_secs(1);
 const DEVICE_POLL_INTERVAL: Duration = Duration::from_secs(1);
 const DEVICE_RETRY_MAX_INTERVAL: Duration = Duration::from_secs(10);
@@ -469,6 +469,13 @@ fn audio_manager_loop(ctx: AudioManagerCtx) {
             continue;
         }
 
+        let dropped_samples = live.dropped_samples.swap(0, Ordering::AcqRel);
+        if dropped_samples != 0 {
+            ctx.log.warn(format!(
+                "microphone ring overflow dropped {dropped_samples} sample(s)"
+            ));
+        }
+
         if ctx.session_epoch.load(Ordering::Relaxed) != 0 {
             continue;
         }
@@ -518,8 +525,16 @@ fn handle_manager_control(
 ) {
     match control {
         AudioControl::Start { epoch, ack } => {
-            let result = start_live_recording(live, epoch, idle_policy);
-            let _ = ack.send(result);
+            match start_live_recording(live, epoch, idle_policy) {
+                Ok(()) => {
+                    if ack.send(Ok(())).is_err() {
+                        rollback_abandoned_start(live, ctx, idle_policy);
+                    }
+                }
+                Err(err) => {
+                    let _ = ack.send(Err(err));
+                }
+            }
         }
         AudioControl::Stop { ack } => {
             let result = stop_live_recording(live);
@@ -536,6 +551,27 @@ fn handle_manager_control(
                 }
             }
         }
+    }
+}
+
+fn rollback_abandoned_start(
+    live: &mut LiveStream,
+    ctx: &AudioManagerCtx,
+    idle_policy: IdleStreamPolicy,
+) {
+    ctx.log.warn(
+        "recording start completed after the caller gave up; stopping abandoned capture"
+            .to_string(),
+    );
+    if let Err(err) = stop_live_recording(live) {
+        ctx.log.warn(format!(
+            "could not stop abandoned microphone recording: {err:#}"
+        ));
+    }
+    if let Err(err) = pause_live_stream(live, idle_policy) {
+        ctx.log.warn(format!(
+            "could not pause abandoned microphone stream: {err:#}"
+        ));
     }
 }
 
@@ -653,6 +689,7 @@ struct LiveStream {
     drain_control: Sender<DrainControl>,
     stream: Stream,
     paused: bool,
+    dropped_samples: Arc<AtomicU64>,
     _drain: AudioDrain,
 }
 
@@ -723,6 +760,7 @@ fn open_live_stream(
     let (wake_tx, wake_rx) = bounded::<()>(1);
     let (control_tx, control_rx) = bounded::<DrainControl>(4);
     let stream_alive = Arc::new(AtomicBool::new(true));
+    let dropped_samples = Arc::new(AtomicU64::new(0));
     let drain = spawn_audio_drain(
         consumer,
         wake_rx,
@@ -746,6 +784,7 @@ fn open_live_stream(
             channels,
             producer,
             stream_error,
+            Arc::clone(&dropped_samples),
             wake_tx.clone(),
         )?,
         SampleFormat::I16 => build_stream::<i16>(
@@ -754,6 +793,7 @@ fn open_live_stream(
             channels,
             producer,
             stream_error,
+            Arc::clone(&dropped_samples),
             wake_tx.clone(),
         )?,
         SampleFormat::I32 => build_stream::<i32>(
@@ -762,6 +802,7 @@ fn open_live_stream(
             channels,
             producer,
             stream_error,
+            Arc::clone(&dropped_samples),
             wake_tx.clone(),
         )?,
         SampleFormat::U8 => build_stream::<u8>(
@@ -770,6 +811,7 @@ fn open_live_stream(
             channels,
             producer,
             stream_error,
+            Arc::clone(&dropped_samples),
             wake_tx.clone(),
         )?,
         SampleFormat::U16 => build_stream::<u16>(
@@ -778,6 +820,7 @@ fn open_live_stream(
             channels,
             producer,
             stream_error,
+            Arc::clone(&dropped_samples),
             wake_tx.clone(),
         )?,
         SampleFormat::U32 => build_stream::<u32>(
@@ -786,6 +829,7 @@ fn open_live_stream(
             channels,
             producer,
             stream_error,
+            Arc::clone(&dropped_samples),
             wake_tx.clone(),
         )?,
         SampleFormat::F32 => build_stream::<f32>(
@@ -794,6 +838,7 @@ fn open_live_stream(
             channels,
             producer,
             stream_error,
+            Arc::clone(&dropped_samples),
             wake_tx.clone(),
         )?,
         SampleFormat::F64 => build_stream::<f64>(
@@ -802,6 +847,7 @@ fn open_live_stream(
             channels,
             producer,
             stream_error,
+            Arc::clone(&dropped_samples),
             wake_tx.clone(),
         )?,
         other => return Err(anyhow!("unsupported sample format: {:?}", other)),
@@ -816,12 +862,21 @@ fn open_live_stream(
         drain_control: control_tx,
         stream,
         paused: start_paused,
+        dropped_samples,
         _drain: drain,
     })
 }
 
 fn audio_ring_capacity(hw_rate: u32) -> usize {
     (hw_rate as usize * AUDIO_RING_SECONDS).max(AUDIO_RING_MIN_CAPACITY)
+}
+
+fn callback_scratch_frames(config: &StreamConfig) -> usize {
+    match config.buffer_size {
+        cpal::BufferSize::Fixed(frames) => frames as usize,
+        cpal::BufferSize::Default => DEFAULT_CALLBACK_SCRATCH_FRAMES,
+    }
+    .max(1)
 }
 
 fn spawn_audio_drain(
@@ -896,7 +951,6 @@ fn audio_drain_loop(
                     }
                 }
                 recv(wake_rx) -> _ => {}
-                default(AUDIO_DRAIN_IDLE_SLEEP) => {}
             }
         }
     }
@@ -1439,13 +1493,14 @@ fn build_stream<T>(
     channels: usize,
     mut producer: HeapProd<f32>,
     stream_error: Arc<Mutex<Option<String>>>,
+    dropped_samples: Arc<AtomicU64>,
     wake: Sender<()>,
 ) -> Result<Stream>
 where
     T: cpal::SizedSample + cpal::FromSample<f32> + 'static,
     f32: cpal::FromSample<T>,
 {
-    let mut mono_scratch: Vec<f32> = Vec::with_capacity(8192);
+    let mut mono_scratch = vec![0.0_f32; callback_scratch_frames(config)];
     let err_state = Arc::clone(&stream_error);
     let err_fn = move |err: cpal::StreamError| {
         *err_state.lock() = Some(err.to_string());
@@ -1455,26 +1510,39 @@ where
         .build_input_stream(
             config,
             move |data: &[T], _: &cpal::InputCallbackInfo| {
-                mono_scratch.clear();
-                if channels == 1 {
-                    mono_scratch.reserve(data.len());
-                    for &s in data {
-                        mono_scratch.push(cpal::Sample::from_sample(s));
-                    }
+                let frame_count = if channels == 1 {
+                    data.len()
                 } else {
-                    let frames = data.len() / channels;
-                    mono_scratch.reserve(frames);
-                    for f in 0..frames {
-                        let mut sum = 0.0f32;
-                        for c in 0..channels {
-                            let s: f32 = cpal::Sample::from_sample(data[f * channels + c]);
-                            sum += s;
+                    data.len() / channels
+                };
+                let mut frame_offset = 0;
+
+                while frame_offset < frame_count {
+                    let chunk_frames = (frame_count - frame_offset).min(mono_scratch.len());
+                    if channels == 1 {
+                        for (i, slot) in mono_scratch.iter_mut().take(chunk_frames).enumerate() {
+                            *slot = cpal::Sample::from_sample(data[frame_offset + i]);
                         }
-                        mono_scratch.push(sum / channels as f32);
+                    } else {
+                        for (i, slot) in mono_scratch.iter_mut().take(chunk_frames).enumerate() {
+                            let frame = frame_offset + i;
+                            let mut sum = 0.0f32;
+                            for c in 0..channels {
+                                let s: f32 = cpal::Sample::from_sample(data[frame * channels + c]);
+                                sum += s;
+                            }
+                            *slot = sum / channels as f32;
+                        }
                     }
+
+                    let written = producer.push_slice(&mono_scratch[..chunk_frames]);
+                    if written < chunk_frames {
+                        dropped_samples
+                            .fetch_add((chunk_frames - written) as u64, Ordering::Relaxed);
+                    }
+                    frame_offset += chunk_frames;
                 }
 
-                let _ = producer.push_slice(&mono_scratch);
                 let _ = wake.try_send(());
             },
             err_fn,

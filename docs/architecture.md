@@ -11,7 +11,7 @@ audio manager thread         owns the current cpal::Stream and follows the defau
 cpal callback thread         mixes input to mono and pushes frames into a bounded SPSC ring
 audio drain thread           drains ring -> resamples -> updates pre-roll and active recording
 worker thread                owns Engine and runs transcribe -> clean -> insert
-sound thread                 owns rodio::OutputStream and plays cue tones
+sound thread                 opens rodio output only while playing cue tones
 IPC thread                   handles status, stop, paste-last, copy-last, and test-paste commands
 ```
 
@@ -29,12 +29,12 @@ Idle
 
 Empty or near-silent captures are skipped before inference. Short non-silent captures are right-padded with silence before inference instead of being rejected.
 
-Live capture keeps the microphone stream open and drains callback audio through a bounded single-producer/single-consumer ring buffer. The drain thread owns resampling, keeps a 350 ms rolling pre-roll buffer, and seeds each recording with that pre-roll before appending live samples. Recording uses a session epoch so stale drained samples from a stopped utterance cannot append into the next utterance.
+Live capture drains callback audio through a bounded single-producer/single-consumer ring buffer. Linux and macOS keep the microphone stream open for 350 ms pre-roll; Windows opens the stream paused and resumes it only while recording so `audiodg.exe` and driver-level processing do not run while idle. Recording uses a session epoch so stale drained samples from a stopped utterance cannot append into the next utterance.
 
 ## Ownership Constraints
 
 - `cpal::Stream` is not reliably `Send`, so the live stream stays on the audio manager thread.
-- `rodio::OutputStream` is not reliably `Send`, so the sound stream lives on its own thread.
+- `rodio::OutputStream` is not reliably `Send`, so cue playback lives on its own thread and opens output only for the duration of a cue.
 - `crispasr::Session` is `Send` but not `Sync`, so the worker owns `Engine` directly. Do not wrap it in `Arc<Engine>`.
 - Hotkey backends emit only logical press/release transitions. They do not call audio, ASR, clipboard, or insertion code.
 - Linux `auto`, `desktop`, and `x11-global-hotkey` register `Ctrl+Space` with X11 through `global-hotkey`; `x11-listen` is passive debugging, and `evdev-proxy-experimental` is the explicit experimental evdev/uinput path. Linux text insertion uses X11/XTest and rejects Wayland sessions.
