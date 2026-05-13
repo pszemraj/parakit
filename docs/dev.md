@@ -48,6 +48,12 @@ TODO: Move the default hotkey away from `Ctrl+Space` or make it configurable, th
 
 TODO: Add a secondary recording watchdog for missed key-release events from the registered X11 hotkey backend. The existing max-utterance timeout bounds the failure, but a silence-based stop would recover sooner when a backend misses release ordering.
 
+TODO: Revisit Linux/macOS microphone idle policy after Windows CPU validation. Either move them to the same pause/resume default as Windows or keep 350 ms warm pre-roll only with measured idle CPU and first-syllable evidence that justifies the cost.
+
+TODO: Replace fallback microphone device polling with platform event notifications when the audio layer is split: Windows `IMMNotificationClient`, PipeWire/PulseAudio registry events, and macOS `AudioObject` property listeners. Expose stream state, callback drops, and recovery counters through daemon status at the same time.
+
+TODO: Evaluate callback-confirmed recording cues and a short post-roll window. The current cue fires after the start command succeeds, not after the first input callback, and release drains only already-arrived samples plus the resampler tail.
+
 TODO: Upgrade `enigo` from the 0.2 line in a cross-platform validation branch. Linux batch paste uses X11 directly and Windows batch paste uses `SendInput`, but direct mode and macOS paste shortcuts still need real desktop validation after the dependency update.
 
 TODO: In the dedicated macOS work branch, decide whether default model storage should move from `~/Library/Caches/parakit/models/` to `~/Library/Application Support/parakit/models/`. The current cache path is user-scoped and adminless, but a multi-GB model may fit durable app data semantics better than reclaimable cache semantics.
