@@ -259,6 +259,11 @@ fn key_event(vk: VIRTUAL_KEY, key_up: bool) -> INPUT {
 }
 
 trait InputSender {
+    /// Send the provided Win32 input events.
+    ///
+    /// # Returns
+    ///
+    /// The number of input events accepted by Windows.
     fn send_inputs(&mut self, inputs: &[INPUT]) -> u32;
 }
 
