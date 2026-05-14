@@ -29,6 +29,10 @@ use std::env;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+#[path = "build_support/windows_openblas.rs"]
+mod windows_openblas;
+use windows_openblas::{find_windows_openblas, WindowsOpenBlas};
+
 const WINDOWS_RUNTIME_MANIFEST: &str = "parakit-runtime-manifest.json";
 
 fn main() {
@@ -40,6 +44,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed=BLAS_LIBRARIES");
     println!("cargo:rerun-if-env-changed=CONDA_PREFIX");
     println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-changed=build_support/windows_openblas.rs");
 
     build_alsa_silencer();
 
@@ -316,7 +321,7 @@ struct BlasConfig {
     vendor: Option<&'static str>,
     cohere_mkl: bool,
     explicit: bool,
-    openblas_root: Option<PathBuf>,
+    windows_openblas: Option<WindowsOpenBlas>,
 }
 
 impl BlasConfig {
@@ -328,11 +333,7 @@ impl BlasConfig {
             "" | "0" | "false" | "no" | "none" | "off" => Self::off(raw, explicit),
             "auto" => Self::auto(raw, explicit),
             "mkl" | "intel" | "intel-mkl" => Self::mkl(raw, explicit),
-            "openblas" => Self::openblas(
-                raw,
-                explicit,
-                target_is_windows().then(windows_openblas_root).flatten(),
-            ),
+            "openblas" => Self::openblas(raw, explicit, windows_openblas_from_env(true)),
             "accelerate" | "apple" => Self::accelerate(raw, explicit),
             "1" | "true" | "yes" | "on" | "blas" | "generic" | "system" => {
                 Self::generic(raw, explicit)
@@ -351,8 +352,8 @@ impl BlasConfig {
             return Self::mkl(raw, explicit);
         }
         if target_is_windows() {
-            if let Some(root) = windows_openblas_root() {
-                return Self::openblas(raw, explicit, Some(root));
+            if let Some(openblas) = windows_openblas_from_env(false) {
+                return Self::openblas(raw, explicit, Some(openblas));
             }
         }
         if pkg_config_exists("openblas") || pkg_config_exists("openblas64") {
@@ -370,7 +371,7 @@ impl BlasConfig {
         vendor: Option<&'static str>,
         cohere_mkl: bool,
         explicit: bool,
-        openblas_root: Option<PathBuf>,
+        windows_openblas: Option<WindowsOpenBlas>,
     ) -> Self {
         Self {
             requested,
@@ -379,7 +380,7 @@ impl BlasConfig {
             vendor,
             cohere_mkl,
             explicit,
-            openblas_root,
+            windows_openblas,
         }
     }
 
@@ -391,14 +392,18 @@ impl BlasConfig {
         Self::new(requested, "generic", Some("Generic"), false, explicit, None)
     }
 
-    fn openblas(requested: String, explicit: bool, root: Option<PathBuf>) -> Self {
+    fn openblas(
+        requested: String,
+        explicit: bool,
+        windows_openblas: Option<WindowsOpenBlas>,
+    ) -> Self {
         Self::new(
             requested,
             "openblas",
             Some("OpenBLAS"),
             false,
             explicit,
-            root,
+            windows_openblas,
         )
     }
 
@@ -441,17 +446,19 @@ fn configure_blas_paths(cfg: &mut cmake::Config, blas: &BlasConfig) {
     }
 
     if blas.selected == "openblas" && target_is_windows() {
-        if let Some(root) = blas.openblas_root.as_deref() {
-            let lib = root.join("lib/openblas.lib");
-            let include = root.join("include/openblas");
-            if lib.is_file() && include.join("cblas.h").is_file() {
-                cfg.define("BLAS_LIBRARIES", lib.to_string_lossy().as_ref());
-                cfg.define("BLAS_INCLUDE_DIRS", include.to_string_lossy().as_ref());
-                println!(
-                    "cargo:warning=parakit build: using Windows OpenBLAS at {}",
-                    root.display()
-                );
-            }
+        if let Some(openblas) = blas.windows_openblas.as_ref() {
+            cfg.define(
+                "BLAS_LIBRARIES",
+                openblas.import_lib.to_string_lossy().as_ref(),
+            );
+            cfg.define(
+                "BLAS_INCLUDE_DIRS",
+                openblas.include_dir.to_string_lossy().as_ref(),
+            );
+            println!(
+                "cargo:warning=parakit build: using Windows OpenBLAS at {}",
+                openblas.root.display()
+            );
         }
     }
 }
@@ -667,27 +674,15 @@ fn copy_optional_windows_blas_runtime(bin_dir: &Path, blas: &BlasConfig) {
         return;
     }
 
-    let Some(root) = blas.openblas_root.as_deref() else {
+    let Some(openblas) = blas.windows_openblas.as_ref() else {
         return;
     };
-    let source_dir = root.join("bin");
-    let Ok(entries) = std::fs::read_dir(&source_dir) else {
-        return;
-    };
-
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if !path.is_file() {
-            continue;
-        }
-        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+    for path in &openblas.runtime_dlls {
+        let Some(name) = path.file_name() else {
             continue;
         };
-        if !is_known_openblas_runtime_dll(name) {
-            continue;
-        }
         let dest = bin_dir.join(name);
-        std::fs::copy(&path, &dest).unwrap_or_else(|err| {
+        std::fs::copy(path, &dest).unwrap_or_else(|err| {
             panic!(
                 "failed to copy Windows OpenBLAS runtime DLL {} to {}: {err}",
                 path.display(),
@@ -697,43 +692,44 @@ fn copy_optional_windows_blas_runtime(bin_dir: &Path, blas: &BlasConfig) {
     }
 }
 
-fn is_known_openblas_runtime_dll(file_name: &str) -> bool {
-    let lower = file_name.to_ascii_lowercase();
-    lower == "openblas.dll"
-        || lower == "libomp.dll"
-        || lower == "libiomp5md.dll"
-        || lower == "vcomp140.dll"
-        || dll_name_matches_prefix(&lower, "libgfortran")
-        || dll_name_matches_prefix(&lower, "libgcc_s_seh")
-        || dll_name_matches_prefix(&lower, "libquadmath")
-        || dll_name_matches_prefix(&lower, "libwinpthread")
-}
-
-fn dll_name_matches_prefix(file_name: &str, prefix: &str) -> bool {
-    file_name.starts_with(prefix) && file_name.ends_with(".dll")
-}
-
-fn windows_openblas_root() -> Option<PathBuf> {
+fn windows_openblas_from_env(explicit_openblas: bool) -> Option<WindowsOpenBlas> {
     if let Ok(root) = env::var("PARAKIT_OPENBLAS_ROOT") {
         let root = PathBuf::from(root);
-        if windows_openblas_root_is_usable(&root) {
-            return Some(root);
+        if let Some(openblas) = find_windows_openblas(&root) {
+            return Some(openblas);
+        }
+        if explicit_openblas && !manual_blas_path_overrides_are_set() {
+            panic!(
+                "PARAKIT_OPENBLAS_ROOT is set but does not contain a usable Windows OpenBLAS install. \
+                 Expected cblas.h under include/ or include/openblas/, an import lib under lib/, and a runtime DLL under bin/."
+            );
+        }
+        println!(
+            "cargo:warning=parakit build: PARAKIT_OPENBLAS_ROOT={} is not a usable Windows OpenBLAS layout",
+            root.display()
+        );
+    }
+
+    if let Ok(conda) = env::var("CONDA_PREFIX") {
+        let root = PathBuf::from(conda).join("Library");
+        if let Some(openblas) = find_windows_openblas(&root) {
+            return Some(openblas);
         }
     }
 
-    let conda = PathBuf::from(env::var("CONDA_PREFIX").ok()?);
-    let root = conda.join("Library");
-    if windows_openblas_root_is_usable(&root) {
-        Some(root)
-    } else {
-        None
+    if explicit_openblas && target_is_windows() && !manual_blas_path_overrides_are_set() {
+        panic!(
+            "PARAKIT_BLAS=openblas requested Windows OpenBLAS, but no usable install was found. \
+             Set PARAKIT_OPENBLAS_ROOT to a prefix containing include/, lib/, and bin/, \
+             activate a Conda environment with OpenBLAS, or provide BLAS_INCLUDE_DIRS and BLAS_LIBRARIES."
+        );
     }
+
+    None
 }
 
-fn windows_openblas_root_is_usable(root: &Path) -> bool {
-    root.join("lib/openblas.lib").is_file()
-        && root.join("include/openblas/cblas.h").is_file()
-        && root.join("bin/openblas.dll").is_file()
+fn manual_blas_path_overrides_are_set() -> bool {
+    env::var("BLAS_INCLUDE_DIRS").is_ok() && env::var("BLAS_LIBRARIES").is_ok()
 }
 
 fn windows_import_library_names() -> (&'static str, &'static str) {
@@ -874,11 +870,30 @@ fn write_windows_runtime_manifest(bin_dir: &Path, runtime_dlls: &[String], blas:
     required_files.extend(runtime_dlls.iter().cloned());
 
     let openblas_root = blas
-        .openblas_root
-        .as_deref()
-        .map(|path| path.to_string_lossy().to_string());
+        .windows_openblas
+        .as_ref()
+        .map(|openblas| openblas.root.to_string_lossy().to_string());
+    let openblas_include_dir = blas
+        .windows_openblas
+        .as_ref()
+        .map(|openblas| openblas.include_dir.to_string_lossy().to_string());
+    let openblas_import_lib = blas
+        .windows_openblas
+        .as_ref()
+        .map(|openblas| openblas.import_lib.to_string_lossy().to_string());
+    let openblas_runtime_dlls = blas
+        .windows_openblas
+        .as_ref()
+        .map(|openblas| {
+            openblas
+                .runtime_dlls
+                .iter()
+                .map(|path| path.to_string_lossy().to_string())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
     let manifest = format!(
-        "{{\n  \"required_files\": {},\n  \"runtime_dlls\": {},\n  \"blas\": {{\n    \"requested\": {},\n    \"selected\": {}\n  }},\n  \"openblas_root\": {}\n}}\n",
+        "{{\n  \"required_files\": {},\n  \"runtime_dlls\": {},\n  \"blas\": {{\n    \"requested\": {},\n    \"selected\": {}\n  }},\n  \"openblas_root\": {},\n  \"openblas_include_dir\": {},\n  \"openblas_import_lib\": {},\n  \"openblas_runtime_dlls\": {}\n}}\n",
         json_array(&required_files),
         json_array(runtime_dlls),
         json_string(&blas.requested),
@@ -886,7 +901,16 @@ fn write_windows_runtime_manifest(bin_dir: &Path, runtime_dlls: &[String], blas:
         openblas_root
             .as_deref()
             .map(json_string)
-            .unwrap_or_else(|| "null".to_string())
+            .unwrap_or_else(|| "null".to_string()),
+        openblas_include_dir
+            .as_deref()
+            .map(json_string)
+            .unwrap_or_else(|| "null".to_string()),
+        openblas_import_lib
+            .as_deref()
+            .map(json_string)
+            .unwrap_or_else(|| "null".to_string()),
+        json_array(&openblas_runtime_dlls)
     );
     let path = bin_dir.join(WINDOWS_RUNTIME_MANIFEST);
     std::fs::write(&path, manifest).unwrap_or_else(|err| {
