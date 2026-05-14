@@ -524,8 +524,15 @@ fn clipboard_policy(keep_transcript_clipboard: bool) -> ClipboardPolicy {
 
 fn focus_allows_insertion(focus: Option<&FocusSnapshot>, log: &Logger) -> bool {
     let Some(focus) = focus else {
-        // The focus guard is best effort. Dropping a transcript because X11 had
-        // a transient focus-query failure is worse than a recoverable wrong paste.
+        if cfg!(target_os = "windows") {
+            // Windows insertion must prove the current foreground target still
+            // matches the hotkey target; unknown focus is not safe to paste.
+            log.warn("recording focus was unavailable; automatic paste skipped");
+            return false;
+        }
+
+        // Linux/X11 focus can be transiently unavailable. Preserve the existing
+        // behavior there so a temporary X11 query failure does not drop speech.
         log.verbose("recording focus was unavailable; pasting without focus guard");
         return true;
     };
@@ -538,6 +545,12 @@ fn focus_verification_allows_insertion(result: Result<bool>, log: &Logger) -> bo
         Ok(true) => true,
         Ok(false) => {
             log.warn("focus changed before insertion; automatic paste skipped");
+            false
+        }
+        Err(err) if cfg!(target_os = "windows") => {
+            log.warn(format!(
+                "could not verify recording focus ({err:#}); automatic paste skipped"
+            ));
             false
         }
         Err(err) => {
@@ -736,16 +749,29 @@ mod tests {
     }
 
     #[test]
-    fn unavailable_or_unverified_focus_allows_insertion() {
+    fn unavailable_or_unverified_focus_uses_platform_policy() {
         let log = Logger::new(LogLevel::Quiet);
 
-        assert!(focus_allows_insertion(None, &log));
         assert!(focus_verification_allows_insertion(Ok(true), &log));
         assert!(!focus_verification_allows_insertion(Ok(false), &log));
-        assert!(focus_verification_allows_insertion(
-            Err(anyhow::anyhow!("temporary X11 failure")),
-            &log
-        ));
+
+        #[cfg(target_os = "windows")]
+        {
+            assert!(!focus_allows_insertion(None, &log));
+            assert!(!focus_verification_allows_insertion(
+                Err(anyhow::anyhow!("focus unavailable")),
+                &log
+            ));
+        }
+
+        #[cfg(not(target_os = "windows"))]
+        {
+            assert!(focus_allows_insertion(None, &log));
+            assert!(focus_verification_allows_insertion(
+                Err(anyhow::anyhow!("temporary X11 failure")),
+                &log
+            ));
+        }
     }
 
     #[test]
