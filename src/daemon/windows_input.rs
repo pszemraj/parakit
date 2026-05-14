@@ -337,7 +337,7 @@ mod tests {
     impl InputSender for MockInputSender {
         fn send_inputs(&mut self, inputs: &[INPUT]) -> u32 {
             self.calls.push(inputs.len());
-            self.responses.pop().unwrap_or_else(|| inputs.len() as u32)
+            self.responses.pop().unwrap_or(inputs.len() as u32)
         }
     }
 
