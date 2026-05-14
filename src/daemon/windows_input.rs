@@ -11,8 +11,11 @@ use windows::core::Error as WinError;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, RegisterHotKey, SendInput, UnregisterHotKey, HOT_KEY_MODIFIERS, INPUT,
     INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYBD_EVENT_FLAGS, KEYEVENTF_KEYUP, MOD_CONTROL,
-    MOD_NOREPEAT, VIRTUAL_KEY, VK_CONTROL, VK_LCONTROL, VK_LMENU, VK_LSHIFT, VK_LWIN, VK_MENU,
-    VK_RCONTROL, VK_RMENU, VK_RSHIFT, VK_RWIN, VK_SHIFT, VK_SPACE,
+    MOD_NOREPEAT, VIRTUAL_KEY, VK_CONTROL, VK_MENU, VK_SHIFT, VK_SPACE,
+};
+#[cfg(test)]
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    VK_LCONTROL, VK_LMENU, VK_LSHIFT, VK_LWIN, VK_RCONTROL, VK_RMENU, VK_RSHIFT, VK_RWIN,
 };
 use windows::Win32::UI::WindowsAndMessaging::{GetMessageW, MSG, WM_HOTKEY};
 
@@ -123,12 +126,34 @@ fn key_is_down(vk: VIRTUAL_KEY) -> bool {
 /// Returns an error when `SendInput` accepts only part of the event sequence,
 /// commonly because the target is elevated or input injection is blocked.
 pub(crate) fn send_paste_chord(use_shift: bool) -> Result<()> {
+    let mut sender = Win32InputSender;
+    send_paste_chord_with(use_shift, &mut sender)
+}
+
+fn send_paste_chord_with<S: InputSender>(use_shift: bool, sender: &mut S) -> Result<()> {
     let events = paste_chord_events(use_shift);
     let inputs = events
         .iter()
         .map(|event| key_event(event.vk, event.key_up))
         .collect::<Vec<_>>();
-    send_inputs(&inputs, "paste chord")
+    let sent = sender.send_inputs(&inputs);
+    if sent == inputs.len() as u32 {
+        return Ok(());
+    }
+
+    let cleanup_events = paste_cleanup_events_for_partial_send(&events, sent as usize);
+    let cleanup_result = send_key_events_exact(sender, &cleanup_events, "paste chord cleanup");
+    let primary_error = anyhow::anyhow!(
+        "paste chord: SendInput sent {sent}/{} events; target may be elevated or input injection may be blocked by UIPI",
+        inputs.len()
+    );
+
+    match cleanup_result {
+        Ok(()) => Err(primary_error),
+        Err(cleanup_error) => Err(anyhow::anyhow!(
+            "{primary_error:#}; paste modifier cleanup also failed: {cleanup_error:#}"
+        )),
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -138,7 +163,7 @@ struct KeyEvent {
 }
 
 fn paste_chord_events(use_shift: bool) -> Vec<KeyEvent> {
-    let mut events = Vec::with_capacity(if use_shift { 17 } else { 15 });
+    let mut events = Vec::with_capacity(if use_shift { 6 } else { 4 });
     events.push(KeyEvent {
         vk: VK_CONTROL,
         key_up: false,
@@ -167,22 +192,35 @@ fn paste_chord_events(use_shift: bool) -> Vec<KeyEvent> {
         vk: VK_CONTROL,
         key_up: true,
     });
-    for vk in [
-        VK_CONTROL,
-        VK_LCONTROL,
-        VK_RCONTROL,
-        VK_SHIFT,
-        VK_LSHIFT,
-        VK_RSHIFT,
-        VK_MENU,
-        VK_LMENU,
-        VK_RMENU,
-        VK_LWIN,
-        VK_RWIN,
-    ] {
-        events.push(KeyEvent { vk, key_up: true });
-    }
     events
+}
+
+fn paste_cleanup_events_for_partial_send(events: &[KeyEvent], sent: usize) -> Vec<KeyEvent> {
+    let mut ctrl_down = false;
+    let mut shift_down = false;
+
+    for event in events.iter().take(sent) {
+        if event.vk == VK_CONTROL {
+            ctrl_down = !event.key_up;
+        } else if event.vk == VK_SHIFT {
+            shift_down = !event.key_up;
+        }
+    }
+
+    let mut cleanup = Vec::with_capacity(2);
+    if shift_down {
+        cleanup.push(KeyEvent {
+            vk: VK_SHIFT,
+            key_up: true,
+        });
+    }
+    if ctrl_down {
+        cleanup.push(KeyEvent {
+            vk: VK_CONTROL,
+            key_up: true,
+        });
+    }
+    cleanup
 }
 
 /// Send a short Alt tap to unlock Windows foreground activation.
@@ -220,12 +258,41 @@ fn key_event(vk: VIRTUAL_KEY, key_up: bool) -> INPUT {
     }
 }
 
+trait InputSender {
+    fn send_inputs(&mut self, inputs: &[INPUT]) -> u32;
+}
+
+struct Win32InputSender;
+
+impl InputSender for Win32InputSender {
+    fn send_inputs(&mut self, inputs: &[INPUT]) -> u32 {
+        unsafe { SendInput(inputs, size_of::<INPUT>() as i32) }
+    }
+}
+
+fn send_key_events_exact<S: InputSender>(
+    sender: &mut S,
+    events: &[KeyEvent],
+    label: &str,
+) -> Result<()> {
+    let inputs = events
+        .iter()
+        .map(|event| key_event(event.vk, event.key_up))
+        .collect::<Vec<_>>();
+    send_inputs_with(sender, &inputs, label)
+}
+
 fn send_inputs(inputs: &[INPUT], label: &str) -> Result<()> {
+    let mut sender = Win32InputSender;
+    send_inputs_with(&mut sender, inputs, label)
+}
+
+fn send_inputs_with<S: InputSender>(sender: &mut S, inputs: &[INPUT], label: &str) -> Result<()> {
     if inputs.is_empty() {
         return Ok(());
     }
 
-    let sent = unsafe { SendInput(inputs, size_of::<INPUT>() as i32) };
+    let sent = sender.send_inputs(inputs);
     if sent != inputs.len() as u32 {
         bail!(
             "{label}: SendInput sent {sent}/{} events; target may be elevated or input injection may be blocked by UIPI",
@@ -248,6 +315,27 @@ pub(crate) fn windows_hotkey_failure_help() -> &'static str {
 mod tests {
     use super::*;
 
+    struct MockInputSender {
+        responses: Vec<u32>,
+        calls: Vec<usize>,
+    }
+
+    impl MockInputSender {
+        fn new(responses: &[u32]) -> Self {
+            Self {
+                responses: responses.iter().rev().copied().collect(),
+                calls: Vec::new(),
+            }
+        }
+    }
+
+    impl InputSender for MockInputSender {
+        fn send_inputs(&mut self, inputs: &[INPUT]) -> u32 {
+            self.calls.push(inputs.len());
+            self.responses.pop().unwrap_or_else(|| inputs.len() as u32)
+        }
+    }
+
     fn event_codes(events: &[KeyEvent]) -> Vec<(u16, bool)> {
         events
             .iter()
@@ -256,32 +344,38 @@ mod tests {
     }
 
     #[test]
-    fn standard_paste_chord_batches_core_sequence_and_cleanup() {
+    fn standard_paste_chord_releases_only_owned_control() {
         let events = paste_chord_events(false);
 
-        assert_eq!(events.len(), 15);
         assert_eq!(
-            &event_codes(&events)[..4],
-            &[
+            event_codes(&events),
+            vec![
                 (VK_CONTROL.0, false),
                 (VK_V.0, false),
                 (VK_V.0, true),
                 (VK_CONTROL.0, true),
             ]
         );
-        assert!(events[4..]
-            .iter()
-            .all(|event| event.key_up && event.vk != VK_V));
+        assert!(!events.iter().any(|event| {
+            event.vk == VK_MENU
+                || event.vk == VK_LMENU
+                || event.vk == VK_RMENU
+                || event.vk == VK_LWIN
+                || event.vk == VK_RWIN
+                || event.vk == VK_LCONTROL
+                || event.vk == VK_RCONTROL
+                || event.vk == VK_LSHIFT
+                || event.vk == VK_RSHIFT
+        }));
     }
 
     #[test]
     fn terminal_paste_chord_includes_shift_in_one_batch() {
         let events = paste_chord_events(true);
 
-        assert_eq!(events.len(), 17);
         assert_eq!(
-            &event_codes(&events)[..6],
-            &[
+            event_codes(&events),
+            vec![
                 (VK_CONTROL.0, false),
                 (VK_SHIFT.0, false),
                 (VK_V.0, false),
@@ -290,8 +384,53 @@ mod tests {
                 (VK_CONTROL.0, true),
             ]
         );
-        assert!(events[6..]
-            .iter()
-            .all(|event| event.key_up && event.vk != VK_V));
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event.vk == VK_SHIFT && event.key_up)
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn partial_paste_send_cleans_up_only_pressed_owned_modifiers() {
+        let events = paste_chord_events(true);
+
+        assert_eq!(
+            event_codes(&paste_cleanup_events_for_partial_send(&events, 0)),
+            Vec::<(u16, bool)>::new()
+        );
+        assert_eq!(
+            event_codes(&paste_cleanup_events_for_partial_send(&events, 1)),
+            vec![(VK_CONTROL.0, true)]
+        );
+        assert_eq!(
+            event_codes(&paste_cleanup_events_for_partial_send(&events, 2)),
+            vec![(VK_SHIFT.0, true), (VK_CONTROL.0, true)]
+        );
+        assert_eq!(
+            event_codes(&paste_cleanup_events_for_partial_send(&events, 5)),
+            vec![(VK_CONTROL.0, true)]
+        );
+    }
+
+    #[test]
+    fn partial_send_attempts_owned_modifier_cleanup() {
+        let mut sender = MockInputSender::new(&[1, 1]);
+        let err = send_paste_chord_with(false, &mut sender).expect_err("partial send should fail");
+
+        assert_eq!(sender.calls, vec![4, 1]);
+        assert!(format!("{err:#}").contains("paste chord: SendInput sent 1/4 events"));
+    }
+
+    #[test]
+    fn partial_send_reports_cleanup_failure() {
+        let mut sender = MockInputSender::new(&[2, 1]);
+        let err =
+            send_paste_chord_with(true, &mut sender).expect_err("partial cleanup should fail");
+
+        assert_eq!(sender.calls, vec![6, 2]);
+        assert!(format!("{err:#}").contains("paste modifier cleanup also failed"));
     }
 }
