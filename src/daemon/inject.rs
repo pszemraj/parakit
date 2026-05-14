@@ -232,6 +232,17 @@ pub(super) trait ClipboardStore {
     ///
     /// Returns an error if the clipboard cannot be written.
     fn set_image(&mut self, image: ImageData<'static>) -> Result<()>;
+
+    /// Clear all current clipboard contents.
+    ///
+    /// # Returns
+    ///
+    /// `Ok(())` when the clipboard was cleared.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the clipboard cannot be cleared.
+    fn clear(&mut self) -> Result<()>;
 }
 
 impl ClipboardStore for Clipboard {
@@ -273,6 +284,10 @@ impl ClipboardStore for Clipboard {
 
     fn set_image(&mut self, image: ImageData<'static>) -> Result<()> {
         Clipboard::set_image(self, image).context("could not write image clipboard contents")
+    }
+
+    fn clear(&mut self) -> Result<()> {
+        Clipboard::clear(self).context("could not clear system clipboard")
     }
 }
 
@@ -705,6 +720,14 @@ where
         return Ok(PasteOutcome::Pasted);
     }
 
+    match before_chord() {
+        Ok(true) => {}
+        Ok(false) => {
+            return finish_blocked_before_clipboard(clipboard, text, clipboard_policy);
+        }
+        Err(err) => return Err(err),
+    }
+
     let previous = ClipboardSnapshot::capture(clipboard);
     clipboard
         .set_text(text.to_owned())
@@ -740,6 +763,20 @@ where
             }
         }
     }
+}
+
+fn finish_blocked_before_clipboard<C: ClipboardStore>(
+    clipboard: &mut C,
+    text: &str,
+    clipboard_policy: ClipboardPolicy,
+) -> Result<PasteOutcome> {
+    if clipboard_policy == ClipboardPolicy::KeepTranscript {
+        clipboard
+            .set_text(text.to_owned())
+            .context("could not copy transcript to clipboard")?;
+        return Ok(PasteOutcome::CopiedOnly);
+    }
+    Ok(PasteOutcome::Blocked)
 }
 
 fn finish_blocked_clipboard<C: ClipboardStore>(
@@ -845,7 +882,14 @@ pub(super) fn restore_or_clear_clipboard<C: ClipboardStore>(
         ClipboardSnapshot::Image(image) => clipboard
             .set_image(image)
             .map_err(|err| anyhow::anyhow!("{CLIPBOARD_RESTORE_ERROR}: {err:#}")),
-        ClipboardSnapshot::Unsupported => Ok(()),
+        ClipboardSnapshot::Unsupported => clipboard
+            .clear()
+            .or_else(|_| clipboard.set_text(String::new()))
+            .map_err(|err| {
+                anyhow::anyhow!(
+                    "{CLIPBOARD_RESTORE_ERROR}: previous clipboard format unsupported and staged transcript could not be cleared: {err:#}"
+                )
+            }),
     }
 }
 
