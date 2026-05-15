@@ -29,11 +29,8 @@ use std::env;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-#[path = "build_support/blas_paths.rs"]
-mod blas_paths;
 #[path = "build_support/windows_openblas.rs"]
 mod windows_openblas;
-use blas_paths::complete_manual_path_override;
 use windows_openblas::{find_windows_openblas, WindowsOpenBlas, WindowsOpenBlasImportKind};
 
 const WINDOWS_RUNTIME_MANIFEST: &str = "parakit-runtime-manifest.json";
@@ -47,7 +44,6 @@ fn main() {
     println!("cargo:rerun-if-env-changed=BLAS_LIBRARIES");
     println!("cargo:rerun-if-env-changed=CONDA_PREFIX");
     println!("cargo:rerun-if-changed=build.rs");
-    println!("cargo:rerun-if-changed=build_support/blas_paths.rs");
     println!("cargo:rerun-if-changed=build_support/windows_openblas.rs");
 
     build_alsa_silencer();
@@ -714,6 +710,10 @@ fn windows_openblas_for_bundle(blas: &BlasConfig) -> Option<&WindowsOpenBlas> {
 }
 
 fn windows_openblas_from_env(explicit_openblas: bool) -> Option<WindowsOpenBlas> {
+    if !target_is_windows() {
+        return None;
+    }
+
     let import_kind = windows_openblas_import_kind();
 
     if let Ok(root) = env::var("PARAKIT_OPENBLAS_ROOT") {
@@ -765,6 +765,10 @@ fn manual_blas_path_overrides_are_set() -> bool {
     complete_manual_path_override(include_dirs.as_deref(), libraries.as_deref())
 }
 
+fn complete_manual_path_override(include_dirs: Option<&str>, libraries: Option<&str>) -> bool {
+    include_dirs.is_some() && libraries.is_some()
+}
+
 fn windows_import_library_names() -> (&'static str, &'static str) {
     if env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default() == "gnu" {
         ("libwhisper.dll.a", "libcrispasr.dll.a")
@@ -797,27 +801,30 @@ fn copy_windows_runtime_dlls(install_dir: &Path, bin_dir: &Path) {
 }
 
 fn copy_named_artifact(install_dir: &Path, file_name: &str, dest_dir: &Path) {
-    if dest_dir.join(file_name).is_file() {
-        return;
-    }
-
+    let dest = dest_dir.join(file_name);
     let mut matches = collect_files_named(install_dir, file_name);
     matches.sort();
 
-    let Some(src) = matches.into_iter().next() else {
+    let Some(src) = matches
+        .into_iter()
+        .find(|path| path != &dest)
+        .or_else(|| dest.is_file().then_some(dest.clone()))
+    else {
         panic!(
             "CrispASR build did not produce {file_name}. \
              Check the Windows CMake output with `cargo build -vv`."
         );
     };
 
-    std::fs::copy(&src, dest_dir.join(file_name)).unwrap_or_else(|err| {
-        panic!(
-            "failed to copy {} to {}: {err}",
-            src.display(),
-            dest_dir.display()
-        )
-    });
+    if src != dest {
+        std::fs::copy(&src, &dest).unwrap_or_else(|err| {
+            panic!(
+                "failed to copy {} to {}: {err}",
+                src.display(),
+                dest.display()
+            )
+        });
+    }
 }
 
 fn copy_runtime_dlls_to_profile_dir(bin_dir: &Path) {
