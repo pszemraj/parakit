@@ -54,7 +54,7 @@ Cross-thread communication uses atomics, mutex-protected buffers, and crossbeam 
 | `src/daemon/audio_pactl.rs` | Linux `pactl` parsing for startup/reopen microphone display details. |
 | `src/daemon/worker.rs` | ASR worker, paste sanitizer, focus guard, clipboard fallback, and insertion circuit breaker. |
 | `src/daemon/ipc.rs` | Local control socket for `status`, `stop`, `paste-last`, `copy-last`, and `test-paste`. |
-| `src/daemon/windows_{focus,input,paste_smoke,security}.rs` | Windows foreground checks, registered hotkey and paste helpers, deep paste smoke test, and privilege diagnostics. |
+| `src/daemon/windows_{focus,input,paste_smoke,security}.rs` | Windows foreground checks, `SendInput` paste helpers, deep paste smoke test, and privilege diagnostics. |
 | `src/daemon/{preflight,session,x11,alsa}.rs` | Startup checks, session events, X11 helpers, and ALSA stderr suppression. |
 | `src/daemon/{logging,notifications,sounds}.rs` | Runtime logging, desktop notifications, and generated audio cues. |
 | `src/fetch.rs` | Hosted [Q8_0 GGUF](https://huggingface.co/pszemraj/parakeet-tdt-0.6b-v3-gguf) download, source rebuilds, checksum verification. |

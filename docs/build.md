@@ -1,6 +1,6 @@
 # Build
 
-parakit is a Rust 1.87+ binary that links to the vendored [CrispASR](https://github.com/CrispStrobe/CrispASR) submodule. The default build is CPU-only and local-machine optimized.
+parakit is a Rust 1.87+ binary that links to the vendored [CrispASR](https://github.com/CrispStrobe/CrispASR) submodule. The default build is CPU-only and may use detected CPU BLAS libraries.
 
 Command examples use a POSIX shell unless the surrounding section is Windows-specific. Windows-only commands are shown as `bat` or `powershell`.
 
@@ -46,7 +46,6 @@ Add `--locked` for CI or reproducibility checks when Cargo must use the exact ve
 Optional accelerator builds:
 
 ```bash
-PARAKIT_BLAS=auto cargo install --path .
 cargo install --path . --features cuda
 cargo install --path . --features vulkan
 cargo install --path . --features metal  # Apple targets only
@@ -91,10 +90,9 @@ cargo run --release --no-default-features --features bundled --example transcrib
 
 ## BLAS And MKL
 
-Native ggml kernels are the default. BLAS/MKL can help some matrix paths but adds system-library dependencies.
+The build defaults to `PARAKIT_BLAS=auto`. If no supported BLAS is detected, parakit uses native ggml CPU kernels. BLAS/MKL can help some matrix paths but adds system-library dependencies.
 
 ```bash
-PARAKIT_BLAS=auto cargo install --path .
 PARAKIT_BLAS=openblas cargo install --path .
 PARAKIT_BLAS=mkl cargo install --path .
 PARAKIT_BLAS=generic cargo install --path .
@@ -104,12 +102,14 @@ Supported values:
 
 | Value | Behavior |
 | --- | --- |
-| unset, `off` | Native/OpenMP CPU kernels without BLAS. |
-| `auto` | Apple Accelerate on macOS; otherwise MKL if `mkl-sdl.pc` is visible; otherwise Windows conda OpenBLAS from `CONDA_PREFIX\Library`; otherwise OpenBLAS if `openblas.pc` or `openblas64.pc` is visible; otherwise off. |
+| unset, `auto` | Apple Accelerate on macOS; otherwise MKL if `mkl-sdl.pc` is visible; otherwise Windows OpenBLAS from `PARAKIT_OPENBLAS_ROOT` or `CONDA_PREFIX\Library`; otherwise OpenBLAS if `openblas.pc` or `openblas64.pc` is visible; otherwise off. |
+| `off`, `false`, `0` | Native/OpenMP CPU kernels without BLAS. |
 | `openblas` | `GGML_BLAS=ON`, `GGML_BLAS_VENDOR=OpenBLAS`. |
 | `mkl` | CrispASR `COHERE_MKL=ON`, ggml `Intel10_64lp`. |
 | `generic` | `GGML_BLAS=ON`, `GGML_BLAS_VENDOR=Generic`. |
 | `accelerate` | Apple Accelerate. Apple targets only. |
+
+On Windows, OpenBLAS detection requires `cblas.h`, a runtime DLL under `bin\`, and an import library compatible with the active Rust target environment: `.lib` for MSVC or `.dll.a` for GNU. Set `PARAKIT_OPENBLAS_ROOT` to the prefix containing `include\`, `lib\`, and `bin\`, or activate a conda environment whose `%CONDA_PREFIX%\Library` has that layout. Set both `BLAS_INCLUDE_DIRS` and `BLAS_LIBRARIES` for explicit CMake paths; together they take precedence over autodetection and skip OpenBLAS DLL bundling.
 
 Ubuntu/Debian OpenBLAS:
 
@@ -118,7 +118,7 @@ sudo apt install libopenblas-dev
 PARAKIT_BLAS=openblas cargo install --path .
 ```
 
-Explicit BLAS builds print the selected mode, and `parakit doctor` reports it.
+Explicit `PARAKIT_BLAS` builds print the selected mode, and `parakit doctor` reports the requested and selected modes.
 
 ## CrispASR And Backends
 

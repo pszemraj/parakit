@@ -31,7 +31,7 @@ The build script checks whether `vendor\CrispASR` is already populated before to
 
 ## Runtime Manifest
 
-The build writes `parakit-runtime-manifest.json` beside `parakit.exe`. The bundle copies every file in `required_files`, and the installer validates those entries before installing. With an active conda environment, `PARAKIT_BLAS=auto` detects OpenBLAS from `%CONDA_PREFIX%\Library`; selected OpenBLAS bundles include `openblas.dll` plus adjacent known runtime DLLs such as OpenMP, gfortran, GCC, quadmath, and winpthreads libraries when present.
+The build writes `parakit-runtime-manifest.json` beside `parakit.exe`. The bundle copies every file in `required_files`, and the installer validates those entries before installing. OpenBLAS selection and manual path overrides are in [../../docs/build.md#blas-and-mkl](../../docs/build.md#blas-and-mkl). When `build.rs` selects a Windows OpenBLAS install, the bundle includes `openblas.dll` plus adjacent known runtime DLLs such as OpenMP, gfortran, GCC, quadmath, and winpthreads libraries when present.
 
 After installing, open a new terminal and run:
 
