@@ -127,12 +127,13 @@ daemon = [
 # library is not in the platform linker search path.
 bundled = []
 
-# GPU backends. Each implies `bundled` because crispasr-sys does NOT
-# rebuild the C library — the choice of backend has to happen at the
-# CrispASR cmake level, which only matters when we're the ones building it.
-cuda    = ["bundled", "crispasr/cuda"]
-metal   = ["bundled", "crispasr/metal"]
-vulkan  = ["bundled", "crispasr/vulkan"]
+# GPU backends are selected by parakit's build.rs when it configures the
+# pinned CrispASR CMake tree. Do not forward these to crispasr-sys: its
+# fallback build script treats them as native CMake toggles too, which makes
+# `--all-features` non-portable across host platforms.
+cuda    = ["bundled"]
+metal   = ["bundled"]
+vulkan  = ["bundled"]
 
 [build-dependencies]
 cc = "1"

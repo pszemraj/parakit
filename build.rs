@@ -97,17 +97,17 @@ fn main() {
         // lives there. On Windows, the pinned CrispASR examples tree also
         // builds the server target, which currently fails under MSVC before
         // parakit can link; hosted Q8 remains the Windows CPU-first path.
-        .define("WHISPER_BUILD_TESTS", "OFF")
+        .define("CRISPASR_BUILD_TESTS", "OFF")
         .define(
-            "WHISPER_BUILD_EXAMPLES",
+            "CRISPASR_BUILD_EXAMPLES",
             if build_crispasr_examples { "ON" } else { "OFF" },
         )
         .define("GGML_BUILD_TESTS", "OFF")
         .define("GGML_BUILD_EXAMPLES", "OFF")
         // Bake an `$ORIGIN` (Linux/BSD) or `@loader_path` (macOS) rpath into
         // the installed shared libraries so each library finds its siblings
-        // (libwhisper.so → libggml.so → libggml-cpu.so) without LD_LIBRARY_PATH.
-        // Without this, libwhisper.so's transitive deps (libggml*.so) fail to
+        // (libcrispasr.so → libggml.so → libggml-cpu.so) without LD_LIBRARY_PATH.
+        // Without this, libcrispasr.so's transitive deps (libggml*.so) fail to
         // resolve at load time even when the binary's own rpath points at
         // the right directory — Linux's DT_RUNPATH doesn't apply transitively.
         .define("CMAKE_INSTALL_RPATH", install_rpath_token())
@@ -141,16 +141,9 @@ fn main() {
     let install_dir = cfg.build();
     emit_build_report(&install_dir);
 
-    // 5. CrispASR's CMake builds `libwhisper.{so,dylib,dll}` as the umbrella
-    //    shared library — every backend (parakeet, voxtral, qwen3, ...) is a
-    //    static lib that gets statically linked INTO libwhisper. The build
-    //    also creates a `libcrispasr.{so,dylib}` symlink pointing at libwhisper
-    //    inside the build directory, but that alias is *not* installed.
-    //
-    //    `crispasr-sys` defaults to looking for `libcrispasr` (it accepts
-    //    `CRISPASR_LIB_NAME=whisper` as an override but we can't set env vars
-    //    for sibling build scripts). Cleanest solution: recreate the alias
-    //    inside install_dir/lib so the canonical link name resolves.
+    // 5. CrispASR v0.6.6 installs `libcrispasr` as the umbrella library.
+    //    `crispasr-sys` links that exact name, so fail clearly if the pinned
+    //    submodule stops producing it.
     let lib_dir = install_dir.join("lib");
     let lib_dir_alt = install_dir.join("lib64");
     let final_lib_dir = if lib_dir.is_dir() {
@@ -176,7 +169,7 @@ fn main() {
     if target_is_windows() {
         prepare_windows_artifacts(&install_dir, &final_lib_dir, &bin_dir, &blas);
     } else {
-        create_crispasr_alias(&final_lib_dir);
+        assert_crispasr_library_exists(&final_lib_dir);
     }
 
     println!("cargo:rustc-link-search=native={}", final_lib_dir.display());
@@ -650,31 +643,8 @@ fn prepare_windows_artifacts(
 
     copy_windows_runtime_dlls(install_dir, bin_dir);
 
-    let (whisper_import, crispasr_import) = windows_import_library_names();
-    copy_named_artifact(install_dir, whisper_import, lib_dir);
-
-    let whisper_import_path = lib_dir.join(whisper_import);
-    let crispasr_import_path = lib_dir.join(crispasr_import);
-    let _ = std::fs::remove_file(&crispasr_import_path);
-    std::fs::copy(&whisper_import_path, &crispasr_import_path).unwrap_or_else(|err| {
-        panic!(
-            "failed to create {} from {}: {err}",
-            crispasr_import_path.display(),
-            whisper_import_path.display()
-        )
-    });
-
-    copy_named_artifact(install_dir, "whisper.dll", bin_dir);
-    let whisper_dll = bin_dir.join("whisper.dll");
-    let crispasr_dll = bin_dir.join("crispasr.dll");
-    let _ = std::fs::remove_file(&crispasr_dll);
-    std::fs::copy(&whisper_dll, &crispasr_dll).unwrap_or_else(|err| {
-        panic!(
-            "failed to create {} from {}: {err}",
-            crispasr_dll.display(),
-            whisper_dll.display()
-        )
-    });
+    copy_named_artifact(install_dir, windows_import_library_name(), lib_dir);
+    copy_named_artifact(install_dir, "crispasr.dll", bin_dir);
 
     copy_optional_windows_blas_runtime(bin_dir, blas);
     let runtime_dlls = windows_runtime_dll_names_for_bundle(bin_dir);
@@ -765,11 +735,11 @@ fn manual_blas_path_overrides_are_set() -> bool {
     complete_manual_path_override(include_dirs.as_deref(), libraries.as_deref())
 }
 
-fn windows_import_library_names() -> (&'static str, &'static str) {
+fn windows_import_library_name() -> &'static str {
     if env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default() == "gnu" {
-        ("libwhisper.dll.a", "libcrispasr.dll.a")
+        "libcrispasr.dll.a"
     } else {
-        ("whisper.lib", "crispasr.lib")
+        "crispasr.lib"
     }
 }
 
@@ -1017,7 +987,7 @@ fn collect_files(root: &Path, matches: &impl Fn(&Path) -> bool) -> Vec<PathBuf> 
 /// DT_RPATH (rather than DT_RUNPATH) applies transitively to the
 /// binary's transitive shared-library dependencies. This is belt-and-
 /// suspenders insurance — `CMAKE_INSTALL_RPATH=$ORIGIN` should already
-/// make libwhisper.so find its own ggml siblings, but `--disable-new-dtags`
+/// make libcrispasr.so find its own ggml siblings, but `--disable-new-dtags`
 /// keeps things working even on systems where the cmake rpath setting
 /// gets stripped.
 ///
@@ -1053,57 +1023,24 @@ fn install_rpath_token() -> &'static str {
     }
 }
 
-/// Ensure `lib_dir` contains `libcrispasr.{so,dylib}` as an alias
-/// for the canonical `libwhisper.*` produced by CrispASR's CMake.
-///
-/// On Unix we use a relative symlink so the install dir is relocatable.
-/// Windows uses [`prepare_windows_artifacts`] instead because MSVC needs an
-/// import library at link time and DLLs at runtime.
-///
-/// Idempotent: the alias is recreated every time so stale aliases do not
-/// survive a backend or submodule change.
-fn create_crispasr_alias(lib_dir: &Path) {
+/// Ensure `lib_dir` contains the pinned CrispASR shared library name.
+fn assert_crispasr_library_exists(lib_dir: &Path) {
     let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
 
-    let (whisper_name, alias_name) = match target_os.as_str() {
-        "macos" | "ios" => ("libwhisper.dylib", "libcrispasr.dylib"),
-        _ => ("libwhisper.so", "libcrispasr.so"),
+    let lib_name = match target_os.as_str() {
+        "macos" | "ios" => "libcrispasr.dylib",
+        _ => "libcrispasr.so",
     };
 
-    let whisper_path = lib_dir.join(whisper_name);
-    let alias_path = lib_dir.join(alias_name);
-
-    if !whisper_path.exists() {
-        panic!(
-            "CrispASR build did not produce {}. \
-             cmake build may have failed silently — \
-             check `cargo build -vv` output.",
-            whisper_path.display()
-        );
+    let lib_path = lib_dir.join(lib_name);
+    if lib_path.exists() {
+        return;
     }
 
-    // Recreate the alias each time. Cheap, and avoids stale-link issues
-    // if the user changed something in vendor/CrispASR.
-    let _ = std::fs::remove_file(&alias_path);
-
-    let result = {
-        #[cfg(unix)]
-        {
-            // Relative symlink keeps the install dir relocatable.
-            std::os::unix::fs::symlink(whisper_name, &alias_path)
-        }
-        #[cfg(not(unix))]
-        {
-            std::fs::copy(&whisper_path, &alias_path).map(|_| ())
-        }
-    };
-
-    if let Err(e) = result {
-        panic!(
-            "failed to create {} -> {} alias in {}: {e}",
-            alias_name,
-            whisper_name,
-            lib_dir.display()
-        );
-    }
+    panic!(
+        "CrispASR build did not produce {}. \
+         cmake build may have failed silently — \
+         check `cargo build -vv` output.",
+        lib_path.display()
+    );
 }

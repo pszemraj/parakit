@@ -134,12 +134,12 @@ Feature mapping:
 
 ## Runtime Library Paths
 
-Linux/BSD builds must use transitive `RPATH`, not `RUNPATH`, so `libwhisper.so` can find sibling `libggml*.so` files.
+Linux/BSD builds must use transitive `RPATH`, not `RUNPATH`, so `libcrispasr.so` can find sibling `libggml*.so` files.
 
 Verify:
 
 ```bash
-ldd target/debug/parakit | grep -E "whisper|ggml"
+ldd target/debug/parakit | grep -E "crispasr|ggml"
 readelf -d target/debug/parakit | grep -E "RPATH|RUNPATH"
 ```
 
