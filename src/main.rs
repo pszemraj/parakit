@@ -512,9 +512,9 @@ fn run_ptt_audio_simulation(cli: &Cli, log: Arc<Logger>, audio_path: &Path) -> R
 
     let started_at = Instant::now();
     let stopped_at = started_at + Duration::from_secs_f32(audio_secs);
-    tx.send(WorkerEvent::RecordingStarted)
+    tx.send(WorkerEvent::Started)
         .context("could not send simulated PTT start event")?;
-    tx.send(WorkerEvent::RecordingStopped {
+    tx.send(WorkerEvent::Stopped {
         started_at,
         stopped_at,
         pcm: wav.samples,

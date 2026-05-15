@@ -76,7 +76,7 @@ fn recording_coordinator_loop_with_max_utterance(
                     focus_at_start = None;
                     continue;
                 }
-                match send_worker_event(&tx, WorkerEvent::RecordingStarted) {
+                match send_worker_event(&tx, WorkerEvent::Started) {
                     WorkerSendStatus::Sent => {}
                     WorkerSendStatus::Full => {
                         let _ = audio.stop_recording();
@@ -149,17 +149,33 @@ fn stop_and_send_recording(
     stopped_at: Instant,
     focus_at_start: &mut Option<FocusSnapshot>,
 ) -> WorkerSendStatus {
-    let pcm = match audio.stop_recording() {
+    send_recording_result(
+        tx,
+        audio.stop_recording(),
+        started_at,
+        stopped_at,
+        focus_at_start,
+    )
+}
+
+fn send_recording_result(
+    tx: &Sender<WorkerEvent>,
+    recording: anyhow::Result<Vec<f32>>,
+    started_at: Instant,
+    stopped_at: Instant,
+    focus_at_start: &mut Option<FocusSnapshot>,
+) -> WorkerSendStatus {
+    let pcm = match recording {
         Ok(pcm) => pcm,
         Err(err) => {
-            eprintln!("parakit: error: could not stop audio recording: {err:#}");
+            let message = format!("could not stop audio recording: {err:#}");
             focus_at_start.take();
-            return WorkerSendStatus::Sent;
+            return send_worker_event(tx, WorkerEvent::Failed { message });
         }
     };
     send_worker_event(
         tx,
-        WorkerEvent::RecordingStopped {
+        WorkerEvent::Stopped {
             started_at,
             stopped_at,
             pcm,
@@ -210,14 +226,14 @@ mod tests {
             worker_rx
                 .recv_timeout(Duration::from_millis(250))
                 .expect("start event"),
-            WorkerEvent::RecordingStarted
+            WorkerEvent::Started
         ));
 
         match worker_rx
             .recv_timeout(Duration::from_millis(500))
             .expect("timeout stop event")
         {
-            WorkerEvent::RecordingStopped {
+            WorkerEvent::Stopped {
                 started_at: start,
                 stopped_at,
                 pcm,
@@ -227,11 +243,45 @@ mod tests {
                 assert!(stopped_at >= started_at);
                 assert!(pcm.is_empty());
             }
-            WorkerEvent::RecordingStarted => panic!("unexpected second start event"),
+            WorkerEvent::Started => panic!("unexpected second start event"),
+            WorkerEvent::Failed { message } => {
+                panic!("unexpected recording failure event: {message}")
+            }
         }
 
         drop(hotkey_tx);
         coordinator.join().expect("coordinator should exit cleanly");
+    }
+
+    #[test]
+    fn coordinator_reports_stop_failure_to_worker() {
+        let (worker_tx, worker_rx) = bounded(1);
+        let started_at = Instant::now();
+        let stopped_at = started_at + Duration::from_millis(5);
+        let mut focus_at_start = None;
+
+        let status = send_recording_result(
+            &worker_tx,
+            Err(anyhow::anyhow!(
+                "audio drain accepted Stop but did not acknowledge before timeout"
+            )),
+            started_at,
+            stopped_at,
+            &mut focus_at_start,
+        );
+
+        assert_eq!(status, WorkerSendStatus::Sent);
+        match worker_rx
+            .recv_timeout(Duration::from_millis(250))
+            .expect("terminal failure event")
+        {
+            WorkerEvent::Failed { message } => {
+                assert!(message.contains("could not stop audio recording"));
+                assert!(message.contains("accepted Stop"));
+            }
+            WorkerEvent::Started => panic!("unexpected start event"),
+            WorkerEvent::Stopped { .. } => panic!("unexpected stop event"),
+        }
     }
 
     #[test]

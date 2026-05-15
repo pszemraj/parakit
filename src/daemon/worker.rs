@@ -28,9 +28,14 @@ const SILENCE_RMS_THRESHOLD: f32 = 0.0005;
 /// Events consumed by the transcription worker.
 pub(crate) enum WorkerEvent {
     /// Recording began at this instant.
-    RecordingStarted,
+    Started,
+    /// Recording began but failed before PCM could be handed to the worker.
+    Failed {
+        /// User-facing failure message without the standard log prefix.
+        message: String,
+    },
     /// Recording ended and the captured PCM moved out of the audio buffer.
-    RecordingStopped {
+    Stopped {
         /// Monotonic timestamp captured when recording started.
         started_at: Instant,
         /// Monotonic timestamp captured when recording stopped.
@@ -125,12 +130,17 @@ fn worker_loop(ctx: WorkerCtx) {
     let mut paste_circuit = PasteCircuit::default();
     while let Ok(ev) = rx.recv() {
         match ev {
-            WorkerEvent::RecordingStarted => {
+            WorkerEvent::Started => {
                 state.set_phase("recording");
                 sounds.start();
                 log.line("parakit: recording...");
             }
-            WorkerEvent::RecordingStopped {
+            WorkerEvent::Failed { message } => {
+                log.error(&message);
+                state.set_phase("idle");
+                sounds.error();
+            }
+            WorkerEvent::Stopped {
                 started_at,
                 stopped_at,
                 pcm,

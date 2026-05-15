@@ -29,8 +29,11 @@ use std::env;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+#[path = "build_support/blas_paths.rs"]
+mod blas_paths;
 #[path = "build_support/windows_openblas.rs"]
 mod windows_openblas;
+use blas_paths::complete_manual_path_override;
 use windows_openblas::{find_windows_openblas, WindowsOpenBlas};
 
 const WINDOWS_RUNTIME_MANIFEST: &str = "parakit-runtime-manifest.json";
@@ -44,6 +47,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed=BLAS_LIBRARIES");
     println!("cargo:rerun-if-env-changed=CONDA_PREFIX");
     println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-changed=build_support/blas_paths.rs");
     println!("cargo:rerun-if-changed=build_support/windows_openblas.rs");
 
     build_alsa_silencer();
@@ -438,14 +442,12 @@ fn configure_blas_paths(cfg: &mut cmake::Config, blas: &BlasConfig) {
         return;
     }
 
-    if let Ok(include_dirs) = env::var("BLAS_INCLUDE_DIRS") {
-        cfg.define("BLAS_INCLUDE_DIRS", include_dirs);
-    }
-    if let Ok(libraries) = env::var("BLAS_LIBRARIES") {
-        cfg.define("BLAS_LIBRARIES", libraries);
-    }
+    let manual_include_dirs = env::var("BLAS_INCLUDE_DIRS").ok();
+    let manual_libraries = env::var("BLAS_LIBRARIES").ok();
+    let complete_manual_override =
+        complete_manual_path_override(manual_include_dirs.as_deref(), manual_libraries.as_deref());
 
-    if blas.selected == "openblas" && target_is_windows() {
+    if blas.selected == "openblas" && target_is_windows() && !complete_manual_override {
         if let Some(openblas) = blas.windows_openblas.as_ref() {
             cfg.define(
                 "BLAS_LIBRARIES",
@@ -460,6 +462,18 @@ fn configure_blas_paths(cfg: &mut cmake::Config, blas: &BlasConfig) {
                 openblas.root.display()
             );
         }
+    }
+
+    if let Some(include_dirs) = manual_include_dirs {
+        cfg.define("BLAS_INCLUDE_DIRS", include_dirs);
+    }
+    if let Some(libraries) = manual_libraries {
+        cfg.define("BLAS_LIBRARIES", libraries);
+    }
+    if complete_manual_override {
+        println!(
+            "cargo:warning=parakit build: using explicit BLAS_INCLUDE_DIRS and BLAS_LIBRARIES"
+        );
     }
 }
 
@@ -674,7 +688,7 @@ fn copy_optional_windows_blas_runtime(bin_dir: &Path, blas: &BlasConfig) {
         return;
     }
 
-    let Some(openblas) = blas.windows_openblas.as_ref() else {
+    let Some(openblas) = windows_openblas_for_bundle(blas) else {
         return;
     };
     for path in &openblas.runtime_dlls {
@@ -690,6 +704,13 @@ fn copy_optional_windows_blas_runtime(bin_dir: &Path, blas: &BlasConfig) {
             )
         });
     }
+}
+
+fn windows_openblas_for_bundle(blas: &BlasConfig) -> Option<&WindowsOpenBlas> {
+    if manual_blas_path_overrides_are_set() {
+        return None;
+    }
+    blas.windows_openblas.as_ref()
 }
 
 fn windows_openblas_from_env(explicit_openblas: bool) -> Option<WindowsOpenBlas> {
@@ -729,7 +750,9 @@ fn windows_openblas_from_env(explicit_openblas: bool) -> Option<WindowsOpenBlas>
 }
 
 fn manual_blas_path_overrides_are_set() -> bool {
-    env::var("BLAS_INCLUDE_DIRS").is_ok() && env::var("BLAS_LIBRARIES").is_ok()
+    let include_dirs = env::var("BLAS_INCLUDE_DIRS").ok();
+    let libraries = env::var("BLAS_LIBRARIES").ok();
+    complete_manual_path_override(include_dirs.as_deref(), libraries.as_deref())
 }
 
 fn windows_import_library_names() -> (&'static str, &'static str) {
@@ -869,21 +892,14 @@ fn write_windows_runtime_manifest(bin_dir: &Path, runtime_dlls: &[String], blas:
     required_files.push("parakit.exe".to_string());
     required_files.extend(runtime_dlls.iter().cloned());
 
-    let openblas_root = blas
-        .windows_openblas
-        .as_ref()
-        .map(|openblas| openblas.root.to_string_lossy().to_string());
-    let openblas_include_dir = blas
-        .windows_openblas
-        .as_ref()
-        .map(|openblas| openblas.include_dir.to_string_lossy().to_string());
-    let openblas_import_lib = blas
-        .windows_openblas
-        .as_ref()
-        .map(|openblas| openblas.import_lib.to_string_lossy().to_string());
-    let openblas_runtime_dlls = blas
-        .windows_openblas
-        .as_ref()
+    let windows_openblas = windows_openblas_for_bundle(blas);
+    let openblas_root =
+        windows_openblas.map(|openblas| openblas.root.to_string_lossy().to_string());
+    let openblas_include_dir =
+        windows_openblas.map(|openblas| openblas.include_dir.to_string_lossy().to_string());
+    let openblas_import_lib =
+        windows_openblas.map(|openblas| openblas.import_lib.to_string_lossy().to_string());
+    let openblas_runtime_dlls = windows_openblas
         .map(|openblas| {
             openblas
                 .runtime_dlls
