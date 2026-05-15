@@ -34,7 +34,7 @@ mod blas_paths;
 #[path = "build_support/windows_openblas.rs"]
 mod windows_openblas;
 use blas_paths::complete_manual_path_override;
-use windows_openblas::{find_windows_openblas, WindowsOpenBlas};
+use windows_openblas::{find_windows_openblas, WindowsOpenBlas, WindowsOpenBlasImportKind};
 
 const WINDOWS_RUNTIME_MANIFEST: &str = "parakit-runtime-manifest.json";
 
@@ -714,39 +714,49 @@ fn windows_openblas_for_bundle(blas: &BlasConfig) -> Option<&WindowsOpenBlas> {
 }
 
 fn windows_openblas_from_env(explicit_openblas: bool) -> Option<WindowsOpenBlas> {
+    let import_kind = windows_openblas_import_kind();
+
     if let Ok(root) = env::var("PARAKIT_OPENBLAS_ROOT") {
         let root = PathBuf::from(root);
-        if let Some(openblas) = find_windows_openblas(&root) {
+        if let Some(openblas) = find_windows_openblas(&root, import_kind) {
             return Some(openblas);
         }
         if explicit_openblas && !manual_blas_path_overrides_are_set() {
             panic!(
-                "PARAKIT_OPENBLAS_ROOT is set but does not contain a usable Windows OpenBLAS install. \
-                 Expected cblas.h under include/ or include/openblas/, an import lib under lib/, and a runtime DLL under bin/."
+                "PARAKIT_OPENBLAS_ROOT is set but does not contain a usable Windows OpenBLAS install for the active target environment. \
+                 Expected cblas.h under include/ or include/openblas/, a target-compatible import lib under lib/, and a runtime DLL under bin/."
             );
         }
         println!(
-            "cargo:warning=parakit build: PARAKIT_OPENBLAS_ROOT={} is not a usable Windows OpenBLAS layout",
+            "cargo:warning=parakit build: PARAKIT_OPENBLAS_ROOT={} is not a usable Windows OpenBLAS layout for this target",
             root.display()
         );
     }
 
     if let Ok(conda) = env::var("CONDA_PREFIX") {
         let root = PathBuf::from(conda).join("Library");
-        if let Some(openblas) = find_windows_openblas(&root) {
+        if let Some(openblas) = find_windows_openblas(&root, import_kind) {
             return Some(openblas);
         }
     }
 
     if explicit_openblas && target_is_windows() && !manual_blas_path_overrides_are_set() {
         panic!(
-            "PARAKIT_BLAS=openblas requested Windows OpenBLAS, but no usable install was found. \
+            "PARAKIT_BLAS=openblas requested Windows OpenBLAS, but no usable target-compatible install was found. \
              Set PARAKIT_OPENBLAS_ROOT to a prefix containing include/, lib/, and bin/, \
              activate a Conda environment with OpenBLAS, or provide BLAS_INCLUDE_DIRS and BLAS_LIBRARIES."
         );
     }
 
     None
+}
+
+fn windows_openblas_import_kind() -> WindowsOpenBlasImportKind {
+    if env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default() == "gnu" {
+        WindowsOpenBlasImportKind::Gnu
+    } else {
+        WindowsOpenBlasImportKind::Msvc
+    }
 }
 
 fn manual_blas_path_overrides_are_set() -> bool {

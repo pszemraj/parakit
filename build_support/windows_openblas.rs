@@ -9,18 +9,23 @@ pub(crate) struct WindowsOpenBlas {
     pub(crate) runtime_dlls: Vec<PathBuf>,
 }
 
-pub(crate) fn find_windows_openblas(root: &Path) -> Option<WindowsOpenBlas> {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum WindowsOpenBlasImportKind {
+    Msvc,
+    Gnu,
+}
+
+pub(crate) fn find_windows_openblas(
+    root: &Path,
+    import_kind: WindowsOpenBlasImportKind,
+) -> Option<WindowsOpenBlas> {
     let include_dir = [root.join("include/openblas"), root.join("include")]
         .into_iter()
         .find(|dir| dir.join("cblas.h").is_file())?;
 
-    let import_lib = [
-        root.join("lib/openblas.lib"),
-        root.join("lib/libopenblas.lib"),
-        root.join("lib/libopenblas.dll.a"),
-    ]
-    .into_iter()
-    .find(|path| path.is_file())?;
+    let import_lib = windows_openblas_import_candidates(root, import_kind)
+        .into_iter()
+        .find(|path| path.is_file())?;
 
     let runtime_dlls = windows_openblas_runtime_dlls(root);
     if !runtime_dlls.iter().any(|path| {
@@ -37,6 +42,24 @@ pub(crate) fn find_windows_openblas(root: &Path) -> Option<WindowsOpenBlas> {
         import_lib,
         runtime_dlls,
     })
+}
+
+fn windows_openblas_import_candidates(
+    root: &Path,
+    import_kind: WindowsOpenBlasImportKind,
+) -> Vec<PathBuf> {
+    match import_kind {
+        WindowsOpenBlasImportKind::Msvc => {
+            vec![
+                root.join("lib/openblas.lib"),
+                root.join("lib/libopenblas.lib"),
+            ]
+        }
+        WindowsOpenBlasImportKind::Gnu => vec![
+            root.join("lib/libopenblas.dll.a"),
+            root.join("lib/openblas.dll.a"),
+        ],
+    }
 }
 
 fn windows_openblas_runtime_dlls(root: &Path) -> Vec<PathBuf> {

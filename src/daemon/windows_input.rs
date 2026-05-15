@@ -151,7 +151,7 @@ fn send_paste_chord_with<S: InputSender>(use_shift: bool, sender: &mut S) -> Res
     match cleanup_result {
         Ok(()) => Err(primary_error),
         Err(cleanup_error) => Err(anyhow::anyhow!(
-            "{primary_error:#}; paste modifier cleanup also failed: {cleanup_error:#}"
+            "{primary_error:#}; paste key cleanup also failed: {cleanup_error:#}"
         )),
     }
 }
@@ -196,31 +196,23 @@ fn paste_chord_events(use_shift: bool) -> Vec<KeyEvent> {
 }
 
 fn paste_cleanup_events_for_partial_send(events: &[KeyEvent], sent: usize) -> Vec<KeyEvent> {
-    let mut ctrl_down = false;
-    let mut shift_down = false;
+    let mut down = Vec::new();
 
-    for event in events.iter().take(sent) {
-        if event.vk == VK_CONTROL {
-            ctrl_down = !event.key_up;
-        } else if event.vk == VK_SHIFT {
-            shift_down = !event.key_up;
+    for event in events.iter().take(sent.min(events.len())) {
+        if event.key_up {
+            if let Some(pos) = down.iter().rposition(|vk| *vk == event.vk) {
+                down.remove(pos);
+            }
+        } else if !down.contains(&event.vk) {
+            down.push(event.vk);
         }
     }
 
-    let mut cleanup = Vec::with_capacity(2);
-    if shift_down {
-        cleanup.push(KeyEvent {
-            vk: VK_SHIFT,
-            key_up: true,
-        });
-    }
-    if ctrl_down {
-        cleanup.push(KeyEvent {
-            vk: VK_CONTROL,
-            key_up: true,
-        });
-    }
-    cleanup
+    // Release only keys whose synthetic down was accepted without its matching up.
+    down.into_iter()
+        .rev()
+        .map(|vk| KeyEvent { vk, key_up: true })
+        .collect()
 }
 
 /// Send a short Alt tap to unlock Windows foreground activation.
@@ -399,43 +391,62 @@ mod tests {
     }
 
     #[test]
-    fn partial_paste_send_cleans_up_only_pressed_owned_modifiers() {
-        let events = paste_chord_events(true);
+    fn partial_paste_send_cleans_up_unreleased_owned_keys() {
+        let standard = paste_chord_events(false);
 
         assert_eq!(
-            event_codes(&paste_cleanup_events_for_partial_send(&events, 0)),
+            event_codes(&paste_cleanup_events_for_partial_send(&standard, 0)),
             Vec::<(u16, bool)>::new()
         );
         assert_eq!(
-            event_codes(&paste_cleanup_events_for_partial_send(&events, 1)),
+            event_codes(&paste_cleanup_events_for_partial_send(&standard, 1)),
             vec![(VK_CONTROL.0, true)]
         );
         assert_eq!(
-            event_codes(&paste_cleanup_events_for_partial_send(&events, 2)),
+            event_codes(&paste_cleanup_events_for_partial_send(&standard, 2)),
+            vec![(VK_V.0, true), (VK_CONTROL.0, true)]
+        );
+        assert_eq!(
+            event_codes(&paste_cleanup_events_for_partial_send(&standard, 3)),
+            vec![(VK_CONTROL.0, true)]
+        );
+
+        let terminal = paste_chord_events(true);
+
+        assert_eq!(
+            event_codes(&paste_cleanup_events_for_partial_send(&terminal, 2)),
             vec![(VK_SHIFT.0, true), (VK_CONTROL.0, true)]
         );
         assert_eq!(
-            event_codes(&paste_cleanup_events_for_partial_send(&events, 5)),
+            event_codes(&paste_cleanup_events_for_partial_send(&terminal, 3)),
+            vec![(VK_V.0, true), (VK_SHIFT.0, true), (VK_CONTROL.0, true)]
+        );
+        assert_eq!(
+            event_codes(&paste_cleanup_events_for_partial_send(&terminal, 4)),
+            vec![(VK_SHIFT.0, true), (VK_CONTROL.0, true)]
+        );
+        assert_eq!(
+            event_codes(&paste_cleanup_events_for_partial_send(&terminal, 5)),
             vec![(VK_CONTROL.0, true)]
         );
     }
 
     #[test]
-    fn partial_send_attempts_owned_modifier_cleanup() {
-        let mut sender = MockInputSender::new(&[1, 1]);
+    fn partial_send_attempts_owned_key_cleanup() {
+        let mut sender = MockInputSender::new(&[2, 2]);
         let err = send_paste_chord_with(false, &mut sender).expect_err("partial send should fail");
 
-        assert_eq!(sender.calls, vec![4, 1]);
-        assert!(format!("{err:#}").contains("paste chord: SendInput sent 1/4 events"));
+        assert_eq!(sender.calls, vec![4, 2]);
+        assert!(format!("{err:#}").contains("paste chord: SendInput sent 2/4 events"));
     }
 
     #[test]
     fn partial_send_reports_cleanup_failure() {
-        let mut sender = MockInputSender::new(&[2, 1]);
+        let mut sender = MockInputSender::new(&[3, 1]);
         let err =
             send_paste_chord_with(true, &mut sender).expect_err("partial cleanup should fail");
 
-        assert_eq!(sender.calls, vec![6, 2]);
-        assert!(format!("{err:#}").contains("paste modifier cleanup also failed"));
+        assert_eq!(sender.calls, vec![6, 3]);
+        assert!(format!("{err:#}").contains("paste key cleanup also failed"));
     }
 }
