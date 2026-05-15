@@ -64,9 +64,9 @@ TODO: Benchmark an opt-in Windows MSVC `/GL` + `/LTCG` build after the CPU daemo
 
 TODO: Add a Windows PE dependency-walker validation pass for the CPU bundle so release packaging verifies every transitive DLL dependency instead of relying only on build-time known runtime DLL names.
 
-TODO: Run the full Windows BLAS/thread benchmark matrix for CPU builds, including no BLAS, OpenBLAS with controlled OpenMP ownership, and relevant `--threads` values against the pinned voice-memo smoke file.
+TODO: Run the full Windows BLAS/thread benchmark matrix for CPU builds, including no BLAS, OpenBLAS with controlled OpenMP ownership, and relevant `--threads` values against the pinned voice-memo smoke file. This is separate from upstream CrispASR issue #88 and remains open after the v0.6.6 pin.
 
-TODO: Track upstream CrispASR [issue #88](https://github.com/CrispStrobe/CrispASR/issues/88) for Parakeet TDT greedy decode handling of blank + duration-0 predictions. Keep this upstream unless Windows validation shows Parakit needs a temporary diagnostic tail-padding workaround for long dictations before the backend fix lands.
+TODO: Track upstream CrispASR [issue #88](https://github.com/CrispStrobe/CrispASR/issues/88) through long-dictation validation. The pinned v0.6.6 submodule includes the upstream NeMo parity fix for blank + duration-0 TDT decode retries, but the issue remains open because the maintainer does not expect that greedy-path parity change alone to explain tail truncation. This is not merge-blocking while Windows PTT smoke remains healthy; close the Parakit note only after rerunning the problematic long dictation against the pinned backend, or add a temporary Parakit diagnostic workaround only if the reproducer still drops tail speech.
 
 ## Updating [CrispASR](https://github.com/CrispStrobe/CrispASR)
 

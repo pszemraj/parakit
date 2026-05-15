@@ -1,7 +1,5 @@
 //! WSL environment detection for diagnostics.
 
-#![cfg(target_os = "linux")]
-
 /// Return whether this Linux process appears to run under WSL.
 ///
 /// # Returns
