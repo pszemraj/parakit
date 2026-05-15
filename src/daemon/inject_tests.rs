@@ -28,7 +28,6 @@ struct MockClipboard {
     content: MockClipboardContent,
     events: Rc<RefCell<Vec<String>>>,
     fail_next_set: bool,
-    fail_on_set: Option<String>,
 }
 
 impl MockClipboard {
@@ -37,7 +36,6 @@ impl MockClipboard {
             content: MockClipboardContent::Text(text.into()),
             events: Rc::new(RefCell::new(Vec::new())),
             fail_next_set: false,
-            fail_on_set: None,
         }
     }
 
@@ -46,7 +44,6 @@ impl MockClipboard {
             content: MockClipboardContent::Empty,
             events: Rc::new(RefCell::new(Vec::new())),
             fail_next_set: false,
-            fail_on_set: None,
         }
     }
 
@@ -58,7 +55,6 @@ impl MockClipboard {
             },
             events: Rc::new(RefCell::new(Vec::new())),
             fail_next_set: false,
-            fail_on_set: None,
         }
     }
 
@@ -67,7 +63,6 @@ impl MockClipboard {
             content: MockClipboardContent::FileList(paths.iter().map(PathBuf::from).collect()),
             events: Rc::new(RefCell::new(Vec::new())),
             fail_next_set: false,
-            fail_on_set: None,
         }
     }
 
@@ -80,7 +75,6 @@ impl MockClipboard {
             },
             events: Rc::new(RefCell::new(Vec::new())),
             fail_next_set: false,
-            fail_on_set: None,
         }
     }
 
@@ -89,17 +83,11 @@ impl MockClipboard {
             content: MockClipboardContent::Unsupported,
             events: Rc::new(RefCell::new(Vec::new())),
             fail_next_set: false,
-            fail_on_set: None,
         }
     }
 
     fn fail_next_set(mut self) -> Self {
         self.fail_next_set = true;
-        self
-    }
-
-    fn fail_on_set(mut self, text: impl Into<String>) -> Self {
-        self.fail_on_set = Some(text.into());
         self
     }
 
@@ -114,15 +102,10 @@ impl MockClipboard {
         }
     }
 
-    fn fail_set_if_needed(&mut self, text: Option<&str>) -> Result<()> {
+    fn fail_set_if_needed(&mut self, _text: Option<&str>) -> Result<()> {
         if self.fail_next_set {
             self.fail_next_set = false;
             anyhow::bail!("clipboard write failed");
-        }
-        if let Some(text) = text {
-            if self.fail_on_set.as_deref() == Some(text) {
-                anyhow::bail!("clipboard write failed for {text}");
-            }
         }
         Ok(())
     }
@@ -531,7 +514,6 @@ struct ClipboardCase {
     guard_allows: bool,
     paste_error: Option<&'static str>,
     fail_next_set: bool,
-    fail_on_set: Option<&'static str>,
     expected_text: Option<&'static str>,
     expected_events: &'static [&'static str],
     expected_outcome: Option<PasteOutcome>,
@@ -548,7 +530,6 @@ fn clipboard_swap_cases_are_stable() {
             guard_allows: true,
             paste_error: Some("paste failed"),
             fail_next_set: false,
-            fail_on_set: None,
             expected_text: Some("old clipboard"),
             expected_events: &[
                 "guard",
@@ -568,7 +549,6 @@ fn clipboard_swap_cases_are_stable() {
             guard_allows: true,
             paste_error: None,
             fail_next_set: false,
-            fail_on_set: None,
             expected_text: Some("old clipboard"),
             expected_events: &[
                 "guard",
@@ -588,7 +568,6 @@ fn clipboard_swap_cases_are_stable() {
             guard_allows: true,
             paste_error: None,
             fail_next_set: false,
-            fail_on_set: None,
             expected_text: Some("dictated text"),
             expected_events: &[
                 "guard",
@@ -608,7 +587,6 @@ fn clipboard_swap_cases_are_stable() {
             guard_allows: false,
             paste_error: None,
             fail_next_set: false,
-            fail_on_set: None,
             expected_text: Some("old clipboard"),
             expected_events: &["guard"],
             expected_outcome: Some(PasteOutcome::Blocked),
@@ -621,7 +599,6 @@ fn clipboard_swap_cases_are_stable() {
             guard_allows: true,
             paste_error: None,
             fail_next_set: false,
-            fail_on_set: None,
             expected_text: None,
             expected_events: &[],
             expected_outcome: Some(PasteOutcome::Pasted),
@@ -634,7 +611,6 @@ fn clipboard_swap_cases_are_stable() {
             guard_allows: true,
             paste_error: None,
             fail_next_set: true,
-            fail_on_set: None,
             expected_text: Some("old clipboard"),
             expected_events: &["guard", "read", "set:dictated text"],
             expected_outcome: None,
@@ -649,9 +625,6 @@ fn clipboard_swap_cases_are_stable() {
         };
         if case.fail_next_set {
             clipboard = clipboard.fail_next_set();
-        }
-        if let Some(text) = case.fail_on_set {
-            clipboard = clipboard.fail_on_set(text);
         }
 
         let events = clipboard.events();
@@ -721,21 +694,14 @@ fn clipboard_guard_error_before_staging_leaves_clipboard_untouched() {
 fn clipboard_keep_transcript_policy_leaves_text_after_paste_and_guard_block() {
     for guard_allows in [true, false] {
         let mut clipboard = MockClipboard::new("old clipboard");
-        let events = clipboard.events();
         let result = paste_with_clipboard_swap_guarded(
             &mut clipboard,
             "dictated text",
-            || {
-                events.borrow_mut().push("paste".to_string());
-                Ok(())
-            },
+            || Ok(()),
             Duration::ZERO,
             Duration::ZERO,
             ClipboardPolicy::KeepTranscript,
-            || {
-                events.borrow_mut().push("guard".to_string());
-                Ok(guard_allows)
-            },
+            || Ok(guard_allows),
         )
         .expect("clipboard keep policy should not fail");
 

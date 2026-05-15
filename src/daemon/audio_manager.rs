@@ -140,14 +140,18 @@ fn try_send_audio_control(control: Sender<AudioControl>, command: AudioControl) 
 fn recv_audio_control_ack<T>(ack_rx: Receiver<Result<T>>, label: &'static str) -> Result<T> {
     match ack_rx.recv_timeout(AUDIO_CONTROL_TIMEOUT) {
         Ok(result) => result,
-        Err(err) => Err(match err {
-            RecvTimeoutError::Timeout => {
-                anyhow!("audio drain accepted {label} but did not acknowledge before timeout")
-            }
-            RecvTimeoutError::Disconnected => {
-                anyhow!("audio drain accepted {label} but disconnected before acknowledging")
-            }
-        }),
+        Err(err) => Err(audio_control_ack_error(label, err)),
+    }
+}
+
+fn audio_control_ack_error(label: &'static str, err: RecvTimeoutError) -> anyhow::Error {
+    match err {
+        RecvTimeoutError::Timeout => {
+            anyhow!("audio drain accepted {label} but did not acknowledge before timeout")
+        }
+        RecvTimeoutError::Disconnected => {
+            anyhow!("audio drain accepted {label} but disconnected before acknowledging")
+        }
     }
 }
 
@@ -625,14 +629,7 @@ fn pause_live_stream(live: &mut LiveStream, idle_policy: IdleStreamPolicy) -> Re
 fn recv_drain_control_ack<T>(ack_rx: Receiver<T>, label: &'static str) -> Result<T> {
     ack_rx
         .recv_timeout(AUDIO_CONTROL_TIMEOUT)
-        .map_err(|err| match err {
-            RecvTimeoutError::Timeout => {
-                anyhow!("audio drain accepted {label} but did not acknowledge before timeout")
-            }
-            RecvTimeoutError::Disconnected => {
-                anyhow!("audio drain accepted {label} but disconnected before acknowledging")
-            }
-        })
+        .map_err(|err| audio_control_ack_error(label, err))
 }
 
 fn reopen_until_success(host: &cpal::Host, ctx: &AudioManagerCtx) -> Option<LiveStream> {

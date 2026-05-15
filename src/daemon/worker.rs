@@ -300,10 +300,7 @@ impl PasteCircuit {
 }
 
 fn insertion_result_remembers_transcript(result: &Result<InsertOutcome>) -> bool {
-    matches!(
-        result,
-        Ok(InsertOutcome::Pasted | InsertOutcome::CopiedOnly | InsertOutcome::Blocked) | Err(_)
-    )
+    !matches!(result, Ok(InsertOutcome::Skipped))
 }
 
 /// Sanitize text and run the shared paste/copy insertion transaction.
@@ -453,10 +450,6 @@ fn paste_transcript(
     let paste_error = match paste_result {
         Ok(super::inject::PasteOutcome::Pasted) => return Ok(InsertOutcome::Pasted),
         Ok(super::inject::PasteOutcome::CopiedOnly) => {
-            if mode == PasteMode::Direct {
-                notifier.paste_blocked("Direct insertion was blocked by the safety guard.");
-                return Ok(InsertOutcome::Blocked);
-            }
             notifier.transcript_copied("Focus changed immediately before paste.");
             return Ok(InsertOutcome::CopiedOnly);
         }
