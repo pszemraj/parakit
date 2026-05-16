@@ -341,13 +341,17 @@ impl BlasConfig {
         if target_is_apple() {
             return Self::accelerate(raw, explicit);
         }
-        if pkg_config_exists("mkl-sdl") {
-            return Self::mkl(raw, explicit);
-        }
         if target_is_windows() {
             if let Some(openblas) = windows_openblas_from_env(false) {
                 return Self::openblas(raw, explicit, Some(openblas));
             }
+            println!(
+                "cargo:warning=parakit build: PARAKIT_BLAS=auto found no bundleable Windows OpenBLAS via PARAKIT_OPENBLAS_ROOT or CONDA_PREFIX; skipping pkg-config BLAS and building without BLAS"
+            );
+            return Self::off(raw, explicit);
+        }
+        if pkg_config_exists("mkl-sdl") {
+            return Self::mkl(raw, explicit);
         }
         if pkg_config_exists("openblas") || pkg_config_exists("openblas64") {
             return Self::openblas(raw, explicit, None);
