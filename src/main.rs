@@ -380,7 +380,7 @@ fn run() -> Result<()> {
         .context("audio manager started without reporting a microphone")?;
     warn_about_bluetooth_mic_if_needed(&log, &mic_info);
 
-    let (model_path, engine) = open_cli_engine(&cli, !cli.verbose, &log)?;
+    let (model_path, engine) = open_cli_engine(&cli, cli.quiet, &log)?;
     let model_dtype = model_dtype_label(&model_path);
 
     // Banner.
