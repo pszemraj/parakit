@@ -99,10 +99,18 @@ function Require-Command {
         [string]$InstallHint
     )
 
-    $cmd = Get-Command $Name -ErrorAction SilentlyContinue
-    if ($null -eq $cmd) {
+    if (-not (Test-Command $Name)) {
         throw "$Name was not found. $InstallHint"
     }
+}
+
+function Test-Command {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Name
+    )
+
+    return $null -ne (Get-Command $Name -ErrorAction SilentlyContinue)
 }
 
 function Assert-NativeWindows {
@@ -191,6 +199,10 @@ function Test-CrispAsrSubmoduleReady {
         return $false
     }
 
+    if (-not (Test-Command "git")) {
+        return $true
+    }
+
     $status = & git -C $repo submodule status --recursive "vendor/CrispASR" 2>$null
     if ($LASTEXITCODE -ne 0 -or $null -eq $status) {
         return $true
@@ -218,7 +230,6 @@ Assert-NativeWindows
 Require-Command "cargo" "Install Rust with rustup using the MSVC toolchain."
 Require-Command "rustc" "Install Rust with rustup using the MSVC toolchain."
 Require-Command "cmake" "Install CMake and ensure it is on PATH."
-Require-Command "git" "Install Git for Windows and ensure it is on PATH."
 
 $repo = Get-RepoRoot
 Set-Location $repo
@@ -229,6 +240,7 @@ if ($NoSubmodules) {
 } elseif (Test-CrispAsrSubmoduleReady) {
     Write-Host "Submodules: ready"
 } else {
+    Require-Command "git" "Install Git for Windows and ensure it is on PATH, or use --no-submodules with vendor\CrispASR already populated."
     Write-Host "Updating submodules"
     Invoke-Checked "git" "submodule" "update" "--init" "--recursive"
     Assert-CrispAsrSubmoduleReady

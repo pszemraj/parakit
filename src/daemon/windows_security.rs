@@ -2,7 +2,11 @@
 
 #![cfg(target_os = "windows")]
 
-use std::{ffi::c_void, mem::size_of, ptr::null_mut};
+use std::{
+    ffi::c_void,
+    mem::{size_of, MaybeUninit},
+    ptr::null_mut,
+};
 use windows::Win32::Foundation::{CloseHandle, HANDLE};
 use windows::Win32::Security::{
     GetSidSubAuthority, GetSidSubAuthorityCount, GetTokenInformation, TokenElevation,
@@ -93,7 +97,7 @@ impl TokenHandle {
             return None;
         }
 
-        let mut buf = vec![0_u8; needed as usize];
+        let mut buf = token_info_storage::<TOKEN_MANDATORY_LABEL>(needed)?;
         unsafe {
             GetTokenInformation(
                 self.0,
@@ -105,7 +109,7 @@ impl TokenHandle {
         }
         .ok()?;
 
-        let label = unsafe { &*(buf.as_ptr() as *const TOKEN_MANDATORY_LABEL) };
+        let label = token_info_head::<TOKEN_MANDATORY_LABEL>(&buf, needed)?;
         let count = unsafe { GetSidSubAuthorityCount(label.Label.Sid) };
         if count.is_null() || unsafe { *count } == 0 {
             return None;
@@ -125,7 +129,7 @@ impl TokenHandle {
             return None;
         }
 
-        let mut buf = vec![0_u8; needed as usize];
+        let mut buf = token_info_storage::<TOKEN_USER>(needed)?;
         unsafe {
             GetTokenInformation(
                 self.0,
@@ -137,7 +141,7 @@ impl TokenHandle {
         }
         .ok()?;
 
-        let user = unsafe { &*(buf.as_ptr() as *const TOKEN_USER) };
+        let user = token_info_head::<TOKEN_USER>(&buf, needed)?;
         let mut sid = null_mut::<u16>();
         if unsafe { ConvertSidToStringSidW(user.User.Sid, &mut sid) } == 0 || sid.is_null() {
             return None;
@@ -156,6 +160,31 @@ impl Drop for TokenHandle {
             let _ = CloseHandle(self.0);
         }
     }
+}
+
+fn token_info_storage<T>(needed: u32) -> Option<Vec<MaybeUninit<T>>> {
+    let needed = usize::try_from(needed).ok()?;
+    let item_size = size_of::<T>();
+    if item_size == 0 || needed < item_size {
+        return None;
+    }
+
+    let slots = needed.div_ceil(item_size);
+    let mut storage = Vec::with_capacity(slots);
+    storage.resize_with(slots, MaybeUninit::uninit);
+    Some(storage)
+}
+
+fn token_info_head<T>(storage: &[MaybeUninit<T>], returned: u32) -> Option<&T> {
+    let returned = usize::try_from(returned).ok()?;
+    let item_size = size_of::<T>();
+    let storage_bytes = storage.len().checked_mul(item_size)?;
+    if item_size == 0 || returned < item_size || returned > storage_bytes {
+        return None;
+    }
+
+    // GetTokenInformation wrote the header into storage aligned for T.
+    Some(unsafe { &*(storage.as_ptr() as *const T) })
 }
 
 fn integrity_label_from_rid(rid: u32) -> String {
