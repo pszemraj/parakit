@@ -546,7 +546,10 @@ fn send_command(command: IpcCommand) -> Result<IpcResponse> {
 #[cfg(target_os = "windows")]
 mod windows_pipe {
     use super::*;
-    use std::{ffi::c_void, ptr::null_mut};
+    use std::{
+        ffi::c_void,
+        ptr::{null, null_mut},
+    };
     use windows::core::PCWSTR;
     use windows::Win32::Foundation::{CloseHandle, HANDLE};
 
@@ -556,17 +559,26 @@ mod windows_pipe {
     const GENERIC_WRITE: u32 = 0x4000_0000;
     const OPEN_EXISTING: u32 = 3;
     const FILE_ATTRIBUTE_NORMAL: u32 = 0x0000_0080;
+    const FILE_FLAG_OVERLAPPED: u32 = 0x4000_0000;
     const PIPE_ACCESS_DUPLEX: u32 = 0x0000_0003;
     const PIPE_TYPE_MESSAGE: u32 = 0x0000_0004;
     const PIPE_READMODE_MESSAGE: u32 = 0x0000_0002;
     const PIPE_WAIT: u32 = 0x0000_0000;
     const PIPE_UNLIMITED_INSTANCES: u32 = 255;
     const ERROR_FILE_NOT_FOUND: u32 = 2;
+    const ERROR_IO_PENDING: u32 = 997;
     const ERROR_MORE_DATA: u32 = 234;
+    const ERROR_OPERATION_ABORTED: u32 = 995;
     const ERROR_PIPE_BUSY: u32 = 231;
     const ERROR_PIPE_CONNECTED: u32 = 535;
     const ERROR_SEM_TIMEOUT: u32 = 121;
     const SDDL_REVISION_1: u32 = 1;
+    const TRUE: i32 = 1;
+    const FALSE: i32 = 0;
+    const WAIT_OBJECT_0: u32 = 0;
+    const WAIT_TIMEOUT: u32 = 0x0000_0102;
+    const WAIT_FAILED: u32 = 0xffff_ffff;
+    const INFINITE: u32 = 0xffff_ffff;
     const CLIENT_CONNECT_RETRY: Duration = Duration::from_millis(10);
 
     #[repr(C)]
@@ -588,7 +600,14 @@ mod windows_pipe {
 
     #[link(name = "kernel32")]
     unsafe extern "system" {
+        fn CancelIoEx(file: HANDLE, overlapped: *mut c_void) -> i32;
         fn ConnectNamedPipe(pipe: HANDLE, overlapped: *mut c_void) -> i32;
+        fn CreateEventW(
+            event_attributes: *mut c_void,
+            manual_reset: i32,
+            initial_state: i32,
+            name: PCWSTR,
+        ) -> HANDLE;
         fn CreateFileW(
             file_name: PCWSTR,
             desired_access: u32,
@@ -608,9 +627,13 @@ mod windows_pipe {
             default_timeout: u32,
             security_attributes: *mut RawSecurityAttributes,
         ) -> HANDLE;
-        fn DisconnectNamedPipe(pipe: HANDLE) -> i32;
-        fn FlushFileBuffers(file: HANDLE) -> i32;
         fn GetLastError() -> u32;
+        fn GetOverlappedResult(
+            file: HANDLE,
+            overlapped: *mut c_void,
+            bytes_transferred: *mut u32,
+            wait: i32,
+        ) -> i32;
         fn LocalFree(mem: *mut c_void) -> *mut c_void;
         fn ReadFile(
             file: HANDLE,
@@ -625,6 +648,7 @@ mod windows_pipe {
             max_collection_count: *mut u32,
             collect_data_timeout: *mut u32,
         ) -> i32;
+        fn WaitForSingleObject(handle: HANDLE, milliseconds: u32) -> u32;
         fn WaitNamedPipeW(name: PCWSTR, timeout: u32) -> i32;
         fn WriteFile(
             file: HANDLE,
@@ -730,10 +754,6 @@ mod windows_pipe {
         if let Err(err) = write_json_message(&pipe, &outcome.response) {
             log.warn(format!("Windows daemon control response failed: {err:#}"));
         }
-        unsafe {
-            let _ = FlushFileBuffers(pipe.0);
-            let _ = DisconnectNamedPipe(pipe.0);
-        }
 
         if outcome.stop_after_response {
             schedule_exit_after_response(None);
@@ -758,7 +778,7 @@ mod windows_pipe {
         let handle = unsafe {
             CreateNamedPipeW(
                 PCWSTR(pipe_name.as_ptr()),
-                PIPE_ACCESS_DUPLEX,
+                PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED,
                 PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT,
                 PIPE_UNLIMITED_INSTANCES,
                 PIPE_BUFFER_SIZE,
@@ -774,14 +794,24 @@ mod windows_pipe {
     }
 
     fn connect_server_pipe(pipe: &PipeHandle) -> Result<()> {
-        if unsafe { ConnectNamedPipe(pipe.0, null_mut()) } != 0 {
+        let event = EventHandle::create()?;
+        let mut overlapped = RawOverlapped::new(event.0);
+        if unsafe { ConnectNamedPipe(pipe.0, overlapped.as_mut_ptr()) } != 0 {
             return Ok(());
         }
         let err = unsafe { GetLastError() };
-        if err == ERROR_PIPE_CONNECTED {
-            Ok(())
-        } else {
-            Err(win32_error("ConnectNamedPipe failed", err))
+        match err {
+            ERROR_IO_PENDING => {
+                wait_for_overlapped(
+                    pipe,
+                    &mut overlapped,
+                    INFINITE,
+                    "ConnectNamedPipe Windows daemon control pipe failed",
+                )?;
+                Ok(())
+            }
+            ERROR_PIPE_CONNECTED => Ok(()),
+            _ => Err(win32_error("ConnectNamedPipe failed", err)),
         }
     }
 
@@ -795,7 +825,7 @@ mod windows_pipe {
                     0,
                     null_mut(),
                     OPEN_EXISTING,
-                    FILE_ATTRIBUTE_NORMAL,
+                    FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OVERLAPPED,
                     HANDLE::default(),
                 )
             };
@@ -889,32 +919,9 @@ mod windows_pipe {
     }
 
     fn read_pipe_message(pipe: &PipeHandle) -> Result<Vec<u8>> {
-        let mut out = Vec::new();
-        loop {
-            let mut chunk = vec![0_u8; PIPE_BUFFER_SIZE as usize];
-            let mut read = 0_u32;
-            let ok = unsafe {
-                ReadFile(
-                    pipe.0,
-                    chunk.as_mut_ptr().cast(),
-                    PIPE_BUFFER_SIZE,
-                    &mut read,
-                    null_mut(),
-                )
-            };
-            out.extend_from_slice(&chunk[..read as usize]);
-            if ok != 0 {
-                return Ok(out);
-            }
-            let err = unsafe { GetLastError() };
-            if err != ERROR_MORE_DATA {
-                return Err(win32_error(
-                    "ReadFile Windows daemon control pipe failed",
-                    err,
-                ));
-            }
-            validate_pipe_message_len(out.len() + 1)?;
-        }
+        let mut chunk = vec![0_u8; PIPE_BUFFER_SIZE as usize];
+        let read = read_pipe_chunk(pipe, &mut chunk)?;
+        Ok(chunk[..read].to_vec())
     }
 
     fn write_json_message<T: Serialize>(pipe: &PipeHandle, value: &T) -> Result<()> {
@@ -927,6 +934,8 @@ mod windows_pipe {
 
         // Message-type pipes frame each WriteFile call as a separate message.
         // The control protocol sends exactly one JSON payload per message.
+        let event = EventHandle::create()?;
+        let mut overlapped = RawOverlapped::new(event.0);
         let mut written = 0_u32;
         let ok = unsafe {
             WriteFile(
@@ -934,11 +943,23 @@ mod windows_pipe {
                 bytes.as_ptr().cast(),
                 bytes.len() as u32,
                 &mut written,
-                null_mut(),
+                overlapped.as_mut_ptr(),
             )
         };
         if ok == 0 {
-            return Err(last_error("WriteFile Windows daemon control pipe failed"));
+            let err = unsafe { GetLastError() };
+            if err != ERROR_IO_PENDING {
+                return Err(win32_error(
+                    "WriteFile Windows daemon control pipe failed",
+                    err,
+                ));
+            }
+            written = wait_for_overlapped(
+                pipe,
+                &mut overlapped,
+                IPC_CLIENT_TIMEOUT_MS,
+                "WriteFile Windows daemon control pipe failed",
+            )?;
         }
         if written as usize != bytes.len() {
             bail!(
@@ -950,6 +971,90 @@ mod windows_pipe {
         Ok(())
     }
 
+    fn read_pipe_chunk(pipe: &PipeHandle, chunk: &mut [u8]) -> Result<usize> {
+        let event = EventHandle::create()?;
+        let mut overlapped = RawOverlapped::new(event.0);
+        let mut read = 0_u32;
+        let ok = unsafe {
+            ReadFile(
+                pipe.0,
+                chunk.as_mut_ptr().cast(),
+                PIPE_BUFFER_SIZE,
+                &mut read,
+                overlapped.as_mut_ptr(),
+            )
+        };
+        if ok != 0 {
+            return Ok(read as usize);
+        }
+
+        let err = unsafe { GetLastError() };
+        match err {
+            ERROR_IO_PENDING => {
+                let read = wait_for_overlapped(
+                    pipe,
+                    &mut overlapped,
+                    IPC_CLIENT_TIMEOUT_MS,
+                    "ReadFile Windows daemon control pipe failed",
+                )?;
+                Ok(read as usize)
+            }
+            ERROR_MORE_DATA => oversized_pipe_message_error(),
+            _ => Err(win32_error(
+                "ReadFile Windows daemon control pipe failed",
+                err,
+            )),
+        }
+    }
+
+    fn wait_for_overlapped(
+        pipe: &PipeHandle,
+        overlapped: &mut RawOverlapped,
+        timeout_ms: u32,
+        label: &str,
+    ) -> Result<u32> {
+        match unsafe { WaitForSingleObject(overlapped.h_event, timeout_ms) } {
+            WAIT_OBJECT_0 => match overlapped_result(pipe, overlapped, FALSE) {
+                Ok(transferred) => Ok(transferred),
+                Err(ERROR_MORE_DATA) => oversized_pipe_message_error(),
+                Err(err) => Err(win32_error(label, err)),
+            },
+            WAIT_TIMEOUT => {
+                let _ = unsafe { CancelIoEx(pipe.0, overlapped.as_mut_ptr()) };
+                match overlapped_result(pipe, overlapped, TRUE) {
+                    Ok(transferred) => Ok(transferred),
+                    Err(ERROR_OPERATION_ABORTED) => {
+                        bail!("{label}: timed out after {timeout_ms}ms")
+                    }
+                    Err(ERROR_MORE_DATA) => oversized_pipe_message_error(),
+                    Err(err) => Err(win32_error(label, err)),
+                }
+            }
+            WAIT_FAILED => Err(last_error("WaitForSingleObject failed")),
+            other => bail!("WaitForSingleObject returned unexpected status {other}"),
+        }
+    }
+
+    fn overlapped_result(
+        pipe: &PipeHandle,
+        overlapped: &mut RawOverlapped,
+        wait: i32,
+    ) -> std::result::Result<u32, u32> {
+        let mut transferred = 0_u32;
+        if unsafe { GetOverlappedResult(pipe.0, overlapped.as_mut_ptr(), &mut transferred, wait) }
+            != 0
+        {
+            return Ok(transferred);
+        }
+
+        Err(unsafe { GetLastError() })
+    }
+
+    fn oversized_pipe_message_error<T>() -> Result<T> {
+        validate_pipe_message_len(PIPE_BUFFER_SIZE as usize + 1)?;
+        unreachable!("validate_pipe_message_len always rejects oversized messages")
+    }
+
     fn validate_pipe_message_len(len: usize) -> Result<()> {
         if len > PIPE_BUFFER_SIZE as usize {
             bail!(
@@ -959,6 +1064,51 @@ mod windows_pipe {
             );
         }
         Ok(())
+    }
+
+    #[repr(C)]
+    struct RawOverlapped {
+        internal: usize,
+        internal_high: usize,
+        offset: u32,
+        offset_high: u32,
+        h_event: HANDLE,
+    }
+
+    impl RawOverlapped {
+        fn new(event: HANDLE) -> Self {
+            Self {
+                internal: 0,
+                internal_high: 0,
+                offset: 0,
+                offset_high: 0,
+                h_event: event,
+            }
+        }
+
+        fn as_mut_ptr(&mut self) -> *mut c_void {
+            std::ptr::from_mut(self).cast()
+        }
+    }
+
+    struct EventHandle(HANDLE);
+
+    impl EventHandle {
+        fn create() -> Result<Self> {
+            let handle = unsafe { CreateEventW(null_mut(), TRUE, FALSE, PCWSTR(null())) };
+            if is_null_handle(handle) {
+                return Err(last_error("CreateEventW failed"));
+            }
+            Ok(Self(handle))
+        }
+    }
+
+    impl Drop for EventHandle {
+        fn drop(&mut self) {
+            unsafe {
+                let _ = CloseHandle(self.0);
+            }
+        }
     }
 
     struct PipeSecurity {
@@ -1032,6 +1182,10 @@ mod windows_pipe {
 
     fn is_invalid_handle(handle: HANDLE) -> bool {
         handle.0 == invalid_handle().0
+    }
+
+    fn is_null_handle(handle: HANDLE) -> bool {
+        handle.0.is_null()
     }
 
     fn is_retryable_pipe_availability_error(error: u32) -> bool {
@@ -1232,6 +1386,73 @@ mod windows_pipe {
             assert_eq!([first, second].concat(), payload);
 
             Ok(())
+        }
+
+        #[test]
+        fn pipe_message_read_times_out_when_peer_sends_nothing() -> Result<()> {
+            let (server, _client) = connected_overlapped_test_pipe()?;
+            let started = std::time::Instant::now();
+
+            let err = read_pipe_message(&server)
+                .expect_err("idle Windows daemon pipe read should time out");
+
+            assert!(started.elapsed() < Duration::from_secs(2));
+            assert!(format!("{err:#}").contains("timed out after 750ms"));
+            Ok(())
+        }
+
+        #[test]
+        fn pipe_response_remains_readable_after_server_handle_closes() -> Result<()> {
+            let (server, client) = connected_overlapped_test_pipe()?;
+
+            write_pipe_message(&server, b"ok")?;
+            drop(server);
+
+            assert_eq!(read_pipe_message(&client)?, b"ok");
+            Ok(())
+        }
+
+        fn connected_overlapped_test_pipe() -> Result<(PipeHandle, PipeHandle)> {
+            let unique = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system time should be after epoch")
+                .as_nanos();
+            let pipe_name = encode_wide_null(&format!(
+                r"\\.\pipe\parakit-ipc-test-{}-{unique}",
+                std::process::id()
+            ));
+            let server_handle = unsafe {
+                CreateNamedPipeW(
+                    PCWSTR(pipe_name.as_ptr()),
+                    PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED,
+                    PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT,
+                    1,
+                    PIPE_BUFFER_SIZE,
+                    PIPE_BUFFER_SIZE,
+                    IPC_CLIENT_TIMEOUT_MS,
+                    null_mut(),
+                )
+            };
+            assert!(!is_invalid_handle(server_handle));
+            let server = PipeHandle(server_handle);
+
+            let client_handle = unsafe {
+                CreateFileW(
+                    PCWSTR(pipe_name.as_ptr()),
+                    GENERIC_READ | GENERIC_WRITE,
+                    0,
+                    null_mut(),
+                    OPEN_EXISTING,
+                    FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OVERLAPPED,
+                    HANDLE::default(),
+                )
+            };
+            assert!(!is_invalid_handle(client_handle));
+            let client = PipeHandle(client_handle);
+
+            set_client_message_read_mode(&client)?;
+            connect_server_pipe(&server)?;
+            Ok((server, client))
         }
     }
 }
