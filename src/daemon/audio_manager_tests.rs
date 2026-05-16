@@ -296,6 +296,32 @@ fn full_audio_control_queue_does_not_block_or_fallback() {
 }
 
 #[test]
+fn stop_recording_control_failure_resets_recording_state() {
+    let (control_tx, _control_rx) = bounded::<AudioControl>(1);
+    let (ack_tx, _ack_rx) = bounded(1);
+    control_tx
+        .try_send(AudioControl::Stop { ack: ack_tx })
+        .expect("preload control queue");
+    let handle = AudioHandle {
+        state: Arc::new(Mutex::new(CaptureState {
+            buffer: vec![0.4, -0.4],
+            pre_roll: VecDeque::new(),
+        })),
+        session_epoch: Arc::new(AtomicU64::new(7)),
+        next_session_epoch: Arc::new(AtomicU64::new(7)),
+        control: Arc::new(Mutex::new(Some(control_tx))),
+    };
+
+    let err = handle
+        .stop_recording()
+        .expect_err("stop failure should be reported after local reset");
+
+    assert!(format!("{err:#}").contains("control queue is full"));
+    assert_eq!(handle.session_epoch.load(Ordering::Acquire), 0);
+    assert!(handle.state.lock().buffer.is_empty());
+}
+
+#[test]
 fn audio_drain_drop_stops_thread() {
     let ring = HeapRb::<f32>::new(8);
     let (_producer, consumer) = ring.split();

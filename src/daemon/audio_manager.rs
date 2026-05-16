@@ -88,15 +88,25 @@ impl AudioHandle {
     /// # Errors
     ///
     /// Returns an error if the live audio drain accepts the command but does
-    /// not acknowledge it before the control timeout.
+    /// not acknowledge it before the control timeout. Recording state is reset
+    /// locally before the error is returned.
     pub fn stop_recording(&self) -> Result<Vec<f32>> {
-        match self.try_stop_on_drain()? {
-            AudioControlAck::Acked(pcm) => Ok(pcm),
-            AudioControlAck::NoLiveDrain => {
+        match self.try_stop_on_drain() {
+            Ok(AudioControlAck::Acked(pcm)) => Ok(pcm),
+            Ok(AudioControlAck::NoLiveDrain) => {
                 self.session_epoch.store(0, Ordering::Release);
                 Ok(self.state.lock().take_recording())
             }
+            Err(err) => {
+                self.reset_recording_after_failed_stop();
+                Err(err)
+            }
         }
+    }
+
+    fn reset_recording_after_failed_stop(&self) {
+        self.session_epoch.store(0, Ordering::Release);
+        let _ = self.state.lock().take_recording();
     }
 
     fn try_start_on_drain(&self, epoch: u64) -> Result<AudioControlAck<()>> {
@@ -169,6 +179,15 @@ impl AudioHandle {
             next_session_epoch: Arc::new(AtomicU64::new(0)),
             control: Arc::new(Mutex::new(None)),
         }
+    }
+
+    /// Return whether the test handle currently considers recording active.
+    ///
+    /// # Returns
+    ///
+    /// `true` when the session epoch is non-zero.
+    pub(crate) fn test_is_recording(&self) -> bool {
+        self.session_epoch.load(Ordering::Acquire) != 0
     }
 }
 
