@@ -14,12 +14,19 @@ use global_hotkey::{
     hotkey::{Code, HotKey, Modifiers},
     GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState as RegisteredHotKeyState,
 };
+#[cfg(all(target_os = "windows", test))]
+use rdev::Key;
+#[cfg(not(target_os = "windows"))]
 use rdev::{Event, EventType, Key};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+#[cfg(not(target_os = "windows"))]
+use std::sync::Mutex;
+#[cfg(any(not(target_os = "windows"), test))]
 use std::time::{Duration, Instant};
 #[cfg(target_os = "linux")]
 use std::{fs::File, io, path::PathBuf};
 
+#[cfg(any(not(target_os = "windows"), test))]
 const HOTKEY_DEBOUNCE: Duration = Duration::from_millis(150);
 #[cfg(target_os = "linux")]
 const REGISTERED_HOTKEY_PHYSICAL_POLL: Duration = Duration::from_millis(25);
@@ -96,16 +103,19 @@ impl HotkeyBackend {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg(any(not(target_os = "windows"), test))]
 enum HotkeyAction {
     Start { started_at: Instant },
     Stop { stopped_at: Instant },
 }
 
 #[derive(Clone, Copy, Debug, Default)]
+#[cfg(any(not(target_os = "windows"), test))]
 struct RecordingLatch {
     started_at: Option<Instant>,
 }
 
+#[cfg(any(not(target_os = "windows"), test))]
 impl RecordingLatch {
     fn is_recording(&self) -> bool {
         self.started_at.is_some()
@@ -127,6 +137,7 @@ impl RecordingLatch {
 }
 
 #[derive(Clone, Copy, Debug, Default)]
+#[cfg(any(not(target_os = "windows"), test))]
 struct HotkeyState {
     ctrl_left: bool,
     ctrl_right: bool,
@@ -142,6 +153,7 @@ struct HotkeyState {
     last_start: Option<Instant>,
 }
 
+#[cfg(any(not(target_os = "windows"), test))]
 impl HotkeyState {
     fn press(&mut self, key: Key, now: Instant) -> (Option<HotkeyAction>, bool) {
         let space_was_held = self.space;
@@ -267,9 +279,26 @@ pub(crate) fn run_grab_loop(
 /// # Arguments
 ///
 /// * `tx` - Coordinator channel used to post logical hotkey transitions.
+/// * `_backend` - Ignored backend preference on Windows.
+/// * `log` - Logger used for backend diagnostics.
+#[cfg(target_os = "windows")]
+pub(crate) fn run_grab_loop(
+    tx: Sender<HotkeyTransition>,
+    _backend: HotkeyBackend,
+    log: Arc<Logger>,
+) {
+    log.verbose("parakit: Windows hotkey backend: RegisterHotKey Ctrl+Space");
+    super::windows_input::run_registered_hotkey_loop_or_exit(tx);
+}
+
+/// Run the platform hotkey loop until the process exits.
+///
+/// # Arguments
+///
+/// * `tx` - Coordinator channel used to post logical hotkey transitions.
 /// * `_backend` - Ignored backend preference on platforms with one backend.
-/// * `_log` - Logger unused on non-Linux platforms.
-#[cfg(not(target_os = "linux"))]
+/// * `_log` - Logger unused on non-Linux/non-Windows platforms.
+#[cfg(all(not(target_os = "linux"), not(target_os = "windows")))]
 pub(crate) fn run_grab_loop(
     tx: Sender<HotkeyTransition>,
     _backend: HotkeyBackend,
@@ -278,7 +307,7 @@ pub(crate) fn run_grab_loop(
     run_rdev_grab_loop_or_exit(tx);
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(all(not(target_os = "linux"), not(target_os = "windows")))]
 fn run_rdev_grab_loop_or_exit(tx: Sender<HotkeyTransition>) {
     let state = Arc::new(Mutex::new(HotkeyState::default()));
     let callback_state = Arc::clone(&state);
@@ -825,7 +854,7 @@ fn handle_listen_event(
     let _ = handle_key_event(event.event_type, state, tx);
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(all(not(target_os = "linux"), not(target_os = "windows")))]
 fn handle_grab_event(
     event: Event,
     state: &Arc<Mutex<HotkeyState>>,
@@ -839,6 +868,7 @@ fn handle_grab_event(
     }
 }
 
+#[cfg(not(target_os = "windows"))]
 fn handle_key_event(
     event_type: EventType,
     state: &Arc<Mutex<HotkeyState>>,
@@ -864,6 +894,7 @@ fn handle_key_event(
     suppress
 }
 
+#[cfg(any(not(target_os = "windows"), test))]
 fn send_hotkey_transition(action: HotkeyAction, tx: &Sender<HotkeyTransition>) {
     let transition = match action {
         HotkeyAction::Start { started_at } => HotkeyTransition::Pressed { at: started_at },
@@ -926,11 +957,6 @@ fn grab_failure_help() -> String {
 #[cfg(target_os = "macos")]
 fn grab_failure_help() -> String {
     "macOS hotkey capture requires Accessibility and Input Monitoring permissions for both the terminal and the parakit binary.".to_string()
-}
-
-#[cfg(target_os = "windows")]
-fn grab_failure_help() -> String {
-    "Windows usually allows the hotkey hook. If security software blocked parakit, whitelist the binary and rerun it.".to_string()
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]

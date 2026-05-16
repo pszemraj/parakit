@@ -80,6 +80,9 @@ impl Logger {
         anstream::println!("  dtype: {}", info.dtype);
         anstream::println!("  mic:   {}", info.mic.summary());
         if self.is_verbose() {
+            for line in info.mic.detail_lines() {
+                anstream::println!("  audio: {line}");
+            }
             anstream::println!("  path:  {}", info.model_path.display());
             anstream::println!("  rules: {}", info.cleaning);
             anstream::println!("  sounds: {}", info.sounds);

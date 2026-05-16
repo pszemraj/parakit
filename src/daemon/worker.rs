@@ -28,9 +28,14 @@ const SILENCE_RMS_THRESHOLD: f32 = 0.0005;
 /// Events consumed by the transcription worker.
 pub(crate) enum WorkerEvent {
     /// Recording began at this instant.
-    RecordingStarted,
+    Started,
+    /// Recording began but failed before PCM could be handed to the worker.
+    Failed {
+        /// User-facing failure message without the standard log prefix.
+        message: String,
+    },
     /// Recording ended and the captured PCM moved out of the audio buffer.
-    RecordingStopped {
+    Stopped {
         /// Monotonic timestamp captured when recording started.
         started_at: Instant,
         /// Monotonic timestamp captured when recording stopped.
@@ -125,12 +130,17 @@ fn worker_loop(ctx: WorkerCtx) {
     let mut paste_circuit = PasteCircuit::default();
     while let Ok(ev) = rx.recv() {
         match ev {
-            WorkerEvent::RecordingStarted => {
+            WorkerEvent::Started => {
                 state.set_phase("recording");
                 sounds.start();
                 log.line("parakit: recording...");
             }
-            WorkerEvent::RecordingStopped {
+            WorkerEvent::Failed { message } => {
+                log.error(&message);
+                state.set_phase("idle");
+                sounds.error();
+            }
+            WorkerEvent::Stopped {
                 started_at,
                 stopped_at,
                 pcm,
@@ -290,10 +300,7 @@ impl PasteCircuit {
 }
 
 fn insertion_result_remembers_transcript(result: &Result<InsertOutcome>) -> bool {
-    matches!(
-        result,
-        Ok(InsertOutcome::Pasted | InsertOutcome::CopiedOnly | InsertOutcome::Blocked) | Err(_)
-    )
+    !matches!(result, Ok(InsertOutcome::Skipped))
 }
 
 /// Sanitize text and run the shared paste/copy insertion transaction.
@@ -443,10 +450,6 @@ fn paste_transcript(
     let paste_error = match paste_result {
         Ok(super::inject::PasteOutcome::Pasted) => return Ok(InsertOutcome::Pasted),
         Ok(super::inject::PasteOutcome::CopiedOnly) => {
-            if mode == PasteMode::Direct {
-                notifier.paste_blocked("Direct insertion was blocked by the safety guard.");
-                return Ok(InsertOutcome::Blocked);
-            }
             notifier.transcript_copied("Focus changed immediately before paste.");
             return Ok(InsertOutcome::CopiedOnly);
         }
@@ -524,8 +527,15 @@ fn clipboard_policy(keep_transcript_clipboard: bool) -> ClipboardPolicy {
 
 fn focus_allows_insertion(focus: Option<&FocusSnapshot>, log: &Logger) -> bool {
     let Some(focus) = focus else {
-        // The focus guard is best effort. Dropping a transcript because X11 had
-        // a transient focus-query failure is worse than a recoverable wrong paste.
+        if cfg!(target_os = "windows") {
+            // Windows insertion must prove the current foreground target still
+            // matches the hotkey target; unknown focus is not safe to paste.
+            log.warn("recording focus was unavailable; automatic paste skipped");
+            return false;
+        }
+
+        // Linux/X11 focus can be transiently unavailable. Preserve the existing
+        // behavior there so a temporary X11 query failure does not drop speech.
         log.verbose("recording focus was unavailable; pasting without focus guard");
         return true;
     };
@@ -538,6 +548,12 @@ fn focus_verification_allows_insertion(result: Result<bool>, log: &Logger) -> bo
         Ok(true) => true,
         Ok(false) => {
             log.warn("focus changed before insertion; automatic paste skipped");
+            false
+        }
+        Err(err) if cfg!(target_os = "windows") => {
+            log.warn(format!(
+                "could not verify recording focus ({err:#}); automatic paste skipped"
+            ));
             false
         }
         Err(err) => {
@@ -736,16 +752,29 @@ mod tests {
     }
 
     #[test]
-    fn unavailable_or_unverified_focus_allows_insertion() {
+    fn unavailable_or_unverified_focus_uses_platform_policy() {
         let log = Logger::new(LogLevel::Quiet);
 
-        assert!(focus_allows_insertion(None, &log));
         assert!(focus_verification_allows_insertion(Ok(true), &log));
         assert!(!focus_verification_allows_insertion(Ok(false), &log));
-        assert!(focus_verification_allows_insertion(
-            Err(anyhow::anyhow!("temporary X11 failure")),
-            &log
-        ));
+
+        #[cfg(target_os = "windows")]
+        {
+            assert!(!focus_allows_insertion(None, &log));
+            assert!(!focus_verification_allows_insertion(
+                Err(anyhow::anyhow!("focus unavailable")),
+                &log
+            ));
+        }
+
+        #[cfg(not(target_os = "windows"))]
+        {
+            assert!(focus_allows_insertion(None, &log));
+            assert!(focus_verification_allows_insertion(
+                Err(anyhow::anyhow!("temporary X11 failure")),
+                &log
+            ));
+        }
     }
 
     #[test]

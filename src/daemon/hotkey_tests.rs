@@ -32,24 +32,6 @@ fn ctrl_space_starts_and_stops() {
 }
 
 #[test]
-fn ctrl_release_before_space_stops_without_suppressing_ctrl_release() {
-    let now = base_time();
-    let mut state = HotkeyState::default();
-    state.press(Key::ControlLeft, now);
-    state.press(Key::Space, now + Duration::from_millis(10));
-    assert_eq!(
-        state.release(Key::ControlLeft, now + Duration::from_millis(50)),
-        (
-            Some(HotkeyAction::Stop {
-                stopped_at: now + Duration::from_millis(50)
-            }),
-            false
-        )
-    );
-    assert!(!state.is_recording());
-}
-
-#[test]
 fn ctrl_repress_while_space_held_does_not_restart_recording() {
     let now = base_time();
     let mut state = HotkeyState::default();
@@ -170,26 +152,6 @@ fn physical(ctrl: bool, space: bool) -> PhysicalHotkeyState {
 
 #[cfg(target_os = "linux")]
 #[test]
-fn registered_hotkey_physical_poll_stops_when_ctrl_is_released_first() {
-    let now = base_time();
-    let mut state = RegisteredHotkeyLatch::default();
-
-    assert_eq!(
-        state.event(RegisteredHotKeyState::Pressed, physical(true, true), now),
-        Some(HotkeyAction::Start { started_at: now })
-    );
-
-    assert_eq!(
-        state.physical_poll(physical(false, true), now + Duration::from_millis(50)),
-        Some(HotkeyAction::Stop {
-            stopped_at: now + Duration::from_millis(50)
-        })
-    );
-    assert!(!state.is_recording());
-}
-
-#[cfg(target_os = "linux")]
-#[test]
 fn registered_hotkey_physical_poll_keeps_recording_while_chord_is_down() {
     let now = base_time();
     let mut state = RegisteredHotkeyLatch::default();
@@ -229,7 +191,12 @@ fn registered_hotkey_waits_for_space_release_after_ctrl_first_stop() {
     let mut state = RegisteredHotkeyLatch::default();
 
     state.event(RegisteredHotKeyState::Pressed, physical(true, true), now);
-    state.physical_poll(physical(false, true), now + Duration::from_millis(50));
+    assert_eq!(
+        state.physical_poll(physical(false, true), now + Duration::from_millis(50)),
+        Some(HotkeyAction::Stop {
+            stopped_at: now + Duration::from_millis(50)
+        })
+    );
 
     assert!(!state.is_recording());
     assert!(state.needs_physical_poll());

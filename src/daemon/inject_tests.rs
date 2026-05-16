@@ -28,7 +28,6 @@ struct MockClipboard {
     content: MockClipboardContent,
     events: Rc<RefCell<Vec<String>>>,
     fail_next_set: bool,
-    fail_on_set: Option<String>,
 }
 
 impl MockClipboard {
@@ -37,7 +36,6 @@ impl MockClipboard {
             content: MockClipboardContent::Text(text.into()),
             events: Rc::new(RefCell::new(Vec::new())),
             fail_next_set: false,
-            fail_on_set: None,
         }
     }
 
@@ -46,7 +44,6 @@ impl MockClipboard {
             content: MockClipboardContent::Empty,
             events: Rc::new(RefCell::new(Vec::new())),
             fail_next_set: false,
-            fail_on_set: None,
         }
     }
 
@@ -58,7 +55,6 @@ impl MockClipboard {
             },
             events: Rc::new(RefCell::new(Vec::new())),
             fail_next_set: false,
-            fail_on_set: None,
         }
     }
 
@@ -67,7 +63,6 @@ impl MockClipboard {
             content: MockClipboardContent::FileList(paths.iter().map(PathBuf::from).collect()),
             events: Rc::new(RefCell::new(Vec::new())),
             fail_next_set: false,
-            fail_on_set: None,
         }
     }
 
@@ -80,7 +75,6 @@ impl MockClipboard {
             },
             events: Rc::new(RefCell::new(Vec::new())),
             fail_next_set: false,
-            fail_on_set: None,
         }
     }
 
@@ -89,17 +83,11 @@ impl MockClipboard {
             content: MockClipboardContent::Unsupported,
             events: Rc::new(RefCell::new(Vec::new())),
             fail_next_set: false,
-            fail_on_set: None,
         }
     }
 
     fn fail_next_set(mut self) -> Self {
         self.fail_next_set = true;
-        self
-    }
-
-    fn fail_on_set(mut self, text: impl Into<String>) -> Self {
-        self.fail_on_set = Some(text.into());
         self
     }
 
@@ -114,15 +102,10 @@ impl MockClipboard {
         }
     }
 
-    fn fail_set_if_needed(&mut self, text: Option<&str>) -> Result<()> {
+    fn fail_set_if_needed(&mut self, _text: Option<&str>) -> Result<()> {
         if self.fail_next_set {
             self.fail_next_set = false;
             anyhow::bail!("clipboard write failed");
-        }
-        if let Some(text) = text {
-            if self.fail_on_set.as_deref() == Some(text) {
-                anyhow::bail!("clipboard write failed for {text}");
-            }
         }
         Ok(())
     }
@@ -211,6 +194,12 @@ impl ClipboardStore for MockClipboard {
         };
         Ok(())
     }
+
+    fn clear(&mut self) -> Result<()> {
+        self.events.borrow_mut().push("clear".to_string());
+        self.content = MockClipboardContent::Empty;
+        Ok(())
+    }
 }
 
 #[test]
@@ -220,9 +209,9 @@ fn paste_mode_labels_are_stable() {
     assert_eq!(PasteMode::Direct.label(), "direct");
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn linux_standard_paste_does_not_need_enigo() {
-    #[cfg(target_os = "linux")]
     assert!(!insertion_needs_enigo(PasteMode::Standard));
 }
 
@@ -422,13 +411,13 @@ fn xtest_paste_chord_success_flushes_all_cleanup_modifiers() {
     assert_eq!(sink.flushes, 2);
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(all(not(target_os = "linux"), not(target_os = "windows")))]
 #[test]
 fn direct_mode_has_no_paste_modifiers() {
     assert!(paste_modifiers(PasteMode::Direct).is_empty());
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(all(not(target_os = "linux"), not(target_os = "windows")))]
 #[derive(Default)]
 struct MockPasteShortcutSink {
     events: Vec<String>,
@@ -437,7 +426,7 @@ struct MockPasteShortcutSink {
     fail_paste: bool,
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(all(not(target_os = "linux"), not(target_os = "windows")))]
 impl PasteShortcutSink for MockPasteShortcutSink {
     fn key(&mut self, key: Key, direction: Direction) -> Result<()> {
         let key = mock_key_label(key);
@@ -461,7 +450,7 @@ impl PasteShortcutSink for MockPasteShortcutSink {
     }
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(all(not(target_os = "linux"), not(target_os = "windows")))]
 fn mock_key_label(key: Key) -> &'static str {
     match key {
         Key::Control => "control",
@@ -471,7 +460,7 @@ fn mock_key_label(key: Key) -> &'static str {
     }
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(all(not(target_os = "linux"), not(target_os = "windows")))]
 fn mock_direction_label(direction: Direction) -> &'static str {
     match direction {
         Direction::Press => "press",
@@ -480,7 +469,7 @@ fn mock_direction_label(direction: Direction) -> &'static str {
     }
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(all(not(target_os = "linux"), not(target_os = "windows")))]
 #[test]
 fn paste_shortcut_releases_only_successfully_pressed_modifiers() {
     let mut sink = MockPasteShortcutSink {
@@ -497,7 +486,7 @@ fn paste_shortcut_releases_only_successfully_pressed_modifiers() {
     );
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(all(not(target_os = "linux"), not(target_os = "windows")))]
 #[test]
 fn paste_shortcut_reports_primary_and_modifier_cleanup_errors() {
     let mut sink = MockPasteShortcutSink {
@@ -525,7 +514,6 @@ struct ClipboardCase {
     guard_allows: bool,
     paste_error: Option<&'static str>,
     fail_next_set: bool,
-    fail_on_set: Option<&'static str>,
     expected_text: Option<&'static str>,
     expected_events: &'static [&'static str],
     expected_outcome: Option<PasteOutcome>,
@@ -542,9 +530,9 @@ fn clipboard_swap_cases_are_stable() {
             guard_allows: true,
             paste_error: Some("paste failed"),
             fail_next_set: false,
-            fail_on_set: None,
             expected_text: Some("old clipboard"),
             expected_events: &[
+                "guard",
                 "read",
                 "set:dictated text",
                 "guard",
@@ -561,9 +549,9 @@ fn clipboard_swap_cases_are_stable() {
             guard_allows: true,
             paste_error: None,
             fail_next_set: false,
-            fail_on_set: None,
             expected_text: Some("old clipboard"),
             expected_events: &[
+                "guard",
                 "read",
                 "set:dictated text",
                 "guard",
@@ -580,9 +568,9 @@ fn clipboard_swap_cases_are_stable() {
             guard_allows: true,
             paste_error: None,
             fail_next_set: false,
-            fail_on_set: None,
             expected_text: Some("dictated text"),
             expected_events: &[
+                "guard",
                 "read",
                 "set:dictated text",
                 "guard",
@@ -599,9 +587,8 @@ fn clipboard_swap_cases_are_stable() {
             guard_allows: false,
             paste_error: None,
             fail_next_set: false,
-            fail_on_set: None,
             expected_text: Some("old clipboard"),
-            expected_events: &["read", "set:dictated text", "guard", "set:old clipboard"],
+            expected_events: &["guard"],
             expected_outcome: Some(PasteOutcome::Blocked),
             error_contains: None,
         },
@@ -612,7 +599,6 @@ fn clipboard_swap_cases_are_stable() {
             guard_allows: true,
             paste_error: None,
             fail_next_set: false,
-            fail_on_set: None,
             expected_text: None,
             expected_events: &[],
             expected_outcome: Some(PasteOutcome::Pasted),
@@ -625,9 +611,8 @@ fn clipboard_swap_cases_are_stable() {
             guard_allows: true,
             paste_error: None,
             fail_next_set: true,
-            fail_on_set: None,
             expected_text: Some("old clipboard"),
-            expected_events: &["read", "set:dictated text"],
+            expected_events: &["guard", "read", "set:dictated text"],
             expected_outcome: None,
             error_contains: Some("could not copy transcript to clipboard"),
         },
@@ -640,9 +625,6 @@ fn clipboard_swap_cases_are_stable() {
         };
         if case.fail_next_set {
             clipboard = clipboard.fail_next_set();
-        }
-        if let Some(text) = case.fail_on_set {
-            clipboard = clipboard.fail_on_set(text);
         }
 
         let events = clipboard.events();
@@ -683,24 +665,43 @@ fn clipboard_swap_cases_are_stable() {
 }
 
 #[test]
+fn clipboard_guard_error_before_staging_leaves_clipboard_untouched() {
+    let mut clipboard = MockClipboard::new("old clipboard");
+    let events = clipboard.events();
+    let result = paste_with_clipboard_swap_guarded(
+        &mut clipboard,
+        "dictated text",
+        || {
+            events.borrow_mut().push("paste".to_string());
+            Ok(())
+        },
+        Duration::ZERO,
+        Duration::ZERO,
+        ClipboardPolicy::RestorePrevious,
+        || {
+            events.borrow_mut().push("guard".to_string());
+            Err(anyhow::anyhow!("focus unavailable"))
+        },
+    );
+
+    let err = result.expect_err("guard error should abort before staging");
+    assert!(format!("{err:#}").contains("focus unavailable"));
+    assert_eq!(clipboard.text(), Some("old clipboard"));
+    assert_eq!(events.borrow().as_slice(), ["guard"]);
+}
+
+#[test]
 fn clipboard_keep_transcript_policy_leaves_text_after_paste_and_guard_block() {
     for guard_allows in [true, false] {
         let mut clipboard = MockClipboard::new("old clipboard");
-        let events = clipboard.events();
         let result = paste_with_clipboard_swap_guarded(
             &mut clipboard,
             "dictated text",
-            || {
-                events.borrow_mut().push("paste".to_string());
-                Ok(())
-            },
+            || Ok(()),
             Duration::ZERO,
             Duration::ZERO,
             ClipboardPolicy::KeepTranscript,
-            || {
-                events.borrow_mut().push("guard".to_string());
-                Ok(guard_allows)
-            },
+            || Ok(guard_allows),
         )
         .expect("clipboard keep policy should not fail");
 
@@ -727,6 +728,7 @@ fn clipboard_restore_policy_preserves_supported_non_text_payloads() {
                 alt_text: Some("old".to_string()),
             },
             vec![
+                "guard".to_string(),
                 "read".to_string(),
                 "set:dictated text".to_string(),
                 "guard".to_string(),
@@ -742,6 +744,7 @@ fn clipboard_restore_policy_preserves_supported_non_text_payloads() {
                 PathBuf::from("/tmp/b.txt"),
             ]),
             vec![
+                "guard".to_string(),
                 "set:dictated text".to_string(),
                 "guard".to_string(),
                 "paste".to_string(),
@@ -757,6 +760,7 @@ fn clipboard_restore_policy_preserves_supported_non_text_payloads() {
                 bytes: vec![1, 2, 3, 4],
             },
             vec![
+                "guard".to_string(),
                 "set:dictated text".to_string(),
                 "guard".to_string(),
                 "paste".to_string(),
@@ -791,9 +795,10 @@ fn clipboard_restore_policy_preserves_supported_non_text_payloads() {
 }
 
 #[test]
-fn unsupported_previous_clipboard_leaves_staged_transcript_when_restore_is_impossible() {
+fn unsupported_previous_clipboard_clears_staged_transcript_on_guard_block() {
     let mut clipboard = MockClipboard::unsupported();
     let events = clipboard.events();
+    let mut guard_calls = 0;
     let result = paste_with_clipboard_swap_guarded(
         &mut clipboard,
         "dictated text",
@@ -806,15 +811,16 @@ fn unsupported_previous_clipboard_leaves_staged_transcript_when_restore_is_impos
         ClipboardPolicy::RestorePrevious,
         || {
             events.borrow_mut().push("guard".to_string());
-            Ok(false)
+            guard_calls += 1;
+            Ok(guard_calls == 1)
         },
     )
-    .expect("unsupported clipboard should leave staged transcript on guard block");
+    .expect("unsupported clipboard should clear staged transcript on guard block");
 
     assert_eq!(result, PasteOutcome::Blocked);
-    assert_eq!(clipboard.text(), Some("dictated text"));
+    assert_eq!(clipboard.content, MockClipboardContent::Empty);
     assert_eq!(
         events.borrow().as_slice(),
-        ["read", "set:dictated text", "guard"]
+        ["guard", "read", "set:dictated text", "guard", "clear"]
     );
 }

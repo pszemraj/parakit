@@ -7,7 +7,8 @@ use rubato::{
 };
 use std::path::Path;
 
-const RESAMPLE_CHUNK_SIZE: usize = 1024;
+/// Input frame count used for sinc resampling in file and live audio paths.
+pub const RESAMPLE_CHUNK_SIZE: usize = 1024;
 
 /// Decoded mono WAV audio.
 pub struct WavData {
@@ -100,18 +101,17 @@ pub fn resample_to_target(samples: Vec<f32>, source_rate: u32) -> Result<Vec<f32
     let expected_len =
         (samples.len() as f64 * TARGET_RATE as f64 / source_rate as f64).ceil() as usize;
     let mut output = Vec::with_capacity(expected_len);
+    let mut input_frames = vec![vec![0.0; RESAMPLE_CHUNK_SIZE]];
+    let mut output_frames = vec![vec![0.0; resampler.output_frames_max()]];
 
     for chunk in samples.chunks(RESAMPLE_CHUNK_SIZE) {
-        let mut padded = chunk.to_vec();
-        if padded.len() < RESAMPLE_CHUNK_SIZE {
-            padded.resize(RESAMPLE_CHUNK_SIZE, 0.0);
-        }
-        let input_frames = vec![padded];
-        let output_frames = resampler
-            .process(&input_frames, None)
+        input_frames[0].fill(0.0);
+        input_frames[0][..chunk.len()].copy_from_slice(chunk);
+        let (_, written) = resampler
+            .process_into_buffer(&input_frames, &mut output_frames, None)
             .context("failed to resample WAV chunk")?;
         if let Some(ch0) = output_frames.first() {
-            output.extend_from_slice(ch0);
+            output.extend_from_slice(&ch0[..written]);
         }
     }
 

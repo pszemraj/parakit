@@ -80,10 +80,9 @@ struct Cli {
     #[arg(long, value_name = "N")]
     threads: Option<NonZeroUsize>,
 
-    /// Batch insertion style. `terminal` uses Ctrl+Shift+V on Linux/Windows;
-    /// `direct` types text without touching the clipboard.
-    #[arg(long, value_enum, default_value_t = PasteMode::Terminal)]
-    paste_mode: PasteMode,
+    /// Batch insertion style. Defaults to terminal paste on Linux and standard paste elsewhere.
+    #[arg(long, value_enum)]
+    paste_mode: Option<PasteMode>,
 
     /// Leave dictated text on the clipboard after paste instead of restoring previous clipboard contents.
     #[arg(long)]
@@ -143,6 +142,8 @@ enum Commands {
     Stop,
     /// Paste the last transcript remembered by the running daemon.
     PasteLast,
+    /// Copy the last transcript remembered by the running daemon.
+    CopyLast,
     /// Exercise clipboard staging and paste without recording microphone audio.
     TestPaste(TestPasteCli),
 }
@@ -197,6 +198,24 @@ struct TestPasteCli {
     text: String,
 }
 
+impl Cli {
+    fn effective_paste_mode(&self) -> PasteMode {
+        self.paste_mode.unwrap_or_else(default_paste_mode)
+    }
+}
+
+fn default_paste_mode() -> PasteMode {
+    #[cfg(target_os = "linux")]
+    {
+        PasteMode::Terminal
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        PasteMode::Standard
+    }
+}
+
 // =============================================================================
 // main
 // =============================================================================
@@ -219,6 +238,7 @@ fn run() -> Result<()> {
     let hotkey_backend = cli.hotkey_backend;
     #[cfg(not(target_os = "linux"))]
     let hotkey_backend = HotkeyBackend::Auto;
+    let paste_mode = cli.effective_paste_mode();
 
     if let Some(command) = &cli.command {
         match command {
@@ -245,7 +265,7 @@ fn run() -> Result<()> {
                 let ok = daemon::preflight::print_doctor(
                     cli.quiet,
                     cli.verbose,
-                    cli.paste_mode,
+                    paste_mode,
                     doctor_cli.deep,
                     hotkey_backend,
                 );
@@ -264,6 +284,10 @@ fn run() -> Result<()> {
             }
             Commands::PasteLast => {
                 daemon::ipc::run_client(daemon::ipc::IpcCommand::PasteLast, cli.quiet)?;
+                return Ok(());
+            }
+            Commands::CopyLast => {
+                daemon::ipc::run_client(daemon::ipc::IpcCommand::CopyLast, cli.quiet)?;
                 return Ok(());
             }
             Commands::TestPaste(test_paste) => {
@@ -313,6 +337,11 @@ fn run() -> Result<()> {
     }
 
     #[cfg(target_os = "linux")]
+    if daemon::wsl::running_under_wsl() {
+        log.warn(daemon::wsl::warning());
+    }
+
+    #[cfg(target_os = "linux")]
     daemon::session::ensure_x11_session_supported()?;
 
     let _daemon_lock = daemon::preflight::acquire_singleton_lock()?;
@@ -322,18 +351,18 @@ fn run() -> Result<()> {
         "parakit: hotkey preflight passed ({})",
         hotkey_backend.label()
     ));
-    daemon::inject::preflight(cli.paste_mode).context("text insertion preflight failed")?;
+    daemon::inject::preflight(paste_mode).context("text insertion preflight failed")?;
     log.verbose("parakit: insertion preflight passed");
     let ipc_state = Arc::new(daemon::ipc::SharedState::new());
-    #[cfg(unix)]
+    #[cfg(any(unix, target_os = "windows"))]
     let _ipc_server = daemon::ipc::spawn_server(
         Arc::clone(&ipc_state),
-        cli.paste_mode,
+        paste_mode,
         cli.keep_transcript_clipboard,
         Arc::clone(&log),
     )
     .context("start daemon control socket")?;
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, target_os = "windows")))]
     log.verbose("parakit: local control socket unavailable on this platform");
 
     let cleaner = rules::build_cleaner(cli.no_cleaning, &cli.disable_rule)?.map(Arc::new);
@@ -351,24 +380,8 @@ fn run() -> Result<()> {
         .context("audio manager started without reporting a microphone")?;
     warn_about_bluetooth_mic_if_needed(&log, &mic_info);
 
-    let model_path = match cli.model.as_deref() {
-        Some(path) => path.to_path_buf(),
-        None => fetch::ensure_default_model(cli.quiet)?,
-    };
+    let (model_path, engine) = open_cli_engine(&cli, cli.quiet, &log)?;
     let model_dtype = model_dtype_label(&model_path);
-    let threads = cli
-        .threads
-        .map(NonZeroUsize::get)
-        .unwrap_or_else(default_thread_count);
-    let open_started = Instant::now();
-    let engine = open_engine(&model_path, threads, cli.verbose)
-        .with_context(|| format!("could not open model {}", model_path.display()))?;
-    log.verbose(format!(
-        "parakit: model opened in {:.0}ms with backend={} threads={}",
-        open_started.elapsed().as_secs_f32() * 1000.0,
-        engine.backend(),
-        engine.threads()
-    ));
 
     // Banner.
     let model_name = model_file_name(&model_path);
@@ -388,7 +401,7 @@ fn run() -> Result<()> {
         },
         insertion: format!(
             "batch paste ({}, {})",
-            cli.paste_mode.label(),
+            paste_mode.label(),
             if cli.keep_transcript_clipboard {
                 "keep transcript clipboard"
             } else {
@@ -411,7 +424,7 @@ fn run() -> Result<()> {
         log: Arc::clone(&log),
         notifier: notifier.clone(),
         state: Arc::clone(&ipc_state),
-        paste_mode: cli.paste_mode,
+        paste_mode,
         keep_transcript_clipboard: cli.keep_transcript_clipboard,
         insert_transcripts: true,
         rx,
@@ -448,6 +461,7 @@ fn warn_about_bluetooth_mic_if_needed(log: &Logger, mic_info: &daemon::audio::Mi
 }
 
 fn run_ptt_audio_simulation(cli: &Cli, log: Arc<Logger>, audio_path: &Path) -> Result<()> {
+    let paste_mode = cli.effective_paste_mode();
     let cleaner = rules::build_cleaner(cli.no_cleaning, &cli.disable_rule)?.map(Arc::new);
     let data_log = cli
         .log_dir
@@ -455,21 +469,25 @@ fn run_ptt_audio_simulation(cli: &Cli, log: Arc<Logger>, audio_path: &Path) -> R
         .map(|dir| Arc::new(DataLogger::new(dir, cli.log_format)));
     let sounds = Sounds::new(false);
 
+    let load_started = Instant::now();
     let mut wav = read_wav_mono(audio_path)?;
+    let load_elapsed = load_started.elapsed();
     let source_rate = wav.sample_rate;
+    let source_samples = wav.samples.len();
+    let resample_started = Instant::now();
     wav.samples = resample_to_target(wav.samples, source_rate)?;
+    let resample_elapsed = resample_started.elapsed();
     let audio_secs = wav.samples.len() as f32 / TARGET_RATE as f32;
+    log.verbose(format!(
+        "parakit: simulated audio prepared in {:.0}ms (read/downmix {:.0}ms, resample {:.0}ms, source_samples={}, target_samples={})",
+        (load_elapsed + resample_elapsed).as_secs_f32() * 1000.0,
+        load_elapsed.as_secs_f32() * 1000.0,
+        resample_elapsed.as_secs_f32() * 1000.0,
+        source_samples,
+        wav.samples.len()
+    ));
 
-    let model_path = match cli.model.as_deref() {
-        Some(path) => path.to_path_buf(),
-        None => fetch::ensure_default_model(cli.quiet || !cli.verbose)?,
-    };
-    let threads = cli
-        .threads
-        .map(NonZeroUsize::get)
-        .unwrap_or_else(default_thread_count);
-    let engine = open_engine(&model_path, threads, cli.verbose)
-        .with_context(|| format!("could not open model {}", model_path.display()))?;
+    let (_model_path, engine) = open_cli_engine(cli, cli.quiet || !cli.verbose, &log)?;
 
     let msg = format!(
         "parakit: simulating PTT from {} ({audio_secs:.2}s, {source_rate} Hz source)",
@@ -486,7 +504,7 @@ fn run_ptt_audio_simulation(cli: &Cli, log: Arc<Logger>, audio_path: &Path) -> R
         log,
         notifier: Notifier::new(Arc::new(Logger::new(LogLevel::Quiet))),
         state: Arc::new(daemon::ipc::SharedState::new()),
-        paste_mode: cli.paste_mode,
+        paste_mode,
         keep_transcript_clipboard: cli.keep_transcript_clipboard,
         insert_transcripts: false,
         rx,
@@ -494,9 +512,9 @@ fn run_ptt_audio_simulation(cli: &Cli, log: Arc<Logger>, audio_path: &Path) -> R
 
     let started_at = Instant::now();
     let stopped_at = started_at + Duration::from_secs_f32(audio_secs);
-    tx.send(WorkerEvent::RecordingStarted)
+    tx.send(WorkerEvent::Started)
         .context("could not send simulated PTT start event")?;
-    tx.send(WorkerEvent::RecordingStopped {
+    tx.send(WorkerEvent::Stopped {
         started_at,
         stopped_at,
         pcm: wav.samples,
@@ -511,16 +529,34 @@ fn run_ptt_audio_simulation(cli: &Cli, log: Arc<Logger>, audio_path: &Path) -> R
 }
 
 fn model_dtype_label(path: &std::path::Path) -> String {
-    let dtype = gguf::detect_dtype(path)
-        .ok()
-        .flatten()
-        .unwrap_or_else(|| "unknown".to_string());
+    let dtype = gguf::dtype_label(path);
     let size = path
         .metadata()
         .ok()
         .map(|meta| format!(" ({:.0} MB)", meta.len() as f64 / 1_000_000.0))
         .unwrap_or_default();
     format!("{dtype}{size}")
+}
+
+fn open_cli_engine(cli: &Cli, fetch_quiet: bool, log: &Logger) -> Result<(PathBuf, Engine)> {
+    let model_path = match cli.model.as_deref() {
+        Some(path) => path.to_path_buf(),
+        None => fetch::ensure_default_model(fetch_quiet)?,
+    };
+    let threads = cli
+        .threads
+        .map(NonZeroUsize::get)
+        .unwrap_or_else(default_thread_count);
+    let open_started = Instant::now();
+    let engine = open_engine(&model_path, threads, cli.verbose)
+        .with_context(|| format!("could not open model {}", model_path.display()))?;
+    log.verbose(format!(
+        "parakit: model opened in {:.0}ms with backend={} threads={}",
+        open_started.elapsed().as_secs_f32() * 1000.0,
+        engine.backend(),
+        engine.threads()
+    ));
+    Ok((model_path, engine))
 }
 
 fn log_level(cli: &Cli) -> LogLevel {
@@ -608,7 +644,107 @@ fn with_stderr_suppressed<T>(f: impl FnOnce() -> Result<T>) -> Result<T> {
     f()
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+const STDERR_FD: libc::c_int = 2;
+
+#[cfg(windows)]
+fn with_stderr_suppressed<T>(f: impl FnOnce() -> Result<T>) -> Result<T> {
+    use std::os::windows::io::{FromRawHandle, IntoRawHandle};
+
+    struct RestoreStderr {
+        saved_fd: libc::c_int,
+        nul_fd: libc::c_int,
+    }
+
+    impl Drop for RestoreStderr {
+        fn drop(&mut self) {
+            unsafe {
+                libc::dup2(self.saved_fd, STDERR_FD);
+                libc::close(self.saved_fd);
+                libc::close(self.nul_fd);
+            }
+        }
+    }
+
+    let Ok(nul_file) = std::fs::OpenOptions::new().write(true).open("NUL") else {
+        return f();
+    };
+    let nul_handle = nul_file.into_raw_handle();
+    let nul_fd = unsafe { libc::open_osfhandle(nul_handle as isize, 0) };
+    if nul_fd < 0 {
+        unsafe {
+            drop(std::fs::File::from_raw_handle(nul_handle));
+        }
+        return f();
+    }
+
+    let saved_fd = unsafe { libc::dup(STDERR_FD) };
+    if saved_fd < 0 {
+        unsafe {
+            libc::close(nul_fd);
+        }
+        return f();
+    }
+
+    // MSVCRT _dup2 returns 0 on success, while POSIX dup2 returns the
+    // destination fd. Both report failure as -1, so check the failure value.
+    if unsafe { libc::dup2(nul_fd, STDERR_FD) } == -1 {
+        unsafe {
+            libc::close(saved_fd);
+            libc::close(nul_fd);
+        }
+        return f();
+    }
+
+    let _restore = RestoreStderr { saved_fd, nul_fd };
+    f()
+}
+
+#[cfg(all(test, windows))]
+mod windows_stdio_tests {
+    use super::STDERR_FD;
+    use std::os::windows::io::{FromRawHandle, IntoRawHandle};
+
+    struct RestoreStderr {
+        saved_fd: libc::c_int,
+        nul_fd: libc::c_int,
+    }
+
+    impl Drop for RestoreStderr {
+        fn drop(&mut self) {
+            unsafe {
+                libc::dup2(self.saved_fd, STDERR_FD);
+                libc::close(self.saved_fd);
+                libc::close(self.nul_fd);
+            }
+        }
+    }
+
+    #[test]
+    fn windows_crt_dup2_reports_zero_on_success() {
+        let nul_file = std::fs::OpenOptions::new()
+            .write(true)
+            .open("NUL")
+            .expect("open NUL");
+        let nul_handle = nul_file.into_raw_handle();
+        let nul_fd = unsafe { libc::open_osfhandle(nul_handle as isize, 0) };
+        if nul_fd < 0 {
+            unsafe {
+                drop(std::fs::File::from_raw_handle(nul_handle));
+            }
+            panic!("open_osfhandle failed");
+        }
+
+        let saved_fd = unsafe { libc::dup(STDERR_FD) };
+        assert!(saved_fd >= 0, "dup stderr failed");
+        let _restore = RestoreStderr { saved_fd, nul_fd };
+
+        let result = unsafe { libc::dup2(nul_fd, STDERR_FD) };
+        assert_eq!(result, 0);
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
 fn with_stderr_suppressed<T>(f: impl FnOnce() -> Result<T>) -> Result<T> {
     f()
 }
@@ -651,10 +787,7 @@ fn print_cache_list() -> Result<()> {
     println!("  models:");
     for path in entries {
         let name = model_file_name(&path);
-        let dtype = gguf::detect_dtype(&path)
-            .ok()
-            .flatten()
-            .unwrap_or_else(|| "unknown".to_string());
+        let dtype = gguf::dtype_label(&path);
         let size = path
             .metadata()
             .map(|meta| format_file_size(meta.len()))

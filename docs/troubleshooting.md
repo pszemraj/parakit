@@ -2,7 +2,7 @@
 
 Start with diagnostics. `doctor` does not load the model.
 
-```bash
+```text
 parakit doctor
 parakit --verbose doctor
 parakit doctor --deep
@@ -12,7 +12,7 @@ It exits `0` when startup should proceed and `1` when a blocking issue remains. 
 
 If a daemon is already running, use the control socket before starting another copy:
 
-```bash
+```text
 parakit status
 parakit stop
 ```
@@ -39,12 +39,18 @@ Paste modes, focus-change behavior, paste sanitization, and clipboard fallback b
 
 Run `parakit doctor --deep` for an active insertion smoke test. On Linux, use an X11 session; Wayland details are in [linux-desktop.md](linux-desktop.md). Use `standard` for apps that only accept `Ctrl+V`; use `direct` only when an app refuses clipboard paste entirely.
 
-On Windows, paste shortcuts are sent with `SendInput`. Windows blocks synthetic input into higher-integrity processes, so a normal parakit process cannot paste into an administrator/elevated target application. Security software can also flag global hooks plus text insertion; whitelist the binary when needed.
+Windows elevated-target behavior is covered in [running.md#insertion](running.md#insertion).
 
 If paste is blocked, focus the intended field and run:
 
-```bash
+```text
 parakit paste-last
+```
+
+To avoid sending a paste chord, copy the last transcript instead:
+
+```text
+parakit copy-last
 ```
 
 ## Wrong Microphone
@@ -77,13 +83,6 @@ The git submodule is missing. Fix the existing checkout:
 git submodule update --init --recursive
 ```
 
-On Windows, initialize the submodule before building:
-
-```powershell
-git submodule update --init --recursive
-cargo build --release
-```
-
 For shared library loading failures on Linux, check [build.md#runtime-library-paths](build.md#runtime-library-paths).
 
 Vulkan failing on `spirv/unified1/spirv.hpp` means `spirv-headers` is missing. Install it and rebuild with the Vulkan feature:
@@ -93,6 +92,6 @@ sudo apt install spirv-headers
 cargo build --release --features vulkan
 ```
 
-Windows builds need generated DLLs next to the executable or on `PATH`; see [build.md#windows-dlls](build.md#windows-dlls).
+Windows builds need generated DLLs next to the executable; use the bundle scripts in [../scripts/windows/README.md](../scripts/windows/README.md).
 
 Model cache behavior and commands are in [running.md#model-cache](running.md#model-cache).

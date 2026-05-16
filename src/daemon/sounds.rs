@@ -5,15 +5,19 @@
 //!   - Stop   : high ding (E5 = 659 Hz, ~80 ms) — successful transcription
 //!   - Error  : two-pulse low buzz (A3 = 220 Hz, ~110 ms each)
 //!
-//! Implementation note: rodio's `OutputStream` is `!Send`, so we run a
-//! dedicated sound thread that owns the stream and listens on a channel.
-//! [`Sounds`] is then a thin `Send + Sync` wrapper around the channel
-//! sender, so the hotkey and worker threads can both poke it.
+//! Implementation note: rodio's `OutputStream` is `!Send`, so the sound thread
+//! opens output only while a cue is playing. [`Sounds`] stays a thin
+//! `Send + Sync` wrapper around the channel sender, so the hotkey and worker
+//! threads can both poke it.
 
 use crossbeam_channel::{bounded, Sender};
 use rodio::source::Source;
 use rodio::{OutputStream, Sink};
 use std::time::Duration;
+
+const CUE_SAMPLE_RATE: u32 = 44_100;
+const CUE_OUTPUT_WARMUP: Duration = Duration::from_millis(60);
+const CUE_OUTPUT_DRAIN: Duration = Duration::from_millis(60);
 
 #[derive(Clone, Copy)]
 enum Cue {
@@ -47,57 +51,12 @@ impl Sounds {
         std::thread::Builder::new()
             .name("parakit-sounds".into())
             .spawn(move || {
-                // Owning the stream on this thread keeps cpal/rodio happy.
-                let (_stream, handle) = match OutputStream::try_default() {
-                    Ok(s) => s,
-                    Err(e) => {
-                        eprintln!(
-                            "parakit: could not open audio output for cues: {e:?}\n\
-                             (Sound cues will be disabled. Pass --no-sounds to silence this warning.)"
-                        );
-                        return;
-                    }
-                };
-
                 while let Ok(cue) = rx.recv() {
-                    let result = (|| -> Result<(), String> {
-                        let sink =
-                            Sink::try_new(&handle).map_err(|e| format!("sink: {e:?}"))?;
-                        match cue {
-                            Cue::Start => {
-                                sink.append(sine_with_envelope(
-                                    440.0,
-                                    Duration::from_millis(80),
-                                    0.6,
-                                ));
-                            }
-                            Cue::Success => {
-                                sink.append(sine_with_envelope(
-                                    659.0,
-                                    Duration::from_millis(80),
-                                    0.6,
-                                ));
-                            }
-                            Cue::Error => {
-                                sink.append(sine_with_envelope(
-                                    220.0,
-                                    Duration::from_millis(110),
-                                    0.7,
-                                ));
-                                sink.append(sine_with_envelope(
-                                    207.0, // a touch flat for clear "wrong" feel
-                                    Duration::from_millis(110),
-                                    0.7,
-                                ));
-                            }
-                        }
-                        // Block this thread until the cue finishes so the
-                        // next cue doesn't start mid-tone.
-                        sink.sleep_until_end();
-                        Ok(())
-                    })();
-                    if let Err(e) = result {
-                        eprintln!("parakit: sound cue dropped: {e}");
+                    if let Err(e) = play_cue(cue) {
+                        eprintln!(
+                            "parakit: sound cue dropped: {e}\n\
+                             (Pass --no-sounds to silence this warning.)"
+                        );
                     }
                 }
             })
@@ -130,17 +89,38 @@ impl Sounds {
     }
 }
 
+fn play_cue(cue: Cue) -> Result<(), String> {
+    let (_stream, handle) =
+        OutputStream::try_default().map_err(|e| format!("audio output: {e:?}"))?;
+    let sink = Sink::try_new(&handle).map_err(|e| format!("sink: {e:?}"))?;
+    sink.append(silence(CUE_OUTPUT_WARMUP));
+    match cue {
+        Cue::Start => {
+            sink.append(sine_with_envelope(440.0, Duration::from_millis(80), 0.6));
+        }
+        Cue::Success => {
+            sink.append(sine_with_envelope(659.0, Duration::from_millis(80), 0.6));
+        }
+        Cue::Error => {
+            sink.append(sine_with_envelope(220.0, Duration::from_millis(110), 0.7));
+            sink.append(sine_with_envelope(207.0, Duration::from_millis(110), 0.7));
+        }
+    }
+    sink.append(silence(CUE_OUTPUT_DRAIN));
+    sink.sleep_until_end();
+    Ok(())
+}
+
 /// Sine wave with a short attack and release to avoid clicks.
 fn sine_with_envelope(freq: f32, dur: Duration, vol: f32) -> impl Source<Item = f32> {
-    let sample_rate = 44_100u32;
-    let total_samples = (sample_rate as f32 * dur.as_secs_f32()) as usize;
-    let attack_samples = (sample_rate as f32 * 0.005) as usize; // 5 ms
-    let release_samples = (sample_rate as f32 * 0.020) as usize; // 20 ms
+    let total_samples = (CUE_SAMPLE_RATE as f32 * dur.as_secs_f32()) as usize;
+    let attack_samples = (CUE_SAMPLE_RATE as f32 * 0.005) as usize; // 5 ms
+    let release_samples = (CUE_SAMPLE_RATE as f32 * 0.020) as usize; // 20 ms
     let two_pi_f = 2.0 * std::f32::consts::PI * freq;
 
     let samples: Vec<f32> = (0..total_samples)
         .map(|i| {
-            let t = i as f32 / sample_rate as f32;
+            let t = i as f32 / CUE_SAMPLE_RATE as f32;
             let mut v = (two_pi_f * t).sin() * vol;
             if i < attack_samples {
                 v *= i as f32 / attack_samples as f32;
@@ -153,5 +133,10 @@ fn sine_with_envelope(freq: f32, dur: Duration, vol: f32) -> impl Source<Item = 
         })
         .collect();
 
-    rodio::buffer::SamplesBuffer::new(1, sample_rate, samples)
+    rodio::buffer::SamplesBuffer::new(1, CUE_SAMPLE_RATE, samples)
+}
+
+fn silence(dur: Duration) -> impl Source<Item = f32> {
+    let total_samples = (CUE_SAMPLE_RATE as f32 * dur.as_secs_f32()) as usize;
+    rodio::buffer::SamplesBuffer::new(1, CUE_SAMPLE_RATE, vec![0.0; total_samples])
 }

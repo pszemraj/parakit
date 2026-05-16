@@ -1,6 +1,8 @@
 # Build
 
-parakit is a Rust 1.87+ binary that links to the vendored [CrispASR](https://github.com/CrispStrobe/CrispASR) submodule. The default build is CPU-only and local-machine optimized.
+parakit is a Rust 1.87+ binary that links to the vendored [CrispASR](https://github.com/CrispStrobe/CrispASR) submodule. The default build is CPU-only and may use detected CPU BLAS libraries.
+
+Command examples use a POSIX shell unless the surrounding section is Windows-specific. Windows-only commands are shown as `bat` or `powershell`.
 
 ## Native Dependencies
 
@@ -8,9 +10,9 @@ Cargo handles Rust packages. System packages are still needed for audio, desktop
 
 | OS | Packages |
 | --- | --- |
-| Ubuntu 24.04 | `cmake build-essential libasound2-dev libudev-dev libxtst-dev libxi-dev libx11-dev libxkbcommon-dev libevdev-dev libgomp1 pkg-config autoconf libtool` |
-| Fedora | `cmake gcc-c++ alsa-lib-devel libudev-devel libXtst-devel libXi-devel libX11-devel libxkbcommon-devel libevdev-devel pkgconf autoconf libtool` |
-| Arch | `cmake base-devel alsa-lib libxtst libxi libx11 libxkbcommon libevdev pkgconf autoconf libtool` |
+| Ubuntu 24.04 | `cmake build-essential libasound2-dev libudev-dev libxtst-dev libxi-dev libx11-dev libxkbcommon-dev libevdev-dev libxdo-dev libgomp1 pkg-config autoconf libtool` |
+| Fedora | `cmake gcc-c++ alsa-lib-devel libudev-devel libXtst-devel libXi-devel libX11-devel libxkbcommon-devel libevdev-devel xdotool-devel pkgconf autoconf libtool` |
+| Arch | `cmake base-devel alsa-lib libxtst libxi libx11 libxkbcommon libevdev xdotool pkgconf autoconf libtool` |
 | Windows | Visual Studio 2022 with the "Desktop development with C++" workload, plus CMake on `PATH`. |
 | macOS | Xcode command line tools plus `cmake autoconf automake libtool pkg-config`. |
 
@@ -26,33 +28,47 @@ sudo apt install libvulkan-dev vulkan-tools glslc spirv-tools spirv-headers mesa
 
 ## Install
 
-```bash
+```text
 git submodule update --init --recursive
 cargo install --path .
 ```
 
-`cargo install --path .` installs the release binary to Cargo's bin directory, usually `~/.cargo/bin`.
-Developer installs built this way depend on the generated CrispASR shared libraries under Cargo's build output. Do not delete the repository `target/` tree and treat GitHub auto-generated source archives as unsupported because they do not include the CrispASR submodule. A public release must ship either a source archive with submodules or a binary bundle whose shared libraries are colocated with the executable.
+`cargo install --path .` installs the release binary to Cargo's bin directory, usually `~/.cargo/bin` on Unix-like systems and `%USERPROFILE%\.cargo\bin` on Windows.
+
+Install behavior:
+
+- Windows `cargo install --path .` copies `parakit.exe` but not the generated CrispASR/ggml DLLs. Use the scripts in [../scripts/windows/README.md](../scripts/windows/README.md) for a normal Windows install.
+- Unix-like developer installs depend on the generated CrispASR shared libraries under Cargo's build output. Do not delete the repository `target/` tree.
+- GitHub auto-generated source archives are unsupported because they do not include the CrispASR submodule. A public release must ship either a source archive with submodules or a binary bundle whose shared libraries are colocated with the executable.
 
 Add `--locked` for CI or reproducibility checks when Cargo must use the exact versions in `Cargo.lock`. Leave it off for normal local installs.
 
 Optional accelerator builds:
 
 ```bash
-PARAKIT_BLAS=auto cargo install --path .
 cargo install --path . --features cuda
 cargo install --path . --features vulkan
 cargo install --path . --features metal  # Apple targets only
 ```
 
-Windows support is experimental. Prefer a normal Rust build first:
+## Windows Bundles
 
-```powershell
-git submodule update --init --recursive
-cargo build --release
+For a per-user Windows CPU install:
+
+```bat
+scripts\windows\windows-cpu-build.bat
 ```
 
-If `parakit.exe` cannot find generated CrispASR DLLs, copy them next to the binary as described in [Windows DLLs](#windows-dlls). Treat Windows builds as source/build validation until the daemon work in [architecture.md#deferred-windows-work](architecture.md#deferred-windows-work) is complete.
+The PowerShell equivalent from PowerShell is:
+
+```powershell
+Set-ExecutionPolicy -Scope Process Bypass
+.\scripts\windows\windows-cpu-build.ps1
+```
+
+Options, install location, PATH behavior, and OpenBLAS bundling are described in [../scripts/windows/README.md](../scripts/windows/README.md).
+
+The Windows scripts do not require Developer Mode. They install by copying files into a per-user directory, not by creating symlinks.
 
 ## CPU Builds
 
@@ -74,10 +90,9 @@ cargo run --release --no-default-features --features bundled --example transcrib
 
 ## BLAS And MKL
 
-Native ggml kernels are the default. BLAS/MKL can help some matrix paths but adds system-library dependencies.
+The build defaults to `PARAKIT_BLAS=auto`. If no supported BLAS is detected, parakit uses native ggml CPU kernels. BLAS/MKL can help some matrix paths but adds system-library dependencies.
 
 ```bash
-PARAKIT_BLAS=auto cargo install --path .
 PARAKIT_BLAS=openblas cargo install --path .
 PARAKIT_BLAS=mkl cargo install --path .
 PARAKIT_BLAS=generic cargo install --path .
@@ -87,12 +102,14 @@ Supported values:
 
 | Value | Behavior |
 | --- | --- |
-| unset, `off` | Native/OpenMP CPU kernels without BLAS. |
-| `auto` | Apple Accelerate on macOS; otherwise MKL if `mkl-sdl.pc` is visible; otherwise OpenBLAS if `openblas.pc` or `openblas64.pc` is visible; otherwise off. |
+| unset, `auto` | Apple Accelerate on macOS; otherwise MKL if `mkl-sdl.pc` is visible; otherwise Windows OpenBLAS from `PARAKIT_OPENBLAS_ROOT` or `CONDA_PREFIX\Library`; otherwise OpenBLAS if `openblas.pc` or `openblas64.pc` is visible; otherwise off. |
+| `off`, `false`, `0` | Native/OpenMP CPU kernels without BLAS. |
 | `openblas` | `GGML_BLAS=ON`, `GGML_BLAS_VENDOR=OpenBLAS`. |
 | `mkl` | CrispASR `COHERE_MKL=ON`, ggml `Intel10_64lp`. |
 | `generic` | `GGML_BLAS=ON`, `GGML_BLAS_VENDOR=Generic`. |
 | `accelerate` | Apple Accelerate. Apple targets only. |
+
+On Windows, OpenBLAS detection requires `cblas.h`, a runtime DLL under `bin\`, and an import library compatible with the active Rust target environment: `.lib` for MSVC or `.dll.a` for GNU. Set `PARAKIT_OPENBLAS_ROOT` to the prefix containing `include\`, `lib\`, and `bin\`, or activate a conda environment whose `%CONDA_PREFIX%\Library` has that layout. Set both `BLAS_INCLUDE_DIRS` and `BLAS_LIBRARIES` for explicit CMake paths; together they take precedence over autodetection and skip OpenBLAS DLL bundling.
 
 Ubuntu/Debian OpenBLAS:
 
@@ -101,11 +118,11 @@ sudo apt install libopenblas-dev
 PARAKIT_BLAS=openblas cargo install --path .
 ```
 
-Explicit BLAS builds print the selected mode, and `parakit doctor` reports it.
+Explicit `PARAKIT_BLAS` builds print the selected mode, and `parakit doctor` reports the requested and selected modes.
 
 ## CrispASR And Backends
 
-The repository vendors [CrispASR](https://github.com/CrispStrobe/CrispASR) as a git submodule. `build.rs` builds it with CMake, installs shared libraries under `target/<profile>/build/parakit-*/out/lib`, and builds `crispasr-quantize` for `parakit fetch --from-source`.
+The repository vendors [CrispASR](https://github.com/CrispStrobe/CrispASR) as a git submodule. `build.rs` builds it with CMake and installs shared libraries under `target/<profile>/build/parakit-*/out/lib`. Source rebuild requirements are in [dev.md#source-rebuild](dev.md#source-rebuild).
 
 Feature mapping:
 
@@ -117,24 +134,13 @@ Feature mapping:
 
 ## Runtime Library Paths
 
-Linux/BSD builds must use transitive `RPATH`, not `RUNPATH`, so `libwhisper.so` can find sibling `libggml*.so` files.
+Linux/BSD builds must use transitive `RPATH`, not `RUNPATH`, so `libcrispasr.so` can find sibling `libggml*.so` files.
 
 Verify:
 
 ```bash
-ldd target/debug/parakit | grep -E "whisper|ggml"
+ldd target/debug/parakit | grep -E "crispasr|ggml"
 readelf -d target/debug/parakit | grep -E "RPATH|RUNPATH"
 ```
 
 The library paths should point into `target/debug/build/parakit-*/out/lib`, and `readelf` should report `RPATH`.
-
-## Windows DLLs
-
-Windows has no rpath. If the built executable cannot find CrispASR DLLs, copy generated DLLs next to the binary or put the generated `out\bin` directory on `PATH`:
-
-```powershell
-cargo build --release
-copy target\release\build\parakit-*\out\bin\*.dll target\release\
-```
-
-Windows text insertion uses `SendInput`. It can inject only into applications running at the same or a lower integrity level, so a non-elevated parakit cannot paste into an elevated administrator app. Security software may also flag global hooks plus text insertion; whitelist the binary if needed.

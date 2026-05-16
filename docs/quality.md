@@ -11,7 +11,7 @@ cargo run --no-default-features --features bundled --example transcribe-file -- 
   --audio clips/example.wav
 ```
 
-The helper accepts WAV input, uses the same `Engine` path as the daemon, applies cleanup unless disabled, and prints raw and cleaned text. This command avoids live daemon desktop/audio dependencies while keeping the bundled CrispASR build. It uses the cached Q8_0 model by default. Pass `--model /path/to/model.gguf` only when comparing a specific custom GGUF. The source lives at `tools/transcribe-file.rs`; it is a Cargo example target so it is not installed as an end-user binary.
+The helper accepts WAV input, uses the same `Engine` path as the daemon, applies cleanup unless disabled, and prints raw and cleaned text. This command avoids live daemon desktop/audio dependencies while keeping the bundled CrispASR build. Model cache behavior is in [running.md#model-cache](running.md#model-cache). Pass `--model /path/to/model.gguf` only when comparing a specific custom GGUF. The source lives at `tools/transcribe-file.rs`; it is a Cargo example target so it is not installed as an end-user binary.
 
 ## PTT Worker Simulation
 
@@ -32,7 +32,16 @@ The Python helper runs NVIDIA NeMo's official [Parakeet-TDT-0.6B-v3](https://hug
 python scripts/transcribe_nemo_parakeet.py clips/example.wav
 ```
 
-Install details are in [scripts/README.md](../scripts/README.md). The script has hard imports for PyTorch and NeMo so a broken reference environment fails immediately.
+Use a separate Python environment. NeMo and PyTorch are heavy dependencies and are not needed for the Rust daemon:
+
+```bash
+python -m venv target/tmp/.venv-nemo
+source target/tmp/.venv-nemo/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -r scripts/requirements.txt
+```
+
+For CUDA, install the PyTorch build appropriate for the machine first if the default wheel resolver does not pick the right one. The script has hard imports for PyTorch and NeMo so a broken reference environment fails immediately.
 
 ## Recommended A/B Procedure
 

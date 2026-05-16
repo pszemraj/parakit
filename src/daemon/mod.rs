@@ -28,8 +28,23 @@ pub(crate) mod recording;
 pub(crate) mod session;
 /// Generated start/success/error sound cues.
 pub(crate) mod sounds;
+/// Native Windows foreground-window focus snapshots.
+#[cfg(target_os = "windows")]
+pub(crate) mod windows_focus;
+/// Native Windows keyboard input helpers.
+#[cfg(target_os = "windows")]
+pub(crate) mod windows_input;
+/// Windows active paste smoke target used by doctor --deep.
+#[cfg(target_os = "windows")]
+pub(crate) mod windows_paste_smoke;
+/// Windows privilege diagnostics for input-injection limitations.
+#[cfg(target_os = "windows")]
+pub(crate) mod windows_security;
 /// Transcription worker, sanitizer, and paste safety flow.
 pub(crate) mod worker;
+/// WSL environment detection for diagnostics.
+#[cfg(target_os = "linux")]
+pub(crate) mod wsl;
 /// Shared X11 helpers for Linux desktop hotkeys and insertion checks.
 #[cfg(target_os = "linux")]
 pub(crate) mod x11;

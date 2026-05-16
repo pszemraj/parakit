@@ -76,7 +76,10 @@ pub fn ensure_default_model(quiet: bool) -> Result<PathBuf> {
 pub fn run(options: FetchOptions) -> Result<PathBuf> {
     match options.source {
         FetchSource::HostedQ8 => run_hosted_q8(options),
-        FetchSource::OfficialNemo { .. } => run_official_nemo(options),
+        FetchSource::OfficialNemo {
+            keep_nemo,
+            keep_f16,
+        } => run_official_nemo(options, keep_nemo, keep_f16),
     }
 }
 
@@ -146,7 +149,7 @@ fn run_hosted_q8(options: FetchOptions) -> Result<PathBuf> {
     Ok(paths.q8)
 }
 
-fn run_official_nemo(options: FetchOptions) -> Result<PathBuf> {
+fn run_official_nemo(options: FetchOptions, keep_nemo: bool, keep_f16: bool) -> Result<PathBuf> {
     let paths = FetchPaths::new()?;
     std::fs::create_dir_all(&paths.models_dir)
         .with_context(|| format!("create {}", paths.models_dir.display()))?;
@@ -180,7 +183,7 @@ fn run_official_nemo(options: FetchOptions) -> Result<PathBuf> {
                 paths.q8.display()
             ),
         );
-        cleanup_intermediates(&paths, options)?;
+        cleanup_intermediates(&paths, keep_nemo, keep_f16)?;
         return Ok(paths.q8);
     }
 
@@ -214,7 +217,7 @@ fn run_official_nemo(options: FetchOptions) -> Result<PathBuf> {
     )?;
     manifest.save(&paths.manifest)?;
 
-    cleanup_intermediates(&paths, options)?;
+    cleanup_intermediates(&paths, keep_nemo, keep_f16)?;
     status(
         options,
         format_args!("parakit: model ready: {}", paths.q8.display()),
@@ -582,6 +585,12 @@ fn quantize_bin_path() -> Result<PathBuf> {
         return Ok(path);
     }
 
+    #[cfg(target_os = "windows")]
+    bail!(
+        "crispasr-quantize.exe was not found. Windows bundled CPU builds skip the CrispASR examples tree because the pinned server example does not compile under MSVC. Use the hosted Q8 model, or put a compatible crispasr-quantize.exe on PATH before running fetch --from-source."
+    );
+
+    #[cfg(not(target_os = "windows"))]
     bail!(
         "crispasr-quantize was not found. Rebuild parakit with bundled CrispASR enabled, or put crispasr-quantize on PATH."
     );
@@ -700,18 +709,12 @@ fn status(options: FetchOptions, message: std::fmt::Arguments<'_>) {
     }
 }
 
-fn cleanup_intermediates(paths: &FetchPaths, options: FetchOptions) -> Result<()> {
-    if let FetchSource::OfficialNemo {
-        keep_nemo,
-        keep_f16,
-    } = options.source
-    {
-        if !keep_nemo {
-            remove_if_exists(&paths.nemo)?;
-        }
-        if !keep_f16 {
-            remove_if_exists(&paths.f16)?;
-        }
+fn cleanup_intermediates(paths: &FetchPaths, keep_nemo: bool, keep_f16: bool) -> Result<()> {
+    if !keep_nemo {
+        remove_if_exists(&paths.nemo)?;
+    }
+    if !keep_f16 {
+        remove_if_exists(&paths.f16)?;
     }
     Ok(())
 }

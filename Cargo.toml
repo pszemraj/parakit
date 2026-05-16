@@ -1,6 +1,6 @@
 [package]
 name = "parakit"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 rust-version = "1.87"
 description = "Push-to-talk desktop dictation daemon backed by NVIDIA Parakeet through CrispASR."
@@ -64,8 +64,10 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "serd
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
-# Downloading and checksums for `parakit fetch`
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
+# Downloading and checksums for `parakit fetch`. Native roots and system
+# proxy support keep corporate Windows installs working behind managed TLS
+# inspection and proxy policy without disabling certificate validation.
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls-native-roots", "system-proxy"] }
 sha2 = "0.10"
 
 # Error handling
@@ -88,6 +90,17 @@ evdev-rs = { version = "0.4", optional = true }
 
 # X11 paste and smoke-test utilities.
 x11rb = { version = "0.13", features = ["xtest"], optional = true }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.62.2", features = [
+  "Win32_Foundation",
+  "Win32_Graphics_Gdi",
+  "Win32_Security",
+  "Win32_System_LibraryLoader",
+  "Win32_System_Threading",
+  "Win32_UI_Input_KeyboardAndMouse",
+  "Win32_UI_WindowsAndMessaging",
+] }
 
 [features]
 default = ["bundled", "daemon"]
@@ -114,12 +127,13 @@ daemon = [
 # library is not in the platform linker search path.
 bundled = []
 
-# GPU backends. Each implies `bundled` because crispasr-sys does NOT
-# rebuild the C library — the choice of backend has to happen at the
-# CrispASR cmake level, which only matters when we're the ones building it.
-cuda    = ["bundled", "crispasr/cuda"]
-metal   = ["bundled", "crispasr/metal"]
-vulkan  = ["bundled", "crispasr/vulkan"]
+# GPU backends are selected by parakit's build.rs when it configures the
+# pinned CrispASR CMake tree. Do not forward these to crispasr-sys: its
+# fallback build script treats them as native CMake toggles too, which makes
+# `--all-features` non-portable across host platforms.
+cuda    = ["bundled"]
+metal   = ["bundled"]
+vulkan  = ["bundled"]
 
 [build-dependencies]
 cc = "1"

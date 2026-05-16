@@ -4,15 +4,15 @@ parakit runs in the foreground by default. Use that mode once after install, the
 
 ## First Run
 
-```bash
+```text
 parakit doctor && parakit
 ```
 
-`parakit doctor` checks hotkey access, the selected microphone, and insertion support without downloading or loading the model. It reports an already-running daemon but does not treat the daemon lock as an environment failure. It exits `0` when startup should proceed and `1` when a blocking issue remains, so it can be used directly in shell conditionals.
+`parakit doctor` checks hotkey access, the selected microphone, insertion support, and the daemon singleton lock without downloading or loading the model. An already-running daemon makes readiness fail; use `parakit status` or `parakit stop` before starting another copy. It exits `0` when startup should proceed and `1` when a blocking issue remains, so it can be used directly in shell conditionals.
 
 Useful variants:
 
-```bash
+```text
 parakit --verbose doctor
 parakit --quiet doctor
 parakit doctor --deep
@@ -28,7 +28,7 @@ Normal startup:
 parakit
   model: parakeet-tdt-0.6b-v3-Q8_0.gguf
   dtype: Q8_0 (745 MB)
-  mic:   USB Speech Mic Mono, 48000 Hz input -> 16000 Hz model, mono, F32
+  mic:   USB Speech Mic Mono, 48000 Hz mono input -> 16000 Hz mono model, F32
 Ready: hold Ctrl+Space to dictate.
 ```
 
@@ -67,20 +67,21 @@ parakit stop
 
 ## Control Socket
 
-When the daemon is running, these commands talk to it through a per-user Unix socket under the parakit runtime directory:
+When the daemon is running, these commands talk to it through local per-user IPC. Unix-like systems use a Unix socket under the parakit runtime directory; Windows uses a named pipe.
 
-```bash
+```text
 parakit status
 parakit stop
 parakit paste-last
+parakit copy-last
 parakit test-paste "hello from parakit"
 ```
 
-`paste-last` keeps only the latest transcript in daemon memory. `test-paste` runs clipboard staging, focus checks, paste sanitization, and the paste chord without using the microphone.
+`paste-last` and `copy-last` keep only the latest transcript in daemon memory. `test-paste` runs clipboard staging, focus checks, paste sanitization, and the paste chord without using the microphone.
 
 ## Model Cache
 
-With no `-m`, parakit uses the hosted [Q8_0 GGUF model](https://huggingface.co/pszemraj/parakeet-tdt-0.6b-v3-gguf). `XDG_CACHE_HOME` is honored on Linux. macOS uses `~/Library/Caches/parakit/models/`; Windows uses `%LOCALAPPDATA%\parakit\Cache\models\`.
+With no `-m`, parakit uses the hosted [Q8_0 GGUF model](https://huggingface.co/pszemraj/parakeet-tdt-0.6b-v3-gguf). `PARAKIT_MODELS_DIR` overrides the model directory. Without that override, `XDG_CACHE_HOME` is honored on Linux, macOS uses `~/Library/Caches/parakit/models/`, and Windows uses `%LOCALAPPDATA%\parakit\Cache\models\`.
 
 Useful commands:
 
@@ -94,9 +95,13 @@ parakit -m /path/to/model.gguf
 
 `-m <path>` always wins and disables automatic fetch.
 
+For locked-down or offline machines, seed the default model by placing `parakeet-tdt-0.6b-v3-Q8_0.gguf` in the directory printed by `parakit cache dir`. On the next startup, parakit verifies the compiled-in SHA256 and writes the cache manifest. Use `PARAKIT_MODELS_DIR` when the approved model location is managed by IT or shared across a build image.
+
 ## Microphone
 
-parakit follows the OS default input device and avoids monitor/loopback/virtual sources unless no better input is available. The microphone stream stays warm while the daemon is running; a bounded ring buffer feeds a drain thread that keeps 350 ms of pre-roll so the beginning of an utterance is less likely to be clipped.
+parakit follows the OS default input device and avoids monitor/loopback/virtual sources unless no better input is available. When CPAL reports a mono stream with the same sample rate and sample format as the default stream, parakit opens the mono stream. Otherwise it opens the default stream and downmixes multi-channel input to mono before resampling and before model inference. The model input is always 16 kHz mono PCM.
+
+On Linux and macOS, the microphone stream stays warm while the daemon is running; a bounded ring buffer feeds a drain thread that keeps 350 ms of pre-roll so the beginning of an utterance is less likely to be clipped. On Windows, parakit pauses the input stream while idle so `audiodg.exe` and driver-level microphone processing do not burn CPU when no recording is active. Recording start/stop is event-driven; idle device-change polling runs once per second.
 
 If the default input changes while parakit is idle, the daemon switches when CPAL reports a changed selected device identity and prints the new microphone unless `--quiet` is set. Idle polling is CPAL-only and does not shell out to `pactl`. On Linux PulseAudio/PipeWire systems, startup, probe, and stream reopen paths use `pactl` only to enrich generic `default` source names for human-readable logs and Bluetooth warnings. If an active stream fails, parakit keeps running and retries.
 
@@ -104,9 +109,11 @@ Bluetooth microphones are allowed, but parakit prints a warning because headset 
 
 ## Insertion
 
-parakit transcribes once on hotkey release, writes plain text to the system clipboard, then sends the configured paste shortcut. By default it waits for the target to consume the paste and restores the previous clipboard contents when the clipboard API can round-trip them. Current restore support covers text, HTML with a text alternative, copied file lists, and images. Other clipboard MIME formats are not generally restorable through `arboard`; if one was active, parakit leaves the staged transcript on the clipboard instead of overwriting an unknown format with empty text.
+parakit transcribes once on hotkey release, writes plain text to the system clipboard, then sends the configured paste shortcut. By default it waits for the target to consume the paste and restores the previous clipboard contents when the clipboard API can round-trip them. Current restore support covers text, HTML with a text alternative, copied file lists, and images. Other clipboard MIME formats are not generally restorable through `arboard`; when restore is required, parakit clears the staged transcript instead of leaving sensitive text globally available.
 
-On Linux/X11, parakit records the active X11 window when recording starts. If focus clearly changes before insertion, it does not send a paste chord. If focus capture or recheck fails because X11 is transiently unavailable, parakit pastes anyway; the transcript remains available through `parakit paste-last` either way. Terminal mode strips trailing newlines and blocks multiline terminal paste.
+On Linux/X11, parakit records the active X11 window when recording starts. If focus clearly changes before insertion, it does not send a paste chord. If focus capture or recheck fails because X11 is transiently unavailable, parakit pastes anyway; the transcript remains available through `parakit paste-last` or `parakit copy-last` either way. Terminal mode strips trailing newlines and blocks multiline terminal paste.
+
+On Windows, parakit records the foreground window at PTT-down, rechecks it before paste, and sends the paste shortcut with `SendInput`. If the foreground target cannot be captured or verified, automatic paste is skipped. A normal user process cannot inject into an administrator/elevated target application.
 
 Paste modes:
 

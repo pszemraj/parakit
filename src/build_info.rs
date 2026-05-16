@@ -18,16 +18,26 @@ pub fn diagnostic_lines() -> Vec<String> {
         option_env!("PARAKIT_BUILD_CMAKE_BUILD_TYPE").unwrap_or("external or unknown")
     ));
     lines.push(format!(
-        "cpu:            native={}, openmp={}, repack={}, blas={}",
+        "cpu:            native={}, variants={}, openmp={}, repack={}, blas={}",
         build_value!("PARAKIT_BUILD_GGML_NATIVE"),
+        build_value!("PARAKIT_BUILD_GGML_CPU_ALL_VARIANTS"),
         build_value!("PARAKIT_BUILD_GGML_OPENMP"),
         build_value!("PARAKIT_BUILD_GGML_CPU_REPACK"),
         blas_label()
     ));
     lines.push(format!(
+        "backend dl:     {}",
+        build_value!("PARAKIT_BUILD_GGML_BACKEND_DL")
+    ));
+    lines.push(format!(
         "cpu flags:      {}",
         option_env!("PARAKIT_BUILD_CPU_FLAGS").unwrap_or("unknown")
     ));
+    if let Some(flags) = option_env!("PARAKIT_BUILD_CMAKE_CXX_FLAGS_RELEASE") {
+        if !flags.is_empty() {
+            lines.push(format!("c++ release:    {flags}"));
+        }
+    }
     lines.push(format!(
         "accelerators:   cuda={}, vulkan={}, metal={}",
         build_value!("PARAKIT_BUILD_GGML_CUDA"),

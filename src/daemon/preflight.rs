@@ -120,10 +120,7 @@ fn print_doctor_summary(
         Err(err) => print_status_line("insertion", false, &format!("{err:#}")),
     }
 
-    if ok {
-        println!("  run:       parakit");
-        println!("  shell:     parakit doctor && parakit");
-    } else {
+    if !ok {
         println!("  details:   parakit --verbose doctor");
     }
 }
@@ -151,6 +148,9 @@ fn print_doctor_details(
     match mic {
         Ok(mic) => {
             println!("  mic:            {}", mic.summary());
+            for line in mic.detail_lines() {
+                println!("  audio detail:   {line}");
+            }
             println!("  audio status:   OK");
         }
         Err(err) => {
@@ -226,6 +226,7 @@ fn singleton_lock_path() -> Result<PathBuf> {
 /// # Errors
 ///
 /// Returns an error when the runtime directory cannot be determined.
+#[cfg(unix)]
 pub(crate) fn control_socket_path() -> Result<PathBuf> {
     Ok(daemon_runtime_dir()?.join("control.sock"))
 }
@@ -422,6 +423,7 @@ fn hotkey_report(backend: HotkeyBackend) -> HotkeyReport {
         )
         .unwrap();
     }
+    append_wsl_warning(&mut details);
 
     let summary = if blocking {
         let mut summary = String::new();
@@ -468,6 +470,15 @@ fn hotkey_report(backend: HotkeyBackend) -> HotkeyReport {
         summary,
         details,
     }
+}
+
+#[cfg(target_os = "linux")]
+fn append_wsl_warning(details: &mut String) {
+    if !super::wsl::running_under_wsl() {
+        return;
+    }
+    writeln!(details, "  wsl:            detected").unwrap();
+    writeln!(details, "  note:           {}", super::wsl::warning()).unwrap();
 }
 
 #[cfg(target_os = "linux")]
@@ -553,7 +564,7 @@ fn linux_hotkey_status(
         return "input device scan errors".to_string();
     }
 
-    "evdev/uinput keyboard proxy unavailable".to_string()
+    unreachable!("blocking evdev report without a failure reason")
 }
 
 #[cfg(target_os = "linux")]
@@ -646,11 +657,64 @@ fn hotkey_report(_backend: HotkeyBackend) -> HotkeyReport {
 
 #[cfg(target_os = "windows")]
 fn hotkey_report(_backend: HotkeyBackend) -> HotkeyReport {
-    let details = "parakit doctor\n  hotkey backend: rdev::grab\n  status:         experimental; source check only\n  note:           Windows daemon support still needs passive hotkey capture, a foreground-window paste guard, and manual validation.".to_string();
+    let registered = super::windows_input::registered_hotkey_probe();
+    let security = super::windows_security::current_process_security_report();
+    let blocking = registered.is_err();
+    let mut details = String::new();
+    writeln!(&mut details, "parakit doctor").unwrap();
+    writeln!(&mut details, "  hotkey backend: RegisterHotKey Ctrl+Space").unwrap();
+    match &registered {
+        Ok(()) => writeln!(&mut details, "  registered:     Ctrl+Space available").unwrap(),
+        Err(err) => writeln!(&mut details, "  registered:     unavailable ({err:#})").unwrap(),
+    }
+    writeln!(
+        &mut details,
+        "  elevated:       {}",
+        security
+            .elevated
+            .map(|value| if value { "yes" } else { "no" })
+            .unwrap_or("unknown")
+    )
+    .unwrap();
+    writeln!(
+        &mut details,
+        "  integrity:      {}",
+        security.integrity.as_deref().unwrap_or("unknown")
+    )
+    .unwrap();
+    writeln!(
+        &mut details,
+        "  input note:     SendInput cannot inject into higher-integrity/elevated target applications"
+    )
+    .unwrap();
+    if blocking {
+        writeln!(&mut details, "  status:         FAIL").unwrap();
+        writeln!(
+            &mut details,
+            "fix:\n  - Close any application that already owns Ctrl+Space.\n  - Re-run: parakit doctor\n  - Elevated target apps may still reject paste input from a normal user process."
+        )
+        .unwrap();
+    } else {
+        writeln!(
+            &mut details,
+            "  status:         OK (registered Windows Ctrl+Space)"
+        )
+        .unwrap();
+    }
+
+    let status = match &registered {
+        Ok(()) => "registered Windows Ctrl+Space ready".to_string(),
+        Err(err) => format!("registered Ctrl+Space unavailable ({err:#})"),
+    };
+    let summary = if blocking {
+        details.clone()
+    } else {
+        "hotkey preflight passed with registered Windows Ctrl+Space".to_string()
+    };
     HotkeyReport {
-        blocking: false,
-        status: "experimental Windows hotkey backend".to_string(),
-        summary: details.clone(),
+        blocking,
+        status,
+        summary,
         details,
     }
 }
@@ -741,6 +805,7 @@ mod tests {
             sample_format: "F32".to_string(),
             source_id: None,
             resampling: false,
+            config_note: None,
         });
         let insertion = Ok(());
 
