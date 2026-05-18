@@ -29,7 +29,7 @@ use std::env;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-#[path = "build_support/windows_openblas.rs"]
+#[path = "build/windows_openblas.rs"]
 mod windows_openblas;
 use windows_openblas::{find_windows_openblas, WindowsOpenBlas, WindowsOpenBlasImportKind};
 
@@ -44,7 +44,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed=BLAS_LIBRARIES");
     println!("cargo:rerun-if-env-changed=CONDA_PREFIX");
     println!("cargo:rerun-if-changed=build.rs");
-    println!("cargo:rerun-if-changed=build_support/windows_openblas.rs");
+    println!("cargo:rerun-if-changed=build/windows_openblas.rs");
 
     build_alsa_silencer();
 
@@ -209,7 +209,7 @@ fn build_alsa_silencer() {
         return;
     }
 
-    let shim = "src/daemon/alsa_silence.c";
+    let shim = "src/daemon/audio/alsa_silence.c";
     println!("cargo:rerun-if-changed={shim}");
     cc::Build::new()
         .file(shim)

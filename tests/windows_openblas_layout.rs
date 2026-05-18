@@ -1,4 +1,4 @@
-#[path = "../build_support/windows_openblas.rs"]
+#[path = "../build/windows_openblas.rs"]
 mod windows_openblas;
 
 use std::fs;
