@@ -1,50 +1,20 @@
 //! Daemon-only subsystems used by the `parakit` binary.
 
-/// Linux libasound stderr handling.
-#[cfg(target_os = "linux")]
-pub(crate) mod alsa;
-/// Microphone capture and shared recording buffer.
-#[path = "audio_manager.rs"]
 pub(crate) mod audio;
-/// Linux PulseAudio/PipeWire source metadata parsing.
-#[cfg(target_os = "linux")]
-pub(crate) mod audio_pactl;
-/// Push-to-talk hotkey backends.
-pub(crate) mod hotkey;
-/// Text insertion at the focused cursor.
-pub(crate) mod inject;
-/// Local daemon control socket.
+pub(crate) mod desktop;
 pub(crate) mod ipc;
-/// Terminal-aware daemon logging.
 pub(crate) mod logging;
-/// Desktop notifications for optional clipboard and device fallbacks.
 pub(crate) mod notifications;
-/// Runtime checks for desktop input permissions.
 pub(crate) mod preflight;
-/// Coordinator between hotkey transitions and audio recording events.
 pub(crate) mod recording;
-/// Desktop session compatibility checks.
-#[cfg(target_os = "linux")]
-pub(crate) mod session;
-/// Generated start/success/error sound cues.
 pub(crate) mod sounds;
-/// Native Windows foreground-window focus snapshots.
-#[cfg(target_os = "windows")]
-pub(crate) mod windows_focus;
-/// Native Windows keyboard input helpers.
-#[cfg(target_os = "windows")]
-pub(crate) mod windows_input;
-/// Windows active paste smoke target used by doctor --deep.
-#[cfg(target_os = "windows")]
-pub(crate) mod windows_paste_smoke;
-/// Windows privilege diagnostics for input-injection limitations.
-#[cfg(target_os = "windows")]
-pub(crate) mod windows_security;
-/// Transcription worker, sanitizer, and paste safety flow.
 pub(crate) mod worker;
-/// WSL environment detection for diagnostics.
+
+pub(crate) use desktop::{hotkey, inject};
+
 #[cfg(target_os = "linux")]
-pub(crate) mod wsl;
-/// Shared X11 helpers for Linux desktop hotkeys and insertion checks.
-#[cfg(target_os = "linux")]
-pub(crate) mod x11;
+pub(crate) use desktop::{session, wsl, x11};
+
+#[cfg(target_os = "windows")]
+#[allow(unused_imports)]
+pub(crate) use desktop::{windows_focus, windows_input, windows_paste_smoke, windows_security};

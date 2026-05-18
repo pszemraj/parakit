@@ -19,7 +19,7 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{GetMessageW, MSG, WM_HOTKEY};
 
-use super::recording::HotkeyTransition;
+use crate::daemon::recording::HotkeyTransition;
 
 const PARAKIT_HOTKEY_ID: i32 = 0x504b;
 const PARAKIT_HOTKEY_PROBE_ID: i32 = PARAKIT_HOTKEY_ID + 1;

@@ -36,9 +36,9 @@ After rebuilding a release artifact, upload F16 and Q8_0 to the hosted repo and 
 
 ## File Size Exceptions
 
-`src/daemon/audio_manager.rs` is temporarily over the 1k LoC target because it owns one tightly coupled runtime boundary: CPAL stream recovery, the SPSC drain thread, resampler flushing, and recording/pre-roll state. Split it after Windows CPU settles into smaller `audio/stream.rs`, `audio/drain.rs`, and `audio/device.rs` modules without changing behavior.
+`src/daemon/audio/capture.rs` is temporarily over the 1k LoC target because it owns one tightly coupled runtime boundary: CPAL stream recovery, the SPSC drain thread, resampler flushing, and recording/pre-roll state. Split it after Windows CPU settles into smaller `audio/stream.rs`, `audio/drain.rs`, and `audio/device.rs` modules without changing behavior.
 
-`src/daemon/inject.rs` is also temporarily over the target while clipboard transaction, X11 paste-chord cleanup, focus snapshots, and smoke-test support settle. Split it into focused clipboard, X11 paste, and focus modules without changing the paste safety contract.
+`src/daemon/desktop/inject.rs` is also temporarily over the target while clipboard transaction, X11 paste-chord cleanup, focus snapshots, and smoke-test support settle. Split it into focused clipboard, X11 paste, and focus modules without changing the paste safety contract.
 
 `src/daemon/ipc.rs` is temporarily over the target because it owns both Unix socket IPC and Windows named-pipe IPC, including Windows ACL setup and retry policy tests. Split the Windows named-pipe transport into a dedicated module after the Windows daemon behavior settles.
 

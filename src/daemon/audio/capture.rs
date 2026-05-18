@@ -22,9 +22,10 @@ use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
-use super::{logging::Logger, notifications::Notifier};
 #[cfg(target_os = "linux")]
-use crate::daemon::audio_pactl::{pactl_default_source_info, pactl_default_source_name};
+use super::pactl::{pactl_default_source_info, pactl_default_source_name};
+use crate::daemon::logging::Logger;
+use crate::daemon::notifications::Notifier;
 
 pub use parakit::constants::TARGET_RATE;
 
@@ -1605,5 +1606,5 @@ fn append_samples_bounded(buf: &mut Vec<f32>, samples: &[f32]) {
 }
 
 #[cfg(test)]
-#[path = "audio_manager_tests.rs"]
-mod audio_manager_tests;
+#[path = "capture_tests.rs"]
+mod capture_tests;

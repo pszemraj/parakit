@@ -47,25 +47,25 @@ Cross-thread communication uses atomics, mutex-protected buffers, and crossbeam 
 
 | Path | Responsibility |
 | --- | --- |
-| `src/main.rs` | CLI, daemon setup, and batch PTT simulation helper. |
-| `src/daemon/hotkey.rs` | Hotkey backends and hotkey state helpers. |
+| `src/{main,cli,app}.rs` | Binary entrypoint, CLI definitions, daemon setup, and batch PTT simulation helper. |
+| `src/daemon/desktop/hotkey.rs` | Hotkey backends and hotkey state helpers. |
 | `src/daemon/recording.rs` | Hotkey transition coordinator, focus snapshot, audio start/stop, and PCM handoff. |
-| `src/daemon/audio_manager.rs` | Microphone selection, live stream ownership, ring-buffer drain, pre-roll, resampling, and restart. |
-| `src/daemon/audio_pactl.rs` | Linux `pactl` parsing for startup/reopen microphone display details. |
+| `src/daemon/audio/capture.rs` | Microphone selection, live stream ownership, ring-buffer drain, pre-roll, resampling, and restart. |
+| `src/daemon/audio/pactl.rs` | Linux `pactl` parsing for startup/reopen microphone display details. |
 | `src/daemon/worker.rs` | ASR worker, paste sanitizer, focus guard, clipboard fallback, and insertion circuit breaker. |
 | `src/daemon/ipc.rs` | Local control socket for `status`, `stop`, `paste-last`, `copy-last`, and `test-paste`. |
-| `src/daemon/windows_{focus,input,paste_smoke,security}.rs` | Windows foreground checks, `SendInput` paste helpers, deep paste smoke test, and privilege diagnostics. |
-| `src/daemon/{preflight,session,x11,alsa}.rs` | Startup checks, session events, X11 helpers, and ALSA stderr suppression. |
+| `src/daemon/desktop/windows_{focus,input,paste_smoke,security}.rs` | Windows foreground checks, `SendInput` paste helpers, deep paste smoke test, and privilege diagnostics. |
+| `src/daemon/{preflight,audio/alsa,desktop/session,desktop/x11}.rs` | Startup checks, ALSA stderr suppression, session events, and X11 helpers. |
 | `src/daemon/{logging,notifications,sounds}.rs` | Runtime logging, desktop notifications, and generated audio cues. |
 | `src/fetch.rs` | Hosted [Q8_0 GGUF](https://huggingface.co/pszemraj/parakeet-tdt-0.6b-v3-gguf) download, source rebuilds, checksum verification. |
 | `src/model.rs` | Model names, hosted GGUF naming, cache paths, hosted URLs, and checksum constants. |
 | `src/gguf.rs` | Minimal GGUF dtype reader for startup reporting. |
 | `src/inference.rs` | [CrispASR](https://github.com/CrispStrobe/CrispASR) session wrapper and short-audio padding. |
 | `src/rules.rs` | Built-in transcript cleanup rules. |
-| `src/daemon/inject.rs` | Clipboard transaction, X11/XTest paste chord, direct insertion, and clipboard restore. |
+| `src/daemon/desktop/inject.rs` | Clipboard transaction, X11/XTest paste chord, direct insertion, and clipboard restore. |
 | `src/data_log.rs` | JSONL/TSV transcription logging. |
 | `src/audio_file.rs` | WAV decoding, mono mixing, and file resampling for quality tools and PTT simulation. |
-| `tools/transcribe-file.rs` | File-based smoke and quality checks. |
+| `examples/transcribe_file.rs` | Raw file-based inference smoke and quality checks. |
 | `scripts/transcribe_nemo_parakeet.py` | NeMo reference transcription helper. |
 
 ## Failure Policy
