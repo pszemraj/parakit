@@ -4,3 +4,8 @@
 *.gguf
 *.nemo
 .DS_Store
+
+# Source helper for root build.rs; keep other root build/ outputs ignored.
+!/build/
+/build/*
+!/build/windows_openblas.rs
