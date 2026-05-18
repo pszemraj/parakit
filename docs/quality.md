@@ -4,14 +4,14 @@ Build success does not prove transcription quality. Use real user audio, not syn
 
 ## WAV Quality Target
 
-Use the Rust WAV target to run the same [CrispASR](https://github.com/CrispStrobe/CrispASR) engine and cleanup pipeline without the hotkey daemon:
+Use the Rust WAV target to run the same [CrispASR](https://github.com/CrispStrobe/CrispASR) engine without the hotkey daemon:
 
 ```bash
 cargo run --no-default-features --features bundled --example transcribe-file -- \
   --audio clips/example.wav
 ```
 
-The helper accepts WAV input, uses the same `Engine` path as the daemon, applies cleanup unless disabled, and prints raw and cleaned text. This command avoids live daemon desktop/audio dependencies while keeping the bundled CrispASR build. Model cache behavior is in [running.md#model-cache](running.md#model-cache). Pass `--model /path/to/model.gguf` only when comparing a specific custom GGUF. The source lives at `tools/transcribe-file.rs`; it is a Cargo example target so it is not installed as an end-user binary.
+The helper accepts WAV input, uses the same raw `Engine` path as the daemon, and prints raw inference text and timing. It intentionally does not import or apply parakit text-cleaning rules. This command avoids live daemon desktop/audio dependencies while keeping the bundled CrispASR build. Model cache behavior is in [running.md#model-cache](running.md#model-cache). Pass `--model /path/to/model.gguf` only when comparing a specific custom GGUF. The source lives at `examples/transcribe_file.rs`; it is a Cargo example target so it is not installed as an end-user binary.
 
 ## PTT Worker Simulation
 
@@ -38,7 +38,7 @@ Use a separate Python environment. NeMo and PyTorch are heavy dependencies and a
 python -m venv target/tmp/.venv-nemo
 source target/tmp/.venv-nemo/bin/activate
 python -m pip install --upgrade pip
-python -m pip install -r scripts/requirements.txt
+python -m pip install -r scripts/requirements-nemo.txt
 ```
 
 For CUDA, install the PyTorch build appropriate for the machine first if the default wheel resolver does not pick the right one. The script has hard imports for PyTorch and NeMo so a broken reference environment fails immediately.
