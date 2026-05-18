@@ -57,6 +57,7 @@ pub(crate) fn run() -> Result<()> {
                 fetch::run(FetchOptions {
                     force: fetch_cli.force,
                     quiet: cli.quiet,
+                    verbose: cli.verbose,
                     source: if fetch_cli.from_source {
                         FetchSource::OfficialNemo {
                             keep_nemo: fetch_cli.keep_nemo,
@@ -352,7 +353,7 @@ fn model_dtype_label(path: &std::path::Path) -> String {
 fn open_cli_engine(cli: &Cli, fetch_quiet: bool, log: &Logger) -> Result<(PathBuf, Engine)> {
     let model_path = match cli.model.as_deref() {
         Some(path) => path.to_path_buf(),
-        None => fetch::ensure_default_model(fetch_quiet)?,
+        None => fetch::ensure_default_model_with_verbosity(fetch_quiet, cli.verbose)?,
     };
     let threads = cli
         .threads

@@ -27,6 +27,8 @@ pub struct FetchOptions {
     pub force: bool,
     /// Suppress stdout status messages.
     pub quiet: bool,
+    /// Print cache-hit diagnostics that are otherwise hidden.
+    pub verbose: bool,
     /// Which acquisition path to use.
     pub source: FetchSource,
 }
@@ -56,9 +58,29 @@ pub enum FetchSource {
 /// Returns an error if the model cannot be downloaded, verified, or written
 /// into the platform cache directory.
 pub fn ensure_default_model(quiet: bool) -> Result<PathBuf> {
+    ensure_default_model_with_verbosity(quiet, false)
+}
+
+/// Ensure the default hosted Q8_0 model is present in the cache.
+///
+/// # Arguments
+///
+/// * `quiet` - Suppress stdout status messages.
+/// * `verbose` - Print cache-hit diagnostics when the cached model is current.
+///
+/// # Returns
+///
+/// The canonical cached Q8_0 model path.
+///
+/// # Errors
+///
+/// Returns an error if the model cannot be downloaded, verified, or written
+/// into the platform cache directory.
+pub fn ensure_default_model_with_verbosity(quiet: bool, verbose: bool) -> Result<PathBuf> {
     run(FetchOptions {
         force: false,
         quiet,
+        verbose,
         source: FetchSource::HostedQ8,
     })
 }
@@ -99,7 +121,7 @@ fn run_hosted_q8(options: FetchOptions) -> Result<PathBuf> {
                 manifest.mark_hosted_ready(&paths.q8);
                 manifest.save(&paths.manifest)?;
             }
-            status(
+            verbose_status(
                 options,
                 format_args!("parakit: cached model is current: {}", paths.q8.display()),
             );
@@ -176,7 +198,7 @@ fn run_official_nemo(options: FetchOptions, keep_nemo: bool, keep_f16: bool) -> 
         &quantize_bin,
         &quantize_version,
     )? {
-        status(
+        verbose_status(
             options,
             format_args!(
                 "parakit: cached source-built model is current: {}",
@@ -703,10 +725,26 @@ fn move_into_place(src: &Path, dst: &Path) -> Result<()> {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum StatusVisibility {
+    Normal,
+    Verbose,
+}
+
 fn status(options: FetchOptions, message: std::fmt::Arguments<'_>) {
-    if !options.quiet {
+    if should_print_status(options, StatusVisibility::Normal) {
         println!("{message}");
     }
+}
+
+fn verbose_status(options: FetchOptions, message: std::fmt::Arguments<'_>) {
+    if should_print_status(options, StatusVisibility::Verbose) {
+        println!("{message}");
+    }
+}
+
+fn should_print_status(options: FetchOptions, visibility: StatusVisibility) -> bool {
+    !options.quiet && (visibility == StatusVisibility::Normal || options.verbose)
 }
 
 fn cleanup_intermediates(paths: &FetchPaths, keep_nemo: bool, keep_f16: bool) -> Result<()> {
@@ -805,5 +843,31 @@ mod tests {
         assert_eq!(paths[0], dir);
         assert_eq!(paths[1], Path::new("target/tmp/a"));
         assert_eq!(paths[2], Path::new("target/tmp/b"));
+    }
+
+    #[test]
+    fn cache_hit_status_requires_verbose_output() {
+        let normal = FetchOptions {
+            force: false,
+            quiet: false,
+            verbose: false,
+            source: FetchSource::HostedQ8,
+        };
+        assert!(should_print_status(normal, StatusVisibility::Normal));
+        assert!(!should_print_status(normal, StatusVisibility::Verbose));
+
+        let verbose = FetchOptions {
+            verbose: true,
+            ..normal
+        };
+        assert!(should_print_status(verbose, StatusVisibility::Verbose));
+
+        let quiet = FetchOptions {
+            quiet: true,
+            verbose: true,
+            ..normal
+        };
+        assert!(!should_print_status(quiet, StatusVisibility::Normal));
+        assert!(!should_print_status(quiet, StatusVisibility::Verbose));
     }
 }
