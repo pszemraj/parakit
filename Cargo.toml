@@ -19,7 +19,7 @@ required-features = ["daemon"]
 
 [[example]]
 name = "transcribe-file"
-path = "tools/transcribe-file.rs"
+path = "examples/transcribe_file.rs"
 
 [dependencies]
 # CLI parsing
