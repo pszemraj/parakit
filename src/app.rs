@@ -1,3 +1,5 @@
+//! Application entry point and top-level command dispatch for the `parakit` binary.
+
 use anyhow::{Context, Result};
 use clap::Parser;
 use crossbeam_channel::{bounded, unbounded};
@@ -27,6 +29,15 @@ use crate::daemon::notifications::Notifier;
 use crate::daemon::sounds::Sounds;
 use crate::daemon::worker::{spawn_worker, WorkerCtx, WorkerEvent, WORKER_QUEUE_CAPACITY};
 
+/// Parse CLI arguments and run the requested command or daemon mode.
+///
+/// # Returns
+///
+/// Returns `Ok(())` after the selected command completes or the daemon shuts down.
+///
+/// # Errors
+///
+/// Returns an error when CLI command execution, model loading, audio setup, or daemon startup fails.
 pub(crate) fn run() -> Result<()> {
     #[cfg(target_os = "linux")]
     daemon::audio::alsa::install_error_silencer();

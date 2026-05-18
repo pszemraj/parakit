@@ -1,20 +1,44 @@
+//! Windows OpenBLAS layout detection used by the build script.
+//!
+//! The helper is kept outside `build.rs` so its path probing can be tested by
+//! the integration test without running the full native build script.
+
 use std::fs;
 use std::path::{Path, PathBuf};
 
+/// A target-compatible Windows OpenBLAS installation.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct WindowsOpenBlas {
+    /// OpenBLAS prefix root.
     pub(crate) root: PathBuf,
+    /// Directory containing `cblas.h`.
     pub(crate) include_dir: PathBuf,
+    /// Import library used by the active Rust target environment.
     pub(crate) import_lib: PathBuf,
+    /// Runtime DLLs that should be copied into the bundle.
     pub(crate) runtime_dlls: Vec<PathBuf>,
 }
 
+/// Import-library flavor required by the active Windows Rust target.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum WindowsOpenBlasImportKind {
+    /// MSVC-style `.lib` import library.
     Msvc,
+    /// GNU-style `.dll.a` import library.
     Gnu,
 }
 
+/// Locate a usable Windows OpenBLAS layout under `root`.
+///
+/// # Arguments
+///
+/// * `root` - Candidate OpenBLAS prefix containing `include`, `lib`, and `bin`.
+/// * `import_kind` - Import-library flavor required by the active target.
+///
+/// # Returns
+///
+/// The detected include directory, import library, and runtime DLL set, or
+/// `None` when the layout is incomplete or incompatible.
 pub(crate) fn find_windows_openblas(
     root: &Path,
     import_kind: WindowsOpenBlasImportKind,
@@ -84,6 +108,16 @@ fn windows_openblas_runtime_dlls(root: &Path) -> Vec<PathBuf> {
     dlls
 }
 
+/// Return whether `file_name` is an OpenBLAS runtime DLL or known dependency.
+///
+/// # Arguments
+///
+/// * `file_name` - DLL file name without a directory component.
+///
+/// # Returns
+///
+/// `true` for primary OpenBLAS DLL names and runtime dependency DLLs that need
+/// to travel with the Windows bundle.
 pub(crate) fn is_known_openblas_runtime_dll(file_name: &str) -> bool {
     is_primary_openblas_runtime_dll(file_name) || is_known_openblas_dependency_dll(file_name)
 }

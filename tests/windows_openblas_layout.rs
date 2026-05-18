@@ -1,3 +1,5 @@
+//! Integration coverage for Windows OpenBLAS layout detection.
+
 #[path = "../build/windows_openblas.rs"]
 mod windows_openblas;
 

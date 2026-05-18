@@ -1,3 +1,5 @@
+//! Command-line interface definitions for the `parakit` binary.
+
 use clap::{Args, Parser, Subcommand};
 use parakit::data_log::LogFormat;
 use std::num::NonZeroUsize;
@@ -7,6 +9,7 @@ use std::path::PathBuf;
 use crate::daemon::hotkey::HotkeyBackend;
 use crate::daemon::inject::PasteMode;
 
+/// Parsed command-line options for daemon mode and subcommands.
 #[derive(Parser, Debug)]
 #[command(
     name = "parakit",
@@ -84,6 +87,7 @@ pub(crate) struct Cli {
     pub(crate) log_format: LogFormat,
 }
 
+/// Top-level subcommands that run instead of the push-to-talk daemon.
 #[derive(Subcommand, Debug)]
 pub(crate) enum Commands {
     /// Download the default hosted Parakeet Q8_0 GGUF.
@@ -104,6 +108,7 @@ pub(crate) enum Commands {
     TestPaste(TestPasteCli),
 }
 
+/// Arguments for model cache inspection commands.
 #[derive(Args, Debug)]
 pub(crate) struct CacheCli {
     /// Cache subcommand. Defaults to `list`.
@@ -111,6 +116,7 @@ pub(crate) struct CacheCli {
     pub(crate) command: Option<CacheCommand>,
 }
 
+/// Model cache inspection actions.
 #[derive(Subcommand, Debug)]
 pub(crate) enum CacheCommand {
     /// List cached model artifacts.
@@ -119,6 +125,7 @@ pub(crate) enum CacheCommand {
     Dir,
 }
 
+/// Arguments controlling default model download and rebuild behavior.
 #[derive(Args, Debug)]
 pub(crate) struct FetchCli {
     /// Ignore cached artifacts and download or rebuild again.
@@ -138,6 +145,7 @@ pub(crate) struct FetchCli {
     pub(crate) keep_f16: bool,
 }
 
+/// Arguments for runtime prerequisite checks.
 #[derive(Args, Debug)]
 pub(crate) struct DoctorCli {
     /// Run active smoke tests in addition to passive preflight checks.
@@ -148,6 +156,7 @@ pub(crate) struct DoctorCli {
     pub(crate) deep: bool,
 }
 
+/// Arguments for testing the daemon paste path.
 #[derive(Args, Debug)]
 pub(crate) struct TestPasteCli {
     /// Text to insert through the running daemon's paste path.
@@ -155,11 +164,21 @@ pub(crate) struct TestPasteCli {
 }
 
 impl Cli {
+    /// Return the selected paste mode, falling back to the platform default.
+    ///
+    /// # Returns
+    ///
+    /// Returns the explicitly configured paste mode or the default for the current platform.
     pub(crate) fn effective_paste_mode(&self) -> PasteMode {
         self.paste_mode.unwrap_or_else(default_paste_mode)
     }
 }
 
+/// Return the platform-specific default paste mode.
+///
+/// # Returns
+///
+/// Returns terminal paste on Linux and standard paste on other platforms.
 pub(crate) fn default_paste_mode() -> PasteMode {
     #[cfg(target_os = "linux")]
     {
