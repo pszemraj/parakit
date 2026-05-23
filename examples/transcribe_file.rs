@@ -2,6 +2,7 @@
 //!
 //! This maintainer tool is registered as a Cargo example target so it is easy
 //! to run during validation without being installed as an end-user binary.
+//! It prints raw inference output only; daemon text-cleaning rules are not run.
 
 use anyhow::{Context, Result};
 use clap::Parser;
@@ -11,7 +12,6 @@ use parakit::fetch;
 use parakit::gguf;
 use parakit::inference::default_thread_count;
 use parakit::inference::Engine;
-use parakit::rules;
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -37,20 +37,10 @@ struct Cli {
     /// Repeat inference on the same loaded model for timing comparisons.
     #[arg(long, default_value = "1")]
     repeat: NonZeroUsize,
-
-    /// Disable all text cleaning rules.
-    #[arg(long)]
-    no_cleaning: bool,
-
-    /// Disable a specific rule by name. Repeatable.
-    #[arg(long, value_name = "NAME")]
-    disable_rule: Vec<String>,
 }
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-
-    let cleaner = rules::build_cleaner(cli.no_cleaning, &cli.disable_rule)?;
 
     let mut wav = read_wav_mono(&cli.audio)?;
     let original_rate = wav.sample_rate;
@@ -82,9 +72,6 @@ fn main() -> Result<()> {
         let raw = engine.transcribe(&wav.samples)?;
         let infer = started.elapsed();
         timings.push(infer);
-        let cleaned = cleaner
-            .as_ref()
-            .map_or_else(|| raw.clone(), |c| c.clean(&raw));
 
         if cli.repeat.get() > 1 {
             println!("run:     {idx}/{}", cli.repeat);
@@ -96,7 +83,6 @@ fn main() -> Result<()> {
             realtime_speed(audio_secs, infer)
         );
         println!("Raw:     {}", raw);
-        println!("Clean:   {}", cleaned);
     }
 
     if timings.len() > 1 {

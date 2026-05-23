@@ -1,4 +1,6 @@
-#[path = "../build_support/windows_openblas.rs"]
+//! Integration coverage for Windows OpenBLAS layout detection.
+
+#[path = "../build/windows_openblas.rs"]
 mod windows_openblas;
 
 use std::fs;

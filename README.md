@@ -14,7 +14,7 @@ Hold `Ctrl+Space`, speak, release, and the transcript is inserted into the focus
 
 Transcription runs locally via [NVIDIA Parakeet-TDT-0.6B-v3](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3), pre-quantized to [Q8_0 by default](https://huggingface.co/pszemraj/parakeet-tdt-0.6b-v3-gguf) through the vendored [CrispASR](https://github.com/CrispStrobe/CrispASR) runtime.
 
-<img src="assets/tui.png" alt="parakit TUI" width="90%">
+<img src="docs/assets/tui.png" alt="parakit TUI" width="90%">
 
 ## Install
 

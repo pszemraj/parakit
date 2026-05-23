@@ -3,7 +3,8 @@
 //! Linux defaults to a registered X11 desktop hotkey. Passive X11 listening
 //! and the evdev/uinput keyboard proxy remain explicit non-default backends.
 
-use super::{logging::Logger, recording::HotkeyTransition};
+use crate::daemon::logging::Logger;
+use crate::daemon::recording::HotkeyTransition;
 #[cfg(target_os = "linux")]
 use anyhow::Context as _;
 #[cfg(target_os = "linux")]

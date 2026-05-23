@@ -1,50 +1,32 @@
 //! Daemon-only subsystems used by the `parakit` binary.
 
-/// Linux libasound stderr handling.
-#[cfg(target_os = "linux")]
-pub(crate) mod alsa;
-/// Microphone capture and shared recording buffer.
-#[path = "audio_manager.rs"]
+/// Captures microphone audio and reports input-device metadata.
 pub(crate) mod audio;
-/// Linux PulseAudio/PipeWire source metadata parsing.
-#[cfg(target_os = "linux")]
-pub(crate) mod audio_pactl;
-/// Push-to-talk hotkey backends.
-pub(crate) mod hotkey;
-/// Text insertion at the focused cursor.
-pub(crate) mod inject;
-/// Local daemon control socket.
+/// Integrates global hotkeys, focus detection, and text insertion.
+pub(crate) mod desktop;
+/// Coordinates single-instance daemon IPC.
 pub(crate) mod ipc;
-/// Terminal-aware daemon logging.
+/// Writes transcript logs and runtime event records.
 pub(crate) mod logging;
-/// Desktop notifications for optional clipboard and device fallbacks.
+/// Sends user-visible desktop notifications.
 pub(crate) mod notifications;
-/// Runtime checks for desktop input permissions.
+/// Checks runtime prerequisites before the daemon starts.
 pub(crate) mod preflight;
-/// Coordinator between hotkey transitions and audio recording events.
+/// Manages push-to-talk recording state and capture buffers.
 pub(crate) mod recording;
-/// Desktop session compatibility checks.
-#[cfg(target_os = "linux")]
-pub(crate) mod session;
-/// Generated start/success/error sound cues.
+/// Plays local feedback sounds for daemon events.
 pub(crate) mod sounds;
-/// Native Windows foreground-window focus snapshots.
-#[cfg(target_os = "windows")]
-pub(crate) mod windows_focus;
-/// Native Windows keyboard input helpers.
-#[cfg(target_os = "windows")]
-pub(crate) mod windows_input;
-/// Windows active paste smoke target used by doctor --deep.
-#[cfg(target_os = "windows")]
-pub(crate) mod windows_paste_smoke;
-/// Windows privilege diagnostics for input-injection limitations.
-#[cfg(target_os = "windows")]
-pub(crate) mod windows_security;
-/// Transcription worker, sanitizer, and paste safety flow.
+/// Runs transcription and post-processing work off the hotkey thread.
 pub(crate) mod worker;
-/// WSL environment detection for diagnostics.
+
+/// Re-export commonly used desktop helpers for the daemon entrypoint.
+pub(crate) use desktop::{hotkey, inject};
+
 #[cfg(target_os = "linux")]
-pub(crate) mod wsl;
-/// Shared X11 helpers for Linux desktop hotkeys and insertion checks.
-#[cfg(target_os = "linux")]
-pub(crate) mod x11;
+/// Re-export Linux desktop/session helpers.
+pub(crate) use desktop::{session, wsl, x11};
+
+#[cfg(target_os = "windows")]
+#[allow(unused_imports)]
+/// Re-export Windows desktop integration helpers.
+pub(crate) use desktop::{windows_focus, windows_input, windows_paste_smoke, windows_security};
