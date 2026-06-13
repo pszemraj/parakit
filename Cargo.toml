@@ -1,6 +1,6 @@
 [package]
 name = "parakit"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2021"
 rust-version = "1.87"
 description = "Push-to-talk desktop dictation daemon backed by NVIDIA Parakeet through CrispASR."
