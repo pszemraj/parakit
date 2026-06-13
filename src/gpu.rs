@@ -1,17 +1,26 @@
 //! Bundled ggml device enumeration.
 
 use std::ffi::CStr;
-use std::os::raw::{c_char, c_int, c_void};
+use std::os::raw::{c_char, c_int};
 
-type GgmlBackendDev = *mut c_void;
+type GgmlBackendDev = *mut GgmlBackendDevice;
+
+#[repr(C)]
+struct GgmlBackendDevice {
+    iface: GgmlBackendDeviceIface,
+}
+
+#[repr(C)]
+struct GgmlBackendDeviceIface {
+    get_name: Option<unsafe extern "C" fn(GgmlBackendDev) -> *const c_char>,
+    get_description: Option<unsafe extern "C" fn(GgmlBackendDev) -> *const c_char>,
+    get_memory: Option<unsafe extern "C" fn(GgmlBackendDev, *mut usize, *mut usize)>,
+    get_type: Option<unsafe extern "C" fn(GgmlBackendDev) -> c_int>,
+}
 
 extern "C" {
     fn ggml_backend_dev_count() -> usize;
     fn ggml_backend_dev_get(index: usize) -> GgmlBackendDev;
-    fn ggml_backend_dev_name(device: GgmlBackendDev) -> *const c_char;
-    fn ggml_backend_dev_description(device: GgmlBackendDev) -> *const c_char;
-    fn ggml_backend_dev_memory(device: GgmlBackendDev, free: *mut usize, total: *mut usize);
-    fn ggml_backend_dev_type(device: GgmlBackendDev) -> c_int;
 }
 
 /// ggml compute device class.
@@ -128,15 +137,26 @@ pub fn devices() -> Vec<DeviceInfo> {
         if device.is_null() {
             continue;
         }
-        let mut free_bytes = 0;
-        let mut total_bytes = 0;
-        unsafe {
-            ggml_backend_dev_memory(device, &mut free_bytes, &mut total_bytes);
-        }
+        let device_ref = unsafe { &*device };
+        let (free_bytes, total_bytes) = device_memory(device, device_ref);
         out.push(DeviceInfo {
-            name: c_string(unsafe { ggml_backend_dev_name(device) }),
-            description: c_string(unsafe { ggml_backend_dev_description(device) }),
-            kind: DeviceKind::from(unsafe { ggml_backend_dev_type(device) }),
+            name: device_ref
+                .iface
+                .get_name
+                .map(|get_name| c_string(unsafe { get_name(device) }))
+                .unwrap_or_default(),
+            description: device_ref
+                .iface
+                .get_description
+                .map(|get_description| c_string(unsafe { get_description(device) }))
+                .unwrap_or_default(),
+            kind: DeviceKind::from(
+                device_ref
+                    .iface
+                    .get_type
+                    .map(|get_type| unsafe { get_type(device) })
+                    .unwrap_or(-1),
+            ),
             free_bytes,
             total_bytes,
         });
@@ -155,6 +175,17 @@ pub fn has_gpu_device() -> bool {
 
 fn bytes_to_mib(bytes: usize) -> usize {
     bytes / 1_048_576
+}
+
+fn device_memory(device: GgmlBackendDev, device_ref: &GgmlBackendDevice) -> (usize, usize) {
+    let mut free_bytes = 0;
+    let mut total_bytes = 0;
+    if let Some(get_memory) = device_ref.iface.get_memory {
+        unsafe {
+            get_memory(device, &mut free_bytes, &mut total_bytes);
+        }
+    }
+    (free_bytes, total_bytes)
 }
 
 fn c_string(ptr: *const c_char) -> String {
