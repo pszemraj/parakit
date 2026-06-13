@@ -3,6 +3,7 @@
 use crate::constants::TARGET_RATE;
 use crate::crispasr_ext::OwnedSession;
 use anyhow::{bail, Context, Result};
+use clap::ValueEnum;
 use crispasr::SessionSegment;
 use std::borrow::Cow;
 use std::path::Path;
@@ -15,7 +16,7 @@ use std::path::Path;
 const MIN_INFERENCE_SAMPLES: usize = TARGET_RATE as usize;
 
 /// Runtime CPU/GPU selection requested by the user.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
 pub enum DeviceMode {
     /// Keep CrispASR's default: use the best GPU when one is available,
     /// otherwise fall back to CPU.
@@ -86,25 +87,6 @@ impl EngineSession {
 }
 
 impl Engine {
-    /// Open a GGUF model with a requested CPU thread count.
-    ///
-    /// # Arguments
-    ///
-    /// * `model_path` - GGUF model file to load.
-    /// * `threads` - CPU inference thread count requested from CrispASR.
-    ///
-    /// # Returns
-    ///
-    /// An initialized transcription engine.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the model path is not a file, is not UTF-8, the
-    /// thread count is zero, or CrispASR cannot load the model.
-    pub fn open_with_threads<P: AsRef<Path>>(model_path: P, threads: usize) -> Result<Self> {
-        Self::open(model_path, threads, DeviceMode::Auto)
-    }
-
     /// Open a GGUF model with a requested CPU thread count and device mode.
     ///
     /// # Arguments
@@ -364,9 +346,10 @@ mod tests {
 
     #[test]
     fn missing_model_path_fails_before_crispasr() {
-        let err = match Engine::open_with_threads(
+        let err = match Engine::open(
             "target/tmp/definitely-missing-parakit-model.gguf",
             1,
+            DeviceMode::Auto,
         ) {
             Ok(_) => panic!("missing model path should fail"),
             Err(err) => err,

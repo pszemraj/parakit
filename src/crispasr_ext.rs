@@ -4,8 +4,9 @@
 //! yet. This module keeps the raw ABI use narrow so parakit can choose CPU or
 //! GPU at session open without modifying the submodule.
 
+use crate::ffi_util::c_string_lossy;
 use crispasr::{SessionSegment, SessionWord};
-use std::ffi::{CStr, CString};
+use std::ffi::CString;
 use std::os::raw::{c_char, c_float, c_int};
 
 #[repr(C)]
@@ -93,7 +94,7 @@ impl OwnedSession {
     /// returned a null backend pointer.
     pub(crate) fn backend(&self) -> String {
         let ptr = unsafe { crispasr_sys::crispasr_session_backend(self.handle) };
-        c_string(ptr)
+        c_string_lossy(ptr)
     }
 
     /// Transcribe 16 kHz mono PCM through the raw session.
@@ -135,7 +136,7 @@ impl OwnedSession {
         unsafe {
             let n_segments = crispasr_sys::crispasr_session_result_n_segments(result.0);
             for segment_index in 0..n_segments {
-                let text = c_string(crispasr_sys::crispasr_session_result_segment_text(
+                let text = c_string_lossy(crispasr_sys::crispasr_session_result_segment_text(
                     result.0,
                     segment_index,
                 ))
@@ -160,7 +161,7 @@ impl OwnedSession {
                         word_index,
                     );
                     words.push(SessionWord {
-                        text: c_string(crispasr_sys::crispasr_session_result_word_text(
+                        text: c_string_lossy(crispasr_sys::crispasr_session_result_word_text(
                             result.0,
                             segment_index,
                             word_index,
@@ -208,15 +209,5 @@ impl Drop for OwnedResult {
         unsafe {
             crispasr_sys::crispasr_session_result_free(self.0);
         }
-    }
-}
-
-fn c_string(ptr: *const c_char) -> String {
-    if ptr.is_null() {
-        String::new()
-    } else {
-        unsafe { CStr::from_ptr(ptr) }
-            .to_string_lossy()
-            .into_owned()
     }
 }

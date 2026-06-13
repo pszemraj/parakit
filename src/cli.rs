@@ -1,6 +1,6 @@
 //! Command-line interface definitions for the `parakit` binary.
 
-use clap::{Args, Parser, Subcommand, ValueEnum};
+use clap::{Args, Parser, Subcommand};
 use parakit::data_log::LogFormat;
 use parakit::inference::DeviceMode;
 use std::num::NonZeroUsize;
@@ -42,7 +42,7 @@ pub(crate) struct Cli {
 
     /// Runtime compute device. `auto` uses the best GPU when available and CPU otherwise.
     #[arg(long, value_enum, default_value = "auto")]
-    pub(crate) device: DeviceArg,
+    pub(crate) device: DeviceMode,
 
     /// Batch insertion style. Defaults to terminal paste on Linux and standard paste elsewhere.
     #[arg(long, value_enum)]
@@ -168,27 +168,6 @@ pub(crate) struct TestPasteCli {
     pub(crate) text: String,
 }
 
-/// CLI value for runtime compute device selection.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
-pub(crate) enum DeviceArg {
-    /// Use CrispASR's default GPU-when-available behavior.
-    Auto,
-    /// Force CPU inference.
-    Cpu,
-    /// Request GPU inference.
-    Gpu,
-}
-
-impl From<DeviceArg> for DeviceMode {
-    fn from(value: DeviceArg) -> Self {
-        match value {
-            DeviceArg::Auto => Self::Auto,
-            DeviceArg::Cpu => Self::Cpu,
-            DeviceArg::Gpu => Self::Gpu,
-        }
-    }
-}
-
 impl Cli {
     /// Return the selected paste mode, falling back to the platform default.
     ///
@@ -205,7 +184,7 @@ impl Cli {
     ///
     /// The library-level device mode selected by the CLI.
     pub(crate) fn effective_device_mode(&self) -> DeviceMode {
-        self.device.into()
+        self.device
     }
 }
 

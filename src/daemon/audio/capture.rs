@@ -118,7 +118,7 @@ impl AudioHandle {
         if !try_send_audio_control(control, AudioControl::Start { epoch, ack: ack_tx })? {
             return Ok(AudioControlAck::NoLiveDrain);
         }
-        recv_audio_control_ack(ack_rx, "Start").map(AudioControlAck::Acked)
+        recv_audio_control_ack(ack_rx, "audio manager", "Start").map(AudioControlAck::Acked)
     }
 
     fn try_stop_on_drain(&self) -> Result<AudioControlAck<Vec<f32>>> {
@@ -129,7 +129,7 @@ impl AudioHandle {
         if !try_send_audio_control(control, AudioControl::Stop { ack: ack_tx })? {
             return Ok(AudioControlAck::NoLiveDrain);
         }
-        recv_audio_control_ack(ack_rx, "Stop").map(AudioControlAck::Acked)
+        recv_audio_control_ack(ack_rx, "audio manager", "Stop").map(AudioControlAck::Acked)
     }
 }
 
@@ -148,20 +148,28 @@ fn try_send_audio_control(control: Sender<AudioControl>, command: AudioControl) 
     }
 }
 
-fn recv_audio_control_ack<T>(ack_rx: Receiver<Result<T>>, label: &'static str) -> Result<T> {
+fn recv_audio_control_ack<T>(
+    ack_rx: Receiver<Result<T>>,
+    layer: &'static str,
+    label: &'static str,
+) -> Result<T> {
     match ack_rx.recv_timeout(AUDIO_CONTROL_TIMEOUT) {
         Ok(result) => result,
-        Err(err) => Err(audio_control_ack_error(label, err)),
+        Err(err) => Err(audio_control_ack_error(layer, label, err)),
     }
 }
 
-fn audio_control_ack_error(label: &'static str, err: RecvTimeoutError) -> anyhow::Error {
+fn audio_control_ack_error(
+    layer: &'static str,
+    label: &'static str,
+    err: RecvTimeoutError,
+) -> anyhow::Error {
     match err {
         RecvTimeoutError::Timeout => {
-            anyhow!("audio drain accepted {label} but did not acknowledge before timeout")
+            anyhow!("{layer} accepted {label} but did not acknowledge before timeout")
         }
         RecvTimeoutError::Disconnected => {
-            anyhow!("audio drain accepted {label} but disconnected before acknowledging")
+            anyhow!("{layer} accepted {label} but disconnected before acknowledging")
         }
     }
 }
@@ -649,7 +657,7 @@ fn pause_live_stream(live: &mut LiveStream, idle_policy: IdleStreamPolicy) -> Re
 fn recv_drain_control_ack<T>(ack_rx: Receiver<T>, label: &'static str) -> Result<T> {
     ack_rx
         .recv_timeout(AUDIO_CONTROL_TIMEOUT)
-        .map_err(|err| audio_control_ack_error(label, err))
+        .map_err(|err| audio_control_ack_error("audio drain", label, err))
 }
 
 fn reopen_until_success(host: &cpal::Host, ctx: &AudioManagerCtx) -> Option<LiveStream> {

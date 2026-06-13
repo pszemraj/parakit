@@ -1,6 +1,6 @@
 //! Bundled ggml device enumeration.
 
-use std::ffi::CStr;
+use crate::ffi_util::c_string_lossy;
 use std::os::raw::{c_char, c_int};
 
 type GgmlBackendDev = *mut GgmlBackendDevice;
@@ -143,12 +143,12 @@ pub fn devices() -> Vec<DeviceInfo> {
             name: device_ref
                 .iface
                 .get_name
-                .map(|get_name| c_string(unsafe { get_name(device) }))
+                .map(|get_name| c_string_lossy(unsafe { get_name(device) }))
                 .unwrap_or_default(),
             description: device_ref
                 .iface
                 .get_description
-                .map(|get_description| c_string(unsafe { get_description(device) }))
+                .map(|get_description| c_string_lossy(unsafe { get_description(device) }))
                 .unwrap_or_default(),
             kind: DeviceKind::from(
                 device_ref
@@ -186,16 +186,6 @@ fn device_memory(device: GgmlBackendDev, device_ref: &GgmlBackendDevice) -> (usi
         }
     }
     (free_bytes, total_bytes)
-}
-
-fn c_string(ptr: *const c_char) -> String {
-    if ptr.is_null() {
-        String::new()
-    } else {
-        unsafe { CStr::from_ptr(ptr) }
-            .to_string_lossy()
-            .into_owned()
-    }
 }
 
 #[cfg(test)]

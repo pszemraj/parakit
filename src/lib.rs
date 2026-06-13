@@ -13,6 +13,7 @@ mod crispasr_ext;
 pub mod data_log;
 /// Model acquisition pipeline for the official Parakeet checkpoint.
 pub mod fetch;
+mod ffi_util;
 /// Minimal GGUF metadata reader for dtype reporting.
 pub mod gguf;
 /// Bundled ggml device diagnostics.

@@ -5,7 +5,7 @@
 //! It prints raw inference output only; daemon text-cleaning rules are not run.
 
 use anyhow::{Context, Result};
-use clap::{Parser, ValueEnum};
+use clap::Parser;
 use parakit::audio_file::{read_wav_mono, resample_to_target};
 use parakit::constants::TARGET_RATE;
 use parakit::fetch;
@@ -35,28 +35,11 @@ struct Cli {
 
     /// Runtime compute device. `auto` uses the best GPU when available and CPU otherwise.
     #[arg(long, value_enum, default_value = "auto")]
-    device: DeviceArg,
+    device: DeviceMode,
 
     /// Repeat inference on the same loaded model for timing comparisons.
     #[arg(long, default_value = "1")]
     repeat: NonZeroUsize,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
-enum DeviceArg {
-    Auto,
-    Cpu,
-    Gpu,
-}
-
-impl From<DeviceArg> for DeviceMode {
-    fn from(value: DeviceArg) -> Self {
-        match value {
-            DeviceArg::Auto => Self::Auto,
-            DeviceArg::Cpu => Self::Cpu,
-            DeviceArg::Gpu => Self::Gpu,
-        }
-    }
 }
 
 fn main() -> Result<()> {
@@ -75,7 +58,7 @@ fn main() -> Result<()> {
         .threads
         .map(NonZeroUsize::get)
         .unwrap_or_else(default_thread_count);
-    let engine = Engine::open(&model_path, threads, cli.device.into())
+    let engine = Engine::open(&model_path, threads, cli.device)
         .with_context(|| format!("could not open model {}", model_path.display()))?;
     let dtype = gguf::dtype_label(&model_path);
 
