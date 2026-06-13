@@ -170,6 +170,8 @@ function Configure-GpuBuildGenerator {
         Ensure-MsvcBuildEnvironment
         Ensure-NinjaAvailable
     }
+
+    Configure-CompilerCache
 }
 
 function Ensure-MsvcBuildEnvironment {
@@ -343,6 +345,27 @@ function Import-EnvironmentFromBatch {
 
         [System.Environment]::SetEnvironmentVariable("Path", $pathValue, "Process")
         $env:Path = $pathValue
+    }
+}
+
+function Configure-CompilerCache {
+    if (Test-Command "ccache") {
+        if ([string]::IsNullOrWhiteSpace($env:CCACHE_DIR)) {
+            $env:CCACHE_DIR = Join-Path $repo "target\tmp\ccache"
+            New-Item -ItemType Directory -Force -Path $env:CCACHE_DIR | Out-Null
+            Write-Host "ccache: using repo-local cache at $env:CCACHE_DIR"
+        } else {
+            Write-Host "ccache: using CCACHE_DIR=$env:CCACHE_DIR"
+        }
+
+        if ([string]::IsNullOrWhiteSpace($env:CCACHE_TEMPDIR)) {
+            $env:CCACHE_TEMPDIR = Join-Path $repo "target\tmp\ccache-tmp"
+            New-Item -ItemType Directory -Force -Path $env:CCACHE_TEMPDIR | Out-Null
+        }
+
+        if ([string]::IsNullOrWhiteSpace($env:CCACHE_BASEDIR)) {
+            $env:CCACHE_BASEDIR = $repo
+        }
     }
 }
 
