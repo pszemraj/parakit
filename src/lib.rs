@@ -15,6 +15,9 @@ pub mod data_log;
 pub mod fetch;
 /// Minimal GGUF metadata reader for dtype reporting.
 pub mod gguf;
+/// Bundled ggml device diagnostics.
+#[cfg(feature = "bundled")]
+pub mod gpu;
 /// CrispASR-backed transcription engine.
 pub mod inference;
 /// Canonical model names and cache paths.

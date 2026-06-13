@@ -222,6 +222,7 @@ pub(crate) fn run() -> Result<()> {
         ),
         threads: engine.threads(),
         backend: engine.backend().to_string(),
+        device: engine.device_mode().as_str().to_string(),
     });
 
     // Worker thread takes exclusive ownership of `engine`. `crispasr::Session`
@@ -360,6 +361,7 @@ fn open_cli_engine(cli: &Cli, fetch_quiet: bool, log: &Logger) -> Result<(PathBu
         .map(NonZeroUsize::get)
         .unwrap_or_else(default_thread_count);
     let device_mode = cli.effective_device_mode();
+    validate_device_request(device_mode, log)?;
     let open_started = Instant::now();
     let engine = open_engine(&model_path, threads, device_mode, cli.verbose)
         .with_context(|| format!("could not open model {}", model_path.display()))?;
@@ -370,6 +372,7 @@ fn open_cli_engine(cli: &Cli, fetch_quiet: bool, log: &Logger) -> Result<(PathBu
         engine.threads(),
         engine.device_mode().as_str()
     ));
+    warm_up_engine(&engine, log)?;
     Ok((model_path, engine))
 }
 
@@ -400,6 +403,44 @@ fn open_engine(
         return Engine::open(path, threads, device_mode);
     }
     with_stderr_suppressed(|| Engine::open(path, threads, device_mode))
+}
+
+fn validate_device_request(device_mode: DeviceMode, log: &Logger) -> Result<()> {
+    if device_mode != DeviceMode::Gpu {
+        return Ok(());
+    }
+
+    #[cfg(feature = "bundled")]
+    {
+        if !parakit::gpu::has_gpu_device() {
+            anyhow::bail!(
+                "--device gpu requested, but ggml reports no GPU or iGPU devices; run `parakit doctor --verbose` for compute diagnostics"
+            );
+        }
+    }
+
+    #[cfg(not(feature = "bundled"))]
+    {
+        log.warn(
+            "--device gpu requested, but this build does not include the bundled ggml device probe; continuing without GPU preflight",
+        );
+    }
+
+    let _ = log;
+    Ok(())
+}
+
+fn warm_up_engine(engine: &Engine, log: &Logger) -> Result<()> {
+    let started = Instant::now();
+    let silence = vec![0.0; TARGET_RATE as usize];
+    engine
+        .transcribe(&silence)
+        .context("engine warmup transcription failed")?;
+    log.verbose(format!(
+        "parakit: engine warmup took {:.0}ms",
+        started.elapsed().as_secs_f32() * 1000.0
+    ));
+    Ok(())
 }
 
 #[cfg(unix)]
