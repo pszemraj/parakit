@@ -55,77 +55,19 @@ For Windows bundles, build one accelerator flavor at a time. A combined CUDA+Vul
 
 ## Windows Bundles
 
-For a per-user Windows CPU install:
+Use the Windows bundle scripts for runnable per-user installs. They copy
+`parakit.exe` plus the generated CrispASR/ggml runtime DLLs into one app
+directory.
 
 ```bat
 scripts\windows\windows-cpu-build.bat
-```
-
-Windows GPU bundle entry points:
-
-```bat
 scripts\windows\windows-cuda-build.bat
 scripts\windows\windows-vulkan-build.bat
 ```
 
-The PowerShell equivalent from PowerShell is:
-
-```powershell
-Set-ExecutionPolicy -Scope Process Bypass
-.\scripts\windows\windows-cpu-build.ps1
-.\scripts\windows\windows-cpu-build.ps1 --cuda
-.\scripts\windows\windows-cpu-build.ps1 --vulkan
-```
-
-Options, install location, PATH behavior, and OpenBLAS bundling are described in [../scripts/windows/README.md](../scripts/windows/README.md).
-
-The Windows scripts do not require Developer Mode. They install by copying files into a per-user directory, not by creating symlinks.
-
-### Windows CUDA
-
-CUDA builds require the NVIDIA CUDA Toolkit on the build machine, with `nvcc` on `PATH` and `CUDA_PATH` pointing at the toolkit root. CUDA 12.x and 13.x toolkits are supported by the vendored ggml. CUDA 13.x toolkits do not install a display driver as part of the toolkit; install a compatible NVIDIA display driver separately.
-
-The Windows CUDA bundle script defaults `CMAKE_GENERATOR` to `Ninja` when no generator is set, then activates an amd64 Visual Studio C++ environment before running Cargo. This avoids a Windows CUDA trap in the Visual Studio generator: CUDA toolkit selection comes from versioned MSBuild BuildCustomizations such as `CUDA 13.1.props`/`.targets`, not from generic `PATH` or `CUDA_PATH`. A stale `CUDA 13.2.targets` file can make MSBuild pick 13.2 even when `nvcc` and `CUDA_PATH` point at 13.1.
-
-The default CUDA architecture behavior is ggml's native build for the GPU present on the machine. Override it when needed:
-
-```powershell
-$env:PARAKIT_CUDA_ARCHS = "89-real"
-.\scripts\windows\windows-cpu-build.ps1 --cuda
-```
-
-`PARAKIT_CUDA_ARCHS` is passed directly to CMake as `CMAKE_CUDA_ARCHITECTURES`; values such as `native`, `89-real`, or semicolon-separated architecture lists are accepted by CMake/CUDA.
-
-On Windows, ggml links the CUDA runtime statically but cuBLAS dynamically. A normal CUDA bundle expects `cublas64_*.dll` and `cublasLt64_*.dll` from `%CUDA_PATH%\bin` or `PATH` at install/run time. For a relocatable bundle:
-
-```bat
-scripts\windows\windows-cuda-build.bat --bundle-cuda-dlls
-```
-
-That option copies the cuBLAS DLLs into the bundle. The files are large, so this is opt-in. parakit also sets `GGML_CUDA_NCCL=OFF`; the daemon has no multi-GPU collective workload.
-
-If you explicitly set `CMAKE_GENERATOR` to a Visual Studio generator, the matching CUDA Visual Studio integration must be installed and the matching version-specific environment variable such as `CUDA_PATH_V13_1` must resolve. Advanced users can force the VS toolset with `CMAKE_GENERATOR_TOOLSET=cuda=<toolkit-path>`, but Ninja is the supported default for the bundle scripts.
-
-### Windows Vulkan
-
-Vulkan builds require the LunarG Vulkan SDK at build time for headers, `vulkan-1.lib`, and `glslc`. Set `VULKAN_SDK`, or let the Windows script autodetect the newest `C:\VulkanSDK\*` install.
-
-```bat
-scripts\windows\windows-vulkan-build.bat
-```
-
-The Windows Vulkan bundle script also defaults to Ninja and activates the amd64 Visual Studio C++ environment. ggml-vulkan generates many shader-permutation source files with long names, so deep checkouts can exceed Windows path limits inside Cargo's CMake output tree. When the path is risky and `CARGO_TARGET_DIR` is not absolute, the script temporarily maps a free drive letter to the repo, runs the build through that short path, and removes the mapping afterward.
-
-If you set an absolute `CARGO_TARGET_DIR`, keep it short:
-
-```powershell
-$env:CARGO_TARGET_DIR = "C:\t"
-.\scripts\windows\windows-cpu-build.ps1 --vulkan
-```
-
-Cloning to a short path such as `C:\src\parakit` and enabling Windows long paths are the other useful mitigations. Rust `sccache` wrappers are disabled only inside the script-managed short-drive build because this local setup cannot spawn rustc correctly from a substituted drive; C/C++ `ccache` remains enabled with the repo-local cache. If the failure is instead a `glslc` message about linking multiple files, capture the failing command line; that is a separate ggml-vulkan shader generation issue and should be handled by using Ninja under a clean build tree or by updating the vendored ggml/CrispASR pin.
-
-The Vulkan bundle has no CUDA-style runtime toolkit dependency. It imports `vulkan-1.dll`, the Khronos loader installed by GPU driver packages into System32. The installer warns if the loader is missing, but does not bundle it.
+Options, install location, PATH behavior, OpenBLAS bundling, CUDA cuBLAS
+handling, and Vulkan path-length handling are in
+[../scripts/windows/README.md](../scripts/windows/README.md).
 
 ## CPU Builds
 

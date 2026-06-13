@@ -22,7 +22,7 @@ cargo run -- \
   --simulate-ptt-audio target/tmp/ptt-audio/example.wav
 ```
 
-Use a real WAV with a known transcript. The command resamples it to the model rate, sends `RecordingStarted`/`RecordingStopped` events with owned PCM, runs inference and cleanup, and prints the transcript. It does not test registered hotkeys, evdev-proxy capture, or paste insertion.
+Use a real WAV with a known transcript. The command resamples it to the model rate, sends worker start/stop events with owned PCM, runs inference and cleanup, and prints the transcript. It does not test registered hotkeys, evdev-proxy capture, or paste insertion.
 
 ## NeMo Reference Helper
 

@@ -51,6 +51,15 @@ scripts\windows\windows-cuda-build.bat --bundle-cuda-dlls
 
 The scripts reject `--cuda --vulkan`; raw Cargo experiments can still enable multiple features, but the Windows bundle path keeps one accelerator per installed directory.
 
+CUDA 12.x and 13.x toolkits are supported by the vendored ggml. CUDA 13.x toolkits do not install a display driver as part of the toolkit; install a compatible NVIDIA display driver separately. The default CUDA architecture behavior is ggml's native build for the GPU present on the machine. Override it when needed:
+
+```powershell
+$env:PARAKIT_CUDA_ARCHS = "89-real"
+.\scripts\windows\windows-cpu-build.ps1 --cuda
+```
+
+`PARAKIT_CUDA_ARCHS` is passed directly to CMake as `CMAKE_CUDA_ARCHITECTURES`; values such as `native`, `89-real`, or semicolon-separated architecture lists are accepted by CMake/CUDA.
+
 GPU builds default `CMAKE_GENERATOR` to `Ninja` when the variable is unset. The script activates an amd64 Visual Studio C++ environment before Cargo runs, then verifies `cl.exe`, `link.exe`, and `ninja.exe`. This is intentional for CUDA: Visual Studio generators select CUDA from versioned MSBuild BuildCustomizations, so stale files such as `CUDA 13.2.targets` can override a shell where `nvcc` and `CUDA_PATH` point at 13.1.
 
 If you explicitly set a Visual Studio generator for CUDA, keep the matching CUDA Visual Studio integration installed and ensure the matching variable such as `CUDA_PATH_V13_1` resolves. The advanced override is `CMAKE_GENERATOR_TOOLSET=cuda=<toolkit-path>`, but Ninja is the normal bundle path.
