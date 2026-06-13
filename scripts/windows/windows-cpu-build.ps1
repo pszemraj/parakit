@@ -561,6 +561,104 @@ function Get-RepoRoot {
     return (Resolve-Path (Join-Path $scriptDir "..\..")).Path
 }
 
+function Invoke-ThroughShortRepoDriveIfNeeded {
+    if ($Flavor -ne "vulkan") {
+        return
+    }
+    if ($env:PARAKIT_SHORT_REPO_DRIVE_ACTIVE -eq "1") {
+        return
+    }
+    if (-not [string]::IsNullOrWhiteSpace($env:CARGO_TARGET_DIR) -and [System.IO.Path]::IsPathRooted($env:CARGO_TARGET_DIR)) {
+        return
+    }
+
+    $estimatedLength = Get-VulkanShaderObjectPathEstimate -RepoRoot $repo
+    if ($estimatedLength -lt 230) {
+        return
+    }
+
+    $drive = Get-FreeSubstDrive
+    if ([string]::IsNullOrWhiteSpace($drive)) {
+        Write-Warning "Vulkan: no free drive letter was available for a short build path; continuing from $repo."
+        return
+    }
+
+    Write-Host "Vulkan: mapping ${drive}\ to $repo for shorter shader build paths"
+    & subst.exe $drive $repo
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warning "Vulkan: subst failed for ${drive}; continuing from $repo."
+        return
+    }
+
+    $previousShortDrive = $env:PARAKIT_SHORT_REPO_DRIVE_ACTIVE
+    $previousRustcWrapper = $env:RUSTC_WRAPPER
+    $previousRustcWorkspaceWrapper = $env:RUSTC_WORKSPACE_WRAPPER
+    $previousCargoRustcWrapper = $env:CARGO_BUILD_RUSTC_WRAPPER
+    try {
+        $env:PARAKIT_SHORT_REPO_DRIVE_ACTIVE = "1"
+        Write-Host "Vulkan: disabling Cargo rustc wrappers for short-path build"
+        $env:RUSTC_WRAPPER = ""
+        $env:RUSTC_WORKSPACE_WRAPPER = ""
+        $env:CARGO_BUILD_RUSTC_WRAPPER = ""
+        $mappedScript = Join-Path "${drive}\" "scripts\windows\windows-cpu-build.ps1"
+        & $mappedScript @RawArgs
+        if (-not $?) {
+            throw "Windows Vulkan build failed through ${drive}\"
+        }
+    } finally {
+        if ([string]::IsNullOrWhiteSpace($previousShortDrive)) {
+            Remove-Item Env:\PARAKIT_SHORT_REPO_DRIVE_ACTIVE -ErrorAction SilentlyContinue
+        } else {
+            $env:PARAKIT_SHORT_REPO_DRIVE_ACTIVE = $previousShortDrive
+        }
+        if ([string]::IsNullOrWhiteSpace($previousRustcWrapper)) {
+            Remove-Item Env:\RUSTC_WRAPPER -ErrorAction SilentlyContinue
+        } else {
+            $env:RUSTC_WRAPPER = $previousRustcWrapper
+        }
+        if ([string]::IsNullOrWhiteSpace($previousRustcWorkspaceWrapper)) {
+            Remove-Item Env:\RUSTC_WORKSPACE_WRAPPER -ErrorAction SilentlyContinue
+        } else {
+            $env:RUSTC_WORKSPACE_WRAPPER = $previousRustcWorkspaceWrapper
+        }
+        if ([string]::IsNullOrWhiteSpace($previousCargoRustcWrapper)) {
+            Remove-Item Env:\CARGO_BUILD_RUSTC_WRAPPER -ErrorAction SilentlyContinue
+        } else {
+            $env:CARGO_BUILD_RUSTC_WRAPPER = $previousCargoRustcWrapper
+        }
+        & subst.exe $drive /D
+    }
+
+    exit 0
+}
+
+function Get-VulkanShaderObjectPathEstimate {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$RepoRoot
+    )
+
+    $targetRoot = if ([string]::IsNullOrWhiteSpace($env:CARGO_TARGET_DIR)) {
+        Join-Path $RepoRoot "target"
+    } else {
+        Join-Path $RepoRoot $env:CARGO_TARGET_DIR
+    }
+
+    $samplePath = Join-Path $targetRoot "$Profile\build\parakit-0000000000000000\out\build\ggml\src\ggml-vulkan\vulkan-shaders-gen-prefix\src\vulkan-shaders-gen-build\CMakeFiles\CMakeScratch\TryCompile-000000\CMakeFiles\cmTC_00000.dir\testCCompiler.c.obj"
+    return $samplePath.Length
+}
+
+function Get-FreeSubstDrive {
+    foreach ($letter in @("V", "P", "R", "Q", "W", "X", "Y", "Z")) {
+        $drive = "${letter}:"
+        if (-not (Test-Path "${drive}\")) {
+            return $drive
+        }
+    }
+
+    return $null
+}
+
 function Get-DefaultInstallDir {
     if ([string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) {
         return (Join-Path $env:USERPROFILE "AppData\Local\Programs\parakit")
@@ -662,6 +760,7 @@ Require-Command "rustc" "Install Rust with rustup using the MSVC toolchain."
 Require-Command "cmake" "Install CMake and ensure it is on PATH."
 
 $repo = Get-RepoRoot
+Invoke-ThroughShortRepoDriveIfNeeded
 Set-Location $repo
 
 if ($NoSubmodules) {
@@ -702,6 +801,10 @@ Write-Host "Building $Profile ($Flavor)"
 $cargoArgs = @("build", "--locked")
 if ($Profile -eq "release") {
     $cargoArgs += "--release"
+}
+if ($env:PARAKIT_SHORT_REPO_DRIVE_ACTIVE -eq "1") {
+    $cargoArgs += @("--config", "build.rustc-wrapper = ''")
+    $cargoArgs += @("--config", "build.rustc-workspace-wrapper = ''")
 }
 if ($Flavor -ne "cpu") {
     $cargoArgs += @("--features", $Flavor)
