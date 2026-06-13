@@ -55,6 +55,8 @@ GPU builds default `CMAKE_GENERATOR` to `Ninja` when the variable is unset. The 
 
 If you explicitly set a Visual Studio generator for CUDA, keep the matching CUDA Visual Studio integration installed and ensure the matching variable such as `CUDA_PATH_V13_1` resolves. The advanced override is `CMAKE_GENERATOR_TOOLSET=cuda=<toolkit-path>`, but Ninja is the normal bundle path.
 
+When `ccache` is on `PATH`, ggml's fallback CMake build can auto-enable it. The script keeps that supported by setting `CCACHE_DIR`, `CCACHE_TEMPDIR`, and `CCACHE_BASEDIR` to repo-local paths under `target\tmp` unless you already set them. For troubleshooting, set `CCACHE_DISABLE=1` in the build shell to bypass caching without uninstalling ccache.
+
 Vulkan builds can fail in ggml's shader generator when the checkout plus Cargo target path is too deep. If the script warns about long paths, use a short target root:
 
 ```powershell
