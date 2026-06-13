@@ -13,7 +13,7 @@ Cargo handles Rust packages. System packages are still needed for audio, desktop
 | Ubuntu 24.04 | `cmake build-essential libasound2-dev libudev-dev libxtst-dev libxi-dev libx11-dev libxkbcommon-dev libevdev-dev libxdo-dev libgomp1 pkg-config autoconf libtool` |
 | Fedora | `cmake gcc-c++ alsa-lib-devel libudev-devel libXtst-devel libXi-devel libX11-devel libxkbcommon-devel libevdev-devel xdotool-devel pkgconf autoconf libtool` |
 | Arch | `cmake base-devel alsa-lib libxtst libxi libx11 libxkbcommon libevdev xdotool pkgconf autoconf libtool` |
-| Windows | Visual Studio 2022 with the "Desktop development with C++" workload, plus CMake on `PATH`. |
+| Windows | Visual Studio 2022 with the "Desktop development with C++" workload, plus CMake on `PATH`. GPU bundle scripts also require Ninja. |
 | macOS | Xcode command line tools plus `cmake autoconf automake libtool pkg-config`. |
 
 CUDA builds need the CUDA Toolkit with `nvcc` on `PATH`.
@@ -85,6 +85,8 @@ The Windows scripts do not require Developer Mode. They install by copying files
 
 CUDA builds require the NVIDIA CUDA Toolkit on the build machine, with `nvcc` on `PATH` and `CUDA_PATH` pointing at the toolkit root. CUDA 12.x and 13.x toolkits are supported by the vendored ggml. CUDA 13.x toolkits do not install a display driver as part of the toolkit; install a compatible NVIDIA display driver separately.
 
+The Windows CUDA bundle script defaults `CMAKE_GENERATOR` to `Ninja` when no generator is set, then activates an amd64 Visual Studio C++ environment before running Cargo. This avoids a Windows CUDA trap in the Visual Studio generator: CUDA toolkit selection comes from versioned MSBuild BuildCustomizations such as `CUDA 13.1.props`/`.targets`, not from generic `PATH` or `CUDA_PATH`. A stale `CUDA 13.2.targets` file can make MSBuild pick 13.2 even when `nvcc` and `CUDA_PATH` point at 13.1.
+
 The default CUDA architecture behavior is ggml's native build for the GPU present on the machine. Override it when needed:
 
 ```powershell
@@ -102,7 +104,7 @@ scripts\windows\windows-cuda-build.bat --bundle-cuda-dlls
 
 That option copies the cuBLAS DLLs into the bundle. The files are large, so this is opt-in. parakit also sets `GGML_CUDA_NCCL=OFF`; the daemon has no multi-GPU collective workload.
 
-If CMake uses the default Visual Studio generator, the CUDA Visual Studio integration must be installed. As an alternative, set `CMAKE_GENERATOR=Ninja` for the build shell and ensure `nvcc` is on `PATH`.
+If you explicitly set `CMAKE_GENERATOR` to a Visual Studio generator, the matching CUDA Visual Studio integration must be installed and the matching version-specific environment variable such as `CUDA_PATH_V13_1` must resolve. Advanced users can force the VS toolset with `CMAKE_GENERATOR_TOOLSET=cuda=<toolkit-path>`, but Ninja is the supported default for the bundle scripts.
 
 ### Windows Vulkan
 
@@ -111,6 +113,15 @@ Vulkan builds require the LunarG Vulkan SDK at build time for headers, `vulkan-1
 ```bat
 scripts\windows\windows-vulkan-build.bat
 ```
+
+The Windows Vulkan bundle script also defaults to Ninja and activates the amd64 Visual Studio C++ environment. ggml-vulkan generates many shader-permutation source files with long names, so deep checkouts can exceed Windows path limits inside Cargo's CMake output tree. If shader generation fails with path or PDB errors, use a short target root:
+
+```powershell
+$env:CARGO_TARGET_DIR = "C:\t"
+.\scripts\windows\windows-cpu-build.ps1 --vulkan
+```
+
+Cloning to a short path such as `C:\src\parakit` and enabling Windows long paths are the other useful mitigations. If the failure is instead a `glslc` message about linking multiple files, capture the failing command line; that is a separate ggml-vulkan shader generation issue and should be handled by using Ninja under a clean build tree or by updating the vendored ggml/CrispASR pin.
 
 The Vulkan bundle has no CUDA-style runtime toolkit dependency. It imports `vulkan-1.dll`, the Khronos loader installed by GPU driver packages into System32. The installer warns if the loader is missing, but does not bundle it.
 

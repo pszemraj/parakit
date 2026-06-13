@@ -40,8 +40,8 @@ Only one accelerator flavor is supported per bundle.
 | Flavor | Command | Build-time requirements | Runtime expectation |
 | --- | --- | --- | --- |
 | CPU | `windows-cpu-build.bat` | Visual Studio C++ tools, CMake, Rust | Generated CrispASR/ggml DLLs are bundled. |
-| CUDA | `windows-cuda-build.bat` | NVIDIA CUDA Toolkit with `nvcc`, `CUDA_PATH`, and either CUDA Visual Studio integration or `CMAKE_GENERATOR=Ninja` | cuBLAS DLLs must be found through `%CUDA_PATH%\bin` or `PATH`, unless `--bundle-cuda-dlls` is used. |
-| Vulkan | `windows-vulkan-build.bat` | LunarG Vulkan SDK with `glslc`; `VULKAN_SDK` may be autodetected from `C:\VulkanSDK\*` | `vulkan-1.dll` is provided by the installed GPU driver. |
+| CUDA | `windows-cuda-build.bat` | Visual Studio C++ tools, Ninja, NVIDIA CUDA Toolkit with `nvcc` and `CUDA_PATH` | cuBLAS DLLs must be found through `%CUDA_PATH%\bin` or `PATH`, unless `--bundle-cuda-dlls` is used. |
+| Vulkan | `windows-vulkan-build.bat` | Visual Studio C++ tools, Ninja, LunarG Vulkan SDK with `glslc`; `VULKAN_SDK` may be autodetected from `C:\VulkanSDK\*` | `vulkan-1.dll` is provided by the installed GPU driver. |
 
 CUDA cuBLAS bundling is opt-in because `cublasLt64_*.dll` is large:
 
@@ -50,6 +50,19 @@ scripts\windows\windows-cuda-build.bat --bundle-cuda-dlls
 ```
 
 The scripts reject `--cuda --vulkan`; raw Cargo experiments can still enable multiple features, but the Windows bundle path keeps one accelerator per installed directory.
+
+GPU builds default `CMAKE_GENERATOR` to `Ninja` when the variable is unset. The script activates an amd64 Visual Studio C++ environment before Cargo runs, then verifies `cl.exe`, `link.exe`, and `ninja.exe`. This is intentional for CUDA: Visual Studio generators select CUDA from versioned MSBuild BuildCustomizations, so stale files such as `CUDA 13.2.targets` can override a shell where `nvcc` and `CUDA_PATH` point at 13.1.
+
+If you explicitly set a Visual Studio generator for CUDA, keep the matching CUDA Visual Studio integration installed and ensure the matching variable such as `CUDA_PATH_V13_1` resolves. The advanced override is `CMAKE_GENERATOR_TOOLSET=cuda=<toolkit-path>`, but Ninja is the normal bundle path.
+
+Vulkan builds can fail in ggml's shader generator when the checkout plus Cargo target path is too deep. If the script warns about long paths, use a short target root:
+
+```powershell
+$env:CARGO_TARGET_DIR = "C:\t"
+.\scripts\windows\windows-vulkan-build.bat --no-install
+```
+
+If path shortening does not fix a Vulkan shader-gen failure, capture the exact `glslc` command. A `linking multiple files is not supported yet` message is a separate SDK/ggml issue, not a path-length problem.
 
 ## Runtime Manifest
 
