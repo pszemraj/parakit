@@ -43,6 +43,11 @@ parakit --threads 8 --verbose
 
 GPU-capable builds default to `--device auto`. In `auto`, CrispASR asks ggml for the best backend device and falls back to CPU when no GPU backend is available. On hybrid laptops, ggml prefers a discrete GPU over an integrated GPU.
 
+On Windows, the Vulkan bundle is the recommended GPU build for most users. It
+works across NVIDIA, AMD, and Intel drivers and avoids CUDA Toolkit runtime DLL
+setup. Use the CUDA bundle when you specifically want the NVIDIA CUDA backend or
+already manage CUDA Toolkit installs on the target machine.
+
 ```bash
 parakit --device auto
 parakit --device cpu

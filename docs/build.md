@@ -65,6 +65,13 @@ scripts\windows\windows-cuda-build.bat
 scripts\windows\windows-vulkan-build.bat
 ```
 
+For Windows GPU installs, prefer the Vulkan bundle unless you specifically need
+CUDA. Vulkan works across NVIDIA, AMD, and Intel GPUs and has no CUDA Toolkit or
+cuBLAS runtime DLL requirement on the target machine; it only needs a current
+GPU driver at runtime. CUDA remains useful for NVIDIA-only setups where the CUDA
+Toolkit is already part of the machine image or where you want to validate the
+NVIDIA CUDA path directly.
+
 Options, install location, PATH behavior, OpenBLAS bundling, CUDA cuBLAS
 handling, and Vulkan path-length handling are in
 [../scripts/windows/README.md](../scripts/windows/README.md).

@@ -22,6 +22,12 @@ scripts\windows\windows-vulkan-build.bat
 
 The batch files are wrappers around the PowerShell implementation. All entry points accept the same options; run any of them with `--help` for the supported flags.
 
+For Windows GPU installs, start with `windows-vulkan-build.bat` unless you
+specifically need CUDA. Vulkan is vendor-agnostic, ships as a self-contained
+parakit bundle, and uses the GPU driver's `vulkan-1.dll` at runtime. CUDA is
+NVIDIA-only and either needs matching CUDA Toolkit cuBLAS DLLs available through
+`%CUDA_PATH%\bin` or `PATH`, or a larger bundle built with `--bundle-cuda-dlls`.
+
 PowerShell equivalent from PowerShell:
 
 ```powershell
@@ -40,8 +46,8 @@ Only one accelerator flavor is supported per bundle.
 | Flavor | Command | Build-time requirements | Runtime expectation |
 | --- | --- | --- | --- |
 | CPU | `windows-cpu-build.bat` | Visual Studio C++ tools, CMake, Rust | Generated CrispASR/ggml DLLs are bundled. |
-| CUDA | `windows-cuda-build.bat` | Visual Studio C++ tools, Ninja, NVIDIA CUDA Toolkit with `nvcc` and `CUDA_PATH` | cuBLAS DLLs must be found through `%CUDA_PATH%\bin` or `PATH`, unless `--bundle-cuda-dlls` is used. |
-| Vulkan | `windows-vulkan-build.bat` | Visual Studio C++ tools, Ninja, LunarG Vulkan SDK with `glslc`; `VULKAN_SDK` may be autodetected from `C:\VulkanSDK\*` | `vulkan-1.dll` is provided by the installed GPU driver. |
+| CUDA | `windows-cuda-build.bat` | Visual Studio C++ tools, Ninja, NVIDIA CUDA Toolkit with `nvcc` and `CUDA_PATH` | NVIDIA-only. cuBLAS DLLs must be found through `%CUDA_PATH%\bin` or `PATH`, unless `--bundle-cuda-dlls` is used. |
+| Vulkan | `windows-vulkan-build.bat` | Visual Studio C++ tools, Ninja, LunarG Vulkan SDK with `glslc`; `VULKAN_SDK` may be autodetected from `C:\VulkanSDK\*` | Recommended Windows GPU flavor. `vulkan-1.dll` is provided by the installed GPU driver. |
 
 CUDA cuBLAS bundling is opt-in because `cublasLt64_*.dll` is large:
 
