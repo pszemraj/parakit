@@ -114,14 +114,16 @@ Vulkan builds require the LunarG Vulkan SDK at build time for headers, `vulkan-1
 scripts\windows\windows-vulkan-build.bat
 ```
 
-The Windows Vulkan bundle script also defaults to Ninja and activates the amd64 Visual Studio C++ environment. ggml-vulkan generates many shader-permutation source files with long names, so deep checkouts can exceed Windows path limits inside Cargo's CMake output tree. If shader generation fails with path or PDB errors, use a short target root:
+The Windows Vulkan bundle script also defaults to Ninja and activates the amd64 Visual Studio C++ environment. ggml-vulkan generates many shader-permutation source files with long names, so deep checkouts can exceed Windows path limits inside Cargo's CMake output tree. When the path is risky and `CARGO_TARGET_DIR` is not absolute, the script temporarily maps a free drive letter to the repo, runs the build through that short path, and removes the mapping afterward.
+
+If you set an absolute `CARGO_TARGET_DIR`, keep it short:
 
 ```powershell
 $env:CARGO_TARGET_DIR = "C:\t"
 .\scripts\windows\windows-cpu-build.ps1 --vulkan
 ```
 
-Cloning to a short path such as `C:\src\parakit` and enabling Windows long paths are the other useful mitigations. If the failure is instead a `glslc` message about linking multiple files, capture the failing command line; that is a separate ggml-vulkan shader generation issue and should be handled by using Ninja under a clean build tree or by updating the vendored ggml/CrispASR pin.
+Cloning to a short path such as `C:\src\parakit` and enabling Windows long paths are the other useful mitigations. Rust `sccache` wrappers are disabled only inside the script-managed short-drive build because this local setup cannot spawn rustc correctly from a substituted drive; C/C++ `ccache` remains enabled with the repo-local cache. If the failure is instead a `glslc` message about linking multiple files, capture the failing command line; that is a separate ggml-vulkan shader generation issue and should be handled by using Ninja under a clean build tree or by updating the vendored ggml/CrispASR pin.
 
 The Vulkan bundle has no CUDA-style runtime toolkit dependency. It imports `vulkan-1.dll`, the Khronos loader installed by GPU driver packages into System32. The installer warns if the loader is missing, but does not bundle it.
 

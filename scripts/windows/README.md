@@ -57,7 +57,9 @@ If you explicitly set a Visual Studio generator for CUDA, keep the matching CUDA
 
 When `ccache` is on `PATH`, ggml's fallback CMake build can auto-enable it. The script keeps that supported by setting `CCACHE_DIR`, `CCACHE_TEMPDIR`, and `CCACHE_BASEDIR` to repo-local paths under `target\tmp` unless you already set them. For troubleshooting, set `CCACHE_DISABLE=1` in the build shell to bypass caching without uninstalling ccache.
 
-Vulkan builds can fail in ggml's shader generator when the checkout plus Cargo target path is too deep. If the script warns about long paths, use a short target root:
+Vulkan builds can fail in ggml's shader generator when the checkout plus Cargo target path is too deep. When the script detects a risky path and `CARGO_TARGET_DIR` is not an absolute path, it temporarily maps a free drive letter to the repo, reruns the build through that short path, and removes the mapping afterward. Rust `sccache` wrappers are disabled only inside that mapped build because this local setup cannot spawn rustc correctly from a substituted drive; C/C++ `ccache` remains enabled with the repo-local cache.
+
+If you set an absolute `CARGO_TARGET_DIR`, choose a short path:
 
 ```powershell
 $env:CARGO_TARGET_DIR = "C:\t"
