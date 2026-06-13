@@ -567,9 +567,17 @@ function Test-CrispAsrSubmoduleReady {
         return $true
     }
 
-    $status = & git -C $repo submodule status --recursive "vendor/CrispASR" 2>$null
-    if ($LASTEXITCODE -ne 0 -or $null -eq $status) {
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        $status = & git -C $repo submodule status --recursive "vendor/CrispASR" 2>$null
+        if ($LASTEXITCODE -ne 0 -or $null -eq $status) {
+            return $true
+        }
+    } catch {
         return $true
+    } finally {
+        $ErrorActionPreference = $previousErrorActionPreference
     }
 
     foreach ($line in @($status)) {
