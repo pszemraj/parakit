@@ -145,6 +145,172 @@ function Test-Command {
     return $null -ne (Get-Command $Name -ErrorAction SilentlyContinue)
 }
 
+function Test-NinjaGenerator {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Generator
+    )
+
+    return $Generator -like "Ninja*"
+}
+
+function Configure-GpuBuildGenerator {
+    if ($Flavor -eq "cpu") {
+        return
+    }
+
+    if ([string]::IsNullOrWhiteSpace($env:CMAKE_GENERATOR)) {
+        $env:CMAKE_GENERATOR = "Ninja"
+        Write-Host "${Flavor}: CMAKE_GENERATOR was not set; defaulting to Ninja"
+    } else {
+        Write-Host "${Flavor}: using CMAKE_GENERATOR=$env:CMAKE_GENERATOR"
+    }
+
+    if (Test-NinjaGenerator $env:CMAKE_GENERATOR) {
+        Ensure-MsvcBuildEnvironment
+        Ensure-NinjaAvailable
+    }
+}
+
+function Ensure-MsvcBuildEnvironment {
+    if ((Test-Command "cl.exe") -and (Test-Command "link.exe")) {
+        Write-Host "MSVC: using active developer environment"
+        return
+    }
+
+    $vsInstall = Get-VisualStudioInstallPath
+    if ([string]::IsNullOrWhiteSpace($vsInstall)) {
+        throw "Visual Studio C++ tools were not found. Install Visual Studio 2022 with the Desktop development with C++ workload."
+    }
+
+    $script:VisualStudioInstallPath = $vsInstall
+    $launchDevShell = Join-Path $vsInstall "Common7\Tools\Launch-VsDevShell.ps1"
+    $vcvars64 = Join-Path $vsInstall "VC\Auxiliary\Build\vcvars64.bat"
+    $currentLocation = Get-Location
+    $activated = $false
+
+    try {
+        if (Test-Path -LiteralPath $launchDevShell -PathType Leaf) {
+            try {
+                . $launchDevShell -Arch amd64 -HostArch amd64 -SkipAutomaticLocation | Out-Null
+                $activated = $true
+            } catch {
+                Write-Warning "MSVC: Launch-VsDevShell.ps1 failed; falling back to vcvars64.bat. $($_.Exception.Message)"
+            }
+        }
+
+        if (-not $activated -and (Test-Path -LiteralPath $vcvars64 -PathType Leaf)) {
+            Import-EnvironmentFromBatch $vcvars64
+            $activated = $true
+        }
+
+        if (-not $activated) {
+            throw "Visual Studio install is missing usable Launch-VsDevShell.ps1 and vcvars64.bat: $vsInstall"
+        }
+    } finally {
+        Set-Location $currentLocation
+    }
+
+    Add-VisualStudioNinjaToPath $vsInstall
+
+    if (-not (Test-Command "cl.exe") -or -not (Test-Command "link.exe")) {
+        throw "Visual Studio environment activation did not expose cl.exe and link.exe. Run from an x64 Native Tools shell or repair the Visual Studio C++ workload."
+    }
+
+    Write-Host "MSVC: activated amd64 developer environment from $vsInstall"
+}
+
+function Ensure-NinjaAvailable {
+    if (Test-Command "ninja") {
+        Write-Host "Ninja: using $(Get-Command ninja | Select-Object -ExpandProperty Source -First 1)"
+        return
+    }
+
+    if ([string]::IsNullOrWhiteSpace($script:VisualStudioInstallPath)) {
+        $script:VisualStudioInstallPath = Get-VisualStudioInstallPath
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($script:VisualStudioInstallPath)) {
+        Add-VisualStudioNinjaToPath $script:VisualStudioInstallPath
+    }
+
+    Require-Command "ninja" "Install Ninja, or install Visual Studio's CMake tools so its bundled Ninja is available."
+    Write-Host "Ninja: using $(Get-Command ninja | Select-Object -ExpandProperty Source -First 1)"
+}
+
+function Add-VisualStudioNinjaToPath {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$VsInstall
+    )
+
+    $ninjaDir = Join-Path $VsInstall "Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja"
+    $ninjaExe = Join-Path $ninjaDir "ninja.exe"
+    if ((Test-Path -LiteralPath $ninjaExe -PathType Leaf) -and -not ($env:Path.Split(";") -contains $ninjaDir)) {
+        $env:Path = "$ninjaDir;$env:Path"
+    }
+}
+
+function Get-VisualStudioInstallPath {
+    $vswhere = $null
+    if (-not [string]::IsNullOrWhiteSpace(${env:ProgramFiles(x86)})) {
+        $candidate = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+            $vswhere = $candidate
+        }
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($vswhere)) {
+        $path = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath 2>$null |
+            Select-Object -First 1
+        if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($path)) {
+            return $path
+        }
+    }
+
+    $roots = @()
+    if (-not [string]::IsNullOrWhiteSpace(${env:ProgramFiles(x86)})) {
+        $roots += Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\2022"
+    }
+    if (-not [string]::IsNullOrWhiteSpace($env:ProgramFiles)) {
+        $roots += Join-Path $env:ProgramFiles "Microsoft Visual Studio\2022"
+    }
+
+    foreach ($root in $roots) {
+        if (-not (Test-Path -LiteralPath $root -PathType Container)) {
+            continue
+        }
+
+        $candidate = Get-ChildItem -LiteralPath $root -Directory -ErrorAction SilentlyContinue |
+            Where-Object { Test-Path -LiteralPath (Join-Path $_.FullName "VC\Auxiliary\Build\vcvars64.bat") -PathType Leaf } |
+            Select-Object -First 1
+        if ($null -ne $candidate) {
+            return $candidate.FullName
+        }
+    }
+
+    return $null
+}
+
+function Import-EnvironmentFromBatch {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$BatchPath
+    )
+
+    $command = "`"$BatchPath`" >nul && set"
+    $environment = & $env:ComSpec /d /s /c $command
+    if ($LASTEXITCODE -ne 0) {
+        throw "$BatchPath failed with exit code $LASTEXITCODE"
+    }
+
+    foreach ($line in @($environment)) {
+        if ($line -match '^([^=]+)=(.*)$') {
+            [System.Environment]::SetEnvironmentVariable($matches[1], $matches[2], "Process")
+        }
+    }
+}
+
 function Assert-CudaBuildReady {
     Require-Command "nvcc" "Install the NVIDIA CUDA Toolkit and ensure nvcc is on PATH."
 
@@ -157,15 +323,60 @@ function Assert-CudaBuildReady {
         throw "CUDA_PATH does not contain a bin directory: $env:CUDA_PATH"
     }
 
-    if ([string]::IsNullOrWhiteSpace($env:CMAKE_GENERATOR) -and -not (Test-CudaVisualStudioIntegration)) {
-        throw "CUDA Visual Studio integration was not found. Install the Visual Studio integration component from the CUDA Toolkit installer, or set CMAKE_GENERATOR=Ninja for this shell and ensure nvcc is on PATH."
+    if (-not (Test-NinjaGenerator $env:CMAKE_GENERATOR)) {
+        Assert-CudaVisualStudioToolset
     }
 
     Write-Host "CUDA: using toolkit at $env:CUDA_PATH"
     Write-Host "CUDA: ggml-cuda first build can take tens of minutes; native/default arch keeps it to this machine."
 }
 
-function Test-CudaVisualStudioIntegration {
+function Assert-CudaVisualStudioToolset {
+    if (-not [string]::IsNullOrWhiteSpace($env:CMAKE_GENERATOR_TOOLSET) -and $env:CMAKE_GENERATOR_TOOLSET -match '(^|,)cuda=') {
+        Write-Host "CUDA: using CMAKE_GENERATOR_TOOLSET=$env:CMAKE_GENERATOR_TOOLSET"
+        return
+    }
+
+    $nvccVersion = Get-NvccReleaseVersion
+    $integrationVersions = @(Get-CudaVisualStudioIntegrationVersions)
+
+    if ($integrationVersions.Count -eq 0) {
+        throw "CUDA Visual Studio integration was not found. Use the default Ninja generator, install the CUDA Visual Studio integration component, or set CMAKE_GENERATOR_TOOLSET=cuda=<toolkit-path>."
+    }
+
+    if ([string]::IsNullOrWhiteSpace($nvccVersion)) {
+        Write-Warning "CUDA: could not parse nvcc release version; Visual Studio generator may select a different CUDA BuildCustomizations version."
+        return
+    }
+
+    if ($integrationVersions -notcontains $nvccVersion) {
+        $available = $integrationVersions -join ", "
+        throw "CUDA: nvcc reports $nvccVersion, but Visual Studio CUDA BuildCustomizations contain [$available]. Use Ninja, remove stale CUDA *.props/*.targets, reinstall the matching CUDA Visual Studio integration, or set CMAKE_GENERATOR_TOOLSET=cuda=$env:CUDA_PATH."
+    }
+
+    $specificEnvName = "CUDA_PATH_V$($nvccVersion.Replace('.', '_'))"
+    $specificEnvValue = [System.Environment]::GetEnvironmentVariable($specificEnvName, "Process")
+    if ([string]::IsNullOrWhiteSpace($specificEnvValue)) {
+        Write-Warning "CUDA: $specificEnvName is not set. Visual Studio CUDA targets may resolve an empty CudaToolkitDir; prefer Ninja or set CMAKE_GENERATOR_TOOLSET=cuda=$env:CUDA_PATH."
+    }
+}
+
+function Get-NvccReleaseVersion {
+    $nvcc = & nvcc --version 2>$null
+    if ($LASTEXITCODE -ne 0) {
+        return $null
+    }
+
+    foreach ($line in @($nvcc)) {
+        if ($line -match 'release\s+([0-9]+\.[0-9]+)') {
+            return $matches[1]
+        }
+    }
+
+    return $null
+}
+
+function Get-CudaVisualStudioIntegrationVersions {
     $roots = @()
     if (-not [string]::IsNullOrWhiteSpace($env:CUDA_PATH)) {
         $roots += Join-Path $env:CUDA_PATH "extras\visual_studio_integration"
@@ -178,15 +389,17 @@ function Test-CudaVisualStudioIntegration {
     }
     $roots = $roots | Where-Object { Test-Path -LiteralPath $_ -PathType Container }
 
+    $versions = @()
     foreach ($root in $roots) {
-        $match = Get-ChildItem -LiteralPath $root -Recurse -Filter "CUDA *.props" -ErrorAction SilentlyContinue |
-            Select-Object -First 1
-        if ($null -ne $match) {
-            return $true
+        $propsFiles = Get-ChildItem -LiteralPath $root -Recurse -Filter "CUDA *.props" -ErrorAction SilentlyContinue
+        foreach ($propsFile in @($propsFiles)) {
+            if ($propsFile.BaseName -match '^CUDA\s+([0-9]+\.[0-9]+)') {
+                $versions += $Matches[1]
+            }
         }
     }
 
-    return $false
+    return $versions | Sort-Object -Unique
 }
 
 function Assert-VulkanBuildReady {
@@ -210,6 +423,7 @@ function Assert-VulkanBuildReady {
 
     Require-Command "glslc" "Install the LunarG Vulkan SDK and ensure its Bin directory is on PATH."
     Write-Host "Vulkan: using SDK at $env:VULKAN_SDK"
+    Write-VulkanPathLengthWarnings
 }
 
 function Get-NewestVulkanSdk {
@@ -225,6 +439,42 @@ function Get-NewestVulkanSdk {
         return $null
     }
     return $sdk.FullName
+}
+
+function Get-CargoTargetRoot {
+    if ([string]::IsNullOrWhiteSpace($env:CARGO_TARGET_DIR)) {
+        return (Join-Path $repo "target")
+    }
+
+    if ([System.IO.Path]::IsPathRooted($env:CARGO_TARGET_DIR)) {
+        return [System.IO.Path]::GetFullPath($env:CARGO_TARGET_DIR)
+    }
+
+    return [System.IO.Path]::GetFullPath((Join-Path $repo $env:CARGO_TARGET_DIR))
+}
+
+function Get-LongPathsEnabled {
+    try {
+        $value = Get-ItemPropertyValue -LiteralPath "HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem" -Name "LongPathsEnabled" -ErrorAction Stop
+        return [int]$value
+    } catch {
+        return $null
+    }
+}
+
+function Write-VulkanPathLengthWarnings {
+    $targetRoot = Get-CargoTargetRoot
+    $samplePath = Join-Path $targetRoot "$Profile\build\parakit-0000000000000000\out\build\vendor\CrispASR\ggml\src\ggml-vulkan\CMakeFiles\vulkan-shaders-gen.dir\vulkan-shaders\matmul_id_subgroup_q6_k_f32_f16acc_aligned_c00.cxx.obj"
+    if ($samplePath.Length -ge 240) {
+        Write-Warning "Vulkan: estimated shader build object path is $($samplePath.Length) characters. ggml-vulkan can exceed Windows MAX_PATH from deep checkouts; set CARGO_TARGET_DIR to a short absolute path such as C:\t, or build from a shorter checkout such as C:\src\parakit."
+    }
+
+    $longPathsEnabled = Get-LongPathsEnabled
+    if ($null -eq $longPathsEnabled) {
+        Write-Warning "Vulkan: could not read LongPathsEnabled. If shader generation fails with path or PDB errors, enable Windows long paths or shorten CARGO_TARGET_DIR."
+    } elseif ($longPathsEnabled -ne 1) {
+        Write-Warning "Vulkan: Windows long paths are disabled. If shader generation fails with path or PDB errors, enable LongPathsEnabled or shorten CARGO_TARGET_DIR."
+    }
 }
 
 function Assert-NativeWindows {
@@ -359,6 +609,8 @@ if ($NoSubmodules) {
     Invoke-Checked "git" "submodule" "update" "--init" "--recursive"
     Assert-CrispAsrSubmoduleReady
 }
+
+Configure-GpuBuildGenerator
 
 switch ($Flavor) {
     "cuda" {
