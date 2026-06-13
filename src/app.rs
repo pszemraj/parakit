@@ -29,6 +29,10 @@ use crate::daemon::notifications::Notifier;
 use crate::daemon::sounds::Sounds;
 use crate::daemon::worker::{spawn_worker, WorkerCtx, WorkerEvent, WORKER_QUEUE_CAPACITY};
 
+const CPU_ENGINE_WARMUP_SECONDS: usize = 1;
+const GPU_ENGINE_WARMUP_SECONDS: usize = 60;
+const ENGINE_WARMUP_AMPLITUDE: f32 = 0.02;
+
 /// Parse CLI arguments and run the requested command or daemon mode.
 ///
 /// # Returns
@@ -432,15 +436,61 @@ fn validate_device_request(device_mode: DeviceMode, log: &Logger) -> Result<()> 
 
 fn warm_up_engine(engine: &Engine, log: &Logger) -> Result<()> {
     let started = Instant::now();
-    let silence = vec![0.0; TARGET_RATE as usize];
+    let seconds = engine_warmup_seconds(engine);
+    let warmup = engine_warmup_pcm(seconds);
     engine
-        .transcribe(&silence)
+        .transcribe(&warmup)
         .context("engine warmup transcription failed")?;
     log.verbose(format!(
-        "parakit: engine warmup took {:.0}ms",
-        started.elapsed().as_secs_f32() * 1000.0
+        "parakit: engine warmup took {:.0}ms ({}s synthetic input)",
+        started.elapsed().as_secs_f32() * 1000.0,
+        seconds
     ));
     Ok(())
+}
+
+fn engine_warmup_seconds(engine: &Engine) -> usize {
+    if engine.device_mode() == DeviceMode::Cpu {
+        return CPU_ENGINE_WARMUP_SECONDS;
+    }
+
+    #[cfg(feature = "bundled")]
+    {
+        if parakit::gpu::has_gpu_device() {
+            return GPU_ENGINE_WARMUP_SECONDS;
+        }
+    }
+
+    CPU_ENGINE_WARMUP_SECONDS
+}
+
+fn engine_warmup_pcm(seconds: usize) -> Vec<f32> {
+    let sample_count = TARGET_RATE as usize * seconds;
+    (0..sample_count)
+        .map(|index| {
+            if (index / 80) % 2 == 0 {
+                ENGINE_WARMUP_AMPLITUDE
+            } else {
+                -ENGINE_WARMUP_AMPLITUDE
+            }
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod app_tests {
+    use super::*;
+
+    #[test]
+    fn engine_warmup_pcm_is_representative_and_nonzero() {
+        let pcm = engine_warmup_pcm(GPU_ENGINE_WARMUP_SECONDS);
+        assert_eq!(pcm.len(), TARGET_RATE as usize * GPU_ENGINE_WARMUP_SECONDS);
+        assert!(pcm.iter().any(|sample| *sample > 0.0));
+        assert!(pcm.iter().any(|sample| *sample < 0.0));
+        assert!(pcm
+            .iter()
+            .all(|sample| sample.abs() <= ENGINE_WARMUP_AMPLITUDE));
+    }
 }
 
 #[cfg(unix)]
