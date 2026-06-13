@@ -312,10 +312,37 @@ function Import-EnvironmentFromBatch {
         throw "$BatchPath failed with exit code $LASTEXITCODE"
     }
 
+    $values = New-Object "System.Collections.Generic.Dictionary[string,string]" ([System.StringComparer]::OrdinalIgnoreCase)
+    $pathValues = @()
+
     foreach ($line in @($environment)) {
         if ($line -match '^([^=]+)=(.*)$') {
-            [System.Environment]::SetEnvironmentVariable($matches[1], $matches[2], "Process")
+            $name = $matches[1]
+            $value = $matches[2]
+            if ($name -ieq "PATH") {
+                $pathValues += $value
+            } else {
+                $values[$name] = $value
+            }
         }
+    }
+
+    foreach ($name in $values.Keys) {
+        [System.Environment]::SetEnvironmentVariable($name, $values[$name], "Process")
+    }
+
+    if ($pathValues.Count -gt 0) {
+        $pathValue = $pathValues |
+            Where-Object { $_ -like "*\VC\Tools\MSVC\*HostX64*x64*" } |
+            Select-Object -First 1
+        if ([string]::IsNullOrWhiteSpace($pathValue)) {
+            $pathValue = $pathValues |
+                Sort-Object { $_.Length } -Descending |
+                Select-Object -First 1
+        }
+
+        [System.Environment]::SetEnvironmentVariable("Path", $pathValue, "Process")
+        $env:Path = $pathValue
     }
 }
 
