@@ -1,4 +1,4 @@
-# Build and bundle Parakit CPU daemon on native Windows.
+# Build and bundle Parakit daemon flavors on native Windows.
 #
 # Usage:
 #   powershell -ExecutionPolicy Bypass -File scripts/windows/windows-cpu-build.ps1 [options]
@@ -6,8 +6,8 @@
 # By default this builds a repo-local bundle, installs it to the per-user
 # Windows app directory, and adds that directory to the User PATH.
 #
-# This script intentionally does not enable CUDA. Validate the native CPU
-# daemon before adding GPU toolchain and runtime DLL complexity.
+# One accelerator flavor is supported per bundle. CUDA requires a local CUDA
+# Toolkit; Vulkan requires the LunarG Vulkan SDK at build time.
 
 param(
     [Parameter(ValueFromRemainingArguments = $true)]
@@ -21,6 +21,8 @@ $NoInstall = $false
 $NoUserPath = $false
 $NoSubmodules = $false
 $InstallDir = $null
+$Flavor = "cpu"
+$BundleCudaDlls = $false
 
 if ($DebugPreference -ne "SilentlyContinue") {
     $Profile = "debug"
@@ -33,12 +35,16 @@ function Show-Usage {
         $entryPoint = "scripts\windows\$scriptName"
     }
 
-    Write-Host "Build and bundle Parakit CPU daemon on native Windows."
+    Write-Host "Build and bundle Parakit daemon flavors on native Windows."
     Write-Host ""
     Write-Host "Usage:"
-    Write-Host "  $entryPoint [--release] [--debug] [--no-submodules] [--no-install] [--no-user-path] [--install-dir DIR]"
+    Write-Host "  $entryPoint [--cuda | --vulkan] [--bundle-cuda-dlls] [--release] [--debug] [--no-submodules] [--no-install] [--no-user-path] [--install-dir DIR]"
     Write-Host ""
     Write-Host "Options:"
+    Write-Host "  --cuda           Build a CUDA bundle. Requires NVIDIA CUDA Toolkit on this machine."
+    Write-Host "  --vulkan         Build a Vulkan bundle. Requires LunarG Vulkan SDK and glslc."
+    Write-Host "  --bundle-cuda-dlls"
+    Write-Host "                   CUDA only: copy cublas64_*.dll and cublasLt64_*.dll into the bundle."
     Write-Host "  --release        Build target\release and bundle it. This is the default."
     Write-Host "  --debug          Build target\debug and bundle it into the same target bundle."
     Write-Host "  --no-submodules  Do not run git submodule update --init --recursive."
@@ -46,6 +52,19 @@ function Show-Usage {
     Write-Host "  --no-user-path   Install without adding the install directory to User PATH."
     Write-Host "  --install-dir    Install to DIR instead of `%LOCALAPPDATA`%\Programs\parakit."
     Write-Host "  -h, --help       Print this help."
+}
+
+function Set-BuildFlavor {
+    param(
+        [Parameter(Mandatory = $true)]
+        [ValidateSet("cpu", "cuda", "vulkan")]
+        [string]$Value
+    )
+
+    if ($Flavor -ne "cpu" -and $Flavor -ne $Value) {
+        throw "Only one accelerator flavor can be selected per bundle. Choose either --cuda or --vulkan."
+    }
+    $script:Flavor = $Value
 }
 
 for ($i = 0; $i -lt $RawArgs.Count; $i++) {
@@ -56,6 +75,15 @@ for ($i = 0; $i -lt $RawArgs.Count; $i++) {
         }
         '^(--release|-release|-Release)$' {
             $Profile = "release"
+        }
+        '^(--cuda|-cuda|-Cuda)$' {
+            Set-BuildFlavor "cuda"
+        }
+        '^(--vulkan|-vulkan|-Vulkan)$' {
+            Set-BuildFlavor "vulkan"
+        }
+        '^(--bundle-cuda-dlls|-bundle-cuda-dlls|-BundleCudaDlls)$' {
+            $BundleCudaDlls = $true
         }
         '^(--debug|-debug|-Profile|-profile)$' {
             if ($RawArgs[$i] -eq "-Profile") {
@@ -90,6 +118,10 @@ for ($i = 0; $i -lt $RawArgs.Count; $i++) {
     }
 }
 
+if ($BundleCudaDlls -and $Flavor -ne "cuda") {
+    throw "--bundle-cuda-dlls is only valid with --cuda."
+}
+
 function Require-Command {
     param(
         [Parameter(Mandatory = $true)]
@@ -111,6 +143,88 @@ function Test-Command {
     )
 
     return $null -ne (Get-Command $Name -ErrorAction SilentlyContinue)
+}
+
+function Assert-CudaBuildReady {
+    Require-Command "nvcc" "Install the NVIDIA CUDA Toolkit and ensure nvcc is on PATH."
+
+    if ([string]::IsNullOrWhiteSpace($env:CUDA_PATH)) {
+        throw "CUDA_PATH is not set. Install the NVIDIA CUDA Toolkit, or set CUDA_PATH to the toolkit root for this shell."
+    }
+
+    $cudaBin = Join-Path $env:CUDA_PATH "bin"
+    if (-not (Test-Path -LiteralPath $cudaBin -PathType Container)) {
+        throw "CUDA_PATH does not contain a bin directory: $env:CUDA_PATH"
+    }
+
+    if ([string]::IsNullOrWhiteSpace($env:CMAKE_GENERATOR) -and -not (Test-CudaVisualStudioIntegration)) {
+        throw "CUDA Visual Studio integration was not found. Install the Visual Studio integration component from the CUDA Toolkit installer, or set CMAKE_GENERATOR=Ninja for this shell and ensure nvcc is on PATH."
+    }
+
+    Write-Host "CUDA: using toolkit at $env:CUDA_PATH"
+    Write-Host "CUDA: ggml-cuda first build can take tens of minutes; native/default arch keeps it to this machine."
+}
+
+function Test-CudaVisualStudioIntegration {
+    $roots = @()
+    if (-not [string]::IsNullOrWhiteSpace($env:CUDA_PATH)) {
+        $roots += Join-Path $env:CUDA_PATH "extras\visual_studio_integration"
+    }
+    if (-not [string]::IsNullOrWhiteSpace(${env:ProgramFiles(x86)})) {
+        $roots += Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio"
+    }
+    if (-not [string]::IsNullOrWhiteSpace($env:ProgramFiles)) {
+        $roots += Join-Path $env:ProgramFiles "Microsoft Visual Studio"
+    }
+    $roots = $roots | Where-Object { Test-Path -LiteralPath $_ -PathType Container }
+
+    foreach ($root in $roots) {
+        $match = Get-ChildItem -LiteralPath $root -Recurse -Filter "CUDA *.props" -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+        if ($null -ne $match) {
+            return $true
+        }
+    }
+
+    return $false
+}
+
+function Assert-VulkanBuildReady {
+    if ([string]::IsNullOrWhiteSpace($env:VULKAN_SDK)) {
+        $detected = Get-NewestVulkanSdk
+        if ([string]::IsNullOrWhiteSpace($detected)) {
+            throw "VULKAN_SDK is not set and no C:\VulkanSDK install was found. Install the LunarG Vulkan SDK from vulkan.lunarg.com, or use winget install KhronosGroup.VulkanSDK."
+        }
+        $env:VULKAN_SDK = $detected
+        Write-Host "Vulkan: auto-detected SDK at $env:VULKAN_SDK"
+    }
+
+    if (-not (Test-Path -LiteralPath $env:VULKAN_SDK -PathType Container)) {
+        throw "VULKAN_SDK does not point at a directory: $env:VULKAN_SDK"
+    }
+
+    $sdkBin = Join-Path $env:VULKAN_SDK "Bin"
+    if (Test-Path -LiteralPath $sdkBin -PathType Container) {
+        $env:Path = "$sdkBin;$env:Path"
+    }
+
+    Require-Command "glslc" "Install the LunarG Vulkan SDK and ensure its Bin directory is on PATH."
+    Write-Host "Vulkan: using SDK at $env:VULKAN_SDK"
+}
+
+function Get-NewestVulkanSdk {
+    $root = "C:\VulkanSDK"
+    if (-not (Test-Path -LiteralPath $root -PathType Container)) {
+        return $null
+    }
+
+    $sdk = Get-ChildItem -LiteralPath $root -Directory |
+        Sort-Object Name -Descending |
+        Select-Object -First 1
+    if ($null -eq $sdk) {
+        return $null
+    }
+    return $sdk.FullName
 }
 
 function Assert-NativeWindows {
@@ -246,10 +360,33 @@ if ($NoSubmodules) {
     Assert-CrispAsrSubmoduleReady
 }
 
-Write-Host "Building $Profile"
+switch ($Flavor) {
+    "cuda" {
+        Assert-CudaBuildReady
+        if ($BundleCudaDlls) {
+            $env:PARAKIT_BUNDLE_CUDA_DLLS = "1"
+            Write-Host "CUDA: cuBLAS runtime DLL bundling enabled"
+        } else {
+            Remove-Item Env:\PARAKIT_BUNDLE_CUDA_DLLS -ErrorAction SilentlyContinue
+            Write-Host "CUDA: cuBLAS runtime DLLs expected from CUDA_PATH\bin or PATH at install/run time"
+        }
+    }
+    "vulkan" {
+        Assert-VulkanBuildReady
+        Remove-Item Env:\PARAKIT_BUNDLE_CUDA_DLLS -ErrorAction SilentlyContinue
+    }
+    default {
+        Remove-Item Env:\PARAKIT_BUNDLE_CUDA_DLLS -ErrorAction SilentlyContinue
+    }
+}
+
+Write-Host "Building $Profile ($Flavor)"
 $cargoArgs = @("build", "--locked")
 if ($Profile -eq "release") {
     $cargoArgs += "--release"
+}
+if ($Flavor -ne "cpu") {
+    $cargoArgs += @("--features", $Flavor)
 }
 Invoke-Checked "cargo" @cargoArgs
 
@@ -270,7 +407,7 @@ if (-not (Test-Path -LiteralPath $targetRoot)) {
     New-Item -ItemType Directory -Path $targetRoot | Out-Null
 }
 
-$bundleDir = Join-Path $targetRoot "parakit-windows-x86_64-cpu"
+$bundleDir = Join-Path $targetRoot "parakit-windows-x86_64-$Flavor"
 Assert-ChildPath -Child $bundleDir -Parent $targetRoot
 
 if (Test-Path -LiteralPath $bundleDir) {

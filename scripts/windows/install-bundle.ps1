@@ -89,6 +89,8 @@ function Assert-Bundle {
             throw "Bundle is missing required runtime file: $required"
         }
     }
+
+    return $manifest
 }
 
 function Assert-InstallDir {
@@ -225,6 +227,145 @@ public static class ParakitEnvironmentBroadcast {
         [ref]$result)
 }
 
+function Get-SearchPathEntries {
+    $entries = @()
+    if (-not [string]::IsNullOrWhiteSpace($env:Path)) {
+        $entries += $env:Path -split ";" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+    }
+    return $entries
+}
+
+function Test-DllResolvable {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Name,
+
+        [string[]]$ExtraDirs = @()
+    )
+
+    foreach ($dir in $ExtraDirs) {
+        if ([string]::IsNullOrWhiteSpace($dir)) {
+            continue
+        }
+        $candidate = Join-Path $dir $Name
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+            return $true
+        }
+    }
+
+    foreach ($dir in Get-SearchPathEntries) {
+        $expanded = [System.Environment]::ExpandEnvironmentVariables($dir)
+        if ([string]::IsNullOrWhiteSpace($expanded)) {
+            continue
+        }
+        $candidate = Join-Path $expanded $Name
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+            return $true
+        }
+    }
+
+    return $false
+}
+
+function Assert-ExternalRuntimeDependencies {
+    param(
+        [Parameter(Mandatory = $true)]
+        $Manifest
+    )
+
+    if ($null -ne $Manifest.cuda) {
+        Assert-CudaExternalDlls $Manifest.cuda
+    }
+    if ($null -ne $Manifest.vulkan) {
+        Warn-VulkanExternalDlls $Manifest.vulkan
+    }
+}
+
+function Assert-CudaExternalDlls {
+    param(
+        [Parameter(Mandatory = $true)]
+        $Cuda
+    )
+
+    if ($null -ne $Cuda.external_dlls_bundled -and [bool]$Cuda.external_dlls_bundled) {
+        return
+    }
+
+    $dlls = @($Cuda.external_dlls) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+    if ($dlls.Count -eq 0) {
+        return
+    }
+
+    $extraDirs = @()
+    if (-not [string]::IsNullOrWhiteSpace($env:CUDA_PATH)) {
+        $extraDirs += Join-Path $env:CUDA_PATH "bin"
+    }
+
+    $missing = @()
+    foreach ($dll in $dlls) {
+        if (-not (Test-DllResolvable -Name $dll -ExtraDirs $extraDirs)) {
+            $missing += $dll
+        }
+    }
+
+    if ($missing.Count -gt 0) {
+        $version = if ([string]::IsNullOrWhiteSpace($Cuda.toolkit_version)) { "the build" } else { $Cuda.toolkit_version }
+        throw "CUDA bundle expects external runtime DLLs that were not found: $($missing -join ', '). Install the CUDA Toolkit matching $version so CUDA_PATH\bin is available, add the DLL directory to PATH, or rebuild with --bundle-cuda-dlls."
+    }
+}
+
+function Warn-VulkanExternalDlls {
+    param(
+        [Parameter(Mandatory = $true)]
+        $Vulkan
+    )
+
+    $dlls = @($Vulkan.external_dlls) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+    if ($dlls.Count -eq 0) {
+        return
+    }
+
+    $systemDir = [System.Environment]::SystemDirectory
+    foreach ($dll in $dlls) {
+        if (-not (Test-DllResolvable -Name $dll -ExtraDirs @($systemDir))) {
+            Write-Warning "Vulkan loader $dll was not found in System32 or PATH. Install a current NVIDIA, AMD, or Intel GPU driver before running the Vulkan bundle."
+        }
+    }
+}
+
+function Invoke-InstallSmoke {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path
+    )
+
+    $exe = Join-Path $Path "parakit.exe"
+    try {
+        & $exe --quiet doctor
+        $code = $LASTEXITCODE
+    } catch {
+        throw "Installed parakit.exe failed to start. This usually means a runtime DLL is missing. $($_.Exception.Message)"
+    }
+
+    if (Test-StatusDllNotFoundExitCode $code) {
+        throw "Installed parakit.exe failed to start with 0xC0000135 (STATUS_DLL_NOT_FOUND). A required runtime DLL is missing; check the bundle manifest external_dlls entries."
+    }
+    if ($code -ne 0) {
+        throw "Installed parakit doctor smoke test failed with exit code $code"
+    }
+
+    Write-Host "Smoke: parakit --quiet doctor OK"
+}
+
+function Test-StatusDllNotFoundExitCode {
+    param(
+        [Parameter(Mandatory = $true)]
+        [int]$Code
+    )
+
+    return $Code -eq -1073741515 -or ([uint32]$Code) -eq 0xC0000135
+}
+
 function Install-Bundle {
     param(
         [Parameter(Mandatory = $true)]
@@ -259,11 +400,13 @@ Assert-NativeWindows
 $bundleFull = (Resolve-Path -LiteralPath $BundleDir).Path
 $installFull = Get-FullPath $InstallDir
 
-Assert-Bundle $bundleFull
+$manifest = Assert-Bundle $bundleFull
 Assert-InstallDir $installFull
+Assert-ExternalRuntimeDependencies $manifest
 
 Install-Bundle -Source $bundleFull -Destination $installFull
 Write-Host "Installed: $installFull"
+Invoke-InstallSmoke $installFull
 
 if ($NoUserPath) {
     Write-Host "User PATH: skipped"
