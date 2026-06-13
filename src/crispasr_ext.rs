@@ -27,6 +27,7 @@ extern "C" {
     ) -> *mut crispasr_sys::CrispasrSession;
 }
 
+/// Raw CrispASR session opened through `crispasr_session_open_with_params`.
 pub(crate) struct OwnedSession {
     handle: *mut crispasr_sys::CrispasrSession,
 }
@@ -35,6 +36,23 @@ pub(crate) struct OwnedSession {
 unsafe impl Send for OwnedSession {}
 
 impl OwnedSession {
+    /// Open a CrispASR session with explicit CPU/GPU parameters.
+    ///
+    /// # Arguments
+    ///
+    /// * `model_path` - GGUF model path passed to CrispASR.
+    /// * `backend` - Backend label detected from the GGUF metadata.
+    /// * `threads` - CPU thread count for CrispASR.
+    /// * `use_gpu` - Whether CrispASR should enable GPU use during open.
+    ///
+    /// # Returns
+    ///
+    /// An owned raw session handle.
+    ///
+    /// # Errors
+    ///
+    /// Returns a string error if arguments cannot be represented for the C ABI
+    /// or CrispASR returns a null session handle.
     pub(crate) fn open_with_params(
         model_path: &str,
         backend: &str,
@@ -67,11 +85,31 @@ impl OwnedSession {
         Ok(Self { handle })
     }
 
+    /// Return the backend label reported by CrispASR.
+    ///
+    /// # Returns
+    ///
+    /// A backend name such as `parakeet`, or an empty string if CrispASR
+    /// returned a null backend pointer.
     pub(crate) fn backend(&self) -> String {
         let ptr = unsafe { crispasr_sys::crispasr_session_backend(self.handle) };
         c_string(ptr)
     }
 
+    /// Transcribe 16 kHz mono PCM through the raw session.
+    ///
+    /// # Returns
+    ///
+    /// CrispASR session segments.
+    ///
+    /// # Errors
+    ///
+    /// Returns a string error if the sample count exceeds the C ABI range or
+    /// CrispASR returns a null result handle.
+    ///
+    /// # Panics
+    ///
+    /// Panics only if allocating the returned segment or word vectors fails.
     pub(crate) fn transcribe(&self, pcm: &[f32]) -> Result<Vec<SessionSegment>, String> {
         if pcm.is_empty() {
             return Ok(Vec::new());
@@ -113,7 +151,8 @@ impl OwnedSession {
 
                 let n_words =
                     crispasr_sys::crispasr_session_result_n_words(result.0, segment_index);
-                let mut words = Vec::with_capacity(n_words as usize);
+                let n_words = n_words.max(0);
+                let mut words = Vec::with_capacity(usize::try_from(n_words).unwrap_or(0));
                 for word_index in 0..n_words {
                     let confidence = crispasr_sys::crispasr_session_result_word_p(
                         result.0,

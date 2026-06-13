@@ -95,3 +95,23 @@ cargo build --release --features vulkan
 Windows builds need generated DLLs next to the executable; use the bundle scripts in [../scripts/windows/README.md](../scripts/windows/README.md).
 
 Model cache behavior and commands are in [running.md#model-cache](running.md#model-cache).
+
+## Windows GPU Builds
+
+If a CUDA bundle fails to start with `0xC0000135` or `STATUS_DLL_NOT_FOUND`, Windows could not resolve a load-time DLL. For CUDA bundles, the usual missing files are `cublas64_*.dll` and `cublasLt64_*.dll`. Install the CUDA Toolkit that matches the build so `%CUDA_PATH%\bin` is available, add that directory to `PATH`, or rebuild with:
+
+```bat
+scripts\windows\windows-cuda-build.bat --bundle-cuda-dlls
+```
+
+For Vulkan bundles, `vulkan-1.dll` comes from the GPU driver package, not the Vulkan SDK. Install or update the NVIDIA, AMD, or Intel GPU driver if the installer warns that `vulkan-1.dll` is missing.
+
+If `parakit --device gpu` fails before model load, run:
+
+```text
+parakit --verbose doctor
+```
+
+The `compute:` block lists devices visible to bundled ggml. A GPU build with no GPU or iGPU listed usually means the driver is missing, too old for the CUDA toolkit/driver ABI, or not exposing Vulkan on that machine. `--device auto` and `--device cpu` remain valid CPU fallback paths.
+
+The first inference after process start is intentionally warmed up by the daemon with one second of silence. CUDA uses this to absorb context and cuBLAS initialization. Vulkan may also compile compute pipelines on a truly cold driver cache; the current pinned CrispASR/ggml revision does not include a persistent ggml Vulkan pipeline cache, so cold-start cost can return after vendor driver caches are evicted. Use `--verbose` to see warmup duration.

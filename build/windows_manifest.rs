@@ -3,8 +3,10 @@
 //! This lives outside `build.rs` so integration tests can exercise the JSON
 //! shape without invoking the native CMake build.
 
+/// File name for the Windows runtime manifest colocated with `parakit.exe`.
 pub(crate) const WINDOWS_RUNTIME_MANIFEST: &str = "parakit-runtime-manifest.json";
 
+/// Accelerator flavor recorded in the Windows runtime manifest.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Accelerator {
     Cpu,
@@ -23,6 +25,7 @@ impl Accelerator {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+/// BLAS fields serialized into the Windows runtime manifest.
 pub(crate) struct BlasManifest {
     pub(crate) requested: String,
     pub(crate) selected: String,
@@ -33,6 +36,7 @@ pub(crate) struct BlasManifest {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+/// CUDA fields serialized into the Windows runtime manifest.
 pub(crate) struct CudaManifest {
     pub(crate) toolkit_version: String,
     pub(crate) architectures: String,
@@ -41,6 +45,7 @@ pub(crate) struct CudaManifest {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+/// Vulkan fields serialized into the Windows runtime manifest.
 pub(crate) struct VulkanManifest {
     pub(crate) sdk_version: String,
     pub(crate) external_dlls: Vec<String>,
@@ -48,6 +53,7 @@ pub(crate) struct VulkanManifest {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+/// Complete Windows runtime manifest model.
 pub(crate) struct RuntimeManifest {
     pub(crate) required_files: Vec<String>,
     pub(crate) runtime_dlls: Vec<String>,
@@ -58,6 +64,11 @@ pub(crate) struct RuntimeManifest {
 }
 
 impl RuntimeManifest {
+    /// Serialize the manifest as stable JSON.
+    ///
+    /// # Returns
+    ///
+    /// A pretty-printed JSON document terminated by a newline.
     pub(crate) fn to_json(&self) -> String {
         format!(
             "{{\n  \"required_files\": {},\n  \"runtime_dlls\": {},\n  \"blas\": {{\n    \"requested\": {},\n    \"selected\": {}\n  }},\n  \"openblas_root\": {},\n  \"openblas_include_dir\": {},\n  \"openblas_import_lib\": {},\n  \"openblas_runtime_dlls\": {},\n  \"accelerator\": {},\n  \"cuda\": {},\n  \"vulkan\": {}\n}}\n",
@@ -82,6 +93,12 @@ impl RuntimeManifest {
     }
 }
 
+/// Derive cuBLAS runtime DLL names from a CUDA Toolkit version string.
+///
+/// # Returns
+///
+/// The expected `cublas64_<major>.dll` and `cublasLt64_<major>.dll` names,
+/// or an empty vector when no numeric major version can be parsed.
 pub(crate) fn cuda_external_dll_names(toolkit_version: &str) -> Vec<String> {
     let Some(major) = toolkit_version
         .split(|ch: char| !ch.is_ascii_digit())

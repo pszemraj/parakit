@@ -168,10 +168,14 @@ pub(crate) struct TestPasteCli {
     pub(crate) text: String,
 }
 
+/// CLI value for runtime compute device selection.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 pub(crate) enum DeviceArg {
+    /// Use CrispASR's default GPU-when-available behavior.
     Auto,
+    /// Force CPU inference.
     Cpu,
+    /// Request GPU inference.
     Gpu,
 }
 
@@ -196,6 +200,10 @@ impl Cli {
     }
 
     /// Return the requested runtime compute device mode.
+    ///
+    /// # Returns
+    ///
+    /// The library-level device mode selected by the CLI.
     pub(crate) fn effective_device_mode(&self) -> DeviceMode {
         self.device.into()
     }

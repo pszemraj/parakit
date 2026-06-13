@@ -30,6 +30,10 @@ pub enum DeviceMode {
 
 impl DeviceMode {
     /// Stable CLI/log label.
+    ///
+    /// # Returns
+    ///
+    /// `auto`, `cpu`, or `gpu`.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Auto => "auto",

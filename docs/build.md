@@ -51,6 +51,8 @@ cargo install --path . --features vulkan
 cargo install --path . --features metal  # Apple targets only
 ```
 
+For Windows bundles, build one accelerator flavor at a time. A combined CUDA+Vulkan bundle is rejected by the Windows scripts because it would hard-load both accelerator DLL chains while ggml would choose CUDA first anyway.
+
 ## Windows Bundles
 
 For a per-user Windows CPU install:
@@ -59,16 +61,58 @@ For a per-user Windows CPU install:
 scripts\windows\windows-cpu-build.bat
 ```
 
+Windows GPU bundle entry points:
+
+```bat
+scripts\windows\windows-cuda-build.bat
+scripts\windows\windows-vulkan-build.bat
+```
+
 The PowerShell equivalent from PowerShell is:
 
 ```powershell
 Set-ExecutionPolicy -Scope Process Bypass
 .\scripts\windows\windows-cpu-build.ps1
+.\scripts\windows\windows-cpu-build.ps1 --cuda
+.\scripts\windows\windows-cpu-build.ps1 --vulkan
 ```
 
 Options, install location, PATH behavior, and OpenBLAS bundling are described in [../scripts/windows/README.md](../scripts/windows/README.md).
 
 The Windows scripts do not require Developer Mode. They install by copying files into a per-user directory, not by creating symlinks.
+
+### Windows CUDA
+
+CUDA builds require the NVIDIA CUDA Toolkit on the build machine, with `nvcc` on `PATH` and `CUDA_PATH` pointing at the toolkit root. CUDA 12.x and 13.x toolkits are supported by the vendored ggml. CUDA 13.x toolkits do not install a display driver as part of the toolkit; install a compatible NVIDIA display driver separately.
+
+The default CUDA architecture behavior is ggml's native build for the GPU present on the machine. Override it when needed:
+
+```powershell
+$env:PARAKIT_CUDA_ARCHS = "89-real"
+.\scripts\windows\windows-cpu-build.ps1 --cuda
+```
+
+`PARAKIT_CUDA_ARCHS` is passed directly to CMake as `CMAKE_CUDA_ARCHITECTURES`; values such as `native`, `89-real`, or semicolon-separated architecture lists are accepted by CMake/CUDA.
+
+On Windows, ggml links the CUDA runtime statically but cuBLAS dynamically. A normal CUDA bundle expects `cublas64_*.dll` and `cublasLt64_*.dll` from `%CUDA_PATH%\bin` or `PATH` at install/run time. For a relocatable bundle:
+
+```bat
+scripts\windows\windows-cuda-build.bat --bundle-cuda-dlls
+```
+
+That option copies the cuBLAS DLLs into the bundle. The files are large, so this is opt-in. parakit also sets `GGML_CUDA_NCCL=OFF`; the daemon has no multi-GPU collective workload.
+
+If CMake uses the default Visual Studio generator, the CUDA Visual Studio integration must be installed. As an alternative, set `CMAKE_GENERATOR=Ninja` for the build shell and ensure `nvcc` is on `PATH`.
+
+### Windows Vulkan
+
+Vulkan builds require the LunarG Vulkan SDK at build time for headers, `vulkan-1.lib`, and `glslc`. Set `VULKAN_SDK`, or let the Windows script autodetect the newest `C:\VulkanSDK\*` install.
+
+```bat
+scripts\windows\windows-vulkan-build.bat
+```
+
+The Vulkan bundle has no CUDA-style runtime toolkit dependency. It imports `vulkan-1.dll`, the Khronos loader installed by GPU driver packages into System32. The installer warns if the loader is missing, but does not bundle it.
 
 ## CPU Builds
 
@@ -131,6 +175,8 @@ Feature mapping:
 | `cuda` | `GGML_CUDA=ON` |
 | `vulkan` | `GGML_VULKAN=ON` |
 | `metal` | `GGML_METAL=ON` |
+
+CUDA builds also force `GGML_CUDA_NCCL=OFF`.
 
 ## Runtime Library Paths
 

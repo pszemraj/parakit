@@ -27,11 +27,19 @@ pub enum DeviceKind {
 
 impl DeviceKind {
     /// Return whether this device is a discrete or integrated GPU.
+    ///
+    /// # Returns
+    ///
+    /// `true` for ggml discrete GPU and integrated GPU device classes.
     pub fn is_gpu_like(self) -> bool {
         matches!(self, Self::Gpu | Self::IGpu)
     }
 
     /// Stable diagnostic label.
+    ///
+    /// # Returns
+    ///
+    /// A short label suitable for `doctor` output.
     pub fn label(self) -> &'static str {
         match self {
             Self::Cpu => "CPU",
@@ -69,11 +77,19 @@ pub struct DeviceInfo {
 
 impl DeviceInfo {
     /// Return whether this device is a discrete or integrated GPU.
+    ///
+    /// # Returns
+    ///
+    /// `true` for discrete GPU and integrated GPU devices.
     pub fn is_gpu_like(&self) -> bool {
         self.kind.is_gpu_like()
     }
 
     /// Format a concise diagnostic line.
+    ///
+    /// # Returns
+    ///
+    /// A human-readable single-line device summary.
     pub fn diagnostic_line(&self) -> String {
         let description = if self.description.is_empty() || self.description == self.name {
             String::new()
@@ -100,6 +116,10 @@ impl DeviceInfo {
 }
 
 /// Enumerate ggml compute devices registered in the bundled library.
+///
+/// # Returns
+///
+/// Device information for each non-null ggml device handle.
 pub fn devices() -> Vec<DeviceInfo> {
     let count = unsafe { ggml_backend_dev_count() };
     let mut out = Vec::with_capacity(count);
@@ -125,6 +145,10 @@ pub fn devices() -> Vec<DeviceInfo> {
 }
 
 /// Return whether any discrete or integrated GPU is visible to ggml.
+///
+/// # Returns
+///
+/// `true` when `devices()` contains at least one GPU or iGPU.
 pub fn has_gpu_device() -> bool {
     devices().iter().any(DeviceInfo::is_gpu_like)
 }

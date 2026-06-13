@@ -39,6 +39,27 @@ parakit --verbose
 parakit --threads 8 --verbose
 ```
 
+## Device Selection
+
+GPU-capable builds default to `--device auto`. In `auto`, CrispASR asks ggml for the best backend device and falls back to CPU when no GPU backend is available. On hybrid laptops, ggml prefers a discrete GPU over an integrated GPU.
+
+```bash
+parakit --device auto
+parakit --device cpu
+parakit --device gpu
+```
+
+`--device cpu` opens the session with GPU use disabled. `--device gpu` requests the GPU path and, on bundled builds, fails before model load if ggml reports no discrete or integrated GPU device. On system-library builds without the bundled ggml probe, `--device gpu` continues with a warning because parakit cannot verify device visibility before opening the session.
+
+Per-device CLI selection is intentionally not exposed. The Parakeet backend currently ignores CrispASR's `gpu_device` field, so pinning remains backend-specific environment configuration:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 parakit --device gpu
+GGML_VK_VISIBLE_DEVICES=0 parakit --device gpu
+```
+
+Use `parakit --verbose doctor` to list the compute devices visible to bundled ggml.
+
 ## Background Use
 
 ```bash
