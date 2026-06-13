@@ -7,7 +7,7 @@ use parakit::audio_file::{read_wav_mono, resample_to_target};
 use parakit::data_log::DataLogger;
 use parakit::fetch::{self, FetchOptions, FetchSource};
 use parakit::gguf;
-use parakit::inference::{default_thread_count, Engine};
+use parakit::inference::{default_thread_count, DeviceMode, Engine};
 use parakit::model;
 use parakit::rules;
 #[cfg(unix)]
@@ -359,14 +359,16 @@ fn open_cli_engine(cli: &Cli, fetch_quiet: bool, log: &Logger) -> Result<(PathBu
         .threads
         .map(NonZeroUsize::get)
         .unwrap_or_else(default_thread_count);
+    let device_mode = cli.effective_device_mode();
     let open_started = Instant::now();
-    let engine = open_engine(&model_path, threads, cli.verbose)
+    let engine = open_engine(&model_path, threads, device_mode, cli.verbose)
         .with_context(|| format!("could not open model {}", model_path.display()))?;
     log.verbose(format!(
-        "parakit: model opened in {:.0}ms with backend={} threads={}",
+        "parakit: model opened in {:.0}ms with backend={} threads={} device={}",
         open_started.elapsed().as_secs_f32() * 1000.0,
         engine.backend(),
-        engine.threads()
+        engine.threads(),
+        engine.device_mode().as_str()
     ));
     Ok((model_path, engine))
 }
@@ -388,11 +390,16 @@ fn model_file_name(path: &Path) -> String {
         .unwrap_or_else(|| path.display().to_string())
 }
 
-fn open_engine(path: &Path, threads: usize, verbose: bool) -> Result<Engine> {
+fn open_engine(
+    path: &Path,
+    threads: usize,
+    device_mode: DeviceMode,
+    verbose: bool,
+) -> Result<Engine> {
     if verbose {
-        return Engine::open_with_threads(path, threads);
+        return Engine::open(path, threads, device_mode);
     }
-    with_stderr_suppressed(|| Engine::open_with_threads(path, threads))
+    with_stderr_suppressed(|| Engine::open(path, threads, device_mode))
 }
 
 #[cfg(unix)]

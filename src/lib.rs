@@ -8,6 +8,7 @@ pub mod build_info;
 pub mod checksum;
 /// Shared audio and model constants.
 pub mod constants;
+mod crispasr_ext;
 /// Transcription log writer for raw/cleaned text pairs.
 pub mod data_log;
 /// Model acquisition pipeline for the official Parakeet checkpoint.

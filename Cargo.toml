@@ -31,6 +31,7 @@ anstyle = "1.0"
 # Inference runtime. CrispASR's Rust crates are supplied by the pinned
 # submodule rather than crates.io.
 crispasr = { path = "vendor/CrispASR/crispasr", default-features = false }
+crispasr-sys = { path = "vendor/CrispASR/crispasr-sys" }
 
 # Audio capture
 cpal = { version = "0.15", optional = true }

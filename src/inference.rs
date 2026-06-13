@@ -1,7 +1,9 @@
 //! Inference wrapper around a `crispasr::Session`.
 
 use crate::constants::TARGET_RATE;
+use crate::crispasr_ext::OwnedSession;
 use anyhow::{bail, Context, Result};
+use crispasr::SessionSegment;
 use std::borrow::Cow;
 use std::path::Path;
 
@@ -12,6 +14,39 @@ use std::path::Path;
 /// without dropping the user's utterance.
 const MIN_INFERENCE_SAMPLES: usize = TARGET_RATE as usize;
 
+/// Runtime CPU/GPU selection requested by the user.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum DeviceMode {
+    /// Keep CrispASR's default: use the best GPU when one is available,
+    /// otherwise fall back to CPU.
+    #[default]
+    Auto,
+    /// Force CrispASR to open the session without a GPU backend.
+    Cpu,
+    /// Require the GPU path. Device availability is validated by callers
+    /// that can use the bundled ggml probe.
+    Gpu,
+}
+
+impl DeviceMode {
+    /// Stable CLI/log label.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Cpu => "cpu",
+            Self::Gpu => "gpu",
+        }
+    }
+
+    fn use_gpu_override(self) -> Option<bool> {
+        match self {
+            Self::Auto => None,
+            Self::Cpu => Some(false),
+            Self::Gpu => Some(true),
+        }
+    }
+}
+
 /// Thin wrapper so the rest of the code never touches `crispasr` directly.
 ///
 /// Owned exclusively by the worker thread. `crispasr::Session` is `Send`
@@ -19,9 +54,31 @@ const MIN_INFERENCE_SAMPLES: usize = TARGET_RATE as usize;
 /// hand out `&Engine` from multiple threads). The architecture respects
 /// that: only the worker thread ever calls `transcribe`.
 pub struct Engine {
-    session: crispasr::Session,
+    session: EngineSession,
     backend: String,
     threads: usize,
+    device_mode: DeviceMode,
+}
+
+enum EngineSession {
+    Auto(crispasr::Session),
+    WithParams(OwnedSession),
+}
+
+impl EngineSession {
+    fn backend(&self) -> String {
+        match self {
+            Self::Auto(session) => session.backend(),
+            Self::WithParams(session) => session.backend(),
+        }
+    }
+
+    fn transcribe(&self, pcm: &[f32]) -> Result<Vec<SessionSegment>, String> {
+        match self {
+            Self::Auto(session) => session.transcribe(pcm),
+            Self::WithParams(session) => session.transcribe(pcm),
+        }
+    }
 }
 
 impl Engine {
@@ -41,6 +98,30 @@ impl Engine {
     /// Returns an error if the model path is not a file, is not UTF-8, the
     /// thread count is zero, or CrispASR cannot load the model.
     pub fn open_with_threads<P: AsRef<Path>>(model_path: P, threads: usize) -> Result<Self> {
+        Self::open(model_path, threads, DeviceMode::Auto)
+    }
+
+    /// Open a GGUF model with a requested CPU thread count and device mode.
+    ///
+    /// # Arguments
+    ///
+    /// * `model_path` - GGUF model file to load.
+    /// * `threads` - CPU inference thread count requested from CrispASR.
+    /// * `device_mode` - CPU/GPU behavior to request at session open.
+    ///
+    /// # Returns
+    ///
+    /// An initialized transcription engine.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the model path is not a file, is not UTF-8, the
+    /// thread count is zero, or CrispASR cannot load the model.
+    pub fn open<P: AsRef<Path>>(
+        model_path: P,
+        threads: usize,
+        device_mode: DeviceMode,
+    ) -> Result<Self> {
         if threads == 0 {
             return Err(anyhow::anyhow!("thread count must be at least 1"));
         }
@@ -63,14 +144,22 @@ impl Engine {
             .with_context(|| format!("failed to detect backend for model {}", path_str))?;
         let backend = validate_detected_backend(detected_backend)
             .with_context(|| format!("failed to detect backend for model {}", path_str))?;
-        let session = crispasr::Session::open_with_backend(path_str, &backend, threads as i32)
-            .map_err(|e| anyhow::anyhow!("crispasr open failed: {e}"))
-            .with_context(|| format!("failed to open model {}", path_str))?;
+        let session = match device_mode.use_gpu_override() {
+            Some(use_gpu) => EngineSession::WithParams(
+                OwnedSession::open_with_params(path_str, &backend, threads, use_gpu)
+                    .map_err(|e| anyhow::anyhow!("crispasr open failed: {e}"))?,
+            ),
+            None => EngineSession::Auto(
+                crispasr::Session::open_with_backend(path_str, &backend, threads as i32)
+                    .map_err(|e| anyhow::anyhow!("crispasr open failed: {e}"))?,
+            ),
+        };
         let backend = session.backend();
         Ok(Self {
             session,
             backend,
             threads,
+            device_mode,
         })
     }
 
@@ -97,6 +186,15 @@ impl Engine {
         self.threads
     }
 
+    /// Return the requested runtime device mode.
+    ///
+    /// # Returns
+    ///
+    /// The device mode passed when opening the engine.
+    pub fn device_mode(&self) -> DeviceMode {
+        self.device_mode
+    }
+
     /// Transcribe 16 kHz mono PCM samples.
     ///
     /// # Returns
@@ -112,15 +210,19 @@ impl Engine {
             .session
             .transcribe(pcm.as_ref())
             .map_err(|e| anyhow::anyhow!("crispasr transcribe failed: {e}"))?;
-        let mut out = String::new();
-        for seg in segments {
-            if !out.is_empty() && !out.ends_with(' ') {
-                out.push(' ');
-            }
-            out.push_str(seg.text.trim());
-        }
-        Ok(out)
+        Ok(join_segment_text(segments))
     }
+}
+
+fn join_segment_text(segments: Vec<SessionSegment>) -> String {
+    let mut out = String::new();
+    for seg in segments {
+        if !out.is_empty() && !out.ends_with(' ') {
+            out.push(' ');
+        }
+        out.push_str(seg.text.trim());
+    }
+    out
 }
 
 fn validate_detected_backend(backend: String) -> Result<String> {
@@ -227,6 +329,33 @@ mod tests {
     fn long_pcm_is_borrowed_without_copying() {
         let pcm = vec![0.0; MIN_INFERENCE_SAMPLES];
         assert!(matches!(pad_short_pcm(&pcm), Cow::Borrowed(_)));
+    }
+
+    #[test]
+    fn device_mode_labels_are_stable() {
+        assert_eq!(DeviceMode::Auto.as_str(), "auto");
+        assert_eq!(DeviceMode::Cpu.as_str(), "cpu");
+        assert_eq!(DeviceMode::Gpu.as_str(), "gpu");
+    }
+
+    #[test]
+    fn segment_text_is_joined_with_single_spaces() {
+        let segments = vec![
+            SessionSegment {
+                text: " hello ".to_string(),
+                start: 0.0,
+                end: 0.5,
+                words: Vec::new(),
+            },
+            SessionSegment {
+                text: "world".to_string(),
+                start: 0.5,
+                end: 1.0,
+                words: Vec::new(),
+            },
+        ];
+
+        assert_eq!(join_segment_text(segments), "hello world");
     }
 
     #[test]

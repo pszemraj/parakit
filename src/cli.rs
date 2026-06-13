@@ -1,7 +1,8 @@
 //! Command-line interface definitions for the `parakit` binary.
 
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use parakit::data_log::LogFormat;
+use parakit::inference::DeviceMode;
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
 
@@ -38,6 +39,10 @@ pub(crate) struct Cli {
     /// CPU inference threads. Defaults to a conservative detected count.
     #[arg(long, value_name = "N")]
     pub(crate) threads: Option<NonZeroUsize>,
+
+    /// Runtime compute device. `auto` uses the best GPU when available and CPU otherwise.
+    #[arg(long, value_enum, default_value = "auto")]
+    pub(crate) device: DeviceArg,
 
     /// Batch insertion style. Defaults to terminal paste on Linux and standard paste elsewhere.
     #[arg(long, value_enum)]
@@ -163,6 +168,23 @@ pub(crate) struct TestPasteCli {
     pub(crate) text: String,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub(crate) enum DeviceArg {
+    Auto,
+    Cpu,
+    Gpu,
+}
+
+impl From<DeviceArg> for DeviceMode {
+    fn from(value: DeviceArg) -> Self {
+        match value {
+            DeviceArg::Auto => Self::Auto,
+            DeviceArg::Cpu => Self::Cpu,
+            DeviceArg::Gpu => Self::Gpu,
+        }
+    }
+}
+
 impl Cli {
     /// Return the selected paste mode, falling back to the platform default.
     ///
@@ -171,6 +193,11 @@ impl Cli {
     /// Returns the explicitly configured paste mode or the default for the current platform.
     pub(crate) fn effective_paste_mode(&self) -> PasteMode {
         self.paste_mode.unwrap_or_else(default_paste_mode)
+    }
+
+    /// Return the requested runtime compute device mode.
+    pub(crate) fn effective_device_mode(&self) -> DeviceMode {
+        self.device.into()
     }
 }
 
