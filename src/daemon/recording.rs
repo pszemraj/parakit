@@ -5,7 +5,9 @@ use crossbeam_channel::{Receiver, RecvTimeoutError, Sender, TrySendError};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-const MAX_UTTERANCE: Duration = Duration::from_secs(270);
+/// Hard stop for one held push-to-talk capture.
+pub(crate) const MAX_UTTERANCE_SECONDS: u64 = 270;
+const MAX_UTTERANCE: Duration = Duration::from_secs(MAX_UTTERANCE_SECONDS);
 
 /// Logical push-to-talk transition emitted by platform hotkey backends.
 ///

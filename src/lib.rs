@@ -25,3 +25,5 @@ pub mod inference;
 pub mod model;
 /// Regex-based transcript cleanup rules.
 pub mod rules;
+/// Synthetic warmup audio used by daemon and validation tools.
+pub mod warmup;

@@ -13,6 +13,8 @@ cargo run --no-default-features --features bundled --example transcribe-file -- 
 
 The helper accepts WAV input, uses the same raw `Engine` path as the daemon, and prints raw inference text and timing. It intentionally does not import or apply parakit text-cleaning rules. This command avoids live daemon desktop/audio dependencies while keeping the bundled CrispASR build. Model cache behavior is in [running.md#model-cache](running.md#model-cache). Pass `--model /path/to/model.gguf` only when comparing a specific custom GGUF. The source lives at `examples/transcribe_file.rs`; it is a Cargo example target so it is not installed as an end-user binary.
 
+For latency work, use short real clips around 2s, 5s, 15s, and 25s. Longer quality clips are still useful for catching transcription drift, but they should not drive startup or post-release latency policy. Use repeatable `--warmup-seconds N` flags when calibrating GPU cold-start behavior; each flag runs one synthetic warmup pass before timing the real clip.
+
 ## PTT Worker Simulation
 
 Use the hidden simulation path when you need the daemon worker flow without a live keyboard, microphone, or text insertion:

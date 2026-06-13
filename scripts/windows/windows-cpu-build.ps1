@@ -514,6 +514,49 @@ function Get-CargoTargetRoot {
     return [System.IO.Path]::GetFullPath((Join-Path $repo $env:CARGO_TARGET_DIR))
 }
 
+function Clear-StaleCMakePathAliasCaches {
+    $targetRoot = Get-CargoTargetRoot
+    $profileBuildRoot = Join-Path $targetRoot "$Profile\build"
+    if (-not (Test-Path -LiteralPath $profileBuildRoot -PathType Container)) {
+        return
+    }
+
+    Get-ChildItem -LiteralPath $profileBuildRoot -Directory -Filter "parakit-*" | ForEach-Object {
+        $outDir = Join-Path $_.FullName "out"
+        $buildDir = Join-Path $outDir "build"
+        $cachePath = Join-Path $buildDir "CMakeCache.txt"
+        if (-not (Test-Path -LiteralPath $cachePath -PathType Leaf)) {
+            return
+        }
+
+        $cachedDir = Get-Content -LiteralPath $cachePath |
+            Where-Object { $_ -like "CMAKE_CACHEFILE_DIR:INTERNAL=*" } |
+            Select-Object -First 1
+        if ([string]::IsNullOrWhiteSpace($cachedDir)) {
+            return
+        }
+
+        $cachedDir = ConvertTo-ComparablePath $cachedDir.Substring("CMAKE_CACHEFILE_DIR:INTERNAL=".Length)
+        $expectedDir = ConvertTo-ComparablePath ([System.IO.Path]::GetFullPath($buildDir))
+        if ([string]::Equals($cachedDir, $expectedDir, [System.StringComparison]::OrdinalIgnoreCase)) {
+            return
+        }
+
+        Assert-ChildPath -Child $outDir -Parent $targetRoot
+        Write-Host "CMake: removing stale build cache from $outDir (cached path was $cachedDir)"
+        Remove-Item -LiteralPath $outDir -Recurse -Force
+    }
+}
+
+function ConvertTo-ComparablePath {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path
+    )
+
+    return $Path.Trim().Replace("/", "\").TrimEnd("\")
+}
+
 function Get-LongPathsEnabled {
     try {
         $value = Get-ItemPropertyValue -LiteralPath "HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem" -Name "LongPathsEnabled" -ErrorAction Stop
@@ -795,6 +838,7 @@ if ($env:PARAKIT_SHORT_REPO_DRIVE_ACTIVE -eq "1") {
 if ($Flavor -ne "cpu") {
     $cargoArgs += @("--features", $Flavor)
 }
+Clear-StaleCMakePathAliasCaches
 Invoke-Checked "cargo" @cargoArgs
 
 $targetRoot = Join-Path $repo "target"

@@ -10,6 +10,7 @@ use parakit::gguf;
 use parakit::inference::{default_thread_count, DeviceMode, Engine};
 use parakit::model;
 use parakit::rules;
+use parakit::warmup;
 #[cfg(unix)]
 use std::fs::File;
 #[cfg(unix)]
@@ -21,7 +22,7 @@ use std::time::{Duration, Instant};
 
 use crate::cli::{CacheCli, CacheCommand, Cli, Commands};
 use crate::daemon;
-use crate::daemon::audio::{AudioCapture, TARGET_RATE};
+use crate::daemon::audio::AudioCapture;
 #[cfg(not(target_os = "linux"))]
 use crate::daemon::hotkey::HotkeyBackend;
 use crate::daemon::logging::{BannerInfo, LogLevel, Logger};
@@ -29,9 +30,13 @@ use crate::daemon::notifications::Notifier;
 use crate::daemon::sounds::Sounds;
 use crate::daemon::worker::{spawn_worker, WorkerCtx, WorkerEvent, WORKER_QUEUE_CAPACITY};
 
-const CPU_ENGINE_WARMUP_SECONDS: usize = 1;
-const GPU_ENGINE_WARMUP_SECONDS: usize = 60;
-const ENGINE_WARMUP_AMPLITUDE: f32 = 0.02;
+const CPU_ENGINE_WARMUP_SECONDS: &[usize] = &[1];
+// The daemon hard-stops held recordings at MAX_UTTERANCE_SECONDS, but warming
+// that full 270s shape would make every launch pay worst-case compute. This is
+// a realistic-latency policy: cover short dictations and normal 2-25s
+// dictations with margin, accepting a one-time backend stall for unusual longer
+// cold-cache captures.
+const GPU_ENGINE_WARMUP_SECONDS: &[usize] = &[5, 30];
 
 /// Parse CLI arguments and run the requested command or daemon mode.
 ///
@@ -294,7 +299,7 @@ fn run_ptt_audio_simulation(cli: &Cli, log: Arc<Logger>, audio_path: &Path) -> R
     let resample_started = Instant::now();
     wav.samples = resample_to_target(wav.samples, source_rate)?;
     let resample_elapsed = resample_started.elapsed();
-    let audio_secs = wav.samples.len() as f32 / TARGET_RATE as f32;
+    let audio_secs = wav.samples.len() as f32 / parakit::constants::TARGET_RATE as f32;
     log.verbose(format!(
         "parakit: simulated audio prepared in {:.0}ms (read/downmix {:.0}ms, resample {:.0}ms, source_samples={}, target_samples={})",
         (load_elapsed + resample_elapsed).as_secs_f32() * 1000.0,
@@ -436,20 +441,22 @@ fn validate_device_request(device_mode: DeviceMode, log: &Logger) -> Result<()> 
 
 fn warm_up_engine(engine: &Engine, log: &Logger) -> Result<()> {
     let started = Instant::now();
-    let seconds = engine_warmup_seconds(engine);
-    let warmup = engine_warmup_pcm(seconds);
-    engine
-        .transcribe(&warmup)
-        .context("engine warmup transcription failed")?;
+    let sequence = engine_warmup_seconds(engine);
+    for seconds in sequence {
+        let warmup = warmup::synthetic_pcm(*seconds);
+        engine
+            .transcribe(&warmup)
+            .context("engine warmup transcription failed")?;
+    }
     log.verbose(format!(
-        "parakit: engine warmup took {:.0}ms ({}s synthetic input)",
+        "parakit: engine warmup took {:.0}ms ({} synthetic input)",
         started.elapsed().as_secs_f32() * 1000.0,
-        seconds
+        format_warmup_sequence(sequence)
     ));
     Ok(())
 }
 
-fn engine_warmup_seconds(engine: &Engine) -> usize {
+fn engine_warmup_seconds(engine: &Engine) -> &'static [usize] {
     if engine.device_mode() == DeviceMode::Cpu {
         return CPU_ENGINE_WARMUP_SECONDS;
     }
@@ -464,17 +471,12 @@ fn engine_warmup_seconds(engine: &Engine) -> usize {
     CPU_ENGINE_WARMUP_SECONDS
 }
 
-fn engine_warmup_pcm(seconds: usize) -> Vec<f32> {
-    let sample_count = TARGET_RATE as usize * seconds;
-    (0..sample_count)
-        .map(|index| {
-            if (index / 80) % 2 == 0 {
-                ENGINE_WARMUP_AMPLITUDE
-            } else {
-                -ENGINE_WARMUP_AMPLITUDE
-            }
-        })
-        .collect()
+fn format_warmup_sequence(sequence: &[usize]) -> String {
+    sequence
+        .iter()
+        .map(|seconds| format!("{seconds}s"))
+        .collect::<Vec<_>>()
+        .join(" + ")
 }
 
 #[cfg(test)]
@@ -482,14 +484,17 @@ mod app_tests {
     use super::*;
 
     #[test]
-    fn engine_warmup_pcm_is_representative_and_nonzero() {
-        let pcm = engine_warmup_pcm(GPU_ENGINE_WARMUP_SECONDS);
-        assert_eq!(pcm.len(), TARGET_RATE as usize * GPU_ENGINE_WARMUP_SECONDS);
-        assert!(pcm.iter().any(|sample| *sample > 0.0));
-        assert!(pcm.iter().any(|sample| *sample < 0.0));
-        assert!(pcm
+    fn gpu_warmup_policy_is_realistic_not_worst_case() {
+        assert_eq!(crate::daemon::recording::MAX_UTTERANCE_SECONDS, 270);
+        assert_eq!(GPU_ENGINE_WARMUP_SECONDS, &[5, 30]);
+        assert!(GPU_ENGINE_WARMUP_SECONDS
             .iter()
-            .all(|sample| sample.abs() <= ENGINE_WARMUP_AMPLITUDE));
+            .all(|seconds| *seconds < crate::daemon::recording::MAX_UTTERANCE_SECONDS as usize));
+    }
+
+    #[test]
+    fn warmup_sequence_format_is_stable() {
+        assert_eq!(format_warmup_sequence(&[5, 30]), "5s + 30s");
     }
 }
 

@@ -11,6 +11,7 @@ use parakit::constants::TARGET_RATE;
 use parakit::fetch;
 use parakit::gguf;
 use parakit::inference::{default_thread_count, DeviceMode, Engine};
+use parakit::warmup;
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -40,6 +41,10 @@ struct Cli {
     /// Repeat inference on the same loaded model for timing comparisons.
     #[arg(long, default_value = "1")]
     repeat: NonZeroUsize,
+
+    /// Run one synthetic warmup pass before timing the real clip. Repeat for multiple passes.
+    #[arg(long, value_name = "SECONDS")]
+    warmup_seconds: Vec<usize>,
 }
 
 fn main() -> Result<()> {
@@ -69,6 +74,15 @@ fn main() -> Result<()> {
     println!("device:  {}", engine.device_mode().as_str());
     println!("audio:   {:.2}s", audio_secs);
     println!("source:  {} Hz", original_rate);
+
+    for seconds in &cli.warmup_seconds {
+        let warmup_pcm = warmup::synthetic_pcm(*seconds);
+        let started = Instant::now();
+        engine.transcribe(&warmup_pcm)?;
+        let elapsed = started.elapsed();
+        println!("warmup_audio: {seconds}s");
+        println!("warmup: {:.0}ms", elapsed.as_secs_f32() * 1000.0);
+    }
 
     let mut timings = Vec::with_capacity(cli.repeat.get());
     for idx in 1..=cli.repeat.get() {
