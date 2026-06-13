@@ -193,7 +193,11 @@ function Ensure-MsvcBuildEnvironment {
         if (Test-Path -LiteralPath $launchDevShell -PathType Leaf) {
             try {
                 . $launchDevShell -Arch amd64 -HostArch amd64 -SkipAutomaticLocation | Out-Null
-                $activated = $true
+                if ((Test-Command "cl.exe") -and (Test-Command "link.exe")) {
+                    $activated = $true
+                } else {
+                    Write-Warning "MSVC: Launch-VsDevShell.ps1 completed without exposing cl.exe and link.exe; falling back to vcvars64.bat."
+                }
             } catch {
                 Write-Warning "MSVC: Launch-VsDevShell.ps1 failed; falling back to vcvars64.bat. $($_.Exception.Message)"
             }
@@ -201,7 +205,9 @@ function Ensure-MsvcBuildEnvironment {
 
         if (-not $activated -and (Test-Path -LiteralPath $vcvars64 -PathType Leaf)) {
             Import-EnvironmentFromBatch $vcvars64
-            $activated = $true
+            if ((Test-Command "cl.exe") -and (Test-Command "link.exe")) {
+                $activated = $true
+            }
         }
 
         if (-not $activated) {
