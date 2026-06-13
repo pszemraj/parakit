@@ -16,6 +16,9 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+$scriptDir = Split-Path -Parent $PSCommandPath
+. (Join-Path $scriptDir "common.ps1")
+
 $Profile = "release"
 $NoInstall = $false
 $NoUserPath = $false
@@ -532,23 +535,6 @@ function Write-VulkanPathLengthWarnings {
         Write-Warning "Vulkan: could not read LongPathsEnabled. If shader generation fails with path or PDB errors, enable Windows long paths or shorten CARGO_TARGET_DIR."
     } elseif ($longPathsEnabled -ne 1) {
         Write-Warning "Vulkan: Windows long paths are disabled. If shader generation fails with path or PDB errors, enable LongPathsEnabled or shorten CARGO_TARGET_DIR."
-    }
-}
-
-function Assert-NativeWindows {
-    if ($env:WSL_DISTRO_NAME -or $env:WSL_INTEROP) {
-        throw "This script must run in native Windows PowerShell, not inside WSL. WSL builds Linux binaries by default."
-    }
-
-    if ($PSVersionTable.PSEdition -eq "Core") {
-        if (-not $IsWindows) {
-            throw "This script must run on Windows."
-        }
-        return
-    }
-
-    if ([System.Environment]::OSVersion.Platform -ne [System.PlatformID]::Win32NT) {
-        throw "This script must run on Windows."
     }
 }
 

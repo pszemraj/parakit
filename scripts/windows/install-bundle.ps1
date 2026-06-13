@@ -12,22 +12,8 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-function Assert-NativeWindows {
-    if ($env:WSL_DISTRO_NAME -or $env:WSL_INTEROP) {
-        throw "This installer must run on native Windows, not inside WSL."
-    }
-
-    if ($PSVersionTable.PSEdition -eq "Core") {
-        if (-not $IsWindows) {
-            throw "This installer must run on Windows."
-        }
-        return
-    }
-
-    if ([System.Environment]::OSVersion.Platform -ne [System.PlatformID]::Win32NT) {
-        throw "This installer must run on Windows."
-    }
-}
+$scriptDir = Split-Path -Parent $PSCommandPath
+. (Join-Path $scriptDir "common.ps1")
 
 function Get-FullPath {
     param(
@@ -395,7 +381,7 @@ function Install-Bundle {
     Set-Content -LiteralPath $marker -Value "parakit windows install" -Encoding ascii
 }
 
-Assert-NativeWindows
+Assert-NativeWindows "This installer"
 
 $bundleFull = (Resolve-Path -LiteralPath $BundleDir).Path
 $installFull = Get-FullPath $InstallDir
