@@ -34,14 +34,22 @@ pub struct FetchOptions {
 }
 
 impl FetchOptions {
+    fn should_print_status(self) -> bool {
+        !self.quiet
+    }
+
+    fn should_print_verbose_status(self) -> bool {
+        !self.quiet && self.verbose
+    }
+
     fn status(self, message: std::fmt::Arguments<'_>) {
-        if !self.quiet {
+        if self.should_print_status() {
             println!("{message}");
         }
     }
 
     fn verbose_status(self, message: std::fmt::Arguments<'_>) {
-        if !self.quiet && self.verbose {
+        if self.should_print_verbose_status() {
             println!("{message}");
         }
     }
@@ -770,6 +778,35 @@ mod tests {
         assert_eq!(manifest.q8_sha256.as_deref(), Some(HOSTED_Q8_SHA256));
         assert!(manifest.nemo_sha256.is_none());
         assert!(manifest.f16_sha256.is_none());
+    }
+
+    #[test]
+    fn cache_hit_status_requires_verbose_output() {
+        let options = FetchOptions {
+            force: false,
+            quiet: false,
+            verbose: false,
+            source: FetchSource::HostedQ8,
+        };
+
+        assert!(options.should_print_status());
+        assert!(!FetchOptions {
+            quiet: true,
+            ..options
+        }
+        .should_print_status());
+        assert!(!options.should_print_verbose_status());
+        assert!(FetchOptions {
+            verbose: true,
+            ..options
+        }
+        .should_print_verbose_status());
+        assert!(!FetchOptions {
+            quiet: true,
+            verbose: true,
+            ..options
+        }
+        .should_print_verbose_status());
     }
 
     #[test]

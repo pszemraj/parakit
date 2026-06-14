@@ -145,6 +145,8 @@ If path shortening does not fix a Vulkan shader-gen failure, capture the exact `
 
 `install.ps1` validates the bundle manifest, checks external CUDA/Vulkan runtime DLLs before replacing an install, refuses unsafe install directories, enforces the backend-switch guard, copies the bundle, runs `parakit --version` as a loader smoke test, and then updates User `PATH` unless `--no-user-path` is set. Direct `install.ps1` calls can use `-AllowBackendSwitch` or `-Force` for intentional backend replacement.
 
+The installer only wipes directories it owns, marked by `.parakit-install`. It refuses a non-empty unmarked destination instead of merging files into it, because stale accelerator DLLs from a foreign directory can change loader behavior.
+
 When intentionally replacing an installed backend, pass `--allow-backend-switch` or `--force` on the build command. Without it, the installer fails before deleting the existing install.
 
 The build script checks whether `vendor\CrispASR` is already populated before touching submodules. If the submodule is present and pinned, the script does not contact GitHub. If it must initialize the submodule, it runs Git non-interactively so firewalled machines fail instead of opening credential prompts. On a firewalled machine, use a checkout or source archive that already includes `vendor\CrispASR`, or pass `--no-submodules` to fail fast instead of trying to initialize it.

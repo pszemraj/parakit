@@ -388,7 +388,10 @@ function Install-Bundle {
         if (Test-Path -LiteralPath $marker -PathType Leaf) {
             Remove-Item -LiteralPath $Destination -Recurse -Force
         } else {
-            Write-Host "Install warning: existing unmarked directory; overwriting files only"
+            $existingEntry = Get-ChildItem -LiteralPath $Destination -Force | Select-Object -First 1
+            if ($null -ne $existingEntry) {
+                throw "Refusing to install into existing non-empty directory without .parakit-install marker: $Destination. Choose an empty install directory or move the existing directory aside."
+            }
         }
     }
 
