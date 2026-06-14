@@ -43,10 +43,7 @@ parakit --threads 8 --verbose
 
 GPU-capable builds default to `--device auto`. In `auto`, CrispASR asks ggml for the best backend device and falls back to CPU when no GPU backend is available. On hybrid laptops, ggml prefers a discrete GPU over an integrated GPU.
 
-Windows GPU bundle selection is covered in
-[build.md#windows-bundles](build.md#windows-bundles) and
-[../scripts/windows/README.md#bundle-flavors](../scripts/windows/README.md#bundle-flavors).
-At runtime, `--device` controls CPU/GPU use inside the installed build flavor.
+Windows bundle backend selection is covered in [../scripts/windows/README.md#backend-requirements](../scripts/windows/README.md#backend-requirements). At runtime, `--device` controls CPU/GPU use inside the installed build.
 
 ```bash
 parakit --device auto

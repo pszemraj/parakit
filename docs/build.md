@@ -55,13 +55,7 @@ For Windows bundles, build one accelerator backend at a time. A combined CUDA+Vu
 
 ## Windows Bundles
 
-Use the Windows scripts for runnable per-user installs. They copy `parakit.exe` and generated runtime DLLs into one app directory. Backend selection, BLAS arguments, installer, PATH, CUDA, and Vulkan behavior are in [../scripts/windows/README.md](../scripts/windows/README.md).
-
-```bat
-scripts\windows\build.bat --backend cpu
-scripts\windows\build.bat --backend cuda
-scripts\windows\build.bat --backend vulkan
-```
+Use the Windows scripts for runnable per-user installs. They copy `parakit.exe` and generated runtime DLLs into one app directory. Backend selection, BLAS arguments, installer, PATH, CUDA, Vulkan, and runtime-manifest behavior are in [../scripts/windows/README.md](../scripts/windows/README.md).
 
 ## CPU Builds
 
@@ -102,7 +96,7 @@ Supported values:
 | `generic` | `GGML_BLAS=ON`, `GGML_BLAS_VENDOR=Generic`. |
 | `accelerate` | Apple Accelerate. Apple targets only. |
 
-On Windows, OpenBLAS detection requires `cblas.h`, a runtime DLL under `bin\`, and an import library compatible with the active Rust target environment: `.lib` for MSVC or `.dll.a` for GNU. Set `PARAKIT_OPENBLAS_ROOT` to the prefix containing `include\`, `lib\`, and `bin\`, or activate a conda environment whose `%CONDA_PREFIX%\Library` has that layout. Set both `BLAS_INCLUDE_DIRS` and `BLAS_LIBRARIES` for explicit CMake paths; together they take precedence over autodetection and skip OpenBLAS DLL bundling.
+Windows OpenBLAS layout and bundling behavior are in [../scripts/windows/README.md#blas](../scripts/windows/README.md#blas).
 
 Ubuntu/Debian OpenBLAS:
 

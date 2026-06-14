@@ -55,8 +55,8 @@ Run `.\scripts\windows\build.ps1 --help` for the script's live help.
 | `--openblas-root DIR` | Sets `PARAKIT_OPENBLAS_ROOT` for this build. `DIR` must contain a Windows OpenBLAS layout with `include\`, `lib\`, and `bin\`. |
 | `--bundle-cuda-dlls` | CUDA only: copies `cudart64_*.dll`, `cublas64_*.dll`, and `cublasLt64_*.dll` into the bundle. |
 | `--release` | Builds `target\release` and bundles it. This is the default. |
-| `--debug` | Builds `target\debug` and bundles it into the same backend bundle directory. |
-| `-Profile release\|debug` | PowerShell-compatible profile selector. Prefer `--release` or `--debug` for normal use. |
+| `--debug` | Legacy shorthand. PowerShell can consume it before the script sees it; use `-Profile debug` for debug builds. |
+| `-Profile release\|debug` | Selects the Cargo profile. Use `-Profile debug` when you need `target\debug`. |
 | `--no-submodules` | Does not run `git submodule update --init --recursive`; fails if `vendor\CrispASR` is not already populated. |
 | `--no-install` | Builds the repo-local bundle without installing it. |
 | `--no-user-path` | Installs without adding the install directory to User `PATH`. |
@@ -176,4 +176,5 @@ For development-only bundle checks without installing:
 scripts\windows\build.bat --backend cpu --no-install
 scripts\windows\build.bat --backend cuda --no-install
 scripts\windows\build.bat --backend vulkan --no-install
+scripts\windows\build.bat -Profile debug --backend cpu --no-install
 ```

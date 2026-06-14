@@ -102,14 +102,6 @@ Model cache behavior and commands are in [running.md#model-cache](running.md#mod
 
 If a GPU bundle fails to start with `0xC0000135` or `STATUS_DLL_NOT_FOUND`, Windows could not resolve a load-time DLL. Bundle requirements, CUDA runtime bundling, Vulkan loader behavior, and installer checks are in [../scripts/windows/README.md#runtime-manifest](../scripts/windows/README.md#runtime-manifest).
 
-For CUDA bundles, install the CUDA Toolkit that matches the build so its runtime DLL directory is available, add that directory to `PATH`, or rebuild with:
-
-```bat
-scripts\windows\build.bat --backend cuda --bundle-cuda-dlls
-```
-
-For Vulkan bundles, install or update the NVIDIA, AMD, or Intel GPU driver if the installer reports that `vulkan-1.dll` is missing. Use the CPU bundle on machines without a Vulkan-capable driver.
-
 If `parakit --device gpu` fails before model load, run:
 
 ```text
