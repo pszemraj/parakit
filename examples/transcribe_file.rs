@@ -55,7 +55,7 @@ fn main() -> Result<()> {
 
     let model_path = match cli.model.as_deref() {
         Some(path) => path.to_path_buf(),
-        None => fetch::ensure_default_model(false)?,
+        None => fetch::ensure_default_model_with_verbosity(false, false)?,
     };
     let threads = cli
         .threads

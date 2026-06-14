@@ -49,20 +49,6 @@ pub enum FetchSource {
 
 /// Ensure the default hosted Q8_0 model is present in the cache.
 ///
-/// # Returns
-///
-/// The canonical cached Q8_0 model path.
-///
-/// # Errors
-///
-/// Returns an error if the model cannot be downloaded, verified, or written
-/// into the platform cache directory.
-pub fn ensure_default_model(quiet: bool) -> Result<PathBuf> {
-    ensure_default_model_with_verbosity(quiet, false)
-}
-
-/// Ensure the default hosted Q8_0 model is present in the cache.
-///
 /// # Arguments
 ///
 /// * `quiet` - Suppress stdout status messages.
