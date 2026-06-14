@@ -1,4 +1,4 @@
-# Build and bundle Parakit daemon flavors on native Windows.
+# Build and bundle Parakit daemon backends on native Windows.
 #
 # Usage:
 #   powershell -ExecutionPolicy RemoteSigned -File scripts/windows/build-bundle.ps1 [options]
@@ -6,7 +6,7 @@
 # By default this builds a repo-local bundle, installs it to the per-user
 # Windows app directory, and adds that directory to the User PATH.
 #
-# One accelerator flavor is supported per bundle. CUDA requires a local CUDA
+# One compute backend is supported per bundle. CUDA requires a local CUDA
 # Toolkit; Vulkan requires the LunarG Vulkan SDK at build time.
 
 param(
@@ -24,10 +24,12 @@ $NoInstall = $false
 $NoUserPath = $false
 $NoSubmodules = $false
 $InstallDir = $null
-$Flavor = "cpu"
-$FlavorExplicit = $false
+$Backend = "cpu"
+$BackendExplicit = $false
+$Blas = $null
+$OpenBlasRoot = $null
 $BundleCudaDlls = $false
-$AllowFlavorSwitch = $false
+$AllowBackendSwitch = $false
 
 if ($DebugPreference -ne "SilentlyContinue") {
     $Profile = "debug"
@@ -36,16 +38,18 @@ if ($DebugPreference -ne "SilentlyContinue") {
 function Show-Usage {
     $entryPoint = "scripts\windows\build-bundle.ps1"
 
-    Write-Host "Build and bundle Parakit daemon flavors on native Windows."
+    Write-Host "Build and bundle Parakit daemon backends on native Windows."
     Write-Host ""
     Write-Host "Usage:"
-    Write-Host "  $entryPoint [--flavor cpu|cuda|vulkan] [--bundle-cuda-dlls] [--release] [--debug] [--no-submodules] [--no-install] [--no-user-path] [--allow-flavor-switch] [--install-dir DIR]"
+    Write-Host "  $entryPoint [--backend cpu|cuda|vulkan] [--blas auto|off|openblas|mkl|generic] [--openblas-root DIR] [--bundle-cuda-dlls] [--release] [--debug] [--no-submodules] [--no-install] [--no-user-path] [--allow-backend-switch] [--install-dir DIR]"
     Write-Host ""
     Write-Host "Options:"
-    Write-Host "  --flavor         Build flavor: cpu, cuda, or vulkan. Defaults to cpu."
-    Write-Host "  --cpu            Alias for --flavor cpu."
-    Write-Host "  --cuda           Alias for --flavor cuda. Requires NVIDIA CUDA Toolkit on this machine."
-    Write-Host "  --vulkan         Alias for --flavor vulkan. Requires LunarG Vulkan SDK and glslc."
+    Write-Host "  --backend        Build backend: cpu, cuda, or vulkan. If omitted, an interactive selector opens; Enter selects CPU."
+    Write-Host "  --cpu            Alias for --backend cpu."
+    Write-Host "  --cuda           Alias for --backend cuda. Requires NVIDIA CUDA Toolkit on this machine."
+    Write-Host "  --vulkan         Alias for --backend vulkan. Requires LunarG Vulkan SDK and glslc."
+    Write-Host "  --blas           Override CPU BLAS selection for this build: auto, off, openblas, mkl, or generic."
+    Write-Host "  --openblas-root  Windows OpenBLAS prefix containing include, lib, and bin. Sets PARAKIT_OPENBLAS_ROOT."
     Write-Host "  --bundle-cuda-dlls"
     Write-Host "                   CUDA only: copy cudart64_*.dll, cublas64_*.dll, and cublasLt64_*.dll into the bundle."
     Write-Host "  --release        Build target\release and bundle it. This is the default."
@@ -53,24 +57,163 @@ function Show-Usage {
     Write-Host "  --no-submodules  Do not run git submodule update --init --recursive."
     Write-Host "  --no-install     Build the repo-local bundle without installing it."
     Write-Host "  --no-user-path   Install without adding the install directory to User PATH."
-    Write-Host "  --allow-flavor-switch"
-    Write-Host "                   Allow replacing an installed cpu/cuda/vulkan flavor with a different flavor."
+    Write-Host "  --allow-backend-switch"
+    Write-Host "                   Allow replacing an installed cpu/cuda/vulkan backend with a different backend."
     Write-Host "  --install-dir    Install to DIR instead of `%LOCALAPPDATA`%\Programs\parakit."
     Write-Host "  -h, --help       Print this help."
 }
 
-function Set-BuildFlavor {
+function Set-BuildBackend {
     param(
         [Parameter(Mandatory = $true)]
         [ValidateSet("cpu", "cuda", "vulkan")]
         [string]$Value
     )
 
-    if ($FlavorExplicit -and $Flavor -ne $Value) {
-        throw "Only one build flavor can be selected per bundle. Choose cpu, cuda, or vulkan."
+    if ($BackendExplicit -and $Backend -ne $Value) {
+        throw "Only one build backend can be selected per bundle. Choose cpu, cuda, or vulkan."
     }
-    $script:Flavor = $Value
-    $script:FlavorExplicit = $true
+    $script:Backend = $Value
+    $script:BackendExplicit = $true
+}
+
+function Set-BlasMode {
+    param(
+        [Parameter(Mandatory = $true)]
+        [ValidateSet("auto", "off", "openblas", "mkl", "generic")]
+        [string]$Value
+    )
+
+    $script:Blas = $Value
+}
+
+function Get-BackendOptions {
+    return @(
+        [pscustomobject]@{
+            Value = "cpu"
+            Label = "CPU"
+            Description = "native CPU build; BLAS auto-detected unless --blas overrides it"
+        },
+        [pscustomobject]@{
+            Value = "cuda"
+            Label = "CUDA"
+            Description = "NVIDIA CUDA Toolkit backend"
+        },
+        [pscustomobject]@{
+            Value = "vulkan"
+            Label = "Vulkan"
+            Description = "Vulkan GPU backend for NVIDIA, AMD, or Intel drivers"
+        }
+    )
+}
+
+function ConvertTo-BackendSelection {
+    param(
+        [AllowNull()]
+        [string]$Selection,
+
+        [Parameter(Mandatory = $true)]
+        [object[]]$Options
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Selection)) {
+        return "cpu"
+    }
+
+    $normalized = $Selection.Trim().ToLowerInvariant()
+    if ($normalized -match '^[1-3]$') {
+        $index = [int]$normalized - 1
+        return $Options[$index].Value
+    }
+
+    foreach ($option in $Options) {
+        if ($normalized -eq $option.Value -or $normalized -eq $option.Label.ToLowerInvariant()) {
+            return $option.Value
+        }
+    }
+
+    throw "Invalid build backend selection: $Selection. Choose 1, 2, 3, cpu, cuda, or vulkan."
+}
+
+function Write-BackendMenuLine {
+    param(
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyString()]
+        [string]$Text,
+
+        [switch]$Selected
+    )
+
+    $line = $Text
+    try {
+        $width = [Math]::Max(1, [Console]::BufferWidth - 1)
+        if ($line.Length -gt $width) {
+            $line = $line.Substring(0, $width)
+        } else {
+            $line = $line.PadRight($width)
+        }
+    } catch {
+        $line = $Text
+    }
+
+    if ($Selected) {
+        Write-Host $line -ForegroundColor Black -BackgroundColor Gray
+    } else {
+        Write-Host $line
+    }
+}
+
+function Show-BackendMenu {
+    $options = Get-BackendOptions
+
+    if ([Console]::IsInputRedirected -or [Console]::IsOutputRedirected) {
+        Write-Host "Select Windows build backend"
+        for ($index = 0; $index -lt $options.Count; $index++) {
+            $option = $options[$index]
+            Write-Host ("  {0}. {1,-6} {2}" -f ($index + 1), $option.Label, $option.Description)
+        }
+        Write-Host "Backend [1=CPU default, 2=CUDA, 3=Vulkan]: " -NoNewline
+        return ConvertTo-BackendSelection -Selection ([Console]::In.ReadLine()) -Options $options
+    }
+
+    $selected = 0
+    $top = [Console]::CursorTop
+    while ($true) {
+        [Console]::SetCursorPosition(0, $top)
+        Write-BackendMenuLine "Select Windows build backend"
+        Write-BackendMenuLine ""
+        for ($index = 0; $index -lt $options.Count; $index++) {
+            $option = $options[$index]
+            $marker = if ($index -eq $selected) { ">" } else { " " }
+            $line = (" {0} {1}. {2,-6} {3}" -f $marker, ($index + 1), $option.Label, $option.Description)
+            Write-BackendMenuLine $line -Selected:($index -eq $selected)
+        }
+        Write-BackendMenuLine ""
+        Write-BackendMenuLine "Enter = selected (CPU default). Up/Down = move. 1-3 = select. Esc = cancel."
+
+        $key = [Console]::ReadKey($true)
+        switch ($key.Key) {
+            "UpArrow" {
+                $selected = ($selected + $options.Count - 1) % $options.Count
+            }
+            "DownArrow" {
+                $selected = ($selected + 1) % $options.Count
+            }
+            "Enter" {
+                Write-Host ""
+                return $options[$selected].Value
+            }
+            "Escape" {
+                throw "Build backend selection cancelled."
+            }
+            default {
+                if ($key.KeyChar -match '^[1-3]$') {
+                    Write-Host ""
+                    return ConvertTo-BackendSelection -Selection ([string]$key.KeyChar) -Options $options
+                }
+            }
+        }
+    }
 }
 
 for ($i = 0; $i -lt $RawArgs.Count; $i++) {
@@ -82,27 +225,41 @@ for ($i = 0; $i -lt $RawArgs.Count; $i++) {
         '^(--release|-release|-Release)$' {
             $Profile = "release"
         }
-        '^(--flavor|-flavor|-Flavor)$' {
+        '^(--backend|-backend|-Backend)$' {
             $i++
             if ($i -ge $RawArgs.Count -or $RawArgs[$i] -notin @("cpu", "cuda", "vulkan")) {
                 throw "$($RawArgs[$i - 1]) requires one of: cpu, cuda, vulkan"
             }
-            Set-BuildFlavor $RawArgs[$i]
+            Set-BuildBackend $RawArgs[$i]
         }
         '^(--cpu|-cpu|-Cpu)$' {
-            Set-BuildFlavor "cpu"
+            Set-BuildBackend "cpu"
         }
         '^(--cuda|-cuda|-Cuda)$' {
-            Set-BuildFlavor "cuda"
+            Set-BuildBackend "cuda"
         }
         '^(--vulkan|-vulkan|-Vulkan)$' {
-            Set-BuildFlavor "vulkan"
+            Set-BuildBackend "vulkan"
+        }
+        '^(--blas|-blas|-Blas)$' {
+            $i++
+            if ($i -ge $RawArgs.Count -or $RawArgs[$i] -notin @("auto", "off", "openblas", "mkl", "generic")) {
+                throw "$($RawArgs[$i - 1]) requires one of: auto, off, openblas, mkl, generic"
+            }
+            Set-BlasMode $RawArgs[$i]
+        }
+        '^(--openblas-root|-openblas-root|-OpenBlasRoot)$' {
+            $i++
+            if ($i -ge $RawArgs.Count -or [string]::IsNullOrWhiteSpace($RawArgs[$i])) {
+                throw "$($RawArgs[$i - 1]) requires a directory argument"
+            }
+            $OpenBlasRoot = $RawArgs[$i]
         }
         '^(--bundle-cuda-dlls|-bundle-cuda-dlls|-BundleCudaDlls)$' {
             $BundleCudaDlls = $true
         }
         '^(--debug|-debug|-Profile|-profile)$' {
-            if ($RawArgs[$i] -eq "-Profile") {
+            if ($RawArgs[$i] -ieq "-Profile") {
                 $i++
                 if ($i -ge $RawArgs.Count -or $RawArgs[$i] -notin @("release", "debug")) {
                     throw "-Profile requires 'release' or 'debug'"
@@ -121,8 +278,8 @@ for ($i = 0; $i -lt $RawArgs.Count; $i++) {
         '^(--no-user-path|-no-user-path|-NoUserPath)$' {
             $NoUserPath = $true
         }
-        '^(--allow-flavor-switch|-allow-flavor-switch|-AllowFlavorSwitch)$' {
-            $AllowFlavorSwitch = $true
+        '^(--allow-backend-switch|-allow-backend-switch|-AllowBackendSwitch)$' {
+            $AllowBackendSwitch = $true
         }
         '^(--install-dir|-install-dir|-InstallDir)$' {
             $i++
@@ -137,8 +294,19 @@ for ($i = 0; $i -lt $RawArgs.Count; $i++) {
     }
 }
 
-if ($BundleCudaDlls -and $Flavor -ne "cuda") {
-    throw "--bundle-cuda-dlls is only valid with --cuda."
+if (-not $BackendExplicit) {
+    $Backend = Show-BackendMenu
+}
+Write-Host "Backend: $Backend"
+
+if ($BundleCudaDlls -and $Backend -ne "cuda") {
+    throw "--bundle-cuda-dlls is only valid with --backend cuda or --cuda."
+}
+
+if (-not [string]::IsNullOrWhiteSpace($OpenBlasRoot) -and
+    -not [string]::IsNullOrWhiteSpace($Blas) -and
+    $Blas -notin @("auto", "openblas")) {
+    throw "--openblas-root only applies with --blas auto or --blas openblas."
 }
 
 if (-not [string]::IsNullOrWhiteSpace($env:CRISPASR_LIB_DIR)) {
@@ -155,15 +323,15 @@ function Test-NinjaGenerator {
 }
 
 function Configure-GpuBuildGenerator {
-    if ($Flavor -eq "cpu") {
+    if ($Backend -eq "cpu") {
         return
     }
 
     if ([string]::IsNullOrWhiteSpace($env:CMAKE_GENERATOR)) {
         $env:CMAKE_GENERATOR = "Ninja"
-        Write-Host "${Flavor}: CMAKE_GENERATOR was not set; defaulting to Ninja"
+        Write-Host "${Backend}: CMAKE_GENERATOR was not set; defaulting to Ninja"
     } else {
-        Write-Host "${Flavor}: using CMAKE_GENERATOR=$env:CMAKE_GENERATOR"
+        Write-Host "${Backend}: using CMAKE_GENERATOR=$env:CMAKE_GENERATOR"
     }
 
     if (Test-NinjaGenerator $env:CMAKE_GENERATOR) {
@@ -366,6 +534,28 @@ function Configure-CompilerCache {
         if ([string]::IsNullOrWhiteSpace($env:CCACHE_BASEDIR)) {
             $env:CCACHE_BASEDIR = $repo
         }
+    }
+}
+
+function Configure-BlasSelection {
+    if (-not [string]::IsNullOrWhiteSpace($OpenBlasRoot)) {
+        $root = Get-FullPath $OpenBlasRoot
+        if (-not (Test-Path -LiteralPath $root -PathType Container)) {
+            throw "--openblas-root does not point to a directory: $root"
+        }
+        $env:PARAKIT_OPENBLAS_ROOT = $root
+        Write-Host "BLAS: PARAKIT_OPENBLAS_ROOT=$env:PARAKIT_OPENBLAS_ROOT"
+    } elseif (-not [string]::IsNullOrWhiteSpace($env:PARAKIT_OPENBLAS_ROOT)) {
+        Write-Host "BLAS: using PARAKIT_OPENBLAS_ROOT=$env:PARAKIT_OPENBLAS_ROOT"
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($Blas)) {
+        $env:PARAKIT_BLAS = $Blas
+        Write-Host "BLAS: PARAKIT_BLAS=$env:PARAKIT_BLAS"
+    } elseif (-not [string]::IsNullOrWhiteSpace($env:PARAKIT_BLAS)) {
+        Write-Host "BLAS: using PARAKIT_BLAS=$env:PARAKIT_BLAS"
+    } else {
+        Write-Host "BLAS: auto-detecting; pass --blas to override"
     }
 }
 
@@ -649,7 +839,7 @@ function Get-RepoRoot {
 }
 
 function Assert-VulkanBuildPathLength {
-    if ($Flavor -ne "vulkan") {
+    if ($Backend -ne "vulkan") {
         return
     }
 
@@ -798,9 +988,10 @@ if ($NoSubmodules) {
     Assert-CrispAsrSubmoduleReady
 }
 
+Configure-BlasSelection
 Configure-GpuBuildGenerator
 
-switch ($Flavor) {
+switch ($Backend) {
     "cuda" {
         Assert-CudaBuildReady
         if ($BundleCudaDlls) {
@@ -820,13 +1011,13 @@ switch ($Flavor) {
     }
 }
 
-Write-Host "Building $Profile ($Flavor)"
+Write-Host "Building $Profile ($Backend)"
 $cargoArgs = @("build", "--locked")
 if ($Profile -eq "release") {
     $cargoArgs += "--release"
 }
-if ($Flavor -ne "cpu") {
-    $cargoArgs += @("--features", $Flavor)
+if ($Backend -ne "cpu") {
+    $cargoArgs += @("--features", $Backend)
 }
 Clear-StaleCMakePathAliasCaches
 Invoke-Checked "cargo" @cargoArgs
@@ -849,7 +1040,7 @@ if (-not (Test-Path -LiteralPath $bundleRoot)) {
     New-Item -ItemType Directory -Path $bundleRoot | Out-Null
 }
 
-$bundleDir = Join-Path $bundleRoot "parakit-windows-x86_64-$Flavor"
+$bundleDir = Join-Path $bundleRoot "parakit-windows-x86_64-$Backend"
 Assert-ChildPath -Child $bundleDir -Parent $bundleRoot
 
 if (Test-Path -LiteralPath $bundleDir) {
@@ -884,8 +1075,8 @@ if (-not $NoInstall) {
     if ($NoUserPath) {
         $installerArgs += "-NoUserPath"
     }
-    if ($AllowFlavorSwitch) {
-        $installerArgs += "-AllowFlavorSwitch"
+    if ($AllowBackendSwitch) {
+        $installerArgs += "-AllowBackendSwitch"
     }
 
     & $installer @installerArgs

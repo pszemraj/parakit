@@ -9,7 +9,7 @@ param(
 
     [switch]$NoUserPath,
 
-    [switch]$AllowFlavorSwitch
+    [switch]$AllowBackendSwitch
 )
 
 $ErrorActionPreference = "Stop"
@@ -245,7 +245,7 @@ function Get-InstalledAccelerator {
     return Get-BundleAccelerator $manifest
 }
 
-function Assert-FlavorReplacementAllowed {
+function Assert-BackendReplacementAllowed {
     param(
         [Parameter(Mandatory = $true)]
         [string]$Destination,
@@ -274,7 +274,7 @@ function Assert-FlavorReplacementAllowed {
     }
 
     if (-not $AllowSwitch) {
-        throw "Refusing to replace installed $installed bundle with $incoming bundle without explicit approval. Rerun build-bundle with --allow-flavor-switch, or install-bundle.ps1 with -AllowFlavorSwitch, when switching cpu/cuda/vulkan installs intentionally."
+        throw "Refusing to replace installed $installed bundle with $incoming bundle without explicit approval. Rerun build-bundle with --allow-backend-switch, or install-bundle.ps1 with -AllowBackendSwitch, when switching cpu/cuda/vulkan installs intentionally."
     }
 
     Write-Host "Install: replacing $installed bundle with $incoming bundle"
@@ -410,7 +410,7 @@ $installFull = Get-FullPath $InstallDir
 $manifest = Assert-Bundle $bundleFull
 Assert-InstallDir $installFull
 Assert-ExternalRuntimeDependencies -Manifest $manifest -BundleDir $bundleFull
-Assert-FlavorReplacementAllowed -Destination $installFull -Manifest $manifest -AllowSwitch ([bool]$AllowFlavorSwitch)
+Assert-BackendReplacementAllowed -Destination $installFull -Manifest $manifest -AllowSwitch ([bool]$AllowBackendSwitch)
 
 Install-Bundle -Source $bundleFull -Destination $installFull
 Write-Host "Installed: $installFull"

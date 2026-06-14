@@ -51,16 +51,16 @@ cargo install --path . --features vulkan
 cargo install --path . --features metal  # Apple targets only
 ```
 
-For Windows bundles, build one accelerator flavor at a time. A combined CUDA+Vulkan bundle is rejected by the Windows scripts because it would hard-load both accelerator DLL chains while ggml would choose CUDA first anyway.
+For Windows bundles, build one accelerator backend at a time. A combined CUDA+Vulkan bundle is rejected by the Windows scripts because it would hard-load both accelerator DLL chains while ggml would choose CUDA first anyway.
 
 ## Windows Bundles
 
-Use the Windows bundle scripts for runnable per-user installs. They copy `parakit.exe` and generated runtime DLLs into one app directory. Flavor, installer, PATH, CUDA, and Vulkan behavior are in [../scripts/windows/README.md](../scripts/windows/README.md).
+Use the Windows bundle scripts for runnable per-user installs. They copy `parakit.exe` and generated runtime DLLs into one app directory. Backend selection, BLAS arguments, installer, PATH, CUDA, and Vulkan behavior are in [../scripts/windows/README.md](../scripts/windows/README.md).
 
 ```bat
-scripts\windows\build-bundle.bat --flavor cpu
-scripts\windows\build-bundle.bat --flavor cuda
-scripts\windows\build-bundle.bat --flavor vulkan
+scripts\windows\build-bundle.bat --backend cpu
+scripts\windows\build-bundle.bat --backend cuda
+scripts\windows\build-bundle.bat --backend vulkan
 ```
 
 ## CPU Builds
