@@ -9,6 +9,7 @@ param(
 
     [switch]$NoUserPath,
 
+    [Alias("Force")]
     [switch]$AllowBackendSwitch
 )
 
@@ -274,7 +275,7 @@ function Assert-BackendReplacementAllowed {
     }
 
     if (-not $AllowSwitch) {
-        throw "Refusing to replace installed $installed bundle with $incoming bundle without explicit approval. Rerun build.ps1 with --allow-backend-switch, or install.ps1 with -AllowBackendSwitch, when switching cpu/cuda/vulkan installs intentionally."
+        throw "Refusing to replace installed $installed bundle with $incoming bundle without explicit approval. Rerun build.ps1 with --allow-backend-switch or --force, or install.ps1 with -AllowBackendSwitch or -Force, when switching cpu/cuda/vulkan installs intentionally."
     }
 
     Write-Host "Install: replacing $installed bundle with $incoming bundle"

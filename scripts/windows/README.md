@@ -10,7 +10,7 @@ By default, the build script asks which compute backend to build. CPU is highlig
 
 The scripts do not edit the system `PATH`, create firewall rules, open TCP ports, create symlinks or junctions, map temporary drive letters, require Windows Developer Mode, or require administrator rights.
 
-All backends install into the same default per-user app directory. The installer refuses to replace an installed `cpu`, `cuda`, or `vulkan` bundle with a different backend unless you pass `--allow-backend-switch`. This prevents a later CPU install from silently replacing a GPU install.
+All backends install into the same default per-user app directory. The installer refuses to replace an installed `cpu`, `cuda`, or `vulkan` bundle with a different backend unless you pass `--allow-backend-switch` or `--force`. This prevents a later CPU install from silently replacing a GPU install.
 
 The installer is intentionally per-user. It refuses system locations such as `C:\Windows` and `C:\Program Files\...`; those paths require admin rights on normal Windows systems and are the wrong default for a developer or corporate laptop.
 
@@ -60,7 +60,7 @@ Run `.\scripts\windows\build.ps1 --help` for the script's live help.
 | `--no-submodules` | Does not run `git submodule update --init --recursive`; fails if `vendor\CrispASR` is not already populated. |
 | `--no-install` | Builds the repo-local bundle without installing it. |
 | `--no-user-path` | Installs without adding the install directory to User `PATH`. |
-| `--allow-backend-switch` | Allows replacing an installed `cpu`, `cuda`, or `vulkan` bundle with a different backend. |
+| `--allow-backend-switch`, `--force` | Allows replacing an installed `cpu`, `cuda`, or `vulkan` bundle with a different backend. This does not skip directory, runtime DLL, or loader checks. |
 | `--install-dir DIR` | Installs to `DIR` instead of `%LOCALAPPDATA%\Programs\parakit`. |
 | `-h`, `--help` | Prints help. |
 
@@ -143,9 +143,9 @@ If path shortening does not fix a Vulkan shader-gen failure, capture the exact `
 9. Copies `parakit-runtime-manifest.json`, every manifest `required_files` entry, `LICENSE`, and `README.md` into the bundle.
 10. Unless `--no-install` is set, calls `install.ps1`.
 
-`install.ps1` validates the bundle manifest, checks external CUDA/Vulkan runtime DLLs before replacing an install, refuses unsafe install directories, enforces the backend-switch guard, copies the bundle, runs `parakit --version` as a loader smoke test, and then updates User `PATH` unless `--no-user-path` is set.
+`install.ps1` validates the bundle manifest, checks external CUDA/Vulkan runtime DLLs before replacing an install, refuses unsafe install directories, enforces the backend-switch guard, copies the bundle, runs `parakit --version` as a loader smoke test, and then updates User `PATH` unless `--no-user-path` is set. Direct `install.ps1` calls can use `-AllowBackendSwitch` or `-Force` for intentional backend replacement.
 
-When intentionally replacing an installed backend, pass `--allow-backend-switch` on the build command. Without it, the installer fails before deleting the existing install.
+When intentionally replacing an installed backend, pass `--allow-backend-switch` or `--force` on the build command. Without it, the installer fails before deleting the existing install.
 
 The build script checks whether `vendor\CrispASR` is already populated before touching submodules. If the submodule is present and pinned, the script does not contact GitHub. If it must initialize the submodule, it runs Git non-interactively so firewalled machines fail instead of opening credential prompts. On a firewalled machine, use a checkout or source archive that already includes `vendor\CrispASR`, or pass `--no-submodules` to fail fast instead of trying to initialize it.
 

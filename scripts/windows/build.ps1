@@ -41,7 +41,7 @@ function Show-Usage {
     Write-Host "Build Parakit daemon backends on native Windows."
     Write-Host ""
     Write-Host "Usage:"
-    Write-Host "  $entryPoint [--backend cpu|cuda|vulkan] [--blas auto|off|openblas|mkl|generic] [--openblas-root DIR] [--bundle-cuda-dlls] [--release] [--debug] [--no-submodules] [--no-install] [--no-user-path] [--allow-backend-switch] [--install-dir DIR]"
+    Write-Host "  $entryPoint [--backend cpu|cuda|vulkan] [--blas auto|off|openblas|mkl|generic] [--openblas-root DIR] [--bundle-cuda-dlls] [--release] [--debug] [--no-submodules] [--no-install] [--no-user-path] [--allow-backend-switch|--force] [--install-dir DIR]"
     Write-Host ""
     Write-Host "Options:"
     Write-Host "  --backend        Build backend: cpu, cuda, or vulkan. If omitted, an interactive selector opens; Enter selects CPU."
@@ -58,6 +58,7 @@ function Show-Usage {
     Write-Host "  --no-install     Build the repo-local bundle without installing it."
     Write-Host "  --no-user-path   Install without adding the install directory to User PATH."
     Write-Host "  --allow-backend-switch"
+    Write-Host "  --force"
     Write-Host "                   Allow replacing an installed cpu/cuda/vulkan backend with a different backend."
     Write-Host "  --install-dir    Install to DIR instead of `%LOCALAPPDATA`%\Programs\parakit."
     Write-Host "  -h, --help       Print this help."
@@ -278,7 +279,7 @@ for ($i = 0; $i -lt $RawArgs.Count; $i++) {
         '^(--no-user-path|-no-user-path|-NoUserPath)$' {
             $NoUserPath = $true
         }
-        '^(--allow-backend-switch|-allow-backend-switch|-AllowBackendSwitch)$' {
+        '^(--allow-backend-switch|-allow-backend-switch|-AllowBackendSwitch|--force|-force|-Force)$' {
             $AllowBackendSwitch = $true
         }
         '^(--install-dir|-install-dir|-InstallDir)$' {
