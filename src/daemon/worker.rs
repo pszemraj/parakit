@@ -484,19 +484,16 @@ fn copy_or_block_transcript(
     match stage_transcript_for_history(injector, text, keep_transcript_clipboard)
         .context(copy_context)?
     {
-        super::inject::PasteOutcome::CopiedOnly => {
+        super::inject::StageOutcome::CopiedOnly => {
             notifier.transcript_copied(reason);
             Ok(InsertOutcome::CopiedOnly)
         }
-        super::inject::PasteOutcome::Blocked => {
+        super::inject::StageOutcome::Blocked => {
             log.warn(format!(
                 "automatic paste skipped ({reason}); transcript staged for clipboard history"
             ));
             notifier.paste_blocked(reason);
             Ok(InsertOutcome::Blocked)
-        }
-        super::inject::PasteOutcome::Pasted => {
-            unreachable!("no paste is sent by clipboard staging")
         }
     }
 }
@@ -505,7 +502,7 @@ fn stage_transcript_for_history(
     injector: &mut Option<Injector>,
     text: &str,
     keep_transcript_clipboard: bool,
-) -> Result<super::inject::PasteOutcome> {
+) -> Result<super::inject::StageOutcome> {
     let policy = clipboard_policy(keep_transcript_clipboard);
     with_injector(injector, |injector| {
         injector.stage_text_for_history(text, policy)

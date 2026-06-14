@@ -82,6 +82,24 @@ pub(crate) enum PasteOutcome {
     Blocked,
 }
 
+/// Result of staging clipboard text without sending paste or type input.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum StageOutcome {
+    /// The transcript was left on the clipboard.
+    CopiedOnly,
+    /// The previous clipboard policy was applied after staging.
+    Blocked,
+}
+
+impl From<StageOutcome> for PasteOutcome {
+    fn from(outcome: StageOutcome) -> Self {
+        match outcome {
+            StageOutcome::CopiedOnly => Self::CopiedOnly,
+            StageOutcome::Blocked => Self::Blocked,
+        }
+    }
+}
+
 /// Clipboard retention policy after staging text for paste.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ClipboardPolicy {
@@ -600,8 +618,8 @@ impl Injector {
     ///
     /// # Returns
     ///
-    /// [`PasteOutcome::CopiedOnly`] when the transcript remains on the active
-    /// clipboard, or [`PasteOutcome::Blocked`] when the previous clipboard was
+    /// [`StageOutcome::CopiedOnly`] when the transcript remains on the active
+    /// clipboard, or [`StageOutcome::Blocked`] when the previous clipboard was
     /// restored.
     ///
     /// # Errors
@@ -611,9 +629,9 @@ impl Injector {
         &mut self,
         text: &str,
         clipboard_policy: ClipboardPolicy,
-    ) -> Result<PasteOutcome> {
+    ) -> Result<StageOutcome> {
         if text.is_empty() {
-            return Ok(PasteOutcome::Blocked);
+            return Ok(StageOutcome::Blocked);
         }
         let mut clipboard = self.take_clipboard()?;
         let restore_gate = self.clipboard_restore_gate();
@@ -811,7 +829,8 @@ where
     match before_chord() {
         Ok(true) => {}
         Ok(false) => {
-            return stage_text_without_paste(clipboard, text, restore_plan, clipboard_policy);
+            return stage_text_without_paste(clipboard, text, restore_plan, clipboard_policy)
+                .map(PasteOutcome::from);
         }
         Err(err) => return Err(err),
     }
@@ -886,7 +905,7 @@ fn stage_text_without_paste<C, H>(
     text: &str,
     restore_plan: ClipboardRestorePlan<'_, H>,
     clipboard_policy: ClipboardPolicy,
-) -> Result<PasteOutcome>
+) -> Result<StageOutcome>
 where
     C: ClipboardStore,
     H: ClipboardRestoreGate + ?Sized,
@@ -895,7 +914,7 @@ where
         clipboard
             .set_text(text.to_owned())
             .context("could not copy transcript to clipboard")?;
-        return Ok(PasteOutcome::CopiedOnly);
+        return Ok(StageOutcome::CopiedOnly);
     }
 
     let previous = ClipboardSnapshot::capture(clipboard);
@@ -912,7 +931,7 @@ where
         clipboard_policy,
         RestoreWait::BeforeRestore,
     )?;
-    Ok(PasteOutcome::Blocked)
+    Ok(StageOutcome::Blocked)
 }
 
 fn finish_blocked_clipboard<C, H>(

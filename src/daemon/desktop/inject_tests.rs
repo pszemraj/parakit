@@ -934,7 +934,8 @@ fn clipboard_restore_gate_cases_are_stable() {
                 "dictated text",
                 restore_plan(&gate),
                 case.policy,
-            ),
+            )
+            .map(PasteOutcome::from),
         }
         .expect(case.name);
 
