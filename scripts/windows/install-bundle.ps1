@@ -195,21 +195,27 @@ function Test-DllResolvable {
 function Assert-ExternalRuntimeDependencies {
     param(
         [Parameter(Mandatory = $true)]
-        $Manifest
+        $Manifest,
+
+        [Parameter(Mandatory = $true)]
+        [string]$BundleDir
     )
 
     if ($null -ne $Manifest.cuda) {
-        Assert-CudaExternalDlls $Manifest.cuda
+        Assert-CudaExternalDlls -Cuda $Manifest.cuda -BundleDir $BundleDir
     }
     if ($null -ne $Manifest.vulkan) {
-        Assert-VulkanExternalDlls $Manifest.vulkan
+        Assert-VulkanExternalDlls -Vulkan $Manifest.vulkan -BundleDir $BundleDir
     }
 }
 
 function Assert-CudaExternalDlls {
     param(
         [Parameter(Mandatory = $true)]
-        $Cuda
+        $Cuda,
+
+        [Parameter(Mandatory = $true)]
+        [string]$BundleDir
     )
 
     if ($null -ne $Cuda.external_dlls_bundled -and [bool]$Cuda.external_dlls_bundled) {
@@ -221,30 +227,27 @@ function Assert-CudaExternalDlls {
         return
     }
 
-    $extraDirs = @()
-    if (-not [string]::IsNullOrWhiteSpace($env:CUDA_PATH)) {
-        $cudaBin = Join-Path $env:CUDA_PATH "bin"
-        $extraDirs += $cudaBin
-        $extraDirs += Join-Path $cudaBin "x64"
-    }
-
     $missing = @()
     foreach ($dll in $dlls) {
-        if (-not (Test-DllResolvable -Name $dll -ExtraDirs $extraDirs)) {
+        Assert-FlatBundleFileName -Name $dll -Context "CUDA external DLL"
+        if (-not (Test-DllResolvable -Name $dll -ExtraDirs @($BundleDir))) {
             $missing += $dll
         }
     }
 
     if ($missing.Count -gt 0) {
         $version = if ([string]::IsNullOrWhiteSpace($Cuda.toolkit_version)) { "the build" } else { $Cuda.toolkit_version }
-        throw "CUDA bundle expects external runtime DLLs that were not found: $($missing -join ', '). Install the CUDA Toolkit matching $version so the CUDA runtime DLL directory is available, add the DLL directory to PATH, or rebuild with --bundle-cuda-dlls."
+        throw "CUDA bundle expects external runtime DLLs that are not loadable from the installed app directory or PATH: $($missing -join ', '). Install the CUDA Toolkit matching $version and add its bin directory to PATH, copy the DLLs into the bundle directory, or rebuild with --bundle-cuda-dlls. CUDA_PATH alone is not a Windows loader search path."
     }
 }
 
 function Assert-VulkanExternalDlls {
     param(
         [Parameter(Mandatory = $true)]
-        $Vulkan
+        $Vulkan,
+
+        [Parameter(Mandatory = $true)]
+        [string]$BundleDir
     )
 
     $dlls = @($Vulkan.external_dlls) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
@@ -255,7 +258,8 @@ function Assert-VulkanExternalDlls {
     $systemDir = [System.Environment]::SystemDirectory
     $missing = @()
     foreach ($dll in $dlls) {
-        if (-not (Test-DllResolvable -Name $dll -ExtraDirs @($systemDir))) {
+        Assert-FlatBundleFileName -Name $dll -Context "Vulkan external DLL"
+        if (-not (Test-DllResolvable -Name $dll -ExtraDirs @($BundleDir, $systemDir))) {
             $missing += $dll
         }
     }
@@ -334,7 +338,7 @@ $installFull = Get-FullPath $InstallDir
 
 $manifest = Assert-Bundle $bundleFull
 Assert-InstallDir $installFull
-Assert-ExternalRuntimeDependencies $manifest
+Assert-ExternalRuntimeDependencies -Manifest $manifest -BundleDir $bundleFull
 
 Install-Bundle -Source $bundleFull -Destination $installFull
 Write-Host "Installed: $installFull"
