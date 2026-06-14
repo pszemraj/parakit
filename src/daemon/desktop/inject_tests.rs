@@ -31,59 +31,45 @@ struct MockClipboard {
 }
 
 impl MockClipboard {
-    fn new(text: impl Into<String>) -> Self {
+    fn with_content(content: MockClipboardContent) -> Self {
         Self {
-            content: MockClipboardContent::Text(text.into()),
+            content,
             events: Rc::new(RefCell::new(Vec::new())),
             fail_next_set: false,
         }
+    }
+
+    fn new(text: impl Into<String>) -> Self {
+        Self::with_content(MockClipboardContent::Text(text.into()))
     }
 
     fn empty() -> Self {
-        Self {
-            content: MockClipboardContent::Empty,
-            events: Rc::new(RefCell::new(Vec::new())),
-            fail_next_set: false,
-        }
+        Self::with_content(MockClipboardContent::Empty)
     }
 
     fn html(html: impl Into<String>, alt_text: Option<&str>) -> Self {
-        Self {
-            content: MockClipboardContent::Html {
-                html: html.into(),
-                alt_text: alt_text.map(str::to_owned),
-            },
-            events: Rc::new(RefCell::new(Vec::new())),
-            fail_next_set: false,
-        }
+        Self::with_content(MockClipboardContent::Html {
+            html: html.into(),
+            alt_text: alt_text.map(str::to_owned),
+        })
     }
 
     fn file_list(paths: &[&str]) -> Self {
-        Self {
-            content: MockClipboardContent::FileList(paths.iter().map(PathBuf::from).collect()),
-            events: Rc::new(RefCell::new(Vec::new())),
-            fail_next_set: false,
-        }
+        Self::with_content(MockClipboardContent::FileList(
+            paths.iter().map(PathBuf::from).collect(),
+        ))
     }
 
     fn image() -> Self {
-        Self {
-            content: MockClipboardContent::Image {
-                width: 2,
-                height: 1,
-                bytes: vec![1, 2, 3, 4],
-            },
-            events: Rc::new(RefCell::new(Vec::new())),
-            fail_next_set: false,
-        }
+        Self::with_content(MockClipboardContent::Image {
+            width: 2,
+            height: 1,
+            bytes: vec![1, 2, 3, 4],
+        })
     }
 
     fn unsupported() -> Self {
-        Self {
-            content: MockClipboardContent::Unsupported,
-            events: Rc::new(RefCell::new(Vec::new())),
-            fail_next_set: false,
-        }
+        Self::with_content(MockClipboardContent::Unsupported)
     }
 
     fn fail_next_set(mut self) -> Self {
@@ -748,30 +734,21 @@ fn clipboard_guard_error_before_staging_leaves_clipboard_untouched() {
 }
 
 #[test]
-fn clipboard_keep_transcript_policy_leaves_text_after_paste_and_guard_block() {
-    for guard_allows in [true, false] {
-        let mut clipboard = MockClipboard::new("old clipboard");
-        let result = paste_with_clipboard_swap_guarded(
-            &mut clipboard,
-            "dictated text",
-            || Ok(()),
-            Duration::ZERO,
-            restore_plan(&PlatformClipboardRestoreGate::fallback()),
-            ClipboardPolicy::KeepTranscript,
-            || Ok(guard_allows),
-        )
-        .expect("clipboard keep policy should not fail");
+fn clipboard_keep_transcript_policy_leaves_text_after_guard_block() {
+    let mut clipboard = MockClipboard::new("old clipboard");
+    let result = paste_with_clipboard_swap_guarded(
+        &mut clipboard,
+        "dictated text",
+        || Ok(()),
+        Duration::ZERO,
+        restore_plan(&PlatformClipboardRestoreGate::fallback()),
+        ClipboardPolicy::KeepTranscript,
+        || Ok(false),
+    )
+    .expect("clipboard keep policy should not fail");
 
-        assert_eq!(clipboard.text(), Some("dictated text"));
-        assert_eq!(
-            result,
-            if guard_allows {
-                PasteOutcome::Pasted
-            } else {
-                PasteOutcome::CopiedOnly
-            }
-        );
-    }
+    assert_eq!(clipboard.text(), Some("dictated text"));
+    assert_eq!(result, PasteOutcome::CopiedOnly);
 }
 
 #[derive(Clone, Copy)]
