@@ -75,16 +75,6 @@ function Set-BuildBackend {
     $script:BackendExplicit = $true
 }
 
-function Set-BlasMode {
-    param(
-        [Parameter(Mandatory = $true)]
-        [ValidateSet("auto", "off", "openblas", "mkl", "generic")]
-        [string]$Value
-    )
-
-    $script:Blas = $Value
-}
-
 function Get-BackendOptions {
     return @(
         [pscustomobject]@{
@@ -244,7 +234,7 @@ for ($i = 0; $i -lt $RawArgs.Count; $i++) {
             if ($i -ge $RawArgs.Count -or $RawArgs[$i] -notin @("auto", "off", "openblas", "mkl", "generic")) {
                 throw "$($RawArgs[$i - 1]) requires one of: auto, off, openblas, mkl, generic"
             }
-            Set-BlasMode $RawArgs[$i]
+            $Blas = $RawArgs[$i]
         }
         '^(--openblas-root|-openblas-root|-OpenBlasRoot)$' {
             $i++
@@ -315,15 +305,6 @@ if (-not [string]::IsNullOrWhiteSpace($env:CRISPASR_LIB_DIR)) {
     throw "Windows builds from this script require the bundled CrispASR staging path so runtime DLLs and parakit-runtime-manifest.json are produced. Unset CRISPASR_LIB_DIR before running this script."
 }
 
-function Test-NinjaGenerator {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$Generator
-    )
-
-    return $Generator -like "Ninja*"
-}
-
 function Configure-GpuBuildGenerator {
     if ($Backend -eq "cpu") {
         return
@@ -336,7 +317,7 @@ function Configure-GpuBuildGenerator {
         Write-Host "${Backend}: using CMAKE_GENERATOR=$env:CMAKE_GENERATOR"
     }
 
-    if (Test-NinjaGenerator $env:CMAKE_GENERATOR) {
+    if ($env:CMAKE_GENERATOR -like "Ninja*") {
         Ensure-MsvcBuildEnvironment
         Ensure-NinjaAvailable
     }
@@ -574,7 +555,7 @@ function Assert-CudaBuildReady {
         throw "CUDA_PATH does not contain a bin directory: $env:CUDA_PATH"
     }
 
-    if (-not (Test-NinjaGenerator $env:CMAKE_GENERATOR)) {
+    if (-not ($env:CMAKE_GENERATOR -like "Ninja*")) {
         Assert-CudaVisualStudioToolset
     }
 
@@ -818,7 +799,7 @@ function Get-LongPathsEnabled {
 }
 
 function Write-VulkanPathLengthWarnings {
-    $sample = Get-VulkanShaderObjectPathSample -RepoRoot $repo
+    $sample = Get-VulkanShaderObjectPathSample
     if ($sample.Length -ge 240) {
         Write-Warning "Vulkan: estimated shader build object path is $($sample.Length) characters. ggml-vulkan can exceed Windows path limits from deep checkouts; set CARGO_TARGET_DIR to a short absolute user-writable path such as `$env:USERPROFILE\parakit-target, or build from a shorter checkout such as C:\src\parakit."
     }
@@ -831,15 +812,6 @@ function Write-VulkanPathLengthWarnings {
     }
 }
 
-function Get-RepoRoot {
-    $scriptPath = $PSCommandPath
-    if (-not $scriptPath) {
-        $scriptPath = $MyInvocation.MyCommand.Path
-    }
-    $scriptDir = Split-Path -Parent $scriptPath
-    return (Resolve-Path (Join-Path $scriptDir "..\..")).Path
-}
-
 function Assert-VulkanBuildPathLength {
     if ($Backend -ne "vulkan") {
         return
@@ -847,7 +819,7 @@ function Assert-VulkanBuildPathLength {
 
     Set-DefaultVulkanCargoTargetDirIfNeeded
 
-    $sample = Get-VulkanShaderObjectPathSample -RepoRoot $repo
+    $sample = Get-VulkanShaderObjectPathSample
     if ($sample.Length -lt 250) {
         return
     }
@@ -860,7 +832,7 @@ function Set-DefaultVulkanCargoTargetDirIfNeeded {
         return
     }
 
-    $repoTargetSample = Get-VulkanShaderObjectPathSample -RepoRoot $repo
+    $repoTargetSample = Get-VulkanShaderObjectPathSample
     if ($repoTargetSample.Length -lt 250) {
         return
     }
@@ -879,18 +851,7 @@ function Get-DefaultVulkanCargoTargetDir {
 }
 
 function Get-VulkanShaderObjectPathSample {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$RepoRoot
-    )
-
-    $targetRoot = if ([string]::IsNullOrWhiteSpace($env:CARGO_TARGET_DIR)) {
-        Join-Path $RepoRoot "target"
-    } elseif ([System.IO.Path]::IsPathRooted($env:CARGO_TARGET_DIR)) {
-        [System.IO.Path]::GetFullPath($env:CARGO_TARGET_DIR)
-    } else {
-        Join-Path $RepoRoot $env:CARGO_TARGET_DIR
-    }
+    $targetRoot = Get-CargoTargetRoot
 
     $samplePath = Join-Path $targetRoot "$Profile\build\parakit-0000000000000000\out\build\ggml\src\ggml-vulkan\vulkan-shaders-gen-prefix\src\vulkan-shaders-gen-build\CMakeFiles\CMakeScratch\TryCompile-000000\CMakeFiles\cmTC_00000.dir\testCCompiler.c.obj"
     return [pscustomobject]@{
@@ -974,7 +935,7 @@ Require-Command "cargo" "Install Rust with rustup using the MSVC toolchain."
 Require-Command "rustc" "Install Rust with rustup using the MSVC toolchain."
 Require-Command "cmake" "Install CMake and ensure it is on PATH."
 
-$repo = Get-RepoRoot
+$repo = (Resolve-Path (Join-Path $scriptDir "..\..")).Path
 Set-Location $repo
 Assert-VulkanBuildPathLength
 

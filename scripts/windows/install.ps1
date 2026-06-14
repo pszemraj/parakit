@@ -155,14 +155,6 @@ function Add-UserPathEntry {
     return $true
 }
 
-function Get-SearchPathEntries {
-    $entries = @()
-    if (-not [string]::IsNullOrWhiteSpace($env:Path)) {
-        $entries += $env:Path -split ";" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
-    }
-    return $entries
-}
-
 function Test-DllResolvable {
     param(
         [Parameter(Mandatory = $true)]
@@ -181,7 +173,7 @@ function Test-DllResolvable {
         }
     }
 
-    foreach ($dir in Get-SearchPathEntries) {
+    foreach ($dir in @($env:Path -split ";" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })) {
         $expanded = [System.Environment]::ExpandEnvironmentVariables($dir)
         if ([string]::IsNullOrWhiteSpace($expanded)) {
             continue
@@ -355,7 +347,7 @@ function Invoke-InstallSmoke {
         throw "Installed parakit.exe failed to start. This usually means a runtime DLL is missing. $($_.Exception.Message)"
     }
 
-    if (Test-StatusDllNotFoundExitCode $code) {
+    if ($code -eq -1073741515 -or ([uint32]$code) -eq 0xC0000135) {
         throw "Installed parakit.exe failed to start with 0xC0000135 (STATUS_DLL_NOT_FOUND). A required runtime DLL is missing; check the bundle manifest external_dlls entries."
     }
     if ($code -ne 0) {
@@ -363,15 +355,6 @@ function Invoke-InstallSmoke {
     }
 
     Write-Host "Smoke: parakit --version OK"
-}
-
-function Test-StatusDllNotFoundExitCode {
-    param(
-        [Parameter(Mandatory = $true)]
-        [int]$Code
-    )
-
-    return $Code -eq -1073741515 -or ([uint32]$Code) -eq 0xC0000135
 }
 
 function Install-Bundle {

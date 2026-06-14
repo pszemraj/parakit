@@ -506,8 +506,7 @@ fn configure_blas_paths(cfg: &mut cmake::Config, blas: &BlasConfig) {
 
     let manual_include_dirs = env::var("BLAS_INCLUDE_DIRS").ok();
     let manual_libraries = env::var("BLAS_LIBRARIES").ok();
-    let complete_manual_override =
-        complete_manual_path_override(manual_include_dirs.as_deref(), manual_libraries.as_deref());
+    let complete_manual_override = manual_include_dirs.is_some() && manual_libraries.is_some();
 
     if blas.selected == "openblas" && target_is_windows() && !complete_manual_override {
         if let Some(openblas) = blas.windows_openblas.as_ref() {
@@ -942,13 +941,7 @@ fn windows_openblas_import_kind() -> WindowsOpenBlasImportKind {
 }
 
 fn manual_blas_path_overrides_are_set() -> bool {
-    let include_dirs = env::var("BLAS_INCLUDE_DIRS").ok();
-    let libraries = env::var("BLAS_LIBRARIES").ok();
-    complete_manual_path_override(include_dirs.as_deref(), libraries.as_deref())
-}
-
-fn complete_manual_path_override(include_dirs: Option<&str>, libraries: Option<&str>) -> bool {
-    include_dirs.is_some() && libraries.is_some()
+    env::var("BLAS_INCLUDE_DIRS").is_ok() && env::var("BLAS_LIBRARIES").is_ok()
 }
 
 fn windows_import_library_name(base: &str) -> String {
