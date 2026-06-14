@@ -1,14 +1,12 @@
 # Troubleshooting
 
-Start with diagnostics. `doctor` does not load the model.
+Start with diagnostics. Launch behavior and exit codes are in [running.md#first-run](running.md#first-run). `doctor` does not load the model.
 
 ```text
 parakit doctor
 parakit --verbose doctor
 parakit doctor --deep
 ```
-
-It exits `0` when startup should proceed and `1` when a blocking issue remains. Launch behavior is in [running.md](running.md).
 
 If a daemon is already running, use the control socket before starting another copy:
 
@@ -22,6 +20,8 @@ parakit stop
 Linux X11 session and backend setup are in [linux-desktop.md](linux-desktop.md). The default backend registers `Ctrl+Space` with X11 and does not need `/dev/input` or `/dev/uinput`. If `Ctrl+Space` is unavailable, another desktop shortcut, input method, or keyboard remapper may own it. IBus uses `Ctrl+Space` by default on many Ubuntu/GNOME installs. Disable the conflicting binding and rerun `parakit doctor`.
 
 On macOS, grant Accessibility and Input Monitoring permissions to both the terminal and the built binary.
+
+WSL is not the native Windows daemon path. Validate Windows hotkeys, focus checks, and paste behavior from native Windows PowerShell with the Windows bundle.
 
 ## Literal Space Appears
 
@@ -100,15 +100,15 @@ Model cache behavior and commands are in [running.md#model-cache](running.md#mod
 
 ## Windows GPU Builds
 
-If a GPU bundle fails to start with `0xC0000135` or `STATUS_DLL_NOT_FOUND`, Windows could not resolve a load-time DLL. Bundle requirements and installer behavior are in [../scripts/windows/README.md#runtime-manifest](../scripts/windows/README.md#runtime-manifest).
+If a GPU bundle fails to start with `0xC0000135` or `STATUS_DLL_NOT_FOUND`, Windows could not resolve a load-time DLL. Bundle requirements, CUDA runtime bundling, Vulkan loader behavior, and installer checks are in [../scripts/windows/README.md#runtime-manifest](../scripts/windows/README.md#runtime-manifest).
 
-For CUDA bundles, the usual missing files are `cudart64_*.dll`, `cublas64_*.dll`, and `cublasLt64_*.dll`. Install the CUDA Toolkit that matches the build so its runtime DLL directory is available, add that directory to `PATH`, or rebuild with:
+For CUDA bundles, install the CUDA Toolkit that matches the build so its runtime DLL directory is available, add that directory to `PATH`, or rebuild with:
 
 ```bat
 scripts\windows\windows-cuda-build.bat --bundle-cuda-dlls
 ```
 
-For Vulkan bundles, `vulkan-1.dll` comes from the GPU driver package, not the Vulkan SDK. Install or update the NVIDIA, AMD, or Intel GPU driver if the installer reports that `vulkan-1.dll` is missing. Use the CPU bundle on machines without a Vulkan-capable driver.
+For Vulkan bundles, install or update the NVIDIA, AMD, or Intel GPU driver if the installer reports that `vulkan-1.dll` is missing. Use the CPU bundle on machines without a Vulkan-capable driver.
 
 If `parakit --device gpu` fails before model load, run:
 
@@ -116,6 +116,6 @@ If `parakit --device gpu` fails before model load, run:
 parakit --verbose doctor
 ```
 
-The `compute:` block lists devices visible to bundled ggml. A GPU build with no GPU or iGPU listed usually means the driver is missing, too old for the CUDA toolkit/driver ABI, or not exposing Vulkan on that machine. `--device auto` and `--device cpu` remain valid CPU fallback paths.
+The `compute:` block lists devices visible to bundled ggml. A GPU build with no GPU or iGPU listed usually means the driver is missing, too old for the CUDA toolkit/driver ABI, or not exposing Vulkan on that machine. Device selection behavior is in [running.md#device-selection](running.md#device-selection).
 
-The first inference after process start is intentionally warmed up by the daemon. CPU-only runs use a short warmup. GPU-capable bundled runs use 5s and 30s synthetic inputs, which cover short and normal push-to-talk dictations with margin while avoiding a worst-case 270s warmup at every launch. An unusual longer first dictation on a cold backend cache can still pay a one-time kernel or pipeline selection cost, then subsequent dictations use the backend cache. The current pinned CrispASR/ggml revision does not include a persistent ggml Vulkan pipeline cache, so Vulkan still relies on the GPU driver's shader cache between processes. Use `--verbose` to see warmup duration.
+The daemon intentionally warms the backend at startup. Use `--verbose` to see warmup duration. A cold backend can still make an unusually long first dictation slower.

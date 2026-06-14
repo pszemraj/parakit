@@ -36,7 +36,7 @@ After rebuilding a release artifact, upload F16 and Q8_0 to the hosted repo and 
 
 ## Windows GPU Validation
 
-Use the Windows bundle scripts for CUDA/Vulkan validation; they default to Ninja. Raw `cargo check --workspace --all-targets --all-features` may still enter CMake's Visual Studio generator and fail before Rust typechecking if local Visual Studio CUDA BuildCustomizations are stale. A known local failure is MSBuild selecting `CUDA 13.2.targets` while the installed toolkit is 13.1, then failing because `CUDA_PATH_V13_2` is unset and `CudaToolkitDir` resolves to an empty path.
+Use the Windows bundle scripts for CUDA/Vulkan validation; they default to Ninja. Raw `cargo check --workspace --all-targets --all-features` may still enter CMake's Visual Studio generator and fail before Rust typechecking if Visual Studio CUDA BuildCustomizations are stale. Known local failure: versioned CUDA targets leave `CudaToolkitDir` empty and emit `CUDA Toolkit directory '' does not exist`.
 
 When that happens, record the exact CUDA/MSBuild error, then validate the Rust all-features surface with an existing bundled lib directory:
 

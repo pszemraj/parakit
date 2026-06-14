@@ -68,9 +68,9 @@ $env:PARAKIT_CUDA_ARCHS = "89-real"
 
 `PARAKIT_CUDA_ARCHS` is passed directly to CMake as `CMAKE_CUDA_ARCHITECTURES`; values such as `native`, `89-real`, or semicolon-separated architecture lists are accepted by CMake/CUDA.
 
-GPU builds default `CMAKE_GENERATOR` to `Ninja` when the variable is unset. The script activates an amd64 Visual Studio C++ environment before Cargo runs, then verifies `cl.exe`, `link.exe`, and `ninja.exe`. This is intentional for CUDA: Visual Studio generators select CUDA from versioned MSBuild BuildCustomizations, so stale files such as `CUDA 13.2.targets` can override a shell where `nvcc` and `CUDA_PATH` point at 13.1.
+GPU builds default `CMAKE_GENERATOR` to `Ninja` when the variable is unset. The script activates an amd64 Visual Studio C++ environment before Cargo runs, then verifies `cl.exe`, `link.exe`, and `ninja.exe`. This is intentional for CUDA: Visual Studio generators select CUDA from versioned MSBuild BuildCustomizations, so stale versioned targets can override the toolkit selected by `nvcc` and `CUDA_PATH`.
 
-If you explicitly set a Visual Studio generator for CUDA, keep the matching CUDA Visual Studio integration installed and ensure the matching variable such as `CUDA_PATH_V13_1` resolves. The advanced override is `CMAKE_GENERATOR_TOOLSET=cuda=<toolkit-path>`, but Ninja is the normal bundle path.
+If you explicitly set a Visual Studio generator for CUDA, keep the matching CUDA Visual Studio integration installed and ensure the matching versioned variable, such as `CUDA_PATH_V13_2`, resolves. The advanced override is `CMAKE_GENERATOR_TOOLSET=cuda=<toolkit-path>`, but Ninja is the normal bundle path.
 
 When `ccache` is on `PATH`, ggml's fallback CMake build can auto-enable it. The script keeps that supported by setting `CCACHE_DIR`, `CCACHE_TEMPDIR`, and `CCACHE_BASEDIR` to repo-local paths under `target\tmp` unless you already set them. For troubleshooting, set `CCACHE_DISABLE=1` in the build shell to bypass caching without uninstalling ccache.
 
