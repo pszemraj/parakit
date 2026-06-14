@@ -365,7 +365,7 @@ fn open_cli_engine(cli: &Cli, fetch_quiet: bool, log: &Logger) -> Result<(PathBu
         .threads
         .map(NonZeroUsize::get)
         .unwrap_or_else(default_thread_count);
-    let device_mode = cli.effective_device_mode();
+    let device_mode = cli.device;
     validate_device_request(device_mode, log)?;
     let open_started = Instant::now();
     let engine = open_engine(&model_path, threads, device_mode, cli.verbose)

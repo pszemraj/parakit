@@ -177,15 +177,6 @@ impl Cli {
     pub(crate) fn effective_paste_mode(&self) -> PasteMode {
         self.paste_mode.unwrap_or_else(default_paste_mode)
     }
-
-    /// Return the requested runtime compute device mode.
-    ///
-    /// # Returns
-    ///
-    /// The library-level device mode selected by the CLI.
-    pub(crate) fn effective_device_mode(&self) -> DeviceMode {
-        self.device
-    }
 }
 
 /// Return the platform-specific default paste mode.
