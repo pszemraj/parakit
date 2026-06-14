@@ -5,6 +5,16 @@ use std::path::{Path, PathBuf};
 
 /// Return a clean test fixture root under `target/tmp`.
 ///
+/// # Arguments
+///
+/// * `namespace` - Directory grouping for a related fixture suite.
+/// * `name` - Specific fixture case name.
+///
+/// # Returns
+///
+/// A process-scoped fixture directory path. Any previous contents at that path
+/// are removed.
+///
 /// # Panics
 ///
 /// Does not panic.
@@ -18,6 +28,10 @@ pub(crate) fn fixture_root(namespace: &str, name: &str) -> PathBuf {
 }
 
 /// Create an empty fixture file, including parent directories.
+///
+/// # Arguments
+///
+/// * `path` - File path to create.
 ///
 /// # Panics
 ///
