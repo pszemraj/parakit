@@ -46,7 +46,8 @@ GPU-capable builds default to `--device auto`. In `auto`, CrispASR asks ggml for
 On Windows, the Vulkan bundle is the recommended GPU build for most users. It
 works across NVIDIA, AMD, and Intel drivers and avoids CUDA Toolkit runtime DLL
 setup. Use the CUDA bundle when you specifically want the NVIDIA CUDA backend or
-already manage CUDA Toolkit installs on the target machine.
+already manage CUDA Toolkit installs on the target machine. AMD-only and
+Intel-only Windows machines should use the Vulkan bundle for GPU acceleration.
 
 ```bash
 parakit --device auto

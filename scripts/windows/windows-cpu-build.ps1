@@ -374,6 +374,7 @@ function Configure-CompilerCache {
 
 function Assert-CudaBuildReady {
     Require-Command "nvcc" "Install the NVIDIA CUDA Toolkit and ensure nvcc is on PATH."
+    Set-CudaPathFromNvccIfMissing
 
     if ([string]::IsNullOrWhiteSpace($env:CUDA_PATH)) {
         throw "CUDA_PATH is not set. Install the NVIDIA CUDA Toolkit, or set CUDA_PATH to the toolkit root for this shell."
@@ -390,6 +391,35 @@ function Assert-CudaBuildReady {
 
     Write-Host "CUDA: using toolkit at $env:CUDA_PATH"
     Write-Host "CUDA: ggml-cuda first build can take tens of minutes; native/default arch keeps it to this machine."
+}
+
+function Set-CudaPathFromNvccIfMissing {
+    if (-not [string]::IsNullOrWhiteSpace($env:CUDA_PATH)) {
+        return
+    }
+
+    $nvcc = Get-Command "nvcc" -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($null -eq $nvcc -or [string]::IsNullOrWhiteSpace($nvcc.Source)) {
+        return
+    }
+
+    $nvccPath = $nvcc.Source
+    if (-not (Test-Path -LiteralPath $nvccPath -PathType Leaf)) {
+        return
+    }
+
+    $binDir = Split-Path -Parent $nvccPath
+    if ((Split-Path -Leaf $binDir) -ine "bin") {
+        return
+    }
+
+    $toolkitRoot = Split-Path -Parent $binDir
+    if ([string]::IsNullOrWhiteSpace($toolkitRoot) -or -not (Test-Path -LiteralPath $toolkitRoot -PathType Container)) {
+        return
+    }
+
+    $env:CUDA_PATH = $toolkitRoot
+    Write-Host "CUDA: inferred CUDA_PATH=$env:CUDA_PATH from nvcc on PATH"
 }
 
 function Assert-CudaVisualStudioToolset {
@@ -467,7 +497,10 @@ function Assert-VulkanBuildReady {
     if ([string]::IsNullOrWhiteSpace($env:VULKAN_SDK)) {
         $detected = Get-NewestVulkanSdk
         if ([string]::IsNullOrWhiteSpace($detected)) {
-            throw "VULKAN_SDK is not set and no C:\VulkanSDK install was found. Install the LunarG Vulkan SDK from vulkan.lunarg.com, or use winget install KhronosGroup.VulkanSDK."
+            $detected = Get-VulkanSdkFromGlslc
+        }
+        if ([string]::IsNullOrWhiteSpace($detected)) {
+            throw "VULKAN_SDK is not set and no Vulkan SDK install was found. Install the LunarG Vulkan SDK from vulkan.lunarg.com, use winget install KhronosGroup.VulkanSDK, or put glslc from a complete Vulkan SDK on PATH."
         }
         $env:VULKAN_SDK = $detected
         Write-Host "Vulkan: auto-detected SDK at $env:VULKAN_SDK"
@@ -500,6 +533,35 @@ function Get-NewestVulkanSdk {
         return $null
     }
     return $sdk.FullName
+}
+
+function Get-VulkanSdkFromGlslc {
+    $glslc = Get-Command "glslc" -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($null -eq $glslc -or [string]::IsNullOrWhiteSpace($glslc.Source)) {
+        return $null
+    }
+
+    $glslcPath = $glslc.Source
+    if (-not (Test-Path -LiteralPath $glslcPath -PathType Leaf)) {
+        return $null
+    }
+
+    $binDir = Split-Path -Parent $glslcPath
+    if ((Split-Path -Leaf $binDir) -ine "bin") {
+        return $null
+    }
+
+    $sdkRoot = Split-Path -Parent $binDir
+    $header = Join-Path $sdkRoot "Include\vulkan\vulkan.h"
+    $importLib = Join-Path $sdkRoot "Lib\vulkan-1.lib"
+    if (
+        (Test-Path -LiteralPath $header -PathType Leaf) -and
+        (Test-Path -LiteralPath $importLib -PathType Leaf)
+    ) {
+        return $sdkRoot
+    }
+
+    return $null
 }
 
 function Get-CargoTargetRoot {

@@ -46,8 +46,8 @@ Only one accelerator flavor is supported per bundle.
 | Flavor | Command | Build-time requirements | Runtime expectation |
 | --- | --- | --- | --- |
 | CPU | `windows-cpu-build.bat` | Visual Studio C++ tools, CMake, Rust | Generated CrispASR/ggml DLLs are bundled. |
-| CUDA | `windows-cuda-build.bat` | Visual Studio C++ tools, Ninja, NVIDIA CUDA Toolkit with `nvcc` and `CUDA_PATH` | NVIDIA-only. cuBLAS DLLs must be found through `%CUDA_PATH%\bin` or `PATH`, unless `--bundle-cuda-dlls` is used. |
-| Vulkan | `windows-vulkan-build.bat` | Visual Studio C++ tools, Ninja, LunarG Vulkan SDK with `glslc`; `VULKAN_SDK` may be autodetected from `C:\VulkanSDK\*` | Recommended Windows GPU flavor. `vulkan-1.dll` is provided by the installed GPU driver. |
+| CUDA | `windows-cuda-build.bat` | Visual Studio C++ tools, Ninja, NVIDIA CUDA Toolkit with `nvcc`; `CUDA_PATH` may be inferred from `nvcc.exe` on `PATH` | NVIDIA-only. cuBLAS DLLs must be found through `%CUDA_PATH%\bin` or `PATH`, unless `--bundle-cuda-dlls` is used. |
+| Vulkan | `windows-vulkan-build.bat` | Visual Studio C++ tools, Ninja, LunarG Vulkan SDK with `glslc`; `VULKAN_SDK` may be autodetected from `C:\VulkanSDK\*` or inferred from `glslc.exe` on `PATH` | Recommended Windows GPU flavor for NVIDIA, AMD, and Intel. `vulkan-1.dll` is provided by the installed GPU driver. |
 
 CUDA cuBLAS bundling is opt-in because `cublasLt64_*.dll` is large:
 
@@ -87,7 +87,7 @@ If path shortening does not fix a Vulkan shader-gen failure, capture the exact `
 
 The build writes `parakit-runtime-manifest.json` beside `parakit.exe`. The bundle copies every file in `required_files`, and the installer validates those entries before installing. OpenBLAS selection and manual path overrides are in [../../docs/build.md#blas-and-mkl](../../docs/build.md#blas-and-mkl). When `build.rs` selects a Windows OpenBLAS install, the bundle includes `openblas.dll` plus adjacent known runtime DLLs such as OpenMP, gfortran, GCC, quadmath, and winpthreads libraries when present.
 
-The manifest also records the selected accelerator and external runtime DLLs. CUDA external DLLs are hard requirements unless they were bundled. Vulkan's `vulkan-1.dll` is driver-managed; the installer warns if it cannot find the loader.
+The manifest also records the selected accelerator and external runtime DLLs. CUDA external DLLs are hard requirements unless they were bundled. Vulkan's `vulkan-1.dll` is driver-managed and must be present through System32 or `PATH`; install or update the NVIDIA, AMD, or Intel GPU driver before installing the Vulkan bundle.
 
 After installing, open a new terminal and run:
 
@@ -96,7 +96,7 @@ parakit doctor --deep
 parakit
 ```
 
-The installer runs `parakit --quiet doctor` after copying files. If Windows reports `0xC0000135`, the installer translates it to a missing-runtime-DLL message before PATH updates.
+The installer runs `parakit --version` after copying files. That checks Windows loader resolution without touching the hotkey, microphone, daemon lock, model cache, or clipboard. If Windows reports `0xC0000135`, the installer translates it to a missing-runtime-DLL message before PATH updates.
 
 The installer updates persistent User `PATH`; it cannot rewrite already-running parent shells.
 

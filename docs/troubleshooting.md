@@ -104,7 +104,7 @@ If a CUDA bundle fails to start with `0xC0000135` or `STATUS_DLL_NOT_FOUND`, Win
 scripts\windows\windows-cuda-build.bat --bundle-cuda-dlls
 ```
 
-For Vulkan bundles, `vulkan-1.dll` comes from the GPU driver package, not the Vulkan SDK. Install or update the NVIDIA, AMD, or Intel GPU driver if the installer warns that `vulkan-1.dll` is missing.
+For Vulkan bundles, `vulkan-1.dll` comes from the GPU driver package, not the Vulkan SDK. Install or update the NVIDIA, AMD, or Intel GPU driver if the installer reports that `vulkan-1.dll` is missing. Use the CPU bundle on machines without a Vulkan-capable driver.
 
 If `parakit --device gpu` fails before model load, run:
 

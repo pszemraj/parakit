@@ -263,7 +263,7 @@ function Assert-ExternalRuntimeDependencies {
         Assert-CudaExternalDlls $Manifest.cuda
     }
     if ($null -ne $Manifest.vulkan) {
-        Warn-VulkanExternalDlls $Manifest.vulkan
+        Assert-VulkanExternalDlls $Manifest.vulkan
     }
 }
 
@@ -300,7 +300,7 @@ function Assert-CudaExternalDlls {
     }
 }
 
-function Warn-VulkanExternalDlls {
+function Assert-VulkanExternalDlls {
     param(
         [Parameter(Mandatory = $true)]
         $Vulkan
@@ -312,10 +312,15 @@ function Warn-VulkanExternalDlls {
     }
 
     $systemDir = [System.Environment]::SystemDirectory
+    $missing = @()
     foreach ($dll in $dlls) {
         if (-not (Test-DllResolvable -Name $dll -ExtraDirs @($systemDir))) {
-            Write-Warning "Vulkan loader $dll was not found in System32 or PATH. Install a current NVIDIA, AMD, or Intel GPU driver before running the Vulkan bundle."
+            $missing += $dll
         }
+    }
+
+    if ($missing.Count -gt 0) {
+        throw "Vulkan bundle expects the driver-provided loader DLLs that were not found: $($missing -join ', '). Install or update the NVIDIA, AMD, or Intel GPU driver, or install the CPU bundle on machines without a Vulkan-capable driver."
     }
 }
 
@@ -327,7 +332,7 @@ function Invoke-InstallSmoke {
 
     $exe = Join-Path $Path "parakit.exe"
     try {
-        & $exe --quiet doctor
+        & $exe --version > $null
         $code = $LASTEXITCODE
     } catch {
         throw "Installed parakit.exe failed to start. This usually means a runtime DLL is missing. $($_.Exception.Message)"
@@ -337,10 +342,10 @@ function Invoke-InstallSmoke {
         throw "Installed parakit.exe failed to start with 0xC0000135 (STATUS_DLL_NOT_FOUND). A required runtime DLL is missing; check the bundle manifest external_dlls entries."
     }
     if ($code -ne 0) {
-        throw "Installed parakit doctor smoke test failed with exit code $code"
+        throw "Installed parakit loader smoke test failed with exit code $code"
     }
 
-    Write-Host "Smoke: parakit --quiet doctor OK"
+    Write-Host "Smoke: parakit --version OK"
 }
 
 function Test-StatusDllNotFoundExitCode {
