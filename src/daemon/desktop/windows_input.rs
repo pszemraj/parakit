@@ -340,18 +340,29 @@ mod tests {
             .collect()
     }
 
+    fn assert_event_codes(events: &[KeyEvent], expected: &[(u16, bool)]) {
+        assert_eq!(event_codes(events), expected);
+    }
+
+    fn assert_cleanup(events: &[KeyEvent], sent: usize, expected: &[(u16, bool)]) {
+        assert_event_codes(
+            &paste_cleanup_events_for_partial_send(events, sent),
+            expected,
+        );
+    }
+
     #[test]
     fn standard_paste_chord_releases_only_owned_control() {
         let events = paste_chord_events(false);
 
-        assert_eq!(
-            event_codes(&events),
-            vec![
+        assert_event_codes(
+            &events,
+            &[
                 (VK_CONTROL.0, false),
                 (VK_V.0, false),
                 (VK_V.0, true),
                 (VK_CONTROL.0, true),
-            ]
+            ],
         );
         assert!(!events.iter().any(|event| {
             event.vk == VK_MENU
@@ -370,16 +381,16 @@ mod tests {
     fn terminal_paste_chord_includes_shift_in_one_batch() {
         let events = paste_chord_events(true);
 
-        assert_eq!(
-            event_codes(&events),
-            vec![
+        assert_event_codes(
+            &events,
+            &[
                 (VK_CONTROL.0, false),
                 (VK_SHIFT.0, false),
                 (VK_V.0, false),
                 (VK_V.0, true),
                 (VK_SHIFT.0, true),
                 (VK_CONTROL.0, true),
-            ]
+            ],
         );
         assert_eq!(
             events
@@ -394,41 +405,21 @@ mod tests {
     fn partial_paste_send_cleans_up_unreleased_owned_keys() {
         let standard = paste_chord_events(false);
 
-        assert_eq!(
-            event_codes(&paste_cleanup_events_for_partial_send(&standard, 0)),
-            Vec::<(u16, bool)>::new()
-        );
-        assert_eq!(
-            event_codes(&paste_cleanup_events_for_partial_send(&standard, 1)),
-            vec![(VK_CONTROL.0, true)]
-        );
-        assert_eq!(
-            event_codes(&paste_cleanup_events_for_partial_send(&standard, 2)),
-            vec![(VK_V.0, true), (VK_CONTROL.0, true)]
-        );
-        assert_eq!(
-            event_codes(&paste_cleanup_events_for_partial_send(&standard, 3)),
-            vec![(VK_CONTROL.0, true)]
-        );
+        assert_cleanup(&standard, 0, &[]);
+        assert_cleanup(&standard, 1, &[(VK_CONTROL.0, true)]);
+        assert_cleanup(&standard, 2, &[(VK_V.0, true), (VK_CONTROL.0, true)]);
+        assert_cleanup(&standard, 3, &[(VK_CONTROL.0, true)]);
 
         let terminal = paste_chord_events(true);
 
-        assert_eq!(
-            event_codes(&paste_cleanup_events_for_partial_send(&terminal, 2)),
-            vec![(VK_SHIFT.0, true), (VK_CONTROL.0, true)]
+        assert_cleanup(&terminal, 2, &[(VK_SHIFT.0, true), (VK_CONTROL.0, true)]);
+        assert_cleanup(
+            &terminal,
+            3,
+            &[(VK_V.0, true), (VK_SHIFT.0, true), (VK_CONTROL.0, true)],
         );
-        assert_eq!(
-            event_codes(&paste_cleanup_events_for_partial_send(&terminal, 3)),
-            vec![(VK_V.0, true), (VK_SHIFT.0, true), (VK_CONTROL.0, true)]
-        );
-        assert_eq!(
-            event_codes(&paste_cleanup_events_for_partial_send(&terminal, 4)),
-            vec![(VK_SHIFT.0, true), (VK_CONTROL.0, true)]
-        );
-        assert_eq!(
-            event_codes(&paste_cleanup_events_for_partial_send(&terminal, 5)),
-            vec![(VK_CONTROL.0, true)]
-        );
+        assert_cleanup(&terminal, 4, &[(VK_SHIFT.0, true), (VK_CONTROL.0, true)]);
+        assert_cleanup(&terminal, 5, &[(VK_CONTROL.0, true)]);
     }
 
     #[test]

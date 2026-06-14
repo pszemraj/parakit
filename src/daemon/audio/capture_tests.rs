@@ -242,6 +242,22 @@ fn pre_roll_vec(state: &CaptureState) -> Vec<f32> {
     state.pre_roll.iter().copied().collect()
 }
 
+fn audio_handle_with_control(
+    control_tx: Sender<AudioControl>,
+    epoch: u64,
+    buffer: Vec<f32>,
+) -> AudioHandle {
+    AudioHandle {
+        state: Arc::new(Mutex::new(CaptureState {
+            buffer,
+            pre_roll: VecDeque::new(),
+        })),
+        session_epoch: Arc::new(AtomicU64::new(epoch)),
+        next_session_epoch: Arc::new(AtomicU64::new(epoch)),
+        control: Arc::new(Mutex::new(Some(control_tx))),
+    }
+}
+
 #[test]
 fn stop_recording_without_drain_takes_buffered_samples() {
     let handle = AudioHandle::test_handle();
@@ -256,12 +272,7 @@ fn stop_recording_without_drain_takes_buffered_samples() {
 #[test]
 fn sent_audio_control_start_timeout_does_not_fallback_to_direct_state() {
     let (control_tx, _control_rx) = bounded::<AudioControl>(1);
-    let handle = AudioHandle {
-        state: Arc::new(Mutex::new(CaptureState::new())),
-        session_epoch: Arc::new(AtomicU64::new(0)),
-        next_session_epoch: Arc::new(AtomicU64::new(0)),
-        control: Arc::new(Mutex::new(Some(control_tx))),
-    };
+    let handle = audio_handle_with_control(control_tx, 0, Vec::new());
 
     let err = handle
         .start_recording()
@@ -279,12 +290,7 @@ fn full_audio_control_queue_does_not_block_or_fallback() {
     control_tx
         .try_send(AudioControl::Stop { ack: ack_tx })
         .expect("preload control queue");
-    let handle = AudioHandle {
-        state: Arc::new(Mutex::new(CaptureState::new())),
-        session_epoch: Arc::new(AtomicU64::new(0)),
-        next_session_epoch: Arc::new(AtomicU64::new(0)),
-        control: Arc::new(Mutex::new(Some(control_tx))),
-    };
+    let handle = audio_handle_with_control(control_tx, 0, Vec::new());
 
     let err = handle
         .start_recording()
@@ -302,15 +308,7 @@ fn stop_recording_control_failure_resets_recording_state() {
     control_tx
         .try_send(AudioControl::Stop { ack: ack_tx })
         .expect("preload control queue");
-    let handle = AudioHandle {
-        state: Arc::new(Mutex::new(CaptureState {
-            buffer: vec![0.4, -0.4],
-            pre_roll: VecDeque::new(),
-        })),
-        session_epoch: Arc::new(AtomicU64::new(7)),
-        next_session_epoch: Arc::new(AtomicU64::new(7)),
-        control: Arc::new(Mutex::new(Some(control_tx))),
-    };
+    let handle = audio_handle_with_control(control_tx, 7, vec![0.4, -0.4]);
 
     let err = handle
         .stop_recording()
