@@ -168,49 +168,7 @@ function Add-UserPathEntry {
     }
 
     [System.Environment]::SetEnvironmentVariable("Path", $newValue, "User")
-    try {
-        Broadcast-EnvironmentChange
-    } catch {
-        # Updating the persistent User PATH is the required operation. The
-        # shell broadcast only helps already-running Windows processes notice.
-    }
     return $true
-}
-
-function Broadcast-EnvironmentChange {
-    $type = @"
-using System;
-using System.Runtime.InteropServices;
-
-public static class ParakitEnvironmentBroadcast {
-    [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Auto)]
-    public static extern IntPtr SendMessageTimeout(
-        IntPtr hWnd,
-        uint Msg,
-        UIntPtr wParam,
-        string lParam,
-        uint fuFlags,
-        uint uTimeout,
-        out UIntPtr lpdwResult);
-}
-"@
-
-    if (-not ("ParakitEnvironmentBroadcast" -as [type])) {
-        Add-Type -TypeDefinition $type
-    }
-
-    $result = [UIntPtr]::Zero
-    $hwndBroadcast = [IntPtr]0xffff
-    $wmSettingChange = 0x001a
-    $smtoAbortIfHung = 0x0002
-    [void][ParakitEnvironmentBroadcast]::SendMessageTimeout(
-        $hwndBroadcast,
-        $wmSettingChange,
-        [UIntPtr]::Zero,
-        "Environment",
-        $smtoAbortIfHung,
-        5000,
-        [ref]$result)
 }
 
 function Get-SearchPathEntries {

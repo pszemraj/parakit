@@ -6,11 +6,11 @@ Windows builds need an installed runnable directory, not only `parakit.exe`. Cri
 
 `cargo install --path .` is different: Cargo installs only `parakit.exe` into Cargo's bin directory. It does not copy the generated CrispASR, ggml, or OpenBLAS DLLs. Use one of these scripts when you want a normal Windows install.
 
-By default, the CPU script builds `target\parakit-windows-x86_64-cpu`, installs it to `%LOCALAPPDATA%\Programs\parakit`, and adds that install directory to the Windows User `PATH`. GPU scripts build sibling bundle directories with `-cuda` or `-vulkan` suffixes. They do not edit the system `PATH` and do not require administrator rights.
+By default, the CPU script builds `target\parakit-windows-x86_64-cpu`, installs it to `%LOCALAPPDATA%\Programs\parakit`, and adds that install directory to the Windows User `PATH`. GPU scripts build sibling bundle directories with `-cuda` or `-vulkan` suffixes. They do not edit the system `PATH`, create firewall rules, open TCP ports, or require administrator rights.
 
 The installer is intentionally per-user. It refuses system locations such as `C:\Windows` and `C:\Program Files\...`; those paths require admin rights on normal Windows systems and are the wrong default for a developer or corporate laptop.
 
-The scripts do not create symlinks and do not require Windows Developer Mode.
+The scripts do not create symlinks, junctions, or temporary drive-letter mappings, and do not require Windows Developer Mode.
 
 ## Build
 
@@ -31,13 +31,12 @@ NVIDIA-only and either needs matching CUDA Toolkit cuBLAS DLLs available through
 PowerShell equivalent from PowerShell:
 
 ```powershell
-Set-ExecutionPolicy -Scope Process Bypass
 .\scripts\windows\windows-cpu-build.ps1
 .\scripts\windows\windows-cpu-build.ps1 --cuda
 .\scripts\windows\windows-cpu-build.ps1 --vulkan
 ```
 
-The build script checks whether `vendor\CrispASR` is already populated before touching submodules. If the submodule is present and pinned, the script does not contact GitHub. On a firewalled machine, use a checkout or source archive that already includes `vendor\CrispASR`, or pass `--no-submodules` to fail fast instead of trying to initialize it.
+The build script checks whether `vendor\CrispASR` is already populated before touching submodules. If the submodule is present and pinned, the script does not contact GitHub. If it must initialize the submodule, it runs Git non-interactively so firewalled machines fail instead of opening credential prompts. On a firewalled machine, use a checkout or source archive that already includes `vendor\CrispASR`, or pass `--no-submodules` to fail fast instead of trying to initialize it.
 
 ## Bundle Flavors
 
@@ -72,12 +71,12 @@ If you explicitly set a Visual Studio generator for CUDA, keep the matching CUDA
 
 When `ccache` is on `PATH`, ggml's fallback CMake build can auto-enable it. The script keeps that supported by setting `CCACHE_DIR`, `CCACHE_TEMPDIR`, and `CCACHE_BASEDIR` to repo-local paths under `target\tmp` unless you already set them. For troubleshooting, set `CCACHE_DISABLE=1` in the build shell to bypass caching without uninstalling ccache.
 
-Vulkan builds can fail in ggml's shader generator when the checkout plus Cargo target path is too deep. When the script detects a risky path and `CARGO_TARGET_DIR` is not an absolute path, it temporarily maps a free drive letter to the repo, reruns the build through that short path, and removes the mapping afterward. Rust `sccache` wrappers are disabled only inside that mapped build because this local setup cannot spawn rustc correctly from a substituted drive; C/C++ `ccache` remains enabled with the repo-local cache.
+Vulkan builds can fail in ggml's shader generator when the checkout plus Cargo target path is too deep. The script warns for risky paths and fails early when the estimated shader object path exceeds CMake's practical MSVC object path limit. It does not shorten paths by mapping temporary drive letters; set `CARGO_TARGET_DIR` explicitly instead.
 
 If you set an absolute `CARGO_TARGET_DIR`, choose a short path:
 
 ```powershell
-$env:CARGO_TARGET_DIR = "C:\t"
+$env:CARGO_TARGET_DIR = "$env:USERPROFILE\parakit-target"
 .\scripts\windows\windows-vulkan-build.bat --no-install
 ```
 
@@ -98,7 +97,7 @@ parakit
 
 The installer runs `parakit --version` after copying files. That checks Windows loader resolution without touching the hotkey, microphone, daemon lock, model cache, or clipboard. If Windows reports `0xC0000135`, the installer translates it to a missing-runtime-DLL message before PATH updates.
 
-The installer updates persistent User `PATH`; it cannot rewrite already-running parent shells.
+The installer updates persistent User `PATH`; it does not broadcast an environment change to already-running applications. Open a new terminal after install.
 
 If Group Policy blocks User `PATH` writes, the install still succeeds and prints a warning. Run `%LOCALAPPDATA%\Programs\parakit\parakit.exe` directly, add the directory through your approved endpoint-management path, or rerun with `--no-user-path` when PATH changes are not allowed.
 

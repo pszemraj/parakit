@@ -15,5 +15,5 @@ if errorlevel 1 (
     )
 )
 
-"%POWERSHELL_EXE%" -NoProfile -ExecutionPolicy Bypass -File "%PS_SCRIPT%" %PARAKIT_WINDOWS_BUILD_FLAVOR_ARG% %*
+"%POWERSHELL_EXE%" -NoProfile -ExecutionPolicy RemoteSigned -File "%PS_SCRIPT%" %PARAKIT_WINDOWS_BUILD_FLAVOR_ARG% %*
 exit /b %ERRORLEVEL%

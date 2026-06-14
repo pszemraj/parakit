@@ -1,7 +1,7 @@
 # Build and bundle Parakit daemon flavors on native Windows.
 #
 # Usage:
-#   powershell -ExecutionPolicy Bypass -File scripts/windows/windows-cpu-build.ps1 [options]
+#   powershell -ExecutionPolicy RemoteSigned -File scripts/windows/windows-cpu-build.ps1 [options]
 #
 # By default this builds a repo-local bundle, installs it to the per-user
 # Windows app directory, and adds that directory to the User PATH.
@@ -632,7 +632,7 @@ function Write-VulkanPathLengthWarnings {
     $targetRoot = Get-CargoTargetRoot
     $samplePath = Join-Path $targetRoot "$Profile\build\parakit-0000000000000000\out\build\vendor\CrispASR\ggml\src\ggml-vulkan\CMakeFiles\vulkan-shaders-gen.dir\vulkan-shaders\matmul_id_subgroup_q6_k_f32_f16acc_aligned_c00.cxx.obj"
     if ($samplePath.Length -ge 240) {
-        Write-Warning "Vulkan: estimated shader build object path is $($samplePath.Length) characters. ggml-vulkan can exceed Windows MAX_PATH from deep checkouts; set CARGO_TARGET_DIR to a short absolute path such as C:\t, or build from a shorter checkout such as C:\src\parakit."
+        Write-Warning "Vulkan: estimated shader build object path is $($samplePath.Length) characters. ggml-vulkan can exceed Windows path limits from deep checkouts; set CARGO_TARGET_DIR to a short absolute user-writable path such as `$env:USERPROFILE\parakit-target, or build from a shorter checkout such as C:\src\parakit."
     }
 
     $longPathsEnabled = Get-LongPathsEnabled
@@ -652,75 +652,17 @@ function Get-RepoRoot {
     return (Resolve-Path (Join-Path $scriptDir "..\..")).Path
 }
 
-function Invoke-ThroughShortRepoDriveIfNeeded {
+function Assert-VulkanBuildPathLength {
     if ($Flavor -ne "vulkan") {
-        return
-    }
-    if ($env:PARAKIT_SHORT_REPO_DRIVE_ACTIVE -eq "1") {
-        return
-    }
-    if (-not [string]::IsNullOrWhiteSpace($env:CARGO_TARGET_DIR) -and [System.IO.Path]::IsPathRooted($env:CARGO_TARGET_DIR)) {
         return
     }
 
     $estimatedLength = Get-VulkanShaderObjectPathEstimate -RepoRoot $repo
-    if ($estimatedLength -lt 230) {
+    if ($estimatedLength -lt 250) {
         return
     }
 
-    $drive = Get-FreeSubstDrive
-    if ([string]::IsNullOrWhiteSpace($drive)) {
-        Write-Warning "Vulkan: no free drive letter was available for a short build path; continuing from $repo."
-        return
-    }
-
-    Write-Host "Vulkan: mapping ${drive}\ to $repo for shorter shader build paths"
-    & subst.exe $drive $repo
-    if ($LASTEXITCODE -ne 0) {
-        Write-Warning "Vulkan: subst failed for ${drive}; continuing from $repo."
-        return
-    }
-
-    $previousShortDrive = $env:PARAKIT_SHORT_REPO_DRIVE_ACTIVE
-    $previousRustcWrapper = $env:RUSTC_WRAPPER
-    $previousRustcWorkspaceWrapper = $env:RUSTC_WORKSPACE_WRAPPER
-    $previousCargoRustcWrapper = $env:CARGO_BUILD_RUSTC_WRAPPER
-    try {
-        $env:PARAKIT_SHORT_REPO_DRIVE_ACTIVE = "1"
-        Write-Host "Vulkan: disabling Cargo rustc wrappers for short-path build"
-        $env:RUSTC_WRAPPER = ""
-        $env:RUSTC_WORKSPACE_WRAPPER = ""
-        $env:CARGO_BUILD_RUSTC_WRAPPER = ""
-        $mappedScript = Join-Path "${drive}\" "scripts\windows\windows-cpu-build.ps1"
-        & $mappedScript @RawArgs
-        if (-not $?) {
-            throw "Windows Vulkan build failed through ${drive}\"
-        }
-    } finally {
-        if ([string]::IsNullOrWhiteSpace($previousShortDrive)) {
-            Remove-Item Env:\PARAKIT_SHORT_REPO_DRIVE_ACTIVE -ErrorAction SilentlyContinue
-        } else {
-            $env:PARAKIT_SHORT_REPO_DRIVE_ACTIVE = $previousShortDrive
-        }
-        if ([string]::IsNullOrWhiteSpace($previousRustcWrapper)) {
-            Remove-Item Env:\RUSTC_WRAPPER -ErrorAction SilentlyContinue
-        } else {
-            $env:RUSTC_WRAPPER = $previousRustcWrapper
-        }
-        if ([string]::IsNullOrWhiteSpace($previousRustcWorkspaceWrapper)) {
-            Remove-Item Env:\RUSTC_WORKSPACE_WRAPPER -ErrorAction SilentlyContinue
-        } else {
-            $env:RUSTC_WORKSPACE_WRAPPER = $previousRustcWorkspaceWrapper
-        }
-        if ([string]::IsNullOrWhiteSpace($previousCargoRustcWrapper)) {
-            Remove-Item Env:\CARGO_BUILD_RUSTC_WRAPPER -ErrorAction SilentlyContinue
-        } else {
-            $env:CARGO_BUILD_RUSTC_WRAPPER = $previousCargoRustcWrapper
-        }
-        & subst.exe $drive /D
-    }
-
-    exit 0
+    throw "Vulkan shader build paths are estimated at $estimatedLength characters, which exceeds CMake's practical MSVC object path limit. Set CARGO_TARGET_DIR to a short absolute user-writable path such as `$env:USERPROFILE\parakit-target, or clone/build from a shorter path, then rerun the build. The script does not map temporary drive letters automatically because managed Windows environments can block that behavior."
 }
 
 function Get-VulkanShaderObjectPathEstimate {
@@ -731,23 +673,14 @@ function Get-VulkanShaderObjectPathEstimate {
 
     $targetRoot = if ([string]::IsNullOrWhiteSpace($env:CARGO_TARGET_DIR)) {
         Join-Path $RepoRoot "target"
+    } elseif ([System.IO.Path]::IsPathRooted($env:CARGO_TARGET_DIR)) {
+        [System.IO.Path]::GetFullPath($env:CARGO_TARGET_DIR)
     } else {
         Join-Path $RepoRoot $env:CARGO_TARGET_DIR
     }
 
     $samplePath = Join-Path $targetRoot "$Profile\build\parakit-0000000000000000\out\build\ggml\src\ggml-vulkan\vulkan-shaders-gen-prefix\src\vulkan-shaders-gen-build\CMakeFiles\CMakeScratch\TryCompile-000000\CMakeFiles\cmTC_00000.dir\testCCompiler.c.obj"
     return $samplePath.Length
-}
-
-function Get-FreeSubstDrive {
-    foreach ($letter in @("V", "P", "R", "Q", "W", "X", "Y", "Z")) {
-        $drive = "${letter}:"
-        if (-not (Test-Path "${drive}\")) {
-            return $drive
-        }
-    }
-
-    return $null
 }
 
 function Get-DefaultInstallDir {
@@ -844,6 +777,27 @@ function Assert-CrispAsrSubmoduleReady {
     throw "CrispASR submodule is missing or not at the pinned revision. Use a checkout/source archive with vendor\CrispASR populated, or run git submodule update --init --recursive on a network that can reach the submodule remote."
 }
 
+function Invoke-GitSubmoduleUpdate {
+    $previousGitPrompt = $env:GIT_TERMINAL_PROMPT
+    $previousGcmInteractive = $env:GCM_INTERACTIVE
+    try {
+        $env:GIT_TERMINAL_PROMPT = "0"
+        $env:GCM_INTERACTIVE = "Never"
+        Invoke-Checked "git" "submodule" "update" "--init" "--recursive"
+    } finally {
+        if ([string]::IsNullOrWhiteSpace($previousGitPrompt)) {
+            Remove-Item Env:\GIT_TERMINAL_PROMPT -ErrorAction SilentlyContinue
+        } else {
+            $env:GIT_TERMINAL_PROMPT = $previousGitPrompt
+        }
+        if ([string]::IsNullOrWhiteSpace($previousGcmInteractive)) {
+            Remove-Item Env:\GCM_INTERACTIVE -ErrorAction SilentlyContinue
+        } else {
+            $env:GCM_INTERACTIVE = $previousGcmInteractive
+        }
+    }
+}
+
 Assert-NativeWindows
 
 Require-Command "cargo" "Install Rust with rustup using the MSVC toolchain."
@@ -851,8 +805,8 @@ Require-Command "rustc" "Install Rust with rustup using the MSVC toolchain."
 Require-Command "cmake" "Install CMake and ensure it is on PATH."
 
 $repo = Get-RepoRoot
-Invoke-ThroughShortRepoDriveIfNeeded
 Set-Location $repo
+Assert-VulkanBuildPathLength
 
 if ($NoSubmodules) {
     Assert-CrispAsrSubmoduleReady
@@ -861,8 +815,8 @@ if ($NoSubmodules) {
     Write-Host "Submodules: ready"
 } else {
     Require-Command "git" "Install Git for Windows and ensure it is on PATH, or use --no-submodules with vendor\CrispASR already populated."
-    Write-Host "Updating submodules"
-    Invoke-Checked "git" "submodule" "update" "--init" "--recursive"
+    Write-Host "Updating submodules (non-interactive)"
+    Invoke-GitSubmoduleUpdate
     Assert-CrispAsrSubmoduleReady
 }
 
@@ -892,10 +846,6 @@ Write-Host "Building $Profile ($Flavor)"
 $cargoArgs = @("build", "--locked")
 if ($Profile -eq "release") {
     $cargoArgs += "--release"
-}
-if ($env:PARAKIT_SHORT_REPO_DRIVE_ACTIVE -eq "1") {
-    $cargoArgs += @("--config", "build.rustc-wrapper = ''")
-    $cargoArgs += @("--config", "build.rustc-workspace-wrapper = ''")
 }
 if ($Flavor -ne "cpu") {
     $cargoArgs += @("--features", $Flavor)
