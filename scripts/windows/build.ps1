@@ -31,17 +31,13 @@ $OpenBlasRoot = $null
 $BundleCudaDlls = $false
 $AllowBackendSwitch = $false
 
-if ($DebugPreference -ne "SilentlyContinue") {
-    $Profile = "debug"
-}
-
 function Show-Usage {
     $entryPoint = "scripts\windows\build.ps1"
 
     Write-Host "Build Parakit daemon backends on native Windows."
     Write-Host ""
     Write-Host "Usage:"
-    Write-Host "  $entryPoint [--backend cpu|cuda|vulkan] [--blas auto|off|openblas|mkl|generic] [--openblas-root DIR] [--bundle-cuda-dlls] [--release] [--debug] [--no-submodules] [--no-install] [--no-user-path] [--allow-backend-switch|--force] [--install-dir DIR]"
+    Write-Host "  $entryPoint [--backend cpu|cuda|vulkan] [--blas auto|off|openblas|mkl|generic] [--openblas-root DIR] [--bundle-cuda-dlls] [--release|--debug|-Profile release|debug] [--no-submodules] [--no-install] [--no-user-path] [--allow-backend-switch|--force] [--install-dir DIR]"
     Write-Host ""
     Write-Host "Options:"
     Write-Host "  --backend        Build backend: cpu, cuda, or vulkan. If omitted, an interactive selector opens; Enter selects CPU."
@@ -54,6 +50,7 @@ function Show-Usage {
     Write-Host "                   CUDA only: copy cudart64_*.dll, cublas64_*.dll, and cublasLt64_*.dll into the bundle."
     Write-Host "  --release        Build target\release and bundle it. This is the default."
     Write-Host "  --debug          Build target\debug and bundle it into the same target bundle."
+    Write-Host "  -Profile         PowerShell-compatible profile selector: release or debug."
     Write-Host "  --no-submodules  Do not run git submodule update --init --recursive."
     Write-Host "  --no-install     Build the repo-local bundle without installing it."
     Write-Host "  --no-user-path   Install without adding the install directory to User PATH."
@@ -302,6 +299,10 @@ Write-Host "Backend: $Backend"
 
 if ($BundleCudaDlls -and $Backend -ne "cuda") {
     throw "--bundle-cuda-dlls is only valid with --backend cuda or --cuda."
+}
+
+if ($NoInstall -and ($NoUserPath -or $AllowBackendSwitch -or -not [string]::IsNullOrWhiteSpace($InstallDir))) {
+    throw "--no-user-path, --allow-backend-switch/--force, and --install-dir only apply when installing. Remove them when using --no-install."
 }
 
 if (-not [string]::IsNullOrWhiteSpace($OpenBlasRoot) -and
