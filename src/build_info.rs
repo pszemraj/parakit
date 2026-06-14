@@ -80,7 +80,7 @@ pub fn accelerator_enabled() -> bool {
 /// # Returns
 ///
 /// `true` when `GGML_CUDA` was `ON` in the bundled CMake cache.
-pub fn cuda_enabled() -> bool {
+fn cuda_enabled() -> bool {
     build_value!("PARAKIT_BUILD_GGML_CUDA") == "ON"
 }
 
@@ -89,7 +89,7 @@ pub fn cuda_enabled() -> bool {
 /// # Returns
 ///
 /// `true` when `GGML_VULKAN` was `ON` in the bundled CMake cache.
-pub fn vulkan_enabled() -> bool {
+fn vulkan_enabled() -> bool {
     build_value!("PARAKIT_BUILD_GGML_VULKAN") == "ON"
 }
 
@@ -98,7 +98,7 @@ pub fn vulkan_enabled() -> bool {
 /// # Returns
 ///
 /// `true` when `GGML_METAL` was `ON` in the bundled CMake cache.
-pub fn metal_enabled() -> bool {
+fn metal_enabled() -> bool {
     build_value!("PARAKIT_BUILD_GGML_METAL") == "ON"
 }
 

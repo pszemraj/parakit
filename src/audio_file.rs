@@ -11,11 +11,11 @@ use std::path::Path;
 pub const RESAMPLE_CHUNK_SIZE: usize = 1024;
 
 /// Decoded mono WAV audio.
-pub struct WavData {
+struct WavData {
     /// PCM samples mixed to mono.
-    pub samples: Vec<f32>,
+    samples: Vec<f32>,
     /// Source file sample rate.
-    pub sample_rate: u32,
+    sample_rate: u32,
 }
 
 /// WAV audio prepared for the model input path.
@@ -57,7 +57,7 @@ impl PreparedWav {
 ///
 /// Returns an error when the file cannot be read or uses an unsupported sample
 /// representation.
-pub fn read_wav_mono(path: &Path) -> Result<WavData> {
+fn read_wav_mono(path: &Path) -> Result<WavData> {
     let mut reader = hound::WavReader::open(path)
         .with_context(|| format!("failed to open {}", path.display()))?;
     let spec = reader.spec();
@@ -131,7 +131,7 @@ pub fn prepare_wav_for_model(path: &Path) -> Result<PreparedWav> {
 /// # Panics
 ///
 /// Does not panic.
-pub fn resample_to_target(samples: Vec<f32>, source_rate: u32) -> Result<Vec<f32>> {
+fn resample_to_target(samples: Vec<f32>, source_rate: u32) -> Result<Vec<f32>> {
     if source_rate == TARGET_RATE || samples.is_empty() {
         return Ok(samples);
     }

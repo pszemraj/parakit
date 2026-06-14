@@ -3,7 +3,7 @@
 use crate::constants::TARGET_RATE;
 
 /// Low nonzero amplitude used for synthetic warmup audio.
-pub const SYNTHETIC_AMPLITUDE: f32 = 0.02;
+const SYNTHETIC_AMPLITUDE: f32 = 0.02;
 
 /// Build deterministic non-silent mono PCM at the model sample rate.
 ///

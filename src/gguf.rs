@@ -43,7 +43,7 @@ const COMMON_DTYPE_NAMES: &[(u32, &str)] = &[
 /// Returns an error when the file cannot be read or is not a supported GGUF
 /// header. Runtime callers should usually display `unknown` instead of
 /// treating this as fatal.
-pub fn detect_dtype(path: &Path) -> Result<Option<String>> {
+fn detect_dtype(path: &Path) -> Result<Option<String>> {
     let mut file = File::open(path).with_context(|| format!("open {}", path.display()))?;
     let mut magic = [0_u8; 4];
     file.read_exact(&mut magic)?;

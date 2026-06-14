@@ -6,14 +6,14 @@
 //!
 //! ## How rules are applied
 //!
-//! Rules apply in the order they appear in [`DEFAULT_RULES`]. Each rule's
+//! Rules apply in the order they appear in `DEFAULT_RULES`. Each rule's
 //! output is the next rule's input. Order matters — for example, leading
 //! filler removal ("So, ") happens before whitespace collapse, otherwise the
 //! comma-space leftovers wouldn't get cleaned.
 //!
 //! ## How to add a rule
 //!
-//! Append a [`Rule`] entry to [`DEFAULT_RULES`]. Use Rust regex syntax
+//! Append a `Rule` entry to `DEFAULT_RULES`. Use Rust regex syntax
 //! (effectively PCRE-lite, no lookbehind). Use `(?i)` for case-insensitive,
 //! `\b` for word boundaries, `$1` etc. for capture references.
 //!
@@ -36,11 +36,11 @@ use regex::Regex;
 use std::collections::HashSet;
 
 /// A single text-cleaning rule.
-pub struct Rule {
-    pub name: &'static str,
-    pub description: &'static str,
-    pub pattern: &'static str,
-    pub replacement: &'static str,
+struct Rule {
+    name: &'static str,
+    description: &'static str,
+    pattern: &'static str,
+    replacement: &'static str,
 }
 
 /// Compiled at startup.
@@ -64,7 +64,7 @@ impl Cleaner {
     /// # Errors
     ///
     /// Returns an error if any enabled rule contains an invalid regex pattern.
-    pub fn new(disabled: &HashSet<String>) -> Result<Self> {
+    fn new(disabled: &HashSet<String>) -> Result<Self> {
         let mut rules = Vec::with_capacity(DEFAULT_RULES.len());
         for r in DEFAULT_RULES {
             if disabled.contains(r.name) {
@@ -252,7 +252,7 @@ macro_rules! partial_stutter_rule {
 }
 
 /// Built-in transcript cleanup rules in application order.
-pub const DEFAULT_RULES: &[Rule] = &[
+const DEFAULT_RULES: &[Rule] = &[
     // -------------------------------------------------------------------------
     // Filler words at sentence start ("So, I think..." → "I think...")
     // -------------------------------------------------------------------------
