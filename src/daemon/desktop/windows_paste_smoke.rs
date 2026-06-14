@@ -96,6 +96,10 @@ pub(crate) fn windows_paste_smoke_test(mode: PasteMode) -> Result<()> {
         .context("focus Windows paste smoke edit window")?;
     pump_messages_for(FOCUS_SETTLE);
 
+    // This smoke window is pumped by the current thread. The production
+    // Injector path waits before restoring, so this same-thread control cannot
+    // process Ctrl+V until after restore. Keep the smoke focused on Win32 input
+    // acceptance and read-back; unit tests cover the restore gate ordering.
     let mut clipboard = Clipboard::new().context("could not open system clipboard")?;
     let previous = ClipboardSnapshot::capture(&mut clipboard);
     let test_result = (|| -> Result<()> {
