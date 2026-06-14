@@ -3,7 +3,7 @@
 use anyhow::{Context, Result};
 use clap::Parser;
 use crossbeam_channel::{bounded, unbounded};
-use parakit::audio_file::{read_wav_mono, resample_to_target};
+use parakit::audio_file::prepare_wav_for_model;
 use parakit::data_log::DataLogger;
 use parakit::fetch::{self, FetchOptions, FetchSource};
 use parakit::gguf;
@@ -287,21 +287,15 @@ fn run_ptt_audio_simulation(cli: &Cli, log: Arc<Logger>, audio_path: &Path) -> R
         .map(|dir| Arc::new(DataLogger::new(dir, cli.log_format)));
     let sounds = Sounds::new(false);
 
-    let load_started = Instant::now();
-    let mut wav = read_wav_mono(audio_path)?;
-    let load_elapsed = load_started.elapsed();
-    let source_rate = wav.sample_rate;
-    let source_samples = wav.samples.len();
-    let resample_started = Instant::now();
-    wav.samples = resample_to_target(wav.samples, source_rate)?;
-    let resample_elapsed = resample_started.elapsed();
-    let audio_secs = wav.samples.len() as f32 / parakit::constants::TARGET_RATE as f32;
+    let prepare_started = Instant::now();
+    let wav = prepare_wav_for_model(audio_path)?;
+    let prepare_elapsed = prepare_started.elapsed();
+    let audio_secs = wav.audio_secs();
     log.verbose(format!(
-        "parakit: simulated audio prepared in {:.0}ms (read/downmix {:.0}ms, resample {:.0}ms, source_samples={}, target_samples={})",
-        (load_elapsed + resample_elapsed).as_secs_f32() * 1000.0,
-        load_elapsed.as_secs_f32() * 1000.0,
-        resample_elapsed.as_secs_f32() * 1000.0,
-        source_samples,
+        "parakit: simulated audio prepared in {:.0}ms (source_rate={} Hz, source_samples={}, target_samples={})",
+        prepare_elapsed.as_secs_f32() * 1000.0,
+        wav.source_rate,
+        wav.source_samples,
         wav.samples.len()
     ));
 
@@ -309,7 +303,8 @@ fn run_ptt_audio_simulation(cli: &Cli, log: Arc<Logger>, audio_path: &Path) -> R
 
     let msg = format!(
         "parakit: simulating PTT from {} ({audio_secs:.2}s, {source_rate} Hz source)",
-        audio_path.display()
+        audio_path.display(),
+        source_rate = wav.source_rate
     );
     log.line(&msg);
 

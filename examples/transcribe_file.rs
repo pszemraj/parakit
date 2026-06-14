@@ -6,8 +6,7 @@
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use parakit::audio_file::{read_wav_mono, resample_to_target};
-use parakit::constants::TARGET_RATE;
+use parakit::audio_file::prepare_wav_for_model;
 use parakit::fetch;
 use parakit::gguf;
 use parakit::inference::{default_thread_count, DeviceMode, Engine};
@@ -50,10 +49,9 @@ struct Cli {
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    let mut wav = read_wav_mono(&cli.audio)?;
-    let original_rate = wav.sample_rate;
-    wav.samples = resample_to_target(wav.samples, original_rate)?;
-    let audio_secs = wav.samples.len() as f32 / TARGET_RATE as f32;
+    let wav = prepare_wav_for_model(&cli.audio)?;
+    let original_rate = wav.source_rate;
+    let audio_secs = wav.audio_secs();
 
     let model_path = match cli.model.as_deref() {
         Some(path) => path.to_path_buf(),

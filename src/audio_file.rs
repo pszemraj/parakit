@@ -18,6 +18,27 @@ pub struct WavData {
     pub sample_rate: u32,
 }
 
+/// WAV audio prepared for the model input path.
+pub struct PreparedWav {
+    /// Mono PCM samples resampled to [`TARGET_RATE`].
+    pub samples: Vec<f32>,
+    /// Source file sample rate before resampling.
+    pub source_rate: u32,
+    /// Source sample count after downmixing and before resampling.
+    pub source_samples: usize,
+}
+
+impl PreparedWav {
+    /// Return the prepared audio duration in seconds.
+    ///
+    /// # Returns
+    ///
+    /// Duration of the model-rate PCM payload.
+    pub fn audio_secs(&self) -> f32 {
+        self.samples.len() as f32 / TARGET_RATE as f32
+    }
+}
+
 /// Read a WAV file, normalize samples to `f32`, and mix it to mono.
 ///
 /// # Arguments
@@ -60,6 +81,31 @@ pub fn read_wav_mono(path: &Path) -> Result<WavData> {
     Ok(WavData {
         samples: mix_to_mono(&samples, spec.channels as usize),
         sample_rate: spec.sample_rate,
+    })
+}
+
+/// Read, downmix, and resample a WAV file for model input.
+///
+/// # Arguments
+///
+/// * `path` - WAV file to prepare.
+///
+/// # Returns
+///
+/// Mono PCM at [`TARGET_RATE`] plus source metadata useful for diagnostics.
+///
+/// # Errors
+///
+/// Returns an error when the WAV cannot be decoded or resampled.
+pub fn prepare_wav_for_model(path: &Path) -> Result<PreparedWav> {
+    let wav = read_wav_mono(path)?;
+    let source_rate = wav.sample_rate;
+    let source_samples = wav.samples.len();
+    let samples = resample_to_target(wav.samples, source_rate)?;
+    Ok(PreparedWav {
+        samples,
+        source_rate,
+        source_samples,
     })
 }
 
@@ -215,5 +261,29 @@ mod tests {
             resample_to_target(vec![0.1, -0.1], TARGET_RATE).unwrap(),
             vec![0.1, -0.1]
         );
+    }
+
+    #[test]
+    fn prepare_wav_for_model_keeps_source_metadata() {
+        let dir = Path::new("target/tmp/audio-file-tests");
+        std::fs::create_dir_all(dir).unwrap();
+        let path = dir.join("target-rate.wav");
+        let spec = WavSpec {
+            channels: 1,
+            sample_rate: TARGET_RATE,
+            bits_per_sample: 16,
+            sample_format: SampleFormat::Int,
+        };
+        let mut writer = WavWriter::create(&path, spec).unwrap();
+        writer.write_sample::<i16>(16_384).unwrap();
+        writer.write_sample::<i16>(-16_384).unwrap();
+        writer.finalize().unwrap();
+
+        let wav = prepare_wav_for_model(&path).unwrap();
+
+        assert_eq!(wav.source_rate, TARGET_RATE);
+        assert_eq!(wav.source_samples, 2);
+        assert_eq!(wav.samples.len(), 2);
+        assert!((wav.audio_secs() - 2.0 / TARGET_RATE as f32).abs() < f32::EPSILON);
     }
 }
