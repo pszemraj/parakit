@@ -1,30 +1,15 @@
 //! Integration coverage for Windows CUDA runtime DLL layout detection.
 
+mod common;
 #[path = "../build/windows_cuda.rs"]
 mod windows_cuda;
 
 use std::fs;
-use std::path::{Path, PathBuf};
 
 use windows_cuda::{
     cuda_external_dll_names, cuda_runtime_dirs, derive_cuda_external_dll_names,
     discover_cuda_external_dll_names, display_paths, is_cuda_external_dll_name,
 };
-
-fn fixture_root(name: &str) -> PathBuf {
-    let root = Path::new("target")
-        .join("tmp")
-        .join("windows-cuda-layout-tests")
-        .join(format!("{}-{name}", std::process::id()));
-    let _ = fs::remove_dir_all(&root);
-    root
-}
-
-fn touch(path: &Path) {
-    fs::create_dir_all(path.parent().expect("fixture file should have parent"))
-        .expect("fixture parent should be created");
-    fs::write(path, b"").expect("fixture file should be created");
-}
 
 #[test]
 fn derives_cuda_runtime_dll_names_from_toolkit_major_as_fallback() {
@@ -41,11 +26,11 @@ fn derives_cuda_runtime_dll_names_from_toolkit_major_as_fallback() {
 
 #[test]
 fn discovers_cuda_runtime_dlls_from_bin_x64_without_version_assumptions() {
-    let root = fixture_root("bin-x64");
-    touch(&root.join("bin/x64/cublasLt64_99.dll"));
-    touch(&root.join("bin/x64/cudart64_99.dll"));
-    touch(&root.join("bin/x64/cublas64_99.dll"));
-    touch(&root.join("bin/x64/nvrtc64_990_0.dll"));
+    let root = common::fixture_root("windows-cuda-layout-tests", "bin-x64");
+    common::touch(&root.join("bin/x64/cublasLt64_99.dll"));
+    common::touch(&root.join("bin/x64/cudart64_99.dll"));
+    common::touch(&root.join("bin/x64/cublas64_99.dll"));
+    common::touch(&root.join("bin/x64/nvrtc64_990_0.dll"));
 
     assert_eq!(
         discover_cuda_external_dll_names(&root),
@@ -55,10 +40,10 @@ fn discovers_cuda_runtime_dlls_from_bin_x64_without_version_assumptions() {
 
 #[test]
 fn resolved_cuda_dll_names_prefer_discovered_toolkit_files() {
-    let root = fixture_root("prefer-discovered");
-    touch(&root.join("bin/cudart64_42.dll"));
-    touch(&root.join("bin/cublas64_42.dll"));
-    touch(&root.join("bin/cublasLt64_42.dll"));
+    let root = common::fixture_root("windows-cuda-layout-tests", "prefer-discovered");
+    common::touch(&root.join("bin/cudart64_42.dll"));
+    common::touch(&root.join("bin/cublas64_42.dll"));
+    common::touch(&root.join("bin/cublasLt64_42.dll"));
 
     assert_eq!(
         cuda_external_dll_names(Some(&root), "13.2"),
@@ -68,7 +53,7 @@ fn resolved_cuda_dll_names_prefer_discovered_toolkit_files() {
 
 #[test]
 fn resolved_cuda_dll_names_fall_back_to_toolkit_major_when_discovery_is_empty() {
-    let root = fixture_root("fallback");
+    let root = common::fixture_root("windows-cuda-layout-tests", "fallback");
     fs::create_dir_all(root.join("bin")).expect("fixture bin dir should be created");
 
     assert_eq!(
@@ -79,7 +64,7 @@ fn resolved_cuda_dll_names_fall_back_to_toolkit_major_when_discovery_is_empty() 
 
 #[test]
 fn cuda_runtime_dirs_include_bin_and_bin_x64_layouts() {
-    let root = fixture_root("runtime-dirs");
+    let root = common::fixture_root("windows-cuda-layout-tests", "runtime-dirs");
     fs::create_dir_all(root.join("bin/x64")).expect("fixture bin/x64 dir should be created");
 
     assert_eq!(
@@ -102,8 +87,8 @@ fn cuda_runtime_dll_filter_accepts_required_runtime_names_only() {
 fn display_paths_joins_candidate_dirs_for_errors() {
     assert_eq!(
         display_paths(&[
-            PathBuf::from("C:\\CUDA\\bin"),
-            PathBuf::from("C:\\CUDA\\bin\\x64")
+            std::path::PathBuf::from("C:\\CUDA\\bin"),
+            std::path::PathBuf::from("C:\\CUDA\\bin\\x64")
         ]),
         "C:\\CUDA\\bin, C:\\CUDA\\bin\\x64"
     );
