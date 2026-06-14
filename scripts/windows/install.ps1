@@ -204,18 +204,34 @@ function Assert-ExternalRuntimeDependencies {
     }
 }
 
-function Get-BundleAccelerator {
+function Get-ManifestAccelerator {
     param(
         [Parameter(Mandatory = $true)]
         $Manifest
     )
 
     $accelerator = $Manifest.accelerator
-    if ([string]::IsNullOrWhiteSpace($accelerator)) {
-        return "unknown"
+    if (-not [string]::IsNullOrWhiteSpace($accelerator)) {
+        return $accelerator.ToString().Trim().ToLowerInvariant()
     }
 
-    return $accelerator.ToString().Trim().ToLowerInvariant()
+    if ($null -ne $Manifest.cuda) {
+        return "cuda"
+    }
+    if ($null -ne $Manifest.vulkan) {
+        return "vulkan"
+    }
+
+    foreach ($required in @($Manifest.required_files)) {
+        if ($required -ieq "ggml-cuda.dll") {
+            return "cuda"
+        }
+        if ($required -ieq "ggml-vulkan.dll") {
+            return "vulkan"
+        }
+    }
+
+    return "cpu"
 }
 
 function Get-InstalledAccelerator {
@@ -235,7 +251,7 @@ function Get-InstalledAccelerator {
         return "unreadable"
     }
 
-    return Get-BundleAccelerator $manifest
+    return Get-ManifestAccelerator $manifest
 }
 
 function Assert-BackendReplacementAllowed {
@@ -261,7 +277,7 @@ function Assert-BackendReplacementAllowed {
         return
     }
 
-    $incoming = Get-BundleAccelerator $Manifest
+    $incoming = Get-ManifestAccelerator $Manifest
     if ($installed.Equals($incoming, [System.StringComparison]::OrdinalIgnoreCase)) {
         return
     }
