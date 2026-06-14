@@ -29,6 +29,16 @@ pub(crate) fn fixture_root(namespace: &str, name: &str) -> PathBuf {
 
 /// Return a clean fixture root and create empty files relative to it.
 ///
+/// # Arguments
+///
+/// * `namespace` - Directory grouping for a related fixture suite.
+/// * `name` - Specific fixture case name.
+/// * `files` - Relative file paths to create below the fixture root.
+///
+/// # Returns
+///
+/// The clean fixture root containing the requested files.
+///
 /// # Panics
 ///
 /// Panics if any fixture file cannot be created.
