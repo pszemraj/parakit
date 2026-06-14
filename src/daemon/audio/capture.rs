@@ -26,13 +26,16 @@ use std::time::Duration;
 use super::pactl::{pactl_default_source_info, pactl_default_source_name};
 use crate::daemon::logging::Logger;
 use crate::daemon::notifications::Notifier;
+use crate::daemon::recording::MAX_UTTERANCE_SECONDS;
 
 pub use parakit::constants::TARGET_RATE;
 
 /// Reusable capacity for ordinary dictation bursts.
 const RECORDING_CAPACITY: usize = TARGET_RATE as usize * 90;
 /// Hard cap for one held recording to prevent unbounded memory growth.
-const MAX_RECORDING_SAMPLES: usize = TARGET_RATE as usize * 60 * 5;
+const RECORDING_HARD_CAP_HEADROOM_SECONDS: usize = 30;
+const MAX_RECORDING_SAMPLES: usize =
+    TARGET_RATE as usize * (MAX_UTTERANCE_SECONDS as usize + RECORDING_HARD_CAP_HEADROOM_SECONDS);
 const PRE_ROLL_SAMPLES: usize = TARGET_RATE as usize * 350 / 1000;
 const AUDIO_RING_SECONDS: usize = 6;
 const AUDIO_RING_MIN_CAPACITY: usize = TARGET_RATE as usize * AUDIO_RING_SECONDS;

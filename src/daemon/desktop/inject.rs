@@ -30,6 +30,8 @@ use x11rb::protocol::xproto::ConnectionExt as _;
 #[cfg(target_os = "linux")]
 use x11rb::rust_connection::RustConnection;
 
+#[cfg(target_os = "windows")]
+use super::clipboard_restore::clipboard_history_debug;
 #[cfg(test)]
 use super::clipboard_restore::ClipboardWriteSnapshot;
 use super::clipboard_restore::{
@@ -1071,14 +1073,6 @@ fn sleep_if_nonzero(delay: Duration) {
     if !delay.is_zero() {
         thread::sleep(delay);
     }
-}
-
-#[cfg(target_os = "windows")]
-fn clipboard_history_debug(message: impl std::fmt::Display) {
-    #[cfg(debug_assertions)]
-    eprintln!("parakit: debug: {message}");
-    #[cfg(not(debug_assertions))]
-    let _ = message;
 }
 
 #[cfg(target_os = "macos")]
