@@ -10,6 +10,8 @@
 # Toolkit; Vulkan requires the LunarG Vulkan SDK at build time.
 
 param(
+    # Keep one catch-all so direct PowerShell calls such as `-Profile debug`
+    # and cmd-style calls such as `--backend vulkan` both reach the same parser.
     [Parameter(ValueFromRemainingArguments = $true)]
     [string[]]$RawArgs
 )
