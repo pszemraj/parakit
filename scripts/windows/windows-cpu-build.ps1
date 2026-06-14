@@ -125,6 +125,10 @@ if ($BundleCudaDlls -and $Flavor -ne "cuda") {
     throw "--bundle-cuda-dlls is only valid with --cuda."
 }
 
+if (-not [string]::IsNullOrWhiteSpace($env:CRISPASR_LIB_DIR)) {
+    throw "Windows bundle builds require the bundled CrispASR staging path so runtime DLLs and parakit-runtime-manifest.json are produced. Unset CRISPASR_LIB_DIR before running this script."
+}
+
 function Require-Command {
     param(
         [Parameter(Mandatory = $true)]
@@ -629,10 +633,9 @@ function Get-LongPathsEnabled {
 }
 
 function Write-VulkanPathLengthWarnings {
-    $targetRoot = Get-CargoTargetRoot
-    $samplePath = Join-Path $targetRoot "$Profile\build\parakit-0000000000000000\out\build\vendor\CrispASR\ggml\src\ggml-vulkan\CMakeFiles\vulkan-shaders-gen.dir\vulkan-shaders\matmul_id_subgroup_q6_k_f32_f16acc_aligned_c00.cxx.obj"
-    if ($samplePath.Length -ge 240) {
-        Write-Warning "Vulkan: estimated shader build object path is $($samplePath.Length) characters. ggml-vulkan can exceed Windows path limits from deep checkouts; set CARGO_TARGET_DIR to a short absolute user-writable path such as `$env:USERPROFILE\parakit-target, or build from a shorter checkout such as C:\src\parakit."
+    $sample = Get-VulkanShaderObjectPathSample -RepoRoot $repo
+    if ($sample.Length -ge 240) {
+        Write-Warning "Vulkan: estimated shader build object path is $($sample.Length) characters. ggml-vulkan can exceed Windows path limits from deep checkouts; set CARGO_TARGET_DIR to a short absolute user-writable path such as `$env:USERPROFILE\parakit-target, or build from a shorter checkout such as C:\src\parakit."
     }
 
     $longPathsEnabled = Get-LongPathsEnabled
@@ -659,12 +662,12 @@ function Assert-VulkanBuildPathLength {
 
     Set-DefaultVulkanCargoTargetDirIfNeeded
 
-    $estimatedLength = Get-VulkanShaderObjectPathEstimate -RepoRoot $repo
-    if ($estimatedLength -lt 250) {
+    $sample = Get-VulkanShaderObjectPathSample -RepoRoot $repo
+    if ($sample.Length -lt 250) {
         return
     }
 
-    throw "Vulkan shader build paths are estimated at $estimatedLength characters, which exceeds CMake's practical MSVC object path limit. Set CARGO_TARGET_DIR to a shorter absolute user-writable path, or clone/build from a shorter path, then rerun the build. The script does not map temporary drive letters automatically because managed Windows environments can block that behavior."
+    throw "Vulkan shader build paths are estimated at $($sample.Length) characters, which exceeds CMake's practical MSVC object path limit. Set CARGO_TARGET_DIR to a shorter absolute user-writable path, or clone/build from a shorter path, then rerun the build. The script does not map temporary drive letters automatically because managed Windows environments can block that behavior."
 }
 
 function Set-DefaultVulkanCargoTargetDirIfNeeded {
@@ -672,8 +675,8 @@ function Set-DefaultVulkanCargoTargetDirIfNeeded {
         return
     }
 
-    $repoTargetEstimate = Get-VulkanShaderObjectPathEstimate -RepoRoot $repo
-    if ($repoTargetEstimate -lt 250) {
+    $repoTargetSample = Get-VulkanShaderObjectPathSample -RepoRoot $repo
+    if ($repoTargetSample.Length -lt 250) {
         return
     }
 
@@ -690,7 +693,7 @@ function Get-DefaultVulkanCargoTargetDir {
     return [System.IO.Path]::GetFullPath((Join-Path $repo "target"))
 }
 
-function Get-VulkanShaderObjectPathEstimate {
+function Get-VulkanShaderObjectPathSample {
     param(
         [Parameter(Mandatory = $true)]
         [string]$RepoRoot
@@ -705,7 +708,10 @@ function Get-VulkanShaderObjectPathEstimate {
     }
 
     $samplePath = Join-Path $targetRoot "$Profile\build\parakit-0000000000000000\out\build\ggml\src\ggml-vulkan\vulkan-shaders-gen-prefix\src\vulkan-shaders-gen-build\CMakeFiles\CMakeScratch\TryCompile-000000\CMakeFiles\cmTC_00000.dir\testCCompiler.c.obj"
-    return $samplePath.Length
+    return [pscustomobject]@{
+        Path = $samplePath
+        Length = $samplePath.Length
+    }
 }
 
 function Get-DefaultInstallDir {
@@ -878,8 +884,8 @@ if ($Flavor -ne "cpu") {
 Clear-StaleCMakePathAliasCaches
 Invoke-Checked "cargo" @cargoArgs
 
-$targetRoot = Join-Path $repo "target"
-$profileDir = Join-Path $targetRoot $Profile
+$cargoTargetRoot = Get-CargoTargetRoot
+$profileDir = Join-Path $cargoTargetRoot $Profile
 $exe = Join-Path $profileDir "parakit.exe"
 $runtimeManifest = Join-Path $profileDir "parakit-runtime-manifest.json"
 
@@ -891,12 +897,13 @@ if (-not (Test-Path -LiteralPath $runtimeManifest -PathType Leaf)) {
     throw "Runtime manifest was not produced at $runtimeManifest"
 }
 
-if (-not (Test-Path -LiteralPath $targetRoot)) {
-    New-Item -ItemType Directory -Path $targetRoot | Out-Null
+$bundleRoot = Join-Path $repo "target"
+if (-not (Test-Path -LiteralPath $bundleRoot)) {
+    New-Item -ItemType Directory -Path $bundleRoot | Out-Null
 }
 
-$bundleDir = Join-Path $targetRoot "parakit-windows-x86_64-$Flavor"
-Assert-ChildPath -Child $bundleDir -Parent $targetRoot
+$bundleDir = Join-Path $bundleRoot "parakit-windows-x86_64-$Flavor"
+Assert-ChildPath -Child $bundleDir -Parent $bundleRoot
 
 if (Test-Path -LiteralPath $bundleDir) {
     Remove-Item -LiteralPath $bundleDir -Recurse -Force
