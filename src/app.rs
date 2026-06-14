@@ -369,6 +369,8 @@ fn open_cli_engine(cli: &Cli, fetch_quiet: bool, log: &Logger) -> Result<(PathBu
         engine.threads(),
         device_summary
     ));
+    // Warmup is a startup readiness check, not only a latency hint: it runs
+    // the same transcribe path the first real dictation would use.
     warm_up_engine(&engine, log)?;
     Ok((model_path, engine))
 }

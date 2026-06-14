@@ -1014,10 +1014,16 @@ impl ClipboardSnapshot {
         }
 
         if let Ok(html) = clipboard.get_html() {
-            return Self::Html {
-                html,
-                alt_text: clipboard.get_text().ok(),
-            };
+            let alt_text = clipboard.get_text().ok();
+            // Browser image copies can expose transient HTML plus bitmap data.
+            // Without a text alternative, the decoded image is usually the
+            // restorable user-visible payload.
+            if alt_text.as_deref().is_none_or(str::is_empty) {
+                if let Ok(image) = clipboard.get_image() {
+                    return Self::Image(owned_image(image));
+                }
+            }
+            return Self::Html { html, alt_text };
         }
 
         if let Ok(image) = clipboard.get_image() {

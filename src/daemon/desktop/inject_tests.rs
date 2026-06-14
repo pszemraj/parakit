@@ -14,6 +14,13 @@ enum MockClipboardContent {
         html: String,
         alt_text: Option<String>,
     },
+    HtmlImage {
+        html: String,
+        alt_text: Option<String>,
+        width: usize,
+        height: usize,
+        bytes: Vec<u8>,
+    },
     FileList(Vec<PathBuf>),
     Image {
         width: usize,
@@ -51,6 +58,16 @@ impl MockClipboard {
         Self::with_content(MockClipboardContent::Html {
             html: html.into(),
             alt_text: alt_text.map(str::to_owned),
+        })
+    }
+
+    fn html_image(html: impl Into<String>, alt_text: Option<&str>) -> Self {
+        Self::with_content(MockClipboardContent::HtmlImage {
+            html: html.into(),
+            alt_text: alt_text.map(str::to_owned),
+            width: 2,
+            height: 1,
+            bytes: vec![1, 2, 3, 4],
         })
     }
 
@@ -106,6 +123,10 @@ impl ClipboardStore for MockClipboard {
                 alt_text: Some(text),
                 ..
             } => Ok(text.clone()),
+            MockClipboardContent::HtmlImage {
+                alt_text: Some(text),
+                ..
+            } => Ok(text.clone()),
             _ => anyhow::bail!("clipboard is not text"),
         }
     }
@@ -119,7 +140,8 @@ impl ClipboardStore for MockClipboard {
 
     fn get_html(&mut self) -> Result<String> {
         match &self.content {
-            MockClipboardContent::Html { html, .. } => Ok(html.clone()),
+            MockClipboardContent::Html { html, .. }
+            | MockClipboardContent::HtmlImage { html, .. } => Ok(html.clone()),
             _ => anyhow::bail!("clipboard is not HTML"),
         }
     }
@@ -156,6 +178,12 @@ impl ClipboardStore for MockClipboard {
                 width,
                 height,
                 bytes,
+            }
+            | MockClipboardContent::HtmlImage {
+                width,
+                height,
+                bytes,
+                ..
             } => Ok(ImageData {
                 width: *width,
                 height: *height,
@@ -979,6 +1007,42 @@ fn clipboard_restore_policy_preserves_supported_non_text_payloads() {
                 "guard".to_string(),
                 "paste".to_string(),
                 "set-image:2x1:4".to_string(),
+            ],
+        ),
+        (
+            "html image without text alternative",
+            MockClipboard::html_image(r#"<img src="blob:chatgpt-image">"#, None),
+            MockClipboardContent::Image {
+                width: 2,
+                height: 1,
+                bytes: vec![1, 2, 3, 4],
+            },
+            vec![
+                "guard".to_string(),
+                "read".to_string(),
+                "set:dictated text".to_string(),
+                "guard".to_string(),
+                "paste".to_string(),
+                "set-image:2x1:4".to_string(),
+            ],
+        ),
+        (
+            "html image with text alternative",
+            MockClipboard::html_image(
+                r#"<img src="https://example.invalid/image.webp">"#,
+                Some("image alt"),
+            ),
+            MockClipboardContent::Html {
+                html: r#"<img src="https://example.invalid/image.webp">"#.to_string(),
+                alt_text: Some("image alt".to_string()),
+            },
+            vec![
+                "guard".to_string(),
+                "read".to_string(),
+                "set:dictated text".to_string(),
+                "guard".to_string(),
+                "paste".to_string(),
+                "set-html:<img src=\"https://example.invalid/image.webp\">:image alt".to_string(),
             ],
         ),
     ];

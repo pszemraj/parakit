@@ -157,7 +157,8 @@ impl ListenerState {
         let latest = shared.latest_sequence;
         shared.waiters.retain(|waiter| {
             if latest >= waiter.target_sequence {
-                waiter.tx.send(()).is_err()
+                let _ = waiter.tx.send(());
+                false
             } else {
                 true
             }
@@ -322,4 +323,53 @@ unsafe extern "system" fn listener_wnd_proc(
     // SAFETY: The listener does not own message-specific state; all messages
     // are forwarded to the default window procedure.
     unsafe { DefWindowProcW(hwnd, message, wparam, lparam) }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn satisfied_waiter_is_removed_when_receiver_is_gone() {
+        let state = ListenerState::new(1);
+        let waiter_id = state.next_waiter_id.fetch_add(1, Ordering::Relaxed);
+        let (tx, rx) = mpsc::channel();
+        drop(rx);
+
+        {
+            let mut shared = state.shared.lock().expect("listener mutex");
+            shared.waiters.push(ClipboardWaiter {
+                id: waiter_id,
+                target_sequence: 2,
+                tx,
+            });
+        }
+
+        state.observe_sequence(2);
+
+        let shared = state.shared.lock().expect("listener mutex");
+        assert!(shared.waiters.is_empty());
+    }
+
+    #[test]
+    fn unsatisfied_waiter_remains_pending() {
+        let state = ListenerState::new(1);
+        let waiter_id = state.next_waiter_id.fetch_add(1, Ordering::Relaxed);
+        let (tx, _rx) = mpsc::channel();
+
+        {
+            let mut shared = state.shared.lock().expect("listener mutex");
+            shared.waiters.push(ClipboardWaiter {
+                id: waiter_id,
+                target_sequence: 3,
+                tx,
+            });
+        }
+
+        state.observe_sequence(2);
+
+        let shared = state.shared.lock().expect("listener mutex");
+        assert_eq!(shared.waiters.len(), 1);
+        assert_eq!(shared.waiters[0].id, waiter_id);
+    }
 }

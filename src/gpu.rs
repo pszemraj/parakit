@@ -5,6 +5,9 @@ use std::os::raw::{c_char, c_int};
 
 type GgmlBackendDev = *mut GgmlBackendDevice;
 
+// Prefix mirror of ggml's `ggml_backend_device` and leading
+// `ggml_backend_device_i` fields. Keep this in sync with
+// vendor/CrispASR/ggml/src/ggml-backend-impl.h through `get_type`.
 #[repr(C)]
 struct GgmlBackendDevice {
     iface: GgmlBackendDeviceIface,
