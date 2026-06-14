@@ -1,5 +1,18 @@
 # Windows Build Scripts
 
+## 30-Second Version
+
+- Normal CPU install: run `scripts\windows\build.bat` and press Enter.
+- Recommended Windows GPU install: run `scripts\windows\build.bat --backend vulkan`.
+- CUDA install: run `scripts\windows\build.bat --backend cuda` only when you specifically need NVIDIA CUDA.
+- Build without replacing the installed command: add `--no-install`.
+- Intentionally replace an installed CPU/CUDA/Vulkan backend with another: add `--force`.
+- After install, open a new terminal and run `parakit doctor --deep`.
+
+From PowerShell, use `.\scripts\windows\build.ps1 ...` instead of `build.bat`. For debug builds, use `-Profile debug`.
+
+## Why The Script Exists
+
 Windows builds need an installed runnable directory, not only `parakit.exe`. CrispASR and ggml build shared DLLs, and Windows loads those DLLs from the executable directory or `PATH`.
 
 `cargo build` works for development because `build.rs` copies the generated DLLs next to `target\debug\parakit.exe` or `target\release\parakit.exe`.
@@ -14,30 +27,14 @@ All backends install into the same default per-user app directory. The installer
 
 The installer is intentionally per-user. It refuses system locations such as `C:\Windows` and `C:\Program Files\...`; those paths require admin rights on normal Windows systems and are the wrong default for a developer or corporate laptop.
 
-## Quick Start
+## Backend Selection
 
-Run without a backend flag to choose from the keyboard menu:
+If you omit `--backend`, the script opens a keyboard menu. It accepts Up/Down, `1`/`2`/`3`, and Enter. CPU starts highlighted, so pressing Enter selects CPU.
 
-```bat
-scripts\windows\build.bat
-```
-
-The menu accepts Up/Down, `1`/`2`/`3`, and Enter. Enter selects the highlighted default, which starts on CPU.
-
-Explicit backend builds:
-
-```bat
-scripts\windows\build.bat --backend cpu
-scripts\windows\build.bat --backend cuda
-scripts\windows\build.bat --backend vulkan
-```
-
-`build.bat` is only a `cmd.exe` wrapper around the PowerShell implementation. From PowerShell, call the implementation directly:
+`build.bat` is a `cmd.exe` wrapper around the PowerShell implementation. From PowerShell, call the implementation directly:
 
 ```powershell
 .\scripts\windows\build.ps1
-.\scripts\windows\build.ps1 --backend cpu
-.\scripts\windows\build.ps1 --backend cuda
 .\scripts\windows\build.ps1 --backend vulkan
 ```
 
