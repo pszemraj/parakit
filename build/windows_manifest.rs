@@ -94,27 +94,6 @@ impl RuntimeManifest {
     }
 }
 
-/// Derive CUDA runtime DLL names from a CUDA Toolkit version string.
-///
-/// # Returns
-///
-/// The expected `cudart64_<major>.dll`, `cublas64_<major>.dll`,
-/// and `cublasLt64_<major>.dll` names,
-/// or an empty vector when no numeric major version can be parsed.
-pub(crate) fn cuda_external_dll_names(toolkit_version: &str) -> Vec<String> {
-    let Some(major) = toolkit_version
-        .split(|ch: char| !ch.is_ascii_digit())
-        .find(|part| !part.is_empty())
-    else {
-        return Vec::new();
-    };
-    vec![
-        format!("cudart64_{major}.dll"),
-        format!("cublas64_{major}.dll"),
-        format!("cublasLt64_{major}.dll"),
-    ]
-}
-
 fn cuda_manifest_value(cuda: &CudaManifest) -> Value {
     json!({
         "toolkit_version": &cuda.toolkit_version,

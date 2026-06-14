@@ -6,8 +6,8 @@ mod windows_manifest;
 use serde_json::Value;
 
 use windows_manifest::{
-    cuda_external_dll_names, Accelerator, BlasManifest, CudaManifest, RuntimeManifest,
-    VulkanManifest, WINDOWS_RUNTIME_MANIFEST,
+    Accelerator, BlasManifest, CudaManifest, RuntimeManifest, VulkanManifest,
+    WINDOWS_RUNTIME_MANIFEST,
 };
 
 fn base_blas() -> BlasManifest {
@@ -108,7 +108,11 @@ fn preserves_experimental_multi_backend_metadata() {
         cuda: Some(CudaManifest {
             toolkit_version: "12.9".to_string(),
             architectures: "native".to_string(),
-            external_dlls: cuda_external_dll_names("12.9"),
+            external_dlls: vec![
+                "cudart64_12.dll".to_string(),
+                "cublas64_12.dll".to_string(),
+                "cublasLt64_12.dll".to_string(),
+            ],
             external_dlls_bundled: true,
         }),
         vulkan: Some(VulkanManifest {
@@ -121,19 +125,6 @@ fn preserves_experimental_multi_backend_metadata() {
     assert_eq!(json["accelerator"], "cuda");
     assert!(json["cuda"].is_object());
     assert!(json["vulkan"].is_object());
-}
-
-#[test]
-fn derives_cuda_runtime_dll_names_from_toolkit_major() {
-    assert_eq!(
-        cuda_external_dll_names("13.2"),
-        vec!["cudart64_13.dll", "cublas64_13.dll", "cublasLt64_13.dll"]
-    );
-    assert_eq!(
-        cuda_external_dll_names("Cuda compilation tools, release 12.6, V12.6.85"),
-        vec!["cudart64_12.dll", "cublas64_12.dll", "cublasLt64_12.dll"]
-    );
-    assert!(cuda_external_dll_names("unknown").is_empty());
 }
 
 #[test]
