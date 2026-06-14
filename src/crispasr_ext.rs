@@ -1,8 +1,9 @@
 //! Local extensions over the pinned CrispASR Rust bindings.
 //!
-//! The vendored safe crate has not bound `crispasr_session_open_with_params`
-//! yet. This module keeps the raw ABI use narrow so parakit can choose CPU or
-//! GPU at session open without modifying the submodule.
+//! The vendored C API exports `crispasr_session_open_with_params`, but the
+//! `crispasr-sys` Rust bindings have not exposed it yet. This module keeps the
+//! raw ABI use narrow so parakit can choose CPU or GPU at session open without
+//! modifying the submodule.
 
 use crate::ffi_util::c_string_lossy;
 use crispasr::{SessionSegment, SessionWord};
