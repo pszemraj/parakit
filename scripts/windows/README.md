@@ -2,6 +2,9 @@
 
 ## 30-Second Version
 
+> [!NOTE]
+> Commands in this file are meant to run from the repository root (`parakit\`). If your shell is already in `scripts\windows`, run `cd ..\..` first.
+
 - Normal CPU install: run `scripts\windows\build.bat` and press Enter.
 - Recommended Windows GPU install: run `scripts\windows\build.bat --backend vulkan`.
 - CUDA install: run `scripts\windows\build.bat --backend cuda` only when you specifically need NVIDIA CUDA.
