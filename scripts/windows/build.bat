@@ -12,5 +12,5 @@ if errorlevel 1 (
     )
 )
 
-"%POWERSHELL_EXE%" -NoProfile -ExecutionPolicy RemoteSigned -File "%~dp0build-bundle.ps1" %*
+"%POWERSHELL_EXE%" -NoProfile -ExecutionPolicy RemoteSigned -File "%~dp0build.ps1" %*
 exit /b %ERRORLEVEL%

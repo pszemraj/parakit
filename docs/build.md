@@ -13,7 +13,7 @@ Cargo handles Rust packages. System packages are still needed for audio, desktop
 | Ubuntu 24.04 | `cmake build-essential libasound2-dev libudev-dev libxtst-dev libxi-dev libx11-dev libxkbcommon-dev libevdev-dev libxdo-dev libgomp1 pkg-config autoconf libtool` |
 | Fedora | `cmake gcc-c++ alsa-lib-devel libudev-devel libXtst-devel libXi-devel libX11-devel libxkbcommon-devel libevdev-devel xdotool-devel pkgconf autoconf libtool` |
 | Arch | `cmake base-devel alsa-lib libxtst libxi libx11 libxkbcommon libevdev xdotool pkgconf autoconf libtool` |
-| Windows | Visual Studio 2022 with the "Desktop development with C++" workload, plus CMake on `PATH`. GPU bundle scripts also require Ninja. |
+| Windows | Visual Studio 2022 with the "Desktop development with C++" workload, plus CMake on `PATH`. GPU builds through the Windows scripts also require Ninja. |
 | macOS | Xcode command line tools plus `cmake autoconf automake libtool pkg-config`. |
 
 CUDA builds need the CUDA Toolkit with `nvcc` on `PATH`.
@@ -55,12 +55,12 @@ For Windows bundles, build one accelerator backend at a time. A combined CUDA+Vu
 
 ## Windows Bundles
 
-Use the Windows bundle scripts for runnable per-user installs. They copy `parakit.exe` and generated runtime DLLs into one app directory. Backend selection, BLAS arguments, installer, PATH, CUDA, and Vulkan behavior are in [../scripts/windows/README.md](../scripts/windows/README.md).
+Use the Windows scripts for runnable per-user installs. They copy `parakit.exe` and generated runtime DLLs into one app directory. Backend selection, BLAS arguments, installer, PATH, CUDA, and Vulkan behavior are in [../scripts/windows/README.md](../scripts/windows/README.md).
 
 ```bat
-scripts\windows\build-bundle.bat --backend cpu
-scripts\windows\build-bundle.bat --backend cuda
-scripts\windows\build-bundle.bat --backend vulkan
+scripts\windows\build.bat --backend cpu
+scripts\windows\build.bat --backend cuda
+scripts\windows\build.bat --backend vulkan
 ```
 
 ## CPU Builds

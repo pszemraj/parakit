@@ -1,4 +1,4 @@
-# Install a built Parakit Windows bundle into a per-user app directory.
+# Install a built Parakit Windows app directory into a per-user app directory.
 
 param(
     [Parameter(Mandatory = $true)]
@@ -274,7 +274,7 @@ function Assert-BackendReplacementAllowed {
     }
 
     if (-not $AllowSwitch) {
-        throw "Refusing to replace installed $installed bundle with $incoming bundle without explicit approval. Rerun build-bundle with --allow-backend-switch, or install-bundle.ps1 with -AllowBackendSwitch, when switching cpu/cuda/vulkan installs intentionally."
+        throw "Refusing to replace installed $installed bundle with $incoming bundle without explicit approval. Rerun build.ps1 with --allow-backend-switch, or install.ps1 with -AllowBackendSwitch, when switching cpu/cuda/vulkan installs intentionally."
     }
 
     Write-Host "Install: replacing $installed bundle with $incoming bundle"

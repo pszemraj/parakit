@@ -1,7 +1,7 @@
-# Build and bundle Parakit daemon backends on native Windows.
+# Build Parakit daemon backends on native Windows.
 #
 # Usage:
-#   powershell -ExecutionPolicy RemoteSigned -File scripts/windows/build-bundle.ps1 [options]
+#   powershell -ExecutionPolicy RemoteSigned -File scripts/windows/build.ps1 [options]
 #
 # By default this builds a repo-local bundle, installs it to the per-user
 # Windows app directory, and adds that directory to the User PATH.
@@ -36,9 +36,9 @@ if ($DebugPreference -ne "SilentlyContinue") {
 }
 
 function Show-Usage {
-    $entryPoint = "scripts\windows\build-bundle.ps1"
+    $entryPoint = "scripts\windows\build.ps1"
 
-    Write-Host "Build and bundle Parakit daemon backends on native Windows."
+    Write-Host "Build Parakit daemon backends on native Windows."
     Write-Host ""
     Write-Host "Usage:"
     Write-Host "  $entryPoint [--backend cpu|cuda|vulkan] [--blas auto|off|openblas|mkl|generic] [--openblas-root DIR] [--bundle-cuda-dlls] [--release] [--debug] [--no-submodules] [--no-install] [--no-user-path] [--allow-backend-switch] [--install-dir DIR]"
@@ -310,7 +310,7 @@ if (-not [string]::IsNullOrWhiteSpace($OpenBlasRoot) -and
 }
 
 if (-not [string]::IsNullOrWhiteSpace($env:CRISPASR_LIB_DIR)) {
-    throw "Windows bundle builds require the bundled CrispASR staging path so runtime DLLs and parakit-runtime-manifest.json are produced. Unset CRISPASR_LIB_DIR before running this script."
+    throw "Windows builds from this script require the bundled CrispASR staging path so runtime DLLs and parakit-runtime-manifest.json are produced. Unset CRISPASR_LIB_DIR before running this script."
 }
 
 function Test-NinjaGenerator {
@@ -1069,19 +1069,15 @@ if (-not $NoInstall) {
         $InstallDir = Get-DefaultInstallDir
     }
 
-    $installer = Join-Path $repo "scripts\windows\install-bundle.ps1"
+    $installer = Join-Path $repo "scripts\windows\install.ps1"
 
-    $installerArgs = @("-BundleDir", $bundleDir, "-InstallDir", $InstallDir)
-    if ($NoUserPath) {
-        $installerArgs += "-NoUserPath"
-    }
-    if ($AllowBackendSwitch) {
-        $installerArgs += "-AllowBackendSwitch"
-    }
-
-    & $installer @installerArgs
+    & $installer `
+        -BundleDir $bundleDir `
+        -InstallDir $InstallDir `
+        -NoUserPath:$NoUserPath `
+        -AllowBackendSwitch:$AllowBackendSwitch
     if (-not $?) {
-        throw "Windows bundle install failed"
+        throw "Windows install failed"
     }
 
 }

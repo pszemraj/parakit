@@ -94,7 +94,7 @@ sudo apt install spirv-headers
 cargo build --release --features vulkan
 ```
 
-Windows builds need generated DLLs next to the executable; use the bundle scripts in [../scripts/windows/README.md](../scripts/windows/README.md).
+Windows builds need generated DLLs next to the executable; use the Windows scripts in [../scripts/windows/README.md](../scripts/windows/README.md).
 
 Model cache behavior and commands are in [running.md#model-cache](running.md#model-cache).
 
@@ -105,7 +105,7 @@ If a GPU bundle fails to start with `0xC0000135` or `STATUS_DLL_NOT_FOUND`, Wind
 For CUDA bundles, install the CUDA Toolkit that matches the build so its runtime DLL directory is available, add that directory to `PATH`, or rebuild with:
 
 ```bat
-scripts\windows\build-bundle.bat --backend cuda --bundle-cuda-dlls
+scripts\windows\build.bat --backend cuda --bundle-cuda-dlls
 ```
 
 For Vulkan bundles, install or update the NVIDIA, AMD, or Intel GPU driver if the installer reports that `vulkan-1.dll` is missing. Use the CPU bundle on machines without a Vulkan-capable driver.

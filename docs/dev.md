@@ -36,7 +36,7 @@ After rebuilding a release artifact, upload F16 and Q8_0 to the hosted repo and 
 
 ## Windows GPU Validation
 
-Use the Windows bundle scripts for CUDA/Vulkan validation; they default to Ninja. Raw `cargo check --workspace --all-targets --all-features` may still enter CMake's Visual Studio generator and fail before Rust typechecking if Visual Studio CUDA BuildCustomizations are stale. Known local failure: versioned CUDA targets leave `CudaToolkitDir` empty and emit `CUDA Toolkit directory '' does not exist`.
+Use the Windows scripts for CUDA/Vulkan validation; they default to Ninja. Raw `cargo check --workspace --all-targets --all-features` may still enter CMake's Visual Studio generator and fail before Rust typechecking if Visual Studio CUDA BuildCustomizations are stale. Known local failure: versioned CUDA targets leave `CudaToolkitDir` empty and emit `CUDA Toolkit directory '' does not exist`.
 
 When that happens, record the exact CUDA/MSBuild error, then validate the Rust all-features surface with an existing bundled lib directory:
 
@@ -46,7 +46,7 @@ cargo check --workspace --all-targets --all-features
 Remove-Item Env:\CRISPASR_LIB_DIR
 ```
 
-This fallback does not replace real GPU validation. Also run the CUDA and Vulkan bundle scripts plus simulated-dictation smoke tests against `local-scratch\Juniper_St_NE_5.wav` when touching Windows GPU behavior.
+This fallback does not replace real GPU validation. Also run the CUDA and Vulkan Windows scripts plus simulated-dictation smoke tests against `local-scratch\Juniper_St_NE_5.wav` when touching Windows GPU behavior.
 
 ## File Size Exceptions
 
