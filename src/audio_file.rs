@@ -34,6 +34,10 @@ impl PreparedWav {
     /// # Returns
     ///
     /// Duration of the model-rate PCM payload.
+    ///
+    /// # Panics
+    ///
+    /// Does not panic.
     pub fn audio_secs(&self) -> f32 {
         self.samples.len() as f32 / TARGET_RATE as f32
     }

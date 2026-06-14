@@ -267,6 +267,11 @@ fn wait_for_windows_clipboard_history(
 }
 
 #[cfg(target_os = "windows")]
+/// Print a Windows clipboard-history debug message in debug builds.
+///
+/// # Arguments
+///
+/// * `message` - Lazily formatted diagnostic.
 pub(super) fn clipboard_history_debug(message: impl std::fmt::Display) {
     #[cfg(debug_assertions)]
     eprintln!("parakit: debug: {message}");
