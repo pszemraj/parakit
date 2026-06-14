@@ -774,195 +774,183 @@ fn clipboard_keep_transcript_policy_leaves_text_after_paste_and_guard_block() {
     }
 }
 
-#[test]
-fn clipboard_restore_waits_for_confirmation_before_restore() {
-    let mut clipboard = MockClipboard::new("old clipboard");
-    let events = clipboard.events();
-    let gate = MockRestoreGate::new(Rc::clone(&events));
+#[derive(Clone, Copy)]
+enum ClipboardRestoreAction {
+    Paste,
+    StageOnly,
+}
 
-    let result = paste_with_clipboard_swap_guarded(
-        &mut clipboard,
-        "dictated text",
-        || {
-            events.borrow_mut().push("paste".to_string());
-            Ok(())
-        },
-        Duration::ZERO,
-        restore_plan(&gate),
-        ClipboardPolicy::RestorePrevious,
-        || {
-            events.borrow_mut().push("guard".to_string());
-            Ok(true)
-        },
-    )
-    .expect("paste should succeed");
+#[derive(Clone, Copy)]
+enum MockGateMode {
+    Normal,
+    Timeout,
+    UnadvancedSequence,
+}
 
-    assert_eq!(result, PasteOutcome::Pasted);
-    assert_eq!(clipboard.text(), Some("old clipboard"));
-    assert_eq!(
-        events.borrow().as_slice(),
-        [
-            "guard",
-            "read",
-            "before-write:10",
-            "set:dictated text",
-            "after-write:11",
-            "guard",
-            "paste",
-            "wait:10->11",
-            "set:old clipboard",
-        ]
-    );
+impl MockGateMode {
+    fn gate(self, events: Rc<RefCell<Vec<String>>>) -> MockRestoreGate {
+        let gate = MockRestoreGate::new(events);
+        match self {
+            Self::Normal => gate,
+            Self::Timeout => gate.timeout(),
+            Self::UnadvancedSequence => gate.without_sequence_advance(),
+        }
+    }
+}
+
+struct ClipboardRestoreCase {
+    name: &'static str,
+    initial: &'static str,
+    action: ClipboardRestoreAction,
+    policy: ClipboardPolicy,
+    gate: MockGateMode,
+    expected_outcome: PasteOutcome,
+    expected_text: &'static str,
+    expected_events: &'static [&'static str],
 }
 
 #[test]
-fn clipboard_restore_timeout_path_still_restores() {
-    let mut clipboard = MockClipboard::new("old clipboard");
-    let events = clipboard.events();
-    let gate = MockRestoreGate::new(Rc::clone(&events)).timeout();
-
-    let result = paste_with_clipboard_swap_guarded(
-        &mut clipboard,
-        "dictated text",
-        || {
-            events.borrow_mut().push("paste".to_string());
-            Ok(())
+fn clipboard_restore_gate_cases_are_stable() {
+    let cases = [
+        ClipboardRestoreCase {
+            name: "waits for confirmation before restore",
+            initial: "old clipboard",
+            action: ClipboardRestoreAction::Paste,
+            policy: ClipboardPolicy::RestorePrevious,
+            gate: MockGateMode::Normal,
+            expected_outcome: PasteOutcome::Pasted,
+            expected_text: "old clipboard",
+            expected_events: &[
+                "guard",
+                "read",
+                "before-write:10",
+                "set:dictated text",
+                "after-write:11",
+                "guard",
+                "paste",
+                "wait:10->11",
+                "set:old clipboard",
+            ],
         },
-        Duration::ZERO,
-        restore_plan(&gate),
-        ClipboardPolicy::RestorePrevious,
-        || {
-            events.borrow_mut().push("guard".to_string());
-            Ok(true)
+        ClipboardRestoreCase {
+            name: "timeout path still restores",
+            initial: "old clipboard",
+            action: ClipboardRestoreAction::Paste,
+            policy: ClipboardPolicy::RestorePrevious,
+            gate: MockGateMode::Timeout,
+            expected_outcome: PasteOutcome::Pasted,
+            expected_text: "old clipboard",
+            expected_events: &[
+                "guard",
+                "read",
+                "before-write:10",
+                "set:dictated text",
+                "after-write:11",
+                "guard",
+                "paste",
+                "wait-timeout:10->11",
+                "set:old clipboard",
+            ],
         },
-    )
-    .expect("timeout fallback should still restore");
-
-    assert_eq!(result, PasteOutcome::Pasted);
-    assert_eq!(clipboard.text(), Some("old clipboard"));
-    assert_eq!(
-        events.borrow().as_slice(),
-        [
-            "guard",
-            "read",
-            "before-write:10",
-            "set:dictated text",
-            "after-write:11",
-            "guard",
-            "paste",
-            "wait-timeout:10->11",
-            "set:old clipboard",
-        ]
-    );
-}
-
-#[test]
-fn clipboard_stage_without_paste_waits_for_confirmation_before_restore() {
-    let mut clipboard = MockClipboard::new("old clipboard");
-    let events = clipboard.events();
-    let gate = MockRestoreGate::new(Rc::clone(&events));
-
-    let result = stage_text_without_paste(
-        &mut clipboard,
-        "dictated text",
-        restore_plan(&gate),
-        ClipboardPolicy::RestorePrevious,
-    )
-    .expect("blocked staging should restore");
-
-    assert_eq!(result, PasteOutcome::Blocked);
-    assert_eq!(clipboard.text(), Some("old clipboard"));
-    assert_eq!(
-        events.borrow().as_slice(),
-        [
-            "read",
-            "before-write:10",
-            "set:dictated text",
-            "after-write:11",
-            "wait:10->11",
-            "set:old clipboard",
-        ]
-    );
-}
-
-#[test]
-fn clipboard_keep_transcript_policy_never_waits_or_restores() {
-    let mut clipboard = MockClipboard::new("old clipboard");
-    let events = clipboard.events();
-    let gate = MockRestoreGate::new(Rc::clone(&events));
-
-    let result = paste_with_clipboard_swap_guarded(
-        &mut clipboard,
-        "dictated text",
-        || {
-            events.borrow_mut().push("paste".to_string());
-            Ok(())
+        ClipboardRestoreCase {
+            name: "stage-only waits for confirmation before restore",
+            initial: "old clipboard",
+            action: ClipboardRestoreAction::StageOnly,
+            policy: ClipboardPolicy::RestorePrevious,
+            gate: MockGateMode::Normal,
+            expected_outcome: PasteOutcome::Blocked,
+            expected_text: "old clipboard",
+            expected_events: &[
+                "read",
+                "before-write:10",
+                "set:dictated text",
+                "after-write:11",
+                "wait:10->11",
+                "set:old clipboard",
+            ],
         },
-        Duration::ZERO,
-        restore_plan(&gate),
-        ClipboardPolicy::KeepTranscript,
-        || {
-            events.borrow_mut().push("guard".to_string());
-            Ok(true)
+        ClipboardRestoreCase {
+            name: "keep transcript never waits or restores",
+            initial: "old clipboard",
+            action: ClipboardRestoreAction::Paste,
+            policy: ClipboardPolicy::KeepTranscript,
+            gate: MockGateMode::Normal,
+            expected_outcome: PasteOutcome::Pasted,
+            expected_text: "dictated text",
+            expected_events: &[
+                "guard",
+                "read",
+                "before-write:10",
+                "set:dictated text",
+                "after-write:11",
+                "guard",
+                "paste",
+            ],
         },
-    )
-    .expect("keep policy should not restore");
-
-    assert_eq!(result, PasteOutcome::Pasted);
-    assert_eq!(clipboard.text(), Some("dictated text"));
-    assert_eq!(
-        events.borrow().as_slice(),
-        [
-            "guard",
-            "read",
-            "before-write:10",
-            "set:dictated text",
-            "after-write:11",
-            "guard",
-            "paste",
-        ]
-    );
-}
-
-#[test]
-fn clipboard_restore_handles_unadvanced_sequence_without_hanging() {
-    let mut clipboard = MockClipboard::new("dictated text");
-    let events = clipboard.events();
-    let gate = MockRestoreGate::new(Rc::clone(&events)).without_sequence_advance();
-
-    let result = paste_with_clipboard_swap_guarded(
-        &mut clipboard,
-        "dictated text",
-        || {
-            events.borrow_mut().push("paste".to_string());
-            Ok(())
+        ClipboardRestoreCase {
+            name: "unadvanced sequence completes without hanging",
+            initial: "dictated text",
+            action: ClipboardRestoreAction::Paste,
+            policy: ClipboardPolicy::RestorePrevious,
+            gate: MockGateMode::UnadvancedSequence,
+            expected_outcome: PasteOutcome::Pasted,
+            expected_text: "dictated text",
+            expected_events: &[
+                "guard",
+                "read",
+                "before-write:10",
+                "set:dictated text",
+                "after-write:10",
+                "guard",
+                "paste",
+                "wait:10->10",
+                "set:dictated text",
+            ],
         },
-        Duration::ZERO,
-        restore_plan(&gate),
-        ClipboardPolicy::RestorePrevious,
-        || {
-            events.borrow_mut().push("guard".to_string());
-            Ok(true)
-        },
-    )
-    .expect("restore should complete even when sequence did not advance");
+    ];
 
-    assert_eq!(result, PasteOutcome::Pasted);
-    assert_eq!(clipboard.text(), Some("dictated text"));
-    assert_eq!(
-        events.borrow().as_slice(),
-        [
-            "guard",
-            "read",
-            "before-write:10",
-            "set:dictated text",
-            "after-write:10",
-            "guard",
-            "paste",
-            "wait:10->10",
-            "set:dictated text",
-        ]
-    );
+    for case in cases {
+        let mut clipboard = MockClipboard::new(case.initial);
+        let events = clipboard.events();
+        let gate = case.gate.gate(Rc::clone(&events));
+        let result = match case.action {
+            ClipboardRestoreAction::Paste => paste_with_clipboard_swap_guarded(
+                &mut clipboard,
+                "dictated text",
+                || {
+                    events.borrow_mut().push("paste".to_string());
+                    Ok(())
+                },
+                Duration::ZERO,
+                restore_plan(&gate),
+                case.policy,
+                || {
+                    events.borrow_mut().push("guard".to_string());
+                    Ok(true)
+                },
+            ),
+            ClipboardRestoreAction::StageOnly => stage_text_without_paste(
+                &mut clipboard,
+                "dictated text",
+                restore_plan(&gate),
+                case.policy,
+            ),
+        }
+        .expect(case.name);
+
+        assert_eq!(result, case.expected_outcome, "{}", case.name);
+        assert_eq!(clipboard.text(), Some(case.expected_text), "{}", case.name);
+        assert_eq!(
+            events
+                .borrow()
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            case.expected_events,
+            "{}",
+            case.name
+        );
+    }
 }
 
 #[test]
