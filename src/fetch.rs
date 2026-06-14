@@ -35,19 +35,15 @@ pub struct FetchOptions {
 
 impl FetchOptions {
     fn status(self, message: std::fmt::Arguments<'_>) {
-        if self.should_print_status(StatusVisibility::Normal) {
+        if !self.quiet {
             println!("{message}");
         }
     }
 
     fn verbose_status(self, message: std::fmt::Arguments<'_>) {
-        if self.should_print_status(StatusVisibility::Verbose) {
+        if !self.quiet && self.verbose {
             println!("{message}");
         }
-    }
-
-    fn should_print_status(self, visibility: StatusVisibility) -> bool {
-        !self.quiet && (visibility == StatusVisibility::Normal || self.verbose)
     }
 }
 
@@ -707,12 +703,6 @@ fn move_into_place(src: &Path, dst: &Path) -> Result<()> {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum StatusVisibility {
-    Normal,
-    Verbose,
-}
-
 fn cleanup_intermediates(paths: &FetchPaths, keep_nemo: bool, keep_f16: bool) -> Result<()> {
     if !keep_nemo {
         remove_if_exists(&paths.nemo)?;
@@ -809,31 +799,5 @@ mod tests {
         assert_eq!(paths[0], dir);
         assert_eq!(paths[1], Path::new("target/tmp/a"));
         assert_eq!(paths[2], Path::new("target/tmp/b"));
-    }
-
-    #[test]
-    fn cache_hit_status_requires_verbose_output() {
-        let normal = FetchOptions {
-            force: false,
-            quiet: false,
-            verbose: false,
-            source: FetchSource::HostedQ8,
-        };
-        assert!(normal.should_print_status(StatusVisibility::Normal));
-        assert!(!normal.should_print_status(StatusVisibility::Verbose));
-
-        let verbose = FetchOptions {
-            verbose: true,
-            ..normal
-        };
-        assert!(verbose.should_print_status(StatusVisibility::Verbose));
-
-        let quiet = FetchOptions {
-            quiet: true,
-            verbose: true,
-            ..normal
-        };
-        assert!(!quiet.should_print_status(StatusVisibility::Normal));
-        assert!(!quiet.should_print_status(StatusVisibility::Verbose));
     }
 }

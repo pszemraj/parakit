@@ -132,14 +132,13 @@ pub(crate) fn preflight(mode: PasteMode) -> Result<()> {
     Ok(())
 }
 
-#[cfg(target_os = "windows")]
 fn insertion_needs_enigo(mode: PasteMode) -> bool {
-    mode == PasteMode::Direct
-}
-
-#[cfg(not(target_os = "windows"))]
-fn insertion_needs_enigo(mode: PasteMode) -> bool {
-    mode == PasteMode::Direct || cfg!(not(target_os = "linux"))
+    match mode {
+        PasteMode::Direct => true,
+        PasteMode::Terminal | PasteMode::Standard => {
+            cfg!(not(any(target_os = "linux", target_os = "windows")))
+        }
+    }
 }
 
 /// Exercise the configured insertion backend without inserting into the user's

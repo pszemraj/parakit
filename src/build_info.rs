@@ -72,34 +72,9 @@ pub fn diagnostic_lines() -> Vec<String> {
 ///
 /// `true` when CUDA, Vulkan, or Metal was enabled at build time.
 pub fn accelerator_enabled() -> bool {
-    cuda_enabled() || vulkan_enabled() || metal_enabled()
-}
-
-/// Return whether this build enabled ggml CUDA.
-///
-/// # Returns
-///
-/// `true` when `GGML_CUDA` was `ON` in the bundled CMake cache.
-fn cuda_enabled() -> bool {
     build_value!("PARAKIT_BUILD_GGML_CUDA") == "ON"
-}
-
-/// Return whether this build enabled ggml Vulkan.
-///
-/// # Returns
-///
-/// `true` when `GGML_VULKAN` was `ON` in the bundled CMake cache.
-fn vulkan_enabled() -> bool {
-    build_value!("PARAKIT_BUILD_GGML_VULKAN") == "ON"
-}
-
-/// Return whether this build enabled ggml Metal.
-///
-/// # Returns
-///
-/// `true` when `GGML_METAL` was `ON` in the bundled CMake cache.
-fn metal_enabled() -> bool {
-    build_value!("PARAKIT_BUILD_GGML_METAL") == "ON"
+        || build_value!("PARAKIT_BUILD_GGML_VULKAN") == "ON"
+        || build_value!("PARAKIT_BUILD_GGML_METAL") == "ON"
 }
 
 fn non_empty_env(value: Option<&'static str>) -> Option<&'static str> {
