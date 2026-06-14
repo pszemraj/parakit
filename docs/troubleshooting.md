@@ -105,7 +105,7 @@ If a GPU bundle fails to start with `0xC0000135` or `STATUS_DLL_NOT_FOUND`, Wind
 For CUDA bundles, install the CUDA Toolkit that matches the build so its runtime DLL directory is available, add that directory to `PATH`, or rebuild with:
 
 ```bat
-scripts\windows\windows-cuda-build.bat --bundle-cuda-dlls
+scripts\windows\build-bundle.bat --flavor cuda --bundle-cuda-dlls
 ```
 
 For Vulkan bundles, install or update the NVIDIA, AMD, or Intel GPU driver if the installer reports that `vulkan-1.dll` is missing. Use the CPU bundle on machines without a Vulkan-capable driver.

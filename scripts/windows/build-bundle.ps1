@@ -1,7 +1,7 @@
 # Build and bundle Parakit daemon flavors on native Windows.
 #
 # Usage:
-#   powershell -ExecutionPolicy RemoteSigned -File scripts/windows/windows-cpu-build.ps1 [options]
+#   powershell -ExecutionPolicy RemoteSigned -File scripts/windows/build-bundle.ps1 [options]
 #
 # By default this builds a repo-local bundle, installs it to the per-user
 # Windows app directory, and adds that directory to the User PATH.
@@ -25,27 +25,27 @@ $NoUserPath = $false
 $NoSubmodules = $false
 $InstallDir = $null
 $Flavor = "cpu"
+$FlavorExplicit = $false
 $BundleCudaDlls = $false
+$AllowFlavorSwitch = $false
 
 if ($DebugPreference -ne "SilentlyContinue") {
     $Profile = "debug"
 }
 
 function Show-Usage {
-    $scriptName = Split-Path -Leaf $PSCommandPath
-    $entryPoint = $env:PARAKIT_WINDOWS_BUILD_COMMAND
-    if ([string]::IsNullOrWhiteSpace($entryPoint)) {
-        $entryPoint = "scripts\windows\$scriptName"
-    }
+    $entryPoint = "scripts\windows\build-bundle.ps1"
 
     Write-Host "Build and bundle Parakit daemon flavors on native Windows."
     Write-Host ""
     Write-Host "Usage:"
-    Write-Host "  $entryPoint [--cuda | --vulkan] [--bundle-cuda-dlls] [--release] [--debug] [--no-submodules] [--no-install] [--no-user-path] [--install-dir DIR]"
+    Write-Host "  $entryPoint [--flavor cpu|cuda|vulkan] [--bundle-cuda-dlls] [--release] [--debug] [--no-submodules] [--no-install] [--no-user-path] [--allow-flavor-switch] [--install-dir DIR]"
     Write-Host ""
     Write-Host "Options:"
-    Write-Host "  --cuda           Build a CUDA bundle. Requires NVIDIA CUDA Toolkit on this machine."
-    Write-Host "  --vulkan         Build a Vulkan bundle. Requires LunarG Vulkan SDK and glslc."
+    Write-Host "  --flavor         Build flavor: cpu, cuda, or vulkan. Defaults to cpu."
+    Write-Host "  --cpu            Alias for --flavor cpu."
+    Write-Host "  --cuda           Alias for --flavor cuda. Requires NVIDIA CUDA Toolkit on this machine."
+    Write-Host "  --vulkan         Alias for --flavor vulkan. Requires LunarG Vulkan SDK and glslc."
     Write-Host "  --bundle-cuda-dlls"
     Write-Host "                   CUDA only: copy cudart64_*.dll, cublas64_*.dll, and cublasLt64_*.dll into the bundle."
     Write-Host "  --release        Build target\release and bundle it. This is the default."
@@ -53,6 +53,8 @@ function Show-Usage {
     Write-Host "  --no-submodules  Do not run git submodule update --init --recursive."
     Write-Host "  --no-install     Build the repo-local bundle without installing it."
     Write-Host "  --no-user-path   Install without adding the install directory to User PATH."
+    Write-Host "  --allow-flavor-switch"
+    Write-Host "                   Allow replacing an installed cpu/cuda/vulkan flavor with a different flavor."
     Write-Host "  --install-dir    Install to DIR instead of `%LOCALAPPDATA`%\Programs\parakit."
     Write-Host "  -h, --help       Print this help."
 }
@@ -64,10 +66,11 @@ function Set-BuildFlavor {
         [string]$Value
     )
 
-    if ($Flavor -ne "cpu" -and $Flavor -ne $Value) {
-        throw "Only one accelerator flavor can be selected per bundle. Choose either --cuda or --vulkan."
+    if ($FlavorExplicit -and $Flavor -ne $Value) {
+        throw "Only one build flavor can be selected per bundle. Choose cpu, cuda, or vulkan."
     }
     $script:Flavor = $Value
+    $script:FlavorExplicit = $true
 }
 
 for ($i = 0; $i -lt $RawArgs.Count; $i++) {
@@ -78,6 +81,16 @@ for ($i = 0; $i -lt $RawArgs.Count; $i++) {
         }
         '^(--release|-release|-Release)$' {
             $Profile = "release"
+        }
+        '^(--flavor|-flavor|-Flavor)$' {
+            $i++
+            if ($i -ge $RawArgs.Count -or $RawArgs[$i] -notin @("cpu", "cuda", "vulkan")) {
+                throw "$($RawArgs[$i - 1]) requires one of: cpu, cuda, vulkan"
+            }
+            Set-BuildFlavor $RawArgs[$i]
+        }
+        '^(--cpu|-cpu|-Cpu)$' {
+            Set-BuildFlavor "cpu"
         }
         '^(--cuda|-cuda|-Cuda)$' {
             Set-BuildFlavor "cuda"
@@ -107,6 +120,9 @@ for ($i = 0; $i -lt $RawArgs.Count; $i++) {
         }
         '^(--no-user-path|-no-user-path|-NoUserPath)$' {
             $NoUserPath = $true
+        }
+        '^(--allow-flavor-switch|-allow-flavor-switch|-AllowFlavorSwitch)$' {
+            $AllowFlavorSwitch = $true
         }
         '^(--install-dir|-install-dir|-InstallDir)$' {
             $i++
@@ -792,7 +808,7 @@ switch ($Flavor) {
             Write-Host "CUDA: runtime DLL bundling enabled"
         } else {
             Remove-Item Env:\PARAKIT_BUNDLE_CUDA_DLLS -ErrorAction SilentlyContinue
-            Write-Host "CUDA: runtime DLLs expected from CUDA_PATH\bin, CUDA_PATH\bin\x64, or PATH at install/run time"
+            Write-Host "CUDA: runtime DLLs expected from the installed app directory or PATH at install/run time"
         }
     }
     "vulkan" {
@@ -864,11 +880,15 @@ if (-not $NoInstall) {
 
     $installer = Join-Path $repo "scripts\windows\install-bundle.ps1"
 
+    $installerArgs = @("-BundleDir", $bundleDir, "-InstallDir", $InstallDir)
     if ($NoUserPath) {
-        & $installer -BundleDir $bundleDir -InstallDir $InstallDir -NoUserPath
-    } else {
-        & $installer -BundleDir $bundleDir -InstallDir $InstallDir
+        $installerArgs += "-NoUserPath"
     }
+    if ($AllowFlavorSwitch) {
+        $installerArgs += "-AllowFlavorSwitch"
+    }
+
+    & $installer @installerArgs
     if (-not $?) {
         throw "Windows bundle install failed"
     }

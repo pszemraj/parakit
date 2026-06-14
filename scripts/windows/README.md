@@ -4,11 +4,11 @@ Windows builds need an installed runnable directory, not only `parakit.exe`. Cri
 
 `cargo build` works for development because `build.rs` copies the generated DLLs next to `target\debug\parakit.exe` or `target\release\parakit.exe`.
 
-`cargo install --path .` is different: Cargo installs only `parakit.exe` into Cargo's bin directory. It does not copy the generated CrispASR, ggml, or OpenBLAS DLLs. Use one of these scripts when you want a normal Windows install.
+`cargo install --path .` is different: Cargo installs only `parakit.exe` into Cargo's bin directory. It does not copy the generated CrispASR, ggml, or OpenBLAS DLLs. Use `build-bundle.ps1` when you want a normal Windows install.
 
-By default, the CPU script builds `target\parakit-windows-x86_64-cpu`, installs it to `%LOCALAPPDATA%\Programs\parakit`, and adds that install directory to the Windows User `PATH`. GPU scripts build sibling bundle directories with `-cuda` or `-vulkan` suffixes. They do not edit the system `PATH`, create firewall rules, open TCP ports, or require administrator rights.
+By default, the build script builds `target\parakit-windows-x86_64-cpu`, installs it to `%LOCALAPPDATA%\Programs\parakit`, and adds that install directory to the Windows User `PATH`. GPU flavors build sibling bundle directories with `-cuda` or `-vulkan` suffixes. The scripts do not edit the system `PATH`, create firewall rules, open TCP ports, or require administrator rights.
 
-Running a different flavor script installs that flavor into the same default per-user app directory. The installer replaces the previous marked parakit install, so switching from CUDA to Vulkan or back is just another script run.
+All flavors install into the same default per-user app directory. The installer refuses to replace an installed `cpu`, `cuda`, or `vulkan` bundle with a different flavor unless you pass `--allow-flavor-switch`. This prevents a later CPU install from silently replacing a GPU install.
 
 The installer is intentionally per-user. It refuses system locations such as `C:\Windows` and `C:\Program Files\...`; those paths require admin rights on normal Windows systems and are the wrong default for a developer or corporate laptop.
 
@@ -17,27 +17,29 @@ The scripts do not create symlinks, junctions, or temporary drive-letter mapping
 ## Build
 
 ```bat
-scripts\windows\windows-cpu-build.bat
-scripts\windows\windows-cuda-build.bat
-scripts\windows\windows-vulkan-build.bat
+scripts\windows\build-bundle.bat --flavor cpu
+scripts\windows\build-bundle.bat --flavor cuda
+scripts\windows\build-bundle.bat --flavor vulkan
 ```
 
-The batch files are wrappers around the PowerShell implementation. All entry points accept the same options; run any of them with `--help` for the supported flags.
+`build-bundle.bat` is only a `cmd.exe` wrapper around the PowerShell implementation. From PowerShell, call the implementation directly:
 
-For Windows GPU installs, start with `windows-vulkan-build.bat` unless you
+```powershell
+.\scripts\windows\build-bundle.ps1 --flavor cpu
+.\scripts\windows\build-bundle.ps1 --flavor cuda
+.\scripts\windows\build-bundle.ps1 --flavor vulkan
+```
+
+Run `.\scripts\windows\build-bundle.ps1 --help` for all supported flags.
+
+For Windows GPU installs, start with `--flavor vulkan` unless you
 specifically need CUDA. Vulkan is vendor-agnostic, ships as a self-contained
 parakit bundle, and uses the GPU driver's `vulkan-1.dll` at runtime. CUDA is
 NVIDIA-only and either needs matching CUDA Toolkit runtime DLLs available
-through `%CUDA_PATH%\bin`, `%CUDA_PATH%\bin\x64`, or `PATH`, or a larger bundle
-built with `--bundle-cuda-dlls`.
+from the installed app directory or `PATH`, or a larger bundle built with
+`--bundle-cuda-dlls`.
 
-PowerShell equivalent from PowerShell:
-
-```powershell
-.\scripts\windows\windows-cpu-build.ps1
-.\scripts\windows\windows-cpu-build.ps1 --cuda
-.\scripts\windows\windows-cpu-build.ps1 --vulkan
-```
+When intentionally replacing an installed flavor, pass `--allow-flavor-switch` on the build command. Without it, the installer fails before deleting the existing install.
 
 The build script checks whether `vendor\CrispASR` is already populated before touching submodules. If the submodule is present and pinned, the script does not contact GitHub. If it must initialize the submodule, it runs Git non-interactively so firewalled machines fail instead of opening credential prompts. On a firewalled machine, use a checkout or source archive that already includes `vendor\CrispASR`, or pass `--no-submodules` to fail fast instead of trying to initialize it.
 
@@ -47,23 +49,23 @@ Only one accelerator flavor is supported per bundle.
 
 | Flavor | Command | Build-time requirements | Runtime expectation |
 | --- | --- | --- | --- |
-| CPU | `windows-cpu-build.bat` | Visual Studio C++ tools, CMake, Rust | Generated CrispASR/ggml DLLs are bundled. |
-| CUDA | `windows-cuda-build.bat` | Visual Studio C++ tools, Ninja, NVIDIA CUDA Toolkit with `nvcc`; `CUDA_PATH` may be inferred from `nvcc.exe` on `PATH` | NVIDIA-only. CUDA runtime and cuBLAS DLLs must be found through `%CUDA_PATH%\bin`, `%CUDA_PATH%\bin\x64`, or `PATH`, unless `--bundle-cuda-dlls` is used. |
-| Vulkan | `windows-vulkan-build.bat` | Visual Studio C++ tools, Ninja, LunarG Vulkan SDK with `glslc`; `VULKAN_SDK` may be autodetected from `C:\VulkanSDK\*` or inferred from `glslc.exe` on `PATH` | Recommended Windows GPU flavor for NVIDIA, AMD, and Intel. `vulkan-1.dll` is provided by the installed GPU driver. |
+| CPU | `build-bundle.ps1 --flavor cpu` | Visual Studio C++ tools, CMake, Rust | Generated CrispASR/ggml DLLs are bundled. |
+| CUDA | `build-bundle.ps1 --flavor cuda` | Visual Studio C++ tools, Ninja, NVIDIA CUDA Toolkit with `nvcc`; `CUDA_PATH` may be inferred from `nvcc.exe` on `PATH` | NVIDIA-only. CUDA runtime and cuBLAS DLLs must be found from the installed app directory or `PATH`, unless `--bundle-cuda-dlls` is used. |
+| Vulkan | `build-bundle.ps1 --flavor vulkan` | Visual Studio C++ tools, Ninja, LunarG Vulkan SDK with `glslc`; `VULKAN_SDK` may be autodetected from `C:\VulkanSDK\*` or inferred from `glslc.exe` on `PATH` | Recommended Windows GPU flavor for NVIDIA, AMD, and Intel. `vulkan-1.dll` is provided by the installed GPU driver. |
 
 CUDA runtime DLL bundling is opt-in because `cublasLt64_*.dll` is large:
 
 ```bat
-scripts\windows\windows-cuda-build.bat --bundle-cuda-dlls
+scripts\windows\build-bundle.bat --flavor cuda --bundle-cuda-dlls
 ```
 
-The scripts reject `--cuda --vulkan`; raw Cargo experiments can still enable multiple features, but the Windows bundle path keeps one accelerator per installed directory.
+The build script rejects `--cuda --vulkan`; raw Cargo experiments can still enable multiple features, but the Windows bundle path keeps one accelerator per installed directory.
 
 CUDA 12.x and 13.x toolkits are supported by the vendored ggml. CUDA 13.x toolkits do not install a display driver as part of the toolkit; install a compatible NVIDIA display driver separately. The default CUDA architecture behavior is ggml's native build for the GPU present on the machine. Override it when needed:
 
 ```powershell
 $env:PARAKIT_CUDA_ARCHS = "89-real"
-.\scripts\windows\windows-cpu-build.ps1 --cuda
+.\scripts\windows\build-bundle.ps1 --flavor cuda
 ```
 
 `PARAKIT_CUDA_ARCHS` is passed directly to CMake as `CMAKE_CUDA_ARCHITECTURES`; values such as `native`, `89-real`, or semicolon-separated architecture lists are accepted by CMake/CUDA.
@@ -80,7 +82,7 @@ Override the target directory only when you need a different approved location:
 
 ```powershell
 $env:CARGO_TARGET_DIR = "$env:USERPROFILE\parakit-target"
-.\scripts\windows\windows-vulkan-build.bat --no-install
+.\scripts\windows\build-bundle.ps1 --flavor vulkan --no-install
 ```
 
 If path shortening does not fix a Vulkan shader-gen failure, capture the exact `glslc` command. A `linking multiple files is not supported yet` message is a separate SDK/ggml issue, not a path-length problem.
@@ -109,7 +111,7 @@ Model downloads use the platform certificate roots and system proxy settings. Th
 For development-only bundle checks without installing:
 
 ```bat
-scripts\windows\windows-cpu-build.bat --no-install
-scripts\windows\windows-cuda-build.bat --no-install
-scripts\windows\windows-vulkan-build.bat --no-install
+scripts\windows\build-bundle.bat --flavor cpu --no-install
+scripts\windows\build-bundle.bat --flavor cuda --no-install
+scripts\windows\build-bundle.bat --flavor vulkan --no-install
 ```

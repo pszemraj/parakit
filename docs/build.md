@@ -58,9 +58,9 @@ For Windows bundles, build one accelerator flavor at a time. A combined CUDA+Vul
 Use the Windows bundle scripts for runnable per-user installs. They copy `parakit.exe` and generated runtime DLLs into one app directory. Flavor, installer, PATH, CUDA, and Vulkan behavior are in [../scripts/windows/README.md](../scripts/windows/README.md).
 
 ```bat
-scripts\windows\windows-cpu-build.bat
-scripts\windows\windows-cuda-build.bat
-scripts\windows\windows-vulkan-build.bat
+scripts\windows\build-bundle.bat --flavor cpu
+scripts\windows\build-bundle.bat --flavor cuda
+scripts\windows\build-bundle.bat --flavor vulkan
 ```
 
 ## CPU Builds
