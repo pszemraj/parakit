@@ -233,23 +233,27 @@ mod tests {
     use super::*;
     use hound::{SampleFormat, WavSpec, WavWriter};
 
-    #[test]
-    fn mixes_stereo_wav_to_mono() {
-        let dir = Path::new("target/tmp/audio-file-tests");
+    fn write_i16_wav(path: &Path, channels: u16, sample_rate: u32, samples: &[i16]) {
+        let dir = path.parent().expect("test WAV should have parent");
         std::fs::create_dir_all(dir).unwrap();
-        let path = dir.join("stereo.wav");
         let spec = WavSpec {
-            channels: 2,
-            sample_rate: 48_000,
+            channels,
+            sample_rate,
             bits_per_sample: 16,
             sample_format: SampleFormat::Int,
         };
-        let mut writer = WavWriter::create(&path, spec).unwrap();
-        writer.write_sample::<i16>(16_384).unwrap();
-        writer.write_sample::<i16>(0).unwrap();
-        writer.write_sample::<i16>(0).unwrap();
-        writer.write_sample::<i16>(-16_384).unwrap();
+        let mut writer = WavWriter::create(path, spec).unwrap();
+        for sample in samples {
+            writer.write_sample(*sample).unwrap();
+        }
         writer.finalize().unwrap();
+    }
+
+    #[test]
+    fn mixes_stereo_wav_to_mono() {
+        let dir = Path::new("target/tmp/audio-file-tests");
+        let path = dir.join("stereo.wav");
+        write_i16_wav(&path, 2, 48_000, &[16_384, 0, 0, -16_384]);
 
         let wav = read_wav_mono(&path).unwrap();
         assert_eq!(wav.sample_rate, 48_000);
@@ -270,18 +274,8 @@ mod tests {
     #[test]
     fn prepare_wav_for_model_keeps_source_metadata() {
         let dir = Path::new("target/tmp/audio-file-tests");
-        std::fs::create_dir_all(dir).unwrap();
         let path = dir.join("target-rate.wav");
-        let spec = WavSpec {
-            channels: 1,
-            sample_rate: TARGET_RATE,
-            bits_per_sample: 16,
-            sample_format: SampleFormat::Int,
-        };
-        let mut writer = WavWriter::create(&path, spec).unwrap();
-        writer.write_sample::<i16>(16_384).unwrap();
-        writer.write_sample::<i16>(-16_384).unwrap();
-        writer.finalize().unwrap();
+        write_i16_wav(&path, 1, TARGET_RATE, &[16_384, -16_384]);
 
         let wav = prepare_wav_for_model(&path).unwrap();
 

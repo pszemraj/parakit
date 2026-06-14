@@ -26,11 +26,16 @@ fn derives_cuda_runtime_dll_names_from_toolkit_major_as_fallback() {
 
 #[test]
 fn discovers_cuda_runtime_dlls_from_bin_x64_without_version_assumptions() {
-    let root = common::fixture_root("windows-cuda-layout-tests", "bin-x64");
-    common::touch(&root.join("bin/x64/cublasLt64_99.dll"));
-    common::touch(&root.join("bin/x64/cudart64_99.dll"));
-    common::touch(&root.join("bin/x64/cublas64_99.dll"));
-    common::touch(&root.join("bin/x64/nvrtc64_990_0.dll"));
+    let root = common::fixture_root_with_files(
+        "windows-cuda-layout-tests",
+        "bin-x64",
+        &[
+            "bin/x64/cublasLt64_99.dll",
+            "bin/x64/cudart64_99.dll",
+            "bin/x64/cublas64_99.dll",
+            "bin/x64/nvrtc64_990_0.dll",
+        ],
+    );
 
     assert_eq!(
         discover_cuda_external_dll_names(&root),
@@ -40,10 +45,15 @@ fn discovers_cuda_runtime_dlls_from_bin_x64_without_version_assumptions() {
 
 #[test]
 fn resolved_cuda_dll_names_prefer_discovered_toolkit_files() {
-    let root = common::fixture_root("windows-cuda-layout-tests", "prefer-discovered");
-    common::touch(&root.join("bin/cudart64_42.dll"));
-    common::touch(&root.join("bin/cublas64_42.dll"));
-    common::touch(&root.join("bin/cublasLt64_42.dll"));
+    let root = common::fixture_root_with_files(
+        "windows-cuda-layout-tests",
+        "prefer-discovered",
+        &[
+            "bin/cudart64_42.dll",
+            "bin/cublas64_42.dll",
+            "bin/cublasLt64_42.dll",
+        ],
+    );
 
     assert_eq!(
         cuda_external_dll_names(Some(&root), "13.2"),

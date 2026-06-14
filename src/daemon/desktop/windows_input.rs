@@ -392,13 +392,6 @@ mod tests {
                 (VK_CONTROL.0, true),
             ],
         );
-        assert_eq!(
-            events
-                .iter()
-                .filter(|event| event.vk == VK_SHIFT && event.key_up)
-                .count(),
-            1
-        );
     }
 
     #[test]

@@ -99,7 +99,7 @@ fn serializes_vulkan_system_loader_contract() {
 }
 
 #[test]
-fn preserves_experimental_multi_backend_metadata() {
+fn serializes_multi_backend_metadata_when_both_are_present() {
     let json = parse(RuntimeManifest {
         required_files: vec!["parakit.exe".to_string()],
         runtime_dlls: Vec::new(),
@@ -123,8 +123,11 @@ fn preserves_experimental_multi_backend_metadata() {
     });
 
     assert_eq!(json["accelerator"], "cuda");
-    assert!(json["cuda"].is_object());
-    assert!(json["vulkan"].is_object());
+    assert_eq!(json["cuda"]["toolkit_version"], "12.9");
+    assert_eq!(json["cuda"]["architectures"], "native");
+    assert_eq!(json["cuda"]["external_dlls_bundled"], true);
+    assert_eq!(json["vulkan"]["sdk_version"], "C:\\VulkanSDK\\1.4.321.1");
+    assert_eq!(json["vulkan"]["external_dlls"][0], "vulkan-1.dll");
 }
 
 #[test]

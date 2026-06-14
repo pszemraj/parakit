@@ -27,6 +27,19 @@ pub(crate) fn fixture_root(namespace: &str, name: &str) -> PathBuf {
     root
 }
 
+/// Return a clean fixture root and create empty files relative to it.
+///
+/// # Panics
+///
+/// Panics if any fixture file cannot be created.
+pub(crate) fn fixture_root_with_files(namespace: &str, name: &str, files: &[&str]) -> PathBuf {
+    let root = fixture_root(namespace, name);
+    for file in files {
+        touch(&root.join(file));
+    }
+    root
+}
+
 /// Create an empty fixture file, including parent directories.
 ///
 /// # Arguments

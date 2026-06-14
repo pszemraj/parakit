@@ -130,9 +130,23 @@ mod tests {
 
     #[test]
     fn rtf_is_inference_time_over_audio_duration() {
-        let infer = Duration::from_millis(2_000);
+        let cases = [
+            (10.0, Duration::from_millis(2_000), 0.2, 5.0),
+            (0.0, Duration::from_millis(2_000), f32::INFINITY, 0.0),
+            (10.0, Duration::ZERO, 0.0, f32::INFINITY),
+        ];
 
-        assert!((real_time_factor(10.0, infer) - 0.2).abs() < f32::EPSILON);
-        assert!((realtime_speed(10.0, infer) - 5.0).abs() < f32::EPSILON);
+        for (audio_secs, infer, expected_rtf, expected_speed) in cases {
+            assert_metric_eq(real_time_factor(audio_secs, infer), expected_rtf);
+            assert_metric_eq(realtime_speed(audio_secs, infer), expected_speed);
+        }
+    }
+
+    fn assert_metric_eq(actual: f32, expected: f32) {
+        if expected.is_infinite() {
+            assert_eq!(actual, expected);
+        } else {
+            assert!((actual - expected).abs() < f32::EPSILON);
+        }
     }
 }
