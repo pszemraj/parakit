@@ -3,6 +3,8 @@
 //! This lives outside `build.rs` so integration tests can exercise the JSON
 //! shape without invoking the native CMake build.
 
+use serde_json::{json, Value};
+
 /// File name for the Windows runtime manifest colocated with `parakit.exe`.
 pub(crate) const WINDOWS_RUNTIME_MANIFEST: &str = "parakit-runtime-manifest.json";
 
@@ -70,25 +72,24 @@ impl RuntimeManifest {
     ///
     /// A pretty-printed JSON document terminated by a newline.
     pub(crate) fn to_json(&self) -> String {
+        let manifest = json!({
+            "required_files": &self.required_files,
+            "runtime_dlls": &self.runtime_dlls,
+            "blas": {
+                "requested": &self.blas.requested,
+                "selected": &self.blas.selected,
+            },
+            "openblas_root": &self.blas.openblas_root,
+            "openblas_include_dir": &self.blas.openblas_include_dir,
+            "openblas_import_lib": &self.blas.openblas_import_lib,
+            "openblas_runtime_dlls": &self.blas.openblas_runtime_dlls,
+            "accelerator": self.accelerator.as_str(),
+            "cuda": self.cuda.as_ref().map(cuda_manifest_value),
+            "vulkan": self.vulkan.as_ref().map(vulkan_manifest_value),
+        });
         format!(
-            "{{\n  \"required_files\": {},\n  \"runtime_dlls\": {},\n  \"blas\": {{\n    \"requested\": {},\n    \"selected\": {}\n  }},\n  \"openblas_root\": {},\n  \"openblas_include_dir\": {},\n  \"openblas_import_lib\": {},\n  \"openblas_runtime_dlls\": {},\n  \"accelerator\": {},\n  \"cuda\": {},\n  \"vulkan\": {}\n}}\n",
-            json_array(&self.required_files),
-            json_array(&self.runtime_dlls),
-            json_string(&self.blas.requested),
-            json_string(&self.blas.selected),
-            json_nullable_string(self.blas.openblas_root.as_deref()),
-            json_nullable_string(self.blas.openblas_include_dir.as_deref()),
-            json_nullable_string(self.blas.openblas_import_lib.as_deref()),
-            json_array(&self.blas.openblas_runtime_dlls),
-            json_string(self.accelerator.as_str()),
-            self.cuda
-                .as_ref()
-                .map(cuda_manifest_json)
-                .unwrap_or_else(|| "null".to_string()),
-            self.vulkan
-                .as_ref()
-                .map(vulkan_manifest_json)
-                .unwrap_or_else(|| "null".to_string()),
+            "{}\n",
+            serde_json::to_string_pretty(&manifest).expect("runtime manifest JSON serialization")
         )
     }
 }
@@ -112,59 +113,19 @@ pub(crate) fn cuda_external_dll_names(toolkit_version: &str) -> Vec<String> {
     ]
 }
 
-fn cuda_manifest_json(cuda: &CudaManifest) -> String {
-    format!(
-        "{{\n    \"toolkit_version\": {},\n    \"architectures\": {},\n    \"external_dlls\": {},\n    \"external_dlls_bundled\": {}\n  }}",
-        json_string(&cuda.toolkit_version),
-        json_string(&cuda.architectures),
-        json_array(&cuda.external_dlls),
-        json_bool(cuda.external_dlls_bundled),
-    )
+fn cuda_manifest_value(cuda: &CudaManifest) -> Value {
+    json!({
+        "toolkit_version": &cuda.toolkit_version,
+        "architectures": &cuda.architectures,
+        "external_dlls": &cuda.external_dlls,
+        "external_dlls_bundled": cuda.external_dlls_bundled,
+    })
 }
 
-fn vulkan_manifest_json(vulkan: &VulkanManifest) -> String {
-    format!(
-        "{{\n    \"sdk_version\": {},\n    \"external_dlls\": {},\n    \"external_dlls_bundled\": {}\n  }}",
-        json_string(&vulkan.sdk_version),
-        json_array(&vulkan.external_dlls),
-        json_bool(vulkan.external_dlls_bundled),
-    )
-}
-
-fn json_array(values: &[String]) -> String {
-    let escaped = values
-        .iter()
-        .map(|value| json_string(value))
-        .collect::<Vec<_>>();
-    format!("[{}]", escaped.join(", "))
-}
-
-fn json_nullable_string(value: Option<&str>) -> String {
-    value.map(json_string).unwrap_or_else(|| "null".to_string())
-}
-
-fn json_bool(value: bool) -> &'static str {
-    if value {
-        "true"
-    } else {
-        "false"
-    }
-}
-
-fn json_string(value: &str) -> String {
-    let mut out = String::with_capacity(value.len() + 2);
-    out.push('"');
-    for ch in value.chars() {
-        match ch {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            ch if ch.is_control() => out.push_str(&format!("\\u{:04x}", ch as u32)),
-            ch => out.push(ch),
-        }
-    }
-    out.push('"');
-    out
+fn vulkan_manifest_value(vulkan: &VulkanManifest) -> Value {
+    json!({
+        "sdk_version": &vulkan.sdk_version,
+        "external_dlls": &vulkan.external_dlls,
+        "external_dlls_bundled": vulkan.external_dlls_bundled,
+    })
 }
