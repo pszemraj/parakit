@@ -173,6 +173,38 @@ pub fn has_gpu_device() -> bool {
     devices().iter().any(DeviceInfo::is_gpu_like)
 }
 
+/// Return the GPU device ggml is expected to prefer.
+///
+/// # Returns
+///
+/// The first discrete GPU when one is visible, otherwise the first integrated
+/// GPU. Returns `None` when ggml reports no GPU or iGPU devices.
+pub fn preferred_gpu_device() -> Option<DeviceInfo> {
+    let devices = devices();
+    preferred_gpu_device_in(&devices).cloned()
+}
+
+/// Return the preferred GPU device from an existing device list.
+///
+/// # Arguments
+///
+/// * `devices` - Device list returned by [`devices`].
+///
+/// # Returns
+///
+/// The first discrete GPU when one is present, otherwise the first integrated
+/// GPU.
+pub fn preferred_gpu_device_in(devices: &[DeviceInfo]) -> Option<&DeviceInfo> {
+    devices
+        .iter()
+        .find(|device| device.kind == DeviceKind::Gpu)
+        .or_else(|| {
+            devices
+                .iter()
+                .find(|device| device.kind == DeviceKind::IGpu)
+        })
+}
+
 fn bytes_to_mib(bytes: usize) -> usize {
     bytes / 1_048_576
 }
@@ -213,6 +245,56 @@ mod tests {
         assert_eq!(
             info.diagnostic_line(),
             "Vulkan0 - NVIDIA RTX [GPU] (7 MiB free / 8 MiB total)"
+        );
+    }
+
+    #[test]
+    fn preferred_gpu_device_prefers_discrete_over_integrated() {
+        let devices = vec![
+            DeviceInfo {
+                name: "Vulkan0".to_string(),
+                description: "AMD 780M".to_string(),
+                kind: DeviceKind::IGpu,
+                free_bytes: 0,
+                total_bytes: 0,
+            },
+            DeviceInfo {
+                name: "Vulkan1".to_string(),
+                description: "NVIDIA RTX".to_string(),
+                kind: DeviceKind::Gpu,
+                free_bytes: 0,
+                total_bytes: 0,
+            },
+        ];
+
+        assert_eq!(
+            preferred_gpu_device_in(&devices).map(|device| device.name.as_str()),
+            Some("Vulkan1")
+        );
+    }
+
+    #[test]
+    fn preferred_gpu_device_uses_integrated_when_no_discrete_gpu_exists() {
+        let devices = vec![
+            DeviceInfo {
+                name: "BLAS".to_string(),
+                description: "OpenBLAS".to_string(),
+                kind: DeviceKind::Accel,
+                free_bytes: 0,
+                total_bytes: 0,
+            },
+            DeviceInfo {
+                name: "Vulkan0".to_string(),
+                description: "AMD 780M".to_string(),
+                kind: DeviceKind::IGpu,
+                free_bytes: 0,
+                total_bytes: 0,
+            },
+        ];
+
+        assert_eq!(
+            preferred_gpu_device_in(&devices).map(|device| device.name.as_str()),
+            Some("Vulkan0")
         );
     }
 }

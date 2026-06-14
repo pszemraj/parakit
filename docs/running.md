@@ -64,6 +64,8 @@ GGML_VK_VISIBLE_DEVICES=0 parakit --device gpu
 ```
 
 Use `parakit --verbose doctor` to list the compute devices visible to bundled ggml.
+Verbose daemon startup prints the requested mode and expected device, such as
+`device: auto -> Vulkan1 - NVIDIA GeForce RTX 4070 Laptop GPU [GPU]`.
 
 ## Background Use
 

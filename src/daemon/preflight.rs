@@ -176,12 +176,15 @@ fn print_doctor_details(
 #[cfg(feature = "bundled")]
 fn print_compute_details() {
     println!("  compute:");
-    let devices = parakit::gpu::devices();
+    let devices = super::stderr::with_stderr_suppressed(parakit::gpu::devices);
     if devices.is_empty() {
         println!("    no ggml devices reported");
     } else {
         for device in &devices {
             println!("    {}", device.diagnostic_line());
+        }
+        if let Some(device) = parakit::gpu::preferred_gpu_device_in(&devices) {
+            println!("    auto selects: {}", device.diagnostic_line());
         }
     }
     if build_info::accelerator_enabled()
