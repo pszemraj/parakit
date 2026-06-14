@@ -25,7 +25,6 @@ Install the native, OS-specific packages needed[^2] as explained in [docs/build.
 ```bash
 git clone --recurse-submodules https://github.com/pszemraj/parakit.git
 cd parakit
-# if BLAS installed, add PARAKIT_BLAS=auto to below command
 cargo install --path .
 ```
 
