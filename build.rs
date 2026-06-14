@@ -852,35 +852,40 @@ fn env_flag_enabled(name: &str) -> bool {
 }
 
 fn discover_cuda_external_dll_names() -> Vec<String> {
-    let Some(bin_dir) = cuda_bin_dir() else {
-        return Vec::new();
-    };
-    let Ok(entries) = std::fs::read_dir(bin_dir) else {
-        return Vec::new();
-    };
-    let mut names = entries
-        .flatten()
-        .filter_map(|entry| entry.file_name().into_string().ok())
-        .filter(|name| is_cuda_external_dll_name(name))
-        .collect::<Vec<_>>();
+    let mut names = Vec::new();
+    for runtime_dir in cuda_runtime_dirs() {
+        let Ok(entries) = std::fs::read_dir(runtime_dir) else {
+            continue;
+        };
+        names.extend(
+            entries
+                .flatten()
+                .filter_map(|entry| entry.file_name().into_string().ok())
+                .filter(|name| is_cuda_external_dll_name(name)),
+        );
+    }
     names.sort();
     names.dedup();
     names
 }
 
 fn copy_cuda_external_dlls(bin_dir: &Path, names: &[String]) {
-    let Some(cuda_bin) = cuda_bin_dir() else {
+    let runtime_dirs = cuda_runtime_dirs();
+    if runtime_dirs.is_empty() {
         panic!("PARAKIT_BUNDLE_CUDA_DLLS=1 requires CUDA_PATH to point at a CUDA Toolkit install");
-    };
+    }
     for name in names {
-        let source = cuda_bin.join(name);
-        if !source.is_file() {
+        let source = runtime_dirs
+            .iter()
+            .map(|runtime_dir| runtime_dir.join(name))
+            .find(|path| path.is_file());
+        let Some(source) = source else {
             panic!(
                 "PARAKIT_BUNDLE_CUDA_DLLS=1 could not find CUDA runtime DLL {} under {}",
                 name,
-                cuda_bin.display()
+                display_paths(&runtime_dirs)
             );
-        }
+        };
         let dest = bin_dir.join(name);
         std::fs::copy(&source, &dest).unwrap_or_else(|err| {
             panic!(
@@ -892,14 +897,31 @@ fn copy_cuda_external_dlls(bin_dir: &Path, names: &[String]) {
     }
 }
 
-fn cuda_bin_dir() -> Option<PathBuf> {
-    let cuda_path = env::var("CUDA_PATH").ok()?;
-    Some(PathBuf::from(cuda_path).join("bin"))
+fn cuda_runtime_dirs() -> Vec<PathBuf> {
+    let Ok(cuda_path) = env::var("CUDA_PATH") else {
+        return Vec::new();
+    };
+    let bin_dir = PathBuf::from(cuda_path).join("bin");
+    [bin_dir.clone(), bin_dir.join("x64")]
+        .into_iter()
+        .filter(|path| path.is_dir())
+        .collect()
+}
+
+fn display_paths(paths: &[PathBuf]) -> String {
+    paths
+        .iter()
+        .map(|path| path.display().to_string())
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 fn is_cuda_external_dll_name(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
-    (lower.starts_with("cublas64_") || lower.starts_with("cublaslt64_")) && lower.ends_with(".dll")
+    (lower.starts_with("cudart64_")
+        || lower.starts_with("cublas64_")
+        || lower.starts_with("cublaslt64_"))
+        && lower.ends_with(".dll")
 }
 
 fn windows_openblas_for_bundle(blas: &BlasConfig) -> Option<&WindowsOpenBlas> {

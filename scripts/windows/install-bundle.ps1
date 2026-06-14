@@ -242,7 +242,9 @@ function Assert-CudaExternalDlls {
 
     $extraDirs = @()
     if (-not [string]::IsNullOrWhiteSpace($env:CUDA_PATH)) {
-        $extraDirs += Join-Path $env:CUDA_PATH "bin"
+        $cudaBin = Join-Path $env:CUDA_PATH "bin"
+        $extraDirs += $cudaBin
+        $extraDirs += Join-Path $cudaBin "x64"
     }
 
     $missing = @()
@@ -254,7 +256,7 @@ function Assert-CudaExternalDlls {
 
     if ($missing.Count -gt 0) {
         $version = if ([string]::IsNullOrWhiteSpace($Cuda.toolkit_version)) { "the build" } else { $Cuda.toolkit_version }
-        throw "CUDA bundle expects external runtime DLLs that were not found: $($missing -join ', '). Install the CUDA Toolkit matching $version so CUDA_PATH\bin is available, add the DLL directory to PATH, or rebuild with --bundle-cuda-dlls."
+        throw "CUDA bundle expects external runtime DLLs that were not found: $($missing -join ', '). Install the CUDA Toolkit matching $version so the CUDA runtime DLL directory is available, add the DLL directory to PATH, or rebuild with --bundle-cuda-dlls."
     }
 }
 

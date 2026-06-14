@@ -47,7 +47,7 @@ function Show-Usage {
     Write-Host "  --cuda           Build a CUDA bundle. Requires NVIDIA CUDA Toolkit on this machine."
     Write-Host "  --vulkan         Build a Vulkan bundle. Requires LunarG Vulkan SDK and glslc."
     Write-Host "  --bundle-cuda-dlls"
-    Write-Host "                   CUDA only: copy cublas64_*.dll and cublasLt64_*.dll into the bundle."
+    Write-Host "                   CUDA only: copy cudart64_*.dll, cublas64_*.dll, and cublasLt64_*.dll into the bundle."
     Write-Host "  --release        Build target\release and bundle it. This is the default."
     Write-Host "  --debug          Build target\debug and bundle it into the same target bundle."
     Write-Host "  --no-submodules  Do not run git submodule update --init --recursive."
@@ -858,10 +858,10 @@ switch ($Flavor) {
         Assert-CudaBuildReady
         if ($BundleCudaDlls) {
             $env:PARAKIT_BUNDLE_CUDA_DLLS = "1"
-            Write-Host "CUDA: cuBLAS runtime DLL bundling enabled"
+            Write-Host "CUDA: runtime DLL bundling enabled"
         } else {
             Remove-Item Env:\PARAKIT_BUNDLE_CUDA_DLLS -ErrorAction SilentlyContinue
-            Write-Host "CUDA: cuBLAS runtime DLLs expected from CUDA_PATH\bin or PATH at install/run time"
+            Write-Host "CUDA: runtime DLLs expected from CUDA_PATH\bin, CUDA_PATH\bin\x64, or PATH at install/run time"
         }
     }
     "vulkan" {

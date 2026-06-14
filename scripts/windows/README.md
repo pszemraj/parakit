@@ -27,8 +27,9 @@ The batch files are wrappers around the PowerShell implementation. All entry poi
 For Windows GPU installs, start with `windows-vulkan-build.bat` unless you
 specifically need CUDA. Vulkan is vendor-agnostic, ships as a self-contained
 parakit bundle, and uses the GPU driver's `vulkan-1.dll` at runtime. CUDA is
-NVIDIA-only and either needs matching CUDA Toolkit cuBLAS DLLs available through
-`%CUDA_PATH%\bin` or `PATH`, or a larger bundle built with `--bundle-cuda-dlls`.
+NVIDIA-only and either needs matching CUDA Toolkit runtime DLLs available
+through `%CUDA_PATH%\bin`, `%CUDA_PATH%\bin\x64`, or `PATH`, or a larger bundle
+built with `--bundle-cuda-dlls`.
 
 PowerShell equivalent from PowerShell:
 
@@ -47,10 +48,10 @@ Only one accelerator flavor is supported per bundle.
 | Flavor | Command | Build-time requirements | Runtime expectation |
 | --- | --- | --- | --- |
 | CPU | `windows-cpu-build.bat` | Visual Studio C++ tools, CMake, Rust | Generated CrispASR/ggml DLLs are bundled. |
-| CUDA | `windows-cuda-build.bat` | Visual Studio C++ tools, Ninja, NVIDIA CUDA Toolkit with `nvcc`; `CUDA_PATH` may be inferred from `nvcc.exe` on `PATH` | NVIDIA-only. cuBLAS DLLs must be found through `%CUDA_PATH%\bin` or `PATH`, unless `--bundle-cuda-dlls` is used. |
+| CUDA | `windows-cuda-build.bat` | Visual Studio C++ tools, Ninja, NVIDIA CUDA Toolkit with `nvcc`; `CUDA_PATH` may be inferred from `nvcc.exe` on `PATH` | NVIDIA-only. CUDA runtime and cuBLAS DLLs must be found through `%CUDA_PATH%\bin`, `%CUDA_PATH%\bin\x64`, or `PATH`, unless `--bundle-cuda-dlls` is used. |
 | Vulkan | `windows-vulkan-build.bat` | Visual Studio C++ tools, Ninja, LunarG Vulkan SDK with `glslc`; `VULKAN_SDK` may be autodetected from `C:\VulkanSDK\*` or inferred from `glslc.exe` on `PATH` | Recommended Windows GPU flavor for NVIDIA, AMD, and Intel. `vulkan-1.dll` is provided by the installed GPU driver. |
 
-CUDA cuBLAS bundling is opt-in because `cublasLt64_*.dll` is large:
+CUDA runtime DLL bundling is opt-in because `cublasLt64_*.dll` is large:
 
 ```bat
 scripts\windows\windows-cuda-build.bat --bundle-cuda-dlls

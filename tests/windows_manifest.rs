@@ -57,6 +57,7 @@ fn serializes_cuda_external_dll_contract() {
             toolkit_version: "13.2".to_string(),
             architectures: "89-real".to_string(),
             external_dlls: vec![
+                "cudart64_13.dll".to_string(),
                 "cublas64_13.dll".to_string(),
                 "cublasLt64_13.dll".to_string(),
             ],
@@ -68,8 +69,9 @@ fn serializes_cuda_external_dll_contract() {
     assert_eq!(json["accelerator"], "cuda");
     assert_eq!(json["cuda"]["toolkit_version"], "13.2");
     assert_eq!(json["cuda"]["architectures"], "89-real");
-    assert_eq!(json["cuda"]["external_dlls"][0], "cublas64_13.dll");
-    assert_eq!(json["cuda"]["external_dlls"][1], "cublasLt64_13.dll");
+    assert_eq!(json["cuda"]["external_dlls"][0], "cudart64_13.dll");
+    assert_eq!(json["cuda"]["external_dlls"][1], "cublas64_13.dll");
+    assert_eq!(json["cuda"]["external_dlls"][2], "cublasLt64_13.dll");
     assert_eq!(json["cuda"]["external_dlls_bundled"], false);
     assert_eq!(json["vulkan"], Value::Null);
 }
@@ -122,14 +124,14 @@ fn preserves_experimental_multi_backend_metadata() {
 }
 
 #[test]
-fn derives_cuda_cublas_dll_names_from_toolkit_major() {
+fn derives_cuda_runtime_dll_names_from_toolkit_major() {
     assert_eq!(
         cuda_external_dll_names("13.2"),
-        vec!["cublas64_13.dll", "cublasLt64_13.dll"]
+        vec!["cudart64_13.dll", "cublas64_13.dll", "cublasLt64_13.dll"]
     );
     assert_eq!(
         cuda_external_dll_names("Cuda compilation tools, release 12.6, V12.6.85"),
-        vec!["cublas64_12.dll", "cublasLt64_12.dll"]
+        vec!["cudart64_12.dll", "cublas64_12.dll", "cublasLt64_12.dll"]
     );
     assert!(cuda_external_dll_names("unknown").is_empty());
 }

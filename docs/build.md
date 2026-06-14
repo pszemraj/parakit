@@ -58,7 +58,7 @@ For Windows bundles, build one accelerator flavor at a time. A combined CUDA+Vul
 Use the Windows bundle scripts for runnable per-user installs. They copy
 `parakit.exe` plus the generated CrispASR/ggml runtime DLLs into one app
 directory. The detailed flavor matrix, installer behavior, PATH handling, CUDA
-cuBLAS handling, and Vulkan path-length behavior are in
+runtime DLL handling, and Vulkan path-length behavior are in
 [../scripts/windows/README.md](../scripts/windows/README.md).
 
 ```bat
