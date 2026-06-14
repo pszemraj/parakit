@@ -71,9 +71,9 @@ If you explicitly set a Visual Studio generator for CUDA, keep the matching CUDA
 
 When `ccache` is on `PATH`, ggml's fallback CMake build can auto-enable it. The script keeps that supported by setting `CCACHE_DIR`, `CCACHE_TEMPDIR`, and `CCACHE_BASEDIR` to repo-local paths under `target\tmp` unless you already set them. For troubleshooting, set `CCACHE_DISABLE=1` in the build shell to bypass caching without uninstalling ccache.
 
-Vulkan builds can fail in ggml's shader generator when the checkout plus Cargo target path is too deep. The script warns for risky paths and fails early when the estimated shader object path exceeds CMake's practical MSVC object path limit. It does not shorten paths by mapping temporary drive letters; set `CARGO_TARGET_DIR` explicitly instead.
+Vulkan builds can fail in ggml's shader generator when the checkout plus Cargo target path is too deep. If `CARGO_TARGET_DIR` is unset and the repo-local target path would be too deep, the script automatically uses `$env:USERPROFILE\parakit-target`. It does not shorten paths by mapping temporary drive letters. If you set `CARGO_TARGET_DIR` yourself and it is still too deep, the script fails early before CMake starts.
 
-If you set an absolute `CARGO_TARGET_DIR`, choose a short path:
+Override the target directory only when you need a different approved location:
 
 ```powershell
 $env:CARGO_TARGET_DIR = "$env:USERPROFILE\parakit-target"

@@ -657,12 +657,37 @@ function Assert-VulkanBuildPathLength {
         return
     }
 
+    Set-DefaultVulkanCargoTargetDirIfNeeded
+
     $estimatedLength = Get-VulkanShaderObjectPathEstimate -RepoRoot $repo
     if ($estimatedLength -lt 250) {
         return
     }
 
-    throw "Vulkan shader build paths are estimated at $estimatedLength characters, which exceeds CMake's practical MSVC object path limit. Set CARGO_TARGET_DIR to a short absolute user-writable path such as `$env:USERPROFILE\parakit-target, or clone/build from a shorter path, then rerun the build. The script does not map temporary drive letters automatically because managed Windows environments can block that behavior."
+    throw "Vulkan shader build paths are estimated at $estimatedLength characters, which exceeds CMake's practical MSVC object path limit. Set CARGO_TARGET_DIR to a shorter absolute user-writable path, or clone/build from a shorter path, then rerun the build. The script does not map temporary drive letters automatically because managed Windows environments can block that behavior."
+}
+
+function Set-DefaultVulkanCargoTargetDirIfNeeded {
+    if (-not [string]::IsNullOrWhiteSpace($env:CARGO_TARGET_DIR)) {
+        return
+    }
+
+    $repoTargetEstimate = Get-VulkanShaderObjectPathEstimate -RepoRoot $repo
+    if ($repoTargetEstimate -lt 250) {
+        return
+    }
+
+    $defaultTarget = Get-DefaultVulkanCargoTargetDir
+    $env:CARGO_TARGET_DIR = $defaultTarget
+    Write-Host "Vulkan: CARGO_TARGET_DIR was not set; using short target dir $env:CARGO_TARGET_DIR"
+}
+
+function Get-DefaultVulkanCargoTargetDir {
+    if (-not [string]::IsNullOrWhiteSpace($env:USERPROFILE)) {
+        return [System.IO.Path]::GetFullPath((Join-Path $env:USERPROFILE "parakit-target"))
+    }
+
+    return [System.IO.Path]::GetFullPath((Join-Path $repo "target"))
 }
 
 function Get-VulkanShaderObjectPathEstimate {
