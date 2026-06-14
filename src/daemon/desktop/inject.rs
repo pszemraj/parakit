@@ -539,10 +539,7 @@ impl Injector {
             anyhow::bail!("direct insertion blocked by safety guard");
         }
 
-        let mut clipboard = match self.clipboard.take() {
-            Some(clipboard) => clipboard,
-            None => Clipboard::new().context("could not open system clipboard")?,
-        };
+        let mut clipboard = self.take_clipboard()?;
         let restore_gate = self.clipboard_restore_gate();
         let restore_plan = ClipboardRestorePlan::new(
             clipboard_restore_delay(),
@@ -616,10 +613,7 @@ impl Injector {
         if text.is_empty() {
             return Ok(PasteOutcome::Blocked);
         }
-        let mut clipboard = match self.clipboard.take() {
-            Some(clipboard) => clipboard,
-            None => Clipboard::new().context("could not open system clipboard")?,
-        };
+        let mut clipboard = self.take_clipboard()?;
         let restore_gate = self.clipboard_restore_gate();
         let restore_plan = ClipboardRestorePlan::new(
             clipboard_restore_delay(),
@@ -629,6 +623,13 @@ impl Injector {
         let result = stage_text_without_paste(&mut clipboard, text, restore_plan, clipboard_policy);
         self.clipboard = Some(clipboard);
         result
+    }
+
+    fn take_clipboard(&mut self) -> Result<Clipboard> {
+        match self.clipboard.take() {
+            Some(clipboard) => Ok(clipboard),
+            None => Clipboard::new().context("could not open system clipboard"),
+        }
     }
 
     /// Type the given text as synthetic keystrokes at the focused cursor.
@@ -833,12 +834,13 @@ where
             );
         }
         Err(err) => {
-            let restore_result = restore_after_history_delay(
+            let restore_result = restore_after_delay(
                 clipboard,
                 previous,
                 write_token,
                 restore_plan,
                 clipboard_policy,
+                RestoreWait::BeforeRestore,
             );
             return match restore_result {
                 Ok(()) => Err(err),
@@ -850,22 +852,24 @@ where
     let paste_result = paste();
     match paste_result {
         Ok(()) => {
-            restore_after_paste_history_delay(
+            restore_after_delay(
                 clipboard,
                 previous,
                 write_token,
                 restore_plan,
                 clipboard_policy,
+                RestoreWait::AfterPaste,
             )?;
             Ok(PasteOutcome::Pasted)
         }
         Err(paste_err) => {
-            let restore_result = restore_after_history_delay(
+            let restore_result = restore_after_delay(
                 clipboard,
                 previous,
                 write_token,
                 restore_plan,
                 clipboard_policy,
+                RestoreWait::BeforeRestore,
             );
             match restore_result {
                 Ok(()) => Err(paste_err),
@@ -898,12 +902,13 @@ where
         .set_text(text.to_owned())
         .context("could not copy transcript to clipboard")?;
     let write_token = restore_plan.after_transcript_write(write_before);
-    restore_after_history_delay(
+    restore_after_delay(
         clipboard,
         previous,
         write_token,
         restore_plan,
         clipboard_policy,
+        RestoreWait::BeforeRestore,
     )?;
     Ok(PasteOutcome::Blocked)
 }
@@ -919,12 +924,13 @@ where
     C: ClipboardStore,
     H: ClipboardRestoreGate + ?Sized,
 {
-    restore_after_history_delay(
+    restore_after_delay(
         clipboard,
         previous,
         write_token,
         restore_plan,
         clipboard_policy,
+        RestoreWait::BeforeRestore,
     )?;
     Ok(match clipboard_policy {
         ClipboardPolicy::RestorePrevious => PasteOutcome::Blocked,
@@ -932,36 +938,29 @@ where
     })
 }
 
-fn restore_after_paste_history_delay<C, H>(
-    clipboard: &mut C,
-    previous: ClipboardSnapshot,
-    write_token: ClipboardWriteToken,
-    restore_plan: ClipboardRestorePlan<'_, H>,
-    clipboard_policy: ClipboardPolicy,
-) -> Result<()>
-where
-    C: ClipboardStore,
-    H: ClipboardRestoreGate + ?Sized,
-{
-    if clipboard_policy == ClipboardPolicy::RestorePrevious {
-        restore_plan.wait_after_paste_before_restore(write_token);
-    }
-    restore_or_clear_clipboard(clipboard, previous, clipboard_policy)
+#[derive(Clone, Copy)]
+enum RestoreWait {
+    BeforeRestore,
+    AfterPaste,
 }
 
-fn restore_after_history_delay<C, H>(
+fn restore_after_delay<C, H>(
     clipboard: &mut C,
     previous: ClipboardSnapshot,
     write_token: ClipboardWriteToken,
     restore_plan: ClipboardRestorePlan<'_, H>,
     clipboard_policy: ClipboardPolicy,
+    wait: RestoreWait,
 ) -> Result<()>
 where
     C: ClipboardStore,
     H: ClipboardRestoreGate + ?Sized,
 {
     if clipboard_policy == ClipboardPolicy::RestorePrevious {
-        restore_plan.wait_before_restore(write_token);
+        match wait {
+            RestoreWait::BeforeRestore => restore_plan.wait_before_restore(write_token),
+            RestoreWait::AfterPaste => restore_plan.wait_after_paste_before_restore(write_token),
+        }
     }
     restore_or_clear_clipboard(clipboard, previous, clipboard_policy)
 }
