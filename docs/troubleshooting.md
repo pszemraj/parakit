@@ -41,6 +41,8 @@ Run `parakit doctor --deep` for an active insertion smoke test. On Linux, use an
 
 Windows elevated-target behavior is covered in [running.md#insertion](running.md#insertion).
 
+In non-direct paste modes, parakit stages blocked or failed transcripts on the clipboard before restoring the active clipboard. Check OS clipboard history, such as `Win+V` on Windows, or your clipboard manager before using the recovery commands below.
+
 If paste is blocked, focus the intended field and run:
 
 ```text

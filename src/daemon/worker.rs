@@ -481,16 +481,42 @@ fn copy_or_block_transcript(
     log: &Logger,
     notifier: &Notifier,
 ) -> Result<InsertOutcome> {
-    if keep_transcript_clipboard {
-        copy_transcript_to_clipboard(injector, text).context(copy_context)?;
-        notifier.transcript_copied(reason);
-        return Ok(InsertOutcome::CopiedOnly);
+    match stage_transcript_for_history(injector, text, keep_transcript_clipboard)
+        .context(copy_context)?
+    {
+        super::inject::PasteOutcome::CopiedOnly => {
+            notifier.transcript_copied(reason);
+            Ok(InsertOutcome::CopiedOnly)
+        }
+        super::inject::PasteOutcome::Blocked => {
+            log.warn(format!(
+                "automatic paste skipped ({reason}); transcript staged for clipboard history"
+            ));
+            notifier.paste_blocked(reason);
+            Ok(InsertOutcome::Blocked)
+        }
+        super::inject::PasteOutcome::Pasted => {
+            unreachable!("no paste is sent by clipboard staging")
+        }
     }
-    log.warn(format!(
-        "automatic paste skipped ({reason}); transcript kept in daemon memory only"
-    ));
-    notifier.paste_blocked(reason);
-    Ok(InsertOutcome::Blocked)
+}
+
+fn stage_transcript_for_history(
+    injector: &mut Option<Injector>,
+    text: &str,
+    keep_transcript_clipboard: bool,
+) -> Result<super::inject::PasteOutcome> {
+    let policy = clipboard_policy(keep_transcript_clipboard);
+    match injector.as_mut() {
+        Some(injector) => injector.stage_text_for_history(text, policy),
+        None => {
+            let mut rebuilt = Injector::new()
+                .context("could not initialize insertion backend for clipboard fallback")?;
+            let result = rebuilt.stage_text_for_history(text, policy);
+            *injector = Some(rebuilt);
+            result
+        }
+    }
 }
 
 fn copy_transcript_to_clipboard(injector: &mut Option<Injector>, text: &str) -> Result<()> {

@@ -558,6 +558,50 @@ impl Injector {
         result
     }
 
+    /// Stage text without sending any paste or type event, then apply the
+    /// configured clipboard retention policy.
+    ///
+    /// This is used for blocked insertion paths so clipboard history managers
+    /// can still observe the transcript while the active clipboard is restored
+    /// by default.
+    ///
+    /// # Arguments
+    ///
+    /// * `text` - Transcript text to stage.
+    /// * `clipboard_policy` - Policy deciding whether the transcript remains
+    ///   on the active clipboard.
+    ///
+    /// # Returns
+    ///
+    /// [`PasteOutcome::CopiedOnly`] when the transcript remains on the active
+    /// clipboard, or [`PasteOutcome::Blocked`] when the previous clipboard was
+    /// restored.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the clipboard cannot be opened, written, or restored.
+    pub fn stage_text_for_history(
+        &mut self,
+        text: &str,
+        clipboard_policy: ClipboardPolicy,
+    ) -> Result<PasteOutcome> {
+        if text.is_empty() {
+            return Ok(PasteOutcome::Blocked);
+        }
+        let mut clipboard = match self.clipboard.take() {
+            Some(clipboard) => clipboard,
+            None => Clipboard::new().context("could not open system clipboard")?,
+        };
+        let result = stage_text_without_paste(
+            &mut clipboard,
+            text,
+            clipboard_restore_delay(),
+            clipboard_policy,
+        );
+        self.clipboard = Some(clipboard);
+        result
+    }
+
     /// Type the given text as synthetic keystrokes at the focused cursor.
     ///
     /// # Returns
@@ -723,7 +767,7 @@ where
     match before_chord() {
         Ok(true) => {}
         Ok(false) => {
-            return finish_blocked_before_clipboard(clipboard, text, clipboard_policy);
+            return stage_text_without_paste(clipboard, text, restore_delay, clipboard_policy);
         }
         Err(err) => return Err(err),
     }
@@ -737,10 +781,11 @@ where
     match before_chord() {
         Ok(true) => {}
         Ok(false) => {
-            return finish_blocked_clipboard(clipboard, previous, clipboard_policy);
+            return finish_blocked_clipboard(clipboard, previous, restore_delay, clipboard_policy);
         }
         Err(err) => {
-            let restore_result = restore_or_clear_clipboard(clipboard, previous, clipboard_policy);
+            let restore_result =
+                restore_after_history_delay(clipboard, previous, restore_delay, clipboard_policy);
             return match restore_result {
                 Ok(()) => Err(err),
                 Err(restore_err) => Err(err.context(format!("{restore_err:#}"))),
@@ -751,12 +796,12 @@ where
     let paste_result = paste();
     match paste_result {
         Ok(()) => {
-            sleep_if_nonzero(restore_delay);
-            restore_or_clear_clipboard(clipboard, previous, clipboard_policy)?;
+            restore_after_history_delay(clipboard, previous, restore_delay, clipboard_policy)?;
             Ok(PasteOutcome::Pasted)
         }
         Err(paste_err) => {
-            let restore_result = restore_or_clear_clipboard(clipboard, previous, clipboard_policy);
+            let restore_result =
+                restore_after_history_delay(clipboard, previous, restore_delay, clipboard_policy);
             match restore_result {
                 Ok(()) => Err(paste_err),
                 Err(restore_err) => Err(paste_err.context(format!("{restore_err:#}"))),
@@ -765,9 +810,10 @@ where
     }
 }
 
-fn finish_blocked_before_clipboard<C: ClipboardStore>(
+fn stage_text_without_paste<C: ClipboardStore>(
     clipboard: &mut C,
     text: &str,
+    restore_delay: Duration,
     clipboard_policy: ClipboardPolicy,
 ) -> Result<PasteOutcome> {
     if clipboard_policy == ClipboardPolicy::KeepTranscript {
@@ -776,19 +822,38 @@ fn finish_blocked_before_clipboard<C: ClipboardStore>(
             .context("could not copy transcript to clipboard")?;
         return Ok(PasteOutcome::CopiedOnly);
     }
+
+    let previous = ClipboardSnapshot::capture(clipboard);
+    clipboard
+        .set_text(text.to_owned())
+        .context("could not copy transcript to clipboard")?;
+    restore_after_history_delay(clipboard, previous, restore_delay, clipboard_policy)?;
     Ok(PasteOutcome::Blocked)
 }
 
 fn finish_blocked_clipboard<C: ClipboardStore>(
     clipboard: &mut C,
     previous: ClipboardSnapshot,
+    restore_delay: Duration,
     clipboard_policy: ClipboardPolicy,
 ) -> Result<PasteOutcome> {
-    restore_or_clear_clipboard(clipboard, previous, clipboard_policy)?;
+    restore_after_history_delay(clipboard, previous, restore_delay, clipboard_policy)?;
     Ok(match clipboard_policy {
         ClipboardPolicy::RestorePrevious => PasteOutcome::Blocked,
         ClipboardPolicy::KeepTranscript => PasteOutcome::CopiedOnly,
     })
+}
+
+fn restore_after_history_delay<C: ClipboardStore>(
+    clipboard: &mut C,
+    previous: ClipboardSnapshot,
+    restore_delay: Duration,
+    clipboard_policy: ClipboardPolicy,
+) -> Result<()> {
+    if clipboard_policy == ClipboardPolicy::RestorePrevious {
+        sleep_if_nonzero(restore_delay);
+    }
+    restore_or_clear_clipboard(clipboard, previous, clipboard_policy)
 }
 
 /// Best-effort snapshot of supported clipboard payloads before staging text.
@@ -971,7 +1036,7 @@ fn clipboard_restore_delay() -> Duration {
     }
     #[cfg(target_os = "windows")]
     {
-        Duration::from_millis(100)
+        Duration::from_millis(750)
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
     {

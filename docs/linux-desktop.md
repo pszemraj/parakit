@@ -34,7 +34,7 @@ If `doctor` reports that `Ctrl+Space` could not be registered, disable any deskt
 
 ## Focus Guard
 
-On X11, parakit compares the active window captured at PTT-down with the active window at paste time. If focus clearly changes, no paste chord is sent and supported previous clipboard contents are preserved or restored unless `--keep-transcript-clipboard` is set. If X11 focus capture or recheck is unavailable, parakit pastes anyway so a transient focus-query failure does not silently drop dictation. Parakit does not inspect application internals with AT-SPI; normal desktop apps, Electron apps, browsers, editors, and terminals are handled by clipboard staging plus one paste chord.
+On X11, parakit compares the active window captured at PTT-down with the active window at paste time. If focus clearly changes, no paste chord is sent, but non-direct modes still stage the transcript before restoring supported previous clipboard contents unless `--keep-transcript-clipboard` is set. If X11 focus capture or recheck is unavailable, parakit pastes anyway so a transient focus-query failure does not silently drop dictation. Parakit does not inspect application internals with AT-SPI; normal desktop apps, Electron apps, browsers, editors, and terminals are handled by clipboard staging plus one paste chord.
 
 ## Passive X11 Listen
 
