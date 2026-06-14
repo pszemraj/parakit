@@ -1364,7 +1364,7 @@ fn enhance_mic_info(_info: &mut MicInfo, _is_default: bool) {}
 ///
 /// `true` for names parakit should avoid unless no physical-looking input is
 /// available.
-pub fn is_virtual_input_name(name: &str) -> bool {
+fn is_virtual_input_name(name: &str) -> bool {
     let lower = name.to_lowercase();
     let patterns = [
         "monitor of",
@@ -1388,7 +1388,7 @@ pub fn is_virtual_input_name(name: &str) -> bool {
 /// # Returns
 ///
 /// `true` for common Bluetooth transport, profile, and headset labels.
-pub fn is_bluetooth_input_name(name: &str) -> bool {
+fn is_bluetooth_input_name(name: &str) -> bool {
     let lower = name.to_lowercase();
     let patterns = [
         "bluetooth",

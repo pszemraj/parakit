@@ -662,7 +662,7 @@ impl Injector {
     ///
     /// Returns an error if the platform backend rejects the synthetic typing
     /// request.
-    pub fn type_text(&mut self, text: &str) -> Result<()> {
+    fn type_text(&mut self, text: &str) -> Result<()> {
         if text.is_empty() {
             return Ok(());
         }
