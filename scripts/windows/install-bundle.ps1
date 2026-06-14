@@ -15,15 +15,6 @@ $ErrorActionPreference = "Stop"
 $scriptDir = Split-Path -Parent $PSCommandPath
 . (Join-Path $scriptDir "common.ps1")
 
-function Get-FullPath {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$Path
-    )
-
-    return [System.IO.Path]::GetFullPath($Path)
-}
-
 function Assert-Bundle {
     param(
         [Parameter(Mandatory = $true)]
@@ -59,17 +50,7 @@ function Assert-Bundle {
     }
 
     foreach ($required in $requiredFiles) {
-        if ([string]::IsNullOrWhiteSpace($required)) {
-            throw "Bundle runtime manifest contains an empty required file entry"
-        }
-        if (
-            [System.IO.Path]::IsPathRooted($required) -or
-            $required.Contains("/") -or
-            $required.Contains("\") -or
-            $required.Contains("..")
-        ) {
-            throw "Bundle runtime manifest required file must be a flat file name: $required"
-        }
+        Assert-FlatBundleFileName -Name $required
         $candidate = Join-Path $Path $required
         if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) {
             throw "Bundle is missing required runtime file: $required"

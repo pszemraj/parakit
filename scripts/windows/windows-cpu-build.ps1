@@ -129,29 +129,6 @@ if (-not [string]::IsNullOrWhiteSpace($env:CRISPASR_LIB_DIR)) {
     throw "Windows bundle builds require the bundled CrispASR staging path so runtime DLLs and parakit-runtime-manifest.json are produced. Unset CRISPASR_LIB_DIR before running this script."
 }
 
-function Require-Command {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$Name,
-
-        [Parameter(Mandatory = $true)]
-        [string]$InstallHint
-    )
-
-    if (-not (Test-Command $Name)) {
-        throw "$Name was not found. $InstallHint"
-    }
-}
-
-function Test-Command {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$Name
-    )
-
-    return $null -ne (Get-Command $Name -ErrorAction SilentlyContinue)
-}
-
 function Test-NinjaGenerator {
     param(
         [Parameter(Mandatory = $true)]
@@ -722,52 +699,6 @@ function Get-DefaultInstallDir {
     return (Join-Path $env:LOCALAPPDATA "Programs\parakit")
 }
 
-function Assert-ChildPath {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$Child,
-
-        [Parameter(Mandatory = $true)]
-        [string]$Parent
-    )
-
-    $childFull = [System.IO.Path]::GetFullPath($Child)
-    $parentFull = [System.IO.Path]::GetFullPath($Parent).TrimEnd([System.IO.Path]::DirectorySeparatorChar)
-    $prefix = $parentFull + [System.IO.Path]::DirectorySeparatorChar
-    if (-not $childFull.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)) {
-        throw "Refusing to operate outside expected directory. Path: $childFull Parent: $parentFull"
-    }
-}
-
-function Copy-IfExists {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$Path,
-
-        [Parameter(Mandatory = $true)]
-        [string]$Destination
-    )
-
-    if (Test-Path -LiteralPath $Path) {
-        Copy-Item -LiteralPath $Path -Destination $Destination -Force
-    }
-}
-
-function Invoke-Checked {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$Command,
-
-        [Parameter(ValueFromRemainingArguments = $true)]
-        [string[]]$Arguments
-    )
-
-    & $Command @Arguments
-    if ($LASTEXITCODE -ne 0) {
-        throw "$Command failed with exit code $LASTEXITCODE"
-    }
-}
-
 function Test-CrispAsrSubmoduleReady {
     $manifest = Join-Path $repo "vendor\CrispASR\crispasr\Cargo.toml"
     if (-not (Test-Path -LiteralPath $manifest -PathType Leaf)) {
@@ -915,15 +846,7 @@ Copy-Item -LiteralPath $runtimeManifest -Destination $bundleDir -Force
 
 $manifest = Get-Content -LiteralPath $runtimeManifest -Raw | ConvertFrom-Json
 foreach ($required in @($manifest.required_files)) {
-    if (
-        [string]::IsNullOrWhiteSpace($required) -or
-        [System.IO.Path]::IsPathRooted($required) -or
-        $required.Contains("/") -or
-        $required.Contains("\") -or
-        $required.Contains("..")
-    ) {
-        throw "Runtime manifest required file must be a flat file name: $required"
-    }
+    Assert-FlatBundleFileName -Name $required -Context "Runtime manifest required file"
     $source = Join-Path $profileDir $required
     if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
         throw "Runtime manifest required file was not produced: $required"
