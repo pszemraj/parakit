@@ -100,7 +100,9 @@ Model cache behavior and commands are in [running.md#model-cache](running.md#mod
 
 ## Windows GPU Builds
 
-If a CUDA bundle fails to start with `0xC0000135` or `STATUS_DLL_NOT_FOUND`, Windows could not resolve a load-time DLL. For CUDA bundles, the usual missing files are `cublas64_*.dll` and `cublasLt64_*.dll`. Install the CUDA Toolkit that matches the build so `%CUDA_PATH%\bin` is available, add that directory to `PATH`, or rebuild with:
+If a GPU bundle fails to start with `0xC0000135` or `STATUS_DLL_NOT_FOUND`, Windows could not resolve a load-time DLL. Bundle requirements and installer behavior are in [../scripts/windows/README.md#runtime-manifest](../scripts/windows/README.md#runtime-manifest).
+
+For CUDA bundles, the usual missing files are `cublas64_*.dll` and `cublasLt64_*.dll`. Install the CUDA Toolkit that matches the build so `%CUDA_PATH%\bin` is available, add that directory to `PATH`, or rebuild with:
 
 ```bat
 scripts\windows\windows-cuda-build.bat --bundle-cuda-dlls

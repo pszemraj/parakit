@@ -57,34 +57,15 @@ For Windows bundles, build one accelerator flavor at a time. A combined CUDA+Vul
 
 Use the Windows bundle scripts for runnable per-user installs. They copy
 `parakit.exe` plus the generated CrispASR/ggml runtime DLLs into one app
-directory.
+directory. The detailed flavor matrix, installer behavior, PATH handling, CUDA
+cuBLAS handling, and Vulkan path-length behavior are in
+[../scripts/windows/README.md](../scripts/windows/README.md).
 
 ```bat
 scripts\windows\windows-cpu-build.bat
 scripts\windows\windows-cuda-build.bat
 scripts\windows\windows-vulkan-build.bat
 ```
-
-For Windows GPU installs, prefer the Vulkan bundle unless you specifically need
-CUDA. Vulkan works across NVIDIA, AMD, and Intel GPUs and has no CUDA Toolkit or
-cuBLAS runtime DLL requirement on the target machine; it only needs a current
-GPU driver at runtime. CUDA remains useful for NVIDIA-only setups where the CUDA
-Toolkit is already part of the machine image or where you want to validate the
-NVIDIA CUDA path directly.
-
-Practical Windows choices:
-
-| Machine | Recommended bundle |
-| --- | --- |
-| No GPU SDKs installed, or no GPU acceleration wanted | CPU |
-| NVIDIA, AMD, or Intel GPU with a current vendor driver | Vulkan |
-| NVIDIA GPU with CUDA Toolkit/runtime managed on the machine image | CUDA |
-| NVIDIA GPU without CUDA Toolkit/runtime | Vulkan |
-| AMD-only or Intel-only GPU | Vulkan |
-
-Options, install location, PATH behavior, OpenBLAS bundling, CUDA cuBLAS
-handling, and Vulkan path-length handling are in
-[../scripts/windows/README.md](../scripts/windows/README.md).
 
 ## CPU Builds
 

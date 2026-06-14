@@ -8,6 +8,8 @@ Windows builds need an installed runnable directory, not only `parakit.exe`. Cri
 
 By default, the CPU script builds `target\parakit-windows-x86_64-cpu`, installs it to `%LOCALAPPDATA%\Programs\parakit`, and adds that install directory to the Windows User `PATH`. GPU scripts build sibling bundle directories with `-cuda` or `-vulkan` suffixes. They do not edit the system `PATH`, create firewall rules, open TCP ports, or require administrator rights.
 
+Running a different flavor script installs that flavor into the same default per-user app directory. The installer replaces the previous marked parakit install, so switching from CUDA to Vulkan or back is just another script run.
+
 The installer is intentionally per-user. It refuses system locations such as `C:\Windows` and `C:\Program Files\...`; those paths require admin rights on normal Windows systems and are the wrong default for a developer or corporate laptop.
 
 The scripts do not create symlinks, junctions, or temporary drive-letter mappings, and do not require Windows Developer Mode.

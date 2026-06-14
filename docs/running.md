@@ -43,11 +43,10 @@ parakit --threads 8 --verbose
 
 GPU-capable builds default to `--device auto`. In `auto`, CrispASR asks ggml for the best backend device and falls back to CPU when no GPU backend is available. On hybrid laptops, ggml prefers a discrete GPU over an integrated GPU.
 
-On Windows, the Vulkan bundle is the recommended GPU build for most users. It
-works across NVIDIA, AMD, and Intel drivers and avoids CUDA Toolkit runtime DLL
-setup. Use the CUDA bundle when you specifically want the NVIDIA CUDA backend or
-already manage CUDA Toolkit installs on the target machine. AMD-only and
-Intel-only Windows machines should use the Vulkan bundle for GPU acceleration.
+Windows GPU bundle selection is covered in
+[build.md#windows-bundles](build.md#windows-bundles) and
+[../scripts/windows/README.md#bundle-flavors](../scripts/windows/README.md#bundle-flavors).
+At runtime, `--device` controls CPU/GPU use inside the installed build flavor.
 
 ```bash
 parakit --device auto
@@ -66,7 +65,7 @@ GGML_VK_VISIBLE_DEVICES=0 parakit --device gpu
 
 Use `parakit --verbose doctor` to list the compute devices visible to bundled ggml.
 Verbose daemon startup prints the requested mode and expected device, such as
-`device: auto -> Vulkan1 - NVIDIA GeForce RTX 4070 Laptop GPU [GPU]`.
+`device=auto -> Vulkan1 - NVIDIA GeForce RTX 4070 Laptop GPU [GPU]`.
 
 ## Background Use
 
