@@ -352,18 +352,14 @@ fn model_dtype_label(path: &std::path::Path) -> String {
 }
 
 fn open_cli_engine(cli: &Cli, fetch_quiet: bool, log: &Logger) -> Result<(PathBuf, Engine)> {
-    let model_path = match cli.model.as_deref() {
-        Some(path) => path.to_path_buf(),
-        None => fetch::ensure_default_model_with_verbosity(fetch_quiet, cli.verbose)?,
-    };
-    let threads = cli
-        .threads
-        .map(NonZeroUsize::get)
-        .unwrap_or_else(default_thread_count);
-    let device_mode = cli.device;
-    validate_device_request(device_mode, log)?;
+    let config = resolve_engine_config(
+        cli,
+        || fetch::ensure_default_model_with_verbosity(fetch_quiet, cli.verbose),
+        log,
+    )?;
+    let model_path = config.model_path;
     let open_started = Instant::now();
-    let engine = open_engine(&model_path, threads, device_mode, cli.verbose)
+    let engine = open_engine(&model_path, config.threads, config.device_mode, cli.verbose)
         .with_context(|| format!("could not open model {}", model_path.display()))?;
     let device_summary = resolved_device_summary(engine.device_mode());
     log.verbose(format!(
@@ -375,6 +371,48 @@ fn open_cli_engine(cli: &Cli, fetch_quiet: bool, log: &Logger) -> Result<(PathBu
     ));
     warm_up_engine(&engine, log)?;
     Ok((model_path, engine))
+}
+
+#[derive(Debug)]
+struct EngineConfig {
+    model_path: PathBuf,
+    threads: usize,
+    device_mode: DeviceMode,
+}
+
+fn resolve_engine_config<F>(cli: &Cli, fetch_default_model: F, log: &Logger) -> Result<EngineConfig>
+where
+    F: FnOnce() -> Result<PathBuf>,
+{
+    resolve_engine_config_with_validator(cli, fetch_default_model, |device_mode| {
+        validate_device_request(device_mode, log)
+    })
+}
+
+fn resolve_engine_config_with_validator<F, V>(
+    cli: &Cli,
+    fetch_default_model: F,
+    validate_device: V,
+) -> Result<EngineConfig>
+where
+    F: FnOnce() -> Result<PathBuf>,
+    V: FnOnce(DeviceMode) -> Result<()>,
+{
+    let device_mode = cli.device;
+    validate_device(device_mode)?;
+    let model_path = match cli.model.as_deref() {
+        Some(path) => path.to_path_buf(),
+        None => fetch_default_model()?,
+    };
+    let threads = cli
+        .threads
+        .map(NonZeroUsize::get)
+        .unwrap_or_else(default_thread_count);
+    Ok(EngineConfig {
+        model_path,
+        threads,
+        device_mode,
+    })
 }
 
 fn log_level(cli: &Cli) -> LogLevel {
@@ -586,5 +624,27 @@ mod app_tests {
     #[test]
     fn cpu_device_summary_is_plain() {
         assert_eq!(resolved_device_summary(DeviceMode::Cpu), "cpu");
+    }
+
+    #[test]
+    fn explicit_gpu_validation_runs_before_default_model_fetch() {
+        let cli = Cli::parse_from(["parakit", "--device", "gpu"]);
+        let fetched_default = std::cell::Cell::new(false);
+
+        let err = resolve_engine_config_with_validator(
+            &cli,
+            || {
+                fetched_default.set(true);
+                Ok(PathBuf::from("target/tmp/default-model.gguf"))
+            },
+            |device_mode| {
+                assert_eq!(device_mode, DeviceMode::Gpu);
+                anyhow::bail!("gpu unavailable")
+            },
+        )
+        .unwrap_err();
+
+        assert_eq!(err.to_string(), "gpu unavailable");
+        assert!(!fetched_default.get());
     }
 }
