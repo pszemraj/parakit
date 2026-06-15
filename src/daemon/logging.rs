@@ -90,6 +90,7 @@ impl Logger {
             anstream::println!("  insert: {}", info.insertion);
             anstream::println!("  threads: {}", info.threads);
             anstream::println!("  backend: {}", info.backend);
+            anstream::println!("  device: {}", info.device);
             anstream::println!("  build:");
             for line in build_info::diagnostic_lines() {
                 anstream::println!("    {line}");
@@ -176,6 +177,8 @@ pub(crate) struct BannerInfo<'a> {
     pub(crate) threads: usize,
     /// CrispASR backend label.
     pub(crate) backend: String,
+    /// Requested runtime compute device.
+    pub(crate) device: String,
 }
 
 fn timestamp() -> String {

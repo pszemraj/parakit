@@ -16,6 +16,8 @@ pub(crate) mod preflight;
 pub(crate) mod recording;
 /// Plays local feedback sounds for daemon events.
 pub(crate) mod sounds;
+/// Temporarily suppresses noisy native stderr around structured diagnostics.
+pub(crate) mod stderr;
 /// Runs transcription and post-processing work off the hotkey thread.
 pub(crate) mod worker;
 

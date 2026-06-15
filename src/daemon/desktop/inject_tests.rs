@@ -14,6 +14,13 @@ enum MockClipboardContent {
         html: String,
         alt_text: Option<String>,
     },
+    HtmlImage {
+        html: String,
+        alt_text: Option<String>,
+        width: usize,
+        height: usize,
+        bytes: Vec<u8>,
+    },
     FileList(Vec<PathBuf>),
     Image {
         width: usize,
@@ -31,59 +38,55 @@ struct MockClipboard {
 }
 
 impl MockClipboard {
-    fn new(text: impl Into<String>) -> Self {
+    fn with_content(content: MockClipboardContent) -> Self {
         Self {
-            content: MockClipboardContent::Text(text.into()),
+            content,
             events: Rc::new(RefCell::new(Vec::new())),
             fail_next_set: false,
         }
+    }
+
+    fn new(text: impl Into<String>) -> Self {
+        Self::with_content(MockClipboardContent::Text(text.into()))
     }
 
     fn empty() -> Self {
-        Self {
-            content: MockClipboardContent::Empty,
-            events: Rc::new(RefCell::new(Vec::new())),
-            fail_next_set: false,
-        }
+        Self::with_content(MockClipboardContent::Empty)
     }
 
     fn html(html: impl Into<String>, alt_text: Option<&str>) -> Self {
-        Self {
-            content: MockClipboardContent::Html {
-                html: html.into(),
-                alt_text: alt_text.map(str::to_owned),
-            },
-            events: Rc::new(RefCell::new(Vec::new())),
-            fail_next_set: false,
-        }
+        Self::with_content(MockClipboardContent::Html {
+            html: html.into(),
+            alt_text: alt_text.map(str::to_owned),
+        })
+    }
+
+    fn html_image(html: impl Into<String>, alt_text: Option<&str>) -> Self {
+        Self::with_content(MockClipboardContent::HtmlImage {
+            html: html.into(),
+            alt_text: alt_text.map(str::to_owned),
+            width: 2,
+            height: 1,
+            bytes: vec![1, 2, 3, 4],
+        })
     }
 
     fn file_list(paths: &[&str]) -> Self {
-        Self {
-            content: MockClipboardContent::FileList(paths.iter().map(PathBuf::from).collect()),
-            events: Rc::new(RefCell::new(Vec::new())),
-            fail_next_set: false,
-        }
+        Self::with_content(MockClipboardContent::FileList(
+            paths.iter().map(PathBuf::from).collect(),
+        ))
     }
 
     fn image() -> Self {
-        Self {
-            content: MockClipboardContent::Image {
-                width: 2,
-                height: 1,
-                bytes: vec![1, 2, 3, 4],
-            },
-            events: Rc::new(RefCell::new(Vec::new())),
-            fail_next_set: false,
-        }
+        Self::with_content(MockClipboardContent::Image {
+            width: 2,
+            height: 1,
+            bytes: vec![1, 2, 3, 4],
+        })
     }
 
     fn unsupported() -> Self {
-        Self {
-            content: MockClipboardContent::Unsupported,
-            events: Rc::new(RefCell::new(Vec::new())),
-            fail_next_set: false,
-        }
+        Self::with_content(MockClipboardContent::Unsupported)
     }
 
     fn fail_next_set(mut self) -> Self {
@@ -120,6 +123,10 @@ impl ClipboardStore for MockClipboard {
                 alt_text: Some(text),
                 ..
             } => Ok(text.clone()),
+            MockClipboardContent::HtmlImage {
+                alt_text: Some(text),
+                ..
+            } => Ok(text.clone()),
             _ => anyhow::bail!("clipboard is not text"),
         }
     }
@@ -133,7 +140,8 @@ impl ClipboardStore for MockClipboard {
 
     fn get_html(&mut self) -> Result<String> {
         match &self.content {
-            MockClipboardContent::Html { html, .. } => Ok(html.clone()),
+            MockClipboardContent::Html { html, .. }
+            | MockClipboardContent::HtmlImage { html, .. } => Ok(html.clone()),
             _ => anyhow::bail!("clipboard is not HTML"),
         }
     }
@@ -170,6 +178,12 @@ impl ClipboardStore for MockClipboard {
                 width,
                 height,
                 bytes,
+            }
+            | MockClipboardContent::HtmlImage {
+                width,
+                height,
+                bytes,
+                ..
             } => Ok(ImageData {
                 width: *width,
                 height: *height,
@@ -200,6 +214,63 @@ impl ClipboardStore for MockClipboard {
         self.content = MockClipboardContent::Empty;
         Ok(())
     }
+}
+
+#[derive(Clone)]
+struct MockRestoreGate {
+    events: Rc<RefCell<Vec<String>>>,
+    after_sequence: u32,
+    timeout: bool,
+}
+
+impl MockRestoreGate {
+    fn new(events: Rc<RefCell<Vec<String>>>) -> Self {
+        Self {
+            events,
+            after_sequence: 11,
+            timeout: false,
+        }
+    }
+
+    fn timeout(mut self) -> Self {
+        self.timeout = true;
+        self
+    }
+
+    fn without_sequence_advance(mut self) -> Self {
+        self.after_sequence = 10;
+        self
+    }
+}
+
+impl ClipboardRestoreGate for MockRestoreGate {
+    fn before_transcript_write(&self) -> ClipboardWriteSnapshot {
+        self.events.borrow_mut().push("before-write:10".to_string());
+        ClipboardWriteSnapshot { sequence: Some(10) }
+    }
+
+    fn after_transcript_write(&self, before: ClipboardWriteSnapshot) -> ClipboardWriteToken {
+        self.events
+            .borrow_mut()
+            .push(format!("after-write:{}", self.after_sequence));
+        ClipboardWriteToken {
+            before_sequence: before.sequence,
+            after_sequence: Some(self.after_sequence),
+        }
+    }
+
+    fn wait_before_restore(&self, token: ClipboardWriteToken, _fallback_delay: Duration) {
+        self.events.borrow_mut().push(format!(
+            "{}:{}->{}",
+            if self.timeout { "wait-timeout" } else { "wait" },
+            token.before_sequence.unwrap_or_default(),
+            token.after_sequence.unwrap_or_default()
+        ));
+    }
+}
+
+fn restore_plan<'a, G: ClipboardRestoreGate + ?Sized>(gate: &'a G) -> ClipboardRestorePlan<'a, G> {
+    ClipboardRestorePlan::new(Duration::ZERO, Duration::ZERO, gate)
 }
 
 #[test]
@@ -581,14 +652,14 @@ fn clipboard_swap_cases_are_stable() {
             error_contains: None,
         },
         ClipboardCase {
-            name: "guard blocks paste and restores previous clipboard",
+            name: "guard blocks paste after staging transcript",
             initial: Some("old clipboard"),
             transcript: "dictated text",
             guard_allows: false,
             paste_error: None,
             fail_next_set: false,
             expected_text: Some("old clipboard"),
-            expected_events: &["guard"],
+            expected_events: &["guard", "read", "set:dictated text", "set:old clipboard"],
             expected_outcome: Some(PasteOutcome::Blocked),
             error_contains: None,
         },
@@ -639,7 +710,7 @@ fn clipboard_swap_cases_are_stable() {
                 }
             },
             Duration::ZERO,
-            Duration::ZERO,
+            restore_plan(&PlatformClipboardRestoreGate::fallback()),
             ClipboardPolicy::RestorePrevious,
             || {
                 events.borrow_mut().push("guard".to_string());
@@ -676,7 +747,7 @@ fn clipboard_guard_error_before_staging_leaves_clipboard_untouched() {
             Ok(())
         },
         Duration::ZERO,
-        Duration::ZERO,
+        restore_plan(&PlatformClipboardRestoreGate::fallback()),
         ClipboardPolicy::RestorePrevious,
         || {
             events.borrow_mut().push("guard".to_string());
@@ -691,28 +762,199 @@ fn clipboard_guard_error_before_staging_leaves_clipboard_untouched() {
 }
 
 #[test]
-fn clipboard_keep_transcript_policy_leaves_text_after_paste_and_guard_block() {
-    for guard_allows in [true, false] {
-        let mut clipboard = MockClipboard::new("old clipboard");
-        let result = paste_with_clipboard_swap_guarded(
-            &mut clipboard,
-            "dictated text",
-            || Ok(()),
-            Duration::ZERO,
-            Duration::ZERO,
-            ClipboardPolicy::KeepTranscript,
-            || Ok(guard_allows),
-        )
-        .expect("clipboard keep policy should not fail");
+fn clipboard_keep_transcript_policy_leaves_text_after_guard_block() {
+    let mut clipboard = MockClipboard::new("old clipboard");
+    let result = paste_with_clipboard_swap_guarded(
+        &mut clipboard,
+        "dictated text",
+        || Ok(()),
+        Duration::ZERO,
+        restore_plan(&PlatformClipboardRestoreGate::fallback()),
+        ClipboardPolicy::KeepTranscript,
+        || Ok(false),
+    )
+    .expect("clipboard keep policy should not fail");
 
-        assert_eq!(clipboard.text(), Some("dictated text"));
+    assert_eq!(clipboard.text(), Some("dictated text"));
+    assert_eq!(result, PasteOutcome::CopiedOnly);
+}
+
+#[derive(Clone, Copy)]
+enum ClipboardRestoreAction {
+    Paste,
+    StageOnly,
+}
+
+#[derive(Clone, Copy)]
+enum MockGateMode {
+    Normal,
+    Timeout,
+    UnadvancedSequence,
+}
+
+impl MockGateMode {
+    fn gate(self, events: Rc<RefCell<Vec<String>>>) -> MockRestoreGate {
+        let gate = MockRestoreGate::new(events);
+        match self {
+            Self::Normal => gate,
+            Self::Timeout => gate.timeout(),
+            Self::UnadvancedSequence => gate.without_sequence_advance(),
+        }
+    }
+}
+
+struct ClipboardRestoreCase {
+    name: &'static str,
+    initial: &'static str,
+    action: ClipboardRestoreAction,
+    policy: ClipboardPolicy,
+    gate: MockGateMode,
+    expected_outcome: PasteOutcome,
+    expected_text: &'static str,
+    expected_events: &'static [&'static str],
+}
+
+#[test]
+fn clipboard_restore_gate_cases_are_stable() {
+    let cases = [
+        ClipboardRestoreCase {
+            name: "waits for confirmation before restore",
+            initial: "old clipboard",
+            action: ClipboardRestoreAction::Paste,
+            policy: ClipboardPolicy::RestorePrevious,
+            gate: MockGateMode::Normal,
+            expected_outcome: PasteOutcome::Pasted,
+            expected_text: "old clipboard",
+            expected_events: &[
+                "guard",
+                "read",
+                "before-write:10",
+                "set:dictated text",
+                "after-write:11",
+                "guard",
+                "paste",
+                "wait:10->11",
+                "set:old clipboard",
+            ],
+        },
+        ClipboardRestoreCase {
+            name: "timeout path still restores",
+            initial: "old clipboard",
+            action: ClipboardRestoreAction::Paste,
+            policy: ClipboardPolicy::RestorePrevious,
+            gate: MockGateMode::Timeout,
+            expected_outcome: PasteOutcome::Pasted,
+            expected_text: "old clipboard",
+            expected_events: &[
+                "guard",
+                "read",
+                "before-write:10",
+                "set:dictated text",
+                "after-write:11",
+                "guard",
+                "paste",
+                "wait-timeout:10->11",
+                "set:old clipboard",
+            ],
+        },
+        ClipboardRestoreCase {
+            name: "stage-only waits for confirmation before restore",
+            initial: "old clipboard",
+            action: ClipboardRestoreAction::StageOnly,
+            policy: ClipboardPolicy::RestorePrevious,
+            gate: MockGateMode::Normal,
+            expected_outcome: PasteOutcome::Blocked,
+            expected_text: "old clipboard",
+            expected_events: &[
+                "read",
+                "before-write:10",
+                "set:dictated text",
+                "after-write:11",
+                "wait:10->11",
+                "set:old clipboard",
+            ],
+        },
+        ClipboardRestoreCase {
+            name: "keep transcript never waits or restores",
+            initial: "old clipboard",
+            action: ClipboardRestoreAction::Paste,
+            policy: ClipboardPolicy::KeepTranscript,
+            gate: MockGateMode::Normal,
+            expected_outcome: PasteOutcome::Pasted,
+            expected_text: "dictated text",
+            expected_events: &[
+                "guard",
+                "read",
+                "before-write:10",
+                "set:dictated text",
+                "after-write:11",
+                "guard",
+                "paste",
+            ],
+        },
+        ClipboardRestoreCase {
+            name: "unadvanced sequence completes without hanging",
+            initial: "dictated text",
+            action: ClipboardRestoreAction::Paste,
+            policy: ClipboardPolicy::RestorePrevious,
+            gate: MockGateMode::UnadvancedSequence,
+            expected_outcome: PasteOutcome::Pasted,
+            expected_text: "dictated text",
+            expected_events: &[
+                "guard",
+                "read",
+                "before-write:10",
+                "set:dictated text",
+                "after-write:10",
+                "guard",
+                "paste",
+                "wait:10->10",
+                "set:dictated text",
+            ],
+        },
+    ];
+
+    for case in cases {
+        let mut clipboard = MockClipboard::new(case.initial);
+        let events = clipboard.events();
+        let gate = case.gate.gate(Rc::clone(&events));
+        let result = match case.action {
+            ClipboardRestoreAction::Paste => paste_with_clipboard_swap_guarded(
+                &mut clipboard,
+                "dictated text",
+                || {
+                    events.borrow_mut().push("paste".to_string());
+                    Ok(())
+                },
+                Duration::ZERO,
+                restore_plan(&gate),
+                case.policy,
+                || {
+                    events.borrow_mut().push("guard".to_string());
+                    Ok(true)
+                },
+            ),
+            ClipboardRestoreAction::StageOnly => stage_text_without_paste(
+                &mut clipboard,
+                "dictated text",
+                restore_plan(&gate),
+                case.policy,
+            )
+            .map(PasteOutcome::from),
+        }
+        .expect(case.name);
+
+        assert_eq!(result, case.expected_outcome, "{}", case.name);
+        assert_eq!(clipboard.text(), Some(case.expected_text), "{}", case.name);
         assert_eq!(
-            result,
-            if guard_allows {
-                PasteOutcome::Pasted
-            } else {
-                PasteOutcome::CopiedOnly
-            }
+            events
+                .borrow()
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            case.expected_events,
+            "{}",
+            case.name
         );
     }
 }
@@ -767,6 +1009,42 @@ fn clipboard_restore_policy_preserves_supported_non_text_payloads() {
                 "set-image:2x1:4".to_string(),
             ],
         ),
+        (
+            "html image without text alternative",
+            MockClipboard::html_image(r#"<img src="blob:chatgpt-image">"#, None),
+            MockClipboardContent::Image {
+                width: 2,
+                height: 1,
+                bytes: vec![1, 2, 3, 4],
+            },
+            vec![
+                "guard".to_string(),
+                "read".to_string(),
+                "set:dictated text".to_string(),
+                "guard".to_string(),
+                "paste".to_string(),
+                "set-image:2x1:4".to_string(),
+            ],
+        ),
+        (
+            "html image with text alternative",
+            MockClipboard::html_image(
+                r#"<img src="https://example.invalid/image.webp">"#,
+                Some("image alt"),
+            ),
+            MockClipboardContent::Html {
+                html: r#"<img src="https://example.invalid/image.webp">"#.to_string(),
+                alt_text: Some("image alt".to_string()),
+            },
+            vec![
+                "guard".to_string(),
+                "read".to_string(),
+                "set:dictated text".to_string(),
+                "guard".to_string(),
+                "paste".to_string(),
+                "set-html:<img src=\"https://example.invalid/image.webp\">:image alt".to_string(),
+            ],
+        ),
     ];
 
     for (name, mut clipboard, expected_content, expected_events) in cases {
@@ -779,7 +1057,7 @@ fn clipboard_restore_policy_preserves_supported_non_text_payloads() {
                 Ok(())
             },
             Duration::ZERO,
-            Duration::ZERO,
+            restore_plan(&PlatformClipboardRestoreGate::fallback()),
             ClipboardPolicy::RestorePrevious,
             || {
                 events.borrow_mut().push("guard".to_string());
@@ -807,7 +1085,7 @@ fn unsupported_previous_clipboard_clears_staged_transcript_on_guard_block() {
             Ok(())
         },
         Duration::ZERO,
-        Duration::ZERO,
+        restore_plan(&PlatformClipboardRestoreGate::fallback()),
         ClipboardPolicy::RestorePrevious,
         || {
             events.borrow_mut().push("guard".to_string());

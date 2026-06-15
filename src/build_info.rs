@@ -50,8 +50,35 @@ pub fn diagnostic_lines() -> Vec<String> {
             lines.push(format!("cuda arch:      {arch}"));
         }
     }
+    if let Some(request) = non_empty_env(option_env!("PARAKIT_BUILD_CUDA_ARCHS_REQUEST")) {
+        lines.push(format!("cuda request:   {request}"));
+    }
+    if let Some(version) = non_empty_env(option_env!("PARAKIT_BUILD_CUDA_TOOLKIT_VERSION")) {
+        lines.push(format!("cuda toolkit:   {version}"));
+    }
+    if let Some(compiler) = non_empty_env(option_env!("PARAKIT_BUILD_CMAKE_CUDA_COMPILER")) {
+        lines.push(format!("cuda compiler:  {compiler}"));
+    }
+    if let Some(sdk) = non_empty_env(option_env!("PARAKIT_BUILD_VULKAN_SDK")) {
+        lines.push(format!("vulkan sdk:     {sdk}"));
+    }
 
     lines
+}
+
+/// Return whether this build has a compiled GPU accelerator.
+///
+/// # Returns
+///
+/// `true` when CUDA, Vulkan, or Metal was enabled at build time.
+pub fn accelerator_enabled() -> bool {
+    build_value!("PARAKIT_BUILD_GGML_CUDA") == "ON"
+        || build_value!("PARAKIT_BUILD_GGML_VULKAN") == "ON"
+        || build_value!("PARAKIT_BUILD_GGML_METAL") == "ON"
+}
+
+fn non_empty_env(value: Option<&'static str>) -> Option<&'static str> {
+    value.filter(|value| !value.is_empty() && *value != "unknown")
 }
 
 fn blas_label() -> String {

@@ -1,5 +1,6 @@
 //! Desktop hotkey, focus, session, and insertion helpers.
 
+mod clipboard_restore;
 /// Global push-to-talk hotkey registration and event handling.
 pub(crate) mod hotkey;
 /// Text insertion into the currently focused desktop target.
@@ -15,6 +16,9 @@ pub(crate) mod wsl;
 /// X11 focus and hotkey integration.
 pub(crate) mod x11;
 
+#[cfg(target_os = "windows")]
+/// Windows clipboard-history listener helpers.
+pub(crate) mod windows_clipboard_history;
 #[cfg(target_os = "windows")]
 /// Windows foreground-window detection helpers.
 pub(crate) mod windows_focus;

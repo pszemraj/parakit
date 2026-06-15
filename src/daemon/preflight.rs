@@ -170,7 +170,32 @@ fn print_doctor_details(
     for line in build_info::diagnostic_lines() {
         println!("    {line}");
     }
+    print_compute_details();
 }
+
+#[cfg(feature = "bundled")]
+fn print_compute_details() {
+    println!("  compute:");
+    let devices = super::stderr::with_stderr_suppressed(parakit::gpu::devices);
+    if devices.is_empty() {
+        println!("    no ggml devices reported");
+    } else {
+        for device in &devices {
+            println!("    {}", device.diagnostic_line());
+        }
+        if let Some(device) = parakit::gpu::preferred_gpu_device_in(&devices) {
+            println!("    auto selects: {}", device.diagnostic_line());
+        }
+    }
+    if build_info::accelerator_enabled()
+        && !devices.iter().any(parakit::gpu::DeviceInfo::is_gpu_like)
+    {
+        println!("    warning: accelerator build has no GPU or iGPU visible to ggml");
+    }
+}
+
+#[cfg(not(feature = "bundled"))]
+fn print_compute_details() {}
 
 fn doctor_ready(
     report: &HotkeyReport,

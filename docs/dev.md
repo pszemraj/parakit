@@ -34,6 +34,20 @@ On Windows, the hosted Q8_0 path is the normal model setup. `fetch --from-source
 
 After rebuilding a release artifact, upload F16 and Q8_0 to the hosted repo and update `HOSTED_Q8_SHA256` in `src/model.rs` if the Q8_0 bytes changed.
 
+## Windows GPU Validation
+
+Use the Windows scripts for CUDA/Vulkan validation; they default to Ninja. Raw `cargo check --workspace --all-targets --all-features` may still enter CMake's Visual Studio generator and fail before Rust typechecking if Visual Studio CUDA BuildCustomizations are stale. Known local failure: versioned CUDA targets leave `CudaToolkitDir` empty and emit `CUDA Toolkit directory '' does not exist`.
+
+When that happens, record the exact CUDA/MSBuild error, then validate the Rust all-features surface with an existing bundled lib directory:
+
+```powershell
+$env:CRISPASR_LIB_DIR = (Resolve-Path 'target\debug\build\parakit-<hash>\out\lib').Path
+cargo check --workspace --all-targets --all-features
+Remove-Item Env:\CRISPASR_LIB_DIR
+```
+
+This fallback does not replace real GPU validation. Also run the CUDA and Vulkan Windows scripts plus simulated-dictation smoke tests against `local-scratch\Juniper_St_NE_5.wav` when touching Windows GPU behavior.
+
 ## File Size Exceptions
 
 `src/daemon/audio/capture.rs` is temporarily over the 1k LoC target because it owns one tightly coupled runtime boundary: CPAL stream recovery, the SPSC drain thread, resampler flushing, and recording/pre-roll state. Split it after Windows CPU settles into smaller `audio/stream.rs`, `audio/drain.rs`, and `audio/device.rs` modules without changing behavior.

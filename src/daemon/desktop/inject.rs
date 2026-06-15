@@ -30,6 +30,14 @@ use x11rb::protocol::xproto::ConnectionExt as _;
 #[cfg(target_os = "linux")]
 use x11rb::rust_connection::RustConnection;
 
+#[cfg(target_os = "windows")]
+use super::clipboard_restore::clipboard_history_debug;
+#[cfg(test)]
+use super::clipboard_restore::ClipboardWriteSnapshot;
+use super::clipboard_restore::{
+    ClipboardRestoreGate, ClipboardRestorePlan, ClipboardWriteToken, PlatformClipboardRestoreGate,
+};
+
 #[cfg(target_os = "linux")]
 #[path = "inject_smoke.rs"]
 mod inject_smoke;
@@ -74,6 +82,24 @@ pub(crate) enum PasteOutcome {
     Blocked,
 }
 
+/// Result of staging clipboard text without sending paste or type input.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum StageOutcome {
+    /// The transcript was left on the clipboard.
+    CopiedOnly,
+    /// The previous clipboard policy was applied after staging.
+    Blocked,
+}
+
+impl From<StageOutcome> for PasteOutcome {
+    fn from(outcome: StageOutcome) -> Self {
+        match outcome {
+            StageOutcome::CopiedOnly => Self::CopiedOnly,
+            StageOutcome::Blocked => Self::Blocked,
+        }
+    }
+}
+
 /// Clipboard retention policy after staging text for paste.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ClipboardPolicy {
@@ -106,14 +132,13 @@ pub(crate) fn preflight(mode: PasteMode) -> Result<()> {
     Ok(())
 }
 
-#[cfg(target_os = "windows")]
 fn insertion_needs_enigo(mode: PasteMode) -> bool {
-    mode == PasteMode::Direct
-}
-
-#[cfg(not(target_os = "windows"))]
-fn insertion_needs_enigo(mode: PasteMode) -> bool {
-    mode == PasteMode::Direct || cfg!(not(target_os = "linux"))
+    match mode {
+        PasteMode::Direct => true,
+        PasteMode::Terminal | PasteMode::Standard => {
+            cfg!(not(any(target_os = "linux", target_os = "windows")))
+        }
+    }
 }
 
 /// Exercise the configured insertion backend without inserting into the user's
@@ -412,6 +437,8 @@ fn linux_current_input_focus(conn: &RustConnection) -> Result<u32> {
 pub struct Injector {
     enigo: Option<Enigo>,
     clipboard: Option<Clipboard>,
+    #[cfg(target_os = "windows")]
+    clipboard_history: Option<super::windows_clipboard_history::ClipboardHistoryListener>,
     #[cfg(target_os = "linux")]
     x11_paste: Option<LinuxX11Paste>,
 }
@@ -431,9 +458,23 @@ impl Injector {
         #[cfg(target_os = "linux")]
         super::session::ensure_x11_session_supported()?;
 
+        #[cfg(target_os = "windows")]
+        let clipboard_history =
+            match super::windows_clipboard_history::ClipboardHistoryListener::start() {
+                Ok(listener) => Some(listener),
+                Err(err) => {
+                    clipboard_history_debug(format_args!(
+                        "Windows clipboard-history listener unavailable; using timed restore fallback: {err:#}"
+                    ));
+                    None
+                }
+            };
+
         Ok(Self {
             enigo: None,
             clipboard: None,
+            #[cfg(target_os = "windows")]
+            clipboard_history,
             #[cfg(target_os = "linux")]
             x11_paste: None,
         })
@@ -517,16 +558,19 @@ impl Injector {
             anyhow::bail!("direct insertion blocked by safety guard");
         }
 
-        let mut clipboard = match self.clipboard.take() {
-            Some(clipboard) => clipboard,
-            None => Clipboard::new().context("could not open system clipboard")?,
-        };
+        let mut clipboard = self.take_clipboard()?;
+        let restore_gate = self.clipboard_restore_gate();
+        let restore_plan = ClipboardRestorePlan::new(
+            clipboard_restore_delay(),
+            restore_gate.paste_consume_delay(),
+            &restore_gate,
+        );
         let result = paste_with_clipboard_swap_guarded(
             &mut clipboard,
             text,
             || self.paste_clipboard(mode),
             clipboard_settle_delay(),
-            clipboard_restore_delay(),
+            restore_plan,
             clipboard_policy,
             before_chord,
         );
@@ -558,6 +602,55 @@ impl Injector {
         result
     }
 
+    /// Stage text without sending any paste or type event, then apply the
+    /// configured clipboard retention policy.
+    ///
+    /// This is used for blocked insertion paths so clipboard history managers
+    /// can still observe the transcript while the active clipboard is restored
+    /// by default.
+    ///
+    /// # Arguments
+    ///
+    /// * `text` - Transcript text to stage.
+    /// * `clipboard_policy` - Policy deciding whether the transcript remains
+    ///   on the active clipboard.
+    ///
+    /// # Returns
+    ///
+    /// [`StageOutcome::CopiedOnly`] when the transcript remains on the active
+    /// clipboard, or [`StageOutcome::Blocked`] when the previous clipboard was
+    /// restored.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the clipboard cannot be opened, written, or restored.
+    pub fn stage_text_for_history(
+        &mut self,
+        text: &str,
+        clipboard_policy: ClipboardPolicy,
+    ) -> Result<StageOutcome> {
+        if text.is_empty() {
+            return Ok(StageOutcome::Blocked);
+        }
+        let mut clipboard = self.take_clipboard()?;
+        let restore_gate = self.clipboard_restore_gate();
+        let restore_plan = ClipboardRestorePlan::new(
+            clipboard_restore_delay(),
+            restore_gate.paste_consume_delay(),
+            &restore_gate,
+        );
+        let result = stage_text_without_paste(&mut clipboard, text, restore_plan, clipboard_policy);
+        self.clipboard = Some(clipboard);
+        result
+    }
+
+    fn take_clipboard(&mut self) -> Result<Clipboard> {
+        match self.clipboard.take() {
+            Some(clipboard) => Ok(clipboard),
+            None => Clipboard::new().context("could not open system clipboard"),
+        }
+    }
+
     /// Type the given text as synthetic keystrokes at the focused cursor.
     ///
     /// # Returns
@@ -568,7 +661,7 @@ impl Injector {
     ///
     /// Returns an error if the platform backend rejects the synthetic typing
     /// request.
-    pub fn type_text(&mut self, text: &str) -> Result<()> {
+    fn type_text(&mut self, text: &str) -> Result<()> {
         if text.is_empty() {
             return Ok(());
         }
@@ -620,6 +713,17 @@ impl Injector {
             );
         }
         Ok(self.enigo.as_mut().expect("enigo was just initialized"))
+    }
+
+    fn clipboard_restore_gate(&self) -> PlatformClipboardRestoreGate {
+        #[cfg(target_os = "windows")]
+        {
+            PlatformClipboardRestoreGate::from_listener(self.clipboard_history.as_ref())
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            PlatformClipboardRestoreGate::fallback()
+        }
     }
 }
 
@@ -702,12 +806,12 @@ fn flush_paste_modifiers<S: PasteShortcutSink>(sink: &mut S) {
     }
 }
 
-fn paste_with_clipboard_swap_guarded<C, P, G>(
+fn paste_with_clipboard_swap_guarded<C, P, G, H>(
     clipboard: &mut C,
     text: &str,
     mut paste: P,
     settle_delay: Duration,
-    restore_delay: Duration,
+    restore_plan: ClipboardRestorePlan<'_, H>,
     clipboard_policy: ClipboardPolicy,
     mut before_chord: G,
 ) -> Result<PasteOutcome>
@@ -715,6 +819,7 @@ where
     C: ClipboardStore,
     P: FnMut() -> Result<()>,
     G: FnMut() -> Result<bool>,
+    H: ClipboardRestoreGate + ?Sized,
 {
     if text.is_empty() {
         return Ok(PasteOutcome::Pasted);
@@ -723,24 +828,40 @@ where
     match before_chord() {
         Ok(true) => {}
         Ok(false) => {
-            return finish_blocked_before_clipboard(clipboard, text, clipboard_policy);
+            return stage_text_without_paste(clipboard, text, restore_plan, clipboard_policy)
+                .map(PasteOutcome::from);
         }
         Err(err) => return Err(err),
     }
 
     let previous = ClipboardSnapshot::capture(clipboard);
+    let write_before = restore_plan.before_transcript_write();
     clipboard
         .set_text(text.to_owned())
         .context("could not copy transcript to clipboard")?;
+    let write_token = restore_plan.after_transcript_write(write_before);
 
     sleep_if_nonzero(settle_delay);
     match before_chord() {
         Ok(true) => {}
         Ok(false) => {
-            return finish_blocked_clipboard(clipboard, previous, clipboard_policy);
+            return finish_blocked_clipboard(
+                clipboard,
+                previous,
+                write_token,
+                restore_plan,
+                clipboard_policy,
+            );
         }
         Err(err) => {
-            let restore_result = restore_or_clear_clipboard(clipboard, previous, clipboard_policy);
+            let restore_result = restore_after_delay(
+                clipboard,
+                previous,
+                write_token,
+                restore_plan,
+                clipboard_policy,
+                RestoreWait::BeforeRestore,
+            );
             return match restore_result {
                 Ok(()) => Err(err),
                 Err(restore_err) => Err(err.context(format!("{restore_err:#}"))),
@@ -751,12 +872,25 @@ where
     let paste_result = paste();
     match paste_result {
         Ok(()) => {
-            sleep_if_nonzero(restore_delay);
-            restore_or_clear_clipboard(clipboard, previous, clipboard_policy)?;
+            restore_after_delay(
+                clipboard,
+                previous,
+                write_token,
+                restore_plan,
+                clipboard_policy,
+                RestoreWait::AfterPaste,
+            )?;
             Ok(PasteOutcome::Pasted)
         }
         Err(paste_err) => {
-            let restore_result = restore_or_clear_clipboard(clipboard, previous, clipboard_policy);
+            let restore_result = restore_after_delay(
+                clipboard,
+                previous,
+                write_token,
+                restore_plan,
+                clipboard_policy,
+                RestoreWait::BeforeRestore,
+            );
             match restore_result {
                 Ok(()) => Err(paste_err),
                 Err(restore_err) => Err(paste_err.context(format!("{restore_err:#}"))),
@@ -765,30 +899,90 @@ where
     }
 }
 
-fn finish_blocked_before_clipboard<C: ClipboardStore>(
+fn stage_text_without_paste<C, H>(
     clipboard: &mut C,
     text: &str,
+    restore_plan: ClipboardRestorePlan<'_, H>,
     clipboard_policy: ClipboardPolicy,
-) -> Result<PasteOutcome> {
+) -> Result<StageOutcome>
+where
+    C: ClipboardStore,
+    H: ClipboardRestoreGate + ?Sized,
+{
     if clipboard_policy == ClipboardPolicy::KeepTranscript {
         clipboard
             .set_text(text.to_owned())
             .context("could not copy transcript to clipboard")?;
-        return Ok(PasteOutcome::CopiedOnly);
+        return Ok(StageOutcome::CopiedOnly);
     }
-    Ok(PasteOutcome::Blocked)
+
+    let previous = ClipboardSnapshot::capture(clipboard);
+    let write_before = restore_plan.before_transcript_write();
+    clipboard
+        .set_text(text.to_owned())
+        .context("could not copy transcript to clipboard")?;
+    let write_token = restore_plan.after_transcript_write(write_before);
+    restore_after_delay(
+        clipboard,
+        previous,
+        write_token,
+        restore_plan,
+        clipboard_policy,
+        RestoreWait::BeforeRestore,
+    )?;
+    Ok(StageOutcome::Blocked)
 }
 
-fn finish_blocked_clipboard<C: ClipboardStore>(
+fn finish_blocked_clipboard<C, H>(
     clipboard: &mut C,
     previous: ClipboardSnapshot,
+    write_token: ClipboardWriteToken,
+    restore_plan: ClipboardRestorePlan<'_, H>,
     clipboard_policy: ClipboardPolicy,
-) -> Result<PasteOutcome> {
-    restore_or_clear_clipboard(clipboard, previous, clipboard_policy)?;
+) -> Result<PasteOutcome>
+where
+    C: ClipboardStore,
+    H: ClipboardRestoreGate + ?Sized,
+{
+    restore_after_delay(
+        clipboard,
+        previous,
+        write_token,
+        restore_plan,
+        clipboard_policy,
+        RestoreWait::BeforeRestore,
+    )?;
     Ok(match clipboard_policy {
         ClipboardPolicy::RestorePrevious => PasteOutcome::Blocked,
         ClipboardPolicy::KeepTranscript => PasteOutcome::CopiedOnly,
     })
+}
+
+#[derive(Clone, Copy)]
+enum RestoreWait {
+    BeforeRestore,
+    AfterPaste,
+}
+
+fn restore_after_delay<C, H>(
+    clipboard: &mut C,
+    previous: ClipboardSnapshot,
+    write_token: ClipboardWriteToken,
+    restore_plan: ClipboardRestorePlan<'_, H>,
+    clipboard_policy: ClipboardPolicy,
+    wait: RestoreWait,
+) -> Result<()>
+where
+    C: ClipboardStore,
+    H: ClipboardRestoreGate + ?Sized,
+{
+    if clipboard_policy == ClipboardPolicy::RestorePrevious {
+        match wait {
+            RestoreWait::BeforeRestore => restore_plan.wait_before_restore(write_token),
+            RestoreWait::AfterPaste => restore_plan.wait_after_paste_before_restore(write_token),
+        }
+    }
+    restore_or_clear_clipboard(clipboard, previous, clipboard_policy)
 }
 
 /// Best-effort snapshot of supported clipboard payloads before staging text.
@@ -820,10 +1014,16 @@ impl ClipboardSnapshot {
         }
 
         if let Ok(html) = clipboard.get_html() {
-            return Self::Html {
-                html,
-                alt_text: clipboard.get_text().ok(),
-            };
+            let alt_text = clipboard.get_text().ok();
+            // Browser image copies can expose transient HTML plus bitmap data.
+            // Without a text alternative, the decoded image is usually the
+            // restorable user-visible payload.
+            if alt_text.as_deref().is_none_or(str::is_empty) {
+                if let Ok(image) = clipboard.get_image() {
+                    return Self::Image(owned_image(image));
+                }
+            }
+            return Self::Html { html, alt_text };
         }
 
         if let Ok(image) = clipboard.get_image() {
@@ -971,7 +1171,7 @@ fn clipboard_restore_delay() -> Duration {
     }
     #[cfg(target_os = "windows")]
     {
-        Duration::from_millis(100)
+        Duration::from_millis(750)
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
     {

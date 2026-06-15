@@ -3,17 +3,14 @@
 use anyhow::{Context, Result};
 use clap::Parser;
 use crossbeam_channel::{bounded, unbounded};
-use parakit::audio_file::{read_wav_mono, resample_to_target};
+use parakit::audio_file::prepare_wav_for_model;
 use parakit::data_log::DataLogger;
 use parakit::fetch::{self, FetchOptions, FetchSource};
 use parakit::gguf;
-use parakit::inference::{default_thread_count, Engine};
+use parakit::inference::{default_thread_count, DeviceMode, Engine};
 use parakit::model;
 use parakit::rules;
-#[cfg(unix)]
-use std::fs::File;
-#[cfg(unix)]
-use std::io::Read;
+use parakit::warmup;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -21,13 +18,21 @@ use std::time::{Duration, Instant};
 
 use crate::cli::{CacheCli, CacheCommand, Cli, Commands};
 use crate::daemon;
-use crate::daemon::audio::{AudioCapture, TARGET_RATE};
+use crate::daemon::audio::AudioCapture;
 #[cfg(not(target_os = "linux"))]
 use crate::daemon::hotkey::HotkeyBackend;
 use crate::daemon::logging::{BannerInfo, LogLevel, Logger};
 use crate::daemon::notifications::Notifier;
 use crate::daemon::sounds::Sounds;
 use crate::daemon::worker::{spawn_worker, WorkerCtx, WorkerEvent, WORKER_QUEUE_CAPACITY};
+
+const CPU_ENGINE_WARMUP_SECONDS: &[usize] = &[1];
+// The daemon hard-stops held recordings at MAX_UTTERANCE_SECONDS, but warming
+// that full 270s shape would make every launch pay worst-case compute. This is
+// a realistic-latency policy: cover short dictations and normal 2-25s
+// dictations with margin, accepting a one-time backend stall for unusual longer
+// cold-cache captures.
+const GPU_ENGINE_WARMUP_SECONDS: &[usize] = &[5, 30];
 
 /// Parse CLI arguments and run the requested command or daemon mode.
 ///
@@ -222,6 +227,7 @@ pub(crate) fn run() -> Result<()> {
         ),
         threads: engine.threads(),
         backend: engine.backend().to_string(),
+        device: resolved_device_summary(engine.device_mode()),
     });
 
     // Worker thread takes exclusive ownership of `engine`. `crispasr::Session`
@@ -281,21 +287,15 @@ fn run_ptt_audio_simulation(cli: &Cli, log: Arc<Logger>, audio_path: &Path) -> R
         .map(|dir| Arc::new(DataLogger::new(dir, cli.log_format)));
     let sounds = Sounds::new(false);
 
-    let load_started = Instant::now();
-    let mut wav = read_wav_mono(audio_path)?;
-    let load_elapsed = load_started.elapsed();
-    let source_rate = wav.sample_rate;
-    let source_samples = wav.samples.len();
-    let resample_started = Instant::now();
-    wav.samples = resample_to_target(wav.samples, source_rate)?;
-    let resample_elapsed = resample_started.elapsed();
-    let audio_secs = wav.samples.len() as f32 / TARGET_RATE as f32;
+    let prepare_started = Instant::now();
+    let wav = prepare_wav_for_model(audio_path)?;
+    let prepare_elapsed = prepare_started.elapsed();
+    let audio_secs = wav.audio_secs();
     log.verbose(format!(
-        "parakit: simulated audio prepared in {:.0}ms (read/downmix {:.0}ms, resample {:.0}ms, source_samples={}, target_samples={})",
-        (load_elapsed + resample_elapsed).as_secs_f32() * 1000.0,
-        load_elapsed.as_secs_f32() * 1000.0,
-        resample_elapsed.as_secs_f32() * 1000.0,
-        source_samples,
+        "parakit: simulated audio prepared in {:.0}ms (source_rate={} Hz, source_samples={}, target_samples={})",
+        prepare_elapsed.as_secs_f32() * 1000.0,
+        wav.source_rate,
+        wav.source_samples,
         wav.samples.len()
     ));
 
@@ -303,7 +303,8 @@ fn run_ptt_audio_simulation(cli: &Cli, log: Arc<Logger>, audio_path: &Path) -> R
 
     let msg = format!(
         "parakit: simulating PTT from {} ({audio_secs:.2}s, {source_rate} Hz source)",
-        audio_path.display()
+        audio_path.display(),
+        source_rate = wav.source_rate
     );
     log.line(&msg);
 
@@ -351,24 +352,69 @@ fn model_dtype_label(path: &std::path::Path) -> String {
 }
 
 fn open_cli_engine(cli: &Cli, fetch_quiet: bool, log: &Logger) -> Result<(PathBuf, Engine)> {
+    let config = resolve_engine_config(
+        cli,
+        || fetch::ensure_default_model_with_verbosity(fetch_quiet, cli.verbose),
+        log,
+    )?;
+    let model_path = config.model_path;
+    let open_started = Instant::now();
+    let engine = open_engine(&model_path, config.threads, config.device_mode, cli.verbose)
+        .with_context(|| format!("could not open model {}", model_path.display()))?;
+    let device_summary = resolved_device_summary(engine.device_mode());
+    log.verbose(format!(
+        "parakit: model opened in {:.0}ms with backend={} threads={} device={}",
+        open_started.elapsed().as_secs_f32() * 1000.0,
+        engine.backend(),
+        engine.threads(),
+        device_summary
+    ));
+    // Warmup is a startup readiness check, not only a latency hint: it runs
+    // the same transcribe path the first real dictation would use.
+    warm_up_engine(&engine, log)?;
+    Ok((model_path, engine))
+}
+
+#[derive(Debug)]
+struct EngineConfig {
+    model_path: PathBuf,
+    threads: usize,
+    device_mode: DeviceMode,
+}
+
+fn resolve_engine_config<F>(cli: &Cli, fetch_default_model: F, log: &Logger) -> Result<EngineConfig>
+where
+    F: FnOnce() -> Result<PathBuf>,
+{
+    resolve_engine_config_with_validator(cli, fetch_default_model, |device_mode| {
+        validate_device_request(device_mode, log)
+    })
+}
+
+fn resolve_engine_config_with_validator<F, V>(
+    cli: &Cli,
+    fetch_default_model: F,
+    validate_device: V,
+) -> Result<EngineConfig>
+where
+    F: FnOnce() -> Result<PathBuf>,
+    V: FnOnce(DeviceMode) -> Result<()>,
+{
+    let device_mode = cli.device;
+    validate_device(device_mode)?;
     let model_path = match cli.model.as_deref() {
         Some(path) => path.to_path_buf(),
-        None => fetch::ensure_default_model_with_verbosity(fetch_quiet, cli.verbose)?,
+        None => fetch_default_model()?,
     };
     let threads = cli
         .threads
         .map(NonZeroUsize::get)
         .unwrap_or_else(default_thread_count);
-    let open_started = Instant::now();
-    let engine = open_engine(&model_path, threads, cli.verbose)
-        .with_context(|| format!("could not open model {}", model_path.display()))?;
-    log.verbose(format!(
-        "parakit: model opened in {:.0}ms with backend={} threads={}",
-        open_started.elapsed().as_secs_f32() * 1000.0,
-        engine.backend(),
-        engine.threads()
-    ));
-    Ok((model_path, engine))
+    Ok(EngineConfig {
+        model_path,
+        threads,
+        device_mode,
+    })
 }
 
 fn log_level(cli: &Cli) -> LogLevel {
@@ -388,177 +434,103 @@ fn model_file_name(path: &Path) -> String {
         .unwrap_or_else(|| path.display().to_string())
 }
 
-fn open_engine(path: &Path, threads: usize, verbose: bool) -> Result<Engine> {
+fn open_engine(
+    path: &Path,
+    threads: usize,
+    device_mode: DeviceMode,
+    verbose: bool,
+) -> Result<Engine> {
     if verbose {
-        return Engine::open_with_threads(path, threads);
+        return Engine::open(path, threads, device_mode);
     }
-    with_stderr_suppressed(|| Engine::open_with_threads(path, threads))
+    daemon::stderr::with_stderr_suppressed(|| Engine::open(path, threads, device_mode))
 }
 
-#[cfg(unix)]
-fn with_stderr_suppressed<T>(f: impl FnOnce() -> Result<T>) -> Result<T> {
-    use std::os::fd::FromRawFd;
-
-    struct RestoreStderr {
-        saved: i32,
-        drain: Option<std::thread::JoinHandle<()>>,
+fn validate_device_request(device_mode: DeviceMode, log: &Logger) -> Result<()> {
+    if device_mode != DeviceMode::Gpu {
+        return Ok(());
     }
 
-    impl Drop for RestoreStderr {
-        fn drop(&mut self) {
-            unsafe {
-                libc::dup2(self.saved, libc::STDERR_FILENO);
-                libc::close(self.saved);
-            }
-            if let Some(drain) = self.drain.take() {
-                let _ = drain.join();
-            }
+    #[cfg(feature = "bundled")]
+    {
+        if !parakit::gpu::has_gpu_device() {
+            anyhow::bail!(
+                "--device gpu requested, but ggml reports no GPU or iGPU devices; run `parakit doctor --verbose` for compute diagnostics"
+            );
         }
     }
 
-    let mut pipe_fds = [0_i32; 2];
-    unsafe {
-        if libc::pipe(pipe_fds.as_mut_ptr()) != 0 {
-            return f();
-        }
-    }
-    let read_fd = pipe_fds[0];
-    let write_fd = pipe_fds[1];
-    let saved = unsafe { libc::dup(libc::STDERR_FILENO) };
-    if saved < 0 {
-        unsafe {
-            libc::close(read_fd);
-            libc::close(write_fd);
-        }
-        return f();
-    }
-    if unsafe { libc::dup2(write_fd, libc::STDERR_FILENO) } < 0 {
-        unsafe {
-            libc::close(saved);
-            libc::close(read_fd);
-            libc::close(write_fd);
-        }
-        return f();
-    }
-    unsafe {
-        libc::close(write_fd);
+    #[cfg(not(feature = "bundled"))]
+    {
+        log.warn(
+            "--device gpu requested, but this build does not include the bundled ggml device probe; continuing without GPU preflight",
+        );
     }
 
-    let drain = std::thread::spawn(move || unsafe {
-        let mut file = File::from_raw_fd(read_fd);
-        let mut buf = [0_u8; 8192];
-        while matches!(file.read(&mut buf), Ok(n) if n > 0) {}
-    });
-    let _restore = RestoreStderr {
-        saved,
-        drain: Some(drain),
-    };
-    f()
+    let _ = log;
+    Ok(())
 }
 
-#[cfg(windows)]
-const STDERR_FD: libc::c_int = 2;
-
-#[cfg(windows)]
-fn with_stderr_suppressed<T>(f: impl FnOnce() -> Result<T>) -> Result<T> {
-    use std::os::windows::io::{FromRawHandle, IntoRawHandle};
-
-    struct RestoreStderr {
-        saved_fd: libc::c_int,
-        nul_fd: libc::c_int,
+fn resolved_device_summary(device_mode: DeviceMode) -> String {
+    if device_mode == DeviceMode::Cpu {
+        return DeviceMode::Cpu.as_str().to_string();
     }
 
-    impl Drop for RestoreStderr {
-        fn drop(&mut self) {
-            unsafe {
-                libc::dup2(self.saved_fd, STDERR_FD);
-                libc::close(self.saved_fd);
-                libc::close(self.nul_fd);
+    #[cfg(feature = "bundled")]
+    {
+        match parakit::gpu::preferred_gpu_device() {
+            Some(device) => format!("{} -> {}", device_mode.as_str(), device.diagnostic_line()),
+            None if device_mode == DeviceMode::Auto => {
+                "auto -> CPU fallback (no GPU/iGPU visible)".to_string()
             }
+            None => "gpu -> unavailable (no GPU/iGPU visible)".to_string(),
         }
     }
 
-    let Ok(nul_file) = std::fs::OpenOptions::new().write(true).open("NUL") else {
-        return f();
-    };
-    let nul_handle = nul_file.into_raw_handle();
-    let nul_fd = unsafe { libc::open_osfhandle(nul_handle as isize, 0) };
-    if nul_fd < 0 {
-        unsafe {
-            drop(std::fs::File::from_raw_handle(nul_handle));
-        }
-        return f();
-    }
-
-    let saved_fd = unsafe { libc::dup(STDERR_FD) };
-    if saved_fd < 0 {
-        unsafe {
-            libc::close(nul_fd);
-        }
-        return f();
-    }
-
-    // MSVCRT _dup2 returns 0 on success, while POSIX dup2 returns the
-    // destination fd. Both report failure as -1, so check the failure value.
-    if unsafe { libc::dup2(nul_fd, STDERR_FD) } == -1 {
-        unsafe {
-            libc::close(saved_fd);
-            libc::close(nul_fd);
-        }
-        return f();
-    }
-
-    let _restore = RestoreStderr { saved_fd, nul_fd };
-    f()
-}
-
-#[cfg(all(test, windows))]
-mod windows_stdio_tests {
-    use super::STDERR_FD;
-    use std::os::windows::io::{FromRawHandle, IntoRawHandle};
-
-    struct RestoreStderr {
-        saved_fd: libc::c_int,
-        nul_fd: libc::c_int,
-    }
-
-    impl Drop for RestoreStderr {
-        fn drop(&mut self) {
-            unsafe {
-                libc::dup2(self.saved_fd, STDERR_FD);
-                libc::close(self.saved_fd);
-                libc::close(self.nul_fd);
-            }
-        }
-    }
-
-    #[test]
-    fn windows_crt_dup2_reports_zero_on_success() {
-        let nul_file = std::fs::OpenOptions::new()
-            .write(true)
-            .open("NUL")
-            .expect("open NUL");
-        let nul_handle = nul_file.into_raw_handle();
-        let nul_fd = unsafe { libc::open_osfhandle(nul_handle as isize, 0) };
-        if nul_fd < 0 {
-            unsafe {
-                drop(std::fs::File::from_raw_handle(nul_handle));
-            }
-            panic!("open_osfhandle failed");
-        }
-
-        let saved_fd = unsafe { libc::dup(STDERR_FD) };
-        assert!(saved_fd >= 0, "dup stderr failed");
-        let _restore = RestoreStderr { saved_fd, nul_fd };
-
-        let result = unsafe { libc::dup2(nul_fd, STDERR_FD) };
-        assert_eq!(result, 0);
+    #[cfg(not(feature = "bundled"))]
+    {
+        format!("{} (device probe unavailable)", device_mode.as_str())
     }
 }
 
-#[cfg(not(any(unix, windows)))]
-fn with_stderr_suppressed<T>(f: impl FnOnce() -> Result<T>) -> Result<T> {
-    f()
+fn warm_up_engine(engine: &Engine, log: &Logger) -> Result<()> {
+    let started = Instant::now();
+    let sequence = engine_warmup_seconds(engine);
+    for seconds in sequence {
+        let warmup = warmup::synthetic_pcm(*seconds);
+        engine
+            .transcribe(&warmup)
+            .context("engine warmup transcription failed")?;
+    }
+    log.verbose(format!(
+        "parakit: engine warmup took {:.0}ms ({} synthetic input)",
+        started.elapsed().as_secs_f32() * 1000.0,
+        format_warmup_sequence(sequence)
+    ));
+    Ok(())
+}
+
+fn engine_warmup_seconds(engine: &Engine) -> &'static [usize] {
+    if engine.device_mode() == DeviceMode::Cpu {
+        return CPU_ENGINE_WARMUP_SECONDS;
+    }
+
+    #[cfg(feature = "bundled")]
+    {
+        if parakit::gpu::has_gpu_device() {
+            return GPU_ENGINE_WARMUP_SECONDS;
+        }
+    }
+
+    CPU_ENGINE_WARMUP_SECONDS
+}
+
+fn format_warmup_sequence(sequence: &[usize]) -> String {
+    sequence
+        .iter()
+        .map(|seconds| format!("{seconds}s"))
+        .collect::<Vec<_>>()
+        .join(" + ")
 }
 
 fn run_cache_command(cache: &CacheCli, quiet: bool) -> Result<()> {
@@ -630,5 +602,51 @@ fn format_file_size(bytes: u64) -> String {
         format!("{:.0} MB", bytes as f64 / 1_000_000.0)
     } else {
         format!("{} KB", bytes / 1000)
+    }
+}
+
+#[cfg(test)]
+mod app_tests {
+    use super::*;
+
+    #[test]
+    fn gpu_warmup_policy_is_realistic_not_worst_case() {
+        assert_eq!(crate::daemon::recording::MAX_UTTERANCE_SECONDS, 270);
+        assert_eq!(GPU_ENGINE_WARMUP_SECONDS, &[5, 30]);
+        assert!(GPU_ENGINE_WARMUP_SECONDS
+            .iter()
+            .all(|seconds| *seconds < crate::daemon::recording::MAX_UTTERANCE_SECONDS as usize));
+    }
+
+    #[test]
+    fn warmup_sequence_format_is_stable() {
+        assert_eq!(format_warmup_sequence(&[5, 30]), "5s + 30s");
+    }
+
+    #[test]
+    fn cpu_device_summary_is_plain() {
+        assert_eq!(resolved_device_summary(DeviceMode::Cpu), "cpu");
+    }
+
+    #[test]
+    fn explicit_gpu_validation_runs_before_default_model_fetch() {
+        let cli = Cli::parse_from(["parakit", "--device", "gpu"]);
+        let fetched_default = std::cell::Cell::new(false);
+
+        let err = resolve_engine_config_with_validator(
+            &cli,
+            || {
+                fetched_default.set(true);
+                Ok(PathBuf::from("target/tmp/default-model.gguf"))
+            },
+            |device_mode| {
+                assert_eq!(device_mode, DeviceMode::Gpu);
+                anyhow::bail!("gpu unavailable")
+            },
+        )
+        .unwrap_err();
+
+        assert_eq!(err.to_string(), "gpu unavailable");
+        assert!(!fetched_default.get());
     }
 }

@@ -9,3 +9,5 @@
 !/build/
 /build/*
 !/build/windows_openblas.rs
+!/build/windows_cuda.rs
+!/build/windows_manifest.rs

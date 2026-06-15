@@ -1,10 +1,6 @@
 @echo off
 setlocal EnableExtensions DisableDelayedExpansion
 
-for %%I in ("%~dp0.") do set "SCRIPT_DIR=%%~fI"
-set "PS_SCRIPT=%SCRIPT_DIR%\windows-cpu-build.ps1"
-set "PARAKIT_WINDOWS_BUILD_COMMAND=scripts\windows\windows-cpu-build.bat"
-
 set "POWERSHELL_EXE=powershell.exe"
 where "%POWERSHELL_EXE%" >nul 2>nul
 if errorlevel 1 (
@@ -16,5 +12,5 @@ if errorlevel 1 (
     )
 )
 
-"%POWERSHELL_EXE%" -NoProfile -ExecutionPolicy Bypass -File "%PS_SCRIPT%" %*
+"%POWERSHELL_EXE%" -NoProfile -ExecutionPolicy RemoteSigned -File "%~dp0build.ps1" %*
 exit /b %ERRORLEVEL%

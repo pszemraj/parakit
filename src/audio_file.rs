@@ -11,11 +11,36 @@ use std::path::Path;
 pub const RESAMPLE_CHUNK_SIZE: usize = 1024;
 
 /// Decoded mono WAV audio.
-pub struct WavData {
+struct WavData {
     /// PCM samples mixed to mono.
-    pub samples: Vec<f32>,
+    samples: Vec<f32>,
     /// Source file sample rate.
-    pub sample_rate: u32,
+    sample_rate: u32,
+}
+
+/// WAV audio prepared for the model input path.
+pub struct PreparedWav {
+    /// Mono PCM samples resampled to [`TARGET_RATE`].
+    pub samples: Vec<f32>,
+    /// Source file sample rate before resampling.
+    pub source_rate: u32,
+    /// Source sample count after downmixing and before resampling.
+    pub source_samples: usize,
+}
+
+impl PreparedWav {
+    /// Return the prepared audio duration in seconds.
+    ///
+    /// # Returns
+    ///
+    /// Duration of the model-rate PCM payload.
+    ///
+    /// # Panics
+    ///
+    /// Does not panic.
+    pub fn audio_secs(&self) -> f32 {
+        self.samples.len() as f32 / TARGET_RATE as f32
+    }
 }
 
 /// Read a WAV file, normalize samples to `f32`, and mix it to mono.
@@ -32,7 +57,7 @@ pub struct WavData {
 ///
 /// Returns an error when the file cannot be read or uses an unsupported sample
 /// representation.
-pub fn read_wav_mono(path: &Path) -> Result<WavData> {
+fn read_wav_mono(path: &Path) -> Result<WavData> {
     let mut reader = hound::WavReader::open(path)
         .with_context(|| format!("failed to open {}", path.display()))?;
     let spec = reader.spec();
@@ -63,6 +88,31 @@ pub fn read_wav_mono(path: &Path) -> Result<WavData> {
     })
 }
 
+/// Read, downmix, and resample a WAV file for model input.
+///
+/// # Arguments
+///
+/// * `path` - WAV file to prepare.
+///
+/// # Returns
+///
+/// Mono PCM at [`TARGET_RATE`] plus source metadata useful for diagnostics.
+///
+/// # Errors
+///
+/// Returns an error when the WAV cannot be decoded or resampled.
+pub fn prepare_wav_for_model(path: &Path) -> Result<PreparedWav> {
+    let wav = read_wav_mono(path)?;
+    let source_rate = wav.sample_rate;
+    let source_samples = wav.samples.len();
+    let samples = resample_to_target(wav.samples, source_rate)?;
+    Ok(PreparedWav {
+        samples,
+        source_rate,
+        source_samples,
+    })
+}
+
 /// Resample mono PCM to [`TARGET_RATE`].
 ///
 /// # Arguments
@@ -81,7 +131,7 @@ pub fn read_wav_mono(path: &Path) -> Result<WavData> {
 /// # Panics
 ///
 /// Does not panic.
-pub fn resample_to_target(samples: Vec<f32>, source_rate: u32) -> Result<Vec<f32>> {
+fn resample_to_target(samples: Vec<f32>, source_rate: u32) -> Result<Vec<f32>> {
     if source_rate == TARGET_RATE || samples.is_empty() {
         return Ok(samples);
     }
@@ -183,23 +233,27 @@ mod tests {
     use super::*;
     use hound::{SampleFormat, WavSpec, WavWriter};
 
-    #[test]
-    fn mixes_stereo_wav_to_mono() {
-        let dir = Path::new("target/tmp/audio-file-tests");
+    fn write_i16_wav(path: &Path, channels: u16, sample_rate: u32, samples: &[i16]) {
+        let dir = path.parent().expect("test WAV should have parent");
         std::fs::create_dir_all(dir).unwrap();
-        let path = dir.join("stereo.wav");
         let spec = WavSpec {
-            channels: 2,
-            sample_rate: 48_000,
+            channels,
+            sample_rate,
             bits_per_sample: 16,
             sample_format: SampleFormat::Int,
         };
-        let mut writer = WavWriter::create(&path, spec).unwrap();
-        writer.write_sample::<i16>(16_384).unwrap();
-        writer.write_sample::<i16>(0).unwrap();
-        writer.write_sample::<i16>(0).unwrap();
-        writer.write_sample::<i16>(-16_384).unwrap();
+        let mut writer = WavWriter::create(path, spec).unwrap();
+        for sample in samples {
+            writer.write_sample(*sample).unwrap();
+        }
         writer.finalize().unwrap();
+    }
+
+    #[test]
+    fn mixes_stereo_wav_to_mono() {
+        let dir = Path::new("target/tmp/audio-file-tests");
+        let path = dir.join("stereo.wav");
+        write_i16_wav(&path, 2, 48_000, &[16_384, 0, 0, -16_384]);
 
         let wav = read_wav_mono(&path).unwrap();
         assert_eq!(wav.sample_rate, 48_000);
@@ -215,5 +269,19 @@ mod tests {
             resample_to_target(vec![0.1, -0.1], TARGET_RATE).unwrap(),
             vec![0.1, -0.1]
         );
+    }
+
+    #[test]
+    fn prepare_wav_for_model_keeps_source_metadata() {
+        let dir = Path::new("target/tmp/audio-file-tests");
+        let path = dir.join("target-rate.wav");
+        write_i16_wav(&path, 1, TARGET_RATE, &[16_384, -16_384]);
+
+        let wav = prepare_wav_for_model(&path).unwrap();
+
+        assert_eq!(wav.source_rate, TARGET_RATE);
+        assert_eq!(wav.source_samples, 2);
+        assert_eq!(wav.samples.len(), 2);
+        assert!((wav.audio_secs() - 2.0 / TARGET_RATE as f32).abs() < f32::EPSILON);
     }
 }

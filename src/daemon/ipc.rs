@@ -1051,19 +1051,22 @@ mod windows_pipe {
     }
 
     fn oversized_pipe_message_error<T>() -> Result<T> {
-        validate_pipe_message_len(PIPE_BUFFER_SIZE as usize + 1)?;
-        unreachable!("validate_pipe_message_len always rejects oversized messages")
+        oversized_pipe_message(PIPE_BUFFER_SIZE as usize + 1)
     }
 
     fn validate_pipe_message_len(len: usize) -> Result<()> {
         if len > PIPE_BUFFER_SIZE as usize {
-            bail!(
-                "Windows daemon control message is {} bytes; max supported message is {} bytes",
-                len,
-                PIPE_BUFFER_SIZE
-            );
+            return oversized_pipe_message(len);
         }
         Ok(())
+    }
+
+    fn oversized_pipe_message<T>(len: usize) -> Result<T> {
+        bail!(
+            "Windows daemon control message is {} bytes; max supported message is {} bytes",
+            len,
+            PIPE_BUFFER_SIZE
+        )
     }
 
     #[repr(C)]

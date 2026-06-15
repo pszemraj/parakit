@@ -1,14 +1,12 @@
 # Troubleshooting
 
-Start with diagnostics. `doctor` does not load the model.
+Start with diagnostics. Launch behavior and exit codes are in [running.md#first-run](running.md#first-run). `doctor` does not load the model.
 
 ```text
 parakit doctor
 parakit --verbose doctor
 parakit doctor --deep
 ```
-
-It exits `0` when startup should proceed and `1` when a blocking issue remains. Launch behavior is in [running.md](running.md).
 
 If a daemon is already running, use the control socket before starting another copy:
 
@@ -22,6 +20,8 @@ parakit stop
 Linux X11 session and backend setup are in [linux-desktop.md](linux-desktop.md). The default backend registers `Ctrl+Space` with X11 and does not need `/dev/input` or `/dev/uinput`. If `Ctrl+Space` is unavailable, another desktop shortcut, input method, or keyboard remapper may own it. IBus uses `Ctrl+Space` by default on many Ubuntu/GNOME installs. Disable the conflicting binding and rerun `parakit doctor`.
 
 On macOS, grant Accessibility and Input Monitoring permissions to both the terminal and the built binary.
+
+WSL is not the native Windows daemon path. Validate Windows hotkeys, focus checks, and paste behavior from native Windows PowerShell with the Windows bundle.
 
 ## Literal Space Appears
 
@@ -40,6 +40,8 @@ Paste modes, focus-change behavior, paste sanitization, and clipboard fallback b
 Run `parakit doctor --deep` for an active insertion smoke test. On Linux, use an X11 session; Wayland details are in [linux-desktop.md](linux-desktop.md). Use `standard` for apps that only accept `Ctrl+V`; use `direct` only when an app refuses clipboard paste entirely.
 
 Windows elevated-target behavior is covered in [running.md#insertion](running.md#insertion).
+
+In non-direct paste modes, parakit stages blocked or failed transcripts on the clipboard before restoring the active clipboard. Check OS clipboard history, such as `Win+V` on Windows, or your clipboard manager before using the recovery commands below.
 
 If paste is blocked, focus the intended field and run:
 
@@ -92,6 +94,20 @@ sudo apt install spirv-headers
 cargo build --release --features vulkan
 ```
 
-Windows builds need generated DLLs next to the executable; use the bundle scripts in [../scripts/windows/README.md](../scripts/windows/README.md).
+Windows builds need generated DLLs next to the executable; use the Windows scripts in [../scripts/windows/README.md](../scripts/windows/README.md).
 
 Model cache behavior and commands are in [running.md#model-cache](running.md#model-cache).
+
+## Windows GPU Builds
+
+If a GPU bundle fails to start with `0xC0000135` or `STATUS_DLL_NOT_FOUND`, Windows could not resolve a load-time DLL. Bundle requirements, CUDA runtime bundling, Vulkan loader behavior, and installer checks are in [../scripts/windows/README.md#runtime-manifest](../scripts/windows/README.md#runtime-manifest).
+
+If `parakit --device gpu` fails before model load, run:
+
+```text
+parakit --verbose doctor
+```
+
+The `compute:` block lists devices visible to bundled ggml. A GPU build with no GPU or iGPU listed usually means the driver is missing, too old for the CUDA toolkit/driver ABI, or not exposing Vulkan on that machine. Device selection behavior is in [running.md#device-selection](running.md#device-selection).
+
+The daemon intentionally warms the backend at startup. Use `--verbose` to see warmup duration. A cold backend can still make an unusually long first dictation slower.

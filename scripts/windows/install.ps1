@@ -1,0 +1,437 @@
+# Install a built Parakit Windows app directory into a per-user app directory.
+
+param(
+    [Parameter(Mandatory = $true)]
+    [string]$BundleDir,
+
+    [Parameter(Mandatory = $true)]
+    [string]$InstallDir,
+
+    [switch]$NoUserPath,
+
+    [Alias("Force")]
+    [switch]$AllowBackendSwitch
+)
+
+$ErrorActionPreference = "Stop"
+
+$scriptDir = Split-Path -Parent $PSCommandPath
+. (Join-Path $scriptDir "common.ps1")
+
+function Assert-Bundle {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path
+    )
+
+    if (-not (Test-Path -LiteralPath $Path -PathType Container)) {
+        throw "Bundle directory does not exist: $Path"
+    }
+
+    $manifestPath = Join-Path $Path "parakit-runtime-manifest.json"
+    if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
+        throw "Bundle is missing required runtime manifest: parakit-runtime-manifest.json"
+    }
+
+    try {
+        $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+    } catch {
+        throw "Bundle runtime manifest is not valid JSON: $manifestPath"
+    }
+
+    if ($null -eq $manifest.required_files) {
+        throw "Bundle runtime manifest is missing required_files"
+    }
+
+    $requiredFiles = @($manifest.required_files)
+    if ($requiredFiles.Count -eq 0) {
+        throw "Bundle runtime manifest required_files is empty"
+    }
+
+    if (-not ($requiredFiles -contains "parakit.exe")) {
+        throw "Bundle runtime manifest required_files must include parakit.exe"
+    }
+
+    foreach ($required in $requiredFiles) {
+        Assert-FlatBundleFileName -Name $required
+        $candidate = Join-Path $Path $required
+        if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) {
+            throw "Bundle is missing required runtime file: $required"
+        }
+    }
+
+    return $manifest
+}
+
+function Assert-InstallDir {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path
+    )
+
+    $full = Get-FullPath $Path
+    $trimmed = $full.TrimEnd([System.IO.Path]::DirectorySeparatorChar)
+    $root = [System.IO.Path]::GetPathRoot($full).TrimEnd([System.IO.Path]::DirectorySeparatorChar)
+
+    if ([string]::IsNullOrWhiteSpace($trimmed) -or $trimmed -eq $root) {
+        throw "Refusing to install into an unsafe directory: $full"
+    }
+
+    $forbiddenTrees = @(
+        $env:SystemRoot,
+        $env:ProgramFiles,
+        ${env:ProgramFiles(x86)}
+    ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+
+    foreach ($entry in $forbiddenTrees) {
+        $entryFull = (Get-FullPath $entry).TrimEnd([System.IO.Path]::DirectorySeparatorChar)
+        $prefix = $entryFull + [System.IO.Path]::DirectorySeparatorChar
+        if (
+            $trimmed.Equals($entryFull, [System.StringComparison]::OrdinalIgnoreCase) -or
+            $trimmed.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)
+        ) {
+            throw "Refusing to install into an admin/system directory: $full"
+        }
+    }
+
+    $forbiddenExact = @(
+        $env:USERPROFILE,
+        $env:LOCALAPPDATA
+    ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+
+    foreach ($entry in $forbiddenExact) {
+        $entryFull = (Get-FullPath $entry).TrimEnd([System.IO.Path]::DirectorySeparatorChar)
+        if ($trimmed.Equals($entryFull, [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "Refusing to install into an unsafe directory: $full"
+        }
+    }
+}
+
+function Normalize-PathEntry {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Entry
+    )
+
+    $expanded = [System.Environment]::ExpandEnvironmentVariables($Entry.Trim())
+    if ([string]::IsNullOrWhiteSpace($expanded)) {
+        return ""
+    }
+
+    try {
+        return (Get-FullPath $expanded).TrimEnd([System.IO.Path]::DirectorySeparatorChar)
+    } catch {
+        return $expanded.TrimEnd([System.IO.Path]::DirectorySeparatorChar)
+    }
+}
+
+function Add-UserPathEntry {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path
+    )
+
+    $target = (Get-FullPath $Path).TrimEnd([System.IO.Path]::DirectorySeparatorChar)
+    $current = [System.Environment]::GetEnvironmentVariable("Path", "User")
+    $entries = @()
+    if (-not [string]::IsNullOrWhiteSpace($current)) {
+        $entries = $current -split ";" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+    }
+
+    foreach ($entry in $entries) {
+        $normalized = Normalize-PathEntry $entry
+        if ($normalized.Equals($target, [System.StringComparison]::OrdinalIgnoreCase)) {
+            return $false
+        }
+    }
+
+    $newValue = if ([string]::IsNullOrWhiteSpace($current)) {
+        $target
+    } else {
+        "$target;$current"
+    }
+
+    [System.Environment]::SetEnvironmentVariable("Path", $newValue, "User")
+    return $true
+}
+
+function Test-DllResolvable {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Name,
+
+        [string[]]$ExtraDirs = @()
+    )
+
+    foreach ($dir in $ExtraDirs) {
+        if ([string]::IsNullOrWhiteSpace($dir)) {
+            continue
+        }
+        $candidate = Join-Path $dir $Name
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+            return $true
+        }
+    }
+
+    foreach ($dir in @($env:Path -split ";" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })) {
+        $expanded = [System.Environment]::ExpandEnvironmentVariables($dir)
+        if ([string]::IsNullOrWhiteSpace($expanded)) {
+            continue
+        }
+        $candidate = Join-Path $expanded $Name
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+            return $true
+        }
+    }
+
+    return $false
+}
+
+function Assert-ExternalRuntimeDependencies {
+    param(
+        [Parameter(Mandatory = $true)]
+        $Manifest,
+
+        [Parameter(Mandatory = $true)]
+        [string]$BundleDir
+    )
+
+    if ($null -ne $Manifest.cuda) {
+        Assert-CudaExternalDlls -Cuda $Manifest.cuda -BundleDir $BundleDir
+    }
+    if ($null -ne $Manifest.vulkan) {
+        Assert-VulkanExternalDlls -Vulkan $Manifest.vulkan -BundleDir $BundleDir
+    }
+}
+
+function Get-ManifestAccelerator {
+    param(
+        [Parameter(Mandatory = $true)]
+        $Manifest
+    )
+
+    $accelerator = $Manifest.accelerator
+    if (-not [string]::IsNullOrWhiteSpace($accelerator)) {
+        return $accelerator.ToString().Trim().ToLowerInvariant()
+    }
+
+    if ($null -ne $Manifest.cuda) {
+        return "cuda"
+    }
+    if ($null -ne $Manifest.vulkan) {
+        return "vulkan"
+    }
+
+    foreach ($required in @($Manifest.required_files)) {
+        if ($required -ieq "ggml-cuda.dll") {
+            return "cuda"
+        }
+        if ($required -ieq "ggml-vulkan.dll") {
+            return "vulkan"
+        }
+    }
+
+    return "cpu"
+}
+
+function Get-InstalledAccelerator {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path
+    )
+
+    $manifestPath = Join-Path $Path "parakit-runtime-manifest.json"
+    if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
+        return $null
+    }
+
+    try {
+        $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+    } catch {
+        return "unreadable"
+    }
+
+    return Get-ManifestAccelerator $manifest
+}
+
+function Assert-BackendReplacementAllowed {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Destination,
+
+        [Parameter(Mandatory = $true)]
+        $Manifest,
+
+        [Parameter(Mandatory = $true)]
+        [bool]$AllowSwitch
+    )
+
+    $marker = Join-Path $Destination ".parakit-install"
+    if (-not (Test-Path -LiteralPath $Destination -PathType Container) -or
+        -not (Test-Path -LiteralPath $marker -PathType Leaf)) {
+        return
+    }
+
+    $installed = Get-InstalledAccelerator $Destination
+    if ([string]::IsNullOrWhiteSpace($installed)) {
+        return
+    }
+
+    $incoming = Get-ManifestAccelerator $Manifest
+    if ($installed.Equals($incoming, [System.StringComparison]::OrdinalIgnoreCase)) {
+        return
+    }
+
+    if (-not $AllowSwitch) {
+        throw "Refusing to replace installed $installed bundle with $incoming bundle without explicit approval. Rerun build.ps1 with --allow-backend-switch or --force, or install.ps1 with -AllowBackendSwitch or -Force, when switching cpu/cuda/vulkan installs intentionally."
+    }
+
+    Write-Host "Install: replacing $installed bundle with $incoming bundle"
+}
+
+function Assert-CudaExternalDlls {
+    param(
+        [Parameter(Mandatory = $true)]
+        $Cuda,
+
+        [Parameter(Mandatory = $true)]
+        [string]$BundleDir
+    )
+
+    if ($null -ne $Cuda.external_dlls_bundled -and [bool]$Cuda.external_dlls_bundled) {
+        return
+    }
+
+    $dlls = @($Cuda.external_dlls) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+    if ($dlls.Count -eq 0) {
+        return
+    }
+
+    $missing = @()
+    foreach ($dll in $dlls) {
+        Assert-FlatBundleFileName -Name $dll -Context "CUDA external DLL"
+        if (-not (Test-DllResolvable -Name $dll -ExtraDirs @($BundleDir))) {
+            $missing += $dll
+        }
+    }
+
+    if ($missing.Count -gt 0) {
+        $version = if ([string]::IsNullOrWhiteSpace($Cuda.toolkit_version)) { "the build" } else { $Cuda.toolkit_version }
+        throw "CUDA bundle expects external runtime DLLs that are not loadable from the installed app directory or PATH: $($missing -join ', '). Install the CUDA Toolkit matching $version and add its bin directory to PATH, copy the DLLs into the bundle directory, or rebuild with --bundle-cuda-dlls. CUDA_PATH alone is not a Windows loader search path."
+    }
+}
+
+function Assert-VulkanExternalDlls {
+    param(
+        [Parameter(Mandatory = $true)]
+        $Vulkan,
+
+        [Parameter(Mandatory = $true)]
+        [string]$BundleDir
+    )
+
+    $dlls = @($Vulkan.external_dlls) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+    if ($dlls.Count -eq 0) {
+        return
+    }
+
+    $systemDir = [System.Environment]::SystemDirectory
+    $missing = @()
+    foreach ($dll in $dlls) {
+        Assert-FlatBundleFileName -Name $dll -Context "Vulkan external DLL"
+        if (-not (Test-DllResolvable -Name $dll -ExtraDirs @($BundleDir, $systemDir))) {
+            $missing += $dll
+        }
+    }
+
+    if ($missing.Count -gt 0) {
+        throw "Vulkan bundle expects the driver-provided loader DLLs that were not found: $($missing -join ', '). Install or update the NVIDIA, AMD, or Intel GPU driver, or install the CPU bundle on machines without a Vulkan-capable driver."
+    }
+}
+
+function Invoke-InstallSmoke {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path
+    )
+
+    $exe = Join-Path $Path "parakit.exe"
+    try {
+        & $exe --version > $null
+        $code = $LASTEXITCODE
+    } catch {
+        throw "Installed parakit.exe failed to start. This usually means a runtime DLL is missing. $($_.Exception.Message)"
+    }
+
+    if ($code -eq -1073741515 -or ([uint32]$code) -eq 0xC0000135) {
+        throw "Installed parakit.exe failed to start with 0xC0000135 (STATUS_DLL_NOT_FOUND). A required runtime DLL is missing; check the bundle manifest external_dlls entries."
+    }
+    if ($code -ne 0) {
+        throw "Installed parakit loader smoke test failed with exit code $code"
+    }
+
+    Write-Host "Smoke: parakit --version OK"
+}
+
+function Install-Bundle {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Source,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Destination
+    )
+
+    $marker = Join-Path $Destination ".parakit-install"
+
+    if (Test-Path -LiteralPath $Destination -PathType Container) {
+        if (Test-Path -LiteralPath $marker -PathType Leaf) {
+            Remove-Item -LiteralPath $Destination -Recurse -Force
+        } else {
+            $existingEntry = Get-ChildItem -LiteralPath $Destination -Force | Select-Object -First 1
+            if ($null -ne $existingEntry) {
+                throw "Refusing to install into existing non-empty directory without .parakit-install marker: $Destination. Choose an empty install directory or move the existing directory aside."
+            }
+        }
+    }
+
+    New-Item -ItemType Directory -Path $Destination -Force | Out-Null
+
+    Get-ChildItem -LiteralPath $Source -Force |
+        ForEach-Object {
+            Copy-Item -LiteralPath $_.FullName -Destination $Destination -Recurse -Force
+        }
+
+    Set-Content -LiteralPath $marker -Value "parakit windows install" -Encoding ascii
+}
+
+Assert-NativeWindows "This installer"
+
+$bundleFull = (Resolve-Path -LiteralPath $BundleDir).Path
+$installFull = Get-FullPath $InstallDir
+
+$manifest = Assert-Bundle $bundleFull
+Assert-InstallDir $installFull
+Assert-ExternalRuntimeDependencies -Manifest $manifest -BundleDir $bundleFull
+Assert-BackendReplacementAllowed -Destination $installFull -Manifest $manifest -AllowSwitch ([bool]$AllowBackendSwitch)
+
+Install-Bundle -Source $bundleFull -Destination $installFull
+Write-Host "Installed: $installFull"
+Invoke-InstallSmoke $installFull
+
+if ($NoUserPath) {
+    Write-Host "User PATH: skipped"
+} else {
+    try {
+        $added = Add-UserPathEntry $installFull
+        if ($added) {
+            Write-Host "User PATH: added $installFull"
+        } else {
+            Write-Host "User PATH: already contains $installFull"
+        }
+    } catch {
+        Write-Warning "User PATH update failed: $($_.Exception.Message)"
+        Write-Host "User PATH: not changed"
+        Write-Host "Run directly: $(Join-Path $installFull 'parakit.exe')"
+    }
+}

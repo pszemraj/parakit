@@ -2,6 +2,7 @@
 
 use clap::{Args, Parser, Subcommand};
 use parakit::data_log::LogFormat;
+use parakit::inference::DeviceMode;
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
 
@@ -38,6 +39,10 @@ pub(crate) struct Cli {
     /// CPU inference threads. Defaults to a conservative detected count.
     #[arg(long, value_name = "N")]
     pub(crate) threads: Option<NonZeroUsize>,
+
+    /// Runtime compute device. `auto` uses the best GPU when available and CPU otherwise.
+    #[arg(long, value_enum, default_value = "auto")]
+    pub(crate) device: DeviceMode,
 
     /// Batch insertion style. Defaults to terminal paste on Linux and standard paste elsewhere.
     #[arg(long, value_enum)]

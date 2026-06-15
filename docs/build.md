@@ -13,7 +13,7 @@ Cargo handles Rust packages. System packages are still needed for audio, desktop
 | Ubuntu 24.04 | `cmake build-essential libasound2-dev libudev-dev libxtst-dev libxi-dev libx11-dev libxkbcommon-dev libevdev-dev libxdo-dev libgomp1 pkg-config autoconf libtool` |
 | Fedora | `cmake gcc-c++ alsa-lib-devel libudev-devel libXtst-devel libXi-devel libX11-devel libxkbcommon-devel libevdev-devel xdotool-devel pkgconf autoconf libtool` |
 | Arch | `cmake base-devel alsa-lib libxtst libxi libx11 libxkbcommon libevdev xdotool pkgconf autoconf libtool` |
-| Windows | Visual Studio 2022 with the "Desktop development with C++" workload, plus CMake on `PATH`. |
+| Windows | Visual Studio 2022 with the "Desktop development with C++" workload, plus CMake on `PATH`. GPU builds through the Windows scripts also require Ninja. |
 | macOS | Xcode command line tools plus `cmake autoconf automake libtool pkg-config`. |
 
 CUDA builds need the CUDA Toolkit with `nvcc` on `PATH`.
@@ -51,24 +51,11 @@ cargo install --path . --features vulkan
 cargo install --path . --features metal  # Apple targets only
 ```
 
+For Windows bundles, build one accelerator backend at a time. A combined CUDA+Vulkan bundle is rejected by the Windows scripts because it would hard-load both accelerator DLL chains while ggml would choose CUDA first anyway.
+
 ## Windows Bundles
 
-For a per-user Windows CPU install:
-
-```bat
-scripts\windows\windows-cpu-build.bat
-```
-
-The PowerShell equivalent from PowerShell is:
-
-```powershell
-Set-ExecutionPolicy -Scope Process Bypass
-.\scripts\windows\windows-cpu-build.ps1
-```
-
-Options, install location, PATH behavior, and OpenBLAS bundling are described in [../scripts/windows/README.md](../scripts/windows/README.md).
-
-The Windows scripts do not require Developer Mode. They install by copying files into a per-user directory, not by creating symlinks.
+Use the Windows scripts for runnable per-user installs. They copy `parakit.exe` and generated runtime DLLs into one app directory. Backend selection, BLAS arguments, installer, PATH, CUDA, Vulkan, and runtime-manifest behavior are in [../scripts/windows/README.md](../scripts/windows/README.md).
 
 ## CPU Builds
 
@@ -109,7 +96,7 @@ Supported values:
 | `generic` | `GGML_BLAS=ON`, `GGML_BLAS_VENDOR=Generic`. |
 | `accelerate` | Apple Accelerate. Apple targets only. |
 
-On Windows, OpenBLAS detection requires `cblas.h`, a runtime DLL under `bin\`, and an import library compatible with the active Rust target environment: `.lib` for MSVC or `.dll.a` for GNU. Set `PARAKIT_OPENBLAS_ROOT` to the prefix containing `include\`, `lib\`, and `bin\`, or activate a conda environment whose `%CONDA_PREFIX%\Library` has that layout. Set both `BLAS_INCLUDE_DIRS` and `BLAS_LIBRARIES` for explicit CMake paths; together they take precedence over autodetection and skip OpenBLAS DLL bundling.
+Windows OpenBLAS layout and bundling behavior are in [../scripts/windows/README.md#blas](../scripts/windows/README.md#blas).
 
 Ubuntu/Debian OpenBLAS:
 
@@ -124,6 +111,8 @@ Explicit `PARAKIT_BLAS` builds print the selected mode, and `parakit doctor` rep
 
 The repository vendors [CrispASR](https://github.com/CrispStrobe/CrispASR) as a git submodule. `build.rs` builds it with CMake and installs shared libraries under `target/<profile>/build/parakit-*/out/lib`. Source rebuild requirements are in [dev.md#source-rebuild](dev.md#source-rebuild).
 
+`CRISPASR_LIB_DIR` is for advanced local experiments with an already-built compatible CrispASR tree. The library must match the pinned C ABI, including `crispasr_session_open_with_params`. Bundled builds must also provide compatible ggml libraries with the exported device registry entry points and the pinned device struct prefix used by `parakit doctor` and `--device gpu` preflight.
+
 Feature mapping:
 
 | Cargo feature | CMake option |
@@ -131,6 +120,8 @@ Feature mapping:
 | `cuda` | `GGML_CUDA=ON` |
 | `vulkan` | `GGML_VULKAN=ON` |
 | `metal` | `GGML_METAL=ON` |
+
+CUDA builds also force `GGML_CUDA_NCCL=OFF`.
 
 ## Runtime Library Paths
 

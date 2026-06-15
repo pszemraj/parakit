@@ -1,6 +1,6 @@
 [package]
 name = "parakit"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2021"
 rust-version = "1.87"
 description = "Push-to-talk desktop dictation daemon backed by NVIDIA Parakeet through CrispASR."
@@ -31,6 +31,7 @@ anstyle = "1.0"
 # Inference runtime. CrispASR's Rust crates are supplied by the pinned
 # submodule rather than crates.io.
 crispasr = { path = "vendor/CrispASR/crispasr", default-features = false }
+crispasr-sys = { path = "vendor/CrispASR/crispasr-sys" }
 
 # Audio capture
 cpal = { version = "0.15", optional = true }
@@ -96,6 +97,7 @@ windows = { version = "0.62.2", features = [
   "Win32_Foundation",
   "Win32_Graphics_Gdi",
   "Win32_Security",
+  "Win32_System_DataExchange",
   "Win32_System_LibraryLoader",
   "Win32_System_Threading",
   "Win32_UI_Input_KeyboardAndMouse",
@@ -138,6 +140,7 @@ vulkan  = ["bundled"]
 [build-dependencies]
 cc = "1"
 cmake = "0.1"
+serde_json = "1"
 
 [profile.release]
 opt-level = 3

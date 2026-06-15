@@ -33,18 +33,32 @@ use std::process::Command;
 mod windows_openblas;
 use windows_openblas::{find_windows_openblas, WindowsOpenBlas, WindowsOpenBlasImportKind};
 
-const WINDOWS_RUNTIME_MANIFEST: &str = "parakit-runtime-manifest.json";
+#[path = "build/windows_cuda.rs"]
+mod windows_cuda;
+#[path = "build/windows_manifest.rs"]
+mod windows_manifest;
+use windows_cuda::{cuda_external_dll_names, cuda_runtime_dirs, display_paths};
+use windows_manifest::{
+    Accelerator, BlasManifest, CudaManifest, RuntimeManifest, VulkanManifest,
+    WINDOWS_RUNTIME_MANIFEST,
+};
 
 fn main() {
     println!("cargo:rerun-if-env-changed=CRISPASR_LIB_DIR");
     println!("cargo:rerun-if-env-changed=CRISPASR_SRC_DIR");
     println!("cargo:rerun-if-env-changed=PARAKIT_BLAS");
     println!("cargo:rerun-if-env-changed=PARAKIT_OPENBLAS_ROOT");
+    println!("cargo:rerun-if-env-changed=PARAKIT_CUDA_ARCHS");
+    println!("cargo:rerun-if-env-changed=PARAKIT_BUNDLE_CUDA_DLLS");
+    println!("cargo:rerun-if-env-changed=CUDA_PATH");
+    println!("cargo:rerun-if-env-changed=VULKAN_SDK");
     println!("cargo:rerun-if-env-changed=BLAS_INCLUDE_DIRS");
     println!("cargo:rerun-if-env-changed=BLAS_LIBRARIES");
     println!("cargo:rerun-if-env-changed=CONDA_PREFIX");
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=build/windows_openblas.rs");
+    println!("cargo:rerun-if-changed=build/windows_manifest.rs");
+    println!("cargo:rerun-if-changed=build/windows_cuda.rs");
 
     build_alsa_silencer();
 
@@ -54,6 +68,7 @@ fn main() {
     if let Ok(dir) = env::var("CRISPASR_LIB_DIR") {
         println!("cargo:rustc-link-search=native={dir}");
         emit_rpath(Path::new(&dir));
+        emit_direct_ggml_link_if_bundled();
         return;
     }
 
@@ -115,9 +130,19 @@ fn main() {
     let cuda_enabled = cargo_feature("cuda");
     let metal_enabled = cargo_feature("metal");
     let vulkan_enabled = cargo_feature("vulkan");
+    let cuda_archs_request = env::var("PARAKIT_CUDA_ARCHS")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
 
     let blas = configure_blas(&mut cfg);
     cfg.define("GGML_CUDA", if cuda_enabled { "ON" } else { "OFF" });
+    if cuda_enabled {
+        cfg.define("GGML_CUDA_NCCL", "OFF");
+        if let Some(archs) = cuda_archs_request.as_ref() {
+            cfg.define("CMAKE_CUDA_ARCHITECTURES", archs);
+        }
+    }
     cfg.define("GGML_VULKAN", if vulkan_enabled { "ON" } else { "OFF" });
     if metal_enabled {
         if target_is_apple() {
@@ -163,12 +188,23 @@ fn main() {
 
     let bin_dir = install_dir.join("bin");
     if target_is_windows() {
-        prepare_windows_artifacts(&install_dir, &final_lib_dir, &bin_dir, &blas);
+        prepare_windows_artifacts(
+            &install_dir,
+            &final_lib_dir,
+            &bin_dir,
+            &blas,
+            &WindowsAcceleratorConfig {
+                cuda_enabled,
+                vulkan_enabled,
+                cuda_archs_request,
+            },
+        );
     } else {
         assert_crispasr_library_exists(&final_lib_dir);
     }
 
     println!("cargo:rustc-link-search=native={}", final_lib_dir.display());
+    emit_direct_ggml_link_if_bundled();
 
     // Windows DLLs land in bin/, not lib/. Add it for completeness.
     if bin_dir.is_dir() {
@@ -238,6 +274,7 @@ fn emit_build_report(install_dir: &Path) {
         "GGML_VULKAN",
         "GGML_METAL",
         "CMAKE_CUDA_ARCHITECTURES",
+        "CMAKE_CUDA_COMPILER",
         "CMAKE_C_FLAGS_RELEASE",
         "CMAKE_CXX_FLAGS_RELEASE",
         "CMAKE_ASM_FLAGS_RELEASE",
@@ -256,6 +293,32 @@ fn emit_build_report(install_dir: &Path) {
             "cargo:warning=could not read ggml CPU flags from {}",
             build_dir.display()
         );
+    }
+
+    if cargo_feature("cuda") {
+        let cuda_archs_request = env::var("PARAKIT_CUDA_ARCHS")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| "native".to_string());
+        println!("cargo:rustc-env=PARAKIT_BUILD_CUDA_ARCHS_REQUEST={cuda_archs_request}");
+
+        match detect_cuda_toolkit_version() {
+            Some(version) => {
+                println!("cargo:rustc-env=PARAKIT_BUILD_CUDA_TOOLKIT_VERSION={version}");
+            }
+            None => {
+                println!(
+                    "cargo:warning=could not determine CUDA Toolkit version from nvcc --version"
+                );
+                println!("cargo:rustc-env=PARAKIT_BUILD_CUDA_TOOLKIT_VERSION=unknown");
+            }
+        }
+    }
+
+    if cargo_feature("vulkan") {
+        let sdk = vulkan_sdk_version().unwrap_or_else(|| "unknown".to_string());
+        println!("cargo:rustc-env=PARAKIT_BUILD_VULKAN_SDK={sdk}");
     }
 }
 
@@ -315,6 +378,12 @@ struct BlasConfig {
     cohere_mkl: bool,
     explicit: bool,
     windows_openblas: Option<WindowsOpenBlas>,
+}
+
+struct WindowsAcceleratorConfig {
+    cuda_enabled: bool,
+    vulkan_enabled: bool,
+    cuda_archs_request: Option<String>,
 }
 
 impl BlasConfig {
@@ -437,8 +506,7 @@ fn configure_blas_paths(cfg: &mut cmake::Config, blas: &BlasConfig) {
 
     let manual_include_dirs = env::var("BLAS_INCLUDE_DIRS").ok();
     let manual_libraries = env::var("BLAS_LIBRARIES").ok();
-    let complete_manual_override =
-        complete_manual_path_override(manual_include_dirs.as_deref(), manual_libraries.as_deref());
+    let complete_manual_override = manual_include_dirs.is_some() && manual_libraries.is_some();
 
     if blas.selected == "openblas" && target_is_windows() && !complete_manual_override {
         if let Some(openblas) = blas.windows_openblas.as_ref() {
@@ -514,6 +582,38 @@ fn read_cpu_flags(build_dir: &Path) -> Option<String> {
     Some(summarize_cpu_flags(flags))
 }
 
+fn detect_cuda_toolkit_version() -> Option<String> {
+    let output = Command::new("nvcc").arg("--version").output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    parse_nvcc_release(&text)
+}
+
+fn parse_nvcc_release(text: &str) -> Option<String> {
+    for line in text.lines() {
+        let Some((_, after_release)) = line.split_once("release ") else {
+            continue;
+        };
+        let version = after_release
+            .split(|ch: char| ch == ',' || ch.is_whitespace())
+            .find(|part| !part.is_empty())?;
+        return Some(version.to_string());
+    }
+    None
+}
+
+fn vulkan_sdk_version() -> Option<String> {
+    let raw = env::var("VULKAN_SDK").ok()?;
+    let path = PathBuf::from(&raw);
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .map(str::to_string)
+        .or(Some(raw))
+}
+
 fn summarize_cpu_flags(flags: &str) -> String {
     let interesting = [
         "-O3",
@@ -549,6 +649,12 @@ fn summarize_cpu_flags(flags: &str) -> String {
 fn emit_env_from_cache(cache: &BTreeMap<String, String>, cache_key: &str, env_key: &str) {
     if let Some(value) = cache.get(cache_key) {
         println!("cargo:rustc-env={env_key}={value}");
+    }
+}
+
+fn emit_direct_ggml_link_if_bundled() {
+    if cargo_feature("bundled") {
+        println!("cargo:rustc-link-lib=dylib=ggml");
     }
 }
 
@@ -627,6 +733,7 @@ fn prepare_windows_artifacts(
     lib_dir: &Path,
     bin_dir: &Path,
     blas: &BlasConfig,
+    accelerators: &WindowsAcceleratorConfig,
 ) {
     std::fs::create_dir_all(lib_dir).unwrap_or_else(|err| {
         panic!(
@@ -642,13 +749,25 @@ fn prepare_windows_artifacts(
     });
 
     copy_windows_runtime_dlls(install_dir, bin_dir);
+    let cuda_manifest = cuda_manifest(install_dir, bin_dir, accelerators);
+    let vulkan_manifest = vulkan_manifest(accelerators);
 
-    copy_named_artifact(install_dir, windows_import_library_name(), lib_dir);
+    let crispasr_import_library = windows_import_library_name("crispasr");
+    let ggml_import_library = windows_import_library_name("ggml");
+    copy_named_artifact(install_dir, &crispasr_import_library, lib_dir);
+    copy_named_artifact(install_dir, &ggml_import_library, lib_dir);
     copy_named_artifact(install_dir, "crispasr.dll", bin_dir);
 
     copy_optional_windows_blas_runtime(bin_dir, blas);
     let runtime_dlls = windows_runtime_dll_names_for_bundle(bin_dir);
-    write_windows_runtime_manifest(bin_dir, &runtime_dlls, blas);
+    write_windows_runtime_manifest(
+        bin_dir,
+        &runtime_dlls,
+        blas,
+        accelerators,
+        cuda_manifest,
+        vulkan_manifest,
+    );
     copy_runtime_dlls_to_profile_dir(bin_dir);
     copy_runtime_manifest_to_profile_dir(bin_dir);
 }
@@ -670,6 +789,94 @@ fn copy_optional_windows_blas_runtime(bin_dir: &Path, blas: &BlasConfig) {
             panic!(
                 "failed to copy Windows OpenBLAS runtime DLL {} to {}: {err}",
                 path.display(),
+                dest.display()
+            )
+        });
+    }
+}
+
+fn cuda_manifest(
+    install_dir: &Path,
+    bin_dir: &Path,
+    accelerators: &WindowsAcceleratorConfig,
+) -> Option<CudaManifest> {
+    if !accelerators.cuda_enabled {
+        return None;
+    }
+
+    let toolkit_version = detect_cuda_toolkit_version().unwrap_or_else(|| "unknown".to_string());
+    let architectures = cmake_cache_value(install_dir, "CMAKE_CUDA_ARCHITECTURES")
+        .or_else(|| accelerators.cuda_archs_request.clone())
+        .unwrap_or_else(|| "native".to_string());
+    let cuda_path = env::var_os("CUDA_PATH").map(PathBuf::from);
+    let external_dlls = cuda_external_dll_names(cuda_path.as_deref(), &toolkit_version);
+    let external_dlls_bundled = env_flag_enabled("PARAKIT_BUNDLE_CUDA_DLLS");
+    if external_dlls_bundled {
+        copy_cuda_external_dlls(bin_dir, &external_dlls);
+    }
+
+    Some(CudaManifest {
+        toolkit_version,
+        architectures,
+        external_dlls,
+        external_dlls_bundled,
+    })
+}
+
+fn vulkan_manifest(accelerators: &WindowsAcceleratorConfig) -> Option<VulkanManifest> {
+    if !accelerators.vulkan_enabled {
+        return None;
+    }
+
+    Some(VulkanManifest {
+        sdk_version: vulkan_sdk_version().unwrap_or_else(|| "unknown".to_string()),
+        external_dlls: vec!["vulkan-1.dll".to_string()],
+        external_dlls_bundled: false,
+    })
+}
+
+fn cmake_cache_value(install_dir: &Path, key: &str) -> Option<String> {
+    let cache = read_cmake_cache(&install_dir.join("build/CMakeCache.txt"));
+    cache.get(key).cloned().filter(|value| !value.is_empty())
+}
+
+fn env_flag_enabled(name: &str) -> bool {
+    env::var(name)
+        .ok()
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(false)
+}
+
+fn copy_cuda_external_dlls(bin_dir: &Path, names: &[String]) {
+    let Some(cuda_path) = env::var_os("CUDA_PATH").map(PathBuf::from) else {
+        panic!("PARAKIT_BUNDLE_CUDA_DLLS=1 requires CUDA_PATH to point at a CUDA Toolkit install");
+    };
+    let runtime_dirs = cuda_runtime_dirs(&cuda_path);
+    if runtime_dirs.is_empty() {
+        panic!("PARAKIT_BUNDLE_CUDA_DLLS=1 requires CUDA_PATH to point at a CUDA Toolkit install");
+    }
+    for name in names {
+        let source = runtime_dirs
+            .iter()
+            .map(|runtime_dir| runtime_dir.join(name))
+            .find(|path| path.is_file());
+        let Some(source) = source else {
+            panic!(
+                "PARAKIT_BUNDLE_CUDA_DLLS=1 could not find CUDA runtime DLL {} under {}",
+                name,
+                display_paths(&runtime_dirs)
+            );
+        };
+        let dest = bin_dir.join(name);
+        std::fs::copy(&source, &dest).unwrap_or_else(|err| {
+            panic!(
+                "failed to copy CUDA runtime DLL {} to {}: {err}",
+                source.display(),
                 dest.display()
             )
         });
@@ -734,20 +941,14 @@ fn windows_openblas_import_kind() -> WindowsOpenBlasImportKind {
 }
 
 fn manual_blas_path_overrides_are_set() -> bool {
-    let include_dirs = env::var("BLAS_INCLUDE_DIRS").ok();
-    let libraries = env::var("BLAS_LIBRARIES").ok();
-    complete_manual_path_override(include_dirs.as_deref(), libraries.as_deref())
+    env::var("BLAS_INCLUDE_DIRS").is_ok() && env::var("BLAS_LIBRARIES").is_ok()
 }
 
-fn complete_manual_path_override(include_dirs: Option<&str>, libraries: Option<&str>) -> bool {
-    include_dirs.is_some() && libraries.is_some()
-}
-
-fn windows_import_library_name() -> &'static str {
+fn windows_import_library_name(base: &str) -> String {
     if env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default() == "gnu" {
-        "libcrispasr.dll.a"
+        format!("lib{base}.dll.a")
     } else {
-        "crispasr.lib"
+        format!("{base}.lib")
     }
 }
 
@@ -878,80 +1079,59 @@ fn should_skip_windows_bundle_dll(file_name: &str) -> bool {
     lower.starts_with("ggml-cpu-") && lower.ends_with(".dll")
 }
 
-fn write_windows_runtime_manifest(bin_dir: &Path, runtime_dlls: &[String], blas: &BlasConfig) {
+fn write_windows_runtime_manifest(
+    bin_dir: &Path,
+    runtime_dlls: &[String],
+    blas: &BlasConfig,
+    accelerators: &WindowsAcceleratorConfig,
+    cuda: Option<CudaManifest>,
+    vulkan: Option<VulkanManifest>,
+) {
     let mut required_files = Vec::with_capacity(runtime_dlls.len() + 1);
     required_files.push("parakit.exe".to_string());
     required_files.extend(runtime_dlls.iter().cloned());
 
     let windows_openblas = windows_openblas_for_bundle(blas);
-    let openblas_root =
-        windows_openblas.map(|openblas| openblas.root.to_string_lossy().to_string());
-    let openblas_include_dir =
-        windows_openblas.map(|openblas| openblas.include_dir.to_string_lossy().to_string());
-    let openblas_import_lib =
-        windows_openblas.map(|openblas| openblas.import_lib.to_string_lossy().to_string());
-    let openblas_runtime_dlls = windows_openblas
-        .map(|openblas| {
-            openblas
-                .runtime_dlls
-                .iter()
-                .map(|path| path.to_string_lossy().to_string())
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    let manifest = format!(
-        "{{\n  \"required_files\": {},\n  \"runtime_dlls\": {},\n  \"blas\": {{\n    \"requested\": {},\n    \"selected\": {}\n  }},\n  \"openblas_root\": {},\n  \"openblas_include_dir\": {},\n  \"openblas_import_lib\": {},\n  \"openblas_runtime_dlls\": {}\n}}\n",
-        json_array(&required_files),
-        json_array(runtime_dlls),
-        json_string(&blas.requested),
-        json_string(blas.selected),
-        openblas_root
-            .as_deref()
-            .map(json_string)
-            .unwrap_or_else(|| "null".to_string()),
-        openblas_include_dir
-            .as_deref()
-            .map(json_string)
-            .unwrap_or_else(|| "null".to_string()),
-        openblas_import_lib
-            .as_deref()
-            .map(json_string)
-            .unwrap_or_else(|| "null".to_string()),
-        json_array(&openblas_runtime_dlls)
-    );
+    let accelerator = if accelerators.cuda_enabled {
+        Accelerator::Cuda
+    } else if accelerators.vulkan_enabled {
+        Accelerator::Vulkan
+    } else {
+        Accelerator::Cpu
+    };
+    let manifest = RuntimeManifest {
+        required_files,
+        runtime_dlls: runtime_dlls.to_vec(),
+        blas: BlasManifest {
+            requested: blas.requested.clone(),
+            selected: blas.selected.to_string(),
+            openblas_root: windows_openblas
+                .map(|openblas| openblas.root.to_string_lossy().to_string()),
+            openblas_include_dir: windows_openblas
+                .map(|openblas| openblas.include_dir.to_string_lossy().to_string()),
+            openblas_import_lib: windows_openblas
+                .map(|openblas| openblas.import_lib.to_string_lossy().to_string()),
+            openblas_runtime_dlls: windows_openblas
+                .map(|openblas| {
+                    openblas
+                        .runtime_dlls
+                        .iter()
+                        .map(|path| path.to_string_lossy().to_string())
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default(),
+        },
+        accelerator,
+        cuda,
+        vulkan,
+    };
     let path = bin_dir.join(WINDOWS_RUNTIME_MANIFEST);
-    std::fs::write(&path, manifest).unwrap_or_else(|err| {
+    std::fs::write(&path, manifest.to_json()).unwrap_or_else(|err| {
         panic!(
             "failed to write Windows runtime manifest {}: {err}",
             path.display()
         )
     });
-}
-
-fn json_array(values: &[String]) -> String {
-    let escaped = values
-        .iter()
-        .map(|value| json_string(value))
-        .collect::<Vec<_>>();
-    format!("[{}]", escaped.join(", "))
-}
-
-fn json_string(value: &str) -> String {
-    let mut out = String::with_capacity(value.len() + 2);
-    out.push('"');
-    for ch in value.chars() {
-        match ch {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            ch if ch.is_control() => out.push_str(&format!("\\u{:04x}", ch as u32)),
-            ch => out.push(ch),
-        }
-    }
-    out.push('"');
-    out
 }
 
 fn cargo_profile_dir() -> Option<PathBuf> {

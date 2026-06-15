@@ -39,6 +39,31 @@ parakit --verbose
 parakit --threads 8 --verbose
 ```
 
+## Device Selection
+
+GPU-capable builds default to `--device auto`. In `auto`, CrispASR asks ggml for the best backend device and falls back to CPU when no GPU backend is available. On hybrid laptops, ggml prefers a discrete GPU over an integrated GPU.
+
+Windows bundle backend selection is covered in [../scripts/windows/README.md#backend-requirements](../scripts/windows/README.md#backend-requirements). At runtime, `--device` controls CPU/GPU use inside the installed build.
+
+```bash
+parakit --device auto
+parakit --device cpu
+parakit --device gpu
+```
+
+`--device cpu` opens the session with GPU use disabled. `--device gpu` requests the GPU path and, on bundled builds, fails before model load if ggml reports no discrete or integrated GPU device. On system-library builds without the bundled ggml probe, `--device gpu` continues with a warning because parakit cannot verify device visibility before opening the session.
+
+Per-device CLI selection is intentionally not exposed. The Parakeet backend currently ignores CrispASR's `gpu_device` field, so pinning remains backend-specific environment configuration:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 parakit --device gpu
+GGML_VK_VISIBLE_DEVICES=0 parakit --device gpu
+```
+
+Use `parakit --verbose doctor` to list the compute devices visible to bundled ggml.
+Verbose daemon startup prints the requested mode and expected device, such as
+`device=auto -> Vulkan1 - NVIDIA GeForce RTX 4070 Laptop GPU [GPU]`.
+
 ## Background Use
 
 ```bash
@@ -109,11 +134,13 @@ Bluetooth microphones are allowed, but parakit prints a warning because headset 
 
 ## Insertion
 
-parakit transcribes once on hotkey release, writes plain text to the system clipboard, then sends the configured paste shortcut. By default it waits for the target to consume the paste and restores the previous clipboard contents when the clipboard API can round-trip them. Current restore support covers text, HTML with a text alternative, copied file lists, and images. Other clipboard MIME formats are not generally restorable through `arboard`; when restore is required, parakit clears the staged transcript instead of leaving sensitive text globally available.
+parakit transcribes once on hotkey release, stages plain text on the system clipboard, then sends the configured paste shortcut. By default it gives the target and clipboard history tools time to observe the staged text, then restores the previous clipboard contents when the clipboard API can round-trip them. Current restore support covers text, HTML with a text alternative, copied file lists, and images exposed as normal platform image data. Browser-private image packages, WebP-only payloads, and other clipboard MIME formats are not generally restorable through `arboard`; when restore is required, parakit clears the staged transcript instead of leaving sensitive text as the active clipboard.
 
-On Linux/X11, parakit records the active X11 window when recording starts. If focus clearly changes before insertion, it does not send a paste chord. If focus capture or recheck fails because X11 is transiently unavailable, parakit pastes anyway; the transcript remains available through `parakit paste-last` or `parakit copy-last` either way. Terminal mode strips trailing newlines and blocks multiline terminal paste.
+OS clipboard history or a third-party clipboard manager is useful for recovering a transcript when the target app rejects paste. On Windows, built-in clipboard history is opened with `Win+V` and must be enabled by the user. Clipboard history tools may retain transcript text after parakit restores the active clipboard; disable them if that retention is not acceptable for your workflow.
 
-On Windows, parakit records the foreground window at PTT-down, rechecks it before paste, and sends the paste shortcut with `SendInput`. If the foreground target cannot be captured or verified, automatic paste is skipped. A normal user process cannot inject into an administrator/elevated target application.
+On Linux/X11, parakit records the active X11 window when recording starts. If focus clearly changes before insertion, it does not send a paste chord, but non-direct modes still stage the transcript before restoring the active clipboard. If focus capture or recheck fails because X11 is transiently unavailable, parakit pastes anyway; the transcript remains available through `parakit paste-last` or `parakit copy-last` either way. Terminal mode strips trailing newlines and blocks multiline terminal paste.
+
+On Windows, parakit records the foreground window at PTT-down, rechecks it before paste, and sends the paste shortcut with `SendInput`. If the foreground target cannot be captured or verified, automatic paste is skipped, but non-direct modes still stage the transcript before restoring the active clipboard. A normal user process cannot inject into an administrator/elevated target application.
 
 Paste modes:
 
@@ -125,7 +152,7 @@ parakit --paste-mode direct    # synthetic typing, no clipboard
 
 Use `direct` only as an app-compatibility fallback. It is slower and can be less reliable for non-ASCII text. On Linux it still requires an X11 session.
 
-Use `--keep-transcript-clipboard` when you want successful pastes and blocked fallback text to remain on the clipboard. The default is to restore the previous supported clipboard contents.
+Use `--keep-transcript-clipboard` when you want successful pastes and blocked fallback text to remain as the active clipboard. The default is to restore the previous supported clipboard contents after staging the transcript.
 
 After repeated paste backend errors, parakit temporarily disables automatic paste and uses the same clipboard/block fallback behavior. It retries automatic paste after a short cooldown instead of requiring a daemon restart.
 

@@ -1,36 +1,24 @@
 //! Integration coverage for Windows OpenBLAS layout detection.
 
+mod common;
 #[path = "../build/windows_openblas.rs"]
 mod windows_openblas;
-
-use std::fs;
-use std::path::{Path, PathBuf};
 
 use windows_openblas::{
     find_windows_openblas, is_known_openblas_runtime_dll, WindowsOpenBlasImportKind,
 };
 
-fn fixture_root(name: &str) -> PathBuf {
-    let root = Path::new("target")
-        .join("tmp")
-        .join("windows-openblas-layout-tests")
-        .join(format!("{}-{name}", std::process::id()));
-    let _ = fs::remove_dir_all(&root);
-    root
-}
-
-fn touch(path: &Path) {
-    fs::create_dir_all(path.parent().expect("fixture file should have parent"))
-        .expect("fixture parent should be created");
-    fs::write(path, b"").expect("fixture file should be created");
-}
-
 #[test]
 fn detects_current_conda_openblas_layout() {
-    let root = fixture_root("current-conda");
-    touch(&root.join("include/openblas/cblas.h"));
-    touch(&root.join("lib/openblas.lib"));
-    touch(&root.join("bin/openblas.dll"));
+    let root = common::fixture_root_with_files(
+        "windows-openblas-layout-tests",
+        "current-conda",
+        &[
+            "include/openblas/cblas.h",
+            "lib/openblas.lib",
+            "bin/openblas.dll",
+        ],
+    );
 
     let found = find_windows_openblas(&root, WindowsOpenBlasImportKind::Msvc)
         .expect("layout should be detected");
@@ -42,11 +30,16 @@ fn detects_current_conda_openblas_layout() {
 
 #[test]
 fn detects_flat_include_and_libopenblas_dll_layout() {
-    let root = fixture_root("flat-libopenblas");
-    touch(&root.join("include/cblas.h"));
-    touch(&root.join("lib/libopenblas.lib"));
-    touch(&root.join("bin/libopenblas.dll"));
-    touch(&root.join("bin/libomp.dll"));
+    let root = common::fixture_root_with_files(
+        "windows-openblas-layout-tests",
+        "flat-libopenblas",
+        &[
+            "include/cblas.h",
+            "lib/libopenblas.lib",
+            "bin/libopenblas.dll",
+            "bin/libomp.dll",
+        ],
+    );
 
     let found = find_windows_openblas(&root, WindowsOpenBlasImportKind::Msvc)
         .expect("layout should be detected");
@@ -64,12 +57,17 @@ fn detects_flat_include_and_libopenblas_dll_layout() {
 
 #[test]
 fn detects_gnu_import_lib_and_versioned_runtime_layout() {
-    let root = fixture_root("gnu-versioned");
-    touch(&root.join("include/cblas.h"));
-    touch(&root.join("lib/libopenblas.dll.a"));
-    touch(&root.join("bin/libopenblas64_.dll"));
-    touch(&root.join("bin/libgcc_s_seh-1.dll"));
-    touch(&root.join("bin/libwinpthread-1.dll"));
+    let root = common::fixture_root_with_files(
+        "windows-openblas-layout-tests",
+        "gnu-versioned",
+        &[
+            "include/cblas.h",
+            "lib/libopenblas.dll.a",
+            "bin/libopenblas64_.dll",
+            "bin/libgcc_s_seh-1.dll",
+            "bin/libwinpthread-1.dll",
+        ],
+    );
 
     let found = find_windows_openblas(&root, WindowsOpenBlasImportKind::Gnu)
         .expect("layout should be detected");
@@ -85,31 +83,42 @@ fn detects_gnu_import_lib_and_versioned_runtime_layout() {
 
 #[test]
 fn rejects_layout_without_primary_runtime_dll() {
-    let root = fixture_root("missing-primary-runtime");
-    touch(&root.join("include/cblas.h"));
-    touch(&root.join("lib/openblas.lib"));
-    touch(&root.join("bin/libomp.dll"));
+    let root = common::fixture_root_with_files(
+        "windows-openblas-layout-tests",
+        "missing-primary-runtime",
+        &["include/cblas.h", "lib/openblas.lib", "bin/libomp.dll"],
+    );
 
     assert!(find_windows_openblas(&root, WindowsOpenBlasImportKind::Msvc).is_none());
 }
 
 #[test]
 fn msvc_rejects_gnu_only_import_lib_layout() {
-    let root = fixture_root("msvc-rejects-dll-a");
-    touch(&root.join("include/cblas.h"));
-    touch(&root.join("lib/libopenblas.dll.a"));
-    touch(&root.join("bin/libopenblas.dll"));
+    let root = common::fixture_root_with_files(
+        "windows-openblas-layout-tests",
+        "msvc-rejects-dll-a",
+        &[
+            "include/cblas.h",
+            "lib/libopenblas.dll.a",
+            "bin/libopenblas.dll",
+        ],
+    );
 
     assert!(find_windows_openblas(&root, WindowsOpenBlasImportKind::Msvc).is_none());
 }
 
 #[test]
 fn target_kind_selects_compatible_import_library_from_mixed_layout() {
-    let root = fixture_root("mixed-import-libs");
-    touch(&root.join("include/cblas.h"));
-    touch(&root.join("lib/openblas.lib"));
-    touch(&root.join("lib/libopenblas.dll.a"));
-    touch(&root.join("bin/libopenblas.dll"));
+    let root = common::fixture_root_with_files(
+        "windows-openblas-layout-tests",
+        "mixed-import-libs",
+        &[
+            "include/cblas.h",
+            "lib/openblas.lib",
+            "lib/libopenblas.dll.a",
+            "bin/libopenblas.dll",
+        ],
+    );
 
     let msvc = find_windows_openblas(&root, WindowsOpenBlasImportKind::Msvc)
         .expect("MSVC layout should be detected");

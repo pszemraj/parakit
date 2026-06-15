@@ -481,29 +481,51 @@ fn copy_or_block_transcript(
     log: &Logger,
     notifier: &Notifier,
 ) -> Result<InsertOutcome> {
-    if keep_transcript_clipboard {
-        copy_transcript_to_clipboard(injector, text).context(copy_context)?;
-        notifier.transcript_copied(reason);
-        return Ok(InsertOutcome::CopiedOnly);
+    match stage_transcript_for_history(injector, text, keep_transcript_clipboard)
+        .context(copy_context)?
+    {
+        super::inject::StageOutcome::CopiedOnly => {
+            notifier.transcript_copied(reason);
+            Ok(InsertOutcome::CopiedOnly)
+        }
+        super::inject::StageOutcome::Blocked => {
+            log.warn(format!(
+                "automatic paste skipped ({reason}); transcript staged for clipboard history"
+            ));
+            notifier.paste_blocked(reason);
+            Ok(InsertOutcome::Blocked)
+        }
     }
-    log.warn(format!(
-        "automatic paste skipped ({reason}); transcript kept in daemon memory only"
-    ));
-    notifier.paste_blocked(reason);
-    Ok(InsertOutcome::Blocked)
+}
+
+fn stage_transcript_for_history(
+    injector: &mut Option<Injector>,
+    text: &str,
+    keep_transcript_clipboard: bool,
+) -> Result<super::inject::StageOutcome> {
+    let policy = clipboard_policy(keep_transcript_clipboard);
+    with_injector(injector, |injector| {
+        injector.stage_text_for_history(text, policy)
+    })
 }
 
 fn copy_transcript_to_clipboard(injector: &mut Option<Injector>, text: &str) -> Result<()> {
-    match injector.as_mut() {
-        Some(injector) => injector.copy_text(text),
-        None => {
-            let mut rebuilt = Injector::new()
-                .context("could not initialize insertion backend for clipboard fallback")?;
-            let result = rebuilt.copy_text(text);
-            *injector = Some(rebuilt);
-            result
-        }
+    with_injector(injector, |injector| injector.copy_text(text))
+}
+
+fn with_injector<R>(
+    injector: &mut Option<Injector>,
+    f: impl FnOnce(&mut Injector) -> Result<R>,
+) -> Result<R> {
+    if injector.is_none() {
+        *injector = Some(
+            Injector::new()
+                .context("could not initialize insertion backend for clipboard fallback")?,
+        );
     }
+    f(injector
+        .as_mut()
+        .expect("insertion backend was just initialized"))
 }
 
 fn paste_failure_uses_clipboard_fallback(

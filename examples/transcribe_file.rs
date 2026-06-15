@@ -6,12 +6,11 @@
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use parakit::audio_file::{read_wav_mono, resample_to_target};
-use parakit::constants::TARGET_RATE;
+use parakit::audio_file::prepare_wav_for_model;
 use parakit::fetch;
 use parakit::gguf;
-use parakit::inference::default_thread_count;
-use parakit::inference::Engine;
+use parakit::inference::{default_thread_count, DeviceMode, Engine};
+use parakit::warmup;
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -34,28 +33,35 @@ struct Cli {
     #[arg(long, value_name = "N")]
     threads: Option<NonZeroUsize>,
 
+    /// Runtime compute device. `auto` uses the best GPU when available and CPU otherwise.
+    #[arg(long, value_enum, default_value = "auto")]
+    device: DeviceMode,
+
     /// Repeat inference on the same loaded model for timing comparisons.
     #[arg(long, default_value = "1")]
     repeat: NonZeroUsize,
+
+    /// Run one synthetic warmup pass before timing the real clip. Repeat for multiple passes.
+    #[arg(long, value_name = "SECONDS")]
+    warmup_seconds: Vec<usize>,
 }
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    let mut wav = read_wav_mono(&cli.audio)?;
-    let original_rate = wav.sample_rate;
-    wav.samples = resample_to_target(wav.samples, original_rate)?;
-    let audio_secs = wav.samples.len() as f32 / TARGET_RATE as f32;
+    let wav = prepare_wav_for_model(&cli.audio)?;
+    let original_rate = wav.source_rate;
+    let audio_secs = wav.audio_secs();
 
     let model_path = match cli.model.as_deref() {
         Some(path) => path.to_path_buf(),
-        None => fetch::ensure_default_model(false)?,
+        None => fetch::ensure_default_model_with_verbosity(false, false)?,
     };
     let threads = cli
         .threads
         .map(NonZeroUsize::get)
         .unwrap_or_else(default_thread_count);
-    let engine = Engine::open_with_threads(&model_path, threads)
+    let engine = Engine::open(&model_path, threads, cli.device)
         .with_context(|| format!("could not open model {}", model_path.display()))?;
     let dtype = gguf::dtype_label(&model_path);
 
@@ -63,8 +69,18 @@ fn main() -> Result<()> {
     println!("dtype:   {dtype}");
     println!("backend: {}", engine.backend());
     println!("threads: {}", engine.threads());
+    println!("device:  {}", engine.device_mode().as_str());
     println!("audio:   {:.2}s", audio_secs);
     println!("source:  {} Hz", original_rate);
+
+    for seconds in &cli.warmup_seconds {
+        let warmup_pcm = warmup::synthetic_pcm(*seconds);
+        let started = Instant::now();
+        engine.transcribe(&warmup_pcm)?;
+        let elapsed = started.elapsed();
+        println!("warmup_audio: {seconds}s");
+        println!("warmup: {:.0}ms", elapsed.as_secs_f32() * 1000.0);
+    }
 
     let mut timings = Vec::with_capacity(cli.repeat.get());
     for idx in 1..=cli.repeat.get() {
@@ -114,9 +130,23 @@ mod tests {
 
     #[test]
     fn rtf_is_inference_time_over_audio_duration() {
-        let infer = Duration::from_millis(2_000);
+        let cases = [
+            (10.0, Duration::from_millis(2_000), 0.2, 5.0),
+            (0.0, Duration::from_millis(2_000), f32::INFINITY, 0.0),
+            (10.0, Duration::ZERO, 0.0, f32::INFINITY),
+        ];
 
-        assert!((real_time_factor(10.0, infer) - 0.2).abs() < f32::EPSILON);
-        assert!((realtime_speed(10.0, infer) - 5.0).abs() < f32::EPSILON);
+        for (audio_secs, infer, expected_rtf, expected_speed) in cases {
+            assert_metric_eq(real_time_factor(audio_secs, infer), expected_rtf);
+            assert_metric_eq(realtime_speed(audio_secs, infer), expected_speed);
+        }
+    }
+
+    fn assert_metric_eq(actual: f32, expected: f32) {
+        if expected.is_infinite() {
+            assert_eq!(actual, expected);
+        } else {
+            assert!((actual - expected).abs() < f32::EPSILON);
+        }
     }
 }

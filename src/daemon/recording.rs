@@ -5,7 +5,9 @@ use crossbeam_channel::{Receiver, RecvTimeoutError, Sender, TrySendError};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-const MAX_UTTERANCE: Duration = Duration::from_secs(270);
+/// Hard stop for one held push-to-talk capture.
+pub(crate) const MAX_UTTERANCE_SECONDS: u64 = 270;
+const MAX_UTTERANCE: Duration = Duration::from_secs(MAX_UTTERANCE_SECONDS);
 
 /// Logical push-to-talk transition emitted by platform hotkey backends.
 ///
@@ -225,6 +227,25 @@ mod tests {
     use super::*;
     use crossbeam_channel::{bounded, unbounded};
 
+    fn assert_empty_stopped_event(event: WorkerEvent, started_at: Instant) {
+        match event {
+            WorkerEvent::Stopped {
+                started_at: start,
+                stopped_at,
+                pcm,
+                ..
+            } => {
+                assert_eq!(start, started_at);
+                assert!(stopped_at >= started_at);
+                assert!(pcm.is_empty());
+            }
+            WorkerEvent::Started => panic!("unexpected second start event"),
+            WorkerEvent::Failed { message } => {
+                panic!("unexpected recording failure event: {message}")
+            }
+        }
+    }
+
     #[test]
     fn coordinator_force_stops_at_max_utterance() {
         let audio = AudioHandle::test_handle();
@@ -251,25 +272,12 @@ mod tests {
             WorkerEvent::Started
         ));
 
-        match worker_rx
-            .recv_timeout(Duration::from_millis(500))
-            .expect("timeout stop event")
-        {
-            WorkerEvent::Stopped {
-                started_at: start,
-                stopped_at,
-                pcm,
-                ..
-            } => {
-                assert_eq!(start, started_at);
-                assert!(stopped_at >= started_at);
-                assert!(pcm.is_empty());
-            }
-            WorkerEvent::Started => panic!("unexpected second start event"),
-            WorkerEvent::Failed { message } => {
-                panic!("unexpected recording failure event: {message}")
-            }
-        }
+        assert_empty_stopped_event(
+            worker_rx
+                .recv_timeout(Duration::from_millis(500))
+                .expect("timeout stop event"),
+            started_at,
+        );
 
         drop(hotkey_tx);
         coordinator.join().expect("coordinator should exit cleanly");
@@ -436,25 +444,12 @@ mod tests {
                 .expect("start event"),
             WorkerEvent::Started
         ));
-        match worker_rx
-            .recv_timeout(Duration::from_millis(250))
-            .expect("terminal stop event")
-        {
-            WorkerEvent::Stopped {
-                started_at: start,
-                stopped_at,
-                pcm,
-                ..
-            } => {
-                assert_eq!(start, started_at);
-                assert!(stopped_at >= started_at);
-                assert!(pcm.is_empty());
-            }
-            WorkerEvent::Started => panic!("unexpected second start event"),
-            WorkerEvent::Failed { message } => {
-                panic!("unexpected recording failure event: {message}")
-            }
-        }
+        assert_empty_stopped_event(
+            worker_rx
+                .recv_timeout(Duration::from_millis(250))
+                .expect("terminal stop event"),
+            started_at,
+        );
 
         drop(hotkey_tx);
         coordinator.join().expect("coordinator should exit cleanly");

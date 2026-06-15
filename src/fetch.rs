@@ -33,6 +33,28 @@ pub struct FetchOptions {
     pub source: FetchSource,
 }
 
+impl FetchOptions {
+    fn should_print_status(self) -> bool {
+        !self.quiet
+    }
+
+    fn should_print_verbose_status(self) -> bool {
+        !self.quiet && self.verbose
+    }
+
+    fn status(self, message: std::fmt::Arguments<'_>) {
+        if self.should_print_status() {
+            println!("{message}");
+        }
+    }
+
+    fn verbose_status(self, message: std::fmt::Arguments<'_>) {
+        if self.should_print_verbose_status() {
+            println!("{message}");
+        }
+    }
+}
+
 /// Model acquisition source for `parakit fetch`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FetchSource {
@@ -45,20 +67,6 @@ pub enum FetchSource {
         /// Keep the intermediate F16 GGUF after the final Q8_0 model is produced.
         keep_f16: bool,
     },
-}
-
-/// Ensure the default hosted Q8_0 model is present in the cache.
-///
-/// # Returns
-///
-/// The canonical cached Q8_0 model path.
-///
-/// # Errors
-///
-/// Returns an error if the model cannot be downloaded, verified, or written
-/// into the platform cache directory.
-pub fn ensure_default_model(quiet: bool) -> Result<PathBuf> {
-    ensure_default_model_with_verbosity(quiet, false)
 }
 
 /// Ensure the default hosted Q8_0 model is present in the cache.
@@ -106,9 +114,7 @@ pub fn run(options: FetchOptions) -> Result<PathBuf> {
 }
 
 fn run_hosted_q8(options: FetchOptions) -> Result<PathBuf> {
-    let paths = FetchPaths::new()?;
-    std::fs::create_dir_all(&paths.models_dir)
-        .with_context(|| format!("create {}", paths.models_dir.display()))?;
+    let paths = FetchPaths::new_prepared()?;
     let mut manifest = Manifest::load(&paths.manifest)?.unwrap_or_default();
     let partial = paths.q8.with_extension("gguf.part");
 
@@ -121,32 +127,25 @@ fn run_hosted_q8(options: FetchOptions) -> Result<PathBuf> {
                 manifest.mark_hosted_ready(&paths.q8);
                 manifest.save(&paths.manifest)?;
             }
-            verbose_status(
-                options,
-                format_args!("parakit: cached model is current: {}", paths.q8.display()),
-            );
+            options.verbose_status(format_args!(
+                "parakit: cached model is current: {}",
+                paths.q8.display()
+            ));
             return Ok(paths.q8);
         }
-        status(
-            options,
-            format_args!(
-                "parakit: cached model checksum mismatch, replacing: {}",
-                paths.q8.display()
-            ),
-        );
+        options.status(format_args!(
+            "parakit: cached model checksum mismatch, replacing: {}",
+            paths.q8.display()
+        ));
     }
 
-    status(
-        options,
-        format_args!("parakit: downloading {}", HOSTED_Q8_URL),
-    );
+    options.status(format_args!("parakit: downloading {}", HOSTED_Q8_URL));
     download_with_resume(HOSTED_Q8_URL, &partial)?;
     let mut downloaded_sha = crate::checksum::sha256_file_hex(&partial)?;
     if downloaded_sha != HOSTED_Q8_SHA256 {
-        status(
-            options,
-            format_args!("parakit: downloaded partial checksum mismatch, restarting download"),
-        );
+        options.status(format_args!(
+            "parakit: downloaded partial checksum mismatch, restarting download"
+        ));
         remove_if_exists(&partial)?;
         download_with_resume(HOSTED_Q8_URL, &partial)?;
         downloaded_sha = crate::checksum::sha256_file_hex(&partial)?;
@@ -164,17 +163,12 @@ fn run_hosted_q8(options: FetchOptions) -> Result<PathBuf> {
     move_into_place(&partial, &paths.q8)?;
     manifest.mark_hosted_ready(&paths.q8);
     manifest.save(&paths.manifest)?;
-    status(
-        options,
-        format_args!("parakit: model ready: {}", paths.q8.display()),
-    );
+    options.status(format_args!("parakit: model ready: {}", paths.q8.display()));
     Ok(paths.q8)
 }
 
 fn run_official_nemo(options: FetchOptions, keep_nemo: bool, keep_f16: bool) -> Result<PathBuf> {
-    let paths = FetchPaths::new()?;
-    std::fs::create_dir_all(&paths.models_dir)
-        .with_context(|| format!("create {}", paths.models_dir.display()))?;
+    let paths = FetchPaths::new_prepared()?;
 
     let converter_script = converter_script_path();
     if !converter_script.is_file() {
@@ -198,13 +192,10 @@ fn run_official_nemo(options: FetchOptions, keep_nemo: bool, keep_f16: bool) -> 
         &quantize_bin,
         &quantize_version,
     )? {
-        verbose_status(
-            options,
-            format_args!(
-                "parakit: cached source-built model is current: {}",
-                paths.q8.display()
-            ),
-        );
+        options.verbose_status(format_args!(
+            "parakit: cached source-built model is current: {}",
+            paths.q8.display()
+        ));
         cleanup_intermediates(&paths, keep_nemo, keep_f16)?;
         return Ok(paths.q8);
     }
@@ -240,10 +231,7 @@ fn run_official_nemo(options: FetchOptions, keep_nemo: bool, keep_f16: bool) -> 
     manifest.save(&paths.manifest)?;
 
     cleanup_intermediates(&paths, keep_nemo, keep_f16)?;
-    status(
-        options,
-        format_args!("parakit: model ready: {}", paths.q8.display()),
-    );
+    options.status(format_args!("parakit: model ready: {}", paths.q8.display()));
     Ok(paths.q8)
 }
 
@@ -266,6 +254,13 @@ impl FetchPaths {
             q8: models_dir.join(Q8_FILENAME),
             models_dir,
         })
+    }
+
+    fn new_prepared() -> Result<Self> {
+        let paths = Self::new()?;
+        std::fs::create_dir_all(&paths.models_dir)
+            .with_context(|| format!("create {}", paths.models_dir.display()))?;
+        Ok(paths)
     }
 }
 
@@ -371,18 +366,15 @@ fn ensure_nemo(
         if manifest.source_url == OFFICIAL_NEMO_URL
             && manifest.nemo_sha256.as_deref() == Some(&current)
         {
-            status(
-                options,
-                format_args!("parakit: using cached checkpoint: {}", paths.nemo.display()),
-            );
+            options.status(format_args!(
+                "parakit: using cached checkpoint: {}",
+                paths.nemo.display()
+            ));
             return Ok(current);
         }
     }
 
-    status(
-        options,
-        format_args!("parakit: downloading {}", OFFICIAL_NEMO_URL),
-    );
+    options.status(format_args!("parakit: downloading {}", OFFICIAL_NEMO_URL));
     download_with_resume(OFFICIAL_NEMO_URL, &paths.nemo)?;
     let sha = crate::checksum::sha256_file_hex(&paths.nemo)?;
     manifest.acquisition = ACQ_OFFICIAL_NEMO.to_string();
@@ -408,10 +400,10 @@ fn ensure_f16(
     {
         let current = crate::checksum::sha256_file_hex(&paths.f16)?;
         if manifest.f16_sha256.as_deref() == Some(&current) {
-            status(
-                options,
-                format_args!("parakit: using cached F16 GGUF: {}", paths.f16.display()),
-            );
+            options.status(format_args!(
+                "parakit: using cached F16 GGUF: {}",
+                paths.f16.display()
+            ));
             return Ok(current);
         }
     }
@@ -423,10 +415,7 @@ fn ensure_f16(
         None => python_with_converter_deps()?,
     };
     remove_if_exists(&paths.f16)?;
-    status(
-        options,
-        format_args!("parakit: converting .nemo to F16 GGUF"),
-    );
+    options.status(format_args!("parakit: converting .nemo to F16 GGUF"));
     run_command(
         Command::new(&python)
             .arg(converter_script)
@@ -462,20 +451,17 @@ fn ensure_q8(
     {
         let current = crate::checksum::sha256_file_hex(&paths.q8)?;
         if manifest.q8_sha256.as_deref() == Some(&current) {
-            status(
-                options,
-                format_args!("parakit: using cached Q8_0 GGUF: {}", paths.q8.display()),
-            );
+            options.status(format_args!(
+                "parakit: using cached Q8_0 GGUF: {}",
+                paths.q8.display()
+            ));
             return Ok(current);
         }
     }
 
     let tmp_q8 = paths.q8.with_extension("gguf.quantizing");
     remove_if_exists(&tmp_q8)?;
-    status(
-        options,
-        format_args!("parakit: quantizing F16 GGUF to Q8_0"),
-    );
+    options.status(format_args!("parakit: quantizing F16 GGUF to Q8_0"));
     let mut command = Command::new(quantize_bin);
     command.arg(&paths.f16).arg(&tmp_q8).arg("q8_0");
     add_bundled_library_path(&mut command, quantize_bin);
@@ -725,28 +711,6 @@ fn move_into_place(src: &Path, dst: &Path) -> Result<()> {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum StatusVisibility {
-    Normal,
-    Verbose,
-}
-
-fn status(options: FetchOptions, message: std::fmt::Arguments<'_>) {
-    if should_print_status(options, StatusVisibility::Normal) {
-        println!("{message}");
-    }
-}
-
-fn verbose_status(options: FetchOptions, message: std::fmt::Arguments<'_>) {
-    if should_print_status(options, StatusVisibility::Verbose) {
-        println!("{message}");
-    }
-}
-
-fn should_print_status(options: FetchOptions, visibility: StatusVisibility) -> bool {
-    !options.quiet && (visibility == StatusVisibility::Normal || options.verbose)
-}
-
 fn cleanup_intermediates(paths: &FetchPaths, keep_nemo: bool, keep_f16: bool) -> Result<()> {
     if !keep_nemo {
         remove_if_exists(&paths.nemo)?;
@@ -817,6 +781,35 @@ mod tests {
     }
 
     #[test]
+    fn cache_hit_status_requires_verbose_output() {
+        let options = FetchOptions {
+            force: false,
+            quiet: false,
+            verbose: false,
+            source: FetchSource::HostedQ8,
+        };
+
+        assert!(options.should_print_status());
+        assert!(!FetchOptions {
+            quiet: true,
+            ..options
+        }
+        .should_print_status());
+        assert!(!options.should_print_verbose_status());
+        assert!(FetchOptions {
+            verbose: true,
+            ..options
+        }
+        .should_print_verbose_status());
+        assert!(!FetchOptions {
+            quiet: true,
+            verbose: true,
+            ..options
+        }
+        .should_print_verbose_status());
+    }
+
+    #[test]
     fn move_into_place_replaces_existing_file() {
         let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("target/tmp/parakit-fetch-tests/move-into-place");
@@ -843,31 +836,5 @@ mod tests {
         assert_eq!(paths[0], dir);
         assert_eq!(paths[1], Path::new("target/tmp/a"));
         assert_eq!(paths[2], Path::new("target/tmp/b"));
-    }
-
-    #[test]
-    fn cache_hit_status_requires_verbose_output() {
-        let normal = FetchOptions {
-            force: false,
-            quiet: false,
-            verbose: false,
-            source: FetchSource::HostedQ8,
-        };
-        assert!(should_print_status(normal, StatusVisibility::Normal));
-        assert!(!should_print_status(normal, StatusVisibility::Verbose));
-
-        let verbose = FetchOptions {
-            verbose: true,
-            ..normal
-        };
-        assert!(should_print_status(verbose, StatusVisibility::Verbose));
-
-        let quiet = FetchOptions {
-            quiet: true,
-            verbose: true,
-            ..normal
-        };
-        assert!(!should_print_status(quiet, StatusVisibility::Normal));
-        assert!(!should_print_status(quiet, StatusVisibility::Verbose));
     }
 }
