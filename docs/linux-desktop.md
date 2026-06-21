@@ -32,6 +32,24 @@ disown
 
 If `doctor` reports that `Ctrl+Space` could not be registered, disable any desktop shortcut, input method, or keyboard remapper that already owns that chord and rerun `parakit doctor`. Ubuntu/GNOME IBus commonly uses `Ctrl+Space` to switch input methods, so check IBus first when the registered backend is intermittent after login, suspend, or an input-method state change.
 
+## Shortcut Conflicts
+
+On GNOME/Ubuntu, check the visible shortcuts first:
+
+1. Open Settings > Keyboard > Keyboard Shortcuts.
+2. Check Typing or Input Sources for `Ctrl+Space`.
+3. Disable or change anything that uses `Ctrl+Space`, then rerun `parakit doctor`.
+
+Useful command-line checks:
+
+```bash
+gsettings get org.gnome.desktop.wm.keybindings switch-input-source
+gsettings get org.gnome.desktop.wm.keybindings switch-input-source-backward
+gsettings get org.gnome.desktop.input-sources xkb-options
+```
+
+If any output mentions `<Control>space`, `<Ctrl>space`, or a left-control toggle, remove that binding in Settings or with your input-method tool. For IBus-specific bindings, run `ibus-setup`, open Keyboard Shortcuts, and remove `Ctrl+Space` from input-method switching before rerunning `parakit doctor`.
+
 ## Focus Guard
 
 On X11, parakit compares the active window captured at PTT-down with the active window at paste time. If focus clearly changes, no paste chord is sent, but non-direct modes still stage the transcript before restoring supported previous clipboard contents unless `--keep-transcript-clipboard` is set. If X11 focus capture or recheck is unavailable, parakit pastes anyway so a transient focus-query failure does not silently drop dictation. Parakit does not inspect application internals with AT-SPI; normal desktop apps, Electron apps, browsers, editors, and terminals are handled by clipboard staging plus one paste chord.

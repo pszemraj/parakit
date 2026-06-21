@@ -45,6 +45,13 @@ If Accessibility is missing, `doctor` can trigger the macOS prompt. After granti
 
 The default macOS push-to-talk hotkey is `Left Control+Space`. This deliberately avoids `Command+Space`, which is normally Spotlight. Press and hold `Left Control+Space` while speaking, then release when done.
 
+macOS may also use `Control+Space` for input-source switching when multiple input sources are configured. If parakit does not react, or if the input-source switcher appears instead:
+
+1. Open System Settings > Keyboard > Keyboard Shortcuts.
+2. Check Input Sources for shortcuts assigned to `Control+Space` or `Control+Option+Space`, and disable or change them.
+3. Check other shortcut categories for warning icons; macOS marks conflicting shortcuts there.
+4. Restart parakit and rerun `parakit doctor`.
+
 Custom hotkeys are deferred to a future config file. Until then, macOS has one default hotkey.
 
 ## Paths

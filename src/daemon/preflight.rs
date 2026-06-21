@@ -651,7 +651,7 @@ fn evdev_report() -> EvdevReport {
 fn write_registered_linux_fix(out: &mut String) {
     writeln!(
         out,
-        "fix:\n  - Use an X11 session; Wayland is intentionally rejected.\n  - Disable any desktop shortcut, input method, or remapper that already owns Ctrl+Space.\n  - Re-run: parakit doctor\n  - The experimental evdev/uinput keyboard proxy is available with: parakit --hotkey-backend evdev-proxy"
+        "fix:\n  - Use an X11 session; Wayland is intentionally rejected.\n  - Disable any desktop shortcut, input method, or remapper that already owns Ctrl+Space.\n  - On GNOME/Ubuntu, check Settings > Keyboard > Keyboard Shortcuts > Typing/Input Sources, or run:\n      gsettings get org.gnome.desktop.wm.keybindings switch-input-source\n      gsettings get org.gnome.desktop.wm.keybindings switch-input-source-backward\n  - Re-run: parakit doctor\n  - The experimental evdev/uinput keyboard proxy is available with: parakit --hotkey-backend evdev-proxy"
     )
     .unwrap();
 }
