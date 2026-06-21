@@ -126,12 +126,12 @@ parakit --verbose doctor
 The `compute:` block should list a Metal GPU or iGPU. If it reports no GPU and shows a Rosetta or non-aarch64 warning, reinstall from a native arm64 terminal:
 
 ```bash
-scripts/macos/install.sh --locked
+cargo install --path . --features metal
 ```
 
-Verify the installed Metal sibling dylib:
+Verify the generated Metal sibling dylib:
 
 ```bash
-ls "$HOME/.cargo/lib/parakit"/libggml-metal.dylib
-otool -s __DATA __ggml_metallib "$HOME/.cargo/lib/parakit/libggml-metal.dylib" | head
+ls target/release/build/parakit-*/out/lib/libggml-metal.dylib
+otool -s __DATA __ggml_metallib target/release/build/parakit-*/out/lib/libggml-metal.dylib | head
 ```

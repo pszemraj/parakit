@@ -31,7 +31,7 @@ cd parakit
 | --- | --- | --- |
 | Linux X11 | `cargo install --path .` | Native packages in [docs/build.md](docs/build.md), desktop setup in [docs/linux-desktop.md](docs/linux-desktop.md). |
 | Windows | `.\scripts\windows\build.ps1` then `.\scripts\windows\install.ps1` | Use the bundle scripts; they copy the required DLLs. See [scripts/windows/README.md](scripts/windows/README.md). |
-| macOS Apple Silicon | `scripts/macos/install.sh --locked` | Native arm64 + Metal install, terminal permissions, and path layout in [docs/macos-desktop.md](docs/macos-desktop.md). |
+| macOS Apple Silicon | `cargo install --path . --features metal` | Native arm64 + Metal install, terminal permissions, and path layout in [docs/macos-desktop.md](docs/macos-desktop.md). |
 
 ### Linux X11
 
@@ -66,10 +66,10 @@ brew install cmake autoconf automake libtool pkg-config
 Then install the native arm64 build:
 
 ```bash
-scripts/macos/install.sh --locked
+cargo install --path . --features metal
 ```
 
-This installs `parakit` to `~/.cargo/bin` and copies its CrispASR/ggml dylibs to `~/.cargo/lib/parakit`, so the installed binary does not depend on the repository `target/` tree. Grant Accessibility and Microphone to the terminal app that launches parakit. See [docs/macos-desktop.md](docs/macos-desktop.md).
+This installs `parakit` to `~/.cargo/bin`. Like the Linux source-build path, it links against CrispASR/ggml shared libraries in the repository `target/` tree, so do not delete `target/` after installing. Grant Accessibility and Microphone to the terminal app that launches parakit. See [docs/macos-desktop.md](docs/macos-desktop.md).
 
 Make sure Cargo's bin directory is on `PATH`:
 

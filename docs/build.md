@@ -43,16 +43,15 @@ cargo install --path .
 macOS Apple Silicon install:
 
 ```bash
-scripts/macos/install.sh --locked
+cargo install --path . --features metal
 ```
 
-The Linux `cargo install --path .` path installs the release binary to Cargo's bin directory, usually `~/.cargo/bin`.
+`cargo install --path .` installs the release binary to Cargo's bin directory, usually `~/.cargo/bin`.
 
 Install behavior:
 
 - Windows `cargo install --path .` copies `parakit.exe` but not the generated CrispASR/ggml DLLs. Use the scripts in [../scripts/windows/README.md](../scripts/windows/README.md) for a normal Windows install.
-- macOS uses [../scripts/macos/install.sh](../scripts/macos/install.sh). It copies `parakit` to `<prefix>/bin` and the generated CrispASR/ggml dylibs to `<prefix>/lib/parakit`, then patches the binary rpath to `@executable_path/../lib/parakit`.
-- Linux/BSD developer installs currently depend on the generated CrispASR shared libraries under Cargo's build output. Do not delete the repository `target/` tree.
+- Unix-like developer installs currently depend on the generated CrispASR shared libraries under Cargo's build output. Do not delete the repository `target/` tree.
 - GitHub auto-generated source archives are unsupported because they do not include the CrispASR submodule. A public release must ship either a source archive with submodules or a binary bundle whose shared libraries are colocated with the executable.
 
 Add `--locked` for CI or reproducibility checks when Cargo must use the exact versions in `Cargo.lock`. Leave it off for normal local installs.
@@ -62,7 +61,7 @@ Optional accelerator builds:
 ```bash
 cargo install --path . --features cuda
 cargo install --path . --features vulkan
-scripts/macos/install.sh --locked        # Apple targets, Metal by default
+cargo install --path . --features metal  # Apple targets only
 ```
 
 For Windows bundles, build one accelerator backend at a time. A combined CUDA+Vulkan bundle is rejected by the Windows scripts because it would hard-load both accelerator DLL chains while ggml would choose CUDA first anyway.
@@ -163,14 +162,7 @@ otool -L target/debug/build/parakit-*/out/lib/libggml.dylib
 otool -l target/debug/parakit | grep -A2 LC_RPATH
 ```
 
-For installed macOS builds, verify the binary points at the colocated runtime libraries rather than the repository build tree:
-
-```bash
-otool -l "$HOME/.cargo/bin/parakit" | grep -A2 LC_RPATH
-ls "$HOME/.cargo/lib/parakit"/libcrispasr.dylib
-```
-
-The installed rpath should be `@executable_path/../lib/parakit`.
+For installed macOS source builds, the binary rpath points into the repository build tree. This matches the Linux source-build contract.
 
 For Metal builds:
 
