@@ -58,10 +58,10 @@ brew install cmake autoconf automake libtool pkg-config
 Then install the native arm64 build:
 
 ```bash
-cargo install --path . --features metal
+scripts/macos/install.sh --locked
 ```
 
-Grant Accessibility and Microphone to the terminal app that launches parakit. See [docs/macos-desktop.md](docs/macos-desktop.md).
+This installs `parakit` to `~/.cargo/bin` and copies its CrispASR/ggml dylibs to `~/.cargo/lib/parakit`, so the installed binary does not depend on the repository `target/` tree. Grant Accessibility and Microphone to the terminal app that launches parakit. See [docs/macos-desktop.md](docs/macos-desktop.md).
 
 Make sure Cargo's bin directory is on `PATH`:
 

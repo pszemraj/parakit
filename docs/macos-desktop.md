@@ -14,8 +14,10 @@ brew install cmake autoconf automake libtool pkg-config
 Build or install the native Apple Silicon binary:
 
 ```bash
-cargo install --path . --features metal
+scripts/macos/install.sh --locked
 ```
+
+The macOS installer builds from source, installs `parakit` under `~/.cargo/bin`, copies the generated CrispASR/ggml dylibs under `~/.cargo/lib/parakit`, and patches the installed binary to use `@executable_path/../lib/parakit`. The installed binary does not depend on the repository `target/` tree.
 
 `aarch64-apple-darwin` is the supported macOS target. If `parakit --verbose doctor` reports a Rosetta or non-aarch64 warning, rebuild from a native arm64 terminal.
 
@@ -81,10 +83,10 @@ parakit --verbose doctor
 For release builds, the Metal backend should be in the generated sibling library directory:
 
 ```bash
-ls target/release/build/parakit-*/out/lib/libggml-metal.dylib
-otool -L target/release/build/parakit-*/out/lib/libggml.dylib
-otool -l target/release/parakit | grep -A2 LC_RPATH
-otool -s __DATA __ggml_metallib target/release/build/parakit-*/out/lib/libggml-metal.dylib | head
+ls "$HOME/.cargo/lib/parakit"/libggml-metal.dylib
+otool -L "$HOME/.cargo/lib/parakit/libggml.dylib"
+otool -l "$HOME/.cargo/bin/parakit" | grep -A2 LC_RPATH
+otool -s __DATA __ggml_metallib "$HOME/.cargo/lib/parakit/libggml-metal.dylib" | head
 ```
 
 ## Troubleshooting
