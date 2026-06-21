@@ -58,7 +58,11 @@ This fallback does not replace real GPU validation. Also run the CUDA and Vulkan
 
 ## Deferred Daemon Safety Work
 
-TODO: Move the default hotkey away from `Ctrl+Space` or make it configurable, then add a Linux `doctor` warning for known IBus `Ctrl+Space` conflicts. Keep the current docs warning until the default/config story changes.
+TODO: Add a small user config file, likely `~/.cache/parakit/config.toml`, for configurable hotkeys and other local daemon preferences. Candidate macOS fallbacks to evaluate there are right Command alone and right Command plus right Option. Keep the default behavior simple until config exists: Linux/Windows use `Ctrl+Space`, and macOS uses `Left Control+Space`.
+
+TODO: Add a Linux `doctor` warning for known IBus `Ctrl+Space` conflicts, or close this if configurable hotkeys make the warning unnecessary. Keep the current Linux docs warning until the default/config story changes.
+
+TODO: Remove the Unix source-install dependency on the repository `target/` library tree in a dedicated follow-up PR. First try to work upstream with CrispASR for static/manual linking support; if that is not viable, revisit full vendoring or an aggregate static-link strategy in parakit. Do not patch the CrispASR submodule locally for this.
 
 TODO: Add a secondary recording watchdog for missed key-release events from the registered X11 hotkey backend. The existing max-utterance timeout bounds the failure, but a silence-based stop would recover sooner when a backend misses release ordering.
 

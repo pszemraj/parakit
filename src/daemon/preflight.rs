@@ -681,6 +681,7 @@ fn hotkey_report(_backend: HotkeyBackend, prompt_accessibility: bool) -> HotkeyR
     let mut details = String::new();
     writeln!(&mut details, "parakit doctor").unwrap();
     writeln!(&mut details, "  hotkey backend: rdev::grab").unwrap();
+    writeln!(&mut details, "  ptt hotkey:     Left Control+Space").unwrap();
     writeln!(
         &mut details,
         "  accessibility: {}",
@@ -712,12 +713,12 @@ fn hotkey_report(_backend: HotkeyBackend, prompt_accessibility: bool) -> HotkeyR
     let status = if blocking {
         "macOS Accessibility permission missing".to_string()
     } else {
-        "macOS Accessibility ready".to_string()
+        "macOS Accessibility ready for Left Control+Space".to_string()
     };
     let summary = if blocking {
         details.clone()
     } else {
-        "macOS Accessibility permission granted".to_string()
+        "macOS Accessibility permission granted; hotkey Left Control+Space".to_string()
     };
     HotkeyReport {
         blocking,

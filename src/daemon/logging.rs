@@ -7,7 +7,7 @@ use std::fmt::Display;
 use std::path::Path;
 use std::time::Duration;
 
-use crate::daemon::audio::MicInfo;
+use crate::daemon::{audio::MicInfo, hotkey};
 
 /// Runtime logging level selected by CLI flags.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -100,7 +100,10 @@ impl Logger {
 
     /// Print the ready line.
     pub(crate) fn ready(&self) {
-        self.line("Ready: hold Ctrl+Space to dictate.");
+        self.line(&format!(
+            "Ready: hold {} to dictate.",
+            hotkey::default_ptt_hint()
+        ));
         if self.is_verbose() {
             self.line("Ctrl+C in this terminal to exit.");
         }

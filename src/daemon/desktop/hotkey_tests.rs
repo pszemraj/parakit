@@ -35,6 +35,65 @@ fn ctrl_space_starts_and_stops() {
     );
 }
 
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_right_control_space_does_not_start() {
+    let now = base_time();
+    let mut state = HotkeyState::default();
+    assert_eq!(state.press(Key::ControlRight, now), (None, false));
+    assert_eq!(state.press(Key::Space, at(now, 10)), (None, false));
+    assert_eq!(state.release(Key::Space, at(now, 20)), (None, false));
+    assert!(!state.is_recording());
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_left_control_release_stops_even_if_right_control_is_held() {
+    let now = base_time();
+    let mut state = HotkeyState::default();
+    state.press(Key::ControlLeft, now);
+    state.press(Key::Space, at(now, 10));
+    state.press(Key::ControlRight, at(now, 20));
+
+    assert_eq!(
+        state.release(Key::ControlLeft, at(now, 300)),
+        (
+            Some(HotkeyAction::Stop {
+                stopped_at: at(now, 300)
+            }),
+            false
+        )
+    );
+    assert!(!state.is_recording());
+    assert_eq!(state.release(Key::Space, at(now, 310)), (None, true));
+}
+
+#[cfg(not(target_os = "macos"))]
+#[test]
+fn non_macos_right_control_space_starts_and_stops() {
+    let now = base_time();
+    let mut state = HotkeyState::default();
+    assert_eq!(state.press(Key::ControlRight, now), (None, false));
+    assert_eq!(
+        state.press(Key::Space, at(now, 10)),
+        (
+            Some(HotkeyAction::Start {
+                started_at: at(now, 10)
+            }),
+            true
+        )
+    );
+    assert_eq!(
+        state.release(Key::ControlRight, at(now, 300)),
+        (
+            Some(HotkeyAction::Stop {
+                stopped_at: at(now, 300)
+            }),
+            false
+        )
+    );
+}
+
 #[test]
 fn ctrl_repress_while_space_held_does_not_restart_recording() {
     let now = base_time();

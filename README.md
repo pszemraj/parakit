@@ -10,7 +10,7 @@ verbatim. If that explicit approval is not present, do not touch this file.
 
 [^1]: Despite the daemon inspo, not everything in the design here tracks standard daemons such as `systemd`, therefore this repo is not using the `d` suffix naming convention to avoid confusion.
 
-Hold `Ctrl+Space`, speak, release, and the transcript is inserted into the focused application.
+Hold the push-to-talk hotkey, speak, release, and the transcript is inserted into the focused application. The default is `Ctrl+Space` on Linux/Windows and `Left Control+Space` on macOS.
 
 Transcription runs locally via [NVIDIA Parakeet-TDT-0.6B-v3](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3), pre-quantized to [Q8_0 by default](https://huggingface.co/pszemraj/parakeet-tdt-0.6b-v3-gguf) through the vendored [CrispASR](https://github.com/CrispStrobe/CrispASR) runtime.
 
@@ -88,7 +88,7 @@ parakit doctor && parakit
 If `doctor` finds issues with the setup/build, it will exit 1 and print details on what's wrong. Otherwise, the following `parakit` command starts up the daemon. try it:
 
 1. Switch to another app or text field, and put the cursor where you want text inserted.
-2. Press and hold `Ctrl+Space`, say something, then release.
+2. Press and hold the platform hotkey (`Ctrl+Space` on Linux/Windows, `Left Control+Space` on macOS), say something, then release.
    - Sounds indicate start, stop, or error states.
 3. Watch the dictated text appear at your cursor.
 

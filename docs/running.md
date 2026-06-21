@@ -32,6 +32,8 @@ parakit
 Ready: hold Ctrl+Space to dictate.
 ```
 
+On macOS the ready line says `Left Control+Space`; on Linux and Windows it says `Ctrl+Space`.
+
 Use `--verbose` only when debugging startup, backend selection, or latency:
 
 ```bash

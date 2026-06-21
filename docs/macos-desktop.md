@@ -25,7 +25,7 @@ The macOS source install puts `parakit` under `~/.cargo/bin` and uses an rpath i
 
 Grant these in System Settings > Privacy & Security:
 
-- Accessibility: required for the `Ctrl+Space` hotkey and synthetic paste/type events.
+- Accessibility: required for the `Left Control+Space` hotkey and synthetic paste/type events.
 - Microphone: required for audio capture.
 
 Grant permissions to the terminal application that launches parakit, such as Terminal.app, iTerm2, or Ghostty. This is the recommended source-build flow because the grant attaches to the terminal's stable app identity and survives parakit rebuilds.
@@ -40,6 +40,12 @@ parakit
 ```
 
 If Accessibility is missing, `doctor` can trigger the macOS prompt. After granting the permission, rerun `parakit doctor`. If Microphone is not determined yet, the first capture may trigger the Microphone prompt; rerun parakit after granting it.
+
+## Hotkey
+
+The default macOS push-to-talk hotkey is `Left Control+Space`. This deliberately avoids `Command+Space`, which is normally Spotlight. Press and hold `Left Control+Space` while speaking, then release when done.
+
+Custom hotkeys are deferred to a future config file. Until then, macOS has one default hotkey.
 
 ## Paths
 

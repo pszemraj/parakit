@@ -103,6 +103,23 @@ impl HotkeyBackend {
     }
 }
 
+/// Return the user-facing default push-to-talk hotkey hint.
+///
+/// # Returns
+///
+/// A concise hotkey label for startup and documentation-facing diagnostics.
+pub(crate) fn default_ptt_hint() -> &'static str {
+    #[cfg(target_os = "macos")]
+    {
+        "Left Control+Space"
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        "Ctrl+Space"
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[cfg(any(not(target_os = "windows"), test))]
 enum HotkeyAction {
@@ -183,7 +200,7 @@ impl HotkeyState {
                 self.suppress_space_release = false;
                 (None, true)
             }
-            Key::ControlLeft | Key::ControlRight if was_recording && !self.ctrl_held() => {
+            Key::ControlLeft | Key::ControlRight if was_recording && !self.ptt_ctrl_held() => {
                 (self.stop_recording(now), false)
             }
             _ => (None, false),
@@ -210,8 +227,21 @@ impl HotkeyState {
         self.recording.is_recording()
     }
 
+    #[cfg(not(target_os = "macos"))]
     fn ctrl_held(&self) -> bool {
         self.ctrl_left || self.ctrl_right
+    }
+
+    fn ptt_ctrl_held(&self) -> bool {
+        #[cfg(target_os = "macos")]
+        {
+            self.ctrl_left
+        }
+
+        #[cfg(not(target_os = "macos"))]
+        {
+            self.ctrl_held()
+        }
     }
 
     fn extra_modifier_held(&self) -> bool {
@@ -224,7 +254,15 @@ impl HotkeyState {
     }
 
     fn ctrl_only(&self) -> bool {
-        self.ctrl_held() && !self.extra_modifier_held()
+        #[cfg(target_os = "macos")]
+        {
+            self.ctrl_left && !self.ctrl_right && !self.extra_modifier_held()
+        }
+
+        #[cfg(not(target_os = "macos"))]
+        {
+            self.ctrl_held() && !self.extra_modifier_held()
+        }
     }
 
     fn set_key(&mut self, key: Key, pressed: bool) {
@@ -305,6 +343,9 @@ pub(crate) fn run_grab_loop(
     _backend: HotkeyBackend,
     _log: Arc<Logger>,
 ) {
+    #[cfg(target_os = "macos")]
+    _log.verbose("parakit: macOS hotkey backend: rdev::grab Left Control+Space");
+
     run_rdev_grab_loop_or_exit(tx);
 }
 
@@ -957,7 +998,7 @@ fn grab_failure_help() -> String {
 
 #[cfg(target_os = "macos")]
 fn grab_failure_help() -> String {
-    "macOS hotkey capture requires Accessibility for the terminal that launched parakit. Grant it in System Settings > Privacy & Security > Accessibility, then rerun `parakit doctor`.".to_string()
+    "macOS hotkey capture uses Left Control+Space and requires Accessibility for the terminal that launched parakit. Grant it in System Settings > Privacy & Security > Accessibility, then rerun `parakit doctor`.".to_string()
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
