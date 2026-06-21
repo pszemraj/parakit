@@ -70,7 +70,7 @@ TODO: Evaluate callback-confirmed recording cues and a short post-roll window. T
 
 TODO: Upgrade `enigo` from the 0.2 line in a cross-platform validation branch. Linux batch paste uses X11 directly and Windows batch paste uses `SendInput`, but direct mode and macOS paste shortcuts still need real desktop validation after the dependency update.
 
-TODO: In the dedicated macOS work branch, decide whether default model storage should move from `~/Library/Caches/parakit/models/` to `~/Library/Application Support/parakit/models/`. The current cache path is user-scoped and adminless, but a multi-GB model may fit durable app data semantics better than reclaimable cache semantics.
+TODO: Revisit model durability semantics before packaged releases. Source builds use the XDG-style `~/.cache/parakit/models/` path on Linux and macOS; a future bundle may want a less reclaimable app-data location.
 
 TODO: Add an optional X11 paste inter-key hold only if real target applications miss the current XTest paste chord. The current smoke test covers X11 event delivery; app-specific compatibility should drive any delay so normal paste latency does not grow without evidence.
 

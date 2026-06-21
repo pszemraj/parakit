@@ -957,7 +957,7 @@ fn grab_failure_help() -> String {
 
 #[cfg(target_os = "macos")]
 fn grab_failure_help() -> String {
-    "macOS hotkey capture requires Accessibility and Input Monitoring permissions for both the terminal and the parakit binary.".to_string()
+    "macOS hotkey capture requires Accessibility for the terminal that launched parakit. Grant it in System Settings > Privacy & Security > Accessibility, then rerun `parakit doctor`.".to_string()
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]

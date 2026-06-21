@@ -11,8 +11,8 @@
 //!     emoji or rare scripts may not pass through cleanly.
 //!   - Linux Wayland: unsupported. Startup preflight rejects Wayland sessions
 //!     because XTest cannot insert into focused native Wayland applications.
-//!   - macOS: synthesizes via the CGEvent API. Requires the launcher to
-//!     be granted "Input Monitoring" + "Accessibility" permissions.
+//!   - macOS: synthesizes via the CGEvent API. Requires Accessibility for the
+//!     terminal that launched parakit.
 
 use anyhow::{Context, Result};
 use arboard::{Clipboard, ImageData};
@@ -126,7 +126,7 @@ pub(crate) enum ClipboardPolicy {
 pub(crate) fn preflight(mode: PasteMode) -> Result<()> {
     let mut injector = Injector::new()?;
     injector.prepare_for_mode(mode)?;
-    if mode != PasteMode::Direct {
+    if mode != PasteMode::Direct || cfg!(target_os = "macos") {
         platform_paste_preflight()?;
     }
     Ok(())
@@ -158,7 +158,7 @@ fn insertion_needs_enigo(mode: PasteMode) -> bool {
 /// fails the validation.
 pub(crate) fn smoke_test(mode: PasteMode) -> Result<()> {
     preflight(mode)?;
-    if mode == PasteMode::Direct {
+    if mode == PasteMode::Direct && !cfg!(target_os = "macos") {
         return Ok(());
     }
     platform_paste_smoke_test(mode)
@@ -324,6 +324,8 @@ pub(crate) struct FocusSnapshot {
     active_window: Option<u32>,
     #[cfg(target_os = "windows")]
     windows: super::windows_focus::WindowsFocusSnapshot,
+    #[cfg(target_os = "macos")]
+    macos: crate::daemon::macos::MacOsFocusSnapshot,
 }
 
 impl FocusSnapshot {
@@ -364,7 +366,14 @@ impl FocusSnapshot {
             })
         }
 
-        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+        #[cfg(target_os = "macos")]
+        {
+            Ok(Self {
+                macos: crate::daemon::macos::MacOsFocusSnapshot::capture()?,
+            })
+        }
+
+        #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
         {
             Ok(Self {})
         }
@@ -411,7 +420,12 @@ impl FocusSnapshot {
             self.windows.matches_current()
         }
 
-        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+        #[cfg(target_os = "macos")]
+        {
+            self.macos.matches_current()
+        }
+
+        #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
         {
             Ok(true)
         }
@@ -1121,7 +1135,12 @@ fn platform_paste_preflight() -> Result<()> {
     linux_x11_xtest_preflight()
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(target_os = "macos")]
+fn platform_paste_preflight() -> Result<()> {
+    crate::daemon::macos::accessibility_preflight()
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn platform_paste_preflight() -> Result<()> {
     Ok(())
 }
@@ -1136,7 +1155,18 @@ fn platform_paste_smoke_test(mode: PasteMode) -> Result<()> {
     super::windows_paste_smoke::windows_paste_smoke_test(mode)
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "windows")))]
+#[cfg(target_os = "macos")]
+fn platform_paste_smoke_test(mode: PasteMode) -> Result<()> {
+    crate::daemon::macos::suppressed_key_event_smoke(|| {
+        let mut injector = Injector::new()?;
+        match mode {
+            PasteMode::Direct => injector.type_text("a"),
+            PasteMode::Standard | PasteMode::Terminal => injector.paste_clipboard(mode),
+        }
+    })
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 fn platform_paste_smoke_test(_mode: PasteMode) -> Result<()> {
     Ok(())
 }

@@ -18,17 +18,50 @@ Transcription runs locally via [NVIDIA Parakeet-TDT-0.6B-v3](https://huggingface
 
 ## Install
 
-Install the native, OS-specific packages needed[^2] as explained in [docs/build.md](docs/build.md), then:
-
-[^2]: These are mostly for audio streaming, hotkey monitoring, and text insertion.
+parakit is built from source. Clone with submodules first:
 
 ```bash
 git clone --recurse-submodules https://github.com/pszemraj/parakit.git
 cd parakit
+```
+
+### Linux X11
+
+Install the native packages needed for audio streaming, X11 hotkeys, and insertion as explained in [docs/build.md](docs/build.md), then:
+
+```bash
 cargo install --path .
 ```
 
-On Windows, use the bundle script instead of `cargo install` when you want a runnable app directory. See [scripts/windows/README.md](scripts/windows/README.md).
+Linux currently requires an X11 session for desktop hotkeys and text insertion. See [docs/linux-desktop.md](docs/linux-desktop.md).
+
+### Windows
+
+Use the bundle script instead of `cargo install` when you want a runnable app directory:
+
+```powershell
+.\scripts\windows\build.ps1
+.\scripts\windows\install.ps1
+```
+
+CUDA and Vulkan bundles are built through the Windows scripts. See [scripts/windows/README.md](scripts/windows/README.md).
+
+### macOS Apple Silicon
+
+Install Xcode command line tools and Homebrew build helpers:
+
+```bash
+xcode-select --install
+brew install cmake autoconf automake libtool pkg-config
+```
+
+Then install the native arm64 build:
+
+```bash
+cargo install --path . --features metal
+```
+
+Grant Accessibility and Microphone to the terminal app that launches parakit. See [docs/macos-desktop.md](docs/macos-desktop.md).
 
 Make sure Cargo's bin directory is on `PATH`:
 
@@ -53,14 +86,13 @@ If `doctor` finds issues with the setup/build, it will exit 1 and print details 
 
 For background mode, paste options, and other runtime-related options see [docs/running.md](docs/running.md).
 
-Linux currently requires an X11 session for desktop hotkeys and text insertion; see [docs/linux-desktop.md](docs/linux-desktop.md).
-
 ## Docs
 
 - Build and native dependencies: [docs/build.md](docs/build.md)
 - Windows bundle scripts: [scripts/windows/README.md](scripts/windows/README.md)
 - Running, control socket, model cache, logging, and paste modes: [docs/running.md](docs/running.md)
 - Linux X11 and experimental evdev-proxy setup: [docs/linux-desktop.md](docs/linux-desktop.md)
+- macOS permissions, Metal, and desktop setup: [docs/macos-desktop.md](docs/macos-desktop.md)
 - Cleanup rules: [docs/cleaning-rules.md](docs/cleaning-rules.md)
 - Validation and quality checks: [docs/quality.md](docs/quality.md)
 - Architecture and platform work: [docs/architecture.md](docs/architecture.md)

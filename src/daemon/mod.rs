@@ -8,6 +8,9 @@ pub(crate) mod desktop;
 pub(crate) mod ipc;
 /// Writes transcript logs and runtime event records.
 pub(crate) mod logging;
+#[cfg(target_os = "macos")]
+/// macOS desktop permission, focus, and diagnostic helpers.
+pub(crate) mod macos;
 /// Sends user-visible desktop notifications.
 pub(crate) mod notifications;
 /// Checks runtime prerequisites before the daemon starts.

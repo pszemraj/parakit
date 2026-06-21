@@ -14,7 +14,7 @@ Cargo handles Rust packages. System packages are still needed for audio, desktop
 | Fedora | `cmake gcc-c++ alsa-lib-devel libudev-devel libXtst-devel libXi-devel libX11-devel libxkbcommon-devel libevdev-devel xdotool-devel pkgconf autoconf libtool` |
 | Arch | `cmake base-devel alsa-lib libxtst libxi libx11 libxkbcommon libevdev xdotool pkgconf autoconf libtool` |
 | Windows | Visual Studio 2022 with the "Desktop development with C++" workload, plus CMake on `PATH`. GPU builds through the Windows scripts also require Ninja. |
-| macOS | Xcode command line tools plus `cmake autoconf automake libtool pkg-config`. |
+| macOS | Apple Silicon with Xcode command line tools plus `cmake autoconf automake libtool pkg-config`. |
 
 CUDA builds need the CUDA Toolkit with `nvcc` on `PATH`.
 
@@ -52,6 +52,8 @@ cargo install --path . --features metal  # Apple targets only
 ```
 
 For Windows bundles, build one accelerator backend at a time. A combined CUDA+Vulkan bundle is rejected by the Windows scripts because it would hard-load both accelerator DLL chains while ggml would choose CUDA first anyway.
+
+On macOS, `aarch64-apple-darwin` is the supported target. Build from a native arm64 terminal; an x86_64/Rosetta build may not expose the Metal backend to ggml.
 
 ## Windows Bundles
 
@@ -119,9 +121,13 @@ Feature mapping:
 | --- | --- |
 | `cuda` | `GGML_CUDA=ON` |
 | `vulkan` | `GGML_VULKAN=ON` |
-| `metal` | `GGML_METAL=ON` |
+| `metal` | `GGML_METAL=ON`, `GGML_METAL_EMBED_LIBRARY=ON` |
 
 CUDA builds also force `GGML_CUDA_NCCL=OFF`.
+
+Metal builds embed the shader source into `libggml-metal.dylib`, so there is no loose `default.metallib` to carry with the binary. The first GPU use still pays normal Metal runtime compilation/warmup cost.
+
+On macOS, `PARAKIT_BLAS=auto` uses Apple Accelerate. `libomp` is optional; ggml's OpenMP path degrades when OpenMP is not available, and Metal handles GPU offload separately.
 
 ## Runtime Library Paths
 
@@ -135,3 +141,17 @@ readelf -d target/debug/parakit | grep -E "RPATH|RUNPATH"
 ```
 
 The library paths should point into `target/debug/build/parakit-*/out/lib`, and `readelf` should report `RPATH`.
+
+macOS uses `@rpath` and sibling dylib install names. Verify:
+
+```bash
+otool -L target/debug/build/parakit-*/out/lib/libggml.dylib
+otool -l target/debug/parakit | grep -A2 LC_RPATH
+```
+
+For Metal builds:
+
+```bash
+ls target/debug/build/parakit-*/out/lib/libggml-metal.dylib
+otool -s __DATA __ggml_metallib target/debug/build/parakit-*/out/lib/libggml-metal.dylib | head
+```

@@ -26,7 +26,7 @@ use super::inject::{self, PasteMode};
 /// Returns an actionable error when the global hotkey backend is known to be
 /// unavailable in the current desktop session.
 pub fn ensure_hotkey_ready(backend: HotkeyBackend) -> Result<()> {
-    let report = hotkey_report(backend);
+    let report = hotkey_report(backend, true);
     if report.blocking {
         bail!("{}", report.summary);
     }
@@ -53,7 +53,7 @@ pub fn print_doctor(
     deep: bool,
     backend: HotkeyBackend,
 ) -> bool {
-    let report = hotkey_report(backend);
+    let report = hotkey_report(backend, !quiet);
     let daemon_lock = singleton_lock_probe();
     let mic = super::audio::probe_default_input();
     let insertion = if deep {
@@ -176,6 +176,10 @@ fn print_doctor_details(
 #[cfg(feature = "bundled")]
 fn print_compute_details() {
     println!("  compute:");
+    #[cfg(target_os = "macos")]
+    for line in super::macos::architecture_warning_lines() {
+        println!("    {line}");
+    }
     let devices = super::stderr::with_stderr_suppressed(parakit::gpu::devices);
     if devices.is_empty() {
         println!("    no ggml devices reported");
@@ -273,17 +277,18 @@ pub(crate) fn daemon_runtime_dir() -> Result<PathBuf> {
         }
     }
 
-    let dirs =
-        directories::BaseDirs::new().context("could not determine user runtime directory")?;
-
     #[cfg(target_os = "windows")]
     {
+        let dirs =
+            directories::BaseDirs::new().context("could not determine user runtime directory")?;
         Ok(dirs.data_local_dir().join("parakit").join("run"))
     }
 
     #[cfg(not(target_os = "windows"))]
     {
-        Ok(dirs.cache_dir().join("parakit").join("run"))
+        Ok(parakit::model::xdg_cache_base()?
+            .join("parakit")
+            .join("run"))
     }
 }
 
@@ -337,7 +342,7 @@ fn linux_hotkey_success_label(backend: HotkeyBackend) -> &'static str {
 }
 
 #[cfg(target_os = "linux")]
-fn hotkey_report(backend: HotkeyBackend) -> HotkeyReport {
+fn hotkey_report(backend: HotkeyBackend, _prompt_accessibility: bool) -> HotkeyReport {
     let session = std::env::var("XDG_SESSION_TYPE").unwrap_or_else(|_| "unknown".to_string());
     let display = std::env::var("DISPLAY").unwrap_or_else(|_| "<unset>".to_string());
     let xauthority = std::env::var("XAUTHORITY").unwrap_or_else(|_| "<unset>".to_string());
@@ -670,18 +675,60 @@ fn write_evdev_linux_fix(out: &mut String, user: &str) {
 }
 
 #[cfg(target_os = "macos")]
-fn hotkey_report(_backend: HotkeyBackend) -> HotkeyReport {
-    let details = "parakit doctor\n  hotkey backend: rdev::grab\n  status:         manual check\n  fix: grant Accessibility and Input Monitoring permissions to both the terminal and the parakit binary.".to_string();
+fn hotkey_report(_backend: HotkeyBackend, prompt_accessibility: bool) -> HotkeyReport {
+    let permissions = super::macos::permission_report(prompt_accessibility);
+    let blocking = !permissions.accessibility.granted();
+    let mut details = String::new();
+    writeln!(&mut details, "parakit doctor").unwrap();
+    writeln!(&mut details, "  hotkey backend: rdev::grab").unwrap();
+    writeln!(
+        &mut details,
+        "  accessibility: {}",
+        permissions.accessibility.label()
+    )
+    .unwrap();
+    writeln!(
+        &mut details,
+        "  input monitor: {} (diagnostic only)",
+        permissions.input_monitoring.label()
+    )
+    .unwrap();
+    writeln!(
+        &mut details,
+        "  microphone:    {}",
+        permissions.microphone.label()
+    )
+    .unwrap();
+    if blocking {
+        writeln!(&mut details, "  status:        FAIL").unwrap();
+        writeln!(
+            &mut details,
+            "fix:\n  - Grant Accessibility to your terminal in System Settings > Privacy & Security > Accessibility.\n  - Re-run: parakit doctor"
+        )
+        .unwrap();
+    } else {
+        writeln!(&mut details, "  status:        OK").unwrap();
+    }
+    let status = if blocking {
+        "macOS Accessibility permission missing".to_string()
+    } else {
+        "macOS Accessibility ready".to_string()
+    };
+    let summary = if blocking {
+        details.clone()
+    } else {
+        "macOS Accessibility permission granted".to_string()
+    };
     HotkeyReport {
-        blocking: false,
-        status: "manual permission check required".to_string(),
-        summary: details.clone(),
+        blocking,
+        status,
+        summary,
         details,
     }
 }
 
 #[cfg(target_os = "windows")]
-fn hotkey_report(_backend: HotkeyBackend) -> HotkeyReport {
+fn hotkey_report(_backend: HotkeyBackend, _prompt_accessibility: bool) -> HotkeyReport {
     let registered = super::windows_input::registered_hotkey_probe();
     let security = super::windows_security::current_process_security_report();
     let blocking = registered.is_err();
@@ -745,7 +792,7 @@ fn hotkey_report(_backend: HotkeyBackend) -> HotkeyReport {
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-fn hotkey_report(_backend: HotkeyBackend) -> HotkeyReport {
+fn hotkey_report(_backend: HotkeyBackend, _prompt_accessibility: bool) -> HotkeyReport {
     let details = "parakit doctor\n  hotkey backend: rdev::grab\n  status:         unsupported platform preflight".to_string();
     HotkeyReport {
         blocking: false,

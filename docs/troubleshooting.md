@@ -19,7 +19,7 @@ parakit stop
 
 Linux X11 session and backend setup are in [linux-desktop.md](linux-desktop.md). The default backend registers `Ctrl+Space` with X11 and does not need `/dev/input` or `/dev/uinput`. If `Ctrl+Space` is unavailable, another desktop shortcut, input method, or keyboard remapper may own it. IBus uses `Ctrl+Space` by default on many Ubuntu/GNOME installs. Disable the conflicting binding and rerun `parakit doctor`.
 
-On macOS, grant Accessibility and Input Monitoring permissions to both the terminal and the built binary.
+On macOS, grant Accessibility to the terminal app that launches parakit. Accessibility covers the active hotkey tap and synthetic paste/type events. `parakit doctor` reports Input Monitoring for diagnostics, but it is not a separate required toggle when Accessibility is granted. If the hotkey stops after changing privacy settings, restart parakit so it recreates the event tap.
 
 WSL is not the native Windows daemon path. Validate Windows hotkeys, focus checks, and paste behavior from native Windows PowerShell with the Windows bundle.
 
@@ -40,6 +40,8 @@ Paste modes, focus-change behavior, paste sanitization, and clipboard fallback b
 Run `parakit doctor --deep` for an active insertion smoke test. On Linux, use an X11 session; Wayland details are in [linux-desktop.md](linux-desktop.md). Use `standard` for apps that only accept `Ctrl+V`; use `direct` only when an app refuses clipboard paste entirely.
 
 Windows elevated-target behavior is covered in [running.md#insertion](running.md#insertion).
+
+On macOS, run `parakit doctor --deep` to exercise the Accessibility-controlled insertion path. If it fails, grant Accessibility to the terminal app, restart parakit, and rerun the check.
 
 In non-direct paste modes, parakit stages blocked or failed transcripts on the clipboard before restoring the active clipboard. Check OS clipboard history, such as `Win+V` on Windows, or your clipboard manager before using the recovery commands below.
 
@@ -111,3 +113,25 @@ parakit --verbose doctor
 The `compute:` block lists devices visible to bundled ggml. A GPU build with no GPU or iGPU listed usually means the driver is missing, too old for the CUDA toolkit/driver ABI, or not exposing Vulkan on that machine. Device selection behavior is in [running.md#device-selection](running.md#device-selection).
 
 The daemon intentionally warms the backend at startup. Use `--verbose` to see warmup duration. A cold backend can still make an unusually long first dictation slower.
+
+## macOS Metal Builds
+
+Build from a native Apple Silicon terminal:
+
+```bash
+cargo build --release --features metal
+parakit --verbose doctor
+```
+
+The `compute:` block should list a Metal GPU or iGPU. If it reports no GPU and shows a Rosetta or non-aarch64 warning, reinstall from a native arm64 terminal:
+
+```bash
+cargo install --path . --features metal
+```
+
+Verify the generated Metal sibling dylib:
+
+```bash
+ls target/release/build/parakit-*/out/lib/libggml-metal.dylib
+otool -s __DATA __ggml_metallib target/release/build/parakit-*/out/lib/libggml-metal.dylib | head
+```

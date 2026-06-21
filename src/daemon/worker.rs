@@ -549,9 +549,10 @@ fn clipboard_policy(keep_transcript_clipboard: bool) -> ClipboardPolicy {
 
 fn focus_allows_insertion(focus: Option<&FocusSnapshot>, log: &Logger) -> bool {
     let Some(focus) = focus else {
-        if cfg!(target_os = "windows") {
-            // Windows insertion must prove the current foreground target still
-            // matches the hotkey target; unknown focus is not safe to paste.
+        if cfg!(any(target_os = "macos", target_os = "windows")) {
+            // macOS and Windows insertion must prove the current foreground
+            // target still matches the hotkey target; unknown focus is not
+            // safe to paste.
             log.warn("recording focus was unavailable; automatic paste skipped");
             return false;
         }
@@ -572,7 +573,7 @@ fn focus_verification_allows_insertion(result: Result<bool>, log: &Logger) -> bo
             log.warn("focus changed before insertion; automatic paste skipped");
             false
         }
-        Err(err) if cfg!(target_os = "windows") => {
+        Err(err) if cfg!(any(target_os = "macos", target_os = "windows")) => {
             log.warn(format!(
                 "could not verify recording focus ({err:#}); automatic paste skipped"
             ));
@@ -780,7 +781,7 @@ mod tests {
         assert!(focus_verification_allows_insertion(Ok(true), &log));
         assert!(!focus_verification_allows_insertion(Ok(false), &log));
 
-        #[cfg(target_os = "windows")]
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
         {
             assert!(!focus_allows_insertion(None, &log));
             assert!(!focus_verification_allows_insertion(
@@ -789,7 +790,7 @@ mod tests {
             ));
         }
 
-        #[cfg(not(target_os = "windows"))]
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         {
             assert!(focus_allows_insertion(None, &log));
             assert!(focus_verification_allows_insertion(

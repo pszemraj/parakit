@@ -1,6 +1,7 @@
 //! Canonical Parakeet model names and cache paths.
 
 use anyhow::{Context, Result};
+#[cfg(target_os = "windows")]
 use directories::BaseDirs;
 use std::path::PathBuf;
 
@@ -38,10 +39,9 @@ pub fn models_dir() -> Result<PathBuf> {
         return Ok(path);
     }
 
-    let dirs = BaseDirs::new().context("could not determine user cache directory")?;
-
     #[cfg(target_os = "windows")]
     {
+        let dirs = BaseDirs::new().context("could not determine user cache directory")?;
         Ok(dirs
             .data_local_dir()
             .join("parakit")
@@ -51,8 +51,29 @@ pub fn models_dir() -> Result<PathBuf> {
 
     #[cfg(not(target_os = "windows"))]
     {
-        Ok(dirs.cache_dir().join("parakit").join("models"))
+        Ok(xdg_cache_base()?.join("parakit").join("models"))
     }
+}
+
+/// Return the XDG-style cache base used by Unix-like parakit paths.
+///
+/// # Returns
+///
+/// `$XDG_CACHE_HOME` when set and non-empty, otherwise `$HOME/.cache`.
+///
+/// # Errors
+///
+/// Returns an error if no usable home directory is available.
+#[cfg(not(target_os = "windows"))]
+pub fn xdg_cache_base() -> Result<PathBuf> {
+    if let Some(path) = std::env::var_os("XDG_CACHE_HOME") {
+        if !path.as_os_str().is_empty() {
+            return Ok(PathBuf::from(path));
+        }
+    }
+
+    let home = std::env::var_os("HOME").context("HOME is not set")?;
+    Ok(PathBuf::from(home).join(".cache"))
 }
 
 fn override_models_dir() -> Result<Option<PathBuf>> {
