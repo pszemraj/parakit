@@ -25,6 +25,14 @@ git clone --recurse-submodules https://github.com/pszemraj/parakit.git
 cd parakit
 ```
 
+### Choose Your Platform
+
+| Platform | Quick install | Start here |
+| --- | --- | --- |
+| Linux X11 | `cargo install --path .` | Native packages in [docs/build.md](docs/build.md), desktop setup in [docs/linux-desktop.md](docs/linux-desktop.md). |
+| Windows | `.\scripts\windows\build.ps1` then `.\scripts\windows\install.ps1` | Use the bundle scripts; they copy the required DLLs. See [scripts/windows/README.md](scripts/windows/README.md). |
+| macOS Apple Silicon | `scripts/macos/install.sh --locked` | Native arm64 + Metal install, terminal permissions, and path layout in [docs/macos-desktop.md](docs/macos-desktop.md). |
+
 ### Linux X11
 
 Install the native packages needed for audio streaming, X11 hotkeys, and insertion as explained in [docs/build.md](docs/build.md), then:
