@@ -56,6 +56,8 @@ const K_CG_EVENT_FLAGS_CHANGED: u32 = 12;
 #[cfg(target_os = "macos")]
 const K_CG_KEYBOARD_EVENT_KEYCODE: u32 = 9;
 #[cfg(target_os = "macos")]
+const K_CG_EVENT_SOURCE_STATE_HID_SYSTEM_STATE: i32 = 1;
+#[cfg(target_os = "macos")]
 const MACOS_KEY_SPACE: i64 = 49;
 #[cfg(target_os = "macos")]
 const MACOS_KEY_LEFT_CONTROL: i64 = 59;
@@ -113,6 +115,7 @@ extern "C" {
     ) -> CFMachPortRef;
     fn CGEventTapEnable(tap: CFMachPortRef, enable: Boolean);
     fn CGEventGetIntegerValueField(event: CGEventRef, field: u32) -> i64;
+    fn CGEventSourceKeyState(state_id: i32, key: u16) -> bool;
 }
 
 /// Hotkey backend preference.
@@ -291,11 +294,19 @@ impl HotkeyState {
     }
 
     #[cfg(target_os = "macos")]
-    fn macos_left_control_flags_changed(&mut self, now: Instant) -> (Option<HotkeyAction>, bool) {
-        if self.ctrl_left {
-            self.release(Key::ControlLeft, now)
+    fn macos_sync_left_control(
+        &mut self,
+        left_control_down: bool,
+        now: Instant,
+    ) -> Option<HotkeyAction> {
+        if self.ctrl_left == left_control_down {
+            return None;
+        }
+        if left_control_down {
+            self.set_key(Key::ControlLeft, true);
+            None
         } else {
-            self.press(Key::ControlLeft, now)
+            self.release(Key::ControlLeft, now).0
         }
     }
 
@@ -570,21 +581,28 @@ extern "C" fn macos_hotkey_tap_callback(
     let keycode = unsafe { CGEventGetIntegerValueField(event, K_CG_KEYBOARD_EVENT_KEYCODE) };
     let now = Instant::now();
     let (action, suppress) = match (event_type, keycode) {
-        (K_CG_EVENT_FLAGS_CHANGED, MACOS_KEY_LEFT_CONTROL) => state
-            .hotkey
-            .lock()
-            .expect("hotkey state lock poisoned")
-            .macos_left_control_flags_changed(now),
-        (K_CG_EVENT_KEY_DOWN, MACOS_KEY_SPACE) => state
-            .hotkey
-            .lock()
-            .expect("hotkey state lock poisoned")
-            .press(Key::Space, now),
-        (K_CG_EVENT_KEY_UP, MACOS_KEY_SPACE) => state
-            .hotkey
-            .lock()
-            .expect("hotkey state lock poisoned")
-            .release(Key::Space, now),
+        (K_CG_EVENT_FLAGS_CHANGED, MACOS_KEY_LEFT_CONTROL) => {
+            let action = state
+                .hotkey
+                .lock()
+                .expect("hotkey state lock poisoned")
+                .macos_sync_left_control(macos_physical_left_control_down(), now);
+            (action, false)
+        }
+        (K_CG_EVENT_KEY_DOWN, MACOS_KEY_SPACE) => {
+            let mut hotkey = state.hotkey.lock().expect("hotkey state lock poisoned");
+            let sync_action =
+                hotkey.macos_sync_left_control(macos_physical_left_control_down(), now);
+            let (space_action, suppress) = hotkey.press(Key::Space, now);
+            (sync_action.or(space_action), suppress)
+        }
+        (K_CG_EVENT_KEY_UP, MACOS_KEY_SPACE) => {
+            let mut hotkey = state.hotkey.lock().expect("hotkey state lock poisoned");
+            let sync_action =
+                hotkey.macos_sync_left_control(macos_physical_left_control_down(), now);
+            let (space_action, suppress) = hotkey.release(Key::Space, now);
+            (sync_action.or(space_action), suppress)
+        }
         _ => (None, false),
     };
 
@@ -601,6 +619,16 @@ extern "C" fn macos_hotkey_tap_callback(
 #[cfg(target_os = "macos")]
 fn event_mask(event_type: u32) -> u64 {
     1_u64 << event_type
+}
+
+#[cfg(target_os = "macos")]
+fn macos_physical_left_control_down() -> bool {
+    unsafe {
+        CGEventSourceKeyState(
+            K_CG_EVENT_SOURCE_STATE_HID_SYSTEM_STATE,
+            MACOS_KEY_LEFT_CONTROL as u16,
+        )
+    }
 }
 
 #[cfg(all(

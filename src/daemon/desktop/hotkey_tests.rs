@@ -98,6 +98,39 @@ fn macos_tap_disabled_resets_state_and_allows_next_ptt_cycle() {
     );
 }
 
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_stale_left_control_state_does_not_start_on_plain_space() {
+    let now = base_time();
+    let mut state = HotkeyState::default();
+    state.press(Key::ControlLeft, now);
+    assert!(state.ctrl_left);
+
+    assert_eq!(state.macos_sync_left_control(false, at(now, 10)), None);
+    assert!(!state.ctrl_left);
+    assert_eq!(state.press(Key::Space, at(now, 20)), (None, false));
+    assert!(!state.is_recording());
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_physical_left_control_state_can_start_next_space_press() {
+    let now = base_time();
+    let mut state = HotkeyState::default();
+
+    assert_eq!(state.macos_sync_left_control(true, now), None);
+    assert!(state.ctrl_left);
+    assert_eq!(
+        state.press(Key::Space, at(now, 10)),
+        (
+            Some(HotkeyAction::Start {
+                started_at: at(now, 10)
+            }),
+            true
+        )
+    );
+}
+
 #[cfg(not(target_os = "macos"))]
 #[test]
 fn non_macos_right_control_space_starts_and_stops() {
