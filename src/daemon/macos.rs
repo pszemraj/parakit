@@ -38,11 +38,15 @@ const K_IOHID_ACCESS_TYPE_DENIED: i32 = 1;
 const K_IOHID_ACCESS_TYPE_UNKNOWN: i32 = 2;
 
 const K_CG_SESSION_EVENT_TAP: u32 = 1;
+const K_CG_HID_EVENT_TAP: u32 = 0;
 const K_CG_HEAD_INSERT_EVENT_TAP: u32 = 0;
 const K_CG_EVENT_TAP_OPTION_DEFAULT: u32 = 0;
 const K_CG_EVENT_KEY_DOWN: u32 = 10;
 const K_CG_EVENT_KEY_UP: u32 = 11;
 const K_CG_EVENT_FLAGS_CHANGED: u32 = 12;
+const K_CG_KEYBOARD_EVENT_KEYCODE: u32 = 9;
+const K_CG_EVENT_FLAG_MASK_COMMAND: u64 = 0x0010_0000;
+const MACOS_V_KEYCODE: u16 = 9;
 
 const SMOKE_TIMEOUT: Duration = Duration::from_millis(750);
 const SMOKE_POLL: Duration = Duration::from_millis(20);
@@ -94,6 +98,15 @@ extern "C" {
         callback: CGEventTapCallBack,
         user_info: *mut c_void,
     ) -> CFMachPortRef;
+    fn CGEventCreateKeyboardEvent(
+        source: *mut c_void,
+        virtual_key: u16,
+        key_down: Boolean,
+    ) -> CGEventRef;
+    fn CGEventPost(tap: u32, event: CGEventRef);
+    fn CGEventGetFlags(event: CGEventRef) -> u64;
+    fn CGEventGetIntegerValueField(event: CGEventRef, field: u32) -> i64;
+    fn CGEventSetFlags(event: CGEventRef, flags: u64);
     fn CGEventTapEnable(tap: CFMachPortRef, enable: Boolean);
 }
 
@@ -386,9 +399,43 @@ pub(crate) fn no_gpu_hint() -> Option<&'static str> {
 /// Returns an error if the event tap cannot be created, the action fails, or no
 /// key events are observed.
 pub(crate) fn suppressed_key_event_smoke(action: impl FnOnce() -> Result<()>) -> Result<()> {
+    suppressed_key_event_smoke_with_expectation(action, None, 0)
+}
+
+/// Run a paste shortcut action behind a temporary suppressing event tap.
+///
+/// # Arguments
+///
+/// * `action` - Synthetic paste action to execute while the tap is enabled.
+///
+/// # Returns
+///
+/// `Ok(())` when Cmd+V down/up events are observed.
+///
+/// # Errors
+///
+/// Returns an error if the event tap cannot be created, the action fails, or the
+/// observed events do not include a Command-flagged V key down/up pair.
+pub(crate) fn suppressed_paste_shortcut_smoke(action: impl FnOnce() -> Result<()>) -> Result<()> {
+    suppressed_key_event_smoke_with_expectation(
+        action,
+        Some(MACOS_V_KEYCODE.into()),
+        K_CG_EVENT_FLAG_MASK_COMMAND,
+    )
+}
+
+fn suppressed_key_event_smoke_with_expectation(
+    action: impl FnOnce() -> Result<()>,
+    expected_keycode: Option<i64>,
+    required_flags: u64,
+) -> Result<()> {
     accessibility_preflight()?;
 
-    let state = SmokeTapState::default();
+    let state = SmokeTapState {
+        expected_keycode,
+        required_flags,
+        ..SmokeTapState::default()
+    };
     let mask = event_mask(K_CG_EVENT_KEY_DOWN)
         | event_mask(K_CG_EVENT_KEY_UP)
         | event_mask(K_CG_EVENT_FLAGS_CHANGED);
@@ -434,10 +481,52 @@ pub(crate) fn suppressed_key_event_smoke(action: impl FnOnce() -> Result<()>) ->
 
     action_result?;
     if state.saw_key_down.load(Ordering::Acquire) && state.saw_key_up.load(Ordering::Acquire) {
+        if expected_keycode.is_some()
+            && (!state.saw_expected_key_down.load(Ordering::Acquire)
+                || !state.saw_expected_key_up.load(Ordering::Acquire))
+        {
+            bail!("macOS insertion smoke test did not observe expected Cmd+V key down/up events")
+        }
         Ok(())
     } else {
         bail!("macOS insertion smoke test did not observe synthetic key down/up events")
     }
+}
+
+/// Send a macOS paste shortcut using a single flagged key event pair.
+///
+/// # Returns
+///
+/// `Ok(())` when CoreGraphics accepted the synthetic Cmd+V key events.
+///
+/// # Errors
+///
+/// Returns an error if Accessibility is unavailable or CoreGraphics cannot
+/// allocate the keyboard events.
+pub(crate) fn send_paste_shortcut() -> Result<()> {
+    accessibility_preflight()?;
+
+    let key_down = unsafe { CGEventCreateKeyboardEvent(ptr::null_mut(), MACOS_V_KEYCODE, 1) };
+    if key_down.is_null() {
+        bail!("could not create macOS paste key-down event");
+    }
+    let key_up = unsafe { CGEventCreateKeyboardEvent(ptr::null_mut(), MACOS_V_KEYCODE, 0) };
+    if key_up.is_null() {
+        unsafe {
+            CFRelease(key_down.cast());
+        }
+        bail!("could not create macOS paste key-up event");
+    }
+
+    unsafe {
+        CGEventSetFlags(key_down, K_CG_EVENT_FLAG_MASK_COMMAND);
+        CGEventSetFlags(key_up, K_CG_EVENT_FLAG_MASK_COMMAND);
+        CGEventPost(K_CG_HID_EVENT_TAP, key_down);
+        CGEventPost(K_CG_HID_EVENT_TAP, key_up);
+        CFRelease(key_down.cast());
+        CFRelease(key_up.cast());
+    }
+    Ok(())
 }
 
 fn frontmost_application() -> Result<MacOsFocusSnapshot> {
@@ -489,6 +578,10 @@ fn accessibility_trusted_with_prompt() -> bool {
 struct SmokeTapState {
     saw_key_down: AtomicBool,
     saw_key_up: AtomicBool,
+    saw_expected_key_down: AtomicBool,
+    saw_expected_key_up: AtomicBool,
+    expected_keycode: Option<i64>,
+    required_flags: u64,
 }
 
 extern "C" fn smoke_tap_callback(
@@ -500,8 +593,18 @@ extern "C" fn smoke_tap_callback(
     if !user_info.is_null() {
         let state = unsafe { &*(user_info.cast::<SmokeTapState>()) };
         match event_type {
-            K_CG_EVENT_KEY_DOWN => state.saw_key_down.store(true, Ordering::Release),
-            K_CG_EVENT_KEY_UP => state.saw_key_up.store(true, Ordering::Release),
+            K_CG_EVENT_KEY_DOWN => {
+                state.saw_key_down.store(true, Ordering::Release);
+                if state.matches_expected(event) {
+                    state.saw_expected_key_down.store(true, Ordering::Release);
+                }
+            }
+            K_CG_EVENT_KEY_UP => {
+                state.saw_key_up.store(true, Ordering::Release);
+                if state.matches_expected(event) {
+                    state.saw_expected_key_up.store(true, Ordering::Release);
+                }
+            }
             K_CG_EVENT_FLAGS_CHANGED => {}
             _ => return event,
         }
@@ -510,13 +613,33 @@ extern "C" fn smoke_tap_callback(
     event
 }
 
+impl SmokeTapState {
+    fn complete(&self) -> bool {
+        if self.expected_keycode.is_some() {
+            self.saw_expected_key_down.load(Ordering::Acquire)
+                && self.saw_expected_key_up.load(Ordering::Acquire)
+        } else {
+            self.saw_key_down.load(Ordering::Acquire) && self.saw_key_up.load(Ordering::Acquire)
+        }
+    }
+
+    fn matches_expected(&self, event: CGEventRef) -> bool {
+        let Some(expected_keycode) = self.expected_keycode else {
+            return true;
+        };
+        let keycode = unsafe { CGEventGetIntegerValueField(event, K_CG_KEYBOARD_EVENT_KEYCODE) };
+        let flags = unsafe { CGEventGetFlags(event) };
+        keycode == expected_keycode && (flags & self.required_flags) == self.required_flags
+    }
+}
+
 fn wait_for_smoke_events(state: &SmokeTapState) {
     let deadline = Instant::now() + SMOKE_TIMEOUT;
     while Instant::now() < deadline {
         unsafe {
             let _ = CFRunLoopRunInMode(kCFRunLoopDefaultMode, SMOKE_POLL.as_secs_f64(), 1);
         }
-        if state.saw_key_down.load(Ordering::Acquire) && state.saw_key_up.load(Ordering::Acquire) {
+        if state.complete() {
             return;
         }
         thread::sleep(Duration::from_millis(5));
