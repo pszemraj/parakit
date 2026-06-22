@@ -54,7 +54,7 @@ Install behavior:
 - Unix-like developer installs currently depend on the generated CrispASR shared libraries under Cargo's build output. Do not delete the repository `target/` tree.
 - GitHub auto-generated source archives are unsupported because they do not include the CrispASR submodule. A public release must ship either a source archive with submodules or a binary bundle whose shared libraries are colocated with the executable.
 
-Add `--locked` for CI or reproducibility checks when Cargo must use the exact versions in `Cargo.lock`. Leave it off for normal local installs.
+Add `--locked` only when you specifically want Cargo to use the exact dependency versions in `Cargo.lock`.
 
 Optional accelerator builds:
 

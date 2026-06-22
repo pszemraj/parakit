@@ -60,7 +60,7 @@ This fallback does not replace real GPU validation. Also run the CUDA and Vulkan
 
 TODO: Add a small user config file, likely `~/.cache/parakit/config.toml`, for configurable hotkeys and other local daemon preferences. Candidate macOS fallbacks to evaluate there are right Command alone and right Command plus right Option. Keep the default behavior simple until config exists: Linux/Windows use `Ctrl+Space`, and macOS uses `Left Control+Space`.
 
-TODO: Keep a direct platform-hotkey path available if configurable chords are not enough. On macOS, that means replacing `rdev::grab` with a small CoreGraphics event-tap backend that owns the selected chord, suppresses only that chord, and can handle tap-disabled callbacks. On Linux, keep the registered X11 backend as the normal path and use the evdev/uinput proxy only when users explicitly accept the lower-level permission tradeoff. On Windows, `RegisterHotKey` already gives a clear conflict/error boundary.
+TODO: Keep the direct platform-hotkey path available when configurable chords land. On macOS, extend the existing CoreGraphics event-tap backend so it owns the selected chord, suppresses only that chord, and handles tap-disabled callbacks. On Linux, keep the registered X11 backend as the normal path and use the evdev/uinput proxy only when users explicitly accept the lower-level permission tradeoff. On Windows, `RegisterHotKey` already gives a clear conflict/error boundary.
 
 TODO: Add a Linux `doctor` warning for known IBus `Ctrl+Space` conflicts, or close this if configurable hotkeys make the warning unnecessary. Keep the current Linux docs warning until the default/config story changes.
 

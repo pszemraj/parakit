@@ -11,8 +11,10 @@ use parakit::inference::{default_thread_count, DeviceMode, Engine};
 use parakit::model;
 use parakit::rules;
 use parakit::warmup;
+use std::ffi::{c_char, c_void, CStr};
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -33,6 +35,17 @@ const CPU_ENGINE_WARMUP_SECONDS: &[usize] = &[1];
 // dictations with margin, accepting a one-time backend stall for unusual longer
 // cold-cache captures.
 const GPU_ENGINE_WARMUP_SECONDS: &[usize] = &[5, 30];
+const GGML_LOG_LEVEL_NONE: i32 = 0;
+const GGML_LOG_LEVEL_WARN: i32 = 3;
+const GGML_LOG_LEVEL_CONT: i32 = 5;
+static NATIVE_LOG_MIN_LEVEL: AtomicI32 = AtomicI32::new(GGML_LOG_LEVEL_WARN);
+static NATIVE_LOG_LAST_ALLOWED: AtomicBool = AtomicBool::new(false);
+
+type CrispAsrLogCallback = Option<extern "C" fn(i32, *const c_char, *mut c_void)>;
+
+extern "C" {
+    fn whisper_log_set(log_callback: CrispAsrLogCallback, user_data: *mut c_void);
+}
 
 /// Parse CLI arguments and run the requested command or daemon mode.
 ///
@@ -48,6 +61,7 @@ pub(crate) fn run() -> Result<()> {
     daemon::audio::alsa::install_error_silencer();
 
     let cli = Cli::parse();
+    configure_native_logging(cli.verbose);
     let log = Arc::new(Logger::new(log_level(&cli)));
     let notifier = Notifier::new(Arc::clone(&log));
     #[cfg(target_os = "linux")]
@@ -261,6 +275,43 @@ pub(crate) fn run() -> Result<()> {
     let _ = coordinator.join();
     let _ = worker.join();
     Ok(())
+}
+
+fn configure_native_logging(verbose: bool) {
+    let min_level = if verbose {
+        GGML_LOG_LEVEL_NONE
+    } else {
+        GGML_LOG_LEVEL_WARN
+    };
+    NATIVE_LOG_MIN_LEVEL.store(min_level, Ordering::Relaxed);
+    NATIVE_LOG_LAST_ALLOWED.store(false, Ordering::Relaxed);
+    unsafe {
+        whisper_log_set(Some(parakit_native_log_callback), std::ptr::null_mut());
+    }
+}
+
+extern "C" fn parakit_native_log_callback(
+    level: i32,
+    text: *const c_char,
+    _user_data: *mut c_void,
+) {
+    if text.is_null() {
+        return;
+    }
+    let min_level = NATIVE_LOG_MIN_LEVEL.load(Ordering::Relaxed);
+    let allowed = if level == GGML_LOG_LEVEL_CONT {
+        NATIVE_LOG_LAST_ALLOWED.load(Ordering::Relaxed)
+    } else {
+        level >= min_level
+    };
+    if level != GGML_LOG_LEVEL_CONT {
+        NATIVE_LOG_LAST_ALLOWED.store(allowed, Ordering::Relaxed);
+    }
+    if !allowed {
+        return;
+    }
+    let bytes = unsafe { CStr::from_ptr(text) }.to_bytes();
+    let _ = std::io::Write::write_all(&mut std::io::stderr().lock(), bytes);
 }
 
 /// Warn when the selected microphone appears to be Bluetooth.

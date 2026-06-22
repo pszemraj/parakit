@@ -680,7 +680,7 @@ fn hotkey_report(_backend: HotkeyBackend, prompt_accessibility: bool) -> HotkeyR
     let blocking = !permissions.accessibility.granted();
     let mut details = String::new();
     writeln!(&mut details, "parakit doctor").unwrap();
-    writeln!(&mut details, "  hotkey backend: rdev::grab").unwrap();
+    writeln!(&mut details, "  hotkey backend: CoreGraphics event tap").unwrap();
     writeln!(&mut details, "  ptt hotkey:     Left Control+Space").unwrap();
     writeln!(
         &mut details,

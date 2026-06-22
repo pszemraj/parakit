@@ -68,6 +68,36 @@ fn macos_left_control_release_stops_even_if_right_control_is_held() {
     assert_eq!(state.release(Key::Space, at(now, 310)), (None, true));
 }
 
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_tap_disabled_resets_state_and_allows_next_ptt_cycle() {
+    let now = base_time();
+    let mut state = HotkeyState::default();
+    state.press(Key::ControlLeft, now);
+    state.press(Key::Space, at(now, 10));
+    assert!(state.is_recording());
+
+    assert_eq!(
+        state.reset_after_tap_disabled(at(now, 50)),
+        Some(HotkeyAction::Stop {
+            stopped_at: at(now, 50)
+        })
+    );
+    assert!(!state.is_recording());
+    assert_eq!(state.release(Key::Space, at(now, 60)), (None, false));
+
+    assert_eq!(state.press(Key::ControlLeft, at(now, 200)), (None, false));
+    assert_eq!(
+        state.press(Key::Space, at(now, 210)),
+        (
+            Some(HotkeyAction::Start {
+                started_at: at(now, 210)
+            }),
+            true
+        )
+    );
+}
+
 #[cfg(not(target_os = "macos"))]
 #[test]
 fn non_macos_right_control_space_starts_and_stops() {

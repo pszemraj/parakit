@@ -17,13 +17,19 @@ use global_hotkey::{
 };
 #[cfg(all(target_os = "windows", test))]
 use rdev::Key;
-#[cfg(not(target_os = "windows"))]
+#[cfg(target_os = "macos")]
+use rdev::Key;
+#[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
 use rdev::{Event, EventType, Key};
+#[cfg(target_os = "macos")]
+use std::sync::atomic::{AtomicPtr, Ordering};
 use std::sync::Arc;
 #[cfg(not(target_os = "windows"))]
 use std::sync::Mutex;
 #[cfg(any(not(target_os = "windows"), test))]
 use std::time::{Duration, Instant};
+#[cfg(target_os = "macos")]
+use std::{ffi::c_void, ptr};
 #[cfg(target_os = "linux")]
 use std::{fs::File, io, path::PathBuf};
 
@@ -31,6 +37,83 @@ use std::{fs::File, io, path::PathBuf};
 const HOTKEY_DEBOUNCE: Duration = Duration::from_millis(150);
 #[cfg(target_os = "linux")]
 const REGISTERED_HOTKEY_PHYSICAL_POLL: Duration = Duration::from_millis(25);
+#[cfg(target_os = "macos")]
+const K_CG_HID_EVENT_TAP: u32 = 0;
+#[cfg(target_os = "macos")]
+const K_CG_HEAD_INSERT_EVENT_TAP: u32 = 0;
+#[cfg(target_os = "macos")]
+const K_CG_EVENT_TAP_OPTION_DEFAULT: u32 = 0;
+#[cfg(target_os = "macos")]
+const K_CG_EVENT_TAP_DISABLED_BY_TIMEOUT: u32 = 0xFFFF_FFFE;
+#[cfg(target_os = "macos")]
+const K_CG_EVENT_TAP_DISABLED_BY_USER_INPUT: u32 = 0xFFFF_FFFF;
+#[cfg(target_os = "macos")]
+const K_CG_EVENT_KEY_DOWN: u32 = 10;
+#[cfg(target_os = "macos")]
+const K_CG_EVENT_KEY_UP: u32 = 11;
+#[cfg(target_os = "macos")]
+const K_CG_EVENT_FLAGS_CHANGED: u32 = 12;
+#[cfg(target_os = "macos")]
+const K_CG_KEYBOARD_EVENT_KEYCODE: u32 = 9;
+#[cfg(target_os = "macos")]
+const MACOS_KEY_SPACE: i64 = 49;
+#[cfg(target_os = "macos")]
+const MACOS_KEY_LEFT_CONTROL: i64 = 59;
+
+#[cfg(target_os = "macos")]
+type Boolean = u8;
+#[cfg(target_os = "macos")]
+type CFAllocatorRef = *const c_void;
+#[cfg(target_os = "macos")]
+type CFIndex = isize;
+#[cfg(target_os = "macos")]
+type CFRunLoopRef = *mut c_void;
+#[cfg(target_os = "macos")]
+type CFRunLoopSourceRef = *mut c_void;
+#[cfg(target_os = "macos")]
+type CFStringRef = *const c_void;
+#[cfg(target_os = "macos")]
+type CFTypeRef = *const c_void;
+#[cfg(target_os = "macos")]
+type CFMachPortRef = *mut c_void;
+#[cfg(target_os = "macos")]
+type CGEventRef = *mut c_void;
+#[cfg(target_os = "macos")]
+type CGEventTapProxy = *mut c_void;
+#[cfg(target_os = "macos")]
+type CGEventTapCallBack =
+    extern "C" fn(CGEventTapProxy, u32, CGEventRef, *mut c_void) -> CGEventRef;
+
+#[cfg(target_os = "macos")]
+#[link(name = "CoreFoundation", kind = "framework")]
+extern "C" {
+    static kCFRunLoopDefaultMode: CFStringRef;
+
+    fn CFRelease(cf: CFTypeRef);
+    fn CFRunLoopAddSource(rl: CFRunLoopRef, source: CFRunLoopSourceRef, mode: CFStringRef);
+    fn CFRunLoopGetCurrent() -> CFRunLoopRef;
+    fn CFRunLoopRun();
+    fn CFMachPortCreateRunLoopSource(
+        allocator: CFAllocatorRef,
+        port: CFMachPortRef,
+        order: CFIndex,
+    ) -> CFRunLoopSourceRef;
+}
+
+#[cfg(target_os = "macos")]
+#[link(name = "CoreGraphics", kind = "framework")]
+extern "C" {
+    fn CGEventTapCreate(
+        tap: u32,
+        place: u32,
+        options: u32,
+        events_of_interest: u64,
+        callback: CGEventTapCallBack,
+        user_info: *mut c_void,
+    ) -> CFMachPortRef;
+    fn CGEventTapEnable(tap: CFMachPortRef, enable: Boolean);
+    fn CGEventGetIntegerValueField(event: CGEventRef, field: u32) -> i64;
+}
 
 /// Hotkey backend preference.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, clap::ValueEnum)]
@@ -207,6 +290,30 @@ impl HotkeyState {
         }
     }
 
+    #[cfg(target_os = "macos")]
+    fn macos_left_control_flags_changed(&mut self, now: Instant) -> (Option<HotkeyAction>, bool) {
+        if self.ctrl_left {
+            self.release(Key::ControlLeft, now)
+        } else {
+            self.press(Key::ControlLeft, now)
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn reset_after_tap_disabled(&mut self, now: Instant) -> Option<HotkeyAction> {
+        self.ctrl_left = false;
+        self.ctrl_right = false;
+        self.shift_left = false;
+        self.shift_right = false;
+        self.alt = false;
+        self.alt_gr = false;
+        self.meta_left = false;
+        self.meta_right = false;
+        self.space = false;
+        self.suppress_space_release = false;
+        self.stop_recording(now)
+    }
+
     fn start_recording(&mut self, now: Instant) -> Option<HotkeyAction> {
         let debounce_ok = self
             .last_start
@@ -344,12 +451,163 @@ pub(crate) fn run_grab_loop(
     _log: Arc<Logger>,
 ) {
     #[cfg(target_os = "macos")]
-    _log.verbose("parakit: macOS hotkey backend: rdev::grab Left Control+Space");
+    {
+        _log.verbose("parakit: macOS hotkey backend: CoreGraphics event tap Left Control+Space");
+        run_macos_event_tap_loop_or_exit(tx);
+    }
 
+    #[cfg(not(target_os = "macos"))]
     run_rdev_grab_loop_or_exit(tx);
 }
 
-#[cfg(all(not(target_os = "linux"), not(target_os = "windows")))]
+#[cfg(target_os = "macos")]
+fn run_macos_event_tap_loop_or_exit(tx: Sender<HotkeyTransition>) {
+    if let Err(err) = run_macos_event_tap_loop(tx) {
+        eprintln!(
+            "parakit: macOS hotkey event tap failed: {err:#}\n{}",
+            grab_failure_help()
+        );
+        std::process::exit(2);
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn run_macos_event_tap_loop(tx: Sender<HotkeyTransition>) -> anyhow::Result<()> {
+    crate::daemon::macos::accessibility_preflight()?;
+
+    let state = Box::new(MacOsHotkeyTapState {
+        hotkey: Arc::new(Mutex::new(HotkeyState::default())),
+        tx,
+        tap: AtomicPtr::new(ptr::null_mut()),
+    });
+    let state_ptr = Box::into_raw(state);
+    let mask = event_mask(K_CG_EVENT_KEY_DOWN)
+        | event_mask(K_CG_EVENT_KEY_UP)
+        | event_mask(K_CG_EVENT_FLAGS_CHANGED);
+    let tap = unsafe {
+        CGEventTapCreate(
+            K_CG_HID_EVENT_TAP,
+            K_CG_HEAD_INSERT_EVENT_TAP,
+            K_CG_EVENT_TAP_OPTION_DEFAULT,
+            mask,
+            macos_hotkey_tap_callback,
+            state_ptr.cast(),
+        )
+    };
+    if tap.is_null() {
+        unsafe {
+            drop(Box::from_raw(state_ptr));
+        }
+        anyhow::bail!("could not create CoreGraphics event tap");
+    }
+
+    unsafe {
+        (*state_ptr).tap.store(tap.cast(), Ordering::Release);
+    }
+
+    let source = unsafe { CFMachPortCreateRunLoopSource(ptr::null(), tap, 0) };
+    if source.is_null() {
+        unsafe {
+            CFRelease(tap.cast());
+            drop(Box::from_raw(state_ptr));
+        }
+        anyhow::bail!("could not create CoreGraphics event-tap run-loop source");
+    }
+
+    unsafe {
+        let run_loop = CFRunLoopGetCurrent();
+        CFRunLoopAddSource(run_loop, source, kCFRunLoopDefaultMode);
+        CGEventTapEnable(tap, 1);
+        CFRelease(source.cast());
+        CFRunLoopRun();
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+struct MacOsHotkeyTapState {
+    hotkey: Arc<Mutex<HotkeyState>>,
+    tx: Sender<HotkeyTransition>,
+    tap: AtomicPtr<c_void>,
+}
+
+#[cfg(target_os = "macos")]
+extern "C" fn macos_hotkey_tap_callback(
+    _proxy: CGEventTapProxy,
+    event_type: u32,
+    event: CGEventRef,
+    user_info: *mut c_void,
+) -> CGEventRef {
+    if user_info.is_null() {
+        return event;
+    }
+    let state = unsafe { &*(user_info.cast::<MacOsHotkeyTapState>()) };
+    match event_type {
+        K_CG_EVENT_TAP_DISABLED_BY_TIMEOUT | K_CG_EVENT_TAP_DISABLED_BY_USER_INPUT => {
+            if let Some(action) = state
+                .hotkey
+                .lock()
+                .expect("hotkey state lock poisoned")
+                .reset_after_tap_disabled(Instant::now())
+            {
+                send_hotkey_transition(action, &state.tx);
+            }
+            let tap: CFMachPortRef = state.tap.load(Ordering::Acquire).cast();
+            if !tap.is_null() {
+                unsafe {
+                    CGEventTapEnable(tap, 1);
+                }
+            }
+            return event;
+        }
+        K_CG_EVENT_FLAGS_CHANGED | K_CG_EVENT_KEY_DOWN | K_CG_EVENT_KEY_UP => {}
+        _ => return event,
+    }
+
+    if event.is_null() {
+        return event;
+    }
+    let keycode = unsafe { CGEventGetIntegerValueField(event, K_CG_KEYBOARD_EVENT_KEYCODE) };
+    let now = Instant::now();
+    let (action, suppress) = match (event_type, keycode) {
+        (K_CG_EVENT_FLAGS_CHANGED, MACOS_KEY_LEFT_CONTROL) => state
+            .hotkey
+            .lock()
+            .expect("hotkey state lock poisoned")
+            .macos_left_control_flags_changed(now),
+        (K_CG_EVENT_KEY_DOWN, MACOS_KEY_SPACE) => state
+            .hotkey
+            .lock()
+            .expect("hotkey state lock poisoned")
+            .press(Key::Space, now),
+        (K_CG_EVENT_KEY_UP, MACOS_KEY_SPACE) => state
+            .hotkey
+            .lock()
+            .expect("hotkey state lock poisoned")
+            .release(Key::Space, now),
+        _ => (None, false),
+    };
+
+    if let Some(action) = action {
+        send_hotkey_transition(action, &state.tx);
+    }
+    if suppress {
+        ptr::null_mut()
+    } else {
+        event
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn event_mask(event_type: u32) -> u64 {
+    1_u64 << event_type
+}
+
+#[cfg(all(
+    not(target_os = "linux"),
+    not(target_os = "macos"),
+    not(target_os = "windows")
+))]
 fn run_rdev_grab_loop_or_exit(tx: Sender<HotkeyTransition>) {
     let state = Arc::new(Mutex::new(HotkeyState::default()));
     let callback_state = Arc::clone(&state);
@@ -896,7 +1154,11 @@ fn handle_listen_event(
     let _ = handle_key_event(event.event_type, state, tx);
 }
 
-#[cfg(all(not(target_os = "linux"), not(target_os = "windows")))]
+#[cfg(all(
+    not(target_os = "linux"),
+    not(target_os = "macos"),
+    not(target_os = "windows")
+))]
 fn handle_grab_event(
     event: Event,
     state: &Arc<Mutex<HotkeyState>>,
@@ -910,7 +1172,7 @@ fn handle_grab_event(
     }
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
 fn handle_key_event(
     event_type: EventType,
     state: &Arc<Mutex<HotkeyState>>,

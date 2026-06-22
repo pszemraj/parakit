@@ -19,7 +19,7 @@ parakit stop
 
 Linux X11 session and backend setup are in [linux-desktop.md](linux-desktop.md). The default backend registers `Ctrl+Space` with X11 and does not need `/dev/input` or `/dev/uinput`. If `Ctrl+Space` is unavailable, another desktop shortcut, input method, or keyboard remapper may own it. IBus uses `Ctrl+Space` by default on many Ubuntu/GNOME installs. Check [linux-desktop.md#shortcut-conflicts](linux-desktop.md#shortcut-conflicts), disable the conflicting binding, and rerun `parakit doctor`.
 
-On macOS, the default hotkey is `Left Control+Space`. Grant Accessibility to the terminal app that launches parakit. Accessibility covers the active hotkey tap and synthetic paste/type events. `parakit doctor` reports Input Monitoring for diagnostics, but it is not a separate required toggle when Accessibility is granted. If the input-source switcher appears, check [macos-desktop.md#hotkey](macos-desktop.md#hotkey). If the hotkey stops after changing privacy settings, restart parakit so it recreates the event tap.
+On macOS, the default hotkey is `Left Control+Space`. Grant Accessibility to the terminal app that launches parakit. Accessibility covers the CoreGraphics event tap and synthetic paste/type events. `parakit doctor` reports Input Monitoring for diagnostics, but it is not a separate required toggle when Accessibility is granted. If the input-source switcher appears, check [macos-desktop.md#hotkey](macos-desktop.md#hotkey). If the hotkey stops after changing privacy settings, restart parakit so it recreates the event tap.
 
 WSL is not the native Windows daemon path. Validate Windows hotkeys, focus checks, and paste behavior from native Windows PowerShell with the Windows bundle.
 

@@ -43,7 +43,7 @@ If Accessibility is missing, `doctor` can trigger the macOS prompt. After granti
 
 ## Hotkey
 
-The default macOS push-to-talk hotkey is `Left Control+Space`. This deliberately avoids `Command+Space`, which is normally Spotlight. Press and hold `Left Control+Space` while speaking, then release when done.
+The default macOS push-to-talk hotkey is `Left Control+Space`. This deliberately avoids `Command+Space`, which is normally Spotlight. Press and hold `Left Control+Space` while speaking, then release when done. parakit handles the chord with a CoreGraphics event tap and suppresses the Space key while the chord is active.
 
 macOS may also use `Control+Space` for input-source switching when multiple input sources are configured. If parakit does not react, or if the input-source switcher appears instead:
 
@@ -106,6 +106,6 @@ otool -s __DATA __ggml_metallib target/release/build/parakit-*/out/lib/libggml-m
 
 If the hotkey does nothing, grant Accessibility to the terminal, quit and restart parakit, then rerun `parakit doctor`.
 
-If the hotkey worked and later stops after changing privacy settings or after a macOS input-event issue, restart parakit. Restarting recreates the event tap.
+If the hotkey worked and later stops after changing privacy settings, restart parakit. The event tap tries to re-enable itself after macOS disables it, but privacy changes can still require a fresh process.
 
 If `--device gpu` reports no GPU on Apple Silicon, run `parakit --verbose doctor`. A Rosetta warning means the process is translated; reinstall from a native arm64 terminal.

@@ -16,7 +16,7 @@ use crate::daemon::inject::PasteMode;
     name = "parakit",
     version,
     about = "Push-to-talk dictation daemon (Parakeet-TDT via CrispASR).",
-    long_about = "Push-to-talk dictation daemon. Hold Ctrl+Space to record, release to transcribe and insert text at the cursor.\n\nDefault mode prints concise status and transcripts. Pass --verbose for diagnostic paths and timings, or --quiet for background daemon mode."
+    long_about = "Push-to-talk dictation daemon. Hold the platform hotkey to record, release to transcribe and insert text at the cursor.\n\nDefault mode prints concise status and transcripts. Pass --verbose for diagnostic paths and timings, or --quiet for background daemon mode."
 )]
 pub(crate) struct Cli {
     /// Subcommand to run instead of the push-to-talk daemon.
