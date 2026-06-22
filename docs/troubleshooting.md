@@ -17,9 +17,9 @@ parakit stop
 
 ## Hotkey Problems
 
-Linux X11 session and backend setup are in [linux-desktop.md](linux-desktop.md). The default backend registers `Ctrl+Space` with X11 and does not need `/dev/input` or `/dev/uinput`. If `Ctrl+Space` is unavailable, another desktop shortcut, input method, or keyboard remapper may own it. IBus uses `Ctrl+Space` by default on many Ubuntu/GNOME installs. Check [linux-desktop.md#shortcut-conflicts](linux-desktop.md#shortcut-conflicts), disable the conflicting binding, and rerun `parakit doctor`.
+Linux X11 session and backend setup are in [linux-desktop.md](linux-desktop.md). If `Ctrl+Space` is unavailable, another desktop shortcut, input method, or keyboard remapper may own it. Check [linux-desktop.md#shortcut-conflicts](linux-desktop.md#shortcut-conflicts), disable the conflicting binding, and rerun `parakit doctor`.
 
-On macOS, the default hotkey is `Left Control+Space`. Grant Accessibility to the terminal app that launches parakit. Accessibility covers the CoreGraphics event tap and synthetic paste/type events. `parakit doctor` reports Input Monitoring for diagnostics, but it is not a separate required toggle when Accessibility is granted. If the input-source switcher appears, check [macos-desktop.md#hotkey](macos-desktop.md#hotkey). If the hotkey stops after changing privacy settings, restart parakit so it recreates the event tap.
+On macOS, grant Accessibility to the terminal app that launches parakit. If the input-source switcher appears or the hotkey stops after changing privacy settings, use [macos-desktop.md#hotkey](macos-desktop.md#hotkey) and restart parakit so it recreates the event tap.
 
 WSL is not the native Windows daemon path. Validate Windows hotkeys, focus checks, and paste behavior from native Windows PowerShell with the Windows bundle.
 
@@ -112,26 +112,8 @@ parakit --verbose doctor
 
 The `compute:` block lists devices visible to bundled ggml. A GPU build with no GPU or iGPU listed usually means the driver is missing, too old for the CUDA toolkit/driver ABI, or not exposing Vulkan on that machine. Device selection behavior is in [running.md#device-selection](running.md#device-selection).
 
-The daemon intentionally warms the backend at startup. Use `--verbose` to see warmup duration. A cold backend can still make an unusually long first dictation slower.
+The daemon intentionally warms the backend at startup. Use `--verbose` to see warmup duration.
 
 ## macOS Metal Builds
 
-Build from a native Apple Silicon terminal:
-
-```bash
-cargo build --release --features metal
-parakit --verbose doctor
-```
-
-The `compute:` block should list a Metal GPU or iGPU. If it reports no GPU and shows a Rosetta or non-aarch64 warning, reinstall from a native arm64 terminal:
-
-```bash
-cargo install --path . --features metal
-```
-
-Verify the generated Metal sibling dylib:
-
-```bash
-ls target/release/build/parakit-*/out/lib/libggml-metal.dylib
-otool -s __DATA __ggml_metallib target/release/build/parakit-*/out/lib/libggml-metal.dylib | head
-```
+Build and permission setup are in [macos-desktop.md](macos-desktop.md). If `--device gpu` reports no GPU on Apple Silicon, run `parakit --verbose doctor`. A Rosetta or non-aarch64 warning means the process is translated; reinstall from a native arm64 terminal. Metal library checks are in [macos-desktop.md#metal-verification](macos-desktop.md#metal-verification).

@@ -51,7 +51,7 @@ cargo install --path . --features metal
 Install behavior:
 
 - Windows `cargo install --path .` copies `parakit.exe` but not the generated CrispASR/ggml DLLs. Use the scripts in [../scripts/windows/README.md](../scripts/windows/README.md) for a normal Windows install.
-- Unix-like developer installs currently depend on the generated CrispASR shared libraries under Cargo's build output. Do not delete the repository `target/` tree.
+- Linux and macOS source installs currently depend on the generated CrispASR shared libraries under Cargo's build output. Do not delete the repository `target/` tree.
 - GitHub auto-generated source archives are unsupported because they do not include the CrispASR submodule. A public release must ship either a source archive with submodules or a binary bundle whose shared libraries are colocated with the executable.
 
 Add `--locked` only when you specifically want Cargo to use the exact dependency versions in `Cargo.lock`.
@@ -67,10 +67,6 @@ cargo install --path . --features metal  # Apple targets only
 For Windows bundles, build one accelerator backend at a time. A combined CUDA+Vulkan bundle is rejected by the Windows scripts because it would hard-load both accelerator DLL chains while ggml would choose CUDA first anyway.
 
 On macOS, `aarch64-apple-darwin` is the supported target. Build from a native arm64 terminal; an x86_64/Rosetta build may not expose the Metal backend to ggml.
-
-## Windows Bundles
-
-Use the Windows scripts for runnable per-user installs. They copy `parakit.exe` and generated runtime DLLs into one app directory. Backend selection, BLAS arguments, installer, PATH, CUDA, Vulkan, and runtime-manifest behavior are in [../scripts/windows/README.md](../scripts/windows/README.md).
 
 ## CPU Builds
 
@@ -144,7 +140,7 @@ On macOS, `PARAKIT_BLAS=auto` uses Apple Accelerate. `libomp` is optional; ggml'
 
 ## Runtime Library Paths
 
-Linux/BSD builds must use transitive `RPATH`, not `RUNPATH`, so `libcrispasr.so` can find sibling `libggml*.so` files.
+Linux builds must use transitive `RPATH`, not `RUNPATH`, so `libcrispasr.so` can find sibling `libggml*.so` files.
 
 Verify:
 
@@ -164,9 +160,4 @@ otool -l target/debug/parakit | grep -A2 LC_RPATH
 
 For installed macOS source builds, the binary rpath points into the repository build tree. This matches the Linux source-build contract.
 
-For Metal builds:
-
-```bash
-ls target/debug/build/parakit-*/out/lib/libggml-metal.dylib
-otool -s __DATA __ggml_metallib target/debug/build/parakit-*/out/lib/libggml-metal.dylib | head
-```
+Metal-specific checks are in [macos-desktop.md#metal-verification](macos-desktop.md#metal-verification).
