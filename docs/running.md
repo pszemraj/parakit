@@ -146,7 +146,7 @@ On Linux/X11, parakit records the active X11 window when recording starts. If fo
 
 On Windows, parakit records the foreground window at PTT-down, rechecks it before paste, and sends the paste shortcut with `SendInput`. If the foreground target cannot be captured or verified, automatic paste is skipped, but non-direct modes still stage the transcript before restoring the active clipboard. A normal user process cannot inject into an administrator/elevated target application.
 
-On macOS, parakit records the frontmost application at PTT-down, rechecks it before paste, and sends `Cmd+V` or direct typing through the Accessibility-controlled desktop input path. If the frontmost app cannot be captured or verified, automatic paste is skipped, but non-direct modes still stage the transcript before restoring the active clipboard.
+On macOS, parakit records the frontmost application window at PTT-down, rechecks it before paste, and sends `Cmd+V` or direct typing through the Accessibility-controlled desktop input path. Switching to another window in the same app counts as a focus change. If the frontmost window cannot be captured or verified, automatic paste is skipped, but non-direct modes still stage the transcript before restoring the active clipboard.
 
 Paste modes:
 

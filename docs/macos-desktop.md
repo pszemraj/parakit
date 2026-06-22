@@ -43,7 +43,7 @@ If Accessibility is missing, `doctor` can trigger the macOS prompt. After granti
 
 ## Hotkey
 
-The default macOS push-to-talk hotkey is `Left Control+Space`. This deliberately avoids `Command+Space`, which is normally Spotlight. Press and hold `Left Control+Space` while speaking, then release when done. parakit handles the chord with a CoreGraphics event tap and suppresses the Space key while the chord is active.
+The default macOS push-to-talk hotkey is `Left Control+Space`. This deliberately avoids `Command+Space`, which is normally Spotlight. Press and hold `Left Control+Space` while speaking, then release when done. parakit handles the chord with a CoreGraphics event tap and suppresses the Space key while the exact chord is active. Modified chords such as `Left Control+Shift+Space`, `Control+Option+Space`, or `Command+Space` pass through to macOS and the focused app.
 
 macOS may also use `Control+Space` for input-source switching when multiple input sources are configured. If parakit does not react, or if the input-source switcher appears instead:
 
@@ -81,9 +81,9 @@ mkdir -p "$HOME/.local/state/parakit"
 nohup parakit --quiet >/dev/null 2>>"$HOME/.local/state/parakit/parakit.err" &
 ```
 
-## Focus Guard
+## Insertion
 
-On macOS, parakit records the frontmost app at push-to-talk down using `NSWorkspace`. Before insertion, it checks that the same bundle identifier and process id are still frontmost. If focus changed or cannot be verified, automatic paste is skipped and the transcript remains recoverable through clipboard fallback and daemon commands.
+macOS insertion behavior, focus-change handling, and recovery commands are in [running.md#insertion](running.md#insertion).
 
 ## Metal Verification
 

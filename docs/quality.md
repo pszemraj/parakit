@@ -94,7 +94,7 @@ Check:
 - the platform push-to-talk chord does not leak a literal space;
 - holding the platform push-to-talk chord for 3 to 5 seconds produces exactly one recording start and one stop;
 - rapid double-presses do not wedge the state machine;
-- Ctrl release before Space stops recording;
+- releasing the push-to-talk modifier before Space stops recording;
 - focus changes do not paste into the new target;
 - very short captures are padded and transcribed instead of rejected;
 - `--quiet` emits no stdout;
