@@ -14,9 +14,11 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 type Boolean = u8;
+type CFArrayRef = *const c_void;
 type CFAllocatorRef = *const c_void;
 type CFDictionaryRef = *const c_void;
 type CFIndex = isize;
+type CFNumberRef = *const c_void;
 type CFRunLoopRef = *mut c_void;
 type CFRunLoopSourceRef = *mut c_void;
 type CFStringRef = *const c_void;
@@ -46,6 +48,10 @@ const K_CG_EVENT_KEY_UP: u32 = 11;
 const K_CG_EVENT_FLAGS_CHANGED: u32 = 12;
 const K_CG_KEYBOARD_EVENT_KEYCODE: u32 = 9;
 const K_CG_EVENT_FLAG_MASK_COMMAND: u64 = 0x0010_0000;
+const K_CG_NULL_WINDOW_ID: u32 = 0;
+const K_CG_WINDOW_LIST_OPTION_ON_SCREEN_ONLY: u32 = 1 << 0;
+const K_CG_WINDOW_LIST_EXCLUDE_DESKTOP_ELEMENTS: u32 = 1 << 4;
+const K_CF_NUMBER_SINT64_TYPE: i32 = 4;
 const MACOS_V_KEYCODE: u16 = 9;
 
 const SMOKE_TIMEOUT: Duration = Duration::from_millis(750);
@@ -69,6 +75,8 @@ extern "C" {
     static kCFBooleanTrue: CFTypeRef;
     static kCFRunLoopDefaultMode: CFStringRef;
 
+    fn CFArrayGetCount(the_array: CFArrayRef) -> CFIndex;
+    fn CFArrayGetValueAtIndex(the_array: CFArrayRef, idx: CFIndex) -> *const c_void;
     fn CFDictionaryCreate(
         allocator: CFAllocatorRef,
         keys: *const *const c_void,
@@ -77,6 +85,8 @@ extern "C" {
         key_callbacks: *const c_void,
         value_callbacks: *const c_void,
     ) -> CFDictionaryRef;
+    fn CFDictionaryGetValue(the_dict: CFDictionaryRef, key: *const c_void) -> *const c_void;
+    fn CFNumberGetValue(number: CFNumberRef, the_type: i32, value_ptr: *mut c_void) -> Boolean;
     fn CFRelease(cf: CFTypeRef);
     fn CFRunLoopAddSource(rl: CFRunLoopRef, source: CFRunLoopSourceRef, mode: CFStringRef);
     fn CFRunLoopGetCurrent() -> CFRunLoopRef;
@@ -90,6 +100,10 @@ extern "C" {
 
 #[link(name = "CoreGraphics", kind = "framework")]
 extern "C" {
+    static kCGWindowLayer: CFStringRef;
+    static kCGWindowNumber: CFStringRef;
+    static kCGWindowOwnerPID: CFStringRef;
+
     fn CGEventTapCreate(
         tap: u32,
         place: u32,
@@ -108,6 +122,7 @@ extern "C" {
     fn CGEventGetIntegerValueField(event: CGEventRef, field: u32) -> i64;
     fn CGEventSetFlags(event: CGEventRef, flags: u64);
     fn CGEventTapEnable(tap: CFMachPortRef, enable: Boolean);
+    fn CGWindowListCopyWindowInfo(option: u32, relative_to_window: u32) -> CFArrayRef;
 }
 
 #[link(name = "IOKit", kind = "framework")]
@@ -172,15 +187,16 @@ pub(crate) struct PermissionReport {
     pub(crate) input_monitoring: PermissionStatus,
 }
 
-/// Sendable representation of the frontmost macOS application.
+/// Sendable representation of the focused macOS insertion target.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct MacOsFocusSnapshot {
     pid: libc::pid_t,
     bundle_identifier: Option<String>,
+    window_id: u32,
 }
 
 impl MacOsFocusSnapshot {
-    /// Capture the current frontmost application.
+    /// Capture the current frontmost application window.
     ///
     /// # Returns
     ///
@@ -188,24 +204,30 @@ impl MacOsFocusSnapshot {
     ///
     /// # Errors
     ///
-    /// Returns an error when macOS reports no frontmost application.
+    /// Returns an error when macOS reports no frontmost application window.
     pub(crate) fn capture() -> Result<Self> {
-        frontmost_application().context("could not capture macOS frontmost application")
+        frontmost_application_window().context("could not capture macOS frontmost window")
     }
 
-    /// Return whether the current frontmost application still matches.
+    /// Return whether the current frontmost application window still matches.
     ///
     /// # Returns
     ///
-    /// `Ok(true)` when PID and bundle identifier still match.
+    /// `Ok(true)` when PID, bundle identifier, and window id still match.
     ///
     /// # Errors
     ///
-    /// Returns an error when the frontmost application cannot be read.
+    /// Returns an error when the frontmost application window cannot be read.
     pub(crate) fn matches_current(&self) -> Result<bool> {
         let current =
-            frontmost_application().context("could not read macOS frontmost application")?;
-        Ok(current.pid == self.pid && current.bundle_identifier == self.bundle_identifier)
+            frontmost_application_window().context("could not read macOS frontmost window")?;
+        Ok(self.same_target(&current))
+    }
+
+    fn same_target(&self, current: &Self) -> bool {
+        current.pid == self.pid
+            && current.bundle_identifier == self.bundle_identifier
+            && current.window_id == self.window_id
     }
 }
 
@@ -529,7 +551,7 @@ pub(crate) fn send_paste_shortcut() -> Result<()> {
     Ok(())
 }
 
-fn frontmost_application() -> Result<MacOsFocusSnapshot> {
+fn frontmost_application_window() -> Result<MacOsFocusSnapshot> {
     autoreleasepool(|_pool| {
         let workspace = NSWorkspace::sharedWorkspace();
         let app = workspace
@@ -543,11 +565,79 @@ fn frontmost_application() -> Result<MacOsFocusSnapshot> {
             .bundleIdentifier()
             .map(|bundle| bundle.to_string())
             .filter(|bundle| !bundle.is_empty());
+        let window_id = frontmost_window_id_for_pid(pid)?;
         Ok(MacOsFocusSnapshot {
             pid,
             bundle_identifier,
+            window_id,
         })
     })
+}
+
+fn frontmost_window_id_for_pid(pid: libc::pid_t) -> Result<u32> {
+    let options =
+        K_CG_WINDOW_LIST_OPTION_ON_SCREEN_ONLY | K_CG_WINDOW_LIST_EXCLUDE_DESKTOP_ELEMENTS;
+    let windows = unsafe { CGWindowListCopyWindowInfo(options, K_CG_NULL_WINDOW_ID) };
+    if windows.is_null() {
+        bail!("macOS did not return an on-screen window list");
+    }
+
+    let window_id = frontmost_window_id_in_list(windows, pid).with_context(|| {
+        format!("macOS frontmost application pid {pid} has no visible layer-0 window")
+    });
+    unsafe {
+        CFRelease(windows.cast());
+    }
+    window_id
+}
+
+fn frontmost_window_id_in_list(windows: CFArrayRef, pid: libc::pid_t) -> Option<u32> {
+    let count = unsafe { CFArrayGetCount(windows) };
+    for idx in 0..count {
+        let window = unsafe { CFArrayGetValueAtIndex(windows, idx) };
+        if window.is_null() {
+            continue;
+        }
+        let window = window.cast();
+        let Some(owner_pid) = cf_dictionary_i64(window, unsafe { kCGWindowOwnerPID }) else {
+            continue;
+        };
+        if owner_pid != i64::from(pid) {
+            continue;
+        }
+        let Some(layer) = cf_dictionary_i64(window, unsafe { kCGWindowLayer }) else {
+            continue;
+        };
+        if layer != 0 {
+            continue;
+        }
+        let Some(window_id) = cf_dictionary_i64(window, unsafe { kCGWindowNumber }) else {
+            continue;
+        };
+        if let Ok(window_id) = u32::try_from(window_id) {
+            if window_id != 0 {
+                return Some(window_id);
+            }
+        }
+    }
+    None
+}
+
+fn cf_dictionary_i64(dictionary: CFDictionaryRef, key: CFStringRef) -> Option<i64> {
+    let value = unsafe { CFDictionaryGetValue(dictionary, key.cast()) };
+    if value.is_null() {
+        return None;
+    }
+
+    let mut out = 0_i64;
+    let ok = unsafe {
+        CFNumberGetValue(
+            value.cast(),
+            K_CF_NUMBER_SINT64_TYPE,
+            (&mut out as *mut i64).cast(),
+        ) != 0
+    };
+    ok.then_some(out)
 }
 
 fn accessibility_trusted_with_prompt() -> bool {
@@ -648,4 +738,31 @@ fn wait_for_smoke_events(state: &SmokeTapState) {
 
 fn event_mask(event_type: u32) -> u64 {
     1_u64 << event_type
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn snapshot(
+        pid: libc::pid_t,
+        bundle_identifier: Option<&str>,
+        window_id: u32,
+    ) -> MacOsFocusSnapshot {
+        MacOsFocusSnapshot {
+            pid,
+            bundle_identifier: bundle_identifier.map(ToOwned::to_owned),
+            window_id,
+        }
+    }
+
+    #[test]
+    fn focus_snapshot_requires_matching_window_id() {
+        let original = snapshot(42, Some("com.example.App"), 1001);
+
+        assert!(original.same_target(&snapshot(42, Some("com.example.App"), 1001)));
+        assert!(!original.same_target(&snapshot(42, Some("com.example.App"), 1002)));
+        assert!(!original.same_target(&snapshot(43, Some("com.example.App"), 1001)));
+        assert!(!original.same_target(&snapshot(42, Some("com.example.Other"), 1001)));
+    }
 }
