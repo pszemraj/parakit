@@ -4,6 +4,8 @@
 pub(crate) mod audio;
 /// Integrates global hotkeys, focus detection, and text insertion.
 pub(crate) mod desktop;
+/// Shared user-facing hotkey diagnostics.
+pub(crate) mod hotkey_help;
 /// Coordinates single-instance daemon IPC.
 pub(crate) mod ipc;
 /// Writes transcript logs and runtime event records.

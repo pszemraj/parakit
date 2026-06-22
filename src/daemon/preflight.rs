@@ -9,6 +9,8 @@ use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
 use super::hotkey::HotkeyBackend;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use super::hotkey_help;
 use super::inject::{self, PasteMode};
 
 /// Run blocking daemon preflight checks before expensive startup work.
@@ -439,11 +441,11 @@ fn hotkey_report(backend: HotkeyBackend, _prompt_accessibility: bool) -> HotkeyR
     if blocking {
         writeln!(&mut details, "  status:         FAIL").unwrap();
         if backend.uses_registered_x11() {
-            write_registered_linux_fix(&mut details);
+            hotkey_help::write_registered_linux_fix(&mut details);
         } else if backend.uses_passive_x11_listen() {
-            write_x11_listen_linux_fix(&mut details);
+            hotkey_help::write_x11_listen_linux_fix(&mut details);
         } else {
-            write_evdev_linux_fix(&mut details, &user);
+            hotkey_help::write_evdev_linux_fix(&mut details, &user);
         }
     } else {
         writeln!(
@@ -468,12 +470,12 @@ fn hotkey_report(backend: HotkeyBackend, _prompt_accessibility: bool) -> HotkeyR
             if let Some(Err(err)) = registered.as_ref() {
                 writeln!(&mut summary, "registered hotkey: unavailable ({err:#})").unwrap();
             }
-            write_registered_linux_fix(&mut summary);
+            hotkey_help::write_registered_linux_fix(&mut summary);
         } else if backend.uses_passive_x11_listen() {
             if let Some(Err(err)) = x11_listen.as_ref() {
                 writeln!(&mut summary, "x11-listen: unavailable ({err:#})").unwrap();
             }
-            write_x11_listen_linux_fix(&mut summary);
+            hotkey_help::write_x11_listen_linux_fix(&mut summary);
         } else if let Some(evdev) = &evdev {
             writeln!(
                 &mut summary,
@@ -484,7 +486,7 @@ fn hotkey_report(backend: HotkeyBackend, _prompt_accessibility: bool) -> HotkeyR
             if let Some(err) = &evdev.uinput_error {
                 writeln!(&mut summary, "uinput: unavailable ({err})").unwrap();
             }
-            write_evdev_linux_fix(&mut summary, &user);
+            hotkey_help::write_evdev_linux_fix(&mut summary, &user);
         }
         summary
     } else {
@@ -647,33 +649,6 @@ fn evdev_report() -> EvdevReport {
     }
 }
 
-#[cfg(target_os = "linux")]
-fn write_registered_linux_fix(out: &mut String) {
-    writeln!(
-        out,
-        "fix:\n  - Use an X11 session; Wayland is intentionally rejected.\n  - Disable any desktop shortcut, input method, or remapper that already owns Ctrl+Space.\n  - On GNOME/Ubuntu, check Settings > Keyboard > Keyboard Shortcuts > Typing/Input Sources, or run:\n      gsettings get org.gnome.desktop.wm.keybindings switch-input-source\n      gsettings get org.gnome.desktop.wm.keybindings switch-input-source-backward\n  - Re-run: parakit doctor\n  - The experimental evdev/uinput keyboard proxy is available with: parakit --hotkey-backend evdev-proxy"
-    )
-    .unwrap();
-}
-
-#[cfg(target_os = "linux")]
-fn write_x11_listen_linux_fix(out: &mut String) {
-    writeln!(
-        out,
-        "fix:\n  - Use an X11 session; Wayland is intentionally rejected.\n  - Re-run: parakit --hotkey-backend x11-listen\n  - This backend passively listens only; it does not grab, suppress, or forward keyboard events."
-    )
-    .unwrap();
-}
-
-#[cfg(target_os = "linux")]
-fn write_evdev_linux_fix(out: &mut String, user: &str) {
-    writeln!(
-        out,
-        "fix:\n  - Grant the desktop user read access to /dev/input/event*:\n      sudo usermod -aG input {user}\n  - Ensure /dev/uinput is writable by the desktop user. On many distros this needs a uinput udev rule.\n  - After changing groups or udev rules, log out completely and log back in, or reboot.\n  - Verify the fresh session:\n      id -nG | tr ' ' '\\n' | grep '^input$'\n      ls -l /dev/uinput /dev/input/event* | head\n  - Then run: parakit --hotkey-backend evdev-proxy\n  - Do not run parakit with sudo; audio, clipboard, and insertion belong to the desktop user."
-    )
-    .unwrap();
-}
-
 #[cfg(target_os = "macos")]
 fn hotkey_report(_backend: HotkeyBackend, prompt_accessibility: bool) -> HotkeyReport {
     let permissions = super::macos::permission_report(prompt_accessibility);
@@ -702,11 +677,7 @@ fn hotkey_report(_backend: HotkeyBackend, prompt_accessibility: bool) -> HotkeyR
     .unwrap();
     if blocking {
         writeln!(&mut details, "  status:        FAIL").unwrap();
-        writeln!(
-            &mut details,
-            "fix:\n  - Grant Accessibility to your terminal in System Settings > Privacy & Security > Accessibility.\n  - Re-run: parakit doctor"
-        )
-        .unwrap();
+        hotkey_help::write_macos_accessibility_fix(&mut details);
     } else {
         writeln!(&mut details, "  status:        OK").unwrap();
     }
@@ -792,22 +763,10 @@ fn hotkey_report(_backend: HotkeyBackend, _prompt_accessibility: bool) -> Hotkey
     }
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-fn hotkey_report(_backend: HotkeyBackend, _prompt_accessibility: bool) -> HotkeyReport {
-    let details = "parakit doctor\n  hotkey backend: rdev::grab\n  status:         unsupported platform preflight".to_string();
-    HotkeyReport {
-        blocking: false,
-        status: "unsupported platform preflight".to_string(),
-        summary: details.clone(),
-        details,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::super::audio::MicInfo;
     use super::*;
-    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
     #[cfg(target_os = "linux")]
@@ -891,14 +850,8 @@ mod tests {
 
     #[test]
     fn singleton_lock_blocks_second_holder() {
-        let unique = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("clock before UNIX epoch")
-            .as_nanos();
-        let path = std::path::PathBuf::from(format!(
-            "target/tmp/parakit-lock-test-{}-{unique}/parakit.lock",
-            std::process::id()
-        ));
+        let path = crate::test_support::fixture_root("parakit-lock-test", "singleton")
+            .join("parakit.lock");
 
         let first = acquire_singleton_lock_at(&path).expect("first lock should succeed");
         let second = acquire_singleton_lock_at(&path);

@@ -17,8 +17,6 @@
 use anyhow::{Context, Result};
 use arboard::{Clipboard, ImageData};
 use clap::ValueEnum;
-#[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
-use enigo::{Direction, Key};
 use enigo::{Enigo, Keyboard, Settings};
 use std::{borrow::Cow, path::PathBuf, thread, time::Duration};
 #[cfg(target_os = "linux")]
@@ -131,12 +129,7 @@ pub(crate) fn preflight(mode: PasteMode) -> Result<()> {
 }
 
 fn insertion_needs_enigo(mode: PasteMode) -> bool {
-    match mode {
-        PasteMode::Direct => true,
-        PasteMode::Terminal | PasteMode::Standard => {
-            cfg!(not(any(target_os = "linux", target_os = "windows")))
-        }
-    }
+    mode == PasteMode::Direct
 }
 
 /// Exercise the configured insertion backend without inserting into the user's
@@ -370,11 +363,6 @@ impl FocusSnapshot {
                 macos: crate::daemon::macos::MacOsFocusSnapshot::capture()?,
             })
         }
-
-        #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-        {
-            Ok(Self {})
-        }
     }
 
     /// Return whether the current focus still matches this snapshot.
@@ -421,11 +409,6 @@ impl FocusSnapshot {
         #[cfg(target_os = "macos")]
         {
             self.macos.matches_current()
-        }
-
-        #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-        {
-            Ok(true)
         }
     }
 }
@@ -718,16 +701,6 @@ impl Injector {
         }
     }
 
-    #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
-    fn paste_clipboard(&mut self, mode: PasteMode) -> Result<()> {
-        let enigo = self.keyboard()?;
-        let mut sink = EnigoPasteShortcutSink { enigo };
-        let result = send_paste_shortcut_with_cleanup(&mut sink, paste_modifiers(mode))
-            .context("could not send paste shortcut");
-        flush_paste_modifiers(&mut sink);
-        result
-    }
-
     fn keyboard(&mut self) -> Result<&mut Enigo> {
         if self.enigo.is_none() {
             self.enigo = Some(
@@ -747,85 +720,6 @@ impl Injector {
         {
             PlatformClipboardRestoreGate::fallback()
         }
-    }
-}
-
-#[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
-trait PasteShortcutSink {
-    /// Send a modifier key press or release.
-    /// # Arguments
-    /// * `key` - Modifier key to press or release.
-    /// * `direction` - Press or release direction to send.
-    /// # Returns
-    /// `Ok(())` when the backend accepted the synthetic key event.
-    /// # Errors
-    /// Returns an error when the platform rejects the synthetic key event.
-    fn key(&mut self, key: Key, direction: Direction) -> Result<()>;
-
-    /// Click the platform paste key.
-    /// # Returns
-    /// `Ok(())` when the backend accepted the synthetic paste key event.
-    /// # Errors
-    /// Returns an error when the platform rejects the synthetic paste key.
-    fn paste_key(&mut self) -> Result<()>;
-}
-
-#[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
-struct EnigoPasteShortcutSink<'a> {
-    enigo: &'a mut Enigo,
-}
-
-#[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
-impl PasteShortcutSink for EnigoPasteShortcutSink<'_> {
-    fn key(&mut self, key: Key, direction: Direction) -> Result<()> {
-        self.enigo
-            .key(key, direction)
-            .map_err(|e| anyhow::anyhow!("{e:?}"))
-    }
-
-    fn paste_key(&mut self) -> Result<()> {
-        paste_key_click(self.enigo)
-    }
-}
-
-#[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
-fn send_paste_shortcut_with_cleanup<S: PasteShortcutSink>(
-    sink: &mut S,
-    modifiers: &[Key],
-) -> Result<()> {
-    let mut pressed = Vec::with_capacity(modifiers.len());
-    let paste_result = (|| -> Result<()> {
-        for key in modifiers {
-            sink.key(*key, Direction::Press)
-                .context("enigo paste modifier press failed")?;
-            pressed.push(*key);
-        }
-
-        sink.paste_key().context("enigo paste key failed")?;
-        Ok(())
-    })();
-
-    let mut cleanup_error = None;
-    for key in pressed.into_iter().rev() {
-        if let Err(err) = sink.key(key, Direction::Release) {
-            cleanup_error.get_or_insert_with(|| err.context("enigo paste modifier release failed"));
-        }
-    }
-
-    match (paste_result, cleanup_error) {
-        (Ok(()), None) => Ok(()),
-        (Err(err), None) => Err(err),
-        (Ok(()), Some(cleanup)) => Err(cleanup).context("paste modifier cleanup failed"),
-        (Err(err), Some(cleanup)) => Err(anyhow::anyhow!(
-            "{err:#}; paste modifier cleanup also failed: {cleanup:#}"
-        )),
-    }
-}
-
-#[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
-fn flush_paste_modifiers<S: PasteShortcutSink>(sink: &mut S) {
-    for key in [Key::Control, Key::Shift, Key::Alt, Key::Meta] {
-        let _ = sink.key(key, Direction::Release);
     }
 }
 
@@ -1122,15 +1016,6 @@ fn sleep_if_nonzero(delay: Duration) {
     }
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
-fn paste_modifiers(mode: PasteMode) -> &'static [Key] {
-    match mode {
-        PasteMode::Standard => &[Key::Control],
-        PasteMode::Terminal => &[Key::Control, Key::Shift],
-        PasteMode::Direct => &[],
-    }
-}
-
 #[cfg(target_os = "linux")]
 fn platform_paste_preflight() -> Result<()> {
     linux_x11_xtest_preflight()
@@ -1141,7 +1026,7 @@ fn platform_paste_preflight() -> Result<()> {
     crate::daemon::macos::accessibility_preflight()
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+#[cfg(target_os = "windows")]
 fn platform_paste_preflight() -> Result<()> {
     Ok(())
 }
@@ -1169,11 +1054,6 @@ fn platform_paste_smoke_test(mode: PasteMode) -> Result<()> {
     }
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-fn platform_paste_smoke_test(_mode: PasteMode) -> Result<()> {
-    Ok(())
-}
-
 fn clipboard_settle_delay() -> Duration {
     #[cfg(target_os = "linux")]
     {
@@ -1186,10 +1066,6 @@ fn clipboard_settle_delay() -> Duration {
     #[cfg(target_os = "windows")]
     {
         Duration::from_millis(50)
-    }
-    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-    {
-        Duration::from_millis(100)
     }
 }
 
@@ -1206,17 +1082,6 @@ fn clipboard_restore_delay() -> Duration {
     {
         Duration::from_millis(750)
     }
-    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-    {
-        Duration::from_millis(150)
-    }
-}
-
-#[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
-fn paste_key_click(enigo: &mut Enigo) -> Result<()> {
-    enigo
-        .key(Key::Unicode('v'), Direction::Click)
-        .map_err(|e| anyhow::anyhow!("{e:?}"))
 }
 
 #[cfg(target_os = "linux")]

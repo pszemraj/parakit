@@ -21,6 +21,8 @@
 mod app;
 mod cli;
 mod daemon;
+#[cfg(test)]
+mod test_support;
 
 fn main() {
     if let Err(err) = app::run() {

@@ -811,9 +811,7 @@ mod tests {
 
     #[test]
     fn move_into_place_replaces_existing_file() {
-        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("target/tmp/parakit-fetch-tests/move-into-place");
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = crate::test_support::fixture_root("parakit-fetch-tests", "move-into-place");
         let src = dir.join("model.gguf.part");
         let dst = dir.join("model.gguf");
         std::fs::write(&src, b"new").unwrap();

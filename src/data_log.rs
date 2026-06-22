@@ -187,13 +187,11 @@ fn sanitize_tsv(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
     use std::sync::Arc;
 
     #[test]
     fn concurrent_jsonl_logging_writes_all_lines() {
-        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/tmp/parakit-log-test");
-        let _ = fs::remove_dir_all(&dir);
+        let dir = crate::test_support::fixture_root("parakit-log-test", "jsonl");
         let logger = Arc::new(DataLogger::new(dir.clone(), LogFormat::Jsonl));
 
         let mut threads = Vec::new();
@@ -218,7 +216,7 @@ mod tests {
 
         let date = Local::now().date_naive();
         let path = dir.join(file_name(date, LogFormat::Jsonl));
-        let contents = fs::read_to_string(&path).expect("read log file");
+        let contents = std::fs::read_to_string(&path).expect("read log file");
         assert_eq!(contents.lines().count(), 1000);
         for line in contents.lines() {
             let value: serde_json::Value = serde_json::from_str(line).expect("valid jsonl");

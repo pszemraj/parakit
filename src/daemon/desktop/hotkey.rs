@@ -19,7 +19,7 @@ use global_hotkey::{
 use rdev::Key;
 #[cfg(target_os = "macos")]
 use rdev::Key;
-#[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+#[cfg(target_os = "linux")]
 use rdev::{Event, EventType, Key};
 #[cfg(target_os = "macos")]
 use std::sync::atomic::{AtomicPtr, Ordering};
@@ -453,22 +453,16 @@ pub(crate) fn run_grab_loop(
 /// # Arguments
 ///
 /// * `tx` - Coordinator channel used to post logical hotkey transitions.
-/// * `_backend` - Ignored backend preference on platforms with one backend.
-/// * `_log` - Logger unused on non-Linux/non-Windows platforms.
-#[cfg(all(not(target_os = "linux"), not(target_os = "windows")))]
+/// * `_backend` - Ignored backend preference on macOS.
+/// * `log` - Logger used for backend diagnostics.
+#[cfg(target_os = "macos")]
 pub(crate) fn run_grab_loop(
     tx: Sender<HotkeyTransition>,
     _backend: HotkeyBackend,
-    _log: Arc<Logger>,
+    log: Arc<Logger>,
 ) {
-    #[cfg(target_os = "macos")]
-    {
-        _log.verbose("parakit: macOS hotkey backend: CoreGraphics event tap Left Control+Space");
-        run_macos_event_tap_loop_or_exit(tx);
-    }
-
-    #[cfg(not(target_os = "macos"))]
-    run_rdev_grab_loop_or_exit(tx);
+    log.verbose("parakit: macOS hotkey backend: CoreGraphics event tap Left Control+Space");
+    run_macos_event_tap_loop_or_exit(tx);
 }
 
 #[cfg(target_os = "macos")]
@@ -628,23 +622,6 @@ fn macos_physical_left_control_down() -> bool {
             K_CG_EVENT_SOURCE_STATE_HID_SYSTEM_STATE,
             MACOS_KEY_LEFT_CONTROL as u16,
         )
-    }
-}
-
-#[cfg(all(
-    not(target_os = "linux"),
-    not(target_os = "macos"),
-    not(target_os = "windows")
-))]
-fn run_rdev_grab_loop_or_exit(tx: Sender<HotkeyTransition>) {
-    let state = Arc::new(Mutex::new(HotkeyState::default()));
-    let callback_state = Arc::clone(&state);
-    let callback_tx = tx.clone();
-
-    if let Err(e) = rdev::grab(move |event| handle_grab_event(event, &callback_state, &callback_tx))
-    {
-        eprintln!("parakit: rdev::grab failed: {e:?}\n{}", grab_failure_help());
-        std::process::exit(2);
     }
 }
 
@@ -1237,64 +1214,22 @@ fn send_hotkey_transition(action: HotkeyAction, tx: &Sender<HotkeyTransition>) {
 
 #[cfg(target_os = "linux")]
 fn registered_hotkey_failure_help() -> String {
-    let session = std::env::var("XDG_SESSION_TYPE").unwrap_or_else(|_| "unknown".to_string());
-    let display = std::env::var("DISPLAY").unwrap_or_else(|_| "<unset>".to_string());
-
-    format!(
-        "Linux default hotkey capture registers Ctrl+Space with the X11 session.\n\
-         Current session: XDG_SESSION_TYPE={session}, DISPLAY={display}\n\
-         Checks:\n\
-           parakit --verbose doctor\n\
-           confirm no desktop shortcut or input method already owns Ctrl+Space\n\
-         Use an X11 session. Wayland is intentionally rejected.\n\
-         The experimental evdev/uinput keyboard proxy is available with --hotkey-backend evdev-proxy."
-    )
+    crate::daemon::hotkey_help::registered_linux_failure_help()
 }
 
 #[cfg(target_os = "linux")]
 fn x11_listen_failure_help() -> String {
-    let session = std::env::var("XDG_SESSION_TYPE").unwrap_or_else(|_| "unknown".to_string());
-    let display = std::env::var("DISPLAY").unwrap_or_else(|_| "<unset>".to_string());
-
-    format!(
-        "The x11-listen backend passively observes Ctrl+Space with rdev::listen.\n\
-         Current session: XDG_SESSION_TYPE={session}, DISPLAY={display}\n\
-         Checks:\n\
-           parakit --verbose --hotkey-backend x11-listen doctor\n\
-         Use an X11 session. Wayland is intentionally rejected.\n\
-         This backend does not grab, suppress, or forward keyboard events."
-    )
+    crate::daemon::hotkey_help::x11_listen_linux_failure_help()
 }
 
 #[cfg(target_os = "linux")]
 fn grab_failure_help() -> String {
-    let session = std::env::var("XDG_SESSION_TYPE").unwrap_or_else(|_| "unknown".to_string());
-    let display = std::env::var("DISPLAY").unwrap_or_else(|_| "<unset>".to_string());
-    let user = std::env::var("USER").unwrap_or_else(|_| "$USER".to_string());
-
-    format!(
-        "The evdev-proxy backend uses an evdev keyboard grab and uinput forwarding device.\n\
-         Current session: XDG_SESSION_TYPE={session}, DISPLAY={display}\n\
-         Checks:\n\
-           id -nG | tr ' ' '\\n' | grep '^input$'\n\
-           ls -l /dev/uinput /dev/input/event* | head\n\
-         If event devices are not readable, run:\n\
-           sudo usermod -aG input {user}\n\
-         Then log out completely and log back in, or reboot.\n\
-         If /dev/uinput is not writable by your user, add a uinput udev rule.\n\
-         Do not run parakit with sudo; audio, clipboard, and insertion belong to the desktop user."
-    )
+    crate::daemon::hotkey_help::evdev_linux_failure_help()
 }
 
 #[cfg(target_os = "macos")]
 fn grab_failure_help() -> String {
-    "macOS hotkey capture uses Left Control+Space and requires Accessibility for the terminal that launched parakit. Grant it in System Settings > Privacy & Security > Accessibility, then rerun `parakit doctor`.".to_string()
-}
-
-#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-fn grab_failure_help() -> String {
-    "Global hotkey capture is platform-specific and may need OS-level input permissions."
-        .to_string()
+    crate::daemon::hotkey_help::macos_failure_help()
 }
 
 #[cfg(test)]

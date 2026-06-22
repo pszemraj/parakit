@@ -203,8 +203,7 @@ mod tests {
 
     #[test]
     fn detects_general_file_type() {
-        let dir = Path::new("target/tmp/gguf-tests");
-        std::fs::create_dir_all(dir).unwrap();
+        let dir = crate::test_support::fixture_root("gguf-tests", "general-file-type");
         let path = dir.join("q8.gguf");
         let mut file = File::create(&path).unwrap();
         file.write_all(b"GGUF").unwrap();

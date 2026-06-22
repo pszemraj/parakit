@@ -468,17 +468,8 @@ fn passive_listen_handler_emits_transitions_without_returning_suppression() {
 #[test]
 fn evdev_input_files_are_opened_nonblocking() {
     use std::os::fd::AsRawFd;
-    use std::time::{SystemTime, UNIX_EPOCH};
 
-    let unique = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("clock before UNIX epoch")
-        .as_nanos();
-    let dir = PathBuf::from(format!(
-        "target/tmp/parakit-hotkey-test-{}-{unique}",
-        std::process::id()
-    ));
-    std::fs::create_dir_all(&dir).expect("create test directory");
+    let dir = crate::test_support::fixture_root("parakit-hotkey-test", "evdev-input");
     let path = dir.join("event-test");
     std::fs::write(&path, b"").expect("create test input file");
 

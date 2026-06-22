@@ -1,5 +1,8 @@
 //! Desktop hotkey, focus, session, and insertion helpers.
 
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+compile_error!("parakit desktop mode supports Linux, macOS, and Windows only");
+
 mod clipboard_restore;
 /// Global push-to-talk hotkey registration and event handling.
 pub(crate) mod hotkey;
