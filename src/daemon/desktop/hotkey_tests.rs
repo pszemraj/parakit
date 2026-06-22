@@ -106,7 +106,10 @@ fn macos_stale_left_control_state_does_not_start_on_plain_space() {
     state.press(Key::ControlLeft, now);
     assert!(state.ctrl_left);
 
-    assert_eq!(state.macos_sync_left_control(false, at(now, 10)), None);
+    assert_eq!(
+        state.macos_sync_modifiers(MacOsModifierState::default(), at(now, 10)),
+        None
+    );
     assert!(!state.ctrl_left);
     assert_eq!(state.press(Key::Space, at(now, 20)), (None, false));
     assert!(!state.is_recording());
@@ -118,7 +121,16 @@ fn macos_physical_left_control_state_can_start_next_space_press() {
     let now = base_time();
     let mut state = HotkeyState::default();
 
-    assert_eq!(state.macos_sync_left_control(true, now), None);
+    assert_eq!(
+        state.macos_sync_modifiers(
+            MacOsModifierState {
+                ctrl_left: true,
+                ..MacOsModifierState::default()
+            },
+            now
+        ),
+        None
+    );
     assert!(state.ctrl_left);
     assert_eq!(
         state.press(Key::Space, at(now, 10)),
@@ -129,6 +141,69 @@ fn macos_physical_left_control_state_can_start_next_space_press() {
             true
         )
     );
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_modified_space_tap_does_not_start_or_suppress() {
+    let now = base_time();
+    let mut state = HotkeyState::default();
+    let modifiers = MacOsModifierState {
+        ctrl_left: true,
+        shift_left: true,
+        ..MacOsModifierState::default()
+    };
+
+    assert_eq!(
+        super::macos::handle_tap_event(
+            &mut state,
+            super::macos::K_CG_EVENT_KEY_DOWN,
+            super::macos::MACOS_KEY_SPACE,
+            modifiers,
+            now
+        ),
+        (None, false)
+    );
+    assert!(!state.is_recording());
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_flags_changed_tracks_right_control_as_extra_modifier() {
+    let now = base_time();
+    let mut state = HotkeyState::default();
+
+    assert_eq!(
+        super::macos::handle_tap_event(
+            &mut state,
+            super::macos::K_CG_EVENT_FLAGS_CHANGED,
+            0,
+            MacOsModifierState {
+                ctrl_left: true,
+                ctrl_right: true,
+                ..MacOsModifierState::default()
+            },
+            now
+        ),
+        (None, false)
+    );
+    assert!(state.ctrl_left);
+    assert!(state.ctrl_right);
+    assert_eq!(
+        super::macos::handle_tap_event(
+            &mut state,
+            super::macos::K_CG_EVENT_KEY_DOWN,
+            super::macos::MACOS_KEY_SPACE,
+            MacOsModifierState {
+                ctrl_left: true,
+                ctrl_right: true,
+                ..MacOsModifierState::default()
+            },
+            at(now, 10)
+        ),
+        (None, false)
+    );
+    assert!(!state.is_recording());
 }
 
 #[cfg(not(target_os = "macos"))]

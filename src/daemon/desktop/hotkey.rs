@@ -3,6 +3,7 @@
 //! Linux defaults to a registered X11 desktop hotkey. Passive X11 listening
 //! and the evdev/uinput keyboard proxy remain explicit non-default backends.
 
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 use crate::daemon::logging::Logger;
 use crate::daemon::recording::HotkeyTransition;
 #[cfg(target_os = "linux")]
@@ -21,102 +22,22 @@ use rdev::Key;
 use rdev::Key;
 #[cfg(target_os = "linux")]
 use rdev::{Event, EventType, Key};
-#[cfg(target_os = "macos")]
-use std::sync::atomic::{AtomicPtr, Ordering};
+#[cfg(not(target_os = "macos"))]
 use std::sync::Arc;
-#[cfg(not(target_os = "windows"))]
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 use std::sync::Mutex;
 #[cfg(any(not(target_os = "windows"), test))]
 use std::time::{Duration, Instant};
-#[cfg(target_os = "macos")]
-use std::{ffi::c_void, ptr};
 #[cfg(target_os = "linux")]
 use std::{fs::File, io, path::PathBuf};
+
+#[cfg(target_os = "macos")]
+mod macos;
 
 #[cfg(any(not(target_os = "windows"), test))]
 const HOTKEY_DEBOUNCE: Duration = Duration::from_millis(150);
 #[cfg(target_os = "linux")]
 const REGISTERED_HOTKEY_PHYSICAL_POLL: Duration = Duration::from_millis(25);
-#[cfg(target_os = "macos")]
-const K_CG_HID_EVENT_TAP: u32 = 0;
-#[cfg(target_os = "macos")]
-const K_CG_HEAD_INSERT_EVENT_TAP: u32 = 0;
-#[cfg(target_os = "macos")]
-const K_CG_EVENT_TAP_OPTION_DEFAULT: u32 = 0;
-#[cfg(target_os = "macos")]
-const K_CG_EVENT_TAP_DISABLED_BY_TIMEOUT: u32 = 0xFFFF_FFFE;
-#[cfg(target_os = "macos")]
-const K_CG_EVENT_TAP_DISABLED_BY_USER_INPUT: u32 = 0xFFFF_FFFF;
-#[cfg(target_os = "macos")]
-const K_CG_EVENT_KEY_DOWN: u32 = 10;
-#[cfg(target_os = "macos")]
-const K_CG_EVENT_KEY_UP: u32 = 11;
-#[cfg(target_os = "macos")]
-const K_CG_EVENT_FLAGS_CHANGED: u32 = 12;
-#[cfg(target_os = "macos")]
-const K_CG_KEYBOARD_EVENT_KEYCODE: u32 = 9;
-#[cfg(target_os = "macos")]
-const K_CG_EVENT_SOURCE_STATE_HID_SYSTEM_STATE: i32 = 1;
-#[cfg(target_os = "macos")]
-const MACOS_KEY_SPACE: i64 = 49;
-#[cfg(target_os = "macos")]
-const MACOS_KEY_LEFT_CONTROL: i64 = 59;
-
-#[cfg(target_os = "macos")]
-type Boolean = u8;
-#[cfg(target_os = "macos")]
-type CFAllocatorRef = *const c_void;
-#[cfg(target_os = "macos")]
-type CFIndex = isize;
-#[cfg(target_os = "macos")]
-type CFRunLoopRef = *mut c_void;
-#[cfg(target_os = "macos")]
-type CFRunLoopSourceRef = *mut c_void;
-#[cfg(target_os = "macos")]
-type CFStringRef = *const c_void;
-#[cfg(target_os = "macos")]
-type CFTypeRef = *const c_void;
-#[cfg(target_os = "macos")]
-type CFMachPortRef = *mut c_void;
-#[cfg(target_os = "macos")]
-type CGEventRef = *mut c_void;
-#[cfg(target_os = "macos")]
-type CGEventTapProxy = *mut c_void;
-#[cfg(target_os = "macos")]
-type CGEventTapCallBack =
-    extern "C" fn(CGEventTapProxy, u32, CGEventRef, *mut c_void) -> CGEventRef;
-
-#[cfg(target_os = "macos")]
-#[link(name = "CoreFoundation", kind = "framework")]
-extern "C" {
-    static kCFRunLoopDefaultMode: CFStringRef;
-
-    fn CFRelease(cf: CFTypeRef);
-    fn CFRunLoopAddSource(rl: CFRunLoopRef, source: CFRunLoopSourceRef, mode: CFStringRef);
-    fn CFRunLoopGetCurrent() -> CFRunLoopRef;
-    fn CFRunLoopRun();
-    fn CFMachPortCreateRunLoopSource(
-        allocator: CFAllocatorRef,
-        port: CFMachPortRef,
-        order: CFIndex,
-    ) -> CFRunLoopSourceRef;
-}
-
-#[cfg(target_os = "macos")]
-#[link(name = "CoreGraphics", kind = "framework")]
-extern "C" {
-    fn CGEventTapCreate(
-        tap: u32,
-        place: u32,
-        options: u32,
-        events_of_interest: u64,
-        callback: CGEventTapCallBack,
-        user_info: *mut c_void,
-    ) -> CFMachPortRef;
-    fn CGEventTapEnable(tap: CFMachPortRef, enable: Boolean);
-    fn CGEventGetIntegerValueField(event: CGEventRef, field: u32) -> i64;
-    fn CGEventSourceKeyState(state_id: i32, key: u16) -> bool;
-}
 
 /// Hotkey backend preference.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, clap::ValueEnum)]
@@ -257,6 +178,19 @@ struct HotkeyState {
     last_start: Option<Instant>,
 }
 
+#[cfg(target_os = "macos")]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct MacOsModifierState {
+    ctrl_left: bool,
+    ctrl_right: bool,
+    shift_left: bool,
+    shift_right: bool,
+    alt: bool,
+    alt_gr: bool,
+    meta_left: bool,
+    meta_right: bool,
+}
+
 #[cfg(any(not(target_os = "windows"), test))]
 impl HotkeyState {
     fn press(&mut self, key: Key, now: Instant) -> (Option<HotkeyAction>, bool) {
@@ -294,15 +228,22 @@ impl HotkeyState {
     }
 
     #[cfg(target_os = "macos")]
-    fn macos_sync_left_control(
+    fn macos_sync_modifiers(
         &mut self,
-        left_control_down: bool,
+        physical: MacOsModifierState,
         now: Instant,
     ) -> Option<HotkeyAction> {
-        if self.ctrl_left == left_control_down {
-            return None;
-        }
-        if left_control_down {
+        self.set_key(Key::ControlRight, physical.ctrl_right);
+        self.set_key(Key::ShiftLeft, physical.shift_left);
+        self.set_key(Key::ShiftRight, physical.shift_right);
+        self.set_key(Key::Alt, physical.alt);
+        self.set_key(Key::AltGr, physical.alt_gr);
+        self.set_key(Key::MetaLeft, physical.meta_left);
+        self.set_key(Key::MetaRight, physical.meta_right);
+
+        if self.ctrl_left == physical.ctrl_left {
+            None
+        } else if physical.ctrl_left {
             self.set_key(Key::ControlLeft, true);
             None
         } else {
@@ -448,182 +389,8 @@ pub(crate) fn run_grab_loop(
     super::windows_input::run_registered_hotkey_loop_or_exit(tx);
 }
 
-/// Run the platform hotkey loop until the process exits.
-///
-/// # Arguments
-///
-/// * `tx` - Coordinator channel used to post logical hotkey transitions.
-/// * `_backend` - Ignored backend preference on macOS.
-/// * `log` - Logger used for backend diagnostics.
 #[cfg(target_os = "macos")]
-pub(crate) fn run_grab_loop(
-    tx: Sender<HotkeyTransition>,
-    _backend: HotkeyBackend,
-    log: Arc<Logger>,
-) {
-    log.verbose("parakit: macOS hotkey backend: CoreGraphics event tap Left Control+Space");
-    run_macos_event_tap_loop_or_exit(tx);
-}
-
-#[cfg(target_os = "macos")]
-fn run_macos_event_tap_loop_or_exit(tx: Sender<HotkeyTransition>) {
-    if let Err(err) = run_macos_event_tap_loop(tx) {
-        eprintln!(
-            "parakit: macOS hotkey event tap failed: {err:#}\n{}",
-            grab_failure_help()
-        );
-        std::process::exit(2);
-    }
-}
-
-#[cfg(target_os = "macos")]
-fn run_macos_event_tap_loop(tx: Sender<HotkeyTransition>) -> anyhow::Result<()> {
-    crate::daemon::macos::accessibility_preflight()?;
-
-    let state = Box::new(MacOsHotkeyTapState {
-        hotkey: Arc::new(Mutex::new(HotkeyState::default())),
-        tx,
-        tap: AtomicPtr::new(ptr::null_mut()),
-    });
-    let state_ptr = Box::into_raw(state);
-    let mask = event_mask(K_CG_EVENT_KEY_DOWN)
-        | event_mask(K_CG_EVENT_KEY_UP)
-        | event_mask(K_CG_EVENT_FLAGS_CHANGED);
-    let tap = unsafe {
-        CGEventTapCreate(
-            K_CG_HID_EVENT_TAP,
-            K_CG_HEAD_INSERT_EVENT_TAP,
-            K_CG_EVENT_TAP_OPTION_DEFAULT,
-            mask,
-            macos_hotkey_tap_callback,
-            state_ptr.cast(),
-        )
-    };
-    if tap.is_null() {
-        unsafe {
-            drop(Box::from_raw(state_ptr));
-        }
-        anyhow::bail!("could not create CoreGraphics event tap");
-    }
-
-    unsafe {
-        (*state_ptr).tap.store(tap.cast(), Ordering::Release);
-    }
-
-    let source = unsafe { CFMachPortCreateRunLoopSource(ptr::null(), tap, 0) };
-    if source.is_null() {
-        unsafe {
-            CFRelease(tap.cast());
-            drop(Box::from_raw(state_ptr));
-        }
-        anyhow::bail!("could not create CoreGraphics event-tap run-loop source");
-    }
-
-    unsafe {
-        let run_loop = CFRunLoopGetCurrent();
-        CFRunLoopAddSource(run_loop, source, kCFRunLoopDefaultMode);
-        CGEventTapEnable(tap, 1);
-        CFRelease(source.cast());
-        CFRunLoopRun();
-    }
-    Ok(())
-}
-
-#[cfg(target_os = "macos")]
-struct MacOsHotkeyTapState {
-    hotkey: Arc<Mutex<HotkeyState>>,
-    tx: Sender<HotkeyTransition>,
-    tap: AtomicPtr<c_void>,
-}
-
-#[cfg(target_os = "macos")]
-extern "C" fn macos_hotkey_tap_callback(
-    _proxy: CGEventTapProxy,
-    event_type: u32,
-    event: CGEventRef,
-    user_info: *mut c_void,
-) -> CGEventRef {
-    if user_info.is_null() {
-        return event;
-    }
-    let state = unsafe { &*(user_info.cast::<MacOsHotkeyTapState>()) };
-    match event_type {
-        K_CG_EVENT_TAP_DISABLED_BY_TIMEOUT | K_CG_EVENT_TAP_DISABLED_BY_USER_INPUT => {
-            if let Some(action) = state
-                .hotkey
-                .lock()
-                .expect("hotkey state lock poisoned")
-                .reset_after_tap_disabled(Instant::now())
-            {
-                send_hotkey_transition(action, &state.tx);
-            }
-            let tap: CFMachPortRef = state.tap.load(Ordering::Acquire).cast();
-            if !tap.is_null() {
-                unsafe {
-                    CGEventTapEnable(tap, 1);
-                }
-            }
-            return event;
-        }
-        K_CG_EVENT_FLAGS_CHANGED | K_CG_EVENT_KEY_DOWN | K_CG_EVENT_KEY_UP => {}
-        _ => return event,
-    }
-
-    if event.is_null() {
-        return event;
-    }
-    let keycode = unsafe { CGEventGetIntegerValueField(event, K_CG_KEYBOARD_EVENT_KEYCODE) };
-    let now = Instant::now();
-    let (action, suppress) = match (event_type, keycode) {
-        (K_CG_EVENT_FLAGS_CHANGED, MACOS_KEY_LEFT_CONTROL) => {
-            let action = state
-                .hotkey
-                .lock()
-                .expect("hotkey state lock poisoned")
-                .macos_sync_left_control(macos_physical_left_control_down(), now);
-            (action, false)
-        }
-        (K_CG_EVENT_KEY_DOWN, MACOS_KEY_SPACE) => {
-            let mut hotkey = state.hotkey.lock().expect("hotkey state lock poisoned");
-            let sync_action =
-                hotkey.macos_sync_left_control(macos_physical_left_control_down(), now);
-            let (space_action, suppress) = hotkey.press(Key::Space, now);
-            (sync_action.or(space_action), suppress)
-        }
-        (K_CG_EVENT_KEY_UP, MACOS_KEY_SPACE) => {
-            let mut hotkey = state.hotkey.lock().expect("hotkey state lock poisoned");
-            let sync_action =
-                hotkey.macos_sync_left_control(macos_physical_left_control_down(), now);
-            let (space_action, suppress) = hotkey.release(Key::Space, now);
-            (sync_action.or(space_action), suppress)
-        }
-        _ => (None, false),
-    };
-
-    if let Some(action) = action {
-        send_hotkey_transition(action, &state.tx);
-    }
-    if suppress {
-        ptr::null_mut()
-    } else {
-        event
-    }
-}
-
-#[cfg(target_os = "macos")]
-fn event_mask(event_type: u32) -> u64 {
-    1_u64 << event_type
-}
-
-#[cfg(target_os = "macos")]
-fn macos_physical_left_control_down() -> bool {
-    unsafe {
-        CGEventSourceKeyState(
-            K_CG_EVENT_SOURCE_STATE_HID_SYSTEM_STATE,
-            MACOS_KEY_LEFT_CONTROL as u16,
-        )
-    }
-}
+pub(crate) use macos::run_grab_loop;
 
 #[cfg(target_os = "linux")]
 fn run_linux_registered_hotkey_loop_or_exit(tx: Sender<HotkeyTransition>) {
@@ -1225,11 +992,6 @@ fn x11_listen_failure_help() -> String {
 #[cfg(target_os = "linux")]
 fn grab_failure_help() -> String {
     crate::daemon::hotkey_help::evdev_linux_failure_help()
-}
-
-#[cfg(target_os = "macos")]
-fn grab_failure_help() -> String {
-    crate::daemon::hotkey_help::macos_failure_help()
 }
 
 #[cfg(test)]
