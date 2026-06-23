@@ -106,7 +106,7 @@ fn run_event_tap_loop_or_exit(tx: Sender<HotkeyTransition>) {
 }
 
 fn run_event_tap_loop(tx: Sender<HotkeyTransition>) -> anyhow::Result<()> {
-    crate::daemon::macos::accessibility_preflight()?;
+    crate::daemon::macos::event_tap_preflight()?;
 
     let state = Box::new(MacOsHotkeyTapState {
         hotkey: Arc::new(Mutex::new(HotkeyState::default())),

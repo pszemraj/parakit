@@ -291,6 +291,28 @@ pub(crate) fn accessibility_preflight() -> Result<()> {
     )
 }
 
+/// Fail when the macOS event-tap permissions required for hotkey capture are missing.
+///
+/// # Returns
+///
+/// `Ok(())` when the launching terminal can create the session event tap used
+/// for `Left Control+Space`.
+///
+/// # Errors
+///
+/// Returns an actionable macOS permission error when Accessibility or Input
+/// Monitoring is missing.
+pub(crate) fn event_tap_preflight() -> Result<()> {
+    let permissions = permission_report(false);
+    if permissions.accessibility.granted() && permissions.input_monitoring.granted() {
+        return Ok(());
+    }
+
+    bail!(
+        "macOS hotkey capture requires Accessibility and Input Monitoring for the terminal that launched parakit; grant both in System Settings > Privacy & Security, restart parakit, then rerun parakit doctor"
+    )
+}
+
 /// Fail when Microphone has been explicitly denied.
 ///
 /// # Returns
@@ -333,12 +355,11 @@ pub(crate) fn microphone_permission_status() -> PermissionStatus {
     }
 }
 
-/// Return the diagnostic Input Monitoring status.
+/// Return the Input Monitoring status required by CoreGraphics session event taps.
 ///
 /// # Returns
 ///
-/// The listen-event access state. This is informational; Accessibility remains
-/// the required permission for parakit's active hotkey tap.
+/// The listen-event access state.
 pub(crate) fn input_monitoring_permission_status() -> PermissionStatus {
     let status = unsafe { IOHIDCheckAccess(K_IOHID_REQUEST_TYPE_LISTEN_EVENT) };
     match status {
@@ -452,7 +473,7 @@ fn suppressed_key_event_smoke_with_expectation(
     expected_keycode: Option<i64>,
     required_flags: u64,
 ) -> Result<()> {
-    accessibility_preflight()?;
+    event_tap_preflight()?;
 
     let state = SmokeTapState {
         expected_keycode,
@@ -474,7 +495,7 @@ fn suppressed_key_event_smoke_with_expectation(
     };
     if tap.is_null() {
         bail!(
-            "could not create macOS event tap for insertion smoke test; grant Accessibility to your terminal and rerun parakit doctor --deep"
+            "could not create macOS event tap for insertion smoke test; grant Accessibility and Input Monitoring to your terminal and rerun parakit doctor --deep"
         );
     }
 

@@ -103,19 +103,21 @@ pub(crate) fn evdev_linux_failure_help() -> String {
 }
 
 #[cfg(target_os = "macos")]
-/// Shared macOS Accessibility remediation steps.
-pub(crate) const MACOS_ACCESSIBILITY_FIX: &str = "fix:
+/// Shared macOS event-tap permission remediation steps.
+pub(crate) const MACOS_EVENT_TAP_FIX: &str = "fix:
   - Grant Accessibility to your terminal in System Settings > Privacy & Security > Accessibility.
+  - Grant Input Monitoring to your terminal in System Settings > Privacy & Security > Input Monitoring.
+  - Restart parakit after changing either permission so macOS recreates the event tap.
   - Re-run: parakit doctor";
 
 #[cfg(target_os = "macos")]
-/// Append macOS Accessibility remediation steps.
+/// Append macOS event-tap permission remediation steps.
 ///
 /// # Arguments
 ///
 /// * `out` - Diagnostic buffer to append to.
-pub(crate) fn write_macos_accessibility_fix(out: &mut String) {
-    push_line(out, MACOS_ACCESSIBILITY_FIX);
+pub(crate) fn write_macos_event_tap_fix(out: &mut String) {
+    push_line(out, MACOS_EVENT_TAP_FIX);
 }
 
 #[cfg(target_os = "macos")]
@@ -123,11 +125,11 @@ pub(crate) fn write_macos_accessibility_fix(out: &mut String) {
 ///
 /// # Returns
 ///
-/// Multi-line diagnostic text explaining the Accessibility requirement.
+/// Multi-line diagnostic text explaining the event-tap permission requirements.
 pub(crate) fn macos_failure_help() -> String {
     format!(
-        "macOS hotkey capture uses Left Control+Space and requires Accessibility for the terminal that launched parakit.\n{}",
-        MACOS_ACCESSIBILITY_FIX
+        "macOS hotkey capture uses Left Control+Space and requires Accessibility plus Input Monitoring for the terminal that launched parakit.\n{}",
+        MACOS_EVENT_TAP_FIX
     )
 }
 

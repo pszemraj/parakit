@@ -19,7 +19,7 @@ parakit stop
 
 Linux X11 session and backend setup are in [linux-desktop.md](linux-desktop.md). If `Ctrl+Space` is unavailable, another desktop shortcut, input method, or keyboard remapper may own it. Check [linux-desktop.md#shortcut-conflicts](linux-desktop.md#shortcut-conflicts), disable the conflicting binding, and rerun `parakit doctor`.
 
-On macOS, grant Accessibility to the terminal app that launches parakit. If the input-source switcher appears or the hotkey stops after changing privacy settings, use [macos-desktop.md#hotkey](macos-desktop.md#hotkey) and restart parakit so it recreates the event tap.
+On macOS, grant Accessibility and Input Monitoring to the terminal app that launches parakit. If the input-source switcher appears or the hotkey stops after changing privacy settings, use [macos-desktop.md#hotkey](macos-desktop.md#hotkey) and restart parakit so it recreates the event tap.
 
 WSL is not the native Windows daemon path. Validate Windows hotkeys, focus checks, and paste behavior from native Windows PowerShell with the Windows bundle.
 
@@ -41,7 +41,7 @@ Run `parakit doctor --deep` for an active insertion smoke test. On Linux, use an
 
 Windows elevated-target behavior is covered in [running.md#insertion](running.md#insertion).
 
-On macOS, run `parakit doctor --deep` to exercise the Accessibility-controlled insertion path. If it fails, grant Accessibility to the terminal app, restart parakit, and rerun the check.
+On macOS, run `parakit doctor --deep` to exercise the Accessibility-controlled insertion path and event-tap smoke check. If it fails, grant Accessibility and Input Monitoring to the terminal app, restart parakit, and rerun the check.
 
 In non-direct paste modes, parakit stages blocked or failed transcripts on the clipboard before restoring the active clipboard. Check OS clipboard history, such as `Win+V` on Windows, or your clipboard manager before using the recovery commands below.
 

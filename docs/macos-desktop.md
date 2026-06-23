@@ -26,11 +26,10 @@ The macOS source install puts `parakit` under `~/.cargo/bin` and uses an rpath i
 Grant these in System Settings > Privacy & Security:
 
 - Accessibility: required for the `Left Control+Space` hotkey and synthetic paste/type events.
+- Input Monitoring: required for the CoreGraphics event tap that observes `Left Control+Space`.
 - Microphone: required for audio capture.
 
 Grant permissions to the terminal application that launches parakit, such as Terminal.app, iTerm2, or Ghostty. This is the recommended source-build flow because the grant attaches to the terminal's stable app identity and survives parakit rebuilds.
-
-Input Monitoring is reported by `doctor` for diagnostics, but it is not a separate required parakit toggle when Accessibility is granted.
 
 First-run flow:
 
@@ -39,7 +38,7 @@ parakit doctor
 parakit
 ```
 
-If Accessibility is missing, `doctor` can trigger the macOS prompt. After granting the permission, rerun `parakit doctor`. If Microphone is not determined yet, the first capture may trigger the Microphone prompt; rerun parakit after granting it.
+If Accessibility is missing, `doctor` can trigger the macOS prompt. Input Monitoring must be granted manually in System Settings. After changing either permission, restart parakit and rerun `parakit doctor`. If Microphone is not determined yet, the first capture may trigger the Microphone prompt; rerun parakit after granting it.
 
 ## Hotkey
 
@@ -104,7 +103,7 @@ otool -s __DATA __ggml_metallib target/release/build/parakit-*/out/lib/libggml-m
 
 ## Troubleshooting
 
-If the hotkey does nothing, grant Accessibility to the terminal, quit and restart parakit, then rerun `parakit doctor`.
+If the hotkey does nothing, grant Accessibility and Input Monitoring to the terminal, quit and restart parakit, then rerun `parakit doctor`.
 
 If the hotkey worked and later stops after changing privacy settings, restart parakit. The event tap tries to re-enable itself after macOS disables it, but privacy changes can still require a fresh process.
 

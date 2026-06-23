@@ -652,7 +652,7 @@ fn evdev_report() -> EvdevReport {
 #[cfg(target_os = "macos")]
 fn hotkey_report(_backend: HotkeyBackend, prompt_accessibility: bool) -> HotkeyReport {
     let permissions = super::macos::permission_report(prompt_accessibility);
-    let blocking = !permissions.accessibility.granted();
+    let blocking = macos_hotkey_startup_blocked(&permissions);
     let mut details = String::new();
     writeln!(&mut details, "parakit doctor").unwrap();
     writeln!(
@@ -669,7 +669,7 @@ fn hotkey_report(_backend: HotkeyBackend, prompt_accessibility: bool) -> HotkeyR
     .unwrap();
     writeln!(
         &mut details,
-        "  input monitor: {} (diagnostic only)",
+        "  input monitor: {}",
         permissions.input_monitoring.label()
     )
     .unwrap();
@@ -681,25 +681,45 @@ fn hotkey_report(_backend: HotkeyBackend, prompt_accessibility: bool) -> HotkeyR
     .unwrap();
     if blocking {
         writeln!(&mut details, "  status:        FAIL").unwrap();
-        hotkey_help::write_macos_accessibility_fix(&mut details);
+        hotkey_help::write_macos_event_tap_fix(&mut details);
     } else {
         writeln!(&mut details, "  status:        OK").unwrap();
     }
-    let status = if blocking {
-        "macOS Accessibility permission missing".to_string()
-    } else {
-        "macOS Accessibility ready for Left Control+Space".to_string()
-    };
+    let status = macos_hotkey_status(&permissions);
     let summary = if blocking {
         details.clone()
     } else {
-        "macOS Accessibility permission granted; hotkey Left Control+Space".to_string()
+        "macOS Accessibility and Input Monitoring granted; hotkey Left Control+Space".to_string()
     };
     HotkeyReport {
         blocking,
         status,
         summary,
         details,
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn macos_hotkey_startup_blocked(permissions: &super::macos::PermissionReport) -> bool {
+    // A CoreGraphics session event tap that observes keyDown/keyUp/flagsChanged
+    // needs both synthetic-input trust and listen-event/Input Monitoring trust.
+    !permissions.accessibility.granted() || !permissions.input_monitoring.granted()
+}
+
+#[cfg(target_os = "macos")]
+fn macos_hotkey_status(permissions: &super::macos::PermissionReport) -> String {
+    match (
+        permissions.accessibility.granted(),
+        permissions.input_monitoring.granted(),
+    ) {
+        (true, true) => {
+            "macOS Accessibility and Input Monitoring ready for Left Control+Space".to_string()
+        }
+        (false, true) => "macOS Accessibility permission missing".to_string(),
+        (true, false) => "macOS Input Monitoring permission missing".to_string(),
+        (false, false) => {
+            "macOS Accessibility and Input Monitoring permissions missing".to_string()
+        }
     }
 }
 
@@ -824,6 +844,46 @@ mod tests {
 
         assert!(!report.grab_likely_available());
         assert_eq!(report.status_label(), "no keyboard candidates");
+    }
+
+    #[cfg(target_os = "macos")]
+    fn macos_permissions(
+        accessibility: super::super::macos::PermissionStatus,
+        input_monitoring: super::super::macos::PermissionStatus,
+    ) -> super::super::macos::PermissionReport {
+        super::super::macos::PermissionReport {
+            accessibility,
+            microphone: super::super::macos::PermissionStatus::Granted,
+            input_monitoring,
+        }
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn macos_hotkey_readiness_requires_accessibility_and_input_monitoring() {
+        use super::super::macos::PermissionStatus;
+
+        let ready = macos_permissions(PermissionStatus::Granted, PermissionStatus::Granted);
+        assert!(!macos_hotkey_startup_blocked(&ready));
+        assert_eq!(
+            macos_hotkey_status(&ready),
+            "macOS Accessibility and Input Monitoring ready for Left Control+Space"
+        );
+
+        let missing_input = macos_permissions(PermissionStatus::Granted, PermissionStatus::Denied);
+        assert!(macos_hotkey_startup_blocked(&missing_input));
+        assert_eq!(
+            macos_hotkey_status(&missing_input),
+            "macOS Input Monitoring permission missing"
+        );
+
+        let missing_both =
+            macos_permissions(PermissionStatus::Denied, PermissionStatus::NotDetermined);
+        assert!(macos_hotkey_startup_blocked(&missing_both));
+        assert_eq!(
+            macos_hotkey_status(&missing_both),
+            "macOS Accessibility and Input Monitoring permissions missing"
+        );
     }
 
     #[test]
