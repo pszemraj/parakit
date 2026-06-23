@@ -6,6 +6,7 @@ use crate::daemon::recording::HotkeyTransition;
 use crossbeam_channel::Sender;
 use rdev::Key;
 use std::ffi::c_void;
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::ptr;
 use std::sync::atomic::{AtomicPtr, Ordering};
 use std::sync::{Arc, Mutex};
@@ -112,6 +113,8 @@ fn run_event_tap_loop(tx: Sender<HotkeyTransition>) -> anyhow::Result<()> {
         tx,
         tap: AtomicPtr::new(ptr::null_mut()),
     });
+    // CFRunLoopRun owns the normal daemon lifetime. Keep the tap state alive
+    // until process exit; setup error paths below reclaim it before the loop.
     let state_ptr = Box::into_raw(state);
     let mask = event_mask(K_CG_EVENT_KEY_DOWN)
         | event_mask(K_CG_EVENT_KEY_UP)
@@ -168,26 +171,34 @@ extern "C" fn hotkey_tap_callback(
     event: CGEventRef,
     user_info: *mut c_void,
 ) -> CGEventRef {
+    catch_unwind(AssertUnwindSafe(|| {
+        hotkey_tap_callback_inner(event_type, event, user_info)
+    }))
+    .unwrap_or(event)
+}
+
+fn hotkey_tap_callback_inner(
+    event_type: u32,
+    event: CGEventRef,
+    user_info: *mut c_void,
+) -> CGEventRef {
     if user_info.is_null() {
         return event;
     }
     let state = unsafe { &*(user_info.cast::<MacOsHotkeyTapState>()) };
     match event_type {
         K_CG_EVENT_TAP_DISABLED_BY_TIMEOUT | K_CG_EVENT_TAP_DISABLED_BY_USER_INPUT => {
-            if let Some(action) = state
-                .hotkey
-                .lock()
-                .expect("hotkey state lock poisoned")
-                .reset_after_tap_disabled(Instant::now())
-            {
+            let action = match state.hotkey.lock() {
+                Ok(mut hotkey) => hotkey.reset_after_tap_disabled(Instant::now()),
+                Err(_) => {
+                    reenable_tap(state);
+                    return event;
+                }
+            };
+            if let Some(action) = action {
                 send_hotkey_transition(action, &state.tx);
             }
-            let tap: CFMachPortRef = state.tap.load(Ordering::Acquire).cast();
-            if !tap.is_null() {
-                unsafe {
-                    CGEventTapEnable(tap, 1);
-                }
-            }
+            reenable_tap(state);
             return event;
         }
         K_CG_EVENT_FLAGS_CHANGED | K_CG_EVENT_KEY_DOWN | K_CG_EVENT_KEY_UP => {}
@@ -202,7 +213,9 @@ extern "C" fn hotkey_tap_callback(
     let now = Instant::now();
     let modifiers = physical_modifier_state();
     let (action, suppress) = {
-        let mut hotkey = state.hotkey.lock().expect("hotkey state lock poisoned");
+        let Ok(mut hotkey) = state.hotkey.lock() else {
+            return event;
+        };
         handle_tap_event(&mut hotkey, event_type, keycode, modifiers, now)
     };
 
@@ -213,6 +226,15 @@ extern "C" fn hotkey_tap_callback(
         ptr::null_mut()
     } else {
         event
+    }
+}
+
+fn reenable_tap(state: &MacOsHotkeyTapState) {
+    let tap: CFMachPortRef = state.tap.load(Ordering::Acquire).cast();
+    if !tap.is_null() {
+        unsafe {
+            CGEventTapEnable(tap, 1);
+        }
     }
 }
 

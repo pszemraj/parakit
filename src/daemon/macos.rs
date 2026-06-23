@@ -8,6 +8,7 @@ use objc2::{class, msg_send};
 use objc2_app_kit::NSWorkspace;
 use objc2_foundation::NSString;
 use std::ffi::c_void;
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::ptr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
@@ -523,11 +524,11 @@ fn suppressed_key_event_smoke_with_expectation(
 ///
 /// # Errors
 ///
-/// Returns an error if Accessibility is unavailable or CoreGraphics cannot
-/// allocate the keyboard events.
+/// Returns an error if CoreGraphics cannot allocate the keyboard events.
+///
+/// Callers must run `accessibility_preflight()` before choosing this backend.
+/// The daemon and `doctor --deep` both do that once before entering this hot path.
 pub(crate) fn send_paste_shortcut() -> Result<()> {
-    accessibility_preflight()?;
-
     let key_down = unsafe { CGEventCreateKeyboardEvent(ptr::null_mut(), MACOS_V_KEYCODE, 1) };
     if key_down.is_null() {
         bail!("could not create macOS paste key-down event");
@@ -676,6 +677,17 @@ struct SmokeTapState {
 
 extern "C" fn smoke_tap_callback(
     _proxy: CGEventTapProxy,
+    event_type: u32,
+    event: CGEventRef,
+    user_info: *mut c_void,
+) -> CGEventRef {
+    catch_unwind(AssertUnwindSafe(|| {
+        smoke_tap_callback_inner(event_type, event, user_info)
+    }))
+    .unwrap_or(event)
+}
+
+fn smoke_tap_callback_inner(
     event_type: u32,
     event: CGEventRef,
     user_info: *mut c_void,
