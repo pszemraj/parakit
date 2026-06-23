@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicPtr, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-const K_CG_HID_EVENT_TAP: u32 = 0;
+const K_CG_SESSION_EVENT_TAP: u32 = 1;
 const K_CG_HEAD_INSERT_EVENT_TAP: u32 = 0;
 const K_CG_EVENT_TAP_OPTION_DEFAULT: u32 = 0;
 const K_CG_EVENT_TAP_DISABLED_BY_TIMEOUT: u32 = 0xFFFF_FFFE;
@@ -90,7 +90,7 @@ pub(crate) fn run_grab_loop(
     _backend: HotkeyBackend,
     log: Arc<Logger>,
 ) {
-    log.verbose("parakit: macOS hotkey backend: CoreGraphics event tap Left Control+Space");
+    log.verbose("parakit: macOS hotkey backend: CoreGraphics session event tap Left Control+Space");
     run_event_tap_loop_or_exit(tx);
 }
 
@@ -118,7 +118,7 @@ fn run_event_tap_loop(tx: Sender<HotkeyTransition>) -> anyhow::Result<()> {
         | event_mask(K_CG_EVENT_FLAGS_CHANGED);
     let tap = unsafe {
         CGEventTapCreate(
-            K_CG_HID_EVENT_TAP,
+            K_CG_SESSION_EVENT_TAP,
             K_CG_HEAD_INSERT_EVENT_TAP,
             K_CG_EVENT_TAP_OPTION_DEFAULT,
             mask,
@@ -130,7 +130,7 @@ fn run_event_tap_loop(tx: Sender<HotkeyTransition>) -> anyhow::Result<()> {
         unsafe {
             drop(Box::from_raw(state_ptr));
         }
-        anyhow::bail!("could not create CoreGraphics event tap");
+        anyhow::bail!("could not create CoreGraphics session event tap");
     }
 
     unsafe {
