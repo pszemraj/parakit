@@ -4,10 +4,15 @@
 pub(crate) mod audio;
 /// Integrates global hotkeys, focus detection, and text insertion.
 pub(crate) mod desktop;
+/// Shared user-facing hotkey diagnostics.
+pub(crate) mod hotkey_help;
 /// Coordinates single-instance daemon IPC.
 pub(crate) mod ipc;
 /// Writes transcript logs and runtime event records.
 pub(crate) mod logging;
+#[cfg(target_os = "macos")]
+/// macOS desktop permission, focus, and diagnostic helpers.
+pub(crate) mod macos;
 /// Sends user-visible desktop notifications.
 pub(crate) mod notifications;
 /// Checks runtime prerequisites before the daemon starts.

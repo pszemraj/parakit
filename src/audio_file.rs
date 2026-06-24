@@ -234,8 +234,6 @@ mod tests {
     use hound::{SampleFormat, WavSpec, WavWriter};
 
     fn write_i16_wav(path: &Path, channels: u16, sample_rate: u32, samples: &[i16]) {
-        let dir = path.parent().expect("test WAV should have parent");
-        std::fs::create_dir_all(dir).unwrap();
         let spec = WavSpec {
             channels,
             sample_rate,
@@ -251,7 +249,7 @@ mod tests {
 
     #[test]
     fn mixes_stereo_wav_to_mono() {
-        let dir = Path::new("target/tmp/audio-file-tests");
+        let dir = crate::test_support::fixture_root("audio-file-tests", "stereo");
         let path = dir.join("stereo.wav");
         write_i16_wav(&path, 2, 48_000, &[16_384, 0, 0, -16_384]);
 
@@ -273,7 +271,7 @@ mod tests {
 
     #[test]
     fn prepare_wav_for_model_keeps_source_metadata() {
-        let dir = Path::new("target/tmp/audio-file-tests");
+        let dir = crate::test_support::fixture_root("audio-file-tests", "target-rate");
         let path = dir.join("target-rate.wav");
         write_i16_wav(&path, 1, TARGET_RATE, &[16_384, -16_384]);
 

@@ -3,6 +3,7 @@
 //! Linux defaults to a registered X11 desktop hotkey. Passive X11 listening
 //! and the evdev/uinput keyboard proxy remain explicit non-default backends.
 
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 use crate::daemon::logging::Logger;
 use crate::daemon::recording::HotkeyTransition;
 #[cfg(target_os = "linux")]
@@ -17,15 +18,21 @@ use global_hotkey::{
 };
 #[cfg(all(target_os = "windows", test))]
 use rdev::Key;
-#[cfg(not(target_os = "windows"))]
+#[cfg(target_os = "macos")]
+use rdev::Key;
+#[cfg(target_os = "linux")]
 use rdev::{Event, EventType, Key};
+#[cfg(not(target_os = "macos"))]
 use std::sync::Arc;
-#[cfg(not(target_os = "windows"))]
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 use std::sync::Mutex;
 #[cfg(any(not(target_os = "windows"), test))]
 use std::time::{Duration, Instant};
 #[cfg(target_os = "linux")]
 use std::{fs::File, io, path::PathBuf};
+
+#[cfg(target_os = "macos")]
+mod macos;
 
 #[cfg(any(not(target_os = "windows"), test))]
 const HOTKEY_DEBOUNCE: Duration = Duration::from_millis(150);
@@ -103,6 +110,23 @@ impl HotkeyBackend {
     }
 }
 
+/// Return the user-facing default push-to-talk hotkey hint.
+///
+/// # Returns
+///
+/// A concise hotkey label for startup and documentation-facing diagnostics.
+pub(crate) fn default_ptt_hint() -> &'static str {
+    #[cfg(target_os = "macos")]
+    {
+        "Left Control+Space"
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        "Ctrl+Space"
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[cfg(any(not(target_os = "windows"), test))]
 enum HotkeyAction {
@@ -154,6 +178,19 @@ struct HotkeyState {
     last_start: Option<Instant>,
 }
 
+#[cfg(target_os = "macos")]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct MacOsModifierState {
+    ctrl_left: bool,
+    ctrl_right: bool,
+    shift_left: bool,
+    shift_right: bool,
+    alt: bool,
+    alt_gr: bool,
+    meta_left: bool,
+    meta_right: bool,
+}
+
 #[cfg(any(not(target_os = "windows"), test))]
 impl HotkeyState {
     fn press(&mut self, key: Key, now: Instant) -> (Option<HotkeyAction>, bool) {
@@ -183,11 +220,50 @@ impl HotkeyState {
                 self.suppress_space_release = false;
                 (None, true)
             }
-            Key::ControlLeft | Key::ControlRight if was_recording && !self.ctrl_held() => {
+            Key::ControlLeft | Key::ControlRight if was_recording && !self.ptt_ctrl_held() => {
                 (self.stop_recording(now), false)
             }
             _ => (None, false),
         }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn macos_sync_modifiers(
+        &mut self,
+        physical: MacOsModifierState,
+        now: Instant,
+    ) -> Option<HotkeyAction> {
+        self.set_key(Key::ControlRight, physical.ctrl_right);
+        self.set_key(Key::ShiftLeft, physical.shift_left);
+        self.set_key(Key::ShiftRight, physical.shift_right);
+        self.set_key(Key::Alt, physical.alt);
+        self.set_key(Key::AltGr, physical.alt_gr);
+        self.set_key(Key::MetaLeft, physical.meta_left);
+        self.set_key(Key::MetaRight, physical.meta_right);
+
+        if self.ctrl_left == physical.ctrl_left {
+            None
+        } else if physical.ctrl_left {
+            self.set_key(Key::ControlLeft, true);
+            None
+        } else {
+            self.release(Key::ControlLeft, now).0
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn reset_after_tap_disabled(&mut self, now: Instant) -> Option<HotkeyAction> {
+        self.ctrl_left = false;
+        self.ctrl_right = false;
+        self.shift_left = false;
+        self.shift_right = false;
+        self.alt = false;
+        self.alt_gr = false;
+        self.meta_left = false;
+        self.meta_right = false;
+        self.space = false;
+        self.suppress_space_release = false;
+        self.stop_recording(now)
     }
 
     fn start_recording(&mut self, now: Instant) -> Option<HotkeyAction> {
@@ -210,8 +286,21 @@ impl HotkeyState {
         self.recording.is_recording()
     }
 
+    #[cfg(not(target_os = "macos"))]
     fn ctrl_held(&self) -> bool {
         self.ctrl_left || self.ctrl_right
+    }
+
+    fn ptt_ctrl_held(&self) -> bool {
+        #[cfg(target_os = "macos")]
+        {
+            self.ctrl_left
+        }
+
+        #[cfg(not(target_os = "macos"))]
+        {
+            self.ctrl_held()
+        }
     }
 
     fn extra_modifier_held(&self) -> bool {
@@ -224,7 +313,15 @@ impl HotkeyState {
     }
 
     fn ctrl_only(&self) -> bool {
-        self.ctrl_held() && !self.extra_modifier_held()
+        #[cfg(target_os = "macos")]
+        {
+            self.ctrl_left && !self.ctrl_right && !self.extra_modifier_held()
+        }
+
+        #[cfg(not(target_os = "macos"))]
+        {
+            self.ctrl_held() && !self.extra_modifier_held()
+        }
     }
 
     fn set_key(&mut self, key: Key, pressed: bool) {
@@ -292,34 +389,8 @@ pub(crate) fn run_grab_loop(
     super::windows_input::run_registered_hotkey_loop_or_exit(tx);
 }
 
-/// Run the platform hotkey loop until the process exits.
-///
-/// # Arguments
-///
-/// * `tx` - Coordinator channel used to post logical hotkey transitions.
-/// * `_backend` - Ignored backend preference on platforms with one backend.
-/// * `_log` - Logger unused on non-Linux/non-Windows platforms.
-#[cfg(all(not(target_os = "linux"), not(target_os = "windows")))]
-pub(crate) fn run_grab_loop(
-    tx: Sender<HotkeyTransition>,
-    _backend: HotkeyBackend,
-    _log: Arc<Logger>,
-) {
-    run_rdev_grab_loop_or_exit(tx);
-}
-
-#[cfg(all(not(target_os = "linux"), not(target_os = "windows")))]
-fn run_rdev_grab_loop_or_exit(tx: Sender<HotkeyTransition>) {
-    let state = Arc::new(Mutex::new(HotkeyState::default()));
-    let callback_state = Arc::clone(&state);
-    let callback_tx = tx.clone();
-
-    if let Err(e) = rdev::grab(move |event| handle_grab_event(event, &callback_state, &callback_tx))
-    {
-        eprintln!("parakit: rdev::grab failed: {e:?}\n{}", grab_failure_help());
-        std::process::exit(2);
-    }
-}
+#[cfg(target_os = "macos")]
+pub(crate) use macos::run_grab_loop;
 
 #[cfg(target_os = "linux")]
 fn run_linux_registered_hotkey_loop_or_exit(tx: Sender<HotkeyTransition>) {
@@ -855,7 +926,11 @@ fn handle_listen_event(
     let _ = handle_key_event(event.event_type, state, tx);
 }
 
-#[cfg(all(not(target_os = "linux"), not(target_os = "windows")))]
+#[cfg(all(
+    not(target_os = "linux"),
+    not(target_os = "macos"),
+    not(target_os = "windows")
+))]
 fn handle_grab_event(
     event: Event,
     state: &Arc<Mutex<HotkeyState>>,
@@ -869,7 +944,7 @@ fn handle_grab_event(
     }
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
 fn handle_key_event(
     event_type: EventType,
     state: &Arc<Mutex<HotkeyState>>,
@@ -906,64 +981,17 @@ fn send_hotkey_transition(action: HotkeyAction, tx: &Sender<HotkeyTransition>) {
 
 #[cfg(target_os = "linux")]
 fn registered_hotkey_failure_help() -> String {
-    let session = std::env::var("XDG_SESSION_TYPE").unwrap_or_else(|_| "unknown".to_string());
-    let display = std::env::var("DISPLAY").unwrap_or_else(|_| "<unset>".to_string());
-
-    format!(
-        "Linux default hotkey capture registers Ctrl+Space with the X11 session.\n\
-         Current session: XDG_SESSION_TYPE={session}, DISPLAY={display}\n\
-         Checks:\n\
-           parakit --verbose doctor\n\
-           confirm no desktop shortcut or input method already owns Ctrl+Space\n\
-         Use an X11 session. Wayland is intentionally rejected.\n\
-         The experimental evdev/uinput keyboard proxy is available with --hotkey-backend evdev-proxy."
-    )
+    crate::daemon::hotkey_help::registered_linux_failure_help()
 }
 
 #[cfg(target_os = "linux")]
 fn x11_listen_failure_help() -> String {
-    let session = std::env::var("XDG_SESSION_TYPE").unwrap_or_else(|_| "unknown".to_string());
-    let display = std::env::var("DISPLAY").unwrap_or_else(|_| "<unset>".to_string());
-
-    format!(
-        "The x11-listen backend passively observes Ctrl+Space with rdev::listen.\n\
-         Current session: XDG_SESSION_TYPE={session}, DISPLAY={display}\n\
-         Checks:\n\
-           parakit --verbose --hotkey-backend x11-listen doctor\n\
-         Use an X11 session. Wayland is intentionally rejected.\n\
-         This backend does not grab, suppress, or forward keyboard events."
-    )
+    crate::daemon::hotkey_help::x11_listen_linux_failure_help()
 }
 
 #[cfg(target_os = "linux")]
 fn grab_failure_help() -> String {
-    let session = std::env::var("XDG_SESSION_TYPE").unwrap_or_else(|_| "unknown".to_string());
-    let display = std::env::var("DISPLAY").unwrap_or_else(|_| "<unset>".to_string());
-    let user = std::env::var("USER").unwrap_or_else(|_| "$USER".to_string());
-
-    format!(
-        "The evdev-proxy backend uses an evdev keyboard grab and uinput forwarding device.\n\
-         Current session: XDG_SESSION_TYPE={session}, DISPLAY={display}\n\
-         Checks:\n\
-           id -nG | tr ' ' '\\n' | grep '^input$'\n\
-           ls -l /dev/uinput /dev/input/event* | head\n\
-         If event devices are not readable, run:\n\
-           sudo usermod -aG input {user}\n\
-         Then log out completely and log back in, or reboot.\n\
-         If /dev/uinput is not writable by your user, add a uinput udev rule.\n\
-         Do not run parakit with sudo; audio, clipboard, and insertion belong to the desktop user."
-    )
-}
-
-#[cfg(target_os = "macos")]
-fn grab_failure_help() -> String {
-    "macOS hotkey capture requires Accessibility and Input Monitoring permissions for both the terminal and the parakit binary.".to_string()
-}
-
-#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-fn grab_failure_help() -> String {
-    "Global hotkey capture is platform-specific and may need OS-level input permissions."
-        .to_string()
+    crate::daemon::hotkey_help::evdev_linux_failure_help()
 }
 
 #[cfg(test)]

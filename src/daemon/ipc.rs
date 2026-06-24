@@ -1489,9 +1489,7 @@ mod tests {
     fn socket_dir_is_restricted_to_owner() {
         use std::os::unix::fs::PermissionsExt;
 
-        let dir = PathBuf::from("target/tmp/ipc-private-dir-test");
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).expect("test dir should be created");
+        let dir = crate::test_support::fixture_root("ipc-private-dir-test", "owner");
         std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755))
             .expect("test dir permissions should be set");
 

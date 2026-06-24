@@ -147,6 +147,7 @@ fn main() {
     if metal_enabled {
         if target_is_apple() {
             cfg.define("GGML_METAL", "ON");
+            cfg.define("GGML_METAL_EMBED_LIBRARY", "ON");
         } else if cuda_enabled || vulkan_enabled {
             cfg.define("GGML_METAL", "OFF");
             println!(
@@ -201,6 +202,7 @@ fn main() {
         );
     } else {
         assert_crispasr_library_exists(&final_lib_dir);
+        assert_apple_metal_library_exists_if_enabled(&final_lib_dir);
     }
 
     println!("cargo:rustc-link-search=native={}", final_lib_dir.display());
@@ -273,6 +275,7 @@ fn emit_build_report(install_dir: &Path) {
         "GGML_CUDA",
         "GGML_VULKAN",
         "GGML_METAL",
+        "GGML_METAL_EMBED_LIBRARY",
         "CMAKE_CUDA_ARCHITECTURES",
         "CMAKE_CUDA_COMPILER",
         "CMAKE_C_FLAGS_RELEASE",
@@ -1232,6 +1235,24 @@ fn assert_crispasr_library_exists(lib_dir: &Path) {
         "CrispASR build did not produce {}. \
          cmake build may have failed silently — \
          check `cargo build -vv` output.",
+        lib_path.display()
+    );
+}
+
+/// Ensure Apple Metal builds installed the Metal backend sibling dylib.
+fn assert_apple_metal_library_exists_if_enabled(lib_dir: &Path) {
+    if !target_is_apple() || !cargo_feature("metal") {
+        return;
+    }
+
+    let lib_path = lib_dir.join("libggml-metal.dylib");
+    if lib_path.exists() {
+        return;
+    }
+
+    panic!(
+        "Metal build did not produce {}. \
+         GGML_METAL is enabled, but the runtime Metal backend dylib is missing.",
         lib_path.display()
     );
 }

@@ -35,6 +35,203 @@ fn ctrl_space_starts_and_stops() {
     );
 }
 
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_right_control_space_does_not_start() {
+    let now = base_time();
+    let mut state = HotkeyState::default();
+    assert_eq!(state.press(Key::ControlRight, now), (None, false));
+    assert_eq!(state.press(Key::Space, at(now, 10)), (None, false));
+    assert_eq!(state.release(Key::Space, at(now, 20)), (None, false));
+    assert!(!state.is_recording());
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_left_control_release_stops_even_if_right_control_is_held() {
+    let now = base_time();
+    let mut state = HotkeyState::default();
+    state.press(Key::ControlLeft, now);
+    state.press(Key::Space, at(now, 10));
+    state.press(Key::ControlRight, at(now, 20));
+
+    assert_eq!(
+        state.release(Key::ControlLeft, at(now, 300)),
+        (
+            Some(HotkeyAction::Stop {
+                stopped_at: at(now, 300)
+            }),
+            false
+        )
+    );
+    assert!(!state.is_recording());
+    assert_eq!(state.release(Key::Space, at(now, 310)), (None, true));
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_tap_disabled_resets_state_and_allows_next_ptt_cycle() {
+    let now = base_time();
+    let mut state = HotkeyState::default();
+    state.press(Key::ControlLeft, now);
+    state.press(Key::Space, at(now, 10));
+    assert!(state.is_recording());
+
+    assert_eq!(
+        state.reset_after_tap_disabled(at(now, 50)),
+        Some(HotkeyAction::Stop {
+            stopped_at: at(now, 50)
+        })
+    );
+    assert!(!state.is_recording());
+    assert_eq!(state.release(Key::Space, at(now, 60)), (None, false));
+
+    assert_eq!(state.press(Key::ControlLeft, at(now, 200)), (None, false));
+    assert_eq!(
+        state.press(Key::Space, at(now, 210)),
+        (
+            Some(HotkeyAction::Start {
+                started_at: at(now, 210)
+            }),
+            true
+        )
+    );
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_stale_left_control_state_does_not_start_on_plain_space() {
+    let now = base_time();
+    let mut state = HotkeyState::default();
+    state.press(Key::ControlLeft, now);
+    assert!(state.ctrl_left);
+
+    assert_eq!(
+        state.macos_sync_modifiers(MacOsModifierState::default(), at(now, 10)),
+        None
+    );
+    assert!(!state.ctrl_left);
+    assert_eq!(state.press(Key::Space, at(now, 20)), (None, false));
+    assert!(!state.is_recording());
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_physical_left_control_state_can_start_next_space_press() {
+    let now = base_time();
+    let mut state = HotkeyState::default();
+
+    assert_eq!(
+        state.macos_sync_modifiers(
+            MacOsModifierState {
+                ctrl_left: true,
+                ..MacOsModifierState::default()
+            },
+            now
+        ),
+        None
+    );
+    assert!(state.ctrl_left);
+    assert_eq!(
+        state.press(Key::Space, at(now, 10)),
+        (
+            Some(HotkeyAction::Start {
+                started_at: at(now, 10)
+            }),
+            true
+        )
+    );
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_modified_space_tap_does_not_start_or_suppress() {
+    let now = base_time();
+    let mut state = HotkeyState::default();
+    let modifiers = MacOsModifierState {
+        ctrl_left: true,
+        shift_left: true,
+        ..MacOsModifierState::default()
+    };
+
+    assert_eq!(
+        super::macos::handle_tap_event(
+            &mut state,
+            super::macos::K_CG_EVENT_KEY_DOWN,
+            super::macos::MACOS_KEY_SPACE,
+            modifiers,
+            now
+        ),
+        (None, false)
+    );
+    assert!(!state.is_recording());
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_flags_changed_tracks_right_control_as_extra_modifier() {
+    let now = base_time();
+    let mut state = HotkeyState::default();
+
+    assert_eq!(
+        super::macos::handle_tap_event(
+            &mut state,
+            super::macos::K_CG_EVENT_FLAGS_CHANGED,
+            0,
+            MacOsModifierState {
+                ctrl_left: true,
+                ctrl_right: true,
+                ..MacOsModifierState::default()
+            },
+            now
+        ),
+        (None, false)
+    );
+    assert!(state.ctrl_left);
+    assert!(state.ctrl_right);
+    assert_eq!(
+        super::macos::handle_tap_event(
+            &mut state,
+            super::macos::K_CG_EVENT_KEY_DOWN,
+            super::macos::MACOS_KEY_SPACE,
+            MacOsModifierState {
+                ctrl_left: true,
+                ctrl_right: true,
+                ..MacOsModifierState::default()
+            },
+            at(now, 10)
+        ),
+        (None, false)
+    );
+    assert!(!state.is_recording());
+}
+
+#[cfg(not(target_os = "macos"))]
+#[test]
+fn non_macos_right_control_space_starts_and_stops() {
+    let now = base_time();
+    let mut state = HotkeyState::default();
+    assert_eq!(state.press(Key::ControlRight, now), (None, false));
+    assert_eq!(
+        state.press(Key::Space, at(now, 10)),
+        (
+            Some(HotkeyAction::Start {
+                started_at: at(now, 10)
+            }),
+            true
+        )
+    );
+    assert_eq!(
+        state.release(Key::ControlRight, at(now, 300)),
+        (
+            Some(HotkeyAction::Stop {
+                stopped_at: at(now, 300)
+            }),
+            false
+        )
+    );
+}
+
 #[test]
 fn ctrl_repress_while_space_held_does_not_restart_recording() {
     let now = base_time();
@@ -346,17 +543,8 @@ fn passive_listen_handler_emits_transitions_without_returning_suppression() {
 #[test]
 fn evdev_input_files_are_opened_nonblocking() {
     use std::os::fd::AsRawFd;
-    use std::time::{SystemTime, UNIX_EPOCH};
 
-    let unique = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("clock before UNIX epoch")
-        .as_nanos();
-    let dir = PathBuf::from(format!(
-        "target/tmp/parakit-hotkey-test-{}-{unique}",
-        std::process::id()
-    ));
-    std::fs::create_dir_all(&dir).expect("create test directory");
+    let dir = crate::test_support::fixture_root("parakit-hotkey-test", "evdev-input");
     let path = dir.join("event-test");
     std::fs::write(&path, b"").expect("create test input file");
 

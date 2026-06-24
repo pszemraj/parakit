@@ -44,6 +44,9 @@ pub fn diagnostic_lines() -> Vec<String> {
         build_value!("PARAKIT_BUILD_GGML_VULKAN"),
         build_value!("PARAKIT_BUILD_GGML_METAL")
     ));
+    if let Some(embed) = non_empty_env(option_env!("PARAKIT_BUILD_GGML_METAL_EMBED_LIBRARY")) {
+        lines.push(format!("metal embed:    {embed}"));
+    }
 
     if let Some(arch) = option_env!("PARAKIT_BUILD_CMAKE_CUDA_ARCHITECTURES") {
         if !arch.is_empty() {

@@ -11,8 +11,10 @@ use parakit::inference::{default_thread_count, DeviceMode, Engine};
 use parakit::model;
 use parakit::rules;
 use parakit::warmup;
+use std::ffi::{c_char, c_void, CStr};
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -33,6 +35,17 @@ const CPU_ENGINE_WARMUP_SECONDS: &[usize] = &[1];
 // dictations with margin, accepting a one-time backend stall for unusual longer
 // cold-cache captures.
 const GPU_ENGINE_WARMUP_SECONDS: &[usize] = &[5, 30];
+const GGML_LOG_LEVEL_NONE: i32 = 0;
+const GGML_LOG_LEVEL_WARN: i32 = 3;
+const GGML_LOG_LEVEL_CONT: i32 = 5;
+static NATIVE_LOG_MIN_LEVEL: AtomicI32 = AtomicI32::new(GGML_LOG_LEVEL_WARN);
+static NATIVE_LOG_LAST_ALLOWED: AtomicBool = AtomicBool::new(false);
+
+type CrispAsrLogCallback = Option<extern "C" fn(i32, *const c_char, *mut c_void)>;
+
+extern "C" {
+    fn whisper_log_set(log_callback: CrispAsrLogCallback, user_data: *mut c_void);
+}
 
 /// Parse CLI arguments and run the requested command or daemon mode.
 ///
@@ -48,6 +61,7 @@ pub(crate) fn run() -> Result<()> {
     daemon::audio::alsa::install_error_silencer();
 
     let cli = Cli::parse();
+    configure_native_logging(cli.verbose);
     let log = Arc::new(Logger::new(log_level(&cli)));
     let notifier = Notifier::new(Arc::clone(&log));
     #[cfg(target_os = "linux")]
@@ -263,6 +277,64 @@ pub(crate) fn run() -> Result<()> {
     Ok(())
 }
 
+fn configure_native_logging(verbose: bool) {
+    let min_level = if verbose {
+        GGML_LOG_LEVEL_NONE
+    } else {
+        GGML_LOG_LEVEL_WARN
+    };
+    NATIVE_LOG_MIN_LEVEL.store(min_level, Ordering::Relaxed);
+    NATIVE_LOG_LAST_ALLOWED.store(false, Ordering::Relaxed);
+    unsafe {
+        // CrispASR/ggml exposes one process-global logger on every supported
+        // platform. Install it unconditionally so non-verbose daemon output
+        // keeps native INFO/DEBUG chatter out of stderr while preserving WARN/ERROR.
+        whisper_log_set(Some(parakit_native_log_callback), std::ptr::null_mut());
+    }
+}
+
+extern "C" fn parakit_native_log_callback(
+    level: i32,
+    text: *const c_char,
+    _user_data: *mut c_void,
+) {
+    if text.is_null() {
+        return;
+    }
+    let min_level = NATIVE_LOG_MIN_LEVEL.load(Ordering::Relaxed);
+    let last_allowed = NATIVE_LOG_LAST_ALLOWED.load(Ordering::Relaxed);
+    let decision = native_log_decision(level, min_level, last_allowed);
+    if let Some(next_last_allowed) = decision.next_last_allowed {
+        NATIVE_LOG_LAST_ALLOWED.store(next_last_allowed, Ordering::Relaxed);
+    }
+    if !decision.allowed {
+        return;
+    }
+    let bytes = unsafe { CStr::from_ptr(text) }.to_bytes();
+    let _ = std::io::Write::write_all(&mut std::io::stderr().lock(), bytes);
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct NativeLogDecision {
+    allowed: bool,
+    next_last_allowed: Option<bool>,
+}
+
+fn native_log_decision(level: i32, min_level: i32, last_allowed: bool) -> NativeLogDecision {
+    if level == GGML_LOG_LEVEL_CONT {
+        return NativeLogDecision {
+            allowed: last_allowed,
+            next_last_allowed: None,
+        };
+    }
+
+    let allowed = level >= min_level;
+    NativeLogDecision {
+        allowed,
+        next_last_allowed: Some(allowed),
+    }
+}
+
 /// Warn when the selected microphone appears to be Bluetooth.
 ///
 /// # Arguments
@@ -454,9 +526,13 @@ fn validate_device_request(device_mode: DeviceMode, log: &Logger) -> Result<()> 
     #[cfg(feature = "bundled")]
     {
         if !parakit::gpu::has_gpu_device() {
-            anyhow::bail!(
-                "--device gpu requested, but ggml reports no GPU or iGPU devices; run `parakit doctor --verbose` for compute diagnostics"
-            );
+            let mut message = "--device gpu requested, but ggml reports no GPU or iGPU devices; run `parakit doctor --verbose` for compute diagnostics".to_string();
+            #[cfg(target_os = "macos")]
+            if let Some(hint) = daemon::macos::no_gpu_hint() {
+                message.push_str("; ");
+                message.push_str(hint);
+            }
+            anyhow::bail!(message);
         }
     }
 
@@ -609,6 +685,10 @@ fn format_file_size(bytes: u64) -> String {
 mod app_tests {
     use super::*;
 
+    const GGML_LOG_LEVEL_DEBUG: i32 = 1;
+    const GGML_LOG_LEVEL_INFO: i32 = 2;
+    const GGML_LOG_LEVEL_ERROR: i32 = 4;
+
     #[test]
     fn gpu_warmup_policy_is_realistic_not_worst_case() {
         assert_eq!(crate::daemon::recording::MAX_UTTERANCE_SECONDS, 270);
@@ -626,6 +706,78 @@ mod app_tests {
     #[test]
     fn cpu_device_summary_is_plain() {
         assert_eq!(resolved_device_summary(DeviceMode::Cpu), "cpu");
+    }
+
+    #[test]
+    fn native_log_filter_suppresses_info_and_debug_without_verbose() {
+        assert_eq!(
+            native_log_decision(GGML_LOG_LEVEL_DEBUG, GGML_LOG_LEVEL_WARN, true),
+            NativeLogDecision {
+                allowed: false,
+                next_last_allowed: Some(false),
+            }
+        );
+        assert_eq!(
+            native_log_decision(GGML_LOG_LEVEL_INFO, GGML_LOG_LEVEL_WARN, true),
+            NativeLogDecision {
+                allowed: false,
+                next_last_allowed: Some(false),
+            }
+        );
+    }
+
+    #[test]
+    fn native_log_filter_keeps_warnings_and_errors_without_verbose() {
+        assert_eq!(
+            native_log_decision(GGML_LOG_LEVEL_WARN, GGML_LOG_LEVEL_WARN, false),
+            NativeLogDecision {
+                allowed: true,
+                next_last_allowed: Some(true),
+            }
+        );
+        assert_eq!(
+            native_log_decision(GGML_LOG_LEVEL_ERROR, GGML_LOG_LEVEL_WARN, false),
+            NativeLogDecision {
+                allowed: true,
+                next_last_allowed: Some(true),
+            }
+        );
+    }
+
+    #[test]
+    fn native_log_filter_passes_everything_with_verbose() {
+        assert_eq!(
+            native_log_decision(GGML_LOG_LEVEL_DEBUG, GGML_LOG_LEVEL_NONE, false),
+            NativeLogDecision {
+                allowed: true,
+                next_last_allowed: Some(true),
+            }
+        );
+        assert_eq!(
+            native_log_decision(GGML_LOG_LEVEL_INFO, GGML_LOG_LEVEL_NONE, false),
+            NativeLogDecision {
+                allowed: true,
+                next_last_allowed: Some(true),
+            }
+        );
+    }
+
+    #[test]
+    fn native_log_continuation_follows_previous_allowed_record() {
+        assert_eq!(
+            native_log_decision(GGML_LOG_LEVEL_CONT, GGML_LOG_LEVEL_WARN, false),
+            NativeLogDecision {
+                allowed: false,
+                next_last_allowed: None,
+            }
+        );
+        assert_eq!(
+            native_log_decision(GGML_LOG_LEVEL_CONT, GGML_LOG_LEVEL_WARN, true),
+            NativeLogDecision {
+                allowed: true,
+                next_last_allowed: None,
+            }
+        );
     }
 
     #[test]

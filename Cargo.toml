@@ -1,6 +1,6 @@
 [package]
 name = "parakit"
-version = "0.2.2"
+version = "0.3.0"
 edition = "2021"
 rust-version = "1.87"
 description = "Push-to-talk desktop dictation daemon backed by NVIDIA Parakeet through CrispASR."
@@ -103,6 +103,13 @@ windows = { version = "0.62.2", features = [
   "Win32_UI_Input_KeyboardAndMouse",
   "Win32_UI_WindowsAndMessaging",
 ] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# The objc2 framework crates enable large generated API surfaces by default.
+# Keep only the AppKit/Foundation items parakit calls from the CLI daemon.
+objc2 = { version = "0.6.4", default-features = false }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSRunningApplication", "NSWorkspace"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["NSString"] }
 
 [features]
 default = ["bundled", "daemon"]

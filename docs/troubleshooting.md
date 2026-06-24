@@ -17,18 +17,18 @@ parakit stop
 
 ## Hotkey Problems
 
-Linux X11 session and backend setup are in [linux-desktop.md](linux-desktop.md). The default backend registers `Ctrl+Space` with X11 and does not need `/dev/input` or `/dev/uinput`. If `Ctrl+Space` is unavailable, another desktop shortcut, input method, or keyboard remapper may own it. IBus uses `Ctrl+Space` by default on many Ubuntu/GNOME installs. Disable the conflicting binding and rerun `parakit doctor`.
+Linux X11 session and backend setup are in [linux-desktop.md](linux-desktop.md). If `Ctrl+Space` is unavailable, another desktop shortcut, input method, or keyboard remapper may own it. Check [linux-desktop.md#shortcut-conflicts](linux-desktop.md#shortcut-conflicts), disable the conflicting binding, and rerun `parakit doctor`.
 
-On macOS, grant Accessibility and Input Monitoring permissions to both the terminal and the built binary.
+On macOS, grant Accessibility and Input Monitoring to the terminal app that launches parakit. If the input-source switcher appears or the hotkey stops after changing privacy settings, use [macos-desktop.md#hotkey](macos-desktop.md#hotkey) and restart parakit so it recreates the event tap.
 
 WSL is not the native Windows daemon path. Validate Windows hotkeys, focus checks, and paste behavior from native Windows PowerShell with the Windows bundle.
 
 ## Literal Space Appears
 
-The active backend should suppress the literal Space in `Ctrl+Space`. If a space reaches the focused app:
+The active backend should suppress the literal Space in the platform push-to-talk chord. If a space reaches the focused app:
 
 - confirm only one parakit process is running;
-- confirm no desktop/input-method shortcut also handles `Ctrl+Space`;
+- confirm no desktop/input-method shortcut also handles `Ctrl+Space` on Linux/Windows or `Left Control+Space` on macOS;
 - if you selected `evdev-proxy-experimental`, confirm `/dev/uinput` is writable and the input device can be grabbed;
 - retry in foreground mode to inspect errors;
 - use an X11 session for Linux insertion.
@@ -40,6 +40,8 @@ Paste modes, focus-change behavior, paste sanitization, and clipboard fallback b
 Run `parakit doctor --deep` for an active insertion smoke test. On Linux, use an X11 session; Wayland details are in [linux-desktop.md](linux-desktop.md). Use `standard` for apps that only accept `Ctrl+V`; use `direct` only when an app refuses clipboard paste entirely.
 
 Windows elevated-target behavior is covered in [running.md#insertion](running.md#insertion).
+
+On macOS, run `parakit doctor --deep` to exercise the Accessibility-controlled insertion path and event-tap smoke check. If it fails, grant Accessibility and Input Monitoring to the terminal app, restart parakit, and rerun the check.
 
 In non-direct paste modes, parakit stages blocked or failed transcripts on the clipboard before restoring the active clipboard. Check OS clipboard history, such as `Win+V` on Windows, or your clipboard manager before using the recovery commands below.
 
@@ -110,4 +112,8 @@ parakit --verbose doctor
 
 The `compute:` block lists devices visible to bundled ggml. A GPU build with no GPU or iGPU listed usually means the driver is missing, too old for the CUDA toolkit/driver ABI, or not exposing Vulkan on that machine. Device selection behavior is in [running.md#device-selection](running.md#device-selection).
 
-The daemon intentionally warms the backend at startup. Use `--verbose` to see warmup duration. A cold backend can still make an unusually long first dictation slower.
+The daemon intentionally warms the backend at startup. Use `--verbose` to see warmup duration.
+
+## macOS Metal Builds
+
+Build and permission setup are in [macos-desktop.md](macos-desktop.md). If `--device gpu` reports no GPU on Apple Silicon, run `parakit --verbose doctor`. A Rosetta or non-aarch64 warning means the process is translated; reinstall from a native arm64 terminal. Metal library checks are in [macos-desktop.md#metal-verification](macos-desktop.md#metal-verification).

@@ -25,5 +25,7 @@ pub mod inference;
 pub mod model;
 /// Regex-based transcript cleanup rules.
 pub mod rules;
+#[cfg(test)]
+mod test_support;
 /// Synthetic warmup audio used by daemon and validation tools.
 pub mod warmup;

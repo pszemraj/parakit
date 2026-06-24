@@ -18,7 +18,7 @@ parakit --quiet doctor
 parakit doctor --deep
 ```
 
-`--verbose` and `--quiet` are global flags, so they go before `doctor`. On Linux, Wayland sessions fail insertion preflight even when XWayland exposes a `DISPLAY`; use an X11 session.
+`--verbose` and `--quiet` are global flags, so they go before `doctor`. On Linux, Wayland sessions fail insertion preflight even when XWayland exposes a `DISPLAY`; use an X11 session. On macOS, `doctor` checks Accessibility, Input Monitoring, and Microphone status for the terminal that launched parakit.
 
 The daemon checks the hotkey backend, insertion backend, and singleton lock before any model download. If those preflights pass, it opens the microphone, warns when the selected source looks like Bluetooth, downloads the default Q8_0 GGUF if it is not already cached, opens the model, and starts the hotkey loop. Linux backend details are in [linux-desktop.md](linux-desktop.md).
 
@@ -31,6 +31,8 @@ parakit
   mic:   USB Speech Mic Mono, 48000 Hz mono input -> 16000 Hz mono model, F32
 Ready: hold Ctrl+Space to dictate.
 ```
+
+On macOS the ready line says `Left Control+Space`; on Linux and Windows it says `Ctrl+Space`.
 
 Use `--verbose` only when debugging startup, backend selection, or latency:
 
@@ -75,6 +77,8 @@ disown
 
 On Linux, start parakit from a terminal in the current desktop session. Tmux, X11 auth, and evdev details are in [linux-desktop.md](linux-desktop.md).
 
+On macOS, start parakit from the terminal app that has Accessibility, Input Monitoring, and Microphone permission. Permission details are in [macos-desktop.md](macos-desktop.md).
+
 Keep stderr in a file:
 
 ```bash
@@ -106,7 +110,7 @@ parakit test-paste "hello from parakit"
 
 ## Model Cache
 
-With no `-m`, parakit uses the hosted [Q8_0 GGUF model](https://huggingface.co/pszemraj/parakeet-tdt-0.6b-v3-gguf). `PARAKIT_MODELS_DIR` overrides the model directory. Without that override, `XDG_CACHE_HOME` is honored on Linux, macOS uses `~/Library/Caches/parakit/models/`, and Windows uses `%LOCALAPPDATA%\parakit\Cache\models\`.
+With no `-m`, parakit uses the hosted [Q8_0 GGUF model](https://huggingface.co/pszemraj/parakeet-tdt-0.6b-v3-gguf). `PARAKIT_MODELS_DIR` overrides the model directory. Without that override, `XDG_CACHE_HOME` is honored on Linux and macOS, both fall back to `~/.cache/parakit/models/`, and Windows uses `%LOCALAPPDATA%\parakit\Cache\models\`.
 
 Useful commands:
 
@@ -141,6 +145,8 @@ OS clipboard history or a third-party clipboard manager is useful for recovering
 On Linux/X11, parakit records the active X11 window when recording starts. If focus clearly changes before insertion, it does not send a paste chord, but non-direct modes still stage the transcript before restoring the active clipboard. If focus capture or recheck fails because X11 is transiently unavailable, parakit pastes anyway; the transcript remains available through `parakit paste-last` or `parakit copy-last` either way. Terminal mode strips trailing newlines and blocks multiline terminal paste.
 
 On Windows, parakit records the foreground window at PTT-down, rechecks it before paste, and sends the paste shortcut with `SendInput`. If the foreground target cannot be captured or verified, automatic paste is skipped, but non-direct modes still stage the transcript before restoring the active clipboard. A normal user process cannot inject into an administrator/elevated target application.
+
+On macOS, parakit records the frontmost application window at PTT-down, rechecks it before paste, and sends `Cmd+V` or direct typing through the Accessibility-controlled desktop input path. Switching to another window in the same app counts as a focus change. If the frontmost window cannot be captured or verified, automatic paste is skipped, but non-direct modes still stage the transcript before restoring the active clipboard.
 
 Paste modes:
 

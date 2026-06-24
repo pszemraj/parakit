@@ -375,6 +375,9 @@ impl AudioCapture {
     ///
     /// Returns an error if no usable input device can be opened.
     pub fn open(log: Arc<Logger>, notifier: Notifier) -> Result<Self> {
+        #[cfg(target_os = "macos")]
+        crate::daemon::macos::microphone_preflight()?;
+
         let state = Arc::new(Mutex::new(CaptureState::new()));
         let session_epoch = Arc::new(AtomicU64::new(0));
         let current = Arc::new(Mutex::new(None));
@@ -763,6 +766,9 @@ impl Drop for AudioDrain {
 ///
 /// Returns an error if no usable input device is available.
 pub fn probe_default_input() -> Result<MicInfo> {
+    #[cfg(target_os = "macos")]
+    crate::daemon::macos::microphone_preflight()?;
+
     let host = cpal::default_host();
     selected_mic_info(&host)
 }

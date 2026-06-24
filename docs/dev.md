@@ -48,6 +48,8 @@ Remove-Item Env:\CRISPASR_LIB_DIR
 
 This fallback does not replace real GPU validation. Also run the CUDA and Vulkan Windows scripts plus simulated-dictation smoke tests against `local-scratch\Juniper_St_NE_5.wav` when touching Windows GPU behavior.
 
+On macOS, raw `--all-features` also enables CUDA and can fail in CMake before Rust typechecking when the CUDA Toolkit is not installed. Use the same `CRISPASR_LIB_DIR` fallback to validate the Rust all-features surface; validate Metal with the native macOS build and `doctor`.
+
 ## File Size Exceptions
 
 `src/daemon/audio/capture.rs` is temporarily over the 1k LoC target because it owns one tightly coupled runtime boundary: CPAL stream recovery, the SPSC drain thread, resampler flushing, and recording/pre-roll state. Split it after Windows CPU settles into smaller `audio/stream.rs`, `audio/drain.rs`, and `audio/device.rs` modules without changing behavior.
@@ -58,7 +60,13 @@ This fallback does not replace real GPU validation. Also run the CUDA and Vulkan
 
 ## Deferred Daemon Safety Work
 
-TODO: Move the default hotkey away from `Ctrl+Space` or make it configurable, then add a Linux `doctor` warning for known IBus `Ctrl+Space` conflicts. Keep the current docs warning until the default/config story changes.
+TODO: Add a small user config file, likely `~/.cache/parakit/config.toml`, for configurable hotkeys and other local daemon preferences. Candidate macOS fallbacks to evaluate there are right Command alone and right Command plus right Option. Keep the default behavior simple until config exists: Linux/Windows use `Ctrl+Space`, and macOS uses `Left Control+Space`.
+
+TODO: Keep the direct platform-hotkey path available when configurable chords land. On macOS, extend the existing CoreGraphics event-tap backend so it owns the selected chord, suppresses only that chord, and handles tap-disabled callbacks. On Linux, keep the registered X11 backend as the normal path and use the evdev/uinput proxy only when users explicitly accept the lower-level permission tradeoff. On Windows, `RegisterHotKey` already gives a clear conflict/error boundary.
+
+TODO: Add a Linux `doctor` warning for known IBus `Ctrl+Space` conflicts, or close this if configurable hotkeys make the warning unnecessary. Keep the current Linux docs warning until the default/config story changes.
+
+TODO: Remove the Unix source-install dependency on the repository `target/` library tree in a dedicated follow-up PR. First try to work upstream with CrispASR for static/manual linking support; if that is not viable, revisit full vendoring or an aggregate static-link strategy in parakit. Do not patch the CrispASR submodule locally for this.
 
 TODO: Add a secondary recording watchdog for missed key-release events from the registered X11 hotkey backend. The existing max-utterance timeout bounds the failure, but a silence-based stop would recover sooner when a backend misses release ordering.
 
@@ -68,9 +76,9 @@ TODO: Replace fallback microphone device polling with platform event notificatio
 
 TODO: Evaluate callback-confirmed recording cues and a short post-roll window. The current cue fires after the start command succeeds, not after the first input callback, and release drains only already-arrived samples plus the resampler tail.
 
-TODO: Upgrade `enigo` from the 0.2 line in a cross-platform validation branch. Linux batch paste uses X11 directly and Windows batch paste uses `SendInput`, but direct mode and macOS paste shortcuts still need real desktop validation after the dependency update.
+TODO: Upgrade `enigo` from the 0.2 line in a cross-platform validation branch. Linux batch paste uses X11 directly, Windows batch paste uses `SendInput`, and macOS batch paste uses CoreGraphics Cmd+V events that `doctor --deep` can smoke-test. Keep the dependency update focused on direct typing unless a real desktop paste regression points back to the fallback path.
 
-TODO: In the dedicated macOS work branch, decide whether default model storage should move from `~/Library/Caches/parakit/models/` to `~/Library/Application Support/parakit/models/`. The current cache path is user-scoped and adminless, but a multi-GB model may fit durable app data semantics better than reclaimable cache semantics.
+TODO: Revisit model durability semantics before packaged releases. Source builds use the XDG-style `~/.cache/parakit/models/` path on Linux and macOS; a future bundle may want a less reclaimable app-data location.
 
 TODO: Add an optional X11 paste inter-key hold only if real target applications miss the current XTest paste chord. The current smoke test covers X11 event delivery; app-specific compatibility should drive any delay so normal paste latency does not grow without evidence.
 
