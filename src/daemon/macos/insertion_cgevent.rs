@@ -58,6 +58,7 @@ extern "C" {
         seconds: f64,
         return_after_source_handled: Boolean,
     ) -> i32;
+    fn CFMachPortInvalidate(port: CFMachPortRef);
     fn CFMachPortCreateRunLoopSource(
         allocator: CFAllocatorRef,
         port: CFMachPortRef,
@@ -177,9 +178,16 @@ fn suppressed_key_event_smoke_with_expectation(
     let action_result = action();
     wait_for_smoke_events(&state);
 
+    // Full teardown, in dependency order. Releasing the port objects alone
+    // is not enough: without an explicit disable + invalidate, the window
+    // server keeps routing session key events into the (now unserviced)
+    // suppressing tap, which silently eats any synthetic chord posted right
+    // after this smoke test — including stage 2's real paste transaction.
     unsafe {
+        CGEventTapEnable(tap, 0);
         let run_loop = CFRunLoopGetCurrent();
         CFRunLoopRemoveSource(run_loop, source, kCFRunLoopDefaultMode);
+        CFMachPortInvalidate(tap);
         CFRelease(source.cast());
         CFRelease(tap.cast());
     }
