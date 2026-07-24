@@ -8,7 +8,7 @@ Install Xcode command line tools and the build helpers:
 
 ```bash
 xcode-select --install
-brew install cmake autoconf automake libtool pkg-config
+brew install cmake pkg-config
 ```
 
 Build or install the native Apple Silicon binary:
