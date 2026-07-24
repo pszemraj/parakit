@@ -42,6 +42,9 @@ const MACOS_PTT_SPACE_KEYCODE: u16 = 49;
 
 const SMOKE_TIMEOUT: Duration = Duration::from_millis(750);
 const SMOKE_POLL: Duration = Duration::from_millis(20);
+/// Yield between run-loop slices so the smoke wait never becomes a spin loop
+/// when `CFRunLoopRunInMode` returns early with nothing to dispatch.
+const SMOKE_YIELD: Duration = Duration::from_millis(5);
 const PTT_RELEASE_TIMEOUT: Duration = Duration::from_millis(200);
 const PTT_RELEASE_POLL: Duration = Duration::from_millis(15);
 
@@ -419,7 +422,7 @@ fn wait_for_smoke_events(state: &SmokeTapState) {
         if state.complete() {
             return;
         }
-        thread::sleep(Duration::from_millis(5));
+        thread::sleep(SMOKE_YIELD);
     }
 }
 

@@ -92,16 +92,6 @@ fn ax_focused_ui_element_attribute() -> CFStringRef {
     cached_ax_attribute(&CACHE, "AXFocusedUIElement")
 }
 
-fn ax_role_attribute() -> CFStringRef {
-    static CACHE: OnceLock<usize> = OnceLock::new();
-    cached_ax_attribute(&CACHE, "AXRole")
-}
-
-fn ax_subrole_attribute() -> CFStringRef {
-    static CACHE: OnceLock<usize> = OnceLock::new();
-    cached_ax_attribute(&CACHE, "AXSubrole")
-}
-
 fn ax_value_attribute() -> CFStringRef {
     static CACHE: OnceLock<usize> = OnceLock::new();
     cached_ax_attribute(&CACHE, "AXValue")
@@ -149,20 +139,12 @@ unsafe impl Sync for AxElementHandle {}
 
 /// Focused Accessibility element captured for the frontmost application.
 ///
-/// `role`, `subrole`, and `supports_value_polling` are not consulted by the
-/// current [`decide_focus_verification`] logic (identity is decided purely
-/// by `CFEqual` on `element`); they are captured now so a later
-/// acknowledgement/read-back commit does not need to re-plumb Accessibility
-/// captures.
+/// Target identity is decided purely by `CFEqual` on `element` (see
+/// [`decide_focus_verification`]); `supports_value_polling` only records
+/// whether post-paste acknowledgement is worth attempting.
 #[derive(Debug)]
 pub(crate) struct AxElementSnapshot {
     element: AxElementHandle,
-    /// `AXRole` of the focused element, when it could be read.
-    #[allow(dead_code, reason = "captured for a future acknowledgement commit")]
-    role: Option<String>,
-    /// `AXSubrole` of the focused element, when it could be read.
-    #[allow(dead_code, reason = "captured for a future acknowledgement commit")]
-    subrole: Option<String>,
     /// Whether `AXValue` could be read as a string-typed value on the
     /// focused element at capture time.
     supports_value_polling: bool,
@@ -406,13 +388,9 @@ fn capture_ax_focused_element(pid: libc::pid_t) -> Option<AxElementSnapshot> {
     let _app = AxElementHandle(app);
 
     let element = copy_ax_element(app, ax_focused_ui_element_attribute())?;
-    let role = copy_ax_string(element.0, ax_role_attribute());
-    let subrole = copy_ax_string(element.0, ax_subrole_attribute());
     let supports_value_polling = ax_value_is_string(element.0);
     Some(AxElementSnapshot {
         element,
-        role,
-        subrole,
         supports_value_polling,
     })
 }
@@ -424,14 +402,6 @@ fn copy_ax_element(element: AXUIElementRef, attribute: CFStringRef) -> Option<Ax
         return None;
     }
     Some(AxElementHandle(value.cast_mut()))
-}
-
-fn copy_ax_string(element: AXUIElementRef, attribute: CFStringRef) -> Option<String> {
-    let handle = copy_ax_element(element, attribute)?;
-    if unsafe { CFGetTypeID(handle.as_cftype()) } != unsafe { CFStringGetTypeID() } {
-        return None;
-    }
-    cfstring_to_string(handle.as_cftype().cast())
 }
 
 /// Return whether copying `AXValue` on `element` succeeds right now and

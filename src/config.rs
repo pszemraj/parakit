@@ -157,7 +157,8 @@ pub(crate) const TEMPLATE: &str = r#"# parakit config.toml
 # backend = "auto"
 
 # User-defined text-cleaning rules, applied alongside the built-in rules.
-# Repeat the [[rules.user]] table for each additional rule. See
+# Repeat the [[rules.user]] table for each additional rule; uncomment the
+# [[rules.user]] header itself, or the keys below land in [hotkey]. See
 # docs/cleaning-rules.md for the full user-rule format and validation
 # rules (names must not collide with a built-in rule or another user rule,
 # and `pattern` must be a valid Rust `regex` crate pattern).

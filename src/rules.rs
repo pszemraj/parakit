@@ -73,6 +73,21 @@ pub enum RulePosition {
     Last,
 }
 
+impl RulePosition {
+    /// Stable label, matching the value accepted in `config.toml`.
+    ///
+    /// # Returns
+    ///
+    /// `first`, `standard`, or `last`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::First => "first",
+            Self::Standard => "standard",
+            Self::Last => "last",
+        }
+    }
+}
+
 /// A user-supplied text-cleaning rule loaded from `config.toml`.
 ///
 /// Compiled the same way as a built-in [`Rule`], but user-supplied and thus

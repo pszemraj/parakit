@@ -226,10 +226,7 @@ pub(crate) fn real_paste_transaction_smoke_test(mode: PasteMode) -> Result<()> {
     let probe = ProbeWindow::create(mtm)
         .context("could not create the macOS doctor paste-transaction probe window")?;
     probe.make_key_and_focus(&app)?;
-
-    let result = probe.run_paste_transaction(&app, mode);
-    probe.close();
-    result
+    probe.run_paste_transaction(&app, mode)
 }
 
 /// Install a minimal main menu holding Edit > Paste (Cmd+V).
@@ -483,8 +480,16 @@ impl ProbeWindow {
 
         Ok(())
     }
+}
 
-    fn close(&self) {
+impl Drop for ProbeWindow {
+    /// Take the probe window off screen on every exit path.
+    ///
+    /// `make_key_and_focus` orders the window front before it can fail, so an
+    /// early return from there would otherwise strand a visible window until
+    /// the process exits. `Retained<NSWindow>` is main-thread-only, so this
+    /// can only run on the thread that built it.
+    fn drop(&mut self) {
         self.window.close();
     }
 }

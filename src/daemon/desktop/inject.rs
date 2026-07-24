@@ -156,15 +156,6 @@ pub(crate) enum StageOutcome {
     Blocked,
 }
 
-impl From<StageOutcome> for PasteOutcome {
-    fn from(outcome: StageOutcome) -> Self {
-        match outcome {
-            StageOutcome::CopiedOnly => Self::CopiedOnly,
-            StageOutcome::Blocked => Self::Blocked,
-        }
-    }
-}
-
 /// Clipboard retention policy after staging text for paste.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ClipboardPolicy {
