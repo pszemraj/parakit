@@ -165,6 +165,9 @@ fn worker_loop(ctx: WorkerCtx) {
 
                 match transcribe_clean(&engine, &pcm, cleaner.as_deref()) {
                     Ok(Some(transcript)) => {
+                        // Count the dictation itself, once, regardless of how
+                        // many insertion attempts or outcomes follow below.
+                        state.record_dictation();
                         let record_id = data_log.as_ref().map(|data_log| {
                             data_log.log(
                                 secs,

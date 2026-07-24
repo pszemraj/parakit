@@ -125,19 +125,23 @@ pub(crate) fn run() -> Result<()> {
                 std::process::exit(1);
             }
             Commands::Status => {
-                daemon::ipc::run_client(daemon::ipc::IpcCommand::Status, cli.quiet)?;
+                daemon::ipc::run_client(daemon::ipc::IpcCommand::Status, cli.quiet, cli.verbose)?;
                 return Ok(());
             }
             Commands::Stop => {
-                daemon::ipc::run_client(daemon::ipc::IpcCommand::Stop, cli.quiet)?;
+                daemon::ipc::run_client(daemon::ipc::IpcCommand::Stop, cli.quiet, cli.verbose)?;
                 return Ok(());
             }
             Commands::PasteLast => {
-                daemon::ipc::run_client(daemon::ipc::IpcCommand::PasteLast, cli.quiet)?;
+                daemon::ipc::run_client(
+                    daemon::ipc::IpcCommand::PasteLast,
+                    cli.quiet,
+                    cli.verbose,
+                )?;
                 return Ok(());
             }
             Commands::CopyLast => {
-                daemon::ipc::run_client(daemon::ipc::IpcCommand::CopyLast, cli.quiet)?;
+                daemon::ipc::run_client(daemon::ipc::IpcCommand::CopyLast, cli.quiet, cli.verbose)?;
                 return Ok(());
             }
             Commands::TestPaste(test_paste) => {
@@ -146,6 +150,7 @@ pub(crate) fn run() -> Result<()> {
                         text: test_paste.text.clone(),
                     },
                     cli.quiet,
+                    cli.verbose,
                 )?;
                 return Ok(());
             }
@@ -260,15 +265,19 @@ pub(crate) fn run() -> Result<()> {
 
     // Banner.
     let model_name = model_file_name(&model_path);
+    let cleaning_summary = match cleaner.as_deref() {
+        Some(c) => format!("on ({} rules)", c.active_rule_count()),
+        None => "off".to_string(),
+    };
+    let device_summary = resolved_device_summary(engine.device_mode());
+    let backend_label = engine.backend().to_string();
+    let engine_threads = engine.threads();
     log.banner(BannerInfo {
         model_name: &model_name,
         model_path: &model_path,
         dtype: &model_dtype,
         mic: &mic_info,
-        cleaning: match cleaner.as_deref() {
-            Some(c) => format!("on ({} rules)", c.active_rule_count()),
-            None => "off".to_string(),
-        },
+        cleaning: cleaning_summary.clone(),
         sounds: if sounds_enabled { "on" } else { "off" },
         transcription_logging: match &log_dir {
             Some(dir) => format!("{log_format:?} to {}", dir.display()),
@@ -283,9 +292,32 @@ pub(crate) fn run() -> Result<()> {
                 "restore clipboard"
             }
         ),
-        threads: engine.threads(),
-        backend: engine.backend().to_string(),
-        device: resolved_device_summary(engine.device_mode()),
+        threads: engine_threads,
+        backend: backend_label.clone(),
+        device: device_summary.clone(),
+    });
+
+    // Status detail: mirrors the banner fields above so `parakit --verbose
+    // status` can report the same effective values without re-deriving them.
+    #[cfg(target_os = "linux")]
+    let hotkey_backend_label = Some(hotkey_backend.label());
+    #[cfg(not(target_os = "linux"))]
+    let hotkey_backend_label = None;
+    ipc_state.set_info(daemon::ipc::DaemonInfo {
+        pid: std::process::id(),
+        model_name,
+        dtype: model_dtype,
+        mic_summary: mic_info.summary(),
+        backend: backend_label,
+        device: device_summary,
+        threads: engine_threads,
+        paste_mode: paste_mode.label(),
+        cleaning_summary,
+        sounds_on: sounds_enabled,
+        log_summary: log_dir
+            .as_ref()
+            .map(|dir| format!("{log_format:?} to {}", dir.display())),
+        hotkey_backend_label,
     });
 
     // Worker thread takes exclusive ownership of `engine`. `crispasr::Session`

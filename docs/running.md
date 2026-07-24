@@ -108,6 +108,34 @@ parakit test-paste "hello from parakit"
 
 `paste-last` and `copy-last` keep only the latest transcript in daemon memory. `test-paste` runs clipboard staging, focus checks, paste sanitization, and the paste chord without using the microphone.
 
+Plain `parakit status` output is unchanged and safe for scripts to parse:
+
+```text
+$ parakit status
+parakit: idle
+last transcript: 42 bytes
+```
+
+Pass the global `--verbose` flag before the subcommand to also print a detail block (mic, model, device, uptime, dictation count, and more):
+
+```text
+$ parakit --verbose status
+parakit: idle
+last transcript: 42 bytes
+  pid:        41213
+  uptime:     1h 23m
+  dictations: 17
+  mic:        USB Speech Mic Mono, 48000 Hz mono input -> 16000 Hz mono model, F32
+  model:      parakeet-tdt-0.6b-v3-Q8_0.gguf (Q8_0 (745 MB))
+  device:     cpu (CPU, 8 threads)
+  paste mode: standard
+  sounds:     on
+  cleaning:   on (12 rules)
+  logging:    jsonl to /home/user/.parakit/logs
+```
+
+The detail block reflects the daemon's own state at query time, not the querying process's flags. If the daemon has not finished starting up yet (or predates this feature), `--verbose status` instead prints a single `detail unavailable (daemon starting or older version)` line after the two lines above.
+
 ## Model Cache
 
 With no `-m`, parakit uses the hosted [Q8_0 GGUF model](https://huggingface.co/pszemraj/parakeet-tdt-0.6b-v3-gguf). `PARAKIT_MODELS_DIR` overrides the model directory. Without that override, `XDG_CACHE_HOME` is honored on Linux and macOS, both fall back to `~/.cache/parakit/models/`, and Windows uses `%LOCALAPPDATA%\parakit\Cache\models\`.

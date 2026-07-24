@@ -11,6 +11,7 @@ use std::cell::Cell;
 use std::io::{BufRead, BufReader, Write};
 #[cfg(unix)]
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 #[cfg(any(unix, target_os = "windows"))]
 use std::sync::Arc;
 #[cfg(any(unix, target_os = "windows"))]
@@ -19,6 +20,7 @@ use std::thread;
 use std::thread::JoinHandle;
 #[cfg(any(unix, target_os = "windows"))]
 use std::time::Duration;
+use std::time::Instant;
 
 #[cfg(unix)]
 use super::preflight;
@@ -59,19 +61,101 @@ pub(crate) enum IpcResponse {
     Status {
         phase: String,
         last_transcript_len: Option<usize>,
+        /// Extended runtime detail for `--verbose status`. `#[serde(default)]`
+        /// so a reply from an older daemon build without this key still
+        /// deserializes; `None` also covers the startup window before
+        /// [`SharedState::set_info`] has run. Boxed because `StatusDetail` is
+        /// much larger than the other `IpcResponse` variants, and `Status` is
+        /// otherwise mostly `None` (serde transparently (de)serializes
+        /// `Box<T>` as `T`, so the wire format is unaffected).
+        #[serde(default)]
+        detail: Option<Box<StatusDetail>>,
     },
     /// Command failed.
     Err { message: String },
 }
 
+/// Extended daemon runtime detail returned by `Status` when
+/// [`SharedState::set_info`] has run.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub(crate) struct StatusDetail {
+    /// Daemon process id.
+    pub(crate) pid: u32,
+    /// Seconds since the daemon started serving IPC.
+    pub(crate) uptime_secs: u64,
+    /// Successful dictations completed this session.
+    pub(crate) dictation_count: u64,
+    /// Selected microphone summary.
+    pub(crate) mic: String,
+    /// Model file name.
+    pub(crate) model: String,
+    /// Model dtype/size label.
+    pub(crate) dtype: String,
+    /// Resolved runtime compute device summary.
+    pub(crate) device: String,
+    /// CrispASR backend label.
+    pub(crate) backend: String,
+    /// Inference thread count.
+    pub(crate) threads: usize,
+    /// Paste mode label.
+    pub(crate) paste_mode: String,
+    /// Whether audio cues are enabled.
+    pub(crate) sounds: bool,
+    /// Cleaning pipeline state label.
+    pub(crate) cleaning: String,
+    /// Transcription logging target, when enabled.
+    pub(crate) log: Option<String>,
+    /// Linux hotkey backend label, when applicable.
+    pub(crate) hotkey_backend: Option<String>,
+}
+
+/// Daemon runtime info captured once at startup and exposed through `Status`.
+///
+/// Set once via [`SharedState::set_info`] after the model, microphone, and
+/// insertion backend are all ready. Kept separate from [`StatusDetail`]
+/// because it holds process-lifetime values (backend labels, thread counts)
+/// as-computed at startup, while `StatusDetail` also carries values that
+/// change per query (uptime, dictation count).
+#[derive(Debug, Clone)]
+pub(crate) struct DaemonInfo {
+    /// Daemon process id.
+    pub(crate) pid: u32,
+    /// Model file name.
+    pub(crate) model_name: String,
+    /// Model dtype/size label.
+    pub(crate) dtype: String,
+    /// Selected microphone summary.
+    pub(crate) mic_summary: String,
+    /// CrispASR backend label.
+    pub(crate) backend: String,
+    /// Resolved runtime compute device summary.
+    pub(crate) device: String,
+    /// Inference thread count.
+    pub(crate) threads: usize,
+    /// Paste mode label.
+    pub(crate) paste_mode: &'static str,
+    /// Cleaning pipeline state label (e.g. `"on (12 rules)"` or `"off"`).
+    pub(crate) cleaning_summary: String,
+    /// Whether audio cues are enabled.
+    pub(crate) sounds_on: bool,
+    /// Transcription logging target, when enabled.
+    pub(crate) log_summary: Option<String>,
+    /// Linux hotkey backend label, when applicable.
+    pub(crate) hotkey_backend_label: Option<&'static str>,
+}
+
 /// Shared in-memory daemon state used by the worker and IPC server.
-#[derive(Default)]
 pub(crate) struct SharedState {
     inner: Mutex<StateSnapshot>,
     insertion: Mutex<()>,
+    /// Runtime info set once startup completes; `None` until then.
+    info: Mutex<Option<DaemonInfo>>,
+    /// Instant the daemon started serving IPC, used to compute uptime.
+    started_at: Instant,
+    /// Count of successful dictations (transcript produced) this session.
+    dictation_count: AtomicU64,
 }
 
-#[derive(Default)]
 struct StateSnapshot {
     phase: String,
     last_transcript: Option<String>,
@@ -90,6 +174,9 @@ impl SharedState {
                 last_transcript: None,
             }),
             insertion: Mutex::new(()),
+            info: Mutex::new(None),
+            started_at: Instant::now(),
+            dictation_count: AtomicU64::new(0),
         }
     }
 
@@ -103,12 +190,48 @@ impl SharedState {
         self.inner.lock().last_transcript = Some(text);
     }
 
+    /// Store daemon runtime info, making it visible to subsequent `Status`
+    /// queries. Called once, after startup finishes resolving the model,
+    /// microphone, and insertion backend.
+    pub(crate) fn set_info(&self, info: DaemonInfo) {
+        *self.info.lock() = Some(info);
+    }
+
+    /// Record one successful dictation (a non-empty transcript was
+    /// produced). Called once per transcription success, not once per
+    /// insertion attempt.
+    pub(crate) fn record_dictation(&self) {
+        self.dictation_count.fetch_add(1, Ordering::Relaxed);
+    }
+
     #[cfg(any(unix, target_os = "windows", test))]
     fn status(&self) -> IpcResponse {
         let inner = self.inner.lock();
+        let detail = self
+            .info
+            .lock()
+            .as_ref()
+            .map(|info| StatusDetail {
+                pid: info.pid,
+                uptime_secs: self.started_at.elapsed().as_secs(),
+                dictation_count: self.dictation_count.load(Ordering::Relaxed),
+                mic: info.mic_summary.clone(),
+                model: info.model_name.clone(),
+                dtype: info.dtype.clone(),
+                device: info.device.clone(),
+                backend: info.backend.clone(),
+                threads: info.threads,
+                paste_mode: info.paste_mode.to_string(),
+                sounds: info.sounds_on,
+                cleaning: info.cleaning_summary.clone(),
+                log: info.log_summary.clone(),
+                hotkey_backend: info.hotkey_backend_label.map(str::to_string),
+            })
+            .map(Box::new);
         IpcResponse::Status {
             phase: inner.phase.clone(),
             last_transcript_len: inner.last_transcript.as_ref().map(String::len),
+            detail,
         }
     }
 
@@ -179,6 +302,8 @@ pub(crate) fn spawn_server(
 ///
 /// * `command` - Command to send to the running daemon.
 /// * `quiet` - Suppress stdout on success.
+/// * `verbose` - Print an extended detail block for `Status` responses. Has
+///   no effect on other commands, so their output is unaffected either way.
 ///
 /// # Returns
 ///
@@ -187,7 +312,7 @@ pub(crate) fn spawn_server(
 /// # Errors
 ///
 /// Returns an error when no daemon is listening or the daemon reports failure.
-pub(crate) fn run_client(command: IpcCommand, quiet: bool) -> Result<()> {
+pub(crate) fn run_client(command: IpcCommand, quiet: bool, verbose: bool) -> Result<()> {
     let response = send_command(command)?;
     match response {
         IpcResponse::Ok { message } => {
@@ -199,17 +324,71 @@ pub(crate) fn run_client(command: IpcCommand, quiet: bool) -> Result<()> {
         IpcResponse::Status {
             phase,
             last_transcript_len,
+            detail,
         } => {
             if !quiet {
+                // These two lines must stay byte-identical to the pre-verbose
+                // output: existing scripts parse them.
                 println!("parakit: {phase}");
                 match last_transcript_len {
                     Some(len) => println!("last transcript: {len} bytes"),
                     None => println!("last transcript: none"),
                 }
+                if verbose {
+                    print_status_detail(detail.as_deref());
+                }
             }
             Ok(())
         }
         IpcResponse::Err { message } => bail!("{message}"),
+    }
+}
+
+/// Print the `--verbose status` detail block.
+///
+/// # Arguments
+///
+/// * `detail` - Extended runtime detail from the daemon's `Status` response,
+///   or `None` when the daemon has not yet called `set_info` (e.g. still
+///   starting up) or predates this field.
+fn print_status_detail(detail: Option<&StatusDetail>) {
+    let Some(detail) = detail else {
+        println!("  detail unavailable (daemon starting or older version)");
+        return;
+    };
+    println!("  pid:        {}", detail.pid);
+    println!("  uptime:     {}", format_uptime(detail.uptime_secs));
+    println!("  dictations: {}", detail.dictation_count);
+    println!("  mic:        {}", detail.mic);
+    println!("  model:      {} ({})", detail.model, detail.dtype);
+    println!(
+        "  device:     {} ({}, {} threads)",
+        detail.device, detail.backend, detail.threads
+    );
+    println!("  paste mode: {}", detail.paste_mode);
+    println!("  sounds:     {}", if detail.sounds { "on" } else { "off" });
+    println!("  cleaning:   {}", detail.cleaning);
+    println!("  logging:    {}", detail.log.as_deref().unwrap_or("off"));
+    if let Some(hotkey_backend) = &detail.hotkey_backend {
+        println!("  hotkey:     {hotkey_backend}");
+    }
+}
+
+/// Humanize a duration in seconds as `1h 23m`, `23m 5s`, or `5s`.
+///
+/// # Returns
+///
+/// The largest two non-zero units, or `0s` for a zero duration.
+fn format_uptime(total_secs: u64) -> String {
+    let hours = total_secs / 3600;
+    let minutes = (total_secs % 3600) / 60;
+    let seconds = total_secs % 60;
+    if hours > 0 {
+        format!("{hours}h {minutes}m")
+    } else if minutes > 0 {
+        format!("{minutes}m {seconds}s")
+    } else {
+        format!("{seconds}s")
     }
 }
 
@@ -1494,7 +1673,134 @@ mod tests {
             IpcResponse::Status {
                 phase,
                 last_transcript_len: Some(5),
+                detail: None,
             } if phase == "recording"
+        ));
+    }
+
+    fn sample_daemon_info() -> DaemonInfo {
+        DaemonInfo {
+            pid: 4242,
+            model_name: "parakeet-tdt-0.6b-v3-Q8_0.gguf".to_string(),
+            dtype: "Q8_0 (745 MB)".to_string(),
+            mic_summary: "Test Mic, 48000 Hz mono input -> 16000 Hz mono model, F32".to_string(),
+            backend: "CPU".to_string(),
+            device: "cpu".to_string(),
+            threads: 8,
+            paste_mode: "standard",
+            cleaning_summary: "on (12 rules)".to_string(),
+            sounds_on: true,
+            log_summary: Some("jsonl to /home/user/.parakit/logs".to_string()),
+            hotkey_backend_label: Some("auto"),
+        }
+    }
+
+    #[test]
+    fn shared_state_status_is_bare_until_info_is_set() {
+        let state = SharedState::new();
+
+        let IpcResponse::Status { detail, .. } = state.status() else {
+            panic!("expected a Status response");
+        };
+        assert!(detail.is_none());
+    }
+
+    #[test]
+    fn shared_state_set_info_and_record_dictation_populate_status_detail() {
+        let state = SharedState::new();
+        state.set_info(sample_daemon_info());
+        state.record_dictation();
+        state.record_dictation();
+
+        let IpcResponse::Status { detail, .. } = state.status() else {
+            panic!("expected a Status response");
+        };
+        let detail = detail.expect("detail should be set after set_info");
+        assert_eq!(detail.pid, 4242);
+        assert_eq!(detail.dictation_count, 2);
+        assert_eq!(detail.model, "parakeet-tdt-0.6b-v3-Q8_0.gguf");
+        assert_eq!(detail.dtype, "Q8_0 (745 MB)");
+        assert_eq!(detail.backend, "CPU");
+        assert_eq!(detail.device, "cpu");
+        assert_eq!(detail.threads, 8);
+        assert_eq!(detail.paste_mode, "standard");
+        assert!(detail.sounds);
+        assert_eq!(detail.cleaning, "on (12 rules)");
+        assert_eq!(
+            detail.log.as_deref(),
+            Some("jsonl to /home/user/.parakit/logs")
+        );
+        assert_eq!(detail.hotkey_backend.as_deref(), Some("auto"));
+    }
+
+    #[test]
+    fn shared_state_uptime_reflects_elapsed_time() {
+        let state = SharedState::new();
+        state.set_info(sample_daemon_info());
+        std::thread::sleep(Duration::from_millis(20));
+
+        let IpcResponse::Status { detail, .. } = state.status() else {
+            panic!("expected a Status response");
+        };
+        // A freshly created state has near-zero uptime; this only asserts
+        // the field is wired to `started_at`, not a precise duration.
+        assert!(detail.expect("detail should be set").uptime_secs < 5);
+    }
+
+    #[test]
+    fn status_detail_serde_round_trips() {
+        let detail = StatusDetail {
+            pid: 1234,
+            uptime_secs: 5025,
+            dictation_count: 7,
+            mic: "Test Mic".to_string(),
+            model: "model.gguf".to_string(),
+            dtype: "Q8_0".to_string(),
+            device: "cpu".to_string(),
+            backend: "CPU".to_string(),
+            threads: 4,
+            paste_mode: "standard".to_string(),
+            sounds: true,
+            cleaning: "off".to_string(),
+            log: None,
+            hotkey_backend: None,
+        };
+        let response = IpcResponse::Status {
+            phase: "idle".to_string(),
+            last_transcript_len: Some(12),
+            detail: Some(Box::new(detail.clone())),
+        };
+
+        let json = serde_json::to_string(&response).expect("status response should serialize");
+        let round_tripped: IpcResponse =
+            serde_json::from_str(&json).expect("status response should deserialize");
+
+        assert!(matches!(
+            round_tripped,
+            IpcResponse::Status {
+                detail: Some(d),
+                ..
+            } if *d == detail
+        ));
+    }
+
+    #[test]
+    fn status_response_without_detail_key_deserializes_as_none() {
+        // Simulates a reply from a daemon build that predates the `detail`
+        // field: the wire payload simply omits the key. `#[serde(default)]`
+        // must make this parse instead of failing.
+        let json = r#"{"status":{"phase":"idle","last_transcript_len":null}}"#;
+
+        let response: IpcResponse =
+            serde_json::from_str(json).expect("older status payload should still deserialize");
+
+        assert!(matches!(
+            response,
+            IpcResponse::Status {
+                phase,
+                last_transcript_len: None,
+                detail: None,
+            } if phase == "idle"
         ));
     }
 
@@ -1525,7 +1831,6 @@ mod tests {
         use super::super::logging::{LogLevel, Logger};
         use std::io::Write as _;
         use std::os::unix::net::UnixStream;
-        use std::time::Instant;
 
         let (mut client, server) = UnixStream::pair().expect("unix stream pair");
         client
