@@ -1,7 +1,9 @@
 //! Clipboard restore timing and history-observation policy.
 
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
+
+use super::inject::FocusSnapshot;
 
 #[cfg(target_os = "windows")]
 const CLIPBOARD_CONFIRM_TIMEOUT: Duration = Duration::from_millis(1000);
@@ -21,6 +23,60 @@ pub(super) struct ClipboardWriteSnapshot {
 pub(super) struct ClipboardWriteToken {
     pub(super) before_sequence: Option<u32>,
     pub(super) after_sequence: Option<u32>,
+}
+
+/// Focus and transcript context available to a paste-acknowledgement
+/// strategy. Kept as a struct so a future confirmation strategy can read
+/// more context without changing the [`ClipboardRestoreGate`] trait's
+/// method signature again.
+///
+/// `pub(crate)` rather than `pub(super)`: the macOS override built on top
+/// of this trait lives in `daemon::macos`, a sibling of `daemon::desktop`,
+/// so both this type and [`PasteConfirmation`] must be visible crate-wide
+/// to cross that module boundary.
+pub(crate) struct PasteConfirmationContext<'a> {
+    /// Focus captured before insertion became eligible, when available.
+    pub(crate) focus: Option<&'a FocusSnapshot>,
+    /// Transcript text that was just pasted.
+    pub(crate) transcript: &'a str,
+}
+
+/// Result of waiting for evidence that a just-sent paste chord was consumed
+/// by the insertion target.
+///
+/// Every variant carries the stable telemetry label
+/// (`InsertionLogFields::acknowledgement_kind`) that explains how the
+/// variant was decided, alongside how long the wait took.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PasteConfirmation {
+    /// Insertion was positively observed (or, on platforms without a
+    /// stronger signal, this is simply how long the fallback/history wait
+    /// took — see `kind`).
+    Confirmed {
+        /// Time spent waiting for confirmation.
+        elapsed: Duration,
+        /// Stable telemetry label, e.g. `"ax_confirmed"` or
+        /// `"not_applicable"` on platforms without acknowledgement
+        /// machinery.
+        kind: &'static str,
+    },
+    /// No positive evidence was available at all (no pollable signal), so a
+    /// fixed grace period was used instead. The paste chord was sent; it is
+    /// simply unknown whether it landed.
+    Unverified {
+        /// Time spent in the grace period.
+        elapsed: Duration,
+        /// Stable telemetry label, e.g. `"unverified_timeout"`.
+        kind: &'static str,
+    },
+    /// A pollable signal was available but never showed insertion evidence
+    /// before the deadline.
+    NoEvidence {
+        /// Time spent polling for evidence.
+        elapsed: Duration,
+        /// Stable telemetry label, e.g. `"no_evidence"`.
+        kind: &'static str,
+    },
 }
 
 /// Clipboard restore gate used to wait until listeners observe a staged write.
@@ -48,6 +104,66 @@ pub(super) trait ClipboardRestoreGate {
     /// * `fallback_delay` - Time-based restore delay used when observation is
     ///   unavailable.
     fn wait_before_restore(&self, token: ClipboardWriteToken, fallback_delay: Duration);
+
+    /// Await evidence that a just-sent paste chord was consumed by the
+    /// insertion target, before the caller decides whether to restore the
+    /// previous clipboard contents.
+    ///
+    /// The default implementation reproduces the historical behavior of
+    /// every gate that does not have a stronger acknowledgement signal:
+    /// sleep `paste_consume_delay` so the target has a chance to read the
+    /// clipboard, then apply [`Self::wait_before_restore`]'s existing
+    /// policy. It always resolves to [`PasteConfirmation::Confirmed`] with
+    /// `kind: "not_applicable"`, since no platform-specific positive signal
+    /// was consulted.
+    ///
+    /// # Arguments
+    ///
+    /// * `token` - Clipboard write token for the staged transcript.
+    /// * `fallback_delay` - Time-based restore delay used when observation
+    ///   is unavailable.
+    /// * `paste_consume_delay` - Extra delay after a successful paste chord
+    ///   so the target can consume the clipboard before restore.
+    /// * `_ctx` - Focus/transcript context. Unused by the default
+    ///   implementation; available to overrides with a real acknowledgement
+    ///   signal (see the macOS override on [`PlatformClipboardRestoreGate`]).
+    fn await_paste_confirmation(
+        &self,
+        token: ClipboardWriteToken,
+        fallback_delay: Duration,
+        paste_consume_delay: Duration,
+        _ctx: &PasteConfirmationContext<'_>,
+    ) -> PasteConfirmation {
+        default_paste_confirmation(self, token, fallback_delay, paste_consume_delay)
+    }
+}
+
+/// Shared body for [`ClipboardRestoreGate::await_paste_confirmation`]'s
+/// default implementation, factored out so test gates can reuse the exact
+/// same fallback behavior instead of duplicating it (see
+/// `MockRestoreGate::await_paste_confirmation` in `inject_tests.rs`).
+///
+/// # Arguments
+///
+/// * `gate` - Gate to wait on.
+/// * `token` - Clipboard write token for the staged transcript.
+/// * `fallback_delay` - Time-based restore delay used when observation is
+///   unavailable.
+/// * `paste_consume_delay` - Extra delay after a successful paste chord so
+///   the target can consume the clipboard before restore.
+pub(super) fn default_paste_confirmation<G: ClipboardRestoreGate + ?Sized>(
+    gate: &G,
+    token: ClipboardWriteToken,
+    fallback_delay: Duration,
+    paste_consume_delay: Duration,
+) -> PasteConfirmation {
+    let start = Instant::now();
+    sleep_if_nonzero(paste_consume_delay);
+    gate.wait_before_restore(token, fallback_delay);
+    PasteConfirmation::Confirmed {
+        elapsed: start.elapsed(),
+        kind: "not_applicable",
+    }
 }
 
 /// Restore timing policy for one staged clipboard write.
@@ -104,14 +220,21 @@ impl<'a, G: ClipboardRestoreGate + ?Sized> ClipboardRestorePlan<'a, G> {
         self.gate.after_transcript_write(before)
     }
 
-    /// Wait after a successful paste before restoring the previous clipboard.
+    /// Await evidence that a just-sent paste chord was consumed by the
+    /// insertion target.
     ///
     /// # Arguments
     ///
     /// * `token` - Clipboard write token for the staged transcript.
-    pub(super) fn wait_after_paste_before_restore(&self, token: ClipboardWriteToken) {
-        sleep_if_nonzero(self.paste_consume_delay);
-        self.wait_before_restore(token);
+    /// * `ctx` - Focus/transcript context for platform confirmation
+    ///   strategies that have a real acknowledgement signal.
+    pub(super) fn await_paste_confirmation(
+        &self,
+        token: ClipboardWriteToken,
+        ctx: &PasteConfirmationContext<'_>,
+    ) -> PasteConfirmation {
+        self.gate
+            .await_paste_confirmation(token, self.delay, self.paste_consume_delay, ctx)
     }
 
     /// Wait before restoring the previous clipboard.
@@ -226,6 +349,22 @@ impl ClipboardRestoreGate for PlatformClipboardRestoreGate {
         let _ = token;
 
         sleep_if_nonzero(fallback_delay);
+    }
+
+    #[cfg(target_os = "macos")]
+    fn await_paste_confirmation(
+        &self,
+        _token: ClipboardWriteToken,
+        _fallback_delay: Duration,
+        _paste_consume_delay: Duration,
+        ctx: &PasteConfirmationContext<'_>,
+    ) -> PasteConfirmation {
+        // macOS has a real acknowledgement signal (Accessibility `AXValue`
+        // polling), so it does not use the clipboard-sequence/history-based
+        // wait the trait default applies on other platforms. Linux and
+        // Windows have no override here, so they keep using the trait's
+        // default `await_paste_confirmation` unchanged.
+        crate::daemon::macos::pasteboard::await_paste_confirmation(ctx)
     }
 }
 

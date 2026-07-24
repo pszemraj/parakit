@@ -4,9 +4,11 @@
 
 mod focus;
 mod insertion_cgevent;
+/// Post-paste Accessibility acknowledgement (`AXValue` confirmation polling).
+pub(crate) mod pasteboard;
 mod permissions;
 
-pub(crate) use focus::{FocusVerification, MacOsFocusSnapshot};
+pub(crate) use focus::{AxElementSnapshot, FocusVerification, MacOsFocusSnapshot};
 pub(crate) use insertion_cgevent::{
     send_paste_shortcut, suppressed_key_event_smoke, suppressed_paste_shortcut_smoke,
 };

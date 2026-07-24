@@ -3,7 +3,12 @@
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 compile_error!("parakit desktop mode supports Linux, macOS, and Windows only");
 
-mod clipboard_restore;
+/// Clipboard restore timing and paste-acknowledgement policy. `pub(crate)`
+/// so the macOS Accessibility acknowledgement override in
+/// `daemon::macos::pasteboard` (a sibling of `daemon::desktop`) can name
+/// [`clipboard_restore::PasteConfirmation`] and
+/// [`clipboard_restore::PasteConfirmationContext`].
+pub(crate) mod clipboard_restore;
 /// Global push-to-talk hotkey registration and event handling.
 pub(crate) mod hotkey;
 /// Text insertion into the currently focused desktop target.

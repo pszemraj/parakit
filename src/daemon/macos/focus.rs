@@ -165,8 +165,56 @@ pub(crate) struct AxElementSnapshot {
     subrole: Option<String>,
     /// Whether `AXValue` could be read as a string-typed value on the
     /// focused element at capture time.
-    #[allow(dead_code, reason = "captured for a future acknowledgement commit")]
     supports_value_polling: bool,
+}
+
+impl AxElementSnapshot {
+    /// Return whether `AXValue` could be read as a string-typed value on
+    /// this element at capture time.
+    ///
+    /// `false` is the expected, deliberate result for secure/password input
+    /// fields: macOS withholds `AXValue` from Accessibility clients for
+    /// those fields as a privacy boundary (the same protection "Secure
+    /// Input" relies on), not a bug in this snapshot. Callers should treat
+    /// `false` as "no pollable acknowledgement signal here", not as an
+    /// error.
+    ///
+    /// # Returns
+    ///
+    /// `true` when post-paste `AXValue` polling is worth attempting.
+    pub(crate) fn supports_value_polling(&self) -> bool {
+        self.supports_value_polling
+    }
+
+    /// Re-read `AXValue` from this element, for post-paste acknowledgement
+    /// polling.
+    ///
+    /// # Returns
+    ///
+    /// `Ok(Some(value))` when `AXValue` is currently a string; `Ok(None)`
+    /// when the read succeeded but the value is not (or is no longer) a
+    /// string. `Err(())` when the Accessibility read itself failed, which
+    /// in practice means the element died or otherwise stopped answering AX
+    /// requests (e.g. focus moved to a different element or application);
+    /// callers should treat that as the end of evidence-gathering rather
+    /// than a transient error to retry.
+    pub(crate) fn poll_value(&self) -> Result<Option<String>, ()> {
+        let element: AXUIElementRef = self.element.0;
+        let mut value: CFTypeRef = ptr::null();
+        let status =
+            unsafe { AXUIElementCopyAttributeValue(element, ax_value_attribute(), &mut value) };
+        if status != K_AX_ERROR_SUCCESS {
+            return Err(());
+        }
+        if value.is_null() {
+            return Ok(None);
+        }
+        let handle = AxElementHandle(value.cast_mut());
+        if unsafe { CFGetTypeID(handle.as_cftype()) } != unsafe { CFStringGetTypeID() } {
+            return Ok(None);
+        }
+        Ok(cfstring_to_string(handle.as_cftype().cast()))
+    }
 }
 
 /// Sendable representation of the focused macOS insertion target.
@@ -256,6 +304,18 @@ impl MacOsFocusSnapshot {
     /// application had no bundle identifier.
     pub(crate) fn bundle_id(&self) -> Option<&str> {
         self.bundle_identifier.as_deref()
+    }
+
+    /// Return the focused Accessibility element captured for this snapshot,
+    /// when Accessibility exposed one.
+    ///
+    /// # Returns
+    ///
+    /// `Some` when a focused element was captured; `None` when
+    /// Accessibility could not expose one (permission not granted, no
+    /// focused element, etc. — see [`Self::capture`]).
+    pub(crate) fn ax_element(&self) -> Option<&AxElementSnapshot> {
+        self.ax.as_ref()
     }
 }
 

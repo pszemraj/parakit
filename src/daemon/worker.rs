@@ -190,6 +190,7 @@ fn worker_loop(ctx: WorkerCtx) {
                                 transcript_chars,
                                 None,
                                 "not_applicable",
+                                None,
                             );
                             state.set_last_transcript(transcript.cleaned.clone());
                             state.set_phase("idle");
@@ -220,7 +221,8 @@ fn worker_loop(ctx: WorkerCtx) {
                             result
                         });
                         match insert_result {
-                            Ok(outcome) => {
+                            Ok(report) => {
+                                let outcome = report.outcome;
                                 log_insertion_outcome(
                                     &data_log,
                                     record_id,
@@ -229,8 +231,12 @@ fn worker_loop(ctx: WorkerCtx) {
                                     transcript_chars,
                                     None,
                                     focus_verification.get(),
+                                    Some(&report),
                                 );
-                                if outcome == InsertOutcome::Pasted {
+                                if matches!(
+                                    outcome,
+                                    InsertOutcome::Pasted | InsertOutcome::PastedUnverified
+                                ) {
                                     paste_circuit.record_success();
                                 }
                                 let insert_elapsed = insert_started.elapsed();
@@ -246,7 +252,18 @@ fn worker_loop(ctx: WorkerCtx) {
                                     total_elapsed.as_secs_f32() * 1000.0
                                 ));
                                 state.set_phase("idle");
-                                if outcome == InsertOutcome::Blocked {
+                                // Blocked always alarms. A post-chord
+                                // CopiedOnly (paste sent but insertion never
+                                // confirmed) is a safe degradation, not a
+                                // backend failure, but the user still needs
+                                // to know the paste did not land; a
+                                // pre-chord CopiedOnly (guard blocked before
+                                // any chord was sent) keeps the quieter
+                                // existing behavior.
+                                let needs_alert = matches!(outcome, InsertOutcome::Blocked)
+                                    || (outcome == InsertOutcome::CopiedOnly
+                                        && report.paste_event_posted);
+                                if needs_alert {
                                     sounds.error();
                                 } else {
                                     sounds.success();
@@ -261,6 +278,7 @@ fn worker_loop(ctx: WorkerCtx) {
                                     transcript_chars,
                                     Some(format!("{e:#}")),
                                     focus_verification.get(),
+                                    None,
                                 );
                                 if paste_circuit.record_failure(Instant::now()) {
                                     notifier.paste_temporarily_disabled();
@@ -333,8 +351,14 @@ impl PasteCircuit {
     }
 }
 
-fn insertion_result_remembers_transcript(result: &Result<InsertOutcome>) -> bool {
-    !matches!(result, Ok(InsertOutcome::Skipped))
+fn insertion_result_remembers_transcript(result: &Result<InsertReport>) -> bool {
+    !matches!(
+        result,
+        Ok(InsertReport {
+            outcome: InsertOutcome::Skipped,
+            ..
+        })
+    )
 }
 
 /// Write an insertion-outcome telemetry record correlated with the
@@ -357,6 +381,11 @@ fn insertion_result_remembers_transcript(result: &Result<InsertOutcome>) -> bool
 ///   observed by the last live recheck performed for this attempt (or
 ///   `"not_applicable"` when insertion never reached a focus check, e.g.
 ///   sanitizer skip/copy-only paths and PTT audio simulation).
+/// * `report` - Real acknowledgement/clipboard telemetry for this attempt,
+///   when one is available (every `Ok` insertion result has one; `None` for
+///   PTT audio simulation and the `"error"` outcome, which have nothing to
+///   report).
+#[allow(clippy::too_many_arguments)]
 fn log_insertion_outcome(
     data_log: &Option<Arc<DataLogger>>,
     record_id: Option<RecordId>,
@@ -365,6 +394,7 @@ fn log_insertion_outcome(
     transcript_chars: usize,
     failure_reason: Option<String>,
     focus_verification: &'static str,
+    report: Option<&InsertReport>,
 ) {
     let (Some(data_log), Some(record_id)) = (data_log, record_id) else {
         return;
@@ -377,11 +407,14 @@ fn log_insertion_outcome(
             target_bundle_id,
             focus_verification,
             transcript_chars,
-            paste_event_posted: outcome == "pasted",
+            paste_event_posted: report.map_or(outcome == "pasted", |r| r.paste_event_posted),
+            // NSPasteboard/Carbon promise-keeper read evidence is a
+            // deferred follow-up (see `daemon::macos::pasteboard` module
+            // docs); no call site can populate this yet.
             pasteboard_requested: None,
-            acknowledgement_kind: "not_applicable",
-            acknowledgement_ms: None,
-            clipboard_restored: None,
+            acknowledgement_kind: report.map_or("not_applicable", |r| r.acknowledgement_kind),
+            acknowledgement_ms: report.and_then(|r| r.acknowledgement_ms),
+            clipboard_restored: report.and_then(|r| r.clipboard_restored),
             failure_reason: failure_reason.as_deref(),
         },
     );
@@ -416,7 +449,7 @@ pub(crate) struct FocusCheck<'a> {
 ///
 /// # Returns
 ///
-/// Worker insertion outcome.
+/// Worker insertion outcome plus acknowledgement/clipboard telemetry.
 ///
 /// # Errors
 ///
@@ -429,7 +462,7 @@ pub(crate) fn insert_text(
     focus: FocusCheck<'_>,
     ui: (&Logger, &Notifier),
     copy_only_mode: bool,
-) -> Result<InsertOutcome> {
+) -> Result<InsertReport> {
     let (log, notifier) = ui;
     match sanitize_for_paste(raw_text, mode) {
         PastePlan::Paste(text) if copy_only_mode => {
@@ -438,7 +471,7 @@ pub(crate) fn insert_text(
                     "direct insertion disabled after repeated failures; transcript was not copied",
                 );
                 notifier.paste_temporarily_disabled();
-                Ok(InsertOutcome::Blocked)
+                Ok(InsertReport::placeholder(InsertOutcome::Blocked, false))
             } else {
                 copy_or_block_transcript(
                     injector,
@@ -466,7 +499,7 @@ pub(crate) fn insert_text(
                     "direct insertion blocked by sanitizer ({reason}); transcript was not copied"
                 ));
                 notifier.paste_blocked(reason);
-                Ok(InsertOutcome::Blocked)
+                Ok(InsertReport::placeholder(InsertOutcome::Blocked, false))
             } else {
                 log.warn(format!("paste blocked by sanitizer ({reason})"));
                 copy_or_block_transcript(
@@ -482,7 +515,7 @@ pub(crate) fn insert_text(
         }
         PastePlan::Skip { reason } => {
             log.warn(format!("paste skipped by sanitizer: {reason}"));
-            Ok(InsertOutcome::Skipped)
+            Ok(InsertReport::placeholder(InsertOutcome::Skipped, false))
         }
     }
 }
@@ -495,11 +528,11 @@ fn paste_transcript(
     focus: FocusCheck<'_>,
     log: &Logger,
     notifier: &Notifier,
-) -> Result<InsertOutcome> {
+) -> Result<InsertReport> {
     if !focus_allows_insertion(focus, log) {
         if mode == PasteMode::Direct {
             notifier.paste_blocked("Focus changed before insertion.");
-            return Ok(InsertOutcome::Blocked);
+            return Ok(InsertReport::placeholder(InsertOutcome::Blocked, false));
         }
         return copy_or_block_transcript(
             injector,
@@ -544,18 +577,42 @@ fn paste_transcript(
             text,
             mode,
             clipboard_policy(keep_transcript_clipboard),
+            focus.snapshot,
             || Ok(focus_allows_insertion(focus, log)),
         );
     let paste_error = match paste_result {
         Ok(report) => match report.outcome {
-            super::inject::PasteOutcome::Pasted => return Ok(InsertOutcome::Pasted),
+            super::inject::PasteOutcome::Pasted => {
+                return Ok(InsertReport::from_paste(InsertOutcome::Pasted, report))
+            }
+            super::inject::PasteOutcome::PastedUnverified => {
+                log.verbose(format!(
+                    "parakit: paste sent but insertion could not be confirmed within {}ms ({}); treating as pasted",
+                    report.acknowledgement_ms.unwrap_or_default(),
+                    report.acknowledgement_kind,
+                ));
+                return Ok(InsertReport::from_paste(
+                    InsertOutcome::PastedUnverified,
+                    report,
+                ));
+            }
             super::inject::PasteOutcome::CopiedOnly => {
-                notifier.transcript_copied("Focus changed immediately before paste.");
-                return Ok(InsertOutcome::CopiedOnly);
+                if report.paste_event_posted {
+                    // The paste chord was sent but never confirmed: avoid
+                    // alarm fatigue from a second silent failure path and
+                    // tell the user the transcript is safe on the
+                    // clipboard.
+                    notifier.paste_blocked(
+                        "Paste could not be confirmed; transcript copied. Press Cmd+V to insert it.",
+                    );
+                } else {
+                    notifier.transcript_copied("Focus changed immediately before paste.");
+                }
+                return Ok(InsertReport::from_paste(InsertOutcome::CopiedOnly, report));
             }
             super::inject::PasteOutcome::Blocked => {
                 notifier.paste_blocked("Focus changed immediately before paste.");
-                return Ok(InsertOutcome::Blocked);
+                return Ok(InsertReport::from_paste(InsertOutcome::Blocked, report));
             }
         },
         Err(err) => err,
@@ -581,20 +638,20 @@ fn copy_or_block_transcript(
     reason: &'static str,
     log: &Logger,
     notifier: &Notifier,
-) -> Result<InsertOutcome> {
+) -> Result<InsertReport> {
     match stage_transcript_for_history(injector, text, keep_transcript_clipboard)
         .context(copy_context)?
     {
         super::inject::StageOutcome::CopiedOnly => {
             notifier.transcript_copied(reason);
-            Ok(InsertOutcome::CopiedOnly)
+            Ok(InsertReport::from_stage(InsertOutcome::CopiedOnly, false))
         }
         super::inject::StageOutcome::Blocked => {
             log.warn(format!(
                 "automatic paste skipped ({reason}); transcript staged for clipboard history"
             ));
             notifier.paste_blocked(reason);
-            Ok(InsertOutcome::Blocked)
+            Ok(InsertReport::from_stage(InsertOutcome::Blocked, true))
         }
     }
 }
@@ -725,6 +782,12 @@ pub(crate) enum PastePlan {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum InsertOutcome {
     Pasted,
+    /// The paste chord was sent, but insertion could not be positively
+    /// confirmed within the acknowledgement grace period. Treated as a
+    /// success (the clipboard was restored per policy, same as
+    /// [`Self::Pasted`]); distinct telemetry so this degraded case remains
+    /// visible.
+    PastedUnverified,
     CopiedOnly,
     Blocked,
     Skipped,
@@ -739,9 +802,68 @@ impl InsertOutcome {
     fn log_label(self) -> &'static str {
         match self {
             Self::Pasted => "pasted",
+            Self::PastedUnverified => "pasted_unverified",
             Self::CopiedOnly => "copied_only",
             Self::Blocked => "blocked",
             Self::Skipped => "skipped",
+        }
+    }
+}
+
+/// Insertion outcome plus the real acknowledgement/clipboard telemetry
+/// needed for [`log_insertion_outcome`], replacing the pre-acknowledgement
+/// approximations (`paste_event_posted` inferred from the outcome label,
+/// `clipboard_restored` always `None`).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct InsertReport {
+    /// Coarse worker-level insertion result.
+    pub(crate) outcome: InsertOutcome,
+    /// Whether a synthetic paste chord or type event was actually sent.
+    pub(crate) paste_event_posted: bool,
+    /// How insertion success was acknowledged (`"ax_confirmed"`,
+    /// `"unverified_timeout"`, `"no_evidence"`, or `"not_applicable"`).
+    pub(crate) acknowledgement_kind: &'static str,
+    /// Milliseconds spent waiting for acknowledgement, when applicable.
+    pub(crate) acknowledgement_ms: Option<u128>,
+    /// Whether the previous clipboard contents were restored, when the
+    /// clipboard was touched at all.
+    pub(crate) clipboard_restored: Option<bool>,
+}
+
+impl InsertReport {
+    /// Build a report from a completed [`super::inject::PasteReport`],
+    /// carrying its real acknowledgement/clipboard telemetry through.
+    fn from_paste(outcome: InsertOutcome, report: super::inject::PasteReport) -> Self {
+        Self {
+            outcome,
+            paste_event_posted: report.paste_event_posted,
+            acknowledgement_kind: report.acknowledgement_kind,
+            acknowledgement_ms: report.acknowledgement_ms,
+            clipboard_restored: report.clipboard_restored,
+        }
+    }
+
+    /// Build a report for a clipboard-staging-only path (no paste chord
+    /// sent), with a known clipboard-restore outcome.
+    fn from_stage(outcome: InsertOutcome, clipboard_restored: bool) -> Self {
+        Self {
+            outcome,
+            paste_event_posted: false,
+            acknowledgement_kind: "not_applicable",
+            acknowledgement_ms: None,
+            clipboard_restored: Some(clipboard_restored),
+        }
+    }
+
+    /// Build a report for a path with no acknowledgement or clipboard
+    /// telemetry at all (direct-mode insertion/block, or sanitizer skip).
+    fn placeholder(outcome: InsertOutcome, paste_event_posted: bool) -> Self {
+        Self {
+            outcome,
+            paste_event_posted,
+            acknowledgement_kind: "not_applicable",
+            acknowledgement_ms: None,
+            clipboard_restored: None,
         }
     }
 }
@@ -974,21 +1096,28 @@ mod tests {
 
     #[test]
     fn insertion_failures_remember_transcript_for_ipc_recovery() {
-        assert!(insertion_result_remembers_transcript(&Ok(
+        fn report(outcome: InsertOutcome) -> InsertReport {
+            InsertReport::placeholder(outcome, false)
+        }
+
+        assert!(insertion_result_remembers_transcript(&Ok(report(
             InsertOutcome::Pasted
-        )));
-        assert!(insertion_result_remembers_transcript(&Ok(
+        ))));
+        assert!(insertion_result_remembers_transcript(&Ok(report(
+            InsertOutcome::PastedUnverified
+        ))));
+        assert!(insertion_result_remembers_transcript(&Ok(report(
             InsertOutcome::CopiedOnly
-        )));
-        assert!(insertion_result_remembers_transcript(&Ok(
+        ))));
+        assert!(insertion_result_remembers_transcript(&Ok(report(
             InsertOutcome::Blocked
-        )));
+        ))));
         assert!(insertion_result_remembers_transcript(&Err(
             anyhow::anyhow!("paste failed")
         )));
-        assert!(!insertion_result_remembers_transcript(&Ok(
+        assert!(!insertion_result_remembers_transcript(&Ok(report(
             InsertOutcome::Skipped
-        )));
+        ))));
     }
 
     #[test]

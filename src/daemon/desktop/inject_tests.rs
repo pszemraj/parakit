@@ -1,6 +1,7 @@
 //! Unit tests for clipboard, paste, and XTest cleanup helpers.
 
 use super::*;
+use crate::daemon::desktop::clipboard_restore::default_paste_confirmation;
 use std::borrow::Cow;
 use std::cell::RefCell;
 use std::path::PathBuf;
@@ -221,6 +222,7 @@ struct MockRestoreGate {
     events: Rc<RefCell<Vec<String>>>,
     after_sequence: u32,
     timeout: bool,
+    confirmation_override: Option<PasteConfirmation>,
 }
 
 impl MockRestoreGate {
@@ -229,6 +231,7 @@ impl MockRestoreGate {
             events,
             after_sequence: 11,
             timeout: false,
+            confirmation_override: None,
         }
     }
 
@@ -239,6 +242,14 @@ impl MockRestoreGate {
 
     fn without_sequence_advance(mut self) -> Self {
         self.after_sequence = 10;
+        self
+    }
+
+    /// Make `await_paste_confirmation` return `confirmation` directly
+    /// instead of falling through to the trait's default (sleep +
+    /// `wait_before_restore`) behavior.
+    fn confirmation(mut self, confirmation: PasteConfirmation) -> Self {
+        self.confirmation_override = Some(confirmation);
         self
     }
 }
@@ -267,10 +278,57 @@ impl ClipboardRestoreGate for MockRestoreGate {
             token.after_sequence.unwrap_or_default()
         ));
     }
+
+    fn await_paste_confirmation(
+        &self,
+        token: ClipboardWriteToken,
+        fallback_delay: Duration,
+        paste_consume_delay: Duration,
+        _ctx: &PasteConfirmationContext<'_>,
+    ) -> PasteConfirmation {
+        match self.confirmation_override {
+            Some(confirmation) => {
+                self.events
+                    .borrow_mut()
+                    .push(format!("confirm:{}", confirmation_kind(confirmation)));
+                confirmation
+            }
+            // No override configured: reproduce the exact trait-default
+            // behavior so every test that does not opt into a confirmation
+            // override is unaffected by this method's addition.
+            None => default_paste_confirmation(self, token, fallback_delay, paste_consume_delay),
+        }
+    }
+}
+
+fn confirmation_kind(confirmation: PasteConfirmation) -> &'static str {
+    match confirmation {
+        PasteConfirmation::Confirmed { kind, .. }
+        | PasteConfirmation::Unverified { kind, .. }
+        | PasteConfirmation::NoEvidence { kind, .. } => kind,
+    }
 }
 
 fn restore_plan<'a, G: ClipboardRestoreGate + ?Sized>(gate: &'a G) -> ClipboardRestorePlan<'a, G> {
     ClipboardRestorePlan::new(Duration::ZERO, Duration::ZERO, gate)
+}
+
+/// A [`MockRestoreGate`] with no confirmation override and a throwaway event
+/// sink, for tests that exercise generic clipboard-swap sequencing and don't
+/// care about the paste-acknowledgement tier reached.
+///
+/// Deliberately *not* [`PlatformClipboardRestoreGate::fallback()`]: on
+/// macOS, that type's `await_paste_confirmation` override performs real
+/// `AXValue` polling (see `daemon::macos::pasteboard`). With `focus: None`
+/// (as these tests pass), that always degrades to a 1.5s
+/// [`crate::daemon::macos::pasteboard::UNVERIFIED_GRACE`] sleep and
+/// [`PasteConfirmation::Unverified`], which would make swap-mechanics tests
+/// slow, flaky across platforms, and dependent on Accessibility permissions
+/// they don't hold. This gate always resolves through
+/// [`default_paste_confirmation`] instead, matching the pre-acknowledgement
+/// behavior these tests were written against, on every platform.
+fn quiet_gate() -> MockRestoreGate {
+    MockRestoreGate::new(Rc::new(RefCell::new(Vec::new())))
 }
 
 #[test]
@@ -604,6 +662,7 @@ fn clipboard_swap_cases_are_stable() {
         }
 
         let events = clipboard.events();
+        let gate = quiet_gate();
         let result = paste_with_clipboard_swap_guarded(
             &mut clipboard,
             case.transcript,
@@ -615,8 +674,9 @@ fn clipboard_swap_cases_are_stable() {
                 }
             },
             Duration::ZERO,
-            restore_plan(&PlatformClipboardRestoreGate::fallback()),
+            restore_plan(&gate),
             ClipboardPolicy::RestorePrevious,
+            None,
             || {
                 events.borrow_mut().push("guard".to_string());
                 Ok(case.guard_allows)
@@ -657,6 +717,7 @@ fn clipboard_guard_error_before_staging_leaves_clipboard_untouched() {
         Duration::ZERO,
         restore_plan(&PlatformClipboardRestoreGate::fallback()),
         ClipboardPolicy::RestorePrevious,
+        None,
         || {
             events.borrow_mut().push("guard".to_string());
             Err(anyhow::anyhow!("focus unavailable"))
@@ -679,6 +740,7 @@ fn clipboard_keep_transcript_policy_leaves_text_after_guard_block() {
         Duration::ZERO,
         restore_plan(&PlatformClipboardRestoreGate::fallback()),
         ClipboardPolicy::KeepTranscript,
+        None,
         || Ok(false),
     )
     .expect("clipboard keep policy should not fail");
@@ -785,7 +847,12 @@ fn clipboard_restore_gate_cases_are_stable() {
             ],
         },
         ClipboardRestoreCase {
-            name: "keep transcript never waits or restores",
+            // Confirmation still runs under `KeepTranscript` (the outcome
+            // variant, e.g. `Pasted` vs `PastedUnverified` vs a no-evidence
+            // `CopiedOnly`, is meaningful telemetry/UX regardless of
+            // clipboard policy), but it never restores the previous
+            // clipboard contents.
+            name: "keep transcript still awaits confirmation but never restores",
             initial: "old clipboard",
             action: ClipboardRestoreAction::Paste,
             policy: ClipboardPolicy::KeepTranscript,
@@ -800,6 +867,7 @@ fn clipboard_restore_gate_cases_are_stable() {
                 "after-write:11",
                 "guard",
                 "paste",
+                "wait:10->11",
             ],
         },
         ClipboardRestoreCase {
@@ -839,6 +907,7 @@ fn clipboard_restore_gate_cases_are_stable() {
                 Duration::ZERO,
                 restore_plan(&gate),
                 case.policy,
+                None,
                 || {
                     events.borrow_mut().push("guard".to_string());
                     Ok(true)
@@ -959,6 +1028,7 @@ fn clipboard_restore_policy_preserves_supported_non_text_payloads() {
 
     for (name, mut clipboard, expected_content, expected_events) in cases {
         let events = clipboard.events();
+        let gate = quiet_gate();
         let result = paste_with_clipboard_swap_guarded(
             &mut clipboard,
             "dictated text",
@@ -967,8 +1037,9 @@ fn clipboard_restore_policy_preserves_supported_non_text_payloads() {
                 Ok(())
             },
             Duration::ZERO,
-            restore_plan(&PlatformClipboardRestoreGate::fallback()),
+            restore_plan(&gate),
             ClipboardPolicy::RestorePrevious,
+            None,
             || {
                 events.borrow_mut().push("guard".to_string());
                 Ok(true)
@@ -997,6 +1068,7 @@ fn unsupported_previous_clipboard_clears_staged_transcript_on_guard_block() {
         Duration::ZERO,
         restore_plan(&PlatformClipboardRestoreGate::fallback()),
         ClipboardPolicy::RestorePrevious,
+        None,
         || {
             events.borrow_mut().push("guard".to_string());
             guard_calls += 1;
@@ -1011,4 +1083,119 @@ fn unsupported_previous_clipboard_clears_staged_transcript_on_guard_block() {
         events.borrow().as_slice(),
         ["guard", "read", "set:dictated text", "guard", "clear"]
     );
+}
+
+struct AcknowledgementCase {
+    name: &'static str,
+    confirmation: PasteConfirmation,
+    policy: ClipboardPolicy,
+    expected_outcome: PasteOutcome,
+    expected_acknowledgement_kind: &'static str,
+    expected_clipboard_restored: Option<bool>,
+    expected_text: &'static str,
+}
+
+#[test]
+fn post_paste_acknowledgement_tiers_drive_outcome_and_clipboard_policy() {
+    let cases = [
+        AcknowledgementCase {
+            name: "confirmed restores clipboard and reports ax_confirmed",
+            confirmation: PasteConfirmation::Confirmed {
+                elapsed: Duration::from_millis(42),
+                kind: "ax_confirmed",
+            },
+            policy: ClipboardPolicy::RestorePrevious,
+            expected_outcome: PasteOutcome::Pasted,
+            expected_acknowledgement_kind: "ax_confirmed",
+            expected_clipboard_restored: Some(true),
+            expected_text: "old clipboard",
+        },
+        AcknowledgementCase {
+            name: "unverified still restores clipboard but is not Pasted",
+            confirmation: PasteConfirmation::Unverified {
+                elapsed: Duration::from_millis(1500),
+                kind: "unverified_timeout",
+            },
+            policy: ClipboardPolicy::RestorePrevious,
+            expected_outcome: PasteOutcome::PastedUnverified,
+            expected_acknowledgement_kind: "unverified_timeout",
+            expected_clipboard_restored: Some(true),
+            expected_text: "old clipboard",
+        },
+        AcknowledgementCase {
+            name: "no evidence leaves transcript on the clipboard instead of restoring",
+            confirmation: PasteConfirmation::NoEvidence {
+                elapsed: Duration::from_millis(1800),
+                kind: "no_evidence",
+            },
+            policy: ClipboardPolicy::RestorePrevious,
+            expected_outcome: PasteOutcome::CopiedOnly,
+            expected_acknowledgement_kind: "no_evidence",
+            expected_clipboard_restored: Some(false),
+            expected_text: "dictated text",
+        },
+        AcknowledgementCase {
+            name: "confirmed with keep-transcript policy leaves transcript on the clipboard",
+            confirmation: PasteConfirmation::Confirmed {
+                elapsed: Duration::from_millis(10),
+                kind: "ax_confirmed",
+            },
+            policy: ClipboardPolicy::KeepTranscript,
+            expected_outcome: PasteOutcome::Pasted,
+            expected_acknowledgement_kind: "ax_confirmed",
+            expected_clipboard_restored: Some(false),
+            expected_text: "dictated text",
+        },
+    ];
+
+    for case in cases {
+        let mut clipboard = MockClipboard::new("old clipboard");
+        let events = clipboard.events();
+        let gate = MockRestoreGate::new(Rc::clone(&events)).confirmation(case.confirmation);
+        let result = paste_with_clipboard_swap_guarded(
+            &mut clipboard,
+            "dictated text",
+            || {
+                events.borrow_mut().push("paste".to_string());
+                Ok(())
+            },
+            Duration::ZERO,
+            restore_plan(&gate),
+            case.policy,
+            None,
+            || {
+                events.borrow_mut().push("guard".to_string());
+                Ok(true)
+            },
+        )
+        .expect(case.name);
+
+        assert_eq!(result.outcome, case.expected_outcome, "{}", case.name);
+        assert_eq!(
+            result.acknowledgement_kind, case.expected_acknowledgement_kind,
+            "{}",
+            case.name
+        );
+        assert!(
+            result.acknowledgement_ms.is_some(),
+            "{}: acknowledgement_ms should be populated",
+            case.name
+        );
+        assert_eq!(
+            result.clipboard_restored, case.expected_clipboard_restored,
+            "{}",
+            case.name
+        );
+        assert!(result.paste_event_posted, "{}", case.name);
+        assert_eq!(clipboard.text(), Some(case.expected_text), "{}", case.name);
+        assert!(
+            events
+                .borrow()
+                .iter()
+                .any(|event| event.starts_with("confirm:")),
+            "{}: expected a confirm: event, got {:?}",
+            case.name,
+            events.borrow()
+        );
+    }
 }

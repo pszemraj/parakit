@@ -383,6 +383,9 @@ fn handle_command(
                 response: IpcResponse::Ok {
                     message: match result {
                         InsertOutcome::Pasted => "pasted last transcript",
+                        InsertOutcome::PastedUnverified => {
+                            "pasted last transcript (insertion unconfirmed)"
+                        }
                         InsertOutcome::CopiedOnly => "copied last transcript",
                         InsertOutcome::Blocked => "paste blocked",
                         InsertOutcome::Skipped => "paste skipped",
@@ -414,6 +417,9 @@ fn handle_command(
                 response: IpcResponse::Ok {
                     message: match result {
                         InsertOutcome::Pasted => "test paste sent",
+                        InsertOutcome::PastedUnverified => {
+                            "test paste sent (insertion unconfirmed)"
+                        }
                         InsertOutcome::CopiedOnly => "test text copied",
                         InsertOutcome::Blocked => "test paste blocked",
                         InsertOutcome::Skipped => "test paste skipped",
@@ -490,6 +496,7 @@ fn paste_text(
         (log, notifier),
         false,
     )
+    .map(|report| report.outcome)
     .context("could not send paste command")
 }
 

@@ -31,7 +31,8 @@ use super::clipboard_restore::clipboard_history_debug;
 #[cfg(test)]
 use super::clipboard_restore::ClipboardWriteSnapshot;
 use super::clipboard_restore::{
-    ClipboardRestoreGate, ClipboardRestorePlan, ClipboardWriteToken, PlatformClipboardRestoreGate,
+    ClipboardRestoreGate, ClipboardRestorePlan, ClipboardWriteToken, PasteConfirmation,
+    PasteConfirmationContext, PlatformClipboardRestoreGate,
 };
 
 #[cfg(target_os = "linux")]
@@ -70,8 +71,18 @@ impl PasteMode {
 /// Result of a guarded paste attempt.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum PasteOutcome {
-    /// The paste chord or direct typing path was sent.
+    /// The paste chord or direct typing path was sent, and insertion was
+    /// positively confirmed (or no stronger confirmation signal exists on
+    /// this platform, in which case this is the historical unconditional
+    /// meaning of "pasted").
     Pasted,
+    /// The paste chord was sent, but insertion could not be positively
+    /// confirmed within the acknowledgement grace period (e.g. on macOS,
+    /// `AXValue` could not be polled at all — see the `daemon::macos::pasteboard`
+    /// module docs for why that happens legitimately). Treated as a success
+    /// for retry and clipboard-restore purposes, distinct telemetry from
+    /// [`Self::Pasted`].
+    PastedUnverified,
     /// The transcript was left on the clipboard and no synthetic input was sent.
     CopiedOnly,
     /// No paste chord was sent and clipboard policy was applied.
@@ -81,10 +92,12 @@ pub(crate) enum PasteOutcome {
 /// Outcome of a guarded paste attempt plus the insertion telemetry needed to
 /// populate a `parakit::data_log::InsertionLogFields` record.
 ///
-/// Acknowledgement fields are placeholders until a later commit wires up
-/// real confirmation (e.g. Accessibility read-back); for now every report
-/// carries `acknowledgement_kind: "not_applicable"` and `acknowledgement_ms:
-/// None`.
+/// Most call sites still carry placeholder acknowledgement fields
+/// (`acknowledgement_kind: "not_applicable"`, `acknowledgement_ms: None`):
+/// paths that never send a paste chord (staging, guard-blocked, direct
+/// typing) have nothing to acknowledge. The post-paste-chord success path in
+/// [`paste_with_clipboard_swap_guarded`] populates real values from
+/// [`crate::daemon::desktop::clipboard_restore::PasteConfirmation`].
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct PasteReport {
     /// Coarse guarded-paste result.
@@ -533,6 +546,21 @@ impl FocusSnapshot {
     pub(crate) fn target_bundle_id(&self) -> Option<&str> {
         None
     }
+
+    /// Return the focused Accessibility element captured for this snapshot,
+    /// when one is available for post-paste `AXValue` acknowledgement
+    /// polling.
+    ///
+    /// # Returns
+    ///
+    /// `Some` when this snapshot captured a focused Accessibility element
+    /// (see [`crate::daemon::macos::MacOsFocusSnapshot::ax_element`] for the
+    /// cases where it did not, e.g. capture-time Accessibility failure or a
+    /// secure input field).
+    #[cfg(target_os = "macos")]
+    pub(crate) fn macos_ax_element(&self) -> Option<&crate::daemon::macos::AxElementSnapshot> {
+        self.macos.ax_element()
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -644,14 +672,21 @@ impl Injector {
     ///
     /// * `text` - Transcript text to insert.
     /// * `mode` - Paste shortcut style to send after updating the clipboard.
+    /// * `clipboard_policy` - Clipboard retention policy after paste or guarded cancellation.
+    /// * `focus` - Focus snapshot captured before insertion became eligible,
+    ///   when available. Passed through to the post-paste acknowledgement
+    ///   strategy (e.g. macOS `AXValue` confirmation polling reads the
+    ///   focused Accessibility element from this snapshot).
     ///
     /// # Returns
     ///
-    /// A [`PasteReport`] whose `outcome` is [`PasteOutcome::Pasted`] when
-    /// synthetic input was sent, [`PasteOutcome::CopiedOnly`] when the guard
-    /// blocked insertion and the transcript was intentionally left on the
-    /// clipboard, or [`PasteOutcome::Blocked`] when no input was sent and the
-    /// previous clipboard was restored.
+    /// A [`PasteReport`] whose `outcome` is [`PasteOutcome::Pasted`] or
+    /// [`PasteOutcome::PastedUnverified`] when synthetic input was sent,
+    /// [`PasteOutcome::CopiedOnly`] when the guard blocked insertion (or
+    /// post-paste acknowledgement never found evidence of insertion) and the
+    /// transcript was intentionally left on the clipboard, or
+    /// [`PasteOutcome::Blocked`] when no input was sent and the previous
+    /// clipboard was restored.
     ///
     /// # Errors
     ///
@@ -662,6 +697,7 @@ impl Injector {
         text: &str,
         mode: PasteMode,
         clipboard_policy: ClipboardPolicy,
+        focus: Option<&FocusSnapshot>,
         mut before_chord: impl FnMut() -> Result<bool>,
     ) -> Result<PasteReport> {
         if text.is_empty() {
@@ -693,6 +729,7 @@ impl Injector {
             clipboard_settle_delay(),
             restore_plan,
             clipboard_policy,
+            focus,
             before_chord,
         );
         self.clipboard = Some(clipboard);
@@ -849,6 +886,13 @@ impl Injector {
     }
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "each parameter is an independently meaningful piece of the guarded-paste transaction \
+              (clipboard, transcript, paste sender, timing, restore policy, clipboard policy, focus \
+              context for acknowledgement, and the safety-recheck closure); grouping them would just \
+              move the complexity into an ad hoc params struct with no real callers besides this fn"
+)]
 fn paste_with_clipboard_swap_guarded<C, P, G, H>(
     clipboard: &mut C,
     text: &str,
@@ -856,6 +900,7 @@ fn paste_with_clipboard_swap_guarded<C, P, G, H>(
     settle_delay: Duration,
     restore_plan: ClipboardRestorePlan<'_, H>,
     clipboard_policy: ClipboardPolicy,
+    focus: Option<&FocusSnapshot>,
     mut before_chord: G,
 ) -> Result<PasteReport>
 where
@@ -903,7 +948,6 @@ where
                 write_token,
                 restore_plan,
                 clipboard_policy,
-                RestoreWait::BeforeRestore,
             );
             return match restore_result {
                 Ok(()) => Err(err),
@@ -914,22 +958,15 @@ where
 
     let paste_result = paste();
     match paste_result {
-        Ok(()) => {
-            restore_after_delay(
-                clipboard,
-                previous,
-                write_token,
-                restore_plan,
-                clipboard_policy,
-                RestoreWait::AfterPaste,
-            )?;
-            let clipboard_restored = Some(clipboard_policy == ClipboardPolicy::RestorePrevious);
-            Ok(PasteReport::new(
-                PasteOutcome::Pasted,
-                true,
-                clipboard_restored,
-            ))
-        }
+        Ok(()) => finish_confirmed_paste(
+            clipboard,
+            previous,
+            write_token,
+            restore_plan,
+            clipboard_policy,
+            focus,
+            text,
+        ),
         Err(paste_err) => {
             let restore_result = restore_after_delay(
                 clipboard,
@@ -937,12 +974,86 @@ where
                 write_token,
                 restore_plan,
                 clipboard_policy,
-                RestoreWait::BeforeRestore,
             );
             match restore_result {
                 Ok(()) => Err(paste_err),
                 Err(restore_err) => Err(paste_err.context(format!("{restore_err:#}"))),
             }
+        }
+    }
+}
+
+/// Resolve the outcome of a paste chord that was sent successfully: await
+/// acknowledgement, then restore or retain the clipboard per policy and the
+/// acknowledgement tier reached.
+///
+/// # Arguments
+///
+/// * `clipboard` - Clipboard backend to update.
+/// * `previous` - Snapshot captured before staging transcript text.
+/// * `write_token` - Clipboard write token for the staged transcript.
+/// * `restore_plan` - Restore timing/acknowledgement policy.
+/// * `clipboard_policy` - Policy deciding whether restoration should occur.
+/// * `focus` - Focus snapshot passed through to the acknowledgement strategy.
+/// * `text` - Transcript text that was just pasted.
+///
+/// # Errors
+///
+/// Returns an error if the previous clipboard payload cannot be restored.
+fn finish_confirmed_paste<C, H>(
+    clipboard: &mut C,
+    previous: ClipboardSnapshot,
+    write_token: ClipboardWriteToken,
+    restore_plan: ClipboardRestorePlan<'_, H>,
+    clipboard_policy: ClipboardPolicy,
+    focus: Option<&FocusSnapshot>,
+    text: &str,
+) -> Result<PasteReport>
+where
+    C: ClipboardStore,
+    H: ClipboardRestoreGate + ?Sized,
+{
+    let confirmation = restore_plan.await_paste_confirmation(
+        write_token,
+        &PasteConfirmationContext {
+            focus,
+            transcript: text,
+        },
+    );
+
+    match confirmation {
+        PasteConfirmation::Confirmed { elapsed, kind } => {
+            restore_or_clear_clipboard(clipboard, previous, clipboard_policy)?;
+            Ok(PasteReport {
+                outcome: PasteOutcome::Pasted,
+                paste_event_posted: true,
+                acknowledgement_kind: kind,
+                acknowledgement_ms: Some(elapsed.as_millis()),
+                clipboard_restored: Some(clipboard_policy == ClipboardPolicy::RestorePrevious),
+            })
+        }
+        PasteConfirmation::Unverified { elapsed, kind } => {
+            restore_or_clear_clipboard(clipboard, previous, clipboard_policy)?;
+            Ok(PasteReport {
+                outcome: PasteOutcome::PastedUnverified,
+                paste_event_posted: true,
+                acknowledgement_kind: kind,
+                acknowledgement_ms: Some(elapsed.as_millis()),
+                clipboard_restored: Some(clipboard_policy == ClipboardPolicy::RestorePrevious),
+            })
+        }
+        PasteConfirmation::NoEvidence { elapsed, kind } => {
+            // No evidence the target consumed the paste: `previous` is
+            // dropped here without being restored, and the transcript
+            // intentionally stays on the clipboard so it is not lost.
+            // Uncertainty must never destroy the transcript.
+            Ok(PasteReport {
+                outcome: PasteOutcome::CopiedOnly,
+                paste_event_posted: true,
+                acknowledgement_kind: kind,
+                acknowledgement_ms: Some(elapsed.as_millis()),
+                clipboard_restored: Some(false),
+            })
         }
     }
 }
@@ -976,7 +1087,6 @@ where
         write_token,
         restore_plan,
         clipboard_policy,
-        RestoreWait::BeforeRestore,
     )?;
     Ok(StageOutcome::Blocked)
 }
@@ -998,7 +1108,6 @@ where
         write_token,
         restore_plan,
         clipboard_policy,
-        RestoreWait::BeforeRestore,
     )?;
     Ok(match clipboard_policy {
         ClipboardPolicy::RestorePrevious => {
@@ -1010,29 +1119,34 @@ where
     })
 }
 
-#[derive(Clone, Copy)]
-enum RestoreWait {
-    BeforeRestore,
-    AfterPaste,
-}
-
+/// Wait for the fallback/history-based restore signal, then restore or
+/// clear the clipboard per policy.
+///
+/// Used by every guarded-cancellation and error path that never reaches a
+/// paste chord (and therefore never has paste-acknowledgement evidence to
+/// consult): the guard-blocked-after-staging path, the post-settle guard
+/// recheck failure path, the paste-error path, and plain staging. The
+/// post-paste-chord success path uses
+/// [`ClipboardRestorePlan::await_paste_confirmation`] instead (see
+/// [`finish_confirmed_paste`]), since by then a paste chord was actually
+/// sent and a real acknowledgement signal may be available.
+///
+/// # Errors
+///
+/// Returns an error if the previous clipboard payload cannot be restored.
 fn restore_after_delay<C, H>(
     clipboard: &mut C,
     previous: ClipboardSnapshot,
     write_token: ClipboardWriteToken,
     restore_plan: ClipboardRestorePlan<'_, H>,
     clipboard_policy: ClipboardPolicy,
-    wait: RestoreWait,
 ) -> Result<()>
 where
     C: ClipboardStore,
     H: ClipboardRestoreGate + ?Sized,
 {
     if clipboard_policy == ClipboardPolicy::RestorePrevious {
-        match wait {
-            RestoreWait::BeforeRestore => restore_plan.wait_before_restore(write_token),
-            RestoreWait::AfterPaste => restore_plan.wait_after_paste_before_restore(write_token),
-        }
+        restore_plan.wait_before_restore(write_token);
     }
     restore_or_clear_clipboard(clipboard, previous, clipboard_policy)
 }
