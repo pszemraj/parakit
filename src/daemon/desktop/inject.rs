@@ -78,6 +78,61 @@ pub(crate) enum PasteOutcome {
     Blocked,
 }
 
+/// Outcome of a guarded paste attempt plus the insertion telemetry needed to
+/// populate a `parakit::data_log::InsertionLogFields` record.
+///
+/// Acknowledgement fields are placeholders until a later commit wires up
+/// real confirmation (e.g. Accessibility read-back); for now every report
+/// carries `acknowledgement_kind: "not_applicable"` and `acknowledgement_ms:
+/// None`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PasteReport {
+    /// Coarse guarded-paste result.
+    pub(crate) outcome: PasteOutcome,
+    /// Whether a synthetic paste chord or type event was actually sent.
+    pub(crate) paste_event_posted: bool,
+    /// How insertion success was acknowledged. Always `"not_applicable"`
+    /// until acknowledgement machinery lands.
+    pub(crate) acknowledgement_kind: &'static str,
+    /// Milliseconds spent waiting for acknowledgement. Always `None` until
+    /// acknowledgement machinery lands.
+    pub(crate) acknowledgement_ms: Option<u128>,
+    /// Whether the previous clipboard contents were restored, when the
+    /// clipboard was touched at all.
+    pub(crate) clipboard_restored: Option<bool>,
+}
+
+impl PasteReport {
+    /// Build a report with the not-yet-wired acknowledgement fields set to
+    /// their placeholder values.
+    fn new(
+        outcome: PasteOutcome,
+        paste_event_posted: bool,
+        clipboard_restored: Option<bool>,
+    ) -> Self {
+        Self {
+            outcome,
+            paste_event_posted,
+            acknowledgement_kind: "not_applicable",
+            acknowledgement_ms: None,
+            clipboard_restored,
+        }
+    }
+}
+
+/// Convert a completed clipboard-staging outcome into a [`PasteReport`].
+///
+/// Staging never sends a paste chord. [`StageOutcome::CopiedOnly`] means the
+/// transcript was intentionally left on the clipboard (no restore);
+/// [`StageOutcome::Blocked`] means the previous clipboard contents were
+/// restored.
+fn report_from_stage_outcome(outcome: StageOutcome) -> PasteReport {
+    match outcome {
+        StageOutcome::CopiedOnly => PasteReport::new(PasteOutcome::CopiedOnly, false, Some(false)),
+        StageOutcome::Blocked => PasteReport::new(PasteOutcome::Blocked, false, Some(true)),
+    }
+}
+
 /// Result of staging clipboard text without sending paste or type input.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum StageOutcome {
@@ -411,6 +466,31 @@ impl FocusSnapshot {
             self.macos.matches_current()
         }
     }
+
+    /// Return the bundle identifier of the captured insertion target, when
+    /// the platform focus snapshot carries one.
+    ///
+    /// # Returns
+    ///
+    /// `Some` bundle identifier on macOS when the frontmost application
+    /// reported one; `None` on platforms whose focus snapshot has no
+    /// application bundle identifier concept.
+    #[cfg(target_os = "macos")]
+    pub(crate) fn target_bundle_id(&self) -> Option<&str> {
+        self.macos.bundle_id()
+    }
+
+    /// Return the bundle identifier of the captured insertion target, when
+    /// the platform focus snapshot carries one.
+    ///
+    /// # Returns
+    ///
+    /// Always `None`: Linux and Windows focus snapshots do not carry an
+    /// application bundle identifier today.
+    #[cfg(not(target_os = "macos"))]
+    pub(crate) fn target_bundle_id(&self) -> Option<&str> {
+        None
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -525,11 +605,11 @@ impl Injector {
     ///
     /// # Returns
     ///
-    /// [`PasteOutcome::Pasted`] when synthetic input was sent,
-    /// [`PasteOutcome::CopiedOnly`] when the guard blocked insertion and the
-    /// transcript was intentionally left on the clipboard, or
-    /// [`PasteOutcome::Blocked`] when no input was sent and the previous
-    /// clipboard was restored.
+    /// A [`PasteReport`] whose `outcome` is [`PasteOutcome::Pasted`] when
+    /// synthetic input was sent, [`PasteOutcome::CopiedOnly`] when the guard
+    /// blocked insertion and the transcript was intentionally left on the
+    /// clipboard, or [`PasteOutcome::Blocked`] when no input was sent and the
+    /// previous clipboard was restored.
     ///
     /// # Errors
     ///
@@ -541,14 +621,18 @@ impl Injector {
         mode: PasteMode,
         clipboard_policy: ClipboardPolicy,
         mut before_chord: impl FnMut() -> Result<bool>,
-    ) -> Result<PasteOutcome> {
+    ) -> Result<PasteReport> {
         if text.is_empty() {
-            return Ok(PasteOutcome::Pasted);
+            // Nothing was staged or sent; this short-circuit exists as a
+            // defensive no-op for callers (e.g. IPC/test paths) that might
+            // pass empty text directly, bypassing the sanitizer that already
+            // filters this out on the worker path.
+            return Ok(PasteReport::new(PasteOutcome::Pasted, false, None));
         }
         if mode == PasteMode::Direct {
             if before_chord()? {
                 self.type_text(text)?;
-                return Ok(PasteOutcome::Pasted);
+                return Ok(PasteReport::new(PasteOutcome::Pasted, true, None));
             }
             anyhow::bail!("direct insertion blocked by safety guard");
         }
@@ -731,7 +815,7 @@ fn paste_with_clipboard_swap_guarded<C, P, G, H>(
     restore_plan: ClipboardRestorePlan<'_, H>,
     clipboard_policy: ClipboardPolicy,
     mut before_chord: G,
-) -> Result<PasteOutcome>
+) -> Result<PasteReport>
 where
     C: ClipboardStore,
     P: FnMut() -> Result<()>,
@@ -739,14 +823,14 @@ where
     H: ClipboardRestoreGate + ?Sized,
 {
     if text.is_empty() {
-        return Ok(PasteOutcome::Pasted);
+        return Ok(PasteReport::new(PasteOutcome::Pasted, false, None));
     }
 
     match before_chord() {
         Ok(true) => {}
         Ok(false) => {
             return stage_text_without_paste(clipboard, text, restore_plan, clipboard_policy)
-                .map(PasteOutcome::from);
+                .map(report_from_stage_outcome);
         }
         Err(err) => return Err(err),
     }
@@ -797,7 +881,12 @@ where
                 clipboard_policy,
                 RestoreWait::AfterPaste,
             )?;
-            Ok(PasteOutcome::Pasted)
+            let clipboard_restored = Some(clipboard_policy == ClipboardPolicy::RestorePrevious);
+            Ok(PasteReport::new(
+                PasteOutcome::Pasted,
+                true,
+                clipboard_restored,
+            ))
         }
         Err(paste_err) => {
             let restore_result = restore_after_delay(
@@ -856,7 +945,7 @@ fn finish_blocked_clipboard<C, H>(
     write_token: ClipboardWriteToken,
     restore_plan: ClipboardRestorePlan<'_, H>,
     clipboard_policy: ClipboardPolicy,
-) -> Result<PasteOutcome>
+) -> Result<PasteReport>
 where
     C: ClipboardStore,
     H: ClipboardRestoreGate + ?Sized,
@@ -870,8 +959,12 @@ where
         RestoreWait::BeforeRestore,
     )?;
     Ok(match clipboard_policy {
-        ClipboardPolicy::RestorePrevious => PasteOutcome::Blocked,
-        ClipboardPolicy::KeepTranscript => PasteOutcome::CopiedOnly,
+        ClipboardPolicy::RestorePrevious => {
+            PasteReport::new(PasteOutcome::Blocked, false, Some(true))
+        }
+        ClipboardPolicy::KeepTranscript => {
+            PasteReport::new(PasteOutcome::CopiedOnly, false, Some(false))
+        }
     })
 }
 

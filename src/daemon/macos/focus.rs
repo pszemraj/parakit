@@ -74,6 +74,17 @@ impl MacOsFocusSnapshot {
         Ok(self.same_target(&current))
     }
 
+    /// Return the bundle identifier of the captured frontmost application,
+    /// when macOS reported one.
+    ///
+    /// # Returns
+    ///
+    /// The bundle identifier string, or `None` when the frontmost
+    /// application had no bundle identifier.
+    pub(crate) fn bundle_id(&self) -> Option<&str> {
+        self.bundle_identifier.as_deref()
+    }
+
     fn same_target(&self, current: &Self) -> bool {
         current.pid == self.pid
             && current.bundle_identifier == self.bundle_identifier

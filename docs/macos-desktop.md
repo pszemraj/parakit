@@ -84,6 +84,8 @@ nohup parakit --quiet >/dev/null 2>>"$HOME/.local/state/parakit/parakit.err" &
 
 macOS insertion behavior, focus-change handling, and recovery commands are in [running.md#insertion](running.md#insertion).
 
+Paste-failure and paste-fallback notifications (transcript copied, paste blocked, paste temporarily disabled, microphone unavailable/recovered) surface as real Notification Center banners on macOS, sent through `osascript`/`display notification`. If macOS does not show them, check System Settings > Notifications; some macOS versions file `osascript`-originated notifications under "Script Editor" rather than under "parakit".
+
 ## Metal Verification
 
 Use verbose doctor output to confirm the Metal build and visible compute device:

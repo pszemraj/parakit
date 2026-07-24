@@ -173,6 +173,13 @@ parakit --log-dir "$HOME/.parakit/logs" --log-format tsv
 
 One JSONL or TSV file is written per local day. Records include timestamp, audio seconds, inference milliseconds, raw text, cleaned text, and active rule count. Audio is never logged.
 
+Each transcription record is followed by an insertion-outcome record once insertion resolves, so a transcript and how it was (or was not) delivered can be joined:
+
+- **JSONL**: the insertion outcome is a second, independent line: `{"kind":"insertion","ts":...,"ref_id":<N>,"outcome":...,"target_bundle_id":...,"focus_verification":...,"transcript_chars":...,"paste_event_posted":...,"pasteboard_requested":...,"acknowledgement_kind":...,"acknowledgement_ms":...,"clipboard_restored":...,"failure_reason":...}`. `ref_id` matches the transcription line written immediately before it; the transcription line itself is unchanged and has no `kind` key.
+- **TSV**: the transcription row is buffered rather than written immediately. The insertion outcome completes it by appending ten trailing tab-separated columns, in this order: `outcome`, `target_bundle_id`, `focus_verification`, `transcript_chars`, `paste_event_posted`, `pasteboard_requested`, `acknowledgement_kind`, `acknowledgement_ms`, `clipboard_restored`, `failure_reason`. Missing/`None` values are empty cells; booleans are `true`/`false`. If insertion never resolves within roughly 30 seconds (e.g. the daemon exits mid-insertion), the buffered row is still flushed with the six transcript columns and empty insertion columns, so the transcript itself is never silently dropped.
+
+Field meanings: `outcome` is a coarse result such as `pasted`, `copied_only`, `blocked`, `skipped`, or `error`. `target_bundle_id` is the macOS bundle identifier of the insertion target when known (always empty/`null` on Linux and Windows today). `focus_verification`, `acknowledgement_kind`, `acknowledgement_ms`, `pasteboard_requested`, and `clipboard_restored` are reserved for finer-grained focus and acknowledgement telemetry; most are `not_applicable`/empty in this release and will be populated as that plumbing lands. `failure_reason` holds the error message when `outcome` is `error`.
+
 Disable cue tones:
 
 ```bash

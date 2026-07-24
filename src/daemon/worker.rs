@@ -2,7 +2,7 @@
 
 use anyhow::{Context, Result};
 use crossbeam_channel::Receiver;
-use parakit::data_log::DataLogger;
+use parakit::data_log::{DataLogger, InsertionLogFields, RecordId};
 use parakit::inference::Engine;
 use parakit::rules::Cleaner;
 use std::sync::Arc;
@@ -164,15 +164,16 @@ fn worker_loop(ctx: WorkerCtx) {
 
                 match transcribe_clean(&engine, &pcm, cleaner.as_deref()) {
                     Ok(Some(transcript)) => {
-                        if let Some(data_log) = &data_log {
+                        let record_id = data_log.as_ref().map(|data_log| {
                             data_log.log(
                                 secs,
                                 transcript.infer_elapsed,
                                 &transcript.raw,
                                 &transcript.cleaned,
                                 rules_active,
-                            );
-                        }
+                            )
+                        });
+                        let transcript_chars = transcript.cleaned.chars().count();
                         log.transcript(
                             &transcript.raw,
                             &transcript.cleaned,
@@ -180,6 +181,14 @@ fn worker_loop(ctx: WorkerCtx) {
                         );
                         if !insert_transcripts {
                             log.verbose("parakit: insertion skipped for PTT audio simulation");
+                            log_insertion_outcome(
+                                &data_log,
+                                record_id,
+                                "skipped",
+                                focus_at_start.as_deref(),
+                                transcript_chars,
+                                None,
+                            );
                             state.set_last_transcript(transcript.cleaned.clone());
                             state.set_phase("idle");
                             sounds.success();
@@ -205,6 +214,14 @@ fn worker_loop(ctx: WorkerCtx) {
                         });
                         match insert_result {
                             Ok(outcome) => {
+                                log_insertion_outcome(
+                                    &data_log,
+                                    record_id,
+                                    outcome.log_label(),
+                                    focus_at_start.as_deref(),
+                                    transcript_chars,
+                                    None,
+                                );
                                 if outcome == InsertOutcome::Pasted {
                                     paste_circuit.record_success();
                                 }
@@ -228,6 +245,14 @@ fn worker_loop(ctx: WorkerCtx) {
                                 }
                             }
                             Err(e) => {
+                                log_insertion_outcome(
+                                    &data_log,
+                                    record_id,
+                                    "error",
+                                    focus_at_start.as_deref(),
+                                    transcript_chars,
+                                    Some(format!("{e:#}")),
+                                );
                                 if paste_circuit.record_failure(Instant::now()) {
                                     notifier.paste_temporarily_disabled();
                                 }
@@ -301,6 +326,55 @@ impl PasteCircuit {
 
 fn insertion_result_remembers_transcript(result: &Result<InsertOutcome>) -> bool {
     !matches!(result, Ok(InsertOutcome::Skipped))
+}
+
+/// Write an insertion-outcome telemetry record correlated with the
+/// transcription record `record_id` refers to.
+///
+/// A no-op when `data_log` or `record_id` is `None`, which happens whenever
+/// data logging is disabled or the transcription record itself failed to log.
+///
+/// # Arguments
+///
+/// * `data_log` - Optional shared transcription logger.
+/// * `record_id` - Identifier of the transcription record to correlate with.
+/// * `outcome` - Coarse insertion result label.
+/// * `focus_at_start` - Focus captured before insertion became eligible, used
+///   to recover a target bundle identifier on platforms that expose one.
+/// * `transcript_chars` - Character count of the transcript offered for
+///   insertion.
+/// * `failure_reason` - Error display text when `outcome` is `"error"`.
+fn log_insertion_outcome(
+    data_log: &Option<Arc<DataLogger>>,
+    record_id: Option<RecordId>,
+    outcome: &'static str,
+    focus_at_start: Option<&FocusSnapshot>,
+    transcript_chars: usize,
+    failure_reason: Option<String>,
+) {
+    let (Some(data_log), Some(record_id)) = (data_log, record_id) else {
+        return;
+    };
+    let target_bundle_id = focus_at_start.and_then(FocusSnapshot::target_bundle_id);
+    data_log.log_insertion(
+        record_id,
+        InsertionLogFields {
+            outcome,
+            target_bundle_id,
+            // TODO(commit 3): distinguish "matched"/"changed"/"unavailable"
+            // once focus_allows_insertion's result is plumbed into
+            // InsertOutcome (or a richer type) instead of being folded into
+            // a plain bool before it reaches this function.
+            focus_verification: "not_applicable",
+            transcript_chars,
+            paste_event_posted: outcome == "pasted",
+            pasteboard_requested: None,
+            acknowledgement_kind: "not_applicable",
+            acknowledgement_ms: None,
+            clipboard_restored: None,
+            failure_reason: failure_reason.as_deref(),
+        },
+    );
 }
 
 /// Sanitize text and run the shared paste/copy insertion transaction.
@@ -448,15 +522,17 @@ fn paste_transcript(
             || Ok(focus_allows_insertion(focus, log)),
         );
     let paste_error = match paste_result {
-        Ok(super::inject::PasteOutcome::Pasted) => return Ok(InsertOutcome::Pasted),
-        Ok(super::inject::PasteOutcome::CopiedOnly) => {
-            notifier.transcript_copied("Focus changed immediately before paste.");
-            return Ok(InsertOutcome::CopiedOnly);
-        }
-        Ok(super::inject::PasteOutcome::Blocked) => {
-            notifier.paste_blocked("Focus changed immediately before paste.");
-            return Ok(InsertOutcome::Blocked);
-        }
+        Ok(report) => match report.outcome {
+            super::inject::PasteOutcome::Pasted => return Ok(InsertOutcome::Pasted),
+            super::inject::PasteOutcome::CopiedOnly => {
+                notifier.transcript_copied("Focus changed immediately before paste.");
+                return Ok(InsertOutcome::CopiedOnly);
+            }
+            super::inject::PasteOutcome::Blocked => {
+                notifier.paste_blocked("Focus changed immediately before paste.");
+                return Ok(InsertOutcome::Blocked);
+            }
+        },
         Err(err) => err,
     };
 
@@ -614,6 +690,22 @@ pub(crate) enum InsertOutcome {
     CopiedOnly,
     Blocked,
     Skipped,
+}
+
+impl InsertOutcome {
+    /// Return the stable label used for data-log insertion telemetry.
+    ///
+    /// # Returns
+    ///
+    /// A lowercase, `snake_case` outcome label.
+    fn log_label(self) -> &'static str {
+        match self {
+            Self::Pasted => "pasted",
+            Self::CopiedOnly => "copied_only",
+            Self::Blocked => "blocked",
+            Self::Skipped => "skipped",
+        }
+    }
 }
 
 /// Sanitize text before any clipboard or paste action.

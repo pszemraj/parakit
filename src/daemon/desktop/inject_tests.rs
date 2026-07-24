@@ -628,7 +628,10 @@ fn clipboard_swap_cases_are_stable() {
                 let err = result.expect_err(case.name);
                 assert!(format!("{err:#}").contains(fragment), "{}", case.name);
             }
-            None => assert_eq!(result.expect(case.name), case.expected_outcome.unwrap()),
+            None => assert_eq!(
+                result.expect(case.name).outcome,
+                case.expected_outcome.unwrap()
+            ),
         }
         assert_eq!(clipboard.text(), case.expected_text, "{}", case.name);
         assert_eq!(
@@ -681,7 +684,9 @@ fn clipboard_keep_transcript_policy_leaves_text_after_guard_block() {
     .expect("clipboard keep policy should not fail");
 
     assert_eq!(clipboard.text(), Some("dictated text"));
-    assert_eq!(result, PasteOutcome::CopiedOnly);
+    assert_eq!(result.outcome, PasteOutcome::CopiedOnly);
+    assert!(!result.paste_event_posted);
+    assert_eq!(result.clipboard_restored, Some(false));
 }
 
 #[derive(Clone, Copy)]
@@ -845,11 +850,11 @@ fn clipboard_restore_gate_cases_are_stable() {
                 restore_plan(&gate),
                 case.policy,
             )
-            .map(PasteOutcome::from),
+            .map(report_from_stage_outcome),
         }
         .expect(case.name);
 
-        assert_eq!(result, case.expected_outcome, "{}", case.name);
+        assert_eq!(result.outcome, case.expected_outcome, "{}", case.name);
         assert_eq!(clipboard.text(), Some(case.expected_text), "{}", case.name);
         assert_eq!(
             events
@@ -971,7 +976,7 @@ fn clipboard_restore_policy_preserves_supported_non_text_payloads() {
         )
         .expect(name);
 
-        assert_eq!(result, PasteOutcome::Pasted, "{name}");
+        assert_eq!(result.outcome, PasteOutcome::Pasted, "{name}");
         assert_eq!(clipboard.content, expected_content, "{name}");
         assert_eq!(events.borrow().as_slice(), expected_events, "{name}");
     }
@@ -1000,7 +1005,7 @@ fn unsupported_previous_clipboard_clears_staged_transcript_on_guard_block() {
     )
     .expect("unsupported clipboard should clear staged transcript on guard block");
 
-    assert_eq!(result, PasteOutcome::Blocked);
+    assert_eq!(result.outcome, PasteOutcome::Blocked);
     assert_eq!(clipboard.content, MockClipboardContent::Empty);
     assert_eq!(
         events.borrow().as_slice(),
