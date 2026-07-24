@@ -1,5 +1,27 @@
 # Development Notes
 
+## Git Hooks
+
+The repository ships a pre-commit hook in `.githooks/`. Enable it once per clone:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+Every commit is checked for conflict markers, whitespace errors, and accidental `vendor/` submodule pointer bumps. Commits that stage Rust files or `Cargo.toml`/`Cargo.lock` additionally run:
+
+- `cargo fmt --package parakit -- --check` (package-scoped so the vendored CrispASR submodule is never reformatted)
+- [rustdoc-checker](https://github.com/pszemraj/rustdoc-checker) in `--strict` mode, excluding `target` and `vendor` (skipped with a warning when not installed)
+- `cargo clippy --package parakit --all-targets -- -D warnings` (package-scoped so known vendored-crate deprecation warnings do not gate commits)
+
+Bypass a single commit with `git commit --no-verify`. The hook is a fast gate, not the full validation loop; workspace-wide check, tests, and build still run before pushing runtime changes.
+
+Install rustdoc-checker with:
+
+```bash
+cargo install --git https://github.com/pszemraj/rustdoc-checker.git
+```
+
 ## Model Artifacts
 
 End-user startup uses the hosted [Q8_0 GGUF](https://huggingface.co/pszemraj/parakeet-tdt-0.6b-v3-gguf).
