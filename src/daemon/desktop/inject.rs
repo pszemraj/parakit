@@ -463,7 +463,49 @@ impl FocusSnapshot {
 
         #[cfg(target_os = "macos")]
         {
-            self.macos.matches_current()
+            Ok(self.macos.matches_current())
+        }
+    }
+
+    /// Return a stable telemetry label describing how focus was verified
+    /// against the live focus state at the moment of the call.
+    ///
+    /// This performs its own fresh platform focus read (independent of
+    /// [`Self::matches_current`]) so callers can record what was actually
+    /// checked immediately before insertion.
+    ///
+    /// # Returns
+    ///
+    /// One of `"matched"`, `"changed"`, `"ax_unsupported"` (macOS only, pid
+    /// and bundle identifier matched but Accessibility focused-element
+    /// identity could not be compared), or `"not_applicable"` (platforms or
+    /// error paths without a richer verification signal).
+    pub(crate) fn verify(&self) -> &'static str {
+        #[cfg(target_os = "linux")]
+        {
+            match self.matches_current() {
+                Ok(true) => "matched",
+                Ok(false) => "changed",
+                Err(_) => "not_applicable",
+            }
+        }
+
+        #[cfg(target_os = "windows")]
+        {
+            match self.windows.matches_current() {
+                Ok(true) => "matched",
+                Ok(false) => "changed",
+                Err(_) => "not_applicable",
+            }
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            match self.macos.verify_current() {
+                crate::daemon::macos::FocusVerification::Matched => "matched",
+                crate::daemon::macos::FocusVerification::Changed => "changed",
+                crate::daemon::macos::FocusVerification::AxUnsupported => "ax_unsupported",
+            }
         }
     }
 

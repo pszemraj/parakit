@@ -1,52 +1,202 @@
-//! macOS frontmost-application-window focus snapshots.
+//! macOS focused-Accessibility-element identity snapshots.
+//!
+//! A snapshot captured at push-to-talk-down is compared against a fresh
+//! read immediately before insertion. Matching is by the Accessibility
+//! focused UI element's identity (via `CFEqual`), which survives the
+//! transient window churn (palettes, popovers, sheets, z-order changes)
+//! that made the previous on-screen-window-id comparison unreliable. When
+//! Accessibility cannot expose a focused element on either side, matching
+//! falls back to frontmost-application pid + bundle identifier.
 
 use anyhow::{bail, Context, Result};
 use objc2::msg_send;
 use objc2::rc::autoreleasepool;
 use objc2_app_kit::NSWorkspace;
 use std::ffi::c_void;
+use std::ptr;
+use std::sync::OnceLock;
 
+type AXError = i32;
+type AXUIElementRef = *mut c_void;
 type Boolean = u8;
-type CFArrayRef = *const c_void;
-type CFDictionaryRef = *const c_void;
+type CFAllocatorRef = *const c_void;
 type CFIndex = isize;
-type CFNumberRef = *const c_void;
 type CFStringRef = *const c_void;
+type CFTypeID = usize;
 type CFTypeRef = *const c_void;
 
-const K_CG_NULL_WINDOW_ID: u32 = 0;
-const K_CG_WINDOW_LIST_OPTION_ON_SCREEN_ONLY: u32 = 1 << 0;
-const K_CG_WINDOW_LIST_EXCLUDE_DESKTOP_ELEMENTS: u32 = 1 << 4;
-const K_CF_NUMBER_SINT64_TYPE: i32 = 4;
+const K_AX_ERROR_SUCCESS: AXError = 0;
+const K_CF_STRING_ENCODING_UTF8: u32 = 0x0800_0100;
+
+#[link(name = "ApplicationServices", kind = "framework")]
+extern "C" {
+    fn AXUIElementCreateApplication(pid: libc::pid_t) -> AXUIElementRef;
+    fn AXUIElementCopyAttributeValue(
+        element: AXUIElementRef,
+        attribute: CFStringRef,
+        value: *mut CFTypeRef,
+    ) -> AXError;
+}
 
 #[link(name = "CoreFoundation", kind = "framework")]
 extern "C" {
-    fn CFArrayGetCount(the_array: CFArrayRef) -> CFIndex;
-    fn CFArrayGetValueAtIndex(the_array: CFArrayRef, idx: CFIndex) -> *const c_void;
-    fn CFDictionaryGetValue(the_dict: CFDictionaryRef, key: *const c_void) -> *const c_void;
-    fn CFNumberGetValue(number: CFNumberRef, the_type: i32, value_ptr: *mut c_void) -> Boolean;
+    fn CFEqual(cf1: CFTypeRef, cf2: CFTypeRef) -> Boolean;
+    fn CFGetTypeID(cf: CFTypeRef) -> CFTypeID;
     fn CFRelease(cf: CFTypeRef);
+    fn CFStringCreateWithBytes(
+        alloc: CFAllocatorRef,
+        bytes: *const u8,
+        num_bytes: CFIndex,
+        encoding: u32,
+        is_external_representation: Boolean,
+    ) -> CFStringRef;
+    fn CFStringGetCString(
+        the_string: CFStringRef,
+        buffer: *mut u8,
+        buffer_size: CFIndex,
+        encoding: u32,
+    ) -> Boolean;
+    fn CFStringGetLength(the_string: CFStringRef) -> CFIndex;
+    fn CFStringGetTypeID() -> CFTypeID;
 }
 
-#[link(name = "CoreGraphics", kind = "framework")]
-extern "C" {
-    static kCGWindowLayer: CFStringRef;
-    static kCGWindowNumber: CFStringRef;
-    static kCGWindowOwnerPID: CFStringRef;
+/// Attribute name constants (`kAXFocusedUIElementAttribute` and friends) are
+/// preprocessor macros in Apple's headers rather than linkable symbols, so
+/// they are built once here from their literal string values and cached for
+/// the life of the process (intentionally never released — a handful of
+/// interned CFStrings live for as long as the daemon runs).
+fn cached_ax_attribute(cache: &'static OnceLock<usize>, name: &'static str) -> CFStringRef {
+    let addr = *cache.get_or_init(|| cfstring_from_static_str(name) as usize);
+    addr as CFStringRef
+}
 
-    fn CGWindowListCopyWindowInfo(option: u32, relative_to_window: u32) -> CFArrayRef;
+fn cfstring_from_static_str(s: &'static str) -> CFStringRef {
+    let value = unsafe {
+        CFStringCreateWithBytes(
+            ptr::null(),
+            s.as_ptr(),
+            s.len() as CFIndex,
+            K_CF_STRING_ENCODING_UTF8,
+            0,
+        )
+    };
+    assert!(
+        !value.is_null(),
+        "CFStringCreateWithBytes returned null for {s:?}"
+    );
+    value
+}
+
+fn ax_focused_ui_element_attribute() -> CFStringRef {
+    static CACHE: OnceLock<usize> = OnceLock::new();
+    cached_ax_attribute(&CACHE, "AXFocusedUIElement")
+}
+
+fn ax_role_attribute() -> CFStringRef {
+    static CACHE: OnceLock<usize> = OnceLock::new();
+    cached_ax_attribute(&CACHE, "AXRole")
+}
+
+fn ax_subrole_attribute() -> CFStringRef {
+    static CACHE: OnceLock<usize> = OnceLock::new();
+    cached_ax_attribute(&CACHE, "AXSubrole")
+}
+
+fn ax_value_attribute() -> CFStringRef {
+    static CACHE: OnceLock<usize> = OnceLock::new();
+    cached_ax_attribute(&CACHE, "AXValue")
+}
+
+/// Owning handle to a single retained Core Foundation object copied from an
+/// Accessibility attribute (an `AXUIElementRef` or a `CFStringRef`, both of
+/// which are CF-retainable opaque types).
+struct AxElementHandle(*mut c_void);
+
+impl AxElementHandle {
+    fn as_cftype(&self) -> CFTypeRef {
+        self.0.cast_const()
+    }
+}
+
+impl Drop for AxElementHandle {
+    fn drop(&mut self) {
+        if !self.0.is_null() {
+            unsafe { CFRelease(self.0.cast_const()) };
+        }
+    }
+}
+
+impl std::fmt::Debug for AxElementHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "AxElementHandle({:p})", self.0)
+    }
+}
+
+// SAFETY: `AxElementHandle` owns a CF-retained object. Core Foundation's
+// retain/release/CFEqual are thread-safe and may be called from any thread;
+// the wrapped pointer here is only ever used for `CFEqual` identity
+// comparison and read-only AX attribute copies (never for AppKit calls that
+// require the main thread), which Accessibility client tooling routinely
+// performs off the main thread. `MacOsFocusSnapshot` is moved across the
+// recording-coordinator/worker thread boundary through `WorkerEvent`, which
+// requires `Send`; `Sync` is additionally required transitively (unrelated
+// crates place `Send + Sync` bounds on error types carried through this
+// channel). Neither trait allows mutation through a shared reference here:
+// `AxElementHandle` exposes no interior mutability, and CF's atomic
+// retain-count bookkeeping makes concurrent reads/releases safe.
+unsafe impl Send for AxElementHandle {}
+unsafe impl Sync for AxElementHandle {}
+
+/// Focused Accessibility element captured for the frontmost application.
+///
+/// `role`, `subrole`, and `supports_value_polling` are not consulted by the
+/// current [`decide_focus_verification`] logic (identity is decided purely
+/// by `CFEqual` on `element`); they are captured now so a later
+/// acknowledgement/read-back commit does not need to re-plumb Accessibility
+/// captures.
+#[derive(Debug)]
+pub(crate) struct AxElementSnapshot {
+    element: AxElementHandle,
+    /// `AXRole` of the focused element, when it could be read.
+    #[allow(dead_code, reason = "captured for a future acknowledgement commit")]
+    role: Option<String>,
+    /// `AXSubrole` of the focused element, when it could be read.
+    #[allow(dead_code, reason = "captured for a future acknowledgement commit")]
+    subrole: Option<String>,
+    /// Whether `AXValue` could be read as a string-typed value on the
+    /// focused element at capture time.
+    #[allow(dead_code, reason = "captured for a future acknowledgement commit")]
+    supports_value_polling: bool,
 }
 
 /// Sendable representation of the focused macOS insertion target.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Debug)]
 pub(crate) struct MacOsFocusSnapshot {
     pid: libc::pid_t,
     bundle_identifier: Option<String>,
-    window_id: u32,
+    ax: Option<AxElementSnapshot>,
+}
+
+/// Result of comparing a captured [`MacOsFocusSnapshot`] against a fresh
+/// read of the live macOS focus state.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FocusVerification {
+    /// Same frontmost pid and bundle identifier, and (when Accessibility
+    /// exposed a focused element on both sides) the same focused element
+    /// identity.
+    Matched,
+    /// The frontmost application changed, or the focused element identity
+    /// no longer matches.
+    Changed,
+    /// The frontmost pid and bundle identifier still match, but the
+    /// Accessibility focused element could not be compared because it was
+    /// unavailable on the captured snapshot, the live read, or both.
+    AxUnsupported,
 }
 
 impl MacOsFocusSnapshot {
-    /// Capture the current frontmost application window.
+    /// Capture the current frontmost application and its focused
+    /// Accessibility element.
     ///
     /// # Returns
     ///
@@ -54,24 +204,47 @@ impl MacOsFocusSnapshot {
     ///
     /// # Errors
     ///
-    /// Returns an error when macOS reports no frontmost application window.
+    /// Returns an error when macOS reports no frontmost application.
+    /// Accessibility read failures at capture time never produce an error;
+    /// they simply leave the Accessibility portion of the snapshot empty
+    /// (see [`Self::verify_current`] for the pid+bundle fallback this
+    /// enables).
     pub(crate) fn capture() -> Result<Self> {
         frontmost_application_window().context("could not capture macOS frontmost window")
     }
 
-    /// Return whether the current frontmost application window still matches.
+    /// Return whether the current frontmost focus still matches this
+    /// snapshot.
     ///
     /// # Returns
     ///
-    /// `Ok(true)` when PID, bundle identifier, and window id still match.
+    /// `true` unless [`Self::verify_current`] reports [`FocusVerification::Changed`].
+    pub(crate) fn matches_current(&self) -> bool {
+        !matches!(self.verify_current(), FocusVerification::Changed)
+    }
+
+    /// Compare this snapshot against a fresh read of the live macOS focus
+    /// state.
     ///
-    /// # Errors
+    /// # Returns
     ///
-    /// Returns an error when the frontmost application window cannot be read.
-    pub(crate) fn matches_current(&self) -> Result<bool> {
-        let current =
-            frontmost_application_window().context("could not read macOS frontmost window")?;
-        Ok(self.same_target(&current))
+    /// The verification outcome: [`FocusVerification::Matched`] when pid,
+    /// bundle identifier, and focused Accessibility element identity all
+    /// agree; [`FocusVerification::AxUnsupported`] when pid and bundle
+    /// identifier agree but Accessibility could not expose a focused
+    /// element on one or both sides; [`FocusVerification::Changed`]
+    /// otherwise (including when the live frontmost application cannot be
+    /// read at all).
+    pub(crate) fn verify_current(&self) -> FocusVerification {
+        let current = match frontmost_application_window() {
+            Ok(current) => current,
+            Err(_) => return FocusVerification::Changed,
+        };
+        decide_focus_verification(
+            self.pid == current.pid,
+            self.bundle_identifier == current.bundle_identifier,
+            ax_identity_equal(self.ax.as_ref(), current.ax.as_ref()),
+        )
     }
 
     /// Return the bundle identifier of the captured frontmost application,
@@ -84,12 +257,41 @@ impl MacOsFocusSnapshot {
     pub(crate) fn bundle_id(&self) -> Option<&str> {
         self.bundle_identifier.as_deref()
     }
+}
 
-    fn same_target(&self, current: &Self) -> bool {
-        current.pid == self.pid
-            && current.bundle_identifier == self.bundle_identifier
-            && current.window_id == self.window_id
+/// Pure decision logic for [`FocusVerification`], factored out of the live
+/// Accessibility/AppKit reads so it can be unit-tested without an
+/// Accessibility permission grant.
+///
+/// # Arguments
+///
+/// * `same_pid` - Whether the live frontmost pid matches the captured pid.
+/// * `same_bundle` - Whether the live frontmost bundle identifier matches
+///   the captured bundle identifier.
+/// * `ax_equal` - `Some(true)`/`Some(false)` when both sides exposed a
+///   focused Accessibility element and could be compared via `CFEqual`;
+///   `None` when Accessibility was unavailable on either side.
+fn decide_focus_verification(
+    same_pid: bool,
+    same_bundle: bool,
+    ax_equal: Option<bool>,
+) -> FocusVerification {
+    if !same_pid || !same_bundle {
+        return FocusVerification::Changed;
     }
+    match ax_equal {
+        Some(true) => FocusVerification::Matched,
+        Some(false) => FocusVerification::Changed,
+        None => FocusVerification::AxUnsupported,
+    }
+}
+
+fn ax_identity_equal(
+    expected: Option<&AxElementSnapshot>,
+    current: Option<&AxElementSnapshot>,
+) -> Option<bool> {
+    let (expected, current) = (expected?, current?);
+    Some(unsafe { CFEqual(expected.element.as_cftype(), current.element.as_cftype()) != 0 })
 }
 
 fn frontmost_application_window() -> Result<MacOsFocusSnapshot> {
@@ -106,104 +308,135 @@ fn frontmost_application_window() -> Result<MacOsFocusSnapshot> {
             .bundleIdentifier()
             .map(|bundle| bundle.to_string())
             .filter(|bundle| !bundle.is_empty());
-        let window_id = frontmost_window_id_for_pid(pid)?;
+        let ax = capture_ax_focused_element(pid);
         Ok(MacOsFocusSnapshot {
             pid,
             bundle_identifier,
-            window_id,
+            ax,
         })
     })
 }
 
-fn frontmost_window_id_for_pid(pid: libc::pid_t) -> Result<u32> {
-    let options =
-        K_CG_WINDOW_LIST_OPTION_ON_SCREEN_ONLY | K_CG_WINDOW_LIST_EXCLUDE_DESKTOP_ELEMENTS;
-    let windows = unsafe { CGWindowListCopyWindowInfo(options, K_CG_NULL_WINDOW_ID) };
-    if windows.is_null() {
-        bail!("macOS did not return an on-screen window list");
-    }
-
-    let window_id = frontmost_window_id_in_list(windows, pid).with_context(|| {
-        format!("macOS frontmost application pid {pid} has no visible layer-0 window")
-    });
-    unsafe {
-        CFRelease(windows.cast());
-    }
-    window_id
-}
-
-fn frontmost_window_id_in_list(windows: CFArrayRef, pid: libc::pid_t) -> Option<u32> {
-    let count = unsafe { CFArrayGetCount(windows) };
-    for idx in 0..count {
-        let window = unsafe { CFArrayGetValueAtIndex(windows, idx) };
-        if window.is_null() {
-            continue;
-        }
-        let window = window.cast();
-        let Some(owner_pid) = cf_dictionary_i64(window, unsafe { kCGWindowOwnerPID }) else {
-            continue;
-        };
-        if owner_pid != i64::from(pid) {
-            continue;
-        }
-        let Some(layer) = cf_dictionary_i64(window, unsafe { kCGWindowLayer }) else {
-            continue;
-        };
-        if layer != 0 {
-            continue;
-        }
-        let Some(window_id) = cf_dictionary_i64(window, unsafe { kCGWindowNumber }) else {
-            continue;
-        };
-        if let Ok(window_id) = u32::try_from(window_id) {
-            if window_id != 0 {
-                return Some(window_id);
-            }
-        }
-    }
-    None
-}
-
-fn cf_dictionary_i64(dictionary: CFDictionaryRef, key: CFStringRef) -> Option<i64> {
-    let value = unsafe { CFDictionaryGetValue(dictionary, key.cast()) };
-    if value.is_null() {
+/// Best-effort capture of the focused Accessibility element for `pid`'s
+/// application. Returns `None` on any Accessibility failure (permission not
+/// granted, application has no AX focused element, etc.) rather than an
+/// error, per the capture-failure tolerance policy: an Accessibility read
+/// failure at capture time must never block dictation.
+fn capture_ax_focused_element(pid: libc::pid_t) -> Option<AxElementSnapshot> {
+    let app = unsafe { AXUIElementCreateApplication(pid) };
+    if app.is_null() {
         return None;
     }
+    // Held only to release the application AXUIElementRef when this
+    // function returns; the focused-element copy below is independently
+    // retained in `element`.
+    let _app = AxElementHandle(app);
 
-    let mut out = 0_i64;
+    let element = copy_ax_element(app, ax_focused_ui_element_attribute())?;
+    let role = copy_ax_string(element.0, ax_role_attribute());
+    let subrole = copy_ax_string(element.0, ax_subrole_attribute());
+    let supports_value_polling = ax_value_is_string(element.0);
+    Some(AxElementSnapshot {
+        element,
+        role,
+        subrole,
+        supports_value_polling,
+    })
+}
+
+fn copy_ax_element(element: AXUIElementRef, attribute: CFStringRef) -> Option<AxElementHandle> {
+    let mut value: CFTypeRef = ptr::null();
+    let status = unsafe { AXUIElementCopyAttributeValue(element, attribute, &mut value) };
+    if status != K_AX_ERROR_SUCCESS || value.is_null() {
+        return None;
+    }
+    Some(AxElementHandle(value.cast_mut()))
+}
+
+fn copy_ax_string(element: AXUIElementRef, attribute: CFStringRef) -> Option<String> {
+    let handle = copy_ax_element(element, attribute)?;
+    if unsafe { CFGetTypeID(handle.as_cftype()) } != unsafe { CFStringGetTypeID() } {
+        return None;
+    }
+    cfstring_to_string(handle.as_cftype().cast())
+}
+
+/// Return whether copying `AXValue` on `element` succeeds right now and
+/// yields a string-typed value. The value itself is discarded; only the
+/// capability is recorded (see [`AxElementSnapshot::supports_value_polling`]).
+fn ax_value_is_string(element: AXUIElementRef) -> bool {
+    let Some(handle) = copy_ax_element(element, ax_value_attribute()) else {
+        return false;
+    };
+    unsafe { CFGetTypeID(handle.as_cftype()) == CFStringGetTypeID() }
+}
+
+fn cfstring_to_string(value: CFStringRef) -> Option<String> {
+    let length = unsafe { CFStringGetLength(value) };
+    if length < 0 {
+        return None;
+    }
+    // Each UTF-16 code unit needs at most 3 UTF-8 bytes; surrogate pairs (2
+    // units) need at most 4, comfortably under this bound.
+    let capacity = (length as usize).saturating_mul(3).saturating_add(1);
+    let mut buffer = vec![0_u8; capacity];
     let ok = unsafe {
-        CFNumberGetValue(
-            value.cast(),
-            K_CF_NUMBER_SINT64_TYPE,
-            (&mut out as *mut i64).cast(),
+        CFStringGetCString(
+            value,
+            buffer.as_mut_ptr(),
+            capacity as CFIndex,
+            K_CF_STRING_ENCODING_UTF8,
         ) != 0
     };
-    ok.then_some(out)
+    if !ok {
+        return None;
+    }
+    let nul = buffer.iter().position(|&b| b == 0).unwrap_or(buffer.len());
+    buffer.truncate(nul);
+    String::from_utf8(buffer).ok()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn snapshot(
-        pid: libc::pid_t,
-        bundle_identifier: Option<&str>,
-        window_id: u32,
-    ) -> MacOsFocusSnapshot {
-        MacOsFocusSnapshot {
-            pid,
-            bundle_identifier: bundle_identifier.map(ToOwned::to_owned),
-            window_id,
-        }
+    #[test]
+    fn decision_matches_when_pid_bundle_and_ax_element_agree() {
+        assert_eq!(
+            decide_focus_verification(true, true, Some(true)),
+            FocusVerification::Matched
+        );
     }
 
     #[test]
-    fn focus_snapshot_requires_matching_window_id() {
-        let original = snapshot(42, Some("com.example.App"), 1001);
+    fn decision_changes_when_ax_element_identity_differs() {
+        assert_eq!(
+            decide_focus_verification(true, true, Some(false)),
+            FocusVerification::Changed
+        );
+    }
 
-        assert!(original.same_target(&snapshot(42, Some("com.example.App"), 1001)));
-        assert!(!original.same_target(&snapshot(42, Some("com.example.App"), 1002)));
-        assert!(!original.same_target(&snapshot(43, Some("com.example.App"), 1001)));
-        assert!(!original.same_target(&snapshot(42, Some("com.example.Other"), 1001)));
+    #[test]
+    fn decision_falls_back_when_ax_is_unavailable_on_either_side() {
+        assert_eq!(
+            decide_focus_verification(true, true, None),
+            FocusVerification::AxUnsupported
+        );
+    }
+
+    #[test]
+    fn decision_changes_when_bundle_identifier_differs() {
+        assert_eq!(
+            decide_focus_verification(true, false, Some(true)),
+            FocusVerification::Changed
+        );
+    }
+
+    #[test]
+    fn decision_changes_when_pid_differs() {
+        assert_eq!(
+            decide_focus_verification(false, true, Some(true)),
+            FocusVerification::Changed
+        );
     }
 }

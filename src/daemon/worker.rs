@@ -5,6 +5,7 @@ use crossbeam_channel::Receiver;
 use parakit::data_log::{DataLogger, InsertionLogFields, RecordId};
 use parakit::inference::Engine;
 use parakit::rules::Cleaner;
+use std::cell::Cell;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -188,6 +189,7 @@ fn worker_loop(ctx: WorkerCtx) {
                                 focus_at_start.as_deref(),
                                 transcript_chars,
                                 None,
+                                "not_applicable",
                             );
                             state.set_last_transcript(transcript.cleaned.clone());
                             state.set_phase("idle");
@@ -197,13 +199,18 @@ fn worker_loop(ctx: WorkerCtx) {
                         let insert_started = Instant::now();
                         let cleaned = transcript.cleaned.clone();
                         paste_circuit.maybe_reenable(Instant::now(), log.as_ref());
+                        let focus_verification = Cell::new("not_applicable");
+                        let focus_check = FocusCheck {
+                            snapshot: focus_at_start.as_deref(),
+                            verification: &focus_verification,
+                        };
                         let insert_result = state.with_insertion_lock(|| {
                             let result = insert_text(
                                 &mut injector,
                                 &cleaned,
                                 paste_mode,
                                 keep_transcript_clipboard,
-                                focus_at_start.as_deref(),
+                                focus_check,
                                 (log.as_ref(), &notifier),
                                 paste_circuit.copy_only_mode,
                             );
@@ -221,6 +228,7 @@ fn worker_loop(ctx: WorkerCtx) {
                                     focus_at_start.as_deref(),
                                     transcript_chars,
                                     None,
+                                    focus_verification.get(),
                                 );
                                 if outcome == InsertOutcome::Pasted {
                                     paste_circuit.record_success();
@@ -252,6 +260,7 @@ fn worker_loop(ctx: WorkerCtx) {
                                     focus_at_start.as_deref(),
                                     transcript_chars,
                                     Some(format!("{e:#}")),
+                                    focus_verification.get(),
                                 );
                                 if paste_circuit.record_failure(Instant::now()) {
                                     notifier.paste_temporarily_disabled();
@@ -344,6 +353,10 @@ fn insertion_result_remembers_transcript(result: &Result<InsertOutcome>) -> bool
 /// * `transcript_chars` - Character count of the transcript offered for
 ///   insertion.
 /// * `failure_reason` - Error display text when `outcome` is `"error"`.
+/// * `focus_verification` - How focus was verified before insertion, as
+///   observed by the last live recheck performed for this attempt (or
+///   `"not_applicable"` when insertion never reached a focus check, e.g.
+///   sanitizer skip/copy-only paths and PTT audio simulation).
 fn log_insertion_outcome(
     data_log: &Option<Arc<DataLogger>>,
     record_id: Option<RecordId>,
@@ -351,6 +364,7 @@ fn log_insertion_outcome(
     focus_at_start: Option<&FocusSnapshot>,
     transcript_chars: usize,
     failure_reason: Option<String>,
+    focus_verification: &'static str,
 ) {
     let (Some(data_log), Some(record_id)) = (data_log, record_id) else {
         return;
@@ -361,11 +375,7 @@ fn log_insertion_outcome(
         InsertionLogFields {
             outcome,
             target_bundle_id,
-            // TODO(commit 3): distinguish "matched"/"changed"/"unavailable"
-            // once focus_allows_insertion's result is plumbed into
-            // InsertOutcome (or a richer type) instead of being folded into
-            // a plain bool before it reaches this function.
-            focus_verification: "not_applicable",
+            focus_verification,
             transcript_chars,
             paste_event_posted: outcome == "pasted",
             pasteboard_requested: None,
@@ -377,6 +387,21 @@ fn log_insertion_outcome(
     );
 }
 
+/// Focus snapshot captured before insertion became eligible, paired with the
+/// telemetry cell that records the label of the last live focus recheck
+/// performed against it. Bundled together because every insertion call site
+/// that reads one also updates the other.
+#[derive(Clone, Copy)]
+pub(crate) struct FocusCheck<'a> {
+    /// Focus captured at PTT-down, when capture succeeded.
+    pub(crate) snapshot: Option<&'a FocusSnapshot>,
+    /// Updated with the telemetry label of the last live focus recheck
+    /// performed against `snapshot`. Left at its initial value when
+    /// insertion never reaches a focus check (e.g. sanitizer skip/copy-only
+    /// paths).
+    pub(crate) verification: &'a Cell<&'static str>,
+}
+
 /// Sanitize text and run the shared paste/copy insertion transaction.
 ///
 /// # Arguments
@@ -385,7 +410,7 @@ fn log_insertion_outcome(
 /// * `raw_text` - Candidate transcript or IPC text.
 /// * `mode` - Paste mode used for sanitizer policy and chord selection.
 /// * `keep_transcript_clipboard` - Leave text on clipboard instead of restoring previous contents.
-/// * `focus` - Focus snapshot captured before insertion became eligible.
+/// * `focus` - Focus snapshot and telemetry cell (see [`FocusCheck`]).
 /// * `ui` - Daemon logger and desktop notification wrapper.
 /// * `copy_only_mode` - Circuit-breaker flag that disables synthetic paste.
 ///
@@ -401,7 +426,7 @@ pub(crate) fn insert_text(
     raw_text: &str,
     mode: PasteMode,
     keep_transcript_clipboard: bool,
-    focus: Option<&FocusSnapshot>,
+    focus: FocusCheck<'_>,
     ui: (&Logger, &Notifier),
     copy_only_mode: bool,
 ) -> Result<InsertOutcome> {
@@ -467,7 +492,7 @@ fn paste_transcript(
     text: &str,
     mode: PasteMode,
     keep_transcript_clipboard: bool,
-    focus: Option<&FocusSnapshot>,
+    focus: FocusCheck<'_>,
     log: &Logger,
     notifier: &Notifier,
 ) -> Result<InsertOutcome> {
@@ -623,8 +648,20 @@ fn clipboard_policy(keep_transcript_clipboard: bool) -> ClipboardPolicy {
     }
 }
 
-fn focus_allows_insertion(focus: Option<&FocusSnapshot>, log: &Logger) -> bool {
-    let Some(focus) = focus else {
+/// Decide whether insertion may proceed for `focus.snapshot`, recording the
+/// telemetry label for this check into `focus.verification`.
+///
+/// # Arguments
+///
+/// * `focus` - Focus snapshot captured before insertion became eligible,
+///   plus the telemetry cell this check's label is recorded into:
+///   `"unavailable"` when no snapshot was captured at PTT-down, or the
+///   platform's live verification label otherwise (see
+///   [`FocusSnapshot::verify`]).
+/// * `log` - Daemon logger used for diagnostics.
+fn focus_allows_insertion(focus: FocusCheck<'_>, log: &Logger) -> bool {
+    let Some(snapshot) = focus.snapshot else {
+        focus.verification.set("unavailable");
         if cfg!(any(target_os = "macos", target_os = "windows")) {
             // macOS and Windows insertion must prove the current foreground
             // target still matches the hotkey target; unknown focus is not
@@ -639,7 +676,8 @@ fn focus_allows_insertion(focus: Option<&FocusSnapshot>, log: &Logger) -> bool {
         return true;
     };
 
-    focus_verification_allows_insertion(focus.matches_current(), log)
+    focus.verification.set(snapshot.verify());
+    focus_verification_allows_insertion(snapshot.matches_current(), log)
 }
 
 fn focus_verification_allows_insertion(result: Result<bool>, log: &Logger) -> bool {
@@ -875,7 +913,13 @@ mod tests {
 
         #[cfg(any(target_os = "macos", target_os = "windows"))]
         {
-            assert!(!focus_allows_insertion(None, &log));
+            let verification = Cell::new("not_applicable");
+            let focus = FocusCheck {
+                snapshot: None,
+                verification: &verification,
+            };
+            assert!(!focus_allows_insertion(focus, &log));
+            assert_eq!(verification.get(), "unavailable");
             assert!(!focus_verification_allows_insertion(
                 Err(anyhow::anyhow!("focus unavailable")),
                 &log
@@ -884,7 +928,13 @@ mod tests {
 
         #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         {
-            assert!(focus_allows_insertion(None, &log));
+            let verification = Cell::new("not_applicable");
+            let focus = FocusCheck {
+                snapshot: None,
+                verification: &verification,
+            };
+            assert!(focus_allows_insertion(focus, &log));
+            assert_eq!(verification.get(), "unavailable");
             assert!(focus_verification_allows_insertion(
                 Err(anyhow::anyhow!("temporary X11 failure")),
                 &log

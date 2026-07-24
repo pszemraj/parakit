@@ -5,6 +5,8 @@ use anyhow::Context;
 use anyhow::{bail, Result};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
+#[cfg(any(unix, target_os = "windows"))]
+use std::cell::Cell;
 #[cfg(unix)]
 use std::io::{BufRead, BufReader, Write};
 #[cfg(unix)]
@@ -25,7 +27,7 @@ use super::{
     inject::{FocusSnapshot, PasteMode},
     logging::Logger,
     notifications::Notifier,
-    worker::{insert_text, InsertOutcome},
+    worker::{insert_text, FocusCheck, InsertOutcome},
 };
 
 #[cfg(unix)]
@@ -474,12 +476,17 @@ fn paste_text(
 ) -> Result<InsertOutcome> {
     let focus = FocusSnapshot::capture().ok();
     let mut injector = None;
+    let focus_verification = Cell::new("not_applicable");
+    let focus_check = FocusCheck {
+        snapshot: focus.as_ref(),
+        verification: &focus_verification,
+    };
     insert_text(
         &mut injector,
         text,
         paste_mode,
         keep_transcript_clipboard,
-        focus.as_ref(),
+        focus_check,
         (log, notifier),
         false,
     )
