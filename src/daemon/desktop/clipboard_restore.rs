@@ -127,6 +127,12 @@ pub(super) trait ClipboardRestoreGate {
     /// * `_ctx` - Focus/transcript context. Unused by the default
     ///   implementation; available to overrides with a real acknowledgement
     ///   signal (see the macOS override on [`PlatformClipboardRestoreGate`]).
+    ///
+    /// # Returns
+    ///
+    /// The confirmation tier the gate observed. The default implementation
+    /// always returns [`PasteConfirmation::Confirmed`] with
+    /// `kind: "not_applicable"`.
     fn await_paste_confirmation(
         &self,
         token: ClipboardWriteToken,
@@ -151,6 +157,11 @@ pub(super) trait ClipboardRestoreGate {
 ///   unavailable.
 /// * `paste_consume_delay` - Extra delay after a successful paste chord so
 ///   the target can consume the clipboard before restore.
+///
+/// # Returns
+///
+/// Always [`PasteConfirmation::Confirmed`] with `kind: "not_applicable"`,
+/// since no positive platform signal is consulted on this path.
 pub(super) fn default_paste_confirmation<G: ClipboardRestoreGate + ?Sized>(
     gate: &G,
     token: ClipboardWriteToken,
@@ -228,6 +239,10 @@ impl<'a, G: ClipboardRestoreGate + ?Sized> ClipboardRestorePlan<'a, G> {
     /// * `token` - Clipboard write token for the staged transcript.
     /// * `ctx` - Focus/transcript context for platform confirmation
     ///   strategies that have a real acknowledgement signal.
+    ///
+    /// # Returns
+    ///
+    /// The confirmation tier reported by the underlying gate.
     pub(super) fn await_paste_confirmation(
         &self,
         token: ClipboardWriteToken,

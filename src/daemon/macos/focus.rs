@@ -193,8 +193,12 @@ impl AxElementSnapshot {
     ///
     /// `Ok(Some(value))` when `AXValue` is currently a string; `Ok(None)`
     /// when the read succeeded but the value is not (or is no longer) a
-    /// string. `Err(())` when the Accessibility read itself failed, which
-    /// in practice means the element died or otherwise stopped answering AX
+    /// string.
+    ///
+    /// # Errors
+    ///
+    /// `Err(())` when the Accessibility read itself failed, which in
+    /// practice means the element died or otherwise stopped answering AX
     /// requests (e.g. focus moved to a different element or application);
     /// callers should treat that as the end of evidence-gathering rather
     /// than a transient error to retry.

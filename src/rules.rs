@@ -312,6 +312,11 @@ fn is_opening_punct(c: char) -> bool {
 /// Validate a single rule name exists in `DEFAULT_RULES` or `user_rules`.
 /// Used by the CLI to fail fast on `--disable-rule typoname`.
 ///
+/// # Arguments
+///
+/// * `name` - Rule name to look up, as typed on the CLI.
+/// * `user_rules` - User-defined rules that extend the built-in set.
+///
 /// # Returns
 ///
 /// `Ok(())` when the rule name is present.

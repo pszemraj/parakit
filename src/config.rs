@@ -243,6 +243,11 @@ pub(crate) fn load() -> Result<ConfigFile> {
 /// [`load`] so tests can exercise parsing without touching process
 /// environment state.
 ///
+/// # Returns
+///
+/// The parsed and validated config, or [`ConfigFile::default`] when no
+/// file exists at `path`.
+///
 /// # Errors
 ///
 /// See [`load`].
