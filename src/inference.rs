@@ -16,7 +16,10 @@ use std::path::Path;
 const MIN_INFERENCE_SAMPLES: usize = TARGET_RATE as usize;
 
 /// Runtime CPU/GPU selection requested by the user.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
+#[derive(
+    Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum, serde::Serialize, serde::Deserialize,
+)]
+#[serde(rename_all = "kebab-case")]
 pub enum DeviceMode {
     /// Keep CrispASR's default: use the best GPU when one is available,
     /// otherwise fall back to CPU.

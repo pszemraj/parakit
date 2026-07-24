@@ -40,7 +40,10 @@ const HOTKEY_DEBOUNCE: Duration = Duration::from_millis(150);
 const REGISTERED_HOTKEY_PHYSICAL_POLL: Duration = Duration::from_millis(25);
 
 /// Hotkey backend preference.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, clap::ValueEnum)]
+#[derive(
+    Clone, Copy, Debug, Eq, PartialEq, clap::ValueEnum, serde::Serialize, serde::Deserialize,
+)]
+#[serde(rename_all = "kebab-case")]
 pub(crate) enum HotkeyBackend {
     /// Prefer the platform desktop hotkey backend.
     Auto,
@@ -49,14 +52,17 @@ pub(crate) enum HotkeyBackend {
     /// Force the registered X11 global hotkey backend.
     #[cfg(target_os = "linux")]
     #[value(name = "x11-global-hotkey")]
+    #[serde(rename = "x11-global-hotkey")]
     X11GlobalHotkey,
     /// Force the passive X11 event listener backend.
     #[cfg(target_os = "linux")]
     #[value(name = "x11-listen")]
+    #[serde(rename = "x11-listen")]
     X11Listen,
     /// Force the experimental low-level evdev/uinput keyboard proxy backend.
     #[cfg(target_os = "linux")]
     #[value(name = "evdev-proxy-experimental", alias = "evdev-proxy")]
+    #[serde(rename = "evdev-proxy-experimental")]
     EvdevProxyExperimental,
 }
 

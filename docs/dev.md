@@ -60,7 +60,9 @@ On macOS, raw `--all-features` also enables CUDA and can fail in CMake before Ru
 
 ## Deferred Daemon Safety Work
 
-TODO: Add a small user config file, likely `~/.cache/parakit/config.toml`, for configurable hotkeys and other local daemon preferences. Candidate macOS fallbacks to evaluate there are right Command alone and right Command plus right Option. Keep the default behavior simple until config exists: Linux/Windows use `Ctrl+Space`, and macOS uses `Left Control+Space`.
+The user config file landed at the XDG config dir (`$XDG_CONFIG_HOME/parakit/config.toml`, falling back to `~/.config/parakit/config.toml`; `%APPDATA%\parakit\config.toml` on Windows; override with `PARAKIT_CONFIG_PATH`), not the earlier `~/.cache/parakit/config.toml` idea below this TODO used to propose. See `src/config.rs`, `docs/running.md#configuration`, and `parakit config --help`. It covers daemon defaults (model, device, threads, paste mode, clipboard/sounds/verbose), cleaning (enable/disable, disabled rule names, user-defined rules), transcription logging, and — on Linux — which hotkey *backend* (`auto`/`desktop`/`x11-global-hotkey`/`x11-listen`/`evdev-proxy-experimental`) to use.
+
+TODO: Config does not yet support remapping the actual PTT chord (e.g. a custom macOS fallback of right Command alone, or right Command plus right Option). Keep the default chords as-is until that lands: Linux/Windows use `Ctrl+Space`, and macOS uses `Left Control+Space`.
 
 TODO: Keep the direct platform-hotkey path available when configurable chords land. On macOS, extend the existing CoreGraphics event-tap backend so it owns the selected chord, suppresses only that chord, and handles tap-disabled callbacks. On Linux, keep the registered X11 backend as the normal path and use the evdev/uinput proxy only when users explicitly accept the lower-level permission tradeoff. On Windows, `RegisterHotKey` already gives a clear conflict/error boundary.
 

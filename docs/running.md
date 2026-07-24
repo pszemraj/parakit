@@ -193,3 +193,54 @@ Disable cue tones:
 ```bash
 parakit --no-sounds
 ```
+
+## Configuration
+
+parakit reads an optional `config.toml` for daemon defaults, cleaning preferences, transcription logging, the Linux hotkey backend, and user-defined cleaning rules. Precedence is **CLI flags > config file > built-in defaults**.
+
+Default path, following each platform's normal config-directory convention:
+
+```text
+Linux/macOS: $XDG_CONFIG_HOME/parakit/config.toml, falling back to ~/.config/parakit/config.toml
+Windows:     %APPDATA%\parakit\config.toml
+```
+
+`PARAKIT_CONFIG_PATH` overrides the path outright on every platform.
+
+```bash
+parakit config path                 # print the resolved config path
+parakit config init                 # write a commented template (fails if a file already exists)
+parakit config init --force         # overwrite an existing config file
+parakit config show                 # print the resolved path and effective merged values (default for bare `parakit config`)
+parakit config edit                 # open $VISUAL or $EDITOR, creating the file from the template first if missing
+```
+
+A missing config file is equivalent to an empty one: every key falls back to its built-in default. A config file that fails to parse, or that defines an invalid user rule (bad regex, a name colliding with a built-in rule, or a duplicate user rule name), is a hard error that names the config file path — `parakit config show` and `parakit config edit` are the fastest way to find and fix it.
+
+Template excerpt (every key is commented out by default; see `parakit config init`'s output for the full file):
+
+```toml
+[daemon]
+# device = "auto"          # "auto", "cpu", or "gpu"
+# paste_mode = "standard"  # "terminal", "standard", or "direct"
+# verbose = false          # a CLI --quiet flag always wins over this
+
+[cleaning]
+# enabled = true
+# disabled_rules = ["fix-trailing-period"]
+
+[logging]
+# dir = "/home/user/.parakit/logs"
+# format = "jsonl"         # "jsonl" or "tsv"
+
+[hotkey]
+# backend = "auto"         # Linux only
+
+# [[rules.user]]
+# name = "weights-and-biases-to-wandb"
+# pattern = "(?i)\\bweights and biases\\b"
+# replacement = "wandb"
+# position = "standard"    # "first", "standard" (default), or "last"
+```
+
+See [cleaning-rules.md](cleaning-rules.md#user-rules) for the full user-defined rule format, position semantics, and validation errors.

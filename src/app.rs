@@ -12,13 +12,15 @@ use parakit::model;
 use parakit::rules;
 use parakit::warmup;
 use std::ffi::{c_char, c_void, CStr};
+use std::io::Write as _;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crate::cli::{CacheCli, CacheCommand, Cli, Commands};
+use crate::cli::{CacheCli, CacheCommand, Cli, Commands, ConfigCli, ConfigCommand};
+use crate::config::{self, ConfigFile};
 use crate::daemon;
 use crate::daemon::audio::AudioCapture;
 #[cfg(not(target_os = "linux"))]
@@ -61,15 +63,21 @@ pub(crate) fn run() -> Result<()> {
     daemon::audio::alsa::install_error_silencer();
 
     let cli = Cli::parse();
+    // Unconditional, CLI-only pass: keeps native ggml log filtering behavior
+    // unchanged for the commands below that must not depend on config
+    // parsing (see the load-order comment above the post-dispatch
+    // `config::load()` call). `doctor` and the post-dispatch daemon
+    // bootstrap path re-run this once config is available so a config
+    // `daemon.verbose = true` also takes effect.
     configure_native_logging(cli.verbose);
-    let log = Arc::new(Logger::new(log_level(&cli)));
-    let notifier = Notifier::new(Arc::clone(&log));
-    #[cfg(target_os = "linux")]
-    let hotkey_backend = cli.hotkey_backend;
-    #[cfg(not(target_os = "linux"))]
-    let hotkey_backend = HotkeyBackend::Auto;
-    let paste_mode = cli.effective_paste_mode();
 
+    // `fetch`, `cache`, `config`, `status`, `stop`, `paste-last`,
+    // `copy-last`, and `test-paste` must keep working even when the user's
+    // config file is broken (missing, bad TOML, invalid user rule), so none
+    // of these branches touch `config::load()`. `doctor` is the one
+    // dispatch-block exception: it loads config itself below because it
+    // reports the same effective hotkey/paste-mode values the daemon would
+    // use.
     if let Some(command) = &cli.command {
         match command {
             Commands::Fetch(fetch_cli) => {
@@ -92,10 +100,21 @@ pub(crate) fn run() -> Result<()> {
                 run_cache_command(cache_cli, cli.quiet)?;
                 return Ok(());
             }
+            Commands::Config(config_cli) => {
+                run_config_command(config_cli, cli.quiet)?;
+                return Ok(());
+            }
             Commands::Doctor(doctor_cli) => {
+                let config = config::load()?;
+                configure_native_logging(cli.effective_verbose(&config));
+                let paste_mode = cli.effective_paste_mode(&config);
+                #[cfg(target_os = "linux")]
+                let hotkey_backend = cli.effective_hotkey_backend(&config);
+                #[cfg(not(target_os = "linux"))]
+                let hotkey_backend = HotkeyBackend::Auto;
                 let ok = daemon::preflight::print_doctor(
                     cli.quiet,
-                    cli.verbose,
+                    cli.effective_verbose(&config),
                     paste_mode,
                     doctor_cli.deep,
                     hotkey_backend,
@@ -133,15 +152,32 @@ pub(crate) fn run() -> Result<()> {
         }
     }
 
+    // Beyond this point: `--list-rules`, `--test-rules`,
+    // `--simulate-ptt-audio`, and full daemon bootstrap. All of these merge
+    // CLI flags with the config file, loaded once here.
+    let config = config::load()?;
+    configure_native_logging(cli.effective_verbose(&config));
+    let log = Arc::new(Logger::new(log_level(&cli, &config)));
+    let notifier = Notifier::new(Arc::clone(&log));
+    #[cfg(target_os = "linux")]
+    let hotkey_backend = cli.effective_hotkey_backend(&config);
+    #[cfg(not(target_os = "linux"))]
+    let hotkey_backend = HotkeyBackend::Auto;
+    let paste_mode = cli.effective_paste_mode(&config);
+
     // Special command modes: print rules / test rules.
     if cli.list_rules {
         if !cli.quiet {
-            rules::print_rule_list(&[]);
+            rules::print_rule_list(&config.rules.user);
         }
         return Ok(());
     }
     if let Some(input) = &cli.test_rules {
-        let cleaner = rules::build_cleaner(cli.no_cleaning, &cli.disable_rule, &[])?;
+        let cleaner = rules::build_cleaner(
+            !cli.effective_cleaning_enabled(&config),
+            &cli.effective_disabled_rules(&config),
+            &config.rules.user,
+        )?;
         let raw = input.as_str();
         let cleaned = cleaner.as_ref().map(|c| c.clean(raw));
         if !cli.quiet {
@@ -155,10 +191,10 @@ pub(crate) fn run() -> Result<()> {
         return Ok(());
     }
     if let Some(audio_path) = &cli.simulate_ptt_audio {
-        return run_ptt_audio_simulation(&cli, Arc::clone(&log), audio_path);
+        return run_ptt_audio_simulation(&cli, &config, Arc::clone(&log), audio_path);
     }
 
-    if let Some(path) = cli.model.as_deref() {
+    if let Some(path) = cli.effective_model(&config) {
         if !path.is_file() {
             return Err(anyhow::anyhow!(
                 "model path is not a file: {}",
@@ -185,24 +221,32 @@ pub(crate) fn run() -> Result<()> {
     daemon::inject::preflight(paste_mode).context("text insertion preflight failed")?;
     log.verbose("parakit: insertion preflight passed");
     let ipc_state = Arc::new(daemon::ipc::SharedState::new());
+    let keep_transcript_clipboard = cli.effective_keep_transcript_clipboard(&config);
     #[cfg(any(unix, target_os = "windows"))]
     let _ipc_server = daemon::ipc::spawn_server(
         Arc::clone(&ipc_state),
         paste_mode,
-        cli.keep_transcript_clipboard,
+        keep_transcript_clipboard,
         Arc::clone(&log),
     )
     .context("start daemon control socket")?;
     #[cfg(not(any(unix, target_os = "windows")))]
     log.verbose("parakit: local control socket unavailable on this platform");
 
-    let cleaner = rules::build_cleaner(cli.no_cleaning, &cli.disable_rule, &[])?.map(Arc::new);
-    let data_log = cli
-        .log_dir
+    let cleaner = rules::build_cleaner(
+        !cli.effective_cleaning_enabled(&config),
+        &cli.effective_disabled_rules(&config),
+        &config.rules.user,
+    )?
+    .map(Arc::new);
+    let log_dir = cli.effective_log_dir(&config);
+    let log_format = cli.effective_log_format(&config);
+    let data_log = log_dir
         .clone()
-        .map(|dir| Arc::new(DataLogger::new(dir, cli.log_format)));
+        .map(|dir| Arc::new(DataLogger::new(dir, log_format)));
 
-    let sounds = Sounds::new(!cli.no_sounds);
+    let sounds_enabled = cli.effective_sounds_enabled(&config);
+    let sounds = Sounds::new(sounds_enabled);
 
     let capture = AudioCapture::open(Arc::clone(&log), notifier.clone())?;
     let audio = capture.handle.clone();
@@ -211,7 +255,7 @@ pub(crate) fn run() -> Result<()> {
         .context("audio manager started without reporting a microphone")?;
     warn_about_bluetooth_mic_if_needed(&log, &mic_info);
 
-    let (model_path, engine) = open_cli_engine(&cli, cli.quiet, &log)?;
+    let (model_path, engine) = open_cli_engine(&cli, &config, cli.quiet, &log)?;
     let model_dtype = model_dtype_label(&model_path);
 
     // Banner.
@@ -225,15 +269,15 @@ pub(crate) fn run() -> Result<()> {
             Some(c) => format!("on ({} rules)", c.active_rule_count()),
             None => "off".to_string(),
         },
-        sounds: if cli.no_sounds { "off" } else { "on" },
-        transcription_logging: match &cli.log_dir {
-            Some(dir) => format!("{:?} to {}", cli.log_format, dir.display()),
+        sounds: if sounds_enabled { "on" } else { "off" },
+        transcription_logging: match &log_dir {
+            Some(dir) => format!("{log_format:?} to {}", dir.display()),
             None => "off".to_string(),
         },
         insertion: format!(
             "batch paste ({}, {})",
             paste_mode.label(),
-            if cli.keep_transcript_clipboard {
+            if keep_transcript_clipboard {
                 "keep transcript clipboard"
             } else {
                 "restore clipboard"
@@ -257,7 +301,7 @@ pub(crate) fn run() -> Result<()> {
         notifier: notifier.clone(),
         state: Arc::clone(&ipc_state),
         paste_mode,
-        keep_transcript_clipboard: cli.keep_transcript_clipboard,
+        keep_transcript_clipboard,
         insert_transcripts: true,
         rx,
     });
@@ -350,13 +394,22 @@ fn warn_about_bluetooth_mic_if_needed(log: &Logger, mic_info: &daemon::audio::Mi
     }
 }
 
-fn run_ptt_audio_simulation(cli: &Cli, log: Arc<Logger>, audio_path: &Path) -> Result<()> {
-    let paste_mode = cli.effective_paste_mode();
-    let cleaner = rules::build_cleaner(cli.no_cleaning, &cli.disable_rule, &[])?.map(Arc::new);
+fn run_ptt_audio_simulation(
+    cli: &Cli,
+    config: &ConfigFile,
+    log: Arc<Logger>,
+    audio_path: &Path,
+) -> Result<()> {
+    let paste_mode = cli.effective_paste_mode(config);
+    let cleaner = rules::build_cleaner(
+        !cli.effective_cleaning_enabled(config),
+        &cli.effective_disabled_rules(config),
+        &config.rules.user,
+    )?
+    .map(Arc::new);
     let data_log = cli
-        .log_dir
-        .clone()
-        .map(|dir| Arc::new(DataLogger::new(dir, cli.log_format)));
+        .effective_log_dir(config)
+        .map(|dir| Arc::new(DataLogger::new(dir, cli.effective_log_format(config))));
     let sounds = Sounds::new(false);
 
     let prepare_started = Instant::now();
@@ -371,7 +424,12 @@ fn run_ptt_audio_simulation(cli: &Cli, log: Arc<Logger>, audio_path: &Path) -> R
         wav.samples.len()
     ));
 
-    let (_model_path, engine) = open_cli_engine(cli, cli.quiet || !cli.verbose, &log)?;
+    let (_model_path, engine) = open_cli_engine(
+        cli,
+        config,
+        cli.quiet || !cli.effective_verbose(config),
+        &log,
+    )?;
 
     let msg = format!(
         "parakit: simulating PTT from {} ({audio_secs:.2}s, {source_rate} Hz source)",
@@ -390,7 +448,7 @@ fn run_ptt_audio_simulation(cli: &Cli, log: Arc<Logger>, audio_path: &Path) -> R
         notifier: Notifier::new(Arc::new(Logger::new(LogLevel::Quiet))),
         state: Arc::new(daemon::ipc::SharedState::new()),
         paste_mode,
-        keep_transcript_clipboard: cli.keep_transcript_clipboard,
+        keep_transcript_clipboard: cli.effective_keep_transcript_clipboard(config),
         insert_transcripts: false,
         rx,
     });
@@ -423,16 +481,28 @@ fn model_dtype_label(path: &std::path::Path) -> String {
     format!("{dtype}{size}")
 }
 
-fn open_cli_engine(cli: &Cli, fetch_quiet: bool, log: &Logger) -> Result<(PathBuf, Engine)> {
-    let config = resolve_engine_config(
+fn open_cli_engine(
+    cli: &Cli,
+    config: &ConfigFile,
+    fetch_quiet: bool,
+    log: &Logger,
+) -> Result<(PathBuf, Engine)> {
+    let verbose = cli.effective_verbose(config);
+    let engine_config = resolve_engine_config(
         cli,
-        || fetch::ensure_default_model_with_verbosity(fetch_quiet, cli.verbose),
+        config,
+        || fetch::ensure_default_model_with_verbosity(fetch_quiet, verbose),
         log,
     )?;
-    let model_path = config.model_path;
+    let model_path = engine_config.model_path;
     let open_started = Instant::now();
-    let engine = open_engine(&model_path, config.threads, config.device_mode, cli.verbose)
-        .with_context(|| format!("could not open model {}", model_path.display()))?;
+    let engine = open_engine(
+        &model_path,
+        engine_config.threads,
+        engine_config.device_mode,
+        verbose,
+    )
+    .with_context(|| format!("could not open model {}", model_path.display()))?;
     let device_summary = resolved_device_summary(engine.device_mode());
     log.verbose(format!(
         "parakit: model opened in {:.0}ms with backend={} threads={} device={}",
@@ -454,17 +524,23 @@ struct EngineConfig {
     device_mode: DeviceMode,
 }
 
-fn resolve_engine_config<F>(cli: &Cli, fetch_default_model: F, log: &Logger) -> Result<EngineConfig>
+fn resolve_engine_config<F>(
+    cli: &Cli,
+    config: &ConfigFile,
+    fetch_default_model: F,
+    log: &Logger,
+) -> Result<EngineConfig>
 where
     F: FnOnce() -> Result<PathBuf>,
 {
-    resolve_engine_config_with_validator(cli, fetch_default_model, |device_mode| {
+    resolve_engine_config_with_validator(cli, config, fetch_default_model, |device_mode| {
         validate_device_request(device_mode, log)
     })
 }
 
 fn resolve_engine_config_with_validator<F, V>(
     cli: &Cli,
+    config: &ConfigFile,
     fetch_default_model: F,
     validate_device: V,
 ) -> Result<EngineConfig>
@@ -472,14 +548,14 @@ where
     F: FnOnce() -> Result<PathBuf>,
     V: FnOnce(DeviceMode) -> Result<()>,
 {
-    let device_mode = cli.device;
+    let device_mode = cli.effective_device(config);
     validate_device(device_mode)?;
-    let model_path = match cli.model.as_deref() {
-        Some(path) => path.to_path_buf(),
+    let model_path = match cli.effective_model(config) {
+        Some(path) => path,
         None => fetch_default_model()?,
     };
     let threads = cli
-        .threads
+        .effective_threads(config)
         .map(NonZeroUsize::get)
         .unwrap_or_else(default_thread_count);
     Ok(EngineConfig {
@@ -489,10 +565,10 @@ where
     })
 }
 
-fn log_level(cli: &Cli) -> LogLevel {
+fn log_level(cli: &Cli, config: &ConfigFile) -> LogLevel {
     if cli.quiet {
         LogLevel::Quiet
-    } else if cli.verbose {
+    } else if cli.effective_verbose(config) {
         LogLevel::Verbose
     } else {
         LogLevel::Normal
@@ -681,6 +757,187 @@ fn format_file_size(bytes: u64) -> String {
     }
 }
 
+fn run_config_command(config_cli: &ConfigCli, quiet: bool) -> Result<()> {
+    match config_cli.command.as_ref().unwrap_or(&ConfigCommand::Show) {
+        ConfigCommand::Path => {
+            if !quiet {
+                println!("{}", config::config_path()?.display());
+            }
+        }
+        ConfigCommand::Init { force } => init_config_file(*force, quiet)?,
+        ConfigCommand::Show => print_config_show(quiet)?,
+        ConfigCommand::Edit => edit_config_file()?,
+    }
+    Ok(())
+}
+
+/// Write the commented config template to the resolved config path.
+///
+/// # Errors
+///
+/// Returns an error if the config directory cannot be created, or if the
+/// file already exists and `force` is `false`.
+fn init_config_file(force: bool, quiet: bool) -> Result<()> {
+    let path = config::config_path()?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create config directory {}", parent.display()))?;
+    }
+
+    let mut open_options = std::fs::OpenOptions::new();
+    open_options.write(true);
+    if force {
+        open_options.create(true).truncate(true);
+    } else {
+        open_options.create_new(true);
+    }
+    let mut file = open_options.open(&path).with_context(|| {
+        format!(
+            "failed to create config file {} (use --force to overwrite an existing file)",
+            path.display()
+        )
+    })?;
+    file.write_all(config::TEMPLATE.as_bytes())
+        .with_context(|| format!("failed to write config file {}", path.display()))?;
+
+    if !quiet {
+        println!("wrote {}", path.display());
+    }
+    Ok(())
+}
+
+/// Print the resolved config path and effective merged values.
+///
+/// # Errors
+///
+/// Returns an error if the config path cannot be resolved or the config
+/// file exists but fails to parse or validate.
+fn print_config_show(quiet: bool) -> Result<()> {
+    if quiet {
+        return Ok(());
+    }
+
+    let path = config::config_path()?;
+    let config = config::load()?;
+
+    println!("parakit config");
+    println!("  path: {}", path.display());
+    println!("  exists: {}", path.is_file());
+    println!("  daemon:");
+    println!(
+        "    model: {}",
+        config
+            .daemon
+            .model
+            .as_ref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "(default: hosted Q8_0)".to_string())
+    );
+    println!(
+        "    device: {}",
+        config
+            .daemon
+            .device
+            .map(|d| d.as_str().to_string())
+            .unwrap_or_else(|| format!("(default: {})", DeviceMode::default().as_str()))
+    );
+    println!(
+        "    threads: {}",
+        config
+            .daemon
+            .threads
+            .map(|t| t.to_string())
+            .unwrap_or_else(|| "(default: auto-detected)".to_string())
+    );
+    println!(
+        "    paste_mode: {}",
+        config
+            .daemon
+            .paste_mode
+            .map(|m| m.label().to_string())
+            .unwrap_or_else(|| "(default: platform)".to_string())
+    );
+    println!(
+        "    keep_transcript_clipboard: {}",
+        config.daemon.keep_transcript_clipboard.unwrap_or(false)
+    );
+    println!("    sounds: {}", config.daemon.sounds.unwrap_or(true));
+    println!("    verbose: {}", config.daemon.verbose.unwrap_or(false));
+    println!("  cleaning:");
+    println!("    enabled: {}", config.cleaning.enabled.unwrap_or(true));
+    println!("    disabled_rules: {:?}", config.cleaning.disabled_rules);
+    println!("  logging:");
+    println!(
+        "    dir: {}",
+        config
+            .logging
+            .dir
+            .as_ref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "(disabled)".to_string())
+    );
+    println!(
+        "    format: {}",
+        config
+            .logging
+            .format
+            .map(|f| format!("{f:?}").to_lowercase())
+            .unwrap_or_else(|| "jsonl".to_string())
+    );
+    #[cfg(target_os = "linux")]
+    {
+        println!("  hotkey:");
+        println!(
+            "    backend: {}",
+            config
+                .hotkey
+                .backend
+                .map(|b| b.label().to_string())
+                .unwrap_or_else(|| "(default: auto)".to_string())
+        );
+    }
+    println!("  rules:");
+    println!("    user rules: {}", config.rules.user.len());
+    for user_rule in &config.rules.user {
+        println!("      {} ({:?})", user_rule.name, user_rule.position);
+    }
+    Ok(())
+}
+
+/// Open the config file in `$VISUAL` or `$EDITOR`, creating it from the
+/// template first if it does not exist yet.
+///
+/// # Errors
+///
+/// Returns an error if the config path cannot be resolved, the template
+/// cannot be written when the file is missing, neither `$VISUAL` nor
+/// `$EDITOR` is set, the editor cannot be launched, or the editor exits
+/// with a non-zero status.
+fn edit_config_file() -> Result<()> {
+    let path = config::config_path()?;
+    if !path.is_file() {
+        init_config_file(false, true)?;
+    }
+
+    let editor = std::env::var("VISUAL")
+        .or_else(|_| std::env::var("EDITOR"))
+        .map_err(|_| {
+            anyhow::anyhow!(
+                "no editor configured: set $VISUAL or $EDITOR, or edit {} directly",
+                path.display()
+            )
+        })?;
+
+    let status = std::process::Command::new(&editor)
+        .arg(&path)
+        .status()
+        .with_context(|| format!("failed to launch editor '{editor}'"))?;
+    if !status.success() {
+        anyhow::bail!("editor '{editor}' exited with {status}");
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod app_tests {
     use super::*;
@@ -783,10 +1040,12 @@ mod app_tests {
     #[test]
     fn explicit_gpu_validation_runs_before_default_model_fetch() {
         let cli = Cli::parse_from(["parakit", "--device", "gpu"]);
+        let config = ConfigFile::default();
         let fetched_default = std::cell::Cell::new(false);
 
         let err = resolve_engine_config_with_validator(
             &cli,
+            &config,
             || {
                 fetched_default.set(true);
                 Ok(PathBuf::from("target/tmp/default-model.gguf"))

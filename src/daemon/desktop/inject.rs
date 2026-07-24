@@ -43,7 +43,8 @@ mod inject_smoke;
 pub(crate) const CLIPBOARD_RESTORE_ERROR: &str = "could not restore previous clipboard contents";
 
 /// Paste shortcut style for batch transcript insertion.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub(crate) enum PasteMode {
     /// Terminal-friendly paste: `Ctrl+Shift+V` on Linux/Windows, `Cmd+V` on macOS.
     Terminal,
