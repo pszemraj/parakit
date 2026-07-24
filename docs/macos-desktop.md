@@ -40,6 +40,17 @@ parakit
 
 If Accessibility is missing, `doctor` can trigger the macOS prompt. Input Monitoring must be granted manually in System Settings. After changing either permission, restart parakit and rerun `parakit doctor`. If Microphone is not determined yet, the first capture may trigger the Microphone prompt; rerun parakit after granting it.
 
+### `doctor --deep`
+
+`parakit doctor --deep` runs a deeper insertion smoke test than plain `doctor`. For the `standard`/`terminal` paste modes it runs two stages and reports which one failed:
+
+1. A suppressed Cmd+V event-tap smoke test: parakit posts a synthetic paste chord and confirms, via a CoreGraphics event tap that suppresses the chord before it reaches any app, that the chord was actually posted.
+2. A real end-to-end paste-transaction smoke test: parakit briefly opens a small, unobtrusive titled window with a text field, pastes a unique sentinel into it through the same production clipboard-swap/paste/`AXValue`-acknowledgement path the daemon uses for real dictation, then verifies the text landed, was Accessibility-acknowledged, and that the clipboard was restored to whatever it held before the test.
+
+For `direct` mode, only the suppressed key-event tap runs (direct typing never touches the clipboard or `AXValue` acknowledgement, so there is no transaction to open a window and test).
+
+Because stage 2 opens a real window and drives real Accessibility APIs, `doctor --deep` on macOS requires an active GUI login session (not a headless or SSH-only session) with Accessibility already granted to the terminal. The window closes itself automatically once the check completes.
+
 ## Hotkey
 
 The default macOS push-to-talk hotkey is `Left Control+Space`. This deliberately avoids `Command+Space`, which is normally Spotlight. Press and hold `Left Control+Space` while speaking, then release when done. parakit handles the chord with a CoreGraphics event tap and suppresses the Space key while the exact chord is active. Modified chords such as `Left Control+Shift+Space`, `Control+Option+Space`, or `Command+Space` pass through to macOS and the focused app.

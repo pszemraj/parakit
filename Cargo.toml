@@ -107,9 +107,15 @@ windows = { version = "0.62.2", features = [
 [target.'cfg(target_os = "macos")'.dependencies]
 # The objc2 framework crates enable large generated API surfaces by default.
 # Keep only the AppKit/Foundation items parakit calls from the CLI daemon.
+# NSApplication/NSGraphics/NSResponder/NSText/NSTextView/NSView/NSWindow are
+# additionally needed only by the `doctor --deep` real-paste-transaction
+# diagnostic harness (`daemon::macos::diagnostics`), which builds a throwaway
+# probe window/text view to paste a sentinel through the production
+# clipboard-swap transaction; the daemon's hot insertion path never touches
+# AppKit.
 objc2 = { version = "0.6.4", default-features = false }
-objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSRunningApplication", "NSWorkspace"] }
-objc2-foundation = { version = "0.3.2", default-features = false, features = ["NSString"] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSApplication", "NSGraphics", "NSResponder", "NSRunningApplication", "NSText", "NSTextView", "NSView", "NSWindow", "NSWorkspace"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["NSGeometry", "NSString"] }
 
 [features]
 default = ["bundled", "daemon"]

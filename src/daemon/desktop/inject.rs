@@ -1290,15 +1290,35 @@ fn platform_paste_smoke_test(mode: PasteMode) -> Result<()> {
     super::windows_paste_smoke::windows_paste_smoke_test(mode)
 }
 
+/// Run the macOS `doctor --deep` insertion smoke test.
+///
+/// Direct mode runs a single stage: a suppressed synthetic key-event tap
+/// proving parakit can post keystrokes at all (there is no clipboard/paste
+/// chord/`AXValue` acknowledgement pipeline in direct-typing mode for a
+/// second stage to exercise).
+///
+/// Standard/Terminal mode runs two stages, and reports which one failed:
+///   1. A suppressed Cmd+V event tap (fast, low-level, side-effect-free)
+///      proving parakit can post a full paste chord.
+///   2. [`crate::daemon::macos::real_paste_transaction_smoke_test`], which
+///      pastes a sentinel through the production guarded-paste transaction
+///      into a throwaway text view and verifies it actually landed, was
+///      `AXValue`-acknowledged, and the clipboard was restored.
 #[cfg(target_os = "macos")]
 fn platform_paste_smoke_test(mode: PasteMode) -> Result<()> {
     let mut injector = Injector::new()?;
     match mode {
         PasteMode::Direct => {
             crate::daemon::macos::suppressed_key_event_smoke(|| injector.type_text("a"))
+                .context("macOS insertion smoke stage 1 (suppressed key-event tap) failed")
         }
         PasteMode::Standard | PasteMode::Terminal => {
-            crate::daemon::macos::suppressed_paste_shortcut_smoke(|| injector.paste_clipboard(mode))
+            crate::daemon::macos::suppressed_paste_shortcut_smoke(|| {
+                injector.paste_clipboard(mode)
+            })
+            .context("macOS insertion smoke stage 1 (suppressed paste-shortcut tap) failed")?;
+            crate::daemon::macos::real_paste_transaction_smoke_test(mode)
+                .context("macOS insertion smoke stage 2 (real paste-transaction) failed")
         }
     }
 }
