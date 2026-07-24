@@ -4,17 +4,19 @@ parakit is a Rust 1.87+ binary that links to the vendored [CrispASR](https://git
 
 Command examples use a POSIX shell unless the surrounding section is Windows-specific. Windows-only commands are shown as `bat` or `powershell`.
 
+Install Rust via [rustup](https://rustup.rs) if you do not already have a toolchain; parakit requires Rust 1.87 or newer (`rust-version` in `Cargo.toml`).
+
 ## Native Dependencies
 
 Cargo handles Rust packages. System packages are still needed for audio, desktop input, X11/XTest insertion, CMake, and optional accelerator SDKs.
 
 | OS | Packages |
 | --- | --- |
-| Ubuntu 24.04 | `cmake build-essential libasound2-dev libudev-dev libxtst-dev libxi-dev libx11-dev libxkbcommon-dev libevdev-dev libxdo-dev libgomp1 pkg-config autoconf libtool` |
-| Fedora | `cmake gcc-c++ alsa-lib-devel libudev-devel libXtst-devel libXi-devel libX11-devel libxkbcommon-devel libevdev-devel xdotool-devel pkgconf autoconf libtool` |
-| Arch | `cmake base-devel alsa-lib libxtst libxi libx11 libxkbcommon libevdev xdotool pkgconf autoconf libtool` |
+| Ubuntu 24.04 | `cmake build-essential libasound2-dev libxtst-dev libxi-dev libx11-dev libxkbcommon-dev libevdev-dev libgomp1 pkg-config` |
+| Fedora | `cmake gcc-c++ alsa-lib-devel libXtst-devel libXi-devel libX11-devel libxkbcommon-devel libevdev-devel pkgconf` |
+| Arch | `cmake base-devel alsa-lib libxtst libxi libx11 libxkbcommon libevdev pkgconf` |
 | Windows | Visual Studio 2022 with the "Desktop development with C++" workload, plus CMake on `PATH`. GPU builds through the Windows scripts also require Ninja. |
-| macOS | Apple Silicon with Xcode command line tools plus `cmake autoconf automake libtool pkg-config`. |
+| macOS | Apple Silicon with Xcode command line tools plus `cmake pkg-config`. |
 
 CUDA builds need the CUDA Toolkit with `nvcc` on `PATH`.
 
