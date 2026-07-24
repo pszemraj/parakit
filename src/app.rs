@@ -72,12 +72,12 @@ pub(crate) fn run() -> Result<()> {
     configure_native_logging(cli.verbose);
 
     // `fetch`, `cache`, `config`, `status`, `stop`, `paste-last`,
-    // `copy-last`, and `test-paste` must keep working even when the user's
-    // config file is broken (missing, bad TOML, invalid user rule), so none
-    // of these branches touch `config::load()`. `doctor` is the one
-    // dispatch-block exception: it loads config itself below because it
-    // reports the same effective hotkey/paste-mode values the daemon would
-    // use.
+    // `copy-last`, `history`, and `test-paste` must keep working even when
+    // the user's config file is broken (missing, bad TOML, invalid user
+    // rule), so none of these branches touch `config::load()`. `doctor` is
+    // the one dispatch-block exception: it loads config itself below
+    // because it reports the same effective hotkey/paste-mode values the
+    // daemon would use.
     if let Some(command) = &cli.command {
         match command {
             Commands::Fetch(fetch_cli) => {
@@ -132,16 +132,32 @@ pub(crate) fn run() -> Result<()> {
                 daemon::ipc::run_client(daemon::ipc::IpcCommand::Stop, cli.quiet, cli.verbose)?;
                 return Ok(());
             }
-            Commands::PasteLast => {
+            Commands::PasteLast(history_ref) => {
+                let index = wire_history_index(history_ref.index)?;
                 daemon::ipc::run_client(
-                    daemon::ipc::IpcCommand::PasteLast,
+                    daemon::ipc::IpcCommand::PasteLast { index },
                     cli.quiet,
                     cli.verbose,
                 )?;
                 return Ok(());
             }
-            Commands::CopyLast => {
-                daemon::ipc::run_client(daemon::ipc::IpcCommand::CopyLast, cli.quiet, cli.verbose)?;
+            Commands::CopyLast(history_ref) => {
+                let index = wire_history_index(history_ref.index)?;
+                daemon::ipc::run_client(
+                    daemon::ipc::IpcCommand::CopyLast { index },
+                    cli.quiet,
+                    cli.verbose,
+                )?;
+                return Ok(());
+            }
+            Commands::History(history_cli) => {
+                daemon::ipc::run_client(
+                    daemon::ipc::IpcCommand::History {
+                        limit: history_cli.limit,
+                    },
+                    cli.quiet,
+                    cli.verbose,
+                )?;
                 return Ok(());
             }
             Commands::TestPaste(test_paste) => {
@@ -225,7 +241,9 @@ pub(crate) fn run() -> Result<()> {
     ));
     daemon::inject::preflight(paste_mode).context("text insertion preflight failed")?;
     log.verbose("parakit: insertion preflight passed");
-    let ipc_state = Arc::new(daemon::ipc::SharedState::new());
+    let ipc_state = Arc::new(daemon::ipc::SharedState::with_history_limit(
+        cli.effective_transcript_history(&config),
+    ));
     let keep_transcript_clipboard = cli.effective_keep_transcript_clipboard(&config);
     #[cfg(any(unix, target_os = "windows"))]
     let _ipc_server = daemon::ipc::spawn_server(
@@ -351,6 +369,25 @@ pub(crate) fn run() -> Result<()> {
     let _ = coordinator.join();
     let _ = worker.join();
     Ok(())
+}
+
+/// Convert the CLI's 1-based `paste-last`/`copy-last` index into the wire
+/// protocol's 0-based index.
+///
+/// # Returns
+///
+/// `0` (most recent) when `index` is `None`, otherwise `index - 1`.
+///
+/// # Errors
+///
+/// Returns an error when `index` is `Some(0)`: transcript numbering starts
+/// at 1.
+fn wire_history_index(index: Option<usize>) -> Result<usize> {
+    match index {
+        None => Ok(0),
+        Some(0) => anyhow::bail!("transcript index starts at 1; 1 is the most recent"),
+        Some(n) => Ok(n - 1),
+    }
 }
 
 fn configure_native_logging(verbose: bool) {
@@ -895,6 +932,14 @@ fn print_config_show(quiet: bool) -> Result<()> {
     );
     println!("    sounds: {}", config.daemon.sounds.unwrap_or(true));
     println!("    verbose: {}", config.daemon.verbose.unwrap_or(false));
+    println!(
+        "    transcript_history: {}",
+        config
+            .daemon
+            .transcript_history
+            .map(|n| n.to_string())
+            .unwrap_or_else(|| format!("(default: {})", daemon::ipc::DEFAULT_TRANSCRIPT_HISTORY))
+    );
     println!("  cleaning:");
     println!("    enabled: {}", config.cleaning.enabled.unwrap_or(true));
     println!("    disabled_rules: {:?}", config.cleaning.disabled_rules);

@@ -10,6 +10,7 @@ use crate::config::ConfigFile;
 #[cfg(target_os = "linux")]
 use crate::daemon::hotkey::HotkeyBackend;
 use crate::daemon::inject::PasteMode;
+use crate::daemon::ipc::DEFAULT_TRANSCRIPT_HISTORY;
 
 /// Parsed command-line options for daemon mode and subcommands.
 #[derive(Parser, Debug)]
@@ -112,12 +113,30 @@ pub(crate) enum Commands {
     Status,
     /// Stop a running daemon over the local control socket.
     Stop,
-    /// Paste the last transcript remembered by the running daemon.
-    PasteLast,
-    /// Copy the last transcript remembered by the running daemon.
-    CopyLast,
+    /// Paste a transcript remembered by the running daemon.
+    PasteLast(HistoryRefCli),
+    /// Copy a transcript remembered by the running daemon.
+    CopyLast(HistoryRefCli),
+    /// List transcripts the running daemon is holding in memory.
+    History(HistoryCli),
     /// Exercise clipboard staging and paste without recording microphone audio.
     TestPaste(TestPasteCli),
+}
+
+/// Arguments shared by `paste-last` and `copy-last`.
+#[derive(Args, Debug)]
+pub(crate) struct HistoryRefCli {
+    /// Which remembered transcript to use, counting back from the most
+    /// recent. 1 is the latest.
+    pub(crate) index: Option<usize>,
+}
+
+/// Arguments for listing remembered transcripts.
+#[derive(Args, Debug)]
+pub(crate) struct HistoryCli {
+    /// Show at most this many entries.
+    #[arg(long)]
+    pub(crate) limit: Option<usize>,
 }
 
 /// Arguments for model cache inspection commands.
@@ -329,6 +348,20 @@ impl Cli {
     /// `true` when verbose diagnostics should print.
     pub(crate) fn effective_verbose(&self, config: &ConfigFile) -> bool {
         self.verbose || config.daemon.verbose.unwrap_or(false)
+    }
+
+    /// Return the number of transcripts kept in daemon memory: config
+    /// `daemon.transcript_history`, then [`DEFAULT_TRANSCRIPT_HISTORY`].
+    /// `0` disables `paste-last`, `copy-last`, and `history`.
+    ///
+    /// # Returns
+    ///
+    /// The effective transcript history depth.
+    pub(crate) fn effective_transcript_history(&self, config: &ConfigFile) -> usize {
+        config
+            .daemon
+            .transcript_history
+            .unwrap_or(DEFAULT_TRANSCRIPT_HISTORY)
     }
 
     /// Return the union of CLI `--disable-rule` names and config
@@ -544,5 +577,20 @@ mod tests {
         ];
         expected.sort();
         assert_eq!(merged, expected);
+    }
+
+    #[test]
+    fn effective_transcript_history_prefers_config_then_default() {
+        let mut config = ConfigFile::default();
+        assert_eq!(
+            cli_from(&[]).effective_transcript_history(&config),
+            DEFAULT_TRANSCRIPT_HISTORY
+        );
+
+        config.daemon.transcript_history = Some(0);
+        assert_eq!(cli_from(&[]).effective_transcript_history(&config), 0);
+
+        config.daemon.transcript_history = Some(25);
+        assert_eq!(cli_from(&[]).effective_transcript_history(&config), 25);
     }
 }

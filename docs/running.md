@@ -101,12 +101,13 @@ When the daemon is running, these commands talk to it through local per-user IPC
 ```text
 parakit status
 parakit stop
-parakit paste-last
-parakit copy-last
+parakit paste-last [N]
+parakit copy-last [N]
+parakit history
 parakit test-paste "hello from parakit"
 ```
 
-`paste-last` and `copy-last` keep only the latest transcript in daemon memory. `test-paste` runs clipboard staging, focus checks, paste sanitization, and the paste chord without using the microphone.
+The daemon keeps a ring buffer of recent transcripts in memory (`daemon.transcript_history` entries, 10 by default). `paste-last` and `copy-last` act on the most recent one by default; pass `N` (1-based, counting back from the most recent) to reach further back, e.g. `parakit paste-last 3` for the third-most-recent transcript. `parakit history` lists what the daemon currently remembers, newest first; `--limit N` caps how many entries print. This history is memory-only: it is never written to disk and is gone as soon as the daemon stops. `test-paste` runs clipboard staging, focus checks, paste sanitization, and the paste chord without using the microphone.
 
 Plain `parakit status` output is unchanged and safe for scripts to parse:
 
@@ -132,6 +133,7 @@ last transcript: 42 bytes
   sounds:     on
   cleaning:   on (12 rules)
   logging:    jsonl to /home/user/.parakit/logs
+  history:    3 of 10
 ```
 
 The detail block reflects the daemon's own state at query time, not the querying process's flags. If the daemon has not finished starting up yet (or predates this feature), `--verbose status` instead prints a single `detail unavailable (daemon starting or older version)` line after the two lines above.
@@ -226,6 +228,8 @@ parakit --no-sounds
 
 parakit reads an optional `config.toml` for daemon defaults, cleaning preferences, transcription logging, the Linux hotkey backend, and user-defined cleaning rules. Precedence is **CLI flags > config file > built-in defaults**.
 
+[configuration.md](configuration.md) is the per-key reference: every key's type, default, accepted values, and interactions. This section is the overview.
+
 Default path, following each platform's normal config-directory convention:
 
 ```text
@@ -252,6 +256,7 @@ Template excerpt (every key is commented out by default; see `parakit config ini
 # device = "auto"          # "auto", "cpu", or "gpu"
 # paste_mode = "standard"  # "terminal", "standard", or "direct"
 # verbose = false          # a CLI --quiet flag always wins over this
+# transcript_history = 10  # transcripts kept in daemon memory; 0 disables paste-last/copy-last/history
 
 [cleaning]
 # enabled = true
@@ -272,3 +277,5 @@ Template excerpt (every key is commented out by default; see `parakit config ini
 ```
 
 See [cleaning-rules.md](cleaning-rules.md#user-rules) for the full user-defined rule format, position semantics, and validation errors.
+
+`daemon.transcript_history` only affects daemon memory: it is never written to disk, existing history does not survive a restart, and a changed value takes effect the next time the daemon starts (a running daemon keeps the depth it started with).

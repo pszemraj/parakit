@@ -57,6 +57,13 @@ To avoid sending a paste chord, copy the last transcript instead:
 parakit copy-last
 ```
 
+If the transcript you need is not the most recent one, list what the daemon still remembers and reach back by number:
+
+```text
+parakit history
+parakit copy-last 2
+```
+
 ## Wrong Microphone
 
 Microphone selection behavior is described in [running.md#microphone](running.md#microphone).

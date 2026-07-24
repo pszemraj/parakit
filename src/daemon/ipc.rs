@@ -7,6 +7,7 @@ use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 #[cfg(any(unix, target_os = "windows"))]
 use std::cell::Cell;
+use std::collections::VecDeque;
 #[cfg(unix)]
 use std::io::{BufRead, BufReader, Write};
 #[cfg(unix)]
@@ -35,7 +36,18 @@ use super::{
 #[cfg(unix)]
 const IPC_CLIENT_TIMEOUT: Duration = Duration::from_millis(750);
 
+/// Default number of transcripts kept in daemon memory when
+/// `daemon.transcript_history` is unset.
+pub(crate) const DEFAULT_TRANSCRIPT_HISTORY: usize = 10;
+
 /// Command sent by helper subcommands to the running daemon.
+///
+/// `PasteLast` and `CopyLast` changed from unit variants to struct variants
+/// carrying an `index` when transcript history became configurable. This is
+/// a deliberate wire-format break: a client built after this change talking
+/// to a daemon started by an older build gets a parse error for these two
+/// commands. Restart the daemon; history depth is read once at startup, so
+/// there is no way to bridge the two wire formats.
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum IpcCommand {
@@ -43,10 +55,27 @@ pub(crate) enum IpcCommand {
     Status,
     /// Stop the daemon process.
     Stop,
-    /// Paste the most recent transcript remembered in memory.
-    PasteLast,
-    /// Copy the most recent transcript remembered in memory.
-    CopyLast,
+    /// Paste a transcript remembered in memory.
+    ///
+    /// `index` is 0-based on the wire (0 is the most recent); a missing key
+    /// defaults to 0. The CLI number is 1-based and is converted to this
+    /// 0-based wire index at the CLI boundary.
+    PasteLast {
+        #[serde(default)]
+        index: usize,
+    },
+    /// Copy a transcript remembered in memory. See `PasteLast` for the
+    /// wire index convention.
+    CopyLast {
+        #[serde(default)]
+        index: usize,
+    },
+    /// List transcripts remembered in memory, newest first.
+    History {
+        /// Cap the number of entries returned. `None` returns all of them.
+        #[serde(default)]
+        limit: Option<usize>,
+    },
     /// Run the insertion path with caller-supplied text, without microphone use.
     TestPaste { text: String },
 }
@@ -71,8 +100,24 @@ pub(crate) enum IpcResponse {
         #[serde(default)]
         detail: Option<Box<StatusDetail>>,
     },
+    /// Transcript history listing, newest first.
+    History { entries: Vec<HistoryEntry> },
     /// Command failed.
     Err { message: String },
+}
+
+/// One remembered transcript, as reported by the `History` command.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub(crate) struct HistoryEntry {
+    /// Position counting back from the most recent, 1-based to match the
+    /// number the user passes to `copy-last` / `paste-last`.
+    pub(crate) index: usize,
+    /// Seconds since the transcript was remembered.
+    pub(crate) age_secs: u64,
+    /// Transcript length in characters.
+    pub(crate) chars: usize,
+    /// Single-line, whitespace-collapsed excerpt for display.
+    pub(crate) preview: String,
 }
 
 /// Extended daemon runtime detail returned by `Status` when
@@ -107,6 +152,11 @@ pub(crate) struct StatusDetail {
     pub(crate) log: Option<String>,
     /// Linux hotkey backend label, when applicable.
     pub(crate) hotkey_backend: Option<String>,
+    /// Transcript history depth summary (`"3 of 10"`) or `"disabled"` when
+    /// `daemon.transcript_history = 0`. `#[serde(default)]` so a reply from
+    /// an older daemon build without this key still deserializes.
+    #[serde(default)]
+    pub(crate) history: Option<String>,
 }
 
 /// Daemon runtime info captured once at startup and exposed through `Status`.
@@ -154,29 +204,57 @@ pub(crate) struct SharedState {
     started_at: Instant,
     /// Count of successful dictations (transcript produced) this session.
     dictation_count: AtomicU64,
+    /// Maximum number of transcripts kept in `inner.history`. Immutable for
+    /// the life of the daemon process: history depth is read once at
+    /// startup from `daemon.transcript_history`.
+    history_limit: usize,
 }
 
 struct StateSnapshot {
     phase: String,
-    last_transcript: Option<String>,
+    /// Remembered transcripts, newest first. Never persisted to disk.
+    history: VecDeque<TranscriptEntry>,
+}
+
+/// One transcript remembered in daemon memory.
+struct TranscriptEntry {
+    text: String,
+    at: Instant,
 }
 
 impl SharedState {
-    /// Create an idle state snapshot.
+    /// Create an idle state snapshot with the default transcript history
+    /// depth.
     ///
     /// # Returns
     ///
-    /// Shared state with no remembered transcript.
+    /// Shared state with no remembered transcripts.
     pub(crate) fn new() -> Self {
+        Self::with_history_limit(DEFAULT_TRANSCRIPT_HISTORY)
+    }
+
+    /// Create an idle state snapshot that remembers at most `limit`
+    /// transcripts.
+    ///
+    /// # Arguments
+    ///
+    /// * `limit` - Maximum number of transcripts kept in memory. `0`
+    ///   disables `paste-last`, `copy-last`, and `history`.
+    ///
+    /// # Returns
+    ///
+    /// Shared state with no remembered transcripts.
+    pub(crate) fn with_history_limit(limit: usize) -> Self {
         Self {
             inner: Mutex::new(StateSnapshot {
                 phase: "starting".to_string(),
-                last_transcript: None,
+                history: VecDeque::new(),
             }),
             insertion: Mutex::new(()),
             info: Mutex::new(None),
             started_at: Instant::now(),
             dictation_count: AtomicU64::new(0),
+            history_limit: limit,
         }
     }
 
@@ -185,9 +263,18 @@ impl SharedState {
         self.inner.lock().phase = phase.into();
     }
 
-    /// Remember the latest transcript in memory.
-    pub(crate) fn set_last_transcript(&self, text: String) {
-        self.inner.lock().last_transcript = Some(text);
+    /// Remember a transcript in memory, evicting the oldest entry once
+    /// `history_limit` is exceeded. No-op when `history_limit` is 0.
+    pub(crate) fn remember_transcript(&self, text: String) {
+        if self.history_limit == 0 {
+            return;
+        }
+        let mut inner = self.inner.lock();
+        inner.history.push_front(TranscriptEntry {
+            text,
+            at: Instant::now(),
+        });
+        inner.history.truncate(self.history_limit);
     }
 
     /// Store daemon runtime info, making it visible to subsequent `Status`
@@ -226,18 +313,120 @@ impl SharedState {
                 cleaning: info.cleaning_summary.clone(),
                 log: info.log_summary.clone(),
                 hotkey_backend: info.hotkey_backend_label.map(str::to_string),
+                history: Some(self.history_label(inner.history.len())),
             })
             .map(Box::new);
         IpcResponse::Status {
             phase: inner.phase.clone(),
-            last_transcript_len: inner.last_transcript.as_ref().map(String::len),
+            last_transcript_len: inner.history.front().map(|entry| entry.text.len()),
             detail,
         }
     }
 
+    /// Summarize remembered transcript count against `history_limit` for
+    /// `StatusDetail::history`.
+    ///
+    /// # Returns
+    ///
+    /// `"disabled"` when `history_limit` is 0, otherwise `"{len} of
+    /// {history_limit}"`.
+    #[cfg(any(unix, target_os = "windows", test))]
+    fn history_label(&self, history_len: usize) -> String {
+        if self.history_limit == 0 {
+            "disabled".to_string()
+        } else {
+            format!("{history_len} of {}", self.history_limit)
+        }
+    }
+
+    /// Look up a remembered transcript by 0-based index (0 is the most
+    /// recent).
+    ///
+    /// # Returns
+    ///
+    /// `Some(text)` when `index` names a remembered transcript, `None`
+    /// otherwise (including when history is disabled or empty).
+    #[cfg(any(unix, target_os = "windows", test))]
+    fn transcript_at(&self, index: usize) -> Option<String> {
+        self.inner
+            .lock()
+            .history
+            .get(index)
+            .map(|entry| entry.text.clone())
+    }
+
+    /// Fail when transcript history is turned off, so `history` reports the
+    /// same reason as `paste-last` and `copy-last` instead of looking like
+    /// an empty session.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `history_limit` is 0.
     #[cfg(any(unix, target_os = "windows"))]
-    fn last_transcript(&self) -> Option<String> {
-        self.inner.lock().last_transcript.clone()
+    fn ensure_history_enabled(&self) -> Result<()> {
+        if self.history_limit == 0 {
+            bail!("transcript history is disabled (daemon.transcript_history = 0)");
+        }
+        Ok(())
+    }
+
+    /// Resolve a transcript by 0-based wire index, honoring the
+    /// history-disabled / empty / out-of-range errors in that priority
+    /// order.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `history_limit` is 0, no transcript has been
+    /// remembered yet, or `index` is past the end of what is remembered.
+    #[cfg(any(unix, target_os = "windows"))]
+    fn resolve_transcript(&self, index: usize) -> Result<String> {
+        self.ensure_history_enabled()?;
+        let count = self.inner.lock().history.len();
+        if count == 0 {
+            bail!("no transcript has been captured in this daemon session");
+        }
+        if index >= count {
+            let noun = if count == 1 {
+                "transcript"
+            } else {
+                "transcripts"
+            };
+            bail!("only {count} {noun} remembered in this daemon session");
+        }
+        Ok(self
+            .transcript_at(index)
+            .expect("index checked against history length above"))
+    }
+
+    /// Snapshot remembered transcripts, newest first, for the `History`
+    /// command.
+    ///
+    /// # Arguments
+    ///
+    /// * `limit` - Cap on the number of entries returned. `None` returns
+    ///   every remembered transcript.
+    ///
+    /// # Returns
+    ///
+    /// Entries with 1-based `index` counting back from the most recent.
+    #[cfg(any(unix, target_os = "windows", test))]
+    fn history_snapshot(&self, limit: Option<usize>) -> Vec<HistoryEntry> {
+        let inner = self.inner.lock();
+        let now = Instant::now();
+        let entries = inner.history.iter().enumerate();
+        let capped: Vec<_> = match limit {
+            Some(limit) => entries.take(limit).collect(),
+            None => entries.collect(),
+        };
+        capped
+            .into_iter()
+            .map(|(position, entry)| HistoryEntry {
+                index: position + 1,
+                age_secs: now.saturating_duration_since(entry.at).as_secs(),
+                chars: entry.text.chars().count(),
+                preview: preview_text(&entry.text),
+            })
+            .collect()
     }
 
     /// Run a clipboard/insertion transaction while excluding worker and IPC
@@ -275,7 +464,7 @@ impl Drop for IpcServer {
 ///
 /// # Arguments
 ///
-/// * `state` - Shared daemon status and last-transcript cache.
+/// * `state` - Shared daemon status and transcript history.
 /// * `paste_mode` - Paste mode used by paste-related commands.
 /// * `log` - Logger for socket errors.
 ///
@@ -340,7 +529,34 @@ pub(crate) fn run_client(command: IpcCommand, quiet: bool, verbose: bool) -> Res
             }
             Ok(())
         }
+        IpcResponse::History { entries } => {
+            if !quiet {
+                print_history(&entries);
+            }
+            Ok(())
+        }
         IpcResponse::Err { message } => bail!("{message}"),
+    }
+}
+
+/// Print the `History` command's transcript listing.
+///
+/// # Arguments
+///
+/// * `entries` - Transcripts remembered by the daemon, newest first.
+fn print_history(entries: &[HistoryEntry]) {
+    if entries.is_empty() {
+        println!("no transcripts remembered in this daemon session");
+        return;
+    }
+    for entry in entries {
+        println!(
+            "{index:<3}{age:<10}{chars:>4} chars  {preview}",
+            index = entry.index,
+            age = format_age(entry.age_secs),
+            chars = entry.chars,
+            preview = entry.preview,
+        );
     }
 }
 
@@ -369,6 +585,9 @@ fn print_status_detail(detail: Option<&StatusDetail>) {
     println!("  sounds:     {}", if detail.sounds { "on" } else { "off" });
     println!("  cleaning:   {}", detail.cleaning);
     println!("  logging:    {}", detail.log.as_deref().unwrap_or("off"));
+    if let Some(history) = &detail.history {
+        println!("  history:    {history}");
+    }
     if let Some(hotkey_backend) = &detail.hotkey_backend {
         println!("  hotkey:     {hotkey_backend}");
     }
@@ -390,6 +609,33 @@ fn format_uptime(total_secs: u64) -> String {
     } else {
         format!("{seconds}s")
     }
+}
+
+/// Humanize a transcript's age as `format_uptime` output plus `" ago"`.
+///
+/// # Returns
+///
+/// e.g. `"12s ago"`, `"3m 5s ago"`, or `"1h 23m ago"`.
+fn format_age(age_secs: u64) -> String {
+    format!("{} ago", format_uptime(age_secs))
+}
+
+/// Collapse a transcript into a single-line preview for `history` output.
+///
+/// # Returns
+///
+/// The transcript with every run of whitespace (including newlines)
+/// collapsed to a single space and trimmed, truncated on a char boundary
+/// to 72 characters with a trailing `…` when truncation occurred.
+fn preview_text(text: &str) -> String {
+    const MAX_CHARS: usize = 72;
+    let collapsed = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if collapsed.chars().count() <= MAX_CHARS {
+        return collapsed;
+    }
+    let mut truncated: String = collapsed.chars().take(MAX_CHARS).collect();
+    truncated.push('…');
+    truncated
 }
 
 #[cfg(unix)]
@@ -531,6 +777,23 @@ struct CommandOutcome {
     stop_after_response: bool,
 }
 
+/// Human-readable reference to a 0-based wire history index, used in
+/// `paste-last`/`copy-last` success messages.
+///
+/// # Returns
+///
+/// `"last transcript"` for index 0 (byte-identical to the pre-history
+/// wording), otherwise `"transcript {index + 1}"` (1-based, matching the
+/// CLI's `N` argument).
+#[cfg(any(unix, target_os = "windows"))]
+fn history_ref_label(index: usize) -> String {
+    if index == 0 {
+        "last transcript".to_string()
+    } else {
+        format!("transcript {}", index + 1)
+    }
+}
+
 #[cfg(any(unix, target_os = "windows"))]
 fn handle_command(
     command: IpcCommand,
@@ -551,39 +814,44 @@ fn handle_command(
             },
             stop_after_response: true,
         }),
-        IpcCommand::PasteLast => {
+        IpcCommand::PasteLast { index } => {
             let result = state.with_insertion_lock(|| {
-                let text = state
-                    .last_transcript()
-                    .context("no transcript has been captured in this daemon session")?;
+                let text = state.resolve_transcript(index)?;
                 paste_text(&text, paste_mode, keep_transcript_clipboard, log, notifier)
             })?;
+            let what = history_ref_label(index);
             Ok(CommandOutcome {
                 response: IpcResponse::Ok {
                     message: match result {
-                        InsertOutcome::Pasted => "pasted last transcript",
+                        InsertOutcome::Pasted => format!("pasted {what}"),
                         InsertOutcome::PastedUnverified => {
-                            "pasted last transcript (insertion unconfirmed)"
+                            format!("pasted {what} (insertion unconfirmed)")
                         }
-                        InsertOutcome::CopiedOnly => "copied last transcript",
-                        InsertOutcome::Blocked => "paste blocked",
-                        InsertOutcome::Skipped => "paste skipped",
-                    }
-                    .to_string(),
+                        InsertOutcome::CopiedOnly => format!("copied {what}"),
+                        InsertOutcome::Blocked => "paste blocked".to_string(),
+                        InsertOutcome::Skipped => "paste skipped".to_string(),
+                    },
                 },
                 stop_after_response: false,
             })
         }
-        IpcCommand::CopyLast => {
+        IpcCommand::CopyLast { index } => {
             state.with_insertion_lock(|| {
-                let text = state
-                    .last_transcript()
-                    .context("no transcript has been captured in this daemon session")?;
+                let text = state.resolve_transcript(index)?;
                 copy_text(&text)
             })?;
             Ok(CommandOutcome {
                 response: IpcResponse::Ok {
-                    message: "copied last transcript".to_string(),
+                    message: format!("copied {}", history_ref_label(index)),
+                },
+                stop_after_response: false,
+            })
+        }
+        IpcCommand::History { limit } => {
+            state.ensure_history_enabled()?;
+            Ok(CommandOutcome {
+                response: IpcResponse::History {
+                    entries: state.history_snapshot(limit),
                 },
                 stop_after_response: false,
             })
@@ -856,7 +1124,7 @@ mod windows_pipe {
     ///
     /// # Arguments
     ///
-    /// * `state` - Shared daemon status and last-transcript cache.
+    /// * `state` - Shared daemon status and transcript history.
     /// * `paste_mode` - Paste mode used by paste-related commands.
     /// * `keep_transcript_clipboard` - Whether command insertion leaves text on
     ///   the clipboard.
@@ -1663,19 +1931,184 @@ mod tests {
     use super::*;
 
     #[test]
-    fn shared_state_reports_phase_and_last_transcript_length() {
+    fn shared_state_reports_phase_and_newest_transcript_byte_length() {
         let state = SharedState::new();
         state.set_phase("recording");
-        state.set_last_transcript("hello".to_string());
+        state.remember_transcript("hi".to_string());
+        state.remember_transcript("hello world".to_string());
 
         assert!(matches!(
             state.status(),
             IpcResponse::Status {
                 phase,
-                last_transcript_len: Some(5),
+                last_transcript_len: Some(11),
                 detail: None,
             } if phase == "recording"
         ));
+    }
+
+    #[test]
+    fn remember_transcript_evicts_oldest_beyond_history_limit() {
+        let state = SharedState::with_history_limit(2);
+        state.remember_transcript("first".to_string());
+        state.remember_transcript("second".to_string());
+        state.remember_transcript("third".to_string());
+
+        assert_eq!(state.transcript_at(0).as_deref(), Some("third"));
+        assert_eq!(state.transcript_at(1).as_deref(), Some("second"));
+        assert_eq!(state.transcript_at(2), None);
+    }
+
+    #[test]
+    fn history_limit_zero_remembers_nothing() {
+        let state = SharedState::with_history_limit(0);
+        state.remember_transcript("should not be kept".to_string());
+
+        assert_eq!(state.transcript_at(0), None);
+        assert!(state.history_snapshot(None).is_empty());
+    }
+
+    #[test]
+    fn transcript_at_beyond_history_returns_none() {
+        let state = SharedState::new();
+        state.remember_transcript("only one".to_string());
+
+        assert_eq!(state.transcript_at(0).as_deref(), Some("only one"));
+        assert_eq!(state.transcript_at(1), None);
+    }
+
+    #[cfg(any(unix, target_os = "windows"))]
+    #[test]
+    fn history_ref_label_reproduces_last_transcript_wording_for_index_zero() {
+        // Index 0 must keep the pre-history wording byte-identical, since
+        // `paste-last`/`copy-last` with no `N` argument is the common case
+        // and existing docs/scripts quote this exact phrase.
+        assert_eq!(history_ref_label(0), "last transcript");
+        assert_eq!(history_ref_label(1), "transcript 2");
+        assert_eq!(history_ref_label(4), "transcript 5");
+    }
+
+    #[cfg(any(unix, target_os = "windows"))]
+    #[test]
+    fn resolve_transcript_reports_history_disabled_first() {
+        let state = SharedState::with_history_limit(0);
+
+        let err = state.resolve_transcript(0).unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "transcript history is disabled (daemon.transcript_history = 0)"
+        );
+    }
+
+    #[cfg(any(unix, target_os = "windows"))]
+    #[test]
+    fn ensure_history_enabled_separates_disabled_from_empty() {
+        // `history` must not report a disabled ring as merely empty: the
+        // two states need different fixes from the user.
+        assert_eq!(
+            SharedState::with_history_limit(0)
+                .ensure_history_enabled()
+                .unwrap_err()
+                .to_string(),
+            "transcript history is disabled (daemon.transcript_history = 0)"
+        );
+        assert!(SharedState::new().ensure_history_enabled().is_ok());
+    }
+
+    #[cfg(any(unix, target_os = "windows"))]
+    #[test]
+    fn resolve_transcript_reports_empty_history_when_enabled_but_unused() {
+        let state = SharedState::new();
+
+        let err = state.resolve_transcript(0).unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "no transcript has been captured in this daemon session"
+        );
+    }
+
+    #[cfg(any(unix, target_os = "windows"))]
+    #[test]
+    fn resolve_transcript_reports_out_of_range_index_with_correct_plural() {
+        let state = SharedState::new();
+        state.remember_transcript("only one".to_string());
+
+        let err = state.resolve_transcript(1).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "only 1 transcript remembered in this daemon session"
+        );
+
+        state.remember_transcript("second".to_string());
+        let err = state.resolve_transcript(5).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "only 2 transcripts remembered in this daemon session"
+        );
+    }
+
+    #[cfg(any(unix, target_os = "windows"))]
+    #[test]
+    fn resolve_transcript_returns_the_requested_entry_when_in_range() {
+        let state = SharedState::new();
+        state.remember_transcript("oldest".to_string());
+        state.remember_transcript("newest".to_string());
+
+        assert_eq!(state.resolve_transcript(0).unwrap(), "newest");
+        assert_eq!(state.resolve_transcript(1).unwrap(), "oldest");
+    }
+
+    #[test]
+    fn history_snapshot_orders_newest_first_with_one_based_index() {
+        let state = SharedState::new();
+        state.remember_transcript("oldest".to_string());
+        state.remember_transcript("middle".to_string());
+        state.remember_transcript("newest".to_string());
+
+        let entries = state.history_snapshot(None);
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[0].index, 1);
+        assert_eq!(entries[0].preview, "newest");
+        assert_eq!(entries[1].index, 2);
+        assert_eq!(entries[1].preview, "middle");
+        assert_eq!(entries[2].index, 3);
+        assert_eq!(entries[2].preview, "oldest");
+    }
+
+    #[test]
+    fn history_snapshot_respects_limit() {
+        let state = SharedState::new();
+        state.remember_transcript("one".to_string());
+        state.remember_transcript("two".to_string());
+        state.remember_transcript("three".to_string());
+
+        let entries = state.history_snapshot(Some(2));
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].preview, "three");
+        assert_eq!(entries[1].preview, "two");
+    }
+
+    #[test]
+    fn preview_text_collapses_whitespace_and_trims() {
+        let collapsed = preview_text("  line one\n  line two\t\tline three  ");
+        assert_eq!(collapsed, "line one line two line three");
+    }
+
+    #[test]
+    fn preview_text_truncates_long_text_on_a_char_boundary() {
+        // 'e' with combining characters would risk a byte-boundary panic if
+        // truncation were byte-based instead of char-based; a plain
+        // multi-byte codepoint repeated past the 72-char cap is enough to
+        // catch that regression.
+        let long = "é".repeat(80);
+
+        let preview = preview_text(&long);
+
+        assert_eq!(preview.chars().count(), 73); // 72 chars + '…'
+        assert!(preview.ends_with('…'));
+        assert!(preview.starts_with(&"é".repeat(72)));
     }
 
     fn sample_daemon_info() -> DaemonInfo {
@@ -1764,6 +2197,7 @@ mod tests {
             cleaning: "off".to_string(),
             log: None,
             hotkey_backend: None,
+            history: Some("3 of 10".to_string()),
         };
         let response = IpcResponse::Status {
             phase: "idle".to_string(),
@@ -1801,6 +2235,81 @@ mod tests {
                 last_transcript_len: None,
                 detail: None,
             } if phase == "idle"
+        ));
+    }
+
+    #[test]
+    fn status_detail_without_history_key_deserializes_as_none() {
+        // Simulates a reply from a daemon build that predates transcript
+        // history depth reporting: the wire payload omits the `history`
+        // key. `#[serde(default)]` must make this parse instead of failing.
+        let json = r#"{"pid":1,"uptime_secs":0,"dictation_count":0,"mic":"m","model":"m","dtype":"d","device":"d","backend":"b","threads":1,"paste_mode":"standard","sounds":true,"cleaning":"off","log":null,"hotkey_backend":null}"#;
+
+        let detail: StatusDetail = serde_json::from_str(json)
+            .expect("older status detail payload should still deserialize");
+
+        assert!(detail.history.is_none());
+    }
+
+    #[test]
+    fn ipc_command_paste_last_and_copy_last_serde_round_trip_with_index() {
+        let command = IpcCommand::PasteLast { index: 3 };
+        let json = serde_json::to_string(&command).expect("paste_last should serialize");
+        assert_eq!(json, r#"{"paste_last":{"index":3}}"#);
+        let round_tripped: IpcCommand =
+            serde_json::from_str(&json).expect("paste_last should deserialize");
+        assert!(matches!(round_tripped, IpcCommand::PasteLast { index: 3 }));
+
+        let command = IpcCommand::CopyLast { index: 1 };
+        let json = serde_json::to_string(&command).expect("copy_last should serialize");
+        assert_eq!(json, r#"{"copy_last":{"index":1}}"#);
+        let round_tripped: IpcCommand =
+            serde_json::from_str(&json).expect("copy_last should deserialize");
+        assert!(matches!(round_tripped, IpcCommand::CopyLast { index: 1 }));
+    }
+
+    #[test]
+    fn ipc_command_copy_last_missing_index_defaults_to_zero() {
+        let command: IpcCommand = serde_json::from_str(r#"{"copy_last":{}}"#)
+            .expect("copy_last with no index should parse");
+
+        assert!(matches!(command, IpcCommand::CopyLast { index: 0 }));
+    }
+
+    #[test]
+    fn ipc_command_history_serde_round_trips_with_and_without_limit() {
+        let command: IpcCommand =
+            serde_json::from_str(r#"{"history":{}}"#).expect("history with no limit should parse");
+        assert!(matches!(command, IpcCommand::History { limit: None }));
+
+        let command = IpcCommand::History { limit: Some(5) };
+        let json = serde_json::to_string(&command).expect("history should serialize");
+        let round_tripped: IpcCommand =
+            serde_json::from_str(&json).expect("history should deserialize");
+        assert!(matches!(
+            round_tripped,
+            IpcCommand::History { limit: Some(5) }
+        ));
+    }
+
+    #[test]
+    fn ipc_response_history_serde_round_trips() {
+        let response = IpcResponse::History {
+            entries: vec![HistoryEntry {
+                index: 1,
+                age_secs: 12,
+                chars: 47,
+                preview: "the quick brown fox".to_string(),
+            }],
+        };
+
+        let json = serde_json::to_string(&response).expect("history response should serialize");
+        let round_tripped: IpcResponse =
+            serde_json::from_str(&json).expect("history response should deserialize");
+
+        assert!(matches!(
+            round_tripped,
+            IpcResponse::History { entries } if entries.len() == 1 && entries[0].preview == "the quick brown fox"
         ));
     }
 

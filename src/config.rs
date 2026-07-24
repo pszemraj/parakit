@@ -10,7 +10,7 @@
 //!
 //! A broken config file must never break commands that do not need it
 //! (`fetch`, `cache`, `config`, `status`, `stop`, `paste-last`, `copy-last`,
-//! `test-paste`); see the load-order comment in `app.rs::run`.
+//! `history`, `test-paste`); see the load-order comment in `app.rs::run`.
 
 use anyhow::{Context, Result};
 use parakit::data_log::LogFormat;
@@ -63,6 +63,11 @@ pub(crate) struct DaemonConfig {
     pub(crate) sounds: Option<bool>,
     /// Verbose diagnostics: paths, backend details, and timing lines.
     pub(crate) verbose: Option<bool>,
+    /// Count of transcripts kept in daemon memory for `paste-last`,
+    /// `copy-last`, and `history`. `0` disables all three. History lives
+    /// only in daemon memory; nothing is written to disk, and it is
+    /// cleared when the daemon stops.
+    pub(crate) transcript_history: Option<usize>,
 }
 
 /// `[cleaning]` section: text-cleaning pipeline defaults.
@@ -134,6 +139,11 @@ pub(crate) const TEMPLATE: &str = r#"# parakit config.toml
 # Verbose diagnostics: paths, backend details, and timing lines. A CLI
 # --quiet flag always wins over this setting.
 # verbose = false
+
+# Number of transcripts kept in daemon memory for `paste-last`, `copy-last`,
+# and `history`. 0 disables all three. History lives only in daemon memory,
+# is never written to disk, and is cleared when the daemon stops.
+# transcript_history = 10
 
 [cleaning]
 # Enable the text-cleaning pipeline.
@@ -343,6 +353,7 @@ paste_mode = "direct"
 keep_transcript_clipboard = true
 sounds = false
 verbose = true
+transcript_history = 25
 
 [cleaning]
 enabled = false
@@ -372,6 +383,7 @@ position = "first"
         assert_eq!(config.daemon.keep_transcript_clipboard, Some(true));
         assert_eq!(config.daemon.sounds, Some(false));
         assert_eq!(config.daemon.verbose, Some(true));
+        assert_eq!(config.daemon.transcript_history, Some(25));
 
         assert_eq!(config.cleaning.enabled, Some(false));
         assert_eq!(

@@ -195,7 +195,7 @@ fn worker_loop(ctx: WorkerCtx) {
                                 "not_applicable",
                                 None,
                             );
-                            state.set_last_transcript(transcript.cleaned.clone());
+                            state.remember_transcript(transcript.cleaned.clone());
                             state.set_phase("idle");
                             sounds.success();
                             continue;
@@ -219,7 +219,7 @@ fn worker_loop(ctx: WorkerCtx) {
                                 paste_circuit.copy_only_mode,
                             );
                             if insertion_result_remembers_transcript(&result) {
-                                state.set_last_transcript(cleaned);
+                                state.remember_transcript(cleaned);
                             }
                             result
                         });
