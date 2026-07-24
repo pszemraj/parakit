@@ -33,6 +33,8 @@
 
 use anyhow::{anyhow, Context, Result};
 use regex::Regex;
+use serde::Deserialize;
+use std::borrow::Cow;
 use std::collections::HashSet;
 
 /// A single text-cleaning rule.
@@ -44,39 +46,95 @@ struct Rule {
 }
 
 /// Compiled at startup.
+#[derive(Debug)]
 struct CompiledRule {
     re: Regex,
-    replacement: &'static str,
+    replacement: Cow<'static, str>,
 }
 
+/// Where a [`UserRule`] is spliced relative to [`DEFAULT_RULES`].
+///
+/// `Standard` (the default) runs alongside the bulk of the built-in rules,
+/// before the final whitespace/punctuation cleanup group. `First` and `Last`
+/// wrap the entire built-in rule list, which is useful for rules that must
+/// see raw ASR output before any built-in rule touches it, or that must run
+/// after all built-in cleanup (including whitespace/punctuation) has settled.
+#[derive(Debug, Clone, Copy, Default, Eq, PartialEq, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum RulePosition {
+    /// Run before every built-in rule.
+    First,
+    /// Run with the bulk of the built-in rules, before the final
+    /// whitespace/punctuation cleanup group. This is the default.
+    #[default]
+    Standard,
+    /// Run after every built-in rule, including whitespace/punctuation
+    /// cleanup.
+    Last,
+}
+
+/// A user-supplied text-cleaning rule loaded from `config.toml`.
+///
+/// Compiled the same way as a built-in [`Rule`], but user-supplied and thus
+/// validated at load time: the pattern must be a valid regex, and the name
+/// must not collide with a built-in rule name or another user rule name.
+#[derive(Debug, Clone, Deserialize)]
+pub struct UserRule {
+    /// Unique rule name. Must not collide with a built-in rule name or
+    /// another user rule name.
+    pub name: String,
+    /// Optional human-readable description, shown by `--list-rules`.
+    pub description: Option<String>,
+    /// Rust `regex` crate pattern (same dialect as built-in rules).
+    pub pattern: String,
+    /// Replacement string. Supports `$1`, `$2`, etc. capture references.
+    pub replacement: String,
+    /// Where this rule is spliced relative to the built-in rule list.
+    #[serde(default)]
+    pub position: RulePosition,
+}
+
+/// Name of the first built-in rule in the final whitespace/punctuation
+/// cleanup group. `RulePosition::Standard` user rules are inserted
+/// immediately before this rule; `RulePosition::First`/`RulePosition::Last`
+/// wrap the entire built-in rule list instead.
+const CLEANUP_BOUNDARY_RULE_NAME: &str = "fix-space-before-punct";
+
 /// Driver. Build once, call `clean()` per transcription.
+#[derive(Debug)]
 pub struct Cleaner {
     rules: Vec<CompiledRule>,
 }
 
 impl Cleaner {
-    /// Compile all default rules whose name is not in `disabled`.
+    /// Compile all default rules whose name is not in `disabled`, spliced
+    /// with `user_rules` at their configured [`RulePosition`].
     ///
     /// # Returns
     ///
-    /// A cleaner containing the default-enabled rules that were not disabled.
+    /// A cleaner containing the default-enabled and user-enabled rules that
+    /// were not disabled, in application order.
     ///
     /// # Errors
     ///
-    /// Returns an error if any enabled rule contains an invalid regex pattern.
-    fn new(disabled: &HashSet<String>) -> Result<Self> {
-        let mut rules = Vec::with_capacity(DEFAULT_RULES.len());
-        for r in DEFAULT_RULES {
-            if disabled.contains(r.name) {
-                continue;
-            }
-            let re = Regex::new(r.pattern)
-                .with_context(|| format!("rule '{}' has invalid regex", r.name))?;
-            rules.push(CompiledRule {
-                re,
-                replacement: r.replacement,
-            });
-        }
+    /// Returns an error if any enabled rule (built-in or user) contains an
+    /// invalid regex pattern, if a user rule name collides with a built-in
+    /// rule name, or if two user rules share the same name.
+    fn new(disabled: &HashSet<String>, user_rules: &[UserRule]) -> Result<Self> {
+        validate_user_rules(user_rules)?;
+
+        let cleanup_idx = DEFAULT_RULES
+            .iter()
+            .position(|r| r.name == CLEANUP_BOUNDARY_RULE_NAME)
+            .unwrap_or(DEFAULT_RULES.len());
+
+        let mut rules = Vec::with_capacity(DEFAULT_RULES.len() + user_rules.len());
+        push_user_rules(&mut rules, user_rules, RulePosition::First, disabled)?;
+        push_default_rules(&mut rules, &DEFAULT_RULES[..cleanup_idx], disabled)?;
+        push_user_rules(&mut rules, user_rules, RulePosition::Standard, disabled)?;
+        push_default_rules(&mut rules, &DEFAULT_RULES[cleanup_idx..], disabled)?;
+        push_user_rules(&mut rules, user_rules, RulePosition::Last, disabled)?;
+
         Ok(Self { rules })
     }
 
@@ -88,7 +146,7 @@ impl Cleaner {
     pub fn clean(&self, input: &str) -> String {
         let mut s = input.to_string();
         for r in &self.rules {
-            let replaced = r.re.replace_all(&s, r.replacement);
+            let replaced = r.re.replace_all(&s, r.replacement.as_ref());
             if matches!(replaced, std::borrow::Cow::Owned(_)) {
                 s = replaced.into_owned();
             }
@@ -106,12 +164,90 @@ impl Cleaner {
     }
 }
 
+/// Validate that no user rule collides with a built-in name and that no two
+/// user rules share a name. Regex validity is checked when a rule is
+/// compiled (`push_user_rules`), not here, so this stays cheap to call
+/// unconditionally.
+///
+/// # Errors
+///
+/// Returns an error naming the offending rule when a user rule's name
+/// collides with a built-in rule name, or when two user rules share a name.
+fn validate_user_rules(user_rules: &[UserRule]) -> Result<()> {
+    let mut seen: HashSet<&str> = HashSet::with_capacity(user_rules.len());
+    for ur in user_rules {
+        if DEFAULT_RULES.iter().any(|r| r.name == ur.name) {
+            return Err(anyhow!(
+                "user rule '{}' has the same name as a built-in rule; rename it",
+                ur.name
+            ));
+        }
+        if !seen.insert(ur.name.as_str()) {
+            return Err(anyhow!("duplicate user rule name '{}'", ur.name));
+        }
+    }
+    Ok(())
+}
+
+/// Compile and append enabled entries from `defs` (a slice of
+/// [`DEFAULT_RULES`]) to `rules`, skipping names present in `disabled`.
+///
+/// # Errors
+///
+/// Returns an error naming the rule when its pattern is an invalid regex.
+fn push_default_rules(
+    rules: &mut Vec<CompiledRule>,
+    defs: &[Rule],
+    disabled: &HashSet<String>,
+) -> Result<()> {
+    for r in defs {
+        if disabled.contains(r.name) {
+            continue;
+        }
+        let re = Regex::new(r.pattern)
+            .with_context(|| format!("rule '{}' has invalid regex", r.name))?;
+        rules.push(CompiledRule {
+            re,
+            replacement: Cow::Borrowed(r.replacement),
+        });
+    }
+    Ok(())
+}
+
+/// Compile and append enabled `user_rules` entries at `position` to `rules`,
+/// skipping names present in `disabled`.
+///
+/// # Errors
+///
+/// Returns an error naming the rule when its pattern is an invalid regex.
+fn push_user_rules(
+    rules: &mut Vec<CompiledRule>,
+    user_rules: &[UserRule],
+    position: RulePosition,
+    disabled: &HashSet<String>,
+) -> Result<()> {
+    for ur in user_rules.iter().filter(|ur| ur.position == position) {
+        if disabled.contains(&ur.name) {
+            continue;
+        }
+        let re = Regex::new(&ur.pattern)
+            .map_err(|err| anyhow!("user rule '{}' has invalid regex: {err}", ur.name))?;
+        rules.push(CompiledRule {
+            re,
+            replacement: Cow::Owned(ur.replacement.clone()),
+        });
+    }
+    Ok(())
+}
+
 /// Build the standard cleaner configuration used by CLIs.
 ///
 /// # Arguments
 ///
 /// * `no_cleaning` - Disable cleaning after validating rule names.
-/// * `disabled_rules` - Rule names supplied by repeated `--disable-rule`.
+/// * `disabled_rules` - Rule names supplied by repeated `--disable-rule`
+///   and/or `cleaning.disabled_rules` in `config.toml`.
+/// * `user_rules` - User-defined rules loaded from `config.toml`.
 ///
 /// # Returns
 ///
@@ -119,16 +255,23 @@ impl Cleaner {
 ///
 /// # Errors
 ///
-/// Returns an error for unknown rule names or invalid rule regexes.
-pub fn build_cleaner(no_cleaning: bool, disabled_rules: &[String]) -> Result<Option<Cleaner>> {
+/// Returns an error for unknown rule names, invalid rule regexes, a user
+/// rule name colliding with a built-in name, or duplicate user rule names.
+/// Config-path context, if any, is the caller's responsibility to add.
+pub fn build_cleaner(
+    no_cleaning: bool,
+    disabled_rules: &[String],
+    user_rules: &[UserRule],
+) -> Result<Option<Cleaner>> {
     for name in disabled_rules {
-        assert_rule_name_exists(name)?;
+        assert_rule_name_exists(name, user_rules)?;
     }
+    validate_user_rules(user_rules)?;
     if no_cleaning {
         return Ok(None);
     }
     let disabled: HashSet<String> = disabled_rules.iter().cloned().collect();
-    Cleaner::new(&disabled).map(Some)
+    Cleaner::new(&disabled, user_rules).map(Some)
 }
 
 fn capitalize_sentence_starts(s: &str) -> String {
@@ -166,8 +309,8 @@ fn is_opening_punct(c: char) -> bool {
     matches!(c, '"' | '\'' | '(' | '[' | '{' | '<')
 }
 
-/// Validate a single rule name exists in `DEFAULT_RULES`. Used by the CLI to
-/// fail fast on `--disable-rule typoname`.
+/// Validate a single rule name exists in `DEFAULT_RULES` or `user_rules`.
+/// Used by the CLI to fail fast on `--disable-rule typoname`.
 ///
 /// # Returns
 ///
@@ -176,8 +319,8 @@ fn is_opening_punct(c: char) -> bool {
 /// # Errors
 ///
 /// Returns an error describing the unknown name when no matching rule exists.
-pub fn assert_rule_name_exists(name: &str) -> Result<()> {
-    if DEFAULT_RULES.iter().any(|r| r.name == name) {
+pub fn assert_rule_name_exists(name: &str, user_rules: &[UserRule]) -> Result<()> {
+    if DEFAULT_RULES.iter().any(|r| r.name == name) || user_rules.iter().any(|r| r.name == name) {
         Ok(())
     } else {
         Err(anyhow!(
@@ -187,12 +330,25 @@ pub fn assert_rule_name_exists(name: &str) -> Result<()> {
     }
 }
 
-/// Print all rules to stdout (used by `--list-rules`).
-pub fn print_rule_list() {
+/// Print all rules to stdout (used by `--list-rules`). User rules, if any,
+/// print in a separate section below the built-in rules.
+pub fn print_rule_list(user_rules: &[UserRule]) {
     println!("{:<32}  description", "name");
     println!("{}", "-".repeat(80));
     for r in DEFAULT_RULES {
         println!("{:<32}  {}", r.name, r.description);
+    }
+    if !user_rules.is_empty() {
+        println!();
+        println!("{:<32}  description (user)", "name");
+        println!("{}", "-".repeat(80));
+        for ur in user_rules {
+            println!(
+                "{:<32}  {}",
+                ur.name,
+                ur.description.as_deref().unwrap_or("")
+            );
+        }
     }
 }
 
@@ -547,7 +703,17 @@ mod tests {
     use super::*;
 
     fn cleaner_with_all_defaults() -> Cleaner {
-        Cleaner::new(&HashSet::new()).expect("default rules must compile")
+        Cleaner::new(&HashSet::new(), &[]).expect("default rules must compile")
+    }
+
+    fn user_rule(name: &str, pattern: &str, replacement: &str, position: RulePosition) -> UserRule {
+        UserRule {
+            name: name.to_string(),
+            description: None,
+            pattern: pattern.to_string(),
+            replacement: replacement.to_string(),
+            position,
+        }
     }
 
     fn assert_clean_cases(cases: &[(&str, &str)]) {
@@ -609,9 +775,111 @@ mod tests {
     fn disabled_rules_skip() {
         let mut disabled = HashSet::new();
         disabled.insert("filler-um-uh".to_string());
-        let c = Cleaner::new(&disabled).unwrap();
+        let c = Cleaner::new(&disabled, &[]).unwrap();
         // um/uh should survive
         assert_eq!(c.clean("hello, um, world"), "Hello, um, world");
+    }
+
+    #[test]
+    fn user_rule_first_position_runs_before_builtins() {
+        // A `First` user rule expands "xyz" to "So, hello" *before* any
+        // built-in rule runs, so the built-in `lead-so-comma` rule (which
+        // only fires at sentence start) still strips the "So," it produced.
+        let rules = vec![user_rule(
+            "expand-xyz",
+            r"(?i)^xyz$",
+            "So, hello",
+            RulePosition::First,
+        )];
+        let c = Cleaner::new(&HashSet::new(), &rules).unwrap();
+        assert_eq!(c.clean("xyz"), "Hello");
+    }
+
+    #[test]
+    fn user_rule_standard_position_runs_before_cleanup_group() {
+        // A `Standard` user rule introduces messy whitespace and a stray
+        // space before a comma; it must run before the built-in
+        // `fix-collapse-spaces` / `fix-space-before-punct` cleanup rules for
+        // the output to come out clean.
+        let rules = vec![user_rule(
+            "expand-brb",
+            r"(?i)\bbrb\b",
+            "be right   back ,",
+            RulePosition::Standard,
+        )];
+        let c = Cleaner::new(&HashSet::new(), &rules).unwrap();
+        assert_eq!(c.clean("brb"), "Be right back,");
+    }
+
+    #[test]
+    fn user_rule_last_position_runs_after_builtins() {
+        // A `Last` user rule appends a trailing period *after* the built-in
+        // `fix-trailing-period` rule has already run, so the period this
+        // rule adds is not stripped.
+        let rules = vec![user_rule(
+            "add-trailing-period",
+            r"(?i)^done$",
+            "done.",
+            RulePosition::Last,
+        )];
+        let c = Cleaner::new(&HashSet::new(), &rules).unwrap();
+        assert_eq!(c.clean("done"), "Done.");
+    }
+
+    #[test]
+    fn user_rule_name_colliding_with_builtin_is_an_error() {
+        let rules = vec![user_rule(
+            "filler-um-uh",
+            r"(?i)nope",
+            "x",
+            RulePosition::Standard,
+        )];
+        let err = Cleaner::new(&HashSet::new(), &rules).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("filler-um-uh"), "message: {msg}");
+        assert!(msg.contains("rename"), "message: {msg}");
+    }
+
+    #[test]
+    fn duplicate_user_rule_names_are_an_error() {
+        let rules = vec![
+            user_rule("custom-a", r"(?i)a", "A", RulePosition::Standard),
+            user_rule("custom-a", r"(?i)b", "B", RulePosition::Standard),
+        ];
+        let err = Cleaner::new(&HashSet::new(), &rules).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("duplicate"), "message: {msg}");
+        assert!(msg.contains("custom-a"), "message: {msg}");
+    }
+
+    #[test]
+    fn invalid_user_rule_regex_names_the_rule() {
+        let rules = vec![user_rule(
+            "bad-regex",
+            "(unclosed",
+            "x",
+            RulePosition::Standard,
+        )];
+        let err = Cleaner::new(&HashSet::new(), &rules).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("user rule 'bad-regex' has invalid regex"),
+            "message: {msg}"
+        );
+    }
+
+    #[test]
+    fn disabled_user_rule_skips_compilation_and_application() {
+        let mut disabled = HashSet::new();
+        disabled.insert("custom-hello".to_string());
+        let rules = vec![user_rule(
+            "custom-hello",
+            r"(?i)hello",
+            "HI",
+            RulePosition::Standard,
+        )];
+        let c = Cleaner::new(&disabled, &rules).unwrap();
+        assert_eq!(c.clean("hello world"), "Hello world");
     }
 
     #[test]
@@ -660,7 +928,14 @@ mod tests {
 
     #[test]
     fn assert_rule_name_exists_works() {
-        assert!(assert_rule_name_exists("filler-um-uh").is_ok());
-        assert!(assert_rule_name_exists("does-not-exist").is_err());
+        assert!(assert_rule_name_exists("filler-um-uh", &[]).is_ok());
+        assert!(assert_rule_name_exists("does-not-exist", &[]).is_err());
+        let rules = vec![user_rule(
+            "custom-hello",
+            r"(?i)hello",
+            "HI",
+            RulePosition::Standard,
+        )];
+        assert!(assert_rule_name_exists("custom-hello", &rules).is_ok());
     }
 }

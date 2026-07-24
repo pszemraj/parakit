@@ -136,12 +136,12 @@ pub(crate) fn run() -> Result<()> {
     // Special command modes: print rules / test rules.
     if cli.list_rules {
         if !cli.quiet {
-            rules::print_rule_list();
+            rules::print_rule_list(&[]);
         }
         return Ok(());
     }
     if let Some(input) = &cli.test_rules {
-        let cleaner = rules::build_cleaner(cli.no_cleaning, &cli.disable_rule)?;
+        let cleaner = rules::build_cleaner(cli.no_cleaning, &cli.disable_rule, &[])?;
         let raw = input.as_str();
         let cleaned = cleaner.as_ref().map(|c| c.clean(raw));
         if !cli.quiet {
@@ -196,7 +196,7 @@ pub(crate) fn run() -> Result<()> {
     #[cfg(not(any(unix, target_os = "windows")))]
     log.verbose("parakit: local control socket unavailable on this platform");
 
-    let cleaner = rules::build_cleaner(cli.no_cleaning, &cli.disable_rule)?.map(Arc::new);
+    let cleaner = rules::build_cleaner(cli.no_cleaning, &cli.disable_rule, &[])?.map(Arc::new);
     let data_log = cli
         .log_dir
         .clone()
@@ -352,7 +352,7 @@ fn warn_about_bluetooth_mic_if_needed(log: &Logger, mic_info: &daemon::audio::Mi
 
 fn run_ptt_audio_simulation(cli: &Cli, log: Arc<Logger>, audio_path: &Path) -> Result<()> {
     let paste_mode = cli.effective_paste_mode();
-    let cleaner = rules::build_cleaner(cli.no_cleaning, &cli.disable_rule)?.map(Arc::new);
+    let cleaner = rules::build_cleaner(cli.no_cleaning, &cli.disable_rule, &[])?.map(Arc::new);
     let data_log = cli
         .log_dir
         .clone()
