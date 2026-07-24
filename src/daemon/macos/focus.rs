@@ -310,6 +310,15 @@ impl MacOsFocusSnapshot {
         self.bundle_identifier.as_deref()
     }
 
+    /// Return the process id of the captured frontmost application.
+    ///
+    /// # Returns
+    ///
+    /// The pid macOS reported as frontmost at capture time.
+    pub(crate) fn pid(&self) -> libc::pid_t {
+        self.pid
+    }
+
     /// Return the focused Accessibility element captured for this snapshot,
     /// when Accessibility exposed one.
     ///

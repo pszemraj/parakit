@@ -38,7 +38,7 @@
 //! this from a background thread fails with a clear error instead of
 //! crashing or corrupting AppKit state.
 //!
-//! ## Threading design: worker thread pastes, main thread pumps the run loop
+//! ## Threading design: worker thread pastes, main thread pumps events
 //!
 //! [`crate::daemon::macos::pasteboard::await_paste_confirmation`] polls
 //! `AXValue` with a plain blocking sleep loop on the calling thread. In
@@ -49,18 +49,23 @@
 //! function called `Injector::paste_text_guarded` directly from the main
 //! thread, the blocking `AXValue` poll loop would starve AppKit's own event
 //! dispatch: the synthetic Cmd+V chord this same call just posted to the HID
-//! tap would never be delivered to the probe `NSTextView` (AppKit delivers
-//! posted key events through the main thread's run loop), so the paste could
-//! never be observed landing and the poll would always end in
+//! tap would never be delivered to the probe `NSTextView`, so the paste
+//! could never be observed landing and the poll would always end in
 //! [`crate::daemon::desktop::clipboard_restore::PasteConfirmation::NoEvidence`].
 //!
 //! The fix mirrors production exactly rather than inventing new threading:
 //! the paste (clipboard stage, chord send, `AXValue` poll) runs on a
 //! short-lived worker thread — exactly where it runs in the real daemon —
-//! while the main thread pumps `CFRunLoopRunInMode` in a bounded loop,
-//! checking a channel for the worker's result each tick. This lets AppKit
-//! actually deliver the synthetic keystrokes to the probe text view while
-//! the worker polls `AXValue` for evidence.
+//! while the main thread pumps AppKit events in bounded slices, checking a
+//! channel for the worker's result each tick.
+//!
+//! The pump must be a real AppKit event pump — `nextEventMatchingMask:` +
+//! `sendEvent:` (see [`pump_app_events`]) — not a bare `CFRunLoopRunInMode`
+//! loop. An `NSApplication` that never enters `[NSApp run]` dequeues nothing
+//! from the window-server event queue on its own: merely running the
+//! CFRunLoop leaves the app-activation handshake unprocessed (so the probe
+//! window never becomes key, even in a perfectly healthy GUI session) and
+//! would likewise never deliver the synthetic paste chord to the text view.
 //!
 //! Moving [`FocusSnapshot`] into the worker thread's closure requires it to
 //! be `Send`. It already is: `WorkerEvent::Stopped` (see
@@ -73,13 +78,12 @@
 
 use anyhow::{bail, Context, Result};
 use objc2::rc::Retained;
-use objc2::{MainThreadMarker, MainThreadOnly as _};
+use objc2::{sel, MainThreadMarker, MainThreadOnly as _};
 use objc2_app_kit::{
-    NSApplication, NSApplicationActivationPolicy, NSBackingStoreType, NSTextView, NSWindow,
-    NSWindowStyleMask,
+    NSApplication, NSApplicationActivationPolicy, NSBackingStoreType, NSEventMask, NSMenu,
+    NSMenuItem, NSTextView, NSWindow, NSWindowStyleMask,
 };
-use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
-use std::ffi::c_void;
+use objc2_foundation::{NSDate, NSDefaultRunLoopMode, NSPoint, NSRect, NSSize, NSString};
 use std::sync::mpsc::{self, TryRecvError};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -88,8 +92,6 @@ use crate::daemon::desktop::inject::{
     ClipboardPolicy, FocusSnapshot, Injector, PasteMode, PasteOutcome, PasteReport,
 };
 
-type Boolean = u8;
-type CFStringRef = *const c_void;
 type OSStatus = i32;
 type ProcessApplicationTransformState = u32;
 
@@ -101,17 +103,6 @@ const K_PROCESS_TRANSFORM_TO_FOREGROUND_APPLICATION: ProcessApplicationTransform
 struct ProcessSerialNumber {
     high_long_of_psn: u32,
     low_long_of_psn: u32,
-}
-
-#[link(name = "CoreFoundation", kind = "framework")]
-extern "C" {
-    static kCFRunLoopDefaultMode: CFStringRef;
-
-    fn CFRunLoopRunInMode(
-        mode: CFStringRef,
-        seconds: f64,
-        return_after_source_handled: Boolean,
-    ) -> i32;
 }
 
 #[link(name = "ApplicationServices", kind = "framework")]
@@ -161,17 +152,23 @@ fn register_as_foreground_application() {
 }
 
 /// How long to wait for the probe window to become key before giving up.
-const READY_TIMEOUT: Duration = Duration::from_secs(2);
-/// Run-loop pump slice used while waiting for the probe window to become key.
+const READY_TIMEOUT: Duration = Duration::from_secs(3);
+/// Event pump slice used while waiting for the probe window to become key.
 const READY_POLL: Duration = Duration::from_millis(20);
+/// How often to re-request app activation while waiting for the probe
+/// window to become key. Modern macOS treats activation as a cooperative,
+/// asynchronous request the window server may not honor on the first ask
+/// for a freshly registered CLI process; periodic re-requests while pumping
+/// events make becoming key reliable instead of a first-try coin flip.
+const ACTIVATION_NUDGE_INTERVAL: Duration = Duration::from_millis(250);
 /// Best-effort settle pump after first-responder assignment, giving the
 /// Accessibility subsystem a moment to register the new focused element
 /// before it is snapshotted. Capture failure after this still degrades
 /// gracefully (see [`check_paste_report`]); this just improves the odds of
 /// exercising the `ax_confirmed` path instead of skipping it.
 const AX_SETTLE_PUMP: Duration = Duration::from_millis(150);
-/// Run-loop pump slice used while waiting for the paste worker thread.
-const RUN_LOOP_PUMP_SLICE: Duration = Duration::from_millis(20);
+/// Event pump slice used while waiting for the paste worker thread.
+const EVENT_PUMP_SLICE: Duration = Duration::from_millis(20);
 /// Upper bound on the whole paste transaction (clipboard settle + chord +
 /// `AXValue` confirmation deadline/unverified grace, see
 /// `daemon::macos::pasteboard`) plus a generous margin. Exceeding this means
@@ -222,14 +219,75 @@ pub(crate) fn real_paste_transaction_smoke_test(mode: PasteMode) -> Result<()> {
 
     let app = NSApplication::sharedApplication(mtm);
     app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
+    install_paste_menu(&app, mtm);
     app.finishLaunching();
-    // The modern `-activate` is cooperative: on a busy desktop with several
-    // other visible apps it can be silently ignored unless a peer app yields
-    // activation to us first, which never happens for a synchronous CLI
-    // diagnostic with no cooperating peer. `doctor --deep` needs its probe
-    // window to reliably become key regardless of whatever else has focus,
-    // so it deliberately uses the forceful, deprecated
-    // `-activateIgnoringOtherApps:` instead.
+    request_activation(&app);
+
+    let probe = ProbeWindow::create(mtm)
+        .context("could not create the macOS doctor paste-transaction probe window")?;
+    probe.make_key_and_focus(&app)?;
+
+    let result = probe.run_paste_transaction(&app, mode);
+    probe.close();
+    result
+}
+
+/// Install a minimal main menu holding Edit > Paste (Cmd+V).
+///
+/// AppKit routes command-key chords through menu key equivalents:
+/// `-[NSApplication sendEvent:]` offers a command-modified key-down to the
+/// key window and then to the main menu's `performKeyEquivalent:`.
+/// `NSTextView` has no Cmd+V handling of its own — in a real application
+/// the Edit menu's Paste item (action `paste:`, key equivalent "v") is what
+/// turns the chord into a `paste:` message down the responder chain. A bare
+/// unbundled CLI process has no main menu, so without this the production
+/// paste chord is delivered to the activated probe app and then dropped,
+/// and the probe text view never consumes the clipboard. The menu is never
+/// drawn (accessory activation policy); only its key-equivalent table
+/// matters.
+fn install_paste_menu(app: &NSApplication, mtm: MainThreadMarker) {
+    let empty = NSString::from_str("");
+    let menubar = NSMenu::initWithTitle(NSMenu::alloc(mtm), &empty);
+    // SAFETY: a nil action with an empty key equivalent is the inert
+    // container form of NSMenuItem; nothing is ever dispatched through it.
+    let edit_holder = unsafe {
+        NSMenuItem::initWithTitle_action_keyEquivalent(
+            NSMenuItem::alloc(mtm),
+            &NSString::from_str("Edit"),
+            None,
+            &empty,
+        )
+    };
+    let edit_menu = NSMenu::initWithTitle(NSMenu::alloc(mtm), &NSString::from_str("Edit"));
+    // SAFETY: `paste:` is the standard NSResponder editing action; with a
+    // nil target, menu dispatch walks the key window's responder chain and
+    // reaches the probe NSTextView, which implements it. The "v" key
+    // equivalent carries the default Command modifier mask.
+    let paste_item = unsafe {
+        NSMenuItem::initWithTitle_action_keyEquivalent(
+            NSMenuItem::alloc(mtm),
+            &NSString::from_str("Paste"),
+            Some(sel!(paste:)),
+            &NSString::from_str("v"),
+        )
+    };
+    edit_menu.addItem(&paste_item);
+    edit_holder.setSubmenu(Some(&edit_menu));
+    menubar.addItem(&edit_holder);
+    app.setMainMenu(Some(&menubar));
+}
+
+/// Request app activation with the forceful, deprecated
+/// `-activateIgnoringOtherApps:`.
+///
+/// The modern `-activate` is cooperative: on a busy desktop with several
+/// other visible apps it can be silently ignored unless a peer app yields
+/// activation to us first, which never happens for a synchronous CLI
+/// diagnostic with no cooperating peer. `doctor --deep` needs its probe
+/// window to reliably become key regardless of whatever else has focus, so
+/// it deliberately uses the forceful variant, re-requested periodically
+/// while the ready wait pumps events (see [`ProbeWindow::make_key_and_focus`]).
+fn request_activation(app: &NSApplication) {
     #[allow(
         deprecated,
         reason = "`-activate` is cooperative and can be silently ignored on a busy desktop; \
@@ -237,14 +295,6 @@ pub(crate) fn real_paste_transaction_smoke_test(mode: PasteMode) -> Result<()> {
                    the forceful `-activateIgnoringOtherApps:` to reliably become the key window"
     )]
     app.activateIgnoringOtherApps(true);
-
-    let probe = ProbeWindow::create(mtm)
-        .context("could not create the macOS doctor paste-transaction probe window")?;
-    probe.make_key_and_focus()?;
-
-    let result = probe.run_paste_transaction(mode);
-    probe.close();
-    result
 }
 
 /// Throwaway `NSWindow` + `NSTextView` used only for the duration of
@@ -293,16 +343,28 @@ impl ProbeWindow {
         Ok(Self { window, text_view })
     }
 
-    /// Order the probe window front, wait for it to become key, and make its
-    /// text view the first responder.
-    fn make_key_and_focus(&self) -> Result<()> {
-        self.window.makeKeyAndOrderFront(None);
-        if !wait_until(READY_TIMEOUT, READY_POLL, || self.window.isKeyWindow()) {
-            bail!(
-                "the macOS doctor paste-transaction probe window did not become the key window \
-                 within {READY_TIMEOUT:?}; this requires an active GUI login session with \
-                 window-server access (not a headless or SSH-only session)"
-            );
+    /// Order the probe window front, wait for it to become key (pumping
+    /// AppKit events and periodically re-requesting activation, since the
+    /// window server treats activation as an asynchronous request it may
+    /// not honor on the first ask), and make its text view the first
+    /// responder.
+    fn make_key_and_focus(&self, app: &NSApplication) -> Result<()> {
+        let deadline = Instant::now() + READY_TIMEOUT;
+        let mut next_nudge = Instant::now();
+        while !self.window.isKeyWindow() {
+            if Instant::now() >= deadline {
+                bail!(
+                    "the macOS doctor paste-transaction probe window did not become the key \
+                     window within {READY_TIMEOUT:?}; the window server did not activate the \
+                     probe process"
+                );
+            }
+            if Instant::now() >= next_nudge {
+                request_activation(app);
+                self.window.makeKeyAndOrderFront(None);
+                next_nudge = Instant::now() + ACTIVATION_NUDGE_INTERVAL;
+            }
+            pump_app_events(app, READY_POLL);
         }
         if !self.window.makeFirstResponder(Some(&self.text_view)) {
             bail!(
@@ -310,18 +372,36 @@ impl ProbeWindow {
                  the first responder"
             );
         }
-        pump_run_loop_for(AX_SETTLE_PUMP);
+        pump_app_events(app, AX_SETTLE_PUMP);
         Ok(())
     }
 
     /// Capture focus on the probe window, run the production guarded-paste
     /// transaction with a unique sentinel, and assert it landed, was
     /// acknowledged, and the clipboard was restored.
-    fn run_paste_transaction(&self, mode: PasteMode) -> Result<()> {
+    fn run_paste_transaction(&self, app: &NSApplication, mode: PasteMode) -> Result<()> {
         let focus = FocusSnapshot::capture().context(
             "could not capture a macOS focus snapshot of the doctor paste-transaction probe \
              window itself",
         )?;
+
+        // The snapshot captures whatever application the window server says
+        // is frontmost. If that is not this process, the probe window
+        // becoming key was a lie at the system level, and posting the paste
+        // chord would deliver a Cmd+V (and the sentinel on the clipboard) to
+        // some unrelated application the user is actually using. Refuse
+        // loudly instead.
+        let probe_pid = std::process::id() as libc::pid_t;
+        let captured_pid = focus.macos_pid();
+        if captured_pid != probe_pid {
+            bail!(
+                "the frontmost application at snapshot time was pid {captured_pid} \
+                 (bundle {:?}), not the probe process (pid {probe_pid}); refusing to post the \
+                 paste chord because it would be delivered to that application instead of the \
+                 probe window",
+                focus.target_bundle_id(),
+            );
+        }
         let ax_focused_element_available = focus.macos_ax_element().is_some();
 
         let mut probe_clipboard = arboard::Clipboard::new().context(
@@ -347,7 +427,7 @@ impl ProbeWindow {
             })
             .context("could not spawn the macOS doctor paste-transaction worker thread")?;
 
-        let report = match pump_until_paste_result(&rx, PASTE_TRANSACTION_TIMEOUT) {
+        let report = match pump_until_paste_result(app, &rx, PASTE_TRANSACTION_TIMEOUT) {
             Ok(report) => {
                 // The worker already sent its result, so this returns
                 // essentially immediately; join it for cleanliness.
@@ -365,18 +445,23 @@ impl ProbeWindow {
             }
         };
 
+        // Read the probe text view back before judging the report: whether
+        // the sentinel physically landed is the ground truth that tells a
+        // delivery failure apart from an acknowledgement failure.
+        let landed_text = self.text_view.string().to_string();
+        let sentinel_landed = landed_text.contains(&sentinel);
+
         if let Err(message) = check_paste_report(&report, ax_focused_element_available) {
             bail!(
-                "{message} (paste_event_posted={}, acknowledgement_ms={:?}, \
-                 clipboard_restored={:?})",
+                "{message} (sentinel landed in probe text view: {sentinel_landed}, \
+                 paste_event_posted={}, acknowledgement_ms={:?}, clipboard_restored={:?})",
                 report.paste_event_posted,
                 report.acknowledgement_ms,
                 report.clipboard_restored,
             );
         }
 
-        let landed_text = self.text_view.string().to_string();
-        if !landed_text.contains(&sentinel) {
+        if !sentinel_landed {
             bail!(
                 "macOS doctor paste-transaction reported {:?}/{} but the probe text view does \
                  not contain the sentinel; the acknowledgement signal and the actual inserted \
@@ -485,9 +570,11 @@ fn check_paste_report(
 }
 
 /// Poll `rx` for the paste worker thread's result while pumping the main
-/// thread's run loop, so AppKit can deliver the synthetic paste chord to the
-/// probe text view while the worker's `AXValue` poll loop waits for evidence.
+/// thread's AppKit events, so the synthetic paste chord can be delivered to
+/// the probe text view while the worker's `AXValue` poll loop waits for
+/// evidence.
 fn pump_until_paste_result(
+    app: &NSApplication,
     rx: &mpsc::Receiver<Result<PasteReport>>,
     timeout: Duration,
 ) -> Result<PasteReport> {
@@ -510,40 +597,33 @@ fn pump_until_paste_result(
                  (the probe window or Accessibility polling may be stuck)"
             );
         }
-        unsafe {
-            CFRunLoopRunInMode(kCFRunLoopDefaultMode, RUN_LOOP_PUMP_SLICE.as_secs_f64(), 1);
-        }
+        pump_app_events(app, EVENT_PUMP_SLICE);
     }
 }
 
-/// Pump the run loop in bounded slices until `condition` is true or
-/// `timeout` elapses.
+/// Dequeue and dispatch pending AppKit events for up to `slice`.
 ///
-/// # Returns
-///
-/// `true` when `condition` became true before the deadline.
-fn wait_until(timeout: Duration, poll: Duration, mut condition: impl FnMut() -> bool) -> bool {
-    let deadline = Instant::now() + timeout;
-    loop {
-        if condition() {
-            return true;
-        }
-        if Instant::now() >= deadline {
-            return false;
-        }
-        unsafe {
-            CFRunLoopRunInMode(kCFRunLoopDefaultMode, poll.as_secs_f64(), 1);
-        }
-    }
-}
-
-/// Pump the run loop for a fixed duration, ignoring whatever happens.
-fn pump_run_loop_for(duration: Duration) {
-    let deadline = Instant::now() + duration;
-    while Instant::now() < deadline {
-        unsafe {
-            CFRunLoopRunInMode(kCFRunLoopDefaultMode, RUN_LOOP_PUMP_SLICE.as_secs_f64(), 1);
-        }
+/// This is the manual equivalent of one bounded turn of `[NSApp run]`: an
+/// `NSApplication` that never enters its own run loop must explicitly pull
+/// events from the window-server queue with `nextEventMatchingMask:` and
+/// hand them to `sendEvent:`, or nothing is ever delivered — no activation
+/// handshake (the probe window can never become key) and no synthetic
+/// keystrokes to the probe text view. Merely running the CFRunLoop does not
+/// do this. `expiration` is an absolute date, so the wait for further
+/// events naturally ends at the deadline; events already queued are
+/// dispatched immediately regardless.
+fn pump_app_events(app: &NSApplication, slice: Duration) {
+    let expiration = NSDate::dateWithTimeIntervalSinceNow(slice.as_secs_f64());
+    // SAFETY: `NSDefaultRunLoopMode` is an extern static; reading it has no
+    // side effects and it is always a valid, immortal NSString constant.
+    let mode = unsafe { NSDefaultRunLoopMode };
+    while let Some(event) = app.nextEventMatchingMask_untilDate_inMode_dequeue(
+        NSEventMask::Any,
+        Some(&expiration),
+        mode,
+        true,
+    ) {
+        app.sendEvent(&event);
     }
 }
 

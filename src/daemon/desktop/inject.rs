@@ -562,6 +562,16 @@ impl FocusSnapshot {
     pub(crate) fn macos_ax_element(&self) -> Option<&crate::daemon::macos::AxElementSnapshot> {
         self.macos.ax_element()
     }
+
+    /// Return the pid of the frontmost application this snapshot captured.
+    ///
+    /// # Returns
+    ///
+    /// The process id macOS reported as frontmost at capture time.
+    #[cfg(target_os = "macos")]
+    pub(crate) fn macos_pid(&self) -> libc::pid_t {
+        self.macos.pid()
+    }
 }
 
 #[cfg(target_os = "linux")]
