@@ -31,10 +31,19 @@ const K_CG_EVENT_KEY_UP: u32 = 11;
 const K_CG_EVENT_FLAGS_CHANGED: u32 = 12;
 const K_CG_KEYBOARD_EVENT_KEYCODE: u32 = 9;
 const K_CG_EVENT_FLAG_MASK_COMMAND: u64 = 0x0010_0000;
+const K_CG_EVENT_SOURCE_STATE_HID_SYSTEM_STATE: i32 = 1;
 const MACOS_V_KEYCODE: u16 = 9;
+const MACOS_COMMAND_KEYCODE: u16 = 55;
+// TODO: these must track the push-to-talk hotkey definition (currently
+// hardcoded to Left Control+Space in `src/daemon/desktop/hotkey/macos.rs`)
+// once hotkeys become configurable.
+const MACOS_PTT_LEFT_CONTROL_KEYCODE: u16 = 59;
+const MACOS_PTT_SPACE_KEYCODE: u16 = 49;
 
 const SMOKE_TIMEOUT: Duration = Duration::from_millis(750);
 const SMOKE_POLL: Duration = Duration::from_millis(20);
+const PTT_RELEASE_TIMEOUT: Duration = Duration::from_millis(200);
+const PTT_RELEASE_POLL: Duration = Duration::from_millis(15);
 
 #[link(name = "CoreFoundation", kind = "framework")]
 extern "C" {
@@ -76,6 +85,8 @@ extern "C" {
     fn CGEventGetIntegerValueField(event: CGEventRef, field: u32) -> i64;
     fn CGEventSetFlags(event: CGEventRef, flags: u64);
     fn CGEventTapEnable(tap: CFMachPortRef, enable: Boolean);
+    fn CGEventSourceCreate(state_id: i32) -> *mut c_void;
+    fn CGEventSourceKeyState(state_id: i32, key: u16) -> bool;
 }
 
 /// Run an insertion action behind a temporary suppressing event tap.
@@ -187,7 +198,7 @@ fn suppressed_key_event_smoke_with_expectation(
     }
 }
 
-/// Send a macOS paste shortcut using a single flagged key event pair.
+/// Send a macOS paste shortcut as a full Cmd+V hardware-style chord.
 ///
 /// # Returns
 ///
@@ -200,27 +211,125 @@ fn suppressed_key_event_smoke_with_expectation(
 /// Callers must run `accessibility_preflight()` before choosing this backend.
 /// The daemon and `doctor --deep` both do that once before entering this hot path.
 pub(crate) fn send_paste_shortcut() -> Result<()> {
-    let key_down = unsafe { CGEventCreateKeyboardEvent(ptr::null_mut(), MACOS_V_KEYCODE, 1) };
-    if key_down.is_null() {
-        bail!("could not create macOS paste key-down event");
-    }
-    let key_up = unsafe { CGEventCreateKeyboardEvent(ptr::null_mut(), MACOS_V_KEYCODE, 0) };
-    if key_up.is_null() {
-        unsafe {
-            CFRelease(key_down.cast());
+    // Push-to-talk is held with the physical keyboard while this fires; give the
+    // user a brief window to release Left Control+Space first so the synthetic
+    // chord below doesn't get interleaved with real modifier-key transitions.
+    wait_for_ptt_keys_released(PTT_RELEASE_TIMEOUT);
+
+    // A HID-system event source makes the synthetic chord carry the same
+    // source CoreGraphics attaches to real hardware input, which is what
+    // CGEventSourceKeyState-based modifier trackers key off of. If allocation
+    // fails, fall back to posting with a null source rather than failing the
+    // paste outright.
+    let source = unsafe { CGEventSourceCreate(K_CG_EVENT_SOURCE_STATE_HID_SYSTEM_STATE) };
+
+    let events = match create_paste_chord_events(source) {
+        Ok(events) => events,
+        Err(err) => {
+            release_event_source(source);
+            return Err(err);
         }
-        bail!("could not create macOS paste key-up event");
-    }
+    };
 
     unsafe {
-        CGEventSetFlags(key_down, K_CG_EVENT_FLAG_MASK_COMMAND);
-        CGEventSetFlags(key_up, K_CG_EVENT_FLAG_MASK_COMMAND);
-        CGEventPost(K_CG_HID_EVENT_TAP, key_down);
-        CGEventPost(K_CG_HID_EVENT_TAP, key_up);
-        CFRelease(key_down.cast());
-        CFRelease(key_up.cast());
+        for event in &events {
+            CGEventPost(K_CG_HID_EVENT_TAP, *event);
+        }
+        for event in &events {
+            CFRelease(event.cast());
+        }
     }
+    release_event_source(source);
+
     Ok(())
+}
+
+/// Build the Cmd-down, V-down, V-up, Cmd-up event chord for [`send_paste_shortcut`].
+///
+/// Command key-down/up events are typed by CoreGraphics as `flagsChanged`
+/// automatically once posted (modifier keycodes have no key down/up
+/// semantics for apps), so bracketing V with a real Cmd down/up pair makes
+/// the synthetic input look like an actual hardware chord to anything
+/// tracking global modifier state via `CGEventSourceKeyState` (this matters
+/// for Chromium/Electron apps in particular). The explicit Command flag stays
+/// set on the V events themselves because most apps read the per-event flags
+/// field rather than following flagsChanged transitions.
+///
+/// On error, any events already created are released before returning.
+fn create_paste_chord_events(source: *mut c_void) -> Result<Vec<CGEventRef>> {
+    let mut events: Vec<CGEventRef> = Vec::with_capacity(4);
+    match build_paste_chord_events(source, &mut events) {
+        Ok(()) => Ok(events),
+        Err(err) => {
+            for event in &events {
+                unsafe { CFRelease(event.cast()) };
+            }
+            Err(err)
+        }
+    }
+}
+
+fn build_paste_chord_events(source: *mut c_void, events: &mut Vec<CGEventRef>) -> Result<()> {
+    events.push(create_keyboard_event(source, MACOS_COMMAND_KEYCODE, 1)?);
+
+    let v_down = create_keyboard_event(source, MACOS_V_KEYCODE, 1)?;
+    unsafe { CGEventSetFlags(v_down, K_CG_EVENT_FLAG_MASK_COMMAND) };
+    events.push(v_down);
+
+    let v_up = create_keyboard_event(source, MACOS_V_KEYCODE, 0)?;
+    unsafe { CGEventSetFlags(v_up, K_CG_EVENT_FLAG_MASK_COMMAND) };
+    events.push(v_up);
+
+    events.push(create_keyboard_event(source, MACOS_COMMAND_KEYCODE, 0)?);
+    Ok(())
+}
+
+fn create_keyboard_event(
+    source: *mut c_void,
+    keycode: u16,
+    key_down: Boolean,
+) -> Result<CGEventRef> {
+    let event = unsafe { CGEventCreateKeyboardEvent(source, keycode, key_down) };
+    if event.is_null() {
+        bail!(
+            "could not create macOS paste keyboard event (keycode {keycode}, key_down {key_down})"
+        );
+    }
+    Ok(event)
+}
+
+fn release_event_source(source: *mut c_void) {
+    if !source.is_null() {
+        unsafe {
+            CFRelease(source.cast());
+        }
+    }
+}
+
+/// Poll the HID system key state until the push-to-talk keys are released.
+///
+/// # Arguments
+///
+/// * `timeout` - Maximum time to wait before giving up and proceeding anyway.
+///
+/// Never blocks indefinitely: if the keys are still down at the deadline,
+/// this returns and the paste proceeds regardless.
+// TODO: MACOS_PTT_LEFT_CONTROL_KEYCODE/MACOS_PTT_SPACE_KEYCODE must track the
+// push-to-talk hotkey definition once hotkeys become configurable.
+fn wait_for_ptt_keys_released(timeout: Duration) {
+    let deadline = Instant::now() + timeout;
+    loop {
+        let ctrl_down = ptt_key_down(MACOS_PTT_LEFT_CONTROL_KEYCODE);
+        let space_down = ptt_key_down(MACOS_PTT_SPACE_KEYCODE);
+        if (!ctrl_down && !space_down) || Instant::now() >= deadline {
+            return;
+        }
+        thread::sleep(PTT_RELEASE_POLL);
+    }
+}
+
+fn ptt_key_down(keycode: u16) -> bool {
+    unsafe { CGEventSourceKeyState(K_CG_EVENT_SOURCE_STATE_HID_SYSTEM_STATE, keycode) }
 }
 
 #[derive(Default)]
