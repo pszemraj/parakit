@@ -305,7 +305,7 @@ fn send_inputs_with<S: InputSender>(sender: &mut S, inputs: &[INPUT], label: &st
 ///
 /// A static diagnostic string for startup failures.
 pub(crate) fn windows_hotkey_failure_help() -> &'static str {
-    "Windows hotkey capture uses RegisterHotKey(Ctrl+Space). If registration fails, another application probably owns Ctrl+Space. Close the conflicting application or add a configurable hotkey before using this backend."
+    "Windows hotkey capture uses RegisterHotKey(Ctrl+Space). If registration fails, another application already owns Ctrl+Space. Close it, then rerun: parakit doctor"
 }
 
 #[cfg(test)]

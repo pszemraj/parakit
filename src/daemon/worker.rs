@@ -388,7 +388,14 @@ fn insertion_result_remembers_transcript(result: &Result<InsertReport>) -> bool 
 ///   when one is available (every `Ok` insertion result has one; `None` for
 ///   PTT audio simulation and the `"error"` outcome, which have nothing to
 ///   report).
-#[allow(clippy::too_many_arguments)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "each parameter is an independently observed fact about one insertion (logger, \
+              record id, outcome, focus at start, transcript length, failure reason, focus \
+              verification, and paste report); the three call sites each learn these at \
+              different points, so bundling them into a struct would only move the argument \
+              list to the construction site"
+)]
 fn log_insertion_outcome(
     data_log: &Option<Arc<DataLogger>>,
     record_id: Option<RecordId>,
@@ -481,7 +488,7 @@ pub(crate) fn insert_text(
                     &text,
                     keep_transcript_clipboard,
                     "paste-disabled clipboard copy failed",
-                    "Paste is temporarily disabled after repeated failures.",
+                    PasteBlockReason::PasteTemporarilyDisabled,
                     log,
                     notifier,
                 )
@@ -499,12 +506,13 @@ pub(crate) fn insert_text(
         PastePlan::CopyOnly { text, reason } => {
             if mode == PasteMode::Direct {
                 log.warn(format!(
-                    "direct insertion blocked by sanitizer ({reason}); transcript was not copied"
+                    "direct insertion blocked by sanitizer ({}); transcript was not copied",
+                    reason.log_tag()
                 ));
-                notifier.paste_blocked(reason);
+                notifier.paste_blocked(reason.notice());
                 Ok(InsertReport::placeholder(InsertOutcome::Blocked, false))
             } else {
-                log.warn(format!("paste blocked by sanitizer ({reason})"));
+                log.warn(format!("paste blocked by sanitizer ({})", reason.log_tag()));
                 copy_or_block_transcript(
                     injector,
                     &text,
@@ -517,7 +525,7 @@ pub(crate) fn insert_text(
             }
         }
         PastePlan::Skip { reason } => {
-            log.warn(format!("paste skipped by sanitizer: {reason}"));
+            log.warn(format!("paste skipped by sanitizer: {}", reason.log_tag()));
             Ok(InsertReport::placeholder(InsertOutcome::Skipped, false))
         }
     }
@@ -534,7 +542,7 @@ fn paste_transcript(
 ) -> Result<InsertReport> {
     if !focus_allows_insertion(focus, log) {
         if mode == PasteMode::Direct {
-            notifier.paste_blocked("Focus changed before insertion.");
+            notifier.paste_blocked(PasteBlockReason::FocusChangedBeforeInsertion.notice());
             return Ok(InsertReport::placeholder(InsertOutcome::Blocked, false));
         }
         return copy_or_block_transcript(
@@ -542,7 +550,7 @@ fn paste_transcript(
             text,
             keep_transcript_clipboard,
             "focus changed clipboard fallback failed",
-            "Focus changed before insertion.",
+            PasteBlockReason::FocusChangedBeforeInsertion,
             log,
             notifier,
         );
@@ -565,7 +573,7 @@ fn paste_transcript(
                 text,
                 keep_transcript_clipboard,
                 "paste backend unavailable and clipboard fallback failed",
-                "Paste backend was unavailable.",
+                PasteBlockReason::BackendUnavailable,
                 log,
                 notifier,
             );
@@ -605,16 +613,14 @@ fn paste_transcript(
                     // alarm fatigue from a second silent failure path and
                     // tell the user the transcript is safe on the
                     // clipboard.
-                    notifier.paste_blocked(
-                        "Paste could not be confirmed; transcript copied. Press Cmd+V to insert it.",
-                    );
+                    notifier.paste_blocked(PasteBlockReason::Unconfirmed.notice());
                 } else {
-                    notifier.transcript_copied("Focus changed immediately before paste.");
+                    notifier.transcript_copied(PasteBlockReason::FocusChangedBeforePaste.notice());
                 }
                 return Ok(InsertReport::from_paste(InsertOutcome::CopiedOnly, report));
             }
             super::inject::PasteOutcome::Blocked => {
-                notifier.paste_blocked("Focus changed immediately before paste.");
+                notifier.paste_blocked(PasteBlockReason::FocusChangedBeforePaste.notice());
                 return Ok(InsertReport::from_paste(InsertOutcome::Blocked, report));
             }
         },
@@ -638,7 +644,7 @@ fn copy_or_block_transcript(
     text: &str,
     keep_transcript_clipboard: bool,
     copy_context: &'static str,
-    reason: &'static str,
+    reason: PasteBlockReason,
     log: &Logger,
     notifier: &Notifier,
 ) -> Result<InsertReport> {
@@ -646,14 +652,15 @@ fn copy_or_block_transcript(
         .context(copy_context)?
     {
         super::inject::StageOutcome::CopiedOnly => {
-            notifier.transcript_copied(reason);
+            notifier.transcript_copied(reason.notice());
             Ok(InsertReport::from_stage(InsertOutcome::CopiedOnly, false))
         }
         super::inject::StageOutcome::Blocked => {
             log.warn(format!(
-                "automatic paste skipped ({reason}); transcript staged for clipboard history"
+                "automatic paste skipped ({}); transcript staged for clipboard history",
+                reason.log_tag()
             ));
-            notifier.paste_blocked(reason);
+            notifier.paste_blocked(reason.notice());
             Ok(InsertReport::from_stage(InsertOutcome::Blocked, true))
         }
     }
@@ -771,14 +778,99 @@ pub(crate) enum PastePlan {
     CopyOnly {
         /// Sanitized text to copy.
         text: String,
-        /// Short user-facing reason.
-        reason: &'static str,
+        /// Why automatic paste was withheld.
+        reason: PasteBlockReason,
     },
     /// Text should not be copied or pasted.
     Skip {
-        /// Short user-facing reason.
-        reason: &'static str,
+        /// Why the transcript was dropped.
+        reason: PasteBlockReason,
     },
+}
+
+/// Why an utterance was not pasted automatically.
+///
+/// Carries two renderings of the same fact because the two consumers have
+/// different audiences: [`Self::log_tag`] is a lowercase fragment that reads
+/// correctly inside a parenthesized log line, and [`Self::notice`] is the
+/// sentence shown in a desktop notification.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PasteBlockReason {
+    /// Nothing printable survived sanitization.
+    EmptyAfterSanitization,
+    /// Nothing printable survived terminal-mode newline trimming.
+    EmptyTerminalAfterSanitization,
+    /// Terminal mode refuses multi-line text, which would submit commands.
+    MultilineTerminal,
+    /// Longer than the terminal-mode paste ceiling.
+    TerminalTooLong,
+    /// Longer than the general paste ceiling.
+    TooLong,
+    /// The insertion circuit breaker is open after repeated failures.
+    PasteTemporarilyDisabled,
+    /// The platform insertion backend could not be prepared for this mode.
+    BackendUnavailable,
+    /// The focused target changed between capture and the insertion attempt.
+    FocusChangedBeforeInsertion,
+    /// The focused target changed during the final pre-chord recheck.
+    FocusChangedBeforePaste,
+    /// The paste chord was sent but never acknowledged, so the transcript was
+    /// deliberately left on the clipboard for the user to paste manually.
+    Unconfirmed,
+}
+
+impl PasteBlockReason {
+    /// Lowercase fragment for log lines.
+    ///
+    /// # Returns
+    ///
+    /// A short phrase with no leading capital and no trailing period.
+    fn log_tag(self) -> &'static str {
+        match self {
+            Self::EmptyAfterSanitization => "empty transcript after sanitization",
+            Self::EmptyTerminalAfterSanitization => "empty terminal transcript after sanitization",
+            Self::MultilineTerminal => "multiline terminal transcript",
+            Self::TerminalTooLong => "terminal transcript too long",
+            Self::TooLong => "transcript too long",
+            Self::PasteTemporarilyDisabled => "paste temporarily disabled after repeated failures",
+            Self::BackendUnavailable => "paste backend unavailable",
+            Self::FocusChangedBeforeInsertion => "focus changed before insertion",
+            Self::FocusChangedBeforePaste => "focus changed immediately before paste",
+            Self::Unconfirmed => "paste not acknowledged",
+        }
+    }
+
+    /// Sentence shown in the desktop notification body.
+    ///
+    /// # Returns
+    ///
+    /// A capitalized, punctuated sentence.
+    fn notice(self) -> &'static str {
+        match self {
+            Self::EmptyAfterSanitization | Self::EmptyTerminalAfterSanitization => {
+                "Transcript was empty after cleanup."
+            }
+            Self::MultilineTerminal => "Multi-line transcript; terminal mode does not auto-paste.",
+            Self::TerminalTooLong | Self::TooLong => "Transcript too long to paste automatically.",
+            Self::PasteTemporarilyDisabled => {
+                "Paste is temporarily disabled after repeated failures."
+            }
+            Self::BackendUnavailable => "Paste backend was unavailable.",
+            Self::FocusChangedBeforeInsertion => "Focus changed before insertion.",
+            Self::FocusChangedBeforePaste => "Focus changed immediately before paste.",
+            // The unacknowledged tier is only reachable where a platform
+            // overrides `await_paste_confirmation` (macOS today), but name
+            // the right chord for whatever platform this compiles for.
+            #[cfg(target_os = "macos")]
+            Self::Unconfirmed => {
+                "Paste could not be confirmed; transcript copied. Press Cmd+V to insert it."
+            }
+            #[cfg(not(target_os = "macos"))]
+            Self::Unconfirmed => {
+                "Paste could not be confirmed; transcript copied. Press Ctrl+V to insert it."
+            }
+        }
+    }
 }
 
 /// Result of a worker-level insertion attempt.
@@ -895,7 +987,7 @@ pub(crate) fn sanitize_for_paste(raw: &str, mode: PasteMode) -> PastePlan {
 
     if text.trim().is_empty() {
         return PastePlan::Skip {
-            reason: "empty transcript after sanitization",
+            reason: PasteBlockReason::EmptyAfterSanitization,
         };
     }
 
@@ -905,19 +997,19 @@ pub(crate) fn sanitize_for_paste(raw: &str, mode: PasteMode) -> PastePlan {
         }
         if text.trim().is_empty() {
             return PastePlan::Skip {
-                reason: "empty terminal transcript after sanitization",
+                reason: PasteBlockReason::EmptyTerminalAfterSanitization,
             };
         }
         if text.contains('\n') {
             return PastePlan::CopyOnly {
                 text,
-                reason: "multiline terminal transcript",
+                reason: PasteBlockReason::MultilineTerminal,
             };
         }
         if text.chars().count() > TERMINAL_MAX_PASTE_CHARS {
             return PastePlan::CopyOnly {
                 text,
-                reason: "terminal transcript too long",
+                reason: PasteBlockReason::TerminalTooLong,
             };
         }
     }
@@ -925,7 +1017,7 @@ pub(crate) fn sanitize_for_paste(raw: &str, mode: PasteMode) -> PastePlan {
     if text.chars().count() > MAX_PASTE_CHARS {
         return PastePlan::CopyOnly {
             text,
-            reason: "transcript too long",
+            reason: PasteBlockReason::TooLong,
         };
     }
 
@@ -1154,7 +1246,7 @@ mod tests {
                 PasteMode::Terminal,
                 PastePlan::CopyOnly {
                     text: "first\nsecond".to_string(),
-                    reason: "multiline terminal transcript",
+                    reason: PasteBlockReason::MultilineTerminal,
                 },
             ),
             (
@@ -1162,7 +1254,7 @@ mod tests {
                 "\0\x07\n".to_string(),
                 PasteMode::Standard,
                 PastePlan::Skip {
-                    reason: "empty transcript after sanitization",
+                    reason: PasteBlockReason::EmptyAfterSanitization,
                 },
             ),
             (
@@ -1171,7 +1263,7 @@ mod tests {
                 PasteMode::Terminal,
                 PastePlan::CopyOnly {
                     text: raw,
-                    reason: "terminal transcript too long",
+                    reason: PasteBlockReason::TerminalTooLong,
                 },
             ),
         ];

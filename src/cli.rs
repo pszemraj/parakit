@@ -188,8 +188,10 @@ pub(crate) struct FetchCli {
 pub(crate) struct DoctorCli {
     /// Run active smoke tests in addition to passive preflight checks.
     ///
-    /// On Linux/X11 this briefly focuses a tiny probe window and verifies the
-    /// configured paste shortcut reaches it.
+    /// Opens a throwaway probe window and takes focus for a moment:
+    /// Linux/X11 checks that the configured paste shortcut reaches it, macOS
+    /// and Windows run a full paste round trip and read the result back. The
+    /// probe window closes itself.
     #[arg(long)]
     pub(crate) deep: bool,
 }

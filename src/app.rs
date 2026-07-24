@@ -634,7 +634,7 @@ fn validate_device_request(device_mode: DeviceMode, log: &Logger) -> Result<()> 
     #[cfg(feature = "bundled")]
     {
         if !parakit::gpu::has_gpu_device() {
-            let mut message = "--device gpu requested, but ggml reports no GPU or iGPU devices; run `parakit doctor --verbose` for compute diagnostics".to_string();
+            let mut message = "--device gpu requested, but ggml reports no GPU or iGPU devices; run `parakit --verbose doctor` for compute diagnostics".to_string();
             #[cfg(target_os = "macos")]
             if let Some(hint) = daemon::macos::no_gpu_hint() {
                 message.push_str("; ");
@@ -931,7 +931,7 @@ fn print_config_show(quiet: bool) -> Result<()> {
     println!("  rules:");
     println!("    user rules: {}", config.rules.user.len());
     for user_rule in &config.rules.user {
-        println!("      {} ({:?})", user_rule.name, user_rule.position);
+        println!("      {} ({})", user_rule.name, user_rule.position.as_str());
     }
     Ok(())
 }
