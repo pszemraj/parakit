@@ -117,13 +117,17 @@ disabled_rules = ["weights-and-biases-to-wandb"]
 
 ### Validation Errors
 
-A broken user rule is a hard error at config load time (`parakit config show`, `parakit config edit`, or daemon startup), naming the offending rule:
+A broken user rule is a hard error at config load time (`parakit config show` or daemon startup), naming the offending rule:
 
 ```text
+user rule #1 has an empty name
+user rule 'my-rule' has an empty pattern
 user rule 'my-rule' has invalid regex: regex parse error: ...
 user rule 'filler-um-uh' has the same name as a built-in rule; rename it
 duplicate user rule name 'my-rule'
 ```
+
+An unknown name in `cleaning.disabled_rules` fails the same way, with `no rule named '<name>'`. `parakit config edit` never loads the file, so it stays available to repair a config that no longer parses.
 
 ## Regression Workflow
 
