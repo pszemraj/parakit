@@ -133,8 +133,9 @@ impl Cleaner {
     /// # Errors
     ///
     /// Returns an error if any enabled rule (built-in or user) contains an
-    /// invalid regex pattern, if a user rule name collides with a built-in
-    /// rule name, or if two user rules share the same name.
+    /// invalid regex pattern, if a user rule has an empty name or an empty
+    /// pattern, if a user rule name collides with a built-in rule name, or
+    /// if two user rules share the same name.
     fn new(disabled: &HashSet<String>, user_rules: &[UserRule]) -> Result<Self> {
         validate_user_rules(user_rules)?;
 
@@ -179,18 +180,25 @@ impl Cleaner {
     }
 }
 
-/// Validate that no user rule collides with a built-in name and that no two
-/// user rules share a name. Regex validity is checked when a rule is
-/// compiled (`push_user_rules`), not here, so this stays cheap to call
-/// unconditionally.
+/// Validate that every user rule has a non-empty name and pattern, that no
+/// user rule collides with a built-in name, and that no two user rules
+/// share a name. Regex *validity* (whether the pattern compiles) is checked
+/// when a rule is compiled (`push_user_rules`), not here, so this stays
+/// cheap to call unconditionally.
 ///
 /// # Errors
 ///
-/// Returns an error naming the offending rule when a user rule's name
-/// collides with a built-in rule name, or when two user rules share a name.
+/// Returns an error naming the offending rule when: a rule's `name` is
+/// empty or whitespace-only; a rule's `name` collides with a built-in rule
+/// name; two user rules share a `name`; or a rule's `pattern` is the empty
+/// string (an empty regex matches at every position, so `replacement` would
+/// be spliced between every character of every transcript).
 fn validate_user_rules(user_rules: &[UserRule]) -> Result<()> {
     let mut seen: HashSet<&str> = HashSet::with_capacity(user_rules.len());
-    for ur in user_rules {
+    for (idx, ur) in user_rules.iter().enumerate() {
+        if ur.name.trim().is_empty() {
+            return Err(anyhow!("user rule #{} has an empty name", idx + 1));
+        }
         if DEFAULT_RULES.iter().any(|r| r.name == ur.name) {
             return Err(anyhow!(
                 "user rule '{}' has the same name as a built-in rule; rename it",
@@ -199,6 +207,9 @@ fn validate_user_rules(user_rules: &[UserRule]) -> Result<()> {
         }
         if !seen.insert(ur.name.as_str()) {
             return Err(anyhow!("duplicate user rule name '{}'", ur.name));
+        }
+        if ur.pattern.is_empty() {
+            return Err(anyhow!("user rule '{}' has an empty pattern", ur.name));
         }
     }
     Ok(())
@@ -270,9 +281,10 @@ fn push_user_rules(
 ///
 /// # Errors
 ///
-/// Returns an error for unknown rule names, invalid rule regexes, a user
-/// rule name colliding with a built-in name, or duplicate user rule names.
-/// Config-path context, if any, is the caller's responsibility to add.
+/// Returns an error for unknown rule names, invalid rule regexes, an empty
+/// user rule name or pattern, a user rule name colliding with a built-in
+/// name, or duplicate user rule names. Config-path context, if any, is the
+/// caller's responsibility to add.
 pub fn build_cleaner(
     no_cleaning: bool,
     disabled_rules: &[String],
@@ -873,6 +885,47 @@ mod tests {
     }
 
     #[test]
+    fn empty_user_rule_name_is_rejected() {
+        let rules = vec![user_rule("", r"(?i)hi", "hello", RulePosition::Standard)];
+        let err = Cleaner::new(&HashSet::new(), &rules).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("empty name"), "message: {msg}");
+    }
+
+    #[test]
+    fn whitespace_only_user_rule_name_is_rejected() {
+        let rules = vec![user_rule("   ", r"(?i)hi", "hello", RulePosition::Standard)];
+        let err = Cleaner::new(&HashSet::new(), &rules).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("empty name"), "message: {msg}");
+    }
+
+    #[test]
+    fn empty_user_rule_pattern_is_rejected() {
+        let rules = vec![user_rule(
+            "custom-empty-pattern",
+            "",
+            "x",
+            RulePosition::Standard,
+        )];
+        let err = Cleaner::new(&HashSet::new(), &rules).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("custom-empty-pattern"), "message: {msg}");
+        assert!(msg.contains("empty pattern"), "message: {msg}");
+    }
+
+    #[test]
+    fn whitespace_only_user_rule_pattern_is_accepted_as_a_literal_pattern() {
+        // Only the literal empty string is rejected. A whitespace-only
+        // pattern is a normal (if unusual) regex that matches a literal
+        // space, not the "matches everywhere" footgun an empty pattern is,
+        // so it must not be rejected by `validate_user_rules`.
+        let rules = vec![user_rule("space-rule", " ", "_", RulePosition::Standard)];
+        let c = Cleaner::new(&HashSet::new(), &rules).unwrap();
+        assert_eq!(c.clean("a b"), "A_b");
+    }
+
+    #[test]
     fn invalid_user_rule_regex_names_the_rule() {
         let rules = vec![user_rule(
             "bad-regex",
@@ -900,6 +953,30 @@ mod tests {
         )];
         let c = Cleaner::new(&disabled, &rules).unwrap();
         assert_eq!(c.clean("hello world"), "Hello world");
+    }
+
+    #[test]
+    fn build_cleaner_never_compiles_regex_for_a_disabled_user_rule() {
+        // A user rule named in `disabled_rules` is filtered out in
+        // `push_user_rules` before `Regex::new` is ever called on it (see
+        // that function), so a disabled rule may carry an invalid regex
+        // without failing `build_cleaner` — the same entry point
+        // `config::validate_config` now calls with the real
+        // `cleaning.disabled_rules` list instead of an empty slice. This is
+        // the documented way to "park" a `[[rules.user]]` entry whose
+        // pattern does not compile yet.
+        let rules = vec![user_rule(
+            "broken-regex",
+            "(unclosed",
+            "x",
+            RulePosition::Standard,
+        )];
+        let disabled = vec!["broken-regex".to_string()];
+        let result = build_cleaner(false, &disabled, &rules);
+        assert!(
+            result.is_ok(),
+            "a disabled user rule's invalid regex must not be compiled: {result:?}"
+        );
     }
 
     #[test]

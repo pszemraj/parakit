@@ -52,7 +52,7 @@ whether a mistake surfaces immediately or at next daemon start:
 
 | Checked when the file loads | Checked only when the daemon starts |
 | --- | --- |
-| TOML syntax; all enum values; `[[rules.user]]` regex, name collisions, duplicate names | `daemon.model` path existence; `cleaning.disabled_rules` names; `logging.dir` writability; hotkey backend availability |
+| TOML syntax; all enum values; `[[rules.user]]` name (non-empty), pattern (non-empty), regex validity, name collisions, duplicate names; `cleaning.disabled_rules` names | `daemon.model` path existence; `logging.dir` writability; hotkey backend availability |
 
 `parakit config show` runs the first column and fails on a broken file. Every
 other `parakit config` subcommand — `path`, `init`, `edit` — works regardless,
@@ -133,9 +133,8 @@ enabled = <bool>
 # Accepts any built-in or user rule name; `parakit --list-rules` prints the
 # authoritative set, including user rules. Merged as a union with repeated
 # `--disable-rule` flags rather than replaced by them.
-# An unknown name here is NOT caught when the file loads — `config show`
-# reports a clean config and the daemon then fails at startup with
-# `no rule named '<name>'`. Verify with `parakit --test-rules`.
+# An unknown name here is caught when the file loads: `config show` and
+# daemon startup both fail with `no rule named '<name>'`.
 # Naming a user rule here skips compiling it, so this is also the way to
 # park a [[rules.user]] entry whose regex does not compile.
 disabled_rules = [<string>, ...]
@@ -224,7 +223,8 @@ and `--test-rules` — but not `status`, `stop`, `paste-last`, `copy-last`,
 ```toml
 [[rules.user]]
 
-# Rule identifier, required. Must not match a built-in rule name
+# Rule identifier, required. Must not be empty or whitespace-only
+# (`user rule #<n> has an empty name`). Must not match a built-in rule name
 # (`user rule '<name>' has the same name as a built-in rule; rename it`) or
 # another user rule (`duplicate user rule name '<name>'`).
 # Shown by `--list-rules` and usable in cleaning.disabled_rules.
@@ -233,8 +233,10 @@ name = <string>
 # Human-readable note, optional. Default: none. Shown by `--list-rules`.
 description = <string>
 
-# Rust `regex` crate pattern, required. No lookahead, no lookbehind, no
-# backreferences. Invalid patterns fail with
+# Rust `regex` crate pattern, required. Must not be the empty string
+# (`user rule '<name>' has an empty pattern`) — an empty regex matches at
+# every position, so replacement would be spliced between every character.
+# No lookahead, no lookbehind, no backreferences. Invalid patterns fail with
 # `user rule '<name>' has invalid regex: <detail>`, except when the rule is
 # listed in cleaning.disabled_rules, in which case it is never compiled.
 pattern = <string>

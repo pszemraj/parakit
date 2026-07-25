@@ -242,10 +242,11 @@ fn xdg_config_base() -> Result<PathBuf> {
 /// # Errors
 ///
 /// Returns an error if the config path cannot be resolved, the file exists
-/// but cannot be read, the file is not valid TOML for [`ConfigFile`], or a
-/// user-defined rule fails validation (invalid regex, a name colliding
-/// with a built-in rule, or a duplicate user rule name). Parse and
-/// validation errors are annotated with the config file path.
+/// but cannot be read, the file is not valid TOML for [`ConfigFile`], a
+/// user-defined rule fails validation (empty name, empty pattern, invalid
+/// regex, a name colliding with a built-in rule, or a duplicate user rule
+/// name), or `cleaning.disabled_rules` names a rule that does not exist.
+/// Parse and validation errors are annotated with the config file path.
 pub(crate) fn load() -> Result<ConfigFile> {
     load_from_path(&config_path()?)
 }
@@ -285,16 +286,20 @@ pub(crate) fn load_from_path(path: &Path) -> Result<ConfigFile> {
 /// Validate config-level invariants that are cheap to check eagerly at
 /// load time, ahead of daemon bootstrap.
 ///
-/// Reuses [`parakit::rules::build_cleaner`] so load-time errors are worded
-/// identically to the errors `--test-rules` or daemon startup would report
-/// for the same rule set.
+/// Reuses [`parakit::rules::build_cleaner`] with the configured
+/// `cleaning.disabled_rules` (not an empty slice), so load-time errors —
+/// including an unknown name in `disabled_rules` — are worded identically
+/// to the errors `--test-rules` or daemon startup would report for the same
+/// rule set.
 ///
 /// # Errors
 ///
-/// Returns an error naming the offending user rule for an invalid regex,
-/// a name colliding with a built-in rule, or a duplicate user rule name.
+/// Returns an error naming the offending user rule for an empty name, an
+/// empty pattern, an invalid regex, a name colliding with a built-in rule,
+/// or a duplicate user rule name; or naming an unknown rule listed in
+/// `cleaning.disabled_rules`.
 fn validate_config(config: &ConfigFile) -> Result<()> {
-    parakit::rules::build_cleaner(false, &[], &config.rules.user)?;
+    parakit::rules::build_cleaner(false, &config.cleaning.disabled_rules, &config.rules.user)?;
     Ok(())
 }
 
@@ -429,6 +434,37 @@ replacement = "x"
     }
 
     #[test]
+    fn empty_user_rule_name_is_rejected_at_load() {
+        let toml = r#"
+[[rules.user]]
+name = ""
+pattern = "(?i)hi"
+replacement = "hello"
+"#;
+        let path = write_fixture("empty-user-rule-name", toml);
+        let err = load_from_path(&path).unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(msg.contains("empty name"), "message: {msg}");
+        assert!(msg.contains(&path.display().to_string()), "message: {msg}");
+    }
+
+    #[test]
+    fn empty_user_rule_pattern_is_rejected_at_load() {
+        let toml = r#"
+[[rules.user]]
+name = "custom-empty-pattern"
+pattern = ""
+replacement = "x"
+"#;
+        let path = write_fixture("empty-user-rule-pattern", toml);
+        let err = load_from_path(&path).unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(msg.contains("custom-empty-pattern"), "message: {msg}");
+        assert!(msg.contains("empty pattern"), "message: {msg}");
+        assert!(msg.contains(&path.display().to_string()), "message: {msg}");
+    }
+
+    #[test]
     fn user_rule_collision_with_builtin_is_rejected_at_load() {
         let toml = r#"
 [[rules.user]]
@@ -441,6 +477,62 @@ replacement = "x"
         let msg = format!("{err:#}");
         assert!(msg.contains("filler-um-uh"), "message: {msg}");
         assert!(msg.contains(&path.display().to_string()), "message: {msg}");
+    }
+
+    #[test]
+    fn disabled_rules_typo_is_rejected_at_load() {
+        let toml = r#"
+[cleaning]
+disabled_rules = ["fixed-trailing-perod"]
+"#;
+        let path = write_fixture("disabled-rules-typo", toml);
+        let err = load_from_path(&path).unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(msg.contains("no rule named"), "message: {msg}");
+        assert!(msg.contains("fixed-trailing-perod"), "message: {msg}");
+        assert!(msg.contains(&path.display().to_string()), "message: {msg}");
+    }
+
+    #[test]
+    fn disabled_rules_naming_a_user_rule_is_accepted_at_load() {
+        let toml = r#"
+[cleaning]
+disabled_rules = ["custom-hello"]
+
+[[rules.user]]
+name = "custom-hello"
+pattern = "(?i)hi"
+replacement = "hello"
+"#;
+        let path = write_fixture("disabled-rules-user-rule", toml);
+        let config = load_from_path(&path).expect("disabling a user rule by name should validate");
+        assert_eq!(
+            config.cleaning.disabled_rules,
+            vec!["custom-hello".to_string()]
+        );
+    }
+
+    #[test]
+    fn disabling_a_user_rule_with_invalid_regex_does_not_fail_load() {
+        // A disabled user rule's pattern is never compiled (see
+        // `parakit::rules::push_user_rules`), so an invalid regex on a rule
+        // that is also listed in `cleaning.disabled_rules` must not fail
+        // config load. This is the load-bearing interaction between the
+        // `disabled_rules` name check added to `validate_config` and the
+        // documented "park a broken rule by disabling it" workflow.
+        let toml = r#"
+[cleaning]
+disabled_rules = ["broken"]
+
+[[rules.user]]
+name = "broken"
+pattern = "(unclosed"
+replacement = "x"
+"#;
+        let path = write_fixture("disabled-user-rule-bad-regex", toml);
+        let config = load_from_path(&path)
+            .expect("disabled user rule with invalid regex must not fail validation");
+        assert_eq!(config.rules.user[0].pattern, "(unclosed");
     }
 
     #[test]
