@@ -151,10 +151,9 @@ pub(crate) fn run() -> Result<()> {
                 return Ok(());
             }
             Commands::History(history_cli) => {
+                let limit = wire_history_limit(history_cli.limit)?;
                 daemon::ipc::run_client(
-                    daemon::ipc::IpcCommand::History {
-                        limit: history_cli.limit,
-                    },
+                    daemon::ipc::IpcCommand::History { limit },
                     cli.quiet,
                     cli.verbose,
                 )?;
@@ -387,6 +386,31 @@ fn wire_history_index(index: Option<usize>) -> Result<usize> {
         None => Ok(0),
         Some(0) => anyhow::bail!("transcript index starts at 1; 1 is the most recent"),
         Some(n) => Ok(n - 1),
+    }
+}
+
+/// Reject `history --limit 0` before it reaches the daemon.
+///
+/// Without this check, `--limit 0` sails through to `history_snapshot` and
+/// comes back as an empty list, which `print_history` then reports as "no
+/// transcripts remembered in this daemon session" — a lie when the daemon
+/// does remember transcripts and the caller simply asked for zero of them.
+///
+/// # Arguments
+///
+/// * `limit` - Value of `--limit` as parsed from the CLI.
+///
+/// # Returns
+///
+/// `limit` unchanged: `None`, or `Some(n)` with `n >= 1`.
+///
+/// # Errors
+///
+/// Returns an error when `limit` is `Some(0)`.
+fn wire_history_limit(limit: Option<usize>) -> Result<Option<usize>> {
+    match limit {
+        Some(0) => anyhow::bail!("history --limit must be at least 1"),
+        other => Ok(other),
     }
 }
 
@@ -1136,5 +1160,19 @@ mod app_tests {
 
         assert_eq!(err.to_string(), "gpu unavailable");
         assert!(!fetched_default.get());
+    }
+
+    #[test]
+    fn wire_history_limit_rejects_zero_but_passes_through_none_and_positive_values() {
+        // `history --limit 0` must be rejected here, not forwarded to the
+        // daemon: an empty result for `limit: Some(0)` would make
+        // `print_history` claim history is empty even when transcripts are
+        // remembered, the same lie `ensure_history_enabled` exists to avoid.
+        assert_eq!(
+            wire_history_limit(Some(0)).unwrap_err().to_string(),
+            "history --limit must be at least 1"
+        );
+        assert_eq!(wire_history_limit(None).unwrap(), None);
+        assert_eq!(wire_history_limit(Some(5)).unwrap(), Some(5));
     }
 }
