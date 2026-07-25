@@ -2,9 +2,9 @@
 
 use anyhow::{Context, Result};
 use crossbeam_channel::Receiver;
-use parakit::data_log::{DataLogger, InsertionLogFields, RecordId};
+use parakit::data_log::{CleaningLogFields, DataLogger, InsertionLogFields, RecordId};
 use parakit::inference::Engine;
-use parakit::rules::Cleaner;
+use parakit::rules::{Cleaner, RuleHit, CLEANER_VERSION};
 use std::cell::Cell;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -78,6 +78,12 @@ pub(crate) struct WorkerCtx {
 struct TranscriptResult {
     raw: String,
     cleaned: String,
+    /// Cleaning passes that changed the transcript, in application order.
+    /// Empty when cleaning is disabled or when cleaning failed open.
+    rules_fired: Vec<RuleHit>,
+    /// Set when a cleaning pass failed at runtime and `cleaned` is the
+    /// untransformed `raw` transcript rather than a cleaned one.
+    cleaning_failure: Option<String>,
     infer_elapsed: Duration,
     clean_elapsed: Duration,
 }
@@ -106,7 +112,18 @@ fn worker_loop(ctx: WorkerCtx) {
         rx,
     } = ctx;
 
+    // Cleaner-derived telemetry is fixed for the worker's lifetime; only the
+    // fired-rule list and any cleaning failure vary per utterance.
     let rules_active = cleaner.as_deref().map_or(0, Cleaner::active_rule_count);
+    let cleaning_profile = cleaner
+        .as_deref()
+        .map_or("disabled", |cleaner| cleaner.profile().as_str());
+    let ruleset_id = cleaner
+        .as_deref()
+        .map(|cleaner| cleaner.ruleset_id().to_string());
+    let drops_trailing_period = cleaner
+        .as_deref()
+        .is_some_and(Cleaner::drops_trailing_period);
     let mut injector = if insert_transcripts {
         match Injector::new() {
             Ok(mut injector) => match injector.prepare_for_mode(paste_mode) {
@@ -168,13 +185,26 @@ fn worker_loop(ctx: WorkerCtx) {
                         // Count the dictation itself, once, regardless of how
                         // many insertion attempts or outcomes follow below.
                         state.record_dictation();
+                        if let Some(failure) = transcript.cleaning_failure.as_deref() {
+                            log.warn(format!(
+                                "parakit: cleaning failed, inserting the raw transcript: {failure}"
+                            ));
+                        }
                         let record_id = data_log.as_ref().map(|data_log| {
                             data_log.log(
                                 secs,
                                 transcript.infer_elapsed,
                                 &transcript.raw,
                                 &transcript.cleaned,
-                                rules_active,
+                                CleaningLogFields {
+                                    rules_active,
+                                    cleaner_version: CLEANER_VERSION,
+                                    profile: cleaning_profile,
+                                    ruleset_id: ruleset_id.as_deref(),
+                                    drops_trailing_period,
+                                    rules_fired: &transcript.rules_fired,
+                                    failure: transcript.cleaning_failure.as_deref(),
+                                },
                             )
                         });
                         let transcript_chars = transcript.cleaned.chars().count();
@@ -1037,13 +1067,21 @@ fn transcribe_clean(
     }
 
     let clean_started = Instant::now();
-    let cleaned = match cleaner {
-        Some(c) => c.clean(&raw),
-        None => raw.clone(),
+    // `Cleaner::clean` fails open: a runtime cleaning failure yields the
+    // original transcript plus a description, never a partially transformed
+    // string and never a panic on the worker thread.
+    let (cleaned, rules_fired, cleaning_failure) = match cleaner {
+        Some(c) => {
+            let result = c.clean(&raw);
+            (result.text, result.rules_fired, result.failure)
+        }
+        None => (raw.clone(), Vec::new(), None),
     };
     Ok(Some(TranscriptResult {
         raw,
         cleaned,
+        rules_fired,
+        cleaning_failure,
         infer_elapsed,
         clean_elapsed: clean_started.elapsed(),
     }))

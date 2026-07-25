@@ -21,6 +21,12 @@ required-features = ["daemon"]
 name = "transcribe-file"
 path = "examples/transcribe_file.rs"
 
+# Replays the cleaning pipeline over historical JSONL dictation logs. Needs no
+# speech model, audio device, or desktop feature.
+[[example]]
+name = "audit-cleaning"
+path = "examples/audit_cleaning.rs"
+
 [dependencies]
 # CLI parsing
 clap = { version = "4.5", features = ["derive"] }
@@ -57,8 +63,11 @@ enigo = { version = "0.2", optional = true }
 # Audio cues (start/stop/error tones, generated programmatically)
 rodio = { version = "0.19", default-features = false, features = ["wav"], optional = true }
 
-# Text cleaning rules
+# Text cleaning rules. Keep most passes on the linear-time engine; use
+# fancy-regex only for bounded backreference-based stutter consolidation.
 regex = "1.10"
+fancy-regex = { version = "0.18", default-features = false, features = ["std", "unicode", "perf"] }
+text2num = "2.6.5"
 
 # Transcription logging
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde", "std"] }

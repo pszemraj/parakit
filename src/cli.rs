@@ -3,6 +3,7 @@
 use clap::{Args, Parser, Subcommand};
 use parakit::data_log::LogFormat;
 use parakit::inference::DeviceMode;
+use parakit::rules::CleaningProfile;
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
 
@@ -62,6 +63,17 @@ pub(crate) struct Cli {
     /// Disable all text cleaning rules (raw transcript inserted as-is).
     #[arg(long)]
     pub(crate) no_cleaning: bool,
+
+    /// Cleanup behavior tier. `safe` keeps semantic discourse markers such as
+    /// comparative `like`; `aggressive` also deletes them. Defaults to
+    /// `config.toml`'s `cleaning.profile`, then `safe`.
+    #[arg(long, value_name = "PROFILE", value_parser = clap::value_parser!(CleaningProfile))]
+    pub(crate) cleaning_profile: Option<CleaningProfile>,
+
+    /// Keep the single terminal period that messaging-style cleanup removes by
+    /// default. Also settable as `cleaning.keep_trailing_period`.
+    #[arg(long)]
+    pub(crate) keep_trailing_period: bool,
 
     /// Disable a specific rule by name. Repeatable: `--disable-rule a --disable-rule b`.
     #[arg(long, value_name = "NAME")]
@@ -322,6 +334,43 @@ impl Cli {
         !self.no_cleaning && config.cleaning.enabled.unwrap_or(true)
     }
 
+    /// Return the cleanup behavior tier: CLI `--cleaning-profile`, then config
+    /// `cleaning.profile`, then [`CleaningProfile::Safe`].
+    ///
+    /// The safe default is deliberate. Broad semantic editing, in particular
+    /// deleting discourse markers such as `like`, `you know`, and `I mean`,
+    /// only happens when the caller opts in to `aggressive`.
+    ///
+    /// # Arguments
+    ///
+    /// * `config` - Loaded configuration file values.
+    ///
+    /// # Returns
+    ///
+    /// The profile the cleaner should be built with.
+    pub(crate) fn effective_cleaning_profile(&self, config: &ConfigFile) -> CleaningProfile {
+        self.cleaning_profile
+            .or(config.cleaning.profile)
+            .unwrap_or(CleaningProfile::Safe)
+    }
+
+    /// Return whether cleanup should drop one terminal period: the inverse of
+    /// CLI `--keep-trailing-period` OR config `cleaning.keep_trailing_period`.
+    ///
+    /// Dropping the period is the default because parakit is used mostly for
+    /// messaging-style dictation, where a trailing period reads as terse.
+    ///
+    /// # Arguments
+    ///
+    /// * `config` - Loaded configuration file values.
+    ///
+    /// # Returns
+    ///
+    /// `true` when the terminal-period pass should be enabled.
+    pub(crate) fn effective_drops_trailing_period(&self, config: &ConfigFile) -> bool {
+        !(self.keep_trailing_period || config.cleaning.keep_trailing_period.unwrap_or(false))
+    }
+
     /// Return whether the transcript should stay on the clipboard after
     /// paste: CLI `--keep-transcript-clipboard` OR config
     /// `daemon.keep_transcript_clipboard` (default false).
@@ -519,6 +568,46 @@ mod tests {
         config.cleaning.enabled = Some(true);
         assert!(!cli_from(&["--no-sounds"]).effective_sounds_enabled(&config));
         assert!(!cli_from(&["--no-cleaning"]).effective_cleaning_enabled(&config));
+    }
+
+    #[test]
+    fn effective_cleaning_profile_prefers_cli_then_config_then_safe() {
+        let mut config = ConfigFile::default();
+
+        // Safe is the shipped default: broad semantic editing, in particular
+        // deleting `like`/`you know`/`I mean`, must stay opt-in.
+        assert_eq!(
+            cli_from(&[]).effective_cleaning_profile(&config),
+            CleaningProfile::Safe
+        );
+
+        config.cleaning.profile = Some(CleaningProfile::Aggressive);
+        assert_eq!(
+            cli_from(&[]).effective_cleaning_profile(&config),
+            CleaningProfile::Aggressive
+        );
+
+        assert_eq!(
+            cli_from(&["--cleaning-profile", "safe"]).effective_cleaning_profile(&config),
+            CleaningProfile::Safe
+        );
+    }
+
+    #[test]
+    fn effective_drops_trailing_period_defaults_on_and_opts_out_by_or_semantics() {
+        let mut config = ConfigFile::default();
+
+        // Messaging-style dictation: one terminal period is dropped unless
+        // the user positively asks to keep it.
+        assert!(cli_from(&[]).effective_drops_trailing_period(&config));
+
+        config.cleaning.keep_trailing_period = Some(true);
+        assert!(!cli_from(&[]).effective_drops_trailing_period(&config));
+
+        // The CLI opt-out wins over a config that leaves the default in place.
+        config.cleaning.keep_trailing_period = Some(false);
+        assert!(cli_from(&[]).effective_drops_trailing_period(&config));
+        assert!(!cli_from(&["--keep-trailing-period"]).effective_drops_trailing_period(&config));
     }
 
     #[test]

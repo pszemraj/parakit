@@ -15,7 +15,7 @@
 use anyhow::{Context, Result};
 use parakit::data_log::LogFormat;
 use parakit::inference::DeviceMode;
-use parakit::rules::UserRule;
+use parakit::rules::{CleaningProfile, UserRule};
 use serde::Deserialize;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
@@ -76,6 +76,12 @@ pub(crate) struct DaemonConfig {
 pub(crate) struct CleaningConfig {
     /// Enable the text-cleaning pipeline.
     pub(crate) enabled: Option<bool>,
+    /// Cleanup behavior tier: `safe` (default) or `aggressive`. Overridden by
+    /// CLI `--cleaning-profile`.
+    pub(crate) profile: Option<CleaningProfile>,
+    /// Keep the single terminal period that cleanup removes by default.
+    /// CLI `--keep-trailing-period` forces this on.
+    pub(crate) keep_trailing_period: Option<bool>,
     /// Rule names to disable. Merged with CLI `--disable-rule` flags.
     pub(crate) disabled_rules: Vec<String>,
 }
@@ -148,6 +154,17 @@ pub(crate) const TEMPLATE: &str = r#"# parakit config.toml
 [cleaning]
 # Enable the text-cleaning pipeline.
 # enabled = true
+
+# Cleanup behavior tier: "safe" or "aggressive". Safe performs mechanical
+# cleanup and high-confidence normalization only. Aggressive additionally
+# deletes discourse markers such as filler "like", "you know", and "I mean",
+# which can change meaning. Overridden by CLI --cleaning-profile.
+# profile = "safe"
+
+# Keep the single terminal period. Cleanup drops it by default because
+# parakit is used mostly for messaging-style dictation. CLI
+# --keep-trailing-period forces this on.
+# keep_trailing_period = false
 
 # Rule names to disable. Merged with any CLI --disable-rule flags. Run
 # `parakit --list-rules` to see all built-in and user rule names.
@@ -299,7 +316,17 @@ pub(crate) fn load_from_path(path: &Path) -> Result<ConfigFile> {
 /// or a duplicate user rule name; or naming an unknown rule listed in
 /// `cleaning.disabled_rules`.
 fn validate_config(config: &ConfigFile) -> Result<()> {
-    parakit::rules::build_cleaner(false, &config.cleaning.disabled_rules, &config.rules.user)?;
+    // `Aggressive` plus terminal-period removal is the widest activation set,
+    // so every built-in pattern is compiled here regardless of which profile
+    // the daemon will actually run with. Rule-name and user-rule validation is
+    // profile-independent, so this cannot reject a config that would run.
+    parakit::rules::build_cleaner(
+        false,
+        CleaningProfile::Aggressive,
+        true,
+        &config.cleaning.disabled_rules,
+        &config.rules.user,
+    )?;
     Ok(())
 }
 

@@ -79,6 +79,21 @@ If F16 differs materially from the reference, inspect CrispASR's Parakeet prepro
 
 Parakeet-v3 auto-detects language. It has no parakit language flag today, so non-English or code-switched dictation should be checked against real clips before relying on it. Accents, noise, proper nouns, and technical vocabulary can change language detection behavior.
 
+## Cleaning Corpus Replay
+
+Use the audit example to measure a cleanup change over historical JSONL dictation logs without loading a speech model:
+
+```bash
+cargo run --no-default-features --features bundled --example audit-cleaning -- \
+  "$HOME/.parakit/logs" \
+  --profile safe \
+  --output target/cleaning-safe.json
+```
+
+Run it again with `--profile aggressive` when changing an aggressive-only pass. Compare record counts, changed-from-raw counts, agreement with historical output, per-pass activation counts, and every retained difference example. A lower rule count or a larger changed-text count is not a quality metric; preservation of intended meaning and per-pass precision are.
+
+The audit removes one terminal period by default, matching daemon behavior. Add `--keep-trailing-period` when comparing prose-oriented output separately. Number-conversion changes must be evaluated as `text2num` integration and context-formatting changes, not by adding a second local number grammar.
+
 ## Runtime Smoke Checks
 
 Run the daemon in foreground mode and exercise real applications:

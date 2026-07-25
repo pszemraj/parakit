@@ -9,7 +9,7 @@ use parakit::fetch::{self, FetchOptions, FetchSource};
 use parakit::gguf;
 use parakit::inference::{default_thread_count, DeviceMode, Engine};
 use parakit::model;
-use parakit::rules;
+use parakit::rules::{self, CleaningProfile};
 use parakit::warmup;
 use std::ffi::{c_char, c_void, CStr};
 use std::io::Write as _;
@@ -188,13 +188,20 @@ pub(crate) fn run() -> Result<()> {
     // Special command modes: print rules / test rules.
     if cli.list_rules {
         if !cli.quiet {
-            rules::print_rule_list(&config.rules.user);
+            rules::print_rule_list(
+                cli.effective_cleaning_profile(&config),
+                cli.effective_drops_trailing_period(&config),
+                &cli.effective_disabled_rules(&config),
+                &config.rules.user,
+            )?;
         }
         return Ok(());
     }
     if let Some(input) = &cli.test_rules {
         let cleaner = rules::build_cleaner(
             !cli.effective_cleaning_enabled(&config),
+            cli.effective_cleaning_profile(&config),
+            cli.effective_drops_trailing_period(&config),
             &cli.effective_disabled_rules(&config),
             &config.rules.user,
         )?;
@@ -202,10 +209,21 @@ pub(crate) fn run() -> Result<()> {
         let cleaned = cleaner.as_ref().map(|c| c.clean(raw));
         if !cli.quiet {
             println!("Raw:     {}", raw);
-            if let Some(cleaned) = cleaned {
-                println!("Clean:   {}", cleaned);
-            } else {
-                println!("Clean:   <cleaning disabled>");
+            match &cleaned {
+                Some(result) => {
+                    println!("Clean:   {}", result.text);
+                    if let Some(failure) = &result.failure {
+                        eprintln!("parakit: cleaning failed, raw text kept: {failure}");
+                    } else if !result.rules_fired.is_empty() {
+                        let fired: Vec<String> = result
+                            .rules_fired
+                            .iter()
+                            .map(|hit| format!("{}x{}", hit.name, hit.matches))
+                            .collect();
+                        println!("Rules:   {}", fired.join(", "));
+                    }
+                }
+                None => println!("Clean:   <cleaning disabled>"),
             }
         }
         return Ok(());
@@ -257,6 +275,8 @@ pub(crate) fn run() -> Result<()> {
 
     let cleaner = rules::build_cleaner(
         !cli.effective_cleaning_enabled(&config),
+        cli.effective_cleaning_profile(&config),
+        cli.effective_drops_trailing_period(&config),
         &cli.effective_disabled_rules(&config),
         &config.rules.user,
     )?
@@ -283,7 +303,16 @@ pub(crate) fn run() -> Result<()> {
     // Banner.
     let model_name = model_file_name(&model_path);
     let cleaning_summary = match cleaner.as_deref() {
-        Some(c) => format!("on ({} rules)", c.active_rule_count()),
+        Some(c) => format!(
+            "on ({}, {} rules{})",
+            c.profile(),
+            c.active_rule_count(),
+            if c.drops_trailing_period() {
+                ""
+            } else {
+                ", keeps trailing period"
+            }
+        ),
         None => "off".to_string(),
     };
     let device_summary = resolved_device_summary(engine.device_mode());
@@ -496,6 +525,8 @@ fn run_ptt_audio_simulation(
     let paste_mode = cli.effective_paste_mode(config);
     let cleaner = rules::build_cleaner(
         !cli.effective_cleaning_enabled(config),
+        cli.effective_cleaning_profile(config),
+        cli.effective_drops_trailing_period(config),
         &cli.effective_disabled_rules(config),
         &config.rules.user,
     )?
@@ -966,6 +997,14 @@ fn print_config_show(quiet: bool) -> Result<()> {
     );
     println!("  cleaning:");
     println!("    enabled: {}", config.cleaning.enabled.unwrap_or(true));
+    println!(
+        "    profile: {}",
+        config.cleaning.profile.unwrap_or(CleaningProfile::Safe)
+    );
+    println!(
+        "    keep_trailing_period: {}",
+        config.cleaning.keep_trailing_period.unwrap_or(false)
+    );
     println!("    disabled_rules: {:?}", config.cleaning.disabled_rules);
     println!("  logging:");
     println!(

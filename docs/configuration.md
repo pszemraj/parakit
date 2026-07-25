@@ -27,9 +27,11 @@ Resolved in this order:
 are all equivalent to the built-in default. No key is required, and there is no
 key whose absence is an error.
 
-**Precedence is CLI flag > this file > built-in default,** with two exceptions
+**Precedence is CLI flag > this file > built-in default,** with three exceptions
 that are marked on the keys themselves: `sounds` and `cleaning.enabled` have
-only a negating flag, which can force the value off but never on.
+only a negating flag, which can force the value off but never on;
+`cleaning.keep_trailing_period` has only an affirming flag, which can force it
+on but never off.
 
 **Misspelled key names are silently ignored.** parakit deliberately does not set
 `deny_unknown_fields`, so a config written for a newer version still loads on an
@@ -128,6 +130,22 @@ transcript_history = <int >= 0>
 # `--no-cleaning` forces this off; no flag can force it on against `false`
 # here. Turning cleaning off also disables every [[rules.user]] rule.
 enabled = <bool>
+
+# Cleanup behavior tier. Default: "safe". One of "safe" | "aggressive".
+# `safe` is mechanical cleanup plus high-confidence normalization only.
+# `aggressive` adds deletion of discourse markers such as filler `like`,
+# `you know`, and `I mean`, which can change emphasis or meaning.
+# Overridden by `--cleaning-profile`. Ignored when `enabled = false`.
+# Never applies to [[rules.user]] rules, which always run when enabled.
+profile = <string>
+
+# Keep the single terminal period. Default: false (the period is dropped).
+# Removal is the default because parakit targets messaging-style dictation.
+# `--keep-trailing-period` forces this on; no flag can force it off against
+# `true` here. Equivalent to disabling the `fix-trailing-period` rule, but
+# stated as an intent rather than a rule name, so it survives rule renames.
+# Ignored when `enabled = false`.
+keep_trailing_period = <bool>
 
 # Rule names to skip. Default: [] (no rules skipped).
 # Accepts any built-in or user rule name; `parakit --list-rules` prints the

@@ -65,7 +65,7 @@ Cross-thread communication uses atomics, mutex-protected buffers, and crossbeam 
 | `src/gguf.rs` | Minimal GGUF dtype reader for startup reporting. |
 | `src/{build_info,gpu,warmup,ffi_util}.rs` | Build diagnostics, bundled ggml device listing, synthetic warmup PCM, and local FFI helpers. |
 | `src/inference.rs` | [CrispASR](https://github.com/CrispStrobe/CrispASR) session wrapper and short-audio padding. |
-| `src/rules.rs` | Built-in transcript cleanup rules. |
+| `src/rules/` | Transcript cleanup pipeline: profiles, the built-in rule table, procedural passes, and user rules from `config.toml`. |
 | `src/daemon/desktop/{inject,clipboard_restore}.rs` | Clipboard transaction, X11/XTest paste chord, direct insertion, and restore timing. |
 | `src/data_log.rs` | JSONL/TSV transcription logging. |
 | `src/audio_file.rs` | WAV decoding, mono mixing, and file resampling for quality tools and PTT simulation. |
