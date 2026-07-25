@@ -39,6 +39,17 @@ pub(crate) struct PasteConfirmationContext<'a> {
     pub(crate) focus: Option<&'a FocusSnapshot>,
     /// Transcript text that was just pasted.
     pub(crate) transcript: &'a str,
+    /// Target's observable value as read *before* the paste chord was sent,
+    /// via [`ClipboardRestoreGate::capture_paste_baseline`].
+    ///
+    /// This is what makes "the value grew" trustworthy evidence. Reading the
+    /// baseline after the chord races the target: an app that refreshes its
+    /// accessibility tree coarsely (terminals especially) can already have
+    /// the pasted text in the first post-chord read, after which the value
+    /// never grows again and a successful paste looks exactly like a failed
+    /// one. `None` when no pre-chord read was possible, in which case the
+    /// confirmation strategy falls back to a post-chord baseline.
+    pub(crate) baseline: Option<&'a str>,
 }
 
 /// Result of waiting for evidence that a just-sent paste chord was consumed
@@ -104,6 +115,27 @@ pub(super) trait ClipboardRestoreGate {
     /// * `fallback_delay` - Time-based restore delay used when observation is
     ///   unavailable.
     fn wait_before_restore(&self, token: ClipboardWriteToken, fallback_delay: Duration);
+
+    /// Read the insertion target's observable value immediately *before* the
+    /// paste chord is sent, to be handed back as
+    /// [`PasteConfirmationContext::baseline`].
+    ///
+    /// Called on the hot path between the final focus recheck and the chord,
+    /// so an implementation must be non-blocking; returning `None` is always
+    /// acceptable and merely degrades confirmation to a post-chord baseline.
+    ///
+    /// # Arguments
+    ///
+    /// * `_focus` - Focus snapshot the chord is about to target, when
+    ///   available.
+    ///
+    /// # Returns
+    ///
+    /// `None` in the default implementation: only macOS has a pollable
+    /// per-element value to baseline against.
+    fn capture_paste_baseline(&self, _focus: Option<&FocusSnapshot>) -> Option<String> {
+        None
+    }
 
     /// Await evidence that a just-sent paste chord was consumed by the
     /// insertion target, before the caller decides whether to restore the
@@ -229,6 +261,20 @@ impl<'a, G: ClipboardRestoreGate + ?Sized> ClipboardRestorePlan<'a, G> {
         before: ClipboardWriteSnapshot,
     ) -> ClipboardWriteToken {
         self.gate.after_transcript_write(before)
+    }
+
+    /// Read the target's observable value before the paste chord is sent.
+    ///
+    /// # Arguments
+    ///
+    /// * `focus` - Focus snapshot the chord is about to target.
+    ///
+    /// # Returns
+    ///
+    /// The pre-chord baseline, or `None` when the platform has no pollable
+    /// value.
+    pub(super) fn capture_paste_baseline(&self, focus: Option<&FocusSnapshot>) -> Option<String> {
+        self.gate.capture_paste_baseline(focus)
     }
 
     /// Await evidence that a just-sent paste chord was consumed by the
@@ -364,6 +410,11 @@ impl ClipboardRestoreGate for PlatformClipboardRestoreGate {
         let _ = token;
 
         sleep_if_nonzero(fallback_delay);
+    }
+
+    #[cfg(target_os = "macos")]
+    fn capture_paste_baseline(&self, focus: Option<&FocusSnapshot>) -> Option<String> {
+        crate::daemon::macos::pasteboard::capture_baseline(focus)
     }
 
     #[cfg(target_os = "macos")]

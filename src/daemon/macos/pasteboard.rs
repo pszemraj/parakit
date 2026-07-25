@@ -34,12 +34,24 @@
 //!   `kAXValueChangedNotification` and pumping a bounded
 //!   `CFRunLoopRunInMode` on the worker thread would shorten confirmation
 //!   latency versus fixed-interval polling.
-//! - **Pre-chord baseline.** [`await_paste_confirmation`] uses the first
-//!   post-chord `AXValue` read as its baseline (see the function doc for
-//!   why); capturing a genuine pre-chord baseline would need a channel back
-//!   from the focus-recheck closure in
-//!   `paste_with_clipboard_swap_guarded`'s `before_chord` callback, which is
-//!   a plain `FnMut() -> Result<bool>` today.
+//!
+//! ## Reading the baseline before the chord
+//!
+//! [`capture_baseline`] is called on the paste path *before* the chord is
+//! posted, and its result reaches [`await_paste_confirmation`] as
+//! [`PasteConfirmationContext::baseline`].
+//!
+//! This matters more than it looks. An earlier version took its baseline
+//! from the first *post*-chord read, which races the target: an app that
+//! refreshes its accessibility tree coarsely (terminals especially — ghostty
+//! confirms in ~300ms where Safari and Discord confirm in ~40ms) can already
+//! have the pasted text in that first read. From then on the value never
+//! grows, so a paste that landed perfectly is indistinguishable from one
+//! that was dropped, and the transaction reports
+//! [`PasteConfirmation::NoEvidence`] — an error chime and a withheld
+//! clipboard restore on a completely successful dictation. Whether that
+//! happened came down to timing, which made it look intermittent and
+//! arbitrary from the outside.
 //!
 //! ## Secure input fields are not a bug
 //!
@@ -73,6 +85,36 @@ pub(crate) const UNVERIFIED_GRACE: Duration = Duration::from_millis(1500);
 /// scan against a potentially huge accessibility value on every poll tick.
 const MAX_CONTAINS_TRANSCRIPT_LEN: usize = 20_000;
 
+/// Number of leading (and trailing) non-whitespace characters matched when
+/// the whole transcript cannot be found in the target's value.
+///
+/// Long enough that a natural-language run of this many characters is
+/// effectively unique against whatever the field held beforehand, so a match
+/// is real evidence rather than coincidence.
+const CONFIRM_WINDOW_CHARS: usize = 32;
+
+/// Read the focused element's `AXValue` before a paste chord is sent.
+///
+/// Wired into the paste transaction through
+/// [`ClipboardRestoreGate::capture_paste_baseline`](crate::daemon::desktop::clipboard_restore::ClipboardRestoreGate::capture_paste_baseline);
+/// see the module docs for why the baseline must predate the chord.
+///
+/// # Arguments
+///
+/// * `focus` - Focus snapshot the chord is about to target.
+///
+/// # Returns
+///
+/// The element's current value, or `None` when there is no focus snapshot,
+/// the element withholds its value (secure input fields), or the read fails.
+/// `None` is not an error: confirmation degrades to a post-chord baseline.
+pub(crate) fn capture_baseline(focus: Option<&FocusSnapshot>) -> Option<String> {
+    focus
+        .and_then(FocusSnapshot::macos_ax_element)
+        .filter(|element| element.supports_value_polling())
+        .and_then(|element| element.poll_value().ok().flatten())
+}
+
 /// Await confirmation that a just-sent paste chord was consumed by the
 /// focused Accessibility element, by polling `AXValue`.
 ///
@@ -80,20 +122,17 @@ const MAX_CONTAINS_TRANSCRIPT_LEN: usize = 20_000;
 /// pump is required (see the module docs for why this does not use
 /// `AXObserver` push notifications).
 ///
-/// The first post-chord `AXValue` read is used as the growth baseline
-/// (rather than a pre-chord read) because plumbing a pre-chord snapshot
-/// through today's `before_chord` recheck closure would require a broader
-/// signature change than this fix needs; see the module docs' deferred
-/// follow-ups. In practice this is a reasonable baseline: synthetic paste
-/// delivery and the target's own event-loop dispatch take at least a few
-/// milliseconds, so this first read almost always lands before the target
-/// has processed the paste.
+/// Growth is measured against [`PasteConfirmationContext::baseline`], read
+/// before the chord was sent. When no pre-chord read was possible this falls
+/// back to the first post-chord read, which is strictly weaker — see the
+/// module docs.
 ///
 /// # Returns
 ///
 /// [`PasteConfirmation::Confirmed`] as soon as the element's value is
-/// observed to contain the transcript, or to have grown since the first
-/// post-chord read. [`PasteConfirmation::Unverified`] after a fixed grace
+/// observed to show the transcript (ignoring the target's own line
+/// wrapping), or to have grown past the baseline.
+/// [`PasteConfirmation::Unverified`] after a fixed grace
 /// sleep when Accessibility cannot expose a pollable value at all (no
 /// focused element on this snapshot, or the field does not support value
 /// polling). [`PasteConfirmation::NoEvidence`] when polling itself worked
@@ -113,7 +152,10 @@ pub(crate) fn await_paste_confirmation(ctx: &PasteConfirmationContext<'_>) -> Pa
         };
     };
 
-    let baseline = element.poll_value().ok().flatten();
+    let baseline: Option<String> = match ctx.baseline {
+        Some(baseline) => Some(baseline.to_owned()),
+        None => element.poll_value().ok().flatten(),
+    };
 
     let deadline = start + AX_CONFIRM_DEADLINE;
     loop {
@@ -164,16 +206,60 @@ pub(crate) fn await_paste_confirmation(ctx: &PasteConfirmationContext<'_>) -> Pa
 /// * `current` - Most recent `AXValue` read.
 /// * `transcript` - Transcript text that was pasted.
 fn value_indicates_insertion(baseline: Option<&str>, current: &str, transcript: &str) -> bool {
-    if !transcript.is_empty()
-        && transcript.len() <= MAX_CONTAINS_TRANSCRIPT_LEN
-        && current.contains(transcript)
-    {
+    if transcript_is_present(current, transcript) {
         return true;
     }
     match baseline {
         Some(baseline) => current.len() > baseline.len(),
         None => false,
     }
+}
+
+/// Is `transcript` visible in `current`, allowing for the target having
+/// re-laid-out the text?
+///
+/// Matching ignores whitespace entirely rather than comparing verbatim. A
+/// terminal's `AXValue` is its *rendered* screen, hard-wrapped at the column
+/// width, so a pasted transcript comes back with newlines injected at the
+/// wrap points — and terminals wrap mid-word, so collapsing runs of
+/// whitespace is not enough to repair it. Dropping whitespace on both sides
+/// makes the comparison independent of how the target chose to lay the text
+/// out.
+///
+/// When the whole transcript is not found, a leading or trailing window of
+/// [`CONFIRM_WINDOW_CHARS`] still counts: a terminal scrolls the head of a
+/// long paste off the top of the screen, and a bounded field truncates the
+/// tail, but either end appearing verbatim is positive evidence the paste
+/// landed.
+///
+/// # Arguments
+///
+/// * `current` - Most recent `AXValue` read.
+/// * `transcript` - Transcript text that was pasted.
+fn transcript_is_present(current: &str, transcript: &str) -> bool {
+    if transcript.is_empty() || transcript.len() > MAX_CONTAINS_TRANSCRIPT_LEN {
+        return false;
+    }
+    let needle: Vec<char> = transcript.chars().filter(|c| !c.is_whitespace()).collect();
+    if needle.is_empty() {
+        return false;
+    }
+    let haystack: String = current.chars().filter(|c| !c.is_whitespace()).collect();
+
+    let whole: String = needle.iter().collect();
+    if haystack.contains(&whole) {
+        return true;
+    }
+    if needle.len() <= CONFIRM_WINDOW_CHARS {
+        // Already covered by the whole-transcript check above, and too short
+        // to window down further without inviting coincidental matches.
+        return false;
+    }
+    let head: String = needle[..CONFIRM_WINDOW_CHARS].iter().collect();
+    let tail: String = needle[needle.len() - CONFIRM_WINDOW_CHARS..]
+        .iter()
+        .collect();
+    haystack.contains(&head) || haystack.contains(&tail)
 }
 
 #[cfg(test)]
@@ -226,6 +312,77 @@ mod tests {
         assert!(!value_indicates_insertion(Some(""), "", ""));
         assert!(value_indicates_insertion(Some(""), "x", ""));
     }
+
+    /// The regression behind the false error chime in ghostty: a terminal
+    /// reports its *rendered* screen, hard-wrapped at the column width, and
+    /// it wraps mid-word. A verbatim `contains` misses that entirely.
+    #[test]
+    fn hard_wrapped_transcript_still_confirms() {
+        let transcript = "Wait, what? How is the new rule set from the dictation not in scope?";
+        let wrapped =
+            "prompt> Wait, what? How is the new rule set from the dic\ntation not in scope?";
+        assert!(
+            !wrapped.contains(transcript),
+            "precondition: verbatim fails"
+        );
+        assert!(value_indicates_insertion(
+            Some("prompt> "),
+            wrapped,
+            transcript
+        ));
+    }
+
+    /// Growth is unavailable when the target re-rendered to the same length
+    /// (a fixed-size terminal grid). Layout-independent matching has to
+    /// carry the confirmation on its own.
+    #[test]
+    fn wrapped_transcript_confirms_without_any_growth_evidence() {
+        let transcript = "the quick brown fox jumps over the lazy dog every single morning";
+        let wrapped = "the quick brown fox jumps over the\nlazy dog every single morning";
+        assert!(value_indicates_insertion(
+            Some(wrapped),
+            wrapped,
+            transcript
+        ));
+    }
+
+    /// A terminal scrolls the head of a long paste off the top of the
+    /// screen; a bounded field truncates the tail. Either surviving end is
+    /// still evidence the paste landed.
+    #[test]
+    fn partially_visible_transcript_confirms_from_either_end() {
+        let transcript = "alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo";
+        let head_only = &transcript[..48];
+        let tail_only = &transcript[18..];
+        assert!(value_indicates_insertion(Some(""), head_only, transcript));
+        assert!(value_indicates_insertion(Some(""), tail_only, transcript));
+    }
+
+    /// Windowed matching must not fire on an unrelated field that merely
+    /// happens to hold text.
+    #[test]
+    fn unrelated_value_does_not_confirm_via_windowing() {
+        let transcript = "alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo";
+        assert!(!value_indicates_insertion(
+            Some("some unrelated field contents"),
+            "some unrelated field contents",
+            transcript
+        ));
+    }
+
+    /// A transcript at or under [`CONFIRM_WINDOW_CHARS`] gets no windowed
+    /// fallback: a partial overlap must not be mistaken for insertion when
+    /// the whole transcript is short enough to have been matched outright.
+    #[test]
+    fn short_transcript_has_no_windowed_fallback() {
+        let transcript = "hello there friend";
+        assert!(transcript.chars().count() <= CONFIRM_WINDOW_CHARS);
+        assert!(!value_indicates_insertion(
+            Some("hello there"),
+            "hello there",
+            transcript
+        ));
+    }
 }
 
 #[cfg(all(test, target_os = "macos"))]
@@ -241,6 +398,7 @@ mod ffi_tests {
         let ctx = PasteConfirmationContext {
             focus: None,
             transcript: "hello",
+            baseline: None,
         };
         match await_paste_confirmation(&ctx) {
             PasteConfirmation::Unverified { kind, .. } => {
@@ -248,5 +406,13 @@ mod ffi_tests {
             }
             other => panic!("expected Unverified, got {other:?}"),
         }
+    }
+
+    /// `capture_baseline` runs on the paste hot path in a process that may
+    /// hold no Accessibility grant; with no focus snapshot it must resolve
+    /// to `None` without touching a live Accessibility API.
+    #[test]
+    fn capture_baseline_without_focus_is_none() {
+        assert!(capture_baseline(None).is_none());
     }
 }

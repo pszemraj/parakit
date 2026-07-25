@@ -958,6 +958,12 @@ where
         }
     }
 
+    // Read the target's value *before* the chord. Doing it after races apps
+    // that refresh their accessibility tree coarsely, which makes a landed
+    // paste indistinguishable from a dropped one. See
+    // `PasteConfirmationContext::baseline`.
+    let baseline = restore_plan.capture_paste_baseline(focus);
+
     let paste_result = paste();
     match paste_result {
         Ok(()) => finish_confirmed_paste(
@@ -968,6 +974,7 @@ where
             clipboard_policy,
             focus,
             text,
+            baseline.as_deref(),
         ),
         Err(paste_err) => {
             let restore_result = restore_after_delay(
@@ -998,10 +1005,16 @@ where
 /// * `clipboard_policy` - Policy deciding whether restoration should occur.
 /// * `focus` - Focus snapshot passed through to the acknowledgement strategy.
 /// * `text` - Transcript text that was just pasted.
+/// * `baseline` - Target's observable value read before the chord was sent.
 ///
 /// # Errors
 ///
 /// Returns an error if the previous clipboard payload cannot be restored.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "mirrors the guarded-paste transaction's own parameter set; each is an \
+              independently meaningful piece of resolving one paste"
+)]
 fn finish_confirmed_paste<C, H>(
     clipboard: &mut C,
     previous: ClipboardSnapshot,
@@ -1010,6 +1023,7 @@ fn finish_confirmed_paste<C, H>(
     clipboard_policy: ClipboardPolicy,
     focus: Option<&FocusSnapshot>,
     text: &str,
+    baseline: Option<&str>,
 ) -> Result<PasteReport>
 where
     C: ClipboardStore,
@@ -1020,6 +1034,7 @@ where
         &PasteConfirmationContext {
             focus,
             transcript: text,
+            baseline,
         },
     );
 
