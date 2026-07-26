@@ -30,7 +30,7 @@ A single terminal period is removed by default because parakit primarily targets
 parakit --keep-trailing-period
 ```
 
-These settings also live in `config.toml` as `cleaning.profile` and `cleaning.keep_trailing_period`; the CLI flags override them. Number conversion has the config-only `cleaning.number_threshold` setting. See [configuration.md](configuration.md).
+These settings also live in `config.toml` as `cleaning.profile` and `cleaning.keep_trailing_period`; the CLI flags override them. Number conversion has the config-only `cleaning.number_threshold` setting. See the per-key [config reference](config_reference.toml).
 
 Disable cleaning entirely:
 
@@ -147,9 +147,9 @@ disabled_rules = ["weights-and-biases-to-wandb"]
 ### Edit Rules Without Rebuilding
 
 User rules are runtime configuration, not compiled into the parakit binary.
-Each process reads `config.toml`, validates the rule definitions, and compiles
-their regexes once while constructing the cleaner. Dictations then reuse that
-compiled pipeline, so there is no TOML parsing or regex compilation on the
+Config-consuming processes validate them during startup and build the
+effective cleaner before doing any dictation work. Dictations then reuse that
+pipeline, so there is no TOML parsing or regex compilation on the
 per-dictation hot path. Editing a rule never runs Cargo, rebuilds parakit,
 downloads a model, or converts model weights.
 
@@ -162,12 +162,13 @@ parakit --test-rules "A representative dictation to clean."
 parakit --list-rules
 ```
 
-`config show` validates the whole file. `--test-rules` and `--list-rules` load
-the edited rules in a short-lived process and exit before model, microphone,
-hotkey, or daemon startup. Once the output is right, run `parakit stop` and
-relaunch the daemon with the same startup command you normally use. The
-running daemon intentionally keeps its startup cleaner until restart; the
-config file is not watched for live changes.
+`config show` validates the whole file unless global `--quiet` makes it a
+no-op. `--test-rules` and `--list-rules` load the edited rules in a short-lived
+process and exit before model, microphone, hotkey, or daemon startup. Once the
+output is right, run `parakit stop` and relaunch the daemon with the same
+startup command you normally use. The running daemon intentionally keeps its
+startup cleaner until restart; the config file is not watched for live
+changes.
 
 A built-in rule can be replaced without rebuilding by listing its name in
 `cleaning.disabled_rules` and adding a differently named `[[rules.user]]`

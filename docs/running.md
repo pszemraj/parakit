@@ -232,7 +232,9 @@ parakit --no-sounds
 
 parakit reads an optional `config.toml` for daemon defaults, cleaning preferences, transcription logging, the Linux hotkey backend, and user-defined cleaning rules. Precedence is **CLI flags > config file > built-in defaults**.
 
-[configuration.md](configuration.md) is the per-key reference: every key's type, default, accepted values, and interactions. This section is the overview.
+[configuration.md](configuration.md) explains file location, lifecycle, and
+the config commands. [config_reference.toml](config_reference.toml) is the
+complete per-key contract.
 
 Default path, following each platform's normal config-directory convention:
 
@@ -251,7 +253,10 @@ parakit config show                 # print the resolved path and effective merg
 parakit config edit                 # open $VISUAL or $EDITOR, creating the file from the template first if missing
 ```
 
-A missing config file is equivalent to an empty one: every key falls back to its built-in default. A config file that fails to parse, or that defines an invalid user rule (bad regex, a name colliding with a built-in rule, or a duplicate user rule name), is a hard error that names the config file path — `parakit config show` and `parakit config edit` are the fastest way to find and fix it.
+A missing config file is equivalent to an empty one: every ordinary key falls
+back to its built-in default. A config file that fails to parse or validate is
+a hard error that names the path. Use `parakit config show` to find the
+problem and `parakit config edit` to repair it.
 
 Template excerpt (every key is commented out by default; see `parakit config init`'s output for the full file):
 
