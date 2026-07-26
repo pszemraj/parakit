@@ -73,11 +73,11 @@ fn capitalization_protects_real_technical_tokens() {
         ("use 3.5 and 3.6 already.", "Use 3.5 and 3.6 already."),
         ("call dataset.filter next.", "Call dataset.filter next."),
         ("open claude.ai now.", "Open claude.ai now."),
-        ("edit agents.md first.", "Edit agents.md first."),
+        ("edit agents.md first.", "Edit agents.md 1st."),
         ("email test@gmail.com now.", "Email test@gmail.com now."),
         (
             "this is i.e. still one sentence.",
-            "This is i.e. still one sentence.",
+            "This is i.e. still 1 sentence.",
         ),
     ];
     for (input, expected) in cases {
@@ -92,7 +92,12 @@ fn safe_profile_applies_high_confidence_normalization() {
             "um, the the G P T model is gonna work.",
             "The GPT model is going to work.",
         ),
+        (
+            "the G P T model is gunna work.",
+            "The GPT model is going to work.",
+        ),
         ("I wanna run an A B test.", "I want to run an AB test."),
+        ("I wana run an A B test.", "I want to run an AB test."),
         ("send S T D out to the T T Y.", "Send STD out to the TTY."),
         ("gimme the G G UF file.", "Give me the GG UF file."),
         (
@@ -103,6 +108,21 @@ fn safe_profile_applies_high_confidence_normalization() {
     for (input, expected) in cases {
         assert_eq!(clean(CleaningProfile::Safe, input), expected);
     }
+}
+
+#[test]
+fn safe_profile_renders_all_spoken_numbers_as_digits() {
+    assert_eq!(
+        clean(
+            CleaningProfile::Safe,
+            "When it asks you to press 0, 1, 2, or three."
+        ),
+        "When it asks you to press 0, 1, 2, or 3."
+    );
+    assert_eq!(
+        clean(CleaningProfile::Safe, "Zero, one, two, three, four."),
+        "0, 1, 2, 3, 4."
+    );
 }
 
 #[test]

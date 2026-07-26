@@ -317,7 +317,7 @@ pub(crate) const DEFAULT_RULES: &[Rule] = &[
     ),
     procedural_rule!(
         "spoken-numbers",
-        "Convert English number expressions with text2num while preserving isolated values below five",
+        "Convert every recognized English number expression with text2num",
         Activation::Safe,
         normalize_spoken_numbers
     ),
@@ -371,16 +371,16 @@ pub(crate) const DEFAULT_RULES: &[Rule] = &[
     ),
     regex_rule!(
         "casual-gonna",
-        "Expand 'gonna' to 'going to'",
+        "Expand 'gonna' and 'gunna' to 'going to'",
         Activation::Safe,
-        r#"(?i)\bgonna\b"#,
+        r#"(?i)\bg[ou]nna\b"#,
         "going to"
     ),
     regex_rule!(
         "casual-wanna",
-        "Expand 'wanna' to 'want to'",
+        "Expand 'wanna' and 'wana' to 'want to'",
         Activation::Safe,
-        r#"(?i)\bwanna\b"#,
+        r#"(?i)\bwan{1,2}a\b"#,
         "want to"
     ),
     regex_rule!(

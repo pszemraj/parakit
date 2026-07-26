@@ -176,7 +176,9 @@ fn high_confidence_casual_forms_are_expanded() {
         CleaningProfile::Safe,
         &[
             ("I'm gonna test it.", "I'm going to test it."),
+            ("I'm gunna test it.", "I'm going to test it."),
             ("I wanna test it.", "I want to test it."),
+            ("I wana test it.", "I want to test it."),
             ("It's kinda odd.", "It's kind of odd."),
             ("Gimme a second.", "Give me a second."),
             ("I left 'cause it was late.", "I left because it was late."),
@@ -208,7 +210,7 @@ fn text2num_handles_documented_cardinals_groups_and_decimals() {
     assert_clean_cases(
         CleaningProfile::Safe,
         &[
-            ("Five files and four folders.", "5 files and four folders."),
+            ("Five files and four folders.", "5 files and 4 folders."),
             ("Nine thousand four hundred and fifty-three.", "9453."),
             (
                 "The value is three point one four one five.",
@@ -218,21 +220,44 @@ fn text2num_handles_documented_cardinals_groups_and_decimals() {
                 "Groups like one, two, three are digits.",
                 "Groups like 1, 2, 3 are digits.",
             ),
+            (
+                "When it asks you to press 0, 1, 2, or three.",
+                "When it asks you to press 0, 1, 2, or 3.",
+            ),
         ],
     );
 }
 
 #[test]
-fn text2num_threshold_preserves_isolated_values_below_five() {
+fn text2num_converts_every_isolated_non_negative_value() {
     assert_clean_cases(
         CleaningProfile::Safe,
         &[
-            (
-                "One thing and two more ideas.",
-                "One thing and two more ideas.",
-            ),
-            ("There are four folders.", "There are four folders."),
+            ("Zero files remain.", "0 files remain."),
+            ("One thing and two more ideas.", "1 thing and 2 more ideas."),
+            ("There are four folders.", "There are 4 folders."),
             ("There are five folders.", "There are 5 folders."),
+        ],
+    );
+}
+
+#[test]
+fn text2num_preserves_second_when_it_is_a_time_unit() {
+    assert_clean_cases(
+        CleaningProfile::Safe,
+        &[
+            ("Give me a second.", "Give me a second."),
+            ("Wait one second.", "Wait 1 second."),
+            (
+                "Process five tokens per second.",
+                "Process 5 tokens per second.",
+            ),
+            (
+                "It was a split-second choice.",
+                "It was a split-second choice.",
+            ),
+            ("Open the second file.", "Open the 2nd file."),
+            ("This is the twenty-second file.", "This is the 22nd file."),
         ],
     );
 }

@@ -306,11 +306,12 @@ pub(crate) fn normalize_numeric_point_suffixes(input: &str) -> TransformResult {
 /// Convert English number expressions to digits by delegating to the
 /// `text2num` crate.
 ///
-/// Uses an isolated-value threshold of 5.0: a standalone number word below
-/// that threshold (e.g. `"three"`) is left as a word, while numbers that
-/// are part of a larger expression, or at/above the threshold, are
-/// converted. There is deliberately no home-grown English number grammar
-/// here; all parsing is delegated to `text2num`.
+/// Uses an isolated-value threshold of 0.0 so every recognized numeric
+/// expression is converted, including standalone values such as `"zero"`
+/// and `"three"`. Contexts where `"second"` is a time unit rather than an
+/// ordinal are protected from conversion. There is deliberately no
+/// home-grown English number grammar here; all parsing is delegated to
+/// `text2num`.
 ///
 /// # Returns
 ///
@@ -323,15 +324,84 @@ pub(crate) fn normalize_numeric_point_suffixes(input: &str) -> TransformResult {
 /// This function is infallible: it returns [`TransformResult`], not
 /// `Result`, and never returns an `Err`.
 pub(crate) fn normalize_spoken_numbers(input: &str) -> TransformResult {
-    const ISOLATED_NUMBER_THRESHOLD: f64 = 5.0;
+    const ISOLATED_NUMBER_THRESHOLD: f64 = 0.0;
 
     let language = Language::english();
-    let text = replace_numbers_in_text(input, &language, ISOLATED_NUMBER_THRESHOLD);
+    let text = replace_numbers_preserving_time_units(input, &language, ISOLATED_NUMBER_THRESHOLD);
     if text == input {
         unchanged(input)
     } else {
         TransformResult { text, matches: 1 }
     }
+}
+
+fn replace_numbers_preserving_time_units(
+    input: &str,
+    language: &Language,
+    threshold: f64,
+) -> String {
+    static SECOND: OnceLock<Regex> = OnceLock::new();
+    static PREVIOUS_TOKEN: OnceLock<Regex> = OnceLock::new();
+    let second_re = SECOND
+        .get_or_init(|| Regex::new(r"(?i)\bsecond\b").expect("second-word regex must compile"));
+    let previous_re = PREVIOUS_TOKEN.get_or_init(|| {
+        Regex::new(r"(?i)([a-z0-9]+)([-\s]+)$").expect("previous-token regex must compile")
+    });
+
+    let protected: Vec<_> = second_re
+        .find_iter(input)
+        .filter(|found| second_is_time_unit(&input[..found.start()], previous_re, language))
+        .collect();
+    if protected.is_empty() {
+        return replace_numbers_in_text(input, language, threshold);
+    }
+
+    // Run text2num independently on the text around protected time-unit
+    // tokens. This still converts a preceding quantity (`one second` becomes
+    // `1 second`) without letting the unit itself become the ordinal `2nd`.
+    let mut output = String::with_capacity(input.len());
+    let mut last_end = 0;
+    for found in protected {
+        output.push_str(&replace_numbers_in_text(
+            &input[last_end..found.start()],
+            language,
+            threshold,
+        ));
+        output.push_str(found.as_str());
+        last_end = found.end();
+    }
+    output.push_str(&replace_numbers_in_text(
+        &input[last_end..],
+        language,
+        threshold,
+    ));
+    output
+}
+
+fn second_is_time_unit(prefix: &str, previous_re: &Regex, language: &Language) -> bool {
+    let Some(captures) = previous_re.captures(prefix) else {
+        return false;
+    };
+    let previous = captures.get(1).expect("capture 1 is required").as_str();
+    let separator = captures.get(2).expect("capture 2 is required").as_str();
+
+    if separator.contains('-') {
+        let candidate = format!("{previous}-second");
+        // A recognized compound such as "twenty-second" is a genuine ordinal.
+        // Non-numeric compounds such as "split-second" retain the word.
+        return text2digits(&candidate, language).is_err();
+    }
+
+    matches!(
+        previous.to_ascii_lowercase().as_str(),
+        "a" | "per" | "every" | "each"
+    ) || previous.chars().all(|character| character.is_ascii_digit())
+        || text2digits(previous, language).is_ok_and(|rendered| {
+            !rendered.ends_with("st")
+                && !rendered.ends_with("nd")
+                && !rendered.ends_with("rd")
+                && !rendered.ends_with("th")
+        })
 }
 
 /// Join split digit groups onto a structurally recognizable uppercase
