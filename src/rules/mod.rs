@@ -35,6 +35,7 @@ use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fmt;
+use std::fmt::Write as _;
 use std::str::FromStr;
 
 mod defaults;
@@ -152,12 +153,12 @@ pub struct CleanResult {
 /// # Errors
 ///
 /// Returns an error for an unknown disabled rule name, an invalid built-in
-/// pattern, an empty user rule name or pattern, a user rule name colliding
-/// with a built-in name, a duplicate user rule name, or an invalid user rule
-/// regex. A user rule that is itself named in `disabled_rules` is exempt
-/// from the invalid-regex check: it is filtered out before its pattern is
-/// ever compiled, which is the documented way to "park" a `[[rules.user]]`
-/// entry whose pattern does not compile yet.
+/// pattern, an empty or non-canonical user rule name, an empty user rule
+/// pattern, a user rule name colliding with a built-in name, a duplicate user
+/// rule name, or an invalid user rule regex. A user rule that is itself named
+/// in `disabled_rules` is exempt from the invalid-regex check: it is filtered
+/// out before its pattern is ever compiled, which is the documented way to
+/// "park" a `[[rules.user]]` entry whose pattern does not compile yet.
 pub fn build_cleaner(
     no_cleaning: bool,
     profile: CleaningProfile,
@@ -168,8 +169,8 @@ pub fn build_cleaner(
     for name in disabled_rules {
         assert_rule_name_exists(name, user_rules)?;
     }
-    user::validate_user_rules(user_rules)?;
     if no_cleaning {
+        user::validate_user_rules(user_rules)?;
         return Ok(None);
     }
 
@@ -210,7 +211,8 @@ pub fn assert_rule_name_exists(name: &str, user_rules: &[UserRule]) -> Result<()
 ///
 /// The built-in table (name/engine/tier/enabled/description) is printed
 /// first. If `user_rules` is non-empty, a separate `(user)` section with
-/// each user rule's name and description is appended below it.
+/// each user rule's name, enabled state, and description is appended below
+/// it.
 ///
 /// # Arguments
 ///
@@ -229,49 +231,83 @@ pub fn assert_rule_name_exists(name: &str, user_rules: &[UserRule]) -> Result<()
 ///
 /// # Errors
 ///
-/// Returns an error when a name in `disabled_rules` matches neither a
-/// built-in nor a user rule.
+/// Returns an error when a user rule has an invalid name or empty pattern, or
+/// when a name in `disabled_rules` matches neither a built-in nor a user rule.
 pub fn print_rule_list(
     profile: CleaningProfile,
     drop_trailing_period: bool,
     disabled_rules: &[String],
     user_rules: &[UserRule],
 ) -> Result<()> {
+    user::validate_user_rules(user_rules)?;
     for name in disabled_rules {
         assert_rule_name_exists(name, user_rules)?;
     }
     let disabled: HashSet<&str> = disabled_rules.iter().map(String::as_str).collect();
+    print!(
+        "{}",
+        render_rule_list(profile, drop_trailing_period, &disabled, user_rules)
+    );
+    Ok(())
+}
 
+/// Render the rule listing after names have been validated.
+///
+/// Split from [`print_rule_list`] so column content can be regression-tested
+/// without capturing process-global stdout.
+fn render_rule_list(
+    profile: CleaningProfile,
+    drop_trailing_period: bool,
+    disabled: &HashSet<&str>,
+    user_rules: &[UserRule],
+) -> String {
+    let mut output = String::new();
     // The tier column is sized for the longest label, `messaging-default`.
-    println!(
+    writeln!(
+        output,
         "{:<31}  {:<12}  {:<17}  {:<7}  description",
         "name", "engine", "tier", "enabled"
-    );
-    println!("{}", "-".repeat(114));
+    )
+    .expect("writing to a String cannot fail");
+    writeln!(output, "{}", "-".repeat(114)).expect("writing to a String cannot fail");
     for rule in defaults::DEFAULT_RULES {
         let enabled =
             rule.activation.enabled(profile, drop_trailing_period) && !disabled.contains(rule.name);
-        println!(
+        writeln!(
+            output,
             "{:<31}  {:<12}  {:<17}  {:<7}  {}",
             rule.name,
             rule.kind.engine().label(),
             rule.activation.label(),
             if enabled { "yes" } else { "no" },
-            rule.description
-        );
+            rule.description,
+        )
+        .expect("writing to a String cannot fail");
     }
 
     if !user_rules.is_empty() {
-        println!();
-        println!("{:<32}  description (user)", "name");
-        println!("{}", "-".repeat(80));
+        writeln!(output).expect("writing to a String cannot fail");
+        writeln!(
+            output,
+            "{:<32}  {:<7}  description (user)",
+            "name", "enabled"
+        )
+        .expect("writing to a String cannot fail");
+        writeln!(output, "{}", "-".repeat(80)).expect("writing to a String cannot fail");
         for rule in user_rules {
-            println!(
-                "{:<32}  {}",
+            writeln!(
+                output,
+                "{:<32}  {:<7}  {}",
                 rule.name,
-                rule.description.as_deref().unwrap_or("")
-            );
+                if disabled.contains(rule.name.as_str()) {
+                    "no"
+                } else {
+                    "yes"
+                },
+                rule.description.as_deref().unwrap_or(""),
+            )
+            .expect("writing to a String cannot fail");
         }
     }
-    Ok(())
+    output
 }

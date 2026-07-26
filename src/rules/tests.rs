@@ -595,6 +595,40 @@ fn whitespace_only_user_rule_name_is_rejected() {
 }
 
 #[test]
+fn user_rule_name_with_surrounding_whitespace_is_rejected() {
+    let rules = vec![user_rule(
+        " custom-hello ",
+        r"(?i)hi",
+        "hello",
+        RulePosition::Standard,
+    )];
+    let err = build_cleaner_for_test_result(CleaningProfile::Safe, false, &HashSet::new(), &rules)
+        .unwrap_err();
+    let msg = err.to_string();
+    assert!(
+        msg.contains("leading or trailing whitespace"),
+        "message: {msg}"
+    );
+}
+
+#[test]
+fn disabled_cleaning_still_validates_user_rule_names() {
+    let rules = vec![user_rule(
+        " custom-hello ",
+        r"(?i)hi",
+        "hello",
+        RulePosition::Standard,
+    )];
+
+    let err = build_cleaner(true, CleaningProfile::Safe, false, &[], &rules).unwrap_err();
+
+    assert!(
+        err.to_string().contains("leading or trailing whitespace"),
+        "message: {err:#}"
+    );
+}
+
+#[test]
 fn empty_user_rule_pattern_is_rejected() {
     let rules = vec![user_rule(
         "custom-empty-pattern",
@@ -739,6 +773,32 @@ fn assert_rule_name_exists_works() {
         RulePosition::Standard,
     )];
     assert!(assert_rule_name_exists("custom-hello", &rules).is_ok());
+}
+
+#[test]
+fn rendered_rule_list_reports_enabled_state_for_user_rules() {
+    let rules = vec![
+        UserRule {
+            description: Some("enabled description".to_string()),
+            ..user_rule("custom-enabled", r"(?i)hello", "HI", RulePosition::Standard)
+        },
+        UserRule {
+            description: Some("disabled description".to_string()),
+            ..user_rule(
+                "custom-disabled",
+                r"(?i)goodbye",
+                "BYE",
+                RulePosition::Standard,
+            )
+        },
+    ];
+    let disabled = HashSet::from(["custom-disabled"]);
+
+    let rendered = render_rule_list(CleaningProfile::Safe, true, &disabled, &rules);
+
+    assert!(rendered.contains("name                              enabled  description (user)"));
+    assert!(rendered.contains("custom-enabled                    yes      enabled description"));
+    assert!(rendered.contains("custom-disabled                   no       disabled description"));
 }
 
 // =============================================================================

@@ -63,8 +63,8 @@ impl RulePosition {
 /// with a built-in rule name or another user rule name.
 #[derive(Debug, Clone, Deserialize)]
 pub struct UserRule {
-    /// Unique rule name. Must not collide with a built-in rule name or
-    /// another user rule name.
+    /// Unique rule name. Must not have surrounding whitespace or collide
+    /// with a built-in rule name or another user rule name.
     pub name: String,
     /// Optional human-readable description, shown by `--list-rules`.
     pub description: Option<String>,
@@ -78,11 +78,14 @@ pub struct UserRule {
     pub position: RulePosition,
 }
 
-/// Validate that every user rule has a non-empty name and pattern, that no
-/// user rule collides with a built-in name, and that no two user rules
-/// share a name. Regex *validity* (whether the pattern compiles) is checked
-/// when a rule is compiled ([`compile_user_regex`]), not here, so this stays
-/// cheap to call unconditionally.
+/// Validate that every user rule has a canonical, non-empty name and a
+/// non-empty pattern, that no user rule collides with a built-in name, and
+/// that no two user rules share a name. A canonical name has no leading or
+/// trailing whitespace, so validation, `disabled_rules` lookup, and rule-list
+/// output all use exactly the same identifier. Regex *validity* (whether the
+/// pattern compiles) is checked when a rule is compiled
+/// ([`compile_user_regex`]), not here, so this stays cheap to call
+/// unconditionally.
 ///
 /// # Returns
 ///
@@ -91,18 +94,25 @@ pub struct UserRule {
 /// # Errors
 ///
 /// Returns an error naming the offending rule when: a rule's `name` is
-/// empty or whitespace-only; a rule's `name` collides with a built-in rule
-/// name; two user rules share a `name`; or a rule's `pattern` is the empty
-/// string (an empty regex matches at every position, so `replacement` would
-/// be spliced between every character of every transcript). A
-/// whitespace-only pattern is legal: it is a normal, if unusual, regex that
-/// matches a literal space, not the "matches everywhere" footgun an empty
-/// pattern is.
+/// empty or whitespace-only; a rule's `name` has leading or trailing
+/// whitespace; a rule's `name` collides with a built-in rule name; two user
+/// rules share a `name`; or a rule's `pattern` is the empty string (an empty
+/// regex matches at every position, so `replacement` would be spliced
+/// between every character of every transcript). A whitespace-only pattern
+/// is legal: it is a normal, if unusual, regex that matches a literal space,
+/// not the "matches everywhere" footgun an empty pattern is.
 pub(crate) fn validate_user_rules(user_rules: &[UserRule]) -> Result<()> {
     let mut seen: HashSet<&str> = HashSet::with_capacity(user_rules.len());
     for (idx, rule) in user_rules.iter().enumerate() {
-        if rule.name.trim().is_empty() {
+        let trimmed_name = rule.name.trim();
+        if trimmed_name.is_empty() {
             return Err(anyhow!("user rule #{} has an empty name", idx + 1));
+        }
+        if trimmed_name != rule.name {
+            return Err(anyhow!(
+                "user rule '{}' has leading or trailing whitespace in its name",
+                rule.name
+            ));
         }
         if DEFAULT_RULES.iter().any(|def| def.name == rule.name) {
             return Err(anyhow!(

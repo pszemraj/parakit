@@ -283,6 +283,7 @@ impl Cleaner {
         disabled: &HashSet<String>,
         user_rules: &[UserRule],
     ) -> Result<Self> {
+        validate_user_rules(user_rules)?;
         Self::assemble(
             profile,
             drop_trailing_period,
@@ -322,6 +323,7 @@ impl Cleaner {
         user_rules: &[UserRule],
         backtrack_limit: usize,
     ) -> Result<Self> {
+        validate_user_rules(user_rules)?;
         Self::assemble(
             profile,
             drop_trailing_period,
@@ -338,8 +340,6 @@ impl Cleaner {
         user_rules: &[UserRule],
         backtrack_limit: usize,
     ) -> Result<Self> {
-        validate_user_rules(user_rules)?;
-
         let enabled_defaults: Vec<&'static Rule> = DEFAULT_RULES
             .iter()
             .filter(|def| {

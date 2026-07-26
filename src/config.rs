@@ -209,7 +209,15 @@ pub(crate) const TEMPLATE: &str = r#"# parakit config.toml
 /// Returns an error if `$PARAKIT_CONFIG_PATH` is set but empty, or if the
 /// operating system does not expose a usable config or home directory.
 pub(crate) fn config_path() -> Result<PathBuf> {
-    if let Some(raw) = std::env::var_os(CONFIG_PATH_ENV) {
+    config_path_with_override(std::env::var_os(CONFIG_PATH_ENV))
+}
+
+/// Resolve the config path from an already-read environment override.
+///
+/// Keeping the environment read at the public boundary lets tests exercise
+/// override precedence without mutating process-global environment state.
+fn config_path_with_override(override_path: Option<std::ffi::OsString>) -> Result<PathBuf> {
+    if let Some(raw) = override_path {
         if raw.is_empty() {
             anyhow::bail!("{CONFIG_PATH_ENV} is set but empty");
         }
@@ -260,9 +268,10 @@ fn xdg_config_base() -> Result<PathBuf> {
 ///
 /// Returns an error if the config path cannot be resolved, the file exists
 /// but cannot be read, the file is not valid TOML for [`ConfigFile`], a
-/// user-defined rule fails validation (empty name, empty pattern, invalid
-/// regex, a name colliding with a built-in rule, or a duplicate user rule
-/// name), or `cleaning.disabled_rules` names a rule that does not exist.
+/// user-defined rule fails validation (empty or non-canonical name, empty
+/// pattern, invalid regex, a name colliding with a built-in rule, or a
+/// duplicate user rule name), or `cleaning.disabled_rules` names a rule that
+/// does not exist.
 /// Parse and validation errors are annotated with the config file path.
 pub(crate) fn load() -> Result<ConfigFile> {
     load_from_path(&config_path()?)
@@ -311,10 +320,10 @@ pub(crate) fn load_from_path(path: &Path) -> Result<ConfigFile> {
 ///
 /// # Errors
 ///
-/// Returns an error naming the offending user rule for an empty name, an
-/// empty pattern, an invalid regex, a name colliding with a built-in rule,
-/// or a duplicate user rule name; or naming an unknown rule listed in
-/// `cleaning.disabled_rules`.
+/// Returns an error naming the offending user rule for an empty or
+/// non-canonical name, an empty pattern, an invalid regex, a name colliding
+/// with a built-in rule, or a duplicate user rule name; or naming an unknown
+/// rule listed in `cleaning.disabled_rules`.
 fn validate_config(config: &ConfigFile) -> Result<()> {
     // `Aggressive` plus terminal-period removal is the widest activation set,
     // so every built-in pattern is compiled here regardless of which profile
@@ -476,6 +485,24 @@ replacement = "hello"
     }
 
     #[test]
+    fn user_rule_name_with_surrounding_whitespace_is_rejected_at_load() {
+        let toml = r#"
+[[rules.user]]
+name = " custom-hello "
+pattern = "(?i)hi"
+replacement = "hello"
+"#;
+        let path = write_fixture("noncanonical-user-rule-name", toml);
+        let err = load_from_path(&path).unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("leading or trailing whitespace"),
+            "message: {msg}"
+        );
+        assert!(msg.contains(&path.display().to_string()), "message: {msg}");
+    }
+
+    #[test]
     fn empty_user_rule_pattern_is_rejected_at_load() {
         let toml = r#"
 [[rules.user]]
@@ -566,10 +593,17 @@ replacement = "x"
     fn config_path_env_override_wins() {
         let dir = crate::test_support::fixture_root("parakit-config-test", "env-override");
         let path = dir.join("custom-config.toml");
-        std::env::set_var(CONFIG_PATH_ENV, &path);
-        let resolved = config_path();
-        std::env::remove_var(CONFIG_PATH_ENV);
+        let resolved = config_path_with_override(Some(path.clone().into_os_string()));
         assert_eq!(resolved.expect("env override should resolve"), path);
+    }
+
+    #[test]
+    fn empty_config_path_env_override_is_rejected_without_global_env_mutation() {
+        let err = config_path_with_override(Some(std::ffi::OsString::new())).unwrap_err();
+        assert!(
+            err.to_string().contains("is set but empty"),
+            "message: {err:#}"
+        );
     }
 
     /// Assert that every variant of a `clap::ValueEnum` serializes (via

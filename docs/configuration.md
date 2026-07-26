@@ -27,11 +27,13 @@ Resolved in this order:
 are all equivalent to the built-in default. No key is required, and there is no
 key whose absence is an error.
 
-**Precedence is CLI flag > this file > built-in default,** with three exceptions
-that are marked on the keys themselves: `sounds` and `cleaning.enabled` have
-only a negating flag, which can force the value off but never on;
-`cleaning.keep_trailing_period` has only an affirming flag, which can force it
-on but never off.
+**Precedence is CLI flag > this file > built-in default,** with five exceptions
+that are marked on the keys themselves. `sounds` and `cleaning.enabled` have
+only a negating flag, which can force the value off but never on.
+`keep_transcript_clipboard` and `cleaning.keep_trailing_period` have only an
+affirming flag, which can force the value on but never off. `verbose` is also
+affirming, while `--quiet` suppresses both CLI- and config-requested verbose
+output.
 
 **Misspelled key names are silently ignored.** parakit deliberately does not set
 `deny_unknown_fields`, so a config written for a newer version still loads on an
@@ -54,7 +56,7 @@ whether a mistake surfaces immediately or at next daemon start:
 
 | Checked when the file loads | Checked only when the daemon starts |
 | --- | --- |
-| TOML syntax; all enum values; `[[rules.user]]` name (non-empty), pattern (non-empty), regex validity, name collisions, duplicate names; `cleaning.disabled_rules` names | `daemon.model` path existence; `logging.dir` writability; hotkey backend availability |
+| TOML syntax; all enum values; `[[rules.user]]` name (non-empty, no surrounding whitespace), pattern (non-empty), regex validity, name collisions, duplicate names; `cleaning.disabled_rules` names | `daemon.model` path existence; `logging.dir` writability; hotkey backend availability |
 
 `parakit config show` runs the first column and fails on a broken file. Every
 other `parakit config` subcommand — `path`, `init`, `edit` — works regardless,
@@ -101,6 +103,8 @@ paste_mode = "terminal" | "standard" | "direct"
 # Leave the dictated text on the clipboard instead of restoring the previous
 # contents. Default: false.
 # Has no effect when paste_mode = "direct", which never writes the clipboard.
+# `--keep-transcript-clipboard` forces this on; no flag can force it off
+# against `true` here.
 keep_transcript_clipboard = <bool>
 
 # Play the start / success / error cue tones. Default: true.
@@ -110,6 +114,9 @@ sounds = <bool>
 # Verbose diagnostics: paths, backend details, timing lines. Default: false.
 # Also raises the native inference library's log level.
 # `--quiet` overrides this silently — no warning that the file asked otherwise.
+# Commands that intentionally bypass config loading ignore this key. In
+# particular, use `parakit --verbose status` to request the status detail block;
+# `verbose = true` here does not make plain `parakit status` verbose.
 verbose = <bool>
 
 # Transcripts kept in daemon memory for `paste-last`, `copy-last`, and
@@ -242,9 +249,10 @@ and `--test-rules` — but not `status`, `stop`, `paste-last`, `copy-last`,
 [[rules.user]]
 
 # Rule identifier, required. Must not be empty or whitespace-only
-# (`user rule #<n> has an empty name`). Must not match a built-in rule name
-# (`user rule '<name>' has the same name as a built-in rule; rename it`) or
-# another user rule (`duplicate user rule name '<name>'`).
+# (`user rule #<n> has an empty name`) and must not have leading or trailing
+# whitespace. Must not match a built-in rule name (`user rule '<name>' has the
+# same name as a built-in rule; rename it`) or another user rule
+# (`duplicate user rule name '<name>'`).
 # Shown by `--list-rules` and usable in cleaning.disabled_rules.
 name = <string>
 
