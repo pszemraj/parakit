@@ -15,7 +15,7 @@
 //! * The pre-merge single-file engine's user-defined rule support
 //!   (`UserRule`, `RulePosition`, disabled-rule "parking"). Every test from
 //!   that suite is ported unchanged in intent, updated only for the new
-//!   4-argument `Cleaner::new` and the `CleanResult`-returning `clean`
+//!   5-argument `Cleaner::new` and the `CleanResult`-returning `clean`
 //!   (tests use `clean_text` where a bare `String` is all that's needed).
 //!
 //! One behavioral difference between the two sources could not be
@@ -37,7 +37,19 @@ fn build_cleaner_for_test(
     disabled: &HashSet<String>,
     user_rules: &[UserRule],
 ) -> Cleaner {
-    Cleaner::new(profile, drop_trailing_period, disabled, user_rules).expect("rules must compile")
+    Cleaner::new(profile, drop_trailing_period, None, disabled, user_rules)
+        .expect("rules must compile")
+}
+
+fn cleaner_with_number_threshold(threshold: Option<f64>) -> Cleaner {
+    Cleaner::new(
+        CleaningProfile::Safe,
+        false,
+        threshold,
+        &HashSet::new(),
+        &[],
+    )
+    .expect("rules must compile")
 }
 
 fn cleaner_keep_period(profile: CleaningProfile) -> Cleaner {
@@ -261,6 +273,50 @@ fn text2num_converts_every_isolated_non_negative_value() {
 }
 
 #[test]
+fn spoken_number_threshold_preserves_only_values_strictly_below_it() {
+    let cleaner = cleaner_with_number_threshold(Some(5.0));
+    assert_eq!(
+        cleaner.clean_text("One file. Four folders. Five notes. Six tasks."),
+        "One file. Four folders. 5 notes. 6 tasks."
+    );
+    assert_eq!(cleaner.number_threshold(), Some(5.0));
+}
+
+#[test]
+fn omitted_and_zero_number_thresholds_both_convert_every_value() {
+    let omitted = cleaner_with_number_threshold(None);
+    let zero = cleaner_with_number_threshold(Some(0.0));
+    let input = "Zero files. One folder. Four notes.";
+    assert_eq!(omitted.clean_text(input), "0 files. 1 folder. 4 notes.");
+    assert_eq!(zero.clean_text(input), "0 files. 1 folder. 4 notes.");
+    assert_eq!(omitted.number_threshold(), None);
+    assert_eq!(zero.number_threshold(), None);
+    assert_eq!(omitted.ruleset_id(), zero.ruleset_id());
+}
+
+#[test]
+fn invalid_number_thresholds_are_rejected_even_when_cleaning_is_disabled() {
+    for threshold in [Some(-1.0), Some(f64::NAN), Some(f64::INFINITY)] {
+        let err =
+            build_cleaner(true, CleaningProfile::Safe, false, threshold, &[], &[]).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("number threshold must be a finite value"),
+            "threshold {threshold:?}: {err:#}"
+        );
+    }
+}
+
+#[test]
+fn number_threshold_does_not_override_structural_version_conversion() {
+    let cleaner = cleaner_with_number_threshold(Some(10.0));
+    assert_eq!(
+        cleaner.clean_text("V zero point five point two. Four files."),
+        "v0.5.2. Four files."
+    );
+}
+
+#[test]
 fn text2num_preserves_second_when_it_is_a_time_unit() {
     assert_clean_cases(
         CleaningProfile::Safe,
@@ -434,6 +490,17 @@ fn ruleset_id_is_stable_and_option_sensitive() {
     assert_eq!(first.ruleset_id(), second.ruleset_id());
     assert_ne!(first.ruleset_id(), aggressive.ruleset_id());
     assert_ne!(first.ruleset_id(), messaging.ruleset_id());
+
+    let threshold = cleaner_with_number_threshold(Some(5.0));
+    assert_ne!(first.ruleset_id(), threshold.ruleset_id());
+}
+
+#[test]
+fn disabled_spoken_number_rule_ignores_threshold_in_ruleset_id() {
+    let disabled = HashSet::from(["spoken-numbers".to_string()]);
+    let all = Cleaner::new(CleaningProfile::Safe, false, None, &disabled, &[]).unwrap();
+    let threshold = Cleaner::new(CleaningProfile::Safe, false, Some(5.0), &disabled, &[]).unwrap();
+    assert_eq!(all.ruleset_id(), threshold.ruleset_id());
 }
 
 #[test]
@@ -664,7 +731,7 @@ fn disabled_cleaning_still_validates_user_rule_names() {
         RulePosition::Standard,
     )];
 
-    let err = build_cleaner(true, CleaningProfile::Safe, false, &[], &rules).unwrap_err();
+    let err = build_cleaner(true, CleaningProfile::Safe, false, None, &[], &rules).unwrap_err();
 
     assert!(
         err.to_string().contains("leading or trailing whitespace"),
@@ -745,7 +812,7 @@ fn build_cleaner_never_compiles_regex_for_a_disabled_user_rule() {
         RulePosition::Standard,
     )];
     let disabled = vec!["broken-regex".to_string()];
-    let result = build_cleaner(false, CleaningProfile::Safe, false, &disabled, &rules);
+    let result = build_cleaner(false, CleaningProfile::Safe, false, None, &disabled, &rules);
     assert!(
         result.is_ok(),
         "a disabled user rule's invalid regex must not be compiled: {result:?}"
@@ -857,7 +924,7 @@ fn build_cleaner_for_test_result(
     disabled: &HashSet<String>,
     user_rules: &[UserRule],
 ) -> Result<Cleaner> {
-    Cleaner::new(profile, drop_trailing_period, disabled, user_rules)
+    Cleaner::new(profile, drop_trailing_period, None, disabled, user_rules)
 }
 
 #[test]

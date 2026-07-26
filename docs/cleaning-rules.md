@@ -30,7 +30,7 @@ A single terminal period is removed by default because parakit primarily targets
 parakit --keep-trailing-period
 ```
 
-Both settings also live in `config.toml` as `cleaning.profile` and `cleaning.keep_trailing_period`; the CLI flags override them. See [configuration.md](configuration.md).
+These settings also live in `config.toml` as `cleaning.profile` and `cleaning.keep_trailing_period`; the CLI flags override them. Number conversion has the config-only `cleaning.number_threshold` setting. See [configuration.md](configuration.md).
 
 Disable cleaning entirely:
 
@@ -44,7 +44,7 @@ The default pipeline favors structural rules over product- or vocabulary-specifi
 
 Spaced acronyms follow one invariant: a run of two or more standalone uppercase ASCII letters separated by exactly one ASCII space is collapsed without separators. For example, `O C R` becomes `OCR`, `R L H F` becomes `RLHF`, and `A B` becomes `AB`. There is no acronym allowlist, so an unfamiliar initialism collapses exactly like a familiar one. Repeated-word stutter handling runs before acronym collapsing, so `I I think` still becomes `I think` rather than `II think`.
 
-Number conversion uses `text2num` with a threshold of zero, so every recognized numeric expression becomes digits, including isolated values such as `zero`, `one`, and `three`. The ambiguous word `second` remains a word when context identifies it as a time unit (`one second`, `per second`, `a split-second`), while genuine ordinals still render numerically. Multi-point versions are parsed component by component through `text2num`; parakit then joins those validated components with periods. Generic formatting passes compact short uppercase identifiers and split digit groups without maintaining a list of product names.
+Number conversion uses `text2num` with an isolated-number threshold of zero by default, so every recognized numeric expression becomes digits, including isolated values such as `zero`, `one`, and `three`. Set `cleaning.number_threshold = 5`, for example, to leave isolated values strictly below five as words while rendering five and larger values as digits. Omission and an explicit zero are equivalent. Because this is `text2num`'s isolated-value threshold, grouped or structural expressions may still render components below the cutoff numerically. The ambiguous word `second` remains a word when context identifies it as a time unit (`one second`, `per second`, `a split-second`), while genuine ordinals still render numerically. Multi-point versions are parsed component by component through `text2num`; parakit then joins those validated components with periods regardless of the isolated-value threshold. Generic formatting passes compact short uppercase identifiers and split digit groups without maintaining a list of product names.
 
 The safe repeated-word rule remains intentionally conservative. A bounded backreference consolidates a small set of high-confidence function-word stutters, while valid or ambiguous repetition such as `that that` and emphatic `no no` survives. The aggressive profile can opt into collapsing the ambiguous set.
 
@@ -167,8 +167,9 @@ Transcription records include:
 - `parakit_version`, the Cargo package version embedded in the running binary;
 - `cleaner_version`;
 - `cleaning_profile`, one of `safe`, `aggressive`, or `disabled`;
-- `ruleset_id`, derived from the ordered enabled pass set, including user rules;
+- `ruleset_id`, derived from the ordered enabled pass set, user rules, and configurable behavioral inputs;
 - `drops_trailing_period`;
+- `number_threshold`, the configured isolated-number cutoff or `null` when all recognized numbers are converted;
 - `rules_active`;
 - `rules_fired`, an ordered array of `{name, matches}` objects;
 - `cleaning_failure`, present only when a bounded matcher failed and the cleaner fell back to the original transcript.
@@ -179,7 +180,7 @@ When a procedural pass changes behavior without changing its name, increment `CL
 
 ## Corpus Regression Workflow
 
-Replay one JSONL file or a directory tree with the audit example. The audit uses the same messaging-style terminal-period behavior as the daemon unless `--keep-trailing-period` is supplied. Insertion-outcome lines are skipped automatically.
+Replay one JSONL file or a directory tree with the audit example. The audit uses the same messaging-style terminal-period behavior as the daemon unless `--keep-trailing-period` is supplied. Pass `--number-threshold VALUE` to audit a non-default number policy. Insertion-outcome lines are skipped automatically.
 
 ```bash
 cargo run --no-default-features --features bundled --example audit-cleaning -- \

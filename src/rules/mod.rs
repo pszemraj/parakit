@@ -141,6 +141,8 @@ pub struct CleanResult {
 /// * `profile` - Selected [`CleaningProfile`].
 /// * `drop_trailing_period` - Enable the messaging-style terminal-period
 ///   removal rule.
+/// * `number_threshold` - Minimum isolated number converted to digits.
+///   `None` converts every recognized number.
 /// * `disabled_rules` - Rule names supplied by repeated `--disable-rule`
 ///   and/or `cleaning.disabled_rules` in `config.toml`. May name a built-in
 ///   or a user rule.
@@ -152,17 +154,19 @@ pub struct CleanResult {
 ///
 /// # Errors
 ///
-/// Returns an error for an unknown disabled rule name, an invalid built-in
-/// pattern, an empty or non-canonical user rule name, an empty user rule
-/// pattern, a user rule name colliding with a built-in name, a duplicate user
-/// rule name, or an invalid user rule regex. A user rule that is itself named
-/// in `disabled_rules` is exempt from the invalid-regex check: it is filtered
-/// out before its pattern is ever compiled, which is the documented way to
-/// "park" a `[[rules.user]]` entry whose pattern does not compile yet.
+/// Returns an error for a negative or non-finite `number_threshold`, an unknown
+/// disabled rule name, an invalid built-in pattern, an empty or non-canonical
+/// user rule name, an empty user rule pattern, a user rule name colliding with
+/// a built-in name, a duplicate user rule name, or an invalid user rule regex.
+/// A user rule that is itself named in `disabled_rules` is exempt from the
+/// invalid-regex check: it is filtered out before its pattern is ever compiled,
+/// which is the documented way to "park" a `[[rules.user]]` entry whose pattern
+/// does not compile yet.
 pub fn build_cleaner(
     no_cleaning: bool,
     profile: CleaningProfile,
     drop_trailing_period: bool,
+    number_threshold: Option<f64>,
     disabled_rules: &[String],
     user_rules: &[UserRule],
 ) -> Result<Option<Cleaner>> {
@@ -170,12 +174,20 @@ pub fn build_cleaner(
         assert_rule_name_exists(name, user_rules)?;
     }
     if no_cleaning {
+        engine::validate_number_threshold(number_threshold)?;
         user::validate_user_rules(user_rules)?;
         return Ok(None);
     }
 
     let disabled: HashSet<String> = disabled_rules.iter().cloned().collect();
-    engine::Cleaner::new(profile, drop_trailing_period, &disabled, user_rules).map(Some)
+    engine::Cleaner::new(
+        profile,
+        drop_trailing_period,
+        number_threshold,
+        &disabled,
+        user_rules,
+    )
+    .map(Some)
 }
 
 /// Validate a rule name used by `--disable-rule` or `cleaning.disabled_rules`.

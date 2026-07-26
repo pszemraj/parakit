@@ -82,6 +82,9 @@ pub(crate) struct CleaningConfig {
     /// Keep the single terminal period that cleanup removes by default.
     /// CLI `--keep-trailing-period` forces this on.
     pub(crate) keep_trailing_period: Option<bool>,
+    /// Minimum isolated numeric value converted to digits. Unset or zero
+    /// converts every recognized number.
+    pub(crate) number_threshold: Option<f64>,
     /// Rule names to disable. Merged with CLI `--disable-rule` flags.
     pub(crate) disabled_rules: Vec<String>,
 }
@@ -165,6 +168,11 @@ pub(crate) const TEMPLATE: &str = r#"# parakit config.toml
 # parakit is used mostly for messaging-style dictation. CLI
 # --keep-trailing-period forces this on.
 # keep_trailing_period = false
+
+# Minimum isolated numeric value rendered as digits. Leave unset (or set to
+# 0) to convert every recognized number. For example, 5 keeps isolated zero
+# through four as words and converts five and larger values.
+# number_threshold = 5
 
 # Rule names to disable. Merged with any CLI --disable-rule flags. Run
 # `parakit --list-rules` to see all built-in and user rule names.
@@ -323,7 +331,8 @@ pub(crate) fn load_from_path(path: &Path) -> Result<ConfigFile> {
 /// Returns an error naming the offending user rule for an empty or
 /// non-canonical name, an empty pattern, an invalid regex, a name colliding
 /// with a built-in rule, or a duplicate user rule name; or naming an unknown
-/// rule listed in `cleaning.disabled_rules`.
+/// rule listed in `cleaning.disabled_rules`, or a negative/non-finite
+/// `cleaning.number_threshold`.
 fn validate_config(config: &ConfigFile) -> Result<()> {
     // `Aggressive` plus terminal-period removal is the widest activation set,
     // so every built-in pattern is compiled here regardless of which profile
@@ -333,6 +342,7 @@ fn validate_config(config: &ConfigFile) -> Result<()> {
         false,
         CleaningProfile::Aggressive,
         true,
+        config.cleaning.number_threshold,
         &config.cleaning.disabled_rules,
         &config.rules.user,
     )?;
@@ -370,6 +380,7 @@ mod tests {
         assert!(config.daemon.device.is_none());
         assert!(config.cleaning.disabled_rules.is_empty());
         assert!(config.cleaning.enabled.is_none());
+        assert!(config.cleaning.number_threshold.is_none());
     }
 
     #[test]
@@ -381,6 +392,7 @@ mod tests {
         let config = load_from_path(&path).expect("template should be valid TOML");
         assert!(config.daemon.model.is_none());
         assert!(config.rules.user.is_empty());
+        assert!(config.cleaning.number_threshold.is_none());
     }
 
     #[test]
@@ -398,6 +410,7 @@ transcript_history = 25
 
 [cleaning]
 enabled = false
+number_threshold = 5
 disabled_rules = ["fix-trailing-period", "filler-um-uh"]
 
 [logging]
@@ -427,6 +440,7 @@ position = "first"
         assert_eq!(config.daemon.transcript_history, Some(25));
 
         assert_eq!(config.cleaning.enabled, Some(false));
+        assert_eq!(config.cleaning.number_threshold, Some(5.0));
         assert_eq!(
             config.cleaning.disabled_rules,
             vec![
@@ -544,6 +558,34 @@ disabled_rules = ["fixed-trailing-perod"]
         let msg = format!("{err:#}");
         assert!(msg.contains("no rule named"), "message: {msg}");
         assert!(msg.contains("fixed-trailing-perod"), "message: {msg}");
+        assert!(msg.contains(&path.display().to_string()), "message: {msg}");
+    }
+
+    #[test]
+    fn negative_number_threshold_is_rejected_at_load() {
+        let toml = r#"
+[cleaning]
+number_threshold = -1
+"#;
+        let path = write_fixture("negative-number-threshold", toml);
+        let err = load_from_path(&path).unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(msg.contains("number threshold"), "message: {msg}");
+        assert!(msg.contains("greater than or equal to 0"), "message: {msg}");
+        assert!(msg.contains(&path.display().to_string()), "message: {msg}");
+    }
+
+    #[test]
+    fn nonfinite_number_threshold_is_rejected_at_load() {
+        let toml = r#"
+[cleaning]
+number_threshold = nan
+"#;
+        let path = write_fixture("nonfinite-number-threshold", toml);
+        let err = load_from_path(&path).unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(msg.contains("number threshold"), "message: {msg}");
+        assert!(msg.contains("finite value"), "message: {msg}");
         assert!(msg.contains(&path.display().to_string()), "message: {msg}");
     }
 

@@ -7,7 +7,7 @@ use parakit::rules::{build_cleaner, CleaningProfile};
 /// trailing-period default. `drops_trailing_period` has its own coverage in
 /// `trailing_period_default_and_opt_out`.
 fn clean(profile: CleaningProfile, input: &str) -> String {
-    build_cleaner(false, profile, false, &[], &[])
+    build_cleaner(false, profile, false, None, &[], &[])
         .expect("cleaner should compile")
         .expect("cleaning should be enabled")
         .clean_text(input)
@@ -16,7 +16,7 @@ fn clean(profile: CleaningProfile, input: &str) -> String {
 /// Clean `input` with the shipped defaults: safe profile, terminal period
 /// dropped.
 fn clean_with_defaults(input: &str) -> String {
-    build_cleaner(false, CleaningProfile::Safe, true, &[], &[])
+    build_cleaner(false, CleaningProfile::Safe, true, None, &[], &[])
         .expect("cleaner should compile")
         .expect("cleaning should be enabled")
         .clean_text(input)

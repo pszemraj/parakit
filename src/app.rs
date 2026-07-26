@@ -202,6 +202,7 @@ pub(crate) fn run() -> Result<()> {
             !cli.effective_cleaning_enabled(&config),
             cli.effective_cleaning_profile(&config),
             cli.effective_drops_trailing_period(&config),
+            config.cleaning.number_threshold,
             &cli.effective_disabled_rules(&config),
             &config.rules.user,
         )?;
@@ -283,6 +284,7 @@ pub(crate) fn run() -> Result<()> {
         !cli.effective_cleaning_enabled(&config),
         cli.effective_cleaning_profile(&config),
         cli.effective_drops_trailing_period(&config),
+        config.cleaning.number_threshold,
         &cli.effective_disabled_rules(&config),
         &config.rules.user,
     )?
@@ -527,6 +529,7 @@ fn run_ptt_audio_simulation(
         !cli.effective_cleaning_enabled(config),
         cli.effective_cleaning_profile(config),
         cli.effective_drops_trailing_period(config),
+        config.cleaning.number_threshold,
         &cli.effective_disabled_rules(config),
         &config.rules.user,
     )?
@@ -1004,6 +1007,15 @@ fn print_config_show(quiet: bool) -> Result<()> {
     println!(
         "    keep_trailing_period: {}",
         config.cleaning.keep_trailing_period.unwrap_or(false)
+    );
+    println!(
+        "    number_threshold: {}",
+        config
+            .cleaning
+            .number_threshold
+            .filter(|value| *value > 0.0)
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "(all numbers)".to_string())
     );
     println!("    disabled_rules: {:?}", config.cleaning.disabled_rules);
     println!("  logging:");

@@ -34,6 +34,10 @@ struct Cli {
     #[arg(long)]
     keep_trailing_period: bool,
 
+    /// Minimum isolated numeric value converted to digits. Omit to convert all.
+    #[arg(long, value_name = "VALUE")]
+    number_threshold: Option<f64>,
+
     /// Disable a pass by name. Repeatable.
     #[arg(long, value_name = "NAME")]
     disable_rule: Vec<String>,
@@ -76,6 +80,7 @@ struct AuditReport<'a> {
     cleaner_version: u32,
     profile: &'a str,
     drop_trailing_period: bool,
+    number_threshold: Option<f64>,
     ruleset_id: &'a str,
     rules_active: usize,
     files: usize,
@@ -102,6 +107,7 @@ fn run() -> Result<()> {
         false,
         cli.profile,
         !cli.keep_trailing_period,
+        cli.number_threshold,
         &cli.disable_rule,
         &[],
     )?
@@ -195,10 +201,11 @@ fn run() -> Result<()> {
         })
         .collect();
     let report = AuditReport {
-        report_schema: 1,
+        report_schema: 2,
         cleaner_version: CLEANER_VERSION,
         profile: cleaner.profile().as_str(),
         drop_trailing_period: cleaner.drops_trailing_period(),
+        number_threshold: cleaner.number_threshold(),
         ruleset_id: cleaner.ruleset_id(),
         rules_active: cleaner.active_rule_count(),
         files: files.len(),

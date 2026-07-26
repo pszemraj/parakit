@@ -18,8 +18,7 @@
 use super::engine::{Activation, Rule, RuleKind};
 use super::passes::{
     capitalize_sentence_starts, normalize_magnitude_suffixes, normalize_numeric_identifier_groups,
-    normalize_numeric_point_suffixes, normalize_spaced_acronyms, normalize_spoken_numbers,
-    normalize_spoken_versions,
+    normalize_numeric_point_suffixes, normalize_spaced_acronyms, normalize_spoken_versions,
 };
 
 macro_rules! regex_rule {
@@ -315,12 +314,13 @@ pub(crate) const DEFAULT_RULES: &[Rule] = &[
         Activation::Safe,
         normalize_numeric_point_suffixes
     ),
-    procedural_rule!(
-        "spoken-numbers",
-        "Convert every recognized English number expression with text2num",
-        Activation::Safe,
-        normalize_spoken_numbers
-    ),
+    Rule {
+        name: "spoken-numbers",
+        description:
+            "Convert recognized English number expressions at or above the configured threshold",
+        activation: Activation::Safe,
+        kind: RuleKind::SpokenNumbers,
+    },
     procedural_rule!(
         "numeric-identifier-groups",
         "Join split digit groups in structurally recognizable uppercase identifiers",

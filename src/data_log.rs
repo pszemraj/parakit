@@ -58,6 +58,8 @@ pub struct CleaningLogFields<'a> {
     pub ruleset_id: Option<&'a str>,
     /// Whether the messaging-style terminal-period pass was enabled.
     pub drops_trailing_period: bool,
+    /// Minimum isolated number converted to digits; None means convert all.
+    pub number_threshold: Option<f64>,
     /// Transformations that actually changed the transcript, in application order.
     pub rules_fired: &'a [RuleHit],
     /// Set when a cleaning pass failed at runtime and the transcript was passed through unchanged.
@@ -78,6 +80,7 @@ struct LogRecord<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     ruleset_id: Option<&'a str>,
     drops_trailing_period: bool,
+    number_threshold: Option<f64>,
     rules_fired: &'a [RuleHit],
     #[serde(skip_serializing_if = "Option::is_none")]
     cleaning_failure: Option<&'a str>,
@@ -141,7 +144,7 @@ const BASE_TSV_COLUMNS: usize = 7;
 /// Number of TSV columns carrying cleaning telemetry, written immediately
 /// after the base columns and before the (possibly deferred) insertion
 /// columns.
-const CLEANING_TSV_COLUMNS: usize = 6;
+const CLEANING_TSV_COLUMNS: usize = 7;
 
 /// Number of trailing TSV columns appended by an insertion record.
 const INSERTION_TSV_COLUMNS: usize = 10;
@@ -286,6 +289,7 @@ impl DataLogger {
             cleaning_profile: cleaning.profile,
             ruleset_id: cleaning.ruleset_id,
             drops_trailing_period: cleaning.drops_trailing_period,
+            number_threshold: cleaning.number_threshold,
             rules_fired: cleaning.rules_fired,
             cleaning_failure: cleaning.failure,
         };
@@ -522,6 +526,10 @@ fn cleaning_tsv_cells(fields: &CleaningLogFields<'_>) -> [String; CLEANING_TSV_C
         sanitize_tsv(fields.profile),
         fields.ruleset_id.map(sanitize_tsv).unwrap_or_default(),
         fields.drops_trailing_period.to_string(),
+        fields
+            .number_threshold
+            .map(|value| value.to_string())
+            .unwrap_or_default(),
         sanitize_tsv(&encode_rules_fired(fields.rules_fired)),
         fields.failure.map(sanitize_tsv).unwrap_or_default(),
     ]
@@ -616,6 +624,7 @@ mod tests {
             profile: "safe",
             ruleset_id: Some("safe-v1"),
             drops_trailing_period: true,
+            number_threshold: None,
             rules_fired: &[],
             failure: None,
         }
@@ -716,18 +725,19 @@ mod tests {
         assert_eq!(cols[8], "safe", "profile");
         assert_eq!(cols[9], "safe-v1", "ruleset_id");
         assert_eq!(cols[10], "true", "drops_trailing_period");
-        assert_eq!(cols[11], "", "rules_fired (none fired)");
-        assert_eq!(cols[12], "", "cleaning failure (none)");
-        assert_eq!(cols[13], "pasted");
-        assert_eq!(cols[14], "com.example.App");
-        assert_eq!(cols[15], "not_applicable");
-        assert_eq!(cols[16], "12");
-        assert_eq!(cols[17], "true");
-        assert_eq!(cols[18], "");
-        assert_eq!(cols[19], "not_applicable");
-        assert_eq!(cols[20], "120");
-        assert_eq!(cols[21], "true");
-        assert_eq!(cols[22], "");
+        assert_eq!(cols[11], "", "number_threshold (convert all)");
+        assert_eq!(cols[12], "", "rules_fired (none fired)");
+        assert_eq!(cols[13], "", "cleaning failure (none)");
+        assert_eq!(cols[14], "pasted");
+        assert_eq!(cols[15], "com.example.App");
+        assert_eq!(cols[16], "not_applicable");
+        assert_eq!(cols[17], "12");
+        assert_eq!(cols[18], "true");
+        assert_eq!(cols[19], "");
+        assert_eq!(cols[20], "not_applicable");
+        assert_eq!(cols[21], "120");
+        assert_eq!(cols[22], "true");
+        assert_eq!(cols[23], "");
     }
 
     #[test]
@@ -745,6 +755,7 @@ mod tests {
             profile: "aggressive",
             ruleset_id: Some("aggressive-v2"),
             drops_trailing_period: false,
+            number_threshold: Some(5.0),
             rules_fired: &hits,
             failure: None,
         };
@@ -770,8 +781,9 @@ mod tests {
         assert_eq!(cols[8], "aggressive", "profile");
         assert_eq!(cols[9], "aggressive-v2", "ruleset_id");
         assert_eq!(cols[10], "false", "drops_trailing_period");
-        assert_eq!(cols[11], "trailing_period:1", "rules_fired");
-        assert_eq!(cols[12], "", "cleaning failure (none)");
+        assert_eq!(cols[11], "5", "number_threshold");
+        assert_eq!(cols[12], "trailing_period:1", "rules_fired");
+        assert_eq!(cols[13], "", "cleaning failure (none)");
     }
 
     #[test]
@@ -846,8 +858,12 @@ mod tests {
             cols[10], "true",
             "drops_trailing_period still carried through the sweep"
         );
-        assert_eq!(cols[11], "", "rules_fired still carried through the sweep");
-        for col in &cols[13..] {
+        assert_eq!(
+            cols[11], "",
+            "number_threshold still carried through the sweep"
+        );
+        assert_eq!(cols[12], "", "rules_fired still carried through the sweep");
+        for col in &cols[14..] {
             assert!(
                 col.is_empty(),
                 "insertion columns should be empty for a swept orphan row"
@@ -882,7 +898,7 @@ mod tests {
         assert_eq!(cols[3], "raw");
         assert_eq!(cols[4], "cleaned");
         assert_eq!(cols[6], crate::build_info::PACKAGE_VERSION);
-        assert!(cols[13..].iter().all(|col| col.is_empty()));
+        assert!(cols[14..].iter().all(|col| col.is_empty()));
     }
 
     #[test]
@@ -906,6 +922,7 @@ mod tests {
             profile: "aggressive",
             ruleset_id: Some("aggressive-v7"),
             drops_trailing_period: true,
+            number_threshold: Some(5.0),
             rules_fired: &hits,
             failure: None,
         };
@@ -923,6 +940,7 @@ mod tests {
         assert_eq!(value["cleaning_profile"], "aggressive");
         assert_eq!(value["ruleset_id"], "aggressive-v7");
         assert_eq!(value["drops_trailing_period"], true);
+        assert_eq!(value["number_threshold"], 5.0);
         assert_eq!(
             value["rules_fired"],
             serde_json::json!([
@@ -947,6 +965,7 @@ mod tests {
             profile: "disabled",
             ruleset_id: None,
             drops_trailing_period: false,
+            number_threshold: None,
             rules_fired: &[],
             failure: None,
         };
@@ -967,6 +986,7 @@ mod tests {
             "cleaning_failure should be omitted when None"
         );
         assert_eq!(value["cleaning_profile"], "disabled");
+        assert_eq!(value["number_threshold"], serde_json::Value::Null);
         assert_eq!(value["rules_fired"], serde_json::json!([]));
     }
 
@@ -1007,14 +1027,14 @@ mod tests {
             ..sample_cleaning_fields()
         };
         let cells = cleaning_tsv_cells(&fields);
-        assert_eq!(cells[4], "trailing_period:2;filler_words:5");
+        assert_eq!(cells[5], "trailing_period:2;filler_words:5");
     }
 
     #[test]
     fn tsv_rules_fired_is_empty_string_when_no_rules_fired() {
         let fields = sample_cleaning_fields();
         let cells = cleaning_tsv_cells(&fields);
-        assert_eq!(cells[4], "");
+        assert_eq!(cells[5], "");
     }
 
     #[test]
@@ -1024,7 +1044,7 @@ mod tests {
             ..sample_cleaning_fields()
         };
         let cells = cleaning_tsv_cells(&fields);
-        assert_eq!(cells[5], "bad value here");
+        assert_eq!(cells[6], "bad value here");
     }
 
     #[test]

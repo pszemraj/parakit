@@ -306,12 +306,17 @@ pub(crate) fn normalize_numeric_point_suffixes(input: &str) -> TransformResult {
 /// Convert English number expressions to digits by delegating to the
 /// `text2num` crate.
 ///
-/// Uses an isolated-value threshold of 0.0 so every recognized numeric
-/// expression is converted, including standalone values such as `"zero"`
-/// and `"three"`. Contexts where `"second"` is a time unit rather than an
-/// ordinal are protected from conversion. There is deliberately no
-/// home-grown English number grammar here; all parsing is delegated to
-/// `text2num`.
+/// `threshold` is the minimum isolated numeric value rendered as digits.
+/// A threshold of `0.0` converts every recognized expression; higher values
+/// preserve isolated simple cardinals and ordinals strictly below the
+/// threshold. Contexts where `"second"` is a time unit rather than an ordinal
+/// are protected from conversion. There is deliberately no home-grown English
+/// number grammar here; all parsing is delegated to `text2num`.
+///
+/// # Arguments
+///
+/// * `input` - Transcript text to normalize.
+/// * `threshold` - Minimum isolated numeric value rendered as digits.
 ///
 /// # Returns
 ///
@@ -323,11 +328,9 @@ pub(crate) fn normalize_numeric_point_suffixes(input: &str) -> TransformResult {
 ///
 /// This function is infallible: it returns [`TransformResult`], not
 /// `Result`, and never returns an `Err`.
-pub(crate) fn normalize_spoken_numbers(input: &str) -> TransformResult {
-    const ISOLATED_NUMBER_THRESHOLD: f64 = 0.0;
-
+pub(crate) fn normalize_spoken_numbers(input: &str, threshold: f64) -> TransformResult {
     let language = Language::english();
-    let text = replace_numbers_preserving_time_units(input, &language, ISOLATED_NUMBER_THRESHOLD);
+    let text = replace_numbers_preserving_time_units(input, &language, threshold);
     if text == input {
         unchanged(input)
     } else {

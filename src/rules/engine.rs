@@ -8,7 +8,7 @@
 //! ordered pipeline, splicing user rules at their configured position
 //! relative to the built-in rule list.
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use fancy_regex::{Regex as FancyRegex, RegexBuilder as FancyRegexBuilder};
 use regex::Regex;
 use sha2::{Digest, Sha256};
@@ -111,8 +111,8 @@ impl EngineKind {
 }
 
 /// How a built-in [`Rule`] is compiled and applied: a linear-time `regex`
-/// pattern, a bounded `fancy-regex` pattern, or a procedural transform
-/// function.
+/// pattern, a bounded `fancy-regex` pattern, a procedural transform function,
+/// or the configurable spoken-number transform.
 #[derive(Clone, Copy)]
 pub(crate) enum RuleKind {
     Regex {
@@ -124,6 +124,7 @@ pub(crate) enum RuleKind {
         replacement: &'static str,
     },
     Procedural(fn(&str) -> TransformResult),
+    SpokenNumbers,
 }
 
 impl RuleKind {
@@ -134,7 +135,7 @@ impl RuleKind {
         match self {
             Self::Regex { .. } => EngineKind::Regex,
             Self::FancyRegex { .. } => EngineKind::FancyRegex,
-            Self::Procedural(_) => EngineKind::Procedural,
+            Self::Procedural(_) | Self::SpokenNumbers => EngineKind::Procedural,
         }
     }
 }
@@ -165,6 +166,9 @@ enum CompiledTransform {
         replacement: &'static str,
     },
     Procedural(fn(&str) -> TransformResult),
+    SpokenNumbers {
+        threshold: f64,
+    },
 }
 
 impl CompiledTransform {
@@ -172,7 +176,7 @@ impl CompiledTransform {
         match self {
             Self::Regex { .. } => EngineKind::Regex,
             Self::FancyRegex { .. } => EngineKind::FancyRegex,
-            Self::Procedural(_) => EngineKind::Procedural,
+            Self::Procedural(_) | Self::SpokenNumbers { .. } => EngineKind::Procedural,
         }
     }
 
@@ -183,7 +187,7 @@ impl CompiledTransform {
         match self {
             Self::Regex { re, replacement } => Some((re.as_str(), replacement.as_ref())),
             Self::FancyRegex { re, replacement } => Some((re.as_str(), replacement)),
-            Self::Procedural(_) => None,
+            Self::Procedural(_) | Self::SpokenNumbers { .. } => None,
         }
     }
 }
@@ -237,6 +241,9 @@ impl CompiledRule {
                 Ok(TransformResult { text, matches })
             }
             CompiledTransform::Procedural(transform) => Ok(transform(input)),
+            CompiledTransform::SpokenNumbers { threshold } => {
+                Ok(super::passes::normalize_spoken_numbers(input, *threshold))
+            }
         }
     }
 }
@@ -252,6 +259,7 @@ pub struct Cleaner {
     rules: Vec<CompiledRule>,
     profile: CleaningProfile,
     drop_trailing_period: bool,
+    number_threshold: Option<f64>,
     ruleset_id: String,
 }
 
@@ -264,6 +272,8 @@ impl Cleaner {
     /// * `profile` - Selected [`CleaningProfile`].
     /// * `drop_trailing_period` - Enable the messaging-style terminal-period
     ///   removal rule.
+    /// * `number_threshold` - Minimum isolated number converted to digits;
+    ///   `None` converts every recognized number.
     /// * `disabled` - Rule names to exclude, built-in or user-defined.
     /// * `user_rules` - User-defined rules to splice into the built-in list.
     ///
@@ -273,20 +283,24 @@ impl Cleaner {
     ///
     /// # Errors
     ///
-    /// Returns an error if user rule validation fails (see
-    /// [`validate_user_rules`]), if any enabled built-in pattern is an
-    /// invalid `regex` or `fancy-regex` expression, or if any enabled user
-    /// rule pattern is an invalid `regex` expression.
+    /// Returns an error if `number_threshold` is negative or non-finite, if
+    /// user rule validation fails (see [`validate_user_rules`]), if any
+    /// enabled built-in pattern is an invalid `regex` or `fancy-regex`
+    /// expression, or if any enabled user rule pattern is an invalid `regex`
+    /// expression.
     pub(crate) fn new(
         profile: CleaningProfile,
         drop_trailing_period: bool,
+        number_threshold: Option<f64>,
         disabled: &HashSet<String>,
         user_rules: &[UserRule],
     ) -> Result<Self> {
+        validate_number_threshold(number_threshold)?;
         validate_user_rules(user_rules)?;
         Self::assemble(
             profile,
             drop_trailing_period,
+            number_threshold,
             disabled,
             user_rules,
             FANCY_BACKTRACK_LIMIT,
@@ -327,6 +341,7 @@ impl Cleaner {
         Self::assemble(
             profile,
             drop_trailing_period,
+            None,
             disabled,
             user_rules,
             backtrack_limit,
@@ -336,10 +351,16 @@ impl Cleaner {
     fn assemble(
         profile: CleaningProfile,
         drop_trailing_period: bool,
+        number_threshold: Option<f64>,
         disabled: &HashSet<String>,
         user_rules: &[UserRule],
         backtrack_limit: usize,
     ) -> Result<Self> {
+        // Treat an explicit zero exactly like omission, including in log
+        // metadata and the ruleset fingerprint. Validation has already
+        // rejected negative and non-finite values.
+        let number_threshold = number_threshold.filter(|value| *value > 0.0);
+        let effective_number_threshold = number_threshold.unwrap_or(0.0);
         let enabled_defaults: Vec<&'static Rule> = DEFAULT_RULES
             .iter()
             .filter(|def| {
@@ -355,11 +376,19 @@ impl Cleaner {
         let mut rules = Vec::with_capacity(enabled_defaults.len() + user_rules.len());
         push_user_rules(&mut rules, user_rules, RulePosition::First, disabled)?;
         for def in &enabled_defaults[..cleanup_idx] {
-            rules.push(compile_default_rule(def, backtrack_limit)?);
+            rules.push(compile_default_rule(
+                def,
+                backtrack_limit,
+                effective_number_threshold,
+            )?);
         }
         push_user_rules(&mut rules, user_rules, RulePosition::Standard, disabled)?;
         for def in &enabled_defaults[cleanup_idx..] {
-            rules.push(compile_default_rule(def, backtrack_limit)?);
+            rules.push(compile_default_rule(
+                def,
+                backtrack_limit,
+                effective_number_threshold,
+            )?);
         }
         push_user_rules(&mut rules, user_rules, RulePosition::Last, disabled)?;
 
@@ -368,6 +397,7 @@ impl Cleaner {
             rules,
             profile,
             drop_trailing_period,
+            number_threshold,
             ruleset_id,
         })
     }
@@ -484,6 +514,17 @@ impl Cleaner {
         self.drop_trailing_period
     }
 
+    /// Configured minimum isolated number converted to digits.
+    ///
+    /// # Returns
+    ///
+    /// `None` when every recognized number is converted, otherwise the
+    /// configured positive threshold.
+    #[must_use]
+    pub const fn number_threshold(&self) -> Option<f64> {
+        self.number_threshold
+    }
+
     /// Stable identifier derived from the ordered enabled pass set,
     /// including spliced user rules.
     ///
@@ -497,7 +538,11 @@ impl Cleaner {
     }
 }
 
-fn compile_default_rule(def: &'static Rule, backtrack_limit: usize) -> Result<CompiledRule> {
+fn compile_default_rule(
+    def: &'static Rule,
+    backtrack_limit: usize,
+    number_threshold: f64,
+) -> Result<CompiledRule> {
     let transform = match def.kind {
         RuleKind::Regex {
             pattern,
@@ -521,6 +566,9 @@ fn compile_default_rule(def: &'static Rule, backtrack_limit: usize) -> Result<Co
             replacement,
         },
         RuleKind::Procedural(transform) => CompiledTransform::Procedural(transform),
+        RuleKind::SpokenNumbers => CompiledTransform::SpokenNumbers {
+            threshold: number_threshold,
+        },
     };
     Ok(CompiledRule {
         name: def.name.to_string(),
@@ -583,6 +631,14 @@ fn compute_ruleset_id(
             hasher.update([0]);
             hasher.update(replacement.as_bytes());
         }
+        if let CompiledTransform::SpokenNumbers { threshold } = &rule.transform {
+            // Procedural functions have no pattern text to fingerprint. Hash
+            // this configurable input so behaviorally different number
+            // policies can never share a ruleset identifier.
+            hasher.update([0]);
+            hasher.update(b"number-threshold");
+            hasher.update(threshold.to_bits().to_le_bytes());
+        }
         if let Some(position) = rule.position {
             hasher.update([0]);
             hasher.update(position.as_str().as_bytes());
@@ -595,4 +651,29 @@ fn compute_ruleset_id(
         write!(&mut short_hash, "{byte:02x}").expect("writing to String cannot fail");
     }
     format!("v{CLEANER_VERSION}-{}-{short_hash}", profile.as_str())
+}
+
+/// Validate the optional isolated-number conversion threshold.
+///
+/// # Arguments
+///
+/// * `threshold` - Minimum isolated numeric value rendered as digits, or
+///   `None` for the convert-all default.
+///
+/// # Returns
+///
+/// `Ok(())` when the threshold is absent, zero, or a finite positive value.
+///
+/// # Errors
+///
+/// Returns an error when the threshold is negative, NaN, or infinite.
+pub(crate) fn validate_number_threshold(threshold: Option<f64>) -> Result<()> {
+    if let Some(value) = threshold {
+        if !value.is_finite() || value < 0.0 {
+            bail!(
+                "number threshold must be a finite value greater than or equal to 0 (got {value})"
+            );
+        }
+    }
+    Ok(())
 }

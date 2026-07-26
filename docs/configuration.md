@@ -56,7 +56,7 @@ whether a mistake surfaces immediately or at next daemon start:
 
 | Checked when the file loads | Checked only when the daemon starts |
 | --- | --- |
-| TOML syntax; all enum values; `[[rules.user]]` name (non-empty, no surrounding whitespace), pattern (non-empty), regex validity, name collisions, duplicate names; `cleaning.disabled_rules` names | `daemon.model` path existence; `logging.dir` writability; hotkey backend availability |
+| TOML syntax; all enum values; `cleaning.number_threshold` (finite and nonnegative); `[[rules.user]]` name (non-empty, no surrounding whitespace), pattern (non-empty), regex validity, name collisions, duplicate names; `cleaning.disabled_rules` names | `daemon.model` path existence; `logging.dir` writability; hotkey backend availability |
 
 `parakit config show` runs the first column and fails on a broken file. Every
 other `parakit config` subcommand — `path`, `init`, `edit` — works regardless,
@@ -153,6 +153,16 @@ profile = <string>
 # stated as an intent rather than a rule name, so it survives rule renames.
 # Ignored when `enabled = false`.
 keep_trailing_period = <bool>
+
+# Minimum isolated numeric value rendered as digits. Default: unset, which
+# converts every recognized number; `0` has the same meaning.
+# Values strictly below the threshold stay as words, while the threshold
+# itself and larger values become digits. For example, `5` preserves isolated
+# `zero` through `four` and converts `five` and above.
+# Must be finite and >= 0. No CLI override exists.
+# This is text2num's isolated-number threshold. Structured expressions such as
+# multi-point versions are still normalized by their dedicated passes.
+number_threshold = <number >= 0>
 
 # Rule names to skip. Default: [] (no rules skipped).
 # Accepts any built-in or user rule name; `parakit --list-rules` prints the

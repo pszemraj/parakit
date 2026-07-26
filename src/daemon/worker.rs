@@ -124,6 +124,7 @@ fn worker_loop(ctx: WorkerCtx) {
     let drops_trailing_period = cleaner
         .as_deref()
         .is_some_and(Cleaner::drops_trailing_period);
+    let number_threshold = cleaner.as_deref().and_then(Cleaner::number_threshold);
     let mut injector = if insert_transcripts {
         match Injector::new() {
             Ok(mut injector) => match injector.prepare_for_mode(paste_mode) {
@@ -202,6 +203,7 @@ fn worker_loop(ctx: WorkerCtx) {
                                     profile: cleaning_profile,
                                     ruleset_id: ruleset_id.as_deref(),
                                     drops_trailing_period,
+                                    number_threshold,
                                     rules_fired: &transcript.rules_fired,
                                     failure: transcript.cleaning_failure.as_deref(),
                                 },
