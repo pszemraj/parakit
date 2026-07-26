@@ -43,7 +43,7 @@ fn safe_profile_preserves_semantic_you_know_phrases() {
         "You know the rules.",
         "You know what the report says.",
         "You know what to do.",
-        "You know Jira, right?",
+        "You know Jira?",
         "You know what I mean?",
     ];
     for input in cases {
@@ -122,6 +122,18 @@ fn safe_profile_renders_all_spoken_numbers_as_digits() {
     assert_eq!(
         clean(CleaningProfile::Safe, "Zero, one, two, three, four."),
         "0, 1, 2, 3, 4."
+    );
+}
+
+#[test]
+fn safe_profile_drops_complete_right_tag_questions() {
+    let input = "Okay, well could you iterate on that to make it a little bit more generic? I don't want to have to think through all that on the trim rule (In either case, it should be discoverable by the model, right?)";
+    let expected = "Okay, well could you iterate on that to make it a little bit more generic? I don't want to have to think through all that on the trim rule (In either case, it should be discoverable by the model.)";
+    assert_eq!(clean(CleaningProfile::Safe, input), expected);
+
+    assert_eq!(
+        clean(CleaningProfile::Safe, "Did I turn right?"),
+        "Did I turn right?"
     );
 }
 

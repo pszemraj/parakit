@@ -397,6 +397,13 @@ pub(crate) const DEFAULT_RULES: &[Rule] = &[
         r#"(?i)\bgimme\b"#,
         "give me"
     ),
+    regex_rule!(
+        "drop-right-tag-question",
+        "Replace the complete ', right?' tag question with a period",
+        Activation::Safe,
+        r#"(?i),[ \t]*right\?"#,
+        "."
+    ),
     // Mechanical cleanup and boundary-aware capitalization run last.
     regex_rule!(
         "fix-space-before-punct",

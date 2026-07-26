@@ -187,6 +187,25 @@ fn high_confidence_casual_forms_are_expanded() {
 }
 
 #[test]
+fn complete_right_tag_questions_become_periods() {
+    assert_clean_cases(
+        CleaningProfile::Safe,
+        &[
+            (
+                "The model can discover it, right?",
+                "The model can discover it.",
+            ),
+            (
+                "(In either case, it should be discoverable by the model, right?)",
+                "(In either case, it should be discoverable by the model.)",
+            ),
+            ("Turn right?", "Turn right?"),
+            ("Is that right?", "Is that right?"),
+        ],
+    );
+}
+
+#[test]
 fn spaced_uppercase_letters_collapse_by_invariant() {
     assert_clean_cases(
         CleaningProfile::Safe,
