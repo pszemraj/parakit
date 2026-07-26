@@ -382,21 +382,19 @@ impl Cli {
         self.keep_transcript_clipboard || config.daemon.keep_transcript_clipboard.unwrap_or(false)
     }
 
-    /// Return whether verbose diagnostics are enabled: CLI `--verbose` OR
-    /// config `daemon.verbose` (default false).
+    /// Return whether verbose diagnostics are enabled: not CLI `--quiet`,
+    /// and either CLI `--verbose` OR config `daemon.verbose` (default false).
     ///
     /// `--quiet` and `--verbose` conflict at the CLI level
-    /// (`conflicts_with`), so clap itself rejects passing both. A config
-    /// `verbose = true` cannot participate in that clap-level conflict
-    /// check, so callers that also honor `--quiet` must check `self.quiet`
-    /// first (see `app.rs::log_level`): quiet always wins, even over a
-    /// config file that requests verbose output.
+    /// (`conflicts_with`), but a config `verbose = true` cannot participate
+    /// in that check. Folding `quiet` into this helper keeps native-library
+    /// logging and application logging under the same quiet-mode contract.
     ///
     /// # Returns
     ///
     /// `true` when verbose diagnostics should print.
     pub(crate) fn effective_verbose(&self, config: &ConfigFile) -> bool {
-        self.verbose || config.daemon.verbose.unwrap_or(false)
+        !self.quiet && (self.verbose || config.daemon.verbose.unwrap_or(false))
     }
 
     /// Return the number of transcripts kept in daemon memory: config
@@ -632,15 +630,13 @@ mod tests {
     #[test]
     fn effective_verbose_config_true_does_not_override_cli_quiet() {
         // `--quiet` and `--verbose` conflict at the CLI level, but a config
-        // `verbose = true` cannot participate in that check. Callers must
-        // check `cli.quiet` before `effective_verbose` (see `app.rs`), so
-        // this test documents that `effective_verbose` alone still reports
-        // `true` here -- the "quiet wins" behavior lives in the caller.
+        // `verbose = true` cannot participate in that check. Effective
+        // verbosity must still keep every logging layer quiet.
         let mut config = ConfigFile::default();
         config.daemon.verbose = Some(true);
         let cli = cli_from(&["--quiet"]);
         assert!(cli.quiet);
-        assert!(cli.effective_verbose(&config));
+        assert!(!cli.effective_verbose(&config));
     }
 
     #[test]
