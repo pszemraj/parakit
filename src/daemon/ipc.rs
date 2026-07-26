@@ -416,13 +416,11 @@ impl SharedState {
     fn history_snapshot(&self, limit: Option<usize>) -> Vec<HistoryEntry> {
         let inner = self.inner.lock();
         let now = Instant::now();
-        let entries = inner.history.iter().enumerate();
-        let capped: Vec<_> = match limit {
-            Some(limit) => entries.take(limit).collect(),
-            None => entries.collect(),
-        };
-        capped
-            .into_iter()
+        inner
+            .history
+            .iter()
+            .enumerate()
+            .take(limit.unwrap_or(usize::MAX))
             .map(|(position, entry)| HistoryEntry {
                 index: position + 1,
                 age_secs: now.saturating_duration_since(entry.at).as_secs(),
