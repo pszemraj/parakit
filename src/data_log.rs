@@ -67,6 +67,7 @@ pub struct CleaningLogFields<'a> {
 #[derive(Debug, Serialize)]
 struct LogRecord<'a> {
     ts: String,
+    parakit_version: &'static str,
     audio_secs: f32,
     infer_ms: u128,
     raw: &'a str,
@@ -130,6 +131,12 @@ struct InsertionLogRecord<'a> {
     clipboard_restored: Option<bool>,
     failure_reason: Option<&'a str>,
 }
+
+/// Number of TSV columns written before cleaning and insertion telemetry.
+///
+/// The original six transcript columns retain their order; the embedded
+/// Parakit package version is the seventh.
+const BASE_TSV_COLUMNS: usize = 7;
 
 /// Number of TSV columns carrying cleaning telemetry, written immediately
 /// after the base columns and before the (possibly deferred) insertion
@@ -269,6 +276,7 @@ impl DataLogger {
         let ts = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
         let record = LogRecord {
             ts,
+            parakit_version: crate::build_info::PACKAGE_VERSION,
             audio_secs,
             infer_ms: infer.as_millis(),
             raw,
@@ -292,14 +300,16 @@ impl DataLogger {
             LogFormat::Tsv => {
                 self.sweep_stale_pending_tsv_rows()?;
                 let base = format!(
-                    "{}\t{:.3}\t{}\t{}\t{}\t{}",
+                    "{}\t{:.3}\t{}\t{}\t{}\t{}\t{}",
                     record.ts,
                     record.audio_secs,
                     record.infer_ms,
                     sanitize_tsv(record.raw),
                     sanitize_tsv(record.cleaned),
-                    record.rules_active
+                    record.rules_active,
+                    record.parakit_version
                 );
+                debug_assert_eq!(base.matches('\t').count() + 1, BASE_TSV_COLUMNS);
                 let prefix = tsv_row_with_cells(&base, &cleaning_tsv_cells(&cleaning));
                 self.pending_tsv.lock().insert(
                     id.0,
@@ -575,6 +585,7 @@ mod tests {
         for line in contents.lines() {
             let value: serde_json::Value = serde_json::from_str(line).expect("valid jsonl");
             assert_eq!(value["rules_active"], 72);
+            assert_eq!(value["parakit_version"], crate::build_info::PACKAGE_VERSION);
         }
     }
 
@@ -641,6 +652,10 @@ mod tests {
             "transcript record must not gain a kind key"
         );
         assert_eq!(transcript["cleaned"], "cleaned text");
+        assert_eq!(
+            transcript["parakit_version"],
+            crate::build_info::PACKAGE_VERSION
+        );
 
         let insertion: serde_json::Value =
             serde_json::from_str(lines[1]).expect("valid insertion jsonl");
@@ -685,26 +700,34 @@ mod tests {
         let lines: Vec<&str> = contents.lines().collect();
         assert_eq!(lines.len(), 1);
         let cols: Vec<&str> = lines[0].split('\t').collect();
-        assert_eq!(cols.len(), 6 + CLEANING_TSV_COLUMNS + INSERTION_TSV_COLUMNS);
+        assert_eq!(
+            cols.len(),
+            BASE_TSV_COLUMNS + CLEANING_TSV_COLUMNS + INSERTION_TSV_COLUMNS
+        );
         assert_eq!(cols[3], "raw");
         assert_eq!(cols[4], "cleaned");
         assert_eq!(cols[5], "5", "rules_active");
-        assert_eq!(cols[6], "1", "cleaner_version");
-        assert_eq!(cols[7], "safe", "profile");
-        assert_eq!(cols[8], "safe-v1", "ruleset_id");
-        assert_eq!(cols[9], "true", "drops_trailing_period");
-        assert_eq!(cols[10], "", "rules_fired (none fired)");
-        assert_eq!(cols[11], "", "cleaning failure (none)");
-        assert_eq!(cols[12], "pasted");
-        assert_eq!(cols[13], "com.example.App");
-        assert_eq!(cols[14], "not_applicable");
-        assert_eq!(cols[15], "12");
-        assert_eq!(cols[16], "true");
-        assert_eq!(cols[17], "");
-        assert_eq!(cols[18], "not_applicable");
-        assert_eq!(cols[19], "120");
-        assert_eq!(cols[20], "true");
-        assert_eq!(cols[21], "");
+        assert_eq!(
+            cols[6],
+            crate::build_info::PACKAGE_VERSION,
+            "parakit_version"
+        );
+        assert_eq!(cols[7], "1", "cleaner_version");
+        assert_eq!(cols[8], "safe", "profile");
+        assert_eq!(cols[9], "safe-v1", "ruleset_id");
+        assert_eq!(cols[10], "true", "drops_trailing_period");
+        assert_eq!(cols[11], "", "rules_fired (none fired)");
+        assert_eq!(cols[12], "", "cleaning failure (none)");
+        assert_eq!(cols[13], "pasted");
+        assert_eq!(cols[14], "com.example.App");
+        assert_eq!(cols[15], "not_applicable");
+        assert_eq!(cols[16], "12");
+        assert_eq!(cols[17], "true");
+        assert_eq!(cols[18], "");
+        assert_eq!(cols[19], "not_applicable");
+        assert_eq!(cols[20], "120");
+        assert_eq!(cols[21], "true");
+        assert_eq!(cols[22], "");
     }
 
     #[test]
@@ -734,16 +757,21 @@ mod tests {
         let cols: Vec<&str> = row.prefix.split('\t').collect();
         assert_eq!(
             cols.len(),
-            6 + CLEANING_TSV_COLUMNS,
+            BASE_TSV_COLUMNS + CLEANING_TSV_COLUMNS,
             "pending prefix should hold base + cleaning columns only, no insertion columns yet"
         );
         assert_eq!(cols[5], "5", "rules_active");
-        assert_eq!(cols[6], "2", "cleaner_version");
-        assert_eq!(cols[7], "aggressive", "profile");
-        assert_eq!(cols[8], "aggressive-v2", "ruleset_id");
-        assert_eq!(cols[9], "false", "drops_trailing_period");
-        assert_eq!(cols[10], "trailing_period:1", "rules_fired");
-        assert_eq!(cols[11], "", "cleaning failure (none)");
+        assert_eq!(
+            cols[6],
+            crate::build_info::PACKAGE_VERSION,
+            "parakit_version"
+        );
+        assert_eq!(cols[7], "2", "cleaner_version");
+        assert_eq!(cols[8], "aggressive", "profile");
+        assert_eq!(cols[9], "aggressive-v2", "ruleset_id");
+        assert_eq!(cols[10], "false", "drops_trailing_period");
+        assert_eq!(cols[11], "trailing_period:1", "rules_fired");
+        assert_eq!(cols[12], "", "cleaning failure (none)");
     }
 
     #[test]
@@ -793,25 +821,33 @@ mod tests {
         );
 
         let cols: Vec<&str> = lines[0].split('\t').collect();
-        assert_eq!(cols.len(), 6 + CLEANING_TSV_COLUMNS + INSERTION_TSV_COLUMNS);
+        assert_eq!(
+            cols.len(),
+            BASE_TSV_COLUMNS + CLEANING_TSV_COLUMNS + INSERTION_TSV_COLUMNS
+        );
         assert_eq!(cols[3], "orphan raw");
         assert_eq!(cols[4], "orphan cleaned");
         assert_eq!(cols[5], "1", "rules_active still carried through the sweep");
         assert_eq!(
-            cols[6], "1",
+            cols[6],
+            crate::build_info::PACKAGE_VERSION,
+            "parakit_version still carried through the sweep"
+        );
+        assert_eq!(
+            cols[7], "1",
             "cleaner_version still carried through the sweep"
         );
-        assert_eq!(cols[7], "safe", "profile still carried through the sweep");
+        assert_eq!(cols[8], "safe", "profile still carried through the sweep");
         assert_eq!(
-            cols[8], "safe-v1",
+            cols[9], "safe-v1",
             "ruleset_id still carried through the sweep"
         );
         assert_eq!(
-            cols[9], "true",
+            cols[10], "true",
             "drops_trailing_period still carried through the sweep"
         );
-        assert_eq!(cols[10], "", "rules_fired still carried through the sweep");
-        for col in &cols[12..] {
+        assert_eq!(cols[11], "", "rules_fired still carried through the sweep");
+        for col in &cols[13..] {
             assert!(
                 col.is_empty(),
                 "insertion columns should be empty for a swept orphan row"
@@ -839,10 +875,14 @@ mod tests {
         let lines: Vec<&str> = contents.lines().collect();
         assert_eq!(lines.len(), 1);
         let cols: Vec<&str> = lines[0].split('\t').collect();
-        assert_eq!(cols.len(), 6 + CLEANING_TSV_COLUMNS + INSERTION_TSV_COLUMNS);
+        assert_eq!(
+            cols.len(),
+            BASE_TSV_COLUMNS + CLEANING_TSV_COLUMNS + INSERTION_TSV_COLUMNS
+        );
         assert_eq!(cols[3], "raw");
         assert_eq!(cols[4], "cleaned");
-        assert!(cols[12..].iter().all(|col| col.is_empty()));
+        assert_eq!(cols[6], crate::build_info::PACKAGE_VERSION);
+        assert!(cols[13..].iter().all(|col| col.is_empty()));
     }
 
     #[test]
@@ -878,6 +918,7 @@ mod tests {
             serde_json::from_str(contents.lines().next().expect("one line")).expect("valid jsonl");
 
         assert_eq!(value["rules_active"], 4);
+        assert_eq!(value["parakit_version"], crate::build_info::PACKAGE_VERSION);
         assert_eq!(value["cleaner_version"], 7);
         assert_eq!(value["cleaning_profile"], "aggressive");
         assert_eq!(value["ruleset_id"], "aggressive-v7");

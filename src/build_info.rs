@@ -1,5 +1,8 @@
 //! Build-time CrispASR and ggml configuration reported by `build.rs`.
 
+/// Cargo package version embedded in the running Parakit binary.
+pub const PACKAGE_VERSION: &str = env!("CARGO_PKG_VERSION");
+
 macro_rules! build_value {
     ($key:literal) => {
         option_env!($key).unwrap_or("unknown")

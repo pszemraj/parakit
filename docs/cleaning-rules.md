@@ -164,6 +164,7 @@ A user rule named in `disabled_rules` is never compiled, so parking a rule with 
 
 Transcription records include:
 
+- `parakit_version`, the Cargo package version embedded in the running binary;
 - `cleaner_version`;
 - `cleaning_profile`, one of `safe`, `aggressive`, or `disabled`;
 - `ruleset_id`, derived from the ordered enabled pass set, including user rules;
