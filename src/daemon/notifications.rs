@@ -123,9 +123,10 @@ fn show_notification(_summary: &str, _body: &str) -> anyhow::Result<()> {
 /// Escape a string for embedding in a double-quoted AppleScript string
 /// literal.
 ///
-/// Only backslash and double-quote need escaping in AppleScript string
-/// literals; every other character, including non-ASCII text, passes
-/// through unchanged.
+/// Backslash, double-quote, line feed, and carriage return are escaped so
+/// untrusted notification text cannot terminate the source line or string
+/// literal. Every other character, including non-ASCII text, passes through
+/// unchanged.
 ///
 /// # Arguments
 ///
@@ -133,8 +134,8 @@ fn show_notification(_summary: &str, _body: &str) -> anyhow::Result<()> {
 ///
 /// # Returns
 ///
-/// `s` with backslashes and double quotes escaped. The caller is
-/// responsible for wrapping the result in the surrounding double quotes.
+/// `s` with AppleScript source-significant characters escaped. The caller
+/// is responsible for wrapping the result in the surrounding double quotes.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn applescript_quote(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
@@ -142,6 +143,8 @@ fn applescript_quote(s: &str) -> String {
         match ch {
             '\\' => out.push_str("\\\\"),
             '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
             other => out.push(other),
         }
     }
@@ -165,6 +168,14 @@ mod tests {
     #[test]
     fn applescript_quote_passes_through_unicode() {
         assert_eq!(applescript_quote("héllo wörld 你好"), "héllo wörld 你好");
+    }
+
+    #[test]
+    fn applescript_quote_escapes_line_endings() {
+        assert_eq!(
+            applescript_quote("first\nsecond\rthird\r\nfourth"),
+            r"first\nsecond\rthird\r\nfourth"
+        );
     }
 
     #[test]
