@@ -144,6 +144,38 @@ disabled_rules = ["weights-and-biases-to-wandb"]
 
 `parakit --list-rules` prints user rules in a separate `(user)` section below the built-in rule list.
 
+### Edit Rules Without Rebuilding
+
+User rules are runtime configuration, not compiled into the parakit binary.
+Each process reads `config.toml`, validates the rule definitions, and compiles
+their regexes once while constructing the cleaner. Dictations then reuse that
+compiled pipeline, so there is no TOML parsing or regex compilation on the
+per-dictation hot path. Editing a rule never runs Cargo, rebuilds parakit,
+downloads a model, or converts model weights.
+
+Use this fast edit-and-test loop even while the daemon is running:
+
+```bash
+parakit config edit
+parakit config show
+parakit --test-rules "A representative dictation to clean."
+parakit --list-rules
+```
+
+`config show` validates the whole file. `--test-rules` and `--list-rules` load
+the edited rules in a short-lived process and exit before model, microphone,
+hotkey, or daemon startup. Once the output is right, run `parakit stop` and
+relaunch the daemon with the same startup command you normally use. The
+running daemon intentionally keeps its startup cleaner until restart; the
+config file is not watched for live changes.
+
+A built-in rule can be replaced without rebuilding by listing its name in
+`cleaning.disabled_rules` and adding a differently named `[[rules.user]]`
+replacement. Runtime user rules deliberately use the standard Rust `regex`
+dialect. Context-sensitive procedural transforms such as number/version
+parsing and sentence capitalization remain Rust code unless they expose a
+specific config setting such as `cleaning.number_threshold`.
+
 ### Validation Errors
 
 A broken user rule is a hard error at config load time (`parakit config show` or daemon startup), naming the offending rule:
