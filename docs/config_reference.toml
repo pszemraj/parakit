@@ -183,22 +183,11 @@
 # directory off. Paths receive no ~ or environment expansion, and relative
 # paths resolve from the process working directory.
 # The directory is created lazily. An append-only
-# parakit-YYYY-MM-DD.jsonl or .tsv file is opened on the first write and
-# rotates when the local date changes. Failures warn and dictation continues,
-# but the synchronous write can delay worker progress.
+# parakit-YYYY-MM-DD.jsonl file is opened on the first write and rotates when
+# the local date changes. Each record is flushed immediately. Failures warn
+# and dictation continues, but the synchronous write can delay worker progress.
 # Logs contain plaintext transcripts and have no retention or size cap.
 # This setting also logs hidden --simulate-ptt-audio runs.
-
-# logging.format
-# Type: string (optional). Default: "jsonl". Valid config values: "jsonl" |
-# "tsv". CLI --log-format overrides it and additionally accepts "json".
-# Directory and format merge independently: CLI --log-dir can use this
-# configured format, and CLI --log-format can use a configured logging.dir.
-# Used only when logging.dir is effective, but invalid values always fail
-# config parsing. JSONL writes correlated transcript/insertion records; TSV
-# buffers one combined row until insertion, a later log operation sweeps it
-# after 30 seconds, or an orderly parakit stop/logger drop flushes it. A crash
-# or abrupt process termination can lose the one pending in-memory TSV row.
 
 
 # [hotkey]

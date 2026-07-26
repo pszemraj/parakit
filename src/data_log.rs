@@ -5,36 +5,11 @@ use anyhow::{Context, Result};
 use chrono::{Local, NaiveDate, SecondsFormat, Utc};
 use parking_lot::Mutex;
 use serde::Serialize;
-use std::collections::HashMap;
 use std::fs::{create_dir_all, File, OpenOptions};
 use std::io::{BufWriter, Write};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{Duration, Instant};
-
-/// On-disk format used for transcription logs.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum LogFormat {
-    /// Newline-delimited JSON records.
-    Jsonl,
-    /// Tab-separated records.
-    Tsv,
-}
-
-impl std::str::FromStr for LogFormat {
-    type Err = anyhow::Error;
-
-    fn from_str(s: &str) -> Result<Self> {
-        match s {
-            "jsonl" | "json" => Ok(Self::Jsonl),
-            "tsv" => Ok(Self::Tsv),
-            other => Err(anyhow::anyhow!(
-                "unknown log format '{other}'. Expected 'jsonl' or 'tsv'"
-            )),
-        }
-    }
-}
+use std::time::Duration;
 
 /// Identifier returned by [`DataLogger::log`] that correlates a
 /// transcription record with its later insertion outcome recorded through
@@ -135,76 +110,43 @@ struct InsertionLogRecord<'a> {
     failure_reason: Option<&'a str>,
 }
 
-/// Number of TSV columns written before cleaning and insertion telemetry.
-///
-/// The original six transcript columns retain their order; the embedded
-/// Parakit package version is the seventh.
-const BASE_TSV_COLUMNS: usize = 7;
-
-/// Number of TSV columns carrying cleaning telemetry, written immediately
-/// after the base columns and before the (possibly deferred) insertion
-/// columns.
-const CLEANING_TSV_COLUMNS: usize = 7;
-
-/// Number of trailing TSV columns appended by an insertion record.
-const INSERTION_TSV_COLUMNS: usize = 10;
-
-/// Maximum time a TSV transcription row waits for its insertion outcome
-/// before it is flushed with empty insertion columns.
-const PENDING_TSV_MAX_AGE: Duration = Duration::from_secs(30);
-
 struct LogState {
     date: NaiveDate,
     file: BufWriter<File>,
 }
 
-/// A TSV transcription row buffered until its insertion outcome is known.
-struct PendingTsvRow {
-    queued_at: Instant,
-    prefix: String,
-}
-
-/// Synchronous transcription logger with lazy daily file rotation.
+/// Synchronous JSONL transcription logger with lazy daily file rotation.
 pub struct DataLogger {
     dir: PathBuf,
-    format: LogFormat,
     state: Mutex<Option<LogState>>,
     next_id: AtomicU64,
-    /// TSV rows written by [`DataLogger::log`] but not yet completed by a
-    /// matching [`DataLogger::log_insertion`] call. Unused for JSONL, which
-    /// correlates the two records by `ref_id` instead of by buffering.
-    pending_tsv: Mutex<HashMap<u64, PendingTsvRow>>,
 }
 
 impl DataLogger {
-    /// Build a logger for `dir` using the requested format.
+    /// Build a JSONL logger for `dir`.
     ///
     /// Files are opened lazily on the first write.
     ///
     /// # Arguments
     ///
     /// * `dir` - Directory that will receive daily log files.
-    /// * `format` - File format to use for new log records.
     ///
     /// # Returns
     ///
     /// A logger ready to write records.
-    pub fn new(dir: PathBuf, format: LogFormat) -> Self {
+    pub fn new(dir: PathBuf) -> Self {
         Self {
             dir,
-            format,
             state: Mutex::new(None),
             next_id: AtomicU64::new(0),
-            pending_tsv: Mutex::new(HashMap::new()),
         }
     }
 
     /// Write one transcription record.
     ///
     /// Logging failures are printed to stderr and never propagated to the
-    /// caller, because logging must not crash or block dictation. For the
-    /// TSV format, the row is buffered rather than written immediately; see
-    /// [`DataLogger::log_insertion`].
+    /// caller, because logging must not crash dictation. The JSONL record is
+    /// flushed before this method returns.
     ///
     /// # Arguments
     ///
@@ -227,7 +169,7 @@ impl DataLogger {
         cleaning: CleaningLogFields<'_>,
     ) -> RecordId {
         let id = RecordId(self.next_id.fetch_add(1, Ordering::Relaxed));
-        if let Err(e) = self.try_log(id, audio_secs, infer, raw, cleaned, cleaning) {
+        if let Err(e) = self.try_log(audio_secs, infer, raw, cleaned, cleaning) {
             eprintln!("parakit: transcription log write failed: {e:#}");
         }
         id
@@ -236,13 +178,9 @@ impl DataLogger {
     /// Write the insertion outcome for a record previously returned by
     /// [`DataLogger::log`].
     ///
-    /// For JSONL, this appends a second, independently parseable line
-    /// carrying `"kind":"insertion"` and `"ref_id"` set to the original
-    /// record's identifier. For TSV, this completes the buffered row from
-    /// `log` by appending fixed-order trailing columns and writing the row;
-    /// calling this for an id whose row already aged out (see
-    /// [`PENDING_TSV_MAX_AGE`]) is a no-op, since that row was already
-    /// flushed with empty insertion columns.
+    /// This appends a second, independently parseable JSONL line carrying
+    /// `"kind":"insertion"` and `"ref_id"` set to the original record's
+    /// identifier.
     ///
     /// Logging failures are printed to stderr and never propagated, for the
     /// same reason as [`DataLogger::log`].
@@ -257,19 +195,8 @@ impl DataLogger {
         }
     }
 
-    /// Flush every pending TSV transcription with empty insertion columns.
-    ///
-    /// Used during deterministic daemon shutdown so a buffered transcription
-    /// is not lost. This is a no-op for JSONL.
-    pub fn flush_pending(&self) {
-        if let Err(e) = self.try_flush_pending_tsv_rows() {
-            eprintln!("parakit: pending transcription log flush failed: {e:#}");
-        }
-    }
-
     fn try_log(
         &self,
-        id: RecordId,
         audio_secs: f32,
         infer: Duration,
         raw: &str,
@@ -294,130 +221,35 @@ impl DataLogger {
             cleaning_failure: cleaning.failure,
         };
 
-        match self.format {
-            LogFormat::Jsonl => self.with_state(|state| {
-                serde_json::to_writer(&mut state.file, &record)
-                    .context("failed to serialize jsonl log record")?;
-                writeln!(state.file).context("failed to write jsonl newline")?;
-                state.file.flush().context("failed to flush log file")
-            }),
-            LogFormat::Tsv => {
-                self.sweep_stale_pending_tsv_rows()?;
-                let base = format!(
-                    "{}\t{:.3}\t{}\t{}\t{}\t{}\t{}",
-                    record.ts,
-                    record.audio_secs,
-                    record.infer_ms,
-                    sanitize_tsv(record.raw),
-                    sanitize_tsv(record.cleaned),
-                    record.rules_active,
-                    record.parakit_version
-                );
-                debug_assert_eq!(base.matches('\t').count() + 1, BASE_TSV_COLUMNS);
-                let prefix = tsv_row_with_cells(&base, &cleaning_tsv_cells(&cleaning));
-                self.pending_tsv.lock().insert(
-                    id.0,
-                    PendingTsvRow {
-                        queued_at: Instant::now(),
-                        prefix,
-                    },
-                );
-                Ok(())
-            }
-        }
+        self.with_state(|state| {
+            serde_json::to_writer(&mut state.file, &record)
+                .context("failed to serialize jsonl log record")?;
+            writeln!(state.file).context("failed to write jsonl newline")?;
+            state.file.flush().context("failed to flush log file")
+        })
     }
 
     fn try_log_insertion(&self, id: RecordId, fields: &InsertionLogFields<'_>) -> Result<()> {
-        match self.format {
-            LogFormat::Jsonl => {
-                let ts = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
-                let record = InsertionLogRecord {
-                    kind: "insertion",
-                    ts,
-                    ref_id: id.0,
-                    outcome: fields.outcome,
-                    target_bundle_id: fields.target_bundle_id,
-                    focus_verification: fields.focus_verification,
-                    transcript_chars: fields.transcript_chars,
-                    paste_event_posted: fields.paste_event_posted,
-                    pasteboard_requested: fields.pasteboard_requested,
-                    acknowledgement_kind: fields.acknowledgement_kind,
-                    acknowledgement_ms: fields.acknowledgement_ms,
-                    clipboard_restored: fields.clipboard_restored,
-                    failure_reason: fields.failure_reason,
-                };
-                self.with_state(|state| {
-                    serde_json::to_writer(&mut state.file, &record)
-                        .context("failed to serialize jsonl insertion record")?;
-                    writeln!(state.file).context("failed to write jsonl newline")?;
-                    state.file.flush().context("failed to flush log file")
-                })
-            }
-            LogFormat::Tsv => {
-                self.sweep_stale_pending_tsv_rows()?;
-                let Some(pending) = self.pending_tsv.lock().remove(&id.0) else {
-                    // The row already aged out of the pending map and was
-                    // flushed with empty insertion columns by the sweep
-                    // above; there is nothing left to complete for a TSV
-                    // file's single-row-per-record layout.
-                    return Ok(());
-                };
-                let line = tsv_row_with_cells(&pending.prefix, &insertion_tsv_cells(fields));
-                self.with_state(|state| {
-                    writeln!(state.file, "{line}")
-                        .context("failed to write tsv insertion record")?;
-                    state.file.flush().context("failed to flush log file")
-                })
-            }
-        }
-    }
-
-    /// Flush TSV rows that have waited longer than [`PENDING_TSV_MAX_AGE`]
-    /// for their insertion outcome, so a dropped or unusually delayed
-    /// [`DataLogger::log_insertion`] call never silently discards the
-    /// transcript itself.
-    fn sweep_stale_pending_tsv_rows(&self) -> Result<()> {
-        let now = Instant::now();
-        let stale: Vec<(u64, PendingTsvRow)> = {
-            let mut pending = self.pending_tsv.lock();
-            let stale_ids: Vec<u64> = pending
-                .iter()
-                .filter(|(_, row)| {
-                    now.saturating_duration_since(row.queued_at) >= PENDING_TSV_MAX_AGE
-                })
-                .map(|(id, _)| *id)
-                .collect();
-            stale_ids
-                .into_iter()
-                .filter_map(|id| pending.remove(&id).map(|row| (id, row)))
-                .collect()
+        let ts = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+        let record = InsertionLogRecord {
+            kind: "insertion",
+            ts,
+            ref_id: id.0,
+            outcome: fields.outcome,
+            target_bundle_id: fields.target_bundle_id,
+            focus_verification: fields.focus_verification,
+            transcript_chars: fields.transcript_chars,
+            paste_event_posted: fields.paste_event_posted,
+            pasteboard_requested: fields.pasteboard_requested,
+            acknowledgement_kind: fields.acknowledgement_kind,
+            acknowledgement_ms: fields.acknowledgement_ms,
+            clipboard_restored: fields.clipboard_restored,
+            failure_reason: fields.failure_reason,
         };
-        self.flush_tsv_rows(stale)
-    }
-
-    fn try_flush_pending_tsv_rows(&self) -> Result<()> {
-        if self.format != LogFormat::Tsv {
-            return Ok(());
-        }
-        let pending = {
-            let mut pending = self.pending_tsv.lock();
-            pending.drain().collect()
-        };
-        self.flush_tsv_rows(pending)
-    }
-
-    fn flush_tsv_rows(&self, mut rows: Vec<(u64, PendingTsvRow)>) -> Result<()> {
-        if rows.is_empty() {
-            return Ok(());
-        }
-        rows.sort_unstable_by_key(|(id, _)| *id);
-        let empty_cells = empty_insertion_tsv_cells();
         self.with_state(|state| {
-            for (_, row) in &rows {
-                let line = tsv_row_with_cells(&row.prefix, &empty_cells);
-                writeln!(state.file, "{line}")
-                    .context("failed to write orphaned tsv log record")?;
-            }
+            serde_json::to_writer(&mut state.file, &record)
+                .context("failed to serialize jsonl insertion record")?;
+            writeln!(state.file).context("failed to write jsonl newline")?;
             state.file.flush().context("failed to flush log file")
         })
     }
@@ -445,7 +277,7 @@ impl DataLogger {
     fn open_for_date(&self, date: NaiveDate) -> Result<BufWriter<File>> {
         create_dir_all(&self.dir)
             .with_context(|| format!("failed to create log dir {}", self.dir.display()))?;
-        let path = self.dir.join(file_name(date, self.format));
+        let path = self.dir.join(file_name(date));
         let file = OpenOptions::new()
             .create(true)
             .append(true)
@@ -455,102 +287,8 @@ impl DataLogger {
     }
 }
 
-impl Drop for DataLogger {
-    fn drop(&mut self) {
-        self.flush_pending();
-    }
-}
-
-fn file_name(date: NaiveDate, format: LogFormat) -> String {
-    let ext = match format {
-        LogFormat::Jsonl => "jsonl",
-        LogFormat::Tsv => "tsv",
-    };
-    format!("parakit-{}.{}", date.format("%Y-%m-%d"), ext)
-}
-
-fn sanitize_tsv(s: &str) -> String {
-    s.chars()
-        .map(|c| match c {
-            '\t' | '\r' | '\n' => ' ',
-            other => other,
-        })
-        .collect()
-}
-
-fn opt_bool_cell(value: Option<bool>) -> String {
-    match value {
-        Some(true) => "true".to_string(),
-        Some(false) => "false".to_string(),
-        None => String::new(),
-    }
-}
-
-fn insertion_tsv_cells(fields: &InsertionLogFields<'_>) -> [String; INSERTION_TSV_COLUMNS] {
-    [
-        sanitize_tsv(fields.outcome),
-        fields
-            .target_bundle_id
-            .map(sanitize_tsv)
-            .unwrap_or_default(),
-        sanitize_tsv(fields.focus_verification),
-        fields.transcript_chars.to_string(),
-        fields.paste_event_posted.to_string(),
-        opt_bool_cell(fields.pasteboard_requested),
-        sanitize_tsv(fields.acknowledgement_kind),
-        fields
-            .acknowledgement_ms
-            .map(|ms| ms.to_string())
-            .unwrap_or_default(),
-        opt_bool_cell(fields.clipboard_restored),
-        fields.failure_reason.map(sanitize_tsv).unwrap_or_default(),
-    ]
-}
-
-fn empty_insertion_tsv_cells() -> [String; INSERTION_TSV_COLUMNS] {
-    std::array::from_fn(|_| String::new())
-}
-
-/// Encode fired cleaning rules as a single TSV cell: `name:count` pairs
-/// joined by `;`, or an empty string when no rules fired.
-fn encode_rules_fired(hits: &[RuleHit]) -> String {
-    hits.iter()
-        .map(|hit| format!("{}:{}", hit.name, hit.matches))
-        .collect::<Vec<_>>()
-        .join(";")
-}
-
-fn cleaning_tsv_cells(fields: &CleaningLogFields<'_>) -> [String; CLEANING_TSV_COLUMNS] {
-    [
-        fields.cleaner_version.to_string(),
-        sanitize_tsv(fields.profile),
-        fields.ruleset_id.map(sanitize_tsv).unwrap_or_default(),
-        fields.drops_trailing_period.to_string(),
-        fields
-            .number_threshold
-            .map(|value| value.to_string())
-            .unwrap_or_default(),
-        sanitize_tsv(&encode_rules_fired(fields.rules_fired)),
-        fields.failure.map(sanitize_tsv).unwrap_or_default(),
-    ]
-}
-
-#[cfg(test)]
-fn empty_cleaning_tsv_cells() -> [String; CLEANING_TSV_COLUMNS] {
-    std::array::from_fn(|_| String::new())
-}
-
-/// Append tab-separated `cells` to `prefix`, used to build TSV rows from
-/// both the cleaning cells (appended immediately, in [`DataLogger::log`])
-/// and the insertion cells (appended later, or as an empty fallback when a
-/// pending row ages out).
-fn tsv_row_with_cells<const N: usize>(prefix: &str, cells: &[String; N]) -> String {
-    let mut line = String::from(prefix);
-    for cell in cells {
-        line.push('\t');
-        line.push_str(cell);
-    }
-    line
+fn file_name(date: NaiveDate) -> String {
+    format!("parakit-{}.jsonl", date.format("%Y-%m-%d"))
 }
 
 #[cfg(test)]
@@ -561,7 +299,7 @@ mod tests {
     #[test]
     fn concurrent_jsonl_logging_writes_all_lines() {
         let dir = crate::test_support::fixture_root("parakit-log-test", "jsonl");
-        let logger = Arc::new(DataLogger::new(dir.clone(), LogFormat::Jsonl));
+        let logger = Arc::new(DataLogger::new(dir.clone()));
 
         let mut threads = Vec::new();
         for thread_id in 0..10 {
@@ -587,7 +325,7 @@ mod tests {
         }
 
         let date = Local::now().date_naive();
-        let path = dir.join(file_name(date, LogFormat::Jsonl));
+        let path = dir.join(file_name(date));
         let contents = std::fs::read_to_string(&path).expect("read log file");
         assert_eq!(contents.lines().count(), 1000);
         for line in contents.lines() {
@@ -595,11 +333,6 @@ mod tests {
             assert_eq!(value["rules_active"], 72);
             assert_eq!(value["parakit_version"], crate::build_info::PACKAGE_VERSION);
         }
-    }
-
-    #[test]
-    fn tsv_sanitizes_tabs_and_newlines() {
-        assert_eq!(sanitize_tsv("a\tb\nc\rd"), "a b c d");
     }
 
     fn sample_insertion_fields() -> InsertionLogFields<'static> {
@@ -633,7 +366,7 @@ mod tests {
     #[test]
     fn jsonl_log_insertion_emits_correlated_second_line() {
         let dir = crate::test_support::fixture_root("parakit-log-test", "jsonl-insertion");
-        let logger = DataLogger::new(dir.clone(), LogFormat::Jsonl);
+        let logger = DataLogger::new(dir.clone());
 
         let id = logger.log(
             1.5,
@@ -645,7 +378,7 @@ mod tests {
         logger.log_insertion(id, sample_insertion_fields());
 
         let date = Local::now().date_naive();
-        let path = dir.join(file_name(date, LogFormat::Jsonl));
+        let path = dir.join(file_name(date));
         let contents = std::fs::read_to_string(&path).expect("read log file");
         let lines: Vec<&str> = contents.lines().collect();
         assert_eq!(
@@ -680,231 +413,9 @@ mod tests {
     }
 
     #[test]
-    fn tsv_row_appears_only_after_log_insertion() {
-        let dir = crate::test_support::fixture_root("parakit-log-test", "tsv-deferred");
-        let logger = DataLogger::new(dir.clone(), LogFormat::Tsv);
-
-        let id = logger.log(
-            2.0,
-            Duration::from_millis(88),
-            "raw",
-            "cleaned",
-            CleaningLogFields {
-                rules_active: 5,
-                ..sample_cleaning_fields()
-            },
-        );
-
-        let date = Local::now().date_naive();
-        let path = dir.join(file_name(date, LogFormat::Tsv));
-        let before = std::fs::read_to_string(&path).unwrap_or_default();
-        assert!(
-            before.is_empty(),
-            "transcript row should be deferred until log_insertion completes it"
-        );
-
-        logger.log_insertion(id, sample_insertion_fields());
-
-        let contents = std::fs::read_to_string(&path).expect("read tsv log file");
-        let lines: Vec<&str> = contents.lines().collect();
-        assert_eq!(lines.len(), 1);
-        let cols: Vec<&str> = lines[0].split('\t').collect();
-        assert_eq!(
-            cols.len(),
-            BASE_TSV_COLUMNS + CLEANING_TSV_COLUMNS + INSERTION_TSV_COLUMNS
-        );
-        assert_eq!(cols[3], "raw");
-        assert_eq!(cols[4], "cleaned");
-        assert_eq!(cols[5], "5", "rules_active");
-        assert_eq!(
-            cols[6],
-            crate::build_info::PACKAGE_VERSION,
-            "parakit_version"
-        );
-        assert_eq!(cols[7], "1", "cleaner_version");
-        assert_eq!(cols[8], "safe", "profile");
-        assert_eq!(cols[9], "safe-v1", "ruleset_id");
-        assert_eq!(cols[10], "true", "drops_trailing_period");
-        assert_eq!(cols[11], "", "number_threshold (convert all)");
-        assert_eq!(cols[12], "", "rules_fired (none fired)");
-        assert_eq!(cols[13], "", "cleaning failure (none)");
-        assert_eq!(cols[14], "pasted");
-        assert_eq!(cols[15], "com.example.App");
-        assert_eq!(cols[16], "not_applicable");
-        assert_eq!(cols[17], "12");
-        assert_eq!(cols[18], "true");
-        assert_eq!(cols[19], "");
-        assert_eq!(cols[20], "not_applicable");
-        assert_eq!(cols[21], "120");
-        assert_eq!(cols[22], "true");
-        assert_eq!(cols[23], "");
-    }
-
-    #[test]
-    fn tsv_pending_row_prefix_carries_cleaning_cells_before_insertion() {
-        let dir = crate::test_support::fixture_root("parakit-log-test", "tsv-pending-cleaning");
-        let logger = DataLogger::new(dir.clone(), LogFormat::Tsv);
-
-        let hits = vec![RuleHit {
-            name: "trailing_period".to_string(),
-            matches: 1,
-        }];
-        let fields = CleaningLogFields {
-            rules_active: 5,
-            cleaner_version: 2,
-            profile: "aggressive",
-            ruleset_id: Some("aggressive-v2"),
-            drops_trailing_period: false,
-            number_threshold: Some(5.0),
-            rules_fired: &hits,
-            failure: None,
-        };
-        let id = logger.log(2.0, Duration::from_millis(88), "raw", "cleaned", fields);
-
-        let pending = logger.pending_tsv.lock();
-        let row = pending
-            .get(&id.0)
-            .expect("row should be pending before insertion completes");
-        let cols: Vec<&str> = row.prefix.split('\t').collect();
-        assert_eq!(
-            cols.len(),
-            BASE_TSV_COLUMNS + CLEANING_TSV_COLUMNS,
-            "pending prefix should hold base + cleaning columns only, no insertion columns yet"
-        );
-        assert_eq!(cols[5], "5", "rules_active");
-        assert_eq!(
-            cols[6],
-            crate::build_info::PACKAGE_VERSION,
-            "parakit_version"
-        );
-        assert_eq!(cols[7], "2", "cleaner_version");
-        assert_eq!(cols[8], "aggressive", "profile");
-        assert_eq!(cols[9], "aggressive-v2", "ruleset_id");
-        assert_eq!(cols[10], "false", "drops_trailing_period");
-        assert_eq!(cols[11], "5", "number_threshold");
-        assert_eq!(cols[12], "trailing_period:1", "rules_fired");
-        assert_eq!(cols[13], "", "cleaning failure (none)");
-    }
-
-    #[test]
-    fn tsv_sweep_flushes_stale_orphaned_row_with_empty_insertion_cells() {
-        let dir = crate::test_support::fixture_root("parakit-log-test", "tsv-sweep");
-        let logger = DataLogger::new(dir.clone(), LogFormat::Tsv);
-
-        let orphan_id = logger.log(
-            1.0,
-            Duration::from_millis(10),
-            "orphan raw",
-            "orphan cleaned",
-            CleaningLogFields {
-                rules_active: 1,
-                ..sample_cleaning_fields()
-            },
-        );
-        {
-            let mut pending = logger.pending_tsv.lock();
-            let row = pending
-                .get_mut(&orphan_id.0)
-                .expect("pending row should exist before the sweep");
-            row.queued_at = Instant::now() - PENDING_TSV_MAX_AGE - Duration::from_secs(1);
-        }
-
-        // Triggers the sweep as a side effect; the orphan is stale enough to
-        // be flushed before this second row is buffered.
-        let _second_id = logger.log(
-            2.0,
-            Duration::from_millis(20),
-            "second raw",
-            "second cleaned",
-            CleaningLogFields {
-                rules_active: 2,
-                ..sample_cleaning_fields()
-            },
-        );
-
-        let date = Local::now().date_naive();
-        let path = dir.join(file_name(date, LogFormat::Tsv));
-        let contents = std::fs::read_to_string(&path).expect("read tsv log file");
-        let lines: Vec<&str> = contents.lines().collect();
-        assert_eq!(
-            lines.len(),
-            1,
-            "only the swept orphan row should be flushed so far"
-        );
-
-        let cols: Vec<&str> = lines[0].split('\t').collect();
-        assert_eq!(
-            cols.len(),
-            BASE_TSV_COLUMNS + CLEANING_TSV_COLUMNS + INSERTION_TSV_COLUMNS
-        );
-        assert_eq!(cols[3], "orphan raw");
-        assert_eq!(cols[4], "orphan cleaned");
-        assert_eq!(cols[5], "1", "rules_active still carried through the sweep");
-        assert_eq!(
-            cols[6],
-            crate::build_info::PACKAGE_VERSION,
-            "parakit_version still carried through the sweep"
-        );
-        assert_eq!(
-            cols[7], "1",
-            "cleaner_version still carried through the sweep"
-        );
-        assert_eq!(cols[8], "safe", "profile still carried through the sweep");
-        assert_eq!(
-            cols[9], "safe-v1",
-            "ruleset_id still carried through the sweep"
-        );
-        assert_eq!(
-            cols[10], "true",
-            "drops_trailing_period still carried through the sweep"
-        );
-        assert_eq!(
-            cols[11], "",
-            "number_threshold still carried through the sweep"
-        );
-        assert_eq!(cols[12], "", "rules_fired still carried through the sweep");
-        for col in &cols[14..] {
-            assert!(
-                col.is_empty(),
-                "insertion columns should be empty for a swept orphan row"
-            );
-        }
-
-        assert!(
-            !logger.pending_tsv.lock().contains_key(&orphan_id.0),
-            "swept row should be removed from pending state"
-        );
-    }
-
-    #[test]
-    fn tsv_drop_flushes_pending_row_with_empty_insertion_cells() {
-        let dir = crate::test_support::fixture_root("parakit-log-test", "tsv-drop");
-        {
-            let logger = DataLogger::new(dir.clone(), LogFormat::Tsv);
-            let fields = sample_cleaning_fields();
-            logger.log(1.0, Duration::ZERO, "raw", "cleaned", fields);
-        }
-
-        let date = Local::now().date_naive();
-        let path = dir.join(file_name(date, LogFormat::Tsv));
-        let contents = std::fs::read_to_string(&path).expect("read tsv log file after drop");
-        let lines: Vec<&str> = contents.lines().collect();
-        assert_eq!(lines.len(), 1);
-        let cols: Vec<&str> = lines[0].split('\t').collect();
-        assert_eq!(
-            cols.len(),
-            BASE_TSV_COLUMNS + CLEANING_TSV_COLUMNS + INSERTION_TSV_COLUMNS
-        );
-        assert_eq!(cols[3], "raw");
-        assert_eq!(cols[4], "cleaned");
-        assert_eq!(cols[6], crate::build_info::PACKAGE_VERSION);
-        assert!(cols[14..].iter().all(|col| col.is_empty()));
-    }
-
-    #[test]
     fn jsonl_log_includes_cleaning_fields() {
         let dir = crate::test_support::fixture_root("parakit-log-test", "jsonl-cleaning");
-        let logger = DataLogger::new(dir.clone(), LogFormat::Jsonl);
+        let logger = DataLogger::new(dir.clone());
 
         let hits = vec![
             RuleHit {
@@ -929,7 +440,7 @@ mod tests {
         logger.log(1.0, Duration::from_millis(10), "raw", "cleaned", fields);
 
         let date = Local::now().date_naive();
-        let path = dir.join(file_name(date, LogFormat::Jsonl));
+        let path = dir.join(file_name(date));
         let contents = std::fs::read_to_string(&path).expect("read log file");
         let value: serde_json::Value =
             serde_json::from_str(contents.lines().next().expect("one line")).expect("valid jsonl");
@@ -957,7 +468,7 @@ mod tests {
     #[test]
     fn jsonl_log_omits_optional_cleaning_fields_when_absent() {
         let dir = crate::test_support::fixture_root("parakit-log-test", "jsonl-cleaning-quiet");
-        let logger = DataLogger::new(dir.clone(), LogFormat::Jsonl);
+        let logger = DataLogger::new(dir.clone());
 
         let fields = CleaningLogFields {
             rules_active: 0,
@@ -972,7 +483,7 @@ mod tests {
         logger.log(1.0, Duration::from_millis(5), "raw", "raw", fields);
 
         let date = Local::now().date_naive();
-        let path = dir.join(file_name(date, LogFormat::Jsonl));
+        let path = dir.join(file_name(date));
         let contents = std::fs::read_to_string(&path).expect("read log file");
         let value: serde_json::Value =
             serde_json::from_str(contents.lines().next().expect("one line")).expect("valid jsonl");
@@ -993,7 +504,7 @@ mod tests {
     #[test]
     fn cleaning_failure_is_recorded_in_jsonl() {
         let dir = crate::test_support::fixture_root("parakit-log-test", "jsonl-cleaning-failure");
-        let logger = DataLogger::new(dir.clone(), LogFormat::Jsonl);
+        let logger = DataLogger::new(dir.clone());
 
         let fields = CleaningLogFields {
             failure: Some("panic: rule 'foo' bar"),
@@ -1002,55 +513,11 @@ mod tests {
         logger.log(1.0, Duration::from_millis(5), "raw", "raw", fields);
 
         let date = Local::now().date_naive();
-        let path = dir.join(file_name(date, LogFormat::Jsonl));
+        let path = dir.join(file_name(date));
         let contents = std::fs::read_to_string(&path).expect("read log file");
         let value: serde_json::Value =
             serde_json::from_str(contents.lines().next().expect("one line")).expect("valid jsonl");
 
         assert_eq!(value["cleaning_failure"], "panic: rule 'foo' bar");
-    }
-
-    #[test]
-    fn tsv_rules_fired_encodes_as_name_colon_count_pairs() {
-        let hits = vec![
-            RuleHit {
-                name: "trailing_period".to_string(),
-                matches: 2,
-            },
-            RuleHit {
-                name: "filler_words".to_string(),
-                matches: 5,
-            },
-        ];
-        let fields = CleaningLogFields {
-            rules_fired: &hits,
-            ..sample_cleaning_fields()
-        };
-        let cells = cleaning_tsv_cells(&fields);
-        assert_eq!(cells[5], "trailing_period:2;filler_words:5");
-    }
-
-    #[test]
-    fn tsv_rules_fired_is_empty_string_when_no_rules_fired() {
-        let fields = sample_cleaning_fields();
-        let cells = cleaning_tsv_cells(&fields);
-        assert_eq!(cells[5], "");
-    }
-
-    #[test]
-    fn tsv_cleaning_failure_cell_is_sanitized() {
-        let fields = CleaningLogFields {
-            failure: Some("bad\tvalue\nhere"),
-            ..sample_cleaning_fields()
-        };
-        let cells = cleaning_tsv_cells(&fields);
-        assert_eq!(cells[6], "bad value here");
-    }
-
-    #[test]
-    fn empty_cleaning_tsv_cells_has_expected_shape() {
-        let cells = empty_cleaning_tsv_cells();
-        assert_eq!(cells.len(), CLEANING_TSV_COLUMNS);
-        assert!(cells.iter().all(|c| c.is_empty()));
     }
 }

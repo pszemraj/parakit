@@ -264,16 +264,12 @@ pub(crate) fn run() -> Result<()> {
     ));
     let keep_transcript_clipboard = cli.effective_keep_transcript_clipboard(&config);
     let log_dir = cli.effective_log_dir(&config);
-    let log_format = cli.effective_log_format(&config);
-    let data_log = log_dir
-        .clone()
-        .map(|dir| Arc::new(DataLogger::new(dir, log_format)));
+    let data_log = log_dir.clone().map(|dir| Arc::new(DataLogger::new(dir)));
     #[cfg(any(unix, target_os = "windows"))]
     let _ipc_server = daemon::ipc::spawn_server(
         Arc::clone(&ipc_state),
         paste_mode,
         keep_transcript_clipboard,
-        data_log.clone(),
         Arc::clone(&log),
     )
     .context("start daemon control socket")?;
@@ -328,7 +324,7 @@ pub(crate) fn run() -> Result<()> {
         cleaning: cleaning_summary.clone(),
         sounds: if sounds_enabled { "on" } else { "off" },
         transcription_logging: match &log_dir {
-            Some(dir) => format!("{log_format:?} to {}", dir.display()),
+            Some(dir) => format!("JSONL to {}", dir.display()),
             None => "off".to_string(),
         },
         insertion: format!(
@@ -364,7 +360,7 @@ pub(crate) fn run() -> Result<()> {
         sounds_on: sounds_enabled,
         log_summary: log_dir
             .as_ref()
-            .map(|dir| format!("{log_format:?} to {}", dir.display())),
+            .map(|dir| format!("JSONL to {}", dir.display())),
         hotkey_backend_label,
     });
 
@@ -536,7 +532,7 @@ fn run_ptt_audio_simulation(
     .map(Arc::new);
     let data_log = cli
         .effective_log_dir(config)
-        .map(|dir| Arc::new(DataLogger::new(dir, cli.effective_log_format(config))));
+        .map(|dir| Arc::new(DataLogger::new(dir)));
     let sounds = Sounds::new(false);
 
     let prepare_started = Instant::now();
@@ -1027,14 +1023,6 @@ fn print_config_show(quiet: bool) -> Result<()> {
             .as_ref()
             .map(|p| p.display().to_string())
             .unwrap_or_else(|| "(disabled)".to_string())
-    );
-    println!(
-        "    format: {}",
-        config
-            .logging
-            .format
-            .map(|f| format!("{f:?}").to_lowercase())
-            .unwrap_or_else(|| "jsonl".to_string())
     );
     #[cfg(target_os = "linux")]
     {

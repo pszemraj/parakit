@@ -1,7 +1,6 @@
 //! Command-line interface definitions for the `parakit` binary.
 
 use clap::{Args, Parser, Subcommand};
-use parakit::data_log::LogFormat;
 use parakit::inference::DeviceMode;
 use parakit::rules::CleaningProfile;
 use std::num::NonZeroUsize;
@@ -99,15 +98,9 @@ pub(crate) struct Cli {
     #[arg(long, value_enum)]
     pub(crate) hotkey_backend: Option<HotkeyBackend>,
 
-    /// Directory for transcription logs. One file is written per local day.
+    /// Directory for JSONL transcription logs. One file is written per local day.
     #[arg(long, value_name = "DIR")]
     pub(crate) log_dir: Option<PathBuf>,
-
-    /// Transcription log format. Used only when --log-dir (or config
-    /// `logging.dir`) is set. Defaults to `config.toml`'s `logging.format`,
-    /// then `jsonl`.
-    #[arg(long, value_parser = clap::value_parser!(LogFormat))]
-    pub(crate) log_format: Option<LogFormat>,
 }
 
 /// Top-level subcommands that run instead of the push-to-talk daemon.
@@ -288,18 +281,6 @@ impl Cli {
         self.log_dir.clone().or_else(|| config.logging.dir.clone())
     }
 
-    /// Return the selected transcription log format: CLI `--log-format`,
-    /// then config `logging.format`, then `jsonl`.
-    ///
-    /// # Returns
-    ///
-    /// The effective log format.
-    pub(crate) fn effective_log_format(&self, config: &ConfigFile) -> LogFormat {
-        self.log_format
-            .or(config.logging.format)
-            .unwrap_or(LogFormat::Jsonl)
-    }
-
     /// Return the selected Linux hotkey backend: CLI `--hotkey-backend`,
     /// then config `hotkey.backend`, then [`HotkeyBackend::Auto`].
     ///
@@ -473,20 +454,10 @@ mod tests {
     }
 
     #[test]
-    fn effective_log_format_prefers_cli_then_config_then_jsonl() {
-        let mut config = ConfigFile::default();
-        assert_eq!(
-            cli_from(&[]).effective_log_format(&config),
-            LogFormat::Jsonl
-        );
-
-        config.logging.format = Some(LogFormat::Tsv);
-        assert_eq!(cli_from(&[]).effective_log_format(&config), LogFormat::Tsv);
-
-        assert_eq!(
-            cli_from(&["--log-format", "jsonl"]).effective_log_format(&config),
-            LogFormat::Jsonl
-        );
+    fn removed_log_format_flag_is_rejected() {
+        let error = Cli::try_parse_from(["parakit", "--log-format", "jsonl"])
+            .expect_err("--log-format must not remain a supported surface");
+        assert_eq!(error.kind(), clap::error::ErrorKind::UnknownArgument);
     }
 
     #[test]

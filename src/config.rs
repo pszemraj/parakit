@@ -13,7 +13,6 @@
 //! `history`, `test-paste`); see the load-order comment in `app.rs::run`.
 
 use anyhow::{Context, Result};
-use parakit::data_log::LogFormat;
 use parakit::inference::DeviceMode;
 use parakit::rules::{CleaningProfile, UserRule};
 use serde::Deserialize;
@@ -93,10 +92,8 @@ pub(crate) struct CleaningConfig {
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 pub(crate) struct LoggingConfig {
-    /// Directory for transcription logs. One file is written per local day.
+    /// Directory for JSONL transcription logs. One file is written per local day.
     pub(crate) dir: Option<PathBuf>,
-    /// Transcription log format. Used only when `dir` is set.
-    pub(crate) format: Option<LogFormat>,
 }
 
 /// `[hotkey]` section: Linux hotkey backend default.
@@ -179,12 +176,9 @@ pub(crate) const TEMPLATE: &str = r#"# parakit config.toml
 # disabled_rules = ["fix-trailing-period"]
 
 [logging]
-# Directory for transcription logs. One JSONL or TSV file is written per
-# local day. Unset disables transcription logging.
+# Directory for JSONL transcription logs. One file is written per local day.
+# Unset disables transcription logging.
 # dir = "/home/user/.parakit/logs"
-
-# Transcription log format: "jsonl" or "tsv". Used only when `dir` is set.
-# format = "jsonl"
 
 [hotkey]
 # Linux hotkey backend: "auto", "desktop", "x11-global-hotkey",
@@ -415,7 +409,6 @@ disabled_rules = ["fix-trailing-period", "filler-um-uh"]
 
 [logging]
 dir = "/logs"
-format = "tsv"
 
 [[rules.user]]
 name = "custom-hello"
@@ -450,7 +443,6 @@ position = "first"
         );
 
         assert_eq!(config.logging.dir, Some(PathBuf::from("/logs")));
-        assert_eq!(config.logging.format, Some(LogFormat::Tsv));
 
         assert_eq!(config.rules.user.len(), 1);
         assert_eq!(config.rules.user[0].name, "custom-hello");
@@ -686,21 +678,5 @@ replacement = "x"
     #[test]
     fn hotkey_backend_serde_matches_clap_value_strings() {
         assert_serde_matches_clap::<HotkeyBackend>();
-    }
-
-    #[test]
-    fn log_format_serde_matches_cli_flag_strings() {
-        // `LogFormat` hand-rolls `FromStr` instead of implementing
-        // `clap::ValueEnum` (it also accepts a "json" alias on the CLI that
-        // has no serde equivalent), so it is checked directly against the
-        // canonical `--log-format` strings rather than through
-        // `assert_serde_matches_clap`.
-        assert_eq!(
-            serde_json::to_string(&LogFormat::Jsonl).unwrap(),
-            "\"jsonl\""
-        );
-        assert_eq!("jsonl".parse::<LogFormat>().unwrap(), LogFormat::Jsonl);
-        assert_eq!(serde_json::to_string(&LogFormat::Tsv).unwrap(), "\"tsv\"");
-        assert_eq!("tsv".parse::<LogFormat>().unwrap(), LogFormat::Tsv);
     }
 }

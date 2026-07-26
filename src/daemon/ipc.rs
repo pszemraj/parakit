@@ -23,9 +23,6 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 use std::time::Instant;
 
-#[cfg(any(unix, target_os = "windows"))]
-use parakit::data_log::DataLogger;
-
 #[cfg(unix)]
 use super::preflight;
 #[cfg(any(unix, target_os = "windows"))]
@@ -469,7 +466,6 @@ impl Drop for IpcServer {
 /// * `paste_mode` - Paste mode used by paste-related commands.
 /// * `keep_transcript_clipboard` - Whether command insertion leaves text on
 ///   the clipboard.
-/// * `data_log` - Optional transcription logger flushed before daemon exit.
 /// * `log` - Logger for socket errors.
 ///
 /// # Returns
@@ -484,10 +480,9 @@ pub(crate) fn spawn_server(
     state: Arc<SharedState>,
     paste_mode: PasteMode,
     keep_transcript_clipboard: bool,
-    data_log: Option<Arc<DataLogger>>,
     log: Arc<Logger>,
 ) -> Result<IpcServer> {
-    spawn_server_impl(state, paste_mode, keep_transcript_clipboard, data_log, log)
+    spawn_server_impl(state, paste_mode, keep_transcript_clipboard, log)
 }
 
 /// Run one IPC client command and print a concise response.
@@ -648,7 +643,6 @@ fn spawn_server_impl(
     state: Arc<SharedState>,
     paste_mode: PasteMode,
     keep_transcript_clipboard: bool,
-    data_log: Option<Arc<DataLogger>>,
     log: Arc<Logger>,
 ) -> Result<IpcServer> {
     use std::io::ErrorKind;
@@ -676,7 +670,6 @@ fn spawn_server_impl(
                 match stream {
                     Ok(stream) => {
                         let state = Arc::clone(&state);
-                        let data_log = data_log.clone();
                         let log = Arc::clone(&log);
                         let _ = thread::Builder::new()
                             .name("parakit-ipc-client".into())
@@ -686,7 +679,6 @@ fn spawn_server_impl(
                                     &state,
                                     paste_mode,
                                     keep_transcript_clipboard,
-                                    data_log,
                                     log,
                                 )
                             });
@@ -709,7 +701,6 @@ fn handle_client(
     state: &Arc<SharedState>,
     paste_mode: PasteMode,
     keep_transcript_clipboard: bool,
-    data_log: Option<Arc<DataLogger>>,
     log: Arc<Logger>,
 ) {
     let notifier = Notifier::new(Arc::clone(&log));
@@ -729,7 +720,7 @@ fn handle_client(
     }
 
     if outcome.stop_after_response {
-        schedule_exit_after_response(preflight::control_socket_path().ok(), data_log);
+        schedule_exit_after_response(preflight::control_socket_path().ok());
     }
 }
 
@@ -918,15 +909,9 @@ fn client_command_outcome(
 }
 
 #[cfg(any(unix, target_os = "windows"))]
-fn schedule_exit_after_response(
-    cleanup_path: Option<std::path::PathBuf>,
-    data_log: Option<Arc<DataLogger>>,
-) {
+fn schedule_exit_after_response(cleanup_path: Option<std::path::PathBuf>) {
     thread::spawn(move || {
         thread::sleep(Duration::from_millis(50));
-        if let Some(data_log) = data_log {
-            data_log.flush_pending();
-        }
         if let Some(path) = cleanup_path {
             let _ = std::fs::remove_file(path);
         }
@@ -1143,7 +1128,6 @@ mod windows_pipe {
     /// * `paste_mode` - Paste mode used by paste-related commands.
     /// * `keep_transcript_clipboard` - Whether command insertion leaves text on
     ///   the clipboard.
-    /// * `data_log` - Optional transcription logger flushed before daemon exit.
     /// * `log` - Logger used for background transport failures.
     ///
     /// # Returns
@@ -1158,7 +1142,6 @@ mod windows_pipe {
         state: Arc<SharedState>,
         paste_mode: PasteMode,
         keep_transcript_clipboard: bool,
-        data_log: Option<Arc<DataLogger>>,
         log: Arc<Logger>,
     ) -> Result<IpcServer> {
         let pipe_name = daemon_pipe_name()?;
@@ -1171,7 +1154,6 @@ mod windows_pipe {
                 }) {
                     Ok(pipe) => {
                         let state = Arc::clone(&state);
-                        let data_log = data_log.clone();
                         let log = Arc::clone(&log);
                         let _ = thread::Builder::new()
                             .name("parakit-ipc-client".into())
@@ -1181,7 +1163,6 @@ mod windows_pipe {
                                     state,
                                     paste_mode,
                                     keep_transcript_clipboard,
-                                    data_log,
                                     log,
                                 )
                             });
@@ -1219,7 +1200,6 @@ mod windows_pipe {
         state: Arc<SharedState>,
         paste_mode: PasteMode,
         keep_transcript_clipboard: bool,
-        data_log: Option<Arc<DataLogger>>,
         log: Arc<Logger>,
     ) {
         let notifier = Notifier::new(Arc::clone(&log));
@@ -1237,7 +1217,7 @@ mod windows_pipe {
         }
 
         if outcome.stop_after_response {
-            schedule_exit_after_response(None, data_log);
+            schedule_exit_after_response(None);
         }
     }
 
@@ -2370,7 +2350,7 @@ mod tests {
         let started = Instant::now();
         let handler = thread::spawn(move || {
             let log = Arc::new(Logger::new(LogLevel::Quiet));
-            handle_client(server, &state, PasteMode::Terminal, false, None, log);
+            handle_client(server, &state, PasteMode::Terminal, false, log);
         });
         handler.join().expect("handler should return after timeout");
         assert!(started.elapsed() < Duration::from_secs(2));

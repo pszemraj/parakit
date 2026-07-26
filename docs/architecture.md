@@ -67,7 +67,7 @@ Cross-thread communication uses atomics, mutex-protected buffers, and crossbeam 
 | `src/inference.rs` | [CrispASR](https://github.com/CrispStrobe/CrispASR) session wrapper and short-audio padding. |
 | `src/rules/` | Transcript cleanup pipeline: profiles, the built-in rule table, procedural passes, and user rules from `config.toml`. |
 | `src/daemon/desktop/{inject,clipboard_restore}.rs` | Clipboard transaction, X11/XTest paste chord, direct insertion, and restore timing. |
-| `src/data_log.rs` | JSONL/TSV transcription logging. |
+| `src/data_log.rs` | JSONL transcription logging. |
 | `src/audio_file.rs` | WAV decoding, mono mixing, and file resampling for quality tools and PTT simulation. |
 | `examples/transcribe_file.rs` | Raw file-based inference smoke and quality checks. |
 | `scripts/transcribe_nemo_parakeet.py` | NeMo reference transcription helper. |
