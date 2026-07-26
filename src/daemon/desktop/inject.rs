@@ -93,11 +93,11 @@ pub(crate) enum PasteOutcome {
 /// Outcome of a guarded paste attempt plus the insertion telemetry needed to
 /// populate a `parakit::data_log::InsertionLogFields` record.
 ///
-/// Most call sites still carry placeholder acknowledgement fields
-/// (`acknowledgement_kind: "not_applicable"`, `acknowledgement_ms: None`):
-/// paths that never send a paste chord (staging, guard-blocked, direct
-/// typing) have nothing to acknowledge. The post-paste-chord success path in
-/// [`paste_with_clipboard_swap_guarded`] populates real values from
+/// Paths that never send a paste chord (staging, guard-blocked, direct
+/// typing) use `acknowledgement_kind: "not_applicable"` and
+/// `acknowledgement_ms: None` because they have nothing to acknowledge.
+/// After a paste chord, [`paste_with_clipboard_swap_guarded`] records the
+/// actual confirmation kind and elapsed time from
 /// [`crate::daemon::desktop::clipboard_restore::PasteConfirmation`].
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct PasteReport {
@@ -105,11 +105,11 @@ pub(crate) struct PasteReport {
     pub(crate) outcome: PasteOutcome,
     /// Whether a synthetic paste chord or type event was actually sent.
     pub(crate) paste_event_posted: bool,
-    /// How insertion success was acknowledged. Always `"not_applicable"`
-    /// until acknowledgement machinery lands.
+    /// How insertion was acknowledged, or `"not_applicable"` when no paste
+    /// chord was sent.
     pub(crate) acknowledgement_kind: &'static str,
-    /// Milliseconds spent waiting for acknowledgement. Always `None` until
-    /// acknowledgement machinery lands.
+    /// Milliseconds spent waiting for acknowledgement, or `None` when no
+    /// acknowledgement was attempted.
     pub(crate) acknowledgement_ms: Option<u128>,
     /// Whether the previous clipboard contents were restored, when the
     /// clipboard was touched at all.
@@ -117,8 +117,7 @@ pub(crate) struct PasteReport {
 }
 
 impl PasteReport {
-    /// Build a report with the not-yet-wired acknowledgement fields set to
-    /// their placeholder values.
+    /// Build a report for a path that does not attempt acknowledgement.
     fn new(
         outcome: PasteOutcome,
         paste_event_posted: bool,
@@ -367,6 +366,57 @@ impl ClipboardStore for Clipboard {
     }
 }
 
+/// One live comparison between a captured focus owner and the current target.
+///
+/// The label and insertion decision deliberately live on the same value so
+/// telemetry cannot describe a different platform read from the one that
+/// authorized (or blocked) insertion.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FocusVerification {
+    /// The current insertion target matches the recording target.
+    Matched,
+    /// The current insertion target differs from the recording target.
+    Changed,
+    /// The application identity matched, but macOS Accessibility could not
+    /// expose focused-element identity on one or both reads.
+    #[cfg(target_os = "macos")]
+    AxUnsupported,
+}
+
+impl FocusVerification {
+    /// Return the stable telemetry label for this comparison.
+    ///
+    /// # Returns
+    ///
+    /// `"matched"`, `"changed"`, or `"ax_unsupported"` on macOS.
+    pub(crate) const fn label(self) -> &'static str {
+        match self {
+            Self::Matched => "matched",
+            Self::Changed => "changed",
+            #[cfg(target_os = "macos")]
+            Self::AxUnsupported => "ax_unsupported",
+        }
+    }
+
+    /// Return whether this comparison permits insertion.
+    ///
+    /// # Returns
+    ///
+    /// `false` only when the live insertion target changed.
+    pub(crate) const fn allows_insertion(self) -> bool {
+        !matches!(self, Self::Changed)
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    const fn from_matches(matches: bool) -> Self {
+        if matches {
+            Self::Matched
+        } else {
+            Self::Changed
+        }
+    }
+}
+
 /// Focus owner captured when recording begins.
 pub(crate) struct FocusSnapshot {
     #[cfg(target_os = "linux")]
@@ -425,16 +475,17 @@ impl FocusSnapshot {
         }
     }
 
-    /// Return whether the current focus still matches this snapshot.
+    /// Compare the current focus against this snapshot with one platform read.
     ///
     /// # Returns
     ///
-    /// `Ok(true)` when it is safe to insert into the original target.
+    /// A verification value carrying both the telemetry label and insertion
+    /// decision for the same live focus observation.
     ///
     /// # Errors
     ///
     /// Returns an error when the current focus cannot be read.
-    pub(crate) fn matches_current(&self) -> Result<bool> {
+    pub(crate) fn verify_current(&self) -> Result<FocusVerification> {
         #[cfg(target_os = "linux")]
         {
             let (conn, screen_num) = RustConnection::connect(None)
@@ -445,7 +496,7 @@ impl FocusSnapshot {
                 if let Some(current) = super::x11::active_window(&conn, root)
                     .context("could not query the current X11 active window")?
                 {
-                    return Ok(current == expected);
+                    return Ok(FocusVerification::from_matches(current == expected));
                 }
             }
 
@@ -454,63 +505,29 @@ impl FocusSnapshot {
                     "X11 active window is unavailable and no input focus fallback exists"
                 );
             };
-            Ok(
+            Ok(FocusVerification::from_matches(
                 linux_current_input_focus(&conn)
                     .context("could not query the current X11 focus")?
                     == expected,
-            )
+            ))
         }
 
         #[cfg(target_os = "windows")]
         {
-            self.windows.matches_current()
+            self.windows
+                .matches_current()
+                .map(FocusVerification::from_matches)
         }
 
         #[cfg(target_os = "macos")]
         {
-            Ok(self.macos.matches_current())
-        }
-    }
-
-    /// Return a stable telemetry label describing how focus was verified
-    /// against the live focus state at the moment of the call.
-    ///
-    /// This performs its own fresh platform focus read (independent of
-    /// [`Self::matches_current`]) so callers can record what was actually
-    /// checked immediately before insertion.
-    ///
-    /// # Returns
-    ///
-    /// One of `"matched"`, `"changed"`, `"ax_unsupported"` (macOS only, pid
-    /// and bundle identifier matched but Accessibility focused-element
-    /// identity could not be compared), or `"not_applicable"` (platforms or
-    /// error paths without a richer verification signal).
-    pub(crate) fn verify(&self) -> &'static str {
-        #[cfg(target_os = "linux")]
-        {
-            match self.matches_current() {
-                Ok(true) => "matched",
-                Ok(false) => "changed",
-                Err(_) => "not_applicable",
-            }
-        }
-
-        #[cfg(target_os = "windows")]
-        {
-            match self.windows.matches_current() {
-                Ok(true) => "matched",
-                Ok(false) => "changed",
-                Err(_) => "not_applicable",
-            }
-        }
-
-        #[cfg(target_os = "macos")]
-        {
-            match self.macos.verify_current() {
-                crate::daemon::macos::FocusVerification::Matched => "matched",
-                crate::daemon::macos::FocusVerification::Changed => "changed",
-                crate::daemon::macos::FocusVerification::AxUnsupported => "ax_unsupported",
-            }
+            Ok(match self.macos.verify_current() {
+                crate::daemon::macos::FocusVerification::Matched => FocusVerification::Matched,
+                crate::daemon::macos::FocusVerification::Changed => FocusVerification::Changed,
+                crate::daemon::macos::FocusVerification::AxUnsupported => {
+                    FocusVerification::AxUnsupported
+                }
+            })
         }
     }
 

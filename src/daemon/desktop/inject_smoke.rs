@@ -80,7 +80,11 @@ pub(super) fn linux_x11_paste_smoke_test(mode: PasteMode) -> Result<()> {
                 "parakit smoke test",
                 mode,
                 ClipboardPolicy::RestorePrevious,
-                || focus.matches_current(),
+                || {
+                    focus
+                        .verify_current()
+                        .map(|verification| verification.allows_insertion())
+                },
             )
             .context("configured guarded paste failed during smoke test")?;
         linux_wait_for_v_key_events(&conn, window, v_keycode)

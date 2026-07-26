@@ -247,16 +247,6 @@ impl MacOsFocusSnapshot {
         frontmost_application_window().context("could not capture macOS frontmost window")
     }
 
-    /// Return whether the current frontmost focus still matches this
-    /// snapshot.
-    ///
-    /// # Returns
-    ///
-    /// `true` unless [`Self::verify_current`] reports [`FocusVerification::Changed`].
-    pub(crate) fn matches_current(&self) -> bool {
-        !matches!(self.verify_current(), FocusVerification::Changed)
-    }
-
     /// Compare this snapshot against a fresh read of the live macOS focus
     /// state.
     ///

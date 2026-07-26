@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use super::audio::TARGET_RATE;
-use super::inject::{ClipboardPolicy, FocusSnapshot, Injector, PasteMode};
+use super::inject::{ClipboardPolicy, FocusSnapshot, FocusVerification, Injector, PasteMode};
 use super::ipc::SharedState;
 use super::logging::Logger;
 use super::notifications::Notifier;
@@ -754,7 +754,7 @@ fn clipboard_policy(keep_transcript_clipboard: bool) -> ClipboardPolicy {
 ///   plus the telemetry cell this check's label is recorded into:
 ///   `"unavailable"` when no snapshot was captured at PTT-down, or the
 ///   platform's live verification label otherwise (see
-///   [`FocusSnapshot::verify`]).
+///   [`FocusSnapshot::verify_current`]).
 /// * `log` - Daemon logger used for diagnostics.
 fn focus_allows_insertion(focus: FocusCheck<'_>, log: &Logger) -> bool {
     let Some(snapshot) = focus.snapshot else {
@@ -773,24 +773,33 @@ fn focus_allows_insertion(focus: FocusCheck<'_>, log: &Logger) -> bool {
         return true;
     };
 
-    focus.verification.set(snapshot.verify());
-    focus_verification_allows_insertion(snapshot.matches_current(), log)
+    focus_verification_allows_insertion(snapshot.verify_current(), focus.verification, log)
 }
 
-fn focus_verification_allows_insertion(result: Result<bool>, log: &Logger) -> bool {
+fn focus_verification_allows_insertion(
+    result: Result<FocusVerification>,
+    verification: &Cell<&'static str>,
+    log: &Logger,
+) -> bool {
     match result {
-        Ok(true) => true,
-        Ok(false) => {
-            log.warn("focus changed before insertion; automatic paste skipped");
-            false
+        Ok(result) => {
+            verification.set(result.label());
+            if result.allows_insertion() {
+                true
+            } else {
+                log.warn("focus changed before insertion; automatic paste skipped");
+                false
+            }
         }
         Err(err) if cfg!(any(target_os = "macos", target_os = "windows")) => {
+            verification.set("not_applicable");
             log.warn(format!(
                 "could not verify recording focus ({err:#}); automatic paste skipped"
             ));
             false
         }
         Err(err) => {
+            verification.set("not_applicable");
             log.verbose(format!(
                 "could not verify recording focus ({err:#}); pasting without focus guard"
             ));
@@ -1162,9 +1171,29 @@ mod tests {
     #[test]
     fn unavailable_or_unverified_focus_uses_platform_policy() {
         let log = Logger::new(LogLevel::Quiet);
+        let verification = Cell::new("unset");
 
-        assert!(focus_verification_allows_insertion(Ok(true), &log));
-        assert!(!focus_verification_allows_insertion(Ok(false), &log));
+        assert!(focus_verification_allows_insertion(
+            Ok(FocusVerification::Matched),
+            &verification,
+            &log
+        ));
+        assert_eq!(verification.get(), "matched");
+        assert!(!focus_verification_allows_insertion(
+            Ok(FocusVerification::Changed),
+            &verification,
+            &log
+        ));
+        assert_eq!(verification.get(), "changed");
+        #[cfg(target_os = "macos")]
+        {
+            assert!(focus_verification_allows_insertion(
+                Ok(FocusVerification::AxUnsupported),
+                &verification,
+                &log
+            ));
+            assert_eq!(verification.get(), "ax_unsupported");
+        }
 
         #[cfg(any(target_os = "macos", target_os = "windows"))]
         {
@@ -1177,8 +1206,10 @@ mod tests {
             assert_eq!(verification.get(), "unavailable");
             assert!(!focus_verification_allows_insertion(
                 Err(anyhow::anyhow!("focus unavailable")),
+                &verification,
                 &log
             ));
+            assert_eq!(verification.get(), "not_applicable");
         }
 
         #[cfg(not(any(target_os = "macos", target_os = "windows")))]
@@ -1192,8 +1223,10 @@ mod tests {
             assert_eq!(verification.get(), "unavailable");
             assert!(focus_verification_allows_insertion(
                 Err(anyhow::anyhow!("temporary X11 failure")),
+                &verification,
                 &log
             ));
+            assert_eq!(verification.get(), "not_applicable");
         }
     }
 
