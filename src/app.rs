@@ -262,11 +262,17 @@ pub(crate) fn run() -> Result<()> {
         cli.effective_transcript_history(&config),
     ));
     let keep_transcript_clipboard = cli.effective_keep_transcript_clipboard(&config);
+    let log_dir = cli.effective_log_dir(&config);
+    let log_format = cli.effective_log_format(&config);
+    let data_log = log_dir
+        .clone()
+        .map(|dir| Arc::new(DataLogger::new(dir, log_format)));
     #[cfg(any(unix, target_os = "windows"))]
     let _ipc_server = daemon::ipc::spawn_server(
         Arc::clone(&ipc_state),
         paste_mode,
         keep_transcript_clipboard,
+        data_log.clone(),
         Arc::clone(&log),
     )
     .context("start daemon control socket")?;
@@ -281,12 +287,6 @@ pub(crate) fn run() -> Result<()> {
         &config.rules.user,
     )?
     .map(Arc::new);
-    let log_dir = cli.effective_log_dir(&config);
-    let log_format = cli.effective_log_format(&config);
-    let data_log = log_dir
-        .clone()
-        .map(|dir| Arc::new(DataLogger::new(dir, log_format)));
-
     let sounds_enabled = cli.effective_sounds_enabled(&config);
     let sounds = Sounds::new(sounds_enabled);
 

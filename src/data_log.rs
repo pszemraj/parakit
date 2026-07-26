@@ -247,6 +247,16 @@ impl DataLogger {
         }
     }
 
+    /// Flush every pending TSV transcription with empty insertion columns.
+    ///
+    /// Used during deterministic daemon shutdown so a buffered transcription
+    /// is not lost. This is a no-op for JSONL.
+    pub fn flush_pending(&self) {
+        if let Err(e) = self.try_flush_pending_tsv_rows() {
+            eprintln!("parakit: pending transcription log flush failed: {e:#}");
+        }
+    }
+
     fn try_log(
         &self,
         id: RecordId,
@@ -354,7 +364,7 @@ impl DataLogger {
     /// transcript itself.
     fn sweep_stale_pending_tsv_rows(&self) -> Result<()> {
         let now = Instant::now();
-        let stale: Vec<PendingTsvRow> = {
+        let stale: Vec<(u64, PendingTsvRow)> = {
             let mut pending = self.pending_tsv.lock();
             let stale_ids: Vec<u64> = pending
                 .iter()
@@ -365,16 +375,31 @@ impl DataLogger {
                 .collect();
             stale_ids
                 .into_iter()
-                .filter_map(|id| pending.remove(&id))
+                .filter_map(|id| pending.remove(&id).map(|row| (id, row)))
                 .collect()
         };
-        if stale.is_empty() {
+        self.flush_tsv_rows(stale)
+    }
+
+    fn try_flush_pending_tsv_rows(&self) -> Result<()> {
+        if self.format != LogFormat::Tsv {
             return Ok(());
         }
+        let pending = {
+            let mut pending = self.pending_tsv.lock();
+            pending.drain().collect()
+        };
+        self.flush_tsv_rows(pending)
+    }
 
+    fn flush_tsv_rows(&self, mut rows: Vec<(u64, PendingTsvRow)>) -> Result<()> {
+        if rows.is_empty() {
+            return Ok(());
+        }
+        rows.sort_unstable_by_key(|(id, _)| *id);
         let empty_cells = empty_insertion_tsv_cells();
         self.with_state(|state| {
-            for row in &stale {
+            for (_, row) in &rows {
                 let line = tsv_row_with_cells(&row.prefix, &empty_cells);
                 writeln!(state.file, "{line}")
                     .context("failed to write orphaned tsv log record")?;
@@ -413,6 +438,12 @@ impl DataLogger {
             .open(&path)
             .with_context(|| format!("failed to open log file {}", path.display()))?;
         Ok(BufWriter::new(file))
+    }
+}
+
+impl Drop for DataLogger {
+    fn drop(&mut self) {
+        self.flush_pending();
     }
 }
 
@@ -791,6 +822,27 @@ mod tests {
             !logger.pending_tsv.lock().contains_key(&orphan_id.0),
             "swept row should be removed from pending state"
         );
+    }
+
+    #[test]
+    fn tsv_drop_flushes_pending_row_with_empty_insertion_cells() {
+        let dir = crate::test_support::fixture_root("parakit-log-test", "tsv-drop");
+        {
+            let logger = DataLogger::new(dir.clone(), LogFormat::Tsv);
+            let fields = sample_cleaning_fields();
+            logger.log(1.0, Duration::ZERO, "raw", "cleaned", fields);
+        }
+
+        let date = Local::now().date_naive();
+        let path = dir.join(file_name(date, LogFormat::Tsv));
+        let contents = std::fs::read_to_string(&path).expect("read tsv log file after drop");
+        let lines: Vec<&str> = contents.lines().collect();
+        assert_eq!(lines.len(), 1);
+        let cols: Vec<&str> = lines[0].split('\t').collect();
+        assert_eq!(cols.len(), 6 + CLEANING_TSV_COLUMNS + INSERTION_TSV_COLUMNS);
+        assert_eq!(cols[3], "raw");
+        assert_eq!(cols[4], "cleaned");
+        assert!(cols[12..].iter().all(|col| col.is_empty()));
     }
 
     #[test]
