@@ -77,6 +77,7 @@
 //! same, already-relied-upon property rather than adding anything new.
 
 use anyhow::{bail, Context, Result};
+use arboard::{Clipboard, ImageData};
 use objc2::rc::Retained;
 use objc2::{sel, MainThreadMarker, MainThreadOnly as _};
 use objc2_app_kit::{
@@ -84,6 +85,8 @@ use objc2_app_kit::{
     NSMenuItem, NSTextView, NSWindow, NSWindowStyleMask,
 };
 use objc2_foundation::{NSDate, NSDefaultRunLoopMode, NSPoint, NSRect, NSSize, NSString};
+use std::borrow::Cow;
+use std::path::PathBuf;
 use std::sync::mpsc::{self, TryRecvError};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -178,6 +181,230 @@ const PASTE_TRANSACTION_TIMEOUT: Duration = Duration::from_secs(8);
 const PROBE_WINDOW_TITLE: &str = "parakit paste smoke";
 const PROBE_ORIGIN: (f64, f64) = (80.0, 80.0);
 const PROBE_SIZE: (f64, f64) = (360.0, 90.0);
+
+/// Clipboard payload kinds the production swap path can restore.
+///
+/// The doctor harness captures the same supported formats independently so
+/// it can verify restoration rather than trusting `PasteReport` telemetry.
+enum DoctorClipboardSnapshot {
+    Text(String),
+    Html {
+        html: String,
+        alt_text: Option<String>,
+    },
+    FileList(Vec<PathBuf>),
+    Image(ImageData<'static>),
+    EmptyOrUnsupported,
+}
+
+impl DoctorClipboardSnapshot {
+    fn capture(clipboard: &mut Clipboard) -> Self {
+        if let Ok(files) = clipboard.get().file_list() {
+            return Self::FileList(files);
+        }
+
+        if let Ok(html) = clipboard.get().html() {
+            let alt_text = Clipboard::get_text(clipboard).ok();
+            if alt_text.as_deref().is_none_or(str::is_empty) {
+                if let Ok(image) = Clipboard::get_image(clipboard) {
+                    return Self::Image(owned_image(image));
+                }
+            }
+            return Self::Html { html, alt_text };
+        }
+
+        if let Ok(image) = Clipboard::get_image(clipboard) {
+            return Self::Image(owned_image(image));
+        }
+
+        match Clipboard::get_text(clipboard).ok() {
+            Some(text) => Self::Text(text),
+            None => Self::EmptyOrUnsupported,
+        }
+    }
+
+    fn restore(&self, clipboard: &mut Clipboard) -> Result<()> {
+        match self {
+            Self::Text(text) => Clipboard::set_text(clipboard, text.clone())
+                .context("could not restore the doctor smoke test's previous clipboard text"),
+            Self::Html { html, alt_text } => clipboard
+                .set()
+                .html(html.clone(), alt_text.clone())
+                .context("could not restore the doctor smoke test's previous HTML clipboard"),
+            Self::FileList(files) => clipboard
+                .set()
+                .file_list(files)
+                .context("could not restore the doctor smoke test's previous file-list clipboard"),
+            Self::Image(image) => Clipboard::set_image(
+                clipboard,
+                ImageData {
+                    width: image.width,
+                    height: image.height,
+                    bytes: Cow::Owned(image.bytes.to_vec()),
+                },
+            )
+            .context("could not restore the doctor smoke test's previous image clipboard"),
+            Self::EmptyOrUnsupported => Clipboard::clear(clipboard)
+                .context("could not clear the clipboard after the doctor smoke test"),
+        }
+    }
+
+    fn matches_current(&self, clipboard: &mut Clipboard) -> bool {
+        self.same_payload(&Self::capture(clipboard))
+    }
+
+    fn same_payload(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Text(expected), Self::Text(actual)) => expected == actual,
+            (
+                Self::Html {
+                    html: expected_html,
+                    alt_text: expected_alt,
+                },
+                Self::Html {
+                    html: actual_html,
+                    alt_text: actual_alt,
+                },
+            ) => expected_html == actual_html && expected_alt == actual_alt,
+            (Self::FileList(expected), Self::FileList(actual)) => expected == actual,
+            (Self::Image(expected), Self::Image(actual)) => {
+                expected.width == actual.width
+                    && expected.height == actual.height
+                    && expected.bytes == actual.bytes
+            }
+            (Self::EmptyOrUnsupported, Self::EmptyOrUnsupported) => true,
+            _ => false,
+        }
+    }
+
+    fn is_text(&self, expected: &str) -> bool {
+        matches!(self, Self::Text(actual) if actual == expected)
+    }
+
+    fn kind(&self) -> &'static str {
+        match self {
+            Self::Text(_) => "text",
+            Self::Html { .. } => "HTML",
+            Self::FileList(_) => "file list",
+            Self::Image(_) => "image",
+            Self::EmptyOrUnsupported => "empty or unsupported",
+        }
+    }
+}
+
+fn owned_image(image: ImageData<'_>) -> ImageData<'static> {
+    ImageData {
+        width: image.width,
+        height: image.height,
+        bytes: Cow::Owned(image.bytes.into_owned()),
+    }
+}
+
+/// Main-thread failsafe for the clipboard mutation performed by the worker.
+///
+/// Normal completion verifies every supported payload kind. On an earlier
+/// return or panic in the worker, `Drop` restores the snapshot when the
+/// staged sentinel is still active, preventing a diagnostic failure from
+/// stranding it on the user's clipboard.
+struct DoctorClipboardGuard {
+    clipboard: Clipboard,
+    previous: DoctorClipboardSnapshot,
+    sentinel: Option<String>,
+    finished: bool,
+}
+
+impl DoctorClipboardGuard {
+    fn capture() -> Result<Self> {
+        let mut clipboard = Clipboard::new()
+            .context("could not open the system clipboard for the doctor paste smoke test")?;
+        let previous = DoctorClipboardSnapshot::capture(&mut clipboard);
+        Ok(Self {
+            clipboard,
+            previous,
+            sentinel: None,
+            finished: false,
+        })
+    }
+
+    fn arm(&mut self, sentinel: &str) {
+        self.sentinel = Some(sentinel.to_owned());
+    }
+
+    /// Verify the production restore and repair it before returning an error.
+    fn verify_and_repair(&mut self) -> Result<()> {
+        let current = DoctorClipboardSnapshot::capture(&mut self.clipboard);
+        if self.previous.same_payload(&current) {
+            self.finished = true;
+            return Ok(());
+        }
+
+        let expected_kind = self.previous.kind();
+        let sentinel_is_staged = self
+            .sentinel
+            .as_deref()
+            .is_some_and(|sentinel| current.is_text(sentinel));
+        if !sentinel_is_staged {
+            // A clipboard payload other than our sentinel belongs to the
+            // user or another application. Report that restoration could
+            // not be verified, but never overwrite the newer value.
+            self.finished = true;
+            bail!(
+                "macOS doctor paste-transaction did not restore the previous {expected_kind} \
+                 clipboard payload; the clipboard now contains a different {} payload, which \
+                 the diagnostic left untouched",
+                current.kind()
+            );
+        }
+
+        self.previous
+            .restore(&mut self.clipboard)
+            .with_context(|| {
+                format!(
+                    "macOS doctor paste-transaction did not restore the previous \
+                     {expected_kind} clipboard payload, and diagnostic cleanup also failed"
+                )
+            })?;
+        let repaired = self.previous.matches_current(&mut self.clipboard);
+        self.finished = repaired;
+        if repaired {
+            bail!(
+                "macOS doctor paste-transaction did not restore the previous {expected_kind} \
+                 clipboard payload; the diagnostic repaired it before returning"
+            );
+        }
+        bail!(
+            "macOS doctor paste-transaction did not restore the previous {expected_kind} \
+             clipboard payload, and the cleanup write could not be verified"
+        )
+    }
+
+    fn restore_staged_sentinel(&mut self) -> Result<()> {
+        let Some(sentinel) = self.sentinel.as_deref() else {
+            return Ok(());
+        };
+        let current = DoctorClipboardSnapshot::capture(&mut self.clipboard);
+        if current.is_text(sentinel) {
+            self.previous.restore(&mut self.clipboard)?;
+            self.finished = self.previous.matches_current(&mut self.clipboard);
+            if !self.finished {
+                bail!(
+                    "restored the pre-diagnostic clipboard after a failed paste smoke test, but \
+                     the {} payload could not be verified",
+                    self.previous.kind()
+                );
+            }
+        }
+        Ok(())
+    }
+}
+
+impl Drop for DoctorClipboardGuard {
+    fn drop(&mut self) {
+        if !self.finished {
+            let _ = self.restore_staged_sentinel();
+        }
+    }
+}
 
 /// Run the real end-to-end paste-transaction smoke test: paste a sentinel
 /// through the production guarded-paste transaction into a throwaway
@@ -401,16 +628,14 @@ impl ProbeWindow {
         }
         let ax_focused_element_available = focus.macos_ax_element().is_some();
 
-        let mut probe_clipboard = arboard::Clipboard::new().context(
-            "could not open the system clipboard to observe the doctor paste-transaction restore",
-        )?;
-        let clipboard_before = probe_clipboard.get_text().ok();
+        let mut clipboard_guard = DoctorClipboardGuard::capture()?;
 
         let nonce = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|elapsed| elapsed.as_nanos())
             .unwrap_or_default();
         let sentinel = build_sentinel(std::process::id(), nonce);
+        clipboard_guard.arm(&sentinel);
 
         let (tx, rx) = mpsc::channel::<Result<PasteReport>>();
         let worker_focus = focus;
@@ -438,7 +663,13 @@ impl ProbeWindow {
                 // means something is genuinely stuck, so let the thread
                 // finish on its own rather than risking `doctor` hanging in
                 // `join()` too.
-                return Err(err);
+                return match clipboard_guard.restore_staged_sentinel() {
+                    Ok(()) => Err(err),
+                    Err(cleanup_err) => Err(err.context(format!(
+                        "failed to restore the pre-diagnostic clipboard after the paste worker \
+                         failed: {cleanup_err:#}"
+                    ))),
+                };
             }
         };
 
@@ -447,11 +678,17 @@ impl ProbeWindow {
         // delivery failure apart from an acknowledgement failure.
         let landed_text = self.text_view.string().to_string();
         let sentinel_landed = landed_text.contains(&sentinel);
+        let clipboard_restore_result = clipboard_guard.verify_and_repair();
 
         if let Err(message) = check_paste_report(&report, ax_focused_element_available) {
+            let clipboard_status = match &clipboard_restore_result {
+                Ok(()) => "previous clipboard payload verified".to_owned(),
+                Err(err) => format!("clipboard restore check: {err:#}"),
+            };
             bail!(
                 "{message} (sentinel landed in probe text view: {sentinel_landed}, \
-                 paste_event_posted={}, acknowledgement_ms={:?}, clipboard_restored={:?})",
+                 paste_event_posted={}, acknowledgement_ms={:?}, clipboard_restored={:?}, \
+                 {clipboard_status})",
                 report.paste_event_posted,
                 report.acknowledgement_ms,
                 report.clipboard_restored,
@@ -468,17 +705,7 @@ impl ProbeWindow {
             );
         }
 
-        if let Some(before) = clipboard_before.as_deref() {
-            let clipboard_after = probe_clipboard.get_text().ok();
-            if clipboard_after.as_deref() != Some(before) {
-                bail!(
-                    "macOS doctor paste-transaction did not restore the previous clipboard text \
-                     after the transaction (expected {before:?}, found {clipboard_after:?})"
-                );
-            }
-        }
-
-        Ok(())
+        clipboard_restore_result
     }
 }
 
@@ -644,6 +871,57 @@ mod tests {
         assert_ne!(a, b);
         assert_ne!(a, c);
         assert!(a.starts_with("parakit-doctor-macos-smoke-123-"));
+    }
+
+    #[test]
+    fn failure_cleanup_only_replaces_the_staged_sentinel() {
+        let sentinel = "parakit-doctor-macos-smoke-123-1";
+        assert!(DoctorClipboardSnapshot::Text(sentinel.to_owned()).is_text(sentinel));
+        assert!(
+            !DoctorClipboardSnapshot::Text("a newer user clipboard value".to_owned())
+                .is_text(sentinel)
+        );
+        assert!(!DoctorClipboardSnapshot::Html {
+            html: "<b>newer payload</b>".to_owned(),
+            alt_text: Some(sentinel.to_owned()),
+        }
+        .is_text(sentinel));
+    }
+
+    #[test]
+    fn non_text_clipboard_snapshots_compare_payload_contents() {
+        let html = DoctorClipboardSnapshot::Html {
+            html: "<b>hello</b>".to_owned(),
+            alt_text: Some("hello".to_owned()),
+        };
+        let changed_html = DoctorClipboardSnapshot::Html {
+            html: "<b>hello</b>".to_owned(),
+            alt_text: Some("different".to_owned()),
+        };
+        assert!(html.same_payload(&DoctorClipboardSnapshot::Html {
+            html: "<b>hello</b>".to_owned(),
+            alt_text: Some("hello".to_owned()),
+        }));
+        assert!(!html.same_payload(&changed_html));
+
+        let image = DoctorClipboardSnapshot::Image(ImageData {
+            width: 1,
+            height: 1,
+            bytes: Cow::Owned(vec![0, 1, 2, 3]),
+        });
+        let changed_image = DoctorClipboardSnapshot::Image(ImageData {
+            width: 1,
+            height: 1,
+            bytes: Cow::Owned(vec![3, 2, 1, 0]),
+        });
+        assert!(!image.same_payload(&changed_image));
+
+        let files = DoctorClipboardSnapshot::FileList(vec![PathBuf::from("one.txt")]);
+        assert!(
+            files.same_payload(&DoctorClipboardSnapshot::FileList(vec![PathBuf::from(
+                "one.txt"
+            )]))
+        );
     }
 
     fn report(outcome: PasteOutcome, acknowledgement_kind: &'static str) -> PasteReport {

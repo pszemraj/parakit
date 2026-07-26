@@ -148,54 +148,8 @@ fn suppressed_key_event_smoke_with_expectation(
     let mask = event_mask(K_CG_EVENT_KEY_DOWN)
         | event_mask(K_CG_EVENT_KEY_UP)
         | event_mask(K_CG_EVENT_FLAGS_CHANGED);
-    let tap = unsafe {
-        CGEventTapCreate(
-            K_CG_SESSION_EVENT_TAP,
-            K_CG_HEAD_INSERT_EVENT_TAP,
-            K_CG_EVENT_TAP_OPTION_DEFAULT,
-            mask,
-            smoke_tap_callback,
-            (&state as *const SmokeTapState).cast_mut().cast(),
-        )
-    };
-    if tap.is_null() {
-        bail!(
-            "could not create macOS event tap for insertion smoke test; grant Accessibility and Input Monitoring to your terminal and rerun parakit doctor --deep"
-        );
-    }
-
-    let source = unsafe { CFMachPortCreateRunLoopSource(ptr::null(), tap, 0) };
-    if source.is_null() {
-        unsafe {
-            CFRelease(tap.cast());
-        }
-        bail!("could not create macOS event-tap run-loop source");
-    }
-
-    unsafe {
-        let run_loop = CFRunLoopGetCurrent();
-        CFRunLoopAddSource(run_loop, source, kCFRunLoopDefaultMode);
-        CGEventTapEnable(tap, 1);
-    }
-
-    let action_result = action();
-    wait_for_smoke_events(&state);
-
-    // Full teardown, in dependency order. Releasing the port objects alone
-    // is not enough: without an explicit disable + invalidate, the window
-    // server keeps routing session key events into the (now unserviced)
-    // suppressing tap, which silently eats any synthetic chord posted right
-    // after this smoke test — including stage 2's real paste transaction.
-    unsafe {
-        CGEventTapEnable(tap, 0);
-        let run_loop = CFRunLoopGetCurrent();
-        CFRunLoopRemoveSource(run_loop, source, kCFRunLoopDefaultMode);
-        CFMachPortInvalidate(tap);
-        CFRelease(source.cast());
-        CFRelease(tap.cast());
-    }
-
-    action_result?;
+    let tap = SmokeTap::install(&state, mask)?;
+    run_smoke_action(tap, action, || wait_for_smoke_events(&state))?;
     if state.saw_key_down.load(Ordering::Acquire) && state.saw_key_up.load(Ordering::Acquire) {
         if expected_keycode.is_some()
             && (!state.saw_expected_key_down.load(Ordering::Acquire)
@@ -207,6 +161,89 @@ fn suppressed_key_event_smoke_with_expectation(
     } else {
         bail!("macOS insertion smoke test did not observe synthetic key down/up events")
     }
+}
+
+/// Installed smoke tap whose lifetime keeps `SmokeTapState::user_info` valid.
+///
+/// Declared after the stack-owned state and moved into
+/// [`run_smoke_action`], so teardown runs before that state can be dropped on
+/// both normal return and unwinding.
+struct SmokeTap {
+    tap: CFMachPortRef,
+    source: CFRunLoopSourceRef,
+    run_loop: CFRunLoopRef,
+}
+
+impl SmokeTap {
+    fn install(state: &SmokeTapState, mask: u64) -> Result<Self> {
+        let tap = unsafe {
+            CGEventTapCreate(
+                K_CG_SESSION_EVENT_TAP,
+                K_CG_HEAD_INSERT_EVENT_TAP,
+                K_CG_EVENT_TAP_OPTION_DEFAULT,
+                mask,
+                smoke_tap_callback,
+                (state as *const SmokeTapState).cast_mut().cast(),
+            )
+        };
+        if tap.is_null() {
+            bail!(
+                "could not create macOS event tap for insertion smoke test; grant Accessibility and Input Monitoring to your terminal and rerun parakit doctor --deep"
+            );
+        }
+
+        let source = unsafe { CFMachPortCreateRunLoopSource(ptr::null(), tap, 0) };
+        if source.is_null() {
+            unsafe {
+                CFMachPortInvalidate(tap);
+                CFRelease(tap.cast());
+            }
+            bail!("could not create macOS event-tap run-loop source");
+        }
+
+        let run_loop = unsafe { CFRunLoopGetCurrent() };
+        unsafe {
+            CFRunLoopAddSource(run_loop, source, kCFRunLoopDefaultMode);
+            CGEventTapEnable(tap, 1);
+        }
+        Ok(Self {
+            tap,
+            source,
+            run_loop,
+        })
+    }
+}
+
+impl Drop for SmokeTap {
+    fn drop(&mut self) {
+        // Full teardown, in dependency order. Releasing the port objects
+        // alone is not enough: without an explicit disable + invalidate, the
+        // window server can keep routing events into the callback after its
+        // stack-owned `user_info` state has gone away.
+        unsafe {
+            CGEventTapEnable(self.tap, 0);
+            CFRunLoopRemoveSource(self.run_loop, self.source, kCFRunLoopDefaultMode);
+            CFMachPortInvalidate(self.tap);
+            CFRelease(self.source.cast());
+            CFRelease(self.tap.cast());
+        }
+    }
+}
+
+/// Run the smoke action and bounded observation while a teardown guard lives.
+///
+/// Keeping this tiny wrapper generic makes the unwind contract independently
+/// testable: if `action` panics, Rust drops `guard` before unwinding back to
+/// the caller.
+fn run_smoke_action<G>(
+    guard: G,
+    action: impl FnOnce() -> Result<()>,
+    wait: impl FnOnce(),
+) -> Result<()> {
+    let action_result = action();
+    wait();
+    drop(guard);
+    action_result
 }
 
 /// Send a macOS paste shortcut as a full Cmd+V hardware-style chord.
@@ -428,4 +465,33 @@ fn wait_for_smoke_events(state: &SmokeTapState) {
 
 fn event_mask(event_type: u32) -> u64 {
     1_u64 << event_type
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+
+    struct DropSpy(Arc<AtomicBool>);
+
+    impl Drop for DropSpy {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::Release);
+        }
+    }
+
+    #[test]
+    fn smoke_guard_tears_down_when_action_panics() {
+        let dropped = Arc::new(AtomicBool::new(false));
+        let guard = DropSpy(Arc::clone(&dropped));
+        let unwind = catch_unwind(AssertUnwindSafe(|| {
+            let _ = run_smoke_action(
+                guard,
+                || -> Result<()> { panic!("synthetic smoke action panic") },
+                || {},
+            );
+        }));
+        assert!(unwind.is_err());
+        assert!(dropped.load(Ordering::Acquire));
+    }
 }

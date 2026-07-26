@@ -53,6 +53,19 @@
 //! happened came down to timing, which made it look intermittent and
 //! arbitrary from the outside.
 //!
+//! ## Why value growth alone is not confirmation
+//!
+//! A focused element can grow for reasons unrelated to Parakit's paste:
+//! asynchronous application output, autocomplete, a remote terminal update,
+//! or another input source can all change `AXValue` during the confirmation
+//! window. Treating any length increase as paste evidence can therefore
+//! restore the previous clipboard even though the transcript never landed,
+//! destroying the only remaining copy. Confirmation requires transcript-
+//! specific evidence instead: a newly visible whole transcript, or a newly
+//! visible leading/trailing window when a terminal or bounded field only
+//! exposes part of it. If that evidence is unavailable, the transaction
+//! deliberately leaves the transcript on the clipboard.
+//!
 //! ## Secure input fields are not a bug
 //!
 //! Password/secure-text fields deliberately withhold `AXValue` from
@@ -79,11 +92,17 @@ pub(crate) const AX_POLL_INTERVAL: Duration = Duration::from_millis(40);
 /// see the secure-input-field note in the module docs).
 pub(crate) const UNVERIFIED_GRACE: Duration = Duration::from_millis(1500);
 
-/// Longest transcript length for which a freshly read `AXValue` is compared
-/// with `.contains(transcript)`. Longer transcripts fall back to
-/// length-growth evidence only, avoiding an `O(field_len * transcript_len)`
-/// scan against a potentially huge accessibility value on every poll tick.
-const MAX_CONTAINS_TRANSCRIPT_LEN: usize = 20_000;
+/// Longest normalized transcript retained for whole-transcript matching.
+/// Longer transcripts retain only their leading/trailing evidence windows.
+const MAX_WHOLE_TRANSCRIPT_CHARS: usize = 20_000;
+
+/// Maximum number of non-whitespace `AXValue` characters retained per poll.
+///
+/// Values at or below the limit are matched whole. Larger values retain
+/// equally sized leading and trailing segments, bounding both allocation and
+/// matching work while preserving the portions exposed by terminals and
+/// bounded text fields most often.
+const MAX_NORMALIZED_AX_VALUE_CHARS: usize = 65_536;
 
 /// Number of leading (and trailing) non-whitespace characters matched when
 /// the whole transcript cannot be found in the target's value.
@@ -122,16 +141,16 @@ pub(crate) fn capture_baseline(focus: Option<&FocusSnapshot>) -> Option<String> 
 /// pump is required (see the module docs for why this does not use
 /// `AXObserver` push notifications).
 ///
-/// Growth is measured against [`PasteConfirmationContext::baseline`], read
-/// before the chord was sent. When no pre-chord read was possible this falls
-/// back to the first post-chord read, which is strictly weaker — see the
-/// module docs.
+/// Transcript-specific evidence is compared with
+/// [`PasteConfirmationContext::baseline`], read before the chord was sent.
+/// When no pre-chord read was possible this falls back to the first
+/// post-chord read, which is strictly weaker — see the module docs.
 ///
 /// # Returns
 ///
 /// [`PasteConfirmation::Confirmed`] as soon as the element's value is
-/// observed to show the transcript (ignoring the target's own line
-/// wrapping), or to have grown past the baseline.
+/// observed to show a newly visible transcript occurrence (ignoring the
+/// target's own line wrapping).
 /// [`PasteConfirmation::Unverified`] after a fixed grace
 /// sleep when Accessibility cannot expose a pollable value at all (no
 /// focused element on this snapshot, or the field does not support value
@@ -152,10 +171,20 @@ pub(crate) fn await_paste_confirmation(ctx: &PasteConfirmationContext<'_>) -> Pa
         };
     };
 
-    let baseline: Option<String> = match ctx.baseline {
-        Some(baseline) => Some(baseline.to_owned()),
-        None => element.poll_value().ok().flatten(),
-    };
+    // Build transcript evidence once for the whole polling transaction. The
+    // old implementation rebuilt this whitespace-normalized needle on every
+    // 40ms tick.
+    let matcher = TranscriptMatcher::new(ctx.transcript);
+    let baseline =
+        match ctx.baseline {
+            Some(baseline) => Some(BoundedNormalizedValue::new(
+                baseline,
+                MAX_NORMALIZED_AX_VALUE_CHARS,
+            )),
+            None => element.poll_value().ok().flatten().map(|baseline| {
+                BoundedNormalizedValue::new(&baseline, MAX_NORMALIZED_AX_VALUE_CHARS)
+            }),
+        };
 
     let deadline = start + AX_CONFIRM_DEADLINE;
     loop {
@@ -170,7 +199,8 @@ pub(crate) fn await_paste_confirmation(ctx: &PasteConfirmationContext<'_>) -> Pa
 
         match element.poll_value() {
             Ok(Some(current)) => {
-                if value_indicates_insertion(baseline.as_deref(), &current, ctx.transcript) {
+                let current = BoundedNormalizedValue::new(&current, MAX_NORMALIZED_AX_VALUE_CHARS);
+                if matcher.indicates_insertion(baseline.as_ref(), &current) {
                     return PasteConfirmation::Confirmed {
                         elapsed: start.elapsed(),
                         kind: "ax_confirmed",
@@ -192,9 +222,8 @@ pub(crate) fn await_paste_confirmation(ctx: &PasteConfirmationContext<'_>) -> Pa
     }
 }
 
-/// Pure decision logic: does `current` (a freshly read `AXValue`) look like
-/// it now contains the inserted transcript, relative to `baseline` (the
-/// first post-chord read, when one was available)?
+/// Pure decision logic: does `current` (a freshly read `AXValue`) contain
+/// newly visible transcript-specific evidence relative to `baseline`?
 ///
 /// Factored out of the FFI polling loop so it can be unit-tested without an
 /// Accessibility permission grant; the FFI wrapper in
@@ -202,29 +231,85 @@ pub(crate) fn await_paste_confirmation(ctx: &PasteConfirmationContext<'_>) -> Pa
 ///
 /// # Arguments
 ///
-/// * `baseline` - First post-chord `AXValue` read, when available.
+/// * `baseline` - Pre-chord `AXValue` read, when available.
 /// * `current` - Most recent `AXValue` read.
 /// * `transcript` - Transcript text that was pasted.
+#[cfg(test)]
 fn value_indicates_insertion(baseline: Option<&str>, current: &str, transcript: &str) -> bool {
-    if transcript_is_present(current, transcript) {
-        return true;
+    let matcher = TranscriptMatcher::new(transcript);
+    let baseline =
+        baseline.map(|value| BoundedNormalizedValue::new(value, MAX_NORMALIZED_AX_VALUE_CHARS));
+    let current = BoundedNormalizedValue::new(current, MAX_NORMALIZED_AX_VALUE_CHARS);
+    matcher.indicates_insertion(baseline.as_ref(), &current)
+}
+
+/// Bounded whitespace-normalized representation of an Accessibility value.
+///
+/// Small values are kept whole in `head`. For a value over the requested
+/// limit, `head` and `tail` hold disjoint leading/trailing halves. They stay
+/// separate so concatenating them cannot manufacture a false match across
+/// an omitted middle.
+struct BoundedNormalizedValue {
+    head: String,
+    tail: Option<String>,
+}
+
+impl BoundedNormalizedValue {
+    fn new(value: &str, max_chars: usize) -> Self {
+        debug_assert!(max_chars >= 2);
+        let mut leading: Vec<char> = value
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .take(max_chars + 1)
+            .collect();
+        if leading.len() <= max_chars {
+            return Self {
+                head: leading.into_iter().collect(),
+                tail: None,
+            };
+        }
+
+        let head_chars = max_chars / 2;
+        leading.truncate(head_chars);
+        let mut trailing: Vec<char> = value
+            .chars()
+            .rev()
+            .filter(|c| !c.is_whitespace())
+            .take(max_chars - head_chars)
+            .collect();
+        trailing.reverse();
+        Self {
+            head: leading.into_iter().collect(),
+            tail: Some(trailing.into_iter().collect()),
+        }
     }
-    match baseline {
-        Some(baseline) => current.len() > baseline.len(),
-        None => false,
+
+    fn occurrence_count(&self, needle: &str) -> usize {
+        if needle.is_empty() {
+            return 0;
+        }
+        self.head.match_indices(needle).count()
+            + self
+                .tail
+                .as_deref()
+                .map_or(0, |tail| tail.match_indices(needle).count())
     }
 }
 
-/// Is `transcript` visible in `current`, allowing for the target having
-/// re-laid-out the text?
+#[derive(Default)]
+struct EvidenceCounts {
+    whole: usize,
+    head: usize,
+    tail: usize,
+}
+
+/// Transcript-specific evidence compiled once before the poll loop.
 ///
 /// Matching ignores whitespace entirely rather than comparing verbatim. A
 /// terminal's `AXValue` is its *rendered* screen, hard-wrapped at the column
 /// width, so a pasted transcript comes back with newlines injected at the
-/// wrap points — and terminals wrap mid-word, so collapsing runs of
-/// whitespace is not enough to repair it. Dropping whitespace on both sides
-/// makes the comparison independent of how the target chose to lay the text
-/// out.
+/// wrap points. Dropping whitespace on both sides makes the comparison
+/// independent of that layout.
 ///
 /// When the whole transcript is not found, a leading or trailing window of
 /// [`CONFIRM_WINDOW_CHARS`] still counts: a terminal scrolls the head of a
@@ -232,34 +317,80 @@ fn value_indicates_insertion(baseline: Option<&str>, current: &str, transcript: 
 /// tail, but either end appearing verbatim is positive evidence the paste
 /// landed.
 ///
-/// # Arguments
-///
-/// * `current` - Most recent `AXValue` read.
-/// * `transcript` - Transcript text that was pasted.
-fn transcript_is_present(current: &str, transcript: &str) -> bool {
-    if transcript.is_empty() || transcript.len() > MAX_CONTAINS_TRANSCRIPT_LEN {
-        return false;
-    }
-    let needle: Vec<char> = transcript.chars().filter(|c| !c.is_whitespace()).collect();
-    if needle.is_empty() {
-        return false;
-    }
-    let haystack: String = current.chars().filter(|c| !c.is_whitespace()).collect();
+struct TranscriptMatcher {
+    whole: Option<String>,
+    head: Option<String>,
+    tail: Option<String>,
+}
 
-    let whole: String = needle.iter().collect();
-    if haystack.contains(&whole) {
-        return true;
+impl TranscriptMatcher {
+    fn new(transcript: &str) -> Self {
+        let normalized = BoundedNormalizedValue::new(transcript, MAX_WHOLE_TRANSCRIPT_CHARS);
+        if normalized.head.is_empty() {
+            return Self {
+                whole: None,
+                head: None,
+                tail: None,
+            };
+        }
+
+        let whole = normalized.tail.is_none().then(|| normalized.head.clone());
+        let normalized_len = normalized.head.chars().count()
+            + normalized
+                .tail
+                .as_deref()
+                .map_or(0, |tail| tail.chars().count());
+        if normalized_len <= CONFIRM_WINDOW_CHARS {
+            return Self {
+                whole,
+                head: None,
+                tail: None,
+            };
+        }
+
+        let head: String = normalized.head.chars().take(CONFIRM_WINDOW_CHARS).collect();
+        let tail_source = normalized.tail.as_deref().unwrap_or(&normalized.head);
+        let mut tail: Vec<char> = tail_source
+            .chars()
+            .rev()
+            .take(CONFIRM_WINDOW_CHARS)
+            .collect();
+        tail.reverse();
+        Self {
+            whole,
+            head: Some(head),
+            tail: Some(tail.into_iter().collect()),
+        }
     }
-    if needle.len() <= CONFIRM_WINDOW_CHARS {
-        // Already covered by the whole-transcript check above, and too short
-        // to window down further without inviting coincidental matches.
-        return false;
+
+    fn counts(&self, value: &BoundedNormalizedValue) -> EvidenceCounts {
+        EvidenceCounts {
+            whole: self
+                .whole
+                .as_deref()
+                .map_or(0, |whole| value.occurrence_count(whole)),
+            head: self
+                .head
+                .as_deref()
+                .map_or(0, |head| value.occurrence_count(head)),
+            tail: self
+                .tail
+                .as_deref()
+                .map_or(0, |tail| value.occurrence_count(tail)),
+        }
     }
-    let head: String = needle[..CONFIRM_WINDOW_CHARS].iter().collect();
-    let tail: String = needle[needle.len() - CONFIRM_WINDOW_CHARS..]
-        .iter()
-        .collect();
-    haystack.contains(&head) || haystack.contains(&tail)
+
+    fn indicates_insertion(
+        &self,
+        baseline: Option<&BoundedNormalizedValue>,
+        current: &BoundedNormalizedValue,
+    ) -> bool {
+        let current = self.counts(current);
+        let baseline = baseline.map(|value| self.counts(value)).unwrap_or_default();
+        current.whole > baseline.whole
+            || current.head > baseline.head
+            || current.tail > baseline.tail
+    }
 }
 
 #[cfg(test)]
@@ -267,7 +398,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn contains_transcript_confirms_regardless_of_baseline() {
+    fn new_transcript_evidence_confirms_with_or_without_baseline() {
         assert!(value_indicates_insertion(None, "hello world", "world"));
         assert!(value_indicates_insertion(
             Some("hello "),
@@ -277,8 +408,8 @@ mod tests {
     }
 
     #[test]
-    fn growth_confirms_when_transcript_not_found_verbatim() {
-        assert!(value_indicates_insertion(Some("abc"), "abcdef", "xyz"));
+    fn unrelated_growth_does_not_confirm() {
+        assert!(!value_indicates_insertion(Some("abc"), "abcdef", "xyz"));
     }
 
     #[test]
@@ -297,9 +428,14 @@ mod tests {
     }
 
     #[test]
-    fn oversized_transcript_falls_back_to_growth_only() {
-        let huge = "a".repeat(MAX_CONTAINS_TRANSCRIPT_LEN + 1);
-        assert!(value_indicates_insertion(
+    fn oversized_transcript_uses_bounded_windows_not_growth() {
+        let huge = format!(
+            "{}middle{}",
+            "a".repeat(MAX_WHOLE_TRANSCRIPT_CHARS),
+            "z".repeat(CONFIRM_WINDOW_CHARS)
+        );
+        assert!(value_indicates_insertion(Some(""), &huge, &huge));
+        assert!(!value_indicates_insertion(
             Some("short"),
             "short-plus-more",
             &huge
@@ -308,9 +444,9 @@ mod tests {
     }
 
     #[test]
-    fn empty_transcript_relies_on_growth_only() {
+    fn empty_transcript_never_confirms() {
         assert!(!value_indicates_insertion(Some(""), "", ""));
-        assert!(value_indicates_insertion(Some(""), "x", ""));
+        assert!(!value_indicates_insertion(Some(""), "x", ""));
     }
 
     /// The regression behind the false error chime in ghostty: a terminal
@@ -339,8 +475,9 @@ mod tests {
     fn wrapped_transcript_confirms_without_any_growth_evidence() {
         let transcript = "the quick brown fox jumps over the lazy dog every single morning";
         let wrapped = "the quick brown fox jumps over the\nlazy dog every single morning";
+        let same_length_baseline = "x".repeat(wrapped.len());
         assert!(value_indicates_insertion(
-            Some(wrapped),
+            Some(&same_length_baseline),
             wrapped,
             transcript
         ));
@@ -382,6 +519,35 @@ mod tests {
             "hello there",
             transcript
         ));
+    }
+
+    #[test]
+    fn evidence_already_present_in_baseline_does_not_confirm() {
+        let transcript = "alpha bravo charlie delta echo foxtrot";
+        assert!(!value_indicates_insertion(
+            Some(transcript),
+            transcript,
+            transcript
+        ));
+    }
+
+    #[test]
+    fn an_additional_transcript_occurrence_confirms() {
+        let transcript = "alpha bravo charlie delta echo foxtrot";
+        let current = format!("{transcript}\n{transcript}");
+        assert!(value_indicates_insertion(
+            Some(transcript),
+            &current,
+            transcript
+        ));
+    }
+
+    #[test]
+    fn normalized_ax_values_are_bounded_and_keep_both_ends() {
+        let value = format!("{}{}", "a".repeat(80), "z".repeat(80));
+        let normalized = BoundedNormalizedValue::new(&value, 64);
+        assert_eq!(normalized.head, "a".repeat(32));
+        assert_eq!(normalized.tail.as_deref(), Some("z".repeat(32).as_str()));
     }
 }
 
