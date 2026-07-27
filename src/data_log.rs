@@ -22,14 +22,17 @@ pub struct RecordId(u64);
 /// Every field describes how [`DataLogger::log`]'s `cleaned` argument was
 /// derived from its `raw` argument, so downstream analysis can join a
 /// transcription record with the cleaning behavior that produced it.
+#[derive(Serialize)]
 pub struct CleaningLogFields<'a> {
     /// Number of enabled passes after profile and disable filtering.
     pub rules_active: usize,
     /// Cleaner schema/behavior version (`parakit::rules::CLEANER_VERSION`).
     pub cleaner_version: u32,
     /// Selected profile: "safe", "aggressive", or "disabled" when cleaning is off.
+    #[serde(rename = "cleaning_profile")]
     pub profile: &'static str,
     /// Stable identifier of the ordered enabled pass set; None when cleaning is off.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub ruleset_id: Option<&'a str>,
     /// Whether the messaging-style terminal-period pass was enabled.
     pub drops_trailing_period: bool,
@@ -38,10 +41,11 @@ pub struct CleaningLogFields<'a> {
     /// Transformations that actually changed the transcript, in application order.
     pub rules_fired: &'a [RuleHit],
     /// Set when a cleaning pass failed at runtime and the transcript was passed through unchanged.
+    #[serde(rename = "cleaning_failure", skip_serializing_if = "Option::is_none")]
     pub failure: Option<&'a str>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Serialize)]
 struct LogRecord<'a> {
     ts: String,
     parakit_version: &'static str,
@@ -49,16 +53,8 @@ struct LogRecord<'a> {
     infer_ms: u128,
     raw: &'a str,
     cleaned: &'a str,
-    rules_active: usize,
-    cleaner_version: u32,
-    cleaning_profile: &'a str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    ruleset_id: Option<&'a str>,
-    drops_trailing_period: bool,
-    number_threshold: Option<f64>,
-    rules_fired: &'a [RuleHit],
-    #[serde(skip_serializing_if = "Option::is_none")]
-    cleaning_failure: Option<&'a str>,
+    #[serde(flatten)]
+    cleaning: CleaningLogFields<'a>,
 }
 
 /// Insertion-outcome telemetry correlated with a previously logged
@@ -67,6 +63,7 @@ struct LogRecord<'a> {
 /// Every field describes what happened after the record identified by a
 /// [`RecordId`] was written, so downstream analysis can join a transcription
 /// record with how (or whether) it reached the focused application.
+#[derive(Serialize)]
 pub struct InsertionLogFields<'a> {
     /// Coarse insertion result, e.g. `"pasted"`, `"pasted_unverified"`,
     /// `"copied_only"`, `"blocked"`, `"skipped"`, or `"error"`.
@@ -93,21 +90,13 @@ pub struct InsertionLogFields<'a> {
     pub failure_reason: Option<&'a str>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Serialize)]
 struct InsertionLogRecord<'a> {
     kind: &'static str,
     ts: String,
     ref_id: u64,
-    outcome: &'a str,
-    target_bundle_id: Option<&'a str>,
-    focus_verification: &'a str,
-    transcript_chars: usize,
-    paste_event_posted: bool,
-    pasteboard_requested: Option<bool>,
-    acknowledgement_kind: &'a str,
-    acknowledgement_ms: Option<u128>,
-    clipboard_restored: Option<bool>,
-    failure_reason: Option<&'a str>,
+    #[serde(flatten)]
+    fields: InsertionLogFields<'a>,
 }
 
 struct LogState {
@@ -190,7 +179,7 @@ impl DataLogger {
     /// * `id` - Identifier returned by the original [`DataLogger::log`] call.
     /// * `fields` - Insertion telemetry to record.
     pub fn log_insertion(&self, id: RecordId, fields: InsertionLogFields<'_>) {
-        if let Err(e) = self.try_log_insertion(id, &fields) {
+        if let Err(e) = self.try_log_insertion(id, fields) {
             eprintln!("parakit: insertion log write failed: {e:#}");
         }
     }
@@ -211,14 +200,7 @@ impl DataLogger {
             infer_ms: infer.as_millis(),
             raw,
             cleaned,
-            rules_active: cleaning.rules_active,
-            cleaner_version: cleaning.cleaner_version,
-            cleaning_profile: cleaning.profile,
-            ruleset_id: cleaning.ruleset_id,
-            drops_trailing_period: cleaning.drops_trailing_period,
-            number_threshold: cleaning.number_threshold,
-            rules_fired: cleaning.rules_fired,
-            cleaning_failure: cleaning.failure,
+            cleaning,
         };
 
         self.with_state(|state| {
@@ -226,22 +208,13 @@ impl DataLogger {
         })
     }
 
-    fn try_log_insertion(&self, id: RecordId, fields: &InsertionLogFields<'_>) -> Result<()> {
+    fn try_log_insertion(&self, id: RecordId, fields: InsertionLogFields<'_>) -> Result<()> {
         let ts = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
         let record = InsertionLogRecord {
             kind: "insertion",
             ts,
             ref_id: id.0,
-            outcome: fields.outcome,
-            target_bundle_id: fields.target_bundle_id,
-            focus_verification: fields.focus_verification,
-            transcript_chars: fields.transcript_chars,
-            paste_event_posted: fields.paste_event_posted,
-            pasteboard_requested: fields.pasteboard_requested,
-            acknowledgement_kind: fields.acknowledgement_kind,
-            acknowledgement_ms: fields.acknowledgement_ms,
-            clipboard_restored: fields.clipboard_restored,
-            failure_reason: fields.failure_reason,
+            fields,
         };
         self.with_state(|state| {
             write_jsonl_record(state, &record, "failed to serialize jsonl insertion record")
@@ -367,6 +340,14 @@ mod tests {
         }
     }
 
+    fn assert_exact_keys(value: &serde_json::Value, expected: &[&str]) {
+        let object = value.as_object().expect("record should be a JSON object");
+        assert_eq!(object.len(), expected.len(), "unexpected keys in {value}");
+        for key in expected {
+            assert!(object.contains_key(*key), "missing {key:?} in {value}");
+        }
+    }
+
     #[test]
     fn jsonl_log_insertion_emits_correlated_second_line() {
         let dir = crate::test_support::fixture_root("parakit-log-test", "jsonl-insertion");
@@ -393,9 +374,23 @@ mod tests {
 
         let transcript: serde_json::Value =
             serde_json::from_str(lines[0]).expect("valid transcript jsonl");
-        assert!(
-            transcript.get("kind").is_none(),
-            "transcript record must not gain a kind key"
+        assert_exact_keys(
+            &transcript,
+            &[
+                "ts",
+                "parakit_version",
+                "audio_secs",
+                "infer_ms",
+                "raw",
+                "cleaned",
+                "rules_active",
+                "cleaner_version",
+                "cleaning_profile",
+                "ruleset_id",
+                "drops_trailing_period",
+                "number_threshold",
+                "rules_fired",
+            ],
         );
         assert_eq!(transcript["cleaned"], "cleaned text");
         assert_eq!(
@@ -405,6 +400,24 @@ mod tests {
 
         let insertion: serde_json::Value =
             serde_json::from_str(lines[1]).expect("valid insertion jsonl");
+        assert_exact_keys(
+            &insertion,
+            &[
+                "kind",
+                "ts",
+                "ref_id",
+                "outcome",
+                "target_bundle_id",
+                "focus_verification",
+                "transcript_chars",
+                "paste_event_posted",
+                "pasteboard_requested",
+                "acknowledgement_kind",
+                "acknowledgement_ms",
+                "clipboard_restored",
+                "failure_reason",
+            ],
+        );
         assert_eq!(insertion["kind"], "insertion");
         assert_eq!(insertion["ref_id"], id.0);
         assert_eq!(insertion["outcome"], "pasted");
