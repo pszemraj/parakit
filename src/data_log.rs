@@ -222,10 +222,7 @@ impl DataLogger {
         };
 
         self.with_state(|state| {
-            serde_json::to_writer(&mut state.file, &record)
-                .context("failed to serialize jsonl log record")?;
-            writeln!(state.file).context("failed to write jsonl newline")?;
-            state.file.flush().context("failed to flush log file")
+            write_jsonl_record(state, &record, "failed to serialize jsonl log record")
         })
     }
 
@@ -247,10 +244,7 @@ impl DataLogger {
             failure_reason: fields.failure_reason,
         };
         self.with_state(|state| {
-            serde_json::to_writer(&mut state.file, &record)
-                .context("failed to serialize jsonl insertion record")?;
-            writeln!(state.file).context("failed to write jsonl newline")?;
-            state.file.flush().context("failed to flush log file")
+            write_jsonl_record(state, &record, "failed to serialize jsonl insertion record")
         })
     }
 
@@ -270,7 +264,7 @@ impl DataLogger {
         }
         let state = state
             .as_mut()
-            .ok_or_else(|| anyhow::anyhow!("log file state was not initialized"))?;
+            .expect("log state is initialized or open_for_date returned an error");
         f(state)
     }
 
@@ -285,6 +279,16 @@ impl DataLogger {
             .with_context(|| format!("failed to open log file {}", path.display()))?;
         Ok(BufWriter::new(file))
     }
+}
+
+fn write_jsonl_record<T: Serialize>(
+    state: &mut LogState,
+    record: &T,
+    serialization_context: &'static str,
+) -> Result<()> {
+    serde_json::to_writer(&mut state.file, record).context(serialization_context)?;
+    writeln!(state.file).context("failed to write jsonl newline")?;
+    state.file.flush().context("failed to flush log file")
 }
 
 fn file_name(date: NaiveDate) -> String {
