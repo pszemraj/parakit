@@ -2,6 +2,37 @@
 
 Build success does not prove transcription quality. Use real user audio, not synthetic TTS.
 
+## Rust Source Coverage
+
+Install Rust's coverage tools once:
+
+```bash
+rustup component add llvm-tools-preview
+cargo install cargo-llvm-cov --locked
+```
+
+Run the workspace tests with source instrumentation and print the Rust
+coverage summary:
+
+```bash
+cargo coverage
+```
+
+Generate a browsable per-line report when investigating an untested branch:
+
+```bash
+cargo coverage-html
+```
+
+The aliases are defined in [`.cargo/config.toml`](../.cargo/config.toml).
+`cargo-llvm-cov` keeps instrumented artifacts under
+`target/llvm-cov-target`, separate from ordinary builds. Reports cover
+parakit's Rust code, not linked CrispASR C/C++ code. They also cover only
+code compiled for the current host and feature set, so macOS coverage does
+not validate Linux or Windows branches. Use coverage to locate test gaps; do
+not treat a percentage as evidence of transcription quality, desktop
+integration, or paste safety.
+
 ## WAV Quality Target
 
 Use the Rust WAV target to run the same [CrispASR](https://github.com/CrispStrobe/CrispASR) engine without the hotkey daemon:

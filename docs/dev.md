@@ -22,6 +22,9 @@ Install rustdoc-checker with:
 cargo install --git https://github.com/pszemraj/rustdoc-checker.git
 ```
 
+Source-coverage setup and report commands are in
+[quality.md#rust-source-coverage](quality.md#rust-source-coverage).
+
 ## Model Artifacts
 
 End-user startup uses the hosted [Q8_0 GGUF](https://huggingface.co/pszemraj/parakeet-tdt-0.6b-v3-gguf).
