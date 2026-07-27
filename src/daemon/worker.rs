@@ -588,13 +588,8 @@ fn paste_transcript(
         );
     }
 
-    if injector.is_none() {
-        *injector = Some(Injector::new().context("could not initialize insertion backend")?);
-    }
-    let prepare_result = injector
-        .as_mut()
-        .expect("insertion backend was just initialized")
-        .prepare_for_mode(mode);
+    let prepare_result =
+        ensure_injector(injector, "could not initialize insertion backend")?.prepare_for_mode(mode);
     if let Err(err) = prepare_result {
         if mode != PasteMode::Direct {
             log.warn(format!(
@@ -717,13 +712,20 @@ fn with_injector<R>(
     injector: &mut Option<Injector>,
     f: impl FnOnce(&mut Injector) -> Result<R>,
 ) -> Result<R> {
+    f(ensure_injector(
+        injector,
+        "could not initialize insertion backend for clipboard fallback",
+    )?)
+}
+
+fn ensure_injector<'a>(
+    injector: &'a mut Option<Injector>,
+    context: &'static str,
+) -> Result<&'a mut Injector> {
     if injector.is_none() {
-        *injector = Some(
-            Injector::new()
-                .context("could not initialize insertion backend for clipboard fallback")?,
-        );
+        *injector = Some(Injector::new().context(context)?);
     }
-    f(injector
+    Ok(injector
         .as_mut()
         .expect("insertion backend was just initialized"))
 }
