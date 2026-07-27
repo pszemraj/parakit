@@ -461,124 +461,99 @@ position = "first"
     }
 
     #[test]
-    fn bad_user_rule_regex_error_includes_file_path() {
-        let toml = r#"
+    fn validation_errors_name_the_case_and_config_path() {
+        let cases: &[(&str, &str, &[&str])] = &[
+            (
+                "bad-regex",
+                r#"
 [[rules.user]]
 name = "bad"
 pattern = "(unclosed"
 replacement = "x"
-"#;
-        let path = write_fixture("bad-regex", toml);
-        let err = load_from_path(&path).unwrap_err();
-        let msg = format!("{err:#}");
-        assert!(msg.contains("invalid regex"), "message: {msg}");
-        assert!(msg.contains(&path.display().to_string()), "message: {msg}");
-    }
-
-    #[test]
-    fn empty_user_rule_name_is_rejected_at_load() {
-        let toml = r#"
+"#,
+                &["invalid regex"],
+            ),
+            (
+                "empty-user-rule-name",
+                r#"
 [[rules.user]]
 name = ""
 pattern = "(?i)hi"
 replacement = "hello"
-"#;
-        let path = write_fixture("empty-user-rule-name", toml);
-        let err = load_from_path(&path).unwrap_err();
-        let msg = format!("{err:#}");
-        assert!(msg.contains("empty name"), "message: {msg}");
-        assert!(msg.contains(&path.display().to_string()), "message: {msg}");
-    }
-
-    #[test]
-    fn user_rule_name_with_surrounding_whitespace_is_rejected_at_load() {
-        let toml = r#"
+"#,
+                &["empty name"],
+            ),
+            (
+                "noncanonical-user-rule-name",
+                r#"
 [[rules.user]]
 name = " custom-hello "
 pattern = "(?i)hi"
 replacement = "hello"
-"#;
-        let path = write_fixture("noncanonical-user-rule-name", toml);
-        let err = load_from_path(&path).unwrap_err();
-        let msg = format!("{err:#}");
-        assert!(
-            msg.contains("leading or trailing whitespace"),
-            "message: {msg}"
-        );
-        assert!(msg.contains(&path.display().to_string()), "message: {msg}");
-    }
-
-    #[test]
-    fn empty_user_rule_pattern_is_rejected_at_load() {
-        let toml = r#"
+"#,
+                &["leading or trailing whitespace"],
+            ),
+            (
+                "empty-user-rule-pattern",
+                r#"
 [[rules.user]]
 name = "custom-empty-pattern"
 pattern = ""
 replacement = "x"
-"#;
-        let path = write_fixture("empty-user-rule-pattern", toml);
-        let err = load_from_path(&path).unwrap_err();
-        let msg = format!("{err:#}");
-        assert!(msg.contains("custom-empty-pattern"), "message: {msg}");
-        assert!(msg.contains("empty pattern"), "message: {msg}");
-        assert!(msg.contains(&path.display().to_string()), "message: {msg}");
-    }
-
-    #[test]
-    fn user_rule_collision_with_builtin_is_rejected_at_load() {
-        let toml = r#"
+"#,
+                &["custom-empty-pattern", "empty pattern"],
+            ),
+            (
+                "collision",
+                r#"
 [[rules.user]]
 name = "filled-pauses"
 pattern = "(?i)nope"
 replacement = "x"
-"#;
-        let path = write_fixture("collision", toml);
-        let err = load_from_path(&path).unwrap_err();
-        let msg = format!("{err:#}");
-        assert!(msg.contains("filled-pauses"), "message: {msg}");
-        assert!(msg.contains(&path.display().to_string()), "message: {msg}");
-    }
-
-    #[test]
-    fn disabled_rules_typo_is_rejected_at_load() {
-        let toml = r#"
+"#,
+                &["filled-pauses"],
+            ),
+            (
+                "disabled-rules-typo",
+                r#"
 [cleaning]
 disabled_rules = ["fixed-trailing-perod"]
-"#;
-        let path = write_fixture("disabled-rules-typo", toml);
-        let err = load_from_path(&path).unwrap_err();
-        let msg = format!("{err:#}");
-        assert!(msg.contains("no rule named"), "message: {msg}");
-        assert!(msg.contains("fixed-trailing-perod"), "message: {msg}");
-        assert!(msg.contains(&path.display().to_string()), "message: {msg}");
-    }
-
-    #[test]
-    fn negative_number_threshold_is_rejected_at_load() {
-        let toml = r#"
+"#,
+                &["no rule named", "fixed-trailing-perod"],
+            ),
+            (
+                "negative-number-threshold",
+                r#"
 [cleaning]
 number_threshold = -1
-"#;
-        let path = write_fixture("negative-number-threshold", toml);
-        let err = load_from_path(&path).unwrap_err();
-        let msg = format!("{err:#}");
-        assert!(msg.contains("number threshold"), "message: {msg}");
-        assert!(msg.contains("greater than or equal to 0"), "message: {msg}");
-        assert!(msg.contains(&path.display().to_string()), "message: {msg}");
-    }
-
-    #[test]
-    fn nonfinite_number_threshold_is_rejected_at_load() {
-        let toml = r#"
+"#,
+                &["number threshold", "greater than or equal to 0"],
+            ),
+            (
+                "nonfinite-number-threshold",
+                r#"
 [cleaning]
 number_threshold = nan
-"#;
-        let path = write_fixture("nonfinite-number-threshold", toml);
-        let err = load_from_path(&path).unwrap_err();
-        let msg = format!("{err:#}");
-        assert!(msg.contains("number threshold"), "message: {msg}");
-        assert!(msg.contains("finite value"), "message: {msg}");
-        assert!(msg.contains(&path.display().to_string()), "message: {msg}");
+"#,
+                &["number threshold", "finite value"],
+            ),
+        ];
+
+        for &(name, toml, expected_fragments) in cases {
+            let path = write_fixture(name, toml);
+            let err = load_from_path(&path).unwrap_err();
+            let message = format!("{err:#}");
+            for fragment in expected_fragments {
+                assert!(
+                    message.contains(fragment),
+                    "case {name}: expected {fragment:?} in {message}"
+                );
+            }
+            assert!(
+                message.contains(&path.display().to_string()),
+                "case {name}: config path missing from {message}"
+            );
+        }
     }
 
     #[test]
