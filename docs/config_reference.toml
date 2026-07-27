@@ -109,17 +109,9 @@
 
 # Built-in names accepted by cleaning.disabled_rules.
 # Safe/high-confidence:
-#   filler-um-uh - remove standalone um/uh variants and adjacent commas.
-#   filler-erm - remove lowercase erm variants without matching acronym ER.
+#   filled-pauses - remove standalone um/uh/erm variants and adjacent commas.
 #   stutter-safe-words - collapse repeated high-confidence function words.
-#   single-letter-stutter - remove repeated letter starts before that word.
-#   partial-stutter-should - remove partial starts before "should".
-#   partial-stutter-think - remove starts before think/thinking/thing/this/that/these/those.
-#   partial-stutter-because - remove partial starts before "because".
-#   partial-stutter-definitely - remove partial starts before "definitely".
-#   partial-stutter-make - remove partial starts before "make".
-#   partial-stutter-sure - remove partial starts before "sure".
-#   partial-stutter-change - remove partial starts before change/changed/changes/changing.
+#   repeated-prefix-stutter - remove repeated letter or sh/th/ch starts before a matching word.
 #   spaced-acronyms - collapse runs of standalone uppercase ASCII letters.
 #   spoken-version-numbers - render multi-point spoken versions with text2num.
 #   numeric-point-suffixes - append spoken point parts to an existing number.
@@ -128,8 +120,7 @@
 #   numeric-magnitude-suffixes - join numeric groups to uppercase K/M/B.
 #   compact-version-prefix - join V/v to a following dotted version.
 #   compact-short-identifier - join B-H/J-Z or any two uppercase letters to a number.
-#   cause-to-because-mid - expand attached apostrophe-cause to "because".
-#   cause-to-because-bare - expand standalone apostrophe-cause to "because".
+#   cause-to-because - expand standalone or attached apostrophe-cause to "because".
 #   casual-em-til-round - separate attached 'em/'til/'round/'bout/'cept/'nother.
 #   casual-gonna - expand "gonna"/"gunna" to "going to".
 #   casual-wanna - expand "wanna"/"wana" to "want to".
@@ -144,27 +135,11 @@
 # Conditional terminal-period cleanup:
 #   fix-trailing-period - drop one final "." unless explicitly kept.
 # Aggressive profile only:
-#   lead-so-comma - remove leading "So," at a sentence start.
-#   lead-so-pronoun - remove leading "So " before common continuations.
-#   lead-well-comma - remove leading "Well," at a sentence start.
-#   lead-well-pronoun - remove leading "Well " before common continuations.
-#   lead-like-comma - remove leading "Like," at a sentence start.
-#   lead-like-pronoun - remove leading filler "Like " before continuations.
-#   lead-you-know - remove comma-delimited leading "You know,".
-#   lead-i-mean - remove comma-delimited leading "I mean,".
-#   mid-not-like-you-know - collapse "not like, you know," to "not".
-#   mid-like-you-know - remove delimited "like, you know/I mean,".
-#   mid-as-in-like - replace "as in like X" with "as in X".
-#   mid-its-actually-like - remove "like" after it/that/there/here + qualifier.
-#   mid-is-actually-like - remove filler "like" after a qualified copula.
-#   mid-you-know - remove fully comma-delimited ", you know,".
-#   mid-i-mean - remove fully comma-delimited ", I mean,".
-#   mid-like-comma - remove fully comma-delimited ", like,".
-#   mid-i-dont-know - remove fully delimited ", I don't know,".
-#   mid-like-noun - remove ", like " before the next token.
-#   mid-is-like - remove filler "like" after a copula.
-#   mid-its-like - remove filler "like" after it/that/there/here is.
-#   mid-conj-like - remove filler "like" after and/but/or/so.
+#   lead-discourse-comma - remove comma-delimited leading discourse markers.
+#   lead-discourse-word - remove leading so/well/like before common continuations.
+#   mid-like-discourse - remove delimited "like, you know/I mean," filler.
+#   mid-discourse-parenthetical - remove fully comma-delimited discourse phrases.
+#   mid-filler-like - remove "like" after a recognized context or comma.
 #   stutter-ambiguous-words - collapse repeated that/no/can/had/do.
 
 

@@ -50,7 +50,7 @@ pub use engine::Cleaner;
 pub use user::{RulePosition, UserRule};
 
 /// Schema/behavior version recorded in transcription logs.
-pub const CLEANER_VERSION: u32 = 4;
+pub const CLEANER_VERSION: u32 = 5;
 
 /// Built-in cleanup behavior tiers.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]

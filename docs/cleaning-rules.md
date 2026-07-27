@@ -73,10 +73,14 @@ Disable one or more named passes:
 parakit --disable-rule casual-gonna
 parakit \
   --disable-rule spaced-acronyms \
-  --disable-rule filler-um-uh
+  --disable-rule filled-pauses
 ```
 
-Per-word stutter names are consolidated. Use `stutter-safe-words` for conservative default handling and `stutter-ambiguous-words` for the aggressive-only `that`, `no`, `can`, `had`, and `do` set.
+Stutter handling is grouped by shape. Use `stutter-safe-words` for
+conservative repeated words, `repeated-prefix-stutter` for repeated letters
+or `sh`/`th`/`ch` starts before a matching word, and
+`stutter-ambiguous-words` for the aggressive-only `that`, `no`, `can`,
+`had`, and `do` set.
 
 ## Rule Order
 
@@ -88,7 +92,7 @@ A pass should be moved only with regression evidence. Reordering can change down
 
 Use the standard `regex` engine for ordinary substitutions. It remains the default because its matching model is predictable and bounded.
 
-Use `fancy-regex` only when an advanced feature materially improves the implementation. The current uses are bounded backreferences for repeated-token and single-letter stutter patterns. Every `fancy-regex` pass sets an explicit backtrack limit, and a runtime limit failure is not fatal: the cleaner fails open, keeping the original transcript and recording the failure rather than inserting partially transformed text. Do not replace the conservative stutter vocabulary with a generic repeated-word backreference: valid language such as `that that` and emphatic `no no` must survive the safe profile.
+Use `fancy-regex` only when an advanced feature materially improves the implementation. The current uses are bounded backreferences for repeated-token and repeated-prefix stutter patterns. Every `fancy-regex` pass sets an explicit backtrack limit, and a runtime limit failure is not fatal: the cleaner fails open, keeping the original transcript and recording the failure rather than inserting partially transformed text. Do not replace the conservative repeated-word vocabulary with a generic backreference: valid language such as `that that` and emphatic `no no` must survive the safe profile.
 
 Use a maintained domain crate when the task is already a well-defined parsing problem. English number grammar belongs to `text2num`, not to a growing local word table.
 
@@ -107,7 +111,9 @@ Rules use Rust's `regex` crate dialect:
 - capture replacement uses `$1`, `$2`, and so on;
 - use `(?i)` for case-insensitive matches.
 
-Increment `CLEANER_VERSION` when a procedural pass changes behavior so historical `ruleset_id` values continue to identify the behavior that produced a transcript.
+Increment `CLEANER_VERSION` whenever built-in behavior, rule identity, or
+ordering changes so historical logs continue to identify the cleaner that
+produced a transcript.
 
 Personal vocabulary belongs in code only when it generalizes to normal dictation. Proper nouns, project-specific shorthand, and private jargon belong in `config.toml` instead. See User Rules below.
 

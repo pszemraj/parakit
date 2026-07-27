@@ -77,6 +77,49 @@ fn user_rule(name: &str, pattern: &str, replacement: &str, position: RulePositio
     }
 }
 
+#[test]
+fn built_in_rule_surface_stays_grouped() {
+    let names = defaults::DEFAULT_RULES
+        .iter()
+        .map(|rule| rule.name)
+        .collect::<HashSet<_>>();
+
+    assert!(
+        defaults::DEFAULT_RULES.len() <= 32,
+        "built-in rule count grew from the compact grouped surface: {}",
+        defaults::DEFAULT_RULES.len()
+    );
+    assert_eq!(
+        names.len(),
+        defaults::DEFAULT_RULES.len(),
+        "built-in rule names must remain unique"
+    );
+    for grouped_name in [
+        "lead-discourse-comma",
+        "lead-discourse-word",
+        "mid-like-discourse",
+        "mid-discourse-parenthetical",
+        "mid-filler-like",
+        "filled-pauses",
+        "repeated-prefix-stutter",
+        "cause-to-because",
+    ] {
+        assert!(names.contains(grouped_name), "missing {grouped_name}");
+    }
+    for superseded_name in [
+        "lead-so-comma",
+        "mid-you-know",
+        "filler-um-uh",
+        "partial-stutter-should",
+        "cause-to-because-bare",
+    ] {
+        assert!(
+            !names.contains(superseded_name),
+            "{superseded_name} should remain folded into a grouped rule"
+        );
+    }
+}
+
 // =============================================================================
 // Ported from the proposed engine rewrite
 // =============================================================================
@@ -107,6 +150,16 @@ fn aggressive_profile_retains_opt_in_stylistic_cleanup() {
             ("It's like, you know, hard.", "It's hard."),
             ("As in like tuple.", "As in tuple."),
             ("It is basically like broken.", "It is basically broken."),
+            ("So, well, I mean, this works.", "This works."),
+            ("You know what I mean, this works.", "This works."),
+            ("So that works.", "That works."),
+            ("Well the system works.", "The system works."),
+            ("Like actually this works.", "Actually this works."),
+            ("It is, I mean, difficult.", "It is difficult."),
+            ("It is, I don't know, difficult.", "It is difficult."),
+            ("Not like, I mean, impossible.", "Not impossible."),
+            ("It is actually like broken.", "It is actually broken."),
+            ("And actually like broken.", "And actually broken."),
         ],
     );
 }
@@ -154,6 +207,7 @@ fn fancy_regex_collapses_only_safe_repeated_words_by_default() {
                 "No no no, we are not doing that.",
             ),
             ("Can can we split this?", "Can can we split this?"),
+            ("We should be be better.", "We should be be better."),
         ],
     );
 }
@@ -170,15 +224,21 @@ fn aggressive_profile_can_collapse_ambiguous_repetitions() {
 }
 
 #[test]
-fn partial_and_single_letter_stutters_are_removed() {
-    assert_clean_cases(
-        CleaningProfile::Safe,
-        &[
-            ("we sh sh should go", "We should go"),
-            ("we sh-sh-should go", "We should go"),
-            ("t t t think", "Think"),
-            ("I w w w want this", "I want this"),
-        ],
+fn generic_prefix_stutter_rule_reports_all_matches_under_one_name() {
+    let result = cleaner_keep_period(CleaningProfile::Safe)
+        .try_clean("we sh sh should and d d definitely change")
+        .unwrap();
+
+    assert_eq!(result.text, "We should and definitely change");
+    assert_eq!(
+        result
+            .rules_fired
+            .iter()
+            .find(|hit| hit.name == "repeated-prefix-stutter"),
+        Some(&RuleHit {
+            name: "repeated-prefix-stutter".to_string(),
+            matches: 2,
+        })
     );
 }
 
@@ -423,7 +483,7 @@ fn trace_reports_ordered_rule_hits_and_counts() {
         .unwrap();
     assert_eq!(result.text, "The GPT model is going to work.");
     assert!(result.failure.is_none());
-    // `filler-um-uh`'s match on "um," does not consume the space that
+    // `filled-pauses`' match on "um," does not consume the space that
     // followed the comma in the input, so its single-space replacement
     // leaves a doubled space behind; `fix-collapse-spaces` cleans it up a
     // few rules later.
@@ -431,7 +491,7 @@ fn trace_reports_ordered_rule_hits_and_counts() {
         result.rules_fired,
         vec![
             RuleHit {
-                name: "filler-um-uh".to_string(),
+                name: "filled-pauses".to_string(),
                 matches: 1,
             },
             RuleHit {
@@ -472,7 +532,7 @@ fn cleaner_is_idempotent() {
 #[test]
 fn disabled_rules_are_removed_from_pipeline_and_ruleset() {
     let baseline = cleaner_keep_period(CleaningProfile::Safe);
-    let disabled = HashSet::from(["filler-um-uh".to_string()]);
+    let disabled = HashSet::from(["filled-pauses".to_string()]);
     let without_filler = build_cleaner_for_test(CleaningProfile::Safe, false, &disabled, &[]);
     assert_eq!(
         without_filler.clean_text("hello, um, world"),
@@ -505,7 +565,7 @@ fn disabled_spoken_number_rule_ignores_threshold_in_ruleset_id() {
 
 #[test]
 fn unknown_rule_names_fail_fast() {
-    assert!(assert_rule_name_exists("filler-um-uh", &[]).is_ok());
+    assert!(assert_rule_name_exists("filled-pauses", &[]).is_ok());
     assert!(assert_rule_name_exists("does-not-exist", &[]).is_err());
 }
 
@@ -525,7 +585,7 @@ fn clean_result_remains_unchanged_when_no_pass_fires() {
 
 #[test]
 fn lead_so_removed() {
-    // `lead-so-comma`/`lead-so-pronoun` are unconditional in the pre-merge
+    // Leading so-removal is unconditional in the pre-merge
     // engine but Aggressive-gated in the merged engine; use the Aggressive
     // profile to preserve this test's intent. The pre-merge engine also
     // dropped a trailing period unconditionally, so `drop_trailing_period`
@@ -569,10 +629,21 @@ fn repeated_words_collapsed() {
 }
 
 #[test]
-fn partial_stutter_should() {
-    let cleaner = cleaner_keep_period(CleaningProfile::Safe);
-    assert_eq!(cleaner.clean_text("we sh sh should go"), "We should go");
-    assert_eq!(cleaner.clean_text("we sh-sh-should go"), "We should go");
+fn repeated_prefix_stutters_are_removed() {
+    assert_clean_cases(
+        CleaningProfile::Safe,
+        &[
+            ("we sh sh should go", "We should go"),
+            ("we sh-sh-should go", "We should go"),
+            ("we th th think so", "We think so"),
+            ("we ch ch change it", "We change it"),
+            ("we sh sh shutdown cleanly", "We shutdown cleanly"),
+            ("it happened b b because", "It happened because"),
+            ("it is d d definitely ready", "It is definitely ready"),
+            ("we m m make it", "We make it"),
+            ("we are s s sure", "We are sure"),
+        ],
+    );
 }
 
 #[test]
@@ -599,7 +670,7 @@ fn whitespace_cleanup() {
 #[test]
 fn disabled_rules_skip() {
     let mut disabled = HashSet::new();
-    disabled.insert("filler-um-uh".to_string());
+    disabled.insert("filled-pauses".to_string());
     let cleaner = build_cleaner_for_test(CleaningProfile::Safe, false, &disabled, &[]);
     // um/uh should survive
     assert_eq!(cleaner.clean_text("hello, um, world"), "Hello, um, world");
@@ -608,7 +679,7 @@ fn disabled_rules_skip() {
 #[test]
 fn user_rule_first_position_runs_before_builtins() {
     // A `First` user rule expands "xyz" to "So, hello" *before* any
-    // built-in rule runs, so the built-in `lead-so-comma` rule (which only
+    // built-in rule runs, so the built-in `lead-discourse-comma` rule (which only
     // fires at sentence start, and only under the Aggressive profile in the
     // merged engine) still strips the "So," it produced.
     let rules = vec![user_rule(
@@ -662,7 +733,7 @@ fn user_rule_last_position_runs_after_builtins() {
 #[test]
 fn user_rule_name_colliding_with_builtin_is_an_error() {
     let rules = vec![user_rule(
-        "filler-um-uh",
+        "filled-pauses",
         r"(?i)nope",
         "x",
         RulePosition::Standard,
@@ -670,7 +741,7 @@ fn user_rule_name_colliding_with_builtin_is_an_error() {
     let err = build_cleaner_for_test_result(CleaningProfile::Safe, false, &HashSet::new(), &rules)
         .unwrap_err();
     let msg = err.to_string();
-    assert!(msg.contains("filler-um-uh"), "message: {msg}");
+    assert!(msg.contains("filled-pauses"), "message: {msg}");
     assert!(msg.contains("rename"), "message: {msg}");
 }
 
@@ -875,7 +946,7 @@ fn like_filler_combos() {
 
 #[test]
 fn assert_rule_name_exists_works() {
-    assert!(assert_rule_name_exists("filler-um-uh", &[]).is_ok());
+    assert!(assert_rule_name_exists("filled-pauses", &[]).is_ok());
     assert!(assert_rule_name_exists("does-not-exist", &[]).is_err());
     let rules = vec![user_rule(
         "custom-hello",

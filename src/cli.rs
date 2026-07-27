@@ -615,21 +615,21 @@ mod tests {
         let mut config = ConfigFile::default();
         config.cleaning.disabled_rules = vec![
             "fix-trailing-period".to_string(),
-            "filler-um-uh".to_string(),
+            "filled-pauses".to_string(),
         ];
 
         let cli = cli_from(&[
             "--disable-rule",
-            "filler-um-uh",
+            "filled-pauses",
             "--disable-rule",
-            "lead-so-comma",
+            "lead-discourse-comma",
         ]);
         let mut merged = cli.effective_disabled_rules(&config);
         merged.sort();
         let mut expected = vec![
-            "filler-um-uh".to_string(),
+            "filled-pauses".to_string(),
             "fix-trailing-period".to_string(),
-            "lead-so-comma".to_string(),
+            "lead-discourse-comma".to_string(),
         ];
         expected.sort();
         assert_eq!(merged, expected);

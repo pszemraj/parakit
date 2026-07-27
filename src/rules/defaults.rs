@@ -60,26 +60,6 @@ macro_rules! procedural_rule {
     };
 }
 
-macro_rules! partial_stutter_rule {
-    ($name:literal, $label:literal, $prefixes:literal, $target:literal) => {
-        regex_rule!(
-            concat!("partial-stutter-", $name),
-            concat!("Strip partial-word stutter before '", $label, "'"),
-            Activation::Safe,
-            concat!(
-                r#"(?i)\b(?:"#,
-                $prefixes,
-                r#")(?:[- ]+(?:"#,
-                $prefixes,
-                r#")){1,3}[- ]+("#,
-                $target,
-                r#")\b"#
-            ),
-            "$1"
-        )
-    };
-}
-
 /// Built-in rule table, in application order.
 ///
 /// Order is significant, as described in the module docs above: aggressive
@@ -90,166 +70,47 @@ macro_rules! partial_stutter_rule {
 pub(crate) const DEFAULT_RULES: &[Rule] = &[
     // Aggressive leading discourse markers.
     regex_rule!(
-        "lead-so-comma",
-        "Remove leading 'So,' at a sentence start",
+        "lead-discourse-comma",
+        "Remove comma-delimited leading discourse markers",
         Activation::Aggressive,
-        r#"(?i)(^\s*|[.!?\n]\s*)((?:[\"'(\[]\s*)*)(?:so,\s+)+"#,
+        r#"(?i)(^\s*|[.!?\n]\s*)((?:[\"'(\[]\s*)*)(?:(?:so|well|like|i mean|you know(?: what i mean)?),\s+)+"#,
         "$1$2"
     ),
     regex_rule!(
-        "lead-so-pronoun",
-        "Remove leading 'So ' before a common continuation",
+        "lead-discourse-word",
+        "Remove leading so/well/like before a common continuation",
         Activation::Aggressive,
-        r#"(?i)(^\s*|[.!?\n]\s*)((?:[\"'(\[]\s*)*)so\s+(i|we|you|he|she|they|it|this|there|then|and|but|the|a|an|my|our|your)\b"#,
+        r#"(?i)(^\s*|[.!?\n]\s*)((?:[\"'(\[]\s*)*)(?:so|well|like)\s+(i|we|you|he|she|they|it|this|that|there|then|and|but|the|a|an|my|our|your|maybe|actually|some|any)\b"#,
         "$1$2$3"
-    ),
-    regex_rule!(
-        "lead-well-comma",
-        "Remove leading 'Well,' at a sentence start",
-        Activation::Aggressive,
-        r#"(?i)(^\s*|[.!?\n]\s*)((?:[\"'(\[]\s*)*)(?:well,\s+)+"#,
-        "$1$2"
-    ),
-    regex_rule!(
-        "lead-well-pronoun",
-        "Remove leading 'Well ' before a common continuation",
-        Activation::Aggressive,
-        r#"(?i)(^\s*|[.!?\n]\s*)((?:[\"'(\[]\s*)*)well\s+(i|we|you|he|she|they|it|this|that|there|then|and|but|maybe|actually)\b"#,
-        "$1$2$3"
-    ),
-    regex_rule!(
-        "lead-like-comma",
-        "Remove leading 'Like,' at a sentence start",
-        Activation::Aggressive,
-        r#"(?i)(^\s*|[.!?\n]\s*)((?:[\"'(\[]\s*)*)(?:like,\s+)+"#,
-        "$1$2"
-    ),
-    regex_rule!(
-        "lead-like-pronoun",
-        "Remove leading filler 'Like ' before a common continuation",
-        Activation::Aggressive,
-        r#"(?i)(^\s*|[.!?\n]\s*)((?:[\"'(\[]\s*)*)like\s+(i|we|you|he|she|they|it|this|that|there|the|a|an|my|our|your|some|any)\b"#,
-        "$1$2$3"
-    ),
-    regex_rule!(
-        "lead-you-know",
-        "Remove only comma-delimited leading 'You know,'",
-        Activation::Aggressive,
-        r#"(?i)(^\s*|[.!?\n]\s*)((?:[\"'(\[]\s*)*)you know(?: what i mean)?,\s+"#,
-        "$1$2"
-    ),
-    regex_rule!(
-        "lead-i-mean",
-        "Remove comma-delimited leading 'I mean,'",
-        Activation::Aggressive,
-        r#"(?i)(^\s*|[.!?\n]\s*)((?:[\"'(\[]\s*)*)(?:i mean,\s+)+"#,
-        "$1$2"
     ),
     // Aggressive mid-sentence discourse markers. Bare semantic forms are kept.
     regex_rule!(
-        "mid-not-like-you-know",
-        "Collapse comma-delimited 'not like, you know,' to 'not'",
+        "mid-like-discourse",
+        "Remove comma-delimited like plus you-know/I-mean filler",
         Activation::Aggressive,
-        r#"(?i)\bnot\s+like,\s*(?:you know(?: what i mean)?|i mean),\s*"#,
-        "not "
+        r#"(?i)\b(not\s+)?like,\s*(?:you know(?: what i mean)?|i mean),\s*"#,
+        "$1"
     ),
     regex_rule!(
-        "mid-like-you-know",
-        "Remove comma-delimited 'like, you know,' or 'like, I mean,'",
+        "mid-discourse-parenthetical",
+        "Remove fully comma-delimited discourse parentheticals",
         Activation::Aggressive,
-        r#"(?i)\blike,\s*(?:you know(?: what i mean)?|i mean),\s*"#,
-        ""
-    ),
-    regex_rule!(
-        "mid-as-in-like",
-        "Replace 'as in like X' with 'as in X'",
-        Activation::Aggressive,
-        r#"(?i)\bas\s+in\s+like\s+([A-Za-z0-9][A-Za-z0-9'-]*)\b"#,
-        "as in $1"
-    ),
-    regex_rule!(
-        "mid-its-actually-like",
-        "Delete filler 'like' from 'it is actually like X' forms",
-        Activation::Aggressive,
-        r#"(?i)\b(it'?s|that'?s|there'?s|here'?s)\s+(actually|basically|literally)\s+like\s+([A-Za-z0-9][A-Za-z0-9'-]*)\b"#,
-        "$1 $2 $3"
-    ),
-    regex_rule!(
-        "mid-is-actually-like",
-        "Delete filler 'like' after a copula and qualifier",
-        Activation::Aggressive,
-        r#"(?i)\b(is|was|are|were|am|be|been|being)\s+(actually|basically|literally)\s+like\s+([A-Za-z0-9][A-Za-z0-9'-]*)\b"#,
-        "$1 $2 $3"
-    ),
-    regex_rule!(
-        "mid-you-know",
-        "Remove only fully comma-delimited ', you know,' parentheticals",
-        Activation::Aggressive,
-        r#"(?i),\s*you know(?: what i mean)?,\s*"#,
+        r#"(?i),\s*(?:you know(?: what i mean)?|i mean|like|i don'?t know),\s*"#,
         " "
     ),
     regex_rule!(
-        "mid-i-mean",
-        "Remove fully comma-delimited ', I mean,' parentheticals",
+        "mid-filler-like",
+        "Remove filler like after a recognized context or comma",
         Activation::Aggressive,
-        r#"(?i),\s*i mean,\s*"#,
-        " "
-    ),
-    regex_rule!(
-        "mid-like-comma",
-        "Remove fully comma-delimited ', like,' parentheticals",
-        Activation::Aggressive,
-        r#"(?i),\s*like,\s*"#,
-        " "
-    ),
-    regex_rule!(
-        "mid-i-dont-know",
-        "Remove fully comma-delimited ', I don't know,' parentheticals",
-        Activation::Aggressive,
-        r#"(?i),\s*i don'?t know,\s*"#,
-        " "
-    ),
-    regex_rule!(
-        "mid-like-noun",
-        "Delete ', like ' before the next token",
-        Activation::Aggressive,
-        r#"(?i),\s*like\s+([A-Za-z0-9][A-Za-z0-9'-]*)\b"#,
-        " $1"
-    ),
-    regex_rule!(
-        "mid-is-like",
-        "Delete 'like' after a copula",
-        Activation::Aggressive,
-        r#"(?i)\b(is|was|are|were|am|be|been|being)\s+like\s+([A-Za-z0-9][A-Za-z0-9'-]*)\b"#,
-        "$1 $2"
-    ),
-    regex_rule!(
-        "mid-its-like",
-        "Delete 'like' after it/that/there/here is",
-        Activation::Aggressive,
-        r#"(?i)\b(it'?s|that'?s|there'?s|here'?s)\s+like\s+([A-Za-z0-9][A-Za-z0-9'-]*)\b"#,
-        "$1 $2"
-    ),
-    regex_rule!(
-        "mid-conj-like",
-        "Delete 'like' after and/but/or/so",
-        Activation::Aggressive,
-        r#"(?i)\b(and|but|or|so)\s+like\s+([A-Za-z0-9][A-Za-z0-9'-]*)\b"#,
+        r#"(?i)(?:\b((?:as\s+in)|(?:(?:it'?s|that'?s|there'?s|here'?s|is|was|are|were|am|be|been|being|and|but|or|so)(?:\s+(?:actually|basically|literally))?))\s+|,\s*)like\s+([A-Za-z0-9][A-Za-z0-9'-]*)\b"#,
         "$1 $2"
     ),
     // High-confidence filled pauses.
     regex_rule!(
-        "filler-um-uh",
-        "Remove standalone um/uh variants and adjacent commas",
+        "filled-pauses",
+        "Remove standalone um/uh/erm variants and adjacent commas",
         Activation::Safe,
-        r#"(?i),?\s*\b(?:u[hm]+)\b\s*,?"#,
-        " "
-    ),
-    regex_rule!(
-        "filler-erm",
-        "Remove lowercase erm variants without matching the acronym ER",
-        Activation::Safe,
-        r#",?\s*\b(?:er+m+)\b\s*,?"#,
+        r#",?\s*\b(?:(?i:u[hm]+)|er+m+)\b\s*,?"#,
         " "
     ),
     // Consolidated duplicate-token handling. The safe list deliberately omits
@@ -269,28 +130,11 @@ pub(crate) const DEFAULT_RULES: &[Rule] = &[
         "$1"
     ),
     fancy_rule!(
-        "single-letter-stutter",
-        "Strip repeated single-letter starts before a matching word",
+        "repeated-prefix-stutter",
+        "Strip repeated one-letter or consonant-digraph starts before a matching word",
         Activation::Safe,
-        r#"(?i)\b([a-z])(?:[- ]+\1){1,3}[- ]+(\1[a-z][a-z'-]*)\b"#,
+        r#"(?i)\b([a-z]|sh|th|ch)(?:[- ]+\1){1,3}[- ]+(\1[a-z][a-z'-]*)\b"#,
         "$2"
-    ),
-    partial_stutter_rule!("should", "should", "s|so|sh|sho", "should"),
-    partial_stutter_rule!(
-        "think",
-        "think/thinking/thing/this/that",
-        "t|th|thi",
-        "think(?:ing)?|thing|this|that|these|those"
-    ),
-    partial_stutter_rule!("because", "because", "b|be|bec", "because"),
-    partial_stutter_rule!("definitely", "definitely", "d|de|def", "definitely"),
-    partial_stutter_rule!("make", "make", "m|ma|mak", "make"),
-    partial_stutter_rule!("sure", "sure", "s|su|sur", "sure"),
-    partial_stutter_rule!(
-        "change",
-        "change/changing/changed",
-        "c|ch",
-        "chang(?:e|ed|es|ing)"
     ),
     // General orthographic invariants. No technical-vocabulary allowlist is
     // involved: any run of two or more standalone uppercase letters collapses.
@@ -349,18 +193,11 @@ pub(crate) const DEFAULT_RULES: &[Rule] = &[
     ),
     // High-confidence casual-form normalization.
     regex_rule!(
-        "cause-to-because-mid",
-        "Normalize attached apostrophe-cause to because",
+        "cause-to-because",
+        "Normalize standalone or attached apostrophe-cause to because",
         Activation::Safe,
-        r#"(?i)([A-Za-z])['\u{2019}]cause\b"#,
+        r#"(?i)([A-Za-z]?)['\u{2019}]cause\b"#,
         "$1 because"
-    ),
-    regex_rule!(
-        "cause-to-because-bare",
-        "Normalize standalone apostrophe-cause to because",
-        Activation::Safe,
-        r#"(?i)['\u{2019}]cause\b"#,
-        "because"
     ),
     regex_rule!(
         "casual-em-til-round",

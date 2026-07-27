@@ -405,7 +405,7 @@ transcript_history = 25
 [cleaning]
 enabled = false
 number_threshold = 5
-disabled_rules = ["fix-trailing-period", "filler-um-uh"]
+disabled_rules = ["fix-trailing-period", "filled-pauses"]
 
 [logging]
 dir = "/logs"
@@ -438,7 +438,7 @@ position = "first"
             config.cleaning.disabled_rules,
             vec![
                 "fix-trailing-period".to_string(),
-                "filler-um-uh".to_string()
+                "filled-pauses".to_string()
             ]
         );
 
@@ -528,14 +528,14 @@ replacement = "x"
     fn user_rule_collision_with_builtin_is_rejected_at_load() {
         let toml = r#"
 [[rules.user]]
-name = "filler-um-uh"
+name = "filled-pauses"
 pattern = "(?i)nope"
 replacement = "x"
 "#;
         let path = write_fixture("collision", toml);
         let err = load_from_path(&path).unwrap_err();
         let msg = format!("{err:#}");
-        assert!(msg.contains("filler-um-uh"), "message: {msg}");
+        assert!(msg.contains("filled-pauses"), "message: {msg}");
         assert!(msg.contains(&path.display().to_string()), "message: {msg}");
     }
 
