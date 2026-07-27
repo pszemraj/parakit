@@ -136,7 +136,7 @@ fn show_notification(_summary: &str, _body: &str) -> anyhow::Result<()> {
 ///
 /// `s` with AppleScript source-significant characters escaped. The caller
 /// is responsible for wrapping the result in the surrounding double quotes.
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+#[cfg(target_os = "macos")]
 fn applescript_quote(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for ch in s.chars() {
@@ -151,7 +151,7 @@ fn applescript_quote(s: &str) -> String {
     out
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "macos"))]
 mod tests {
     use super::*;
 

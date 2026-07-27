@@ -1921,11 +1921,6 @@ mod windows_pipe {
     }
 }
 
-#[cfg(not(any(unix, target_os = "windows")))]
-fn send_command(_command: IpcCommand) -> Result<IpcResponse> {
-    bail!("local daemon IPC is not implemented on this platform")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

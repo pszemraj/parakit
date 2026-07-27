@@ -266,8 +266,6 @@ pub(crate) fn run() -> Result<()> {
         Arc::clone(&log),
     )
     .context("start daemon control socket")?;
-    #[cfg(not(any(unix, target_os = "windows")))]
-    log.verbose("parakit: local control socket unavailable on this platform");
 
     let cleaner = build_cli_cleaner(&cli, &config)?.map(Arc::new);
     let sounds_enabled = cli.effective_sounds_enabled(&config);

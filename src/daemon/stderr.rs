@@ -133,11 +133,6 @@ fn with_stderr_suppressed_impl<T>(f: impl FnOnce() -> T) -> T {
     f()
 }
 
-#[cfg(not(any(unix, windows)))]
-fn with_stderr_suppressed_impl<T>(f: impl FnOnce() -> T) -> T {
-    f()
-}
-
 #[cfg(all(test, windows))]
 mod windows_tests {
     use super::STDERR_FD;

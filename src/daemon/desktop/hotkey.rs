@@ -952,24 +952,6 @@ fn handle_listen_event(
     let _ = handle_key_event(event.event_type, state, tx);
 }
 
-#[cfg(all(
-    not(target_os = "linux"),
-    not(target_os = "macos"),
-    not(target_os = "windows")
-))]
-fn handle_grab_event(
-    event: Event,
-    state: &Arc<Mutex<HotkeyState>>,
-    tx: &Sender<HotkeyTransition>,
-) -> Option<Event> {
-    let suppress = handle_key_event(event.event_type, state, tx);
-    if suppress {
-        None
-    } else {
-        Some(event)
-    }
-}
-
 #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
 fn handle_key_event(
     event_type: EventType,
