@@ -198,14 +198,7 @@ pub(crate) fn run() -> Result<()> {
         return Ok(());
     }
     if let Some(input) = &cli.test_rules {
-        let cleaner = rules::build_cleaner(
-            !cli.effective_cleaning_enabled(&config),
-            cli.effective_cleaning_profile(&config),
-            cli.effective_drops_trailing_period(&config),
-            config.cleaning.number_threshold,
-            &cli.effective_disabled_rules(&config),
-            &config.rules.user,
-        )?;
+        let cleaner = build_cli_cleaner(&cli, &config)?;
         let raw = input.as_str();
         let cleaned = cleaner.as_ref().map(|c| c.clean(raw));
         if !cli.quiet {
@@ -276,15 +269,7 @@ pub(crate) fn run() -> Result<()> {
     #[cfg(not(any(unix, target_os = "windows")))]
     log.verbose("parakit: local control socket unavailable on this platform");
 
-    let cleaner = rules::build_cleaner(
-        !cli.effective_cleaning_enabled(&config),
-        cli.effective_cleaning_profile(&config),
-        cli.effective_drops_trailing_period(&config),
-        config.cleaning.number_threshold,
-        &cli.effective_disabled_rules(&config),
-        &config.rules.user,
-    )?
-    .map(Arc::new);
+    let cleaner = build_cli_cleaner(&cli, &config)?.map(Arc::new);
     let sounds_enabled = cli.effective_sounds_enabled(&config);
     let sounds = Sounds::new(sounds_enabled);
 
@@ -521,15 +506,7 @@ fn run_ptt_audio_simulation(
     audio_path: &Path,
 ) -> Result<()> {
     let paste_mode = cli.effective_paste_mode(config);
-    let cleaner = rules::build_cleaner(
-        !cli.effective_cleaning_enabled(config),
-        cli.effective_cleaning_profile(config),
-        cli.effective_drops_trailing_period(config),
-        config.cleaning.number_threshold,
-        &cli.effective_disabled_rules(config),
-        &config.rules.user,
-    )?
-    .map(Arc::new);
+    let cleaner = build_cli_cleaner(cli, config)?.map(Arc::new);
     let data_log = cli
         .effective_log_dir(config)
         .map(|dir| Arc::new(DataLogger::new(dir)));
@@ -592,6 +569,17 @@ fn run_ptt_audio_simulation(
         .join()
         .map_err(|_| anyhow::anyhow!("PTT simulation worker panicked"))?;
     Ok(())
+}
+
+fn build_cli_cleaner(cli: &Cli, config: &ConfigFile) -> Result<Option<rules::Cleaner>> {
+    rules::build_cleaner(
+        !cli.effective_cleaning_enabled(config),
+        cli.effective_cleaning_profile(config),
+        cli.effective_drops_trailing_period(config),
+        config.cleaning.number_threshold,
+        &cli.effective_disabled_rules(config),
+        &config.rules.user,
+    )
 }
 
 fn model_dtype_label(path: &std::path::Path) -> String {
