@@ -188,10 +188,6 @@ pub(crate) fn preflight(mode: PasteMode) -> Result<()> {
     Ok(())
 }
 
-fn insertion_needs_enigo(mode: PasteMode) -> bool {
-    mode == PasteMode::Direct
-}
-
 /// Exercise the configured insertion backend without inserting into the user's
 /// focused application.
 ///
@@ -607,7 +603,7 @@ impl Injector {
     ///
     /// Returns an error if a required platform handle cannot be opened.
     pub fn prepare_for_mode(&mut self, mode: PasteMode) -> Result<()> {
-        if insertion_needs_enigo(mode) {
+        if mode == PasteMode::Direct {
             let _keyboard = self.keyboard()?;
         }
 

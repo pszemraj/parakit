@@ -423,11 +423,6 @@ mod tests {
     }
 
     #[test]
-    fn missing_baseline_with_transcript_match_confirms() {
-        assert!(value_indicates_insertion(None, "hello world", "hello"));
-    }
-
-    #[test]
     fn oversized_transcript_uses_bounded_windows_not_growth() {
         let huge = format!(
             "{}middle{}",

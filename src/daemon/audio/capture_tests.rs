@@ -497,15 +497,23 @@ fn source_aware_identity_detects_default_source_switch() {
 }
 
 #[test]
-fn resampler_flushes_and_resets_tail_between_recordings() {
+fn resampler_flushes_resets_tail_and_reuses_chunk_buffers() {
     let mut pipeline = CapturePipeline {
         resampler: make_resampler(48_000).expect("resampler"),
     };
+    let (chunk_size, input_capacity, output_capacity) = {
+        let resampler = pipeline.resampler.as_ref().unwrap();
+        (
+            resampler.chunk_size,
+            resampler.input_buf[0].capacity(),
+            resampler.output_buf[0].capacity(),
+        )
+    };
     let mut out = Vec::new();
     let mut scratch = Vec::new();
-    let input = vec![0.1; 100];
+    let short_input = vec![0.1; 100];
 
-    assert!(pipeline.process(&input, &mut scratch).is_empty());
+    assert!(pipeline.process(&short_input, &mut scratch).is_empty());
     pipeline.finish_recording(&mut out);
     assert!(!out.is_empty());
     assert!(pipeline.resampler.as_ref().unwrap().scratch.is_empty());
@@ -514,22 +522,14 @@ fn resampler_flushes_and_resets_tail_between_recordings() {
     pipeline.reset_recording();
     pipeline.finish_recording(&mut out);
     assert_eq!(out.len(), flushed_len);
-}
 
-#[test]
-fn resampler_reuses_chunk_buffers_during_process_and_flush() {
-    let mut resampler = make_resampler(48_000)
-        .expect("resampler creation should succeed")
-        .expect("48 kHz input should need resampling");
-    let input_capacity = resampler.input_buf[0].capacity();
-    let output_capacity = resampler.output_buf[0].capacity();
-    let mut out = Vec::new();
-    let input = vec![0.1; resampler.chunk_size * 3 + 100];
+    let multi_chunk_input = vec![0.1; chunk_size * 3 + 100];
+    assert!(!pipeline
+        .process(&multi_chunk_input, &mut scratch)
+        .is_empty());
+    pipeline.finish_recording(&mut out);
 
-    resampler.process(&input, &mut out);
-    resampler.flush_recording(&mut out);
-
-    assert!(!out.is_empty());
+    let resampler = pipeline.resampler.as_ref().unwrap();
     assert_eq!(resampler.input_buf[0].capacity(), input_capacity);
     assert_eq!(resampler.output_buf[0].capacity(), output_capacity);
     assert!(resampler.scratch.is_empty());

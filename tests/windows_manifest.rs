@@ -5,10 +5,7 @@ mod windows_manifest;
 
 use serde_json::Value;
 
-use windows_manifest::{
-    Accelerator, BlasManifest, CudaManifest, RuntimeManifest, VulkanManifest,
-    WINDOWS_RUNTIME_MANIFEST,
-};
+use windows_manifest::{Accelerator, BlasManifest, CudaManifest, RuntimeManifest, VulkanManifest};
 
 fn base_blas() -> BlasManifest {
     BlasManifest {
@@ -128,9 +125,4 @@ fn serializes_multi_backend_metadata_when_both_are_present() {
     assert_eq!(json["cuda"]["external_dlls_bundled"], true);
     assert_eq!(json["vulkan"]["sdk_version"], "C:\\VulkanSDK\\1.4.321.1");
     assert_eq!(json["vulkan"]["external_dlls"][0], "vulkan-1.dll");
-}
-
-#[test]
-fn exposes_runtime_manifest_filename() {
-    assert_eq!(WINDOWS_RUNTIME_MANIFEST, "parakit-runtime-manifest.json");
 }

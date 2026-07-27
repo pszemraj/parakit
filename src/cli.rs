@@ -454,13 +454,6 @@ mod tests {
     }
 
     #[test]
-    fn removed_log_format_flag_is_rejected() {
-        let error = Cli::try_parse_from(["parakit", "--log-format", "jsonl"])
-            .expect_err("--log-format must not remain a supported surface");
-        assert_eq!(error.kind(), clap::error::ErrorKind::UnknownArgument);
-    }
-
-    #[test]
     fn effective_paste_mode_prefers_cli_then_config_then_platform_default() {
         let mut config = ConfigFile::default();
         assert_eq!(

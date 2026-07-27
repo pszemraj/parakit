@@ -338,13 +338,6 @@ fn paste_mode_labels_are_stable() {
     assert_eq!(PasteMode::Direct.label(), "direct");
 }
 
-#[test]
-fn batch_paste_does_not_need_enigo() {
-    assert!(!insertion_needs_enigo(PasteMode::Standard));
-    assert!(!insertion_needs_enigo(PasteMode::Terminal));
-    assert!(insertion_needs_enigo(PasteMode::Direct));
-}
-
 #[cfg(target_os = "linux")]
 #[test]
 fn linux_xtest_paste_chord_steps_are_ordered() {

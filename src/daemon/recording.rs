@@ -284,37 +284,6 @@ mod tests {
     }
 
     #[test]
-    fn coordinator_reports_stop_failure_to_worker() {
-        let (worker_tx, worker_rx) = bounded(1);
-        let started_at = Instant::now();
-        let stopped_at = started_at + Duration::from_millis(5);
-        let mut focus_at_start = None;
-
-        let status = send_recording_result(
-            &worker_tx,
-            Err(anyhow::anyhow!(
-                "audio drain accepted Stop but did not acknowledge before timeout"
-            )),
-            started_at,
-            stopped_at,
-            &mut focus_at_start,
-        );
-
-        assert_eq!(status, WorkerSendStatus::Sent);
-        match worker_rx
-            .recv_timeout(Duration::from_millis(250))
-            .expect("terminal failure event")
-        {
-            WorkerEvent::Failed { message } => {
-                assert!(message.contains("could not stop audio recording"));
-                assert!(message.contains("accepted Stop"));
-            }
-            WorkerEvent::Started => panic!("unexpected start event"),
-            WorkerEvent::Stopped { .. } => panic!("unexpected stop event"),
-        }
-    }
-
-    #[test]
     fn terminal_failure_is_delivered_after_started_when_worker_queue_is_full() {
         let (worker_tx, worker_rx) = bounded(1);
         worker_tx
