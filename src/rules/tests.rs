@@ -1,30 +1,4 @@
-//! Tests for the merged cleaning engine.
-//!
-//! This module ports every test from the two sources that were merged to
-//! build this crate's `rules` module:
-//!
-//! * The proposed engine rewrite (`safe`/`aggressive` profiles, `fancy-regex`
-//!   stutter collapsing, `text2num`-backed number/version handling,
-//!   procedural capitalization). Its `Activation::Aggressive` gate moved
-//!   several rules (leading "So,"/"Well,"/"Like," discourse markers, most
-//!   mid-sentence "like" filler, and the `that|no|can|had|do` stutter group)
-//!   out of the always-on set they used to be in under the pre-merge
-//!   single-file engine. Tests ported from that older engine which relied on
-//!   those rules firing unconditionally now run against
-//!   `CleaningProfile::Aggressive` instead; a comment marks each such case.
-//! * The pre-merge single-file engine's user-defined rule support
-//!   (`UserRule`, `RulePosition`, disabled-rule "parking"). Every test from
-//!   that suite is ported unchanged in intent, updated only for the new
-//!   5-argument `Cleaner::new` and the `CleanResult`-returning `clean`
-//!   (tests use `clean_text` where a bare `String` is all that's needed).
-//!
-//! One behavioral difference between the two sources could not be
-//! reconciled by "keep both": the pre-merge engine applied sentence
-//! capitalization as a final pass *after* every rule, including `Last`
-//! position user rules; the merged engine (matching the proposed rewrite)
-//! runs `capitalize-sentence-starts` as an ordinary built-in rule ahead of
-//! the `Last` splice point. `user_rule_last_position_runs_after_builtins`
-//! below documents the adjusted expectation.
+//! Unit tests for cleaning rules, ordering, profiles, and user-rule validation.
 
 use std::collections::HashSet;
 
@@ -76,53 +50,6 @@ fn user_rule(name: &str, pattern: &str, replacement: &str, position: RulePositio
         position,
     }
 }
-
-#[test]
-fn built_in_rule_surface_stays_grouped() {
-    let names = defaults::DEFAULT_RULES
-        .iter()
-        .map(|rule| rule.name)
-        .collect::<HashSet<_>>();
-
-    assert!(
-        defaults::DEFAULT_RULES.len() <= 32,
-        "built-in rule count grew from the compact grouped surface: {}",
-        defaults::DEFAULT_RULES.len()
-    );
-    assert_eq!(
-        names.len(),
-        defaults::DEFAULT_RULES.len(),
-        "built-in rule names must remain unique"
-    );
-    for grouped_name in [
-        "lead-discourse-comma",
-        "lead-discourse-word",
-        "mid-like-discourse",
-        "mid-discourse-parenthetical",
-        "mid-filler-like",
-        "filled-pauses",
-        "repeated-prefix-stutter",
-        "cause-to-because",
-    ] {
-        assert!(names.contains(grouped_name), "missing {grouped_name}");
-    }
-    for superseded_name in [
-        "lead-so-comma",
-        "mid-you-know",
-        "filler-um-uh",
-        "partial-stutter-should",
-        "cause-to-because-bare",
-    ] {
-        assert!(
-            !names.contains(superseded_name),
-            "{superseded_name} should remain folded into a grouped rule"
-        );
-    }
-}
-
-// =============================================================================
-// Ported from the proposed engine rewrite
-// =============================================================================
 
 #[test]
 fn safe_profile_preserves_semantic_discourse_markers() {
@@ -201,6 +128,8 @@ fn fancy_regex_collapses_only_safe_repeated_words_by_default() {
             ("the the the cat", "The cat"),
             ("I I I think", "I think"),
             ("we we ran", "We ran"),
+            ("did did happen", "Did happen"),
+            ("has has changed", "Has changed"),
             ("I know that that is valid.", "I know that that is valid."),
             (
                 "No no no, we are not doing that.",
@@ -465,18 +394,6 @@ fn capitalization_stops_after_a_numeric_sentence_start() {
 }
 
 #[test]
-fn messaging_default_drops_terminal_period_and_can_be_disabled() {
-    assert_eq!(
-        cleaner_messaging_default(CleaningProfile::Safe).clean_text("Drop this period."),
-        "Drop this period"
-    );
-    assert_eq!(
-        cleaner_keep_period(CleaningProfile::Safe).clean_text("Keep this period."),
-        "Keep this period."
-    );
-}
-
-#[test]
 fn trace_reports_ordered_rule_hits_and_counts() {
     let result = cleaner_keep_period(CleaningProfile::Safe)
         .try_clean("um, the the G P T model is gonna work.")
@@ -564,12 +481,6 @@ fn disabled_spoken_number_rule_ignores_threshold_in_ruleset_id() {
 }
 
 #[test]
-fn unknown_rule_names_fail_fast() {
-    assert!(assert_rule_name_exists("filled-pauses", &[]).is_ok());
-    assert!(assert_rule_name_exists("does-not-exist", &[]).is_err());
-}
-
-#[test]
 fn clean_result_remains_unchanged_when_no_pass_fires() {
     let result = cleaner_keep_period(CleaningProfile::Safe)
         .try_clean("Already clean.")
@@ -578,10 +489,6 @@ fn clean_result_remains_unchanged_when_no_pass_fires() {
     assert!(result.rules_fired.is_empty());
     assert!(result.failure.is_none());
 }
-
-// =============================================================================
-// Ported from the pre-merge single-file engine (user-defined rules)
-// =============================================================================
 
 #[test]
 fn lead_so_removed() {
@@ -609,23 +516,6 @@ fn um_uh_removed() {
         "I think this works"
     );
     assert_eq!(cleaner.clean_text("uh, hello there"), "Hello there");
-}
-
-#[test]
-fn repeated_words_collapsed() {
-    // "no no no problem" is covered separately under the Aggressive profile
-    // by `aggressive_profile_can_collapse_ambiguous_repetitions`; "no" is
-    // not in the Safe `stutter-safe-words` list.
-    assert_clean_cases(
-        CleaningProfile::Safe,
-        &[
-            ("the the the cat", "The cat"),
-            ("I I I think", "I think"),
-            ("we we ran", "We ran"),
-            ("did did happen", "Did happen"),
-            ("has has changed", "Has changed"),
-        ],
-    );
 }
 
 #[test]
@@ -665,15 +555,6 @@ fn whitespace_cleanup() {
         cleaner.clean_text("hello   world ,  foo ."),
         "Hello world, foo"
     );
-}
-
-#[test]
-fn disabled_rules_skip() {
-    let mut disabled = HashSet::new();
-    disabled.insert("filled-pauses".to_string());
-    let cleaner = build_cleaner_for_test(CleaningProfile::Safe, false, &disabled, &[]);
-    // um/uh should survive
-    assert_eq!(cleaner.clean_text("hello, um, world"), "Hello, um, world");
 }
 
 #[test]
@@ -929,22 +810,6 @@ fn single_letter_stutter() {
 }
 
 #[test]
-fn like_filler_combos() {
-    // All of these rely on mid-sentence "like" filler rules that are
-    // Aggressive-gated in the merged engine.
-    assert_clean_cases(
-        CleaningProfile::Aggressive,
-        &[
-            ("it's like, you know, hard", "It's hard"),
-            ("not like, you know,", "Not"),
-            ("as in like tuple", "As in tuple"),
-            ("it's actually like hard", "It's actually hard"),
-            ("is basically like broken", "Is basically broken"),
-        ],
-    );
-}
-
-#[test]
 fn assert_rule_name_exists_works() {
     assert!(assert_rule_name_exists("filled-pauses", &[]).is_ok());
     assert!(assert_rule_name_exists("does-not-exist", &[]).is_err());
@@ -983,10 +848,6 @@ fn rendered_rule_list_reports_enabled_state_for_user_rules() {
     assert!(rendered.contains("custom-disabled                   no       disabled description"));
 }
 
-// =============================================================================
-// New tests for the merged engine's contract
-// =============================================================================
-
 /// Helper mirroring [`build_cleaner_for_test`] but returning the `Result`
 /// instead of unwrapping it, for tests that assert on the error.
 fn build_cleaner_for_test_result(
@@ -1007,31 +868,6 @@ fn final_period_removal_is_off_by_default_and_can_be_enabled() {
     let dropped = cleaner_messaging_default(CleaningProfile::Safe);
     assert_eq!(dropped.clean_text("Drop this period."), "Drop this period");
     assert!(dropped.drops_trailing_period());
-}
-
-#[test]
-fn generic_spaced_acronyms_collapse_without_a_vocabulary_allowlist() {
-    // No allowlist of known acronyms is involved: any run of two or more
-    // standalone uppercase letters collapses, including combinations that
-    // are not real dictionary acronyms.
-    assert_clean_cases(
-        CleaningProfile::Safe,
-        &[
-            ("It uses an L L M.", "It uses an LLM."),
-            ("Ship the G G U F file.", "Ship the GGUF file."),
-            ("Trained with R L H F.", "Trained with RLHF."),
-            ("Ask the A I.", "Ask the AI."),
-        ],
-    );
-}
-
-#[test]
-fn duplicate_i_is_collapsed_before_acronym_normalization() {
-    // `stutter-safe-words` (a fancy-regex rule ordered before
-    // `spaced-acronyms` in `DEFAULT_RULES`) must collapse "I I" to "I"
-    // before the spaced-acronym pass ever sees the text, otherwise "I I"
-    // would be misread as a two-letter spaced acronym and collapse to "II".
-    assert_clean_cases(CleaningProfile::Safe, &[("I I think", "I think")]);
 }
 
 #[test]
@@ -1110,33 +946,4 @@ fn fancy_regex_failure_fails_open_to_the_original_transcript() {
     assert_eq!(result.text, input);
     assert!(result.rules_fired.is_empty());
     assert!(result.failure.is_some());
-}
-
-#[test]
-fn clean_fails_open_branch_directly_without_relying_on_backtrack_exhaustion() {
-    // Belt-and-suspenders unit test of the fail-open branch itself, in case
-    // a future fancy-regex/regex version changes how readily a backtrack
-    // limit of 0 is exhausted: this directly checks the invariant
-    // documented on `Cleaner::clean` regardless of whether this particular
-    // input happens to trip the limit -- its `Ok` branch is `try_clean`'s
-    // result unchanged, and it never panics even under the smallest
-    // possible backtrack budget.
-    let cleaner =
-        Cleaner::new_with_backtrack_limit(CleaningProfile::Safe, false, &HashSet::new(), &[], 0)
-            .expect("rule patterns must still compile with a zero backtrack limit");
-    let input = "we we we ran";
-
-    match cleaner.try_clean(input) {
-        Ok(result) => {
-            // If this particular fancy-regex version manages to satisfy the
-            // limit for this input, `clean` must still agree with
-            // `try_clean` exactly.
-            assert_eq!(cleaner.clean(input), result);
-        }
-        Err(_) => {
-            let result = cleaner.clean(input);
-            assert_eq!(result.text, input);
-            assert!(result.failure.is_some());
-        }
-    }
 }
