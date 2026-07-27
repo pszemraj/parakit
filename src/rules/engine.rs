@@ -14,7 +14,6 @@ use regex::Regex;
 use sha2::{Digest, Sha256};
 use std::borrow::Cow;
 use std::collections::HashSet;
-use std::fmt::Write as _;
 
 use super::defaults::DEFAULT_RULES;
 use super::user::{compile_user_regex, validate_user_rules, RulePosition, UserRule};
@@ -646,10 +645,7 @@ fn compute_ruleset_id(
     }
 
     let digest = hasher.finalize();
-    let mut short_hash = String::with_capacity(16);
-    for byte in digest.iter().take(8) {
-        write!(&mut short_hash, "{byte:02x}").expect("writing to String cannot fail");
-    }
+    let short_hash = crate::checksum::hex_digest(&digest[..8]);
     format!("v{CLEANER_VERSION}-{}-{short_hash}", profile.as_str())
 }
 
