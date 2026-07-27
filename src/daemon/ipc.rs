@@ -339,22 +339,6 @@ impl SharedState {
         }
     }
 
-    /// Look up a remembered transcript by 0-based index (0 is the most
-    /// recent).
-    ///
-    /// # Returns
-    ///
-    /// `Some(text)` when `index` names a remembered transcript, `None`
-    /// otherwise (including when history is disabled or empty).
-    #[cfg(any(unix, target_os = "windows", test))]
-    fn transcript_at(&self, index: usize) -> Option<String> {
-        self.inner
-            .lock()
-            .history
-            .get(index)
-            .map(|entry| entry.text.clone())
-    }
-
     /// Fail when transcript history is turned off, so `history` reports the
     /// same reason as `paste-last` and `copy-last` instead of looking like
     /// an empty session.
@@ -381,7 +365,8 @@ impl SharedState {
     #[cfg(any(unix, target_os = "windows"))]
     fn resolve_transcript(&self, index: usize) -> Result<String> {
         self.ensure_history_enabled()?;
-        let count = self.inner.lock().history.len();
+        let inner = self.inner.lock();
+        let count = inner.history.len();
         if count == 0 {
             bail!("no transcript has been captured in this daemon session");
         }
@@ -393,9 +378,7 @@ impl SharedState {
             };
             bail!("only {count} {noun} remembered in this daemon session");
         }
-        Ok(self
-            .transcript_at(index)
-            .expect("index checked against history length above"))
+        Ok(inner.history[index].text.clone())
     }
 
     /// Snapshot remembered transcripts, newest first, for the `History`
@@ -1949,9 +1932,10 @@ mod tests {
         state.remember_transcript("second".to_string());
         state.remember_transcript("third".to_string());
 
-        assert_eq!(state.transcript_at(0).as_deref(), Some("third"));
-        assert_eq!(state.transcript_at(1).as_deref(), Some("second"));
-        assert_eq!(state.transcript_at(2), None);
+        let entries = state.history_snapshot(None);
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].preview, "third");
+        assert_eq!(entries[1].preview, "second");
     }
 
     #[test]
@@ -1959,17 +1943,7 @@ mod tests {
         let state = SharedState::with_history_limit(0);
         state.remember_transcript("should not be kept".to_string());
 
-        assert_eq!(state.transcript_at(0), None);
         assert!(state.history_snapshot(None).is_empty());
-    }
-
-    #[test]
-    fn transcript_at_beyond_history_returns_none() {
-        let state = SharedState::new();
-        state.remember_transcript("only one".to_string());
-
-        assert_eq!(state.transcript_at(0).as_deref(), Some("only one"));
-        assert_eq!(state.transcript_at(1), None);
     }
 
     #[cfg(any(unix, target_os = "windows"))]
