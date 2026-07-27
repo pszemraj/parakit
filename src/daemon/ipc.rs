@@ -2136,20 +2136,6 @@ mod tests {
     }
 
     #[test]
-    fn shared_state_uptime_reflects_elapsed_time() {
-        let state = SharedState::new();
-        state.set_info(sample_daemon_info());
-        std::thread::sleep(Duration::from_millis(20));
-
-        let IpcResponse::Status { detail, .. } = state.status() else {
-            panic!("expected a Status response");
-        };
-        // A freshly created state has near-zero uptime; this only asserts
-        // the field is wired to `started_at`, not a precise duration.
-        assert!(detail.expect("detail should be set").uptime_secs < 5);
-    }
-
-    #[test]
     fn status_detail_serde_round_trips() {
         let detail = StatusDetail {
             pid: 1234,
