@@ -228,22 +228,20 @@ fn run() -> Result<()> {
                 std::fs::create_dir_all(parent)
                     .with_context(|| format!("failed to create {}", parent.display()))?;
             }
-            let mut file = File::create(&path)
+            let file = File::create(&path)
                 .with_context(|| format!("failed to create {}", path.display()))?;
-            serde_json::to_writer_pretty(&mut file, &report)
-                .context("failed to serialize audit report")?;
-            writeln!(file).context("failed to terminate audit report with a newline")?;
+            write_report(file, &report)?;
         }
-        None => {
-            let stdout = std::io::stdout();
-            let mut locked = stdout.lock();
-            serde_json::to_writer_pretty(&mut locked, &report)
-                .context("failed to serialize audit report")?;
-            writeln!(locked).context("failed to terminate audit report with a newline")?;
-        }
+        None => write_report(std::io::stdout().lock(), &report)?,
     }
 
     Ok(())
+}
+
+fn write_report(mut output: impl Write, report: &AuditReport<'_>) -> Result<()> {
+    serde_json::to_writer_pretty(&mut output, report)
+        .context("failed to serialize audit report")?;
+    writeln!(output).context("failed to terminate audit report with a newline")
 }
 
 fn collect_jsonl_files(path: &Path, output: &mut Vec<PathBuf>) -> Result<()> {
