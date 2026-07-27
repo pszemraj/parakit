@@ -2,6 +2,25 @@
 
 Build success does not prove transcription quality. Use real user audio, not synthetic TTS.
 
+## Rust Validation Loop
+
+Run the full loop in order before pushing Rust or runtime changes:
+
+```bash
+cargo fmt --package parakit
+rustdoc-checker . --exclude target,vendor,.claude,local-scratch
+cargo check --workspace --all-targets
+cargo test
+cargo clippy --workspace --all-targets
+cargo build
+cargo check --workspace --all-targets --all-features
+```
+
+The all-features check can request accelerator toolchains that the current
+host does not have. Follow [GPU feature validation](dev.md#gpu-feature-validation)
+for the host-specific fallback, then run the native GPU build and runtime
+checks on each supported platform.
+
 ## Rust Source Coverage
 
 Install Rust's coverage tools once:
@@ -18,6 +37,10 @@ coverage summary:
 cargo coverage
 ```
 
+This alias uses the default feature and Cargo test-target surface. Include
+example-target tests with `cargo coverage --all-targets`; pass explicit
+feature flags when measuring feature-gated code.
+
 Generate a browsable per-line report when investigating an untested branch:
 
 ```bash
@@ -25,7 +48,7 @@ cargo coverage-html
 ```
 
 The aliases are defined in [`.cargo/config.toml`](../.cargo/config.toml).
-`cargo-llvm-cov` keeps instrumented artifacts under
+By default, `cargo-llvm-cov` keeps instrumented artifacts under
 `target/llvm-cov-target`, separate from ordinary builds. Reports cover
 parakit's Rust code, not linked CrispASR C/C++ code. They also cover only
 code compiled for the current host and feature set, so macOS coverage does

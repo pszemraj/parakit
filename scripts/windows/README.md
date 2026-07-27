@@ -94,7 +94,7 @@ Only one compute backend is supported per bundle.
 | CUDA | `build.ps1 --backend cuda` | Visual Studio C++ tools, Ninja, NVIDIA CUDA Toolkit with `nvcc`; `CUDA_PATH` may be inferred from `nvcc.exe` on `PATH` | NVIDIA-only. CUDA runtime and cuBLAS DLLs must be found from the installed app directory or `PATH`, unless `--bundle-cuda-dlls` is used. |
 | Vulkan | `build.ps1 --backend vulkan` | Visual Studio C++ tools, Ninja, LunarG Vulkan SDK with `glslc`; `VULKAN_SDK` may be autodetected from `C:\VulkanSDK\*` or inferred from `glslc.exe` on `PATH` | Recommended Windows GPU backend for NVIDIA, AMD, and Intel. `vulkan-1.dll` is provided by the installed GPU driver. |
 
-For Windows GPU installs, start with `--backend vulkan` unless you specifically need CUDA. Vulkan is vendor-agnostic, ships as a self-contained parakit bundle, and uses the GPU driver's `vulkan-1.dll` at runtime. CUDA is NVIDIA-only and either needs matching CUDA Toolkit runtime DLLs available from the installed app directory or `PATH`, or a larger bundle built with `--bundle-cuda-dlls`.
+For Windows GPU installs, start with `--backend vulkan` unless you specifically need CUDA. Vulkan is vendor-agnostic and bundles all parakit-owned runtime DLLs; the GPU driver must provide `vulkan-1.dll`. CUDA is NVIDIA-only and either needs matching CUDA Toolkit runtime DLLs available from the installed app directory or `PATH`, or a larger bundle built with `--bundle-cuda-dlls`.
 
 CUDA runtime DLL bundling is opt-in because `cublasLt64_*.dll` is large:
 
@@ -102,14 +102,7 @@ CUDA runtime DLL bundling is opt-in because `cublasLt64_*.dll` is large:
 scripts\windows\build.bat --backend cuda --bundle-cuda-dlls
 ```
 
-CUDA 12.x and 13.x toolkits are supported by the vendored ggml. CUDA 13.x toolkits do not install a display driver as part of the toolkit; install a compatible NVIDIA display driver separately. The default CUDA architecture behavior is ggml's native build for the GPU present on the machine. Override it when needed:
-
-```powershell
-$env:PARAKIT_CUDA_ARCHS = "89-real"
-.\scripts\windows\build.ps1 --backend cuda
-```
-
-`PARAKIT_CUDA_ARCHS` is passed directly to CMake as `CMAKE_CUDA_ARCHITECTURES`; values such as `native`, `89-real`, or semicolon-separated architecture lists are accepted by CMake/CUDA.
+CUDA 12.x and 13.x toolkits are supported by the vendored ggml. CUDA 13.x toolkits do not install a display driver as part of the toolkit; install a compatible NVIDIA display driver separately. The default CUDA architecture behavior is ggml's native build for the GPU present on the machine; the cross-platform `PARAKIT_CUDA_ARCHS` override is in [the build guide](../../docs/build.md#crispasr-and-backends).
 
 GPU builds default `CMAKE_GENERATOR` to `Ninja` when the variable is unset. The script activates an amd64 Visual Studio C++ environment before Cargo runs, then verifies `cl.exe`, `link.exe`, and `ninja.exe`. This is intentional for CUDA: Visual Studio generators select CUDA from versioned MSBuild BuildCustomizations, so stale versioned targets can override the toolkit selected by `nvcc` and `CUDA_PATH`.
 

@@ -14,7 +14,9 @@ Every commit is checked for conflict markers, whitespace errors, and accidental 
 - [rustdoc-checker](https://github.com/pszemraj/rustdoc-checker) in `--strict` mode, excluding `target`, `vendor`, `.claude`, and `local-scratch` (skipped with a warning when not installed)
 - `cargo clippy --package parakit --all-targets -- -D warnings` (package-scoped so known vendored-crate deprecation warnings do not gate commits)
 
-Bypass a single commit with `git commit --no-verify`. The hook is a fast gate, not the full validation loop; workspace-wide check, tests, and build still run before pushing runtime changes.
+Bypass a single commit with `git commit --no-verify`. The hook is a fast gate,
+not the [full validation loop](quality.md#rust-validation-loop), which still
+runs before pushing runtime changes.
 
 Install rustdoc-checker with:
 
@@ -56,7 +58,7 @@ On Windows, the hosted Q8_0 path is the normal model setup. `fetch --from-source
 
 After rebuilding a release artifact, upload F16 and Q8_0 to the hosted repo and update `HOSTED_Q8_SHA256` in `src/model.rs` if the Q8_0 bytes changed.
 
-## Windows GPU Validation
+## GPU Feature Validation
 
 Use the Windows scripts for CUDA/Vulkan validation; they default to Ninja. Raw `cargo check --workspace --all-targets --all-features` may still enter CMake's Visual Studio generator and fail before Rust typechecking if Visual Studio CUDA BuildCustomizations are stale. Known local failure: versioned CUDA targets leave `CudaToolkitDir` empty and emit `CUDA Toolkit directory '' does not exist`.
 

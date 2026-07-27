@@ -122,6 +122,17 @@ The repository vendors [CrispASR](https://github.com/CrispStrobe/CrispASR) as a 
 
 `CRISPASR_LIB_DIR` is for advanced local experiments with an already-built compatible CrispASR tree. The library must match the pinned C ABI, including `crispasr_session_open_with_params`. Bundled builds must also provide compatible ggml libraries with the exported device registry entry points and the pinned device struct prefix used by `parakit doctor` and `--device gpu` preflight.
 
+`CRISPASR_SRC_DIR` is an optional path to another CrispASR source tree containing
+`CMakeLists.txt`; by default, the bundled CMake build uses the vendored tree. An
+alternative tree must remain ABI-compatible with the vendored Rust crates. It
+cannot replace a missing submodule because Cargo resolves those path dependencies
+before `build.rs` runs.
+
+For CUDA builds, a nonempty `PARAKIT_CUDA_ARCHS` is passed unchanged as
+`CMAKE_CUDA_ARCHITECTURES`; omission or an empty value keeps ggml's native
+selection. CMake accepts values such as `89-real` and semicolon-separated
+architecture lists.
+
 Feature mapping:
 
 | Cargo feature | CMake option |
