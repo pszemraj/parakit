@@ -1,6 +1,7 @@
 //! macOS CGEvent-based paste shortcut and insertion smoke-test helpers.
 
 use super::permissions::event_tap_preflight;
+use crate::daemon::desktop::hotkey::{MACOS_PTT_LEFT_CONTROL_KEYCODE, MACOS_PTT_SPACE_KEYCODE};
 use anyhow::{bail, Result};
 use std::ffi::c_void;
 use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -34,11 +35,6 @@ const K_CG_EVENT_FLAG_MASK_COMMAND: u64 = 0x0010_0000;
 const K_CG_EVENT_SOURCE_STATE_HID_SYSTEM_STATE: i32 = 1;
 const MACOS_V_KEYCODE: u16 = 9;
 const MACOS_COMMAND_KEYCODE: u16 = 55;
-// TODO: these must track the push-to-talk hotkey definition (currently
-// hardcoded to Left Control+Space in `src/daemon/desktop/hotkey/macos.rs`)
-// once hotkeys become configurable.
-const MACOS_PTT_LEFT_CONTROL_KEYCODE: u16 = 59;
-const MACOS_PTT_SPACE_KEYCODE: u16 = 49;
 
 const SMOKE_TIMEOUT: Duration = Duration::from_millis(750);
 const SMOKE_POLL: Duration = Duration::from_millis(20);
@@ -362,8 +358,6 @@ fn release_event_source(source: *mut c_void) {
 ///
 /// Never blocks indefinitely: if the keys are still down at the deadline,
 /// this returns and the paste proceeds regardless.
-// TODO: MACOS_PTT_LEFT_CONTROL_KEYCODE/MACOS_PTT_SPACE_KEYCODE must track the
-// push-to-talk hotkey definition once hotkeys become configurable.
 fn wait_for_ptt_keys_released(timeout: Duration) {
     let deadline = Instant::now() + timeout;
     loop {

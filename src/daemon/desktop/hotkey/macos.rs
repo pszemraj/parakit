@@ -1,6 +1,9 @@
 //! macOS CoreGraphics push-to-talk hotkey tap.
 
-use super::{send_hotkey_transition, HotkeyAction, HotkeyBackend, HotkeyState, MacOsModifierState};
+use super::{
+    send_hotkey_transition, HotkeyAction, HotkeyBackend, HotkeyState, MacOsModifierState,
+    MACOS_PTT_LEFT_CONTROL_KEYCODE, MACOS_PTT_SPACE_KEYCODE,
+};
 use crate::daemon::logging::Logger;
 use crate::daemon::recording::HotkeyTransition;
 use crossbeam_channel::Sender;
@@ -26,12 +29,12 @@ pub(super) const K_CG_EVENT_FLAGS_CHANGED: u32 = 12;
 const K_CG_KEYBOARD_EVENT_KEYCODE: u32 = 9;
 const K_CG_EVENT_SOURCE_STATE_HID_SYSTEM_STATE: i32 = 1;
 /// Virtual keycode for Space in the macOS hardware-independent key map.
-pub(super) const MACOS_KEY_SPACE: i64 = 49;
+pub(super) const MACOS_KEY_SPACE: i64 = MACOS_PTT_SPACE_KEYCODE as i64;
 const MACOS_KEY_RIGHT_COMMAND: i64 = 54;
 const MACOS_KEY_LEFT_COMMAND: i64 = 55;
 const MACOS_KEY_LEFT_SHIFT: i64 = 56;
 const MACOS_KEY_LEFT_OPTION: i64 = 58;
-const MACOS_KEY_LEFT_CONTROL: i64 = 59;
+const MACOS_KEY_LEFT_CONTROL: i64 = MACOS_PTT_LEFT_CONTROL_KEYCODE as i64;
 const MACOS_KEY_RIGHT_SHIFT: i64 = 60;
 const MACOS_KEY_RIGHT_OPTION: i64 = 61;
 const MACOS_KEY_RIGHT_CONTROL: i64 = 62;

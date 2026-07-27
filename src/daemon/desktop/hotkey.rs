@@ -34,6 +34,13 @@ use std::{fs::File, io, path::PathBuf};
 #[cfg(target_os = "macos")]
 mod macos;
 
+/// Virtual keycode for the configured macOS push-to-talk Control key.
+#[cfg(target_os = "macos")]
+pub(crate) const MACOS_PTT_LEFT_CONTROL_KEYCODE: u16 = 59;
+/// Virtual keycode for the configured macOS push-to-talk Space key.
+#[cfg(target_os = "macos")]
+pub(crate) const MACOS_PTT_SPACE_KEYCODE: u16 = 49;
+
 #[cfg(any(not(target_os = "windows"), test))]
 const HOTKEY_DEBOUNCE: Duration = Duration::from_millis(150);
 #[cfg(target_os = "linux")]
