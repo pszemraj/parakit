@@ -788,13 +788,7 @@ fn copy_optional_windows_blas_runtime(bin_dir: &Path, blas: &BlasConfig) {
             continue;
         };
         let dest = bin_dir.join(name);
-        std::fs::copy(path, &dest).unwrap_or_else(|err| {
-            panic!(
-                "failed to copy Windows OpenBLAS runtime DLL {} to {}: {err}",
-                path.display(),
-                dest.display()
-            )
-        });
+        copy_file_or_panic(path, &dest, "Windows OpenBLAS runtime DLL");
     }
 }
 
@@ -876,13 +870,7 @@ fn copy_cuda_external_dlls(bin_dir: &Path, names: &[String]) {
             );
         };
         let dest = bin_dir.join(name);
-        std::fs::copy(&source, &dest).unwrap_or_else(|err| {
-            panic!(
-                "failed to copy CUDA runtime DLL {} to {}: {err}",
-                source.display(),
-                dest.display()
-            )
-        });
+        copy_file_or_panic(&source, &dest, "CUDA runtime DLL");
     }
 }
 
@@ -967,13 +955,7 @@ fn copy_windows_runtime_dlls(install_dir: &Path, bin_dir: &Path) {
         };
         let dest = bin_dir.join(name);
         if dll != dest {
-            std::fs::copy(&dll, &dest).unwrap_or_else(|err| {
-                panic!(
-                    "failed to copy Windows runtime DLL {} to {}: {err}",
-                    dll.display(),
-                    dest.display()
-                )
-            });
+            copy_file_or_panic(&dll, &dest, "Windows runtime DLL");
         }
     }
 }
@@ -995,14 +977,18 @@ fn copy_named_artifact(install_dir: &Path, file_name: &str, dest_dir: &Path) {
     };
 
     if src != dest {
-        std::fs::copy(&src, &dest).unwrap_or_else(|err| {
-            panic!(
-                "failed to copy {} to {}: {err}",
-                src.display(),
-                dest.display()
-            )
-        });
+        copy_file_or_panic(&src, &dest, "Windows build artifact");
     }
+}
+
+fn copy_file_or_panic(source: &Path, dest: &Path, description: &str) {
+    std::fs::copy(source, dest).unwrap_or_else(|err| {
+        panic!(
+            "failed to copy {description} {} to {}: {err}",
+            source.display(),
+            dest.display()
+        )
+    });
 }
 
 fn copy_runtime_dlls_to_profile_dir(bin_dir: &Path) {
@@ -1022,13 +1008,7 @@ fn copy_runtime_dlls_to_profile_dir(bin_dir: &Path) {
                 continue;
             };
             let dest = profile_dir.join(name);
-            std::fs::copy(&path, &dest).unwrap_or_else(|err| {
-                panic!(
-                    "failed to copy runtime DLL {} to {}: {err}",
-                    path.display(),
-                    dest.display()
-                )
-            });
+            copy_file_or_panic(&path, &dest, "runtime DLL");
         }
     }
 }
@@ -1041,13 +1021,8 @@ fn copy_runtime_manifest_to_profile_dir(bin_dir: &Path) {
     if !manifest.is_file() {
         return;
     }
-    std::fs::copy(&manifest, profile_dir.join(WINDOWS_RUNTIME_MANIFEST)).unwrap_or_else(|err| {
-        panic!(
-            "failed to copy runtime manifest {} to {}: {err}",
-            manifest.display(),
-            profile_dir.display()
-        )
-    });
+    let dest = profile_dir.join(WINDOWS_RUNTIME_MANIFEST);
+    copy_file_or_panic(&manifest, &dest, "runtime manifest");
 }
 
 fn windows_runtime_dll_names_for_bundle(bin_dir: &Path) -> Vec<String> {
