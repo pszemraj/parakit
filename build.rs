@@ -912,7 +912,7 @@ fn windows_openblas_from_env(explicit_openblas: bool) -> Option<WindowsOpenBlas>
         }
     }
 
-    if explicit_openblas && target_is_windows() && !manual_blas_path_overrides_are_set() {
+    if explicit_openblas && !manual_blas_path_overrides_are_set() {
         panic!(
             "PARAKIT_BLAS=openblas requested Windows OpenBLAS, but no usable target-compatible install was found. \
              Set PARAKIT_OPENBLAS_ROOT to a prefix containing include/, lib/, and bin/, \
