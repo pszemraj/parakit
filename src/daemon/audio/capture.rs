@@ -811,79 +811,29 @@ fn open_live_stream(
         thread: Some(drain),
     };
 
+    macro_rules! build_typed_stream {
+        ($sample:ty) => {
+            build_stream::<$sample>(
+                &selected.device,
+                &stream_config,
+                channels,
+                producer,
+                stream_error,
+                Arc::clone(&dropped_samples),
+                wake_tx.clone(),
+            )?
+        };
+    }
+
     let stream = match selected.config.sample_format() {
-        SampleFormat::I8 => build_stream::<i8>(
-            &selected.device,
-            &stream_config,
-            channels,
-            producer,
-            stream_error,
-            Arc::clone(&dropped_samples),
-            wake_tx.clone(),
-        )?,
-        SampleFormat::I16 => build_stream::<i16>(
-            &selected.device,
-            &stream_config,
-            channels,
-            producer,
-            stream_error,
-            Arc::clone(&dropped_samples),
-            wake_tx.clone(),
-        )?,
-        SampleFormat::I32 => build_stream::<i32>(
-            &selected.device,
-            &stream_config,
-            channels,
-            producer,
-            stream_error,
-            Arc::clone(&dropped_samples),
-            wake_tx.clone(),
-        )?,
-        SampleFormat::U8 => build_stream::<u8>(
-            &selected.device,
-            &stream_config,
-            channels,
-            producer,
-            stream_error,
-            Arc::clone(&dropped_samples),
-            wake_tx.clone(),
-        )?,
-        SampleFormat::U16 => build_stream::<u16>(
-            &selected.device,
-            &stream_config,
-            channels,
-            producer,
-            stream_error,
-            Arc::clone(&dropped_samples),
-            wake_tx.clone(),
-        )?,
-        SampleFormat::U32 => build_stream::<u32>(
-            &selected.device,
-            &stream_config,
-            channels,
-            producer,
-            stream_error,
-            Arc::clone(&dropped_samples),
-            wake_tx.clone(),
-        )?,
-        SampleFormat::F32 => build_stream::<f32>(
-            &selected.device,
-            &stream_config,
-            channels,
-            producer,
-            stream_error,
-            Arc::clone(&dropped_samples),
-            wake_tx.clone(),
-        )?,
-        SampleFormat::F64 => build_stream::<f64>(
-            &selected.device,
-            &stream_config,
-            channels,
-            producer,
-            stream_error,
-            Arc::clone(&dropped_samples),
-            wake_tx.clone(),
-        )?,
+        SampleFormat::I8 => build_typed_stream!(i8),
+        SampleFormat::I16 => build_typed_stream!(i16),
+        SampleFormat::I32 => build_typed_stream!(i32),
+        SampleFormat::U8 => build_typed_stream!(u8),
+        SampleFormat::U16 => build_typed_stream!(u16),
+        SampleFormat::U32 => build_typed_stream!(u32),
+        SampleFormat::F32 => build_typed_stream!(f32),
+        SampleFormat::F64 => build_typed_stream!(f64),
         other => return Err(anyhow!("unsupported sample format: {:?}", other)),
     };
 
