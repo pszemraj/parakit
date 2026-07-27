@@ -703,7 +703,7 @@ fn hotkey_report(_backend: HotkeyBackend, prompt_accessibility: bool) -> HotkeyR
 fn macos_hotkey_startup_blocked(permissions: &super::macos::PermissionReport) -> bool {
     // A CoreGraphics session event tap that observes keyDown/keyUp/flagsChanged
     // needs both synthetic-input trust and listen-event/Input Monitoring trust.
-    !permissions.accessibility.granted() || !permissions.input_monitoring.granted()
+    !permissions.event_tap_ready()
 }
 
 #[cfg(target_os = "macos")]

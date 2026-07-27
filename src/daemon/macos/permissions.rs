@@ -104,6 +104,18 @@ pub(crate) struct PermissionReport {
     pub(crate) input_monitoring: PermissionStatus,
 }
 
+impl PermissionReport {
+    /// Return whether the CoreGraphics session event tap has both permissions
+    /// it requires.
+    ///
+    /// # Returns
+    ///
+    /// `true` when Accessibility and Input Monitoring are both granted.
+    pub(crate) fn event_tap_ready(&self) -> bool {
+        self.accessibility.granted() && self.input_monitoring.granted()
+    }
+}
+
 /// Return the current permission snapshot.
 ///
 /// # Arguments
@@ -176,7 +188,7 @@ pub(crate) fn accessibility_preflight() -> Result<()> {
 /// Monitoring is missing.
 pub(crate) fn event_tap_preflight() -> Result<()> {
     let permissions = permission_report(false);
-    if permissions.accessibility.granted() && permissions.input_monitoring.granted() {
+    if permissions.event_tap_ready() {
         return Ok(());
     }
 
