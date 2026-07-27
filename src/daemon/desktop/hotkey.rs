@@ -92,34 +92,46 @@ impl HotkeyBackend {
         }
     }
 
-    #[cfg(target_os = "linux")]
-    /// Return whether this Linux backend uses the registered X11 hotkey path.
+    /// Resolve aliases to the Linux implementation that will actually run.
     ///
     /// # Returns
     ///
-    /// `true` for `auto`, `desktop`, and `x11-global-hotkey`.
-    pub(crate) fn uses_registered_x11(self) -> bool {
-        matches!(self, Self::Auto | Self::Desktop | Self::X11GlobalHotkey)
+    /// The concrete registered-X11, passive-X11, or evdev route.
+    #[cfg(target_os = "linux")]
+    pub(crate) const fn linux_route(self) -> LinuxHotkeyRoute {
+        match self {
+            Self::Auto | Self::Desktop | Self::X11GlobalHotkey => LinuxHotkeyRoute::RegisteredX11,
+            Self::X11Listen => LinuxHotkeyRoute::PassiveX11,
+            Self::EvdevProxyExperimental => LinuxHotkeyRoute::EvdevProxy,
+        }
     }
+}
 
-    #[cfg(target_os = "linux")]
-    /// Return whether this Linux backend passively listens for X11 events.
+/// Concrete Linux hotkey implementation after resolving CLI/config aliases.
+#[cfg(target_os = "linux")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum LinuxHotkeyRoute {
+    /// Registered X11 `Ctrl+Space`.
+    RegisteredX11,
+    /// Passive X11 keyboard-event listening.
+    PassiveX11,
+    /// Experimental evdev grab plus uinput forwarding.
+    EvdevProxy,
+}
+
+#[cfg(target_os = "linux")]
+impl LinuxHotkeyRoute {
+    /// Return the stable success/selection label for this route.
     ///
     /// # Returns
     ///
-    /// `true` for `x11-listen`.
-    pub(crate) fn uses_passive_x11_listen(self) -> bool {
-        matches!(self, Self::X11Listen)
-    }
-
-    #[cfg(target_os = "linux")]
-    /// Return whether this Linux backend uses the experimental evdev proxy.
-    ///
-    /// # Returns
-    ///
-    /// `true` for `evdev-proxy-experimental` and its explicit proxy alias.
-    pub(crate) fn uses_evdev_proxy(self) -> bool {
-        matches!(self, Self::EvdevProxyExperimental)
+    /// A concise user-facing Linux backend description.
+    pub(crate) const fn label(self) -> &'static str {
+        match self {
+            Self::RegisteredX11 => "registered X11 Ctrl+Space",
+            Self::PassiveX11 => "passive X11 Ctrl+Space listen",
+            Self::EvdevProxy => "experimental evdev/uinput keyboard proxy",
+        }
     }
 }
 
@@ -366,20 +378,21 @@ pub(crate) fn run_grab_loop(
     backend: HotkeyBackend,
     log: Arc<Logger>,
 ) {
-    match backend {
-        HotkeyBackend::Auto | HotkeyBackend::Desktop | HotkeyBackend::X11GlobalHotkey => {
-            log.verbose("parakit: Linux hotkey backend: registered X11 Ctrl+Space");
+    let route = backend.linux_route();
+    if route == LinuxHotkeyRoute::EvdevProxy {
+        log.warn(
+            "evdev-proxy is experimental; it grabs keyboard devices and forwards unsuppressed input through uinput",
+        );
+    }
+    log.verbose(format!("parakit: Linux hotkey backend: {}", route.label()));
+    match route {
+        LinuxHotkeyRoute::RegisteredX11 => {
             run_linux_registered_hotkey_loop_or_exit(tx);
         }
-        HotkeyBackend::X11Listen => {
-            log.verbose("parakit: Linux hotkey backend: passive X11 Ctrl+Space listen");
+        LinuxHotkeyRoute::PassiveX11 => {
             run_linux_x11_listen_or_exit(tx);
         }
-        HotkeyBackend::EvdevProxyExperimental => {
-            log.warn(
-                "evdev-proxy is experimental; it grabs keyboard devices and forwards unsuppressed input through uinput",
-            );
-            log.verbose("parakit: Linux hotkey backend: experimental evdev/uinput keyboard proxy");
+        LinuxHotkeyRoute::EvdevProxy => {
             run_linux_evdev_grab_loop_or_exit(tx, log);
         }
     }

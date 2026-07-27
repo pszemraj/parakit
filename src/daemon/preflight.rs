@@ -9,6 +9,8 @@ use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
 use super::hotkey::HotkeyBackend;
+#[cfg(target_os = "linux")]
+use super::hotkey::LinuxHotkeyRoute;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use super::hotkey_help;
 use super::inject::{self, PasteMode};
@@ -319,58 +321,44 @@ fn acquire_singleton_lock_at(path: &Path) -> Result<DaemonLock> {
 
 #[cfg(target_os = "linux")]
 fn linux_hotkey_startup_blocked(
-    backend: HotkeyBackend,
+    route: LinuxHotkeyRoute,
     x11_ready: bool,
     evdev_ready: bool,
 ) -> bool {
-    if backend.uses_registered_x11() || backend.uses_passive_x11_listen() {
-        !x11_ready
-    } else if backend.uses_evdev_proxy() {
-        !evdev_ready
-    } else {
-        false
-    }
-}
-
-#[cfg(target_os = "linux")]
-fn linux_hotkey_success_label(backend: HotkeyBackend) -> &'static str {
-    match backend {
-        HotkeyBackend::Auto | HotkeyBackend::Desktop | HotkeyBackend::X11GlobalHotkey => {
-            "registered X11 Ctrl+Space"
-        }
-        HotkeyBackend::X11Listen => "passive X11 Ctrl+Space listen",
-        HotkeyBackend::EvdevProxyExperimental => "experimental evdev/uinput keyboard proxy",
+    match route {
+        LinuxHotkeyRoute::RegisteredX11 | LinuxHotkeyRoute::PassiveX11 => !x11_ready,
+        LinuxHotkeyRoute::EvdevProxy => !evdev_ready,
     }
 }
 
 #[cfg(target_os = "linux")]
 fn hotkey_report(backend: HotkeyBackend, _prompt_accessibility: bool) -> HotkeyReport {
+    let route = backend.linux_route();
     let session = std::env::var("XDG_SESSION_TYPE").unwrap_or_else(|_| "unknown".to_string());
     let display = std::env::var("DISPLAY").unwrap_or_else(|_| "<unset>".to_string());
     let xauthority = std::env::var("XAUTHORITY").unwrap_or_else(|_| "<unset>".to_string());
     let user = std::env::var("USER").unwrap_or_else(|_| "$USER".to_string());
-    let registered = if backend.uses_registered_x11() {
+    let registered = if route == LinuxHotkeyRoute::RegisteredX11 {
         Some(super::hotkey::registered_hotkey_probe())
     } else {
         None
     };
     let registered_ready = registered.as_ref().is_some_and(|result| result.is_ok());
-    let x11_listen = backend
-        .uses_passive_x11_listen()
-        .then(super::session::ensure_x11_session_supported);
+    let x11_listen =
+        (route == LinuxHotkeyRoute::PassiveX11).then(super::session::ensure_x11_session_supported);
     let x11_listen_ready = x11_listen.as_ref().is_some_and(|result| result.is_ok());
-    let x11_ready = if backend.uses_passive_x11_listen() {
-        x11_listen_ready
-    } else {
-        registered_ready
+    let x11_ready = match route {
+        LinuxHotkeyRoute::RegisteredX11 => registered_ready,
+        LinuxHotkeyRoute::PassiveX11 => x11_listen_ready,
+        LinuxHotkeyRoute::EvdevProxy => false,
     };
-    let evdev = backend.uses_evdev_proxy().then(evdev_report);
+    let evdev = (route == LinuxHotkeyRoute::EvdevProxy).then(evdev_report);
     let evdev_ready = evdev
         .as_ref()
         .is_some_and(EvdevReport::grab_likely_available);
-    let blocking = linux_hotkey_startup_blocked(backend, x11_ready, evdev_ready);
+    let blocking = linux_hotkey_startup_blocked(route, x11_ready, evdev_ready);
     let status = linux_hotkey_status(
-        backend,
+        route,
         registered.as_ref(),
         x11_listen.as_ref(),
         evdev.as_ref(),
@@ -440,20 +428,19 @@ fn hotkey_report(backend: HotkeyBackend, _prompt_accessibility: bool) -> HotkeyR
 
     if blocking {
         writeln!(&mut details, "  status:         FAIL").unwrap();
-        if backend.uses_registered_x11() {
-            hotkey_help::write_registered_linux_fix(&mut details);
-        } else if backend.uses_passive_x11_listen() {
-            hotkey_help::write_x11_listen_linux_fix(&mut details);
-        } else {
-            hotkey_help::write_evdev_linux_fix(&mut details, &user);
+        match route {
+            LinuxHotkeyRoute::RegisteredX11 => {
+                hotkey_help::write_registered_linux_fix(&mut details);
+            }
+            LinuxHotkeyRoute::PassiveX11 => {
+                hotkey_help::write_x11_listen_linux_fix(&mut details);
+            }
+            LinuxHotkeyRoute::EvdevProxy => {
+                hotkey_help::write_evdev_linux_fix(&mut details, &user);
+            }
         }
     } else {
-        writeln!(
-            &mut details,
-            "  status:         OK ({})",
-            linux_hotkey_success_label(backend)
-        )
-        .unwrap();
+        writeln!(&mut details, "  status:         OK ({})", route.label()).unwrap();
     }
     append_wsl_warning(&mut details);
 
@@ -466,34 +453,37 @@ fn hotkey_report(backend: HotkeyBackend, _prompt_accessibility: bool) -> HotkeyR
             "session: XDG_SESSION_TYPE={session}, DISPLAY={display}, XAUTHORITY={xauthority}"
         )
         .unwrap();
-        if backend.uses_registered_x11() {
-            if let Some(Err(err)) = registered.as_ref() {
-                writeln!(&mut summary, "registered hotkey: unavailable ({err:#})").unwrap();
+        match route {
+            LinuxHotkeyRoute::RegisteredX11 => {
+                if let Some(Err(err)) = registered.as_ref() {
+                    writeln!(&mut summary, "registered hotkey: unavailable ({err:#})").unwrap();
+                }
+                hotkey_help::write_registered_linux_fix(&mut summary);
             }
-            hotkey_help::write_registered_linux_fix(&mut summary);
-        } else if backend.uses_passive_x11_listen() {
-            if let Some(Err(err)) = x11_listen.as_ref() {
-                writeln!(&mut summary, "x11-listen: unavailable ({err:#})").unwrap();
+            LinuxHotkeyRoute::PassiveX11 => {
+                if let Some(Err(err)) = x11_listen.as_ref() {
+                    writeln!(&mut summary, "x11-listen: unavailable ({err:#})").unwrap();
+                }
+                hotkey_help::write_x11_listen_linux_fix(&mut summary);
             }
-            hotkey_help::write_x11_listen_linux_fix(&mut summary);
-        } else if let Some(evdev) = &evdev {
-            writeln!(
-                &mut summary,
-                "evdev-proxy backend: {} device(s), {} readable, {} Ctrl+Space keyboard candidate(s), {} permission denied",
-                evdev.event_devices, evdev.readable, evdev.hotkey_keyboards, evdev.denied
-            )
-            .unwrap();
-            if let Some(err) = &evdev.uinput_error {
-                writeln!(&mut summary, "uinput: unavailable ({err})").unwrap();
+            LinuxHotkeyRoute::EvdevProxy => {
+                if let Some(evdev) = &evdev {
+                    writeln!(
+                        &mut summary,
+                        "evdev-proxy backend: {} device(s), {} readable, {} Ctrl+Space keyboard candidate(s), {} permission denied",
+                        evdev.event_devices, evdev.readable, evdev.hotkey_keyboards, evdev.denied
+                    )
+                    .unwrap();
+                    if let Some(err) = &evdev.uinput_error {
+                        writeln!(&mut summary, "uinput: unavailable ({err})").unwrap();
+                    }
+                    hotkey_help::write_evdev_linux_fix(&mut summary, &user);
+                }
             }
-            hotkey_help::write_evdev_linux_fix(&mut summary, &user);
         }
         summary
     } else {
-        format!(
-            "hotkey preflight passed with {}",
-            linux_hotkey_success_label(backend)
-        )
+        format!("hotkey preflight passed with {}", route.label())
     };
 
     HotkeyReport {
@@ -550,24 +540,24 @@ impl EvdevReport {
 
 #[cfg(target_os = "linux")]
 fn linux_hotkey_status(
-    backend: HotkeyBackend,
+    route: LinuxHotkeyRoute,
     registered: Option<&Result<()>>,
     x11_listen: Option<&Result<()>>,
     evdev: Option<&EvdevReport>,
     blocking: bool,
 ) -> String {
     if !blocking {
-        return format!("{} ready", linux_hotkey_success_label(backend));
+        return format!("{} ready", route.label());
     }
 
-    if backend.uses_registered_x11() {
+    if route == LinuxHotkeyRoute::RegisteredX11 {
         return match registered {
             Some(Err(err)) => format!("registered Ctrl+Space unavailable ({err:#})"),
             _ => "registered Ctrl+Space unavailable".to_string(),
         };
     }
 
-    if backend.uses_passive_x11_listen() {
+    if route == LinuxHotkeyRoute::PassiveX11 {
         return match x11_listen {
             Some(Err(err)) => format!("passive X11 listen unavailable ({err:#})"),
             _ => "passive X11 listen unavailable".to_string(),
@@ -809,7 +799,7 @@ mod tests {
         ];
         for (backend, x11_ready, evdev_ready, expected) in cases {
             assert_eq!(
-                linux_hotkey_startup_blocked(backend, x11_ready, evdev_ready),
+                linux_hotkey_startup_blocked(backend.linux_route(), x11_ready, evdev_ready),
                 expected
             );
         }

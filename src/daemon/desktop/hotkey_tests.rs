@@ -498,17 +498,21 @@ fn x11_keymap_bit_probe_detects_down_keycodes() {
 
 #[cfg(target_os = "linux")]
 #[test]
-fn linux_backend_routing_helpers_classify_backends() {
-    for (backend, registered, passive, evdev) in [
-        (HotkeyBackend::Auto, true, false, false),
-        (HotkeyBackend::Desktop, true, false, false),
-        (HotkeyBackend::X11GlobalHotkey, true, false, false),
-        (HotkeyBackend::X11Listen, false, true, false),
-        (HotkeyBackend::EvdevProxyExperimental, false, false, true),
+fn linux_backend_aliases_resolve_to_one_route() {
+    for (backend, expected) in [
+        (HotkeyBackend::Auto, LinuxHotkeyRoute::RegisteredX11),
+        (HotkeyBackend::Desktop, LinuxHotkeyRoute::RegisteredX11),
+        (
+            HotkeyBackend::X11GlobalHotkey,
+            LinuxHotkeyRoute::RegisteredX11,
+        ),
+        (HotkeyBackend::X11Listen, LinuxHotkeyRoute::PassiveX11),
+        (
+            HotkeyBackend::EvdevProxyExperimental,
+            LinuxHotkeyRoute::EvdevProxy,
+        ),
     ] {
-        assert_eq!(backend.uses_registered_x11(), registered);
-        assert_eq!(backend.uses_passive_x11_listen(), passive);
-        assert_eq!(backend.uses_evdev_proxy(), evdev);
+        assert_eq!(backend.linux_route(), expected);
     }
 }
 
