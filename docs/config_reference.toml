@@ -73,7 +73,8 @@
 
 # daemon.transcript_history - integer >= 0, optional; default: 10; no CLI override or upper clamp.
 # Bounds newest-first paste-last/copy-last/history entries; 0 disables those commands.
-# Stored only in process memory and discarded when the daemon exits.
+# The ring is process-memory-only, but logging.dir can independently persist the same transcript.
+# At 0, plain status reports no last transcript and verbose status reports history disabled.
 
 
 # [cleaning]

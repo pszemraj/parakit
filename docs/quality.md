@@ -38,7 +38,7 @@ integration, or paste safety.
 Use the Rust WAV target to run the same [CrispASR](https://github.com/CrispStrobe/CrispASR) engine without the hotkey daemon:
 
 ```bash
-cargo run --no-default-features --features bundled --example transcribe-file -- \
+cargo run --release --no-default-features --features bundled --example transcribe-file -- \
   --audio clips/example.wav
 ```
 

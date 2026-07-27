@@ -11,7 +11,7 @@ git config core.hooksPath .githooks
 Every commit is checked for conflict markers, whitespace errors, and accidental `vendor/` submodule pointer bumps. Commits that stage Rust files or `Cargo.toml`/`Cargo.lock` additionally run:
 
 - `cargo fmt --package parakit -- --check` (package-scoped so the vendored CrispASR submodule is never reformatted)
-- [rustdoc-checker](https://github.com/pszemraj/rustdoc-checker) in `--strict` mode, excluding `target` and `vendor` (skipped with a warning when not installed)
+- [rustdoc-checker](https://github.com/pszemraj/rustdoc-checker) in `--strict` mode, excluding `target`, `vendor`, `.claude`, and `local-scratch` (skipped with a warning when not installed)
 - `cargo clippy --package parakit --all-targets -- -D warnings` (package-scoped so known vendored-crate deprecation warnings do not gate commits)
 
 Bypass a single commit with `git commit --no-verify`. The hook is a fast gate, not the full validation loop; workspace-wide check, tests, and build still run before pushing runtime changes.
@@ -86,7 +86,6 @@ Current Rust files over the approximate 1k LoC target:
 | `build.rs` | Coordinates cross-platform CMake, BLAS, accelerator, runtime-path, and Windows-manifest policy. Continue moving self-contained Windows discovery and manifest code under `build/`. |
 | `src/daemon/desktop/hotkey.rs` | Is only slightly over the target and already delegates macOS code. Extract Linux backend implementations if it grows further. |
 | `src/daemon/desktop/inject_tests.rs` | Keeps the clipboard and insertion transaction regression matrix together. Split by transaction phase when shared fixtures no longer dominate. |
-| `src/rules/tests.rs` | Keeps ordering-sensitive cleaning and user-rule regressions together. Split by rule family when helpers can remain shared without obscuring order coverage. |
 
 ## Deferred Runtime Work
 

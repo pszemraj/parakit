@@ -107,7 +107,7 @@ parakit history
 parakit test-paste "hello from parakit"
 ```
 
-The daemon keeps a ring buffer of recent transcripts in memory (`daemon.transcript_history` entries, 10 by default). `paste-last` and `copy-last` act on the most recent one by default; pass `N` (1-based, counting back from the most recent) to reach further back, e.g. `parakit paste-last 3` for the third-most-recent transcript. `parakit history` lists what the daemon currently remembers, newest first; `--limit N` caps how many entries print. This history is memory-only: it is never written to disk and is gone as soon as the daemon stops. `test-paste` runs clipboard staging, focus checks, paste sanitization, and the paste chord without using the microphone.
+The daemon keeps a ring buffer of recent transcripts in memory (`daemon.transcript_history` entries, 10 by default). `paste-last` and `copy-last` act on the most recent one by default; pass `N` (1-based, counting back from the most recent) to reach further back, e.g. `parakit paste-last 3` for the third-most-recent transcript. `parakit history` lists what the daemon currently remembers, newest first; `--limit N` caps how many entries print. The history ring is never written to disk and disappears when the daemon stops, but enabled [JSONL logging](#logging-and-sounds) independently persists transcripts. `test-paste` runs clipboard staging, focus checks, paste sanitization, and the paste chord without using the microphone.
 
 Plain `parakit status` output is unchanged and safe for scripts to parse:
 
@@ -131,7 +131,7 @@ last transcript: 42 bytes
   device:     cpu (CPU, 8 threads)
   paste mode: standard
   sounds:     on
-  cleaning:   on (33 rules)
+  cleaning:   on (24 rules)
   logging:    JSONL to /home/user/.parakit/logs
   history:    3 of 10
   hotkey:     auto
@@ -187,7 +187,7 @@ After the paste chord is sent, macOS additionally confirms whether the target ac
 - **Unverified** - no pollable Accessibility value was available at all (no focused element captured, or the field withholds its value, as secure/password fields deliberately do). After a fixed ~1.5 second grace period, the paste is treated as likely successful and the clipboard is restored per policy, but the outcome is logged distinctly (`pasted_unverified`) so the degraded case stays visible in telemetry. This grace period runs before the success cue, so targets that never expose `AXValue` add about 1.5 seconds of perceived completion latency.
 - **No evidence** - a pollable value was available but never showed the transcript before the deadline. Uncertainty must never destroy the transcript: the previous clipboard is deliberately **not** restored, the transcript remains on the clipboard, parakit plays the error tone, and shows a notification asking you to press Cmd+V to insert it manually.
 
-This acknowledgement step only runs after a paste chord has actually been sent. Linux and Windows clipboard modes use fixed-delay restore gates. Direct typing never uses the clipboard.
+This acknowledgement step only runs after a paste chord has actually been sent. Linux clipboard modes use a fixed-delay restore gate. Windows waits for its clipboard-update listener when available and falls back to timing. Direct typing never uses the clipboard.
 
 Paste modes:
 

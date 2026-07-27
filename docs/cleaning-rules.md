@@ -46,7 +46,7 @@ Spaced acronyms follow one invariant: a run of two or more standalone uppercase 
 
 Number conversion uses `text2num` with an isolated-number threshold of zero by default, so every recognized numeric expression becomes digits, including isolated values such as `zero`, `one`, and `three`. Set `cleaning.number_threshold = 5`, for example, to leave isolated values strictly below five as words while rendering five and larger values as digits. Omission and an explicit zero are equivalent. Because this is `text2num`'s isolated-value threshold, grouped or structural expressions may still render components below the cutoff numerically. The ambiguous word `second` remains a word when context identifies it as a time unit (`one second`, `per second`, `a split-second`), while genuine ordinals still render numerically. Multi-point versions are parsed component by component through `text2num`; parakit then joins those validated components with periods regardless of the isolated-value threshold. Generic formatting passes compact short uppercase identifiers and split digit groups without maintaining a list of product names.
 
-Safe casual-form normalization expands `gonna` and `gunna` to `going to`, and `wanna` and `wana` to `want to`. The complete tag question `, right?` becomes a period, while ordinary questions such as `Did I turn right?` and `Is that right?` remain unchanged.
+Safe casual-form normalization expands `gonna` and `gunna` to `going to`, and `wanna` and `wana` to `want to`. The complete tag question `, right?` becomes a period, while ordinary questions such as `Did I turn right?` and `Is that right?` remain unchanged. When the replacement is the dictation's final character, the default terminal-period pass removes it unless `--keep-trailing-period` is set.
 
 The safe repeated-word rule remains intentionally conservative. A bounded backreference consolidates a small set of high-confidence function-word stutters, while valid or ambiguous repetition such as `that that` and emphatic `no no` survives. The aggressive profile can opt into collapsing the ambiguous set.
 
@@ -155,7 +155,7 @@ disabled_rules = ["weights-and-biases-to-wandb"]
 ### Edit Rules Without Rebuilding
 
 User rules are runtime configuration, not compiled into the parakit binary.
-They are validated and compiled once at process startup, then reused for each
+They are validated and compiled during process startup, then reused for each
 dictation without TOML parsing or regex compilation on the hot path. Editing
 a rule does not run Cargo, rebuild Parakit, download a model, or convert model
 weights.

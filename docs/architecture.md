@@ -11,7 +11,7 @@ audio manager thread         owns the current cpal::Stream and follows the defau
 cpal callback thread         mixes input to mono and pushes frames into a bounded SPSC ring
 audio drain thread           drains ring -> resamples -> updates pre-roll and active recording
 worker thread                owns Engine and runs transcribe -> clean -> insert
-sound thread                 opens rodio output only while playing cue tones
+optional sound thread        opens rodio output only while playing cue tones
 IPC listener thread          accepts local control connections
 IPC client threads           handle status, stop, paste-last, copy-last, history, and test-paste
 Windows clipboard thread     observes clipboard-history acknowledgement when available
@@ -77,6 +77,8 @@ Cross-thread communication uses atomics, mutex-protected buffers, and crossbeam 
 
 ## Failure Policy
 
-Startup failures stop the process when the model, microphone, or hotkey backend cannot be opened.
+Any failed required startup or preflight step stops the process. This includes
+config and cleaner validation, session and singleton checks, insertion and
+control-socket setup, and opening the model, microphone, or hotkey backend.
 
 Runtime failures are reported and the daemon continues when possible: sound cues, log writes, individual transcriptions, and text insertion failures.
