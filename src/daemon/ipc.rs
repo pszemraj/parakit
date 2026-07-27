@@ -1758,45 +1758,7 @@ mod windows_pipe {
 
         #[test]
         fn client_message_read_mode_preserves_message_boundaries() -> Result<()> {
-            let unique = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .expect("system time should be after epoch")
-                .as_nanos();
-            let pipe_name = encode_wide_null(&format!(
-                r"\\.\pipe\parakit-ipc-test-{}-{unique}",
-                std::process::id()
-            ));
-            let server_handle = unsafe {
-                CreateNamedPipeW(
-                    PCWSTR(pipe_name.as_ptr()),
-                    PIPE_ACCESS_DUPLEX,
-                    PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT,
-                    1,
-                    PIPE_BUFFER_SIZE,
-                    PIPE_BUFFER_SIZE,
-                    IPC_CLIENT_TIMEOUT_MS,
-                    null_mut(),
-                )
-            };
-            assert!(!is_invalid_handle(server_handle));
-            let server = PipeHandle(server_handle);
-
-            let client_handle = unsafe {
-                CreateFileW(
-                    PCWSTR(pipe_name.as_ptr()),
-                    GENERIC_READ | GENERIC_WRITE,
-                    0,
-                    null_mut(),
-                    OPEN_EXISTING,
-                    FILE_ATTRIBUTE_NORMAL,
-                    HANDLE::default(),
-                )
-            };
-            assert!(!is_invalid_handle(client_handle));
-            let client = PipeHandle(client_handle);
-
-            set_client_message_read_mode(&client)?;
-            connect_server_pipe(&server)?;
+            let (server, client) = connected_test_pipe(false)?;
 
             let payload = b"abcdef";
             write_pipe_message(&server, payload)?;
@@ -1837,7 +1799,7 @@ mod windows_pipe {
 
         #[test]
         fn pipe_message_read_times_out_when_peer_sends_nothing() -> Result<()> {
-            let (server, _client) = connected_overlapped_test_pipe()?;
+            let (server, _client) = connected_test_pipe(true)?;
             let started = std::time::Instant::now();
 
             let err = read_pipe_message(&server)
@@ -1850,7 +1812,7 @@ mod windows_pipe {
 
         #[test]
         fn pipe_response_remains_readable_after_server_handle_closes() -> Result<()> {
-            let (server, client) = connected_overlapped_test_pipe()?;
+            let (server, client) = connected_test_pipe(true)?;
 
             write_pipe_message(&server, b"ok")?;
             drop(server);
@@ -1859,7 +1821,7 @@ mod windows_pipe {
             Ok(())
         }
 
-        fn connected_overlapped_test_pipe() -> Result<(PipeHandle, PipeHandle)> {
+        fn connected_test_pipe(overlapped: bool) -> Result<(PipeHandle, PipeHandle)> {
             let unique = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .expect("system time should be after epoch")
@@ -1868,10 +1830,11 @@ mod windows_pipe {
                 r"\\.\pipe\parakit-ipc-test-{}-{unique}",
                 std::process::id()
             ));
+            let overlapped_flag = if overlapped { FILE_FLAG_OVERLAPPED } else { 0 };
             let server_handle = unsafe {
                 CreateNamedPipeW(
                     PCWSTR(pipe_name.as_ptr()),
-                    PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED,
+                    PIPE_ACCESS_DUPLEX | overlapped_flag,
                     PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT,
                     1,
                     PIPE_BUFFER_SIZE,
@@ -1890,7 +1853,7 @@ mod windows_pipe {
                     0,
                     null_mut(),
                     OPEN_EXISTING,
-                    FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OVERLAPPED,
+                    FILE_ATTRIBUTE_NORMAL | overlapped_flag,
                     HANDLE::default(),
                 )
             };
