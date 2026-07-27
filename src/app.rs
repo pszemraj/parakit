@@ -280,7 +280,11 @@ pub(crate) fn run() -> Result<()> {
         .context("audio manager started without reporting a microphone")?;
     warn_about_bluetooth_mic_if_needed(&log, &mic_info);
 
-    let (model_path, engine) = open_cli_engine(&cli, &config, cli.quiet, &log)?;
+    let OpenedEngine {
+        model_path,
+        engine,
+        device_summary,
+    } = open_cli_engine(&cli, &config, cli.quiet, &log)?;
     let model_dtype = model_dtype_label(&model_path);
 
     // Banner.
@@ -298,7 +302,6 @@ pub(crate) fn run() -> Result<()> {
         ),
         None => "off".to_string(),
     };
-    let device_summary = resolved_device_summary(engine.device_mode());
     let backend_label = engine.backend().to_string();
     let engine_threads = engine.threads();
     log.banner(BannerInfo {
@@ -524,7 +527,7 @@ fn run_ptt_audio_simulation(
         wav.samples.len()
     ));
 
-    let (_model_path, engine) = open_cli_engine(
+    let OpenedEngine { engine, .. } = open_cli_engine(
         cli,
         config,
         cli.quiet || !cli.effective_verbose(config),
@@ -597,7 +600,7 @@ fn open_cli_engine(
     config: &ConfigFile,
     fetch_quiet: bool,
     log: &Logger,
-) -> Result<(PathBuf, Engine)> {
+) -> Result<OpenedEngine> {
     let verbose = cli.effective_verbose(config);
     let engine_config = resolve_engine_config(
         cli,
@@ -614,7 +617,7 @@ fn open_cli_engine(
         verbose,
     )
     .with_context(|| format!("could not open model {}", model_path.display()))?;
-    let device_summary = resolved_device_summary(engine.device_mode());
+    let (device_summary, has_gpu) = resolve_runtime_device(engine.device_mode());
     log.verbose(format!(
         "parakit: model opened in {:.0}ms with backend={} threads={} device={}",
         open_started.elapsed().as_secs_f32() * 1000.0,
@@ -624,8 +627,18 @@ fn open_cli_engine(
     ));
     // Warmup is a startup readiness check, not only a latency hint: it runs
     // the same transcribe path the first real dictation would use.
-    warm_up_engine(&engine, log)?;
-    Ok((model_path, engine))
+    warm_up_engine(&engine, has_gpu, log)?;
+    Ok(OpenedEngine {
+        model_path,
+        engine,
+        device_summary,
+    })
+}
+
+struct OpenedEngine {
+    model_path: PathBuf,
+    engine: Engine,
+    device_summary: String,
 }
 
 #[derive(Debug)]
@@ -734,31 +747,37 @@ fn validate_device_request(device_mode: DeviceMode, log: &Logger) -> Result<()> 
     Ok(())
 }
 
-fn resolved_device_summary(device_mode: DeviceMode) -> String {
+fn resolve_runtime_device(device_mode: DeviceMode) -> (String, bool) {
     if device_mode == DeviceMode::Cpu {
-        return DeviceMode::Cpu.as_str().to_string();
+        return (DeviceMode::Cpu.as_str().to_string(), false);
     }
 
     #[cfg(feature = "bundled")]
     {
-        match parakit::gpu::preferred_gpu_device() {
+        let devices = parakit::gpu::devices();
+        let preferred = parakit::gpu::preferred_gpu_device_in(&devices);
+        let summary = match preferred {
             Some(device) => format!("{} -> {}", device_mode.as_str(), device.diagnostic_line()),
             None if device_mode == DeviceMode::Auto => {
                 "auto -> CPU fallback (no GPU/iGPU visible)".to_string()
             }
             None => "gpu -> unavailable (no GPU/iGPU visible)".to_string(),
-        }
+        };
+        (summary, preferred.is_some())
     }
 
     #[cfg(not(feature = "bundled"))]
     {
-        format!("{} (device probe unavailable)", device_mode.as_str())
+        (
+            format!("{} (device probe unavailable)", device_mode.as_str()),
+            false,
+        )
     }
 }
 
-fn warm_up_engine(engine: &Engine, log: &Logger) -> Result<()> {
+fn warm_up_engine(engine: &Engine, has_gpu: bool, log: &Logger) -> Result<()> {
     let started = Instant::now();
-    let sequence = engine_warmup_seconds(engine);
+    let sequence = engine_warmup_seconds(engine.device_mode(), has_gpu);
     for seconds in sequence {
         let warmup = warmup::synthetic_pcm(*seconds);
         engine
@@ -773,19 +792,12 @@ fn warm_up_engine(engine: &Engine, log: &Logger) -> Result<()> {
     Ok(())
 }
 
-fn engine_warmup_seconds(engine: &Engine) -> &'static [usize] {
-    if engine.device_mode() == DeviceMode::Cpu {
-        return CPU_ENGINE_WARMUP_SECONDS;
+fn engine_warmup_seconds(device_mode: DeviceMode, has_gpu: bool) -> &'static [usize] {
+    if device_mode != DeviceMode::Cpu && has_gpu {
+        GPU_ENGINE_WARMUP_SECONDS
+    } else {
+        CPU_ENGINE_WARMUP_SECONDS
     }
-
-    #[cfg(feature = "bundled")]
-    {
-        if parakit::gpu::has_gpu_device() {
-            return GPU_ENGINE_WARMUP_SECONDS;
-        }
-    }
-
-    CPU_ENGINE_WARMUP_SECONDS
 }
 
 fn format_warmup_sequence(sequence: &[usize]) -> String {
@@ -1075,12 +1087,19 @@ mod app_tests {
     const GGML_LOG_LEVEL_ERROR: i32 = 4;
 
     #[test]
-    fn gpu_warmup_policy_is_realistic_not_worst_case() {
-        assert_eq!(crate::daemon::recording::MAX_UTTERANCE_SECONDS, 270);
-        assert_eq!(GPU_ENGINE_WARMUP_SECONDS, &[5, 30]);
-        assert!(GPU_ENGINE_WARMUP_SECONDS
-            .iter()
-            .all(|seconds| *seconds < crate::daemon::recording::MAX_UTTERANCE_SECONDS as usize));
+    fn warmup_policy_uses_gpu_sequence_only_for_a_visible_gpu() {
+        assert_eq!(
+            engine_warmup_seconds(DeviceMode::Auto, true),
+            GPU_ENGINE_WARMUP_SECONDS
+        );
+        assert_eq!(
+            engine_warmup_seconds(DeviceMode::Gpu, false),
+            CPU_ENGINE_WARMUP_SECONDS
+        );
+        assert_eq!(
+            engine_warmup_seconds(DeviceMode::Cpu, true),
+            CPU_ENGINE_WARMUP_SECONDS
+        );
     }
 
     #[test]
@@ -1090,7 +1109,9 @@ mod app_tests {
 
     #[test]
     fn cpu_device_summary_is_plain() {
-        assert_eq!(resolved_device_summary(DeviceMode::Cpu), "cpu");
+        let (summary, has_gpu) = resolve_runtime_device(DeviceMode::Cpu);
+        assert_eq!(summary, "cpu");
+        assert!(!has_gpu);
     }
 
     #[test]
