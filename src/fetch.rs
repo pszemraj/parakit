@@ -442,7 +442,7 @@ fn ensure_q8(
     quantize_version: &str,
     f16_sha: &str,
     options: FetchOptions,
-) -> Result<String> {
+) -> Result<()> {
     if !options.force
         && paths.q8.is_file()
         && manifest.q8_input_sha256.as_deref() == Some(f16_sha)
@@ -455,7 +455,7 @@ fn ensure_q8(
                 "parakit: using cached Q8_0 GGUF: {}",
                 paths.q8.display()
             ));
-            return Ok(current);
+            return Ok(());
         }
     }
 
@@ -473,12 +473,12 @@ fn ensure_q8(
     let q8_sha = crate::checksum::sha256_file_hex(&tmp_q8)?;
     move_into_place(&tmp_q8, &paths.q8)?;
     manifest.q8_input_sha256 = Some(f16_sha.to_string());
-    manifest.q8_sha256 = Some(q8_sha.clone());
+    manifest.q8_sha256 = Some(q8_sha);
     manifest.q8_output_path = paths.q8.display().to_string();
     manifest.crispasr_quantize_bin = quantize_bin.display().to_string();
     manifest.crispasr_quantize_version = quantize_version.to_string();
     manifest.quantized_at = Some(now_utc());
-    Ok(q8_sha)
+    Ok(())
 }
 
 fn download_with_resume(url: &str, path: &Path) -> Result<()> {
