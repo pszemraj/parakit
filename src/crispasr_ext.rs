@@ -113,9 +113,6 @@ impl OwnedSession {
     ///
     /// Panics only if allocating the returned segment or word vectors fails.
     pub(crate) fn transcribe(&self, pcm: &[f32]) -> Result<Vec<SessionSegment>, String> {
-        if pcm.is_empty() {
-            return Ok(Vec::new());
-        }
         let n_samples = c_int::try_from(pcm.len())
             .map_err(|_| format!("audio buffer too large for CrispASR: {} samples", pcm.len()))?;
         let result = unsafe {

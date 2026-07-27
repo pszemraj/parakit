@@ -307,11 +307,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn short_pcm_is_padded_with_silence() {
+    fn short_and_empty_pcm_are_padded_with_silence() {
         let padded = pad_short_pcm(&[0.25, -0.25]);
         assert_eq!(padded.len(), MIN_INFERENCE_SAMPLES);
         assert_eq!(&padded[..2], &[0.25, -0.25]);
         assert!(padded[2..].iter().all(|sample| *sample == 0.0));
+
+        let empty = pad_short_pcm(&[]);
+        assert_eq!(empty.len(), MIN_INFERENCE_SAMPLES);
+        assert!(empty.iter().all(|sample| *sample == 0.0));
     }
 
     #[test]
