@@ -8,6 +8,7 @@
 //! Accessibility cannot expose a focused element on either side, matching
 //! falls back to frontmost-application pid + bundle identifier.
 
+use crate::daemon::desktop::FocusVerification;
 use anyhow::{bail, Context, Result};
 use objc2::msg_send;
 use objc2::rc::autoreleasepool;
@@ -209,23 +210,6 @@ pub(crate) struct MacOsFocusSnapshot {
     pid: libc::pid_t,
     bundle_identifier: Option<String>,
     ax: Option<AxElementSnapshot>,
-}
-
-/// Result of comparing a captured [`MacOsFocusSnapshot`] against a fresh
-/// read of the live macOS focus state.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum FocusVerification {
-    /// Same frontmost pid and bundle identifier, and (when Accessibility
-    /// exposed a focused element on both sides) the same focused element
-    /// identity.
-    Matched,
-    /// The frontmost application changed, or the focused element identity
-    /// no longer matches.
-    Changed,
-    /// The frontmost pid and bundle identifier still match, but the
-    /// Accessibility focused element could not be compared because it was
-    /// unavailable on the captured snapshot, the live read, or both.
-    AxUnsupported,
 }
 
 impl MacOsFocusSnapshot {

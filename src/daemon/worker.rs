@@ -10,7 +10,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use super::audio::TARGET_RATE;
-use super::inject::{ClipboardPolicy, FocusSnapshot, FocusVerification, Injector, PasteMode};
+use super::desktop::FocusVerification;
+use super::inject::{ClipboardPolicy, FocusSnapshot, Injector, PasteMode};
 use super::ipc::SharedState;
 use super::logging::Logger;
 use super::notifications::Notifier;
