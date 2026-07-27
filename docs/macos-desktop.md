@@ -4,9 +4,7 @@ parakit supports Apple Silicon macOS as a terminal-run CLI. Build from source, g
 
 ## Build
 
-Install the native Apple Silicon Metal build using
-[build.md#install](build.md#install). Build dependencies, source-install
-library paths, and Rosetta constraints are covered there.
+Install the native Apple Silicon Metal build using [build.md#install](build.md#install). Build dependencies, source-install library paths, and Rosetta constraints are covered there.
 
 ## Permissions
 
@@ -53,15 +51,29 @@ The push-to-talk chord is not configurable yet; macOS uses `Left Control+Space`.
 
 ## Background Use
 
-Use the commands in [running.md#background-use](running.md#background-use),
-launched from the terminal application that holds Parakit's privacy
-permissions.
+Use the commands in [running.md#background-use](running.md#background-use), launched from the terminal application that holds parakit's privacy permissions.
 
 ## Insertion
 
-macOS insertion behavior, focus-change handling, and recovery commands are in [running.md#insertion](running.md#insertion).
+Paste modes, focus-change handling, clipboard staging, and recovery commands are in [running.md#insertion](running.md#insertion). This section covers the acknowledgement step that is unique to macOS.
+
+After a paste chord is sent, macOS does not restore the previous clipboard contents after a fixed delay. It polls the focused Accessibility element's `AXValue` for evidence that the target consumed the paste, at 40 ms intervals against a 1800 ms deadline, and insertion resolves to one of three tiers:
+
+- **Confirmed** - the element's value showed newly visible transcript-specific evidence before the deadline. The previous clipboard contents are restored, or the transcript is cleared, per the usual clipboard policy. Logged as `outcome: pasted` with `acknowledgement_kind: ax_confirmed`.
+- **Unverified** - no pollable Accessibility value was available at all: no focused element was captured, or the field withholds its value, as secure and password fields do by design. After a fixed 1500 ms grace period the paste is treated as likely successful and the clipboard is restored per policy, logged as `outcome: pasted_unverified` with `acknowledgement_kind: unverified_timeout` so the degraded case stays visible in telemetry. The grace period runs before the success cue, so targets that never expose `AXValue` add about 1.5 seconds of perceived completion latency.
+- **No evidence** - a pollable value was available but never showed the transcript before the deadline, or the element died mid-poll. Uncertainty must never destroy the transcript, so the previous clipboard is not restored: the transcript stays on the clipboard, parakit plays the error tone, and a notification asks you to press `Cmd+V` to insert it manually. Logged as `outcome: copied_only` with `acknowledgement_kind: no_evidence`.
 
 Paste-failure and paste-fallback notifications (transcript copied, paste blocked, paste temporarily disabled, microphone unavailable/recovered) surface as real Notification Center banners on macOS, sent through `osascript`/`display notification`. If macOS does not show them, check System Settings > Notifications; some macOS versions file `osascript`-originated notifications under "Script Editor" rather than under "parakit".
+
+### What Counts As Evidence
+
+The baseline value is read *before* the chord is posted, not after. Reading it afterward races the target: an app that refreshes its accessibility tree coarsely (terminals especially; ghostty confirms in roughly 300 ms where Safari and Discord confirm in roughly 40 ms) can already have the pasted text in the first post-chord read. From then on the value never changes, so a paste that landed perfectly is indistinguishable from one that was dropped, and the transaction reports no evidence: an error chime and a withheld clipboard restore on a completely successful dictation. Whether that happened came down to timing, which made it look intermittent and arbitrary from the outside.
+
+Bare value growth is not confirmation. A focused element can grow for reasons unrelated to the paste: asynchronous application output, autocomplete, a remote terminal update, or another input source can all change `AXValue` during the confirmation window. Treating any length increase as evidence would restore the previous clipboard even when the transcript never landed, destroying the only remaining copy. Confirmation requires transcript-specific evidence instead.
+
+Matching ignores whitespace on both sides rather than comparing verbatim. A terminal's `AXValue` is its rendered screen, hard-wrapped at the column width and wrapping mid-word, so a pasted transcript comes back with newlines injected at the wrap points. Dropping whitespace makes the comparison independent of that layout.
+
+When the whole transcript cannot be found, a newly visible 32-character leading or trailing window still counts. A terminal scrolls the head of a long paste off the top of the screen and a bounded field truncates the tail, but either end appearing verbatim is real evidence rather than coincidence: a natural-language run of that length is effectively unique against whatever the field held beforehand. Transcripts at or under 32 characters get no windowed fallback, since a partial overlap must not be mistaken for insertion when the whole transcript was short enough to match outright.
 
 ## Metal Verification
 
