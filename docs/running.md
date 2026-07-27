@@ -105,7 +105,7 @@ parakit history
 parakit test-paste "hello from parakit"
 ```
 
-The daemon keeps a ring buffer of recent transcripts in memory (`daemon.transcript_history` entries, 10 by default). `paste-last` and `copy-last` act on the most recent one by default; pass `N` (1-based, counting back from the most recent) to reach further back, e.g. `parakit paste-last 3` for the third-most-recent transcript. `parakit history` lists what the daemon currently remembers, newest first; `--limit N` caps how many entries print. The history ring is never written to disk and disappears when the daemon stops, but enabled [JSONL logging](#logging-and-sounds) independently persists transcripts. `test-paste` runs clipboard staging, focus checks, paste sanitization, and the paste chord without using the microphone.
+The daemon keeps a ring buffer of recent transcripts in memory (`daemon.transcript_history` entries, 10 by default). `paste-last` and `copy-last` act on the most recent one by default; pass `N` (1-based, counting back from the most recent) to reach further back, e.g. `parakit paste-last 3` for the third-most-recent transcript. `parakit history` lists what the daemon currently remembers, newest first; `--limit N` caps how many entries print. The history ring is never written to disk and disappears when the daemon stops, so treat it as a same-session convenience rather than an archive; a [clipboard history manager](#insertion) is what carries dictations across restarts, and enabled [JSONL logging](#logging-and-sounds) independently persists them. `test-paste` runs clipboard staging, focus checks, paste sanitization, and the paste chord without using the microphone.
 
 Plain `parakit status` output is unchanged and safe for scripts to parse:
 
@@ -191,7 +191,9 @@ parakit --paste-mode direct
 
 Linux clipboard modes use a fixed-delay restore gate. Windows waits for its clipboard-update listener when available and falls back to timing. macOS waits for insertion evidence instead, described below.
 
-OS clipboard history or a third-party clipboard manager is useful for recovering a transcript when the target app rejects paste. On Windows, built-in clipboard history is opened with `Win+V` and must be enabled by the user. Clipboard history tools may retain transcript text after parakit restores the active clipboard; disable them if that retention is not acceptable for your workflow.
+Run an OS or third-party clipboard history manager alongside parakit. parakit does not persist dictations on its own: the daemon's in-memory ring holds only the last `daemon.transcript_history` transcripts and is gone when the daemon stops, and [JSONL logging](#logging-and-sounds) writes nothing unless you set a log directory. A clipboard manager is what gives you durable access to something you dictated earlier, and it is also how you recover a transcript when the target application rejects the paste. On Windows, built-in clipboard history is opened with `Win+V` and must be enabled by the user.
+
+Clipboard history tools do retain transcript text after parakit restores the active clipboard. That is the point, but it also means dictated text outlives the paste; disable the manager if that retention is not acceptable for your workflow.
 
 ### Focus Changes
 
