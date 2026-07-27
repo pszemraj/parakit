@@ -4,22 +4,9 @@ parakit supports Apple Silicon macOS as a terminal-run CLI. Build from source, g
 
 ## Build
 
-Install Xcode command line tools and the build helpers:
-
-```bash
-xcode-select --install
-brew install cmake pkg-config
-```
-
-Build or install the native Apple Silicon binary:
-
-```bash
-cargo install --path . --features metal
-```
-
-The macOS source install puts `parakit` under `~/.cargo/bin` and uses an rpath into the repository's generated CrispASR/ggml library directory. This matches Linux source installs. Do not delete the repository `target/` tree after installing.
-
-`aarch64-apple-darwin` is the supported macOS target. If `parakit --verbose doctor` reports a Rosetta or non-aarch64 warning, rebuild from a native arm64 terminal.
+Install the native Apple Silicon Metal build using
+[build.md#install](build.md#install). Build dependencies, source-install
+library paths, and Rosetta constraints are covered there.
 
 ## Permissions
 
@@ -64,32 +51,11 @@ macOS may also use `Control+Space` for input-source switching when multiple inpu
 
 Custom hotkeys are deferred to a future config file. Until then, macOS has one default hotkey.
 
-## Paths
-
-macOS uses the same XDG-style cache layout as Linux:
-
-```text
-~/.cache/parakit/models
-~/.cache/parakit/run
-```
-
-`PARAKIT_MODELS_DIR` still overrides the model directory.
-
 ## Background Use
 
-Start parakit from a terminal in the active desktop login:
-
-```bash
-parakit doctor && parakit --quiet &
-disown
-```
-
-Keep stderr in a file:
-
-```bash
-mkdir -p "$HOME/.local/state/parakit"
-nohup parakit --quiet >/dev/null 2>>"$HOME/.local/state/parakit/parakit.err" &
-```
+Use the commands in [running.md#background-use](running.md#background-use),
+launched from the terminal application that holds Parakit's privacy
+permissions.
 
 ## Insertion
 
@@ -113,11 +79,3 @@ otool -L target/release/build/parakit-*/out/lib/libggml.dylib
 otool -l "$HOME/.cargo/bin/parakit" | grep -A2 LC_RPATH
 otool -s __DATA __ggml_metallib target/release/build/parakit-*/out/lib/libggml-metal.dylib | head
 ```
-
-## Troubleshooting
-
-If the hotkey does nothing, grant Accessibility and Input Monitoring to the terminal, quit and restart parakit, then rerun `parakit doctor`.
-
-If the hotkey worked and later stops after changing privacy settings, restart parakit. The event tap tries to re-enable itself after macOS disables it, but privacy changes can still require a fresh process.
-
-If `--device gpu` reports no GPU on Apple Silicon, run `parakit --verbose doctor`. A Rosetta warning means the process is translated; reinstall from a native arm64 terminal.

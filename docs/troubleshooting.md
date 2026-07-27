@@ -43,26 +43,10 @@ Windows elevated-target behavior is covered in [running.md#insertion](running.md
 
 On macOS, run `parakit doctor --deep` to exercise the Accessibility-controlled insertion path and event-tap smoke check. If it fails, grant Accessibility and Input Monitoring to the terminal app, restart parakit, and rerun the check.
 
-In non-direct paste modes, parakit stages blocked or failed transcripts on the clipboard before restoring the active clipboard. Check OS clipboard history, such as `Win+V` on Windows, or your clipboard manager before using the recovery commands below.
-
-If paste is blocked, focus the intended field and run:
-
-```text
-parakit paste-last
-```
-
-To avoid sending a paste chord, copy the last transcript instead:
-
-```text
-parakit copy-last
-```
-
-If the transcript you need is not the most recent one, list what the daemon still remembers and reach back by number:
-
-```text
-parakit history
-parakit copy-last 2
-```
+In non-direct paste modes, check OS clipboard history, such as `Win+V` on
+Windows, or your clipboard manager for blocked or failed transcripts.
+Daemon-memory recovery commands are in
+[running.md#control-socket](running.md#control-socket).
 
 ## Wrong Microphone
 
@@ -123,4 +107,6 @@ The daemon intentionally warms the backend at startup. Use `--verbose` to see wa
 
 ## macOS Metal Builds
 
-Build and permission setup are in [macos-desktop.md](macos-desktop.md). If `--device gpu` reports no GPU on Apple Silicon, run `parakit --verbose doctor`. A Rosetta or non-aarch64 warning means the process is translated; reinstall from a native arm64 terminal. Metal library checks are in [macos-desktop.md#metal-verification](macos-desktop.md#metal-verification).
+Build and permission setup are in
+[macos-desktop.md](macos-desktop.md). Metal library checks are in
+[macos-desktop.md#metal-verification](macos-desktop.md#metal-verification).

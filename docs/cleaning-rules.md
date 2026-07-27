@@ -122,12 +122,10 @@ replacement = "wandb"
 position = "standard"   # "first", "standard" (default), or "last"
 ```
 
-- `name` must be unique: it must not collide with a built-in rule name or another user rule name.
-- `pattern` and `replacement` use the same Rust `regex` crate dialect as built-in rules (no lookbehind, no backreferences, `$1`/`$2`/... for captures, `(?i)` for case-insensitive).
-- `position` controls where the rule is spliced into the built-in rule list:
-  - `first` — runs before every built-in rule, including leading-filler removal. Use this when your rule needs to see the rawest possible ASR output.
-  - `standard` (default) — runs with the bulk of the built-in rules, before the final whitespace/punctuation cleanup group. Right choice for most vocabulary substitutions.
-  - `last` — runs after every built-in rule, including whitespace/punctuation cleanup. Use this for rules that should have the final word, such as appending punctuation.
+The key contracts, validation constraints, replacement syntax, and exact
+splice points for `first`, `standard`, and `last` are in
+[config_reference.toml](config_reference.toml). Use `standard` for ordinary
+vocabulary substitutions.
 
 Disable a user rule the same way as a built-in rule:
 
@@ -147,28 +145,13 @@ disabled_rules = ["weights-and-biases-to-wandb"]
 ### Edit Rules Without Rebuilding
 
 User rules are runtime configuration, not compiled into the parakit binary.
-Config-consuming processes validate them during startup and build the
-effective cleaner before doing any dictation work. Dictations then reuse that
-pipeline, so there is no TOML parsing or regex compilation on the
-per-dictation hot path. Editing a rule never runs Cargo, rebuilds parakit,
-downloads a model, or converts model weights.
+They are validated and compiled once at process startup, then reused for each
+dictation without TOML parsing or regex compilation on the hot path. Editing
+a rule does not run Cargo, rebuild Parakit, download a model, or convert model
+weights.
 
-Use this fast edit-and-test loop even while the daemon is running:
-
-```bash
-parakit config edit
-parakit config show
-parakit --test-rules "A representative dictation to clean."
-parakit --list-rules
-```
-
-`config show` validates the whole file unless global `--quiet` makes it a
-no-op. `--test-rules` and `--list-rules` load the edited rules in a short-lived
-process and exit before model, microphone, hotkey, or daemon startup. Once the
-output is right, run `parakit stop` and relaunch the daemon with the same
-startup command you normally use. The running daemon intentionally keeps its
-startup cleaner until restart; the config file is not watched for live
-changes.
+Use the edit, validation, and restart workflow in
+[configuration.md#validation-and-recovery](configuration.md#validation-and-recovery).
 
 A built-in rule can be replaced without rebuilding by listing its name in
 `cleaning.disabled_rules` and adding a differently named `[[rules.user]]`
@@ -176,53 +159,6 @@ replacement. Runtime user rules deliberately use the standard Rust `regex`
 dialect. Context-sensitive procedural transforms such as number/version
 parsing and sentence capitalization remain Rust code unless they expose a
 specific config setting such as `cleaning.number_threshold`.
-
-### Validation Errors
-
-A broken user rule is a hard error at config load time (`parakit config show` or daemon startup), naming the offending rule:
-
-```text
-user rule #1 has an empty name
-user rule 'my-rule' has an empty pattern
-user rule 'my-rule' has invalid regex: regex parse error: ...
-user rule 'filler-um-uh' has the same name as a built-in rule; rename it
-duplicate user rule name 'my-rule'
-```
-
-An unknown name in `cleaning.disabled_rules` fails the same way, with `no rule named '<name>'`. `parakit config edit` never loads the file, so it stays available to repair a config that no longer parses.
-
-A user rule named in `disabled_rules` is never compiled, so parking a rule with a known-bad pattern there is a supported way to keep a draft in the file without breaking startup.
-
-## Log Schema And Ruleset Identity
-
-Transcription records include:
-
-- `parakit_version`, the Cargo package version embedded in the running binary;
-- `cleaner_version`;
-- `cleaning_profile`, one of `safe`, `aggressive`, or `disabled`;
-- `ruleset_id`, derived from the ordered enabled pass set, user rules, and configurable behavioral inputs;
-- `drops_trailing_period`;
-- `number_threshold`, the configured isolated-number cutoff or `null` when all recognized numbers are converted;
-- `rules_active`;
-- `rules_fired`, an ordered array of `{name, matches}` objects;
-- `cleaning_failure`, present only when a bounded matcher failed and the cleaner fell back to the original transcript.
-
-When cleaning is disabled the profile is recorded as `disabled`, no ruleset ID is written, the active count is zero, and `rules_fired` is empty. Historical records that contain only `rules_active` remain valid input for the audit tool, but that count alone cannot identify behavior.
-
-When a procedural pass changes behavior without changing its name, increment `CLEANER_VERSION`. That changes the ruleset ID and prevents different implementations from being grouped as the same cleaner.
-
-## Corpus Regression Workflow
-
-Replay one JSONL file or a directory tree with the audit example. The audit uses the same messaging-style terminal-period behavior as the daemon unless `--keep-trailing-period` is supplied. Pass `--number-threshold VALUE` to audit a non-default number policy. Insertion-outcome lines are skipped automatically.
-
-```bash
-cargo run --no-default-features --features bundled --example audit-cleaning -- \
-  "$HOME/.parakit/logs" \
-  --profile safe \
-  --output target/cleaning-safe.json
-```
-
-Inspect the highest-frequency passes in `rules_fired`, then read the `examples` array, which holds transcripts where the replay disagrees with the historical `cleaned` value.
 
 ## Regression Workflow
 
@@ -233,5 +169,8 @@ When a cleanup worsens a transcript:
 3. Disable candidate passes one at a time with `--disable-rule`.
 4. Narrow the pattern or add a more specific rule before the generic one.
 5. Add a case to the `rules` unit tests or `tests/cleaning_regressions.rs`.
+
+For historical JSONL replay, use
+[quality.md#cleaning-corpus-replay](quality.md#cleaning-corpus-replay).
 
 Avoid disabling broad rule categories to fix a narrow failure. If the failure is personal vocabulary rather than a general defect, add a user rule instead.

@@ -14,12 +14,9 @@ Default behavior:
 
 ## X11 Sessions
 
-Start parakit from a terminal opened in the current graphical login:
-
-```bash
-parakit --quiet &
-disown
-```
+Start Parakit from a terminal opened in the current graphical login. General
+foreground and background commands are in
+[running.md#background-use](running.md#background-use).
 
 Tmux is fine when the tmux server was started from the current desktop login. A tmux server that survived a GNOME logout/login can keep stale `DISPLAY` or `XAUTHORITY` values from the old session. In that case, `parakit doctor` may report an X11 error such as `Connection refused`.
 

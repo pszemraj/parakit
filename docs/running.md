@@ -230,63 +230,7 @@ parakit --no-sounds
 
 ## Configuration
 
-parakit reads an optional `config.toml` for daemon defaults, cleaning preferences, transcription logging, the Linux hotkey backend, and user-defined cleaning rules. Precedence is **CLI flags > config file > built-in defaults**.
-
-[configuration.md](configuration.md) explains file location, lifecycle, and
-the config commands. [config_reference.toml](config_reference.toml) is the
-complete per-key contract.
-
-Default path, following each platform's normal config-directory convention:
-
-```text
-Linux/macOS: $XDG_CONFIG_HOME/parakit/config.toml, falling back to ~/.config/parakit/config.toml
-Windows:     %APPDATA%\parakit\config.toml
-```
-
-`PARAKIT_CONFIG_PATH` overrides the path outright on every platform.
-
-```bash
-parakit config path                 # print the resolved config path
-parakit config init                 # write a commented template (fails if a file already exists)
-parakit config init --force         # overwrite an existing config file
-parakit config show                 # print the resolved path and effective merged values (default for bare `parakit config`)
-parakit config edit                 # open $VISUAL or $EDITOR, creating the file from the template first if missing
-```
-
-A missing config file is equivalent to an empty one: every ordinary key falls
-back to its built-in default. A config file that fails to parse or validate is
-a hard error that names the path. Use `parakit config show` to find the
-problem and `parakit config edit` to repair it.
-
-Template excerpt (every key is commented out by default; see `parakit config init`'s output for the full file):
-
-```toml
-[daemon]
-# device = "auto"          # "auto", "cpu", or "gpu"
-# paste_mode = "standard"  # "terminal", "standard", or "direct"
-# verbose = false          # a CLI --quiet flag always wins over this
-# transcript_history = 10  # transcripts kept in daemon memory; 0 disables paste-last/copy-last/history
-
-[cleaning]
-# enabled = true
-# profile = "safe"              # "safe" or "aggressive"
-# keep_trailing_period = false  # true keeps the period cleanup drops by default
-# number_threshold = 5          # below 5 stays words; omit/0 converts all
-# disabled_rules = ["fix-trailing-period"]
-
-[logging]
-# dir = "/home/user/.parakit/logs"
-
-[hotkey]
-# backend = "auto"         # Linux only
-
-# [[rules.user]]
-# name = "weights-and-biases-to-wandb"
-# pattern = "(?i)\\bweights and biases\\b"
-# replacement = "wandb"
-# position = "standard"    # "first", "standard" (default), or "last"
-```
-
-See [cleaning-rules.md](cleaning-rules.md#user-rules) for the full user-defined rule format, position semantics, and validation errors.
-
-`daemon.transcript_history` only affects daemon memory: it is never written to disk, existing history does not survive a restart, and a changed value takes effect the next time the daemon starts (a running daemon keeps the depth it started with).
+Config file location, commands, precedence, loading, and recovery are in
+[configuration.md](configuration.md). The type, default, valid values, and
+interactions for every setting are in
+[config_reference.toml](config_reference.toml).

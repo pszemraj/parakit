@@ -116,12 +116,3 @@ daemon settings: `fetch`, `cache`, `config path`, `config init`, `config edit`,
 `status`, `stop`, `paste-last`, `copy-last`, `history`, and `test-paste`.
 `doctor`, `--list-rules`, `--test-rules`, PTT simulation, and daemon startup
 do load it.
-
-## Related Documentation
-
-- [config_reference.toml](config_reference.toml): complete TOML and runtime
-  environment contract.
-- [cleaning-rules.md](cleaning-rules.md): pipeline behavior, user-rule
-  examples, and the no-rebuild editing workflow.
-- [running.md](running.md): daemon operation, insertion behavior, logging
-  schema, and startup examples.
