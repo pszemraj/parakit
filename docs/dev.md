@@ -27,11 +27,8 @@ Source-coverage setup and report commands are in
 
 ## Model Artifacts
 
-End-user startup uses the hosted [Q8_0 GGUF](https://huggingface.co/pszemraj/parakeet-tdt-0.6b-v3-gguf).
-
-The binary downloads `parakeet-tdt-0.6b-v3-Q8_0.gguf`, verifies the compiled-in SHA256, writes it to the platform model cache, and starts the daemon after startup preflights pass. The default `parakit` command must not require Python, NeMo, PyTorch, or manual model setup.
-
-`-m <path>` is the escape hatch for local experiments and always disables automatic model fetch.
+End-user download, cache, checksum, and model-override behavior is in
+[running.md#model-cache](running.md#model-cache).
 
 Hosted release files:
 
@@ -99,7 +96,7 @@ TODO: Keep the direct platform-hotkey path available when configurable chords la
 
 TODO: Add a Linux `doctor` warning for known IBus `Ctrl+Space` conflicts, or close this if configurable hotkeys make the warning unnecessary. Keep the current Linux docs warning until the default/config story changes.
 
-TODO: Remove the Unix source-install dependency on the repository `target/` library tree in a dedicated follow-up PR. First try to work upstream with CrispASR for static/manual linking support; if that is not viable, revisit full vendoring or an aggregate static-link strategy in parakit. Do not patch the CrispASR submodule locally for this.
+TODO: Remove the [Unix source-install dependency on the repository `target/` library tree](build.md#install) in a dedicated follow-up PR. First try to work upstream with CrispASR for static/manual linking support; if that is not viable, revisit full vendoring or an aggregate static-link strategy in parakit. Do not patch the CrispASR submodule locally for this.
 
 TODO: Add a secondary recording watchdog for missed key-release events from the registered X11 hotkey backend. The existing max-utterance timeout bounds the failure, but a silence-based stop would recover sooner when a backend misses release ordering.
 

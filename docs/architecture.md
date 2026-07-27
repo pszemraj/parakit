@@ -39,9 +39,10 @@ Live capture drains callback audio through a bounded single-producer/single-cons
 - `rodio::OutputStream` is not reliably `Send`, so cue playback lives on its own thread and opens output only for the duration of a cue.
 - `crispasr::Session` is `Send` but not `Sync`, so the worker owns `Engine` directly. Do not wrap it in `Arc<Engine>`.
 - Hotkey backends emit only logical press/release transitions. They do not call audio, ASR, clipboard, or insertion code.
-- Linux `auto`, `desktop`, and `x11-global-hotkey` register `Ctrl+Space` with X11 through `global-hotkey`; `x11-listen` is passive debugging, and `evdev-proxy-experimental` is the explicit experimental evdev/uinput path. Linux text insertion uses X11/XTest and rejects Wayland sessions.
-- macOS uses a CoreGraphics event tap for `Left Control+Space`, requires Accessibility for the launching terminal, and before insertion checks the frontmost app's focused Accessibility UI element identity, falling back to pid+bundle identifier matching when Accessibility exposes no focused element on either side.
-- Windows registers `Ctrl+Space` with `RegisterHotKey`, pastes with `SendInput`, checks the foreground window before insertion, and uses a per-user named pipe for daemon commands.
+- Runtime focus and insertion behavior is in [running.md#insertion](running.md#insertion);
+  backend setup is in [linux-desktop.md](linux-desktop.md),
+  [macos-desktop.md](macos-desktop.md), and
+  [the Windows guide](../scripts/windows/README.md).
 - Normal dictation hotkey backends must suppress the literal Space key before it reaches the focused application. The passive `x11-listen` backend is for debugging and does not suppress keys.
 
 Cross-thread communication uses atomics, mutex-protected buffers, and crossbeam channels.

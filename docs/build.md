@@ -81,12 +81,8 @@ parakit doctor
 parakit --verbose doctor
 ```
 
-Benchmark different thread counts with the daemon-free WAV quality target described in [quality.md#wav-quality-target](quality.md#wav-quality-target):
-
-```bash
-cargo run --release --no-default-features --features bundled --example transcribe-file -- \
-  --audio path/to/sample.wav --threads 8 --repeat 3
-```
+Benchmark different thread counts with the daemon-free
+[WAV quality target](quality.md#wav-quality-target).
 
 ## BLAS And MKL
 
