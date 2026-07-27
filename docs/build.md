@@ -90,7 +90,7 @@ cargo run --release --no-default-features --features bundled --example transcrib
 
 ## BLAS And MKL
 
-The build defaults to `PARAKIT_BLAS=auto`. If no supported BLAS is detected, parakit uses native ggml CPU kernels. BLAS/MKL can help some matrix paths but adds system-library dependencies.
+The build defaults to `PARAKIT_BLAS=auto`. If no supported BLAS is detected, parakit uses native ggml CPU kernels. BLAS/MKL can help some matrix paths but adds system-library dependencies. Values are trimmed and case-insensitive; an explicitly empty value disables BLAS, while an unset value selects `auto`.
 
 ```bash
 PARAKIT_BLAS=openblas cargo install --path .
@@ -102,12 +102,12 @@ Supported values:
 
 | Value | Behavior |
 | --- | --- |
-| unset, `auto` | Apple Accelerate on macOS; otherwise MKL if `mkl-sdl.pc` is visible; otherwise Windows OpenBLAS from `PARAKIT_OPENBLAS_ROOT` or `CONDA_PREFIX\Library`; otherwise OpenBLAS if `openblas.pc` or `openblas64.pc` is visible; otherwise off. |
-| `off`, `false`, `0` | Native/OpenMP CPU kernels without BLAS. |
+| unset, `auto` | Apple Accelerate on macOS. Windows uses bundleable OpenBLAS from `PARAKIT_OPENBLAS_ROOT` or `CONDA_PREFIX\Library`, otherwise off. Other Unix targets try MKL through `mkl-sdl.pc`, then OpenBLAS through `openblas.pc` or `openblas64.pc`, then off. |
+| empty, `off`, `none`, `no`, `false`, `0` | Native/OpenMP CPU kernels without BLAS. |
 | `openblas` | `GGML_BLAS=ON`, `GGML_BLAS_VENDOR=OpenBLAS`. |
-| `mkl` | CrispASR `COHERE_MKL=ON`, ggml `Intel10_64lp`. |
-| `generic` | `GGML_BLAS=ON`, `GGML_BLAS_VENDOR=Generic`. |
-| `accelerate` | Apple Accelerate. Apple targets only. |
+| `mkl`, `intel`, `intel-mkl` | CrispASR `COHERE_MKL=ON`, ggml `Intel10_64lp`. |
+| `generic`, `system`, `blas`, `on`, `yes`, `true`, `1` | `GGML_BLAS=ON`, `GGML_BLAS_VENDOR=Generic`. |
+| `accelerate`, `apple` | Apple Accelerate. Apple targets only. |
 
 Windows OpenBLAS layout and bundling behavior are in [../scripts/windows/README.md#blas](../scripts/windows/README.md#blas).
 

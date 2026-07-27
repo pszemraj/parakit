@@ -30,7 +30,7 @@ A single terminal period is removed by default because parakit primarily targets
 parakit --keep-trailing-period
 ```
 
-These settings also live in `config.toml` as `cleaning.profile` and `cleaning.keep_trailing_period`; the CLI flags override them. Number conversion has the config-only `cleaning.number_threshold` setting. See the per-key [config reference](config_reference.toml).
+These settings also live in `config.toml` as `cleaning.profile` and `cleaning.keep_trailing_period`. Number conversion has the config-only `cleaning.number_threshold` setting. The exact CLI/config merge behavior is in the per-key [config reference](config_reference.toml).
 
 Disable cleaning entirely:
 
@@ -45,6 +45,8 @@ The default pipeline favors structural rules over product- or vocabulary-specifi
 Spaced acronyms follow one invariant: a run of two or more standalone uppercase ASCII letters separated by exactly one ASCII space is collapsed without separators. For example, `O C R` becomes `OCR`, `R L H F` becomes `RLHF`, and `A B` becomes `AB`. There is no acronym allowlist, so an unfamiliar initialism collapses exactly like a familiar one. Repeated-word stutter handling runs before acronym collapsing, so `I I think` still becomes `I think` rather than `II think`.
 
 Number conversion uses `text2num` with an isolated-number threshold of zero by default, so every recognized numeric expression becomes digits, including isolated values such as `zero`, `one`, and `three`. Set `cleaning.number_threshold = 5`, for example, to leave isolated values strictly below five as words while rendering five and larger values as digits. Omission and an explicit zero are equivalent. Because this is `text2num`'s isolated-value threshold, grouped or structural expressions may still render components below the cutoff numerically. The ambiguous word `second` remains a word when context identifies it as a time unit (`one second`, `per second`, `a split-second`), while genuine ordinals still render numerically. Multi-point versions are parsed component by component through `text2num`; parakit then joins those validated components with periods regardless of the isolated-value threshold. Generic formatting passes compact short uppercase identifiers and split digit groups without maintaining a list of product names.
+
+Safe casual-form normalization expands `gonna` and `gunna` to `going to`, and `wanna` and `wana` to `want to`. The complete tag question `, right?` becomes a period, while ordinary questions such as `Did I turn right?` and `Is that right?` remain unchanged.
 
 The safe repeated-word rule remains intentionally conservative. A bounded backreference consolidates a small set of high-confidence function-word stutters, while valid or ambiguous repetition such as `that that` and emphatic `no no` survives. The aggressive profile can opt into collapsing the ambiguous set.
 
@@ -105,7 +107,9 @@ Rules use Rust's `regex` crate dialect:
 - capture replacement uses `$1`, `$2`, and so on;
 - use `(?i)` for case-insensitive matches.
 
-Personal vocabulary belongs in code only when it generalizes to normal dictation. Personal vocabulary that should *not* be baked into the binary — proper nouns, jargon, a `'cause`-style substitution you don't want everyone to get — belongs in `config.toml` instead. See User Rules below.
+Increment `CLEANER_VERSION` when a procedural pass changes behavior so historical `ruleset_id` values continue to identify the behavior that produced a transcript.
+
+Personal vocabulary belongs in code only when it generalizes to normal dictation. Proper nouns, project-specific shorthand, and private jargon belong in `config.toml` instead. See User Rules below.
 
 ## User Rules
 

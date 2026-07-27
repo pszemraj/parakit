@@ -47,9 +47,13 @@ gsettings get org.gnome.desktop.input-sources xkb-options
 
 If any output mentions `<Control>space`, `<Ctrl>space`, or a left-control toggle, remove that binding in Settings or with your input-method tool. For IBus-specific bindings, run `ibus-setup`, open Keyboard Shortcuts, and remove `Ctrl+Space` from input-method switching before rerunning `parakit doctor`.
 
+## Deep Doctor Check
+
+In `terminal` or `standard` mode, `parakit doctor --deep` creates and focuses a temporary 1x1 X11 window, stages a sentinel through the production guarded clipboard transaction, sends the configured paste chord, and verifies the window observed the V key press and release. It then restores the previous focus and supported clipboard contents and destroys the window. An active X11 desktop is required. In `direct` mode, the command performs backend preflight only and does not synthesize text.
+
 ## Focus Guard
 
-On X11, parakit compares the active window captured at PTT-down with the active window at paste time. If focus clearly changes, no paste chord is sent, but non-direct modes still stage the transcript before restoring supported previous clipboard contents unless `--keep-transcript-clipboard` is set. If X11 focus capture or recheck is unavailable, parakit pastes anyway so a transient focus-query failure does not silently drop dictation. Parakit does not inspect application internals with AT-SPI; normal desktop apps, Electron apps, browsers, editors, and terminals are handled by clipboard staging plus one paste chord.
+The X11 focus guard, fail-open query behavior, and clipboard fallback are described in [running.md#insertion](running.md#insertion). Parakit does not inspect application internals with AT-SPI.
 
 ## Passive X11 Listen
 

@@ -74,15 +74,21 @@ On macOS, raw `--all-features` also enables CUDA and can fail in CMake before Ru
 
 ## File Size Exceptions
 
-`src/daemon/audio/capture.rs` is temporarily over the 1k LoC target because it owns one tightly coupled runtime boundary: CPAL stream recovery, the SPSC drain thread, resampler flushing, and recording/pre-roll state. Split it after Windows CPU settles into smaller `audio/stream.rs`, `audio/drain.rs`, and `audio/device.rs` modules without changing behavior.
+Current Rust files over the approximate 1k LoC target:
 
-`src/daemon/desktop/inject.rs` is also temporarily over the target while clipboard transaction, X11 paste-chord cleanup, focus snapshots, and smoke-test support settle. Split it into focused clipboard, X11 paste, and focus modules without changing the paste safety contract.
+| Path | Reason and split boundary |
+| --- | --- |
+| `src/daemon/audio/capture.rs` | Owns the coupled CPAL stream-recovery, SPSC drain, resampling, and pre-roll boundary. Split into stream, drain, and device modules after Windows CPU behavior settles. |
+| `src/daemon/desktop/inject.rs` | Owns the cross-platform clipboard transaction and insertion contract. Split clipboard, X11 paste, and focus code without changing paste safety. |
+| `src/daemon/ipc.rs` | Contains both Unix-socket and Windows named-pipe transports plus their policy tests. Extract the Windows transport after its behavior settles. |
+| `src/daemon/worker.rs` | Coordinates ASR, cleaning, logging, recovery history, and the insertion circuit breaker. Extract stable policy helpers without splitting the end-to-end worker state machine. |
+| `src/app.rs` | Holds top-level command dispatch and daemon bootstrap. Extract command handlers when a stable subsystem boundary appears. |
+| `build.rs` | Coordinates cross-platform CMake, BLAS, accelerator, runtime-path, and Windows-manifest policy. Continue moving self-contained Windows discovery and manifest code under `build/`. |
+| `src/daemon/desktop/hotkey.rs` | Is only slightly over the target and already delegates macOS code. Extract Linux backend implementations if it grows further. |
+| `src/daemon/desktop/inject_tests.rs` | Keeps the clipboard and insertion transaction regression matrix together. Split by transaction phase when shared fixtures no longer dominate. |
+| `src/rules/tests.rs` | Keeps ordering-sensitive cleaning and user-rule regressions together. Split by rule family when helpers can remain shared without obscuring order coverage. |
 
-`src/daemon/ipc.rs` is temporarily over the target because it owns both Unix socket IPC and Windows named-pipe IPC, including Windows ACL setup and retry policy tests. Split the Windows named-pipe transport into a dedicated module after the Windows daemon behavior settles.
-
-## Deferred Daemon Safety Work
-
-The user config file landed at the XDG config dir (`$XDG_CONFIG_HOME/parakit/config.toml`, falling back to `~/.config/parakit/config.toml`; `%APPDATA%\parakit\config.toml` on Windows; override with `PARAKIT_CONFIG_PATH`), not the earlier `~/.cache/parakit/config.toml` idea below this TODO used to propose. See `src/config.rs`, `docs/running.md#configuration`, and `parakit config --help`. It covers daemon defaults (model, device, threads, paste mode, clipboard/sounds/verbose), cleaning (enable/disable, disabled rule names, user-defined rules), transcription logging, and — on Linux — which hotkey *backend* (`auto`/`desktop`/`x11-global-hotkey`/`x11-listen`/`evdev-proxy-experimental`) to use.
+## Deferred Runtime Work
 
 TODO: Config does not yet support remapping the actual PTT chord (e.g. a custom macOS fallback of right Command alone, or right Command plus right Option). Keep the default chords as-is until that lands: Linux/Windows use `Ctrl+Space`, and macOS uses `Left Control+Space`.
 
@@ -112,7 +118,7 @@ TODO: Add a Windows PE dependency-walker validation pass for the CPU bundle so r
 
 TODO: Run the full Windows BLAS/thread benchmark matrix for CPU builds, including no BLAS, OpenBLAS with controlled OpenMP ownership, and relevant `--threads` values against the pinned voice-memo smoke file. This is separate from upstream CrispASR issue #88 and remains open after the v0.6.6 pin.
 
-TODO: Track upstream CrispASR [issue #88](https://github.com/CrispStrobe/CrispASR/issues/88) through long-dictation validation. The pinned v0.6.6 submodule includes the upstream NeMo parity fix for blank + duration-0 TDT decode retries, but the issue remains open because the maintainer does not expect that greedy-path parity change alone to explain tail truncation. This is not merge-blocking while Windows PTT smoke remains healthy; close the Parakit note only after rerunning the problematic long dictation against the pinned backend, or add a temporary Parakit diagnostic workaround only if the reproducer still drops tail speech.
+TODO: Re-run the problematic long dictation from CrispASR [issue #88](https://github.com/CrispStrobe/CrispASR/issues/88) against the pinned v0.6.6 backend. The pin includes the upstream NeMo parity fix for blank plus duration-0 TDT decode retries, and the upstream issue is closed. Remove this local note only after the original reproducer confirms that tail speech survives; add a temporary Parakit diagnostic workaround only if it still fails.
 
 ## Updating [CrispASR](https://github.com/CrispStrobe/CrispASR)
 

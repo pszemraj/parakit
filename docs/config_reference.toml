@@ -1,8 +1,5 @@
 # parakit config.toml reference
 #
-# This is a per-key contract, not an example config. Every line is a comment
-# so this document cannot be mistaken for a ready-made configuration.
-#
 # FILE-WIDE CONTRACT
 #
 # The config format is TOML. The file, ordinary tables, and ordinary keys are
@@ -28,11 +25,11 @@
 
 # [daemon]
 
-# daemon.model — path string, optional; default: hosted cached Q8_0, downloaded when absent.
+# daemon.model - path string, optional; default: hosted cached Q8_0, downloaded when absent.
 # CLI -m/--model overrides it. No ~ or environment expansion; relative paths use the working directory.
 # When inference starts, the path must be UTF-8 and name a regular model file.
 
-# daemon.device — string, optional; default: "auto"; valid: "auto" | "cpu" | "gpu".
+# daemon.device - string, optional; default: "auto"; valid: "auto" | "cpu" | "gpu".
 # CLI --device overrides it. "auto" selects GPU with CPU fallback; "cpu" disables GPU.
 # "gpu" requires detected GPU in bundled builds; custom non-bundled builds only warn. Recommend "auto".
 
@@ -61,38 +58,38 @@
 # or rare scripts; Windows direct supports Unicode; macOS direct requires
 # Accessibility permission.
 
-# daemon.keep_transcript_clipboard — boolean, optional; default: false.
+# daemon.keep_transcript_clipboard - boolean, optional; default: false.
 # Clipboard modes restore the prior supported payload when false and leave the transcript when true.
 # CLI --keep-transcript-clipboard ORs with it; no force-off flag. Ignored in "direct" mode.
 
-# daemon.sounds — boolean, optional; default: true; enables asynchronous start/success/error cues.
+# daemon.sounds - boolean, optional; default: true; enables asynchronous start/success/error cues.
 # CLI --no-sounds forces false; no force-on flag. Cue-device failures warn but do not fail dictation.
 # CLI --quiet does not disable cues; PTT audio simulation always disables them.
 
-# daemon.verbose — boolean, optional; default: false; enables diagnostics and native inference logs.
+# daemon.verbose - boolean, optional; default: false; enables diagnostics and native inference logs.
 # CLI --verbose ORs with it; CLI --quiet takes final precedence over both sources.
 # Fetch/cache/config/status/stop/paste-last/copy-last/history/test-paste do not apply it; use --verbose.
 # config show reads and displays this key but does not use it for command verbosity.
 
-# daemon.transcript_history — integer >= 0, optional; default: 10; no CLI override or upper clamp.
+# daemon.transcript_history - integer >= 0, optional; default: 10; no CLI override or upper clamp.
 # Bounds newest-first paste-last/copy-last/history entries; 0 disables those commands.
 # Stored only in process memory and discarded when the daemon exits.
 
 
 # [cleaning]
 
-# cleaning.enabled — boolean, optional; default: true; enables built-in and user transformations.
+# cleaning.enabled - boolean, optional; default: true; enables built-in and user transformations.
 # CLI --no-cleaning forces false; no force-on flag. Disabling cleaning does not bypass validation.
 
-# cleaning.profile — string, optional; default: "safe"; valid: "safe" | "aggressive".
+# cleaning.profile - string, optional; default: "safe"; valid: "safe" | "aggressive".
 # CLI --cleaning-profile overrides it. "aggressive" adds semantic filler/discourse deletion.
 # Inert when cleaning is disabled; never gates user rules. Recommend "safe" unless deletion is wanted.
 
-# cleaning.keep_trailing_period — boolean, optional; default: false, so one final "." is removed.
+# cleaning.keep_trailing_period - boolean, optional; default: false, so one final "." is removed.
 # CLI --keep-trailing-period ORs with it; no force-off flag. Disabling "fix-trailing-period" also keeps it.
 # Inert when cleaning.enabled is false or --no-cleaning is set.
 
-# cleaning.number_threshold — finite integer/float >= 0, optional; default: unset/0 = convert all.
+# cleaning.number_threshold - finite integer/float >= 0, optional; default: unset/0 = convert all.
 # Positive values keep isolated cardinals/ordinals strictly below the value and digitize it and above.
 # No CLI override. It controls only "spoken-numbers"; structural numeric passes still normalize.
 # Disabling that rule or cleaning makes it inert, not unvalidated. Time-unit uses of "second" stay words.
@@ -112,63 +109,63 @@
 
 # Built-in names accepted by cleaning.disabled_rules.
 # Safe/high-confidence:
-#   filler-um-uh — remove standalone um/uh variants and adjacent commas.
-#   filler-erm — remove lowercase erm variants without matching acronym ER.
-#   stutter-safe-words — collapse repeated high-confidence function words.
-#   single-letter-stutter — remove repeated letter starts before that word.
-#   partial-stutter-should — remove partial starts before "should".
-#   partial-stutter-think — remove starts before think/thinking/thing/this/that/these/those.
-#   partial-stutter-because — remove partial starts before "because".
-#   partial-stutter-definitely — remove partial starts before "definitely".
-#   partial-stutter-make — remove partial starts before "make".
-#   partial-stutter-sure — remove partial starts before "sure".
-#   partial-stutter-change — remove partial starts before change/changed/changes/changing.
-#   spaced-acronyms — collapse runs of standalone uppercase ASCII letters.
-#   spoken-version-numbers — render multi-point spoken versions with text2num.
-#   numeric-point-suffixes — append spoken point parts to an existing number.
-#   spoken-numbers — convert English numbers at/above number_threshold.
-#   numeric-identifier-groups — join split digits in uppercase identifiers.
-#   numeric-magnitude-suffixes — join numeric groups to uppercase K/M/B.
-#   compact-version-prefix — join V/v to a following dotted version.
-#   compact-short-identifier — join B-H/J-Z or any two uppercase letters to a number.
-#   cause-to-because-mid — expand attached apostrophe-cause to "because".
-#   cause-to-because-bare — expand standalone apostrophe-cause to "because".
-#   casual-em-til-round — separate attached 'em/'til/'round/'bout/'cept/'nother.
-#   casual-gonna — expand "gonna"/"gunna" to "going to".
-#   casual-wanna — expand "wanna"/"wana" to "want to".
-#   casual-kinda — expand "kinda" to "kind of".
-#   casual-gimme — expand "gimme" to "give me".
-#   drop-right-tag-question — replace the complete ", right?" tag with ".".
-#   fix-space-before-punct — remove space before , . ; : ! or ?.
-#   fix-collapse-spaces — collapse repeated spaces and tabs.
-#   fix-trim — remove leading/trailing whitespace.
-#   fix-leading-comma — remove a comma left at the start.
-#   capitalize-sentence-starts — capitalize true starts, protecting dotted tokens.
+#   filler-um-uh - remove standalone um/uh variants and adjacent commas.
+#   filler-erm - remove lowercase erm variants without matching acronym ER.
+#   stutter-safe-words - collapse repeated high-confidence function words.
+#   single-letter-stutter - remove repeated letter starts before that word.
+#   partial-stutter-should - remove partial starts before "should".
+#   partial-stutter-think - remove starts before think/thinking/thing/this/that/these/those.
+#   partial-stutter-because - remove partial starts before "because".
+#   partial-stutter-definitely - remove partial starts before "definitely".
+#   partial-stutter-make - remove partial starts before "make".
+#   partial-stutter-sure - remove partial starts before "sure".
+#   partial-stutter-change - remove partial starts before change/changed/changes/changing.
+#   spaced-acronyms - collapse runs of standalone uppercase ASCII letters.
+#   spoken-version-numbers - render multi-point spoken versions with text2num.
+#   numeric-point-suffixes - append spoken point parts to an existing number.
+#   spoken-numbers - convert English numbers at/above number_threshold.
+#   numeric-identifier-groups - join split digits in uppercase identifiers.
+#   numeric-magnitude-suffixes - join numeric groups to uppercase K/M/B.
+#   compact-version-prefix - join V/v to a following dotted version.
+#   compact-short-identifier - join B-H/J-Z or any two uppercase letters to a number.
+#   cause-to-because-mid - expand attached apostrophe-cause to "because".
+#   cause-to-because-bare - expand standalone apostrophe-cause to "because".
+#   casual-em-til-round - separate attached 'em/'til/'round/'bout/'cept/'nother.
+#   casual-gonna - expand "gonna"/"gunna" to "going to".
+#   casual-wanna - expand "wanna"/"wana" to "want to".
+#   casual-kinda - expand "kinda" to "kind of".
+#   casual-gimme - expand "gimme" to "give me".
+#   drop-right-tag-question - replace the complete ", right?" tag with ".".
+#   fix-space-before-punct - remove space before , . ; : ! or ?.
+#   fix-collapse-spaces - collapse repeated spaces and tabs.
+#   fix-trim - remove leading/trailing whitespace.
+#   fix-leading-comma - remove a comma left at the start.
+#   capitalize-sentence-starts - capitalize true starts, protecting dotted tokens.
 # Conditional terminal-period cleanup:
-#   fix-trailing-period — drop one final "." unless explicitly kept.
+#   fix-trailing-period - drop one final "." unless explicitly kept.
 # Aggressive profile only:
-#   lead-so-comma — remove leading "So," at a sentence start.
-#   lead-so-pronoun — remove leading "So " before common continuations.
-#   lead-well-comma — remove leading "Well," at a sentence start.
-#   lead-well-pronoun — remove leading "Well " before common continuations.
-#   lead-like-comma — remove leading "Like," at a sentence start.
-#   lead-like-pronoun — remove leading filler "Like " before continuations.
-#   lead-you-know — remove comma-delimited leading "You know,".
-#   lead-i-mean — remove comma-delimited leading "I mean,".
-#   mid-not-like-you-know — collapse "not like, you know," to "not".
-#   mid-like-you-know — remove delimited "like, you know/I mean,".
-#   mid-as-in-like — replace "as in like X" with "as in X".
-#   mid-its-actually-like — remove "like" after it/that/there/here + qualifier.
-#   mid-is-actually-like — remove filler "like" after a qualified copula.
-#   mid-you-know — remove fully comma-delimited ", you know,".
-#   mid-i-mean — remove fully comma-delimited ", I mean,".
-#   mid-like-comma — remove fully comma-delimited ", like,".
-#   mid-i-dont-know — remove fully delimited ", I don't know,".
-#   mid-like-noun — remove ", like " before the next token.
-#   mid-is-like — remove filler "like" after a copula.
-#   mid-its-like — remove filler "like" after it/that/there/here is.
-#   mid-conj-like — remove filler "like" after and/but/or/so.
-#   stutter-ambiguous-words — collapse repeated that/no/can/had/do.
+#   lead-so-comma - remove leading "So," at a sentence start.
+#   lead-so-pronoun - remove leading "So " before common continuations.
+#   lead-well-comma - remove leading "Well," at a sentence start.
+#   lead-well-pronoun - remove leading "Well " before common continuations.
+#   lead-like-comma - remove leading "Like," at a sentence start.
+#   lead-like-pronoun - remove leading filler "Like " before continuations.
+#   lead-you-know - remove comma-delimited leading "You know,".
+#   lead-i-mean - remove comma-delimited leading "I mean,".
+#   mid-not-like-you-know - collapse "not like, you know," to "not".
+#   mid-like-you-know - remove delimited "like, you know/I mean,".
+#   mid-as-in-like - replace "as in like X" with "as in X".
+#   mid-its-actually-like - remove "like" after it/that/there/here + qualifier.
+#   mid-is-actually-like - remove filler "like" after a qualified copula.
+#   mid-you-know - remove fully comma-delimited ", you know,".
+#   mid-i-mean - remove fully comma-delimited ", I mean,".
+#   mid-like-comma - remove fully comma-delimited ", like,".
+#   mid-i-dont-know - remove fully delimited ", I don't know,".
+#   mid-like-noun - remove ", like " before the next token.
+#   mid-is-like - remove filler "like" after a copula.
+#   mid-its-like - remove filler "like" after it/that/there/here is.
+#   mid-conj-like - remove filler "like" after and/but/or/so.
+#   stutter-ambiguous-words - collapse repeated that/no/can/had/do.
 
 
 # [logging]

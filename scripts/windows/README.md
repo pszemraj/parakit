@@ -18,7 +18,7 @@ From PowerShell, use `.\scripts\windows\build.ps1 ...` instead of `build.bat`. F
 
 Windows builds need an installed runnable directory, not only `parakit.exe`. CrispASR and ggml build shared DLLs, and Windows loads those DLLs from the executable directory or `PATH`.
 
-`cargo build` works for development because `build.rs` copies the generated DLLs next to `target\debug\parakit.exe` or `target\release\parakit.exe`.
+`cargo build` works for development because `build.rs` copies the generated DLLs next to `parakit.exe` in the active Cargo target directory. That is normally `target\debug` or `target\release`, but `CARGO_TARGET_DIR` can move it.
 
 `cargo install --path .` is different: Cargo installs only `parakit.exe` into Cargo's bin directory. It does not copy the generated CrispASR, ggml, or OpenBLAS DLLs. Use `build.ps1` when you want a normal Windows install.
 
@@ -54,14 +54,14 @@ Run `.\scripts\windows\build.ps1 --help` for the script's live help.
 | `--blas auto\|off\|openblas\|mkl\|generic` | Sets `PARAKIT_BLAS` for this build. Omit it for normal autodetection. |
 | `--openblas-root DIR` | Sets `PARAKIT_OPENBLAS_ROOT` for this build. `DIR` must contain a Windows OpenBLAS layout with `include\`, `lib\`, and `bin\`. |
 | `--bundle-cuda-dlls` | CUDA only: copies `cudart64_*.dll`, `cublas64_*.dll`, and `cublasLt64_*.dll` into the bundle. |
-| `--release` | Builds `target\release` and bundles it. This is the default. |
+| `--release` | Builds the Cargo `release` profile and bundles it. This is the default. |
 | `--debug` | Legacy shorthand. PowerShell can consume it before the script sees it; use `-Profile debug` for debug builds. |
-| `-Profile release\|debug` | Selects the Cargo profile. Use `-Profile debug` when you need `target\debug`. |
+| `-Profile release\|debug` | Selects the Cargo profile. The output lives under the active Cargo target directory. |
 | `--no-submodules` | Does not run `git submodule update --init --recursive`; fails if `vendor\CrispASR` is not already populated. |
-| `--no-install` | Builds the repo-local bundle without installing it. |
-| `--no-user-path` | Installs without adding the install directory to User `PATH`. |
-| `--allow-backend-switch`, `--force` | Allows replacing an installed `cpu`, `cuda`, or `vulkan` bundle with a different backend. This does not skip directory, runtime DLL, or loader checks. |
-| `--install-dir DIR` | Installs to `DIR` instead of `%LOCALAPPDATA%\Programs\parakit`. |
+| `--no-install` | Builds the repo-local bundle without installing it. Cannot be combined with `--no-user-path`, `--allow-backend-switch`/`--force`, or `--install-dir`. |
+| `--no-user-path` | Installs without adding the install directory to User `PATH`. Invalid with `--no-install`. |
+| `--allow-backend-switch`, `--force` | Allows replacing an installed `cpu`, `cuda`, or `vulkan` bundle with a different backend. This does not skip directory, runtime DLL, or loader checks. Invalid with `--no-install`. |
+| `--install-dir DIR` | Installs to `DIR` instead of `%LOCALAPPDATA%\Programs\parakit`. Invalid with `--no-install`. |
 | `-h`, `--help` | Prints help. |
 
 The script rejects contradictory backend choices such as `--cuda --vulkan`. Raw Cargo experiments can still enable multiple features, but the Windows bundle path keeps one backend per installed directory.
@@ -115,7 +115,7 @@ GPU builds default `CMAKE_GENERATOR` to `Ninja` when the variable is unset. The 
 
 If you explicitly set a Visual Studio generator for CUDA, keep the matching CUDA Visual Studio integration installed and ensure the matching versioned variable, such as `CUDA_PATH_V13_2`, resolves. The advanced override is `CMAKE_GENERATOR_TOOLSET=cuda=<toolkit-path>`, but Ninja is the normal bundle path.
 
-When `ccache` is on `PATH`, ggml's fallback CMake build can auto-enable it. The script keeps that supported by setting `CCACHE_DIR`, `CCACHE_TEMPDIR`, and `CCACHE_BASEDIR` to repo-local paths under `target\tmp` unless you already set them. For troubleshooting, set `CCACHE_DISABLE=1` in the build shell to bypass caching without uninstalling ccache.
+Windows MSVC bundle builds set `GGML_CCACHE=OFF`. A `ccache` executable on `PATH` is not used by this build path.
 
 Vulkan builds can fail in ggml's shader generator when the checkout plus Cargo target path is too deep. If `CARGO_TARGET_DIR` is unset and the repo-local target path would be too deep, the script automatically uses `$env:USERPROFILE\parakit-target`. It does not shorten paths by mapping temporary drive letters. If you set `CARGO_TARGET_DIR` yourself and it is still too deep, the script fails early before CMake starts.
 
@@ -163,6 +163,8 @@ After installing, open a new terminal and run:
 parakit doctor --deep
 parakit
 ```
+
+In `standard` or `terminal` mode, `doctor --deep` opens a visible Win32 edit window, briefly takes focus, stages a sentinel, sends the configured paste chord, reads the text back, and restores supported clipboard content. Windows may use a brief cursor-click fallback to focus the probe and then restores the cursor position. Run it from an unlocked interactive desktop. In `direct` mode, it performs backend preflight only and does not type into the probe.
 
 The installer runs `parakit --version` after copying files. That checks Windows loader resolution without touching the hotkey, microphone, daemon lock, model cache, or clipboard. If Windows reports `0xC0000135`, the installer translates it to a missing-runtime-DLL message before PATH updates.
 

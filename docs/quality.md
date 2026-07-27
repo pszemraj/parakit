@@ -92,7 +92,9 @@ cargo run --no-default-features --features bundled --example audit-cleaning -- \
 
 Run it again with `--profile aggressive` when changing an aggressive-only pass. Compare record counts, changed-from-raw counts, agreement with historical output, per-pass activation counts, and every retained difference example. A lower rule count or a larger changed-text count is not a quality metric; preservation of intended meaning and per-pass precision are.
 
-The audit removes one terminal period by default, matching daemon behavior. Add `--keep-trailing-period` when comparing prose-oriented output separately. Number-conversion changes must be evaluated as `text2num` integration and context-formatting changes, not by adding a second local number grammar.
+The audit removes one terminal period by default, matching daemon behavior. Add `--keep-trailing-period` when comparing prose-oriented output separately, and use `--number-threshold VALUE` to replay a non-default isolated-number threshold.
+
+The audit applies built-in rules only. It does not load `config.toml` or `[[rules.user]]`; pass profile, threshold, trailing-period, and disabled-rule choices explicitly. Use `parakit --test-rules` to validate the currently configured user rules. Number-conversion changes must be evaluated as `text2num` integration and context-formatting changes, not by adding a second local number grammar.
 
 ## Runtime Smoke Checks
 

@@ -25,7 +25,7 @@ WSL is not the native Windows daemon path. Validate Windows hotkeys, focus check
 
 ## Literal Space Appears
 
-The active backend should suppress the literal Space in the platform push-to-talk chord. If a space reaches the focused app:
+Normal dictation backends suppress the literal Space in the platform push-to-talk chord. Linux `x11-listen` is a passive debugging backend and deliberately does not suppress it. For any other backend, if a space reaches the focused app:
 
 - confirm only one parakit process is running;
 - confirm no desktop/input-method shortcut also handles `Ctrl+Space` on Linux/Windows or `Left Control+Space` on macOS;
@@ -37,7 +37,7 @@ The active backend should suppress the literal Space in the platform push-to-tal
 
 Paste modes, focus-change behavior, paste sanitization, and clipboard fallback behavior are described in [running.md#insertion](running.md#insertion).
 
-Run `parakit doctor --deep` for an active insertion smoke test. On Linux, use an X11 session; Wayland details are in [linux-desktop.md](linux-desktop.md). Use `standard` for apps that only accept `Ctrl+V`; use `direct` only when an app refuses clipboard paste entirely.
+Run `parakit doctor --deep` for an active `standard` or `terminal` insertion smoke test. On Linux, use an X11 session; Wayland and deep-check details are in [linux-desktop.md](linux-desktop.md). On Linux and Windows, `direct` mode performs backend preflight only rather than typing into a probe window. Use `standard` for apps that only accept `Ctrl+V`; use `direct` only when an app refuses clipboard paste entirely.
 
 Windows elevated-target behavior is covered in [running.md#insertion](running.md#insertion).
 
@@ -80,12 +80,7 @@ git submodule update --init --recursive
 
 For shared library loading failures on Linux, check [build.md#runtime-library-paths](build.md#runtime-library-paths).
 
-Vulkan failing on `spirv/unified1/spirv.hpp` means `spirv-headers` is missing. Install it and rebuild with the Vulkan feature:
-
-```bash
-sudo apt install spirv-headers
-cargo build --release --features vulkan
-```
+Vulkan failing on `spirv/unified1/spirv.hpp` means `spirv-headers` is missing. Install the Vulkan dependency set in [build.md#native-dependencies](build.md#native-dependencies), then rebuild.
 
 Windows builds need generated DLLs next to the executable; use the Windows scripts in [../scripts/windows/README.md](../scripts/windows/README.md).
 

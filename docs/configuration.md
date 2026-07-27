@@ -4,10 +4,9 @@ Parakit reads an optional TOML file for daemon defaults, cleaning behavior,
 transcription logging, the Linux hotkey backend, and user-defined cleaning
 rules.
 
-Use [config_reference.toml](config_reference.toml) for the authoritative
-per-key contract and runtime-environment inventory. It gives every setting's
-type, default, valid values, interactions, and relevant warnings in one
-greppable file. This page covers where the file lives and how to work with it.
+The type, default, valid values, interactions, and warnings for each key and
+Parakit-owned runtime environment variable are in
+[config_reference.toml](config_reference.toml).
 
 ## File Location
 

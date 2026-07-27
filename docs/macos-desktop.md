@@ -32,7 +32,7 @@ If Accessibility is missing, `doctor` can trigger the macOS prompt. Input Monito
 `parakit doctor --deep` runs a deeper insertion smoke test than plain `doctor`. For the `standard`/`terminal` paste modes it runs two stages and reports which one failed:
 
 1. A suppressed Cmd+V event-tap smoke test: parakit posts a synthetic paste chord and confirms, via a CoreGraphics event tap that suppresses the chord before it reaches any app, that the chord was actually posted.
-2. A real end-to-end paste-transaction smoke test: parakit briefly opens a small, unobtrusive titled window with a text field, pastes a unique sentinel into it through the same production clipboard-swap/paste/`AXValue`-acknowledgement path the daemon uses for real dictation, then verifies the text landed, was Accessibility-acknowledged, and that the clipboard was restored to whatever it held before the test.
+2. A real end-to-end paste-transaction smoke test: parakit briefly opens a small, unobtrusive titled window with a text field, pastes a unique sentinel into it through the same production clipboard-swap/paste/`AXValue`-acknowledgement path the daemon uses for real dictation, then verifies the text landed, was Accessibility-acknowledged, and that supported text, HTML, file-list, or image clipboard content was restored. Unsupported clipboard formats are cleared instead of being reconstructed; the format limits are described in [running.md#insertion](running.md#insertion).
 
 For `direct` mode, only the suppressed key-event tap runs (direct typing never touches the clipboard or `AXValue` acknowledgement, so there is no transaction to open a window and test).
 
@@ -49,7 +49,7 @@ macOS may also use `Control+Space` for input-source switching when multiple inpu
 3. Check other shortcut categories for warning icons; macOS marks conflicting shortcuts there.
 4. Restart parakit and rerun `parakit doctor`.
 
-Custom hotkeys are deferred to a future config file. Until then, macOS has one default hotkey.
+The push-to-talk chord is not configurable yet; macOS uses `Left Control+Space`.
 
 ## Background Use
 
@@ -76,6 +76,6 @@ For release builds, the Metal backend should be in the generated sibling library
 ```bash
 ls target/release/build/parakit-*/out/lib/libggml-metal.dylib
 otool -L target/release/build/parakit-*/out/lib/libggml.dylib
-otool -l "$HOME/.cargo/bin/parakit" | grep -A2 LC_RPATH
+otool -l "$(command -v parakit)" | grep -A2 LC_RPATH
 otool -s __DATA __ggml_metallib target/release/build/parakit-*/out/lib/libggml-metal.dylib | head
 ```
