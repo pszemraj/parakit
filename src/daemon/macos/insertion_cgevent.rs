@@ -34,15 +34,39 @@ const K_CG_KEYBOARD_EVENT_KEYCODE: u32 = 9;
 const K_CG_EVENT_FLAG_MASK_COMMAND: u64 = 0x0010_0000;
 const K_CG_EVENT_SOURCE_STATE_HID_SYSTEM_STATE: i32 = 1;
 const MACOS_V_KEYCODE: u16 = 9;
+const MACOS_RIGHT_COMMAND_KEYCODE: u16 = 54;
 const MACOS_COMMAND_KEYCODE: u16 = 55;
+const MACOS_LEFT_SHIFT_KEYCODE: u16 = 56;
+const MACOS_LEFT_OPTION_KEYCODE: u16 = 58;
+const MACOS_RIGHT_SHIFT_KEYCODE: u16 = 60;
+const MACOS_RIGHT_OPTION_KEYCODE: u16 = 61;
+const MACOS_RIGHT_CONTROL_KEYCODE: u16 = 62;
+const MACOS_FUNCTION_KEYCODE: u16 = 63;
+
+/// Physical keys that can change the meaning of a synthetic Cmd+V chord.
+///
+/// Caps Lock is deliberately absent: it does not alter the paste shortcut,
+/// and its latched state must not prevent insertion indefinitely.
+const MACOS_PASTE_CONFLICT_KEYCODES: &[u16] = &[
+    MACOS_PTT_SPACE_KEYCODE,
+    MACOS_RIGHT_COMMAND_KEYCODE,
+    MACOS_COMMAND_KEYCODE,
+    MACOS_LEFT_SHIFT_KEYCODE,
+    MACOS_LEFT_OPTION_KEYCODE,
+    MACOS_PTT_LEFT_CONTROL_KEYCODE,
+    MACOS_RIGHT_SHIFT_KEYCODE,
+    MACOS_RIGHT_OPTION_KEYCODE,
+    MACOS_RIGHT_CONTROL_KEYCODE,
+    MACOS_FUNCTION_KEYCODE,
+];
 
 const SMOKE_TIMEOUT: Duration = Duration::from_millis(750);
 const SMOKE_POLL: Duration = Duration::from_millis(20);
 /// Yield between run-loop slices so the smoke wait never becomes a spin loop
 /// when `CFRunLoopRunInMode` returns early with nothing to dispatch.
 const SMOKE_YIELD: Duration = Duration::from_millis(5);
-const PTT_RELEASE_TIMEOUT: Duration = Duration::from_secs(2);
-const PTT_RELEASE_POLL: Duration = Duration::from_millis(15);
+const PASTE_MODIFIER_RELEASE_TIMEOUT: Duration = Duration::from_secs(2);
+const PASTE_MODIFIER_RELEASE_POLL: Duration = Duration::from_millis(15);
 
 #[link(name = "CoreFoundation", kind = "framework")]
 extern "C" {
@@ -247,8 +271,24 @@ fn run_smoke_action<G>(
 pub(crate) enum PasteShortcutOutcome {
     /// A full Cmd+V chord was posted.
     Sent,
-    /// The chord was withheld because a physical push-to-talk key stayed down.
-    PttKeysHeld,
+    /// The chord was withheld because a conflicting physical key was down.
+    UnsafeModifiers,
+}
+
+/// Wait until no physical key can alter the synthetic Cmd+V chord.
+///
+/// This wait intentionally runs before the paste transaction's final focus
+/// recheck. Short dictations can finish before the push-to-talk keys are
+/// naturally released; waiting afterward would leave a stale focus snapshot
+/// able to authorize a chord in whichever application became frontmost during
+/// the wait.
+///
+/// # Returns
+///
+/// `true` when every conflicting key is up before the bounded deadline;
+/// `false` when any remains down.
+pub(crate) fn wait_for_safe_paste_modifiers() -> bool {
+    wait_for_safe_paste_modifiers_with(PASTE_MODIFIER_RELEASE_TIMEOUT, physical_key_down)
 }
 
 /// Send a macOS paste shortcut as a full Cmd+V hardware-style chord.
@@ -256,9 +296,9 @@ pub(crate) enum PasteShortcutOutcome {
 /// # Returns
 ///
 /// [`PasteShortcutOutcome::Sent`] when CoreGraphics accepted the synthetic
-/// Cmd+V key events, or [`PasteShortcutOutcome::PttKeysHeld`] when the
-/// physical push-to-talk keys did not become safe before the bounded
-/// deadline and no event was posted.
+/// Cmd+V key events, or [`PasteShortcutOutcome::UnsafeModifiers`] when a
+/// physical key became unsafe after the caller's bounded wait and no event
+/// was posted.
 ///
 /// # Errors
 ///
@@ -267,15 +307,6 @@ pub(crate) enum PasteShortcutOutcome {
 /// Callers must run `accessibility_preflight()` before choosing this backend.
 /// The daemon and `doctor --deep` both do that once before entering this hot path.
 pub(crate) fn send_paste_shortcut() -> Result<PasteShortcutOutcome> {
-    // CoreGraphics combines live hardware modifier state into synthetic
-    // events. Never post while the physical PTT chord is still down: Safari
-    // can otherwise receive Control+Command+V and reject an otherwise valid
-    // paste. Short dictations can finish before a natural key release, so the
-    // old 200ms allowance was too narrow.
-    if !wait_for_ptt_keys_released(PTT_RELEASE_TIMEOUT) {
-        return Ok(PasteShortcutOutcome::PttKeysHeld);
-    }
-
     // A HID-system event source makes the synthetic chord carry the same
     // source CoreGraphics attaches to real hardware input, which is what
     // CGEventSourceKeyState-based modifier trackers key off of. If allocation
@@ -291,14 +322,22 @@ pub(crate) fn send_paste_shortcut() -> Result<PasteShortcutOutcome> {
         }
     };
 
+    // CoreGraphics merges live hardware flags into synthetic events. Check
+    // every conflicting key immediately before posting, after event
+    // allocation, so a modifier pressed during clipboard staging or the
+    // final focus check cannot turn Cmd+V into another shortcut.
+    if !safe_paste_modifiers_with(physical_key_down) {
+        release_events(&events);
+        release_event_source(source);
+        return Ok(PasteShortcutOutcome::UnsafeModifiers);
+    }
+
     unsafe {
         for event in &events {
             CGEventPost(K_CG_HID_EVENT_TAP, *event);
         }
-        for event in &events {
-            CFRelease(event.cast());
-        }
     }
+    release_events(&events);
     release_event_source(source);
 
     Ok(PasteShortcutOutcome::Sent)
@@ -366,7 +405,13 @@ fn release_event_source(source: *mut c_void) {
     }
 }
 
-/// Poll the HID system key state until the push-to-talk keys are released.
+fn release_events(events: &[CGEventRef]) {
+    for event in events {
+        unsafe { CFRelease(event.cast()) };
+    }
+}
+
+/// Poll the HID system key state until paste-conflicting keys are released.
 ///
 /// # Arguments
 ///
@@ -374,28 +419,26 @@ fn release_event_source(source: *mut c_void) {
 ///
 /// # Returns
 ///
-/// `true` when both keys are up; `false` when either key remains down at the
-/// deadline.
-fn wait_for_ptt_keys_released(timeout: Duration) -> bool {
-    wait_for_ptt_keys_released_with(timeout, ptt_key_down)
-}
-
-fn wait_for_ptt_keys_released_with(timeout: Duration, key_down: impl Fn(u16) -> bool) -> bool {
+/// `true` when every conflicting key is up; `false` when any remains down at
+/// the deadline.
+fn wait_for_safe_paste_modifiers_with(timeout: Duration, key_down: impl Fn(u16) -> bool) -> bool {
     let deadline = Instant::now() + timeout;
     loop {
-        let ctrl_down = key_down(MACOS_PTT_LEFT_CONTROL_KEYCODE);
-        let space_down = key_down(MACOS_PTT_SPACE_KEYCODE);
-        if !ctrl_down && !space_down {
+        if safe_paste_modifiers_with(&key_down) {
             return true;
         }
         if Instant::now() >= deadline {
             return false;
         }
-        thread::sleep(PTT_RELEASE_POLL);
+        thread::sleep(PASTE_MODIFIER_RELEASE_POLL);
     }
 }
 
-fn ptt_key_down(keycode: u16) -> bool {
+fn safe_paste_modifiers_with(key_down: impl Fn(u16) -> bool) -> bool {
+    !MACOS_PASTE_CONFLICT_KEYCODES.iter().copied().any(key_down)
+}
+
+fn physical_key_down(keycode: u16) -> bool {
     unsafe { CGEventSourceKeyState(K_CG_EVENT_SOURCE_STATE_HID_SYSTEM_STATE, keycode) }
 }
 
@@ -515,14 +558,27 @@ mod tests {
     }
 
     #[test]
-    fn released_ptt_keys_are_ready_without_waiting() {
-        assert!(wait_for_ptt_keys_released_with(Duration::ZERO, |_| false));
+    fn released_conflicting_keys_are_ready_without_waiting() {
+        assert!(wait_for_safe_paste_modifiers_with(Duration::ZERO, |_| {
+            false
+        }));
     }
 
     #[test]
-    fn held_ptt_key_at_deadline_withholds_paste() {
-        assert!(!wait_for_ptt_keys_released_with(Duration::ZERO, |key| {
-            key == MACOS_PTT_LEFT_CONTROL_KEYCODE
-        }));
+    fn every_conflicting_key_withholds_paste_at_deadline() {
+        for held_key in MACOS_PASTE_CONFLICT_KEYCODES {
+            assert!(
+                !wait_for_safe_paste_modifiers_with(Duration::ZERO, |key| key == *held_key),
+                "keycode {held_key} should withhold the paste chord"
+            );
+        }
+    }
+
+    #[test]
+    fn unrelated_physical_key_does_not_withhold_paste() {
+        assert!(wait_for_safe_paste_modifiers_with(
+            Duration::ZERO,
+            |key| key == MACOS_V_KEYCODE
+        ));
     }
 }

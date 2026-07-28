@@ -171,6 +171,17 @@ enum PasteDispatch {
     SkippedUnsafeModifiers,
 }
 
+fn wait_for_paste_shortcut_safety() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        crate::daemon::macos::wait_for_safe_paste_modifiers()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        true
+    }
+}
+
 /// Clipboard retention policy after staging text for paste.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ClipboardPolicy {
@@ -784,6 +795,7 @@ impl Injector {
         let result = paste_with_clipboard_swap_guarded(
             &mut clipboard,
             text,
+            wait_for_paste_shortcut_safety,
             || self.paste_clipboard(mode),
             clipboard_settle_delay(),
             restore_plan,
@@ -921,7 +933,7 @@ impl Injector {
                     .context("could not send macOS paste shortcut")?
                 {
                     crate::daemon::macos::PasteShortcutOutcome::Sent => Ok(PasteDispatch::Posted),
-                    crate::daemon::macos::PasteShortcutOutcome::PttKeysHeld => {
+                    crate::daemon::macos::PasteShortcutOutcome::UnsafeModifiers => {
                         Ok(PasteDispatch::SkippedUnsafeModifiers)
                     }
                 }
@@ -955,13 +967,15 @@ impl Injector {
 #[allow(
     clippy::too_many_arguments,
     reason = "each parameter is an independently meaningful piece of the guarded-paste transaction \
-              (clipboard, transcript, paste sender, timing, restore policy, clipboard policy, focus \
-              context for acknowledgement, and the safety-recheck closure); grouping them would just \
-              move the complexity into an ad hoc params struct with no real callers besides this fn"
+              (clipboard, transcript, modifier readiness, paste sender, timing, restore policy, \
+              clipboard policy, focus context for acknowledgement, and the safety-recheck closure); \
+              grouping them would just move the complexity into an ad hoc params struct with no real \
+              callers besides this fn"
 )]
-fn paste_with_clipboard_swap_guarded<C, P, G, H>(
+fn paste_with_clipboard_swap_guarded<C, R, P, G, H>(
     clipboard: &mut C,
     text: &str,
+    mut prepare_paste: R,
     mut paste: P,
     settle_delay: Duration,
     restore_plan: ClipboardRestorePlan<'_, H>,
@@ -971,6 +985,7 @@ fn paste_with_clipboard_swap_guarded<C, P, G, H>(
 ) -> Result<PasteReport>
 where
     C: ClipboardStore,
+    R: FnMut() -> bool,
     P: FnMut() -> Result<PasteDispatch>,
     G: FnMut() -> Result<bool>,
     H: ClipboardRestoreGate + ?Sized,
@@ -986,6 +1001,24 @@ where
                 .map(report_from_stage_outcome);
         }
         Err(err) => return Err(err),
+    }
+
+    // The macOS backend may need to wait for the physical PTT chord (or
+    // another modifier) to be released. Do that before staging and, most
+    // importantly, before the final focus recheck below. A timed-out wait
+    // leaves the transcript on the clipboard for manual recovery.
+    if !prepare_paste() {
+        stage_text_without_paste(
+            clipboard,
+            text,
+            restore_plan,
+            ClipboardPolicy::KeepTranscript,
+        )?;
+        return Ok(PasteReport::new(
+            PasteOutcome::UnsafeModifiers,
+            false,
+            Some(false),
+        ));
     }
 
     let previous = ClipboardSnapshot::capture(clipboard);
@@ -1041,10 +1074,10 @@ where
             baseline.as_ref(),
         ),
         Ok(PasteDispatch::SkippedUnsafeModifiers) => {
-            // Posting while the physical PTT modifier is still active can
-            // turn Cmd+V into a different shortcut. No input was sent, so
-            // leave the staged transcript on the clipboard for recovery and
-            // report that fact honestly.
+            // A modifier became active after the bounded readiness wait.
+            // Posting would turn Cmd+V into a different shortcut. No input
+            // was sent, so leave the staged transcript on the clipboard for
+            // recovery and report that fact honestly.
             Ok(PasteReport::new(
                 PasteOutcome::UnsafeModifiers,
                 false,

@@ -659,6 +659,7 @@ fn clipboard_swap_cases_are_stable() {
         let result = paste_with_clipboard_swap_guarded(
             &mut clipboard,
             case.transcript,
+            || true,
             || {
                 events.borrow_mut().push("paste".to_string());
                 match case.paste_error {
@@ -703,6 +704,7 @@ fn clipboard_guard_error_before_staging_leaves_clipboard_untouched() {
     let result = paste_with_clipboard_swap_guarded(
         &mut clipboard,
         "dictated text",
+        || true,
         || {
             events.borrow_mut().push("paste".to_string());
             Ok(PasteDispatch::Posted)
@@ -724,12 +726,91 @@ fn clipboard_guard_error_before_staging_leaves_clipboard_untouched() {
 }
 
 #[test]
+fn modifier_wait_completes_before_final_focus_recheck() {
+    let mut clipboard = MockClipboard::new("old clipboard");
+    let events = clipboard.events();
+    let gate = quiet_gate();
+    let result = paste_with_clipboard_swap_guarded(
+        &mut clipboard,
+        "dictated text",
+        || {
+            events.borrow_mut().push("modifier-wait".to_string());
+            true
+        },
+        || {
+            events.borrow_mut().push("paste".to_string());
+            Ok(PasteDispatch::Posted)
+        },
+        Duration::ZERO,
+        restore_plan(&gate),
+        ClipboardPolicy::RestorePrevious,
+        None,
+        || {
+            events.borrow_mut().push("guard".to_string());
+            Ok(true)
+        },
+    )
+    .expect("safe modifiers and stable focus should allow paste");
+
+    assert_eq!(result.outcome, PasteOutcome::Pasted);
+    assert_eq!(
+        events.borrow().as_slice(),
+        [
+            "guard",
+            "modifier-wait",
+            "read",
+            "set:dictated text",
+            "guard",
+            "paste",
+            "set:old clipboard"
+        ]
+    );
+}
+
+#[test]
+fn modifier_wait_timeout_keeps_transcript_without_posting() {
+    let mut clipboard = MockClipboard::new("old clipboard");
+    let events = clipboard.events();
+    let result = paste_with_clipboard_swap_guarded(
+        &mut clipboard,
+        "dictated text",
+        || {
+            events.borrow_mut().push("modifier-wait".to_string());
+            false
+        },
+        || {
+            events.borrow_mut().push("paste".to_string());
+            Ok(PasteDispatch::Posted)
+        },
+        Duration::ZERO,
+        restore_plan(&quiet_gate()),
+        ClipboardPolicy::RestorePrevious,
+        None,
+        || {
+            events.borrow_mut().push("guard".to_string());
+            Ok(true)
+        },
+    )
+    .expect("withholding an unsafe chord should be recoverable");
+
+    assert_eq!(result.outcome, PasteOutcome::UnsafeModifiers);
+    assert!(!result.paste_event_posted);
+    assert_eq!(result.clipboard_restored, Some(false));
+    assert_eq!(clipboard.text(), Some("dictated text"));
+    assert_eq!(
+        events.borrow().as_slice(),
+        ["guard", "modifier-wait", "set:dictated text"]
+    );
+}
+
+#[test]
 fn unsafe_modifier_skip_keeps_staged_transcript_without_posting() {
     let mut clipboard = MockClipboard::new("old clipboard");
     let events = clipboard.events();
     let result = paste_with_clipboard_swap_guarded(
         &mut clipboard,
         "dictated text",
+        || true,
         || {
             events.borrow_mut().push("paste-attempt".to_string());
             Ok(PasteDispatch::SkippedUnsafeModifiers)
@@ -768,6 +849,7 @@ fn clipboard_keep_transcript_policy_leaves_text_after_guard_block() {
     let result = paste_with_clipboard_swap_guarded(
         &mut clipboard,
         "dictated text",
+        || true,
         || Ok(PasteDispatch::Posted),
         Duration::ZERO,
         restore_plan(&PlatformClipboardRestoreGate::fallback()),
@@ -932,6 +1014,7 @@ fn clipboard_restore_gate_cases_are_stable() {
             ClipboardRestoreAction::Paste => paste_with_clipboard_swap_guarded(
                 &mut clipboard,
                 "dictated text",
+                || true,
                 || {
                     events.borrow_mut().push("paste".to_string());
                     Ok(PasteDispatch::Posted)
@@ -1064,6 +1147,7 @@ fn clipboard_restore_policy_preserves_supported_non_text_payloads() {
         let result = paste_with_clipboard_swap_guarded(
             &mut clipboard,
             "dictated text",
+            || true,
             || {
                 events.borrow_mut().push("paste".to_string());
                 Ok(PasteDispatch::Posted)
@@ -1093,6 +1177,7 @@ fn unsupported_previous_clipboard_clears_staged_transcript_on_guard_block() {
     let result = paste_with_clipboard_swap_guarded(
         &mut clipboard,
         "dictated text",
+        || true,
         || {
             events.borrow_mut().push("paste".to_string());
             Ok(PasteDispatch::Posted)
@@ -1187,6 +1272,7 @@ fn post_paste_acknowledgement_tiers_drive_outcome_and_clipboard_policy() {
         let result = paste_with_clipboard_swap_guarded(
             &mut clipboard,
             "dictated text",
+            || true,
             || {
                 events.borrow_mut().push("paste".to_string());
                 Ok(PasteDispatch::Posted)
