@@ -86,10 +86,14 @@ pub(crate) enum IpcCommand {
 impl IpcCommand {
     fn response_timeout(&self) -> Duration {
         match self {
-            Self::PasteLast { .. } | Self::TestPaste { .. } => IPC_INSERT_RESPONSE_TIMEOUT,
-            Self::Status | Self::Stop | Self::CopyLast { .. } | Self::History { .. } => {
-                IPC_TRANSPORT_TIMEOUT
+            // All three commands acquire SharedState's process-wide insertion
+            // lock. CopyLast itself is quick, but it can queue behind a
+            // synchronous paste transaction (including macOS modifier and
+            // acknowledgement waits), so it needs the same response budget.
+            Self::PasteLast { .. } | Self::CopyLast { .. } | Self::TestPaste { .. } => {
+                IPC_INSERT_RESPONSE_TIMEOUT
             }
+            Self::Status | Self::Stop | Self::History { .. } => IPC_TRANSPORT_TIMEOUT,
         }
     }
 }
@@ -1954,9 +1958,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn insertion_commands_allow_for_synchronous_acknowledgement() {
+    fn insertion_lock_commands_use_synchronous_transaction_timeout() {
         assert_eq!(
             IpcCommand::PasteLast { index: 0 }.response_timeout(),
+            IPC_INSERT_RESPONSE_TIMEOUT
+        );
+        assert_eq!(
+            IpcCommand::CopyLast { index: 0 }.response_timeout(),
             IPC_INSERT_RESPONSE_TIMEOUT
         );
         assert_eq!(
