@@ -1388,8 +1388,26 @@ mod windows_pipe {
 
     fn read_pipe_message_with_timeout(pipe: &PipeHandle, timeout_ms: u32) -> Result<Vec<u8>> {
         let mut chunk = vec![0_u8; PIPE_BUFFER_SIZE as usize];
-        let read = read_pipe_chunk(pipe, &mut chunk, timeout_ms)?;
-        Ok(chunk[..read].to_vec())
+        let mut message = Vec::new();
+        let started = std::time::Instant::now();
+        loop {
+            let remaining_ms = remaining_timeout_ms(started, std::time::Instant::now(), timeout_ms)
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "ReadFile Windows daemon control pipe failed: timed out after \
+                             {timeout_ms}ms"
+                    )
+                })?;
+            match read_pipe_chunk(pipe, &mut chunk, remaining_ms)? {
+                PipeReadChunk::Complete(read) => {
+                    message.extend_from_slice(&chunk[..read]);
+                    return Ok(message);
+                }
+                PipeReadChunk::MoreData(read) => {
+                    message.extend_from_slice(&chunk[..read]);
+                }
+            }
+        }
     }
 
     fn write_json_message<T: Serialize>(pipe: &PipeHandle, value: &T) -> Result<()> {
@@ -1398,7 +1416,8 @@ mod windows_pipe {
     }
 
     fn write_pipe_message(pipe: &PipeHandle, bytes: &[u8]) -> Result<()> {
-        validate_pipe_message_len(bytes.len())?;
+        let bytes_to_write =
+            u32::try_from(bytes.len()).context("Windows daemon control message exceeds 4 GiB")?;
 
         // Message-type pipes frame each WriteFile call as a separate message.
         // The control protocol sends exactly one JSON payload per message.
@@ -1409,7 +1428,7 @@ mod windows_pipe {
             WriteFile(
                 pipe.0,
                 bytes.as_ptr().cast(),
-                bytes.len() as u32,
+                bytes_to_write,
                 &mut written,
                 overlapped.as_mut_ptr(),
             )
@@ -1439,7 +1458,16 @@ mod windows_pipe {
         Ok(())
     }
 
-    fn read_pipe_chunk(pipe: &PipeHandle, chunk: &mut [u8], timeout_ms: u32) -> Result<usize> {
+    enum PipeReadChunk {
+        Complete(usize),
+        MoreData(usize),
+    }
+
+    fn read_pipe_chunk(
+        pipe: &PipeHandle,
+        chunk: &mut [u8],
+        timeout_ms: u32,
+    ) -> Result<PipeReadChunk> {
         let event = EventHandle::create()?;
         let mut overlapped = RawOverlapped::new(event.0);
         let mut read = 0_u32;
@@ -1453,25 +1481,66 @@ mod windows_pipe {
             )
         };
         if ok != 0 {
-            return Ok(read as usize);
+            return Ok(PipeReadChunk::Complete(read as usize));
         }
 
         let err = unsafe { GetLastError() };
         match err {
-            ERROR_IO_PENDING => {
-                let read = wait_for_overlapped(
-                    pipe,
-                    &mut overlapped,
-                    timeout_ms,
-                    "ReadFile Windows daemon control pipe failed",
-                )?;
-                Ok(read as usize)
-            }
-            ERROR_MORE_DATA => oversized_pipe_message_error(),
+            ERROR_IO_PENDING => wait_for_read_overlapped(
+                pipe,
+                &mut overlapped,
+                timeout_ms,
+                "ReadFile Windows daemon control pipe failed",
+            ),
+            ERROR_MORE_DATA => Ok(PipeReadChunk::MoreData(read as usize)),
             _ => Err(win32_error(
                 "ReadFile Windows daemon control pipe failed",
                 err,
             )),
+        }
+    }
+
+    fn wait_for_read_overlapped(
+        pipe: &PipeHandle,
+        overlapped: &mut RawOverlapped,
+        timeout_ms: u32,
+        label: &str,
+    ) -> Result<PipeReadChunk> {
+        match unsafe { WaitForSingleObject(overlapped.h_event, timeout_ms) } {
+            WAIT_OBJECT_0 => match read_overlapped_result(pipe, overlapped, FALSE) {
+                Ok(read) => Ok(read),
+                Err(err) => Err(win32_error(label, err)),
+            },
+            WAIT_TIMEOUT => {
+                let _ = unsafe { CancelIoEx(pipe.0, overlapped.as_mut_ptr()) };
+                match read_overlapped_result(pipe, overlapped, TRUE) {
+                    Ok(read) => Ok(read),
+                    Err(ERROR_OPERATION_ABORTED) => {
+                        bail!("{label}: timed out after {timeout_ms}ms")
+                    }
+                    Err(err) => Err(win32_error(label, err)),
+                }
+            }
+            WAIT_FAILED => Err(last_error("WaitForSingleObject failed")),
+            other => bail!("WaitForSingleObject returned unexpected status {other}"),
+        }
+    }
+
+    fn read_overlapped_result(
+        pipe: &PipeHandle,
+        overlapped: &mut RawOverlapped,
+        wait: i32,
+    ) -> std::result::Result<PipeReadChunk, u32> {
+        let mut transferred = 0_u32;
+        if unsafe { GetOverlappedResult(pipe.0, overlapped.as_mut_ptr(), &mut transferred, wait) }
+            != 0
+        {
+            return Ok(PipeReadChunk::Complete(transferred as usize));
+        }
+
+        match unsafe { GetLastError() } {
+            ERROR_MORE_DATA => Ok(PipeReadChunk::MoreData(transferred as usize)),
+            err => Err(err),
         }
     }
 
@@ -1484,7 +1553,6 @@ mod windows_pipe {
         match unsafe { WaitForSingleObject(overlapped.h_event, timeout_ms) } {
             WAIT_OBJECT_0 => match overlapped_result(pipe, overlapped, FALSE) {
                 Ok(transferred) => Ok(transferred),
-                Err(ERROR_MORE_DATA) => oversized_pipe_message_error(),
                 Err(err) => Err(win32_error(label, err)),
             },
             WAIT_TIMEOUT => {
@@ -1494,7 +1562,6 @@ mod windows_pipe {
                     Err(ERROR_OPERATION_ABORTED) => {
                         bail!("{label}: timed out after {timeout_ms}ms")
                     }
-                    Err(ERROR_MORE_DATA) => oversized_pipe_message_error(),
                     Err(err) => Err(win32_error(label, err)),
                 }
             }
@@ -1516,25 +1583,6 @@ mod windows_pipe {
         }
 
         Err(unsafe { GetLastError() })
-    }
-
-    fn oversized_pipe_message_error<T>() -> Result<T> {
-        oversized_pipe_message(PIPE_BUFFER_SIZE as usize + 1)
-    }
-
-    fn validate_pipe_message_len(len: usize) -> Result<()> {
-        if len > PIPE_BUFFER_SIZE as usize {
-            return oversized_pipe_message(len);
-        }
-        Ok(())
-    }
-
-    fn oversized_pipe_message<T>(len: usize) -> Result<T> {
-        bail!(
-            "Windows daemon control message is {} bytes; max supported message is {} bytes",
-            len,
-            PIPE_BUFFER_SIZE
-        )
     }
 
     #[repr(C)]
@@ -1773,14 +1821,6 @@ mod windows_pipe {
         }
 
         #[test]
-        fn oversized_control_messages_fail_before_write() {
-            let err = validate_pipe_message_len(PIPE_BUFFER_SIZE as usize + 1)
-                .expect_err("oversized message should be rejected");
-
-            assert!(format!("{err:#}").contains("max supported message"));
-        }
-
-        #[test]
         fn client_message_read_mode_preserves_message_boundaries() -> Result<()> {
             let (server, client) = connected_test_pipe(false)?;
 
@@ -1818,6 +1858,24 @@ mod windows_pipe {
 
             assert_eq!([first, second].concat(), payload);
 
+            Ok(())
+        }
+
+        #[test]
+        fn pipe_message_larger_than_transport_buffer_round_trips() -> Result<()> {
+            let (server, client) = connected_test_pipe(true)?;
+            let payload: Vec<u8> = (0..PIPE_BUFFER_SIZE as usize + 1024)
+                .map(|index| (index % 251) as u8)
+                .collect();
+            let expected = payload.clone();
+            let writer = std::thread::spawn(move || write_pipe_message(&server, &payload));
+
+            let received = read_pipe_message(&client)?;
+            writer
+                .join()
+                .expect("Windows pipe writer thread should not panic")?;
+
+            assert_eq!(received, expected);
             Ok(())
         }
 
