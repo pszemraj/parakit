@@ -294,18 +294,7 @@ fn worker_loop(ctx: WorkerCtx) {
                                     total_elapsed.as_secs_f32() * 1000.0
                                 ));
                                 state.set_phase("idle");
-                                // Blocked always alarms. A post-chord
-                                // CopiedOnly (paste sent but insertion never
-                                // confirmed) is a safe degradation, not a
-                                // backend failure, but the user still needs
-                                // to know the paste did not land; a
-                                // pre-chord CopiedOnly (guard blocked before
-                                // any chord was sent) keeps the quieter
-                                // existing behavior.
-                                let needs_alert = matches!(outcome, InsertOutcome::Blocked)
-                                    || (outcome == InsertOutcome::CopiedOnly
-                                        && report.paste_event_posted);
-                                if needs_alert {
+                                if report.needs_alert() {
                                     sounds.error();
                                 } else {
                                     sounds.success();
@@ -628,9 +617,11 @@ fn paste_transcript(
     let paste_error = match paste_result {
         Ok(report) => match report.outcome {
             super::inject::PasteOutcome::Pasted => {
-                return Ok(InsertReport::from_paste(InsertOutcome::Pasted, report))
+                warn_if_clipboard_restore_failed(log, keep_transcript_clipboard, &report);
+                return Ok(InsertReport::from_paste(InsertOutcome::Pasted, report));
             }
             super::inject::PasteOutcome::PastedUnverified => {
+                warn_if_clipboard_restore_failed(log, keep_transcript_clipboard, &report);
                 log.verbose(format!(
                     "parakit: paste sent but insertion could not be confirmed within {}ms ({}); treating as pasted",
                     report.acknowledgement_ms.unwrap_or_default(),
@@ -654,8 +645,13 @@ fn paste_transcript(
                 return Ok(InsertReport::from_paste(InsertOutcome::CopiedOnly, report));
             }
             super::inject::PasteOutcome::UnsafeModifiers => {
+                // No chord was ever posted (`report.paste_event_posted` is
+                // always false here) and the transcript is intentionally
+                // kept on the clipboard, exactly like the pre-chord
+                // `CopiedOnly` case above: this is the quiet "copied, not
+                // pasted" outcome, not a `Blocked` failure.
                 notifier.transcript_copied(PasteBlockReason::UnsafeModifiers.notice());
-                return Ok(InsertReport::from_paste(InsertOutcome::Blocked, report));
+                return Ok(InsertReport::from_paste(InsertOutcome::CopiedOnly, report));
             }
             super::inject::PasteOutcome::Blocked => {
                 notifier.paste_blocked(PasteBlockReason::FocusChangedBeforePaste.notice());
@@ -675,6 +671,35 @@ fn paste_transcript(
     }
 
     Err(paste_error)
+}
+
+/// Warn when a paste that already landed (or was accepted as unverified)
+/// could not restore the caller's previous clipboard contents.
+///
+/// `Injector::paste_text_guarded` never turns a failed restore into an error
+/// once the paste itself reached the `Pasted`/`PastedUnverified` tier: the
+/// paste already happened, so losing the previous clipboard is a secondary,
+/// recoverable problem, not a paste failure. That fix means this is the only
+/// place the failure becomes visible, since the low-level insertion module
+/// has no logger of its own to report through.
+///
+/// `report.clipboard_restored == Some(false)` is ambiguous on its own: it is
+/// also what a deliberate [`ClipboardPolicy::KeepTranscript`] request looks
+/// like. Restricting the warning to `!keep_transcript_clipboard` (the caller
+/// asked for [`ClipboardPolicy::RestorePrevious`]) resolves the ambiguity,
+/// since that combination can only mean the restore was attempted and
+/// failed.
+fn warn_if_clipboard_restore_failed(
+    log: &Logger,
+    keep_transcript_clipboard: bool,
+    report: &super::inject::PasteReport,
+) {
+    if !keep_transcript_clipboard && report.clipboard_restored == Some(false) {
+        log.warn(format!(
+            "paste succeeded, but {}; the transcript is likely still on the clipboard",
+            super::inject::CLIPBOARD_RESTORE_ERROR
+        ));
+    }
 }
 
 fn copy_or_block_transcript(
@@ -1022,6 +1047,25 @@ impl InsertReport {
             clipboard_restored: None,
         }
     }
+
+    /// Whether this outcome should play the daemon's error tone instead of
+    /// its success tone.
+    ///
+    /// [`InsertOutcome::Blocked`] always alarms. A post-chord
+    /// [`InsertOutcome::CopiedOnly`] (a paste chord was actually sent but
+    /// insertion was never confirmed) is a safe degradation, not a backend
+    /// failure, but the user still needs to know the paste did not land; a
+    /// pre-chord `CopiedOnly` (no chord was ever sent — guard-blocked, focus
+    /// changed before paste, or held modifiers withheld the chord) keeps the
+    /// quieter existing behavior.
+    ///
+    /// # Returns
+    ///
+    /// `true` when the daemon should play its error tone for this outcome.
+    fn needs_alert(&self) -> bool {
+        matches!(self.outcome, InsertOutcome::Blocked)
+            || (self.outcome == InsertOutcome::CopiedOnly && self.paste_event_posted)
+    }
 }
 
 /// Sanitize text before any clipboard or paste action.
@@ -1364,5 +1408,53 @@ mod tests {
         for (name, raw, mode, expected) in cases {
             assert_eq!(sanitize_for_paste(&raw, mode), expected, "{name}");
         }
+    }
+
+    #[test]
+    fn unsafe_modifiers_maps_to_quiet_copied_only() {
+        let paste_report = super::super::inject::PasteReport {
+            outcome: super::super::inject::PasteOutcome::UnsafeModifiers,
+            paste_event_posted: false,
+            acknowledgement_kind: "not_applicable",
+            acknowledgement_ms: None,
+            clipboard_restored: Some(false),
+        };
+
+        let report = InsertReport::from_paste(InsertOutcome::CopiedOnly, paste_report);
+
+        assert_eq!(report.outcome, InsertOutcome::CopiedOnly);
+        assert!(!report.paste_event_posted);
+        assert!(
+            !report.needs_alert(),
+            "held-modifier skips keep the transcript on the clipboard via the quiet, \
+             pre-chord CopiedOnly path; they must not alarm like Blocked does"
+        );
+    }
+
+    #[test]
+    fn needs_alert_matches_outcome_and_paste_event_posted() {
+        fn report(outcome: InsertOutcome, paste_event_posted: bool) -> InsertReport {
+            InsertReport {
+                outcome,
+                paste_event_posted,
+                acknowledgement_kind: "not_applicable",
+                acknowledgement_ms: None,
+                clipboard_restored: None,
+            }
+        }
+
+        assert!(!report(InsertOutcome::Pasted, true).needs_alert());
+        assert!(!report(InsertOutcome::PastedUnverified, true).needs_alert());
+        assert!(!report(InsertOutcome::Skipped, false).needs_alert());
+        assert!(report(InsertOutcome::Blocked, false).needs_alert());
+        assert!(report(InsertOutcome::Blocked, true).needs_alert());
+        assert!(
+            !report(InsertOutcome::CopiedOnly, false).needs_alert(),
+            "pre-chord CopiedOnly (guard-blocked, focus changed, or unsafe modifiers) stays quiet"
+        );
+        assert!(
+            report(InsertOutcome::CopiedOnly, true).needs_alert(),
+            "post-chord CopiedOnly (chord sent but never confirmed) must still alert"
+        );
     }
 }

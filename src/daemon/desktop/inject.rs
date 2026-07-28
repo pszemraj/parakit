@@ -758,6 +758,12 @@ impl Injector {
     /// [`PasteOutcome::Blocked`] when no input was sent and the previous
     /// clipboard was restored.
     ///
+    /// The `UnsafeModifiers` case always keeps the transcript on the
+    /// clipboard and ignores `clipboard_policy`, even when the caller asked
+    /// for [`ClipboardPolicy::RestorePrevious`]: uncertainty about whether
+    /// the chord could be posted safely must not destroy the only copy of
+    /// the transcript.
+    ///
     /// # Errors
     ///
     /// Returns an error if clipboard staging, the guard, direct typing, or the
@@ -1063,7 +1069,7 @@ where
 
     let paste_result = paste();
     match paste_result {
-        Ok(PasteDispatch::Posted) => finish_confirmed_paste(
+        Ok(PasteDispatch::Posted) => Ok(finish_confirmed_paste(
             clipboard,
             previous,
             write_token,
@@ -1072,7 +1078,7 @@ where
             focus,
             text,
             baseline.as_ref(),
-        ),
+        )),
         Ok(PasteDispatch::SkippedUnsafeModifiers) => {
             // A modifier became active after the bounded readiness wait.
             // Posting would turn Cmd+V into a different shortcut. No input
@@ -1115,9 +1121,11 @@ where
 /// * `text` - Transcript text that was just pasted.
 /// * `baseline` - Target's observable value read before the chord was sent.
 ///
-/// # Errors
-///
-/// Returns an error if the previous clipboard payload cannot be restored.
+/// Never fails: the paste chord was already sent by this point, so a
+/// problem restoring the previous clipboard (see
+/// [`clipboard_restored_after_paste`]) is reported through
+/// `clipboard_restored: Some(false)` on the returned report rather than
+/// turned into an error that would discard an already-landed paste.
 #[allow(
     clippy::too_many_arguments,
     reason = "mirrors the guarded-paste transaction's own parameter set; each is an \
@@ -1132,7 +1140,7 @@ fn finish_confirmed_paste<C, H>(
     focus: Option<&FocusSnapshot>,
     text: &str,
     baseline: Option<&PasteTargetValue>,
-) -> Result<PasteReport>
+) -> PasteReport
 where
     C: ClipboardStore,
     H: ClipboardRestoreGate + ?Sized,
@@ -1147,39 +1155,72 @@ where
     );
 
     match confirmation {
-        PasteConfirmation::Confirmed { elapsed, kind } => {
-            restore_or_clear_clipboard(clipboard, previous, clipboard_policy)?;
-            Ok(PasteReport {
-                outcome: PasteOutcome::Pasted,
-                paste_event_posted: true,
-                acknowledgement_kind: kind,
-                acknowledgement_ms: Some(elapsed.as_millis()),
-                clipboard_restored: Some(clipboard_policy == ClipboardPolicy::RestorePrevious),
-            })
-        }
-        PasteConfirmation::Unverified { elapsed, kind } => {
-            restore_or_clear_clipboard(clipboard, previous, clipboard_policy)?;
-            Ok(PasteReport {
-                outcome: PasteOutcome::PastedUnverified,
-                paste_event_posted: true,
-                acknowledgement_kind: kind,
-                acknowledgement_ms: Some(elapsed.as_millis()),
-                clipboard_restored: Some(clipboard_policy == ClipboardPolicy::RestorePrevious),
-            })
-        }
+        PasteConfirmation::Confirmed { elapsed, kind } => PasteReport {
+            outcome: PasteOutcome::Pasted,
+            paste_event_posted: true,
+            acknowledgement_kind: kind,
+            acknowledgement_ms: Some(elapsed.as_millis()),
+            clipboard_restored: Some(clipboard_restored_after_paste(
+                clipboard,
+                previous,
+                clipboard_policy,
+            )),
+        },
+        PasteConfirmation::Unverified { elapsed, kind } => PasteReport {
+            outcome: PasteOutcome::PastedUnverified,
+            paste_event_posted: true,
+            acknowledgement_kind: kind,
+            acknowledgement_ms: Some(elapsed.as_millis()),
+            clipboard_restored: Some(clipboard_restored_after_paste(
+                clipboard,
+                previous,
+                clipboard_policy,
+            )),
+        },
         PasteConfirmation::NoEvidence { elapsed, kind } => {
             // No evidence the target consumed the paste: `previous` is
             // dropped here without being restored, and the transcript
             // intentionally stays on the clipboard so it is not lost.
             // Uncertainty must never destroy the transcript.
-            Ok(PasteReport {
+            PasteReport {
                 outcome: PasteOutcome::CopiedOnly,
                 paste_event_posted: true,
                 acknowledgement_kind: kind,
                 acknowledgement_ms: Some(elapsed.as_millis()),
                 clipboard_restored: Some(false),
-            })
+            }
         }
+    }
+}
+
+/// Restore the clipboard after a paste that already landed (or was accepted
+/// as unverified), treating a failed restore as "not restored" rather than
+/// turning an already-successful paste into an error.
+///
+/// The paste itself succeeded by this point, so losing the previous
+/// clipboard contents is a secondary, recoverable problem, not a paste
+/// failure: it must not be reported as one to the caller's retry/circuit-
+/// breaker logic. A failed restore here means the transcript is left
+/// sitting on the clipboard exactly as it would be under
+/// [`ClipboardPolicy::KeepTranscript`]; the returned `bool` cannot
+/// distinguish the two cases, and the underlying error is dropped along with
+/// them, since this module has no logger to report it through. The
+/// `daemon::worker` call site recovers the distinction from the combination
+/// of its own `clipboard_policy` request and this `bool`, and logs a
+/// warning through the [`crate::daemon::logging::Logger`] it holds.
+///
+/// # Returns
+///
+/// `true` when [`ClipboardPolicy::RestorePrevious`] was requested and the
+/// previous clipboard was successfully restored.
+fn clipboard_restored_after_paste<C: ClipboardStore>(
+    clipboard: &mut C,
+    previous: ClipboardSnapshot,
+    clipboard_policy: ClipboardPolicy,
+) -> bool {
+    match restore_or_clear_clipboard(clipboard, previous, clipboard_policy) {
+        Ok(()) => clipboard_policy == ClipboardPolicy::RestorePrevious,
+        Err(_) => false,
     }
 }
 

@@ -36,6 +36,7 @@ struct MockClipboard {
     content: MockClipboardContent,
     events: Rc<RefCell<Vec<String>>>,
     fail_next_set: bool,
+    fail_set_matching: Option<String>,
 }
 
 impl MockClipboard {
@@ -44,6 +45,7 @@ impl MockClipboard {
             content,
             events: Rc::new(RefCell::new(Vec::new())),
             fail_next_set: false,
+            fail_set_matching: None,
         }
     }
 
@@ -95,6 +97,15 @@ impl MockClipboard {
         self
     }
 
+    /// Fail every `set_text` call that writes exactly `text`, without
+    /// consuming a one-shot flag. Used to make the *restore* write fail
+    /// (which happens after the transcript's own `set_text` call already
+    /// succeeded) without needing to count calls.
+    fn fail_set_matching(mut self, text: impl Into<String>) -> Self {
+        self.fail_set_matching = Some(text.into());
+        self
+    }
+
     fn events(&self) -> Rc<RefCell<Vec<String>>> {
         Rc::clone(&self.events)
     }
@@ -106,10 +117,15 @@ impl MockClipboard {
         }
     }
 
-    fn fail_set_if_needed(&mut self, _text: Option<&str>) -> Result<()> {
+    fn fail_set_if_needed(&mut self, text: Option<&str>) -> Result<()> {
         if self.fail_next_set {
             self.fail_next_set = false;
             anyhow::bail!("clipboard write failed");
+        }
+        if let Some(target) = self.fail_set_matching.as_deref() {
+            if Some(target) == text {
+                anyhow::bail!("clipboard restore write failed");
+            }
         }
         Ok(())
     }
@@ -1316,4 +1332,77 @@ fn post_paste_acknowledgement_tiers_drive_outcome_and_clipboard_policy() {
             events.borrow()
         );
     }
+}
+
+#[test]
+fn confirmed_paste_survives_a_failed_clipboard_restore() {
+    let mut clipboard = MockClipboard::new("old clipboard").fail_set_matching("old clipboard");
+    let events = clipboard.events();
+    let gate =
+        MockRestoreGate::new(Rc::clone(&events)).confirmation(PasteConfirmation::Confirmed {
+            elapsed: Duration::from_millis(42),
+            kind: "ax_confirmed",
+        });
+    let result = paste_with_clipboard_swap_guarded(
+        &mut clipboard,
+        "dictated text",
+        || true,
+        || {
+            events.borrow_mut().push("paste".to_string());
+            Ok(PasteDispatch::Posted)
+        },
+        Duration::ZERO,
+        restore_plan(&gate),
+        ClipboardPolicy::RestorePrevious,
+        None,
+        || {
+            events.borrow_mut().push("guard".to_string());
+            Ok(true)
+        },
+    )
+    .expect("a failed restore after a landed paste must not turn success into an error");
+
+    assert_eq!(result.outcome, PasteOutcome::Pasted);
+    assert!(result.paste_event_posted);
+    assert_eq!(result.acknowledgement_kind, "ax_confirmed");
+    // The restore attempt failed, so the transcript is still on the
+    // clipboard rather than the previous "old clipboard" contents; this must
+    // read as `Some(false)`, not silently as `Some(true)` or an `Err` that
+    // would discard the already-landed paste.
+    assert_eq!(result.clipboard_restored, Some(false));
+    assert_eq!(clipboard.text(), Some("dictated text"));
+}
+
+#[test]
+fn unverified_paste_survives_a_failed_clipboard_restore() {
+    let mut clipboard = MockClipboard::new("old clipboard").fail_set_matching("old clipboard");
+    let events = clipboard.events();
+    let gate =
+        MockRestoreGate::new(Rc::clone(&events)).confirmation(PasteConfirmation::Unverified {
+            elapsed: Duration::from_millis(1500),
+            kind: "unverified_timeout",
+        });
+    let result = paste_with_clipboard_swap_guarded(
+        &mut clipboard,
+        "dictated text",
+        || true,
+        || {
+            events.borrow_mut().push("paste".to_string());
+            Ok(PasteDispatch::Posted)
+        },
+        Duration::ZERO,
+        restore_plan(&gate),
+        ClipboardPolicy::RestorePrevious,
+        None,
+        || {
+            events.borrow_mut().push("guard".to_string());
+            Ok(true)
+        },
+    )
+    .expect("a failed restore after an unverified paste must not turn success into an error");
+
+    assert_eq!(result.outcome, PasteOutcome::PastedUnverified);
+    assert!(result.paste_event_posted);
+    assert_eq!(result.clipboard_restored, Some(false));
+    assert_eq!(clipboard.text(), Some("dictated text"));
 }
