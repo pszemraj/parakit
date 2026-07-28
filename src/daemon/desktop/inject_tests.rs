@@ -745,7 +745,7 @@ fn unsafe_modifier_skip_keeps_staged_transcript_without_posting() {
     )
     .expect("withholding an unsafe chord should be recoverable");
 
-    assert_eq!(result.outcome, PasteOutcome::CopiedOnly);
+    assert_eq!(result.outcome, PasteOutcome::UnsafeModifiers);
     assert!(!result.paste_event_posted);
     assert_eq!(result.acknowledgement_kind, "not_applicable");
     assert_eq!(result.clipboard_restored, Some(false));

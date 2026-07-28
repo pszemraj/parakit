@@ -87,6 +87,9 @@ pub(crate) enum PasteOutcome {
     PastedUnverified,
     /// The transcript was left on the clipboard and no synthetic input was sent.
     CopiedOnly,
+    /// The transcript was left on the clipboard because active physical
+    /// modifiers made posting the paste chord unsafe.
+    UnsafeModifiers,
     /// No paste chord was sent and clipboard policy was applied.
     Blocked,
 }
@@ -673,7 +676,9 @@ impl Injector {
     /// [`PasteOutcome::PastedUnverified`] when synthetic input was sent,
     /// [`PasteOutcome::CopiedOnly`] when the guard blocked insertion (or
     /// post-paste acknowledgement never found evidence of insertion) and the
-    /// transcript was intentionally left on the clipboard, or
+    /// transcript was intentionally left on the clipboard,
+    /// [`PasteOutcome::UnsafeModifiers`] when physical modifiers prevented a
+    /// safe chord, or
     /// [`PasteOutcome::Blocked`] when no input was sent and the previous
     /// clipboard was restored.
     ///
@@ -976,7 +981,7 @@ where
             // leave the staged transcript on the clipboard for recovery and
             // report that fact honestly.
             Ok(PasteReport::new(
-                PasteOutcome::CopiedOnly,
+                PasteOutcome::UnsafeModifiers,
                 false,
                 Some(false),
             ))

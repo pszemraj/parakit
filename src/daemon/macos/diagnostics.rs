@@ -793,6 +793,11 @@ fn check_paste_report(
              the clipboard instead (outcome=CopiedOnly, kind={kind:?}); the synthetic Cmd+V may \
              not have reached the probe window, or the text view never consumed the clipboard"
         )),
+        (PasteOutcome::UnsafeModifiers, kind) => Err(format!(
+            "the paste chord was withheld because physical modifiers remained active \
+             (outcome=UnsafeModifiers, kind={kind:?}); release the push-to-talk keys before \
+             rerunning the deep diagnostic"
+        )),
         (PasteOutcome::Blocked, kind) => Err(format!(
             "the doctor smoke harness's own safety-recheck closure blocked insertion \
              (outcome=Blocked, kind={kind:?}); this indicates a bug in the harness itself, not \

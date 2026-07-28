@@ -647,6 +647,10 @@ fn paste_transcript(
                 }
                 return Ok(InsertReport::from_paste(InsertOutcome::CopiedOnly, report));
             }
+            super::inject::PasteOutcome::UnsafeModifiers => {
+                notifier.transcript_copied(PasteBlockReason::UnsafeModifiers.notice());
+                return Ok(InsertReport::from_paste(InsertOutcome::Blocked, report));
+            }
             super::inject::PasteOutcome::Blocked => {
                 notifier.paste_blocked(PasteBlockReason::FocusChangedBeforePaste.notice());
                 return Ok(InsertReport::from_paste(InsertOutcome::Blocked, report));
@@ -858,6 +862,9 @@ pub(crate) enum PasteBlockReason {
     FocusChangedBeforeInsertion,
     /// The focused target changed during the final pre-chord recheck.
     FocusChangedBeforePaste,
+    /// Physical modifier keys remained active, so posting the paste shortcut
+    /// would have produced a different chord.
+    UnsafeModifiers,
     /// The paste chord was sent but never acknowledged, so the transcript was
     /// deliberately left on the clipboard for the user to paste manually.
     Unconfirmed,
@@ -880,6 +887,7 @@ impl PasteBlockReason {
             Self::BackendUnavailable => "paste backend unavailable",
             Self::FocusChangedBeforeInsertion => "focus changed before insertion",
             Self::FocusChangedBeforePaste => "focus changed immediately before paste",
+            Self::UnsafeModifiers => "physical modifiers made the paste shortcut unsafe",
             Self::Unconfirmed => "paste not acknowledged",
         }
     }
@@ -902,6 +910,9 @@ impl PasteBlockReason {
             Self::BackendUnavailable => "Paste backend was unavailable.",
             Self::FocusChangedBeforeInsertion => "Focus changed before insertion.",
             Self::FocusChangedBeforePaste => "Focus changed immediately before paste.",
+            Self::UnsafeModifiers => {
+                "Push-to-talk keys remained held; transcript copied for manual paste."
+            }
             // The unacknowledged tier is only reachable where a platform
             // overrides `await_paste_confirmation` (macOS today), but name
             // the right chord for whatever platform this compiles for.
