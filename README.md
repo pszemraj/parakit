@@ -51,9 +51,6 @@ If `doctor` finds issues with the setup/build, it will exit 1 and print details 
    - Sounds indicate start, stop, or error states.
 3. Watch the dictated text appear at your cursor.
 
-> [!TIP]
-> Run a clipboard history manager alongside parakit. Dictations are not persisted: the daemon keeps only the last few in memory until it stops, so a clipboard manager is what lets you pull an earlier dictation back.
-
 For background mode, paste options, and other runtime-related options see [docs/running.md](docs/running.md).
 
 Linux currently requires an X11 session for desktop hotkeys and text insertion; see [docs/linux-desktop.md](docs/linux-desktop.md).
