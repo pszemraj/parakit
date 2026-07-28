@@ -91,6 +91,31 @@ fn capitalization_protects_real_technical_tokens() {
 }
 
 #[test]
+fn capitalization_preserves_punctuation_inside_urls() {
+    let cases = [
+        (
+            "visit https://example.com?token=abc and https://example.com/a!b.",
+            "Visit https://example.com?token=abc and https://example.com/a!b.",
+        ),
+        (
+            "open www.example.com?foo=bar now.",
+            "Open www.example.com?foo=bar now.",
+        ),
+        (
+            "visit https://example.com? then continue.",
+            "Visit https://example.com? Then continue.",
+        ),
+        (
+            "visit https://example.com/a!b. then continue.",
+            "Visit https://example.com/a!b. Then continue.",
+        ),
+    ];
+    for (input, expected) in cases {
+        assert_eq!(clean(CleaningProfile::Safe, input), expected);
+    }
+}
+
+#[test]
 fn safe_profile_applies_high_confidence_normalization() {
     let cases = [
         (

@@ -681,11 +681,11 @@ pub(crate) fn drop_dangling_connective(input: &str) -> TransformResult {
 /// domain, email address, filename/extension, or a `v`-prefixed version
 /// (via [`preserve_sentence_start_token_case`]'s dot/`@`/scheme checks), so
 /// those are never corrupted. A `.`, `!`, or `?` opens a new sentence only
-/// when [`period_is_sentence_boundary`] agrees; that helper keeps decimals,
-/// semvers, domains, ellipses, and known abbreviations/initialisms (e.g.
-/// `"e.g."`, `"U.S."`) from being treated as sentence ends, so a dotted
-/// identifier is never split into two sentences and its next token is
-/// never capitalized.
+/// when [`punctuation_is_sentence_boundary`] agrees; that helper keeps URL
+/// query/path punctuation, decimals, semvers, domains, ellipses, and known
+/// abbreviations/initialisms (e.g. `"e.g."`, `"U.S."`) from being treated
+/// as sentence ends, so a protected token is never split into two sentences
+/// and its next character is never capitalized.
 ///
 /// # Returns
 ///
@@ -726,9 +726,7 @@ pub(crate) fn capitalize_sentence_starts(input: &str) -> TransformResult {
         }
 
         output.push(character);
-        if matches!(character, '!' | '?')
-            || (character == '.' && period_is_sentence_boundary(input, byte_index))
-        {
+        if punctuation_is_sentence_boundary(input, byte_index, character) {
             capitalize_next = true;
         }
     }
@@ -739,35 +737,77 @@ pub(crate) fn capitalize_sentence_starts(input: &str) -> TransformResult {
     }
 }
 
+fn punctuation_is_sentence_boundary(input: &str, byte_index: usize, character: char) -> bool {
+    match character {
+        '.' => period_is_sentence_boundary(input, byte_index),
+        '!' | '?' => !punctuation_is_inside_protected_token(input, byte_index, character),
+        _ => false,
+    }
+}
+
+fn punctuation_is_inside_protected_token(
+    input: &str,
+    byte_index: usize,
+    punctuation: char,
+) -> bool {
+    let token_start = input[..byte_index]
+        .char_indices()
+        .rev()
+        .find_map(|(index, character)| {
+            character
+                .is_whitespace()
+                .then_some(index + character.len_utf8())
+        })
+        .unwrap_or(0);
+    let after_punctuation = byte_index + punctuation.len_utf8();
+    let token_end = input[after_punctuation..]
+        .char_indices()
+        .find_map(|(offset, character)| {
+            character
+                .is_whitespace()
+                .then_some(after_punctuation + offset)
+        })
+        .unwrap_or(input.len());
+
+    input[after_punctuation..token_end]
+        .chars()
+        .any(char::is_alphanumeric)
+        && protected_token_case(&input[token_start..token_end])
+}
+
 fn preserve_sentence_start_token_case(input: &str, byte_index: usize) -> bool {
     let tail = &input[byte_index..];
     let token = tail
         .split(|character: char| character.is_whitespace())
         .next()
-        .unwrap_or("")
-        .trim_matches(|character: char| {
-            matches!(
-                character,
-                '"' | '\''
-                    | '('
-                    | ')'
-                    | '['
-                    | ']'
-                    | '{'
-                    | '}'
-                    | '<'
-                    | '>'
-                    | ','
-                    | ';'
-                    | ':'
-                    | '!'
-                    | '?'
-            )
-        });
+        .unwrap_or("");
+    protected_token_case(token)
+}
+
+fn protected_token_case(token: &str) -> bool {
+    let token = token.trim_matches(|character: char| {
+        matches!(
+            character,
+            '"' | '\''
+                | '('
+                | ')'
+                | '['
+                | ']'
+                | '{'
+                | '}'
+                | '<'
+                | '>'
+                | ','
+                | ';'
+                | ':'
+                | '!'
+                | '?'
+        )
+    });
     let lexical = token.trim_end_matches('.');
     let lower = lexical.to_ascii_lowercase();
 
-    if lower.starts_with("http://")
+    lower.starts_with("http://")
         || lower.starts_with("https://")
         || lower.starts_with("www.")
         || lower.contains('@')
@@ -777,11 +817,6 @@ fn preserve_sentence_start_token_case(input: &str, byte_index: usize) -> bool {
                 .chars()
                 .nth(1)
                 .is_some_and(|character| character.is_ascii_digit()))
-    {
-        return true;
-    }
-
-    false
 }
 
 fn period_is_sentence_boundary(input: &str, period_index: usize) -> bool {
