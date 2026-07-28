@@ -15,7 +15,10 @@ use std::time::Duration;
 /// transcription record with its later insertion outcome recorded through
 /// [`DataLogger::log_insertion`].
 #[derive(Clone, Copy, Debug)]
-pub struct RecordId(u64);
+pub struct RecordId {
+    sequence: u64,
+    local_date: NaiveDate,
+}
 
 /// Transcript-cleaning telemetry recorded with the transcription record.
 ///
@@ -104,6 +107,23 @@ struct LogState {
     file: BufWriter<File>,
 }
 
+struct LogTimestamp {
+    local_date: NaiveDate,
+    utc_rfc3339: String,
+}
+
+impl LogTimestamp {
+    fn now() -> Self {
+        let now = Local::now();
+        Self {
+            local_date: now.date_naive(),
+            utc_rfc3339: now
+                .with_timezone(&Utc)
+                .to_rfc3339_opts(SecondsFormat::Millis, true),
+        }
+    }
+}
+
 /// Synchronous JSONL transcription logger with lazy daily file rotation.
 pub struct DataLogger {
     dir: PathBuf,
@@ -148,7 +168,8 @@ impl DataLogger {
     ///
     /// # Returns
     ///
-    /// An identifier that correlates this record with its insertion outcome.
+    /// `Some` identifier that correlates this record with its insertion
+    /// outcome when the record was written, or `None` when logging failed.
     pub fn log(
         &self,
         audio_secs: f32,
@@ -156,12 +177,19 @@ impl DataLogger {
         raw: &str,
         cleaned: &str,
         cleaning: CleaningLogFields<'_>,
-    ) -> RecordId {
-        let id = RecordId(self.next_id.fetch_add(1, Ordering::Relaxed));
-        if let Err(e) = self.try_log(audio_secs, infer, raw, cleaned, cleaning) {
-            eprintln!("parakit: transcription log write failed: {e:#}");
+    ) -> Option<RecordId> {
+        let timestamp = LogTimestamp::now();
+        let id = RecordId {
+            sequence: self.next_id.fetch_add(1, Ordering::Relaxed),
+            local_date: timestamp.local_date,
+        };
+        match self.try_log(timestamp, audio_secs, infer, raw, cleaned, cleaning) {
+            Ok(()) => Some(id),
+            Err(e) => {
+                eprintln!("parakit: transcription log write failed: {e:#}");
+                None
+            }
         }
-        id
     }
 
     /// Write the insertion outcome for a record previously returned by
@@ -186,15 +214,15 @@ impl DataLogger {
 
     fn try_log(
         &self,
+        timestamp: LogTimestamp,
         audio_secs: f32,
         infer: Duration,
         raw: &str,
         cleaned: &str,
         cleaning: CleaningLogFields<'_>,
     ) -> Result<()> {
-        let ts = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
         let record = LogRecord {
-            ts,
+            ts: timestamp.utc_rfc3339,
             parakit_version: crate::build_info::PACKAGE_VERSION,
             audio_secs,
             infer_ms: infer.as_millis(),
@@ -203,7 +231,7 @@ impl DataLogger {
             cleaning,
         };
 
-        self.with_state(|state| {
+        self.with_state(timestamp.local_date, |state| {
             write_jsonl_record(state, &record, "failed to serialize jsonl log record")
         })
     }
@@ -213,21 +241,20 @@ impl DataLogger {
         let record = InsertionLogRecord {
             kind: "insertion",
             ts,
-            ref_id: id.0,
+            ref_id: id.sequence,
             fields,
         };
-        self.with_state(|state| {
+        self.with_state(id.local_date, |state| {
             write_jsonl_record(state, &record, "failed to serialize jsonl insertion record")
         })
     }
 
-    /// Run `f` against the current daily log file, rotating it first if the
-    /// local date has changed since the last write.
-    fn with_state<F>(&self, f: F) -> Result<()>
+    /// Run `f` against the requested daily log file, rotating first when the
+    /// previous write targeted a different date.
+    fn with_state<F>(&self, local_date: NaiveDate, f: F) -> Result<()>
     where
         F: FnOnce(&mut LogState) -> Result<()>,
     {
-        let local_date = Local::now().date_naive();
         let mut state = self.state.lock();
         if state.as_ref().map(|s| s.date) != Some(local_date) {
             *state = Some(LogState {
@@ -283,16 +310,18 @@ mod tests {
             let logger = Arc::clone(&logger);
             threads.push(std::thread::spawn(move || {
                 for i in 0..100 {
-                    logger.log(
-                        4.21,
-                        Duration::from_millis(187),
-                        &format!("raw {thread_id} {i}"),
-                        &format!("cleaned {thread_id} {i}"),
-                        CleaningLogFields {
-                            rules_active: 72,
-                            ..sample_cleaning_fields()
-                        },
-                    );
+                    logger
+                        .log(
+                            4.21,
+                            Duration::from_millis(187),
+                            &format!("raw {thread_id} {i}"),
+                            &format!("cleaned {thread_id} {i}"),
+                            CleaningLogFields {
+                                rules_active: 72,
+                                ..sample_cleaning_fields()
+                            },
+                        )
+                        .expect("write concurrent log record");
                 }
             }));
         }
@@ -353,13 +382,15 @@ mod tests {
         let dir = crate::test_support::fixture_root("parakit-log-test", "jsonl-insertion");
         let logger = DataLogger::new(dir.clone());
 
-        let id = logger.log(
-            1.5,
-            Duration::from_millis(42),
-            "raw text",
-            "cleaned text",
-            sample_cleaning_fields(),
-        );
+        let id = logger
+            .log(
+                1.5,
+                Duration::from_millis(42),
+                "raw text",
+                "cleaned text",
+                sample_cleaning_fields(),
+            )
+            .expect("write transcript record");
         logger.log_insertion(id, sample_insertion_fields());
 
         let date = Local::now().date_naive();
@@ -419,7 +450,7 @@ mod tests {
             ],
         );
         assert_eq!(insertion["kind"], "insertion");
-        assert_eq!(insertion["ref_id"], id.0);
+        assert_eq!(insertion["ref_id"], id.sequence);
         assert_eq!(insertion["outcome"], "pasted");
         assert_eq!(insertion["target_bundle_id"], "com.example.App");
         assert_eq!(insertion["focus_verification"], "not_applicable");
@@ -427,6 +458,79 @@ mod tests {
         assert_eq!(insertion["acknowledgement_ms"], 120);
         assert_eq!(insertion["clipboard_restored"], true);
         assert_eq!(insertion["pasteboard_requested"], serde_json::Value::Null);
+    }
+
+    #[test]
+    fn insertion_record_stays_in_the_transcriptions_daily_file() {
+        let dir = crate::test_support::fixture_root("parakit-log-test", "insertion-rotation");
+        let logger = DataLogger::new(dir.clone());
+        let first_date = NaiveDate::from_ymd_opt(2026, 1, 31).expect("valid date");
+        let next_date = NaiveDate::from_ymd_opt(2026, 2, 1).expect("valid date");
+
+        logger
+            .try_log(
+                LogTimestamp {
+                    local_date: first_date,
+                    utc_rfc3339: "2026-02-01T04:59:59.900Z".to_string(),
+                },
+                1.0,
+                Duration::from_millis(10),
+                "first raw",
+                "first cleaned",
+                sample_cleaning_fields(),
+            )
+            .expect("write first-day transcript");
+        logger
+            .try_log(
+                LogTimestamp {
+                    local_date: next_date,
+                    utc_rfc3339: "2026-02-01T05:00:00.100Z".to_string(),
+                },
+                1.0,
+                Duration::from_millis(10),
+                "next raw",
+                "next cleaned",
+                sample_cleaning_fields(),
+            )
+            .expect("rotate to next-day transcript");
+
+        let first_id = RecordId {
+            sequence: 41,
+            local_date: first_date,
+        };
+        logger.log_insertion(first_id, sample_insertion_fields());
+
+        let first_contents =
+            std::fs::read_to_string(dir.join(file_name(first_date))).expect("read first-day log");
+        let next_contents =
+            std::fs::read_to_string(dir.join(file_name(next_date))).expect("read next-day log");
+        let first_lines: Vec<_> = first_contents.lines().collect();
+        assert_eq!(first_lines.len(), 2);
+        assert_eq!(next_contents.lines().count(), 1);
+
+        let insertion: serde_json::Value =
+            serde_json::from_str(first_lines[1]).expect("valid insertion JSON");
+        assert_eq!(insertion["kind"], "insertion");
+        assert_eq!(insertion["ref_id"], first_id.sequence);
+    }
+
+    #[test]
+    fn failed_transcription_write_returns_no_record_id() {
+        let root = crate::test_support::fixture_root("parakit-log-test", "write-failure");
+        let blocked_dir = root.join("not-a-directory");
+        std::fs::write(&blocked_dir, b"file blocks log directory")
+            .expect("create log-directory blocker");
+        let logger = DataLogger::new(blocked_dir);
+
+        let id = logger.log(
+            1.0,
+            Duration::from_millis(10),
+            "raw",
+            "cleaned",
+            sample_cleaning_fields(),
+        );
+
+        assert!(id.is_none());
     }
 
     #[test]
@@ -454,7 +558,9 @@ mod tests {
             rules_fired: &hits,
             failure: None,
         };
-        logger.log(1.0, Duration::from_millis(10), "raw", "cleaned", fields);
+        logger
+            .log(1.0, Duration::from_millis(10), "raw", "cleaned", fields)
+            .expect("write cleaning log record");
 
         let date = Local::now().date_naive();
         let path = dir.join(file_name(date));
@@ -497,7 +603,9 @@ mod tests {
             rules_fired: &[],
             failure: None,
         };
-        logger.log(1.0, Duration::from_millis(5), "raw", "raw", fields);
+        logger
+            .log(1.0, Duration::from_millis(5), "raw", "raw", fields)
+            .expect("write cleaning log record");
 
         let date = Local::now().date_naive();
         let path = dir.join(file_name(date));
@@ -527,7 +635,9 @@ mod tests {
             failure: Some("panic: rule 'foo' bar"),
             ..sample_cleaning_fields()
         };
-        logger.log(1.0, Duration::from_millis(5), "raw", "raw", fields);
+        logger
+            .log(1.0, Duration::from_millis(5), "raw", "raw", fields)
+            .expect("write cleaning failure record");
 
         let date = Local::now().date_naive();
         let path = dir.join(file_name(date));

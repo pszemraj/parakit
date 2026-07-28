@@ -192,7 +192,7 @@ fn worker_loop(ctx: WorkerCtx) {
                                 "parakit: cleaning failed, inserting the raw transcript: {failure}"
                             ));
                         }
-                        let record_id = data_log.as_ref().map(|data_log| {
+                        let record_id = data_log.as_ref().and_then(|data_log| {
                             data_log.log(
                                 secs,
                                 transcript.infer_elapsed,
