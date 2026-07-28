@@ -94,7 +94,7 @@ parakit stop
 
 ## Control Socket
 
-When the daemon is running, these commands talk to it through local per-user IPC. Unix-like systems use a Unix socket under the parakit runtime directory; Windows uses a named pipe.
+When the daemon is running, these commands talk to it through local per-user IPC. Unix-like systems use a Unix socket under the parakit runtime directory; Windows uses a named pipe. After upgrading parakit in place, restart the daemon (`parakit stop`, then start it again): `paste-last` and `copy-last` use a wire format that is not compatible across the upgrade until the daemon restarts.
 
 ```text
 parakit status
@@ -187,7 +187,7 @@ parakit --paste-mode direct
 
 `terminal` and `standard` stage plain text on the system clipboard and send the paste shortcut. Both give the target and clipboard history tools time to observe the staged text, then restore the previous clipboard contents when the clipboard API can round-trip them. Restore support covers text, HTML with a text alternative, copied file lists, and images exposed as normal platform image data. Browser-private image packages, WebP-only payloads, and other clipboard MIME formats are not restorable through `arboard`; when restore is required, parakit clears the staged transcript instead of leaving sensitive text as the active clipboard.
 
-`--keep-transcript-clipboard` leaves the transcript as the active clipboard after both successful pastes and blocked fallbacks. The default is to restore the previous supported clipboard contents after staging.
+`--keep-transcript-clipboard` leaves the transcript as the active clipboard after both successful pastes and blocked fallbacks. The default is to restore the previous supported clipboard contents after staging. On macOS, one case ignores this setting either way: if push-to-talk (or another) modifier key is still physically held down at paste time, sending the chord would post a different shortcut, so parakit skips it and keeps the transcript on the clipboard regardless of the configured policy. This is the quiet path — a "Transcript copied" notification and the success tone, not the error tone — logged as `copied_only`.
 
 Linux clipboard modes use a fixed-delay restore gate. Windows waits for its clipboard-update listener when available and falls back to timing. macOS waits for insertion evidence instead, described below.
 
@@ -205,7 +205,7 @@ On macOS, parakit records the frontmost application's focused Accessibility UI e
 
 ### Paste Acknowledgement On macOS
 
-After the paste chord is sent, macOS polls the focused element's Accessibility value for evidence that the target consumed it, and only then decides what to do with the clipboard. Three outcomes are possible. When the transcript is seen in the target, the previous clipboard contents are restored (or cleared) per the usual policy. When the target exposes no readable value at all, which is normal for secure and password fields, the paste is treated as successful and the clipboard is restored, at the cost of about 1.5 seconds of added completion latency. The polling deadlines, matching rules, and the reasoning behind them are in [macos-desktop.md#insertion](macos-desktop.md#insertion).
+After the paste chord is sent, macOS polls the focused element's Accessibility value for evidence that the target consumed it, and only then decides what to do with the clipboard. Three outcomes are possible. When the transcript is seen in the target, the previous clipboard contents are restored (or cleared) per the usual policy. When the target exposes no readable value at all, which is normal for secure and password fields, the paste is treated as successful and the clipboard is restored, at the cost of about 1.5 seconds of added completion latency. The polling deadlines, matching rules, and the reasoning behind them are in [macos-desktop.md#insertion](macos-desktop.md#insertion). If restoring the previous clipboard itself fails after either of these two outcomes, the paste is not retroactively treated as a failure: the same `pasted`/`pasted_unverified` result is logged with `clipboard_restored: false`, and parakit prints a warning that the transcript is likely still on the clipboard.
 
 > [!IMPORTANT]
 > The third outcome needs you to act. When a readable value never shows the transcript, parakit leaves the transcript on the clipboard instead of restoring the previous contents, plays the error tone, and posts a notification. Look at the target before pressing `Cmd+V` yourself: parakit could not confirm the paste, but it may still have landed, and pasting again would insert a second copy.
@@ -229,58 +229,14 @@ parakit --log-dir "$HOME/.parakit/logs"
 
 Audio and redirected console output are never included.
 
-One append-only `parakit-YYYY-MM-DD.jsonl` file is written per local day. Every line is an independent JSON object and is flushed synchronously before the worker continues. A completed dictation normally produces two lines, a transcription line and a later insertion line:
+Set the same directory persistently through the `logging.dir` config key instead of the flag; see [configuration.md](configuration.md) and [config_reference.toml](config_reference.toml). One append-only `parakit-YYYY-MM-DD.jsonl` file is written per local day. A completed dictation normally writes two independent, synchronously flushed lines: a transcription line as soon as the model and cleaner finish, then a later insertion line once parakit knows what happened to the paste attempt.
 
 ```json
 {"ts":"2026-07-27T14:02:11.482Z","session_id":"2026-07-27T14:02:10.981234000Z-p4312-l0","record_id":7,"parakit_version":"0.4.0","audio_secs":4.21,"infer_ms":187,"raw":"so the build is green now.","cleaned":"So the build is green now","rules_active":25,"cleaner_version":6,"cleaning_profile":"safe","ruleset_id":"v6-safe-69be753fb69620ef","drops_trailing_period":true,"number_threshold":4.0,"rules_fired":[{"name":"capitalize-sentence-starts","matches":1},{"name":"fix-trailing-period","matches":1}]}
 {"kind":"insertion","ts":"2026-07-27T14:02:11.930Z","session_id":"2026-07-27T14:02:10.981234000Z-p4312-l0","ref_id":7,"outcome":"pasted","target_bundle_id":"com.mitchellh.ghostty","focus_verification":"matched","transcript_chars":25,"paste_event_posted":true,"pasteboard_requested":null,"acknowledgement_kind":"ax_confirmed","acknowledgement_ms":312,"clipboard_restored":true,"failure_reason":null}
 ```
 
-The transcription line is durable before insertion starts, so exiting during insertion can leave one transcription line without a corresponding outcome. When both writes succeed, join the transcription's (`session_id`, `record_id`) pair to the insertion's (`session_id`, `ref_id`) pair. `session_id` changes for each logger instance (normally each daemon start), while the numeric sequence starts at zero again, so the combined key remains unambiguous when multiple daemon sessions append to the same daily file.
-
-Transcription line fields, in serialization order:
-
-| Field | Type | Meaning |
-| --- | --- | --- |
-| `ts` | string | UTC RFC 3339 timestamp with milliseconds. |
-| `session_id` | string | Opaque logger-session identifier shared by this transcription and its insertion outcome. |
-| `record_id` | integer | Sequence number within `session_id`, starting at zero. |
-| `parakit_version` | string | Cargo package version of the binary that wrote the record. |
-| `audio_secs` | number | Length of the recorded utterance. |
-| `infer_ms` | integer | Model inference time in milliseconds. |
-| `raw` | string | Transcript as returned by the model. |
-| `cleaned` | string | Transcript after cleaning passes. |
-| `rules_active` | integer | Enabled pass count after profile and disable filtering. |
-| `cleaner_version` | integer | Procedural cleaner behavior revision. |
-| `cleaning_profile` | string | `safe`, `aggressive`, or `disabled`. |
-| `ruleset_id` | string | Identifier of the ordered enabled pass set and configurable cleaning behavior, including user rules and a non-default number threshold. Omitted when cleaning is disabled. |
-| `drops_trailing_period` | boolean | Whether the messaging-style terminal-period pass was enabled. |
-| `number_threshold` | number or null | The isolated-value cutoff for digit conversion that was actually in effect, 4 by default; `null` only when cleaning is disabled entirely. |
-| `rules_fired` | array | Passes that changed text, in application order, as `{"name":...,"matches":...}` objects. |
-| `cleaning_failure` | string | Error text from a bounded matcher that exceeded its limit; the cleaner then keeps the original transcript instead of inserting a partial transformation. Omitted when cleaning succeeded. |
-
-`ruleset_id` and `cleaning_failure` are the only omittable fields on this line. Everything else is always present, and `number_threshold` carries whatever threshold was actually in effect, dropping to `null` only when cleaning was disabled. Pass semantics are in [cleaning-rules.md](cleaning-rules.md).
-
-Insertion line fields, in serialization order:
-
-| Field | Type | Meaning |
-| --- | --- | --- |
-| `kind` | string | Always `insertion`; the transcription line carries no `kind`. |
-| `ts` | string | UTC RFC 3339 timestamp with milliseconds. |
-| `session_id` | string | Logger-session identifier copied from the correlated transcription record. |
-| `ref_id` | integer | Sequence number matching the correlated transcription record's `record_id`. |
-| `outcome` | string | `pasted`, `pasted_unverified`, `copied_only`, `blocked`, `skipped`, or `error`. |
-| `target_bundle_id` | string or null | macOS target bundle identifier when known; `null` on Linux and Windows. |
-| `focus_verification` | string | `matched`, `changed`, `ax_unsupported`, `unavailable`, or `not_applicable`. The last value also covers a live focus-recheck error, not only paths that skipped the check. |
-| `transcript_chars` | integer | Character count of the transcript offered for insertion. |
-| `paste_event_posted` | boolean | Whether a paste chord or type event was sent. |
-| `pasteboard_requested` | null | Reserved for a clipboard read-back signal; always `null` today. |
-| `acknowledgement_kind` | string | `ax_confirmed`, `no_evidence`, `unverified_timeout`, or `not_applicable`. |
-| `acknowledgement_ms` | integer or null | Milliseconds spent waiting for acknowledgement; `null` when no wait occurred. |
-| `clipboard_restored` | boolean or null | Whether the previous clipboard was restored; `null` when the result is unknown or inapplicable. |
-| `failure_reason` | string or null | Error text when `outcome` is `error`. |
-
-No field on the insertion line is omitted; absent values serialize as `null`. An `error` record is assembled without a completed insertion report, so `clipboard_restored` can be `null` even though the clipboard was touched, and `paste_event_posted` is `false` whether or not an event was attempted.
+The transcription line is durable before insertion starts, so exiting during insertion can leave one without a corresponding outcome; when both writes succeed, join them by matching the transcription's (`session_id`, `record_id`) pair to the insertion's (`session_id`, `ref_id`) pair, which stays unambiguous across a daemon restart. `outcome` is one of `pasted`, `pasted_unverified`, `copied_only`, `blocked`, `skipped`, or `error`. The full field-by-field reference and what each outcome means are in [logging.md](logging.md).
 
 Disable cue tones:
 
