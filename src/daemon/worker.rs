@@ -182,7 +182,13 @@ fn worker_loop(ctx: WorkerCtx) {
                 state.set_phase("transcribing");
                 log.transcribing(secs, wall_secs);
 
-                match transcribe_clean(&engine, &pcm, cleaner.as_deref()) {
+                let transcription = transcribe_clean(&engine, &pcm, cleaner.as_deref());
+                // Inference is the last PCM consumer. Release the potentially
+                // maximum-length capture before modifier-release and paste
+                // acknowledgement waits keep the worker occupied.
+                drop(pcm);
+
+                match transcription {
                     Ok(Some(transcript)) => {
                         // Count the dictation itself, once, regardless of how
                         // many insertion attempts or outcomes follow below.
