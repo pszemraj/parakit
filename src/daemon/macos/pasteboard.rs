@@ -498,14 +498,15 @@ impl TranscriptMatcher {
             }
             _ => false,
         };
-        let distinctive_occurrence = if self.head.is_some() || self.tail.is_some() {
-            let current_counts = self.counts(current);
-            let baseline_counts = baseline.map(|value| self.counts(value)).unwrap_or_default();
-            current_counts.whole > baseline_counts.whole
-                || current_counts.head > baseline_counts.head
-                || current_counts.tail > baseline_counts.tail
-        } else {
-            false
+        let distinctive_occurrence = match baseline {
+            Some(baseline) if self.head.is_some() || self.tail.is_some() => {
+                let current_counts = self.counts(current);
+                let baseline_counts = self.counts(baseline);
+                current_counts.whole > baseline_counts.whole
+                    || current_counts.head > baseline_counts.head
+                    || current_counts.tail > baseline_counts.tail
+            }
+            _ => false,
         };
 
         short_exact_insertion
@@ -597,6 +598,13 @@ mod tests {
     #[test]
     fn missing_baseline_without_transcript_match_does_not_confirm() {
         assert!(!value_indicates_insertion(None, "some field text", "xyz"));
+    }
+
+    #[test]
+    fn missing_baseline_does_not_confirm_a_preexisting_long_transcript() {
+        let transcript = "alpha bravo charlie delta echo foxtrot golf hotel";
+        assert!(transcript.chars().count() > CONFIRM_WINDOW_CHARS);
+        assert!(!value_indicates_insertion(None, transcript, transcript));
     }
 
     #[test]
