@@ -237,24 +237,37 @@ fn text2num_handles_documented_cardinals_groups_and_decimals() {
                 "The value is 3.1415.",
             ),
             (
+                // A comma-delimited group converts as a whole regardless of
+                // the default threshold; text2num does not treat these
+                // members as "isolated" values.
                 "Groups like one, two, three are digits.",
                 "Groups like 1, 2, 3 are digits.",
             ),
             (
+                // Unlike the comma-delimited group above, the trailing
+                // "three" here is an isolated value below the default
+                // threshold of 4, so it is left as text2num produced it.
                 "When it asks you to press 0, 1, 2, or three.",
-                "When it asks you to press 0, 1, 2, or 3.",
+                "When it asks you to press 0, 1, 2, or three.",
             ),
         ],
     );
 }
 
 #[test]
-fn text2num_converts_every_isolated_non_negative_value() {
+fn text2num_leaves_values_below_the_default_threshold_untouched() {
+    // With `number_threshold` unset, the effective threshold is
+    // `DEFAULT_NUMBER_THRESHOLD` (4.0): isolated values strictly below it
+    // are left exactly as produced (not forced to words, not forced to
+    // digits), and values at or above it are digitized.
     assert_clean_cases(
         CleaningProfile::Safe,
         &[
-            ("Zero files remain.", "0 files remain."),
-            ("One thing and two more ideas.", "1 thing and 2 more ideas."),
+            ("Zero files remain.", "Zero files remain."),
+            (
+                "One thing and two more ideas.",
+                "One thing and two more ideas.",
+            ),
             ("There are four folders.", "There are 4 folders."),
             ("There are five folders.", "There are 5 folders."),
         ],
@@ -268,19 +281,38 @@ fn spoken_number_threshold_preserves_only_values_strictly_below_it() {
         cleaner.clean_text("One file. Four folders. Five notes. Six tasks."),
         "One file. Four folders. 5 notes. 6 tasks."
     );
-    assert_eq!(cleaner.number_threshold(), Some(5.0));
+    assert_eq!(cleaner.number_threshold(), 5.0);
 }
 
 #[test]
-fn omitted_and_zero_number_thresholds_both_convert_every_value() {
+fn unset_number_threshold_resolves_to_the_default_and_digitizes_at_or_above_it() {
+    let cleaner = cleaner_with_number_threshold(None);
+    assert_eq!(
+        cleaner.clean_text("One file. Three notes. Four folders. Ten tasks."),
+        "One file. Three notes. 4 folders. 10 tasks."
+    );
+    assert_eq!(cleaner.number_threshold(), DEFAULT_NUMBER_THRESHOLD);
+}
+
+#[test]
+fn explicit_zero_number_threshold_is_the_opt_out_that_converts_every_value() {
+    let cleaner = cleaner_with_number_threshold(Some(0.0));
+    assert_eq!(
+        cleaner.clean_text("Zero files. One folder. Four notes."),
+        "0 files. 1 folder. 4 notes."
+    );
+    assert_eq!(cleaner.number_threshold(), 0.0);
+}
+
+#[test]
+fn unset_and_explicit_zero_number_thresholds_now_produce_different_ruleset_ids() {
+    // Before the default changed, an explicit `Some(0.0)` collapsed into
+    // `None` in `Cleaner::assemble`, so the two shared a ruleset id. Now
+    // that `Some(0.0)` is the explicit opt-out from the default of 4.0
+    // instead of a synonym for "unset", they must fingerprint differently.
     let omitted = cleaner_with_number_threshold(None);
     let zero = cleaner_with_number_threshold(Some(0.0));
-    let input = "Zero files. One folder. Four notes.";
-    assert_eq!(omitted.clean_text(input), "0 files. 1 folder. 4 notes.");
-    assert_eq!(zero.clean_text(input), "0 files. 1 folder. 4 notes.");
-    assert_eq!(omitted.number_threshold(), None);
-    assert_eq!(zero.number_threshold(), None);
-    assert_eq!(omitted.ruleset_id(), zero.ruleset_id());
+    assert_ne!(omitted.ruleset_id(), zero.ruleset_id());
 }
 
 #[test]
@@ -311,7 +343,10 @@ fn text2num_preserves_second_when_it_is_a_time_unit() {
         CleaningProfile::Safe,
         &[
             ("Give me a second.", "Give me a second."),
-            ("Wait one second.", "Wait 1 second."),
+            // "one" is an isolated value below the default threshold of 4,
+            // so it is left as-is; this case only used to convert back when
+            // the default converted every value.
+            ("Wait one second.", "Wait one second."),
             (
                 "Process five tokens per second.",
                 "Process 5 tokens per second.",
@@ -320,7 +355,9 @@ fn text2num_preserves_second_when_it_is_a_time_unit() {
                 "It was a split-second choice.",
                 "It was a split-second choice.",
             ),
-            ("Open the second file.", "Open the 2nd file."),
+            // The ordinal "second" (2nd) is also below the default
+            // threshold of 4, so it is left as-is.
+            ("Open the second file.", "Open the second file."),
             ("This is the twenty-second file.", "This is the 22nd file."),
         ],
     );
@@ -868,6 +905,80 @@ fn final_period_removal_is_off_by_default_and_can_be_enabled() {
     let dropped = cleaner_messaging_default(CleaningProfile::Safe);
     assert_eq!(dropped.clean_text("Drop this period."), "Drop this period");
     assert!(dropped.drops_trailing_period());
+}
+
+#[test]
+fn dangling_connective_after_a_period_is_dropped() {
+    assert_clean_cases(
+        CleaningProfile::Safe,
+        &[
+            ("The build is green. But", "The build is green."),
+            ("I pushed the fix. So", "I pushed the fix."),
+        ],
+    );
+}
+
+#[test]
+fn dangling_connective_promotes_a_trailing_comma_to_a_period() {
+    assert_clean_cases(CleaningProfile::Safe, &[("It works, but", "It works.")]);
+}
+
+#[test]
+fn chained_dangling_connectives_are_all_removed_in_one_pass() {
+    // Each application strips one trailing connective; applying that
+    // repeatedly resolves a whole chain, so "And so." fully reduces down to
+    // the real sentence underneath.
+    assert_clean_cases(CleaningProfile::Safe, &[("It works. And so.", "It works.")]);
+}
+
+#[test]
+fn dangling_connective_rule_leaves_real_endings_and_mid_sentence_uses_untouched() {
+    assert_clean_cases(
+        CleaningProfile::Safe,
+        &[
+            // A real sentence ending in a word that is not on the
+            // connective list is left alone.
+            ("It works well.", "It works well."),
+            // "and" mid-sentence, not at the very end, is never touched.
+            (
+                "The cat sat on the mat and the dog ran",
+                "The cat sat on the mat and the dog ran",
+            ),
+        ],
+    );
+}
+
+#[test]
+fn lone_dangling_connective_with_no_preceding_content_is_left_alone() {
+    assert_clean_cases(CleaningProfile::Safe, &[("So", "So")]);
+}
+
+#[test]
+fn dangling_connective_removal_interacts_with_trailing_period_removal() {
+    // The rule always leaves the sentence-final period behind; whether that
+    // period itself survives depends only on the independent, default-on
+    // `fix-trailing-period` messaging rule, exercised here both off and on.
+    let kept = cleaner_keep_period(CleaningProfile::Safe);
+    assert_eq!(
+        kept.clean_text("The build is green. But"),
+        "The build is green."
+    );
+
+    let messaging = cleaner_messaging_default(CleaningProfile::Safe);
+    assert_eq!(
+        messaging.clean_text("The build is green. But"),
+        "The build is green"
+    );
+}
+
+#[test]
+fn dangling_connective_rule_can_be_disabled_by_name() {
+    let disabled = HashSet::from(["drop-dangling-connective".to_string()]);
+    let cleaner = build_cleaner_for_test(CleaningProfile::Safe, false, &disabled, &[]);
+    assert_eq!(
+        cleaner.clean_text("The build is green. But"),
+        "The build is green. But"
+    );
 }
 
 #[test]

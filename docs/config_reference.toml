@@ -90,8 +90,9 @@
 # CLI --keep-trailing-period ORs with it; no force-off flag. Disabling "fix-trailing-period" also keeps it.
 # Inert when cleaning.enabled is false or --no-cleaning is set.
 
-# cleaning.number_threshold - finite integer/float >= 0, optional; default: unset/0 = convert all.
-# Positive values keep isolated cardinals/ordinals strictly below the value and digitize it and above.
+# cleaning.number_threshold - finite integer/float >= 0, optional; default: 4 when unset.
+# Isolated cardinals/ordinals at or above the threshold digitize; below it, left exactly as
+# recognized, never forced to a word or a digit. Set 0 to convert every isolated value instead.
 # No CLI override. It controls only "spoken-numbers"; structural numeric passes still normalize.
 # Disabling that rule or cleaning makes it inert, not unvalidated. Time-unit uses of "second" stay words.
 
@@ -128,6 +129,7 @@
 #   casual-kinda - expand "kinda" to "kind of".
 #   casual-gimme - expand "gimme" to "give me".
 #   drop-right-tag-question - replace the complete ", right?" tag with ".".
+#   drop-dangling-connective - remove a trailing so/but/and/or/because, promoting , ; : under it to a period.
 #   fix-space-before-punct - remove space before , . ; : ! or ?.
 #   fix-collapse-spaces - collapse repeated spaces and tabs.
 #   fix-trim - remove leading/trailing whitespace.

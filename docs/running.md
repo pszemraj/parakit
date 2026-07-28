@@ -129,7 +129,7 @@ last transcript: 42 bytes
   device:     cpu (CPU, 8 threads)
   paste mode: standard
   sounds:     on
-  cleaning:   on (24 rules)
+  cleaning:   on (safe, 25 rules)
   logging:    JSONL to /home/user/.parakit/logs
   history:    3 of 10
   hotkey:     auto
@@ -232,7 +232,7 @@ Audio and redirected console output are never included.
 One append-only `parakit-YYYY-MM-DD.jsonl` file is written per local day. Every line is an independent JSON object and is flushed synchronously before the worker continues. A completed dictation normally produces two lines, a transcription line and a later insertion line:
 
 ```json
-{"ts":"2026-07-27T14:02:11.482Z","parakit_version":"0.4.0","audio_secs":4.21,"infer_ms":187,"raw":"so the build is green now.","cleaned":"So the build is green now","rules_active":24,"cleaner_version":5,"cleaning_profile":"safe","ruleset_id":"v5-safe-9c1f2ab40d7e6538","drops_trailing_period":true,"number_threshold":null,"rules_fired":[{"name":"capitalize-sentence-starts","matches":1},{"name":"fix-trailing-period","matches":1}]}
+{"ts":"2026-07-27T14:02:11.482Z","parakit_version":"0.4.0","audio_secs":4.21,"infer_ms":187,"raw":"so the build is green now.","cleaned":"So the build is green now","rules_active":25,"cleaner_version":6,"cleaning_profile":"safe","ruleset_id":"v6-safe-69be753fb69620ef","drops_trailing_period":true,"number_threshold":4.0,"rules_fired":[{"name":"capitalize-sentence-starts","matches":1},{"name":"fix-trailing-period","matches":1}]}
 {"kind":"insertion","ts":"2026-07-27T14:02:11.930Z","ref_id":7,"outcome":"pasted","target_bundle_id":"com.mitchellh.ghostty","focus_verification":"matched","transcript_chars":25,"paste_event_posted":true,"pasteboard_requested":null,"acknowledgement_kind":"ax_confirmed","acknowledgement_ms":312,"clipboard_restored":true,"failure_reason":null}
 ```
 
@@ -253,11 +253,11 @@ Transcription line fields, in serialization order:
 | `cleaning_profile` | string | `safe`, `aggressive`, or `disabled`. |
 | `ruleset_id` | string | Identifier of the ordered enabled pass set and configurable cleaning behavior, including user rules and a non-default number threshold. Omitted when cleaning is disabled. |
 | `drops_trailing_period` | boolean | Whether the messaging-style terminal-period pass was enabled. |
-| `number_threshold` | number or null | Minimum isolated value rendered as digits; `null` is the default convert-all policy. |
+| `number_threshold` | number or null | The isolated-value cutoff for digit conversion that was actually in effect, 4 by default; `null` only when cleaning is disabled entirely. |
 | `rules_fired` | array | Passes that changed text, in application order, as `{"name":...,"matches":...}` objects. |
 | `cleaning_failure` | string | Error text from a bounded matcher that exceeded its limit; the cleaner then keeps the original transcript instead of inserting a partial transformation. Omitted when cleaning succeeded. |
 
-`ruleset_id` and `cleaning_failure` are the only omittable fields on this line. Everything else is always present, and `number_threshold` serializes as `null` rather than disappearing. Pass semantics are in [cleaning-rules.md](cleaning-rules.md).
+`ruleset_id` and `cleaning_failure` are the only omittable fields on this line. Everything else is always present, and `number_threshold` carries whatever threshold was actually in effect, dropping to `null` only when cleaning was disabled. Pass semantics are in [cleaning-rules.md](cleaning-rules.md).
 
 Insertion line fields, in serialization order:
 

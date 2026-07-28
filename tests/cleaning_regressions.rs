@@ -73,11 +73,16 @@ fn capitalization_protects_real_technical_tokens() {
         ("use 3.5 and 3.6 already.", "Use 3.5 and 3.6 already."),
         ("call dataset.filter next.", "Call dataset.filter next."),
         ("open claude.ai now.", "Open claude.ai now."),
-        ("edit agents.md first.", "Edit agents.md 1st."),
+        // "first" (1) is an isolated value below the default number
+        // threshold of 4, so it stays as a word; this case is about
+        // `agents.md` staying lowercase, not number conversion.
+        ("edit agents.md first.", "Edit agents.md first."),
         ("email test@gmail.com now.", "Email test@gmail.com now."),
         (
+            // Likewise "one" (1) stays as a word below the default
+            // threshold; this case is about `i.e.` staying lowercase.
             "this is i.e. still one sentence.",
-            "This is i.e. still 1 sentence.",
+            "This is i.e. still one sentence.",
         ),
     ];
     for (input, expected) in cases {
@@ -111,14 +116,19 @@ fn safe_profile_applies_high_confidence_normalization() {
 }
 
 #[test]
-fn safe_profile_renders_all_spoken_numbers_as_digits() {
+fn safe_profile_number_conversion_respects_the_default_threshold() {
+    // Under the default (unset) number threshold of 4, the trailing "three"
+    // is an isolated value below it and is left as a word...
     assert_eq!(
         clean(
             CleaningProfile::Safe,
             "When it asks you to press 0, 1, 2, or three."
         ),
-        "When it asks you to press 0, 1, 2, or 3."
+        "When it asks you to press 0, 1, 2, or three."
     );
+    // ...but a comma-delimited listing converts as a whole regardless of
+    // the threshold, since text2num does not treat its members as
+    // "isolated" values.
     assert_eq!(
         clean(CleaningProfile::Safe, "Zero, one, two, three, four."),
         "0, 1, 2, 3, 4."

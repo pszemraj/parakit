@@ -17,8 +17,9 @@
 
 use super::engine::{Activation, Rule, RuleKind};
 use super::passes::{
-    capitalize_sentence_starts, normalize_magnitude_suffixes, normalize_numeric_identifier_groups,
-    normalize_numeric_point_suffixes, normalize_spaced_acronyms, normalize_spoken_versions,
+    capitalize_sentence_starts, drop_dangling_connective, normalize_magnitude_suffixes,
+    normalize_numeric_identifier_groups, normalize_numeric_point_suffixes,
+    normalize_spaced_acronyms, normalize_spoken_versions,
 };
 
 macro_rules! regex_rule {
@@ -240,6 +241,12 @@ pub(crate) const DEFAULT_RULES: &[Rule] = &[
         Activation::Safe,
         r#"(?i),[ \t]*right\?"#,
         "."
+    ),
+    procedural_rule!(
+        "drop-dangling-connective",
+        "Remove a trailing connective left dangling at the end of the transcript",
+        Activation::Safe,
+        drop_dangling_connective
     ),
     // Mechanical cleanup and boundary-aware capitalization run last.
     regex_rule!(

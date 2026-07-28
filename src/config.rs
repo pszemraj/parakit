@@ -81,8 +81,10 @@ pub(crate) struct CleaningConfig {
     /// Keep the single terminal period that cleanup removes by default.
     /// CLI `--keep-trailing-period` forces this on.
     pub(crate) keep_trailing_period: Option<bool>,
-    /// Minimum isolated numeric value converted to digits. Unset or zero
-    /// converts every recognized number.
+    /// Minimum isolated numeric value converted to digits. Unset resolves
+    /// to the built-in default of 4: isolated values below 4 are left
+    /// exactly as the ASR model produced them. `0` is the explicit opt-out
+    /// that converts every recognized number.
     pub(crate) number_threshold: Option<f64>,
     /// Rule names to disable. Merged with CLI `--disable-rule` flags.
     pub(crate) disabled_rules: Vec<String>,
@@ -166,9 +168,11 @@ pub(crate) const TEMPLATE: &str = r#"# parakit config.toml
 # --keep-trailing-period forces this on.
 # keep_trailing_period = false
 
-# Minimum isolated numeric value rendered as digits. Leave unset (or set to
-# 0) to convert every recognized number. For example, 5 keeps isolated zero
-# through four as words and converts five and larger values.
+# Minimum isolated numeric value rendered as digits. Leave unset to use the
+# built-in default of 4: isolated values below the threshold are left
+# exactly as the ASR model produced them, never forced to words or digits.
+# Set to 0 to instead convert every recognized number. For example, 5 keeps
+# isolated zero through four as-is and converts five and larger values.
 # number_threshold = 5
 
 # Rule names to disable. Merged with any CLI --disable-rule flags. Run

@@ -1007,9 +1007,8 @@ fn print_config_show(quiet: bool) -> Result<()> {
         config
             .cleaning
             .number_threshold
-            .filter(|value| *value > 0.0)
             .map(|value| value.to_string())
-            .unwrap_or_else(|| "(all numbers)".to_string())
+            .unwrap_or_else(|| format!("(default: {})", rules::DEFAULT_NUMBER_THRESHOLD))
     );
     println!("    disabled_rules: {:?}", config.cleaning.disabled_rules);
     println!("  logging:");

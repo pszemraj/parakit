@@ -2,7 +2,7 @@
 
 parakit reads an optional TOML file for daemon defaults, cleaning behavior, transcription logging, the Linux hotkey backend, and user-defined cleaning rules. A missing file is valid and selects built-in defaults.
 
-A small config that pins the thread count, keeps the trailing period that cleanup drops by default, spells small numbers as words, and turns on transcription logging:
+A small config that pins the thread count, keeps the trailing period that cleanup drops by default, leaves spoken numbers below five as the model produced them, and turns on transcription logging:
 
 ```toml
 [daemon]

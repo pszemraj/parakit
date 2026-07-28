@@ -34,7 +34,8 @@ struct Cli {
     #[arg(long)]
     keep_trailing_period: bool,
 
-    /// Minimum isolated numeric value converted to digits. Omit to convert all.
+    /// Minimum isolated numeric value converted to digits. Omit to use the
+    /// built-in default of 4; pass 0 to convert every recognized number.
     #[arg(long, value_name = "VALUE")]
     number_threshold: Option<f64>,
 
@@ -80,7 +81,7 @@ struct AuditReport<'a> {
     cleaner_version: u32,
     profile: &'a str,
     drop_trailing_period: bool,
-    number_threshold: Option<f64>,
+    number_threshold: f64,
     ruleset_id: &'a str,
     rules_active: usize,
     files: usize,

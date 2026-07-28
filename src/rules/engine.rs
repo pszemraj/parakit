@@ -17,7 +17,7 @@ use std::collections::HashSet;
 
 use super::defaults::DEFAULT_RULES;
 use super::user::{compile_user_regex, validate_user_rules, RulePosition, UserRule};
-use super::{CleanResult, CleaningProfile, RuleHit, CLEANER_VERSION};
+use super::{CleanResult, CleaningProfile, RuleHit, CLEANER_VERSION, DEFAULT_NUMBER_THRESHOLD};
 
 /// Backtrack step budget for every `fancy-regex` pass. Bounds worst-case
 /// matching time for the small backreference-based subset of rules that use
@@ -258,7 +258,7 @@ pub struct Cleaner {
     rules: Vec<CompiledRule>,
     profile: CleaningProfile,
     drop_trailing_period: bool,
-    number_threshold: Option<f64>,
+    number_threshold: f64,
     ruleset_id: String,
 }
 
@@ -272,7 +272,8 @@ impl Cleaner {
     /// * `drop_trailing_period` - Enable the messaging-style terminal-period
     ///   removal rule.
     /// * `number_threshold` - Minimum isolated number converted to digits;
-    ///   `None` converts every recognized number.
+    ///   `None` resolves to [`DEFAULT_NUMBER_THRESHOLD`], and `Some(0.0)` is
+    ///   the explicit opt-out that converts every recognized number.
     /// * `disabled` - Rule names to exclude, built-in or user-defined.
     /// * `user_rules` - User-defined rules to splice into the built-in list.
     ///
@@ -355,11 +356,12 @@ impl Cleaner {
         user_rules: &[UserRule],
         backtrack_limit: usize,
     ) -> Result<Self> {
-        // Treat an explicit zero exactly like omission, including in log
-        // metadata and the ruleset fingerprint. Validation has already
+        // `None` (the key left unset) resolves to `DEFAULT_NUMBER_THRESHOLD`.
+        // An explicit `Some(0.0)` is preserved verbatim as the opt-out that
+        // converts every recognized number, so it now produces a different
+        // ruleset id than an unset threshold. Validation has already
         // rejected negative and non-finite values.
-        let number_threshold = number_threshold.filter(|value| *value > 0.0);
-        let effective_number_threshold = number_threshold.unwrap_or(0.0);
+        let number_threshold = number_threshold.unwrap_or(DEFAULT_NUMBER_THRESHOLD);
         let enabled_defaults: Vec<&'static Rule> = DEFAULT_RULES
             .iter()
             .filter(|def| {
@@ -378,7 +380,7 @@ impl Cleaner {
             rules.push(compile_default_rule(
                 def,
                 backtrack_limit,
-                effective_number_threshold,
+                number_threshold,
             )?);
         }
         push_user_rules(&mut rules, user_rules, RulePosition::Standard, disabled)?;
@@ -386,7 +388,7 @@ impl Cleaner {
             rules.push(compile_default_rule(
                 def,
                 backtrack_limit,
-                effective_number_threshold,
+                number_threshold,
             )?);
         }
         push_user_rules(&mut rules, user_rules, RulePosition::Last, disabled)?;
@@ -513,14 +515,15 @@ impl Cleaner {
         self.drop_trailing_period
     }
 
-    /// Configured minimum isolated number converted to digits.
+    /// Effective minimum isolated number converted to digits.
     ///
     /// # Returns
     ///
-    /// `None` when every recognized number is converted, otherwise the
-    /// configured positive threshold.
+    /// [`DEFAULT_NUMBER_THRESHOLD`] when the configured threshold was
+    /// unset, otherwise the configured value verbatim (including an
+    /// explicit `0.0`, which converts every recognized number).
     #[must_use]
-    pub const fn number_threshold(&self) -> Option<f64> {
+    pub const fn number_threshold(&self) -> f64 {
         self.number_threshold
     }
 
@@ -654,7 +657,7 @@ fn compute_ruleset_id(
 /// # Arguments
 ///
 /// * `threshold` - Minimum isolated numeric value rendered as digits, or
-///   `None` for the convert-all default.
+///   `None` to resolve to [`DEFAULT_NUMBER_THRESHOLD`].
 ///
 /// # Returns
 ///

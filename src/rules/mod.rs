@@ -50,7 +50,16 @@ pub use engine::Cleaner;
 pub use user::{RulePosition, UserRule};
 
 /// Schema/behavior version recorded in transcription logs.
-pub const CLEANER_VERSION: u32 = 5;
+pub const CLEANER_VERSION: u32 = 6;
+
+/// Default minimum isolated number converted to digits when
+/// `cleaning.number_threshold` is left unset.
+///
+/// An isolated number at or above this value is rendered as digits; a value
+/// strictly below it is left exactly as the ASR model produced it (never
+/// forced to words, never forced to digits). Configuring an explicit
+/// `Some(0.0)` is the opt-out that converts every recognized number.
+pub const DEFAULT_NUMBER_THRESHOLD: f64 = 4.0;
 
 /// Built-in cleanup behavior tiers.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -142,7 +151,8 @@ pub struct CleanResult {
 /// * `drop_trailing_period` - Enable the messaging-style terminal-period
 ///   removal rule.
 /// * `number_threshold` - Minimum isolated number converted to digits.
-///   `None` converts every recognized number.
+///   `None` resolves to [`DEFAULT_NUMBER_THRESHOLD`]; `Some(0.0)` is the
+///   explicit opt-out that converts every recognized number.
 /// * `disabled_rules` - Rule names supplied by repeated `--disable-rule`
 ///   and/or `cleaning.disabled_rules` in `config.toml`. May name a built-in
 ///   or a user rule.

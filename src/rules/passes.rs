@@ -562,6 +562,115 @@ fn unchanged(input: &str) -> TransformResult {
     }
 }
 
+/// Whole words treated as a dangling trailing connective by
+/// [`drop_dangling_connective`]. Case-insensitive, matched only as a
+/// complete word. Deliberately tight: adding a word here removes it
+/// whenever it is the very last word of a transcript, so only genuinely
+/// unambiguous connectives belong on this list.
+const DANGLING_CONNECTIVES: &[&str] = &["so", "but", "and", "or", "because"];
+
+fn is_dangling_connective(word: &str) -> bool {
+    DANGLING_CONNECTIVES
+        .iter()
+        .any(|candidate| word.eq_ignore_ascii_case(candidate))
+}
+
+/// Remove a trailing connective (`so`, `but`, `and`, `or`, `because`) left
+/// dangling at the very end of a transcript, chaining through any further
+/// trailing connectives, as long as the sentence content underneath still
+/// ends with real sentence-ending punctuation.
+///
+/// Dictation often ends with a stranded conjunction (e.g. `"The build is
+/// green. But"`) that connects to nothing and should be dropped, keeping
+/// the punctuation that already closed the previous sentence. Scanning
+/// backward from the end of the input, this repeatedly strips one trailing
+/// connective word at a time -- which is what lets a chain such as `"It
+/// works. And so."` fully resolve to `"It works."` -- but only commits once
+/// the content underneath the whole chain (a) contains at least one
+/// alphanumeric character and (b) ends with one of `. ! ? , ; :`; a bare
+/// trailing connective with no reachable prior punctuation (including a
+/// transcript that is nothing but a lone connective) is ambiguous and is
+/// left untouched. A trailing `,`, `;`, or `:` immediately under the chain
+/// is promoted to `.`; a trailing `.`, `!`, or `?` is kept as-is. Any
+/// punctuation directly trailing the connective chain itself (e.g. the
+/// period in `"so."`) is discarded, since the kept punctuation always comes
+/// from what precedes the chain.
+///
+/// # Returns
+///
+/// A [`TransformResult`] with the trailing connective(s) removed and
+/// `matches` set to the number of connective words dropped.
+///
+/// # Errors
+///
+/// This function is infallible: it returns [`TransformResult`], not
+/// `Result`, and never returns an `Err`.
+///
+/// # Panics
+///
+/// Does not panic in practice. The one `.expect()` is guarded by the
+/// immediately preceding emptiness check, which is what it documents. Every
+/// byte offset used for slicing comes from `char_indices` on `input` or a
+/// prefix of it, or from `len_utf8` of a character read out of that same
+/// text, so all of them are valid UTF-8 boundaries of `input`.
+pub(crate) fn drop_dangling_connective(input: &str) -> TransformResult {
+    let mut cursor = input.trim_end().len();
+
+    // The connective chain's own trailing punctuation (e.g. the period in
+    // "so.") does not influence the kept punctuation, which always comes
+    // from what precedes the chain, so it is simply discarded here.
+    if let Some(last) = input[..cursor].chars().next_back() {
+        if ".!?,;:".contains(last) {
+            cursor -= last.len_utf8();
+        }
+    }
+
+    let mut removed = 0usize;
+    loop {
+        let head = input[..cursor].trim_end();
+        let word_start = head
+            .char_indices()
+            .rev()
+            .find_map(|(index, character)| {
+                (!character.is_alphabetic()).then_some(index + character.len_utf8())
+            })
+            .unwrap_or(0);
+        if !is_dangling_connective(&head[word_start..]) {
+            break;
+        }
+        removed += 1;
+        cursor = word_start;
+    }
+
+    if removed == 0 {
+        return unchanged(input);
+    }
+
+    let root = input[..cursor].trim_end();
+    if root.is_empty() || !root.chars().any(char::is_alphanumeric) {
+        return unchanged(input);
+    }
+    let last = root
+        .chars()
+        .next_back()
+        .expect("root is non-empty, checked above");
+
+    let mut text = String::with_capacity(root.len());
+    match last {
+        '.' | '!' | '?' => text.push_str(root),
+        ',' | ';' | ':' => {
+            text.push_str(&root[..root.len() - last.len_utf8()]);
+            text.push('.');
+        }
+        _ => return unchanged(input),
+    }
+
+    TransformResult {
+        text,
+        matches: removed,
+    }
+}
+
 /// Capitalize the first letter of each true sentence while leaving
 /// non-sentence-start tokens untouched.
 ///
