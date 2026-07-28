@@ -66,7 +66,7 @@ pub struct UserRule {
     /// Unique rule name. Must not have surrounding whitespace or collide
     /// with a built-in rule name or another user rule name.
     pub name: String,
-    /// Optional human-readable description, shown by `--list-rules`.
+    /// Optional human-readable description, shown by `parakit rules list`.
     pub description: Option<String>,
     /// Rust `regex` crate pattern (same dialect as built-in `regex`-engine
     /// rules).

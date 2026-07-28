@@ -1,7 +1,6 @@
 //! Application entry point and top-level command dispatch for the `parakit` binary.
 
 use anyhow::{Context, Result};
-use clap::Parser;
 use crossbeam_channel::{bounded, unbounded};
 use parakit::audio_file::prepare_wav_for_model;
 use parakit::data_log::DataLogger;
@@ -19,7 +18,10 @@ use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crate::cli::{CacheCli, CacheCommand, Cli, Commands, ConfigCli, ConfigCommand};
+use crate::cli::{
+    self, CacheCli, CacheCommand, Cli, Commands, ConfigCli, ConfigCommand, DoctorCli, RulesArgs,
+    RulesCli, RulesCommand, StartCli,
+};
 use crate::config::{self, ConfigFile};
 use crate::daemon;
 use crate::daemon::audio::AudioCapture;
@@ -62,171 +64,195 @@ pub(crate) fn run() -> Result<()> {
     #[cfg(target_os = "linux")]
     daemon::audio::alsa::install_error_silencer();
 
-    let cli = Cli::parse();
+    let cli = cli::parse_cli();
     // Unconditional, CLI-only pass: keeps native ggml log filtering behavior
     // unchanged for the commands below that must not depend on config
     // parsing (see the load-order comment above the post-dispatch
-    // `config::load()` call). `doctor` and the post-dispatch daemon
-    // bootstrap path re-run this once config is available so a config
+    // `config::load()` call). `doctor`, `rules`, and the daemon bootstrap
+    // path re-run this once config is available so a config
     // `daemon.verbose = true` also takes effect.
     configure_native_logging(cli.verbose);
 
     // `fetch`, `cache`, `config`, `status`, `stop`, `paste-last`,
     // `copy-last`, `history`, and `test-paste` must keep working even when
     // the user's config file is broken (missing, bad TOML, invalid user
-    // rule), so none of these branches touch `config::load()`. `doctor` is
-    // the one dispatch-block exception: it loads config itself below
-    // because it reports the same effective hotkey/paste-mode values the
-    // daemon would use.
-    if let Some(command) = &cli.command {
-        match command {
-            Commands::Fetch(fetch_cli) => {
-                fetch::run(FetchOptions {
-                    force: fetch_cli.force,
-                    quiet: cli.quiet,
-                    verbose: cli.verbose,
-                    source: if fetch_cli.from_source {
-                        FetchSource::OfficialNemo {
-                            keep_nemo: fetch_cli.keep_nemo,
-                            keep_f16: fetch_cli.keep_f16,
-                        }
-                    } else {
-                        FetchSource::HostedQ8
-                    },
-                })?;
-                return Ok(());
-            }
-            Commands::Cache(cache_cli) => {
-                run_cache_command(cache_cli, cli.quiet)?;
-                return Ok(());
-            }
-            Commands::Config(config_cli) => {
-                run_config_command(config_cli, cli.quiet)?;
-                return Ok(());
-            }
-            Commands::Doctor(doctor_cli) => {
-                let config = config::load()?;
-                configure_native_logging(cli.effective_verbose(&config));
-                let paste_mode = cli.effective_paste_mode(&config);
-                #[cfg(target_os = "linux")]
-                let hotkey_backend = cli.effective_hotkey_backend(&config);
-                #[cfg(not(target_os = "linux"))]
-                let hotkey_backend = HotkeyBackend::Auto;
-                let ok = daemon::preflight::print_doctor(
-                    cli.quiet,
-                    cli.effective_verbose(&config),
-                    paste_mode,
-                    doctor_cli.deep,
-                    hotkey_backend,
-                );
-                if ok {
-                    return Ok(());
-                }
-                std::process::exit(1);
-            }
-            Commands::Status => {
-                daemon::ipc::run_client(daemon::ipc::IpcCommand::Status, cli.quiet, cli.verbose)?;
-                return Ok(());
-            }
-            Commands::Stop => {
-                daemon::ipc::run_client(daemon::ipc::IpcCommand::Stop, cli.quiet, cli.verbose)?;
-                return Ok(());
-            }
-            Commands::PasteLast(history_ref) => {
-                let index = wire_history_index(history_ref.index)?;
-                daemon::ipc::run_client(
-                    daemon::ipc::IpcCommand::PasteLast { index },
-                    cli.quiet,
-                    cli.verbose,
-                )?;
-                return Ok(());
-            }
-            Commands::CopyLast(history_ref) => {
-                let index = wire_history_index(history_ref.index)?;
-                daemon::ipc::run_client(
-                    daemon::ipc::IpcCommand::CopyLast { index },
-                    cli.quiet,
-                    cli.verbose,
-                )?;
-                return Ok(());
-            }
-            Commands::History(history_cli) => {
-                let limit = wire_history_limit(history_cli.limit)?;
-                daemon::ipc::run_client(
-                    daemon::ipc::IpcCommand::History { limit },
-                    cli.quiet,
-                    cli.verbose,
-                )?;
-                return Ok(());
-            }
-            Commands::TestPaste(test_paste) => {
-                daemon::ipc::run_client(
-                    daemon::ipc::IpcCommand::TestPaste {
-                        text: test_paste.text.clone(),
-                    },
-                    cli.quiet,
-                    cli.verbose,
-                )?;
-                return Ok(());
-            }
+    // rule), so none of these branches touch `config::load()`. `doctor` and
+    // `rules` are the dispatch-block exceptions: they load config
+    // themselves below because they report/apply the same effective values
+    // the daemon would use.
+    match &cli.command {
+        Some(Commands::Fetch(fetch_cli)) => {
+            fetch::run(FetchOptions {
+                force: fetch_cli.force,
+                quiet: cli.quiet,
+                verbose: cli.verbose,
+                source: if fetch_cli.from_source {
+                    FetchSource::OfficialNemo {
+                        keep_nemo: fetch_cli.keep_nemo,
+                        keep_f16: fetch_cli.keep_f16,
+                    }
+                } else {
+                    FetchSource::HostedQ8
+                },
+            })?;
+            Ok(())
         }
+        Some(Commands::Cache(cache_cli)) => run_cache_command(cache_cli, cli.quiet),
+        Some(Commands::Config(config_cli)) => run_config_command(config_cli, cli.quiet),
+        Some(Commands::Doctor(doctor_cli)) => run_doctor(&cli, doctor_cli),
+        Some(Commands::Rules(rules_cli)) => run_rules_command(&cli, rules_cli),
+        Some(Commands::Status) => {
+            daemon::ipc::run_client(daemon::ipc::IpcCommand::Status, cli.quiet, cli.verbose)
+        }
+        Some(Commands::Stop) => {
+            daemon::ipc::run_client(daemon::ipc::IpcCommand::Stop, cli.quiet, cli.verbose)
+        }
+        Some(Commands::PasteLast(history_ref)) => {
+            let index = wire_history_index(history_ref.index)?;
+            daemon::ipc::run_client(
+                daemon::ipc::IpcCommand::PasteLast { index },
+                cli.quiet,
+                cli.verbose,
+            )
+        }
+        Some(Commands::CopyLast(history_ref)) => {
+            let index = wire_history_index(history_ref.index)?;
+            daemon::ipc::run_client(
+                daemon::ipc::IpcCommand::CopyLast { index },
+                cli.quiet,
+                cli.verbose,
+            )
+        }
+        Some(Commands::History(history_cli)) => {
+            let limit = wire_history_limit(history_cli.limit)?;
+            daemon::ipc::run_client(
+                daemon::ipc::IpcCommand::History { limit },
+                cli.quiet,
+                cli.verbose,
+            )
+        }
+        Some(Commands::TestPaste(test_paste)) => daemon::ipc::run_client(
+            daemon::ipc::IpcCommand::TestPaste {
+                text: test_paste.text.clone(),
+            },
+            cli.quiet,
+            cli.verbose,
+        ),
+        Some(Commands::Start(start)) => run_daemon(&cli, start),
+        None => run_daemon(&cli, &StartCli::default()),
     }
+}
 
-    // Beyond this point: `--list-rules`, `--test-rules`,
-    // `--simulate-ptt-audio`, and full daemon bootstrap. All of these merge
-    // CLI flags with the config file, loaded once here.
+/// Run the `doctor` preflight checks.
+///
+/// Loads config itself (unlike most other subcommands) because it reports
+/// the same effective hotkey/paste-mode values the daemon would use.
+///
+/// # Errors
+///
+/// Returns an error when the config file fails to load or parse.
+fn run_doctor(cli: &Cli, doctor_cli: &DoctorCli) -> Result<()> {
     let config = config::load()?;
     configure_native_logging(cli.effective_verbose(&config));
-    let log = Arc::new(Logger::new(log_level(&cli, &config)));
-    let notifier = Notifier::new(Arc::clone(&log));
+    let paste_mode = doctor_cli.effective_paste_mode(&config);
     #[cfg(target_os = "linux")]
-    let hotkey_backend = cli.effective_hotkey_backend(&config);
+    let hotkey_backend = doctor_cli.effective_hotkey_backend(&config);
     #[cfg(not(target_os = "linux"))]
     let hotkey_backend = HotkeyBackend::Auto;
-    let paste_mode = cli.effective_paste_mode(&config);
-
-    // Special command modes: print rules / test rules.
-    if cli.list_rules {
-        if !cli.quiet {
-            rules::print_rule_list(
-                cli.effective_cleaning_profile(&config),
-                cli.effective_drops_trailing_period(&config),
-                &cli.effective_disabled_rules(&config),
-                &config.rules.user,
-            )?;
-        }
+    let ok = daemon::preflight::print_doctor(
+        cli.quiet,
+        cli.effective_verbose(&config),
+        paste_mode,
+        doctor_cli.deep,
+        hotkey_backend,
+    );
+    if ok {
         return Ok(());
     }
-    if let Some(input) = &cli.test_rules {
-        let cleaner = build_cli_cleaner(&cli, &config)?;
-        let raw = input.as_str();
-        let cleaned = cleaner.as_ref().map(|c| c.clean(raw));
-        if !cli.quiet {
-            println!("Raw:     {}", raw);
-            match &cleaned {
-                Some(result) => {
-                    println!("Clean:   {}", result.text);
-                    if let Some(failure) = &result.failure {
-                        eprintln!("parakit: cleaning failed, raw text kept: {failure}");
-                    } else if !result.rules_fired.is_empty() {
-                        let fired: Vec<String> = result
-                            .rules_fired
-                            .iter()
-                            .map(|hit| format!("{}x{}", hit.name, hit.matches))
-                            .collect();
-                        println!("Rules:   {}", fired.join(", "));
-                    }
-                }
-                None => println!("Clean:   <cleaning disabled>"),
+    std::process::exit(1);
+}
+
+/// Run `rules list` or `rules test`, defaulting to `list` when no rules
+/// subcommand is given.
+///
+/// Loads config itself (unlike most other subcommands) for the same reason
+/// as `doctor`: it needs `cleaning.profile`/`cleaning.disabled_rules`
+/// fallbacks and `[[rules.user]]` entries.
+///
+/// # Errors
+///
+/// Returns an error when the config file fails to load or parse, or when an
+/// unknown rule name is disabled or a user rule is invalid.
+fn run_rules_command(cli: &Cli, rules_cli: &RulesCli) -> Result<()> {
+    let config = config::load()?;
+    configure_native_logging(cli.effective_verbose(&config));
+    let default_command = RulesCommand::List(RulesArgs::default());
+    match rules_cli.command.as_ref().unwrap_or(&default_command) {
+        RulesCommand::List(args) => {
+            if !cli.quiet {
+                rules::print_rule_list(
+                    args.effective_cleaning_profile(&config),
+                    args.effective_drops_trailing_period(&config),
+                    &args.effective_disabled_rules(&config),
+                    &config.rules.user,
+                )?;
             }
+            Ok(())
         }
-        return Ok(());
+        RulesCommand::Test { input, args } => {
+            let cleaner = build_rules_cleaner(args, &config)?;
+            let raw = input.as_str();
+            let cleaned = cleaner.as_ref().map(|c| c.clean(raw));
+            if !cli.quiet {
+                println!("Raw:     {}", raw);
+                match &cleaned {
+                    Some(result) => {
+                        println!("Clean:   {}", result.text);
+                        if let Some(failure) = &result.failure {
+                            eprintln!("parakit: cleaning failed, raw text kept: {failure}");
+                        } else if !result.rules_fired.is_empty() {
+                            let fired: Vec<String> = result
+                                .rules_fired
+                                .iter()
+                                .map(|hit| format!("{}x{}", hit.name, hit.matches))
+                                .collect();
+                            println!("Rules:   {}", fired.join(", "));
+                        }
+                    }
+                    None => println!("Clean:   <cleaning disabled>"),
+                }
+            }
+            Ok(())
+        }
     }
-    if let Some(audio_path) = &cli.simulate_ptt_audio {
-        return run_ptt_audio_simulation(&cli, &config, Arc::clone(&log), audio_path);
+}
+
+/// Run the push-to-talk daemon: the full startup sequence when no
+/// subcommand is given, or when `start` is given explicitly.
+///
+/// # Errors
+///
+/// Returns an error when config loading, model loading, audio setup, or
+/// daemon startup fails.
+fn run_daemon(cli: &Cli, start: &StartCli) -> Result<()> {
+    // Beyond this point: `--simulate-ptt-audio` and full daemon bootstrap.
+    // All of these merge CLI flags with the config file, loaded once here.
+    let config = config::load()?;
+    let verbose = cli.effective_verbose(&config);
+    configure_native_logging(verbose);
+    let log = Arc::new(Logger::new(log_level(cli, &config)));
+    let notifier = Notifier::new(Arc::clone(&log));
+    #[cfg(target_os = "linux")]
+    let hotkey_backend = start.effective_hotkey_backend(&config);
+    #[cfg(not(target_os = "linux"))]
+    let hotkey_backend = HotkeyBackend::Auto;
+    let paste_mode = start.effective_paste_mode(&config);
+
+    if let Some(audio_path) = &start.simulate_ptt_audio {
+        return run_ptt_audio_simulation(cli, start, &config, Arc::clone(&log), audio_path);
     }
 
-    if let Some(path) = cli.effective_model(&config) {
+    if let Some(path) = start.effective_model(&config) {
         if !path.is_file() {
             return Err(anyhow::anyhow!(
                 "model path is not a file: {}",
@@ -253,10 +279,10 @@ pub(crate) fn run() -> Result<()> {
     daemon::inject::preflight(paste_mode).context("text insertion preflight failed")?;
     log.verbose("parakit: insertion preflight passed");
     let ipc_state = Arc::new(daemon::ipc::SharedState::with_history_limit(
-        cli.effective_transcript_history(&config),
+        start.effective_transcript_history(&config),
     ));
-    let keep_transcript_clipboard = cli.effective_keep_transcript_clipboard(&config);
-    let log_dir = cli.effective_log_dir(&config);
+    let keep_transcript_clipboard = start.effective_keep_transcript_clipboard(&config);
+    let log_dir = start.effective_log_dir(&config);
     let data_log = log_dir.clone().map(|dir| Arc::new(DataLogger::new(dir)));
     #[cfg(any(unix, target_os = "windows"))]
     let _ipc_server = daemon::ipc::spawn_server(
@@ -267,8 +293,8 @@ pub(crate) fn run() -> Result<()> {
     )
     .context("start daemon control socket")?;
 
-    let cleaner = build_cli_cleaner(&cli, &config)?.map(Arc::new);
-    let sounds_enabled = cli.effective_sounds_enabled(&config);
+    let cleaner = build_cli_cleaner(start, &config)?.map(Arc::new);
+    let sounds_enabled = start.effective_sounds_enabled(&config);
     let sounds = Sounds::new(sounds_enabled);
 
     let capture = AudioCapture::open(Arc::clone(&log), notifier.clone())?;
@@ -282,7 +308,7 @@ pub(crate) fn run() -> Result<()> {
         model_path,
         engine,
         device_summary,
-    } = open_cli_engine(&cli, &config, cli.quiet, &log)?;
+    } = open_cli_engine(start, &config, verbose, cli.quiet, &log)?;
     let model_dtype = model_dtype_label(&model_path);
 
     // Banner.
@@ -502,13 +528,15 @@ fn warn_about_bluetooth_mic_if_needed(log: &Logger, mic_info: &daemon::audio::Mi
 
 fn run_ptt_audio_simulation(
     cli: &Cli,
+    start: &StartCli,
     config: &ConfigFile,
     log: Arc<Logger>,
     audio_path: &Path,
 ) -> Result<()> {
-    let paste_mode = cli.effective_paste_mode(config);
-    let cleaner = build_cli_cleaner(cli, config)?.map(Arc::new);
-    let data_log = cli
+    let verbose = cli.effective_verbose(config);
+    let paste_mode = start.effective_paste_mode(config);
+    let cleaner = build_cli_cleaner(start, config)?.map(Arc::new);
+    let data_log = start
         .effective_log_dir(config)
         .map(|dir| Arc::new(DataLogger::new(dir)));
     let sounds = Sounds::new(false);
@@ -525,12 +553,8 @@ fn run_ptt_audio_simulation(
         wav.samples.len()
     ));
 
-    let OpenedEngine { engine, .. } = open_cli_engine(
-        cli,
-        config,
-        cli.quiet || !cli.effective_verbose(config),
-        &log,
-    )?;
+    let OpenedEngine { engine, .. } =
+        open_cli_engine(start, config, verbose, cli.quiet || !verbose, &log)?;
 
     let msg = format!(
         "parakit: simulating PTT from {} ({audio_secs:.2}s, {source_rate} Hz source)",
@@ -549,7 +573,7 @@ fn run_ptt_audio_simulation(
         notifier: Notifier::new(Arc::new(Logger::new(LogLevel::Quiet))),
         state: Arc::new(daemon::ipc::SharedState::new()),
         paste_mode,
-        keep_transcript_clipboard: cli.effective_keep_transcript_clipboard(config),
+        keep_transcript_clipboard: start.effective_keep_transcript_clipboard(config),
         insert_transcripts: false,
         rx,
     });
@@ -572,13 +596,28 @@ fn run_ptt_audio_simulation(
     Ok(())
 }
 
-fn build_cli_cleaner(cli: &Cli, config: &ConfigFile) -> Result<Option<rules::Cleaner>> {
+fn build_cli_cleaner(start: &StartCli, config: &ConfigFile) -> Result<Option<rules::Cleaner>> {
     rules::build_cleaner(
-        !cli.effective_cleaning_enabled(config),
-        cli.effective_cleaning_profile(config),
-        cli.effective_drops_trailing_period(config),
+        !start.effective_cleaning_enabled(config),
+        start.effective_cleaning_profile(config),
+        start.effective_drops_trailing_period(config),
         config.cleaning.number_threshold,
-        &cli.effective_disabled_rules(config),
+        &start.effective_disabled_rules(config),
+        &config.rules.user,
+    )
+}
+
+/// Build the cleaner for `rules list`/`rules test`. Unlike [`build_cli_cleaner`],
+/// cleaning is never disabled here: there is no `--cleaning`/`--no-cleaning`
+/// under `rules`, since testing or listing rules with cleaning off is
+/// meaningless.
+fn build_rules_cleaner(args: &RulesArgs, config: &ConfigFile) -> Result<Option<rules::Cleaner>> {
+    rules::build_cleaner(
+        false,
+        args.effective_cleaning_profile(config),
+        args.effective_drops_trailing_period(config),
+        config.cleaning.number_threshold,
+        &args.effective_disabled_rules(config),
         &config.rules.user,
     )
 }
@@ -594,14 +633,14 @@ fn model_dtype_label(path: &std::path::Path) -> String {
 }
 
 fn open_cli_engine(
-    cli: &Cli,
+    start: &StartCli,
     config: &ConfigFile,
+    verbose: bool,
     fetch_quiet: bool,
     log: &Logger,
 ) -> Result<OpenedEngine> {
-    let verbose = cli.effective_verbose(config);
     let engine_config = resolve_engine_config(
-        cli,
+        start,
         config,
         || fetch::ensure_default_model_with_verbosity(fetch_quiet, verbose),
         log,
@@ -647,7 +686,7 @@ struct EngineConfig {
 }
 
 fn resolve_engine_config<F>(
-    cli: &Cli,
+    start: &StartCli,
     config: &ConfigFile,
     fetch_default_model: F,
     log: &Logger,
@@ -655,13 +694,13 @@ fn resolve_engine_config<F>(
 where
     F: FnOnce() -> Result<PathBuf>,
 {
-    resolve_engine_config_with_validator(cli, config, fetch_default_model, |device_mode| {
+    resolve_engine_config_with_validator(start, config, fetch_default_model, |device_mode| {
         validate_device_request(device_mode, log)
     })
 }
 
 fn resolve_engine_config_with_validator<F, V>(
-    cli: &Cli,
+    start: &StartCli,
     config: &ConfigFile,
     fetch_default_model: F,
     validate_device: V,
@@ -670,13 +709,13 @@ where
     F: FnOnce() -> Result<PathBuf>,
     V: FnOnce(DeviceMode) -> Result<()>,
 {
-    let device_mode = cli.effective_device(config);
+    let device_mode = start.effective_device(config);
     validate_device(device_mode)?;
-    let model_path = match cli.effective_model(config) {
+    let model_path = match start.effective_model(config) {
         Some(path) => path,
         None => fetch_default_model()?,
     };
-    let threads = cli
+    let threads = start
         .effective_threads(config)
         .map(NonZeroUsize::get)
         .unwrap_or_else(default_thread_count);
@@ -1078,6 +1117,7 @@ fn edit_config_file() -> Result<()> {
 #[cfg(test)]
 mod app_tests {
     use super::*;
+    use clap::Parser as _;
 
     const GGML_LOG_LEVEL_DEBUG: i32 = 1;
     const GGML_LOG_LEVEL_INFO: i32 = 2;
@@ -1185,12 +1225,15 @@ mod app_tests {
 
     #[test]
     fn explicit_gpu_validation_runs_before_default_model_fetch() {
-        let cli = Cli::parse_from(["parakit", "--device", "gpu"]);
+        let start = match Cli::parse_from(["parakit", "start", "--device", "gpu"]).command {
+            Some(Commands::Start(start)) => start,
+            other => panic!("expected Commands::Start, got {other:?}"),
+        };
         let config = ConfigFile::default();
         let fetched_default = std::cell::Cell::new(false);
 
         let err = resolve_engine_config_with_validator(
-            &cli,
+            &start,
             &config,
             || {
                 fetched_default.set(true);

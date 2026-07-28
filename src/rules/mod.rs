@@ -222,7 +222,7 @@ pub fn assert_rule_name_exists(name: &str, user_rules: &[UserRule]) -> Result<()
         Ok(())
     } else {
         Err(anyhow!(
-            "no rule named '{}'. Run with --list-rules to see all rules.",
+            "no rule named '{}'. Run `parakit rules list` to see all rules.",
             name
         ))
     }

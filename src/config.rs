@@ -179,7 +179,7 @@ pub(crate) const TEMPLATE: &str = r#"# parakit config.toml
 # number_threshold = 5
 
 # Rule names to disable. Merged with any CLI --disable-rule flags. Run
-# `parakit --list-rules` to see all built-in and user rule names.
+# `parakit rules list` to see all built-in and user rule names.
 # disabled_rules = ["fix-trailing-period"]
 
 [logging]
@@ -324,8 +324,8 @@ pub(crate) fn load_from_path(path: &Path) -> Result<ConfigFile> {
 /// Reuses [`parakit::rules::build_cleaner`] with the configured
 /// `cleaning.disabled_rules` (not an empty slice), so load-time errors —
 /// including an unknown name in `disabled_rules` — are worded identically
-/// to the errors `--test-rules` or daemon startup would report for the same
-/// rule set.
+/// to the errors `parakit rules test` or daemon startup would report for the
+/// same rule set.
 ///
 /// # Errors
 ///

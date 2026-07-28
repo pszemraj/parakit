@@ -8,12 +8,12 @@ const REGISTERED_LINUX_FIX: &str = "fix:
       gsettings get org.gnome.desktop.wm.keybindings switch-input-source
       gsettings get org.gnome.desktop.wm.keybindings switch-input-source-backward
   - Re-run: parakit doctor
-  - The experimental evdev/uinput keyboard proxy is available with: parakit --hotkey-backend evdev-proxy";
+  - The experimental evdev/uinput keyboard proxy is available with: parakit start --hotkey-backend evdev-proxy";
 
 #[cfg(target_os = "linux")]
 const X11_LISTEN_LINUX_FIX: &str = "fix:
   - Use an X11 session; Wayland is intentionally rejected.
-  - Re-run: parakit --hotkey-backend x11-listen
+  - Re-run: parakit start --hotkey-backend x11-listen
   - This backend passively listens only; it does not grab, suppress, or forward keyboard events.";
 
 #[cfg(target_os = "linux")]
@@ -77,7 +77,7 @@ pub(crate) fn x11_listen_linux_failure_help() -> String {
         "The x11-listen backend passively observes Ctrl+Space with rdev::listen.\n\
          Current session: XDG_SESSION_TYPE={session}, DISPLAY={display}\n\
          Checks:\n\
-           parakit --verbose --hotkey-backend x11-listen doctor\n\
+           parakit doctor --verbose --hotkey-backend x11-listen\n\
          {X11_LISTEN_LINUX_FIX}"
     )
 }
@@ -149,6 +149,6 @@ fn linux_session_context() -> (String, String) {
 #[cfg(target_os = "linux")]
 fn evdev_linux_fix(user: &str) -> String {
     format!(
-        "fix:\n  - Grant the desktop user read access to /dev/input/event*:\n      sudo usermod -aG input {user}\n  - Ensure /dev/uinput is writable by the desktop user. On many distros this needs a uinput udev rule.\n  - After changing groups or udev rules, log out completely and log back in, or reboot.\n  - Verify the fresh session:\n      id -nG | tr ' ' '\\n' | grep '^input$'\n      ls -l /dev/uinput /dev/input/event* | head\n  - Then run: parakit --hotkey-backend evdev-proxy\n  - Do not run parakit with sudo; audio, clipboard, and insertion belong to the desktop user."
+        "fix:\n  - Grant the desktop user read access to /dev/input/event*:\n      sudo usermod -aG input {user}\n  - Ensure /dev/uinput is writable by the desktop user. On many distros this needs a uinput udev rule.\n  - After changing groups or udev rules, log out completely and log back in, or reboot.\n  - Verify the fresh session:\n      id -nG | tr ' ' '\\n' | grep '^input$'\n      ls -l /dev/uinput /dev/input/event* | head\n  - Then run: parakit start --hotkey-backend evdev-proxy\n  - Do not run parakit with sudo; audio, clipboard, and insertion belong to the desktop user."
     )
 }

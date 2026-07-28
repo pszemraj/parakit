@@ -45,7 +45,7 @@ pub(crate) enum Activation {
 }
 
 impl Activation {
-    /// Label shown in the `--list-rules` tier column.
+    /// Label shown in the `parakit rules list` tier column.
     ///
     /// # Returns
     ///
@@ -94,7 +94,7 @@ pub(crate) enum EngineKind {
 }
 
 impl EngineKind {
-    /// Label shown in the `--list-rules` engine column.
+    /// Label shown in the `parakit rules list` engine column.
     ///
     /// # Returns
     ///
