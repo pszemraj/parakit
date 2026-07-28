@@ -511,6 +511,30 @@ impl FocusSnapshot {
         self.macos.ax_element()
     }
 
+    /// Reacquire and read the current focused macOS Accessibility value.
+    ///
+    /// # Arguments
+    ///
+    /// * `max_utf16_units` - Maximum number of UTF-16 code units copied from
+    ///   the complete value.
+    ///
+    /// # Returns
+    ///
+    /// The current bounded value and whether the live Accessibility object
+    /// is identical to the originally captured one.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err(())` when the frontmost application changed or its focus
+    /// state cannot be read.
+    #[cfg(target_os = "macos")]
+    pub(crate) fn macos_poll_current_value(
+        &self,
+        max_utf16_units: usize,
+    ) -> Result<Option<(PasteTargetValue, bool)>, ()> {
+        self.macos.poll_current_value(max_utf16_units)
+    }
+
     /// Return the pid of the frontmost application this snapshot captured.
     ///
     /// # Returns

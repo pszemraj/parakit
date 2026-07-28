@@ -8,7 +8,10 @@
 //! Accessibility cannot expose a focused element on either side, matching
 //! falls back to frontmost-application pid + bundle identifier.
 
-use crate::daemon::desktop::{clipboard_restore::PasteTargetValue, FocusVerification};
+use crate::daemon::desktop::{
+    clipboard_restore::{PasteTargetSelection, PasteTargetValue},
+    FocusVerification,
+};
 use anyhow::{bail, Context, Result};
 use objc2::msg_send;
 use objc2::rc::autoreleasepool;
@@ -19,6 +22,7 @@ use std::sync::OnceLock;
 
 type AXError = i32;
 type AXUIElementRef = *mut c_void;
+type AXValueType = u32;
 type Boolean = u8;
 type CFAllocatorRef = *const c_void;
 type CFIndex = isize;
@@ -34,6 +38,7 @@ struct CFRange {
 }
 
 const K_AX_ERROR_SUCCESS: AXError = 0;
+const K_AX_VALUE_CF_RANGE_TYPE: AXValueType = 4;
 const K_CF_STRING_ENCODING_UTF8: u32 = 0x0800_0100;
 
 #[link(name = "ApplicationServices", kind = "framework")]
@@ -44,6 +49,12 @@ extern "C" {
         attribute: CFStringRef,
         value: *mut CFTypeRef,
     ) -> AXError;
+    fn AXValueGetType(value: CFTypeRef) -> AXValueType;
+    fn AXValueGetValue(
+        value: CFTypeRef,
+        value_type: AXValueType,
+        value_ptr: *mut c_void,
+    ) -> Boolean;
 }
 
 #[link(name = "CoreFoundation", kind = "framework")]
@@ -98,6 +109,11 @@ fn ax_focused_ui_element_attribute() -> CFStringRef {
 fn ax_value_attribute() -> CFStringRef {
     static CACHE: OnceLock<usize> = OnceLock::new();
     cached_ax_attribute(&CACHE, "AXValue")
+}
+
+fn ax_selected_text_range_attribute() -> CFStringRef {
+    static CACHE: OnceLock<usize> = OnceLock::new();
+    cached_ax_attribute(&CACHE, "AXSelectedTextRange")
 }
 
 /// Owning handle to a single retained Core Foundation object copied from an
@@ -211,10 +227,11 @@ impl AxElementSnapshot {
         if unsafe { CFGetTypeID(handle.as_cftype()) } != unsafe { CFStringGetTypeID() } {
             return Ok(None);
         }
-        Ok(cfstring_to_bounded_value(
-            handle.as_cftype().cast(),
-            max_utf16_units,
-        ))
+        let mut observation = cfstring_to_bounded_value(handle.as_cftype().cast(), max_utf16_units);
+        if let Some(observation) = observation.as_mut() {
+            observation.selection = copy_ax_text_selection(element);
+        }
+        Ok(observation)
     }
 }
 
@@ -299,6 +316,46 @@ impl MacOsFocusSnapshot {
     /// focused element, etc. — see [`Self::capture`]).
     pub(crate) fn ax_element(&self) -> Option<&AxElementSnapshot> {
         self.ax.as_ref()
+    }
+
+    /// Reacquire the live focused Accessibility element and read its value.
+    ///
+    /// Safari/WebKit may replace a focused Accessibility object while
+    /// updating an editable field. Reacquiring lets paste acknowledgement
+    /// continue across that replacement without treating a dead captured
+    /// object as proof that insertion failed.
+    ///
+    /// # Arguments
+    ///
+    /// * `max_utf16_units` - Maximum total UTF-16 code units copied from the
+    ///   Accessibility value.
+    ///
+    /// # Returns
+    ///
+    /// The current bounded value and whether its Accessibility object is
+    /// identical to the one captured in this snapshot. `None` means the same
+    /// application is still frontmost but exposes no readable focused value.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err(())` if the frontmost application changed or cannot be
+    /// read.
+    pub(crate) fn poll_current_value(
+        &self,
+        max_utf16_units: usize,
+    ) -> Result<Option<(PasteTargetValue, bool)>, ()> {
+        let current = frontmost_application_window().map_err(|_| ())?;
+        if self.pid != current.pid || self.bundle_identifier != current.bundle_identifier {
+            return Err(());
+        }
+        let Some(current_element) = current.ax.as_ref() else {
+            return Ok(None);
+        };
+        let same_element =
+            ax_identity_equal(self.ax.as_ref(), Some(current_element)).unwrap_or(false);
+        current_element
+            .poll_value(max_utf16_units)
+            .map(|value| value.map(|value| (value, same_element)))
     }
 }
 
@@ -402,6 +459,32 @@ fn ax_value_is_string(element: AXUIElementRef) -> bool {
     unsafe { CFGetTypeID(handle.as_cftype()) == CFStringGetTypeID() }
 }
 
+fn copy_ax_text_selection(element: AXUIElementRef) -> Option<PasteTargetSelection> {
+    let handle = copy_ax_element(element, ax_selected_text_range_attribute())?;
+    if unsafe { AXValueGetType(handle.as_cftype()) } != K_AX_VALUE_CF_RANGE_TYPE {
+        return None;
+    }
+
+    let mut range = CFRange {
+        location: 0,
+        length: 0,
+    };
+    let copied = unsafe {
+        AXValueGetValue(
+            handle.as_cftype(),
+            K_AX_VALUE_CF_RANGE_TYPE,
+            (&mut range as *mut CFRange).cast(),
+        )
+    };
+    if copied == 0 || range.location < 0 || range.length < 0 {
+        return None;
+    }
+    Some(PasteTargetSelection {
+        location: usize::try_from(range.location).ok()?,
+        length: usize::try_from(range.length).ok()?,
+    })
+}
+
 fn cfstring_to_bounded_value(
     value: CFStringRef,
     max_utf16_units: usize,
@@ -418,6 +501,8 @@ fn cfstring_to_bounded_value(
         return Some(PasteTargetValue {
             head: cfstring_range_to_string(value, 0, length)?,
             tail: None,
+            utf16_units: length,
+            selection: None,
         });
     }
 
@@ -430,6 +515,8 @@ fn cfstring_to_bounded_value(
             length - tail_units,
             tail_units,
         )?),
+        utf16_units: length,
+        selection: None,
     })
 }
 
@@ -474,6 +561,8 @@ mod tests {
 
         assert_eq!(bounded.head, "a".repeat(32));
         assert_eq!(bounded.tail.as_deref(), Some("z".repeat(32).as_str()));
+        assert_eq!(bounded.utf16_units, 160);
+        assert_eq!(bounded.selection, None);
     }
 
     #[test]

@@ -61,10 +61,14 @@
 //! window. Treating any length increase as paste evidence can therefore
 //! restore the previous clipboard even though the transcript never landed,
 //! destroying the only remaining copy. Confirmation requires transcript-
-//! specific evidence instead: a newly visible whole transcript, or a newly
+//! specific evidence instead: a newly visible whole transcript, a newly
 //! visible leading/trailing window when a terminal or bounded field only
-//! exposes part of it. If that evidence is unavailable, the transaction
-//! deliberately leaves the transcript on the clipboard.
+//! exposes part of it, or the exact selected-range and total-length transition
+//! that inserting the transcript must produce. Selection geometry is trusted
+//! only while polling the same Accessibility object; a replacement object
+//! must show transcript-specific text. If neither form of evidence is
+//! available, the transaction deliberately leaves the transcript on the
+//! clipboard.
 //!
 //! ## Secure input fields are not a bug
 //!
@@ -81,7 +85,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::daemon::desktop::clipboard_restore::{
-    PasteConfirmation, PasteConfirmationContext, PasteTargetValue,
+    PasteConfirmation, PasteConfirmationContext, PasteTargetSelection, PasteTargetValue,
 };
 use crate::daemon::desktop::inject::FocusSnapshot;
 
@@ -153,15 +157,16 @@ pub(crate) fn capture_baseline(focus: Option<&FocusSnapshot>) -> Option<PasteTar
 ///
 /// [`PasteConfirmation::Confirmed`] as soon as the element's value is
 /// observed to show a newly visible transcript occurrence (ignoring the
-/// target's own line wrapping).
+/// target's own line wrapping), or its selection and length show the exact
+/// insertion transition.
 /// [`PasteConfirmation::Unverified`] after a fixed grace
 /// sleep when Accessibility cannot expose a pollable value at all (no
 /// focused element on this snapshot, or the field does not support value
 /// polling). [`PasteConfirmation::NoEvidence`] when polling itself worked
-/// but no insertion evidence appeared before the deadline, including when
-/// the focused element died or focus moved mid-poll (no more evidence can
-/// be gathered at that point, so polling stops early rather than waiting
-/// out the rest of the deadline).
+/// but no insertion evidence appeared before the deadline. A dead captured
+/// Accessibility object is reacquired from the same frontmost application so
+/// Safari/WebKit object replacement does not become a false failure; a real
+/// focus change still ends evidence gathering.
 pub(crate) fn await_paste_confirmation(ctx: &PasteConfirmationContext<'_>) -> PasteConfirmation {
     let start = Instant::now();
 
@@ -189,9 +194,16 @@ pub(crate) fn await_paste_confirmation(ctx: &PasteConfirmationContext<'_>) -> Pa
     };
 
     let deadline = start + AX_CONFIRM_DEADLINE;
+    let mut captured_element_usable = true;
     loop {
         let now = Instant::now();
         if now >= deadline {
+            if poll_current_focus(ctx, &matcher, baseline.as_ref()).unwrap_or(false) {
+                return PasteConfirmation::Confirmed {
+                    elapsed: start.elapsed(),
+                    kind: "ax_confirmed",
+                };
+            }
             return PasteConfirmation::NoEvidence {
                 elapsed: start.elapsed(),
                 kind: "no_evidence",
@@ -199,10 +211,30 @@ pub(crate) fn await_paste_confirmation(ctx: &PasteConfirmationContext<'_>) -> Pa
         }
         thread::sleep(AX_POLL_INTERVAL.min(deadline.saturating_duration_since(now)));
 
-        match element.poll_value(MAX_AX_VALUE_UTF16_UNITS) {
+        let poll = if captured_element_usable {
+            element.poll_value(MAX_AX_VALUE_UTF16_UNITS)
+        } else {
+            match poll_current_focus(ctx, &matcher, baseline.as_ref()) {
+                Ok(true) => {
+                    return PasteConfirmation::Confirmed {
+                        elapsed: start.elapsed(),
+                        kind: "ax_confirmed",
+                    };
+                }
+                Ok(false) => continue,
+                Err(()) => {
+                    return PasteConfirmation::NoEvidence {
+                        elapsed: start.elapsed(),
+                        kind: "no_evidence",
+                    };
+                }
+            }
+        };
+
+        match poll {
             Ok(Some(current)) => {
                 let current = BoundedNormalizedValue::from_target_value(&current);
-                if matcher.indicates_insertion(baseline.as_ref(), &current) {
+                if matcher.indicates_insertion(baseline.as_ref(), &current, true) {
                     return PasteConfirmation::Confirmed {
                         elapsed: start.elapsed(),
                         kind: "ax_confirmed",
@@ -214,14 +246,30 @@ pub(crate) fn await_paste_confirmation(ctx: &PasteConfirmationContext<'_>) -> Pa
                 // tick. Keep polling until the deadline.
             }
             Err(()) => {
-                // Element died or focus moved: no more evidence to gather.
-                return PasteConfirmation::NoEvidence {
-                    elapsed: start.elapsed(),
-                    kind: "no_evidence",
-                };
+                // WebKit can replace an AX object as an editable field is
+                // updated. Continue with fresh focused-element reads from the
+                // captured application; a real focus change is rejected by
+                // `poll_current_focus`.
+                captured_element_usable = false;
             }
         }
     }
+}
+
+fn poll_current_focus(
+    ctx: &PasteConfirmationContext<'_>,
+    matcher: &TranscriptMatcher,
+    baseline: Option<&BoundedNormalizedValue>,
+) -> Result<bool, ()> {
+    let Some(focus) = ctx.focus else {
+        return Ok(false);
+    };
+    let Some((current, same_element)) = focus.macos_poll_current_value(MAX_AX_VALUE_UTF16_UNITS)?
+    else {
+        return Ok(false);
+    };
+    let current = BoundedNormalizedValue::from_target_value(&current);
+    Ok(matcher.indicates_insertion(baseline, &current, same_element))
 }
 
 /// Pure decision logic: does `current` (a freshly read `AXValue`) contain
@@ -242,7 +290,7 @@ fn value_indicates_insertion(baseline: Option<&str>, current: &str, transcript: 
     let baseline =
         baseline.map(|value| BoundedNormalizedValue::new(value, MAX_AX_VALUE_UTF16_UNITS));
     let current = BoundedNormalizedValue::new(current, MAX_AX_VALUE_UTF16_UNITS);
-    matcher.indicates_insertion(baseline.as_ref(), &current)
+    matcher.indicates_insertion(baseline.as_ref(), &current, true)
 }
 
 /// Bounded whitespace-normalized representation of an Accessibility value.
@@ -254,6 +302,8 @@ fn value_indicates_insertion(baseline: Option<&str>, current: &str, transcript: 
 struct BoundedNormalizedValue {
     head: String,
     tail: Option<String>,
+    utf16_units: usize,
+    selection: Option<PasteTargetSelection>,
 }
 
 impl BoundedNormalizedValue {
@@ -261,11 +311,14 @@ impl BoundedNormalizedValue {
         Self {
             head: normalize_segment(&value.head),
             tail: value.tail.as_deref().map(normalize_segment),
+            utf16_units: value.utf16_units,
+            selection: value.selection,
         }
     }
 
     fn new(value: &str, max_chars: usize) -> Self {
         debug_assert!(max_chars >= 2);
+        let utf16_units = value.encode_utf16().count();
         let mut leading: Vec<char> = value
             .chars()
             .filter(|c| !c.is_whitespace())
@@ -275,6 +328,8 @@ impl BoundedNormalizedValue {
             return Self {
                 head: leading.into_iter().collect(),
                 tail: None,
+                utf16_units,
+                selection: None,
             };
         }
 
@@ -290,6 +345,8 @@ impl BoundedNormalizedValue {
         Self {
             head: leading.into_iter().collect(),
             tail: Some(trailing.into_iter().collect()),
+            utf16_units,
+            selection: None,
         }
     }
 
@@ -334,16 +391,19 @@ struct TranscriptMatcher {
     whole: Option<String>,
     head: Option<String>,
     tail: Option<String>,
+    utf16_units: usize,
 }
 
 impl TranscriptMatcher {
     fn new(transcript: &str) -> Self {
+        let utf16_units = transcript.encode_utf16().count();
         let normalized = BoundedNormalizedValue::new(transcript, MAX_WHOLE_TRANSCRIPT_CHARS);
         if normalized.head.is_empty() {
             return Self {
                 whole: None,
                 head: None,
                 tail: None,
+                utf16_units,
             };
         }
 
@@ -358,6 +418,7 @@ impl TranscriptMatcher {
                 whole,
                 head: None,
                 tail: None,
+                utf16_units,
             };
         }
 
@@ -373,6 +434,7 @@ impl TranscriptMatcher {
             whole,
             head: Some(head),
             tail: Some(tail.into_iter().collect()),
+            utf16_units,
         }
     }
 
@@ -397,12 +459,51 @@ impl TranscriptMatcher {
         &self,
         baseline: Option<&BoundedNormalizedValue>,
         current: &BoundedNormalizedValue,
+        allow_selection_evidence: bool,
     ) -> bool {
-        let current = self.counts(current);
-        let baseline = baseline.map(|value| self.counts(value)).unwrap_or_default();
-        current.whole > baseline.whole
-            || current.head > baseline.head
-            || current.tail > baseline.tail
+        let current_counts = self.counts(current);
+        let baseline_counts = baseline.map(|value| self.counts(value)).unwrap_or_default();
+        current_counts.whole > baseline_counts.whole
+            || current_counts.head > baseline_counts.head
+            || current_counts.tail > baseline_counts.tail
+            || (allow_selection_evidence
+                && baseline
+                    .is_some_and(|baseline| self.selection_indicates_insertion(baseline, current)))
+    }
+
+    fn selection_indicates_insertion(
+        &self,
+        baseline: &BoundedNormalizedValue,
+        current: &BoundedNormalizedValue,
+    ) -> bool {
+        if self.utf16_units == 0 {
+            return false;
+        }
+        let (Some(before), Some(after)) = (baseline.selection, current.selection) else {
+            return false;
+        };
+        let Some(selection_end) = before.location.checked_add(before.length) else {
+            return false;
+        };
+        if selection_end > baseline.utf16_units {
+            return false;
+        }
+        let Some(expected_caret) = before.location.checked_add(self.utf16_units) else {
+            return false;
+        };
+        let Some(expected_value_units) = baseline
+            .utf16_units
+            .checked_sub(before.length)
+            .and_then(|units| units.checked_add(self.utf16_units))
+        else {
+            return false;
+        };
+        after
+            == (PasteTargetSelection {
+                location: expected_caret,
+                length: 0,
+            })
+            && current.utf16_units == expected_value_units
     }
 }
 
@@ -563,11 +664,90 @@ mod tests {
         let value = PasteTargetValue {
             head: "prefix alpha ".to_owned(),
             tail: Some(" omega suffix".to_owned()),
+            utf16_units: 25,
+            selection: None,
         };
         let normalized = BoundedNormalizedValue::from_target_value(&value);
         assert_eq!(normalized.head, "prefixalpha");
         assert_eq!(normalized.tail.as_deref(), Some("omegasuffix"));
         assert_eq!(normalized.occurrence_count("alphaomega"), 0);
+    }
+
+    #[test]
+    fn exact_selection_geometry_confirms_reformatted_safari_text() {
+        let transcript = "say \"hi\"";
+        let matcher = TranscriptMatcher::new(transcript);
+        let baseline = BoundedNormalizedValue::from_target_value(&PasteTargetValue {
+            head: "draft".to_owned(),
+            tail: None,
+            utf16_units: 5,
+            selection: Some(PasteTargetSelection {
+                location: 0,
+                length: 5,
+            }),
+        });
+        let current = BoundedNormalizedValue::from_target_value(&PasteTargetValue {
+            head: "say \u{201c}hi\u{201d}".to_owned(),
+            tail: None,
+            utf16_units: 8,
+            selection: Some(PasteTargetSelection {
+                location: 8,
+                length: 0,
+            }),
+        });
+
+        assert!(!current.head.contains(&normalize_segment(transcript)));
+        assert!(matcher.indicates_insertion(Some(&baseline), &current, true));
+    }
+
+    #[test]
+    fn replacement_ax_object_requires_text_evidence() {
+        let matcher = TranscriptMatcher::new("say \"hi\"");
+        let baseline = BoundedNormalizedValue::from_target_value(&PasteTargetValue {
+            head: "draft".to_owned(),
+            tail: None,
+            utf16_units: 5,
+            selection: Some(PasteTargetSelection {
+                location: 0,
+                length: 5,
+            }),
+        });
+        let current = BoundedNormalizedValue::from_target_value(&PasteTargetValue {
+            head: "say \u{201c}hi\u{201d}".to_owned(),
+            tail: None,
+            utf16_units: 8,
+            selection: Some(PasteTargetSelection {
+                location: 8,
+                length: 0,
+            }),
+        });
+
+        assert!(!matcher.indicates_insertion(Some(&baseline), &current, false));
+    }
+
+    #[test]
+    fn selection_motion_without_expected_value_length_does_not_confirm() {
+        let matcher = TranscriptMatcher::new("hello");
+        let baseline = BoundedNormalizedValue::from_target_value(&PasteTargetValue {
+            head: "draft".to_owned(),
+            tail: None,
+            utf16_units: 5,
+            selection: Some(PasteTargetSelection {
+                location: 0,
+                length: 5,
+            }),
+        });
+        let current = BoundedNormalizedValue::from_target_value(&PasteTargetValue {
+            head: "unrelated".to_owned(),
+            tail: None,
+            utf16_units: 9,
+            selection: Some(PasteTargetSelection {
+                location: 5,
+                length: 0,
+            }),
+        });
+
+        assert!(!matcher.indicates_insertion(Some(&baseline), &current, true));
     }
 }
 

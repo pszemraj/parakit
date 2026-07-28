@@ -31,11 +31,25 @@ pub(super) struct ClipboardWriteToken {
 /// `tail` being present means an omitted middle separates it from `head`.
 /// Keeping the pieces distinct prevents acknowledgement matching from
 /// manufacturing evidence across content that was never read.
+#[derive(Debug)]
 pub(crate) struct PasteTargetValue {
     /// Leading portion of the target value.
     pub(crate) head: String,
     /// Trailing portion when the target value exceeded the extraction bound.
     pub(crate) tail: Option<String>,
+    /// Total length of the complete target value in UTF-16 code units.
+    pub(crate) utf16_units: usize,
+    /// Selected text range reported for the target, when available.
+    pub(crate) selection: Option<PasteTargetSelection>,
+}
+
+/// Selected text range in a macOS Accessibility text value.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PasteTargetSelection {
+    /// Zero-based selection start in UTF-16 code units.
+    pub(crate) location: usize,
+    /// Selected length in UTF-16 code units.
+    pub(crate) length: usize,
 }
 
 /// Focus and transcript context available to a paste-acknowledgement
