@@ -402,6 +402,10 @@ impl DoctorClipboardGuard {
 impl Drop for DoctorClipboardGuard {
     fn drop(&mut self) {
         if !self.finished {
+            // A failed restore can be transient (for example, clipboard
+            // ownership changing mid-write), so make one best-effort retry.
+            // `restore_staged_sentinel` writes only while our sentinel is
+            // still current and therefore never overwrites newer user data.
             let _ = self.restore_staged_sentinel();
         }
     }
