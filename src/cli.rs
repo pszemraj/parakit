@@ -51,17 +51,40 @@ pub(crate) struct Cli {
     #[arg(long, value_enum)]
     pub(crate) paste_mode: Option<PasteMode>,
 
-    /// Leave dictated text on the clipboard after paste instead of restoring previous clipboard contents.
-    #[arg(long)]
+    /// Leave dictated text on the clipboard after paste instead of restoring
+    /// previous clipboard contents. Overrides a configured
+    /// `daemon.keep_transcript_clipboard = false`; conflicts with
+    /// `--no-keep-transcript-clipboard`.
+    #[arg(long, conflicts_with = "no_keep_transcript_clipboard")]
     pub(crate) keep_transcript_clipboard: bool,
 
-    /// Disable the audio cues (start / success / error tones).
-    #[arg(long)]
+    /// Restore the previous clipboard contents after paste instead of leaving
+    /// the transcript. Overrides a configured
+    /// `daemon.keep_transcript_clipboard = true`; conflicts with
+    /// `--keep-transcript-clipboard`.
+    #[arg(long, conflicts_with = "keep_transcript_clipboard")]
+    pub(crate) no_keep_transcript_clipboard: bool,
+
+    /// Disable the audio cues (start / success / error tones). Overrides a
+    /// configured `daemon.sounds = true`; conflicts with `--sounds`.
+    #[arg(long, conflicts_with = "sounds")]
     pub(crate) no_sounds: bool,
 
+    /// Enable the audio cues (start / success / error tones). Overrides a
+    /// configured `daemon.sounds = false`; conflicts with `--no-sounds`.
+    #[arg(long, conflicts_with = "no_sounds")]
+    pub(crate) sounds: bool,
+
     /// Disable all text cleaning rules (raw transcript inserted as-is).
-    #[arg(long)]
+    /// Overrides a configured `cleaning.enabled = true`; conflicts with
+    /// `--cleaning`.
+    #[arg(long, conflicts_with = "cleaning")]
     pub(crate) no_cleaning: bool,
+
+    /// Enable the text cleaning pipeline. Overrides a configured
+    /// `cleaning.enabled = false`; conflicts with `--no-cleaning`.
+    #[arg(long, conflicts_with = "no_cleaning")]
+    pub(crate) cleaning: bool,
 
     /// Cleanup behavior tier. `safe` keeps semantic discourse markers such as
     /// comparative `like`; `aggressive` also deletes them. Defaults to
@@ -70,9 +93,16 @@ pub(crate) struct Cli {
     pub(crate) cleaning_profile: Option<CleaningProfile>,
 
     /// Keep the single terminal period that messaging-style cleanup removes by
-    /// default. Also settable as `cleaning.keep_trailing_period`.
-    #[arg(long)]
+    /// default. Overrides a configured `cleaning.keep_trailing_period = false`;
+    /// conflicts with `--no-keep-trailing-period`.
+    #[arg(long, conflicts_with = "no_keep_trailing_period")]
     pub(crate) keep_trailing_period: bool,
+
+    /// Drop the single terminal period even when configured to keep it.
+    /// Overrides a configured `cleaning.keep_trailing_period = true`;
+    /// conflicts with `--keep-trailing-period`.
+    #[arg(long, conflicts_with = "keep_trailing_period")]
+    pub(crate) no_keep_trailing_period: bool,
 
     /// Disable a specific rule by name. Repeatable: `--disable-rule a --disable-rule b`.
     #[arg(long, value_name = "NAME")]
@@ -294,25 +324,41 @@ impl Cli {
             .unwrap_or(HotkeyBackend::Auto)
     }
 
-    /// Return whether audio cues are enabled: `--no-sounds` always wins;
-    /// otherwise falls back to config `daemon.sounds` (default enabled).
+    /// Return whether audio cues are enabled: explicit `--sounds` forces
+    /// `true`, explicit `--no-sounds` forces `false`; with neither flag, falls
+    /// back to config `daemon.sounds` (default enabled). The two flags
+    /// conflict with each other, so at most one applies per invocation.
     ///
     /// # Returns
     ///
     /// `true` when start/success/error tones should play.
     pub(crate) fn effective_sounds_enabled(&self, config: &ConfigFile) -> bool {
-        !self.no_sounds && config.daemon.sounds.unwrap_or(true)
+        if self.sounds {
+            true
+        } else if self.no_sounds {
+            false
+        } else {
+            config.daemon.sounds.unwrap_or(true)
+        }
     }
 
-    /// Return whether the text-cleaning pipeline is enabled: `--no-cleaning`
-    /// always wins; otherwise falls back to config `cleaning.enabled`
-    /// (default enabled).
+    /// Return whether the text-cleaning pipeline is enabled: explicit
+    /// `--cleaning` forces `true`, explicit `--no-cleaning` forces `false`;
+    /// with neither flag, falls back to config `cleaning.enabled` (default
+    /// enabled). The two flags conflict with each other, so at most one
+    /// applies per invocation.
     ///
     /// # Returns
     ///
     /// `true` when the cleaning pipeline should run.
     pub(crate) fn effective_cleaning_enabled(&self, config: &ConfigFile) -> bool {
-        !self.no_cleaning && config.cleaning.enabled.unwrap_or(true)
+        if self.cleaning {
+            true
+        } else if self.no_cleaning {
+            false
+        } else {
+            config.cleaning.enabled.unwrap_or(true)
+        }
     }
 
     /// Return the cleanup behavior tier: CLI `--cleaning-profile`, then config
@@ -335,8 +381,13 @@ impl Cli {
             .unwrap_or(CleaningProfile::Safe)
     }
 
-    /// Return whether cleanup should drop one terminal period: the inverse of
-    /// CLI `--keep-trailing-period` OR config `cleaning.keep_trailing_period`.
+    /// Return whether cleanup should drop one terminal period: explicit
+    /// `--keep-trailing-period` forces it kept (`false`), explicit
+    /// `--no-keep-trailing-period` forces it dropped (`true`); with neither
+    /// flag, falls back to the inverse of config
+    /// `cleaning.keep_trailing_period` (default kept `false`, i.e. dropped by
+    /// default). The two flags conflict with each other, so at most one
+    /// applies per invocation.
     ///
     /// Dropping the period is the default because parakit is used mostly for
     /// messaging-style dictation, where a trailing period reads as terse.
@@ -349,18 +400,33 @@ impl Cli {
     ///
     /// `true` when the terminal-period pass should be enabled.
     pub(crate) fn effective_drops_trailing_period(&self, config: &ConfigFile) -> bool {
-        !(self.keep_trailing_period || config.cleaning.keep_trailing_period.unwrap_or(false))
+        if self.keep_trailing_period {
+            false
+        } else if self.no_keep_trailing_period {
+            true
+        } else {
+            !config.cleaning.keep_trailing_period.unwrap_or(false)
+        }
     }
 
     /// Return whether the transcript should stay on the clipboard after
-    /// paste: CLI `--keep-transcript-clipboard` OR config
-    /// `daemon.keep_transcript_clipboard` (default false).
+    /// paste: explicit `--keep-transcript-clipboard` forces `true`, explicit
+    /// `--no-keep-transcript-clipboard` forces `false`; with neither flag,
+    /// falls back to config `daemon.keep_transcript_clipboard` (default
+    /// false). The two flags conflict with each other, so at most one applies
+    /// per invocation.
     ///
     /// # Returns
     ///
     /// `true` when the previous clipboard contents should not be restored.
     pub(crate) fn effective_keep_transcript_clipboard(&self, config: &ConfigFile) -> bool {
-        self.keep_transcript_clipboard || config.daemon.keep_transcript_clipboard.unwrap_or(false)
+        if self.keep_transcript_clipboard {
+            true
+        } else if self.no_keep_transcript_clipboard {
+            false
+        } else {
+            config.daemon.keep_transcript_clipboard.unwrap_or(false)
+        }
     }
 
     /// Return whether verbose diagnostics are enabled: not CLI `--quiet`,
@@ -434,6 +500,13 @@ mod tests {
         let mut full = vec!["parakit"];
         full.extend_from_slice(args);
         Cli::parse_from(full)
+    }
+
+    #[test]
+    fn removed_log_format_flag_is_rejected() {
+        let error = Cli::try_parse_from(["parakit", "--log-format", "jsonl"])
+            .expect_err("--log-format must not remain a supported surface");
+        assert_eq!(error.kind(), clap::error::ErrorKind::UnknownArgument);
     }
 
     #[test]
@@ -511,25 +584,47 @@ mod tests {
     }
 
     #[test]
-    fn effective_sounds_and_cleaning_use_negated_and_semantics() {
+    fn sounds_flag_pair_overrides_config_in_both_directions() {
         let mut config = ConfigFile::default();
 
-        // No flags, no config: both enabled by default.
+        // (c) No flags: falls through to config, then built-in default (true).
         assert!(cli_from(&[]).effective_sounds_enabled(&config));
-        assert!(cli_from(&[]).effective_cleaning_enabled(&config));
-
-        // Config explicitly disables: still enabled unless CLI also cares,
-        // since disabling is expressed as `Some(false)`.
         config.daemon.sounds = Some(false);
-        config.cleaning.enabled = Some(false);
         assert!(!cli_from(&[]).effective_sounds_enabled(&config));
+
+        // (a) Positive flag overrides a config `false`.
+        assert!(cli_from(&["--sounds"]).effective_sounds_enabled(&config));
+
+        // (b) Negative flag overrides a config `true`.
+        config.daemon.sounds = Some(true);
+        assert!(!cli_from(&["--no-sounds"]).effective_sounds_enabled(&config));
+
+        // (d) The pair conflicts.
+        let error = Cli::try_parse_from(["parakit", "--sounds", "--no-sounds"])
+            .expect_err("--sounds and --no-sounds must conflict");
+        assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
+    }
+
+    #[test]
+    fn cleaning_flag_pair_overrides_config_in_both_directions() {
+        let mut config = ConfigFile::default();
+
+        // (c) No flags: falls through to config, then built-in default (true).
+        assert!(cli_from(&[]).effective_cleaning_enabled(&config));
+        config.cleaning.enabled = Some(false);
         assert!(!cli_from(&[]).effective_cleaning_enabled(&config));
 
-        // CLI --no-sounds/--no-cleaning always win, regardless of config.
-        config.daemon.sounds = Some(true);
+        // (a) Positive flag overrides a config `false`.
+        assert!(cli_from(&["--cleaning"]).effective_cleaning_enabled(&config));
+
+        // (b) Negative flag overrides a config `true`.
         config.cleaning.enabled = Some(true);
-        assert!(!cli_from(&["--no-sounds"]).effective_sounds_enabled(&config));
         assert!(!cli_from(&["--no-cleaning"]).effective_cleaning_enabled(&config));
+
+        // (d) The pair conflicts.
+        let error = Cli::try_parse_from(["parakit", "--cleaning", "--no-cleaning"])
+            .expect_err("--cleaning and --no-cleaning must conflict");
+        assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
     }
 
     #[test]
@@ -556,38 +651,73 @@ mod tests {
     }
 
     #[test]
-    fn effective_drops_trailing_period_defaults_on_and_opts_out_by_or_semantics() {
+    fn keep_trailing_period_flag_pair_overrides_config_in_both_directions() {
         let mut config = ConfigFile::default();
 
-        // Messaging-style dictation: one terminal period is dropped unless
-        // the user positively asks to keep it.
+        // (c) No flags: falls through to config, then built-in default
+        // (dropped). Messaging-style dictation drops the trailing period
+        // unless the user positively asks to keep it.
         assert!(cli_from(&[]).effective_drops_trailing_period(&config));
-
         config.cleaning.keep_trailing_period = Some(true);
         assert!(!cli_from(&[]).effective_drops_trailing_period(&config));
 
-        // The CLI opt-out wins over a config that leaves the default in place.
+        // (a) Positive flag overrides a config `false` (would otherwise drop it).
         config.cleaning.keep_trailing_period = Some(false);
-        assert!(cli_from(&[]).effective_drops_trailing_period(&config));
         assert!(!cli_from(&["--keep-trailing-period"]).effective_drops_trailing_period(&config));
+
+        // (b) Negative flag overrides a config `true` (would otherwise keep it).
+        config.cleaning.keep_trailing_period = Some(true);
+        assert!(cli_from(&["--no-keep-trailing-period"]).effective_drops_trailing_period(&config));
+
+        // (d) The pair conflicts.
+        let error = Cli::try_parse_from([
+            "parakit",
+            "--keep-trailing-period",
+            "--no-keep-trailing-period",
+        ])
+        .expect_err("--keep-trailing-period and --no-keep-trailing-period must conflict");
+        assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
     }
 
     #[test]
-    fn effective_keep_transcript_clipboard_and_verbose_use_or_semantics() {
+    fn keep_transcript_clipboard_flag_pair_overrides_config_in_both_directions() {
         let mut config = ConfigFile::default();
+
+        // (c) No flags: falls through to config, then built-in default (false).
         assert!(!cli_from(&[]).effective_keep_transcript_clipboard(&config));
-        assert!(!cli_from(&[]).effective_verbose(&config));
-
         config.daemon.keep_transcript_clipboard = Some(true);
-        config.daemon.verbose = Some(true);
         assert!(cli_from(&[]).effective_keep_transcript_clipboard(&config));
-        assert!(cli_from(&[]).effective_verbose(&config));
 
+        // (a) Positive flag overrides a config `false`.
         config.daemon.keep_transcript_clipboard = Some(false);
-        config.daemon.verbose = Some(false);
         assert!(
             cli_from(&["--keep-transcript-clipboard"]).effective_keep_transcript_clipboard(&config)
         );
+
+        // (b) Negative flag overrides a config `true`.
+        config.daemon.keep_transcript_clipboard = Some(true);
+        assert!(!cli_from(&["--no-keep-transcript-clipboard"])
+            .effective_keep_transcript_clipboard(&config));
+
+        // (d) The pair conflicts.
+        let error = Cli::try_parse_from([
+            "parakit",
+            "--keep-transcript-clipboard",
+            "--no-keep-transcript-clipboard",
+        ])
+        .expect_err("--keep-transcript-clipboard and --no-keep-transcript-clipboard must conflict");
+        assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
+    }
+
+    #[test]
+    fn effective_verbose_uses_or_semantics() {
+        let mut config = ConfigFile::default();
+        assert!(!cli_from(&[]).effective_verbose(&config));
+
+        config.daemon.verbose = Some(true);
+        assert!(cli_from(&[]).effective_verbose(&config));
+
+        config.daemon.verbose = Some(false);
         assert!(cli_from(&["--verbose"]).effective_verbose(&config));
     }
 

@@ -101,7 +101,7 @@ The usual precedence is:
 CLI flag > config value > built-in default
 ```
 
-Some booleans have only an enabling or a disabling CLI flag, disabled rule names from the CLI and the config are merged, and a few settings are config-only. Those exact interactions are documented on each key in [config_reference.toml](config_reference.toml).
+Four booleans (`daemon.sounds`, `cleaning.enabled`, `cleaning.keep_trailing_period`, and `daemon.keep_transcript_clipboard`) each have a paired CLI flag, one that forces the value on and one that forces it off (for example `--sounds`/`--no-sounds`), so a config default can be overridden in either direction for a single invocation; the two flags in a pair conflict with each other. Disabled rule names from the CLI and the config are merged, and a few settings are config-only. Those exact interactions are documented on each key in [config_reference.toml](config_reference.toml).
 
 Unknown tables and keys are ignored for forward compatibility, which lets an older binary read a newer config. Invalid TOML, invalid known values, and rule-validation failures are hard errors that name the config path.
 

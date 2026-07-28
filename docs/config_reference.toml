@@ -25,13 +25,19 @@
 
 # [daemon]
 
-# daemon.model - path string, optional; default: hosted cached Q8_0, downloaded when absent.
-# CLI -m/--model overrides it. No ~ or environment expansion; relative paths use the working directory.
+# daemon.model
+# Type: path string (optional). Default: hosted cached Q8_0, downloaded when
+# absent.
+# CLI -m/--model overrides it. No ~ or environment expansion; relative paths
+# use the working directory.
 # When inference starts, the path must be UTF-8 and name a regular model file.
 
-# daemon.device - string, optional; default: "auto"; valid: "auto" | "cpu" | "gpu".
-# CLI --device overrides it. "auto" selects GPU with CPU fallback; "cpu" disables GPU.
-# "gpu" requires detected GPU in bundled builds; custom non-bundled builds only warn. Recommend "auto".
+# daemon.device
+# Type: string (optional). Default: "auto". Valid values: "auto" | "cpu" |
+# "gpu".
+# CLI --device overrides it. "auto" selects GPU with CPU fallback; "cpu"
+# disables GPU. "gpu" requires detected GPU in bundled builds; custom
+# non-bundled builds only warn. Recommend "auto".
 
 # daemon.threads
 # Type: integer >= 1 (optional). Default: computed as 1 on a single logical
@@ -58,43 +64,73 @@
 # or rare scripts; Windows direct supports Unicode; macOS direct requires
 # Accessibility permission.
 
-# daemon.keep_transcript_clipboard - boolean, optional; default: false.
-# Clipboard modes restore the prior supported payload when false and leave the transcript when true.
-# CLI --keep-transcript-clipboard ORs with it; no force-off flag. Ignored in "direct" mode.
+# daemon.keep_transcript_clipboard
+# Type: boolean (optional). Default: false.
+# Clipboard modes restore the prior supported payload when false and leave
+# the transcript when true.
+# CLI --keep-transcript-clipboard/--no-keep-transcript-clipboard override it
+# in either direction; the two flags conflict with each other. Ignored in
+# "direct" mode.
 
-# daemon.sounds - boolean, optional; default: true; enables asynchronous start/success/error cues.
-# CLI --no-sounds forces false; no force-on flag. Cue-device failures warn but do not fail dictation.
-# CLI --quiet does not disable cues; PTT audio simulation always disables them.
+# daemon.sounds
+# Type: boolean (optional). Default: true. Enables asynchronous
+# start/success/error cues.
+# CLI --sounds/--no-sounds override it in either direction; the two flags
+# conflict with each other. Cue-device failures warn but do not fail
+# dictation. CLI --quiet does not disable cues; PTT audio simulation always
+# disables them.
 
-# daemon.verbose - boolean, optional; default: false; enables diagnostics and native inference logs.
-# CLI --verbose ORs with it; CLI --quiet takes final precedence over both sources.
-# Fetch/cache/config/status/stop/paste-last/copy-last/history/test-paste do not apply it; use --verbose.
-# config show reads and displays this key but does not use it for command verbosity.
+# daemon.verbose
+# Type: boolean (optional). Default: false. Enables diagnostics and native
+# inference logs.
+# CLI --verbose ORs with it; CLI --quiet takes final precedence over both
+# sources. Fetch/cache/config/status/stop/paste-last/copy-last/history/
+# test-paste do not apply it; use --verbose. config show reads and displays
+# this key but does not use it for command verbosity.
 
-# daemon.transcript_history - integer >= 0, optional; default: 10; no CLI override or upper clamp.
-# Bounds newest-first paste-last/copy-last/history entries; 0 disables those commands.
-# The ring is process-memory-only, but logging.dir can independently persist the same transcript.
-# At 0, plain status reports no last transcript and verbose status reports history disabled.
+# daemon.transcript_history
+# Type: integer >= 0 (optional). Default: 10. No CLI override or upper clamp.
+# Bounds newest-first paste-last/copy-last/history entries; 0 disables those
+# commands.
+# The ring is process-memory-only, but logging.dir can independently persist
+# the same transcript.
+# At 0, plain status reports no last transcript and verbose status reports
+# history disabled.
 
 
 # [cleaning]
 
-# cleaning.enabled - boolean, optional; default: true; enables built-in and user transformations.
-# CLI --no-cleaning forces false; no force-on flag. Disabling cleaning does not bypass validation.
+# cleaning.enabled
+# Type: boolean (optional). Default: true. Enables built-in and user
+# transformations.
+# CLI --cleaning/--no-cleaning override it in either direction; the two
+# flags conflict with each other. Disabling cleaning does not bypass
+# validation.
 
-# cleaning.profile - string, optional; default: "safe"; valid: "safe" | "aggressive".
-# CLI --cleaning-profile overrides it. "aggressive" adds semantic filler/discourse deletion.
-# Inert when cleaning is disabled; never gates user rules. Recommend "safe" unless deletion is wanted.
+# cleaning.profile
+# Type: string (optional). Default: "safe". Valid values: "safe" |
+# "aggressive".
+# CLI --cleaning-profile overrides it. "aggressive" adds semantic
+# filler/discourse deletion.
+# Inert when cleaning is disabled; never gates user rules. Recommend "safe"
+# unless deletion is wanted.
 
-# cleaning.keep_trailing_period - boolean, optional; default: false, so one final "." is removed.
-# CLI --keep-trailing-period ORs with it; no force-off flag. Disabling "fix-trailing-period" also keeps it.
+# cleaning.keep_trailing_period
+# Type: boolean (optional). Default: false, so one final "." is removed.
+# CLI --keep-trailing-period/--no-keep-trailing-period override it in
+# either direction; the two flags conflict with each other. Disabling
+# "fix-trailing-period" also keeps it.
 # Inert when cleaning.enabled is false or --no-cleaning is set.
 
-# cleaning.number_threshold - finite integer/float >= 0, optional; default: 4 when unset.
-# Isolated cardinals/ordinals at or above the threshold digitize; below it, left exactly as
-# recognized, never forced to a word or a digit. Set 0 to convert every isolated value instead.
-# No CLI override. It controls only "spoken-numbers"; structural numeric passes still normalize.
-# Disabling that rule or cleaning makes it inert, not unvalidated. Time-unit uses of "second" stay words.
+# cleaning.number_threshold
+# Type: finite integer/float >= 0 (optional). Default: 4 when unset.
+# Isolated cardinals/ordinals at or above the threshold digitize; below it,
+# left exactly as recognized, never forced to a word or a digit. Set 0 to
+# convert every isolated value instead.
+# No CLI override. It controls only "spoken-numbers"; structural numeric
+# passes still normalize.
+# Disabling that rule or cleaning makes it inert, not unvalidated. Time-unit
+# uses of "second" stay words.
 
 # cleaning.disabled_rules
 # Type: array of strings (optional). Default: [].
@@ -262,9 +298,7 @@
 # PARAKIT_MODELS_DIR is set, and supplies the runtime-dir fallback.
 
 # HOME
-# Type: path string (conditionally required on Linux/macOS). No default.
-# Used only when a needed XDG_CONFIG_HOME or XDG_CACHE_HOME fallback is absent;
-# path resolution fails if HOME is then unavailable.
+# XDG_CONFIG_HOME/XDG_CACHE_HOME fallback; path resolution fails without it.
 
 # VISUAL
 # Type: executable name/path string (optional). Default: fall back to EDITOR.
@@ -302,13 +336,10 @@
 # normally supplies it.
 
 # USER
-# Type: string (optional; Linux only). Default in remediation text: "$USER".
-# Used to personalize hotkey permission instructions, not runtime behavior.
+# Only personalizes hotkey permission remediation text (Linux); not runtime behavior.
 
 # PATH
-# Type: platform path list (optional). Default: inherited from the launcher.
-# fetch --from-source searches it for Python and a fallback quantizer. On
-# Windows, a bundled quantizer library directory is prepended for that child.
+# Searched by fetch --from-source for Python and a fallback quantizer.
 
 # DYLD_LIBRARY_PATH
 # Type: path list (optional; macOS only). Default: inherited/empty.
