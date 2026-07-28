@@ -9,8 +9,11 @@
 //! `Cli::effective_*` in `cli.rs` for the merge logic.
 //!
 //! A broken config file must never break commands that do not need it
-//! (`fetch`, `cache`, `config`, `status`, `stop`, `paste-last`, `copy-last`,
-//! `history`, `test-paste`); see the load-order comment in `app.rs::run`.
+//! (`fetch`, `cache`, `status`, `stop`, `paste-last`, `copy-last`, `history`,
+//! `test-paste`); see the load-order comment in `app.rs::run`. Within
+//! `config`, `path`/`init`/`edit` stay available on a broken file, but
+//! `show` (the default subcommand) loads and validates the file and so
+//! fails with a diagnostic naming the config path.
 
 use anyhow::{Context, Result};
 use parakit::inference::DeviceMode;
