@@ -87,7 +87,9 @@ use objc2_app_kit::{
 use objc2_foundation::{NSDate, NSDefaultRunLoopMode, NSPoint, NSRect, NSSize, NSString};
 use std::borrow::Cow;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, TryRecvError};
+use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -95,6 +97,7 @@ use crate::daemon::desktop::inject::{
     restore_html_clipboard, ClipboardPolicy, FocusSnapshot, Injector, PasteMode, PasteOutcome,
     PasteReport,
 };
+use crate::daemon::macos::pasteboard;
 
 type OSStatus = i32;
 type ProcessApplicationTransformState = u32;
@@ -645,9 +648,16 @@ impl ProbeWindow {
         let (tx, rx) = mpsc::channel::<Result<PasteReport>>();
         let worker_focus = focus;
         let worker_sentinel = sentinel.clone();
+        // Shared with the worker thread below so the timeout path can tell
+        // it that this harness has taken over clipboard cleanup; see
+        // `pasteboard::install_abandonment_signal` for the full mechanism
+        // and why it exists.
+        let abandoned = Arc::new(AtomicBool::new(false));
+        let worker_abandoned = Arc::clone(&abandoned);
         let worker = thread::Builder::new()
             .name("parakit-doctor-paste-smoke".to_string())
             .spawn(move || {
+                pasteboard::install_abandonment_signal(worker_abandoned);
                 let outcome =
                     paste_sentinel_on_worker_thread(mode, &worker_sentinel, &worker_focus);
                 let _ = tx.send(outcome);
@@ -668,6 +678,18 @@ impl ProbeWindow {
                 // means something is genuinely stuck, so let the thread
                 // finish on its own rather than risking `doctor` hanging in
                 // `join()` too.
+                //
+                // That leaves the worker thread free to keep running after
+                // this function returns, potentially still inside the
+                // `AXValue` confirmation poll, and it must not be left free
+                // to also mutate the real clipboard once it eventually
+                // unblocks: `clipboard_guard.restore_staged_sentinel()` below
+                // and the process exit that (per `app::run`) follows a
+                // `doctor --deep` failure both assume unilateral ownership
+                // of it. Flip the abandonment signal before that cleanup
+                // runs, not after, so the worker sees it as soon as possible
+                // once it resumes from whatever it is blocked on.
+                abandoned.store(true, Ordering::Release);
                 return match clipboard_guard.restore_staged_sentinel() {
                     Ok(()) => Err(err),
                     Err(cleanup_err) => Err(err.context(format!(

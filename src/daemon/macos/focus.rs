@@ -406,6 +406,42 @@ fn ax_identity_equal(
     Some(unsafe { CFEqual(expected.element.as_cftype(), current.element.as_cftype()) != 0 })
 }
 
+/// Read the live frontmost application and its focused Accessibility
+/// element from `NSWorkspace` and the AX API.
+///
+/// # Off-main-thread `NSWorkspace` usage
+///
+/// This is called from several non-main threads: the recording coordinator
+/// (`daemon::recording`, at push-to-talk-down, via
+/// [`MacOsFocusSnapshot::capture`]), the daemon worker thread (the
+/// pre-chord [`MacOsFocusSnapshot::verify_current`] recheck, and — at much
+/// higher frequency — [`MacOsFocusSnapshot::poll_current_value`], the
+/// `daemon::macos::pasteboard` `AXValue`-reacquire fallback, which can fire
+/// on every remaining poll tick, roughly every 40ms, for the rest of one
+/// paste's confirmation window once the originally captured Accessibility
+/// object stops answering), the IPC handling thread (`daemon::ipc`'s
+/// `paste_text`), and the process main thread (`doctor --deep`'s
+/// synchronous paste-transaction smoke test, `daemon::macos::diagnostics`).
+///
+/// The AX/CF calls just below (`AXUIElementCopyAttributeValue`, `CFEqual`,
+/// retain/release) have an explicit thread-safety justification for this —
+/// see the `SAFETY` comment on `AxElementHandle`'s `Send`/`Sync` impls
+/// above. Apple does not extend that same documented guarantee to
+/// `NSWorkspace`'s query methods (`sharedWorkspace`,
+/// `frontmostApplication`); as far as published Apple documentation goes,
+/// calling them off the main thread is an undocumented gray area, not a
+/// confirmed-safe pattern.
+///
+/// This usage is accepted anyway: every call here is a read-only query (no
+/// window server state is mutated), the pattern predates this PR (it is not
+/// new off-main-thread exposure introduced here), and no crash or corruption
+/// has ever been observed traced back to it in practice. If that ever
+/// changes — a crash report or hang implicates `NSWorkspace` from one of
+/// these threads — the escalation path is to stop calling it directly here
+/// and instead dispatch the query to the main thread (e.g. proxy the read
+/// through a call scheduled on the main run loop) and block the calling
+/// thread on the result, rather than continuing to call it inline off the
+/// main thread.
 fn frontmost_application_window(probe_value_support: bool) -> Result<MacOsFocusSnapshot> {
     autoreleasepool(|_pool| {
         let workspace = NSWorkspace::sharedWorkspace();

@@ -81,6 +81,9 @@
 //! Parakit cannot tell whether the transcript landed, but it also must not
 //! guess by destroying the transcript.
 
+use std::cell::RefCell;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -117,6 +120,94 @@ const MAX_AX_VALUE_UTF16_UNITS: usize = 65_536;
 /// effectively unique against whatever the field held beforehand, so a match
 /// is real evidence rather than coincidence.
 const CONFIRM_WINDOW_CHARS: usize = 32;
+
+thread_local! {
+    /// Per-thread abandonment signal consulted by [`await_paste_confirmation`].
+    ///
+    /// `None` on every thread that never calls [`install_abandonment_signal`]
+    /// — in particular the production daemon's worker thread, which never
+    /// installs one — so this is completely inert outside the one place that
+    /// uses it (see that function's doc for why it exists).
+    static ABANDONMENT_SIGNAL: RefCell<Option<Arc<AtomicBool>>> = const { RefCell::new(None) };
+}
+
+/// Install a per-thread abandonment signal for [`await_paste_confirmation`]
+/// to consult before letting a confirmation result reach the caller.
+///
+/// This exists solely for `doctor --deep`'s real paste-transaction smoke
+/// test (see `daemon::macos::diagnostics::run_paste_transaction`), which
+/// spawns a short-lived worker thread per attempt and enforces its own
+/// `PASTE_TRANSACTION_TIMEOUT` on the main thread. If that timeout fires
+/// while the worker thread is still blocked somewhere inside
+/// [`await_paste_confirmation`] (a stuck-then-recovering AX call, most
+/// likely), the harness's `JoinHandle` is dropped without joining and the
+/// harness immediately starts its own clipboard cleanup — while the
+/// abandoned worker thread is still running and, left unchecked, would
+/// independently decide to restore or clear the same real macOS clipboard
+/// once it finally returns. Two unilateral owners of one OS clipboard is the
+/// race. The doctor harness calls this at the top of the worker closure,
+/// before starting the paste attempt, and flips the flag from the main
+/// thread the instant its timeout fires, *before* its own cleanup runs; see
+/// the call sites inside [`await_paste_confirmation`] for where this is
+/// consulted and the residual race window that leaves.
+///
+/// There is no matching uninstall: the thread this is called on is single-
+/// use (one paste attempt, then the thread exits), so the thread-local just
+/// drops with it.
+pub(crate) fn install_abandonment_signal(flag: Arc<AtomicBool>) {
+    ABANDONMENT_SIGNAL.with(|cell| *cell.borrow_mut() = Some(flag));
+}
+
+/// Whether the current thread's installed abandonment signal, if any, has
+/// been set.
+fn is_abandoned() -> bool {
+    ABANDONMENT_SIGNAL.with(|cell| {
+        cell.borrow()
+            .as_ref()
+            .is_some_and(|flag| flag.load(Ordering::Acquire))
+    })
+}
+
+/// Build [`PasteConfirmation::Confirmed`], unless this thread's abandonment
+/// signal (see [`install_abandonment_signal`]) is set, in which case this
+/// degrades to [`PasteConfirmation::NoEvidence`] instead.
+///
+/// Every call site is a point where [`await_paste_confirmation`] is about to
+/// resume from a potentially long blocking AX or pasteboard read and hand
+/// back a result that would make its caller (`finish_confirmed_paste` in
+/// `daemon::desktop::inject`) restore the clipboard. `NoEvidence` is the one
+/// outcome that caller leaves alone, which is exactly what an abandoned
+/// worker should do once the doctor harness has taken over cleanup.
+///
+/// This is a check-then-act race with the harness's timeout path, not a
+/// full fix: the signal could still flip immediately after this check
+/// returns `false`, in the instant before the caller acts on `Confirmed`.
+/// That shrinks the exposure from the whole multi-second
+/// `PASTE_TRANSACTION_TIMEOUT` window down to a handful of instructions —
+/// microseconds, not seconds. Closing it completely would need a clipboard
+/// mutex shared with the production paste path, which is out of proportion
+/// for a diagnostics-only harness; the residual window is accepted instead.
+fn confirmed_unless_abandoned(elapsed: Duration, kind: &'static str) -> PasteConfirmation {
+    if is_abandoned() {
+        return PasteConfirmation::NoEvidence {
+            elapsed,
+            kind: "no_evidence",
+        };
+    }
+    PasteConfirmation::Confirmed { elapsed, kind }
+}
+
+/// As [`confirmed_unless_abandoned`], for the [`PasteConfirmation::Unverified`]
+/// path (no pollable Accessibility value was available at all).
+fn unverified_unless_abandoned(elapsed: Duration, kind: &'static str) -> PasteConfirmation {
+    if is_abandoned() {
+        return PasteConfirmation::NoEvidence {
+            elapsed,
+            kind: "no_evidence",
+        };
+    }
+    PasteConfirmation::Unverified { elapsed, kind }
+}
 
 /// Read the focused element's `AXValue` before a paste chord is sent.
 ///
@@ -169,16 +260,20 @@ pub(crate) fn capture_baseline(focus: Option<&FocusSnapshot>) -> Option<PasteTar
 /// Accessibility object is reacquired from the same frontmost application so
 /// Safari/WebKit object replacement does not become a false failure; a real
 /// focus change still ends evidence gathering.
+///
+/// Every point below that resumes from a blocking sleep or AX/pasteboard
+/// read and is about to report `Confirmed` or `Unverified` first checks this
+/// thread's abandonment signal (see [`install_abandonment_signal`]) and
+/// degrades to `NoEvidence` instead when it is set, so an abandoned
+/// `doctor --deep` worker thread never restores the clipboard out from under
+/// that harness's own cleanup.
 pub(crate) fn await_paste_confirmation(ctx: &PasteConfirmationContext<'_>) -> PasteConfirmation {
     let start = Instant::now();
 
     let element = ctx.focus.and_then(FocusSnapshot::macos_ax_element);
     let Some(element) = element.filter(|element| element.supports_value_polling()) else {
         thread::sleep(UNVERIFIED_GRACE);
-        return PasteConfirmation::Unverified {
-            elapsed: start.elapsed(),
-            kind: "unverified_timeout",
-        };
+        return unverified_unless_abandoned(start.elapsed(), "unverified_timeout");
     };
 
     // Build transcript evidence once for the whole polling transaction. The
@@ -201,10 +296,7 @@ pub(crate) fn await_paste_confirmation(ctx: &PasteConfirmationContext<'_>) -> Pa
         let now = Instant::now();
         if now >= deadline {
             if poll_current_focus(ctx, &matcher, baseline.as_ref()).unwrap_or(false) {
-                return PasteConfirmation::Confirmed {
-                    elapsed: start.elapsed(),
-                    kind: "ax_confirmed",
-                };
+                return confirmed_unless_abandoned(start.elapsed(), "ax_confirmed");
             }
             return PasteConfirmation::NoEvidence {
                 elapsed: start.elapsed(),
@@ -217,12 +309,7 @@ pub(crate) fn await_paste_confirmation(ctx: &PasteConfirmationContext<'_>) -> Pa
             element.poll_value(MAX_AX_VALUE_UTF16_UNITS)
         } else {
             match poll_current_focus(ctx, &matcher, baseline.as_ref()) {
-                Ok(true) => {
-                    return PasteConfirmation::Confirmed {
-                        elapsed: start.elapsed(),
-                        kind: "ax_confirmed",
-                    };
-                }
+                Ok(true) => return confirmed_unless_abandoned(start.elapsed(), "ax_confirmed"),
                 Ok(false) => continue,
                 Err(()) => {
                     return PasteConfirmation::NoEvidence {
@@ -237,10 +324,7 @@ pub(crate) fn await_paste_confirmation(ctx: &PasteConfirmationContext<'_>) -> Pa
             Ok(Some(current)) => {
                 let current = BoundedNormalizedValue::from_target_value(&current);
                 if matcher.indicates_insertion(baseline.as_ref(), &current, true) {
-                    return PasteConfirmation::Confirmed {
-                        elapsed: start.elapsed(),
-                        kind: "ax_confirmed",
-                    };
+                    return confirmed_unless_abandoned(start.elapsed(), "ax_confirmed");
                 }
             }
             Ok(None) => {
@@ -258,6 +342,15 @@ pub(crate) fn await_paste_confirmation(ctx: &PasteConfirmationContext<'_>) -> Pa
     }
 }
 
+/// Reacquire-fallback poll used once the originally captured Accessibility
+/// object stops answering (see the `Err(())` arm in
+/// [`await_paste_confirmation`]'s loop). This is the highest-frequency
+/// caller of `frontmost_application_window`'s `NSWorkspace` query on the
+/// worker thread: once triggered, it re-runs on every remaining
+/// [`AX_POLL_INTERVAL`] tick for the rest of the confirmation window (up to
+/// ~45 calls over [`AX_CONFIRM_DEADLINE`]) rather than once. See the
+/// thread-safety note on `frontmost_application_window` in `focus.rs` for
+/// why calling it this often off the main thread is accepted.
 fn poll_current_focus(
     ctx: &PasteConfirmationContext<'_>,
     matcher: &TranscriptMatcher,
@@ -851,5 +944,37 @@ mod ffi_tests {
     #[test]
     fn capture_baseline_without_focus_is_none() {
         assert!(capture_baseline(None).is_none());
+    }
+
+    /// Once this thread's abandonment signal (see
+    /// [`install_abandonment_signal`]) is set, `await_paste_confirmation`
+    /// must degrade what would otherwise be `Unverified` to `NoEvidence`
+    /// instead, so its caller in `daemon::desktop::inject` skips restoring
+    /// the clipboard for an abandoned `doctor --deep` worker thread. Uses
+    /// the same no-focus-snapshot path as
+    /// `no_focus_snapshot_is_unverified_without_ax_permission` so this stays
+    /// exercisable without a live Accessibility grant.
+    #[test]
+    fn abandoned_signal_degrades_unverified_to_no_evidence() {
+        install_abandonment_signal(Arc::new(AtomicBool::new(true)));
+        let ctx = PasteConfirmationContext {
+            focus: None,
+            transcript: "hello",
+            baseline: None,
+        };
+        match await_paste_confirmation(&ctx) {
+            PasteConfirmation::NoEvidence { kind, .. } => {
+                assert_eq!(kind, "no_evidence");
+            }
+            other => panic!("expected NoEvidence once abandoned, got {other:?}"),
+        }
+    }
+
+    /// A thread that never calls [`install_abandonment_signal`] — every
+    /// production daemon worker thread — must be completely unaffected: the
+    /// signal is inert by default.
+    #[test]
+    fn no_installed_signal_is_never_treated_as_abandoned() {
+        assert!(!is_abandoned());
     }
 }
