@@ -156,6 +156,12 @@ pub(crate) enum StageOutcome {
     Blocked,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PasteDispatch {
+    Posted,
+    SkippedUnsafeModifiers,
+}
+
 /// Clipboard retention policy after staging text for paste.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ClipboardPolicy {
@@ -813,7 +819,7 @@ impl Injector {
     }
 
     #[cfg(target_os = "linux")]
-    fn paste_clipboard(&mut self, mode: PasteMode) -> Result<()> {
+    fn paste_clipboard(&mut self, mode: PasteMode) -> Result<PasteDispatch> {
         if self.x11_paste.is_none() {
             self.x11_paste = Some(LinuxX11Paste::open()?);
         }
@@ -826,22 +832,29 @@ impl Injector {
         if result.is_err() {
             self.x11_paste = None;
         }
-        result
+        result.map(|()| PasteDispatch::Posted)
     }
 
     #[cfg(target_os = "windows")]
-    fn paste_clipboard(&mut self, mode: PasteMode) -> Result<()> {
+    fn paste_clipboard(&mut self, mode: PasteMode) -> Result<PasteDispatch> {
         let use_shift = mode == PasteMode::Terminal;
         super::windows_input::send_paste_chord(use_shift)
-            .context("could not send Windows paste shortcut")
+            .context("could not send Windows paste shortcut")?;
+        Ok(PasteDispatch::Posted)
     }
 
     #[cfg(target_os = "macos")]
-    fn paste_clipboard(&mut self, mode: PasteMode) -> Result<()> {
+    fn paste_clipboard(&mut self, mode: PasteMode) -> Result<PasteDispatch> {
         match mode {
             PasteMode::Standard | PasteMode::Terminal => {
-                crate::daemon::macos::send_paste_shortcut()
-                    .context("could not send macOS paste shortcut")
+                match crate::daemon::macos::send_paste_shortcut()
+                    .context("could not send macOS paste shortcut")?
+                {
+                    crate::daemon::macos::PasteShortcutOutcome::Sent => Ok(PasteDispatch::Posted),
+                    crate::daemon::macos::PasteShortcutOutcome::PttKeysHeld => {
+                        Ok(PasteDispatch::SkippedUnsafeModifiers)
+                    }
+                }
             }
             PasteMode::Direct => anyhow::bail!("direct mode does not use the paste shortcut"),
         }
@@ -888,7 +901,7 @@ fn paste_with_clipboard_swap_guarded<C, P, G, H>(
 ) -> Result<PasteReport>
 where
     C: ClipboardStore,
-    P: FnMut() -> Result<()>,
+    P: FnMut() -> Result<PasteDispatch>,
     G: FnMut() -> Result<bool>,
     H: ClipboardRestoreGate + ?Sized,
 {
@@ -947,7 +960,7 @@ where
 
     let paste_result = paste();
     match paste_result {
-        Ok(()) => finish_confirmed_paste(
+        Ok(PasteDispatch::Posted) => finish_confirmed_paste(
             clipboard,
             previous,
             write_token,
@@ -957,6 +970,17 @@ where
             text,
             baseline.as_ref(),
         ),
+        Ok(PasteDispatch::SkippedUnsafeModifiers) => {
+            // Posting while the physical PTT modifier is still active can
+            // turn Cmd+V into a different shortcut. No input was sent, so
+            // leave the staged transcript on the clipboard for recovery and
+            // report that fact honestly.
+            Ok(PasteReport::new(
+                PasteOutcome::CopiedOnly,
+                false,
+                Some(false),
+            ))
+        }
         Err(paste_err) => {
             let restore_result = restore_after_delay(
                 clipboard,
@@ -1312,7 +1336,12 @@ fn platform_paste_smoke_test(mode: PasteMode) -> Result<()> {
         }
         PasteMode::Standard | PasteMode::Terminal => {
             crate::daemon::macos::suppressed_paste_shortcut_smoke(|| {
-                injector.paste_clipboard(mode)
+                match injector.paste_clipboard(mode)? {
+                    PasteDispatch::Posted => Ok(()),
+                    PasteDispatch::SkippedUnsafeModifiers => {
+                        anyhow::bail!("physical push-to-talk keys remained held")
+                    }
+                }
             })
             .context("macOS insertion smoke stage 1 (suppressed paste-shortcut tap) failed")?;
             crate::daemon::macos::real_paste_transaction_smoke_test(mode)

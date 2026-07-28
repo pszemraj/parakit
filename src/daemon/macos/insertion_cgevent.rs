@@ -41,7 +41,7 @@ const SMOKE_POLL: Duration = Duration::from_millis(20);
 /// Yield between run-loop slices so the smoke wait never becomes a spin loop
 /// when `CFRunLoopRunInMode` returns early with nothing to dispatch.
 const SMOKE_YIELD: Duration = Duration::from_millis(5);
-const PTT_RELEASE_TIMEOUT: Duration = Duration::from_millis(200);
+const PTT_RELEASE_TIMEOUT: Duration = Duration::from_secs(2);
 const PTT_RELEASE_POLL: Duration = Duration::from_millis(15);
 
 #[link(name = "CoreFoundation", kind = "framework")]
@@ -242,11 +242,23 @@ fn run_smoke_action<G>(
     action_result
 }
 
+/// Result of preparing and posting a macOS paste shortcut.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PasteShortcutOutcome {
+    /// A full Cmd+V chord was posted.
+    Sent,
+    /// The chord was withheld because a physical push-to-talk key stayed down.
+    PttKeysHeld,
+}
+
 /// Send a macOS paste shortcut as a full Cmd+V hardware-style chord.
 ///
 /// # Returns
 ///
-/// `Ok(())` when CoreGraphics accepted the synthetic Cmd+V key events.
+/// [`PasteShortcutOutcome::Sent`] when CoreGraphics accepted the synthetic
+/// Cmd+V key events, or [`PasteShortcutOutcome::PttKeysHeld`] when the
+/// physical push-to-talk keys did not become safe before the bounded
+/// deadline and no event was posted.
 ///
 /// # Errors
 ///
@@ -254,11 +266,15 @@ fn run_smoke_action<G>(
 ///
 /// Callers must run `accessibility_preflight()` before choosing this backend.
 /// The daemon and `doctor --deep` both do that once before entering this hot path.
-pub(crate) fn send_paste_shortcut() -> Result<()> {
-    // Push-to-talk is held with the physical keyboard while this fires; give the
-    // user a brief window to release Left Control+Space first so the synthetic
-    // chord below doesn't get interleaved with real modifier-key transitions.
-    wait_for_ptt_keys_released(PTT_RELEASE_TIMEOUT);
+pub(crate) fn send_paste_shortcut() -> Result<PasteShortcutOutcome> {
+    // CoreGraphics combines live hardware modifier state into synthetic
+    // events. Never post while the physical PTT chord is still down: Safari
+    // can otherwise receive Control+Command+V and reject an otherwise valid
+    // paste. Short dictations can finish before a natural key release, so the
+    // old 200ms allowance was too narrow.
+    if !wait_for_ptt_keys_released(PTT_RELEASE_TIMEOUT) {
+        return Ok(PasteShortcutOutcome::PttKeysHeld);
+    }
 
     // A HID-system event source makes the synthetic chord carry the same
     // source CoreGraphics attaches to real hardware input, which is what
@@ -285,7 +301,7 @@ pub(crate) fn send_paste_shortcut() -> Result<()> {
     }
     release_event_source(source);
 
-    Ok(())
+    Ok(PasteShortcutOutcome::Sent)
 }
 
 /// Build the Cmd-down, V-down, V-up, Cmd-up event chord for [`send_paste_shortcut`].
@@ -354,17 +370,26 @@ fn release_event_source(source: *mut c_void) {
 ///
 /// # Arguments
 ///
-/// * `timeout` - Maximum time to wait before giving up and proceeding anyway.
+/// * `timeout` - Maximum time to wait before withholding the paste chord.
 ///
-/// Never blocks indefinitely: if the keys are still down at the deadline,
-/// this returns and the paste proceeds regardless.
-fn wait_for_ptt_keys_released(timeout: Duration) {
+/// # Returns
+///
+/// `true` when both keys are up; `false` when either key remains down at the
+/// deadline.
+fn wait_for_ptt_keys_released(timeout: Duration) -> bool {
+    wait_for_ptt_keys_released_with(timeout, ptt_key_down)
+}
+
+fn wait_for_ptt_keys_released_with(timeout: Duration, key_down: impl Fn(u16) -> bool) -> bool {
     let deadline = Instant::now() + timeout;
     loop {
-        let ctrl_down = ptt_key_down(MACOS_PTT_LEFT_CONTROL_KEYCODE);
-        let space_down = ptt_key_down(MACOS_PTT_SPACE_KEYCODE);
-        if (!ctrl_down && !space_down) || Instant::now() >= deadline {
-            return;
+        let ctrl_down = key_down(MACOS_PTT_LEFT_CONTROL_KEYCODE);
+        let space_down = key_down(MACOS_PTT_SPACE_KEYCODE);
+        if !ctrl_down && !space_down {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
         }
         thread::sleep(PTT_RELEASE_POLL);
     }
@@ -487,5 +512,17 @@ mod tests {
         }));
         assert!(unwind.is_err());
         assert!(dropped.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn released_ptt_keys_are_ready_without_waiting() {
+        assert!(wait_for_ptt_keys_released_with(Duration::ZERO, |_| false));
+    }
+
+    #[test]
+    fn held_ptt_key_at_deadline_withholds_paste() {
+        assert!(!wait_for_ptt_keys_released_with(Duration::ZERO, |key| {
+            key == MACOS_PTT_LEFT_CONTROL_KEYCODE
+        }));
     }
 }

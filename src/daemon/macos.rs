@@ -15,6 +15,7 @@ pub(crate) use diagnostics::real_paste_transaction_smoke_test;
 pub(crate) use focus::{AxElementSnapshot, MacOsFocusSnapshot};
 pub(crate) use insertion_cgevent::{
     send_paste_shortcut, suppressed_key_event_smoke, suppressed_paste_shortcut_smoke,
+    PasteShortcutOutcome,
 };
 #[allow(unused_imports)]
 pub(crate) use permissions::{
