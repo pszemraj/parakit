@@ -33,8 +33,10 @@ use super::{
     worker::{insert_text, FocusCheck, InsertOutcome},
 };
 
-#[cfg(unix)]
-const IPC_CLIENT_TIMEOUT: Duration = Duration::from_millis(750);
+#[cfg(any(unix, target_os = "windows"))]
+const IPC_TRANSPORT_TIMEOUT: Duration = Duration::from_millis(750);
+#[cfg(any(unix, target_os = "windows"))]
+const IPC_INSERT_RESPONSE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Default number of transcripts kept in daemon memory when
 /// `daemon.transcript_history` is unset.
@@ -78,6 +80,18 @@ pub(crate) enum IpcCommand {
     },
     /// Run the insertion path with caller-supplied text, without microphone use.
     TestPaste { text: String },
+}
+
+#[cfg(any(unix, target_os = "windows"))]
+impl IpcCommand {
+    fn response_timeout(&self) -> Duration {
+        match self {
+            Self::PasteLast { .. } | Self::TestPaste { .. } => IPC_INSERT_RESPONSE_TIMEOUT,
+            Self::Status | Self::Stop | Self::CopyLast { .. } | Self::History { .. } => {
+                IPC_TRANSPORT_TIMEOUT
+            }
+        }
+    }
 }
 
 /// Response sent by the daemon control socket.
@@ -687,8 +701,8 @@ fn handle_client(
     log: Arc<Logger>,
 ) {
     let notifier = Notifier::new(Arc::clone(&log));
-    let _ = stream.set_read_timeout(Some(IPC_CLIENT_TIMEOUT));
-    let _ = stream.set_write_timeout(Some(IPC_CLIENT_TIMEOUT));
+    let _ = stream.set_read_timeout(Some(IPC_TRANSPORT_TIMEOUT));
+    let _ = stream.set_write_timeout(Some(IPC_TRANSPORT_TIMEOUT));
     let outcome = client_command_outcome(
         read_command(&stream),
         state,
@@ -950,14 +964,15 @@ fn write_response(
 fn send_command(command: IpcCommand) -> Result<IpcResponse> {
     use std::os::unix::net::UnixStream;
 
+    let response_timeout = command.response_timeout();
     let path = preflight::control_socket_path()?;
     let mut stream = UnixStream::connect(&path)
         .with_context(|| format!("connect daemon control socket {}", path.display()))?;
     stream
-        .set_read_timeout(Some(IPC_CLIENT_TIMEOUT))
+        .set_read_timeout(Some(response_timeout))
         .context("set daemon control socket read timeout")?;
     stream
-        .set_write_timeout(Some(IPC_CLIENT_TIMEOUT))
+        .set_write_timeout(Some(IPC_TRANSPORT_TIMEOUT))
         .context("set daemon control socket write timeout")?;
     serde_json::to_writer(&mut stream, &command).context("serialize control command")?;
     stream
@@ -1171,10 +1186,15 @@ mod windows_pipe {
     /// Returns an error when the per-user named pipe is unavailable, transport
     /// I/O fails, or the response cannot be decoded.
     pub(super) fn send_command(command: IpcCommand) -> Result<IpcResponse> {
+        let response_timeout_ms = command
+            .response_timeout()
+            .as_millis()
+            .clamp(1, u128::from(u32::MAX)) as u32;
         let pipe_name = daemon_pipe_name()?;
         let pipe = connect_client_pipe(&pipe_name)?;
         write_json_message(&pipe, &command).context("write Windows daemon control command")?;
-        let response = read_pipe_message(&pipe).context("read Windows daemon control response")?;
+        let response = read_pipe_message_with_timeout(&pipe, response_timeout_ms)
+            .context("read Windows daemon control response")?;
         serde_json::from_slice(&response).context("parse Windows daemon control response")
     }
 
@@ -1363,8 +1383,12 @@ mod windows_pipe {
     }
 
     fn read_pipe_message(pipe: &PipeHandle) -> Result<Vec<u8>> {
+        read_pipe_message_with_timeout(pipe, IPC_CLIENT_TIMEOUT_MS)
+    }
+
+    fn read_pipe_message_with_timeout(pipe: &PipeHandle, timeout_ms: u32) -> Result<Vec<u8>> {
         let mut chunk = vec![0_u8; PIPE_BUFFER_SIZE as usize];
-        let read = read_pipe_chunk(pipe, &mut chunk)?;
+        let read = read_pipe_chunk(pipe, &mut chunk, timeout_ms)?;
         Ok(chunk[..read].to_vec())
     }
 
@@ -1415,7 +1439,7 @@ mod windows_pipe {
         Ok(())
     }
 
-    fn read_pipe_chunk(pipe: &PipeHandle, chunk: &mut [u8]) -> Result<usize> {
+    fn read_pipe_chunk(pipe: &PipeHandle, chunk: &mut [u8], timeout_ms: u32) -> Result<usize> {
         let event = EventHandle::create()?;
         let mut overlapped = RawOverlapped::new(event.0);
         let mut read = 0_u32;
@@ -1438,7 +1462,7 @@ mod windows_pipe {
                 let read = wait_for_overlapped(
                     pipe,
                     &mut overlapped,
-                    IPC_CLIENT_TIMEOUT_MS,
+                    timeout_ms,
                     "ReadFile Windows daemon control pipe failed",
                 )?;
                 Ok(read as usize)
@@ -1870,6 +1894,27 @@ mod windows_pipe {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn insertion_commands_allow_for_synchronous_acknowledgement() {
+        assert_eq!(
+            IpcCommand::PasteLast { index: 0 }.response_timeout(),
+            IPC_INSERT_RESPONSE_TIMEOUT
+        );
+        assert_eq!(
+            IpcCommand::TestPaste {
+                text: "test".to_string(),
+            }
+            .response_timeout(),
+            IPC_INSERT_RESPONSE_TIMEOUT
+        );
+        assert_eq!(IpcCommand::Status.response_timeout(), IPC_TRANSPORT_TIMEOUT);
+
+        #[cfg(target_os = "macos")]
+        assert!(
+            IPC_INSERT_RESPONSE_TIMEOUT > crate::daemon::macos::pasteboard::AX_CONFIRM_DEADLINE
+        );
+    }
 
     #[test]
     fn shared_state_reports_phase_and_newest_transcript_byte_length() {
