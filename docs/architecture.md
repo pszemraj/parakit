@@ -13,7 +13,7 @@ audio drain thread           drains ring -> resamples -> updates pre-roll and ac
 worker thread                owns Engine and runs transcribe -> clean -> insert
 optional sound thread        opens rodio output only while playing cue tones
 IPC listener thread          accepts local control connections
-IPC client threads           handle status, stop, paste-last, copy-last, history, and test-paste
+IPC client threads           handle status, stop, copy-last, history, and test-paste
 Windows clipboard thread     observes clipboard-history acknowledgement when available
 ```
 
@@ -59,7 +59,7 @@ Cross-thread communication uses atomics, mutex-protected buffers, and crossbeam 
 | `src/daemon/audio/capture.rs` | Microphone selection, live stream ownership, ring-buffer drain, pre-roll, resampling, and restart. |
 | `src/daemon/audio/pactl.rs` | Linux `pactl` parsing for startup/reopen microphone display details. |
 | `src/daemon/worker.rs` | ASR worker, paste sanitizer, focus guard, clipboard fallback, and insertion circuit breaker. |
-| `src/daemon/ipc.rs` | Local control socket for `status`, `stop`, `paste-last`, `copy-last`, `history`, and `test-paste`; serves an in-memory transcript ring buffer. |
+| `src/daemon/ipc.rs` | Local control socket for `status`, `stop`, `copy-last`, `history`, and `test-paste`; serves an in-memory transcript ring buffer. |
 | `src/daemon/desktop/windows_{clipboard_history,focus,input,paste_smoke,security}.rs` | Windows clipboard-history acknowledgement, foreground checks, `SendInput` helpers, deep paste smoke test, and privilege diagnostics. |
 | `src/daemon/{preflight,audio/alsa,desktop/session,desktop/x11}.rs`, `src/daemon/macos.rs`, `src/daemon/macos/{permissions,focus,insertion_cgevent,pasteboard,diagnostics}.rs` | Startup checks, macOS TCC/focus/insertion/acknowledgement helpers, the deep paste-transaction smoke test, ALSA stderr suppression, session events, and X11 helpers. |
 | `src/daemon/{logging,notifications,sounds}.rs` | Runtime logging, desktop notifications, and generated audio cues. |

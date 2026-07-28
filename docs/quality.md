@@ -74,7 +74,7 @@ For latency work, use short real clips around 2s, 5s, 15s, and 25s. Longer quali
 Use the hidden simulation path when you need the daemon worker flow without a live keyboard, microphone, or text insertion:
 
 ```bash
-cargo run -- \
+cargo run -- start \
   --simulate-ptt-audio target/tmp/ptt-audio/example.wav
 ```
 
@@ -148,7 +148,7 @@ Run it again with `--profile aggressive` when changing an aggressive-only pass. 
 
 The audit removes one terminal period by default, matching daemon behavior. Add `--keep-trailing-period` when comparing prose-oriented output separately, and use `--number-threshold VALUE` to replay a non-default isolated-number threshold.
 
-The audit applies built-in rules only. It does not load `config.toml` or `[[rules.user]]`; pass profile, threshold, trailing-period, and disabled-rule choices explicitly. Use `parakit --test-rules` to validate the currently configured user rules. Number-conversion changes must be evaluated as `text2num` integration and context-formatting changes, not by adding a second local number grammar.
+The audit applies built-in rules only. It does not load `config.toml` or `[[rules.user]]`; pass profile, threshold, trailing-period, and disabled-rule choices explicitly. Use `parakit rules test` to validate the currently configured user rules. Number-conversion changes must be evaluated as `text2num` integration and context-formatting changes, not by adding a second local number grammar.
 
 ## Runtime Smoke Checks
 

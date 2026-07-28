@@ -11,8 +11,13 @@
 # keys are silently ignored for forward compatibility. This also means a
 # misspelling such as "pastemode" loads without warning and has no effect.
 #
-# Most keys use: CLI flag > config value > built-in default. Each exception,
-# merge rule, and config-only setting is documented on the affected key.
+# Most keys use: CLI flag > config value > built-in default. Except where a
+# key's own note says otherwise, that CLI flag lives on `parakit start`. The
+# profile, trailing-period, and disable-rule flags also work the same way on
+# `parakit rules list`/`parakit rules test`, for checking a change without
+# restarting the daemon; --cleaning/--no-cleaning exist only on `start`.
+# Each exception, merge rule, and config-only setting is documented on the
+# affected key.
 #
 # Config-consuming processes parse and validate the file once at startup.
 # The daemon never watches it; restart the daemon after a change. Invalid
@@ -52,7 +57,9 @@
 # daemon.paste_mode
 # Type: string (optional). Valid values: "terminal" | "standard" | "direct".
 # Default: "terminal" on Linux and "standard" on macOS/Windows. CLI
-# --paste-mode overrides it.
+# --paste-mode overrides it. doctor also takes --paste-mode, but only to
+# override this setting for that one check; it does not change the value
+# below.
 # "terminal" sends Ctrl+Shift+V on Linux/Windows and Cmd+V on macOS, removes
 # trailing newlines, refuses remaining multiline text, and limits insertion
 # to 2,000 characters. "standard" sends Ctrl+V or Cmd+V. "direct" types
@@ -84,14 +91,13 @@
 # Type: boolean (optional). Default: false. Enables diagnostics and native
 # inference logs.
 # CLI --verbose ORs with it; CLI --quiet takes final precedence over both
-# sources. Fetch/cache/config/status/stop/paste-last/copy-last/history/
-# test-paste do not apply it; use --verbose. config show reads and displays
-# this key but does not use it for command verbosity.
+# sources. Fetch/cache/config/status/stop/copy-last/history/test-paste do
+# not apply it; use --verbose. config show reads and displays this key but
+# does not use it for command verbosity.
 
 # daemon.transcript_history
 # Type: integer >= 0 (optional). Default: 10. No CLI override or upper clamp.
-# Bounds newest-first paste-last/copy-last/history entries; 0 disables those
-# commands.
+# Bounds newest-first copy-last/history entries; 0 disables both commands.
 # The ring is process-memory-only, but logging.dir can independently persist
 # the same transcript.
 # At 0, plain status reports no last transcript and verbose status reports
@@ -110,7 +116,8 @@
 # cleaning.profile
 # Type: string (optional). Default: "safe". Valid values: "safe" |
 # "aggressive".
-# CLI --cleaning-profile overrides it. "aggressive" adds semantic
+# start's CLI --cleaning-profile overrides it; `rules list`/`rules test`
+# take the same value as --profile instead. "aggressive" adds semantic
 # filler/discourse deletion.
 # Inert when cleaning is disabled; never gates user rules. Recommend "safe"
 # unless deletion is wanted.
@@ -211,7 +218,8 @@
 # Type: string (optional). Default: "auto". Valid config values: "auto" |
 # "desktop" | "x11-global-hotkey" | "x11-listen" |
 # "evdev-proxy-experimental". Linux CLI --hotkey-backend overrides it and
-# additionally accepts "evdev-proxy" as an alias.
+# additionally accepts "evdev-proxy" as an alias. doctor also takes
+# --hotkey-backend, but only to override this setting for that one check.
 # "auto", "desktop", and "x11-global-hotkey" currently share the registered
 # X11 path; "auto" does not fall back if registration fails. They fail if
 # another app owns Ctrl+Space. "x11-listen" passively observes X11 events and
@@ -244,7 +252,7 @@
 
 # description (within [[rules.user]])
 # Type: string (optional). Default: absent. Any string, including empty.
-# Displayed by --list-rules only; it does not affect behavior or ruleset ID.
+# Displayed by `rules list` only; it does not affect behavior or ruleset ID.
 
 # pattern (within [[rules.user]])
 # Type: string (required). Rust regex-crate pattern; must not be the empty

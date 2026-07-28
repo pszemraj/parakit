@@ -85,7 +85,7 @@ A key you did not set prints its built-in default in parentheses. On Linux the o
 
 `config init` refuses to replace an existing file. `config init --force` truncates and overwrites it, so use it only when losing the current contents is intended.
 
-`config show` reports the config file merged with built-in defaults. It does not merge CLI flags, so a one-off `parakit --device cpu` does not appear there, and the output is a summary rather than a round-trippable config.
+`config show` reports the config file merged with built-in defaults. It does not merge CLI flags, so a one-off `parakit start --device cpu` does not appear there, and the output is a summary rather than a round-trippable config.
 
 `--quiet config show` prints nothing and returns before it loads the file, so quiet mode is not a validation command. `--quiet` likewise silences `config path` and the `wrote <path>` line from `config init`, though `init` still writes the file.
 
@@ -101,6 +101,8 @@ The usual precedence is:
 CLI flag > config value > built-in default
 ```
 
+These daemon and cleaning flags live on `parakit start`. The profile, trailing-period, and disable-rule flags also work the same way on `parakit rules list`/`parakit rules test` for checking a change before restarting the daemon (`cleaning.profile`'s flag is spelled `--profile` there instead of `--cleaning-profile`); `--cleaning`/`--no-cleaning` exist only on `start`.
+
 Four booleans (`daemon.sounds`, `cleaning.enabled`, `cleaning.keep_trailing_period`, and `daemon.keep_transcript_clipboard`) each have a paired CLI flag, one that forces the value on and one that forces it off (for example `--sounds`/`--no-sounds`), so a config default can be overridden in either direction for a single invocation; the two flags in a pair conflict with each other. Disabled rule names from the CLI and the config are merged, and a few settings are config-only. Those exact interactions are documented on each key in [config_reference.toml](config_reference.toml).
 
 Unknown tables and keys are ignored for forward compatibility, which lets an older binary read a newer config. Invalid TOML, invalid known values, and rule-validation failures are hard errors that name the config path.
@@ -108,7 +110,7 @@ Unknown tables and keys are ignored for forward compatibility, which lets an old
 > [!WARNING]
 > Because unknown keys are ignored, a misspelled key loads without any warning and silently has no effect. Run `parakit config show` after editing to confirm a setting actually took.
 
-Short-lived `--test-rules` and `--list-rules` processes each load the current file, which makes them useful for checking a change before restarting the daemon.
+Short-lived `rules test` and `rules list` processes each load the current file, which makes them useful for checking a change before restarting the daemon.
 
 ## Validation and Recovery
 
@@ -119,8 +121,8 @@ Use this edit loop for cleaning and user-rule changes:
 ```bash
 parakit config edit
 parakit config show
-parakit --test-rules "A representative dictation to clean."
-parakit --list-rules
+parakit rules test "A representative dictation to clean."
+parakit rules list
 ```
 
 When the result is right, stop the daemon and start it again with the startup command you normally use:
@@ -130,4 +132,4 @@ parakit stop
 parakit --quiet &
 ```
 
-A broken config does not block repair or control commands that do not need daemon settings: `fetch`, `cache`, `config path`, `config init`, `config edit`, `status`, `stop`, `paste-last`, `copy-last`, `history`, and `test-paste`. `config show`, `doctor`, `--list-rules`, `--test-rules`, PTT simulation, and daemon startup do load it.
+A broken config does not block repair or control commands that do not need daemon settings: `fetch`, `cache`, `config path`, `config init`, `config edit`, `status`, `stop`, `copy-last`, `history`, and `test-paste`. `config show`, `doctor`, `rules list`, `rules test`, PTT simulation, and daemon startup do load it.

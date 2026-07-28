@@ -15,19 +15,19 @@ Built-in passes are code in `src/rules/`. Personal, non-generalizable rules can 
 The default `safe` profile preserves discourse and meaning. It performs whitespace and punctuation repair, removes high-confidence filled pauses, collapses conservative stutters, expands selected casual forms, drops a trailing connective left dangling at the end of the transcript, converts number expressions, collapses spaced uppercase-letter runs, and capitalizes true sentence starts without treating decimal, version, domain, email, filename, or dotted-identifier periods as sentence boundaries.
 
 ```bash
-parakit --cleaning-profile safe
+parakit start --cleaning-profile safe
 ```
 
 The `aggressive` profile includes every safe pass and adds stylistic deletion of leading discourse markers and broad filler uses of `like`, `you know`, and similar phrases. Those edits can change emphasis or meaning, so they are opt-in.
 
 ```bash
-parakit --cleaning-profile aggressive
+parakit start --cleaning-profile aggressive
 ```
 
 A single terminal period is removed by default because parakit primarily targets messaging-style dictation. Preserve it when the target context expects conventional prose punctuation:
 
 ```bash
-parakit --keep-trailing-period
+parakit start --keep-trailing-period
 ```
 
 These settings also live in `config.toml` as `cleaning.profile` and `cleaning.keep_trailing_period`. Number conversion has the config-only `cleaning.number_threshold` setting. The exact CLI/config merge behavior is in the per-key [config reference](config_reference.toml).
@@ -35,7 +35,7 @@ These settings also live in `config.toml` as `cleaning.profile` and `cleaning.ke
 Disable cleaning entirely:
 
 ```bash
-parakit --no-cleaning
+parakit start --no-cleaning
 ```
 
 ## General Invariants
@@ -57,23 +57,23 @@ The safe repeated-word rule remains intentionally conservative. A bounded backre
 Show every pass, its engine, behavior tier, and whether it is active for the selected options:
 
 ```bash
-parakit --list-rules
-parakit --cleaning-profile aggressive --list-rules
-parakit --keep-trailing-period --list-rules
+parakit rules list
+parakit rules list --profile aggressive
+parakit rules list --keep-trailing-period
 ```
 
 Test one input. The output lists each pass that changed the text:
 
 ```bash
-parakit --test-rules "um, the the G P T model is gonna work."
-parakit --cleaning-profile aggressive --test-rules "So, it's like, you know, hard."
+parakit rules test "um, the the G P T model is gonna work."
+parakit rules test "So, it's like, you know, hard." --profile aggressive
 ```
 
 Disable one or more named passes:
 
 ```bash
-parakit --disable-rule casual-gonna
-parakit \
+parakit start --disable-rule casual-gonna
+parakit start \
   --disable-rule spaced-acronyms \
   --disable-rule filled-pauses
 ```
@@ -86,7 +86,7 @@ or `sh`/`th`/`ch` starts before a matching word, and
 
 ## Rule Order
 
-Passes run in the order shown by `--list-rules`. The output of one pass is the input to the next. Aggressive discourse edits run first. Stutter handling precedes acronym collapsing. `text2num` conversion precedes structural identifier formatting. Whitespace cleanup and capitalization run near the end, followed by the default terminal-period removal.
+Passes run in the order shown by `parakit rules list`. The output of one pass is the input to the next. Aggressive discourse edits run first. Stutter handling precedes acronym collapsing. `text2num` conversion precedes structural identifier formatting. Whitespace cleanup and capitalization run near the end, followed by the default terminal-period removal.
 
 A pass should be moved only with regression evidence. Reordering can change downstream matches even when every individual expression remains unchanged.
 
@@ -142,7 +142,7 @@ vocabulary substitutions.
 Disable a user rule the same way as a built-in rule:
 
 ```bash
-parakit --disable-rule weights-and-biases-to-wandb
+parakit start --disable-rule weights-and-biases-to-wandb
 ```
 
 or in `config.toml`:
@@ -152,7 +152,7 @@ or in `config.toml`:
 disabled_rules = ["weights-and-biases-to-wandb"]
 ```
 
-`parakit --list-rules` prints user rules in a separate `(user)` section below the built-in rule list.
+`parakit rules list` prints user rules in a separate `(user)` section below the built-in rule list.
 
 ### Edit Rules Without Rebuilding
 
@@ -177,7 +177,7 @@ specific config setting such as `cleaning.number_threshold`.
 When a cleanup worsens a transcript:
 
 1. Capture the raw ASR output.
-2. Reproduce with `parakit --test-rules "<raw text>"`.
+2. Reproduce with `parakit rules test "<raw text>"`.
 3. Disable candidate passes one at a time with `--disable-rule`.
 4. Narrow the pattern or add a more specific rule before the generic one.
 5. Add a case to the `rules` unit tests or `tests/cleaning_regressions.rs`.

@@ -4,7 +4,7 @@ Start with diagnostics. Launch behavior and exit codes are in [running.md#first-
 
 ```text
 parakit doctor
-parakit --verbose doctor
+parakit doctor --verbose
 parakit doctor --deep
 ```
 
@@ -60,7 +60,7 @@ Normal dictation backends suppress the literal Space in the platform push-to-tal
 
    ```bash
    test -w /dev/uinput
-   parakit --hotkey-backend evdev-proxy-experimental doctor
+   parakit doctor --hotkey-backend evdev-proxy-experimental
    ```
 
 4. Retry in foreground mode without `--quiet` to see the backend errors that background mode hides.
@@ -90,7 +90,6 @@ The transcript is printed or logged but nothing arrives in the focused applicati
 
    ```text
    parakit history
-   parakit paste-last
    parakit copy-last
    ```
 
@@ -99,8 +98,8 @@ The transcript is printed or logged but nothing arrives in the focused applicati
 4. Try a different paste mode against the same target. The default is `terminal` on Linux and `standard` elsewhere.
 
    ```bash
-   parakit --paste-mode standard
-   parakit --paste-mode direct
+   parakit start --paste-mode standard
+   parakit start --paste-mode direct
    ```
 
    Use `standard` for applications that only accept `Ctrl+V` and ignore `Ctrl+Shift+V`. Use `direct` only when an application refuses clipboard paste entirely; it types through the platform keyboard API, is slower, and is less reliable for non-ASCII text. On Linux it still requires an X11 session.
@@ -132,7 +131,7 @@ parakit sent `Cmd+V`, then polled the focused Accessibility element's value for 
    parakit test-paste "hello from parakit"
    ```
 
-   If the text lands every time but is still reported unconfirmed, that application does not expose the pasted text through Accessibility in a form parakit can match. Restart the daemon with `parakit --paste-mode direct` while you work in that application; direct typing never touches the clipboard and never runs the acknowledgement step.
+   If the text lands every time but is still reported unconfirmed, that application does not expose the pasted text through Accessibility in a form parakit can match. Restart the daemon with `parakit start --paste-mode direct` while you work in that application; direct typing never touches the clipboard and never runs the acknowledgement step.
 
 5. If JSONL logging is enabled, the insertion record for the dictation has `"outcome":"copied_only"` with `"acknowledgement_kind":"no_evidence"`. That distinguishes this case from `pasted_unverified`, which is the separate and quieter path taken when the field withholds its value entirely, as password and other secure fields do.
 
@@ -142,7 +141,7 @@ If the notification never appears at all, some macOS versions file `osascript`-o
 
 parakit records from a different input device than the one you expect.
 
-1. Check what parakit selected. `parakit doctor` prints the `mic` line; a running daemon reports the same thing under `parakit --verbose status`.
+1. Check what parakit selected. `parakit doctor` prints the `mic` line; a running daemon reports the same thing under `parakit status --verbose`.
 2. Change the operating system default input device. parakit follows the OS default and has no device-selection flag. Use desktop sound settings, `pavucontrol` on Linux, System Settings > Sound > Input on macOS, or Settings > System > Sound on Windows.
 3. On PipeWire or PulseAudio, confirm the change took effect at the audio-server level:
 
@@ -203,14 +202,14 @@ If that did not fix it, native dependencies are in [build.md#native-dependencies
 
 ## Windows GPU Builds
 
-A GPU bundle fails to start, or `parakit --device gpu` fails before the model loads.
+A GPU bundle fails to start, or `parakit start --device gpu` fails before the model loads.
 
 1. Open a new terminal. The installer updates persistent User `PATH` but does not broadcast the change to already-running shells.
 2. If startup fails with `0xC0000135` or `STATUS_DLL_NOT_FOUND`, Windows could not resolve a load-time DLL. For a Vulkan bundle, `vulkan-1.dll` comes from the GPU driver, not from parakit: install or update the NVIDIA, AMD, or Intel driver. For a CUDA bundle, the CUDA runtime and cuBLAS DLLs must be reachable from the install directory or `PATH`, or the bundle has to be rebuilt with `--bundle-cuda-dlls`.
 3. List the compute devices the bundled ggml can actually see:
 
    ```text
-   parakit --verbose doctor
+   parakit doctor --verbose
    ```
 
    The `compute:` block lists them. A GPU build with no GPU or iGPU listed usually means the driver is missing, is too old for the CUDA toolkit and driver ABI, or does not expose Vulkan on that machine.
@@ -218,7 +217,7 @@ A GPU bundle fails to start, or `parakit --device gpu` fails before the model lo
 4. Confirm the rest of the install works by forcing CPU inference:
 
    ```text
-   parakit --device cpu
+   parakit start --device cpu
    ```
 
    If that runs, the problem is device visibility, not the bundle.

@@ -80,7 +80,7 @@ When the whole transcript cannot be found, a newly visible 32-character leading 
 Use verbose doctor output to confirm the Metal build and visible compute device:
 
 ```bash
-parakit --verbose doctor
+parakit doctor --verbose
 ```
 
 For release builds, the Metal backend should be in the generated sibling library directory:

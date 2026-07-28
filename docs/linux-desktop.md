@@ -60,8 +60,8 @@ The X11 focus guard, fail-open query behavior, and clipboard fallback are descri
 The `x11-listen` backend is for debugging hotkey state without registering or grabbing the chord:
 
 ```bash
-parakit --hotkey-backend x11-listen doctor
-parakit --hotkey-backend x11-listen --quiet &
+parakit doctor --hotkey-backend x11-listen
+parakit start --hotkey-backend x11-listen --quiet &
 ```
 
 Because this backend is passive, it cannot prevent the literal Space key from reaching the focused application. Use the default registered backend for normal dictation.
@@ -70,7 +70,7 @@ Because this backend is passive, it cannot prevent the literal Space key from re
 
 The evdev-proxy experimental backend is for testing the old keyboard proxy path. It grabs a physical keyboard event device, suppresses the `Ctrl+Space` chord, and forwards other key events through `/dev/uinput`.
 
-Only this backend needs at least one readable keyboard event device that exposes both `Ctrl` and `Space`, plus writable `/dev/uinput`. `parakit --hotkey-backend evdev-proxy-experimental doctor` reports unreadable non-keyboard event devices, but they do not block startup when a usable hotkey keyboard candidate is readable.
+Only this backend needs at least one readable keyboard event device that exposes both `Ctrl` and `Space`, plus writable `/dev/uinput`. `parakit doctor --hotkey-backend evdev-proxy-experimental` reports unreadable non-keyboard event devices, but they do not block startup when a usable hotkey keyboard candidate is readable.
 
 ```bash
 sudo usermod -aG input "$USER"
@@ -91,13 +91,13 @@ Log out completely and log back in, or reboot. Then verify:
 ```bash
 id -nG | tr ' ' '\n' | grep '^input$'
 test -w /dev/uinput
-parakit --hotkey-backend evdev-proxy-experimental doctor
+parakit doctor --hotkey-backend evdev-proxy-experimental
 ```
 
 When `doctor` reports `hotkey OK`, run:
 
 ```bash
-parakit --hotkey-backend evdev-proxy-experimental doctor && parakit --hotkey-backend evdev-proxy-experimental --quiet &
+parakit doctor --hotkey-backend evdev-proxy-experimental && parakit start --hotkey-backend evdev-proxy-experimental --quiet &
 disown
 ```
 

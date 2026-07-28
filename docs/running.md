@@ -18,7 +18,7 @@ parakit --quiet doctor
 parakit doctor --deep
 ```
 
-`--verbose` and `--quiet` are global flags, so they go before `doctor`. On Linux, Wayland sessions fail insertion preflight even when XWayland exposes a `DISPLAY`; use an X11 session. On macOS, `doctor` checks Accessibility, Input Monitoring, and Microphone status for the terminal that launched parakit.
+`--verbose` and `--quiet` are global flags: they work whether they come before or after `doctor`. On Linux, Wayland sessions fail insertion preflight even when XWayland exposes a `DISPLAY`; use an X11 session. On macOS, `doctor` checks Accessibility, Input Monitoring, and Microphone status for the terminal that launched parakit.
 
 The daemon checks the hotkey backend, insertion backend, and singleton lock before any model download. If those preflights pass, it opens the microphone, warns when the selected source looks like Bluetooth, downloads the default Q8_0 GGUF if it is not already cached, opens the model, and starts the hotkey loop. Linux backend details are in [linux-desktop.md](linux-desktop.md).
 
@@ -38,7 +38,7 @@ Use `--verbose` only when debugging startup, backend selection, or latency:
 
 ```bash
 parakit --verbose
-parakit --threads 8 --verbose
+parakit start --threads 8 --verbose
 ```
 
 ## Device Selection
@@ -48,9 +48,9 @@ GPU-capable builds default to `--device auto`. In `auto`, CrispASR asks ggml for
 Windows bundle backend selection is covered in [../scripts/windows/README.md#backend-requirements](../scripts/windows/README.md#backend-requirements). At runtime, `--device` controls CPU/GPU use inside the installed build.
 
 ```bash
-parakit --device auto
-parakit --device cpu
-parakit --device gpu
+parakit start --device auto
+parakit start --device cpu
+parakit start --device gpu
 ```
 
 `--device cpu` opens the session with GPU use disabled. `--device gpu` requests the GPU path and, on bundled builds, fails before model load if ggml reports no discrete or integrated GPU device. On system-library builds without the bundled ggml probe, `--device gpu` continues with a warning because parakit cannot verify device visibility before opening the session.
@@ -58,8 +58,8 @@ parakit --device gpu
 Per-device CLI selection is not exposed. The Parakeet backend currently ignores CrispASR's `gpu_device` field, so pinning remains backend-specific environment configuration:
 
 ```bash
-CUDA_VISIBLE_DEVICES=0 parakit --device gpu
-GGML_VK_VISIBLE_DEVICES=0 parakit --device gpu
+CUDA_VISIBLE_DEVICES=0 parakit start --device gpu
+GGML_VK_VISIBLE_DEVICES=0 parakit start --device gpu
 ```
 
 Use `parakit --verbose doctor` to list the compute devices visible to bundled ggml. Verbose daemon startup prints the requested mode and expected device, such as `device=auto -> Vulkan1 - NVIDIA GeForce RTX 4070 Laptop GPU [GPU]`.
@@ -94,18 +94,17 @@ parakit stop
 
 ## Control Socket
 
-When the daemon is running, these commands talk to it through local per-user IPC. Unix-like systems use a Unix socket under the parakit runtime directory; Windows uses a named pipe. After upgrading parakit in place, restart the daemon (`parakit stop`, then start it again): `paste-last` and `copy-last` use a wire format that is not compatible across the upgrade until the daemon restarts.
+When the daemon is running, these commands talk to it through local per-user IPC. Unix-like systems use a Unix socket under the parakit runtime directory; Windows uses a named pipe. After upgrading parakit in place, restart the daemon (`parakit stop`, then start it again): `copy-last` uses a wire format that is not compatible across the upgrade until the daemon restarts.
 
 ```text
 parakit status
 parakit stop
-parakit paste-last [N]
 parakit copy-last [N]
 parakit history
 parakit test-paste "hello from parakit"
 ```
 
-The daemon keeps a ring buffer of recent transcripts in memory (`daemon.transcript_history` entries, 10 by default). `paste-last` and `copy-last` act on the most recent one by default; pass `N` (1-based, counting back from the most recent) to reach further back, e.g. `parakit paste-last 3` for the third-most-recent transcript. `parakit history` lists what the daemon currently remembers, newest first; `--limit N` caps how many entries print. The history ring is never written to disk and disappears when the daemon stops, so treat it as a same-session convenience rather than an archive; a [clipboard history manager](#insertion) is what carries dictations across restarts, and enabled [JSONL logging](#logging-and-sounds) independently persists them. `test-paste` runs clipboard staging, focus checks, paste sanitization, and the paste chord without using the microphone.
+The daemon keeps a ring buffer of recent transcripts in memory (`daemon.transcript_history` entries, 10 by default). `copy-last` acts on the most recent one by default; pass `N` (1-based, counting back from the most recent) to reach further back, e.g. `parakit copy-last 3` for the third-most-recent transcript. `parakit history` lists what the daemon currently remembers, newest first; `--limit N` caps how many entries print. The history ring is never written to disk and disappears when the daemon stops, so treat it as a same-session convenience rather than an archive; a [clipboard history manager](#insertion) is what carries dictations across restarts, and enabled [JSONL logging](#logging-and-sounds) independently persists them. `test-paste` runs clipboard staging, focus checks, paste sanitization, and the paste chord without using the microphone.
 
 Plain `parakit status` output is unchanged and safe for scripts to parse:
 
@@ -115,7 +114,7 @@ parakit: idle
 last transcript: 42 bytes
 ```
 
-Pass the global `--verbose` flag before the subcommand to also print a detail block (mic, model, device, uptime, dictation count, and more):
+Pass the global `--verbose` flag (before or after the subcommand) to also print a detail block (mic, model, device, uptime, dictation count, and more):
 
 ```text
 $ parakit --verbose status
@@ -148,7 +147,7 @@ parakit fetch --force
 parakit cache
 parakit cache list
 parakit cache dir
-parakit -m /path/to/model.gguf
+parakit start -m /path/to/model.gguf
 ```
 
 `-m <path>` always wins and disables automatic fetch.
@@ -178,9 +177,9 @@ parakit transcribes once on hotkey release and hands the text to one of three in
 | `direct` | Synthetic typing through the platform keyboard API; the clipboard is never touched | App-compatibility fallback when neither chord reaches the target. Slower and less reliable for non-ASCII text. On Linux it still requires an X11 session. |
 
 ```bash
-parakit --paste-mode terminal
-parakit --paste-mode standard
-parakit --paste-mode direct
+parakit start --paste-mode terminal
+parakit start --paste-mode standard
+parakit start --paste-mode direct
 ```
 
 ### Clipboard Staging And Restore
@@ -197,7 +196,7 @@ Clipboard history tools do retain transcript text after parakit restores the act
 
 ### Focus Changes
 
-On Linux/X11, parakit records the active X11 window when recording starts. If focus clearly changes before insertion, it does not send a paste chord, but non-direct modes still stage the transcript before restoring the active clipboard. If focus capture or recheck fails because X11 is transiently unavailable, parakit pastes anyway; the transcript remains available through `parakit paste-last` or `parakit copy-last` either way.
+On Linux/X11, parakit records the active X11 window when recording starts. If focus clearly changes before insertion, it does not send a paste chord, but non-direct modes still stage the transcript before restoring the active clipboard. If focus capture or recheck fails because X11 is transiently unavailable, parakit pastes anyway; the transcript remains available through `parakit copy-last` either way.
 
 On Windows, parakit records the foreground window at PTT-down, rechecks it before paste, and sends the paste shortcut with `SendInput`. If the foreground target cannot be captured or verified, automatic paste is skipped, but non-direct modes still stage the transcript before restoring the active clipboard. A normal user process cannot inject into an administrator/elevated target application.
 
@@ -221,7 +220,7 @@ After repeated paste backend errors, parakit temporarily disables automatic past
 Text-only transcription logging:
 
 ```bash
-parakit --log-dir "$HOME/.parakit/logs"
+parakit start --log-dir "$HOME/.parakit/logs"
 ```
 
 > [!WARNING]
@@ -241,7 +240,7 @@ The transcription line is durable before insertion starts, so exiting during ins
 Disable cue tones:
 
 ```bash
-parakit --no-sounds
+parakit start --no-sounds
 ```
 
 ## Configuration

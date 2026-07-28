@@ -1,6 +1,6 @@
 # Transcription And Insertion Logs
 
-parakit can write one JSON object per line (JSONL) for every dictation: what the model heard, what cleanup did to it, and what happened when parakit tried to insert it into the focused application. Logging is off by default. Turn it on with the `logging.dir` config key (see [configuration.md](configuration.md) and [config_reference.toml](config_reference.toml)) or the `--log-dir` flag (see [running.md#logging-and-sounds](running.md#logging-and-sounds)).
+parakit can write one JSON object per line (JSONL) for every dictation: what the model heard, what cleanup did to it, and what happened when parakit tried to insert it into the focused application. Logging is off by default. Turn it on with the `logging.dir` config key (see [configuration.md](configuration.md) and [config_reference.toml](config_reference.toml)) or `parakit start`'s `--log-dir` flag (see [running.md#logging-and-sounds](running.md#logging-and-sounds)).
 
 Audio and redirected console output are never logged, but the raw and cleaned transcript text is, in plaintext, with no built-in retention or size cap. Protect the log directory and rotate or delete old files to match the sensitivity of your dictation.
 
