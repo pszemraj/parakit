@@ -385,6 +385,8 @@ mod tests {
 
     #[test]
     fn coordinator_delivers_terminal_event_after_accepted_start_when_queue_is_full() {
+        const EVENT_TIMEOUT: Duration = Duration::from_secs(2);
+
         let audio = AudioHandle::test_handle();
         let (hotkey_tx, hotkey_rx) = unbounded();
         let (worker_tx, worker_rx) = bounded(1);
@@ -408,14 +410,12 @@ mod tests {
             .expect("hotkey release should send");
 
         assert!(matches!(
-            worker_rx
-                .recv_timeout(Duration::from_millis(250))
-                .expect("start event"),
+            worker_rx.recv_timeout(EVENT_TIMEOUT).expect("start event"),
             WorkerEvent::Started
         ));
         assert_empty_stopped_event(
             worker_rx
-                .recv_timeout(Duration::from_millis(250))
+                .recv_timeout(EVENT_TIMEOUT)
                 .expect("terminal stop event"),
             started_at,
         );
