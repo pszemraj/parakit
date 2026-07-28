@@ -25,6 +25,19 @@ pub(super) struct ClipboardWriteToken {
     pub(super) after_sequence: Option<u32>,
 }
 
+/// Bounded leading and optional trailing portions of a paste target's
+/// observable value.
+///
+/// `tail` being present means an omitted middle separates it from `head`.
+/// Keeping the pieces distinct prevents acknowledgement matching from
+/// manufacturing evidence across content that was never read.
+pub(crate) struct PasteTargetValue {
+    /// Leading portion of the target value.
+    pub(crate) head: String,
+    /// Trailing portion when the target value exceeded the extraction bound.
+    pub(crate) tail: Option<String>,
+}
+
 /// Focus and transcript context available to a paste-acknowledgement
 /// strategy. Kept as a struct so a future confirmation strategy can read
 /// more context without changing the [`ClipboardRestoreGate`] trait's
@@ -49,7 +62,7 @@ pub(crate) struct PasteConfirmationContext<'a> {
     /// never grows again and a successful paste looks exactly like a failed
     /// one. `None` when no pre-chord read was possible, in which case the
     /// confirmation strategy falls back to a post-chord baseline.
-    pub(crate) baseline: Option<&'a str>,
+    pub(crate) baseline: Option<&'a PasteTargetValue>,
 }
 
 /// Result of waiting for evidence that a just-sent paste chord was consumed
@@ -133,7 +146,7 @@ pub(super) trait ClipboardRestoreGate {
     ///
     /// `None` in the default implementation: only macOS has a pollable
     /// per-element value to baseline against.
-    fn capture_paste_baseline(&self, _focus: Option<&FocusSnapshot>) -> Option<String> {
+    fn capture_paste_baseline(&self, _focus: Option<&FocusSnapshot>) -> Option<PasteTargetValue> {
         None
     }
 
@@ -273,7 +286,10 @@ impl<'a, G: ClipboardRestoreGate + ?Sized> ClipboardRestorePlan<'a, G> {
     ///
     /// The pre-chord baseline, or `None` when the platform has no pollable
     /// value.
-    pub(super) fn capture_paste_baseline(&self, focus: Option<&FocusSnapshot>) -> Option<String> {
+    pub(super) fn capture_paste_baseline(
+        &self,
+        focus: Option<&FocusSnapshot>,
+    ) -> Option<PasteTargetValue> {
         self.gate.capture_paste_baseline(focus)
     }
 
@@ -413,7 +429,7 @@ impl ClipboardRestoreGate for PlatformClipboardRestoreGate {
     }
 
     #[cfg(target_os = "macos")]
-    fn capture_paste_baseline(&self, focus: Option<&FocusSnapshot>) -> Option<String> {
+    fn capture_paste_baseline(&self, focus: Option<&FocusSnapshot>) -> Option<PasteTargetValue> {
         crate::daemon::macos::pasteboard::capture_baseline(focus)
     }
 

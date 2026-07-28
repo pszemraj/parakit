@@ -80,7 +80,9 @@
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crate::daemon::desktop::clipboard_restore::{PasteConfirmation, PasteConfirmationContext};
+use crate::daemon::desktop::clipboard_restore::{
+    PasteConfirmation, PasteConfirmationContext, PasteTargetValue,
+};
 use crate::daemon::desktop::inject::FocusSnapshot;
 
 /// Deadline for `AXValue` confirmation polling after a paste chord is sent.
@@ -96,13 +98,13 @@ pub(crate) const UNVERIFIED_GRACE: Duration = Duration::from_millis(1500);
 /// Longer transcripts retain only their leading/trailing evidence windows.
 const MAX_WHOLE_TRANSCRIPT_CHARS: usize = 20_000;
 
-/// Maximum number of non-whitespace `AXValue` characters retained per poll.
+/// Maximum number of UTF-16 code units copied from `AXValue` per poll.
 ///
-/// Values at or below the limit are matched whole. Larger values retain
-/// equally sized leading and trailing segments, bounding both allocation and
-/// matching work while preserving the portions exposed by terminals and
+/// Values at or below the limit are copied whole. Larger values retain
+/// equally sized leading and trailing segments, bounding allocation before
+/// UTF-8 conversion while preserving the portions exposed by terminals and
 /// bounded text fields most often.
-const MAX_NORMALIZED_AX_VALUE_CHARS: usize = 65_536;
+const MAX_AX_VALUE_UTF16_UNITS: usize = 65_536;
 
 /// Number of leading (and trailing) non-whitespace characters matched when
 /// the whole transcript cannot be found in the target's value.
@@ -124,14 +126,15 @@ const CONFIRM_WINDOW_CHARS: usize = 32;
 ///
 /// # Returns
 ///
-/// The element's current value, or `None` when there is no focus snapshot,
-/// the element withholds its value (secure input fields), or the read fails.
-/// `None` is not an error: confirmation degrades to a post-chord baseline.
-pub(crate) fn capture_baseline(focus: Option<&FocusSnapshot>) -> Option<String> {
+/// Bounded leading/trailing portions of the element's current value, or
+/// `None` when there is no focus snapshot, the element withholds its value
+/// (secure input fields), or the read fails. `None` is not an error:
+/// confirmation degrades to a post-chord baseline.
+pub(crate) fn capture_baseline(focus: Option<&FocusSnapshot>) -> Option<PasteTargetValue> {
     focus
         .and_then(FocusSnapshot::macos_ax_element)
         .filter(|element| element.supports_value_polling())
-        .and_then(|element| element.poll_value().ok().flatten())
+        .and_then(|element| element.poll_value(MAX_AX_VALUE_UTF16_UNITS).ok().flatten())
 }
 
 /// Await confirmation that a just-sent paste chord was consumed by the
@@ -175,16 +178,15 @@ pub(crate) fn await_paste_confirmation(ctx: &PasteConfirmationContext<'_>) -> Pa
     // old implementation rebuilt this whitespace-normalized needle on every
     // 40ms tick.
     let matcher = TranscriptMatcher::new(ctx.transcript);
-    let baseline =
-        match ctx.baseline {
-            Some(baseline) => Some(BoundedNormalizedValue::new(
-                baseline,
-                MAX_NORMALIZED_AX_VALUE_CHARS,
-            )),
-            None => element.poll_value().ok().flatten().map(|baseline| {
-                BoundedNormalizedValue::new(&baseline, MAX_NORMALIZED_AX_VALUE_CHARS)
-            }),
-        };
+    let baseline = match ctx.baseline {
+        Some(baseline) => Some(BoundedNormalizedValue::from_target_value(baseline)),
+        None => element
+            .poll_value(MAX_AX_VALUE_UTF16_UNITS)
+            .ok()
+            .flatten()
+            .as_ref()
+            .map(BoundedNormalizedValue::from_target_value),
+    };
 
     let deadline = start + AX_CONFIRM_DEADLINE;
     loop {
@@ -197,9 +199,9 @@ pub(crate) fn await_paste_confirmation(ctx: &PasteConfirmationContext<'_>) -> Pa
         }
         thread::sleep(AX_POLL_INTERVAL.min(deadline.saturating_duration_since(now)));
 
-        match element.poll_value() {
+        match element.poll_value(MAX_AX_VALUE_UTF16_UNITS) {
             Ok(Some(current)) => {
-                let current = BoundedNormalizedValue::new(&current, MAX_NORMALIZED_AX_VALUE_CHARS);
+                let current = BoundedNormalizedValue::from_target_value(&current);
                 if matcher.indicates_insertion(baseline.as_ref(), &current) {
                     return PasteConfirmation::Confirmed {
                         elapsed: start.elapsed(),
@@ -238,8 +240,8 @@ pub(crate) fn await_paste_confirmation(ctx: &PasteConfirmationContext<'_>) -> Pa
 fn value_indicates_insertion(baseline: Option<&str>, current: &str, transcript: &str) -> bool {
     let matcher = TranscriptMatcher::new(transcript);
     let baseline =
-        baseline.map(|value| BoundedNormalizedValue::new(value, MAX_NORMALIZED_AX_VALUE_CHARS));
-    let current = BoundedNormalizedValue::new(current, MAX_NORMALIZED_AX_VALUE_CHARS);
+        baseline.map(|value| BoundedNormalizedValue::new(value, MAX_AX_VALUE_UTF16_UNITS));
+    let current = BoundedNormalizedValue::new(current, MAX_AX_VALUE_UTF16_UNITS);
     matcher.indicates_insertion(baseline.as_ref(), &current)
 }
 
@@ -255,6 +257,13 @@ struct BoundedNormalizedValue {
 }
 
 impl BoundedNormalizedValue {
+    fn from_target_value(value: &PasteTargetValue) -> Self {
+        Self {
+            head: normalize_segment(&value.head),
+            tail: value.tail.as_deref().map(normalize_segment),
+        }
+    }
+
     fn new(value: &str, max_chars: usize) -> Self {
         debug_assert!(max_chars >= 2);
         let mut leading: Vec<char> = value
@@ -294,6 +303,10 @@ impl BoundedNormalizedValue {
                 .as_deref()
                 .map_or(0, |tail| tail.match_indices(needle).count())
     }
+}
+
+fn normalize_segment(value: &str) -> String {
+    value.chars().filter(|c| !c.is_whitespace()).collect()
 }
 
 #[derive(Default)]
@@ -543,6 +556,18 @@ mod tests {
         let normalized = BoundedNormalizedValue::new(&value, 64);
         assert_eq!(normalized.head, "a".repeat(32));
         assert_eq!(normalized.tail.as_deref(), Some("z".repeat(32).as_str()));
+    }
+
+    #[test]
+    fn omitted_ax_middle_stays_separate_during_normalization() {
+        let value = PasteTargetValue {
+            head: "prefix alpha ".to_owned(),
+            tail: Some(" omega suffix".to_owned()),
+        };
+        let normalized = BoundedNormalizedValue::from_target_value(&value);
+        assert_eq!(normalized.head, "prefixalpha");
+        assert_eq!(normalized.tail.as_deref(), Some("omegasuffix"));
+        assert_eq!(normalized.occurrence_count("alphaomega"), 0);
     }
 }
 

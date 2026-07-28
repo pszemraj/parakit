@@ -8,7 +8,7 @@
 //! Accessibility cannot expose a focused element on either side, matching
 //! falls back to frontmost-application pid + bundle identifier.
 
-use crate::daemon::desktop::FocusVerification;
+use crate::daemon::desktop::{clipboard_restore::PasteTargetValue, FocusVerification};
 use anyhow::{bail, Context, Result};
 use objc2::msg_send;
 use objc2::rc::autoreleasepool;
@@ -25,6 +25,13 @@ type CFIndex = isize;
 type CFStringRef = *const c_void;
 type CFTypeID = usize;
 type CFTypeRef = *const c_void;
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct CFRange {
+    location: CFIndex,
+    length: CFIndex,
+}
 
 const K_AX_ERROR_SUCCESS: AXError = 0;
 const K_CF_STRING_ENCODING_UTF8: u32 = 0x0800_0100;
@@ -51,12 +58,7 @@ extern "C" {
         encoding: u32,
         is_external_representation: Boolean,
     ) -> CFStringRef;
-    fn CFStringGetCString(
-        the_string: CFStringRef,
-        buffer: *mut u8,
-        buffer_size: CFIndex,
-        encoding: u32,
-    ) -> Boolean;
+    fn CFStringGetCharacters(the_string: CFStringRef, range: CFRange, buffer: *mut u16);
     fn CFStringGetLength(the_string: CFStringRef) -> CFIndex;
     fn CFStringGetTypeID() -> CFTypeID;
 }
@@ -174,9 +176,15 @@ impl AxElementSnapshot {
     ///
     /// # Returns
     ///
-    /// `Ok(Some(value))` when `AXValue` is currently a string; `Ok(None)`
-    /// when the read succeeded but the value is not (or is no longer) a
-    /// string.
+    /// `Ok(Some(value))` when `AXValue` is currently a string; the returned
+    /// leading/trailing portions contain at most `max_utf16_units` total
+    /// UTF-16 code units. `Ok(None)` when the read succeeded but the value
+    /// is not (or is no longer) a string.
+    ///
+    /// # Arguments
+    ///
+    /// * `max_utf16_units` - Maximum total UTF-16 code units copied from the
+    ///   Accessibility value. Must be at least 2.
     ///
     /// # Errors
     ///
@@ -185,7 +193,10 @@ impl AxElementSnapshot {
     /// requests (e.g. focus moved to a different element or application);
     /// callers should treat that as the end of evidence-gathering rather
     /// than a transient error to retry.
-    pub(crate) fn poll_value(&self) -> Result<Option<String>, ()> {
+    pub(crate) fn poll_value(
+        &self,
+        max_utf16_units: usize,
+    ) -> Result<Option<PasteTargetValue>, ()> {
         let element: AXUIElementRef = self.element.0;
         let mut value: CFTypeRef = ptr::null();
         let status =
@@ -200,7 +211,10 @@ impl AxElementSnapshot {
         if unsafe { CFGetTypeID(handle.as_cftype()) } != unsafe { CFStringGetTypeID() } {
             return Ok(None);
         }
-        Ok(cfstring_to_string(handle.as_cftype().cast()))
+        Ok(cfstring_to_bounded_value(
+            handle.as_cftype().cast(),
+            max_utf16_units,
+        ))
     }
 }
 
@@ -388,34 +402,79 @@ fn ax_value_is_string(element: AXUIElementRef) -> bool {
     unsafe { CFGetTypeID(handle.as_cftype()) == CFStringGetTypeID() }
 }
 
-fn cfstring_to_string(value: CFStringRef) -> Option<String> {
+fn cfstring_to_bounded_value(
+    value: CFStringRef,
+    max_utf16_units: usize,
+) -> Option<PasteTargetValue> {
+    if max_utf16_units < 2 {
+        return None;
+    }
     let length = unsafe { CFStringGetLength(value) };
     if length < 0 {
         return None;
     }
-    // Each UTF-16 code unit needs at most 3 UTF-8 bytes; surrogate pairs (2
-    // units) need at most 4, comfortably under this bound.
-    let capacity = (length as usize).saturating_mul(3).saturating_add(1);
-    let mut buffer = vec![0_u8; capacity];
-    let ok = unsafe {
-        CFStringGetCString(
-            value,
-            buffer.as_mut_ptr(),
-            capacity as CFIndex,
-            K_CF_STRING_ENCODING_UTF8,
-        ) != 0
-    };
-    if !ok {
-        return None;
+    let length = usize::try_from(length).ok()?;
+    if length <= max_utf16_units {
+        return Some(PasteTargetValue {
+            head: cfstring_range_to_string(value, 0, length)?,
+            tail: None,
+        });
     }
-    let nul = buffer.iter().position(|&b| b == 0).unwrap_or(buffer.len());
-    buffer.truncate(nul);
-    String::from_utf8(buffer).ok()
+
+    let head_units = max_utf16_units / 2;
+    let tail_units = max_utf16_units - head_units;
+    Some(PasteTargetValue {
+        head: cfstring_range_to_string(value, 0, head_units)?,
+        tail: Some(cfstring_range_to_string(
+            value,
+            length - tail_units,
+            tail_units,
+        )?),
+    })
+}
+
+fn cfstring_range_to_string(value: CFStringRef, location: usize, length: usize) -> Option<String> {
+    let mut units = vec![0_u16; length];
+    if length != 0 {
+        unsafe {
+            CFStringGetCharacters(
+                value,
+                CFRange {
+                    location: CFIndex::try_from(location).ok()?,
+                    length: CFIndex::try_from(length).ok()?,
+                },
+                units.as_mut_ptr(),
+            );
+        }
+    }
+    Some(String::from_utf16_lossy(&units))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cfstring_conversion_copies_only_bounded_ends() {
+        let input = format!("{}{}", "a".repeat(80), "z".repeat(80));
+        let value = unsafe {
+            CFStringCreateWithBytes(
+                ptr::null(),
+                input.as_ptr(),
+                input.len() as CFIndex,
+                K_CF_STRING_ENCODING_UTF8,
+                0,
+            )
+        };
+        assert!(!value.is_null());
+        let value = AxElementHandle(value.cast_mut());
+
+        let bounded =
+            cfstring_to_bounded_value(value.as_cftype().cast(), 64).expect("valid CFString");
+
+        assert_eq!(bounded.head, "a".repeat(32));
+        assert_eq!(bounded.tail.as_deref(), Some("z".repeat(32).as_str()));
+    }
 
     #[test]
     fn decision_matches_when_pid_bundle_and_ax_element_agree() {

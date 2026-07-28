@@ -32,7 +32,7 @@ use super::clipboard_restore::clipboard_history_debug;
 use super::clipboard_restore::ClipboardWriteSnapshot;
 use super::clipboard_restore::{
     ClipboardRestoreGate, ClipboardRestorePlan, ClipboardWriteToken, PasteConfirmation,
-    PasteConfirmationContext, PlatformClipboardRestoreGate,
+    PasteConfirmationContext, PasteTargetValue, PlatformClipboardRestoreGate,
 };
 use super::FocusVerification;
 
@@ -931,7 +931,7 @@ where
             clipboard_policy,
             focus,
             text,
-            baseline.as_deref(),
+            baseline.as_ref(),
         ),
         Err(paste_err) => {
             let restore_result = restore_after_delay(
@@ -980,7 +980,7 @@ fn finish_confirmed_paste<C, H>(
     clipboard_policy: ClipboardPolicy,
     focus: Option<&FocusSnapshot>,
     text: &str,
-    baseline: Option<&str>,
+    baseline: Option<&PasteTargetValue>,
 ) -> Result<PasteReport>
 where
     C: ClipboardStore,
