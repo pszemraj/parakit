@@ -40,6 +40,27 @@ pub(crate) const MACOS_PTT_LEFT_CONTROL_KEYCODE: u16 = 59;
 /// Virtual keycode for the configured macOS push-to-talk Space key.
 #[cfg(target_os = "macos")]
 pub(crate) const MACOS_PTT_SPACE_KEYCODE: u16 = 49;
+/// Virtual keycode for the macOS right Command key.
+#[cfg(target_os = "macos")]
+pub(crate) const MACOS_RIGHT_COMMAND_KEYCODE: u16 = 54;
+/// Virtual keycode for the macOS left Command key.
+#[cfg(target_os = "macos")]
+pub(crate) const MACOS_LEFT_COMMAND_KEYCODE: u16 = 55;
+/// Virtual keycode for the macOS left Shift key.
+#[cfg(target_os = "macos")]
+pub(crate) const MACOS_LEFT_SHIFT_KEYCODE: u16 = 56;
+/// Virtual keycode for the macOS left Option key.
+#[cfg(target_os = "macos")]
+pub(crate) const MACOS_LEFT_OPTION_KEYCODE: u16 = 58;
+/// Virtual keycode for the macOS right Shift key.
+#[cfg(target_os = "macos")]
+pub(crate) const MACOS_RIGHT_SHIFT_KEYCODE: u16 = 60;
+/// Virtual keycode for the macOS right Option key.
+#[cfg(target_os = "macos")]
+pub(crate) const MACOS_RIGHT_OPTION_KEYCODE: u16 = 61;
+/// Virtual keycode for the macOS right Control key.
+#[cfg(target_os = "macos")]
+pub(crate) const MACOS_RIGHT_CONTROL_KEYCODE: u16 = 62;
 
 #[cfg(any(not(target_os = "windows"), test))]
 const HOTKEY_DEBOUNCE: Duration = Duration::from_millis(150);

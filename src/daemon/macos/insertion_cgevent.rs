@@ -1,7 +1,11 @@
 //! macOS CGEvent-based paste shortcut and insertion smoke-test helpers.
 
 use super::permissions::event_tap_preflight;
-use crate::daemon::desktop::hotkey::{MACOS_PTT_LEFT_CONTROL_KEYCODE, MACOS_PTT_SPACE_KEYCODE};
+use crate::daemon::desktop::hotkey::{
+    MACOS_LEFT_COMMAND_KEYCODE, MACOS_LEFT_OPTION_KEYCODE, MACOS_LEFT_SHIFT_KEYCODE,
+    MACOS_PTT_LEFT_CONTROL_KEYCODE, MACOS_PTT_SPACE_KEYCODE, MACOS_RIGHT_COMMAND_KEYCODE,
+    MACOS_RIGHT_CONTROL_KEYCODE, MACOS_RIGHT_OPTION_KEYCODE, MACOS_RIGHT_SHIFT_KEYCODE,
+};
 use anyhow::{bail, Result};
 use std::ffi::c_void;
 use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -34,23 +38,18 @@ const K_CG_KEYBOARD_EVENT_KEYCODE: u32 = 9;
 const K_CG_EVENT_FLAG_MASK_COMMAND: u64 = 0x0010_0000;
 const K_CG_EVENT_SOURCE_STATE_HID_SYSTEM_STATE: i32 = 1;
 const MACOS_V_KEYCODE: u16 = 9;
-const MACOS_RIGHT_COMMAND_KEYCODE: u16 = 54;
-const MACOS_COMMAND_KEYCODE: u16 = 55;
-const MACOS_LEFT_SHIFT_KEYCODE: u16 = 56;
-const MACOS_LEFT_OPTION_KEYCODE: u16 = 58;
-const MACOS_RIGHT_SHIFT_KEYCODE: u16 = 60;
-const MACOS_RIGHT_OPTION_KEYCODE: u16 = 61;
-const MACOS_RIGHT_CONTROL_KEYCODE: u16 = 62;
 const MACOS_FUNCTION_KEYCODE: u16 = 63;
 
-/// Physical keys that can change the meaning of a synthetic Cmd+V chord.
+/// Physical keys that must be released before a synthetic Cmd+V chord.
 ///
-/// Caps Lock is deliberately absent: it does not alter the paste shortcut,
-/// and its latched state must not prevent insertion indefinitely.
+/// Modifier keys can change the chord's meaning. The configured PTT Space
+/// key is also included so insertion waits for the triggering key release;
+/// it is not a `CGEventFlags` modifier. Caps Lock is deliberately absent:
+/// it does not alter paste, and its latched state must not block insertion.
 const MACOS_PASTE_CONFLICT_KEYCODES: &[u16] = &[
     MACOS_PTT_SPACE_KEYCODE,
     MACOS_RIGHT_COMMAND_KEYCODE,
-    MACOS_COMMAND_KEYCODE,
+    MACOS_LEFT_COMMAND_KEYCODE,
     MACOS_LEFT_SHIFT_KEYCODE,
     MACOS_LEFT_OPTION_KEYCODE,
     MACOS_PTT_LEFT_CONTROL_KEYCODE,
@@ -369,7 +368,11 @@ fn create_paste_chord_events(source: *mut c_void) -> Result<Vec<CGEventRef>> {
 }
 
 fn build_paste_chord_events(source: *mut c_void, events: &mut Vec<CGEventRef>) -> Result<()> {
-    events.push(create_keyboard_event(source, MACOS_COMMAND_KEYCODE, 1)?);
+    events.push(create_keyboard_event(
+        source,
+        MACOS_LEFT_COMMAND_KEYCODE,
+        1,
+    )?);
 
     let v_down = create_keyboard_event(source, MACOS_V_KEYCODE, 1)?;
     unsafe { CGEventSetFlags(v_down, K_CG_EVENT_FLAG_MASK_COMMAND) };
@@ -379,7 +382,11 @@ fn build_paste_chord_events(source: *mut c_void, events: &mut Vec<CGEventRef>) -
     unsafe { CGEventSetFlags(v_up, K_CG_EVENT_FLAG_MASK_COMMAND) };
     events.push(v_up);
 
-    events.push(create_keyboard_event(source, MACOS_COMMAND_KEYCODE, 0)?);
+    events.push(create_keyboard_event(
+        source,
+        MACOS_LEFT_COMMAND_KEYCODE,
+        0,
+    )?);
     Ok(())
 }
 
