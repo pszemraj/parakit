@@ -73,13 +73,12 @@ pub(crate) fn run() -> Result<()> {
     // `daemon.verbose = true` also takes effect.
     configure_native_logging(cli.verbose);
 
-    // `fetch`, `cache`, `config`, `status`, `stop`, `paste-last`,
-    // `copy-last`, `history`, and `test-paste` must keep working even when
-    // the user's config file is broken (missing, bad TOML, invalid user
-    // rule), so none of these branches touch `config::load()`. `doctor` and
-    // `rules` are the dispatch-block exceptions: they load config
-    // themselves below because they report/apply the same effective values
-    // the daemon would use.
+    // `fetch`, `cache`, `config`, `status`, `stop`, `copy-last`, `history`,
+    // and `test-paste` must keep working even when the user's config file is
+    // broken (missing, bad TOML, invalid user rule), so none of these
+    // branches touch `config::load()`. `doctor` and `rules` are the
+    // dispatch-block exceptions: they load config themselves below because
+    // they report/apply the same effective values the daemon would use.
     match &cli.command {
         Some(Commands::Fetch(fetch_cli)) => {
             fetch::run(FetchOptions {
@@ -106,14 +105,6 @@ pub(crate) fn run() -> Result<()> {
         }
         Some(Commands::Stop) => {
             daemon::ipc::run_client(daemon::ipc::IpcCommand::Stop, cli.quiet, cli.verbose)
-        }
-        Some(Commands::PasteLast(history_ref)) => {
-            let index = wire_history_index(history_ref.index)?;
-            daemon::ipc::run_client(
-                daemon::ipc::IpcCommand::PasteLast { index },
-                cli.quiet,
-                cli.verbose,
-            )
         }
         Some(Commands::CopyLast(history_ref)) => {
             let index = wire_history_index(history_ref.index)?;
@@ -409,8 +400,8 @@ fn run_daemon(cli: &Cli, start: &StartCli) -> Result<()> {
     Ok(())
 }
 
-/// Convert the CLI's 1-based `paste-last`/`copy-last` index into the wire
-/// protocol's 0-based index.
+/// Convert the CLI's 1-based `copy-last` index into the wire protocol's
+/// 0-based index.
 ///
 /// # Returns
 ///

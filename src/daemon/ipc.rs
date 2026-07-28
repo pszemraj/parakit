@@ -46,19 +46,26 @@ pub(crate) const DEFAULT_TRANSCRIPT_HISTORY: usize = 10;
 
 /// Command sent by helper subcommands to the running daemon.
 ///
-/// `PasteLast` and `CopyLast` changed from unit variants to struct variants
-/// carrying an `index` when transcript history became configurable. This is
-/// a deliberate wire-format break: a client built after this change talking
+/// `CopyLast` changed from a unit variant to a struct variant carrying an
+/// `index` when transcript history became configurable. This is a
+/// deliberate wire-format break: a client built after this change talking
 /// to a daemon started by an older build (or vice versa, after an in-place
-/// binary upgrade that left the old daemon running) can't exchange these two
-/// commands. History depth is read once at startup, so there is no way to
+/// binary upgrade that left the old daemon running) can't exchange this
+/// command. History depth is read once at startup, so there is no way to
 /// bridge the two wire formats; restarting the daemon is the only fix.
 /// Neither direction is left to surface a raw serde error: `parse_command`
 /// recognizes the legacy bare-string encoding on the daemon side and replies
 /// with the restart hint through the existing `IpcResponse::Err` path (old
 /// clients can still render that, since its shape hasn't changed), and
 /// `send_command`'s response parsing adds the same hint on the client side
-/// for `PasteLast`/`CopyLast` specifically.
+/// for `CopyLast` specifically.
+///
+/// `PasteLast` was removed: run from a terminal, it pasted into the terminal
+/// itself rather than wherever the caller meant to paste, so `copy-last`'s
+/// copy-then-paste-manually flow is the one that stays. A CLI built before
+/// the removal can still send the legacy bare `"paste_last"` string (see
+/// [`LEGACY_PASTE_LAST_WIRE`]); `parse_command` answers that with a
+/// "removed, use copy-last" message instead of a raw serde error.
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum IpcCommand {
@@ -66,17 +73,11 @@ pub(crate) enum IpcCommand {
     Status,
     /// Stop the daemon process.
     Stop,
-    /// Paste a transcript remembered in memory.
+    /// Copy a transcript remembered in memory.
     ///
     /// `index` is 0-based on the wire (0 is the most recent); a missing key
     /// defaults to 0. The CLI number is 1-based and is converted to this
     /// 0-based wire index at the CLI boundary.
-    PasteLast {
-        #[serde(default)]
-        index: usize,
-    },
-    /// Copy a transcript remembered in memory. See `PasteLast` for the
-    /// wire index convention.
     CopyLast {
         #[serde(default)]
         index: usize,
@@ -95,21 +96,19 @@ pub(crate) enum IpcCommand {
 impl IpcCommand {
     fn response_timeout(&self) -> Duration {
         match self {
-            // All three commands acquire SharedState's process-wide insertion
+            // Both commands acquire SharedState's process-wide insertion
             // lock. CopyLast itself is quick, but it can queue behind a
             // synchronous paste transaction (including macOS modifier and
             // acknowledgement waits), so it needs the same response budget.
-            Self::PasteLast { .. } | Self::CopyLast { .. } | Self::TestPaste { .. } => {
-                IPC_INSERT_RESPONSE_TIMEOUT
-            }
+            Self::CopyLast { .. } | Self::TestPaste { .. } => IPC_INSERT_RESPONSE_TIMEOUT,
             Self::Status | Self::Stop | Self::History { .. } => IPC_TRANSPORT_TIMEOUT,
         }
     }
 }
 
-/// Bare-string wire encoding used by `PasteLast`/`CopyLast` before they
-/// gained an `index` field. A CLI built before that change still sends one
-/// of these two literals.
+/// Bare-string wire encoding used by the removed `paste_last` command and by
+/// `copy_last` before it gained an `index` field. A CLI built before the
+/// respective change still sends one of these two literals.
 #[cfg(any(unix, target_os = "windows"))]
 const LEGACY_PASTE_LAST_WIRE: &str = "\"paste_last\"";
 #[cfg(any(unix, target_os = "windows"))]
@@ -117,47 +116,57 @@ const LEGACY_COPY_LAST_WIRE: &str = "\"copy_last\"";
 
 /// Deserialize one control-socket request line as [`IpcCommand`].
 ///
-/// Detects the pre-`index` unit-variant encoding of `paste_last`/
-/// `copy_last` (a bare JSON string) and replaces the resulting serde type
-/// error with an actionable one: that shape only comes from a CLI built
-/// before this daemon, so the message names the fix instead of surfacing
-/// "invalid type: map, expected unit" to whoever reads `IpcResponse::Err`.
+/// Detects two legacy bare-string (pre-`index` unit-variant) encodings and
+/// replaces the resulting serde error with an actionable one, instead of
+/// surfacing raw serde text (e.g. "unknown variant `paste_last`") to
+/// whoever reads `IpcResponse::Err`:
+/// - `"paste_last"` only comes from a CLI old enough to predate the
+///   command's removal; the daemon has no handler for it at all anymore, so
+///   the message says it was removed and points at `copy-last`.
+/// - `"copy_last"` comes from a CLI built before `copy-last` gained an
+///   `index`; the message names the CLI/daemon version mismatch and the
+///   restart fix.
 ///
 /// # Errors
 ///
-/// Returns an error naming the CLI/daemon version mismatch when `raw` is
-/// the legacy `paste_last`/`copy_last` literal, otherwise the underlying
-/// serde error wrapped with context.
+/// Returns an error naming the removed command or the CLI/daemon version
+/// mismatch when `raw` is one of the two legacy literals, otherwise the
+/// underlying serde error wrapped with context.
 #[cfg(any(unix, target_os = "windows"))]
 fn parse_command(raw: &str) -> Result<IpcCommand> {
     serde_json::from_str(raw).or_else(|err| match raw.trim() {
-        LEGACY_PASTE_LAST_WIRE | LEGACY_COPY_LAST_WIRE => bail!(
-            "this daemon is newer than the CLI that sent this command: paste-last/copy-last \
-             gained a transcript index and can no longer be sent as a bare command. Reinstall \
-             or upgrade the parakit CLI to match this daemon, or restart the daemon to go back \
-             to matching an older CLI."
+        LEGACY_PASTE_LAST_WIRE => bail!(
+            "paste-last was removed from parakit: run from a terminal, it pasted into the \
+             terminal itself, so it never did what it looked like it should. Use `parakit \
+             copy-last` instead (copies the transcript to the clipboard; paste it yourself)."
+        ),
+        LEGACY_COPY_LAST_WIRE => bail!(
+            "this daemon is newer than the CLI that sent this command: copy-last gained a \
+             transcript index and can no longer be sent as a bare command. Reinstall or upgrade \
+             the parakit CLI to match this daemon, or restart the daemon to go back to matching \
+             an older CLI."
         ),
         _ => Err(err).context("invalid control command"),
     })
 }
 
 /// Extra context for a control-socket response parse failure, naming the
-/// probable cause when `command` is `PasteLast`/`CopyLast`: those are the
-/// only two commands with a wire-format break (see the `IpcCommand` doc
-/// comment), so a response that fails to parse most likely means the
-/// running daemon predates this CLI build. `Status` and `History` are
-/// additive-compatible (new fields are `#[serde(default)]`; new variants
-/// are never sent by an old daemon) and don't need this hint.
+/// probable cause when `command` is `CopyLast`: it is the only command with
+/// a wire-format break (see the `IpcCommand` doc comment), so a response
+/// that fails to parse most likely means the running daemon predates this
+/// CLI build. `Status` and `History` are additive-compatible (new fields
+/// are `#[serde(default)]`; new variants are never sent by an old daemon)
+/// and don't need this hint.
 ///
 /// # Returns
 ///
-/// `Some` context message for `PasteLast`/`CopyLast`, `None` otherwise.
+/// `Some` context message for `CopyLast`, `None` otherwise.
 #[cfg(any(unix, target_os = "windows"))]
 fn stale_daemon_response_hint(command: &IpcCommand) -> Option<&'static str> {
     match command {
-        IpcCommand::PasteLast { .. } | IpcCommand::CopyLast { .. } => Some(
+        IpcCommand::CopyLast { .. } => Some(
             "parse daemon control response: the running daemon predates this CLI's \
-             paste-last/copy-last wire format; run `parakit stop` and start it again",
+             copy-last wire format; run `parakit stop` and start it again",
         ),
         IpcCommand::Status
         | IpcCommand::Stop
@@ -196,7 +205,7 @@ pub(crate) enum IpcResponse {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub(crate) struct HistoryEntry {
     /// Position counting back from the most recent, 1-based to match the
-    /// number the user passes to `copy-last` / `paste-last`.
+    /// number the user passes to `copy-last`.
     pub(crate) index: usize,
     /// Seconds since the transcript was remembered.
     pub(crate) age_secs: u64,
@@ -325,7 +334,7 @@ impl SharedState {
     /// # Arguments
     ///
     /// * `limit` - Maximum number of transcripts kept in memory. `0`
-    ///   disables `paste-last`, `copy-last`, and `history`.
+    ///   disables `copy-last` and `history`.
     ///
     /// # Returns
     ///
@@ -426,8 +435,7 @@ impl SharedState {
     }
 
     /// Fail when transcript history is turned off, so `history` reports the
-    /// same reason as `paste-last` and `copy-last` instead of looking like
-    /// an empty session.
+    /// same reason as `copy-last` instead of looking like an empty session.
     ///
     /// # Errors
     ///
@@ -500,8 +508,8 @@ impl SharedState {
     /// paste/copy paths.
     ///
     /// Clipboard staging plus a synthetic paste chord must be serialized
-    /// process-wide. Otherwise `paste-last`, `copy-last`, or `test-paste` can
-    /// race the worker clipboard transaction and paste or copy the wrong text.
+    /// process-wide. Otherwise `copy-last` or `test-paste` can race the
+    /// worker clipboard transaction and paste or copy the wrong text.
     ///
     /// # Returns
     ///
@@ -847,7 +855,7 @@ struct CommandOutcome {
 }
 
 /// Human-readable reference to a 0-based wire history index, used in
-/// `paste-last`/`copy-last` success messages.
+/// `copy-last` success messages.
 ///
 /// # Returns
 ///
@@ -883,27 +891,6 @@ fn handle_command(
             },
             stop_after_response: true,
         }),
-        IpcCommand::PasteLast { index } => {
-            let result = state.with_insertion_lock(|| {
-                let text = state.resolve_transcript(index)?;
-                paste_text(&text, paste_mode, keep_transcript_clipboard, log, notifier)
-            })?;
-            let what = history_ref_label(index);
-            Ok(CommandOutcome {
-                response: IpcResponse::Ok {
-                    message: match result {
-                        InsertOutcome::Pasted => format!("pasted {what}"),
-                        InsertOutcome::PastedUnverified => {
-                            format!("pasted {what} (insertion unconfirmed)")
-                        }
-                        InsertOutcome::CopiedOnly => format!("copied {what}"),
-                        InsertOutcome::Blocked => "paste blocked".to_string(),
-                        InsertOutcome::Skipped => "paste skipped".to_string(),
-                    },
-                },
-                stop_after_response: false,
-            })
-        }
         IpcCommand::CopyLast { index } => {
             state.with_insertion_lock(|| {
                 let text = state.resolve_transcript(index)?;
@@ -2032,10 +2019,6 @@ mod tests {
     #[test]
     fn insertion_lock_commands_use_synchronous_transaction_timeout() {
         assert_eq!(
-            IpcCommand::PasteLast { index: 0 }.response_timeout(),
-            IPC_INSERT_RESPONSE_TIMEOUT
-        );
-        assert_eq!(
             IpcCommand::CopyLast { index: 0 }.response_timeout(),
             IPC_INSERT_RESPONSE_TIMEOUT
         );
@@ -2110,8 +2093,8 @@ mod tests {
     #[test]
     fn history_ref_label_reproduces_last_transcript_wording_for_index_zero() {
         // Index 0 must keep the pre-history wording byte-identical, since
-        // `paste-last`/`copy-last` with no `N` argument is the common case
-        // and existing docs/scripts quote this exact phrase.
+        // `copy-last` with no `N` argument is the common case and existing
+        // docs/scripts quote this exact phrase.
         assert_eq!(history_ref_label(0), "last transcript");
         assert_eq!(history_ref_label(1), "transcript 2");
         assert_eq!(history_ref_label(4), "transcript 5");
@@ -2367,14 +2350,7 @@ mod tests {
     }
 
     #[test]
-    fn ipc_command_paste_last_and_copy_last_serde_round_trip_with_index() {
-        let command = IpcCommand::PasteLast { index: 3 };
-        let json = serde_json::to_string(&command).expect("paste_last should serialize");
-        assert_eq!(json, r#"{"paste_last":{"index":3}}"#);
-        let round_tripped: IpcCommand =
-            serde_json::from_str(&json).expect("paste_last should deserialize");
-        assert!(matches!(round_tripped, IpcCommand::PasteLast { index: 3 }));
-
+    fn ipc_command_copy_last_serde_round_trips_with_index() {
         let command = IpcCommand::CopyLast { index: 1 };
         let json = serde_json::to_string(&command).expect("copy_last should serialize");
         assert_eq!(json, r#"{"copy_last":{"index":1}}"#);
@@ -2473,20 +2449,22 @@ mod tests {
 
     #[test]
     fn legacy_bare_string_paste_last_and_copy_last_fail_against_new_enum() {
-        // Pre-`index` CLIs send `PasteLast`/`CopyLast` as a bare JSON
-        // string (the old unit-variant encoding); the struct-variant
-        // encoding introduced with `index` rejects that shape outright.
+        // A pre-`index` CLI sends `paste_last`/`copy_last` as a bare JSON
+        // string (the old unit-variant encoding). `paste_last` no longer
+        // names a variant at all, and `copy_last`'s struct-variant encoding
+        // rejects the bare-string shape outright; both fail plain serde
+        // deserialization the same way.
         assert!(serde_json::from_str::<IpcCommand>(r#""paste_last""#).is_err());
         assert!(serde_json::from_str::<IpcCommand>(r#""copy_last""#).is_err());
     }
 
     #[cfg(any(unix, target_os = "windows"))]
     #[test]
-    fn parse_command_classifies_legacy_paste_last_as_a_version_mismatch() {
+    fn parse_command_classifies_legacy_paste_last_as_removed() {
         let err = parse_command("\"paste_last\"\n").unwrap_err();
         let message = err.to_string();
-        assert!(message.contains("newer than the CLI"), "{message}");
-        assert!(message.contains("restart the daemon"), "{message}");
+        assert!(message.contains("paste-last was removed"), "{message}");
+        assert!(message.contains("parakit copy-last"), "{message}");
     }
 
     #[cfg(any(unix, target_os = "windows"))]
@@ -2508,17 +2486,16 @@ mod tests {
     #[cfg(any(unix, target_os = "windows"))]
     #[test]
     fn parse_command_still_accepts_the_current_wire_format() {
-        let command = parse_command(r#"{"paste_last":{"index":2}}"#)
-            .expect("current paste_last encoding should still parse");
-        assert!(matches!(command, IpcCommand::PasteLast { index: 2 }));
+        let command = parse_command(r#"{"copy_last":{"index":2}}"#)
+            .expect("current copy_last encoding should still parse");
+        assert!(matches!(command, IpcCommand::CopyLast { index: 2 }));
     }
 
     #[cfg(any(unix, target_os = "windows"))]
     #[test]
-    fn stale_daemon_response_hint_only_applies_to_paste_and_copy_last() {
+    fn stale_daemon_response_hint_only_applies_to_copy_last() {
         // Status/History are additive-compatible (see the doc comment on
         // `stale_daemon_response_hint`) and must not get this wording.
-        assert!(stale_daemon_response_hint(&IpcCommand::PasteLast { index: 0 }).is_some());
         assert!(stale_daemon_response_hint(&IpcCommand::CopyLast { index: 0 }).is_some());
         assert!(stale_daemon_response_hint(&IpcCommand::Status).is_none());
         assert!(stale_daemon_response_hint(&IpcCommand::Stop).is_none());
@@ -2532,8 +2509,8 @@ mod tests {
     #[cfg(any(unix, target_os = "windows"))]
     #[test]
     fn stale_daemon_response_hint_names_the_restart_fix() {
-        let hint = stale_daemon_response_hint(&IpcCommand::PasteLast { index: 0 })
-            .expect("paste_last should carry a hint");
+        let hint = stale_daemon_response_hint(&IpcCommand::CopyLast { index: 0 })
+            .expect("copy_last should carry a hint");
         assert!(hint.contains("parakit stop"), "{hint}");
         assert!(hint.contains("predates this CLI"), "{hint}");
     }

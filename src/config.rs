@@ -9,8 +9,8 @@
 //! `Cli::effective_*` in `cli.rs` for the merge logic.
 //!
 //! A broken config file must never break commands that do not need it
-//! (`fetch`, `cache`, `status`, `stop`, `paste-last`, `copy-last`, `history`,
-//! `test-paste`); see the load-order comment in `app.rs::run`. Within
+//! (`fetch`, `cache`, `status`, `stop`, `copy-last`, `history`, `test-paste`);
+//! see the load-order comment in `app.rs::run`. Within
 //! `config`, `path`/`init`/`edit` stay available on a broken file, but
 //! `show` (the default subcommand) loads and validates the file and so
 //! fails with a diagnostic naming the config path.
@@ -65,10 +65,9 @@ pub(crate) struct DaemonConfig {
     pub(crate) sounds: Option<bool>,
     /// Verbose diagnostics: paths, backend details, and timing lines.
     pub(crate) verbose: Option<bool>,
-    /// Count of transcripts kept in daemon memory for `paste-last`,
-    /// `copy-last`, and `history`. `0` disables all three. History lives
-    /// only in daemon memory; nothing is written to disk, and it is
-    /// cleared when the daemon stops.
+    /// Count of transcripts kept in daemon memory for `copy-last` and
+    /// `history`. `0` disables both. History lives only in daemon memory;
+    /// nothing is written to disk, and it is cleared when the daemon stops.
     pub(crate) transcript_history: Option<usize>,
 }
 
@@ -151,9 +150,9 @@ pub(crate) const TEMPLATE: &str = r#"# parakit config.toml
 # --quiet flag always wins over this setting.
 # verbose = false
 
-# Number of transcripts kept in daemon memory for `paste-last`, `copy-last`,
-# and `history`. 0 disables all three. History lives only in daemon memory,
-# is never written to disk, and is cleared when the daemon stops.
+# Number of transcripts kept in daemon memory for `copy-last` and `history`.
+# 0 disables both. History lives only in daemon memory, is never written to
+# disk, and is cleared when the daemon stops.
 # transcript_history = 10
 
 [cleaning]

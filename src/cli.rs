@@ -75,8 +75,6 @@ pub(crate) enum Commands {
     Status,
     /// Stop a running daemon over the local control socket.
     Stop,
-    /// Paste a transcript remembered by the running daemon.
-    PasteLast(HistoryRefCli),
     /// Copy a transcript remembered by the running daemon.
     CopyLast(HistoryRefCli),
     /// List transcripts the running daemon is holding in memory.
@@ -343,7 +341,7 @@ impl StartCli {
 
     /// Return the number of transcripts kept in daemon memory: config
     /// `daemon.transcript_history`, then [`DEFAULT_TRANSCRIPT_HISTORY`].
-    /// `0` disables `paste-last`, `copy-last`, and `history`.
+    /// `0` disables `copy-last` and `history`.
     ///
     /// # Returns
     ///
@@ -366,7 +364,7 @@ impl StartCli {
     }
 }
 
-/// Arguments shared by `paste-last` and `copy-last`.
+/// Arguments for `copy-last`.
 #[derive(Args, Debug)]
 pub(crate) struct HistoryRefCli {
     /// Which remembered transcript to use, counting back from the most
