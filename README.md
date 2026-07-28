@@ -57,17 +57,11 @@ Linux currently requires an X11 session for desktop hotkeys and text insertion; 
 
 ## Docs
 
+Full index: [docs/README.md](docs/README.md)
+
 - Build and native dependencies: [docs/build.md](docs/build.md)
-- Windows bundle scripts: [scripts/windows/README.md](scripts/windows/README.md)
 - Running, control socket, model cache, logging, and paste modes: [docs/running.md](docs/running.md)
 - Config file, precedence, and user rules: [docs/configuration.md](docs/configuration.md)
-- Transcription log schema: [docs/logging.md](docs/logging.md)
-- Linux X11 and experimental evdev-proxy setup: [docs/linux-desktop.md](docs/linux-desktop.md)
-- macOS permissions, hotkey, and paste acknowledgement: [docs/macos-desktop.md](docs/macos-desktop.md)
-- Cleanup rules: [docs/cleaning-rules.md](docs/cleaning-rules.md)
-- Validation and quality checks: [docs/quality.md](docs/quality.md)
-- Architecture and platform work: [docs/architecture.md](docs/architecture.md)
-- Maintainer notes: [docs/dev.md](docs/dev.md)
 - Troubleshooting: [docs/troubleshooting.md](docs/troubleshooting.md)
 
 ## License
