@@ -18,7 +18,7 @@ fail() {
     exit 1
 }
 
-staged="$(git diff --cached --name-only --diff-filter=ACMR)"
+staged="$(git diff --cached --name-only --diff-filter=ACMRD)"
 [ -n "$staged" ] || exit 0
 
 # Block accidental vendored-submodule pointer bumps: cargo fmt --all and
