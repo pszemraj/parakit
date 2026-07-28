@@ -61,14 +61,14 @@
 //! window. Treating any length increase as paste evidence can therefore
 //! restore the previous clipboard even though the transcript never landed,
 //! destroying the only remaining copy. Confirmation requires transcript-
-//! specific evidence instead: a newly visible whole transcript, a newly
-//! visible leading/trailing window when a terminal or bounded field only
-//! exposes part of it, or the exact selected-range and total-length transition
-//! that inserting the transcript must produce. Selection geometry is trusted
-//! only while polling the same Accessibility object; a replacement object
-//! must show transcript-specific text. If neither form of evidence is
-//! available, the transaction deliberately leaves the transcript on the
-//! clipboard.
+//! specific evidence instead: an exact baseline-to-current insertion for a
+//! short transcript, a newly visible whole transcript or leading/trailing
+//! window once the text is long enough to be distinctive, or the exact
+//! selected-range and total-length transition that inserting the transcript
+//! must produce. Selection geometry is trusted only while polling the same
+//! Accessibility object; a replacement object must show transcript-specific
+//! text. If neither form of evidence is available, the transaction
+//! deliberately leaves the transcript on the clipboard.
 //!
 //! ## Secure input fields are not a bug
 //!
@@ -156,9 +156,11 @@ pub(crate) fn capture_baseline(focus: Option<&FocusSnapshot>) -> Option<PasteTar
 /// # Returns
 ///
 /// [`PasteConfirmation::Confirmed`] as soon as the element's value is
-/// observed to show a newly visible transcript occurrence (ignoring the
+/// observed to show transcript-specific insertion evidence (ignoring the
 /// target's own line wrapping), or its selection and length show the exact
-/// insertion transition.
+/// insertion transition. Short transcripts require an exact value delta
+/// against the pre-chord baseline; longer text can use distinctive occurrence
+/// windows.
 /// [`PasteConfirmation::Unverified`] after a fixed grace
 /// sleep when Accessibility cannot expose a pollable value at all (no
 /// focused element on this snapshot, or the field does not support value
@@ -360,6 +362,33 @@ impl BoundedNormalizedValue {
                 .as_deref()
                 .map_or(0, |tail| tail.match_indices(needle).count())
     }
+
+    /// Return whether this complete value is exactly `baseline` with one
+    /// normalized `inserted` substring added.
+    ///
+    /// This is the safe text-only acknowledgement for short transcripts:
+    /// merely seeing another `"ok"` occurrence can collide with unrelated
+    /// growth such as `"token"`, while removing the alleged insertion and
+    /// recovering the exact baseline demonstrates the expected value delta.
+    fn is_exact_insertion_of(&self, baseline: &Self, inserted: &str) -> bool {
+        if inserted.is_empty() || self.tail.is_some() || baseline.tail.is_some() {
+            return false;
+        }
+        if self.head.len() != baseline.head.len() + inserted.len() {
+            return false;
+        }
+
+        self.head.match_indices(inserted).any(|(index, _)| {
+            let suffix_index = index + inserted.len();
+            baseline.head.get(..index).is_some_and(|prefix| {
+                prefix == &self.head[..index]
+                    && baseline
+                        .head
+                        .get(index..)
+                        .is_some_and(|suffix| suffix == &self.head[suffix_index..])
+            })
+        })
+    }
 }
 
 fn normalize_segment(value: &str) -> String {
@@ -381,11 +410,13 @@ struct EvidenceCounts {
 /// wrap points. Dropping whitespace on both sides makes the comparison
 /// independent of that layout.
 ///
-/// When the whole transcript is not found, a leading or trailing window of
-/// [`CONFIRM_WINDOW_CHARS`] still counts: a terminal scrolls the head of a
-/// long paste off the top of the screen, and a bounded field truncates the
-/// tail, but either end appearing verbatim is positive evidence the paste
-/// landed.
+/// A transcript at or below [`CONFIRM_WINDOW_CHARS`] requires an exact
+/// baseline-to-current insertion instead of a substring count increase; short
+/// strings collide too easily with unrelated target updates. For longer text,
+/// a leading or trailing window still counts: a terminal scrolls the head of
+/// a long paste off the top of the screen, and a bounded field truncates the
+/// tail, but either distinctive end appearing verbatim is positive evidence
+/// the paste landed.
 ///
 struct TranscriptMatcher {
     whole: Option<String>,
@@ -461,11 +492,24 @@ impl TranscriptMatcher {
         current: &BoundedNormalizedValue,
         allow_selection_evidence: bool,
     ) -> bool {
-        let current_counts = self.counts(current);
-        let baseline_counts = baseline.map(|value| self.counts(value)).unwrap_or_default();
-        current_counts.whole > baseline_counts.whole
-            || current_counts.head > baseline_counts.head
-            || current_counts.tail > baseline_counts.tail
+        let short_exact_insertion = match (&self.whole, &self.head, &self.tail, baseline) {
+            (Some(whole), None, None, Some(baseline)) => {
+                current.is_exact_insertion_of(baseline, whole)
+            }
+            _ => false,
+        };
+        let distinctive_occurrence = if self.head.is_some() || self.tail.is_some() {
+            let current_counts = self.counts(current);
+            let baseline_counts = baseline.map(|value| self.counts(value)).unwrap_or_default();
+            current_counts.whole > baseline_counts.whole
+                || current_counts.head > baseline_counts.head
+                || current_counts.tail > baseline_counts.tail
+        } else {
+            false
+        };
+
+        short_exact_insertion
+            || distinctive_occurrence
             || (allow_selection_evidence
                 && baseline
                     .is_some_and(|baseline| self.selection_indicates_insertion(baseline, current)))
@@ -512,13 +556,32 @@ mod tests {
     use super::*;
 
     #[test]
-    fn new_transcript_evidence_confirms_with_or_without_baseline() {
-        assert!(value_indicates_insertion(None, "hello world", "world"));
+    fn short_transcript_requires_baseline_and_exact_delta() {
+        assert!(!value_indicates_insertion(None, "hello world", "world"));
         assert!(value_indicates_insertion(
             Some("hello "),
             "hello world",
             "world"
         ));
+    }
+
+    #[test]
+    fn short_transcript_substring_collision_does_not_confirm() {
+        assert!(!value_indicates_insertion(
+            Some("draft"),
+            "draft token",
+            "ok"
+        ));
+    }
+
+    #[test]
+    fn short_transcript_exact_insertion_confirms_at_any_position() {
+        assert!(value_indicates_insertion(
+            Some("draft token"),
+            "draft token ok",
+            "ok"
+        ));
+        assert!(value_indicates_insertion(Some("token"), "tokoken", "ok"));
     }
 
     #[test]
