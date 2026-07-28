@@ -38,9 +38,10 @@ mod windows_cuda;
 #[path = "build/windows_manifest.rs"]
 mod windows_manifest;
 use windows_cuda::{cuda_external_dll_names, cuda_runtime_dirs, display_paths};
-use windows_manifest::{Accelerator, BlasManifest, CudaManifest, RuntimeManifest, VulkanManifest};
-
-const WINDOWS_RUNTIME_MANIFEST: &str = "parakit-runtime-manifest.json";
+use windows_manifest::{
+    Accelerator, BlasManifest, CudaManifest, RuntimeManifest, VulkanManifest,
+    WINDOWS_RUNTIME_MANIFEST,
+};
 
 fn main() {
     println!("cargo:rerun-if-env-changed=CRISPASR_LIB_DIR");

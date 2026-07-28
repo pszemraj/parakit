@@ -6,6 +6,8 @@
 use serde_json::{json, Value};
 
 /// File name for the Windows runtime manifest colocated with `parakit.exe`.
+pub(crate) const WINDOWS_RUNTIME_MANIFEST: &str = "parakit-runtime-manifest.json";
+
 /// Accelerator flavor recorded in the Windows runtime manifest.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Accelerator {

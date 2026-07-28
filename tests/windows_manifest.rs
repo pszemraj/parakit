@@ -5,7 +5,10 @@ mod windows_manifest;
 
 use serde_json::Value;
 
-use windows_manifest::{Accelerator, BlasManifest, CudaManifest, RuntimeManifest, VulkanManifest};
+use windows_manifest::{
+    Accelerator, BlasManifest, CudaManifest, RuntimeManifest, VulkanManifest,
+    WINDOWS_RUNTIME_MANIFEST,
+};
 
 fn base_blas() -> BlasManifest {
     BlasManifest {
@@ -20,6 +23,19 @@ fn base_blas() -> BlasManifest {
 
 fn parse(manifest: RuntimeManifest) -> Value {
     serde_json::from_str(&manifest.to_json()).expect("manifest should serialize valid JSON")
+}
+
+#[test]
+fn runtime_manifest_filename_matches_windows_scripts() {
+    let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    for script in ["scripts/windows/build.ps1", "scripts/windows/install.ps1"] {
+        let contents = std::fs::read_to_string(repo.join(script))
+            .unwrap_or_else(|err| panic!("read {script}: {err}"));
+        assert!(
+            contents.contains(WINDOWS_RUNTIME_MANIFEST),
+            "{script} must use shared runtime manifest filename {WINDOWS_RUNTIME_MANIFEST:?}"
+        );
+    }
 }
 
 #[test]
