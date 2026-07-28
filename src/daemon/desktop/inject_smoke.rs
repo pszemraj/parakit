@@ -80,6 +80,7 @@ pub(super) fn linux_x11_paste_smoke_test(mode: PasteMode) -> Result<()> {
                 "parakit smoke test",
                 mode,
                 ClipboardPolicy::RestorePrevious,
+                Some(&focus),
                 || {
                     focus
                         .verify_current()
