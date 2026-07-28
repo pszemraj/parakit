@@ -226,10 +226,10 @@
 # Type: string (optional). Default: "standard". Valid values: "first" |
 # "standard" | "last".
 # "first" runs before all built-ins. "standard" runs immediately before
-# "fix-space-before-punct"; if that rule is disabled, standard rules instead
-# run after every enabled built-in. "last" runs after all built-ins, including
-# capitalization and terminal-period handling, so no later cleanup repairs
-# its output. Recommendation: use "standard" for ordinary substitutions.
+# the canonical "fix-space-before-punct" position, even when that built-in is
+# disabled. "last" runs after all built-ins, including capitalization and
+# terminal-period handling, so no later cleanup repairs its output.
+# Recommendation: use "standard" for ordinary substitutions.
 
 
 # RUNTIME ENVIRONMENT

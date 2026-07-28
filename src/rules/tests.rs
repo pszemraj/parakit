@@ -628,6 +628,20 @@ fn user_rule_standard_position_runs_before_cleanup_group() {
 }
 
 #[test]
+fn user_rule_standard_position_stays_before_cleanup_when_boundary_is_disabled() {
+    let rules = vec![user_rule(
+        "expand-brb",
+        r"^brb$",
+        "be right back",
+        RulePosition::Standard,
+    )];
+    let disabled = HashSet::from(["fix-space-before-punct".to_string()]);
+    let cleaner = build_cleaner_for_test(CleaningProfile::Safe, false, &disabled, &rules);
+
+    assert_eq!(cleaner.clean_text("brb"), "Be right back");
+}
+
+#[test]
 fn user_rule_last_position_runs_after_builtins() {
     // A `Last` user rule appends a trailing period *after* the built-in
     // `fix-trailing-period` rule (enabled here via `drop_trailing_period =

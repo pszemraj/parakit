@@ -28,10 +28,9 @@ pub(crate) const FANCY_BACKTRACK_LIMIT: usize = 100_000;
 /// cleanup group. [`RulePosition::Standard`] user rules are spliced
 /// immediately before this rule; [`RulePosition::First`] and
 /// [`RulePosition::Last`] wrap the entire enabled built-in rule list
-/// instead. The boundary is computed over the *enabled* built-in list: if no
-/// enabled rule has this name (disabled, or filtered out by the active
-/// profile), `Standard` user rules are appended at the end of the built-in
-/// list instead.
+/// instead. The boundary is anchored to the canonical built-in order, so
+/// disabling the boundary rule does not move `Standard` rules behind later
+/// cleanup and capitalization passes.
 pub(crate) const CLEANUP_BOUNDARY_RULE_NAME: &str = "fix-space-before-punct";
 
 /// Built-in cleanup activation tier.
@@ -362,17 +361,18 @@ impl Cleaner {
         // ruleset id than an unset threshold. Validation has already
         // rejected negative and non-finite values.
         let number_threshold = number_threshold.unwrap_or(DEFAULT_NUMBER_THRESHOLD);
-        let enabled_defaults: Vec<&'static Rule> = DEFAULT_RULES
-            .iter()
-            .filter(|def| {
-                def.activation.enabled(profile, drop_trailing_period)
-                    && !disabled.contains(def.name)
-            })
-            .collect();
-        let cleanup_idx = enabled_defaults
-            .iter()
-            .position(|def| def.name == CLEANUP_BOUNDARY_RULE_NAME)
-            .unwrap_or(enabled_defaults.len());
+        let mut enabled_defaults = Vec::with_capacity(DEFAULT_RULES.len());
+        let mut cleanup_idx = None;
+        for def in DEFAULT_RULES {
+            if def.name == CLEANUP_BOUNDARY_RULE_NAME {
+                cleanup_idx = Some(enabled_defaults.len());
+            }
+            if def.activation.enabled(profile, drop_trailing_period) && !disabled.contains(def.name)
+            {
+                enabled_defaults.push(def);
+            }
+        }
+        let cleanup_idx = cleanup_idx.unwrap_or(enabled_defaults.len());
 
         let mut rules = Vec::with_capacity(enabled_defaults.len() + user_rules.len());
         push_user_rules(&mut rules, user_rules, RulePosition::First, disabled)?;
