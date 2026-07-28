@@ -19,6 +19,7 @@ use objc2_app_kit::NSWorkspace;
 use std::ffi::c_void;
 use std::ptr;
 use std::sync::OnceLock;
+use std::time::Duration;
 
 type AXError = i32;
 type AXUIElementRef = *mut c_void;
@@ -41,6 +42,13 @@ const K_AX_ERROR_SUCCESS: AXError = 0;
 const K_AX_VALUE_CF_RANGE_TYPE: AXValueType = 4;
 const K_CF_STRING_ENCODING_UTF8: u32 = 0x0800_0100;
 
+/// Per-call timeout applied to every application and focused Accessibility
+/// element used by the paste transaction. The outer confirmation deadline
+/// is checked between polls; this bound prevents one unresponsive target
+/// from trapping the worker inside a single AX request for the system
+/// default timeout.
+pub(crate) const AX_MESSAGE_TIMEOUT: Duration = Duration::from_millis(250);
+
 #[link(name = "ApplicationServices", kind = "framework")]
 extern "C" {
     fn AXUIElementCreateApplication(pid: libc::pid_t) -> AXUIElementRef;
@@ -49,6 +57,7 @@ extern "C" {
         attribute: CFStringRef,
         value: *mut CFTypeRef,
     ) -> AXError;
+    fn AXUIElementSetMessagingTimeout(element: AXUIElementRef, timeout_in_seconds: f32) -> AXError;
     fn AXValueGetType(value: CFTypeRef) -> AXValueType;
     fn AXValueGetValue(
         value: CFTypeRef,
@@ -259,7 +268,7 @@ impl MacOsFocusSnapshot {
     /// (see [`Self::verify_current`] for the pid+bundle fallback this
     /// enables).
     pub(crate) fn capture() -> Result<Self> {
-        frontmost_application_window().context("could not capture macOS frontmost window")
+        frontmost_application_window(true).context("could not capture macOS frontmost window")
     }
 
     /// Compare this snapshot against a fresh read of the live macOS focus
@@ -275,7 +284,7 @@ impl MacOsFocusSnapshot {
     /// otherwise (including when the live frontmost application cannot be
     /// read at all).
     pub(crate) fn verify_current(&self) -> FocusVerification {
-        let current = match frontmost_application_window() {
+        let current = match frontmost_application_window(false) {
             Ok(current) => current,
             Err(_) => return FocusVerification::Changed,
         };
@@ -344,7 +353,10 @@ impl MacOsFocusSnapshot {
         &self,
         max_utf16_units: usize,
     ) -> Result<Option<(PasteTargetValue, bool)>, ()> {
-        let current = frontmost_application_window().map_err(|_| ())?;
+        // This path immediately reads AXValue below, so reacquisition only
+        // needs element identity. Skipping the capture-time capability probe
+        // avoids copying the same potentially large value twice per poll.
+        let current = frontmost_application_window(false).map_err(|_| ())?;
         if self.pid != current.pid || self.bundle_identifier != current.bundle_identifier {
             return Err(());
         }
@@ -394,7 +406,7 @@ fn ax_identity_equal(
     Some(unsafe { CFEqual(expected.element.as_cftype(), current.element.as_cftype()) != 0 })
 }
 
-fn frontmost_application_window() -> Result<MacOsFocusSnapshot> {
+fn frontmost_application_window(probe_value_support: bool) -> Result<MacOsFocusSnapshot> {
     autoreleasepool(|_pool| {
         let workspace = NSWorkspace::sharedWorkspace();
         let app = workspace
@@ -408,7 +420,7 @@ fn frontmost_application_window() -> Result<MacOsFocusSnapshot> {
             .bundleIdentifier()
             .map(|bundle| bundle.to_string())
             .filter(|bundle| !bundle.is_empty());
-        let ax = capture_ax_focused_element(pid);
+        let ax = capture_ax_focused_element(pid, probe_value_support);
         Ok(MacOsFocusSnapshot {
             pid,
             bundle_identifier,
@@ -422,7 +434,10 @@ fn frontmost_application_window() -> Result<MacOsFocusSnapshot> {
 /// granted, application has no AX focused element, etc.) rather than an
 /// error, per the capture-failure tolerance policy: an Accessibility read
 /// failure at capture time must never block dictation.
-fn capture_ax_focused_element(pid: libc::pid_t) -> Option<AxElementSnapshot> {
+fn capture_ax_focused_element(
+    pid: libc::pid_t,
+    probe_value_support: bool,
+) -> Option<AxElementSnapshot> {
     let app = unsafe { AXUIElementCreateApplication(pid) };
     if app.is_null() {
         return None;
@@ -431,13 +446,21 @@ fn capture_ax_focused_element(pid: libc::pid_t) -> Option<AxElementSnapshot> {
     // function returns; the focused-element copy below is independently
     // retained in `element`.
     let _app = AxElementHandle(app);
+    set_ax_messaging_timeout(app)?;
 
     let element = copy_ax_element(app, ax_focused_ui_element_attribute())?;
-    let supports_value_polling = ax_value_is_string(element.0);
+    set_ax_messaging_timeout(element.0)?;
+    let supports_value_polling = probe_value_support && ax_value_is_string(element.0);
     Some(AxElementSnapshot {
         element,
         supports_value_polling,
     })
+}
+
+fn set_ax_messaging_timeout(element: AXUIElementRef) -> Option<()> {
+    let status =
+        unsafe { AXUIElementSetMessagingTimeout(element, AX_MESSAGE_TIMEOUT.as_secs_f32()) };
+    (status == K_AX_ERROR_SUCCESS).then_some(())
 }
 
 fn copy_ax_element(element: AXUIElementRef, attribute: CFStringRef) -> Option<AxElementHandle> {
@@ -540,6 +563,17 @@ fn cfstring_range_to_string(value: CFStringRef, location: usize, length: usize) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn messaging_timeout_bounds_each_confirmation_poll() {
+        const MAX_AX_CALLS_PER_POLL: u32 = 3;
+
+        assert!(!AX_MESSAGE_TIMEOUT.is_zero());
+        assert!(
+            AX_MESSAGE_TIMEOUT * MAX_AX_CALLS_PER_POLL
+                < crate::daemon::macos::pasteboard::AX_CONFIRM_DEADLINE
+        );
+    }
 
     #[test]
     fn cfstring_conversion_copies_only_bounded_ends() {
