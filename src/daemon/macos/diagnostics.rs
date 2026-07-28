@@ -92,7 +92,8 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::daemon::desktop::inject::{
-    ClipboardPolicy, FocusSnapshot, Injector, PasteMode, PasteOutcome, PasteReport,
+    restore_html_clipboard, ClipboardPolicy, FocusSnapshot, Injector, PasteMode, PasteOutcome,
+    PasteReport,
 };
 
 type OSStatus = i32;
@@ -227,10 +228,10 @@ impl DoctorClipboardSnapshot {
         match self {
             Self::Text(text) => Clipboard::set_text(clipboard, text.clone())
                 .context("could not restore the doctor smoke test's previous clipboard text"),
-            Self::Html { html, alt_text } => clipboard
-                .set()
-                .html(html.clone(), alt_text.clone())
-                .context("could not restore the doctor smoke test's previous HTML clipboard"),
+            Self::Html { html, alt_text } => {
+                restore_html_clipboard(clipboard, html.clone(), alt_text.clone())
+                    .context("could not restore the doctor smoke test's previous HTML clipboard")
+            }
             Self::FileList(files) => clipboard
                 .set()
                 .file_list(files)

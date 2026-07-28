@@ -18,6 +18,12 @@ use anyhow::{Context, Result};
 use arboard::{Clipboard, ImageData};
 use clap::ValueEnum;
 use enigo::{Enigo, Keyboard, Settings};
+#[cfg(target_os = "macos")]
+use objc2::rc::autoreleasepool;
+#[cfg(target_os = "macos")]
+use objc2_app_kit::{NSPasteboard, NSPasteboardTypeHTML, NSPasteboardTypeString};
+#[cfg(target_os = "macos")]
+use objc2_foundation::NSString;
 use std::{borrow::Cow, path::PathBuf, thread, time::Duration};
 #[cfg(target_os = "linux")]
 use x11rb::connection::Connection as _;
@@ -326,6 +332,67 @@ pub(super) trait ClipboardStore {
     fn clear(&mut self) -> Result<()>;
 }
 
+/// Restore HTML and its optional plain-text alternative to the clipboard.
+///
+/// arboard's macOS HTML setter always surrounds the supplied HTML with a
+/// synthetic document wrapper. That is useful when copying a fresh fragment,
+/// but restoring an already-captured payload through it nests another wrapper
+/// after every dictation. Write the two native pasteboard types directly on
+/// macOS so the captured HTML is preserved verbatim.
+///
+/// # Arguments
+///
+/// * `clipboard` - Open clipboard handle used by non-macOS backends.
+/// * `html` - Captured HTML payload to restore.
+/// * `alt_text` - Optional plain-text representation of the same payload.
+///
+/// # Returns
+///
+/// `Ok(())` when every requested pasteboard representation was written.
+///
+/// # Errors
+///
+/// Returns an error if the platform clipboard rejects either representation.
+pub(crate) fn restore_html_clipboard(
+    clipboard: &mut Clipboard,
+    html: String,
+    alt_text: Option<String>,
+) -> Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        let _ = clipboard;
+        autoreleasepool(|_| {
+            let pasteboard = NSPasteboard::generalPasteboard();
+            pasteboard.clearContents();
+            // SAFETY: AppKit exports these immutable, process-lifetime
+            // pasteboard type constants whenever the linked framework is
+            // loaded.
+            let (html_type, string_type) =
+                unsafe { (NSPasteboardTypeHTML, NSPasteboardTypeString) };
+
+            if !pasteboard.setString_forType(&NSString::from_str(&html), html_type) {
+                return Err(anyhow::anyhow!(
+                    "could not write native HTML clipboard contents"
+                ));
+            }
+            if let Some(alt_text) = alt_text {
+                if !pasteboard.setString_forType(&NSString::from_str(&alt_text), string_type) {
+                    return Err(anyhow::anyhow!(
+                        "could not write native plain-text clipboard alternative"
+                    ));
+                }
+            }
+            Ok(())
+        })
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    clipboard
+        .set()
+        .html(html, alt_text)
+        .context("could not write HTML clipboard contents")
+}
+
 impl ClipboardStore for Clipboard {
     fn get_text(&mut self) -> Result<String> {
         Clipboard::get_text(self).context("could not read system clipboard")
@@ -342,9 +409,7 @@ impl ClipboardStore for Clipboard {
     }
 
     fn set_html(&mut self, html: String, alt_text: Option<String>) -> Result<()> {
-        self.set()
-            .html(html, alt_text)
-            .context("could not write HTML clipboard contents")
+        restore_html_clipboard(self, html, alt_text)
     }
 
     fn get_file_list(&mut self) -> Result<Vec<PathBuf>> {
