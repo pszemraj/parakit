@@ -9,13 +9,15 @@ use std::fs::{create_dir_all, File, OpenOptions};
 use std::io::{BufWriter, Write};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 /// Identifier returned by [`DataLogger::log`] that correlates a
 /// transcription record with its later insertion outcome recorded through
 /// [`DataLogger::log_insertion`].
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct RecordId {
+    session_id: Arc<str>,
     sequence: u64,
     local_date: NaiveDate,
 }
@@ -39,7 +41,7 @@ pub struct CleaningLogFields<'a> {
     pub ruleset_id: Option<&'a str>,
     /// Whether the messaging-style terminal-period pass was enabled.
     pub drops_trailing_period: bool,
-    /// Minimum isolated number converted to digits; None means convert all.
+    /// Minimum isolated number converted to digits; `None` when cleaning is disabled.
     pub number_threshold: Option<f64>,
     /// Transformations that actually changed the transcript, in application order.
     pub rules_fired: &'a [RuleHit],
@@ -51,6 +53,8 @@ pub struct CleaningLogFields<'a> {
 #[derive(Serialize)]
 struct LogRecord<'a> {
     ts: String,
+    session_id: &'a str,
+    record_id: u64,
     parakit_version: &'static str,
     audio_secs: f32,
     infer_ms: u128,
@@ -97,6 +101,7 @@ pub struct InsertionLogFields<'a> {
 struct InsertionLogRecord<'a> {
     kind: &'static str,
     ts: String,
+    session_id: &'a str,
     ref_id: u64,
     #[serde(flatten)]
     fields: InsertionLogFields<'a>,
@@ -108,15 +113,19 @@ struct LogState {
 }
 
 struct LogTimestamp {
-    local_date: NaiveDate,
+    record_id: RecordId,
     utc_rfc3339: String,
 }
 
 impl LogTimestamp {
-    fn now() -> Self {
+    fn now(session_id: Arc<str>, sequence: u64) -> Self {
         let now = Local::now();
         Self {
-            local_date: now.date_naive(),
+            record_id: RecordId {
+                session_id,
+                sequence,
+                local_date: now.date_naive(),
+            },
             utc_rfc3339: now
                 .with_timezone(&Utc)
                 .to_rfc3339_opts(SecondsFormat::Millis, true),
@@ -127,9 +136,12 @@ impl LogTimestamp {
 /// Synchronous JSONL transcription logger with lazy daily file rotation.
 pub struct DataLogger {
     dir: PathBuf,
+    session_id: Arc<str>,
     state: Mutex<Option<LogState>>,
     next_id: AtomicU64,
 }
+
+static NEXT_LOGGER_SESSION: AtomicU64 = AtomicU64::new(0);
 
 impl DataLogger {
     /// Build a JSONL logger for `dir`.
@@ -146,6 +158,7 @@ impl DataLogger {
     pub fn new(dir: PathBuf) -> Self {
         Self {
             dir,
+            session_id: new_session_id(),
             state: Mutex::new(None),
             next_id: AtomicU64::new(0),
         }
@@ -178,11 +191,11 @@ impl DataLogger {
         cleaned: &str,
         cleaning: CleaningLogFields<'_>,
     ) -> Option<RecordId> {
-        let timestamp = LogTimestamp::now();
-        let id = RecordId {
-            sequence: self.next_id.fetch_add(1, Ordering::Relaxed),
-            local_date: timestamp.local_date,
-        };
+        let timestamp = LogTimestamp::now(
+            Arc::clone(&self.session_id),
+            self.next_id.fetch_add(1, Ordering::Relaxed),
+        );
+        let id = timestamp.record_id.clone();
         match self.try_log(timestamp, audio_secs, infer, raw, cleaned, cleaning) {
             Ok(()) => Some(id),
             Err(e) => {
@@ -196,8 +209,8 @@ impl DataLogger {
     /// [`DataLogger::log`].
     ///
     /// This appends a second, independently parseable JSONL line carrying
-    /// `"kind":"insertion"` and `"ref_id"` set to the original record's
-    /// identifier.
+    /// `"kind":"insertion"`, the original `"session_id"`, and `"ref_id"`
+    /// set to the original record's sequence.
     ///
     /// Logging failures are printed to stderr and never propagated, for the
     /// same reason as [`DataLogger::log`].
@@ -206,7 +219,7 @@ impl DataLogger {
     ///
     /// * `id` - Identifier returned by the original [`DataLogger::log`] call.
     /// * `fields` - Insertion telemetry to record.
-    pub fn log_insertion(&self, id: RecordId, fields: InsertionLogFields<'_>) {
+    pub fn log_insertion(&self, id: &RecordId, fields: InsertionLogFields<'_>) {
         if let Err(e) = self.try_log_insertion(id, fields) {
             eprintln!("parakit: insertion log write failed: {e:#}");
         }
@@ -223,6 +236,8 @@ impl DataLogger {
     ) -> Result<()> {
         let record = LogRecord {
             ts: timestamp.utc_rfc3339,
+            session_id: &timestamp.record_id.session_id,
+            record_id: timestamp.record_id.sequence,
             parakit_version: crate::build_info::PACKAGE_VERSION,
             audio_secs,
             infer_ms: infer.as_millis(),
@@ -231,16 +246,17 @@ impl DataLogger {
             cleaning,
         };
 
-        self.with_state(timestamp.local_date, |state| {
+        self.with_state(timestamp.record_id.local_date, |state| {
             write_jsonl_record(state, &record, "failed to serialize jsonl log record")
         })
     }
 
-    fn try_log_insertion(&self, id: RecordId, fields: InsertionLogFields<'_>) -> Result<()> {
+    fn try_log_insertion(&self, id: &RecordId, fields: InsertionLogFields<'_>) -> Result<()> {
         let ts = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
         let record = InsertionLogRecord {
             kind: "insertion",
             ts,
+            session_id: &id.session_id,
             ref_id: id.sequence,
             fields,
         };
@@ -279,6 +295,12 @@ impl DataLogger {
             .with_context(|| format!("failed to open log file {}", path.display()))?;
         Ok(BufWriter::new(file))
     }
+}
+
+fn new_session_id() -> Arc<str> {
+    let started_at = Utc::now().to_rfc3339_opts(SecondsFormat::Nanos, true);
+    let ordinal = NEXT_LOGGER_SESSION.fetch_add(1, Ordering::Relaxed);
+    Arc::from(format!("{started_at}-p{}-l{ordinal}", std::process::id()))
 }
 
 fn write_jsonl_record<T: Serialize>(
@@ -391,7 +413,7 @@ mod tests {
                 sample_cleaning_fields(),
             )
             .expect("write transcript record");
-        logger.log_insertion(id, sample_insertion_fields());
+        logger.log_insertion(&id, sample_insertion_fields());
 
         let date = Local::now().date_naive();
         let path = dir.join(file_name(date));
@@ -409,6 +431,8 @@ mod tests {
             &transcript,
             &[
                 "ts",
+                "session_id",
+                "record_id",
                 "parakit_version",
                 "audio_secs",
                 "infer_ms",
@@ -424,6 +448,8 @@ mod tests {
             ],
         );
         assert_eq!(transcript["cleaned"], "cleaned text");
+        assert_eq!(transcript["session_id"], id.session_id.as_ref());
+        assert_eq!(transcript["record_id"], id.sequence);
         assert_eq!(
             transcript["parakit_version"],
             crate::build_info::PACKAGE_VERSION
@@ -436,6 +462,7 @@ mod tests {
             &[
                 "kind",
                 "ts",
+                "session_id",
                 "ref_id",
                 "outcome",
                 "target_bundle_id",
@@ -450,6 +477,7 @@ mod tests {
             ],
         );
         assert_eq!(insertion["kind"], "insertion");
+        assert_eq!(insertion["session_id"], id.session_id.as_ref());
         assert_eq!(insertion["ref_id"], id.sequence);
         assert_eq!(insertion["outcome"], "pasted");
         assert_eq!(insertion["target_bundle_id"], "com.example.App");
@@ -461,16 +489,72 @@ mod tests {
     }
 
     #[test]
+    fn logger_sessions_disambiguate_sequence_restarts_in_one_daily_file() {
+        let dir = crate::test_support::fixture_root("parakit-log-test", "session-correlation");
+
+        let first_logger = DataLogger::new(dir.clone());
+        let first_id = first_logger
+            .log(
+                1.0,
+                Duration::from_millis(10),
+                "first raw",
+                "first cleaned",
+                sample_cleaning_fields(),
+            )
+            .expect("write first-session transcript");
+        first_logger.log_insertion(&first_id, sample_insertion_fields());
+        drop(first_logger);
+
+        let second_logger = DataLogger::new(dir.clone());
+        let second_id = second_logger
+            .log(
+                1.0,
+                Duration::from_millis(10),
+                "second raw",
+                "second cleaned",
+                sample_cleaning_fields(),
+            )
+            .expect("write second-session transcript");
+        second_logger.log_insertion(&second_id, sample_insertion_fields());
+
+        let path = dir.join(file_name(Local::now().date_naive()));
+        let records: Vec<serde_json::Value> = std::fs::read_to_string(path)
+            .expect("read shared daily log")
+            .lines()
+            .map(|line| serde_json::from_str(line).expect("valid JSONL record"))
+            .collect();
+        assert_eq!(records.len(), 4);
+
+        assert_eq!(records[0]["record_id"], 0);
+        assert_eq!(records[1]["ref_id"], 0);
+        assert_eq!(records[2]["record_id"], 0);
+        assert_eq!(records[3]["ref_id"], 0);
+        assert_eq!(records[0]["session_id"], records[1]["session_id"]);
+        assert_eq!(records[2]["session_id"], records[3]["session_id"]);
+        assert_ne!(records[0]["session_id"], records[2]["session_id"]);
+    }
+
+    #[test]
     fn insertion_record_stays_in_the_transcriptions_daily_file() {
         let dir = crate::test_support::fixture_root("parakit-log-test", "insertion-rotation");
         let logger = DataLogger::new(dir.clone());
         let first_date = NaiveDate::from_ymd_opt(2026, 1, 31).expect("valid date");
         let next_date = NaiveDate::from_ymd_opt(2026, 2, 1).expect("valid date");
+        let first_id = RecordId {
+            session_id: Arc::clone(&logger.session_id),
+            sequence: 41,
+            local_date: first_date,
+        };
+        let next_id = RecordId {
+            session_id: Arc::clone(&logger.session_id),
+            sequence: 42,
+            local_date: next_date,
+        };
 
         logger
             .try_log(
                 LogTimestamp {
-                    local_date: first_date,
+                    record_id: first_id.clone(),
                     utc_rfc3339: "2026-02-01T04:59:59.900Z".to_string(),
                 },
                 1.0,
@@ -483,7 +567,7 @@ mod tests {
         logger
             .try_log(
                 LogTimestamp {
-                    local_date: next_date,
+                    record_id: next_id,
                     utc_rfc3339: "2026-02-01T05:00:00.100Z".to_string(),
                 },
                 1.0,
@@ -494,11 +578,7 @@ mod tests {
             )
             .expect("rotate to next-day transcript");
 
-        let first_id = RecordId {
-            sequence: 41,
-            local_date: first_date,
-        };
-        logger.log_insertion(first_id, sample_insertion_fields());
+        logger.log_insertion(&first_id, sample_insertion_fields());
 
         let first_contents =
             std::fs::read_to_string(dir.join(file_name(first_date))).expect("read first-day log");

@@ -232,17 +232,19 @@ Audio and redirected console output are never included.
 One append-only `parakit-YYYY-MM-DD.jsonl` file is written per local day. Every line is an independent JSON object and is flushed synchronously before the worker continues. A completed dictation normally produces two lines, a transcription line and a later insertion line:
 
 ```json
-{"ts":"2026-07-27T14:02:11.482Z","parakit_version":"0.4.0","audio_secs":4.21,"infer_ms":187,"raw":"so the build is green now.","cleaned":"So the build is green now","rules_active":25,"cleaner_version":6,"cleaning_profile":"safe","ruleset_id":"v6-safe-69be753fb69620ef","drops_trailing_period":true,"number_threshold":4.0,"rules_fired":[{"name":"capitalize-sentence-starts","matches":1},{"name":"fix-trailing-period","matches":1}]}
-{"kind":"insertion","ts":"2026-07-27T14:02:11.930Z","ref_id":7,"outcome":"pasted","target_bundle_id":"com.mitchellh.ghostty","focus_verification":"matched","transcript_chars":25,"paste_event_posted":true,"pasteboard_requested":null,"acknowledgement_kind":"ax_confirmed","acknowledgement_ms":312,"clipboard_restored":true,"failure_reason":null}
+{"ts":"2026-07-27T14:02:11.482Z","session_id":"2026-07-27T14:02:10.981234000Z-p4312-l0","record_id":7,"parakit_version":"0.4.0","audio_secs":4.21,"infer_ms":187,"raw":"so the build is green now.","cleaned":"So the build is green now","rules_active":25,"cleaner_version":6,"cleaning_profile":"safe","ruleset_id":"v6-safe-69be753fb69620ef","drops_trailing_period":true,"number_threshold":4.0,"rules_fired":[{"name":"capitalize-sentence-starts","matches":1},{"name":"fix-trailing-period","matches":1}]}
+{"kind":"insertion","ts":"2026-07-27T14:02:11.930Z","session_id":"2026-07-27T14:02:10.981234000Z-p4312-l0","ref_id":7,"outcome":"pasted","target_bundle_id":"com.mitchellh.ghostty","focus_verification":"matched","transcript_chars":25,"paste_event_posted":true,"pasteboard_requested":null,"acknowledgement_kind":"ax_confirmed","acknowledgement_ms":312,"clipboard_restored":true,"failure_reason":null}
 ```
 
-The transcription line is durable before insertion starts, so exiting during insertion can leave one transcription line without a corresponding outcome. When both writes succeed, the insertion line belongs to the immediately preceding transcription line. `ref_id` is a process-local sequence that starts at zero after each daemon restart; the transcription line has no matching ID, so do not use `ref_id` alone to join records across a file.
+The transcription line is durable before insertion starts, so exiting during insertion can leave one transcription line without a corresponding outcome. When both writes succeed, join the transcription's (`session_id`, `record_id`) pair to the insertion's (`session_id`, `ref_id`) pair. `session_id` changes for each logger instance (normally each daemon start), while the numeric sequence starts at zero again, so the combined key remains unambiguous when multiple daemon sessions append to the same daily file.
 
 Transcription line fields, in serialization order:
 
 | Field | Type | Meaning |
 | --- | --- | --- |
 | `ts` | string | UTC RFC 3339 timestamp with milliseconds. |
+| `session_id` | string | Opaque logger-session identifier shared by this transcription and its insertion outcome. |
+| `record_id` | integer | Sequence number within `session_id`, starting at zero. |
 | `parakit_version` | string | Cargo package version of the binary that wrote the record. |
 | `audio_secs` | number | Length of the recorded utterance. |
 | `infer_ms` | integer | Model inference time in milliseconds. |
@@ -265,7 +267,8 @@ Insertion line fields, in serialization order:
 | --- | --- | --- |
 | `kind` | string | Always `insertion`; the transcription line carries no `kind`. |
 | `ts` | string | UTC RFC 3339 timestamp with milliseconds. |
-| `ref_id` | integer | Process-local sequence number of the transcription record this outcome belongs to. |
+| `session_id` | string | Logger-session identifier copied from the correlated transcription record. |
+| `ref_id` | integer | Sequence number matching the correlated transcription record's `record_id`. |
 | `outcome` | string | `pasted`, `pasted_unverified`, `copied_only`, `blocked`, `skipped`, or `error`. |
 | `target_bundle_id` | string or null | macOS target bundle identifier when known; `null` on Linux and Windows. |
 | `focus_verification` | string | `matched`, `changed`, `ax_unsupported`, `unavailable`, or `not_applicable`. The last value also covers a live focus-recheck error, not only paths that skipped the check. |

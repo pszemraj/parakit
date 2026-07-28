@@ -450,7 +450,7 @@ fn log_insertion_outcome(
     };
     let target_bundle_id = focus_at_start.and_then(FocusSnapshot::target_bundle_id);
     data_log.log_insertion(
-        record_id,
+        &record_id,
         InsertionLogFields {
             outcome,
             target_bundle_id,
