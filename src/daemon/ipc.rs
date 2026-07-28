@@ -35,8 +35,10 @@ use super::{
 
 #[cfg(any(unix, target_os = "windows"))]
 const IPC_TRANSPORT_TIMEOUT: Duration = Duration::from_millis(750);
+/// Response budget for insertion-lock commands. A command can wait behind
+/// one complete paste transaction before running its own.
 #[cfg(any(unix, target_os = "windows"))]
-const IPC_INSERT_RESPONSE_TIMEOUT: Duration = Duration::from_secs(5);
+const IPC_INSERT_RESPONSE_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Default number of transcripts kept in daemon memory when
 /// `daemon.transcript_history` is unset.
@@ -1977,9 +1979,23 @@ mod tests {
         assert_eq!(IpcCommand::Status.response_timeout(), IPC_TRANSPORT_TIMEOUT);
 
         #[cfg(target_os = "macos")]
-        assert!(
-            IPC_INSERT_RESPONSE_TIMEOUT > crate::daemon::macos::pasteboard::AX_CONFIRM_DEADLINE
-        );
+        {
+            let acknowledgement_budget = std::cmp::max(
+                crate::daemon::macos::pasteboard::AX_CONFIRM_DEADLINE,
+                crate::daemon::macos::pasteboard::UNVERIFIED_GRACE,
+            );
+            let transaction_wait_budget = crate::daemon::macos::PASTE_MODIFIER_RELEASE_TIMEOUT
+                + crate::daemon::desktop::inject::MACOS_CLIPBOARD_SETTLE_DELAY
+                + acknowledgement_budget;
+            let queued_then_own_transaction_budget =
+                transaction_wait_budget + transaction_wait_budget;
+
+            assert!(
+                IPC_INSERT_RESPONSE_TIMEOUT > queued_then_own_transaction_budget,
+                "IPC insertion response timeout must cover one queued macOS paste transaction \
+                 plus the command's own transaction"
+            );
+        }
     }
 
     #[test]

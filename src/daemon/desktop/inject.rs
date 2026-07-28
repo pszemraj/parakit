@@ -1453,6 +1453,10 @@ fn platform_paste_smoke_test(mode: PasteMode) -> Result<()> {
     }
 }
 
+/// macOS delay between staging transcript text and the final focus check.
+#[cfg(target_os = "macos")]
+pub(crate) const MACOS_CLIPBOARD_SETTLE_DELAY: Duration = Duration::from_millis(200);
+
 fn clipboard_settle_delay() -> Duration {
     #[cfg(target_os = "linux")]
     {
@@ -1460,7 +1464,7 @@ fn clipboard_settle_delay() -> Duration {
     }
     #[cfg(target_os = "macos")]
     {
-        Duration::from_millis(200)
+        MACOS_CLIPBOARD_SETTLE_DELAY
     }
     #[cfg(target_os = "windows")]
     {

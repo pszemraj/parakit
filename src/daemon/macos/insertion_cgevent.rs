@@ -64,7 +64,9 @@ const SMOKE_POLL: Duration = Duration::from_millis(20);
 /// Yield between run-loop slices so the smoke wait never becomes a spin loop
 /// when `CFRunLoopRunInMode` returns early with nothing to dispatch.
 const SMOKE_YIELD: Duration = Duration::from_millis(5);
-const PASTE_MODIFIER_RELEASE_TIMEOUT: Duration = Duration::from_secs(2);
+/// Maximum time a paste transaction waits for physical PTT/modifier keys to
+/// be released before withholding the synthetic chord.
+pub(crate) const PASTE_MODIFIER_RELEASE_TIMEOUT: Duration = Duration::from_secs(2);
 const PASTE_MODIFIER_RELEASE_POLL: Duration = Duration::from_millis(15);
 
 #[link(name = "CoreFoundation", kind = "framework")]
