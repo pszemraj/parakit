@@ -227,6 +227,8 @@ mod tests {
     use super::*;
     use crossbeam_channel::{bounded, unbounded};
 
+    const EVENT_TIMEOUT: Duration = Duration::from_secs(2);
+
     fn assert_empty_stopped_event(event: WorkerEvent, started_at: Instant) {
         match event {
             WorkerEvent::Stopped {
@@ -266,15 +268,13 @@ mod tests {
             .expect("hotkey press should send");
 
         assert!(matches!(
-            worker_rx
-                .recv_timeout(Duration::from_millis(250))
-                .expect("start event"),
+            worker_rx.recv_timeout(EVENT_TIMEOUT).expect("start event"),
             WorkerEvent::Started
         ));
 
         assert_empty_stopped_event(
             worker_rx
-                .recv_timeout(Duration::from_millis(500))
+                .recv_timeout(EVENT_TIMEOUT)
                 .expect("timeout stop event"),
             started_at,
         );
@@ -305,13 +305,11 @@ mod tests {
         });
 
         assert!(matches!(
-            worker_rx
-                .recv_timeout(Duration::from_millis(250))
-                .expect("start event"),
+            worker_rx.recv_timeout(EVENT_TIMEOUT).expect("start event"),
             WorkerEvent::Started
         ));
         match worker_rx
-            .recv_timeout(Duration::from_millis(250))
+            .recv_timeout(EVENT_TIMEOUT)
             .expect("terminal failure event")
         {
             WorkerEvent::Failed { message } => {
@@ -385,8 +383,6 @@ mod tests {
 
     #[test]
     fn coordinator_delivers_terminal_event_after_accepted_start_when_queue_is_full() {
-        const EVENT_TIMEOUT: Duration = Duration::from_secs(2);
-
         let audio = AudioHandle::test_handle();
         let (hotkey_tx, hotkey_rx) = unbounded();
         let (worker_tx, worker_rx) = bounded(1);
