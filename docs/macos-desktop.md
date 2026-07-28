@@ -73,7 +73,7 @@ Bare value growth is not confirmation. A focused element can grow for reasons un
 
 Matching ignores whitespace on both sides rather than comparing verbatim. A terminal's `AXValue` is its rendered screen, hard-wrapped at the column width and wrapping mid-word, so a pasted transcript comes back with newlines injected at the wrap points. Dropping whitespace makes the comparison independent of that layout.
 
-When the whole transcript cannot be found, a newly visible 32-character leading or trailing window still counts. A terminal scrolls the head of a long paste off the top of the screen and a bounded field truncates the tail, but either end appearing verbatim is real evidence rather than coincidence: a natural-language run of that length is effectively unique against whatever the field held beforehand. Transcripts at or under 32 characters get no windowed fallback, since a partial overlap must not be mistaken for insertion when the whole transcript was short enough to match outright.
+When the whole transcript cannot be found, a newly visible 32-character leading or trailing window still counts. A terminal scrolls the head of a long paste off the top of the screen and a bounded field truncates the tail, but either end appearing verbatim is real evidence rather than coincidence: a natural-language run of that length is effectively unique against whatever the field held beforehand. Transcripts at or under 32 characters do not use occurrence matching at all, since short text such as `ok` can appear inside unrelated growth such as `token`. They require either an exact baseline-to-current insertion after whitespace normalization or the exact selection and value-length transition expected from the paste.
 
 ## Metal Verification
 
