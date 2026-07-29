@@ -321,6 +321,7 @@ fn confirmation_kind(confirmation: PasteConfirmation) -> &'static str {
     match confirmation {
         PasteConfirmation::Confirmed { kind, .. }
         | PasteConfirmation::Unverified { kind, .. }
+        | PasteConfirmation::UnverifiedFocusLost { kind, .. }
         | PasteConfirmation::NoEvidence { kind, .. } => kind,
     }
 }
@@ -1264,6 +1265,18 @@ fn post_paste_acknowledgement_tiers_drive_outcome_and_clipboard_policy() {
             policy: ClipboardPolicy::RestorePrevious,
             expected_outcome: PasteOutcome::CopiedOnly,
             expected_acknowledgement_kind: "no_evidence",
+            expected_clipboard_restored: Some(false),
+            expected_text: "dictated text",
+        },
+        AcknowledgementCase {
+            name: "unverified focus lost is treated as pasted but keeps the transcript",
+            confirmation: PasteConfirmation::UnverifiedFocusLost {
+                elapsed: Duration::from_millis(900),
+                kind: "unverified_focus_lost",
+            },
+            policy: ClipboardPolicy::RestorePrevious,
+            expected_outcome: PasteOutcome::PastedUnverified,
+            expected_acknowledgement_kind: "unverified_focus_lost",
             expected_clipboard_restored: Some(false),
             expected_text: "dictated text",
         },

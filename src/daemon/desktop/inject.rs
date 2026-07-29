@@ -1126,6 +1126,14 @@ where
 /// [`clipboard_restored_after_paste`]) is reported through
 /// `clipboard_restored: Some(false)` on the returned report rather than
 /// turned into an error that would discard an already-landed paste.
+///
+/// [`PasteConfirmation::UnverifiedFocusLost`] and [`PasteConfirmation::NoEvidence`]
+/// also report `clipboard_restored: Some(false)`, but deliberately: the
+/// insertion target became unobservable (or never showed evidence) before a
+/// restore could be trusted, so `previous` is dropped without being
+/// restored to keep the transcript as the only remaining copy. That is not a
+/// restore failure and must not be logged as one — see the `daemon::worker`
+/// call site that tells the two situations apart.
 #[allow(
     clippy::too_many_arguments,
     reason = "mirrors the guarded-paste transaction's own parameter set; each is an \
@@ -1177,6 +1185,23 @@ where
                 clipboard_policy,
             )),
         },
+        PasteConfirmation::UnverifiedFocusLost { elapsed, kind } => {
+            // The chord was posted into a verified-focused target and very
+            // likely landed, but the target became unobservable (app switch,
+            // or focus state that can no longer be read) before any
+            // evidence could appear. Unlike `Unverified`, where the same
+            // target stays observable, that target can never be re-checked,
+            // so `previous` is dropped here without being restored: the
+            // transcript is the only remaining copy if the paste did not
+            // land after all.
+            PasteReport {
+                outcome: PasteOutcome::PastedUnverified,
+                paste_event_posted: true,
+                acknowledgement_kind: kind,
+                acknowledgement_ms: Some(elapsed.as_millis()),
+                clipboard_restored: Some(false),
+            }
+        }
         PasteConfirmation::NoEvidence { elapsed, kind } => {
             // No evidence the target consumed the paste: `previous` is
             // dropped here without being restored, and the transcript

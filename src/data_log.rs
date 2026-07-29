@@ -87,7 +87,8 @@ pub struct InsertionLogFields<'a> {
     /// Reserved for a future clipboard read-back confirmation signal.
     pub pasteboard_requested: Option<bool>,
     /// How insertion success was acknowledged: `"ax_confirmed"`,
-    /// `"unverified_timeout"`, `"no_evidence"`, or `"not_applicable"`.
+    /// `"unverified_timeout"`, `"unverified_no_baseline"`,
+    /// `"unverified_focus_lost"`, `"no_evidence"`, or `"not_applicable"`.
     pub acknowledgement_kind: &'static str,
     /// Milliseconds spent waiting for acknowledgement, when applicable.
     pub acknowledgement_ms: Option<u128>,

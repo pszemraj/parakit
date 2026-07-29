@@ -7,9 +7,15 @@
 //! regardless of whether the target had consumed the paste yet. On a slow
 //! or busy target that blind restore could destroy the just-dictated
 //! transcript. This module turns that guess into a bounded, evidence-based
-//! wait: uncertainty degrades to [`PasteConfirmation::Unverified`] or
-//! [`PasteConfirmation::NoEvidence`], it never silently destroys the
-//! transcript.
+//! wait: uncertainty degrades to [`PasteConfirmation::Unverified`],
+//! [`PasteConfirmation::UnverifiedFocusLost`], or
+//! [`PasteConfirmation::NoEvidence`] — it never silently destroys the
+//! transcript. `Unverified` still restores the previous clipboard contents,
+//! since the target (or the absence of one) stayed the same throughout, just
+//! inconclusive; `UnverifiedFocusLost` and `NoEvidence` both keep the
+//! transcript on the clipboard instead, for different reasons — the target
+//! became unobservable partway through, or evidence gathering worked the
+//! whole window and simply never found anything.
 //!
 //! ## Why polling on the worker thread, not `AXObserver` push notifications
 //!
@@ -61,14 +67,16 @@
 //! window. Treating any length increase as paste evidence can therefore
 //! restore the previous clipboard even though the transcript never landed,
 //! destroying the only remaining copy. Confirmation requires transcript-
-//! specific evidence instead: an exact baseline-to-current insertion for a
-//! short transcript, a newly visible whole transcript or leading/trailing
-//! window once the text is long enough to be distinctive, or the exact
-//! selected-range and total-length transition that inserting the transcript
-//! must produce. Selection geometry is trusted only while polling the same
-//! Accessibility object; a replacement object must show transcript-specific
-//! text. If neither form of evidence is available, the transaction
-//! deliberately leaves the transcript on the clipboard.
+//! specific evidence instead: an exact baseline-to-current insertion for the
+//! very shortest transcripts, a whole-transcript occurrence-count increase
+//! once the text is long enough to be unlikely by coincidence, a newly
+//! visible whole transcript or leading/trailing window once the text is long
+//! enough to be distinctive on its own, or the exact selected-range and
+//! total-length transition that inserting the transcript must produce.
+//! Selection geometry is trusted only while polling the same Accessibility
+//! object; a replacement object must show transcript-specific text. If none
+//! of these forms of evidence is available, the transaction deliberately
+//! leaves the transcript on the clipboard.
 //!
 //! ## Secure input fields are not a bug
 //!
@@ -120,6 +128,25 @@ const MAX_AX_VALUE_UTF16_UNITS: usize = 65_536;
 /// effectively unique against whatever the field held beforehand, so a match
 /// is real evidence rather than coincidence.
 const CONFIRM_WINDOW_CHARS: usize = 32;
+
+/// Minimum normalized (whitespace-stripped) transcript length for which a
+/// whole-transcript occurrence-count *increase* over the pre-chord baseline
+/// counts as confirmation evidence on its own, for a transcript at or under
+/// [`CONFIRM_WINDOW_CHARS`] that gets no leading/trailing window (see
+/// [`TranscriptMatcher`]).
+///
+/// Below this floor, a string is short enough that it could turn up in a
+/// target's value by pure coincidence — a terminal's `AXValue` is its whole
+/// rendered screen, so scrollback or unrelated output can easily contain a
+/// short run of characters — so only an exact baseline-to-current insertion
+/// or selection-geometry evidence is trusted there; a bare occurrence-count
+/// increase is not enough. At or above this floor the same reasoning that
+/// justifies occurrence-count matching for longer transcripts already
+/// applies: a natural-language run this long is unlikely to appear by
+/// chance, and requiring an *increase* rather than mere presence (see
+/// `evidence_already_present_in_baseline_does_not_confirm`) still rules out
+/// a transcript that merely already existed in the target before the chord.
+const SHORT_CONFIRM_MIN_OCCURRENCE_CHARS: usize = 12;
 
 thread_local! {
     /// Per-thread abandonment signal consulted by [`await_paste_confirmation`].
@@ -209,6 +236,24 @@ fn unverified_unless_abandoned(elapsed: Duration, kind: &'static str) -> PasteCo
     PasteConfirmation::Unverified { elapsed, kind }
 }
 
+/// As [`confirmed_unless_abandoned`], for the
+/// [`PasteConfirmation::UnverifiedFocusLost`] path (the captured
+/// Accessibility object died and the frontmost application then changed, or
+/// its focus state could no longer be read at all, before any evidence
+/// appeared).
+fn unverified_focus_lost_unless_abandoned(
+    elapsed: Duration,
+    kind: &'static str,
+) -> PasteConfirmation {
+    if is_abandoned() {
+        return PasteConfirmation::NoEvidence {
+            elapsed,
+            kind: "no_evidence",
+        };
+    }
+    PasteConfirmation::UnverifiedFocusLost { elapsed, kind }
+}
+
 /// Read the focused element's `AXValue` before a paste chord is sent.
 ///
 /// Wired into the paste transaction through
@@ -249,24 +294,40 @@ pub(crate) fn capture_baseline(focus: Option<&FocusSnapshot>) -> Option<PasteTar
 /// [`PasteConfirmation::Confirmed`] as soon as the element's value is
 /// observed to show transcript-specific insertion evidence (ignoring the
 /// target's own line wrapping), or its selection and length show the exact
-/// insertion transition. Short transcripts require an exact value delta
-/// against the pre-chord baseline; longer text can use distinctive occurrence
-/// windows.
+/// insertion transition. The very shortest transcripts require an exact
+/// value delta against the pre-chord baseline; once long enough to be
+/// unlikely by coincidence, a whole-transcript occurrence-count increase
+/// counts too; longer text still can use distinctive leading/trailing
+/// occurrence windows (see [`TranscriptMatcher`] for the exact length
+/// bands).
 /// [`PasteConfirmation::Unverified`] after a fixed grace
 /// sleep when Accessibility cannot expose a pollable value at all (no
 /// focused element on this snapshot, or the field does not support value
-/// polling). [`PasteConfirmation::NoEvidence`] when polling itself worked
-/// but no insertion evidence appeared before the deadline. A dead captured
-/// Accessibility object is reacquired from the same frontmost application so
-/// Safari/WebKit object replacement does not become a false failure; a real
-/// focus change still ends evidence gathering.
+/// polling), and also when no baseline could be captured at all — neither
+/// the pre-chord read nor the immediate post-chord fallback succeeded. Every
+/// evidence form in [`TranscriptMatcher::indicates_insertion`] requires a
+/// baseline to compare against, so polling without one could never confirm
+/// anything and would otherwise spin to the deadline reporting a guaranteed
+/// false [`PasteConfirmation::NoEvidence`] alarm.
+/// [`PasteConfirmation::UnverifiedFocusLost`] when the originally captured
+/// Accessibility object dies and the reacquire fallback then loses the
+/// ability to read focus entirely — the frontmost application changed, or
+/// its focus state can no longer be read — before any evidence appeared: the
+/// chord was posted into a verified-focused target and very likely landed,
+/// but with focus no longer observable at all there is no way to keep
+/// gathering evidence.
+/// [`PasteConfirmation::NoEvidence`] when polling worked the whole window but
+/// no insertion evidence ever appeared before the deadline. A dead captured
+/// Accessibility object is otherwise reacquired from the same frontmost
+/// application so ordinary Safari/WebKit object replacement does not become
+/// a false failure.
 ///
 /// Every point below that resumes from a blocking sleep or AX/pasteboard
-/// read and is about to report `Confirmed` or `Unverified` first checks this
-/// thread's abandonment signal (see [`install_abandonment_signal`]) and
-/// degrades to `NoEvidence` instead when it is set, so an abandoned
-/// `doctor --deep` worker thread never restores the clipboard out from under
-/// that harness's own cleanup.
+/// read and is about to report `Confirmed`, `Unverified`, or
+/// `UnverifiedFocusLost` first checks this thread's abandonment signal (see
+/// [`install_abandonment_signal`]) and degrades to `NoEvidence` instead when
+/// it is set, so an abandoned `doctor --deep` worker thread never restores
+/// the clipboard out from under that harness's own cleanup.
 pub(crate) fn await_paste_confirmation(ctx: &PasteConfirmationContext<'_>) -> PasteConfirmation {
     let start = Instant::now();
 
@@ -290,6 +351,18 @@ pub(crate) fn await_paste_confirmation(ctx: &PasteConfirmationContext<'_>) -> Pa
             .map(BoundedNormalizedValue::from_target_value),
     };
 
+    if baseline.is_none() {
+        // Neither the pre-chord read nor the immediate post-chord fallback
+        // produced a baseline. Every evidence form in
+        // `TranscriptMatcher::indicates_insertion` requires one, so the poll
+        // loop below could never confirm anything — it would just spin to
+        // the deadline and report a guaranteed false `NoEvidence` alarm.
+        // Epistemically this is the same situation as the no-pollable-value
+        // case above, so it degrades the same way.
+        thread::sleep(UNVERIFIED_GRACE.saturating_sub(start.elapsed()));
+        return unverified_unless_abandoned(start.elapsed(), "unverified_no_baseline");
+    }
+
     let deadline = start + AX_CONFIRM_DEADLINE;
     let mut captured_element_usable = true;
     loop {
@@ -312,10 +385,19 @@ pub(crate) fn await_paste_confirmation(ctx: &PasteConfirmationContext<'_>) -> Pa
                 Ok(true) => return confirmed_unless_abandoned(start.elapsed(), "ax_confirmed"),
                 Ok(false) => continue,
                 Err(()) => {
-                    return PasteConfirmation::NoEvidence {
-                        elapsed: start.elapsed(),
-                        kind: "no_evidence",
-                    };
+                    // The captured element had already died (WebKit object
+                    // replacement or similar) and the reacquire fallback has
+                    // now lost focus entirely: the frontmost application
+                    // changed, or its focus state can no longer be read. The
+                    // chord was posted into a verified-focused target and
+                    // very likely landed, but that target can never be
+                    // re-observed, unlike a full-deadline `NoEvidence` where
+                    // polling worked the whole window and simply found
+                    // nothing.
+                    return unverified_focus_lost_unless_abandoned(
+                        start.elapsed(),
+                        "unverified_focus_lost",
+                    );
                 }
             }
         };
@@ -503,19 +585,32 @@ struct EvidenceCounts {
 /// wrap points. Dropping whitespace on both sides makes the comparison
 /// independent of that layout.
 ///
-/// A transcript at or below [`CONFIRM_WINDOW_CHARS`] requires an exact
-/// baseline-to-current insertion instead of a substring count increase; short
-/// strings collide too easily with unrelated target updates. For longer text,
-/// a leading or trailing window still counts: a terminal scrolls the head of
-/// a long paste off the top of the screen, and a bounded field truncates the
-/// tail, but either distinctive end appearing verbatim is positive evidence
-/// the paste landed.
+/// Evidence requirements fall into three length bands, measured on the
+/// normalized (whitespace-stripped) transcript.
 ///
+/// Below [`SHORT_CONFIRM_MIN_OCCURRENCE_CHARS`], only an exact
+/// baseline-to-current insertion (or selection-geometry evidence) counts: a
+/// string this short collides too easily with unrelated target updates, so a
+/// mere occurrence-count increase is not trusted. From there through
+/// [`CONFIRM_WINDOW_CHARS`], a whole-transcript occurrence-count *increase*
+/// over the pre-chord baseline counts too — long enough to be unlikely by
+/// coincidence, but still too short to have a reliable leading/trailing
+/// window of its own. Above [`CONFIRM_WINDOW_CHARS`], a leading or trailing
+/// window also counts on its own: a terminal scrolls the head of a long
+/// paste off the top of the screen, and a bounded field truncates the tail,
+/// but either distinctive end appearing as a new occurrence (not merely
+/// already present, see `evidence_already_present_in_baseline_does_not_confirm`)
+/// is positive evidence the paste landed.
 struct TranscriptMatcher {
     whole: Option<String>,
     head: Option<String>,
     tail: Option<String>,
     utf16_units: usize,
+    /// Whether a whole-transcript occurrence-count increase alone counts as
+    /// confirmation evidence for a transcript that has no leading/trailing
+    /// window (`head`/`tail` both `None`). See
+    /// [`SHORT_CONFIRM_MIN_OCCURRENCE_CHARS`].
+    whole_occurrence_allowed: bool,
 }
 
 impl TranscriptMatcher {
@@ -528,6 +623,7 @@ impl TranscriptMatcher {
                 head: None,
                 tail: None,
                 utf16_units,
+                whole_occurrence_allowed: false,
             };
         }
 
@@ -537,12 +633,14 @@ impl TranscriptMatcher {
                 .tail
                 .as_deref()
                 .map_or(0, |tail| tail.chars().count());
+        let whole_occurrence_allowed = normalized_len >= SHORT_CONFIRM_MIN_OCCURRENCE_CHARS;
         if normalized_len <= CONFIRM_WINDOW_CHARS {
             return Self {
                 whole,
                 head: None,
                 tail: None,
                 utf16_units,
+                whole_occurrence_allowed,
             };
         }
 
@@ -559,6 +657,7 @@ impl TranscriptMatcher {
             head: Some(head),
             tail: Some(tail.into_iter().collect()),
             utf16_units,
+            whole_occurrence_allowed,
         }
     }
 
@@ -592,7 +691,9 @@ impl TranscriptMatcher {
             _ => false,
         };
         let distinctive_occurrence = match baseline {
-            Some(baseline) if self.head.is_some() || self.tail.is_some() => {
+            Some(baseline)
+                if self.head.is_some() || self.tail.is_some() || self.whole_occurrence_allowed =>
+            {
                 let current_counts = self.counts(current);
                 let baseline_counts = self.counts(baseline);
                 current_counts.whole > baseline_counts.whole
@@ -781,8 +882,16 @@ mod tests {
     }
 
     /// A transcript at or under [`CONFIRM_WINDOW_CHARS`] gets no windowed
-    /// fallback: a partial overlap must not be mistaken for insertion when
-    /// the whole transcript is short enough to have been matched outright.
+    /// (leading/trailing) fallback: a partial overlap must not be mistaken
+    /// for insertion when the whole transcript is short enough to have been
+    /// matched outright. This transcript's normalized length (16) actually
+    /// clears [`SHORT_CONFIRM_MIN_OCCURRENCE_CHARS`], so the whole-occurrence
+    /// fallback added for that band is live here too; this still returns
+    /// `false` because the occurrence count does not increase (baseline and
+    /// current both hold zero occurrences of the transcript), not because
+    /// the fallback is unavailable. See
+    /// `short_transcript_confirms_via_occurrence_increase_despite_unrelated_churn`
+    /// for the case where that fallback does fire.
     #[test]
     fn short_transcript_has_no_windowed_fallback() {
         let transcript = "hello there friend";
@@ -790,6 +899,58 @@ mod tests {
         assert!(!value_indicates_insertion(
             Some("hello there"),
             "hello there",
+            transcript
+        ));
+    }
+
+    /// The live regression behind a false error chime in Discord: a short
+    /// transcript (16 normalized chars, above
+    /// [`SHORT_CONFIRM_MIN_OCCURRENCE_CHARS`] but at/under
+    /// [`CONFIRM_WINDOW_CHARS`], so it gets no leading/trailing window)
+    /// landed, but unrelated churn around it (Slate re-rendering, a
+    /// zero-width character, a redrawn spinner frame) broke the exact
+    /// baseline-to-current insertion delta. A whole-transcript
+    /// occurrence-count increase over the baseline is still real evidence
+    /// here, even without an exact match.
+    #[test]
+    fn short_transcript_confirms_via_occurrence_increase_despite_unrelated_churn() {
+        let transcript = "hello there friend";
+        assert!(transcript.chars().filter(|c| !c.is_whitespace()).count() >= 12);
+        assert!(value_indicates_insertion(
+            Some("prompt one"),
+            "prompt two hello there friend",
+            transcript
+        ));
+    }
+
+    /// Below [`SHORT_CONFIRM_MIN_OCCURRENCE_CHARS`], an occurrence-count
+    /// increase alone must not confirm: `"okay"` is short enough to appear in
+    /// unrelated growth by coincidence, so only an exact insertion delta (or
+    /// selection evidence) is trusted for it, even though the count here
+    /// genuinely goes from zero to one.
+    #[test]
+    fn below_floor_transcript_does_not_confirm_via_occurrence_increase() {
+        let transcript = "okay";
+        assert!(transcript.chars().count() < 12);
+        assert!(!value_indicates_insertion(
+            Some("prompt one"),
+            "prompt two okay friend",
+            transcript
+        ));
+    }
+
+    /// A short transcript already present once in the baseline that is
+    /// merely still present once in the current value — with unrelated
+    /// churn added around it — must not confirm: the occurrence count did
+    /// not increase, so this is mere presence, not evidence of a new
+    /// insertion (compare `evidence_already_present_in_baseline_does_not_confirm`,
+    /// the equivalent case for long transcripts).
+    #[test]
+    fn short_transcript_present_once_in_both_does_not_confirm_despite_churn() {
+        let transcript = "hello there friend";
+        assert!(!value_indicates_insertion(
+            Some(transcript),
+            &format!("xyz {transcript} abc"),
             transcript
         ));
     }
@@ -963,6 +1124,29 @@ mod ffi_tests {
             baseline: None,
         };
         match await_paste_confirmation(&ctx) {
+            PasteConfirmation::NoEvidence { kind, .. } => {
+                assert_eq!(kind, "no_evidence");
+            }
+            other => panic!("expected NoEvidence once abandoned, got {other:?}"),
+        }
+    }
+
+    /// As [`abandoned_signal_degrades_unverified_to_no_evidence`], for the
+    /// sibling [`unverified_focus_lost_unless_abandoned`] helper backing
+    /// [`PasteConfirmation::UnverifiedFocusLost`]. Driving
+    /// `await_paste_confirmation` itself into that branch needs a live,
+    /// then-broken captured Accessibility object, which is unavailable
+    /// without an Accessibility permission grant, so this calls the helper
+    /// directly instead — exactly as
+    /// `no_focus_snapshot_is_unverified_without_ax_permission` does for the
+    /// no-pollable-value case above.
+    #[test]
+    fn abandoned_signal_degrades_unverified_focus_lost_to_no_evidence() {
+        install_abandonment_signal(Arc::new(AtomicBool::new(true)));
+        match unverified_focus_lost_unless_abandoned(
+            Duration::from_millis(5),
+            "unverified_focus_lost",
+        ) {
             PasteConfirmation::NoEvidence { kind, .. } => {
                 assert_eq!(kind, "no_evidence");
             }

@@ -100,11 +100,28 @@ pub(crate) enum PasteConfirmation {
     },
     /// No positive evidence was available at all (no pollable signal), so a
     /// fixed grace period was used instead. The paste chord was sent; it is
-    /// simply unknown whether it landed.
+    /// simply unknown whether it landed. The insertion target stayed
+    /// observable throughout (or was never pollable at all), so the previous
+    /// clipboard contents are still restored per policy.
     Unverified {
         /// Time spent in the grace period.
         elapsed: Duration,
         /// Stable telemetry label, e.g. `"unverified_timeout"`.
+        kind: &'static str,
+    },
+    /// Evidence gathering was cut off because the insertion target became
+    /// unobservable mid-poll: the originally captured Accessibility object
+    /// died and the frontmost application then changed, or its focus state
+    /// could no longer be read at all. The paste chord was posted into a
+    /// verified-focused target and very likely landed, but unlike
+    /// [`Self::Unverified`] the target can never be re-observed to check, so
+    /// the transcript is kept on the clipboard rather than restoring the
+    /// previous contents — the same reasoning as [`Self::NoEvidence`], for a
+    /// different reason.
+    UnverifiedFocusLost {
+        /// Time spent before the focus loss was detected.
+        elapsed: Duration,
+        /// Stable telemetry label, `"unverified_focus_lost"`.
         kind: &'static str,
     },
     /// A pollable signal was available but never showed insertion evidence

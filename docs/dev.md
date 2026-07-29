@@ -88,6 +88,7 @@ Current Rust files over the approximate 1k LoC target:
 | `build.rs` | Coordinates cross-platform CMake, BLAS, accelerator, runtime-path, and Windows-manifest policy. Continue moving self-contained Windows discovery and manifest code under `build/`. |
 | `src/daemon/desktop/hotkey.rs` | Is only slightly over the target and already delegates macOS code. Extract Linux backend implementations if it grows further. |
 | `src/daemon/desktop/inject_tests.rs` | Keeps the clipboard and insertion transaction regression matrix together. Split by transaction phase when shared fixtures no longer dominate. |
+| `src/daemon/macos/pasteboard.rs` | Owns the macOS paste-acknowledgement evidence policy: baseline capture, confirmation polling, transcript matching, and their regression tests, which dominate the count. Extract `TranscriptMatcher` and its tests into a sibling module if the evidence rules grow further. |
 
 ## Deferred Runtime Work
 

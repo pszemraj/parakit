@@ -686,15 +686,28 @@ fn paste_transcript(
 /// `report.clipboard_restored == Some(false)` is ambiguous on its own: it is
 /// also what a deliberate [`ClipboardPolicy::KeepTranscript`] request looks
 /// like. Restricting the warning to `!keep_transcript_clipboard` (the caller
-/// asked for [`ClipboardPolicy::RestorePrevious`]) resolves the ambiguity,
-/// since that combination can only mean the restore was attempted and
-/// failed.
+/// asked for [`ClipboardPolicy::RestorePrevious`]) resolves that half of the
+/// ambiguity, since that combination usually can only mean the restore was
+/// attempted and failed.
+///
+/// The remaining exception is `acknowledgement_kind: "unverified_focus_lost"`
+/// (see [`crate::daemon::desktop::clipboard_restore::PasteConfirmation::UnverifiedFocusLost`]):
+/// there, `finish_confirmed_paste` never even attempts a restore, because the
+/// insertion target became unobservable before one could be trusted, and
+/// deliberately keeps the transcript for the same reason the `CopiedOnly`
+/// no-evidence path does. Warning about a "failed" restore that was never
+/// attempted would misreport a deliberate, correct decision as a clipboard
+/// bug, so that kind is excluded here exactly as `CopiedOnly` already is by
+/// this function never being called for that outcome.
 fn warn_if_clipboard_restore_failed(
     log: &Logger,
     keep_transcript_clipboard: bool,
     report: &super::inject::PasteReport,
 ) {
-    if !keep_transcript_clipboard && report.clipboard_restored == Some(false) {
+    if !keep_transcript_clipboard
+        && report.clipboard_restored == Some(false)
+        && report.acknowledgement_kind != "unverified_focus_lost"
+    {
         log.warn(format!(
             "paste succeeded, but {}; the transcript is likely still on the clipboard",
             super::inject::CLIPBOARD_RESTORE_ERROR
@@ -1002,7 +1015,8 @@ pub(crate) struct InsertReport {
     /// Whether a synthetic paste chord or type event was actually sent.
     pub(crate) paste_event_posted: bool,
     /// How insertion success was acknowledged (`"ax_confirmed"`,
-    /// `"unverified_timeout"`, `"no_evidence"`, or `"not_applicable"`).
+    /// `"unverified_timeout"`, `"unverified_no_baseline"`,
+    /// `"unverified_focus_lost"`, `"no_evidence"`, or `"not_applicable"`).
     pub(crate) acknowledgement_kind: &'static str,
     /// Milliseconds spent waiting for acknowledgement, when applicable.
     pub(crate) acknowledgement_ms: Option<u128>,
