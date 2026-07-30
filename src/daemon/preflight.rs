@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use super::hotkey::HotkeyBackend;
 #[cfg(target_os = "linux")]
 use super::hotkey::LinuxHotkeyRoute;
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 use super::hotkey_help;
 use super::inject::{self, PasteMode};
 
@@ -362,7 +362,6 @@ fn hotkey_report(backend: HotkeyBackend, _prompt_accessibility: bool) -> HotkeyR
         registered.as_ref(),
         x11_listen.as_ref(),
         evdev.as_ref(),
-        blocking,
     );
 
     let mut details = String::new();
@@ -516,26 +515,39 @@ struct EvdevReport {
 
 #[cfg(target_os = "linux")]
 impl EvdevReport {
+    fn readiness(&self) -> EvdevReadiness {
+        if !self.uinput_writable {
+            EvdevReadiness::UinputUnavailable
+        } else if self.hotkey_keyboards == 0 {
+            EvdevReadiness::NoKeyboardCandidates
+        } else if self.other_errors.is_empty() {
+            EvdevReadiness::Ready
+        } else {
+            EvdevReadiness::InputScanErrors
+        }
+    }
+
     fn grab_likely_available(&self) -> bool {
-        self.event_devices > 0
-            && self.hotkey_keyboards > 0
-            && self.uinput_writable
-            && self.other_errors.is_empty()
+        self.readiness() == EvdevReadiness::Ready
     }
 
     fn status_label(&self) -> &'static str {
-        if self.grab_likely_available() {
-            "ready"
-        } else if !self.uinput_writable {
-            "uinput unavailable"
-        } else if self.hotkey_keyboards == 0 {
-            "no keyboard candidates"
-        } else if self.readable > 0 {
-            "partial permissions"
-        } else {
-            "unavailable"
+        match self.readiness() {
+            EvdevReadiness::Ready => "ready",
+            EvdevReadiness::UinputUnavailable => "uinput unavailable",
+            EvdevReadiness::NoKeyboardCandidates => "no keyboard candidates",
+            EvdevReadiness::InputScanErrors => "input scan errors",
         }
     }
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum EvdevReadiness {
+    Ready,
+    UinputUnavailable,
+    NoKeyboardCandidates,
+    InputScanErrors,
 }
 
 #[cfg(target_os = "linux")]
@@ -544,14 +556,10 @@ fn linux_hotkey_status(
     registered: Option<&Result<()>>,
     x11_listen: Option<&Result<()>>,
     evdev: Option<&EvdevReport>,
-    blocking: bool,
 ) -> String {
-    if !blocking {
-        return format!("{} ready", route.label());
-    }
-
     if route == LinuxHotkeyRoute::RegisteredX11 {
         return match registered {
+            Some(Ok(())) => format!("{} ready", route.label()),
             Some(Err(err)) => format!("registered Ctrl+Space unavailable ({err:#})"),
             _ => "registered Ctrl+Space unavailable".to_string(),
         };
@@ -559,6 +567,7 @@ fn linux_hotkey_status(
 
     if route == LinuxHotkeyRoute::PassiveX11 {
         return match x11_listen {
+            Some(Ok(())) => format!("{} ready", route.label()),
             Some(Err(err)) => format!("passive X11 listen unavailable ({err:#})"),
             _ => "passive X11 listen unavailable".to_string(),
         };
@@ -567,26 +576,15 @@ fn linux_hotkey_status(
     let Some(evdev) = evdev else {
         return "evdev-proxy unavailable".to_string();
     };
-    if !evdev.uinput_writable {
-        return "uinput unavailable".to_string();
-    }
-    if evdev.hotkey_keyboards == 0 {
-        return format!(
+    match evdev.readiness() {
+        EvdevReadiness::Ready => format!("{} ready", route.label()),
+        EvdevReadiness::UinputUnavailable => "uinput unavailable".to_string(),
+        EvdevReadiness::NoKeyboardCandidates => format!(
             "no Ctrl+Space keyboard device found ({} input device(s) readable)",
             evdev.readable
-        );
+        ),
+        EvdevReadiness::InputScanErrors => "input device scan errors".to_string(),
     }
-    if evdev.denied > 0 {
-        return format!(
-            "input permissions incomplete ({} permission denied)",
-            evdev.denied
-        );
-    }
-    if !evdev.other_errors.is_empty() {
-        return "input device scan errors".to_string();
-    }
-
-    unreachable!("blocking evdev report without a failure reason")
 }
 
 #[cfg(target_os = "linux")]
@@ -747,11 +745,7 @@ fn hotkey_report(_backend: HotkeyBackend, _prompt_accessibility: bool) -> Hotkey
     .unwrap();
     if blocking {
         writeln!(&mut details, "  status:         FAIL").unwrap();
-        writeln!(
-            &mut details,
-            "fix:\n  - Close any application that already owns Ctrl+Space.\n  - Re-run: parakit doctor\n  - Elevated target apps may still reject paste input from a normal user process."
-        )
-        .unwrap();
+        hotkey_help::write_windows_hotkey_fix(&mut details);
     } else {
         writeln!(
             &mut details,

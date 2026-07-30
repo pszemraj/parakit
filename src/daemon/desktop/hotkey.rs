@@ -444,7 +444,7 @@ fn run_linux_registered_hotkey_loop_or_exit(tx: Sender<HotkeyTransition>) {
     if let Err(err) = run_linux_registered_hotkey_loop(tx) {
         eprintln!(
             "parakit: registered X11 hotkey failed: {err:#}\n{}",
-            registered_hotkey_failure_help()
+            crate::daemon::hotkey_help::registered_linux_failure_help()
         );
         std::process::exit(2);
     }
@@ -455,7 +455,7 @@ fn run_linux_x11_listen_or_exit(tx: Sender<HotkeyTransition>) {
     if let Err(err) = run_linux_x11_listen_loop(tx) {
         eprintln!(
             "parakit: passive X11 hotkey listen failed: {err:#}\n{}",
-            x11_listen_failure_help()
+            crate::daemon::hotkey_help::x11_listen_linux_failure_help()
         );
         std::process::exit(2);
     }
@@ -689,7 +689,7 @@ fn run_linux_evdev_grab_loop_or_exit(tx: Sender<HotkeyTransition>, log: Arc<Logg
     if let Err(err) = run_linux_evdev_grab_loop(tx, Arc::clone(&log)) {
         eprintln!(
             "parakit: evdev keyboard grab failed: {err:#}\n{}",
-            grab_failure_help()
+            crate::daemon::hotkey_help::evdev_linux_failure_help()
         );
         std::process::exit(2);
     }
@@ -1006,21 +1006,6 @@ fn send_hotkey_transition(action: HotkeyAction, tx: &Sender<HotkeyTransition>) {
         HotkeyAction::Stop { stopped_at } => HotkeyTransition::Released { at: stopped_at },
     };
     let _ = tx.send(transition);
-}
-
-#[cfg(target_os = "linux")]
-fn registered_hotkey_failure_help() -> String {
-    crate::daemon::hotkey_help::registered_linux_failure_help()
-}
-
-#[cfg(target_os = "linux")]
-fn x11_listen_failure_help() -> String {
-    crate::daemon::hotkey_help::x11_listen_linux_failure_help()
-}
-
-#[cfg(target_os = "linux")]
-fn grab_failure_help() -> String {
-    crate::daemon::hotkey_help::evdev_linux_failure_help()
 }
 
 #[cfg(test)]

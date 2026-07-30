@@ -36,7 +36,7 @@ pub(crate) fn run_registered_hotkey_loop_or_exit(tx: Sender<HotkeyTransition>) {
     if let Err(err) = run_registered_hotkey_loop(tx) {
         eprintln!(
             "parakit: Windows registered hotkey failed: {err:#}\n{}",
-            windows_hotkey_failure_help()
+            crate::daemon::hotkey_help::windows_failure_help()
         );
         std::process::exit(2);
     }
@@ -297,15 +297,6 @@ fn send_inputs_with<S: InputSender>(sender: &mut S, inputs: &[INPUT], label: &st
         );
     }
     Ok(())
-}
-
-/// Return the standard Windows hotkey failure help text.
-///
-/// # Returns
-///
-/// A static diagnostic string for startup failures.
-pub(crate) fn windows_hotkey_failure_help() -> &'static str {
-    "Windows hotkey capture uses RegisterHotKey(Ctrl+Space). If registration fails, another application already owns Ctrl+Space. Close it, then rerun: parakit doctor"
 }
 
 #[cfg(test)]

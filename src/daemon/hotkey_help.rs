@@ -133,7 +133,33 @@ pub(crate) fn macos_failure_help() -> String {
     )
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(target_os = "windows")]
+const WINDOWS_HOTKEY_FIX: &str = "fix:
+  - Close any application that already owns Ctrl+Space.
+  - Re-run: parakit doctor
+  - Elevated target apps may still reject paste input from a normal user process.";
+
+#[cfg(target_os = "windows")]
+/// Append Windows registered-hotkey remediation steps.
+///
+/// # Arguments
+///
+/// * `out` - Diagnostic buffer to append to.
+pub(crate) fn write_windows_hotkey_fix(out: &mut String) {
+    push_line(out, WINDOWS_HOTKEY_FIX);
+}
+
+#[cfg(target_os = "windows")]
+/// Build runtime failure help for the Windows registered-hotkey backend.
+///
+/// # Returns
+///
+/// Multi-line diagnostic text explaining registration and elevation failures.
+pub(crate) fn windows_failure_help() -> String {
+    format!("Windows hotkey capture uses RegisterHotKey(Ctrl+Space).\n{WINDOWS_HOTKEY_FIX}")
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 fn push_line(out: &mut String, line: &str) {
     out.push_str(line);
     out.push('\n');
