@@ -39,9 +39,9 @@ impl FocusVerification {
     ///
     /// # Returns
     ///
-    /// `false` only when the live insertion target changed.
+    /// `true` only when the live insertion target was positively matched.
     pub(crate) const fn allows_insertion(self) -> bool {
-        !matches!(self, Self::Changed)
+        matches!(self, Self::Matched)
     }
 
     #[cfg(any(target_os = "linux", target_os = "windows"))]

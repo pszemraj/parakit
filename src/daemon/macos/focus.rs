@@ -4,9 +4,10 @@
 //! read immediately before insertion. Matching is by the Accessibility
 //! focused UI element's identity (via `CFEqual`), which survives the
 //! transient window churn (palettes, popovers, sheets, z-order changes)
-//! that made the previous on-screen-window-id comparison unreliable. When
-//! Accessibility cannot expose a focused element on either side, matching
-//! falls back to frontmost-application pid + bundle identifier.
+//! that made the previous on-screen-window-id comparison unreliable.
+//! Frontmost-application identity is still checked first, but it is not a
+//! substitute for focused-element identity: when Accessibility cannot expose
+//! a focused element on either side, automatic insertion is not authorized.
 
 use crate::daemon::desktop::{
     clipboard_restore::{PasteTargetSelection, PasteTargetValue},
@@ -264,9 +265,9 @@ impl MacOsFocusSnapshot {
     ///
     /// Returns an error when macOS reports no frontmost application.
     /// Accessibility read failures at capture time never produce an error;
-    /// they simply leave the Accessibility portion of the snapshot empty
-    /// (see [`Self::verify_current`] for the pid+bundle fallback this
-    /// enables).
+    /// they leave the Accessibility portion of the snapshot empty, which
+    /// makes [`Self::verify_current`] return
+    /// [`FocusVerification::AxUnsupported`] and blocks automatic insertion.
     pub(crate) fn capture() -> Result<Self> {
         frontmost_application_window(true).context("could not capture macOS frontmost window")
     }
@@ -652,11 +653,11 @@ mod tests {
     }
 
     #[test]
-    fn decision_falls_back_when_ax_is_unavailable_on_either_side() {
-        assert_eq!(
-            decide_focus_verification(true, true, None),
-            FocusVerification::AxUnsupported
-        );
+    fn decision_does_not_authorize_insertion_without_ax_identity() {
+        let verification = decide_focus_verification(true, true, None);
+
+        assert_eq!(verification, FocusVerification::AxUnsupported);
+        assert!(!verification.allows_insertion());
     }
 
     #[test]

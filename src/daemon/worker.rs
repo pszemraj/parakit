@@ -840,7 +840,18 @@ fn focus_verification_allows_insertion(
             if result.allows_insertion() {
                 true
             } else {
-                log.warn("focus changed before insertion; automatic paste skipped");
+                match result {
+                    FocusVerification::Changed => {
+                        log.warn("focus changed before insertion; automatic paste skipped");
+                    }
+                    #[cfg(target_os = "macos")]
+                    FocusVerification::AxUnsupported => {
+                        log.warn(
+                            "could not verify the focused macOS Accessibility element; automatic paste skipped",
+                        );
+                    }
+                    FocusVerification::Matched => unreachable!("matched focus permits insertion"),
+                }
                 false
             }
         }
@@ -1267,7 +1278,7 @@ mod tests {
         assert_eq!(verification.get(), "changed");
         #[cfg(target_os = "macos")]
         {
-            assert!(focus_verification_allows_insertion(
+            assert!(!focus_verification_allows_insertion(
                 Ok(FocusVerification::AxUnsupported),
                 &verification,
                 &log
