@@ -183,6 +183,6 @@ When a cleanup worsens a transcript:
 5. Add a case to the `rules` unit tests or `tests/cleaning_regressions.rs`.
 
 For historical JSONL replay, use
-[quality.md#cleaning-corpus-replay](quality.md#cleaning-corpus-replay).
+[dev/quality.md#cleaning-corpus-replay](dev/quality.md#cleaning-corpus-replay).
 
 Avoid disabling broad rule categories to fix a narrow failure. If the failure is personal vocabulary rather than a general defect, add a user rule instead.

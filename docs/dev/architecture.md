@@ -39,10 +39,10 @@ Live capture drains callback audio through a bounded single-producer/single-cons
 - `rodio::OutputStream` is not reliably `Send`, so cue playback lives on its own thread and opens output only for the duration of a cue.
 - `crispasr::Session` is `Send` but not `Sync`, so the worker owns `Engine` directly. Do not wrap it in `Arc<Engine>`.
 - Hotkey backends emit only logical press/release transitions. They do not call audio, ASR, clipboard, or insertion code.
-- Runtime focus and insertion behavior is in [running.md#insertion](running.md#insertion);
-  backend setup is in [linux-desktop.md](linux-desktop.md),
-  [macos-desktop.md](macos-desktop.md), and
-  [the Windows guide](../scripts/windows/README.md).
+- Runtime focus and insertion behavior is in [running.md#insertion](../running.md#insertion);
+  backend setup is in [linux-desktop.md](../linux-desktop.md),
+  [macos-desktop.md](../macos-desktop.md), and
+  [the Windows guide](../../scripts/windows/README.md).
 - Normal dictation hotkey backends must suppress the literal Space key before it reaches the focused application. The passive `x11-listen` backend is for debugging and does not suppress keys.
 
 Cross-thread communication uses atomics, mutex-protected buffers, and crossbeam channels.

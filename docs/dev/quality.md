@@ -17,7 +17,7 @@ cargo check --workspace --all-targets --all-features
 ```
 
 The all-features check can request accelerator toolchains that the current
-host does not have. Follow [GPU feature validation](dev.md#gpu-feature-validation)
+host does not have. Follow [GPU feature validation](README.md#gpu-feature-validation)
 for the host-specific fallback, then run the native GPU build and runtime
 checks on each supported platform.
 
@@ -47,7 +47,7 @@ Generate a browsable per-line report when investigating an untested branch:
 cargo coverage-html
 ```
 
-The aliases are defined in [`.cargo/config.toml`](../.cargo/config.toml).
+The aliases are defined in [`.cargo/config.toml`](../../.cargo/config.toml).
 By default, `cargo-llvm-cov` keeps instrumented artifacts under
 `target/llvm-cov-target`, separate from ordinary builds. Reports cover
 parakit's Rust code, not linked CrispASR C/C++ code. They also cover only
@@ -65,7 +65,7 @@ cargo run --release --no-default-features --features bundled --example transcrib
   --audio clips/example.wav
 ```
 
-The helper accepts WAV input, uses the same raw `Engine` path as the daemon, and prints raw inference text and timing. It intentionally does not import or apply parakit text-cleaning rules. This command avoids live daemon desktop/audio dependencies while keeping the bundled CrispASR build. Model cache behavior is in [running.md#model-cache](running.md#model-cache). Pass `--model /path/to/model.gguf` only when comparing a specific custom GGUF. The source lives at [examples/transcribe_file.rs](../examples/transcribe_file.rs); it is a Cargo example target so it is not installed as an end-user binary.
+The helper accepts WAV input, uses the same raw `Engine` path as the daemon, and prints raw inference text and timing. It intentionally does not import or apply parakit text-cleaning rules. This command avoids live daemon desktop/audio dependencies while keeping the bundled CrispASR build. Model cache behavior is in [running.md#model-cache](../running.md#model-cache). Pass `--model /path/to/model.gguf` only when comparing a specific custom GGUF. The source lives at [examples/transcribe_file.rs](../../examples/transcribe_file.rs); it is a Cargo example target so it is not installed as an end-user binary.
 
 For latency work, use short real clips around 2s, 5s, 15s, and 25s. Longer quality clips are still useful for catching transcription drift, but they should not drive startup or post-release latency policy. Use repeatable `--warmup-seconds N` flags when calibrating GPU cold-start behavior; each flag runs one synthetic warmup pass before timing the real clip.
 

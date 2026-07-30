@@ -111,7 +111,7 @@ The transcript is printed or logged but nothing arrives in the focused applicati
 9. If focus changed between the hotkey release and the paste, parakit skips the paste on purpose and leaves the transcript on the clipboard. Hold focus on the target until the success cue.
 10. If paste stopped working after several failures in a row, the insertion circuit breaker is open. It retries automatically after a short cooldown, so wait rather than restarting the daemon.
 
-If that did not fix it, paste modes, focus guards, and clipboard restore policy are in [running.md#insertion](running.md#insertion). Platform specifics are in [linux-desktop.md#deep-doctor-check](linux-desktop.md#deep-doctor-check), [macos-desktop.md#doctor---deep](macos-desktop.md#doctor---deep), and [../scripts/windows/README.md#runtime-manifest](../scripts/windows/README.md#runtime-manifest).
+If that did not fix it, paste modes, focus guards, and clipboard restore policy are in [running.md#insertion](running.md#insertion). Platform specifics are in [linux-desktop.md#deep-doctor-check](linux-desktop.md#deep-doctor-check), [macos-desktop.md#doctor---deep](macos-desktop.md#doctor---deep), and [windows-desktop.md#doctor---deep](windows-desktop.md#doctor---deep).
 
 ## macOS Paste Could Not Be Confirmed
 

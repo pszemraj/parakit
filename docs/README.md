@@ -7,6 +7,7 @@ Everything under `docs/`, grouped by when you need it.
 - [build.md](build.md) - building from source and native dependencies per platform.
 - [macos-desktop.md](macos-desktop.md) - macOS permissions, the hotkey, and the paste-acknowledgement step.
 - [linux-desktop.md](linux-desktop.md) - Linux X11 requirements and the experimental evdev-proxy hotkey backend.
+- [windows-desktop.md](windows-desktop.md) - Windows hotkey registration, insertion, and `doctor --deep`.
 - [Windows bundle scripts](../scripts/windows/README.md) - packaging a runnable Windows bundle.
 
 ## Daily Use
@@ -20,6 +21,6 @@ Everything under `docs/`, grouped by when you need it.
 
 ## Development
 
-- [architecture.md](architecture.md) - module map and platform work.
-- [quality.md](quality.md) - validation and quality checks.
-- [dev.md](dev.md) - maintainer notes.
+- [dev/architecture.md](dev/architecture.md) - module map and platform work.
+- [dev/quality.md](dev/quality.md) - validation and quality checks.
+- [dev/README.md](dev/README.md) - maintainer notes.

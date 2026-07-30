@@ -157,7 +157,7 @@ parakit doctor --deep
 parakit
 ```
 
-In `standard` or `terminal` mode, `doctor --deep` opens a visible Win32 edit window, briefly takes focus, stages a sentinel, sends the configured paste chord, reads the text back, and restores supported clipboard content. Windows may use a brief cursor-click fallback to focus the probe and then restores the cursor position. Run it from an unlocked interactive desktop. In `direct` mode, it performs backend preflight only and does not type into the probe.
+What `doctor --deep` actually does on Windows is described in [windows-desktop.md#doctor---deep](../../docs/windows-desktop.md#doctor---deep).
 
 The installer runs `parakit --version` after copying files. That checks Windows loader resolution without touching the hotkey, microphone, daemon lock, model cache, or clipboard. If Windows reports `0xC0000135`, the installer translates it to a missing-runtime-DLL message before PATH updates.
 

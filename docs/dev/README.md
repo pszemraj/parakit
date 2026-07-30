@@ -30,7 +30,7 @@ Source-coverage setup and report commands are in
 ## Model Artifacts
 
 End-user download, cache, checksum, and model-override behavior is in
-[running.md#model-cache](running.md#model-cache).
+[running.md#model-cache](../running.md#model-cache).
 
 Hosted release files:
 
@@ -98,7 +98,7 @@ TODO: Keep the direct platform-hotkey path available when configurable chords la
 
 TODO: Add a Linux `doctor` warning for known IBus `Ctrl+Space` conflicts, or close this if configurable hotkeys make the warning unnecessary. Keep the current Linux docs warning until the default/config story changes.
 
-TODO: Remove the [Unix source-install dependency on the repository `target/` library tree](build.md#install) in a dedicated follow-up PR. First try to work upstream with CrispASR for static/manual linking support; if that is not viable, revisit full vendoring or an aggregate static-link strategy in parakit. Do not patch the CrispASR submodule locally for this.
+TODO: Remove the [Unix source-install dependency on the repository `target/` library tree](../build.md#install) in a dedicated follow-up PR. First try to work upstream with CrispASR for static/manual linking support; if that is not viable, revisit full vendoring or an aggregate static-link strategy in parakit. Do not patch the CrispASR submodule locally for this.
 
 TODO: Add a secondary recording watchdog for missed key-release events from the registered X11 hotkey backend. The existing max-utterance timeout bounds the failure, but a silence-based stop would recover sooner when a backend misses release ordering.
 
