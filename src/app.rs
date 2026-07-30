@@ -1148,6 +1148,16 @@ mod app_tests {
     }
 
     #[test]
+    fn editor_command_preserves_quoted_windows_paths() -> Result<()> {
+        let (program, arguments) =
+            parse_editor_command(r#""C:\Program Files\Editor\editor.exe" --wait"#)?;
+
+        assert_eq!(program, r"C:\Program Files\Editor\editor.exe");
+        assert_eq!(arguments, ["--wait"]);
+        Ok(())
+    }
+
+    #[test]
     fn whitespace_only_visual_falls_back_to_editor() {
         assert_eq!(
             configured_editor(Some(" \t "), Some("vim -f")),
