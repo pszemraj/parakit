@@ -83,12 +83,15 @@ Current Rust files over the approximate 1k LoC target:
 | `src/daemon/audio/capture.rs` | Owns the coupled CPAL stream-recovery, SPSC drain, resampling, and pre-roll boundary. Split into stream, drain, and device modules after Windows CPU behavior settles. |
 | `src/daemon/desktop/inject.rs` | Owns the cross-platform clipboard transaction and insertion contract. Split clipboard, X11 paste, and focus code without changing paste safety. |
 | `src/daemon/ipc.rs` | Contains both Unix-socket and Windows named-pipe transports plus their policy tests. Extract the Windows transport after its behavior settles. |
+| `src/daemon/macos/diagnostics.rs` | Owns the AppKit probe window and the two-stage macOS deep insertion check. Extract the probe-window harness if either diagnostic stage grows. |
 | `src/daemon/worker.rs` | Coordinates ASR, cleaning, logging, recovery history, and the insertion circuit breaker. Extract stable policy helpers without splitting the end-to-end worker state machine. |
 | `src/app.rs` | Holds top-level command dispatch and daemon bootstrap. Extract command handlers when a stable subsystem boundary appears. |
+| `src/cli.rs` | Keeps clap declarations, effective-option precedence, migration hints, and their shared parser tests together. Split declarations from resolution policy after the new command surface settles. |
 | `build.rs` | Coordinates cross-platform CMake, BLAS, accelerator, runtime-path, and Windows-manifest policy. Continue moving self-contained Windows discovery and manifest code under `build/`. |
 | `src/daemon/desktop/hotkey.rs` | Is only slightly over the target and already delegates macOS code. Extract Linux backend implementations if it grows further. |
 | `src/daemon/desktop/inject_tests.rs` | Keeps the clipboard and insertion transaction regression matrix together. Split by transaction phase when shared fixtures no longer dominate. |
 | `src/daemon/macos/pasteboard.rs` | Owns the macOS paste-acknowledgement evidence policy: baseline capture, confirmation polling, transcript matching, and their regression tests, which dominate the count. Extract `TranscriptMatcher` and its tests into a sibling module if the evidence rules grow further. |
+| `src/rules/tests.rs` | Keeps the cleaning pipeline regression matrix beside shared rule fixtures. Split by rule group when the shared setup no longer dominates the file. |
 
 ## Deferred Runtime Work
 
