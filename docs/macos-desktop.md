@@ -10,9 +10,9 @@ Install the native Apple Silicon Metal build using [build.md#install](build.md#i
 
 Grant these in System Settings > Privacy & Security:
 
-- Accessibility: required for the `Left Control+Space` hotkey and synthetic paste/type events.
-- Input Monitoring: required for the CoreGraphics event tap that observes `Left Control+Space`.
-- Microphone: required for audio capture.
+- [Accessibility](https://support.apple.com/guide/mac-help/allow-accessibility-apps-to-access-your-mac-mh43185/mac): required for the `Left Control+Space` hotkey and synthetic paste/type events.
+- [Input Monitoring](https://support.apple.com/guide/mac-help/control-access-to-input-monitoring-on-mac-mchl4cedafb6/mac): required for the CoreGraphics event tap that observes `Left Control+Space`.
+- [Microphone](https://support.apple.com/guide/mac-help/control-access-to-the-microphone-on-mac-mchla1b1e1fe/mac): required for audio capture.
 
 Grant permissions to the terminal application that launches parakit, such as Terminal.app, iTerm2, or Ghostty. This is the recommended source-build flow because the grant attaches to the terminal's stable app identity and survives parakit rebuilds.
 
@@ -24,6 +24,21 @@ parakit
 ```
 
 If Accessibility is missing, `doctor` can trigger the macOS prompt. Input Monitoring must be granted manually in System Settings. After changing either permission, restart parakit and rerun `parakit doctor`. If Microphone is not determined yet, the first capture may trigger the Microphone prompt; rerun parakit after granting it.
+
+### Recovering From a Denied Prompt
+
+> [!TIP]
+> macOS remembers a denied or dismissed permission request and may not show the prompt again automatically. You are not locked out: quit parakit, open the relevant Privacy & Security pane linked above, and enable the terminal application that launches parakit. In the Accessibility pane, use the Add button if the terminal is not listed. Then restart the terminal application and rerun `parakit doctor`.
+
+If the entry is stuck or you specifically want macOS to ask again, Apple documents [`tccutil reset <service> [bundle-id]`](https://developer.apple.com/documentation/xcode/resetting-access-to-protected-resources-in-macos). Reset only the failed permission. For Terminal.app:
+
+```bash
+tccutil reset Accessibility com.apple.Terminal
+tccutil reset ListenEvent com.apple.Terminal
+tccutil reset Microphone com.apple.Terminal
+```
+
+`ListenEvent` is the TCC service behind Input Monitoring. These commands remove Terminal.app's saved decision; they do not grant access. Run parakit again to trigger the applicable prompt, then grant the permission and restart the terminal application. Do not use `sudo`, which broadens the reset beyond the current user. For iTerm2, Ghostty, or another launcher, substitute that application's bundle identifier.
 
 ### `doctor --deep`
 
