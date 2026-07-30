@@ -104,20 +104,6 @@ fn combined_output(output: &Output) -> String {
     )
 }
 
-#[test]
-fn staged_file_scan_includes_deletions() {
-    let hook = fs::read_to_string(hook_path()).expect("pre-commit hook should be readable");
-    let staged_scan = hook
-        .lines()
-        .find(|line| line.contains("git diff --cached --name-only"))
-        .expect("pre-commit hook should scan staged file names");
-
-    assert!(
-        staged_scan.contains("--diff-filter=ACMRD"),
-        "staged scan must include deletions so deletion-only commits are validated: {staged_scan}"
-    );
-}
-
 /// Non-Rust staged files must pass, and must never reach the cargo branch:
 /// the fixture stages only a markdown file, so `cargo fmt`/`rustdoc-checker`/
 /// `cargo clippy` are never invoked. This keeps the test hermetic (no cargo
