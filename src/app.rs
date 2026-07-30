@@ -1086,23 +1086,41 @@ fn edit_config_file() -> Result<()> {
         init_config_file(false, true)?;
     }
 
-    let editor = std::env::var("VISUAL")
-        .or_else(|_| std::env::var("EDITOR"))
-        .map_err(|_| {
-            anyhow::anyhow!(
-                "no editor configured: set $VISUAL or $EDITOR, or edit {} directly",
-                path.display()
-            )
-        })?;
+    let visual = std::env::var("VISUAL").ok();
+    let fallback = std::env::var("EDITOR").ok();
+    let editor = configured_editor(visual.as_deref(), fallback.as_deref()).ok_or_else(|| {
+        anyhow::anyhow!(
+            "no editor configured: set $VISUAL or $EDITOR, or edit {} directly",
+            path.display()
+        )
+    })?;
+    let (program, arguments) = parse_editor_command(editor)?;
 
-    let status = std::process::Command::new(&editor)
+    let status = std::process::Command::new(&program)
+        .args(arguments)
         .arg(&path)
         .status()
-        .with_context(|| format!("failed to launch editor '{editor}'"))?;
+        .with_context(|| format!("failed to launch editor command '{editor}'"))?;
     if !status.success() {
-        anyhow::bail!("editor '{editor}' exited with {status}");
+        anyhow::bail!("editor command '{editor}' exited with {status}");
     }
     Ok(())
+}
+
+fn configured_editor<'a>(visual: Option<&'a str>, fallback: Option<&'a str>) -> Option<&'a str> {
+    visual
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| fallback.filter(|value| !value.trim().is_empty()))
+}
+
+fn parse_editor_command(editor: &str) -> Result<(String, Vec<String>)> {
+    let mut words = shlex::split(editor)
+        .ok_or_else(|| anyhow::anyhow!("invalid editor command '{editor}': unmatched quote"))?;
+    if words.first().is_none_or(String::is_empty) {
+        anyhow::bail!("invalid editor command '{editor}': missing executable");
+    }
+    let program = words.remove(0);
+    Ok((program, words))
 }
 
 #[cfg(test)]
@@ -1113,6 +1131,37 @@ mod app_tests {
     const GGML_LOG_LEVEL_DEBUG: i32 = 1;
     const GGML_LOG_LEVEL_INFO: i32 = 2;
     const GGML_LOG_LEVEL_ERROR: i32 = 4;
+
+    #[test]
+    fn editor_command_prefers_visual_and_preserves_arguments() -> Result<()> {
+        let editor = configured_editor(
+            Some(r#""Visual Studio Code" --wait --reuse-window"#),
+            Some("vim"),
+        )
+        .expect("VISUAL should take precedence");
+
+        let (program, arguments) = parse_editor_command(editor)?;
+
+        assert_eq!(program, "Visual Studio Code");
+        assert_eq!(arguments, ["--wait", "--reuse-window"]);
+        Ok(())
+    }
+
+    #[test]
+    fn whitespace_only_visual_falls_back_to_editor() {
+        assert_eq!(
+            configured_editor(Some(" \t "), Some("vim -f")),
+            Some("vim -f")
+        );
+    }
+
+    #[test]
+    fn malformed_editor_command_is_rejected() {
+        let err = parse_editor_command(r#""unterminated"#)
+            .expect_err("an unmatched quote should be rejected");
+
+        assert!(format!("{err:#}").contains("unmatched quote"));
+    }
 
     #[test]
     fn warmup_policy_uses_gpu_sequence_only_for_a_visible_gpu() {
