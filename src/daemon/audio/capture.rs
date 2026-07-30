@@ -50,7 +50,7 @@ pub struct AudioHandle {
     state: Arc<Mutex<CaptureState>>,
     session_epoch: Arc<AtomicU64>,
     next_session_epoch: Arc<AtomicU64>,
-    control: Arc<Mutex<Option<Sender<AudioControl>>>>,
+    control: Sender<AudioControl>,
 }
 
 impl AudioHandle {
@@ -58,13 +58,12 @@ impl AudioHandle {
     ///
     /// # Returns
     ///
-    /// `Ok(())` when recording state was started by the live drain thread or
-    /// by the no-drain fallback path.
+    /// `Ok(())` when the live audio manager acknowledges the recording start.
     ///
     /// # Errors
     ///
-    /// Returns an error if the live audio drain accepts the command but does
-    /// not acknowledge it before the control timeout.
+    /// Returns an error if the audio manager is unavailable, cannot accept the
+    /// command, or does not acknowledge it before the control timeout.
     pub fn start_recording(&self) -> Result<()> {
         let next = self
             .next_session_epoch
@@ -72,15 +71,7 @@ impl AudioHandle {
             .wrapping_add(1)
             .max(1);
 
-        match self.try_start_on_drain(next)? {
-            AudioControlAck::Acked(()) => Ok(()),
-            AudioControlAck::NoLiveDrain => {
-                let mut state = self.state.lock();
-                state.begin_recording();
-                self.session_epoch.store(next, Ordering::Release);
-                Ok(())
-            }
-        }
+        self.start_on_manager(next)
     }
 
     /// Stop recording and take ownership of the buffered samples.
@@ -91,16 +82,12 @@ impl AudioHandle {
     ///
     /// # Errors
     ///
-    /// Returns an error if the live audio drain accepts the command but does
-    /// not acknowledge it before the control timeout. Recording state is reset
-    /// locally before the error is returned.
+    /// Returns an error if the audio manager is unavailable, cannot accept the
+    /// command, or does not acknowledge it before the control timeout.
+    /// Recording state is reset locally before the error is returned.
     pub fn stop_recording(&self) -> Result<Vec<f32>> {
-        match self.try_stop_on_drain() {
-            Ok(AudioControlAck::Acked(pcm)) => Ok(pcm),
-            Ok(AudioControlAck::NoLiveDrain) => {
-                self.session_epoch.store(0, Ordering::Release);
-                Ok(self.state.lock().take_recording())
-            }
+        match self.stop_on_manager() {
+            Ok(pcm) => Ok(pcm),
             Err(err) => {
                 self.reset_recording_after_failed_stop();
                 Err(err)
@@ -113,38 +100,25 @@ impl AudioHandle {
         let _ = self.state.lock().take_recording();
     }
 
-    fn try_start_on_drain(&self, epoch: u64) -> Result<AudioControlAck<()>> {
-        let Some(control) = self.control.lock().clone() else {
-            return Ok(AudioControlAck::NoLiveDrain);
-        };
+    fn start_on_manager(&self, epoch: u64) -> Result<()> {
         let (ack_tx, ack_rx) = bounded(1);
-        if !try_send_audio_control(control, AudioControl::Start { epoch, ack: ack_tx })? {
-            return Ok(AudioControlAck::NoLiveDrain);
-        }
-        recv_audio_control_ack(ack_rx, "audio manager", "Start").map(AudioControlAck::Acked)
+        send_audio_control(&self.control, AudioControl::Start { epoch, ack: ack_tx })?;
+        recv_audio_control_ack(ack_rx, "audio manager", "Start")
     }
 
-    fn try_stop_on_drain(&self) -> Result<AudioControlAck<Vec<f32>>> {
-        let Some(control) = self.control.lock().clone() else {
-            return Ok(AudioControlAck::NoLiveDrain);
-        };
+    fn stop_on_manager(&self) -> Result<Vec<f32>> {
         let (ack_tx, ack_rx) = bounded(1);
-        if !try_send_audio_control(control, AudioControl::Stop { ack: ack_tx })? {
-            return Ok(AudioControlAck::NoLiveDrain);
-        }
-        recv_audio_control_ack(ack_rx, "audio manager", "Stop").map(AudioControlAck::Acked)
+        send_audio_control(&self.control, AudioControl::Stop { ack: ack_tx })?;
+        recv_audio_control_ack(ack_rx, "audio manager", "Stop")
     }
 }
 
-enum AudioControlAck<T> {
-    Acked(T),
-    NoLiveDrain,
-}
-
-fn try_send_audio_control(control: Sender<AudioControl>, command: AudioControl) -> Result<bool> {
+fn send_audio_control(control: &Sender<AudioControl>, command: AudioControl) -> Result<()> {
     match control.try_send(command) {
-        Ok(()) => Ok(true),
-        Err(TrySendError::Disconnected(_)) => Ok(false),
+        Ok(()) => Ok(()),
+        Err(TrySendError::Disconnected(_)) => Err(anyhow!(
+            "audio manager is not running; recording command was not accepted"
+        )),
         Err(TrySendError::Full(_)) => Err(anyhow!(
             "audio manager control queue is full; recording command was not accepted"
         )),
@@ -183,13 +157,42 @@ impl AudioHandle {
     ///
     /// # Returns
     ///
-    /// A handle with an empty buffer, closed epoch, and default capture pipeline.
+    /// A handle with an empty buffer, closed epoch, and an acknowledging test
+    /// manager.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the test audio-manager thread cannot be spawned.
     pub(crate) fn test_handle() -> Self {
+        let state = Arc::new(Mutex::new(CaptureState::new()));
+        let session_epoch = Arc::new(AtomicU64::new(0));
+        let (control, control_rx) = bounded(4);
+        let manager_state = Arc::clone(&state);
+        let manager_epoch = Arc::clone(&session_epoch);
+        thread::Builder::new()
+            .name("parakit-test-audio".into())
+            .spawn(move || {
+                while let Ok(command) = control_rx.recv() {
+                    match command {
+                        AudioControl::Start { epoch, ack } => {
+                            manager_state.lock().begin_recording();
+                            manager_epoch.store(epoch, Ordering::Release);
+                            let _ = ack.send(Ok(()));
+                        }
+                        AudioControl::Stop { ack } => {
+                            manager_epoch.store(0, Ordering::Release);
+                            let pcm = manager_state.lock().take_recording();
+                            let _ = ack.send(Ok(pcm));
+                        }
+                    }
+                }
+            })
+            .expect("spawn test audio manager");
         Self {
-            state: Arc::new(Mutex::new(CaptureState::new())),
-            session_epoch: Arc::new(AtomicU64::new(0)),
+            state,
+            session_epoch,
             next_session_epoch: Arc::new(AtomicU64::new(0)),
-            control: Arc::new(Mutex::new(None)),
+            control,
         }
     }
 
@@ -383,15 +386,13 @@ impl AudioCapture {
         let current = Arc::new(Mutex::new(None));
         let alive = Arc::new(AtomicBool::new(true));
         let stream_error = Arc::new(Mutex::new(None));
-        let control = Arc::new(Mutex::new(None));
         let (control_tx, control_rx) = bounded::<AudioControl>(4);
-        *control.lock() = Some(control_tx);
 
         let handle = AudioHandle {
             state: Arc::clone(&state),
             session_epoch: Arc::clone(&session_epoch),
             next_session_epoch: Arc::new(AtomicU64::new(0)),
-            control: Arc::clone(&control),
+            control: control_tx,
         };
 
         let (ready_tx, ready_rx) = bounded::<Result<MicInfo>>(1);
@@ -409,7 +410,6 @@ impl AudioCapture {
                     current: thread_current,
                     alive: thread_alive,
                     stream_error: thread_error,
-                    control,
                     control_rx,
                     log: thread_log,
                     notifier,
@@ -452,7 +452,6 @@ struct AudioManagerCtx {
     current: Arc<Mutex<Option<MicInfo>>>,
     alive: Arc<AtomicBool>,
     stream_error: Arc<Mutex<Option<String>>>,
-    control: Arc<Mutex<Option<Sender<AudioControl>>>>,
     control_rx: Receiver<AudioControl>,
     log: Arc<Logger>,
     notifier: Notifier,
@@ -540,8 +539,6 @@ fn audio_manager_loop(ctx: AudioManagerCtx) {
             }
         }
     }
-
-    *ctx.control.lock() = None;
 }
 
 #[derive(Clone, Copy)]

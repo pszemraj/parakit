@@ -254,12 +254,12 @@ fn audio_handle_with_control(
         })),
         session_epoch: Arc::new(AtomicU64::new(epoch)),
         next_session_epoch: Arc::new(AtomicU64::new(epoch)),
-        control: Arc::new(Mutex::new(Some(control_tx))),
+        control: control_tx,
     }
 }
 
 #[test]
-fn stop_recording_without_drain_takes_buffered_samples() {
+fn acknowledging_test_manager_takes_buffered_samples() {
     let handle = AudioHandle::test_handle();
 
     handle.start_recording().expect("recording should start");
@@ -267,6 +267,21 @@ fn stop_recording_without_drain_takes_buffered_samples() {
 
     let pcm = handle.stop_recording().expect("recording should stop");
     assert_eq!(pcm, vec![0.7]);
+}
+
+#[test]
+fn disconnected_audio_manager_does_not_fallback_to_direct_state() {
+    let (control_tx, control_rx) = bounded::<AudioControl>(1);
+    drop(control_rx);
+    let handle = audio_handle_with_control(control_tx, 0, Vec::new());
+
+    let err = handle
+        .start_recording()
+        .expect_err("disconnected audio manager should reject Start");
+
+    assert!(format!("{err:#}").contains("audio manager is not running"));
+    assert_eq!(handle.session_epoch.load(Ordering::Acquire), 0);
+    assert!(handle.state.lock().buffer.is_empty());
 }
 
 #[test]
