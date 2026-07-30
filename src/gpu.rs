@@ -178,17 +178,6 @@ pub fn has_gpu_device() -> bool {
     devices().iter().any(DeviceInfo::is_gpu_like)
 }
 
-/// Return the GPU device ggml is expected to prefer.
-///
-/// # Returns
-///
-/// The first discrete GPU when one is visible, otherwise the first integrated
-/// GPU. Returns `None` when ggml reports no GPU or iGPU devices.
-pub fn preferred_gpu_device() -> Option<DeviceInfo> {
-    let devices = devices();
-    preferred_gpu_device_in(&devices).cloned()
-}
-
 /// Return the preferred GPU device from an existing device list.
 ///
 /// # Arguments

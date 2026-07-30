@@ -34,22 +34,14 @@ pub struct FetchOptions {
 }
 
 impl FetchOptions {
-    fn should_print_status(self) -> bool {
-        !self.quiet
-    }
-
-    fn should_print_verbose_status(self) -> bool {
-        !self.quiet && self.verbose
-    }
-
     fn status(self, message: std::fmt::Arguments<'_>) {
-        if self.should_print_status() {
+        if !self.quiet {
             println!("{message}");
         }
     }
 
     fn verbose_status(self, message: std::fmt::Arguments<'_>) {
-        if self.should_print_verbose_status() {
+        if !self.quiet && self.verbose {
             println!("{message}");
         }
     }
@@ -237,7 +229,6 @@ fn run_official_nemo(options: FetchOptions, keep_nemo: bool, keep_f16: bool) -> 
 
 #[derive(Debug)]
 struct FetchPaths {
-    models_dir: PathBuf,
     manifest: PathBuf,
     nemo: PathBuf,
     f16: PathBuf,
@@ -245,22 +236,16 @@ struct FetchPaths {
 }
 
 impl FetchPaths {
-    fn new() -> Result<Self> {
+    fn new_prepared() -> Result<Self> {
         let models_dir = models_dir()?;
+        std::fs::create_dir_all(&models_dir)
+            .with_context(|| format!("create {}", models_dir.display()))?;
         Ok(Self {
             manifest: models_dir.join(MANIFEST_FILENAME),
             nemo: models_dir.join(NEMO_FILENAME),
             f16: models_dir.join(F16_FILENAME),
             q8: models_dir.join(Q8_FILENAME),
-            models_dir,
         })
-    }
-
-    fn new_prepared() -> Result<Self> {
-        let paths = Self::new()?;
-        std::fs::create_dir_all(&paths.models_dir)
-            .with_context(|| format!("create {}", paths.models_dir.display()))?;
-        Ok(paths)
     }
 }
 
@@ -778,35 +763,6 @@ mod tests {
         assert_eq!(manifest.q8_sha256.as_deref(), Some(HOSTED_Q8_SHA256));
         assert!(manifest.nemo_sha256.is_none());
         assert!(manifest.f16_sha256.is_none());
-    }
-
-    #[test]
-    fn cache_hit_status_requires_verbose_output() {
-        let options = FetchOptions {
-            force: false,
-            quiet: false,
-            verbose: false,
-            source: FetchSource::HostedQ8,
-        };
-
-        assert!(options.should_print_status());
-        assert!(!FetchOptions {
-            quiet: true,
-            ..options
-        }
-        .should_print_status());
-        assert!(!options.should_print_verbose_status());
-        assert!(FetchOptions {
-            verbose: true,
-            ..options
-        }
-        .should_print_verbose_status());
-        assert!(!FetchOptions {
-            quiet: true,
-            verbose: true,
-            ..options
-        }
-        .should_print_verbose_status());
     }
 
     #[test]
