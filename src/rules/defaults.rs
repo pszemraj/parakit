@@ -161,8 +161,7 @@ pub(crate) const DEFAULT_RULES: &[Rule] = &[
     ),
     Rule {
         name: "spoken-numbers",
-        description:
-            "Convert recognized English number expressions at or above the configured threshold",
+        description: "Convert recognized English numbers, retaining readable large-magnitude words",
         activation: Activation::Safe,
         kind: RuleKind::SpokenNumbers,
     },

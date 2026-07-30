@@ -22,7 +22,9 @@
 //!
 //! * [`engine`] - the compiled [`Cleaner`] pipeline and rule/activation types.
 //! * [`defaults`] - the built-in `DEFAULT_RULES` table.
-//! * [`passes`] - procedural transforms (acronyms, numbers, capitalization).
+//! * [`numbers`] - spoken-number parsing policy and magnitude formatting.
+//! * [`passes`] - other procedural transforms (acronyms, versions,
+//!   capitalization).
 //! * [`user`] - user-defined rules loaded from `config.toml`.
 //!
 //! ## How to disable a rule at runtime
@@ -40,6 +42,7 @@ use std::str::FromStr;
 
 mod defaults;
 mod engine;
+mod numbers;
 mod passes;
 #[cfg(test)]
 #[path = "tests.rs"]
@@ -50,7 +53,7 @@ pub use engine::Cleaner;
 pub use user::{RulePosition, UserRule};
 
 /// Schema/behavior version recorded in transcription logs.
-pub const CLEANER_VERSION: u32 = 6;
+pub const CLEANER_VERSION: u32 = 7;
 
 /// Default minimum isolated number converted to digits when
 /// `cleaning.number_threshold` is left unset.

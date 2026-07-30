@@ -260,6 +260,48 @@ fn text2num_handles_documented_cardinals_groups_and_decimals() {
 }
 
 #[test]
+fn large_spoken_magnitudes_use_readable_hybrid_notation() {
+    assert_clean_cases(
+        CleaningProfile::Safe,
+        &[
+            (
+                "The company is worth three billion dollars.",
+                "The company is worth 3 billion dollars.",
+            ),
+            (
+                "The budget is one hundred twenty-five million dollars.",
+                "The budget is 125 million dollars.",
+            ),
+            (
+                "The estimate is three point five billion dollars.",
+                "The estimate is 3.5 billion dollars.",
+            ),
+            (
+                "The existing estimate is 3.5 billion dollars.",
+                "The existing estimate is 3.5 billion dollars.",
+            ),
+        ],
+    );
+}
+
+#[test]
+fn large_magnitude_formatting_preserves_compounds_and_numeric_literals() {
+    assert_clean_cases(
+        CleaningProfile::Safe,
+        &[
+            (
+                "The total is three billion five hundred million.",
+                "The total is 3500000000.",
+            ),
+            (
+                "The identifier is 3000000000.",
+                "The identifier is 3000000000.",
+            ),
+        ],
+    );
+}
+
+#[test]
 fn text2num_leaves_values_below_the_default_threshold_untouched() {
     // With `number_threshold` unset, the effective threshold is
     // `DEFAULT_NUMBER_THRESHOLD` (4.0): isolated values strictly below it

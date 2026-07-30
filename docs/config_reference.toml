@@ -133,7 +133,10 @@
 # Type: finite integer/float >= 0 (optional). Default: 4 when unset.
 # Isolated cardinals/ordinals at or above the threshold digitize; below it,
 # left exactly as recognized, never forced to a word or a digit. Set 0 to
-# convert every isolated value instead.
+# convert every isolated value instead. A recognized expression ending in one
+# explicit million/billion scale uses a numeric coefficient plus that
+# word (for example, "three billion" becomes "3 billion"); multi-scale
+# compounds retain full digits.
 # No CLI override. It controls only "spoken-numbers"; structural numeric
 # passes still normalize.
 # Disabling that rule or cleaning makes it inert, not unvalidated. Time-unit
@@ -160,7 +163,7 @@
 #   spaced-acronyms - collapse runs of standalone uppercase ASCII letters.
 #   spoken-version-numbers - render multi-point spoken versions with text2num.
 #   numeric-point-suffixes - append spoken point parts to an existing number.
-#   spoken-numbers - convert English numbers at/above number_threshold.
+#   spoken-numbers - convert English numbers, retaining readable large magnitudes.
 #   numeric-identifier-groups - join split digits in uppercase identifiers.
 #   numeric-magnitude-suffixes - join numeric groups to uppercase K/M/B.
 #   compact-version-prefix - join V/v to a following dotted version.

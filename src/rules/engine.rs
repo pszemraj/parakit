@@ -242,7 +242,7 @@ impl CompiledRule {
             }
             CompiledTransform::Procedural(transform) => Ok(transform(input)),
             CompiledTransform::SpokenNumbers { threshold } => {
-                Ok(super::passes::normalize_spoken_numbers(input, *threshold))
+                Ok(super::numbers::normalize_spoken_numbers(input, *threshold))
             }
         }
     }
