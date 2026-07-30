@@ -1084,6 +1084,7 @@ mod windows_pipe {
     const PIPE_TYPE_MESSAGE: u32 = 0x0000_0004;
     const PIPE_READMODE_MESSAGE: u32 = 0x0000_0002;
     const PIPE_WAIT: u32 = 0x0000_0000;
+    const PIPE_REJECT_REMOTE_CLIENTS: u32 = 0x0000_0008;
     const PIPE_UNLIMITED_INSTANCES: u32 = 255;
     const ERROR_FILE_NOT_FOUND: u32 = 2;
     const ERROR_IO_PENDING: u32 = 997;
@@ -1306,7 +1307,7 @@ mod windows_pipe {
             CreateNamedPipeW(
                 PCWSTR(pipe_name.as_ptr()),
                 PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED,
-                PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT,
+                server_pipe_mode(),
                 PIPE_UNLIMITED_INSTANCES,
                 PIPE_BUFFER_SIZE,
                 PIPE_BUFFER_SIZE,
@@ -1318,6 +1319,10 @@ mod windows_pipe {
             return Err(last_error("CreateNamedPipeW failed"));
         }
         Ok(PipeHandle(handle))
+    }
+
+    const fn server_pipe_mode() -> u32 {
+        PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS
     }
 
     fn connect_server_pipe(pipe: &PipeHandle) -> Result<()> {
@@ -1823,6 +1828,11 @@ mod windows_pipe {
         }
 
         #[test]
+        fn server_pipe_mode_rejects_remote_clients() {
+            assert_ne!(server_pipe_mode() & PIPE_REJECT_REMOTE_CLIENTS, 0);
+        }
+
+        #[test]
         fn remaining_timeout_counts_down_to_none() {
             let started = std::time::Instant::now();
 
@@ -1980,7 +1990,7 @@ mod windows_pipe {
                 CreateNamedPipeW(
                     PCWSTR(pipe_name.as_ptr()),
                     PIPE_ACCESS_DUPLEX | overlapped_flag,
-                    PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT,
+                    server_pipe_mode(),
                     1,
                     PIPE_BUFFER_SIZE,
                     PIPE_BUFFER_SIZE,
