@@ -612,7 +612,7 @@ fn model_dtype_label(path: &std::path::Path) -> String {
     let size = path
         .metadata()
         .ok()
-        .map(|meta| format!(" ({:.0} MB)", meta.len() as f64 / 1_000_000.0))
+        .map(|meta| format!(" ({})", format_file_size(meta.len())))
         .unwrap_or_default();
     format!("{dtype}{size}")
 }
@@ -1186,6 +1186,13 @@ mod app_tests {
     #[test]
     fn warmup_sequence_format_is_stable() {
         assert_eq!(format_warmup_sequence(&[5, 30]), "5s + 30s");
+    }
+
+    #[test]
+    fn file_size_format_scales_units() {
+        assert_eq!(format_file_size(999_000), "999 KB");
+        assert_eq!(format_file_size(999_000_000), "999 MB");
+        assert_eq!(format_file_size(1_500_000_000), "1.50 GB");
     }
 
     #[test]

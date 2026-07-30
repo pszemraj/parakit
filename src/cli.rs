@@ -247,13 +247,11 @@ impl StartCli {
     ///
     /// `true` when start/success/error tones should play.
     pub(crate) fn effective_sounds_enabled(&self, config: &ConfigFile) -> bool {
-        if self.sounds {
-            true
-        } else if self.no_sounds {
-            false
-        } else {
-            config.daemon.sounds.unwrap_or(true)
-        }
+        resolve_bool_override(
+            self.sounds,
+            self.no_sounds,
+            config.daemon.sounds.unwrap_or(true),
+        )
     }
 
     /// Return whether the text-cleaning pipeline is enabled: explicit
@@ -266,13 +264,11 @@ impl StartCli {
     ///
     /// `true` when the cleaning pipeline should run.
     pub(crate) fn effective_cleaning_enabled(&self, config: &ConfigFile) -> bool {
-        if self.cleaning {
-            true
-        } else if self.no_cleaning {
-            false
-        } else {
-            config.cleaning.enabled.unwrap_or(true)
-        }
+        resolve_bool_override(
+            self.cleaning,
+            self.no_cleaning,
+            config.cleaning.enabled.unwrap_or(true),
+        )
     }
 
     /// Return the cleanup behavior tier: CLI `--cleaning-profile`, then config
@@ -330,13 +326,11 @@ impl StartCli {
     ///
     /// `true` when the previous clipboard contents should not be restored.
     pub(crate) fn effective_keep_transcript_clipboard(&self, config: &ConfigFile) -> bool {
-        if self.keep_transcript_clipboard {
-            true
-        } else if self.no_keep_transcript_clipboard {
-            false
-        } else {
-            config.daemon.keep_transcript_clipboard.unwrap_or(false)
-        }
+        resolve_bool_override(
+            self.keep_transcript_clipboard,
+            self.no_keep_transcript_clipboard,
+            config.daemon.keep_transcript_clipboard.unwrap_or(false),
+        )
     }
 
     /// Return the number of transcripts kept in daemon memory: config
@@ -667,12 +661,31 @@ fn resolve_drops_trailing_period(
     no_keep_trailing_period: bool,
     config: &ConfigFile,
 ) -> bool {
-    if keep_trailing_period {
-        false
-    } else if no_keep_trailing_period {
+    resolve_bool_override(
+        no_keep_trailing_period,
+        keep_trailing_period,
+        !config.cleaning.keep_trailing_period.unwrap_or(false),
+    )
+}
+
+/// Resolve one mutually exclusive positive/negative CLI flag pair.
+///
+/// # Arguments
+///
+/// * `force_true` - Explicit flag that enables the behavior.
+/// * `force_false` - Explicit flag that disables the behavior.
+/// * `fallback` - Config/default value when neither flag is present.
+///
+/// # Returns
+///
+/// The explicit override when present, otherwise `fallback`.
+const fn resolve_bool_override(force_true: bool, force_false: bool, fallback: bool) -> bool {
+    if force_true {
         true
+    } else if force_false {
+        false
     } else {
-        !config.cleaning.keep_trailing_period.unwrap_or(false)
+        fallback
     }
 }
 
