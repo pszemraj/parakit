@@ -897,9 +897,6 @@ impl Injector {
     /// Returns an error if the platform backend rejects the synthetic typing
     /// request.
     fn type_text(&mut self, text: &str) -> Result<()> {
-        if text.is_empty() {
-            return Ok(());
-        }
         self.keyboard()?
             .text(text)
             .map_err(|e| anyhow::anyhow!("enigo type failed: {e:?}"))
@@ -996,10 +993,6 @@ where
     G: FnMut() -> Result<bool>,
     H: ClipboardRestoreGate + ?Sized,
 {
-    if text.is_empty() {
-        return Ok(PasteReport::new(PasteOutcome::Pasted, false, None));
-    }
-
     match before_chord() {
         Ok(true) => {}
         Ok(false) => {

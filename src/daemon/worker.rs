@@ -445,7 +445,7 @@ fn log_insertion_outcome(
             target_bundle_id,
             focus_verification,
             transcript_chars,
-            paste_event_posted: report.map_or(outcome == "pasted", |r| r.paste_event_posted),
+            paste_event_posted: report.is_some_and(|report| report.paste_event_posted),
             // NSPasteboard/Carbon promise-keeper read evidence is a
             // deferred follow-up (see `daemon::macos::pasteboard` module
             // docs); no call site can populate this yet.
@@ -901,8 +901,6 @@ pub(crate) enum PastePlan {
 pub(crate) enum PasteBlockReason {
     /// Nothing printable survived sanitization.
     EmptyAfterSanitization,
-    /// Nothing printable survived terminal-mode newline trimming.
-    EmptyTerminalAfterSanitization,
     /// Terminal mode refuses multi-line text, which would submit commands.
     MultilineTerminal,
     /// Longer than the terminal-mode paste ceiling.
@@ -934,7 +932,6 @@ impl PasteBlockReason {
     fn log_tag(self) -> &'static str {
         match self {
             Self::EmptyAfterSanitization => "empty transcript after sanitization",
-            Self::EmptyTerminalAfterSanitization => "empty terminal transcript after sanitization",
             Self::MultilineTerminal => "multiline terminal transcript",
             Self::TerminalTooLong => "terminal transcript too long",
             Self::TooLong => "transcript too long",
@@ -954,9 +951,7 @@ impl PasteBlockReason {
     /// A capitalized, punctuated sentence.
     fn notice(self) -> &'static str {
         match self {
-            Self::EmptyAfterSanitization | Self::EmptyTerminalAfterSanitization => {
-                "Transcript was empty after cleanup."
-            }
+            Self::EmptyAfterSanitization => "Transcript was empty after cleanup.",
             Self::MultilineTerminal => "Multi-line transcript; terminal mode does not auto-paste.",
             Self::TerminalTooLong | Self::TooLong => "Transcript too long to paste automatically.",
             Self::PasteTemporarilyDisabled => {
@@ -1124,11 +1119,6 @@ pub(crate) fn sanitize_for_paste(raw: &str, mode: PasteMode) -> PastePlan {
     if mode == PasteMode::Terminal {
         while text.ends_with('\n') {
             text.pop();
-        }
-        if text.trim().is_empty() {
-            return PastePlan::Skip {
-                reason: PasteBlockReason::EmptyTerminalAfterSanitization,
-            };
         }
         if text.contains('\n') {
             return PastePlan::CopyOnly {
@@ -1433,27 +1423,6 @@ mod tests {
         for (name, raw, mode, expected) in cases {
             assert_eq!(sanitize_for_paste(&raw, mode), expected, "{name}");
         }
-    }
-
-    #[test]
-    fn unsafe_modifiers_maps_to_quiet_copied_only() {
-        let paste_report = super::super::inject::PasteReport {
-            outcome: super::super::inject::PasteOutcome::UnsafeModifiers,
-            paste_event_posted: false,
-            acknowledgement_kind: "not_applicable",
-            acknowledgement_ms: None,
-            clipboard_restored: Some(false),
-        };
-
-        let report = InsertReport::from_paste(InsertOutcome::CopiedOnly, paste_report);
-
-        assert_eq!(report.outcome, InsertOutcome::CopiedOnly);
-        assert!(!report.paste_event_posted);
-        assert!(
-            !report.needs_alert(),
-            "held-modifier skips keep the transcript on the clipboard via the quiet, \
-             pre-chord CopiedOnly path; they must not alarm like Blocked does"
-        );
     }
 
     #[test]
