@@ -60,7 +60,8 @@ fn main() {
     println!("cargo:rerun-if-changed=build/windows_manifest.rs");
     println!("cargo:rerun-if-changed=build/windows_cuda.rs");
 
-    build_alsa_silencer();
+    let bundled = cargo_feature("bundled");
+    build_alsa_silencer(cargo_feature("daemon"));
 
     // 1. Honor an explicit lib-dir override regardless of feature flags.
     //    crispasr-sys reads CRISPASR_LIB_DIR too — we add to its search path
@@ -68,13 +69,13 @@ fn main() {
     if let Ok(dir) = env::var("CRISPASR_LIB_DIR") {
         println!("cargo:rustc-link-search=native={dir}");
         emit_rpath(Path::new(&dir));
-        emit_direct_ggml_link_if_bundled();
+        emit_direct_ggml_link_if_bundled(bundled);
         return;
     }
 
     // 2. If the user disabled the `bundled` feature, do nothing.
     //    crispasr-sys's own build.rs will probe /usr/local/lib, /opt/homebrew/lib, etc.
-    if env::var("CARGO_FEATURE_BUNDLED").is_err() {
+    if !bundled {
         return;
     }
 
@@ -111,7 +112,7 @@ fn main() {
         .define("CRISPASR_BUILD_TESTS", "OFF")
         .define(
             "CRISPASR_BUILD_EXAMPLES",
-            if build_crispasr_examples { "ON" } else { "OFF" },
+            cmake_bool(build_crispasr_examples),
         )
         .define("GGML_BUILD_TESTS", "OFF")
         .define("GGML_BUILD_EXAMPLES", "OFF")
@@ -127,28 +128,22 @@ fn main() {
 
     configure_windows_msvc_release(&mut cfg);
 
-    let cuda_enabled = cargo_feature("cuda");
-    let metal_enabled = cargo_feature("metal");
-    let vulkan_enabled = cargo_feature("vulkan");
-    let cuda_archs_request = env::var("PARAKIT_CUDA_ARCHS")
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty());
+    let accelerators = AcceleratorConfig::from_env();
 
     let blas = configure_blas(&mut cfg);
-    cfg.define("GGML_CUDA", if cuda_enabled { "ON" } else { "OFF" });
-    if cuda_enabled {
+    cfg.define("GGML_CUDA", cmake_bool(accelerators.cuda_enabled));
+    if accelerators.cuda_enabled {
         cfg.define("GGML_CUDA_NCCL", "OFF");
-        if let Some(archs) = cuda_archs_request.as_ref() {
+        if let Some(archs) = accelerators.cuda_archs_request.as_ref() {
             cfg.define("CMAKE_CUDA_ARCHITECTURES", archs);
         }
     }
-    cfg.define("GGML_VULKAN", if vulkan_enabled { "ON" } else { "OFF" });
-    if metal_enabled {
+    cfg.define("GGML_VULKAN", cmake_bool(accelerators.vulkan_enabled));
+    if accelerators.metal_enabled {
         if target_is_apple() {
             cfg.define("GGML_METAL", "ON");
             cfg.define("GGML_METAL_EMBED_LIBRARY", "ON");
-        } else if cuda_enabled || vulkan_enabled {
+        } else if accelerators.cuda_enabled || accelerators.vulkan_enabled {
             cfg.define("GGML_METAL", "OFF");
             println!(
                 "cargo:warning=ignoring unsupported metal feature on non-Apple target during multi-backend build"
@@ -161,7 +156,7 @@ fn main() {
     }
 
     let install_dir = cfg.build();
-    emit_build_report(&install_dir);
+    emit_build_report(&install_dir, &accelerators);
 
     // 5. CrispASR v0.6.6 installs `libcrispasr` as the umbrella library.
     //    `crispasr-sys` links that exact name, so fail clearly if the pinned
@@ -189,24 +184,14 @@ fn main() {
 
     let bin_dir = install_dir.join("bin");
     if target_is_windows() {
-        prepare_windows_artifacts(
-            &install_dir,
-            &final_lib_dir,
-            &bin_dir,
-            &blas,
-            &WindowsAcceleratorConfig {
-                cuda_enabled,
-                vulkan_enabled,
-                cuda_archs_request,
-            },
-        );
+        prepare_windows_artifacts(&install_dir, &final_lib_dir, &bin_dir, &blas, &accelerators);
     } else {
         assert_crispasr_library_exists(&final_lib_dir);
-        assert_apple_metal_library_exists_if_enabled(&final_lib_dir);
+        assert_apple_metal_library(&final_lib_dir, accelerators.metal_enabled);
     }
 
     println!("cargo:rustc-link-search=native={}", final_lib_dir.display());
-    emit_direct_ggml_link_if_bundled();
+    emit_direct_ggml_link_if_bundled(bundled);
 
     // Windows DLLs land in bin/, not lib/. Add it for completeness.
     if bin_dir.is_dir() {
@@ -240,10 +225,8 @@ fn main() {
     );
 }
 
-fn build_alsa_silencer() {
-    if env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("linux")
-        || env::var("CARGO_FEATURE_DAEMON").is_err()
-    {
+fn build_alsa_silencer(daemon_enabled: bool) {
+    if env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("linux") || !daemon_enabled {
         return;
     }
 
@@ -256,7 +239,7 @@ fn build_alsa_silencer() {
     println!("cargo:rustc-link-lib=asound");
 }
 
-fn emit_build_report(install_dir: &Path) {
+fn emit_build_report(install_dir: &Path, accelerators: &AcceleratorConfig) {
     let build_dir = install_dir.join("build");
     let cache_path = build_dir.join("CMakeCache.txt");
     let cache = read_cmake_cache(&cache_path);
@@ -298,15 +281,14 @@ fn emit_build_report(install_dir: &Path) {
         );
     }
 
-    if cargo_feature("cuda") {
-        let cuda_archs_request = env::var("PARAKIT_CUDA_ARCHS")
-            .ok()
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty())
-            .unwrap_or_else(|| "native".to_string());
+    if accelerators.cuda_enabled {
+        let cuda_archs_request = accelerators
+            .cuda_archs_request
+            .as_deref()
+            .unwrap_or("native");
         println!("cargo:rustc-env=PARAKIT_BUILD_CUDA_ARCHS_REQUEST={cuda_archs_request}");
 
-        match detect_cuda_toolkit_version() {
+        match accelerators.cuda_toolkit_version.as_deref() {
             Some(version) => {
                 println!("cargo:rustc-env=PARAKIT_BUILD_CUDA_TOOLKIT_VERSION={version}");
             }
@@ -319,8 +301,11 @@ fn emit_build_report(install_dir: &Path) {
         }
     }
 
-    if cargo_feature("vulkan") {
-        let sdk = vulkan_sdk_version().unwrap_or_else(|| "unknown".to_string());
+    if accelerators.vulkan_enabled {
+        let sdk = accelerators
+            .vulkan_sdk_version
+            .as_deref()
+            .unwrap_or("unknown");
         println!("cargo:rustc-env=PARAKIT_BUILD_VULKAN_SDK={sdk}");
     }
 }
@@ -346,8 +331,8 @@ fn configure_windows_msvc_release(cfg: &mut cmake::Config) {
 
 fn configure_blas(cfg: &mut cmake::Config) -> BlasConfig {
     let blas = BlasConfig::from_env();
-    cfg.define("GGML_BLAS", if blas.enabled { "ON" } else { "OFF" });
-    cfg.define("COHERE_MKL", if blas.cohere_mkl { "ON" } else { "OFF" });
+    cfg.define("GGML_BLAS", cmake_bool(blas.enabled));
+    cfg.define("COHERE_MKL", cmake_bool(blas.cohere_mkl));
     if let Some(vendor) = blas.vendor {
         cfg.define("GGML_BLAS_VENDOR", vendor);
         if blas.cohere_mkl {
@@ -383,10 +368,32 @@ struct BlasConfig {
     windows_openblas: Option<WindowsOpenBlas>,
 }
 
-struct WindowsAcceleratorConfig {
+struct AcceleratorConfig {
     cuda_enabled: bool,
+    metal_enabled: bool,
     vulkan_enabled: bool,
     cuda_archs_request: Option<String>,
+    cuda_toolkit_version: Option<String>,
+    vulkan_sdk_version: Option<String>,
+}
+
+impl AcceleratorConfig {
+    fn from_env() -> Self {
+        let cuda_enabled = cargo_feature("cuda");
+        let vulkan_enabled = cargo_feature("vulkan");
+        let cuda_archs_request = env::var("PARAKIT_CUDA_ARCHS")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+        Self {
+            cuda_enabled,
+            metal_enabled: cargo_feature("metal"),
+            vulkan_enabled,
+            cuda_archs_request,
+            cuda_toolkit_version: cuda_enabled.then(detect_cuda_toolkit_version).flatten(),
+            vulkan_sdk_version: vulkan_enabled.then(vulkan_sdk_version).flatten(),
+        }
+    }
 }
 
 impl BlasConfig {
@@ -655,9 +662,17 @@ fn emit_env_from_cache(cache: &BTreeMap<String, String>, cache_key: &str, env_ke
     }
 }
 
-fn emit_direct_ggml_link_if_bundled() {
-    if cargo_feature("bundled") {
+fn emit_direct_ggml_link_if_bundled(bundled: bool) {
+    if bundled {
         println!("cargo:rustc-link-lib=dylib=ggml");
+    }
+}
+
+const fn cmake_bool(enabled: bool) -> &'static str {
+    if enabled {
+        "ON"
+    } else {
+        "OFF"
     }
 }
 
@@ -736,7 +751,7 @@ fn prepare_windows_artifacts(
     lib_dir: &Path,
     bin_dir: &Path,
     blas: &BlasConfig,
-    accelerators: &WindowsAcceleratorConfig,
+    accelerators: &AcceleratorConfig,
 ) {
     std::fs::create_dir_all(lib_dir).unwrap_or_else(|err| {
         panic!(
@@ -794,13 +809,16 @@ fn copy_optional_windows_blas_runtime(bin_dir: &Path, blas: &BlasConfig) {
 fn cuda_manifest(
     install_dir: &Path,
     bin_dir: &Path,
-    accelerators: &WindowsAcceleratorConfig,
+    accelerators: &AcceleratorConfig,
 ) -> Option<CudaManifest> {
     if !accelerators.cuda_enabled {
         return None;
     }
 
-    let toolkit_version = detect_cuda_toolkit_version().unwrap_or_else(|| "unknown".to_string());
+    let toolkit_version = accelerators
+        .cuda_toolkit_version
+        .clone()
+        .unwrap_or_else(|| "unknown".to_string());
     let architectures = cmake_cache_value(install_dir, "CMAKE_CUDA_ARCHITECTURES")
         .or_else(|| accelerators.cuda_archs_request.clone())
         .unwrap_or_else(|| "native".to_string());
@@ -808,7 +826,7 @@ fn cuda_manifest(
     let external_dlls = cuda_external_dll_names(cuda_path.as_deref(), &toolkit_version);
     let external_dlls_bundled = env_flag_enabled("PARAKIT_BUNDLE_CUDA_DLLS");
     if external_dlls_bundled {
-        copy_cuda_external_dlls(bin_dir, &external_dlls);
+        copy_cuda_external_dlls(bin_dir, cuda_path.as_deref(), &external_dlls);
     }
 
     Some(CudaManifest {
@@ -819,13 +837,16 @@ fn cuda_manifest(
     })
 }
 
-fn vulkan_manifest(accelerators: &WindowsAcceleratorConfig) -> Option<VulkanManifest> {
+fn vulkan_manifest(accelerators: &AcceleratorConfig) -> Option<VulkanManifest> {
     if !accelerators.vulkan_enabled {
         return None;
     }
 
     Some(VulkanManifest {
-        sdk_version: vulkan_sdk_version().unwrap_or_else(|| "unknown".to_string()),
+        sdk_version: accelerators
+            .vulkan_sdk_version
+            .clone()
+            .unwrap_or_else(|| "unknown".to_string()),
         external_dlls: vec!["vulkan-1.dll".to_string()],
         external_dlls_bundled: false,
     })
@@ -848,11 +869,11 @@ fn env_flag_enabled(name: &str) -> bool {
         .unwrap_or(false)
 }
 
-fn copy_cuda_external_dlls(bin_dir: &Path, names: &[String]) {
-    let Some(cuda_path) = env::var_os("CUDA_PATH").map(PathBuf::from) else {
+fn copy_cuda_external_dlls(bin_dir: &Path, cuda_path: Option<&Path>, names: &[String]) {
+    let Some(cuda_path) = cuda_path else {
         panic!("PARAKIT_BUNDLE_CUDA_DLLS=1 requires CUDA_PATH to point at a CUDA Toolkit install");
     };
-    let runtime_dirs = cuda_runtime_dirs(&cuda_path);
+    let runtime_dirs = cuda_runtime_dirs(cuda_path);
     if runtime_dirs.is_empty() {
         panic!("PARAKIT_BUNDLE_CUDA_DLLS=1 requires CUDA_PATH to point at a CUDA Toolkit install");
     }
@@ -1059,7 +1080,7 @@ fn should_skip_windows_bundle_dll(file_name: &str) -> bool {
 fn write_windows_runtime_manifest(
     bin_dir: &Path,
     runtime_dlls: &[String],
-    accelerators: &WindowsAcceleratorConfig,
+    accelerators: &AcceleratorConfig,
     cuda: Option<CudaManifest>,
     vulkan: Option<VulkanManifest>,
 ) {
@@ -1192,8 +1213,8 @@ fn assert_crispasr_library_exists(lib_dir: &Path) {
 }
 
 /// Ensure Apple Metal builds installed the Metal backend sibling dylib.
-fn assert_apple_metal_library_exists_if_enabled(lib_dir: &Path) {
-    if !target_is_apple() || !cargo_feature("metal") {
+fn assert_apple_metal_library(lib_dir: &Path, metal_enabled: bool) {
+    if !target_is_apple() || !metal_enabled {
         return;
     }
 
