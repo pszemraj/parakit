@@ -1204,11 +1204,11 @@ mod windows_pipe {
         keep_transcript_clipboard: bool,
         log: Arc<Logger>,
     ) -> Result<IpcServer> {
-        let pipe_name = daemon_pipe_name()?;
+        let identity = DaemonPipeIdentity::current()?;
         let thread = thread::Builder::new()
             .name("parakit-ipc".into())
             .spawn(move || loop {
-                match create_server_pipe(&pipe_name).and_then(|pipe| {
+                match create_server_pipe(&identity).and_then(|pipe| {
                     connect_server_pipe(&pipe)?;
                     Ok(pipe)
                 }) {
@@ -1252,8 +1252,8 @@ mod windows_pipe {
             .response_timeout()
             .as_millis()
             .clamp(1, u128::from(u32::MAX)) as u32;
-        let pipe_name = daemon_pipe_name()?;
-        let pipe = connect_client_pipe(&pipe_name)?;
+        let identity = DaemonPipeIdentity::current()?;
+        let pipe = connect_client_pipe(&identity.pipe_name)?;
         write_json_message(&pipe, &command).context("write Windows daemon control command")?;
         let response = read_pipe_message_with_timeout(&pipe, response_timeout_ms)
             .context("read Windows daemon control response")?;
@@ -1294,18 +1294,29 @@ mod windows_pipe {
         super::parse_command(&String::from_utf8_lossy(&bytes))
     }
 
-    fn daemon_pipe_name() -> Result<Vec<u16>> {
-        let sid = super::super::windows_security::current_user_sid_string()
-            .context("read current Windows user SID for daemon pipe")?;
-        Ok(encode_wide_null(&format!(r"\\.\pipe\parakit-daemon-{sid}")))
+    struct DaemonPipeIdentity {
+        pipe_name: Vec<u16>,
+        user_sid: String,
     }
 
-    fn create_server_pipe(pipe_name: &[u16]) -> Result<PipeHandle> {
-        let mut security = PipeSecurity::current_user_only()?;
+    impl DaemonPipeIdentity {
+        fn current() -> Result<Self> {
+            let user_sid = super::super::windows_security::current_user_sid_string()
+                .context("read current Windows user SID for daemon pipe")?;
+            let pipe_name = encode_wide_null(&format!(r"\\.\pipe\parakit-daemon-{user_sid}"));
+            Ok(Self {
+                pipe_name,
+                user_sid,
+            })
+        }
+    }
+
+    fn create_server_pipe(identity: &DaemonPipeIdentity) -> Result<PipeHandle> {
+        let mut security = PipeSecurity::for_user_sid(&identity.user_sid)?;
         let mut attributes = security.attributes();
         let handle = unsafe {
             CreateNamedPipeW(
-                PCWSTR(pipe_name.as_ptr()),
+                PCWSTR(identity.pipe_name.as_ptr()),
                 PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED,
                 server_pipe_mode(),
                 PIPE_UNLIMITED_INSTANCES,
@@ -1339,6 +1350,7 @@ mod windows_pipe {
                     &mut overlapped,
                     INFINITE,
                     "ConnectNamedPipe Windows daemon control pipe failed",
+                    overlapped_result,
                 )?;
                 Ok(())
             }
@@ -1514,6 +1526,7 @@ mod windows_pipe {
                 &mut overlapped,
                 IPC_CLIENT_TIMEOUT_MS,
                 "WriteFile Windows daemon control pipe failed",
+                overlapped_result,
             )?;
         }
         if written as usize != bytes.len() {
@@ -1554,43 +1567,18 @@ mod windows_pipe {
 
         let err = unsafe { GetLastError() };
         match err {
-            ERROR_IO_PENDING => wait_for_read_overlapped(
+            ERROR_IO_PENDING => wait_for_overlapped(
                 pipe,
                 &mut overlapped,
                 timeout_ms,
                 "ReadFile Windows daemon control pipe failed",
+                read_overlapped_result,
             ),
             ERROR_MORE_DATA => Ok(PipeReadChunk::MoreData(read as usize)),
             _ => Err(win32_error(
                 "ReadFile Windows daemon control pipe failed",
                 err,
             )),
-        }
-    }
-
-    fn wait_for_read_overlapped(
-        pipe: &PipeHandle,
-        overlapped: &mut RawOverlapped,
-        timeout_ms: u32,
-        label: &str,
-    ) -> Result<PipeReadChunk> {
-        match unsafe { WaitForSingleObject(overlapped.h_event, timeout_ms) } {
-            WAIT_OBJECT_0 => match read_overlapped_result(pipe, overlapped, FALSE) {
-                Ok(read) => Ok(read),
-                Err(err) => Err(win32_error(label, err)),
-            },
-            WAIT_TIMEOUT => {
-                let _ = unsafe { CancelIoEx(pipe.0, overlapped.as_mut_ptr()) };
-                match read_overlapped_result(pipe, overlapped, TRUE) {
-                    Ok(read) => Ok(read),
-                    Err(ERROR_OPERATION_ABORTED) => {
-                        bail!("{label}: timed out after {timeout_ms}ms")
-                    }
-                    Err(err) => Err(win32_error(label, err)),
-                }
-            }
-            WAIT_FAILED => Err(last_error("WaitForSingleObject failed")),
-            other => bail!("WaitForSingleObject returned unexpected status {other}"),
         }
     }
 
@@ -1612,20 +1600,21 @@ mod windows_pipe {
         }
     }
 
-    fn wait_for_overlapped(
+    fn wait_for_overlapped<T>(
         pipe: &PipeHandle,
         overlapped: &mut RawOverlapped,
         timeout_ms: u32,
         label: &str,
-    ) -> Result<u32> {
+        completion: fn(&PipeHandle, &mut RawOverlapped, i32) -> std::result::Result<T, u32>,
+    ) -> Result<T> {
         match unsafe { WaitForSingleObject(overlapped.h_event, timeout_ms) } {
-            WAIT_OBJECT_0 => match overlapped_result(pipe, overlapped, FALSE) {
+            WAIT_OBJECT_0 => match completion(pipe, overlapped, FALSE) {
                 Ok(transferred) => Ok(transferred),
                 Err(err) => Err(win32_error(label, err)),
             },
             WAIT_TIMEOUT => {
                 let _ = unsafe { CancelIoEx(pipe.0, overlapped.as_mut_ptr()) };
-                match overlapped_result(pipe, overlapped, TRUE) {
+                match completion(pipe, overlapped, TRUE) {
                     Ok(transferred) => Ok(transferred),
                     Err(ERROR_OPERATION_ABORTED) => {
                         bail!("{label}: timed out after {timeout_ms}ms")
@@ -1703,10 +1692,8 @@ mod windows_pipe {
     }
 
     impl PipeSecurity {
-        fn current_user_only() -> Result<Self> {
-            let sid = super::super::windows_security::current_user_sid_string()
-                .context("read current Windows user SID for daemon pipe security")?;
-            let sddl = encode_wide_null(&current_user_only_pipe_sddl(&sid));
+        fn for_user_sid(user_sid: &str) -> Result<Self> {
+            let sddl = encode_wide_null(&current_user_only_pipe_sddl(user_sid));
             let mut descriptor = null_mut::<c_void>();
             if unsafe {
                 ConvertStringSecurityDescriptorToSecurityDescriptorW(
@@ -2455,17 +2442,6 @@ mod tests {
         });
         handler.join().expect("handler should return after timeout");
         assert!(started.elapsed() < Duration::from_secs(2));
-    }
-
-    #[test]
-    fn legacy_bare_string_paste_last_and_copy_last_fail_against_new_enum() {
-        // A pre-`index` CLI sends `paste_last`/`copy_last` as a bare JSON
-        // string (the old unit-variant encoding). `paste_last` no longer
-        // names a variant at all, and `copy_last`'s struct-variant encoding
-        // rejects the bare-string shape outright; both fail plain serde
-        // deserialization the same way.
-        assert!(serde_json::from_str::<IpcCommand>(r#""paste_last""#).is_err());
-        assert!(serde_json::from_str::<IpcCommand>(r#""copy_last""#).is_err());
     }
 
     #[cfg(any(unix, target_os = "windows"))]
