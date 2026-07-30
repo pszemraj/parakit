@@ -195,9 +195,9 @@ fn is_abandoned() -> bool {
     })
 }
 
-/// Build [`PasteConfirmation::Confirmed`], unless this thread's abandonment
-/// signal (see [`install_abandonment_signal`]) is set, in which case this
-/// degrades to [`PasteConfirmation::NoEvidence`] instead.
+/// Return a paste confirmation unless this thread's abandonment signal (see
+/// [`install_abandonment_signal`]) is set, in which case it degrades to
+/// [`PasteConfirmation::NoEvidence`] instead.
 ///
 /// Every call site is a point where [`await_paste_confirmation`] is about to
 /// resume from a potentially long blocking AX or pasteboard read and hand
@@ -214,44 +214,20 @@ fn is_abandoned() -> bool {
 /// microseconds, not seconds. Closing it completely would need a clipboard
 /// mutex shared with the production paste path, which is out of proportion
 /// for a diagnostics-only harness; the residual window is accepted instead.
-fn confirmed_unless_abandoned(elapsed: Duration, kind: &'static str) -> PasteConfirmation {
+fn unless_abandoned(confirmation: PasteConfirmation) -> PasteConfirmation {
     if is_abandoned() {
+        let elapsed = match confirmation {
+            PasteConfirmation::Confirmed { elapsed, .. }
+            | PasteConfirmation::Unverified { elapsed, .. }
+            | PasteConfirmation::UnverifiedFocusLost { elapsed, .. }
+            | PasteConfirmation::NoEvidence { elapsed, .. } => elapsed,
+        };
         return PasteConfirmation::NoEvidence {
             elapsed,
             kind: "no_evidence",
         };
     }
-    PasteConfirmation::Confirmed { elapsed, kind }
-}
-
-/// As [`confirmed_unless_abandoned`], for the [`PasteConfirmation::Unverified`]
-/// path (no pollable Accessibility value was available at all).
-fn unverified_unless_abandoned(elapsed: Duration, kind: &'static str) -> PasteConfirmation {
-    if is_abandoned() {
-        return PasteConfirmation::NoEvidence {
-            elapsed,
-            kind: "no_evidence",
-        };
-    }
-    PasteConfirmation::Unverified { elapsed, kind }
-}
-
-/// As [`confirmed_unless_abandoned`], for the
-/// [`PasteConfirmation::UnverifiedFocusLost`] path (the captured
-/// Accessibility object died and the frontmost application then changed, or
-/// its focus state could no longer be read at all, before any evidence
-/// appeared).
-fn unverified_focus_lost_unless_abandoned(
-    elapsed: Duration,
-    kind: &'static str,
-) -> PasteConfirmation {
-    if is_abandoned() {
-        return PasteConfirmation::NoEvidence {
-            elapsed,
-            kind: "no_evidence",
-        };
-    }
-    PasteConfirmation::UnverifiedFocusLost { elapsed, kind }
+    confirmation
 }
 
 /// Read the focused element's `AXValue` before a paste chord is sent.
@@ -334,7 +310,10 @@ pub(crate) fn await_paste_confirmation(ctx: &PasteConfirmationContext<'_>) -> Pa
     let element = ctx.focus.and_then(FocusSnapshot::macos_ax_element);
     let Some(element) = element.filter(|element| element.supports_value_polling()) else {
         thread::sleep(UNVERIFIED_GRACE);
-        return unverified_unless_abandoned(start.elapsed(), "unverified_timeout");
+        return unless_abandoned(PasteConfirmation::Unverified {
+            elapsed: start.elapsed(),
+            kind: "unverified_timeout",
+        });
     };
 
     // Build transcript evidence once for the whole polling transaction. The
@@ -360,7 +339,10 @@ pub(crate) fn await_paste_confirmation(ctx: &PasteConfirmationContext<'_>) -> Pa
         // Epistemically this is the same situation as the no-pollable-value
         // case above, so it degrades the same way.
         thread::sleep(UNVERIFIED_GRACE.saturating_sub(start.elapsed()));
-        return unverified_unless_abandoned(start.elapsed(), "unverified_no_baseline");
+        return unless_abandoned(PasteConfirmation::Unverified {
+            elapsed: start.elapsed(),
+            kind: "unverified_no_baseline",
+        });
     }
 
     let deadline = start + AX_CONFIRM_DEADLINE;
@@ -369,7 +351,10 @@ pub(crate) fn await_paste_confirmation(ctx: &PasteConfirmationContext<'_>) -> Pa
         let now = Instant::now();
         if now >= deadline {
             if poll_current_focus(ctx, &matcher, baseline.as_ref()).unwrap_or(false) {
-                return confirmed_unless_abandoned(start.elapsed(), "ax_confirmed");
+                return unless_abandoned(PasteConfirmation::Confirmed {
+                    elapsed: start.elapsed(),
+                    kind: "ax_confirmed",
+                });
             }
             return PasteConfirmation::NoEvidence {
                 elapsed: start.elapsed(),
@@ -382,7 +367,12 @@ pub(crate) fn await_paste_confirmation(ctx: &PasteConfirmationContext<'_>) -> Pa
             element.poll_value(MAX_AX_VALUE_UTF16_UNITS)
         } else {
             match poll_current_focus(ctx, &matcher, baseline.as_ref()) {
-                Ok(true) => return confirmed_unless_abandoned(start.elapsed(), "ax_confirmed"),
+                Ok(true) => {
+                    return unless_abandoned(PasteConfirmation::Confirmed {
+                        elapsed: start.elapsed(),
+                        kind: "ax_confirmed",
+                    });
+                }
                 Ok(false) => continue,
                 Err(()) => {
                     // The captured element had already died (WebKit object
@@ -394,10 +384,10 @@ pub(crate) fn await_paste_confirmation(ctx: &PasteConfirmationContext<'_>) -> Pa
                     // re-observed, unlike a full-deadline `NoEvidence` where
                     // polling worked the whole window and simply found
                     // nothing.
-                    return unverified_focus_lost_unless_abandoned(
-                        start.elapsed(),
-                        "unverified_focus_lost",
-                    );
+                    return unless_abandoned(PasteConfirmation::UnverifiedFocusLost {
+                        elapsed: start.elapsed(),
+                        kind: "unverified_focus_lost",
+                    });
                 }
             }
         };
@@ -406,7 +396,10 @@ pub(crate) fn await_paste_confirmation(ctx: &PasteConfirmationContext<'_>) -> Pa
             Ok(Some(current)) => {
                 let current = BoundedNormalizedValue::from_target_value(&current);
                 if matcher.indicates_insertion(baseline.as_ref(), &current, true) {
-                    return confirmed_unless_abandoned(start.elapsed(), "ax_confirmed");
+                    return unless_abandoned(PasteConfirmation::Confirmed {
+                        elapsed: start.elapsed(),
+                        kind: "ax_confirmed",
+                    });
                 }
             }
             Ok(None) => {
@@ -1132,8 +1125,7 @@ mod ffi_tests {
     }
 
     /// As [`abandoned_signal_degrades_unverified_to_no_evidence`], for the
-    /// sibling [`unverified_focus_lost_unless_abandoned`] helper backing
-    /// [`PasteConfirmation::UnverifiedFocusLost`]. Driving
+    /// sibling [`PasteConfirmation::UnverifiedFocusLost`] path. Driving
     /// `await_paste_confirmation` itself into that branch needs a live,
     /// then-broken captured Accessibility object, which is unavailable
     /// without an Accessibility permission grant, so this calls the helper
@@ -1143,10 +1135,10 @@ mod ffi_tests {
     #[test]
     fn abandoned_signal_degrades_unverified_focus_lost_to_no_evidence() {
         install_abandonment_signal(Arc::new(AtomicBool::new(true)));
-        match unverified_focus_lost_unless_abandoned(
-            Duration::from_millis(5),
-            "unverified_focus_lost",
-        ) {
+        match unless_abandoned(PasteConfirmation::UnverifiedFocusLost {
+            elapsed: Duration::from_millis(5),
+            kind: "unverified_focus_lost",
+        }) {
             PasteConfirmation::NoEvidence { kind, .. } => {
                 assert_eq!(kind, "no_evidence");
             }
