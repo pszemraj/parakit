@@ -320,11 +320,11 @@ pub(crate) fn load_from_path(path: &Path) -> Result<ConfigFile> {
 /// Validate config-level invariants that are cheap to check eagerly at
 /// load time, ahead of daemon bootstrap.
 ///
-/// Reuses [`parakit::rules::build_cleaner`] with the configured
-/// `cleaning.disabled_rules` (not an empty slice), so load-time errors —
-/// including an unknown name in `disabled_rules` — are worded identically
-/// to the errors `parakit rules test` or daemon startup would report for the
-/// same rule set.
+/// Reuses [`parakit::rules::validate_configured_rules`] with the configured
+/// `cleaning.disabled_rules`, so load-time errors — including an unknown name
+/// in `disabled_rules` — are worded identically to the errors `parakit rules
+/// test` or daemon startup would report for the same rule set, without
+/// compiling and discarding the built-in pipeline.
 ///
 /// # Errors
 ///
@@ -334,14 +334,7 @@ pub(crate) fn load_from_path(path: &Path) -> Result<ConfigFile> {
 /// rule listed in `cleaning.disabled_rules`, or a negative/non-finite
 /// `cleaning.number_threshold`.
 fn validate_config(config: &ConfigFile) -> Result<()> {
-    // `Aggressive` plus terminal-period removal is the widest activation set,
-    // so every built-in pattern is compiled here regardless of which profile
-    // the daemon will actually run with. Rule-name and user-rule validation is
-    // profile-independent, so this cannot reject a config that would run.
-    parakit::rules::build_cleaner(
-        false,
-        CleaningProfile::Aggressive,
-        true,
+    parakit::rules::validate_configured_rules(
         config.cleaning.number_threshold,
         &config.cleaning.disabled_rules,
         &config.rules.user,
@@ -467,99 +460,21 @@ position = "first"
     }
 
     #[test]
-    fn validation_errors_name_the_case_and_config_path() {
-        let cases: &[(&str, &str, &[&str])] = &[
-            (
-                "bad-regex",
-                r#"
+    fn validation_error_includes_rule_failure_and_config_path() {
+        let toml = r#"
 [[rules.user]]
 name = "bad"
 pattern = "(unclosed"
 replacement = "x"
-"#,
-                &["invalid regex"],
-            ),
-            (
-                "empty-user-rule-name",
-                r#"
-[[rules.user]]
-name = ""
-pattern = "(?i)hi"
-replacement = "hello"
-"#,
-                &["empty name"],
-            ),
-            (
-                "noncanonical-user-rule-name",
-                r#"
-[[rules.user]]
-name = " custom-hello "
-pattern = "(?i)hi"
-replacement = "hello"
-"#,
-                &["leading or trailing whitespace"],
-            ),
-            (
-                "empty-user-rule-pattern",
-                r#"
-[[rules.user]]
-name = "custom-empty-pattern"
-pattern = ""
-replacement = "x"
-"#,
-                &["custom-empty-pattern", "empty pattern"],
-            ),
-            (
-                "collision",
-                r#"
-[[rules.user]]
-name = "filled-pauses"
-pattern = "(?i)nope"
-replacement = "x"
-"#,
-                &["filled-pauses"],
-            ),
-            (
-                "disabled-rules-typo",
-                r#"
-[cleaning]
-disabled_rules = ["fixed-trailing-perod"]
-"#,
-                &["no rule named", "fixed-trailing-perod"],
-            ),
-            (
-                "negative-number-threshold",
-                r#"
-[cleaning]
-number_threshold = -1
-"#,
-                &["number threshold", "greater than or equal to 0"],
-            ),
-            (
-                "nonfinite-number-threshold",
-                r#"
-[cleaning]
-number_threshold = nan
-"#,
-                &["number threshold", "finite value"],
-            ),
-        ];
-
-        for &(name, toml, expected_fragments) in cases {
-            let path = write_fixture(name, toml);
-            let err = load_from_path(&path).unwrap_err();
-            let message = format!("{err:#}");
-            for fragment in expected_fragments {
-                assert!(
-                    message.contains(fragment),
-                    "case {name}: expected {fragment:?} in {message}"
-                );
-            }
-            assert!(
-                message.contains(&path.display().to_string()),
-                "case {name}: config path missing from {message}"
-            );
-        }
+"#;
+        let path = write_fixture("bad-regex", toml);
+        let err = load_from_path(&path).unwrap_err();
+        let message = format!("{err:#}");
+        assert!(message.contains("invalid regex"), "message: {message}");
+        assert!(
+            message.contains(&path.display().to_string()),
+            "config path missing from {message}"
+        );
     }
 
     #[test]

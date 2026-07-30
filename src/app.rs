@@ -193,24 +193,19 @@ fn run_rules_command(cli: &Cli, rules_cli: &RulesCli) -> Result<()> {
         RulesCommand::Test { input, args } => {
             let cleaner = build_rules_cleaner(args, &config)?;
             let raw = input.as_str();
-            let cleaned = cleaner.as_ref().map(|c| c.clean(raw));
+            let cleaned = cleaner.clean(raw);
             if !cli.quiet {
                 println!("Raw:     {}", raw);
-                match &cleaned {
-                    Some(result) => {
-                        println!("Clean:   {}", result.text);
-                        if let Some(failure) = &result.failure {
-                            eprintln!("parakit: cleaning failed, raw text kept: {failure}");
-                        } else if !result.rules_fired.is_empty() {
-                            let fired: Vec<String> = result
-                                .rules_fired
-                                .iter()
-                                .map(|hit| format!("{}x{}", hit.name, hit.matches))
-                                .collect();
-                            println!("Rules:   {}", fired.join(", "));
-                        }
-                    }
-                    None => println!("Clean:   <cleaning disabled>"),
+                println!("Clean:   {}", cleaned.text);
+                if let Some(failure) = &cleaned.failure {
+                    eprintln!("parakit: cleaning failed, raw text kept: {failure}");
+                } else if !cleaned.rules_fired.is_empty() {
+                    let fired: Vec<String> = cleaned
+                        .rules_fired
+                        .iter()
+                        .map(|hit| format!("{}x{}", hit.name, hit.matches))
+                        .collect();
+                    println!("Rules:   {}", fired.join(", "));
                 }
             }
             Ok(())
@@ -602,9 +597,8 @@ fn build_cli_cleaner(start: &StartCli, config: &ConfigFile) -> Result<Option<rul
 /// cleaning is never disabled here: there is no `--cleaning`/`--no-cleaning`
 /// under `rules`, since testing or listing rules with cleaning off is
 /// meaningless.
-fn build_rules_cleaner(args: &RulesArgs, config: &ConfigFile) -> Result<Option<rules::Cleaner>> {
-    rules::build_cleaner(
-        false,
+fn build_rules_cleaner(args: &RulesArgs, config: &ConfigFile) -> Result<rules::Cleaner> {
+    rules::build_enabled_cleaner(
         args.effective_cleaning_profile(config),
         args.effective_drops_trailing_period(config),
         config.cleaning.number_threshold,

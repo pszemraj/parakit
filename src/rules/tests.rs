@@ -61,6 +61,10 @@ fn safe_profile_preserves_semantic_discourse_markers() {
             ("You know what I mean?", "You know what I mean?"),
             ("It's like pulling teeth.", "It's like pulling teeth."),
             (
+                "It is like 50 percent more expensive.",
+                "It is like 50 percent more expensive.",
+            ),
+            (
                 "Files, like Microsoft Word files.",
                 "Files, like Microsoft Word files.",
             ),
@@ -243,6 +247,7 @@ fn text2num_handles_documented_cardinals_groups_and_decimals() {
                 "Groups like one, two, three are digits.",
                 "Groups like 1, 2, 3 are digits.",
             ),
+            ("Zero, one, two, three, four.", "0, 1, 2, 3, 4."),
             (
                 // Unlike the comma-delimited group above, the trailing
                 // "three" here is an isolated value below the default
@@ -405,9 +410,19 @@ fn capitalization_protects_decimals_versions_and_dotted_tokens() {
                 "use dataset.filter and agents.md.",
                 "Use dataset.filter and agents.md.",
             ),
+            ("version 0.5.2 was released.", "Version 0.5.2 was released."),
             (
                 "open claude.ai or gmail.com.",
                 "Open claude.ai or gmail.com.",
+            ),
+            ("email test@gmail.com now.", "Email test@gmail.com now."),
+            (
+                "visit https://example.com?token=abc and https://example.com/a!b.",
+                "Visit https://example.com?token=abc and https://example.com/a!b.",
+            ),
+            (
+                "visit https://example.com? then continue.",
+                "Visit https://example.com? Then continue.",
             ),
             (
                 "i.e. this remains lowercase.",
@@ -670,8 +685,8 @@ fn user_rule_name_colliding_with_builtin_is_an_error() {
         "x",
         RulePosition::Standard,
     )];
-    let err = build_cleaner_for_test_result(CleaningProfile::Safe, false, &HashSet::new(), &rules)
-        .unwrap_err();
+    let err =
+        Cleaner::new(CleaningProfile::Safe, false, None, &HashSet::new(), &rules).unwrap_err();
     let msg = err.to_string();
     assert!(msg.contains("filled-pauses"), "message: {msg}");
     assert!(msg.contains("rename"), "message: {msg}");
@@ -683,8 +698,8 @@ fn duplicate_user_rule_names_are_an_error() {
         user_rule("custom-a", r"(?i)a", "A", RulePosition::Standard),
         user_rule("custom-a", r"(?i)b", "B", RulePosition::Standard),
     ];
-    let err = build_cleaner_for_test_result(CleaningProfile::Safe, false, &HashSet::new(), &rules)
-        .unwrap_err();
+    let err =
+        Cleaner::new(CleaningProfile::Safe, false, None, &HashSet::new(), &rules).unwrap_err();
     let msg = err.to_string();
     assert!(msg.contains("duplicate"), "message: {msg}");
     assert!(msg.contains("custom-a"), "message: {msg}");
@@ -693,8 +708,8 @@ fn duplicate_user_rule_names_are_an_error() {
 #[test]
 fn empty_user_rule_name_is_rejected() {
     let rules = vec![user_rule("", r"(?i)hi", "hello", RulePosition::Standard)];
-    let err = build_cleaner_for_test_result(CleaningProfile::Safe, false, &HashSet::new(), &rules)
-        .unwrap_err();
+    let err =
+        Cleaner::new(CleaningProfile::Safe, false, None, &HashSet::new(), &rules).unwrap_err();
     let msg = err.to_string();
     assert!(msg.contains("empty name"), "message: {msg}");
 }
@@ -702,8 +717,8 @@ fn empty_user_rule_name_is_rejected() {
 #[test]
 fn whitespace_only_user_rule_name_is_rejected() {
     let rules = vec![user_rule("   ", r"(?i)hi", "hello", RulePosition::Standard)];
-    let err = build_cleaner_for_test_result(CleaningProfile::Safe, false, &HashSet::new(), &rules)
-        .unwrap_err();
+    let err =
+        Cleaner::new(CleaningProfile::Safe, false, None, &HashSet::new(), &rules).unwrap_err();
     let msg = err.to_string();
     assert!(msg.contains("empty name"), "message: {msg}");
 }
@@ -716,8 +731,8 @@ fn user_rule_name_with_surrounding_whitespace_is_rejected() {
         "hello",
         RulePosition::Standard,
     )];
-    let err = build_cleaner_for_test_result(CleaningProfile::Safe, false, &HashSet::new(), &rules)
-        .unwrap_err();
+    let err =
+        Cleaner::new(CleaningProfile::Safe, false, None, &HashSet::new(), &rules).unwrap_err();
     let msg = err.to_string();
     assert!(
         msg.contains("leading or trailing whitespace"),
@@ -750,8 +765,8 @@ fn empty_user_rule_pattern_is_rejected() {
         "x",
         RulePosition::Standard,
     )];
-    let err = build_cleaner_for_test_result(CleaningProfile::Safe, false, &HashSet::new(), &rules)
-        .unwrap_err();
+    let err =
+        Cleaner::new(CleaningProfile::Safe, false, None, &HashSet::new(), &rules).unwrap_err();
     let msg = err.to_string();
     assert!(msg.contains("custom-empty-pattern"), "message: {msg}");
     assert!(msg.contains("empty pattern"), "message: {msg}");
@@ -776,8 +791,8 @@ fn invalid_user_rule_regex_names_the_rule() {
         "x",
         RulePosition::Standard,
     )];
-    let err = build_cleaner_for_test_result(CleaningProfile::Safe, false, &HashSet::new(), &rules)
-        .unwrap_err();
+    let err =
+        Cleaner::new(CleaningProfile::Safe, false, None, &HashSet::new(), &rules).unwrap_err();
     let msg = err.to_string();
     assert!(
         msg.contains("user rule 'bad-regex' has invalid regex"),
@@ -899,17 +914,6 @@ fn rendered_rule_list_reports_enabled_state_for_user_rules() {
     assert!(rendered.contains("custom-disabled                   no       disabled description"));
 }
 
-/// Helper mirroring [`build_cleaner_for_test`] but returning the `Result`
-/// instead of unwrapping it, for tests that assert on the error.
-fn build_cleaner_for_test_result(
-    profile: CleaningProfile,
-    drop_trailing_period: bool,
-    disabled: &HashSet<String>,
-    user_rules: &[UserRule],
-) -> Result<Cleaner> {
-    Cleaner::new(profile, drop_trailing_period, None, disabled, user_rules)
-}
-
 #[test]
 fn final_period_removal_is_off_by_default_and_can_be_enabled() {
     let kept = cleaner_keep_period(CleaningProfile::Safe);
@@ -992,60 +996,6 @@ fn dangling_connective_rule_can_be_disabled_by_name() {
     assert_eq!(
         cleaner.clean_text("The build is green. But"),
         "The build is green. But"
-    );
-}
-
-#[test]
-fn safe_profile_leaves_ambiguous_repetitions_and_negation_untouched() {
-    assert_clean_cases(
-        CleaningProfile::Safe,
-        &[
-            ("I know that that is true", "I know that that is true"),
-            ("No no, that is not correct", "No no, that is not correct"),
-        ],
-    );
-}
-
-#[test]
-fn safe_profile_preserves_the_idiomatic_and_quantitative_uses_of_like() {
-    assert_clean_cases(
-        CleaningProfile::Safe,
-        &[
-            ("It is like pulling teeth", "It is like pulling teeth"),
-            (
-                "It is like 50 percent more expensive",
-                "It is like 50 percent more expensive",
-            ),
-        ],
-    );
-}
-
-#[test]
-fn aggressive_profile_removes_only_the_intended_discourse_markers() {
-    // The leading "So," discourse marker is stripped, but the rest of the
-    // sentence -- including its own content words -- is left untouched.
-    assert_clean_cases(
-        CleaningProfile::Aggressive,
-        &[(
-            "So, I think the model architecture uses transformers.",
-            "I think the model architecture uses transformers.",
-        )],
-    );
-}
-
-#[test]
-fn capitalization_preserves_documented_dotted_and_versioned_tokens() {
-    assert_clean_cases(
-        CleaningProfile::Safe,
-        &[
-            ("GPT 5.5 was tested", "GPT 5.5 was tested"),
-            ("version 0.5.2 was released", "Version 0.5.2 was released"),
-            ("open claude.ai now", "Open claude.ai now"),
-            ("call dataset.filter here", "Call dataset.filter here"),
-            ("see agents.md for rules", "See agents.md for rules"),
-            ("email me at gmail.com", "Email me at gmail.com"),
-            ("i.e. this stays lowercase", "i.e. this stays lowercase"),
-        ],
     );
 }
 

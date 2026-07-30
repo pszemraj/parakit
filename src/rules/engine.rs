@@ -16,7 +16,9 @@ use std::borrow::Cow;
 use std::collections::HashSet;
 
 use super::defaults::DEFAULT_RULES;
-use super::user::{compile_user_regex, validate_user_rules, RulePosition, UserRule};
+#[cfg(test)]
+use super::user::validate_user_rules;
+use super::user::{compile_user_regex, RulePosition, UserRule};
 use super::{CleanResult, CleaningProfile, RuleHit, CLEANER_VERSION, DEFAULT_NUMBER_THRESHOLD};
 
 /// Backtrack step budget for every `fancy-regex` pass. Bounds worst-case
@@ -287,6 +289,7 @@ impl Cleaner {
     /// enabled built-in pattern is an invalid `regex` or `fancy-regex`
     /// expression, or if any enabled user rule pattern is an invalid `regex`
     /// expression.
+    #[cfg(test)]
     pub(crate) fn new(
         profile: CleaningProfile,
         drop_trailing_period: bool,
@@ -296,6 +299,40 @@ impl Cleaner {
     ) -> Result<Self> {
         validate_number_threshold(number_threshold)?;
         validate_user_rules(user_rules)?;
+        Self::new_prevalidated(
+            profile,
+            drop_trailing_period,
+            number_threshold,
+            disabled,
+            user_rules,
+        )
+    }
+
+    /// Build a cleaner after rule metadata and numeric inputs have already
+    /// been validated by the public rules facade.
+    ///
+    /// # Arguments
+    ///
+    /// * `profile` - Selected cleanup behavior tier.
+    /// * `drop_trailing_period` - Whether terminal periods are removed.
+    /// * `number_threshold` - Optional isolated-number conversion threshold.
+    /// * `disabled` - Validated names excluded from the pipeline.
+    /// * `user_rules` - Validated user-defined rules.
+    ///
+    /// # Returns
+    ///
+    /// A compiled cleaner.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if an enabled built-in or user regex cannot compile.
+    pub(super) fn new_prevalidated(
+        profile: CleaningProfile,
+        drop_trailing_period: bool,
+        number_threshold: Option<f64>,
+        disabled: &HashSet<String>,
+        user_rules: &[UserRule],
+    ) -> Result<Self> {
         Self::assemble(
             profile,
             drop_trailing_period,

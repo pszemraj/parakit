@@ -136,12 +136,10 @@ pub struct CleanResult {
 
 /// Build the cleaner selected by CLI/runtime options.
 ///
-/// Rule name and user-rule validation always run before the `no_cleaning`
-/// check, so a broken `config.toml` (an unknown disabled rule, an invalid
-/// user rule) fails the same way whether or not cleaning itself ends up
-/// disabled. This is load-bearing: `config::validate_config` calls this with
-/// `no_cleaning = false` to validate a config file eagerly at load time,
-/// independent of whatever `--no-cleaning` the caller might pass later.
+/// Rule-name, user-rule metadata, and threshold validation always run before
+/// the `no_cleaning` check. Config loading separately calls
+/// [`validate_configured_rules`] so enabled user regexes are also checked
+/// eagerly without compiling the built-in pipeline.
 ///
 /// # Arguments
 ///
@@ -180,24 +178,99 @@ pub fn build_cleaner(
     disabled_rules: &[String],
     user_rules: &[UserRule],
 ) -> Result<Option<Cleaner>> {
-    for name in disabled_rules {
-        assert_rule_name_exists(name, user_rules)?;
-    }
     if no_cleaning {
-        engine::validate_number_threshold(number_threshold)?;
-        user::validate_user_rules(user_rules)?;
+        validate_rule_inputs(number_threshold, disabled_rules, user_rules)?;
         return Ok(None);
     }
 
-    let disabled: HashSet<String> = disabled_rules.iter().cloned().collect();
-    engine::Cleaner::new(
+    build_enabled_cleaner(
+        profile,
+        drop_trailing_period,
+        number_threshold,
+        disabled_rules,
+        user_rules,
+    )
+    .map(Some)
+}
+
+/// Build an enabled cleaner selected by CLI/runtime options.
+///
+/// This is the non-optional counterpart to [`build_cleaner`] for command
+/// surfaces, such as `parakit rules test`, that never support disabling the
+/// cleaning pipeline.
+///
+/// # Arguments
+///
+/// See [`build_cleaner`], excluding its `no_cleaning` argument.
+///
+/// # Returns
+///
+/// A compiled cleaner.
+///
+/// # Errors
+///
+/// See [`build_cleaner`].
+pub fn build_enabled_cleaner(
+    profile: CleaningProfile,
+    drop_trailing_period: bool,
+    number_threshold: Option<f64>,
+    disabled_rules: &[String],
+    user_rules: &[UserRule],
+) -> Result<Cleaner> {
+    let disabled = validate_rule_inputs(number_threshold, disabled_rules, user_rules)?;
+    engine::Cleaner::new_prevalidated(
         profile,
         drop_trailing_period,
         number_threshold,
         &disabled,
         user_rules,
     )
-    .map(Some)
+}
+
+/// Validate config-backed rule inputs without compiling the built-in pipeline.
+///
+/// Enabled user regexes are compiled so a broken config still fails at load
+/// time. Disabled user regexes are deliberately skipped, preserving the
+/// documented workflow for parking an unfinished rule.
+///
+/// # Arguments
+///
+/// * `number_threshold` - Optional isolated-number conversion threshold.
+/// * `disabled_rules` - Built-in or user rule names to disable.
+/// * `user_rules` - User-defined regex rules.
+///
+/// # Returns
+///
+/// `Ok(())` when every configured input is valid.
+///
+/// # Errors
+///
+/// See [`build_cleaner`].
+pub fn validate_configured_rules(
+    number_threshold: Option<f64>,
+    disabled_rules: &[String],
+    user_rules: &[UserRule],
+) -> Result<()> {
+    let disabled = validate_rule_inputs(number_threshold, disabled_rules, user_rules)?;
+    for rule in user_rules {
+        if !disabled.contains(&rule.name) {
+            user::compile_user_regex(rule)?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_rule_inputs(
+    number_threshold: Option<f64>,
+    disabled_rules: &[String],
+    user_rules: &[UserRule],
+) -> Result<HashSet<String>> {
+    for name in disabled_rules {
+        assert_rule_name_exists(name, user_rules)?;
+    }
+    engine::validate_number_threshold(number_threshold)?;
+    user::validate_user_rules(user_rules)?;
+    Ok(disabled_rules.iter().cloned().collect())
 }
 
 /// Validate a rule name used by `--disable-rule` or `cleaning.disabled_rules`.
@@ -261,10 +334,7 @@ pub fn print_rule_list(
     disabled_rules: &[String],
     user_rules: &[UserRule],
 ) -> Result<()> {
-    user::validate_user_rules(user_rules)?;
-    for name in disabled_rules {
-        assert_rule_name_exists(name, user_rules)?;
-    }
+    validate_rule_inputs(None, disabled_rules, user_rules)?;
     let disabled: HashSet<&str> = disabled_rules.iter().map(String::as_str).collect();
     print!(
         "{}",
