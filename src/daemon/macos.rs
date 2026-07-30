@@ -2,6 +2,8 @@
 
 #![cfg(target_os = "macos")]
 
+/// Shared CoreFoundation and CoreGraphics event-tap declarations.
+pub(super) mod cgevent_ffi;
 /// Real end-to-end paste-transaction smoke test for `doctor --deep`
 /// (stage 2, opens a throwaway `NSWindow`/`NSTextView`).
 mod diagnostics;

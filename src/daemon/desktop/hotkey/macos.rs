@@ -7,6 +7,13 @@ use super::{
     MACOS_RIGHT_CONTROL_KEYCODE, MACOS_RIGHT_OPTION_KEYCODE, MACOS_RIGHT_SHIFT_KEYCODE,
 };
 use crate::daemon::logging::Logger;
+use crate::daemon::macos::cgevent_ffi::{
+    event_mask, kCFRunLoopDefaultMode, CFMachPortCreateRunLoopSource, CFMachPortRef, CFRelease,
+    CFRunLoopAddSource, CFRunLoopGetCurrent, CFRunLoopRun, CGEventGetIntegerValueField, CGEventRef,
+    CGEventSourceKeyState, CGEventTapCreate, CGEventTapEnable, CGEventTapProxy,
+    K_CG_EVENT_SOURCE_STATE_HID_SYSTEM_STATE, K_CG_EVENT_TAP_OPTION_DEFAULT,
+    K_CG_HEAD_INSERT_EVENT_TAP, K_CG_KEYBOARD_EVENT_KEYCODE, K_CG_SESSION_EVENT_TAP,
+};
 use crate::daemon::recording::HotkeyTransition;
 use crossbeam_channel::Sender;
 use rdev::Key;
@@ -17,19 +24,14 @@ use std::sync::atomic::{AtomicPtr, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-const K_CG_SESSION_EVENT_TAP: u32 = 1;
-const K_CG_HEAD_INSERT_EVENT_TAP: u32 = 0;
-const K_CG_EVENT_TAP_OPTION_DEFAULT: u32 = 0;
 const K_CG_EVENT_TAP_DISABLED_BY_TIMEOUT: u32 = 0xFFFF_FFFE;
 const K_CG_EVENT_TAP_DISABLED_BY_USER_INPUT: u32 = 0xFFFF_FFFF;
-/// CoreGraphics key-down event type used by macOS hotkey tests.
-pub(super) const K_CG_EVENT_KEY_DOWN: u32 = 10;
-/// CoreGraphics key-up event type used by macOS hotkey tests.
-pub(super) const K_CG_EVENT_KEY_UP: u32 = 11;
 /// CoreGraphics modifier-state event type used by macOS hotkey tests.
-pub(super) const K_CG_EVENT_FLAGS_CHANGED: u32 = 12;
-const K_CG_KEYBOARD_EVENT_KEYCODE: u32 = 9;
-const K_CG_EVENT_SOURCE_STATE_HID_SYSTEM_STATE: i32 = 1;
+pub(super) use crate::daemon::macos::cgevent_ffi::K_CG_EVENT_FLAGS_CHANGED;
+/// CoreGraphics key-down event type used by macOS hotkey tests.
+pub(super) use crate::daemon::macos::cgevent_ffi::K_CG_EVENT_KEY_DOWN;
+/// CoreGraphics key-up event type used by macOS hotkey tests.
+pub(super) use crate::daemon::macos::cgevent_ffi::K_CG_EVENT_KEY_UP;
 /// Virtual keycode for Space in the macOS hardware-independent key map.
 pub(super) const MACOS_KEY_SPACE: i64 = MACOS_PTT_SPACE_KEYCODE as i64;
 const MACOS_KEY_RIGHT_COMMAND: i64 = MACOS_RIGHT_COMMAND_KEYCODE as i64;
@@ -40,49 +42,6 @@ const MACOS_KEY_LEFT_CONTROL: i64 = MACOS_PTT_LEFT_CONTROL_KEYCODE as i64;
 const MACOS_KEY_RIGHT_SHIFT: i64 = MACOS_RIGHT_SHIFT_KEYCODE as i64;
 const MACOS_KEY_RIGHT_OPTION: i64 = MACOS_RIGHT_OPTION_KEYCODE as i64;
 const MACOS_KEY_RIGHT_CONTROL: i64 = MACOS_RIGHT_CONTROL_KEYCODE as i64;
-
-type Boolean = u8;
-type CFAllocatorRef = *const c_void;
-type CFIndex = isize;
-type CFRunLoopRef = *mut c_void;
-type CFRunLoopSourceRef = *mut c_void;
-type CFStringRef = *const c_void;
-type CFTypeRef = *const c_void;
-type CFMachPortRef = *mut c_void;
-type CGEventRef = *mut c_void;
-type CGEventTapProxy = *mut c_void;
-type CGEventTapCallBack =
-    extern "C" fn(CGEventTapProxy, u32, CGEventRef, *mut c_void) -> CGEventRef;
-
-#[link(name = "CoreFoundation", kind = "framework")]
-extern "C" {
-    static kCFRunLoopDefaultMode: CFStringRef;
-
-    fn CFRelease(cf: CFTypeRef);
-    fn CFRunLoopAddSource(rl: CFRunLoopRef, source: CFRunLoopSourceRef, mode: CFStringRef);
-    fn CFRunLoopGetCurrent() -> CFRunLoopRef;
-    fn CFRunLoopRun();
-    fn CFMachPortCreateRunLoopSource(
-        allocator: CFAllocatorRef,
-        port: CFMachPortRef,
-        order: CFIndex,
-    ) -> CFRunLoopSourceRef;
-}
-
-#[link(name = "CoreGraphics", kind = "framework")]
-extern "C" {
-    fn CGEventTapCreate(
-        tap: u32,
-        place: u32,
-        options: u32,
-        events_of_interest: u64,
-        callback: CGEventTapCallBack,
-        user_info: *mut c_void,
-    ) -> CFMachPortRef;
-    fn CGEventTapEnable(tap: CFMachPortRef, enable: Boolean);
-    fn CGEventGetIntegerValueField(event: CGEventRef, field: u32) -> i64;
-    fn CGEventSourceKeyState(state_id: i32, key: u16) -> bool;
-}
 
 /// Run the macOS hotkey loop until the process exits.
 ///
@@ -295,8 +254,4 @@ fn physical_modifier_state() -> MacOsModifierState {
 
 fn physical_key_down(keycode: i64) -> bool {
     unsafe { CGEventSourceKeyState(K_CG_EVENT_SOURCE_STATE_HID_SYSTEM_STATE, keycode as u16) }
-}
-
-fn event_mask(event_type: u32) -> u64 {
-    1_u64 << event_type
 }

@@ -1,5 +1,16 @@
 //! macOS CGEvent-based paste shortcut and insertion smoke-test helpers.
 
+use super::cgevent_ffi::{
+    event_mask, kCFRunLoopDefaultMode, Boolean, CFMachPortCreateRunLoopSource,
+    CFMachPortInvalidate, CFMachPortRef, CFRelease, CFRunLoopAddSource, CFRunLoopGetCurrent,
+    CFRunLoopRef, CFRunLoopRemoveSource, CFRunLoopRunInMode, CFRunLoopSourceRef,
+    CGEventCreateKeyboardEvent, CGEventGetFlags, CGEventGetIntegerValueField, CGEventPost,
+    CGEventRef, CGEventSetFlags, CGEventSourceCreate, CGEventSourceKeyState, CGEventTapCreate,
+    CGEventTapEnable, CGEventTapProxy, K_CG_EVENT_FLAGS_CHANGED, K_CG_EVENT_FLAG_MASK_COMMAND,
+    K_CG_EVENT_KEY_DOWN, K_CG_EVENT_KEY_UP, K_CG_EVENT_SOURCE_STATE_HID_SYSTEM_STATE,
+    K_CG_EVENT_TAP_OPTION_DEFAULT, K_CG_HEAD_INSERT_EVENT_TAP, K_CG_HID_EVENT_TAP,
+    K_CG_KEYBOARD_EVENT_KEYCODE, K_CG_SESSION_EVENT_TAP,
+};
 use super::permissions::event_tap_preflight;
 use crate::daemon::desktop::hotkey::{
     MACOS_LEFT_COMMAND_KEYCODE, MACOS_LEFT_OPTION_KEYCODE, MACOS_LEFT_SHIFT_KEYCODE,
@@ -14,29 +25,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
-type Boolean = u8;
-type CFAllocatorRef = *const c_void;
-type CFIndex = isize;
-type CFMachPortRef = *mut c_void;
-type CFRunLoopRef = *mut c_void;
-type CFRunLoopSourceRef = *mut c_void;
-type CFStringRef = *const c_void;
-type CFTypeRef = *const c_void;
-type CGEventRef = *mut c_void;
-type CGEventTapProxy = *mut c_void;
-type CGEventTapCallBack =
-    extern "C" fn(CGEventTapProxy, u32, CGEventRef, *mut c_void) -> CGEventRef;
-
-const K_CG_SESSION_EVENT_TAP: u32 = 1;
-const K_CG_HID_EVENT_TAP: u32 = 0;
-const K_CG_HEAD_INSERT_EVENT_TAP: u32 = 0;
-const K_CG_EVENT_TAP_OPTION_DEFAULT: u32 = 0;
-const K_CG_EVENT_KEY_DOWN: u32 = 10;
-const K_CG_EVENT_KEY_UP: u32 = 11;
-const K_CG_EVENT_FLAGS_CHANGED: u32 = 12;
-const K_CG_KEYBOARD_EVENT_KEYCODE: u32 = 9;
-const K_CG_EVENT_FLAG_MASK_COMMAND: u64 = 0x0010_0000;
-const K_CG_EVENT_SOURCE_STATE_HID_SYSTEM_STATE: i32 = 1;
 const MACOS_V_KEYCODE: u16 = 9;
 const MACOS_FUNCTION_KEYCODE: u16 = 63;
 
@@ -68,51 +56,6 @@ const SMOKE_YIELD: Duration = Duration::from_millis(5);
 /// be released before withholding the synthetic chord.
 pub(crate) const PASTE_MODIFIER_RELEASE_TIMEOUT: Duration = Duration::from_secs(2);
 const PASTE_MODIFIER_RELEASE_POLL: Duration = Duration::from_millis(15);
-
-#[link(name = "CoreFoundation", kind = "framework")]
-extern "C" {
-    static kCFRunLoopDefaultMode: CFStringRef;
-
-    fn CFRelease(cf: CFTypeRef);
-    fn CFRunLoopAddSource(rl: CFRunLoopRef, source: CFRunLoopSourceRef, mode: CFStringRef);
-    fn CFRunLoopGetCurrent() -> CFRunLoopRef;
-    fn CFRunLoopRemoveSource(rl: CFRunLoopRef, source: CFRunLoopSourceRef, mode: CFStringRef);
-    fn CFRunLoopRunInMode(
-        mode: CFStringRef,
-        seconds: f64,
-        return_after_source_handled: Boolean,
-    ) -> i32;
-    fn CFMachPortInvalidate(port: CFMachPortRef);
-    fn CFMachPortCreateRunLoopSource(
-        allocator: CFAllocatorRef,
-        port: CFMachPortRef,
-        order: CFIndex,
-    ) -> CFRunLoopSourceRef;
-}
-
-#[link(name = "CoreGraphics", kind = "framework")]
-extern "C" {
-    fn CGEventTapCreate(
-        tap: u32,
-        place: u32,
-        options: u32,
-        events_of_interest: u64,
-        callback: CGEventTapCallBack,
-        user_info: *mut c_void,
-    ) -> CFMachPortRef;
-    fn CGEventCreateKeyboardEvent(
-        source: *mut c_void,
-        virtual_key: u16,
-        key_down: Boolean,
-    ) -> CGEventRef;
-    fn CGEventPost(tap: u32, event: CGEventRef);
-    fn CGEventGetFlags(event: CGEventRef) -> u64;
-    fn CGEventGetIntegerValueField(event: CGEventRef, field: u32) -> i64;
-    fn CGEventSetFlags(event: CGEventRef, flags: u64);
-    fn CGEventTapEnable(tap: CFMachPortRef, enable: Boolean);
-    fn CGEventSourceCreate(state_id: i32) -> *mut c_void;
-    fn CGEventSourceKeyState(state_id: i32, key: u16) -> bool;
-}
 
 /// Run an insertion action behind a temporary suppressing event tap.
 ///
@@ -532,10 +475,6 @@ fn wait_for_smoke_events(state: &SmokeTapState) {
         }
         thread::sleep(SMOKE_YIELD);
     }
-}
-
-fn event_mask(event_type: u32) -> u64 {
-    1_u64 << event_type
 }
 
 #[cfg(test)]
