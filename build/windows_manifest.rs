@@ -5,9 +5,6 @@
 
 use serde_json::{json, Value};
 
-/// File name for the Windows runtime manifest colocated with `parakit.exe`.
-pub(crate) const WINDOWS_RUNTIME_MANIFEST: &str = "parakit-runtime-manifest.json";
-
 /// Accelerator flavor recorded in the Windows runtime manifest.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Accelerator {
@@ -24,17 +21,6 @@ impl Accelerator {
             Self::Vulkan => "vulkan",
         }
     }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-/// BLAS fields serialized into the Windows runtime manifest.
-pub(crate) struct BlasManifest {
-    pub(crate) requested: String,
-    pub(crate) selected: String,
-    pub(crate) openblas_root: Option<String>,
-    pub(crate) openblas_include_dir: Option<String>,
-    pub(crate) openblas_import_lib: Option<String>,
-    pub(crate) openblas_runtime_dlls: Vec<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -58,8 +44,6 @@ pub(crate) struct VulkanManifest {
 /// Complete Windows runtime manifest model.
 pub(crate) struct RuntimeManifest {
     pub(crate) required_files: Vec<String>,
-    pub(crate) runtime_dlls: Vec<String>,
-    pub(crate) blas: BlasManifest,
     pub(crate) accelerator: Accelerator,
     pub(crate) cuda: Option<CudaManifest>,
     pub(crate) vulkan: Option<VulkanManifest>,
@@ -74,15 +58,6 @@ impl RuntimeManifest {
     pub(crate) fn to_json(&self) -> String {
         let manifest = json!({
             "required_files": &self.required_files,
-            "runtime_dlls": &self.runtime_dlls,
-            "blas": {
-                "requested": &self.blas.requested,
-                "selected": &self.blas.selected,
-            },
-            "openblas_root": &self.blas.openblas_root,
-            "openblas_include_dir": &self.blas.openblas_include_dir,
-            "openblas_import_lib": &self.blas.openblas_import_lib,
-            "openblas_runtime_dlls": &self.blas.openblas_runtime_dlls,
             "accelerator": self.accelerator.as_str(),
             "cuda": self.cuda.as_ref().map(cuda_manifest_value),
             "vulkan": self.vulkan.as_ref().map(vulkan_manifest_value),

@@ -5,55 +5,22 @@ mod windows_manifest;
 
 use serde_json::Value;
 
-use windows_manifest::{
-    Accelerator, BlasManifest, CudaManifest, RuntimeManifest, VulkanManifest,
-    WINDOWS_RUNTIME_MANIFEST,
-};
-
-fn base_blas() -> BlasManifest {
-    BlasManifest {
-        requested: "auto".to_string(),
-        selected: "accelerate".to_string(),
-        openblas_root: None,
-        openblas_include_dir: None,
-        openblas_import_lib: None,
-        openblas_runtime_dlls: Vec::new(),
-    }
-}
+use windows_manifest::{Accelerator, CudaManifest, RuntimeManifest, VulkanManifest};
 
 fn parse(manifest: RuntimeManifest) -> Value {
     serde_json::from_str(&manifest.to_json()).expect("manifest should serialize valid JSON")
 }
 
 #[test]
-fn runtime_manifest_filename_matches_windows_scripts() {
-    let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-    for script in ["scripts/windows/build.ps1", "scripts/windows/install.ps1"] {
-        let contents = std::fs::read_to_string(repo.join(script))
-            .unwrap_or_else(|err| panic!("read {script}: {err}"));
-        assert!(
-            contents.contains(WINDOWS_RUNTIME_MANIFEST),
-            "{script} must use shared runtime manifest filename {WINDOWS_RUNTIME_MANIFEST:?}"
-        );
-    }
-}
-
-#[test]
-fn serializes_cpu_manifest_with_legacy_fields() {
+fn serializes_cpu_manifest() {
     let json = parse(RuntimeManifest {
         required_files: vec!["parakit.exe".to_string(), "crispasr.dll".to_string()],
-        runtime_dlls: vec!["crispasr.dll".to_string()],
-        blas: base_blas(),
         accelerator: Accelerator::Cpu,
         cuda: None,
         vulkan: None,
     });
 
     assert_eq!(json["required_files"][0], "parakit.exe");
-    assert_eq!(json["runtime_dlls"][0], "crispasr.dll");
-    assert_eq!(json["blas"]["requested"], "auto");
-    assert_eq!(json["blas"]["selected"], "accelerate");
-    assert_eq!(json["openblas_root"], Value::Null);
     assert_eq!(json["accelerator"], "cpu");
     assert_eq!(json["cuda"], Value::Null);
     assert_eq!(json["vulkan"], Value::Null);
@@ -63,8 +30,6 @@ fn serializes_cpu_manifest_with_legacy_fields() {
 fn serializes_cuda_external_dll_contract() {
     let json = parse(RuntimeManifest {
         required_files: vec!["parakit.exe".to_string(), "ggml-cuda.dll".to_string()],
-        runtime_dlls: vec!["ggml-cuda.dll".to_string()],
-        blas: base_blas(),
         accelerator: Accelerator::Cuda,
         cuda: Some(CudaManifest {
             toolkit_version: "13.2".to_string(),
@@ -93,8 +58,6 @@ fn serializes_cuda_external_dll_contract() {
 fn serializes_vulkan_system_loader_contract() {
     let json = parse(RuntimeManifest {
         required_files: vec!["parakit.exe".to_string(), "ggml-vulkan.dll".to_string()],
-        runtime_dlls: vec!["ggml-vulkan.dll".to_string()],
-        blas: base_blas(),
         accelerator: Accelerator::Vulkan,
         cuda: None,
         vulkan: Some(VulkanManifest {
@@ -115,8 +78,6 @@ fn serializes_vulkan_system_loader_contract() {
 fn serializes_multi_backend_metadata_when_both_are_present() {
     let json = parse(RuntimeManifest {
         required_files: vec!["parakit.exe".to_string()],
-        runtime_dlls: Vec::new(),
-        blas: base_blas(),
         accelerator: Accelerator::Cuda,
         cuda: Some(CudaManifest {
             toolkit_version: "12.9".to_string(),

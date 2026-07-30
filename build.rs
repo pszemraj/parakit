@@ -38,10 +38,10 @@ mod windows_cuda;
 #[path = "build/windows_manifest.rs"]
 mod windows_manifest;
 use windows_cuda::{cuda_external_dll_names, cuda_runtime_dirs, display_paths};
-use windows_manifest::{
-    Accelerator, BlasManifest, CudaManifest, RuntimeManifest, VulkanManifest,
-    WINDOWS_RUNTIME_MANIFEST,
-};
+use windows_manifest::{Accelerator, CudaManifest, RuntimeManifest, VulkanManifest};
+
+/// File name for the Windows runtime manifest colocated with `parakit.exe`.
+const WINDOWS_RUNTIME_MANIFEST: &str = "parakit-runtime-manifest.json";
 
 fn main() {
     println!("cargo:rerun-if-env-changed=CRISPASR_LIB_DIR");
@@ -766,7 +766,6 @@ fn prepare_windows_artifacts(
     write_windows_runtime_manifest(
         bin_dir,
         &runtime_dlls,
-        blas,
         accelerators,
         cuda_manifest,
         vulkan_manifest,
@@ -1060,7 +1059,6 @@ fn should_skip_windows_bundle_dll(file_name: &str) -> bool {
 fn write_windows_runtime_manifest(
     bin_dir: &Path,
     runtime_dlls: &[String],
-    blas: &BlasConfig,
     accelerators: &WindowsAcceleratorConfig,
     cuda: Option<CudaManifest>,
     vulkan: Option<VulkanManifest>,
@@ -1069,7 +1067,6 @@ fn write_windows_runtime_manifest(
     required_files.push("parakit.exe".to_string());
     required_files.extend(runtime_dlls.iter().cloned());
 
-    let windows_openblas = windows_openblas_for_bundle(blas);
     let accelerator = if accelerators.cuda_enabled {
         Accelerator::Cuda
     } else if accelerators.vulkan_enabled {
@@ -1079,26 +1076,6 @@ fn write_windows_runtime_manifest(
     };
     let manifest = RuntimeManifest {
         required_files,
-        runtime_dlls: runtime_dlls.to_vec(),
-        blas: BlasManifest {
-            requested: blas.requested.clone(),
-            selected: blas.selected.to_string(),
-            openblas_root: windows_openblas
-                .map(|openblas| openblas.root.to_string_lossy().to_string()),
-            openblas_include_dir: windows_openblas
-                .map(|openblas| openblas.include_dir.to_string_lossy().to_string()),
-            openblas_import_lib: windows_openblas
-                .map(|openblas| openblas.import_lib.to_string_lossy().to_string()),
-            openblas_runtime_dlls: windows_openblas
-                .map(|openblas| {
-                    openblas
-                        .runtime_dlls
-                        .iter()
-                        .map(|path| path.to_string_lossy().to_string())
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_default(),
-        },
         accelerator,
         cuda,
         vulkan,
