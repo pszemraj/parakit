@@ -8,103 +8,156 @@ use windows_openblas::{
     find_windows_openblas, is_known_openblas_runtime_dll, WindowsOpenBlasImportKind,
 };
 
-#[test]
-fn detects_current_conda_openblas_layout() {
-    let root = common::fixture_root_with_files(
-        "windows-openblas-layout-tests",
-        "current-conda",
-        &[
+/// Expected layout fields for a case that should be detected.
+struct Expected {
+    include_dir: &'static str,
+    import_lib: &'static str,
+    /// Exact, ordered `runtime_dlls` (only asserted when `Some`).
+    runtime_dlls_exact: Option<&'static [&'static str]>,
+    /// `runtime_dlls` membership checks (order-independent).
+    runtime_dlls_contains: &'static [&'static str],
+}
+
+struct Case {
+    name: &'static str,
+    files: &'static [&'static str],
+    kind: WindowsOpenBlasImportKind,
+    expect: Option<Expected>,
+}
+
+const CASES: &[Case] = &[
+    Case {
+        name: "current-conda",
+        files: &[
             "include/openblas/cblas.h",
             "lib/openblas.lib",
             "bin/openblas.dll",
         ],
-    );
-
-    let found = find_windows_openblas(&root, WindowsOpenBlasImportKind::Msvc)
-        .expect("layout should be detected");
-
-    assert_eq!(found.include_dir, root.join("include/openblas"));
-    assert_eq!(found.import_lib, root.join("lib/openblas.lib"));
-    assert!(found.runtime_dlls.contains(&root.join("bin/openblas.dll")));
-}
-
-#[test]
-fn detects_flat_include_and_libopenblas_dll_layout() {
-    let root = common::fixture_root_with_files(
-        "windows-openblas-layout-tests",
-        "flat-libopenblas",
-        &[
+        kind: WindowsOpenBlasImportKind::Msvc,
+        expect: Some(Expected {
+            include_dir: "include/openblas",
+            import_lib: "lib/openblas.lib",
+            runtime_dlls_exact: None,
+            runtime_dlls_contains: &["bin/openblas.dll"],
+        }),
+    },
+    Case {
+        name: "flat-libopenblas",
+        files: &[
             "include/cblas.h",
             "lib/libopenblas.lib",
             "bin/libopenblas.dll",
             "bin/libomp.dll",
         ],
-    );
-
-    let found = find_windows_openblas(&root, WindowsOpenBlasImportKind::Msvc)
-        .expect("layout should be detected");
-
-    assert_eq!(found.include_dir, root.join("include"));
-    assert_eq!(found.import_lib, root.join("lib/libopenblas.lib"));
-    assert_eq!(
-        found.runtime_dlls,
-        vec![
-            root.join("bin/libomp.dll"),
-            root.join("bin/libopenblas.dll")
-        ]
-    );
-}
-
-#[test]
-fn detects_gnu_import_lib_and_versioned_runtime_layout() {
-    let root = common::fixture_root_with_files(
-        "windows-openblas-layout-tests",
-        "gnu-versioned",
-        &[
+        kind: WindowsOpenBlasImportKind::Msvc,
+        expect: Some(Expected {
+            include_dir: "include",
+            import_lib: "lib/libopenblas.lib",
+            runtime_dlls_exact: Some(&["bin/libomp.dll", "bin/libopenblas.dll"]),
+            runtime_dlls_contains: &[],
+        }),
+    },
+    Case {
+        name: "gnu-versioned",
+        files: &[
             "include/cblas.h",
             "lib/libopenblas.dll.a",
             "bin/libopenblas64_.dll",
             "bin/libgcc_s_seh-1.dll",
             "bin/libwinpthread-1.dll",
         ],
-    );
-
-    let found = find_windows_openblas(&root, WindowsOpenBlasImportKind::Gnu)
-        .expect("layout should be detected");
-
-    assert_eq!(found.import_lib, root.join("lib/libopenblas.dll.a"));
-    assert!(found
-        .runtime_dlls
-        .contains(&root.join("bin/libopenblas64_.dll")));
-    assert!(found
-        .runtime_dlls
-        .contains(&root.join("bin/libwinpthread-1.dll")));
-}
-
-#[test]
-fn rejects_layout_without_primary_runtime_dll() {
-    let root = common::fixture_root_with_files(
-        "windows-openblas-layout-tests",
-        "missing-primary-runtime",
-        &["include/cblas.h", "lib/openblas.lib", "bin/libomp.dll"],
-    );
-
-    assert!(find_windows_openblas(&root, WindowsOpenBlasImportKind::Msvc).is_none());
-}
-
-#[test]
-fn msvc_rejects_gnu_only_import_lib_layout() {
-    let root = common::fixture_root_with_files(
-        "windows-openblas-layout-tests",
-        "msvc-rejects-dll-a",
-        &[
+        kind: WindowsOpenBlasImportKind::Gnu,
+        expect: Some(Expected {
+            include_dir: "include",
+            import_lib: "lib/libopenblas.dll.a",
+            runtime_dlls_exact: None,
+            runtime_dlls_contains: &["bin/libopenblas64_.dll", "bin/libwinpthread-1.dll"],
+        }),
+    },
+    Case {
+        name: "missing-primary-runtime",
+        files: &["include/cblas.h", "lib/openblas.lib", "bin/libomp.dll"],
+        kind: WindowsOpenBlasImportKind::Msvc,
+        expect: None,
+    },
+    Case {
+        name: "msvc-rejects-dll-a",
+        files: &[
             "include/cblas.h",
             "lib/libopenblas.dll.a",
             "bin/libopenblas.dll",
         ],
-    );
+        kind: WindowsOpenBlasImportKind::Msvc,
+        expect: None,
+    },
+];
 
-    assert!(find_windows_openblas(&root, WindowsOpenBlasImportKind::Msvc).is_none());
+fn check_case(case: &Case) -> Option<String> {
+    let root =
+        common::fixture_root_with_files("windows-openblas-layout-tests", case.name, case.files);
+
+    let found = find_windows_openblas(&root, case.kind);
+
+    let Some(expected) = &case.expect else {
+        return found.is_some().then(|| {
+            format!(
+                "{}: expected layout to be rejected, got {:?}",
+                case.name, found
+            )
+        });
+    };
+
+    let Some(found) = found else {
+        return Some(format!("{}: expected layout to be detected", case.name));
+    };
+
+    let mut mismatches = Vec::new();
+
+    let want_include_dir = root.join(expected.include_dir);
+    if found.include_dir != want_include_dir {
+        mismatches.push(format!(
+            "include_dir: expected {:?}, got {:?}",
+            want_include_dir, found.include_dir
+        ));
+    }
+
+    let want_import_lib = root.join(expected.import_lib);
+    if found.import_lib != want_import_lib {
+        mismatches.push(format!(
+            "import_lib: expected {:?}, got {:?}",
+            want_import_lib, found.import_lib
+        ));
+    }
+
+    if let Some(exact) = expected.runtime_dlls_exact {
+        let want = exact.iter().map(|p| root.join(p)).collect::<Vec<_>>();
+        if found.runtime_dlls != want {
+            mismatches.push(format!(
+                "runtime_dlls: expected exactly {:?}, got {:?}",
+                want, found.runtime_dlls
+            ));
+        }
+    }
+
+    for contains in expected.runtime_dlls_contains {
+        let want = root.join(contains);
+        if !found.runtime_dlls.contains(&want) {
+            mismatches.push(format!("runtime_dlls: expected to contain {:?}", want));
+        }
+    }
+
+    (!mismatches.is_empty()).then(|| format!("{}: {}", case.name, mismatches.join("; ")))
+}
+
+#[test]
+fn detects_and_rejects_windows_openblas_layouts() {
+    let failures: Vec<String> = CASES.iter().filter_map(check_case).collect();
+    assert!(
+        failures.is_empty(),
+        "{} case(s) failed:\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
 }
 
 #[test]

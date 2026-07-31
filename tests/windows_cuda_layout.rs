@@ -13,15 +13,38 @@ use windows_cuda::{
 
 #[test]
 fn derives_cuda_runtime_dll_names_from_toolkit_major_as_fallback() {
-    assert_eq!(
-        derive_cuda_external_dll_names("13.2"),
-        vec!["cudart64_13.dll", "cublas64_13.dll", "cublasLt64_13.dll"]
+    let cases: &[(&str, &[&str])] = &[
+        (
+            "13.2",
+            &["cudart64_13.dll", "cublas64_13.dll", "cublasLt64_13.dll"],
+        ),
+        (
+            "Cuda compilation tools, release 12.6, V12.6.85",
+            &["cudart64_12.dll", "cublas64_12.dll", "cublasLt64_12.dll"],
+        ),
+        ("unknown", &[]),
+    ];
+
+    let failures: Vec<String> = cases
+        .iter()
+        .filter_map(|(toolkit_version, expected)| {
+            let actual = derive_cuda_external_dll_names(toolkit_version);
+            let expected = expected.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+            (actual != expected).then(|| {
+                format!(
+                    "toolkit_version {:?}: expected {:?}, got {:?}",
+                    toolkit_version, expected, actual
+                )
+            })
+        })
+        .collect();
+
+    assert!(
+        failures.is_empty(),
+        "{} case(s) failed:\n{}",
+        failures.len(),
+        failures.join("\n")
     );
-    assert_eq!(
-        derive_cuda_external_dll_names("Cuda compilation tools, release 12.6, V12.6.85"),
-        vec!["cudart64_12.dll", "cublas64_12.dll", "cublasLt64_12.dll"]
-    );
-    assert!(derive_cuda_external_dll_names("unknown").is_empty());
 }
 
 #[test]
@@ -43,32 +66,54 @@ fn discovers_cuda_runtime_dlls_from_bin_x64_without_version_assumptions() {
     );
 }
 
-#[test]
-fn resolved_cuda_dll_names_prefer_discovered_toolkit_files() {
-    let root = common::fixture_root_with_files(
-        "windows-cuda-layout-tests",
-        "prefer-discovered",
-        &[
+struct ResolvedCase {
+    name: &'static str,
+    /// Fixture DLLs present in `bin/` (empty means discovery finds nothing).
+    files: &'static [&'static str],
+    expect: &'static [&'static str],
+}
+
+const RESOLVED_CASES: &[ResolvedCase] = &[
+    ResolvedCase {
+        name: "prefer-discovered",
+        files: &[
             "bin/cudart64_42.dll",
             "bin/cublas64_42.dll",
             "bin/cublasLt64_42.dll",
         ],
-    );
-
-    assert_eq!(
-        cuda_external_dll_names(Some(&root), "13.2"),
-        vec!["cudart64_42.dll", "cublas64_42.dll", "cublasLt64_42.dll"]
-    );
-}
+        expect: &["cudart64_42.dll", "cublas64_42.dll", "cublasLt64_42.dll"],
+    },
+    ResolvedCase {
+        name: "fallback",
+        files: &[],
+        expect: &["cudart64_13.dll", "cublas64_13.dll", "cublasLt64_13.dll"],
+    },
+];
 
 #[test]
-fn resolved_cuda_dll_names_fall_back_to_toolkit_major_when_discovery_is_empty() {
-    let root = common::fixture_root("windows-cuda-layout-tests", "fallback");
-    fs::create_dir_all(root.join("bin")).expect("fixture bin dir should be created");
+fn resolved_cuda_dll_names_prefer_discovery_then_fall_back_to_toolkit_major() {
+    let failures: Vec<String> = RESOLVED_CASES
+        .iter()
+        .filter_map(|case| {
+            let root =
+                common::fixture_root_with_files("windows-cuda-layout-tests", case.name, case.files);
 
-    assert_eq!(
-        cuda_external_dll_names(Some(&root), "13.2"),
-        vec!["cudart64_13.dll", "cublas64_13.dll", "cublasLt64_13.dll"]
+            let actual = cuda_external_dll_names(Some(&root), "13.2");
+            let expected = case
+                .expect
+                .iter()
+                .map(|s| s.to_string())
+                .collect::<Vec<_>>();
+            (actual != expected)
+                .then(|| format!("{}: expected {:?}, got {:?}", case.name, expected, actual))
+        })
+        .collect();
+
+    assert!(
+        failures.is_empty(),
+        "{} case(s) failed:\n{}",
+        failures.len(),
+        failures.join("\n")
     );
 }
 
