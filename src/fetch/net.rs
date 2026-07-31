@@ -290,64 +290,73 @@ mod tests {
     }
 
     #[test]
-    fn rewrite_pinned_url_swaps_the_huggingface_prefix() {
-        assert_eq!(
-            rewrite_pinned_url(
-                "https://huggingface.co/pszemraj/model/resolve/main/model.gguf",
-                "https://mirror.internal.example.com"
+    fn rewrite_pinned_url_cases() {
+        let pinned = "https://huggingface.co/pszemraj/model/resolve/main/model.gguf";
+        for (name, url, endpoint, expect) in [
+            (
+                "swaps the huggingface prefix",
+                pinned,
+                "https://mirror.internal.example.com",
+                "https://mirror.internal.example.com/pszemraj/model/resolve/main/model.gguf",
             ),
-            "https://mirror.internal.example.com/pszemraj/model/resolve/main/model.gguf"
-        );
+            (
+                "is identity on the default endpoint",
+                pinned,
+                HF_DEFAULT_ENDPOINT,
+                pinned,
+            ),
+            (
+                "leaves a non-matching URL alone",
+                "https://example.com/model.gguf",
+                "https://mirror.internal.example.com",
+                "https://example.com/model.gguf",
+            ),
+        ] {
+            assert_eq!(rewrite_pinned_url(url, endpoint), expect, "{name}");
+        }
     }
 
     #[test]
-    fn rewrite_pinned_url_is_identity_on_the_default_endpoint() {
-        let url = "https://huggingface.co/pszemraj/model/resolve/main/model.gguf";
-        assert_eq!(rewrite_pinned_url(url, HF_DEFAULT_ENDPOINT), url);
-    }
-
-    #[test]
-    fn rewrite_pinned_url_leaves_a_non_matching_url_alone() {
-        let url = "https://example.com/model.gguf";
-        assert_eq!(
-            rewrite_pinned_url(url, "https://mirror.internal.example.com"),
-            url
-        );
-    }
-
-    #[test]
-    fn bearer_for_matches_only_the_resolved_endpoint_host() {
-        let endpoint = "https://huggingface.co";
-        assert_eq!(
-            bearer_for(
+    fn bearer_for_cases() {
+        for (name, url, endpoint, token, expect) in [
+            (
+                "matches a request under the resolved endpoint",
                 "https://huggingface.co/api/models/a/b/revision/main",
-                endpoint,
-                Some("tok")
+                "https://huggingface.co",
+                Some("tok"),
+                Some("tok"),
             ),
-            Some("tok")
-        );
-        assert_eq!(
-            bearer_for("https://example.com/model.gguf", endpoint, Some("tok")),
-            None
-        );
-        assert_eq!(
-            bearer_for("https://huggingface.co/a/b", endpoint, None),
-            None
-        );
-    }
-
-    #[test]
-    fn bearer_for_requires_a_path_boundary_after_the_endpoint_prefix() {
-        let endpoint = "https://huggingface.co";
-        assert_eq!(
-            bearer_for(
+            (
+                "does not match an unrelated host",
+                "https://example.com/model.gguf",
+                "https://huggingface.co",
+                Some("tok"),
+                None,
+            ),
+            (
+                "no token means nothing to attach even on a matching host",
+                "https://huggingface.co/a/b",
+                "https://huggingface.co",
+                None,
+                None,
+            ),
+            (
+                "requires a path boundary after the endpoint prefix",
                 "https://huggingface.co.evil.example/a/b",
-                endpoint,
-                Some("tok")
+                "https://huggingface.co",
+                Some("tok"),
+                None,
             ),
-            None
-        );
-        assert_eq!(bearer_for(endpoint, endpoint, Some("tok")), Some("tok"));
+            (
+                "matches the endpoint URL itself with no path",
+                "https://huggingface.co",
+                "https://huggingface.co",
+                Some("tok"),
+                Some("tok"),
+            ),
+        ] {
+            assert_eq!(bearer_for(url, endpoint, token), expect, "{name}");
+        }
     }
 
     #[test]

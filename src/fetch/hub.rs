@@ -391,37 +391,101 @@ pub(super) fn run_hub_repo(
 mod tests {
     use super::*;
 
-    #[test]
-    fn parses_owner_repo() {
-        let SourceKind::Repo(spec) = classify_source("cstr/parakeet-tdt-0.6b-v3-GGUF").unwrap()
-        else {
-            panic!("expected a repo spec");
-        };
-        assert_eq!(spec.owner, "cstr");
-        assert_eq!(spec.repo, "parakeet-tdt-0.6b-v3-GGUF");
-        assert_eq!(spec.revision, None);
+    /// Expected outcome of [`classify_source`] for one [`ClassifyCase`] row.
+    #[derive(Clone, Copy)]
+    enum Expected {
+        Repo {
+            owner: &'static str,
+            repo: &'static str,
+            revision: Option<&'static str>,
+        },
+        Url(&'static str),
+    }
+
+    struct ClassifyCase {
+        name: &'static str,
+        input: &'static str,
+        expect: Expected,
     }
 
     #[test]
-    fn parses_owner_repo_with_revision() {
-        let SourceKind::Repo(spec) =
-            classify_source("handy-computer/parakeet-tdt-0.6b-v3-gguf@refs-pr-1").unwrap()
-        else {
-            panic!("expected a repo spec");
-        };
-        assert_eq!(spec.owner, "handy-computer");
-        assert_eq!(spec.repo, "parakeet-tdt-0.6b-v3-gguf");
-        assert_eq!(spec.revision.as_deref(), Some("refs-pr-1"));
-    }
+    fn classify_source_cases() {
+        let cases = [
+            ClassifyCase {
+                name: "parses owner/repo",
+                input: "cstr/parakeet-tdt-0.6b-v3-GGUF",
+                expect: Expected::Repo {
+                    owner: "cstr",
+                    repo: "parakeet-tdt-0.6b-v3-GGUF",
+                    revision: None,
+                },
+            },
+            ClassifyCase {
+                name: "parses owner/repo@revision",
+                input: "handy-computer/parakeet-tdt-0.6b-v3-gguf@refs-pr-1",
+                expect: Expected::Repo {
+                    owner: "handy-computer",
+                    repo: "parakeet-tdt-0.6b-v3-gguf",
+                    revision: Some("refs-pr-1"),
+                },
+            },
+            ClassifyCase {
+                name: "detects a URL source before attempting repo parsing",
+                input: "https://example.com/models/parakeet-q8.gguf",
+                expect: Expected::Url("https://example.com/models/parakeet-q8.gguf"),
+            },
+        ];
 
-    #[test]
-    fn detects_a_url_source_before_attempting_repo_parsing() {
-        let SourceKind::Url(url) =
-            classify_source("https://example.com/models/parakeet-q8.gguf").unwrap()
-        else {
-            panic!("expected a URL source");
-        };
-        assert_eq!(url, "https://example.com/models/parakeet-q8.gguf");
+        let failures: Vec<String> = cases
+            .iter()
+            .filter_map(|case| {
+                let actual = classify_source(case.input).unwrap();
+                // Exhaustive match on the real SourceKind (hub.rs:26, Repo/Url
+                // are its only two variants): a 3rd variant added there must
+                // fail compilation here.
+                match actual {
+                    SourceKind::Repo(spec) => match case.expect {
+                        Expected::Repo {
+                            owner,
+                            repo,
+                            revision,
+                        } => {
+                            let expected = RepoSpec {
+                                owner: owner.to_string(),
+                                repo: repo.to_string(),
+                                revision: revision.map(str::to_string),
+                            };
+                            (spec != expected).then(|| {
+                                format!("{}: expected {expected:?}, got {spec:?}", case.name)
+                            })
+                        }
+                        Expected::Url(url) => Some(format!(
+                            "{}: expected Url({url:?}), got Repo({spec:?})",
+                            case.name
+                        )),
+                    },
+                    SourceKind::Url(actual_url) => match case.expect {
+                        Expected::Url(url) => (actual_url != url).then(|| {
+                            format!(
+                                "{}: expected Url({url:?}), got Url({actual_url:?})",
+                                case.name
+                            )
+                        }),
+                        Expected::Repo { .. } => Some(format!(
+                            "{}: expected a Repo, got Url({actual_url:?})",
+                            case.name
+                        )),
+                    },
+                }
+            })
+            .collect();
+
+        assert!(
+            failures.is_empty(),
+            "{} case(s) failed:\n{}",
+            failures.len(),
+            failures.join("\n")
+        );
     }
 
     #[test]
@@ -444,59 +508,102 @@ mod tests {
         }
     }
 
-    #[test]
-    fn source_from_cli_defaults_to_hosted_q8() {
-        let source = source_from_cli(None, None, None).unwrap();
-        assert_eq!(source, FetchSource::HostedQ8);
+    /// One row of the `source_from_cli` matrix: the three raw CLI fields in
+    /// and either the built [`FetchSource`] or an error-message fragment
+    /// out. The `--file`-with-URL row's fragment
+    /// ("--file requires a Hugging Face repo source (owner/repo), not a
+    /// URL") is a single contiguous substring of the real message, so it
+    /// still covers the original test's separate "--file" and "URL"
+    /// `.contains()` checks.
+    struct SourceFromCliCase {
+        name: &'static str,
+        source: Option<&'static str>,
+        file: Option<&'static str>,
+        sha256: Option<&'static str>,
+        expect: Result<FetchSource, &'static str>,
     }
 
     #[test]
-    fn source_from_cli_builds_a_hub_repo_source() {
-        let source = source_from_cli(
-            Some("cstr/parakeet-tdt-0.6b-v3-GGUF".to_string()),
-            Some("parakeet-tdt-0.6b-v3-q4_k.gguf".to_string()),
-            None,
-        )
-        .unwrap();
-        assert_eq!(
-            source,
-            FetchSource::HubRepo {
-                repo: "cstr/parakeet-tdt-0.6b-v3-GGUF".to_string(),
-                revision: None,
-                file: Some("parakeet-tdt-0.6b-v3-q4_k.gguf".to_string()),
+    fn source_from_cli_cases() {
+        let sha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+        let cases = [
+            SourceFromCliCase {
+                name: "defaults to hosted Q8 when source is absent",
+                source: None,
+                file: None,
                 sha256: None,
-            }
-        );
-    }
-
-    #[test]
-    fn source_from_cli_builds_a_url_source() {
-        let sha = "a".repeat(64);
-        let source = source_from_cli(
-            Some("https://example.com/model.gguf".to_string()),
-            None,
-            Some(sha.clone()),
-        )
-        .unwrap();
-        assert_eq!(
-            source,
-            FetchSource::Url {
-                url: "https://example.com/model.gguf".to_string(),
+                expect: Ok(FetchSource::HostedQ8),
+            },
+            SourceFromCliCase {
+                name: "builds a Hub repo source",
+                source: Some("cstr/parakeet-tdt-0.6b-v3-GGUF"),
+                file: Some("parakeet-tdt-0.6b-v3-q4_k.gguf"),
+                sha256: None,
+                expect: Ok(FetchSource::HubRepo {
+                    repo: "cstr/parakeet-tdt-0.6b-v3-GGUF".to_string(),
+                    revision: None,
+                    file: Some("parakeet-tdt-0.6b-v3-q4_k.gguf".to_string()),
+                    sha256: None,
+                }),
+            },
+            SourceFromCliCase {
+                name: "builds a URL source",
+                source: Some("https://example.com/model.gguf"),
+                file: None,
                 sha256: Some(sha),
-            }
-        );
-    }
+                expect: Ok(FetchSource::Url {
+                    url: "https://example.com/model.gguf".to_string(),
+                    sha256: Some(sha.to_string()),
+                }),
+            },
+            SourceFromCliCase {
+                name: "rejects --file paired with a URL source",
+                source: Some("https://example.com/model.gguf"),
+                file: Some("model.gguf"),
+                sha256: None,
+                expect: Err("--file requires a Hugging Face repo source (owner/repo), not a URL"),
+            },
+        ];
 
-    #[test]
-    fn source_from_cli_rejects_file_with_a_url_source() {
-        let err = source_from_cli(
-            Some("https://example.com/model.gguf".to_string()),
-            Some("model.gguf".to_string()),
-            None,
-        )
-        .unwrap_err();
-        assert!(err.to_string().contains("--file"));
-        assert!(err.to_string().contains("URL"));
+        let failures: Vec<String> = cases
+            .iter()
+            .filter_map(|case| {
+                let actual = source_from_cli(
+                    case.source.map(str::to_string),
+                    case.file.map(str::to_string),
+                    case.sha256.map(str::to_string),
+                );
+                match (&case.expect, actual) {
+                    (Ok(expected), Ok(actual)) => (*expected != actual)
+                        .then(|| format!("{}: expected {expected:?}, got {actual:?}", case.name)),
+                    (Err(fragment), Err(err)) => {
+                        let msg = err.to_string();
+                        (!msg.contains(fragment)).then(|| {
+                            format!(
+                                "{}: expected error to contain {fragment:?}, got {msg:?}",
+                                case.name
+                            )
+                        })
+                    }
+                    (Ok(expected), Err(err)) => Some(format!(
+                        "{}: expected Ok({expected:?}), got Err({err})",
+                        case.name
+                    )),
+                    (Err(fragment), Ok(actual)) => Some(format!(
+                        "{}: expected Err containing {fragment:?}, got Ok({actual:?})",
+                        case.name
+                    )),
+                }
+            })
+            .collect();
+
+        assert!(
+            failures.is_empty(),
+            "{} case(s) failed:\n{}",
+            failures.len(),
+            failures.join("\n")
+        );
     }
 
     fn sibling(rfilename: &str, lfs: Option<LfsInfo>) -> Sibling {
@@ -506,62 +613,127 @@ mod tests {
         }
     }
 
-    #[test]
-    fn selects_the_sole_gguf_file() {
-        let a = sibling("model-Q8_0.gguf", None);
-        let refs = [&a];
-        match select_gguf_file(&refs, None).unwrap() {
-            Selection::Picked(s) => assert_eq!(s.rfilename, "model-Q8_0.gguf"),
-            _ => panic!("expected Selection::Picked"),
-        }
+    /// Expected outcome of [`select_gguf_file`] for one [`SelectCase`] row.
+    /// `Err` carries every message fragment the original per-scenario test
+    /// asserted with `.contains()`.
+    #[derive(Debug)]
+    enum ExpectedSelection {
+        Picked(&'static str),
+        AutoQ8(&'static str),
+        Err(&'static [&'static str]),
+    }
+
+    struct SelectCase {
+        name: &'static str,
+        files: &'static [&'static str],
+        requested: Option<&'static str>,
+        expect: ExpectedSelection,
     }
 
     #[test]
-    fn explicit_file_hits_an_exact_match() {
-        let a = sibling("model-Q8_0.gguf", None);
-        let b = sibling("model-Q4_K_M.gguf", None);
-        let refs = [&a, &b];
-        match select_gguf_file(&refs, Some("model-Q4_K_M.gguf")).unwrap() {
-            Selection::Picked(s) => assert_eq!(s.rfilename, "model-Q4_K_M.gguf"),
-            _ => panic!("expected Selection::Picked"),
-        }
-    }
+    fn select_gguf_file_cases() {
+        let cases = [
+            SelectCase {
+                name: "selects the sole .gguf file",
+                files: &["model-Q8_0.gguf"],
+                requested: None,
+                expect: ExpectedSelection::Picked("model-Q8_0.gguf"),
+            },
+            SelectCase {
+                name: "explicit --file hits an exact match",
+                files: &["model-Q8_0.gguf", "model-Q4_K_M.gguf"],
+                requested: Some("model-Q4_K_M.gguf"),
+                expect: ExpectedSelection::Picked("model-Q4_K_M.gguf"),
+            },
+            SelectCase {
+                name: "explicit --file miss lists available files",
+                files: &["model-Q8_0.gguf"],
+                requested: Some("nope.gguf"),
+                expect: ExpectedSelection::Err(&["model-Q8_0.gguf"]),
+            },
+            SelectCase {
+                name: "auto-picks the sole Q8_0 file among several",
+                files: &["model-Q8_0.gguf", "model-Q4_K_M.gguf", "model-F16.gguf"],
+                requested: None,
+                expect: ExpectedSelection::AutoQ8("model-Q8_0.gguf"),
+            },
+            SelectCase {
+                name: "ambiguous selection without Q8_0 errors with listing",
+                files: &["model-Q4_K_M.gguf", "model-F16.gguf"],
+                requested: None,
+                expect: ExpectedSelection::Err(&["--file", "model-Q4_K_M.gguf", "model-F16.gguf"]),
+            },
+            SelectCase {
+                name: "no .gguf files errors",
+                files: &[],
+                requested: None,
+                expect: ExpectedSelection::Err(&[]),
+            },
+        ];
 
-    #[test]
-    fn explicit_file_miss_lists_available_files() {
-        let a = sibling("model-Q8_0.gguf", None);
-        let refs = [&a];
-        let err = select_gguf_file(&refs, Some("nope.gguf")).unwrap_err();
-        assert!(err.to_string().contains("model-Q8_0.gguf"));
-    }
+        let failures: Vec<String> = cases
+            .iter()
+            .filter_map(|case| {
+                let siblings: Vec<Sibling> = case.files.iter().map(|f| sibling(f, None)).collect();
+                let refs: Vec<&Sibling> = siblings.iter().collect();
+                let result = select_gguf_file(&refs, case.requested);
+                match result {
+                    Ok(selection) => {
+                        // Exhaustive match on the real Selection (hub.rs:169,
+                        // Picked/AutoQ8 are its only two variants): a 3rd
+                        // variant added there must fail compilation here.
+                        let (is_auto_q8, picked) = match selection {
+                            Selection::Picked(s) => (false, s),
+                            Selection::AutoQ8(s) => (true, s),
+                        };
+                        match case.expect {
+                            ExpectedSelection::Picked(name)
+                                if !is_auto_q8 && picked.rfilename == name =>
+                            {
+                                None
+                            }
+                            ExpectedSelection::AutoQ8(name)
+                                if is_auto_q8 && picked.rfilename == name =>
+                            {
+                                None
+                            }
+                            ref other => Some(format!(
+                                "{}: expected {other:?}, got {}({:?})",
+                                case.name,
+                                if is_auto_q8 { "AutoQ8" } else { "Picked" },
+                                picked.rfilename
+                            )),
+                        }
+                    }
+                    Err(err) => match case.expect {
+                        ExpectedSelection::Err(fragments) => {
+                            let msg = err.to_string();
+                            let missing: Vec<&str> = fragments
+                                .iter()
+                                .copied()
+                                .filter(|f| !msg.contains(f))
+                                .collect();
+                            (!missing.is_empty()).then(|| {
+                                format!(
+                                    "{}: error {msg:?} missing fragment(s) {missing:?}",
+                                    case.name
+                                )
+                            })
+                        }
+                        ref other => {
+                            Some(format!("{}: expected {other:?}, got Err({err})", case.name))
+                        }
+                    },
+                }
+            })
+            .collect();
 
-    #[test]
-    fn auto_picks_the_sole_q8_0_file_among_several() {
-        let a = sibling("model-Q8_0.gguf", None);
-        let b = sibling("model-Q4_K_M.gguf", None);
-        let c = sibling("model-F16.gguf", None);
-        let refs = [&a, &b, &c];
-        match select_gguf_file(&refs, None).unwrap() {
-            Selection::AutoQ8(s) => assert_eq!(s.rfilename, "model-Q8_0.gguf"),
-            _ => panic!("expected Selection::AutoQ8"),
-        }
-    }
-
-    #[test]
-    fn ambiguous_selection_without_q8_0_errors_with_listing() {
-        let a = sibling("model-Q4_K_M.gguf", None);
-        let b = sibling("model-F16.gguf", None);
-        let refs = [&a, &b];
-        let err = select_gguf_file(&refs, None).unwrap_err();
-        assert!(err.to_string().contains("--file"));
-        assert!(err.to_string().contains("model-Q4_K_M.gguf"));
-        assert!(err.to_string().contains("model-F16.gguf"));
-    }
-
-    #[test]
-    fn no_gguf_files_errors() {
-        let refs: [&Sibling; 0] = [];
-        assert!(select_gguf_file(&refs, None).is_err());
+        assert!(
+            failures.is_empty(),
+            "{} case(s) failed:\n{}",
+            failures.len(),
+            failures.join("\n")
+        );
     }
 
     #[test]
@@ -619,30 +791,26 @@ mod tests {
     }
 
     #[test]
-    fn resolve_url_percent_encodes_the_filename_and_revision() {
-        assert_eq!(
-            resolve_url(
+    fn resolve_url_cases() {
+        for (name, endpoint, rfilename, expect) in [
+            (
+                "percent-encodes the filename and revision",
                 "https://huggingface.co",
-                "cstr",
-                "parakeet-tdt-0.6b-v3-GGUF",
-                "main",
-                "parakeet tdt Q8_0.gguf"
+                "parakeet tdt Q8_0.gguf",
+                "https://huggingface.co/cstr/parakeet-tdt-0.6b-v3-GGUF/resolve/main/parakeet%20tdt%20Q8_0.gguf",
             ),
-            "https://huggingface.co/cstr/parakeet-tdt-0.6b-v3-GGUF/resolve/main/parakeet%20tdt%20Q8_0.gguf"
-        );
-    }
-
-    #[test]
-    fn resolve_url_honors_a_rewritten_endpoint() {
-        assert_eq!(
-            resolve_url(
+            (
+                "honors a rewritten endpoint",
                 "https://mirror.internal.example.com",
-                "cstr",
-                "parakeet-tdt-0.6b-v3-GGUF",
-                "main",
-                "model.gguf"
+                "model.gguf",
+                "https://mirror.internal.example.com/cstr/parakeet-tdt-0.6b-v3-GGUF/resolve/main/model.gguf",
             ),
-            "https://mirror.internal.example.com/cstr/parakeet-tdt-0.6b-v3-GGUF/resolve/main/model.gguf"
-        );
+        ] {
+            assert_eq!(
+                resolve_url(endpoint, "cstr", "parakeet-tdt-0.6b-v3-GGUF", "main", rfilename),
+                expect,
+                "{name}"
+            );
+        }
     }
 }

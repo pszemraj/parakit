@@ -864,20 +864,30 @@ mod tests {
     }
 
     #[test]
-    fn url_file_name_strips_query_and_fragment() {
-        assert_eq!(
-            url_file_name("https://example.com/models/model.gguf?download=true").unwrap(),
-            "model.gguf"
-        );
-        assert_eq!(
-            url_file_name("https://example.com/models/model.gguf#frag").unwrap(),
-            "model.gguf"
-        );
-    }
-
-    #[test]
-    fn url_file_name_rejects_a_url_with_no_file_segment() {
-        assert!(url_file_name("https://example.com/").is_err());
-        assert!(url_file_name("https://example.com/models/").is_err());
+    fn url_file_name_cases() {
+        for (name, url, expect) in [
+            (
+                "strips a query string",
+                "https://example.com/models/model.gguf?download=true",
+                Some("model.gguf"),
+            ),
+            (
+                "strips a fragment",
+                "https://example.com/models/model.gguf#frag",
+                Some("model.gguf"),
+            ),
+            (
+                "rejects a URL with no path segment",
+                "https://example.com/",
+                None,
+            ),
+            (
+                "rejects a URL whose path ends in a slash",
+                "https://example.com/models/",
+                None,
+            ),
+        ] {
+            assert_eq!(url_file_name(url).ok().as_deref(), expect, "{name}");
+        }
     }
 }
