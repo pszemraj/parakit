@@ -385,8 +385,9 @@ fn run_daemon(cli: &Cli, start: &StartCli) -> Result<()> {
         rx,
     });
     let (hotkey_tx, hotkey_rx) = unbounded();
-    let coordinator = daemon::recording::spawn_recording_coordinator(hotkey_rx, tx, audio)
-        .context("spawn recording coordinator")?;
+    let coordinator =
+        daemon::recording::spawn_recording_coordinator(hotkey_rx, tx, audio, Arc::clone(&log))
+            .context("spawn recording coordinator")?;
 
     // Hotkey grab loop. Blocks forever (until grab returns or process exits).
     ipc_state.set_phase("idle");
