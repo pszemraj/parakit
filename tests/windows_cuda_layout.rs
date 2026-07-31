@@ -66,46 +66,35 @@ fn discovers_cuda_runtime_dlls_from_bin_x64_without_version_assumptions() {
     );
 }
 
-struct ResolvedCase {
-    name: &'static str,
-    /// Fixture DLLs present in `bin/` (empty means discovery finds nothing).
-    files: &'static [&'static str],
-    expect: &'static [&'static str],
-}
-
-const RESOLVED_CASES: &[ResolvedCase] = &[
-    ResolvedCase {
-        name: "prefer-discovered",
-        files: &[
+/// (name, fixture DLLs present in `bin/` — empty means discovery finds
+/// nothing, expected resolved names)
+const RESOLVED_CASES: &[(&str, &[&str], &[&str])] = &[
+    (
+        "prefer-discovered",
+        &[
             "bin/cudart64_42.dll",
             "bin/cublas64_42.dll",
             "bin/cublasLt64_42.dll",
         ],
-        expect: &["cudart64_42.dll", "cublas64_42.dll", "cublasLt64_42.dll"],
-    },
-    ResolvedCase {
-        name: "fallback",
-        files: &[],
-        expect: &["cudart64_13.dll", "cublas64_13.dll", "cublasLt64_13.dll"],
-    },
+        &["cudart64_42.dll", "cublas64_42.dll", "cublasLt64_42.dll"],
+    ),
+    (
+        "fallback",
+        &[],
+        &["cudart64_13.dll", "cublas64_13.dll", "cublasLt64_13.dll"],
+    ),
 ];
 
 #[test]
 fn resolved_cuda_dll_names_prefer_discovery_then_fall_back_to_toolkit_major() {
     let failures: Vec<String> = RESOLVED_CASES
         .iter()
-        .filter_map(|case| {
-            let root =
-                common::fixture_root_with_files("windows-cuda-layout-tests", case.name, case.files);
+        .filter_map(|&(name, files, expect)| {
+            let root = common::fixture_root_with_files("windows-cuda-layout-tests", name, files);
 
             let actual = cuda_external_dll_names(Some(&root), "13.2");
-            let expected = case
-                .expect
-                .iter()
-                .map(|s| s.to_string())
-                .collect::<Vec<_>>();
-            (actual != expected)
-                .then(|| format!("{}: expected {:?}, got {:?}", case.name, expected, actual))
+            let expected = expect.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+            (actual != expected).then(|| format!("{name}: expected {expected:?}, got {actual:?}"))
         })
         .collect();
 

@@ -349,16 +349,6 @@ mod tests {
         path
     }
 
-    /// One row of [`config_defaults_from_missing_empty_or_template_file`].
-    /// `contents: None` means the file is absent entirely (never written).
-    struct DefaultsCase {
-        label: &'static str,
-        /// Fixture directory slug; kept separate from `label` so labels can
-        /// be descriptive without producing odd directory names.
-        slug: &'static str,
-        contents: Option<&'static str>,
-    }
-
     #[test]
     fn config_defaults_from_missing_empty_or_template_file() {
         // Every row asserts the same superset of default fields: the union
@@ -366,60 +356,44 @@ mod tests {
         // and template_parses_as_valid_toml_with_all_defaults each checked
         // individually before this table replaced them. Deliberate
         // uniform-coverage increase.
-        let cases = [
-            DefaultsCase {
-                label: "missing file",
-                slug: "missing",
-                contents: None,
-            },
-            DefaultsCase {
-                label: "empty file",
-                slug: "empty",
-                contents: Some(""),
-            },
-            DefaultsCase {
-                label: "template (entirely commented out, must still parse as valid TOML)",
-                slug: "template",
-                contents: Some(TEMPLATE),
-            },
+        //
+        // (label, fixture directory slug, file contents; `None` means the
+        // file is absent entirely — never written.)
+        let cases: [(&str, &str, Option<&str>); 3] = [
+            ("missing file", "missing", None),
+            ("empty file", "empty", Some("")),
+            (
+                "template (entirely commented out, must still parse as valid TOML)",
+                "template",
+                Some(TEMPLATE),
+            ),
         ];
 
-        for case in cases {
-            let path = match case.contents {
+        for (label, slug, contents) in cases {
+            let path = match contents {
                 None => {
-                    let dir = crate::test_support::fixture_root("parakit-config-test", case.slug);
+                    let dir = crate::test_support::fixture_root("parakit-config-test", slug);
                     dir.join("does-not-exist.toml")
                 }
-                Some(contents) => write_fixture(case.slug, contents),
+                Some(contents) => write_fixture(slug, contents),
             };
             let config = load_from_path(&path)
-                .unwrap_or_else(|e| panic!("{}: config file should parse: {e:#}", case.label));
+                .unwrap_or_else(|e| panic!("{label}: config file should parse: {e:#}"));
 
-            assert!(
-                config.daemon.model.is_none(),
-                "{}: daemon.model",
-                case.label
-            );
-            assert!(
-                config.daemon.device.is_none(),
-                "{}: daemon.device",
-                case.label
-            );
-            assert!(config.rules.user.is_empty(), "{}: rules.user", case.label);
+            assert!(config.daemon.model.is_none(), "{label}: daemon.model");
+            assert!(config.daemon.device.is_none(), "{label}: daemon.device");
+            assert!(config.rules.user.is_empty(), "{label}: rules.user");
             assert!(
                 config.cleaning.disabled_rules.is_empty(),
-                "{}: cleaning.disabled_rules",
-                case.label
+                "{label}: cleaning.disabled_rules"
             );
             assert!(
                 config.cleaning.enabled.is_none(),
-                "{}: cleaning.enabled",
-                case.label
+                "{label}: cleaning.enabled"
             );
             assert!(
                 config.cleaning.number_threshold.is_none(),
-                "{}: cleaning.number_threshold",
-                case.label
+                "{label}: cleaning.number_threshold"
             );
         }
     }

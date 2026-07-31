@@ -157,55 +157,37 @@ mod tests {
 
     #[test]
     fn applescript_quote_matrix() {
-        struct Case {
-            name: &'static str,
-            input: &'static str,
-            expect: &'static str,
-        }
-
+        // (name, input, expected escaped form)
         let cases = [
-            Case {
-                name: "escapes double quotes",
-                input: r#"say "hi""#,
-                expect: r#"say \"hi\""#,
-            },
-            Case {
-                name: "escapes backslashes",
-                input: r"C:\Users\me",
-                expect: r"C:\\Users\\me",
-            },
-            Case {
-                name: "escapes mixed quotes and backslashes",
-                input: r#"mixed \ and " chars"#,
-                expect: r#"mixed \\ and \" chars"#,
-            },
-            Case {
-                name: "passes through unicode",
-                input: "héllo wörld 你好",
-                expect: "héllo wörld 你好",
-            },
-            Case {
-                name: "escapes line endings",
-                input: "first\nsecond\rthird\r\nfourth",
-                expect: r"first\nsecond\rthird\r\nfourth",
-            },
-            Case {
-                name: "leaves plain text untouched",
-                input: "Transcript copied",
-                expect: "Transcript copied",
-            },
+            ("escapes double quotes", r#"say "hi""#, r#"say \"hi\""#),
+            ("escapes backslashes", r"C:\Users\me", r"C:\\Users\\me"),
+            (
+                "escapes mixed quotes and backslashes",
+                r#"mixed \ and " chars"#,
+                r#"mixed \\ and \" chars"#,
+            ),
+            (
+                "passes through unicode",
+                "héllo wörld 你好",
+                "héllo wörld 你好",
+            ),
+            (
+                "escapes line endings",
+                "first\nsecond\rthird\r\nfourth",
+                r"first\nsecond\rthird\r\nfourth",
+            ),
+            (
+                "leaves plain text untouched",
+                "Transcript copied",
+                "Transcript copied",
+            ),
         ];
 
         let failures: Vec<String> = cases
             .iter()
-            .filter_map(|case| {
-                let actual = applescript_quote(case.input);
-                (actual != case.expect).then(|| {
-                    format!(
-                        "{}: expected {:?}, got {:?}",
-                        case.name, case.expect, actual
-                    )
-                })
+            .filter_map(|&(name, input, expect)| {
+                let actual = applescript_quote(input);
+                (actual != expect).then(|| format!("{name}: expected {expect:?}, got {actual:?}"))
             })
             .collect();
         assert!(
