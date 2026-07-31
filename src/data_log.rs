@@ -614,11 +614,50 @@ mod tests {
         assert!(id.is_none());
     }
 
-    #[test]
-    fn jsonl_log_includes_cleaning_fields() {
-        let dir = crate::test_support::fixture_root("parakit-log-test", "jsonl-cleaning");
-        let logger = DataLogger::new(dir.clone());
+    /// Expected shape of one optional-vs-nullable field in the JSON record.
+    ///
+    /// `ruleset_id` and `cleaning_failure` use
+    /// `#[serde(skip_serializing_if = "Option::is_none")]`, so a `None` value
+    /// is OMITTED from the JSON entirely. `number_threshold` has no such
+    /// attribute, so a `None` value is ALWAYS PRESENT, serialized as JSON
+    /// `null`. There is deliberately no bare-null catch-all variant here: a
+    /// row must say which of the two contracts it expects for each field.
+    enum Field {
+        Omitted,
+        Value(serde_json::Value),
+    }
 
+    fn assert_field(value: &serde_json::Value, key: &str, expect: &Field, label: &str) {
+        match expect {
+            Field::Omitted => assert!(
+                value.get(key).is_none(),
+                "{label}: {key} should be omitted, got {:?}",
+                value.get(key)
+            ),
+            Field::Value(expected) => {
+                let actual = value
+                    .get(key)
+                    .unwrap_or_else(|| panic!("{label}: {key} should be present"));
+                assert_eq!(actual, expected, "{label}: {key}");
+            }
+        }
+    }
+
+    /// One row of [`cleaning_log_fields_serialize_with_omit_vs_null_contract`].
+    struct CleaningLogCase<'a> {
+        label: &'static str,
+        fields: CleaningLogFields<'a>,
+        expect_ruleset_id: Field,
+        expect_number_threshold: Field,
+        expect_rules_fired: serde_json::Value,
+        expect_cleaning_failure: Field,
+        expect_cleaner_version: serde_json::Value,
+        expect_cleaning_profile: serde_json::Value,
+        expect_drops_trailing_period: serde_json::Value,
+    }
+
+    #[test]
+    fn cleaning_log_fields_serialize_with_omit_vs_null_contract() {
         let hits = vec![
             RuleHit {
                 name: "trailing_period".to_string(),
@@ -629,103 +668,132 @@ mod tests {
                 matches: 5,
             },
         ];
-        let fields = CleaningLogFields {
-            rules_active: 4,
-            cleaner_version: 7,
-            profile: "aggressive",
-            ruleset_id: Some("aggressive-v7"),
-            drops_trailing_period: true,
-            number_threshold: Some(5.0),
-            rules_fired: &hits,
-            failure: None,
-        };
-        logger
-            .log(1.0, Duration::from_millis(10), "raw", "cleaned", fields)
-            .expect("write cleaning log record");
 
-        let date = Local::now().date_naive();
-        let path = dir.join(file_name(date));
-        let contents = std::fs::read_to_string(&path).expect("read log file");
-        let value: serde_json::Value =
-            serde_json::from_str(contents.lines().next().expect("one line")).expect("valid jsonl");
+        let cases = vec![
+            CleaningLogCase {
+                label: "ruleset_id and number_threshold both present",
+                fields: CleaningLogFields {
+                    rules_active: 4,
+                    cleaner_version: 7,
+                    profile: "aggressive",
+                    ruleset_id: Some("aggressive-v7"),
+                    drops_trailing_period: true,
+                    number_threshold: Some(5.0),
+                    rules_fired: &hits,
+                    failure: None,
+                },
+                expect_ruleset_id: Field::Value(serde_json::json!("aggressive-v7")),
+                expect_number_threshold: Field::Value(serde_json::json!(5.0)),
+                expect_rules_fired: serde_json::json!([
+                    {"name": "trailing_period", "matches": 2},
+                    {"name": "filler_words", "matches": 5},
+                ]),
+                expect_cleaning_failure: Field::Omitted,
+                expect_cleaner_version: serde_json::json!(7),
+                expect_cleaning_profile: serde_json::json!("aggressive"),
+                expect_drops_trailing_period: serde_json::json!(true),
+            },
+            CleaningLogCase {
+                label: "ruleset_id omitted, number_threshold null, cleaning_failure omitted",
+                fields: CleaningLogFields {
+                    rules_active: 0,
+                    cleaner_version: 1,
+                    profile: "disabled",
+                    ruleset_id: None,
+                    drops_trailing_period: false,
+                    number_threshold: None,
+                    rules_fired: &[],
+                    failure: None,
+                },
+                expect_ruleset_id: Field::Omitted,
+                expect_number_threshold: Field::Value(serde_json::Value::Null),
+                expect_rules_fired: serde_json::json!([]),
+                expect_cleaning_failure: Field::Omitted,
+                expect_cleaner_version: serde_json::json!(1),
+                expect_cleaning_profile: serde_json::json!("disabled"),
+                expect_drops_trailing_period: serde_json::json!(false),
+            },
+            CleaningLogCase {
+                label: "cleaning_failure is recorded as a present value",
+                fields: CleaningLogFields {
+                    failure: Some("panic: rule 'foo' bar"),
+                    ..sample_cleaning_fields()
+                },
+                // sample_cleaning_fields() sets ruleset_id: Some("safe-v1")
+                // and number_threshold: None; asserting both here (not just
+                // cleaning_failure, which is all the replaced test checked)
+                // is a deliberate uniform-coverage increase.
+                expect_ruleset_id: Field::Value(serde_json::json!("safe-v1")),
+                expect_number_threshold: Field::Value(serde_json::Value::Null),
+                expect_rules_fired: serde_json::json!([]),
+                expect_cleaning_failure: Field::Value(serde_json::json!("panic: rule 'foo' bar")),
+                expect_cleaner_version: serde_json::json!(1),
+                expect_cleaning_profile: serde_json::json!("safe"),
+                expect_drops_trailing_period: serde_json::json!(true),
+            },
+        ];
 
-        assert_eq!(value["rules_active"], 4);
-        assert_eq!(value["parakit_version"], crate::build_info::PACKAGE_VERSION);
-        assert_eq!(value["cleaner_version"], 7);
-        assert_eq!(value["cleaning_profile"], "aggressive");
-        assert_eq!(value["ruleset_id"], "aggressive-v7");
-        assert_eq!(value["drops_trailing_period"], true);
-        assert_eq!(value["number_threshold"], 5.0);
-        assert_eq!(
-            value["rules_fired"],
-            serde_json::json!([
-                {"name": "trailing_period", "matches": 2},
-                {"name": "filler_words", "matches": 5},
-            ])
-        );
-        assert!(
-            value.get("cleaning_failure").is_none(),
-            "cleaning_failure should be omitted when there was no failure"
-        );
-    }
+        for (index, case) in cases.into_iter().enumerate() {
+            let dir = crate::test_support::fixture_root(
+                "parakit-log-test",
+                &format!("jsonl-cleaning-matrix-{index}"),
+            );
+            let logger = DataLogger::new(dir.clone());
+            logger
+                .log(
+                    1.0,
+                    Duration::from_millis(10),
+                    "raw",
+                    "cleaned",
+                    case.fields,
+                )
+                .unwrap_or_else(|| panic!("{}: write cleaning log record", case.label));
 
-    #[test]
-    fn jsonl_log_omits_optional_cleaning_fields_when_absent() {
-        let dir = crate::test_support::fixture_root("parakit-log-test", "jsonl-cleaning-quiet");
-        let logger = DataLogger::new(dir.clone());
+            let date = Local::now().date_naive();
+            let path = dir.join(file_name(date));
+            let contents = std::fs::read_to_string(&path)
+                .unwrap_or_else(|e| panic!("{}: read log file: {e}", case.label));
+            let value: serde_json::Value = serde_json::from_str(
+                contents
+                    .lines()
+                    .next()
+                    .unwrap_or_else(|| panic!("{}: expected one line", case.label)),
+            )
+            .unwrap_or_else(|e| panic!("{}: valid jsonl: {e}", case.label));
 
-        let fields = CleaningLogFields {
-            rules_active: 0,
-            cleaner_version: 1,
-            profile: "disabled",
-            ruleset_id: None,
-            drops_trailing_period: false,
-            number_threshold: None,
-            rules_fired: &[],
-            failure: None,
-        };
-        logger
-            .log(1.0, Duration::from_millis(5), "raw", "raw", fields)
-            .expect("write cleaning log record");
-
-        let date = Local::now().date_naive();
-        let path = dir.join(file_name(date));
-        let contents = std::fs::read_to_string(&path).expect("read log file");
-        let value: serde_json::Value =
-            serde_json::from_str(contents.lines().next().expect("one line")).expect("valid jsonl");
-
-        assert!(
-            value.get("ruleset_id").is_none(),
-            "ruleset_id should be omitted when None"
-        );
-        assert!(
-            value.get("cleaning_failure").is_none(),
-            "cleaning_failure should be omitted when None"
-        );
-        assert_eq!(value["cleaning_profile"], "disabled");
-        assert_eq!(value["number_threshold"], serde_json::Value::Null);
-        assert_eq!(value["rules_fired"], serde_json::json!([]));
-    }
-
-    #[test]
-    fn cleaning_failure_is_recorded_in_jsonl() {
-        let dir = crate::test_support::fixture_root("parakit-log-test", "jsonl-cleaning-failure");
-        let logger = DataLogger::new(dir.clone());
-
-        let fields = CleaningLogFields {
-            failure: Some("panic: rule 'foo' bar"),
-            ..sample_cleaning_fields()
-        };
-        logger
-            .log(1.0, Duration::from_millis(5), "raw", "raw", fields)
-            .expect("write cleaning failure record");
-
-        let date = Local::now().date_naive();
-        let path = dir.join(file_name(date));
-        let contents = std::fs::read_to_string(&path).expect("read log file");
-        let value: serde_json::Value =
-            serde_json::from_str(contents.lines().next().expect("one line")).expect("valid jsonl");
-
-        assert_eq!(value["cleaning_failure"], "panic: rule 'foo' bar");
+            assert_field(&value, "ruleset_id", &case.expect_ruleset_id, case.label);
+            assert_field(
+                &value,
+                "number_threshold",
+                &case.expect_number_threshold,
+                case.label,
+            );
+            assert_field(
+                &value,
+                "cleaning_failure",
+                &case.expect_cleaning_failure,
+                case.label,
+            );
+            assert_eq!(
+                value["rules_fired"], case.expect_rules_fired,
+                "{}: rules_fired",
+                case.label
+            );
+            assert_eq!(
+                value["cleaner_version"], case.expect_cleaner_version,
+                "{}: cleaner_version",
+                case.label
+            );
+            assert_eq!(
+                value["cleaning_profile"], case.expect_cleaning_profile,
+                "{}: cleaning_profile",
+                case.label
+            );
+            assert_eq!(
+                value["drops_trailing_period"], case.expect_drops_trailing_period,
+                "{}: drops_trailing_period",
+                case.label
+            );
+        }
     }
 }

@@ -220,10 +220,19 @@ mod tests {
 
     #[test]
     fn maps_ggml_device_types() {
-        assert_eq!(DeviceKind::from(0), DeviceKind::Cpu);
-        assert_eq!(DeviceKind::from(1), DeviceKind::Gpu);
-        assert_eq!(DeviceKind::from(2), DeviceKind::IGpu);
-        assert_eq!(DeviceKind::from(9), DeviceKind::Unknown(9));
+        // Codes 3 (Accel) and 4 (Meta) were previously untested; the
+        // `From<c_int>` impl (gpu.rs:69-79) maps all six DeviceKind cases:
+        // 0-4 explicitly, and anything else falls through to Unknown.
+        for (code, expected) in [
+            (0, DeviceKind::Cpu),
+            (1, DeviceKind::Gpu),
+            (2, DeviceKind::IGpu),
+            (3, DeviceKind::Accel), // previously uncovered
+            (4, DeviceKind::Meta),  // previously uncovered
+            (9, DeviceKind::Unknown(9)),
+        ] {
+            assert_eq!(DeviceKind::from(code), expected, "code {code}");
+        }
     }
 
     #[test]
@@ -242,53 +251,61 @@ mod tests {
         );
     }
 
-    #[test]
-    fn preferred_gpu_device_prefers_discrete_over_integrated() {
-        let devices = vec![
-            DeviceInfo {
-                name: "Vulkan0".to_string(),
-                description: "AMD 780M".to_string(),
-                kind: DeviceKind::IGpu,
-                free_bytes: 0,
-                total_bytes: 0,
-            },
-            DeviceInfo {
-                name: "Vulkan1".to_string(),
-                description: "NVIDIA RTX".to_string(),
-                kind: DeviceKind::Gpu,
-                free_bytes: 0,
-                total_bytes: 0,
-            },
-        ];
+    /// Build a dummy device for [`preferred_gpu_device_matrix`]. Description,
+    /// free, and total bytes are never asserted by that test, so every device
+    /// shares the same placeholder values.
+    fn device(name: &'static str, kind: DeviceKind) -> DeviceInfo {
+        DeviceInfo {
+            name: name.to_string(),
+            description: String::new(),
+            kind,
+            free_bytes: 0,
+            total_bytes: 0,
+        }
+    }
 
-        assert_eq!(
-            preferred_gpu_device_in(&devices).map(|device| device.name.as_str()),
-            Some("Vulkan1")
-        );
+    struct PreferredGpuCase {
+        label: &'static str,
+        devices: Vec<DeviceInfo>,
+        expect_name: Option<&'static str>,
     }
 
     #[test]
-    fn preferred_gpu_device_uses_integrated_when_no_discrete_gpu_exists() {
-        let devices = vec![
-            DeviceInfo {
-                name: "BLAS".to_string(),
-                description: "OpenBLAS".to_string(),
-                kind: DeviceKind::Accel,
-                free_bytes: 0,
-                total_bytes: 0,
+    fn preferred_gpu_device_matrix() {
+        let cases = vec![
+            PreferredGpuCase {
+                label: "discrete preferred over integrated",
+                devices: vec![
+                    device("Vulkan0", DeviceKind::IGpu),
+                    device("Vulkan1", DeviceKind::Gpu),
+                ],
+                expect_name: Some("Vulkan1"),
             },
-            DeviceInfo {
-                name: "Vulkan0".to_string(),
-                description: "AMD 780M".to_string(),
-                kind: DeviceKind::IGpu,
-                free_bytes: 0,
-                total_bytes: 0,
+            PreferredGpuCase {
+                label: "integrated used when no discrete gpu exists",
+                devices: vec![
+                    device("BLAS", DeviceKind::Accel),
+                    device("Vulkan0", DeviceKind::IGpu),
+                ],
+                expect_name: Some("Vulkan0"),
+            },
+            PreferredGpuCase {
+                // New coverage: preferred_gpu_device_in's final `None` path
+                // (gpu.rs:191, falling off both `find` calls) was previously
+                // never exercised by a test.
+                label: "no gpu-like device present returns None",
+                devices: vec![device("BLAS", DeviceKind::Accel)],
+                expect_name: None,
             },
         ];
 
-        assert_eq!(
-            preferred_gpu_device_in(&devices).map(|device| device.name.as_str()),
-            Some("Vulkan0")
-        );
+        for case in cases {
+            assert_eq!(
+                preferred_gpu_device_in(&case.devices).map(|device| device.name.as_str()),
+                case.expect_name,
+                "{}",
+                case.label
+            );
+        }
     }
 }

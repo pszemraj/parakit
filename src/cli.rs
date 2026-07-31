@@ -887,25 +887,6 @@ mod tests {
     }
 
     #[test]
-    fn removed_log_format_flag_is_rejected() {
-        let error = Cli::try_parse_from(["parakit", "--log-format", "jsonl"])
-            .expect_err("--log-format must not remain a supported surface");
-        assert_eq!(error.kind(), clap::error::ErrorKind::UnknownArgument);
-        assert!(
-            migration_hint(
-                &[
-                    "parakit".to_string(),
-                    "--log-format".to_string(),
-                    "jsonl".to_string()
-                ],
-                &error
-            )
-            .is_none(),
-            "a flag that never existed on `start` either must not get a migration hint"
-        );
-    }
-
-    #[test]
     fn bare_parakit_parses_with_no_command() {
         let cli = Cli::parse_from(["parakit"]);
         assert!(cli.command.is_none());
@@ -1035,6 +1016,11 @@ mod tests {
 
         config.daemon.paste_mode = Some(PasteMode::Direct);
         assert_eq!(
+            doctor_cli(&[]).effective_paste_mode(&config),
+            PasteMode::Direct,
+            "config value must win when no CLI flag is given"
+        );
+        assert_eq!(
             doctor_cli(&["--paste-mode", "standard"]).effective_paste_mode(&config),
             PasteMode::Standard
         );
@@ -1043,6 +1029,12 @@ mod tests {
     #[test]
     fn effective_model_and_threads_and_log_dir_prefer_cli_then_config() {
         let mut config = ConfigFile::default();
+
+        let start = start_from(&[]);
+        assert_eq!(start.effective_model(&config), None);
+        assert_eq!(start.effective_threads(&config), None);
+        assert_eq!(start.effective_log_dir(&config), None);
+
         config.daemon.model = Some(PathBuf::from("/config/model.gguf"));
         config.daemon.threads = NonZeroUsize::new(2);
         config.logging.dir = Some(PathBuf::from("/config/logs"));
@@ -1295,118 +1287,132 @@ mod tests {
         assert_eq!(start_from(&[]).effective_transcript_history(&config), 25);
     }
 
-    #[test]
-    fn migration_hint_none_when_parse_succeeds_or_kind_mismatches() {
-        // A non-UnknownArgument error (missing subcommand value, etc.) must
-        // not get a migration hint.
-        let error = Cli::try_parse_from(["parakit", "history", "--limit"])
-            .expect_err("--limit requires a value");
-        assert_ne!(error.kind(), clap::error::ErrorKind::UnknownArgument);
-        let args: Vec<String> = ["parakit", "history", "--limit"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
-        assert!(migration_hint(&args, &error).is_none());
+    /// Kind check a [`MigrationHintCase`] row asserts, when it asserts one.
+    /// Only the two cases that originally asserted an error kind keep that
+    /// check here (see the row comments below); every other case leaves it
+    /// unchecked, matching what the tests being replaced actually asserted.
+    enum KindCheck {
+        Is(clap::error::ErrorKind),
+        IsNot(clap::error::ErrorKind),
+    }
+
+    /// One [`migration_hint`] scenario: the raw argv, the clap error kind to
+    /// check (if any), and the hint text (or absence of one) expected.
+    struct MigrationHintCase {
+        label: &'static str,
+        args: &'static [&'static str],
+        expect_kind: Option<KindCheck>,
+        expect_hint: Option<&'static str>,
     }
 
     #[test]
-    fn migration_hint_names_the_start_subcommand_for_a_moved_flag() {
-        let args: Vec<String> = ["parakit", "--paste-mode", "standard"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
-        let error =
-            Cli::try_parse_from(args.iter().cloned()).expect_err("--paste-mode moved off Cli");
-        let hint = migration_hint(&args, &error).expect("a moved start flag must get a hint");
-        assert_eq!(
-            hint,
-            "error: '--paste-mode' now belongs to the start subcommand\n\n  try: parakit start --paste-mode standard"
-        );
+    fn migration_hint_matrix() {
+        let cases = [
+            MigrationHintCase {
+                label: "a flag that never existed on start gets no hint",
+                args: &["parakit", "--log-format", "jsonl"],
+                expect_kind: Some(KindCheck::Is(clap::error::ErrorKind::UnknownArgument)),
+                expect_hint: None,
+            },
+            MigrationHintCase {
+                label: "a non-UnknownArgument error gets no hint",
+                args: &["parakit", "history", "--limit"],
+                expect_kind: Some(KindCheck::IsNot(clap::error::ErrorKind::UnknownArgument)),
+                expect_hint: None,
+            },
+            MigrationHintCase {
+                label: "a moved flag names the start subcommand",
+                args: &["parakit", "--paste-mode", "standard"],
+                expect_kind: None,
+                expect_hint: Some(
+                    "error: '--paste-mode' now belongs to the start subcommand\n\n  try: parakit start --paste-mode standard",
+                ),
+            },
+            MigrationHintCase {
+                label: "a moved flag shell-quotes original args with whitespace",
+                args: &["parakit", "--log-dir", "my logs"],
+                expect_kind: None,
+                expect_hint: Some(
+                    "error: '--log-dir' now belongs to the start subcommand\n\n  try: parakit start --log-dir \"my logs\"",
+                ),
+            },
+            MigrationHintCase {
+                label: "--list-rules points at rules list",
+                args: &["parakit", "--list-rules"],
+                expect_kind: None,
+                expect_hint: Some(
+                    "error: '--list-rules' is now the `rules list` subcommand\n\n  try: parakit rules list",
+                ),
+            },
+            MigrationHintCase {
+                label: "--test-rules with input points at rules test with input",
+                args: &["parakit", "--test-rules", "so um yeah"],
+                expect_kind: None,
+                expect_hint: Some(
+                    "error: '--test-rules' is now the `rules test` subcommand\n\n  try: parakit rules test \"so um yeah\"",
+                ),
+            },
+            MigrationHintCase {
+                label: "--test-rules without input points at rules test without input",
+                args: &["parakit", "--test-rules"],
+                expect_kind: None,
+                expect_hint: Some(
+                    "error: '--test-rules' is now the `rules test` subcommand\n\n  try: parakit rules test <INPUT>",
+                ),
+            },
+            MigrationHintCase {
+                label: "unknown garbage top-level flag gets no hint",
+                args: &["parakit", "--totally-bogus-flag"],
+                expect_kind: None,
+                expect_hint: None,
+            },
+            MigrationHintCase {
+                label: "unknown flag under a real subcommand gets no hint",
+                args: &["parakit", "doctor", "--bogus"],
+                expect_kind: None,
+                expect_hint: None,
+            },
+        ];
+
+        for case in cases {
+            let args: Vec<String> = case.args.iter().map(|s| s.to_string()).collect();
+            let error = Cli::try_parse_from(args.iter().cloned())
+                .expect_err(&format!("{}: expected a parse error", case.label));
+            if let Some(kind_check) = &case.expect_kind {
+                match kind_check {
+                    KindCheck::Is(kind) => assert_eq!(
+                        error.kind(),
+                        *kind,
+                        "{}: expected error kind {kind:?}",
+                        case.label
+                    ),
+                    KindCheck::IsNot(kind) => assert_ne!(
+                        error.kind(),
+                        *kind,
+                        "{}: expected error kind other than {kind:?}",
+                        case.label
+                    ),
+                }
+            }
+            assert_eq!(
+                migration_hint(&args, &error).as_deref(),
+                case.expect_hint,
+                "{}",
+                case.label
+            );
+        }
     }
 
-    #[test]
-    fn migration_hint_shell_quotes_original_args_with_whitespace() {
-        let args: Vec<String> = ["parakit", "--log-dir", "my logs"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
-        let error = Cli::try_parse_from(args.iter().cloned()).expect_err("--log-dir moved off Cli");
-        let hint = migration_hint(&args, &error).expect("a moved start flag must get a hint");
-        assert_eq!(
-            hint,
-            "error: '--log-dir' now belongs to the start subcommand\n\n  try: parakit start --log-dir \"my logs\""
-        );
+    /// Build a `Vec<String>` from string literals; shared by the `fetch`
+    /// coverage tables below, whose rows sometimes need to append an owned
+    /// value (a generated SHA256 digest) that cannot live in a `'static`
+    /// slice.
+    fn strs(args: &[&str]) -> Vec<String> {
+        args.iter().map(|s| s.to_string()).collect()
     }
 
-    #[test]
-    fn migration_hint_points_list_rules_at_rules_list() {
-        let args: Vec<String> = ["parakit", "--list-rules"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
-        let error =
-            Cli::try_parse_from(args.iter().cloned()).expect_err("--list-rules was removed");
-        let hint = migration_hint(&args, &error).expect("--list-rules must get a hint");
-        assert_eq!(
-            hint,
-            "error: '--list-rules' is now the `rules list` subcommand\n\n  try: parakit rules list"
-        );
-    }
-
-    #[test]
-    fn migration_hint_points_test_rules_at_rules_test_with_input() {
-        let args: Vec<String> = ["parakit", "--test-rules", "so um yeah"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
-        let error =
-            Cli::try_parse_from(args.iter().cloned()).expect_err("--test-rules was removed");
-        let hint = migration_hint(&args, &error).expect("--test-rules must get a hint");
-        assert_eq!(
-            hint,
-            "error: '--test-rules' is now the `rules test` subcommand\n\n  try: parakit rules test \"so um yeah\""
-        );
-    }
-
-    #[test]
-    fn migration_hint_points_test_rules_at_rules_test_without_input() {
-        let args: Vec<String> = ["parakit", "--test-rules"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
-        let error =
-            Cli::try_parse_from(args.iter().cloned()).expect_err("--test-rules was removed");
-        let hint = migration_hint(&args, &error).expect("--test-rules must get a hint");
-        assert_eq!(
-            hint,
-            "error: '--test-rules' is now the `rules test` subcommand\n\n  try: parakit rules test <INPUT>"
-        );
-    }
-
-    #[test]
-    fn migration_hint_is_none_for_unknown_garbage_flag() {
-        let args: Vec<String> = ["parakit", "--totally-bogus-flag"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
-        let error =
-            Cli::try_parse_from(args.iter().cloned()).expect_err("bogus flag must fail to parse");
-        assert!(migration_hint(&args, &error).is_none());
-    }
-
-    #[test]
-    fn migration_hint_is_none_for_unknown_flag_under_a_real_subcommand() {
-        let args: Vec<String> = ["parakit", "doctor", "--bogus"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
-        let error =
-            Cli::try_parse_from(args.iter().cloned()).expect_err("bogus flag must fail to parse");
-        assert!(migration_hint(&args, &error).is_none());
-    }
-
-    fn fetch_from(args: &[&str]) -> FetchCli {
-        let mut full = vec!["parakit", "fetch"];
+    fn fetch_from(args: &[String]) -> FetchCli {
+        let mut full: Vec<String> = vec!["parakit".to_string(), "fetch".to_string()];
         full.extend_from_slice(args);
         match Cli::parse_from(full).command {
             Some(Commands::Fetch(fetch)) => fetch,
@@ -1414,104 +1420,160 @@ mod tests {
         }
     }
 
-    #[test]
-    fn bare_fetch_parses_with_no_source() {
-        let fetch = fetch_from(&[]);
-        assert_eq!(fetch.source, None);
-        assert_eq!(fetch.file, None);
-        assert_eq!(fetch.sha256, None);
-        assert!(!fetch.force);
-        assert!(!fetch.from_source);
+    /// One row of [`fetch_parses_successfully_across_source_file_sha_and_flags`]:
+    /// asserts every field of a successfully parsed [`FetchCli`], not just
+    /// the one or two fields each replaced test used to check. Deliberate
+    /// uniform-coverage increase: fields not previously asserted in a given
+    /// scenario are pinned here to their expected default (`None`/`false`).
+    struct FetchParseCase {
+        label: &'static str,
+        args: Vec<String>,
+        expect_source: Option<&'static str>,
+        expect_file: Option<&'static str>,
+        expect_sha256: Option<String>,
+        expect_force: bool,
+        expect_from_source: bool,
     }
 
     #[test]
-    fn fetch_parses_a_positional_repo_source() {
-        let fetch = fetch_from(&["cstr/parakeet-tdt-0.6b-v3-GGUF"]);
-        assert_eq!(
-            fetch.source.as_deref(),
-            Some("cstr/parakeet-tdt-0.6b-v3-GGUF")
-        );
+    fn fetch_parses_successfully_across_source_file_sha_and_flags() {
+        let sha_lower = "a".repeat(64);
+        let sha_upper = "A".repeat(64);
+
+        let cases = vec![
+            FetchParseCase {
+                label: "bare fetch has no source",
+                args: strs(&[]),
+                expect_source: None,
+                expect_file: None,
+                expect_sha256: None,
+                expect_force: false,
+                expect_from_source: false,
+            },
+            FetchParseCase {
+                label: "a positional repo source parses",
+                args: strs(&["cstr/parakeet-tdt-0.6b-v3-GGUF"]),
+                expect_source: Some("cstr/parakeet-tdt-0.6b-v3-GGUF"),
+                expect_file: None,
+                expect_sha256: None,
+                expect_force: false,
+                expect_from_source: false,
+            },
+            FetchParseCase {
+                label: "source with file and sha256 parse together",
+                args: {
+                    let mut args = strs(&[
+                        "cstr/parakeet-tdt-0.6b-v3-GGUF",
+                        "--file",
+                        "parakeet-tdt-0.6b-v3-q4_k.gguf",
+                        "--sha256",
+                    ]);
+                    args.push(sha_lower.clone());
+                    args
+                },
+                expect_source: Some("cstr/parakeet-tdt-0.6b-v3-GGUF"),
+                expect_file: Some("parakeet-tdt-0.6b-v3-q4_k.gguf"),
+                expect_sha256: Some(sha_lower.clone()),
+                expect_force: false,
+                expect_from_source: false,
+            },
+            FetchParseCase {
+                label: "sha256 is normalized to lowercase",
+                args: {
+                    let mut args = strs(&["owner/repo", "--sha256"]);
+                    args.push(sha_upper.clone());
+                    args
+                },
+                expect_source: Some("owner/repo"),
+                expect_file: None,
+                expect_sha256: Some(sha_lower.clone()),
+                expect_force: false,
+                expect_from_source: false,
+            },
+        ];
+
+        for case in cases {
+            let fetch = fetch_from(&case.args);
+            assert_eq!(
+                fetch.source.as_deref(),
+                case.expect_source,
+                "{}: source",
+                case.label
+            );
+            assert_eq!(
+                fetch.file.as_deref(),
+                case.expect_file,
+                "{}: file",
+                case.label
+            );
+            assert_eq!(fetch.sha256, case.expect_sha256, "{}: sha256", case.label);
+            assert_eq!(fetch.force, case.expect_force, "{}: force", case.label);
+            assert_eq!(
+                fetch.from_source, case.expect_from_source,
+                "{}: from_source",
+                case.label
+            );
+        }
+    }
+
+    struct FetchRejectionCase {
+        label: &'static str,
+        args: Vec<String>,
+        expect_kind: clap::error::ErrorKind,
     }
 
     #[test]
-    fn fetch_parses_source_with_file_and_sha256() {
+    fn fetch_rejects_invalid_and_conflicting_argument_combinations() {
         let sha = "a".repeat(64);
-        let fetch = fetch_from(&[
-            "cstr/parakeet-tdt-0.6b-v3-GGUF",
-            "--file",
-            "parakeet-tdt-0.6b-v3-q4_k.gguf",
-            "--sha256",
-            &sha,
-        ]);
-        assert_eq!(
-            fetch.file.as_deref(),
-            Some("parakeet-tdt-0.6b-v3-q4_k.gguf")
-        );
-        assert_eq!(fetch.sha256.as_deref(), Some(sha.as_str()));
-    }
 
-    #[test]
-    fn fetch_sha256_is_normalized_to_lowercase() {
-        let sha = "A".repeat(64);
-        let fetch = fetch_from(&["owner/repo", "--sha256", &sha]);
-        assert_eq!(fetch.sha256.as_deref(), Some("a".repeat(64).as_str()));
-    }
+        let cases = vec![
+            FetchRejectionCase {
+                label: "sha256 rejects a non-64-hex value",
+                args: strs(&["parakit", "fetch", "owner/repo", "--sha256", "not-hex"]),
+                expect_kind: clap::error::ErrorKind::ValueValidation,
+            },
+            FetchRejectionCase {
+                label: "--file requires a source",
+                args: strs(&["parakit", "fetch", "--file", "model.gguf"]),
+                expect_kind: clap::error::ErrorKind::MissingRequiredArgument,
+            },
+            FetchRejectionCase {
+                label: "--sha256 requires a source",
+                args: {
+                    let mut args = strs(&["parakit", "fetch", "--sha256"]);
+                    args.push(sha.clone());
+                    args
+                },
+                expect_kind: clap::error::ErrorKind::MissingRequiredArgument,
+            },
+            FetchRejectionCase {
+                label: "a positional source conflicts with --from-source",
+                args: strs(&["parakit", "fetch", "owner/repo", "--from-source"]),
+                expect_kind: clap::error::ErrorKind::ArgumentConflict,
+            },
+            FetchRejectionCase {
+                label: "--file conflicts with --from-source",
+                args: strs(&[
+                    "parakit",
+                    "fetch",
+                    "owner/repo",
+                    "--file",
+                    "model.gguf",
+                    "--from-source",
+                ]),
+                expect_kind: clap::error::ErrorKind::ArgumentConflict,
+            },
+            FetchRejectionCase {
+                label: "--keep-nemo still requires --from-source",
+                args: strs(&["parakit", "fetch", "--keep-nemo"]),
+                expect_kind: clap::error::ErrorKind::MissingRequiredArgument,
+            },
+        ];
 
-    #[test]
-    fn fetch_sha256_rejects_a_non_64_hex_value() {
-        let error = Cli::try_parse_from(["parakit", "fetch", "owner/repo", "--sha256", "not-hex"])
-            .expect_err("a non-hex --sha256 value must be rejected");
-        assert_eq!(error.kind(), clap::error::ErrorKind::ValueValidation);
-    }
-
-    #[test]
-    fn fetch_file_requires_a_source() {
-        let error = Cli::try_parse_from(["parakit", "fetch", "--file", "model.gguf"])
-            .expect_err("--file without a source must be rejected");
-        assert_eq!(
-            error.kind(),
-            clap::error::ErrorKind::MissingRequiredArgument
-        );
-    }
-
-    #[test]
-    fn fetch_sha256_requires_a_source() {
-        let error = Cli::try_parse_from(["parakit", "fetch", "--sha256", &"a".repeat(64)])
-            .expect_err("--sha256 without a source must be rejected");
-        assert_eq!(
-            error.kind(),
-            clap::error::ErrorKind::MissingRequiredArgument
-        );
-    }
-
-    #[test]
-    fn fetch_source_conflicts_with_from_source() {
-        let error = Cli::try_parse_from(["parakit", "fetch", "owner/repo", "--from-source"])
-            .expect_err("a positional source and --from-source must conflict");
-        assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
-    }
-
-    #[test]
-    fn fetch_file_conflicts_with_from_source() {
-        let error = Cli::try_parse_from([
-            "parakit",
-            "fetch",
-            "owner/repo",
-            "--file",
-            "model.gguf",
-            "--from-source",
-        ])
-        .expect_err("--file and --from-source must conflict");
-        assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
-    }
-
-    #[test]
-    fn fetch_keep_flags_still_require_from_source() {
-        let error = Cli::try_parse_from(["parakit", "fetch", "--keep-nemo"])
-            .expect_err("--keep-nemo without --from-source must be rejected");
-        assert_eq!(
-            error.kind(),
-            clap::error::ErrorKind::MissingRequiredArgument
-        );
+        for case in cases {
+            let error = Cli::try_parse_from(case.args.iter().cloned())
+                .expect_err(&format!("{}: expected a parse error", case.label));
+            assert_eq!(error.kind(), case.expect_kind, "{}", case.label);
+        }
     }
 }

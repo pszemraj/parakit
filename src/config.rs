@@ -349,36 +349,79 @@ mod tests {
         path
     }
 
-    #[test]
-    fn missing_file_returns_defaults() {
-        let dir = crate::test_support::fixture_root("parakit-config-test", "missing");
-        let path = dir.join("does-not-exist.toml");
-        let config = load_from_path(&path).expect("missing config file should default");
-        assert!(config.daemon.model.is_none());
-        assert!(config.daemon.device.is_none());
-        assert!(config.rules.user.is_empty());
+    /// One row of [`config_defaults_from_missing_empty_or_template_file`].
+    /// `contents: None` means the file is absent entirely (never written).
+    struct DefaultsCase {
+        label: &'static str,
+        /// Fixture directory slug; kept separate from `label` so labels can
+        /// be descriptive without producing odd directory names.
+        slug: &'static str,
+        contents: Option<&'static str>,
     }
 
     #[test]
-    fn empty_file_parses_as_defaults() {
-        let path = write_fixture("empty", "");
-        let config = load_from_path(&path).expect("empty config file should parse");
-        assert!(config.daemon.device.is_none());
-        assert!(config.cleaning.disabled_rules.is_empty());
-        assert!(config.cleaning.enabled.is_none());
-        assert!(config.cleaning.number_threshold.is_none());
-    }
+    fn config_defaults_from_missing_empty_or_template_file() {
+        // Every row asserts the same superset of default fields: the union
+        // of what missing_file_returns_defaults, empty_file_parses_as_defaults,
+        // and template_parses_as_valid_toml_with_all_defaults each checked
+        // individually before this table replaced them. Deliberate
+        // uniform-coverage increase.
+        let cases = [
+            DefaultsCase {
+                label: "missing file",
+                slug: "missing",
+                contents: None,
+            },
+            DefaultsCase {
+                label: "empty file",
+                slug: "empty",
+                contents: Some(""),
+            },
+            DefaultsCase {
+                label: "template (entirely commented out, must still parse as valid TOML)",
+                slug: "template",
+                contents: Some(TEMPLATE),
+            },
+        ];
 
-    #[test]
-    fn template_parses_as_valid_toml_with_all_defaults() {
-        // The template is entirely commented out, so it must parse to the
-        // same defaults as an empty file. This is primarily a check that
-        // the template text itself is syntactically valid TOML.
-        let path = write_fixture("template", TEMPLATE);
-        let config = load_from_path(&path).expect("template should be valid TOML");
-        assert!(config.daemon.model.is_none());
-        assert!(config.rules.user.is_empty());
-        assert!(config.cleaning.number_threshold.is_none());
+        for case in cases {
+            let path = match case.contents {
+                None => {
+                    let dir = crate::test_support::fixture_root("parakit-config-test", case.slug);
+                    dir.join("does-not-exist.toml")
+                }
+                Some(contents) => write_fixture(case.slug, contents),
+            };
+            let config = load_from_path(&path)
+                .unwrap_or_else(|e| panic!("{}: config file should parse: {e:#}", case.label));
+
+            assert!(
+                config.daemon.model.is_none(),
+                "{}: daemon.model",
+                case.label
+            );
+            assert!(
+                config.daemon.device.is_none(),
+                "{}: daemon.device",
+                case.label
+            );
+            assert!(config.rules.user.is_empty(), "{}: rules.user", case.label);
+            assert!(
+                config.cleaning.disabled_rules.is_empty(),
+                "{}: cleaning.disabled_rules",
+                case.label
+            );
+            assert!(
+                config.cleaning.enabled.is_none(),
+                "{}: cleaning.enabled",
+                case.label
+            );
+            assert!(
+                config.cleaning.number_threshold.is_none(),
+                "{}: cleaning.number_threshold",
+                case.label
+            );
+        }
     }
 
     #[test]

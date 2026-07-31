@@ -1252,76 +1252,112 @@ mod app_tests {
         assert!(!has_gpu);
     }
 
-    #[test]
-    fn native_log_filter_suppresses_info_and_debug_without_verbose() {
-        assert_eq!(
-            native_log_decision(GGML_LOG_LEVEL_DEBUG, GGML_LOG_LEVEL_WARN, true),
-            NativeLogDecision {
+    /// One [`native_log_decision`] input/output pair.
+    struct NativeLogCase {
+        label: &'static str,
+        level: i32,
+        min_level: i32,
+        last_allowed: bool,
+        expect: NativeLogDecision,
+    }
+
+    /// The 8 assertion points from the four tests this table replaces:
+    /// suppressing INFO/DEBUG without `--verbose`, keeping WARN/ERROR without
+    /// `--verbose`, passing everything with `--verbose`, and CONT following
+    /// whatever `last_allowed` was.
+    const NATIVE_LOG_CASES: &[NativeLogCase] = &[
+        NativeLogCase {
+            label: "debug suppressed without verbose",
+            level: GGML_LOG_LEVEL_DEBUG,
+            min_level: GGML_LOG_LEVEL_WARN,
+            last_allowed: true,
+            expect: NativeLogDecision {
                 allowed: false,
                 next_last_allowed: Some(false),
-            }
-        );
-        assert_eq!(
-            native_log_decision(GGML_LOG_LEVEL_INFO, GGML_LOG_LEVEL_WARN, true),
-            NativeLogDecision {
+            },
+        },
+        NativeLogCase {
+            label: "info suppressed without verbose",
+            level: GGML_LOG_LEVEL_INFO,
+            min_level: GGML_LOG_LEVEL_WARN,
+            last_allowed: true,
+            expect: NativeLogDecision {
                 allowed: false,
                 next_last_allowed: Some(false),
-            }
-        );
-    }
-
-    #[test]
-    fn native_log_filter_keeps_warnings_and_errors_without_verbose() {
-        assert_eq!(
-            native_log_decision(GGML_LOG_LEVEL_WARN, GGML_LOG_LEVEL_WARN, false),
-            NativeLogDecision {
+            },
+        },
+        NativeLogCase {
+            label: "warn kept without verbose",
+            level: GGML_LOG_LEVEL_WARN,
+            min_level: GGML_LOG_LEVEL_WARN,
+            last_allowed: false,
+            expect: NativeLogDecision {
                 allowed: true,
                 next_last_allowed: Some(true),
-            }
-        );
-        assert_eq!(
-            native_log_decision(GGML_LOG_LEVEL_ERROR, GGML_LOG_LEVEL_WARN, false),
-            NativeLogDecision {
+            },
+        },
+        NativeLogCase {
+            label: "error kept without verbose",
+            level: GGML_LOG_LEVEL_ERROR,
+            min_level: GGML_LOG_LEVEL_WARN,
+            last_allowed: false,
+            expect: NativeLogDecision {
                 allowed: true,
                 next_last_allowed: Some(true),
-            }
-        );
-    }
-
-    #[test]
-    fn native_log_filter_passes_everything_with_verbose() {
-        assert_eq!(
-            native_log_decision(GGML_LOG_LEVEL_DEBUG, GGML_LOG_LEVEL_NONE, false),
-            NativeLogDecision {
+            },
+        },
+        NativeLogCase {
+            label: "debug passes with verbose",
+            level: GGML_LOG_LEVEL_DEBUG,
+            min_level: GGML_LOG_LEVEL_NONE,
+            last_allowed: false,
+            expect: NativeLogDecision {
                 allowed: true,
                 next_last_allowed: Some(true),
-            }
-        );
-        assert_eq!(
-            native_log_decision(GGML_LOG_LEVEL_INFO, GGML_LOG_LEVEL_NONE, false),
-            NativeLogDecision {
+            },
+        },
+        NativeLogCase {
+            label: "info passes with verbose",
+            level: GGML_LOG_LEVEL_INFO,
+            min_level: GGML_LOG_LEVEL_NONE,
+            last_allowed: false,
+            expect: NativeLogDecision {
                 allowed: true,
                 next_last_allowed: Some(true),
-            }
-        );
-    }
-
-    #[test]
-    fn native_log_continuation_follows_previous_allowed_record() {
-        assert_eq!(
-            native_log_decision(GGML_LOG_LEVEL_CONT, GGML_LOG_LEVEL_WARN, false),
-            NativeLogDecision {
+            },
+        },
+        NativeLogCase {
+            label: "continuation follows a previously disallowed record",
+            level: GGML_LOG_LEVEL_CONT,
+            min_level: GGML_LOG_LEVEL_WARN,
+            last_allowed: false,
+            expect: NativeLogDecision {
                 allowed: false,
                 next_last_allowed: None,
-            }
-        );
-        assert_eq!(
-            native_log_decision(GGML_LOG_LEVEL_CONT, GGML_LOG_LEVEL_WARN, true),
-            NativeLogDecision {
+            },
+        },
+        NativeLogCase {
+            label: "continuation follows a previously allowed record",
+            level: GGML_LOG_LEVEL_CONT,
+            min_level: GGML_LOG_LEVEL_WARN,
+            last_allowed: true,
+            expect: NativeLogDecision {
                 allowed: true,
                 next_last_allowed: None,
-            }
-        );
+            },
+        },
+    ];
+
+    #[test]
+    fn native_log_decision_matrix() {
+        for case in NATIVE_LOG_CASES {
+            assert_eq!(
+                native_log_decision(case.level, case.min_level, case.last_allowed),
+                case.expect,
+                "{}",
+                case.label
+            );
+        }
     }
 
     #[test]

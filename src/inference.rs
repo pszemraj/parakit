@@ -326,9 +326,19 @@ mod tests {
 
     #[test]
     fn device_mode_labels_are_stable() {
-        assert_eq!(DeviceMode::Auto.as_str(), "auto");
-        assert_eq!(DeviceMode::Cpu.as_str(), "cpu");
-        assert_eq!(DeviceMode::Gpu.as_str(), "gpu");
+        // Exhaustive over ValueEnum::value_variants() with no wildcard arm:
+        // adding a DeviceMode variant without a matching label here is a
+        // compile error, not a silently-missed test case. Mirrors the
+        // value_variants() sweep pattern in config.rs's
+        // assert_serde_matches_clap.
+        for device in DeviceMode::value_variants() {
+            let expected = match device {
+                DeviceMode::Auto => "auto",
+                DeviceMode::Cpu => "cpu",
+                DeviceMode::Gpu => "gpu",
+            };
+            assert_eq!(device.as_str(), expected, "{device:?}");
+        }
     }
 
     #[test]
