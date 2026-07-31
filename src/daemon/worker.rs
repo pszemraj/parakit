@@ -1313,80 +1313,32 @@ mod tests {
 
     #[test]
     fn paste_failures_use_clipboard_fallback_only_when_safe() {
-        enum ErrorKind {
-            Generic(&'static str),
-            RestoreFailure,
-        }
+        let paste_error = anyhow::anyhow!("could not send paste shortcut");
+        assert!(paste_failure_uses_clipboard_fallback(
+            PasteMode::Terminal,
+            &paste_error,
+            true
+        ));
+        assert!(!paste_failure_uses_clipboard_fallback(
+            PasteMode::Terminal,
+            &paste_error,
+            false
+        ));
 
-        impl ErrorKind {
-            fn build(&self) -> anyhow::Error {
-                match self {
-                    Self::Generic(message) => anyhow::anyhow!("{message}"),
-                    Self::RestoreFailure => {
-                        anyhow::anyhow!("{}: lost", super::super::inject::CLIPBOARD_RESTORE_ERROR)
-                    }
-                }
-            }
-        }
+        let restore_error =
+            anyhow::anyhow!("{}: lost", super::super::inject::CLIPBOARD_RESTORE_ERROR);
+        assert!(!paste_failure_uses_clipboard_fallback(
+            PasteMode::Terminal,
+            &restore_error,
+            true
+        ));
 
-        struct Case {
-            name: &'static str,
-            mode: PasteMode,
-            error: ErrorKind,
-            keep_transcript_clipboard: bool,
-            expect: bool,
-        }
-
-        let cases = [
-            Case {
-                name: "terminal paste failure keeps clipboard fallback",
-                mode: PasteMode::Terminal,
-                error: ErrorKind::Generic("could not send paste shortcut"),
-                keep_transcript_clipboard: true,
-                expect: true,
-            },
-            Case {
-                name: "terminal paste failure without keep-clipboard",
-                mode: PasteMode::Terminal,
-                error: ErrorKind::Generic("could not send paste shortcut"),
-                keep_transcript_clipboard: false,
-                expect: false,
-            },
-            Case {
-                name: "restore failure disables clipboard fallback",
-                mode: PasteMode::Terminal,
-                error: ErrorKind::RestoreFailure,
-                keep_transcript_clipboard: true,
-                expect: false,
-            },
-            Case {
-                name: "direct mode never falls back to clipboard",
-                mode: PasteMode::Direct,
-                error: ErrorKind::Generic("could not type text at cursor"),
-                keep_transcript_clipboard: true,
-                expect: false,
-            },
-        ];
-
-        let failures: Vec<String> = cases
-            .iter()
-            .filter_map(|case| {
-                let error = case.error.build();
-                let actual = paste_failure_uses_clipboard_fallback(
-                    case.mode,
-                    &error,
-                    case.keep_transcript_clipboard,
-                );
-                (actual != case.expect)
-                    .then(|| format!("{}: expected {}, got {}", case.name, case.expect, actual))
-            })
-            .collect();
-        assert!(
-            failures.is_empty(),
-            "{} case(s) failed:\n{}",
-            failures.len(),
-            failures.join("\n")
-        );
+        let direct_error = anyhow::anyhow!("could not type text at cursor");
+        assert!(!paste_failure_uses_clipboard_fallback(
+            PasteMode::Direct,
+            &direct_error,
+            true
+        ));
     }
 
     #[test]

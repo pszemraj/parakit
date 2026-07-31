@@ -134,6 +134,14 @@ reasoning here and at the cited sites.
   evaluated and rejected — the getters return unrelated types, so a shared
   table needs an expectation enum plus per-type accessors that cost more
   than the per-getter tests they would replace.
+- The `classify_source`/`source_from_cli` tests in `src/fetch/hub.rs`, the
+  fetch-parse tests in `src/cli.rs`, and the paste-fallback test in
+  `src/daemon/worker.rs`: case-table conversions were applied and reverted —
+  each table roughly doubled the lines while adding no new coverage and no
+  meaningful compile-time enforcement (`SourceKind` has two variants), so
+  direct asserts are shorter and equally legible. A table here must earn
+  its scaffolding with an exhaustive expectation map over a real enum, new
+  case-points, or five-plus rows.
 
 Deferred follow-ups:
 

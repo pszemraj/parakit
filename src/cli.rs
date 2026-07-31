@@ -1420,100 +1420,58 @@ mod tests {
         }
     }
 
-    /// One row of [`fetch_parses_successfully_across_source_file_sha_and_flags`]:
-    /// asserts every field of a successfully parsed [`FetchCli`], not just
-    /// the one or two fields each replaced test used to check. Deliberate
-    /// uniform-coverage increase: fields not previously asserted in a given
-    /// scenario are pinned here to their expected default (`None`/`false`).
-    struct FetchParseCase {
-        label: &'static str,
-        args: Vec<String>,
-        expect_source: Option<&'static str>,
-        expect_file: Option<&'static str>,
-        expect_sha256: Option<String>,
-        expect_force: bool,
-        expect_from_source: bool,
+    #[test]
+    fn bare_fetch_parses_with_no_source() {
+        let fetch = fetch_from(&[]);
+        assert_eq!(fetch.source, None);
+        assert_eq!(fetch.file, None);
+        assert_eq!(fetch.sha256, None);
+        assert!(!fetch.force);
+        assert!(!fetch.from_source);
     }
 
     #[test]
-    fn fetch_parses_successfully_across_source_file_sha_and_flags() {
-        let sha_lower = "a".repeat(64);
-        let sha_upper = "A".repeat(64);
+    fn fetch_parses_a_positional_repo_source() {
+        let fetch = fetch_from(&strs(&["cstr/parakeet-tdt-0.6b-v3-GGUF"]));
+        assert_eq!(
+            fetch.source.as_deref(),
+            Some("cstr/parakeet-tdt-0.6b-v3-GGUF")
+        );
+        assert_eq!(fetch.file, None);
+        assert_eq!(fetch.sha256, None);
+        assert!(!fetch.force && !fetch.from_source);
+    }
 
-        let cases = vec![
-            FetchParseCase {
-                label: "bare fetch has no source",
-                args: strs(&[]),
-                expect_source: None,
-                expect_file: None,
-                expect_sha256: None,
-                expect_force: false,
-                expect_from_source: false,
-            },
-            FetchParseCase {
-                label: "a positional repo source parses",
-                args: strs(&["cstr/parakeet-tdt-0.6b-v3-GGUF"]),
-                expect_source: Some("cstr/parakeet-tdt-0.6b-v3-GGUF"),
-                expect_file: None,
-                expect_sha256: None,
-                expect_force: false,
-                expect_from_source: false,
-            },
-            FetchParseCase {
-                label: "source with file and sha256 parse together",
-                args: {
-                    let mut args = strs(&[
-                        "cstr/parakeet-tdt-0.6b-v3-GGUF",
-                        "--file",
-                        "parakeet-tdt-0.6b-v3-q4_k.gguf",
-                        "--sha256",
-                    ]);
-                    args.push(sha_lower.clone());
-                    args
-                },
-                expect_source: Some("cstr/parakeet-tdt-0.6b-v3-GGUF"),
-                expect_file: Some("parakeet-tdt-0.6b-v3-q4_k.gguf"),
-                expect_sha256: Some(sha_lower.clone()),
-                expect_force: false,
-                expect_from_source: false,
-            },
-            FetchParseCase {
-                label: "sha256 is normalized to lowercase",
-                args: {
-                    let mut args = strs(&["owner/repo", "--sha256"]);
-                    args.push(sha_upper.clone());
-                    args
-                },
-                expect_source: Some("owner/repo"),
-                expect_file: None,
-                expect_sha256: Some(sha_lower.clone()),
-                expect_force: false,
-                expect_from_source: false,
-            },
-        ];
+    #[test]
+    fn fetch_parses_source_with_file_and_sha256() {
+        let sha = "a".repeat(64);
+        let mut args = strs(&[
+            "cstr/parakeet-tdt-0.6b-v3-GGUF",
+            "--file",
+            "parakeet-tdt-0.6b-v3-q4_k.gguf",
+            "--sha256",
+        ]);
+        args.push(sha.clone());
+        let fetch = fetch_from(&args);
+        assert_eq!(
+            fetch.source.as_deref(),
+            Some("cstr/parakeet-tdt-0.6b-v3-GGUF")
+        );
+        assert_eq!(
+            fetch.file.as_deref(),
+            Some("parakeet-tdt-0.6b-v3-q4_k.gguf")
+        );
+        assert_eq!(fetch.sha256, Some(sha));
+        assert!(!fetch.force && !fetch.from_source);
+    }
 
-        for case in cases {
-            let fetch = fetch_from(&case.args);
-            assert_eq!(
-                fetch.source.as_deref(),
-                case.expect_source,
-                "{}: source",
-                case.label
-            );
-            assert_eq!(
-                fetch.file.as_deref(),
-                case.expect_file,
-                "{}: file",
-                case.label
-            );
-            assert_eq!(fetch.sha256, case.expect_sha256, "{}: sha256", case.label);
-            assert_eq!(fetch.force, case.expect_force, "{}: force", case.label);
-            assert_eq!(
-                fetch.from_source, case.expect_from_source,
-                "{}: from_source",
-                case.label
-            );
-        }
+    #[test]
+    fn fetch_sha256_is_normalized_to_lowercase() {
+        let mut args = strs(&["owner/repo", "--sha256"]);
+        args.push("A".repeat(64));
+        let fetch = fetch_from(&args);
+        assert_eq!(fetch.source.as_deref(), Some("owner/repo"));
+        assert_eq!(fetch.sha256, Some("a".repeat(64)));
     }
 
     struct FetchRejectionCase {
