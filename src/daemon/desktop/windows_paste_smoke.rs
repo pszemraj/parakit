@@ -4,23 +4,22 @@
 
 use anyhow::{bail, Context, Result};
 use arboard::Clipboard;
-use std::ffi::c_void;
 use std::thread;
 use std::time::{Duration, Instant};
 use windows::core::w;
-use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
-use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::Foundation::HWND;
 use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::Input::KeyboardAndMouse::SetFocus;
 use windows::Win32::UI::WindowsAndMessaging::{
-    BringWindowToTop, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
-    GetForegroundWindow, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId,
-    PeekMessageW, RegisterClassW, SetForegroundWindow, ShowWindow, TranslateMessage, CS_HREDRAW,
-    CS_VREDRAW, ES_AUTOHSCROLL, MSG, PM_REMOVE, SW_RESTORE, SW_SHOW, WINDOW_EX_STYLE, WINDOW_STYLE,
-    WNDCLASSW, WS_BORDER, WS_CHILD, WS_OVERLAPPEDWINDOW, WS_TABSTOP, WS_VISIBLE,
+    BringWindowToTop, CreateWindowExW, DestroyWindow, DispatchMessageW, GetForegroundWindow,
+    GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId, PeekMessageW,
+    SetForegroundWindow, ShowWindow, TranslateMessage, CS_HREDRAW, CS_VREDRAW, ES_AUTOHSCROLL, MSG,
+    PM_REMOVE, SW_RESTORE, SW_SHOW, WINDOW_EX_STYLE, WINDOW_STYLE, WS_BORDER, WS_CHILD,
+    WS_OVERLAPPEDWINDOW, WS_TABSTOP, WS_VISIBLE,
 };
 
 use super::inject::{restore_or_clear_clipboard, ClipboardPolicy, ClipboardSnapshot, PasteMode};
+use super::windows_clipboard_history::{hwnd_from_raw, register_window_class};
 
 const FOCUS_SETTLE: Duration = Duration::from_millis(200);
 const CLIPBOARD_SETTLE: Duration = Duration::from_millis(75);
@@ -278,32 +277,8 @@ impl TestEditWindow {
     }
 }
 
-fn hwnd_from_raw(raw: isize) -> HWND {
-    HWND(raw as *mut c_void)
-}
-
 fn register_smoke_window_class() -> Result<()> {
-    let instance = unsafe { GetModuleHandleW(None) }.context("GetModuleHandleW failed")?;
-    let class = WNDCLASSW {
-        style: CS_HREDRAW | CS_VREDRAW,
-        lpfnWndProc: Some(smoke_wnd_proc),
-        hInstance: instance.into(),
-        lpszClassName: w!("ParakitSmokeWindow"),
-        ..Default::default()
-    };
-    unsafe {
-        let _ = RegisterClassW(&class);
-    }
-    Ok(())
-}
-
-unsafe extern "system" fn smoke_wnd_proc(
-    hwnd: HWND,
-    message: u32,
-    wparam: WPARAM,
-    lparam: LPARAM,
-) -> LRESULT {
-    unsafe { DefWindowProcW(hwnd, message, wparam, lparam) }
+    register_window_class(w!("ParakitSmokeWindow"), CS_HREDRAW | CS_VREDRAW)
 }
 
 struct ForegroundThreadAttach {
