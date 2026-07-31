@@ -47,29 +47,19 @@ pub(crate) fn normalize_spaced_acronyms(input: &str) -> TransformResult {
         Regex::new(r"\b[A-Z](?: [A-Z])+\b").expect("spaced acronym regex must compile")
     });
 
-    let mut output = String::with_capacity(input.len());
-    let mut last_end = 0;
-    let mut matches = 0;
-    for found in re.find_iter(input) {
-        output.push_str(&input[last_end..found.start()]);
-        output.extend(
-            found
+    let replacements: Vec<(usize, usize, String)> = re
+        .find_iter(input)
+        .map(|found| {
+            let collapsed: String = found
                 .as_str()
                 .chars()
-                .filter(|character| character.is_ascii_uppercase()),
-        );
-        last_end = found.end();
-        matches += 1;
-    }
+                .filter(|character| character.is_ascii_uppercase())
+                .collect();
+            (found.start(), found.end(), collapsed)
+        })
+        .collect();
 
-    if matches == 0 {
-        return unchanged(input);
-    }
-    output.push_str(&input[last_end..]);
-    TransformResult {
-        text: output,
-        matches,
-    }
+    apply_replacements(input, replacements)
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -343,41 +333,36 @@ pub(crate) fn normalize_numeric_identifier_groups(input: &str) -> TransformResul
             .expect("numeric identifier group regex must compile")
     });
 
-    let mut output = String::with_capacity(input.len());
-    let mut last_end = 0;
-    let mut matches = 0;
-
+    let mut replacements = Vec::new();
     for found in re.find_iter(input) {
         let mut parts = found.as_str().split_ascii_whitespace();
         let prefix = parts.next().expect("identifier match has a prefix");
         let groups: Vec<&str> = parts.collect();
+        // Keep in sync with `compact-short-identifier` in defaults.rs, whose
+        // `[B-HJ-Z]` class gap encodes this same A/I-ambiguity exclusion for
+        // single-letter prefixes over a different (single-group) input shape.
         let short_prefix = prefix.len() <= 2 && !matches!(prefix, "A" | "I");
         let four_digit_model =
             prefix.len() >= 3 && groups.len() == 2 && groups.iter().all(|group| group.len() == 2);
         if !short_prefix && !four_digit_model {
+            // Equivalent to not pushing a replacement for this match: the
+            // gap copy for the next pushed replacement (or the final tail)
+            // naturally re-includes this span verbatim.
             continue;
         }
 
-        output.push_str(&input[last_end..found.start()]);
-        output.push_str(prefix);
+        let mut replacement = String::with_capacity(found.as_str().len());
+        replacement.push_str(prefix);
         if four_digit_model {
-            output.push(' ');
+            replacement.push(' ');
         }
         for group in groups {
-            output.push_str(group);
+            replacement.push_str(group);
         }
-        last_end = found.end();
-        matches += 1;
+        replacements.push((found.start(), found.end(), replacement));
     }
 
-    if matches == 0 {
-        return unchanged(input);
-    }
-    output.push_str(&input[last_end..]);
-    TransformResult {
-        text: output,
-        matches,
-    }
+    apply_replacements(input, replacements)
 }
 
 /// Join a numeric value (optionally with additional space-separated digit
@@ -407,29 +392,19 @@ pub(crate) fn normalize_magnitude_suffixes(input: &str) -> TransformResult {
             .expect("numeric magnitude regex must compile")
     });
 
-    let mut output = String::with_capacity(input.len());
-    let mut last_end = 0;
-    let mut matches = 0;
-    for found in re.find_iter(input) {
-        output.push_str(&input[last_end..found.start()]);
-        output.extend(
-            found
+    let replacements: Vec<(usize, usize, String)> = re
+        .find_iter(input)
+        .map(|found| {
+            let joined: String = found
                 .as_str()
                 .chars()
-                .filter(|character| !character.is_ascii_whitespace()),
-        );
-        last_end = found.end();
-        matches += 1;
-    }
+                .filter(|character| !character.is_ascii_whitespace())
+                .collect();
+            (found.start(), found.end(), joined)
+        })
+        .collect();
 
-    if matches == 0 {
-        return unchanged(input);
-    }
-    output.push_str(&input[last_end..]);
-    TransformResult {
-        text: output,
-        matches,
-    }
+    apply_replacements(input, replacements)
 }
 
 fn apply_replacements(input: &str, replacements: Vec<(usize, usize, String)>) -> TransformResult {

@@ -184,6 +184,9 @@ pub(crate) const DEFAULT_RULES: &[Rule] = &[
         r#"\b[Vv]\s+(\d+(?:\.\d+)+)\b"#,
         "v$1"
     ),
+    // The `[B-HJ-Z]` class gap excludes standalone "A" and "I" for the same
+    // A/I-ambiguity reason as the `short_prefix` check in
+    // `passes::normalize_numeric_identifier_groups`; keep both in agreement.
     regex_rule!(
         "compact-short-identifier",
         "Join one unambiguous uppercase letter or any two-letter prefix to a number",

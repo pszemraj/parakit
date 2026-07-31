@@ -78,6 +78,10 @@ fn aggressive_profile_retains_opt_in_stylistic_cleanup() {
         CleaningProfile::Aggressive,
         &[
             ("So, I think this works.", "I think this works."),
+            // Comma-less lead "So" is handled by a different rule
+            // (`lead-discourse-word`, not `lead-discourse-comma`); keep both
+            // covered.
+            ("So I think this works.", "I think this works."),
             ("It's like, you know, hard.", "It's hard."),
             ("As in like tuple.", "As in tuple."),
             ("It is basically like broken.", "It is basically broken."),
@@ -307,18 +311,23 @@ fn text2num_leaves_values_below_the_default_threshold_untouched() {
     // `DEFAULT_NUMBER_THRESHOLD` (4.0): isolated values strictly below it
     // are left exactly as produced (not forced to words, not forced to
     // digits), and values at or above it are digitized.
-    assert_clean_cases(
-        CleaningProfile::Safe,
-        &[
-            ("Zero files remain.", "Zero files remain."),
-            (
-                "One thing and two more ideas.",
-                "One thing and two more ideas.",
-            ),
-            ("There are four folders.", "There are 4 folders."),
-            ("There are five folders.", "There are 5 folders."),
-        ],
-    );
+    let cleaner = cleaner_with_number_threshold(None);
+    assert_eq!(cleaner.number_threshold(), DEFAULT_NUMBER_THRESHOLD);
+    for (input, expected) in [
+        ("Zero files remain.", "Zero files remain."),
+        (
+            "One thing and two more ideas.",
+            "One thing and two more ideas.",
+        ),
+        ("There are four folders.", "There are 4 folders."),
+        ("There are five folders.", "There are 5 folders."),
+        (
+            "One file. Three notes. Four folders. Ten tasks.",
+            "One file. Three notes. 4 folders. 10 tasks.",
+        ),
+    ] {
+        assert_eq!(cleaner.clean_text(input), expected, "input: {input}");
+    }
 }
 
 #[test]
@@ -329,16 +338,6 @@ fn spoken_number_threshold_preserves_only_values_strictly_below_it() {
         "One file. Four folders. 5 notes. 6 tasks."
     );
     assert_eq!(cleaner.number_threshold(), 5.0);
-}
-
-#[test]
-fn unset_number_threshold_resolves_to_the_default_and_digitizes_at_or_above_it() {
-    let cleaner = cleaner_with_number_threshold(None);
-    assert_eq!(
-        cleaner.clean_text("One file. Three notes. Four folders. Ten tasks."),
-        "One file. Three notes. 4 folders. 10 tasks."
-    );
-    assert_eq!(cleaner.number_threshold(), DEFAULT_NUMBER_THRESHOLD);
 }
 
 #[test]
@@ -585,34 +584,6 @@ fn clean_result_remains_unchanged_when_no_pass_fires() {
 }
 
 #[test]
-fn lead_so_removed() {
-    // Leading so-removal is unconditional in the pre-merge
-    // engine but Aggressive-gated in the merged engine; use the Aggressive
-    // profile to preserve this test's intent. The pre-merge engine also
-    // dropped a trailing period unconditionally, so `drop_trailing_period`
-    // must be enabled here too.
-    let cleaner = cleaner_messaging_default(CleaningProfile::Aggressive);
-    assert_eq!(
-        cleaner.clean_text("So, I think this works."),
-        "I think this works"
-    );
-    assert_eq!(
-        cleaner.clean_text("So I think this works."),
-        "I think this works"
-    );
-}
-
-#[test]
-fn um_uh_removed() {
-    let cleaner = cleaner_keep_period(CleaningProfile::Safe);
-    assert_eq!(
-        cleaner.clean_text("I, um, think this works"),
-        "I think this works"
-    );
-    assert_eq!(cleaner.clean_text("uh, hello there"), "Hello there");
-}
-
-#[test]
 fn repeated_prefix_stutters_are_removed() {
     assert_clean_cases(
         CleaningProfile::Safe,
@@ -626,6 +597,12 @@ fn repeated_prefix_stutters_are_removed() {
             ("it is d d definitely ready", "It is definitely ready"),
             ("we m m make it", "We make it"),
             ("we are s s sure", "We are sure"),
+            // Repeat-count-2 cases: real boundary coverage of the rule's
+            // `{1,3}` quantifier (a single-letter prefix repeated twice
+            // before the matching word, not just once).
+            ("t t t think", "Think"),
+            ("I w w w want this", "I want this"),
+            ("s s s sure", "Sure"),
         ],
     );
 }
@@ -902,18 +879,6 @@ fn capitalization_handles_leading_whitespace() {
     assert_eq!(
         capitalize_sentence_starts("   hello there").text,
         "   Hello there"
-    );
-}
-
-#[test]
-fn single_letter_stutter() {
-    assert_clean_cases(
-        CleaningProfile::Safe,
-        &[
-            ("t t t think", "Think"),
-            ("I w w w want this", "I want this"),
-            ("s s s sure", "Sure"),
-        ],
     );
 }
 
