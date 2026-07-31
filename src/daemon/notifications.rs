@@ -156,30 +156,63 @@ mod tests {
     use super::*;
 
     #[test]
-    fn applescript_quote_escapes_quotes_and_backslashes() {
-        assert_eq!(applescript_quote(r#"say "hi""#), r#"say \"hi\""#);
-        assert_eq!(applescript_quote(r"C:\Users\me"), r"C:\\Users\\me");
-        assert_eq!(
-            applescript_quote(r#"mixed \ and " chars"#),
-            r#"mixed \\ and \" chars"#
+    fn applescript_quote_matrix() {
+        struct Case {
+            name: &'static str,
+            input: &'static str,
+            expect: &'static str,
+        }
+
+        let cases = [
+            Case {
+                name: "escapes double quotes",
+                input: r#"say "hi""#,
+                expect: r#"say \"hi\""#,
+            },
+            Case {
+                name: "escapes backslashes",
+                input: r"C:\Users\me",
+                expect: r"C:\\Users\\me",
+            },
+            Case {
+                name: "escapes mixed quotes and backslashes",
+                input: r#"mixed \ and " chars"#,
+                expect: r#"mixed \\ and \" chars"#,
+            },
+            Case {
+                name: "passes through unicode",
+                input: "héllo wörld 你好",
+                expect: "héllo wörld 你好",
+            },
+            Case {
+                name: "escapes line endings",
+                input: "first\nsecond\rthird\r\nfourth",
+                expect: r"first\nsecond\rthird\r\nfourth",
+            },
+            Case {
+                name: "leaves plain text untouched",
+                input: "Transcript copied",
+                expect: "Transcript copied",
+            },
+        ];
+
+        let failures: Vec<String> = cases
+            .iter()
+            .filter_map(|case| {
+                let actual = applescript_quote(case.input);
+                (actual != case.expect).then(|| {
+                    format!(
+                        "{}: expected {:?}, got {:?}",
+                        case.name, case.expect, actual
+                    )
+                })
+            })
+            .collect();
+        assert!(
+            failures.is_empty(),
+            "{} case(s) failed:\n{}",
+            failures.len(),
+            failures.join("\n")
         );
-    }
-
-    #[test]
-    fn applescript_quote_passes_through_unicode() {
-        assert_eq!(applescript_quote("héllo wörld 你好"), "héllo wörld 你好");
-    }
-
-    #[test]
-    fn applescript_quote_escapes_line_endings() {
-        assert_eq!(
-            applescript_quote("first\nsecond\rthird\r\nfourth"),
-            r"first\nsecond\rthird\r\nfourth"
-        );
-    }
-
-    #[test]
-    fn applescript_quote_leaves_plain_text_untouched() {
-        assert_eq!(applescript_quote("Transcript copied"), "Transcript copied");
     }
 }

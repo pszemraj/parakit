@@ -2013,39 +2013,115 @@ mod windows_pipe {
 mod tests {
     use super::*;
 
+    #[cfg(any(unix, target_os = "windows"))]
     #[test]
-    fn insertion_lock_commands_use_synchronous_transaction_timeout() {
-        assert_eq!(
-            IpcCommand::CopyLast { index: 0 }.response_timeout(),
-            IPC_INSERT_RESPONSE_TIMEOUT
-        );
-        assert_eq!(
+    fn ipc_command_response_timeout_and_stale_hint_matrix() {
+        /// Expected `IpcCommand::response_timeout()` for `command`.
+        ///
+        /// Exhaustive with no wildcard arm: a new `IpcCommand` variant fails
+        /// compilation here until this function states its response-timeout
+        /// budget. This also closes a real coverage gap: `Stop` and
+        /// `History` were never asserted before this matrix.
+        fn expected_response_timeout(command: &IpcCommand) -> Duration {
+            match command {
+                IpcCommand::CopyLast { .. } | IpcCommand::TestPaste { .. } => {
+                    IPC_INSERT_RESPONSE_TIMEOUT
+                }
+                IpcCommand::Status | IpcCommand::Stop | IpcCommand::History { .. } => {
+                    IPC_TRANSPORT_TIMEOUT
+                }
+            }
+        }
+
+        /// Expected `stale_daemon_response_hint()` substrings for `command`.
+        ///
+        /// Exhaustive with no wildcard arm, mirroring
+        /// `expected_response_timeout`.
+        fn expected_stale_hint_substrings(command: &IpcCommand) -> Option<&'static [&'static str]> {
+            match command {
+                IpcCommand::CopyLast { .. } => Some(&["parakit stop", "predates this CLI"]),
+                // Status/History are additive-compatible (see the doc
+                // comment on `stale_daemon_response_hint`) and must not get
+                // this wording.
+                IpcCommand::Status
+                | IpcCommand::Stop
+                | IpcCommand::History { .. }
+                | IpcCommand::TestPaste { .. } => None,
+            }
+        }
+
+        let commands = [
+            IpcCommand::Status,
+            IpcCommand::Stop,
+            IpcCommand::History { limit: None },
+            IpcCommand::CopyLast { index: 0 },
             IpcCommand::TestPaste {
                 text: "test".to_string(),
-            }
-            .response_timeout(),
-            IPC_INSERT_RESPONSE_TIMEOUT
+            },
+        ];
+
+        let failures: Vec<String> = commands
+            .iter()
+            .filter_map(|command| {
+                let expected_timeout = expected_response_timeout(command);
+                let actual_timeout = command.response_timeout();
+                if actual_timeout != expected_timeout {
+                    return Some(format!(
+                        "{command:?} timeout: expected {expected_timeout:?}, got {actual_timeout:?}"
+                    ));
+                }
+
+                let hint = stale_daemon_response_hint(command);
+                match (expected_stale_hint_substrings(command), hint) {
+                    (None, None) => {}
+                    (None, Some(hint)) => {
+                        return Some(format!(
+                            "{command:?} hint: expected None, got Some({hint:?})"
+                        ));
+                    }
+                    (Some(_), None) => {
+                        return Some(format!("{command:?} hint: expected Some(..), got None"));
+                    }
+                    (Some(substrings), Some(hint)) => {
+                        for substring in substrings {
+                            if !hint.contains(substring) {
+                                return Some(format!(
+                                    "{command:?} hint {hint:?}: missing substring {substring:?}"
+                                ));
+                            }
+                        }
+                    }
+                }
+
+                None
+            })
+            .collect();
+
+        assert!(
+            failures.is_empty(),
+            "{} case(s) failed:\n{}",
+            failures.len(),
+            failures.join("\n")
         );
-        assert_eq!(IpcCommand::Status.response_timeout(), IPC_TRANSPORT_TIMEOUT);
+    }
 
-        #[cfg(target_os = "macos")]
-        {
-            let acknowledgement_budget = std::cmp::max(
-                crate::daemon::macos::pasteboard::AX_CONFIRM_DEADLINE,
-                crate::daemon::macos::pasteboard::UNVERIFIED_GRACE,
-            );
-            let transaction_wait_budget = crate::daemon::macos::PASTE_MODIFIER_RELEASE_TIMEOUT
-                + crate::daemon::desktop::inject::MACOS_CLIPBOARD_SETTLE_DELAY
-                + acknowledgement_budget;
-            let queued_then_own_transaction_budget =
-                transaction_wait_budget + transaction_wait_budget;
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn insertion_response_timeout_covers_queued_macos_paste_transaction() {
+        let acknowledgement_budget = std::cmp::max(
+            crate::daemon::macos::pasteboard::AX_CONFIRM_DEADLINE,
+            crate::daemon::macos::pasteboard::UNVERIFIED_GRACE,
+        );
+        let transaction_wait_budget = crate::daemon::macos::PASTE_MODIFIER_RELEASE_TIMEOUT
+            + crate::daemon::desktop::inject::MACOS_CLIPBOARD_SETTLE_DELAY
+            + acknowledgement_budget;
+        let queued_then_own_transaction_budget = transaction_wait_budget + transaction_wait_budget;
 
-            assert!(
-                IPC_INSERT_RESPONSE_TIMEOUT > queued_then_own_transaction_budget,
-                "IPC insertion response timeout must cover one queued macOS paste transaction \
-                 plus the command's own transaction"
-            );
-        }
+        assert!(
+            IPC_INSERT_RESPONSE_TIMEOUT > queued_then_own_transaction_budget,
+            "IPC insertion response timeout must cover one queued macOS paste transaction \
+             plus the command's own transaction"
+        );
     }
 
     #[test]
@@ -2066,24 +2142,72 @@ mod tests {
     }
 
     #[test]
-    fn remember_transcript_evicts_oldest_beyond_history_limit() {
-        let state = SharedState::with_history_limit(2);
-        state.remember_transcript("first".to_string());
-        state.remember_transcript("second".to_string());
-        state.remember_transcript("third".to_string());
+    fn history_snapshot_matrix() {
+        struct Case {
+            name: &'static str,
+            history_limit: usize,
+            remembered: &'static [&'static str],
+            snapshot_limit: Option<usize>,
+            expect: &'static [(usize, &'static str)],
+        }
 
-        let entries = state.history_snapshot(None);
-        assert_eq!(entries.len(), 2);
-        assert_eq!(entries[0].preview, "third");
-        assert_eq!(entries[1].preview, "second");
-    }
+        let cases = [
+            Case {
+                name: "evicts oldest beyond history limit",
+                history_limit: 2,
+                remembered: &["first", "second", "third"],
+                snapshot_limit: None,
+                expect: &[(1, "third"), (2, "second")],
+            },
+            Case {
+                name: "history limit zero remembers nothing",
+                history_limit: 0,
+                remembered: &["should not be kept"],
+                snapshot_limit: None,
+                expect: &[],
+            },
+            Case {
+                name: "orders newest first with one-based index",
+                history_limit: DEFAULT_TRANSCRIPT_HISTORY,
+                remembered: &["oldest", "middle", "newest"],
+                snapshot_limit: None,
+                expect: &[(1, "newest"), (2, "middle"), (3, "oldest")],
+            },
+            Case {
+                name: "respects snapshot limit",
+                history_limit: DEFAULT_TRANSCRIPT_HISTORY,
+                remembered: &["one", "two", "three"],
+                snapshot_limit: Some(2),
+                expect: &[(1, "three"), (2, "two")],
+            },
+        ];
 
-    #[test]
-    fn history_limit_zero_remembers_nothing() {
-        let state = SharedState::with_history_limit(0);
-        state.remember_transcript("should not be kept".to_string());
-
-        assert!(state.history_snapshot(None).is_empty());
+        let failures: Vec<String> = cases
+            .iter()
+            .filter_map(|case| {
+                let state = SharedState::with_history_limit(case.history_limit);
+                for text in case.remembered {
+                    state.remember_transcript((*text).to_string());
+                }
+                let entries = state.history_snapshot(case.snapshot_limit);
+                let actual: Vec<(usize, &str)> = entries
+                    .iter()
+                    .map(|entry| (entry.index, entry.preview.as_str()))
+                    .collect();
+                (actual.as_slice() != case.expect).then(|| {
+                    format!(
+                        "{}: expected {:?}, got {:?}",
+                        case.name, case.expect, actual
+                    )
+                })
+            })
+            .collect();
+        assert!(
+            failures.is_empty(),
+            "{} case(s) failed:\n{}",
+            failures.len(),
+            failures.join("\n")
+        );
     }
 
     #[cfg(any(unix, target_os = "windows"))]
@@ -2099,14 +2223,89 @@ mod tests {
 
     #[cfg(any(unix, target_os = "windows"))]
     #[test]
-    fn resolve_transcript_reports_history_disabled_first() {
-        let state = SharedState::with_history_limit(0);
+    fn resolve_transcript_matrix() {
+        struct Case {
+            name: &'static str,
+            /// `None` uses `SharedState::new()`'s default history limit.
+            history_limit: Option<usize>,
+            remembered: &'static [&'static str],
+            index: usize,
+            expect: Result<&'static str, &'static str>,
+        }
 
-        let err = state.resolve_transcript(0).unwrap_err();
+        let cases = [
+            Case {
+                name: "history disabled reported first",
+                history_limit: Some(0),
+                remembered: &[],
+                index: 0,
+                expect: Err("transcript history is disabled (daemon.transcript_history = 0)"),
+            },
+            Case {
+                name: "empty history when enabled but unused",
+                history_limit: None,
+                remembered: &[],
+                index: 0,
+                expect: Err("no transcript has been captured in this daemon session"),
+            },
+            Case {
+                name: "out of range index singular",
+                history_limit: None,
+                remembered: &["only one"],
+                index: 1,
+                expect: Err("only 1 transcript remembered in this daemon session"),
+            },
+            Case {
+                name: "out of range index plural",
+                history_limit: None,
+                remembered: &["only one", "second"],
+                index: 5,
+                expect: Err("only 2 transcripts remembered in this daemon session"),
+            },
+            Case {
+                name: "in range index zero returns newest",
+                history_limit: None,
+                remembered: &["oldest", "newest"],
+                index: 0,
+                expect: Ok("newest"),
+            },
+            Case {
+                name: "in range index one returns oldest",
+                history_limit: None,
+                remembered: &["oldest", "newest"],
+                index: 1,
+                expect: Ok("oldest"),
+            },
+        ];
 
-        assert_eq!(
-            err.to_string(),
-            "transcript history is disabled (daemon.transcript_history = 0)"
+        let failures: Vec<String> = cases
+            .iter()
+            .filter_map(|case| {
+                let state = match case.history_limit {
+                    Some(limit) => SharedState::with_history_limit(limit),
+                    None => SharedState::new(),
+                };
+                for text in case.remembered {
+                    state.remember_transcript((*text).to_string());
+                }
+                let actual = state
+                    .resolve_transcript(case.index)
+                    .map_err(|err| err.to_string());
+                let expect_owned: Result<String, String> =
+                    case.expect.map(str::to_string).map_err(str::to_string);
+                (actual != expect_owned).then(|| {
+                    format!(
+                        "{}: expected {:?}, got {:?}",
+                        case.name, expect_owned, actual
+                    )
+                })
+            })
+            .collect();
+        assert!(
+            failures.is_empty(),
+            "{} case(s) failed:\n{}",
+            failures.len(),
+            failures.join("\n")
         );
     }
 
@@ -2123,80 +2322,6 @@ mod tests {
             "transcript history is disabled (daemon.transcript_history = 0)"
         );
         assert!(SharedState::new().ensure_history_enabled().is_ok());
-    }
-
-    #[cfg(any(unix, target_os = "windows"))]
-    #[test]
-    fn resolve_transcript_reports_empty_history_when_enabled_but_unused() {
-        let state = SharedState::new();
-
-        let err = state.resolve_transcript(0).unwrap_err();
-
-        assert_eq!(
-            err.to_string(),
-            "no transcript has been captured in this daemon session"
-        );
-    }
-
-    #[cfg(any(unix, target_os = "windows"))]
-    #[test]
-    fn resolve_transcript_reports_out_of_range_index_with_correct_plural() {
-        let state = SharedState::new();
-        state.remember_transcript("only one".to_string());
-
-        let err = state.resolve_transcript(1).unwrap_err();
-        assert_eq!(
-            err.to_string(),
-            "only 1 transcript remembered in this daemon session"
-        );
-
-        state.remember_transcript("second".to_string());
-        let err = state.resolve_transcript(5).unwrap_err();
-        assert_eq!(
-            err.to_string(),
-            "only 2 transcripts remembered in this daemon session"
-        );
-    }
-
-    #[cfg(any(unix, target_os = "windows"))]
-    #[test]
-    fn resolve_transcript_returns_the_requested_entry_when_in_range() {
-        let state = SharedState::new();
-        state.remember_transcript("oldest".to_string());
-        state.remember_transcript("newest".to_string());
-
-        assert_eq!(state.resolve_transcript(0).unwrap(), "newest");
-        assert_eq!(state.resolve_transcript(1).unwrap(), "oldest");
-    }
-
-    #[test]
-    fn history_snapshot_orders_newest_first_with_one_based_index() {
-        let state = SharedState::new();
-        state.remember_transcript("oldest".to_string());
-        state.remember_transcript("middle".to_string());
-        state.remember_transcript("newest".to_string());
-
-        let entries = state.history_snapshot(None);
-        assert_eq!(entries.len(), 3);
-        assert_eq!(entries[0].index, 1);
-        assert_eq!(entries[0].preview, "newest");
-        assert_eq!(entries[1].index, 2);
-        assert_eq!(entries[1].preview, "middle");
-        assert_eq!(entries[2].index, 3);
-        assert_eq!(entries[2].preview, "oldest");
-    }
-
-    #[test]
-    fn history_snapshot_respects_limit() {
-        let state = SharedState::new();
-        state.remember_transcript("one".to_string());
-        state.remember_transcript("two".to_string());
-        state.remember_transcript("three".to_string());
-
-        let entries = state.history_snapshot(Some(2));
-        assert_eq!(entries.len(), 2);
-        assert_eq!(entries[0].preview, "three");
-        assert_eq!(entries[1].preview, "two");
     }
 
     #[test]
@@ -2475,29 +2600,5 @@ mod tests {
         let command = parse_command(r#"{"copy_last":{"index":2}}"#)
             .expect("current copy_last encoding should still parse");
         assert!(matches!(command, IpcCommand::CopyLast { index: 2 }));
-    }
-
-    #[cfg(any(unix, target_os = "windows"))]
-    #[test]
-    fn stale_daemon_response_hint_only_applies_to_copy_last() {
-        // Status/History are additive-compatible (see the doc comment on
-        // `stale_daemon_response_hint`) and must not get this wording.
-        assert!(stale_daemon_response_hint(&IpcCommand::CopyLast { index: 0 }).is_some());
-        assert!(stale_daemon_response_hint(&IpcCommand::Status).is_none());
-        assert!(stale_daemon_response_hint(&IpcCommand::Stop).is_none());
-        assert!(stale_daemon_response_hint(&IpcCommand::History { limit: None }).is_none());
-        assert!(stale_daemon_response_hint(&IpcCommand::TestPaste {
-            text: "x".to_string(),
-        })
-        .is_none());
-    }
-
-    #[cfg(any(unix, target_os = "windows"))]
-    #[test]
-    fn stale_daemon_response_hint_names_the_restart_fix() {
-        let hint = stale_daemon_response_hint(&IpcCommand::CopyLast { index: 0 })
-            .expect("copy_last should carry a hint");
-        assert!(hint.contains("parakit stop"), "{hint}");
-        assert!(hint.contains("predates this CLI"), "{hint}");
     }
 }

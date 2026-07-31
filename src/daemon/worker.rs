@@ -1313,32 +1313,80 @@ mod tests {
 
     #[test]
     fn paste_failures_use_clipboard_fallback_only_when_safe() {
-        let paste_error = anyhow::anyhow!("could not send paste shortcut");
-        assert!(paste_failure_uses_clipboard_fallback(
-            PasteMode::Terminal,
-            &paste_error,
-            true
-        ));
-        assert!(!paste_failure_uses_clipboard_fallback(
-            PasteMode::Terminal,
-            &paste_error,
-            false
-        ));
+        enum ErrorKind {
+            Generic(&'static str),
+            RestoreFailure,
+        }
 
-        let restore_error =
-            anyhow::anyhow!("{}: lost", super::super::inject::CLIPBOARD_RESTORE_ERROR);
-        assert!(!paste_failure_uses_clipboard_fallback(
-            PasteMode::Terminal,
-            &restore_error,
-            true
-        ));
+        impl ErrorKind {
+            fn build(&self) -> anyhow::Error {
+                match self {
+                    Self::Generic(message) => anyhow::anyhow!("{message}"),
+                    Self::RestoreFailure => {
+                        anyhow::anyhow!("{}: lost", super::super::inject::CLIPBOARD_RESTORE_ERROR)
+                    }
+                }
+            }
+        }
 
-        let direct_error = anyhow::anyhow!("could not type text at cursor");
-        assert!(!paste_failure_uses_clipboard_fallback(
-            PasteMode::Direct,
-            &direct_error,
-            true
-        ));
+        struct Case {
+            name: &'static str,
+            mode: PasteMode,
+            error: ErrorKind,
+            keep_transcript_clipboard: bool,
+            expect: bool,
+        }
+
+        let cases = [
+            Case {
+                name: "terminal paste failure keeps clipboard fallback",
+                mode: PasteMode::Terminal,
+                error: ErrorKind::Generic("could not send paste shortcut"),
+                keep_transcript_clipboard: true,
+                expect: true,
+            },
+            Case {
+                name: "terminal paste failure without keep-clipboard",
+                mode: PasteMode::Terminal,
+                error: ErrorKind::Generic("could not send paste shortcut"),
+                keep_transcript_clipboard: false,
+                expect: false,
+            },
+            Case {
+                name: "restore failure disables clipboard fallback",
+                mode: PasteMode::Terminal,
+                error: ErrorKind::RestoreFailure,
+                keep_transcript_clipboard: true,
+                expect: false,
+            },
+            Case {
+                name: "direct mode never falls back to clipboard",
+                mode: PasteMode::Direct,
+                error: ErrorKind::Generic("could not type text at cursor"),
+                keep_transcript_clipboard: true,
+                expect: false,
+            },
+        ];
+
+        let failures: Vec<String> = cases
+            .iter()
+            .filter_map(|case| {
+                let error = case.error.build();
+                let actual = paste_failure_uses_clipboard_fallback(
+                    case.mode,
+                    &error,
+                    case.keep_transcript_clipboard,
+                );
+                (actual != case.expect)
+                    .then(|| format!("{}: expected {}, got {}", case.name, case.expect, actual))
+            })
+            .collect();
+        assert!(
+            failures.is_empty(),
+            "{} case(s) failed:\n{}",
+            failures.len(),
+            failures.join("\n")
+        );
     }
 
     #[test]
@@ -1347,24 +1395,49 @@ mod tests {
             InsertReport::placeholder(outcome, false)
         }
 
-        assert!(insertion_result_remembers_transcript(&Ok(report(
-            InsertOutcome::Pasted
-        ))));
-        assert!(insertion_result_remembers_transcript(&Ok(report(
-            InsertOutcome::PastedUnverified
-        ))));
-        assert!(insertion_result_remembers_transcript(&Ok(report(
-            InsertOutcome::CopiedOnly
-        ))));
-        assert!(insertion_result_remembers_transcript(&Ok(report(
-            InsertOutcome::Blocked
-        ))));
+        /// Expected `insertion_result_remembers_transcript` result for
+        /// `outcome`.
+        ///
+        /// Exhaustive with no wildcard arm: a new `InsertOutcome` variant
+        /// fails compilation here until this function states its
+        /// expectation.
+        fn expected_remembers_transcript(outcome: InsertOutcome) -> bool {
+            match outcome {
+                InsertOutcome::Pasted
+                | InsertOutcome::PastedUnverified
+                | InsertOutcome::CopiedOnly
+                | InsertOutcome::Blocked => true,
+                InsertOutcome::Skipped => false,
+            }
+        }
+
+        let outcomes = [
+            InsertOutcome::Pasted,
+            InsertOutcome::PastedUnverified,
+            InsertOutcome::CopiedOnly,
+            InsertOutcome::Blocked,
+            InsertOutcome::Skipped,
+        ];
+
+        let failures: Vec<String> = outcomes
+            .iter()
+            .filter_map(|&outcome| {
+                let expected = expected_remembers_transcript(outcome);
+                let actual = insertion_result_remembers_transcript(&Ok(report(outcome)));
+                (actual != expected)
+                    .then(|| format!("{outcome:?}: expected {expected}, got {actual}"))
+            })
+            .collect();
+        assert!(
+            failures.is_empty(),
+            "{} case(s) failed:\n{}",
+            failures.len(),
+            failures.join("\n")
+        );
+
         assert!(insertion_result_remembers_transcript(&Err(
             anyhow::anyhow!("paste failed")
         )));
-        assert!(!insertion_result_remembers_transcript(&Ok(report(
-            InsertOutcome::Skipped
-        ))));
     }
 
     #[test]
@@ -1437,18 +1510,58 @@ mod tests {
             }
         }
 
-        assert!(!report(InsertOutcome::Pasted, true).needs_alert());
-        assert!(!report(InsertOutcome::PastedUnverified, true).needs_alert());
-        assert!(!report(InsertOutcome::Skipped, false).needs_alert());
-        assert!(report(InsertOutcome::Blocked, false).needs_alert());
-        assert!(report(InsertOutcome::Blocked, true).needs_alert());
+        /// Expected `needs_alert()` results for `outcome`, as
+        /// `(paste_event_posted, expected)` pairs.
+        ///
+        /// Exhaustive with no wildcard arm: a new `InsertOutcome` variant
+        /// fails compilation here until this function states its alert
+        /// expectation.
+        fn needs_alert_cases(outcome: InsertOutcome) -> &'static [(bool, bool)] {
+            match outcome {
+                InsertOutcome::Pasted => &[(true, false)],
+                InsertOutcome::PastedUnverified => &[(true, false)],
+                InsertOutcome::Skipped => &[(false, false)],
+                InsertOutcome::Blocked => &[(false, true), (true, true)],
+                InsertOutcome::CopiedOnly => &[
+                    // pre-chord CopiedOnly (guard-blocked, focus changed, or
+                    // unsafe modifiers) stays quiet
+                    (false, false),
+                    // post-chord CopiedOnly (chord sent but never confirmed)
+                    // must still alert
+                    (true, true),
+                ],
+            }
+        }
+
+        let outcomes = [
+            InsertOutcome::Pasted,
+            InsertOutcome::PastedUnverified,
+            InsertOutcome::CopiedOnly,
+            InsertOutcome::Blocked,
+            InsertOutcome::Skipped,
+        ];
+
+        let failures: Vec<String> = outcomes
+            .iter()
+            .flat_map(|&outcome| {
+                needs_alert_cases(outcome)
+                    .iter()
+                    .filter_map(move |&(paste_event_posted, expected)| {
+                        let actual = report(outcome, paste_event_posted).needs_alert();
+                        (actual != expected).then(|| {
+                            format!(
+                                "{outcome:?} paste_event_posted={paste_event_posted}: expected {expected}, got {actual}"
+                            )
+                        })
+                    })
+            })
+            .collect();
+
         assert!(
-            !report(InsertOutcome::CopiedOnly, false).needs_alert(),
-            "pre-chord CopiedOnly (guard-blocked, focus changed, or unsafe modifiers) stays quiet"
-        );
-        assert!(
-            report(InsertOutcome::CopiedOnly, true).needs_alert(),
-            "post-chord CopiedOnly (chord sent but never confirmed) must still alert"
+            failures.is_empty(),
+            "{} case(s) failed:\n{}",
+            failures.len(),
+            failures.join("\n")
         );
     }
 }

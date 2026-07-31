@@ -794,7 +794,8 @@ mod tests {
         for (backend, x11_ready, evdev_ready, expected) in cases {
             assert_eq!(
                 linux_hotkey_startup_blocked(backend.linux_route(), x11_ready, evdev_ready),
-                expected
+                expected,
+                "backend={backend:?} x11_ready={x11_ready} evdev_ready={evdev_ready}"
             );
         }
     }
