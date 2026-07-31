@@ -490,27 +490,51 @@ mod tests {
     }
 
     #[test]
-    fn released_conflicting_keys_are_ready_without_waiting() {
-        assert!(wait_for_safe_paste_modifiers_with(Duration::ZERO, |_| {
-            false
-        }));
-    }
-
-    #[test]
-    fn every_conflicting_key_withholds_paste_at_deadline() {
-        for held_key in MACOS_PASTE_CONFLICT_KEYCODES {
-            assert!(
-                !wait_for_safe_paste_modifiers_with(Duration::ZERO, |key| key == *held_key),
-                "keycode {held_key} should withhold the paste chord"
-            );
+    fn paste_modifier_wait_withholds_only_for_conflict_keycodes() {
+        struct HeldKeyCase {
+            label: &'static str,
+            held: Option<u16>,
+            expect: bool,
         }
-    }
 
-    #[test]
-    fn unrelated_physical_key_does_not_withhold_paste() {
-        assert!(wait_for_safe_paste_modifiers_with(
-            Duration::ZERO,
-            |key| key == MACOS_V_KEYCODE
-        ));
+        let mut cases = vec![HeldKeyCase {
+            label: "no_key_held_is_ready_without_waiting",
+            held: None,
+            expect: true,
+        }];
+        for &keycode in MACOS_PASTE_CONFLICT_KEYCODES {
+            cases.push(HeldKeyCase {
+                label: "conflicting_key_withholds_paste_at_deadline",
+                held: Some(keycode),
+                expect: false,
+            });
+        }
+        cases.push(HeldKeyCase {
+            label: "unrelated_physical_key_does_not_withhold_paste",
+            held: Some(MACOS_V_KEYCODE),
+            expect: true,
+        });
+
+        let failures: Vec<String> = cases
+            .iter()
+            .filter_map(|case| {
+                let held = case.held;
+                let ready = wait_for_safe_paste_modifiers_with(Duration::ZERO, move |key| {
+                    Some(key) == held
+                });
+                (ready != case.expect).then(|| {
+                    format!(
+                        "{} (held={:?}): expected ready={}, got {ready}",
+                        case.label, case.held, case.expect
+                    )
+                })
+            })
+            .collect();
+        assert!(
+            failures.is_empty(),
+            "{} case(s) failed:\n{}",
+            failures.len(),
+            failures.join("\n")
+        );
     }
 }

@@ -749,47 +749,128 @@ mod tests {
     use super::*;
 
     #[test]
-    fn short_transcript_requires_baseline_and_exact_delta() {
-        assert!(!value_indicates_insertion(None, "hello world", "world"));
-        assert!(value_indicates_insertion(
-            Some("hello "),
-            "hello world",
-            "world"
-        ));
-    }
+    fn insertion_evidence_matrix() {
+        struct InsertionCase {
+            name: &'static str,
+            baseline: Option<&'static str>,
+            current: &'static str,
+            transcript: &'static str,
+            expect: bool,
+        }
 
-    #[test]
-    fn short_transcript_substring_collision_does_not_confirm() {
-        assert!(!value_indicates_insertion(
-            Some("draft"),
-            "draft token",
-            "ok"
-        ));
-    }
+        let cases = [
+            InsertionCase {
+                name: "short_transcript_no_baseline_does_not_confirm",
+                baseline: None,
+                current: "hello world",
+                transcript: "world",
+                expect: false,
+            },
+            InsertionCase {
+                name: "short_transcript_exact_delta_confirms",
+                baseline: Some("hello "),
+                current: "hello world",
+                transcript: "world",
+                expect: true,
+            },
+            InsertionCase {
+                name: "short_transcript_substring_collision_does_not_confirm",
+                baseline: Some("draft"),
+                current: "draft token",
+                transcript: "ok",
+                expect: false,
+            },
+            InsertionCase {
+                name: "short_transcript_exact_insertion_confirms_at_end",
+                baseline: Some("draft token"),
+                current: "draft token ok",
+                transcript: "ok",
+                expect: true,
+            },
+            InsertionCase {
+                name: "short_transcript_exact_insertion_confirms_mid_word",
+                baseline: Some("token"),
+                current: "tokoken",
+                transcript: "ok",
+                expect: true,
+            },
+            InsertionCase {
+                name: "unrelated_growth_does_not_confirm",
+                baseline: Some("abc"),
+                current: "abcdef",
+                transcript: "xyz",
+                expect: false,
+            },
+            InsertionCase {
+                name: "no_change_does_not_confirm",
+                baseline: Some("abc"),
+                current: "abc",
+                transcript: "xyz",
+                expect: false,
+            },
+            InsertionCase {
+                name: "missing_baseline_without_transcript_match_does_not_confirm",
+                baseline: None,
+                current: "some field text",
+                transcript: "xyz",
+                expect: false,
+            },
+            InsertionCase {
+                name: "empty_transcript_never_confirms_no_growth",
+                baseline: Some(""),
+                current: "",
+                transcript: "",
+                expect: false,
+            },
+            InsertionCase {
+                name: "empty_transcript_never_confirms_with_growth",
+                baseline: Some(""),
+                current: "x",
+                transcript: "",
+                expect: false,
+            },
+            // Windowed (leading/trailing) matching must not fire on an
+            // unrelated field that merely happens to hold text.
+            InsertionCase {
+                name: "unrelated_value_does_not_confirm_via_windowing",
+                baseline: Some("some unrelated field contents"),
+                current: "some unrelated field contents",
+                transcript: "alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo",
+                expect: false,
+            },
+            InsertionCase {
+                name: "evidence_already_present_in_baseline_does_not_confirm",
+                baseline: Some("alpha bravo charlie delta echo foxtrot"),
+                current: "alpha bravo charlie delta echo foxtrot",
+                transcript: "alpha bravo charlie delta echo foxtrot",
+                expect: false,
+            },
+        ];
 
-    #[test]
-    fn short_transcript_exact_insertion_confirms_at_any_position() {
-        assert!(value_indicates_insertion(
-            Some("draft token"),
-            "draft token ok",
-            "ok"
-        ));
-        assert!(value_indicates_insertion(Some("token"), "tokoken", "ok"));
-    }
-
-    #[test]
-    fn unrelated_growth_does_not_confirm() {
-        assert!(!value_indicates_insertion(Some("abc"), "abcdef", "xyz"));
-    }
-
-    #[test]
-    fn no_change_does_not_confirm() {
-        assert!(!value_indicates_insertion(Some("abc"), "abc", "xyz"));
-    }
-
-    #[test]
-    fn missing_baseline_without_transcript_match_does_not_confirm() {
-        assert!(!value_indicates_insertion(None, "some field text", "xyz"));
+        let failures: Vec<String> = cases
+            .iter()
+            .filter_map(|case| {
+                let actual =
+                    value_indicates_insertion(case.baseline, case.current, case.transcript);
+                (actual != case.expect).then(|| {
+                    format!(
+                        "{}: baseline={:?} current={:?} transcript={:?} expected {}, got {}",
+                        case.name,
+                        case.baseline,
+                        case.current,
+                        case.transcript,
+                        case.expect,
+                        actual
+                    )
+                })
+            })
+            .collect();
+        assert!(
+            failures.is_empty(),
+            "{} case(s) failed:\n{}",
+            failures.len(),
+            failures.join("\n")
+        );
     }
 
     #[test]
@@ -813,12 +894,6 @@ mod tests {
             &huge
         ));
         assert!(!value_indicates_insertion(Some("short"), "short", &huge));
-    }
-
-    #[test]
-    fn empty_transcript_never_confirms() {
-        assert!(!value_indicates_insertion(Some(""), "", ""));
-        assert!(!value_indicates_insertion(Some(""), "x", ""));
     }
 
     /// The regression behind the false error chime in ghostty: a terminal
@@ -865,18 +940,6 @@ mod tests {
         let tail_only = &transcript[18..];
         assert!(value_indicates_insertion(Some(""), head_only, transcript));
         assert!(value_indicates_insertion(Some(""), tail_only, transcript));
-    }
-
-    /// Windowed matching must not fire on an unrelated field that merely
-    /// happens to hold text.
-    #[test]
-    fn unrelated_value_does_not_confirm_via_windowing() {
-        let transcript = "alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo";
-        assert!(!value_indicates_insertion(
-            Some("some unrelated field contents"),
-            "some unrelated field contents",
-            transcript
-        ));
     }
 
     /// A transcript at or under [`CONFIRM_WINDOW_CHARS`] gets no windowed
@@ -954,16 +1017,6 @@ mod tests {
     }
 
     #[test]
-    fn evidence_already_present_in_baseline_does_not_confirm() {
-        let transcript = "alpha bravo charlie delta echo foxtrot";
-        assert!(!value_indicates_insertion(
-            Some(transcript),
-            transcript,
-            transcript
-        ));
-    }
-
-    #[test]
     fn an_additional_transcript_occurrence_confirms() {
         let transcript = "alpha bravo charlie delta echo foxtrot";
         let current = format!("{transcript}\n{transcript}");
@@ -997,9 +1050,19 @@ mod tests {
     }
 
     #[test]
-    fn exact_selection_geometry_confirms_reformatted_safari_text() {
-        let transcript = "say \"hi\"";
-        let matcher = TranscriptMatcher::new(transcript);
+    fn selection_geometry_confirmation_matrix() {
+        struct SelectionCase {
+            name: &'static str,
+            transcript: &'static str,
+            current_head: &'static str,
+            current_utf16_units: usize,
+            current_selection: PasteTargetSelection,
+            allow_selection_evidence: bool,
+            expect: bool,
+        }
+
+        // Shared baseline for every row: a 5-unit "draft" field with the
+        // whole word selected, as if about to be replaced by dictation.
         let baseline = BoundedNormalizedValue::from_target_value(&PasteTargetValue {
             head: "draft".to_owned(),
             tail: None,
@@ -1009,68 +1072,94 @@ mod tests {
                 length: 5,
             }),
         });
-        let current = BoundedNormalizedValue::from_target_value(&PasteTargetValue {
-            head: "say \u{201c}hi\u{201d}".to_owned(),
-            tail: None,
-            utf16_units: 8,
-            selection: Some(PasteTargetSelection {
-                location: 8,
-                length: 0,
-            }),
-        });
 
-        assert!(!current.head.contains(&normalize_segment(transcript)));
-        assert!(matcher.indicates_insertion(Some(&baseline), &current, true));
-    }
+        let cases = [
+            SelectionCase {
+                name: "exact_selection_geometry_confirms_reformatted_safari_text",
+                transcript: "say \"hi\"",
+                current_head: "say \u{201c}hi\u{201d}",
+                current_utf16_units: 8,
+                current_selection: PasteTargetSelection {
+                    location: 8,
+                    length: 0,
+                },
+                allow_selection_evidence: true,
+                expect: true,
+            },
+            SelectionCase {
+                name: "replacement_ax_object_requires_text_evidence",
+                transcript: "say \"hi\"",
+                current_head: "say \u{201c}hi\u{201d}",
+                current_utf16_units: 8,
+                current_selection: PasteTargetSelection {
+                    location: 8,
+                    length: 0,
+                },
+                allow_selection_evidence: false,
+                expect: false,
+            },
+            SelectionCase {
+                name: "selection_motion_without_expected_value_length_does_not_confirm",
+                transcript: "hello",
+                current_head: "unrelated",
+                current_utf16_units: 9,
+                current_selection: PasteTargetSelection {
+                    location: 5,
+                    length: 0,
+                },
+                allow_selection_evidence: true,
+                expect: false,
+            },
+        ];
 
-    #[test]
-    fn replacement_ax_object_requires_text_evidence() {
-        let matcher = TranscriptMatcher::new("say \"hi\"");
-        let baseline = BoundedNormalizedValue::from_target_value(&PasteTargetValue {
-            head: "draft".to_owned(),
+        // Precondition for the reformatted-Safari-text row: Safari can
+        // reformat straight quotes to curly quotes on insertion, so the
+        // current value's normalized head must NOT contain the normalized
+        // transcript outright — otherwise this row would be trivially
+        // covered by plain substring matching, not the selection-geometry
+        // evidence path it exists to exercise.
+        let safari_case = cases
+            .iter()
+            .find(|case| case.name == "exact_selection_geometry_confirms_reformatted_safari_text")
+            .expect("safari row must be present");
+        let safari_current = BoundedNormalizedValue::from_target_value(&PasteTargetValue {
+            head: safari_case.current_head.to_owned(),
             tail: None,
-            utf16_units: 5,
-            selection: Some(PasteTargetSelection {
-                location: 0,
-                length: 5,
-            }),
+            utf16_units: safari_case.current_utf16_units,
+            selection: Some(safari_case.current_selection),
         });
-        let current = BoundedNormalizedValue::from_target_value(&PasteTargetValue {
-            head: "say \u{201c}hi\u{201d}".to_owned(),
-            tail: None,
-            utf16_units: 8,
-            selection: Some(PasteTargetSelection {
-                location: 8,
-                length: 0,
-            }),
-        });
+        assert!(
+            !safari_current
+                .head
+                .contains(&normalize_segment(safari_case.transcript)),
+            "precondition: reformatted text must not contain the transcript verbatim"
+        );
 
-        assert!(!matcher.indicates_insertion(Some(&baseline), &current, false));
-    }
-
-    #[test]
-    fn selection_motion_without_expected_value_length_does_not_confirm() {
-        let matcher = TranscriptMatcher::new("hello");
-        let baseline = BoundedNormalizedValue::from_target_value(&PasteTargetValue {
-            head: "draft".to_owned(),
-            tail: None,
-            utf16_units: 5,
-            selection: Some(PasteTargetSelection {
-                location: 0,
-                length: 5,
-            }),
-        });
-        let current = BoundedNormalizedValue::from_target_value(&PasteTargetValue {
-            head: "unrelated".to_owned(),
-            tail: None,
-            utf16_units: 9,
-            selection: Some(PasteTargetSelection {
-                location: 5,
-                length: 0,
-            }),
-        });
-
-        assert!(!matcher.indicates_insertion(Some(&baseline), &current, true));
+        let failures: Vec<String> = cases
+            .iter()
+            .filter_map(|case| {
+                let matcher = TranscriptMatcher::new(case.transcript);
+                let current = BoundedNormalizedValue::from_target_value(&PasteTargetValue {
+                    head: case.current_head.to_owned(),
+                    tail: None,
+                    utf16_units: case.current_utf16_units,
+                    selection: Some(case.current_selection),
+                });
+                let actual = matcher.indicates_insertion(
+                    Some(&baseline),
+                    &current,
+                    case.allow_selection_evidence,
+                );
+                (actual != case.expect)
+                    .then(|| format!("{}: expected {}, got {}", case.name, case.expect, actual))
+            })
+            .collect();
+        assert!(
+            failures.is_empty(),
+            "{} case(s) failed:\n{}",
+            failures.len(),
+            failures.join("\n")
+        );
     }
 }
 

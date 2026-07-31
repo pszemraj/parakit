@@ -636,42 +636,101 @@ mod tests {
     }
 
     #[test]
-    fn decision_matches_when_pid_bundle_and_ax_element_agree() {
-        assert_eq!(
-            decide_focus_verification(true, true, Some(true)),
-            FocusVerification::Matched
-        );
-    }
+    fn focus_verification_decision_matrix() {
+        struct FocusCase {
+            name: &'static str,
+            same_pid: bool,
+            same_bundle: bool,
+            ax_equal: Option<bool>,
+            expect: FocusVerification,
+            allows_insertion: bool,
+        }
 
-    #[test]
-    fn decision_changes_when_ax_element_identity_differs() {
-        assert_eq!(
-            decide_focus_verification(true, true, Some(false)),
-            FocusVerification::Changed
-        );
-    }
+        let cases = [
+            FocusCase {
+                name: "decision_matches_when_pid_bundle_and_ax_element_agree",
+                same_pid: true,
+                same_bundle: true,
+                ax_equal: Some(true),
+                expect: FocusVerification::Matched,
+                allows_insertion: true,
+            },
+            FocusCase {
+                name: "decision_changes_when_ax_element_identity_differs",
+                same_pid: true,
+                same_bundle: true,
+                ax_equal: Some(false),
+                expect: FocusVerification::Changed,
+                allows_insertion: false,
+            },
+            FocusCase {
+                name: "decision_does_not_authorize_insertion_without_ax_identity",
+                same_pid: true,
+                same_bundle: true,
+                ax_equal: None,
+                expect: FocusVerification::AxUnsupported,
+                allows_insertion: false,
+            },
+            FocusCase {
+                name: "decision_changes_when_bundle_identifier_differs",
+                same_pid: true,
+                same_bundle: false,
+                ax_equal: Some(true),
+                expect: FocusVerification::Changed,
+                allows_insertion: false,
+            },
+            FocusCase {
+                name: "decision_changes_when_pid_differs",
+                same_pid: false,
+                same_bundle: true,
+                ax_equal: Some(true),
+                expect: FocusVerification::Changed,
+                allows_insertion: false,
+            },
+            // Previously invisible hole: neither pid nor bundle matched, yet
+            // the caller supplied `ax_equal: Some(true)`. This row didn't
+            // exist before this matrix, and it must fall into the same
+            // short-circuit as the single-mismatch cases above:
+            // `decide_focus_verification` checks `!same_pid || !same_bundle`
+            // before ever looking at `ax_equal`, so both mismatching still
+            // means `Changed`, not `Matched`.
+            FocusCase {
+                name: "decision_changes_when_pid_and_bundle_both_differ",
+                same_pid: false,
+                same_bundle: false,
+                ax_equal: Some(true),
+                expect: FocusVerification::Changed,
+                allows_insertion: false,
+            },
+        ];
 
-    #[test]
-    fn decision_does_not_authorize_insertion_without_ax_identity() {
-        let verification = decide_focus_verification(true, true, None);
-
-        assert_eq!(verification, FocusVerification::AxUnsupported);
-        assert!(!verification.allows_insertion());
-    }
-
-    #[test]
-    fn decision_changes_when_bundle_identifier_differs() {
-        assert_eq!(
-            decide_focus_verification(true, false, Some(true)),
-            FocusVerification::Changed
-        );
-    }
-
-    #[test]
-    fn decision_changes_when_pid_differs() {
-        assert_eq!(
-            decide_focus_verification(false, true, Some(true)),
-            FocusVerification::Changed
+        let failures: Vec<String> = cases
+            .iter()
+            .filter_map(|case| {
+                let verification =
+                    decide_focus_verification(case.same_pid, case.same_bundle, case.ax_equal);
+                let allows_insertion = verification.allows_insertion();
+                let mismatch =
+                    verification != case.expect || allows_insertion != case.allows_insertion;
+                mismatch.then(|| {
+                    format!(
+                        "{}: same_pid={} same_bundle={} ax_equal={:?} expected {:?}/{}, got \
+                         {verification:?}/{allows_insertion}",
+                        case.name,
+                        case.same_pid,
+                        case.same_bundle,
+                        case.ax_equal,
+                        case.expect,
+                        case.allows_insertion
+                    )
+                })
+            })
+            .collect();
+        assert!(
+            failures.is_empty(),
+            "{} case(s) failed:\n{}",
+            failures.len(),
+            failures.join("\n")
         );
     }
 }

@@ -447,24 +447,36 @@ fn unrelated_keys_pass_through() {
     assert_eq!(state.release(Key::KeyA, at(now, 10)), (None, false));
 }
 
+/// Expected [`HotkeyBackend::label`] value for `backend`, matched
+/// exhaustively (no wildcard arm) so a new backend variant fails compilation
+/// here until its label is stated as data. The `cfg(target_os = "linux")`
+/// gating on the linux-only arms mirrors the enum definition itself at
+/// `hotkey::HotkeyBackend`.
+fn expected_label(backend: HotkeyBackend) -> &'static str {
+    match backend {
+        HotkeyBackend::Auto => "auto",
+        HotkeyBackend::Desktop => "desktop",
+        #[cfg(target_os = "linux")]
+        HotkeyBackend::X11GlobalHotkey => "x11-global-hotkey",
+        #[cfg(target_os = "linux")]
+        HotkeyBackend::X11Listen => "x11-listen",
+        #[cfg(target_os = "linux")]
+        HotkeyBackend::EvdevProxyExperimental => "evdev-proxy-experimental",
+    }
+}
+
 #[test]
 fn backend_labels_are_stable() {
-    for (backend, label) in [
-        (HotkeyBackend::Auto, "auto"),
-        (HotkeyBackend::Desktop, "desktop"),
-    ] {
-        assert_eq!(backend.label(), label);
+    for backend in [HotkeyBackend::Auto, HotkeyBackend::Desktop] {
+        assert_eq!(backend.label(), expected_label(backend));
     }
     #[cfg(target_os = "linux")]
-    for (backend, label) in [
-        (HotkeyBackend::X11GlobalHotkey, "x11-global-hotkey"),
-        (HotkeyBackend::X11Listen, "x11-listen"),
-        (
-            HotkeyBackend::EvdevProxyExperimental,
-            "evdev-proxy-experimental",
-        ),
+    for backend in [
+        HotkeyBackend::X11GlobalHotkey,
+        HotkeyBackend::X11Listen,
+        HotkeyBackend::EvdevProxyExperimental,
     ] {
-        assert_eq!(backend.label(), label);
+        assert_eq!(backend.label(), expected_label(backend));
     }
 }
 
