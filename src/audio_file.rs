@@ -157,16 +157,56 @@ fn resample_to_target(samples: Vec<f32>, source_rate: u32) -> Result<Vec<f32>> {
     for chunk in samples.chunks(RESAMPLE_CHUNK_SIZE) {
         input_frames[0].fill(0.0);
         input_frames[0][..chunk.len()].copy_from_slice(chunk);
-        let (_, written) = resampler
-            .process_into_buffer(&input_frames, &mut output_frames, None)
-            .context("failed to resample WAV chunk")?;
-        if let Some(ch0) = output_frames.first() {
-            output.extend_from_slice(&ch0[..written]);
-        }
+        process_resample_chunk(
+            &mut resampler,
+            &input_frames,
+            &mut output_frames,
+            &mut output,
+        )
+        .context("failed to resample WAV chunk")?;
     }
 
     output.truncate(expected_len.min(output.len()));
     Ok(output)
+}
+
+/// Process one resampler chunk, appending its output samples.
+///
+/// Shared by the file (batch) and live microphone (streaming) resample
+/// paths, which apply different error policies to a failed chunk.
+///
+/// # Arguments
+///
+/// * `resampler` - Resampler to advance by one chunk.
+/// * `input_frames` - Input frame buffer(s), pre-filled with exactly one chunk.
+/// * `output_frames` - Scratch output frame buffer(s), reused across calls.
+/// * `out` - Accumulator that channel 0's produced samples are appended to.
+///
+/// # Returns
+///
+/// `Ok(())` when the chunk was processed and its output appended to `out`.
+///
+/// # Errors
+///
+/// Returns an error if the resampler fails to process the chunk. On error,
+/// `out` is left unmodified.
+///
+/// # Panics
+///
+/// Panics if `output_frames` is undersized for the frame count the resampler
+/// reports writing; does not happen when buffers are sized via
+/// `resampler.output_frames_max()`, as in both call sites.
+pub fn process_resample_chunk(
+    resampler: &mut SincFixedIn<f32>,
+    input_frames: &[Vec<f32>],
+    output_frames: &mut [Vec<f32>],
+    out: &mut Vec<f32>,
+) -> Result<()> {
+    let (_, written) = resampler.process_into_buffer(input_frames, output_frames, None)?;
+    if let Some(ch0) = output_frames.first() {
+        out.extend_from_slice(&ch0[..written]);
+    }
+    Ok(())
 }
 
 /// Return the sinc resampler parameters used for file and live audio paths.

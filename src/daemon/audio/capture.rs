@@ -9,7 +9,7 @@ use anyhow::{anyhow, Context, Result};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{SampleFormat, Stream, StreamConfig};
 use crossbeam_channel::{bounded, Receiver, RecvTimeoutError, Sender, TrySendError};
-use parakit::audio_file::{resampler_params, RESAMPLE_CHUNK_SIZE};
+use parakit::audio_file::{process_resample_chunk, resampler_params, RESAMPLE_CHUNK_SIZE};
 use parking_lot::Mutex;
 use ringbuf::{
     traits::{Consumer, Producer, Split},
@@ -40,6 +40,10 @@ const PRE_ROLL_SAMPLES: usize = TARGET_RATE as usize * 350 / 1000;
 const AUDIO_RING_SECONDS: usize = 6;
 const AUDIO_RING_MIN_CAPACITY: usize = TARGET_RATE as usize * AUDIO_RING_SECONDS;
 const DEFAULT_CALLBACK_SCRATCH_FRAMES: usize = 8192;
+/// Scratch capacity for the drain loop's per-iteration input/resample buffers.
+/// Sized independently of [`DEFAULT_CALLBACK_SCRATCH_FRAMES`]; the two happen
+/// to share a value but are separate sizing decisions.
+const DRAIN_SCRATCH_FRAMES: usize = 8192;
 const AUDIO_CONTROL_TIMEOUT: Duration = Duration::from_secs(1);
 const DEVICE_POLL_INTERVAL: Duration = Duration::from_secs(1);
 const DEVICE_RETRY_MAX_INTERVAL: Duration = Duration::from_secs(10);
@@ -893,8 +897,8 @@ fn audio_drain_loop(
     mut pipeline: CapturePipeline,
     alive: Arc<AtomicBool>,
 ) {
-    let mut input = vec![0.0_f32; 8192];
-    let mut resampled = Vec::with_capacity(8192);
+    let mut input = vec![0.0_f32; DRAIN_SCRATCH_FRAMES];
+    let mut resampled = Vec::with_capacity(DRAIN_SCRATCH_FRAMES);
     while alive.load(Ordering::Acquire) {
         while let Ok(control) = control_rx.try_recv() {
             handle_audio_control(
@@ -1250,9 +1254,16 @@ fn source_aware_mic_identity(mut identity: MicIdentity, source_id: Option<String
     identity
 }
 
+/// Return whether an input is the OS-selected default source, eligible for a
+/// pactl default-source lookup.
+#[cfg(target_os = "linux")]
+fn is_default_source_candidate(is_default: bool, name: &str) -> bool {
+    is_default || name == "default"
+}
+
 #[cfg(target_os = "linux")]
 fn default_source_id_for_identity(selected: &SelectedInput) -> Option<String> {
-    if !selected.is_default && selected.name != "default" {
+    if !is_default_source_candidate(selected.is_default, &selected.name) {
         return None;
     }
     pactl_default_source_name()
@@ -1287,7 +1298,7 @@ fn mic_info_from_identity(identity: &MicIdentity) -> MicInfo {
 
 #[cfg(target_os = "linux")]
 fn enhance_mic_info(info: &mut MicInfo, is_default: bool) {
-    if !is_default && info.name != "default" {
+    if !is_default_source_candidate(is_default, &info.name) {
         return;
     }
     let Some(source) = pactl_default_source_info() else {
@@ -1311,6 +1322,12 @@ fn enhance_mic_info(info: &mut MicInfo, is_default: bool) {
 #[cfg(not(target_os = "linux"))]
 fn enhance_mic_info(_info: &mut MicInfo, _is_default: bool) {}
 
+/// Return whether `name`, lowercased, contains any of `patterns`.
+fn contains_any_pattern(name: &str, patterns: &[&str]) -> bool {
+    let lower = name.to_lowercase();
+    patterns.iter().any(|pattern| lower.contains(pattern))
+}
+
 /// Return whether a device name looks like a monitor or virtual input.
 ///
 /// # Returns
@@ -1318,22 +1335,23 @@ fn enhance_mic_info(_info: &mut MicInfo, _is_default: bool) {}
 /// `true` for names parakit should avoid unless no physical-looking input is
 /// available.
 fn is_virtual_input_name(name: &str) -> bool {
-    let lower = name.to_lowercase();
-    let patterns = [
-        "monitor of",
-        ".monitor",
-        " monitor",
-        "loopback",
-        "virtual",
-        "null",
-        "dummy",
-        "blackhole",
-        "soundflower",
-        "stereo mix",
-        "what u hear",
-        "wasapi output",
-    ];
-    patterns.iter().any(|pattern| lower.contains(pattern))
+    contains_any_pattern(
+        name,
+        &[
+            "monitor of",
+            ".monitor",
+            " monitor",
+            "loopback",
+            "virtual",
+            "null",
+            "dummy",
+            "blackhole",
+            "soundflower",
+            "stereo mix",
+            "what u hear",
+            "wasapi output",
+        ],
+    )
 }
 
 /// Return whether an input name or source id looks like a Bluetooth microphone.
@@ -1342,26 +1360,27 @@ fn is_virtual_input_name(name: &str) -> bool {
 ///
 /// `true` for common Bluetooth transport, profile, and headset labels.
 fn is_bluetooth_input_name(name: &str) -> bool {
-    let lower = name.to_lowercase();
-    let patterns = [
-        "bluetooth",
-        "bluez",
-        "headset_head_unit",
-        "headset-head-unit",
-        "handsfree",
-        "hands-free",
-        "hands free",
-        "hfp",
-        "hsp",
-        "a2dp",
-        "airpod",
-        "earbud",
-        "earbuds",
-        "galaxy buds",
-        "pixel buds",
-        "freebuds",
-    ];
-    patterns.iter().any(|pattern| lower.contains(pattern))
+    contains_any_pattern(
+        name,
+        &[
+            "bluetooth",
+            "bluez",
+            "headset_head_unit",
+            "headset-head-unit",
+            "handsfree",
+            "hands-free",
+            "hands free",
+            "hfp",
+            "hsp",
+            "a2dp",
+            "airpod",
+            "earbud",
+            "earbuds",
+            "galaxy buds",
+            "pixel buds",
+            "freebuds",
+        ],
+    )
 }
 
 #[derive(Default)]
@@ -1452,18 +1471,13 @@ impl ResamplerState {
     }
 
     fn process_chunk(&mut self, out: &mut Vec<f32>) {
-        match self
-            .resampler
-            .process_into_buffer(&self.input_buf, &mut self.output_buf, None)
-        {
-            Ok((_, written)) => {
-                if let Some(ch0) = self.output_buf.first() {
-                    out.extend_from_slice(&ch0[..written]);
-                }
-            }
-            Err(e) => {
-                eprintln!("parakit: resampler error (dropped chunk): {e}");
-            }
+        if let Err(e) = process_resample_chunk(
+            &mut self.resampler,
+            &self.input_buf,
+            &mut self.output_buf,
+            out,
+        ) {
+            eprintln!("parakit: resampler error (dropped chunk): {e}");
         }
     }
 }
