@@ -556,12 +556,23 @@ struct ClipboardCase {
     initial: Option<&'static str>,
     transcript: &'static str,
     guard_allows: bool,
+    /// When set, the `before_chord` guard closure returns this `Err`
+    /// instead of `Ok(guard_allows)` on its (only) call. Per
+    /// `paste_with_clipboard_swap_guarded` (inject.rs ~978-1070), an `Err`
+    /// aborts immediately with no staging, unlike `Ok(false)` which still
+    /// stages (and, under `RestorePrevious`, restores) before returning.
+    guard_error: Option<&'static str>,
     paste_error: Option<&'static str>,
     fail_next_set: bool,
+    policy: ClipboardPolicy,
     expected_text: Option<&'static str>,
     expected_events: &'static [&'static str],
     expected_outcome: Option<PasteOutcome>,
     error_contains: Option<&'static str>,
+    /// Expected `PasteReport::clipboard_restored`. `None` means "don't
+    /// check" (most rows never verified this field); `Some(x)` asserts the
+    /// report's field equals `Some(x)`.
+    expected_clipboard_restored: Option<bool>,
 }
 
 #[test]
@@ -572,8 +583,10 @@ fn clipboard_swap_cases_are_stable() {
             initial: Some("old clipboard"),
             transcript: "dictated text",
             guard_allows: true,
+            guard_error: None,
             paste_error: Some("paste failed"),
             fail_next_set: false,
+            policy: ClipboardPolicy::RestorePrevious,
             expected_text: Some("old clipboard"),
             expected_events: &[
                 "guard",
@@ -585,14 +598,17 @@ fn clipboard_swap_cases_are_stable() {
             ],
             expected_outcome: None,
             error_contains: Some("paste failed"),
+            expected_clipboard_restored: None,
         },
         ClipboardCase {
             name: "same clipboard text remains available after paste",
             initial: Some("dictated text"),
             transcript: "dictated text",
             guard_allows: true,
+            guard_error: None,
             paste_error: None,
             fail_next_set: false,
+            policy: ClipboardPolicy::RestorePrevious,
             expected_text: Some("dictated text"),
             expected_events: &[
                 "guard",
@@ -604,30 +620,77 @@ fn clipboard_swap_cases_are_stable() {
             ],
             expected_outcome: Some(PasteOutcome::Pasted),
             error_contains: None,
+            expected_clipboard_restored: None,
         },
         ClipboardCase {
             name: "guard blocks paste after staging transcript",
             initial: Some("old clipboard"),
             transcript: "dictated text",
             guard_allows: false,
+            guard_error: None,
             paste_error: None,
             fail_next_set: false,
+            policy: ClipboardPolicy::RestorePrevious,
             expected_text: Some("old clipboard"),
             expected_events: &["guard", "read", "set:dictated text", "set:old clipboard"],
             expected_outcome: Some(PasteOutcome::Blocked),
             error_contains: None,
+            expected_clipboard_restored: None,
         },
         ClipboardCase {
             name: "transcript clipboard write failure does not paste or restore",
             initial: Some("old clipboard"),
             transcript: "dictated text",
             guard_allows: true,
+            guard_error: None,
             paste_error: None,
             fail_next_set: true,
+            policy: ClipboardPolicy::RestorePrevious,
             expected_text: Some("old clipboard"),
             expected_events: &["guard", "read", "set:dictated text"],
             expected_outcome: None,
             error_contains: Some("could not copy transcript to clipboard"),
+            expected_clipboard_restored: None,
+        },
+        // Folded from `clipboard_guard_error_before_staging_leaves_clipboard_untouched`:
+        // an `Err` from the guard aborts before any staging happens at all,
+        // unlike `Ok(false)` (the "guard blocks..." row above), which still
+        // stages and restores. `expected_events` of exactly `["guard"]`
+        // proves no clipboard read/set ever occurred.
+        ClipboardCase {
+            name: "guard error before staging leaves clipboard untouched",
+            initial: Some("old clipboard"),
+            transcript: "dictated text",
+            guard_allows: false, // unread: guard_error short-circuits first
+            guard_error: Some("focus unavailable"),
+            paste_error: None,
+            fail_next_set: false,
+            policy: ClipboardPolicy::RestorePrevious,
+            expected_text: Some("old clipboard"),
+            expected_events: &["guard"],
+            expected_outcome: None,
+            error_contains: Some("focus unavailable"),
+            expected_clipboard_restored: None,
+        },
+        // Folded from `clipboard_keep_transcript_policy_leaves_text_after_guard_block`:
+        // the guard blocks on its first (only) call, routing through
+        // `stage_text_without_paste`'s `KeepTranscript` branch (inject.rs
+        // ~1255-1260), which sets the transcript and returns without ever
+        // reading, restoring, or touching the restore-gate machinery.
+        ClipboardCase {
+            name: "keep-transcript policy leaves transcript on clipboard after guard block",
+            initial: Some("old clipboard"),
+            transcript: "dictated text",
+            guard_allows: false,
+            guard_error: None,
+            paste_error: None,
+            fail_next_set: false,
+            policy: ClipboardPolicy::KeepTranscript,
+            expected_text: Some("dictated text"),
+            expected_events: &["guard", "set:dictated text"],
+            expected_outcome: Some(PasteOutcome::CopiedOnly),
+            error_contains: None,
+            expected_clipboard_restored: Some(false),
         },
     ];
 
@@ -655,10 +718,13 @@ fn clipboard_swap_cases_are_stable() {
             },
             Duration::ZERO,
             restore_plan(&gate),
-            ClipboardPolicy::RestorePrevious,
+            case.policy,
             None,
             || {
                 events.borrow_mut().push("guard".to_string());
+                if let Some(message) = case.guard_error {
+                    return Err(anyhow::anyhow!("{message}"));
+                }
                 Ok(case.guard_allows)
             },
         );
@@ -668,10 +734,23 @@ fn clipboard_swap_cases_are_stable() {
                 let err = result.expect_err(case.name);
                 assert!(format!("{err:#}").contains(fragment), "{}", case.name);
             }
-            None => assert_eq!(
-                result.expect(case.name).outcome,
-                case.expected_outcome.unwrap()
-            ),
+            None => {
+                let report = result.expect(case.name);
+                assert_eq!(
+                    report.outcome,
+                    case.expected_outcome.unwrap(),
+                    "{}",
+                    case.name
+                );
+                if let Some(expected_restored) = case.expected_clipboard_restored {
+                    assert_eq!(
+                        report.clipboard_restored,
+                        Some(expected_restored),
+                        "{}",
+                        case.name
+                    );
+                }
+            }
         }
         assert_eq!(clipboard.text(), case.expected_text, "{}", case.name);
         assert_eq!(
@@ -681,34 +760,6 @@ fn clipboard_swap_cases_are_stable() {
             case.name
         );
     }
-}
-
-#[test]
-fn clipboard_guard_error_before_staging_leaves_clipboard_untouched() {
-    let mut clipboard = MockClipboard::new("old clipboard");
-    let events = clipboard.events();
-    let result = paste_with_clipboard_swap_guarded(
-        &mut clipboard,
-        "dictated text",
-        || true,
-        || {
-            events.borrow_mut().push("paste".to_string());
-            Ok(PasteDispatch::Posted)
-        },
-        Duration::ZERO,
-        restore_plan(&PlatformClipboardRestoreGate::fallback()),
-        ClipboardPolicy::RestorePrevious,
-        None,
-        || {
-            events.borrow_mut().push("guard".to_string());
-            Err(anyhow::anyhow!("focus unavailable"))
-        },
-    );
-
-    let err = result.expect_err("guard error should abort before staging");
-    assert!(format!("{err:#}").contains("focus unavailable"));
-    assert_eq!(clipboard.text(), Some("old clipboard"));
-    assert_eq!(events.borrow().as_slice(), ["guard"]);
 }
 
 #[test]
@@ -827,28 +878,6 @@ fn unsafe_modifier_skip_keeps_staged_transcript_without_posting() {
             "paste-attempt"
         ]
     );
-}
-
-#[test]
-fn clipboard_keep_transcript_policy_leaves_text_after_guard_block() {
-    let mut clipboard = MockClipboard::new("old clipboard");
-    let result = paste_with_clipboard_swap_guarded(
-        &mut clipboard,
-        "dictated text",
-        || true,
-        || Ok(PasteDispatch::Posted),
-        Duration::ZERO,
-        restore_plan(&PlatformClipboardRestoreGate::fallback()),
-        ClipboardPolicy::KeepTranscript,
-        None,
-        || Ok(false),
-    )
-    .expect("clipboard keep policy should not fail");
-
-    assert_eq!(clipboard.text(), Some("dictated text"));
-    assert_eq!(result.outcome, PasteOutcome::CopiedOnly);
-    assert!(!result.paste_event_posted);
-    assert_eq!(result.clipboard_restored, Some(false));
 }
 
 #[derive(Clone, Copy)]
