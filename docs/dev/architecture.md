@@ -129,6 +129,11 @@ reasoning here and at the cited sites.
   `daemon/audio/capture_tests.rs`: a table-driven merge was attempted and
   reverted — each case needs different live-channel scaffolding to control
   drop timing, and the table cost more than the shared assertion lines.
+- The `effective_*` precedence tests in `src/cli.rs`: a single
+  cli-over-config-over-default mega-table spanning every getter was
+  evaluated and rejected — the getters return unrelated types, so a shared
+  table needs an expectation enum plus per-type accessors that cost more
+  than the per-getter tests they would replace.
 
 Deferred follow-ups:
 
@@ -136,3 +141,11 @@ Deferred follow-ups:
   (`daemon/desktop/windows_{clipboard_history,paste_smoke,focus}.rs`,
   commit `f52e3ff`) on Windows CI; they cannot be compiled or tested from a
   macOS host.
+- TODO: fold the `cfg(target_os = "linux")` test clusters (the XTest paste
+  trio in `daemon/desktop/inject_tests.rs`, the backend alias tests in
+  `daemon/desktop/hotkey_tests.rs`) into their adjacent case tables. They
+  do not compile on a macOS host and there is no Linux CI, so a test edit
+  there is currently unverifiable anywhere.
+- TODO: same for the Windows-gated test modules
+  (`daemon/desktop/windows_input.rs`,
+  `daemon/desktop/windows_clipboard_history.rs`), for the same reason.
