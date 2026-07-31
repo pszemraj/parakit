@@ -36,9 +36,20 @@ fn cleaner_messaging_default(profile: CleaningProfile) -> Cleaner {
 
 fn assert_clean_cases(profile: CleaningProfile, cases: &[(&str, &str)]) {
     let cleaner = cleaner_keep_period(profile);
-    for (input, expected) in cases {
-        assert_eq!(cleaner.clean_text(input), *expected, "input: {input}");
-    }
+    let failures: Vec<String> = cases
+        .iter()
+        .filter_map(|(input, expected)| {
+            let actual = cleaner.clean_text(input);
+            (actual != *expected)
+                .then(|| format!("input {input:?}: expected {expected:?}, got {actual:?}"))
+        })
+        .collect();
+    assert!(
+        failures.is_empty(),
+        "{} case(s) failed:\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
 }
 
 fn user_rule(name: &str, pattern: &str, replacement: &str, position: RulePosition) -> UserRule {
@@ -474,15 +485,17 @@ fn capitalization_protects_decimals_versions_and_dotted_tokens() {
                 "it worked! then it stopped? yes.",
                 "It worked! Then it stopped? Yes.",
             ),
+            // Sentence capitalization stops after a numeric sentence start.
+            (
+                "version. 2 changes are pending.",
+                "Version. 2 changes are pending.",
+            ),
+            // Idempotent: already-capitalized sentences are left unchanged.
+            (
+                "Already capitalized. Still capitalized!",
+                "Already capitalized. Still capitalized!",
+            ),
         ],
-    );
-}
-
-#[test]
-fn capitalization_stops_after_a_numeric_sentence_start() {
-    assert_eq!(
-        cleaner_keep_period(CleaningProfile::Safe).clean_text("version. 2 changes are pending."),
-        "Version. 2 changes are pending."
     );
 }
 
@@ -628,41 +641,114 @@ fn whitespace_cleanup() {
     );
 }
 
-#[test]
-fn user_rule_first_position_runs_before_builtins() {
-    // A `First` user rule expands "xyz" to "So, hello" *before* any
-    // built-in rule runs, so the built-in `lead-discourse-comma` rule (which only
-    // fires at sentence start, and only under the Aggressive profile in the
-    // merged engine) still strips the "So," it produced.
-    let rules = vec![user_rule(
-        "expand-xyz",
-        r"(?i)^xyz$",
-        "So, hello",
-        RulePosition::First,
-    )];
-    let cleaner =
-        build_cleaner_for_test(CleaningProfile::Aggressive, false, &HashSet::new(), &rules);
-    assert_eq!(cleaner.clean_text("xyz"), "Hello");
+/// One row of the [`RulePosition`] Level-3 exhaustive driver: the cleaner
+/// config and single user rule that pins down where that position splices
+/// relative to the built-in rule list, plus the input/output pair that
+/// proves it.
+struct PositionCase {
+    profile: CleaningProfile,
+    drop_trailing_period: bool,
+    rule: UserRule,
+    input: &'static str,
+    expected: &'static str,
+}
+
+fn position_case(position: RulePosition) -> PositionCase {
+    match position {
+        // adding a RulePosition variant fails compilation here until its
+        // ordering expectation is stated
+        RulePosition::First => PositionCase {
+            profile: CleaningProfile::Aggressive,
+            drop_trailing_period: false,
+            // A `First` user rule expands "xyz" to "So, hello" *before* any
+            // built-in rule runs, so the built-in `lead-discourse-comma` rule
+            // (which only fires at sentence start, and only under the
+            // Aggressive profile in the merged engine) still strips the
+            // "So," it produced.
+            rule: user_rule("expand-xyz", r"(?i)^xyz$", "So, hello", RulePosition::First),
+            input: "xyz",
+            expected: "Hello",
+        },
+        RulePosition::Standard => PositionCase {
+            profile: CleaningProfile::Safe,
+            drop_trailing_period: false,
+            // A `Standard` user rule introduces messy whitespace and a stray
+            // space before a comma; it must run before the built-in
+            // `fix-collapse-spaces` / `fix-space-before-punct` cleanup rules
+            // (both Safe, unconditional) for the output to come out clean.
+            rule: user_rule(
+                "expand-brb",
+                r"(?i)\bbrb\b",
+                "be right   back ,",
+                RulePosition::Standard,
+            ),
+            input: "brb",
+            expected: "Be right back,",
+        },
+        RulePosition::Last => PositionCase {
+            profile: CleaningProfile::Safe,
+            drop_trailing_period: true,
+            // A `Last` user rule appends a trailing period *after* the
+            // built-in `fix-trailing-period` rule (enabled here via
+            // `drop_trailing_period = true`) has already run, so the period
+            // this rule adds is not stripped.
+            //
+            // Unlike the pre-merge engine, `capitalize-sentence-starts` is
+            // itself a built-in rule that also runs before the `Last` group
+            // in the merged engine (see the module-level doc comment), so
+            // the user rule's literal replacement text is not recapitalized
+            // afterward: the result is "done." rather than the pre-merge
+            // engine's "Done.".
+            rule: user_rule(
+                "add-trailing-period",
+                r"(?i)^done$",
+                "done.",
+                RulePosition::Last,
+            ),
+            input: "done",
+            expected: "done.",
+        },
+    }
 }
 
 #[test]
-fn user_rule_standard_position_runs_before_cleanup_group() {
-    // A `Standard` user rule introduces messy whitespace and a stray space
-    // before a comma; it must run before the built-in `fix-collapse-spaces`
-    // / `fix-space-before-punct` cleanup rules (both Safe, unconditional)
-    // for the output to come out clean.
-    let rules = vec![user_rule(
-        "expand-brb",
-        r"(?i)\bbrb\b",
-        "be right   back ,",
+fn user_rule_positions_are_all_ordered_correctly() {
+    let failures: Vec<String> = [
+        RulePosition::First,
         RulePosition::Standard,
-    )];
-    let cleaner = build_cleaner_for_test(CleaningProfile::Safe, false, &HashSet::new(), &rules);
-    assert_eq!(cleaner.clean_text("brb"), "Be right back,");
+        RulePosition::Last,
+    ]
+    .into_iter()
+    .filter_map(|position| {
+        let case = position_case(position);
+        let cleaner = build_cleaner_for_test(
+            case.profile,
+            case.drop_trailing_period,
+            &HashSet::new(),
+            std::slice::from_ref(&case.rule),
+        );
+        let actual = cleaner.clean_text(case.input);
+        (actual != case.expected).then(|| {
+            format!(
+                "{position:?}: input {:?}: expected {:?}, got {actual:?}",
+                case.input, case.expected
+            )
+        })
+    })
+    .collect();
+
+    assert!(
+        failures.is_empty(),
+        "{} case(s) failed:\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
 }
 
 #[test]
 fn user_rule_standard_position_stays_before_cleanup_when_boundary_is_disabled() {
+    // Extra `Standard` boundary point on the disabled-rules axis, not
+    // covered by the exhaustive per-position matrix above.
     let rules = vec![user_rule(
         "expand-brb",
         r"^brb$",
@@ -675,120 +761,105 @@ fn user_rule_standard_position_stays_before_cleanup_when_boundary_is_disabled() 
     assert_eq!(cleaner.clean_text("brb"), "Be right back");
 }
 
-#[test]
-fn user_rule_last_position_runs_after_builtins() {
-    // A `Last` user rule appends a trailing period *after* the built-in
-    // `fix-trailing-period` rule (enabled here via `drop_trailing_period =
-    // true`) has already run, so the period this rule adds is not stripped.
-    //
-    // Unlike the pre-merge engine, `capitalize-sentence-starts` is itself a
-    // built-in rule that also runs before the `Last` group in the merged
-    // engine (see the module-level doc comment), so the user rule's literal
-    // replacement text is not recapitalized afterward: the result is
-    // "done." rather than the pre-merge engine's "Done.".
-    let rules = vec![user_rule(
-        "add-trailing-period",
-        r"(?i)^done$",
-        "done.",
-        RulePosition::Last,
-    )];
-    let cleaner = build_cleaner_for_test(CleaningProfile::Safe, true, &HashSet::new(), &rules);
-    assert_eq!(cleaner.clean_text("done"), "done.");
+/// One row of the user-rule validation-error matrix: a set of `(name,
+/// pattern)` pairs (replacement is always `"x"`) fed to the cleaner, and the
+/// substrings that must all appear in the resulting error message.
+struct RejectCase {
+    name: &'static str,
+    /// (rule name, pattern) pairs handed to the cleaner; replacement is always "x".
+    rules: &'static [(&'static str, &'static str)],
+    /// Route through `build_cleaner(true, ...)` (cleaning disabled) instead of `Cleaner::new`.
+    cleaning_disabled: bool,
+    expect_substrings: &'static [&'static str],
 }
 
 #[test]
-fn user_rule_name_colliding_with_builtin_is_an_error() {
-    let rules = vec![user_rule(
-        "filled-pauses",
-        r"(?i)nope",
-        "x",
-        RulePosition::Standard,
-    )];
-    let err =
-        Cleaner::new(CleaningProfile::Safe, false, None, &HashSet::new(), &rules).unwrap_err();
-    let msg = err.to_string();
-    assert!(msg.contains("filled-pauses"), "message: {msg}");
-    assert!(msg.contains("rename"), "message: {msg}");
-}
-
-#[test]
-fn duplicate_user_rule_names_are_an_error() {
-    let rules = vec![
-        user_rule("custom-a", r"(?i)a", "A", RulePosition::Standard),
-        user_rule("custom-a", r"(?i)b", "B", RulePosition::Standard),
+fn user_rule_validation_rejections() {
+    let cases = [
+        RejectCase {
+            name: "name colliding with a builtin is an error",
+            rules: &[("filled-pauses", r"(?i)nope")],
+            cleaning_disabled: false,
+            expect_substrings: &["filled-pauses", "rename"],
+        },
+        RejectCase {
+            name: "duplicate user rule names are an error",
+            rules: &[("custom-a", r"(?i)a"), ("custom-a", r"(?i)b")],
+            cleaning_disabled: false,
+            expect_substrings: &["duplicate", "custom-a"],
+        },
+        RejectCase {
+            name: "empty user rule name is rejected",
+            rules: &[("", r"(?i)hi")],
+            cleaning_disabled: false,
+            expect_substrings: &["empty name"],
+        },
+        RejectCase {
+            name: "whitespace-only user rule name is rejected",
+            rules: &[("   ", r"(?i)hi")],
+            cleaning_disabled: false,
+            expect_substrings: &["empty name"],
+        },
+        RejectCase {
+            name: "user rule name with surrounding whitespace is rejected",
+            rules: &[(" custom-hello ", r"(?i)hi")],
+            cleaning_disabled: false,
+            expect_substrings: &["leading or trailing whitespace"],
+        },
+        RejectCase {
+            name: "disabled cleaning still validates user rule names",
+            rules: &[(" custom-hello ", r"(?i)hi")],
+            cleaning_disabled: true,
+            expect_substrings: &["leading or trailing whitespace"],
+        },
+        RejectCase {
+            name: "empty user rule pattern is rejected",
+            rules: &[("custom-empty-pattern", "")],
+            cleaning_disabled: false,
+            expect_substrings: &["custom-empty-pattern", "empty pattern"],
+        },
+        RejectCase {
+            name: "invalid user rule regex names the rule",
+            rules: &[("bad-regex", "(unclosed")],
+            cleaning_disabled: false,
+            expect_substrings: &["user rule 'bad-regex' has invalid regex"],
+        },
     ];
-    let err =
-        Cleaner::new(CleaningProfile::Safe, false, None, &HashSet::new(), &rules).unwrap_err();
-    let msg = err.to_string();
-    assert!(msg.contains("duplicate"), "message: {msg}");
-    assert!(msg.contains("custom-a"), "message: {msg}");
-}
 
-#[test]
-fn empty_user_rule_name_is_rejected() {
-    let rules = vec![user_rule("", r"(?i)hi", "hello", RulePosition::Standard)];
-    let err =
-        Cleaner::new(CleaningProfile::Safe, false, None, &HashSet::new(), &rules).unwrap_err();
-    let msg = err.to_string();
-    assert!(msg.contains("empty name"), "message: {msg}");
-}
-
-#[test]
-fn whitespace_only_user_rule_name_is_rejected() {
-    let rules = vec![user_rule("   ", r"(?i)hi", "hello", RulePosition::Standard)];
-    let err =
-        Cleaner::new(CleaningProfile::Safe, false, None, &HashSet::new(), &rules).unwrap_err();
-    let msg = err.to_string();
-    assert!(msg.contains("empty name"), "message: {msg}");
-}
-
-#[test]
-fn user_rule_name_with_surrounding_whitespace_is_rejected() {
-    let rules = vec![user_rule(
-        " custom-hello ",
-        r"(?i)hi",
-        "hello",
-        RulePosition::Standard,
-    )];
-    let err =
-        Cleaner::new(CleaningProfile::Safe, false, None, &HashSet::new(), &rules).unwrap_err();
-    let msg = err.to_string();
-    assert!(
-        msg.contains("leading or trailing whitespace"),
-        "message: {msg}"
-    );
-}
-
-#[test]
-fn disabled_cleaning_still_validates_user_rule_names() {
-    let rules = vec![user_rule(
-        " custom-hello ",
-        r"(?i)hi",
-        "hello",
-        RulePosition::Standard,
-    )];
-
-    let err = build_cleaner(true, CleaningProfile::Safe, false, None, &[], &rules).unwrap_err();
+    let failures: Vec<String> = cases
+        .iter()
+        .flat_map(|case| {
+            let rules: Vec<UserRule> = case
+                .rules
+                .iter()
+                .map(|(name, pattern)| user_rule(name, pattern, "x", RulePosition::Standard))
+                .collect();
+            let err = if case.cleaning_disabled {
+                build_cleaner(true, CleaningProfile::Safe, false, None, &[], &rules).unwrap_err()
+            } else {
+                Cleaner::new(CleaningProfile::Safe, false, None, &HashSet::new(), &rules)
+                    .unwrap_err()
+            };
+            let msg = err.to_string();
+            case.expect_substrings
+                .iter()
+                .filter(|expected| !msg.contains(**expected))
+                .map(|expected| {
+                    format!(
+                        "{}: expected message to contain {expected:?}, got {msg:?}",
+                        case.name
+                    )
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect();
 
     assert!(
-        err.to_string().contains("leading or trailing whitespace"),
-        "message: {err:#}"
+        failures.is_empty(),
+        "{} case(s) failed:\n{}",
+        failures.len(),
+        failures.join("\n")
     );
-}
-
-#[test]
-fn empty_user_rule_pattern_is_rejected() {
-    let rules = vec![user_rule(
-        "custom-empty-pattern",
-        "",
-        "x",
-        RulePosition::Standard,
-    )];
-    let err =
-        Cleaner::new(CleaningProfile::Safe, false, None, &HashSet::new(), &rules).unwrap_err();
-    let msg = err.to_string();
-    assert!(msg.contains("custom-empty-pattern"), "message: {msg}");
-    assert!(msg.contains("empty pattern"), "message: {msg}");
 }
 
 #[test]
@@ -800,23 +871,6 @@ fn whitespace_only_user_rule_pattern_is_accepted_as_a_literal_pattern() {
     let rules = vec![user_rule("space-rule", " ", "_", RulePosition::Standard)];
     let cleaner = build_cleaner_for_test(CleaningProfile::Safe, false, &HashSet::new(), &rules);
     assert_eq!(cleaner.clean_text("a b"), "A_b");
-}
-
-#[test]
-fn invalid_user_rule_regex_names_the_rule() {
-    let rules = vec![user_rule(
-        "bad-regex",
-        "(unclosed",
-        "x",
-        RulePosition::Standard,
-    )];
-    let err =
-        Cleaner::new(CleaningProfile::Safe, false, None, &HashSet::new(), &rules).unwrap_err();
-    let msg = err.to_string();
-    assert!(
-        msg.contains("user rule 'bad-regex' has invalid regex"),
-        "message: {msg}"
-    );
 }
 
 #[test]
@@ -865,13 +919,6 @@ fn sentence_starts_are_capitalized_after_cleaning() {
         cleaner.clean_text("So, the cat ran. then it slept. \"then it woke.\""),
         "The cat ran. Then it slept. \"Then it woke.\""
     );
-}
-
-#[test]
-fn capitalization_is_idempotent_for_existing_sentence_case() {
-    let cleaner = cleaner_keep_period(CleaningProfile::Safe);
-    let input = "Already capitalized. Still capitalized!";
-    assert_eq!(cleaner.clean_text(input), input);
 }
 
 #[test]
@@ -933,34 +980,19 @@ fn final_period_removal_is_off_by_default_and_can_be_enabled() {
 }
 
 #[test]
-fn dangling_connective_after_a_period_is_dropped() {
+fn dangling_connective_matrix() {
     assert_clean_cases(
         CleaningProfile::Safe,
         &[
+            // Dropped after a period.
             ("The build is green. But", "The build is green."),
             ("I pushed the fix. So", "I pushed the fix."),
-        ],
-    );
-}
-
-#[test]
-fn dangling_connective_promotes_a_trailing_comma_to_a_period() {
-    assert_clean_cases(CleaningProfile::Safe, &[("It works, but", "It works.")]);
-}
-
-#[test]
-fn chained_dangling_connectives_are_all_removed_in_one_pass() {
-    // Each application strips one trailing connective; applying that
-    // repeatedly resolves a whole chain, so "And so." fully reduces down to
-    // the real sentence underneath.
-    assert_clean_cases(CleaningProfile::Safe, &[("It works. And so.", "It works.")]);
-}
-
-#[test]
-fn dangling_connective_rule_leaves_real_endings_and_mid_sentence_uses_untouched() {
-    assert_clean_cases(
-        CleaningProfile::Safe,
-        &[
+            // A trailing comma is promoted to a period.
+            ("It works, but", "It works."),
+            // Each application strips one trailing connective; applying that
+            // repeatedly resolves a whole chain, so "And so." fully reduces
+            // down to the real sentence underneath.
+            ("It works. And so.", "It works."),
             // A real sentence ending in a word that is not on the
             // connective list is left alone.
             ("It works well.", "It works well."),
@@ -969,13 +1001,11 @@ fn dangling_connective_rule_leaves_real_endings_and_mid_sentence_uses_untouched(
                 "The cat sat on the mat and the dog ran",
                 "The cat sat on the mat and the dog ran",
             ),
+            // A lone dangling connective with no preceding content is left
+            // alone.
+            ("So", "So"),
         ],
     );
-}
-
-#[test]
-fn lone_dangling_connective_with_no_preceding_content_is_left_alone() {
-    assert_clean_cases(CleaningProfile::Safe, &[("So", "So")]);
 }
 
 #[test]
