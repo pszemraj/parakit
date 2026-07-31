@@ -63,7 +63,7 @@ Cross-thread communication uses atomics, mutex-protected buffers, and crossbeam 
 | `src/daemon/desktop/windows_{clipboard_history,focus,input,paste_smoke,security}.rs` | Windows clipboard-history acknowledgement, foreground checks, `SendInput` helpers, deep paste smoke test, and privilege diagnostics. |
 | `src/daemon/{preflight,audio/alsa,desktop/session,desktop/x11}.rs`, `src/daemon/macos.rs`, `src/daemon/macos/{permissions,focus,insertion_cgevent,pasteboard,diagnostics}.rs` | Startup checks, macOS TCC/focus/insertion/acknowledgement helpers, the deep paste-transaction smoke test, ALSA stderr suppression, session events, and X11 helpers. |
 | `src/daemon/{logging,notifications,sounds}.rs` | Runtime logging, desktop notifications, and generated audio cues. |
-| `src/fetch.rs` | Hosted [Q8_0 GGUF](https://huggingface.co/pszemraj/parakeet-tdt-0.6b-v3-gguf) download, source rebuilds, checksum verification. |
+| `src/fetch/` | Hosted [Q8_0 GGUF](https://huggingface.co/pszemraj/parakeet-tdt-0.6b-v3-gguf) download, Hugging Face repo and direct-URL sources, source rebuilds, checksum verification, and the acquisition manifest. |
 | `src/model.rs` | Model names, hosted GGUF naming, cache paths, hosted URLs, and checksum constants. |
 | `src/gguf.rs` | Minimal GGUF dtype reader for startup reporting. |
 | `src/{build_info,gpu,warmup,ffi_util}.rs` | Build diagnostics, bundled ggml device listing, synthetic warmup PCM, and local FFI helpers. |
@@ -82,3 +82,57 @@ config and cleaner validation, session and singleton checks, insertion and
 control-socket setup, and opening the model, microphone, or hotkey backend.
 
 Runtime failures are reported and the daemon continues when possible: sound cues, log writes, individual transcriptions, and text insertion failures.
+
+## Intentional Duplication
+
+A repo-wide deduplication audit (2026-07, the `feat/ux` PR) consolidated every
+duplicate with a clean extraction path. The look-alikes below were evaluated
+and deliberately left separate. Do not merge them without revisiting the
+reasoning here and at the cited sites.
+
+- `daemon/macos/diagnostics.rs` `DoctorClipboardSnapshot` vs
+  `daemon/desktop/inject.rs` `ClipboardSnapshot`: `doctor --deep` keeps an
+  independent capture/restore oracle so it verifies the production clipboard
+  path instead of trusting it. Sharing the implementation would let a bug
+  pass its own verification.
+- `daemon/macos/pasteboard.rs` `BoundedNormalizedValue` vs
+  `daemon/macos/focus.rs` `cfstring_to_bounded_value`: same bounded
+  head-plus-tail shape, different unit systems (normalized chars with
+  whitespace stripping for layout-independent matching vs raw UTF-16 units at
+  the FFI boundary). Cross-referenced in comments at both sites.
+- `daemon/stderr.rs` unix vs windows suppressors: a pipe plus drain thread vs
+  a `NUL` redirect. Only the guard structure is similar, not the mechanism.
+- `daemon/ipc.rs` unix vs windows `handle_client`: the ~15 glue lines differ
+  in three real ways (stream timeouts, warning wording, the
+  `schedule_exit_after_response` argument); the business logic is already
+  shared via `client_command_outcome`. A transport trait was evaluated and
+  rejected as net-negative.
+- `src/test_support.rs` vs `tests/common/mod.rs` `fixture_root`: unit-test vs
+  integration-test crate boundary; they cannot share code and differ by
+  design (eager creation and nanosecond suffix vs caller-driven layout).
+- `rules/passes.rs` and `rules/defaults.rs` A/I-ambiguity exclusion: one
+  invariant encoded twice over non-overlapping input shapes; cross-referenced
+  in comments at both sites.
+- `rules/engine.rs` `RuleKind::engine` vs `CompiledTransform::engine`: a
+  three-arm match on a definition type vs a compiled type; a shared trait
+  costs more than the duplication.
+- `fetch::FetchSource::HubRepo` stores a joined `owner/repo` string that
+  `fetch/hub.rs` re-splits: the joined form is the display/manifest format,
+  and the defensive re-split guards public construction of the enum.
+- `gguf.rs` `COMMON_DTYPE_NAMES` is shared across the `general.file_type`
+  and tensor-type code spaces on purpose; verified against the vendored
+  `ggml/include/ggml.h` and commented at the site.
+- X11 `X11KeySink` vs Windows `InputSender` test seams: the same injectable
+  design pattern over incompatible OS APIs; only one side compiles per
+  target.
+- The three `start_recording` rejection tests in
+  `daemon/audio/capture_tests.rs`: a table-driven merge was attempted and
+  reverted — each case needs different live-channel scaffolding to control
+  drop timing, and the table cost more than the shared assertion lines.
+
+Deferred follow-ups:
+
+- TODO: validate the consolidated Windows-only helpers
+  (`daemon/desktop/windows_{clipboard_history,paste_smoke,focus}.rs`,
+  commit `f52e3ff`) on Windows CI; they cannot be compiled or tested from a
+  macOS host.
