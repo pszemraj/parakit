@@ -9,6 +9,7 @@
 //! substitute for focused-element identity: when Accessibility cannot expose
 //! a focused element on either side, automatic insertion is not authorized.
 
+use super::cgevent_ffi::{Boolean, CFAllocatorRef, CFIndex, CFRelease, CFStringRef, CFTypeRef};
 use crate::daemon::desktop::{
     clipboard_restore::{PasteTargetSelection, PasteTargetValue},
     FocusVerification,
@@ -25,12 +26,7 @@ use std::time::Duration;
 type AXError = i32;
 type AXUIElementRef = *mut c_void;
 type AXValueType = u32;
-type Boolean = u8;
-type CFAllocatorRef = *const c_void;
-type CFIndex = isize;
-type CFStringRef = *const c_void;
 type CFTypeID = usize;
-type CFTypeRef = *const c_void;
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -71,7 +67,6 @@ extern "C" {
 extern "C" {
     fn CFEqual(cf1: CFTypeRef, cf2: CFTypeRef) -> Boolean;
     fn CFGetTypeID(cf: CFTypeRef) -> CFTypeID;
-    fn CFRelease(cf: CFTypeRef);
     fn CFStringCreateWithBytes(
         alloc: CFAllocatorRef,
         bytes: *const u8,
@@ -545,6 +540,10 @@ fn copy_ax_text_selection(element: AXUIElementRef) -> Option<PasteTargetSelectio
     })
 }
 
+// Intentionally separate from `pasteboard::BoundedNormalizedValue`: this
+// bounds raw UTF-16 units at the AX FFI boundary, while that bounds
+// whitespace-stripped normalized chars for layout-independent insertion
+// matching. Different unit systems for different jobs — do not merge.
 fn cfstring_to_bounded_value(
     value: CFStringRef,
     max_utf16_units: usize,

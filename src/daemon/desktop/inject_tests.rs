@@ -1316,75 +1316,71 @@ fn post_paste_acknowledgement_tiers_drive_outcome_and_clipboard_policy() {
     }
 }
 
-#[test]
-fn confirmed_paste_survives_a_failed_clipboard_restore() {
-    let mut clipboard = MockClipboard::new("old clipboard").fail_set_matching("old clipboard");
-    let events = clipboard.events();
-    let gate =
-        MockRestoreGate::new(Rc::clone(&events)).confirmation(PasteConfirmation::Confirmed {
-            elapsed: Duration::from_millis(42),
-            kind: "ax_confirmed",
-        });
-    let result = paste_with_clipboard_swap_guarded(
-        &mut clipboard,
-        "dictated text",
-        || true,
-        || {
-            events.borrow_mut().push("paste".to_string());
-            Ok(PasteDispatch::Posted)
-        },
-        Duration::ZERO,
-        restore_plan(&gate),
-        ClipboardPolicy::RestorePrevious,
-        None,
-        || {
-            events.borrow_mut().push("guard".to_string());
-            Ok(true)
-        },
-    )
-    .expect("a failed restore after a landed paste must not turn success into an error");
-
-    assert_eq!(result.outcome, PasteOutcome::Pasted);
-    assert!(result.paste_event_posted);
-    assert_eq!(result.acknowledgement_kind, "ax_confirmed");
-    // The restore attempt failed, so the transcript is still on the
-    // clipboard rather than the previous "old clipboard" contents; this must
-    // read as `Some(false)`, not silently as `Some(true)` or an `Err` that
-    // would discard the already-landed paste.
-    assert_eq!(result.clipboard_restored, Some(false));
-    assert_eq!(clipboard.text(), Some("dictated text"));
+struct FailedClipboardRestoreCase {
+    name: &'static str,
+    confirmation: PasteConfirmation,
+    expected_outcome: PasteOutcome,
+    expected_acknowledgement_kind: &'static str,
 }
 
 #[test]
-fn unverified_paste_survives_a_failed_clipboard_restore() {
-    let mut clipboard = MockClipboard::new("old clipboard").fail_set_matching("old clipboard");
-    let events = clipboard.events();
-    let gate =
-        MockRestoreGate::new(Rc::clone(&events)).confirmation(PasteConfirmation::Unverified {
-            elapsed: Duration::from_millis(1500),
-            kind: "unverified_timeout",
-        });
-    let result = paste_with_clipboard_swap_guarded(
-        &mut clipboard,
-        "dictated text",
-        || true,
-        || {
-            events.borrow_mut().push("paste".to_string());
-            Ok(PasteDispatch::Posted)
+fn paste_survives_a_failed_clipboard_restore() {
+    let cases = [
+        FailedClipboardRestoreCase {
+            name: "confirmed paste survives a failed clipboard restore",
+            confirmation: PasteConfirmation::Confirmed {
+                elapsed: Duration::from_millis(42),
+                kind: "ax_confirmed",
+            },
+            expected_outcome: PasteOutcome::Pasted,
+            expected_acknowledgement_kind: "ax_confirmed",
         },
-        Duration::ZERO,
-        restore_plan(&gate),
-        ClipboardPolicy::RestorePrevious,
-        None,
-        || {
-            events.borrow_mut().push("guard".to_string());
-            Ok(true)
+        FailedClipboardRestoreCase {
+            name: "unverified paste survives a failed clipboard restore",
+            confirmation: PasteConfirmation::Unverified {
+                elapsed: Duration::from_millis(1500),
+                kind: "unverified_timeout",
+            },
+            expected_outcome: PasteOutcome::PastedUnverified,
+            expected_acknowledgement_kind: "unverified_timeout",
         },
-    )
-    .expect("a failed restore after an unverified paste must not turn success into an error");
+    ];
 
-    assert_eq!(result.outcome, PasteOutcome::PastedUnverified);
-    assert!(result.paste_event_posted);
-    assert_eq!(result.clipboard_restored, Some(false));
-    assert_eq!(clipboard.text(), Some("dictated text"));
+    for case in cases {
+        let mut clipboard = MockClipboard::new("old clipboard").fail_set_matching("old clipboard");
+        let events = clipboard.events();
+        let gate = MockRestoreGate::new(Rc::clone(&events)).confirmation(case.confirmation);
+        let result = paste_with_clipboard_swap_guarded(
+            &mut clipboard,
+            "dictated text",
+            || true,
+            || {
+                events.borrow_mut().push("paste".to_string());
+                Ok(PasteDispatch::Posted)
+            },
+            Duration::ZERO,
+            restore_plan(&gate),
+            ClipboardPolicy::RestorePrevious,
+            None,
+            || {
+                events.borrow_mut().push("guard".to_string());
+                Ok(true)
+            },
+        )
+        .expect("a failed restore after a landed paste must not turn success into an error");
+
+        assert_eq!(result.outcome, case.expected_outcome, "{}", case.name);
+        assert!(result.paste_event_posted, "{}", case.name);
+        assert_eq!(
+            result.acknowledgement_kind, case.expected_acknowledgement_kind,
+            "{}",
+            case.name
+        );
+        // The restore attempt failed, so the transcript is still on the
+        // clipboard rather than the previous "old clipboard" contents; this must
+        // read as `Some(false)`, not silently as `Some(true)` or an `Err` that
+        // would discard the already-landed paste.
+        assert_eq!(result.clipboard_restored, Some(false), "{}", case.name);
+        assert_eq!(clipboard.text(), Some("dictated text"), "{}", case.name);
+    }
 }

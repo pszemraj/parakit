@@ -94,8 +94,8 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::daemon::desktop::inject::{
-    restore_html_clipboard, ClipboardPolicy, FocusSnapshot, Injector, PasteMode, PasteOutcome,
-    PasteReport,
+    owned_image, restore_html_clipboard, ClipboardPolicy, FocusSnapshot, Injector, PasteMode,
+    PasteOutcome, PasteReport,
 };
 use crate::daemon::macos::pasteboard;
 
@@ -293,14 +293,6 @@ impl DoctorClipboardSnapshot {
             Self::Image(_) => "image",
             Self::EmptyOrUnsupported => "empty or unsupported",
         }
-    }
-}
-
-fn owned_image(image: ImageData<'_>) -> ImageData<'static> {
-    ImageData {
-        width: image.width,
-        height: image.height,
-        bytes: Cow::Owned(image.bytes.into_owned()),
     }
 }
 

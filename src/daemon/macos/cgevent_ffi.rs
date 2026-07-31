@@ -1,6 +1,8 @@
 //! Shared CoreFoundation and CoreGraphics event-tap declarations.
 
 use std::ffi::c_void;
+use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::ptr;
 
 /// CoreFoundation Boolean ABI type.
 pub(in crate::daemon) type Boolean = u8;
@@ -108,4 +110,113 @@ extern "C" {
 /// A mask with the requested event-type bit set.
 pub(in crate::daemon) const fn event_mask(event_type: u32) -> u64 {
     1_u64 << event_type
+}
+
+/// Failure from [`install_event_tap`], carrying whatever CoreGraphics object
+/// was already created so the caller can pick its own diagnostic wording and
+/// perform its own teardown.
+pub(in crate::daemon) enum EventTapInstallError {
+    /// `CGEventTapCreate` returned a null Mach port; nothing to release.
+    TapCreateFailed,
+    /// `CFMachPortCreateRunLoopSource` returned a null source. The Mach port
+    /// from `CGEventTapCreate` was created successfully and is returned here
+    /// so the caller can release it.
+    SourceCreateFailed(CFMachPortRef),
+}
+
+/// Install a session-scoped, head-insert CoreGraphics event tap: create it,
+/// create and register its run-loop source on the current run loop, and
+/// enable it.
+///
+/// Every caller in this crate installs the tap with the same location,
+/// placement, and options (`K_CG_SESSION_EVENT_TAP`,
+/// `K_CG_HEAD_INSERT_EVENT_TAP`, `K_CG_EVENT_TAP_OPTION_DEFAULT`), so only
+/// the parts that vary per caller — the event mask, callback, and opaque
+/// `user_info` pointer — are parameters here. What happens after a
+/// successful install (teardown on drop vs. running forever) is left to the
+/// caller, since that is exactly where the callers differ.
+///
+/// # Arguments
+///
+/// * `mask` - Event-type mask to intercept, built from [`event_mask`].
+/// * `callback` - Extern "C" callback CoreGraphics invokes per event.
+/// * `user_info` - Opaque pointer passed back to `callback` on every call.
+///
+/// # Returns
+///
+/// The installed tap's Mach port, its run-loop source, and the run loop it
+/// was registered on.
+///
+/// # Errors
+///
+/// Returns [`EventTapInstallError`] when the tap or its run-loop source
+/// could not be created.
+///
+/// # Safety
+///
+/// `callback` must be prepared to be invoked by CoreGraphics for as long as
+/// the returned tap stays installed and enabled, and `user_info` must remain
+/// valid for that same span.
+pub(in crate::daemon) unsafe fn install_event_tap(
+    mask: u64,
+    callback: CGEventTapCallBack,
+    user_info: *mut c_void,
+) -> Result<(CFMachPortRef, CFRunLoopSourceRef, CFRunLoopRef), EventTapInstallError> {
+    let tap = CGEventTapCreate(
+        K_CG_SESSION_EVENT_TAP,
+        K_CG_HEAD_INSERT_EVENT_TAP,
+        K_CG_EVENT_TAP_OPTION_DEFAULT,
+        mask,
+        callback,
+        user_info,
+    );
+    if tap.is_null() {
+        return Err(EventTapInstallError::TapCreateFailed);
+    }
+
+    let source = CFMachPortCreateRunLoopSource(ptr::null(), tap, 0);
+    if source.is_null() {
+        return Err(EventTapInstallError::SourceCreateFailed(tap));
+    }
+
+    let run_loop = CFRunLoopGetCurrent();
+    CFRunLoopAddSource(run_loop, source, kCFRunLoopDefaultMode);
+    CGEventTapEnable(tap, 1);
+    Ok((tap, source, run_loop))
+}
+
+/// Run a CGEvent-tap callback body behind an unwind guard.
+///
+/// CoreGraphics event-tap callbacks are `extern "C"` functions invoked from
+/// the tap's run loop; a panic unwinding across that boundary is undefined
+/// behavior, so every tap callback in this crate routes its inner logic
+/// through this guard instead of calling it directly.
+///
+/// # Arguments
+///
+/// * `event` - The original CGEvent, returned unmodified if `body` panics.
+/// * `body` - Callback logic to run under `catch_unwind`.
+///
+/// # Returns
+///
+/// The event `body` returns on success, or `event` unchanged if `body` panicked.
+pub(in crate::daemon) fn guarded_tap_callback(
+    event: CGEventRef,
+    body: impl FnOnce() -> CGEventRef,
+) -> CGEventRef {
+    catch_unwind(AssertUnwindSafe(body)).unwrap_or(event)
+}
+
+/// Return whether a physical key is currently held down, per the HID system
+/// event source.
+///
+/// # Arguments
+///
+/// * `keycode` - macOS virtual keycode to query.
+///
+/// # Returns
+///
+/// `true` when CoreGraphics reports the key as physically down right now.
+pub(in crate::daemon) fn physical_key_down(keycode: u16) -> bool {
+    unsafe { CGEventSourceKeyState(K_CG_EVENT_SOURCE_STATE_HID_SYSTEM_STATE, keycode) }
 }

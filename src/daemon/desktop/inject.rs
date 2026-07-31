@@ -24,7 +24,7 @@ use objc2::rc::autoreleasepool;
 use objc2_app_kit::{NSPasteboard, NSPasteboardTypeHTML, NSPasteboardTypeString};
 #[cfg(target_os = "macos")]
 use objc2_foundation::NSString;
-use std::{borrow::Cow, path::PathBuf, thread, time::Duration};
+use std::{borrow::Cow, path::PathBuf, time::Duration};
 #[cfg(target_os = "linux")]
 use x11rb::connection::Connection as _;
 #[cfg(target_os = "linux")]
@@ -37,8 +37,8 @@ use super::clipboard_restore::clipboard_history_debug;
 #[cfg(test)]
 use super::clipboard_restore::ClipboardWriteSnapshot;
 use super::clipboard_restore::{
-    ClipboardRestoreGate, ClipboardRestorePlan, ClipboardWriteToken, PasteConfirmation,
-    PasteConfirmationContext, PasteTargetValue, PlatformClipboardRestoreGate,
+    sleep_if_nonzero, ClipboardRestoreGate, ClipboardRestorePlan, ClipboardWriteToken,
+    PasteConfirmation, PasteConfirmationContext, PasteTargetValue, PlatformClipboardRestoreGate,
 };
 use super::FocusVerification;
 
@@ -1387,7 +1387,16 @@ impl ClipboardSnapshot {
     }
 }
 
-fn owned_image(image: ImageData<'_>) -> ImageData<'static> {
+/// Copy a borrowed clipboard image payload into an owned, `'static` one.
+///
+/// # Arguments
+///
+/// * `image` - Image data borrowed from a clipboard read.
+///
+/// # Returns
+///
+/// An equivalent `ImageData` that owns its pixel bytes.
+pub(crate) fn owned_image(image: ImageData<'_>) -> ImageData<'static> {
     ImageData {
         width: image.width,
         height: image.height,
@@ -1440,12 +1449,6 @@ pub(super) fn restore_or_clear_clipboard<C: ClipboardStore>(
                     "{CLIPBOARD_RESTORE_ERROR}: previous clipboard format unsupported and staged transcript could not be cleared: {err:#}"
                 )
             }),
-    }
-}
-
-fn sleep_if_nonzero(delay: Duration) {
-    if !delay.is_zero() {
-        thread::sleep(delay);
     }
 }
 

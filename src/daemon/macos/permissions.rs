@@ -1,17 +1,13 @@
 //! macOS TCC permission diagnostics: Accessibility, Microphone, and Input Monitoring.
 
+use super::cgevent_ffi::{Boolean, CFAllocatorRef, CFIndex, CFRelease, CFStringRef, CFTypeRef};
 use anyhow::{bail, Result};
 use objc2::{class, msg_send};
 use objc2_foundation::NSString;
 use std::ffi::c_void;
 use std::ptr;
 
-type Boolean = u8;
-type CFAllocatorRef = *const c_void;
 type CFDictionaryRef = *const c_void;
-type CFIndex = isize;
-type CFStringRef = *const c_void;
-type CFTypeRef = *const c_void;
 
 const AV_AUTH_NOT_DETERMINED: isize = 0;
 const AV_AUTH_RESTRICTED: isize = 1;
@@ -48,7 +44,6 @@ extern "C" {
         key_callbacks: *const c_void,
         value_callbacks: *const c_void,
     ) -> CFDictionaryRef;
-    fn CFRelease(cf: CFTypeRef);
 }
 
 #[link(name = "IOKit", kind = "framework")]

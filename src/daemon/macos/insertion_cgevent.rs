@@ -1,15 +1,13 @@
 //! macOS CGEvent-based paste shortcut and insertion smoke-test helpers.
 
 use super::cgevent_ffi::{
-    event_mask, kCFRunLoopDefaultMode, Boolean, CFMachPortCreateRunLoopSource,
-    CFMachPortInvalidate, CFMachPortRef, CFRelease, CFRunLoopAddSource, CFRunLoopGetCurrent,
-    CFRunLoopRef, CFRunLoopRemoveSource, CFRunLoopRunInMode, CFRunLoopSourceRef,
-    CGEventCreateKeyboardEvent, CGEventGetFlags, CGEventGetIntegerValueField, CGEventPost,
-    CGEventRef, CGEventSetFlags, CGEventSourceCreate, CGEventSourceKeyState, CGEventTapCreate,
-    CGEventTapEnable, CGEventTapProxy, K_CG_EVENT_FLAGS_CHANGED, K_CG_EVENT_FLAG_MASK_COMMAND,
-    K_CG_EVENT_KEY_DOWN, K_CG_EVENT_KEY_UP, K_CG_EVENT_SOURCE_STATE_HID_SYSTEM_STATE,
-    K_CG_EVENT_TAP_OPTION_DEFAULT, K_CG_HEAD_INSERT_EVENT_TAP, K_CG_HID_EVENT_TAP,
-    K_CG_KEYBOARD_EVENT_KEYCODE, K_CG_SESSION_EVENT_TAP,
+    event_mask, guarded_tap_callback, install_event_tap, kCFRunLoopDefaultMode, physical_key_down,
+    Boolean, CFMachPortInvalidate, CFMachPortRef, CFRelease, CFRunLoopRef, CFRunLoopRemoveSource,
+    CFRunLoopRunInMode, CFRunLoopSourceRef, CGEventCreateKeyboardEvent, CGEventGetFlags,
+    CGEventGetIntegerValueField, CGEventPost, CGEventRef, CGEventSetFlags, CGEventSourceCreate,
+    CGEventTapEnable, CGEventTapProxy, EventTapInstallError, K_CG_EVENT_FLAGS_CHANGED,
+    K_CG_EVENT_FLAG_MASK_COMMAND, K_CG_EVENT_KEY_DOWN, K_CG_EVENT_KEY_UP,
+    K_CG_EVENT_SOURCE_STATE_HID_SYSTEM_STATE, K_CG_HID_EVENT_TAP, K_CG_KEYBOARD_EVENT_KEYCODE,
 };
 use super::permissions::event_tap_preflight;
 use crate::daemon::desktop::hotkey::{
@@ -19,6 +17,7 @@ use crate::daemon::desktop::hotkey::{
 };
 use anyhow::{bail, Result};
 use std::ffi::c_void;
+#[cfg(test)]
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::ptr;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -140,36 +139,26 @@ struct SmokeTap {
 
 impl SmokeTap {
     fn install(state: &SmokeTapState, mask: u64) -> Result<Self> {
-        let tap = unsafe {
-            CGEventTapCreate(
-                K_CG_SESSION_EVENT_TAP,
-                K_CG_HEAD_INSERT_EVENT_TAP,
-                K_CG_EVENT_TAP_OPTION_DEFAULT,
+        let installed = unsafe {
+            install_event_tap(
                 mask,
                 smoke_tap_callback,
                 (state as *const SmokeTapState).cast_mut().cast(),
             )
         };
-        if tap.is_null() {
-            bail!(
+        let (tap, source, run_loop) = match installed {
+            Ok(installed) => installed,
+            Err(EventTapInstallError::TapCreateFailed) => bail!(
                 "could not create macOS event tap for insertion smoke test; grant Accessibility and Input Monitoring to your terminal and rerun parakit doctor --deep"
-            );
-        }
-
-        let source = unsafe { CFMachPortCreateRunLoopSource(ptr::null(), tap, 0) };
-        if source.is_null() {
-            unsafe {
-                CFMachPortInvalidate(tap);
-                CFRelease(tap.cast());
+            ),
+            Err(EventTapInstallError::SourceCreateFailed(tap)) => {
+                unsafe {
+                    CFMachPortInvalidate(tap);
+                    CFRelease(tap.cast());
+                }
+                bail!("could not create macOS event-tap run-loop source");
             }
-            bail!("could not create macOS event-tap run-loop source");
-        }
-
-        let run_loop = unsafe { CFRunLoopGetCurrent() };
-        unsafe {
-            CFRunLoopAddSource(run_loop, source, kCFRunLoopDefaultMode);
-            CGEventTapEnable(tap, 1);
-        }
+        };
         Ok(Self {
             tap,
             source,
@@ -390,10 +379,6 @@ fn safe_paste_modifiers_with(key_down: impl Fn(u16) -> bool) -> bool {
     !MACOS_PASTE_CONFLICT_KEYCODES.iter().copied().any(key_down)
 }
 
-fn physical_key_down(keycode: u16) -> bool {
-    unsafe { CGEventSourceKeyState(K_CG_EVENT_SOURCE_STATE_HID_SYSTEM_STATE, keycode) }
-}
-
 #[derive(Default)]
 struct SmokeTapState {
     saw_key_down: AtomicBool,
@@ -410,10 +395,9 @@ extern "C" fn smoke_tap_callback(
     event: CGEventRef,
     user_info: *mut c_void,
 ) -> CGEventRef {
-    catch_unwind(AssertUnwindSafe(|| {
+    guarded_tap_callback(event, || {
         smoke_tap_callback_inner(event_type, event, user_info)
-    }))
-    .unwrap_or(event)
+    })
 }
 
 fn smoke_tap_callback_inner(

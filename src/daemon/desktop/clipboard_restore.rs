@@ -481,7 +481,13 @@ impl ClipboardRestoreGate for PlatformClipboardRestoreGate {
     }
 }
 
-fn sleep_if_nonzero(delay: Duration) {
+/// Sleep for `delay` unless it is zero.
+///
+/// # Arguments
+///
+/// * `delay` - Duration to sleep; a zero duration is a no-op rather than a
+///   zero-length `thread::sleep` call.
+pub(super) fn sleep_if_nonzero(delay: Duration) {
     if !delay.is_zero() {
         thread::sleep(delay);
     }

@@ -469,6 +469,11 @@ fn value_indicates_insertion(baseline: Option<&str>, current: &str, transcript: 
 /// limit, `head` and `tail` hold disjoint leading/trailing halves. They stay
 /// separate so concatenating them cannot manufacture a false match across
 /// an omitted middle.
+///
+/// Intentionally separate from `focus::cfstring_to_bounded_value`: this type
+/// bounds normalized chars (whitespace-stripped, for layout-independent
+/// insertion matching), while that function bounds raw UTF-16 units at the
+/// AX FFI boundary. Different unit systems for different jobs — do not merge.
 struct BoundedNormalizedValue {
     head: String,
     tail: Option<String>,
