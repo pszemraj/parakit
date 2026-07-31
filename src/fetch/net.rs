@@ -351,33 +351,21 @@ mod tests {
     }
 
     #[test]
-    fn cert_hint_matches_common_tls_failure_phrasings() {
-        let cases = [
+    fn with_cert_hint_appends_guidance_for_tls_failures_and_leaves_others_alone() {
+        let tls_phrasings = [
             "error sending request: unable to get local issuer certificate",
             "invalid peer certificate: UnknownIssuer",
             "tls handshake eof",
             "SEC_E_UNTRUSTED_ROOT: the certificate chain was issued by an authority that is not trusted",
         ];
-        for case in cases {
-            let err = anyhow::anyhow!("{case}");
+        for phrasing in tls_phrasings {
+            let matching: Result<()> = Err(anyhow::anyhow!("{phrasing}"));
+            let wrapped = with_cert_hint(matching).unwrap_err();
             assert!(
-                chain_looks_like_cert_failure(&err),
-                "expected a cert-hint match for: {case}"
+                format!("{wrapped:#}").contains("operating-system certificate store"),
+                "expected a cert hint for: {phrasing}"
             );
         }
-    }
-
-    #[test]
-    fn cert_hint_does_not_match_unrelated_errors() {
-        let err = anyhow::anyhow!("connection refused");
-        assert!(!chain_looks_like_cert_failure(&err));
-    }
-
-    #[test]
-    fn with_cert_hint_appends_guidance_only_on_a_matching_chain() {
-        let matching: Result<()> = Err(anyhow::anyhow!("invalid peer certificate: UnknownIssuer"));
-        let wrapped = with_cert_hint(matching).unwrap_err();
-        assert!(format!("{wrapped:#}").contains("operating-system certificate store"));
 
         let unrelated: Result<()> = Err(anyhow::anyhow!("connection refused"));
         let wrapped = with_cert_hint(unrelated).unwrap_err();

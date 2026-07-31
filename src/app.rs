@@ -911,12 +911,7 @@ fn list_nested_gguf_files(parent: &Path) -> Vec<PathBuf> {
 /// with `/` separators regardless of platform.
 fn relative_cache_display(dir: &Path, path: &Path) -> String {
     path.strip_prefix(dir)
-        .map(|rel| {
-            rel.components()
-                .map(|c| c.as_os_str().to_string_lossy().into_owned())
-                .collect::<Vec<_>>()
-                .join("/")
-        })
+        .map(model::slash_joined)
         .unwrap_or_else(|_| model_file_name(path))
 }
 

@@ -259,11 +259,7 @@ pub(super) fn relative_key(models_dir: &Path, path: &Path) -> Result<String> {
             models_dir.display()
         )
     })?;
-    Ok(rel
-        .components()
-        .map(|c| c.as_os_str().to_string_lossy().into_owned())
-        .collect::<Vec<_>>()
-        .join("/"))
+    Ok(crate::model::slash_joined(rel))
 }
 
 /// Current UTC time as an RFC 3339 timestamp, millisecond precision.

@@ -3,7 +3,7 @@
 use anyhow::{Context, Result};
 #[cfg(target_os = "windows")]
 use directories::BaseDirs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Environment variable that overrides the platform model cache directory.
 pub const MODELS_DIR_ENV: &str = "PARAKIT_MODELS_DIR";
@@ -78,14 +78,61 @@ pub fn models_dir() -> Result<PathBuf> {
 /// Returns an error if no usable home directory is available.
 #[cfg(not(target_os = "windows"))]
 pub fn xdg_cache_base() -> Result<PathBuf> {
-    if let Some(path) = std::env::var_os("XDG_CACHE_HOME") {
+    xdg_base("XDG_CACHE_HOME", ".cache")
+}
+
+/// Resolve an XDG-style base directory: the named environment variable when
+/// set and non-empty, otherwise `$HOME/<fallback_subdir>`.
+///
+/// Shared by [`xdg_cache_base`] and `config::xdg_config_base`, which are
+/// otherwise identical apart from the variable name and fallback
+/// subdirectory.
+///
+/// # Arguments
+///
+/// * `env_var` - XDG environment variable to check first (e.g.
+///   `XDG_CACHE_HOME`).
+/// * `fallback_subdir` - Subdirectory of `$HOME` to fall back to (e.g.
+///   `.cache`).
+///
+/// # Returns
+///
+/// The resolved base directory.
+///
+/// # Errors
+///
+/// Returns an error if no usable home directory is available.
+#[cfg(not(target_os = "windows"))]
+pub fn xdg_base(env_var: &str, fallback_subdir: &str) -> Result<PathBuf> {
+    if let Some(path) = std::env::var_os(env_var) {
         if !path.as_os_str().is_empty() {
             return Ok(PathBuf::from(path));
         }
     }
 
     let home = std::env::var_os("HOME").context("HOME is not set")?;
-    Ok(PathBuf::from(home).join(".cache"))
+    Ok(PathBuf::from(home).join(fallback_subdir))
+}
+
+/// Join a relative path's components with `/`, regardless of platform.
+///
+/// Shared core of [`crate::fetch`]'s manifest key derivation and the
+/// `parakit cache list` display path; each caller applies its own policy for
+/// a path that turns out not to be relative to the expected base, so only
+/// the join itself lives here.
+///
+/// # Arguments
+///
+/// * `rel` - A relative path, already stripped of its base directory.
+///
+/// # Returns
+///
+/// `rel`'s components joined with `/`.
+pub fn slash_joined(rel: &Path) -> String {
+    rel.components()
+        .map(|c| c.as_os_str().to_string_lossy().into_owned())
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 fn override_models_dir() -> Result<Option<PathBuf>> {

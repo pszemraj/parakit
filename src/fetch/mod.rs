@@ -298,16 +298,8 @@ fn run_url(options: &FetchOptions, url: &str, expected_sha: Option<&str>) -> Res
     std::fs::create_dir_all(&dest_dir).with_context(|| format!("create {}", dest_dir.display()))?;
     let dest = dest_dir.join(&file_name);
 
-    if !options.force {
-        if let Some(expected) = expected_sha {
-            if dest.is_file() && crate::checksum::sha256_file_hex(&dest)? == expected {
-                options.verbose_status(format_args!(
-                    "parakit: cached model is current: {}",
-                    dest.display()
-                ));
-                return Ok(dest);
-            }
-        }
+    if !options.force && cached_download_current(options, &dest, expected_sha)? {
+        return Ok(dest);
     }
 
     let client = net::build_client()?;
@@ -317,14 +309,82 @@ fn run_url(options: &FetchOptions, url: &str, expected_sha: Option<&str>) -> Res
     // for requests parakit itself builds against the Hub.
     download_and_verify(options, &client, url, &dest, None, expected_sha)?;
 
-    let manifest_path = dir.join(MANIFEST_FILENAME);
-    let relkey = manifest::relative_key(&dir, &dest)?;
+    record_and_announce(options, &dir, &dest, url, expected_sha.map(str::to_string))?;
+    Ok(dest)
+}
+
+/// Check whether a cached `hub/…`/`url/…` download is already current: the
+/// destination file exists and its SHA256 matches `expected_sha`. Prints the
+/// verbose "cached model is current" status line on a hit.
+///
+/// Shared by [`run_url`] and `hub::run_hub_repo`. Deliberately not used by
+/// the hosted Q8_0 path (`run_hosted_q8`): that cache check also decides
+/// whether to refresh manifest bookkeeping on an already-current file, which
+/// this simpler predicate does not do.
+///
+/// # Arguments
+///
+/// * `options` - Shared fetch options; source of the verbose status line.
+/// * `dest` - The destination path to check.
+/// * `expected_sha` - Expected SHA256, if known.
+///
+/// # Returns
+///
+/// `true` when `dest` exists and matches `expected_sha`; `false` when
+/// `expected_sha` is `None`, `dest` does not exist, or the checksum does not
+/// match.
+///
+/// # Errors
+///
+/// Returns an error if `dest` exists but cannot be hashed.
+fn cached_download_current(
+    options: &FetchOptions,
+    dest: &Path,
+    expected_sha: Option<&str>,
+) -> Result<bool> {
+    let Some(expected) = expected_sha else {
+        return Ok(false);
+    };
+    if !dest.is_file() || crate::checksum::sha256_file_hex(dest)? != expected {
+        return Ok(false);
+    }
+    options.verbose_status(format_args!(
+        "parakit: cached model is current: {}",
+        dest.display()
+    ));
+    Ok(true)
+}
+
+/// Record a completed `hub/…`/`url/…` download in the manifest and print the
+/// "model ready" hint. Shared tail of [`run_url`] and `hub::run_hub_repo`.
+///
+/// # Arguments
+///
+/// * `options` - Shared fetch options.
+/// * `models_dir` - The resolved model cache directory.
+/// * `dest` - The downloaded file's path, under `models_dir`.
+/// * `source_url` - The exact URL downloaded.
+/// * `sha256` - The checksum used to verify the download, if any.
+///
+/// # Errors
+///
+/// Returns an error if `dest` is not under `models_dir`, or if the manifest
+/// cannot be loaded or saved.
+fn record_and_announce(
+    options: &FetchOptions,
+    models_dir: &Path,
+    dest: &Path,
+    source_url: &str,
+    sha256: Option<String>,
+) -> Result<()> {
+    let manifest_path = models_dir.join(MANIFEST_FILENAME);
+    let relkey = manifest::relative_key(models_dir, dest)?;
     let mut manifest = Manifest::load(&manifest_path)?.unwrap_or_default();
-    manifest.record_download(&relkey, url, expected_sha.map(str::to_string));
+    manifest.record_download(&relkey, source_url, sha256);
     manifest.save(&manifest_path)?;
 
-    print_ready_with_hint(options, &dest);
-    Ok(dest)
+    print_ready_with_hint(options, dest);
+    Ok(())
 }
 
 fn url_file_name(url: &str) -> Result<String> {
@@ -336,7 +396,7 @@ fn url_file_name(url: &str) -> Result<String> {
     Ok(name.to_string())
 }
 
-/// Print the two-line "model ready" hint used by non-default fetch sources
+/// Print the three-line "model ready" hint used by non-default fetch sources
 /// (Hugging Face repo and direct URL), which — unlike the hosted Q8_0
 /// default — are not picked up automatically and need `-m`/`daemon.model` to
 /// be used.
@@ -700,29 +760,21 @@ fn run_command(command: &mut Command, label: &str) -> Result<()> {
     }
 }
 
+/// Move a verified download into place.
+///
+/// POSIX `rename` overwrites an existing destination atomically; Windows
+/// `rename` cannot, so the destination is removed first there.
 fn move_into_place(src: &Path, dst: &Path) -> Result<()> {
-    #[cfg(unix)]
-    {
-        std::fs::rename(src, dst).with_context(|| {
-            format!(
-                "move verified model from {} to {}",
-                src.display(),
-                dst.display()
-            )
-        })
-    }
-
     #[cfg(not(unix))]
-    {
-        remove_if_exists(dst)?;
-        std::fs::rename(src, dst).with_context(|| {
-            format!(
-                "move verified model from {} to {}",
-                src.display(),
-                dst.display()
-            )
-        })
-    }
+    remove_if_exists(dst)?;
+
+    std::fs::rename(src, dst).with_context(|| {
+        format!(
+            "move verified model from {} to {}",
+            src.display(),
+            dst.display()
+        )
+    })
 }
 
 fn cleanup_intermediates(paths: &FetchPaths, keep_nemo: bool, keep_f16: bool) -> Result<()> {

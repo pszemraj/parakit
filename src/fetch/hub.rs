@@ -7,7 +7,7 @@ use reqwest::StatusCode;
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 
-use super::{manifest, net, FetchOptions, FetchSource};
+use super::{net, FetchOptions, FetchSource};
 
 /// A parsed Hugging Face repo specification: `owner/repo` or
 /// `owner/repo@revision`.
@@ -151,34 +151,32 @@ fn normalize_lfs_sha256(lfs: Option<&LfsInfo>) -> Option<String> {
         .flatten()
     {
         let stripped = raw.strip_prefix("sha256:").unwrap_or(raw);
-        if is_hex64(stripped) {
+        if crate::checksum::is_sha256_hex(stripped) {
             return Some(stripped.to_ascii_lowercase());
         }
     }
     None
 }
 
-fn is_hex64(s: &str) -> bool {
-    s.len() == 64 && s.chars().all(|c| c.is_ascii_hexdigit())
-}
-
 fn is_gguf_name(name: &str) -> bool {
     name.to_ascii_lowercase().ends_with(".gguf")
 }
 
-/// The chosen `.gguf` sibling and why it was picked, distinguished so the
-/// caller can print a status line only for the auto-picked case.
+/// The chosen `.gguf` sibling and whether it was picked, distinguished only
+/// for the case a caller needs to know about: auto-selection as the sole
+/// Q8_0 match, which gets a status line no other pick does.
 #[derive(Debug)]
 enum Selection<'a> {
-    Explicit(&'a Sibling),
-    Only(&'a Sibling),
+    /// Picked via an exact `--file` match, or as the sole `.gguf` file.
+    Picked(&'a Sibling),
+    /// Auto-picked as the sole Q8_0 match among several `.gguf` files.
     AutoQ8(&'a Sibling),
 }
 
 impl<'a> Selection<'a> {
     fn sibling(&self) -> &'a Sibling {
         match self {
-            Selection::Explicit(s) | Selection::Only(s) | Selection::AutoQ8(s) => s,
+            Selection::Picked(s) | Selection::AutoQ8(s) => s,
         }
     }
 }
@@ -199,7 +197,7 @@ fn select_gguf_file<'a>(
         return gguf_files
             .iter()
             .find(|s| s.rfilename == name)
-            .map(|s| Selection::Explicit(s))
+            .map(|s| Selection::Picked(s))
             .ok_or_else(|| {
                 anyhow!(
                     "file '{name}' not found in repo; available .gguf files: {}",
@@ -212,7 +210,7 @@ fn select_gguf_file<'a>(
         bail!("no .gguf files found in repo");
     }
     if gguf_files.len() == 1 {
-        return Ok(Selection::Only(gguf_files[0]));
+        return Ok(Selection::Picked(gguf_files[0]));
     }
 
     let q8_matches: Vec<&&Sibling> = gguf_files
@@ -369,16 +367,8 @@ pub(super) fn run_hub_repo(
     let hub_sha = normalize_lfs_sha256(sibling.lfs.as_ref());
     let expected_sha = sha256_override.map(str::to_string).or(hub_sha);
 
-    if !options.force {
-        if let Some(expected) = &expected_sha {
-            if dest.is_file() && crate::checksum::sha256_file_hex(&dest)? == *expected {
-                options.verbose_status(format_args!(
-                    "parakit: cached model is current: {}",
-                    dest.display()
-                ));
-                return Ok(dest);
-            }
-        }
+    if !options.force && super::cached_download_current(options, &dest, expected_sha.as_deref())? {
+        return Ok(dest);
     }
 
     let resolve = resolve_url(endpoint, owner, name, revision, &sibling.rfilename);
@@ -393,13 +383,7 @@ pub(super) fn run_hub_repo(
         expected_sha.as_deref(),
     )?;
 
-    let relkey = manifest::relative_key(&models_dir, &dest)?;
-    let manifest_path = models_dir.join(crate::model::MANIFEST_FILENAME);
-    let mut manifest = manifest::Manifest::load(&manifest_path)?.unwrap_or_default();
-    manifest.record_download(&relkey, &resolve, expected_sha);
-    manifest.save(&manifest_path)?;
-
-    super::print_ready_with_hint(options, &dest);
+    super::record_and_announce(options, &models_dir, &dest, &resolve, expected_sha)?;
     Ok(dest)
 }
 
@@ -450,18 +434,14 @@ mod tests {
             "a/b/c",
             "owner/repo@",
             "ow ner/repo",
+            "ow!ner/repo",
+            "owner/re/po",
         ] {
             assert!(
                 classify_source(bad).is_err(),
                 "expected '{bad}' to be rejected"
             );
         }
-    }
-
-    #[test]
-    fn rejects_invalid_characters_in_owner_or_repo() {
-        assert!(parse_repo_spec("ow!ner/repo").is_err());
-        assert!(parse_repo_spec("owner/re/po").is_err());
     }
 
     #[test]
@@ -531,8 +511,8 @@ mod tests {
         let a = sibling("model-Q8_0.gguf", None);
         let refs = [&a];
         match select_gguf_file(&refs, None).unwrap() {
-            Selection::Only(s) => assert_eq!(s.rfilename, "model-Q8_0.gguf"),
-            _ => panic!("expected Selection::Only"),
+            Selection::Picked(s) => assert_eq!(s.rfilename, "model-Q8_0.gguf"),
+            _ => panic!("expected Selection::Picked"),
         }
     }
 
@@ -542,8 +522,8 @@ mod tests {
         let b = sibling("model-Q4_K_M.gguf", None);
         let refs = [&a, &b];
         match select_gguf_file(&refs, Some("model-Q4_K_M.gguf")).unwrap() {
-            Selection::Explicit(s) => assert_eq!(s.rfilename, "model-Q4_K_M.gguf"),
-            _ => panic!("expected Selection::Explicit"),
+            Selection::Picked(s) => assert_eq!(s.rfilename, "model-Q4_K_M.gguf"),
+            _ => panic!("expected Selection::Picked"),
         }
     }
 

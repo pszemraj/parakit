@@ -37,6 +37,25 @@ pub fn sha256_file_hex(path: &Path) -> Result<String> {
     Ok(hex_digest(&hasher.finalize()))
 }
 
+/// Return whether `s` is a well-formed SHA256 hex digest: exactly 64
+/// hexadecimal characters (case-insensitive).
+///
+/// Shared by the CLI `--sha256` value parser and the Hugging Face Hub LFS
+/// checksum normalizer, which both need this predicate but apply their own
+/// policy around it (the CLI parser also lowercases and rejects with a
+/// clap-friendly message).
+///
+/// # Arguments
+///
+/// * `s` - Candidate digest string.
+///
+/// # Returns
+///
+/// `true` when `s` is 64 hex characters.
+pub fn is_sha256_hex(s: &str) -> bool {
+    s.len() == 64 && s.chars().all(|c| c.is_ascii_hexdigit())
+}
+
 /// Return bytes as lowercase hexadecimal.
 ///
 /// # Arguments

@@ -256,14 +256,7 @@ fn config_path_with_override(override_path: Option<std::ffi::OsString>) -> Resul
 /// Returns an error if no usable home directory is available.
 #[cfg(not(target_os = "windows"))]
 fn xdg_config_base() -> Result<PathBuf> {
-    if let Some(path) = std::env::var_os("XDG_CONFIG_HOME") {
-        if !path.as_os_str().is_empty() {
-            return Ok(PathBuf::from(path));
-        }
-    }
-
-    let home = std::env::var_os("HOME").context("HOME is not set")?;
-    Ok(PathBuf::from(home).join(".config"))
+    parakit::model::xdg_base("XDG_CONFIG_HOME", ".config")
 }
 
 /// Load the config file at the resolved [`config_path`].

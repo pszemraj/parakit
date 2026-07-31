@@ -478,7 +478,7 @@ pub(crate) struct FetchCli {
 ///
 /// Returns a message when `value` is not 64 hex characters.
 fn parse_sha256_arg(value: &str) -> Result<String, String> {
-    if value.len() == 64 && value.chars().all(|c| c.is_ascii_hexdigit()) {
+    if parakit::checksum::is_sha256_hex(value) {
         Ok(value.to_ascii_lowercase())
     } else {
         Err(format!(
@@ -1077,48 +1077,135 @@ mod tests {
         );
     }
 
-    #[test]
-    fn sounds_flag_pair_overrides_config_in_both_directions() {
-        let mut config = ConfigFile::default();
-
-        // (c) No flags: falls through to config, then built-in default (true).
-        assert!(start_from(&[]).effective_sounds_enabled(&config));
-        config.daemon.sounds = Some(false);
-        assert!(!start_from(&[]).effective_sounds_enabled(&config));
-
-        // (a) Positive flag overrides a config `false`.
-        assert!(start_from(&["--sounds"]).effective_sounds_enabled(&config));
-
-        // (b) Negative flag overrides a config `true`.
-        config.daemon.sounds = Some(true);
-        assert!(!start_from(&["--no-sounds"]).effective_sounds_enabled(&config));
-
-        // (d) The pair conflicts.
-        let error = Cli::try_parse_from(["parakit", "start", "--sounds", "--no-sounds"])
-            .expect_err("--sounds and --no-sounds must conflict");
-        assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
+    /// One positive/negative CLI flag pair that overrides a config value,
+    /// plus everything [`bool_flag_pairs_override_config_in_both_directions`]
+    /// needs to drive the shared (a)-(d) template against it.
+    struct BoolFlagPairCase {
+        /// Included in every assertion message so a failure names the pair.
+        label: &'static str,
+        positive_flag: &'static str,
+        negative_flag: &'static str,
+        /// Effective value with no flags and no config set.
+        default_fallback: bool,
+        /// What the positive flag forces the effective value to (the
+        /// negative flag forces the opposite). Not always `true`:
+        /// `--keep-trailing-period` forces `effective_drops_trailing_period`
+        /// to `false`.
+        positive_forces: bool,
+        /// Write `value` into the config field this pair reads, choosing the
+        /// underlying config polarity so that `effective(&config)` (with no
+        /// CLI flags) would return `value`.
+        set_config_for_effective: fn(&mut ConfigFile, bool),
+        effective: fn(&StartCli, &ConfigFile) -> bool,
     }
 
+    /// Table-driven (a)-(d) coverage for every mutually exclusive
+    /// positive/negative `start` flag pair that overrides a config value:
+    ///
+    /// - (a) the positive flag overrides a config value of the opposite polarity
+    /// - (b) the negative flag overrides a config value of the opposite polarity
+    /// - (c) with neither flag, the config value applies, and a missing config
+    ///   value falls back to the built-in default
+    /// - (d) the two flags conflict with each other
     #[test]
-    fn cleaning_flag_pair_overrides_config_in_both_directions() {
-        let mut config = ConfigFile::default();
+    fn bool_flag_pairs_override_config_in_both_directions() {
+        let cases = [
+            BoolFlagPairCase {
+                label: "sounds",
+                positive_flag: "--sounds",
+                negative_flag: "--no-sounds",
+                default_fallback: true,
+                positive_forces: true,
+                set_config_for_effective: |config, value| config.daemon.sounds = Some(value),
+                effective: StartCli::effective_sounds_enabled,
+            },
+            BoolFlagPairCase {
+                label: "cleaning",
+                positive_flag: "--cleaning",
+                negative_flag: "--no-cleaning",
+                default_fallback: true,
+                positive_forces: true,
+                set_config_for_effective: |config, value| config.cleaning.enabled = Some(value),
+                effective: StartCli::effective_cleaning_enabled,
+            },
+            BoolFlagPairCase {
+                label: "keep_trailing_period",
+                positive_flag: "--keep-trailing-period",
+                negative_flag: "--no-keep-trailing-period",
+                // Dropped by default: messaging-style dictation drops the
+                // trailing period unless the user positively asks to keep it.
+                default_fallback: true,
+                // `--keep-trailing-period` means "do not drop it".
+                positive_forces: false,
+                set_config_for_effective: |config, value| {
+                    config.cleaning.keep_trailing_period = Some(!value)
+                },
+                effective: StartCli::effective_drops_trailing_period,
+            },
+            BoolFlagPairCase {
+                label: "keep_transcript_clipboard",
+                positive_flag: "--keep-transcript-clipboard",
+                negative_flag: "--no-keep-transcript-clipboard",
+                default_fallback: false,
+                positive_forces: true,
+                set_config_for_effective: |config, value| {
+                    config.daemon.keep_transcript_clipboard = Some(value)
+                },
+                effective: StartCli::effective_keep_transcript_clipboard,
+            },
+        ];
 
-        // (c) No flags: falls through to config, then built-in default (true).
-        assert!(start_from(&[]).effective_cleaning_enabled(&config));
-        config.cleaning.enabled = Some(false);
-        assert!(!start_from(&[]).effective_cleaning_enabled(&config));
+        for case in cases {
+            let mut config = ConfigFile::default();
 
-        // (a) Positive flag overrides a config `false`.
-        assert!(start_from(&["--cleaning"]).effective_cleaning_enabled(&config));
+            // (c) No flags: falls through to config, then the built-in default.
+            assert_eq!(
+                (case.effective)(&start_from(&[]), &config),
+                case.default_fallback,
+                "{}: built-in default should apply with no flags and no config",
+                case.label
+            );
+            (case.set_config_for_effective)(&mut config, !case.default_fallback);
+            assert_eq!(
+                (case.effective)(&start_from(&[]), &config),
+                !case.default_fallback,
+                "{}: config should override the built-in default with no flags",
+                case.label
+            );
 
-        // (b) Negative flag overrides a config `true`.
-        config.cleaning.enabled = Some(true);
-        assert!(!start_from(&["--no-cleaning"]).effective_cleaning_enabled(&config));
+            // (a) Positive flag overrides a config value of the opposite polarity.
+            (case.set_config_for_effective)(&mut config, !case.positive_forces);
+            assert_eq!(
+                (case.effective)(&start_from(&[case.positive_flag]), &config),
+                case.positive_forces,
+                "{}: {} should force the effective value regardless of config",
+                case.label,
+                case.positive_flag
+            );
 
-        // (d) The pair conflicts.
-        let error = Cli::try_parse_from(["parakit", "start", "--cleaning", "--no-cleaning"])
-            .expect_err("--cleaning and --no-cleaning must conflict");
-        assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
+            // (b) Negative flag overrides a config value of the opposite polarity.
+            (case.set_config_for_effective)(&mut config, case.positive_forces);
+            assert_eq!(
+                (case.effective)(&start_from(&[case.negative_flag]), &config),
+                !case.positive_forces,
+                "{}: {} should force the effective value regardless of config",
+                case.label,
+                case.negative_flag
+            );
+
+            // (d) The pair conflicts.
+            let error =
+                Cli::try_parse_from(["parakit", "start", case.positive_flag, case.negative_flag])
+                    .expect_err("the flag pair must conflict");
+            assert_eq!(
+                error.kind(),
+                clap::error::ErrorKind::ArgumentConflict,
+                "{}: {} and {} must conflict",
+                case.label,
+                case.positive_flag,
+                case.negative_flag
+            );
+        }
     }
 
     #[test]
@@ -1142,66 +1229,6 @@ mod tests {
             start_from(&["--cleaning-profile", "safe"]).effective_cleaning_profile(&config),
             CleaningProfile::Safe
         );
-    }
-
-    #[test]
-    fn keep_trailing_period_flag_pair_overrides_config_in_both_directions() {
-        let mut config = ConfigFile::default();
-
-        // (c) No flags: falls through to config, then built-in default
-        // (dropped). Messaging-style dictation drops the trailing period
-        // unless the user positively asks to keep it.
-        assert!(start_from(&[]).effective_drops_trailing_period(&config));
-        config.cleaning.keep_trailing_period = Some(true);
-        assert!(!start_from(&[]).effective_drops_trailing_period(&config));
-
-        // (a) Positive flag overrides a config `false` (would otherwise drop it).
-        config.cleaning.keep_trailing_period = Some(false);
-        assert!(!start_from(&["--keep-trailing-period"]).effective_drops_trailing_period(&config));
-
-        // (b) Negative flag overrides a config `true` (would otherwise keep it).
-        config.cleaning.keep_trailing_period = Some(true);
-        assert!(start_from(&["--no-keep-trailing-period"]).effective_drops_trailing_period(&config));
-
-        // (d) The pair conflicts.
-        let error = Cli::try_parse_from([
-            "parakit",
-            "start",
-            "--keep-trailing-period",
-            "--no-keep-trailing-period",
-        ])
-        .expect_err("--keep-trailing-period and --no-keep-trailing-period must conflict");
-        assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
-    }
-
-    #[test]
-    fn keep_transcript_clipboard_flag_pair_overrides_config_in_both_directions() {
-        let mut config = ConfigFile::default();
-
-        // (c) No flags: falls through to config, then built-in default (false).
-        assert!(!start_from(&[]).effective_keep_transcript_clipboard(&config));
-        config.daemon.keep_transcript_clipboard = Some(true);
-        assert!(start_from(&[]).effective_keep_transcript_clipboard(&config));
-
-        // (a) Positive flag overrides a config `false`.
-        config.daemon.keep_transcript_clipboard = Some(false);
-        assert!(start_from(&["--keep-transcript-clipboard"])
-            .effective_keep_transcript_clipboard(&config));
-
-        // (b) Negative flag overrides a config `true`.
-        config.daemon.keep_transcript_clipboard = Some(true);
-        assert!(!start_from(&["--no-keep-transcript-clipboard"])
-            .effective_keep_transcript_clipboard(&config));
-
-        // (d) The pair conflicts.
-        let error = Cli::try_parse_from([
-            "parakit",
-            "start",
-            "--keep-transcript-clipboard",
-            "--no-keep-transcript-clipboard",
-        ])
-        .expect_err("--keep-transcript-clipboard and --no-keep-transcript-clipboard must conflict");
-        assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
     }
 
     #[test]
