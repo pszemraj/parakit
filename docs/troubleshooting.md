@@ -200,6 +200,22 @@ The build fails, the binary will not start, or the model will not load.
 
 If that did not fix it, native dependencies are in [build.md#native-dependencies](build.md#native-dependencies), library path rules are in [build.md#runtime-library-paths](build.md#runtime-library-paths), the Windows scripts are in [../scripts/windows/README.md](../scripts/windows/README.md), and cache behavior is in [running.md#model-cache](running.md#model-cache).
 
+## Downloads Behind A Corporate Proxy
+
+`parakit fetch` (the hosted default, `--from-source`, a Hugging Face repo, or a direct URL) fails with a TLS or connection error, or cannot reach `huggingface.co` at all.
+
+1. parakit builds `reqwest` with `rustls-tls-native-roots`, so the operating system's certificate store is used natively — no bundled CA list to fall out of date, and a corporate TLS-intercepting proxy's CA is trusted automatically once it is installed in that OS store. If you manage certificates through a separate PEM bundle instead, point `SSL_CERT_FILE` (or `SSL_CERT_DIR`) at it.
+2. parakit also builds with the `system-proxy` feature, so `HTTPS_PROXY`, `HTTP_PROXY`, and `NO_PROXY` are honored the same way most other CLI tools read them. Set them if an egress proxy is required to reach the internet at all.
+3. If the download fails with a certificate-shaped error (mentions `certificate`, an unknown issuer, an invalid peer certificate, or a failed TLS handshake), parakit appends a hint to the error covering steps 1 and 2 automatically — read the full error text, not just the first line.
+4. If `huggingface.co` is blocked outright, set `HF_ENDPOINT` to an internal Nexus/Artifactory-style Hugging Face mirror. It is honored for the default hosted download, `--from-source`'s official `.nemo` checkpoint, and every `parakit fetch <owner>/<repo>` lookup.
+5. If the mirror (or a specific repo) requires authentication, set `HF_TOKEN` to a bearer token. It is only ever attached to requests that target the resolved `HF_ENDPOINT` host, never to an arbitrary `parakit fetch <url>` host.
+
+```bash
+export HF_ENDPOINT=https://artifactory.example.com/huggingface
+export HF_TOKEN=hf_...
+parakit fetch
+```
+
 ## Windows GPU Builds
 
 A GPU bundle fails to start, or `parakit start --device gpu` fails before the model loads.

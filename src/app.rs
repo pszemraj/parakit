@@ -81,18 +81,23 @@ pub(crate) fn run() -> Result<()> {
     // they report/apply the same effective values the daemon would use.
     match &cli.command {
         Some(Commands::Fetch(fetch_cli)) => {
+            let source = if fetch_cli.from_source {
+                FetchSource::OfficialNemo {
+                    keep_nemo: fetch_cli.keep_nemo,
+                    keep_f16: fetch_cli.keep_f16,
+                }
+            } else {
+                fetch::source_from_cli(
+                    fetch_cli.source.clone(),
+                    fetch_cli.file.clone(),
+                    fetch_cli.sha256.clone(),
+                )?
+            };
             fetch::run(FetchOptions {
                 force: fetch_cli.force,
                 quiet: cli.quiet,
                 verbose: cli.verbose,
-                source: if fetch_cli.from_source {
-                    FetchSource::OfficialNemo {
-                        keep_nemo: fetch_cli.keep_nemo,
-                        keep_f16: fetch_cli.keep_f16,
-                    }
-                } else {
-                    FetchSource::HostedQ8
-                },
+                source,
             })?;
             Ok(())
         }
@@ -852,43 +857,92 @@ fn print_cache_list() -> Result<()> {
         return Ok(());
     }
 
-    let mut entries = std::fs::read_dir(&dir)
-        .with_context(|| format!("read cache dir {}", dir.display()))?
-        .filter_map(Result::ok)
-        .map(|entry| entry.path())
-        .filter(|path| path.extension().is_some_and(|ext| ext == "gguf"))
-        .collect::<Vec<_>>();
-    entries.sort();
+    let top_level = list_gguf_files(&dir);
+    let mut extra = list_nested_gguf_files(&dir.join("hub"));
+    extra.extend(list_gguf_files(&dir.join("url")));
+    extra.sort();
 
-    if entries.is_empty() {
+    if top_level.is_empty() && extra.is_empty() {
         println!("  models: none");
         return Ok(());
     }
 
     println!("  models:");
-    for path in entries {
-        let name = model_file_name(&path);
-        let dtype = gguf::dtype_label(&path);
-        let size = path
-            .metadata()
-            .map(|meta| format_file_size(meta.len()))
-            .unwrap_or_else(|_| "unknown size".to_string());
-        let default_marker = if name == model::Q8_FILENAME {
-            " default"
-        } else {
-            ""
-        };
-        let checksum = if name == model::Q8_FILENAME {
-            match parakit::checksum::sha256_file_hex(&path) {
-                Ok(hash) if hash == model::HOSTED_Q8_SHA256 => "sha256 ok".to_string(),
-                Ok(hash) => format!("sha256 mismatch ({hash})"),
-                Err(err) => format!("sha256 unavailable ({err})"),
-            }
-        } else {
-            "sha256 not checked".to_string()
-        };
-        println!("    {name}{default_marker}: {dtype}, {size}, {checksum}");
+    for path in &top_level {
+        print_cache_entry(&dir, path, &model_file_name(path))?;
     }
+    for path in &extra {
+        print_cache_entry(&dir, path, &relative_cache_display(&dir, path))?;
+    }
+    Ok(())
+}
+
+/// List `.gguf` files directly inside `dir`, sorted.
+fn list_gguf_files(dir: &Path) -> Vec<PathBuf> {
+    let Ok(read) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut entries: Vec<_> = read
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.is_file() && path.extension().is_some_and(|ext| ext == "gguf"))
+        .collect();
+    entries.sort();
+    entries
+}
+
+/// List `.gguf` files one level below `parent` (`parent/*/*.gguf`), sorted.
+/// Used for `hub/<owner>--<repo>/*.gguf`.
+fn list_nested_gguf_files(parent: &Path) -> Vec<PathBuf> {
+    let Ok(read) = std::fs::read_dir(parent) else {
+        return Vec::new();
+    };
+    let mut entries: Vec<_> = read
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.is_dir())
+        .flat_map(|sub| list_gguf_files(&sub))
+        .collect();
+    entries.sort();
+    entries
+}
+
+/// Display a `hub/…`/`url/…` cache entry by its path relative to `dir`,
+/// with `/` separators regardless of platform.
+fn relative_cache_display(dir: &Path, path: &Path) -> String {
+    path.strip_prefix(dir)
+        .map(|rel| {
+            rel.components()
+                .map(|c| c.as_os_str().to_string_lossy().into_owned())
+                .collect::<Vec<_>>()
+                .join("/")
+        })
+        .unwrap_or_else(|_| model_file_name(path))
+}
+
+fn print_cache_entry(dir: &Path, path: &Path, display_name: &str) -> Result<()> {
+    let dtype = gguf::dtype_label(path);
+    let size = path
+        .metadata()
+        .map(|meta| format_file_size(meta.len()))
+        .unwrap_or_else(|_| "unknown size".to_string());
+    let name = model_file_name(path);
+    let is_default_q8 = name == model::Q8_FILENAME && path.parent() == Some(dir);
+    let default_marker = if is_default_q8 { " default" } else { "" };
+    let expected_sha = if is_default_q8 {
+        Some(model::HOSTED_Q8_SHA256.to_string())
+    } else {
+        fetch::recorded_download_sha(dir, path)?
+    };
+    let checksum = match expected_sha {
+        Some(expected) => match parakit::checksum::sha256_file_hex(path) {
+            Ok(hash) if hash == expected => "sha256 ok".to_string(),
+            Ok(hash) => format!("sha256 mismatch ({hash})"),
+            Err(err) => format!("sha256 unavailable ({err})"),
+        },
+        None => "sha256 not checked".to_string(),
+    };
+    println!("    {display_name}{default_marker}: {dtype}, {size}, {checksum}");
     Ok(())
 }
 

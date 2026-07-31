@@ -23,6 +23,18 @@ pub const F16_FILENAME: &str = "parakeet-tdt-0.6b-v3-F16.gguf";
 pub const Q8_FILENAME: &str = "parakeet-tdt-0.6b-v3-Q8_0.gguf";
 /// File name for model acquisition metadata.
 pub const MANIFEST_FILENAME: &str = "manifest.json";
+/// Environment variable overriding the Hugging Face Hub endpoint used by
+/// `parakit fetch` for Hub API calls, repo downloads, and the two pinned
+/// hosted/official-checkpoint URLs. Useful for internal Nexus/Artifactory-style
+/// mirrors on networks where `huggingface.co` is blocked.
+pub const HF_ENDPOINT_ENV: &str = "HF_ENDPOINT";
+/// Default Hugging Face Hub endpoint used when `HF_ENDPOINT` is unset or blank.
+pub const HF_DEFAULT_ENDPOINT: &str = "https://huggingface.co";
+/// Environment variable supplying a bearer token for authenticated Hugging
+/// Face Hub requests (gated repos or authenticated internal mirrors). Only
+/// attached to requests that target the resolved Hub endpoint host, never to
+/// an arbitrary `parakit fetch <url>` host.
+pub const HF_TOKEN_ENV: &str = "HF_TOKEN";
 
 /// Return the platform cache directory that holds parakit model files.
 ///

@@ -63,7 +63,10 @@ pub(crate) enum Commands {
     Start(StartCli),
     /// Inspect and test the transcript cleaning rules.
     Rules(RulesCli),
-    /// Download the default hosted Parakeet Q8_0 GGUF.
+    /// Acquire a Parakeet GGUF: the default hosted Q8_0, a Hugging Face repo, or a direct URL.
+    #[command(
+        long_about = "Acquire a Parakeet GGUF model.\n\nWith no arguments, downloads the default hosted Q8_0 GGUF.\n\nExamples:\n  parakit fetch\n  parakit fetch cstr/parakeet-tdt-0.6b-v3-GGUF\n  parakit fetch cstr/parakeet-tdt-0.6b-v3-GGUF --file parakeet-tdt-0.6b-v3-q4_k.gguf\n  parakit fetch handy-computer/parakeet-tdt-0.6b-v3-gguf@main\n  parakit fetch https://example.com/models/parakeet-q8.gguf --sha256 <64-hex>\n  parakit fetch --from-source\n\nFetched repo/URL models land under the cache directory (see `parakit cache dir`) but are not used automatically: pass `-m <path>` to `parakit start`, or set `daemon.model` in config.toml."
+    )]
     Fetch(FetchCli),
     /// Inspect the parakit model cache.
     Cache(CacheCli),
@@ -417,15 +420,43 @@ pub(crate) enum ConfigCommand {
     Edit,
 }
 
-/// Arguments controlling default model download and rebuild behavior.
+/// Arguments controlling model acquisition for `parakit fetch`.
 #[derive(Args, Debug)]
 pub(crate) struct FetchCli {
+    /// Model source: a Hugging Face repo (`owner/repo` or
+    /// `owner/repo@revision`) or a direct `http://`/`https://` URL to a
+    /// `.gguf` file. Omit to fetch the default hosted Q8_0 GGUF.
+    #[arg(value_name = "REPO_OR_URL", conflicts_with = "from_source")]
+    pub(crate) source: Option<String>,
+
+    /// Select a specific `.gguf` file inside a Hugging Face repo `source`.
+    /// Requires `source`; rejected at run time when `source` is a URL.
+    #[arg(
+        long,
+        value_name = "NAME",
+        requires = "source",
+        conflicts_with = "from_source"
+    )]
+    pub(crate) file: Option<String>,
+
+    /// Expected SHA256 of the fetched file (64 hex characters). For a repo
+    /// `source` this overrides the checksum Hugging Face reports; for a URL
+    /// `source` it is the only verification available.
+    #[arg(
+        long,
+        value_name = "HEX",
+        requires = "source",
+        conflicts_with = "from_source",
+        value_parser = parse_sha256_arg
+    )]
+    pub(crate) sha256: Option<String>,
+
     /// Ignore cached artifacts and download or rebuild again.
     #[arg(long)]
     pub(crate) force: bool,
 
     /// Rebuild Q8_0 locally from NVIDIA's official .nemo checkpoint.
-    #[arg(long)]
+    #[arg(long, conflicts_with_all = ["source", "file", "sha256"])]
     pub(crate) from_source: bool,
 
     /// Keep the downloaded 2.4 GB .nemo checkpoint after source rebuild.
@@ -435,6 +466,26 @@ pub(crate) struct FetchCli {
     /// Keep the intermediate F16 GGUF after source rebuild.
     #[arg(long, requires = "from_source")]
     pub(crate) keep_f16: bool,
+}
+
+/// Validate a `--sha256` CLI value: exactly 64 hexadecimal characters.
+///
+/// # Returns
+///
+/// The digest normalized to lowercase.
+///
+/// # Errors
+///
+/// Returns a message when `value` is not 64 hex characters.
+fn parse_sha256_arg(value: &str) -> Result<String, String> {
+    if value.len() == 64 && value.chars().all(|c| c.is_ascii_hexdigit()) {
+        Ok(value.to_ascii_lowercase())
+    } else {
+        Err(format!(
+            "expected 64 hexadecimal characters (a SHA256 digest), got {} characters",
+            value.len()
+        ))
+    }
 }
 
 /// Arguments for runtime prerequisite checks.
@@ -1325,5 +1376,115 @@ mod tests {
         let error =
             Cli::try_parse_from(args.iter().cloned()).expect_err("bogus flag must fail to parse");
         assert!(migration_hint(&args, &error).is_none());
+    }
+
+    fn fetch_from(args: &[&str]) -> FetchCli {
+        let mut full = vec!["parakit", "fetch"];
+        full.extend_from_slice(args);
+        match Cli::parse_from(full).command {
+            Some(Commands::Fetch(fetch)) => fetch,
+            other => panic!("expected Commands::Fetch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn bare_fetch_parses_with_no_source() {
+        let fetch = fetch_from(&[]);
+        assert_eq!(fetch.source, None);
+        assert_eq!(fetch.file, None);
+        assert_eq!(fetch.sha256, None);
+        assert!(!fetch.force);
+        assert!(!fetch.from_source);
+    }
+
+    #[test]
+    fn fetch_parses_a_positional_repo_source() {
+        let fetch = fetch_from(&["cstr/parakeet-tdt-0.6b-v3-GGUF"]);
+        assert_eq!(
+            fetch.source.as_deref(),
+            Some("cstr/parakeet-tdt-0.6b-v3-GGUF")
+        );
+    }
+
+    #[test]
+    fn fetch_parses_source_with_file_and_sha256() {
+        let sha = "a".repeat(64);
+        let fetch = fetch_from(&[
+            "cstr/parakeet-tdt-0.6b-v3-GGUF",
+            "--file",
+            "parakeet-tdt-0.6b-v3-q4_k.gguf",
+            "--sha256",
+            &sha,
+        ]);
+        assert_eq!(
+            fetch.file.as_deref(),
+            Some("parakeet-tdt-0.6b-v3-q4_k.gguf")
+        );
+        assert_eq!(fetch.sha256.as_deref(), Some(sha.as_str()));
+    }
+
+    #[test]
+    fn fetch_sha256_is_normalized_to_lowercase() {
+        let sha = "A".repeat(64);
+        let fetch = fetch_from(&["owner/repo", "--sha256", &sha]);
+        assert_eq!(fetch.sha256.as_deref(), Some("a".repeat(64).as_str()));
+    }
+
+    #[test]
+    fn fetch_sha256_rejects_a_non_64_hex_value() {
+        let error = Cli::try_parse_from(["parakit", "fetch", "owner/repo", "--sha256", "not-hex"])
+            .expect_err("a non-hex --sha256 value must be rejected");
+        assert_eq!(error.kind(), clap::error::ErrorKind::ValueValidation);
+    }
+
+    #[test]
+    fn fetch_file_requires_a_source() {
+        let error = Cli::try_parse_from(["parakit", "fetch", "--file", "model.gguf"])
+            .expect_err("--file without a source must be rejected");
+        assert_eq!(
+            error.kind(),
+            clap::error::ErrorKind::MissingRequiredArgument
+        );
+    }
+
+    #[test]
+    fn fetch_sha256_requires_a_source() {
+        let error = Cli::try_parse_from(["parakit", "fetch", "--sha256", &"a".repeat(64)])
+            .expect_err("--sha256 without a source must be rejected");
+        assert_eq!(
+            error.kind(),
+            clap::error::ErrorKind::MissingRequiredArgument
+        );
+    }
+
+    #[test]
+    fn fetch_source_conflicts_with_from_source() {
+        let error = Cli::try_parse_from(["parakit", "fetch", "owner/repo", "--from-source"])
+            .expect_err("a positional source and --from-source must conflict");
+        assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
+    }
+
+    #[test]
+    fn fetch_file_conflicts_with_from_source() {
+        let error = Cli::try_parse_from([
+            "parakit",
+            "fetch",
+            "owner/repo",
+            "--file",
+            "model.gguf",
+            "--from-source",
+        ])
+        .expect_err("--file and --from-source must conflict");
+        assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
+    }
+
+    #[test]
+    fn fetch_keep_flags_still_require_from_source() {
+        let error = Cli::try_parse_from(["parakit", "fetch", "--keep-nemo"])
+            .expect_err("--keep-nemo without --from-source must be rejected");
+        assert_eq!(
+            error.kind(),
+            clap::error::ErrorKind::MissingRequiredArgument
+        );
     }
 }

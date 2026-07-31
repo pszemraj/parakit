@@ -154,6 +154,23 @@ parakit start -m /path/to/model.gguf
 
 For locked-down or offline machines, seed the default model by placing `parakeet-tdt-0.6b-v3-Q8_0.gguf` in the directory printed by `parakit cache dir`. On the next startup, parakit verifies the compiled-in SHA256 and writes the cache manifest. Use `PARAKIT_MODELS_DIR` when the approved model location is managed by IT or shared across a build image.
 
+### Other GGUF Builds
+
+`parakit fetch` can also acquire other Parakeet GGUF builds instead of the hosted default, for example the CrispASR author's repo or the widely-used `handy-computer` build:
+
+```bash
+parakit fetch cstr/parakeet-tdt-0.6b-v3-GGUF
+parakit fetch cstr/parakeet-tdt-0.6b-v3-GGUF --file parakeet-tdt-0.6b-v3-q4_k.gguf
+parakit fetch handy-computer/parakeet-tdt-0.6b-v3-gguf@main
+parakit fetch https://example.com/models/parakeet-q8.gguf --sha256 <64-hex-sha256>
+```
+
+The first positional argument is either a Hugging Face repo (`owner/repo`, optionally `owner/repo@revision`) or a direct `http://`/`https://` URL. For a repo source, `--file` selects a specific `.gguf` file when the repo publishes more than one and none of them is uniquely named `q8_0`; otherwise parakit auto-selects the sole `.gguf` file, or the sole `q8_0` file among several. `--sha256` pins the expected checksum: it overrides the checksum Hugging Face reports for a repo source, and is the only verification available for a direct URL.
+
+Repo fetches land under `<cache dir>/hub/<owner>--<repo>/<file>`; URL fetches land under `<cache dir>/url/<file>`. Both are separate from the canonical top-level `parakeet-tdt-0.6b-v3-Q8_0.gguf`, so they never collide with it or each other even when different repos publish identically-named files. `parakit cache list` shows every fetched model, including these, with a checksum status. These fetched models are never picked up automatically: activate one with `parakit start -m <path>` or by setting `daemon.model = "<path>"` in `config.toml`, exactly as with any other custom GGUF.
+
+On a corporate network, set `HF_ENDPOINT` to point every Hugging Face request (including the default hosted download) at an internal mirror, and `HF_TOKEN` to authenticate against it or a gated repo. See [troubleshooting.md](troubleshooting.md#downloads-behind-a-corporate-proxy) for proxy and TLS-interception guidance.
+
 ## Microphone
 
 parakit follows the OS default input device and avoids monitor/loopback/virtual sources unless no better input is available. When CPAL reports a mono stream with the same sample rate and sample format as the default stream, parakit opens the mono stream. Otherwise it opens the default stream and downmixes multi-channel input to mono before resampling and before model inference. The model input is always 16 kHz mono PCM.
