@@ -226,6 +226,24 @@ fn run_rules_command(cli: &Cli, rules_cli: &RulesCli) -> Result<()> {
 /// Returns an error when config loading, model loading, audio setup, or
 /// daemon startup fails.
 fn run_daemon(cli: &Cli, start: &StartCli) -> Result<()> {
+    // The hidden audio simulation is a one-shot worker validation, not a
+    // daemon instance, so it intentionally does not participate in the
+    // singleton lock.
+    let _daemon_lock = if start.simulate_ptt_audio.is_none() {
+        match daemon::preflight::acquire_singleton_lock() {
+            Ok(lock) => Some(lock),
+            Err(err) if err.is::<daemon::preflight::DaemonAlreadyRunning>() => {
+                if !cli.quiet {
+                    println!("parakit: already running");
+                }
+                return Ok(());
+            }
+            Err(err) => return Err(err),
+        }
+    } else {
+        None
+    };
+
     // Beyond this point: `--simulate-ptt-audio` and full daemon bootstrap.
     // All of these merge CLI flags with the config file, loaded once here.
     let config = config::load()?;
@@ -259,8 +277,6 @@ fn run_daemon(cli: &Cli, start: &StartCli) -> Result<()> {
 
     #[cfg(target_os = "linux")]
     daemon::session::ensure_x11_session_supported()?;
-
-    let _daemon_lock = daemon::preflight::acquire_singleton_lock()?;
 
     daemon::preflight::ensure_hotkey_ready(hotkey_backend)?;
     log.verbose(format!(

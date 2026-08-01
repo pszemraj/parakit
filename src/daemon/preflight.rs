@@ -229,6 +229,18 @@ pub(crate) fn acquire_singleton_lock() -> Result<DaemonLock> {
     acquire_singleton_lock_at(&path)
 }
 
+/// Marker returned when another process already owns the daemon lock.
+#[derive(Debug)]
+pub(crate) struct DaemonAlreadyRunning;
+
+impl std::fmt::Display for DaemonAlreadyRunning {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("daemon is already running")
+    }
+}
+
+impl std::error::Error for DaemonAlreadyRunning {}
+
 fn singleton_lock_probe() -> Result<()> {
     let lock = acquire_singleton_lock()?;
     drop(lock);
@@ -311,12 +323,25 @@ fn acquire_singleton_lock_at(path: &Path) -> Result<DaemonLock> {
 
     match file.try_lock_exclusive() {
         Ok(()) => Ok(DaemonLock { file }),
-        Err(err) if err.kind() == ErrorKind::WouldBlock => bail!(
-            "another parakit daemon is already running or lock is held: {}",
-            path.display()
-        ),
+        Err(err) if is_daemon_lock_contention(&err) => Err(DaemonAlreadyRunning.into()),
         Err(err) => Err(err).with_context(|| format!("lock daemon lock {}", path.display())),
     }
+}
+
+fn is_daemon_lock_contention(err: &std::io::Error) -> bool {
+    if err.kind() == ErrorKind::WouldBlock {
+        return true;
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        // LockFileEx reports ERROR_LOCK_VIOLATION rather than mapping the
+        // condition to ErrorKind::WouldBlock.
+        err.raw_os_error() == Some(33)
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    false
 }
 
 #[cfg(target_os = "linux")]
@@ -903,8 +928,11 @@ mod tests {
             .join("parakit.lock");
 
         let first = acquire_singleton_lock_at(&path).expect("first lock should succeed");
-        let second = acquire_singleton_lock_at(&path);
-        assert!(second.is_err());
+        let Err(second) = acquire_singleton_lock_at(&path) else {
+            panic!("a held daemon lock should reject another owner");
+        };
+        assert!(second.is::<DaemonAlreadyRunning>(), "{second:#}");
+        assert_eq!(second.to_string(), "daemon is already running");
         drop(first);
         let third = acquire_singleton_lock_at(&path).expect("lock should release after drop");
         drop(third);
