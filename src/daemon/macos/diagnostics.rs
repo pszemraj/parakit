@@ -708,9 +708,9 @@ impl ProbeWindow {
                 "{message} (sentinel landed in probe text view: {sentinel_landed}, \
                  paste_event_posted={}, acknowledgement_ms={:?}, clipboard_restored={:?}, \
                  {clipboard_status})",
-                report.paste_event_posted,
-                report.acknowledgement_ms,
-                report.clipboard_restored,
+                report.telemetry.paste_event_posted,
+                report.telemetry.acknowledgement_ms,
+                report.telemetry.clipboard_restored,
             );
         }
 
@@ -720,7 +720,7 @@ impl ProbeWindow {
                  not contain the sentinel; the acknowledgement signal and the actual inserted \
                  text disagree (text view holds {landed_text:?})",
                 report.outcome,
-                report.acknowledgement_kind,
+                report.telemetry.acknowledgement_kind,
             );
         }
 
@@ -794,7 +794,7 @@ fn check_paste_report(
     report: &PasteReport,
     ax_focused_element_available: bool,
 ) -> Result<(), String> {
-    match (report.outcome, report.acknowledgement_kind) {
+    match (report.outcome, report.telemetry.acknowledgement_kind) {
         (PasteOutcome::Pasted, "ax_confirmed") => Ok(()),
         (PasteOutcome::PastedUnverified, _) if !ax_focused_element_available => Ok(()),
         (PasteOutcome::Pasted, kind) => Err(format!(
@@ -953,10 +953,12 @@ mod tests {
     fn report(outcome: PasteOutcome, acknowledgement_kind: &'static str) -> PasteReport {
         PasteReport {
             outcome,
-            paste_event_posted: true,
-            acknowledgement_kind,
-            acknowledgement_ms: Some(42),
-            clipboard_restored: Some(true),
+            telemetry: crate::daemon::desktop::inject::InsertionTelemetry {
+                paste_event_posted: true,
+                acknowledgement_kind,
+                acknowledgement_ms: Some(42),
+                clipboard_restored: Some(true),
+            },
         }
     }
 

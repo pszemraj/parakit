@@ -100,9 +100,6 @@ pub(crate) enum PasteOutcome {
     Blocked,
 }
 
-/// Outcome of a guarded paste attempt plus the insertion telemetry needed to
-/// populate a `parakit::data_log::InsertionLogFields` record.
-///
 /// Paths that never send a paste chord (staging, guard-blocked, direct
 /// typing) use `acknowledgement_kind: "not_applicable"` and
 /// `acknowledgement_ms: None` because they have nothing to acknowledge.
@@ -110,9 +107,7 @@ pub(crate) enum PasteOutcome {
 /// actual confirmation kind and elapsed time from
 /// [`crate::daemon::desktop::clipboard_restore::PasteConfirmation`].
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct PasteReport {
-    /// Coarse guarded-paste result.
-    pub(crate) outcome: PasteOutcome,
+pub(crate) struct InsertionTelemetry {
     /// Whether a synthetic paste chord or type event was actually sent.
     pub(crate) paste_event_posted: bool,
     /// How insertion was acknowledged, or `"not_applicable"` when no paste
@@ -126,6 +121,52 @@ pub(crate) struct PasteReport {
     pub(crate) clipboard_restored: Option<bool>,
 }
 
+impl InsertionTelemetry {
+    /// Build telemetry for a path that does not attempt acknowledgement.
+    ///
+    /// # Arguments
+    ///
+    /// * `paste_event_posted` - Whether synthetic input was sent.
+    /// * `clipboard_restored` - Known clipboard restore result, when touched.
+    ///
+    /// # Returns
+    ///
+    /// Telemetry with acknowledgement fields set to not applicable.
+    pub(crate) const fn not_applicable(
+        paste_event_posted: bool,
+        clipboard_restored: Option<bool>,
+    ) -> Self {
+        Self {
+            paste_event_posted,
+            acknowledgement_kind: "not_applicable",
+            acknowledgement_ms: None,
+            clipboard_restored,
+        }
+    }
+
+    fn acknowledged(
+        acknowledgement_kind: &'static str,
+        elapsed: Duration,
+        clipboard_restored: bool,
+    ) -> Self {
+        Self {
+            paste_event_posted: true,
+            acknowledgement_kind,
+            acknowledgement_ms: Some(elapsed.as_millis()),
+            clipboard_restored: Some(clipboard_restored),
+        }
+    }
+}
+
+/// Outcome of a guarded paste attempt plus its insertion telemetry.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PasteReport {
+    /// Coarse guarded-paste result.
+    pub(crate) outcome: PasteOutcome,
+    /// Acknowledgement and clipboard details shared with the worker report.
+    pub(crate) telemetry: InsertionTelemetry,
+}
+
 impl PasteReport {
     /// Build a report for a path that does not attempt acknowledgement.
     fn new(
@@ -135,10 +176,7 @@ impl PasteReport {
     ) -> Self {
         Self {
             outcome,
-            paste_event_posted,
-            acknowledgement_kind: "not_applicable",
-            acknowledgement_ms: None,
-            clipboard_restored,
+            telemetry: InsertionTelemetry::not_applicable(paste_event_posted, clipboard_restored),
         }
     }
 }
@@ -834,10 +872,7 @@ impl Injector {
         if text.is_empty() {
             return Ok(());
         }
-        let mut clipboard = match self.clipboard.take() {
-            Some(clipboard) => clipboard,
-            None => Clipboard::new().context("could not open system clipboard")?,
-        };
+        let mut clipboard = self.take_clipboard()?;
         let result = clipboard
             .set_text(text.to_owned())
             .context("could not copy transcript to clipboard");
@@ -1173,25 +1208,19 @@ where
     match confirmation {
         PasteConfirmation::Confirmed { elapsed, kind } => PasteReport {
             outcome: PasteOutcome::Pasted,
-            paste_event_posted: true,
-            acknowledgement_kind: kind,
-            acknowledgement_ms: Some(elapsed.as_millis()),
-            clipboard_restored: Some(clipboard_restored_after_paste(
-                clipboard,
-                previous,
-                clipboard_policy,
-            )),
+            telemetry: InsertionTelemetry::acknowledged(
+                kind,
+                elapsed,
+                clipboard_restored_after_paste(clipboard, previous, clipboard_policy),
+            ),
         },
         PasteConfirmation::Unverified { elapsed, kind } => PasteReport {
             outcome: PasteOutcome::PastedUnverified,
-            paste_event_posted: true,
-            acknowledgement_kind: kind,
-            acknowledgement_ms: Some(elapsed.as_millis()),
-            clipboard_restored: Some(clipboard_restored_after_paste(
-                clipboard,
-                previous,
-                clipboard_policy,
-            )),
+            telemetry: InsertionTelemetry::acknowledged(
+                kind,
+                elapsed,
+                clipboard_restored_after_paste(clipboard, previous, clipboard_policy),
+            ),
         },
         PasteConfirmation::UnverifiedFocusLost { elapsed, kind } => {
             // The chord was posted into a verified-focused target and very
@@ -1204,10 +1233,7 @@ where
             // land after all.
             PasteReport {
                 outcome: PasteOutcome::PastedUnverified,
-                paste_event_posted: true,
-                acknowledgement_kind: kind,
-                acknowledgement_ms: Some(elapsed.as_millis()),
-                clipboard_restored: Some(false),
+                telemetry: InsertionTelemetry::acknowledged(kind, elapsed, false),
             }
         }
         PasteConfirmation::NoEvidence { elapsed, kind } => {
@@ -1217,10 +1243,7 @@ where
             // Uncertainty must never destroy the transcript.
             PasteReport {
                 outcome: PasteOutcome::CopiedOnly,
-                paste_event_posted: true,
-                acknowledgement_kind: kind,
-                acknowledgement_ms: Some(elapsed.as_millis()),
-                clipboard_restored: Some(false),
+                telemetry: InsertionTelemetry::acknowledged(kind, elapsed, false),
             }
         }
     }

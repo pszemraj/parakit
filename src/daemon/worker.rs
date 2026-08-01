@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 
 use super::audio::TARGET_RATE;
 use super::desktop::FocusVerification;
-use super::inject::{ClipboardPolicy, FocusSnapshot, Injector, PasteMode};
+use super::inject::{ClipboardPolicy, FocusSnapshot, Injector, InsertionTelemetry, PasteMode};
 use super::ipc::SharedState;
 use super::logging::Logger;
 use super::notifications::Notifier;
@@ -127,16 +127,8 @@ fn worker_loop(ctx: WorkerCtx) {
         .is_some_and(Cleaner::drops_trailing_period);
     let number_threshold = cleaner.as_deref().map(Cleaner::number_threshold);
     let mut injector = if insert_transcripts {
-        match Injector::new() {
-            Ok(mut injector) => match injector.prepare_for_mode(paste_mode) {
-                Ok(()) => Some(injector),
-                Err(err) => {
-                    log.error(&format!(
-                        "insertion backend unavailable at worker startup: {err:#}"
-                    ));
-                    None
-                }
-            },
+        match prepared_injector(paste_mode) {
+            Ok(injector) => Some(injector),
             Err(err) => {
                 log.error(&format!(
                     "insertion backend unavailable at worker startup: {err:#}"
@@ -336,6 +328,12 @@ fn worker_loop(ctx: WorkerCtx) {
     }
 }
 
+fn prepared_injector(paste_mode: PasteMode) -> Result<Injector> {
+    let mut injector = Injector::new()?;
+    injector.prepare_for_mode(paste_mode)?;
+    Ok(injector)
+}
+
 #[derive(Default)]
 struct PasteCircuit {
     consecutive_failures: usize,
@@ -438,6 +436,9 @@ fn log_insertion_outcome(
         return;
     };
     let target_bundle_id = focus_at_start.and_then(FocusSnapshot::target_bundle_id);
+    let telemetry = report.map_or(InsertionTelemetry::not_applicable(false, None), |report| {
+        report.telemetry
+    });
     data_log.log_insertion(
         &record_id,
         InsertionLogFields {
@@ -445,14 +446,14 @@ fn log_insertion_outcome(
             target_bundle_id,
             focus_verification,
             transcript_chars,
-            paste_event_posted: report.is_some_and(|report| report.paste_event_posted),
+            paste_event_posted: telemetry.paste_event_posted,
             // NSPasteboard/Carbon promise-keeper read evidence is a
             // deferred follow-up (see `daemon::macos::pasteboard` module
             // docs); no call site can populate this yet.
             pasteboard_requested: None,
-            acknowledgement_kind: report.map_or("not_applicable", |r| r.acknowledgement_kind),
-            acknowledgement_ms: report.and_then(|r| r.acknowledgement_ms),
-            clipboard_restored: report.and_then(|r| r.clipboard_restored),
+            acknowledgement_kind: telemetry.acknowledgement_kind,
+            acknowledgement_ms: telemetry.acknowledgement_ms,
+            clipboard_restored: telemetry.clipboard_restored,
             failure_reason: failure_reason.as_deref(),
         },
     );
@@ -624,8 +625,8 @@ fn paste_transcript(
                 warn_if_clipboard_restore_failed(log, keep_transcript_clipboard, &report);
                 log.verbose(format!(
                     "parakit: paste sent but insertion could not be confirmed within {}ms ({}); treating as pasted",
-                    report.acknowledgement_ms.unwrap_or_default(),
-                    report.acknowledgement_kind,
+                    report.telemetry.acknowledgement_ms.unwrap_or_default(),
+                    report.telemetry.acknowledgement_kind,
                 ));
                 return Ok(InsertReport::from_paste(
                     InsertOutcome::PastedUnverified,
@@ -633,7 +634,7 @@ fn paste_transcript(
                 ));
             }
             super::inject::PasteOutcome::CopiedOnly => {
-                if report.paste_event_posted {
+                if report.telemetry.paste_event_posted {
                     // The paste chord was sent but never confirmed: avoid
                     // alarm fatigue from a second silent failure path and
                     // tell the user the transcript is safe on the
@@ -645,7 +646,7 @@ fn paste_transcript(
                 return Ok(InsertReport::from_paste(InsertOutcome::CopiedOnly, report));
             }
             super::inject::PasteOutcome::UnsafeModifiers => {
-                // No chord was ever posted (`report.paste_event_posted` is
+                // No chord was ever posted (`report.telemetry.paste_event_posted` is
                 // always false here) and the transcript is intentionally
                 // kept on the clipboard, exactly like the pre-chord
                 // `CopiedOnly` case above: this is the quiet "copied, not
@@ -662,7 +663,7 @@ fn paste_transcript(
     };
 
     if paste_failure_uses_clipboard_fallback(mode, &paste_error, keep_transcript_clipboard) {
-        copy_transcript_to_clipboard(injector, text).map_err(|copy_error| {
+        with_injector(injector, |injector| injector.copy_text(text)).map_err(|copy_error| {
             anyhow::anyhow!("{paste_error:#}; clipboard fallback also failed: {copy_error:#}")
         })?;
         return Err(
@@ -683,7 +684,7 @@ fn paste_transcript(
 /// place the failure becomes visible, since the low-level insertion module
 /// has no logger of its own to report through.
 ///
-/// `report.clipboard_restored == Some(false)` is ambiguous on its own: it is
+/// `report.telemetry.clipboard_restored == Some(false)` is ambiguous on its own: it is
 /// also what a deliberate [`ClipboardPolicy::KeepTranscript`] request looks
 /// like. Restricting the warning to `!keep_transcript_clipboard` (the caller
 /// asked for [`ClipboardPolicy::RestorePrevious`]) resolves that half of the
@@ -705,8 +706,8 @@ fn warn_if_clipboard_restore_failed(
     report: &super::inject::PasteReport,
 ) {
     if !keep_transcript_clipboard
-        && report.clipboard_restored == Some(false)
-        && report.acknowledgement_kind != "unverified_focus_lost"
+        && report.telemetry.clipboard_restored == Some(false)
+        && report.telemetry.acknowledgement_kind != "unverified_focus_lost"
     {
         log.warn(format!(
             "paste succeeded, but {}; the transcript is likely still on the clipboard",
@@ -724,8 +725,11 @@ fn copy_or_block_transcript(
     log: &Logger,
     notifier: &Notifier,
 ) -> Result<InsertReport> {
-    match stage_transcript_for_history(injector, text, keep_transcript_clipboard)
-        .context(copy_context)?
+    let policy = clipboard_policy(keep_transcript_clipboard);
+    match with_injector(injector, |injector| {
+        injector.stage_text_for_history(text, policy)
+    })
+    .context(copy_context)?
     {
         super::inject::StageOutcome::CopiedOnly => {
             notifier.transcript_copied(reason.notice());
@@ -740,21 +744,6 @@ fn copy_or_block_transcript(
             Ok(InsertReport::from_stage(InsertOutcome::Blocked, true))
         }
     }
-}
-
-fn stage_transcript_for_history(
-    injector: &mut Option<Injector>,
-    text: &str,
-    keep_transcript_clipboard: bool,
-) -> Result<super::inject::StageOutcome> {
-    let policy = clipboard_policy(keep_transcript_clipboard);
-    with_injector(injector, |injector| {
-        injector.stage_text_for_history(text, policy)
-    })
-}
-
-fn copy_transcript_to_clipboard(injector: &mut Option<Injector>, text: &str) -> Result<()> {
-    with_injector(injector, |injector| injector.copy_text(text))
 }
 
 fn with_injector<R>(
@@ -1015,17 +1004,8 @@ impl InsertOutcome {
 pub(crate) struct InsertReport {
     /// Coarse worker-level insertion result.
     pub(crate) outcome: InsertOutcome,
-    /// Whether a synthetic paste chord or type event was actually sent.
-    pub(crate) paste_event_posted: bool,
-    /// How insertion success was acknowledged (`"ax_confirmed"`,
-    /// `"unverified_timeout"`, `"unverified_no_baseline"`,
-    /// `"unverified_focus_lost"`, `"no_evidence"`, or `"not_applicable"`).
-    pub(crate) acknowledgement_kind: &'static str,
-    /// Milliseconds spent waiting for acknowledgement, when applicable.
-    pub(crate) acknowledgement_ms: Option<u128>,
-    /// Whether the previous clipboard contents were restored, when the
-    /// clipboard was touched at all.
-    pub(crate) clipboard_restored: Option<bool>,
+    /// Acknowledgement and clipboard details from the insertion path.
+    pub(crate) telemetry: InsertionTelemetry,
 }
 
 impl InsertReport {
@@ -1034,10 +1014,7 @@ impl InsertReport {
     fn from_paste(outcome: InsertOutcome, report: super::inject::PasteReport) -> Self {
         Self {
             outcome,
-            paste_event_posted: report.paste_event_posted,
-            acknowledgement_kind: report.acknowledgement_kind,
-            acknowledgement_ms: report.acknowledgement_ms,
-            clipboard_restored: report.clipboard_restored,
+            telemetry: report.telemetry,
         }
     }
 
@@ -1046,10 +1023,7 @@ impl InsertReport {
     fn from_stage(outcome: InsertOutcome, clipboard_restored: bool) -> Self {
         Self {
             outcome,
-            paste_event_posted: false,
-            acknowledgement_kind: "not_applicable",
-            acknowledgement_ms: None,
-            clipboard_restored: Some(clipboard_restored),
+            telemetry: InsertionTelemetry::not_applicable(false, Some(clipboard_restored)),
         }
     }
 
@@ -1058,10 +1032,7 @@ impl InsertReport {
     fn placeholder(outcome: InsertOutcome, paste_event_posted: bool) -> Self {
         Self {
             outcome,
-            paste_event_posted,
-            acknowledgement_kind: "not_applicable",
-            acknowledgement_ms: None,
-            clipboard_restored: None,
+            telemetry: InsertionTelemetry::not_applicable(paste_event_posted, None),
         }
     }
 
@@ -1081,7 +1052,7 @@ impl InsertReport {
     /// `true` when the daemon should play its error tone for this outcome.
     fn needs_alert(&self) -> bool {
         matches!(self.outcome, InsertOutcome::Blocked)
-            || (self.outcome == InsertOutcome::CopiedOnly && self.paste_event_posted)
+            || (self.outcome == InsertOutcome::CopiedOnly && self.telemetry.paste_event_posted)
     }
 }
 
@@ -1452,10 +1423,7 @@ mod tests {
         fn report(outcome: InsertOutcome, paste_event_posted: bool) -> InsertReport {
             InsertReport {
                 outcome,
-                paste_event_posted,
-                acknowledgement_kind: "not_applicable",
-                acknowledgement_ms: None,
-                clipboard_restored: None,
+                telemetry: InsertionTelemetry::not_applicable(paste_event_posted, None),
             }
         }
 

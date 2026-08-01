@@ -293,9 +293,7 @@ fn create_paste_chord_events(source: *mut c_void) -> Result<Vec<CGEventRef>> {
     match build_paste_chord_events(source, &mut events) {
         Ok(()) => Ok(events),
         Err(err) => {
-            for event in &events {
-                unsafe { CFRelease(event.cast()) };
-            }
+            release_events(&events);
             Err(err)
         }
     }

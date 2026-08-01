@@ -759,7 +759,7 @@ fn clipboard_swap_cases_are_stable() {
                 );
                 if let Some(expected_restored) = case.expected_clipboard_restored {
                     assert_eq!(
-                        report.clipboard_restored,
+                        report.telemetry.clipboard_restored,
                         Some(expected_restored),
                         "{}",
                         case.name
@@ -852,8 +852,8 @@ fn modifier_wait_timeout_keeps_transcript_without_posting() {
     .expect("withholding an unsafe chord should be recoverable");
 
     assert_eq!(result.outcome, PasteOutcome::UnsafeModifiers);
-    assert!(!result.paste_event_posted);
-    assert_eq!(result.clipboard_restored, Some(false));
+    assert!(!result.telemetry.paste_event_posted);
+    assert_eq!(result.telemetry.clipboard_restored, Some(false));
     assert_eq!(clipboard.text(), Some("dictated text"));
     assert_eq!(
         events.borrow().as_slice(),
@@ -886,9 +886,9 @@ fn unsafe_modifier_skip_keeps_staged_transcript_without_posting() {
     .expect("withholding an unsafe chord should be recoverable");
 
     assert_eq!(result.outcome, PasteOutcome::UnsafeModifiers);
-    assert!(!result.paste_event_posted);
-    assert_eq!(result.acknowledgement_kind, "not_applicable");
-    assert_eq!(result.clipboard_restored, Some(false));
+    assert!(!result.telemetry.paste_event_posted);
+    assert_eq!(result.telemetry.acknowledgement_kind, "not_applicable");
+    assert_eq!(result.telemetry.clipboard_restored, Some(false));
     assert_eq!(clipboard.text(), Some("dictated text"));
     assert_eq!(
         events.borrow().as_slice(),
@@ -1343,21 +1343,21 @@ fn post_paste_acknowledgement_tiers_drive_outcome_and_clipboard_policy() {
 
         assert_eq!(result.outcome, case.expected_outcome, "{}", case.name);
         assert_eq!(
-            result.acknowledgement_kind, case.expected_acknowledgement_kind,
+            result.telemetry.acknowledgement_kind, case.expected_acknowledgement_kind,
             "{}",
             case.name
         );
         assert!(
-            result.acknowledgement_ms.is_some(),
+            result.telemetry.acknowledgement_ms.is_some(),
             "{}: acknowledgement_ms should be populated",
             case.name
         );
         assert_eq!(
-            result.clipboard_restored, case.expected_clipboard_restored,
+            result.telemetry.clipboard_restored, case.expected_clipboard_restored,
             "{}",
             case.name
         );
-        assert!(result.paste_event_posted, "{}", case.name);
+        assert!(result.telemetry.paste_event_posted, "{}", case.name);
         assert_eq!(clipboard.text(), Some(case.expected_text), "{}", case.name);
         assert!(
             events
@@ -1426,9 +1426,9 @@ fn paste_survives_a_failed_clipboard_restore() {
         .expect("a failed restore after a landed paste must not turn success into an error");
 
         assert_eq!(result.outcome, case.expected_outcome, "{}", case.name);
-        assert!(result.paste_event_posted, "{}", case.name);
+        assert!(result.telemetry.paste_event_posted, "{}", case.name);
         assert_eq!(
-            result.acknowledgement_kind, case.expected_acknowledgement_kind,
+            result.telemetry.acknowledgement_kind, case.expected_acknowledgement_kind,
             "{}",
             case.name
         );
@@ -1436,7 +1436,12 @@ fn paste_survives_a_failed_clipboard_restore() {
         // clipboard rather than the previous "old clipboard" contents; this must
         // read as `Some(false)`, not silently as `Some(true)` or an `Err` that
         // would discard the already-landed paste.
-        assert_eq!(result.clipboard_restored, Some(false), "{}", case.name);
+        assert_eq!(
+            result.telemetry.clipboard_restored,
+            Some(false),
+            "{}",
+            case.name
+        );
         assert_eq!(clipboard.text(), Some("dictated text"), "{}", case.name);
     }
 }
