@@ -12,9 +12,9 @@ Cargo handles Rust packages. System packages are still needed for audio, desktop
 
 | OS | Packages |
 | --- | --- |
-| Ubuntu 24.04 | `cmake build-essential libasound2-dev libxtst-dev libxi-dev libx11-dev libxkbcommon-dev libevdev-dev libgomp1 pkg-config` |
-| Fedora | `cmake gcc-c++ alsa-lib-devel libXtst-devel libXi-devel libX11-devel libxkbcommon-devel libevdev-devel pkgconf` |
-| Arch | `cmake base-devel alsa-lib libxtst libxi libx11 libxkbcommon libevdev pkgconf` |
+| Ubuntu 24.04 | `cmake build-essential libasound2-dev libxtst-dev libxi-dev libx11-dev libxkbcommon-dev libevdev-dev libxdo-dev libgomp1 pkg-config` |
+| Fedora | `cmake gcc-c++ alsa-lib-devel libXtst-devel libXi-devel libX11-devel libxkbcommon-devel libevdev-devel xdotool-devel pkgconf` |
+| Arch | `cmake base-devel alsa-lib libxtst libxi libx11 libxkbcommon libevdev xdotool pkgconf` |
 | Windows | Visual Studio 2022 with the "Desktop development with C++" workload, plus CMake on `PATH`. GPU builds through the Windows scripts also require Ninja. |
 | macOS | Apple Silicon with Xcode command line tools plus `cmake pkg-config`. |
 
