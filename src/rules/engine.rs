@@ -250,10 +250,9 @@ impl CompiledRule {
 
 /// Compiled transcript-cleaning pipeline.
 ///
-/// Built by [`build_cleaner`](super::build_cleaner) (or, in tests, by
-/// [`Cleaner::new`] directly). Compiles the enabled built-in rules plus any
-/// enabled user rules, spliced at their configured [`RulePosition`], into a
-/// single ordered pipeline.
+/// Built by [`build_cleaner`](super::build_cleaner). Compiles the enabled
+/// built-in rules plus any enabled user rules, spliced at their configured
+/// [`RulePosition`], into a single ordered pipeline.
 #[derive(Debug)]
 pub struct Cleaner {
     rules: Vec<CompiledRule>,
@@ -264,50 +263,6 @@ pub struct Cleaner {
 }
 
 impl Cleaner {
-    /// Compile the enabled built-in and user rules into an ordered
-    /// pipeline, using the production `fancy-regex` backtrack limit.
-    ///
-    /// # Arguments
-    ///
-    /// * `profile` - Selected [`CleaningProfile`].
-    /// * `drop_trailing_period` - Enable the messaging-style terminal-period
-    ///   removal rule.
-    /// * `number_threshold` - Minimum isolated number converted to digits;
-    ///   `None` resolves to [`DEFAULT_NUMBER_THRESHOLD`], and `Some(0.0)` is
-    ///   the explicit opt-out that converts every recognized number.
-    /// * `disabled` - Rule names to exclude, built-in or user-defined.
-    /// * `user_rules` - User-defined rules to splice into the built-in list.
-    ///
-    /// # Returns
-    ///
-    /// A compiled [`Cleaner`] ready to clean transcripts.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if `number_threshold` is negative or non-finite, if
-    /// user rule validation fails (see [`validate_user_rules`]), if any
-    /// enabled built-in pattern is an invalid `regex` or `fancy-regex`
-    /// expression, or if any enabled user rule pattern is an invalid `regex`
-    /// expression.
-    #[cfg(test)]
-    pub(crate) fn new(
-        profile: CleaningProfile,
-        drop_trailing_period: bool,
-        number_threshold: Option<f64>,
-        disabled: &HashSet<String>,
-        user_rules: &[UserRule],
-    ) -> Result<Self> {
-        validate_number_threshold(number_threshold)?;
-        validate_user_rules(user_rules)?;
-        Self::new_prevalidated(
-            profile,
-            drop_trailing_period,
-            number_threshold,
-            disabled,
-            user_rules,
-        )
-    }
-
     /// Build a cleaner after rule metadata and numeric inputs have already
     /// been validated by the public rules facade.
     ///

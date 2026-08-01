@@ -306,34 +306,14 @@ pub(crate) fn load_from_path(path: &Path) -> Result<ConfigFile> {
     let config: ConfigFile = toml::from_str(&raw)
         .with_context(|| format!("failed to parse config file {}", path.display()))?;
 
-    validate_config(&config).with_context(|| format!("invalid config in {}", path.display()))?;
-
-    Ok(config)
-}
-
-/// Validate config-level invariants that are cheap to check eagerly at
-/// load time, ahead of daemon bootstrap.
-///
-/// Reuses [`parakit::rules::validate_configured_rules`] with the configured
-/// `cleaning.disabled_rules`, so load-time errors — including an unknown name
-/// in `disabled_rules` — are worded identically to the errors `parakit rules
-/// test` or daemon startup would report for the same rule set, without
-/// compiling and discarding the built-in pipeline.
-///
-/// # Errors
-///
-/// Returns an error naming the offending user rule for an empty or
-/// non-canonical name, an empty pattern, an invalid regex, a name colliding
-/// with a built-in rule, or a duplicate user rule name; or naming an unknown
-/// rule listed in `cleaning.disabled_rules`, or a negative/non-finite
-/// `cleaning.number_threshold`.
-fn validate_config(config: &ConfigFile) -> Result<()> {
     parakit::rules::validate_configured_rules(
         config.cleaning.number_threshold,
         &config.cleaning.disabled_rules,
         &config.rules.user,
-    )?;
-    Ok(())
+    )
+    .with_context(|| format!("invalid config in {}", path.display()))?;
+
+    Ok(config)
 }
 
 #[cfg(test)]

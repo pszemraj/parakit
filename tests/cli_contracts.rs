@@ -1,10 +1,22 @@
 //! Process-level CLI contract tests that cannot be covered through clap's
 //! pure parser alone.
 
+use std::path::Path;
 use std::process::Command;
+
+#[allow(dead_code)]
+mod common;
 
 fn parakit() -> Command {
     Command::new(env!("CARGO_BIN_EXE_parakit"))
+}
+
+fn isolated_parakit(root: &Path) -> Command {
+    let mut command = parakit();
+    command
+        .env("XDG_RUNTIME_DIR", root.join("runtime"))
+        .env("XDG_CACHE_HOME", root.join("cache"));
+    command
 }
 
 #[test]
@@ -23,11 +35,7 @@ fn migration_hint_uses_clap_exit_code_two() {
 
 #[test]
 fn broken_config_does_not_block_control_commands() {
-    let root = std::path::Path::new("target")
-        .join("tmp")
-        .join("cli-contracts")
-        .join(format!("{}-broken-config-control", std::process::id()));
-    let _ = std::fs::remove_dir_all(&root);
+    let root = common::fixture_root("cli-contracts", "broken-config-control");
     std::fs::create_dir_all(&root).expect("fixture root should be created");
     let config = root.join("broken.toml");
     std::fs::write(&config, "not = [valid").expect("broken config fixture should be written");
@@ -44,12 +52,8 @@ fn broken_config_does_not_block_control_commands() {
     };
 
     for command in commands {
-        let mut process = parakit();
-        process
-            .arg(command)
-            .env("PARAKIT_CONFIG_PATH", &config)
-            .env("XDG_RUNTIME_DIR", root.join("runtime"))
-            .env("XDG_CACHE_HOME", root.join("cache"));
+        let mut process = isolated_parakit(&root);
+        process.arg(command).env("PARAKIT_CONFIG_PATH", &config);
         let output = process.output().expect("parakit should run");
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(
@@ -64,11 +68,7 @@ fn broken_config_does_not_block_control_commands() {
 #[cfg(unix)]
 #[test]
 fn daemon_only_commands_report_an_absent_daemon_cleanly() {
-    let root = std::path::Path::new("target")
-        .join("tmp")
-        .join("cli-contracts")
-        .join(format!("{}-absent-daemon", std::process::id()));
-    let _ = std::fs::remove_dir_all(&root);
+    let root = common::fixture_root("cli-contracts", "absent-daemon");
 
     let cases: &[(&[&str], i32, &str, &str)] = &[
         (&["status"], 0, "parakit: not running\n", ""),
@@ -94,10 +94,8 @@ fn daemon_only_commands_report_an_absent_daemon_cleanly() {
     ];
 
     for (args, expected_code, expected_stdout, expected_stderr) in cases {
-        let output = parakit()
+        let output = isolated_parakit(&root)
             .args(*args)
-            .env("XDG_RUNTIME_DIR", root.join("runtime"))
-            .env("XDG_CACHE_HOME", root.join("cache"))
             .output()
             .expect("parakit should run");
 
@@ -107,15 +105,49 @@ fn daemon_only_commands_report_an_absent_daemon_cleanly() {
     }
 
     for command in ["status", "stop"] {
-        let output = parakit()
+        let output = isolated_parakit(&root)
             .args(["--quiet", command])
-            .env("XDG_RUNTIME_DIR", root.join("runtime"))
-            .env("XDG_CACHE_HOME", root.join("cache"))
             .output()
             .expect("parakit should run");
 
         assert!(output.status.success(), "{command}");
         assert!(output.stdout.is_empty(), "{command}");
         assert!(output.stderr.is_empty(), "{command}");
+    }
+}
+
+#[test]
+fn config_show_reports_resolved_defaults() {
+    let root = common::fixture_root("cli-contracts", "config-show-defaults");
+    std::fs::create_dir_all(&root).expect("fixture root should be created");
+    let config = root.join("config.toml");
+    std::fs::write(&config, "").expect("empty config fixture should be written");
+
+    let output = isolated_parakit(&root)
+        .args(["config", "show"])
+        .env("PARAKIT_CONFIG_PATH", &config)
+        .output()
+        .expect("parakit should run");
+
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for expected in [
+        "    model: (default: hosted Q8_0)",
+        "    device: (default: auto)",
+        "    threads: (default: auto-detected)",
+        "    paste_mode: (default: platform)",
+        "    keep_transcript_clipboard: false",
+        "    sounds: true",
+        "    transcript_history: (default: 10)",
+        "    enabled: true",
+        "    profile: safe",
+        "    keep_trailing_period: false",
+        "    number_threshold: (default: 4)",
+    ] {
+        assert!(
+            stdout.contains(expected),
+            "missing {expected:?} in:\n{stdout}"
+        );
     }
 }

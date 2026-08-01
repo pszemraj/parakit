@@ -8,7 +8,7 @@ use parakit::fetch::{self, FetchOptions, FetchSource};
 use parakit::gguf;
 use parakit::inference::{default_thread_count, DeviceMode, Engine};
 use parakit::model;
-use parakit::rules::{self, CleaningProfile};
+use parakit::rules;
 use parakit::warmup;
 use std::ffi::{c_char, c_void, CStr};
 use std::io::Write as _;
@@ -262,12 +262,7 @@ fn run_daemon(cli: &Cli, start: &StartCli) -> Result<()> {
     }
 
     if let Some(path) = start.effective_model(&config) {
-        if !path.is_file() {
-            return Err(anyhow::anyhow!(
-                "model path is not a file: {}",
-                path.display()
-            ));
-        }
+        model::validate_model_file(&path)?;
     }
 
     #[cfg(target_os = "linux")]
@@ -1028,6 +1023,7 @@ fn print_config_show(quiet: bool) -> Result<()> {
 
     let path = config::config_path()?;
     let config = config::load()?;
+    let start = StartCli::default();
 
     println!("parakit config");
     println!("  path: {}", path.display());
@@ -1035,42 +1031,40 @@ fn print_config_show(quiet: bool) -> Result<()> {
     println!("  daemon:");
     println!(
         "    model: {}",
-        config
-            .daemon
-            .model
+        start
+            .effective_model(&config)
             .as_ref()
             .map(|p| p.display().to_string())
             .unwrap_or_else(|| "(default: hosted Q8_0)".to_string())
     );
     println!(
         "    device: {}",
-        config
-            .daemon
-            .device
-            .map(|d| d.as_str().to_string())
-            .unwrap_or_else(|| format!("(default: {})", DeviceMode::default().as_str()))
+        if config.daemon.device.is_some() {
+            start.effective_device(&config).as_str().to_string()
+        } else {
+            format!("(default: {})", start.effective_device(&config).as_str())
+        }
     );
     println!(
         "    threads: {}",
-        config
-            .daemon
-            .threads
+        start
+            .effective_threads(&config)
             .map(|t| t.to_string())
             .unwrap_or_else(|| "(default: auto-detected)".to_string())
     );
     println!(
         "    paste_mode: {}",
-        config
-            .daemon
-            .paste_mode
-            .map(|m| m.label().to_string())
-            .unwrap_or_else(|| "(default: platform)".to_string())
+        if config.daemon.paste_mode.is_some() {
+            start.effective_paste_mode(&config).label().to_string()
+        } else {
+            "(default: platform)".to_string()
+        }
     );
     println!(
         "    keep_transcript_clipboard: {}",
-        config.daemon.keep_transcript_clipboard.unwrap_or(false)
+        start.effective_keep_transcript_clipboard(&config)
     );
-    println!("    sounds: {}", config.daemon.sounds.unwrap_or(true));
+    println!("    sounds: {}", start.effective_sounds_enabled(&config));
     println!("    verbose: {}", config.daemon.verbose.unwrap_or(false));
     println!(
         "    transcript_history: {}",
@@ -1078,17 +1072,17 @@ fn print_config_show(quiet: bool) -> Result<()> {
             .daemon
             .transcript_history
             .map(|n| n.to_string())
-            .unwrap_or_else(|| format!("(default: {})", daemon::ipc::DEFAULT_TRANSCRIPT_HISTORY))
+            .unwrap_or_else(|| format!(
+                "(default: {})",
+                start.effective_transcript_history(&config)
+            ))
     );
     println!("  cleaning:");
-    println!("    enabled: {}", config.cleaning.enabled.unwrap_or(true));
-    println!(
-        "    profile: {}",
-        config.cleaning.profile.unwrap_or(CleaningProfile::Safe)
-    );
+    println!("    enabled: {}", start.effective_cleaning_enabled(&config));
+    println!("    profile: {}", start.effective_cleaning_profile(&config));
     println!(
         "    keep_trailing_period: {}",
-        config.cleaning.keep_trailing_period.unwrap_or(false)
+        !start.effective_drops_trailing_period(&config)
     );
     println!(
         "    number_threshold: {}",

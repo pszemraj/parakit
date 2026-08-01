@@ -2,6 +2,7 @@
 
 use crate::constants::TARGET_RATE;
 use crate::crispasr_ext::OwnedSession;
+use crate::model::validate_model_file;
 use anyhow::{bail, Context, Result};
 use clap::ValueEnum;
 use crispasr::SessionSegment;
@@ -115,12 +116,7 @@ impl Engine {
             return Err(anyhow::anyhow!("thread count must be at least 1"));
         }
         let path = model_path.as_ref();
-        if !path.is_file() {
-            return Err(anyhow::anyhow!(
-                "model path is not a file: {}",
-                path.display()
-            ));
-        }
+        validate_model_file(path)?;
         let path_str = path
             .to_str()
             .ok_or_else(|| anyhow::anyhow!("model path is not valid UTF-8"))?;

@@ -13,17 +13,34 @@ fn build_cleaner_for_test(
     disabled: &HashSet<String>,
     user_rules: &[UserRule],
 ) -> Cleaner {
-    Cleaner::new(profile, drop_trailing_period, None, disabled, user_rules)
-        .expect("rules must compile")
+    build_cleaner_for_test_with_threshold(profile, drop_trailing_period, None, disabled, user_rules)
 }
 
 fn cleaner_with_number_threshold(threshold: Option<f64>) -> Cleaner {
-    Cleaner::new(
+    build_cleaner_for_test_with_threshold(
         CleaningProfile::Safe,
         false,
         threshold,
         &HashSet::new(),
         &[],
+    )
+}
+
+fn build_cleaner_for_test_with_threshold(
+    profile: CleaningProfile,
+    drop_trailing_period: bool,
+    number_threshold: Option<f64>,
+    disabled: &HashSet<String>,
+    user_rules: &[UserRule],
+) -> Cleaner {
+    let mut disabled: Vec<String> = disabled.iter().cloned().collect();
+    disabled.sort();
+    build_enabled_cleaner(
+        profile,
+        drop_trailing_period,
+        number_threshold,
+        &disabled,
+        user_rules,
     )
     .expect("rules must compile")
 }
@@ -627,8 +644,15 @@ fn standard_user_rule_cleanup_boundary_exists_in_defaults() {
 #[test]
 fn disabled_spoken_number_rule_ignores_threshold_in_ruleset_id() {
     let disabled = HashSet::from(["spoken-numbers".to_string()]);
-    let all = Cleaner::new(CleaningProfile::Safe, false, None, &disabled, &[]).unwrap();
-    let threshold = Cleaner::new(CleaningProfile::Safe, false, Some(5.0), &disabled, &[]).unwrap();
+    let all =
+        build_cleaner_for_test_with_threshold(CleaningProfile::Safe, false, None, &disabled, &[]);
+    let threshold = build_cleaner_for_test_with_threshold(
+        CleaningProfile::Safe,
+        false,
+        Some(5.0),
+        &disabled,
+        &[],
+    );
     assert_eq!(all.ruleset_id(), threshold.ruleset_id());
 }
 
@@ -883,8 +907,7 @@ fn user_rule_validation_rejections() {
             let err = if case.cleaning_disabled {
                 build_cleaner(true, CleaningProfile::Safe, false, None, &[], &rules).unwrap_err()
             } else {
-                Cleaner::new(CleaningProfile::Safe, false, None, &HashSet::new(), &rules)
-                    .unwrap_err()
+                build_enabled_cleaner(CleaningProfile::Safe, false, None, &[], &rules).unwrap_err()
             };
             let msg = err.to_string();
             case.expect_substrings
@@ -921,7 +944,7 @@ fn whitespace_only_user_rule_pattern_is_accepted_as_a_literal_pattern() {
 fn valid_zero_width_user_regexes_are_not_treated_as_missing_patterns() {
     for (name, pattern) in [("group", "()"), ("repeat", "a*"), ("boundary", r"\b")] {
         let rule = user_rule(name, pattern, "x", RulePosition::Standard);
-        Cleaner::new(CleaningProfile::Safe, false, None, &HashSet::new(), &[rule])
+        build_enabled_cleaner(CleaningProfile::Safe, false, None, &[], &[rule])
             .unwrap_or_else(|err| panic!("{pattern:?} is a valid configured regex: {err:#}"));
     }
 }

@@ -36,6 +36,26 @@ pub const HF_DEFAULT_ENDPOINT: &str = "https://huggingface.co";
 /// an arbitrary `parakit fetch <url>` host.
 pub const HF_TOKEN_ENV: &str = "HF_TOKEN";
 
+/// Verify that a model path names a regular file.
+///
+/// This check is shared by daemon preflight, which must reject an explicit bad
+/// path before initializing desktop/audio resources, and [`crate::inference`],
+/// which must defend direct engine callers too.
+///
+/// # Returns
+///
+/// `Ok(())` when `path` is a regular file.
+///
+/// # Errors
+///
+/// Returns an error when `path` is not a regular file.
+pub fn validate_model_file(path: &Path) -> Result<()> {
+    if !path.is_file() {
+        anyhow::bail!("model path is not a file: {}", path.display());
+    }
+    Ok(())
+}
+
 /// Return the platform cache directory that holds parakit model files.
 ///
 /// # Returns
