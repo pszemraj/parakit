@@ -163,17 +163,11 @@ function Test-DllResolvable {
         [string[]]$ExtraDirs = @()
     )
 
-    foreach ($dir in $ExtraDirs) {
+    $searchDirs = @($ExtraDirs) + @($env:Path -split ";")
+    foreach ($dir in $searchDirs) {
         if ([string]::IsNullOrWhiteSpace($dir)) {
             continue
         }
-        $candidate = Join-Path $dir $Name
-        if (Test-Path -LiteralPath $candidate -PathType Leaf) {
-            return $true
-        }
-    }
-
-    foreach ($dir in @($env:Path -split ";" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })) {
         $expanded = [System.Environment]::ExpandEnvironmentVariables($dir)
         if ([string]::IsNullOrWhiteSpace($expanded)) {
             continue
@@ -185,6 +179,29 @@ function Test-DllResolvable {
     }
 
     return $false
+}
+
+function Get-MissingExternalDlls {
+    param(
+        [string[]]$Dlls,
+
+        [Parameter(Mandatory = $true)]
+        [string]$BundleDir,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Context,
+
+        [string[]]$ExtraDirs = @()
+    )
+
+    $missing = @()
+    foreach ($dll in @($Dlls) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) {
+        Assert-FlatBundleFileName -Name $dll -Context $Context
+        if (-not (Test-DllResolvable -Name $dll -ExtraDirs (@($BundleDir) + $ExtraDirs))) {
+            $missing += $dll
+        }
+    }
+    return $missing
 }
 
 function Assert-ExternalRuntimeDependencies {
@@ -302,18 +319,10 @@ function Assert-CudaExternalDlls {
         return
     }
 
-    $dlls = @($Cuda.external_dlls) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
-    if ($dlls.Count -eq 0) {
-        return
-    }
-
-    $missing = @()
-    foreach ($dll in $dlls) {
-        Assert-FlatBundleFileName -Name $dll -Context "CUDA external DLL"
-        if (-not (Test-DllResolvable -Name $dll -ExtraDirs @($BundleDir))) {
-            $missing += $dll
-        }
-    }
+    $missing = @(Get-MissingExternalDlls `
+        -Dlls @($Cuda.external_dlls) `
+        -BundleDir $BundleDir `
+        -Context "CUDA external DLL")
 
     if ($missing.Count -gt 0) {
         $version = if ([string]::IsNullOrWhiteSpace($Cuda.toolkit_version)) { "the build" } else { $Cuda.toolkit_version }
@@ -330,19 +339,12 @@ function Assert-VulkanExternalDlls {
         [string]$BundleDir
     )
 
-    $dlls = @($Vulkan.external_dlls) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
-    if ($dlls.Count -eq 0) {
-        return
-    }
-
     $systemDir = [System.Environment]::SystemDirectory
-    $missing = @()
-    foreach ($dll in $dlls) {
-        Assert-FlatBundleFileName -Name $dll -Context "Vulkan external DLL"
-        if (-not (Test-DllResolvable -Name $dll -ExtraDirs @($BundleDir, $systemDir))) {
-            $missing += $dll
-        }
-    }
+    $missing = @(Get-MissingExternalDlls `
+        -Dlls @($Vulkan.external_dlls) `
+        -BundleDir $BundleDir `
+        -Context "Vulkan external DLL" `
+        -ExtraDirs @($systemDir))
 
     if ($missing.Count -gt 0) {
         throw "Vulkan bundle expects the driver-provided loader DLLs that were not found: $($missing -join ', '). Install or update the NVIDIA, AMD, or Intel GPU driver, or install the CPU bundle on machines without a Vulkan-capable driver."
