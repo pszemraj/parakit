@@ -20,6 +20,7 @@ required-features = ["daemon"]
 [[example]]
 name = "transcribe-file"
 path = "examples/transcribe_file.rs"
+test = true
 
 # Replays the cleaning pipeline over historical JSONL dictation logs. Needs no
 # speech model, audio device, or desktop feature.
