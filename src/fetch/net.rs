@@ -13,11 +13,13 @@
 
 use anyhow::{bail, Context, Result};
 use reqwest::blocking::{Client, RequestBuilder};
-use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, RANGE, USER_AGENT};
+use reqwest::header::{
+    HeaderMap, HeaderValue, AUTHORIZATION, ETAG, IF_RANGE, LAST_MODIFIED, RANGE, USER_AGENT,
+};
 use reqwest::StatusCode;
 use std::fs::{File, OpenOptions};
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::model::{HF_DEFAULT_ENDPOINT, HF_ENDPOINT_ENV, HF_TOKEN_ENV};
 
@@ -228,11 +230,7 @@ fn download_with_resume_inner(
     path: &Path,
     bearer: Option<&str>,
 ) -> Result<()> {
-    let mut start = path.metadata().map(|m| m.len()).unwrap_or(0);
-    let mut request = attach_bearer(client.get(url), bearer);
-    if start > 0 {
-        request = request.header(RANGE, format!("bytes={start}-"));
-    }
+    let (mut start, request) = prepare_download_request(client, url, path, bearer)?;
 
     let mut response = request.send().with_context(|| format!("GET {url}"))?;
     match response.status() {
@@ -241,9 +239,13 @@ fn download_with_resume_inner(
                 start = 0;
             }
         }
-        StatusCode::PARTIAL_CONTENT => {}
+        StatusCode::PARTIAL_CONTENT if start > 0 => {}
+        StatusCode::PARTIAL_CONTENT => {
+            bail!("download returned partial content without a range request")
+        }
         StatusCode::RANGE_NOT_SATISFIABLE => {
             super::remove_if_exists(path)?;
+            super::remove_if_exists(&resume_validator_path(path))?;
             response = attach_bearer(client.get(url), bearer)
                 .send()
                 .with_context(|| format!("GET {url}"))?;
@@ -260,6 +262,11 @@ fn download_with_resume_inner(
         }
     }
 
+    let validator_path = resume_validator_path(path);
+    if start == 0 {
+        save_resume_validator(&validator_path, response.headers())?;
+    }
+
     let mut file = if start == 0 {
         File::create(path).with_context(|| format!("create {}", path.display()))?
     } else {
@@ -270,7 +277,66 @@ fn download_with_resume_inner(
     };
     std::io::copy(&mut response, &mut file)?;
     file.flush()?;
+    super::remove_if_exists(&validator_path)?;
     Ok(())
+}
+
+fn prepare_download_request(
+    client: &Client,
+    url: &str,
+    path: &Path,
+    bearer: Option<&str>,
+) -> Result<(u64, RequestBuilder)> {
+    let validator_path = resume_validator_path(path);
+    let mut start = path.metadata().map(|metadata| metadata.len()).unwrap_or(0);
+    let validator = if start > 0 {
+        load_resume_validator(&validator_path)?
+    } else {
+        super::remove_if_exists(&validator_path)?;
+        None
+    };
+
+    if start > 0 && validator.is_none() {
+        super::remove_if_exists(path)?;
+        start = 0;
+    }
+
+    let mut request = attach_bearer(client.get(url), bearer);
+    if let Some(validator) = validator {
+        request = request
+            .header(RANGE, format!("bytes={start}-"))
+            .header(IF_RANGE, validator);
+    }
+    Ok((start, request))
+}
+
+fn resume_validator_path(path: &Path) -> PathBuf {
+    let mut validator = path.as_os_str().to_os_string();
+    validator.push(".validator");
+    PathBuf::from(validator)
+}
+
+fn load_resume_validator(path: &Path) -> Result<Option<HeaderValue>> {
+    let bytes = match std::fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error).with_context(|| format!("read {}", path.display())),
+    };
+    HeaderValue::from_bytes(&bytes)
+        .context("parse download resume validator")
+        .map(Some)
+}
+
+fn save_resume_validator(path: &Path, headers: &HeaderMap) -> Result<()> {
+    let strong_etag = headers
+        .get(ETAG)
+        .filter(|value| !value.as_bytes().starts_with(b"W/"));
+    let validator = strong_etag.or_else(|| headers.get(LAST_MODIFIED));
+    match validator {
+        Some(value) => std::fs::write(path, value.as_bytes())
+            .with_context(|| format!("write {}", path.display())),
+        None => super::remove_if_exists(path),
+    }
 }
 
 #[cfg(test)]
@@ -357,6 +423,44 @@ mod tests {
         ] {
             assert_eq!(bearer_for(url, endpoint, token), expect, "{name}");
         }
+    }
+
+    #[test]
+    fn resume_request_pairs_range_with_the_saved_validator() {
+        let dir = crate::test_support::fixture_root("parakit-fetch-tests", "resume-validator");
+        let partial = dir.join("model.gguf.part");
+        std::fs::write(&partial, b"partial").unwrap();
+        let mut response_headers = HeaderMap::new();
+        response_headers.insert(ETAG, HeaderValue::from_static("\"revision-1\""));
+        save_resume_validator(&resume_validator_path(&partial), &response_headers).unwrap();
+
+        let client = build_client().unwrap();
+        let (start, request) =
+            prepare_download_request(&client, "https://example.com/model.gguf", &partial, None)
+                .unwrap();
+        let request = request.build().unwrap();
+
+        assert_eq!(start, 7);
+        assert_eq!(request.headers().get(RANGE).unwrap(), "bytes=7-");
+        assert_eq!(request.headers().get(IF_RANGE).unwrap(), "\"revision-1\"");
+    }
+
+    #[test]
+    fn partial_without_a_validator_restarts_from_scratch() {
+        let dir = crate::test_support::fixture_root("parakit-fetch-tests", "resume-no-validator");
+        let partial = dir.join("model.gguf.part");
+        std::fs::write(&partial, b"stale").unwrap();
+
+        let client = build_client().unwrap();
+        let (start, request) =
+            prepare_download_request(&client, "https://example.com/model.gguf", &partial, None)
+                .unwrap();
+        let request = request.build().unwrap();
+
+        assert_eq!(start, 0);
+        assert!(!partial.exists());
+        assert!(!request.headers().contains_key(RANGE));
+        assert!(!request.headers().contains_key(IF_RANGE));
     }
 
     #[test]

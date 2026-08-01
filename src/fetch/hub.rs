@@ -5,6 +5,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use reqwest::blocking::Client;
 use reqwest::StatusCode;
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 
 use super::{net, FetchOptions, FetchSource};
@@ -23,16 +24,21 @@ struct RepoSpec {
 }
 
 /// How a `parakit fetch` positional argument was classified.
+#[derive(Debug)]
 enum SourceKind {
     Repo(RepoSpec),
     Url(String),
 }
 
-/// Classify a `parakit fetch` positional argument: anything containing
-/// `://` is a URL, everything else is parsed as a Hugging Face repo spec.
+/// Classify a `parakit fetch` positional argument as an HTTP(S) URL or a
+/// Hugging Face repo spec.
 fn classify_source(input: &str) -> Result<SourceKind> {
-    if input.contains("://") {
-        return Ok(SourceKind::Url(input.to_string()));
+    if let Some((scheme, _)) = input.split_once("://") {
+        return if scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https") {
+            Ok(SourceKind::Url(input.to_string()))
+        } else {
+            Err(invalid_source_error(input))
+        };
     }
     parse_repo_spec(input).map(SourceKind::Repo)
 }
@@ -276,6 +282,13 @@ fn resolve_url(endpoint: &str, owner: &str, repo: &str, revision: &str, rfilenam
     )
 }
 
+fn hub_cache_dir(models_dir: &Path, owner: &str, repo: &str, revision: &str) -> PathBuf {
+    let revision_key = crate::checksum::hex_digest(&Sha256::digest(revision.as_bytes()));
+    models_dir
+        .join("hub")
+        .join(format!("{owner}--{repo}--{revision_key}"))
+}
+
 fn fetch_repo_metadata(
     client: &Client,
     endpoint: &str,
@@ -305,7 +318,7 @@ fn fetch_repo_metadata(
 
 /// Run the Hugging Face repo acquisition flow: look up `repo`'s `.gguf`
 /// siblings, pick one, and download it into
-/// `models_dir()/hub/<owner>--<repo>/<file>`.
+/// a revision-specific directory under `models_dir()/hub/`.
 ///
 /// # Arguments
 ///
@@ -357,33 +370,41 @@ pub(super) fn run_hub_repo(
     let sibling = selection.sibling();
 
     let models_dir = crate::model::models_dir()?;
-    let dest_dir = models_dir.join("hub").join(format!("{owner}--{name}"));
+    let dest_dir = hub_cache_dir(&models_dir, owner, name, revision);
     std::fs::create_dir_all(&dest_dir).with_context(|| format!("create {}", dest_dir.display()))?;
     let basename = Path::new(&sibling.rfilename)
         .file_name()
         .ok_or_else(|| anyhow!("repo file '{}' has no usable file name", sibling.rfilename))?;
     let dest = dest_dir.join(basename);
 
+    let resolve = resolve_url(endpoint, owner, name, revision, &sibling.rfilename);
     let hub_sha = normalize_lfs_sha256(sibling.lfs.as_ref());
-    let expected_sha = sha256_override.map(str::to_string).or(hub_sha);
+    let upstream_sha = sha256_override.map(str::to_string).or(hub_sha);
+    let baseline_sha = if upstream_sha.is_none() && !options.force {
+        super::recorded_download_sha_for_source(&models_dir, &dest, &resolve)?
+    } else {
+        None
+    };
+    let verification_sha = upstream_sha.or(baseline_sha);
 
-    if !options.force && super::cached_download_current(options, &dest, expected_sha.as_deref())? {
+    if !options.force
+        && super::cached_download_current(options, &dest, verification_sha.as_deref())?
+    {
         return Ok(dest);
     }
 
-    let resolve = resolve_url(endpoint, owner, name, revision, &sibling.rfilename);
     let bearer = net::bearer_for(&resolve, endpoint, token);
     options.status(format_args!("parakit: downloading {resolve}"));
-    super::download_and_verify(
+    let downloaded_sha = super::download_and_verify(
         options,
         &client,
         &resolve,
         &dest,
         bearer,
-        expected_sha.as_deref(),
+        verification_sha.as_deref(),
     )?;
 
-    super::record_and_announce(options, &models_dir, &dest, &resolve, expected_sha)?;
+    super::record_and_announce(options, &models_dir, &dest, &resolve, Some(downloaded_sha))?;
     Ok(dest)
 }
 
@@ -422,6 +443,18 @@ mod tests {
             panic!("expected a URL source");
         };
         assert_eq!(url, "https://example.com/models/parakeet-q8.gguf");
+    }
+
+    #[test]
+    fn rejects_non_http_url_schemes_before_network_io() {
+        for source in [
+            "file:///tmp/model.gguf",
+            "ftp://example.com/model.gguf",
+            "custom://example.com/model.gguf",
+        ] {
+            let error = classify_source(source).expect_err("source should fail");
+            assert!(error.to_string().contains("http(s):// URL"), "{source}");
+        }
     }
 
     #[test]
@@ -705,5 +738,20 @@ mod tests {
                 "{name}"
             );
         }
+    }
+
+    #[test]
+    fn hub_cache_directory_is_revision_specific_and_windows_safe() {
+        let models_dir = Path::new("cache/models");
+        let main = hub_cache_dir(models_dir, "owner", "repo", "main");
+        let main_again = hub_cache_dir(models_dir, "owner", "repo", "main");
+        let case_distinct = hub_cache_dir(models_dir, "owner", "repo", "Main");
+        let slash_revision = hub_cache_dir(models_dir, "owner", "repo", "refs/pr/1");
+
+        assert_eq!(main, main_again);
+        assert_ne!(main, case_distinct);
+        assert_ne!(main, slash_revision);
+        let component = slash_revision.file_name().unwrap().to_string_lossy();
+        assert!(!component.contains(['/', '\\']));
     }
 }

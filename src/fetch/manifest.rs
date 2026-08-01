@@ -30,7 +30,8 @@ pub(super) struct DownloadRecord {
     /// the user-supplied URL for a direct fetch).
     pub(super) source_url: String,
     /// SHA256 used to verify the download: `--sha256` override, Hub-reported
-    /// LFS checksum, or `None` when no checksum was available at all.
+    /// LFS checksum, or the computed trust-on-first-use baseline when no
+    /// upstream checksum was available.
     pub(super) sha256: Option<String>,
     /// RFC 3339 timestamp of the fetch.
     pub(super) fetched_at: String,
@@ -61,8 +62,8 @@ pub(super) struct Manifest {
     pub(super) quantized_at: Option<String>,
     /// Extra models fetched via a Hugging Face repo or direct URL source,
     /// keyed by their path relative to `models_dir()` using `/` separators
-    /// (e.g. `"hub/cstr--parakeet-tdt-0.6b-v3-GGUF/parakeet-tdt-0.6b-v3-q8_0.gguf"`
-    /// or `"url/model.gguf"`), independent of the single-model fields above.
+    /// (under a revision-keyed `hub/` directory, or as `"url/model.gguf"`),
+    /// independent of the single-model fields above.
     #[serde(default)]
     pub(super) downloads: BTreeMap<String, DownloadRecord>,
 }
@@ -232,6 +233,31 @@ impl Manifest {
             .get(relpath)
             .and_then(|record| record.sha256.clone())
     }
+
+    /// Return the recorded SHA256 only when it belongs to `source_url`.
+    ///
+    /// Direct URLs with the same basename share a cache path, so a TOFU
+    /// baseline must not make a different URL look like a cache hit.
+    ///
+    /// # Arguments
+    ///
+    /// * `relpath` - Manifest key for the cached download.
+    /// * `source_url` - Exact source URL whose recorded digest may be reused.
+    ///
+    /// # Returns
+    ///
+    /// The matching recorded digest, or `None` when the path is unrecorded,
+    /// belongs to another source, or has no digest.
+    pub(super) fn recorded_sha256_for_source(
+        &self,
+        relpath: &str,
+        source_url: &str,
+    ) -> Option<String> {
+        self.downloads
+            .get(relpath)
+            .filter(|record| record.source_url == source_url)
+            .and_then(|record| record.sha256.clone())
+    }
 }
 
 /// Compute the `downloads` map key for `path`: its components relative to
@@ -328,6 +354,20 @@ mod tests {
         );
         assert_eq!(loaded.recorded_sha256("url/model.gguf"), None);
         assert_eq!(loaded.recorded_sha256("hub/nope/nope.gguf"), None);
+        assert_eq!(
+            loaded.recorded_sha256_for_source(
+                "hub/cstr--parakeet-tdt-0.6b-v3-GGUF/parakeet-tdt-0.6b-v3-q8_0.gguf",
+                "https://huggingface.co/cstr/parakeet-tdt-0.6b-v3-GGUF/resolve/main/parakeet-tdt-0.6b-v3-q8_0.gguf"
+            ),
+            Some("a".repeat(64))
+        );
+        assert_eq!(
+            loaded.recorded_sha256_for_source(
+                "hub/cstr--parakeet-tdt-0.6b-v3-GGUF/parakeet-tdt-0.6b-v3-q8_0.gguf",
+                "https://example.com/different-model.gguf"
+            ),
+            None
+        );
         assert_eq!(loaded.downloads.len(), 2);
     }
 

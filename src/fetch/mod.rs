@@ -45,6 +45,10 @@ impl FetchOptions {
             println!("{message}");
         }
     }
+
+    fn warning(&self, message: std::fmt::Arguments<'_>) {
+        eprintln!("{message}");
+    }
 }
 
 /// Model acquisition source for `parakit fetch`.
@@ -297,8 +301,14 @@ fn run_url(options: &FetchOptions, url: &str, expected_sha: Option<&str>) -> Res
     let dest_dir = dir.join("url");
     std::fs::create_dir_all(&dest_dir).with_context(|| format!("create {}", dest_dir.display()))?;
     let dest = dest_dir.join(&file_name);
+    let baseline_sha = if expected_sha.is_none() && !options.force {
+        recorded_download_sha_for_source(&dir, &dest, url)?
+    } else {
+        None
+    };
+    let verification_sha = expected_sha.map(str::to_string).or(baseline_sha);
 
-    if !options.force && cached_download_current(options, &dest, expected_sha)? {
+    if !options.force && cached_download_current(options, &dest, verification_sha.as_deref())? {
         return Ok(dest);
     }
 
@@ -307,10 +317,28 @@ fn run_url(options: &FetchOptions, url: &str, expected_sha: Option<&str>) -> Res
     // A user-supplied --url is never sent the Hub bearer token, even if it
     // happens to point at the resolved Hub endpoint host: the token is only
     // for requests parakit itself builds against the Hub.
-    download_and_verify(options, &client, url, &dest, None, expected_sha)?;
+    let downloaded_sha = download_and_verify(
+        options,
+        &client,
+        url,
+        &dest,
+        None,
+        verification_sha.as_deref(),
+    )?;
 
-    record_and_announce(options, &dir, &dest, url, expected_sha.map(str::to_string))?;
+    record_and_announce(options, &dir, &dest, url, Some(downloaded_sha))?;
     Ok(dest)
+}
+
+fn recorded_download_sha_for_source(
+    models_dir: &Path,
+    dest: &Path,
+    source_url: &str,
+) -> Result<Option<String>> {
+    let relkey = manifest::relative_key(models_dir, dest)?;
+    let manifest_path = models_dir.join(MANIFEST_FILENAME);
+    let manifest = Manifest::load(&manifest_path)?.unwrap_or_default();
+    Ok(manifest.recorded_sha256_for_source(&relkey, source_url))
 }
 
 /// Check whether a cached `hub/…`/`url/…` download is already current: the
@@ -389,7 +417,7 @@ fn record_and_announce(
 
 fn url_file_name(url: &str) -> Result<String> {
     let without_extras = url.split(['?', '#']).next().unwrap_or(url);
-    let name = without_extras.rsplit('/').next().unwrap_or("");
+    let name = without_extras.rsplit(['/', '\\']).next().unwrap_or("");
     if name.is_empty() {
         bail!("URL has no usable file name segment: {url}");
     }
@@ -416,7 +444,7 @@ fn print_ready_with_hint(options: &FetchOptions, path: &Path) {
 /// against `expected_sha` when known and retrying once on a mismatch,
 /// mirroring the hosted Q8_0 retry policy. When no checksum is available at
 /// all, the download still succeeds; a warning plus the computed digest is
-/// printed so the caller can pin it with `--sha256` next time.
+/// printed to stderr so the caller can pin it with `--sha256` next time.
 ///
 /// # Errors
 ///
@@ -429,8 +457,11 @@ fn download_and_verify(
     dest: &Path,
     bearer: Option<&str>,
     expected_sha: Option<&str>,
-) -> Result<()> {
+) -> Result<String> {
     let partial = partial_path(dest);
+    if options.force {
+        remove_if_exists(&partial)?;
+    }
     net::download_with_resume(client, url, &partial, bearer)?;
     let mut sha = crate::checksum::sha256_file_hex(&partial)?;
 
@@ -452,14 +483,14 @@ fn download_and_verify(
             }
         }
         None => {
-            options.status(format_args!(
+            options.warning(format_args!(
                 "parakit: no upstream checksum published for {url}; downloaded sha256 is {sha} (pass --sha256 {sha} to pin it next time)"
             ));
         }
     }
 
     move_into_place(&partial, dest)?;
-    Ok(())
+    Ok(sha)
 }
 
 fn partial_path(dest: &Path) -> PathBuf {
@@ -827,6 +858,40 @@ fn exe_name(name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    fn serve_model_once(body: &'static [u8]) -> (String, std::thread::JoinHandle<String>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let handle = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = Vec::new();
+            let mut buffer = [0_u8; 1024];
+            while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                let count = stream.read(&mut buffer).unwrap();
+                if count == 0 {
+                    break;
+                }
+                request.extend_from_slice(&buffer[..count]);
+            }
+            let request_text = String::from_utf8(request).unwrap();
+            let status = if request_text.to_ascii_lowercase().contains("\r\nrange:") {
+                "206 Partial Content"
+            } else {
+                "200 OK"
+            };
+            write!(
+                stream,
+                "HTTP/1.1 {status}\r\nContent-Length: {}\r\nETag: \"revision-2\"\r\nConnection: close\r\n\r\n",
+                body.len()
+            )
+            .unwrap();
+            stream.write_all(body).unwrap();
+            request_text
+        });
+        (format!("http://{address}/model.gguf"), handle)
+    }
 
     #[test]
     fn move_into_place_replaces_existing_file() {
@@ -864,6 +929,41 @@ mod tests {
     }
 
     #[test]
+    fn force_discards_a_resumable_partial_and_records_a_tofu_checksum() {
+        let dir = crate::test_support::fixture_root("parakit-fetch-tests", "force-tofu");
+        let dest = dir.join("model.gguf");
+        let partial = partial_path(&dest);
+        std::fs::write(&partial, b"stale-prefix").unwrap();
+        let mut validator = partial.as_os_str().to_os_string();
+        validator.push(".validator");
+        std::fs::write(PathBuf::from(validator), b"\"revision-1\"").unwrap();
+
+        let (url, server) = serve_model_once(b"fresh-model");
+        let options = FetchOptions {
+            force: true,
+            quiet: true,
+            verbose: false,
+            source: FetchSource::Url {
+                url: url.clone(),
+                sha256: None,
+            },
+        };
+        let client = Client::builder().no_proxy().build().unwrap();
+        let sha = download_and_verify(&options, &client, &url, &dest, None, None).unwrap();
+        let request = server.join().unwrap();
+
+        assert!(!request.to_ascii_lowercase().contains("\r\nrange:"));
+        assert_eq!(std::fs::read(&dest).unwrap(), b"fresh-model");
+        assert_eq!(sha, crate::checksum::sha256_file_hex(&dest).unwrap());
+
+        record_and_announce(&options, &dir, &dest, &url, Some(sha.clone())).unwrap();
+        assert_eq!(
+            recorded_download_sha_for_source(&dir, &dest, &url).unwrap(),
+            Some(sha)
+        );
+    }
+
+    #[test]
     fn url_file_name_cases() {
         for (name, url, expect) in [
             (
@@ -874,6 +974,11 @@ mod tests {
             (
                 "strips a fragment",
                 "https://example.com/models/model.gguf#frag",
+                Some("model.gguf"),
+            ),
+            (
+                "treats a backslash as a Windows path separator",
+                "https://example.com/models\\nested\\model.gguf",
                 Some("model.gguf"),
             ),
             (
