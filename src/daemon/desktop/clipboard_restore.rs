@@ -3,7 +3,7 @@
 use std::thread;
 use std::time::{Duration, Instant};
 
-use super::inject::FocusSnapshot;
+use super::inject::{FocusSnapshot, PasteMode};
 
 #[cfg(target_os = "windows")]
 const CLIPBOARD_CONFIRM_TIMEOUT: Duration = Duration::from_millis(1000);
@@ -32,6 +32,13 @@ pub(super) struct ClipboardWriteToken {
 /// Keeping the pieces distinct prevents acknowledgement matching from
 /// manufacturing evidence across content that was never read.
 #[derive(Debug)]
+#[cfg_attr(
+    not(target_os = "macos"),
+    allow(
+        dead_code,
+        reason = "paste-target fields are read by the macOS AX confirmation backend only"
+    )
+)]
 pub(crate) struct PasteTargetValue {
     /// Leading portion of the target value.
     pub(crate) head: String,
@@ -61,11 +68,22 @@ pub(crate) struct PasteTargetSelection {
 /// of this trait lives in `daemon::macos`, a sibling of `daemon::desktop`,
 /// so both this type and [`PasteConfirmation`] must be visible crate-wide
 /// to cross that module boundary.
+#[cfg_attr(
+    not(target_os = "macos"),
+    allow(
+        dead_code,
+        reason = "confirmation context fields are read by the macOS AX backend only"
+    )
+)]
 pub(crate) struct PasteConfirmationContext<'a> {
     /// Focus captured before insertion became eligible, when available.
     pub(crate) focus: Option<&'a FocusSnapshot>,
     /// Transcript text that was just pasted.
     pub(crate) transcript: &'a str,
+    /// Paste mode used for the dispatched chord. Terminal targets expose a
+    /// sliding rendered `AXValue`, so occurrence-count evidence is not safe
+    /// there even when it is useful for stable GUI text values.
+    pub(crate) mode: PasteMode,
     /// Target's observable value as read *before* the paste chord was sent,
     /// via [`ClipboardRestoreGate::capture_paste_baseline`].
     ///
@@ -103,6 +121,13 @@ pub(crate) enum PasteConfirmation {
     /// simply unknown whether it landed. The insertion target stayed
     /// observable throughout (or was never pollable at all), so the previous
     /// clipboard contents are still restored per policy.
+    #[cfg_attr(
+        not(target_os = "macos"),
+        allow(
+            dead_code,
+            reason = "the unverified acknowledgement tier is emitted by macOS only"
+        )
+    )]
     Unverified {
         /// Time spent in the grace period.
         elapsed: Duration,
@@ -118,6 +143,13 @@ pub(crate) enum PasteConfirmation {
     /// the transcript is kept on the clipboard rather than restoring the
     /// previous contents — the same reasoning as [`Self::NoEvidence`], for a
     /// different reason.
+    #[cfg_attr(
+        not(target_os = "macos"),
+        allow(
+            dead_code,
+            reason = "the focus-lost acknowledgement tier is emitted by macOS only"
+        )
+    )]
     UnverifiedFocusLost {
         /// Time spent before the focus loss was detected.
         elapsed: Duration,
@@ -126,6 +158,13 @@ pub(crate) enum PasteConfirmation {
     },
     /// A pollable signal was available but never showed insertion evidence
     /// before the deadline.
+    #[cfg_attr(
+        not(target_os = "macos"),
+        allow(
+            dead_code,
+            reason = "the no-evidence acknowledgement tier is emitted by macOS only"
+        )
+    )]
     NoEvidence {
         /// Time spent polling for evidence.
         elapsed: Duration,
@@ -164,9 +203,10 @@ pub(super) trait ClipboardRestoreGate {
     /// paste chord is sent, to be handed back as
     /// [`PasteConfirmationContext::baseline`].
     ///
-    /// Called on the hot path between the final focus recheck and the chord,
-    /// so an implementation must be non-blocking; returning `None` is always
-    /// acceptable and merely degrades confirmation to a post-chord baseline.
+    /// Called before the final focus recheck. Implementations may perform a
+    /// bounded read here; no blocking target query may occur after that
+    /// recheck and before the chord. Returning `None` is always acceptable
+    /// and merely degrades confirmation to a post-chord baseline.
     ///
     /// # Arguments
     ///

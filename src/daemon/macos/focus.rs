@@ -5,9 +5,9 @@
 //! focused UI element's identity (via `CFEqual`), which survives the
 //! transient window churn (palettes, popovers, sheets, z-order changes)
 //! that made the previous on-screen-window-id comparison unreliable.
-//! Frontmost-application identity is still checked first, but it is not a
-//! substitute for focused-element identity: when Accessibility cannot expose
-//! a focused element on either side, automatic insertion is not authorized.
+//! Frontmost-application identity is checked first. When Accessibility cannot
+//! expose a focused element on either side, matching pid and bundle identity
+//! provide the fallback authorization rather than discarding the dictation.
 
 use super::cgevent_ffi::{Boolean, CFAllocatorRef, CFIndex, CFRelease, CFStringRef, CFTypeRef};
 use crate::daemon::desktop::{
@@ -36,6 +36,8 @@ struct CFRange {
 }
 
 const K_AX_ERROR_SUCCESS: AXError = 0;
+const K_AX_ERROR_ATTRIBUTE_UNSUPPORTED: AXError = -25205;
+const K_AX_ERROR_NO_VALUE: AXError = -25212;
 const K_AX_VALUE_CF_RANGE_TYPE: AXValueType = 4;
 const K_CF_STRING_ENCODING_UTF8: u32 = 0x0800_0100;
 
@@ -164,34 +166,15 @@ unsafe impl Sync for AxElementHandle {}
 /// Focused Accessibility element captured for the frontmost application.
 ///
 /// Target identity is decided purely by `CFEqual` on `element` (see
-/// [`decide_focus_verification`]); `supports_value_polling` only records
-/// whether post-paste acknowledgement is worth attempting.
+/// [`decide_focus_verification`]). Whether the element exposes a string
+/// `AXValue` is intentionally not probed at PTT-down; the pre-paste baseline
+/// read discovers that later, without delaying audio capture.
 #[derive(Debug)]
 pub(crate) struct AxElementSnapshot {
     element: AxElementHandle,
-    /// Whether `AXValue` could be read as a string-typed value on the
-    /// focused element at capture time.
-    supports_value_polling: bool,
 }
 
 impl AxElementSnapshot {
-    /// Return whether `AXValue` could be read as a string-typed value on
-    /// this element at capture time.
-    ///
-    /// `false` is the expected, deliberate result for secure/password input
-    /// fields: macOS withholds `AXValue` from Accessibility clients for
-    /// those fields as a privacy boundary (the same protection "Secure
-    /// Input" relies on), not a bug in this snapshot. Callers should treat
-    /// `false` as "no pollable acknowledgement signal here", not as an
-    /// error.
-    ///
-    /// # Returns
-    ///
-    /// `true` when post-paste `AXValue` polling is worth attempting.
-    pub(crate) fn supports_value_polling(&self) -> bool {
-        self.supports_value_polling
-    }
-
     /// Re-read `AXValue` from this element, for post-paste acknowledgement
     /// polling.
     ///
@@ -222,8 +205,10 @@ impl AxElementSnapshot {
         let mut value: CFTypeRef = ptr::null();
         let status =
             unsafe { AXUIElementCopyAttributeValue(element, ax_value_attribute(), &mut value) };
-        if status != K_AX_ERROR_SUCCESS {
-            return Err(());
+        match status {
+            K_AX_ERROR_SUCCESS => {}
+            K_AX_ERROR_ATTRIBUTE_UNSUPPORTED | K_AX_ERROR_NO_VALUE => return Ok(None),
+            _ => return Err(()),
         }
         if value.is_null() {
             return Ok(None);
@@ -262,9 +247,10 @@ impl MacOsFocusSnapshot {
     /// Accessibility read failures at capture time never produce an error;
     /// they leave the Accessibility portion of the snapshot empty, which
     /// makes [`Self::verify_current`] return
-    /// [`FocusVerification::AxUnsupported`] and blocks automatic insertion.
+    /// [`FocusVerification::AxUnsupported`]. Matching pid and bundle
+    /// identity still permit insertion in that case.
     pub(crate) fn capture() -> Result<Self> {
-        frontmost_application_window(true).context("could not capture macOS frontmost window")
+        frontmost_application_window().context("could not capture macOS frontmost window")
     }
 
     /// Compare this snapshot against a fresh read of the live macOS focus
@@ -280,7 +266,7 @@ impl MacOsFocusSnapshot {
     /// otherwise (including when the live frontmost application cannot be
     /// read at all).
     pub(crate) fn verify_current(&self) -> FocusVerification {
-        let current = match frontmost_application_window(false) {
+        let current = match frontmost_application_window() {
             Ok(current) => current,
             Err(_) => return FocusVerification::Changed,
         };
@@ -349,10 +335,7 @@ impl MacOsFocusSnapshot {
         &self,
         max_utf16_units: usize,
     ) -> Result<Option<(PasteTargetValue, bool)>, ()> {
-        // This path immediately reads AXValue below, so reacquisition only
-        // needs element identity. Skipping the capture-time capability probe
-        // avoids copying the same potentially large value twice per poll.
-        let current = frontmost_application_window(false).map_err(|_| ())?;
+        let current = frontmost_application_window().map_err(|_| ())?;
         if self.pid != current.pid || self.bundle_identifier != current.bundle_identifier {
             return Err(());
         }
@@ -438,7 +421,7 @@ fn ax_identity_equal(
 /// through a call scheduled on the main run loop) and block the calling
 /// thread on the result, rather than continuing to call it inline off the
 /// main thread.
-fn frontmost_application_window(probe_value_support: bool) -> Result<MacOsFocusSnapshot> {
+fn frontmost_application_window() -> Result<MacOsFocusSnapshot> {
     autoreleasepool(|_pool| {
         let workspace = NSWorkspace::sharedWorkspace();
         let app = workspace
@@ -452,7 +435,7 @@ fn frontmost_application_window(probe_value_support: bool) -> Result<MacOsFocusS
             .bundleIdentifier()
             .map(|bundle| bundle.to_string())
             .filter(|bundle| !bundle.is_empty());
-        let ax = capture_ax_focused_element(pid, probe_value_support);
+        let ax = capture_ax_focused_element(pid);
         Ok(MacOsFocusSnapshot {
             pid,
             bundle_identifier,
@@ -466,10 +449,7 @@ fn frontmost_application_window(probe_value_support: bool) -> Result<MacOsFocusS
 /// granted, application has no AX focused element, etc.) rather than an
 /// error, per the capture-failure tolerance policy: an Accessibility read
 /// failure at capture time must never block dictation.
-fn capture_ax_focused_element(
-    pid: libc::pid_t,
-    probe_value_support: bool,
-) -> Option<AxElementSnapshot> {
+fn capture_ax_focused_element(pid: libc::pid_t) -> Option<AxElementSnapshot> {
     let app = unsafe { AXUIElementCreateApplication(pid) };
     if app.is_null() {
         return None;
@@ -482,11 +462,7 @@ fn capture_ax_focused_element(
 
     let element = copy_ax_element(app, ax_focused_ui_element_attribute())?;
     set_ax_messaging_timeout(element.0)?;
-    let supports_value_polling = probe_value_support && ax_value_is_string(element.0);
-    Some(AxElementSnapshot {
-        element,
-        supports_value_polling,
-    })
+    Some(AxElementSnapshot { element })
 }
 
 fn set_ax_messaging_timeout(element: AXUIElementRef) -> Option<()> {
@@ -502,16 +478,6 @@ fn copy_ax_element(element: AXUIElementRef, attribute: CFStringRef) -> Option<Ax
         return None;
     }
     Some(AxElementHandle(value.cast_mut()))
-}
-
-/// Return whether copying `AXValue` on `element` succeeds right now and
-/// yields a string-typed value. The value itself is discarded; only the
-/// capability is recorded (see [`AxElementSnapshot::supports_value_polling`]).
-fn ax_value_is_string(element: AXUIElementRef) -> bool {
-    let Some(handle) = copy_ax_element(element, ax_value_attribute()) else {
-        return false;
-    };
-    unsafe { CFGetTypeID(handle.as_cftype()) == CFStringGetTypeID() }
 }
 
 fn copy_ax_text_selection(element: AXUIElementRef) -> Option<PasteTargetSelection> {
@@ -643,7 +609,6 @@ mod tests {
             same_bundle: bool,
             ax_equal: Option<bool>,
             expect: FocusVerification,
-            allows_insertion: bool,
         }
 
         let cases = [
@@ -653,7 +618,6 @@ mod tests {
                 same_bundle: true,
                 ax_equal: Some(true),
                 expect: FocusVerification::Matched,
-                allows_insertion: true,
             },
             FocusCase {
                 name: "decision_changes_when_ax_element_identity_differs",
@@ -661,15 +625,13 @@ mod tests {
                 same_bundle: true,
                 ax_equal: Some(false),
                 expect: FocusVerification::Changed,
-                allows_insertion: false,
             },
             FocusCase {
-                name: "decision_does_not_authorize_insertion_without_ax_identity",
+                name: "decision_uses_app_identity_fallback_without_ax_identity",
                 same_pid: true,
                 same_bundle: true,
                 ax_equal: None,
                 expect: FocusVerification::AxUnsupported,
-                allows_insertion: false,
             },
             FocusCase {
                 name: "decision_changes_when_bundle_identifier_differs",
@@ -677,7 +639,6 @@ mod tests {
                 same_bundle: false,
                 ax_equal: Some(true),
                 expect: FocusVerification::Changed,
-                allows_insertion: false,
             },
             FocusCase {
                 name: "decision_changes_when_pid_differs",
@@ -685,7 +646,6 @@ mod tests {
                 same_bundle: true,
                 ax_equal: Some(true),
                 expect: FocusVerification::Changed,
-                allows_insertion: false,
             },
             // Previously invisible hole: neither pid nor bundle matched, yet
             // the caller supplied `ax_equal: Some(true)`. This row didn't
@@ -700,7 +660,6 @@ mod tests {
                 same_bundle: false,
                 ax_equal: Some(true),
                 expect: FocusVerification::Changed,
-                allows_insertion: false,
             },
         ];
 
@@ -709,19 +668,11 @@ mod tests {
             .filter_map(|case| {
                 let verification =
                     decide_focus_verification(case.same_pid, case.same_bundle, case.ax_equal);
-                let allows_insertion = verification.allows_insertion();
-                let mismatch =
-                    verification != case.expect || allows_insertion != case.allows_insertion;
-                mismatch.then(|| {
+                (verification != case.expect).then(|| {
                     format!(
-                        "{}: same_pid={} same_bundle={} ax_equal={:?} expected {:?}/{}, got \
-                         {verification:?}/{allows_insertion}",
-                        case.name,
-                        case.same_pid,
-                        case.same_bundle,
-                        case.ax_equal,
-                        case.expect,
-                        case.allows_insertion
+                        "{}: same_pid={} same_bundle={} ax_equal={:?} expected {:?}, got \
+                         {verification:?}",
+                        case.name, case.same_pid, case.same_bundle, case.ax_equal, case.expect
                     )
                 })
             })

@@ -69,25 +69,28 @@
 //! destroying the only remaining copy. Confirmation requires transcript-
 //! specific evidence instead: an exact baseline-to-current insertion for the
 //! very shortest transcripts, a whole-transcript occurrence-count increase
-//! once the text is long enough to be unlikely by coincidence, a newly
-//! visible whole transcript or leading/trailing window once the text is long
+//! accompanied by target-value growth once the text is long enough to be
+//! unlikely by coincidence, a newly visible whole transcript or leading/
+//! trailing window with the same growth constraint once the text is long
 //! enough to be distinctive on its own, or the exact selected-range and
 //! total-length transition that inserting the transcript must produce.
 //! Selection geometry is trusted only while polling the same Accessibility
-//! object; a replacement object must show transcript-specific text. If none
-//! of these forms of evidence is available, the transaction deliberately
-//! leaves the transcript on the clipboard.
+//! object and only for transcripts long enough to be distinctive; a
+//! replacement object must show transcript-specific text. If none of these
+//! forms of evidence is available, the transaction keeps longer transcripts
+//! on the clipboard. Very short transcripts instead resolve as unverified
+//! after the grace window, avoiding a false manual-paste prompt in churning
+//! targets where exact evidence is intentionally unavailable.
 //!
 //! ## Secure input fields are not a bug
 //!
 //! Password/secure-text fields deliberately withhold `AXValue` from
 //! Accessibility clients as a macOS privacy boundary (this is part of what
 //! backs "Secure Input" and keeps the Accessibility API from doubling as a
-//! keylogger). [`AxElementSnapshot::supports_value_polling`] being `false`
-//! for such a field is expected, not a defect: [`PasteConfirmation::Unverified`]
+//! keylogger). A baseline or confirmation poll returning no string value for
+//! such a field is expected, not a defect: [`PasteConfirmation::Unverified`]
 //! is the correct degradation there. The paste chord already fired, so
-//! Parakit cannot tell whether the transcript landed, but it also must not
-//! guess by destroying the transcript.
+//! Parakit cannot tell whether the transcript landed.
 
 use std::cell::RefCell;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -98,7 +101,7 @@ use std::time::{Duration, Instant};
 use crate::daemon::desktop::clipboard_restore::{
     PasteConfirmation, PasteConfirmationContext, PasteTargetSelection, PasteTargetValue,
 };
-use crate::daemon::desktop::inject::FocusSnapshot;
+use crate::daemon::desktop::inject::{FocusSnapshot, PasteMode};
 
 /// Deadline for `AXValue` confirmation polling after a paste chord is sent.
 pub(crate) const AX_CONFIRM_DEADLINE: Duration = Duration::from_millis(1800);
@@ -139,8 +142,8 @@ const CONFIRM_WINDOW_CHARS: usize = 32;
 /// target's value by pure coincidence — a terminal's `AXValue` is its whole
 /// rendered screen, so scrollback or unrelated output can easily contain a
 /// short run of characters — so only an exact baseline-to-current insertion
-/// or selection-geometry evidence is trusted there; a bare occurrence-count
-/// increase is not enough. At or above this floor the same reasoning that
+/// is trusted there; occurrence-count and selection-geometry evidence are
+/// not enough. At or above this floor the same reasoning that
 /// justifies occurrence-count matching for longer transcripts already
 /// applies: a natural-language run this long is unlikely to appear by
 /// chance, and requiring an *increase* rather than mere presence (see
@@ -183,6 +186,11 @@ thread_local! {
 /// drops with it.
 pub(crate) fn install_abandonment_signal(flag: Arc<AtomicBool>) {
     ABANDONMENT_SIGNAL.with(|cell| *cell.borrow_mut() = Some(flag));
+}
+
+#[cfg(test)]
+fn clear_abandonment_signal() {
+    ABANDONMENT_SIGNAL.with(|cell| *cell.borrow_mut() = None);
 }
 
 /// Whether the current thread's installed abandonment signal, if any, has
@@ -249,7 +257,6 @@ fn unless_abandoned(confirmation: PasteConfirmation) -> PasteConfirmation {
 pub(crate) fn capture_baseline(focus: Option<&FocusSnapshot>) -> Option<PasteTargetValue> {
     focus
         .and_then(FocusSnapshot::macos_ax_element)
-        .filter(|element| element.supports_value_polling())
         .and_then(|element| element.poll_value(MAX_AX_VALUE_UTF16_UNITS).ok().flatten())
 }
 
@@ -284,7 +291,10 @@ pub(crate) fn capture_baseline(focus: Option<&FocusSnapshot>) -> Option<PasteTar
 /// evidence form in [`TranscriptMatcher::indicates_insertion`] requires a
 /// baseline to compare against, so polling without one could never confirm
 /// anything and would otherwise spin to the deadline reporting a guaranteed
-/// false [`PasteConfirmation::NoEvidence`] alarm.
+/// false [`PasteConfirmation::NoEvidence`] alarm. Transcripts below
+/// [`SHORT_CONFIRM_MIN_OCCURRENCE_CHARS`] also resolve as `Unverified` after
+/// the full confirmation window when their required exact-delta evidence is
+/// defeated by unrelated target churn.
 /// [`PasteConfirmation::UnverifiedFocusLost`] when the originally captured
 /// Accessibility object dies and the reacquire fallback then loses the
 /// ability to read focus entirely — the frontmost application changed, or
@@ -308,7 +318,7 @@ pub(crate) fn await_paste_confirmation(ctx: &PasteConfirmationContext<'_>) -> Pa
     let start = Instant::now();
 
     let element = ctx.focus.and_then(FocusSnapshot::macos_ax_element);
-    let Some(element) = element.filter(|element| element.supports_value_polling()) else {
+    let Some(element) = element else {
         thread::sleep(UNVERIFIED_GRACE);
         return unless_abandoned(PasteConfirmation::Unverified {
             elapsed: start.elapsed(),
@@ -320,19 +330,34 @@ pub(crate) fn await_paste_confirmation(ctx: &PasteConfirmationContext<'_>) -> Pa
     // old implementation rebuilt this whitespace-normalized needle on every
     // 40ms tick.
     let matcher = TranscriptMatcher::new(ctx.transcript);
-    let baseline = match ctx.baseline {
-        Some(baseline) => Some(BoundedNormalizedValue::from_target_value(baseline)),
-        None => element
-            .poll_value(MAX_AX_VALUE_UTF16_UNITS)
-            .ok()
-            .flatten()
-            .as_ref()
-            .map(BoundedNormalizedValue::from_target_value),
+    let (baseline, mut captured_element_usable) = match ctx.baseline {
+        Some(baseline) => (
+            Some(BoundedNormalizedValue::from_target_value(baseline)),
+            true,
+        ),
+        None => match element.poll_value(MAX_AX_VALUE_UTF16_UNITS) {
+            Ok(Some(value)) => (
+                Some(BoundedNormalizedValue::from_target_value(&value)),
+                true,
+            ),
+            Ok(None) => (None, true),
+            Err(()) => match poll_current_value(ctx) {
+                Ok(Some((value, _same_element))) => (Some(value), false),
+                Ok(None) => (None, false),
+                Err(()) => {
+                    return unless_abandoned(PasteConfirmation::UnverifiedFocusLost {
+                        elapsed: start.elapsed(),
+                        kind: "unverified_focus_lost",
+                    });
+                }
+            },
+        },
     };
 
-    if baseline.is_none() {
+    let Some(baseline) = baseline else {
         // Neither the pre-chord read nor the immediate post-chord fallback
-        // produced a baseline. Every evidence form in
+        // (including focused-element reacquisition when the captured WebKit
+        // object died) produced a baseline. Every evidence form in
         // `TranscriptMatcher::indicates_insertion` requires one, so the poll
         // loop below could never confirm anything — it would just spin to
         // the deadline and report a guaranteed false `NoEvidence` alarm.
@@ -343,30 +368,24 @@ pub(crate) fn await_paste_confirmation(ctx: &PasteConfirmationContext<'_>) -> Pa
             elapsed: start.elapsed(),
             kind: "unverified_no_baseline",
         });
-    }
+    };
 
     let deadline = start + AX_CONFIRM_DEADLINE;
-    let mut captured_element_usable = true;
     loop {
         let now = Instant::now();
         if now >= deadline {
-            if poll_current_focus(ctx, &matcher, baseline.as_ref()).unwrap_or(false) {
-                return unless_abandoned(PasteConfirmation::Confirmed {
-                    elapsed: start.elapsed(),
-                    kind: "ax_confirmed",
-                });
-            }
-            return PasteConfirmation::NoEvidence {
-                elapsed: start.elapsed(),
-                kind: "no_evidence",
-            };
+            return unless_abandoned(deadline_confirmation(
+                poll_current_focus(ctx, &matcher, Some(&baseline)),
+                &matcher,
+                start.elapsed(),
+            ));
         }
         thread::sleep(AX_POLL_INTERVAL.min(deadline.saturating_duration_since(now)));
 
         let poll = if captured_element_usable {
             element.poll_value(MAX_AX_VALUE_UTF16_UNITS)
         } else {
-            match poll_current_focus(ctx, &matcher, baseline.as_ref()) {
+            match poll_current_focus(ctx, &matcher, Some(&baseline)) {
                 Ok(true) => {
                     return unless_abandoned(PasteConfirmation::Confirmed {
                         elapsed: start.elapsed(),
@@ -395,7 +414,12 @@ pub(crate) fn await_paste_confirmation(ctx: &PasteConfirmationContext<'_>) -> Pa
         match poll {
             Ok(Some(current)) => {
                 let current = BoundedNormalizedValue::from_target_value(&current);
-                if matcher.indicates_insertion(baseline.as_ref(), &current, true) {
+                if matcher.indicates_insertion(
+                    Some(&baseline),
+                    &current,
+                    true,
+                    ctx.mode != PasteMode::Terminal,
+                ) {
                     return unless_abandoned(PasteConfirmation::Confirmed {
                         elapsed: start.elapsed(),
                         kind: "ax_confirmed",
@@ -417,6 +441,34 @@ pub(crate) fn await_paste_confirmation(ctx: &PasteConfirmationContext<'_>) -> Pa
     }
 }
 
+/// Decide the terminal state of the polling loop after its final focused-
+/// element read. Kept pure so focus loss at the deadline and the special
+/// short-transcript fallback are regression-testable without live AX access.
+fn deadline_confirmation(
+    final_poll: Result<bool, ()>,
+    matcher: &TranscriptMatcher,
+    elapsed: Duration,
+) -> PasteConfirmation {
+    match final_poll {
+        Ok(true) => PasteConfirmation::Confirmed {
+            elapsed,
+            kind: "ax_confirmed",
+        },
+        Ok(false) if !matcher.meets_evidence_floor => PasteConfirmation::Unverified {
+            elapsed,
+            kind: "unverified_short_transcript",
+        },
+        Ok(false) => PasteConfirmation::NoEvidence {
+            elapsed,
+            kind: "no_evidence",
+        },
+        Err(()) => PasteConfirmation::UnverifiedFocusLost {
+            elapsed,
+            kind: "unverified_focus_lost",
+        },
+    }
+}
+
 /// Reacquire-fallback poll used once the originally captured Accessibility
 /// object stops answering (see the `Err(())` arm in
 /// [`await_paste_confirmation`]'s loop). This is the highest-frequency
@@ -431,15 +483,36 @@ fn poll_current_focus(
     matcher: &TranscriptMatcher,
     baseline: Option<&BoundedNormalizedValue>,
 ) -> Result<bool, ()> {
+    let Some((current, same_element)) = poll_current_value(ctx)? else {
+        return Ok(false);
+    };
+    Ok(matcher.indicates_insertion(
+        baseline,
+        &current,
+        same_element,
+        ctx.mode != PasteMode::Terminal,
+    ))
+}
+
+/// Reacquire the current focused value without applying transcript evidence.
+/// This is also used to establish a post-chord baseline when the originally
+/// captured WebKit object dies before the first confirmation poll.
+fn poll_current_value(
+    ctx: &PasteConfirmationContext<'_>,
+) -> Result<Option<(BoundedNormalizedValue, bool)>, ()> {
     let Some(focus) = ctx.focus else {
-        return Ok(false);
+        return Ok(None);
     };
-    let Some((current, same_element)) = focus.macos_poll_current_value(MAX_AX_VALUE_UTF16_UNITS)?
-    else {
-        return Ok(false);
-    };
-    let current = BoundedNormalizedValue::from_target_value(&current);
-    Ok(matcher.indicates_insertion(baseline, &current, same_element))
+    focus
+        .macos_poll_current_value(MAX_AX_VALUE_UTF16_UNITS)
+        .map(|value| {
+            value.map(|(value, same_element)| {
+                (
+                    BoundedNormalizedValue::from_target_value(&value),
+                    same_element,
+                )
+            })
+        })
 }
 
 /// Pure decision logic: does `current` (a freshly read `AXValue`) contain
@@ -456,11 +529,26 @@ fn poll_current_focus(
 /// * `transcript` - Transcript text that was pasted.
 #[cfg(test)]
 fn value_indicates_insertion(baseline: Option<&str>, current: &str, transcript: &str) -> bool {
+    value_indicates_insertion_for_mode(baseline, current, transcript, PasteMode::Standard)
+}
+
+#[cfg(test)]
+fn value_indicates_insertion_for_mode(
+    baseline: Option<&str>,
+    current: &str,
+    transcript: &str,
+    mode: PasteMode,
+) -> bool {
     let matcher = TranscriptMatcher::new(transcript);
     let baseline =
         baseline.map(|value| BoundedNormalizedValue::new(value, MAX_AX_VALUE_UTF16_UNITS));
     let current = BoundedNormalizedValue::new(current, MAX_AX_VALUE_UTF16_UNITS);
-    matcher.indicates_insertion(baseline.as_ref(), &current, true)
+    matcher.indicates_insertion(
+        baseline.as_ref(),
+        &current,
+        true,
+        mode != PasteMode::Terminal,
+    )
 }
 
 /// Bounded whitespace-normalized representation of an Accessibility value.
@@ -587,9 +675,9 @@ struct EvidenceCounts {
 /// normalized (whitespace-stripped) transcript.
 ///
 /// Below [`SHORT_CONFIRM_MIN_OCCURRENCE_CHARS`], only an exact
-/// baseline-to-current insertion (or selection-geometry evidence) counts: a
-/// string this short collides too easily with unrelated target updates, so a
-/// mere occurrence-count increase is not trusted. From there through
+/// baseline-to-current insertion counts: a string this short collides too
+/// easily with unrelated target updates, so occurrence-count and selection-
+/// geometry evidence are not trusted. From there through
 /// [`CONFIRM_WINDOW_CHARS`], a whole-transcript occurrence-count *increase*
 /// over the pre-chord baseline counts too — long enough to be unlikely by
 /// coincidence, but still too short to have a reliable leading/trailing
@@ -604,11 +692,10 @@ struct TranscriptMatcher {
     head: Option<String>,
     tail: Option<String>,
     utf16_units: usize,
-    /// Whether a whole-transcript occurrence-count increase alone counts as
-    /// confirmation evidence for a transcript that has no leading/trailing
-    /// window (`head`/`tail` both `None`). See
-    /// [`SHORT_CONFIRM_MIN_OCCURRENCE_CHARS`].
-    whole_occurrence_allowed: bool,
+    /// Whether non-text-specific evidence is safe for this transcript's
+    /// length. Below the floor, occurrence and selection geometry collide
+    /// too easily with unrelated target churn.
+    meets_evidence_floor: bool,
 }
 
 impl TranscriptMatcher {
@@ -621,7 +708,7 @@ impl TranscriptMatcher {
                 head: None,
                 tail: None,
                 utf16_units,
-                whole_occurrence_allowed: false,
+                meets_evidence_floor: false,
             };
         }
 
@@ -631,14 +718,14 @@ impl TranscriptMatcher {
                 .tail
                 .as_deref()
                 .map_or(0, |tail| tail.chars().count());
-        let whole_occurrence_allowed = normalized_len >= SHORT_CONFIRM_MIN_OCCURRENCE_CHARS;
+        let meets_evidence_floor = normalized_len >= SHORT_CONFIRM_MIN_OCCURRENCE_CHARS;
         if normalized_len <= CONFIRM_WINDOW_CHARS {
             return Self {
                 whole,
                 head: None,
                 tail: None,
                 utf16_units,
-                whole_occurrence_allowed,
+                meets_evidence_floor,
             };
         }
 
@@ -655,7 +742,7 @@ impl TranscriptMatcher {
             head: Some(head),
             tail: Some(tail.into_iter().collect()),
             utf16_units,
-            whole_occurrence_allowed,
+            meets_evidence_floor,
         }
     }
 
@@ -681,16 +768,21 @@ impl TranscriptMatcher {
         baseline: Option<&BoundedNormalizedValue>,
         current: &BoundedNormalizedValue,
         allow_selection_evidence: bool,
+        allow_occurrence_evidence: bool,
     ) -> bool {
-        let short_exact_insertion = match (&self.whole, &self.head, &self.tail, baseline) {
-            (Some(whole), None, None, Some(baseline)) => {
-                current.is_exact_insertion_of(baseline, whole)
-            }
+        let exact_insertion = match (&self.whole, baseline) {
+            (Some(whole), Some(baseline)) => current.is_exact_insertion_of(baseline, whole),
             _ => false,
         };
         let distinctive_occurrence = match baseline {
+            // Occurrence counts alone are unsafe over a fixed-size rendered
+            // AX window: scrolling can reveal an older identical string and
+            // produce a false 0->1 increase. Require enough total value
+            // growth to prove this is not merely a same-size window shift.
             Some(baseline)
-                if self.head.is_some() || self.tail.is_some() || self.whole_occurrence_allowed =>
+                if allow_occurrence_evidence
+                    && self.meets_evidence_floor
+                    && current.utf16_units > baseline.utf16_units =>
             {
                 let current_counts = self.counts(current);
                 let baseline_counts = self.counts(baseline);
@@ -701,9 +793,10 @@ impl TranscriptMatcher {
             _ => false,
         };
 
-        short_exact_insertion
+        exact_insertion
             || distinctive_occurrence
-            || (allow_selection_evidence
+            || (self.meets_evidence_floor
+                && allow_selection_evidence
                 && baseline
                     .is_some_and(|baseline| self.selection_indicates_insertion(baseline, current)))
     }
@@ -908,25 +1001,32 @@ mod tests {
             !wrapped.contains(transcript),
             "precondition: verbatim fails"
         );
-        assert!(value_indicates_insertion(
+        assert!(value_indicates_insertion_for_mode(
             Some("prompt> "),
             wrapped,
-            transcript
+            transcript,
+            PasteMode::Terminal,
         ));
     }
 
-    /// Growth is unavailable when the target re-rendered to the same length
-    /// (a fixed-size terminal grid). Layout-independent matching has to
-    /// carry the confirmation on its own.
+    /// A terminal's rendered AX window is not stable occurrence evidence:
+    /// scrolling can reveal an older identical transcript without the paste
+    /// chord landing. Even when unrelated churn grows the window, occurrence
+    /// counts alone must remain disabled in terminal mode.
     #[test]
-    fn wrapped_transcript_confirms_without_any_growth_evidence() {
+    fn terminal_sliding_window_does_not_confirm_from_occurrence_shift() {
         let transcript = "the quick brown fox jumps over the lazy dog every single morning";
-        let wrapped = "the quick brown fox jumps over the\nlazy dog every single morning";
-        let same_length_baseline = "x".repeat(wrapped.len());
-        assert!(value_indicates_insertion(
-            Some(&same_length_baseline),
-            wrapped,
-            transcript
+        let baseline = "prompt one";
+        let current = format!("prompt two {transcript}");
+        assert!(
+            value_indicates_insertion(Some(baseline), &current, transcript),
+            "precondition: a stable GUI value may use the occurrence increase"
+        );
+        assert!(!value_indicates_insertion_for_mode(
+            Some(baseline),
+            &current,
+            transcript,
+            PasteMode::Terminal,
         ));
     }
 
@@ -986,9 +1086,9 @@ mod tests {
 
     /// Below [`SHORT_CONFIRM_MIN_OCCURRENCE_CHARS`], an occurrence-count
     /// increase alone must not confirm: `"okay"` is short enough to appear in
-    /// unrelated growth by coincidence, so only an exact insertion delta (or
-    /// selection evidence) is trusted for it, even though the count here
-    /// genuinely goes from zero to one.
+    /// unrelated growth by coincidence, so only an exact insertion delta is
+    /// trusted for it, even though the count here genuinely goes from zero
+    /// to one.
     #[test]
     fn below_floor_transcript_does_not_confirm_via_occurrence_increase() {
         let transcript = "okay";
@@ -1076,11 +1176,11 @@ mod tests {
         let cases = [
             SelectionCase {
                 name: "exact_selection_geometry_confirms_reformatted_safari_text",
-                transcript: "say \"hi\"",
-                current_head: "say \u{201c}hi\u{201d}",
-                current_utf16_units: 8,
+                transcript: "please say \"hi\"",
+                current_head: "please say \u{201c}hi\u{201d}",
+                current_utf16_units: 15,
                 current_selection: PasteTargetSelection {
-                    location: 8,
+                    location: 15,
                     length: 0,
                 },
                 allow_selection_evidence: true,
@@ -1088,14 +1188,26 @@ mod tests {
             },
             SelectionCase {
                 name: "replacement_ax_object_requires_text_evidence",
-                transcript: "say \"hi\"",
-                current_head: "say \u{201c}hi\u{201d}",
-                current_utf16_units: 8,
+                transcript: "please say \"hi\"",
+                current_head: "please say \u{201c}hi\u{201d}",
+                current_utf16_units: 15,
                 current_selection: PasteTargetSelection {
-                    location: 8,
+                    location: 15,
                     length: 0,
                 },
                 allow_selection_evidence: false,
+                expect: false,
+            },
+            SelectionCase {
+                name: "short_transcript_does_not_use_selection_geometry",
+                transcript: "ok",
+                current_head: "ok",
+                current_utf16_units: 2,
+                current_selection: PasteTargetSelection {
+                    location: 2,
+                    length: 0,
+                },
+                allow_selection_evidence: true,
                 expect: false,
             },
             SelectionCase {
@@ -1149,6 +1261,7 @@ mod tests {
                     Some(&baseline),
                     &current,
                     case.allow_selection_evidence,
+                    true,
                 );
                 (actual != case.expect)
                     .then(|| format!("{}: expected {}, got {}", case.name, case.expect, actual))
@@ -1160,6 +1273,42 @@ mod tests {
             failures.len(),
             failures.join("\n")
         );
+    }
+
+    #[test]
+    fn deadline_confirmation_matrix() {
+        let elapsed = Duration::from_millis(AX_CONFIRM_DEADLINE.as_millis() as u64);
+        let short = TranscriptMatcher::new("okay");
+        let long = TranscriptMatcher::new("hello there friend");
+
+        assert!(matches!(
+            deadline_confirmation(Ok(true), &long, elapsed),
+            PasteConfirmation::Confirmed {
+                kind: "ax_confirmed",
+                ..
+            }
+        ));
+        assert!(matches!(
+            deadline_confirmation(Ok(false), &short, elapsed),
+            PasteConfirmation::Unverified {
+                kind: "unverified_short_transcript",
+                ..
+            }
+        ));
+        assert!(matches!(
+            deadline_confirmation(Ok(false), &long, elapsed),
+            PasteConfirmation::NoEvidence {
+                kind: "no_evidence",
+                ..
+            }
+        ));
+        assert!(matches!(
+            deadline_confirmation(Err(()), &long, elapsed),
+            PasteConfirmation::UnverifiedFocusLost {
+                kind: "unverified_focus_lost",
+                ..
+            }
+        ));
     }
 }
 
@@ -1176,9 +1325,12 @@ mod ffi_tests {
         let ctx = PasteConfirmationContext {
             focus: None,
             transcript: "hello",
+            mode: PasteMode::Standard,
             baseline: None,
         };
-        match await_paste_confirmation(&ctx) {
+        let confirmation = await_paste_confirmation(&ctx);
+        clear_abandonment_signal();
+        match confirmation {
             PasteConfirmation::Unverified { kind, .. } => {
                 assert_eq!(kind, "unverified_timeout");
             }
@@ -1208,9 +1360,12 @@ mod ffi_tests {
         let ctx = PasteConfirmationContext {
             focus: None,
             transcript: "hello",
+            mode: PasteMode::Standard,
             baseline: None,
         };
-        match await_paste_confirmation(&ctx) {
+        let confirmation = await_paste_confirmation(&ctx);
+        clear_abandonment_signal();
+        match confirmation {
             PasteConfirmation::NoEvidence { kind, .. } => {
                 assert_eq!(kind, "no_evidence");
             }
@@ -1229,10 +1384,12 @@ mod ffi_tests {
     #[test]
     fn abandoned_signal_degrades_unverified_focus_lost_to_no_evidence() {
         install_abandonment_signal(Arc::new(AtomicBool::new(true)));
-        match unless_abandoned(PasteConfirmation::UnverifiedFocusLost {
+        let confirmation = unless_abandoned(PasteConfirmation::UnverifiedFocusLost {
             elapsed: Duration::from_millis(5),
             kind: "unverified_focus_lost",
-        }) {
+        });
+        clear_abandonment_signal();
+        match confirmation {
             PasteConfirmation::NoEvidence { kind, .. } => {
                 assert_eq!(kind, "no_evidence");
             }

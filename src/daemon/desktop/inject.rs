@@ -168,6 +168,13 @@ pub(crate) enum StageOutcome {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum PasteDispatch {
     Posted,
+    #[cfg_attr(
+        not(target_os = "macos"),
+        allow(
+            dead_code,
+            reason = "only the macOS chord backend can withhold a dispatch for live modifiers"
+        )
+    )]
     SkippedUnsafeModifiers,
 }
 
@@ -589,8 +596,8 @@ impl FocusSnapshot {
     ///
     /// `Some` when this snapshot captured a focused Accessibility element
     /// (see [`crate::daemon::macos::MacOsFocusSnapshot::ax_element`] for the
-    /// cases where it did not, e.g. capture-time Accessibility failure or a
-    /// secure input field).
+    /// cases where it did not, e.g. capture-time Accessibility failure or an
+    /// application that exposes no focused element).
     #[cfg(target_os = "macos")]
     pub(crate) fn macos_ax_element(&self) -> Option<&crate::daemon::macos::AxElementSnapshot> {
         self.macos.ax_element()
@@ -801,6 +808,7 @@ impl Injector {
         let result = paste_with_clipboard_swap_guarded(
             &mut clipboard,
             text,
+            mode,
             wait_for_paste_shortcut_safety,
             || self.paste_clipboard(mode),
             clipboard_settle_delay(),
@@ -978,6 +986,7 @@ impl Injector {
 fn paste_with_clipboard_swap_guarded<C, R, P, G, H>(
     clipboard: &mut C,
     text: &str,
+    mode: PasteMode,
     mut prepare_paste: R,
     mut paste: P,
     settle_delay: Duration,
@@ -1028,6 +1037,14 @@ where
     let write_token = restore_plan.after_transcript_write(write_before);
 
     sleep_if_nonzero(settle_delay);
+
+    // Capture the target value before the final focus recheck. macOS AX
+    // reads are bounded but blocking; keeping them on this side of the guard
+    // leaves no AX round-trip between the last focus decision and the chord.
+    // The guard immediately below still proves the captured target remains
+    // current before `paste()` posts any input.
+    let baseline = restore_plan.capture_paste_baseline(focus);
+
     match before_chord() {
         Ok(true) => {}
         Ok(false) => {
@@ -1054,12 +1071,6 @@ where
         }
     }
 
-    // Read the target's value *before* the chord. Doing it after races apps
-    // that refresh their accessibility tree coarsely, which makes a landed
-    // paste indistinguishable from a dropped one. See
-    // `PasteConfirmationContext::baseline`.
-    let baseline = restore_plan.capture_paste_baseline(focus);
-
     let paste_result = paste();
     match paste_result {
         Ok(PasteDispatch::Posted) => Ok(finish_confirmed_paste(
@@ -1070,6 +1081,7 @@ where
             clipboard_policy,
             focus,
             text,
+            mode,
             baseline.as_ref(),
         )),
         Ok(PasteDispatch::SkippedUnsafeModifiers) => {
@@ -1112,6 +1124,7 @@ where
 /// * `clipboard_policy` - Policy deciding whether restoration should occur.
 /// * `focus` - Focus snapshot passed through to the acknowledgement strategy.
 /// * `text` - Transcript text that was just pasted.
+/// * `mode` - Paste mode used to select safe acknowledgement evidence.
 /// * `baseline` - Target's observable value read before the chord was sent.
 ///
 /// Never fails: the paste chord was already sent by this point, so a
@@ -1140,6 +1153,7 @@ fn finish_confirmed_paste<C, H>(
     clipboard_policy: ClipboardPolicy,
     focus: Option<&FocusSnapshot>,
     text: &str,
+    mode: PasteMode,
     baseline: Option<&PasteTargetValue>,
 ) -> PasteReport
 where
@@ -1151,6 +1165,7 @@ where
         &PasteConfirmationContext {
             focus,
             transcript: text,
+            mode,
             baseline,
         },
     );

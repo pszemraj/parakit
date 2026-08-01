@@ -837,22 +837,19 @@ fn focus_verification_allows_insertion(
     match result {
         Ok(result) => {
             verification.set(result.label());
-            if result.allows_insertion() {
-                true
-            } else {
-                match result {
-                    FocusVerification::Changed => {
-                        log.warn("focus changed before insertion; automatic paste skipped");
-                    }
-                    #[cfg(target_os = "macos")]
-                    FocusVerification::AxUnsupported => {
-                        log.warn(
-                            "could not verify the focused macOS Accessibility element; automatic paste skipped",
-                        );
-                    }
-                    FocusVerification::Matched => unreachable!("matched focus permits insertion"),
+            match result {
+                FocusVerification::Matched => true,
+                #[cfg(target_os = "macos")]
+                FocusVerification::AxUnsupported => {
+                    log.verbose(
+                        "macOS Accessibility did not expose focused-element identity; using the matching pid and bundle-id focus fallback",
+                    );
+                    true
                 }
-                false
+                FocusVerification::Changed => {
+                    log.warn("focus changed before insertion; automatic paste skipped");
+                    false
+                }
             }
         }
         Err(err) if cfg!(any(target_os = "macos", target_os = "windows")) => {
@@ -1268,7 +1265,7 @@ mod tests {
         assert_eq!(verification.get(), "changed");
         #[cfg(target_os = "macos")]
         {
-            assert!(!focus_verification_allows_insertion(
+            assert!(focus_verification_allows_insertion(
                 Ok(FocusVerification::AxUnsupported),
                 &verification,
                 &log

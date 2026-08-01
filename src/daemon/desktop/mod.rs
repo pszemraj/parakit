@@ -35,15 +35,6 @@ impl FocusVerification {
         }
     }
 
-    /// Return whether this comparison permits insertion.
-    ///
-    /// # Returns
-    ///
-    /// `true` only when the live insertion target was positively matched.
-    pub(crate) const fn allows_insertion(self) -> bool {
-        matches!(self, Self::Matched)
-    }
-
     #[cfg(any(target_os = "linux", target_os = "windows"))]
     const fn from_matches(matches: bool) -> Self {
         if matches {

@@ -78,7 +78,7 @@
 
 use anyhow::{bail, Context, Result};
 use arboard::{Clipboard, ImageData};
-use objc2::rc::Retained;
+use objc2::rc::{autoreleasepool, Retained};
 use objc2::{sel, MainThreadMarker, MainThreadOnly as _};
 use objc2_app_kit::{
     NSApplication, NSApplicationActivationPolicy, NSBackingStoreType, NSEventMask, NSMenu,
@@ -869,18 +869,20 @@ fn pump_until_paste_result(
 /// events naturally ends at the deadline; events already queued are
 /// dispatched immediately regardless.
 fn pump_app_events(app: &NSApplication, slice: Duration) {
-    let expiration = NSDate::dateWithTimeIntervalSinceNow(slice.as_secs_f64());
-    // SAFETY: `NSDefaultRunLoopMode` is an extern static; reading it has no
-    // side effects and it is always a valid, immortal NSString constant.
-    let mode = unsafe { NSDefaultRunLoopMode };
-    while let Some(event) = app.nextEventMatchingMask_untilDate_inMode_dequeue(
-        NSEventMask::Any,
-        Some(&expiration),
-        mode,
-        true,
-    ) {
-        app.sendEvent(&event);
-    }
+    autoreleasepool(|_| {
+        let expiration = NSDate::dateWithTimeIntervalSinceNow(slice.as_secs_f64());
+        // SAFETY: `NSDefaultRunLoopMode` is an extern static; reading it has no
+        // side effects and it is always a valid, immortal NSString constant.
+        let mode = unsafe { NSDefaultRunLoopMode };
+        while let Some(event) = app.nextEventMatchingMask_untilDate_inMode_dequeue(
+            NSEventMask::Any,
+            Some(&expiration),
+            mode,
+            true,
+        ) {
+            app.sendEvent(&event);
+        }
+    });
 }
 
 #[cfg(test)]

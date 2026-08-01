@@ -239,6 +239,7 @@ struct MockRestoreGate {
     after_sequence: u32,
     timeout: bool,
     confirmation_override: Option<PasteConfirmation>,
+    record_baseline: bool,
 }
 
 impl MockRestoreGate {
@@ -248,6 +249,7 @@ impl MockRestoreGate {
             after_sequence: 11,
             timeout: false,
             confirmation_override: None,
+            record_baseline: false,
         }
     }
 
@@ -266,6 +268,11 @@ impl MockRestoreGate {
     /// `wait_before_restore`) behavior.
     fn confirmation(mut self, confirmation: PasteConfirmation) -> Self {
         self.confirmation_override = Some(confirmation);
+        self
+    }
+
+    fn record_baseline(mut self) -> Self {
+        self.record_baseline = true;
         self
     }
 }
@@ -293,6 +300,13 @@ impl ClipboardRestoreGate for MockRestoreGate {
             token.before_sequence.unwrap_or_default(),
             token.after_sequence.unwrap_or_default()
         ));
+    }
+
+    fn capture_paste_baseline(&self, _focus: Option<&FocusSnapshot>) -> Option<PasteTargetValue> {
+        if self.record_baseline {
+            self.events.borrow_mut().push("baseline".to_string());
+        }
+        None
     }
 
     fn await_paste_confirmation(
@@ -708,6 +722,7 @@ fn clipboard_swap_cases_are_stable() {
         let result = paste_with_clipboard_swap_guarded(
             &mut clipboard,
             case.transcript,
+            PasteMode::Standard,
             || true,
             || {
                 events.borrow_mut().push("paste".to_string());
@@ -763,13 +778,14 @@ fn clipboard_swap_cases_are_stable() {
 }
 
 #[test]
-fn modifier_wait_completes_before_final_focus_recheck() {
+fn modifier_wait_and_baseline_complete_before_final_focus_recheck() {
     let mut clipboard = MockClipboard::new("old clipboard");
     let events = clipboard.events();
-    let gate = quiet_gate();
+    let gate = MockRestoreGate::new(Rc::clone(&events)).record_baseline();
     let result = paste_with_clipboard_swap_guarded(
         &mut clipboard,
         "dictated text",
+        PasteMode::Standard,
         || {
             events.borrow_mut().push("modifier-wait".to_string());
             true
@@ -796,9 +812,13 @@ fn modifier_wait_completes_before_final_focus_recheck() {
             "guard",
             "modifier-wait",
             "read",
+            "before-write:10",
             "set:dictated text",
+            "after-write:11",
+            "baseline",
             "guard",
             "paste",
+            "wait:10->11",
             "set:old clipboard"
         ]
     );
@@ -811,6 +831,7 @@ fn modifier_wait_timeout_keeps_transcript_without_posting() {
     let result = paste_with_clipboard_swap_guarded(
         &mut clipboard,
         "dictated text",
+        PasteMode::Standard,
         || {
             events.borrow_mut().push("modifier-wait".to_string());
             false
@@ -847,6 +868,7 @@ fn unsafe_modifier_skip_keeps_staged_transcript_without_posting() {
     let result = paste_with_clipboard_swap_guarded(
         &mut clipboard,
         "dictated text",
+        PasteMode::Standard,
         || true,
         || {
             events.borrow_mut().push("paste-attempt".to_string());
@@ -1029,6 +1051,7 @@ fn clipboard_restore_gate_cases_are_stable() {
             ClipboardRestoreAction::Paste => paste_with_clipboard_swap_guarded(
                 &mut clipboard,
                 "dictated text",
+                PasteMode::Standard,
                 || true,
                 || {
                     events.borrow_mut().push("paste".to_string());
@@ -1162,6 +1185,7 @@ fn clipboard_restore_policy_preserves_supported_non_text_payloads() {
         let result = paste_with_clipboard_swap_guarded(
             &mut clipboard,
             "dictated text",
+            PasteMode::Standard,
             || true,
             || {
                 events.borrow_mut().push("paste".to_string());
@@ -1192,6 +1216,7 @@ fn unsupported_previous_clipboard_clears_staged_transcript_on_guard_block() {
     let result = paste_with_clipboard_swap_guarded(
         &mut clipboard,
         "dictated text",
+        PasteMode::Standard,
         || true,
         || {
             events.borrow_mut().push("paste".to_string());
@@ -1299,6 +1324,7 @@ fn post_paste_acknowledgement_tiers_drive_outcome_and_clipboard_policy() {
         let result = paste_with_clipboard_swap_guarded(
             &mut clipboard,
             "dictated text",
+            PasteMode::Standard,
             || true,
             || {
                 events.borrow_mut().push("paste".to_string());
@@ -1382,6 +1408,7 @@ fn paste_survives_a_failed_clipboard_restore() {
         let result = paste_with_clipboard_swap_guarded(
             &mut clipboard,
             "dictated text",
+            PasteMode::Standard,
             || true,
             || {
                 events.borrow_mut().push("paste".to_string());
