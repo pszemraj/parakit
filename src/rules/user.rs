@@ -62,6 +62,7 @@ impl RulePosition {
 /// time: the pattern must be a valid regex, and the name must not collide
 /// with a built-in rule name or another user rule name.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct UserRule {
     /// Unique rule name. Must not have surrounding whitespace or collide
     /// with a built-in rule name or another user rule name.
@@ -96,11 +97,11 @@ pub struct UserRule {
 /// Returns an error naming the offending rule when: a rule's `name` is
 /// empty or whitespace-only; a rule's `name` has leading or trailing
 /// whitespace; a rule's `name` collides with a built-in rule name; two user
-/// rules share a `name`; or a rule's `pattern` is the empty string (an empty
-/// regex matches at every position, so `replacement` would be spliced
-/// between every character of every transcript). A whitespace-only pattern
-/// is legal: it is a normal, if unusual, regex that matches a literal space,
-/// not the "matches everywhere" footgun an empty pattern is.
+/// rules share a `name`; or a rule's `pattern` is the empty string. Rejecting
+/// the literal empty value catches an incomplete rule definition; it is not a
+/// general ban on valid regexes that can produce zero-width matches (for
+/// example `()` or `\b`). A whitespace-only pattern remains legal and matches
+/// a literal space.
 pub(crate) fn validate_user_rules(user_rules: &[UserRule]) -> Result<()> {
     let mut seen: HashSet<&str> = HashSet::with_capacity(user_rules.len());
     for (idx, rule) in user_rules.iter().enumerate() {
@@ -124,6 +125,9 @@ pub(crate) fn validate_user_rules(user_rules: &[UserRule]) -> Result<()> {
             return Err(anyhow!("duplicate user rule name '{}'", rule.name));
         }
         if rule.pattern.is_empty() {
+            // This is a required-config-value check, not zero-width regex
+            // analysis. Other valid expressions may intentionally match at a
+            // boundary and are accepted by `compile_user_regex` below.
             return Err(anyhow!("user rule '{}' has an empty pattern", rule.name));
         }
     }

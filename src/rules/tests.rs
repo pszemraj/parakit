@@ -2,6 +2,8 @@
 
 use std::collections::HashSet;
 
+use super::defaults::DEFAULT_RULES;
+use super::engine::CLEANUP_BOUNDARY_RULE_NAME;
 use super::passes::capitalize_sentence_starts;
 use super::*;
 
@@ -134,6 +136,7 @@ fn filled_pauses_are_removed_without_matching_er_acronym() {
             ("I, um, think this works.", "I think this works."),
             ("uh, hello there.", "Hello there."),
             ("I, erm, agree.", "I agree."),
+            ("Erm, I agree.", "I agree."),
             ("The ER team arrived.", "The ER team arrived."),
         ],
     );
@@ -441,6 +444,10 @@ fn identifier_formatting_uses_structural_rules_not_vocabulary_lists() {
             ("RTX 50 90 release.", "RTX 5090 release."),
             ("S M 1 20 support.", "SM120 support."),
             ("Use F 32 and H 100.", "Use F32 and H100."),
+            ("SM 120 is supported.", "SM120 is supported."),
+            ("OK five minutes ago.", "OK 5 minutes ago."),
+            ("US 30 remains open.", "US 30 remains open."),
+            ("TV four is available.", "TV 4 is available."),
             ("About 3 50 K lines.", "About 350K lines."),
             ("GPT 5 5 stays split.", "GPT 5 5 stays split."),
             ("I 5 stays separate.", "I 5 stays separate."),
@@ -576,6 +583,45 @@ fn ruleset_id_is_stable_and_option_sensitive() {
 
     let threshold = cleaner_with_number_threshold(Some(5.0));
     assert_ne!(first.ruleset_id(), threshold.ruleset_id());
+}
+
+#[test]
+fn user_rule_ruleset_id_is_position_sensitive_and_description_insensitive() {
+    let first_rule = UserRule {
+        description: Some("first description".to_string()),
+        ..user_rule("custom-hello", "hello", "hi", RulePosition::First)
+    };
+    let same_behavior = UserRule {
+        description: Some("rewritten description".to_string()),
+        ..first_rule.clone()
+    };
+    let last_rule = UserRule {
+        position: RulePosition::Last,
+        ..first_rule.clone()
+    };
+
+    let first =
+        build_cleaner_for_test(CleaningProfile::Safe, false, &HashSet::new(), &[first_rule]);
+    let described_differently = build_cleaner_for_test(
+        CleaningProfile::Safe,
+        false,
+        &HashSet::new(),
+        &[same_behavior],
+    );
+    let last = build_cleaner_for_test(CleaningProfile::Safe, false, &HashSet::new(), &[last_rule]);
+
+    assert_eq!(first.ruleset_id(), described_differently.ruleset_id());
+    assert_ne!(first.ruleset_id(), last.ruleset_id());
+}
+
+#[test]
+fn standard_user_rule_cleanup_boundary_exists_in_defaults() {
+    assert!(
+        DEFAULT_RULES
+            .iter()
+            .any(|rule| rule.name == CLEANUP_BOUNDARY_RULE_NAME),
+        "{CLEANUP_BOUNDARY_RULE_NAME} must remain in DEFAULT_RULES"
+    );
 }
 
 #[test]
@@ -864,13 +910,20 @@ fn user_rule_validation_rejections() {
 
 #[test]
 fn whitespace_only_user_rule_pattern_is_accepted_as_a_literal_pattern() {
-    // Only the literal empty string is rejected. A whitespace-only pattern
-    // is a normal (if unusual) regex that matches a literal space, not the
-    // "matches everywhere" footgun an empty pattern is, so it must not be
-    // rejected by `validate_user_rules`.
+    // Only a missing literal pattern value is rejected. A whitespace-only
+    // pattern is a normal (if unusual) regex that matches a literal space.
     let rules = vec![user_rule("space-rule", " ", "_", RulePosition::Standard)];
     let cleaner = build_cleaner_for_test(CleaningProfile::Safe, false, &HashSet::new(), &rules);
     assert_eq!(cleaner.clean_text("a b"), "A_b");
+}
+
+#[test]
+fn valid_zero_width_user_regexes_are_not_treated_as_missing_patterns() {
+    for (name, pattern) in [("group", "()"), ("repeat", "a*"), ("boundary", r"\b")] {
+        let rule = user_rule(name, pattern, "x", RulePosition::Standard);
+        Cleaner::new(CleaningProfile::Safe, false, None, &HashSet::new(), &[rule])
+            .unwrap_or_else(|err| panic!("{pattern:?} is a valid configured regex: {err:#}"));
+    }
 }
 
 #[test]

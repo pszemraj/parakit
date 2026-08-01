@@ -33,8 +33,9 @@ pub(crate) const CONFIG_PATH_ENV: &str = "PARAKIT_CONFIG_PATH";
 ///
 /// Every field is optional at every level: an absent file, an absent
 /// section, or an absent key all fall back to built-in defaults. Unknown
-/// keys are ignored (not `deny_unknown_fields`) so older parakit versions
-/// tolerate config files written for newer ones.
+/// top-level and section keys are ignored so older parakit versions tolerate
+/// config files written for newer ones. Individual `[[rules.user]]` entries
+/// are strict because a misspelled field silently changes rule behavior.
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 pub(crate) struct ConfigFile {
@@ -467,6 +468,22 @@ position = "first"
         let err = load_from_path(&path).unwrap_err();
         let msg = format!("{err:#}");
         assert!(msg.contains(&path.display().to_string()), "message: {msg}");
+    }
+
+    #[test]
+    fn misspelled_user_rule_position_is_rejected() {
+        let toml = r#"
+[[rules.user]]
+name = "custom-hello"
+pattern = "(?i)hi"
+replacement = "hello"
+positon = "last"
+"#;
+        let path = write_fixture("misspelled-user-rule-position", toml);
+        let err = load_from_path(&path).unwrap_err();
+        let message = format!("{err:#}");
+        assert!(message.contains("unknown field `positon`"), "{message}");
+        assert!(message.contains(&path.display().to_string()), "{message}");
     }
 
     #[test]
