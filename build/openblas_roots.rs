@@ -3,6 +3,27 @@
 use std::env;
 use std::path::PathBuf;
 
+/// Environment variables that can change OpenBLAS discovery results.
+pub(crate) const OPENBLAS_DISCOVERY_ENV_VARS: &[&str] = &[
+    "PARAKIT_OPENBLAS_ROOT",
+    "OPENBLAS_ROOT",
+    "OpenBLAS_ROOT",
+    "OPENBLAS_HOME",
+    "CMAKE_PREFIX_PATH",
+    "VCPKG_ROOT",
+    "VCPKG_INSTALLATION_ROOT",
+    "VCPKG_INSTALLED_DIR",
+    "VCPKG_DEFAULT_TRIPLET",
+    "HOMEBREW_PREFIX",
+    "CONDA_PREFIX",
+    "USERPROFILE",
+    "PROGRAMDATA",
+    "ProgramFiles",
+    "SystemDrive",
+];
+
+const OPENBLAS_ROOT_ENV_VARS: &[&str] = &["OPENBLAS_ROOT", "OpenBLAS_ROOT", "OPENBLAS_HOME"];
+
 /// Return OpenBLAS roots named by common environment and package-manager
 /// conventions.
 ///
@@ -16,7 +37,7 @@ use std::path::PathBuf;
 pub(crate) fn configured_openblas_roots(windows: bool) -> Vec<PathBuf> {
     let mut roots = Vec::new();
 
-    for name in ["OPENBLAS_ROOT", "OpenBLAS_ROOT", "OPENBLAS_HOME"] {
+    for name in OPENBLAS_ROOT_ENV_VARS {
         if let Some(root) = env_path(name) {
             push_openblas_root(&mut roots, root, windows);
         }
@@ -108,7 +129,12 @@ fn push_unique_path(paths: &mut Vec<PathBuf>, path: PathBuf, windows: bool) {
     }
 }
 
-fn env_path(name: &str) -> Option<PathBuf> {
+/// Return a non-empty environment variable as a path.
+///
+/// # Returns
+///
+/// The configured path, or `None` when the variable is unset or empty.
+pub(crate) fn env_path(name: &str) -> Option<PathBuf> {
     env::var_os(name)
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)

@@ -8,7 +8,7 @@ use std::fs;
 
 use windows_cuda::{
     cuda_external_dll_names, cuda_runtime_dirs, derive_cuda_external_dll_names,
-    discover_cuda_external_dll_names, display_paths, is_cuda_external_dll_name,
+    discover_cuda_external_dll_names, is_cuda_external_dll_name,
 };
 
 #[test]
@@ -125,15 +125,4 @@ fn cuda_runtime_dll_filter_accepts_required_runtime_names_only() {
     assert!(!is_cuda_external_dll_name("nvrtc64_130_0.dll"));
     assert!(!is_cuda_external_dll_name("cublas64_13.lib"));
     assert!(!is_cuda_external_dll_name("unrelated.dll"));
-}
-
-#[test]
-fn display_paths_joins_candidate_dirs_for_errors() {
-    assert_eq!(
-        display_paths(&[
-            std::path::PathBuf::from("C:\\CUDA\\bin"),
-            std::path::PathBuf::from("C:\\CUDA\\bin\\x64")
-        ]),
-        "C:\\CUDA\\bin, C:\\CUDA\\bin\\x64"
-    );
 }

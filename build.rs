@@ -31,7 +31,9 @@ use std::process::Command;
 
 #[path = "build/openblas_roots.rs"]
 mod openblas_roots;
-use openblas_roots::{configured_openblas_roots, conventional_openblas_roots};
+use openblas_roots::{
+    configured_openblas_roots, conventional_openblas_roots, env_path, OPENBLAS_DISCOVERY_ENV_VARS,
+};
 
 #[path = "build/unix_openblas.rs"]
 mod unix_openblas;
@@ -41,47 +43,33 @@ use unix_openblas::{find_unix_openblas, UnixOpenBlas};
 mod windows_openblas;
 use windows_openblas::{find_windows_openblas, WindowsOpenBlas, WindowsOpenBlasImportKind};
 
+#[path = "build/windows_artifacts.rs"]
+mod windows_artifacts;
 #[path = "build/windows_cuda.rs"]
 mod windows_cuda;
 #[path = "build/windows_manifest.rs"]
 mod windows_manifest;
-use windows_cuda::{cuda_external_dll_names, cuda_runtime_dirs, display_paths};
-use windows_manifest::{Accelerator, CudaManifest, RuntimeManifest, VulkanManifest};
-
-/// File name for the Windows runtime manifest colocated with `parakit.exe`.
-const WINDOWS_RUNTIME_MANIFEST: &str = "parakit-runtime-manifest.json";
 
 fn main() {
     println!("cargo:rerun-if-env-changed=CRISPASR_LIB_DIR");
     println!("cargo:rerun-if-env-changed=CRISPASR_SRC_DIR");
     println!("cargo:rerun-if-env-changed=PARAKIT_BLAS");
-    println!("cargo:rerun-if-env-changed=PARAKIT_OPENBLAS_ROOT");
-    println!("cargo:rerun-if-env-changed=OPENBLAS_ROOT");
-    println!("cargo:rerun-if-env-changed=OpenBLAS_ROOT");
-    println!("cargo:rerun-if-env-changed=OPENBLAS_HOME");
-    println!("cargo:rerun-if-env-changed=CMAKE_PREFIX_PATH");
-    println!("cargo:rerun-if-env-changed=VCPKG_ROOT");
-    println!("cargo:rerun-if-env-changed=VCPKG_INSTALLATION_ROOT");
-    println!("cargo:rerun-if-env-changed=VCPKG_INSTALLED_DIR");
-    println!("cargo:rerun-if-env-changed=VCPKG_DEFAULT_TRIPLET");
-    println!("cargo:rerun-if-env-changed=HOMEBREW_PREFIX");
-    println!("cargo:rerun-if-env-changed=USERPROFILE");
-    println!("cargo:rerun-if-env-changed=PROGRAMDATA");
-    println!("cargo:rerun-if-env-changed=ProgramFiles");
-    println!("cargo:rerun-if-env-changed=SystemDrive");
+    for name in OPENBLAS_DISCOVERY_ENV_VARS {
+        println!("cargo:rerun-if-env-changed={name}");
+    }
     println!("cargo:rerun-if-env-changed=PARAKIT_CUDA_ARCHS");
     println!("cargo:rerun-if-env-changed=PARAKIT_BUNDLE_CUDA_DLLS");
     println!("cargo:rerun-if-env-changed=CUDA_PATH");
     println!("cargo:rerun-if-env-changed=VULKAN_SDK");
     println!("cargo:rerun-if-env-changed=BLAS_INCLUDE_DIRS");
     println!("cargo:rerun-if-env-changed=BLAS_LIBRARIES");
-    println!("cargo:rerun-if-env-changed=CONDA_PREFIX");
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=build/openblas_roots.rs");
     println!("cargo:rerun-if-changed=build/unix_openblas.rs");
     println!("cargo:rerun-if-changed=build/windows_openblas.rs");
     println!("cargo:rerun-if-changed=build/windows_manifest.rs");
     println!("cargo:rerun-if-changed=build/windows_cuda.rs");
+    println!("cargo:rerun-if-changed=build/windows_artifacts.rs");
 
     let bundled = cargo_feature("bundled");
     build_alsa_silencer(cargo_feature("daemon"));
@@ -207,7 +195,13 @@ fn main() {
 
     let bin_dir = install_dir.join("bin");
     if target_is_windows() {
-        prepare_windows_artifacts(&install_dir, &final_lib_dir, &bin_dir, &blas, &accelerators);
+        windows_artifacts::prepare_windows_artifacts(
+            &install_dir,
+            &final_lib_dir,
+            &bin_dir,
+            &blas,
+            &accelerators,
+        );
     } else {
         assert_crispasr_library_exists(&final_lib_dir);
         assert_apple_metal_library(&final_lib_dir, accelerators.metal_enabled);
@@ -805,164 +799,6 @@ fn locate_source(manifest_dir: &Path) -> PathBuf {
     );
 }
 
-fn prepare_windows_artifacts(
-    install_dir: &Path,
-    lib_dir: &Path,
-    bin_dir: &Path,
-    blas: &BlasConfig,
-    accelerators: &AcceleratorConfig,
-) {
-    std::fs::create_dir_all(lib_dir).unwrap_or_else(|err| {
-        panic!(
-            "failed to create Windows import-library dir {}: {err}",
-            lib_dir.display()
-        )
-    });
-    std::fs::create_dir_all(bin_dir).unwrap_or_else(|err| {
-        panic!(
-            "failed to create Windows runtime DLL dir {}: {err}",
-            bin_dir.display()
-        )
-    });
-
-    copy_windows_runtime_dlls(install_dir, bin_dir);
-    let cuda_manifest = cuda_manifest(install_dir, bin_dir, accelerators);
-    let vulkan_manifest = vulkan_manifest(accelerators);
-
-    let crispasr_import_library = windows_import_library_name("crispasr");
-    let ggml_import_library = windows_import_library_name("ggml");
-    copy_named_artifact(install_dir, &crispasr_import_library, lib_dir);
-    copy_named_artifact(install_dir, &ggml_import_library, lib_dir);
-    copy_named_artifact(install_dir, "crispasr.dll", bin_dir);
-
-    copy_optional_windows_blas_runtime(bin_dir, blas);
-    let runtime_dlls = windows_runtime_dll_names_for_bundle(bin_dir);
-    write_windows_runtime_manifest(
-        bin_dir,
-        &runtime_dlls,
-        accelerators,
-        cuda_manifest,
-        vulkan_manifest,
-    );
-    copy_runtime_dlls_to_profile_dir(bin_dir);
-    copy_runtime_manifest_to_profile_dir(bin_dir);
-}
-
-fn copy_optional_windows_blas_runtime(bin_dir: &Path, blas: &BlasConfig) {
-    if blas.selected != "openblas" {
-        return;
-    }
-
-    let Some(openblas) = windows_openblas_for_bundle(blas) else {
-        return;
-    };
-    for path in &openblas.runtime_dlls {
-        let Some(name) = path.file_name() else {
-            continue;
-        };
-        let dest = bin_dir.join(name);
-        copy_file_or_panic(path, &dest, "Windows OpenBLAS runtime DLL");
-    }
-}
-
-fn cuda_manifest(
-    install_dir: &Path,
-    bin_dir: &Path,
-    accelerators: &AcceleratorConfig,
-) -> Option<CudaManifest> {
-    if !accelerators.cuda_enabled {
-        return None;
-    }
-
-    let toolkit_version = accelerators
-        .cuda_toolkit_version
-        .clone()
-        .unwrap_or_else(|| "unknown".to_string());
-    let architectures = cmake_cache_value(install_dir, "CMAKE_CUDA_ARCHITECTURES")
-        .or_else(|| accelerators.cuda_archs_request.clone())
-        .unwrap_or_else(|| "native".to_string());
-    let cuda_path = env::var_os("CUDA_PATH").map(PathBuf::from);
-    let external_dlls = cuda_external_dll_names(cuda_path.as_deref(), &toolkit_version);
-    let external_dlls_bundled = env_flag_enabled("PARAKIT_BUNDLE_CUDA_DLLS");
-    if external_dlls_bundled {
-        copy_cuda_external_dlls(bin_dir, cuda_path.as_deref(), &external_dlls);
-    }
-
-    Some(CudaManifest {
-        toolkit_version,
-        architectures,
-        external_dlls,
-        external_dlls_bundled,
-    })
-}
-
-fn vulkan_manifest(accelerators: &AcceleratorConfig) -> Option<VulkanManifest> {
-    if !accelerators.vulkan_enabled {
-        return None;
-    }
-
-    Some(VulkanManifest {
-        sdk_version: accelerators
-            .vulkan_sdk_version
-            .clone()
-            .unwrap_or_else(|| "unknown".to_string()),
-        external_dlls: vec!["vulkan-1.dll".to_string()],
-        external_dlls_bundled: false,
-    })
-}
-
-fn cmake_cache_value(install_dir: &Path, key: &str) -> Option<String> {
-    let cache = read_cmake_cache(&install_dir.join("build/CMakeCache.txt"));
-    cache.get(key).cloned().filter(|value| !value.is_empty())
-}
-
-fn env_flag_enabled(name: &str) -> bool {
-    env::var(name)
-        .ok()
-        .map(|value| {
-            matches!(
-                value.trim().to_ascii_lowercase().as_str(),
-                "1" | "true" | "yes" | "on"
-            )
-        })
-        .unwrap_or(false)
-}
-
-fn copy_cuda_external_dlls(bin_dir: &Path, cuda_path: Option<&Path>, names: &[String]) {
-    let Some(cuda_path) = cuda_path else {
-        panic!("PARAKIT_BUNDLE_CUDA_DLLS=1 requires CUDA_PATH to point at a CUDA Toolkit install");
-    };
-    let runtime_dirs = cuda_runtime_dirs(cuda_path);
-    if runtime_dirs.is_empty() {
-        panic!("PARAKIT_BUNDLE_CUDA_DLLS=1 requires CUDA_PATH to point at a CUDA Toolkit install");
-    }
-    for name in names {
-        let source = runtime_dirs
-            .iter()
-            .map(|runtime_dir| runtime_dir.join(name))
-            .find(|path| path.is_file());
-        let Some(source) = source else {
-            panic!(
-                "PARAKIT_BUNDLE_CUDA_DLLS=1 could not find CUDA runtime DLL {} under {}",
-                name,
-                display_paths(&runtime_dirs)
-            );
-        };
-        let dest = bin_dir.join(name);
-        copy_file_or_panic(&source, &dest, "CUDA runtime DLL");
-    }
-}
-
-fn windows_openblas_for_bundle(blas: &BlasConfig) -> Option<&WindowsOpenBlas> {
-    if manual_blas_path_overrides_are_set() {
-        return None;
-    }
-    match blas.openblas_install.as_ref() {
-        Some(OpenBlasInstall::Windows(openblas)) => Some(openblas),
-        _ => None,
-    }
-}
-
 fn detected_openblas(
     explicit_openblas: bool,
     include_conventional: bool,
@@ -1055,12 +891,6 @@ fn unix_openblas_from_conventional_roots() -> Option<UnixOpenBlas> {
         .find_map(|root| find_unix_openblas(&root))
 }
 
-fn env_path(name: &str) -> Option<PathBuf> {
-    env::var_os(name)
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
-}
-
 fn windows_openblas_import_kind() -> WindowsOpenBlasImportKind {
     if env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default() == "gnu" {
         WindowsOpenBlasImportKind::Gnu
@@ -1071,200 +901,6 @@ fn windows_openblas_import_kind() -> WindowsOpenBlasImportKind {
 
 fn manual_blas_path_overrides_are_set() -> bool {
     env::var("BLAS_INCLUDE_DIRS").is_ok() && env::var("BLAS_LIBRARIES").is_ok()
-}
-
-fn windows_import_library_name(base: &str) -> String {
-    if env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default() == "gnu" {
-        format!("lib{base}.dll.a")
-    } else {
-        format!("{base}.lib")
-    }
-}
-
-fn copy_windows_runtime_dlls(install_dir: &Path, bin_dir: &Path) {
-    let mut dlls = collect_files_with_extension(&install_dir.join("build"), "dll");
-    dlls.extend(collect_files_with_extension(bin_dir, "dll"));
-    dlls.sort();
-    dlls.dedup();
-
-    for dll in dlls {
-        let Some(name) = dll.file_name() else {
-            continue;
-        };
-        let dest = bin_dir.join(name);
-        if dll != dest {
-            copy_file_or_panic(&dll, &dest, "Windows runtime DLL");
-        }
-    }
-}
-
-fn copy_named_artifact(install_dir: &Path, file_name: &str, dest_dir: &Path) {
-    let dest = dest_dir.join(file_name);
-    let mut matches = collect_files_named(install_dir, file_name);
-    matches.sort();
-
-    let Some(src) = matches
-        .into_iter()
-        .find(|path| path != &dest)
-        .or_else(|| dest.is_file().then_some(dest.clone()))
-    else {
-        panic!(
-            "CrispASR build did not produce {file_name}. \
-             Check the Windows CMake output with `cargo build -vv`."
-        );
-    };
-
-    if src != dest {
-        copy_file_or_panic(&src, &dest, "Windows build artifact");
-    }
-}
-
-fn copy_file_or_panic(source: &Path, dest: &Path, description: &str) {
-    std::fs::copy(source, dest).unwrap_or_else(|err| {
-        panic!(
-            "failed to copy {description} {} to {}: {err}",
-            source.display(),
-            dest.display()
-        )
-    });
-}
-
-fn copy_runtime_dlls_to_profile_dir(bin_dir: &Path) {
-    let Some(profile_dir) = cargo_profile_dir() else {
-        return;
-    };
-    let Ok(entries) = std::fs::read_dir(bin_dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path
-            .extension()
-            .is_some_and(|ext| ext.to_string_lossy().eq_ignore_ascii_case("dll"))
-        {
-            let Some(name) = path.file_name() else {
-                continue;
-            };
-            let dest = profile_dir.join(name);
-            copy_file_or_panic(&path, &dest, "runtime DLL");
-        }
-    }
-}
-
-fn copy_runtime_manifest_to_profile_dir(bin_dir: &Path) {
-    let Some(profile_dir) = cargo_profile_dir() else {
-        return;
-    };
-    let manifest = bin_dir.join(WINDOWS_RUNTIME_MANIFEST);
-    if !manifest.is_file() {
-        return;
-    }
-    let dest = profile_dir.join(WINDOWS_RUNTIME_MANIFEST);
-    copy_file_or_panic(&manifest, &dest, "runtime manifest");
-}
-
-fn windows_runtime_dll_names_for_bundle(bin_dir: &Path) -> Vec<String> {
-    let Ok(entries) = std::fs::read_dir(bin_dir) else {
-        return Vec::new();
-    };
-    let mut names = Vec::new();
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if !path.is_file()
-            || !path
-                .extension()
-                .is_some_and(|ext| ext.to_string_lossy().eq_ignore_ascii_case("dll"))
-        {
-            continue;
-        }
-        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
-            continue;
-        };
-        if should_skip_windows_bundle_dll(name) {
-            continue;
-        }
-        names.push(name.to_string());
-    }
-    names.sort();
-    names.dedup();
-    names
-}
-
-fn should_skip_windows_bundle_dll(file_name: &str) -> bool {
-    let lower = file_name.to_ascii_lowercase();
-    lower.starts_with("ggml-cpu-") && lower.ends_with(".dll")
-}
-
-fn write_windows_runtime_manifest(
-    bin_dir: &Path,
-    runtime_dlls: &[String],
-    accelerators: &AcceleratorConfig,
-    cuda: Option<CudaManifest>,
-    vulkan: Option<VulkanManifest>,
-) {
-    let mut required_files = Vec::with_capacity(runtime_dlls.len() + 1);
-    required_files.push("parakit.exe".to_string());
-    required_files.extend(runtime_dlls.iter().cloned());
-
-    let accelerator = if accelerators.cuda_enabled {
-        Accelerator::Cuda
-    } else if accelerators.vulkan_enabled {
-        Accelerator::Vulkan
-    } else {
-        Accelerator::Cpu
-    };
-    let manifest = RuntimeManifest {
-        required_files,
-        accelerator,
-        cuda,
-        vulkan,
-    };
-    let path = bin_dir.join(WINDOWS_RUNTIME_MANIFEST);
-    std::fs::write(&path, manifest.to_json()).unwrap_or_else(|err| {
-        panic!(
-            "failed to write Windows runtime manifest {}: {err}",
-            path.display()
-        )
-    });
-}
-
-fn cargo_profile_dir() -> Option<PathBuf> {
-    let out_dir = PathBuf::from(env::var("OUT_DIR").ok()?);
-    let build_dir = out_dir.parent()?.parent()?;
-    if build_dir.file_name()? != "build" {
-        return None;
-    }
-    build_dir.parent().map(Path::to_path_buf)
-}
-
-fn collect_files_named(root: &Path, file_name: &str) -> Vec<PathBuf> {
-    collect_files(root, &|path| {
-        path.file_name()
-            .is_some_and(|name| name.to_string_lossy().eq_ignore_ascii_case(file_name))
-    })
-}
-
-fn collect_files_with_extension(root: &Path, extension: &str) -> Vec<PathBuf> {
-    collect_files(root, &|path| {
-        path.extension()
-            .is_some_and(|ext| ext.to_string_lossy().eq_ignore_ascii_case(extension))
-    })
-}
-
-fn collect_files(root: &Path, matches: &impl Fn(&Path) -> bool) -> Vec<PathBuf> {
-    let Ok(entries) = std::fs::read_dir(root) else {
-        return Vec::new();
-    };
-    let mut files = Vec::new();
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            files.extend(collect_files(&path, matches));
-        } else if path.is_file() && matches(&path) {
-            files.push(path);
-        }
-    }
-    files
 }
 
 /// Tell the linker to bake `dir` into the binary's rpath.

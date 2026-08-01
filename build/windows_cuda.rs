@@ -109,19 +109,6 @@ pub(crate) fn is_cuda_external_dll_name(file_name: &str) -> bool {
             .any(|prefix| lower.starts_with(prefix))
 }
 
-/// Return a readable list of candidate source directories.
-///
-/// # Returns
-///
-/// Candidate paths joined for use in diagnostics.
-pub(crate) fn display_paths(paths: &[PathBuf]) -> String {
-    paths
-        .iter()
-        .map(|path| path.display().to_string())
-        .collect::<Vec<_>>()
-        .join(", ")
-}
-
 fn sort_cuda_runtime_dll_names(names: &mut [String]) {
     names.sort_by(|a, b| compare_cuda_runtime_dll_names(a, b));
 }
