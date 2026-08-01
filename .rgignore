@@ -1,0 +1,3 @@
+# Keep the vendored CrispASR submodule out of routine ripgrep discovery.
+# Pass `vendor/CrispASR` explicitly when intentionally searching upstream.
+/vendor/
