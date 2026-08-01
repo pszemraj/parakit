@@ -75,6 +75,28 @@ fn recording_coordinator_loop_with_max_utterance(
     let mut focus_at_start = None;
 
     while let Some(event) = next_coordinator_event(&rx, started_at, max_utterance) {
+        let stopped_at = match event {
+            CoordinatorEvent::Hotkey(HotkeyTransition::Released { at }) => Some(at),
+            CoordinatorEvent::MaxUtterance => Some(Instant::now()),
+            CoordinatorEvent::Hotkey(HotkeyTransition::Pressed { .. }) => None,
+        };
+        if let Some(stopped_at) = stopped_at {
+            if let Some(started_at) = started_at.take() {
+                if stop_and_send_recording(
+                    &tx,
+                    &audio,
+                    started_at,
+                    stopped_at,
+                    &mut focus_at_start,
+                    log,
+                ) == WorkerSendStatus::Disconnected
+                {
+                    break;
+                }
+            }
+            continue;
+        }
+
         match event {
             CoordinatorEvent::Hotkey(HotkeyTransition::Pressed { at }) if started_at.is_none() => {
                 focus_at_start = FocusSnapshot::capture().ok();
@@ -106,36 +128,13 @@ fn recording_coordinator_loop_with_max_utterance(
                 started_at = Some(at);
             }
             CoordinatorEvent::Hotkey(HotkeyTransition::Pressed { .. }) => {}
-            CoordinatorEvent::Hotkey(HotkeyTransition::Released { at }) => {
-                let Some(start) = started_at.take() else {
-                    continue;
-                };
-                if stop_and_send_recording(&tx, &audio, start, at, &mut focus_at_start, log)
-                    == WorkerSendStatus::Disconnected
-                {
-                    break;
-                }
-            }
-            CoordinatorEvent::MaxUtterance => {
-                let Some(start) = started_at.take() else {
-                    continue;
-                };
-                if stop_and_send_recording(
-                    &tx,
-                    &audio,
-                    start,
-                    Instant::now(),
-                    &mut focus_at_start,
-                    log,
-                ) == WorkerSendStatus::Disconnected
-                {
-                    break;
-                }
-            }
+            CoordinatorEvent::Hotkey(HotkeyTransition::Released { .. })
+            | CoordinatorEvent::MaxUtterance => unreachable!("handled above"),
         }
     }
 }
 
+#[derive(Clone, Copy)]
 enum CoordinatorEvent {
     Hotkey(HotkeyTransition),
     MaxUtterance,

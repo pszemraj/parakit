@@ -408,13 +408,25 @@ pub(crate) fn run_grab_loop(
     log.verbose(format!("parakit: Linux hotkey backend: {}", route.label()));
     match route {
         LinuxHotkeyRoute::RegisteredX11 => {
-            run_linux_registered_hotkey_loop_or_exit(tx);
+            run_hotkey_loop_or_exit(
+                run_linux_registered_hotkey_loop(tx),
+                "registered X11 hotkey",
+                crate::daemon::hotkey_help::registered_linux_failure_help,
+            );
         }
         LinuxHotkeyRoute::PassiveX11 => {
-            run_linux_x11_listen_or_exit(tx);
+            run_hotkey_loop_or_exit(
+                run_linux_x11_listen_loop(tx),
+                "passive X11 hotkey listen",
+                crate::daemon::hotkey_help::x11_listen_linux_failure_help,
+            );
         }
         LinuxHotkeyRoute::EvdevProxy => {
-            run_linux_evdev_grab_loop_or_exit(tx, log);
+            run_hotkey_loop_or_exit(
+                run_linux_evdev_grab_loop(tx, Arc::clone(&log)).map_err(Into::into),
+                "evdev keyboard grab",
+                crate::daemon::hotkey_help::evdev_linux_failure_help,
+            );
         }
     }
 }
@@ -433,30 +445,31 @@ pub(crate) fn run_grab_loop(
     log: Arc<Logger>,
 ) {
     log.verbose("parakit: Windows hotkey backend: RegisterHotKey Ctrl+Space");
-    super::windows_input::run_registered_hotkey_loop_or_exit(tx);
+    run_hotkey_loop_or_exit(
+        super::windows_input::run_registered_hotkey_loop(tx),
+        "Windows registered hotkey",
+        crate::daemon::hotkey_help::windows_failure_help,
+    );
 }
 
 #[cfg(target_os = "macos")]
 pub(crate) use macos::run_grab_loop;
 
-#[cfg(target_os = "linux")]
-fn run_linux_registered_hotkey_loop_or_exit(tx: Sender<HotkeyTransition>) {
-    if let Err(err) = run_linux_registered_hotkey_loop(tx) {
-        eprintln!(
-            "parakit: registered X11 hotkey failed: {err:#}\n{}",
-            crate::daemon::hotkey_help::registered_linux_failure_help()
-        );
-        std::process::exit(2);
-    }
-}
-
-#[cfg(target_os = "linux")]
-fn run_linux_x11_listen_or_exit(tx: Sender<HotkeyTransition>) {
-    if let Err(err) = run_linux_x11_listen_loop(tx) {
-        eprintln!(
-            "parakit: passive X11 hotkey listen failed: {err:#}\n{}",
-            crate::daemon::hotkey_help::x11_listen_linux_failure_help()
-        );
+/// Print platform-specific hotkey recovery help and terminate after a backend
+/// loop fails.
+///
+/// # Arguments
+///
+/// * `result` - Completed backend loop result.
+/// * `backend` - Human-readable backend name for the error prefix.
+/// * `help` - Lazy platform recovery guidance.
+pub(super) fn run_hotkey_loop_or_exit(
+    result: anyhow::Result<()>,
+    backend: &str,
+    help: impl FnOnce() -> String,
+) {
+    if let Err(err) = result {
+        eprintln!("parakit: {backend} failed: {err:#}\n{}", help());
         std::process::exit(2);
     }
 }
@@ -682,17 +695,6 @@ pub(crate) fn registered_hotkey_probe() -> anyhow::Result<()> {
 #[cfg(target_os = "linux")]
 fn ctrl_space_hotkey() -> HotKey {
     HotKey::new(Some(Modifiers::CONTROL), Code::Space)
-}
-
-#[cfg(target_os = "linux")]
-fn run_linux_evdev_grab_loop_or_exit(tx: Sender<HotkeyTransition>, log: Arc<Logger>) {
-    if let Err(err) = run_linux_evdev_grab_loop(tx, Arc::clone(&log)) {
-        eprintln!(
-            "parakit: evdev keyboard grab failed: {err:#}\n{}",
-            crate::daemon::hotkey_help::evdev_linux_failure_help()
-        );
-        std::process::exit(2);
-    }
 }
 
 #[cfg(target_os = "linux")]

@@ -271,25 +271,43 @@ pub(crate) fn rosetta_translated() -> Option<bool> {
     (rc == 0).then_some(translated != 0)
 }
 
+#[derive(Clone, Copy)]
+struct ArchitectureIssue {
+    warning: &'static str,
+    no_gpu_hint: &'static str,
+}
+
+fn architecture_issue() -> Option<ArchitectureIssue> {
+    if rosetta_translated() == Some(true) {
+        Some(ArchitectureIssue {
+            warning:
+                "warning: running under Rosetta; build/install for aarch64-apple-darwin to use Metal",
+            no_gpu_hint:
+                "this process appears to be running under Rosetta; rebuild/reinstall for aarch64-apple-darwin",
+        })
+    } else if cfg!(target_arch = "aarch64") {
+        None
+    } else {
+        Some(ArchitectureIssue {
+            warning:
+                "warning: this macOS build target is not aarch64-apple-darwin; Apple Silicon is the supported macOS target",
+            no_gpu_hint:
+                "this macOS build is not aarch64-apple-darwin; Apple Silicon is the supported Metal target",
+        })
+    }
+}
+
 /// Return macOS architecture warnings for doctor output.
 ///
 /// # Returns
 ///
 /// Lines describing unsupported or translated macOS execution.
 pub(crate) fn architecture_warning_lines() -> Vec<String> {
-    let mut lines = Vec::new();
-    if rosetta_translated() == Some(true) {
-        lines.push(
-            "warning: running under Rosetta; build/install for aarch64-apple-darwin to use Metal"
-                .to_string(),
-        );
-    } else if !cfg!(target_arch = "aarch64") {
-        lines.push(
-            "warning: this macOS build target is not aarch64-apple-darwin; Apple Silicon is the supported macOS target"
-                .to_string(),
-        );
-    }
-    lines
+    architecture_issue()
+        .map(|issue| issue.warning)
+        .map(str::to_owned)
+        .into_iter()
+        .collect()
 }
 
 /// Return a concise no-GPU hint for macOS device errors.
@@ -298,13 +316,7 @@ pub(crate) fn architecture_warning_lines() -> Vec<String> {
 ///
 /// A Rosetta/toolchain hint when applicable.
 pub(crate) fn no_gpu_hint() -> Option<&'static str> {
-    if rosetta_translated() == Some(true) {
-        Some("this process appears to be running under Rosetta; rebuild/reinstall for aarch64-apple-darwin")
-    } else if !cfg!(target_arch = "aarch64") {
-        Some("this macOS build is not aarch64-apple-darwin; Apple Silicon is the supported Metal target")
-    } else {
-        None
-    }
+    architecture_issue().map(|issue| issue.no_gpu_hint)
 }
 
 fn accessibility_trusted_with_prompt() -> bool {

@@ -27,21 +27,6 @@ const KEY_DOWN_MASK: i16 = i16::MIN;
 const HOTKEY_RELEASE_POLL: Duration = Duration::from_millis(10);
 const VK_V: VIRTUAL_KEY = VIRTUAL_KEY(0x56);
 
-/// Run the native Windows registered-hotkey backend forever.
-///
-/// # Arguments
-///
-/// * `tx` - Coordinator channel used to post logical hotkey transitions.
-pub(crate) fn run_registered_hotkey_loop_or_exit(tx: Sender<HotkeyTransition>) {
-    if let Err(err) = run_registered_hotkey_loop(tx) {
-        eprintln!(
-            "parakit: Windows registered hotkey failed: {err:#}\n{}",
-            crate::daemon::hotkey_help::windows_failure_help()
-        );
-        std::process::exit(2);
-    }
-}
-
 /// Probe whether Ctrl+Space can be registered by this process.
 ///
 /// # Returns
@@ -59,7 +44,18 @@ pub(crate) fn registered_hotkey_probe() -> Result<()> {
     Ok(())
 }
 
-fn run_registered_hotkey_loop(tx: Sender<HotkeyTransition>) -> Result<()> {
+/// Run the native Windows registered-hotkey backend until the message loop
+/// ends.
+///
+/// # Returns
+///
+/// `Ok(())` when Windows ends the thread's message loop.
+///
+/// # Errors
+///
+/// Returns an error when registration, message polling, or coordinator
+/// delivery fails.
+pub(super) fn run_registered_hotkey_loop(tx: Sender<HotkeyTransition>) -> Result<()> {
     register_ctrl_space(PARAKIT_HOTKEY_ID)?;
     let _registration = RegisteredHotkeyGuard {
         id: PARAKIT_HOTKEY_ID,

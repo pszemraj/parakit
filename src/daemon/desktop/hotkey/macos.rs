@@ -53,17 +53,11 @@ pub(crate) fn run_grab_loop(
     log: Arc<Logger>,
 ) {
     log.verbose("parakit: macOS hotkey backend: CoreGraphics session event tap Left Control+Space");
-    run_event_tap_loop_or_exit(tx);
-}
-
-fn run_event_tap_loop_or_exit(tx: Sender<HotkeyTransition>) {
-    if let Err(err) = run_event_tap_loop(tx) {
-        eprintln!(
-            "parakit: macOS hotkey event tap failed: {err:#}\n{}",
-            crate::daemon::hotkey_help::macos_failure_help()
-        );
-        std::process::exit(2);
-    }
+    super::run_hotkey_loop_or_exit(
+        run_event_tap_loop(tx),
+        "macOS hotkey event tap",
+        crate::daemon::hotkey_help::macos_failure_help,
+    );
 }
 
 fn run_event_tap_loop(tx: Sender<HotkeyTransition>) -> anyhow::Result<()> {

@@ -34,6 +34,5 @@ pub(crate) use desktop::{hotkey, inject};
 pub(crate) use desktop::{session, wsl, x11};
 
 #[cfg(target_os = "windows")]
-#[allow(unused_imports)]
 /// Re-export Windows desktop integration helpers.
-pub(crate) use desktop::{windows_focus, windows_input, windows_paste_smoke, windows_security};
+pub(crate) use desktop::{windows_input, windows_security};
