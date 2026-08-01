@@ -279,10 +279,13 @@ impl DataLogger {
                 file: self.open_for_date(local_date)?,
             });
         }
-        let state = state
+        let result = f(state
             .as_mut()
-            .expect("log state is initialized or open_for_date returned an error");
-        f(state)
+            .expect("log state is initialized or open_for_date returned an error"));
+        if result.is_err() {
+            *state = None;
+        }
+        result
     }
 
     fn open_for_date(&self, date: NaiveDate) -> Result<BufWriter<File>> {
@@ -612,6 +615,18 @@ mod tests {
         );
 
         assert!(id.is_none());
+    }
+
+    #[test]
+    fn failed_record_write_discards_log_state() {
+        let dir = crate::test_support::fixture_root("parakit-log-test", "state-reset");
+        let logger = DataLogger::new(dir);
+        let date = Local::now().date_naive();
+
+        let result = logger.with_state(date, |_state| anyhow::bail!("injected write failure"));
+
+        assert!(result.is_err());
+        assert!(logger.state.lock().is_none());
     }
 
     /// Expected shape of one optional-vs-nullable field in the JSON record.
