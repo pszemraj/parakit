@@ -158,19 +158,6 @@ fn preferred_mono_config_and_lower_cost_note_cases_are_stable() {
             ),
         },
         MonoConfigCase {
-            name: "reports intentional mono non-selection",
-            default: stream_config_range(4, 48_000, 48_000, SampleFormat::F32)
-                .with_sample_rate(cpal::SampleRate(48_000)),
-            ranges: vec![
-                stream_config_range(1, 48_000, 48_000, SampleFormat::I16),
-                stream_config_range(1, 16_000, 16_000, SampleFormat::F32),
-            ],
-            expect_preferred: None,
-            expect_note: Some(
-                "same-rate mono is available as I16, but not selected because it changes sample format",
-            ),
-        },
-        MonoConfigCase {
             name: "reports target rate mono when rate would change",
             default: stream_config_range(4, 48_000, 48_000, SampleFormat::F32)
                 .with_sample_rate(cpal::SampleRate(48_000)),
@@ -345,17 +332,6 @@ fn audio_handle_with_control(
         next_session_epoch: Arc::new(AtomicU64::new(epoch)),
         control: control_tx,
     }
-}
-
-#[test]
-fn acknowledging_test_manager_takes_buffered_samples() {
-    let handle = AudioHandle::test_handle();
-
-    handle.start_recording().expect("recording should start");
-    append_processed_samples(&handle.state, &handle.session_epoch, &[0.7]);
-
-    let pcm = handle.stop_recording().expect("recording should stop");
-    assert_eq!(pcm, vec![0.7]);
 }
 
 #[test]

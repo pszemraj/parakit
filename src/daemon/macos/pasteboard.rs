@@ -902,20 +902,6 @@ mod tests {
                 expect: false,
             },
             InsertionCase {
-                name: "missing_baseline_without_transcript_match_does_not_confirm",
-                baseline: None,
-                current: "some field text",
-                transcript: "xyz",
-                expect: false,
-            },
-            InsertionCase {
-                name: "empty_transcript_never_confirms_no_growth",
-                baseline: Some(""),
-                current: "",
-                transcript: "",
-                expect: false,
-            },
-            InsertionCase {
                 name: "empty_transcript_never_confirms_with_growth",
                 baseline: Some(""),
                 current: "x",

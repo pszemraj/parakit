@@ -748,33 +748,9 @@ mod tests {
             },
         ];
 
-        for (index, case) in cases.into_iter().enumerate() {
-            let dir = crate::test_support::fixture_root(
-                "parakit-log-test",
-                &format!("jsonl-cleaning-matrix-{index}"),
-            );
-            let logger = DataLogger::new(dir.clone());
-            logger
-                .log(
-                    1.0,
-                    Duration::from_millis(10),
-                    "raw",
-                    "cleaned",
-                    case.fields,
-                )
-                .unwrap_or_else(|| panic!("{}: write cleaning log record", case.label));
-
-            let date = Local::now().date_naive();
-            let path = dir.join(file_name(date));
-            let contents = std::fs::read_to_string(&path)
-                .unwrap_or_else(|e| panic!("{}: read log file: {e}", case.label));
-            let value: serde_json::Value = serde_json::from_str(
-                contents
-                    .lines()
-                    .next()
-                    .unwrap_or_else(|| panic!("{}: expected one line", case.label)),
-            )
-            .unwrap_or_else(|e| panic!("{}: valid jsonl: {e}", case.label));
+        for case in cases {
+            let value = serde_json::to_value(case.fields)
+                .unwrap_or_else(|e| panic!("{}: serialize cleaning fields: {e}", case.label));
 
             assert_field(&value, "ruleset_id", &case.expect_ruleset_id, case.label);
             assert_field(

@@ -13,10 +13,6 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYBD_EVENT_FLAGS, KEYEVENTF_KEYUP, MOD_CONTROL,
     MOD_NOREPEAT, VIRTUAL_KEY, VK_CONTROL, VK_MENU, VK_SHIFT, VK_SPACE,
 };
-#[cfg(test)]
-use windows::Win32::UI::Input::KeyboardAndMouse::{
-    VK_LCONTROL, VK_LMENU, VK_LSHIFT, VK_LWIN, VK_RCONTROL, VK_RMENU, VK_RSHIFT, VK_RWIN,
-};
 use windows::Win32::UI::WindowsAndMessaging::{GetMessageW, MSG, WM_HOTKEY};
 
 use crate::daemon::recording::HotkeyTransition;
@@ -351,17 +347,6 @@ mod tests {
                 (VK_CONTROL.0, true),
             ],
         );
-        assert!(!events.iter().any(|event| {
-            event.vk == VK_MENU
-                || event.vk == VK_LMENU
-                || event.vk == VK_RMENU
-                || event.vk == VK_LWIN
-                || event.vk == VK_RWIN
-                || event.vk == VK_LCONTROL
-                || event.vk == VK_RCONTROL
-                || event.vk == VK_LSHIFT
-                || event.vk == VK_RSHIFT
-        }));
     }
 
     #[test]

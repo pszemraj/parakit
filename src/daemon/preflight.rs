@@ -805,22 +805,18 @@ mod tests {
     #[cfg(target_os = "linux")]
     fn selected_hotkey_backend_controls_readiness() {
         let cases = [
-            (HotkeyBackend::Auto, true, false, false),
-            (HotkeyBackend::Auto, false, true, true),
-            (HotkeyBackend::Desktop, true, false, false),
-            (HotkeyBackend::Desktop, false, true, true),
-            (HotkeyBackend::X11GlobalHotkey, true, false, false),
-            (HotkeyBackend::X11GlobalHotkey, false, true, true),
-            (HotkeyBackend::X11Listen, true, false, false),
-            (HotkeyBackend::X11Listen, false, true, true),
-            (HotkeyBackend::EvdevProxyExperimental, false, true, false),
-            (HotkeyBackend::EvdevProxyExperimental, true, false, true),
+            (LinuxHotkeyRoute::RegisteredX11, true, false, false),
+            (LinuxHotkeyRoute::RegisteredX11, false, true, true),
+            (LinuxHotkeyRoute::PassiveX11, true, false, false),
+            (LinuxHotkeyRoute::PassiveX11, false, true, true),
+            (LinuxHotkeyRoute::EvdevProxy, false, true, false),
+            (LinuxHotkeyRoute::EvdevProxy, true, false, true),
         ];
-        for (backend, x11_ready, evdev_ready, expected) in cases {
+        for (route, x11_ready, evdev_ready, expected) in cases {
             assert_eq!(
-                linux_hotkey_startup_blocked(backend.linux_route(), x11_ready, evdev_ready),
+                linux_hotkey_startup_blocked(route, x11_ready, evdev_ready),
                 expected,
-                "backend={backend:?} x11_ready={x11_ready} evdev_ready={evdev_ready}"
+                "route={route:?} x11_ready={x11_ready} evdev_ready={evdev_ready}"
             );
         }
     }

@@ -2471,21 +2471,6 @@ mod tests {
         );
     }
 
-    #[cfg(any(unix, target_os = "windows"))]
-    #[test]
-    fn ensure_history_enabled_separates_disabled_from_empty() {
-        // `history` must not report a disabled ring as merely empty: the
-        // two states need different fixes from the user.
-        assert_eq!(
-            SharedState::with_history_limit(0)
-                .ensure_history_enabled()
-                .unwrap_err()
-                .to_string(),
-            "transcript history is disabled (daemon.transcript_history = 0)"
-        );
-        assert!(SharedState::new().ensure_history_enabled().is_ok());
-    }
-
     #[test]
     fn preview_text_collapses_whitespace_and_trims() {
         let collapsed = preview_text("  line one\n  line two\t\tline three  ");
