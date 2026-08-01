@@ -7,9 +7,10 @@
 # [[rules.user]] entry is different: once declared, its required fields must
 # be present.
 #
-# Config enum strings are lowercase and case-sensitive. Unknown tables and
-# keys are silently ignored for forward compatibility. This also means a
-# misspelling such as "pastemode" loads without warning and has no effect.
+# Config enum strings are lowercase and case-sensitive. Unknown top-level and
+# ordinary section keys are silently ignored for forward compatibility. This
+# means a misspelling such as "pastemode" loads without warning and has no
+# effect. Fields inside [[rules.user]] are strict and reject misspellings.
 #
 # Most keys use: CLI flag > config value > built-in default. Except where a
 # key's own note says otherwise, that CLI flag lives on `parakit start`. The
@@ -100,8 +101,8 @@
 # Bounds newest-first copy-last/history entries; 0 disables both commands.
 # The ring is process-memory-only, but logging.dir can independently persist
 # the same transcript.
-# At 0, plain status reports no last transcript and verbose status reports
-# history disabled.
+# At 0, plain status reports "last transcript: history disabled" and verbose
+# status also reports history disabled.
 
 
 # [cleaning]
@@ -167,7 +168,7 @@
 #   numeric-identifier-groups - join split digits in uppercase identifiers.
 #   numeric-magnitude-suffixes - join numeric groups to uppercase K/M/B.
 #   compact-version-prefix - join V/v to a following dotted version.
-#   compact-short-identifier - join B-H/J-Z or any two uppercase letters to a number.
+#   compact-short-identifier - join B-H/J-Z or the SM stem to a number.
 #   cause-to-because - expand standalone or attached apostrophe-cause to "because".
 #   casual-em-til-round - separate attached 'em/'til/'round/'bout/'cept/'nother.
 #   casual-gonna - expand "gonna"/"gunna" to "going to".
@@ -218,10 +219,10 @@
 # this setting selects capture machinery, not the chord.
 
 # hotkey.backend
-# Type: string (optional). Default: "auto". Valid config values: "auto" |
-# "desktop" | "x11-global-hotkey" | "x11-listen" |
-# "evdev-proxy-experimental". Linux CLI --hotkey-backend overrides it and
-# additionally accepts "evdev-proxy" as an alias. doctor also takes
+# Type: string (optional). Default: "auto". Valid values: "auto" | "desktop" |
+# "x11-global-hotkey" | "x11-listen" | "evdev-proxy-experimental". Both the
+# config and Linux CLI also accept "evdev-proxy" as an alias. The CLI value
+# overrides this setting. doctor also takes
 # --hotkey-backend, but only to override this setting for that one check.
 # "auto", "desktop", and "x11-global-hotkey" currently share the registered
 # X11 path; "auto" does not fall back if registration fails. They fail if
@@ -242,7 +243,9 @@
 # Repeated array table. Default: no user rules. Entries run only when
 # cleaning.enabled is true, are never profile-gated, and keep file order
 # within their selected position group. Entries are validated during startup;
-# enabled entries are compiled then reused for every dictation.
+# enabled entries are compiled then reused for every dictation. Unlike ordinary
+# config tables, entries reject unknown fields so a misspelled position cannot
+# silently fall back to "standard".
 # Enabled rule name, pattern, replacement, position, and within-group order
 # affect ruleset_id; description and disabled entries do not. A rule that
 # changes text logs its name and non-overlapping match count.
@@ -312,14 +315,14 @@
 # XDG_CONFIG_HOME/XDG_CACHE_HOME fallback; path resolution fails without it.
 
 # VISUAL
-# Type: executable name/path string (optional). Default: fall back to EDITOR.
-# Used only by config edit. Must be nonempty and contain no command arguments;
-# it is launched directly, without shell parsing.
+# Type: executable plus argument string (optional). Default: fall back to
+# EDITOR. Used only by config edit. Must be nonempty; shell-style quoting splits
+# the value into an executable and arguments, which are launched without a shell.
 
 # EDITOR
-# Type: executable name/path string (optional). Default: none, which makes
+# Type: executable plus argument string (optional). Default: none, which makes
 # config edit error and print the file path. Used only when VISUAL is unset;
-# it must be nonempty and contain no command arguments.
+# it must be nonempty and uses the same shell-style argument splitting as VISUAL.
 
 # XDG_RUNTIME_DIR
 # Type: path string (optional; Linux only). Default:

@@ -11,7 +11,7 @@ One append-only `parakit-YYYY-MM-DD.jsonl` file is written per local day, rotati
 A completed dictation normally produces two lines: a transcription line, written as soon as the model and cleaner finish, and a later insertion line, written once parakit knows what happened to the paste attempt.
 
 ```json
-{"ts":"2026-07-27T14:02:11.482Z","session_id":"2026-07-27T14:02:10.981234000Z-p4312-l0","record_id":7,"parakit_version":"0.4.0","audio_secs":4.21,"infer_ms":187,"raw":"so the build is green now.","cleaned":"So the build is green now","rules_active":25,"cleaner_version":7,"cleaning_profile":"safe","ruleset_id":"v7-safe-06c3485422d67a02","drops_trailing_period":true,"number_threshold":4.0,"rules_fired":[{"name":"capitalize-sentence-starts","matches":1},{"name":"fix-trailing-period","matches":1}]}
+{"ts":"2026-07-27T14:02:11.482Z","session_id":"2026-07-27T14:02:10.981234000Z-p4312-l0","record_id":7,"parakit_version":"0.4.0","audio_secs":4.21,"infer_ms":187,"raw":"so the build is green now.","cleaned":"So the build is green now","rules_active":25,"cleaner_version":8,"cleaning_profile":"safe","ruleset_id":"v8-safe-697797d1e998a158","drops_trailing_period":true,"number_threshold":4.0,"rules_fired":[{"name":"capitalize-sentence-starts","matches":1},{"name":"fix-trailing-period","matches":1}]}
 {"kind":"insertion","ts":"2026-07-27T14:02:11.930Z","session_id":"2026-07-27T14:02:10.981234000Z-p4312-l0","ref_id":7,"outcome":"pasted","target_bundle_id":"com.mitchellh.ghostty","focus_verification":"matched","transcript_chars":25,"paste_event_posted":true,"pasteboard_requested":null,"acknowledgement_kind":"ax_confirmed","acknowledgement_ms":312,"clipboard_restored":true,"failure_reason":null}
 ```
 
@@ -64,7 +64,7 @@ Fields, in serialization order:
 | `transcript_chars` | integer | Character count of the transcript offered for insertion. |
 | `paste_event_posted` | boolean | Whether a paste chord or type event was sent. |
 | `pasteboard_requested` | null | Reserved for a clipboard read-back signal; always `null` today. |
-| `acknowledgement_kind` | string | `ax_confirmed`, `unverified_timeout`, `unverified_no_baseline`, `unverified_focus_lost`, `no_evidence`, or `not_applicable`. |
+| `acknowledgement_kind` | string | `ax_confirmed`, `unverified_timeout`, `unverified_no_baseline`, `unverified_short_transcript`, `unverified_focus_lost`, `no_evidence`, or `not_applicable`. |
 | `acknowledgement_ms` | integer or null | Milliseconds spent waiting for acknowledgement; `null` when no wait occurred. |
 | `clipboard_restored` | boolean or null | Whether the previous clipboard contents were restored; `null` when the result is unknown or inapplicable (for example, `direct` mode never touches the clipboard). |
 | `failure_reason` | string or null | Error text when `outcome` is `error`. |
@@ -76,12 +76,13 @@ No field on the insertion line is omitted; absent values serialize as `null`. An
 `outcome` collapses a lot of decision-making into one word. Reading it alongside `paste_event_posted`, `acknowledgement_kind`, and `clipboard_restored` tells you what actually happened:
 
 - **`pasted`** — a paste chord or direct-typed input was sent and either positively confirmed or has no stronger confirmation signal on this platform (`acknowledgement_kind: ax_confirmed` on macOS; `not_applicable` on Linux and Windows, which have no post-paste acknowledgement step). The previous clipboard is restored, or the transcript is cleared, per the configured clipboard policy.
-- **`pasted_unverified`** — a paste chord was sent, but macOS could not positively confirm it landed. `acknowledgement_kind` distinguishes three situations:
+- **`pasted_unverified`** — a paste chord was sent, but macOS could not positively confirm it landed. `acknowledgement_kind` distinguishes four situations:
   - `unverified_timeout` — no pollable Accessibility value was available at all (no focused element was captured, or the field withholds its value, as secure/password fields do by design).
   - `unverified_no_baseline` — a pollable element existed, but neither the pre-chord read nor the immediate post-chord fallback produced a baseline value to compare later reads against, so confirmation was structurally impossible.
+  - `unverified_short_transcript` — a transcript under 12 normalized characters reached the deadline without the exact insertion delta required for text this collision-prone; unrelated target churn may have hidden a paste that landed.
   - `unverified_focus_lost` — the captured element died mid-poll and the frontmost application then changed, or its focus state could no longer be read at all, before any evidence appeared.
 
-  `unverified_timeout` and `unverified_no_baseline` restore the previous clipboard per policy after a fixed grace period, same as `pasted`. `unverified_focus_lost` does not (`clipboard_restored: false`): once the target can never be re-observed, the chord very likely landed, but the transcript is kept as the only remaining copy rather than risking it on a target that can no longer be checked.
+  `unverified_timeout`, `unverified_no_baseline`, and `unverified_short_transcript` restore the previous clipboard per policy, same as `pasted`. `unverified_focus_lost` does not (`clipboard_restored: false`): once the target can never be re-observed, the chord very likely landed, but the transcript is kept as the only remaining copy rather than risking it on a target that can no longer be checked.
 - **`copied_only`** — the transcript is intentionally left on the clipboard and nothing is restored. Two different situations reach this outcome, and they are distinguishable through `paste_event_posted`:
   - **No chord was ever sent** (`paste_event_posted: false`): a pre-paste guard skipped the paste, most often because push-to-talk (or another) modifier key was still physically held down at paste time on macOS, which would have turned the intended `Cmd+V` into a different shortcut. This is the quiet path: parakit shows a "Transcript copied" notification and plays the success tone, and it keeps the transcript on the clipboard even if `--keep-transcript-clipboard` was not requested, since guessing wrong here would destroy the only remaining copy.
   - **A chord was sent but never confirmed** (`paste_event_posted: true`, macOS only, `acknowledgement_kind: no_evidence`): the target exposed a pollable Accessibility value, but it never showed the transcript before the confirmation deadline. parakit cannot tell whether the paste landed, so it leaves the transcript on the clipboard, plays the error tone, and shows a "Paste blocked" notification asking you to look at the target before pressing `Cmd+V` yourself.

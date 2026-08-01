@@ -89,7 +89,7 @@ A key you did not set prints its built-in default in parentheses. On Linux the o
 
 `--quiet config show` prints nothing and returns before it loads the file, so quiet mode is not a validation command. `--quiet` likewise silences `config path` and the `wrote <path>` line from `config init`, though `init` still writes the file.
 
-`$VISUAL` and `$EDITOR` are launched as a single executable name with the config path as the only argument, not parsed as a shell command, so a value carrying arguments such as `EDITOR="code -w"` fails to launch. With neither variable set, `config edit` errors and prints the path to edit by hand.
+`$VISUAL` and `$EDITOR` are split into an executable plus arguments using shell-style quoting, then launched directly with the config path appended. Values such as `EDITOR="code -w"` therefore work without invoking a shell. With neither variable set, `config edit` errors and prints the path to edit by hand.
 
 `config edit` stays available when the config is broken, and it does not validate the file after the editor exits. Run `parakit config show` afterward.
 
@@ -105,10 +105,10 @@ These daemon and cleaning flags live on `parakit start`. The profile, trailing-p
 
 Four booleans (`daemon.sounds`, `cleaning.enabled`, `cleaning.keep_trailing_period`, and `daemon.keep_transcript_clipboard`) each have a paired CLI flag, one that forces the value on and one that forces it off (for example `--sounds`/`--no-sounds`), so a config default can be overridden in either direction for a single invocation; the two flags in a pair conflict with each other. Disabled rule names from the CLI and the config are merged, and a few settings are config-only. Those exact interactions are documented on each key in [config_reference.toml](config_reference.toml).
 
-Unknown tables and keys are ignored for forward compatibility, which lets an older binary read a newer config. Invalid TOML, invalid known values, and rule-validation failures are hard errors that name the config path.
+Unknown top-level and ordinary section keys are ignored for forward compatibility, which lets an older binary read a newer config. Fields inside each `[[rules.user]]` entry are strict because a misspelling can silently change rule behavior. Invalid TOML, invalid known values, unknown user-rule fields, and rule-validation failures are hard errors that name the config path.
 
 > [!WARNING]
-> Because unknown keys are ignored, a misspelled key loads without any warning and silently has no effect. Run `parakit config show` after editing to confirm a setting actually took.
+> Because ordinary unknown keys are ignored, a misspelled key outside `[[rules.user]]` loads without any warning and silently has no effect. Run `parakit config show` after editing to confirm a setting actually took.
 
 Short-lived `rules test` and `rules list` processes each load the current file, which makes them useful for checking a change before restarting the daemon.
 

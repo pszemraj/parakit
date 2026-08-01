@@ -39,7 +39,7 @@ Hosted release files:
 | `parakeet-tdt-0.6b-v3-Q8_0.gguf` | Default user artifact. |
 | `parakeet-tdt-0.6b-v3-F16.gguf` | Source GGUF kept for maintainers and future re-quantization work. |
 
-The CLI has no quant selector. Q8_0 is the default hosted model, and `-m <path>` is the only supported model override. Avoid unrelated names, nested directories, or model-card-only links for release artifacts.
+The CLI has no quant selector. Q8_0 is the default hosted model; `daemon.model` selects a persistent override and `-m <path>` overrides it for one invocation. Avoid unrelated names, nested directories, or model-card-only links for release artifacts.
 
 The Parakeet converter, loader, and `crispasr-quantize` path are built around F16/F32 tensors. Treat BF16 as future work until it has explicit support and validation.
 

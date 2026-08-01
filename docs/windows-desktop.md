@@ -14,7 +14,7 @@ The default push-to-talk chord is `Ctrl+Space`, the same default as Linux. parak
 
 Some Windows input methods, particularly CJK IMEs, bind `Ctrl+Space` to toggle input mode. If parakit never reacts to the held chord, check for a conflicting IME shortcut before assuming a bug.
 
-Windows has a single hotkey backend. The `--hotkey-backend` values documented in [linux-desktop.md](linux-desktop.md) select among Linux backends; on Windows any selected value is ignored and the `RegisterHotKey` path is always used.
+Windows has a single hotkey backend. The Linux-only `--hotkey-backend` flag documented in [linux-desktop.md](linux-desktop.md) is not accepted on Windows; the `RegisterHotKey` path is always used.
 
 The chord is not configurable yet; Windows uses `Ctrl+Space`.
 
