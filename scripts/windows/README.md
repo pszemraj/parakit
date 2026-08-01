@@ -68,7 +68,7 @@ The script rejects contradictory backend choices such as `--cuda --vulkan`. Raw 
 
 ## BLAS
 
-CPU BLAS is autodetected by default. On Windows, autodetection first uses `PARAKIT_OPENBLAS_ROOT` when set, then an active conda environment's `%CONDA_PREFIX%\Library`, then falls back to non-BLAS native/OpenMP CPU kernels if no bundleable OpenBLAS install is found.
+CPU BLAS is autodetected by default. On Windows, autodetection honors `PARAKIT_OPENBLAS_ROOT`, the standard OpenBLAS root variables, active and common Conda prefixes, `CMAKE_PREFIX_PATH`, vcpkg, and conventional `OpenBLAS` install directories. It falls back to non-BLAS native/OpenMP CPU kernels if no bundleable target-compatible install is found.
 
 Use script arguments for normal Windows builds:
 

@@ -29,6 +29,14 @@ use std::env;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+#[path = "build/openblas_roots.rs"]
+mod openblas_roots;
+use openblas_roots::{configured_openblas_roots, conventional_openblas_roots};
+
+#[path = "build/unix_openblas.rs"]
+mod unix_openblas;
+use unix_openblas::{find_unix_openblas, UnixOpenBlas};
+
 #[path = "build/windows_openblas.rs"]
 mod windows_openblas;
 use windows_openblas::{find_windows_openblas, WindowsOpenBlas, WindowsOpenBlasImportKind};
@@ -48,6 +56,19 @@ fn main() {
     println!("cargo:rerun-if-env-changed=CRISPASR_SRC_DIR");
     println!("cargo:rerun-if-env-changed=PARAKIT_BLAS");
     println!("cargo:rerun-if-env-changed=PARAKIT_OPENBLAS_ROOT");
+    println!("cargo:rerun-if-env-changed=OPENBLAS_ROOT");
+    println!("cargo:rerun-if-env-changed=OpenBLAS_ROOT");
+    println!("cargo:rerun-if-env-changed=OPENBLAS_HOME");
+    println!("cargo:rerun-if-env-changed=CMAKE_PREFIX_PATH");
+    println!("cargo:rerun-if-env-changed=VCPKG_ROOT");
+    println!("cargo:rerun-if-env-changed=VCPKG_INSTALLATION_ROOT");
+    println!("cargo:rerun-if-env-changed=VCPKG_INSTALLED_DIR");
+    println!("cargo:rerun-if-env-changed=VCPKG_DEFAULT_TRIPLET");
+    println!("cargo:rerun-if-env-changed=HOMEBREW_PREFIX");
+    println!("cargo:rerun-if-env-changed=USERPROFILE");
+    println!("cargo:rerun-if-env-changed=PROGRAMDATA");
+    println!("cargo:rerun-if-env-changed=ProgramFiles");
+    println!("cargo:rerun-if-env-changed=SystemDrive");
     println!("cargo:rerun-if-env-changed=PARAKIT_CUDA_ARCHS");
     println!("cargo:rerun-if-env-changed=PARAKIT_BUNDLE_CUDA_DLLS");
     println!("cargo:rerun-if-env-changed=CUDA_PATH");
@@ -56,6 +77,8 @@ fn main() {
     println!("cargo:rerun-if-env-changed=BLAS_LIBRARIES");
     println!("cargo:rerun-if-env-changed=CONDA_PREFIX");
     println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-changed=build/openblas_roots.rs");
+    println!("cargo:rerun-if-changed=build/unix_openblas.rs");
     println!("cargo:rerun-if-changed=build/windows_openblas.rs");
     println!("cargo:rerun-if-changed=build/windows_manifest.rs");
     println!("cargo:rerun-if-changed=build/windows_cuda.rs");
@@ -365,7 +388,12 @@ struct BlasConfig {
     vendor: Option<&'static str>,
     cohere_mkl: bool,
     explicit: bool,
-    windows_openblas: Option<WindowsOpenBlas>,
+    openblas_install: Option<OpenBlasInstall>,
+}
+
+enum OpenBlasInstall {
+    Windows(WindowsOpenBlas),
+    Unix(UnixOpenBlas),
 }
 
 struct AcceleratorConfig {
@@ -405,7 +433,7 @@ impl BlasConfig {
             "" | "0" | "false" | "no" | "none" | "off" => Self::off(raw, explicit),
             "auto" => Self::auto(raw, explicit),
             "mkl" | "intel" | "intel-mkl" => Self::mkl(raw, explicit),
-            "openblas" => Self::openblas(raw, explicit, windows_openblas_from_env(true)),
+            "openblas" => Self::openblas(raw, explicit, detected_openblas(true, true)),
             "accelerate" | "apple" => Self::accelerate(raw, explicit),
             "1" | "true" | "yes" | "on" | "blas" | "generic" | "system" => {
                 Self::generic(raw, explicit)
@@ -422,12 +450,17 @@ impl BlasConfig {
         }
         if target_is_windows() {
             if let Some(openblas) = windows_openblas_from_env(false) {
-                return Self::openblas(raw, explicit, Some(openblas));
+                return Self::openblas(raw, explicit, Some(OpenBlasInstall::Windows(openblas)));
             }
             println!(
-                "cargo:warning=parakit build: PARAKIT_BLAS=auto found no bundleable Windows OpenBLAS via PARAKIT_OPENBLAS_ROOT or CONDA_PREFIX; skipping pkg-config BLAS and building without BLAS"
+                "cargo:warning=parakit build: PARAKIT_BLAS=auto found no bundleable Windows OpenBLAS in configured or conventional prefixes; skipping pkg-config BLAS and building without BLAS"
             );
             return Self::off(raw, explicit);
+        }
+        if target_is_linux() {
+            if let Some(openblas) = unix_openblas_from_configured_roots(false) {
+                return Self::openblas(raw, explicit, Some(OpenBlasInstall::Unix(openblas)));
+            }
         }
         if pkg_config_exists("mkl-sdl") {
             return Self::mkl(raw, explicit);
@@ -435,8 +468,13 @@ impl BlasConfig {
         if pkg_config_exists("openblas") || pkg_config_exists("openblas64") {
             return Self::openblas(raw, explicit, None);
         }
+        if target_is_linux() {
+            if let Some(openblas) = unix_openblas_from_conventional_roots() {
+                return Self::openblas(raw, explicit, Some(OpenBlasInstall::Unix(openblas)));
+            }
+        }
         println!(
-            "cargo:warning=parakit build: PARAKIT_BLAS=auto found no MKL/OpenBLAS pkg-config metadata; building without BLAS"
+            "cargo:warning=parakit build: PARAKIT_BLAS=auto found no MKL/OpenBLAS pkg-config metadata or usable OpenBLAS prefix; building without BLAS"
         );
         Self::off(raw, explicit)
     }
@@ -447,7 +485,7 @@ impl BlasConfig {
         vendor: Option<&'static str>,
         cohere_mkl: bool,
         explicit: bool,
-        windows_openblas: Option<WindowsOpenBlas>,
+        openblas_install: Option<OpenBlasInstall>,
     ) -> Self {
         Self {
             requested,
@@ -456,7 +494,7 @@ impl BlasConfig {
             vendor,
             cohere_mkl,
             explicit,
-            windows_openblas,
+            openblas_install,
         }
     }
 
@@ -471,7 +509,7 @@ impl BlasConfig {
     fn openblas(
         requested: String,
         explicit: bool,
-        windows_openblas: Option<WindowsOpenBlas>,
+        openblas_install: Option<OpenBlasInstall>,
     ) -> Self {
         Self::new(
             requested,
@@ -479,7 +517,7 @@ impl BlasConfig {
             Some("OpenBLAS"),
             false,
             explicit,
-            windows_openblas,
+            openblas_install,
         )
     }
 
@@ -518,20 +556,37 @@ fn configure_blas_paths(cfg: &mut cmake::Config, blas: &BlasConfig) {
     let manual_libraries = env::var("BLAS_LIBRARIES").ok();
     let complete_manual_override = manual_include_dirs.is_some() && manual_libraries.is_some();
 
-    if blas.selected == "openblas" && target_is_windows() && !complete_manual_override {
-        if let Some(openblas) = blas.windows_openblas.as_ref() {
-            cfg.define(
-                "BLAS_LIBRARIES",
-                openblas.import_lib.to_string_lossy().as_ref(),
-            );
-            cfg.define(
-                "BLAS_INCLUDE_DIRS",
-                openblas.include_dir.to_string_lossy().as_ref(),
-            );
-            println!(
-                "cargo:warning=parakit build: using Windows OpenBLAS at {}",
-                openblas.root.display()
-            );
+    if blas.selected == "openblas" && !complete_manual_override {
+        match blas.openblas_install.as_ref() {
+            Some(OpenBlasInstall::Windows(openblas)) => {
+                cfg.define(
+                    "BLAS_LIBRARIES",
+                    openblas.import_lib.to_string_lossy().as_ref(),
+                );
+                cfg.define(
+                    "BLAS_INCLUDE_DIRS",
+                    openblas.include_dir.to_string_lossy().as_ref(),
+                );
+                println!(
+                    "cargo:warning=parakit build: using Windows OpenBLAS at {}",
+                    openblas.root.display()
+                );
+            }
+            Some(OpenBlasInstall::Unix(openblas)) => {
+                cfg.define(
+                    "BLAS_LIBRARIES",
+                    openblas.library.to_string_lossy().as_ref(),
+                );
+                cfg.define(
+                    "BLAS_INCLUDE_DIRS",
+                    openblas.include_dir.to_string_lossy().as_ref(),
+                );
+                println!(
+                    "cargo:warning=parakit build: using OpenBLAS at {}",
+                    openblas.root.display()
+                );
+            }
+            None => {}
         }
     }
 
@@ -694,6 +749,10 @@ fn target_is_apple() -> bool {
 
 fn target_is_windows() -> bool {
     env::var("CARGO_CFG_TARGET_OS").unwrap_or_default() == "windows"
+}
+
+fn target_is_linux() -> bool {
+    env::var("CARGO_CFG_TARGET_OS").unwrap_or_default() == "linux"
 }
 
 fn exe_name(name: &str) -> String {
@@ -898,7 +957,30 @@ fn windows_openblas_for_bundle(blas: &BlasConfig) -> Option<&WindowsOpenBlas> {
     if manual_blas_path_overrides_are_set() {
         return None;
     }
-    blas.windows_openblas.as_ref()
+    match blas.openblas_install.as_ref() {
+        Some(OpenBlasInstall::Windows(openblas)) => Some(openblas),
+        _ => None,
+    }
+}
+
+fn detected_openblas(
+    explicit_openblas: bool,
+    include_conventional: bool,
+) -> Option<OpenBlasInstall> {
+    if target_is_windows() {
+        return windows_openblas_from_env(explicit_openblas).map(OpenBlasInstall::Windows);
+    }
+    if !target_is_linux() {
+        return None;
+    }
+
+    unix_openblas_from_configured_roots(explicit_openblas)
+        .or_else(|| {
+            include_conventional
+                .then(unix_openblas_from_conventional_roots)
+                .flatten()
+        })
+        .map(OpenBlasInstall::Unix)
 }
 
 fn windows_openblas_from_env(explicit_openblas: bool) -> Option<WindowsOpenBlas> {
@@ -908,8 +990,7 @@ fn windows_openblas_from_env(explicit_openblas: bool) -> Option<WindowsOpenBlas>
 
     let import_kind = windows_openblas_import_kind();
 
-    if let Ok(root) = env::var("PARAKIT_OPENBLAS_ROOT") {
-        let root = PathBuf::from(root);
+    if let Some(root) = env_path("PARAKIT_OPENBLAS_ROOT") {
         if let Some(openblas) = find_windows_openblas(&root, import_kind) {
             return Some(openblas);
         }
@@ -925,8 +1006,10 @@ fn windows_openblas_from_env(explicit_openblas: bool) -> Option<WindowsOpenBlas>
         );
     }
 
-    if let Ok(conda) = env::var("CONDA_PREFIX") {
-        let root = PathBuf::from(conda).join("Library");
+    for root in configured_openblas_roots(true)
+        .into_iter()
+        .chain(conventional_openblas_roots(true))
+    {
         if let Some(openblas) = find_windows_openblas(&root, import_kind) {
             return Some(openblas);
         }
@@ -936,11 +1019,46 @@ fn windows_openblas_from_env(explicit_openblas: bool) -> Option<WindowsOpenBlas>
         panic!(
             "PARAKIT_BLAS=openblas requested Windows OpenBLAS, but no usable target-compatible install was found. \
              Set PARAKIT_OPENBLAS_ROOT to a prefix containing include/, lib/, and bin/, \
-             activate a Conda environment with OpenBLAS, or provide BLAS_INCLUDE_DIRS and BLAS_LIBRARIES."
+             install OpenBLAS in a conventional Conda, CMake, or vcpkg prefix, \
+             or provide BLAS_INCLUDE_DIRS and BLAS_LIBRARIES."
         );
     }
 
     None
+}
+
+fn unix_openblas_from_configured_roots(explicit_openblas: bool) -> Option<UnixOpenBlas> {
+    if let Some(root) = env_path("PARAKIT_OPENBLAS_ROOT") {
+        if let Some(openblas) = find_unix_openblas(&root) {
+            return Some(openblas);
+        }
+        if explicit_openblas && !manual_blas_path_overrides_are_set() {
+            panic!(
+                "PARAKIT_OPENBLAS_ROOT is set but does not contain a usable Unix OpenBLAS install. \
+                 Expected cblas.h under include/ and libopenblas under lib/ or lib64/."
+            );
+        }
+        println!(
+            "cargo:warning=parakit build: PARAKIT_OPENBLAS_ROOT={} is not a usable Unix OpenBLAS layout",
+            root.display()
+        );
+    }
+
+    configured_openblas_roots(false)
+        .into_iter()
+        .find_map(|root| find_unix_openblas(&root))
+}
+
+fn unix_openblas_from_conventional_roots() -> Option<UnixOpenBlas> {
+    conventional_openblas_roots(false)
+        .into_iter()
+        .find_map(|root| find_unix_openblas(&root))
+}
+
+fn env_path(name: &str) -> Option<PathBuf> {
+    env::var_os(name)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
 }
 
 fn windows_openblas_import_kind() -> WindowsOpenBlasImportKind {

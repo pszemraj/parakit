@@ -98,7 +98,7 @@ Supported values:
 
 | Value | Behavior |
 | --- | --- |
-| unset, `auto` | Apple Accelerate on macOS. Windows uses bundleable OpenBLAS from `PARAKIT_OPENBLAS_ROOT` or `CONDA_PREFIX\Library`, otherwise off. Other Unix targets try MKL through `mkl-sdl.pc`, then OpenBLAS through `openblas.pc` or `openblas64.pc`, then off. |
+| unset, `auto` | Apple Accelerate on macOS. Windows searches configured and conventional OpenBLAS prefixes, otherwise disables BLAS. Linux honors configured OpenBLAS prefixes, then tries MKL and OpenBLAS through pkg-config, then checks conventional system prefixes. |
 | empty, `off`, `none`, `no`, `false`, `0` | Native/OpenMP CPU kernels without BLAS. |
 | `openblas` | `GGML_BLAS=ON`, `GGML_BLAS_VENDOR=OpenBLAS`. |
 | `mkl`, `intel`, `intel-mkl` | CrispASR `COHERE_MKL=ON`, ggml `Intel10_64lp`. |
@@ -113,6 +113,13 @@ Ubuntu/Debian OpenBLAS:
 sudo apt install libopenblas-dev
 PARAKIT_BLAS=openblas cargo install --path .
 ```
+
+OpenBLAS prefix detection recognizes `PARAKIT_OPENBLAS_ROOT`, `OPENBLAS_ROOT`,
+`OpenBLAS_ROOT`, `OPENBLAS_HOME`, active Conda environments,
+`CMAKE_PREFIX_PATH`, and vcpkg installs. It also checks common Conda and native
+installation prefixes on Windows and `/usr`, `/usr/local`, and `/opt/OpenBLAS`
+on Linux. Explicit `BLAS_INCLUDE_DIRS` plus `BLAS_LIBRARIES` remain the final
+manual override.
 
 Explicit `PARAKIT_BLAS` builds print the selected mode, and `parakit doctor` reports the requested and selected modes.
 
