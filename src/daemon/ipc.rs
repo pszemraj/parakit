@@ -57,8 +57,8 @@ pub(crate) const DEFAULT_TRANSCRIPT_HISTORY: usize = 10;
 /// recognizes the legacy bare-string encoding on the daemon side and replies
 /// with the restart hint through the existing `IpcResponse::Err` path (old
 /// clients can still render that, since its shape hasn't changed), and
-/// `send_command`'s response parsing adds the same hint on the client side
-/// for `CopyLast` specifically.
+/// `stale_daemon_error_hint` recognizes the old daemon's serde rejection in
+/// that same response shape on the client side.
 ///
 /// `PasteLast` was removed: run from a terminal, it pasted into the terminal
 /// itself rather than wherever the caller meant to paste, so `copy-last`'s
@@ -150,26 +150,35 @@ fn parse_command(raw: &str) -> Result<IpcCommand> {
     })
 }
 
-/// Extra context for a control-socket response parse failure, naming the
-/// probable cause when `command` is `CopyLast`: it is the only command with
-/// a wire-format break (see the `IpcCommand` doc comment), so a response
-/// that fails to parse most likely means the running daemon predates this
-/// CLI build. `Status` and `History` are additive-compatible (new fields
-/// are `#[serde(default)]`; new variants are never sent by an old daemon)
-/// and don't need this hint.
+/// Replace the serde rejection returned by an older daemon with an actionable
+/// restart hint.
+///
+/// This deliberately examines only a structurally valid [`IpcResponse::Err`].
+/// A malformed or truncated response remains a transport/parse error instead
+/// of being misdiagnosed as version skew.
 ///
 /// # Returns
 ///
-/// `Some` context message for `CopyLast`, `None` otherwise.
+/// `Some` for the two command shapes an older daemon cannot deserialize,
+/// `None` for ordinary daemon errors and all other commands.
 #[cfg(any(unix, target_os = "windows"))]
-fn stale_daemon_response_hint(command: &IpcCommand) -> Option<&'static str> {
+fn stale_daemon_error_hint(command: &IpcCommand, message: &str) -> Option<&'static str> {
     match command {
-        IpcCommand::CopyLast { .. } => Some(
-            "parse daemon control response: the running daemon predates this CLI's \
-             copy-last wire format; run `parakit stop` and start it again",
+        IpcCommand::CopyLast { .. }
+            if message.contains("invalid type: map") && message.contains("expected unit") =>
+        {
+            Some(
+                "the running daemon predates this CLI's copy-last wire format; run \
+                 `parakit stop` and start it again",
+            )
+        }
+        IpcCommand::History { .. } if message.contains("unknown variant `history`") => Some(
+            "the running daemon predates this CLI's history command; run `parakit stop` and \
+             start it again",
         ),
         IpcCommand::Status
         | IpcCommand::Stop
+        | IpcCommand::CopyLast { .. }
         | IpcCommand::History { .. }
         | IpcCommand::TestPaste { .. } => None,
     }
@@ -579,7 +588,7 @@ pub(crate) fn spawn_server(
 ///
 /// Returns an error when no daemon is listening or the daemon reports failure.
 pub(crate) fn run_client(command: IpcCommand, quiet: bool, verbose: bool) -> Result<()> {
-    let response = send_command(command)?;
+    let response = send_command(&command)?;
     match response {
         IpcResponse::Ok { message } => {
             if !quiet {
@@ -596,10 +605,10 @@ pub(crate) fn run_client(command: IpcCommand, quiet: bool, verbose: bool) -> Res
                 // These two lines must stay byte-identical to the pre-verbose
                 // output: existing scripts parse them.
                 println!("parakit: {phase}");
-                match last_transcript_len {
-                    Some(len) => println!("last transcript: {len} bytes"),
-                    None => println!("last transcript: none"),
-                }
+                println!(
+                    "last transcript: {}",
+                    last_transcript_summary(last_transcript_len, detail.as_deref())
+                );
                 if verbose {
                     print_status_detail(detail.as_deref());
                 }
@@ -612,7 +621,25 @@ pub(crate) fn run_client(command: IpcCommand, quiet: bool, verbose: bool) -> Res
             }
             Ok(())
         }
-        IpcResponse::Err { message } => bail!("{message}"),
+        IpcResponse::Err { message } => match stale_daemon_error_hint(&command, &message) {
+            Some(hint) => bail!("{hint}"),
+            None => bail!("{message}"),
+        },
+    }
+}
+
+/// Format the stable second status line, distinguishing disabled history from
+/// an enabled history that simply has no transcript yet.
+fn last_transcript_summary(
+    last_transcript_len: Option<usize>,
+    detail: Option<&StatusDetail>,
+) -> String {
+    match last_transcript_len {
+        Some(len) => format!("{len} bytes"),
+        None if detail.and_then(|detail| detail.history.as_deref()) == Some("disabled") => {
+            "history disabled".to_string()
+        }
+        None => "none".to_string(),
     }
 }
 
@@ -1020,7 +1047,7 @@ fn write_response(
 }
 
 #[cfg(unix)]
-fn send_command(command: IpcCommand) -> Result<IpcResponse> {
+fn send_command(command: &IpcCommand) -> Result<IpcResponse> {
     use std::os::unix::net::UnixStream;
 
     let response_timeout = command.response_timeout();
@@ -1043,9 +1070,7 @@ fn send_command(command: IpcCommand) -> Result<IpcResponse> {
     reader
         .read_line(&mut line)
         .context("read daemon control response")?;
-    serde_json::from_str(&line).with_context(|| {
-        stale_daemon_response_hint(&command).unwrap_or("parse daemon control response")
-    })
+    serde_json::from_str(&line).context("parse daemon control response")
 }
 
 #[cfg(target_os = "windows")]
@@ -1059,7 +1084,7 @@ fn spawn_server_impl(
 }
 
 #[cfg(target_os = "windows")]
-fn send_command(command: IpcCommand) -> Result<IpcResponse> {
+fn send_command(command: &IpcCommand) -> Result<IpcResponse> {
     windows_pipe::send_command(command)
 }
 
@@ -1247,7 +1272,7 @@ mod windows_pipe {
     ///
     /// Returns an error when the per-user named pipe is unavailable, transport
     /// I/O fails, or the response cannot be decoded.
-    pub(super) fn send_command(command: IpcCommand) -> Result<IpcResponse> {
+    pub(super) fn send_command(command: &IpcCommand) -> Result<IpcResponse> {
         let response_timeout_ms = command
             .response_timeout()
             .as_millis()
@@ -1257,9 +1282,7 @@ mod windows_pipe {
         write_json_message(&pipe, &command).context("write Windows daemon control command")?;
         let response = read_pipe_message_with_timeout(&pipe, response_timeout_ms)
             .context("read Windows daemon control response")?;
-        serde_json::from_slice(&response).with_context(|| {
-            stale_daemon_response_hint(&command).unwrap_or("parse Windows daemon control response")
-        })
+        serde_json::from_slice(&response).context("parse Windows daemon control response")
     }
 
     fn handle_client(
@@ -1948,7 +1971,16 @@ mod windows_pipe {
                 .expect_err("idle Windows daemon pipe read should time out");
 
             assert!(started.elapsed() < Duration::from_secs(2));
-            assert!(format!("{err:#}").contains("timed out after 750ms"));
+            let message = format!("{err:#}");
+            // The overlapped read receives the total deadline's remaining
+            // budget, so setup time can make this 749ms (or slightly less)
+            // rather than the configured 750ms.
+            assert!(
+                message
+                    .starts_with("ReadFile Windows daemon control pipe failed: timed out after ")
+                    && message.ends_with("ms"),
+                "unexpected idle-read failure: {message}"
+            );
             Ok(())
         }
 
@@ -2015,7 +2047,7 @@ mod tests {
 
     #[cfg(any(unix, target_os = "windows"))]
     #[test]
-    fn ipc_command_response_timeout_and_stale_hint_matrix() {
+    fn ipc_command_response_timeout_matrix() {
         /// Expected `IpcCommand::response_timeout()` for `command`.
         ///
         /// Exhaustive with no wildcard arm: a new `IpcCommand` variant fails
@@ -2030,23 +2062,6 @@ mod tests {
                 IpcCommand::Status | IpcCommand::Stop | IpcCommand::History { .. } => {
                     IPC_TRANSPORT_TIMEOUT
                 }
-            }
-        }
-
-        /// Expected `stale_daemon_response_hint()` substrings for `command`.
-        ///
-        /// Exhaustive with no wildcard arm, mirroring
-        /// `expected_response_timeout`.
-        fn expected_stale_hint_substrings(command: &IpcCommand) -> Option<&'static [&'static str]> {
-            match command {
-                IpcCommand::CopyLast { .. } => Some(&["parakit stop", "predates this CLI"]),
-                // Status/History are additive-compatible (see the doc
-                // comment on `stale_daemon_response_hint`) and must not get
-                // this wording.
-                IpcCommand::Status
-                | IpcCommand::Stop
-                | IpcCommand::History { .. }
-                | IpcCommand::TestPaste { .. } => None,
             }
         }
 
@@ -2069,28 +2084,6 @@ mod tests {
                     return Some(format!(
                         "{command:?} timeout: expected {expected_timeout:?}, got {actual_timeout:?}"
                     ));
-                }
-
-                let hint = stale_daemon_response_hint(command);
-                match (expected_stale_hint_substrings(command), hint) {
-                    (None, None) => {}
-                    (None, Some(hint)) => {
-                        return Some(format!(
-                            "{command:?} hint: expected None, got Some({hint:?})"
-                        ));
-                    }
-                    (Some(_), None) => {
-                        return Some(format!("{command:?} hint: expected Some(..), got None"));
-                    }
-                    (Some(substrings), Some(hint)) => {
-                        for substring in substrings {
-                            if !hint.contains(substring) {
-                                return Some(format!(
-                                    "{command:?} hint {hint:?}: missing substring {substring:?}"
-                                ));
-                            }
-                        }
-                    }
                 }
 
                 None
@@ -2139,6 +2132,38 @@ mod tests {
                 detail: None,
             } if phase == "recording"
         ));
+    }
+
+    #[test]
+    fn last_transcript_summary_distinguishes_disabled_history() {
+        let disabled = SharedState::with_history_limit(0);
+        disabled.set_info(sample_daemon_info());
+        let IpcResponse::Status {
+            detail: Some(disabled_detail),
+            ..
+        } = disabled.status()
+        else {
+            panic!("expected populated status detail");
+        };
+        assert_eq!(
+            last_transcript_summary(None, Some(&disabled_detail)),
+            "history disabled"
+        );
+
+        let enabled = SharedState::new();
+        enabled.set_info(sample_daemon_info());
+        let IpcResponse::Status {
+            detail: Some(enabled_detail),
+            ..
+        } = enabled.status()
+        else {
+            panic!("expected populated status detail");
+        };
+        assert_eq!(last_transcript_summary(None, Some(&enabled_detail)), "none");
+        assert_eq!(
+            last_transcript_summary(Some(12), Some(&enabled_detail)),
+            "12 bytes"
+        );
     }
 
     #[test]
@@ -2571,18 +2596,72 @@ mod tests {
 
     #[cfg(any(unix, target_os = "windows"))]
     #[test]
-    fn parse_command_classifies_legacy_paste_last_as_removed() {
-        let err = parse_command("\"paste_last\"\n").unwrap_err();
-        let message = err.to_string();
-        assert!(message.contains("paste-last was removed"), "{message}");
-        assert!(message.contains("parakit copy-last"), "{message}");
+    fn new_daemon_classifies_legacy_client_wire_commands() {
+        #[derive(Serialize)]
+        #[serde(rename_all = "snake_case")]
+        enum LegacyCommand {
+            CopyLast,
+            PasteLast,
+        }
+
+        let copy_last = serde_json::to_string(&LegacyCommand::CopyLast).unwrap();
+        let copy_error = parse_command(&copy_last).unwrap_err().to_string();
+        assert!(copy_error.contains("newer than the CLI"), "{copy_error}");
+
+        let paste_last = serde_json::to_string(&LegacyCommand::PasteLast).unwrap();
+        let paste_error = parse_command(&paste_last).unwrap_err().to_string();
+        assert!(
+            paste_error.contains("paste-last was removed"),
+            "{paste_error}"
+        );
+        assert!(paste_error.contains("parakit copy-last"), "{paste_error}");
     }
 
     #[cfg(any(unix, target_os = "windows"))]
     #[test]
-    fn parse_command_classifies_legacy_copy_last_as_a_version_mismatch() {
-        let err = parse_command("\"copy_last\"").unwrap_err();
-        assert!(err.to_string().contains("newer than the CLI"));
+    fn new_client_classifies_old_daemon_serde_errors_from_valid_error_responses() {
+        #[allow(dead_code)]
+        #[derive(Debug, Deserialize)]
+        #[serde(rename_all = "snake_case")]
+        enum LegacyCommand {
+            Status,
+            Stop,
+            CopyLast,
+            TestPaste { text: String },
+        }
+
+        let cases = [
+            (IpcCommand::CopyLast { index: 2 }, "copy-last"),
+            (IpcCommand::History { limit: Some(5) }, "history"),
+        ];
+        for (command, label) in cases {
+            let wire = serde_json::to_string(&command).unwrap();
+            let old_daemon_error = serde_json::from_str::<LegacyCommand>(&wire)
+                .unwrap_err()
+                .to_string();
+            let response_wire = serde_json::to_string(&IpcResponse::Err {
+                message: format!("invalid control command: {old_daemon_error}"),
+            })
+            .unwrap();
+            let IpcResponse::Err { message } =
+                serde_json::from_str::<IpcResponse>(&response_wire).unwrap()
+            else {
+                panic!("expected an error response");
+            };
+            let hint = stale_daemon_error_hint(&command, &message)
+                .unwrap_or_else(|| panic!("{label}: expected stale-daemon hint for {message:?}"));
+            assert!(hint.contains("parakit stop"), "{label}: {hint}");
+            assert!(hint.contains("predates this CLI"), "{label}: {hint}");
+        }
+
+        assert_eq!(
+            stale_daemon_error_hint(
+                &IpcCommand::CopyLast { index: 0 },
+                "daemon crashed before completing the command"
+            ),
+            None,
+            "transport/crash text must not be diagnosed as version skew"
+        );
     }
 
     #[cfg(any(unix, target_os = "windows"))]

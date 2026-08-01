@@ -758,8 +758,9 @@ fn resolve_disabled_rules(cli_rules: &[String], config: &ConfigFile) -> Vec<Stri
 }
 
 /// Parse process argv into [`Cli`], printing a migration hint and exiting
-/// with clap's usual usage-error code (2) for a flag that moved onto `start`
-/// or for the removed `--list-rules`/`--test-rules` flags.
+/// with clap's usual usage-error code (2) for a flag that moved onto `start`,
+/// for the removed `--list-rules`/`--test-rules` flags, or for the removed
+/// `paste-last` subcommand.
 ///
 /// # Returns
 ///
@@ -780,9 +781,10 @@ pub(crate) fn parse_cli() -> Cli {
     }
 }
 
-/// Build a migration hint for a flag moved onto `start`, or for the removed
-/// `--list-rules`/`--test-rules` flags, given the raw argv and the clap
-/// error a top-level parse produced.
+/// Build a migration hint for a flag moved onto `start`, for the removed
+/// `--list-rules`/`--test-rules` flags, or for the removed `paste-last`
+/// subcommand, given the raw argv and the clap error a top-level parse
+/// produced.
 ///
 /// A pure function over `args` and `err` (no process exit), so the moved-flag
 /// detection is unit-testable on its own.
@@ -794,6 +796,16 @@ pub(crate) fn parse_cli() -> Cli {
 /// an unknown-argument error, or the offending token does not match a known
 /// moved or removed flag.
 fn migration_hint(args: &[String], err: &clap::error::Error) -> Option<String> {
+    let rest: &[String] = args.get(1..).unwrap_or_default();
+    if err.kind() == clap::error::ErrorKind::InvalidSubcommand
+        && rest.first().map(String::as_str) == Some("paste-last")
+    {
+        return Some(
+            "error: 'paste-last' was removed; copy the transcript and paste it manually\n\n  \
+             try: parakit copy-last"
+                .to_string(),
+        );
+    }
     if err.kind() != clap::error::ErrorKind::UnknownArgument {
         return None;
     }
@@ -801,9 +813,9 @@ fn migration_hint(args: &[String], err: &clap::error::Error) -> Option<String> {
         Some(clap::error::ContextValue::String(value)) => value.as_str(),
         _ => return None,
     };
-    // Strip a `=value` suffix (`--paste-mode=standard`) down to the bare flag.
+    // Clap reports the bare flag for `--flag=value` errors. Match that report
+    // back to raw argv so migration suggestions retain the inline value.
     let flag = invalid_arg.split('=').next().unwrap_or(invalid_arg);
-    let rest: &[String] = args.get(1..).unwrap_or_default();
 
     if flag == "--list-rules" {
         return Some(
@@ -812,12 +824,18 @@ fn migration_hint(args: &[String], err: &clap::error::Error) -> Option<String> {
         );
     }
     if flag == "--test-rules" {
-        let flag_index = rest
+        let flag_arg = rest
             .iter()
-            .position(|arg| arg.split('=').next() == Some(flag));
-        let input = flag_index
-            .and_then(|index| rest.get(index + 1))
+            .position(|arg| arg.split('=').next() == Some(flag))
+            .and_then(|index| rest.get(index).map(|arg| (index, arg)));
+        let inline_input = flag_arg
+            .and_then(|(_, arg)| arg.split_once('=').map(|(_, value)| value))
+            .filter(|value| !value.is_empty());
+        let following_input = flag_arg
+            .and_then(|(index, _)| rest.get(index + 1))
+            .map(String::as_str)
             .filter(|arg| !arg.starts_with('-'));
+        let input = inline_input.or(following_input);
         let suggestion = match input {
             Some(value) => format!("parakit rules test {}", shell_quote(value)),
             None => "parakit rules test <INPUT>".to_string(),
@@ -827,22 +845,31 @@ fn migration_hint(args: &[String], err: &clap::error::Error) -> Option<String> {
         ));
     }
 
-    // Otherwise: does this flag now live under `start`? Re-parse with `start`
-    // spliced in right after the binary name; if that succeeds, the flag
-    // moved rather than having been removed or never existed.
+    // Otherwise: does this flag now live under `start`? Re-parse only the
+    // offending option (and its value, when it has one) under `start`. Using
+    // the whole old invocation would suppress this hint when another old flag
+    // in the same command was removed independently.
     let binary = args
         .first()
         .cloned()
         .unwrap_or_else(|| "parakit".to_string());
-    let mut retry = Vec::with_capacity(rest.len() + 2);
-    retry.push(binary);
-    retry.push("start".to_string());
-    retry.extend(rest.iter().cloned());
-    if Cli::try_parse_from(retry).is_err() {
-        return None;
+    let flag_index = rest
+        .iter()
+        .position(|arg| arg.split('=').next() == Some(flag))?;
+    let mut moved_args = vec![rest[flag_index].clone()];
+    let mut retry = vec![binary.clone(), "start".to_string(), moved_args[0].clone()];
+    if Cli::try_parse_from(retry.iter().cloned()).is_err() {
+        let value = rest
+            .get(flag_index + 1)
+            .filter(|arg| !arg.starts_with('-'))?;
+        moved_args.push(value.clone());
+        retry.push(value.clone());
+        if Cli::try_parse_from(retry).is_err() {
+            return None;
+        }
     }
 
-    let original_args = rest
+    let original_args = moved_args
         .iter()
         .map(|arg| shell_quote(arg))
         .collect::<Vec<_>>()
@@ -1337,6 +1364,19 @@ mod tests {
                 ),
             },
             MigrationHintCase {
+                label: "a moved flag still gets a hint beside a separately removed flag",
+                args: &[
+                    "parakit",
+                    "--paste-mode",
+                    "standard",
+                    "--list-rules",
+                ],
+                expect_kind: None,
+                expect_hint: Some(
+                    "error: '--paste-mode' now belongs to the start subcommand\n\n  try: parakit start --paste-mode standard",
+                ),
+            },
+            MigrationHintCase {
                 label: "--list-rules points at rules list",
                 args: &["parakit", "--list-rules"],
                 expect_kind: None,
@@ -1358,6 +1398,24 @@ mod tests {
                 expect_kind: None,
                 expect_hint: Some(
                     "error: '--test-rules' is now the `rules test` subcommand\n\n  try: parakit rules test <INPUT>",
+                ),
+            },
+            MigrationHintCase {
+                label: "--test-rules inline input is retained",
+                args: &["parakit", "--test-rules=so um yeah"],
+                expect_kind: None,
+                expect_hint: Some(
+                    "error: '--test-rules' is now the `rules test` subcommand\n\n  try: parakit rules test \"so um yeah\"",
+                ),
+            },
+            MigrationHintCase {
+                label: "removed paste-last points at copy-last",
+                args: &["parakit", "paste-last"],
+                expect_kind: Some(KindCheck::Is(
+                    clap::error::ErrorKind::InvalidSubcommand,
+                )),
+                expect_hint: Some(
+                    "error: 'paste-last' was removed; copy the transcript and paste it manually\n\n  try: parakit copy-last",
                 ),
             },
             MigrationHintCase {

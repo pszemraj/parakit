@@ -90,7 +90,7 @@ pub(crate) enum HotkeyBackend {
     /// Force the experimental low-level evdev/uinput keyboard proxy backend.
     #[cfg(target_os = "linux")]
     #[value(name = "evdev-proxy-experimental", alias = "evdev-proxy")]
-    #[serde(rename = "evdev-proxy-experimental")]
+    #[serde(rename = "evdev-proxy-experimental", alias = "evdev-proxy")]
     EvdevProxyExperimental,
 }
 
