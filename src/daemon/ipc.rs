@@ -40,6 +40,25 @@ const IPC_TRANSPORT_TIMEOUT: Duration = Duration::from_millis(750);
 #[cfg(any(unix, target_os = "windows"))]
 const IPC_INSERT_RESPONSE_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// Marker used by both local IPC transports when no daemon endpoint exists.
+///
+/// Keeping this distinct from other transport failures lets the CLI render a
+/// stable, platform-independent message without hiding permission errors,
+/// timeouts, truncated responses, or other actionable diagnostics.
+#[cfg(any(unix, target_os = "windows"))]
+#[derive(Debug)]
+struct DaemonNotRunning;
+
+#[cfg(any(unix, target_os = "windows"))]
+impl std::fmt::Display for DaemonNotRunning {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("daemon is not running")
+    }
+}
+
+#[cfg(any(unix, target_os = "windows"))]
+impl std::error::Error for DaemonNotRunning {}
+
 /// Default number of transcripts kept in daemon memory when
 /// `daemon.transcript_history` is unset.
 pub(crate) const DEFAULT_TRANSCRIPT_HISTORY: usize = 10;
@@ -586,9 +605,17 @@ pub(crate) fn spawn_server(
 ///
 /// # Errors
 ///
-/// Returns an error when no daemon is listening or the daemon reports failure.
+/// Returns an error when a command that needs live daemon state is used while
+/// no daemon is listening, or when the daemon reports failure. An absent
+/// daemon is a successful state for `Status` and `Stop`.
 pub(crate) fn run_client(command: IpcCommand, quiet: bool, verbose: bool) -> Result<()> {
-    let response = send_command(&command)?;
+    let response = match send_command(&command) {
+        Ok(response) => response,
+        Err(err) if err.is::<DaemonNotRunning>() => {
+            return handle_daemon_not_running(&command, quiet);
+        }
+        Err(err) => return Err(err),
+    };
     match response {
         IpcResponse::Ok { message } => {
             if !quiet {
@@ -625,6 +652,45 @@ pub(crate) fn run_client(command: IpcCommand, quiet: bool, verbose: bool) -> Res
             Some(hint) => bail!("{hint}"),
             None => bail!("{message}"),
         },
+    }
+}
+
+#[cfg(any(unix, target_os = "windows"))]
+#[derive(Debug, Eq, PartialEq)]
+enum DaemonNotRunningDisposition {
+    Success(&'static str),
+    Error(&'static str),
+}
+
+/// Return the user-facing result for a command when no daemon endpoint exists.
+///
+/// Status queries and stop requests are idempotent state checks, while the
+/// remaining commands require live daemon state and therefore stay failures.
+#[cfg(any(unix, target_os = "windows"))]
+fn daemon_not_running_disposition(command: &IpcCommand) -> DaemonNotRunningDisposition {
+    match command {
+        IpcCommand::Status => DaemonNotRunningDisposition::Success("parakit: not running"),
+        IpcCommand::Stop => {
+            DaemonNotRunningDisposition::Success("parakit: not running; nothing to stop")
+        }
+        IpcCommand::CopyLast { .. } | IpcCommand::History { .. } | IpcCommand::TestPaste { .. } => {
+            DaemonNotRunningDisposition::Error(
+                "daemon is not running; start it with `parakit start` first",
+            )
+        }
+    }
+}
+
+#[cfg(any(unix, target_os = "windows"))]
+fn handle_daemon_not_running(command: &IpcCommand, quiet: bool) -> Result<()> {
+    match daemon_not_running_disposition(command) {
+        DaemonNotRunningDisposition::Success(message) => {
+            if !quiet {
+                println!("{message}");
+            }
+            Ok(())
+        }
+        DaemonNotRunningDisposition::Error(message) => bail!("{message}"),
     }
 }
 
@@ -1052,8 +1118,21 @@ fn send_command(command: &IpcCommand) -> Result<IpcResponse> {
 
     let response_timeout = command.response_timeout();
     let path = preflight::control_socket_path()?;
-    let mut stream = UnixStream::connect(&path)
-        .with_context(|| format!("connect daemon control socket {}", path.display()))?;
+    let mut stream = match UnixStream::connect(&path) {
+        Ok(stream) => stream,
+        Err(err)
+            if matches!(
+                err.kind(),
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused
+            ) =>
+        {
+            return Err(DaemonNotRunning.into());
+        }
+        Err(err) => {
+            return Err(err)
+                .with_context(|| format!("connect daemon control socket {}", path.display()));
+        }
+    };
     stream
         .set_read_timeout(Some(response_timeout))
         .context("set daemon control socket read timeout")?;
@@ -1437,6 +1516,9 @@ mod windows_pipe {
                                 IPC_CLIENT_TIMEOUT_MS,
                                 CLIENT_CONNECT_RETRY,
                             ) else {
+                                if wait_err == ERROR_FILE_NOT_FOUND {
+                                    return Err(DaemonNotRunning.into());
+                                }
                                 return Err(win32_error(
                                     "WaitNamedPipeW Windows daemon control pipe failed",
                                     wait_err,
@@ -1458,10 +1540,7 @@ mod windows_pipe {
                         IPC_CLIENT_TIMEOUT_MS,
                         CLIENT_CONNECT_RETRY,
                     ) else {
-                        return Err(win32_error(
-                            "CreateFileW Windows daemon control pipe failed",
-                            err,
-                        ));
+                        return Err(DaemonNotRunning.into());
                     };
                     thread::sleep(sleep);
                 }
@@ -1904,6 +1983,25 @@ mod windows_pipe {
         }
 
         #[test]
+        fn missing_named_pipe_is_classified_as_daemon_not_running() {
+            let unique = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system time should be after epoch")
+                .as_nanos();
+            let pipe_name = encode_wide_null(&format!(
+                r"\\.\pipe\parakit-ipc-missing-test-{}-{unique}",
+                std::process::id()
+            ));
+
+            let Err(err) = connect_client_pipe(&pipe_name) else {
+                panic!("a nonexistent named pipe should not connect");
+            };
+
+            assert!(err.is::<DaemonNotRunning>(), "unexpected error: {err:#}");
+            assert_eq!(err.to_string(), "daemon is not running");
+        }
+
+        #[test]
         fn client_message_read_mode_preserves_message_boundaries() -> Result<()> {
             let (server, client) = connected_test_pipe(false)?;
 
@@ -2044,6 +2142,45 @@ mod windows_pipe {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(any(unix, target_os = "windows"))]
+    #[test]
+    fn daemon_not_running_disposition_covers_every_control_command() {
+        let cases = [
+            (
+                IpcCommand::Status,
+                DaemonNotRunningDisposition::Success("parakit: not running"),
+            ),
+            (
+                IpcCommand::Stop,
+                DaemonNotRunningDisposition::Success("parakit: not running; nothing to stop"),
+            ),
+            (
+                IpcCommand::CopyLast { index: 0 },
+                DaemonNotRunningDisposition::Error(
+                    "daemon is not running; start it with `parakit start` first",
+                ),
+            ),
+            (
+                IpcCommand::History { limit: None },
+                DaemonNotRunningDisposition::Error(
+                    "daemon is not running; start it with `parakit start` first",
+                ),
+            ),
+            (
+                IpcCommand::TestPaste {
+                    text: "test".to_string(),
+                },
+                DaemonNotRunningDisposition::Error(
+                    "daemon is not running; start it with `parakit start` first",
+                ),
+            ),
+        ];
+
+        for (command, expected) in cases {
+            assert_eq!(daemon_not_running_disposition(&command), expected);
+        }
+    }
 
     #[cfg(any(unix, target_os = "windows"))]
     #[test]
