@@ -754,12 +754,10 @@ fn validate_device_request(device_mode: DeviceMode, log: &Logger) -> Result<()> 
     #[cfg(feature = "bundled")]
     {
         if !parakit::gpu::has_gpu_device() {
-            let mut message = "--device gpu requested, but ggml reports no GPU or iGPU devices; run `parakit --verbose doctor` for compute diagnostics".to_string();
+            let message = "--device gpu requested, but ggml reports no GPU or iGPU devices; run `parakit --verbose doctor` for compute diagnostics";
             #[cfg(target_os = "macos")]
-            if let Some(hint) = daemon::macos::no_gpu_hint() {
-                message.push_str("; ");
-                message.push_str(hint);
-            }
+            let message = daemon::macos::no_gpu_hint()
+                .map_or_else(|| message.to_string(), |hint| format!("{message}; {hint}"));
             anyhow::bail!(message);
         }
     }
