@@ -4,7 +4,7 @@ parakit supports Windows as a terminal-run CLI, built from source and installed 
 
 ## Build
 
-Build and install with the [Windows bundle scripts](../scripts/windows/README.md); a bare `cargo install --path .` does not copy the generated CrispASR/ggml DLLs beside `parakit.exe`. Native-dependency and backend background shared with other platforms is in [build.md](build.md); backend selection, BLAS, and installer behavior are documented in the bundle-scripts guide, not repeated here.
+Build and install with the [Windows bundle scripts](../scripts/windows/README.md); a bare `cargo install --path .` does not copy the generated CrispASR/ggml DLLs beside `parakit.exe`. Shared native dependencies and backend controls are in [build.md](build.md).
 
 ## Hotkey
 
@@ -31,11 +31,3 @@ Foreground-window capture, the pre-paste focus recheck, and the restriction agai
 ## `doctor --deep`
 
 In `standard` or `terminal` mode, `doctor --deep` opens a visible Win32 edit window, briefly takes focus, stages a sentinel on the clipboard, sends the configured paste chord, reads the text back, and restores supported clipboard content. Windows may use a brief cursor-click fallback to focus the probe, then restores the cursor position afterward. Run it from an unlocked interactive desktop. In `direct` mode, it performs backend preflight only and does not type into the probe.
-
-## Config File Location
-
-The Windows config file lives at `%APPDATA%\parakit\config.toml`; see [configuration.md#file-location](configuration.md#file-location) for full path resolution, including the `PARAKIT_CONFIG_PATH` override.
-
-## Microphone
-
-Windows opens the microphone stream paused and resumes it only while a recording is in progress, so no microphone or driver-level audio processing runs between dictations, unlike Linux and macOS, which keep the stream warm for pre-roll. See [running.md#microphone](running.md#microphone) for device selection and downmixing, which are otherwise the same across platforms.

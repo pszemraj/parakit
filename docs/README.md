@@ -12,7 +12,7 @@ Everything under `docs/`, grouped by when you need it.
 
 ## Daily Use
 
-- [running.md](running.md) - running the daemon, the control socket, the model cache, and paste modes.
+- [running.md](running.md) - running the daemon, daemon control, the model cache, and paste modes.
 - [configuration.md](configuration.md) - the config file, CLI/config precedence, and user-defined cleaning rules.
 - [config_reference.toml](config_reference.toml) - the per-key configuration reference.
 - [cleaning-rules.md](cleaning-rules.md) - the built-in transcript cleanup passes and profiles.

@@ -8,18 +8,31 @@ Run the full loop in order before pushing Rust or runtime changes:
 
 ```bash
 cargo fmt --package parakit
-rustdoc-checker . --exclude target,vendor,.claude,local-scratch
+rustdoc-checker . --exclude vendor --strict
 cargo check --workspace --all-targets
 cargo test
-cargo clippy --workspace --all-targets
+cargo clippy --workspace --all-targets -- -D warnings
 cargo build
 cargo check --workspace --all-targets --all-features
 ```
 
-The all-features check can request accelerator toolchains that the current
-host does not have. Follow [GPU feature validation](README.md#gpu-feature-validation)
-for the host-specific fallback, then run the native GPU build and runtime
-checks on each supported platform.
+The all-features check can request accelerator toolchains that the current host does not have. Follow [GPU Feature Validation](#gpu-feature-validation) for the host-specific fallback, then run the native GPU build and runtime checks on each supported platform.
+
+## GPU Feature Validation
+
+Use the Windows scripts for CUDA/Vulkan validation; they default to Ninja. Raw `cargo check --workspace --all-targets --all-features` may still enter CMake's Visual Studio generator and fail before Rust typechecking if Visual Studio CUDA BuildCustomizations are stale. A known failure leaves `CudaToolkitDir` empty and reports `CUDA Toolkit directory '' does not exist`.
+
+When that happens, record the exact CUDA/MSBuild error, then validate the Rust all-features surface with an existing bundled library directory:
+
+```powershell
+$env:CRISPASR_LIB_DIR = (Resolve-Path 'target\debug\build\parakit-<hash>\out\lib').Path
+cargo check --workspace --all-targets --all-features
+Remove-Item Env:\CRISPASR_LIB_DIR
+```
+
+This fallback does not replace real GPU validation. Also run the CUDA and Vulkan Windows scripts plus simulated-dictation smoke tests against `local-scratch\Juniper_St_NE_5.wav` when touching Windows GPU behavior.
+
+On macOS, raw `--all-features` also enables CUDA and can fail in CMake before Rust typechecking when the CUDA Toolkit is not installed. Use the same `CRISPASR_LIB_DIR` fallback to validate the Rust all-features surface; validate Metal with the native macOS build and `doctor`.
 
 ## Rust Source Coverage
 
@@ -37,9 +50,7 @@ coverage summary:
 cargo coverage
 ```
 
-This alias uses the default feature and Cargo test-target surface. Include
-example-target tests with `cargo coverage --all-targets`; pass explicit
-feature flags when measuring feature-gated code.
+This alias uses the default features and Cargo test-target surface, including the test-enabled `transcribe-file` example. Use `cargo coverage --all-targets` for the remaining Cargo target kinds, and pass explicit feature flags when measuring feature-gated code.
 
 Generate a browsable per-line report when investigating an untested branch:
 

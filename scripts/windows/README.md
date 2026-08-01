@@ -22,7 +22,7 @@ Windows builds need an installed runnable directory, not only `parakit.exe`. Cri
 
 `cargo install --path .` is different: Cargo installs only `parakit.exe` into Cargo's bin directory. It does not copy the generated CrispASR, ggml, or OpenBLAS DLLs. Use `build.ps1` when you want a normal Windows install.
 
-By default, the build script asks which compute backend to build. CPU is highlighted first, so pressing Enter selects CPU. The script then builds `target\parakit-windows-x86_64-<backend>`, installs it to `%LOCALAPPDATA%\Programs\parakit`, and adds that install directory to the Windows User `PATH`.
+The script creates `target\parakit-windows-x86_64-<backend>`, installs it to `%LOCALAPPDATA%\Programs\parakit`, and adds that install directory to the Windows User `PATH`.
 
 The scripts do not edit the system `PATH`, create firewall rules, open TCP ports, create symlinks or junctions, map temporary drive letters, require Windows Developer Mode, or require administrator rights.
 
@@ -68,7 +68,7 @@ The script rejects contradictory backend choices such as `--cuda --vulkan`. Raw 
 
 ## BLAS
 
-CPU BLAS is autodetected by default. On Windows, autodetection honors `PARAKIT_OPENBLAS_ROOT`, the standard OpenBLAS root variables, active and common Conda prefixes, `CMAKE_PREFIX_PATH`, vcpkg, and conventional `OpenBLAS` install directories. It falls back to non-BLAS native/OpenMP CPU kernels if no bundleable target-compatible install is found.
+CPU BLAS is autodetected by default using the cross-platform search order in [the build guide](../../docs/build.md#blas-and-mkl). On Windows, a usable OpenBLAS installation must include `cblas.h`, a runtime DLL under `bin\`, and a target-compatible import library under `lib\`: `.lib` for MSVC or `.dll.a` for GNU. The build falls back to native/OpenMP CPU kernels when no compatible installation is found.
 
 Use script arguments for normal Windows builds:
 
@@ -78,9 +78,7 @@ scripts\windows\build.bat --backend cpu --blas off
 scripts\windows\build.bat --backend cpu --blas openblas --openblas-root C:\path\to\OpenBLAS
 ```
 
-`--openblas-root` is valid with `--blas auto` or `--blas openblas`. OpenBLAS detection requires `cblas.h`, a runtime DLL under `bin\`, and an import library compatible with the active Rust target environment: `.lib` for MSVC or `.dll.a` for GNU.
-
-Advanced CMake overrides still work through the environment. Set both `BLAS_INCLUDE_DIRS` and `BLAS_LIBRARIES` when you need explicit CMake paths; together they take precedence over autodetection and skip OpenBLAS DLL bundling.
+`--openblas-root` is valid with `--blas auto` or `--blas openblas`. Advanced CMake path overrides are documented in the build guide; explicit library paths skip automatic OpenBLAS DLL bundling.
 
 When `build.rs` selects a Windows OpenBLAS install, the bundle includes `openblas.dll` plus adjacent known runtime DLLs such as OpenMP, gfortran, GCC, quadmath, and winpthreads libraries when present. `parakit doctor` reports the requested and selected BLAS modes.
 
@@ -93,8 +91,6 @@ Only one compute backend is supported per bundle.
 | CPU | `build.ps1 --backend cpu` | Visual Studio C++ tools, CMake, Rust | Generated CrispASR/ggml DLLs are bundled. BLAS is autodetected unless overridden. |
 | CUDA | `build.ps1 --backend cuda` | Visual Studio C++ tools, Ninja, NVIDIA CUDA Toolkit with `nvcc`; `CUDA_PATH` may be inferred from `nvcc.exe` on `PATH` | NVIDIA-only. CUDA runtime and cuBLAS DLLs must be found from the installed app directory or `PATH`, unless `--bundle-cuda-dlls` is used. |
 | Vulkan | `build.ps1 --backend vulkan` | Visual Studio C++ tools, Ninja, LunarG Vulkan SDK with `glslc`; `VULKAN_SDK` may be autodetected from `C:\VulkanSDK\*` or inferred from `glslc.exe` on `PATH` | Recommended Windows GPU backend for NVIDIA, AMD, and Intel. `vulkan-1.dll` is provided by the installed GPU driver. |
-
-For Windows GPU installs, start with `--backend vulkan` unless you specifically need CUDA. Vulkan is vendor-agnostic and bundles all parakit-owned runtime DLLs; the GPU driver must provide `vulkan-1.dll`. CUDA is NVIDIA-only and either needs matching CUDA Toolkit runtime DLLs available from the installed app directory or `PATH`, or a larger bundle built with `--bundle-cuda-dlls`.
 
 CUDA runtime DLL bundling is opt-in because `cublasLt64_*.dll` is large:
 
@@ -125,28 +121,22 @@ If path shortening does not fix a Vulkan shader-gen failure, capture the exact `
 
 `build.ps1` runs this sequence:
 
-1. Parses options. If no backend was specified, opens the backend selector with CPU highlighted.
-2. Refuses `CRISPASR_LIB_DIR`, because bundle builds must produce a fresh runtime manifest and colocated DLL staging directory.
-3. Validates native Windows, Rust, CMake, and backend-specific toolchains.
-4. Checks `vendor\CrispASR`; initializes submodules only when needed and only non-interactively.
-5. Applies `--blas` and `--openblas-root` by setting `PARAKIT_BLAS` and `PARAKIT_OPENBLAS_ROOT` for the current process.
-6. For GPU builds, configures the CMake generator, activates the MSVC amd64 developer environment when needed, and validates CUDA or Vulkan SDK inputs.
-7. Runs `cargo build --locked`, plus `--release` for release builds and `--features cuda` or `--features vulkan` for GPU builds.
-8. Creates `target\parakit-windows-x86_64-<backend>`.
-9. Copies `parakit-runtime-manifest.json`, every manifest `required_files` entry, `LICENSE`, and `README.md` into the bundle.
-10. Unless `--no-install` is set, calls `install.ps1`.
-
-`install.ps1` validates the bundle manifest, checks external CUDA/Vulkan runtime DLLs before replacing an install, refuses unsafe install directories, enforces the backend-switch guard, copies the bundle, runs `parakit --version` as a loader smoke test, and then updates User `PATH` unless `--no-user-path` is set. Direct `install.ps1` calls can use `-AllowBackendSwitch` or `-Force` for intentional backend replacement.
+1. Rejects `CRISPASR_LIB_DIR`, which cannot produce a fresh runtime manifest and colocated DLL staging directory, then validates the selected toolchain.
+2. Checks `vendor\CrispASR`, initializing submodules non-interactively only when needed.
+3. Configures BLAS and the selected accelerator, including the MSVC amd64 environment and Ninja for GPU builds.
+4. Runs `cargo build --locked` with the requested profile and backend feature.
+5. Creates `target\parakit-windows-x86_64-<backend>` and copies the runtime manifest, its required files, `LICENSE`, and `README.md`.
+6. Calls `install.ps1` unless `--no-install` is set.
 
 The installer only wipes directories it owns, marked by `.parakit-install`. It refuses a non-empty unmarked destination instead of merging files into it, because stale accelerator DLLs from a foreign directory can change loader behavior.
-
-When intentionally replacing an installed backend, pass `--allow-backend-switch` or `--force` on the build command. Without it, the installer fails before deleting the existing install.
 
 The build script checks whether `vendor\CrispASR` is already populated before touching submodules. If the submodule is present and pinned, the script does not contact GitHub. If it must initialize the submodule, it runs Git non-interactively so firewalled machines fail instead of opening credential prompts. On a firewalled machine, use a checkout or source archive that already includes `vendor\CrispASR`, or pass `--no-submodules` to fail fast instead of trying to initialize it.
 
 ## Runtime Manifest
 
 The build writes `parakit-runtime-manifest.json` beside `parakit.exe`. The bundle copies every file in `required_files`, and the installer validates those entries before installing.
+
+`install.ps1` checks external CUDA/Vulkan runtime DLLs, refuses unsafe or non-owned destinations, enforces the backend-switch guard, copies the bundle, runs `parakit --version` as a loader smoke test, and updates User `PATH` unless `--no-user-path` is set. Direct calls can use `-AllowBackendSwitch` or `-Force` for an intentional backend replacement.
 
 The manifest records the selected accelerator and external runtime DLLs. CUDA external DLLs are hard requirements unless they were bundled. Vulkan's `vulkan-1.dll` is driver-managed and must be present through System32 or `PATH`; install or update the NVIDIA, AMD, or Intel GPU driver before installing the Vulkan bundle.
 

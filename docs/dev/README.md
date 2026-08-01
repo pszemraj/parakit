@@ -39,7 +39,7 @@ Hosted release files:
 | `parakeet-tdt-0.6b-v3-Q8_0.gguf` | Default user artifact. |
 | `parakeet-tdt-0.6b-v3-F16.gguf` | Source GGUF kept for maintainers and future re-quantization work. |
 
-The CLI has no quant selector. Q8_0 is the default hosted model; `daemon.model` selects a persistent override and `-m <path>` overrides it for one invocation. Avoid unrelated names, nested directories, or model-card-only links for release artifacts.
+The CLI has no quant selector. Q8_0 is the default hosted model. Runtime model precedence is in [running.md#model-cache](../running.md#model-cache). Avoid unrelated names, nested directories, or model-card-only links for release artifacts.
 
 The Parakeet converter, loader, and `crispasr-quantize` path are built around F16/F32 tensors. Treat BF16 as future work until it has explicit support and validation.
 
@@ -58,21 +58,7 @@ On Windows, the hosted Q8_0 path is the normal model setup. `fetch --from-source
 
 After rebuilding a release artifact, upload F16 and Q8_0 to the hosted repo and update `HOSTED_Q8_SHA256` in `src/model.rs` if the Q8_0 bytes changed.
 
-## GPU Feature Validation
-
-Use the Windows scripts for CUDA/Vulkan validation; they default to Ninja. Raw `cargo check --workspace --all-targets --all-features` may still enter CMake's Visual Studio generator and fail before Rust typechecking if Visual Studio CUDA BuildCustomizations are stale. Known local failure: versioned CUDA targets leave `CudaToolkitDir` empty and emit `CUDA Toolkit directory '' does not exist`.
-
-When that happens, record the exact CUDA/MSBuild error, then validate the Rust all-features surface with an existing bundled lib directory:
-
-```powershell
-$env:CRISPASR_LIB_DIR = (Resolve-Path 'target\debug\build\parakit-<hash>\out\lib').Path
-cargo check --workspace --all-targets --all-features
-Remove-Item Env:\CRISPASR_LIB_DIR
-```
-
-This fallback does not replace real GPU validation. Also run the CUDA and Vulkan Windows scripts plus simulated-dictation smoke tests against `local-scratch\Juniper_St_NE_5.wav` when touching Windows GPU behavior.
-
-On macOS, raw `--all-features` also enables CUDA and can fail in CMake before Rust typechecking when the CUDA Toolkit is not installed. Use the same `CRISPASR_LIB_DIR` fallback to validate the Rust all-features surface; validate Metal with the native macOS build and `doctor`.
+GPU build and runtime checks are in [quality.md#gpu-feature-validation](quality.md#gpu-feature-validation).
 
 ## File Size Exceptions
 
@@ -80,14 +66,13 @@ Current Rust files over the approximate 1k LoC target:
 
 | Path | Reason and split boundary |
 | --- | --- |
-| `src/daemon/audio/capture.rs` | Owns the coupled CPAL stream-recovery, SPSC drain, resampling, and pre-roll boundary. Split into stream, drain, and device modules after Windows CPU behavior settles. |
+| `src/daemon/audio/capture.rs` | Owns the coupled CPAL stream-recovery, SPSC drain, resampling, and pre-roll boundary. Split into stream, drain, and device modules when their ownership boundaries are stable. |
 | `src/daemon/desktop/inject.rs` | Owns the cross-platform clipboard transaction and insertion contract. Split clipboard, X11 paste, and focus code without changing paste safety. |
 | `src/daemon/ipc.rs` | Contains both Unix-socket and Windows named-pipe transports plus their policy tests. Extract the Windows transport after its behavior settles. |
 | `src/daemon/macos/diagnostics.rs` | Owns the AppKit probe window and the two-stage macOS deep insertion check. Extract the probe-window harness if either diagnostic stage grows. |
 | `src/daemon/worker.rs` | Coordinates ASR, cleaning, logging, recovery history, and the insertion circuit breaker. Extract stable policy helpers without splitting the end-to-end worker state machine. |
 | `src/app.rs` | Holds top-level command dispatch and daemon bootstrap. Extract command handlers when a stable subsystem boundary appears. |
 | `src/cli.rs` | Keeps clap declarations, effective-option precedence, migration hints, and their shared parser tests together. Split declarations from resolution policy after the new command surface settles. |
-| `build.rs` | Coordinates cross-platform CMake, BLAS, accelerator, runtime-path, and Windows-manifest policy. Continue moving self-contained Windows discovery and manifest code under `build/`. |
 | `src/daemon/desktop/hotkey.rs` | Is only slightly over the target and already delegates macOS code. Extract Linux backend implementations if it grows further. |
 | `src/daemon/desktop/inject_tests.rs` | Keeps the clipboard and insertion transaction regression matrix together. Split by transaction phase when shared fixtures no longer dominate. |
 | `src/daemon/macos/pasteboard.rs` | Owns the macOS paste-acknowledgement evidence policy: baseline capture, confirmation polling, transcript matching, and their regression tests, which dominate the count. Extract `TranscriptMatcher` and its tests into a sibling module if the evidence rules grow further. |
@@ -105,7 +90,7 @@ TODO: Remove the [Unix source-install dependency on the repository `target/` lib
 
 TODO: Add a secondary recording watchdog for missed key-release events from the registered X11 hotkey backend. The existing max-utterance timeout bounds the failure, but a silence-based stop would recover sooner when a backend misses release ordering.
 
-TODO: Revisit Linux/macOS microphone idle policy after Windows CPU validation. Either move them to the same pause/resume default as Windows or keep 350 ms warm pre-roll only with measured idle CPU and first-syllable evidence that justifies the cost.
+TODO: Revisit Linux/macOS microphone idle policy. Either move them to the same pause/resume default as Windows or keep 350 ms warm pre-roll only with measured idle CPU and first-syllable evidence that justifies the cost.
 
 TODO: Replace fallback microphone device polling with platform event notifications when the audio layer is split: Windows `IMMNotificationClient`, PipeWire/PulseAudio registry events, and macOS `AudioObject` property listeners. Expose stream state, callback drops, and recovery counters through daemon status at the same time.
 
@@ -124,6 +109,8 @@ TODO: Add a Windows PE dependency-walker validation pass for the CPU bundle so r
 TODO: Run the full Windows BLAS/thread benchmark matrix for CPU builds, including no BLAS, OpenBLAS with controlled OpenMP ownership, and relevant `--threads` values against the pinned voice-memo smoke file. This is separate from upstream CrispASR issue #88 and remains open after the v0.6.6 pin.
 
 TODO: Re-run the problematic long dictation from CrispASR [issue #88](https://github.com/CrispStrobe/CrispASR/issues/88) against the pinned v0.6.6 backend. The pin includes the upstream NeMo parity fix for blank plus duration-0 TDT decode retries, and the upstream issue is closed. Remove this local note only after the original reproducer confirms that tail speech survives; add a temporary Parakit diagnostic workaround only if it still fails.
+
+TODO: Add native Linux and Windows CI coverage for target-gated desktop transports, input backends, and their tests.
 
 ## Updating [CrispASR](https://github.com/CrispStrobe/CrispASR)
 

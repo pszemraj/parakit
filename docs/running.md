@@ -8,7 +8,7 @@ parakit runs in the foreground by default. Use that mode once after install, the
 parakit doctor && parakit
 ```
 
-`parakit doctor` checks hotkey access, the selected microphone, insertion support, and the daemon singleton lock without downloading or loading the model. An already-running daemon makes readiness fail; use `parakit status` or `parakit stop` before starting another copy. It exits `0` when startup should proceed and `1` when a blocking issue remains, so it can be used directly in shell conditionals.
+`parakit doctor` checks hotkey access, the selected microphone, insertion support, and the daemon singleton lock without downloading or loading the model. An already-running daemon makes readiness fail. Starting again is harmless: `parakit start` prints `parakit: already running` and exits successfully. It exits `0` when startup should proceed and `1` when a blocking issue remains, so it can be used directly in shell conditionals.
 
 Useful variants:
 
@@ -90,11 +90,11 @@ Stop it:
 parakit stop
 ```
 
-`parakit stop` uses the local control socket. Use `pkill parakit` as a last resort if the process is wedged before the socket starts.
+`parakit stop` uses the local daemon control channel. Use `pkill parakit` as a last resort if the process is wedged before IPC starts.
 
-## Control Socket
+## Daemon Control
 
-When the daemon is running, these commands talk to it through local per-user IPC. Unix-like systems use a Unix socket under the parakit runtime directory; Windows uses a named pipe. After upgrading parakit in place, restart the daemon (`parakit stop`, then start it again): `copy-last` uses a wire format that is not compatible across the upgrade until the daemon restarts.
+When the daemon is running, these commands talk to it through local per-user IPC. Unix-like systems use a Unix socket under the parakit runtime directory; Windows uses a named pipe. Restart the daemon after upgrading parakit in place (`parakit stop`, then start it again). `copy-last` and `history` detect an older daemon that rejects their newer command shape and print the same restart hint.
 
 ```text
 parakit status
@@ -104,7 +104,9 @@ parakit history
 parakit test-paste "hello from parakit"
 ```
 
-The daemon keeps a ring buffer of recent transcripts in memory (`daemon.transcript_history` entries, 10 by default). `copy-last` acts on the most recent one by default; pass `N` (1-based, counting back from the most recent) to reach further back, e.g. `parakit copy-last 3` for the third-most-recent transcript. `parakit history` lists what the daemon currently remembers, newest first; `--limit N` caps how many entries print. The history ring is never written to disk and disappears when the daemon stops, so treat it as a same-session convenience rather than an archive; a [clipboard history manager](#insertion) is what carries dictations across restarts, and enabled [JSONL logging](#logging-and-sounds) independently persists them. `test-paste` runs clipboard staging, focus checks, paste sanitization, and the paste chord without using the microphone.
+`status` and `stop` are safe when no daemon is running. They print `parakit: not running` or `parakit: not running; nothing to stop` and exit successfully. Commands that need daemon state (`history`, `copy-last`, and `test-paste`) instead report that the daemon is not running and point to `parakit start`.
+
+The daemon keeps a ring buffer of recent transcripts in memory (`daemon.transcript_history` entries, 10 by default). `copy-last` acts on the most recent one by default; pass `N` (1-based, counting back from the most recent) to reach further back, e.g. `parakit copy-last 3` for the third-most-recent transcript. `parakit history` lists what the daemon currently remembers, newest first; `--limit N` caps how many entries print. The ring disappears when the daemon stops, so treat it as a same-session convenience. `test-paste` runs clipboard staging, focus checks, paste sanitization, and the paste chord without using the microphone.
 
 Plain `parakit status` output is unchanged and safe for scripts to parse:
 
@@ -203,11 +205,11 @@ parakit start --paste-mode direct
 
 `terminal` and `standard` stage plain text on the system clipboard and send the paste shortcut. Both give the target and clipboard history tools time to observe the staged text, then restore the previous clipboard contents when the clipboard API can round-trip them. Restore support covers text, HTML with a text alternative, copied file lists, and images exposed as normal platform image data. Browser-private image packages, WebP-only payloads, and other clipboard MIME formats are not restorable through `arboard`; when restore is required, parakit clears the staged transcript instead of leaving sensitive text as the active clipboard.
 
-`--keep-transcript-clipboard` leaves the transcript as the active clipboard after both successful pastes and blocked fallbacks. The default is to restore the previous supported clipboard contents after staging. On macOS, one case ignores this setting either way: if push-to-talk (or another) modifier key is still physically held down at paste time, sending the chord would post a different shortcut, so parakit skips it and keeps the transcript on the clipboard regardless of the configured policy. This is the quiet path — a "Transcript copied" notification and the success tone, not the error tone — logged as `copied_only`.
+`--keep-transcript-clipboard` leaves the transcript as the active clipboard after both successful pastes and blocked fallbacks. The default is to restore the previous supported clipboard contents after staging. On macOS, one case ignores this setting either way: if push-to-talk (or another) modifier key is still physically held down at paste time, sending the chord would post a different shortcut, so parakit skips it and keeps the transcript on the clipboard regardless of the configured policy. This is the quiet path - a "Transcript copied" notification and the success tone, not the error tone - logged as `copied_only`.
 
 Linux clipboard modes use a fixed-delay restore gate. Windows waits for its clipboard-update listener when available and falls back to timing. macOS waits for insertion evidence instead, described below.
 
-Run an OS or third-party clipboard history manager alongside parakit. parakit does not persist dictations on its own: the daemon's in-memory ring holds only the last `daemon.transcript_history` transcripts and is gone when the daemon stops, and [JSONL logging](#logging-and-sounds) writes nothing unless you set a log directory. A clipboard manager is what gives you durable access to something you dictated earlier, and it is also how you recover a transcript when the target application rejects the paste. On Windows, built-in clipboard history is opened with `Win+V` and must be enabled by the user.
+The daemon's transcript ring is not durable: it holds only the last `daemon.transcript_history` entries and disappears when the daemon stops. Enable [JSONL logging](logging.md) for parakit-managed durable transcript records. An OS or third-party clipboard history manager provides paste-oriented recovery when a target rejects an insertion; on Windows, built-in clipboard history opens with `Win+V` and must be enabled by the user.
 
 Clipboard history tools do retain transcript text after parakit restores the active clipboard. That is the point, but it also means dictated text outlives the paste; disable the manager if that retention is not acceptable for your workflow.
 
@@ -221,12 +223,9 @@ On macOS, parakit records the frontmost application's focused Accessibility UI e
 
 ### Paste Acknowledgement On macOS
 
-After the paste chord is sent, macOS polls the focused element's Accessibility value for evidence that the target consumed it, and only then decides what to do with the clipboard. Several outcomes are possible. When the transcript is seen in the target, the previous clipboard contents are restored (or cleared) per the usual policy. When the target exposes no readable value at all, which is normal for secure and password fields, no baseline value could be captured to compare later reads against, or a transcript under 12 normalized characters cannot be confirmed through an exact insertion delta because the target churned, the paste is treated as unverified and the clipboard is restored. When the target instead becomes unobservable partway through polling — its Accessibility object dies and the frontmost application changes, or its focus state can no longer be read at all — the paste is still treated as likely successful, but the clipboard is deliberately *not* restored: the target can never be re-checked, so the transcript is kept as the only remaining copy. The polling deadlines, matching rules, and the reasoning behind each tier are in [macos-desktop.md#insertion](macos-desktop.md#insertion). If restoring the previous clipboard itself fails after a paste that landed or was accepted as unverified-but-restorable, the paste is not retroactively treated as a failure: the same `pasted`/`pasted_unverified` result is logged with `clipboard_restored: false`, and parakit prints a warning that the transcript is likely still on the clipboard.
+After a paste chord is sent, macOS waits for Accessibility evidence before deciding whether to restore the clipboard. Confirmed and safely unverified pastes restore it; losing the target during confirmation or reaching the deadline with no insertion evidence keeps the transcript available. Direct typing and blocked insertions skip this step. The evidence tiers and clipboard decisions are in [macos-desktop.md#insertion](macos-desktop.md#insertion), and their JSONL representation is in [logging.md#insertion-outcomes](logging.md#insertion-outcomes).
 
-> [!IMPORTANT]
-> One outcome needs you to act. When a readable value never shows the transcript before the deadline, parakit leaves the transcript on the clipboard instead of restoring the previous contents, plays the error tone, and posts a notification. Look at the target before pressing `Cmd+V` yourself: parakit could not confirm the paste, but it may still have landed, and pasting again would insert a second copy.
-
-This step only runs after a paste chord has been sent, so direct typing and blocked insertions skip it.
+If parakit reports that a paste could not be confirmed, inspect the target before pressing `Cmd+V`: the paste may have landed even though Accessibility did not expose it.
 
 ### Repeated Failures
 
@@ -234,25 +233,13 @@ After repeated paste backend errors, parakit temporarily disables automatic past
 
 ## Logging And Sounds
 
-Text-only transcription logging:
+Enable text-only JSONL logging with:
 
 ```bash
 parakit start --log-dir "$HOME/.parakit/logs"
 ```
 
-> [!WARNING]
-> Logging stores raw and cleaned transcripts as plaintext, with no retention or size cap. Protect the directory and rotate or delete old files according to the sensitivity of your dictation.
-
-Audio and redirected console output are never included.
-
-Set the same directory persistently through the `logging.dir` config key instead of the flag; see [configuration.md](configuration.md) and [config_reference.toml](config_reference.toml). One append-only `parakit-YYYY-MM-DD.jsonl` file is written per local day. A completed dictation normally writes two independent, synchronously flushed lines: a transcription line as soon as the model and cleaner finish, then a later insertion line once parakit knows what happened to the paste attempt.
-
-```json
-{"ts":"2026-07-27T14:02:11.482Z","session_id":"2026-07-27T14:02:10.981234000Z-p4312-l0","record_id":7,"parakit_version":"0.4.0","audio_secs":4.21,"infer_ms":187,"raw":"so the build is green now.","cleaned":"So the build is green now","rules_active":25,"cleaner_version":8,"cleaning_profile":"safe","ruleset_id":"v8-safe-697797d1e998a158","drops_trailing_period":true,"number_threshold":4.0,"rules_fired":[{"name":"capitalize-sentence-starts","matches":1},{"name":"fix-trailing-period","matches":1}]}
-{"kind":"insertion","ts":"2026-07-27T14:02:11.930Z","session_id":"2026-07-27T14:02:10.981234000Z-p4312-l0","ref_id":7,"outcome":"pasted","target_bundle_id":"com.mitchellh.ghostty","focus_verification":"matched","transcript_chars":25,"paste_event_posted":true,"pasteboard_requested":null,"acknowledgement_kind":"ax_confirmed","acknowledgement_ms":312,"clipboard_restored":true,"failure_reason":null}
-```
-
-The transcription line is durable before insertion starts, so exiting during insertion can leave one without a corresponding outcome; when both writes succeed, join them by matching the transcription's (`session_id`, `record_id`) pair to the insertion's (`session_id`, `ref_id`) pair, which stays unambiguous across a daemon restart. `outcome` is one of `pasted`, `pasted_unverified`, `copied_only`, `blocked`, `skipped`, or `error`. The full field-by-field reference and what each outcome means are in [logging.md](logging.md).
+Set the same directory persistently with `logging.dir`. Logging is off by default and stores transcript text as plaintext. File layout, privacy implications, record correlation, and the complete schema are in [logging.md](logging.md).
 
 Disable cue tones:
 

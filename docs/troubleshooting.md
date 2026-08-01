@@ -10,7 +10,7 @@ parakit doctor --deep
 
 `parakit doctor` prints one status line each for `hotkey`, `daemon`, `mic`, and `insertion`. Whichever line reports `FAIL` tells you which section below to read.
 
-If a daemon is already running, use the control socket before starting another copy:
+If a daemon is already running, use its local control channel before starting another copy:
 
 ```text
 parakit status
@@ -30,15 +30,7 @@ The push-to-talk chord does nothing, or something else on the desktop reacts ins
    parakit stop
    ```
 
-4. Free the chord if another application already owns it. On GNOME/Ubuntu the usual owner is IBus input-source switching.
-
-   ```bash
-   gsettings get org.gnome.desktop.wm.keybindings switch-input-source
-   gsettings get org.gnome.desktop.wm.keybindings switch-input-source-backward
-   gsettings get org.gnome.desktop.input-sources xkb-options
-   ```
-
-   Output mentioning `<Control>space`, `<Ctrl>space`, or a left-control toggle is a conflict. Clear it in Settings > Keyboard > Keyboard Shortcuts, or run `ibus-setup` and remove `Ctrl+Space` from input-method switching. On macOS, check System Settings > Keyboard > Keyboard Shortcuts > Input Sources for `Control+Space` and `Control+Option+Space`.
+4. Free the chord if another application already owns it. Follow the conflict checks for [Linux](linux-desktop.md#shortcut-conflicts) or [macOS](macos-desktop.md#hotkey).
 
 5. On macOS, grant Accessibility and Input Monitoring to the terminal application that launches parakit, then restart parakit. The CoreGraphics event tap does not survive a privacy-setting change, so a hotkey that worked before you touched System Settings needs a restart to come back.
 6. On Linux, start parakit from a terminal opened in the current graphical login. A tmux server that outlived a logout carries stale `DISPLAY` or `XAUTHORITY` values, and `doctor` then reports an X11 error such as `Connection refused`.
@@ -55,7 +47,7 @@ A literal space reaches the focused application while you hold the chord.
 Normal dictation backends suppress the literal Space in the platform push-to-talk chord. Linux `x11-listen` is a passive debugging backend and deliberately does not suppress it, so switch off that backend first if you selected it. For any other backend:
 
 1. Confirm only one parakit process is running with `parakit status`.
-2. Confirm no desktop shortcut or input method also handles `Ctrl+Space` on Linux and Windows, or `Left Control+Space` on macOS. Use the `gsettings` checks in [Hotkey Problems](#hotkey-problems).
+2. Confirm no desktop shortcut or input method also handles `Ctrl+Space` on Linux and Windows, or `Left Control+Space` on macOS. Platform conflict checks are linked from [Hotkey Problems](#hotkey-problems).
 3. If you selected `evdev-proxy-experimental`, confirm `/dev/uinput` is writable and the input device can be grabbed. That backend suppresses the chord by grabbing a physical keyboard event device, so it needs both.
 
    ```bash
@@ -63,7 +55,7 @@ Normal dictation backends suppress the literal Space in the platform push-to-tal
    parakit doctor --hotkey-backend evdev-proxy-experimental
    ```
 
-4. Retry in foreground mode without `--quiet` to see the backend errors that background mode hides.
+4. Retry in foreground mode with `--verbose` for backend details. Errors and warnings remain on stderr even in quiet mode.
 5. Use an X11 session for Linux insertion. Wayland is rejected at startup, and an XWayland `DISPLAY` is not enough.
 
 If that did not fix it, backend behavior per Linux hotkey route is in [linux-desktop.md](linux-desktop.md).
@@ -108,7 +100,7 @@ The transcript is printed or logged but nothing arrives in the focused applicati
 6. On Linux, use an X11 session. Insertion goes through X11/XTest for every paste mode, including `direct`.
 7. On macOS, grant Accessibility and Input Monitoring to the terminal application that launches parakit, restart parakit, and rerun `parakit doctor --deep`. Stage 2 of the deep check needs an active GUI login, not an SSH-only session.
 8. On Windows, check whether the target runs elevated. A normal user process cannot inject into an administrator or elevated application, and parakit cannot work around that.
-9. If focus changed between the hotkey release and the paste, parakit skips the paste on purpose and leaves the transcript on the clipboard. Hold focus on the target until the success cue.
+9. If focus changed between the hotkey release and the paste, parakit skips automatic insertion on purpose. Recover the transcript with `history` or `copy-last`; clipboard modes also leave a copy in OS clipboard history. It remains the active clipboard only when the keep-transcript policy applies. Hold focus on the target until the success cue.
 10. If paste stopped working after several failures in a row, the insertion circuit breaker is open. It retries automatically after a short cooldown, so wait rather than restarting the daemon.
 
 If that did not fix it, paste modes, focus guards, and clipboard restore policy are in [running.md#insertion](running.md#insertion). Platform specifics are in [linux-desktop.md#deep-doctor-check](linux-desktop.md#deep-doctor-check), [macos-desktop.md#doctor---deep](macos-desktop.md#doctor---deep), and [windows-desktop.md#doctor---deep](windows-desktop.md#doctor---deep).
@@ -135,7 +127,7 @@ parakit sent `Cmd+V`, then polled the focused Accessibility element's value for 
 
 5. If JSONL logging is enabled, the insertion record for the dictation has `"outcome":"copied_only"` with `"acknowledgement_kind":"no_evidence"`. That distinguishes this case from `pasted_unverified`, which is the separate and quieter path taken when the field withholds its value entirely, as password and other secure fields do.
 
-If the notification never appears at all, some macOS versions file `osascript`-originated notifications under "Script Editor" rather than under "parakit"; check System Settings > Notifications. The three acknowledgement tiers and what each does to the clipboard are in [running.md#insertion](running.md#insertion).
+If the notification never appears at all, follow the macOS notification note in [macos-desktop.md#insertion](macos-desktop.md#insertion). Acknowledgement and clipboard outcomes are described there and in [logging.md#insertion-outcomes](logging.md#insertion-outcomes).
 
 ## Wrong Microphone
 
@@ -174,21 +166,9 @@ The build fails, the binary will not start, or the model will not load.
    git submodule update --init --recursive
    ```
 
-2. If a Vulkan build fails on `spirv/unified1/spirv.hpp`, `spirv-headers` is missing. It is a different package from `spirv-tools`:
-
-   ```bash
-   sudo apt install libvulkan-dev vulkan-tools glslc spirv-tools spirv-headers mesa-vulkan-drivers
-   ```
-
-3. If the binary builds but fails to load shared libraries on Linux, check that the executable carries `RPATH` rather than `RUNPATH`, so `libcrispasr.so` can find its sibling `libggml*.so` files:
-
-   ```bash
-   ldd target/debug/parakit | grep -E "crispasr|ggml"
-   readelf -d target/debug/parakit | grep -E "RPATH|RUNPATH"
-   ```
-
-4. On Windows, the executable needs its generated DLLs beside it. Build and install through the Windows scripts rather than copying `parakit.exe` on its own, then open a new terminal so the updated `PATH` applies.
-5. If the model fails to download or open, inspect the cache and force a refetch:
+2. For missing Vulkan headers or Linux shared-library load failures, follow the package list under [native dependencies](build.md#native-dependencies) and the [runtime library checks](build.md#runtime-library-paths).
+3. On Windows, the executable needs its generated DLLs beside it. Build and install through the Windows scripts rather than copying `parakit.exe` on its own, then open a new terminal so the updated `PATH` applies.
+4. If the model fails to download or open, inspect the cache and force a refetch:
 
    ```bash
    parakit cache dir
@@ -196,7 +176,7 @@ The build fails, the binary will not start, or the model will not load.
    parakit fetch --force
    ```
 
-   `-m /path/to/model.gguf` always wins and disables automatic fetch, so an unexpected model usually means an `-m` flag or a `PARAKIT_MODELS_DIR` override is still set.
+   `-m /path/to/model.gguf` overrides `daemon.model`; either custom-model setting disables automatic fetch. `PARAKIT_MODELS_DIR` only relocates the default model cache.
 
 If that did not fix it, native dependencies are in [build.md#native-dependencies](build.md#native-dependencies), library path rules are in [build.md#runtime-library-paths](build.md#runtime-library-paths), the Windows scripts are in [../scripts/windows/README.md](../scripts/windows/README.md), and cache behavior is in [running.md#model-cache](running.md#model-cache).
 
@@ -204,9 +184,9 @@ If that did not fix it, native dependencies are in [build.md#native-dependencies
 
 `parakit fetch` (the hosted default, `--from-source`, a Hugging Face repo, or a direct URL) fails with a TLS or connection error, or cannot reach `huggingface.co` at all.
 
-1. parakit builds `reqwest` with `rustls-tls-native-roots`, so the operating system's certificate store is used natively — no bundled CA list to fall out of date, and a corporate TLS-intercepting proxy's CA is trusted automatically once it is installed in that OS store. If you manage certificates through a separate PEM bundle instead, point `SSL_CERT_FILE` (or `SSL_CERT_DIR`) at it.
+1. parakit builds `reqwest` with `rustls-tls-native-roots`, so the operating system's certificate store is used natively - no bundled CA list to fall out of date, and a corporate TLS-intercepting proxy's CA is trusted automatically once it is installed in that OS store. If you manage certificates through a separate PEM bundle instead, point `SSL_CERT_FILE` (or `SSL_CERT_DIR`) at it.
 2. parakit also builds with the `system-proxy` feature, so `HTTPS_PROXY`, `HTTP_PROXY`, and `NO_PROXY` are honored the same way most other CLI tools read them. Set them if an egress proxy is required to reach the internet at all.
-3. If the download fails with a certificate-shaped error (mentions `certificate`, an unknown issuer, an invalid peer certificate, or a failed TLS handshake), parakit appends a hint to the error covering steps 1 and 2 automatically — read the full error text, not just the first line.
+3. If the download fails with a certificate-shaped error (mentions `certificate`, an unknown issuer, an invalid peer certificate, or a failed TLS handshake), parakit appends a hint to the error covering steps 1 and 2 automatically - read the full error text, not just the first line.
 4. If `huggingface.co` is blocked outright, set `HF_ENDPOINT` to an internal Nexus/Artifactory-style Hugging Face mirror. It is honored for the default hosted download, `--from-source`'s official `.nemo` checkpoint, and every `parakit fetch <owner>/<repo>` lookup.
 5. If the mirror (or a specific repo) requires authentication, set `HF_TOKEN` to a bearer token. It is only ever attached to requests that target the resolved `HF_ENDPOINT` host, never to an arbitrary `parakit fetch <url>` host.
 
