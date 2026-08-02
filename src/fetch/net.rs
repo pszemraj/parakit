@@ -14,7 +14,8 @@
 use anyhow::{bail, Context, Result};
 use reqwest::blocking::{Client, RequestBuilder};
 use reqwest::header::{
-    HeaderMap, HeaderValue, AUTHORIZATION, ETAG, IF_RANGE, LAST_MODIFIED, RANGE, USER_AGENT,
+    HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_RANGE, ETAG, IF_RANGE, LAST_MODIFIED, RANGE,
+    USER_AGENT,
 };
 use reqwest::StatusCode;
 use std::fs::{File, OpenOptions};
@@ -233,33 +234,39 @@ fn download_with_resume_inner(
     let (mut start, request) = prepare_download_request(client, url, path, bearer)?;
 
     let mut response = request.send().with_context(|| format!("GET {url}"))?;
+    let mut restart = false;
     match response.status() {
         StatusCode::OK => {
             if start > 0 {
                 start = 0;
             }
         }
-        StatusCode::PARTIAL_CONTENT if start > 0 => {}
+        StatusCode::PARTIAL_CONTENT if start > 0 => {
+            restart = content_range_start(response.headers()) != Some(start);
+        }
         StatusCode::PARTIAL_CONTENT => {
             bail!("download returned partial content without a range request")
         }
         StatusCode::RANGE_NOT_SATISFIABLE => {
-            super::remove_if_exists(path)?;
-            let _ = super::remove_if_exists(&resume_validator_path(path));
-            response = attach_bearer(client.get(url), bearer)
-                .send()
-                .with_context(|| format!("GET {url}"))?;
-            if response.status() != StatusCode::OK {
-                bail!(
-                    "download restart failed with HTTP status {}",
-                    response.status()
-                );
-            }
-            start = 0;
+            restart = true;
         }
         status => {
             bail!("download failed with HTTP status {status}");
         }
+    }
+    if restart {
+        super::remove_if_exists(path)?;
+        let _ = super::remove_if_exists(&resume_validator_path(path));
+        response = attach_bearer(client.get(url), bearer)
+            .send()
+            .with_context(|| format!("GET {url}"))?;
+        if response.status() != StatusCode::OK {
+            bail!(
+                "download restart failed with HTTP status {}",
+                response.status()
+            );
+        }
+        start = 0;
     }
 
     let validator_path = resume_validator_path(path);
@@ -279,6 +286,17 @@ fn download_with_resume_inner(
     file.flush()?;
     let _ = super::remove_if_exists(&validator_path);
     Ok(())
+}
+
+fn content_range_start(headers: &HeaderMap) -> Option<u64> {
+    let value = headers.get(CONTENT_RANGE)?.to_str().ok()?;
+    let (unit, range) = value.split_once(' ')?;
+    if !unit.eq_ignore_ascii_case("bytes") {
+        return None;
+    }
+    let (range, _) = range.split_once('/')?;
+    let (start, _) = range.split_once('-')?;
+    start.parse().ok()
 }
 
 fn prepare_download_request(
@@ -335,6 +353,9 @@ fn save_resume_validator(path: &Path, headers: &HeaderMap) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Read;
+    use std::net::TcpListener;
+    use std::thread;
 
     #[test]
     fn normalize_endpoint_trims_trailing_slash() {
@@ -473,6 +494,49 @@ mod tests {
         assert!(!partial.exists());
         assert!(!request.headers().contains_key(RANGE));
         assert!(!request.headers().contains_key(IF_RANGE));
+    }
+
+    #[test]
+    fn invalid_content_range_restarts_instead_of_appending() {
+        for (name, content_range) in [
+            ("missing-content-range", None),
+            ("mismatched-content-range", Some("bytes 1-3/8")),
+        ] {
+            let dir = crate::test_support::fixture_root("parakit-fetch-tests", name);
+            std::fs::create_dir_all(&dir).unwrap();
+            let partial = dir.join("model.gguf.part");
+            std::fs::write(&partial, b"old").unwrap();
+            let mut response_headers = HeaderMap::new();
+            response_headers.insert(ETAG, HeaderValue::from_static("\"revision-1\""));
+            save_resume_validator(&resume_validator_path(&partial), &response_headers);
+
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let url = format!("http://{}/model.gguf", listener.local_addr().unwrap());
+            let content_range = content_range
+                .map(|value| format!("Content-Range: {value}\r\n"))
+                .unwrap_or_default();
+            let server = thread::spawn(move || {
+                let responses = [
+                    format!(
+                        "HTTP/1.1 206 Partial Content\r\n{content_range}Content-Length: 3\r\nConnection: close\r\n\r\nbad"
+                    ),
+                    "HTTP/1.1 200 OK\r\nContent-Length: 8\r\nConnection: close\r\n\r\ncomplete"
+                        .to_string(),
+                ];
+                for response in responses {
+                    let (mut stream, _) = listener.accept().unwrap();
+                    let mut request = [0_u8; 2048];
+                    stream.read(&mut request).unwrap();
+                    stream.write_all(response.as_bytes()).unwrap();
+                }
+            });
+
+            let client = Client::builder().no_proxy().build().unwrap();
+            download_with_resume(&client, &url, &partial, None).unwrap();
+            server.join().unwrap();
+
+            assert_eq!(std::fs::read(&partial).unwrap(), b"complete", "{name}");
+        }
     }
 
     #[test]
