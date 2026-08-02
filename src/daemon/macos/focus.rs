@@ -559,7 +559,22 @@ fn cfstring_range_to_string(value: CFStringRef, location: usize, length: usize) 
             );
         }
     }
-    Some(String::from_utf16_lossy(&units))
+    let total_length = usize::try_from(unsafe { CFStringGetLength(value) }).ok()?;
+    let range_end = location.checked_add(length)?;
+    let start = usize::from(
+        location > 0
+            && units
+                .first()
+                .is_some_and(|unit| matches!(*unit, 0xDC00..=0xDFFF)),
+    );
+    let end = length
+        - usize::from(
+            range_end < total_length
+                && units
+                    .last()
+                    .is_some_and(|unit| matches!(*unit, 0xD800..=0xDBFF)),
+        );
+    Some(String::from_utf16_lossy(&units[start..end]))
 }
 
 #[cfg(test)]
@@ -599,6 +614,46 @@ mod tests {
         assert_eq!(bounded.tail.as_deref(), Some("z".repeat(32).as_str()));
         assert_eq!(bounded.utf16_units, 160);
         assert_eq!(bounded.selection, None);
+    }
+
+    #[test]
+    fn cfstring_conversion_does_not_split_surrogate_pairs_at_bounded_ends() {
+        for (input, expected_head, expected_tail) in [
+            (
+                format!("{}😀{}", "a".repeat(31), "z".repeat(80)),
+                "a".repeat(31),
+                "z".repeat(32),
+            ),
+            (
+                format!("{}😀{}", "a".repeat(80), "z".repeat(31)),
+                "a".repeat(32),
+                "z".repeat(31),
+            ),
+        ] {
+            let value = unsafe {
+                CFStringCreateWithBytes(
+                    ptr::null(),
+                    input.as_ptr(),
+                    input.len() as CFIndex,
+                    K_CF_STRING_ENCODING_UTF8,
+                    0,
+                )
+            };
+            assert!(!value.is_null());
+            let value = AxElementHandle(value.cast_mut());
+
+            let bounded =
+                cfstring_to_bounded_value(value.as_cftype().cast(), 64).expect("valid CFString");
+
+            assert_eq!(bounded.head, expected_head);
+            assert_eq!(bounded.tail.as_deref(), Some(expected_tail.as_str()));
+            assert!(!bounded.head.contains('\u{fffd}'));
+            assert!(!bounded
+                .tail
+                .as_deref()
+                .unwrap_or_default()
+                .contains('\u{fffd}'));
+        }
     }
 
     #[test]
