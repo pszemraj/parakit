@@ -145,6 +145,26 @@ fn quiet_rules_list_still_validates_disabled_rule_names() {
     assert!(String::from_utf8_lossy(&output.stderr).contains("no rule named 'typo'"));
 }
 
+#[test]
+fn cache_list_includes_uppercase_gguf_extensions() {
+    let root = common::fixture_root("cli-contracts", "uppercase-gguf-cache");
+    let models = root.join("models");
+    std::fs::create_dir_all(&models).expect("models directory should be created");
+    std::fs::write(models.join("MODEL.GGUF"), b"").expect("model fixture should be written");
+
+    let output = isolated_parakit(&root)
+        .args(["cache", "list"])
+        .env("PARAKIT_MODELS_DIR", &models)
+        .output()
+        .expect("parakit should run");
+
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("MODEL.GGUF"), "{stdout}");
+    assert!(!stdout.contains("models: none"), "{stdout}");
+}
+
 #[cfg(unix)]
 #[test]
 fn daemon_only_commands_report_an_absent_daemon_cleanly() {

@@ -898,7 +898,12 @@ fn list_gguf_files(dir: &Path) -> Vec<PathBuf> {
     let mut entries: Vec<_> = read
         .filter_map(Result::ok)
         .map(|entry| entry.path())
-        .filter(|path| path.is_file() && path.extension().is_some_and(|ext| ext == "gguf"))
+        .filter(|path| {
+            path.is_file()
+                && path
+                    .extension()
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("gguf"))
+        })
         .collect();
     entries.sort();
     entries
