@@ -186,14 +186,13 @@ fn run_rules_command(cli: &Cli, rules_cli: &RulesCli) -> Result<()> {
     let default_command = RulesCommand::List(RulesArgs::default());
     match rules_cli.command.as_ref().unwrap_or(&default_command) {
         RulesCommand::List(args) => {
-            if !cli.quiet {
-                rules::print_rule_list(
-                    args.effective_cleaning_profile(&config),
-                    args.effective_drops_trailing_period(&config),
-                    &args.effective_disabled_rules(&config),
-                    &config.rules.user,
-                )?;
-            }
+            rules::print_rule_list(
+                args.effective_cleaning_profile(&config),
+                args.effective_drops_trailing_period(&config),
+                &args.effective_disabled_rules(&config),
+                &config.rules.user,
+                cli.quiet,
+            )?;
             Ok(())
         }
         RulesCommand::Test { input, args } => {

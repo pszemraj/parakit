@@ -127,6 +127,24 @@ fn quiet_path_commands_still_report_resolution_and_parse_errors() {
     }
 }
 
+#[test]
+fn quiet_rules_list_still_validates_disabled_rule_names() {
+    let root = common::fixture_root("cli-contracts", "quiet-rules-validation");
+    std::fs::create_dir_all(&root).expect("fixture root should be created");
+    let config = root.join("config.toml");
+    std::fs::write(&config, "").expect("empty config fixture should be written");
+
+    let output = isolated_parakit(&root)
+        .args(["--quiet", "rules", "list", "--disable-rule", "typo"])
+        .env("PARAKIT_CONFIG_PATH", &config)
+        .output()
+        .expect("parakit should run");
+
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("no rule named 'typo'"));
+}
+
 #[cfg(unix)]
 #[test]
 fn daemon_only_commands_report_an_absent_daemon_cleanly() {

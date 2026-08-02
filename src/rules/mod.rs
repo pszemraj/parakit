@@ -314,10 +314,12 @@ pub fn assert_rule_name_exists(name: &str, user_rules: &[UserRule]) -> Result<()
 ///   `cleaning.disabled_rules`.
 /// * `user_rules` - User-defined rules, printed in a separate section below
 ///   the built-in table when non-empty.
+/// * `quiet` - Suppress the table after validating all rule inputs.
 ///
 /// # Returns
 ///
-/// `Ok(())` after printing the table(s) to stdout.
+/// `Ok(())` after validation and, unless `quiet`, printing the table(s) to
+/// stdout.
 ///
 /// # Errors
 ///
@@ -328,8 +330,12 @@ pub fn print_rule_list(
     drop_trailing_period: bool,
     disabled_rules: &[String],
     user_rules: &[UserRule],
+    quiet: bool,
 ) -> Result<()> {
     validate_rule_inputs(None, disabled_rules, user_rules)?;
+    if quiet {
+        return Ok(());
+    }
     let disabled: HashSet<&str> = disabled_rules.iter().map(String::as_str).collect();
     print!(
         "{}",
