@@ -285,10 +285,34 @@ fn use_cached_download(
 fn url_file_name(url: &str) -> Result<String> {
     let without_extras = url.split(['?', '#']).next().unwrap_or(url);
     let name = without_extras.rsplit(['/', '\\']).next().unwrap_or("");
-    if name.is_empty() {
-        bail!("URL has no usable file name segment: {url}");
-    }
+    validate_download_file_name(name)
+        .with_context(|| format!("URL has no usable file name segment: {url}"))?;
     Ok(name.to_string())
+}
+
+fn validate_download_file_name(name: &str) -> Result<()> {
+    if name.is_empty() || matches!(name, "." | "..") {
+        bail!("file name segment is empty or relative");
+    }
+    let stem = name
+        .split('.')
+        .next()
+        .unwrap_or(name)
+        .trim_end_matches(' ')
+        .to_uppercase();
+    let numbered_device = ["COM", "LPT"].iter().any(|prefix| {
+        stem.strip_prefix(prefix).is_some_and(|suffix| {
+            let mut chars = suffix.chars();
+            matches!(
+                (chars.next(), chars.next()),
+                (Some('1'..='9' | '¹' | '²' | '³'), None)
+            )
+        })
+    });
+    if matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL") || numbered_device {
+        bail!("file name '{name}' is reserved on Windows");
+    }
+    Ok(())
 }
 
 /// Print the three-line "model ready" hint used by non-default fetch sources
@@ -773,6 +797,41 @@ mod tests {
             (
                 "rejects a URL whose path ends in a slash",
                 "https://example.com/models/",
+                None,
+            ),
+            (
+                "rejects a parent-directory segment",
+                "https://example.com/models/..",
+                None,
+            ),
+            (
+                "rejects a Windows device name with an extension",
+                "https://example.com/models/CON.gguf",
+                None,
+            ),
+            (
+                "rejects a numbered Windows device name case-insensitively",
+                "https://example.com/models/com1.GGUF",
+                None,
+            ),
+            (
+                "does not reject a device-name prefix",
+                "https://example.com/models/computer.gguf",
+                Some("computer.gguf"),
+            ),
+            (
+                "does not reject a device number outside the reserved range",
+                "https://example.com/models/LPT10.gguf",
+                Some("LPT10.gguf"),
+            ),
+            (
+                "rejects a device name before a second extension",
+                "https://example.com/models/prn.model.gguf",
+                None,
+            ),
+            (
+                "rejects a device name with a superscript digit",
+                "https://example.com/models/lpt².gguf",
                 None,
             ),
         ] {

@@ -262,6 +262,13 @@ fn hub_cache_dir(models_dir: &Path, owner: &str, repo: &str, revision: &str) -> 
         .join(format!("{owner}--{repo}--{revision_key}"))
 }
 
+fn hub_file_name(rfilename: &str) -> Result<&str> {
+    let basename = rfilename.rsplit(['/', '\\']).next().unwrap_or("");
+    super::validate_download_file_name(basename)
+        .with_context(|| format!("repo file '{rfilename}' has no usable file name"))?;
+    Ok(basename)
+}
+
 fn fetch_repo_metadata(
     client: &Client,
     endpoint: &str,
@@ -345,9 +352,7 @@ pub(super) fn run_hub_repo(
     let models_dir = crate::model::models_dir()?;
     let dest_dir = hub_cache_dir(&models_dir, owner, name, revision);
     std::fs::create_dir_all(&dest_dir).with_context(|| format!("create {}", dest_dir.display()))?;
-    let basename = Path::new(&sibling.rfilename)
-        .file_name()
-        .ok_or_else(|| anyhow!("repo file '{}' has no usable file name", sibling.rfilename))?;
+    let basename = hub_file_name(&sibling.rfilename)?;
     let dest = dest_dir.join(basename);
 
     let resolve = resolve_url(endpoint, owner, name, revision, &sibling.rfilename);
@@ -661,5 +666,19 @@ mod tests {
         assert_ne!(main, slash_revision);
         let component = slash_revision.file_name().unwrap().to_string_lossy();
         assert!(!component.contains(['/', '\\']));
+    }
+
+    #[test]
+    fn selected_hub_file_names_are_portable() {
+        for (name, expect_valid) in [
+            ("nested/model-Q8_0.gguf", true),
+            ("nested\\model-Q8_0.gguf", true),
+            ("nested/CON.gguf", false),
+            ("nested/lpt1.model.gguf", false),
+            ("nested/..", false),
+            ("nested/", false),
+        ] {
+            assert_eq!(hub_file_name(name).is_ok(), expect_valid, "{name}");
+        }
     }
 }
