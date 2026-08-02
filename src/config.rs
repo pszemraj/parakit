@@ -391,6 +391,8 @@ transcript_history = 25
 
 [cleaning]
 enabled = false
+profile = "aggressive"
+keep_trailing_period = true
 number_threshold = 5
 disabled_rules = ["fix-trailing-period", "filled-pauses"]
 
@@ -420,6 +422,8 @@ position = "first"
         assert_eq!(config.daemon.transcript_history, Some(25));
 
         assert_eq!(config.cleaning.enabled, Some(false));
+        assert_eq!(config.cleaning.profile, Some(CleaningProfile::Aggressive));
+        assert_eq!(config.cleaning.keep_trailing_period, Some(true));
         assert_eq!(config.cleaning.number_threshold, Some(5.0));
         assert_eq!(
             config.cleaning.disabled_rules,
@@ -433,6 +437,9 @@ position = "first"
 
         assert_eq!(config.rules.user.len(), 1);
         assert_eq!(config.rules.user[0].name, "custom-hello");
+        assert_eq!(config.rules.user[0].description.as_deref(), Some("greet"));
+        assert_eq!(config.rules.user[0].pattern, "(?i)hi");
+        assert_eq!(config.rules.user[0].replacement, "hello");
         assert_eq!(
             config.rules.user[0].position,
             parakit::rules::RulePosition::First

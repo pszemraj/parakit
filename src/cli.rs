@@ -886,6 +886,43 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn effective_hotkey_backend_prefers_cli_then_config_then_auto() {
+        let mut config = ConfigFile::default();
+        assert_eq!(
+            start_from(&[]).effective_hotkey_backend(&config),
+            HotkeyBackend::Auto
+        );
+
+        config.hotkey.backend = Some(HotkeyBackend::X11Listen);
+        assert_eq!(
+            start_from(&[]).effective_hotkey_backend(&config),
+            HotkeyBackend::X11Listen
+        );
+        assert_eq!(
+            start_from(&["--hotkey-backend", "desktop"]).effective_hotkey_backend(&config),
+            HotkeyBackend::Desktop
+        );
+
+        let doctor = |args: &[&str]| {
+            let mut full = vec!["parakit", "doctor"];
+            full.extend_from_slice(args);
+            match Cli::parse_from(full).command {
+                Some(Commands::Doctor(doctor)) => doctor,
+                other => panic!("expected Commands::Doctor, got {other:?}"),
+            }
+        };
+        assert_eq!(
+            doctor(&[]).effective_hotkey_backend(&config),
+            HotkeyBackend::X11Listen
+        );
+        assert_eq!(
+            doctor(&["--hotkey-backend", "desktop"]).effective_hotkey_backend(&config),
+            HotkeyBackend::Desktop
+        );
+    }
+
     #[test]
     fn doctor_effective_paste_mode_prefers_cli_then_config_then_platform_default() {
         let mut config = ConfigFile::default();

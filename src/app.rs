@@ -847,20 +847,23 @@ fn format_warmup_sequence(sequence: &[usize]) -> String {
 }
 
 fn run_cache_command(cache: &CacheCli, quiet: bool) -> Result<()> {
-    if quiet {
-        return Ok(());
-    }
     match cache.command.as_ref().unwrap_or(&CacheCommand::List) {
         CacheCommand::Dir => {
-            println!("{}", model::models_dir()?.display());
+            let dir = model::models_dir()?;
+            if !quiet {
+                println!("{}", dir.display());
+            }
         }
-        CacheCommand::List => print_cache_list()?,
+        CacheCommand::List => print_cache_list(quiet)?,
     }
     Ok(())
 }
 
-fn print_cache_list() -> Result<()> {
+fn print_cache_list(quiet: bool) -> Result<()> {
     let dir = model::models_dir()?;
+    if quiet {
+        return Ok(());
+    }
     println!("parakit cache");
     println!("  dir: {}", dir.display());
     if !dir.is_dir() {
@@ -950,8 +953,9 @@ fn format_file_size(bytes: u64) -> String {
 fn run_config_command(config_cli: &ConfigCli, quiet: bool) -> Result<()> {
     match config_cli.command.as_ref().unwrap_or(&ConfigCommand::Show) {
         ConfigCommand::Path => {
+            let path = config::config_path()?;
             if !quiet {
-                println!("{}", config::config_path()?.display());
+                println!("{}", path.display());
             }
         }
         ConfigCommand::Init { force } => init_config_file(*force, quiet)?,
@@ -1003,12 +1007,11 @@ fn init_config_file(force: bool, quiet: bool) -> Result<()> {
 /// Returns an error if the config path cannot be resolved or the config
 /// file exists but fails to parse or validate.
 fn print_config_show(quiet: bool) -> Result<()> {
+    let path = config::config_path()?;
+    let config = config::load()?;
     if quiet {
         return Ok(());
     }
-
-    let path = config::config_path()?;
-    let config = config::load()?;
     let start = StartCli::default();
 
     println!("parakit config");

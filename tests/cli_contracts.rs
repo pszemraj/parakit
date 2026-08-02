@@ -20,34 +20,110 @@ fn isolated_parakit(root: &Path) -> Command {
 }
 
 #[test]
-fn broken_config_does_not_block_control_commands() {
+fn broken_config_does_not_block_documented_control_and_repair_commands() {
     let root = common::fixture_root("cli-contracts", "broken-config-control");
     std::fs::create_dir_all(&root).expect("fixture root should be created");
     let config = root.join("broken.toml");
     std::fs::write(&config, "not = [valid").expect("broken config fixture should be written");
 
-    // Status is read-only and safe on a developer machine. On Unix, isolate
-    // the daemon endpoint under this fixture as well, which makes Stop safe to
-    // cover without contacting a live daemon. The Windows named pipe is keyed
-    // directly by the user's SID and has no test-path override, so never send
-    // Stop there.
-    let commands: &[&str] = if cfg!(unix) {
-        &["status", "stop"]
-    } else {
-        &["status"]
-    };
-
-    for command in commands {
+    let local_commands: &[&[&str]] = &[
+        &["fetch", "not-a-repo-or-url"],
+        &["cache", "dir"],
+        &["cache", "list"],
+        &["config", "path"],
+        &["config", "init"],
+        &["config", "edit"],
+    ];
+    for args in local_commands {
         let mut process = isolated_parakit(&root);
-        process.arg(command).env("PARAKIT_CONFIG_PATH", &config);
+        process
+            .args(*args)
+            .env("PARAKIT_CONFIG_PATH", &config)
+            .env_remove("VISUAL")
+            .env_remove("EDITOR");
         let output = process.output().expect("parakit should run");
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(
-            !stderr.contains("failed to parse config")
-                && !stderr.contains("failed to read config")
-                && !stderr.contains(&config.display().to_string()),
-            "{command} unexpectedly loaded the broken config: {stderr}"
+            !stderr.contains("failed to parse config") && !stderr.contains("failed to read config"),
+            "{args:?} unexpectedly loaded the broken config: {stderr}"
         );
+    }
+
+    // Unix daemon endpoints are isolated under XDG_RUNTIME_DIR. The Windows
+    // named pipe is keyed directly by the user's SID and has no test-path
+    // override, so these commands must not contact it from the test suite.
+    #[cfg(unix)]
+    for args in [
+        &["status"][..],
+        &["stop"][..],
+        &["copy-last"][..],
+        &["history"][..],
+        &["test-paste", "test"][..],
+    ] {
+        let output = isolated_parakit(&root)
+            .args(args)
+            .env("PARAKIT_CONFIG_PATH", &config)
+            .output()
+            .expect("parakit should run");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            !stderr.contains("failed to parse config") && !stderr.contains("failed to read config"),
+            "{args:?} unexpectedly loaded the broken config: {stderr}"
+        );
+    }
+}
+
+#[test]
+fn quiet_path_commands_still_report_resolution_and_parse_errors() {
+    let root = common::fixture_root("cli-contracts", "quiet-path-errors");
+    std::fs::create_dir_all(&root).expect("fixture root should be created");
+    let broken_config = root.join("broken.toml");
+    std::fs::write(&broken_config, "not = [valid").expect("write broken config fixture");
+
+    let cases: &[(&[&str], &str, Option<&Path>)] = &[
+        (
+            &["--quiet", "config", "path"],
+            "PARAKIT_CONFIG_PATH is set but empty",
+            None,
+        ),
+        (
+            &["--quiet", "cache", "dir"],
+            "PARAKIT_MODELS_DIR is set but empty",
+            None,
+        ),
+        (
+            &["--quiet", "cache", "list"],
+            "PARAKIT_MODELS_DIR is set but empty",
+            None,
+        ),
+        (
+            &["--quiet", "config", "show"],
+            "failed to parse config file",
+            Some(&broken_config),
+        ),
+    ];
+
+    for (args, expected_error, config_path) in cases {
+        let mut process = isolated_parakit(&root);
+        process.args(*args);
+        if args[1] == "config" {
+            match config_path {
+                Some(path) => {
+                    process.env("PARAKIT_CONFIG_PATH", path);
+                }
+                None => {
+                    process.env("PARAKIT_CONFIG_PATH", "");
+                }
+            }
+        } else {
+            process.env("PARAKIT_MODELS_DIR", "");
+        }
+
+        let output = process.output().expect("parakit should run");
+        assert!(!output.status.success(), "{args:?}");
+        assert!(output.stdout.is_empty(), "{args:?}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains(expected_error), "{args:?}: {stderr}");
     }
 }
 
