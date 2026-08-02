@@ -1,35 +1,11 @@
 # Development Notes
 
-## Git Hooks
-
-The repository ships a pre-commit hook in `.githooks/`. Enable it once per clone:
-
-```bash
-git config core.hooksPath .githooks
-```
-
-Every commit is checked for conflict markers, whitespace errors, and accidental `vendor/` submodule pointer bumps. Commits that stage Rust files or `Cargo.toml`/`Cargo.lock` additionally run:
-
-- `cargo fmt --package parakit -- --check` (package-scoped so the vendored CrispASR submodule is never reformatted)
-- [rustdoc-checker](https://github.com/pszemraj/rustdoc-checker) in `--strict` mode, excluding `target`, `vendor`, `.claude`, and `local-scratch` (skipped with a warning when not installed)
-- `cargo clippy --package parakit --all-targets -- -D warnings` (package-scoped so known vendored-crate deprecation warnings do not gate commits)
-
-Bypass a single commit with `git commit --no-verify`. The hook is a fast gate,
-not the [full validation loop](quality.md#rust-validation-loop), which still
-runs before pushing runtime changes.
-
-Install rustdoc-checker with:
-
-```bash
-cargo install --git https://github.com/pszemraj/rustdoc-checker.git
-```
-
 Source-coverage setup and report commands are in
 [quality.md#rust-source-coverage](quality.md#rust-source-coverage).
 
 ## Model Artifacts
 
-End-user download, cache, checksum, and model-override behavior is in
+End-user download, cache, and model-override behavior is in
 [running.md#model-cache](../running.md#model-cache).
 
 Hosted release files:
@@ -56,7 +32,7 @@ That path downloads [NVIDIA's official `.nemo`](https://huggingface.co/nvidia/pa
 
 On Windows, the hosted Q8_0 path is the normal model setup. `fetch --from-source` requires a compatible `crispasr-quantize.exe` on `PATH` because bundled CPU builds skip the CrispASR examples tree under MSVC.
 
-After rebuilding a release artifact, upload F16 and Q8_0 to the hosted repo and update `HOSTED_Q8_SHA256` in `src/model.rs` if the Q8_0 bytes changed.
+After rebuilding a release artifact, upload F16 and Q8_0 to the hosted repo.
 
 GPU build and runtime checks are in [quality.md#gpu-feature-validation](quality.md#gpu-feature-validation).
 
@@ -70,9 +46,9 @@ Current Rust files over the approximate 1k LoC target:
 | `src/daemon/desktop/inject.rs` | Owns the cross-platform clipboard transaction and insertion contract. Split clipboard, X11 paste, and focus code without changing paste safety. |
 | `src/daemon/ipc.rs` | Contains both Unix-socket and Windows named-pipe transports plus their policy tests. Extract the Windows transport after its behavior settles. |
 | `src/daemon/macos/diagnostics.rs` | Owns the AppKit probe window and the two-stage macOS deep insertion check. Extract the probe-window harness if either diagnostic stage grows. |
-| `src/daemon/worker.rs` | Coordinates ASR, cleaning, logging, recovery history, and the insertion circuit breaker. Extract stable policy helpers without splitting the end-to-end worker state machine. |
+| `src/daemon/worker.rs` | Coordinates ASR, cleaning, logging, recovery history, and insertion. Extract stable policy helpers without splitting the end-to-end worker state machine. |
 | `src/app.rs` | Holds top-level command dispatch and daemon bootstrap. Extract command handlers when a stable subsystem boundary appears. |
-| `src/cli.rs` | Keeps clap declarations, effective-option precedence, migration hints, and their shared parser tests together. Split declarations from resolution policy after the new command surface settles. |
+| `src/cli.rs` | Keeps clap declarations, effective-option precedence, and parser tests together. Split declarations from resolution policy after the new command surface settles. |
 | `src/daemon/desktop/hotkey.rs` | Is only slightly over the target and already delegates macOS code. Extract Linux backend implementations if it grows further. |
 | `src/daemon/desktop/inject_tests.rs` | Keeps the clipboard and insertion transaction regression matrix together. Split by transaction phase when shared fixtures no longer dominate. |
 | `src/daemon/macos/pasteboard.rs` | Owns the macOS paste-acknowledgement evidence policy: baseline capture, confirmation polling, transcript matching, and their regression tests, which dominate the count. Extract `TranscriptMatcher` and its tests into a sibling module if the evidence rules grow further. |

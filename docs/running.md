@@ -94,7 +94,7 @@ parakit stop
 
 ## Daemon Control
 
-When the daemon is running, these commands talk to it through local per-user IPC. Unix-like systems use a Unix socket under the parakit runtime directory; Windows uses a named pipe. Restart the daemon after upgrading parakit in place (`parakit stop`, then start it again). `copy-last` and `history` detect an older daemon that rejects their newer command shape and print the same restart hint.
+When the daemon is running, these commands talk to it through local per-user IPC. Unix-like systems use a Unix socket under the parakit runtime directory; Windows uses a named pipe. Restart the daemon after upgrading parakit in place (`parakit stop`, then start it again).
 
 ```text
 parakit status
@@ -154,7 +154,7 @@ parakit start -m /path/to/model.gguf
 
 `-m <path>` always wins and disables automatic fetch.
 
-For locked-down or offline machines, seed the default model by placing `parakeet-tdt-0.6b-v3-Q8_0.gguf` in the directory printed by `parakit cache dir`. On the next startup, parakit verifies the compiled-in SHA256 and writes the cache manifest. Use `PARAKIT_MODELS_DIR` when the approved model location is managed by IT or shared across a build image.
+For locked-down or offline machines, seed the default model by placing `parakeet-tdt-0.6b-v3-Q8_0.gguf` in the directory printed by `parakit cache dir`. Use `PARAKIT_MODELS_DIR` when the approved model location is managed by IT or shared across a build image.
 
 ### Other GGUF Builds
 
@@ -167,9 +167,9 @@ parakit fetch handy-computer/parakeet-tdt-0.6b-v3-gguf@main
 parakit fetch https://example.com/models/parakeet-q8.gguf --sha256 <64-hex-sha256>
 ```
 
-The first positional argument is either a Hugging Face repo (`owner/repo`, optionally `owner/repo@revision`) or a direct `http://`/`https://` URL. Other URL schemes are rejected before any request. For a repo source, `--file` selects a specific `.gguf` file when the repo publishes more than one and none of them is uniquely named `q8_0`; otherwise parakit auto-selects the sole `.gguf` file, or the sole `q8_0` file among several. `--sha256` pins the expected checksum and overrides a checksum reported by Hugging Face. When no upstream checksum exists, parakit prints the computed digest to stderr and records it with the exact source URL as a trust-on-first-use baseline for later cache checks. Resumed downloads use the server's strong ETag or Last-Modified value through `If-Range`; a partial with no validator restarts instead of being appended blindly. `--force` discards any partial and replaces the recorded baseline with the new completed download.
+The first positional argument is either a Hugging Face repo (`owner/repo`, optionally `owner/repo@revision`) or a direct `http://`/`https://` URL. Other URL schemes are rejected before any request. For a repo source, `--file` selects a specific `.gguf` file when the repo publishes more than one and none of them is uniquely named `q8_0`; otherwise parakit auto-selects the sole `.gguf` file, or the sole `q8_0` file among several. `--sha256` checks the completed download when you explicitly supply it; parakit does not otherwise hash models or turn an unpinned URL into a persistent checksum policy. Resumed downloads use the server's strong ETag or Last-Modified value through `If-Range`; a partial with no usable validator restarts instead of being appended blindly. `--force` discards any partial and replaces the cached file.
 
-Repo fetches land under a revision-keyed `<cache dir>/hub/<owner>--<repo>--<revision-key>/<file>` directory; URL fetches land under `<cache dir>/url/<file>`. Different revisions therefore cannot overwrite or resume onto one another. Both source classes are separate from the canonical top-level `parakeet-tdt-0.6b-v3-Q8_0.gguf`, and different repos remain separate even when they publish identically named files. `parakit cache list` shows every fetched model, including these, with a checksum status. These fetched models are never picked up automatically: activate one with `parakit start -m <path>` or by setting `daemon.model = "<path>"` in `config.toml`, exactly as with any other custom GGUF.
+Repo fetches land under a revision-keyed `<cache dir>/hub/<owner>--<repo>--<revision-key>/<file>` directory; URL fetches land under `<cache dir>/url/<url-key>/<file>`, where the key separates exact source URLs that share a filename. Different revisions and URLs therefore cannot overwrite or resume onto one another. Both source classes are separate from the canonical top-level `parakeet-tdt-0.6b-v3-Q8_0.gguf`, and different repos remain separate even when they publish identically named files. `parakit cache list` shows each model's path, GGUF type, and size without reading every model to compute hashes. These fetched models are never picked up automatically: activate one with `parakit start -m <path>` or by setting `daemon.model = "<path>"` in `config.toml`, exactly as with any other custom GGUF.
 
 On a corporate network, set `HF_ENDPOINT` to point every Hugging Face request (including the default hosted download) at an internal mirror, and `HF_TOKEN` to authenticate against it or a gated repo. See [troubleshooting.md](troubleshooting.md#downloads-behind-a-corporate-proxy) for proxy and TLS-interception guidance.
 
@@ -226,10 +226,6 @@ On macOS, parakit records the frontmost application's focused Accessibility UI e
 After a paste chord is sent, macOS waits for Accessibility evidence before deciding whether to restore the clipboard. Confirmed and safely unverified pastes restore it; losing the target during confirmation or reaching the deadline with no insertion evidence keeps the transcript available. Direct typing and blocked insertions skip this step. The evidence tiers and clipboard decisions are in [macos-desktop.md#insertion](macos-desktop.md#insertion), and their JSONL representation is in [logging.md#insertion-outcomes](logging.md#insertion-outcomes).
 
 If parakit reports that a paste could not be confirmed, inspect the target before pressing `Cmd+V`: the paste may have landed even though Accessibility did not expose it.
-
-### Repeated Failures
-
-After repeated paste backend errors, parakit temporarily disables automatic paste and uses the same clipboard/block fallback behavior. It retries automatic paste after a short cooldown instead of requiring a daemon restart.
 
 ## Logging And Sounds
 

@@ -7,10 +7,8 @@
 # [[rules.user]] entry is different: once declared, its required fields must
 # be present.
 #
-# Config enum strings are lowercase and case-sensitive. Unknown top-level and
-# ordinary section keys are silently ignored for forward compatibility. This
-# means a misspelling such as "pastemode" loads without warning and has no
-# effect. Fields inside [[rules.user]] are strict and reject misspellings.
+# Config enum strings are lowercase and case-sensitive. Unknown keys are
+# rejected at every level so misspellings cannot silently change behavior.
 #
 # Most keys use: CLI flag > config value > built-in default. Except where a
 # key's own note says otherwise, that CLI flag lives on `parakit start`. The
@@ -62,12 +60,11 @@
 # override this setting for that one check; it does not change the value
 # below.
 # "terminal" sends Ctrl+Shift+V on Linux/Windows and Cmd+V on macOS, removes
-# trailing newlines, refuses remaining multiline text, and limits insertion
-# to 2,000 characters. "standard" sends Ctrl+V or Cmd+V. "direct" types
-# through the platform keyboard API and never uses the clipboard.
-# Every mode limits insertion to 20,000 characters. Refused batch insertion
-# leaves the transcript only when daemon.keep_transcript_clipboard is true;
-# otherwise it restores the prior clipboard. Refused direct insertion blocks.
+# trailing newlines, and refuses remaining multiline text. "standard" sends
+# Ctrl+V or Cmd+V. "direct" types through the platform keyboard API and never
+# uses the clipboard. Refused batch insertion leaves the transcript only when
+# daemon.keep_transcript_clipboard is true; otherwise it restores the prior
+# clipboard. Refused direct insertion blocks.
 # Linux requires X11 for every mode. Linux direct typing may mishandle emoji
 # or rare scripts; Windows direct supports Unicode; macOS direct requires
 # Accessibility permission.
@@ -151,10 +148,7 @@
 # Unknown names fail config load even when cleaning.enabled is false.
 # The list has no runtime effect when cleaning.enabled is false or
 # --no-cleaning is set, but every name is still validated.
-# A disabled user rule still needs valid metadata and a nonempty pattern, but
-# its regex is not compiled; this can park a syntactically invalid draft.
-# Only this config key can park such a draft during config loading. A CLI
-# --disable-rule arrives too late to rescue an invalid configured regex.
+# Disabled user rules must still contain valid regexes.
 
 # Built-in names accepted by cleaning.disabled_rules.
 # Safe/high-confidence:
@@ -214,15 +208,13 @@
 
 # [hotkey]
 #
-# Linux only. macOS and Windows silently ignore this whole table because
-# unknown tables are accepted. The push-to-talk chord remains Ctrl+Space;
-# this setting selects capture machinery, not the chord.
+# Linux only; uncommenting backend on macOS or Windows is an unknown-key error.
+# This setting selects capture machinery, not the push-to-talk chord.
 
 # hotkey.backend
 # Type: string (optional). Default: "auto". Valid values: "auto" | "desktop" |
-# "x11-global-hotkey" | "x11-listen" | "evdev-proxy-experimental". Both the
-# config and Linux CLI also accept "evdev-proxy" as an alias. The CLI value
-# overrides this setting. doctor also takes
+# "x11-global-hotkey" | "x11-listen" | "evdev-proxy-experimental". The CLI
+# value overrides this setting. doctor also takes
 # --hotkey-backend, but only to override this setting for that one check.
 # "auto", "desktop", and "x11-global-hotkey" currently share the registered
 # X11 path; "auto" does not fall back if registration fails. They fail if
@@ -242,10 +234,8 @@
 #
 # Repeated array table. Default: no user rules. Entries run only when
 # cleaning.enabled is true, are never profile-gated, and keep file order
-# within their selected position group. Entries are validated during startup;
-# enabled entries are compiled then reused for every dictation. Unlike ordinary
-# config tables, entries reject unknown fields so a misspelled position cannot
-# silently fall back to "standard".
+# within their selected position group. Every entry is validated during startup;
+# enabled entries are compiled then reused for every dictation.
 # Enabled rule name, pattern, replacement, position, and within-group order
 # affect ruleset_id; description and disabled entries do not. A rule that
 # changes text logs its name and non-overlapping match count.
@@ -262,7 +252,8 @@
 
 # pattern (within [[rules.user]])
 # Type: string (required). Rust regex-crate pattern; must not be the empty
-# string. Whitespace-only is legal. Enabled patterns must compile.
+# string. Whitespace-only is legal. Every pattern must compile, including a
+# disabled rule.
 # The dialect has no lookaround or pattern backreferences. In TOML basic
 # strings, double each regex backslash; TOML literal strings preserve them.
 # All non-overlapping matches are replaced.

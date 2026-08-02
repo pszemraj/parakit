@@ -101,8 +101,6 @@ The transcript is printed or logged but nothing arrives in the focused applicati
 7. On macOS, grant Accessibility and Input Monitoring to the terminal application that launches parakit, restart parakit, and rerun `parakit doctor --deep`. Stage 2 of the deep check needs an active GUI login, not an SSH-only session.
 8. On Windows, check whether the target runs elevated. A normal user process cannot inject into an administrator or elevated application, and parakit cannot work around that.
 9. If focus changed between the hotkey release and the paste, parakit skips automatic insertion on purpose. Recover the transcript with `history` or `copy-last`; clipboard modes also leave a copy in OS clipboard history. It remains the active clipboard only when the keep-transcript policy applies. Hold focus on the target until the success cue.
-10. If paste stopped working after several failures in a row, the insertion circuit breaker is open. It retries automatically after a short cooldown, so wait rather than restarting the daemon.
-
 If that did not fix it, paste modes, focus guards, and clipboard restore policy are in [running.md#insertion](running.md#insertion). Platform specifics are in [linux-desktop.md#deep-doctor-check](linux-desktop.md#deep-doctor-check), [macos-desktop.md#doctor---deep](macos-desktop.md#doctor---deep), and [windows-desktop.md#doctor---deep](windows-desktop.md#doctor---deep).
 
 ## macOS Paste Could Not Be Confirmed

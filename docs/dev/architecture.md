@@ -29,7 +29,7 @@ Transcribing
 Idle
 ```
 
-Empty or near-silent captures are skipped before inference. Short non-silent captures are right-padded with silence before inference instead of being rejected.
+Empty captures are skipped before inference. Short captures are right-padded with silence before inference instead of being rejected.
 
 Live capture drains callback audio through a bounded single-producer/single-consumer ring buffer. Linux and macOS keep the microphone stream open for 350 ms pre-roll; Windows opens the stream paused and resumes it only while recording so `audiodg.exe` and driver-level processing do not run while idle. Recording uses a session epoch so stale drained samples from a stopped utterance cannot append into the next utterance.
 
@@ -58,13 +58,13 @@ Cross-thread communication uses atomics, mutex-protected buffers, and crossbeam 
 | `src/daemon/recording.rs` | Hotkey transition coordinator, focus snapshot, audio start/stop, and PCM handoff. |
 | `src/daemon/audio/capture.rs` | Microphone selection, live stream ownership, ring-buffer drain, pre-roll, resampling, and restart. |
 | `src/daemon/audio/pactl.rs` | Linux `pactl` parsing for startup/reopen microphone display details. |
-| `src/daemon/worker.rs` | ASR worker, paste sanitizer, focus guard, clipboard fallback, and insertion circuit breaker. |
+| `src/daemon/worker.rs` | ASR worker, paste sanitizer, focus guard, and clipboard fallback. |
 | `src/daemon/ipc.rs` | Local IPC transport for `status`, `stop`, `copy-last`, `history`, and `test-paste`; serves an in-memory transcript ring buffer. |
 | `src/daemon/desktop/windows_{clipboard_history,focus,input,paste_smoke,security}.rs` | Windows clipboard-history acknowledgement, foreground checks, `SendInput` helpers, deep paste smoke test, and privilege diagnostics. |
 | `src/daemon/{preflight,audio/alsa,desktop/session,desktop/x11}.rs`, `src/daemon/macos.rs`, `src/daemon/macos/{permissions,focus,insertion_cgevent,pasteboard,diagnostics}.rs` | Startup checks, macOS TCC/focus/insertion/acknowledgement helpers, the deep paste-transaction smoke test, ALSA stderr suppression, session events, and X11 helpers. |
 | `src/daemon/{logging,notifications,sounds}.rs` | Runtime logging, desktop notifications, and generated audio cues. |
-| `src/fetch/` | Hosted [Q8_0 GGUF](https://huggingface.co/pszemraj/parakeet-tdt-0.6b-v3-gguf) download, Hugging Face repo and direct-URL sources, source rebuilds, checksum verification, and the acquisition manifest. |
-| `src/model.rs` | Model names, hosted GGUF naming, cache paths, hosted URLs, and checksum constants. |
+| `src/fetch/` | Hosted [Q8_0 GGUF](https://huggingface.co/pszemraj/parakeet-tdt-0.6b-v3-gguf) download, Hugging Face repo and direct-URL sources, source rebuilds, and explicit `--sha256` checks. |
+| `src/model.rs` | Model names, hosted GGUF naming, cache paths, and hosted URLs. |
 | `src/gguf.rs` | Minimal GGUF dtype reader for startup reporting. |
 | `src/{build_info,gpu,warmup,ffi_util}.rs` | Build diagnostics, bundled ggml device listing, synthetic warmup PCM, and local FFI helpers. |
 | `src/inference.rs`, `src/crispasr_ext.rs` | [CrispASR](https://github.com/CrispStrobe/CrispASR) session ownership wrapper and short-audio padding. |
@@ -116,7 +116,7 @@ The similar implementations below stay separate because their invariants differ.
   three-arm match on a definition type vs a compiled type; a shared trait
   costs more than the duplication.
 - `fetch::FetchSource::HubRepo` stores a joined `owner/repo` string that
-  `fetch/hub.rs` re-splits: the joined form is the display/manifest format,
+  `fetch/hub.rs` re-splits: the joined form is the display format,
   and the defensive re-split guards public construction of the enum.
 - `gguf.rs` `COMMON_DTYPE_NAMES` is shared across the `general.file_type`
   and tensor-type code spaces on purpose; verified against the vendored

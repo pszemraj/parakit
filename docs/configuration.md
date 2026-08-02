@@ -105,10 +105,7 @@ These daemon and cleaning flags live on `parakit start`. The profile, trailing-p
 
 Four booleans (`daemon.sounds`, `cleaning.enabled`, `cleaning.keep_trailing_period`, and `daemon.keep_transcript_clipboard`) each have a paired CLI flag, one that forces the value on and one that forces it off (for example `--sounds`/`--no-sounds`), so a config default can be overridden in either direction for a single invocation; the two flags in a pair conflict with each other. Disabled rule names from the CLI and the config are merged, and a few settings are config-only. Those exact interactions are documented on each key in [config_reference.toml](config_reference.toml).
 
-Unknown top-level and ordinary section keys are ignored for forward compatibility, which lets an older binary read a newer config. Fields inside each `[[rules.user]]` entry are strict because a misspelling can silently change rule behavior. Invalid TOML, invalid known values, unknown user-rule fields, and rule-validation failures are hard errors that name the config path.
-
-> [!WARNING]
-> Because ordinary unknown keys are ignored, a misspelled key outside `[[rules.user]]` loads without any warning and silently has no effect. Run `parakit config show` after editing to confirm a setting actually took.
+Unknown keys are errors at every level, including inside each `[[rules.user]]` entry. Invalid TOML, invalid values, and rule-validation failures are hard errors that name the config path.
 
 Short-lived `rules test` and `rules list` processes each load the current file, which makes them useful for checking a change before restarting the daemon.
 
