@@ -255,11 +255,21 @@ fn resolve_url(endpoint: &str, owner: &str, repo: &str, revision: &str, rfilenam
     )
 }
 
-fn hub_cache_dir(models_dir: &Path, owner: &str, repo: &str, revision: &str) -> PathBuf {
-    let revision_key = crate::checksum::hex_digest(&Sha256::digest(revision.as_bytes()));
+fn hub_cache_dir(
+    models_dir: &Path,
+    owner: &str,
+    repo: &str,
+    revision: &str,
+    rfilename: &str,
+) -> PathBuf {
+    let mut hasher = Sha256::new();
+    hasher.update(revision.as_bytes());
+    hasher.update([0]);
+    hasher.update(rfilename.as_bytes());
+    let cache_key = crate::checksum::hex_digest(&hasher.finalize());
     models_dir
         .join("hub")
-        .join(format!("{owner}--{repo}--{revision_key}"))
+        .join(format!("{owner}--{repo}--{cache_key}"))
 }
 
 fn hub_file_name(rfilename: &str) -> Result<&str> {
@@ -350,7 +360,7 @@ pub(super) fn run_hub_repo(
     let sibling = selection.sibling();
 
     let models_dir = crate::model::models_dir()?;
-    let dest_dir = hub_cache_dir(&models_dir, owner, name, revision);
+    let dest_dir = hub_cache_dir(&models_dir, owner, name, revision, &sibling.rfilename);
     std::fs::create_dir_all(&dest_dir).with_context(|| format!("create {}", dest_dir.display()))?;
     let basename = hub_file_name(&sibling.rfilename)?;
     let dest = dest_dir.join(basename);
@@ -654,14 +664,17 @@ mod tests {
     }
 
     #[test]
-    fn hub_cache_directory_is_revision_specific_and_windows_safe() {
+    fn hub_cache_directory_is_file_and_revision_specific_and_windows_safe() {
         let models_dir = Path::new("cache/models");
-        let main = hub_cache_dir(models_dir, "owner", "repo", "main");
-        let main_again = hub_cache_dir(models_dir, "owner", "repo", "main");
-        let case_distinct = hub_cache_dir(models_dir, "owner", "repo", "Main");
-        let slash_revision = hub_cache_dir(models_dir, "owner", "repo", "refs/pr/1");
+        let main = hub_cache_dir(models_dir, "owner", "repo", "main", "a/model.gguf");
+        let main_again = hub_cache_dir(models_dir, "owner", "repo", "main", "a/model.gguf");
+        let sibling_path = hub_cache_dir(models_dir, "owner", "repo", "main", "b/model.gguf");
+        let case_distinct = hub_cache_dir(models_dir, "owner", "repo", "Main", "a/model.gguf");
+        let slash_revision =
+            hub_cache_dir(models_dir, "owner", "repo", "refs/pr/1", "a/model.gguf");
 
         assert_eq!(main, main_again);
+        assert_ne!(main, sibling_path);
         assert_ne!(main, case_distinct);
         assert_ne!(main, slash_revision);
         let component = slash_revision.file_name().unwrap().to_string_lossy();
