@@ -8,7 +8,7 @@ Run the full loop in order before pushing Rust or runtime changes:
 
 ```bash
 cargo fmt --package parakit
-rustdoc-checker . --exclude vendor --strict
+rustdoc-checker . --exclude vendor,local-scratch --strict
 cargo check --workspace --all-targets
 cargo test
 cargo clippy --workspace --all-targets -- -D warnings
