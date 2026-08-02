@@ -3,6 +3,12 @@
 Source-coverage setup and report commands are in
 [quality.md#rust-source-coverage](quality.md#rust-source-coverage).
 
+## Proportional Checks
+
+Every automatic check needs a concrete, repository-specific failure that it prevents. In parakit, security theater is integrity or safety machinery without a credible threat model, especially when it adds persistent state or can reject legitimate changes. Do not reintroduce automatic model hashing, TOFU or provenance manifests, cache-list verification, backend-switch approval flags, speculative circuit breakers, or compatibility layers for retired pre-1.0 CLI and wire formats.
+
+Hashes belong in an explicit `--sha256` request or a release process that actually requires byte identity, not normal fetch, startup, cache, build, or test paths. Keep checks that prevent demonstrated data loss, wrong-target insertion, unloadable bundles, credential leakage, or deletion outside a requested directory. A proposed manifest, validator, approval gate, retry policy, or compatibility shim should otherwise stay out unless its concrete failure mode and regression test justify the added state and friction.
+
 ## Model Artifacts
 
 End-user download, cache, and model-override behavior is in
