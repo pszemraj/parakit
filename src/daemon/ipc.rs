@@ -39,6 +39,11 @@ const IPC_TRANSPORT_TIMEOUT: Duration = Duration::from_millis(750);
 /// one complete paste transaction before running its own.
 #[cfg(any(unix, target_os = "windows"))]
 const IPC_INSERT_RESPONSE_TIMEOUT: Duration = Duration::from_secs(10);
+/// Maximum accepted Windows control-pipe message size.
+#[cfg(any(target_os = "windows", test))]
+const IPC_MAX_MESSAGE_SIZE: usize = 64 * 1024;
+#[cfg(any(unix, target_os = "windows"))]
+const STOP_RESPONSE_GRACE: Duration = Duration::from_millis(50);
 
 /// Marker used by both local IPC transports when no daemon endpoint exists.
 ///
@@ -97,6 +102,18 @@ impl IpcCommand {
             Self::Status | Self::Stop | Self::History { .. } => IPC_TRANSPORT_TIMEOUT,
         }
     }
+}
+
+/// Return whether one Windows pipe read can be appended without exceeding
+/// the control protocol's message limit.
+///
+/// `complete == false` means the pipe reported `ERROR_MORE_DATA`, so reaching
+/// the limit already proves that the complete message is oversized.
+#[cfg(any(target_os = "windows", test))]
+fn pipe_message_fits_limit(buffered: usize, chunk_len: usize, complete: bool) -> bool {
+    buffered.checked_add(chunk_len).is_some_and(|total| {
+        total < IPC_MAX_MESSAGE_SIZE || (complete && total == IPC_MAX_MESSAGE_SIZE)
+    })
 }
 
 /// Deserialize one control-socket request line as [`IpcCommand`].
@@ -787,7 +804,9 @@ fn handle_client(
     }
 
     if outcome.stop_after_response {
-        schedule_exit_after_response(preflight::control_socket_path().ok());
+        finish_stop_after_response(state, preflight::control_socket_path().ok(), || {
+            std::process::exit(0)
+        });
     }
 }
 
@@ -955,14 +974,22 @@ fn client_command_outcome(
 }
 
 #[cfg(any(unix, target_os = "windows"))]
-fn schedule_exit_after_response(cleanup_path: Option<std::path::PathBuf>) {
-    thread::spawn(move || {
-        thread::sleep(Duration::from_millis(50));
+fn finish_stop_after_response<R>(
+    state: &SharedState,
+    cleanup_path: Option<std::path::PathBuf>,
+    terminate: impl FnOnce() -> R,
+) -> R {
+    // A response has already been written, so waiting here does not consume
+    // the client's transport timeout. Holding the lock through termination
+    // lets an in-flight paste release every synthetic modifier and prevents a
+    // new paste from starting during the response grace period.
+    state.with_insertion_lock(|| {
+        thread::sleep(STOP_RESPONSE_GRACE);
         if let Some(path) = cleanup_path {
             let _ = std::fs::remove_file(path);
         }
-        std::process::exit(0);
-    });
+        terminate()
+    })
 }
 
 #[cfg(any(unix, target_os = "windows"))]
@@ -1282,7 +1309,7 @@ mod windows_pipe {
         }
 
         if outcome.stop_after_response {
-            schedule_exit_after_response(None);
+            finish_stop_after_response(&state, None, || std::process::exit(0));
         }
     }
 
@@ -1476,14 +1503,16 @@ mod windows_pipe {
                              {timeout_ms}ms"
                     )
                 })?;
-            match read_pipe_chunk(pipe, &mut chunk, remaining_ms)? {
-                PipeReadChunk::Complete(read) => {
-                    message.extend_from_slice(&chunk[..read]);
-                    return Ok(message);
-                }
-                PipeReadChunk::MoreData(read) => {
-                    message.extend_from_slice(&chunk[..read]);
-                }
+            let (read, complete) = match read_pipe_chunk(pipe, &mut chunk, remaining_ms)? {
+                PipeReadChunk::Complete(read) => (read, true),
+                PipeReadChunk::MoreData(read) => (read, false),
+            };
+            if !pipe_message_fits_limit(message.len(), read, complete) {
+                bail!("Windows daemon control message exceeds 64 KiB");
+            }
+            message.extend_from_slice(&chunk[..read]);
+            if complete {
+                return Ok(message);
             }
         }
     }
@@ -1939,9 +1968,9 @@ mod windows_pipe {
         }
 
         #[test]
-        fn pipe_message_larger_than_transport_buffer_round_trips() -> Result<()> {
+        fn pipe_message_at_size_limit_round_trips() -> Result<()> {
             let (server, client) = connected_test_pipe(true)?;
-            let payload: Vec<u8> = (0..PIPE_BUFFER_SIZE as usize + 1024)
+            let payload: Vec<u8> = (0..IPC_MAX_MESSAGE_SIZE)
                 .map(|index| (index % 251) as u8)
                 .collect();
             let expected = payload.clone();
@@ -1953,6 +1982,26 @@ mod windows_pipe {
                 .expect("Windows pipe writer thread should not panic")?;
 
             assert_eq!(received, expected);
+            Ok(())
+        }
+
+        #[test]
+        fn pipe_message_larger_than_size_limit_is_rejected() -> Result<()> {
+            let (server, client) = connected_test_pipe(true)?;
+            let payload = vec![b'x'; IPC_MAX_MESSAGE_SIZE + 1];
+            let writer = std::thread::spawn(move || write_pipe_message(&server, &payload));
+
+            let err = read_pipe_message(&client)
+                .expect_err("oversized Windows daemon pipe message should be rejected");
+            drop(client);
+            let _ = writer
+                .join()
+                .expect("Windows pipe writer thread should not panic");
+
+            assert_eq!(
+                err.to_string(),
+                "Windows daemon control message exceeds 64 KiB"
+            );
             Ok(())
         }
 
@@ -2129,6 +2178,100 @@ mod tests {
             failures.len(),
             failures.join("\n")
         );
+    }
+
+    #[cfg(any(unix, target_os = "windows"))]
+    #[test]
+    fn stop_finalization_waits_for_in_flight_insertion_and_excludes_new_insertions() {
+        use std::sync::mpsc;
+
+        let state = Arc::new(SharedState::new());
+        let (insertion_started_tx, insertion_started_rx) = mpsc::channel();
+        let (release_insertion_tx, release_insertion_rx) = mpsc::channel();
+        let insertion_state = Arc::clone(&state);
+        let insertion = thread::spawn(move || {
+            insertion_state.with_insertion_lock(|| {
+                insertion_started_tx
+                    .send(())
+                    .expect("test should observe in-flight insertion");
+                release_insertion_rx
+                    .recv()
+                    .expect("test should release in-flight insertion");
+            });
+        });
+        insertion_started_rx
+            .recv()
+            .expect("insertion should acquire the lock");
+
+        let (stop_started_tx, stop_started_rx) = mpsc::channel();
+        let (stop_has_lock_tx, stop_has_lock_rx) = mpsc::channel();
+        let (finish_stop_tx, finish_stop_rx) = mpsc::channel();
+        let stop_state = Arc::clone(&state);
+        let stop = thread::spawn(move || {
+            stop_started_tx
+                .send(())
+                .expect("test should observe stop finalization start");
+            finish_stop_after_response(&stop_state, None, || {
+                stop_has_lock_tx
+                    .send(())
+                    .expect("test should observe quiescent stop");
+                finish_stop_rx
+                    .recv()
+                    .expect("test should release stop finalization");
+            });
+        });
+        stop_started_rx
+            .recv()
+            .expect("stop finalization should start");
+        assert!(
+            stop_has_lock_rx
+                .recv_timeout(STOP_RESPONSE_GRACE * 2)
+                .is_err(),
+            "stop must not terminate while an insertion holds the lock"
+        );
+
+        release_insertion_tx
+            .send(())
+            .expect("in-flight insertion should be released");
+        stop_has_lock_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("stop should proceed after the insertion completes");
+
+        let (later_insertion_tx, later_insertion_rx) = mpsc::channel();
+        let later_state = Arc::clone(&state);
+        let later_insertion = thread::spawn(move || {
+            later_state.with_insertion_lock(|| {
+                later_insertion_tx
+                    .send(())
+                    .expect("test should observe later insertion");
+            });
+        });
+        assert!(
+            later_insertion_rx
+                .recv_timeout(STOP_RESPONSE_GRACE * 2)
+                .is_err(),
+            "no insertion may start once stop finalization owns the lock"
+        );
+
+        finish_stop_tx
+            .send(())
+            .expect("stop finalization should be released");
+        stop.join().expect("stop finalization should return");
+        insertion.join().expect("in-flight insertion should return");
+        later_insertion_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("test replacement for process exit should release the lock");
+        later_insertion
+            .join()
+            .expect("later insertion should return");
+    }
+
+    #[test]
+    fn pipe_message_limit_rejects_oversize_before_buffering_it() {
+        assert!(pipe_message_fits_limit(0, IPC_MAX_MESSAGE_SIZE, true));
+        assert!(!pipe_message_fits_limit(0, IPC_MAX_MESSAGE_SIZE, false));
+        assert!(!pipe_message_fits_limit(IPC_MAX_MESSAGE_SIZE, 1, true));
+        assert!(!pipe_message_fits_limit(usize::MAX, 1, true));
     }
 
     #[cfg(target_os = "macos")]
