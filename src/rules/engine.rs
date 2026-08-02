@@ -202,47 +202,53 @@ struct CompiledRule {
     transform: CompiledTransform,
 }
 
+struct RuleApplication<'a> {
+    text: Cow<'a, str>,
+    matches: usize,
+}
+
 impl CompiledRule {
-    fn apply(&self, input: &str) -> Result<TransformResult> {
+    fn apply<'a>(&self, input: &'a str) -> Result<RuleApplication<'a>> {
         match &self.transform {
             CompiledTransform::Regex { re, replacement } => {
-                let matches = re.find_iter(input).count();
-                if matches == 0 {
-                    return Ok(TransformResult {
-                        text: input.to_string(),
-                        matches: 0,
-                    });
-                }
-                Ok(TransformResult {
-                    text: re.replace_all(input, replacement.as_ref()).into_owned(),
-                    matches,
-                })
+                let text = re.replace_all(input, replacement.as_ref());
+                let matches = if matches!(&text, Cow::Borrowed(_)) {
+                    0
+                } else {
+                    re.find_iter(input).count()
+                };
+                Ok(RuleApplication { text, matches })
             }
             CompiledTransform::FancyRegex { re, replacement } => {
-                let mut matches = 0;
-                for found in re.find_iter(input) {
-                    found.with_context(|| {
-                        format!("rule '{}' failed during fancy-regex matching", self.name)
-                    })?;
-                    matches += 1;
-                }
-                if matches == 0 {
-                    return Ok(TransformResult {
-                        text: input.to_string(),
-                        matches: 0,
-                    });
-                }
-                let text = re
-                    .try_replacen(input, 0, *replacement)
-                    .with_context(|| {
-                        format!("rule '{}' failed during fancy-regex replacement", self.name)
+                let text = re.try_replacen(input, 0, *replacement).with_context(|| {
+                    format!("rule '{}' failed during fancy-regex replacement", self.name)
+                })?;
+                let matches = if matches!(&text, Cow::Borrowed(_)) {
+                    0
+                } else {
+                    re.find_iter(input).try_fold(0, |matches, found| {
+                        found
+                            .with_context(|| {
+                                format!("rule '{}' failed during fancy-regex matching", self.name)
+                            })
+                            .map(|_| matches + 1)
                     })?
-                    .into_owned();
-                Ok(TransformResult { text, matches })
+                };
+                Ok(RuleApplication { text, matches })
             }
-            CompiledTransform::Procedural(transform) => Ok(transform(input)),
+            CompiledTransform::Procedural(transform) => {
+                let transformed = transform(input);
+                Ok(RuleApplication {
+                    text: Cow::Owned(transformed.text),
+                    matches: transformed.matches,
+                })
+            }
             CompiledTransform::SpokenNumbers { threshold } => {
-                Ok(super::numbers::normalize_spoken_numbers(input, *threshold))
+                let transformed = super::numbers::normalize_spoken_numbers(input, *threshold);
+                Ok(RuleApplication {
+                    text: Cow::Owned(transformed.text),
+                    matches: transformed.matches,
+                })
             }
         }
     }
@@ -410,23 +416,23 @@ impl Cleaner {
     /// thread) should prefer [`Cleaner::clean`], which fails open to the
     /// original transcript instead of propagating this error.
     pub fn try_clean(&self, input: &str) -> Result<CleanResult> {
-        let mut text = input.to_string();
+        let mut text = Cow::Borrowed(input);
         let mut rules_fired = Vec::new();
 
         for rule in &self.rules {
-            let transformed = rule.apply(&text)?;
-            if transformed.matches == 0 || transformed.text == text {
+            let transformed = rule.apply(text.as_ref())?;
+            if transformed.matches == 0 || transformed.text.as_ref() == text.as_ref() {
                 continue;
             }
             rules_fired.push(RuleHit {
                 name: rule.name.clone(),
                 matches: transformed.matches,
             });
-            text = transformed.text;
+            text = Cow::Owned(transformed.text.into_owned());
         }
 
         Ok(CleanResult {
-            text,
+            text: text.into_owned(),
             rules_fired,
             failure: None,
         })
@@ -667,4 +673,26 @@ pub(crate) fn validate_number_threshold(threshold: Option<f64>) -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod rule_application_tests {
+    use super::*;
+
+    #[test]
+    fn unmatched_regex_rules_borrow_the_input() {
+        let rule = CompiledRule {
+            name: "test".to_string(),
+            position: None,
+            transform: CompiledTransform::Regex {
+                re: Regex::new("match-me").expect("test regex"),
+                replacement: Cow::Borrowed("replacement"),
+            },
+        };
+
+        let applied = rule.apply("unchanged input").expect("apply regex");
+
+        assert_eq!(applied.matches, 0);
+        assert!(matches!(applied.text, Cow::Borrowed("unchanged input")));
+    }
 }
