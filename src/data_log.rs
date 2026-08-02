@@ -6,7 +6,7 @@ use chrono::{Local, NaiveDate, SecondsFormat, Utc};
 use parking_lot::Mutex;
 use serde::Serialize;
 use std::fs::{create_dir_all, File, OpenOptions};
-use std::io::{BufWriter, Write};
+use std::io::Write;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -110,7 +110,7 @@ struct InsertionLogRecord<'a> {
 
 struct LogState {
     date: NaiveDate,
-    file: BufWriter<File>,
+    file: File,
 }
 
 struct LogTimestamp {
@@ -288,7 +288,7 @@ impl DataLogger {
         result
     }
 
-    fn open_for_date(&self, date: NaiveDate) -> Result<BufWriter<File>> {
+    fn open_for_date(&self, date: NaiveDate) -> Result<File> {
         create_dir_all(&self.dir)
             .with_context(|| format!("failed to create log dir {}", self.dir.display()))?;
         let path = self.dir.join(file_name(date));
@@ -297,7 +297,7 @@ impl DataLogger {
             .append(true)
             .open(&path)
             .with_context(|| format!("failed to open log file {}", path.display()))?;
-        Ok(BufWriter::new(file))
+        Ok(file)
     }
 }
 
@@ -312,9 +312,26 @@ fn write_jsonl_record<T: Serialize>(
     record: &T,
     serialization_context: &'static str,
 ) -> Result<()> {
-    serde_json::to_writer(&mut state.file, record).context(serialization_context)?;
-    writeln!(state.file).context("failed to write jsonl newline")?;
-    state.file.flush().context("failed to flush log file")
+    let mut line = serde_json::to_vec(record).context(serialization_context)?;
+    line.push(b'\n');
+    append_with_rollback(&mut state.file, |file| {
+        file.write_all(&line)?;
+        file.flush()
+    })
+    .context("failed to append complete jsonl record")
+}
+
+/// Append one record and restore the previous file length if the write fails.
+fn append_with_rollback<F>(file: &mut File, write: F) -> std::io::Result<()>
+where
+    F: FnOnce(&mut File) -> std::io::Result<()>,
+{
+    let original_len = file.metadata()?.len();
+    if let Err(error) = write(file) {
+        file.set_len(original_len)?;
+        return Err(error);
+    }
+    Ok(())
 }
 
 fn file_name(date: NaiveDate) -> String {
@@ -365,6 +382,32 @@ mod tests {
             assert_eq!(value["rules_active"], 72);
             assert_eq!(value["parakit_version"], crate::build_info::PACKAGE_VERSION);
         }
+    }
+
+    #[test]
+    fn jsonl_round_trips_adversarial_transcript_content() {
+        let dir = crate::test_support::fixture_root("parakit-log-test", "adversarial-content");
+        let logger = DataLogger::new(dir.clone());
+        let raw = "quote: \"; slash: \\; newline:\n; controls:\u{0000}\u{001f}";
+        let cleaned = "cleaned\r\n\t\"value\"";
+
+        logger
+            .log(
+                1.0,
+                Duration::from_millis(10),
+                raw,
+                cleaned,
+                sample_cleaning_fields(),
+            )
+            .expect("write adversarial log record");
+
+        let path = dir.join(file_name(Local::now().date_naive()));
+        let contents = std::fs::read_to_string(path).expect("read adversarial log record");
+        assert_eq!(contents.lines().count(), 1);
+        let value: serde_json::Value =
+            serde_json::from_str(contents.trim_end()).expect("valid JSONL record");
+        assert_eq!(value["raw"], raw);
+        assert_eq!(value["cleaned"], cleaned);
     }
 
     fn sample_insertion_fields() -> InsertionLogFields<'static> {
@@ -627,6 +670,35 @@ mod tests {
 
         assert!(result.is_err());
         assert!(logger.state.lock().is_none());
+    }
+
+    #[test]
+    fn failed_partial_append_restores_the_previous_file() {
+        let dir = crate::test_support::fixture_root("parakit-log-test", "partial-write-rollback");
+        let path = dir.join("records.jsonl");
+        let mut file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .expect("open rollback fixture");
+        file.write_all(b"{\"valid\":true}\n")
+            .expect("write existing record");
+        file.flush().expect("flush existing record");
+
+        let result = append_with_rollback(&mut file, |file| {
+            file.write_all(b"{\"partial\":")?;
+            Err(std::io::Error::other("injected write failure"))
+        });
+
+        assert_eq!(
+            result.expect_err("injected append should fail").to_string(),
+            "injected write failure"
+        );
+        drop(file);
+        assert_eq!(
+            std::fs::read_to_string(path).expect("read rolled-back fixture"),
+            "{\"valid\":true}\n"
+        );
     }
 
     /// Expected shape of one optional-vs-nullable field in the JSON record.
