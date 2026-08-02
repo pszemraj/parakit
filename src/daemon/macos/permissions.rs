@@ -342,3 +342,47 @@ fn accessibility_trusted_with_prompt() -> bool {
     }
     trusted
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn permission_status_helpers_cover_every_state() {
+        let cases = [
+            (PermissionStatus::Granted, "granted", true, false),
+            (PermissionStatus::Denied, "denied", false, true),
+            (PermissionStatus::Restricted, "restricted", false, true),
+            (
+                PermissionStatus::NotDetermined,
+                "not determined",
+                false,
+                false,
+            ),
+            (PermissionStatus::Unknown(7), "unknown (7)", false, false),
+        ];
+
+        for (status, label, granted, blocks_microphone) in cases {
+            assert_eq!(status.label(), label);
+            assert_eq!(status.granted(), granted);
+            assert_eq!(status.blocking_for_microphone(), blocks_microphone);
+        }
+    }
+
+    #[test]
+    fn event_tap_requires_accessibility_and_input_monitoring() {
+        for (accessibility, input_monitoring, expected) in [
+            (PermissionStatus::Granted, PermissionStatus::Granted, true),
+            (PermissionStatus::Denied, PermissionStatus::Granted, false),
+            (PermissionStatus::Granted, PermissionStatus::Denied, false),
+            (PermissionStatus::Denied, PermissionStatus::Denied, false),
+        ] {
+            let report = PermissionReport {
+                accessibility,
+                microphone: PermissionStatus::NotDetermined,
+                input_monitoring,
+            };
+            assert_eq!(report.event_tap_ready(), expected);
+        }
+    }
+}

@@ -220,3 +220,30 @@ pub(in crate::daemon) fn guarded_tap_callback(
 pub(in crate::daemon) fn physical_key_down(keycode: u16) -> bool {
     unsafe { CGEventSourceKeyState(K_CG_EVENT_SOURCE_STATE_HID_SYSTEM_STATE, keycode) }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn event_mask_sets_only_the_requested_event_bit() {
+        assert_eq!(event_mask(K_CG_EVENT_KEY_DOWN), 1_u64 << 10);
+        assert_eq!(event_mask(K_CG_EVENT_KEY_UP), 1_u64 << 11);
+        assert_eq!(event_mask(K_CG_EVENT_FLAGS_CHANGED), 1_u64 << 12);
+    }
+
+    #[test]
+    fn guarded_tap_callback_returns_body_result() {
+        let result = ptr::dangling_mut::<c_void>();
+        assert_eq!(guarded_tap_callback(ptr::null_mut(), || result), result);
+    }
+
+    #[test]
+    fn guarded_tap_callback_preserves_event_when_body_panics() {
+        let event = ptr::dangling_mut::<c_void>();
+        assert_eq!(
+            guarded_tap_callback(event, || panic!("test callback panic")),
+            event
+        );
+    }
+}
