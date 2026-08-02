@@ -526,7 +526,7 @@ mod tests {
                 for response in responses {
                     let (mut stream, _) = listener.accept().unwrap();
                     let mut request = [0_u8; 2048];
-                    stream.read(&mut request).unwrap();
+                    assert_ne!(stream.read(&mut request).unwrap(), 0);
                     stream.write_all(response.as_bytes()).unwrap();
                 }
             });
