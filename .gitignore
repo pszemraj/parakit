@@ -8,6 +8,8 @@
 # Source helper for root build.rs; keep other root build/ outputs ignored.
 !/build/
 /build/*
+!/build/openblas_roots.rs
+!/build/unix_openblas.rs
 !/build/windows_openblas.rs
 !/build/windows_cuda.rs
 !/build/windows_manifest.rs

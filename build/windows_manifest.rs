@@ -69,6 +69,41 @@ impl RuntimeManifest {
     }
 }
 
+/// Find DLLs owned by a previous runtime manifest that are absent from the
+/// current bundle.
+///
+/// # Arguments
+///
+/// * `previous_json` - Previously staged runtime manifest JSON.
+/// * `current_dlls` - DLL file names produced by the current build.
+///
+/// # Returns
+///
+/// Flat DLL file names that should be removed before staging the current
+/// bundle, or an empty vector when the previous manifest cannot be read.
+pub(crate) fn stale_runtime_dlls(previous_json: &str, current_dlls: &[String]) -> Vec<String> {
+    let Ok(manifest) = serde_json::from_str::<Value>(previous_json) else {
+        return Vec::new();
+    };
+    let Some(required_files) = manifest.get("required_files").and_then(Value::as_array) else {
+        return Vec::new();
+    };
+
+    required_files
+        .iter()
+        .filter_map(Value::as_str)
+        .filter(|name| {
+            name.to_ascii_lowercase().ends_with(".dll")
+                && !name.contains('/')
+                && !name.contains('\\')
+                && !current_dlls
+                    .iter()
+                    .any(|current| current.eq_ignore_ascii_case(name))
+        })
+        .map(str::to_string)
+        .collect()
+}
+
 fn cuda_manifest_value(cuda: &CudaManifest) -> Value {
     json!({
         "toolkit_version": &cuda.toolkit_version,

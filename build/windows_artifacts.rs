@@ -5,7 +5,9 @@ use super::{
     OpenBlasInstall,
 };
 use crate::windows_cuda::{cuda_external_dll_names, cuda_runtime_dirs};
-use crate::windows_manifest::{Accelerator, CudaManifest, RuntimeManifest, VulkanManifest};
+use crate::windows_manifest::{
+    stale_runtime_dlls, Accelerator, CudaManifest, RuntimeManifest, VulkanManifest,
+};
 use crate::windows_openblas::WindowsOpenBlas;
 use std::env;
 use std::path::{Path, PathBuf};
@@ -67,7 +69,7 @@ pub(crate) fn prepare_windows_artifacts(
         cuda_manifest,
         vulkan_manifest,
     );
-    copy_profile_artifacts(bin_dir);
+    copy_profile_artifacts(bin_dir, &runtime_dlls);
 }
 
 fn copy_optional_windows_blas_runtime(bin_dir: &Path, blas: &BlasConfig) {
@@ -243,10 +245,12 @@ fn copy_file_or_panic(source: &Path, dest: &Path, description: &str) {
     });
 }
 
-fn copy_profile_artifacts(bin_dir: &Path) {
+fn copy_profile_artifacts(bin_dir: &Path, runtime_dlls: &[String]) {
     let Some(profile_dir) = cargo_profile_dir() else {
         return;
     };
+
+    remove_stale_profile_dlls(&profile_dir, runtime_dlls);
 
     if let Ok(entries) = std::fs::read_dir(bin_dir) {
         for path in entries.flatten().map(|entry| entry.path()) {
@@ -270,6 +274,26 @@ fn copy_profile_artifacts(bin_dir: &Path) {
             &profile_dir.join(RUNTIME_MANIFEST),
             "runtime manifest",
         );
+    }
+}
+
+fn remove_stale_profile_dlls(profile_dir: &Path, current_dlls: &[String]) {
+    let manifest = profile_dir.join(RUNTIME_MANIFEST);
+    let Ok(previous_json) = std::fs::read_to_string(manifest) else {
+        return;
+    };
+
+    for name in stale_runtime_dlls(&previous_json, current_dlls) {
+        let path = profile_dir.join(&name);
+        if !path.is_file() {
+            continue;
+        }
+        std::fs::remove_file(&path).unwrap_or_else(|err| {
+            panic!(
+                "failed to remove stale Windows runtime DLL {}: {err}",
+                path.display()
+            )
+        });
     }
 }
 

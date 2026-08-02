@@ -66,6 +66,28 @@ fn bundle_targets_are_isolated_by_backend() {
 
 #[cfg(windows)]
 #[test]
+fn vulkan_path_estimate_includes_the_backend_target_component() {
+    let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let base = repo.join(common::fixture_root("windows-bundle-guard", "vulkan-path"));
+    let toolchains = repo.join("scripts/windows/toolchains.ps1");
+    let script = format!(
+        ". '{}'; $repo = '{}'; $Profile = 'release'; $Backend = 'vulkan'; $script:BundleCargoTargetRoot = $null; $env:CARGO_TARGET_DIR = '{}'; $sample = Get-VulkanShaderObjectPathSample; $expected = [System.IO.Path]::GetFullPath((Join-Path $env:CARGO_TARGET_DIR 'vulkan')); if (-not $sample.Path.StartsWith($expected + '\\', [System.StringComparison]::OrdinalIgnoreCase)) {{ throw \"Path estimate omitted backend target component: $($sample.Path)\" }}",
+        quote_powershell_path(&toolchains),
+        quote_powershell_path(repo),
+        quote_powershell_path(&base),
+    );
+    let output = run_powershell(&script);
+
+    assert!(
+        output.status.success(),
+        "Vulkan path estimate failed: {}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[cfg(windows)]
+#[test]
 fn gpu_builds_replace_an_inherited_cmake_generator_with_ninja() {
     let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let common = repo.join("scripts/windows/common.ps1");

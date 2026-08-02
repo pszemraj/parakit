@@ -450,6 +450,9 @@ function Get-DefaultVulkanCargoTargetDir {
 
 function Get-VulkanShaderObjectPathSample {
     $targetRoot = Get-CargoTargetRoot
+    if ([string]::IsNullOrWhiteSpace($script:BundleCargoTargetRoot)) {
+        $targetRoot = Join-Path $targetRoot $Backend
+    }
 
     $samplePath = Join-Path $targetRoot "$Profile\build\parakit-0000000000000000\out\build\ggml\src\ggml-vulkan\vulkan-shaders-gen-prefix\src\vulkan-shaders-gen-build\CMakeFiles\CMakeScratch\TryCompile-000000\CMakeFiles\cmTC_00000.dir\testCCompiler.c.obj"
     return [pscustomobject]@{
