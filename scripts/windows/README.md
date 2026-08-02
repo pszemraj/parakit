@@ -56,7 +56,7 @@ Run `.\scripts\windows\build.ps1 --help` for the script's live help.
 | `--bundle-cuda-dlls` | CUDA only: copies `cudart64_*.dll`, `cublas64_*.dll`, and `cublasLt64_*.dll` into the bundle. |
 | `--release` | Builds the Cargo `release` profile and bundles it. This is the default. |
 | `--debug` | Legacy shorthand. PowerShell can consume it before the script sees it; use `-Profile debug` for debug builds. |
-| `-Profile release\|debug` | Selects the Cargo profile. The output lives under the active Cargo target directory. |
+| `-Profile release\|debug` | Selects the Cargo profile. Bundle builds keep each backend under `<CARGO_TARGET_DIR>\<backend>` so cached CPU, CUDA, and Vulkan artifacts cannot overwrite one another. |
 | `--no-submodules` | Does not run `git submodule update --init --recursive`; fails if `vendor\CrispASR` is not already populated. |
 | `--no-install` | Builds the repo-local bundle without installing it. Cannot be combined with `--no-user-path`, `--allow-backend-switch`/`--force`, or `--install-dir`. |
 | `--no-user-path` | Installs without adding the install directory to User `PATH`. Invalid with `--no-install`. |
@@ -106,7 +106,7 @@ If you explicitly set a Visual Studio generator for CUDA, keep the matching CUDA
 
 Windows MSVC bundle builds set `GGML_CCACHE=OFF`. A `ccache` executable on `PATH` is not used by this build path.
 
-Vulkan builds can fail in ggml's shader generator when the checkout plus Cargo target path is too deep. If `CARGO_TARGET_DIR` is unset and the repo-local target path would be too deep, the script automatically uses `$env:USERPROFILE\parakit-target`. It does not shorten paths by mapping temporary drive letters. If you set `CARGO_TARGET_DIR` yourself and it is still too deep, the script fails early before CMake starts.
+Vulkan builds can fail in ggml's shader generator when the checkout plus Cargo target path is too deep. If `CARGO_TARGET_DIR` is unset and the repo-local target path would be too deep, the script automatically uses `$env:USERPROFILE\parakit-target` as the base and builds under its `vulkan` child. It does not shorten paths by mapping temporary drive letters. If you set `CARGO_TARGET_DIR` yourself and it is still too deep, the script fails early before CMake starts.
 
 Override the target directory only when you need a different approved location:
 
@@ -124,7 +124,7 @@ If path shortening does not fix a Vulkan shader-gen failure, capture the exact `
 1. Rejects `CRISPASR_LIB_DIR`, which cannot produce a fresh runtime manifest and colocated DLL staging directory, then validates the selected toolchain.
 2. Checks `vendor\CrispASR`, initializing submodules non-interactively only when needed.
 3. Configures BLAS and the selected accelerator, including the MSVC amd64 environment and Ninja for GPU builds.
-4. Runs `cargo build --locked` with the requested profile and backend feature.
+4. Gives the backend its own Cargo target directory, then runs `cargo build --locked` with the requested profile and backend feature.
 5. Creates `target\parakit-windows-x86_64-<backend>` and copies the runtime manifest, its required files, `LICENSE`, and `README.md`.
 6. Calls `install.ps1` unless `--no-install` is set.
 

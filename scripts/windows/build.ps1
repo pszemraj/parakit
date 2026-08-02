@@ -384,6 +384,7 @@ Require-Command "cmake" "Install CMake and ensure it is on PATH."
 
 $repo = (Resolve-Path (Join-Path $scriptDir "..\..")).Path
 Set-Location $repo
+Set-BundleCargoTargetDir
 Assert-VulkanBuildPathLength
 
 if ($NoSubmodules) {
@@ -399,40 +400,49 @@ if ($NoSubmodules) {
 }
 
 Configure-BlasSelection
-Configure-GpuBuildGenerator
+$previousCmakeGenerator = $env:CMAKE_GENERATOR
+try {
+    Configure-GpuBuildGenerator
 
-switch ($Backend) {
-    "cuda" {
-        Assert-CudaBuildReady
-        if ($BundleCudaDlls) {
-            $env:PARAKIT_BUNDLE_CUDA_DLLS = "1"
-            Write-Host "CUDA: runtime DLL bundling enabled"
-        } else {
+    switch ($Backend) {
+        "cuda" {
+            Assert-CudaBuildReady
+            if ($BundleCudaDlls) {
+                $env:PARAKIT_BUNDLE_CUDA_DLLS = "1"
+                Write-Host "CUDA: runtime DLL bundling enabled"
+            } else {
+                Remove-Item Env:\PARAKIT_BUNDLE_CUDA_DLLS -ErrorAction SilentlyContinue
+                Write-Host "CUDA: runtime DLLs expected from the installed app directory or PATH at install/run time"
+            }
+        }
+        "vulkan" {
+            Assert-VulkanBuildReady
             Remove-Item Env:\PARAKIT_BUNDLE_CUDA_DLLS -ErrorAction SilentlyContinue
-            Write-Host "CUDA: runtime DLLs expected from the installed app directory or PATH at install/run time"
+        }
+        default {
+            Remove-Item Env:\PARAKIT_BUNDLE_CUDA_DLLS -ErrorAction SilentlyContinue
         }
     }
-    "vulkan" {
-        Assert-VulkanBuildReady
-        Remove-Item Env:\PARAKIT_BUNDLE_CUDA_DLLS -ErrorAction SilentlyContinue
+
+    Write-Host "Building $Profile ($Backend)"
+    $cargoTargetRoot = Get-CargoTargetRoot
+    $cargoArgs = @("build", "--locked", "--target-dir", $cargoTargetRoot)
+    if ($Profile -eq "release") {
+        $cargoArgs += "--release"
     }
-    default {
-        Remove-Item Env:\PARAKIT_BUNDLE_CUDA_DLLS -ErrorAction SilentlyContinue
+    if ($Backend -ne "cpu") {
+        $cargoArgs += @("--features", $Backend)
+    }
+    Clear-StaleCMakePathAliasCaches
+    Invoke-Checked "cargo" @cargoArgs
+} finally {
+    if ([string]::IsNullOrWhiteSpace($previousCmakeGenerator)) {
+        Remove-Item Env:\CMAKE_GENERATOR -ErrorAction SilentlyContinue
+    } else {
+        $env:CMAKE_GENERATOR = $previousCmakeGenerator
     }
 }
 
-Write-Host "Building $Profile ($Backend)"
-$cargoArgs = @("build", "--locked")
-if ($Profile -eq "release") {
-    $cargoArgs += "--release"
-}
-if ($Backend -ne "cpu") {
-    $cargoArgs += @("--features", $Backend)
-}
-Clear-StaleCMakePathAliasCaches
-Invoke-Checked "cargo" @cargoArgs
-
-$cargoTargetRoot = Get-CargoTargetRoot
 $profileDir = Join-Path $cargoTargetRoot $Profile
 $exe = Join-Path $profileDir "parakit.exe"
 $runtimeManifest = Join-Path $profileDir "parakit-runtime-manifest.json"
@@ -443,6 +453,11 @@ if (-not (Test-Path -LiteralPath $exe)) {
 
 if (-not (Test-Path -LiteralPath $runtimeManifest -PathType Leaf)) {
     throw "Runtime manifest was not produced at $runtimeManifest"
+}
+
+$manifest = Get-Content -LiteralPath $runtimeManifest -Raw | ConvertFrom-Json
+if ($manifest.accelerator -ine $Backend) {
+    throw "Runtime manifest accelerator '$($manifest.accelerator)' does not match requested backend '$Backend'"
 }
 
 $bundleRoot = Join-Path $repo "target"
@@ -461,7 +476,6 @@ New-Item -ItemType Directory -Path $bundleDir | Out-Null
 Write-Host "Bundle: $bundleDir"
 Copy-Item -LiteralPath $runtimeManifest -Destination $bundleDir -Force
 
-$manifest = Get-Content -LiteralPath $runtimeManifest -Raw | ConvertFrom-Json
 foreach ($required in @($manifest.required_files)) {
     Assert-FlatBundleFileName -Name $required -Context "Runtime manifest required file"
     $source = Join-Path $profileDir $required

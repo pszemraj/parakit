@@ -407,6 +407,10 @@ function Get-VulkanSdkFromGlslc {
 }
 
 function Get-CargoTargetRoot {
+    if (-not [string]::IsNullOrWhiteSpace($script:BundleCargoTargetRoot)) {
+        return [System.IO.Path]::GetFullPath($script:BundleCargoTargetRoot)
+    }
+
     if ([string]::IsNullOrWhiteSpace($env:CARGO_TARGET_DIR)) {
         return (Join-Path $repo "target")
     }
@@ -416,6 +420,16 @@ function Get-CargoTargetRoot {
     }
 
     return [System.IO.Path]::GetFullPath((Join-Path $repo $env:CARGO_TARGET_DIR))
+}
+
+function Set-BundleCargoTargetDir {
+    if ($Backend -eq "vulkan") {
+        Set-DefaultVulkanCargoTargetDirIfNeeded
+    }
+
+    $baseTargetRoot = Get-CargoTargetRoot
+    $script:BundleCargoTargetRoot = [System.IO.Path]::GetFullPath((Join-Path $baseTargetRoot $Backend))
+    Write-Host "Cargo target: $script:BundleCargoTargetRoot"
 }
 
 function Clear-StaleCMakePathAliasCaches {
@@ -500,7 +514,8 @@ function Assert-VulkanBuildPathLength {
 }
 
 function Set-DefaultVulkanCargoTargetDirIfNeeded {
-    if (-not [string]::IsNullOrWhiteSpace($env:CARGO_TARGET_DIR)) {
+    if (-not [string]::IsNullOrWhiteSpace($env:CARGO_TARGET_DIR) -or
+        -not [string]::IsNullOrWhiteSpace($script:BundleCargoTargetRoot)) {
         return
     }
 
@@ -510,8 +525,8 @@ function Set-DefaultVulkanCargoTargetDirIfNeeded {
     }
 
     $defaultTarget = Get-DefaultVulkanCargoTargetDir
-    $env:CARGO_TARGET_DIR = $defaultTarget
-    Write-Host "Vulkan: CARGO_TARGET_DIR was not set; using short target dir $env:CARGO_TARGET_DIR"
+    $script:BundleCargoTargetRoot = $defaultTarget
+    Write-Host "Vulkan: CARGO_TARGET_DIR was not set; using short target dir $script:BundleCargoTargetRoot"
 }
 
 function Get-DefaultVulkanCargoTargetDir {

@@ -1,8 +1,55 @@
-//! Windows installer ownership and stale-file guard regressions.
+//! Windows bundle-target isolation and installer guard regressions.
 
 #[cfg(windows)]
 #[allow(dead_code)]
 mod common;
+
+#[cfg(windows)]
+fn bundle_target_root(base: &std::path::Path, backend: &str) -> std::path::PathBuf {
+    use std::process::Command;
+
+    let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let toolchains = repo.join("scripts/windows/toolchains.ps1");
+    let quote = |path: &std::path::Path| path.display().to_string().replace('\'', "''");
+    let script = format!(
+        ". '{}'; $repo = '{}'; $Backend = '{}'; $env:CARGO_TARGET_DIR = '{}'; Set-BundleCargoTargetDir; Write-Output (Get-CargoTargetRoot)",
+        quote(&toolchains),
+        quote(repo),
+        backend,
+        quote(base),
+    );
+    let output = Command::new("powershell")
+        .current_dir(repo)
+        .args(["-NoProfile", "-Command", &script])
+        .output()
+        .expect("toolchains.ps1 should run");
+    assert!(
+        output.status.success(),
+        "target resolution failed: {}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8(output.stdout).expect("PowerShell output should be UTF-8");
+    std::path::PathBuf::from(
+        stdout
+            .lines()
+            .rfind(|line| !line.trim().is_empty())
+            .expect("target resolution should print a path")
+            .trim(),
+    )
+}
+
+#[cfg(windows)]
+#[test]
+fn bundle_targets_are_isolated_by_backend() {
+    let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let base = repo.join(common::fixture_root("windows-bundle-guard", "target-root"));
+
+    for backend in ["cpu", "cuda", "vulkan"] {
+        assert_eq!(bundle_target_root(&base, backend), base.join(backend));
+    }
+}
 
 #[cfg(windows)]
 #[test]
