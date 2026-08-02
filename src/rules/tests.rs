@@ -295,6 +295,42 @@ fn text2num_handles_documented_cardinals_groups_and_decimals() {
 }
 
 #[test]
+fn text2num_renders_signed_numbers() {
+    assert_clean_cases(
+        CleaningProfile::Safe,
+        &[
+            ("The offset is negative five.", "The offset is -5."),
+            (
+                "The temperature is minus twenty degrees.",
+                "The temperature is -20 degrees.",
+            ),
+            (
+                "The bound is non-negative five.",
+                "The bound is non-negative 5.",
+            ),
+        ],
+    );
+}
+
+#[test]
+fn text2num_renders_ordinals_and_spoken_years() {
+    assert_clean_cases(
+        CleaningProfile::Safe,
+        &[
+            (
+                "It was the twenty-first attempt.",
+                "It was the 21st attempt.",
+            ),
+            ("Use the one hundredth entry.", "Use the 100th entry."),
+            (
+                "The release is from two thousand twenty-four.",
+                "The release is from 2024.",
+            ),
+        ],
+    );
+}
+
+#[test]
 fn large_spoken_magnitudes_use_readable_hybrid_notation() {
     assert_clean_cases(
         CleaningProfile::Safe,

@@ -50,10 +50,26 @@ impl Token for &NumberToken<'_> {
 pub(crate) fn normalize_spoken_numbers(input: &str, threshold: f64) -> TransformResult {
     let language = Language::english();
     let text = replace_numbers_preserving_time_units(input, &language, threshold);
+    let text = render_signed_numbers(text);
     TransformResult {
         matches: usize::from(text != input),
         text,
     }
+}
+
+/// Replace a spoken sign immediately before a number rendered by `text2num`.
+fn render_signed_numbers(input: String) -> String {
+    static SIGNED_NUMBER: OnceLock<Regex> = OnceLock::new();
+    let signed_number = SIGNED_NUMBER.get_or_init(|| {
+        Regex::new(
+            r"(?i)(^|[^[:alnum:]_-])(?:negative|minus)[ \t]+(\d+(?:\.\d+)?(?:[ \t]+(?:million|billion))?)\b",
+        )
+            .expect("signed-number regex must compile")
+    });
+    if !signed_number.is_match(&input) {
+        return input;
+    }
+    signed_number.replace_all(&input, "${1}-${2}").into_owned()
 }
 
 fn replace_numbers_preserving_time_units(
