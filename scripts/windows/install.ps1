@@ -7,10 +7,7 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$InstallDir,
 
-    [switch]$NoUserPath,
-
-    [Alias("Force")]
-    [switch]$AllowBackendSwitch
+    [switch]$NoUserPath
 )
 
 $ErrorActionPreference = "Stop"
@@ -221,89 +218,6 @@ function Assert-ExternalRuntimeDependencies {
     }
 }
 
-function Get-ManifestAccelerator {
-    param(
-        [Parameter(Mandatory = $true)]
-        $Manifest
-    )
-
-    $accelerator = $Manifest.accelerator
-    if (-not [string]::IsNullOrWhiteSpace($accelerator)) {
-        return $accelerator.ToString().Trim().ToLowerInvariant()
-    }
-
-    if ($null -ne $Manifest.cuda) {
-        return "cuda"
-    }
-    if ($null -ne $Manifest.vulkan) {
-        return "vulkan"
-    }
-
-    foreach ($required in @($Manifest.required_files)) {
-        if ($required -ieq "ggml-cuda.dll") {
-            return "cuda"
-        }
-        if ($required -ieq "ggml-vulkan.dll") {
-            return "vulkan"
-        }
-    }
-
-    return "cpu"
-}
-
-function Get-InstalledAccelerator {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$Path
-    )
-
-    $manifestPath = Join-Path $Path "parakit-runtime-manifest.json"
-    if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
-        return $null
-    }
-
-    try {
-        $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
-    } catch {
-        return "unreadable"
-    }
-
-    return Get-ManifestAccelerator $manifest
-}
-
-function Assert-BackendReplacementAllowed {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$Destination,
-
-        [Parameter(Mandatory = $true)]
-        $Manifest,
-
-        [Parameter(Mandatory = $true)]
-        [bool]$AllowSwitch
-    )
-
-    if (-not (Test-Path -LiteralPath $Destination -PathType Container)) {
-        return
-    }
-
-    $installed = Get-InstalledAccelerator $Destination
-    if ([string]::IsNullOrWhiteSpace($installed)) {
-        return
-    }
-
-    $incoming = Get-ManifestAccelerator $Manifest
-    if ($installed.Equals($incoming, [System.StringComparison]::OrdinalIgnoreCase)) {
-        return
-    }
-
-    if (-not $AllowSwitch) {
-        throw "Refusing to replace installed $installed bundle with $incoming bundle without explicit approval. Rerun build.ps1 with --allow-backend-switch or --force, or install.ps1 with -AllowBackendSwitch or -Force, when switching cpu/cuda/vulkan installs intentionally."
-    }
-
-    Write-Host "Install: replacing $installed bundle with $incoming bundle"
-}
-
 function Assert-CudaExternalDlls {
     param(
         [Parameter(Mandatory = $true)]
@@ -418,7 +332,6 @@ $installFull = Get-FullPath $InstallDir
 $manifest = Assert-Bundle $bundleFull
 Assert-InstallDir $installFull
 Assert-ExternalRuntimeDependencies -Manifest $manifest -BundleDir $bundleFull
-Assert-BackendReplacementAllowed -Destination $installFull -Manifest $manifest -AllowSwitch ([bool]$AllowBackendSwitch)
 
 Install-Bundle -Source $bundleFull -Destination $installFull
 Write-Host "Installed: $installFull"

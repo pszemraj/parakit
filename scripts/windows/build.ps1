@@ -32,7 +32,6 @@ $BackendExplicit = $false
 $Blas = $null
 $OpenBlasRoot = $null
 $BundleCudaDlls = $false
-$AllowBackendSwitch = $false
 
 function Show-Usage {
     $entryPoint = "scripts\windows\build.ps1"
@@ -40,7 +39,7 @@ function Show-Usage {
     Write-Host "Build Parakit daemon backends on native Windows."
     Write-Host ""
     Write-Host "Usage:"
-    Write-Host "  $entryPoint [--backend cpu|cuda|vulkan] [--blas auto|off|openblas|mkl|generic] [--openblas-root DIR] [--bundle-cuda-dlls] [--release|-Profile release|debug] [--no-submodules] [--no-install] [--no-user-path] [--allow-backend-switch|--force] [--install-dir DIR]"
+    Write-Host "  $entryPoint [--backend cpu|cuda|vulkan] [--blas auto|off|openblas|mkl|generic] [--openblas-root DIR] [--bundle-cuda-dlls] [--release|-Profile release|debug] [--no-submodules] [--no-install] [--no-user-path] [--install-dir DIR]"
     Write-Host ""
     Write-Host "Options:"
     Write-Host "  --backend        Build backend: cpu, cuda, or vulkan. If omitted, an interactive selector opens; Enter selects CPU."
@@ -56,9 +55,6 @@ function Show-Usage {
     Write-Host "  --no-submodules  Do not run git submodule update --init --recursive."
     Write-Host "  --no-install     Build the repo-local bundle without installing it."
     Write-Host "  --no-user-path   Install without adding the install directory to User PATH."
-    Write-Host "  --allow-backend-switch"
-    Write-Host "  --force"
-    Write-Host "                   Allow replacing an installed cpu/cuda/vulkan backend with a different backend."
     Write-Host "  --install-dir    Install to DIR instead of `%LOCALAPPDATA`%\Programs\parakit."
     Write-Host "  -h, --help       Print this help."
 }
@@ -268,9 +264,6 @@ for ($i = 0; $i -lt $RawArgs.Count; $i++) {
         '^(--no-user-path|-no-user-path|-NoUserPath)$' {
             $NoUserPath = $true
         }
-        '^(--allow-backend-switch|-allow-backend-switch|-AllowBackendSwitch|--force|-force|-Force)$' {
-            $AllowBackendSwitch = $true
-        }
         '^(--install-dir|-install-dir|-InstallDir)$' {
             $i++
             if ($i -ge $RawArgs.Count -or [string]::IsNullOrWhiteSpace($RawArgs[$i])) {
@@ -291,20 +284,6 @@ Write-Host "Backend: $Backend"
 
 if ($BundleCudaDlls -and $Backend -ne "cuda") {
     throw "--bundle-cuda-dlls is only valid with --backend cuda or --cuda."
-}
-
-if ($NoInstall -and ($NoUserPath -or $AllowBackendSwitch -or -not [string]::IsNullOrWhiteSpace($InstallDir))) {
-    throw "--no-user-path, --allow-backend-switch/--force, and --install-dir only apply when installing. Remove them when using --no-install."
-}
-
-if (-not [string]::IsNullOrWhiteSpace($OpenBlasRoot) -and
-    -not [string]::IsNullOrWhiteSpace($Blas) -and
-    $Blas -notin @("auto", "openblas")) {
-    throw "--openblas-root only applies with --blas auto or --blas openblas."
-}
-
-if (-not [string]::IsNullOrWhiteSpace($env:CRISPASR_LIB_DIR)) {
-    throw "Windows builds from this script require the bundled CrispASR staging path so runtime DLLs and parakit-runtime-manifest.json are produced. Unset CRISPASR_LIB_DIR before running this script."
 }
 
 function Test-CrispAsrSubmoduleReady {
@@ -331,7 +310,7 @@ function Test-CrispAsrSubmoduleReady {
     }
 
     foreach ($line in @($status)) {
-        if ($line.StartsWith("-") -or $line.StartsWith("+") -or $line.StartsWith("U")) {
+        if ($line.StartsWith("-") -or $line.StartsWith("U")) {
             return $false
         }
     }
@@ -344,7 +323,7 @@ function Assert-CrispAsrSubmoduleReady {
         return
     }
 
-    throw "CrispASR submodule is missing or not at the pinned revision. Use a checkout/source archive with vendor\CrispASR populated, or run git submodule update --init --recursive on a network that can reach the submodule remote."
+    throw "CrispASR submodule is missing or unresolved. Use a checkout/source archive with vendor\CrispASR populated, or run git submodule update --init --recursive on a network that can reach the submodule remote."
 }
 
 function Invoke-GitSubmoduleUpdate {
@@ -393,7 +372,13 @@ if ($NoSubmodules) {
 
 Configure-BlasSelection
 $previousCmakeGenerator = $env:CMAKE_GENERATOR
+$hadCrispAsrLibDir = Test-Path Env:\CRISPASR_LIB_DIR
+$previousCrispAsrLibDir = $env:CRISPASR_LIB_DIR
 try {
+    if ($hadCrispAsrLibDir) {
+        Write-Host "CrispASR: ignoring CRISPASR_LIB_DIR for the bundled Windows build"
+    }
+    Remove-Item Env:\CRISPASR_LIB_DIR -ErrorAction SilentlyContinue
     Configure-GpuBuildGenerator
 
     switch ($Backend) {
@@ -418,7 +403,7 @@ try {
 
     Write-Host "Building $Profile ($Backend)"
     $cargoTargetRoot = Get-CargoTargetRoot
-    $cargoArgs = @("build", "--locked", "--target-dir", $cargoTargetRoot)
+    $cargoArgs = @("build", "--target-dir", $cargoTargetRoot)
     if ($Profile -eq "release") {
         $cargoArgs += "--release"
     }
@@ -428,6 +413,11 @@ try {
     Clear-StaleCMakePathAliasCaches
     Invoke-Checked "cargo" @cargoArgs
 } finally {
+    if ($hadCrispAsrLibDir) {
+        $env:CRISPASR_LIB_DIR = $previousCrispAsrLibDir
+    } else {
+        Remove-Item Env:\CRISPASR_LIB_DIR -ErrorAction SilentlyContinue
+    }
     if ([string]::IsNullOrWhiteSpace($previousCmakeGenerator)) {
         Remove-Item Env:\CMAKE_GENERATOR -ErrorAction SilentlyContinue
     } else {
@@ -490,8 +480,7 @@ if (-not $NoInstall) {
     & $installer `
         -BundleDir $bundleDir `
         -InstallDir $InstallDir `
-        -NoUserPath:$NoUserPath `
-        -AllowBackendSwitch:$AllowBackendSwitch
+        -NoUserPath:$NoUserPath
     if (-not $?) {
         throw "Windows install failed"
     }

@@ -5,30 +5,37 @@
 mod common;
 
 #[cfg(windows)]
-fn bundle_target_root(base: &std::path::Path, backend: &str) -> std::path::PathBuf {
-    use std::process::Command;
+fn quote_powershell_path(path: &std::path::Path) -> String {
+    path.display().to_string().replace('\'', "''")
+}
 
-    let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-    let toolchains = repo.join("scripts/windows/toolchains.ps1");
-    let quote = |path: &std::path::Path| path.display().to_string().replace('\'', "''");
-    let script = format!(
-        ". '{}'; $repo = '{}'; $Backend = '{}'; $env:CARGO_TARGET_DIR = '{}'; Set-BundleCargoTargetDir; Write-Output (Get-CargoTargetRoot)",
-        quote(&toolchains),
-        quote(repo),
-        backend,
-        quote(base),
-    );
-    let output = Command::new("powershell")
-        .current_dir(repo)
+#[cfg(windows)]
+fn run_powershell(script: &str) -> std::process::Output {
+    std::process::Command::new("powershell")
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
         .args([
             "-NoProfile",
             "-ExecutionPolicy",
             "RemoteSigned",
             "-Command",
-            &script,
+            script,
         ])
         .output()
-        .expect("toolchains.ps1 should run");
+        .expect("PowerShell script should run")
+}
+
+#[cfg(windows)]
+fn bundle_target_root(base: &std::path::Path, backend: &str) -> std::path::PathBuf {
+    let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let toolchains = repo.join("scripts/windows/toolchains.ps1");
+    let script = format!(
+        ". '{}'; $repo = '{}'; $Backend = '{}'; $env:CARGO_TARGET_DIR = '{}'; Set-BundleCargoTargetDir; Write-Output (Get-CargoTargetRoot)",
+        quote_powershell_path(&toolchains),
+        quote_powershell_path(repo),
+        backend,
+        quote_powershell_path(base),
+    );
+    let output = run_powershell(&script);
     assert!(
         output.status.success(),
         "target resolution failed: {}{}",
@@ -59,7 +66,58 @@ fn bundle_targets_are_isolated_by_backend() {
 
 #[cfg(windows)]
 #[test]
-fn installer_refuses_unmarked_custom_destination_even_with_switch_approval() {
+fn gpu_builds_replace_an_inherited_cmake_generator_with_ninja() {
+    let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let common = repo.join("scripts/windows/common.ps1");
+    let toolchains = repo.join("scripts/windows/toolchains.ps1");
+    let script = format!(
+        ". '{}'; . '{}'; function Ensure-MsvcBuildEnvironment {{}}; function Ensure-NinjaAvailable {{}}; $Backend = 'vulkan'; $env:CMAKE_GENERATOR = 'Visual Studio 17 2022'; Configure-GpuBuildGenerator; if ($env:CMAKE_GENERATOR -ne 'Ninja') {{ throw 'GPU generator was not forced to Ninja' }}",
+        quote_powershell_path(&common),
+        quote_powershell_path(&toolchains),
+    );
+    let output = run_powershell(&script);
+
+    assert!(
+        output.status.success(),
+        "GPU generator setup failed: {}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn cuda_path_bin_is_added_before_nvcc_validation() {
+    use std::fs;
+
+    let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let root = common::fixture_root("windows-bundle-guard", "cuda-path");
+    let bin = root.join("bin");
+    fs::create_dir_all(&bin).expect("CUDA bin fixture should be created");
+    fs::write(bin.join("nvcc.exe"), b"").expect("nvcc fixture should be written");
+
+    let common = repo.join("scripts/windows/common.ps1");
+    let toolchains = repo.join("scripts/windows/toolchains.ps1");
+    let script = format!(
+        ". '{}'; . '{}'; $env:CUDA_PATH = '{}'; $env:Path = ''; Assert-CudaBuildReady; if (-not ($env:Path.Split(';') -contains '{}')) {{ throw 'CUDA bin was not added to PATH' }}",
+        quote_powershell_path(&common),
+        quote_powershell_path(&toolchains),
+        quote_powershell_path(&root),
+        quote_powershell_path(&bin),
+    );
+    let output = run_powershell(&script);
+
+    assert!(
+        output.status.success(),
+        "CUDA_PATH setup failed: {}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn installer_refuses_unmarked_custom_destination() {
     use std::fs;
     use std::process::Command;
 
@@ -87,7 +145,6 @@ fn installer_refuses_unmarked_custom_destination_even_with_switch_approval() {
         .arg("-InstallDir")
         .arg(&install)
         .arg("-NoUserPath")
-        .arg("-AllowBackendSwitch")
         .output()
         .expect("install.ps1 should run");
 
@@ -112,7 +169,7 @@ fn installer_refuses_unmarked_custom_destination_even_with_switch_approval() {
 
 #[cfg(windows)]
 #[test]
-fn installer_replaces_unmarked_default_bundle_with_switch_approval() {
+fn installer_replaces_unmarked_default_bundle_and_removes_stale_backend_files() {
     use std::fs;
     use std::process::Command;
 
@@ -150,7 +207,6 @@ fn installer_replaces_unmarked_default_bundle_with_switch_approval() {
         .arg("-InstallDir")
         .arg(&install)
         .arg("-NoUserPath")
-        .arg("-AllowBackendSwitch")
         .output()
         .expect("install.ps1 should run");
 

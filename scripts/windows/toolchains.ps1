@@ -5,17 +5,13 @@ function Configure-GpuBuildGenerator {
         return
     }
 
-    if ([string]::IsNullOrWhiteSpace($env:CMAKE_GENERATOR)) {
+    if ($env:CMAKE_GENERATOR -ne "Ninja") {
         $env:CMAKE_GENERATOR = "Ninja"
-        Write-Host "${Backend}: CMAKE_GENERATOR was not set; defaulting to Ninja"
-    } else {
-        Write-Host "${Backend}: using CMAKE_GENERATOR=$env:CMAKE_GENERATOR"
+        Write-Host "${Backend}: using CMAKE_GENERATOR=Ninja"
     }
 
-    if ($env:CMAKE_GENERATOR -like "Ninja*") {
-        Ensure-MsvcBuildEnvironment
-        Ensure-NinjaAvailable
-    }
+    Ensure-MsvcBuildEnvironment
+    Ensure-NinjaAvailable
 }
 
 function Ensure-MsvcBuildEnvironment {
@@ -193,7 +189,8 @@ function Import-EnvironmentFromBatch {
 }
 
 function Configure-BlasSelection {
-    if (-not [string]::IsNullOrWhiteSpace($OpenBlasRoot)) {
+    $openBlasRootApplies = [string]::IsNullOrWhiteSpace($Blas) -or $Blas -in @("auto", "openblas")
+    if ($openBlasRootApplies -and -not [string]::IsNullOrWhiteSpace($OpenBlasRoot)) {
         $root = Get-FullPath $OpenBlasRoot
         if (-not (Test-Path -LiteralPath $root -PathType Container)) {
             throw "--openblas-root does not point to a directory: $root"
@@ -215,8 +212,10 @@ function Configure-BlasSelection {
 }
 
 function Assert-CudaBuildReady {
-    Require-Command "nvcc" "Install the NVIDIA CUDA Toolkit and ensure nvcc is on PATH."
-    Set-CudaPathFromNvccIfMissing
+    if ([string]::IsNullOrWhiteSpace($env:CUDA_PATH)) {
+        Require-Command "nvcc" "Install the NVIDIA CUDA Toolkit and ensure nvcc is on PATH."
+        Set-CudaPathFromNvccIfMissing
+    }
 
     if ([string]::IsNullOrWhiteSpace($env:CUDA_PATH)) {
         throw "CUDA_PATH is not set. Install the NVIDIA CUDA Toolkit, or set CUDA_PATH to the toolkit root for this shell."
@@ -227,9 +226,15 @@ function Assert-CudaBuildReady {
         throw "CUDA_PATH does not contain a bin directory: $env:CUDA_PATH"
     }
 
-    if (-not ($env:CMAKE_GENERATOR -like "Ninja*")) {
-        Assert-CudaVisualStudioToolset
+    $currentPath = [string]$env:Path
+    if (-not (($currentPath -split ";") -contains $cudaBin)) {
+        $env:Path = if ([string]::IsNullOrWhiteSpace($currentPath)) {
+            $cudaBin
+        } else {
+            "$cudaBin;$currentPath"
+        }
     }
+    Require-Command "nvcc" "CUDA_PATH does not expose nvcc.exe under its bin directory: $env:CUDA_PATH"
 
     Write-Host "CUDA: using toolkit at $env:CUDA_PATH"
     Write-Host "CUDA: ggml-cuda first build can take tens of minutes; native/default arch keeps it to this machine."
@@ -264,82 +269,11 @@ function Set-CudaPathFromNvccIfMissing {
     Write-Host "CUDA: inferred CUDA_PATH=$env:CUDA_PATH from nvcc on PATH"
 }
 
-function Assert-CudaVisualStudioToolset {
-    if (-not [string]::IsNullOrWhiteSpace($env:CMAKE_GENERATOR_TOOLSET) -and $env:CMAKE_GENERATOR_TOOLSET -match '(^|,)cuda=') {
-        Write-Host "CUDA: using CMAKE_GENERATOR_TOOLSET=$env:CMAKE_GENERATOR_TOOLSET"
-        return
-    }
-
-    $nvccVersion = Get-NvccReleaseVersion
-    $integrationVersions = @(Get-CudaVisualStudioIntegrationVersions)
-
-    if ($integrationVersions.Count -eq 0) {
-        throw "CUDA Visual Studio integration was not found. Use the default Ninja generator, install the CUDA Visual Studio integration component, or set CMAKE_GENERATOR_TOOLSET=cuda=<toolkit-path>."
-    }
-
-    if ([string]::IsNullOrWhiteSpace($nvccVersion)) {
-        Write-Warning "CUDA: could not parse nvcc release version; Visual Studio generator may select a different CUDA BuildCustomizations version."
-        return
-    }
-
-    if ($integrationVersions -notcontains $nvccVersion) {
-        $available = $integrationVersions -join ", "
-        throw "CUDA: nvcc reports $nvccVersion, but Visual Studio CUDA BuildCustomizations contain [$available]. Use Ninja, remove stale CUDA *.props/*.targets, reinstall the matching CUDA Visual Studio integration, or set CMAKE_GENERATOR_TOOLSET=cuda=$env:CUDA_PATH."
-    }
-
-    $specificEnvName = "CUDA_PATH_V$($nvccVersion.Replace('.', '_'))"
-    $specificEnvValue = [System.Environment]::GetEnvironmentVariable($specificEnvName, "Process")
-    if ([string]::IsNullOrWhiteSpace($specificEnvValue)) {
-        Write-Warning "CUDA: $specificEnvName is not set. Visual Studio CUDA targets may resolve an empty CudaToolkitDir; prefer Ninja or set CMAKE_GENERATOR_TOOLSET=cuda=$env:CUDA_PATH."
-    }
-}
-
-function Get-NvccReleaseVersion {
-    $nvcc = & nvcc --version 2>$null
-    if ($LASTEXITCODE -ne 0) {
-        return $null
-    }
-
-    foreach ($line in @($nvcc)) {
-        if ($line -match 'release\s+([0-9]+\.[0-9]+)') {
-            return $matches[1]
-        }
-    }
-
-    return $null
-}
-
-function Get-CudaVisualStudioIntegrationVersions {
-    $roots = @()
-    if (-not [string]::IsNullOrWhiteSpace($env:CUDA_PATH)) {
-        $roots += Join-Path $env:CUDA_PATH "extras\visual_studio_integration"
-    }
-    if (-not [string]::IsNullOrWhiteSpace(${env:ProgramFiles(x86)})) {
-        $roots += Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio"
-    }
-    if (-not [string]::IsNullOrWhiteSpace($env:ProgramFiles)) {
-        $roots += Join-Path $env:ProgramFiles "Microsoft Visual Studio"
-    }
-    $roots = $roots | Where-Object { Test-Path -LiteralPath $_ -PathType Container }
-
-    $versions = @()
-    foreach ($root in $roots) {
-        $propsFiles = Get-ChildItem -LiteralPath $root -Recurse -Filter "CUDA *.props" -ErrorAction SilentlyContinue
-        foreach ($propsFile in @($propsFiles)) {
-            if ($propsFile.BaseName -match '^CUDA\s+([0-9]+\.[0-9]+)') {
-                $versions += $Matches[1]
-            }
-        }
-    }
-
-    return $versions | Sort-Object -Unique
-}
-
 function Assert-VulkanBuildReady {
     if ([string]::IsNullOrWhiteSpace($env:VULKAN_SDK)) {
-        $detected = Get-NewestVulkanSdk
+        $detected = Get-VulkanSdkFromGlslc
         if ([string]::IsNullOrWhiteSpace($detected)) {
-            $detected = Get-VulkanSdkFromGlslc
+            $detected = Get-NewestVulkanSdk
         }
         if ([string]::IsNullOrWhiteSpace($detected)) {
             throw "VULKAN_SDK is not set and no Vulkan SDK install was found. Install the LunarG Vulkan SDK from vulkan.lunarg.com, use winget install KhronosGroup.VulkanSDK, or put glslc from a complete Vulkan SDK on PATH."
@@ -359,7 +293,6 @@ function Assert-VulkanBuildReady {
 
     Require-Command "glslc" "Install the LunarG Vulkan SDK and ensure its Bin directory is on PATH."
     Write-Host "Vulkan: using SDK at $env:VULKAN_SDK"
-    Write-VulkanPathLengthWarnings
 }
 
 function Get-NewestVulkanSdk {
@@ -369,7 +302,8 @@ function Get-NewestVulkanSdk {
     }
 
     $sdk = Get-ChildItem -LiteralPath $root -Directory |
-        Sort-Object Name -Descending |
+        Where-Object { $null -ne ($_.Name -as [version]) } |
+        Sort-Object { [version]$_.Name } -Descending |
         Select-Object -First 1
     if ($null -eq $sdk) {
         return $null
@@ -473,29 +407,6 @@ function ConvertTo-ComparablePath {
     )
 
     return $Path.Trim().Replace("/", "\").TrimEnd("\")
-}
-
-function Get-LongPathsEnabled {
-    try {
-        $value = Get-ItemPropertyValue -LiteralPath "HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem" -Name "LongPathsEnabled" -ErrorAction Stop
-        return [int]$value
-    } catch {
-        return $null
-    }
-}
-
-function Write-VulkanPathLengthWarnings {
-    $sample = Get-VulkanShaderObjectPathSample
-    if ($sample.Length -ge 240) {
-        Write-Warning "Vulkan: estimated shader build object path is $($sample.Length) characters. ggml-vulkan can exceed Windows path limits from deep checkouts; set CARGO_TARGET_DIR to a short absolute user-writable path such as `$env:USERPROFILE\parakit-target, or build from a shorter checkout such as C:\src\parakit."
-    }
-
-    $longPathsEnabled = Get-LongPathsEnabled
-    if ($null -eq $longPathsEnabled) {
-        Write-Warning "Vulkan: could not read LongPathsEnabled. If shader generation fails with path or PDB errors, enable Windows long paths or shorten CARGO_TARGET_DIR."
-    } elseif ($longPathsEnabled -ne 1) {
-        Write-Warning "Vulkan: Windows long paths are disabled. If shader generation fails with path or PDB errors, enable LongPathsEnabled or shorten CARGO_TARGET_DIR."
-    }
 }
 
 function Assert-VulkanBuildPathLength {

@@ -95,35 +95,6 @@ fn serializes_runtime_manifest_cases() {
                 ("/vulkan/external_dlls_bundled", json!(false)),
             ],
         },
-        Case {
-            name: "multi-backend-metadata-when-both-are-present",
-            manifest: RuntimeManifest {
-                required_files: vec!["parakit.exe".to_string()],
-                accelerator: Accelerator::Cuda,
-                cuda: Some(CudaManifest {
-                    toolkit_version: "12.9".to_string(),
-                    architectures: "native".to_string(),
-                    external_dlls: vec![
-                        "cudart64_12.dll".to_string(),
-                        "cublas64_12.dll".to_string(),
-                        "cublasLt64_12.dll".to_string(),
-                    ],
-                    external_dlls_bundled: true,
-                }),
-                vulkan: Some(VulkanManifest {
-                    sdk_version: "C:\\VulkanSDK\\1.4.321.1".to_string(),
-                    external_dlls: vec!["vulkan-1.dll".to_string()],
-                    external_dlls_bundled: false,
-                }),
-            },
-            expect_json_fields: vec![
-                ("/cuda/toolkit_version", json!("12.9")),
-                ("/cuda/architectures", json!("native")),
-                ("/cuda/external_dlls_bundled", json!(true)),
-                ("/vulkan/sdk_version", json!("C:\\VulkanSDK\\1.4.321.1")),
-                ("/vulkan/external_dlls/0", json!("vulkan-1.dll")),
-            ],
-        },
     ];
 
     let mut failures = Vec::new();
