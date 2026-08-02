@@ -28,6 +28,14 @@ function Get-FullPath {
     return [System.IO.Path]::GetFullPath($Path)
 }
 
+function Get-DefaultInstallDir {
+    if ([string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) {
+        return (Join-Path $env:USERPROFILE "AppData\Local\Programs\parakit")
+    }
+
+    return (Join-Path $env:LOCALAPPDATA "Programs\parakit")
+}
+
 function Test-Command {
     param(
         [Parameter(Mandatory = $true)]

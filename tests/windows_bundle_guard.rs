@@ -20,7 +20,13 @@ fn bundle_target_root(base: &std::path::Path, backend: &str) -> std::path::PathB
     );
     let output = Command::new("powershell")
         .current_dir(repo)
-        .args(["-NoProfile", "-Command", &script])
+        .args([
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "RemoteSigned",
+            "-Command",
+            &script,
+        ])
         .output()
         .expect("toolchains.ps1 should run");
     assert!(
@@ -53,7 +59,7 @@ fn bundle_targets_are_isolated_by_backend() {
 
 #[cfg(windows)]
 #[test]
-fn installer_refuses_non_empty_unmarked_destination() {
+fn installer_refuses_unmarked_custom_destination_even_with_switch_approval() {
     use std::fs;
     use std::process::Command;
 
@@ -81,6 +87,7 @@ fn installer_refuses_non_empty_unmarked_destination() {
         .arg("-InstallDir")
         .arg(&install)
         .arg("-NoUserPath")
+        .arg("-AllowBackendSwitch")
         .output()
         .expect("install.ps1 should run");
 
@@ -92,7 +99,7 @@ fn installer_refuses_non_empty_unmarked_destination() {
     );
     assert!(
         output_text.contains(
-            "Refusing to install into existing non-empty directory without .parakit-install marker"
+            "Refusing to install into existing non-empty custom directory without .parakit-install marker"
         ),
         "unexpected installer output: {output_text}"
     );
@@ -101,4 +108,64 @@ fn installer_refuses_non_empty_unmarked_destination() {
         fs::read(install.join("ggml-cuda.dll")).expect("stale dll should remain untouched"),
         b"stale"
     );
+}
+
+#[cfg(windows)]
+#[test]
+fn installer_replaces_unmarked_default_bundle_with_switch_approval() {
+    use std::fs;
+    use std::process::Command;
+
+    let root = common::fixture_root("windows-bundle-guard", "unmarked-default-switch");
+    let local_app_data = root.join("local-app-data");
+    let bundle = root.join("bundle");
+    let install = local_app_data.join("Programs").join("parakit");
+    fs::create_dir_all(&bundle).expect("bundle dir should be created");
+    fs::create_dir_all(&install).expect("install dir should be created");
+
+    let parakit = std::path::Path::new(env!("CARGO_BIN_EXE_parakit"));
+    fs::copy(parakit, bundle.join("parakit.exe")).expect("test binary should enter bundle");
+    fs::copy(parakit, install.join("parakit.exe")).expect("test binary should enter install");
+    fs::write(
+        bundle.join("parakit-runtime-manifest.json"),
+        r#"{"required_files":["parakit.exe"],"accelerator":"vulkan"}"#,
+    )
+    .expect("incoming manifest should be written");
+    fs::write(
+        install.join("parakit-runtime-manifest.json"),
+        r#"{"required_files":["parakit.exe","ggml-cuda.dll"],"accelerator":"cuda"}"#,
+    )
+    .expect("installed manifest should be written");
+    fs::write(install.join("ggml-cuda.dll"), b"stale")
+        .expect("stale backend dll should be written");
+
+    let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let output = Command::new("powershell")
+        .current_dir(repo)
+        .env("LOCALAPPDATA", &local_app_data)
+        .args(["-NoProfile", "-ExecutionPolicy", "RemoteSigned", "-File"])
+        .arg(repo.join("scripts/windows/install.ps1"))
+        .arg("-BundleDir")
+        .arg(&bundle)
+        .arg("-InstallDir")
+        .arg(&install)
+        .arg("-NoUserPath")
+        .arg("-AllowBackendSwitch")
+        .output()
+        .expect("install.ps1 should run");
+
+    let output_text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        output.status.success(),
+        "default bundle switch should succeed: {output_text}"
+    );
+    assert!(install.join(".parakit-install").is_file());
+    assert!(!install.join("ggml-cuda.dll").exists());
+    let manifest = fs::read_to_string(install.join("parakit-runtime-manifest.json"))
+        .expect("installed manifest should be readable");
+    assert!(manifest.contains(r#""accelerator":"vulkan""#));
 }

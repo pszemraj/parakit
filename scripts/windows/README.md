@@ -128,7 +128,7 @@ If path shortening does not fix a Vulkan shader-gen failure, capture the exact `
 5. Creates `target\parakit-windows-x86_64-<backend>` and copies the runtime manifest, its required files, `LICENSE`, and `README.md`.
 6. Calls `install.ps1` unless `--no-install` is set.
 
-The installer only wipes directories it owns, marked by `.parakit-install`. It refuses a non-empty unmarked destination instead of merging files into it, because stale accelerator DLLs from a foreign directory can change loader behavior.
+The default `%LOCALAPPDATA%\Programs\parakit` directory is dedicated to parakit and can be replaced after the backend-switch check. Custom install directories are wiped only when marked by `.parakit-install`; an unmarked non-empty custom destination is refused instead of merged, because stale accelerator DLLs can change loader behavior.
 
 The build script checks whether `vendor\CrispASR` is already populated before touching submodules. If the submodule is present and pinned, the script does not contact GitHub. If it must initialize the submodule, it runs Git non-interactively so firewalled machines fail instead of opening credential prompts. On a firewalled machine, use a checkout or source archive that already includes `vendor\CrispASR`, or pass `--no-submodules` to fail fast instead of trying to initialize it.
 

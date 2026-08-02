@@ -307,14 +307,6 @@ if (-not [string]::IsNullOrWhiteSpace($env:CRISPASR_LIB_DIR)) {
     throw "Windows builds from this script require the bundled CrispASR staging path so runtime DLLs and parakit-runtime-manifest.json are produced. Unset CRISPASR_LIB_DIR before running this script."
 }
 
-function Get-DefaultInstallDir {
-    if ([string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) {
-        return (Join-Path $env:USERPROFILE "AppData\Local\Programs\parakit")
-    }
-
-    return (Join-Path $env:LOCALAPPDATA "Programs\parakit")
-}
-
 function Test-CrispAsrSubmoduleReady {
     $manifest = Join-Path $repo "vendor\CrispASR\crispasr\Cargo.toml"
     if (-not (Test-Path -LiteralPath $manifest -PathType Leaf)) {

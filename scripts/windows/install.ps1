@@ -283,9 +283,7 @@ function Assert-BackendReplacementAllowed {
         [bool]$AllowSwitch
     )
 
-    $marker = Join-Path $Destination ".parakit-install"
-    if (-not (Test-Path -LiteralPath $Destination -PathType Container) -or
-        -not (Test-Path -LiteralPath $marker -PathType Leaf)) {
+    if (-not (Test-Path -LiteralPath $Destination -PathType Container)) {
         return
     }
 
@@ -385,14 +383,19 @@ function Install-Bundle {
     )
 
     $marker = Join-Path $Destination ".parakit-install"
+    $defaultInstall = Get-FullPath (Get-DefaultInstallDir)
+    $isDefaultInstall = $Destination.Equals(
+        $defaultInstall,
+        [System.StringComparison]::OrdinalIgnoreCase
+    )
 
     if (Test-Path -LiteralPath $Destination -PathType Container) {
-        if (Test-Path -LiteralPath $marker -PathType Leaf) {
+        if ($isDefaultInstall -or (Test-Path -LiteralPath $marker -PathType Leaf)) {
             Remove-Item -LiteralPath $Destination -Recurse -Force
         } else {
             $existingEntry = Get-ChildItem -LiteralPath $Destination -Force | Select-Object -First 1
             if ($null -ne $existingEntry) {
-                throw "Refusing to install into existing non-empty directory without .parakit-install marker: $Destination. Choose an empty install directory or move the existing directory aside."
+                throw "Refusing to install into existing non-empty custom directory without .parakit-install marker: $Destination. Choose an empty install directory or move the existing directory aside."
             }
         }
     }
