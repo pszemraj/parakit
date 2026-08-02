@@ -4,7 +4,7 @@ use super::{
     manual_blas_path_overrides_are_set, read_cmake_cache, AcceleratorConfig, BlasConfig,
     OpenBlasInstall,
 };
-use crate::windows_cuda::{cuda_external_dll_names, cuda_runtime_dirs};
+use crate::windows_cuda::{cuda_external_dll_names, cuda_runtime_dirs, remove_cuda_external_dlls};
 use crate::windows_manifest::{
     stale_runtime_dlls, Accelerator, CudaManifest, RuntimeManifest, VulkanManifest,
 };
@@ -51,6 +51,12 @@ pub(crate) fn prepare_windows_artifacts(
     });
 
     copy_windows_runtime_dlls(install_dir, bin_dir);
+    remove_cuda_external_dlls(bin_dir).unwrap_or_else(|err| {
+        panic!(
+            "failed to remove stale CUDA runtime DLLs from {}: {err}",
+            bin_dir.display()
+        )
+    });
     let cuda_manifest = cuda_manifest(install_dir, bin_dir, accelerators);
     let vulkan_manifest = vulkan_manifest(accelerators);
 

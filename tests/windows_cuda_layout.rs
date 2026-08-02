@@ -8,7 +8,7 @@ use std::fs;
 
 use windows_cuda::{
     cuda_external_dll_names, cuda_runtime_dirs, derive_cuda_external_dll_names,
-    discover_cuda_external_dll_names, is_cuda_external_dll_name,
+    discover_cuda_external_dll_names, is_cuda_external_dll_name, remove_cuda_external_dlls,
 };
 
 #[test]
@@ -125,4 +125,27 @@ fn cuda_runtime_dll_filter_accepts_required_runtime_names_only() {
     assert!(!is_cuda_external_dll_name("nvrtc64_130_0.dll"));
     assert!(!is_cuda_external_dll_name("cublas64_13.lib"));
     assert!(!is_cuda_external_dll_name("unrelated.dll"));
+}
+
+#[test]
+fn removes_only_staged_cuda_external_runtime_dlls() {
+    let bin = common::fixture_root_with_files(
+        "windows-cuda-layout-tests",
+        "stale-runtime-dlls",
+        &[
+            "cudart64_12.dll",
+            "cublas64_12.dll",
+            "cublasLt64_12.dll",
+            "ggml-cuda.dll",
+            "nvrtc64_120_0.dll",
+        ],
+    );
+
+    remove_cuda_external_dlls(&bin).expect("stale CUDA runtime DLLs should be removed");
+
+    assert!(!bin.join("cudart64_12.dll").exists());
+    assert!(!bin.join("cublas64_12.dll").exists());
+    assert!(!bin.join("cublasLt64_12.dll").exists());
+    assert!(bin.join("ggml-cuda.dll").is_file());
+    assert!(bin.join("nvrtc64_120_0.dll").is_file());
 }
