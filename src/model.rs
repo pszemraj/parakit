@@ -12,17 +12,12 @@ pub const OFFICIAL_NEMO_URL: &str =
     "https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3/resolve/main/parakeet-tdt-0.6b-v3.nemo";
 /// Direct download URL for the default hosted Q8_0 GGUF.
 pub const HOSTED_Q8_URL: &str = "https://huggingface.co/pszemraj/parakeet-tdt-0.6b-v3-gguf/resolve/main/parakeet-tdt-0.6b-v3-Q8_0.gguf";
-/// Expected SHA256 for the default hosted Q8_0 GGUF.
-pub const HOSTED_Q8_SHA256: &str =
-    "10f38dd9ce69ce555a413d9b4201ae5d93c2d7cadc91a285f4bfeeec6eee635a";
 /// File name for the downloaded official NeMo checkpoint.
 pub const NEMO_FILENAME: &str = "parakeet-tdt-0.6b-v3.nemo";
 /// File name for the intermediate F16 GGUF.
 pub const F16_FILENAME: &str = "parakeet-tdt-0.6b-v3-F16.gguf";
 /// File name for the canonical Q8_0 GGUF used by parakit by default.
 pub const Q8_FILENAME: &str = "parakeet-tdt-0.6b-v3-Q8_0.gguf";
-/// File name for model acquisition metadata.
-pub const MANIFEST_FILENAME: &str = "manifest.json";
 /// Environment variable overriding the Hugging Face Hub endpoint used by
 /// `parakit fetch` for Hub API calls, repo downloads, and the two pinned
 /// hosted/official-checkpoint URLs. Useful for internal Nexus/Artifactory-style
@@ -60,7 +55,7 @@ pub fn validate_model_file(path: &Path) -> Result<()> {
 ///
 /// # Returns
 ///
-/// The directory where model artifacts and `manifest.json` are stored.
+/// The directory where model artifacts are stored.
 ///
 /// # Errors
 ///
@@ -136,8 +131,7 @@ pub fn xdg_base(env_var: &str, fallback_subdir: &str) -> Result<PathBuf> {
 
 /// Join a relative path's components with `/`, regardless of platform.
 ///
-/// Shared core of [`crate::fetch`]'s manifest key derivation and the
-/// `parakit cache list` display path; each caller applies its own policy for
+/// Shared core of `parakit cache list` display paths. The caller applies its own policy for
 /// a path that turns out not to be relative to the expected base, so only
 /// the join itself lives here.
 ///

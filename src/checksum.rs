@@ -1,4 +1,5 @@
-//! Small checksum helpers shared by fetch and cache inspection.
+//! Small digest helpers shared by explicit fetch verification, cache keys,
+//! and cleaning-ruleset fingerprints.
 
 use anyhow::{Context, Result};
 use sha2::{Digest, Sha256};
@@ -40,10 +41,8 @@ pub fn sha256_file_hex(path: &Path) -> Result<String> {
 /// Return whether `s` is a well-formed SHA256 hex digest: exactly 64
 /// hexadecimal characters (case-insensitive).
 ///
-/// Shared by the CLI `--sha256` value parser and the Hugging Face Hub LFS
-/// checksum normalizer, which both need this predicate but apply their own
-/// policy around it (the CLI parser also lowercases and rejects with a
-/// clap-friendly message).
+/// Used by the CLI `--sha256` value parser before an explicitly requested
+/// download verification.
 ///
 /// # Arguments
 ///

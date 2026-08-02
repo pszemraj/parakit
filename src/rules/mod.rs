@@ -169,10 +169,6 @@ pub struct CleanResult {
 /// disabled rule name, an invalid built-in pattern, an empty or non-canonical
 /// user rule name, an empty user rule pattern, a user rule name colliding with
 /// a built-in name, a duplicate user rule name, or an invalid user rule regex.
-/// A user rule that is itself named in `disabled_rules` is exempt from the
-/// invalid-regex check: it is filtered out before its pattern is ever compiled,
-/// which is the documented way to "park" a `[[rules.user]]` entry whose pattern
-/// does not compile yet.
 pub fn build_cleaner(
     no_cleaning: bool,
     profile: CleaningProfile,
@@ -232,9 +228,7 @@ pub fn build_enabled_cleaner(
 
 /// Validate config-backed rule inputs without compiling the built-in pipeline.
 ///
-/// Enabled user regexes are compiled so a broken config still fails at load
-/// time. Disabled user regexes are deliberately skipped, preserving the
-/// documented workflow for parking an unfinished rule.
+/// User regexes are compiled so a broken config still fails at load time.
 ///
 /// # Arguments
 ///
@@ -254,12 +248,7 @@ pub fn validate_configured_rules(
     disabled_rules: &[String],
     user_rules: &[UserRule],
 ) -> Result<()> {
-    let disabled = validate_rule_inputs(number_threshold, disabled_rules, user_rules)?;
-    for rule in user_rules {
-        if !disabled.contains(&rule.name) {
-            user::compile_user_regex(rule)?;
-        }
-    }
+    validate_rule_inputs(number_threshold, disabled_rules, user_rules)?;
     Ok(())
 }
 
@@ -273,6 +262,9 @@ fn validate_rule_inputs(
     }
     engine::validate_number_threshold(number_threshold)?;
     user::validate_user_rules(user_rules)?;
+    for rule in user_rules {
+        user::compile_user_regex(rule)?;
+    }
     Ok(disabled_rules.iter().cloned().collect())
 }
 

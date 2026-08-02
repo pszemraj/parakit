@@ -482,7 +482,7 @@ fn backend_labels_are_stable() {
 
 #[cfg(target_os = "linux")]
 #[test]
-fn linux_backend_aliases_parse_to_stable_variants() {
+fn linux_backend_names_parse_to_stable_variants() {
     fn parse(value: &str) -> HotkeyBackend {
         <HotkeyBackend as clap::ValueEnum>::from_str(value, false).unwrap()
     }
@@ -493,12 +493,8 @@ fn linux_backend_aliases_parse_to_stable_variants() {
         parse("evdev-proxy-experimental"),
         HotkeyBackend::EvdevProxyExperimental
     );
-    assert_eq!(parse("evdev-proxy"), HotkeyBackend::EvdevProxyExperimental);
-    assert_eq!(
-        serde_json::from_str::<HotkeyBackend>(r#""evdev-proxy""#).unwrap(),
-        HotkeyBackend::EvdevProxyExperimental,
-        "the CLI alias must also work in config deserialization"
-    );
+    assert!(<HotkeyBackend as clap::ValueEnum>::from_str("evdev-proxy", false).is_err());
+    assert!(serde_json::from_str::<HotkeyBackend>(r#""evdev-proxy""#).is_err());
     assert!(<HotkeyBackend as clap::ValueEnum>::from_str("evdev", false).is_err());
 }
 

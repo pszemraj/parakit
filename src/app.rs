@@ -1,6 +1,7 @@
 //! Application entry point and top-level command dispatch for the `parakit` binary.
 
 use anyhow::{Context, Result};
+use clap::Parser;
 use crossbeam_channel::{bounded, unbounded};
 use parakit::audio_file::prepare_wav_for_model;
 use parakit::data_log::DataLogger;
@@ -19,7 +20,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::cli::{
-    self, CacheCli, CacheCommand, Cli, Commands, ConfigCli, ConfigCommand, DoctorCli, RulesArgs,
+    CacheCli, CacheCommand, Cli, Commands, ConfigCli, ConfigCommand, DoctorCli, RulesArgs,
     RulesCli, RulesCommand, StartCli,
 };
 use crate::config::{self, ConfigFile};
@@ -64,7 +65,7 @@ pub(crate) fn run() -> Result<()> {
     #[cfg(target_os = "linux")]
     daemon::audio::alsa::install_error_silencer();
 
-    let cli = cli::parse_cli();
+    let cli = Cli::parse();
     // Unconditional, CLI-only pass: keeps native ggml log filtering behavior
     // unchanged for the commands below that must not depend on config
     // parsing (see the load-order comment above the post-dispatch
@@ -869,7 +870,7 @@ fn print_cache_list() -> Result<()> {
 
     let top_level = list_gguf_files(&dir);
     let mut extra = list_nested_gguf_files(&dir.join("hub"));
-    extra.extend(list_gguf_files(&dir.join("url")));
+    extra.extend(list_nested_gguf_files(&dir.join("url")));
     extra.sort();
 
     if top_level.is_empty() && extra.is_empty() {
@@ -879,10 +880,10 @@ fn print_cache_list() -> Result<()> {
 
     println!("  models:");
     for path in &top_level {
-        print_cache_entry(&dir, path, &model_file_name(path))?;
+        print_cache_entry(&dir, path, &model_file_name(path));
     }
     for path in &extra {
-        print_cache_entry(&dir, path, &relative_cache_display(&dir, path))?;
+        print_cache_entry(&dir, path, &relative_cache_display(&dir, path));
     }
     Ok(())
 }
@@ -902,7 +903,7 @@ fn list_gguf_files(dir: &Path) -> Vec<PathBuf> {
 }
 
 /// List `.gguf` files one level below `parent` (`parent/*/*.gguf`), sorted.
-/// Used for `hub/<owner>--<repo>/*.gguf`.
+/// Used for revision-keyed Hub entries and URL-keyed direct downloads.
 fn list_nested_gguf_files(parent: &Path) -> Vec<PathBuf> {
     let Ok(read) = std::fs::read_dir(parent) else {
         return Vec::new();
@@ -925,30 +926,15 @@ fn relative_cache_display(dir: &Path, path: &Path) -> String {
         .unwrap_or_else(|_| model_file_name(path))
 }
 
-fn print_cache_entry(dir: &Path, path: &Path, display_name: &str) -> Result<()> {
+fn print_cache_entry(dir: &Path, path: &Path, display_name: &str) {
     let dtype = gguf::dtype_label(path);
     let size = path
         .metadata()
         .map(|meta| format_file_size(meta.len()))
         .unwrap_or_else(|_| "unknown size".to_string());
-    let name = model_file_name(path);
-    let is_default_q8 = name == model::Q8_FILENAME && path.parent() == Some(dir);
+    let is_default_q8 = model_file_name(path) == model::Q8_FILENAME && path.parent() == Some(dir);
     let default_marker = if is_default_q8 { " default" } else { "" };
-    let expected_sha = if is_default_q8 {
-        Some(model::HOSTED_Q8_SHA256.to_string())
-    } else {
-        fetch::recorded_download_sha(dir, path)?
-    };
-    let checksum = match expected_sha {
-        Some(expected) => match parakit::checksum::sha256_file_hex(path) {
-            Ok(hash) if hash == expected => "sha256 ok".to_string(),
-            Ok(hash) => format!("sha256 mismatch ({hash})"),
-            Err(err) => format!("sha256 unavailable ({err})"),
-        },
-        None => "sha256 not checked".to_string(),
-    };
-    println!("    {display_name}{default_marker}: {dtype}, {size}, {checksum}");
-    Ok(())
+    println!("    {display_name}{default_marker}: {dtype}, {size}");
 }
 
 fn format_file_size(bytes: u64) -> String {
@@ -1178,7 +1164,6 @@ fn parse_editor_command(editor: &str) -> Result<(String, Vec<String>)> {
 #[cfg(test)]
 mod app_tests {
     use super::*;
-    use clap::Parser as _;
 
     const GGML_LOG_LEVEL_DEBUG: i32 = 1;
     const GGML_LOG_LEVEL_INFO: i32 = 2;

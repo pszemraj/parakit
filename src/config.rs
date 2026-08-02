@@ -33,23 +33,20 @@ pub(crate) const CONFIG_PATH_ENV: &str = "PARAKIT_CONFIG_PATH";
 ///
 /// Every field is optional at every level: an absent file, an absent
 /// section, or an absent key all fall back to built-in defaults. Unknown
-/// top-level and section keys are ignored so older parakit versions tolerate
-/// config files written for newer ones. Individual `[[rules.user]]` entries
-/// are strict because a misspelled field silently changes rule behavior.
+/// keys are rejected so misspellings cannot silently change behavior.
 #[derive(Debug, Default, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub(crate) struct ConfigFile {
     pub(crate) daemon: DaemonConfig,
     pub(crate) cleaning: CleaningConfig,
     pub(crate) logging: LoggingConfig,
-    #[cfg(target_os = "linux")]
     pub(crate) hotkey: HotkeyConfig,
     pub(crate) rules: RulesConfig,
 }
 
 /// `[daemon]` section: daemon runtime defaults.
 #[derive(Debug, Default, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub(crate) struct DaemonConfig {
     /// Path to a GGUF model file. Overrides the cached Q8_0 model.
     pub(crate) model: Option<PathBuf>,
@@ -74,7 +71,7 @@ pub(crate) struct DaemonConfig {
 
 /// `[cleaning]` section: text-cleaning pipeline defaults.
 #[derive(Debug, Default, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub(crate) struct CleaningConfig {
     /// Enable the text-cleaning pipeline.
     pub(crate) enabled: Option<bool>,
@@ -95,24 +92,24 @@ pub(crate) struct CleaningConfig {
 
 /// `[logging]` section: transcription log defaults.
 #[derive(Debug, Default, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub(crate) struct LoggingConfig {
     /// Directory for JSONL transcription logs. One file is written per local day.
     pub(crate) dir: Option<PathBuf>,
 }
 
 /// `[hotkey]` section: Linux hotkey backend default.
-#[cfg(target_os = "linux")]
 #[derive(Debug, Default, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub(crate) struct HotkeyConfig {
     /// Linux hotkey backend.
+    #[cfg(target_os = "linux")]
     pub(crate) backend: Option<HotkeyBackend>,
 }
 
 /// `[rules]` section: user-defined cleaning rules.
 #[derive(Debug, Default, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub(crate) struct RulesConfig {
     /// User-defined rules, applied alongside the built-in rules. See
     /// `parakit::rules` for the compiled application order.
@@ -504,13 +501,7 @@ replacement = "hello"
     }
 
     #[test]
-    fn disabling_a_user_rule_with_invalid_regex_does_not_fail_load() {
-        // A disabled user rule's pattern is never compiled (see
-        // `parakit::rules::push_user_rules`), so an invalid regex on a rule
-        // that is also listed in `cleaning.disabled_rules` must not fail
-        // config load. This is the load-bearing interaction between the
-        // `disabled_rules` name check added to `validate_config` and the
-        // documented "park a broken rule by disabling it" workflow.
+    fn disabling_a_user_rule_does_not_hide_an_invalid_regex() {
         let toml = r#"
 [cleaning]
 disabled_rules = ["broken"]
@@ -521,9 +512,20 @@ pattern = "(unclosed"
 replacement = "x"
 "#;
         let path = write_fixture("disabled-user-rule-bad-regex", toml);
-        let config = load_from_path(&path)
-            .expect("disabled user rule with invalid regex must not fail validation");
-        assert_eq!(config.rules.user[0].pattern, "(unclosed");
+        let err = load_from_path(&path).expect_err("every configured regex must be valid");
+        assert!(format!("{err:#}").contains("invalid regex"));
+    }
+
+    #[test]
+    fn unknown_config_keys_are_rejected() {
+        for (name, toml, key) in [
+            ("unknown-top-level", "typo = true", "typo"),
+            ("unknown-section-key", "[daemon]\npositon = true", "positon"),
+        ] {
+            let path = write_fixture(name, toml);
+            let err = load_from_path(&path).expect_err("unknown key must fail parsing");
+            assert!(format!("{err:#}").contains(key));
+        }
     }
 
     #[test]

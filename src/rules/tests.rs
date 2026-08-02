@@ -964,14 +964,7 @@ fn disabled_user_rule_skips_compilation_and_application() {
 }
 
 #[test]
-fn build_cleaner_never_compiles_regex_for_a_disabled_user_rule() {
-    // A user rule named in `disabled_rules` is filtered out in
-    // `push_user_rules` before `compile_user_regex` is ever called on it, so
-    // a disabled rule may carry an invalid regex without failing
-    // `build_cleaner` -- the same entry point `config::validate_config`
-    // calls with the real `cleaning.disabled_rules` list instead of an
-    // empty slice. This is the documented way to "park" a `[[rules.user]]`
-    // entry whose pattern does not compile yet.
+fn build_cleaner_validates_regex_for_a_disabled_user_rule() {
     let rules = vec![user_rule(
         "broken-regex",
         "(unclosed",
@@ -980,10 +973,8 @@ fn build_cleaner_never_compiles_regex_for_a_disabled_user_rule() {
     )];
     let disabled = vec!["broken-regex".to_string()];
     let result = build_cleaner(false, CleaningProfile::Safe, false, None, &disabled, &rules);
-    assert!(
-        result.is_ok(),
-        "a disabled user rule's invalid regex must not be compiled: {result:?}"
-    );
+    let err = result.expect_err("disabled rules still need valid configuration");
+    assert!(format!("{err:#}").contains("invalid regex"));
 }
 
 #[test]

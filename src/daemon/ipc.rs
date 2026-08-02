@@ -64,27 +64,6 @@ impl std::error::Error for DaemonNotRunning {}
 pub(crate) const DEFAULT_TRANSCRIPT_HISTORY: usize = 10;
 
 /// Command sent by helper subcommands to the running daemon.
-///
-/// `CopyLast` changed from a unit variant to a struct variant carrying an
-/// `index` when transcript history became configurable. This is a
-/// deliberate wire-format break: a client built after this change talking
-/// to a daemon started by an older build (or vice versa, after an in-place
-/// binary upgrade that left the old daemon running) can't exchange this
-/// command. History depth is read once at startup, so there is no way to
-/// bridge the two wire formats; restarting the daemon is the only fix.
-/// Neither direction is left to surface a raw serde error: `parse_command`
-/// recognizes the legacy bare-string encoding on the daemon side and replies
-/// with the restart hint through the existing `IpcResponse::Err` path (old
-/// clients can still render that, since its shape hasn't changed), and
-/// `stale_daemon_error_hint` recognizes the old daemon's serde rejection in
-/// that same response shape on the client side.
-///
-/// `PasteLast` was removed: run from a terminal, it pasted into the terminal
-/// itself rather than wherever the caller meant to paste, so `copy-last`'s
-/// copy-then-paste-manually flow is the one that stays. A CLI built before
-/// the removal can still send the legacy bare `"paste_last"` string (see
-/// [`LEGACY_PASTE_LAST_WIRE`]); `parse_command` answers that with a
-/// "removed, use copy-last" message instead of a raw serde error.
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum IpcCommand {
@@ -94,17 +73,12 @@ pub(crate) enum IpcCommand {
     Stop,
     /// Copy a transcript remembered in memory.
     ///
-    /// `index` is 0-based on the wire (0 is the most recent); a missing key
-    /// defaults to 0. The CLI number is 1-based and is converted to this
-    /// 0-based wire index at the CLI boundary.
-    CopyLast {
-        #[serde(default)]
-        index: usize,
-    },
+    /// `index` is 0-based on the wire (0 is the most recent). The CLI number
+    /// is 1-based and is converted to this 0-based wire index at the CLI boundary.
+    CopyLast { index: usize },
     /// List transcripts remembered in memory, newest first.
     History {
         /// Cap the number of entries returned. `None` returns all of them.
-        #[serde(default)]
         limit: Option<usize>,
     },
     /// Run the insertion path with caller-supplied text, without microphone use.
@@ -125,82 +99,14 @@ impl IpcCommand {
     }
 }
 
-/// Bare-string wire encoding used by the removed `paste_last` command and by
-/// `copy_last` before it gained an `index` field. A CLI built before the
-/// respective change still sends one of these two literals.
-#[cfg(any(unix, target_os = "windows"))]
-const LEGACY_PASTE_LAST_WIRE: &str = "\"paste_last\"";
-#[cfg(any(unix, target_os = "windows"))]
-const LEGACY_COPY_LAST_WIRE: &str = "\"copy_last\"";
-
 /// Deserialize one control-socket request line as [`IpcCommand`].
-///
-/// Detects two legacy bare-string (pre-`index` unit-variant) encodings and
-/// replaces the resulting serde error with an actionable one, instead of
-/// surfacing raw serde text (e.g. "unknown variant `paste_last`") to
-/// whoever reads `IpcResponse::Err`:
-/// - `"paste_last"` only comes from a CLI old enough to predate the
-///   command's removal; the daemon has no handler for it at all anymore, so
-///   the message says it was removed and points at `copy-last`.
-/// - `"copy_last"` comes from a CLI built before `copy-last` gained an
-///   `index`; the message names the CLI/daemon version mismatch and the
-///   restart fix.
 ///
 /// # Errors
 ///
-/// Returns an error naming the removed command or the CLI/daemon version
-/// mismatch when `raw` is one of the two legacy literals, otherwise the
-/// underlying serde error wrapped with context.
+/// Returns an error when `raw` is not a current command payload.
 #[cfg(any(unix, target_os = "windows"))]
 fn parse_command(raw: &str) -> Result<IpcCommand> {
-    serde_json::from_str(raw).or_else(|err| match raw.trim() {
-        LEGACY_PASTE_LAST_WIRE => bail!(
-            "paste-last was removed from parakit: run from a terminal, it pasted into the \
-             terminal itself, so it never did what it looked like it should. Use `parakit \
-             copy-last` instead (copies the transcript to the clipboard; paste it yourself)."
-        ),
-        LEGACY_COPY_LAST_WIRE => bail!(
-            "this daemon is newer than the CLI that sent this command: copy-last gained a \
-             transcript index and can no longer be sent as a bare command. Reinstall or upgrade \
-             the parakit CLI to match this daemon, or restart the daemon to go back to matching \
-             an older CLI."
-        ),
-        _ => Err(err).context("invalid control command"),
-    })
-}
-
-/// Replace the serde rejection returned by an older daemon with an actionable
-/// restart hint.
-///
-/// This deliberately examines only a structurally valid [`IpcResponse::Err`].
-/// A malformed or truncated response remains a transport/parse error instead
-/// of being misdiagnosed as version skew.
-///
-/// # Returns
-///
-/// `Some` for the two command shapes an older daemon cannot deserialize,
-/// `None` for ordinary daemon errors and all other commands.
-#[cfg(any(unix, target_os = "windows"))]
-fn stale_daemon_error_hint(command: &IpcCommand, message: &str) -> Option<&'static str> {
-    match command {
-        IpcCommand::CopyLast { .. }
-            if message.contains("invalid type: map") && message.contains("expected unit") =>
-        {
-            Some(
-                "the running daemon predates this CLI's copy-last wire format; run \
-                 `parakit stop` and start it again",
-            )
-        }
-        IpcCommand::History { .. } if message.contains("unknown variant `history`") => Some(
-            "the running daemon predates this CLI's history command; run `parakit stop` and \
-             start it again",
-        ),
-        IpcCommand::Status
-        | IpcCommand::Stop
-        | IpcCommand::CopyLast { .. }
-        | IpcCommand::History { .. }
-        | IpcCommand::TestPaste { .. } => None,
-    }
+    serde_json::from_str(raw).context("invalid control command")
 }
 
 /// Response sent by the daemon control socket.
@@ -213,14 +119,12 @@ pub(crate) enum IpcResponse {
     Status {
         phase: String,
         last_transcript_len: Option<usize>,
-        /// Extended runtime detail for `--verbose status`. `#[serde(default)]`
-        /// so a reply from an older daemon build without this key still
-        /// deserializes; `None` also covers the startup window before
+        /// Extended runtime detail for `--verbose status`. `None` covers the
+        /// startup window before
         /// [`SharedState::set_info`] has run. Boxed because `StatusDetail` is
         /// much larger than the other `IpcResponse` variants, and `Status` is
         /// otherwise mostly `None` (serde transparently (de)serializes
         /// `Box<T>` as `T`, so the wire format is unaffected).
-        #[serde(default)]
         detail: Option<Box<StatusDetail>>,
     },
     /// Transcript history listing, newest first.
@@ -276,10 +180,8 @@ pub(crate) struct StatusDetail {
     /// Linux hotkey backend label, when applicable.
     pub(crate) hotkey_backend: Option<String>,
     /// Transcript history depth summary (`"3 of 10"`) or `"disabled"` when
-    /// `daemon.transcript_history = 0`. `#[serde(default)]` so a reply from
-    /// an older daemon build without this key still deserializes.
-    #[serde(default)]
-    pub(crate) history: Option<String>,
+    /// `daemon.transcript_history = 0`.
+    pub(crate) history: String,
 }
 
 /// Daemon runtime info captured once at startup and exposed through `Status`.
@@ -436,7 +338,7 @@ impl SharedState {
                 cleaning: info.cleaning_summary.clone(),
                 log: info.log_summary.clone(),
                 hotkey_backend: info.hotkey_backend_label.map(str::to_string),
-                history: Some(self.history_label(inner.history.len())),
+                history: self.history_label(inner.history.len()),
             })
             .map(Box::new);
         IpcResponse::Status {
@@ -648,10 +550,7 @@ pub(crate) fn run_client(command: IpcCommand, quiet: bool, verbose: bool) -> Res
             }
             Ok(())
         }
-        IpcResponse::Err { message } => match stale_daemon_error_hint(&command, &message) {
-            Some(hint) => bail!("{hint}"),
-            None => bail!("{message}"),
-        },
+        IpcResponse::Err { message } => bail!("{message}"),
     }
 }
 
@@ -702,7 +601,7 @@ fn last_transcript_summary(
 ) -> String {
     match last_transcript_len {
         Some(len) => format!("{len} bytes"),
-        None if detail.and_then(|detail| detail.history.as_deref()) == Some("disabled") => {
+        None if detail.is_some_and(|detail| detail.history == "disabled") => {
             "history disabled".to_string()
         }
         None => "none".to_string(),
@@ -736,10 +635,10 @@ fn print_history(entries: &[HistoryEntry]) {
 ///
 /// * `detail` - Extended runtime detail from the daemon's `Status` response,
 ///   or `None` when the daemon has not yet called `set_info` (e.g. still
-///   starting up) or predates this field.
+///   starting up).
 fn print_status_detail(detail: Option<&StatusDetail>) {
     let Some(detail) = detail else {
-        println!("  detail unavailable (daemon starting or older version)");
+        println!("  detail unavailable (daemon starting)");
         return;
     };
     println!("  pid:        {}", detail.pid);
@@ -755,9 +654,7 @@ fn print_status_detail(detail: Option<&StatusDetail>) {
     println!("  sounds:     {}", if detail.sounds { "on" } else { "off" });
     println!("  cleaning:   {}", detail.cleaning);
     println!("  logging:    {}", detail.log.as_deref().unwrap_or("off"));
-    if let Some(history) = &detail.history {
-        println!("  history:    {history}");
-    }
+    println!("  history:    {}", detail.history);
     if let Some(hotkey_backend) = &detail.hotkey_backend {
         println!("  hotkey:     {hotkey_backend}");
     }
@@ -1090,7 +987,6 @@ fn paste_text(
         keep_transcript_clipboard,
         focus_check,
         (log, notifier),
-        false,
     )
     .map(|report| report.outcome)
     .context("could not send paste command")
@@ -2564,7 +2460,7 @@ mod tests {
             cleaning: "off".to_string(),
             log: None,
             hotkey_backend: None,
-            history: Some("3 of 10".to_string()),
+            history: "3 of 10".to_string(),
         };
         let response = IpcResponse::Status {
             phase: "idle".to_string(),
@@ -2586,39 +2482,6 @@ mod tests {
     }
 
     #[test]
-    fn status_response_without_detail_key_deserializes_as_none() {
-        // Simulates a reply from a daemon build that predates the `detail`
-        // field: the wire payload simply omits the key. `#[serde(default)]`
-        // must make this parse instead of failing.
-        let json = r#"{"status":{"phase":"idle","last_transcript_len":null}}"#;
-
-        let response: IpcResponse =
-            serde_json::from_str(json).expect("older status payload should still deserialize");
-
-        assert!(matches!(
-            response,
-            IpcResponse::Status {
-                phase,
-                last_transcript_len: None,
-                detail: None,
-            } if phase == "idle"
-        ));
-    }
-
-    #[test]
-    fn status_detail_without_history_key_deserializes_as_none() {
-        // Simulates a reply from a daemon build that predates transcript
-        // history depth reporting: the wire payload omits the `history`
-        // key. `#[serde(default)]` must make this parse instead of failing.
-        let json = r#"{"pid":1,"uptime_secs":0,"dictation_count":0,"mic":"m","model":"m","dtype":"d","device":"d","backend":"b","threads":1,"paste_mode":"standard","sounds":true,"cleaning":"off","log":null,"hotkey_backend":null}"#;
-
-        let detail: StatusDetail = serde_json::from_str(json)
-            .expect("older status detail payload should still deserialize");
-
-        assert!(detail.history.is_none());
-    }
-
-    #[test]
     fn ipc_command_copy_last_serde_round_trips_with_index() {
         let command = IpcCommand::CopyLast { index: 1 };
         let json = serde_json::to_string(&command).expect("copy_last should serialize");
@@ -2626,14 +2489,6 @@ mod tests {
         let round_tripped: IpcCommand =
             serde_json::from_str(&json).expect("copy_last should deserialize");
         assert!(matches!(round_tripped, IpcCommand::CopyLast { index: 1 }));
-    }
-
-    #[test]
-    fn ipc_command_copy_last_missing_index_defaults_to_zero() {
-        let command: IpcCommand = serde_json::from_str(r#"{"copy_last":{}}"#)
-            .expect("copy_last with no index should parse");
-
-        assert!(matches!(command, IpcCommand::CopyLast { index: 0 }));
     }
 
     #[test]
@@ -2718,79 +2573,7 @@ mod tests {
 
     #[cfg(any(unix, target_os = "windows"))]
     #[test]
-    fn new_daemon_classifies_legacy_client_wire_commands() {
-        #[derive(Serialize)]
-        #[serde(rename_all = "snake_case")]
-        enum LegacyCommand {
-            CopyLast,
-            PasteLast,
-        }
-
-        let copy_last = serde_json::to_string(&LegacyCommand::CopyLast).unwrap();
-        let copy_error = parse_command(&copy_last).unwrap_err().to_string();
-        assert!(copy_error.contains("newer than the CLI"), "{copy_error}");
-
-        let paste_last = serde_json::to_string(&LegacyCommand::PasteLast).unwrap();
-        let paste_error = parse_command(&paste_last).unwrap_err().to_string();
-        assert!(
-            paste_error.contains("paste-last was removed"),
-            "{paste_error}"
-        );
-        assert!(paste_error.contains("parakit copy-last"), "{paste_error}");
-    }
-
-    #[cfg(any(unix, target_os = "windows"))]
-    #[test]
-    fn new_client_classifies_old_daemon_serde_errors_from_valid_error_responses() {
-        #[allow(dead_code)]
-        #[derive(Debug, Deserialize)]
-        #[serde(rename_all = "snake_case")]
-        enum LegacyCommand {
-            Status,
-            Stop,
-            CopyLast,
-            TestPaste { text: String },
-        }
-
-        let cases = [
-            (IpcCommand::CopyLast { index: 2 }, "copy-last"),
-            (IpcCommand::History { limit: Some(5) }, "history"),
-        ];
-        for (command, label) in cases {
-            let wire = serde_json::to_string(&command).unwrap();
-            let old_daemon_error = serde_json::from_str::<LegacyCommand>(&wire)
-                .unwrap_err()
-                .to_string();
-            let response_wire = serde_json::to_string(&IpcResponse::Err {
-                message: format!("invalid control command: {old_daemon_error}"),
-            })
-            .unwrap();
-            let IpcResponse::Err { message } =
-                serde_json::from_str::<IpcResponse>(&response_wire).unwrap()
-            else {
-                panic!("expected an error response");
-            };
-            let hint = stale_daemon_error_hint(&command, &message)
-                .unwrap_or_else(|| panic!("{label}: expected stale-daemon hint for {message:?}"));
-            assert!(hint.contains("parakit stop"), "{label}: {hint}");
-            assert!(hint.contains("predates this CLI"), "{label}: {hint}");
-        }
-
-        assert_eq!(
-            stale_daemon_error_hint(
-                &IpcCommand::CopyLast { index: 0 },
-                "daemon crashed before completing the command"
-            ),
-            None,
-            "transport/crash text must not be diagnosed as version skew"
-        );
-    }
-
-    #[cfg(any(unix, target_os = "windows"))]
-    #[test]
     fn parse_command_keeps_the_generic_context_for_unrelated_garbage() {
-        // Guards against the legacy-encoding detection over-firing: any
-        // other unparseable request keeps the original generic message.
         let err = parse_command("not json").unwrap_err();
         assert_eq!(err.to_string(), "invalid control command");
     }

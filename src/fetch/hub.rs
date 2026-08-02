@@ -129,39 +129,12 @@ pub fn source_from_cli(
 #[derive(Debug, Deserialize, Clone)]
 struct Sibling {
     rfilename: String,
-    #[serde(default)]
-    lfs: Option<LfsInfo>,
-}
-
-#[derive(Debug, Deserialize, Clone, Default)]
-struct LfsInfo {
-    #[serde(default)]
-    oid: Option<String>,
-    #[serde(default)]
-    sha256: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 struct ApiModelResponse {
     #[serde(default)]
     siblings: Vec<Sibling>,
-}
-
-/// Normalize an LFS-reported checksum from either `lfs.sha256` or
-/// `lfs.oid` (sometimes prefixed `sha256:`), accepting only 64-hex-char
-/// results.
-fn normalize_lfs_sha256(lfs: Option<&LfsInfo>) -> Option<String> {
-    let lfs = lfs?;
-    for raw in [lfs.sha256.as_deref(), lfs.oid.as_deref()]
-        .into_iter()
-        .flatten()
-    {
-        let stripped = raw.strip_prefix("sha256:").unwrap_or(raw);
-        if crate::checksum::is_sha256_hex(stripped) {
-            return Some(stripped.to_ascii_lowercase());
-        }
-    }
-    None
 }
 
 fn is_gguf_name(name: &str) -> bool {
@@ -328,7 +301,7 @@ fn fetch_repo_metadata(
 /// * `repo` - `owner/repo`.
 /// * `revision` - Revision to fetch from; `None` defers to `main`.
 /// * `file` - Exact `rfilename` to select; `None` triggers automatic selection.
-/// * `sha256_override` - `--sha256`, overriding the Hub-reported checksum.
+/// * `sha256_override` - User-supplied `--sha256`, when present.
 ///
 /// # Returns
 ///
@@ -378,33 +351,15 @@ pub(super) fn run_hub_repo(
     let dest = dest_dir.join(basename);
 
     let resolve = resolve_url(endpoint, owner, name, revision, &sibling.rfilename);
-    let hub_sha = normalize_lfs_sha256(sibling.lfs.as_ref());
-    let upstream_sha = sha256_override.map(str::to_string).or(hub_sha);
-    let baseline_sha = if upstream_sha.is_none() && !options.force {
-        super::recorded_download_sha_for_source(&models_dir, &dest, &resolve)?
-    } else {
-        None
-    };
-    let verification_sha = upstream_sha.or(baseline_sha);
-
-    if !options.force
-        && super::cached_download_current(options, &dest, verification_sha.as_deref())?
-    {
+    if !options.force && super::use_cached_download(options, &dest, sha256_override)? {
         return Ok(dest);
     }
 
     let bearer = net::bearer_for(&resolve, endpoint, token);
     options.status(format_args!("parakit: downloading {resolve}"));
-    let downloaded_sha = super::download_and_verify(
-        options,
-        &client,
-        &resolve,
-        &dest,
-        bearer,
-        verification_sha.as_deref(),
-    )?;
+    super::download_and_verify(options, &client, &resolve, &dest, bearer, sha256_override)?;
 
-    super::record_and_announce(options, &models_dir, &dest, &resolve, Some(downloaded_sha))?;
+    super::print_ready_with_hint(options, &dest);
     Ok(dest)
 }
 
@@ -532,10 +487,9 @@ mod tests {
         assert!(err.to_string().contains("URL"));
     }
 
-    fn sibling(rfilename: &str, lfs: Option<LfsInfo>) -> Sibling {
+    fn sibling(rfilename: &str) -> Sibling {
         Sibling {
             rfilename: rfilename.to_string(),
-            lfs,
         }
     }
 
@@ -600,7 +554,7 @@ mod tests {
         let failures: Vec<String> = cases
             .iter()
             .filter_map(|case| {
-                let siblings: Vec<Sibling> = case.files.iter().map(|f| sibling(f, None)).collect();
+                let siblings: Vec<Sibling> = case.files.iter().map(|f| sibling(f)).collect();
                 let refs: Vec<&Sibling> = siblings.iter().collect();
                 let result = select_gguf_file(&refs, case.requested);
                 match result {
@@ -660,52 +614,6 @@ mod tests {
             failures.len(),
             failures.join("\n")
         );
-    }
-
-    #[test]
-    fn parses_siblings_json_with_oid_prefixed_and_bare_sha256_and_a_non_lfs_file() {
-        let json = r#"{
-            "siblings": [
-                {
-                    "rfilename": "model-Q8_0.gguf",
-                    "size": 123,
-                    "lfs": {
-                        "oid": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-                        "size": 123
-                    }
-                },
-                {
-                    "rfilename": "model-F16.gguf",
-                    "lfs": {
-                        "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-                    }
-                },
-                {
-                    "rfilename": "README.md"
-                }
-            ]
-        }"#;
-        let parsed: ApiModelResponse = serde_json::from_str(json).unwrap();
-        assert_eq!(parsed.siblings.len(), 3);
-
-        let q8 = &parsed.siblings[0];
-        assert_eq!(normalize_lfs_sha256(q8.lfs.as_ref()), Some("a".repeat(64)));
-
-        let f16 = &parsed.siblings[1];
-        assert_eq!(normalize_lfs_sha256(f16.lfs.as_ref()), Some("b".repeat(64)));
-
-        let readme = &parsed.siblings[2];
-        assert!(readme.lfs.is_none());
-        assert_eq!(normalize_lfs_sha256(readme.lfs.as_ref()), None);
-    }
-
-    #[test]
-    fn normalize_lfs_sha256_rejects_non_hex64_values() {
-        let lfs = LfsInfo {
-            oid: Some("not-a-hash".to_string()),
-            sha256: None,
-        };
-        assert_eq!(normalize_lfs_sha256(Some(&lfs)), None);
     }
 
     #[test]

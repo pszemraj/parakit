@@ -20,20 +20,6 @@ fn isolated_parakit(root: &Path) -> Command {
 }
 
 #[test]
-fn migration_hint_uses_clap_exit_code_two() {
-    let output = parakit()
-        .arg("paste-last")
-        .output()
-        .expect("parakit should run");
-
-    assert_eq!(output.status.code(), Some(2));
-    assert!(output.stdout.is_empty());
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("paste-last' was removed"), "{stderr}");
-    assert!(stderr.contains("try: parakit copy-last"), "{stderr}");
-}
-
-#[test]
 fn broken_config_does_not_block_control_commands() {
     let root = common::fixture_root("cli-contracts", "broken-config-control");
     std::fs::create_dir_all(&root).expect("fixture root should be created");

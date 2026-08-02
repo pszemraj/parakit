@@ -8,7 +8,7 @@ const REGISTERED_LINUX_FIX: &str = "fix:
       gsettings get org.gnome.desktop.wm.keybindings switch-input-source
       gsettings get org.gnome.desktop.wm.keybindings switch-input-source-backward
   - Re-run: parakit doctor
-  - The experimental evdev/uinput keyboard proxy is available with: parakit start --hotkey-backend evdev-proxy";
+  - The experimental evdev/uinput keyboard proxy is available with: parakit start --hotkey-backend evdev-proxy-experimental";
 
 #[cfg(target_os = "linux")]
 const X11_LISTEN_LINUX_FIX: &str = "fix:
@@ -113,7 +113,7 @@ pub(crate) fn x11_listen_linux_failure_help() -> String {
 pub(crate) fn evdev_linux_failure_help() -> String {
     let user = std::env::var("USER").unwrap_or_else(|_| "$USER".to_string());
     linux_failure_help(
-        "The evdev-proxy backend uses an evdev keyboard grab and uinput forwarding device.",
+        "The evdev-proxy-experimental backend uses an evdev keyboard grab and uinput forwarding device.",
         &[
             "id -nG | tr ' ' '\\n' | grep '^input$'",
             "ls -l /dev/uinput /dev/input/event* | head",
@@ -195,6 +195,6 @@ fn linux_session_context() -> (String, String) {
 #[cfg(target_os = "linux")]
 fn evdev_linux_fix(user: &str) -> String {
     format!(
-        "fix:\n  - Grant the desktop user read access to /dev/input/event*:\n      sudo usermod -aG input {user}\n  - Ensure /dev/uinput is writable by the desktop user. On many distros this needs a uinput udev rule.\n  - After changing groups or udev rules, log out completely and log back in, or reboot.\n  - Verify the fresh session:\n      id -nG | tr ' ' '\\n' | grep '^input$'\n      ls -l /dev/uinput /dev/input/event* | head\n  - Then run: parakit start --hotkey-backend evdev-proxy\n  - Do not run parakit with sudo; audio, clipboard, and insertion belong to the desktop user."
+        "fix:\n  - Grant the desktop user read access to /dev/input/event*:\n      sudo usermod -aG input {user}\n  - Ensure /dev/uinput is writable by the desktop user. On many distros this needs a uinput udev rule.\n  - After changing groups or udev rules, log out completely and log back in, or reboot.\n  - Verify the fresh session:\n      id -nG | tr ' ' '\\n' | grep '^input$'\n      ls -l /dev/uinput /dev/input/event* | head\n  - Then run: parakit start --hotkey-backend evdev-proxy-experimental\n  - Do not run parakit with sudo; audio, clipboard, and insertion belong to the desktop user."
     )
 }

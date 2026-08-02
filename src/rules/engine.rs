@@ -584,8 +584,8 @@ fn compile_user_rule(rule: &UserRule) -> Result<CompiledRule> {
 }
 
 /// Compile and append enabled `user_rules` entries at `position` to `rules`,
-/// skipping names present in `disabled`. A disabled user rule's pattern is
-/// never compiled, so it may be invalid without failing the build.
+/// skipping names present in `disabled`. Every pattern has already passed
+/// load-time validation before this filter runs.
 ///
 /// # Errors
 ///

@@ -245,7 +245,7 @@ fn download_with_resume_inner(
         }
         StatusCode::RANGE_NOT_SATISFIABLE => {
             super::remove_if_exists(path)?;
-            super::remove_if_exists(&resume_validator_path(path))?;
+            let _ = super::remove_if_exists(&resume_validator_path(path));
             response = attach_bearer(client.get(url), bearer)
                 .send()
                 .with_context(|| format!("GET {url}"))?;
@@ -264,7 +264,7 @@ fn download_with_resume_inner(
 
     let validator_path = resume_validator_path(path);
     if start == 0 {
-        save_resume_validator(&validator_path, response.headers())?;
+        save_resume_validator(&validator_path, response.headers());
     }
 
     let mut file = if start == 0 {
@@ -277,7 +277,7 @@ fn download_with_resume_inner(
     };
     std::io::copy(&mut response, &mut file)?;
     file.flush()?;
-    super::remove_if_exists(&validator_path)?;
+    let _ = super::remove_if_exists(&validator_path);
     Ok(())
 }
 
@@ -290,9 +290,9 @@ fn prepare_download_request(
     let validator_path = resume_validator_path(path);
     let mut start = path.metadata().map(|metadata| metadata.len()).unwrap_or(0);
     let validator = if start > 0 {
-        load_resume_validator(&validator_path)?
+        load_resume_validator(&validator_path)
     } else {
-        super::remove_if_exists(&validator_path)?;
+        let _ = super::remove_if_exists(&validator_path);
         None
     };
 
@@ -316,26 +316,19 @@ fn resume_validator_path(path: &Path) -> PathBuf {
     PathBuf::from(validator)
 }
 
-fn load_resume_validator(path: &Path) -> Result<Option<HeaderValue>> {
-    let bytes = match std::fs::read(path) {
-        Ok(bytes) => bytes,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(error).with_context(|| format!("read {}", path.display())),
-    };
-    HeaderValue::from_bytes(&bytes)
-        .context("parse download resume validator")
-        .map(Some)
+fn load_resume_validator(path: &Path) -> Option<HeaderValue> {
+    let bytes = std::fs::read(path).ok()?;
+    HeaderValue::from_bytes(&bytes).ok()
 }
 
-fn save_resume_validator(path: &Path, headers: &HeaderMap) -> Result<()> {
+fn save_resume_validator(path: &Path, headers: &HeaderMap) {
     let strong_etag = headers
         .get(ETAG)
         .filter(|value| !value.as_bytes().starts_with(b"W/"));
     let validator = strong_etag.or_else(|| headers.get(LAST_MODIFIED));
-    match validator {
-        Some(value) => std::fs::write(path, value.as_bytes())
-            .with_context(|| format!("write {}", path.display())),
-        None => super::remove_if_exists(path),
+    let _ = super::remove_if_exists(path);
+    if let Some(value) = validator {
+        let _ = std::fs::write(path, value.as_bytes());
     }
 }
 
@@ -432,7 +425,7 @@ mod tests {
         std::fs::write(&partial, b"partial").unwrap();
         let mut response_headers = HeaderMap::new();
         response_headers.insert(ETAG, HeaderValue::from_static("\"revision-1\""));
-        save_resume_validator(&resume_validator_path(&partial), &response_headers).unwrap();
+        save_resume_validator(&resume_validator_path(&partial), &response_headers);
 
         let client = build_client().unwrap();
         let (start, request) =
@@ -450,6 +443,25 @@ mod tests {
         let dir = crate::test_support::fixture_root("parakit-fetch-tests", "resume-no-validator");
         let partial = dir.join("model.gguf.part");
         std::fs::write(&partial, b"stale").unwrap();
+
+        let client = build_client().unwrap();
+        let (start, request) =
+            prepare_download_request(&client, "https://example.com/model.gguf", &partial, None)
+                .unwrap();
+        let request = request.build().unwrap();
+
+        assert_eq!(start, 0);
+        assert!(!partial.exists());
+        assert!(!request.headers().contains_key(RANGE));
+        assert!(!request.headers().contains_key(IF_RANGE));
+    }
+
+    #[test]
+    fn partial_with_an_invalid_validator_restarts_from_scratch() {
+        let dir = crate::test_support::fixture_root("parakit-fetch-tests", "resume-bad-validator");
+        let partial = dir.join("model.gguf.part");
+        std::fs::write(&partial, b"stale").unwrap();
+        std::fs::write(resume_validator_path(&partial), b"bad\nheader").unwrap();
 
         let client = build_client().unwrap();
         let (start, request) =

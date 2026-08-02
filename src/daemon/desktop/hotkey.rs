@@ -89,8 +89,8 @@ pub(crate) enum HotkeyBackend {
     X11Listen,
     /// Force the experimental low-level evdev/uinput keyboard proxy backend.
     #[cfg(target_os = "linux")]
-    #[value(name = "evdev-proxy-experimental", alias = "evdev-proxy")]
-    #[serde(rename = "evdev-proxy-experimental", alias = "evdev-proxy")]
+    #[value(name = "evdev-proxy-experimental")]
+    #[serde(rename = "evdev-proxy-experimental")]
     EvdevProxyExperimental,
 }
 
@@ -402,7 +402,7 @@ pub(crate) fn run_grab_loop(
     let route = backend.linux_route();
     if route == LinuxHotkeyRoute::EvdevProxy {
         log.warn(
-            "evdev-proxy is experimental; it grabs keyboard devices and forwards unsuppressed input through uinput",
+            "evdev-proxy-experimental grabs keyboard devices and forwards unsuppressed input through uinput",
         );
     }
     log.verbose(format!("parakit: Linux hotkey backend: {}", route.label()));

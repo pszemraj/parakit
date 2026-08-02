@@ -821,13 +821,6 @@ impl Injector {
         focus: Option<&FocusSnapshot>,
         mut before_chord: impl FnMut() -> Result<bool>,
     ) -> Result<PasteReport> {
-        if text.is_empty() {
-            // Nothing was staged or sent; this short-circuit exists as a
-            // defensive no-op for callers (e.g. IPC/test paths) that might
-            // pass empty text directly, bypassing the sanitizer that already
-            // filters this out on the worker path.
-            return Ok(PasteReport::new(PasteOutcome::Pasted, false, None));
-        }
         if mode == PasteMode::Direct {
             if before_chord()? {
                 self.type_text(text)?;
@@ -869,9 +862,6 @@ impl Injector {
     ///
     /// Returns an error if the clipboard cannot be opened or written.
     pub fn copy_text(&mut self, text: &str) -> Result<()> {
-        if text.is_empty() {
-            return Ok(());
-        }
         let mut clipboard = self.take_clipboard()?;
         let result = clipboard
             .set_text(text.to_owned())
@@ -907,9 +897,6 @@ impl Injector {
         text: &str,
         clipboard_policy: ClipboardPolicy,
     ) -> Result<StageOutcome> {
-        if text.is_empty() {
-            return Ok(StageOutcome::Blocked);
-        }
         let mut clipboard = self.take_clipboard()?;
         let restore_gate = self.clipboard_restore_gate();
         let restore_plan = ClipboardRestorePlan::new(

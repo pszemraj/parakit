@@ -136,10 +136,6 @@ pub(crate) fn validate_user_rules(user_rules: &[UserRule]) -> Result<()> {
 
 /// Compile a user rule's `pattern` into a `regex::Regex`.
 ///
-/// Does not check `disabled_rules`; callers must filter disabled rules out
-/// before calling this so a disabled user rule's invalid regex never fails
-/// a build (see `push_user_rules` in [`crate::rules::engine`]).
-///
 /// # Returns
 ///
 /// The compiled [`Regex`] for `rule.pattern`.

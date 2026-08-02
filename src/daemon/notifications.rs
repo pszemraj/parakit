@@ -44,14 +44,6 @@ impl Notifier {
         self.show("Paste blocked", reason.as_ref());
     }
 
-    /// Notify that paste is temporarily disabled after repeated insertion failures.
-    pub(crate) fn paste_temporarily_disabled(&self) {
-        self.show(
-            "Paste disabled",
-            "Repeated insertion failures temporarily disabled automatic paste.",
-        );
-    }
-
     /// Notify that microphone capture failed and the daemon is trying to reopen it.
     ///
     /// # Arguments

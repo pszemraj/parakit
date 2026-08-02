@@ -3,18 +3,16 @@
 //! repo (see [`hub`]), or a direct URL.
 
 mod hub;
-mod manifest;
 mod net;
 
 pub use hub::source_from_cli;
 
 use crate::model::{
-    models_dir, F16_FILENAME, HOSTED_Q8_SHA256, HOSTED_Q8_URL, MANIFEST_FILENAME, NEMO_FILENAME,
-    OFFICIAL_NEMO_URL, Q8_FILENAME,
+    models_dir, F16_FILENAME, HOSTED_Q8_URL, NEMO_FILENAME, OFFICIAL_NEMO_URL, Q8_FILENAME,
 };
 use anyhow::{anyhow, bail, Context, Result};
-use manifest::Manifest;
 use reqwest::blocking::Client;
+use sha2::{Digest, Sha256};
 use std::env;
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
@@ -45,10 +43,6 @@ impl FetchOptions {
             println!("{message}");
         }
     }
-
-    fn warning(&self, message: std::fmt::Arguments<'_>) {
-        eprintln!("{message}");
-    }
 }
 
 /// Model acquisition source for `parakit fetch`.
@@ -71,7 +65,7 @@ pub enum FetchSource {
         revision: Option<String>,
         /// Exact `rfilename` to select. `None` triggers automatic selection.
         file: Option<String>,
-        /// Expected SHA256; overrides the Hub-reported LFS checksum when set.
+        /// User-supplied expected SHA256.
         sha256: Option<String>,
     },
     /// Download an arbitrary file by direct URL.
@@ -88,7 +82,7 @@ pub enum FetchSource {
 /// # Arguments
 ///
 /// * `quiet` - Suppress stdout status messages.
-/// * `verbose` - Print cache-hit diagnostics when the cached model is current.
+/// * `verbose` - Print cache-hit diagnostics when an existing model is used.
 ///
 /// # Returns
 ///
@@ -105,34 +99,6 @@ pub fn ensure_default_model_with_verbosity(quiet: bool, verbose: bool) -> Result
         verbose,
         source: FetchSource::HostedQ8,
     })
-}
-
-/// Return the manifest-recorded SHA256 for a file previously fetched via
-/// `parakit fetch` into a Hugging Face repo (`hub/…`) or direct URL (`url/…`)
-/// cache subdirectory.
-///
-/// # Arguments
-///
-/// * `models_dir` - The resolved model cache directory, as returned by
-///   [`crate::model::models_dir`].
-/// * `path` - Absolute path to a cached file under `models_dir`.
-///
-/// # Returns
-///
-/// The recorded SHA256 hex digest, or `None` when `path` is not under
-/// `models_dir`, has no recorded download, or no manifest file exists yet.
-///
-/// # Errors
-///
-/// Returns an error if a manifest file exists at `models_dir` but cannot be
-/// parsed.
-pub fn recorded_download_sha(models_dir: &Path, path: &Path) -> Result<Option<String>> {
-    let Ok(relpath) = manifest::relative_key(models_dir, path) else {
-        return Ok(None);
-    };
-    let manifest_path = models_dir.join(MANIFEST_FILENAME);
-    let manifest = Manifest::load(&manifest_path)?.unwrap_or_default();
-    Ok(manifest.recorded_sha256(&relpath))
 }
 
 /// Run a model acquisition pipeline.
@@ -177,44 +143,23 @@ pub fn run(options: FetchOptions) -> Result<PathBuf> {
 
 fn run_hosted_q8(options: &FetchOptions, endpoint: &str, token: Option<&str>) -> Result<PathBuf> {
     let paths = FetchPaths::new_prepared()?;
-    let mut manifest = Manifest::load(&paths.manifest)?.unwrap_or_default();
     let url = net::rewrite_pinned_url(HOSTED_Q8_URL, endpoint);
 
     if options.force {
         remove_if_exists(&partial_path(&paths.q8))?;
     } else if paths.q8.is_file() {
-        let current = crate::checksum::sha256_file_hex(&paths.q8)?;
-        if current == HOSTED_Q8_SHA256 {
-            if !manifest.hosted_current(&paths.q8, &url) {
-                manifest.mark_hosted_ready(&paths.q8, &url);
-                manifest.save(&paths.manifest)?;
-            }
-            options.verbose_status(format_args!(
-                "parakit: cached model is current: {}",
-                paths.q8.display()
-            ));
-            return Ok(paths.q8);
-        }
-        options.status(format_args!(
-            "parakit: cached model checksum mismatch, replacing: {}",
+        options.verbose_status(format_args!(
+            "parakit: using cached model: {}",
             paths.q8.display()
         ));
+        return Ok(paths.q8);
     }
 
     let client = net::build_client()?;
     let bearer = net::bearer_for(&url, endpoint, token);
     options.status(format_args!("parakit: downloading {url}"));
-    download_and_verify(
-        options,
-        &client,
-        &url,
-        &paths.q8,
-        bearer,
-        Some(HOSTED_Q8_SHA256),
-    )?;
+    download_and_verify(options, &client, &url, &paths.q8, bearer, None)?;
 
-    manifest.mark_hosted_ready(&paths.q8, &url);
-    manifest.save(&paths.manifest)?;
     options.status(format_args!("parakit: model ready: {}", paths.q8.display()));
     Ok(paths.q8)
 }
@@ -227,6 +172,14 @@ fn run_official_nemo(
     keep_f16: bool,
 ) -> Result<PathBuf> {
     let paths = FetchPaths::new_prepared()?;
+    if !options.force && paths.q8.is_file() {
+        options.verbose_status(format_args!(
+            "parakit: using cached model: {}",
+            paths.q8.display()
+        ));
+        cleanup_intermediates(&paths, keep_nemo, keep_f16)?;
+        return Ok(paths.q8);
+    }
 
     let converter_script = converter_script_path();
     if !converter_script.is_file() {
@@ -235,29 +188,12 @@ fn run_official_nemo(
             converter_script.display()
         );
     }
-    let crispasr_sha = crispasr_git_sha();
     let quantize_bin = quantize_bin_path()?;
-    let quantize_version = quantize_version(&quantize_bin, &crispasr_sha);
-    let mut manifest = Manifest::load(&paths.manifest)?.unwrap_or_default();
     let nemo_url = net::rewrite_pinned_url(OFFICIAL_NEMO_URL, endpoint);
 
     if options.force {
         remove_if_exists(&paths.nemo)?;
         remove_if_exists(&paths.f16)?;
-    } else if manifest.final_current(
-        &paths.q8,
-        &converter_script,
-        &crispasr_sha,
-        &quantize_bin,
-        &quantize_version,
-        &nemo_url,
-    )? {
-        options.verbose_status(format_args!(
-            "parakit: cached source-built model is current: {}",
-            paths.q8.display()
-        ));
-        cleanup_intermediates(&paths, keep_nemo, keep_f16)?;
-        return Ok(paths.q8);
     }
 
     let preflight_python = if paths.f16.is_file() {
@@ -266,29 +202,14 @@ fn run_official_nemo(
         Some(python_with_converter_deps()?)
     };
 
-    let nemo_sha = ensure_nemo(&paths, &mut manifest, options, &nemo_url, endpoint, token)?;
-    manifest.save(&paths.manifest)?;
-
-    let f16_sha = ensure_f16(
+    ensure_nemo(&paths, options, &nemo_url, endpoint, token)?;
+    ensure_f16(
         &paths,
-        &mut manifest,
         &converter_script,
-        &crispasr_sha,
-        &nemo_sha,
         preflight_python.as_deref(),
         options,
     )?;
-    manifest.save(&paths.manifest)?;
-
-    ensure_q8(
-        &paths,
-        &mut manifest,
-        &quantize_bin,
-        &quantize_version,
-        &f16_sha,
-        options,
-    )?;
-    manifest.save(&paths.manifest)?;
+    ensure_q8(&paths, &quantize_bin, options)?;
 
     cleanup_intermediates(&paths, keep_nemo, keep_f16)?;
     options.status(format_args!("parakit: model ready: {}", paths.q8.display()));
@@ -298,17 +219,11 @@ fn run_official_nemo(
 fn run_url(options: &FetchOptions, url: &str, expected_sha: Option<&str>) -> Result<PathBuf> {
     let file_name = url_file_name(url)?;
     let dir = models_dir()?;
-    let dest_dir = dir.join("url");
+    let dest_dir = url_cache_dir(&dir, url);
     std::fs::create_dir_all(&dest_dir).with_context(|| format!("create {}", dest_dir.display()))?;
     let dest = dest_dir.join(&file_name);
-    let baseline_sha = if expected_sha.is_none() && !options.force {
-        recorded_download_sha_for_source(&dir, &dest, url)?
-    } else {
-        None
-    };
-    let verification_sha = expected_sha.map(str::to_string).or(baseline_sha);
 
-    if !options.force && cached_download_current(options, &dest, verification_sha.as_deref())? {
+    if !options.force && use_cached_download(options, &dest, expected_sha)? {
         return Ok(dest);
     }
 
@@ -317,38 +232,21 @@ fn run_url(options: &FetchOptions, url: &str, expected_sha: Option<&str>) -> Res
     // A user-supplied --url is never sent the Hub bearer token, even if it
     // happens to point at the resolved Hub endpoint host: the token is only
     // for requests parakit itself builds against the Hub.
-    let downloaded_sha = download_and_verify(
-        options,
-        &client,
-        url,
-        &dest,
-        None,
-        verification_sha.as_deref(),
-    )?;
+    download_and_verify(options, &client, url, &dest, None, expected_sha)?;
 
-    record_and_announce(options, &dir, &dest, url, Some(downloaded_sha))?;
+    print_ready_with_hint(options, &dest);
     Ok(dest)
 }
 
-fn recorded_download_sha_for_source(
-    models_dir: &Path,
-    dest: &Path,
-    source_url: &str,
-) -> Result<Option<String>> {
-    let relkey = manifest::relative_key(models_dir, dest)?;
-    let manifest_path = models_dir.join(MANIFEST_FILENAME);
-    let manifest = Manifest::load(&manifest_path)?.unwrap_or_default();
-    Ok(manifest.recorded_sha256_for_source(&relkey, source_url))
+fn url_cache_dir(models_dir: &Path, url: &str) -> PathBuf {
+    let key = crate::checksum::hex_digest(&Sha256::digest(url.as_bytes()));
+    models_dir.join("url").join(key)
 }
 
-/// Check whether a cached `hub/…`/`url/…` download is already current: the
-/// destination file exists and its SHA256 matches `expected_sha`. Prints the
-/// verbose "cached model is current" status line on a hit.
+/// Use a cached `hub/…`/`url/…` download when the destination exists and, when
+/// the user supplied one, its SHA256 matches `expected_sha`.
 ///
-/// Shared by [`run_url`] and `hub::run_hub_repo`. Deliberately not used by
-/// the hosted Q8_0 path (`run_hosted_q8`): that cache check also decides
-/// whether to refresh manifest bookkeeping on an already-current file, which
-/// this simpler predicate does not do.
+/// Shared by [`run_url`] and `hub::run_hub_repo`.
 ///
 /// # Arguments
 ///
@@ -358,61 +256,30 @@ fn recorded_download_sha_for_source(
 ///
 /// # Returns
 ///
-/// `true` when `dest` exists and matches `expected_sha`; `false` when
-/// `expected_sha` is `None`, `dest` does not exist, or the checksum does not
-/// match.
+/// `true` when `dest` exists and, when `expected_sha` is supplied, matches it.
 ///
 /// # Errors
 ///
-/// Returns an error if `dest` exists but cannot be hashed.
-fn cached_download_current(
+/// Returns an error if the user supplied `expected_sha` and `dest` cannot be
+/// hashed.
+fn use_cached_download(
     options: &FetchOptions,
     dest: &Path,
     expected_sha: Option<&str>,
 ) -> Result<bool> {
-    let Some(expected) = expected_sha else {
-        return Ok(false);
-    };
-    if !dest.is_file() || crate::checksum::sha256_file_hex(dest)? != expected {
+    if !dest.is_file() {
         return Ok(false);
     }
+    if let Some(expected) = expected_sha {
+        if crate::checksum::sha256_file_hex(dest)? != expected {
+            return Ok(false);
+        }
+    }
     options.verbose_status(format_args!(
-        "parakit: cached model is current: {}",
+        "parakit: using cached model: {}",
         dest.display()
     ));
     Ok(true)
-}
-
-/// Record a completed `hub/…`/`url/…` download in the manifest and print the
-/// "model ready" hint. Shared tail of [`run_url`] and `hub::run_hub_repo`.
-///
-/// # Arguments
-///
-/// * `options` - Shared fetch options.
-/// * `models_dir` - The resolved model cache directory.
-/// * `dest` - The downloaded file's path, under `models_dir`.
-/// * `source_url` - The exact URL downloaded.
-/// * `sha256` - The checksum used to verify the download, if any.
-///
-/// # Errors
-///
-/// Returns an error if `dest` is not under `models_dir`, or if the manifest
-/// cannot be loaded or saved.
-fn record_and_announce(
-    options: &FetchOptions,
-    models_dir: &Path,
-    dest: &Path,
-    source_url: &str,
-    sha256: Option<String>,
-) -> Result<()> {
-    let manifest_path = models_dir.join(MANIFEST_FILENAME);
-    let relkey = manifest::relative_key(models_dir, dest)?;
-    let mut manifest = Manifest::load(&manifest_path)?.unwrap_or_default();
-    manifest.record_download(&relkey, source_url, sha256);
-    manifest.save(&manifest_path)?;
-
-    print_ready_with_hint(options, dest);
-    Ok(())
 }
 
 fn url_file_name(url: &str) -> Result<String> {
@@ -441,15 +308,11 @@ fn print_ready_with_hint(options: &FetchOptions, path: &Path) {
 }
 
 /// Download `url` to `dest` (via a `.gguf.part` staging file), verifying
-/// against `expected_sha` when known and retrying once on a mismatch,
-/// mirroring the hosted Q8_0 retry policy. When no checksum is available at
-/// all, the download still succeeds; a warning plus the computed digest is
-/// printed to stderr so the caller can pin it with `--sha256` next time.
+/// against `expected_sha` when known.
 ///
 /// # Errors
 ///
-/// Returns an error if the download fails, or if it still does not match
-/// `expected_sha` after one retry.
+/// Returns an error if the download fails or does not match `expected_sha`.
 fn download_and_verify(
     options: &FetchOptions,
     client: &Client,
@@ -457,49 +320,32 @@ fn download_and_verify(
     dest: &Path,
     bearer: Option<&str>,
     expected_sha: Option<&str>,
-) -> Result<String> {
+) -> Result<()> {
     let partial = partial_path(dest);
     if options.force {
         remove_if_exists(&partial)?;
     }
     net::download_with_resume(client, url, &partial, bearer)?;
-    let mut sha = crate::checksum::sha256_file_hex(&partial)?;
-
-    match expected_sha {
-        Some(expected) => {
-            if sha != expected {
-                options.status(format_args!(
-                    "parakit: downloaded checksum mismatch, restarting download"
-                ));
-                remove_if_exists(&partial)?;
-                net::download_with_resume(client, url, &partial, bearer)?;
-                sha = crate::checksum::sha256_file_hex(&partial)?;
-            }
-            if sha != expected {
-                remove_if_exists(&partial)?;
-                bail!(
-                    "downloaded file checksum mismatch for {url}: expected {expected}, got {sha}"
-                );
-            }
-        }
-        None => {
-            options.warning(format_args!(
-                "parakit: no upstream checksum published for {url}; downloaded sha256 is {sha} (pass --sha256 {sha} to pin it next time)"
-            ));
+    if let Some(expected) = expected_sha {
+        let sha = crate::checksum::sha256_file_hex(&partial)?;
+        if sha != expected {
+            remove_if_exists(&partial)?;
+            bail!("downloaded file checksum mismatch for {url}: expected {expected}, got {sha}");
         }
     }
 
     move_into_place(&partial, dest)?;
-    Ok(sha)
+    Ok(())
 }
 
 fn partial_path(dest: &Path) -> PathBuf {
-    dest.with_extension("gguf.part")
+    let mut partial = dest.as_os_str().to_os_string();
+    partial.push(".part");
+    PathBuf::from(partial)
 }
 
 #[derive(Debug)]
 struct FetchPaths {
-    manifest: PathBuf,
     nemo: PathBuf,
     f16: PathBuf,
     q8: PathBuf,
@@ -511,7 +357,6 @@ impl FetchPaths {
         std::fs::create_dir_all(&models_dir)
             .with_context(|| format!("create {}", models_dir.display()))?;
         Ok(Self {
-            manifest: models_dir.join(MANIFEST_FILENAME),
             nemo: models_dir.join(NEMO_FILENAME),
             f16: models_dir.join(F16_FILENAME),
             q8: models_dir.join(Q8_FILENAME),
@@ -521,57 +366,38 @@ impl FetchPaths {
 
 fn ensure_nemo(
     paths: &FetchPaths,
-    manifest: &mut Manifest,
     options: &FetchOptions,
     nemo_url: &str,
     endpoint: &str,
     token: Option<&str>,
-) -> Result<String> {
+) -> Result<()> {
     if paths.nemo.is_file() {
-        let current = crate::checksum::sha256_file_hex(&paths.nemo)?;
-        if manifest.source_url == nemo_url && manifest.nemo_sha256.as_deref() == Some(&current) {
-            options.status(format_args!(
-                "parakit: using cached checkpoint: {}",
-                paths.nemo.display()
-            ));
-            return Ok(current);
-        }
+        options.status(format_args!(
+            "parakit: using cached checkpoint: {}",
+            paths.nemo.display()
+        ));
+        return Ok(());
     }
 
     let client = net::build_client()?;
     let bearer = net::bearer_for(nemo_url, endpoint, token);
     options.status(format_args!("parakit: downloading {nemo_url}"));
-    net::download_with_resume(&client, nemo_url, &paths.nemo, bearer)?;
-    let sha = crate::checksum::sha256_file_hex(&paths.nemo)?;
-    manifest.acquisition = manifest::ACQ_OFFICIAL_NEMO.to_string();
-    manifest.source_url = nemo_url.to_string();
-    manifest.nemo_sha256 = Some(sha.clone());
-    manifest.downloaded_at = Some(manifest::now_utc());
-    Ok(sha)
+    download_and_verify(options, &client, nemo_url, &paths.nemo, bearer, None)?;
+    Ok(())
 }
 
 fn ensure_f16(
     paths: &FetchPaths,
-    manifest: &mut Manifest,
     converter_script: &Path,
-    crispasr_sha: &str,
-    nemo_sha: &str,
     preflight_python: Option<&Path>,
     options: &FetchOptions,
-) -> Result<String> {
-    if paths.f16.is_file()
-        && manifest.f16_input_sha256.as_deref() == Some(nemo_sha)
-        && manifest.converter_script == converter_script.display().to_string()
-        && manifest.converter_crispasr_git_sha == crispasr_sha
-    {
-        let current = crate::checksum::sha256_file_hex(&paths.f16)?;
-        if manifest.f16_sha256.as_deref() == Some(&current) {
-            options.status(format_args!(
-                "parakit: using cached F16 GGUF: {}",
-                paths.f16.display()
-            ));
-            return Ok(current);
-        }
+) -> Result<()> {
+    if paths.f16.is_file() {
+        options.status(format_args!(
+            "parakit: using cached F16 GGUF: {}",
+            paths.f16.display()
+        ));
+        return Ok(());
     }
 
     // TODO(convert-rust-port): replace the Python converter when the Parakeet
@@ -580,51 +406,26 @@ fn ensure_f16(
         Some(path) => path.to_path_buf(),
         None => python_with_converter_deps()?,
     };
-    remove_if_exists(&paths.f16)?;
+    let tmp_f16 = paths.f16.with_extension("gguf.converting");
+    remove_if_exists(&tmp_f16)?;
     options.status(format_args!("parakit: converting .nemo to F16 GGUF"));
-    run_command(
+    if let Err(err) = run_command(
         Command::new(&python)
             .arg(converter_script)
             .arg("--nemo")
             .arg(&paths.nemo)
             .arg("--output")
-            .arg(&paths.f16),
+            .arg(&tmp_f16),
         "convert Parakeet .nemo to GGUF",
-    )?;
-
-    let f16_sha = crate::checksum::sha256_file_hex(&paths.f16)?;
-    manifest.f16_input_sha256 = Some(nemo_sha.to_string());
-    manifest.f16_sha256 = Some(f16_sha.clone());
-    manifest.converter_script = converter_script.display().to_string();
-    manifest.converter_crispasr_git_sha = crispasr_sha.to_string();
-    manifest.converted_at = Some(manifest::now_utc());
-    Ok(f16_sha)
+    ) {
+        let _ = remove_if_exists(&tmp_f16);
+        return Err(err);
+    }
+    move_into_place(&tmp_f16, &paths.f16)?;
+    Ok(())
 }
 
-fn ensure_q8(
-    paths: &FetchPaths,
-    manifest: &mut Manifest,
-    quantize_bin: &Path,
-    quantize_version: &str,
-    f16_sha: &str,
-    options: &FetchOptions,
-) -> Result<()> {
-    if !options.force
-        && paths.q8.is_file()
-        && manifest.q8_input_sha256.as_deref() == Some(f16_sha)
-        && manifest.crispasr_quantize_bin == quantize_bin.display().to_string()
-        && manifest.crispasr_quantize_version == quantize_version
-    {
-        let current = crate::checksum::sha256_file_hex(&paths.q8)?;
-        if manifest.q8_sha256.as_deref() == Some(&current) {
-            options.status(format_args!(
-                "parakit: using cached Q8_0 GGUF: {}",
-                paths.q8.display()
-            ));
-            return Ok(());
-        }
-    }
-
+fn ensure_q8(paths: &FetchPaths, quantize_bin: &Path, options: &FetchOptions) -> Result<()> {
     let tmp_q8 = paths.q8.with_extension("gguf.quantizing");
     remove_if_exists(&tmp_q8)?;
     options.status(format_args!("parakit: quantizing F16 GGUF to Q8_0"));
@@ -636,14 +437,7 @@ fn ensure_q8(
         return Err(err);
     }
 
-    let q8_sha = crate::checksum::sha256_file_hex(&tmp_q8)?;
     move_into_place(&tmp_q8, &paths.q8)?;
-    manifest.q8_input_sha256 = Some(f16_sha.to_string());
-    manifest.q8_sha256 = Some(q8_sha);
-    manifest.q8_output_path = paths.q8.display().to_string();
-    manifest.crispasr_quantize_bin = quantize_bin.display().to_string();
-    manifest.crispasr_quantize_version = quantize_version.to_string();
-    manifest.quantized_at = Some(manifest::now_utc());
     Ok(())
 }
 
@@ -717,35 +511,6 @@ fn converter_script_path() -> PathBuf {
         .join("convert-parakeet-to-gguf.py")
 }
 
-fn crispasr_git_sha() -> String {
-    let vendor = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("vendor")
-        .join("CrispASR");
-    Command::new("git")
-        .arg("-C")
-        .arg(vendor)
-        .arg("rev-parse")
-        .arg("HEAD")
-        .output()
-        .ok()
-        .filter(|output| output.status.success())
-        .and_then(|output| String::from_utf8(output.stdout).ok())
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "unknown".to_string())
-}
-
-fn quantize_version(quantize_bin: &Path, crispasr_sha: &str) -> String {
-    let metadata = quantize_bin
-        .metadata()
-        .ok()
-        .and_then(|m| m.modified().ok())
-        .and_then(|mtime| mtime.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_secs().to_string())
-        .unwrap_or_else(|| "unknown-mtime".to_string());
-    format!("crispasr {crispasr_sha}; binary-mtime {metadata}")
-}
-
 fn add_bundled_library_path(command: &mut Command, executable: &Path) {
     let Some(install_dir) = executable.parent().and_then(Path::parent) else {
         return;
@@ -791,7 +556,7 @@ fn run_command(command: &mut Command, label: &str) -> Result<()> {
     }
 }
 
-/// Move a verified download into place.
+/// Move a completed download into place.
 ///
 /// POSIX `rename` overwrites an existing destination atomically; Windows
 /// `rename` cannot, so the destination is removed first there.
@@ -801,7 +566,7 @@ fn move_into_place(src: &Path, dst: &Path) -> Result<()> {
 
     std::fs::rename(src, dst).with_context(|| {
         format!(
-            "move verified model from {} to {}",
+            "move completed model from {} to {}",
             src.display(),
             dst.display()
         )
@@ -929,8 +694,8 @@ mod tests {
     }
 
     #[test]
-    fn force_discards_a_resumable_partial_and_records_a_tofu_checksum() {
-        let dir = crate::test_support::fixture_root("parakit-fetch-tests", "force-tofu");
+    fn force_discards_a_resumable_partial_without_hashing_the_download() {
+        let dir = crate::test_support::fixture_root("parakit-fetch-tests", "force-partial");
         let dest = dir.join("model.gguf");
         let partial = partial_path(&dest);
         std::fs::write(&partial, b"stale-prefix").unwrap();
@@ -949,18 +714,37 @@ mod tests {
             },
         };
         let client = Client::builder().no_proxy().build().unwrap();
-        let sha = download_and_verify(&options, &client, &url, &dest, None, None).unwrap();
+        download_and_verify(&options, &client, &url, &dest, None, None).unwrap();
         let request = server.join().unwrap();
 
         assert!(!request.to_ascii_lowercase().contains("\r\nrange:"));
         assert_eq!(std::fs::read(&dest).unwrap(), b"fresh-model");
-        assert_eq!(sha, crate::checksum::sha256_file_hex(&dest).unwrap());
+    }
 
-        record_and_announce(&options, &dir, &dest, &url, Some(sha.clone())).unwrap();
-        assert_eq!(
-            recorded_download_sha_for_source(&dir, &dest, &url).unwrap(),
-            Some(sha)
-        );
+    #[test]
+    fn explicit_checksum_mismatch_fails_after_one_download() {
+        let dir = crate::test_support::fixture_root("parakit-fetch-tests", "sha-mismatch");
+        let dest = dir.join("model.gguf");
+        let (url, server) = serve_model_once(b"changed-model");
+        let options = FetchOptions {
+            force: false,
+            quiet: true,
+            verbose: false,
+            source: FetchSource::Url {
+                url: url.clone(),
+                sha256: Some("0".repeat(64)),
+            },
+        };
+        let client = Client::builder().no_proxy().build().unwrap();
+
+        let error =
+            download_and_verify(&options, &client, &url, &dest, None, Some(&"0".repeat(64)))
+                .unwrap_err();
+        let request = server.join().unwrap();
+
+        assert!(error.to_string().contains("checksum mismatch"));
+        assert!(request.starts_with("GET "));
+        assert!(!dest.exists());
     }
 
     #[test]
@@ -994,5 +778,18 @@ mod tests {
         ] {
             assert_eq!(url_file_name(url).ok().as_deref(), expect, "{name}");
         }
+    }
+
+    #[test]
+    fn url_cache_key_includes_the_exact_url() {
+        let models = Path::new("target/tmp/models");
+        assert_ne!(
+            url_cache_dir(models, "https://one.example/model.gguf"),
+            url_cache_dir(models, "https://two.example/model.gguf")
+        );
+        assert_eq!(
+            url_cache_dir(models, "https://one.example/model.gguf"),
+            url_cache_dir(models, "https://one.example/model.gguf")
+        );
     }
 }
