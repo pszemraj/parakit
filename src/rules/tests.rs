@@ -789,6 +789,10 @@ fn cause_becomes_because() {
             ("'cause it was late", "Because it was late"),
             ("that's'cause it works", "That's because it works"),
             ("I left 'cause it was late", "I left because it was late"),
+            (
+                "Café closed ’cause it was late",
+                "Café closed because it was late",
+            ),
         ],
     );
 
