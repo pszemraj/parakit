@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use std::cell::Cell;
 use std::collections::VecDeque;
 #[cfg(unix)]
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read as _, Write};
 #[cfg(unix)]
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -44,8 +44,8 @@ const IPC_INSERT_RESPONSE_TIMEOUT: Duration = Duration::from_secs(10);
 /// path if platform insertion code wedges.
 #[cfg(any(unix, target_os = "windows"))]
 const STOP_INSERTION_WAIT: Duration = Duration::from_secs(5);
-/// Maximum accepted Windows control-pipe message size.
-#[cfg(any(target_os = "windows", test))]
+/// Maximum accepted local control-protocol message size.
+#[cfg(any(unix, target_os = "windows"))]
 const IPC_MAX_MESSAGE_SIZE: usize = 64 * 1024;
 #[cfg(any(unix, target_os = "windows"))]
 const STOP_RESPONSE_GRACE: Duration = Duration::from_millis(50);
@@ -817,12 +817,22 @@ fn handle_client(
 
 #[cfg(unix)]
 fn read_command(stream: &std::os::unix::net::UnixStream) -> Result<IpcCommand> {
-    let mut reader = BufReader::new(stream);
-    let mut line = String::new();
+    let reader = BufReader::new(stream);
+    let mut line = Vec::new();
     reader
-        .read_line(&mut line)
+        .take(IPC_MAX_MESSAGE_SIZE as u64 + 1)
+        .read_until(b'\n', &mut line)
         .context("read control command failed")?;
-    parse_command(&line)
+    let payload_len = if line.ends_with(b"\n") {
+        line.len() - 1
+    } else {
+        line.len()
+    };
+    if payload_len > IPC_MAX_MESSAGE_SIZE {
+        bail!("Unix daemon control message exceeds 64 KiB");
+    }
+    let line = std::str::from_utf8(&line).context("control command is not valid UTF-8")?;
+    parse_command(line)
 }
 
 #[cfg(unix)]
@@ -2765,6 +2775,27 @@ mod tests {
         });
         handler.join().expect("handler should return after timeout");
         assert!(started.elapsed() < Duration::from_secs(2));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unix_command_larger_than_size_limit_is_rejected() {
+        use std::io::Write as _;
+        use std::os::unix::net::UnixStream;
+
+        let (mut client, server) = UnixStream::pair().expect("unix stream pair");
+        let mut payload = vec![b'x'; IPC_MAX_MESSAGE_SIZE + 1];
+        payload.push(b'\n');
+        client
+            .write_all(&payload)
+            .expect("oversized command should write");
+
+        let err = read_command(&server).expect_err("oversized Unix command should be rejected");
+
+        assert_eq!(
+            err.to_string(),
+            "Unix daemon control message exceeds 64 KiB"
+        );
     }
 
     #[cfg(any(unix, target_os = "windows"))]
