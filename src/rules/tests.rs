@@ -610,6 +610,8 @@ fn capitalization_protects_decimals_versions_and_dotted_tokens() {
                 "Already capitalized. Still capitalized!",
                 "Already capitalized. Still capitalized!",
             ),
+            ("macOS works. eBay ships.", "macOS works. eBay ships."),
+            ("iOS works. macOS continues.", "iOS works. macOS continues."),
         ],
     );
 }
@@ -793,6 +795,7 @@ fn cause_becomes_because() {
                 "Café closed ’cause it was late",
                 "Café closed because it was late",
             ),
+            ("café’cause it works", "Café because it works"),
         ],
     );
 

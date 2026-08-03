@@ -35,20 +35,18 @@ use super::engine::TransformResult;
 pub(crate) fn normalize_apostrophe_cause(input: &str) -> TransformResult {
     static CAUSE: OnceLock<Regex> = OnceLock::new();
     let re = CAUSE.get_or_init(|| {
-        Regex::new(r#"(?i)([A-Za-z]?)['\u{2019}]cause\b"#)
-            .expect("apostrophe-cause regex must compile")
+        Regex::new(r#"(?i)['\u{2019}]cause\b"#).expect("apostrophe-cause regex must compile")
     });
 
     let replacements = re
         .captures_iter(input)
         .map(|captures| {
             let whole = captures.get(0).expect("capture zero must exist");
-            let prefix = captures.get(1).map_or("", |captured| captured.as_str());
-            let replacement = if prefix.is_empty() {
-                "because".to_string()
-            } else {
-                format!("{prefix} because")
-            };
+            let attached = input[..whole.start()]
+                .chars()
+                .next_back()
+                .is_some_and(char::is_alphanumeric);
+            let replacement = if attached { " because" } else { "because" }.to_string();
             (whole.start(), whole.end(), replacement)
         })
         .collect();
@@ -684,12 +682,13 @@ pub(crate) fn drop_dangling_connective(input: &str) -> TransformResult {
 /// [`preserve_sentence_start_token_case`] identifies its token as a URL,
 /// domain, email address, filename/extension, or a `v`-prefixed version
 /// (via [`preserve_sentence_start_token_case`]'s dot/`@`/scheme checks), so
-/// those are never corrupted. A `.`, `!`, or `?` opens a new sentence only
-/// when [`punctuation_is_sentence_boundary`] agrees; that helper keeps URL
-/// query/path punctuation, decimals, semvers, domains, ellipses, and known
-/// abbreviations/initialisms (e.g. `"e.g."`, `"U.S."`) from being treated
-/// as sentence ends, so a protected token is never split into two sentences
-/// and its next character is never capitalized.
+/// those are never corrupted. Existing mixed-case tokens such as `macOS`,
+/// `iOS`, and `eBay` are also preserved. A `.`, `!`, or `?` opens a new
+/// sentence only when [`punctuation_is_sentence_boundary`] agrees; that helper
+/// keeps URL query/path punctuation, decimals, semvers, domains, ellipses, and
+/// known abbreviations/initialisms (e.g. `"e.g."`, `"U.S."`) from being
+/// treated as sentence ends, so a protected token is never split into two
+/// sentences and its next character is never capitalized.
 ///
 /// # Returns
 ///
@@ -810,8 +809,10 @@ fn protected_token_case(token: &str) -> bool {
     });
     let lexical = token.trim_end_matches('.');
     let lower = lexical.to_ascii_lowercase();
+    let has_internal_uppercase = lexical.chars().skip(1).any(char::is_uppercase);
 
-    lower.starts_with("http://")
+    has_internal_uppercase
+        || lower.starts_with("http://")
         || lower.starts_with("https://")
         || lower.starts_with("www.")
         || lower.contains('@')
