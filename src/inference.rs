@@ -2,6 +2,7 @@
 
 use crate::constants::TARGET_RATE;
 use crate::crispasr_ext::OwnedSession;
+use crate::model::validate_model_file;
 use anyhow::{bail, Context, Result};
 use clap::ValueEnum;
 use crispasr::SessionSegment;
@@ -16,7 +17,10 @@ use std::path::Path;
 const MIN_INFERENCE_SAMPLES: usize = TARGET_RATE as usize;
 
 /// Runtime CPU/GPU selection requested by the user.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
+#[derive(
+    Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum, serde::Serialize, serde::Deserialize,
+)]
+#[serde(rename_all = "kebab-case")]
 pub enum DeviceMode {
     /// Keep CrispASR's default: use the best GPU when one is available,
     /// otherwise fall back to CPU.
@@ -112,12 +116,7 @@ impl Engine {
             return Err(anyhow::anyhow!("thread count must be at least 1"));
         }
         let path = model_path.as_ref();
-        if !path.is_file() {
-            return Err(anyhow::anyhow!(
-                "model path is not a file: {}",
-                path.display()
-            ));
-        }
+        validate_model_file(path)?;
         let path_str = path
             .to_str()
             .ok_or_else(|| anyhow::anyhow!("model path is not valid UTF-8"))?;
@@ -304,11 +303,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn short_pcm_is_padded_with_silence() {
+    fn short_and_empty_pcm_are_padded_with_silence() {
         let padded = pad_short_pcm(&[0.25, -0.25]);
         assert_eq!(padded.len(), MIN_INFERENCE_SAMPLES);
         assert_eq!(&padded[..2], &[0.25, -0.25]);
         assert!(padded[2..].iter().all(|sample| *sample == 0.0));
+
+        let empty = pad_short_pcm(&[]);
+        assert_eq!(empty.len(), MIN_INFERENCE_SAMPLES);
+        assert!(empty.iter().all(|sample| *sample == 0.0));
     }
 
     #[test]
@@ -319,9 +322,19 @@ mod tests {
 
     #[test]
     fn device_mode_labels_are_stable() {
-        assert_eq!(DeviceMode::Auto.as_str(), "auto");
-        assert_eq!(DeviceMode::Cpu.as_str(), "cpu");
-        assert_eq!(DeviceMode::Gpu.as_str(), "gpu");
+        // Exhaustive over ValueEnum::value_variants() with no wildcard arm:
+        // adding a DeviceMode variant without a matching label here is a
+        // compile error, not a silently-missed test case. Mirrors the
+        // value_variants() sweep pattern in config.rs's
+        // assert_serde_matches_clap.
+        for device in DeviceMode::value_variants() {
+            let expected = match device {
+                DeviceMode::Auto => "auto",
+                DeviceMode::Cpu => "cpu",
+                DeviceMode::Gpu => "gpu",
+            };
+            assert_eq!(device.as_str(), expected, "{device:?}");
+        }
     }
 
     #[test]

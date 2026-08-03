@@ -1,83 +1,44 @@
 //! macOS CoreGraphics push-to-talk hotkey tap.
 
-use super::{send_hotkey_transition, HotkeyAction, HotkeyBackend, HotkeyState, MacOsModifierState};
+use super::{
+    send_hotkey_transition, HotkeyAction, HotkeyBackend, HotkeyState, MacOsModifierState,
+    MACOS_LEFT_COMMAND_KEYCODE, MACOS_LEFT_OPTION_KEYCODE, MACOS_LEFT_SHIFT_KEYCODE,
+    MACOS_PTT_LEFT_CONTROL_KEYCODE, MACOS_PTT_SPACE_KEYCODE, MACOS_RIGHT_COMMAND_KEYCODE,
+    MACOS_RIGHT_CONTROL_KEYCODE, MACOS_RIGHT_OPTION_KEYCODE, MACOS_RIGHT_SHIFT_KEYCODE,
+};
 use crate::daemon::logging::Logger;
+use crate::daemon::macos::cgevent_ffi::{
+    event_mask, guarded_tap_callback, install_event_tap, physical_key_down, CFMachPortRef,
+    CFRelease, CFRunLoopRun, CGEventGetIntegerValueField, CGEventRef, CGEventTapEnable,
+    CGEventTapProxy, EventTapInstallError, K_CG_KEYBOARD_EVENT_KEYCODE,
+};
 use crate::daemon::recording::HotkeyTransition;
 use crossbeam_channel::Sender;
 use rdev::Key;
 use std::ffi::c_void;
-use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::ptr;
 use std::sync::atomic::{AtomicPtr, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-const K_CG_SESSION_EVENT_TAP: u32 = 1;
-const K_CG_HEAD_INSERT_EVENT_TAP: u32 = 0;
-const K_CG_EVENT_TAP_OPTION_DEFAULT: u32 = 0;
 const K_CG_EVENT_TAP_DISABLED_BY_TIMEOUT: u32 = 0xFFFF_FFFE;
 const K_CG_EVENT_TAP_DISABLED_BY_USER_INPUT: u32 = 0xFFFF_FFFF;
-/// CoreGraphics key-down event type used by macOS hotkey tests.
-pub(super) const K_CG_EVENT_KEY_DOWN: u32 = 10;
-/// CoreGraphics key-up event type used by macOS hotkey tests.
-pub(super) const K_CG_EVENT_KEY_UP: u32 = 11;
 /// CoreGraphics modifier-state event type used by macOS hotkey tests.
-pub(super) const K_CG_EVENT_FLAGS_CHANGED: u32 = 12;
-const K_CG_KEYBOARD_EVENT_KEYCODE: u32 = 9;
-const K_CG_EVENT_SOURCE_STATE_HID_SYSTEM_STATE: i32 = 1;
+pub(super) use crate::daemon::macos::cgevent_ffi::K_CG_EVENT_FLAGS_CHANGED;
+/// CoreGraphics key-down event type used by macOS hotkey tests.
+pub(super) use crate::daemon::macos::cgevent_ffi::K_CG_EVENT_KEY_DOWN;
+/// CoreGraphics key-up event type used by macOS hotkey tests.
+pub(super) use crate::daemon::macos::cgevent_ffi::K_CG_EVENT_KEY_UP;
 /// Virtual keycode for Space in the macOS hardware-independent key map.
-pub(super) const MACOS_KEY_SPACE: i64 = 49;
-const MACOS_KEY_RIGHT_COMMAND: i64 = 54;
-const MACOS_KEY_LEFT_COMMAND: i64 = 55;
-const MACOS_KEY_LEFT_SHIFT: i64 = 56;
-const MACOS_KEY_LEFT_OPTION: i64 = 58;
-const MACOS_KEY_LEFT_CONTROL: i64 = 59;
-const MACOS_KEY_RIGHT_SHIFT: i64 = 60;
-const MACOS_KEY_RIGHT_OPTION: i64 = 61;
-const MACOS_KEY_RIGHT_CONTROL: i64 = 62;
-
-type Boolean = u8;
-type CFAllocatorRef = *const c_void;
-type CFIndex = isize;
-type CFRunLoopRef = *mut c_void;
-type CFRunLoopSourceRef = *mut c_void;
-type CFStringRef = *const c_void;
-type CFTypeRef = *const c_void;
-type CFMachPortRef = *mut c_void;
-type CGEventRef = *mut c_void;
-type CGEventTapProxy = *mut c_void;
-type CGEventTapCallBack =
-    extern "C" fn(CGEventTapProxy, u32, CGEventRef, *mut c_void) -> CGEventRef;
-
-#[link(name = "CoreFoundation", kind = "framework")]
-extern "C" {
-    static kCFRunLoopDefaultMode: CFStringRef;
-
-    fn CFRelease(cf: CFTypeRef);
-    fn CFRunLoopAddSource(rl: CFRunLoopRef, source: CFRunLoopSourceRef, mode: CFStringRef);
-    fn CFRunLoopGetCurrent() -> CFRunLoopRef;
-    fn CFRunLoopRun();
-    fn CFMachPortCreateRunLoopSource(
-        allocator: CFAllocatorRef,
-        port: CFMachPortRef,
-        order: CFIndex,
-    ) -> CFRunLoopSourceRef;
-}
-
-#[link(name = "CoreGraphics", kind = "framework")]
-extern "C" {
-    fn CGEventTapCreate(
-        tap: u32,
-        place: u32,
-        options: u32,
-        events_of_interest: u64,
-        callback: CGEventTapCallBack,
-        user_info: *mut c_void,
-    ) -> CFMachPortRef;
-    fn CGEventTapEnable(tap: CFMachPortRef, enable: Boolean);
-    fn CGEventGetIntegerValueField(event: CGEventRef, field: u32) -> i64;
-    fn CGEventSourceKeyState(state_id: i32, key: u16) -> bool;
-}
+pub(super) const MACOS_KEY_SPACE: i64 = MACOS_PTT_SPACE_KEYCODE as i64;
+const MACOS_KEY_RIGHT_COMMAND: i64 = MACOS_RIGHT_COMMAND_KEYCODE as i64;
+const MACOS_KEY_LEFT_COMMAND: i64 = MACOS_LEFT_COMMAND_KEYCODE as i64;
+const MACOS_KEY_LEFT_SHIFT: i64 = MACOS_LEFT_SHIFT_KEYCODE as i64;
+const MACOS_KEY_LEFT_OPTION: i64 = MACOS_LEFT_OPTION_KEYCODE as i64;
+const MACOS_KEY_LEFT_CONTROL: i64 = MACOS_PTT_LEFT_CONTROL_KEYCODE as i64;
+const MACOS_KEY_RIGHT_SHIFT: i64 = MACOS_RIGHT_SHIFT_KEYCODE as i64;
+const MACOS_KEY_RIGHT_OPTION: i64 = MACOS_RIGHT_OPTION_KEYCODE as i64;
+const MACOS_KEY_RIGHT_CONTROL: i64 = MACOS_RIGHT_CONTROL_KEYCODE as i64;
 
 /// Run the macOS hotkey loop until the process exits.
 ///
@@ -92,17 +53,11 @@ pub(crate) fn run_grab_loop(
     log: Arc<Logger>,
 ) {
     log.verbose("parakit: macOS hotkey backend: CoreGraphics session event tap Left Control+Space");
-    run_event_tap_loop_or_exit(tx);
-}
-
-fn run_event_tap_loop_or_exit(tx: Sender<HotkeyTransition>) {
-    if let Err(err) = run_event_tap_loop(tx) {
-        eprintln!(
-            "parakit: macOS hotkey event tap failed: {err:#}\n{}",
-            crate::daemon::hotkey_help::macos_failure_help()
-        );
-        std::process::exit(2);
-    }
+    super::run_hotkey_loop_or_exit(
+        run_event_tap_loop(tx),
+        "macOS hotkey event tap",
+        crate::daemon::hotkey_help::macos_failure_help,
+    );
 }
 
 fn run_event_tap_loop(tx: Sender<HotkeyTransition>) -> anyhow::Result<()> {
@@ -119,40 +74,27 @@ fn run_event_tap_loop(tx: Sender<HotkeyTransition>) -> anyhow::Result<()> {
     let mask = event_mask(K_CG_EVENT_KEY_DOWN)
         | event_mask(K_CG_EVENT_KEY_UP)
         | event_mask(K_CG_EVENT_FLAGS_CHANGED);
-    let tap = unsafe {
-        CGEventTapCreate(
-            K_CG_SESSION_EVENT_TAP,
-            K_CG_HEAD_INSERT_EVENT_TAP,
-            K_CG_EVENT_TAP_OPTION_DEFAULT,
-            mask,
-            hotkey_tap_callback,
-            state_ptr.cast(),
-        )
-    };
-    if tap.is_null() {
-        unsafe {
-            drop(Box::from_raw(state_ptr));
+
+    let installed = unsafe { install_event_tap(mask, hotkey_tap_callback, state_ptr.cast()) };
+    let (tap, source, _run_loop) = match installed {
+        Ok(installed) => installed,
+        Err(EventTapInstallError::TapCreateFailed) => {
+            unsafe {
+                drop(Box::from_raw(state_ptr));
+            }
+            anyhow::bail!("could not create CoreGraphics session event tap");
         }
-        anyhow::bail!("could not create CoreGraphics session event tap");
-    }
+        Err(EventTapInstallError::SourceCreateFailed(tap)) => {
+            unsafe {
+                CFRelease(tap.cast());
+                drop(Box::from_raw(state_ptr));
+            }
+            anyhow::bail!("could not create CoreGraphics event-tap run-loop source");
+        }
+    };
 
     unsafe {
         (*state_ptr).tap.store(tap.cast(), Ordering::Release);
-    }
-
-    let source = unsafe { CFMachPortCreateRunLoopSource(ptr::null(), tap, 0) };
-    if source.is_null() {
-        unsafe {
-            CFRelease(tap.cast());
-            drop(Box::from_raw(state_ptr));
-        }
-        anyhow::bail!("could not create CoreGraphics event-tap run-loop source");
-    }
-
-    unsafe {
-        let run_loop = CFRunLoopGetCurrent();
-        CFRunLoopAddSource(run_loop, source, kCFRunLoopDefaultMode);
-        CGEventTapEnable(tap, 1);
         CFRelease(source.cast());
         CFRunLoopRun();
     }
@@ -171,10 +113,9 @@ extern "C" fn hotkey_tap_callback(
     event: CGEventRef,
     user_info: *mut c_void,
 ) -> CGEventRef {
-    catch_unwind(AssertUnwindSafe(|| {
+    guarded_tap_callback(event, || {
         hotkey_tap_callback_inner(event_type, event, user_info)
-    }))
-    .unwrap_or(event)
+    })
 }
 
 fn hotkey_tap_callback_inner(
@@ -275,23 +216,20 @@ pub(super) fn handle_tap_event(
     }
 }
 
+// The MACOS_KEY_* constants above are i64 (matching CGEventGetIntegerValueField's
+// return type, which they are compared against elsewhere in this file), while
+// the shared physical_key_down takes the u16 keycode ABI type; casting back
+// here is lossless since every constant is itself derived from a u16 keycode
+// via `as i64`.
 fn physical_modifier_state() -> MacOsModifierState {
     MacOsModifierState {
-        ctrl_left: physical_key_down(MACOS_KEY_LEFT_CONTROL),
-        ctrl_right: physical_key_down(MACOS_KEY_RIGHT_CONTROL),
-        shift_left: physical_key_down(MACOS_KEY_LEFT_SHIFT),
-        shift_right: physical_key_down(MACOS_KEY_RIGHT_SHIFT),
-        alt: physical_key_down(MACOS_KEY_LEFT_OPTION),
-        alt_gr: physical_key_down(MACOS_KEY_RIGHT_OPTION),
-        meta_left: physical_key_down(MACOS_KEY_LEFT_COMMAND),
-        meta_right: physical_key_down(MACOS_KEY_RIGHT_COMMAND),
+        ctrl_left: physical_key_down(MACOS_KEY_LEFT_CONTROL as u16),
+        ctrl_right: physical_key_down(MACOS_KEY_RIGHT_CONTROL as u16),
+        shift_left: physical_key_down(MACOS_KEY_LEFT_SHIFT as u16),
+        shift_right: physical_key_down(MACOS_KEY_RIGHT_SHIFT as u16),
+        alt: physical_key_down(MACOS_KEY_LEFT_OPTION as u16),
+        alt_gr: physical_key_down(MACOS_KEY_RIGHT_OPTION as u16),
+        meta_left: physical_key_down(MACOS_KEY_LEFT_COMMAND as u16),
+        meta_right: physical_key_down(MACOS_KEY_RIGHT_COMMAND as u16),
     }
-}
-
-fn physical_key_down(keycode: i64) -> bool {
-    unsafe { CGEventSourceKeyState(K_CG_EVENT_SOURCE_STATE_HID_SYSTEM_STATE, keycode as u16) }
-}
-
-fn event_mask(event_type: u32) -> u64 {
-    1_u64 << event_type
 }

@@ -7,10 +7,7 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$InstallDir,
 
-    [switch]$NoUserPath,
-
-    [Alias("Force")]
-    [switch]$AllowBackendSwitch
+    [switch]$NoUserPath
 )
 
 $ErrorActionPreference = "Stop"
@@ -163,17 +160,11 @@ function Test-DllResolvable {
         [string[]]$ExtraDirs = @()
     )
 
-    foreach ($dir in $ExtraDirs) {
+    $searchDirs = @($ExtraDirs) + @($env:Path -split ";")
+    foreach ($dir in $searchDirs) {
         if ([string]::IsNullOrWhiteSpace($dir)) {
             continue
         }
-        $candidate = Join-Path $dir $Name
-        if (Test-Path -LiteralPath $candidate -PathType Leaf) {
-            return $true
-        }
-    }
-
-    foreach ($dir in @($env:Path -split ";" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })) {
         $expanded = [System.Environment]::ExpandEnvironmentVariables($dir)
         if ([string]::IsNullOrWhiteSpace($expanded)) {
             continue
@@ -185,6 +176,29 @@ function Test-DllResolvable {
     }
 
     return $false
+}
+
+function Get-MissingExternalDlls {
+    param(
+        [string[]]$Dlls,
+
+        [Parameter(Mandatory = $true)]
+        [string]$BundleDir,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Context,
+
+        [string[]]$ExtraDirs = @()
+    )
+
+    $missing = @()
+    foreach ($dll in @($Dlls) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) {
+        Assert-FlatBundleFileName -Name $dll -Context $Context
+        if (-not (Test-DllResolvable -Name $dll -ExtraDirs (@($BundleDir) + $ExtraDirs))) {
+            $missing += $dll
+        }
+    }
+    return $missing
 }
 
 function Assert-ExternalRuntimeDependencies {
@@ -204,91 +218,6 @@ function Assert-ExternalRuntimeDependencies {
     }
 }
 
-function Get-ManifestAccelerator {
-    param(
-        [Parameter(Mandatory = $true)]
-        $Manifest
-    )
-
-    $accelerator = $Manifest.accelerator
-    if (-not [string]::IsNullOrWhiteSpace($accelerator)) {
-        return $accelerator.ToString().Trim().ToLowerInvariant()
-    }
-
-    if ($null -ne $Manifest.cuda) {
-        return "cuda"
-    }
-    if ($null -ne $Manifest.vulkan) {
-        return "vulkan"
-    }
-
-    foreach ($required in @($Manifest.required_files)) {
-        if ($required -ieq "ggml-cuda.dll") {
-            return "cuda"
-        }
-        if ($required -ieq "ggml-vulkan.dll") {
-            return "vulkan"
-        }
-    }
-
-    return "cpu"
-}
-
-function Get-InstalledAccelerator {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$Path
-    )
-
-    $manifestPath = Join-Path $Path "parakit-runtime-manifest.json"
-    if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
-        return $null
-    }
-
-    try {
-        $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
-    } catch {
-        return "unreadable"
-    }
-
-    return Get-ManifestAccelerator $manifest
-}
-
-function Assert-BackendReplacementAllowed {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$Destination,
-
-        [Parameter(Mandatory = $true)]
-        $Manifest,
-
-        [Parameter(Mandatory = $true)]
-        [bool]$AllowSwitch
-    )
-
-    $marker = Join-Path $Destination ".parakit-install"
-    if (-not (Test-Path -LiteralPath $Destination -PathType Container) -or
-        -not (Test-Path -LiteralPath $marker -PathType Leaf)) {
-        return
-    }
-
-    $installed = Get-InstalledAccelerator $Destination
-    if ([string]::IsNullOrWhiteSpace($installed)) {
-        return
-    }
-
-    $incoming = Get-ManifestAccelerator $Manifest
-    if ($installed.Equals($incoming, [System.StringComparison]::OrdinalIgnoreCase)) {
-        return
-    }
-
-    if (-not $AllowSwitch) {
-        throw "Refusing to replace installed $installed bundle with $incoming bundle without explicit approval. Rerun build.ps1 with --allow-backend-switch or --force, or install.ps1 with -AllowBackendSwitch or -Force, when switching cpu/cuda/vulkan installs intentionally."
-    }
-
-    Write-Host "Install: replacing $installed bundle with $incoming bundle"
-}
-
 function Assert-CudaExternalDlls {
     param(
         [Parameter(Mandatory = $true)]
@@ -302,18 +231,10 @@ function Assert-CudaExternalDlls {
         return
     }
 
-    $dlls = @($Cuda.external_dlls) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
-    if ($dlls.Count -eq 0) {
-        return
-    }
-
-    $missing = @()
-    foreach ($dll in $dlls) {
-        Assert-FlatBundleFileName -Name $dll -Context "CUDA external DLL"
-        if (-not (Test-DllResolvable -Name $dll -ExtraDirs @($BundleDir))) {
-            $missing += $dll
-        }
-    }
+    $missing = @(Get-MissingExternalDlls `
+        -Dlls @($Cuda.external_dlls) `
+        -BundleDir $BundleDir `
+        -Context "CUDA external DLL")
 
     if ($missing.Count -gt 0) {
         $version = if ([string]::IsNullOrWhiteSpace($Cuda.toolkit_version)) { "the build" } else { $Cuda.toolkit_version }
@@ -330,19 +251,12 @@ function Assert-VulkanExternalDlls {
         [string]$BundleDir
     )
 
-    $dlls = @($Vulkan.external_dlls) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
-    if ($dlls.Count -eq 0) {
-        return
-    }
-
     $systemDir = [System.Environment]::SystemDirectory
-    $missing = @()
-    foreach ($dll in $dlls) {
-        Assert-FlatBundleFileName -Name $dll -Context "Vulkan external DLL"
-        if (-not (Test-DllResolvable -Name $dll -ExtraDirs @($BundleDir, $systemDir))) {
-            $missing += $dll
-        }
-    }
+    $missing = @(Get-MissingExternalDlls `
+        -Dlls @($Vulkan.external_dlls) `
+        -BundleDir $BundleDir `
+        -Context "Vulkan external DLL" `
+        -ExtraDirs @($systemDir))
 
     if ($missing.Count -gt 0) {
         throw "Vulkan bundle expects the driver-provided loader DLLs that were not found: $($missing -join ', '). Install or update the NVIDIA, AMD, or Intel GPU driver, or install the CPU bundle on machines without a Vulkan-capable driver."
@@ -352,7 +266,9 @@ function Assert-VulkanExternalDlls {
 function Invoke-InstallSmoke {
     param(
         [Parameter(Mandatory = $true)]
-        [string]$Path
+        [string]$Path,
+
+        [switch]$SilentSuccess
     )
 
     $exe = Join-Path $Path "parakit.exe"
@@ -370,7 +286,9 @@ function Invoke-InstallSmoke {
         throw "Installed parakit loader smoke test failed with exit code $code"
     }
 
-    Write-Host "Smoke: parakit --version OK"
+    if (-not $SilentSuccess) {
+        Write-Host "Smoke: parakit --version OK"
+    }
 }
 
 function Install-Bundle {
@@ -383,26 +301,80 @@ function Install-Bundle {
     )
 
     $marker = Join-Path $Destination ".parakit-install"
+    $defaultInstall = Get-FullPath (Get-DefaultInstallDir)
+    $isDefaultInstall = $Destination.Equals(
+        $defaultInstall,
+        [System.StringComparison]::OrdinalIgnoreCase
+    )
 
-    if (Test-Path -LiteralPath $Destination -PathType Container) {
-        if (Test-Path -LiteralPath $marker -PathType Leaf) {
-            Remove-Item -LiteralPath $Destination -Recurse -Force
+    $destinationExists = Test-Path -LiteralPath $Destination
+    if ($destinationExists -and -not (Test-Path -LiteralPath $Destination -PathType Container)) {
+        throw "Refusing to replace a non-directory install path: $Destination"
+    }
+
+    if ($destinationExists) {
+        if ($isDefaultInstall -or (Test-Path -LiteralPath $marker -PathType Leaf)) {
+            Write-Host "Replacing existing install directory: $Destination"
         } else {
             $existingEntry = Get-ChildItem -LiteralPath $Destination -Force | Select-Object -First 1
             if ($null -ne $existingEntry) {
-                throw "Refusing to install into existing non-empty directory without .parakit-install marker: $Destination. Choose an empty install directory or move the existing directory aside."
+                throw "Refusing to install into existing non-empty custom directory without .parakit-install marker: $Destination. Choose an empty install directory or move the existing directory aside."
             }
         }
     }
 
-    New-Item -ItemType Directory -Path $Destination -Force | Out-Null
+    $parent = Split-Path -Parent $Destination
+    New-Item -ItemType Directory -Path $parent -Force | Out-Null
+    $leaf = Split-Path -Leaf $Destination
+    $nonce = [System.Guid]::NewGuid().ToString("N")
+    $staging = Join-Path $parent ".$leaf.installing-$nonce"
+    $backup = Join-Path $parent ".$leaf.backup-$nonce"
+    $backupCreated = $false
+    $newInstallPlaced = $false
 
-    Get-ChildItem -LiteralPath $Source -Force |
-        ForEach-Object {
-            Copy-Item -LiteralPath $_.FullName -Destination $Destination -Recurse -Force
+    try {
+        New-Item -ItemType Directory -Path $staging | Out-Null
+
+        Get-ChildItem -LiteralPath $Source -Force |
+            ForEach-Object {
+                Copy-Item -LiteralPath $_.FullName -Destination $staging -Recurse -Force
+            }
+
+        Set-Content -LiteralPath (Join-Path $staging ".parakit-install") -Value "parakit windows install" -Encoding ascii
+        Invoke-InstallSmoke -Path $staging -SilentSuccess
+
+        if ($destinationExists) {
+            Move-Item -LiteralPath $Destination -Destination $backup
+            $backupCreated = $true
         }
 
-    Set-Content -LiteralPath $marker -Value "parakit windows install" -Encoding ascii
+        Move-Item -LiteralPath $staging -Destination $Destination
+        $newInstallPlaced = $true
+        Invoke-InstallSmoke -Path $Destination
+
+        if ($backupCreated) {
+            Remove-Item -LiteralPath $backup -Recurse -Force
+            $backupCreated = $false
+        }
+    } catch {
+        $installError = $_
+        try {
+            if ($newInstallPlaced -and (Test-Path -LiteralPath $Destination)) {
+                Remove-Item -LiteralPath $Destination -Recurse -Force
+            }
+            if ($backupCreated -and (Test-Path -LiteralPath $backup -PathType Container)) {
+                Move-Item -LiteralPath $backup -Destination $Destination
+                $backupCreated = $false
+            }
+        } catch {
+            throw "Install failed and the previous installation could not be restored automatically. It remains at ${backup}. Original error: $($installError.Exception.Message). Rollback error: $($_.Exception.Message)"
+        }
+        throw $installError
+    } finally {
+        if (Test-Path -LiteralPath $staging) {
+            Remove-Item -LiteralPath $staging -Recurse -Force
+        }
+    }
 }
 
 Assert-NativeWindows "This installer"
@@ -413,11 +385,9 @@ $installFull = Get-FullPath $InstallDir
 $manifest = Assert-Bundle $bundleFull
 Assert-InstallDir $installFull
 Assert-ExternalRuntimeDependencies -Manifest $manifest -BundleDir $bundleFull
-Assert-BackendReplacementAllowed -Destination $installFull -Manifest $manifest -AllowSwitch ([bool]$AllowBackendSwitch)
 
 Install-Bundle -Source $bundleFull -Destination $installFull
 Write-Host "Installed: $installFull"
-Invoke-InstallSmoke $installFull
 
 if ($NoUserPath) {
     Write-Host "User PATH: skipped"

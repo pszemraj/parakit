@@ -18,7 +18,13 @@ use anyhow::{Context, Result};
 use arboard::{Clipboard, ImageData};
 use clap::ValueEnum;
 use enigo::{Enigo, Keyboard, Settings};
-use std::{borrow::Cow, path::PathBuf, thread, time::Duration};
+#[cfg(target_os = "macos")]
+use objc2::rc::autoreleasepool;
+#[cfg(target_os = "macos")]
+use objc2_app_kit::{NSPasteboard, NSPasteboardTypeHTML, NSPasteboardTypeString};
+#[cfg(target_os = "macos")]
+use objc2_foundation::NSString;
+use std::{borrow::Cow, path::PathBuf, time::Duration};
 #[cfg(target_os = "linux")]
 use x11rb::connection::Connection as _;
 #[cfg(target_os = "linux")]
@@ -31,8 +37,10 @@ use super::clipboard_restore::clipboard_history_debug;
 #[cfg(test)]
 use super::clipboard_restore::ClipboardWriteSnapshot;
 use super::clipboard_restore::{
-    ClipboardRestoreGate, ClipboardRestorePlan, ClipboardWriteToken, PlatformClipboardRestoreGate,
+    sleep_if_nonzero, ClipboardRestoreGate, ClipboardRestorePlan, ClipboardWriteToken,
+    PasteConfirmation, PasteConfirmationContext, PasteTargetValue, PlatformClipboardRestoreGate,
 };
+use super::FocusVerification;
 
 #[cfg(target_os = "linux")]
 #[path = "inject_smoke.rs"]
@@ -42,7 +50,8 @@ mod inject_smoke;
 pub(crate) const CLIPBOARD_RESTORE_ERROR: &str = "could not restore previous clipboard contents";
 
 /// Paste shortcut style for batch transcript insertion.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub(crate) enum PasteMode {
     /// Terminal-friendly paste: `Ctrl+Shift+V` on Linux/Windows, `Cmd+V` on macOS.
     Terminal,
@@ -70,12 +79,119 @@ impl PasteMode {
 /// Result of a guarded paste attempt.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum PasteOutcome {
-    /// The paste chord or direct typing path was sent.
+    /// The paste chord or direct typing path was sent, and insertion was
+    /// positively confirmed (or no stronger confirmation signal exists on
+    /// this platform, in which case this is the historical unconditional
+    /// meaning of "pasted").
     Pasted,
+    /// The paste chord was sent, but insertion could not be positively
+    /// confirmed within the acknowledgement grace period (e.g. on macOS,
+    /// `AXValue` could not be polled at all — see the `daemon::macos::pasteboard`
+    /// module docs for why that happens legitimately). Treated as a success
+    /// for retry and clipboard-restore purposes, distinct telemetry from
+    /// [`Self::Pasted`].
+    PastedUnverified,
     /// The transcript was left on the clipboard and no synthetic input was sent.
     CopiedOnly,
+    /// The transcript was left on the clipboard because active physical
+    /// modifiers made posting the paste chord unsafe.
+    UnsafeModifiers,
     /// No paste chord was sent and clipboard policy was applied.
     Blocked,
+}
+
+/// Paths that never send a paste chord (staging, guard-blocked, direct
+/// typing) use `acknowledgement_kind: "not_applicable"` and
+/// `acknowledgement_ms: None` because they have nothing to acknowledge.
+/// After a paste chord, [`paste_with_clipboard_swap_guarded`] records the
+/// actual confirmation kind and elapsed time from
+/// [`crate::daemon::desktop::clipboard_restore::PasteConfirmation`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct InsertionTelemetry {
+    /// Whether a synthetic paste chord or type event was actually sent.
+    pub(crate) paste_event_posted: bool,
+    /// How insertion was acknowledged, or `"not_applicable"` when no paste
+    /// chord was sent.
+    pub(crate) acknowledgement_kind: &'static str,
+    /// Milliseconds spent waiting for acknowledgement, or `None` when no
+    /// acknowledgement was attempted.
+    pub(crate) acknowledgement_ms: Option<u128>,
+    /// Whether the previous clipboard contents were restored, when the
+    /// clipboard was touched at all.
+    pub(crate) clipboard_restored: Option<bool>,
+}
+
+impl InsertionTelemetry {
+    /// Build telemetry for a path that does not attempt acknowledgement.
+    ///
+    /// # Arguments
+    ///
+    /// * `paste_event_posted` - Whether synthetic input was sent.
+    /// * `clipboard_restored` - Known clipboard restore result, when touched.
+    ///
+    /// # Returns
+    ///
+    /// Telemetry with acknowledgement fields set to not applicable.
+    pub(crate) const fn not_applicable(
+        paste_event_posted: bool,
+        clipboard_restored: Option<bool>,
+    ) -> Self {
+        Self {
+            paste_event_posted,
+            acknowledgement_kind: "not_applicable",
+            acknowledgement_ms: None,
+            clipboard_restored,
+        }
+    }
+
+    fn acknowledged(
+        acknowledgement_kind: &'static str,
+        elapsed: Duration,
+        clipboard_restored: bool,
+    ) -> Self {
+        Self {
+            paste_event_posted: true,
+            acknowledgement_kind,
+            acknowledgement_ms: Some(elapsed.as_millis()),
+            clipboard_restored: Some(clipboard_restored),
+        }
+    }
+}
+
+/// Outcome of a guarded paste attempt plus its insertion telemetry.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PasteReport {
+    /// Coarse guarded-paste result.
+    pub(crate) outcome: PasteOutcome,
+    /// Acknowledgement and clipboard details shared with the worker report.
+    pub(crate) telemetry: InsertionTelemetry,
+}
+
+impl PasteReport {
+    /// Build a report for a path that does not attempt acknowledgement.
+    fn new(
+        outcome: PasteOutcome,
+        paste_event_posted: bool,
+        clipboard_restored: Option<bool>,
+    ) -> Self {
+        Self {
+            outcome,
+            telemetry: InsertionTelemetry::not_applicable(paste_event_posted, clipboard_restored),
+        }
+    }
+}
+
+/// Convert a completed clipboard-staging outcome into a [`PasteReport`].
+///
+/// Staging never sends a paste chord. [`StageOutcome::CopiedOnly`] means the
+/// transcript was intentionally left on the clipboard (no restore);
+/// [`StageOutcome::Blocked`] means the previous clipboard contents were
+/// restored.
+fn report_from_stage_outcome(outcome: StageOutcome) -> PasteReport {
+    match outcome {
+        StageOutcome::CopiedOnly => PasteReport::new(PasteOutcome::CopiedOnly, false, Some(false)),
+        StageOutcome::Blocked => PasteReport::new(PasteOutcome::Blocked, false, Some(true)),
+    }
 }
 
 /// Result of staging clipboard text without sending paste or type input.
@@ -87,12 +203,27 @@ pub(crate) enum StageOutcome {
     Blocked,
 }
 
-impl From<StageOutcome> for PasteOutcome {
-    fn from(outcome: StageOutcome) -> Self {
-        match outcome {
-            StageOutcome::CopiedOnly => Self::CopiedOnly,
-            StageOutcome::Blocked => Self::Blocked,
-        }
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PasteDispatch {
+    Posted,
+    #[cfg_attr(
+        not(target_os = "macos"),
+        allow(
+            dead_code,
+            reason = "only the macOS chord backend can withhold a dispatch for live modifiers"
+        )
+    )]
+    SkippedUnsafeModifiers,
+}
+
+fn wait_for_paste_shortcut_safety() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        crate::daemon::macos::wait_for_safe_paste_modifiers()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        true
     }
 }
 
@@ -126,10 +257,6 @@ pub(crate) fn preflight(mode: PasteMode) -> Result<()> {
         platform_paste_preflight()?;
     }
     Ok(())
-}
-
-fn insertion_needs_enigo(mode: PasteMode) -> bool {
-    mode == PasteMode::Direct
 }
 
 /// Exercise the configured insertion backend without inserting into the user's
@@ -261,6 +388,67 @@ pub(super) trait ClipboardStore {
     fn clear(&mut self) -> Result<()>;
 }
 
+/// Restore HTML and its optional plain-text alternative to the clipboard.
+///
+/// arboard's macOS HTML setter always surrounds the supplied HTML with a
+/// synthetic document wrapper. That is useful when copying a fresh fragment,
+/// but restoring an already-captured payload through it nests another wrapper
+/// after every dictation. Write the two native pasteboard types directly on
+/// macOS so the captured HTML is preserved verbatim.
+///
+/// # Arguments
+///
+/// * `clipboard` - Open clipboard handle used by non-macOS backends.
+/// * `html` - Captured HTML payload to restore.
+/// * `alt_text` - Optional plain-text representation of the same payload.
+///
+/// # Returns
+///
+/// `Ok(())` when every requested pasteboard representation was written.
+///
+/// # Errors
+///
+/// Returns an error if the platform clipboard rejects either representation.
+pub(crate) fn restore_html_clipboard(
+    clipboard: &mut Clipboard,
+    html: String,
+    alt_text: Option<String>,
+) -> Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        let _ = clipboard;
+        autoreleasepool(|_| {
+            let pasteboard = NSPasteboard::generalPasteboard();
+            pasteboard.clearContents();
+            // SAFETY: AppKit exports these immutable, process-lifetime
+            // pasteboard type constants whenever the linked framework is
+            // loaded.
+            let (html_type, string_type) =
+                unsafe { (NSPasteboardTypeHTML, NSPasteboardTypeString) };
+
+            if !pasteboard.setString_forType(&NSString::from_str(&html), html_type) {
+                return Err(anyhow::anyhow!(
+                    "could not write native HTML clipboard contents"
+                ));
+            }
+            if let Some(alt_text) = alt_text {
+                if !pasteboard.setString_forType(&NSString::from_str(&alt_text), string_type) {
+                    return Err(anyhow::anyhow!(
+                        "could not write native plain-text clipboard alternative"
+                    ));
+                }
+            }
+            Ok(())
+        })
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    clipboard
+        .set()
+        .html(html, alt_text)
+        .context("could not write HTML clipboard contents")
+}
+
 impl ClipboardStore for Clipboard {
     fn get_text(&mut self) -> Result<String> {
         Clipboard::get_text(self).context("could not read system clipboard")
@@ -277,9 +465,7 @@ impl ClipboardStore for Clipboard {
     }
 
     fn set_html(&mut self, html: String, alt_text: Option<String>) -> Result<()> {
-        self.set()
-            .html(html, alt_text)
-            .context("could not write HTML clipboard contents")
+        restore_html_clipboard(self, html, alt_text)
     }
 
     fn get_file_list(&mut self) -> Result<Vec<PathBuf>> {
@@ -365,16 +551,17 @@ impl FocusSnapshot {
         }
     }
 
-    /// Return whether the current focus still matches this snapshot.
+    /// Compare the current focus against this snapshot with one platform read.
     ///
     /// # Returns
     ///
-    /// `Ok(true)` when it is safe to insert into the original target.
+    /// A verification value carrying both the telemetry label and insertion
+    /// decision for the same live focus observation.
     ///
     /// # Errors
     ///
     /// Returns an error when the current focus cannot be read.
-    pub(crate) fn matches_current(&self) -> Result<bool> {
+    pub(crate) fn verify_current(&self) -> Result<FocusVerification> {
         #[cfg(target_os = "linux")]
         {
             let (conn, screen_num) = RustConnection::connect(None)
@@ -385,7 +572,7 @@ impl FocusSnapshot {
                 if let Some(current) = super::x11::active_window(&conn, root)
                     .context("could not query the current X11 active window")?
                 {
-                    return Ok(current == expected);
+                    return Ok(FocusVerification::from_matches(current == expected));
                 }
             }
 
@@ -394,22 +581,98 @@ impl FocusSnapshot {
                     "X11 active window is unavailable and no input focus fallback exists"
                 );
             };
-            Ok(
+            Ok(FocusVerification::from_matches(
                 linux_current_input_focus(&conn)
                     .context("could not query the current X11 focus")?
                     == expected,
-            )
+            ))
         }
 
         #[cfg(target_os = "windows")]
         {
-            self.windows.matches_current()
+            self.windows
+                .matches_current()
+                .map(FocusVerification::from_matches)
         }
 
         #[cfg(target_os = "macos")]
         {
-            self.macos.matches_current()
+            Ok(self.macos.verify_current())
         }
+    }
+
+    /// Return the bundle identifier of the captured insertion target, when
+    /// the platform focus snapshot carries one.
+    ///
+    /// # Returns
+    ///
+    /// `Some` bundle identifier on macOS when the frontmost application
+    /// reported one; `None` on platforms whose focus snapshot has no
+    /// application bundle identifier concept.
+    #[cfg(target_os = "macos")]
+    pub(crate) fn target_bundle_id(&self) -> Option<&str> {
+        self.macos.bundle_id()
+    }
+
+    /// Return the bundle identifier of the captured insertion target, when
+    /// the platform focus snapshot carries one.
+    ///
+    /// # Returns
+    ///
+    /// Always `None`: Linux and Windows focus snapshots do not carry an
+    /// application bundle identifier today.
+    #[cfg(not(target_os = "macos"))]
+    pub(crate) fn target_bundle_id(&self) -> Option<&str> {
+        None
+    }
+
+    /// Return the focused Accessibility element captured for this snapshot,
+    /// when one is available for post-paste `AXValue` acknowledgement
+    /// polling.
+    ///
+    /// # Returns
+    ///
+    /// `Some` when this snapshot captured a focused Accessibility element
+    /// (see [`crate::daemon::macos::MacOsFocusSnapshot::ax_element`] for the
+    /// cases where it did not, e.g. capture-time Accessibility failure or an
+    /// application that exposes no focused element).
+    #[cfg(target_os = "macos")]
+    pub(crate) fn macos_ax_element(&self) -> Option<&crate::daemon::macos::AxElementSnapshot> {
+        self.macos.ax_element()
+    }
+
+    /// Reacquire and read the current focused macOS Accessibility value.
+    ///
+    /// # Arguments
+    ///
+    /// * `max_utf16_units` - Maximum number of UTF-16 code units copied from
+    ///   the complete value.
+    ///
+    /// # Returns
+    ///
+    /// The current bounded value and whether the live Accessibility object
+    /// is identical to the originally captured one.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err(())` when the frontmost application changed or its focus
+    /// state cannot be read.
+    #[cfg(target_os = "macos")]
+    pub(crate) fn macos_poll_current_value(
+        &self,
+        max_utf16_units: usize,
+    ) -> Result<Option<(PasteTargetValue, bool)>, ()> {
+        self.macos.poll_current_value(max_utf16_units)
+    }
+
+    /// Return the pid of the frontmost application this snapshot captured.
+    ///
+    /// # Returns
+    ///
+    /// The process id macOS reported as frontmost at capture time.
+    #[cfg(target_os = "macos")]
+    pub(crate) fn macos_pid(&self) -> libc::pid_t {
+        self.macos.pid()
     }
 }
 
@@ -494,7 +757,7 @@ impl Injector {
     ///
     /// Returns an error if a required platform handle cannot be opened.
     pub fn prepare_for_mode(&mut self, mode: PasteMode) -> Result<()> {
-        if insertion_needs_enigo(mode) {
+        if mode == PasteMode::Direct {
             let _keyboard = self.keyboard()?;
         }
 
@@ -522,14 +785,29 @@ impl Injector {
     ///
     /// * `text` - Transcript text to insert.
     /// * `mode` - Paste shortcut style to send after updating the clipboard.
+    /// * `clipboard_policy` - Clipboard retention policy after paste or guarded cancellation.
+    /// * `focus` - Focus snapshot captured before insertion became eligible,
+    ///   when available. Passed through to the post-paste acknowledgement
+    ///   strategy (e.g. macOS `AXValue` confirmation polling reads the
+    ///   focused Accessibility element from this snapshot).
     ///
     /// # Returns
     ///
-    /// [`PasteOutcome::Pasted`] when synthetic input was sent,
-    /// [`PasteOutcome::CopiedOnly`] when the guard blocked insertion and the
-    /// transcript was intentionally left on the clipboard, or
+    /// A [`PasteReport`] whose `outcome` is [`PasteOutcome::Pasted`] or
+    /// [`PasteOutcome::PastedUnverified`] when synthetic input was sent,
+    /// [`PasteOutcome::CopiedOnly`] when the guard blocked insertion (or
+    /// post-paste acknowledgement never found evidence of insertion) and the
+    /// transcript was intentionally left on the clipboard,
+    /// [`PasteOutcome::UnsafeModifiers`] when physical modifiers prevented a
+    /// safe chord, or
     /// [`PasteOutcome::Blocked`] when no input was sent and the previous
     /// clipboard was restored.
+    ///
+    /// The `UnsafeModifiers` case always keeps the transcript on the
+    /// clipboard and ignores `clipboard_policy`, even when the caller asked
+    /// for [`ClipboardPolicy::RestorePrevious`]: uncertainty about whether
+    /// the chord could be posted safely must not destroy the only copy of
+    /// the transcript.
     ///
     /// # Errors
     ///
@@ -540,15 +818,13 @@ impl Injector {
         text: &str,
         mode: PasteMode,
         clipboard_policy: ClipboardPolicy,
+        focus: Option<&FocusSnapshot>,
         mut before_chord: impl FnMut() -> Result<bool>,
-    ) -> Result<PasteOutcome> {
-        if text.is_empty() {
-            return Ok(PasteOutcome::Pasted);
-        }
+    ) -> Result<PasteReport> {
         if mode == PasteMode::Direct {
             if before_chord()? {
                 self.type_text(text)?;
-                return Ok(PasteOutcome::Pasted);
+                return Ok(PasteReport::new(PasteOutcome::Pasted, true, None));
             }
             anyhow::bail!("direct insertion blocked by safety guard");
         }
@@ -563,10 +839,13 @@ impl Injector {
         let result = paste_with_clipboard_swap_guarded(
             &mut clipboard,
             text,
+            mode,
+            wait_for_paste_shortcut_safety,
             || self.paste_clipboard(mode),
             clipboard_settle_delay(),
             restore_plan,
             clipboard_policy,
+            focus,
             before_chord,
         );
         self.clipboard = Some(clipboard);
@@ -583,13 +862,7 @@ impl Injector {
     ///
     /// Returns an error if the clipboard cannot be opened or written.
     pub fn copy_text(&mut self, text: &str) -> Result<()> {
-        if text.is_empty() {
-            return Ok(());
-        }
-        let mut clipboard = match self.clipboard.take() {
-            Some(clipboard) => clipboard,
-            None => Clipboard::new().context("could not open system clipboard")?,
-        };
+        let mut clipboard = self.take_clipboard()?;
         let result = clipboard
             .set_text(text.to_owned())
             .context("could not copy transcript to clipboard");
@@ -624,9 +897,6 @@ impl Injector {
         text: &str,
         clipboard_policy: ClipboardPolicy,
     ) -> Result<StageOutcome> {
-        if text.is_empty() {
-            return Ok(StageOutcome::Blocked);
-        }
         let mut clipboard = self.take_clipboard()?;
         let restore_gate = self.clipboard_restore_gate();
         let restore_plan = ClipboardRestorePlan::new(
@@ -657,9 +927,6 @@ impl Injector {
     /// Returns an error if the platform backend rejects the synthetic typing
     /// request.
     fn type_text(&mut self, text: &str) -> Result<()> {
-        if text.is_empty() {
-            return Ok(());
-        }
         self.keyboard()?
             .text(text)
             .map_err(|e| anyhow::anyhow!("enigo type failed: {e:?}"))
@@ -667,7 +934,7 @@ impl Injector {
     }
 
     #[cfg(target_os = "linux")]
-    fn paste_clipboard(&mut self, mode: PasteMode) -> Result<()> {
+    fn paste_clipboard(&mut self, mode: PasteMode) -> Result<PasteDispatch> {
         if self.x11_paste.is_none() {
             self.x11_paste = Some(LinuxX11Paste::open()?);
         }
@@ -680,22 +947,29 @@ impl Injector {
         if result.is_err() {
             self.x11_paste = None;
         }
-        result
+        result.map(|()| PasteDispatch::Posted)
     }
 
     #[cfg(target_os = "windows")]
-    fn paste_clipboard(&mut self, mode: PasteMode) -> Result<()> {
+    fn paste_clipboard(&mut self, mode: PasteMode) -> Result<PasteDispatch> {
         let use_shift = mode == PasteMode::Terminal;
         super::windows_input::send_paste_chord(use_shift)
-            .context("could not send Windows paste shortcut")
+            .context("could not send Windows paste shortcut")?;
+        Ok(PasteDispatch::Posted)
     }
 
     #[cfg(target_os = "macos")]
-    fn paste_clipboard(&mut self, mode: PasteMode) -> Result<()> {
+    fn paste_clipboard(&mut self, mode: PasteMode) -> Result<PasteDispatch> {
         match mode {
             PasteMode::Standard | PasteMode::Terminal => {
-                crate::daemon::macos::send_paste_shortcut()
-                    .context("could not send macOS paste shortcut")
+                match crate::daemon::macos::send_paste_shortcut()
+                    .context("could not send macOS paste shortcut")?
+                {
+                    crate::daemon::macos::PasteShortcutOutcome::Sent => Ok(PasteDispatch::Posted),
+                    crate::daemon::macos::PasteShortcutOutcome::UnsafeModifiers => {
+                        Ok(PasteDispatch::SkippedUnsafeModifiers)
+                    }
+                }
             }
             PasteMode::Direct => anyhow::bail!("direct mode does not use the paste shortcut"),
         }
@@ -723,32 +997,58 @@ impl Injector {
     }
 }
 
-fn paste_with_clipboard_swap_guarded<C, P, G, H>(
+#[allow(
+    clippy::too_many_arguments,
+    reason = "each parameter is an independently meaningful piece of the guarded-paste transaction \
+              (clipboard, transcript, modifier readiness, paste sender, timing, restore policy, \
+              clipboard policy, focus context for acknowledgement, and the safety-recheck closure); \
+              grouping them would just move the complexity into an ad hoc params struct with no real \
+              callers besides this fn"
+)]
+fn paste_with_clipboard_swap_guarded<C, R, P, G, H>(
     clipboard: &mut C,
     text: &str,
+    mode: PasteMode,
+    mut prepare_paste: R,
     mut paste: P,
     settle_delay: Duration,
     restore_plan: ClipboardRestorePlan<'_, H>,
     clipboard_policy: ClipboardPolicy,
+    focus: Option<&FocusSnapshot>,
     mut before_chord: G,
-) -> Result<PasteOutcome>
+) -> Result<PasteReport>
 where
     C: ClipboardStore,
-    P: FnMut() -> Result<()>,
+    R: FnMut() -> bool,
+    P: FnMut() -> Result<PasteDispatch>,
     G: FnMut() -> Result<bool>,
     H: ClipboardRestoreGate + ?Sized,
 {
-    if text.is_empty() {
-        return Ok(PasteOutcome::Pasted);
-    }
-
     match before_chord() {
         Ok(true) => {}
         Ok(false) => {
             return stage_text_without_paste(clipboard, text, restore_plan, clipboard_policy)
-                .map(PasteOutcome::from);
+                .map(report_from_stage_outcome);
         }
         Err(err) => return Err(err),
+    }
+
+    // The macOS backend may need to wait for the physical PTT chord (or
+    // another modifier) to be released. Do that before staging and, most
+    // importantly, before the final focus recheck below. A timed-out wait
+    // leaves the transcript on the clipboard for manual recovery.
+    if !prepare_paste() {
+        stage_text_without_paste(
+            clipboard,
+            text,
+            restore_plan,
+            ClipboardPolicy::KeepTranscript,
+        )?;
+        return Ok(PasteReport::new(
+            PasteOutcome::UnsafeModifiers,
+            false,
+            Some(false),
+        ));
     }
 
     let previous = ClipboardSnapshot::capture(clipboard);
@@ -759,6 +1059,14 @@ where
     let write_token = restore_plan.after_transcript_write(write_before);
 
     sleep_if_nonzero(settle_delay);
+
+    // Capture the target value before the final focus recheck. macOS AX
+    // reads are bounded but blocking; keeping them on this side of the guard
+    // leaves no AX round-trip between the last focus decision and the chord.
+    // The guard immediately below still proves the captured target remains
+    // current before `paste()` posts any input.
+    let baseline = restore_plan.capture_paste_baseline(focus);
+
     match before_chord() {
         Ok(true) => {}
         Ok(false) => {
@@ -777,7 +1085,6 @@ where
                 write_token,
                 restore_plan,
                 clipboard_policy,
-                RestoreWait::BeforeRestore,
             );
             return match restore_result {
                 Ok(()) => Err(err),
@@ -788,16 +1095,27 @@ where
 
     let paste_result = paste();
     match paste_result {
-        Ok(()) => {
-            restore_after_delay(
-                clipboard,
-                previous,
-                write_token,
-                restore_plan,
-                clipboard_policy,
-                RestoreWait::AfterPaste,
-            )?;
-            Ok(PasteOutcome::Pasted)
+        Ok(PasteDispatch::Posted) => Ok(finish_confirmed_paste(
+            clipboard,
+            previous,
+            write_token,
+            restore_plan,
+            clipboard_policy,
+            focus,
+            text,
+            mode,
+            baseline.as_ref(),
+        )),
+        Ok(PasteDispatch::SkippedUnsafeModifiers) => {
+            // A modifier became active after the bounded readiness wait.
+            // Posting would turn Cmd+V into a different shortcut. No input
+            // was sent, so leave the staged transcript on the clipboard for
+            // recovery and report that fact honestly.
+            Ok(PasteReport::new(
+                PasteOutcome::UnsafeModifiers,
+                false,
+                Some(false),
+            ))
         }
         Err(paste_err) => {
             let restore_result = restore_after_delay(
@@ -806,13 +1124,146 @@ where
                 write_token,
                 restore_plan,
                 clipboard_policy,
-                RestoreWait::BeforeRestore,
             );
             match restore_result {
                 Ok(()) => Err(paste_err),
                 Err(restore_err) => Err(paste_err.context(format!("{restore_err:#}"))),
             }
         }
+    }
+}
+
+/// Resolve the outcome of a paste chord that was sent successfully: await
+/// acknowledgement, then restore or retain the clipboard per policy and the
+/// acknowledgement tier reached.
+///
+/// # Arguments
+///
+/// * `clipboard` - Clipboard backend to update.
+/// * `previous` - Snapshot captured before staging transcript text.
+/// * `write_token` - Clipboard write token for the staged transcript.
+/// * `restore_plan` - Restore timing/acknowledgement policy.
+/// * `clipboard_policy` - Policy deciding whether restoration should occur.
+/// * `focus` - Focus snapshot passed through to the acknowledgement strategy.
+/// * `text` - Transcript text that was just pasted.
+/// * `mode` - Paste mode used to select safe acknowledgement evidence.
+/// * `baseline` - Target's observable value read before the chord was sent.
+///
+/// Never fails: the paste chord was already sent by this point, so a
+/// problem restoring the previous clipboard (see
+/// [`clipboard_restored_after_paste`]) is reported through
+/// `clipboard_restored: Some(false)` on the returned report rather than
+/// turned into an error that would discard an already-landed paste.
+///
+/// [`PasteConfirmation::UnverifiedFocusLost`] and [`PasteConfirmation::NoEvidence`]
+/// also report `clipboard_restored: Some(false)`, but deliberately: the
+/// insertion target became unobservable (or never showed evidence) before a
+/// restore could be trusted, so `previous` is dropped without being
+/// restored to keep the transcript as the only remaining copy. That is not a
+/// restore failure and must not be logged as one — see the `daemon::worker`
+/// call site that tells the two situations apart.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "mirrors the guarded-paste transaction's own parameter set; each is an \
+              independently meaningful piece of resolving one paste"
+)]
+fn finish_confirmed_paste<C, H>(
+    clipboard: &mut C,
+    previous: ClipboardSnapshot,
+    write_token: ClipboardWriteToken,
+    restore_plan: ClipboardRestorePlan<'_, H>,
+    clipboard_policy: ClipboardPolicy,
+    focus: Option<&FocusSnapshot>,
+    text: &str,
+    mode: PasteMode,
+    baseline: Option<&PasteTargetValue>,
+) -> PasteReport
+where
+    C: ClipboardStore,
+    H: ClipboardRestoreGate + ?Sized,
+{
+    let confirmation = restore_plan.await_paste_confirmation(
+        write_token,
+        &PasteConfirmationContext {
+            focus,
+            transcript: text,
+            mode,
+            baseline,
+        },
+    );
+
+    match confirmation {
+        PasteConfirmation::Confirmed { elapsed, kind } => PasteReport {
+            outcome: PasteOutcome::Pasted,
+            telemetry: InsertionTelemetry::acknowledged(
+                kind,
+                elapsed,
+                clipboard_restored_after_paste(clipboard, previous, clipboard_policy),
+            ),
+        },
+        PasteConfirmation::Unverified { elapsed, kind } => PasteReport {
+            outcome: PasteOutcome::PastedUnverified,
+            telemetry: InsertionTelemetry::acknowledged(
+                kind,
+                elapsed,
+                clipboard_restored_after_paste(clipboard, previous, clipboard_policy),
+            ),
+        },
+        PasteConfirmation::UnverifiedFocusLost { elapsed, kind } => {
+            // The chord was posted into a verified-focused target and very
+            // likely landed, but the target became unobservable (app switch,
+            // or focus state that can no longer be read) before any
+            // evidence could appear. Unlike `Unverified`, where the same
+            // target stays observable, that target can never be re-checked,
+            // so `previous` is dropped here without being restored: the
+            // transcript is the only remaining copy if the paste did not
+            // land after all.
+            PasteReport {
+                outcome: PasteOutcome::PastedUnverified,
+                telemetry: InsertionTelemetry::acknowledged(kind, elapsed, false),
+            }
+        }
+        PasteConfirmation::NoEvidence { elapsed, kind } => {
+            // No evidence the target consumed the paste: `previous` is
+            // dropped here without being restored, and the transcript
+            // intentionally stays on the clipboard so it is not lost.
+            // Uncertainty must never destroy the transcript.
+            PasteReport {
+                outcome: PasteOutcome::CopiedOnly,
+                telemetry: InsertionTelemetry::acknowledged(kind, elapsed, false),
+            }
+        }
+    }
+}
+
+/// Restore the clipboard after a paste that already landed (or was accepted
+/// as unverified), treating a failed restore as "not restored" rather than
+/// turning an already-successful paste into an error.
+///
+/// The paste itself succeeded by this point, so losing the previous
+/// clipboard contents is a secondary, recoverable problem, not a paste
+/// failure: it must not be reported as one to the caller's retry/circuit-
+/// breaker logic. A failed restore here means the transcript is left
+/// sitting on the clipboard exactly as it would be under
+/// [`ClipboardPolicy::KeepTranscript`]; the returned `bool` cannot
+/// distinguish the two cases, and the underlying error is dropped along with
+/// them, since this module has no logger to report it through. The
+/// `daemon::worker` call site recovers the distinction from the combination
+/// of its own `clipboard_policy` request and this `bool`, and logs a
+/// warning through the [`crate::daemon::logging::Logger`] it holds.
+///
+/// # Returns
+///
+/// `true` when [`ClipboardPolicy::RestorePrevious`] was requested and the
+/// previous clipboard was successfully restored.
+fn clipboard_restored_after_paste<C: ClipboardStore>(
+    clipboard: &mut C,
+    previous: ClipboardSnapshot,
+    clipboard_policy: ClipboardPolicy,
+) -> bool {
+    match restore_or_clear_clipboard(clipboard, previous, clipboard_policy) {
+        Ok(()) => clipboard_policy == ClipboardPolicy::RestorePrevious,
+        Err(_) => false,
     }
 }
 
@@ -845,7 +1296,6 @@ where
         write_token,
         restore_plan,
         clipboard_policy,
-        RestoreWait::BeforeRestore,
     )?;
     Ok(StageOutcome::Blocked)
 }
@@ -856,7 +1306,7 @@ fn finish_blocked_clipboard<C, H>(
     write_token: ClipboardWriteToken,
     restore_plan: ClipboardRestorePlan<'_, H>,
     clipboard_policy: ClipboardPolicy,
-) -> Result<PasteOutcome>
+) -> Result<PasteReport>
 where
     C: ClipboardStore,
     H: ClipboardRestoreGate + ?Sized,
@@ -867,37 +1317,45 @@ where
         write_token,
         restore_plan,
         clipboard_policy,
-        RestoreWait::BeforeRestore,
     )?;
     Ok(match clipboard_policy {
-        ClipboardPolicy::RestorePrevious => PasteOutcome::Blocked,
-        ClipboardPolicy::KeepTranscript => PasteOutcome::CopiedOnly,
+        ClipboardPolicy::RestorePrevious => {
+            PasteReport::new(PasteOutcome::Blocked, false, Some(true))
+        }
+        ClipboardPolicy::KeepTranscript => {
+            PasteReport::new(PasteOutcome::CopiedOnly, false, Some(false))
+        }
     })
 }
 
-#[derive(Clone, Copy)]
-enum RestoreWait {
-    BeforeRestore,
-    AfterPaste,
-}
-
+/// Wait for the fallback/history-based restore signal, then restore or
+/// clear the clipboard per policy.
+///
+/// Used by every guarded-cancellation and error path that never reaches a
+/// paste chord (and therefore never has paste-acknowledgement evidence to
+/// consult): the guard-blocked-after-staging path, the post-settle guard
+/// recheck failure path, the paste-error path, and plain staging. The
+/// post-paste-chord success path uses
+/// [`ClipboardRestorePlan::await_paste_confirmation`] instead (see
+/// [`finish_confirmed_paste`]), since by then a paste chord was actually
+/// sent and a real acknowledgement signal may be available.
+///
+/// # Errors
+///
+/// Returns an error if the previous clipboard payload cannot be restored.
 fn restore_after_delay<C, H>(
     clipboard: &mut C,
     previous: ClipboardSnapshot,
     write_token: ClipboardWriteToken,
     restore_plan: ClipboardRestorePlan<'_, H>,
     clipboard_policy: ClipboardPolicy,
-    wait: RestoreWait,
 ) -> Result<()>
 where
     C: ClipboardStore,
     H: ClipboardRestoreGate + ?Sized,
 {
     if clipboard_policy == ClipboardPolicy::RestorePrevious {
-        match wait {
-            RestoreWait::BeforeRestore => restore_plan.wait_before_restore(write_token),
-            RestoreWait::AfterPaste => restore_plan.wait_after_paste_before_restore(write_token),
-        }
+        restore_plan.wait_before_restore(write_token);
     }
     restore_or_clear_clipboard(clipboard, previous, clipboard_policy)
 }
@@ -954,7 +1412,16 @@ impl ClipboardSnapshot {
     }
 }
 
-fn owned_image(image: ImageData<'_>) -> ImageData<'static> {
+/// Copy a borrowed clipboard image payload into an owned, `'static` one.
+///
+/// # Arguments
+///
+/// * `image` - Image data borrowed from a clipboard read.
+///
+/// # Returns
+///
+/// An equivalent `ImageData` that owns its pixel bytes.
+pub(crate) fn owned_image(image: ImageData<'_>) -> ImageData<'static> {
     ImageData {
         width: image.width,
         height: image.height,
@@ -1010,12 +1477,6 @@ pub(super) fn restore_or_clear_clipboard<C: ClipboardStore>(
     }
 }
 
-fn sleep_if_nonzero(delay: Duration) {
-    if !delay.is_zero() {
-        thread::sleep(delay);
-    }
-}
-
 #[cfg(target_os = "linux")]
 fn platform_paste_preflight() -> Result<()> {
     linux_x11_xtest_preflight()
@@ -1041,18 +1502,47 @@ fn platform_paste_smoke_test(mode: PasteMode) -> Result<()> {
     super::windows_paste_smoke::windows_paste_smoke_test(mode)
 }
 
+/// Run the macOS `doctor --deep` insertion smoke test.
+///
+/// Direct mode runs a single stage: a suppressed synthetic key-event tap
+/// proving parakit can post keystrokes at all (there is no clipboard/paste
+/// chord/`AXValue` acknowledgement pipeline in direct-typing mode for a
+/// second stage to exercise).
+///
+/// Standard/Terminal mode runs two stages, and reports which one failed:
+///   1. A suppressed Cmd+V event tap (fast, low-level, side-effect-free)
+///      proving parakit can post a full paste chord.
+///   2. [`crate::daemon::macos::real_paste_transaction_smoke_test`], which
+///      pastes a sentinel through the production guarded-paste transaction
+///      into a throwaway text view and verifies it actually landed, was
+///      `AXValue`-acknowledged, and the clipboard was restored.
 #[cfg(target_os = "macos")]
 fn platform_paste_smoke_test(mode: PasteMode) -> Result<()> {
     let mut injector = Injector::new()?;
     match mode {
         PasteMode::Direct => {
             crate::daemon::macos::suppressed_key_event_smoke(|| injector.type_text("a"))
+                .context("macOS insertion smoke stage 1 (suppressed key-event tap) failed")
         }
         PasteMode::Standard | PasteMode::Terminal => {
-            crate::daemon::macos::suppressed_paste_shortcut_smoke(|| injector.paste_clipboard(mode))
+            crate::daemon::macos::suppressed_paste_shortcut_smoke(|| {
+                match injector.paste_clipboard(mode)? {
+                    PasteDispatch::Posted => Ok(()),
+                    PasteDispatch::SkippedUnsafeModifiers => {
+                        anyhow::bail!("physical push-to-talk keys remained held")
+                    }
+                }
+            })
+            .context("macOS insertion smoke stage 1 (suppressed paste-shortcut tap) failed")?;
+            crate::daemon::macos::real_paste_transaction_smoke_test(mode)
+                .context("macOS insertion smoke stage 2 (real paste-transaction) failed")
         }
     }
 }
+
+/// macOS delay between staging transcript text and the final focus check.
+#[cfg(target_os = "macos")]
+pub(crate) const MACOS_CLIPBOARD_SETTLE_DELAY: Duration = Duration::from_millis(200);
 
 fn clipboard_settle_delay() -> Duration {
     #[cfg(target_os = "linux")]
@@ -1061,7 +1551,7 @@ fn clipboard_settle_delay() -> Duration {
     }
     #[cfg(target_os = "macos")]
     {
-        Duration::from_millis(200)
+        MACOS_CLIPBOARD_SETTLE_DELAY
     }
     #[cfg(target_os = "windows")]
     {

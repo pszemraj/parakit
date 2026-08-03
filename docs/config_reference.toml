@@ -1,0 +1,375 @@
+# parakit config.toml reference
+#
+# FILE-WIDE CONTRACT
+#
+# The config format is TOML. The file, ordinary tables, and ordinary keys are
+# optional; omission selects the default documented on that key. A
+# [[rules.user]] entry is different: once declared, its required fields must
+# be present.
+#
+# Config enum strings are lowercase and case-sensitive. Unknown keys are
+# rejected at every level so misspellings cannot silently change behavior.
+#
+# Most keys use: CLI flag > config value > built-in default. Except where a
+# key's own note says otherwise, that CLI flag lives on `parakit start`. The
+# profile, trailing-period, and disable-rule flags also work the same way on
+# `parakit rules list`/`parakit rules test`, for checking a change without
+# restarting the daemon; --cleaning/--no-cleaning exist only on `start`.
+# Each exception, merge rule, and config-only setting is documented on the
+# affected key.
+#
+# Config-consuming processes parse and validate the file once at startup.
+# The daemon never watches it; restart the daemon after a change. Invalid
+# values are still validated when their feature is disabled unless a key
+# contract explicitly says otherwise.
+#
+# No config key is deprecated or internal. The Linux hotkey value
+# "evdev-proxy-experimental" is explicitly experimental.
+
+
+# [daemon]
+
+# daemon.model
+# Type: path string (optional). Default: hosted cached Q8_0, downloaded when
+# absent.
+# CLI -m/--model overrides it. No ~ or environment expansion; relative paths
+# use the working directory.
+# When inference starts, the path must be UTF-8 and name a regular model file.
+
+# daemon.device
+# Type: string (optional). Default: "auto". Valid values: "auto" | "cpu" |
+# "gpu".
+# CLI --device overrides it. "auto" selects GPU with CPU fallback; "cpu"
+# disables GPU. "gpu" requires detected GPU in bundled builds; custom
+# non-bundled builds only warn. Recommend "auto".
+
+# daemon.threads
+# Type: integer >= 1 (optional). Default: computed as 1 on a single logical
+# CPU, otherwise max(floor(logical CPUs / 2), 2). Detection failure assumes
+# 4 logical CPUs and therefore uses 2 threads.
+# CLI --threads overrides it. Explicit values are not clamped and can
+# oversubscribe the machine.
+# On Windows, the effective value supplies OMP_NUM_THREADS; Parakit also
+# supplies OPENBLAS_NUM_THREADS=1 and OMP_WAIT_POLICY=PASSIVE. A pre-existing
+# value for any of those variables wins for that variable.
+
+# daemon.paste_mode
+# Type: string (optional). Valid values: "terminal" | "standard" | "direct".
+# Default: "terminal" on Linux and "standard" on macOS/Windows. CLI
+# --paste-mode overrides it. doctor also takes --paste-mode, but only to
+# override this setting for that one check; it does not change the value
+# below.
+# "terminal" sends Ctrl+Shift+V on Linux/Windows and Cmd+V on macOS, removes
+# trailing newlines, and refuses remaining multiline text. "standard" sends
+# Ctrl+V or Cmd+V. "direct" types through the platform keyboard API and never
+# uses the clipboard. Refused batch insertion leaves the transcript only when
+# daemon.keep_transcript_clipboard is true; otherwise it restores the prior
+# clipboard. Refused direct insertion blocks.
+# Linux requires X11 for every mode. Linux direct typing may mishandle emoji
+# or rare scripts; Windows direct supports Unicode; macOS direct requires
+# Accessibility permission.
+
+# daemon.keep_transcript_clipboard
+# Type: boolean (optional). Default: false.
+# Clipboard modes restore the prior supported payload when false and leave
+# the transcript when true.
+# CLI --keep-transcript-clipboard/--no-keep-transcript-clipboard override it
+# in either direction; the two flags conflict with each other. Ignored in
+# "direct" mode.
+
+# daemon.sounds
+# Type: boolean (optional). Default: true. Enables asynchronous
+# start/success/error cues.
+# CLI --sounds/--no-sounds override it in either direction; the two flags
+# conflict with each other. Cue-device failures warn but do not fail
+# dictation. CLI --quiet does not disable cues; PTT audio simulation always
+# disables them.
+
+# daemon.verbose
+# Type: boolean (optional). Default: false. Enables diagnostics and native
+# inference logs.
+# CLI --verbose ORs with it; CLI --quiet takes final precedence over both
+# sources. Fetch/cache/config/status/stop/copy-last/history/test-paste do
+# not apply it; use --verbose. config show reads and displays this key but
+# does not use it for command verbosity.
+
+# daemon.transcript_history
+# Type: integer from 0 through 100 (optional). Default: 10. No CLI override.
+# Bounds newest-first copy-last/history entries; 0 disables both commands.
+# The ring is process-memory-only, but logging.dir can independently persist
+# the same transcript.
+# At 0, plain status reports "last transcript: history disabled" and verbose
+# status also reports history disabled.
+
+
+# [cleaning]
+
+# cleaning.enabled
+# Type: boolean (optional). Default: true. Enables built-in and user
+# transformations.
+# CLI --cleaning/--no-cleaning override it in either direction; the two
+# flags conflict with each other. Disabling cleaning does not bypass
+# validation.
+
+# cleaning.profile
+# Type: string (optional). Default: "safe". Valid values: "safe" |
+# "aggressive".
+# start's CLI --cleaning-profile overrides it; `rules list`/`rules test`
+# take the same value as --profile instead. "aggressive" adds semantic
+# filler/discourse deletion.
+# Inert when cleaning is disabled; never gates user rules. Recommend "safe"
+# unless deletion is wanted.
+
+# cleaning.keep_trailing_period
+# Type: boolean (optional). Default: false, so one final "." is removed.
+# CLI --keep-trailing-period/--no-keep-trailing-period override it in
+# either direction; the two flags conflict with each other. Disabling
+# "fix-trailing-period" also keeps it.
+# Inert when cleaning.enabled is false or --no-cleaning is set.
+
+# cleaning.number_threshold
+# Type: finite integer/float >= 0 (optional). Default: 4 when unset.
+# Isolated cardinals/ordinals at or above the threshold digitize; below it,
+# left exactly as recognized, never forced to a word or a digit. Set 0 to
+# convert every isolated value instead. A recognized expression ending in one
+# explicit million/billion scale uses a numeric coefficient plus that
+# word (for example, "three billion" becomes "3 billion"); multi-scale
+# compounds retain full digits.
+# No CLI override. It controls only "spoken-numbers"; structural numeric
+# passes still normalize.
+# Disabling that rule or cleaning makes it inert, not unvalidated. Time-unit
+# uses of "second" stay words.
+
+# cleaning.disabled_rules
+# Type: array of strings (optional). Default: [].
+# Every string must exactly and case-sensitively match a built-in name from
+# the inventory below or a name declared by [[rules.user]]. CLI
+# --disable-rule values are unioned with this array; duplicates are harmless.
+# Unknown names fail config load even when cleaning.enabled is false.
+# The list has no runtime effect when cleaning.enabled is false or
+# --no-cleaning is set, but every name is still validated.
+# Disabled user rules must still contain valid regexes.
+
+# Built-in names accepted by cleaning.disabled_rules.
+# Safe/high-confidence:
+#   filled-pauses - remove standalone um/uh/erm variants and adjacent commas.
+#   stutter-i - collapse repeated first-person pronouns and restore uppercase I.
+#   stutter-safe-words - collapse repeated high-confidence function words.
+#   contracted-have-restart - remove repeated subjects from contracted-have false starts.
+#   repeated-prefix-stutter - remove repeated letter or sh/th/ch starts before a matching word.
+#   spaced-acronyms - collapse runs of standalone uppercase ASCII letters.
+#   spoken-version-numbers - render multi-point spoken versions with text2num.
+#   numeric-point-suffixes - append spoken point parts to an existing number.
+#   spoken-numbers - convert English numbers, retaining readable large magnitudes.
+#   compact-parameter-counts - render parameter counts with K/M/B suffixes.
+#   numeric-identifier-groups - join split digits in uppercase identifiers.
+#   numeric-magnitude-suffixes - join numeric groups to uppercase K/M/B.
+#   compact-version-prefix - join V/v to a following dotted version.
+#   compact-short-identifier - join B-H/J-Z or the SM stem to a number.
+#   cause-to-because - expand standalone or attached apostrophe-cause to "because".
+#   casual-em-til-round - separate attached 'em/'til/'round/'bout/'cept/'nother.
+#   casual-gonna - expand "gonna"/"gunna" to "going to".
+#   casual-gotta - expand "gotta" to "got to".
+#   casual-wanna - expand "wanna"/"wana" to "want to".
+#   casual-kinda - expand "kinda" to "kind of".
+#   casual-gimme - expand "gimme" to "give me".
+#   drop-right-tag-question - replace the complete ", right?" tag with ".".
+#   drop-dangling-connective - remove a trailing so/but/and/or/because, promoting , ; : under it to a period.
+#   fix-space-before-punct - remove space before , . ; : ! or ?.
+#   fix-collapse-spaces - collapse repeated spaces and tabs.
+#   fix-trim - remove leading/trailing whitespace.
+#   fix-leading-comma - remove a comma left at the start.
+#   capitalize-sentence-starts - capitalize true starts, protecting dotted tokens.
+# Conditional terminal-period cleanup:
+#   fix-trailing-period - drop one final "." unless explicitly kept.
+# Aggressive profile only:
+#   lead-discourse-comma - remove comma-delimited leading discourse markers.
+#   lead-discourse-word - remove leading so/well/like before common continuations.
+#   mid-like-discourse - remove delimited "like, you know/I mean," filler.
+#   mid-discourse-parenthetical - remove fully comma-delimited discourse phrases.
+#   mid-filler-like - remove "like" after a recognized context or comma.
+#   stutter-ambiguous-words - collapse repeated that/no/can/had/do.
+
+
+# [logging]
+#
+# Logging is synchronous text-only telemetry. It records raw and cleaned
+# transcripts, cleaner/version metadata, timings, and insertion outcomes;
+# target app identity is included when known. Audio is never logged.
+
+# logging.dir
+# Type: path string (optional). Default: unset, which disables logging.
+# CLI --log-dir overrides it; there is no CLI flag that forces a configured
+# directory off. Paths receive no ~ or environment expansion, and relative
+# paths resolve from the process working directory.
+# The directory is created lazily. An append-only
+# parakit-YYYY-MM-DD.jsonl file is opened on the first write and rotates when
+# the local date changes. Each record is flushed immediately. Failures warn
+# and dictation continues, but the synchronous write can delay worker progress.
+# Logs contain plaintext transcripts and have no retention or size cap.
+# This setting also logs hidden --simulate-ptt-audio runs.
+
+
+# [hotkey]
+#
+# Linux only; macOS and Windows accept this key for synced-config portability
+# but ignore its value.
+# This setting selects capture machinery, not the push-to-talk chord.
+
+# hotkey.backend
+# Type: string (optional). Default: "auto". Valid values: "auto" | "desktop" |
+# "x11-global-hotkey" | "x11-listen" | "evdev-proxy-experimental". The CLI
+# value overrides this setting. doctor also takes
+# --hotkey-backend, but only to override this setting for that one check.
+# "auto", "desktop", and "x11-global-hotkey" currently share the registered
+# X11 path; "auto" does not fall back if registration fails. They fail if
+# another app owns Ctrl+Space. "x11-listen" passively observes X11 events and
+# neither grabs nor suppresses input.
+# "evdev-proxy-experimental" is EXPERIMENTAL: it grabs readable keyboard
+# devices and forwards input through writable uinput, so it requires suitable
+# /dev/input and /dev/uinput permissions. Current daemon startup and insertion
+# still require X11; this backend does not make Wayland supported. Do not run
+# Parakit with sudo to bypass permissions: audio, clipboard, and insertion
+# must remain in the desktop-user session.
+# Config parsing validates the name, not machine availability. Run
+# "parakit doctor"; daemon startup performs the final runtime check.
+
+
+# [[rules.user]]
+#
+# Repeated array table. Default: no user rules. Entries run only when
+# cleaning.enabled is true, are never profile-gated, and keep file order
+# within their selected position group. Every entry is validated during startup;
+# enabled entries are compiled then reused for every dictation.
+# Enabled rule name, pattern, replacement, position, and within-group order
+# affect ruleset_id; description and disabled entries do not. A rule that
+# changes text logs its name and non-overlapping match count.
+
+# name (within [[rules.user]])
+# Type: string (required). Exact, case-sensitive identifier used by
+# cleaning.disabled_rules and --disable-rule.
+# Must contain non-whitespace text, have no leading/trailing whitespace, be
+# unique among user rules, and not equal any built-in name above.
+
+# description (within [[rules.user]])
+# Type: string (optional). Default: absent. Any string, including empty.
+# Displayed by `rules list` only; it does not affect behavior or ruleset ID.
+
+# pattern (within [[rules.user]])
+# Type: string (required). Rust regex-crate pattern; must not be the empty
+# string. Whitespace-only is legal. Every pattern must compile, including a
+# disabled rule.
+# The dialect has no lookaround or pattern backreferences. In TOML basic
+# strings, double each regex backslash; TOML literal strings preserve them.
+# All non-overlapping matches are replaced.
+
+# replacement (within [[rules.user]])
+# Type: string (required; empty allowed). Default: none because required.
+# Supports $0, $1, $name, ${name}, and $$ for a literal dollar sign. A
+# nonexistent capture expands to empty text and can silently remove content.
+
+# position (within [[rules.user]])
+# Type: string (optional). Default: "standard". Valid values: "first" |
+# "standard" | "last".
+# "first" runs before all built-ins. "standard" runs immediately before
+# the canonical "fix-space-before-punct" position, even when that built-in is
+# disabled. "last" runs after all built-ins, including capitalization and
+# terminal-period handling, so no later cleanup repairs its output.
+# Recommendation: use "standard" for ordinary substitutions.
+
+
+# RUNTIME ENVIRONMENT
+#
+# These are process environment variables, not TOML keys. Parakit inherits
+# them from its launcher and does not read a .env file. Build-time Cargo/CMake
+# inputs embedded into a custom binary are outside this runtime reference.
+
+# PARAKIT_CONFIG_PATH
+# Type: path string (optional). Default on Linux/macOS:
+# $XDG_CONFIG_HOME/parakit/config.toml or
+# $HOME/.config/parakit/config.toml; Windows:
+# %APPDATA%\parakit\config.toml. Nonempty values override that verbatim;
+# empty is an error. Relative paths use the working directory.
+
+# PARAKIT_MODELS_DIR
+# Type: path string (optional). Default on Linux/macOS:
+# $XDG_CACHE_HOME/parakit/models or $HOME/.cache/parakit/models; Windows:
+# %LOCALAPPDATA%\parakit\Cache\models. Nonempty values override that verbatim;
+# empty is an error. Relative paths use the working directory.
+
+# XDG_CONFIG_HOME
+# Type: path string (optional; Linux/macOS only). Default: $HOME/.config.
+# Empty is treated as unset. Ignored when PARAKIT_CONFIG_PATH is set.
+# The resulting file is <value>/parakit/config.toml.
+
+# XDG_CACHE_HOME
+# Type: path string (optional; Linux/macOS only). Default: $HOME/.cache.
+# Empty is treated as unset. Supplies the model cache unless
+# PARAKIT_MODELS_DIR is set, and supplies the runtime-dir fallback.
+
+# HOME
+# XDG_CONFIG_HOME/XDG_CACHE_HOME fallback; path resolution fails without it.
+
+# VISUAL
+# Type: executable plus argument string (optional). Default: fall back to
+# EDITOR. Used only by config edit. Must be nonempty; shell-style quoting splits
+# the value into an executable and arguments, which are launched without a shell.
+
+# EDITOR
+# Type: executable plus argument string (optional). Default: none, which makes
+# config edit error and print the file path. Used only when VISUAL is unset;
+# it must be nonempty and uses the same shell-style argument splitting as VISUAL.
+
+# XDG_RUNTIME_DIR
+# Type: path string (optional; Linux only). Default:
+# $XDG_CACHE_HOME/parakit/run or $HOME/.cache/parakit/run.
+# A nonempty value places the daemon socket/lock under <value>/parakit; empty is treated as unset.
+
+# DISPLAY
+# Type: X11 display string (required for the Linux daemon). No default.
+# It must be present and usable; config parsing does not validate it. Inherit
+# it from the active desktop session instead of setting it ad hoc.
+
+# XDG_SESSION_TYPE
+# Type: session string (optional; Linux only). No default.
+# A case-insensitive "wayland" blocks daemon startup. Other values still
+# require a usable DISPLAY. This is desktop-session state, not a tuning key.
+
+# WAYLAND_DISPLAY
+# Type: session string (optional; Linux only). No default.
+# When XDG_SESSION_TYPE is absent, a nonempty value identifies unsupported
+# Wayland and blocks startup. Inherit it from the desktop session.
+
+# XAUTHORITY
+# Type: path string (optional; Linux only). No Parakit default.
+# Reported by doctor/remediation output for X11 diagnosis; the desktop session
+# normally supplies it.
+
+# USER
+# Only personalizes hotkey permission remediation text (Linux); not runtime behavior.
+
+# PATH
+# Searched by fetch --from-source for Python and a fallback quantizer.
+
+# DYLD_LIBRARY_PATH
+# Type: path list (optional; macOS only). Default: inherited/empty.
+# For a bundled fetch --from-source quantizer child, Parakit prepends its
+# library directory while preserving existing entries.
+
+# LD_LIBRARY_PATH
+# Type: path list (optional; Linux only). Default: inherited/empty.
+# For a bundled fetch --from-source quantizer child, Parakit prepends its
+# library directory while preserving existing entries.
+
+# OMP_NUM_THREADS
+# Type: arbitrary string (optional; Windows only). Default: effective
+# daemon.threads. Any existing value, including empty, is preserved without
+# validation and prevents Parakit from supplying the thread count.
+
+# OPENBLAS_NUM_THREADS
+# Type: arbitrary string (optional; Windows only). Default: "1".
+# Any existing value, including empty, is preserved without validation.
+
+# OMP_WAIT_POLICY
+# Type: arbitrary string (optional; Windows only). Default: "PASSIVE".
+# Any existing value, including empty, is preserved without validation.

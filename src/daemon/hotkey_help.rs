@@ -8,12 +8,12 @@ const REGISTERED_LINUX_FIX: &str = "fix:
       gsettings get org.gnome.desktop.wm.keybindings switch-input-source
       gsettings get org.gnome.desktop.wm.keybindings switch-input-source-backward
   - Re-run: parakit doctor
-  - The experimental evdev/uinput keyboard proxy is available with: parakit --hotkey-backend evdev-proxy";
+  - The experimental evdev/uinput keyboard proxy is available with: parakit start --hotkey-backend evdev-proxy-experimental";
 
 #[cfg(target_os = "linux")]
 const X11_LISTEN_LINUX_FIX: &str = "fix:
   - Use an X11 session; Wayland is intentionally rejected.
-  - Re-run: parakit --hotkey-backend x11-listen
+  - Re-run: parakit start --hotkey-backend x11-listen
   - This backend passively listens only; it does not grab, suppress, or forward keyboard events.";
 
 #[cfg(target_os = "linux")]
@@ -48,20 +48,45 @@ pub(crate) fn write_evdev_linux_fix(out: &mut String, user: &str) {
 }
 
 #[cfg(target_os = "linux")]
+/// Build the shared `<intro>` / current-session / `Checks:` / `<fix>` shape
+/// every Linux backend's runtime failure help follows.
+///
+/// # Arguments
+///
+/// * `intro` - Backend-specific opening sentence.
+/// * `checks` - Lines listed under `Checks:`, in order.
+/// * `fix` - Backend-specific fix block appended after the checks.
+///
+/// # Returns
+///
+/// Multi-line diagnostic text including the current session context.
+fn linux_failure_help(intro: &str, checks: &[&str], fix: &str) -> String {
+    let (session, display) = linux_session_context();
+    let mut help = format!(
+        "{intro}\nCurrent session: XDG_SESSION_TYPE={session}, DISPLAY={display}\nChecks:\n"
+    );
+    for check in checks {
+        help.push_str(check);
+        help.push('\n');
+    }
+    help.push_str(fix);
+    help
+}
+
+#[cfg(target_os = "linux")]
 /// Build runtime failure help for the registered-X11 backend.
 ///
 /// # Returns
 ///
 /// Multi-line diagnostic text including the current session context.
 pub(crate) fn registered_linux_failure_help() -> String {
-    let (session, display) = linux_session_context();
-    format!(
-        "Linux default hotkey capture registers Ctrl+Space with the X11 session.\n\
-         Current session: XDG_SESSION_TYPE={session}, DISPLAY={display}\n\
-         Checks:\n\
-           parakit --verbose doctor\n\
-           confirm no desktop shortcut or input method already owns Ctrl+Space\n\
-         {REGISTERED_LINUX_FIX}"
+    linux_failure_help(
+        "Linux default hotkey capture registers Ctrl+Space with the X11 session.",
+        &[
+            "parakit --verbose doctor",
+            "confirm no desktop shortcut or input method already owns Ctrl+Space",
+        ],
+        REGISTERED_LINUX_FIX,
     )
 }
 
@@ -72,13 +97,10 @@ pub(crate) fn registered_linux_failure_help() -> String {
 ///
 /// Multi-line diagnostic text including the current session context.
 pub(crate) fn x11_listen_linux_failure_help() -> String {
-    let (session, display) = linux_session_context();
-    format!(
-        "The x11-listen backend passively observes Ctrl+Space with rdev::listen.\n\
-         Current session: XDG_SESSION_TYPE={session}, DISPLAY={display}\n\
-         Checks:\n\
-           parakit --verbose --hotkey-backend x11-listen doctor\n\
-         {X11_LISTEN_LINUX_FIX}"
+    linux_failure_help(
+        "The x11-listen backend passively observes Ctrl+Space with rdev::listen.",
+        &["parakit doctor --verbose --hotkey-backend x11-listen"],
+        X11_LISTEN_LINUX_FIX,
     )
 }
 
@@ -89,16 +111,14 @@ pub(crate) fn x11_listen_linux_failure_help() -> String {
 ///
 /// Multi-line diagnostic text including the current session context.
 pub(crate) fn evdev_linux_failure_help() -> String {
-    let (session, display) = linux_session_context();
     let user = std::env::var("USER").unwrap_or_else(|_| "$USER".to_string());
-    format!(
-        "The evdev-proxy backend uses an evdev keyboard grab and uinput forwarding device.\n\
-         Current session: XDG_SESSION_TYPE={session}, DISPLAY={display}\n\
-         Checks:\n\
-           id -nG | tr ' ' '\\n' | grep '^input$'\n\
-           ls -l /dev/uinput /dev/input/event* | head\n\
-         {}",
-        evdev_linux_fix(&user)
+    linux_failure_help(
+        "The evdev-proxy-experimental backend uses an evdev keyboard grab and uinput forwarding device.",
+        &[
+            "id -nG | tr ' ' '\\n' | grep '^input$'",
+            "ls -l /dev/uinput /dev/input/event* | head",
+        ],
+        &evdev_linux_fix(&user),
     )
 }
 
@@ -133,7 +153,33 @@ pub(crate) fn macos_failure_help() -> String {
     )
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(target_os = "windows")]
+const WINDOWS_HOTKEY_FIX: &str = "fix:
+  - Close any application that already owns Ctrl+Space.
+  - Re-run: parakit doctor
+  - Elevated target apps may still reject paste input from a normal user process.";
+
+#[cfg(target_os = "windows")]
+/// Append Windows registered-hotkey remediation steps.
+///
+/// # Arguments
+///
+/// * `out` - Diagnostic buffer to append to.
+pub(crate) fn write_windows_hotkey_fix(out: &mut String) {
+    push_line(out, WINDOWS_HOTKEY_FIX);
+}
+
+#[cfg(target_os = "windows")]
+/// Build runtime failure help for the Windows registered-hotkey backend.
+///
+/// # Returns
+///
+/// Multi-line diagnostic text explaining registration and elevation failures.
+pub(crate) fn windows_failure_help() -> String {
+    format!("Windows hotkey capture uses RegisterHotKey(Ctrl+Space).\n{WINDOWS_HOTKEY_FIX}")
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 fn push_line(out: &mut String, line: &str) {
     out.push_str(line);
     out.push('\n');
@@ -149,6 +195,6 @@ fn linux_session_context() -> (String, String) {
 #[cfg(target_os = "linux")]
 fn evdev_linux_fix(user: &str) -> String {
     format!(
-        "fix:\n  - Grant the desktop user read access to /dev/input/event*:\n      sudo usermod -aG input {user}\n  - Ensure /dev/uinput is writable by the desktop user. On many distros this needs a uinput udev rule.\n  - After changing groups or udev rules, log out completely and log back in, or reboot.\n  - Verify the fresh session:\n      id -nG | tr ' ' '\\n' | grep '^input$'\n      ls -l /dev/uinput /dev/input/event* | head\n  - Then run: parakit --hotkey-backend evdev-proxy\n  - Do not run parakit with sudo; audio, clipboard, and insertion belong to the desktop user."
+        "fix:\n  - Grant the desktop user read access to /dev/input/event*:\n      sudo usermod -aG input {user}\n  - Ensure /dev/uinput is writable by the desktop user. On many distros this needs a uinput udev rule.\n  - After changing groups or udev rules, log out completely and log back in, or reboot.\n  - Verify the fresh session:\n      id -nG | tr ' ' '\\n' | grep '^input$'\n      ls -l /dev/uinput /dev/input/event* | head\n  - Then run: parakit start --hotkey-backend evdev-proxy-experimental\n  - Do not run parakit with sudo; audio, clipboard, and insertion belong to the desktop user."
     )
 }

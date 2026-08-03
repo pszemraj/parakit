@@ -24,117 +24,193 @@ fn input_name_classifiers_are_stable() {
     }
 }
 
-#[test]
-fn mic_summary_reports_input_and_model_rates() {
-    let mic = MicInfo {
-        name: "USB Speech Mic Mono".to_string(),
-        input_rate: 48_000,
-        channels: 1,
-        sample_format: "F32".to_string(),
-        source_id: None,
-        resampling: true,
-        config_note: None,
-    };
-    assert_eq!(
-        mic.summary(),
-        "USB Speech Mic Mono, 48000 Hz mono input -> 16000 Hz mono model, F32"
-    );
+struct MicSummaryCase {
+    name: &'static str,
+    channels: u16,
+    resampling: bool,
+    expect_summary: &'static str,
+    expect_detail_lines: &'static [&'static str],
 }
 
 #[test]
-fn mic_summary_makes_downmix_explicit() {
-    let mic = MicInfo {
-        name: "Microphone Array".to_string(),
-        input_rate: 48_000,
-        channels: 4,
-        sample_format: "F32".to_string(),
-        source_id: None,
-        resampling: true,
-        config_note: None,
-    };
-
-    assert_eq!(
-        mic.summary(),
-        "Microphone Array, 48000 Hz 4ch input -> 16000 Hz mono model, F32"
-    );
-    assert_eq!(
-        mic.detail_lines(),
-        vec![
-            "model input: 16000 Hz mono PCM".to_string(),
-            "capture path: CPAL opened 4ch; callback downmixes to mono before resampling"
-                .to_string(),
-        ]
-    );
-}
-
-#[test]
-fn preferred_input_config_uses_mono_at_default_rate_and_format() {
-    let default = stream_config_range(4, 16_000, 48_000, SampleFormat::F32)
-        .with_sample_rate(cpal::SampleRate(48_000));
-
-    let selected = preferred_mono_config_from_ranges(
-        &default,
-        [
-            stream_config_range(2, 16_000, 48_000, SampleFormat::F32),
-            stream_config_range(1, 16_000, 48_000, SampleFormat::F32),
-        ]
-        .iter(),
-    )
-    .expect("mono config should be selected");
-
-    assert_eq!(selected.channels(), 1);
-    assert_eq!(selected.sample_rate().0, 48_000);
-    assert_eq!(selected.sample_format(), SampleFormat::F32);
-}
-
-#[test]
-fn preferred_input_config_keeps_default_when_mono_changes_rate_or_format() {
-    let default = stream_config_range(4, 48_000, 48_000, SampleFormat::F32)
-        .with_sample_rate(cpal::SampleRate(48_000));
-
-    let selected = preferred_mono_config_from_ranges(
-        &default,
-        [
-            stream_config_range(1, 16_000, 16_000, SampleFormat::F32),
-            stream_config_range(1, 48_000, 48_000, SampleFormat::I16),
-        ]
-        .iter(),
-    );
-
-    assert!(selected.is_none());
-}
-
-#[test]
-fn lower_cost_config_note_reports_intentional_mono_non_selection() {
-    let default = stream_config_range(4, 48_000, 48_000, SampleFormat::F32)
-        .with_sample_rate(cpal::SampleRate(48_000));
-    let ranges = [
-        stream_config_range(1, 48_000, 48_000, SampleFormat::I16),
-        stream_config_range(1, 16_000, 16_000, SampleFormat::F32),
+fn mic_summary_and_detail_lines_cases_are_stable() {
+    let cases = [
+        MicSummaryCase {
+            name: "mono input resampled to model rate",
+            channels: 1,
+            resampling: true,
+            expect_summary: "USB Speech Mic Mono, 48000 Hz mono input -> 16000 Hz mono model, F32",
+            expect_detail_lines: &[
+                "model input: 16000 Hz mono PCM",
+                "capture path: mono input, resampling to model rate",
+            ],
+        },
+        MicSummaryCase {
+            name: "4ch input downmixed and resampled",
+            channels: 4,
+            resampling: true,
+            expect_summary: "USB Speech Mic Mono, 48000 Hz 4ch input -> 16000 Hz mono model, F32",
+            expect_detail_lines: &[
+                "model input: 16000 Hz mono PCM",
+                "capture path: CPAL opened 4ch; callback downmixes to mono before resampling",
+            ],
+        },
+        // Previously uncovered: `MicInfo::summary` (capture.rs ~238) has a
+        // third `!resampling` arm that neither original test exercised
+        // (both used `resampling: true`). Mono, no resampling.
+        MicSummaryCase {
+            name: "mono input/model rate without resampling",
+            channels: 1,
+            resampling: false,
+            expect_summary: "USB Speech Mic Mono, 48000 Hz input/model, F32",
+            expect_detail_lines: &[
+                "model input: 16000 Hz mono PCM",
+                "capture path: mono input, no resampling",
+            ],
+        },
+        // Previously uncovered: multi-channel input with `resampling:
+        // false` (also unreached by either original test).
+        MicSummaryCase {
+            name: "multi-channel input without resampling",
+            channels: 2,
+            resampling: false,
+            expect_summary: "USB Speech Mic Mono, 48000 Hz 2ch input -> mono model, F32",
+            expect_detail_lines: &[
+                "model input: 16000 Hz mono PCM",
+                "capture path: CPAL opened 2ch; callback downmixes to mono before resampling",
+            ],
+        },
     ];
 
-    assert_eq!(
-        lower_cost_mono_config_note(&default, &ranges),
-        Some(
-            "same-rate mono is available as I16, but not selected because it changes sample format"
-                .to_string()
-        )
-    );
+    let mut failures = Vec::new();
+    for case in cases {
+        let mic = MicInfo {
+            name: "USB Speech Mic Mono".to_string(),
+            input_rate: 48_000,
+            channels: case.channels,
+            sample_format: "F32".to_string(),
+            source_id: None,
+            resampling: case.resampling,
+            config_note: None,
+        };
+
+        let summary = mic.summary();
+        if summary != case.expect_summary {
+            failures.push(format!(
+                "{}: expected summary {:?}, got {:?}",
+                case.name, case.expect_summary, summary
+            ));
+        }
+
+        let detail_lines = mic.detail_lines();
+        let expected_detail_lines: Vec<String> = case
+            .expect_detail_lines
+            .iter()
+            .map(|line| line.to_string())
+            .collect();
+        if detail_lines != expected_detail_lines {
+            failures.push(format!(
+                "{}: expected detail lines {:?}, got {:?}",
+                case.name, expected_detail_lines, detail_lines
+            ));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+struct MonoConfigCase {
+    name: &'static str,
+    default: cpal::SupportedStreamConfig,
+    ranges: Vec<cpal::SupportedStreamConfigRange>,
+    expect_preferred: Option<(u16, u32, SampleFormat)>,
+    expect_note: Option<&'static str>,
 }
 
 #[test]
-fn lower_cost_config_note_reports_target_rate_mono_when_rate_would_change() {
-    let default = stream_config_range(4, 48_000, 48_000, SampleFormat::F32)
-        .with_sample_rate(cpal::SampleRate(48_000));
-    let ranges = [stream_config_range(1, 16_000, 16_000, SampleFormat::F32)];
+fn preferred_mono_config_and_lower_cost_note_cases_are_stable() {
+    let cases = [
+        MonoConfigCase {
+            name: "uses mono at default rate and format",
+            default: stream_config_range(4, 16_000, 48_000, SampleFormat::F32)
+                .with_sample_rate(cpal::SampleRate(48_000)),
+            ranges: vec![
+                stream_config_range(2, 16_000, 48_000, SampleFormat::F32),
+                stream_config_range(1, 16_000, 48_000, SampleFormat::F32),
+            ],
+            expect_preferred: Some((1, 48_000, SampleFormat::F32)),
+            expect_note: None,
+        },
+        MonoConfigCase {
+            name: "keeps default when mono changes rate or format",
+            default: stream_config_range(4, 48_000, 48_000, SampleFormat::F32)
+                .with_sample_rate(cpal::SampleRate(48_000)),
+            ranges: vec![
+                stream_config_range(1, 16_000, 16_000, SampleFormat::F32),
+                stream_config_range(1, 48_000, 48_000, SampleFormat::I16),
+            ],
+            expect_preferred: None,
+            // Production (`select_preferred_input_config`, capture.rs
+            // ~1145) only calls `lower_cost_mono_config_note` once
+            // `preferred_mono_config_from_ranges` returns `None`, so this
+            // row's ranges also exercise that note path.
+            expect_note: Some(
+                "same-rate mono is available as I16, but not selected because it changes sample format",
+            ),
+        },
+        MonoConfigCase {
+            name: "reports target rate mono when rate would change",
+            default: stream_config_range(4, 48_000, 48_000, SampleFormat::F32)
+                .with_sample_rate(cpal::SampleRate(48_000)),
+            ranges: vec![stream_config_range(1, 16_000, 16_000, SampleFormat::F32)],
+            expect_preferred: None,
+            expect_note: Some(
+                "16000 Hz mono is available as F32, but not selected because the current policy preserves the OS default sample rate",
+            ),
+        },
+        // Previously uncovered: `lower_cost_mono_config_note` (capture.rs
+        // ~1184) returns `None` when the advertised ranges contain neither
+        // a same-rate-other-format nor a target-rate-mono candidate (here,
+        // no mono config is advertised at all).
+        MonoConfigCase {
+            name: "no lower-cost mono candidate exists",
+            default: stream_config_range(4, 48_000, 48_000, SampleFormat::F32)
+                .with_sample_rate(cpal::SampleRate(48_000)),
+            ranges: vec![stream_config_range(2, 44_100, 48_000, SampleFormat::F32)],
+            expect_preferred: None,
+            expect_note: None,
+        },
+    ];
 
-    assert_eq!(
-        lower_cost_mono_config_note(&default, &ranges),
-        Some(
-            "16000 Hz mono is available as F32, but not selected because the current policy preserves the OS default sample rate"
-                .to_string()
-        )
-    );
+    let mut failures = Vec::new();
+    for case in cases {
+        let preferred = preferred_mono_config_from_ranges(&case.default, case.ranges.iter());
+        let actual_preferred = preferred.as_ref().map(|config| {
+            (
+                config.channels(),
+                config.sample_rate().0,
+                config.sample_format(),
+            )
+        });
+        if actual_preferred != case.expect_preferred {
+            failures.push(format!(
+                "{}: expected preferred {:?}, got {:?}",
+                case.name, case.expect_preferred, actual_preferred
+            ));
+        }
+
+        // Contract: only assert the note on rows that reach the branch
+        // production actually takes it in (see the comment above).
+        if case.expect_preferred.is_none() {
+            let note = lower_cost_mono_config_note(&case.default, &case.ranges);
+            if note.as_deref() != case.expect_note {
+                failures.push(format!(
+                    "{}: expected note {:?}, got {:?}",
+                    case.name, case.expect_note, note
+                ));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
 fn stream_config_range(
@@ -254,19 +330,23 @@ fn audio_handle_with_control(
         })),
         session_epoch: Arc::new(AtomicU64::new(epoch)),
         next_session_epoch: Arc::new(AtomicU64::new(epoch)),
-        control: Arc::new(Mutex::new(Some(control_tx))),
+        control: control_tx,
     }
 }
 
 #[test]
-fn stop_recording_without_drain_takes_buffered_samples() {
-    let handle = AudioHandle::test_handle();
+fn disconnected_audio_manager_does_not_fallback_to_direct_state() {
+    let (control_tx, control_rx) = bounded::<AudioControl>(1);
+    drop(control_rx);
+    let handle = audio_handle_with_control(control_tx, 0, Vec::new());
 
-    handle.start_recording().expect("recording should start");
-    append_processed_samples(&handle.state, &handle.session_epoch, &[0.7]);
+    let err = handle
+        .start_recording()
+        .expect_err("disconnected audio manager should reject Start");
 
-    let pcm = handle.stop_recording().expect("recording should stop");
-    assert_eq!(pcm, vec![0.7]);
+    assert!(format!("{err:#}").contains("audio manager is not running"));
+    assert_eq!(handle.session_epoch.load(Ordering::Acquire), 0);
+    assert!(handle.state.lock().buffer.is_empty());
 }
 
 #[test]
@@ -497,15 +577,23 @@ fn source_aware_identity_detects_default_source_switch() {
 }
 
 #[test]
-fn resampler_flushes_and_resets_tail_between_recordings() {
+fn resampler_flushes_resets_tail_and_reuses_chunk_buffers() {
     let mut pipeline = CapturePipeline {
         resampler: make_resampler(48_000).expect("resampler"),
     };
+    let (chunk_size, input_capacity, output_capacity) = {
+        let resampler = pipeline.resampler.as_ref().unwrap();
+        (
+            resampler.chunk_size,
+            resampler.input_buf[0].capacity(),
+            resampler.output_buf[0].capacity(),
+        )
+    };
     let mut out = Vec::new();
     let mut scratch = Vec::new();
-    let input = vec![0.1; 100];
+    let short_input = vec![0.1; 100];
 
-    assert!(pipeline.process(&input, &mut scratch).is_empty());
+    assert!(pipeline.process(&short_input, &mut scratch).is_empty());
     pipeline.finish_recording(&mut out);
     assert!(!out.is_empty());
     assert!(pipeline.resampler.as_ref().unwrap().scratch.is_empty());
@@ -514,22 +602,14 @@ fn resampler_flushes_and_resets_tail_between_recordings() {
     pipeline.reset_recording();
     pipeline.finish_recording(&mut out);
     assert_eq!(out.len(), flushed_len);
-}
 
-#[test]
-fn resampler_reuses_chunk_buffers_during_process_and_flush() {
-    let mut resampler = make_resampler(48_000)
-        .expect("resampler creation should succeed")
-        .expect("48 kHz input should need resampling");
-    let input_capacity = resampler.input_buf[0].capacity();
-    let output_capacity = resampler.output_buf[0].capacity();
-    let mut out = Vec::new();
-    let input = vec![0.1; resampler.chunk_size * 3 + 100];
+    let multi_chunk_input = vec![0.1; chunk_size * 3 + 100];
+    assert!(!pipeline
+        .process(&multi_chunk_input, &mut scratch)
+        .is_empty());
+    pipeline.finish_recording(&mut out);
 
-    resampler.process(&input, &mut out);
-    resampler.flush_recording(&mut out);
-
-    assert!(!out.is_empty());
+    let resampler = pipeline.resampler.as_ref().unwrap();
     assert_eq!(resampler.input_buf[0].capacity(), input_capacity);
     assert_eq!(resampler.output_buf[0].capacity(), output_capacity);
     assert!(resampler.scratch.is_empty());

@@ -19,6 +19,10 @@ const GGUF_TYPE_ARRAY: u32 = 9;
 const GGUF_TYPE_UINT64: u32 = 10;
 const GGUF_TYPE_INT64: u32 = 11;
 const GGUF_TYPE_FLOAT64: u32 = 12;
+// Shared verbatim between `general.file_type` (`ggml_ftype`) and tensor
+// types (`ggml_type`): codes 0-3 and 10-14 name the same quant in both enum
+// spaces (see vendor/CrispASR/ggml/include/ggml.h); the 6-9 divergence is
+// handled by each caller's own `extras` table below.
 const COMMON_DTYPE_NAMES: &[(u32, &str)] = &[
     (0, "F32"),
     (1, "F16"),

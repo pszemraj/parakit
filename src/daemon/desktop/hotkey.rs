@@ -34,13 +34,44 @@ use std::{fs::File, io, path::PathBuf};
 #[cfg(target_os = "macos")]
 mod macos;
 
+/// Virtual keycode for the configured macOS push-to-talk Control key.
+#[cfg(target_os = "macos")]
+pub(crate) const MACOS_PTT_LEFT_CONTROL_KEYCODE: u16 = 59;
+/// Virtual keycode for the configured macOS push-to-talk Space key.
+#[cfg(target_os = "macos")]
+pub(crate) const MACOS_PTT_SPACE_KEYCODE: u16 = 49;
+/// Virtual keycode for the macOS right Command key.
+#[cfg(target_os = "macos")]
+pub(crate) const MACOS_RIGHT_COMMAND_KEYCODE: u16 = 54;
+/// Virtual keycode for the macOS left Command key.
+#[cfg(target_os = "macos")]
+pub(crate) const MACOS_LEFT_COMMAND_KEYCODE: u16 = 55;
+/// Virtual keycode for the macOS left Shift key.
+#[cfg(target_os = "macos")]
+pub(crate) const MACOS_LEFT_SHIFT_KEYCODE: u16 = 56;
+/// Virtual keycode for the macOS left Option key.
+#[cfg(target_os = "macos")]
+pub(crate) const MACOS_LEFT_OPTION_KEYCODE: u16 = 58;
+/// Virtual keycode for the macOS right Shift key.
+#[cfg(target_os = "macos")]
+pub(crate) const MACOS_RIGHT_SHIFT_KEYCODE: u16 = 60;
+/// Virtual keycode for the macOS right Option key.
+#[cfg(target_os = "macos")]
+pub(crate) const MACOS_RIGHT_OPTION_KEYCODE: u16 = 61;
+/// Virtual keycode for the macOS right Control key.
+#[cfg(target_os = "macos")]
+pub(crate) const MACOS_RIGHT_CONTROL_KEYCODE: u16 = 62;
+
 #[cfg(any(not(target_os = "windows"), test))]
 const HOTKEY_DEBOUNCE: Duration = Duration::from_millis(150);
 #[cfg(target_os = "linux")]
 const REGISTERED_HOTKEY_PHYSICAL_POLL: Duration = Duration::from_millis(25);
 
 /// Hotkey backend preference.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, clap::ValueEnum)]
+#[derive(
+    Clone, Copy, Debug, Eq, PartialEq, clap::ValueEnum, serde::Serialize, serde::Deserialize,
+)]
+#[serde(rename_all = "kebab-case")]
 pub(crate) enum HotkeyBackend {
     /// Prefer the platform desktop hotkey backend.
     Auto,
@@ -49,14 +80,17 @@ pub(crate) enum HotkeyBackend {
     /// Force the registered X11 global hotkey backend.
     #[cfg(target_os = "linux")]
     #[value(name = "x11-global-hotkey")]
+    #[serde(rename = "x11-global-hotkey")]
     X11GlobalHotkey,
     /// Force the passive X11 event listener backend.
     #[cfg(target_os = "linux")]
     #[value(name = "x11-listen")]
+    #[serde(rename = "x11-listen")]
     X11Listen,
     /// Force the experimental low-level evdev/uinput keyboard proxy backend.
     #[cfg(target_os = "linux")]
-    #[value(name = "evdev-proxy-experimental", alias = "evdev-proxy")]
+    #[value(name = "evdev-proxy-experimental")]
+    #[serde(rename = "evdev-proxy-experimental")]
     EvdevProxyExperimental,
 }
 
@@ -79,34 +113,46 @@ impl HotkeyBackend {
         }
     }
 
-    #[cfg(target_os = "linux")]
-    /// Return whether this Linux backend uses the registered X11 hotkey path.
+    /// Resolve aliases to the Linux implementation that will actually run.
     ///
     /// # Returns
     ///
-    /// `true` for `auto`, `desktop`, and `x11-global-hotkey`.
-    pub(crate) fn uses_registered_x11(self) -> bool {
-        matches!(self, Self::Auto | Self::Desktop | Self::X11GlobalHotkey)
+    /// The concrete registered-X11, passive-X11, or evdev route.
+    #[cfg(target_os = "linux")]
+    pub(crate) const fn linux_route(self) -> LinuxHotkeyRoute {
+        match self {
+            Self::Auto | Self::Desktop | Self::X11GlobalHotkey => LinuxHotkeyRoute::RegisteredX11,
+            Self::X11Listen => LinuxHotkeyRoute::PassiveX11,
+            Self::EvdevProxyExperimental => LinuxHotkeyRoute::EvdevProxy,
+        }
     }
+}
 
-    #[cfg(target_os = "linux")]
-    /// Return whether this Linux backend passively listens for X11 events.
+/// Concrete Linux hotkey implementation after resolving CLI/config aliases.
+#[cfg(target_os = "linux")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum LinuxHotkeyRoute {
+    /// Registered X11 `Ctrl+Space`.
+    RegisteredX11,
+    /// Passive X11 keyboard-event listening.
+    PassiveX11,
+    /// Experimental evdev grab plus uinput forwarding.
+    EvdevProxy,
+}
+
+#[cfg(target_os = "linux")]
+impl LinuxHotkeyRoute {
+    /// Return the stable success/selection label for this route.
     ///
     /// # Returns
     ///
-    /// `true` for `x11-listen`.
-    pub(crate) fn uses_passive_x11_listen(self) -> bool {
-        matches!(self, Self::X11Listen)
-    }
-
-    #[cfg(target_os = "linux")]
-    /// Return whether this Linux backend uses the experimental evdev proxy.
-    ///
-    /// # Returns
-    ///
-    /// `true` for `evdev-proxy-experimental` and its explicit proxy alias.
-    pub(crate) fn uses_evdev_proxy(self) -> bool {
-        matches!(self, Self::EvdevProxyExperimental)
+    /// A concise user-facing Linux backend description.
+    pub(crate) const fn label(self) -> &'static str {
+        match self {
+            Self::RegisteredX11 => "registered X11 Ctrl+Space",
+            Self::PassiveX11 => "passive X11 Ctrl+Space listen",
+            Self::EvdevProxy => "experimental evdev/uinput keyboard proxy",
+        }
     }
 }
 
@@ -353,21 +399,34 @@ pub(crate) fn run_grab_loop(
     backend: HotkeyBackend,
     log: Arc<Logger>,
 ) {
-    match backend {
-        HotkeyBackend::Auto | HotkeyBackend::Desktop | HotkeyBackend::X11GlobalHotkey => {
-            log.verbose("parakit: Linux hotkey backend: registered X11 Ctrl+Space");
-            run_linux_registered_hotkey_loop_or_exit(tx);
-        }
-        HotkeyBackend::X11Listen => {
-            log.verbose("parakit: Linux hotkey backend: passive X11 Ctrl+Space listen");
-            run_linux_x11_listen_or_exit(tx);
-        }
-        HotkeyBackend::EvdevProxyExperimental => {
-            log.warn(
-                "evdev-proxy is experimental; it grabs keyboard devices and forwards unsuppressed input through uinput",
+    let route = backend.linux_route();
+    if route == LinuxHotkeyRoute::EvdevProxy {
+        log.warn(
+            "evdev-proxy-experimental grabs keyboard devices and forwards unsuppressed input through uinput",
+        );
+    }
+    log.verbose(format!("parakit: Linux hotkey backend: {}", route.label()));
+    match route {
+        LinuxHotkeyRoute::RegisteredX11 => {
+            run_hotkey_loop_or_exit(
+                run_linux_registered_hotkey_loop(tx),
+                "registered X11 hotkey",
+                crate::daemon::hotkey_help::registered_linux_failure_help,
             );
-            log.verbose("parakit: Linux hotkey backend: experimental evdev/uinput keyboard proxy");
-            run_linux_evdev_grab_loop_or_exit(tx, log);
+        }
+        LinuxHotkeyRoute::PassiveX11 => {
+            run_hotkey_loop_or_exit(
+                run_linux_x11_listen_loop(tx),
+                "passive X11 hotkey listen",
+                crate::daemon::hotkey_help::x11_listen_linux_failure_help,
+            );
+        }
+        LinuxHotkeyRoute::EvdevProxy => {
+            run_hotkey_loop_or_exit(
+                run_linux_evdev_grab_loop(tx, Arc::clone(&log)).map_err(Into::into),
+                "evdev keyboard grab",
+                crate::daemon::hotkey_help::evdev_linux_failure_help,
+            );
         }
     }
 }
@@ -386,30 +445,31 @@ pub(crate) fn run_grab_loop(
     log: Arc<Logger>,
 ) {
     log.verbose("parakit: Windows hotkey backend: RegisterHotKey Ctrl+Space");
-    super::windows_input::run_registered_hotkey_loop_or_exit(tx);
+    run_hotkey_loop_or_exit(
+        super::windows_input::run_registered_hotkey_loop(tx),
+        "Windows registered hotkey",
+        crate::daemon::hotkey_help::windows_failure_help,
+    );
 }
 
 #[cfg(target_os = "macos")]
 pub(crate) use macos::run_grab_loop;
 
-#[cfg(target_os = "linux")]
-fn run_linux_registered_hotkey_loop_or_exit(tx: Sender<HotkeyTransition>) {
-    if let Err(err) = run_linux_registered_hotkey_loop(tx) {
-        eprintln!(
-            "parakit: registered X11 hotkey failed: {err:#}\n{}",
-            registered_hotkey_failure_help()
-        );
-        std::process::exit(2);
-    }
-}
-
-#[cfg(target_os = "linux")]
-fn run_linux_x11_listen_or_exit(tx: Sender<HotkeyTransition>) {
-    if let Err(err) = run_linux_x11_listen_loop(tx) {
-        eprintln!(
-            "parakit: passive X11 hotkey listen failed: {err:#}\n{}",
-            x11_listen_failure_help()
-        );
+/// Print platform-specific hotkey recovery help and terminate after a backend
+/// loop fails.
+///
+/// # Arguments
+///
+/// * `result` - Completed backend loop result.
+/// * `backend` - Human-readable backend name for the error prefix.
+/// * `help` - Lazy platform recovery guidance.
+pub(super) fn run_hotkey_loop_or_exit(
+    result: anyhow::Result<()>,
+    backend: &str,
+    help: impl FnOnce() -> String,
+) {
+    if let Err(err) = result {
+        eprintln!("parakit: {backend} failed: {err:#}\n{}", help());
         std::process::exit(2);
     }
 }
@@ -635,17 +695,6 @@ pub(crate) fn registered_hotkey_probe() -> anyhow::Result<()> {
 #[cfg(target_os = "linux")]
 fn ctrl_space_hotkey() -> HotKey {
     HotKey::new(Some(Modifiers::CONTROL), Code::Space)
-}
-
-#[cfg(target_os = "linux")]
-fn run_linux_evdev_grab_loop_or_exit(tx: Sender<HotkeyTransition>, log: Arc<Logger>) {
-    if let Err(err) = run_linux_evdev_grab_loop(tx, Arc::clone(&log)) {
-        eprintln!(
-            "parakit: evdev keyboard grab failed: {err:#}\n{}",
-            grab_failure_help()
-        );
-        std::process::exit(2);
-    }
 }
 
 #[cfg(target_os = "linux")]
@@ -926,24 +975,6 @@ fn handle_listen_event(
     let _ = handle_key_event(event.event_type, state, tx);
 }
 
-#[cfg(all(
-    not(target_os = "linux"),
-    not(target_os = "macos"),
-    not(target_os = "windows")
-))]
-fn handle_grab_event(
-    event: Event,
-    state: &Arc<Mutex<HotkeyState>>,
-    tx: &Sender<HotkeyTransition>,
-) -> Option<Event> {
-    let suppress = handle_key_event(event.event_type, state, tx);
-    if suppress {
-        None
-    } else {
-        Some(event)
-    }
-}
-
 #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
 fn handle_key_event(
     event_type: EventType,
@@ -977,21 +1008,6 @@ fn send_hotkey_transition(action: HotkeyAction, tx: &Sender<HotkeyTransition>) {
         HotkeyAction::Stop { stopped_at } => HotkeyTransition::Released { at: stopped_at },
     };
     let _ = tx.send(transition);
-}
-
-#[cfg(target_os = "linux")]
-fn registered_hotkey_failure_help() -> String {
-    crate::daemon::hotkey_help::registered_linux_failure_help()
-}
-
-#[cfg(target_os = "linux")]
-fn x11_listen_failure_help() -> String {
-    crate::daemon::hotkey_help::x11_listen_linux_failure_help()
-}
-
-#[cfg(target_os = "linux")]
-fn grab_failure_help() -> String {
-    crate::daemon::hotkey_help::evdev_linux_failure_help()
 }
 
 #[cfg(test)]

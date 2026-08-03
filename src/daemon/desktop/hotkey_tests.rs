@@ -447,30 +447,42 @@ fn unrelated_keys_pass_through() {
     assert_eq!(state.release(Key::KeyA, at(now, 10)), (None, false));
 }
 
+/// Expected [`HotkeyBackend::label`] value for `backend`, matched
+/// exhaustively (no wildcard arm) so a new backend variant fails compilation
+/// here until its label is stated as data. The `cfg(target_os = "linux")`
+/// gating on the linux-only arms mirrors the enum definition itself at
+/// `hotkey::HotkeyBackend`.
+fn expected_label(backend: HotkeyBackend) -> &'static str {
+    match backend {
+        HotkeyBackend::Auto => "auto",
+        HotkeyBackend::Desktop => "desktop",
+        #[cfg(target_os = "linux")]
+        HotkeyBackend::X11GlobalHotkey => "x11-global-hotkey",
+        #[cfg(target_os = "linux")]
+        HotkeyBackend::X11Listen => "x11-listen",
+        #[cfg(target_os = "linux")]
+        HotkeyBackend::EvdevProxyExperimental => "evdev-proxy-experimental",
+    }
+}
+
 #[test]
 fn backend_labels_are_stable() {
-    for (backend, label) in [
-        (HotkeyBackend::Auto, "auto"),
-        (HotkeyBackend::Desktop, "desktop"),
-    ] {
-        assert_eq!(backend.label(), label);
+    for backend in [HotkeyBackend::Auto, HotkeyBackend::Desktop] {
+        assert_eq!(backend.label(), expected_label(backend));
     }
     #[cfg(target_os = "linux")]
-    for (backend, label) in [
-        (HotkeyBackend::X11GlobalHotkey, "x11-global-hotkey"),
-        (HotkeyBackend::X11Listen, "x11-listen"),
-        (
-            HotkeyBackend::EvdevProxyExperimental,
-            "evdev-proxy-experimental",
-        ),
+    for backend in [
+        HotkeyBackend::X11GlobalHotkey,
+        HotkeyBackend::X11Listen,
+        HotkeyBackend::EvdevProxyExperimental,
     ] {
-        assert_eq!(backend.label(), label);
+        assert_eq!(backend.label(), expected_label(backend));
     }
 }
 
 #[cfg(target_os = "linux")]
 #[test]
-fn linux_backend_aliases_parse_to_stable_variants() {
+fn linux_backend_names_parse_to_stable_variants() {
     fn parse(value: &str) -> HotkeyBackend {
         <HotkeyBackend as clap::ValueEnum>::from_str(value, false).unwrap()
     }
@@ -481,7 +493,8 @@ fn linux_backend_aliases_parse_to_stable_variants() {
         parse("evdev-proxy-experimental"),
         HotkeyBackend::EvdevProxyExperimental
     );
-    assert_eq!(parse("evdev-proxy"), HotkeyBackend::EvdevProxyExperimental);
+    assert!(<HotkeyBackend as clap::ValueEnum>::from_str("evdev-proxy", false).is_err());
+    assert!(serde_json::from_str::<HotkeyBackend>(r#""evdev-proxy""#).is_err());
     assert!(<HotkeyBackend as clap::ValueEnum>::from_str("evdev", false).is_err());
 }
 
@@ -498,17 +511,21 @@ fn x11_keymap_bit_probe_detects_down_keycodes() {
 
 #[cfg(target_os = "linux")]
 #[test]
-fn linux_backend_routing_helpers_classify_backends() {
-    for (backend, registered, passive, evdev) in [
-        (HotkeyBackend::Auto, true, false, false),
-        (HotkeyBackend::Desktop, true, false, false),
-        (HotkeyBackend::X11GlobalHotkey, true, false, false),
-        (HotkeyBackend::X11Listen, false, true, false),
-        (HotkeyBackend::EvdevProxyExperimental, false, false, true),
+fn linux_backend_aliases_resolve_to_one_route() {
+    for (backend, expected) in [
+        (HotkeyBackend::Auto, LinuxHotkeyRoute::RegisteredX11),
+        (HotkeyBackend::Desktop, LinuxHotkeyRoute::RegisteredX11),
+        (
+            HotkeyBackend::X11GlobalHotkey,
+            LinuxHotkeyRoute::RegisteredX11,
+        ),
+        (HotkeyBackend::X11Listen, LinuxHotkeyRoute::PassiveX11),
+        (
+            HotkeyBackend::EvdevProxyExperimental,
+            LinuxHotkeyRoute::EvdevProxy,
+        ),
     ] {
-        assert_eq!(backend.uses_registered_x11(), registered);
-        assert_eq!(backend.uses_passive_x11_listen(), passive);
-        assert_eq!(backend.uses_evdev_proxy(), evdev);
+        assert_eq!(backend.linux_route(), expected);
     }
 }
 

@@ -1,5 +1,7 @@
 //! Desktop notifications for actionable daemon fallbacks.
 
+#[cfg(target_os = "macos")]
+use anyhow::Context;
 use std::sync::Arc;
 
 use super::{audio::MicInfo, logging::Logger};
@@ -42,14 +44,6 @@ impl Notifier {
         self.show("Paste blocked", reason.as_ref());
     }
 
-    /// Notify that paste is temporarily disabled after repeated insertion failures.
-    pub(crate) fn paste_temporarily_disabled(&self) {
-        self.show(
-            "Paste disabled",
-            "Repeated insertion failures temporarily disabled automatic paste.",
-        );
-    }
-
     /// Notify that microphone capture failed and the daemon is trying to reopen it.
     ///
     /// # Arguments
@@ -89,7 +83,110 @@ fn show_notification(summary: &str, body: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-#[cfg(not(target_os = "linux"))]
+/// Show a macOS Notification Center banner through `osascript`.
+///
+/// This runs `osascript` synchronously. `display notification` returns
+/// quickly (it does not wait for user interaction), and this call already
+/// happens on the worker thread after insertion has resolved, so blocking
+/// briefly here does not add to dictation latency; a synchronous call also
+/// keeps failures visible to the caller for the existing verbose-log
+/// fallback instead of silently dropping them in a detached thread.
+#[cfg(target_os = "macos")]
+fn show_notification(summary: &str, body: &str) -> anyhow::Result<()> {
+    let script = format!(
+        "display notification \"{}\" with title \"{}\"",
+        applescript_quote(body),
+        applescript_quote(summary)
+    );
+    let status = std::process::Command::new("osascript")
+        .arg("-e")
+        .arg(&script)
+        .status()
+        .context("could not spawn osascript for desktop notification")?;
+    anyhow::ensure!(status.success(), "osascript exited with {status}");
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
 fn show_notification(_summary: &str, _body: &str) -> anyhow::Result<()> {
     Ok(())
+}
+
+/// Escape a string for embedding in a double-quoted AppleScript string
+/// literal.
+///
+/// Backslash, double-quote, line feed, and carriage return are escaped so
+/// untrusted notification text cannot terminate the source line or string
+/// literal. Every other character, including non-ASCII text, passes through
+/// unchanged.
+///
+/// # Arguments
+///
+/// * `s` - Raw text to embed inside a `"..."` AppleScript string literal.
+///
+/// # Returns
+///
+/// `s` with AppleScript source-significant characters escaped. The caller
+/// is responsible for wrapping the result in the surrounding double quotes.
+#[cfg(target_os = "macos")]
+fn applescript_quote(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            other => out.push(other),
+        }
+    }
+    out
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn applescript_quote_matrix() {
+        // (name, input, expected escaped form)
+        let cases = [
+            ("escapes double quotes", r#"say "hi""#, r#"say \"hi\""#),
+            ("escapes backslashes", r"C:\Users\me", r"C:\\Users\\me"),
+            (
+                "escapes mixed quotes and backslashes",
+                r#"mixed \ and " chars"#,
+                r#"mixed \\ and \" chars"#,
+            ),
+            (
+                "passes through unicode",
+                "héllo wörld 你好",
+                "héllo wörld 你好",
+            ),
+            (
+                "escapes line endings",
+                "first\nsecond\rthird\r\nfourth",
+                r"first\nsecond\rthird\r\nfourth",
+            ),
+            (
+                "leaves plain text untouched",
+                "Transcript copied",
+                "Transcript copied",
+            ),
+        ];
+
+        let failures: Vec<String> = cases
+            .iter()
+            .filter_map(|&(name, input, expect)| {
+                let actual = applescript_quote(input);
+                (actual != expect).then(|| format!("{name}: expected {expect:?}, got {actual:?}"))
+            })
+            .collect();
+        assert!(
+            failures.is_empty(),
+            "{} case(s) failed:\n{}",
+            failures.len(),
+            failures.join("\n")
+        );
+    }
 }

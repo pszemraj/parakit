@@ -5,10 +5,14 @@ use anyhow::Context;
 use anyhow::{bail, Result};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
+#[cfg(any(unix, target_os = "windows"))]
+use std::cell::Cell;
+use std::collections::VecDeque;
 #[cfg(unix)]
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read as _, Write};
 #[cfg(unix)]
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 #[cfg(any(unix, target_os = "windows"))]
 use std::sync::Arc;
 #[cfg(any(unix, target_os = "windows"))]
@@ -17,6 +21,7 @@ use std::thread;
 use std::thread::JoinHandle;
 #[cfg(any(unix, target_os = "windows"))]
 use std::time::Duration;
+use std::time::Instant;
 
 #[cfg(unix)]
 use super::preflight;
@@ -25,11 +30,52 @@ use super::{
     inject::{FocusSnapshot, PasteMode},
     logging::Logger,
     notifications::Notifier,
-    worker::{insert_text, InsertOutcome},
+    worker::{insert_text, FocusCheck, InsertOutcome},
 };
 
-#[cfg(unix)]
-const IPC_CLIENT_TIMEOUT: Duration = Duration::from_millis(750);
+#[cfg(any(unix, target_os = "windows"))]
+const IPC_TRANSPORT_TIMEOUT: Duration = Duration::from_millis(750);
+/// Response budget for insertion-lock commands. A command can wait behind
+/// one complete paste transaction before running its own.
+#[cfg(any(unix, target_os = "windows"))]
+const IPC_INSERT_RESPONSE_TIMEOUT: Duration = Duration::from_secs(10);
+/// Maximum time stop finalization waits for an in-flight paste transaction.
+/// This covers one normal macOS transaction while preserving a forced-exit
+/// path if platform insertion code wedges.
+#[cfg(any(unix, target_os = "windows"))]
+const STOP_INSERTION_WAIT: Duration = Duration::from_secs(5);
+/// Maximum accepted local control-protocol message size.
+#[cfg(any(unix, target_os = "windows"))]
+const IPC_MAX_MESSAGE_SIZE: usize = 64 * 1024;
+/// Largest transcript ring whose complete history response stays below the
+/// control-protocol message limit, including worst-case JSON escaping.
+pub(crate) const MAX_TRANSCRIPT_HISTORY: usize = 100;
+const HISTORY_PREVIEW_MAX_CHARS: usize = 72;
+#[cfg(any(unix, target_os = "windows"))]
+const STOP_RESPONSE_GRACE: Duration = Duration::from_millis(50);
+
+/// Marker used by both local IPC transports when no daemon endpoint exists.
+///
+/// Keeping this distinct from other transport failures lets the CLI render a
+/// stable, platform-independent message without hiding permission errors,
+/// timeouts, truncated responses, or other actionable diagnostics.
+#[cfg(any(unix, target_os = "windows"))]
+#[derive(Debug)]
+struct DaemonNotRunning;
+
+#[cfg(any(unix, target_os = "windows"))]
+impl std::fmt::Display for DaemonNotRunning {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("daemon is not running")
+    }
+}
+
+#[cfg(any(unix, target_os = "windows"))]
+impl std::error::Error for DaemonNotRunning {}
+
+/// Default number of transcripts kept in daemon memory when
+/// `daemon.transcript_history` is unset.
+pub(crate) const DEFAULT_TRANSCRIPT_HISTORY: usize = 10;
 
 /// Command sent by helper subcommands to the running daemon.
 #[derive(Debug, Deserialize, Serialize)]
@@ -39,12 +85,54 @@ pub(crate) enum IpcCommand {
     Status,
     /// Stop the daemon process.
     Stop,
-    /// Paste the most recent transcript remembered in memory.
-    PasteLast,
-    /// Copy the most recent transcript remembered in memory.
-    CopyLast,
+    /// Copy a transcript remembered in memory.
+    ///
+    /// `index` is 0-based on the wire (0 is the most recent). The CLI number
+    /// is 1-based and is converted to this 0-based wire index at the CLI boundary.
+    CopyLast { index: usize },
+    /// List transcripts remembered in memory, newest first.
+    History {
+        /// Cap the number of entries returned. `None` returns all of them.
+        limit: Option<usize>,
+    },
     /// Run the insertion path with caller-supplied text, without microphone use.
     TestPaste { text: String },
+}
+
+#[cfg(any(unix, target_os = "windows"))]
+impl IpcCommand {
+    fn response_timeout(&self) -> Duration {
+        match self {
+            // Both commands acquire SharedState's process-wide insertion
+            // lock. CopyLast itself is quick, but it can queue behind a
+            // synchronous paste transaction (including macOS modifier and
+            // acknowledgement waits), so it needs the same response budget.
+            Self::CopyLast { .. } | Self::TestPaste { .. } => IPC_INSERT_RESPONSE_TIMEOUT,
+            Self::Status | Self::Stop | Self::History { .. } => IPC_TRANSPORT_TIMEOUT,
+        }
+    }
+}
+
+/// Return whether one Windows pipe read can be appended without exceeding
+/// the control protocol's message limit.
+///
+/// `complete == false` means the pipe reported `ERROR_MORE_DATA`, so reaching
+/// the limit already proves that the complete message is oversized.
+#[cfg(any(target_os = "windows", test))]
+fn pipe_message_fits_limit(buffered: usize, chunk_len: usize, complete: bool) -> bool {
+    buffered.checked_add(chunk_len).is_some_and(|total| {
+        total < IPC_MAX_MESSAGE_SIZE || (complete && total == IPC_MAX_MESSAGE_SIZE)
+    })
+}
+
+/// Deserialize one control-socket request line as [`IpcCommand`].
+///
+/// # Errors
+///
+/// Returns an error when `raw` is not a current command payload.
+#[cfg(any(unix, target_os = "windows"))]
+fn parse_command(raw: &str) -> Result<IpcCommand> {
+    serde_json::from_str(raw).context("invalid control command")
 }
 
 /// Response sent by the daemon control socket.
@@ -57,37 +145,167 @@ pub(crate) enum IpcResponse {
     Status {
         phase: String,
         last_transcript_len: Option<usize>,
+        /// Extended runtime detail for `--verbose status`. `None` covers the
+        /// startup window before
+        /// [`SharedState::set_info`] has run. Boxed because `StatusDetail` is
+        /// much larger than the other `IpcResponse` variants, and `Status` is
+        /// otherwise mostly `None` (serde transparently (de)serializes
+        /// `Box<T>` as `T`, so the wire format is unaffected).
+        detail: Option<Box<StatusDetail>>,
     },
+    /// Transcript history listing, newest first.
+    History { entries: Vec<HistoryEntry> },
     /// Command failed.
     Err { message: String },
 }
 
+/// One remembered transcript, as reported by the `History` command.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub(crate) struct HistoryEntry {
+    /// Position counting back from the most recent, 1-based to match the
+    /// number the user passes to `copy-last`.
+    pub(crate) index: usize,
+    /// Seconds since the transcript was remembered.
+    pub(crate) age_secs: u64,
+    /// Transcript length in characters.
+    pub(crate) chars: usize,
+    /// Single-line, whitespace-collapsed excerpt for display.
+    pub(crate) preview: String,
+}
+
+/// Extended daemon runtime detail returned by `Status` when
+/// [`SharedState::set_info`] has run.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub(crate) struct StatusDetail {
+    /// Daemon process id.
+    pub(crate) pid: u32,
+    /// Seconds since the daemon started serving IPC.
+    pub(crate) uptime_secs: u64,
+    /// Successful dictations completed this session.
+    pub(crate) dictation_count: u64,
+    /// Selected microphone summary.
+    pub(crate) mic: String,
+    /// Model file name.
+    pub(crate) model: String,
+    /// Model dtype/size label.
+    pub(crate) dtype: String,
+    /// Resolved runtime compute device summary.
+    pub(crate) device: String,
+    /// CrispASR backend label.
+    pub(crate) backend: String,
+    /// Inference thread count.
+    pub(crate) threads: usize,
+    /// Paste mode label.
+    pub(crate) paste_mode: String,
+    /// Whether audio cues are enabled.
+    pub(crate) sounds: bool,
+    /// Cleaning pipeline state label.
+    pub(crate) cleaning: String,
+    /// Transcription logging target, when enabled.
+    pub(crate) log: Option<String>,
+    /// Linux hotkey backend label, when applicable.
+    pub(crate) hotkey_backend: Option<String>,
+    /// Transcript history depth summary (`"3 of 10"`) or `"disabled"` when
+    /// `daemon.transcript_history = 0`.
+    pub(crate) history: String,
+}
+
+/// Daemon runtime info captured once at startup and exposed through `Status`.
+///
+/// Set once via [`SharedState::set_info`] after the model, microphone, and
+/// insertion backend are all ready. Kept separate from [`StatusDetail`]
+/// because it holds process-lifetime values (backend labels, thread counts)
+/// as-computed at startup, while `StatusDetail` also carries values that
+/// change per query (uptime, dictation count).
+#[derive(Debug, Clone)]
+pub(crate) struct DaemonInfo {
+    /// Daemon process id.
+    pub(crate) pid: u32,
+    /// Model file name.
+    pub(crate) model_name: String,
+    /// Model dtype/size label.
+    pub(crate) dtype: String,
+    /// Selected microphone summary.
+    pub(crate) mic_summary: String,
+    /// CrispASR backend label.
+    pub(crate) backend: String,
+    /// Resolved runtime compute device summary.
+    pub(crate) device: String,
+    /// Inference thread count.
+    pub(crate) threads: usize,
+    /// Paste mode label.
+    pub(crate) paste_mode: &'static str,
+    /// Cleaning pipeline state label (e.g. `"on (12 rules)"` or `"off"`).
+    pub(crate) cleaning_summary: String,
+    /// Whether audio cues are enabled.
+    pub(crate) sounds_on: bool,
+    /// Transcription logging target, when enabled.
+    pub(crate) log_summary: Option<String>,
+    /// Linux hotkey backend label, when applicable.
+    pub(crate) hotkey_backend_label: Option<&'static str>,
+}
+
 /// Shared in-memory daemon state used by the worker and IPC server.
-#[derive(Default)]
 pub(crate) struct SharedState {
     inner: Mutex<StateSnapshot>,
     insertion: Mutex<()>,
+    /// Runtime info set once startup completes; `None` until then.
+    info: Mutex<Option<DaemonInfo>>,
+    /// Instant the daemon started serving IPC, used to compute uptime.
+    started_at: Instant,
+    /// Count of successful dictations (transcript produced) this session.
+    dictation_count: AtomicU64,
+    /// Maximum number of transcripts kept in `inner.history`. Immutable for
+    /// the life of the daemon process: history depth is read once at
+    /// startup from `daemon.transcript_history`.
+    history_limit: usize,
 }
 
-#[derive(Default)]
 struct StateSnapshot {
     phase: String,
-    last_transcript: Option<String>,
+    /// Remembered transcripts, newest first. Never persisted to disk.
+    history: VecDeque<TranscriptEntry>,
+}
+
+/// One transcript remembered in daemon memory.
+struct TranscriptEntry {
+    text: String,
+    at: Instant,
 }
 
 impl SharedState {
-    /// Create an idle state snapshot.
+    /// Create an idle state snapshot with the default transcript history
+    /// depth.
     ///
     /// # Returns
     ///
-    /// Shared state with no remembered transcript.
+    /// Shared state with no remembered transcripts.
     pub(crate) fn new() -> Self {
+        Self::with_history_limit(DEFAULT_TRANSCRIPT_HISTORY)
+    }
+
+    /// Create an idle state snapshot that remembers at most `limit`
+    /// transcripts.
+    ///
+    /// # Arguments
+    ///
+    /// * `limit` - Maximum number of transcripts kept in memory. `0`
+    ///   disables `copy-last` and `history`.
+    ///
+    /// # Returns
+    ///
+    /// Shared state with no remembered transcripts.
+    pub(crate) fn with_history_limit(limit: usize) -> Self {
         Self {
             inner: Mutex::new(StateSnapshot {
                 phase: "starting".to_string(),
-                last_transcript: None,
+                history: VecDeque::new(),
             }),
             insertion: Mutex::new(()),
+            info: Mutex::new(None),
+            started_at: Instant::now(),
+            dictation_count: AtomicU64::new(0),
+            history_limit: limit,
         }
     }
 
@@ -96,31 +314,158 @@ impl SharedState {
         self.inner.lock().phase = phase.into();
     }
 
-    /// Remember the latest transcript in memory.
-    pub(crate) fn set_last_transcript(&self, text: String) {
-        self.inner.lock().last_transcript = Some(text);
+    /// Remember a transcript in memory, evicting the oldest entry once
+    /// `history_limit` is exceeded. No-op when `history_limit` is 0.
+    pub(crate) fn remember_transcript(&self, text: String) {
+        if self.history_limit == 0 {
+            return;
+        }
+        let mut inner = self.inner.lock();
+        inner.history.push_front(TranscriptEntry {
+            text,
+            at: Instant::now(),
+        });
+        inner.history.truncate(self.history_limit);
+    }
+
+    /// Store daemon runtime info, making it visible to subsequent `Status`
+    /// queries. Called once, after startup finishes resolving the model,
+    /// microphone, and insertion backend.
+    pub(crate) fn set_info(&self, info: DaemonInfo) {
+        *self.info.lock() = Some(info);
+    }
+
+    /// Record one successful dictation (a non-empty transcript was
+    /// produced). Called once per transcription success, not once per
+    /// insertion attempt.
+    pub(crate) fn record_dictation(&self) {
+        self.dictation_count.fetch_add(1, Ordering::Relaxed);
     }
 
     #[cfg(any(unix, target_os = "windows", test))]
     fn status(&self) -> IpcResponse {
         let inner = self.inner.lock();
+        let detail = self
+            .info
+            .lock()
+            .as_ref()
+            .map(|info| StatusDetail {
+                pid: info.pid,
+                uptime_secs: self.started_at.elapsed().as_secs(),
+                dictation_count: self.dictation_count.load(Ordering::Relaxed),
+                mic: info.mic_summary.clone(),
+                model: info.model_name.clone(),
+                dtype: info.dtype.clone(),
+                device: info.device.clone(),
+                backend: info.backend.clone(),
+                threads: info.threads,
+                paste_mode: info.paste_mode.to_string(),
+                sounds: info.sounds_on,
+                cleaning: info.cleaning_summary.clone(),
+                log: info.log_summary.clone(),
+                hotkey_backend: info.hotkey_backend_label.map(str::to_string),
+                history: self.history_label(inner.history.len()),
+            })
+            .map(Box::new);
         IpcResponse::Status {
             phase: inner.phase.clone(),
-            last_transcript_len: inner.last_transcript.as_ref().map(String::len),
+            last_transcript_len: inner.history.front().map(|entry| entry.text.len()),
+            detail,
         }
     }
 
+    /// Summarize remembered transcript count against `history_limit` for
+    /// `StatusDetail::history`.
+    ///
+    /// # Returns
+    ///
+    /// `"disabled"` when `history_limit` is 0, otherwise `"{len} of
+    /// {history_limit}"`.
+    #[cfg(any(unix, target_os = "windows", test))]
+    fn history_label(&self, history_len: usize) -> String {
+        if self.history_limit == 0 {
+            "disabled".to_string()
+        } else {
+            format!("{history_len} of {}", self.history_limit)
+        }
+    }
+
+    /// Fail when transcript history is turned off, so `history` reports the
+    /// same reason as `copy-last` instead of looking like an empty session.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `history_limit` is 0.
     #[cfg(any(unix, target_os = "windows"))]
-    fn last_transcript(&self) -> Option<String> {
-        self.inner.lock().last_transcript.clone()
+    fn ensure_history_enabled(&self) -> Result<()> {
+        if self.history_limit == 0 {
+            bail!("transcript history is disabled (daemon.transcript_history = 0)");
+        }
+        Ok(())
+    }
+
+    /// Resolve a transcript by 0-based wire index, honoring the
+    /// history-disabled / empty / out-of-range errors in that priority
+    /// order.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `history_limit` is 0, no transcript has been
+    /// remembered yet, or `index` is past the end of what is remembered.
+    #[cfg(any(unix, target_os = "windows"))]
+    fn resolve_transcript(&self, index: usize) -> Result<String> {
+        self.ensure_history_enabled()?;
+        let inner = self.inner.lock();
+        let count = inner.history.len();
+        if count == 0 {
+            bail!("no transcript has been captured in this daemon session");
+        }
+        if index >= count {
+            let noun = if count == 1 {
+                "transcript"
+            } else {
+                "transcripts"
+            };
+            bail!("only {count} {noun} remembered in this daemon session");
+        }
+        Ok(inner.history[index].text.clone())
+    }
+
+    /// Snapshot remembered transcripts, newest first, for the `History`
+    /// command.
+    ///
+    /// # Arguments
+    ///
+    /// * `limit` - Cap on the number of entries returned. `None` returns
+    ///   every remembered transcript.
+    ///
+    /// # Returns
+    ///
+    /// Entries with 1-based `index` counting back from the most recent.
+    #[cfg(any(unix, target_os = "windows", test))]
+    fn history_snapshot(&self, limit: Option<usize>) -> Vec<HistoryEntry> {
+        let inner = self.inner.lock();
+        let now = Instant::now();
+        inner
+            .history
+            .iter()
+            .enumerate()
+            .take(limit.unwrap_or(usize::MAX))
+            .map(|(position, entry)| HistoryEntry {
+                index: position + 1,
+                age_secs: now.saturating_duration_since(entry.at).as_secs(),
+                chars: entry.text.chars().count(),
+                preview: preview_text(&entry.text),
+            })
+            .collect()
     }
 
     /// Run a clipboard/insertion transaction while excluding worker and IPC
     /// paste/copy paths.
     ///
     /// Clipboard staging plus a synthetic paste chord must be serialized
-    /// process-wide. Otherwise `paste-last`, `copy-last`, or `test-paste` can
-    /// race the worker clipboard transaction and paste or copy the wrong text.
+    /// process-wide. Otherwise `copy-last` or `test-paste` can race the
+    /// worker clipboard transaction and paste or copy the wrong text.
     ///
     /// # Returns
     ///
@@ -150,8 +495,10 @@ impl Drop for IpcServer {
 ///
 /// # Arguments
 ///
-/// * `state` - Shared daemon status and last-transcript cache.
+/// * `state` - Shared daemon status and transcript history.
 /// * `paste_mode` - Paste mode used by paste-related commands.
+/// * `keep_transcript_clipboard` - Whether command insertion leaves text on
+///   the clipboard.
 /// * `log` - Logger for socket errors.
 ///
 /// # Returns
@@ -177,6 +524,8 @@ pub(crate) fn spawn_server(
 ///
 /// * `command` - Command to send to the running daemon.
 /// * `quiet` - Suppress stdout on success.
+/// * `verbose` - Print an extended detail block for `Status` responses. Has
+///   no effect on other commands, so their output is unaffected either way.
 ///
 /// # Returns
 ///
@@ -184,9 +533,17 @@ pub(crate) fn spawn_server(
 ///
 /// # Errors
 ///
-/// Returns an error when no daemon is listening or the daemon reports failure.
-pub(crate) fn run_client(command: IpcCommand, quiet: bool) -> Result<()> {
-    let response = send_command(command)?;
+/// Returns an error when a command that needs live daemon state is used while
+/// no daemon is listening, or when the daemon reports failure. An absent
+/// daemon is a successful state for `Status` and `Stop`.
+pub(crate) fn run_client(command: IpcCommand, quiet: bool, verbose: bool) -> Result<()> {
+    let response = match send_command(&command) {
+        Ok(response) => response,
+        Err(err) if err.is::<DaemonNotRunning>() => {
+            return handle_daemon_not_running(&command, quiet);
+        }
+        Err(err) => return Err(err),
+    };
     match response {
         IpcResponse::Ok { message } => {
             if !quiet {
@@ -197,18 +554,180 @@ pub(crate) fn run_client(command: IpcCommand, quiet: bool) -> Result<()> {
         IpcResponse::Status {
             phase,
             last_transcript_len,
+            detail,
         } => {
             if !quiet {
+                // These two lines must stay byte-identical to the pre-verbose
+                // output: existing scripts parse them.
                 println!("parakit: {phase}");
-                match last_transcript_len {
-                    Some(len) => println!("last transcript: {len} bytes"),
-                    None => println!("last transcript: none"),
+                println!(
+                    "last transcript: {}",
+                    last_transcript_summary(last_transcript_len, detail.as_deref())
+                );
+                if verbose {
+                    print_status_detail(detail.as_deref());
                 }
+            }
+            Ok(())
+        }
+        IpcResponse::History { entries } => {
+            if !quiet {
+                print_history(&entries);
             }
             Ok(())
         }
         IpcResponse::Err { message } => bail!("{message}"),
     }
+}
+
+#[cfg(any(unix, target_os = "windows"))]
+#[derive(Debug, Eq, PartialEq)]
+enum DaemonNotRunningDisposition {
+    Success(&'static str),
+    Error(&'static str),
+}
+
+/// Return the user-facing result for a command when no daemon endpoint exists.
+///
+/// Status queries and stop requests are idempotent state checks, while the
+/// remaining commands require live daemon state and therefore stay failures.
+#[cfg(any(unix, target_os = "windows"))]
+fn daemon_not_running_disposition(command: &IpcCommand) -> DaemonNotRunningDisposition {
+    match command {
+        IpcCommand::Status => DaemonNotRunningDisposition::Success("parakit: not running"),
+        IpcCommand::Stop => {
+            DaemonNotRunningDisposition::Success("parakit: not running; nothing to stop")
+        }
+        IpcCommand::CopyLast { .. } | IpcCommand::History { .. } | IpcCommand::TestPaste { .. } => {
+            DaemonNotRunningDisposition::Error(
+                "daemon is not running; start it with `parakit start` first",
+            )
+        }
+    }
+}
+
+#[cfg(any(unix, target_os = "windows"))]
+fn handle_daemon_not_running(command: &IpcCommand, quiet: bool) -> Result<()> {
+    match daemon_not_running_disposition(command) {
+        DaemonNotRunningDisposition::Success(message) => {
+            if !quiet {
+                println!("{message}");
+            }
+            Ok(())
+        }
+        DaemonNotRunningDisposition::Error(message) => bail!("{message}"),
+    }
+}
+
+/// Format the stable second status line, distinguishing disabled history from
+/// an enabled history that simply has no transcript yet.
+fn last_transcript_summary(
+    last_transcript_len: Option<usize>,
+    detail: Option<&StatusDetail>,
+) -> String {
+    match last_transcript_len {
+        Some(len) => format!("{len} bytes"),
+        None if detail.is_some_and(|detail| detail.history == "disabled") => {
+            "history disabled".to_string()
+        }
+        None => "none".to_string(),
+    }
+}
+
+/// Print the `History` command's transcript listing.
+///
+/// # Arguments
+///
+/// * `entries` - Transcripts remembered by the daemon, newest first.
+fn print_history(entries: &[HistoryEntry]) {
+    if entries.is_empty() {
+        println!("no transcripts remembered in this daemon session");
+        return;
+    }
+    for entry in entries {
+        println!(
+            "{index:<3}{age:<10}{chars:>4} chars  {preview}",
+            index = entry.index,
+            age = format_age(entry.age_secs),
+            chars = entry.chars,
+            preview = entry.preview,
+        );
+    }
+}
+
+/// Print the `--verbose status` detail block.
+///
+/// # Arguments
+///
+/// * `detail` - Extended runtime detail from the daemon's `Status` response,
+///   or `None` when the daemon has not yet called `set_info` (e.g. still
+///   starting up).
+fn print_status_detail(detail: Option<&StatusDetail>) {
+    let Some(detail) = detail else {
+        println!("  detail unavailable (daemon starting)");
+        return;
+    };
+    println!("  pid:        {}", detail.pid);
+    println!("  uptime:     {}", format_uptime(detail.uptime_secs));
+    println!("  dictations: {}", detail.dictation_count);
+    println!("  mic:        {}", detail.mic);
+    println!("  model:      {} ({})", detail.model, detail.dtype);
+    println!(
+        "  device:     {} ({}, {} threads)",
+        detail.device, detail.backend, detail.threads
+    );
+    println!("  paste mode: {}", detail.paste_mode);
+    println!("  sounds:     {}", if detail.sounds { "on" } else { "off" });
+    println!("  cleaning:   {}", detail.cleaning);
+    println!("  logging:    {}", detail.log.as_deref().unwrap_or("off"));
+    println!("  history:    {}", detail.history);
+    if let Some(hotkey_backend) = &detail.hotkey_backend {
+        println!("  hotkey:     {hotkey_backend}");
+    }
+}
+
+/// Humanize a duration in seconds as `1h 23m`, `23m 5s`, or `5s`.
+///
+/// # Returns
+///
+/// The largest two non-zero units, or `0s` for a zero duration.
+fn format_uptime(total_secs: u64) -> String {
+    let hours = total_secs / 3600;
+    let minutes = (total_secs % 3600) / 60;
+    let seconds = total_secs % 60;
+    if hours > 0 {
+        format!("{hours}h {minutes}m")
+    } else if minutes > 0 {
+        format!("{minutes}m {seconds}s")
+    } else {
+        format!("{seconds}s")
+    }
+}
+
+/// Humanize a transcript's age as `format_uptime` output plus `" ago"`.
+///
+/// # Returns
+///
+/// e.g. `"12s ago"`, `"3m 5s ago"`, or `"1h 23m ago"`.
+fn format_age(age_secs: u64) -> String {
+    format!("{} ago", format_uptime(age_secs))
+}
+
+/// Collapse a transcript into a single-line preview for `history` output.
+///
+/// # Returns
+///
+/// The transcript with every run of whitespace (including newlines)
+/// collapsed to a single space and trimmed, truncated on a char boundary
+/// to 72 characters with a trailing `…` when truncation occurred.
+fn preview_text(text: &str) -> String {
+    let collapsed = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if collapsed.chars().count() <= HISTORY_PREVIEW_MAX_CHARS {
+        return collapsed;
+    }
+    let mut truncated: String = collapsed.chars().take(HISTORY_PREVIEW_MAX_CHARS).collect();
+    truncated.push('…');
+    truncated
 }
 
 #[cfg(unix)]
@@ -277,8 +796,8 @@ fn handle_client(
     log: Arc<Logger>,
 ) {
     let notifier = Notifier::new(Arc::clone(&log));
-    let _ = stream.set_read_timeout(Some(IPC_CLIENT_TIMEOUT));
-    let _ = stream.set_write_timeout(Some(IPC_CLIENT_TIMEOUT));
+    let _ = stream.set_read_timeout(Some(IPC_TRANSPORT_TIMEOUT));
+    let _ = stream.set_write_timeout(Some(IPC_TRANSPORT_TIMEOUT));
     let outcome = client_command_outcome(
         read_command(&stream),
         state,
@@ -293,18 +812,30 @@ fn handle_client(
     }
 
     if outcome.stop_after_response {
-        schedule_exit_after_response(preflight::control_socket_path().ok());
+        finish_stop_after_response(state, preflight::control_socket_path().ok(), || {
+            std::process::exit(0)
+        });
     }
 }
 
 #[cfg(unix)]
 fn read_command(stream: &std::os::unix::net::UnixStream) -> Result<IpcCommand> {
-    let mut reader = BufReader::new(stream);
-    let mut line = String::new();
+    let reader = BufReader::new(stream);
+    let mut line = Vec::new();
     reader
-        .read_line(&mut line)
+        .take(IPC_MAX_MESSAGE_SIZE as u64 + 1)
+        .read_until(b'\n', &mut line)
         .context("read control command failed")?;
-    serde_json::from_str(&line).context("invalid control command")
+    let payload_len = if line.ends_with(b"\n") {
+        line.len() - 1
+    } else {
+        line.len()
+    };
+    if payload_len > IPC_MAX_MESSAGE_SIZE {
+        bail!("Unix daemon control message exceeds 64 KiB");
+    }
+    let line = std::str::from_utf8(&line).context("control command is not valid UTF-8")?;
+    parse_command(line)
 }
 
 #[cfg(unix)]
@@ -350,6 +881,23 @@ struct CommandOutcome {
     stop_after_response: bool,
 }
 
+/// Human-readable reference to a 0-based wire history index, used in
+/// `copy-last` success messages.
+///
+/// # Returns
+///
+/// `"last transcript"` for index 0 (byte-identical to the pre-history
+/// wording), otherwise `"transcript {index + 1}"` (1-based, matching the
+/// CLI's `N` argument).
+#[cfg(any(unix, target_os = "windows"))]
+fn history_ref_label(index: usize) -> String {
+    if index == 0 {
+        "last transcript".to_string()
+    } else {
+        format!("transcript {}", index + 1)
+    }
+}
+
 #[cfg(any(unix, target_os = "windows"))]
 fn handle_command(
     command: IpcCommand,
@@ -370,36 +918,23 @@ fn handle_command(
             },
             stop_after_response: true,
         }),
-        IpcCommand::PasteLast => {
-            let result = state.with_insertion_lock(|| {
-                let text = state
-                    .last_transcript()
-                    .context("no transcript has been captured in this daemon session")?;
-                paste_text(&text, paste_mode, keep_transcript_clipboard, log, notifier)
-            })?;
-            Ok(CommandOutcome {
-                response: IpcResponse::Ok {
-                    message: match result {
-                        InsertOutcome::Pasted => "pasted last transcript",
-                        InsertOutcome::CopiedOnly => "copied last transcript",
-                        InsertOutcome::Blocked => "paste blocked",
-                        InsertOutcome::Skipped => "paste skipped",
-                    }
-                    .to_string(),
-                },
-                stop_after_response: false,
-            })
-        }
-        IpcCommand::CopyLast => {
+        IpcCommand::CopyLast { index } => {
             state.with_insertion_lock(|| {
-                let text = state
-                    .last_transcript()
-                    .context("no transcript has been captured in this daemon session")?;
+                let text = state.resolve_transcript(index)?;
                 copy_text(&text)
             })?;
             Ok(CommandOutcome {
                 response: IpcResponse::Ok {
-                    message: "copied last transcript".to_string(),
+                    message: format!("copied {}", history_ref_label(index)),
+                },
+                stop_after_response: false,
+            })
+        }
+        IpcCommand::History { limit } => {
+            state.ensure_history_enabled()?;
+            Ok(CommandOutcome {
+                response: IpcResponse::History {
+                    entries: state.history_snapshot(limit),
                 },
                 stop_after_response: false,
             })
@@ -412,6 +947,9 @@ fn handle_command(
                 response: IpcResponse::Ok {
                     message: match result {
                         InsertOutcome::Pasted => "test paste sent",
+                        InsertOutcome::PastedUnverified => {
+                            "test paste sent (insertion unconfirmed)"
+                        }
                         InsertOutcome::CopiedOnly => "test text copied",
                         InsertOutcome::Blocked => "test paste blocked",
                         InsertOutcome::Skipped => "test paste skipped",
@@ -454,14 +992,34 @@ fn client_command_outcome(
 }
 
 #[cfg(any(unix, target_os = "windows"))]
-fn schedule_exit_after_response(cleanup_path: Option<std::path::PathBuf>) {
-    thread::spawn(move || {
-        thread::sleep(Duration::from_millis(50));
-        if let Some(path) = cleanup_path {
-            let _ = std::fs::remove_file(path);
-        }
-        std::process::exit(0);
-    });
+fn finish_stop_after_response<R>(
+    state: &SharedState,
+    cleanup_path: Option<std::path::PathBuf>,
+    terminate: impl FnOnce() -> R,
+) -> R {
+    finish_stop_after_response_with_wait(state, cleanup_path, STOP_INSERTION_WAIT, terminate)
+}
+
+#[cfg(any(unix, target_os = "windows"))]
+fn finish_stop_after_response_with_wait<R>(
+    state: &SharedState,
+    cleanup_path: Option<std::path::PathBuf>,
+    insertion_wait: Duration,
+    terminate: impl FnOnce() -> R,
+) -> R {
+    // A response has already been written, so waiting here does not consume
+    // the client's transport timeout. Holding the lock through termination
+    // lets an in-flight paste release every synthetic modifier and prevents a
+    // new paste from starting during the response grace period. A wedged
+    // insertion must not prevent the stop command from terminating the daemon.
+    let insertion_guard = state.insertion.try_lock_for(insertion_wait);
+    if insertion_guard.is_some() {
+        thread::sleep(STOP_RESPONSE_GRACE);
+    }
+    if let Some(path) = cleanup_path {
+        let _ = std::fs::remove_file(path);
+    }
+    terminate()
 }
 
 #[cfg(any(unix, target_os = "windows"))]
@@ -474,15 +1032,20 @@ fn paste_text(
 ) -> Result<InsertOutcome> {
     let focus = FocusSnapshot::capture().ok();
     let mut injector = None;
+    let focus_verification = Cell::new("not_applicable");
+    let focus_check = FocusCheck {
+        snapshot: focus.as_ref(),
+        verification: &focus_verification,
+    };
     insert_text(
         &mut injector,
         text,
         paste_mode,
         keep_transcript_clipboard,
-        focus.as_ref(),
+        focus_check,
         (log, notifier),
-        false,
     )
+    .map(|report| report.outcome)
     .context("could not send paste command")
 }
 
@@ -503,17 +1066,31 @@ fn write_response(
 }
 
 #[cfg(unix)]
-fn send_command(command: IpcCommand) -> Result<IpcResponse> {
+fn send_command(command: &IpcCommand) -> Result<IpcResponse> {
     use std::os::unix::net::UnixStream;
 
+    let response_timeout = command.response_timeout();
     let path = preflight::control_socket_path()?;
-    let mut stream = UnixStream::connect(&path)
-        .with_context(|| format!("connect daemon control socket {}", path.display()))?;
+    let mut stream = match UnixStream::connect(&path) {
+        Ok(stream) => stream,
+        Err(err)
+            if matches!(
+                err.kind(),
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused
+            ) =>
+        {
+            return Err(DaemonNotRunning.into());
+        }
+        Err(err) => {
+            return Err(err)
+                .with_context(|| format!("connect daemon control socket {}", path.display()));
+        }
+    };
     stream
-        .set_read_timeout(Some(IPC_CLIENT_TIMEOUT))
+        .set_read_timeout(Some(response_timeout))
         .context("set daemon control socket read timeout")?;
     stream
-        .set_write_timeout(Some(IPC_CLIENT_TIMEOUT))
+        .set_write_timeout(Some(IPC_TRANSPORT_TIMEOUT))
         .context("set daemon control socket write timeout")?;
     serde_json::to_writer(&mut stream, &command).context("serialize control command")?;
     stream
@@ -539,7 +1116,7 @@ fn spawn_server_impl(
 }
 
 #[cfg(target_os = "windows")]
-fn send_command(command: IpcCommand) -> Result<IpcResponse> {
+fn send_command(command: &IpcCommand) -> Result<IpcResponse> {
     windows_pipe::send_command(command)
 }
 
@@ -564,6 +1141,7 @@ mod windows_pipe {
     const PIPE_TYPE_MESSAGE: u32 = 0x0000_0004;
     const PIPE_READMODE_MESSAGE: u32 = 0x0000_0002;
     const PIPE_WAIT: u32 = 0x0000_0000;
+    const PIPE_REJECT_REMOTE_CLIENTS: u32 = 0x0000_0008;
     const PIPE_UNLIMITED_INSTANCES: u32 = 255;
     const ERROR_FILE_NOT_FOUND: u32 = 2;
     const ERROR_IO_PENDING: u32 = 997;
@@ -663,7 +1241,7 @@ mod windows_pipe {
     ///
     /// # Arguments
     ///
-    /// * `state` - Shared daemon status and last-transcript cache.
+    /// * `state` - Shared daemon status and transcript history.
     /// * `paste_mode` - Paste mode used by paste-related commands.
     /// * `keep_transcript_clipboard` - Whether command insertion leaves text on
     ///   the clipboard.
@@ -683,11 +1261,11 @@ mod windows_pipe {
         keep_transcript_clipboard: bool,
         log: Arc<Logger>,
     ) -> Result<IpcServer> {
-        let pipe_name = daemon_pipe_name()?;
+        let identity = DaemonPipeIdentity::current()?;
         let thread = thread::Builder::new()
             .name("parakit-ipc".into())
             .spawn(move || loop {
-                match create_server_pipe(&pipe_name).and_then(|pipe| {
+                match create_server_pipe(&identity).and_then(|pipe| {
                     connect_server_pipe(&pipe)?;
                     Ok(pipe)
                 }) {
@@ -726,11 +1304,16 @@ mod windows_pipe {
     ///
     /// Returns an error when the per-user named pipe is unavailable, transport
     /// I/O fails, or the response cannot be decoded.
-    pub(super) fn send_command(command: IpcCommand) -> Result<IpcResponse> {
-        let pipe_name = daemon_pipe_name()?;
-        let pipe = connect_client_pipe(&pipe_name)?;
+    pub(super) fn send_command(command: &IpcCommand) -> Result<IpcResponse> {
+        let response_timeout_ms = command
+            .response_timeout()
+            .as_millis()
+            .clamp(1, u128::from(u32::MAX)) as u32;
+        let identity = DaemonPipeIdentity::current()?;
+        let pipe = connect_client_pipe(&identity.pipe_name)?;
         write_json_message(&pipe, &command).context("write Windows daemon control command")?;
-        let response = read_pipe_message(&pipe).context("read Windows daemon control response")?;
+        let response = read_pipe_message_with_timeout(&pipe, response_timeout_ms)
+            .context("read Windows daemon control response")?;
         serde_json::from_slice(&response).context("parse Windows daemon control response")
     }
 
@@ -756,30 +1339,41 @@ mod windows_pipe {
         }
 
         if outcome.stop_after_response {
-            schedule_exit_after_response(None);
+            finish_stop_after_response(&state, None, || std::process::exit(0));
         }
     }
 
     fn read_command(pipe: &PipeHandle) -> Result<IpcCommand> {
         let bytes =
             read_pipe_message(pipe).context("read Windows daemon control command failed")?;
-        serde_json::from_slice(&bytes).context("invalid Windows daemon control command")
+        super::parse_command(&String::from_utf8_lossy(&bytes))
     }
 
-    fn daemon_pipe_name() -> Result<Vec<u16>> {
-        let sid = super::super::windows_security::current_user_sid_string()
-            .context("read current Windows user SID for daemon pipe")?;
-        Ok(encode_wide_null(&format!(r"\\.\pipe\parakit-daemon-{sid}")))
+    struct DaemonPipeIdentity {
+        pipe_name: Vec<u16>,
+        user_sid: String,
     }
 
-    fn create_server_pipe(pipe_name: &[u16]) -> Result<PipeHandle> {
-        let mut security = PipeSecurity::current_user_only()?;
+    impl DaemonPipeIdentity {
+        fn current() -> Result<Self> {
+            let user_sid = super::super::windows_security::current_user_sid_string()
+                .context("read current Windows user SID for daemon pipe")?;
+            let pipe_name = encode_wide_null(&format!(r"\\.\pipe\parakit-daemon-{user_sid}"));
+            Ok(Self {
+                pipe_name,
+                user_sid,
+            })
+        }
+    }
+
+    fn create_server_pipe(identity: &DaemonPipeIdentity) -> Result<PipeHandle> {
+        let mut security = PipeSecurity::for_user_sid(&identity.user_sid)?;
         let mut attributes = security.attributes();
         let handle = unsafe {
             CreateNamedPipeW(
-                PCWSTR(pipe_name.as_ptr()),
+                PCWSTR(identity.pipe_name.as_ptr()),
                 PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED,
-                PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT,
+                server_pipe_mode(),
                 PIPE_UNLIMITED_INSTANCES,
                 PIPE_BUFFER_SIZE,
                 PIPE_BUFFER_SIZE,
@@ -791,6 +1385,10 @@ mod windows_pipe {
             return Err(last_error("CreateNamedPipeW failed"));
         }
         Ok(PipeHandle(handle))
+    }
+
+    const fn server_pipe_mode() -> u32 {
+        PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS
     }
 
     fn connect_server_pipe(pipe: &PipeHandle) -> Result<()> {
@@ -807,6 +1405,7 @@ mod windows_pipe {
                     &mut overlapped,
                     INFINITE,
                     "ConnectNamedPipe Windows daemon control pipe failed",
+                    overlapped_result,
                 )?;
                 Ok(())
             }
@@ -870,6 +1469,9 @@ mod windows_pipe {
                                 IPC_CLIENT_TIMEOUT_MS,
                                 CLIENT_CONNECT_RETRY,
                             ) else {
+                                if wait_err == ERROR_FILE_NOT_FOUND {
+                                    return Err(DaemonNotRunning.into());
+                                }
                                 return Err(win32_error(
                                     "WaitNamedPipeW Windows daemon control pipe failed",
                                     wait_err,
@@ -891,10 +1493,7 @@ mod windows_pipe {
                         IPC_CLIENT_TIMEOUT_MS,
                         CLIENT_CONNECT_RETRY,
                     ) else {
-                        return Err(win32_error(
-                            "CreateFileW Windows daemon control pipe failed",
-                            err,
-                        ));
+                        return Err(DaemonNotRunning.into());
                     };
                     thread::sleep(sleep);
                 }
@@ -919,9 +1518,33 @@ mod windows_pipe {
     }
 
     fn read_pipe_message(pipe: &PipeHandle) -> Result<Vec<u8>> {
+        read_pipe_message_with_timeout(pipe, IPC_CLIENT_TIMEOUT_MS)
+    }
+
+    fn read_pipe_message_with_timeout(pipe: &PipeHandle, timeout_ms: u32) -> Result<Vec<u8>> {
         let mut chunk = vec![0_u8; PIPE_BUFFER_SIZE as usize];
-        let read = read_pipe_chunk(pipe, &mut chunk)?;
-        Ok(chunk[..read].to_vec())
+        let mut message = Vec::new();
+        let started = std::time::Instant::now();
+        loop {
+            let remaining_ms = remaining_timeout_ms(started, std::time::Instant::now(), timeout_ms)
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "ReadFile Windows daemon control pipe failed: timed out after \
+                             {timeout_ms}ms"
+                    )
+                })?;
+            let (read, complete) = match read_pipe_chunk(pipe, &mut chunk, remaining_ms)? {
+                PipeReadChunk::Complete(read) => (read, true),
+                PipeReadChunk::MoreData(read) => (read, false),
+            };
+            if !pipe_message_fits_limit(message.len(), read, complete) {
+                bail!("Windows daemon control message exceeds 64 KiB");
+            }
+            message.extend_from_slice(&chunk[..read]);
+            if complete {
+                return Ok(message);
+            }
+        }
     }
 
     fn write_json_message<T: Serialize>(pipe: &PipeHandle, value: &T) -> Result<()> {
@@ -930,7 +1553,8 @@ mod windows_pipe {
     }
 
     fn write_pipe_message(pipe: &PipeHandle, bytes: &[u8]) -> Result<()> {
-        validate_pipe_message_len(bytes.len())?;
+        let bytes_to_write =
+            u32::try_from(bytes.len()).context("Windows daemon control message exceeds 4 GiB")?;
 
         // Message-type pipes frame each WriteFile call as a separate message.
         // The control protocol sends exactly one JSON payload per message.
@@ -941,7 +1565,7 @@ mod windows_pipe {
             WriteFile(
                 pipe.0,
                 bytes.as_ptr().cast(),
-                bytes.len() as u32,
+                bytes_to_write,
                 &mut written,
                 overlapped.as_mut_ptr(),
             )
@@ -959,6 +1583,7 @@ mod windows_pipe {
                 &mut overlapped,
                 IPC_CLIENT_TIMEOUT_MS,
                 "WriteFile Windows daemon control pipe failed",
+                overlapped_result,
             )?;
         }
         if written as usize != bytes.len() {
@@ -971,7 +1596,16 @@ mod windows_pipe {
         Ok(())
     }
 
-    fn read_pipe_chunk(pipe: &PipeHandle, chunk: &mut [u8]) -> Result<usize> {
+    enum PipeReadChunk {
+        Complete(usize),
+        MoreData(usize),
+    }
+
+    fn read_pipe_chunk(
+        pipe: &PipeHandle,
+        chunk: &mut [u8],
+        timeout_ms: u32,
+    ) -> Result<PipeReadChunk> {
         let event = EventHandle::create()?;
         let mut overlapped = RawOverlapped::new(event.0);
         let mut read = 0_u32;
@@ -985,21 +1619,19 @@ mod windows_pipe {
             )
         };
         if ok != 0 {
-            return Ok(read as usize);
+            return Ok(PipeReadChunk::Complete(read as usize));
         }
 
         let err = unsafe { GetLastError() };
         match err {
-            ERROR_IO_PENDING => {
-                let read = wait_for_overlapped(
-                    pipe,
-                    &mut overlapped,
-                    IPC_CLIENT_TIMEOUT_MS,
-                    "ReadFile Windows daemon control pipe failed",
-                )?;
-                Ok(read as usize)
-            }
-            ERROR_MORE_DATA => oversized_pipe_message_error(),
+            ERROR_IO_PENDING => wait_for_overlapped(
+                pipe,
+                &mut overlapped,
+                timeout_ms,
+                "ReadFile Windows daemon control pipe failed",
+                read_overlapped_result,
+            ),
+            ERROR_MORE_DATA => Ok(PipeReadChunk::MoreData(read as usize)),
             _ => Err(win32_error(
                 "ReadFile Windows daemon control pipe failed",
                 err,
@@ -1007,26 +1639,43 @@ mod windows_pipe {
         }
     }
 
-    fn wait_for_overlapped(
+    fn read_overlapped_result(
+        pipe: &PipeHandle,
+        overlapped: &mut RawOverlapped,
+        wait: i32,
+    ) -> std::result::Result<PipeReadChunk, u32> {
+        let mut transferred = 0_u32;
+        if unsafe { GetOverlappedResult(pipe.0, overlapped.as_mut_ptr(), &mut transferred, wait) }
+            != 0
+        {
+            return Ok(PipeReadChunk::Complete(transferred as usize));
+        }
+
+        match unsafe { GetLastError() } {
+            ERROR_MORE_DATA => Ok(PipeReadChunk::MoreData(transferred as usize)),
+            err => Err(err),
+        }
+    }
+
+    fn wait_for_overlapped<T>(
         pipe: &PipeHandle,
         overlapped: &mut RawOverlapped,
         timeout_ms: u32,
         label: &str,
-    ) -> Result<u32> {
+        completion: fn(&PipeHandle, &mut RawOverlapped, i32) -> std::result::Result<T, u32>,
+    ) -> Result<T> {
         match unsafe { WaitForSingleObject(overlapped.h_event, timeout_ms) } {
-            WAIT_OBJECT_0 => match overlapped_result(pipe, overlapped, FALSE) {
+            WAIT_OBJECT_0 => match completion(pipe, overlapped, FALSE) {
                 Ok(transferred) => Ok(transferred),
-                Err(ERROR_MORE_DATA) => oversized_pipe_message_error(),
                 Err(err) => Err(win32_error(label, err)),
             },
             WAIT_TIMEOUT => {
                 let _ = unsafe { CancelIoEx(pipe.0, overlapped.as_mut_ptr()) };
-                match overlapped_result(pipe, overlapped, TRUE) {
+                match completion(pipe, overlapped, TRUE) {
                     Ok(transferred) => Ok(transferred),
                     Err(ERROR_OPERATION_ABORTED) => {
                         bail!("{label}: timed out after {timeout_ms}ms")
                     }
-                    Err(ERROR_MORE_DATA) => oversized_pipe_message_error(),
                     Err(err) => Err(win32_error(label, err)),
                 }
             }
@@ -1048,25 +1697,6 @@ mod windows_pipe {
         }
 
         Err(unsafe { GetLastError() })
-    }
-
-    fn oversized_pipe_message_error<T>() -> Result<T> {
-        oversized_pipe_message(PIPE_BUFFER_SIZE as usize + 1)
-    }
-
-    fn validate_pipe_message_len(len: usize) -> Result<()> {
-        if len > PIPE_BUFFER_SIZE as usize {
-            return oversized_pipe_message(len);
-        }
-        Ok(())
-    }
-
-    fn oversized_pipe_message<T>(len: usize) -> Result<T> {
-        bail!(
-            "Windows daemon control message is {} bytes; max supported message is {} bytes",
-            len,
-            PIPE_BUFFER_SIZE
-        )
     }
 
     #[repr(C)]
@@ -1119,10 +1749,8 @@ mod windows_pipe {
     }
 
     impl PipeSecurity {
-        fn current_user_only() -> Result<Self> {
-            let sid = super::super::windows_security::current_user_sid_string()
-                .context("read current Windows user SID for daemon pipe security")?;
-            let sddl = encode_wide_null(&current_user_only_pipe_sddl(&sid));
+        fn for_user_sid(user_sid: &str) -> Result<Self> {
+            let sddl = encode_wide_null(&current_user_only_pipe_sddl(user_sid));
             let mut descriptor = null_mut::<c_void>();
             if unsafe {
                 ConvertStringSecurityDescriptorToSecurityDescriptorW(
@@ -1244,6 +1872,11 @@ mod windows_pipe {
         }
 
         #[test]
+        fn server_pipe_mode_rejects_remote_clients() {
+            assert_ne!(server_pipe_mode() & PIPE_REJECT_REMOTE_CLIENTS, 0);
+        }
+
+        #[test]
         fn remaining_timeout_counts_down_to_none() {
             let started = std::time::Instant::now();
 
@@ -1305,54 +1938,27 @@ mod windows_pipe {
         }
 
         #[test]
-        fn oversized_control_messages_fail_before_write() {
-            let err = validate_pipe_message_len(PIPE_BUFFER_SIZE as usize + 1)
-                .expect_err("oversized message should be rejected");
-
-            assert!(format!("{err:#}").contains("max supported message"));
-        }
-
-        #[test]
-        fn client_message_read_mode_preserves_message_boundaries() -> Result<()> {
+        fn missing_named_pipe_is_classified_as_daemon_not_running() {
             let unique = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .expect("system time should be after epoch")
                 .as_nanos();
             let pipe_name = encode_wide_null(&format!(
-                r"\\.\pipe\parakit-ipc-test-{}-{unique}",
+                r"\\.\pipe\parakit-ipc-missing-test-{}-{unique}",
                 std::process::id()
             ));
-            let server_handle = unsafe {
-                CreateNamedPipeW(
-                    PCWSTR(pipe_name.as_ptr()),
-                    PIPE_ACCESS_DUPLEX,
-                    PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT,
-                    1,
-                    PIPE_BUFFER_SIZE,
-                    PIPE_BUFFER_SIZE,
-                    IPC_CLIENT_TIMEOUT_MS,
-                    null_mut(),
-                )
-            };
-            assert!(!is_invalid_handle(server_handle));
-            let server = PipeHandle(server_handle);
 
-            let client_handle = unsafe {
-                CreateFileW(
-                    PCWSTR(pipe_name.as_ptr()),
-                    GENERIC_READ | GENERIC_WRITE,
-                    0,
-                    null_mut(),
-                    OPEN_EXISTING,
-                    FILE_ATTRIBUTE_NORMAL,
-                    HANDLE::default(),
-                )
+            let Err(err) = connect_client_pipe(&pipe_name) else {
+                panic!("a nonexistent named pipe should not connect");
             };
-            assert!(!is_invalid_handle(client_handle));
-            let client = PipeHandle(client_handle);
 
-            set_client_message_read_mode(&client)?;
-            connect_server_pipe(&server)?;
+            assert!(err.is::<DaemonNotRunning>(), "unexpected error: {err:#}");
+            assert_eq!(err.to_string(), "daemon is not running");
+        }
+
+        #[test]
+        fn client_message_read_mode_preserves_message_boundaries() -> Result<()> {
+            let (server, client) = connected_test_pipe(false)?;
 
             let payload = b"abcdef";
             write_pipe_message(&server, payload)?;
@@ -1392,21 +1998,68 @@ mod windows_pipe {
         }
 
         #[test]
+        fn pipe_message_at_size_limit_round_trips() -> Result<()> {
+            let (server, client) = connected_test_pipe(true)?;
+            let payload: Vec<u8> = (0..IPC_MAX_MESSAGE_SIZE)
+                .map(|index| (index % 251) as u8)
+                .collect();
+            let expected = payload.clone();
+            let writer = std::thread::spawn(move || write_pipe_message(&server, &payload));
+
+            let received = read_pipe_message(&client)?;
+            writer
+                .join()
+                .expect("Windows pipe writer thread should not panic")?;
+
+            assert_eq!(received, expected);
+            Ok(())
+        }
+
+        #[test]
+        fn pipe_message_larger_than_size_limit_is_rejected() -> Result<()> {
+            let (server, client) = connected_test_pipe(true)?;
+            let payload = vec![b'x'; IPC_MAX_MESSAGE_SIZE + 1];
+            let writer = std::thread::spawn(move || write_pipe_message(&server, &payload));
+
+            let err = read_pipe_message(&client)
+                .expect_err("oversized Windows daemon pipe message should be rejected");
+            drop(client);
+            let _ = writer
+                .join()
+                .expect("Windows pipe writer thread should not panic");
+
+            assert_eq!(
+                err.to_string(),
+                "Windows daemon control message exceeds 64 KiB"
+            );
+            Ok(())
+        }
+
+        #[test]
         fn pipe_message_read_times_out_when_peer_sends_nothing() -> Result<()> {
-            let (server, _client) = connected_overlapped_test_pipe()?;
+            let (server, _client) = connected_test_pipe(true)?;
             let started = std::time::Instant::now();
 
             let err = read_pipe_message(&server)
                 .expect_err("idle Windows daemon pipe read should time out");
 
             assert!(started.elapsed() < Duration::from_secs(2));
-            assert!(format!("{err:#}").contains("timed out after 750ms"));
+            let message = format!("{err:#}");
+            // The overlapped read receives the total deadline's remaining
+            // budget, so setup time can make this 749ms (or slightly less)
+            // rather than the configured 750ms.
+            assert!(
+                message
+                    .starts_with("ReadFile Windows daemon control pipe failed: timed out after ")
+                    && message.ends_with("ms"),
+                "unexpected idle-read failure: {message}"
+            );
             Ok(())
         }
 
         #[test]
         fn pipe_response_remains_readable_after_server_handle_closes() -> Result<()> {
-            let (server, client) = connected_overlapped_test_pipe()?;
+            let (server, client) = connected_test_pipe(true)?;
 
             write_pipe_message(&server, b"ok")?;
             drop(server);
@@ -1415,7 +2068,7 @@ mod windows_pipe {
             Ok(())
         }
 
-        fn connected_overlapped_test_pipe() -> Result<(PipeHandle, PipeHandle)> {
+        fn connected_test_pipe(overlapped: bool) -> Result<(PipeHandle, PipeHandle)> {
             let unique = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .expect("system time should be after epoch")
@@ -1424,11 +2077,12 @@ mod windows_pipe {
                 r"\\.\pipe\parakit-ipc-test-{}-{unique}",
                 std::process::id()
             ));
+            let overlapped_flag = if overlapped { FILE_FLAG_OVERLAPPED } else { 0 };
             let server_handle = unsafe {
                 CreateNamedPipeW(
                     PCWSTR(pipe_name.as_ptr()),
-                    PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED,
-                    PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT,
+                    PIPE_ACCESS_DUPLEX | overlapped_flag,
+                    server_pipe_mode(),
                     1,
                     PIPE_BUFFER_SIZE,
                     PIPE_BUFFER_SIZE,
@@ -1446,7 +2100,7 @@ mod windows_pipe {
                     0,
                     null_mut(),
                     OPEN_EXISTING,
-                    FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OVERLAPPED,
+                    FILE_ATTRIBUTE_NORMAL | overlapped_flag,
                     HANDLE::default(),
                 )
             };
@@ -1460,27 +2114,647 @@ mod windows_pipe {
     }
 }
 
-#[cfg(not(any(unix, target_os = "windows")))]
-fn send_command(_command: IpcCommand) -> Result<IpcResponse> {
-    bail!("local daemon IPC is not implemented on this platform")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    #[cfg(any(unix, target_os = "windows"))]
     #[test]
-    fn shared_state_reports_phase_and_last_transcript_length() {
+    fn daemon_not_running_disposition_covers_every_control_command() {
+        let cases = [
+            (
+                IpcCommand::Status,
+                DaemonNotRunningDisposition::Success("parakit: not running"),
+            ),
+            (
+                IpcCommand::Stop,
+                DaemonNotRunningDisposition::Success("parakit: not running; nothing to stop"),
+            ),
+            (
+                IpcCommand::CopyLast { index: 0 },
+                DaemonNotRunningDisposition::Error(
+                    "daemon is not running; start it with `parakit start` first",
+                ),
+            ),
+            (
+                IpcCommand::History { limit: None },
+                DaemonNotRunningDisposition::Error(
+                    "daemon is not running; start it with `parakit start` first",
+                ),
+            ),
+            (
+                IpcCommand::TestPaste {
+                    text: "test".to_string(),
+                },
+                DaemonNotRunningDisposition::Error(
+                    "daemon is not running; start it with `parakit start` first",
+                ),
+            ),
+        ];
+
+        for (command, expected) in cases {
+            assert_eq!(daemon_not_running_disposition(&command), expected);
+        }
+    }
+
+    #[cfg(any(unix, target_os = "windows"))]
+    #[test]
+    fn ipc_command_response_timeout_matrix() {
+        /// Expected `IpcCommand::response_timeout()` for `command`.
+        ///
+        /// Exhaustive with no wildcard arm: a new `IpcCommand` variant fails
+        /// compilation here until this function states its response-timeout
+        /// budget. This also closes a real coverage gap: `Stop` and
+        /// `History` were never asserted before this matrix.
+        fn expected_response_timeout(command: &IpcCommand) -> Duration {
+            match command {
+                IpcCommand::CopyLast { .. } | IpcCommand::TestPaste { .. } => {
+                    IPC_INSERT_RESPONSE_TIMEOUT
+                }
+                IpcCommand::Status | IpcCommand::Stop | IpcCommand::History { .. } => {
+                    IPC_TRANSPORT_TIMEOUT
+                }
+            }
+        }
+
+        let commands = [
+            IpcCommand::Status,
+            IpcCommand::Stop,
+            IpcCommand::History { limit: None },
+            IpcCommand::CopyLast { index: 0 },
+            IpcCommand::TestPaste {
+                text: "test".to_string(),
+            },
+        ];
+
+        let failures: Vec<String> = commands
+            .iter()
+            .filter_map(|command| {
+                let expected_timeout = expected_response_timeout(command);
+                let actual_timeout = command.response_timeout();
+                if actual_timeout != expected_timeout {
+                    return Some(format!(
+                        "{command:?} timeout: expected {expected_timeout:?}, got {actual_timeout:?}"
+                    ));
+                }
+
+                None
+            })
+            .collect();
+
+        assert!(
+            failures.is_empty(),
+            "{} case(s) failed:\n{}",
+            failures.len(),
+            failures.join("\n")
+        );
+    }
+
+    #[cfg(any(unix, target_os = "windows"))]
+    #[test]
+    fn stop_finalization_waits_for_in_flight_insertion_and_excludes_new_insertions() {
+        use std::sync::mpsc;
+
+        let state = Arc::new(SharedState::new());
+        let (insertion_started_tx, insertion_started_rx) = mpsc::channel();
+        let (release_insertion_tx, release_insertion_rx) = mpsc::channel();
+        let insertion_state = Arc::clone(&state);
+        let insertion = thread::spawn(move || {
+            insertion_state.with_insertion_lock(|| {
+                insertion_started_tx
+                    .send(())
+                    .expect("test should observe in-flight insertion");
+                release_insertion_rx
+                    .recv()
+                    .expect("test should release in-flight insertion");
+            });
+        });
+        insertion_started_rx
+            .recv()
+            .expect("insertion should acquire the lock");
+
+        let (stop_started_tx, stop_started_rx) = mpsc::channel();
+        let (stop_has_lock_tx, stop_has_lock_rx) = mpsc::channel();
+        let (finish_stop_tx, finish_stop_rx) = mpsc::channel();
+        let stop_state = Arc::clone(&state);
+        let stop = thread::spawn(move || {
+            stop_started_tx
+                .send(())
+                .expect("test should observe stop finalization start");
+            finish_stop_after_response(&stop_state, None, || {
+                stop_has_lock_tx
+                    .send(())
+                    .expect("test should observe quiescent stop");
+                finish_stop_rx
+                    .recv()
+                    .expect("test should release stop finalization");
+            });
+        });
+        stop_started_rx
+            .recv()
+            .expect("stop finalization should start");
+        assert!(
+            stop_has_lock_rx
+                .recv_timeout(STOP_RESPONSE_GRACE * 2)
+                .is_err(),
+            "stop must not terminate while an insertion holds the lock"
+        );
+
+        release_insertion_tx
+            .send(())
+            .expect("in-flight insertion should be released");
+        stop_has_lock_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("stop should proceed after the insertion completes");
+
+        let (later_insertion_tx, later_insertion_rx) = mpsc::channel();
+        let later_state = Arc::clone(&state);
+        let later_insertion = thread::spawn(move || {
+            later_state.with_insertion_lock(|| {
+                later_insertion_tx
+                    .send(())
+                    .expect("test should observe later insertion");
+            });
+        });
+        assert!(
+            later_insertion_rx
+                .recv_timeout(STOP_RESPONSE_GRACE * 2)
+                .is_err(),
+            "no insertion may start once stop finalization owns the lock"
+        );
+
+        finish_stop_tx
+            .send(())
+            .expect("stop finalization should be released");
+        stop.join().expect("stop finalization should return");
+        insertion.join().expect("in-flight insertion should return");
+        later_insertion_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("test replacement for process exit should release the lock");
+        later_insertion
+            .join()
+            .expect("later insertion should return");
+    }
+
+    #[cfg(any(unix, target_os = "windows"))]
+    #[test]
+    fn stop_finalization_forces_termination_when_insertion_is_wedged() {
+        use std::sync::mpsc;
+
+        let state = Arc::new(SharedState::new());
+        let (insertion_started_tx, insertion_started_rx) = mpsc::channel();
+        let (release_insertion_tx, release_insertion_rx) = mpsc::channel();
+        let insertion_state = Arc::clone(&state);
+        let insertion = thread::spawn(move || {
+            insertion_state.with_insertion_lock(|| {
+                insertion_started_tx
+                    .send(())
+                    .expect("test should observe in-flight insertion");
+                release_insertion_rx
+                    .recv()
+                    .expect("test should release in-flight insertion");
+            });
+        });
+        insertion_started_rx
+            .recv()
+            .expect("insertion should acquire the lock");
+
+        let started = Instant::now();
+        let terminated =
+            finish_stop_after_response_with_wait(&state, None, Duration::from_millis(20), || true);
+
+        assert!(terminated);
+        assert!(started.elapsed() < Duration::from_secs(1));
+
+        release_insertion_tx
+            .send(())
+            .expect("in-flight insertion should be released");
+        insertion.join().expect("in-flight insertion should return");
+    }
+
+    #[test]
+    fn pipe_message_limit_rejects_oversize_before_buffering_it() {
+        assert!(pipe_message_fits_limit(0, IPC_MAX_MESSAGE_SIZE, true));
+        assert!(!pipe_message_fits_limit(0, IPC_MAX_MESSAGE_SIZE, false));
+        assert!(!pipe_message_fits_limit(IPC_MAX_MESSAGE_SIZE, 1, true));
+        assert!(!pipe_message_fits_limit(usize::MAX, 1, true));
+    }
+
+    #[test]
+    fn maximum_history_response_fits_message_limit() {
+        let worst_case_preview = preview_text(&"\0".repeat(HISTORY_PREVIEW_MAX_CHARS + 1));
+        let entries = (1..=MAX_TRANSCRIPT_HISTORY)
+            .map(|index| HistoryEntry {
+                index,
+                age_secs: u64::MAX,
+                chars: usize::MAX,
+                preview: worst_case_preview.clone(),
+            })
+            .collect();
+        let response = IpcResponse::History { entries };
+        let encoded = serde_json::to_vec(&response).expect("history response should serialize");
+
+        assert!(
+            encoded.len() <= IPC_MAX_MESSAGE_SIZE,
+            "maximum history response is {} bytes, limit is {IPC_MAX_MESSAGE_SIZE}",
+            encoded.len()
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn insertion_response_timeout_covers_queued_macos_paste_transaction() {
+        let acknowledgement_budget = std::cmp::max(
+            crate::daemon::macos::pasteboard::AX_CONFIRM_DEADLINE,
+            crate::daemon::macos::pasteboard::UNVERIFIED_GRACE,
+        );
+        let transaction_wait_budget = crate::daemon::macos::PASTE_MODIFIER_RELEASE_TIMEOUT
+            + crate::daemon::desktop::inject::MACOS_CLIPBOARD_SETTLE_DELAY
+            + acknowledgement_budget;
+        let queued_then_own_transaction_budget = transaction_wait_budget + transaction_wait_budget;
+
+        assert!(
+            IPC_INSERT_RESPONSE_TIMEOUT > queued_then_own_transaction_budget,
+            "IPC insertion response timeout must cover one queued macOS paste transaction \
+             plus the command's own transaction"
+        );
+    }
+
+    #[test]
+    fn shared_state_reports_phase_and_newest_transcript_byte_length() {
         let state = SharedState::new();
         state.set_phase("recording");
-        state.set_last_transcript("hello".to_string());
+        state.remember_transcript("hi".to_string());
+        state.remember_transcript("hello world".to_string());
 
         assert!(matches!(
             state.status(),
             IpcResponse::Status {
                 phase,
-                last_transcript_len: Some(5),
+                last_transcript_len: Some(11),
+                detail: None,
             } if phase == "recording"
+        ));
+    }
+
+    #[test]
+    fn last_transcript_summary_distinguishes_disabled_history() {
+        let disabled = SharedState::with_history_limit(0);
+        disabled.set_info(sample_daemon_info());
+        let IpcResponse::Status {
+            detail: Some(disabled_detail),
+            ..
+        } = disabled.status()
+        else {
+            panic!("expected populated status detail");
+        };
+        assert_eq!(
+            last_transcript_summary(None, Some(&disabled_detail)),
+            "history disabled"
+        );
+
+        let enabled = SharedState::new();
+        enabled.set_info(sample_daemon_info());
+        let IpcResponse::Status {
+            detail: Some(enabled_detail),
+            ..
+        } = enabled.status()
+        else {
+            panic!("expected populated status detail");
+        };
+        assert_eq!(last_transcript_summary(None, Some(&enabled_detail)), "none");
+        assert_eq!(
+            last_transcript_summary(Some(12), Some(&enabled_detail)),
+            "12 bytes"
+        );
+    }
+
+    #[test]
+    fn history_snapshot_matrix() {
+        struct Case {
+            name: &'static str,
+            history_limit: usize,
+            remembered: &'static [&'static str],
+            snapshot_limit: Option<usize>,
+            expect: &'static [(usize, &'static str)],
+        }
+
+        let cases = [
+            Case {
+                name: "evicts oldest beyond history limit",
+                history_limit: 2,
+                remembered: &["first", "second", "third"],
+                snapshot_limit: None,
+                expect: &[(1, "third"), (2, "second")],
+            },
+            Case {
+                name: "history limit zero remembers nothing",
+                history_limit: 0,
+                remembered: &["should not be kept"],
+                snapshot_limit: None,
+                expect: &[],
+            },
+            Case {
+                name: "orders newest first with one-based index",
+                history_limit: DEFAULT_TRANSCRIPT_HISTORY,
+                remembered: &["oldest", "middle", "newest"],
+                snapshot_limit: None,
+                expect: &[(1, "newest"), (2, "middle"), (3, "oldest")],
+            },
+            Case {
+                name: "respects snapshot limit",
+                history_limit: DEFAULT_TRANSCRIPT_HISTORY,
+                remembered: &["one", "two", "three"],
+                snapshot_limit: Some(2),
+                expect: &[(1, "three"), (2, "two")],
+            },
+        ];
+
+        let failures: Vec<String> = cases
+            .iter()
+            .filter_map(|case| {
+                let state = SharedState::with_history_limit(case.history_limit);
+                for text in case.remembered {
+                    state.remember_transcript((*text).to_string());
+                }
+                let entries = state.history_snapshot(case.snapshot_limit);
+                let actual: Vec<(usize, &str)> = entries
+                    .iter()
+                    .map(|entry| (entry.index, entry.preview.as_str()))
+                    .collect();
+                (actual.as_slice() != case.expect).then(|| {
+                    format!(
+                        "{}: expected {:?}, got {:?}",
+                        case.name, case.expect, actual
+                    )
+                })
+            })
+            .collect();
+        assert!(
+            failures.is_empty(),
+            "{} case(s) failed:\n{}",
+            failures.len(),
+            failures.join("\n")
+        );
+    }
+
+    #[cfg(any(unix, target_os = "windows"))]
+    #[test]
+    fn history_ref_label_reproduces_last_transcript_wording_for_index_zero() {
+        // Index 0 must keep the pre-history wording byte-identical, since
+        // `copy-last` with no `N` argument is the common case and existing
+        // docs/scripts quote this exact phrase.
+        assert_eq!(history_ref_label(0), "last transcript");
+        assert_eq!(history_ref_label(1), "transcript 2");
+        assert_eq!(history_ref_label(4), "transcript 5");
+    }
+
+    #[cfg(any(unix, target_os = "windows"))]
+    #[test]
+    fn resolve_transcript_matrix() {
+        struct Case {
+            name: &'static str,
+            /// `None` uses `SharedState::new()`'s default history limit.
+            history_limit: Option<usize>,
+            remembered: &'static [&'static str],
+            index: usize,
+            expect: Result<&'static str, &'static str>,
+        }
+
+        let cases = [
+            Case {
+                name: "history disabled reported first",
+                history_limit: Some(0),
+                remembered: &[],
+                index: 0,
+                expect: Err("transcript history is disabled (daemon.transcript_history = 0)"),
+            },
+            Case {
+                name: "empty history when enabled but unused",
+                history_limit: None,
+                remembered: &[],
+                index: 0,
+                expect: Err("no transcript has been captured in this daemon session"),
+            },
+            Case {
+                name: "out of range index singular",
+                history_limit: None,
+                remembered: &["only one"],
+                index: 1,
+                expect: Err("only 1 transcript remembered in this daemon session"),
+            },
+            Case {
+                name: "out of range index plural",
+                history_limit: None,
+                remembered: &["only one", "second"],
+                index: 5,
+                expect: Err("only 2 transcripts remembered in this daemon session"),
+            },
+            Case {
+                name: "in range index zero returns newest",
+                history_limit: None,
+                remembered: &["oldest", "newest"],
+                index: 0,
+                expect: Ok("newest"),
+            },
+            Case {
+                name: "in range index one returns oldest",
+                history_limit: None,
+                remembered: &["oldest", "newest"],
+                index: 1,
+                expect: Ok("oldest"),
+            },
+        ];
+
+        let failures: Vec<String> = cases
+            .iter()
+            .filter_map(|case| {
+                let state = match case.history_limit {
+                    Some(limit) => SharedState::with_history_limit(limit),
+                    None => SharedState::new(),
+                };
+                for text in case.remembered {
+                    state.remember_transcript((*text).to_string());
+                }
+                let actual = state
+                    .resolve_transcript(case.index)
+                    .map_err(|err| err.to_string());
+                let expect_owned: Result<String, String> =
+                    case.expect.map(str::to_string).map_err(str::to_string);
+                (actual != expect_owned).then(|| {
+                    format!(
+                        "{}: expected {:?}, got {:?}",
+                        case.name, expect_owned, actual
+                    )
+                })
+            })
+            .collect();
+        assert!(
+            failures.is_empty(),
+            "{} case(s) failed:\n{}",
+            failures.len(),
+            failures.join("\n")
+        );
+    }
+
+    #[test]
+    fn preview_text_collapses_whitespace_and_trims() {
+        let collapsed = preview_text("  line one\n  line two\t\tline three  ");
+        assert_eq!(collapsed, "line one line two line three");
+    }
+
+    #[test]
+    fn preview_text_truncates_long_text_on_a_char_boundary() {
+        // 'e' with combining characters would risk a byte-boundary panic if
+        // truncation were byte-based instead of char-based; a plain
+        // multi-byte codepoint repeated past the 72-char cap is enough to
+        // catch that regression.
+        let long = "é".repeat(80);
+
+        let preview = preview_text(&long);
+
+        assert_eq!(preview.chars().count(), 73); // 72 chars + '…'
+        assert!(preview.ends_with('…'));
+        assert!(preview.starts_with(&"é".repeat(72)));
+    }
+
+    fn sample_daemon_info() -> DaemonInfo {
+        DaemonInfo {
+            pid: 4242,
+            model_name: "parakeet-tdt-0.6b-v3-Q8_0.gguf".to_string(),
+            dtype: "Q8_0 (745 MB)".to_string(),
+            mic_summary: "Test Mic, 48000 Hz mono input -> 16000 Hz mono model, F32".to_string(),
+            backend: "CPU".to_string(),
+            device: "cpu".to_string(),
+            threads: 8,
+            paste_mode: "standard",
+            cleaning_summary: "on (12 rules)".to_string(),
+            sounds_on: true,
+            log_summary: Some("jsonl to /home/user/.parakit/logs".to_string()),
+            hotkey_backend_label: Some("auto"),
+        }
+    }
+
+    #[test]
+    fn shared_state_status_is_bare_until_info_is_set() {
+        let state = SharedState::new();
+
+        let IpcResponse::Status { detail, .. } = state.status() else {
+            panic!("expected a Status response");
+        };
+        assert!(detail.is_none());
+    }
+
+    #[test]
+    fn shared_state_set_info_and_record_dictation_populate_status_detail() {
+        let state = SharedState::new();
+        state.set_info(sample_daemon_info());
+        state.record_dictation();
+        state.record_dictation();
+
+        let IpcResponse::Status { detail, .. } = state.status() else {
+            panic!("expected a Status response");
+        };
+        let detail = detail.expect("detail should be set after set_info");
+        assert_eq!(detail.pid, 4242);
+        assert_eq!(detail.dictation_count, 2);
+        assert_eq!(detail.model, "parakeet-tdt-0.6b-v3-Q8_0.gguf");
+        assert_eq!(detail.dtype, "Q8_0 (745 MB)");
+        assert_eq!(detail.backend, "CPU");
+        assert_eq!(detail.device, "cpu");
+        assert_eq!(detail.threads, 8);
+        assert_eq!(detail.paste_mode, "standard");
+        assert!(detail.sounds);
+        assert_eq!(detail.cleaning, "on (12 rules)");
+        assert_eq!(
+            detail.log.as_deref(),
+            Some("jsonl to /home/user/.parakit/logs")
+        );
+        assert_eq!(detail.hotkey_backend.as_deref(), Some("auto"));
+    }
+
+    #[test]
+    fn status_detail_serde_round_trips() {
+        let detail = StatusDetail {
+            pid: 1234,
+            uptime_secs: 5025,
+            dictation_count: 7,
+            mic: "Test Mic".to_string(),
+            model: "model.gguf".to_string(),
+            dtype: "Q8_0".to_string(),
+            device: "cpu".to_string(),
+            backend: "CPU".to_string(),
+            threads: 4,
+            paste_mode: "standard".to_string(),
+            sounds: true,
+            cleaning: "off".to_string(),
+            log: None,
+            hotkey_backend: None,
+            history: "3 of 10".to_string(),
+        };
+        let response = IpcResponse::Status {
+            phase: "idle".to_string(),
+            last_transcript_len: Some(12),
+            detail: Some(Box::new(detail.clone())),
+        };
+
+        let json = serde_json::to_string(&response).expect("status response should serialize");
+        let round_tripped: IpcResponse =
+            serde_json::from_str(&json).expect("status response should deserialize");
+
+        assert!(matches!(
+            round_tripped,
+            IpcResponse::Status {
+                detail: Some(d),
+                ..
+            } if *d == detail
+        ));
+    }
+
+    #[test]
+    fn ipc_command_copy_last_serde_round_trips_with_index() {
+        let command = IpcCommand::CopyLast { index: 1 };
+        let json = serde_json::to_string(&command).expect("copy_last should serialize");
+        assert_eq!(json, r#"{"copy_last":{"index":1}}"#);
+        let round_tripped: IpcCommand =
+            serde_json::from_str(&json).expect("copy_last should deserialize");
+        assert!(matches!(round_tripped, IpcCommand::CopyLast { index: 1 }));
+    }
+
+    #[test]
+    fn ipc_command_history_serde_round_trips_with_and_without_limit() {
+        let command: IpcCommand =
+            serde_json::from_str(r#"{"history":{}}"#).expect("history with no limit should parse");
+        assert!(matches!(command, IpcCommand::History { limit: None }));
+
+        let command = IpcCommand::History { limit: Some(5) };
+        let json = serde_json::to_string(&command).expect("history should serialize");
+        let round_tripped: IpcCommand =
+            serde_json::from_str(&json).expect("history should deserialize");
+        assert!(matches!(
+            round_tripped,
+            IpcCommand::History { limit: Some(5) }
+        ));
+    }
+
+    #[test]
+    fn ipc_response_history_serde_round_trips() {
+        let response = IpcResponse::History {
+            entries: vec![HistoryEntry {
+                index: 1,
+                age_secs: 12,
+                chars: 47,
+                preview: "the quick brown fox".to_string(),
+            }],
+        };
+
+        let json = serde_json::to_string(&response).expect("history response should serialize");
+        let round_tripped: IpcResponse =
+            serde_json::from_str(&json).expect("history response should deserialize");
+
+        assert!(matches!(
+            round_tripped,
+            IpcResponse::History { entries } if entries.len() == 1 && entries[0].preview == "the quick brown fox"
         ));
     }
 
@@ -1511,7 +2785,6 @@ mod tests {
         use super::super::logging::{LogLevel, Logger};
         use std::io::Write as _;
         use std::os::unix::net::UnixStream;
-        use std::time::Instant;
 
         let (mut client, server) = UnixStream::pair().expect("unix stream pair");
         client
@@ -1526,5 +2799,41 @@ mod tests {
         });
         handler.join().expect("handler should return after timeout");
         assert!(started.elapsed() < Duration::from_secs(2));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unix_command_larger_than_size_limit_is_rejected() {
+        use std::io::Write as _;
+        use std::os::unix::net::UnixStream;
+
+        let (mut client, server) = UnixStream::pair().expect("unix stream pair");
+        let mut payload = vec![b'x'; IPC_MAX_MESSAGE_SIZE + 1];
+        payload.push(b'\n');
+        client
+            .write_all(&payload)
+            .expect("oversized command should write");
+
+        let err = read_command(&server).expect_err("oversized Unix command should be rejected");
+
+        assert_eq!(
+            err.to_string(),
+            "Unix daemon control message exceeds 64 KiB"
+        );
+    }
+
+    #[cfg(any(unix, target_os = "windows"))]
+    #[test]
+    fn parse_command_keeps_the_generic_context_for_unrelated_garbage() {
+        let err = parse_command("not json").unwrap_err();
+        assert_eq!(err.to_string(), "invalid control command");
+    }
+
+    #[cfg(any(unix, target_os = "windows"))]
+    #[test]
+    fn parse_command_still_accepts_the_current_wire_format() {
+        let command = parse_command(r#"{"copy_last":{"index":2}}"#)
+            .expect("current copy_last encoding should still parse");
+        assert!(matches!(command, IpcCommand::CopyLast { index: 2 }));
     }
 }

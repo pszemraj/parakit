@@ -12,13 +12,18 @@ use parakit::model;
 use parakit::rules;
 use parakit::warmup;
 use std::ffi::{c_char, c_void, CStr};
+use std::io::Write as _;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crate::cli::{CacheCli, CacheCommand, Cli, Commands};
+use crate::cli::{
+    CacheCli, CacheCommand, Cli, Commands, ConfigCli, ConfigCommand, DoctorCli, RulesArgs,
+    RulesCli, RulesCommand, StartCli,
+};
+use crate::config::{self, ConfigFile};
 use crate::daemon;
 use crate::daemon::audio::AudioCapture;
 #[cfg(not(target_os = "linux"))]
@@ -61,110 +66,203 @@ pub(crate) fn run() -> Result<()> {
     daemon::audio::alsa::install_error_silencer();
 
     let cli = Cli::parse();
+    // Unconditional, CLI-only pass: keeps native ggml log filtering behavior
+    // unchanged for the commands below that must not depend on config
+    // parsing (see the load-order comment above the post-dispatch
+    // `config::load()` call). `doctor`, `rules`, and the daemon bootstrap
+    // path re-run this once config is available so a config
+    // `daemon.verbose = true` also takes effect.
     configure_native_logging(cli.verbose);
-    let log = Arc::new(Logger::new(log_level(&cli)));
-    let notifier = Notifier::new(Arc::clone(&log));
+
+    // `fetch`, `cache`, `config`, `status`, `stop`, `copy-last`, `history`,
+    // and `test-paste` must keep working even when the user's config file is
+    // broken (missing, bad TOML, invalid user rule), so none of these
+    // branches touch `config::load()`. `doctor` and `rules` are the
+    // dispatch-block exceptions: they load config themselves below because
+    // they report/apply the same effective values the daemon would use.
+    match &cli.command {
+        Some(Commands::Fetch(fetch_cli)) => {
+            let source = if fetch_cli.from_source {
+                FetchSource::OfficialNemo {
+                    keep_nemo: fetch_cli.keep_nemo,
+                    keep_f16: fetch_cli.keep_f16,
+                }
+            } else {
+                fetch::source_from_cli(
+                    fetch_cli.source.clone(),
+                    fetch_cli.file.clone(),
+                    fetch_cli.sha256.clone(),
+                )?
+            };
+            fetch::run(FetchOptions {
+                force: fetch_cli.force,
+                quiet: cli.quiet,
+                verbose: cli.verbose,
+                source,
+            })?;
+            Ok(())
+        }
+        Some(Commands::Cache(cache_cli)) => run_cache_command(cache_cli, cli.quiet),
+        Some(Commands::Config(config_cli)) => run_config_command(config_cli, cli.quiet),
+        Some(Commands::Doctor(doctor_cli)) => run_doctor(&cli, doctor_cli),
+        Some(Commands::Rules(rules_cli)) => run_rules_command(&cli, rules_cli),
+        Some(Commands::Status) => {
+            daemon::ipc::run_client(daemon::ipc::IpcCommand::Status, cli.quiet, cli.verbose)
+        }
+        Some(Commands::Stop) => {
+            daemon::ipc::run_client(daemon::ipc::IpcCommand::Stop, cli.quiet, cli.verbose)
+        }
+        Some(Commands::CopyLast(history_ref)) => {
+            let index = wire_history_index(history_ref.index)?;
+            daemon::ipc::run_client(
+                daemon::ipc::IpcCommand::CopyLast { index },
+                cli.quiet,
+                cli.verbose,
+            )
+        }
+        Some(Commands::History(history_cli)) => {
+            let limit = wire_history_limit(history_cli.limit)?;
+            daemon::ipc::run_client(
+                daemon::ipc::IpcCommand::History { limit },
+                cli.quiet,
+                cli.verbose,
+            )
+        }
+        Some(Commands::TestPaste(test_paste)) => daemon::ipc::run_client(
+            daemon::ipc::IpcCommand::TestPaste {
+                text: test_paste.text.clone(),
+            },
+            cli.quiet,
+            cli.verbose,
+        ),
+        Some(Commands::Start(start)) => run_daemon(&cli, start),
+        None => run_daemon(&cli, &StartCli::default()),
+    }
+}
+
+/// Run the `doctor` preflight checks.
+///
+/// Loads config itself (unlike most other subcommands) because it reports
+/// the same effective hotkey/paste-mode values the daemon would use.
+///
+/// # Errors
+///
+/// Returns an error when the config file fails to load or parse.
+fn run_doctor(cli: &Cli, doctor_cli: &DoctorCli) -> Result<()> {
+    let config = config::load()?;
+    configure_native_logging(cli.effective_verbose(&config));
+    let paste_mode = doctor_cli.effective_paste_mode(&config);
     #[cfg(target_os = "linux")]
-    let hotkey_backend = cli.hotkey_backend;
+    let hotkey_backend = doctor_cli.effective_hotkey_backend(&config);
     #[cfg(not(target_os = "linux"))]
     let hotkey_backend = HotkeyBackend::Auto;
-    let paste_mode = cli.effective_paste_mode();
+    let ok = daemon::preflight::print_doctor(
+        cli.quiet,
+        cli.effective_verbose(&config),
+        paste_mode,
+        doctor_cli.deep,
+        hotkey_backend,
+    );
+    if ok {
+        return Ok(());
+    }
+    std::process::exit(1);
+}
 
-    if let Some(command) = &cli.command {
-        match command {
-            Commands::Fetch(fetch_cli) => {
-                fetch::run(FetchOptions {
-                    force: fetch_cli.force,
-                    quiet: cli.quiet,
-                    verbose: cli.verbose,
-                    source: if fetch_cli.from_source {
-                        FetchSource::OfficialNemo {
-                            keep_nemo: fetch_cli.keep_nemo,
-                            keep_f16: fetch_cli.keep_f16,
-                        }
-                    } else {
-                        FetchSource::HostedQ8
-                    },
-                })?;
-                return Ok(());
-            }
-            Commands::Cache(cache_cli) => {
-                run_cache_command(cache_cli, cli.quiet)?;
-                return Ok(());
-            }
-            Commands::Doctor(doctor_cli) => {
-                let ok = daemon::preflight::print_doctor(
-                    cli.quiet,
-                    cli.verbose,
-                    paste_mode,
-                    doctor_cli.deep,
-                    hotkey_backend,
-                );
-                if ok {
-                    return Ok(());
+/// Run `rules list` or `rules test`, defaulting to `list` when no rules
+/// subcommand is given.
+///
+/// Loads config itself (unlike most other subcommands) for the same reason
+/// as `doctor`: it needs `cleaning.profile`/`cleaning.disabled_rules`
+/// fallbacks and `[[rules.user]]` entries.
+///
+/// # Errors
+///
+/// Returns an error when the config file fails to load or parse, or when an
+/// unknown rule name is disabled or a user rule is invalid.
+fn run_rules_command(cli: &Cli, rules_cli: &RulesCli) -> Result<()> {
+    let config = config::load()?;
+    configure_native_logging(cli.effective_verbose(&config));
+    let default_command = RulesCommand::List(RulesArgs::default());
+    match rules_cli.command.as_ref().unwrap_or(&default_command) {
+        RulesCommand::List(args) => {
+            rules::print_rule_list(
+                args.effective_cleaning_profile(&config),
+                args.effective_drops_trailing_period(&config),
+                &args.effective_disabled_rules(&config),
+                &config.rules.user,
+                cli.quiet,
+            )?;
+            Ok(())
+        }
+        RulesCommand::Test { input, args } => {
+            let cleaner = build_rules_cleaner(args, &config)?;
+            let raw = input.as_str();
+            let cleaned = cleaner.clean(raw);
+            if !cli.quiet {
+                println!("Raw:     {}", raw);
+                println!("Clean:   {}", cleaned.text);
+                if let Some(failure) = &cleaned.failure {
+                    eprintln!("parakit: cleaning failed, raw text kept: {failure}");
+                } else if !cleaned.rules_fired.is_empty() {
+                    let fired: Vec<String> = cleaned
+                        .rules_fired
+                        .iter()
+                        .map(|hit| format!("{}x{}", hit.name, hit.matches))
+                        .collect();
+                    println!("Rules:   {}", fired.join(", "));
                 }
-                std::process::exit(1);
             }
-            Commands::Status => {
-                daemon::ipc::run_client(daemon::ipc::IpcCommand::Status, cli.quiet)?;
-                return Ok(());
-            }
-            Commands::Stop => {
-                daemon::ipc::run_client(daemon::ipc::IpcCommand::Stop, cli.quiet)?;
-                return Ok(());
-            }
-            Commands::PasteLast => {
-                daemon::ipc::run_client(daemon::ipc::IpcCommand::PasteLast, cli.quiet)?;
-                return Ok(());
-            }
-            Commands::CopyLast => {
-                daemon::ipc::run_client(daemon::ipc::IpcCommand::CopyLast, cli.quiet)?;
-                return Ok(());
-            }
-            Commands::TestPaste(test_paste) => {
-                daemon::ipc::run_client(
-                    daemon::ipc::IpcCommand::TestPaste {
-                        text: test_paste.text.clone(),
-                    },
-                    cli.quiet,
-                )?;
-                return Ok(());
-            }
+            Ok(())
         }
+    }
+}
+
+/// Run the push-to-talk daemon: the full startup sequence when no
+/// subcommand is given, or when `start` is given explicitly.
+///
+/// # Errors
+///
+/// Returns an error when config loading, model loading, audio setup, or
+/// daemon startup fails.
+fn run_daemon(cli: &Cli, start: &StartCli) -> Result<()> {
+    // The hidden audio simulation is a one-shot worker validation, not a
+    // daemon instance, so it intentionally does not participate in the
+    // singleton lock.
+    let _daemon_lock = if start.simulate_ptt_audio.is_none() {
+        match daemon::preflight::acquire_singleton_lock() {
+            Ok(lock) => Some(lock),
+            Err(err) if err.is::<daemon::preflight::DaemonAlreadyRunning>() => {
+                if !cli.quiet {
+                    println!("parakit: already running");
+                }
+                return Ok(());
+            }
+            Err(err) => return Err(err),
+        }
+    } else {
+        None
+    };
+
+    // Beyond this point: `--simulate-ptt-audio` and full daemon bootstrap.
+    // All of these merge CLI flags with the config file, loaded once here.
+    let config = config::load()?;
+    let verbose = cli.effective_verbose(&config);
+    configure_native_logging(verbose);
+    let log = Arc::new(Logger::new(log_level(cli, &config)));
+    let notifier = Notifier::new(Arc::clone(&log));
+    #[cfg(target_os = "linux")]
+    let hotkey_backend = start.effective_hotkey_backend(&config);
+    #[cfg(not(target_os = "linux"))]
+    let hotkey_backend = HotkeyBackend::Auto;
+    let paste_mode = start.effective_paste_mode(&config);
+
+    if let Some(audio_path) = &start.simulate_ptt_audio {
+        return run_ptt_audio_simulation(cli, start, &config, Arc::clone(&log), audio_path);
     }
 
-    // Special command modes: print rules / test rules.
-    if cli.list_rules {
-        if !cli.quiet {
-            rules::print_rule_list();
-        }
-        return Ok(());
-    }
-    if let Some(input) = &cli.test_rules {
-        let cleaner = rules::build_cleaner(cli.no_cleaning, &cli.disable_rule)?;
-        let raw = input.as_str();
-        let cleaned = cleaner.as_ref().map(|c| c.clean(raw));
-        if !cli.quiet {
-            println!("Raw:     {}", raw);
-            if let Some(cleaned) = cleaned {
-                println!("Clean:   {}", cleaned);
-            } else {
-                println!("Clean:   <cleaning disabled>");
-            }
-        }
-        return Ok(());
-    }
-    if let Some(audio_path) = &cli.simulate_ptt_audio {
-        return run_ptt_audio_simulation(&cli, Arc::clone(&log), audio_path);
-    }
-
-    if let Some(path) = cli.model.as_deref() {
-        if !path.is_file() {
-            return Err(anyhow::anyhow!(
-                "model path is not a file: {}",
-                path.display()
-            ));
-        }
+    if let Some(path) = start.effective_model(&config) {
+        model::validate_model_file(&path)?;
     }
 
     #[cfg(target_os = "linux")]
@@ -175,8 +273,6 @@ pub(crate) fn run() -> Result<()> {
     #[cfg(target_os = "linux")]
     daemon::session::ensure_x11_session_supported()?;
 
-    let _daemon_lock = daemon::preflight::acquire_singleton_lock()?;
-
     daemon::preflight::ensure_hotkey_ready(hotkey_backend)?;
     log.verbose(format!(
         "parakit: hotkey preflight passed ({})",
@@ -184,25 +280,24 @@ pub(crate) fn run() -> Result<()> {
     ));
     daemon::inject::preflight(paste_mode).context("text insertion preflight failed")?;
     log.verbose("parakit: insertion preflight passed");
-    let ipc_state = Arc::new(daemon::ipc::SharedState::new());
+    let ipc_state = Arc::new(daemon::ipc::SharedState::with_history_limit(
+        start.effective_transcript_history(&config),
+    ));
+    let keep_transcript_clipboard = start.effective_keep_transcript_clipboard(&config);
+    let log_dir = start.effective_log_dir(&config);
+    let data_log = log_dir.clone().map(|dir| Arc::new(DataLogger::new(dir)));
     #[cfg(any(unix, target_os = "windows"))]
     let _ipc_server = daemon::ipc::spawn_server(
         Arc::clone(&ipc_state),
         paste_mode,
-        cli.keep_transcript_clipboard,
+        keep_transcript_clipboard,
         Arc::clone(&log),
     )
     .context("start daemon control socket")?;
-    #[cfg(not(any(unix, target_os = "windows")))]
-    log.verbose("parakit: local control socket unavailable on this platform");
 
-    let cleaner = rules::build_cleaner(cli.no_cleaning, &cli.disable_rule)?.map(Arc::new);
-    let data_log = cli
-        .log_dir
-        .clone()
-        .map(|dir| Arc::new(DataLogger::new(dir, cli.log_format)));
-
-    let sounds = Sounds::new(!cli.no_sounds);
+    let cleaner = build_cli_cleaner(start, &config)?.map(Arc::new);
+    let sounds_enabled = start.effective_sounds_enabled(&config);
+    let sounds = Sounds::new(sounds_enabled);
 
     let capture = AudioCapture::open(Arc::clone(&log), notifier.clone())?;
     let audio = capture.handle.clone();
@@ -211,37 +306,76 @@ pub(crate) fn run() -> Result<()> {
         .context("audio manager started without reporting a microphone")?;
     warn_about_bluetooth_mic_if_needed(&log, &mic_info);
 
-    let (model_path, engine) = open_cli_engine(&cli, cli.quiet, &log)?;
+    let OpenedEngine {
+        model_path,
+        engine,
+        device_summary,
+    } = open_cli_engine(start, &config, verbose, cli.quiet, &log)?;
     let model_dtype = model_dtype_label(&model_path);
 
     // Banner.
     let model_name = model_file_name(&model_path);
+    let cleaning_summary = match cleaner.as_deref() {
+        Some(c) => format!(
+            "on ({}, {} rules{})",
+            c.profile(),
+            c.active_rule_count(),
+            if c.drops_trailing_period() {
+                ""
+            } else {
+                ", keeps trailing period"
+            }
+        ),
+        None => "off".to_string(),
+    };
+    let backend_label = engine.backend().to_string();
+    let engine_threads = engine.threads();
     log.banner(BannerInfo {
         model_name: &model_name,
         model_path: &model_path,
         dtype: &model_dtype,
         mic: &mic_info,
-        cleaning: match cleaner.as_deref() {
-            Some(c) => format!("on ({} rules)", c.active_rule_count()),
-            None => "off".to_string(),
-        },
-        sounds: if cli.no_sounds { "off" } else { "on" },
-        transcription_logging: match &cli.log_dir {
-            Some(dir) => format!("{:?} to {}", cli.log_format, dir.display()),
+        cleaning: cleaning_summary.clone(),
+        sounds: if sounds_enabled { "on" } else { "off" },
+        transcription_logging: match &log_dir {
+            Some(dir) => format!("JSONL to {}", dir.display()),
             None => "off".to_string(),
         },
         insertion: format!(
             "batch paste ({}, {})",
             paste_mode.label(),
-            if cli.keep_transcript_clipboard {
+            if keep_transcript_clipboard {
                 "keep transcript clipboard"
             } else {
                 "restore clipboard"
             }
         ),
-        threads: engine.threads(),
-        backend: engine.backend().to_string(),
-        device: resolved_device_summary(engine.device_mode()),
+        threads: engine_threads,
+        backend: backend_label.clone(),
+        device: device_summary.clone(),
+    });
+
+    // Status detail: mirrors the banner fields above so `parakit --verbose
+    // status` can report the same effective values without re-deriving them.
+    #[cfg(target_os = "linux")]
+    let hotkey_backend_label = Some(hotkey_backend.label());
+    #[cfg(not(target_os = "linux"))]
+    let hotkey_backend_label = None;
+    ipc_state.set_info(daemon::ipc::DaemonInfo {
+        pid: std::process::id(),
+        model_name,
+        dtype: model_dtype,
+        mic_summary: mic_info.summary(),
+        backend: backend_label,
+        device: device_summary,
+        threads: engine_threads,
+        paste_mode: paste_mode.label(),
+        cleaning_summary,
+        sounds_on: sounds_enabled,
+        log_summary: log_dir
+            .as_ref()
+            .map(|dir| format!("JSONL to {}", dir.display())),
+        hotkey_backend_label,
     });
 
     // Worker thread takes exclusive ownership of `engine`. `crispasr::Session`
@@ -257,13 +391,14 @@ pub(crate) fn run() -> Result<()> {
         notifier: notifier.clone(),
         state: Arc::clone(&ipc_state),
         paste_mode,
-        keep_transcript_clipboard: cli.keep_transcript_clipboard,
+        keep_transcript_clipboard,
         insert_transcripts: true,
         rx,
     });
     let (hotkey_tx, hotkey_rx) = unbounded();
-    let coordinator = daemon::recording::spawn_recording_coordinator(hotkey_rx, tx, audio)
-        .context("spawn recording coordinator")?;
+    let coordinator =
+        daemon::recording::spawn_recording_coordinator(hotkey_rx, tx, audio, Arc::clone(&log))
+            .context("spawn recording coordinator")?;
 
     // Hotkey grab loop. Blocks forever (until grab returns or process exits).
     ipc_state.set_phase("idle");
@@ -275,6 +410,50 @@ pub(crate) fn run() -> Result<()> {
     let _ = coordinator.join();
     let _ = worker.join();
     Ok(())
+}
+
+/// Convert the CLI's 1-based `copy-last` index into the wire protocol's
+/// 0-based index.
+///
+/// # Returns
+///
+/// `0` (most recent) when `index` is `None`, otherwise `index - 1`.
+///
+/// # Errors
+///
+/// Returns an error when `index` is `Some(0)`: transcript numbering starts
+/// at 1.
+fn wire_history_index(index: Option<usize>) -> Result<usize> {
+    match index {
+        None => Ok(0),
+        Some(0) => anyhow::bail!("transcript index starts at 1; 1 is the most recent"),
+        Some(n) => Ok(n - 1),
+    }
+}
+
+/// Reject `history --limit 0` before it reaches the daemon.
+///
+/// Without this check, `--limit 0` sails through to `history_snapshot` and
+/// comes back as an empty list, which `print_history` then reports as "no
+/// transcripts remembered in this daemon session" — a lie when the daemon
+/// does remember transcripts and the caller simply asked for zero of them.
+///
+/// # Arguments
+///
+/// * `limit` - Value of `--limit` as parsed from the CLI.
+///
+/// # Returns
+///
+/// `limit` unchanged: `None`, or `Some(n)` with `n >= 1`.
+///
+/// # Errors
+///
+/// Returns an error when `limit` is `Some(0)`.
+fn wire_history_limit(limit: Option<usize>) -> Result<Option<usize>> {
+    match limit {
+        Some(0) => anyhow::bail!("history --limit must be at least 1"),
+        other => Ok(other),
+    }
 }
 
 fn configure_native_logging(verbose: bool) {
@@ -350,13 +529,19 @@ fn warn_about_bluetooth_mic_if_needed(log: &Logger, mic_info: &daemon::audio::Mi
     }
 }
 
-fn run_ptt_audio_simulation(cli: &Cli, log: Arc<Logger>, audio_path: &Path) -> Result<()> {
-    let paste_mode = cli.effective_paste_mode();
-    let cleaner = rules::build_cleaner(cli.no_cleaning, &cli.disable_rule)?.map(Arc::new);
-    let data_log = cli
-        .log_dir
-        .clone()
-        .map(|dir| Arc::new(DataLogger::new(dir, cli.log_format)));
+fn run_ptt_audio_simulation(
+    cli: &Cli,
+    start: &StartCli,
+    config: &ConfigFile,
+    log: Arc<Logger>,
+    audio_path: &Path,
+) -> Result<()> {
+    let verbose = cli.effective_verbose(config);
+    let paste_mode = start.effective_paste_mode(config);
+    let cleaner = build_cli_cleaner(start, config)?.map(Arc::new);
+    let data_log = start
+        .effective_log_dir(config)
+        .map(|dir| Arc::new(DataLogger::new(dir)));
     let sounds = Sounds::new(false);
 
     let prepare_started = Instant::now();
@@ -371,7 +556,8 @@ fn run_ptt_audio_simulation(cli: &Cli, log: Arc<Logger>, audio_path: &Path) -> R
         wav.samples.len()
     ));
 
-    let (_model_path, engine) = open_cli_engine(cli, cli.quiet || !cli.verbose, &log)?;
+    let OpenedEngine { engine, .. } =
+        open_cli_engine(start, config, verbose, cli.quiet || !verbose, &log)?;
 
     let msg = format!(
         "parakit: simulating PTT from {} ({audio_secs:.2}s, {source_rate} Hz source)",
@@ -390,7 +576,7 @@ fn run_ptt_audio_simulation(cli: &Cli, log: Arc<Logger>, audio_path: &Path) -> R
         notifier: Notifier::new(Arc::new(Logger::new(LogLevel::Quiet))),
         state: Arc::new(daemon::ipc::SharedState::new()),
         paste_mode,
-        keep_transcript_clipboard: cli.keep_transcript_clipboard,
+        keep_transcript_clipboard: start.effective_keep_transcript_clipboard(config),
         insert_transcripts: false,
         rx,
     });
@@ -413,27 +599,64 @@ fn run_ptt_audio_simulation(cli: &Cli, log: Arc<Logger>, audio_path: &Path) -> R
     Ok(())
 }
 
+fn build_cli_cleaner(start: &StartCli, config: &ConfigFile) -> Result<Option<rules::Cleaner>> {
+    rules::build_cleaner(
+        !start.effective_cleaning_enabled(config),
+        start.effective_cleaning_profile(config),
+        start.effective_drops_trailing_period(config),
+        config.cleaning.number_threshold,
+        &start.effective_disabled_rules(config),
+        &config.rules.user,
+    )
+}
+
+/// Build the cleaner for `rules list`/`rules test`. Unlike [`build_cli_cleaner`],
+/// cleaning is never disabled here: there is no `--cleaning`/`--no-cleaning`
+/// under `rules`, since testing or listing rules with cleaning off is
+/// meaningless.
+fn build_rules_cleaner(args: &RulesArgs, config: &ConfigFile) -> Result<rules::Cleaner> {
+    rules::build_enabled_cleaner(
+        args.effective_cleaning_profile(config),
+        args.effective_drops_trailing_period(config),
+        config.cleaning.number_threshold,
+        &args.effective_disabled_rules(config),
+        &config.rules.user,
+    )
+}
+
 fn model_dtype_label(path: &std::path::Path) -> String {
     let dtype = gguf::dtype_label(path);
     let size = path
         .metadata()
         .ok()
-        .map(|meta| format!(" ({:.0} MB)", meta.len() as f64 / 1_000_000.0))
+        .map(|meta| format!(" ({})", format_file_size(meta.len())))
         .unwrap_or_default();
     format!("{dtype}{size}")
 }
 
-fn open_cli_engine(cli: &Cli, fetch_quiet: bool, log: &Logger) -> Result<(PathBuf, Engine)> {
-    let config = resolve_engine_config(
-        cli,
-        || fetch::ensure_default_model_with_verbosity(fetch_quiet, cli.verbose),
+fn open_cli_engine(
+    start: &StartCli,
+    config: &ConfigFile,
+    verbose: bool,
+    fetch_quiet: bool,
+    log: &Logger,
+) -> Result<OpenedEngine> {
+    let engine_config = resolve_engine_config(
+        start,
+        config,
+        || fetch::ensure_default_model_with_verbosity(fetch_quiet, verbose),
         log,
     )?;
-    let model_path = config.model_path;
+    let model_path = engine_config.model_path;
     let open_started = Instant::now();
-    let engine = open_engine(&model_path, config.threads, config.device_mode, cli.verbose)
-        .with_context(|| format!("could not open model {}", model_path.display()))?;
-    let device_summary = resolved_device_summary(engine.device_mode());
+    let engine = open_engine(
+        &model_path,
+        engine_config.threads,
+        engine_config.device_mode,
+        verbose,
+    )
+    .with_context(|| format!("could not open model {}", model_path.display()))?;
+    let (device_summary, has_gpu) = resolve_runtime_device(engine.device_mode());
     log.verbose(format!(
         "parakit: model opened in {:.0}ms with backend={} threads={} device={}",
         open_started.elapsed().as_secs_f32() * 1000.0,
@@ -443,8 +666,18 @@ fn open_cli_engine(cli: &Cli, fetch_quiet: bool, log: &Logger) -> Result<(PathBu
     ));
     // Warmup is a startup readiness check, not only a latency hint: it runs
     // the same transcribe path the first real dictation would use.
-    warm_up_engine(&engine, log)?;
-    Ok((model_path, engine))
+    warm_up_engine(&engine, has_gpu, log)?;
+    Ok(OpenedEngine {
+        model_path,
+        engine,
+        device_summary,
+    })
+}
+
+struct OpenedEngine {
+    model_path: PathBuf,
+    engine: Engine,
+    device_summary: String,
 }
 
 #[derive(Debug)]
@@ -454,17 +687,23 @@ struct EngineConfig {
     device_mode: DeviceMode,
 }
 
-fn resolve_engine_config<F>(cli: &Cli, fetch_default_model: F, log: &Logger) -> Result<EngineConfig>
+fn resolve_engine_config<F>(
+    start: &StartCli,
+    config: &ConfigFile,
+    fetch_default_model: F,
+    log: &Logger,
+) -> Result<EngineConfig>
 where
     F: FnOnce() -> Result<PathBuf>,
 {
-    resolve_engine_config_with_validator(cli, fetch_default_model, |device_mode| {
+    resolve_engine_config_with_validator(start, config, fetch_default_model, |device_mode| {
         validate_device_request(device_mode, log)
     })
 }
 
 fn resolve_engine_config_with_validator<F, V>(
-    cli: &Cli,
+    start: &StartCli,
+    config: &ConfigFile,
     fetch_default_model: F,
     validate_device: V,
 ) -> Result<EngineConfig>
@@ -472,14 +711,14 @@ where
     F: FnOnce() -> Result<PathBuf>,
     V: FnOnce(DeviceMode) -> Result<()>,
 {
-    let device_mode = cli.device;
+    let device_mode = start.effective_device(config);
     validate_device(device_mode)?;
-    let model_path = match cli.model.as_deref() {
-        Some(path) => path.to_path_buf(),
+    let model_path = match start.effective_model(config) {
+        Some(path) => path,
         None => fetch_default_model()?,
     };
-    let threads = cli
-        .threads
+    let threads = start
+        .effective_threads(config)
         .map(NonZeroUsize::get)
         .unwrap_or_else(default_thread_count);
     Ok(EngineConfig {
@@ -489,10 +728,10 @@ where
     })
 }
 
-fn log_level(cli: &Cli) -> LogLevel {
+fn log_level(cli: &Cli, config: &ConfigFile) -> LogLevel {
     if cli.quiet {
         LogLevel::Quiet
-    } else if cli.verbose {
+    } else if cli.effective_verbose(config) {
         LogLevel::Verbose
     } else {
         LogLevel::Normal
@@ -526,12 +765,10 @@ fn validate_device_request(device_mode: DeviceMode, log: &Logger) -> Result<()> 
     #[cfg(feature = "bundled")]
     {
         if !parakit::gpu::has_gpu_device() {
-            let mut message = "--device gpu requested, but ggml reports no GPU or iGPU devices; run `parakit doctor --verbose` for compute diagnostics".to_string();
+            let message = "--device gpu requested, but ggml reports no GPU or iGPU devices; run `parakit --verbose doctor` for compute diagnostics";
             #[cfg(target_os = "macos")]
-            if let Some(hint) = daemon::macos::no_gpu_hint() {
-                message.push_str("; ");
-                message.push_str(hint);
-            }
+            let message = daemon::macos::no_gpu_hint()
+                .map_or_else(|| message.to_string(), |hint| format!("{message}; {hint}"));
             anyhow::bail!(message);
         }
     }
@@ -547,31 +784,37 @@ fn validate_device_request(device_mode: DeviceMode, log: &Logger) -> Result<()> 
     Ok(())
 }
 
-fn resolved_device_summary(device_mode: DeviceMode) -> String {
+fn resolve_runtime_device(device_mode: DeviceMode) -> (String, bool) {
     if device_mode == DeviceMode::Cpu {
-        return DeviceMode::Cpu.as_str().to_string();
+        return (DeviceMode::Cpu.as_str().to_string(), false);
     }
 
     #[cfg(feature = "bundled")]
     {
-        match parakit::gpu::preferred_gpu_device() {
+        let devices = parakit::gpu::devices();
+        let preferred = parakit::gpu::preferred_gpu_device_in(&devices);
+        let summary = match preferred {
             Some(device) => format!("{} -> {}", device_mode.as_str(), device.diagnostic_line()),
             None if device_mode == DeviceMode::Auto => {
                 "auto -> CPU fallback (no GPU/iGPU visible)".to_string()
             }
             None => "gpu -> unavailable (no GPU/iGPU visible)".to_string(),
-        }
+        };
+        (summary, preferred.is_some())
     }
 
     #[cfg(not(feature = "bundled"))]
     {
-        format!("{} (device probe unavailable)", device_mode.as_str())
+        (
+            format!("{} (device probe unavailable)", device_mode.as_str()),
+            false,
+        )
     }
 }
 
-fn warm_up_engine(engine: &Engine, log: &Logger) -> Result<()> {
+fn warm_up_engine(engine: &Engine, has_gpu: bool, log: &Logger) -> Result<()> {
     let started = Instant::now();
-    let sequence = engine_warmup_seconds(engine);
+    let sequence = engine_warmup_seconds(engine.device_mode(), has_gpu);
     for seconds in sequence {
         let warmup = warmup::synthetic_pcm(*seconds);
         engine
@@ -586,19 +829,12 @@ fn warm_up_engine(engine: &Engine, log: &Logger) -> Result<()> {
     Ok(())
 }
 
-fn engine_warmup_seconds(engine: &Engine) -> &'static [usize] {
-    if engine.device_mode() == DeviceMode::Cpu {
-        return CPU_ENGINE_WARMUP_SECONDS;
+fn engine_warmup_seconds(device_mode: DeviceMode, has_gpu: bool) -> &'static [usize] {
+    if device_mode != DeviceMode::Cpu && has_gpu {
+        GPU_ENGINE_WARMUP_SECONDS
+    } else {
+        CPU_ENGINE_WARMUP_SECONDS
     }
-
-    #[cfg(feature = "bundled")]
-    {
-        if parakit::gpu::has_gpu_device() {
-            return GPU_ENGINE_WARMUP_SECONDS;
-        }
-    }
-
-    CPU_ENGINE_WARMUP_SECONDS
 }
 
 fn format_warmup_sequence(sequence: &[usize]) -> String {
@@ -610,20 +846,23 @@ fn format_warmup_sequence(sequence: &[usize]) -> String {
 }
 
 fn run_cache_command(cache: &CacheCli, quiet: bool) -> Result<()> {
-    if quiet {
-        return Ok(());
-    }
     match cache.command.as_ref().unwrap_or(&CacheCommand::List) {
         CacheCommand::Dir => {
-            println!("{}", model::models_dir()?.display());
+            let dir = model::models_dir()?;
+            if !quiet {
+                println!("{}", dir.display());
+            }
         }
-        CacheCommand::List => print_cache_list()?,
+        CacheCommand::List => print_cache_list(quiet)?,
     }
     Ok(())
 }
 
-fn print_cache_list() -> Result<()> {
+fn print_cache_list(quiet: bool) -> Result<()> {
     let dir = model::models_dir()?;
+    if quiet {
+        return Ok(());
+    }
     println!("parakit cache");
     println!("  dir: {}", dir.display());
     if !dir.is_dir() {
@@ -631,44 +870,78 @@ fn print_cache_list() -> Result<()> {
         return Ok(());
     }
 
-    let mut entries = std::fs::read_dir(&dir)
-        .with_context(|| format!("read cache dir {}", dir.display()))?
-        .filter_map(Result::ok)
-        .map(|entry| entry.path())
-        .filter(|path| path.extension().is_some_and(|ext| ext == "gguf"))
-        .collect::<Vec<_>>();
-    entries.sort();
+    let top_level = list_gguf_files(&dir);
+    let mut extra = list_nested_gguf_files(&dir.join("hub"));
+    extra.extend(list_nested_gguf_files(&dir.join("url")));
+    extra.sort();
 
-    if entries.is_empty() {
+    if top_level.is_empty() && extra.is_empty() {
         println!("  models: none");
         return Ok(());
     }
 
     println!("  models:");
-    for path in entries {
-        let name = model_file_name(&path);
-        let dtype = gguf::dtype_label(&path);
-        let size = path
-            .metadata()
-            .map(|meta| format_file_size(meta.len()))
-            .unwrap_or_else(|_| "unknown size".to_string());
-        let default_marker = if name == model::Q8_FILENAME {
-            " default"
-        } else {
-            ""
-        };
-        let checksum = if name == model::Q8_FILENAME {
-            match parakit::checksum::sha256_file_hex(&path) {
-                Ok(hash) if hash == model::HOSTED_Q8_SHA256 => "sha256 ok".to_string(),
-                Ok(hash) => format!("sha256 mismatch ({hash})"),
-                Err(err) => format!("sha256 unavailable ({err})"),
-            }
-        } else {
-            "sha256 not checked".to_string()
-        };
-        println!("    {name}{default_marker}: {dtype}, {size}, {checksum}");
+    for path in &top_level {
+        print_cache_entry(&dir, path, &model_file_name(path));
+    }
+    for path in &extra {
+        print_cache_entry(&dir, path, &relative_cache_display(&dir, path));
     }
     Ok(())
+}
+
+/// List `.gguf` files directly inside `dir`, sorted.
+fn list_gguf_files(dir: &Path) -> Vec<PathBuf> {
+    let Ok(read) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut entries: Vec<_> = read
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.is_file()
+                && path
+                    .extension()
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("gguf"))
+        })
+        .collect();
+    entries.sort();
+    entries
+}
+
+/// List `.gguf` files one level below `parent` (`parent/*/*.gguf`), sorted.
+/// Used for revision-keyed Hub entries and URL-keyed direct downloads.
+fn list_nested_gguf_files(parent: &Path) -> Vec<PathBuf> {
+    let Ok(read) = std::fs::read_dir(parent) else {
+        return Vec::new();
+    };
+    let mut entries: Vec<_> = read
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.is_dir())
+        .flat_map(|sub| list_gguf_files(&sub))
+        .collect();
+    entries.sort();
+    entries
+}
+
+/// Display a `hub/…`/`url/…` cache entry by its path relative to `dir`,
+/// with `/` separators regardless of platform.
+fn relative_cache_display(dir: &Path, path: &Path) -> String {
+    path.strip_prefix(dir)
+        .map(model::slash_joined)
+        .unwrap_or_else(|_| model_file_name(path))
+}
+
+fn print_cache_entry(dir: &Path, path: &Path, display_name: &str) {
+    let dtype = gguf::dtype_label(path);
+    let size = path
+        .metadata()
+        .map(|meta| format_file_size(meta.len()))
+        .unwrap_or_else(|_| "unknown size".to_string());
+    let is_default_q8 = model_file_name(path) == model::Q8_FILENAME && path.parent() == Some(dir);
+    let default_marker = if is_default_q8 { " default" } else { "" };
+    println!("    {display_name}{default_marker}: {dtype}, {size}");
 }
 
 fn format_file_size(bytes: u64) -> String {
@@ -681,6 +954,221 @@ fn format_file_size(bytes: u64) -> String {
     }
 }
 
+fn run_config_command(config_cli: &ConfigCli, quiet: bool) -> Result<()> {
+    match config_cli.command.as_ref().unwrap_or(&ConfigCommand::Show) {
+        ConfigCommand::Path => {
+            let path = config::config_path()?;
+            if !quiet {
+                println!("{}", path.display());
+            }
+        }
+        ConfigCommand::Init { force } => init_config_file(*force, quiet)?,
+        ConfigCommand::Show => print_config_show(quiet)?,
+        ConfigCommand::Edit => edit_config_file()?,
+    }
+    Ok(())
+}
+
+/// Write the commented config template to the resolved config path.
+///
+/// # Errors
+///
+/// Returns an error if the config directory cannot be created, or if the
+/// file already exists and `force` is `false`.
+fn init_config_file(force: bool, quiet: bool) -> Result<()> {
+    let path = config::config_path()?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create config directory {}", parent.display()))?;
+    }
+
+    let mut open_options = std::fs::OpenOptions::new();
+    open_options.write(true);
+    if force {
+        open_options.create(true).truncate(true);
+    } else {
+        open_options.create_new(true);
+    }
+    let mut file = open_options.open(&path).with_context(|| {
+        format!(
+            "failed to create config file {} (use --force to overwrite an existing file)",
+            path.display()
+        )
+    })?;
+    file.write_all(config::TEMPLATE.as_bytes())
+        .with_context(|| format!("failed to write config file {}", path.display()))?;
+
+    if !quiet {
+        println!("wrote {}", path.display());
+    }
+    Ok(())
+}
+
+/// Print the resolved config path and effective merged values.
+///
+/// # Errors
+///
+/// Returns an error if the config path cannot be resolved or the config
+/// file exists but fails to parse or validate.
+fn print_config_show(quiet: bool) -> Result<()> {
+    let path = config::config_path()?;
+    let config = config::load()?;
+    // Quiet suppresses the report, not path resolution or config validation.
+    if quiet {
+        return Ok(());
+    }
+    let start = StartCli::default();
+
+    println!("parakit config");
+    println!("  path: {}", path.display());
+    println!("  exists: {}", path.is_file());
+    println!("  daemon:");
+    println!(
+        "    model: {}",
+        start
+            .effective_model(&config)
+            .as_ref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "(default: hosted Q8_0)".to_string())
+    );
+    println!(
+        "    device: {}",
+        if config.daemon.device.is_some() {
+            start.effective_device(&config).as_str().to_string()
+        } else {
+            format!("(default: {})", start.effective_device(&config).as_str())
+        }
+    );
+    println!(
+        "    threads: {}",
+        start
+            .effective_threads(&config)
+            .map(|t| t.to_string())
+            .unwrap_or_else(|| "(default: auto-detected)".to_string())
+    );
+    println!(
+        "    paste_mode: {}",
+        if config.daemon.paste_mode.is_some() {
+            start.effective_paste_mode(&config).label().to_string()
+        } else {
+            "(default: platform)".to_string()
+        }
+    );
+    println!(
+        "    keep_transcript_clipboard: {}",
+        start.effective_keep_transcript_clipboard(&config)
+    );
+    println!("    sounds: {}", start.effective_sounds_enabled(&config));
+    println!("    verbose: {}", config.daemon.verbose.unwrap_or(false));
+    println!(
+        "    transcript_history: {}",
+        config
+            .daemon
+            .transcript_history
+            .map(|n| n.to_string())
+            .unwrap_or_else(|| format!(
+                "(default: {})",
+                start.effective_transcript_history(&config)
+            ))
+    );
+    println!("  cleaning:");
+    println!("    enabled: {}", start.effective_cleaning_enabled(&config));
+    println!("    profile: {}", start.effective_cleaning_profile(&config));
+    println!(
+        "    keep_trailing_period: {}",
+        !start.effective_drops_trailing_period(&config)
+    );
+    println!(
+        "    number_threshold: {}",
+        config
+            .cleaning
+            .number_threshold
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| format!("(default: {})", rules::DEFAULT_NUMBER_THRESHOLD))
+    );
+    println!("    disabled_rules: {:?}", config.cleaning.disabled_rules);
+    println!("  logging:");
+    println!(
+        "    dir: {}",
+        config
+            .logging
+            .dir
+            .as_ref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "(disabled)".to_string())
+    );
+    #[cfg(target_os = "linux")]
+    {
+        println!("  hotkey:");
+        println!(
+            "    backend: {}",
+            config
+                .hotkey
+                .backend
+                .map(|b| b.label().to_string())
+                .unwrap_or_else(|| "(default: auto)".to_string())
+        );
+    }
+    println!("  rules:");
+    println!("    user rules: {}", config.rules.user.len());
+    for user_rule in &config.rules.user {
+        println!("      {} ({})", user_rule.name, user_rule.position.as_str());
+    }
+    Ok(())
+}
+
+/// Open the config file in `$VISUAL` or `$EDITOR`, creating it from the
+/// template first if it does not exist yet.
+///
+/// # Errors
+///
+/// Returns an error if the config path cannot be resolved, the template
+/// cannot be written when the file is missing, neither `$VISUAL` nor
+/// `$EDITOR` is set, the editor cannot be launched, or the editor exits
+/// with a non-zero status.
+fn edit_config_file() -> Result<()> {
+    let path = config::config_path()?;
+    if !path.is_file() {
+        init_config_file(false, true)?;
+    }
+
+    let visual = std::env::var("VISUAL").ok();
+    let fallback = std::env::var("EDITOR").ok();
+    let editor = configured_editor(visual.as_deref(), fallback.as_deref()).ok_or_else(|| {
+        anyhow::anyhow!(
+            "no editor configured: set $VISUAL or $EDITOR, or edit {} directly",
+            path.display()
+        )
+    })?;
+    let (program, arguments) = parse_editor_command(editor)?;
+
+    let status = std::process::Command::new(&program)
+        .args(arguments)
+        .arg(&path)
+        .status()
+        .with_context(|| format!("failed to launch editor command '{editor}'"))?;
+    if !status.success() {
+        anyhow::bail!("editor command '{editor}' exited with {status}");
+    }
+    Ok(())
+}
+
+fn configured_editor<'a>(visual: Option<&'a str>, fallback: Option<&'a str>) -> Option<&'a str> {
+    visual
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| fallback.filter(|value| !value.trim().is_empty()))
+}
+
+fn parse_editor_command(editor: &str) -> Result<(String, Vec<String>)> {
+    let mut words = shlex::split(editor)
+        .ok_or_else(|| anyhow::anyhow!("invalid editor command '{editor}': unmatched quote"))?;
+    if words.first().is_none_or(String::is_empty) {
+        anyhow::bail!("invalid editor command '{editor}': missing executable");
+    }
+    let program = words.remove(0);
+    Ok((program, words))
+}
+
 #[cfg(test)]
 mod app_tests {
     use super::*;
@@ -690,12 +1178,60 @@ mod app_tests {
     const GGML_LOG_LEVEL_ERROR: i32 = 4;
 
     #[test]
-    fn gpu_warmup_policy_is_realistic_not_worst_case() {
-        assert_eq!(crate::daemon::recording::MAX_UTTERANCE_SECONDS, 270);
-        assert_eq!(GPU_ENGINE_WARMUP_SECONDS, &[5, 30]);
-        assert!(GPU_ENGINE_WARMUP_SECONDS
-            .iter()
-            .all(|seconds| *seconds < crate::daemon::recording::MAX_UTTERANCE_SECONDS as usize));
+    fn editor_command_prefers_visual_and_preserves_arguments() -> Result<()> {
+        let editor = configured_editor(
+            Some(r#""Visual Studio Code" --wait --reuse-window"#),
+            Some("vim"),
+        )
+        .expect("VISUAL should take precedence");
+
+        let (program, arguments) = parse_editor_command(editor)?;
+
+        assert_eq!(program, "Visual Studio Code");
+        assert_eq!(arguments, ["--wait", "--reuse-window"]);
+        Ok(())
+    }
+
+    #[test]
+    fn editor_command_preserves_quoted_windows_paths() -> Result<()> {
+        let (program, arguments) =
+            parse_editor_command(r#""C:\Program Files\Editor\editor.exe" --wait"#)?;
+
+        assert_eq!(program, r"C:\Program Files\Editor\editor.exe");
+        assert_eq!(arguments, ["--wait"]);
+        Ok(())
+    }
+
+    #[test]
+    fn whitespace_only_visual_falls_back_to_editor() {
+        assert_eq!(
+            configured_editor(Some(" \t "), Some("vim -f")),
+            Some("vim -f")
+        );
+    }
+
+    #[test]
+    fn malformed_editor_command_is_rejected() {
+        let err = parse_editor_command(r#""unterminated"#)
+            .expect_err("an unmatched quote should be rejected");
+
+        assert!(format!("{err:#}").contains("unmatched quote"));
+    }
+
+    #[test]
+    fn warmup_policy_uses_gpu_sequence_only_for_a_visible_gpu() {
+        assert_eq!(
+            engine_warmup_seconds(DeviceMode::Auto, true),
+            GPU_ENGINE_WARMUP_SECONDS
+        );
+        assert_eq!(
+            engine_warmup_seconds(DeviceMode::Gpu, false),
+            CPU_ENGINE_WARMUP_SECONDS
+        );
+        assert_eq!(
+            engine_warmup_seconds(DeviceMode::Cpu, true),
+            CPU_ENGINE_WARMUP_SECONDS
+        );
     }
 
     #[test]
@@ -704,89 +1240,139 @@ mod app_tests {
     }
 
     #[test]
+    fn file_size_format_scales_units() {
+        assert_eq!(format_file_size(999_000), "999 KB");
+        assert_eq!(format_file_size(999_000_000), "999 MB");
+        assert_eq!(format_file_size(1_500_000_000), "1.50 GB");
+    }
+
+    #[test]
     fn cpu_device_summary_is_plain() {
-        assert_eq!(resolved_device_summary(DeviceMode::Cpu), "cpu");
+        let (summary, has_gpu) = resolve_runtime_device(DeviceMode::Cpu);
+        assert_eq!(summary, "cpu");
+        assert!(!has_gpu);
     }
 
-    #[test]
-    fn native_log_filter_suppresses_info_and_debug_without_verbose() {
-        assert_eq!(
-            native_log_decision(GGML_LOG_LEVEL_DEBUG, GGML_LOG_LEVEL_WARN, true),
-            NativeLogDecision {
+    /// One [`native_log_decision`] input/output pair.
+    struct NativeLogCase {
+        label: &'static str,
+        level: i32,
+        min_level: i32,
+        last_allowed: bool,
+        expect: NativeLogDecision,
+    }
+
+    /// The 8 assertion points from the four tests this table replaces:
+    /// suppressing INFO/DEBUG without `--verbose`, keeping WARN/ERROR without
+    /// `--verbose`, passing everything with `--verbose`, and CONT following
+    /// whatever `last_allowed` was.
+    const NATIVE_LOG_CASES: &[NativeLogCase] = &[
+        NativeLogCase {
+            label: "debug suppressed without verbose",
+            level: GGML_LOG_LEVEL_DEBUG,
+            min_level: GGML_LOG_LEVEL_WARN,
+            last_allowed: true,
+            expect: NativeLogDecision {
                 allowed: false,
                 next_last_allowed: Some(false),
-            }
-        );
-        assert_eq!(
-            native_log_decision(GGML_LOG_LEVEL_INFO, GGML_LOG_LEVEL_WARN, true),
-            NativeLogDecision {
+            },
+        },
+        NativeLogCase {
+            label: "info suppressed without verbose",
+            level: GGML_LOG_LEVEL_INFO,
+            min_level: GGML_LOG_LEVEL_WARN,
+            last_allowed: true,
+            expect: NativeLogDecision {
                 allowed: false,
                 next_last_allowed: Some(false),
-            }
-        );
-    }
-
-    #[test]
-    fn native_log_filter_keeps_warnings_and_errors_without_verbose() {
-        assert_eq!(
-            native_log_decision(GGML_LOG_LEVEL_WARN, GGML_LOG_LEVEL_WARN, false),
-            NativeLogDecision {
+            },
+        },
+        NativeLogCase {
+            label: "warn kept without verbose",
+            level: GGML_LOG_LEVEL_WARN,
+            min_level: GGML_LOG_LEVEL_WARN,
+            last_allowed: false,
+            expect: NativeLogDecision {
                 allowed: true,
                 next_last_allowed: Some(true),
-            }
-        );
-        assert_eq!(
-            native_log_decision(GGML_LOG_LEVEL_ERROR, GGML_LOG_LEVEL_WARN, false),
-            NativeLogDecision {
+            },
+        },
+        NativeLogCase {
+            label: "error kept without verbose",
+            level: GGML_LOG_LEVEL_ERROR,
+            min_level: GGML_LOG_LEVEL_WARN,
+            last_allowed: false,
+            expect: NativeLogDecision {
                 allowed: true,
                 next_last_allowed: Some(true),
-            }
-        );
-    }
-
-    #[test]
-    fn native_log_filter_passes_everything_with_verbose() {
-        assert_eq!(
-            native_log_decision(GGML_LOG_LEVEL_DEBUG, GGML_LOG_LEVEL_NONE, false),
-            NativeLogDecision {
+            },
+        },
+        NativeLogCase {
+            label: "debug passes with verbose",
+            level: GGML_LOG_LEVEL_DEBUG,
+            min_level: GGML_LOG_LEVEL_NONE,
+            last_allowed: false,
+            expect: NativeLogDecision {
                 allowed: true,
                 next_last_allowed: Some(true),
-            }
-        );
-        assert_eq!(
-            native_log_decision(GGML_LOG_LEVEL_INFO, GGML_LOG_LEVEL_NONE, false),
-            NativeLogDecision {
+            },
+        },
+        NativeLogCase {
+            label: "info passes with verbose",
+            level: GGML_LOG_LEVEL_INFO,
+            min_level: GGML_LOG_LEVEL_NONE,
+            last_allowed: false,
+            expect: NativeLogDecision {
                 allowed: true,
                 next_last_allowed: Some(true),
-            }
-        );
-    }
-
-    #[test]
-    fn native_log_continuation_follows_previous_allowed_record() {
-        assert_eq!(
-            native_log_decision(GGML_LOG_LEVEL_CONT, GGML_LOG_LEVEL_WARN, false),
-            NativeLogDecision {
+            },
+        },
+        NativeLogCase {
+            label: "continuation follows a previously disallowed record",
+            level: GGML_LOG_LEVEL_CONT,
+            min_level: GGML_LOG_LEVEL_WARN,
+            last_allowed: false,
+            expect: NativeLogDecision {
                 allowed: false,
                 next_last_allowed: None,
-            }
-        );
-        assert_eq!(
-            native_log_decision(GGML_LOG_LEVEL_CONT, GGML_LOG_LEVEL_WARN, true),
-            NativeLogDecision {
+            },
+        },
+        NativeLogCase {
+            label: "continuation follows a previously allowed record",
+            level: GGML_LOG_LEVEL_CONT,
+            min_level: GGML_LOG_LEVEL_WARN,
+            last_allowed: true,
+            expect: NativeLogDecision {
                 allowed: true,
                 next_last_allowed: None,
-            }
-        );
+            },
+        },
+    ];
+
+    #[test]
+    fn native_log_decision_matrix() {
+        for case in NATIVE_LOG_CASES {
+            assert_eq!(
+                native_log_decision(case.level, case.min_level, case.last_allowed),
+                case.expect,
+                "{}",
+                case.label
+            );
+        }
     }
 
     #[test]
     fn explicit_gpu_validation_runs_before_default_model_fetch() {
-        let cli = Cli::parse_from(["parakit", "--device", "gpu"]);
+        let start = match Cli::parse_from(["parakit", "start", "--device", "gpu"]).command {
+            Some(Commands::Start(start)) => start,
+            other => panic!("expected Commands::Start, got {other:?}"),
+        };
+        let config = ConfigFile::default();
         let fetched_default = std::cell::Cell::new(false);
 
         let err = resolve_engine_config_with_validator(
-            &cli,
+            &start,
+            &config,
             || {
                 fetched_default.set(true);
                 Ok(PathBuf::from("target/tmp/default-model.gguf"))
@@ -800,5 +1386,19 @@ mod app_tests {
 
         assert_eq!(err.to_string(), "gpu unavailable");
         assert!(!fetched_default.get());
+    }
+
+    #[test]
+    fn wire_history_limit_rejects_zero_but_passes_through_none_and_positive_values() {
+        // `history --limit 0` must be rejected here, not forwarded to the
+        // daemon: an empty result for `limit: Some(0)` would make
+        // `print_history` claim history is empty even when transcripts are
+        // remembered, the same lie `ensure_history_enabled` exists to avoid.
+        assert_eq!(
+            wire_history_limit(Some(0)).unwrap_err().to_string(),
+            "history --limit must be at least 1"
+        );
+        assert_eq!(wire_history_limit(None).unwrap(), None);
+        assert_eq!(wire_history_limit(Some(5)).unwrap(), Some(5));
     }
 }

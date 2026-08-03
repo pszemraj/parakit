@@ -31,9 +31,11 @@ pub(crate) use desktop::{hotkey, inject};
 
 #[cfg(target_os = "linux")]
 /// Re-export Linux desktop/session helpers.
-pub(crate) use desktop::{session, wsl, x11};
+pub(crate) use desktop::{session, wsl};
+
+#[cfg(all(target_os = "linux", test))]
+pub(crate) use desktop::x11;
 
 #[cfg(target_os = "windows")]
-#[allow(unused_imports)]
 /// Re-export Windows desktop integration helpers.
-pub(crate) use desktop::{windows_focus, windows_input, windows_paste_smoke, windows_security};
+pub(crate) use desktop::{windows_input, windows_security};

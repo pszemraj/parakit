@@ -1,6 +1,6 @@
 [package]
 name = "parakit"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 rust-version = "1.87"
 description = "Push-to-talk desktop dictation daemon backed by NVIDIA Parakeet through CrispASR."
@@ -20,6 +20,13 @@ required-features = ["daemon"]
 [[example]]
 name = "transcribe-file"
 path = "examples/transcribe_file.rs"
+test = true
+
+# Replays the cleaning pipeline over historical JSONL dictation logs. Needs no
+# speech model, audio device, or desktop feature.
+[[example]]
+name = "audit-cleaning"
+path = "examples/audit_cleaning.rs"
 
 [dependencies]
 # CLI parsing
@@ -57,8 +64,11 @@ enigo = { version = "0.2", optional = true }
 # Audio cues (start/stop/error tones, generated programmatically)
 rodio = { version = "0.19", default-features = false, features = ["wav"], optional = true }
 
-# Text cleaning rules
+# Text cleaning rules. Keep most passes on the linear-time engine; use
+# fancy-regex only for bounded backreference-based stutter consolidation.
 regex = "1.10"
+fancy-regex = { version = "0.18", default-features = false, features = ["std", "unicode", "perf"] }
+text2num = "2.7.0"
 
 # Transcription logging
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde", "std"] }
@@ -70,6 +80,12 @@ serde_json = "1"
 # inspection and proxy policy without disabling certificate validation.
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls-native-roots", "system-proxy"] }
 sha2 = "0.10"
+
+# User config file (config.toml)
+toml = "0.8"
+
+# Parse `$VISUAL`/`$EDITOR` command lines without invoking a shell.
+shlex = "1.3"
 
 # Error handling
 anyhow = "1.0"
@@ -107,9 +123,17 @@ windows = { version = "0.62.2", features = [
 [target.'cfg(target_os = "macos")'.dependencies]
 # The objc2 framework crates enable large generated API surfaces by default.
 # Keep only the AppKit/Foundation items parakit calls from the CLI daemon.
+# NSPasteboard is used by the production clipboard-restore path so saved HTML
+# can be written back verbatim rather than receiving arboard's fragment
+# wrapper. NSApplication/NSEvent/NSGraphics/NSResponder/NSText/NSTextView/
+# NSView/NSWindow (and Foundation's NSDate/NSRunLoop) are additionally needed
+# only by the `doctor --deep` real-paste-transaction diagnostic harness
+# (`daemon::macos::diagnostics`), which builds a throwaway probe window/text
+# view, drives a manual AppKit event pump, and pastes a sentinel through the
+# production clipboard-swap transaction.
 objc2 = { version = "0.6.4", default-features = false }
-objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSRunningApplication", "NSWorkspace"] }
-objc2-foundation = { version = "0.3.2", default-features = false, features = ["NSString"] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSApplication", "NSEvent", "NSGraphics", "NSMenu", "NSMenuItem", "NSPasteboard", "NSResponder", "NSRunningApplication", "NSText", "NSTextView", "NSView", "NSWindow", "NSWorkspace"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["NSDate", "NSGeometry", "NSObjCRuntime", "NSRunLoop", "NSString"] }
 
 [features]
 default = ["bundled", "daemon"]

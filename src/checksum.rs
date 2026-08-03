@@ -1,4 +1,5 @@
-//! Small checksum helpers shared by fetch and cache inspection.
+//! Small digest helpers shared by explicit fetch verification, cache keys,
+//! and cleaning-ruleset fingerprints.
 
 use anyhow::{Context, Result};
 use sha2::{Digest, Sha256};
@@ -37,6 +38,23 @@ pub fn sha256_file_hex(path: &Path) -> Result<String> {
     Ok(hex_digest(&hasher.finalize()))
 }
 
+/// Return whether `s` is a well-formed SHA256 hex digest: exactly 64
+/// hexadecimal characters (case-insensitive).
+///
+/// Used by the CLI `--sha256` value parser before an explicitly requested
+/// download verification.
+///
+/// # Arguments
+///
+/// * `s` - Candidate digest string.
+///
+/// # Returns
+///
+/// `true` when `s` is 64 hex characters.
+pub fn is_sha256_hex(s: &str) -> bool {
+    s.len() == 64 && s.chars().all(|c| c.is_ascii_hexdigit())
+}
+
 /// Return bytes as lowercase hexadecimal.
 ///
 /// # Arguments
@@ -50,7 +68,7 @@ pub fn sha256_file_hex(path: &Path) -> Result<String> {
 /// # Panics
 ///
 /// Does not panic.
-fn hex_digest(bytes: &[u8]) -> String {
+pub(crate) fn hex_digest(bytes: &[u8]) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut out = String::with_capacity(bytes.len() * 2);
     for byte in bytes {

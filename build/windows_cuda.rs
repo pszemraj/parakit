@@ -109,17 +109,27 @@ pub(crate) fn is_cuda_external_dll_name(file_name: &str) -> bool {
             .any(|prefix| lower.starts_with(prefix))
 }
 
-/// Return a readable list of candidate source directories.
+/// Remove external CUDA runtime DLLs from a reused bundle staging directory.
 ///
 /// # Returns
 ///
-/// Candidate paths joined for use in diagnostics.
-pub(crate) fn display_paths(paths: &[PathBuf]) -> String {
-    paths
-        .iter()
-        .map(|path| path.display().to_string())
-        .collect::<Vec<_>>()
-        .join(", ")
+/// `Ok(())` after all matching DLLs have been removed.
+///
+/// # Errors
+///
+/// Returns an error when the directory cannot be read or a matching DLL cannot
+/// be removed.
+pub(crate) fn remove_cuda_external_dlls(dir: &Path) -> std::io::Result<()> {
+    for entry in fs::read_dir(dir)? {
+        let path = entry?.path();
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if path.is_file() && is_cuda_external_dll_name(name) {
+            fs::remove_file(path)?;
+        }
+    }
+    Ok(())
 }
 
 fn sort_cuda_runtime_dll_names(names: &mut [String]) {

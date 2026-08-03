@@ -5,7 +5,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 use x11rb::rust_connection::RustConnection;
 
-use super::{ClipboardPolicy, FocusSnapshot, Injector, PasteMode};
+use super::{ClipboardPolicy, FocusSnapshot, FocusVerification, Injector, PasteMode};
 
 /// Verify that the configured X11 paste chord reaches a temporary focused window.
 ///
@@ -80,7 +80,12 @@ pub(super) fn linux_x11_paste_smoke_test(mode: PasteMode) -> Result<()> {
                 "parakit smoke test",
                 mode,
                 ClipboardPolicy::RestorePrevious,
-                || focus.matches_current(),
+                Some(&focus),
+                || {
+                    focus
+                        .verify_current()
+                        .map(|verification| verification == FocusVerification::Matched)
+                },
             )
             .context("configured guarded paste failed during smoke test")?;
         linux_wait_for_v_key_events(&conn, window, v_keycode)

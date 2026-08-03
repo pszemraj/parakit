@@ -13,10 +13,6 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYBD_EVENT_FLAGS, KEYEVENTF_KEYUP, MOD_CONTROL,
     MOD_NOREPEAT, VIRTUAL_KEY, VK_CONTROL, VK_MENU, VK_SHIFT, VK_SPACE,
 };
-#[cfg(test)]
-use windows::Win32::UI::Input::KeyboardAndMouse::{
-    VK_LCONTROL, VK_LMENU, VK_LSHIFT, VK_LWIN, VK_RCONTROL, VK_RMENU, VK_RSHIFT, VK_RWIN,
-};
 use windows::Win32::UI::WindowsAndMessaging::{GetMessageW, MSG, WM_HOTKEY};
 
 use crate::daemon::recording::HotkeyTransition;
@@ -26,21 +22,6 @@ const PARAKIT_HOTKEY_PROBE_ID: i32 = PARAKIT_HOTKEY_ID + 1;
 const KEY_DOWN_MASK: i16 = i16::MIN;
 const HOTKEY_RELEASE_POLL: Duration = Duration::from_millis(10);
 const VK_V: VIRTUAL_KEY = VIRTUAL_KEY(0x56);
-
-/// Run the native Windows registered-hotkey backend forever.
-///
-/// # Arguments
-///
-/// * `tx` - Coordinator channel used to post logical hotkey transitions.
-pub(crate) fn run_registered_hotkey_loop_or_exit(tx: Sender<HotkeyTransition>) {
-    if let Err(err) = run_registered_hotkey_loop(tx) {
-        eprintln!(
-            "parakit: Windows registered hotkey failed: {err:#}\n{}",
-            windows_hotkey_failure_help()
-        );
-        std::process::exit(2);
-    }
-}
 
 /// Probe whether Ctrl+Space can be registered by this process.
 ///
@@ -59,7 +40,18 @@ pub(crate) fn registered_hotkey_probe() -> Result<()> {
     Ok(())
 }
 
-fn run_registered_hotkey_loop(tx: Sender<HotkeyTransition>) -> Result<()> {
+/// Run the native Windows registered-hotkey backend until the message loop
+/// ends.
+///
+/// # Returns
+///
+/// `Ok(())` when Windows ends the thread's message loop.
+///
+/// # Errors
+///
+/// Returns an error when registration, message polling, or coordinator
+/// delivery fails.
+pub(super) fn run_registered_hotkey_loop(tx: Sender<HotkeyTransition>) -> Result<()> {
     register_ctrl_space(PARAKIT_HOTKEY_ID)?;
     let _registration = RegisteredHotkeyGuard {
         id: PARAKIT_HOTKEY_ID,
@@ -299,15 +291,6 @@ fn send_inputs_with<S: InputSender>(sender: &mut S, inputs: &[INPUT], label: &st
     Ok(())
 }
 
-/// Return the standard Windows hotkey failure help text.
-///
-/// # Returns
-///
-/// A static diagnostic string for startup failures.
-pub(crate) fn windows_hotkey_failure_help() -> &'static str {
-    "Windows hotkey capture uses RegisterHotKey(Ctrl+Space). If registration fails, another application probably owns Ctrl+Space. Close the conflicting application or add a configurable hotkey before using this backend."
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -364,17 +347,6 @@ mod tests {
                 (VK_CONTROL.0, true),
             ],
         );
-        assert!(!events.iter().any(|event| {
-            event.vk == VK_MENU
-                || event.vk == VK_LMENU
-                || event.vk == VK_RMENU
-                || event.vk == VK_LWIN
-                || event.vk == VK_RWIN
-                || event.vk == VK_LCONTROL
-                || event.vk == VK_RCONTROL
-                || event.vk == VK_LSHIFT
-                || event.vk == VK_RSHIFT
-        }));
     }
 
     #[test]

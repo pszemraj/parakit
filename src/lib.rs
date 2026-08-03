@@ -4,7 +4,7 @@
 pub mod audio_file;
 /// Build-time CrispASR and ggml diagnostics.
 pub mod build_info;
-/// File checksum helpers.
+/// Digest helpers for explicit verification, cache keys, and fingerprints.
 pub mod checksum;
 /// Shared audio and model constants.
 pub mod constants;

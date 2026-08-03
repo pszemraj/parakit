@@ -20,6 +20,7 @@
 
 mod app;
 mod cli;
+mod config;
 mod daemon;
 #[cfg(test)]
 mod test_support;

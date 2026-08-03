@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
-use windows::core::{w, Error as WinError};
+use windows::core::{w, Error as WinError, PCWSTR};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::DataExchange::{
     AddClipboardFormatListener, GetClipboardSequenceNumber, RemoveClipboardFormatListener,
@@ -17,6 +17,7 @@ use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, GetMessageW, PostMessageW, RegisterClassW,
     HWND_MESSAGE, MSG, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_CLIPBOARDUPDATE, WNDCLASSW,
+    WNDCLASS_STYLES,
 };
 
 const WM_PARAKIT_CLIPBOARD_LISTENER_STOP: u32 = WM_APP + 0x504b;
@@ -261,12 +262,36 @@ impl Drop for ListenerWindowGuard {
 }
 
 fn register_listener_window_class() -> Result<()> {
+    register_window_class(w!("ParakitClipboardHistoryListener"), WNDCLASS_STYLES(0))
+}
+
+/// Register a message-only window class backed by the shared no-op window
+/// procedure.
+///
+/// Shared by the clipboard-history listener and the paste smoke test, which
+/// both need a throwaway `WNDCLASSW` registration and never process window
+/// messages themselves.
+///
+/// # Arguments
+///
+/// * `class_name` - The class name to register, as a `'static` wide string.
+/// * `style` - The `WNDCLASSW` style flags for the class.
+///
+/// # Returns
+///
+/// `Ok(())` once the class is registered (or already existed).
+///
+/// # Errors
+///
+/// Returns an error if the module handle for this process is unavailable.
+pub(super) fn register_window_class(class_name: PCWSTR, style: WNDCLASS_STYLES) -> Result<()> {
     // SAFETY: Passing None asks Windows for the module handle of this process.
     let instance = unsafe { GetModuleHandleW(None) }.context("GetModuleHandleW failed")?;
     let class = WNDCLASSW {
-        lpfnWndProc: Some(listener_wnd_proc),
+        style,
+        lpfnWndProc: Some(noop_wnd_proc),
         hInstance: instance.into(),
-        lpszClassName: w!("ParakitClipboardHistoryListener"),
+        lpszClassName: class_name,
         ..Default::default()
     };
     // SAFETY: class points to a fully initialized WNDCLASSW. A zero return can
@@ -310,18 +335,30 @@ fn hwnd_to_raw(hwnd: HWND) -> isize {
     hwnd.0 as isize
 }
 
-fn hwnd_from_raw(raw: isize) -> HWND {
+/// Build an `HWND` from a raw pointer-sized value.
+///
+/// Shared by the clipboard-history listener, which carries a handle across
+/// its own thread boundary, and the paste smoke test, which also uses it to
+/// build the `HWND_TOPMOST`/`HWND_NOTOPMOST` sentinels for `SetWindowPos`.
+///
+/// # Returns
+///
+/// The `HWND` wrapping `raw` as a pointer.
+pub(super) fn hwnd_from_raw(raw: isize) -> HWND {
     HWND(raw as *mut c_void)
 }
 
-unsafe extern "system" fn listener_wnd_proc(
+/// No-op window procedure shared by the clipboard-history listener and the
+/// paste smoke test windows; neither owns message-specific state, so every
+/// message is forwarded to the default window procedure.
+unsafe extern "system" fn noop_wnd_proc(
     hwnd: HWND,
     message: u32,
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
-    // SAFETY: The listener does not own message-specific state; all messages
-    // are forwarded to the default window procedure.
+    // SAFETY: No message-specific state is owned by either caller; all
+    // messages are forwarded to the default window procedure.
     unsafe { DefWindowProcW(hwnd, message, wparam, lparam) }
 }
 

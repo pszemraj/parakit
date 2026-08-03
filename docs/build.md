@@ -4,17 +4,19 @@ parakit is a Rust 1.87+ binary that links to the vendored [CrispASR](https://git
 
 Command examples use a POSIX shell unless the surrounding section is Windows-specific. Windows-only commands are shown as `bat` or `powershell`.
 
+Install Rust via [rustup](https://rustup.rs) if you do not already have a toolchain; parakit requires Rust 1.87 or newer (`rust-version` in `Cargo.toml`).
+
 ## Native Dependencies
 
 Cargo handles Rust packages. System packages are still needed for audio, desktop input, X11/XTest insertion, CMake, and optional accelerator SDKs.
 
 | OS | Packages |
 | --- | --- |
-| Ubuntu 24.04 | `cmake build-essential libasound2-dev libudev-dev libxtst-dev libxi-dev libx11-dev libxkbcommon-dev libevdev-dev libxdo-dev libgomp1 pkg-config autoconf libtool` |
-| Fedora | `cmake gcc-c++ alsa-lib-devel libudev-devel libXtst-devel libXi-devel libX11-devel libxkbcommon-devel libevdev-devel xdotool-devel pkgconf autoconf libtool` |
-| Arch | `cmake base-devel alsa-lib libxtst libxi libx11 libxkbcommon libevdev xdotool pkgconf autoconf libtool` |
+| Ubuntu 24.04 | `cmake build-essential libasound2-dev libxtst-dev libxi-dev libx11-dev libxkbcommon-dev libevdev-dev libxdo-dev libgomp1 pkg-config` |
+| Fedora | `cmake gcc-c++ alsa-lib-devel libXtst-devel libXi-devel libX11-devel libxkbcommon-devel libevdev-devel xdotool-devel pkgconf` |
+| Arch | `cmake base-devel alsa-lib libxtst libxi libx11 libxkbcommon libevdev xdotool pkgconf` |
 | Windows | Visual Studio 2022 with the "Desktop development with C++" workload, plus CMake on `PATH`. GPU builds through the Windows scripts also require Ninja. |
-| macOS | Apple Silicon with Xcode command line tools plus `cmake autoconf automake libtool pkg-config`. |
+| macOS | Apple Silicon with Xcode command line tools plus `cmake pkg-config`. |
 
 CUDA builds need the CUDA Toolkit with `nvcc` on `PATH`.
 
@@ -76,19 +78,15 @@ Inspect the compiled flags:
 
 ```bash
 parakit doctor
-parakit --verbose doctor
+parakit doctor --verbose
 ```
 
-Benchmark different thread counts with the daemon-free WAV quality target described in [quality.md#wav-quality-target](quality.md#wav-quality-target):
-
-```bash
-cargo run --release --no-default-features --features bundled --example transcribe-file -- \
-  --audio path/to/sample.wav --threads 8 --repeat 3
-```
+Benchmark different thread counts with the daemon-free
+[WAV quality target](dev/quality.md#wav-quality-target).
 
 ## BLAS And MKL
 
-The build defaults to `PARAKIT_BLAS=auto`. If no supported BLAS is detected, parakit uses native ggml CPU kernels. BLAS/MKL can help some matrix paths but adds system-library dependencies.
+The build defaults to `PARAKIT_BLAS=auto`. If no supported BLAS is detected, parakit uses native ggml CPU kernels. BLAS/MKL can help some matrix paths but adds system-library dependencies. Values are trimmed and case-insensitive; an explicitly empty value disables BLAS, while an unset value selects `auto`.
 
 ```bash
 PARAKIT_BLAS=openblas cargo install --path .
@@ -100,12 +98,12 @@ Supported values:
 
 | Value | Behavior |
 | --- | --- |
-| unset, `auto` | Apple Accelerate on macOS; otherwise MKL if `mkl-sdl.pc` is visible; otherwise Windows OpenBLAS from `PARAKIT_OPENBLAS_ROOT` or `CONDA_PREFIX\Library`; otherwise OpenBLAS if `openblas.pc` or `openblas64.pc` is visible; otherwise off. |
-| `off`, `false`, `0` | Native/OpenMP CPU kernels without BLAS. |
+| unset, `auto` | Apple Accelerate on macOS. Windows searches configured and conventional OpenBLAS prefixes, otherwise disables BLAS. Linux honors configured OpenBLAS prefixes, then tries MKL and OpenBLAS through pkg-config, then checks conventional system prefixes. |
+| empty, `off`, `none`, `no`, `false`, `0` | Native/OpenMP CPU kernels without BLAS. |
 | `openblas` | `GGML_BLAS=ON`, `GGML_BLAS_VENDOR=OpenBLAS`. |
-| `mkl` | CrispASR `COHERE_MKL=ON`, ggml `Intel10_64lp`. |
-| `generic` | `GGML_BLAS=ON`, `GGML_BLAS_VENDOR=Generic`. |
-| `accelerate` | Apple Accelerate. Apple targets only. |
+| `mkl`, `intel`, `intel-mkl` | CrispASR `COHERE_MKL=ON`, ggml `Intel10_64lp`. |
+| `generic`, `system`, `blas`, `on`, `yes`, `true`, `1` | `GGML_BLAS=ON`, `GGML_BLAS_VENDOR=Generic`. |
+| `accelerate`, `apple` | Apple Accelerate. Apple targets only. |
 
 Windows OpenBLAS layout and bundling behavior are in [../scripts/windows/README.md#blas](../scripts/windows/README.md#blas).
 
@@ -116,13 +114,31 @@ sudo apt install libopenblas-dev
 PARAKIT_BLAS=openblas cargo install --path .
 ```
 
+OpenBLAS prefix detection recognizes `PARAKIT_OPENBLAS_ROOT`, `OPENBLAS_ROOT`,
+`OpenBLAS_ROOT`, `OPENBLAS_HOME`, active Conda environments,
+`CMAKE_PREFIX_PATH`, and vcpkg installs. It also checks common Conda and native
+installation prefixes on Windows and `/usr`, `/usr/local`, and `/opt/OpenBLAS`
+on Linux. Explicit `BLAS_INCLUDE_DIRS` plus `BLAS_LIBRARIES` remain the final
+manual override.
+
 Explicit `PARAKIT_BLAS` builds print the selected mode, and `parakit doctor` reports the requested and selected modes.
 
 ## CrispASR And Backends
 
-The repository vendors [CrispASR](https://github.com/CrispStrobe/CrispASR) as a git submodule. `build.rs` builds it with CMake and installs shared libraries under `target/<profile>/build/parakit-*/out/lib`. Source rebuild requirements are in [dev.md#source-rebuild](dev.md#source-rebuild).
+The repository vendors [CrispASR](https://github.com/CrispStrobe/CrispASR) as a git submodule. `build.rs` builds it with CMake and installs shared libraries under `target/<profile>/build/parakit-*/out/lib`. Source rebuild requirements are in [dev/README.md#source-rebuild](dev/README.md#source-rebuild).
 
 `CRISPASR_LIB_DIR` is for advanced local experiments with an already-built compatible CrispASR tree. The library must match the pinned C ABI, including `crispasr_session_open_with_params`. Bundled builds must also provide compatible ggml libraries with the exported device registry entry points and the pinned device struct prefix used by `parakit doctor` and `--device gpu` preflight.
+
+`CRISPASR_SRC_DIR` is an optional path to another CrispASR source tree containing
+`CMakeLists.txt`; by default, the bundled CMake build uses the vendored tree. An
+alternative tree must remain ABI-compatible with the vendored Rust crates. It
+cannot replace a missing submodule because Cargo resolves those path dependencies
+before `build.rs` runs.
+
+For CUDA builds, a nonempty `PARAKIT_CUDA_ARCHS` is passed unchanged as
+`CMAKE_CUDA_ARCHITECTURES`; omission or an empty value keeps ggml's native
+selection. CMake accepts values such as `89-real` and semicolon-separated
+architecture lists.
 
 Feature mapping:
 
