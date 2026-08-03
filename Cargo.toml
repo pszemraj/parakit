@@ -68,7 +68,7 @@ rodio = { version = "0.19", default-features = false, features = ["wav"], option
 # fancy-regex only for bounded backreference-based stutter consolidation.
 regex = "1.10"
 fancy-regex = { version = "0.18", default-features = false, features = ["std", "unicode", "perf"] }
-text2num = "2.6.5"
+text2num = "2.7.0"
 
 # Transcription logging
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde", "std"] }

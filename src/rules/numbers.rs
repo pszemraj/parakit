@@ -1,6 +1,7 @@
 //! Spoken-number formatting layered around the `text2num` English parser.
 
 use regex::Regex;
+use std::borrow::Cow;
 use std::sync::OnceLock;
 use text2num::{find_numbers, replace_numbers_in_text, text2digits, Language, Token};
 
@@ -15,12 +16,12 @@ struct NumberToken<'a> {
 }
 
 impl Token for &NumberToken<'_> {
-    fn text(&self) -> &str {
-        self.text
+    fn text(&self) -> Cow<'_, str> {
+        self.text.into()
     }
 
-    fn text_lowercase(&self) -> &str {
-        &self.lowercase
+    fn text_lowercase(&self) -> Cow<'_, str> {
+        self.lowercase.as_str().into()
     }
 }
 
