@@ -172,6 +172,21 @@ fn run_official_nemo(
     keep_f16: bool,
 ) -> Result<PathBuf> {
     let paths = FetchPaths::new_prepared()?;
+    run_official_nemo_with_paths(options, endpoint, token, keep_nemo, keep_f16, paths)
+}
+
+fn run_official_nemo_with_paths(
+    options: &FetchOptions,
+    endpoint: &str,
+    token: Option<&str>,
+    keep_nemo: bool,
+    keep_f16: bool,
+    paths: FetchPaths,
+) -> Result<PathBuf> {
+    // Conversion and quantization use deterministic intermediate names. Hold
+    // the same destination lock as the hosted download for the whole source
+    // transaction so another fetch cannot remove, rename, or overwrite them.
+    let _lock = acquire_artifact_lock(&paths.q8)?;
     if !options.force && paths.q8.is_file() {
         options.verbose_status(format_args!(
             "parakit: using cached model: {}",
@@ -355,7 +370,7 @@ fn download_and_verify(
     bearer: Option<&str>,
     expected_sha: Option<&str>,
 ) -> Result<()> {
-    let _lock = acquire_download_lock(dest)?;
+    let _lock = acquire_artifact_lock(dest)?;
     if !options.force && use_cached_download(options, dest, expected_sha)? {
         return Ok(());
     }
@@ -377,7 +392,7 @@ fn download_and_verify(
     Ok(())
 }
 
-fn acquire_download_lock(dest: &Path) -> Result<File> {
+fn acquire_artifact_lock(dest: &Path) -> Result<File> {
     let mut lock_path = dest.as_os_str().to_os_string();
     lock_path.push(".lock");
     let lock_path = PathBuf::from(lock_path);
@@ -680,7 +695,7 @@ mod tests {
     use super::*;
     use std::io::{Read, Write};
     use std::net::TcpListener;
-    use std::sync::{Arc, Barrier};
+    use std::sync::{mpsc, Arc, Barrier};
     use std::time::{Duration, Instant};
 
     fn serve_model_once(body: &'static [u8]) -> (String, std::thread::JoinHandle<String>) {
@@ -858,6 +873,56 @@ mod tests {
         }
         assert_eq!(server.join().unwrap(), 1);
         assert_eq!(std::fs::read(dest).unwrap(), b"complete-model");
+    }
+
+    #[test]
+    fn source_rebuild_waits_for_destination_transaction_and_rechecks_cache() {
+        let dir = crate::test_support::fixture_root("parakit-fetch-tests", "source-lock");
+        let paths = FetchPaths {
+            nemo: dir.join(NEMO_FILENAME),
+            f16: dir.join(F16_FILENAME),
+            q8: dir.join(Q8_FILENAME),
+        };
+        let held_lock = acquire_artifact_lock(&paths.q8).unwrap();
+        let q8 = paths.q8.clone();
+        let (started_tx, started_rx) = mpsc::channel();
+        let (done_tx, done_rx) = mpsc::channel();
+
+        let rebuild = std::thread::spawn(move || {
+            let options = FetchOptions {
+                force: false,
+                quiet: true,
+                verbose: false,
+                source: FetchSource::OfficialNemo {
+                    keep_nemo: true,
+                    keep_f16: true,
+                },
+            };
+            started_tx.send(()).unwrap();
+            let result = run_official_nemo_with_paths(
+                &options,
+                "https://example.invalid",
+                None,
+                true,
+                true,
+                paths,
+            );
+            done_tx.send(result).unwrap();
+        });
+
+        started_rx.recv().unwrap();
+        assert!(done_rx.recv_timeout(Duration::from_millis(100)).is_err());
+        std::fs::write(&q8, b"completed-by-first-fetch").unwrap();
+        drop(held_lock);
+
+        assert_eq!(
+            done_rx
+                .recv_timeout(Duration::from_secs(2))
+                .unwrap()
+                .unwrap(),
+            q8
+        );
+        rebuild.join().unwrap();
     }
 
     #[test]
