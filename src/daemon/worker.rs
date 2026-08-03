@@ -20,6 +20,9 @@ use super::sounds::Sounds;
 /// Maximum number of worker events that may queue while ASR or paste is busy.
 pub(crate) const WORKER_QUEUE_CAPACITY: usize = 2;
 
+const SILENCE_PEAK_THRESHOLD: f32 = 0.001;
+const SILENCE_RMS_THRESHOLD: f32 = 0.0005;
+
 /// Events consumed by the transcription worker.
 pub(crate) enum WorkerEvent {
     /// Recording began at this instant.
@@ -154,9 +157,9 @@ fn worker_loop(ctx: WorkerCtx) {
                 let drain_elapsed = stop_started.saturating_duration_since(stopped_at);
                 let secs = pcm.len() as f32 / TARGET_RATE as f32;
                 let wall_secs = stopped_at.duration_since(started_at).as_secs_f32();
-                if pcm.is_empty() {
+                if capture_should_skip(&pcm) {
                     log.verbose(format!(
-                        "parakit: skipped empty capture ({secs:.2}s audio, {wall_secs:.2}s wall)"
+                        "parakit: skipped silent capture ({secs:.2}s audio, {wall_secs:.2}s wall)"
                     ));
                     log.line("parakit: no speech detected");
                     state.set_phase("idle");
@@ -1033,6 +1036,24 @@ fn transcribe_clean(
     }))
 }
 
+/// Reject effectively silent captures before ASR can turn background noise
+/// into text. This is amplitude-based: short speech still reaches
+/// `Engine::transcribe`, where short captures are padded for the model.
+fn capture_should_skip(pcm: &[f32]) -> bool {
+    if pcm.is_empty() {
+        return true;
+    }
+
+    let mut peak = 0.0_f32;
+    let mut sum_squares = 0.0_f64;
+    for sample in pcm {
+        peak = peak.max(sample.abs());
+        sum_squares += f64::from(*sample) * f64::from(*sample);
+    }
+    let rms = (sum_squares / pcm.len() as f64).sqrt() as f32;
+    peak < SILENCE_PEAK_THRESHOLD && rms < SILENCE_RMS_THRESHOLD
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::logging::LogLevel;
@@ -1179,6 +1200,15 @@ mod tests {
         assert!(insertion_result_remembers_transcript(&Err(
             anyhow::anyhow!("paste failed")
         )));
+    }
+
+    #[test]
+    fn silence_gate_skips_empty_and_quiet_audio_only() {
+        assert!(capture_should_skip(&[]));
+        assert!(capture_should_skip(&[0.0; 160]));
+        assert!(capture_should_skip(&[0.0001; 160]));
+        assert!(!capture_should_skip(&[0.0, 0.2]));
+        assert!(!capture_should_skip(&[0.01; 16]));
     }
 
     #[test]
