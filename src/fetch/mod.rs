@@ -11,10 +11,12 @@ use crate::model::{
     models_dir, F16_FILENAME, HOSTED_Q8_URL, NEMO_FILENAME, OFFICIAL_NEMO_URL, Q8_FILENAME,
 };
 use anyhow::{anyhow, bail, Context, Result};
+use fs2::FileExt;
 use reqwest::blocking::Client;
 use sha2::{Digest, Sha256};
 use std::env;
 use std::ffi::{OsStr, OsString};
+use std::fs::{File, OpenOptions};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -145,9 +147,7 @@ fn run_hosted_q8(options: &FetchOptions, endpoint: &str, token: Option<&str>) ->
     let paths = FetchPaths::new_prepared()?;
     let url = net::rewrite_pinned_url(HOSTED_Q8_URL, endpoint);
 
-    if options.force {
-        remove_if_exists(&partial_path(&paths.q8))?;
-    } else if paths.q8.is_file() {
+    if !options.force && paths.q8.is_file() {
         options.verbose_status(format_args!(
             "parakit: using cached model: {}",
             paths.q8.display()
@@ -348,6 +348,11 @@ fn download_and_verify(
     bearer: Option<&str>,
     expected_sha: Option<&str>,
 ) -> Result<()> {
+    let _lock = acquire_download_lock(dest)?;
+    if !options.force && use_cached_download(options, dest, expected_sha)? {
+        return Ok(());
+    }
+
     let partial = partial_path(dest);
     if options.force {
         remove_if_exists(&partial)?;
@@ -363,6 +368,21 @@ fn download_and_verify(
 
     move_into_place(&partial, dest)?;
     Ok(())
+}
+
+fn acquire_download_lock(dest: &Path) -> Result<File> {
+    let mut lock_path = dest.as_os_str().to_os_string();
+    lock_path.push(".lock");
+    let lock_path = PathBuf::from(lock_path);
+    let lock = OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .open(&lock_path)
+        .with_context(|| format!("open download lock {}", lock_path.display()))?;
+    lock.lock_exclusive()
+        .with_context(|| format!("lock download destination {}", dest.display()))?;
+    Ok(lock)
 }
 
 fn partial_path(dest: &Path) -> PathBuf {
@@ -652,6 +672,8 @@ mod tests {
     use super::*;
     use std::io::{Read, Write};
     use std::net::TcpListener;
+    use std::sync::{Arc, Barrier};
+    use std::time::{Duration, Instant};
 
     fn serve_model_once(body: &'static [u8]) -> (String, std::thread::JoinHandle<String>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -681,6 +703,51 @@ mod tests {
             .unwrap();
             stream.write_all(body).unwrap();
             request_text
+        });
+        (format!("http://{address}/model.gguf"), handle)
+    }
+
+    fn serve_slow_model(body: &'static [u8]) -> (String, std::thread::JoinHandle<usize>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let address = listener.local_addr().unwrap();
+        let handle = std::thread::spawn(move || {
+            let mut requests = 0;
+            let mut deadline = Instant::now() + Duration::from_secs(5);
+            while Instant::now() < deadline && requests < 2 {
+                let (mut stream, _) = match listener.accept() {
+                    Ok(connection) => connection,
+                    Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(Duration::from_millis(10));
+                        continue;
+                    }
+                    Err(err) => panic!("test server accept failed: {err}"),
+                };
+                requests += 1;
+
+                let mut request = Vec::new();
+                let mut buffer = [0_u8; 1024];
+                while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                    let count = stream.read(&mut buffer).unwrap();
+                    if count == 0 {
+                        break;
+                    }
+                    request.extend_from_slice(&buffer[..count]);
+                }
+                write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nETag: \"concurrent\"\r\nConnection: close\r\n\r\n",
+                    body.len()
+                )
+                .unwrap();
+                let split = body.len() / 2;
+                stream.write_all(&body[..split]).unwrap();
+                stream.flush().unwrap();
+                std::thread::sleep(Duration::from_millis(250));
+                stream.write_all(&body[split..]).unwrap();
+                deadline = Instant::now() + Duration::from_millis(300);
+            }
+            requests
         });
         (format!("http://{address}/model.gguf"), handle)
     }
@@ -746,6 +813,43 @@ mod tests {
 
         assert!(!request.to_ascii_lowercase().contains("\r\nrange:"));
         assert_eq!(std::fs::read(&dest).unwrap(), b"fresh-model");
+    }
+
+    #[test]
+    fn concurrent_downloads_share_one_destination_transaction() {
+        let dir = crate::test_support::fixture_root("parakit-fetch-tests", "concurrent");
+        let dest = dir.join("model.gguf");
+        let (url, server) = serve_slow_model(b"complete-model");
+        let barrier = Arc::new(Barrier::new(3));
+
+        let downloads = (0..2)
+            .map(|_| {
+                let barrier = Arc::clone(&barrier);
+                let url = url.clone();
+                let dest = dest.clone();
+                std::thread::spawn(move || {
+                    let options = FetchOptions {
+                        force: false,
+                        quiet: true,
+                        verbose: false,
+                        source: FetchSource::Url {
+                            url: url.clone(),
+                            sha256: None,
+                        },
+                    };
+                    let client = Client::builder().no_proxy().build().unwrap();
+                    barrier.wait();
+                    download_and_verify(&options, &client, &url, &dest, None, None)
+                })
+            })
+            .collect::<Vec<_>>();
+        barrier.wait();
+
+        for download in downloads {
+            download.join().unwrap().unwrap();
+        }
+        assert_eq!(server.join().unwrap(), 1);
+        assert_eq!(std::fs::read(dest).unwrap(), b"complete-model");
     }
 
     #[test]
