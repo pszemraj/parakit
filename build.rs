@@ -864,8 +864,9 @@ fn windows_openblas_from_env(explicit_openblas: bool) -> Option<WindowsOpenBlas>
 }
 
 fn unix_openblas_from_configured_roots(explicit_openblas: bool) -> Option<UnixOpenBlas> {
+    let target_arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
     if let Some(root) = env_path("PARAKIT_OPENBLAS_ROOT") {
-        if let Some(openblas) = find_unix_openblas(&root) {
+        if let Some(openblas) = find_unix_openblas(&root, &target_arch) {
             return Some(openblas);
         }
         if explicit_openblas && !manual_blas_path_overrides_are_set() {
@@ -882,13 +883,14 @@ fn unix_openblas_from_configured_roots(explicit_openblas: bool) -> Option<UnixOp
 
     configured_openblas_roots(false)
         .into_iter()
-        .find_map(|root| find_unix_openblas(&root))
+        .find_map(|root| find_unix_openblas(&root, &target_arch))
 }
 
 fn unix_openblas_from_conventional_roots() -> Option<UnixOpenBlas> {
+    let target_arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
     conventional_openblas_roots(false)
         .into_iter()
-        .find_map(|root| find_unix_openblas(&root))
+        .find_map(|root| find_unix_openblas(&root, &target_arch))
 }
 
 fn windows_openblas_import_kind() -> WindowsOpenBlasImportKind {

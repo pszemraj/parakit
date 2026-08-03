@@ -23,16 +23,17 @@ pub(crate) struct UnixOpenBlas {
 /// # Arguments
 ///
 /// * `root` - Candidate prefix containing OpenBLAS headers and libraries.
+/// * `target_arch` - Cargo target architecture used to filter Linux multiarch directories.
 ///
 /// # Returns
 ///
 /// The detected include directory and library, or `None` when the layout is
 /// incomplete.
-pub(crate) fn find_unix_openblas(root: &Path) -> Option<UnixOpenBlas> {
-    let include_dir = unix_openblas_include_dirs(root)
+pub(crate) fn find_unix_openblas(root: &Path, target_arch: &str) -> Option<UnixOpenBlas> {
+    let include_dir = unix_openblas_include_dirs(root, target_arch)
         .into_iter()
         .find(|dir| dir.join("cblas.h").is_file())?;
-    let library = unix_openblas_library_dirs(root)
+    let library = unix_openblas_library_dirs(root, target_arch)
         .into_iter()
         .find_map(|dir| find_openblas_library(&dir))?;
 
@@ -43,7 +44,7 @@ pub(crate) fn find_unix_openblas(root: &Path) -> Option<UnixOpenBlas> {
     })
 }
 
-fn unix_openblas_include_dirs(root: &Path) -> Vec<PathBuf> {
+fn unix_openblas_include_dirs(root: &Path, target_arch: &str) -> Vec<PathBuf> {
     let include = root.join("include");
     let mut dirs = vec![
         include.join("openblas"),
@@ -52,7 +53,7 @@ fn unix_openblas_include_dirs(root: &Path) -> Vec<PathBuf> {
         include.clone(),
     ];
 
-    for child in child_dirs(&include) {
+    for child in target_compatible_child_dirs(&include, target_arch) {
         dirs.push(child.join("openblas"));
         dirs.push(child.join("openblas-pthread"));
         dirs.push(child.join("openblas-openmp"));
@@ -61,13 +62,37 @@ fn unix_openblas_include_dirs(root: &Path) -> Vec<PathBuf> {
     dirs
 }
 
-fn unix_openblas_library_dirs(root: &Path) -> Vec<PathBuf> {
+fn unix_openblas_library_dirs(root: &Path, target_arch: &str) -> Vec<PathBuf> {
     let mut dirs = Vec::new();
     for base in [root.join("lib"), root.join("lib64")] {
         dirs.push(base.clone());
-        dirs.extend(child_dirs(&base));
+        dirs.extend(target_compatible_child_dirs(&base, target_arch));
     }
     dirs
+}
+
+fn target_compatible_child_dirs(parent: &Path, target_arch: &str) -> Vec<PathBuf> {
+    child_dirs(parent)
+        .into_iter()
+        .filter(|path| {
+            let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+                return true;
+            };
+            let Some((multiarch_arch, _)) = name.split_once("-linux-") else {
+                return true;
+            };
+            normalize_linux_arch(multiarch_arch) == target_arch
+        })
+        .collect()
+}
+
+fn normalize_linux_arch(arch: &str) -> &str {
+    match arch {
+        "i386" | "i486" | "i586" | "i686" => "x86",
+        "armv6" | "armv7" => "arm",
+        "powerpc64le" => "powerpc64",
+        other => other,
+    }
 }
 
 fn child_dirs(parent: &Path) -> Vec<PathBuf> {
