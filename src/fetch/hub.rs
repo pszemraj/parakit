@@ -263,6 +263,10 @@ fn hub_cache_dir(
     rfilename: &str,
 ) -> PathBuf {
     let mut hasher = Sha256::new();
+    hasher.update(owner.as_bytes());
+    hasher.update([0]);
+    hasher.update(repo.as_bytes());
+    hasher.update([0]);
     hasher.update(revision.as_bytes());
     hasher.update([0]);
     hasher.update(rfilename.as_bytes());
@@ -685,11 +689,16 @@ mod tests {
         let case_distinct = hub_cache_dir(models_dir, "owner", "repo", "Main", "a/model.gguf");
         let slash_revision =
             hub_cache_dir(models_dir, "owner", "repo", "refs/pr/1", "a/model.gguf");
+        let delimiter_collision_left =
+            hub_cache_dir(models_dir, "owner--nested", "repo", "main", "a/model.gguf");
+        let delimiter_collision_right =
+            hub_cache_dir(models_dir, "owner", "nested--repo", "main", "a/model.gguf");
 
         assert_eq!(main, main_again);
         assert_ne!(main, sibling_path);
         assert_ne!(main, case_distinct);
         assert_ne!(main, slash_revision);
+        assert_ne!(delimiter_collision_left, delimiter_collision_right);
         let component = slash_revision.file_name().unwrap().to_string_lossy();
         assert!(!component.contains(['/', '\\']));
     }
@@ -701,6 +710,10 @@ mod tests {
             ("nested\\model-Q8_0.gguf", true),
             ("nested/CON.gguf", false),
             ("nested/lpt1.model.gguf", false),
+            ("nested/model:stream.gguf", false),
+            ("nested/model|pipe.gguf", false),
+            ("nested/model?.gguf", false),
+            ("nested/model*.gguf", false),
             ("nested/..", false),
             ("nested/", false),
         ] {

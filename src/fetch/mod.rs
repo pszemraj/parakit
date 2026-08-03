@@ -294,6 +294,13 @@ fn validate_download_file_name(name: &str) -> Result<()> {
     if name.is_empty() || matches!(name, "." | "..") {
         bail!("file name segment is empty or relative");
     }
+    if name.ends_with([' ', '.'])
+        || name.chars().any(|c| {
+            c <= '\u{1f}' || matches!(c, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*')
+        })
+    {
+        bail!("file name '{name}' contains characters that are invalid on Windows");
+    }
     let stem = name
         .split('.')
         .next()
@@ -943,6 +950,29 @@ mod tests {
             ),
         ] {
             assert_eq!(url_file_name(url).ok().as_deref(), expect, "{name}");
+        }
+    }
+
+    #[test]
+    fn download_file_names_reject_windows_invalid_characters() {
+        for name in [
+            "model<variant.gguf",
+            "model>variant.gguf",
+            "model:stream.gguf",
+            "model\"variant.gguf",
+            "model/variant.gguf",
+            "model\\variant.gguf",
+            "model|variant.gguf",
+            "model?variant.gguf",
+            "model*variant.gguf",
+            "model.gguf.",
+            "model.gguf ",
+            "model\u{1f}.gguf",
+        ] {
+            assert!(
+                validate_download_file_name(name).is_err(),
+                "{name:?} should be rejected"
+            );
         }
     }
 
