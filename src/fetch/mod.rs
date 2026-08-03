@@ -322,8 +322,7 @@ fn validate_download_file_name(name: &str) -> Result<()> {
 fn print_ready_with_hint(options: &FetchOptions, path: &Path) {
     options.status(format_args!("parakit: model ready: {}", path.display()));
     options.status(format_args!(
-        "parakit: run `parakit start -m {}` to use it",
-        path.display()
+        "parakit: run `parakit start -m <model-path>` to use it"
     ));
     let config_path = toml_path_literal(path);
     options.status(format_args!(
