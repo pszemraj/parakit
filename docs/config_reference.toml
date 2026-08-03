@@ -94,7 +94,7 @@
 # does not use it for command verbosity.
 
 # daemon.transcript_history
-# Type: integer >= 0 (optional). Default: 10. No CLI override or upper clamp.
+# Type: integer from 0 through 100 (optional). Default: 10. No CLI override.
 # Bounds newest-first copy-last/history entries; 0 disables both commands.
 # The ring is process-memory-only, but logging.dir can independently persist
 # the same transcript.

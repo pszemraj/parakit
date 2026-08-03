@@ -47,6 +47,10 @@ const STOP_INSERTION_WAIT: Duration = Duration::from_secs(5);
 /// Maximum accepted local control-protocol message size.
 #[cfg(any(unix, target_os = "windows"))]
 const IPC_MAX_MESSAGE_SIZE: usize = 64 * 1024;
+/// Largest transcript ring whose complete history response stays below the
+/// control-protocol message limit, including worst-case JSON escaping.
+pub(crate) const MAX_TRANSCRIPT_HISTORY: usize = 100;
+const HISTORY_PREVIEW_MAX_CHARS: usize = 72;
 #[cfg(any(unix, target_os = "windows"))]
 const STOP_RESPONSE_GRACE: Duration = Duration::from_millis(50);
 
@@ -717,12 +721,11 @@ fn format_age(age_secs: u64) -> String {
 /// collapsed to a single space and trimmed, truncated on a char boundary
 /// to 72 characters with a trailing `…` when truncation occurred.
 fn preview_text(text: &str) -> String {
-    const MAX_CHARS: usize = 72;
     let collapsed = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    if collapsed.chars().count() <= MAX_CHARS {
+    if collapsed.chars().count() <= HISTORY_PREVIEW_MAX_CHARS {
         return collapsed;
     }
-    let mut truncated: String = collapsed.chars().take(MAX_CHARS).collect();
+    let mut truncated: String = collapsed.chars().take(HISTORY_PREVIEW_MAX_CHARS).collect();
     truncated.push('…');
     truncated
 }
@@ -2335,6 +2338,27 @@ mod tests {
         assert!(!pipe_message_fits_limit(0, IPC_MAX_MESSAGE_SIZE, false));
         assert!(!pipe_message_fits_limit(IPC_MAX_MESSAGE_SIZE, 1, true));
         assert!(!pipe_message_fits_limit(usize::MAX, 1, true));
+    }
+
+    #[test]
+    fn maximum_history_response_fits_message_limit() {
+        let worst_case_preview = preview_text(&"\0".repeat(HISTORY_PREVIEW_MAX_CHARS + 1));
+        let entries = (1..=MAX_TRANSCRIPT_HISTORY)
+            .map(|index| HistoryEntry {
+                index,
+                age_secs: u64::MAX,
+                chars: usize::MAX,
+                preview: worst_case_preview.clone(),
+            })
+            .collect();
+        let response = IpcResponse::History { entries };
+        let encoded = serde_json::to_vec(&response).expect("history response should serialize");
+
+        assert!(
+            encoded.len() <= IPC_MAX_MESSAGE_SIZE,
+            "maximum history response is {} bytes, limit is {IPC_MAX_MESSAGE_SIZE}",
+            encoded.len()
+        );
     }
 
     #[cfg(target_os = "macos")]

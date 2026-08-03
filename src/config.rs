@@ -153,8 +153,8 @@ pub(crate) const TEMPLATE: &str = r#"# parakit config.toml
 # verbose = false
 
 # Number of transcripts kept in daemon memory for `copy-last` and `history`.
-# 0 disables both. History lives only in daemon memory, is never written to
-# disk, and is cleared when the daemon stops.
+# Valid range: 0 through 100. 0 disables both. History lives only in daemon
+# memory, is never written to disk, and is cleared when the daemon stops.
 # transcript_history = 10
 
 [cleaning]
@@ -307,6 +307,18 @@ pub(crate) fn load_from_path(path: &Path) -> Result<ConfigFile> {
     let config: ConfigFile = toml::from_str(&raw)
         .with_context(|| format!("failed to parse config file {}", path.display()))?;
 
+    if config
+        .daemon
+        .transcript_history
+        .is_some_and(|limit| limit > crate::daemon::ipc::MAX_TRANSCRIPT_HISTORY)
+    {
+        anyhow::bail!(
+            "invalid config in {}: daemon.transcript_history must be between 0 and {}",
+            path.display(),
+            crate::daemon::ipc::MAX_TRANSCRIPT_HISTORY
+        );
+    }
+
     parakit::rules::validate_configured_rules(
         config.cleaning.number_threshold,
         &config.cleaning.disabled_rules,
@@ -448,6 +460,26 @@ position = "first"
             config.rules.user[0].position,
             parakit::rules::RulePosition::First
         );
+    }
+
+    #[test]
+    fn transcript_history_above_transport_safe_limit_is_rejected() {
+        let toml = format!(
+            "[daemon]\ntranscript_history = {}\n",
+            crate::daemon::ipc::MAX_TRANSCRIPT_HISTORY + 1
+        );
+        let path = write_fixture("history-limit", &toml);
+        let err = load_from_path(&path).expect_err("oversized transcript history must fail");
+        let message = format!("{err:#}");
+
+        assert!(
+            message.contains(&format!(
+                "daemon.transcript_history must be between 0 and {}",
+                crate::daemon::ipc::MAX_TRANSCRIPT_HISTORY
+            )),
+            "{message}"
+        );
+        assert!(message.contains(&path.display().to_string()), "{message}");
     }
 
     #[test]
