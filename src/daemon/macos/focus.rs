@@ -101,6 +101,9 @@ fn cfstring_from_static_str(s: &'static str) -> CFStringRef {
             0,
         )
     };
+    // Every caller supplies a fixed ASCII AX attribute name, so invalid UTF-8
+    // cannot produce null here. The only remaining failure is allocation,
+    // which is no more recoverable than Rust's own allocation failures.
     assert!(
         !value.is_null(),
         "CFStringCreateWithBytes returned null for {s:?}"
