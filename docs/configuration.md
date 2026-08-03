@@ -32,7 +32,7 @@ parakit resolves one config path:
 2. Linux and macOS: `$XDG_CONFIG_HOME/parakit/config.toml`, or `$HOME/.config/parakit/config.toml` when `XDG_CONFIG_HOME` is unset or empty.
 3. Windows: `%APPDATA%\parakit\config.toml`.
 
-Setting `PARAKIT_CONFIG_PATH` to an empty value is an error. A relative override path stays relative to the process working directory, and parakit does not expand `~` or environment variables inside a path. On Linux and macOS, resolution fails when neither a nonempty `XDG_CONFIG_HOME` nor `HOME` is available.
+Setting `PARAKIT_CONFIG_PATH` to an empty value is an error. A relative override path stays relative to the process working directory. All configured paths, including `PARAKIT_CONFIG_PATH`, `daemon.model`, and `logging.dir`, are used literally; parakit does not expand `~` or environment variables inside them. On Linux and macOS, resolution fails when neither a nonempty `XDG_CONFIG_HOME` nor `HOME` is available.
 
 Print the resolved path without reading the file:
 
