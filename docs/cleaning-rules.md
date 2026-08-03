@@ -79,8 +79,9 @@ parakit start \
 ```
 
 Stutter handling is grouped by shape. Use `stutter-safe-words` for
-conservative repeated words, `repeated-prefix-stutter` for repeated letters
-or `sh`/`th`/`ch` starts before a matching word, and
+conservative repeated words, `contracted-have-restart` for false starts such
+as `I've I already have`, `repeated-prefix-stutter` for repeated letters or
+`sh`/`th`/`ch` starts before a matching word, and
 `stutter-ambiguous-words` for the aggressive-only `that`, `no`, `can`,
 `had`, and `do` set.
 
@@ -94,7 +95,7 @@ A pass should be moved only with regression evidence. Reordering can change down
 
 Use the standard `regex` engine for ordinary substitutions. It remains the default because its matching model is predictable and bounded.
 
-Use `fancy-regex` only when an advanced feature materially improves the implementation. The current uses are bounded backreferences for repeated-token and repeated-prefix stutter patterns. Every `fancy-regex` pass sets an explicit backtrack limit, and a runtime limit failure is not fatal: the cleaner fails open, keeping the original transcript and recording the failure rather than inserting partially transformed text. Do not replace the conservative repeated-word vocabulary with a generic backreference: valid language such as `that that` and emphatic `no no` must survive the safe profile.
+Use `fancy-regex` only when an advanced feature materially improves the implementation. The current uses are bounded backreferences for repeated-token, contracted-have restart, and repeated-prefix stutter patterns. Every `fancy-regex` pass sets an explicit backtrack limit, and a runtime limit failure is not fatal: the cleaner fails open, keeping the original transcript and recording the failure rather than inserting partially transformed text. Do not replace the conservative repeated-word vocabulary with a generic backreference: valid language such as `that that` and emphatic `no no` must survive the safe profile.
 
 Use a maintained domain crate when the task is already a well-defined parsing problem. English number grammar belongs to `text2num`, not to a growing local word table.
 

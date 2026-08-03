@@ -124,6 +124,13 @@ pub(crate) const DEFAULT_RULES: &[Rule] = &[
         "$1"
     ),
     fancy_rule!(
+        "contracted-have-restart",
+        "Remove a repeated subject from contracted-have restarts",
+        Activation::Safe,
+        r#"(?i)\b(i|we|you|they)['\u{2019}]ve[ \t]+\1[ \t]+((?:already[ \t]+)?have)\b"#,
+        "$1 $2"
+    ),
+    fancy_rule!(
         "stutter-ambiguous-words",
         "Collapse repeated that/no/can/had/do only in aggressive mode",
         Activation::Aggressive,

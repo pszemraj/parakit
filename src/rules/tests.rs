@@ -181,6 +181,21 @@ fn fancy_regex_collapses_only_safe_repeated_words_by_default() {
 }
 
 #[test]
+fn contracted_have_restarts_drop_the_false_start() {
+    assert_clean_cases(
+        CleaningProfile::Safe,
+        &[
+            (
+                "I've I already have their updated script.",
+                "I already have their updated script.",
+            ),
+            ("We've we have enough time.", "We have enough time."),
+            ("You've already got it.", "You've already got it."),
+        ],
+    );
+}
+
+#[test]
 fn aggressive_profile_can_collapse_ambiguous_repetitions() {
     assert_clean_cases(
         CleaningProfile::Aggressive,

@@ -154,6 +154,7 @@
 # Safe/high-confidence:
 #   filled-pauses - remove standalone um/uh/erm variants and adjacent commas.
 #   stutter-safe-words - collapse repeated high-confidence function words.
+#   contracted-have-restart - remove repeated subjects from contracted-have false starts.
 #   repeated-prefix-stutter - remove repeated letter or sh/th/ch starts before a matching word.
 #   spaced-acronyms - collapse runs of standalone uppercase ASCII letters.
 #   spoken-version-numbers - render multi-point spoken versions with text2num.
