@@ -385,6 +385,7 @@ fn acquire_download_lock(dest: &Path) -> Result<File> {
         .create(true)
         .read(true)
         .write(true)
+        .truncate(false)
         .open(&lock_path)
         .with_context(|| format!("open download lock {}", lock_path.display()))?;
     lock.lock_exclusive()
