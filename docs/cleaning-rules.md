@@ -78,12 +78,7 @@ parakit start \
   --disable-rule filled-pauses
 ```
 
-Stutter handling is grouped by shape. Use `stutter-safe-words` for
-conservative repeated words, `contracted-have-restart` for false starts such
-as `I've I already have`, `repeated-prefix-stutter` for repeated letters or
-`sh`/`th`/`ch` starts before a matching word, and
-`stutter-ambiguous-words` for the aggressive-only `that`, `no`, `can`,
-`had`, and `do` set.
+Stutter handling is grouped by shape. Use `stutter-i` for repeated first-person pronouns, `stutter-safe-words` for conservative repeated words, `contracted-have-restart` for false starts such as `I've I already have`, `repeated-prefix-stutter` for repeated letters or `sh`/`th`/`ch` starts before a matching word, and `stutter-ambiguous-words` for the aggressive-only `that`, `no`, `can`, `had`, and `do` set.
 
 ## Rule Order
 

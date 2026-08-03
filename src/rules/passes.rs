@@ -15,6 +15,47 @@ use text2num::{text2digits, Language};
 
 use super::engine::TransformResult;
 
+/// Expand apostrophe-cause while preserving exactly the spacing already
+/// present around standalone forms and inserting one space for attached forms.
+///
+/// # Returns
+///
+/// A [`TransformResult`] with each apostrophe-cause form expanded and
+/// `matches` set to the number of expansions.
+///
+/// # Errors
+///
+/// This function is infallible: it returns [`TransformResult`], not
+/// `Result`, and never returns an `Err`.
+///
+/// # Panics
+///
+/// Does not panic in practice. The regex is a compile-time literal, and
+/// capture zero always exists for each item from `captures_iter`.
+pub(crate) fn normalize_apostrophe_cause(input: &str) -> TransformResult {
+    static CAUSE: OnceLock<Regex> = OnceLock::new();
+    let re = CAUSE.get_or_init(|| {
+        Regex::new(r#"(?i)([A-Za-z]?)['\u{2019}]cause\b"#)
+            .expect("apostrophe-cause regex must compile")
+    });
+
+    let replacements = re
+        .captures_iter(input)
+        .map(|captures| {
+            let whole = captures.get(0).expect("capture zero must exist");
+            let prefix = captures.get(1).map_or("", |captured| captured.as_str());
+            let replacement = if prefix.is_empty() {
+                "because".to_string()
+            } else {
+                format!("{prefix} because")
+            };
+            (whole.start(), whole.end(), replacement)
+        })
+        .collect();
+
+    apply_replacements(input, replacements)
+}
+
 /// Collapse runs of standalone uppercase letters separated by single ASCII
 /// spaces (e.g. `"I B M"` becomes `"IBM"`).
 ///

@@ -17,9 +17,10 @@
 
 use super::engine::{Activation, Rule, RuleKind};
 use super::passes::{
-    capitalize_sentence_starts, drop_dangling_connective, normalize_magnitude_suffixes,
-    normalize_numeric_identifier_groups, normalize_numeric_point_suffixes,
-    normalize_parameter_counts, normalize_spaced_acronyms, normalize_spoken_versions,
+    capitalize_sentence_starts, drop_dangling_connective, normalize_apostrophe_cause,
+    normalize_magnitude_suffixes, normalize_numeric_identifier_groups,
+    normalize_numeric_point_suffixes, normalize_parameter_counts, normalize_spaced_acronyms,
+    normalize_spoken_versions,
 };
 
 macro_rules! regex_rule {
@@ -116,11 +117,18 @@ pub(crate) const DEFAULT_RULES: &[Rule] = &[
     ),
     // Consolidated duplicate-token handling. The safe list deliberately omits
     // valid/ambiguous repetitions such as that-that and emphatic no-no.
+    regex_rule!(
+        "stutter-i",
+        "Collapse repeated first-person pronouns and restore uppercase I",
+        Activation::Safe,
+        r#"(?i)\bi\b(?:\s+i\b)+"#,
+        "I"
+    ),
     fancy_rule!(
         "stutter-safe-words",
         "Collapse repeated high-confidence function words with a backreference",
         Activation::Safe,
-        r#"(?i)\b(i|the|a|an|and|but|or|so|to|of|in|on|we|you|he|she|they|it|this|my|is|was|are|were|did|will|has|have)\b(?:\s+\1\b)+"#,
+        r#"(?i)\b(the|a|an|and|but|or|so|to|of|in|on|we|you|he|she|they|it|this|my|is|was|are|were|did|will|has|have)\b(?:\s+\1\b)+"#,
         "$1"
     ),
     fancy_rule!(
@@ -208,12 +216,11 @@ pub(crate) const DEFAULT_RULES: &[Rule] = &[
         "$1$2"
     ),
     // High-confidence casual-form normalization.
-    regex_rule!(
+    procedural_rule!(
         "cause-to-because",
         "Normalize standalone or attached apostrophe-cause to because",
         Activation::Safe,
-        r#"(?i)([A-Za-z]?)['\u{2019}]cause\b"#,
-        "$1 because"
+        normalize_apostrophe_cause
     ),
     regex_rule!(
         "casual-em-til-round",

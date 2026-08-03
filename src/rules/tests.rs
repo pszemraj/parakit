@@ -166,6 +166,8 @@ fn fancy_regex_collapses_only_safe_repeated_words_by_default() {
         &[
             ("the the the cat", "The cat"),
             ("I I I think", "I think"),
+            ("we i i think", "We I think"),
+            ("we i I think", "We I think"),
             ("we we ran", "We ran"),
             ("did did happen", "Did happen"),
             ("has has changed", "Has changed"),
@@ -788,6 +790,14 @@ fn cause_becomes_because() {
             ("that's'cause it works", "That's because it works"),
             ("I left 'cause it was late", "I left because it was late"),
         ],
+    );
+
+    let disabled = HashSet::from(["fix-collapse-spaces".to_string(), "fix-trim".to_string()]);
+    let without_whitespace_cleanup =
+        build_cleaner_for_test(CleaningProfile::Safe, false, &disabled, &[]);
+    assert_eq!(
+        without_whitespace_cleanup.clean_text("I left 'cause it was late."),
+        "I left because it was late."
     );
 }
 
