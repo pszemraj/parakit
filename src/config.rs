@@ -105,6 +105,10 @@ pub(crate) struct HotkeyConfig {
     /// Linux hotkey backend.
     #[cfg(target_os = "linux")]
     pub(crate) backend: Option<HotkeyBackend>,
+    /// Accepted for dotfiles portability but ignored off Linux.
+    #[cfg(not(target_os = "linux"))]
+    #[serde(rename = "backend")]
+    pub(crate) _backend: Option<String>,
 }
 
 /// `[rules]` section: user-defined cleaning rules.
@@ -590,5 +594,17 @@ replacement = "x"
     #[test]
     fn hotkey_backend_serde_matches_clap_value_strings() {
         assert_serde_matches_clap::<HotkeyBackend>();
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    #[test]
+    fn linux_hotkey_backend_is_accepted_and_ignored_on_other_platforms() {
+        let path = write_fixture(
+            "ignored-linux-hotkey-backend",
+            "[hotkey]\nbackend = \"x11-listen\"\n",
+        );
+        let config = load_from_path(&path).expect("Linux hotkey config should remain portable");
+
+        assert_eq!(config.hotkey._backend.as_deref(), Some("x11-listen"));
     }
 }
