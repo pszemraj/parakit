@@ -19,7 +19,7 @@ use super::engine::{Activation, Rule, RuleKind};
 use super::passes::{
     capitalize_sentence_starts, drop_dangling_connective, normalize_magnitude_suffixes,
     normalize_numeric_identifier_groups, normalize_numeric_point_suffixes,
-    normalize_spaced_acronyms, normalize_spoken_versions,
+    normalize_parameter_counts, normalize_spaced_acronyms, normalize_spoken_versions,
 };
 
 macro_rules! regex_rule {
@@ -165,6 +165,12 @@ pub(crate) const DEFAULT_RULES: &[Rule] = &[
         activation: Activation::Safe,
         kind: RuleKind::SpokenNumbers,
     },
+    procedural_rule!(
+        "compact-parameter-counts",
+        "Render parameter counts with K/M/B magnitude suffixes",
+        Activation::Safe,
+        normalize_parameter_counts
+    ),
     procedural_rule!(
         "numeric-identifier-groups",
         "Join split digit groups in structurally recognizable uppercase identifiers",

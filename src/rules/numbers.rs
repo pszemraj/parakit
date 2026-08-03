@@ -163,20 +163,27 @@ fn replace_numbers_with_hybrid_magnitudes(
             continue;
         }
 
-        let (start_index, coefficient) = if scale_occurrence.start < scale_index {
+        let (mut start_index, coefficient) = if scale_occurrence.start < scale_index {
             (scale_occurrence.start, scale_occurrence.value / scale_value)
         } else {
-            let Some(previous) = occurrences.iter().rev().find(|occurrence| {
+            match occurrences.iter().rev().find(|occurrence| {
                 occurrence.end == scale_index
                     && !occurrence.is_ordinal
                     && input[tokens[occurrence.end - 1].end..scale_token.start]
                         .chars()
                         .all(char::is_whitespace)
-            }) else {
-                continue;
-            };
-            (previous.start, previous.value)
+            }) {
+                Some(previous) => (previous.start, previous.value),
+                None if preceding_article_is_adjacent(input, &tokens, scale_index) => {
+                    (scale_index - 1, 1.0)
+                }
+                None => continue,
+            }
         };
+
+        if preceding_article_is_adjacent(input, &tokens, start_index) {
+            start_index -= 1;
+        }
 
         if tokens[start_index..=scale_index]
             .iter()
@@ -223,6 +230,14 @@ fn replace_numbers_with_hybrid_magnitudes(
         threshold,
     ));
     output
+}
+
+fn preceding_article_is_adjacent(input: &str, tokens: &[NumberToken<'_>], index: usize) -> bool {
+    index > 0
+        && tokens[index - 1].lowercase == "a"
+        && input[tokens[index - 1].end..tokens[index].start]
+            .chars()
+            .all(char::is_whitespace)
 }
 
 fn magnitude_scale(token: &str) -> Option<(&'static str, f64)> {

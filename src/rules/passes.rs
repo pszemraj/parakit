@@ -407,6 +407,97 @@ pub(crate) fn normalize_magnitude_suffixes(input: &str) -> TransformResult {
     apply_replacements(input, replacements)
 }
 
+/// Render large counts tied directly to `parameter`/`parameters` using the
+/// conventional `K`/`M`/`B` suffixes. For a range whose second bound carries
+/// the unit, both bounds are compacted.
+///
+/// Full-digit counts are compacted only when they have an exact integer or
+/// one-decimal representation at the largest applicable scale. Other numbers
+/// and large magnitudes used outside parameter-count context are unchanged.
+///
+/// # Returns
+///
+/// A [`TransformResult`] with matching parameter counts compacted and
+/// `matches` set to the number of quantities changed.
+///
+/// # Errors
+///
+/// This function is infallible: it returns [`TransformResult`], not
+/// `Result`, and never returns an `Err`.
+///
+/// # Panics
+///
+/// Does not panic in practice. Both regexes are fixed patterns validated when
+/// first used, and every capture read below is required by its pattern.
+pub(crate) fn normalize_parameter_counts(input: &str) -> TransformResult {
+    static DIRECT_COUNT: OnceLock<Regex> = OnceLock::new();
+    static RANGE_COUNT: OnceLock<Regex> = OnceLock::new();
+    const COUNT: &str = r"(?:\d+(?:\.\d+)?[ \t]+(?:thousand|million|billion)|\d{4,})";
+
+    let direct = DIRECT_COUNT.get_or_init(|| {
+        Regex::new(&format!(r"(?i)\b({COUNT})(?:[ \t-]+)parameters?\b"))
+            .expect("direct parameter-count regex must compile")
+    });
+    let range = RANGE_COUNT.get_or_init(|| {
+        Regex::new(&format!(
+            r"(?i)\b({COUNT})[ \t]+(?:up[ \t]+to|to|through|and)[ \t]+(?:maybe[ \t]+|about[ \t]+|roughly[ \t]+)?{COUNT}(?:[ \t-]+)parameters?\b"
+        ))
+        .expect("parameter-count range regex must compile")
+    });
+
+    let mut replacements: Vec<_> = direct
+        .captures_iter(input)
+        .filter_map(|captures| {
+            let count = captures.get(1).expect("direct count capture is required");
+            compact_large_count(count.as_str())
+                .map(|replacement| (count.start(), count.end(), replacement))
+        })
+        .chain(range.captures_iter(input).filter_map(|captures| {
+            let count = captures.get(1).expect("range count capture is required");
+            compact_large_count(count.as_str())
+                .map(|replacement| (count.start(), count.end(), replacement))
+        }))
+        .collect();
+    replacements.sort_by_key(|(start, _, _)| *start);
+    replacements.dedup_by_key(|(start, end, _)| (*start, *end));
+
+    apply_replacements(input, replacements)
+}
+
+fn compact_large_count(count: &str) -> Option<String> {
+    let mut parts = count.split_ascii_whitespace();
+    let coefficient = parts.next()?;
+    if let Some(magnitude) = parts.next() {
+        let suffix = match magnitude.to_ascii_lowercase().as_str() {
+            "thousand" => 'K',
+            "million" => 'M',
+            "billion" => 'B',
+            _ => return None,
+        };
+        return Some(format!("{coefficient}{suffix}"));
+    }
+
+    let value = coefficient.parse::<u64>().ok()?;
+    for (scale, suffix) in [(1_000_000_000, 'B'), (1_000_000, 'M'), (1_000, 'K')] {
+        if value < scale {
+            continue;
+        }
+        if value % scale == 0 {
+            return Some(format!("{}{suffix}", value / scale));
+        }
+        let tenth = scale / 10;
+        if value % tenth == 0 {
+            let scaled_tenths = value / tenth;
+            return Some(format!(
+                "{}.{}{suffix}",
+                scaled_tenths / 10,
+                scaled_tenths % 10
+            ));
+        }
+    }
+    None
+}
+
 fn apply_replacements(input: &str, replacements: Vec<(usize, usize, String)>) -> TransformResult {
     if replacements.is_empty() {
         return unchanged(input);

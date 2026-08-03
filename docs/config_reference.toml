@@ -159,6 +159,7 @@
 #   spoken-version-numbers - render multi-point spoken versions with text2num.
 #   numeric-point-suffixes - append spoken point parts to an existing number.
 #   spoken-numbers - convert English numbers, retaining readable large magnitudes.
+#   compact-parameter-counts - render parameter counts with K/M/B suffixes.
 #   numeric-identifier-groups - join split digits in uppercase identifiers.
 #   numeric-magnitude-suffixes - join numeric groups to uppercase K/M/B.
 #   compact-version-prefix - join V/v to a following dotted version.

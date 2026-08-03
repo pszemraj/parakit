@@ -374,6 +374,43 @@ fn large_magnitude_formatting_preserves_compounds_and_numeric_literals() {
 }
 
 #[test]
+fn parameter_counts_use_compact_magnitude_suffixes() {
+    assert_clean_cases(
+        CleaningProfile::Safe,
+        &[
+            (
+                "Use a hundred million up to one billion parameters.",
+                "Use 100M up to 1B parameters.",
+            ),
+            (
+                "The model has 125 million parameters.",
+                "The model has 125M parameters.",
+            ),
+            (
+                "The model has 1500000000 parameters.",
+                "The model has 1.5B parameters.",
+            ),
+            (
+                "The model has 100000000 parameters.",
+                "The model has 100M parameters.",
+            ),
+            (
+                "The model has 123456789 parameters.",
+                "The model has 123456789 parameters.",
+            ),
+            (
+                "The company is worth three billion dollars.",
+                "The company is worth 3 billion dollars.",
+            ),
+            (
+                "The dataset has a million examples.",
+                "The dataset has 1 million examples.",
+            ),
+        ],
+    );
+}
+
+#[test]
 fn text2num_leaves_values_below_the_default_threshold_untouched() {
     // With `number_threshold` unset, the effective threshold is
     // `DEFAULT_NUMBER_THRESHOLD` (4.0): isolated values strictly below it
