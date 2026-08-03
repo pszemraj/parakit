@@ -87,7 +87,7 @@ A key you did not set prints its built-in default in parentheses. On Linux the o
 
 `config show` reports the config file merged with built-in defaults. It does not merge CLI flags, so a one-off `parakit start --device cpu` does not appear there, and the output is a summary rather than a round-trippable config.
 
-`--quiet config show` prints nothing and returns before it loads the file, so quiet mode is not a validation command. `--quiet` likewise silences `config path` and the `wrote <path>` line from `config init`, though `init` still writes the file.
+`--quiet config show` prints nothing but still resolves, loads, and validates the config file, so it can be used as a silent validation command. `--quiet` likewise silences `config path` and the `wrote <path>` line from `config init`, though those commands still perform their normal path resolution and file operations.
 
 `$VISUAL` and `$EDITOR` are split into an executable plus arguments using shell-style quoting, then launched directly with the config path appended. Values such as `EDITOR="code -w"` therefore work without invoking a shell. With neither variable set, `config edit` errors and prints the path to edit by hand.
 

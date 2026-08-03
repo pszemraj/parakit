@@ -101,6 +101,11 @@ fn quiet_path_commands_still_report_resolution_and_parse_errors() {
             "failed to parse config file",
             Some(&broken_config),
         ),
+        (
+            &["--quiet", "config", "show"],
+            "PARAKIT_CONFIG_PATH is set but empty",
+            None,
+        ),
     ];
 
     for (args, expected_error, config_path) in cases {

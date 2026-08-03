@@ -1013,6 +1013,7 @@ fn init_config_file(force: bool, quiet: bool) -> Result<()> {
 fn print_config_show(quiet: bool) -> Result<()> {
     let path = config::config_path()?;
     let config = config::load()?;
+    // Quiet suppresses the report, not path resolution or config validation.
     if quiet {
         return Ok(());
     }
