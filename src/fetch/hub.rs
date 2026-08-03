@@ -241,7 +241,7 @@ fn api_url(endpoint: &str, owner: &str, repo: &str, revision: &str) -> String {
         "{endpoint}/api/models/{}/{}/revision/{}?blobs=true",
         percent_encode_segment(owner),
         percent_encode_segment(repo),
-        percent_encode_path(revision),
+        percent_encode_segment(revision),
     )
 }
 
@@ -250,7 +250,7 @@ fn resolve_url(endpoint: &str, owner: &str, repo: &str, revision: &str, rfilenam
         "{endpoint}/{}/{}/resolve/{}/{}",
         percent_encode_segment(owner),
         percent_encode_segment(repo),
-        percent_encode_path(revision),
+        percent_encode_segment(revision),
         percent_encode_path(rfilename),
     )
 }
@@ -396,13 +396,13 @@ mod tests {
     #[test]
     fn parses_owner_repo_with_revision() {
         let SourceKind::Repo(spec) =
-            classify_source("handy-computer/parakeet-tdt-0.6b-v3-gguf@refs-pr-1").unwrap()
+            classify_source("handy-computer/parakeet-tdt-0.6b-v3-gguf@refs/pr/1").unwrap()
         else {
             panic!("expected a repo spec");
         };
         assert_eq!(spec.owner, "handy-computer");
         assert_eq!(spec.repo, "parakeet-tdt-0.6b-v3-gguf");
-        assert_eq!(spec.revision.as_deref(), Some("refs-pr-1"));
+        assert_eq!(spec.revision.as_deref(), Some("refs/pr/1"));
     }
 
     #[test]
@@ -634,29 +634,42 @@ mod tests {
     #[test]
     fn api_url_percent_encodes_and_builds_the_blobs_query() {
         assert_eq!(
-            api_url("https://huggingface.co", "cstr", "parakeet tdt", "main"),
-            "https://huggingface.co/api/models/cstr/parakeet%20tdt/revision/main?blobs=true"
+            api_url(
+                "https://huggingface.co",
+                "cstr",
+                "parakeet tdt",
+                "refs/pr/1"
+            ),
+            "https://huggingface.co/api/models/cstr/parakeet%20tdt/revision/refs%2Fpr%2F1?blobs=true"
         );
     }
 
     #[test]
     fn resolve_url_cases() {
-        for (name, endpoint, rfilename, expect) in [
+        for (name, endpoint, revision, rfilename, expect) in [
             (
-                "percent-encodes the filename and revision",
+                "encodes the revision as one segment and preserves filename separators",
                 "https://huggingface.co",
-                "parakeet tdt Q8_0.gguf",
-                "https://huggingface.co/cstr/parakeet-tdt-0.6b-v3-GGUF/resolve/main/parakeet%20tdt%20Q8_0.gguf",
+                "feature/foo",
+                "weights/parakeet tdt #1.gguf",
+                "https://huggingface.co/cstr/parakeet-tdt-0.6b-v3-GGUF/resolve/feature%2Ffoo/weights/parakeet%20tdt%20%231.gguf",
             ),
             (
                 "honors a rewritten endpoint",
                 "https://mirror.internal.example.com",
+                "main",
                 "model.gguf",
                 "https://mirror.internal.example.com/cstr/parakeet-tdt-0.6b-v3-GGUF/resolve/main/model.gguf",
             ),
         ] {
             assert_eq!(
-                resolve_url(endpoint, "cstr", "parakeet-tdt-0.6b-v3-GGUF", "main", rfilename),
+                resolve_url(
+                    endpoint,
+                    "cstr",
+                    "parakeet-tdt-0.6b-v3-GGUF",
+                    revision,
+                    rfilename
+                ),
                 expect,
                 "{name}"
             );
