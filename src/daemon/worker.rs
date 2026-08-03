@@ -1000,6 +1000,8 @@ pub(crate) fn sanitize_for_paste(raw: &str, mode: PasteMode) -> PastePlan {
         }
     }
 
+    // Length alone is not unsafe: recording duration and IPC framing are
+    // bounded at their entry points, and long single-line dictation remains valid.
     PastePlan::Paste(text)
 }
 
