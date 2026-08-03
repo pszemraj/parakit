@@ -128,6 +128,11 @@ pub(crate) fn is_known_openblas_runtime_dll(file_name: &str) -> bool {
 ///
 /// * `dir` - Runtime DLL staging directory from a previous or current build.
 ///
+/// # Returns
+///
+/// `Ok(())` once all matching runtime files have been removed or when `dir`
+/// does not exist.
+///
 /// # Errors
 ///
 /// Returns an error when the directory cannot be read or a matching file cannot
