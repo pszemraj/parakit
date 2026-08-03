@@ -5,7 +5,8 @@ mod common;
 mod windows_openblas;
 
 use windows_openblas::{
-    find_windows_openblas, is_known_openblas_runtime_dll, WindowsOpenBlasImportKind,
+    find_windows_openblas, is_known_openblas_runtime_dll, remove_known_openblas_runtime_dlls,
+    WindowsOpenBlasImportKind,
 };
 
 /// Expected layout fields for a case that should be detected.
@@ -192,4 +193,29 @@ fn runtime_dll_filter_accepts_primary_and_known_dependency_names() {
     assert!(is_known_openblas_runtime_dll("libquadmath-0.dll"));
     assert!(is_known_openblas_runtime_dll("libwinpthread-1.dll"));
     assert!(!is_known_openblas_runtime_dll("unrelated.dll"));
+}
+
+#[test]
+fn removes_stale_openblas_runtimes_without_touching_other_dlls() {
+    let root = common::fixture_root_with_files(
+        "windows-openblas-layout-tests",
+        "stale-runtime-dlls",
+        &[
+            "bin/openblas.dll",
+            "bin/libgfortran-5.dll",
+            "bin/libwinpthread-1.dll",
+            "bin/crispasr.dll",
+            "bin/unrelated.dll",
+        ],
+    );
+    let bin = root.join("bin");
+
+    remove_known_openblas_runtime_dlls(&bin)
+        .expect("stale OpenBLAS runtime DLLs should be removed");
+
+    assert!(!bin.join("openblas.dll").exists());
+    assert!(!bin.join("libgfortran-5.dll").exists());
+    assert!(!bin.join("libwinpthread-1.dll").exists());
+    assert!(bin.join("crispasr.dll").is_file());
+    assert!(bin.join("unrelated.dll").is_file());
 }

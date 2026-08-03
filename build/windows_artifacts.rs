@@ -8,7 +8,7 @@ use crate::windows_cuda::{cuda_external_dll_names, cuda_runtime_dirs, remove_cud
 use crate::windows_manifest::{
     stale_runtime_dlls, Accelerator, CudaManifest, RuntimeManifest, VulkanManifest,
 };
-use crate::windows_openblas::WindowsOpenBlas;
+use crate::windows_openblas::{remove_known_openblas_runtime_dlls, WindowsOpenBlas};
 use std::env;
 use std::path::{Path, PathBuf};
 
@@ -50,6 +50,12 @@ pub(crate) fn prepare_windows_artifacts(
         )
     });
 
+    remove_known_openblas_runtime_dlls(bin_dir).unwrap_or_else(|err| {
+        panic!(
+            "failed to remove stale OpenBLAS runtime DLLs from {}: {err}",
+            bin_dir.display()
+        )
+    });
     copy_windows_runtime_dlls(install_dir, bin_dir);
     remove_cuda_external_dlls(bin_dir).unwrap_or_else(|err| {
         panic!(
@@ -206,7 +212,6 @@ fn windows_import_library_name(base: &str) -> String {
 
 fn copy_windows_runtime_dlls(install_dir: &Path, bin_dir: &Path) {
     let mut dlls = collect_files_with_extension(&install_dir.join("build"), "dll");
-    dlls.extend(collect_files_with_extension(bin_dir, "dll"));
     dlls.sort();
     dlls.dedup();
 

@@ -122,6 +122,37 @@ pub(crate) fn is_known_openblas_runtime_dll(file_name: &str) -> bool {
     is_primary_openblas_runtime_dll(file_name) || is_known_openblas_dependency_dll(file_name)
 }
 
+/// Remove OpenBLAS runtime files left in a reusable Windows staging directory.
+///
+/// # Arguments
+///
+/// * `dir` - Runtime DLL staging directory from a previous or current build.
+///
+/// # Errors
+///
+/// Returns an error when the directory cannot be read or a matching file cannot
+/// be removed. A missing directory is treated as already clean.
+pub(crate) fn remove_known_openblas_runtime_dlls(dir: &Path) -> std::io::Result<()> {
+    let entries = match fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(err) => return Err(err),
+    };
+
+    for entry in entries {
+        let path = entry?.path();
+        let is_openblas_runtime = path.is_file()
+            && path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(is_known_openblas_runtime_dll);
+        if is_openblas_runtime {
+            fs::remove_file(path)?;
+        }
+    }
+    Ok(())
+}
+
 fn is_primary_openblas_runtime_dll(file_name: &str) -> bool {
     let lower = file_name.to_ascii_lowercase();
     lower == "openblas.dll"
