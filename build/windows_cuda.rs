@@ -111,6 +111,10 @@ pub(crate) fn is_cuda_external_dll_name(file_name: &str) -> bool {
 
 /// Remove external CUDA runtime DLLs from a reused bundle staging directory.
 ///
+/// # Returns
+///
+/// `Ok(())` after all matching DLLs have been removed.
+///
 /// # Errors
 ///
 /// Returns an error when the directory cannot be read or a matching DLL cannot
