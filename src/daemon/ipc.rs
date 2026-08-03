@@ -39,6 +39,11 @@ const IPC_TRANSPORT_TIMEOUT: Duration = Duration::from_millis(750);
 /// one complete paste transaction before running its own.
 #[cfg(any(unix, target_os = "windows"))]
 const IPC_INSERT_RESPONSE_TIMEOUT: Duration = Duration::from_secs(10);
+/// Maximum time stop finalization waits for an in-flight paste transaction.
+/// This covers one normal macOS transaction while preserving a forced-exit
+/// path if platform insertion code wedges.
+#[cfg(any(unix, target_os = "windows"))]
+const STOP_INSERTION_WAIT: Duration = Duration::from_secs(5);
 /// Maximum accepted Windows control-pipe message size.
 #[cfg(any(target_os = "windows", test))]
 const IPC_MAX_MESSAGE_SIZE: usize = 64 * 1024;
@@ -979,17 +984,29 @@ fn finish_stop_after_response<R>(
     cleanup_path: Option<std::path::PathBuf>,
     terminate: impl FnOnce() -> R,
 ) -> R {
+    finish_stop_after_response_with_wait(state, cleanup_path, STOP_INSERTION_WAIT, terminate)
+}
+
+#[cfg(any(unix, target_os = "windows"))]
+fn finish_stop_after_response_with_wait<R>(
+    state: &SharedState,
+    cleanup_path: Option<std::path::PathBuf>,
+    insertion_wait: Duration,
+    terminate: impl FnOnce() -> R,
+) -> R {
     // A response has already been written, so waiting here does not consume
     // the client's transport timeout. Holding the lock through termination
     // lets an in-flight paste release every synthetic modifier and prevents a
-    // new paste from starting during the response grace period.
-    state.with_insertion_lock(|| {
+    // new paste from starting during the response grace period. A wedged
+    // insertion must not prevent the stop command from terminating the daemon.
+    let insertion_guard = state.insertion.try_lock_for(insertion_wait);
+    if insertion_guard.is_some() {
         thread::sleep(STOP_RESPONSE_GRACE);
-        if let Some(path) = cleanup_path {
-            let _ = std::fs::remove_file(path);
-        }
-        terminate()
-    })
+    }
+    if let Some(path) = cleanup_path {
+        let _ = std::fs::remove_file(path);
+    }
+    terminate()
 }
 
 #[cfg(any(unix, target_os = "windows"))]
@@ -2264,6 +2281,42 @@ mod tests {
         later_insertion
             .join()
             .expect("later insertion should return");
+    }
+
+    #[cfg(any(unix, target_os = "windows"))]
+    #[test]
+    fn stop_finalization_forces_termination_when_insertion_is_wedged() {
+        use std::sync::mpsc;
+
+        let state = Arc::new(SharedState::new());
+        let (insertion_started_tx, insertion_started_rx) = mpsc::channel();
+        let (release_insertion_tx, release_insertion_rx) = mpsc::channel();
+        let insertion_state = Arc::clone(&state);
+        let insertion = thread::spawn(move || {
+            insertion_state.with_insertion_lock(|| {
+                insertion_started_tx
+                    .send(())
+                    .expect("test should observe in-flight insertion");
+                release_insertion_rx
+                    .recv()
+                    .expect("test should release in-flight insertion");
+            });
+        });
+        insertion_started_rx
+            .recv()
+            .expect("insertion should acquire the lock");
+
+        let started = Instant::now();
+        let terminated =
+            finish_stop_after_response_with_wait(&state, None, Duration::from_millis(20), || true);
+
+        assert!(terminated);
+        assert!(started.elapsed() < Duration::from_secs(1));
+
+        release_insertion_tx
+            .send(())
+            .expect("in-flight insertion should be released");
+        insertion.join().expect("in-flight insertion should return");
     }
 
     #[test]
