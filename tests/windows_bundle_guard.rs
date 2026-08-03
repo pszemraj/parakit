@@ -250,12 +250,65 @@ fn installer_replaces_unmarked_default_bundle_and_removes_stale_backend_files() 
         "default bundle switch should succeed: {output_text}"
     );
     assert!(
-        output_text.contains("Removing existing install directory before replacement:"),
-        "default bundle switch should announce its recursive removal: {output_text}"
+        output_text.contains("Replacing existing install directory:"),
+        "default bundle switch should announce its replacement: {output_text}"
     );
     assert!(install.join(".parakit-install").is_file());
     assert!(!install.join("ggml-cuda.dll").exists());
     let manifest = fs::read_to_string(install.join("parakit-runtime-manifest.json"))
         .expect("installed manifest should be readable");
     assert!(manifest.contains(r#""accelerator":"vulkan""#));
+}
+
+#[cfg(windows)]
+#[test]
+fn installer_preserves_existing_bundle_when_staged_smoke_fails() {
+    use std::fs;
+    use std::process::Command;
+
+    let root = common::fixture_root("windows-bundle-guard", "failed-staged-smoke");
+    let local_app_data = root.join("local-app-data");
+    let bundle = root.join("bundle");
+    let install = local_app_data.join("Programs").join("parakit");
+    fs::create_dir_all(&bundle).expect("bundle dir should be created");
+    fs::create_dir_all(&install).expect("install dir should be created");
+
+    let parakit = std::path::Path::new(env!("CARGO_BIN_EXE_parakit"));
+    fs::copy(parakit, install.join("parakit.exe")).expect("working executable should be installed");
+    fs::write(install.join("keep.txt"), b"previous install")
+        .expect("previous install sentinel should be written");
+    fs::write(
+        bundle.join("parakit-runtime-manifest.json"),
+        r#"{"required_files":["parakit.exe"],"accelerator":"cpu"}"#,
+    )
+    .expect("manifest should be written");
+    fs::write(bundle.join("parakit.exe"), b"not a Windows executable")
+        .expect("broken incoming executable should be written");
+
+    let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let output = Command::new("powershell")
+        .current_dir(repo)
+        .env("LOCALAPPDATA", &local_app_data)
+        .args(["-NoProfile", "-ExecutionPolicy", "RemoteSigned", "-File"])
+        .arg(repo.join("scripts/windows/install.ps1"))
+        .arg("-BundleDir")
+        .arg(&bundle)
+        .arg("-InstallDir")
+        .arg(&install)
+        .arg("-NoUserPath")
+        .output()
+        .expect("install.ps1 should run");
+
+    assert!(!output.status.success());
+    assert_eq!(
+        fs::read(install.join("keep.txt")).expect("previous install should remain in place"),
+        b"previous install"
+    );
+    let leftovers = fs::read_dir(install.parent().unwrap())
+        .expect("install parent should remain readable")
+        .flatten()
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .filter(|name| name.contains(".installing-") || name.contains(".backup-"))
+        .collect::<Vec<_>>();
+    assert!(leftovers.is_empty(), "staging leftovers: {leftovers:?}");
 }

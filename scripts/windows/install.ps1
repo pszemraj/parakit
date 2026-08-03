@@ -266,7 +266,9 @@ function Assert-VulkanExternalDlls {
 function Invoke-InstallSmoke {
     param(
         [Parameter(Mandatory = $true)]
-        [string]$Path
+        [string]$Path,
+
+        [switch]$SilentSuccess
     )
 
     $exe = Join-Path $Path "parakit.exe"
@@ -284,7 +286,9 @@ function Invoke-InstallSmoke {
         throw "Installed parakit loader smoke test failed with exit code $code"
     }
 
-    Write-Host "Smoke: parakit --version OK"
+    if (-not $SilentSuccess) {
+        Write-Host "Smoke: parakit --version OK"
+    }
 }
 
 function Install-Bundle {
@@ -303,10 +307,14 @@ function Install-Bundle {
         [System.StringComparison]::OrdinalIgnoreCase
     )
 
-    if (Test-Path -LiteralPath $Destination -PathType Container) {
+    $destinationExists = Test-Path -LiteralPath $Destination
+    if ($destinationExists -and -not (Test-Path -LiteralPath $Destination -PathType Container)) {
+        throw "Refusing to replace a non-directory install path: $Destination"
+    }
+
+    if ($destinationExists) {
         if ($isDefaultInstall -or (Test-Path -LiteralPath $marker -PathType Leaf)) {
-            Write-Host "Removing existing install directory before replacement: $Destination"
-            Remove-Item -LiteralPath $Destination -Recurse -Force
+            Write-Host "Replacing existing install directory: $Destination"
         } else {
             $existingEntry = Get-ChildItem -LiteralPath $Destination -Force | Select-Object -First 1
             if ($null -ne $existingEntry) {
@@ -315,14 +323,58 @@ function Install-Bundle {
         }
     }
 
-    New-Item -ItemType Directory -Path $Destination -Force | Out-Null
+    $parent = Split-Path -Parent $Destination
+    New-Item -ItemType Directory -Path $parent -Force | Out-Null
+    $leaf = Split-Path -Leaf $Destination
+    $nonce = [System.Guid]::NewGuid().ToString("N")
+    $staging = Join-Path $parent ".$leaf.installing-$nonce"
+    $backup = Join-Path $parent ".$leaf.backup-$nonce"
+    $backupCreated = $false
+    $newInstallPlaced = $false
 
-    Get-ChildItem -LiteralPath $Source -Force |
-        ForEach-Object {
-            Copy-Item -LiteralPath $_.FullName -Destination $Destination -Recurse -Force
+    try {
+        New-Item -ItemType Directory -Path $staging | Out-Null
+
+        Get-ChildItem -LiteralPath $Source -Force |
+            ForEach-Object {
+                Copy-Item -LiteralPath $_.FullName -Destination $staging -Recurse -Force
+            }
+
+        Set-Content -LiteralPath (Join-Path $staging ".parakit-install") -Value "parakit windows install" -Encoding ascii
+        Invoke-InstallSmoke -Path $staging -SilentSuccess
+
+        if ($destinationExists) {
+            Move-Item -LiteralPath $Destination -Destination $backup
+            $backupCreated = $true
         }
 
-    Set-Content -LiteralPath $marker -Value "parakit windows install" -Encoding ascii
+        Move-Item -LiteralPath $staging -Destination $Destination
+        $newInstallPlaced = $true
+        Invoke-InstallSmoke -Path $Destination
+
+        if ($backupCreated) {
+            Remove-Item -LiteralPath $backup -Recurse -Force
+            $backupCreated = $false
+        }
+    } catch {
+        $installError = $_
+        try {
+            if ($newInstallPlaced -and (Test-Path -LiteralPath $Destination)) {
+                Remove-Item -LiteralPath $Destination -Recurse -Force
+            }
+            if ($backupCreated -and (Test-Path -LiteralPath $backup -PathType Container)) {
+                Move-Item -LiteralPath $backup -Destination $Destination
+                $backupCreated = $false
+            }
+        } catch {
+            throw "Install failed and the previous installation could not be restored automatically. It remains at ${backup}. Original error: $($installError.Exception.Message). Rollback error: $($_.Exception.Message)"
+        }
+        throw $installError
+    } finally {
+        if (Test-Path -LiteralPath $staging) {
+            Remove-Item -LiteralPath $staging -Recurse -Force
+        }
+    }
 }
 
 Assert-NativeWindows "This installer"
@@ -336,7 +388,6 @@ Assert-ExternalRuntimeDependencies -Manifest $manifest -BundleDir $bundleFull
 
 Install-Bundle -Source $bundleFull -Destination $installFull
 Write-Host "Installed: $installFull"
-Invoke-InstallSmoke $installFull
 
 if ($NoUserPath) {
     Write-Host "User PATH: skipped"
