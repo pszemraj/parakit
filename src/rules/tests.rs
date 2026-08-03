@@ -217,6 +217,7 @@ fn high_confidence_casual_forms_are_expanded() {
         &[
             ("I'm gonna test it.", "I'm going to test it."),
             ("I'm gunna test it.", "I'm going to test it."),
+            ("I've gotta leave.", "I've got to leave."),
             ("I wanna test it.", "I want to test it."),
             ("I wana test it.", "I want to test it."),
             ("It's kinda odd.", "It's kind of odd."),

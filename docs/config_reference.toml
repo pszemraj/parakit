@@ -166,6 +166,7 @@
 #   cause-to-because - expand standalone or attached apostrophe-cause to "because".
 #   casual-em-til-round - separate attached 'em/'til/'round/'bout/'cept/'nother.
 #   casual-gonna - expand "gonna"/"gunna" to "going to".
+#   casual-gotta - expand "gotta" to "got to".
 #   casual-wanna - expand "wanna"/"wana" to "want to".
 #   casual-kinda - expand "kinda" to "kind of".
 #   casual-gimme - expand "gimme" to "give me".

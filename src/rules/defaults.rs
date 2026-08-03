@@ -217,6 +217,13 @@ pub(crate) const DEFAULT_RULES: &[Rule] = &[
         "going to"
     ),
     regex_rule!(
+        "casual-gotta",
+        "Expand 'gotta' to 'got to'",
+        Activation::Safe,
+        r#"(?i)\bgotta\b"#,
+        "got to"
+    ),
+    regex_rule!(
         "casual-wanna",
         "Expand 'wanna' and 'wana' to 'want to'",
         Activation::Safe,
