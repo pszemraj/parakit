@@ -102,6 +102,8 @@ Every pass must have a stable name, explicit activation tier, tests, and rule-hi
 
 Add an entry to `DEFAULT_RULES` in `src/rules/defaults.rs` using the `regex_rule!`, `fancy_rule!`, or `procedural_rule!` macro, and pick an activation tier: `Activation::Safe` for mechanical or high-confidence work, `Activation::Aggressive` for anything that can change meaning.
 
+`spoken-numbers` is the single exception: it is a raw `Rule` literal because its dedicated `RuleKind::SpokenNumbers` is compiled with the configured number threshold.
+
 Rules use Rust's `regex` crate dialect:
 
 - no lookaround;
