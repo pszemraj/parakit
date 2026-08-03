@@ -212,7 +212,8 @@
 
 # [hotkey]
 #
-# Linux only; uncommenting backend on macOS or Windows is an unknown-key error.
+# Linux only; macOS and Windows accept this key for synced-config portability
+# but ignore its value.
 # This setting selects capture machinery, not the push-to-talk chord.
 
 # hotkey.backend
