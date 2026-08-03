@@ -211,29 +211,27 @@ impl CompiledRule {
     fn apply<'a>(&self, input: &'a str) -> Result<RuleApplication<'a>> {
         match &self.transform {
             CompiledTransform::Regex { re, replacement } => {
-                let text = re.replace_all(input, replacement.as_ref());
-                let matches = if matches!(&text, Cow::Borrowed(_)) {
-                    0
-                } else {
-                    re.find_iter(input).count()
-                };
+                let mut matches = 0;
+                let text = re.replace_all(input, |captures: &regex::Captures<'_>| {
+                    matches += 1;
+                    let mut expanded = String::new();
+                    captures.expand(replacement.as_ref(), &mut expanded);
+                    expanded
+                });
                 Ok(RuleApplication { text, matches })
             }
             CompiledTransform::FancyRegex { re, replacement } => {
-                let text = re.try_replacen(input, 0, *replacement).with_context(|| {
-                    format!("rule '{}' failed during fancy-regex replacement", self.name)
-                })?;
-                let matches = if matches!(&text, Cow::Borrowed(_)) {
-                    0
-                } else {
-                    re.find_iter(input).try_fold(0, |matches, found| {
-                        found
-                            .with_context(|| {
-                                format!("rule '{}' failed during fancy-regex matching", self.name)
-                            })
-                            .map(|_| matches + 1)
-                    })?
-                };
+                let mut matches = 0;
+                let text = re
+                    .try_replacen(input, 0, |captures: &fancy_regex::Captures<'_>| {
+                        matches += 1;
+                        let mut expanded = String::new();
+                        captures.expand(replacement, &mut expanded);
+                        expanded
+                    })
+                    .with_context(|| {
+                        format!("rule '{}' failed during fancy-regex application", self.name)
+                    })?;
                 Ok(RuleApplication { text, matches })
             }
             CompiledTransform::Procedural(transform) => {
@@ -680,7 +678,7 @@ mod rule_application_tests {
     use super::*;
 
     #[test]
-    fn unmatched_regex_rules_borrow_the_input() {
+    fn regex_rules_borrow_unmatched_input_and_count_replacements() {
         let rule = CompiledRule {
             name: "test".to_string(),
             position: None,
@@ -694,5 +692,11 @@ mod rule_application_tests {
 
         assert_eq!(applied.matches, 0);
         assert!(matches!(applied.text, Cow::Borrowed("unchanged input")));
+
+        let applied = rule
+            .apply("match-me and match-me")
+            .expect("apply matching regex");
+        assert_eq!(applied.matches, 2);
+        assert_eq!(applied.text, "replacement and replacement");
     }
 }
