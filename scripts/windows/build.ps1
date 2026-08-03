@@ -403,7 +403,7 @@ try {
 
     Write-Host "Building $Profile ($Backend)"
     $cargoTargetRoot = Get-CargoTargetRoot
-    $cargoArgs = @("build", "--target-dir", $cargoTargetRoot)
+    $cargoArgs = @("build", "--locked", "--target-dir", $cargoTargetRoot)
     if ($Profile -eq "release") {
         $cargoArgs += "--release"
     }
