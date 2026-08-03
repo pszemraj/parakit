@@ -305,6 +305,7 @@ function Install-Bundle {
 
     if (Test-Path -LiteralPath $Destination -PathType Container) {
         if ($isDefaultInstall -or (Test-Path -LiteralPath $marker -PathType Leaf)) {
+            Write-Host "Removing existing install directory before replacement: $Destination"
             Remove-Item -LiteralPath $Destination -Recurse -Force
         } else {
             $existingEntry = Get-ChildItem -LiteralPath $Destination -Force | Select-Object -First 1

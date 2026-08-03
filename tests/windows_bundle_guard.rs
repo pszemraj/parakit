@@ -241,6 +241,10 @@ fn installer_replaces_unmarked_default_bundle_and_removes_stale_backend_files() 
         output.status.success(),
         "default bundle switch should succeed: {output_text}"
     );
+    assert!(
+        output_text.contains("Removing existing install directory before replacement:"),
+        "default bundle switch should announce its recursive removal: {output_text}"
+    );
     assert!(install.join(".parakit-install").is_file());
     assert!(!install.join("ggml-cuda.dll").exists());
     let manifest = fs::read_to_string(install.join("parakit-runtime-manifest.json"))
