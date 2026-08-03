@@ -325,10 +325,14 @@ fn print_ready_with_hint(options: &FetchOptions, path: &Path) {
         "parakit: run `parakit start -m {}` to use it",
         path.display()
     ));
+    let config_path = toml_path_literal(path);
     options.status(format_args!(
-        "parakit: or set daemon.model = \"{}\" in config.toml",
-        path.display()
+        "parakit: or set daemon.model = {config_path} in config.toml"
     ));
+}
+
+fn toml_path_literal(path: &Path) -> String {
+    toml::Value::String(path.to_string_lossy().into_owned()).to_string()
 }
 
 /// Download `url` to `dest` (via a `.gguf.part` staging file), verifying
@@ -836,6 +840,20 @@ mod tests {
             ),
         ] {
             assert_eq!(url_file_name(url).ok().as_deref(), expect, "{name}");
+        }
+    }
+
+    #[test]
+    fn config_model_hint_paths_round_trip_through_toml() {
+        for path in [
+            r"C:\Users\Name With Space\models\model.gguf",
+            "target/models/model \"Q8_0\".gguf",
+            "target/models/José/model\ncontinued.gguf",
+        ] {
+            let literal = toml_path_literal(Path::new(path));
+            let parsed: toml::Value = format!("daemon.model = {literal}").parse().unwrap();
+
+            assert_eq!(parsed["daemon"]["model"].as_str(), Some(path), "{path:?}");
         }
     }
 
