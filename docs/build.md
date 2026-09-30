@@ -152,7 +152,7 @@ CUDA builds also force `GGML_CUDA_NCCL=OFF`.
 
 Metal builds embed the shader source into `libggml-metal.dylib`, so there is no loose `default.metallib` to carry with the binary. The first GPU use still pays normal Metal runtime compilation/warmup cost.
 
-On macOS, `PARAKIT_BLAS=auto` uses Apple Accelerate. `libomp` is optional; ggml's OpenMP path degrades when OpenMP is not available, and Metal handles GPU offload separately.
+On macOS, `libomp` is optional; ggml's OpenMP path degrades when OpenMP is not available, and Metal handles GPU offload separately.
 
 ## Runtime Library Paths
 

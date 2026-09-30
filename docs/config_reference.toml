@@ -105,11 +105,7 @@
 # Type: nonnegative whole minutes (optional). Default: 10. Zero disables
 # offloading. CLI start --model-idle-minutes N overrides the config.
 # Durations outside the platform monotonic clock range are rejected.
-# Idle begins at readiness and restarts after all recording, queued work,
-# transcription, and insertion finish, including failures and silent captures.
-# Status/history reads do not extend it. The next PTT automatically reopens
-# and warms the resolved local model while recording continues. Reload errors
-# skip that dictation and are retried on the next press; no automatic fetch.
+# Activity, reload, and failure behavior: [Idle Model Offload](running.md#idle-model-offload).
 
 
 # [cleaning]
@@ -139,17 +135,12 @@
 
 # cleaning.number_threshold
 # Type: finite integer/float >= 0 (optional). Default: 4 when unset.
-# Isolated cardinals/ordinals at or above the threshold digitize; below it,
-# left exactly as recognized, never forced to a word or a digit. Set 0 to
-# convert every isolated value instead. A recognized expression ending in one
-# explicit million/billion scale uses a numeric coefficient plus that
-# word (for example, "three billion" becomes "3 billion"); multi-scale
-# compounds retain full digits.
+# Isolated cardinals/ordinals at or above the threshold digitize; values below
+# it are left as recognized. Set 0 to convert every isolated value.
 # No CLI override. It controls only "spoken-numbers"; structural numeric
-# passes still normalize.
-# Disabling that rule or cleaning makes it inert, not unvalidated. Time-unit
-# uses of "second" and indefinite plural magnitudes such as "hundreds" and
-# "millions" stay words, preserving their original case and punctuation.
+# passes still normalize. Disabling that rule or cleaning makes it inert,
+# not unvalidated. Grammar, magnitudes, and protected words:
+# [Numbers](cleaning-rules.md#numbers).
 
 # cleaning.disabled_rules
 # Type: array of strings (optional). Default: [].
@@ -213,12 +204,9 @@
 # CLI --log-dir overrides it; there is no CLI flag that forces a configured
 # directory off. Paths receive no ~ or environment expansion, and relative
 # paths resolve from the process working directory.
-# The directory is created lazily. An append-only
-# parakit-YYYY-MM-DD.jsonl file is opened on the first write and rotates when
-# the local date changes. Each record is flushed immediately. Failures warn
-# and dictation continues, but the synchronous write can delay worker progress.
-# Logs contain plaintext transcripts and have no retention or size cap.
+# The directory is created lazily; failures warn and dictation continues.
 # This setting also logs hidden --simulate-ptt-audio runs.
+# File layout, synchronous writes, retention, and fields: [Logs](logging.md).
 
 
 # [hotkey]

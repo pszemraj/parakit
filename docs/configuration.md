@@ -63,11 +63,11 @@ parakit config
     model: (default: hosted Q8_0)
     device: (default: auto)
     threads: 8
-    model_idle_minutes: 10
     paste_mode: standard
     keep_transcript_clipboard: false
     sounds: true
     verbose: false
+    model_idle_minutes: 10
     transcript_history: 20
   cleaning:
     enabled: true
@@ -81,7 +81,7 @@ parakit config
     user rules: 0
 ```
 
-A key you did not set prints its built-in default in parentheses. On Linux the output has an extra `hotkey:` section with the selected `backend`. Each user rule adds a `name (position)` line under the `user rules` count.
+Some unset keys show a parenthesized default; booleans, cleaning settings, and the idle timeout print their effective values directly. On Linux the output has an extra `hotkey:` section with the selected `backend`. Each user rule adds a `name (position)` line under the `user rules` count.
 
 ### Details
 
@@ -109,7 +109,7 @@ Four booleans (`daemon.sounds`, `cleaning.enabled`, `cleaning.keep_trailing_peri
 
 Unknown keys are errors at every level, including inside each `[[rules.user]]` entry. Invalid TOML, invalid values, and rule-validation failures are hard errors that name the config path.
 
-`daemon.model_idle_minutes` releases the inference session after ten idle minutes by default. Use a nonnegative whole number of minutes; `0` keeps the model loaded. `parakit start --model-idle-minutes N` overrides the config for that run. Negative, fractional, and overflowing durations are rejected. Restart after changing the config. The next normal PTT press reloads automatically while audio capture continues; see [idle model offload](running.md#idle-model-offload).
+For `daemon.model_idle_minutes` behavior, see [idle model offload](running.md#idle-model-offload).
 
 Short-lived `rules test` and `rules list` processes each load the current file, which makes them useful for checking a change before restarting the daemon.
 

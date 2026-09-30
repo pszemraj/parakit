@@ -8,7 +8,7 @@ Run the full loop in order before pushing Rust or runtime changes:
 
 ```bash
 cargo fmt --package parakit
-rustdoc-checker . --exclude vendor,local-scratch --strict
+rustdoc-checker . --exclude target,vendor,.claude,local-scratch --strict
 cargo check --workspace --all-targets
 cargo test
 cargo clippy --workspace --all-targets -- -D warnings
@@ -33,6 +33,14 @@ Remove-Item Env:\CRISPASR_LIB_DIR
 This fallback does not replace real GPU validation. Also run the CUDA and Vulkan Windows scripts plus simulated-dictation smoke tests against `local-scratch\Juniper_St_NE_5.wav` when touching Windows GPU behavior.
 
 On macOS, raw `--all-features` also enables CUDA and can fail in CMake before Rust typechecking when the CUDA Toolkit is not installed. Use the same `CRISPASR_LIB_DIR` fallback to validate the Rust all-features surface; validate Metal with the native macOS build and `doctor`.
+
+```bash
+CRISPASR_LIB_DIR="$PWD/target/debug/build/parakit-<hash>/out/lib" \
+  cargo check --workspace --all-targets --all-features
+```
+
+Replace `<hash>` with the directory from the successful native build; do not
+point the fallback at an unrelated or stale library.
 
 ## Rust Source Coverage
 
@@ -85,13 +93,16 @@ For latency work, use short real clips around 2s, 5s, 15s, and 25s. Longer quali
 Use the hidden simulation path when you need the daemon worker flow without a live keyboard, microphone, or text insertion:
 
 ```bash
-cargo run -- start \
-  --simulate-ptt-audio target/tmp/ptt-audio/example.wav
+PARAKIT_CONFIG_PATH=$PWD/target/tmp/ptt-missing.toml \
+XDG_CACHE_HOME=$PWD/target/tmp/ptt-cache \
+  cargo run -- start -m path/to/model.gguf --threads 8 --no-cleaning \
+  --simulate-ptt-audio local-scratch/Juniper_St_NE_5.wav \
+  --model-idle-minutes 1 --simulate-ptt-repeat 2 --simulate-ptt-idle-seconds 61
 ```
 
-Use a real WAV with a known transcript. The command resamples it to the model rate, sends worker start/stop events with owned PCM, runs inference and cleanup, and prints the transcript. It does not test registered hotkeys, evdev-proxy capture, or paste insertion.
+Use a real WAV with a known transcript. The local Juniper fixture above must have SHA256 `d79d7f729b192642b91aef5e1486b97c1cb7f4c34f6ce4a0d45199a9ff23ab5f`; verify its bytes even if your local filename differs. The command resamples it to the model rate and sends worker start/stop events with owned PCM. `--no-cleaning` exposes raw output for comparison; omit it to exercise cleanup too. Add the build feature and `--device` for the backend being tested. On PowerShell, set the environment variables with `$env:NAME = ...` and use the Windows WAV path.
 
-For configured-timeout validation, add `--model-idle-minutes 1 --simulate-ptt-repeat 2 --simulate-ptt-idle-seconds 61`. The worker acknowledges each required transcript, checks exact parity across repeats, and verifies the expected residency after each wait (including the last). Missing transcripts, reload failures, or missed offloads return a failure exit status. An immediate simulated release exercises queuing while reload is busy. Use `--model-idle-minutes 0` to check disabled offloading. Both simulation options require `--simulate-ptt-audio`.
+The worker acknowledges each required transcript, checks exact parity across repeats, and verifies the expected residency after each wait (including the last). Missing transcripts, reload failures, or missed offloads return a failure exit status. An immediate simulated release exercises queuing while reload is busy. Use `--model-idle-minutes 0` to check disabled offloading. For one dictation without an idle wait, omit `--simulate-ptt-repeat` and `--simulate-ptt-idle-seconds`; both options require `--simulate-ptt-audio`.
 
 For ten-cycle memory comparisons and OS-specific measurements, use the [memory harness](memory.md). This is separate from the real-time worker timeout test.
 
@@ -188,10 +199,12 @@ Check:
 - sounds still play in quiet mode unless `--no-sounds` is set;
 - logging writes raw and cleaned text without crashing the daemon.
 
-For a long-running check:
+Run daemon/IPC checks sequentially with isolated config, cache/runtime paths,
+and a model copy. After a configured idle timeout, verify the first PTT still
+captures and inserts once, then check status and history. Make the test model
+unavailable while offloaded to verify reload failure, restore it, and confirm
+the next PTT recovers. Check stop/restart and sleep/wake on the native desktop,
+including start/completion/error cues. Headless simulation does not validate
+these input, audio, or insertion paths. Record unavailable backend runs as pending.
 
-```bash
-ps -o pid,rss,vsz -p "$(pgrep parakit)"
-```
-
-Compare the same workload at stable checkpoints. RSS includes more than model weights and is not directly interchangeable with GPU allocations or private commit; see [memory measurements](memory.md).
+For allocation comparisons, use the [memory harness and platform measurements](memory.md).

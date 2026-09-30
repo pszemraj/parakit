@@ -1,11 +1,11 @@
-# Model memory and idle lifecycle
+# Model Memory And Idle Lifecycle
 
 The daemon owns one inference session on its worker thread. Idle offload drops
 that complete session; it does not unload libraries or reset a process-wide GPU
 device. Configuration and user behavior are described in
 [running.md](../running.md#idle-model-offload).
 
-## Repeatable measurements
+## Repeatable Measurements
 
 Build `parakit` and the `profile-memory` example with the same features, native
 library, optimization, model, and thread count for both runs. Keep other
@@ -47,24 +47,11 @@ to open time to estimate readiness after offload. OS sampling adds pauses
 outside those operation timings. These are diagnostic measurements, not an
 isolated latency benchmark.
 
-For actual worker admission, queueing, and timer behavior, run separately:
+Test worker admission, queueing, and configured timeouts separately with the
+[PTT worker simulation](quality.md#ptt-worker-simulation). Follow the
+[desktop smoke checks](quality.md#runtime-smoke-checks) for live input and insertion.
 
-```bash
-PARAKIT_CONFIG_PATH=$PWD/target/tmp/memory/missing.toml \
-XDG_CACHE_HOME=$PWD/target/tmp/memory/cache \
-  target/release/parakit --verbose start \
-  -m path/to/model.gguf --device gpu --threads 8 --no-cleaning \
-  --model-idle-minutes 1 --simulate-ptt-audio path/to/recording.wav \
-  --simulate-ptt-repeat 2 --simulate-ptt-idle-seconds 61
-```
-
-This waits for completion, checks transcript parity, and requires offload after
-each wait. Immediate release queues audio while reload warms. Test timeout `0`
-separately. Run daemon/IPC tests sequentially with isolated state. These headless
-paths do not validate native hotkeys, microphone, cues, insertion, or
-suspend/resume; exercise those on the desktop afterward.
-
-## Platform measurements
+## Platform Measurements
 
 ### macOS
 
@@ -100,16 +87,29 @@ scheduler placement and staging ownership before calling it a leak.
 
 ### Windows
 
-Use the existing [native build scripts](../windows-desktop.md) for separate CPU,
-CUDA, and Vulkan builds; build the example against the same resulting library.
-Run the collector from the native user session with the corresponding `.exe`:
+Use the [native build scripts](../../scripts/windows/README.md) with `--no-install`
+for separate CPU, CUDA, and Vulkan bundles. Build the example against that
+bundle's native import libraries. For CUDA, replace the library path below with
+the successful build's actual `out/lib` directory; the target base can differ
+when `CARGO_TARGET_DIR` is set. Copy the helper beside the matching bundle's
+DLLs so Windows can load them:
 
 ```powershell
+$env:CRISPASR_LIB_DIR = (Resolve-Path 'target/cuda/release/build/parakit-<hash>/out/lib').Path
+cargo build --release --features cuda --example profile-memory
+Remove-Item Env:\CRISPASR_LIB_DIR
+Copy-Item target/release/examples/profile-memory.exe target/parakit-windows-x86_64-cuda/
 python scripts/profile_memory.py --output target/tmp/memory/windows-cuda --nvidia -- `
-  target/release/examples/profile-memory.exe `
+  target/parakit-windows-x86_64-cuda/profile-memory.exe `
   --model path/to/model.gguf --audio path/to/recording.wav `
   --device gpu --threads 8 --cycles 10
 ```
+
+Adjust the helper path if `CARGO_TARGET_DIR` changes its output location.
+For Vulkan, substitute its feature and bundle; for CPU, omit the accelerator
+feature and use `--device cpu`. Repeat with `--keep-loaded` and a new output
+directory for the resident baseline. These commands require native Windows
+validation; the results below cover macOS only.
 
 The collector calls `GetProcessMemoryInfo` to record working set, peak working
 set, and private committed bytes. These measures are distinct; see Microsoft's
@@ -120,16 +120,16 @@ GPU Process Memory performance counters during checkpoints. WDDM can make
 `nvidia-smi` process memory unavailable; the collector records that explicitly.
 Do not count shared GPU pages twice against host totals.
 
-## Allocation ownership and operation placement
+## Allocation Ownership And Operation Placement
 
-At the pinned CrispASR revision, `src/parakeet.cpp` owns lazy F32 CPU copies of
+At the pinned CrispASR revision, [`parakeet.cpp`](../../vendor/CrispASR/src/parakeet.cpp) owns lazy F32 CPU copies of
 the predictor LSTM and joint-head weights (`pred_w`, `joint_w`), graph metadata,
 and a ggml scheduler. The decoder runs manually on CPU even when the encoder
 runs on GPU. GPU selection therefore does not eliminate CPU allocations.
 `parakeet_free` frees scheduler, model buffer/context, both backend instances,
 and the context containing those vectors.
 
-The loader in `src/core/gguf_loader.cpp` has opt-in CPU and Metal file-mapping
+The [GGUF loader](../../vendor/CrispASR/src/core/gguf_loader.cpp) has opt-in CPU and Metal file-mapping
 paths (`CRISPASR_GGUF_MMAP=1`); the default allocates a backend buffer and copies
 weights. These measurements keep the default. Distinguish a retained
 mapping from a live anonymous duplicate. CUDA has device pools and host-pinned
@@ -149,7 +149,7 @@ purges, GPU resets, or change warmup solely to reduce a single memory counter.
 A native patch needs a minimal reproducer, immutable revision, transcript
 comparison, and backend validation.
 
-## Native results, 2026-09-30
+## Native Results, 2026-09-30
 
 Measured on an Apple M5 MacBook Air with 32 GiB unified memory, macOS 26.7,
 Rust 1.98.1. The paired runs used the same Rust dev-profile example and existing
@@ -176,8 +176,8 @@ All numbers below are `ps` RSS in MiB. Ranges cover ten cycles.
 | First load | 749.6 | 748.7 | 789.1 | 776.4 |
 | First warmup | 838.1 | 837.4 | 881.4 | 874.6 |
 | First short dictation | 852.2 | 851.3 | 881.6 | 874.6 |
-| Full dictations | 1585.8–1591.8 | 1558.8–1590.1 | 899.6–904.3 | 897.3–917.3 |
-| Between dictations | 1585.8–1591.8 | 113.8–129.9 | 899.6–904.3 | 162.2–182.2 |
+| Full dictations | 1585.8-1591.8 | 1558.8-1590.1 | 899.6-904.3 | 897.3-917.3 |
+| Between dictations | 1585.8-1591.8 | 113.8-129.9 | 899.6-904.3 | 162.2-182.2 |
 | Final close | 131.6 | 119.8 | 164.6 | 182.2 |
 
 Closing released approximately **1460 MiB on CPU** and **735 MiB on Metal**

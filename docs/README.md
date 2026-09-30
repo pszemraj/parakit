@@ -1,7 +1,5 @@
 # parakit Docs
 
-Everything under `docs/`, grouped by when you need it.
-
 ## Setup
 
 - [build.md](build.md) - building from source and native dependencies per platform.
@@ -23,4 +21,5 @@ Everything under `docs/`, grouped by when you need it.
 
 - [dev/architecture.md](dev/architecture.md) - module map and platform work.
 - [dev/quality.md](dev/quality.md) - validation and quality checks.
+- [dev/memory.md](dev/memory.md) - memory profiling, allocation ownership, and native results.
 - [dev/README.md](dev/README.md) - maintainer notes.

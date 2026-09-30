@@ -2,10 +2,8 @@
 
 parakit needs a desktop input backend for `Ctrl+Space`.
 
-Idle model offload uses the shared ten-minute default and automatic next-PTT
-reload. Hotkeys and microphone pre-roll remain active. See
-[runtime settings](running.md#idle-model-offload) and the
-[Linux memory procedure](dev/memory.md#linux) for CPU, CUDA, and Vulkan checks.
+See [idle model offload](running.md#idle-model-offload) for runtime behavior and
+[Linux memory measurements](dev/memory.md#linux) for CPU, CUDA, and Vulkan checks.
 
 Default behavior:
 

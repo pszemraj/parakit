@@ -42,7 +42,7 @@ insertion completion, without holding the insertion mutex while waiting for
 the worker. If the budget expires, immediate process termination avoids racing
 C++ static destructors with live native buffers.
 
-Live capture drains callback audio through a bounded single-producer/single-consumer ring buffer. Linux and macOS keep the microphone stream open for 350 ms pre-roll; Windows opens the stream paused and resumes it only while recording so `audiodg.exe` and driver-level processing do not run while idle. Recording uses a session epoch so stale drained samples from a stopped utterance cannot append into the next utterance.
+Live capture drains callback audio through a bounded single-producer/single-consumer ring buffer. Recording uses a session epoch so stale drained samples from a stopped utterance cannot append into the next utterance. Platform stream and pre-roll policies are in [microphone behavior](../running.md#microphone).
 
 ## Ownership Constraints
 
