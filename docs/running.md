@@ -127,6 +127,8 @@ last transcript: 42 bytes
   dictations: 17
   mic:        USB Speech Mic Mono, 48000 Hz mono input -> 16000 Hz mono model, F32
   model:      parakeet-tdt-0.6b-v3-Q8_0.gguf (Q8_0 (745 MB))
+  residency:  loaded
+  model idle: 10 minutes
   device:     cpu (CPU, 8 threads)
   paste mode: standard
   sounds:     on
@@ -137,6 +139,18 @@ last transcript: 42 bytes
 ```
 
 The detail block reflects the daemon's own state at query time, not the querying process's flags. The `hotkey` line is Linux-only. `daemon.verbose = true` does not expand `parakit status`; pass the querying command's global `--verbose` flag as shown. If the daemon has not finished starting up yet (or predates this feature), `--verbose status` instead prints a single `detail unavailable (daemon starting or older version)` line after the two lines above.
+
+## Idle Model Offload
+
+The model loads and warms at startup, then releases its inference session after ten uninterrupted idle minutes. Set `[daemon] model_idle_minutes = N` in the config, or run `parakit start --model-idle-minutes N`. Whole minutes are required; `0` keeps the model resident.
+
+Recording, queued dictations, transcription, and insertion prevent offloading. The interval restarts when all work finishes, including silent captures and failures. Hotkeys, microphone policy, IPC, and transcript history remain available. Reading status or history does not postpone offloading.
+
+Press PTT normally after an idle period. The start cue plays, audio records, and the worker reopens and warms the same local model. An early release queues that audio until the model is ready. Successful dictation retains its normal completion cue. If reopening fails, that dictation reports an error without insertion; the next PTT retries automatically. Explicit `--device gpu` still requires a GPU.
+
+`parakit --verbose status` reports `loaded`, `loading`, or `offloaded`, the effective timeout, and the last reload error until a successful reload clears it. Residency is separate from the recording/transcribing phase. Queries never load the model, and responses from older daemons can omit these fields.
+
+Session destruction releases owned CPU/GPU allocations, but process and driver caches can remain. See the [native memory measurements and platform procedure](dev/memory.md); GPU inference does not imply zero host memory.
 
 ## Model Cache
 
@@ -179,7 +193,7 @@ parakit follows the OS default input device and avoids monitor/loopback/virtual 
 
 On Linux and macOS, the microphone stream stays warm while the daemon is running; a bounded ring buffer feeds a drain thread that keeps 350 ms of pre-roll so the beginning of an utterance is less likely to be clipped. On Windows, parakit pauses the input stream while idle so `audiodg.exe` and driver-level microphone processing do not burn CPU when no recording is active. Recording start/stop is event-driven; idle device-change polling runs once per second.
 
-One continuously held recording is force-stopped and handed to the worker after 270 seconds. This bounds a missed hotkey-release event without discarding the captured audio.
+One continuously held recording is force-stopped and handed to the worker after 270 seconds. This bounds a missed hotkey-release event without discarding the captured audio. It follows the usual transcription path and normal completion cue.
 
 If the default input changes while parakit is idle, the daemon switches when CPAL reports a changed selected device identity and prints the new microphone unless `--quiet` is set. Idle polling is CPAL-only and does not shell out to `pactl`. On Linux PulseAudio/PipeWire systems, startup, probe, and stream reopen paths use `pactl` only to enrich generic `default` source names for human-readable logs and Bluetooth warnings. If an active stream fails, parakit keeps running and retries.
 

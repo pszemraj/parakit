@@ -54,6 +54,8 @@ pub(crate) struct DaemonConfig {
     pub(crate) device: Option<DeviceMode>,
     /// CPU inference threads.
     pub(crate) threads: Option<NonZeroUsize>,
+    /// Release the session after this many idle minutes; zero disables offload.
+    pub(crate) model_idle_minutes: Option<u64>,
     /// Batch insertion style.
     pub(crate) paste_mode: Option<PasteMode>,
     /// Leave dictated text on the clipboard after paste instead of
@@ -137,6 +139,10 @@ pub(crate) const TEMPLATE: &str = r#"# parakit config.toml
 
 # CPU inference threads. Defaults to a conservative detected count.
 # threads = 4
+
+# Unload the model after this many idle minutes. 0 keeps it resident.
+# The next dictation automatically reloads it while audio is captured.
+# model_idle_minutes = 10
 
 # Batch insertion style: "terminal", "standard", or "direct".
 # paste_mode = "standard"
@@ -306,6 +312,15 @@ pub(crate) fn load_from_path(path: &Path) -> Result<ConfigFile> {
 
     let config: ConfigFile = toml::from_str(&raw)
         .with_context(|| format!("failed to parse config file {}", path.display()))?;
+
+    if let Some(minutes) = config.daemon.model_idle_minutes {
+        crate::daemon::model_lifecycle::idle_timeout(minutes).with_context(|| {
+            format!(
+                "invalid config in {}: daemon.model_idle_minutes",
+                path.display()
+            )
+        })?;
+    }
 
     if config
         .daemon
@@ -638,5 +653,27 @@ replacement = "x"
         let config = load_from_path(&path).expect("Linux hotkey config should remain portable");
 
         assert_eq!(config.hotkey._backend.as_deref(), Some("x11-listen"));
+    }
+    #[test]
+    fn model_idle_config_accepts_zero_and_rejects_invalid_durations() {
+        for minutes in [0, 1, 10] {
+            let path = write_fixture(
+                "idle-valid",
+                &format!("[daemon]\nmodel_idle_minutes = {minutes}\n"),
+            );
+            assert_eq!(
+                load_from_path(&path).unwrap().daemon.model_idle_minutes,
+                Some(minutes)
+            );
+        }
+        for raw in ["-1", "1.5", "9223372036854775807", "\"ten\""] {
+            let path = write_fixture(
+                "idle-invalid",
+                &format!("[daemon]\nmodel_idle_minutes = {raw}\n"),
+            );
+            let message = format!("{:#}", load_from_path(&path).unwrap_err());
+            assert!(message.contains("model_idle_minutes"), "{message}");
+            assert!(message.contains(&path.display().to_string()), "{message}");
+        }
     }
 }

@@ -56,6 +56,14 @@ impl Cli {
     }
 }
 
+fn parse_model_idle_minutes(raw: &str) -> Result<u64, String> {
+    let minutes: u64 = raw
+        .parse()
+        .map_err(|_| "model idle minutes must be a nonnegative whole number".to_string())?;
+    crate::daemon::model_lifecycle::idle_timeout(minutes).map_err(|err| err.to_string())?;
+    Ok(minutes)
+}
+
 /// Top-level subcommands.
 #[derive(Subcommand, Debug)]
 pub(crate) enum Commands {
@@ -96,6 +104,10 @@ pub(crate) struct StartCli {
     /// CPU inference threads. Defaults to a conservative detected count.
     #[arg(long, value_name = "N")]
     pub(crate) threads: Option<NonZeroUsize>,
+
+    /// Unload the model after N idle minutes (default 10). Zero keeps it loaded.
+    #[arg(long, value_name = "N", value_parser = parse_model_idle_minutes)]
+    pub(crate) model_idle_minutes: Option<u64>,
 
     /// Runtime compute device. `auto` uses the best GPU when available and CPU otherwise.
     /// Defaults to `config.toml`'s `daemon.device`, then `auto`.
@@ -176,9 +188,32 @@ pub(crate) struct StartCli {
     /// Hidden validation path: send a WAV through the daemon PTT worker without insertion.
     #[arg(long, hide = true, value_name = "WAV")]
     pub(crate) simulate_ptt_audio: Option<PathBuf>,
+
+    /// Repeat the hidden WAV validation flow in one worker process.
+    #[arg(long, hide = true, requires = "simulate_ptt_audio", value_name = "N")]
+    pub(crate) simulate_ptt_repeat: Option<NonZeroUsize>,
+
+    /// Wait between simulated dictations and verify the expected residency.
+    #[arg(
+        long,
+        hide = true,
+        requires = "simulate_ptt_audio",
+        value_name = "SECONDS"
+    )]
+    pub(crate) simulate_ptt_idle_seconds: Option<u64>,
 }
 
 impl StartCli {
+    /// Effective idle timeout in whole minutes; CLI overrides config and default.
+    ///
+    /// # Returns
+    ///
+    /// The selected minutes, including zero when offload is disabled.
+    pub(crate) fn effective_model_idle_minutes(&self, config: &ConfigFile) -> u64 {
+        self.model_idle_minutes
+            .or(config.daemon.model_idle_minutes)
+            .unwrap_or(crate::daemon::model_lifecycle::DEFAULT_MODEL_IDLE_MINUTES)
+    }
     /// Return the selected paste mode: CLI flag, then config, then the
     /// platform default.
     ///
@@ -1343,5 +1378,23 @@ mod tests {
                 .expect_err(&format!("{}: expected a parse error", case.label));
             assert_eq!(error.kind(), case.expect_kind, "{}", case.label);
         }
+    }
+    #[test]
+    fn model_idle_minutes_precedence_and_validation() {
+        let mut config = ConfigFile::default();
+        assert_eq!(start_from(&[]).effective_model_idle_minutes(&config), 10);
+        config.daemon.model_idle_minutes = Some(2);
+        assert_eq!(start_from(&[]).effective_model_idle_minutes(&config), 2);
+        assert_eq!(
+            start_from(&["--model-idle-minutes", "0"]).effective_model_idle_minutes(&config),
+            0
+        );
+        for raw in ["-1", "0.5", "18446744073709551615", "forever"] {
+            assert!(
+                Cli::try_parse_from(["parakit", "start", "--model-idle-minutes", raw]).is_err(),
+                "{raw}"
+            );
+        }
+        assert!(Cli::try_parse_from(["parakit", "start", "--simulate-ptt-repeat", "2"]).is_err());
     }
 }

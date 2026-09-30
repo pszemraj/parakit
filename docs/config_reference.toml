@@ -101,6 +101,16 @@
 # At 0, plain status reports "last transcript: history disabled" and verbose
 # status also reports history disabled.
 
+# daemon.model_idle_minutes
+# Type: nonnegative whole minutes (optional). Default: 10. Zero disables
+# offloading. CLI start --model-idle-minutes N overrides the config.
+# Durations outside the platform monotonic clock range are rejected.
+# Idle begins at readiness and restarts after all recording, queued work,
+# transcription, and insertion finish, including failures and silent captures.
+# Status/history reads do not extend it. The next PTT automatically reopens
+# and warms the resolved local model while recording continues. Reload errors
+# skip that dictation and are retried on the next press; no automatic fetch.
+
 
 # [cleaning]
 

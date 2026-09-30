@@ -4,6 +4,12 @@ parakit supports Windows as a terminal-run CLI, built from source and installed 
 
 ## Build
 
+Model offload uses the same ten-minute default and automatic next-PTT reload on
+Windows; the idle microphone policy is independent. See
+[runtime settings](running.md#idle-model-offload) and the
+[Windows memory procedure](dev/memory.md#windows) for working set, private
+commit, and dedicated/shared GPU measurements.
+
 Build and install with the [Windows bundle scripts](../scripts/windows/README.md); a bare `cargo install --path .` does not copy the generated CrispASR/ggml DLLs beside `parakit.exe`. Shared native dependencies and backend controls are in [build.md](build.md).
 
 ## Hotkey

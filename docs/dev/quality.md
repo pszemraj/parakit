@@ -91,6 +91,10 @@ cargo run -- start \
 
 Use a real WAV with a known transcript. The command resamples it to the model rate, sends worker start/stop events with owned PCM, runs inference and cleanup, and prints the transcript. It does not test registered hotkeys, evdev-proxy capture, or paste insertion.
 
+For configured-timeout validation, add `--model-idle-minutes 1 --simulate-ptt-repeat 2 --simulate-ptt-idle-seconds 61`. The worker acknowledges each required transcript, checks exact parity across repeats, and verifies the expected residency after each wait (including the last). Missing transcripts, reload failures, or missed offloads return a failure exit status. An immediate simulated release exercises queuing while reload is busy. Use `--model-idle-minutes 0` to check disabled offloading. Both simulation options require `--simulate-ptt-audio`.
+
+For ten-cycle memory comparisons and OS-specific measurements, use the [memory harness](memory.md). This is separate from the real-time worker timeout test.
+
 ## NeMo Reference Helper
 
 The Python helper runs NVIDIA NeMo's official [Parakeet-TDT-0.6B-v3](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3) path:
@@ -190,4 +194,4 @@ For a long-running check:
 ps -o pid,rss,vsz -p "$(pgrep parakit)"
 ```
 
-RSS should settle near model size plus runtime overhead.
+Compare the same workload at stable checkpoints. RSS includes more than model weights and is not directly interchangeable with GPU allocations or private commit; see [memory measurements](memory.md).

@@ -1,5 +1,6 @@
 //! Recording coordinator between hotkey backends and the worker thread.
 
+use super::model_lifecycle::{ActivityGate, ActivityGuard};
 use super::{audio::AudioHandle, inject::FocusSnapshot, logging::Logger, worker::WorkerEvent};
 use crossbeam_channel::{Receiver, RecvTimeoutError, Sender, TrySendError};
 use std::sync::Arc;
@@ -36,6 +37,7 @@ pub(crate) enum HotkeyTransition {
 /// * `tx` - Worker event channel used to post recording events.
 /// * `audio` - Audio capture handle owned by this coordinator boundary.
 /// * `log` - Shared daemon logger used for warnings and errors raised on this thread.
+/// * `activity` - Admission gate retained through capture and queued processing.
 ///
 /// # Returns
 ///
@@ -49,10 +51,11 @@ pub(crate) fn spawn_recording_coordinator(
     tx: Sender<WorkerEvent>,
     audio: AudioHandle,
     log: Arc<Logger>,
+    activity: Arc<ActivityGate>,
 ) -> std::io::Result<JoinHandle<()>> {
     thread::Builder::new()
         .name("parakit-recording".into())
-        .spawn(move || recording_coordinator_loop(rx, tx, audio, log.as_ref()))
+        .spawn(move || recording_coordinator_loop(rx, tx, audio, log.as_ref(), activity))
 }
 
 fn recording_coordinator_loop(
@@ -60,8 +63,9 @@ fn recording_coordinator_loop(
     tx: Sender<WorkerEvent>,
     audio: AudioHandle,
     log: &Logger,
+    activity: Arc<ActivityGate>,
 ) {
-    recording_coordinator_loop_with_max_utterance(rx, tx, audio, MAX_UTTERANCE, log);
+    recording_coordinator_loop_with_max_utterance(rx, tx, audio, MAX_UTTERANCE, log, activity);
 }
 
 fn recording_coordinator_loop_with_max_utterance(
@@ -70,7 +74,9 @@ fn recording_coordinator_loop_with_max_utterance(
     audio: AudioHandle,
     max_utterance: Duration,
     log: &Logger,
+    activity: Arc<ActivityGate>,
 ) {
+    let mut recording_activity = None;
     let mut started_at = None;
     let mut focus_at_start = None;
 
@@ -88,6 +94,7 @@ fn recording_coordinator_loop_with_max_utterance(
                     started_at,
                     stopped_at,
                     &mut focus_at_start,
+                    recording_activity.take(),
                     log,
                 ) == WorkerSendStatus::Disconnected
                 {
@@ -99,6 +106,7 @@ fn recording_coordinator_loop_with_max_utterance(
 
         match event {
             CoordinatorEvent::Hotkey(HotkeyTransition::Pressed { at }) if started_at.is_none() => {
+                let lease = activity.begin();
                 focus_at_start = FocusSnapshot::capture().ok();
                 if let Err(err) = audio.start_recording() {
                     log.error(&format!("could not start audio recording: {err:#}"));
@@ -125,12 +133,16 @@ fn recording_coordinator_loop_with_max_utterance(
                         break;
                     }
                 }
+                recording_activity = Some(lease);
                 started_at = Some(at);
             }
             CoordinatorEvent::Hotkey(HotkeyTransition::Pressed { .. }) => {}
             CoordinatorEvent::Hotkey(HotkeyTransition::Released { .. })
             | CoordinatorEvent::MaxUtterance => unreachable!("handled above"),
         }
+    }
+    if started_at.is_some() {
+        stop_rejected_recording(&audio, "coordinator shutdown", log);
     }
 }
 
@@ -171,6 +183,7 @@ fn stop_and_send_recording(
     started_at: Instant,
     stopped_at: Instant,
     focus_at_start: &mut Option<FocusSnapshot>,
+    activity: Option<ActivityGuard>,
     log: &Logger,
 ) -> WorkerSendStatus {
     send_recording_result(
@@ -179,6 +192,7 @@ fn stop_and_send_recording(
         started_at,
         stopped_at,
         focus_at_start,
+        activity,
         log,
     )
 }
@@ -189,6 +203,7 @@ fn send_recording_result(
     started_at: Instant,
     stopped_at: Instant,
     focus_at_start: &mut Option<FocusSnapshot>,
+    activity: Option<ActivityGuard>,
     log: &Logger,
 ) -> WorkerSendStatus {
     let pcm = match recording {
@@ -196,7 +211,7 @@ fn send_recording_result(
         Err(err) => {
             let message = format!("could not stop audio recording: {err:#}");
             focus_at_start.take();
-            return send_required_worker_event(tx, WorkerEvent::Failed { message }, log);
+            return send_required_worker_event(tx, WorkerEvent::Failed { message, activity }, log);
         }
     };
     send_required_worker_event(
@@ -206,6 +221,8 @@ fn send_recording_result(
             stopped_at,
             pcm,
             focus_at_start: focus_at_start.take().map(Box::new),
+            activity,
+            completion: None,
         },
         log,
     )
@@ -270,7 +287,7 @@ mod tests {
                 assert!(pcm.is_empty());
             }
             WorkerEvent::Started => panic!("unexpected second start event"),
-            WorkerEvent::Failed { message } => {
+            WorkerEvent::Failed { message, .. } => {
                 panic!("unexpected recording failure event: {message}")
             }
         }
@@ -289,6 +306,7 @@ mod tests {
                 audio,
                 Duration::from_millis(10),
                 &log,
+                ActivityGate::new(),
             );
         });
 
@@ -332,6 +350,7 @@ mod tests {
                 started_at,
                 stopped_at,
                 &mut focus_at_start,
+                None,
                 &log,
             )
         });
@@ -344,7 +363,7 @@ mod tests {
             .recv_timeout(EVENT_TIMEOUT)
             .expect("terminal failure event")
         {
-            WorkerEvent::Failed { message } => {
+            WorkerEvent::Failed { message, .. } => {
                 assert!(message.contains("could not stop audio recording"));
                 assert!(message.contains("accepted Stop"));
             }
@@ -371,6 +390,7 @@ mod tests {
                 audio,
                 Duration::from_millis(10),
                 &log,
+                ActivityGate::new(),
             );
         });
 
@@ -405,6 +425,7 @@ mod tests {
                 audio,
                 Duration::from_millis(10),
                 &log,
+                ActivityGate::new(),
             );
         });
 
@@ -430,6 +451,7 @@ mod tests {
                 audio,
                 Duration::from_millis(250),
                 &log,
+                ActivityGate::new(),
             );
         });
 

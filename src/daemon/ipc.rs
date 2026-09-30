@@ -177,6 +177,9 @@ pub(crate) struct HistoryEntry {
 /// [`SharedState::set_info`] has run.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub(crate) struct StatusDetail {
+    /// Optional for compatibility with daemons predating idle model offload.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) model_status: Option<super::model_lifecycle::ModelStatus>,
     /// Daemon process id.
     pub(crate) pid: u32,
     /// Seconds since the daemon started serving IPC.
@@ -247,6 +250,10 @@ pub(crate) struct DaemonInfo {
 
 /// Shared in-memory daemon state used by the worker and IPC server.
 pub(crate) struct SharedState {
+    /// Admission gate shared by capture, queued work, and all insertion paths.
+    pub(crate) activity: Arc<super::model_lifecycle::ActivityGate>,
+    /// Session lifetime handshake shared by startup, worker, and IPC stop.
+    pub(crate) shutdown: super::worker_shutdown::WorkerShutdown,
     inner: Mutex<StateSnapshot>,
     insertion: Mutex<()>,
     /// Runtime info set once startup completes; `None` until then.
@@ -262,6 +269,7 @@ pub(crate) struct SharedState {
 }
 
 struct StateSnapshot {
+    model_status: Option<super::model_lifecycle::ModelStatus>,
     phase: String,
     /// Remembered transcripts, newest first. Never persisted to disk.
     history: VecDeque<TranscriptEntry>,
@@ -297,7 +305,10 @@ impl SharedState {
     /// Shared state with no remembered transcripts.
     pub(crate) fn with_history_limit(limit: usize) -> Self {
         Self {
+            activity: super::model_lifecycle::ActivityGate::new(),
+            shutdown: super::worker_shutdown::WorkerShutdown::default(),
             inner: Mutex::new(StateSnapshot {
+                model_status: None,
                 phase: "starting".to_string(),
                 history: VecDeque::new(),
             }),
@@ -312,6 +323,33 @@ impl SharedState {
     /// Update the visible daemon phase.
     pub(crate) fn set_phase(&self, phase: impl Into<String>) {
         self.inner.lock().phase = phase.into();
+    }
+
+    /// Publish session residency without changing history or daemon phase.
+    pub(crate) fn set_model_status(&self, status: super::model_lifecycle::ModelStatus) {
+        self.inner.lock().model_status = Some(status);
+    }
+
+    /// Read residency without extending the idle interval or loading the model.
+    ///
+    /// # Returns
+    ///
+    /// The most recent worker snapshot, or none before worker startup.
+    pub(crate) fn model_status(&self) -> Option<super::model_lifecycle::ModelStatus> {
+        self.inner.lock().model_status.clone()
+    }
+
+    /// Refresh device details after a reload (auto mode may select a new device).
+    ///
+    /// # Arguments
+    ///
+    /// * `backend` - Model backend reported by the new session.
+    /// * `device` - Device summary computed during reload.
+    pub(crate) fn update_engine_info(&self, backend: &str, device: String) {
+        if let Some(info) = self.info.lock().as_mut() {
+            info.backend = backend.to_string();
+            info.device = device;
+        }
     }
 
     /// Remember a transcript in memory, evicting the oldest entry once
@@ -350,6 +388,7 @@ impl SharedState {
             .lock()
             .as_ref()
             .map(|info| StatusDetail {
+                model_status: inner.model_status.clone(),
                 pid: info.pid,
                 uptime_secs: self.started_at.elapsed().as_secs(),
                 dictation_count: self.dictation_count.load(Ordering::Relaxed),
@@ -408,12 +447,20 @@ impl SharedState {
     /// history-disabled / empty / out-of-range errors in that priority
     /// order.
     ///
+    /// # Returns
+    ///
+    /// A copy of the selected transcript.
+    ///
+    /// # Panics
+    ///
+    /// Does not panic: the index is checked while holding the history lock.
+    ///
     /// # Errors
     ///
     /// Returns an error when `history_limit` is 0, no transcript has been
     /// remembered yet, or `index` is past the end of what is remembered.
     #[cfg(any(unix, target_os = "windows"))]
-    fn resolve_transcript(&self, index: usize) -> Result<String> {
+    pub(crate) fn resolve_transcript(&self, index: usize) -> Result<String> {
         self.ensure_history_enabled()?;
         let inner = self.inner.lock();
         let count = inner.history.len();
@@ -471,6 +518,7 @@ impl SharedState {
     ///
     /// The closure result.
     pub(crate) fn with_insertion_lock<R>(&self, f: impl FnOnce() -> R) -> R {
+        let _activity = self.activity.begin();
         let _guard = self.insertion.lock();
         f()
     }
@@ -672,6 +720,17 @@ fn print_status_detail(detail: Option<&StatusDetail>) {
     println!("  dictations: {}", detail.dictation_count);
     println!("  mic:        {}", detail.mic);
     println!("  model:      {} ({})", detail.model, detail.dtype);
+    if let Some(model) = &detail.model_status {
+        println!("  residency:  {}", model.residency.label());
+        if model.idle_minutes == 0 {
+            println!("  model idle: disabled");
+        } else {
+            println!("  model idle: {} minutes", model.idle_minutes);
+        }
+        if let Some(error) = &model.last_error {
+            println!("  model error: {error}");
+        }
+    }
     println!(
         "  device:     {} ({}, {} threads)",
         detail.device, detail.backend, detail.threads
@@ -812,9 +871,11 @@ fn handle_client(
     }
 
     if outcome.stop_after_response {
-        finish_stop_after_response(state, preflight::control_socket_path().ok(), || {
-            std::process::exit(0)
-        });
+        finish_stop_after_response(
+            state,
+            preflight::control_socket_path().ok(),
+            terminate_daemon,
+        );
     }
 }
 
@@ -995,7 +1056,7 @@ fn client_command_outcome(
 fn finish_stop_after_response<R>(
     state: &SharedState,
     cleanup_path: Option<std::path::PathBuf>,
-    terminate: impl FnOnce() -> R,
+    terminate: impl FnOnce(bool) -> R,
 ) -> R {
     finish_stop_after_response_with_wait(state, cleanup_path, STOP_INSERTION_WAIT, terminate)
 }
@@ -1005,21 +1066,40 @@ fn finish_stop_after_response_with_wait<R>(
     state: &SharedState,
     cleanup_path: Option<std::path::PathBuf>,
     insertion_wait: Duration,
-    terminate: impl FnOnce() -> R,
+    terminate: impl FnOnce(bool) -> R,
 ) -> R {
     // A response has already been written, so waiting here does not consume
     // the client's transport timeout. Holding the lock through termination
     // lets an in-flight paste release every synthetic modifier and prevents a
     // new paste from starting during the response grace period. A wedged
     // insertion must not prevent the stop command from terminating the daemon.
-    let insertion_guard = state.insertion.try_lock_for(insertion_wait);
+    // Wait before taking insertion: the worker may need that lock to finish.
+    // In particular, Metal's static device teardown requires all live session
+    // buffers to be released, which process::exit alone cannot do on a worker.
+    let started = Instant::now();
+    let worker_finished = state
+        .shutdown
+        .request_and_wait(&state.activity, insertion_wait);
+    let insertion_guard = state
+        .insertion
+        .try_lock_for(insertion_wait.saturating_sub(started.elapsed()));
     if insertion_guard.is_some() {
         thread::sleep(STOP_RESPONSE_GRACE);
     }
     if let Some(path) = cleanup_path {
         let _ = std::fs::remove_file(path);
     }
-    terminate()
+    terminate(worker_finished && insertion_guard.is_some())
+}
+
+#[cfg(any(unix, target_os = "windows"))]
+fn terminate_daemon(graceful: bool) -> ! {
+    if graceful {
+        std::process::exit(0);
+    }
+    // A wedged worker/insertion must not hang stop, or race C++ static
+    // destructors with live native buffers. The OS reclaims process resources.
+    unsafe { libc::_exit(0) }
 }
 
 #[cfg(any(unix, target_os = "windows"))]
@@ -1339,7 +1419,7 @@ mod windows_pipe {
         }
 
         if outcome.stop_after_response {
-            finish_stop_after_response(&state, None, || std::process::exit(0));
+            finish_stop_after_response(&state, None, terminate_daemon);
         }
     }
 
@@ -2241,7 +2321,8 @@ mod tests {
             stop_started_tx
                 .send(())
                 .expect("test should observe stop finalization start");
-            finish_stop_after_response(&stop_state, None, || {
+            finish_stop_after_response(&stop_state, None, |graceful| {
+                assert!(graceful);
                 stop_has_lock_tx
                     .send(())
                     .expect("test should observe quiescent stop");
@@ -2298,6 +2379,24 @@ mod tests {
 
     #[cfg(any(unix, target_os = "windows"))]
     #[test]
+    fn stop_waits_for_worker_without_holding_its_insertion_lock() {
+        let state = Arc::new(SharedState::new());
+        let lifetime = state.shutdown.register();
+        let worker_state = Arc::clone(&state);
+        let worker = thread::spawn(move || {
+            worker_state.activity.changes().recv().unwrap();
+            assert!(worker_state.shutdown.requested());
+            worker_state.with_insertion_lock(|| {});
+            drop(lifetime);
+        });
+        finish_stop_after_response_with_wait(&state, None, Duration::from_secs(2), |graceful| {
+            assert!(graceful, "worker must be able to finish before termination");
+        });
+        worker.join().unwrap();
+    }
+
+    #[cfg(any(unix, target_os = "windows"))]
+    #[test]
     fn stop_finalization_forces_termination_when_insertion_is_wedged() {
         use std::sync::mpsc;
 
@@ -2320,8 +2419,15 @@ mod tests {
             .expect("insertion should acquire the lock");
 
         let started = Instant::now();
-        let terminated =
-            finish_stop_after_response_with_wait(&state, None, Duration::from_millis(20), || true);
+        let terminated = finish_stop_after_response_with_wait(
+            &state,
+            None,
+            Duration::from_millis(20),
+            |graceful| {
+                assert!(!graceful);
+                true
+            },
+        );
 
         assert!(terminated);
         assert!(started.elapsed() < Duration::from_secs(1));
@@ -2676,6 +2782,7 @@ mod tests {
     #[test]
     fn status_detail_serde_round_trips() {
         let detail = StatusDetail {
+            model_status: None,
             pid: 1234,
             uptime_secs: 5025,
             dictation_count: 7,
@@ -2699,6 +2806,7 @@ mod tests {
         };
 
         let json = serde_json::to_string(&response).expect("status response should serialize");
+        assert!(!json.contains("model_status"));
         let round_tripped: IpcResponse =
             serde_json::from_str(&json).expect("status response should deserialize");
 
@@ -2709,6 +2817,70 @@ mod tests {
                 ..
             } if *d == detail
         ));
+    }
+
+    #[test]
+    fn model_status_keeps_phase_history_and_idle_deadline_independent() {
+        use super::super::model_lifecycle::{ModelStatus, Residency};
+
+        let state = SharedState::new();
+        state.set_info(sample_daemon_info());
+        state.set_phase("recording");
+        state.remember_transcript("previous dictation".into());
+        state.activity.ready();
+        state.set_model_status(ModelStatus {
+            residency: Residency::Offloaded,
+            idle_minutes: 10,
+            last_error: Some("model reload failed: missing local file".into()),
+        });
+        for _ in 0..3 {
+            let response = state.status();
+            let json = serde_json::to_string(&response).unwrap();
+            let decoded: IpcResponse = serde_json::from_str(&json).unwrap();
+            let IpcResponse::Status { phase, detail, .. } = decoded else {
+                panic!("expected status");
+            };
+            assert_eq!(phase, "recording");
+            assert_eq!(detail.unwrap().model_status, state.model_status());
+            assert_eq!(state.resolve_transcript(0).unwrap(), "previous dictation");
+        }
+        assert_eq!(
+            state.activity.remaining(Some(Duration::ZERO)),
+            Some(Duration::ZERO)
+        );
+        state.with_insertion_lock(|| {
+            assert_eq!(state.activity.remaining(Some(Duration::ZERO)), None);
+        });
+        assert_eq!(
+            state.activity.remaining(Some(Duration::ZERO)),
+            Some(Duration::ZERO)
+        );
+        assert_eq!(
+            state.model_status().unwrap().residency,
+            Residency::Offloaded
+        );
+    }
+
+    #[test]
+    fn waiting_ipc_insertion_prevents_idle_expiration() {
+        let state = Arc::new(SharedState::new());
+        state.activity.ready();
+        let _ = state.activity.changes().try_recv();
+        let held = state.insertion.lock();
+        let queued_state = Arc::clone(&state);
+        let queued = thread::spawn(move || queued_state.with_insertion_lock(|| {}));
+        state
+            .activity
+            .changes()
+            .recv_timeout(Duration::from_secs(2))
+            .unwrap();
+        assert_eq!(state.activity.remaining(Some(Duration::ZERO)), None);
+        drop(held);
+        queued.join().unwrap();
+        assert_eq!(
+            state.activity.remaining(Some(Duration::ZERO)),
+            Some(Duration::ZERO)
+        );
     }
 
     #[test]
@@ -2810,11 +2982,14 @@ mod tests {
         let (mut client, server) = UnixStream::pair().expect("unix stream pair");
         let mut payload = vec![b'x'; IPC_MAX_MESSAGE_SIZE + 1];
         payload.push(b'\n');
-        client
-            .write_all(&payload)
-            .expect("oversized command should write");
+        // macOS can fill the socket buffer before a 64 KiB request is written.
+        // Run the peer concurrently, as the real IPC transport does.
+        let writer = thread::spawn(move || client.write_all(&payload));
 
         let err = read_command(&server).expect_err("oversized Unix command should be rejected");
+        drop(server);
+        // Rejection may close the reader before the trailing newline is written.
+        let _ = writer.join().expect("writer should finish");
 
         assert_eq!(
             err.to_string(),

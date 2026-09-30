@@ -52,7 +52,6 @@ Current Rust files over the approximate 1k LoC target:
 | `src/daemon/desktop/inject.rs` | Owns the cross-platform clipboard transaction and insertion contract. Split clipboard, X11 paste, and focus code without changing paste safety. |
 | `src/daemon/ipc.rs` | Contains both Unix-socket and Windows named-pipe transports plus their policy tests. Extract the Windows transport after its behavior settles. |
 | `src/daemon/macos/diagnostics.rs` | Owns the AppKit probe window and the two-stage macOS deep insertion check. Extract the probe-window harness if either diagnostic stage grows. |
-| `src/daemon/worker.rs` | Coordinates ASR, cleaning, logging, recovery history, and insertion. Extract stable policy helpers without splitting the end-to-end worker state machine. |
 | `src/app.rs` | Holds top-level command dispatch and daemon bootstrap. Extract command handlers when a stable subsystem boundary appears. |
 | `src/cli.rs` | Keeps clap declarations, effective-option precedence, and parser tests together. Split declarations from resolution policy after the new command surface settles. |
 | `src/daemon/desktop/hotkey.rs` | Is only slightly over the target and already delegates macOS code. Extract Linux backend implementations if it grows further. |

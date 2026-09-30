@@ -95,6 +95,11 @@ Very short transcripts, under 12 normalized characters, do not use occurrence or
 
 ## Metal Verification
 
+Idle model offload defaults to ten minutes and reloads on the next PTT while
+capture continues. See [runtime settings](running.md#idle-model-offload) and
+[macOS memory measurements](dev/memory.md#macos). Microphone pre-roll stays
+independent of model residency.
+
 Use verbose doctor output to confirm the Metal build and visible compute device:
 
 ```bash
