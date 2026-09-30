@@ -32,7 +32,8 @@ impl Token for &NumberToken<'_> {
 /// that word with a numeric coefficient for readability (e.g. `"three
 /// billion"` becomes `"3 billion"`). Multi-scale expressions retain
 /// `text2num`'s full-digit rendering. Contexts where `"second"` is a time
-/// unit rather than an ordinal are protected from conversion.
+/// unit rather than an ordinal, and indefinite plural magnitudes such as
+/// `"hundreds"`, are protected from conversion.
 ///
 /// # Arguments
 ///
@@ -50,7 +51,7 @@ impl Token for &NumberToken<'_> {
 /// `Result`, and never returns an `Err`.
 pub(crate) fn normalize_spoken_numbers(input: &str, threshold: f64) -> TransformResult {
     let language = Language::english();
-    let text = replace_numbers_preserving_time_units(input, &language, threshold);
+    let text = replace_numbers_preserving_literals(input, &language, threshold);
     let text = render_signed_numbers(text);
     TransformResult {
         matches: usize::from(text != input),
@@ -73,29 +74,30 @@ fn render_signed_numbers(input: String) -> String {
     signed_number.replace_all(&input, "${1}-${2}").into_owned()
 }
 
-fn replace_numbers_preserving_time_units(
-    input: &str,
-    language: &Language,
-    threshold: f64,
-) -> String {
-    static SECOND: OnceLock<Regex> = OnceLock::new();
+fn replace_numbers_preserving_literals(input: &str, language: &Language, threshold: f64) -> String {
+    static PROTECTED_WORD: OnceLock<Regex> = OnceLock::new();
     static PREVIOUS_TOKEN: OnceLock<Regex> = OnceLock::new();
-    let second_re = SECOND
-        .get_or_init(|| Regex::new(r"(?i)\bsecond\b").expect("second-word regex must compile"));
+    let protected_re = PROTECTED_WORD.get_or_init(|| {
+        Regex::new(r"(?i)\b(?:second|tens|hundreds|thousands|millions|billions|trillions)\b")
+            .expect("protected number-word regex must compile")
+    });
     let previous_re = PREVIOUS_TOKEN.get_or_init(|| {
         Regex::new(r"(?i)([a-z0-9]+)([-\s]+)$").expect("previous-token regex must compile")
     });
 
-    let protected: Vec<_> = second_re
+    let protected: Vec<_> = protected_re
         .find_iter(input)
-        .filter(|found| second_is_time_unit(&input[..found.start()], previous_re, language))
+        .filter(|found| {
+            !found.as_str().eq_ignore_ascii_case("second")
+                || second_is_time_unit(&input[..found.start()], previous_re, language)
+        })
         .collect();
     if protected.is_empty() {
         return replace_numbers_with_hybrid_magnitudes(input, language, threshold);
     }
 
-    // Run text2num independently around protected units so their preceding
-    // quantity can still convert without turning the unit into the ordinal 2nd.
+    // Parse independently around literal spans. This preserves plural grammar
+    // and time units while exact quantities elsewhere still convert normally.
     let mut output = String::with_capacity(input.len());
     let mut last_end = 0;
     for found in protected {

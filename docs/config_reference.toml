@@ -148,7 +148,8 @@
 # No CLI override. It controls only "spoken-numbers"; structural numeric
 # passes still normalize.
 # Disabling that rule or cleaning makes it inert, not unvalidated. Time-unit
-# uses of "second" stay words.
+# uses of "second" and indefinite plural magnitudes such as "hundreds" and
+# "millions" stay words, preserving their original case and punctuation.
 
 # cleaning.disabled_rules
 # Type: array of strings (optional). Default: [].

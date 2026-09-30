@@ -117,6 +117,8 @@ produced a transcript.
 
 Personal vocabulary belongs in code only when it generalizes to normal dictation. Proper nouns, project-specific shorthand, and private jargon belong in `config.toml` instead. See User Rules below.
 
+Indefinite plural magnitudes remain words: `hundreds`, `thousands`, `millions`, and `billions` (also `tens` and `trillions`). The number pass preserves their capitalization and adjacent punctuation at every threshold and in both profiles. Exact quantities still convert: `three hundred records` becomes `300 records`, and `five million rows` becomes `5 million rows`. Other enabled cleanup rules, including sentence capitalization and trailing-period handling, continue to apply.
+
 ## User Rules
 
 For rules that are personal (your vocabulary, your projects, your typing quirks) rather than generally useful, define them in `config.toml` instead of editing `src/rules/`. User rules run alongside the built-in rules in the same cleaning pass, and are never filtered by the profile since you asked for them explicitly.
