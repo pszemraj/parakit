@@ -85,14 +85,14 @@ fn replace_numbers_preserving_literals(input: &str, language: &Language, thresho
         Regex::new(r"(?i)([a-z0-9]+)([-\s]+)$").expect("previous-token regex must compile")
     });
 
-    let protected: Vec<_> = protected_re
+    let protected_words: Vec<_> = protected_re
         .find_iter(input)
         .filter(|found| {
             !found.as_str().eq_ignore_ascii_case("second")
                 || second_is_time_unit(&input[..found.start()], previous_re, language)
         })
         .collect();
-    if protected.is_empty() {
+    if protected_words.is_empty() {
         return replace_numbers_with_hybrid_magnitudes(input, language, threshold);
     }
 
@@ -100,13 +100,19 @@ fn replace_numbers_preserving_literals(input: &str, language: &Language, thresho
     // and time units while exact quantities elsewhere still convert normally.
     let mut output = String::with_capacity(input.len());
     let mut last_end = 0;
-    for found in protected {
+    for found in protected_words {
+        let prefix = &input[last_end..found.start()];
+        let protected_start = if found.as_str().eq_ignore_ascii_case("second") {
+            found.start()
+        } else {
+            last_end + preceding_number_start(prefix, language).unwrap_or(prefix.len())
+        };
         output.push_str(&replace_numbers_with_hybrid_magnitudes(
-            &input[last_end..found.start()],
+            &input[last_end..protected_start],
             language,
             threshold,
         ));
-        output.push_str(found.as_str());
+        output.push_str(&input[protected_start..found.end()]);
         last_end = found.end();
     }
     output.push_str(&replace_numbers_with_hybrid_magnitudes(
@@ -117,21 +123,27 @@ fn replace_numbers_preserving_literals(input: &str, language: &Language, thresho
     output
 }
 
-fn replace_numbers_with_hybrid_magnitudes(
-    input: &str,
-    language: &Language,
-    threshold: f64,
-) -> String {
+/// Return the start of the final parsed number in a text slice, when it is
+/// immediately followed only by whitespace. The caller keeps that raw span
+/// with the adjacent plural magnitude instead of converting it separately.
+fn preceding_number_start(input: &str, language: &Language) -> Option<usize> {
+    let tokens = number_tokens(input);
+    let occurrences = find_numbers(tokens.iter(), language, 0.0);
+    let occurrence = occurrences.last()?;
+    (occurrence.start < occurrence.end
+        && occurrence.end == tokens.len()
+        && input[tokens[occurrence.end - 1].end..]
+            .chars()
+            .all(char::is_whitespace))
+    .then(|| tokens[occurrence.start].start)
+}
+
+fn number_tokens(input: &str) -> Vec<NumberToken<'_>> {
     static TOKEN: OnceLock<Regex> = OnceLock::new();
-    static NUMERIC_MAGNITUDE: OnceLock<Regex> = OnceLock::new();
     let token_re =
         TOKEN.get_or_init(|| Regex::new(r"[A-Za-z0-9]+|[^\s]").expect("number token regex"));
-    let numeric_re = NUMERIC_MAGNITUDE.get_or_init(|| {
-        Regex::new(r"(?i)\b\d+(?:\.\d+)?[ \t]+(?:million|billion)\b")
-            .expect("numeric magnitude regex")
-    });
 
-    let tokens: Vec<_> = token_re
+    token_re
         .find_iter(input)
         .map(|found| NumberToken {
             text: found.as_str(),
@@ -139,7 +151,21 @@ fn replace_numbers_with_hybrid_magnitudes(
             start: found.start(),
             end: found.end(),
         })
-        .collect();
+        .collect()
+}
+
+fn replace_numbers_with_hybrid_magnitudes(
+    input: &str,
+    language: &Language,
+    threshold: f64,
+) -> String {
+    static NUMERIC_MAGNITUDE: OnceLock<Regex> = OnceLock::new();
+    let numeric_re = NUMERIC_MAGNITUDE.get_or_init(|| {
+        Regex::new(r"(?i)\b\d+(?:\.\d+)?[ \t]+(?:million|billion)\b")
+            .expect("numeric magnitude regex")
+    });
+
+    let tokens = number_tokens(input);
     let occurrences = find_numbers(tokens.iter(), language, threshold);
     let mut replacements: Vec<_> = numeric_re
         .find_iter(input)

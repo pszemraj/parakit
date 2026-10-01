@@ -35,9 +35,34 @@ fn plural_magnitudes_preserve_words_in_both_profiles_and_thresholds() {
             "Tens of thousands and hundreds of millions.",
         ),
         (
+            "In the early nineteen hundreds, we moved.",
+            "In the early nineteen hundreds, we moved.",
+        ),
+        (
+            "About four hundreds of them; FIVE MILLIONS of people.",
+            "About four hundreds of them; FIVE MILLIONS of people.",
+        ),
+        (
+            "Twenty-one hundreds, 5 millions, and six records.",
+            "Twenty-one hundreds, 5 millions, and 6 records.",
+        ),
+        (
+            "Sixty hundreds and one billion twenty-five millions.",
+            "Sixty hundreds and one billion twenty-five millions.",
+        ),
+        (
             "Keep HUNDREDS of files; add three hundred records and five million rows.",
             "Keep HUNDREDS of files; add 300 records and 5 million rows.",
         ),
+        (
+            "Six records, five hundreds of forms, and six million rows.",
+            "6 records, five hundreds of forms, and 6 million rows.",
+        ),
+        (
+            "Six records and four hundreds of forms.",
+            "6 records and four hundreds of forms.",
+        ),
+        ("Six, hundreds of forms.", "6, hundreds of forms."),
         (
             "Use the second batch of hundreds after one second.",
             "Use the second batch of hundreds after one second.",
@@ -68,6 +93,10 @@ fn plural_magnitudes_preserve_words_in_both_profiles_and_thresholds() {
             "Hundreds of files and 3 records."
         );
         assert_eq!(
+            all_numbers.clean_text("Three records and five millions of rows."),
+            "3 records and five millions of rows."
+        );
+        assert_eq!(
             all_numbers.clean_text("Use the second batch of hundreds after one second."),
             "Use the 2nd batch of hundreds after 1 second."
         );
@@ -88,8 +117,8 @@ fn disabling_spoken_numbers_preserves_both_plural_and_exact_quantities() {
         .unwrap()
         .unwrap();
         assert_eq!(
-            cleaner.clean_text("Hundreds of files and three hundred records."),
-            "Hundreds of files and three hundred records."
+            cleaner.clean_text("Four hundreds of files and three hundred records."),
+            "Four hundreds of files and three hundred records."
         );
     }
 }

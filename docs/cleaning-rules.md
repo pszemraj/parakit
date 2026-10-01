@@ -54,7 +54,7 @@ For readability, a recognized expression ending in one explicit `million` or `bi
 
 Counts explicitly tied to `parameter` or `parameters` use compact `K`/`M`/`B` notation, including both bounds of a range: `one hundred million up to one billion parameters` becomes `100M up to 1B parameters`. Disable `compact-parameter-counts` to keep the general magnitude-word form. Existing numeric hybrids are preserved, and digit-only input is inferred as a magnitude only in that explicit parameter-count context.
 
-Indefinite plural magnitudes remain words: `hundreds`, `thousands`, `millions`, and `billions` (also `tens` and `trillions`). The number pass preserves their capitalization and adjacent punctuation at every threshold and in both profiles. Exact quantities still convert: `three hundred records` becomes `300 records`, and `five million rows` becomes `5 million rows`. Other enabled cleanup rules, including sentence capitalization and trailing-period handling, continue to apply.
+Indefinite plural magnitudes remain words: `hundreds`, `thousands`, `millions`, and `billions` (also `tens` and `trillions`). A directly preceding number-word phrase remains part of that protected span, so `nineteen hundreds` and `five millions` retain their wording, capitalization, and adjacent punctuation at every threshold and in both profiles. Exact quantities still convert: `three hundred records` becomes `300 records`, and `five million rows` becomes `5 million rows`. Other enabled cleanup rules, including sentence capitalization and trailing-period handling, continue to apply.
 
 The ambiguous word `second` remains a word when context identifies it as a time unit (`one second`, `per second`, `a split-second`), while genuine ordinals still render numerically.
 
