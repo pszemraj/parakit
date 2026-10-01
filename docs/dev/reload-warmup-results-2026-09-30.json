@@ -1,0 +1,346 @@
+{
+  "date": "2026-09-30",
+  "platform": "macOS-26.7-arm64-arm-64bit",
+  "backend": "Metal",
+  "threads": 8,
+  "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)",
+  "build_profile": "dev",
+  "crispasr_revision": "5f1bb858e803167f1b5fc1eb9a90ffdd1970f7ed",
+  "native_library_sha256": "e67884bec36e5c1307a54b8186c54184ea0b5c4ef63ecf391bc32793e61b07e8",
+  "profiler_executable_sha256": "fb87ef5c78b28fb65e5e7674335881dcca46354ab398df4dea2f6add2aa45ea9",
+  "model_sha256": "10f38dd9ce69ce555a413d9b4201ae5d93c2d7cadc91a285f4bfeeec6eee635a",
+  "audio_sha256": "d79d7f729b192642b91aef5e1486b97c1cb7f4c34f6ce4a0d45199a9ff23ab5f",
+  "transcript_hashes": {
+    "after_short": "f829556cabc81ee72924ff68c89909f0e3a0c8899ed547ddc195fdcc1cd0ca19",
+    "after_full": "1cd2852337ca4d874d3ad63084049a9b3e4c7be1a2f8c3e29dd38ca33275f3cf"
+  },
+  "method": "Two sequential rounds of six sessions per policy/order; reverse case order in round two. First session always runs startup warmup and is excluded from reload timing aggregates. Ten reloads per cell. Both short (2 s) and full (55.36 s) recordings are transcribed each cycle, with first clip order varied. All short/full transcript hashes match across all policies, orders, and cycles. No concurrent build or other parakit daemon during measurements.",
+  "timing_limits": "Operation sums exclude sampler pauses and process/device initialization. They model immediate-release readiness plus inference, not perceived latency after overlap with live capture. Measurements on one Metal device do not validate CUDA/Vulkan performance.",
+  "raw_artifacts": "target/tmp/pr13-review/metal-*/{metadata.json,metrics.jsonl,native.stderr}",
+  "results": [
+    {
+      "reload_warmup": "startup",
+      "first_clip": "short",
+      "reload_cycles": 10,
+      "elapsed_ms": {
+        "after_load": {
+          "min": 88.171,
+          "median": 90.381,
+          "max": 119.642
+        },
+        "after_warmup": {
+          "min": 609.572,
+          "median": 622.343,
+          "max": 633.974
+        },
+        "after_short": {
+          "min": 96.805,
+          "median": 98.261,
+          "max": 114.2
+        },
+        "after_full": {
+          "min": 1524.473,
+          "median": 1540.364,
+          "max": 1603.501
+        }
+      },
+      "open_plus_warmup_plus_first_ms": {
+        "min": 800.283,
+        "median": 817.484,
+        "max": 840.42
+      },
+      "rss_mib": {
+        "after_warmup": {
+          "min": 890.609,
+          "median": 893.016,
+          "max": 895.359
+        },
+        "after_short": {
+          "min": 890.609,
+          "median": 893.023,
+          "max": 895.359
+        },
+        "after_full": {
+          "min": 901.656,
+          "median": 904.094,
+          "max": 906.422
+        },
+        "offloaded": {
+          "min": 166.609,
+          "median": 169.047,
+          "max": 171.375
+        }
+      }
+    },
+    {
+      "reload_warmup": "startup",
+      "first_clip": "full",
+      "reload_cycles": 10,
+      "elapsed_ms": {
+        "after_load": {
+          "min": 84.441,
+          "median": 91.241,
+          "max": 97.697
+        },
+        "after_warmup": {
+          "min": 605.26,
+          "median": 623.56,
+          "max": 651.161
+        },
+        "after_short": {
+          "min": 97.59,
+          "median": 103.415,
+          "max": 118.976
+        },
+        "after_full": {
+          "min": 1541.484,
+          "median": 1557.824,
+          "max": 1629.129
+        }
+      },
+      "open_plus_warmup_plus_first_ms": {
+        "min": 2250.827,
+        "median": 2275.774,
+        "max": 2377.988
+      },
+      "rss_mib": {
+        "after_warmup": {
+          "min": 890.609,
+          "median": 891.07,
+          "max": 892.609
+        },
+        "after_short": {
+          "min": 901.672,
+          "median": 902.133,
+          "max": 903.672
+        },
+        "after_full": {
+          "min": 901.672,
+          "median": 902.133,
+          "max": 903.672
+        },
+        "offloaded": {
+          "min": 166.625,
+          "median": 167.086,
+          "max": 168.625
+        }
+      }
+    },
+    {
+      "reload_warmup": "one-second",
+      "first_clip": "short",
+      "reload_cycles": 10,
+      "elapsed_ms": {
+        "after_load": {
+          "min": 86.77,
+          "median": 88.102,
+          "max": 89.81
+        },
+        "after_warmup": {
+          "min": 92.713,
+          "median": 97.088,
+          "max": 104.159
+        },
+        "after_short": {
+          "min": 91.545,
+          "median": 103.444,
+          "max": 110.684
+        },
+        "after_full": {
+          "min": 1532.943,
+          "median": 1552.772,
+          "max": 1566.304
+        }
+      },
+      "open_plus_warmup_plus_first_ms": {
+        "min": 274.929,
+        "median": 287.835,
+        "max": 302.549
+      },
+      "rss_mib": {
+        "after_warmup": {
+          "min": 875.297,
+          "median": 875.383,
+          "max": 875.5
+        },
+        "after_short": {
+          "min": 875.75,
+          "median": 875.836,
+          "max": 875.953
+        },
+        "after_full": {
+          "min": 899.141,
+          "median": 899.242,
+          "max": 899.359
+        },
+        "offloaded": {
+          "min": 164.094,
+          "median": 164.203,
+          "max": 164.312
+        }
+      }
+    },
+    {
+      "reload_warmup": "one-second",
+      "first_clip": "full",
+      "reload_cycles": 10,
+      "elapsed_ms": {
+        "after_load": {
+          "min": 89.545,
+          "median": 90.839,
+          "max": 97.902
+        },
+        "after_warmup": {
+          "min": 88.415,
+          "median": 96.25,
+          "max": 108.248
+        },
+        "after_short": {
+          "min": 100.124,
+          "median": 102.337,
+          "max": 108.348
+        },
+        "after_full": {
+          "min": 1544.16,
+          "median": 1580.778,
+          "max": 1627.433
+        }
+      },
+      "open_plus_warmup_plus_first_ms": {
+        "min": 1728.447,
+        "median": 1770.184,
+        "max": 1819.379
+      },
+      "rss_mib": {
+        "after_warmup": {
+          "min": 875.359,
+          "median": 875.445,
+          "max": 875.688
+        },
+        "after_short": {
+          "min": 899.234,
+          "median": 899.297,
+          "max": 899.547
+        },
+        "after_full": {
+          "min": 899.219,
+          "median": 899.297,
+          "max": 899.547
+        },
+        "offloaded": {
+          "min": 164.188,
+          "median": 164.25,
+          "max": 164.5
+        }
+      }
+    },
+    {
+      "reload_warmup": "none",
+      "first_clip": "short",
+      "reload_cycles": 10,
+      "elapsed_ms": {
+        "after_load": {
+          "min": 87.785,
+          "median": 89.156,
+          "max": 144.187
+        },
+        "after_warmup": {
+          "min": 0.0,
+          "median": 0.0,
+          "max": 0.0
+        },
+        "after_short": {
+          "min": 109.062,
+          "median": 110.781,
+          "max": 123.029
+        },
+        "after_full": {
+          "min": 1536.72,
+          "median": 1550.638,
+          "max": 1688.076
+        }
+      },
+      "open_plus_warmup_plus_first_ms": {
+        "min": 197.336,
+        "median": 199.614,
+        "max": 258.171
+      },
+      "rss_mib": {
+        "after_warmup": {
+          "min": 873.141,
+          "median": 874.977,
+          "max": 875.812
+        },
+        "after_short": {
+          "min": 875.781,
+          "median": 875.938,
+          "max": 876.75
+        },
+        "after_full": {
+          "min": 899.172,
+          "median": 899.336,
+          "max": 900.156
+        },
+        "offloaded": {
+          "min": 164.125,
+          "median": 164.289,
+          "max": 165.109
+        }
+      }
+    },
+    {
+      "reload_warmup": "none",
+      "first_clip": "full",
+      "reload_cycles": 10,
+      "elapsed_ms": {
+        "after_load": {
+          "min": 87.572,
+          "median": 91.122,
+          "max": 100.976
+        },
+        "after_warmup": {
+          "min": 0.0,
+          "median": 0.0,
+          "max": 0.001
+        },
+        "after_short": {
+          "min": 100.425,
+          "median": 105.641,
+          "max": 112.973
+        },
+        "after_full": {
+          "min": 1563.037,
+          "median": 1594.164,
+          "max": 1690.772
+        }
+      },
+      "open_plus_warmup_plus_first_ms": {
+        "min": 1652.689,
+        "median": 1693.448,
+        "max": 1779.574
+      },
+      "rss_mib": {
+        "after_warmup": {
+          "min": 873.078,
+          "median": 874.828,
+          "max": 875.688
+        },
+        "after_short": {
+          "min": 899.078,
+          "median": 899.562,
+          "max": 900.0
+        },
+        "after_full": {
+          "min": 899.047,
+          "median": 899.562,
+          "max": 900.0
+        },
+        "offloaded": {
+          "min": 164.031,
+          "median": 164.516,
+          "max": 164.953
+        }
+      }
+    }
+  ]
+}

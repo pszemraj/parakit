@@ -57,9 +57,9 @@ pub(crate) enum WorkerEvent {
 }
 
 /// Dependencies owned by the transcription worker thread.
-pub(crate) struct WorkerCtx {
+pub(crate) struct WorkerCtx<E = Engine> {
     /// Open transcription engine.
-    pub(crate) engine: Engine,
+    pub(crate) engine: E,
     /// Startup parameters reused when the model has been offloaded.
     pub(crate) recipe: EngineRecipe,
     /// Effective user setting, also exposed in status.
@@ -102,6 +102,27 @@ struct TranscriptResult {
     clean_elapsed: Duration,
 }
 
+/// Minimal worker-facing inference surface, kept private so production uses the
+/// concrete engine while the lifecycle loop can be exercised without a model.
+trait WorkerEngine {
+    /// Transcribe one owned PCM capture.
+    ///
+    /// # Returns
+    ///
+    /// The raw transcript from the inference session.
+    ///
+    /// # Errors
+    ///
+    /// Reports session or inference failures to the worker's completion path.
+    fn transcribe(&self, pcm: &[f32]) -> Result<String>;
+}
+
+impl WorkerEngine for Engine {
+    fn transcribe(&self, pcm: &[f32]) -> Result<String> {
+        Self::transcribe(self, pcm)
+    }
+}
+
 /// Start the transcription worker thread.
 ///
 /// # Returns
@@ -112,9 +133,29 @@ pub(crate) fn spawn_worker(ctx: WorkerCtx) -> std::thread::JoinHandle<()> {
 }
 
 fn worker_loop(ctx: WorkerCtx) {
+    // Config/CLI validation has already checked the supported clock range.
+    let timeout = super::model_lifecycle::idle_timeout(ctx.model_idle_minutes)
+        .expect("validated model idle timeout");
+    let recipe = ctx.recipe.clone();
+    let reload_log = Arc::clone(&ctx.log);
+    let reload_state = Arc::clone(&ctx.state);
+    let load = move || {
+        let (engine, device) = recipe.reload(&reload_log)?;
+        reload_state.update_engine_info(engine.backend(), device);
+        Ok(engine)
+    };
+    worker_loop_with(ctx, timeout, load);
+}
+
+/// Run the production worker event loop with an opened session and reload path.
+fn worker_loop_with<E, Load>(ctx: WorkerCtx<E>, timeout: Option<Duration>, mut load: Load)
+where
+    E: WorkerEngine,
+    Load: FnMut() -> Result<E>,
+{
     let WorkerCtx {
         engine,
-        recipe,
+        recipe: _,
         model_idle_minutes,
         cleaner,
         data_log,
@@ -128,9 +169,6 @@ fn worker_loop(ctx: WorkerCtx) {
         rx,
         lifetime: _lifetime,
     } = ctx;
-    // Config/CLI validation has already checked the supported clock range.
-    let timeout = super::model_lifecycle::idle_timeout(model_idle_minutes)
-        .expect("validated model idle timeout");
     let mut model = ModelSlot::new(engine, model_idle_minutes);
     state.set_model_status(model.status());
 
@@ -193,14 +231,7 @@ fn worker_loop(ctx: WorkerCtx) {
                 state.set_phase("recording");
                 sounds.start();
                 log.line("parakit: recording...");
-                model.ensure_loaded(
-                    || {
-                        let (engine, device) = recipe.open(&log)?;
-                        state.update_engine_info(engine.backend(), device);
-                        Ok(engine)
-                    },
-                    |status| state.set_model_status(status),
-                );
+                model.ensure_loaded(&mut load, |status| state.set_model_status(status));
             }
             WorkerEvent::Failed { message, activity } => {
                 let _activity = activity;
@@ -416,8 +447,8 @@ impl Drop for Completion {
     }
 }
 
-fn transcribe_clean(
-    engine: &Engine,
+fn transcribe_clean<E: WorkerEngine>(
+    engine: &E,
     pcm: &[f32],
     cleaner: Option<&Cleaner>,
 ) -> Result<Option<TranscriptResult>> {
@@ -469,7 +500,42 @@ fn capture_should_skip(pcm: &[f32]) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use super::super::model_lifecycle::Residency;
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct FakeEngine {
+        transcriptions: Arc<AtomicUsize>,
+        drops: Arc<AtomicUsize>,
+    }
+
+    impl WorkerEngine for FakeEngine {
+        fn transcribe(&self, _pcm: &[f32]) -> Result<String> {
+            self.transcriptions.fetch_add(1, Ordering::SeqCst);
+            Ok("reloaded dictation".to_string())
+        }
+    }
+
+    impl Drop for FakeEngine {
+        fn drop(&mut self) {
+            self.drops.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    fn wait_for_state(state: &SharedState, residency: Residency) {
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while state
+            .model_status()
+            .is_none_or(|status| status.residency != residency)
+        {
+            assert!(
+                Instant::now() < deadline,
+                "worker did not reach {residency:?}"
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+
     #[test]
     fn silence_gate_skips_empty_and_quiet_audio_only() {
         assert!(capture_should_skip(&[]));
@@ -477,5 +543,113 @@ mod tests {
         assert!(capture_should_skip(&[0.0001; 160]));
         assert!(!capture_should_skip(&[0.0, 0.2]));
         assert!(!capture_should_skip(&[0.01; 16]));
+    }
+
+    #[test]
+    fn worker_loop_offloads_then_reloads_and_transcribes_queued_capture() {
+        let state = Arc::new(SharedState::with_history_limit(2));
+        state.activity.ready();
+        let log = Arc::new(Logger::new(super::super::logging::LogLevel::Quiet));
+        let notifier = Notifier::new(Arc::clone(&log));
+        let (tx, rx) = crossbeam_channel::bounded(WORKER_QUEUE_CAPACITY);
+        let reloads = Arc::new(AtomicUsize::new(0));
+        let transcriptions = Arc::new(AtomicUsize::new(0));
+        let drops = Arc::new(AtomicUsize::new(0));
+        let loader_activity = Arc::clone(&state.activity);
+        let loader_reloads = Arc::clone(&reloads);
+        let loader_transcriptions = Arc::clone(&transcriptions);
+        let loader_drops = Arc::clone(&drops);
+        let initial_transcriptions = Arc::clone(&transcriptions);
+        let initial_drops = Arc::clone(&drops);
+        let worker_state = Arc::clone(&state);
+        let lifetime = state.shutdown.register();
+        let (load_started_tx, load_started_rx) = crossbeam_channel::bounded(1);
+        let (load_release_tx, load_release_rx) = crossbeam_channel::bounded(1);
+
+        let worker = std::thread::spawn(move || {
+            let load = move || {
+                // A reload may admit other activity; it must not inherit the
+                // gate mutex held by the offload decision.
+                let _admission = loader_activity.begin();
+                loader_reloads.fetch_add(1, Ordering::SeqCst);
+                load_started_tx.send(()).unwrap();
+                load_release_rx.recv().unwrap();
+                Ok(FakeEngine {
+                    transcriptions: Arc::clone(&loader_transcriptions),
+                    drops: Arc::clone(&loader_drops),
+                })
+            };
+            let ctx = WorkerCtx {
+                engine: FakeEngine {
+                    transcriptions: initial_transcriptions,
+                    drops: initial_drops,
+                },
+                recipe: EngineRecipe {
+                    model_path: std::path::PathBuf::new(),
+                    threads: 1,
+                    device_mode: parakit::inference::DeviceMode::Cpu,
+                    verbose: false,
+                },
+                model_idle_minutes: 1,
+                cleaner: None,
+                data_log: None,
+                sounds: Sounds::new(false),
+                log,
+                notifier,
+                state: worker_state,
+                paste_mode: PasteMode::Standard,
+                keep_transcript_clipboard: false,
+                insert_transcripts: false,
+                rx,
+                lifetime,
+            };
+            worker_loop_with(ctx, Some(Duration::from_millis(10)), load);
+        });
+
+        wait_for_state(&state, Residency::Offloaded);
+        assert_eq!(drops.load(Ordering::SeqCst), 1);
+        assert_eq!(reloads.load(Ordering::SeqCst), 0);
+
+        // Keep the reloaded model resident until all post-completion checks
+        // have observed it; the capture lease moves into `Stopped` below.
+        let verify_residency = state.activity.begin();
+        let recording = state.activity.begin();
+        let (completion_tx, completion_rx) = crossbeam_channel::bounded(1);
+        let now = Instant::now();
+        tx.send(WorkerEvent::Started).unwrap();
+        load_started_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap();
+        tx.send(WorkerEvent::Stopped {
+            started_at: now,
+            stopped_at: now,
+            pcm: vec![0.01; 16],
+            focus_at_start: None,
+            activity: Some(recording),
+            completion: Some(completion_tx),
+        })
+        .unwrap();
+        let completion_before_reload = completion_rx.try_recv();
+        load_release_tx.send(()).unwrap();
+        assert!(completion_before_reload.is_err());
+
+        assert_eq!(
+            completion_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
+            Ok(())
+        );
+        assert_eq!(reloads.load(Ordering::SeqCst), 1);
+        assert_eq!(transcriptions.load(Ordering::SeqCst), 1);
+        assert_eq!(state.model_status().unwrap().residency, Residency::Loaded);
+        assert_eq!(state.resolve_transcript(0).unwrap(), "reloaded dictation");
+        assert!(state.resolve_transcript(1).is_err());
+
+        drop(verify_residency);
+        drop(tx);
+        worker.join().unwrap();
+        assert_eq!(
+            completion_rx.try_recv(),
+            Err(crossbeam_channel::TryRecvError::Disconnected)
+        );
+        assert_eq!(drops.load(Ordering::SeqCst), 2);
     }
 }

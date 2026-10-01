@@ -11,7 +11,7 @@ Build `parakit` and the `profile-memory` example with the same features, native
 library, optimization, model, and thread count for both runs. Keep other
 inference workloads stopped. Record compiler, driver, and hardware versions.
 The example uses the first two seconds and the complete supplied WAV. It follows
-the daemon's warmup policy: one second on CPU, five and thirty seconds on GPU.
+the daemon's [startup and reload warmup policy](../running.md#idle-model-offload).
 
 ```bash
 cargo build --release --features metal --bin parakit --example profile-memory
@@ -38,14 +38,22 @@ before loading, after loading, after warmup, after short/full transcription,
 after offload (or retained baseline), and after final close. Records include
 operation elapsed time. Repeated full transcripts must match exactly and be
 nonempty; failures return nonzero. The collector saves input hashes, command,
-platform, commit/submodule identity, working-tree state, `metrics.jsonl`, and
-native diagnostics. It does not persist audio or transcripts. The retained
-baseline opens once; the offload run opens on every cycle.
+platform, commit/submodule identity, working-tree state, `metrics.jsonl`, native
+diagnostics, and transcript hashes. It does not persist audio or transcripts.
+The retained baseline opens once; the offload run opens on every cycle.
 
 Loading time excludes earlier process/device initialization. Add warmup time
 to open time to estimate readiness after offload. OS sampling adds pauses
 outside those operation timings. These are diagnostic measurements, not an
 isolated latency benchmark.
+
+For reload comparisons, `--reload-warmup startup`, `one-second`, or `none`
+overrides the probe after the first session; the default `production` follows
+the daemon. The first session always uses startup warmup. Exclude that first
+cycle when comparing reload timings. Use `--full-first` to transcribe the full
+recording before the short excerpt, so a preceding short inference cannot hide
+the cost of a cold full recording. Both transcripts must be nonempty and stable
+within each run; compare their checkpoint hashes across policies as well.
 
 Test worker admission, queueing, and configured timeouts separately with the
 [PTT worker simulation](quality.md#ptt-worker-simulation). Follow the
@@ -154,7 +162,8 @@ comparison, and backend validation.
 Measured on an Apple M5 MacBook Air with 32 GiB unified memory, macOS 26.7,
 Rust 1.98.1. The paired runs used the same Rust dev-profile example and existing
 Metal-enabled bundled native library, eight threads, default Q8_0 model
-(745,121,632 bytes), and unchanged warmup. CPU runs did not initialize Metal.
+(745,121,632 bytes), and startup warmup repeated at every open. CPU runs did not
+initialize Metal.
 The baseline retained its session, matching the previous daemon lifetime; the
 comparison dropped the same native session between dictations. Engine and
 native inference code were unchanged.
@@ -209,7 +218,8 @@ native check. The trace is in `target/tmp/offload-memory/metal-placement.err`.
 These snapshots identify substantial allocator retention after live session
 allocations have been freed. Device/library caches and heap fragmentation also
 remain. They do not assign every residual byte to a call site. No native leak
-was demonstrated, so this branch retains the dependency pin and warmup policy.
+was demonstrated, so the dependency pin is unchanged. Reload warmup is evaluated
+separately below.
 The Windows/Linux report of 3+ GiB host memory remains open pending native
 allocation/placement measurements; it is not explained away by GPU selection.
 
@@ -253,6 +263,44 @@ Validation status:
 | Audible cue verification and actual system sleep/wake | Pending human listening and native sleep/wake checks |
 | Windows CPU/CUDA/Vulkan | Pending native measurements and desktop validation |
 | Linux CPU/CUDA/Vulkan | Pending native measurements and desktop validation |
+
+### Reload Warmup Comparison
+
+Sequential Metal measurements on the same machine, model, WAV, native library,
+and eight threads compare startup warmup on every open, a one-second reload
+probe, and no reload warmup. Each case ran two rounds of six sessions, with case
+order reversed in round two. The first session always used startup warmup and
+is excluded below, leaving ten reloads per cell. Short-first and full-first runs
+measure the first real inference separately. No build or other parakit daemon
+ran concurrently.
+
+| Reload warmup | Open + warmup + 2 s clip, median (range), ms | Open + warmup + 55.36 s clip, median (range), ms |
+| --- | ---: | ---: |
+| Startup sequence (5 + 30 s) | 817 (800-840) | 2276 (2251-2378) |
+| One-second probe | 288 (275-303) | 1770 (1728-1819) |
+| None | 200 (197-258) | 1693 (1653-1780) |
+
+All short/full transcript hashes matched across all policies, orders, and 72
+sessions. In short-first runs, median RSS immediately after warmup was 893 MiB
+for the startup sequence and 875 MiB for the one-second probe; after full
+transcription and offload, the corresponding medians were 169 and 164 MiB.
+The one-second probe retains a real readiness check before queued dictation,
+while avoiding larger synthetic shapes on every reload. Startup policy is
+unchanged. These measurements support that reload choice on Metal; they do not
+establish CUDA/Vulkan latency or explain Windows/Linux host-memory retention.
+
+The totals exclude sampler pauses and earlier process/device initialization.
+They approximate immediate-release readiness plus inference, rather than
+perceived latency when loading overlaps a live recording. Exact phase ranges,
+memory samples, input/native/executable identities, and transcript hashes are in
+[reload-warmup-results-2026-09-30.json](reload-warmup-results-2026-09-30.json).
+
+With the shorter probe, the production Metal worker completed two real
+one-minute timeout/offload cycles with identical raw output to the previous
+binary. CPU repeat/quiet checks and the native microphone/guarded-insertion
+diagnostic passed. A repeat acoustic desktop test produced no speech with system
+output muted at volume zero; speech-driven insertion on this revision remains
+unverified by that run. The test-owned daemon stopped cleanly.
 
 The full Rust validation loop passed. Raw all-features configuration encountered
 the expected missing CUDA Toolkit on macOS; the documented `CRISPASR_LIB_DIR`

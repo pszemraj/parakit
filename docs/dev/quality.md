@@ -90,6 +90,11 @@ For latency work, use short real clips around 2s, 5s, 15s, and 25s. Longer quali
 
 ## PTT Worker Simulation
 
+The Rust suite also runs the production worker loop with a fake inference engine.
+It checks timed offload, audio queued during a blocked reload, one transcription
+and completion, transcript history, and session destruction without a model or
+a minute-long timeout.
+
 Use the hidden simulation path when you need the daemon worker flow without a live keyboard, microphone, or text insertion:
 
 ```bash

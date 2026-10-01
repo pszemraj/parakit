@@ -21,7 +21,7 @@ pub(crate) struct EngineRecipe {
 }
 
 impl EngineRecipe {
-    /// Open and warm the model with the same policy at startup and reload.
+    /// Open and warm the model for initial startup readiness.
     ///
     /// # Returns
     ///
@@ -31,6 +31,23 @@ impl EngineRecipe {
     ///
     /// Reports missing devices, model errors, and failed readiness inference.
     pub(crate) fn open(&self, log: &Logger) -> Result<(Engine, String)> {
+        self.open_with_policy(log, LoadPolicy::Startup)
+    }
+
+    /// Reopen the resolved model and verify readiness with a short inference.
+    ///
+    /// # Returns
+    ///
+    /// The ready session and its device summary.
+    ///
+    /// # Errors
+    ///
+    /// Reports missing devices, model errors, and failed readiness inference.
+    pub(crate) fn reload(&self, log: &Logger) -> Result<(Engine, String)> {
+        self.open_with_policy(log, LoadPolicy::Reload)
+    }
+
+    fn open_with_policy(&self, log: &Logger, policy: LoadPolicy) -> Result<(Engine, String)> {
         validate_device_request(self.device_mode, log)?;
         let started = Instant::now();
         let engine = open_engine(
@@ -48,8 +65,27 @@ impl EngineRecipe {
             engine.threads(),
             device_summary
         ));
-        warm_up_engine(&engine, has_gpu, log)?;
+        warm_up_engine(
+            &engine,
+            policy.warmup_seconds(engine.device_mode(), has_gpu),
+            log,
+        )?;
         Ok((engine, device_summary))
+    }
+}
+
+#[derive(Clone, Copy)]
+enum LoadPolicy {
+    Startup,
+    Reload,
+}
+
+impl LoadPolicy {
+    fn warmup_seconds(self, device: DeviceMode, has_gpu: bool) -> &'static [usize] {
+        match self {
+            Self::Startup => engine_warmup_seconds(device, has_gpu),
+            Self::Reload => warmup::reload_warmup_seconds(),
+        }
     }
 }
 
@@ -134,9 +170,8 @@ fn resolve_runtime_device(device_mode: DeviceMode) -> (String, bool) {
     }
 }
 
-fn warm_up_engine(engine: &Engine, has_gpu: bool, log: &Logger) -> Result<()> {
+fn warm_up_engine(engine: &Engine, sequence: &[usize], log: &Logger) -> Result<()> {
     let started = Instant::now();
-    let sequence = engine_warmup_seconds(engine.device_mode(), has_gpu);
     for seconds in sequence {
         let warmup = warmup::synthetic_pcm(*seconds);
         engine
@@ -164,9 +199,17 @@ mod tests {
     use super::*;
     #[test]
     fn warmup_policy_uses_gpu_sequence_only_for_a_visible_gpu() {
-        assert_eq!(engine_warmup_seconds(DeviceMode::Auto, true), &[5, 30]);
-        assert_eq!(engine_warmup_seconds(DeviceMode::Gpu, false), &[1]);
-        assert_eq!(engine_warmup_seconds(DeviceMode::Cpu, true), &[1]);
+        for mode in [DeviceMode::Cpu, DeviceMode::Auto, DeviceMode::Gpu] {
+            for has_gpu in [false, true] {
+                let startup: &[usize] = if mode != DeviceMode::Cpu && has_gpu {
+                    &[5, 30]
+                } else {
+                    &[1]
+                };
+                assert_eq!(LoadPolicy::Startup.warmup_seconds(mode, has_gpu), startup);
+                assert_eq!(LoadPolicy::Reload.warmup_seconds(mode, has_gpu), &[1]);
+            }
+        }
     }
 
     #[test]
