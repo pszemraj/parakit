@@ -1,7 +1,8 @@
 //! Filter only the pinned Parakeet loader's two unconditional informational lines.
 //!
-//! Unlike startup's discard/NUL guard, this forwards every other stderr line,
-//! including concurrent microphone, sound, and IPC errors during model reload.
+//! Quiet model reloads use this filter. Unlike the discard/NUL guard used for
+//! quiet startup, it forwards every other stderr line, including concurrent
+//! microphone, sound, and IPC errors.
 
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::sync::Mutex;

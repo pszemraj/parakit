@@ -55,6 +55,7 @@ impl EngineRecipe {
             self.threads,
             self.device_mode,
             self.verbose,
+            policy,
         )
         .with_context(|| format!("could not open model {}", self.model_path.display()))?;
         let (device_summary, has_gpu) = resolve_runtime_device(engine.device_mode());
@@ -94,11 +95,22 @@ fn open_engine(
     threads: usize,
     device_mode: DeviceMode,
     verbose: bool,
+    policy: LoadPolicy,
 ) -> Result<Engine> {
     if verbose {
         return Engine::open(path, threads, device_mode);
     }
-    super::model_output::with_model_output_filtered(|| Engine::open(path, threads, device_mode))
+    match policy {
+        // Quiet startup discards native loader output; a mistaken model file
+        // is reported once through the returned error, not low-level GGUF lines.
+        LoadPolicy::Startup => {
+            super::stderr::with_stderr_suppressed(|| Engine::open(path, threads, device_mode))
+        }
+        // Reload runs beside capture, cues, and IPC, so their errors must survive.
+        LoadPolicy::Reload => super::model_output::with_model_output_filtered(|| {
+            Engine::open(path, threads, device_mode)
+        }),
+    }
 }
 
 /// Validate the explicit GPU requirement before loading model weights.
