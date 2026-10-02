@@ -207,10 +207,10 @@ pub(crate) enum StageOutcome {
 enum PasteDispatch {
     Posted,
     #[cfg_attr(
-        not(target_os = "macos"),
+        not(any(target_os = "macos", target_os = "linux")),
         allow(
             dead_code,
-            reason = "only the macOS chord backend can withhold a dispatch for live modifiers"
+            reason = "only the macOS and Linux chord backends can withhold a dispatch for live modifiers"
         )
     )]
     SkippedUnsafeModifiers,
@@ -947,7 +947,7 @@ impl Injector {
         if result.is_err() {
             self.x11_paste = None;
         }
-        result.map(|()| PasteDispatch::Posted)
+        result
     }
 
     #[cfg(target_os = "windows")]
@@ -1107,10 +1107,9 @@ where
             baseline.as_ref(),
         )),
         Ok(PasteDispatch::SkippedUnsafeModifiers) => {
-            // A modifier became active after the bounded readiness wait.
-            // Posting would turn Cmd+V into a different shortcut. No input
-            // was sent, so leave the staged transcript on the clipboard for
-            // recovery and report that fact honestly.
+            // A live modifier made dispatch unsafe. Posting could change the
+            // shortcut or release a held push-to-talk chord. No input was sent,
+            // so leave the staged transcript on the clipboard for recovery.
             Ok(PasteReport::new(
                 PasteOutcome::UnsafeModifiers,
                 false,
@@ -1615,7 +1614,7 @@ impl LinuxX11Paste {
         })
     }
 
-    fn send_paste_chord(&self, mode: PasteMode) -> Result<()> {
+    fn send_paste_chord(&self, mode: PasteMode) -> Result<PasteDispatch> {
         let steps = match mode {
             PasteMode::Standard => &self.standard_steps,
             PasteMode::Terminal => &self.terminal_steps,
@@ -1625,7 +1624,18 @@ impl LinuxX11Paste {
             conn: &self.conn,
             root: self.root,
         };
-        send_x11_paste_chord_with_modifier_flush(&mut sink, steps, &self.modifier_cleanup_keycodes)
+        let keymap = self
+            .conn
+            .query_keymap()
+            .context("could not query X11 modifiers before paste")?
+            .reply()
+            .context("could not read X11 modifiers before paste")?;
+        send_x11_paste_chord_with_modifier_flush(
+            &mut sink,
+            steps,
+            &self.modifier_cleanup_keycodes,
+            &keymap.keys,
+        )
     }
 }
 
@@ -1793,12 +1803,21 @@ fn send_x11_paste_chord_with_modifier_flush<S: X11KeySink>(
     sink: &mut S,
     steps: &[ResolvedX11KeyStep],
     modifier_keycodes: &[u8],
-) -> Result<()> {
+    keymap: &[u8; 32],
+) -> Result<PasteDispatch> {
+    // The chord and cleanup release modifiers, which would stop another held
+    // push-to-talk capture or interfere with the user's current shortcut.
+    if modifier_keycodes
+        .iter()
+        .any(|keycode| keymap[usize::from(keycode / 8)] & (1 << (keycode % 8)) != 0)
+    {
+        return Ok(PasteDispatch::SkippedUnsafeModifiers);
+    }
     send_x11_key_steps(sink, steps)?;
     // Best-effort blanket releases protect against focus changes during the
     // paste chord that leave the X server believing a modifier is still held.
     let _ = flush_x11_modifier_releases(sink, modifier_keycodes);
-    Ok(())
+    Ok(PasteDispatch::Posted)
 }
 
 #[cfg(target_os = "linux")]

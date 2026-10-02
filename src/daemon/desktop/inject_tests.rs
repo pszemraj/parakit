@@ -547,8 +547,11 @@ fn xtest_paste_chord_success_flushes_all_cleanup_modifiers() {
         },
     ];
 
-    send_x11_paste_chord_with_modifier_flush(&mut sink, &steps, &[1, 3, 4])
-        .expect("paste chord should succeed");
+    assert_eq!(
+        send_x11_paste_chord_with_modifier_flush(&mut sink, &steps, &[1, 3, 4], &[0; 32])
+            .expect("paste chord should succeed"),
+        PasteDispatch::Posted
+    );
 
     assert_eq!(
         sink.events,
@@ -563,6 +566,27 @@ fn xtest_paste_chord_success_flushes_all_cleanup_modifiers() {
         ]
     );
     assert_eq!(sink.flushes, 2);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn xtest_paste_with_held_modifiers_does_not_emit_input() {
+    let modifier_keycodes = [37, 105, 50, 62, 64, 108, 133, 134];
+    for held in modifier_keycodes {
+        let mut sink = MockX11KeySink::default();
+        let mut keymap = [0; 32];
+        keymap[usize::from(held / 8)] |= 1 << (held % 8);
+        let dispatch = send_x11_paste_chord_with_modifier_flush(
+            &mut sink,
+            &three_pressed_key_steps(),
+            &modifier_keycodes,
+            &keymap,
+        )
+        .expect("a held modifier should safely withhold the paste chord");
+        assert_eq!(dispatch, PasteDispatch::SkippedUnsafeModifiers);
+        assert!(sink.events.is_empty(), "held keycode {held}");
+        assert_eq!(sink.flushes, 0, "held keycode {held}");
+    }
 }
 
 struct ClipboardCase {
