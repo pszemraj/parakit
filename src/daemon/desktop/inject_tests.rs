@@ -547,8 +547,11 @@ fn xtest_paste_chord_success_flushes_all_cleanup_modifiers() {
         },
     ];
 
-    send_x11_paste_chord_with_modifier_flush(&mut sink, &steps, &[1, 3, 4])
-        .expect("paste chord should succeed");
+    assert_eq!(
+        send_x11_paste_chord_with_modifier_flush(&mut sink, &steps, &[1, 3, 4], &[0; 32])
+            .expect("paste chord should succeed"),
+        PasteDispatch::Posted
+    );
 
     assert_eq!(
         sink.events,
@@ -563,6 +566,66 @@ fn xtest_paste_chord_success_flushes_all_cleanup_modifiers() {
         ]
     );
     assert_eq!(sink.flushes, 2);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn xtest_paste_with_held_modifiers_does_not_emit_input() {
+    let modifier_keycodes = [37, 105, 50, 62, 64, 108, 133, 134];
+    for held in modifier_keycodes {
+        let mut sink = MockX11KeySink::default();
+        let mut keymap = [0; 32];
+        keymap[usize::from(held / 8)] |= 1 << (held % 8);
+        let dispatch = send_x11_paste_chord_with_modifier_flush(
+            &mut sink,
+            &three_pressed_key_steps(),
+            &modifier_keycodes,
+            &keymap,
+        )
+        .expect("a held modifier should safely withhold the paste chord");
+        assert_eq!(dispatch, PasteDispatch::SkippedUnsafeModifiers);
+        assert!(sink.events.is_empty(), "held keycode {held}");
+        assert_eq!(sink.flushes, 0, "held keycode {held}");
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn x11_modifier_release_wait_allows_late_ctrl_release_after_ptt_stop() {
+    // Space released first stops recording; Ctrl lifts a few polls later.
+    let ctrl_l = 37;
+    let mut keymap = [0; 32];
+    keymap[usize::from(ctrl_l / 8)] |= 1 << (ctrl_l % 8);
+    let mut polls = 0;
+    let ready = wait_for_x11_modifier_release(Duration::from_secs(2), || {
+        polls += 1;
+        if polls == 3 {
+            keymap = [0; 32];
+        }
+        Ok(x11_modifier_held(&keymap, &[ctrl_l, 50]))
+    })
+    .expect("keymap polling should succeed");
+    assert!(ready);
+    assert_eq!(polls, 3);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn x11_modifier_release_wait_times_out_and_propagates_query_errors() {
+    let mut polls = 0;
+    let held = wait_for_x11_modifier_release(Duration::ZERO, || {
+        polls += 1;
+        Ok(true)
+    })
+    .expect("keymap polling should succeed");
+    assert!(!held, "an overlapping capture keeps its modifiers held");
+    assert_eq!(polls, 1);
+
+    let err = wait_for_x11_modifier_release(Duration::from_secs(2), || {
+        anyhow::bail!("X11 connection lost")
+    })
+    .expect_err("query failures should reach the caller");
+    assert!(err.to_string().contains("X11 connection lost"));
 }
 
 struct ClipboardCase {

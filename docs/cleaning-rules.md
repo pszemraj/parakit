@@ -42,9 +42,25 @@ parakit start --no-cleaning
 
 The default pipeline favors structural rules over product- or vocabulary-specific substitutions.
 
+### Acronyms
+
 Spaced acronyms follow one invariant: a run of two or more standalone uppercase ASCII letters separated by exactly one ASCII space is collapsed without separators. For example, `O C R` becomes `OCR`, `R L H F` becomes `RLHF`, and `A B` becomes `AB`. There is no acronym allowlist, so an unfamiliar initialism collapses exactly like a familiar one. Repeated-word stutter handling runs before acronym collapsing, so `I I think` still becomes `I think` rather than `II think`.
 
-Number conversion uses `text2num` with an isolated-number threshold of 4 by default. An isolated value at or above the threshold renders as digits, and an isolated value below it is left exactly as the model produced it: parakit forces it neither to a word nor to a digit. Set `cleaning.number_threshold = 0` to convert every recognized numeric expression instead, including isolated `zero`, `one`, and `two`. Omission and an explicit `0` are not equivalent and produce different `ruleset_id` values. The threshold gates isolated values only, so a comma-delimited listing such as `Zero, one, two, three, four.` still converts every member whatever the threshold is, because `text2num` does not treat listed values as isolated. The same applies to grouped and structural expressions, which may render components below the cutoff numerically. For readability, a recognized expression ending in one explicit `million` or `billion` scale keeps that word with a numeric coefficient: `three billion` becomes `3 billion`, `a million` becomes `1 million`, and `three point five billion` becomes `3.5 billion`. Multi-scale compounds such as `three billion five hundred million` retain the unambiguous full-digit rendering. Counts explicitly tied to `parameter` or `parameters` use compact `K`/`M`/`B` notation, including both bounds of a range: `one hundred million up to one billion parameters` becomes `100M up to 1B parameters`. Disable `compact-parameter-counts` to keep the general magnitude-word form. Existing numeric hybrids are preserved, and digit-only input is inferred as a magnitude only in that explicit parameter-count context. The ambiguous word `second` remains a word when context identifies it as a time unit (`one second`, `per second`, `a split-second`), while genuine ordinals still render numerically. Multi-point versions are parsed component by component through `text2num`; parakit then joins those validated components with periods regardless of the isolated-value threshold. Generic formatting passes compact unambiguous single-letter identifiers, the corpus-backed `SM` stem, and split digit groups without maintaining a list of product names.
+### Numbers
+
+Number conversion uses `text2num` with an isolated-number threshold of 4 by default. An isolated value at or above the threshold renders as digits, and an isolated value below it is left exactly as the model produced it: parakit forces it neither to a word nor to a digit. Set `cleaning.number_threshold = 0` to convert every recognized numeric expression instead, including isolated `zero`, `one`, and `two`. Omission and an explicit `0` are not equivalent and produce different `ruleset_id` values. The threshold gates isolated values only, so a comma-delimited listing such as `Zero, one, two, three, four.` still converts every member whatever the threshold is, because `text2num` does not treat listed values as isolated. The same applies to grouped and structural expressions, which may render components below the cutoff numerically.
+
+For readability, a recognized expression ending in one explicit `million` or `billion` scale keeps that word with a numeric coefficient: `three billion` becomes `3 billion`, `a million` becomes `1 million`, and `three point five billion` becomes `3.5 billion`. Multi-scale compounds such as `three billion five hundred million` retain the unambiguous full-digit rendering.
+
+Counts explicitly tied to `parameter` or `parameters` use compact `K`/`M`/`B` notation, including both bounds of a range: `one hundred million up to one billion parameters` becomes `100M up to 1B parameters`. Disable `compact-parameter-counts` to keep the general magnitude-word form. Existing numeric hybrids are preserved, and digit-only input is inferred as a magnitude only in that explicit parameter-count context.
+
+Indefinite plural magnitudes remain words: `hundreds`, `thousands`, `millions`, and `billions` (also `tens` and `trillions`). A directly preceding number-word phrase remains part of that protected span, so `nineteen hundreds` and `five millions` retain their wording, capitalization, and adjacent punctuation at every threshold and in both profiles. Exact quantities still convert: `three hundred records` becomes `300 records`, and `five million rows` becomes `5 million rows`. Other enabled cleanup rules, including sentence capitalization and trailing-period handling, continue to apply.
+
+The ambiguous word `second` remains a word when context identifies it as a time unit (`one second`, `per second`, `a split-second`), while genuine ordinals still render numerically.
+
+Multi-point versions are parsed component by component through `text2num`; parakit then joins those validated components with periods regardless of the isolated-value threshold. Generic formatting passes compact unambiguous single-letter identifiers, the corpus-backed `SM` stem, and split digit groups without maintaining a list of product names.
+
+### Casual Forms And Stutters
 
 Safe casual-form normalization expands `gonna` and `gunna` to `going to`, `gotta` to `got to`, and `wanna` and `wana` to `want to`. The complete tag question `, right?` becomes a period, while ordinary questions such as `Did I turn right?` and `Is that right?` remain unchanged. When the replacement is the dictation's final character, the default terminal-period pass removes it unless `--keep-trailing-period` is set.
 
@@ -92,8 +108,6 @@ Use the standard `regex` engine for ordinary substitutions. It remains the defau
 
 Use `fancy-regex` only when an advanced feature materially improves the implementation. The current uses are bounded backreferences for repeated-token, contracted-have restart, and repeated-prefix stutter patterns. Every `fancy-regex` pass sets an explicit backtrack limit, and a runtime limit failure is not fatal: the cleaner fails open, keeping the original transcript and recording the failure rather than inserting partially transformed text. Do not replace the conservative repeated-word vocabulary with a generic backreference: valid language such as `that that` and emphatic `no no` must survive the safe profile.
 
-Use a maintained domain crate when the task is already a well-defined parsing problem. English number grammar belongs to `text2num`, not to a growing local word table.
-
 Use a procedural pass when correctness depends on token classes or longer context. Sentence capitalization, spaced-letter collapsing, multi-point version assembly, and identifier formatting are procedural because they enforce structural invariants that are clearer in Rust than in a monolithic expression.
 
 Every pass must have a stable name, explicit activation tier, tests, and rule-hit attribution. Reducing source declarations is useful only when observability and precision are preserved.
@@ -114,8 +128,6 @@ Rules use Rust's `regex` crate dialect:
 Increment `CLEANER_VERSION` whenever built-in behavior, rule identity, or
 ordering changes so historical logs continue to identify the cleaner that
 produced a transcript.
-
-Personal vocabulary belongs in code only when it generalizes to normal dictation. Proper nouns, project-specific shorthand, and private jargon belong in `config.toml` instead. See User Rules below.
 
 ## User Rules
 
@@ -149,8 +161,6 @@ or in `config.toml`:
 [cleaning]
 disabled_rules = ["weights-and-biases-to-wandb"]
 ```
-
-`parakit rules list` prints user rules in a separate `(user)` section below the built-in rule list.
 
 ### Edit Rules Without Rebuilding
 

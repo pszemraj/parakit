@@ -28,6 +28,10 @@ test = true
 name = "audit-cleaning"
 path = "examples/audit_cleaning.rs"
 
+[[example]]
+name = "profile-memory"
+path = "examples/profile_memory.rs"
+
 [dependencies]
 # CLI parsing
 clap = { version = "4.5", features = ["derive"] }

@@ -2,6 +2,9 @@
 
 parakit needs a desktop input backend for `Ctrl+Space`.
 
+See [idle model offload](running.md#idle-model-offload) for runtime behavior and
+[Linux memory measurements](dev/memory.md#linux) for CPU, CUDA, and Vulkan checks.
+
 Default behavior:
 
 - `auto` and `desktop` register `Ctrl+Space` with the X11 session through `global-hotkey`.
@@ -54,6 +57,13 @@ In `terminal` or `standard` mode, `parakit doctor --deep` creates and focuses a 
 ## Focus Guard
 
 The X11 focus guard, fail-open query behavior, and clipboard fallback are described in [running.md#insertion](running.md#insertion). Parakit does not inspect application internals with AT-SPI.
+
+Batch paste also checks the current X11 modifier state before sending input.
+It waits up to two seconds for Control, Shift, Alt, and Super to be released,
+which covers releasing `Space` before `Ctrl` at the end of a short dictation.
+If one is still held, it keeps the transcript on the clipboard instead of sending
+a chord that could release an overlapping push-to-talk capture.
+The transcript remains available in history for recovery after releasing the keys.
 
 ## Passive X11 Listen
 

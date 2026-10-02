@@ -2,6 +2,48 @@
 
 use crate::constants::TARGET_RATE;
 
+const CPU_ENGINE_WARMUP_SECONDS: &[usize] = &[1];
+// The daemon hard-stops held recordings at MAX_UTTERANCE_SECONDS, but warming
+// that full 270s shape would make every launch pay worst-case compute. This is
+// a realistic-latency policy: cover short dictations and normal 2-25s
+// dictations with margin, accepting a one-time backend stall for unusual longer
+// cold-cache captures.
+const GPU_ENGINE_WARMUP_SECONDS: &[usize] = &[5, 30];
+
+/// Return the startup readiness warmup shapes for the requested device policy.
+///
+/// # Arguments
+///
+/// * `device_mode` - Requested CPU/automatic/GPU selection.
+/// * `has_gpu` - Whether the runtime probe sees a usable GPU.
+///
+/// # Returns
+///
+/// One second for CPU, or five and thirty seconds for a visible GPU.
+pub fn engine_warmup_seconds(
+    device_mode: crate::inference::DeviceMode,
+    has_gpu: bool,
+) -> &'static [usize] {
+    if device_mode != crate::inference::DeviceMode::Cpu && has_gpu {
+        GPU_ENGINE_WARMUP_SECONDS
+    } else {
+        CPU_ENGINE_WARMUP_SECONDS
+    }
+}
+
+/// Return the readiness probe used when reopening a session in the same process.
+///
+/// Backend initialization has already run at startup. A short inference still
+/// verifies the new session before queued user audio is processed, without
+/// precomputing larger shapes on every reload.
+///
+/// # Returns
+///
+/// One second of synthetic input, on every backend.
+pub fn reload_warmup_seconds() -> &'static [usize] {
+    CPU_ENGINE_WARMUP_SECONDS
+}
+
 /// Low nonzero amplitude used for synthetic warmup audio.
 const SYNTHETIC_AMPLITUDE: f32 = 0.02;
 

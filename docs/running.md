@@ -8,7 +8,7 @@ parakit runs in the foreground by default. Use that mode once after install, the
 parakit doctor && parakit
 ```
 
-`parakit doctor` checks hotkey access, the selected microphone, insertion support, and the daemon singleton lock without downloading or loading the model. An already-running daemon makes readiness fail. Starting again is harmless: `parakit start` prints `parakit: already running` and exits successfully. It exits `0` when startup should proceed and `1` when a blocking issue remains, so it can be used directly in shell conditionals.
+`parakit doctor` checks hotkey access, the selected microphone, insertion support, and the daemon singleton lock without downloading or loading the model. It exits `0` when startup should proceed and `1` when a blocking issue remains. An already-running daemon makes readiness fail. Starting again is harmless: `parakit start` prints `parakit: already running` and exits successfully.
 
 Useful variants:
 
@@ -75,7 +75,7 @@ disown
 
 On Linux, start parakit from a terminal in the current desktop session. Tmux, X11 auth, and evdev details are in [linux-desktop.md](linux-desktop.md).
 
-On macOS, start parakit from the terminal app that has Accessibility, Input Monitoring, and Microphone permission. Permission details are in [macos-desktop.md](macos-desktop.md).
+On macOS, use the terminal app configured under [permissions](macos-desktop.md#permissions).
 
 Keep stderr in a file:
 
@@ -127,16 +127,37 @@ last transcript: 42 bytes
   dictations: 17
   mic:        USB Speech Mic Mono, 48000 Hz mono input -> 16000 Hz mono model, F32
   model:      parakeet-tdt-0.6b-v3-Q8_0.gguf (Q8_0 (745 MB))
-  device:     cpu (CPU, 8 threads)
+  residency:  loaded
+  model idle: 10 minutes
+  device:     cpu (parakeet, 8 threads)
   paste mode: standard
   sounds:     on
-  cleaning:   on (safe, 25 rules)
+  cleaning:   on (safe, 29 rules)
   logging:    JSONL to /home/user/.parakit/logs
   history:    3 of 10
   hotkey:     auto
 ```
 
-The detail block reflects the daemon's own state at query time, not the querying process's flags. The `hotkey` line is Linux-only. `daemon.verbose = true` does not expand `parakit status`; pass the querying command's global `--verbose` flag as shown. If the daemon has not finished starting up yet (or predates this feature), `--verbose status` instead prints a single `detail unavailable (daemon starting or older version)` line after the two lines above.
+The detail block reflects the daemon's own state at query time, not the querying process's flags. The `hotkey` line is Linux-only. `daemon.verbose = true` does not expand `parakit status`; pass the querying command's global `--verbose` flag as shown. Before startup details are available, it prints `detail unavailable (daemon starting)` after the two lines above.
+
+## Idle Model Offload
+
+The model loads and warms at startup, then releases its inference session after ten uninterrupted idle minutes. Set `[daemon] model_idle_minutes = N` in the config, or run `parakit start --model-idle-minutes N`. The flag overrides the config. Nonnegative whole minutes are required; `0` keeps the model resident. Negative, fractional, and overflowing durations are rejected.
+
+The idle interval uses monotonic elapsed time, not calendar time. Whether system
+sleep counts toward it depends on the OS and Rust's [clock implementation](https://doc.rust-lang.org/std/time/struct.Instant.html).
+On clocks that pause during suspend, the remaining idle interval continues after
+wake; sleeping for ten minutes does not itself make the model eligible for offload.
+
+Recording, queued dictations, transcription, and insertion prevent offloading. The interval restarts when all work finishes, including silent captures and failures. Hotkeys, microphone policy, IPC, and transcript history remain available. Reading status or history does not postpone offloading.
+
+Press PTT normally after an idle period. The start cue plays, audio records, and the worker reopens and warms the same local model. An early release queues that audio until the model is ready. Successful dictation retains its normal completion cue. Reload uses the resolved local file without downloading it again, preserving the thread count and [device policy](#device-selection). If reopening fails, that dictation reports an error without insertion; the next PTT retries automatically.
+
+Startup warms one second of synthetic audio on CPU, or five and thirty seconds on GPU. Reload uses a one-second readiness probe on every backend, letting the first real dictation allocate any larger buffers it needs. [Reload measurements](dev/memory.md#reload-warmup-comparison) compare latency, transcript parity, and memory for this policy.
+
+`parakit --verbose status` reports `loaded`, `loading`, or `offloaded`, the effective timeout, and the last reload error until a successful reload clears it. Residency is separate from the recording/transcribing phase. Queries never load the model, and responses from older daemons can omit these fields.
+
+Session destruction releases owned CPU/GPU allocations, but process and driver caches can remain. See the [native memory measurements and platform procedure](dev/memory.md); GPU inference does not imply zero host memory.
 
 ## Model Cache
 
@@ -179,7 +200,7 @@ parakit follows the OS default input device and avoids monitor/loopback/virtual 
 
 On Linux and macOS, the microphone stream stays warm while the daemon is running; a bounded ring buffer feeds a drain thread that keeps 350 ms of pre-roll so the beginning of an utterance is less likely to be clipped. On Windows, parakit pauses the input stream while idle so `audiodg.exe` and driver-level microphone processing do not burn CPU when no recording is active. Recording start/stop is event-driven; idle device-change polling runs once per second.
 
-One continuously held recording is force-stopped and handed to the worker after 270 seconds. This bounds a missed hotkey-release event without discarding the captured audio.
+One continuously held recording is force-stopped and handed to the worker after 270 seconds. This bounds a missed hotkey-release event without discarding the captured audio. It follows the usual transcription path and normal completion cue.
 
 If the default input changes while parakit is idle, the daemon switches when CPAL reports a changed selected device identity and prints the new microphone unless `--quiet` is set. Idle polling is CPAL-only and does not shell out to `pactl`. On Linux PulseAudio/PipeWire systems, startup, probe, and stream reopen paths use `pactl` only to enrich generic `default` source names for human-readable logs and Bluetooth warnings. If an active stream fails, parakit keeps running and retries.
 
@@ -205,11 +226,11 @@ parakit start --paste-mode direct
 
 `terminal` and `standard` stage plain text on the system clipboard and send the paste shortcut. Both give the target and clipboard history tools time to observe the staged text, then restore the previous clipboard contents when the clipboard API can round-trip them. Restore support covers text, HTML with a text alternative, copied file lists, and images exposed as normal platform image data. Browser-private image packages, WebP-only payloads, and other clipboard MIME formats are not restorable through `arboard`; when restore is required, parakit clears the staged transcript instead of leaving sensitive text as the active clipboard.
 
-`--keep-transcript-clipboard` leaves the transcript as the active clipboard after both successful pastes and blocked fallbacks. The default is to restore the previous supported clipboard contents after staging. On macOS, one case ignores this setting either way: if push-to-talk (or another) modifier key is still physically held down at paste time, sending the chord would post a different shortcut, so parakit skips it and keeps the transcript on the clipboard regardless of the configured policy. This is the quiet path - a "Transcript copied" notification and the success tone, not the error tone - logged as `copied_only`.
+`--keep-transcript-clipboard` leaves the transcript as the active clipboard after both successful pastes and blocked fallbacks. The default is to restore the previous supported clipboard contents after staging. On macOS and Linux, one case ignores this setting either way: if push-to-talk (or another) modifier key is still held after a bounded wait of up to two seconds, sending the chord could change the shortcut or interrupt a capture, so parakit skips it and keeps the transcript on the clipboard regardless of the configured policy. This is the quiet path - a "Transcript copied" notification and the success tone, not the error tone - logged as `copied_only`.
 
-Linux clipboard modes use a fixed-delay restore gate. Windows waits for its clipboard-update listener when available and falls back to timing. macOS waits for insertion evidence instead, described below.
+Linux clipboard modes use a fixed-delay restore gate. Platform-specific timing is covered under [Windows insertion](windows-desktop.md#insertion) and [macOS acknowledgement](macos-desktop.md#insertion).
 
-The daemon's transcript ring is not durable: it holds only the last `daemon.transcript_history` entries and disappears when the daemon stops. Enable [JSONL logging](logging.md) for parakit-managed durable transcript records. An OS or third-party clipboard history manager provides paste-oriented recovery when a target rejects an insertion; on Windows, built-in clipboard history opens with `Win+V` and must be enabled by the user.
+Use [daemon history](#daemon-control) for same-session recovery or [JSONL logging](logging.md) for durable transcript records. Clipboard history managers can also retain staged text; on Windows, enable the built-in history and open it with `Win+V`.
 
 Clipboard history tools do retain transcript text after parakit restores the active clipboard. That is the point, but it also means dictated text outlives the paste; disable the manager if that retention is not acceptable for your workflow.
 
@@ -223,9 +244,7 @@ On macOS, parakit records the frontmost application's focused Accessibility UI e
 
 ### Paste Acknowledgement On macOS
 
-After a paste chord is sent, macOS waits for Accessibility evidence before deciding whether to restore the clipboard. Confirmed and safely unverified pastes restore it; losing the target during confirmation or reaching the deadline with no insertion evidence keeps the transcript available. Direct typing and blocked insertions skip this step. The evidence tiers and clipboard decisions are in [macos-desktop.md#insertion](macos-desktop.md#insertion), and their JSONL representation is in [logging.md#insertion-outcomes](logging.md#insertion-outcomes).
-
-If parakit reports that a paste could not be confirmed, inspect the target before pressing `Cmd+V`: the paste may have landed even though Accessibility did not expose it.
+See [macOS insertion evidence](macos-desktop.md#insertion), [logged outcomes](logging.md#insertion-outcomes), and [recovery after an unconfirmed paste](troubleshooting.md#macos-paste-could-not-be-confirmed).
 
 ## Logging And Sounds
 

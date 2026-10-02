@@ -3,14 +3,15 @@
 use anyhow::{Context, Result};
 use clap::Parser;
 use crossbeam_channel::{bounded, unbounded};
-use parakit::audio_file::prepare_wav_for_model;
+
+mod simulation;
 use parakit::data_log::DataLogger;
 use parakit::fetch::{self, FetchOptions, FetchSource};
 use parakit::gguf;
 use parakit::inference::{default_thread_count, DeviceMode, Engine};
 use parakit::model;
 use parakit::rules;
-use parakit::warmup;
+use simulation::run_ptt_audio_simulation;
 use std::ffi::{c_char, c_void, CStr};
 use std::io::Write as _;
 use std::num::NonZeroUsize;
@@ -26,6 +27,7 @@ use crate::cli::{
 use crate::config::{self, ConfigFile};
 use crate::daemon;
 use crate::daemon::audio::AudioCapture;
+use crate::daemon::engine_runtime::{validate_device_request, EngineRecipe};
 #[cfg(not(target_os = "linux"))]
 use crate::daemon::hotkey::HotkeyBackend;
 use crate::daemon::logging::{BannerInfo, LogLevel, Logger};
@@ -33,13 +35,6 @@ use crate::daemon::notifications::Notifier;
 use crate::daemon::sounds::Sounds;
 use crate::daemon::worker::{spawn_worker, WorkerCtx, WorkerEvent, WORKER_QUEUE_CAPACITY};
 
-const CPU_ENGINE_WARMUP_SECONDS: &[usize] = &[1];
-// The daemon hard-stops held recordings at MAX_UTTERANCE_SECONDS, but warming
-// that full 270s shape would make every launch pay worst-case compute. This is
-// a realistic-latency policy: cover short dictations and normal 2-25s
-// dictations with margin, accepting a one-time backend stall for unusual longer
-// cold-cache captures.
-const GPU_ENGINE_WARMUP_SECONDS: &[usize] = &[5, 30];
 const GGML_LOG_LEVEL_NONE: i32 = 0;
 const GGML_LOG_LEVEL_WARN: i32 = 3;
 const GGML_LOG_LEVEL_CONT: i32 = 5;
@@ -286,6 +281,8 @@ fn run_daemon(cli: &Cli, start: &StartCli) -> Result<()> {
     let keep_transcript_clipboard = start.effective_keep_transcript_clipboard(&config);
     let log_dir = start.effective_log_dir(&config);
     let data_log = log_dir.clone().map(|dir| Arc::new(DataLogger::new(dir)));
+    // Register before IPC exists; this guard outlives a startup engine too.
+    let worker_lifetime = ipc_state.shutdown.register();
     #[cfg(any(unix, target_os = "windows"))]
     let _ipc_server = daemon::ipc::spawn_server(
         Arc::clone(&ipc_state),
@@ -310,6 +307,7 @@ fn run_daemon(cli: &Cli, start: &StartCli) -> Result<()> {
         model_path,
         engine,
         device_summary,
+        recipe,
     } = open_cli_engine(start, &config, verbose, cli.quiet, &log)?;
     let model_dtype = model_dtype_label(&model_path);
 
@@ -384,6 +382,8 @@ fn run_daemon(cli: &Cli, start: &StartCli) -> Result<()> {
     let (tx, rx) = bounded::<WorkerEvent>(WORKER_QUEUE_CAPACITY);
     let worker = spawn_worker(WorkerCtx {
         engine,
+        recipe,
+        model_idle_minutes: start.effective_model_idle_minutes(&config),
         cleaner,
         data_log,
         sounds: sounds.clone(),
@@ -394,17 +394,27 @@ fn run_daemon(cli: &Cli, start: &StartCli) -> Result<()> {
         keep_transcript_clipboard,
         insert_transcripts: true,
         rx,
+        lifetime: worker_lifetime,
     });
     let (hotkey_tx, hotkey_rx) = unbounded();
-    let coordinator =
-        daemon::recording::spawn_recording_coordinator(hotkey_rx, tx, audio, Arc::clone(&log))
-            .context("spawn recording coordinator")?;
+    let coordinator = daemon::recording::spawn_recording_coordinator(
+        hotkey_rx,
+        tx,
+        audio,
+        Arc::clone(&log),
+        Arc::clone(&ipc_state.activity),
+    )
+    .context("spawn recording coordinator")?;
 
     // Hotkey grab loop. Blocks forever (until grab returns or process exits).
     ipc_state.set_phase("idle");
+    ipc_state.activity.ready();
     log.ready();
 
-    daemon::hotkey::run_grab_loop(hotkey_tx, hotkey_backend, Arc::clone(&log));
+    if daemon::hotkey::run_grab_loop(hotkey_tx, hotkey_backend, Arc::clone(&log)).is_err() {
+        // The worker may own a loaded session; release it before native teardown.
+        ipc_state.shutdown.exit_after_worker(&ipc_state.activity, 2);
+    }
 
     // Tear down.
     let _ = coordinator.join();
@@ -529,76 +539,6 @@ fn warn_about_bluetooth_mic_if_needed(log: &Logger, mic_info: &daemon::audio::Mi
     }
 }
 
-fn run_ptt_audio_simulation(
-    cli: &Cli,
-    start: &StartCli,
-    config: &ConfigFile,
-    log: Arc<Logger>,
-    audio_path: &Path,
-) -> Result<()> {
-    let verbose = cli.effective_verbose(config);
-    let paste_mode = start.effective_paste_mode(config);
-    let cleaner = build_cli_cleaner(start, config)?.map(Arc::new);
-    let data_log = start
-        .effective_log_dir(config)
-        .map(|dir| Arc::new(DataLogger::new(dir)));
-    let sounds = Sounds::new(false);
-
-    let prepare_started = Instant::now();
-    let wav = prepare_wav_for_model(audio_path)?;
-    let prepare_elapsed = prepare_started.elapsed();
-    let audio_secs = wav.audio_secs();
-    log.verbose(format!(
-        "parakit: simulated audio prepared in {:.0}ms (source_rate={} Hz, source_samples={}, target_samples={})",
-        prepare_elapsed.as_secs_f32() * 1000.0,
-        wav.source_rate,
-        wav.source_samples,
-        wav.samples.len()
-    ));
-
-    let OpenedEngine { engine, .. } =
-        open_cli_engine(start, config, verbose, cli.quiet || !verbose, &log)?;
-
-    let msg = format!(
-        "parakit: simulating PTT from {} ({audio_secs:.2}s, {source_rate} Hz source)",
-        audio_path.display(),
-        source_rate = wav.source_rate
-    );
-    log.line(&msg);
-
-    let (tx, rx) = bounded::<WorkerEvent>(WORKER_QUEUE_CAPACITY);
-    let worker = spawn_worker(WorkerCtx {
-        engine,
-        cleaner,
-        data_log,
-        sounds,
-        log,
-        notifier: Notifier::new(Arc::new(Logger::new(LogLevel::Quiet))),
-        state: Arc::new(daemon::ipc::SharedState::new()),
-        paste_mode,
-        keep_transcript_clipboard: start.effective_keep_transcript_clipboard(config),
-        insert_transcripts: false,
-        rx,
-    });
-
-    let started_at = Instant::now();
-    let stopped_at = started_at + Duration::from_secs_f32(audio_secs);
-    tx.send(WorkerEvent::Started)
-        .context("could not send simulated PTT start event")?;
-    tx.send(WorkerEvent::Stopped {
-        started_at,
-        stopped_at,
-        pcm: wav.samples,
-        focus_at_start: None,
-    })
-    .context("could not send simulated PTT stop event")?;
-    drop(tx);
-    worker
-        .join()
-        .map_err(|_| anyhow::anyhow!("PTT simulation worker panicked"))?;
-    Ok(())
-}
-
 fn build_cli_cleaner(start: &StartCli, config: &ConfigFile) -> Result<Option<rules::Cleaner>> {
     rules::build_cleaner(
         !start.effective_cleaning_enabled(config),
@@ -648,33 +588,23 @@ fn open_cli_engine(
         log,
     )?;
     let model_path = engine_config.model_path;
-    let open_started = Instant::now();
-    let engine = open_engine(
-        &model_path,
-        engine_config.threads,
-        engine_config.device_mode,
+    let recipe = EngineRecipe {
+        model_path: std::path::absolute(&model_path)?,
+        threads: engine_config.threads,
+        device_mode: engine_config.device_mode,
         verbose,
-    )
-    .with_context(|| format!("could not open model {}", model_path.display()))?;
-    let (device_summary, has_gpu) = resolve_runtime_device(engine.device_mode());
-    log.verbose(format!(
-        "parakit: model opened in {:.0}ms with backend={} threads={} device={}",
-        open_started.elapsed().as_secs_f32() * 1000.0,
-        engine.backend(),
-        engine.threads(),
-        device_summary
-    ));
-    // Warmup is a startup readiness check, not only a latency hint: it runs
-    // the same transcribe path the first real dictation would use.
-    warm_up_engine(&engine, has_gpu, log)?;
+    };
+    let (engine, device_summary) = recipe.open(log)?;
     Ok(OpenedEngine {
         model_path,
         engine,
         device_summary,
+        recipe,
     })
 }
 
 struct OpenedEngine {
+    recipe: EngineRecipe,
     model_path: PathBuf,
     engine: Engine,
     device_summary: String,
@@ -743,106 +673,6 @@ fn model_file_name(path: &Path) -> String {
         .and_then(|name| name.to_str())
         .map(str::to_string)
         .unwrap_or_else(|| path.display().to_string())
-}
-
-fn open_engine(
-    path: &Path,
-    threads: usize,
-    device_mode: DeviceMode,
-    verbose: bool,
-) -> Result<Engine> {
-    if verbose {
-        return Engine::open(path, threads, device_mode);
-    }
-    daemon::stderr::with_stderr_suppressed(|| Engine::open(path, threads, device_mode))
-}
-
-fn validate_device_request(device_mode: DeviceMode, log: &Logger) -> Result<()> {
-    if device_mode != DeviceMode::Gpu {
-        return Ok(());
-    }
-
-    #[cfg(feature = "bundled")]
-    {
-        if !parakit::gpu::has_gpu_device() {
-            let message = "--device gpu requested, but ggml reports no GPU or iGPU devices; run `parakit --verbose doctor` for compute diagnostics";
-            #[cfg(target_os = "macos")]
-            let message = daemon::macos::no_gpu_hint()
-                .map_or_else(|| message.to_string(), |hint| format!("{message}; {hint}"));
-            anyhow::bail!(message);
-        }
-    }
-
-    #[cfg(not(feature = "bundled"))]
-    {
-        log.warn(
-            "--device gpu requested, but this build does not include the bundled ggml device probe; continuing without GPU preflight",
-        );
-    }
-
-    let _ = log;
-    Ok(())
-}
-
-fn resolve_runtime_device(device_mode: DeviceMode) -> (String, bool) {
-    if device_mode == DeviceMode::Cpu {
-        return (DeviceMode::Cpu.as_str().to_string(), false);
-    }
-
-    #[cfg(feature = "bundled")]
-    {
-        let devices = parakit::gpu::devices();
-        let preferred = parakit::gpu::preferred_gpu_device_in(&devices);
-        let summary = match preferred {
-            Some(device) => format!("{} -> {}", device_mode.as_str(), device.diagnostic_line()),
-            None if device_mode == DeviceMode::Auto => {
-                "auto -> CPU fallback (no GPU/iGPU visible)".to_string()
-            }
-            None => "gpu -> unavailable (no GPU/iGPU visible)".to_string(),
-        };
-        (summary, preferred.is_some())
-    }
-
-    #[cfg(not(feature = "bundled"))]
-    {
-        (
-            format!("{} (device probe unavailable)", device_mode.as_str()),
-            false,
-        )
-    }
-}
-
-fn warm_up_engine(engine: &Engine, has_gpu: bool, log: &Logger) -> Result<()> {
-    let started = Instant::now();
-    let sequence = engine_warmup_seconds(engine.device_mode(), has_gpu);
-    for seconds in sequence {
-        let warmup = warmup::synthetic_pcm(*seconds);
-        engine
-            .transcribe(&warmup)
-            .context("engine warmup transcription failed")?;
-    }
-    log.verbose(format!(
-        "parakit: engine warmup took {:.0}ms ({} synthetic input)",
-        started.elapsed().as_secs_f32() * 1000.0,
-        format_warmup_sequence(sequence)
-    ));
-    Ok(())
-}
-
-fn engine_warmup_seconds(device_mode: DeviceMode, has_gpu: bool) -> &'static [usize] {
-    if device_mode != DeviceMode::Cpu && has_gpu {
-        GPU_ENGINE_WARMUP_SECONDS
-    } else {
-        CPU_ENGINE_WARMUP_SECONDS
-    }
-}
-
-fn format_warmup_sequence(sequence: &[usize]) -> String {
-    sequence
-        .iter()
-        .map(|seconds| format!("{seconds}s"))
-        .collect::<Vec<_>>()
-        .join(" + ")
 }
 
 fn run_cache_command(cache: &CacheCli, quiet: bool) -> Result<()> {
@@ -1061,6 +891,10 @@ fn print_config_show(quiet: bool) -> Result<()> {
     println!("    sounds: {}", start.effective_sounds_enabled(&config));
     println!("    verbose: {}", config.daemon.verbose.unwrap_or(false));
     println!(
+        "    model_idle_minutes: {}",
+        start.effective_model_idle_minutes(&config)
+    );
+    println!(
         "    transcript_history: {}",
         config
             .daemon
@@ -1219,38 +1053,10 @@ mod app_tests {
     }
 
     #[test]
-    fn warmup_policy_uses_gpu_sequence_only_for_a_visible_gpu() {
-        assert_eq!(
-            engine_warmup_seconds(DeviceMode::Auto, true),
-            GPU_ENGINE_WARMUP_SECONDS
-        );
-        assert_eq!(
-            engine_warmup_seconds(DeviceMode::Gpu, false),
-            CPU_ENGINE_WARMUP_SECONDS
-        );
-        assert_eq!(
-            engine_warmup_seconds(DeviceMode::Cpu, true),
-            CPU_ENGINE_WARMUP_SECONDS
-        );
-    }
-
-    #[test]
-    fn warmup_sequence_format_is_stable() {
-        assert_eq!(format_warmup_sequence(&[5, 30]), "5s + 30s");
-    }
-
-    #[test]
     fn file_size_format_scales_units() {
         assert_eq!(format_file_size(999_000), "999 KB");
         assert_eq!(format_file_size(999_000_000), "999 MB");
         assert_eq!(format_file_size(1_500_000_000), "1.50 GB");
-    }
-
-    #[test]
-    fn cpu_device_summary_is_plain() {
-        let (summary, has_gpu) = resolve_runtime_device(DeviceMode::Cpu);
-        assert_eq!(summary, "cpu");
-        assert!(!has_gpu);
     }
 
     /// One [`native_log_decision`] input/output pair.

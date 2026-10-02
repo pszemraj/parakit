@@ -4,7 +4,7 @@ parakit can write one JSON object per line (JSONL) for every dictation: what the
 
 Audio and redirected console output are never logged, but the raw and cleaned transcript text is, in plaintext, with no built-in retention or size cap. Protect the log directory and rotate or delete old files to match the sensitivity of your dictation.
 
-One append-only `parakit-YYYY-MM-DD.jsonl` file is written per local day, rotating when the local date changes. Every line is an independent JSON object and is flushed synchronously before the worker continues, so a crash mid-dictation cannot corrupt an earlier line.
+One append-only `parakit-YYYY-MM-DD.jsonl` file is written per local day, rotating when the local date changes. Each JSON object is written and flushed synchronously before the worker continues. There is no filesystem sync guarantee; an interrupted write can leave a partial final line.
 
 ## How To Read A Dictation
 

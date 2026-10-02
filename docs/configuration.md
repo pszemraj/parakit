@@ -9,6 +9,7 @@ A small config that pins the thread count, keeps the trailing period that cleanu
 threads = 8
 paste_mode = "standard"
 transcript_history = 20
+model_idle_minutes = 10
 
 [cleaning]
 profile = "safe"
@@ -66,6 +67,7 @@ parakit config
     keep_transcript_clipboard: false
     sounds: true
     verbose: false
+    model_idle_minutes: 10
     transcript_history: 20
   cleaning:
     enabled: true
@@ -79,7 +81,7 @@ parakit config
     user rules: 0
 ```
 
-A key you did not set prints its built-in default in parentheses. On Linux the output has an extra `hotkey:` section with the selected `backend`. Each user rule adds a `name (position)` line under the `user rules` count.
+Some unset keys show a parenthesized default; booleans, cleaning settings, and the idle timeout print their effective values directly. On Linux the output has an extra `hotkey:` section with the selected `backend`. Each user rule adds a `name (position)` line under the `user rules` count.
 
 ### Details
 
@@ -106,6 +108,8 @@ These daemon and cleaning flags live on `parakit start`. The profile, trailing-p
 Four booleans (`daemon.sounds`, `cleaning.enabled`, `cleaning.keep_trailing_period`, and `daemon.keep_transcript_clipboard`) each have a paired CLI flag, one that forces the value on and one that forces it off (for example `--sounds`/`--no-sounds`), so a config default can be overridden in either direction for a single invocation; the two flags in a pair conflict with each other. Disabled rule names from the CLI and the config are merged, and a few settings are config-only. Those exact interactions are documented on each key in [config_reference.toml](config_reference.toml).
 
 Unknown keys are errors at every level, including inside each `[[rules.user]]` entry. Invalid TOML, invalid values, and rule-validation failures are hard errors that name the config path.
+
+For `daemon.model_idle_minutes` behavior, see [idle model offload](running.md#idle-model-offload).
 
 Short-lived `rules test` and `rules list` processes each load the current file, which makes them useful for checking a change before restarting the daemon.
 

@@ -1,10 +1,17 @@
 # Windows Desktop Setup
 
-parakit supports Windows as a terminal-run CLI, built from source and installed as a per-user bundle by the repo's build scripts. Unlike macOS, Windows needs no privacy-permission grants: `RegisterHotKey` and `SendInput` are ordinary APIs available to any non-elevated process. Daemon behavior - hotkey, insertion, microphone - matches Linux and macOS except where noted below.
+parakit runs from a Windows terminal and installs as a per-user bundle. Its hotkey and insertion APIs do not require macOS-style Accessibility or Input Monitoring grants. Microphone access still depends on Windows privacy settings.
 
 ## Build
 
+See [idle model offload](running.md#idle-model-offload) for runtime behavior and
+[Windows memory measurements](dev/memory.md#windows) for backend checks.
+
 Build and install with the [Windows bundle scripts](../scripts/windows/README.md); a bare `cargo install --path .` does not copy the generated CrispASR/ggml DLLs beside `parakit.exe`. Shared native dependencies and backend controls are in [build.md](build.md).
+
+## Microphone Permissions
+
+In Windows 11, open Settings > Privacy & security > Microphone and enable microphone access for desktop apps. On Windows 10, use Settings > Privacy > Microphone. See [Microsoft's permission instructions](https://support.microsoft.com/en-us/windows/privacy/turn-on-app-permissions-for-your-microphone-in-windows), then rerun `parakit doctor`.
 
 ## Hotkey
 
@@ -20,9 +27,9 @@ The chord is not configurable yet; Windows uses `Ctrl+Space`.
 
 ## Insertion
 
-Paste modes (`terminal`, `standard`, `direct`), clipboard staging, restore policy, and focus-change handling are the same system documented in [running.md#insertion](running.md#insertion); this section only covers what differs on Windows.
+See [insertion](running.md#insertion) for paste modes, clipboard staging, restore policy, and focus-change handling.
 
-Batch paste sends the paste chord (`Ctrl+Shift+V` for `terminal`, `Ctrl+V` for `standard`) as a single batched `SendInput` call. `direct` mode types through `enigo`'s Unicode `SendInput` path instead of touching the clipboard.
+Batch paste sends the selected chord as a single `SendInput` call. `direct` mode uses `enigo`'s Unicode `SendInput` path.
 
 Windows has no post-paste confirmation step like macOS's Accessibility polling. A background clipboard-history listener - a hidden message-only window that watches for clipboard-update notifications - lets parakit wait for its own staged write to actually reach the clipboard before restoring the previous contents, instead of guessing with a fixed delay. That listener only times the clipboard restore; it never confirms that the paste landed in the focused application. Because there is no landing signal, every Windows insertion record's `acknowledgement_kind` is `not_applicable`, whether or not clipboard-history observation was available for that paste. Full field semantics are in [logging.md](logging.md).
 

@@ -145,13 +145,13 @@ parakit
 
 What `doctor --deep` actually does on Windows is described in [windows-desktop.md#doctor---deep](../../docs/windows-desktop.md#doctor---deep).
 
-The installer runs `parakit --version` after copying files. That checks Windows loader resolution without touching the hotkey, microphone, daemon lock, model cache, or clipboard. If Windows reports `0xC0000135`, the installer translates it to a missing-runtime-DLL message before PATH updates.
+The version smoke test does not touch the hotkey, microphone, daemon lock, model cache, or clipboard. If Windows reports `0xC0000135`, the installer translates it to a missing-runtime-DLL message before PATH updates.
 
 The installer updates persistent User `PATH`; it does not broadcast an environment change to already-running applications. Open a new terminal after install.
 
 If Group Policy blocks User `PATH` writes, the install still succeeds and prints a warning. Run `%LOCALAPPDATA%\Programs\parakit\parakit.exe` directly, add the directory through your approved endpoint-management path, or rerun with `--no-user-path` when PATH changes are not allowed.
 
-Model downloads use the platform certificate roots and system proxy settings. This is required on corporate Windows networks where TLS inspection or an HTTP proxy is configured through the OS.
+For TLS interception and proxy setup, see [download troubleshooting](../../docs/troubleshooting.md#downloads-behind-a-corporate-proxy).
 
 For development-only bundle checks without installing:
 
