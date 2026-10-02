@@ -27,8 +27,7 @@ python scripts/profile_memory.py --output target/tmp/memory/offload --vmmap -- \
 ```
 
 Use an existing Python environment; the collector needs only the standard
-library. With conda, prefix Python commands with
-`conda run -n <environment> --live-stream`. Output directories must be new.
+library. Output directories must be new.
 The example requires an explicit local model and never downloads one. Set
 `GGML_METAL_PIPELINE_CACHE` under `target/tmp/` when isolating Metal's disk cache.
 Match whether that cache is populated between comparisons.
@@ -37,7 +36,7 @@ The child pauses at each JSON checkpoint until the collector samples it:
 before loading, after loading, after warmup, after short/full transcription,
 after offload (or retained baseline), and after final close. Records include
 operation elapsed time. Repeated full transcripts must match exactly and be
-nonempty; failures return nonzero. The collector saves input hashes, command,
+nonempty; failures return nonzero. The collector saves input paths and sizes, command,
 platform, commit/submodule identity, working-tree state, `metrics.jsonl`, native
 diagnostics, and transcript hashes. It does not persist audio or transcripts.
 The retained baseline opens once; the offload run opens on every cycle.
@@ -117,7 +116,7 @@ Adjust the helper path if `CARGO_TARGET_DIR` changes its output location.
 For Vulkan, substitute its feature and bundle; for CPU, omit the accelerator
 feature and use `--device cpu`. Repeat with `--keep-loaded` and a new output
 directory for the resident baseline. These commands require native Windows
-validation; the results below cover macOS only.
+validation; the measured results below cover macOS and Linux.
 
 The collector calls `GetProcessMemoryInfo` to record working set, peak working
 set, and private committed bytes. These measures are distinct; see Microsoft's
@@ -220,8 +219,8 @@ allocations have been freed. Device/library caches and heap fragmentation also
 remain. They do not assign every residual byte to a call site. No native leak
 was demonstrated, so the dependency pin is unchanged. Reload warmup is evaluated
 separately below.
-The Windows/Linux report of 3+ GiB host memory remains open pending native
-allocation/placement measurements; it is not explained away by GPU selection.
+These macOS measurements do not explain the reported 3+ GiB Windows/Linux host
+memory. The Linux follow-up below did not reproduce it; Windows remains pending.
 
 Desktop testing did expose a separate ownership defect in parakit's stop path:
 IPC called process exit while the worker still owned a loaded session. Metal's
@@ -262,7 +261,7 @@ Validation status:
 | Native macOS PTT, insertion, first post-idle reload, missing-model recovery, status/history, stop/restart | Passed with an isolated daemon and native hotkey/microphone/input APIs; sounds enabled without backend errors |
 | Audible cue verification and actual system sleep/wake | Pending human listening and native sleep/wake checks |
 | Windows CPU/CUDA/Vulkan | Pending native measurements and desktop validation |
-| Linux CPU/CUDA/Vulkan | Pending native measurements and desktop validation |
+| Linux CPU/CUDA/Vulkan | Native measurements, worker cycles, and automated X11 capture/insertion passed; human checks pending |
 
 ### Reload Warmup Comparison
 
@@ -308,3 +307,135 @@ fallback passed Rust all-features checking. Known vendored CrispASR deprecation
 warnings remain. Rust 1.98.1 also reports the existing `block 0.1.6` dependency's
 uninhabited-static future-incompatibility warning; dependency migration is
 outside this change. Project clippy checks pass with warnings denied.
+
+## Native Linux Results, 2026-10-01
+
+Measured on Ubuntu 24.04.5, Linux 6.17.0-29-generic, a Ryzen 7 7700X,
+and an RTX 5090 with NVIDIA driver 595.91.07. Rust/Cargo were 1.98.0;
+CUDA was 12.9.86 and Vulkan instance support was 1.3.275. The native CPU,
+CUDA, and Vulkan libraries used the unchanged CrispASR pin
+`5f1bb858e803167f1b5fc1eb9a90ffdd1970f7ed`, OpenBLAS, OpenMP, CPU repacking,
+and native CPU instructions. CUDA targeted SM120; Vulkan explicitly selected
+the RTX 5090 with `GGML_VK_VISIBLE_DEVICES=1` rather than the AMD integrated GPU.
+The measured inference code was revision `2e0c457`; subsequent changes correct
+collector metadata and Linux held-modifier paste handling. The backend-specific
+executables resolved their matching native libraries through `RPATH`, without
+`RUNPATH`, under `target/debug/build/parakit-*/out/lib`.
+
+These runs used Rust dev-profile executables and Release native libraries:
+default features for CPU, `--features cuda` for CUDA, and `--features vulkan`
+for Vulkan.
+Each retained/offload pair ran ten cycles with two inference threads on CPU
+cores 0 and 1, the same Q8_0 model (745,121,632 bytes), and the 55.36-second
+`local-scratch/juniper-voicememo-DO_NOT_DELETE.wav`. No concurrent build or
+other test workload ran during sampling. The installed idle daemon remained
+running during profiling; its allocations are excluded from the per-process
+counters. Model and audio contents were not hashed or saved by the collector.
+The profiler's short checkpoint used the first two seconds of that WAV.
+
+All host figures below are MiB from `smaps_rollup`; GPU figures are separate
+per-process `nvidia-smi` readings. Ranges cover ten cycles. Do not add GPU
+allocations to RSS or PSS.
+
+| Offload run | Before load RSS | Loaded RSS | Warmed RSS | After short RSS | After full RSS | Offloaded RSS |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| CPU | 13.8 | 727.5-793.7 | 821.8-830.1 | 849.4-852.2 | 1571.3-1604.4 | 29.7-83.2 |
+| CUDA | 169.3 | 273.5-581.6 | 616.2-631.0 | 616.2-631.0 | 639.9-658.9 | 555.4-658.8 |
+| Vulkan | 18.0 | 167.0-192.8 | 266.1-267.1 | 267.1-268.4 | 275.8-282.1 | 191.9-192.8 |
+
+Before-load is one sample per process; later ranges include startup and repeated
+reloads, so initialized backend state is present in later loaded checkpoints.
+
+| Backend / run | After full RSS | Between dictations RSS | Between PSS | Between anonymous PSS | Between file PSS | Between private dirty | Full GPU | Between GPU |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| CPU retained | 1571.1-1574.4 | 1571.1-1574.4 | 1566.3-1569.7 | 1560.1-1563.4 | 6.3 | 1560.1-1563.4 | unavailable | unavailable |
+| CPU offload | 1571.3-1604.4 | 29.7-83.2 | 24.8-78.4 | 18.5-72.0 | 6.4 | 18.5-72.0 | unavailable | unavailable |
+| CUDA retained | 640.0 | 640.0 | 589.4-592.1 | 471.9 | 107.6-110.2 | 493.0-493.3 | 2052 | 2052 |
+| CUDA offload | 639.9-658.9 | 555.4-658.8 | 507.2-610.5 | 386.2-489.5 | 110.1-111.0 | 421.9-525.2 | 2052-2054 | 566-568 |
+| Vulkan retained | 335.9-337.8 | 335.9-337.8 | 275.4-277.3 | 163.3-165.2 | 112.1 | 173.6-175.6 | 1492 | 1492 |
+| Vulkan offload | 275.8-282.1 | 191.9-192.8 | 131.4-132.2 | 50.0-50.8 | 81.4 | 59.7-60.7 | 1491-1492 | 22 |
+
+Swap was zero at every checkpoint. CPU offload released about 1.5 GiB of RSS;
+CUDA and Vulkan released about 1.5 GiB of device allocations. CUDA offloaded
+RSS settled at 555.4 MiB for cycles 4-10; Vulkan settled at 192.8 MiB after
+cycle 2. CPU offloaded RSS varied without accumulating across the
+ten reloads. This host did not reproduce multi-gigabyte GPU-backend host RSS.
+
+The final CUDA offload snapshot contained 295.6 MiB in the heap, 83.1 MiB in
+anonymous mappings, 76.0 MiB in cuBLASLt, 54.0 MiB in `/dev/nvidiactl`, and
+15.7 MiB in libcuda. Vulkan's largest remaining mappings included LLVM
+(42.7 MiB), the heap (27.4 MiB), and NVIDIA GPU compiler code (24.2 MiB).
+These identify mappings, not the owners of individual heap allocations.
+Residual CUDA heap/context retention remains unattributed; no allocator purge
+or device reset was added.
+
+| Backend | Retained short / full median ms | Offload short / full median ms | Reload open + probe median ms |
+| --- | ---: | ---: | ---: |
+| CPU | 402 / 10428 | 411 / 10548 | 588 |
+| CUDA | 99 / 2108 | 98 / 2168 | 209 |
+| Vulkan | 93 / 1707 | 92 / 1699 | 251 |
+
+Reload medians exclude cycle 1 and include the production one-second readiness
+probe. Sampler pauses are excluded; these are diagnostic timings on two CPU
+cores, not latency guarantees. Short/full output remained stable within each
+pair. Real production-worker runs also completed two one-minute idle periods
+on CPU, CUDA, and Vulkan, including immediate simulated release during reload.
+Quiet runs with offload disabled completed repeated transcription with both
+output streams empty on all three backends.
+Separate two-cycle full-first runs passed on each backend. Scheduler diagnostics
+showed encoder operations on CUDA0 and Vulkan0, with CPU splits where required;
+device enumeration alone was not used as placement evidence. Restricting GPU
+visibility to none in each test process made forced GPU startup exit 1 without
+CPU fallback.
+
+Native X11 checks used a separate daemon, isolated config/cache/runtime paths,
+and a test-owned hardlink of the model. The installed instance was stopped only
+for conflicting hotkey registration and restored after each run. A temporary
+PipeWire null sink fed the short speech fixture through the actual CPAL capture
+path; the desktop fixture was the first five seconds of the same WAV.
+An X11 receiver checked the resulting clipboard paste. This validates
+native capture and insertion with a virtual audio source. The physical
+RØDE NT-USB+ capture path was ready, but spoken microphone input was not observed.
+Keep isolated runtime paths short enough for Unix sockets and preserve the
+native audio endpoint with `PIPEWIRE_RUNTIME_DIR` when changing `XDG_RUNTIME_DIR`.
+
+| Backend | First / post-idle / recovered insertions | Status/history polling idle interval, s | Loaded / offloaded stop, s |
+| --- | --- | ---: | ---: |
+| CPU | Passed once each | 60.10 | 0.22 / 0.06 |
+| CUDA | Passed once each | 60.21 | 0.31 / 0.21 |
+| Vulkan | Passed once each | 60.15 | 0.11 / 0.11 |
+
+Each backend passed `doctor --deep`, CLI-over-config precedence, restart with
+the retained config timeout, and missing-model failure with no insertion,
+followed by recovery and error clearing on the next press. Status/history
+polling preserved history without loading the offloaded model or postponing
+offload. On CPU, a silent 61-second active capture stayed loaded past the
+one-minute timeout and produced no transcription or insertion after release.
+
+The real daemon reported the default ten-minute timeout with the config value
+omitted. Rapid overlapping XTest PTT captures exposed a Linux paste conflict:
+the first paste released Control and stopped the second capture. The modifier
+check fixes the reproduced case: two transcripts completed, the second capture
+stayed active until explicit release, and the earlier transcript remained in
+clipboard/history when automatic paste was withheld. This uses automated X11
+keys; a physical-keyboard overlap was not observed. Short silence produced no
+extra transcript or insertion. Rebuilt CUDA and Vulkan daemons also passed
+the overlapping-capture and short-silence checks with the modifier fix.
+
+On the common CPU worker/input path, stopping during native transcription took
+1.18 seconds and stopping during an in-flight IPC paste took 0.27 seconds.
+Both exited 0 without native teardown assertions, removed the runtime socket,
+left no synthetic modifiers held, and allowed restart with the unchanged test
+configuration. Recording/queued-work/transcription/insertion activity guards
+also passed the deterministic lifecycle tests.
+
+The complete Linux Rust validation loop passed, including 299 tests and native
+all-features checking without a library fallback. Known CrispASR deprecation
+warnings and the intentional ignored Metal feature warning remain. Two Python
+regressions verify collector input metadata for both argument spellings without
+reading fixture contents. No CI jobs were added.
+
+Measurement files, mapping snapshots, loader inspection, and native diagnostics
+remain local under `target/tmp/linux-validation/`; generated artifacts and
+private transcripts are not tracked. Audible cues and physical sleep/wake
+remain pending by request. Windows native runs remain pending independently.
