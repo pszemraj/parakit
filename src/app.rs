@@ -411,7 +411,10 @@ fn run_daemon(cli: &Cli, start: &StartCli) -> Result<()> {
     ipc_state.activity.ready();
     log.ready();
 
-    daemon::hotkey::run_grab_loop(hotkey_tx, hotkey_backend, Arc::clone(&log));
+    if daemon::hotkey::run_grab_loop(hotkey_tx, hotkey_backend, Arc::clone(&log)).is_err() {
+        // The worker may own a loaded session; release it before native teardown.
+        ipc_state.shutdown.exit_after_worker(&ipc_state.activity, 2);
+    }
 
     // Tear down.
     let _ = coordinator.join();

@@ -6,6 +6,9 @@ use parking_lot::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
+/// Worker release budget for fatal daemon exits outside the IPC stop path.
+const FATAL_EXIT_WORKER_WAIT: Duration = Duration::from_secs(5);
+
 /// Lives from startup until the worker has dropped its engine and other locals.
 pub(crate) struct WorkerLifetime {
     _complete: Sender<()>,
@@ -62,6 +65,43 @@ impl WorkerShutdown {
             )
         })
     }
+
+    /// Release the worker's native session, then exit after a fatal failure.
+    ///
+    /// # Arguments
+    ///
+    /// * `activity` - Existing worker wake channel.
+    /// * `code` - Process exit status.
+    ///
+    /// # Returns
+    ///
+    /// Never returns; the process exits with `code`.
+    pub(crate) fn exit_after_worker(&self, activity: &ActivityGate, code: i32) -> ! {
+        terminate_process(
+            code,
+            self.request_and_wait(activity, FATAL_EXIT_WORKER_WAIT),
+        )
+    }
+}
+
+/// End the process once worker-owned native sessions are released.
+///
+/// # Arguments
+///
+/// * `code` - Process exit status.
+/// * `graceful` - Whether normal process teardown is safe because the worker
+///   finished. Otherwise the process terminates immediately.
+///
+/// # Returns
+///
+/// Never returns; the process exits with `code`.
+pub(crate) fn terminate_process(code: i32, graceful: bool) -> ! {
+    if graceful {
+        std::process::exit(code);
+    }
+    // A wedged worker/insertion must not hang exit, or race C++ static
+    // destructors with live native buffers. The OS reclaims process resources.
+    unsafe { libc::_exit(code) }
 }
 
 #[cfg(test)]

@@ -40,7 +40,9 @@ running native process teardown. The lifetime guard is registered before IPC
 startup and transferred with the engine. Stop shares a bounded budget with
 insertion completion, without holding the insertion mutex while waiting for
 the worker. If the budget expires, immediate process termination avoids racing
-C++ static destructors with live native buffers.
+C++ static destructors with live native buffers. A failed hotkey backend
+returns to the daemon owner, which uses the same handshake before exiting with
+status 2.
 
 Live capture drains callback audio through a bounded single-producer/single-consumer ring buffer. Recording uses a session epoch so stale drained samples from a stopped utterance cannot append into the next utterance. Platform stream and pre-roll policies are in [microphone behavior](../running.md#microphone).
 

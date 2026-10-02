@@ -386,19 +386,27 @@ impl HotkeyState {
     }
 }
 
-/// Run the platform hotkey loop until the process exits.
+/// Run the platform hotkey loop until it ends or the process exits.
 ///
 /// # Arguments
 ///
 /// * `tx` - Coordinator channel used to post logical hotkey transitions.
 /// * `backend` - Linux backend preference.
 /// * `log` - Logger used for backend diagnostics.
+///
+/// # Returns
+///
+/// Success when the loop ends normally.
+///
+/// # Errors
+///
+/// Returns [`HotkeyLoopFailed`] after printing recovery help.
 #[cfg(target_os = "linux")]
 pub(crate) fn run_grab_loop(
     tx: Sender<HotkeyTransition>,
     backend: HotkeyBackend,
     log: Arc<Logger>,
-) {
+) -> Result<(), HotkeyLoopFailed> {
     let route = backend.linux_route();
     if route == LinuxHotkeyRoute::EvdevProxy {
         log.warn(
@@ -407,71 +415,87 @@ pub(crate) fn run_grab_loop(
     }
     log.verbose(format!("parakit: Linux hotkey backend: {}", route.label()));
     match route {
-        LinuxHotkeyRoute::RegisteredX11 => {
-            run_hotkey_loop_or_exit(
-                run_linux_registered_hotkey_loop(tx),
-                "registered X11 hotkey",
-                crate::daemon::hotkey_help::registered_linux_failure_help,
-            );
-        }
-        LinuxHotkeyRoute::PassiveX11 => {
-            run_hotkey_loop_or_exit(
-                run_linux_x11_listen_loop(tx),
-                "passive X11 hotkey listen",
-                crate::daemon::hotkey_help::x11_listen_linux_failure_help,
-            );
-        }
-        LinuxHotkeyRoute::EvdevProxy => {
-            run_hotkey_loop_or_exit(
-                run_linux_evdev_grab_loop(tx, Arc::clone(&log)).map_err(Into::into),
-                "evdev keyboard grab",
-                crate::daemon::hotkey_help::evdev_linux_failure_help,
-            );
-        }
+        LinuxHotkeyRoute::RegisteredX11 => report_hotkey_loop_failure(
+            run_linux_registered_hotkey_loop(tx),
+            "registered X11 hotkey",
+            crate::daemon::hotkey_help::registered_linux_failure_help,
+        ),
+        LinuxHotkeyRoute::PassiveX11 => report_hotkey_loop_failure(
+            run_linux_x11_listen_loop(tx),
+            "passive X11 hotkey listen",
+            crate::daemon::hotkey_help::x11_listen_linux_failure_help,
+        ),
+        LinuxHotkeyRoute::EvdevProxy => report_hotkey_loop_failure(
+            run_linux_evdev_grab_loop(tx, Arc::clone(&log)).map_err(Into::into),
+            "evdev keyboard grab",
+            crate::daemon::hotkey_help::evdev_linux_failure_help,
+        ),
     }
 }
 
-/// Run the platform hotkey loop until the process exits.
+/// Run the platform hotkey loop until it ends or the process exits.
 ///
 /// # Arguments
 ///
 /// * `tx` - Coordinator channel used to post logical hotkey transitions.
 /// * `_backend` - Ignored backend preference on Windows.
 /// * `log` - Logger used for backend diagnostics.
+///
+/// # Returns
+///
+/// Success when the loop ends normally.
+///
+/// # Errors
+///
+/// Returns [`HotkeyLoopFailed`] after printing recovery help.
 #[cfg(target_os = "windows")]
 pub(crate) fn run_grab_loop(
     tx: Sender<HotkeyTransition>,
     _backend: HotkeyBackend,
     log: Arc<Logger>,
-) {
+) -> Result<(), HotkeyLoopFailed> {
     log.verbose("parakit: Windows hotkey backend: RegisterHotKey Ctrl+Space");
-    run_hotkey_loop_or_exit(
+    report_hotkey_loop_failure(
         super::windows_input::run_registered_hotkey_loop(tx),
         "Windows registered hotkey",
         crate::daemon::hotkey_help::windows_failure_help,
-    );
+    )
 }
 
 #[cfg(target_os = "macos")]
 pub(crate) use macos::run_grab_loop;
 
-/// Print platform-specific hotkey recovery help and terminate after a backend
-/// loop fails.
+/// A hotkey backend failed after its recovery help was printed.
+///
+/// The daemon owner exits with status 2 once the worker has released any
+/// native session, so process teardown never runs beside live device buffers.
+#[derive(Debug)]
+pub(crate) struct HotkeyLoopFailed;
+
+/// Print platform-specific hotkey recovery help after a backend loop fails.
 ///
 /// # Arguments
 ///
 /// * `result` - Completed backend loop result.
 /// * `backend` - Human-readable backend name for the error prefix.
 /// * `help` - Lazy platform recovery guidance.
-pub(super) fn run_hotkey_loop_or_exit(
+///
+/// # Returns
+///
+/// Success when the backend loop ended normally.
+///
+/// # Errors
+///
+/// Returns [`HotkeyLoopFailed`] after printing the failure and help.
+pub(super) fn report_hotkey_loop_failure(
     result: anyhow::Result<()>,
     backend: &str,
     help: impl FnOnce() -> String,
-) {
-    if let Err(err) = result {
+) -> Result<(), HotkeyLoopFailed> {
+    result.map_err(|err| {
         eprintln!("parakit: {backend} failed: {err:#}\n{}", help());
-        std::process::exit(2);
-    }
+        HotkeyLoopFailed
+    })
 }
 
 #[cfg(target_os = "linux")]

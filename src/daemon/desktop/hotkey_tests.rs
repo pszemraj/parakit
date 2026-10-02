@@ -11,6 +11,19 @@ fn at(start: Instant, millis: u64) -> Instant {
 }
 
 #[test]
+fn hotkey_loop_failure_returns_to_daemon_owner_instead_of_exiting() {
+    assert!(report_hotkey_loop_failure(Ok(()), "test hotkey", || unreachable!()).is_ok());
+    let mut help_shown = false;
+    let failed =
+        report_hotkey_loop_failure(Err(anyhow::anyhow!("grab lost")), "test hotkey", || {
+            help_shown = true;
+            "recovery help".to_string()
+        });
+    assert!(failed.is_err());
+    assert!(help_shown);
+}
+
+#[test]
 fn ctrl_space_starts_and_stops() {
     let now = base_time();
     let mut state = HotkeyState::default();

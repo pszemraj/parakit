@@ -1094,12 +1094,7 @@ fn finish_stop_after_response_with_wait<R>(
 
 #[cfg(any(unix, target_os = "windows"))]
 fn terminate_daemon(graceful: bool) -> ! {
-    if graceful {
-        std::process::exit(0);
-    }
-    // A wedged worker/insertion must not hang stop, or race C++ static
-    // destructors with live native buffers. The OS reclaims process resources.
-    unsafe { libc::_exit(0) }
+    super::worker_shutdown::terminate_process(0, graceful)
 }
 
 #[cfg(any(unix, target_os = "windows"))]
