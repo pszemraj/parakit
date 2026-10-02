@@ -547,6 +547,15 @@ mod tests {
 
     #[test]
     fn worker_loop_offloads_then_reloads_and_transcribes_queued_capture() {
+        exercise_blocked_reload(false);
+    }
+
+    #[test]
+    fn worker_shutdown_during_reload_drops_session_and_queued_capture() {
+        exercise_blocked_reload(true);
+    }
+
+    fn exercise_blocked_reload(shutdown_during_reload: bool) {
         let state = Arc::new(SharedState::with_history_limit(2));
         state.activity.ready();
         let log = Arc::new(Logger::new(super::super::logging::LogLevel::Quiet));
@@ -630,8 +639,42 @@ mod tests {
         })
         .unwrap();
         let completion_before_reload = completion_rx.try_recv();
+        if shutdown_during_reload {
+            assert_eq!(state.model_status().unwrap().residency, Residency::Loading);
+            assert!(!state
+                .shutdown
+                .request_and_wait(&state.activity, Duration::ZERO));
+        }
         load_release_tx.send(()).unwrap();
-        assert!(completion_before_reload.is_err());
+        assert_eq!(
+            completion_before_reload,
+            Err(crossbeam_channel::TryRecvError::Empty)
+        );
+
+        if shutdown_during_reload {
+            assert!(state
+                .shutdown
+                .request_and_wait(&state.activity, Duration::from_secs(1)));
+            // Shutdown must not report completion with a live native session.
+            assert_eq!(drops.load(Ordering::SeqCst), 2);
+            worker.join().unwrap();
+            // The producer owns the channel's remaining queued payloads until
+            // it also stops; no receiver may process them after worker exit.
+            drop(tx);
+            assert_eq!(reloads.load(Ordering::SeqCst), 1);
+            assert_eq!(transcriptions.load(Ordering::SeqCst), 0);
+            assert!(state.resolve_transcript(0).is_err());
+            assert_eq!(
+                completion_rx.try_recv(),
+                Err(crossbeam_channel::TryRecvError::Disconnected)
+            );
+            drop(verify_residency);
+            assert_eq!(
+                state.activity.remaining(Some(Duration::ZERO)),
+                Some(Duration::ZERO)
+            );
+            return;
+        }
 
         assert_eq!(
             completion_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
