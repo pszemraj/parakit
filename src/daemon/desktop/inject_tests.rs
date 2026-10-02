@@ -589,6 +589,45 @@ fn xtest_paste_with_held_modifiers_does_not_emit_input() {
     }
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn x11_modifier_release_wait_allows_late_ctrl_release_after_ptt_stop() {
+    // Space released first stops recording; Ctrl lifts a few polls later.
+    let ctrl_l = 37;
+    let mut keymap = [0; 32];
+    keymap[usize::from(ctrl_l / 8)] |= 1 << (ctrl_l % 8);
+    let mut polls = 0;
+    let ready = wait_for_x11_modifier_release(Duration::from_secs(2), || {
+        polls += 1;
+        if polls == 3 {
+            keymap = [0; 32];
+        }
+        Ok(x11_modifier_held(&keymap, &[ctrl_l, 50]))
+    })
+    .expect("keymap polling should succeed");
+    assert!(ready);
+    assert_eq!(polls, 3);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn x11_modifier_release_wait_times_out_and_propagates_query_errors() {
+    let mut polls = 0;
+    let held = wait_for_x11_modifier_release(Duration::ZERO, || {
+        polls += 1;
+        Ok(true)
+    })
+    .expect("keymap polling should succeed");
+    assert!(!held, "an overlapping capture keeps its modifiers held");
+    assert_eq!(polls, 1);
+
+    let err = wait_for_x11_modifier_release(Duration::from_secs(2), || {
+        anyhow::bail!("X11 connection lost")
+    })
+    .expect_err("query failures should reach the caller");
+    assert!(err.to_string().contains("X11 connection lost"));
+}
+
 struct ClipboardCase {
     name: &'static str,
     initial: Option<&'static str>,

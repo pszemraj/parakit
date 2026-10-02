@@ -24,7 +24,9 @@ use objc2::rc::autoreleasepool;
 use objc2_app_kit::{NSPasteboard, NSPasteboardTypeHTML, NSPasteboardTypeString};
 #[cfg(target_os = "macos")]
 use objc2_foundation::NSString;
-use std::{borrow::Cow, path::PathBuf, time::Duration};
+#[cfg(target_os = "linux")]
+use std::time::Instant;
+use std::{borrow::Cow, cell::RefCell, path::PathBuf, time::Duration};
 #[cfg(target_os = "linux")]
 use x11rb::connection::Connection as _;
 #[cfg(target_os = "linux")]
@@ -216,16 +218,14 @@ enum PasteDispatch {
     SkippedUnsafeModifiers,
 }
 
-fn wait_for_paste_shortcut_safety() -> bool {
-    #[cfg(target_os = "macos")]
-    {
-        crate::daemon::macos::wait_for_safe_paste_modifiers()
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        true
-    }
-}
+/// Maximum time Linux batch paste waits for physical modifiers to be released.
+///
+/// Matches macOS: releasing Space before Ctrl stops a recording, and a short
+/// dictation can finish before the rest of the chord is naturally released.
+#[cfg(target_os = "linux")]
+const LINUX_PASTE_MODIFIER_RELEASE_TIMEOUT: Duration = Duration::from_secs(2);
+#[cfg(target_os = "linux")]
+const LINUX_PASTE_MODIFIER_RELEASE_POLL: Duration = Duration::from_millis(15);
 
 /// Clipboard retention policy after staging text for paste.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -836,12 +836,15 @@ impl Injector {
             restore_gate.paste_consume_delay(),
             &restore_gate,
         );
+        // Readiness and dispatch share the platform input backend; the
+        // transaction calls them sequentially, never re-entrantly.
+        let input = RefCell::new(&mut *self);
         let result = paste_with_clipboard_swap_guarded(
             &mut clipboard,
             text,
             mode,
-            wait_for_paste_shortcut_safety,
-            || self.paste_clipboard(mode),
+            || input.borrow_mut().wait_for_paste_shortcut_safety(),
+            || input.borrow_mut().paste_clipboard(mode),
             clipboard_settle_delay(),
             restore_plan,
             clipboard_policy,
@@ -931,6 +934,57 @@ impl Injector {
             .text(text)
             .map_err(|e| anyhow::anyhow!("enigo type failed: {e:?}"))
             .context("could not type text at cursor")
+    }
+
+    /// Wait until no held modifier can alter or interrupt the paste chord.
+    ///
+    /// Runs before the transaction's final focus recheck, so waiting cannot
+    /// leave a stale focus decision authorizing the chord.
+    ///
+    /// # Returns
+    ///
+    /// `false` when a modifier stayed down for the whole bounded wait.
+    #[cfg(target_os = "linux")]
+    fn wait_for_paste_shortcut_safety(&mut self) -> bool {
+        if self.x11_paste.is_none() {
+            match LinuxX11Paste::open() {
+                Ok(paste) => self.x11_paste = Some(paste),
+                // Dispatch reopens X11 and reports the connection error.
+                Err(_) => return true,
+            }
+        }
+        let paste = self
+            .x11_paste
+            .as_ref()
+            .expect("X11 paste backend was just initialized");
+        let ready = wait_for_x11_modifier_release(LINUX_PASTE_MODIFIER_RELEASE_TIMEOUT, || {
+            paste.modifiers_held()
+        });
+        ready.unwrap_or_else(|_| {
+            // Dispatch reopens X11 and rechecks modifiers before sending input.
+            self.x11_paste = None;
+            true
+        })
+    }
+
+    /// Wait until no held modifier can alter the synthetic Cmd+V chord.
+    ///
+    /// # Returns
+    ///
+    /// `false` when a conflicting key stayed down for the whole bounded wait.
+    #[cfg(target_os = "macos")]
+    fn wait_for_paste_shortcut_safety(&mut self) -> bool {
+        crate::daemon::macos::wait_for_safe_paste_modifiers()
+    }
+
+    /// Windows sends its chord without a modifier readiness wait.
+    ///
+    /// # Returns
+    ///
+    /// Always `true`.
+    #[cfg(target_os = "windows")]
+    fn wait_for_paste_shortcut_safety(&mut self) -> bool {
+        true
     }
 
     #[cfg(target_os = "linux")]
@@ -1033,8 +1087,8 @@ where
         Err(err) => return Err(err),
     }
 
-    // The macOS backend may need to wait for the physical PTT chord (or
-    // another modifier) to be released. Do that before staging and, most
+    // The macOS and Linux backends may need to wait for the physical PTT
+    // chord (or another modifier) to be released. Do that before staging and, most
     // importantly, before the final focus recheck below. A timed-out wait
     // leaves the transcript on the clipboard for manual recovery.
     if !prepare_paste() {
@@ -1624,19 +1678,69 @@ impl LinuxX11Paste {
             conn: &self.conn,
             root: self.root,
         };
-        let keymap = self
-            .conn
-            .query_keymap()
-            .context("could not query X11 modifiers before paste")?
-            .reply()
-            .context("could not read X11 modifiers before paste")?;
         send_x11_paste_chord_with_modifier_flush(
             &mut sink,
             steps,
             &self.modifier_cleanup_keycodes,
-            &keymap.keys,
+            &self.keymap()?,
         )
     }
+
+    fn modifiers_held(&self) -> Result<bool> {
+        Ok(x11_modifier_held(
+            &self.keymap()?,
+            &self.modifier_cleanup_keycodes,
+        ))
+    }
+
+    fn keymap(&self) -> Result<[u8; 32]> {
+        Ok(self
+            .conn
+            .query_keymap()
+            .context("could not query X11 modifiers before paste")?
+            .reply()
+            .context("could not read X11 modifiers before paste")?
+            .keys)
+    }
+}
+
+/// Poll physical modifiers until they are released or the budget expires.
+///
+/// # Arguments
+///
+/// * `timeout` - Maximum wait after the first poll.
+/// * `modifiers_held` - Reads whether any paste-relevant modifier is down.
+///
+/// # Returns
+///
+/// `true` once no modifier is held, or `false` if one is still held at the
+/// deadline.
+///
+/// # Errors
+///
+/// Returns the first keymap query failure.
+#[cfg(target_os = "linux")]
+fn wait_for_x11_modifier_release(
+    timeout: Duration,
+    mut modifiers_held: impl FnMut() -> Result<bool>,
+) -> Result<bool> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if !modifiers_held()? {
+            return Ok(true);
+        }
+        if Instant::now() >= deadline {
+            return Ok(false);
+        }
+        std::thread::sleep(LINUX_PASTE_MODIFIER_RELEASE_POLL);
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn x11_modifier_held(keymap: &[u8; 32], modifier_keycodes: &[u8]) -> bool {
+    modifier_keycodes
+        .iter()
+        .any(|keycode| keymap[usize::from(keycode / 8)] & (1 << (keycode % 8)) != 0)
 }
 
 #[cfg(target_os = "linux")]
@@ -1807,10 +1911,8 @@ fn send_x11_paste_chord_with_modifier_flush<S: X11KeySink>(
 ) -> Result<PasteDispatch> {
     // The chord and cleanup release modifiers, which would stop another held
     // push-to-talk capture or interfere with the user's current shortcut.
-    if modifier_keycodes
-        .iter()
-        .any(|keycode| keymap[usize::from(keycode / 8)] & (1 << (keycode % 8)) != 0)
-    {
+    // This instant check guards changes after the bounded readiness wait.
+    if x11_modifier_held(keymap, modifier_keycodes) {
         return Ok(PasteDispatch::SkippedUnsafeModifiers);
     }
     send_x11_key_steps(sink, steps)?;

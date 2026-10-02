@@ -59,8 +59,10 @@ In `terminal` or `standard` mode, `parakit doctor --deep` creates and focuses a 
 The X11 focus guard, fail-open query behavior, and clipboard fallback are described in [running.md#insertion](running.md#insertion). Parakit does not inspect application internals with AT-SPI.
 
 Batch paste also checks the current X11 modifier state before sending input.
-If Control, Shift, Alt, or Super is held, it keeps the transcript on the clipboard
-instead of sending a chord that could release an overlapping push-to-talk capture.
+It waits up to two seconds for Control, Shift, Alt, and Super to be released,
+which covers releasing `Space` before `Ctrl` at the end of a short dictation.
+If one is still held, it keeps the transcript on the clipboard instead of sending
+a chord that could release an overlapping push-to-talk capture.
 The transcript remains available in history for recovery after releasing the keys.
 
 ## Passive X11 Listen
