@@ -7,7 +7,6 @@ optional macOS vmmap summaries; never writes audio or transcript contents.
 
 import argparse
 import ctypes
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -104,17 +103,17 @@ def nvidia_memory(pid):
             "error": result.stderr.strip() or None}
 
 
-def file_identity(command, flag):
-    """Record input identity without retaining its contents."""
-    if flag not in command:
-        return None
-    path = Path(command[command.index(flag) + 1])
-    digest = hashlib.sha256()
-    with path.open("rb") as source:
-        for block in iter(lambda: source.read(1024 * 1024), b""):
-            digest.update(block)
-    return {"path": str(path.resolve()), "bytes": path.stat().st_size,
-            "sha256": digest.hexdigest()}
+def file_identity(command: list[str], flag: str) -> dict[str, str | int] | None:
+    """Record input path and size without reading its contents."""
+    for index, argument in enumerate(command):
+        if argument == flag:
+            path = Path(command[index + 1])
+        elif argument.startswith(flag + "="):
+            path = Path(argument.split("=", 1)[1])
+        else:
+            continue
+        return {"path": str(path.resolve()), "bytes": path.stat().st_size}
+    return None
 
 
 def main():
