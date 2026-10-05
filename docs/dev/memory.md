@@ -13,9 +13,8 @@ reload cycles 2-3. Host peaks are Linux's reset `VmHWM`, while GPU figures are
 sampled per-process framebuffer allocation. Offloaded endpoints use the fixed
 checkpoint 250 ms after session close.
 
-The CPU run metadata records revision `c1c2992`; the CUDA and Vulkan runs used
-the profiler and production policy at `3b5b4ed`, immediately before this table
-was documented in `c2400e6`. All were Rust dev-profile builds with Rust 1.98.0,
+All three run metadata files record revision `5066d9f`. They were Rust
+dev-profile builds with Rust 1.98.0,
 the CrispASR `5f1bb858e803167f1b5fc1eb9a90ffdd1970f7ed` pin, the 745,121,632-byte
 Q8_0 model, and the 5,314,638-byte Juniper reference WAV. The host was Ubuntu
 24.04.5 on Linux 6.17.0-29-generic with a Ryzen 7 7700X and RTX 5090 (NVIDIA
@@ -24,8 +23,8 @@ sequentially, with no concurrent inference or measurement workload.
 
 | Backend | Reload host peak | Post-load host | Post-full host | Offloaded host | GPU after reload warmup | Post-full GPU | Offloaded GPU |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| CPU | 1.46-1.47 GiB | 0.76-0.78 GiB | 1.57 GiB | 0.08-0.14 GiB | unavailable | unavailable | unavailable |
-| CUDA | 1.21-1.33 GiB | 0.52-0.64 GiB | 0.64 GiB | 0.64 GiB | 1308 MiB | 2054 MiB | 568 MiB |
+| CPU | 1.43-1.46 GiB | 0.74-0.76 GiB | 1.57 GiB | 0.14 GiB | unavailable | unavailable | unavailable |
+| CUDA | 1.26-1.27 GiB | 0.57-0.58 GiB | 0.68 GiB | 0.58 GiB | 1312 MiB | 2054 MiB | 566 MiB |
 | Vulkan | 0.88 GiB | 0.19 GiB | 0.28 GiB | 0.19 GiB | 746 MiB | 1491 MiB | 22 MiB |
 
 The separate reviewer reproduction originally reported a decimal/binary unit
