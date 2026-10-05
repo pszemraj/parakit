@@ -68,7 +68,10 @@ impl StagedClipboard {
     /// Whether the staged text and its observed owner/generation still match.
     pub(super) fn is_current<C: ClipboardStore>(&self, clipboard: &mut C) -> bool {
         let before = match clipboard.change_stamp() {
-            Ok(stamp) => stamp,
+            Ok(stamp) => {
+                self.clear_observation_error();
+                stamp
+            }
             Err(err) => {
                 self.record_observation_error("could not read clipboard stamp", err);
                 return false;
@@ -109,6 +112,7 @@ impl StagedClipboard {
             }
         }
         self.stamp.set(Some(before));
+        self.clear_observation_error();
         true
     }
 
@@ -126,7 +130,10 @@ impl StagedClipboard {
             return false;
         };
         match clipboard.change_stamp() {
-            Ok(current) => current == staged,
+            Ok(current) => {
+                self.clear_observation_error();
+                current == staged
+            }
             Err(err) => {
                 self.record_observation_error("could not recheck clipboard stamp", err);
                 false
@@ -146,6 +153,10 @@ impl StagedClipboard {
 
     fn record_observation_error(&self, context: &str, err: anyhow::Error) {
         *self.observation_error.borrow_mut() = Some(format!("{context}: {err:#}"));
+    }
+
+    fn clear_observation_error(&self) {
+        self.observation_error.borrow_mut().take();
     }
 
     /// Restore only while the clipboard still matches the staged transcript.

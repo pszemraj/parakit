@@ -1213,7 +1213,7 @@ where
     }
 
     let previous = match clipboard_policy {
-        ClipboardPolicy::RestorePrevious => ClipboardSnapshot::capture(clipboard),
+        ClipboardPolicy::RestorePrevious => ClipboardSnapshot::capture(clipboard)?,
         ClipboardPolicy::KeepTranscript => ClipboardSnapshot::Unsupported,
     };
     let write_before = restore_plan.before_transcript_write();
@@ -1261,7 +1261,7 @@ where
                 );
                 return match restore_result {
                     Ok(ClipboardRestore::Changed(diagnostic)) => {
-                        Ok(PasteReport::clipboard_changed(diagnostic))
+                        Ok(clipboard_changed_with_primary_error(err, diagnostic))
                     }
                     Ok(_) => Err(err),
                     Err(restore_err) => Err(err.context(format!("{restore_err:#}"))),
@@ -1314,7 +1314,7 @@ where
             );
             match restore_result {
                 Ok(ClipboardRestore::Changed(diagnostic)) => {
-                    Ok(PasteReport::clipboard_changed(diagnostic))
+                    Ok(clipboard_changed_with_primary_error(paste_err, diagnostic))
                 }
                 Ok(_) => Err(paste_err),
                 Err(restore_err) => Err(paste_err.context(format!("{restore_err:#}"))),
@@ -1462,9 +1462,21 @@ fn clipboard_restored_after_paste<C: ClipboardStore>(
 ) -> (Option<bool>, Option<String>) {
     match previous.restore(clipboard, clipboard_policy) {
         Ok(ClipboardRestore::Restored) => (Some(true), None),
-        Ok(ClipboardRestore::KeptTranscript) | Err(_) => (Some(false), None),
+        Ok(ClipboardRestore::KeptTranscript) => (Some(false), None),
+        Err(error) => (Some(false), Some(format!("{error:#}"))),
         Ok(ClipboardRestore::Changed(diagnostic)) => (None, diagnostic),
     }
+}
+
+fn clipboard_changed_with_primary_error(
+    primary: anyhow::Error,
+    clipboard_diagnostic: Option<String>,
+) -> PasteReport {
+    let diagnostic = match clipboard_diagnostic {
+        Some(clipboard) => format!("{primary:#}; {clipboard}"),
+        None => format!("{primary:#}"),
+    };
+    PasteReport::clipboard_changed(Some(diagnostic))
 }
 
 fn stage_text_without_paste<C, H>(
@@ -1484,7 +1496,7 @@ where
         return Ok(StageOutcome::CopiedOnly);
     }
 
-    let previous = ClipboardSnapshot::capture(clipboard);
+    let previous = ClipboardSnapshot::capture(clipboard)?;
     let write_before = restore_plan.before_transcript_write();
     clipboard
         .set_text(text.to_owned())
@@ -1585,34 +1597,64 @@ impl ClipboardSnapshot {
     /// # Returns
     ///
     /// A supported clipboard snapshot, or [`ClipboardSnapshot::Unsupported`]
-    /// when the current payload cannot be restored by Parakit.
-    pub(super) fn capture<C: ClipboardStore>(clipboard: &mut C) -> Self {
-        if let Ok(files) = clipboard.get_file_list() {
-            return Self::FileList(files);
+    /// when the clipboard has no payload Parakit can restore.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when reading an available clipboard payload fails.
+    pub(super) fn capture<C: ClipboardStore>(clipboard: &mut C) -> Result<Self> {
+        match clipboard.get_file_list() {
+            Ok(files) => return Ok(Self::FileList(files)),
+            Err(error) if clipboard_content_unavailable(&error) => {}
+            Err(error) => return Err(error.context("could not snapshot file-list clipboard")),
         }
 
-        if let Ok(html) = clipboard.get_html() {
-            let alt_text = clipboard.get_text().ok();
-            // Browser image copies can expose transient HTML plus bitmap data.
-            // Without a text alternative, the decoded image is usually the
-            // restorable user-visible payload.
-            if alt_text.as_deref().is_none_or(str::is_empty) {
-                if let Ok(image) = clipboard.get_image() {
-                    return Self::Image(owned_image(image));
+        match clipboard.get_html() {
+            Ok(html) => {
+                let alt_text = match clipboard.get_text() {
+                    Ok(text) => Some(text),
+                    Err(error) if clipboard_content_unavailable(&error) => None,
+                    Err(error) => {
+                        return Err(error.context("could not snapshot clipboard text alternative"));
+                    }
+                };
+                // Browser image copies can expose transient HTML plus bitmap data.
+                // Without a text alternative, the decoded image is usually the
+                // restorable user-visible payload.
+                if alt_text.as_deref().is_none_or(str::is_empty) {
+                    match clipboard.get_image() {
+                        Ok(image) => return Ok(Self::Image(owned_image(image))),
+                        Err(error) if clipboard_content_unavailable(&error) => {}
+                        Err(error) => {
+                            return Err(error.context("could not snapshot image clipboard"));
+                        }
+                    }
                 }
+                return Ok(Self::Html { html, alt_text });
             }
-            return Self::Html { html, alt_text };
+            Err(error) if clipboard_content_unavailable(&error) => {}
+            Err(error) => return Err(error.context("could not snapshot HTML clipboard")),
         }
 
-        if let Ok(image) = clipboard.get_image() {
-            return Self::Image(owned_image(image));
+        match clipboard.get_image() {
+            Ok(image) => return Ok(Self::Image(owned_image(image))),
+            Err(error) if clipboard_content_unavailable(&error) => {}
+            Err(error) => return Err(error.context("could not snapshot image clipboard")),
         }
 
-        match clipboard.get_text().ok() {
-            Some(text) => Self::Text(text),
-            None => Self::Unsupported,
+        match clipboard.get_text() {
+            Ok(text) => Ok(Self::Text(text)),
+            Err(error) if clipboard_content_unavailable(&error) => Ok(Self::Unsupported),
+            Err(error) => Err(error.context("could not snapshot text clipboard")),
         }
     }
+}
+
+fn clipboard_content_unavailable(error: &anyhow::Error) -> bool {
+    matches!(
+        error.downcast_ref::<arboard::Error>(),
+        Some(arboard::Error::ContentNotAvailable)
+    )
 }
 
 /// Copy a borrowed clipboard image payload into an owned, `'static` one.

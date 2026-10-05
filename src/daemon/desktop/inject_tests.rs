@@ -190,7 +190,7 @@ impl ClipboardStore for MockClipboard {
             _ => self
                 .text_alternative
                 .clone()
-                .ok_or_else(|| anyhow::anyhow!("clipboard is not text")),
+                .ok_or_else(|| arboard::Error::ContentNotAvailable.into()),
         };
         let after_read = if self.guard_read {
             self.after_guard_read.take()
@@ -216,7 +216,7 @@ impl ClipboardStore for MockClipboard {
         match &self.content {
             MockClipboardContent::Html { html, .. }
             | MockClipboardContent::HtmlImage { html, .. } => Ok(html.clone()),
-            _ => anyhow::bail!("clipboard is not HTML"),
+            _ => Err(arboard::Error::ContentNotAvailable.into()),
         }
     }
 
@@ -235,7 +235,7 @@ impl ClipboardStore for MockClipboard {
     fn get_file_list(&mut self) -> Result<Vec<PathBuf>> {
         match &self.content {
             MockClipboardContent::FileList(paths) => Ok(paths.clone()),
-            _ => anyhow::bail!("clipboard is not a file list"),
+            _ => Err(arboard::Error::ContentNotAvailable.into()),
         }
     }
 
@@ -267,7 +267,7 @@ impl ClipboardStore for MockClipboard {
                 height: *height,
                 bytes: Cow::Owned(bytes.clone()),
             }),
-            _ => anyhow::bail!("clipboard is not an image"),
+            _ => Err(arboard::Error::ContentNotAvailable.into()),
         }
     }
 
@@ -1601,6 +1601,15 @@ fn paste_survives_a_failed_clipboard_restore() {
             case.name
         );
         assert_eq!(clipboard.text(), Some("dictated text"), "{}", case.name);
+        assert!(
+            result
+                .diagnostic
+                .as_deref()
+                .is_some_and(|diagnostic| diagnostic.contains("clipboard restore write failed")),
+            "{}: missing restore failure: {:?}",
+            case.name,
+            result.diagnostic
+        );
     }
 }
 
@@ -1957,6 +1966,19 @@ fn competing_clipboard_during_error_cleanup_suppresses_fallback() {
             assert_eq!(report.outcome, PasteOutcome::ClipboardChanged);
             assert_eq!(report.telemetry.clipboard_restored, None);
             assert_eq!(clipboard.content, competing);
+            let expected = if fail_guard {
+                "focus unavailable"
+            } else {
+                "dispatch failed"
+            };
+            assert!(
+                report
+                    .diagnostic
+                    .as_deref()
+                    .is_some_and(|diagnostic| diagnostic.contains(expected)),
+                "missing primary {expected:?} diagnostic: {:?}",
+                report.diagnostic
+            );
         }
     }
 }
@@ -2026,7 +2048,7 @@ fn unreadable_clipboard_stamp_fails_closed_before_chord() {
 fn unreadable_clipboard_text_preserves_the_cause_before_chord() {
     let mut clipboard = MockClipboard::new("old clipboard");
     clipboard.text_unavailable.set(true);
-    let report = paste_with_clipboard_swap_guarded(
+    let error = paste_with_clipboard_swap_guarded(
         &mut clipboard,
         "dictated text",
         PasteMode::Standard,
@@ -2038,18 +2060,29 @@ fn unreadable_clipboard_text_preserves_the_cause_before_chord() {
         None,
         || Ok(true),
     )
-    .expect("failed observation must preserve clipboard rather than trigger fallback");
-    assert_eq!(report.outcome, PasteOutcome::ClipboardChanged);
-    assert_eq!(report.telemetry.clipboard_restored, None);
-    assert_eq!(clipboard.text(), Some("dictated text"));
+    .expect_err("failed initial read must abort before staging");
+    assert_eq!(clipboard.text(), Some("old clipboard"));
     assert!(
-        report
-            .diagnostic
-            .as_deref()
-            .is_some_and(|diagnostic| diagnostic.contains("clipboard text unavailable")),
-        "missing text-read failure: {:?}",
-        report.diagnostic
+        format!("{error:#}").contains("clipboard text unavailable"),
+        "missing text-read failure: {error:#}"
     );
+}
+
+#[test]
+fn successful_clipboard_recheck_clears_a_transient_read_error() {
+    let mut clipboard = MockClipboard::new("dictated text");
+    let staged = StagedClipboard::capture(
+        &mut clipboard,
+        ClipboardSnapshot::Text("old clipboard".to_string()),
+        "dictated text",
+    );
+    clipboard.text_unavailable.set(true);
+    assert!(!staged.is_current(&mut clipboard));
+    assert!(staged.observation_error().is_some());
+
+    clipboard.text_unavailable.set(false);
+    assert!(staged.is_current(&mut clipboard));
+    assert_eq!(staged.observation_error(), None);
 }
 
 #[test]
