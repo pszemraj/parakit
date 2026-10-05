@@ -32,8 +32,9 @@ impl Token for &NumberToken<'_> {
 /// that word with a numeric coefficient for readability (e.g. `"three
 /// billion"` becomes `"3 billion"`). Multi-scale expressions retain
 /// `text2num`'s full-digit rendering. Contexts where `"second"` is a time
-/// unit rather than an ordinal, and indefinite plural magnitudes such as
-/// `"hundreds"`, are protected from conversion.
+/// unit rather than an ordinal, indefinite magnitudes such as `"hundreds"`
+/// and `"a few million"`, and fractional quantities such as `"half a
+/// million"`, are protected from conversion.
 ///
 /// # Arguments
 ///
@@ -80,7 +81,7 @@ fn replace_numbers_preserving_literals(input: &str, language: &Language, thresho
     static FOLLOWING_SCALE: OnceLock<Regex> = OnceLock::new();
     let protected_re = PROTECTED_WORD.get_or_init(|| {
         Regex::new(
-            r"(?i)\b(?:(?:(?:a[ \t]+)?few|several|(?:a[ \t]+)?couple(?:[ \t]+of)?)[ \t]+(?:hundred|thousand|million|billion|trillion)|second|tens|hundreds|thousands|millions|billions|trillions)\b",
+            r"(?i)\b(?:(?:and[ \t]+)?(?:a[ \t]+)?(?:half|quarter)(?:[ \t]+of)?(?:[ \t]+a)?[ \t]+(?:hundred|thousand|million|billion|trillion)|(?:(?:a[ \t]+)?few|several|(?:a[ \t]+)?couple(?:[ \t]+of)?)[ \t]+(?:hundred|thousand|million|billion|trillion)|second|tens|hundreds|thousands|millions|billions|trillions)\b",
         )
         .expect("protected number-word regex must compile")
     });
@@ -109,20 +110,29 @@ fn replace_numbers_preserving_literals(input: &str, language: &Language, thresho
     let mut last_end = 0;
     for found in protected_words {
         let prefix = &input[last_end..found.start()];
-        let protected_start = if found.as_str().eq_ignore_ascii_case("second") {
-            found.start()
-        } else {
+        let phrase = found.as_str();
+        let is_plural_magnitude = matches!(
+            phrase.to_ascii_lowercase().as_str(),
+            "tens" | "hundreds" | "thousands" | "millions" | "billions" | "trillions"
+        );
+        let is_mixed_fraction = phrase
+            .split_ascii_whitespace()
+            .next()
+            .is_some_and(|word| word.eq_ignore_ascii_case("and"));
+        let protected_start = if is_plural_magnitude || is_mixed_fraction {
             last_end + preceding_number_start(prefix, language).unwrap_or(prefix.len())
+        } else {
+            found.start()
         };
         // An adjacent singular scale belongs to the same literal phrase:
         // parsing "million" separately after "hundreds" invents an exact count.
-        let protected_end = if found.as_str().eq_ignore_ascii_case("second") {
-            found.end()
-        } else {
+        let protected_end = if is_plural_magnitude {
             found.end()
                 + following_scale_re
                     .find(&input[found.end()..])
                     .map_or(0, |following| following.end())
+        } else {
+            found.end()
         };
         output.push_str(&replace_numbers_with_hybrid_magnitudes(
             &input[last_end..protected_start],
