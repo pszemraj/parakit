@@ -48,7 +48,11 @@ impl EngineRecipe {
     }
 
     fn open_with_policy(&self, log: &Logger, policy: LoadPolicy) -> Result<(Engine, String)> {
-        validate_device_request(self.device_mode, log)?;
+        // Startup is preflighted before a missing default model can trigger a
+        // download. Reload has no resolver boundary, so it validates here.
+        if policy.requires_device_preflight() {
+            validate_device_request(self.device_mode, log)?;
+        }
         let started = Instant::now();
         let engine = open_engine(
             &self.model_path,
@@ -82,6 +86,10 @@ enum LoadPolicy {
 }
 
 impl LoadPolicy {
+    fn requires_device_preflight(self) -> bool {
+        matches!(self, Self::Reload)
+    }
+
     fn warmup_seconds(self, device: DeviceMode, has_gpu: bool) -> &'static [usize] {
         match self {
             Self::Startup => engine_warmup_seconds(device, has_gpu),
@@ -222,6 +230,12 @@ mod tests {
                 assert_eq!(LoadPolicy::Reload.warmup_seconds(mode, has_gpu), &[1]);
             }
         }
+    }
+
+    #[test]
+    fn only_reload_performs_device_preflight_at_open() {
+        assert!(!LoadPolicy::Startup.requires_device_preflight());
+        assert!(LoadPolicy::Reload.requires_device_preflight());
     }
 
     #[test]
