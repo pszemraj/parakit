@@ -340,6 +340,11 @@ fn warn_if_clipboard_restore_failed(
     keep_transcript_clipboard: bool,
     report: &crate::daemon::inject::PasteReport,
 ) {
+    if report.telemetry.acknowledgement_ms.is_some()
+        && report.telemetry.clipboard_restored.is_none()
+    {
+        log.verbose("parakit: clipboard restoration skipped because contents changed or could not be verified; current clipboard preserved");
+    }
     if !keep_transcript_clipboard
         && report.telemetry.clipboard_restored == Some(false)
         && report.telemetry.acknowledgement_kind != "unverified_focus_lost"

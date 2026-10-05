@@ -8,12 +8,13 @@ use super::{restore_or_clear_clipboard, ClipboardPolicy, ClipboardSnapshot, Clip
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use anyhow::Context;
 use anyhow::Result;
+use std::cell::Cell;
 
 /// Clipboard state displaced by a transcript, paired with its staged value.
 pub(super) struct StagedClipboard {
     previous: ClipboardSnapshot,
     transcript: String,
-    stamp: Option<u64>,
+    stamp: Cell<Option<u64>>,
 }
 
 /// Whether the previous clipboard was restored, retained, or superseded.
@@ -43,7 +44,7 @@ impl StagedClipboard {
         Self {
             previous,
             transcript: transcript.to_owned(),
-            stamp: clipboard.change_stamp().ok(),
+            stamp: Cell::new(clipboard.change_stamp().ok()),
         }
     }
 
@@ -57,11 +58,36 @@ impl StagedClipboard {
     ///
     /// Whether the staged text and its observed owner/generation still match.
     pub(super) fn is_current<C: ClipboardStore>(&self, clipboard: &mut C) -> bool {
-        self.stamp_is_current(clipboard)
-            && clipboard
-                .get_text()
-                .is_ok_and(|text| text == self.transcript)
-            && self.stamp_is_current(clipboard)
+        let Ok(before) = clipboard.change_stamp() else {
+            return false;
+        };
+        let Some(staged) = self.stamp.get() else {
+            return false;
+        };
+        if before != staged && !cfg!(target_os = "linux") {
+            return false;
+        }
+        if !clipboard
+            .get_text()
+            .is_ok_and(|text| text == self.transcript)
+        {
+            return false;
+        }
+        // X11 managers may acquire the selection while retaining our text.
+        // Accept that handoff, but preserve a newly copied rich payload even
+        // when its plain-text alternative happens to equal the transcript.
+        if before != staged
+            && (clipboard.get_html().is_ok()
+                || clipboard.get_file_list().is_ok()
+                || clipboard.get_image().is_ok())
+        {
+            return false;
+        }
+        if clipboard.change_stamp().ok() != Some(before) {
+            return false;
+        }
+        self.stamp.set(Some(before));
+        true
     }
 
     /// Recheck only the native stamp after the final focus guard.
@@ -74,7 +100,7 @@ impl StagedClipboard {
     ///
     /// Whether the stamp remains readable and equal to the staged stamp.
     pub(super) fn stamp_is_current<C: ClipboardStore>(&self, clipboard: &mut C) -> bool {
-        self.stamp.is_some() && clipboard.change_stamp().ok() == self.stamp
+        self.stamp.get().is_some() && clipboard.change_stamp().ok() == self.stamp.get()
     }
 
     /// Restore only while the clipboard still matches the staged transcript.

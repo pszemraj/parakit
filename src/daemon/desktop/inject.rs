@@ -732,6 +732,8 @@ pub struct Injector {
     clipboard_history: Option<super::windows_clipboard_history::ClipboardHistoryListener>,
     #[cfg(target_os = "linux")]
     x11_paste: Option<LinuxX11Paste>,
+    #[cfg(target_os = "linux")]
+    x11_direct: Option<LinuxX11Paste>,
 }
 
 impl Injector {
@@ -768,6 +770,8 @@ impl Injector {
             clipboard_history,
             #[cfg(target_os = "linux")]
             x11_paste: None,
+            #[cfg(target_os = "linux")]
+            x11_direct: None,
         })
     }
 
@@ -979,6 +983,26 @@ impl Injector {
             .context("could not type text at cursor")
     }
 
+    /// Query Linux modifiers through the direct-typing connection.
+    ///
+    /// A failed query discards the cached connection so the next dictation
+    /// reopens it instead of remaining broken until restart.
+    #[cfg(target_os = "linux")]
+    fn linux_direct_modifiers_held(&mut self) -> Result<bool> {
+        if self.x11_direct.is_none() {
+            self.x11_direct = Some(LinuxX11Paste::open_for_mode(PasteMode::Direct)?);
+        }
+        let result = self
+            .x11_direct
+            .as_ref()
+            .expect("X11 modifier probe was just initialized")
+            .modifiers_held();
+        if result.is_err() {
+            self.x11_direct = None;
+        }
+        result
+    }
+
     /// Type Linux text while checking physical modifiers and focus per character.
     ///
     /// # Errors
@@ -995,17 +1019,7 @@ impl Injector {
         direct::type_text_guarded(
             text,
             LINUX_PASTE_MODIFIER_RELEASE_TIMEOUT,
-            || {
-                let mut injector = input.borrow_mut();
-                if injector.x11_paste.is_none() {
-                    injector.x11_paste = Some(LinuxX11Paste::open()?);
-                }
-                injector
-                    .x11_paste
-                    .as_ref()
-                    .expect("X11 modifier probe was just initialized")
-                    .modifiers_held()
-            },
+            || input.borrow_mut().linux_direct_modifiers_held(),
             before_character,
             |character| {
                 let mut encoded = [0; 4];
@@ -1216,38 +1230,45 @@ where
         ));
     }
 
-    match before_chord() {
-        Ok(true) => {}
-        Ok(false) => {
-            return finish_blocked_clipboard(
-                clipboard,
-                previous,
-                write_token,
-                restore_plan,
-                clipboard_policy,
-            );
+    for attempt in 0..2 {
+        match before_chord() {
+            Ok(true) => {}
+            Ok(false) => {
+                return finish_blocked_clipboard(
+                    clipboard,
+                    previous,
+                    write_token,
+                    restore_plan,
+                    clipboard_policy,
+                );
+            }
+            Err(err) => {
+                let restore_result = restore_after_delay(
+                    clipboard,
+                    previous,
+                    write_token,
+                    restore_plan,
+                    clipboard_policy,
+                );
+                return match restore_result {
+                    Ok(ClipboardRestore::Changed) => Ok(PasteReport::new(
+                        PasteOutcome::ClipboardChanged,
+                        false,
+                        None,
+                    )),
+                    Ok(_) => Err(err),
+                    Err(restore_err) => Err(err.context(format!("{restore_err:#}"))),
+                };
+            }
         }
-        Err(err) => {
-            let restore_result = restore_after_delay(
-                clipboard,
-                previous,
-                write_token,
-                restore_plan,
-                clipboard_policy,
-            );
-            return match restore_result {
-                Ok(ClipboardRestore::Changed) => Ok(PasteReport::new(
-                    PasteOutcome::ClipboardChanged,
-                    false,
-                    None,
-                )),
-                Ok(_) => Err(err),
-                Err(restore_err) => Err(err.context(format!("{restore_err:#}"))),
-            };
+        if previous.stamp_is_current(clipboard) {
+            break;
         }
-    }
-
-    if !previous.stamp_is_current(clipboard) {
+        if attempt == 0 && cfg!(target_os = "linux") && previous.is_current(clipboard) {
+            // A manager acquired identical text during the focus query. Read
+            // it back once, then recheck focus before sending any input.
+            continue;
+        }
         return Ok(PasteReport::new(
             PasteOutcome::ClipboardChanged,
             false,
@@ -1410,7 +1431,10 @@ where
                 outcome: if current {
                     PasteOutcome::CopiedOnly
                 } else {
-                    PasteOutcome::ClipboardChanged
+                    // The chord may have landed before another copy replaced
+                    // the transcript. Reporting a pre-dispatch block invites
+                    // a duplicate insertion from history.
+                    PasteOutcome::PastedUnverified
                 },
                 telemetry: InsertionTelemetry::acknowledged(
                     kind,
@@ -1778,11 +1802,22 @@ struct LinuxX11Paste {
 #[cfg(target_os = "linux")]
 impl LinuxX11Paste {
     fn open() -> Result<Self> {
+        Self::open_for_mode(PasteMode::Standard)
+    }
+
+    fn open_for_mode(mode: PasteMode) -> Result<Self> {
         let (conn, screen_num) =
             RustConnection::connect(None).context("could not connect to X11")?;
         let root = super::x11::root_window(&conn, screen_num)?;
-        let standard_steps = linux_resolved_paste_chord_steps(&conn, PasteMode::Standard)?;
-        let terminal_steps = linux_resolved_paste_chord_steps(&conn, PasteMode::Terminal)?;
+        let (standard_steps, terminal_steps) = if mode == PasteMode::Direct {
+            // Direct typing needs a modifier query, not Ctrl/Shift/V keycodes.
+            (Vec::new(), Vec::new())
+        } else {
+            (
+                linux_resolved_paste_chord_steps(&conn, PasteMode::Standard)?,
+                linux_resolved_paste_chord_steps(&conn, PasteMode::Terminal)?,
+            )
+        };
         let modifier_cleanup_keycodes = linux_resolved_modifier_cleanup_keycodes(&conn);
         Ok(Self {
             conn,
@@ -2037,6 +2072,8 @@ fn send_x11_paste_chord_with_modifier_flush<S: X11KeySink>(
     // The chord and cleanup release modifiers, which would stop another held
     // push-to-talk capture or interfere with the user's current shortcut.
     // This instant check guards changes after the bounded readiness wait.
+    // QueryKeymap cannot distinguish a lost release from a genuinely held key;
+    // clearing an apparent "stuck" modifier here would release the latter too.
     if x11_modifier_held(keymap, modifier_keycodes) {
         return Ok(PasteDispatch::SkippedUnsafeModifiers);
     }

@@ -1663,32 +1663,214 @@ fn competing_clipboard_during_confirmation_is_preserved_after_posted_paste() {
         ClipboardPolicy::RestorePrevious,
         ClipboardPolicy::KeepTranscript,
     ] {
-        for competing in competing_clipboard_payloads() {
-            let mut clipboard = MockClipboard::new("old clipboard");
-            let pending = Rc::clone(&clipboard.pending_external_write);
-            let queued = competing.clone();
-            let gate = quiet_gate().on_confirmation(move || {
-                *pending.borrow_mut() = Some(queued.clone());
-            });
-            let report = paste_with_clipboard_swap_guarded(
-                &mut clipboard,
-                "dictated text",
-                PasteMode::Standard,
-                || true,
-                || Ok(PasteDispatch::Posted),
-                Duration::ZERO,
-                restore_plan(&gate),
-                policy,
-                None,
-                || Ok(true),
-            )
-            .expect("already posted paste must remain successful");
-            assert_eq!(report.outcome, PasteOutcome::Pasted);
-            assert!(report.telemetry.paste_event_posted);
-            assert_eq!(report.telemetry.clipboard_restored, None);
-            assert_eq!(clipboard.content, competing);
+        for (confirmation, expected) in [
+            (
+                PasteConfirmation::Confirmed {
+                    elapsed: Duration::ZERO,
+                    kind: "not_applicable",
+                },
+                PasteOutcome::Pasted,
+            ),
+            (
+                PasteConfirmation::NoEvidence {
+                    elapsed: Duration::from_millis(1500),
+                    kind: "no_evidence",
+                },
+                PasteOutcome::PastedUnverified,
+            ),
+        ] {
+            for competing in competing_clipboard_payloads() {
+                let mut clipboard = MockClipboard::new("old clipboard");
+                let pending = Rc::clone(&clipboard.pending_external_write);
+                let queued = competing.clone();
+                let gate = quiet_gate()
+                    .confirmation(confirmation)
+                    .on_confirmation(move || {
+                        *pending.borrow_mut() = Some(queued.clone());
+                    });
+                let report = paste_with_clipboard_swap_guarded(
+                    &mut clipboard,
+                    "dictated text",
+                    PasteMode::Standard,
+                    || true,
+                    || Ok(PasteDispatch::Posted),
+                    Duration::ZERO,
+                    restore_plan(&gate),
+                    policy,
+                    None,
+                    || Ok(true),
+                )
+                .expect("already posted paste must remain successful");
+                assert_eq!(report.outcome, expected);
+                assert!(report.telemetry.paste_event_posted);
+                assert_eq!(report.telemetry.clipboard_restored, None);
+                assert_eq!(clipboard.content, competing);
+            }
         }
     }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn clipboard_manager_handoffs_keep_identical_text_pasteable_and_restorable() {
+    for handoff_before_paste in [true, false] {
+        let mut clipboard = MockClipboard::new("old clipboard");
+        let pending = Rc::clone(&clipboard.pending_external_write);
+        let confirmation_pending = Rc::clone(&pending);
+        let gate = quiet_gate().on_confirmation(move || {
+            if !handoff_before_paste {
+                *confirmation_pending.borrow_mut() =
+                    Some(MockClipboardContent::Text("dictated text".to_string()));
+            }
+        });
+        let mut guards = 0;
+        let report = paste_with_clipboard_swap_guarded(
+            &mut clipboard,
+            "dictated text",
+            PasteMode::Standard,
+            || true,
+            || Ok(PasteDispatch::Posted),
+            Duration::ZERO,
+            restore_plan(&gate),
+            ClipboardPolicy::RestorePrevious,
+            None,
+            || {
+                guards += 1;
+                if handoff_before_paste && guards == 2 {
+                    *pending.borrow_mut() =
+                        Some(MockClipboardContent::Text("dictated text".to_string()));
+                }
+                Ok(true)
+            },
+        )
+        .unwrap();
+        assert_eq!(report.outcome, PasteOutcome::Pasted);
+        assert_eq!(report.telemetry.clipboard_restored, Some(true));
+        assert_eq!(clipboard.text(), Some("old clipboard"));
+        if handoff_before_paste {
+            assert_eq!(
+                guards, 3,
+                "focus must be rechecked after reading the new owner"
+            );
+        }
+    }
+}
+
+#[test]
+fn unchanged_clipboard_owner_with_changed_text_is_not_current() {
+    let mut clipboard = MockClipboard::new("dictated text");
+    let staged = StagedClipboard::capture(
+        &mut clipboard,
+        ClipboardSnapshot::Text("old clipboard".to_string()),
+        "dictated text",
+    );
+    clipboard.content = MockClipboardContent::Text("new copy".to_string());
+    assert!(!staged.is_current(&mut clipboard));
+    assert!(matches!(
+        staged
+            .restore(&mut clipboard, ClipboardPolicy::RestorePrevious)
+            .unwrap(),
+        ClipboardRestore::Changed
+    ));
+    assert_eq!(clipboard.text(), Some("new copy"));
+}
+
+#[test]
+fn competing_clipboard_during_skipped_modifier_dispatch_is_preserved() {
+    let mut clipboard = MockClipboard::new("old clipboard");
+    let pending = Rc::clone(&clipboard.pending_external_write);
+    let report = paste_with_clipboard_swap_guarded(
+        &mut clipboard,
+        "dictated text",
+        PasteMode::Standard,
+        || true,
+        || {
+            *pending.borrow_mut() = Some(MockClipboardContent::Text("new copy".to_string()));
+            Ok(PasteDispatch::SkippedUnsafeModifiers)
+        },
+        Duration::ZERO,
+        restore_plan(&quiet_gate()),
+        ClipboardPolicy::RestorePrevious,
+        None,
+        || Ok(true),
+    )
+    .unwrap();
+    assert_eq!(report.outcome, PasteOutcome::ClipboardChanged);
+    assert!(!report.telemetry.paste_event_posted);
+    assert_eq!(report.telemetry.clipboard_restored, None);
+    assert_eq!(clipboard.text(), Some("new copy"));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn direct_control_rejection_does_not_initialize_clipboard_or_paste_backend() {
+    let mut injector = Injector {
+        enigo: None,
+        clipboard: None,
+        x11_paste: None,
+        x11_direct: None,
+    };
+    let error = injector
+        .paste_text_guarded(
+            "a\nb",
+            PasteMode::Direct,
+            ClipboardPolicy::RestorePrevious,
+            None,
+            || panic!("control rejection precedes focus checks"),
+        )
+        .unwrap_err();
+    assert!(error.to_string().contains("control characters"));
+    assert!(injector.enigo.is_none());
+    assert!(injector.clipboard.is_none());
+    assert!(injector.x11_paste.is_none());
+    assert!(injector.x11_direct.is_none());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "requires a running X11 display; only queries modifiers and closes its own connection"]
+fn linux_direct_injector_reopens_failed_modifier_connection_without_paste_setup() {
+    use std::os::fd::AsRawFd;
+
+    let mut injector = Injector::new().unwrap();
+    injector.linux_direct_modifiers_held().unwrap();
+    let direct = injector.x11_direct.as_ref().unwrap();
+    assert!(direct.standard_steps.is_empty());
+    assert!(direct.terminal_steps.is_empty());
+    assert!(injector.x11_paste.is_none());
+    assert!(injector.clipboard.is_none());
+    // SAFETY: This descriptor belongs to this test's dedicated query
+    // connection. Shutdown neither closes it nor affects other X11 clients.
+    let result = unsafe { libc::shutdown(direct.conn.stream().as_raw_fd(), libc::SHUT_RDWR) };
+    assert_eq!(result, 0);
+    assert!(injector.linux_direct_modifiers_held().is_err());
+    assert!(injector.x11_direct.is_none());
+    injector.linux_direct_modifiers_held().unwrap();
+    assert!(injector.x11_direct.is_some());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "requires an X11 display with an existing clipboard owner; read-only"]
+fn linux_clipboard_stamp_matches_selection_owner() {
+    let (connection, _) = x11rb::connect(None).unwrap();
+    let selection = connection
+        .intern_atom(false, b"CLIPBOARD")
+        .unwrap()
+        .reply()
+        .unwrap()
+        .atom;
+    let owner = connection
+        .get_selection_owner(selection)
+        .unwrap()
+        .reply()
+        .unwrap()
+        .owner;
+    assert_ne!(owner, x11rb::NONE);
+    assert_eq!(
+        clipboard_guard::platform_change_stamp().unwrap(),
+        u64::from(owner)
+    );
 }
 
 #[test]
