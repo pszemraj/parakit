@@ -86,7 +86,7 @@ Cross-thread communication uses atomics, mutex-protected buffers, and crossbeam 
 | `src/{build_info,gpu,warmup,ffi_util}.rs` | Build diagnostics, bundled ggml device listing, synthetic warmup PCM, and local FFI helpers. |
 | `src/inference.rs`, `src/crispasr_ext.rs` | [CrispASR](https://github.com/CrispStrobe/CrispASR) session ownership wrapper and short-audio padding. |
 | `src/rules/` | Transcript cleanup pipeline: profiles, the built-in rule table, procedural passes, and user rules from `config.toml`. |
-| `src/daemon/desktop/{inject,clipboard_restore}.rs` | Clipboard transaction, X11/XTest paste chord, direct insertion, and restore timing. |
+| `src/daemon/desktop/{inject,clipboard_guard,direct,clipboard_restore}.rs` | Clipboard transaction and change detection, X11/XTest paste chord, guarded direct insertion, and restore timing. |
 | `src/data_log.rs` | JSONL transcription and insertion-outcome logging. |
 | `src/audio_file.rs` | WAV decoding, mono mixing, and file resampling for quality tools and PTT simulation. |
 | `examples/transcribe_file.rs` | Raw file-based inference smoke and quality checks. |
@@ -120,8 +120,8 @@ The similar implementations below stay separate because their invariants differ.
 - `daemon/stderr.rs` unix vs windows suppressors: a pipe plus drain thread vs
   a `NUL` redirect. Only the guard structure is similar, not the mechanism.
 - `daemon/ipc.rs` unix vs windows `handle_client`: the ~15 glue lines differ
-  in three real ways (stream timeouts, warning wording, the
-  `schedule_exit_after_response` argument); the business logic is already
+  in three real ways (stream timeouts, warning wording, and Unix socket
+  cleanup after a stop response); the business logic is already
   shared via `client_command_outcome`. A transport trait was evaluated and
   rejected as net-negative.
 - `src/test_support.rs` vs `tests/common/mod.rs` `fixture_root`: unit-test vs
