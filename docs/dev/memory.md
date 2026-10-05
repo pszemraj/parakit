@@ -284,9 +284,10 @@ sessions. In short-first runs, median RSS immediately after warmup was 893 MiB
 for the startup sequence and 875 MiB for the one-second probe; after full
 transcription and offload, the corresponding medians were 169 and 164 MiB.
 The one-second probe retains a real readiness check before queued dictation,
-while avoiding larger synthetic shapes on every reload. Startup policy is
-unchanged. These measurements support that reload choice on Metal; they do not
-establish CUDA/Vulkan latency or explain Windows/Linux host-memory retention.
+while avoiding larger synthetic shapes on every reload. These runs retained the
+five-plus-thirty-second startup sequence. They support that reload choice on
+Metal; they do not establish CUDA/Vulkan latency or explain Windows/Linux
+host-memory retention.
 
 The totals exclude sampler pauses and earlier process/device initialization.
 They approximate immediate-release readiness plus inference, rather than

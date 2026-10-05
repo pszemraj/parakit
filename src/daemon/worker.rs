@@ -324,13 +324,13 @@ where
                                 "not_applicable",
                                 None,
                             );
-                            state.remember_transcript(transcript.cleaned.clone());
+                            state.remember_transcript(transcript.cleaned);
                             state.set_phase("idle");
                             sounds.success();
                             continue;
                         }
                         let insert_started = Instant::now();
-                        let cleaned = transcript.cleaned.clone();
+                        let cleaned = transcript.cleaned;
                         let focus_verification = Cell::new("not_applicable");
                         let focus_check = FocusCheck {
                             snapshot: focus_at_start.as_deref(),

@@ -214,7 +214,7 @@ mod tests {
         for mode in [DeviceMode::Cpu, DeviceMode::Auto, DeviceMode::Gpu] {
             for has_gpu in [false, true] {
                 let startup: &[usize] = if mode != DeviceMode::Cpu && has_gpu {
-                    &[5, 30]
+                    &[5]
                 } else {
                     &[1]
                 };

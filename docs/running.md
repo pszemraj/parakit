@@ -153,7 +153,7 @@ Recording, queued dictations, transcription, and insertion prevent offloading. T
 
 Press PTT normally after an idle period. The start cue plays, audio records, and the worker reopens and warms the same local model. An early release queues that audio until the model is ready. Successful dictation retains its normal completion cue. Reload uses the resolved local file without downloading it again, preserving the thread count and [device policy](#device-selection). If reopening fails, that dictation reports an error without insertion; the next PTT retries automatically.
 
-Startup warms one second of synthetic audio on CPU, or five and thirty seconds on GPU. Reload uses a one-second readiness probe on every backend, letting the first real dictation allocate any larger buffers it needs. [Reload measurements](dev/memory.md#reload-warmup-comparison) compare latency, transcript parity, and memory for this policy.
+Startup warms one second of synthetic audio on CPU, or five seconds on GPU. Reload uses a one-second readiness probe on every backend. Longer dictations allocate larger buffers as needed; the first use of a new shape can also incur backend compilation work. [Reload measurements](dev/memory.md#reload-warmup-comparison) compare latency, transcript parity, and memory for the reload policy.
 
 `parakit --verbose status` reports `loaded`, `loading`, or `offloaded`, the effective timeout, and the last reload error until a successful reload clears it. Residency is separate from the recording/transcribing phase. Queries never load the model, and responses from older daemons can omit these fields.
 

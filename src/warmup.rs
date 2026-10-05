@@ -3,12 +3,9 @@
 use crate::constants::TARGET_RATE;
 
 const CPU_ENGINE_WARMUP_SECONDS: &[usize] = &[1];
-// The daemon hard-stops held recordings at MAX_UTTERANCE_SECONDS, but warming
-// that full 270s shape would make every launch pay worst-case compute. This is
-// a realistic-latency policy: cover short dictations and normal 2-25s
-// dictations with margin, accepting a one-time backend stall for unusual longer
-// cold-cache captures.
-const GPU_ENGINE_WARMUP_SECONDS: &[usize] = &[5, 30];
+// Exercise a short GPU inference without reserving a longer recording's
+// workspace at every launch. Real dictations grow backend buffers as needed.
+const GPU_ENGINE_WARMUP_SECONDS: &[usize] = &[5];
 
 /// Return the startup readiness warmup shapes for the requested device policy.
 ///
@@ -19,7 +16,7 @@ const GPU_ENGINE_WARMUP_SECONDS: &[usize] = &[5, 30];
 ///
 /// # Returns
 ///
-/// One second for CPU, or five and thirty seconds for a visible GPU.
+/// One second for CPU, or five seconds for a visible GPU.
 pub fn engine_warmup_seconds(
     device_mode: crate::inference::DeviceMode,
     has_gpu: bool,
