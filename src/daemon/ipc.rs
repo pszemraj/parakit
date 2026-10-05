@@ -179,8 +179,7 @@ pub(crate) struct HistoryEntry {
 /// [`SharedState::set_info`] has run.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub(crate) struct StatusDetail {
-    /// Optional for compatibility with daemons predating idle model offload.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Absent during startup until the worker publishes initial residency.
     pub(crate) model_status: Option<super::model_lifecycle::ModelStatus>,
     /// Daemon process id.
     pub(crate) pid: u32,
@@ -2857,7 +2856,7 @@ mod tests {
         };
 
         let json = serde_json::to_string(&response).expect("status response should serialize");
-        assert!(!json.contains("model_status"));
+        assert!(json.contains("\"model_status\":null"));
         let round_tripped: IpcResponse =
             serde_json::from_str(&json).expect("status response should deserialize");
 
