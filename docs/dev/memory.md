@@ -7,12 +7,10 @@ device. Configuration and user behavior are described in
 
 ## Startup Comparison, 2026-10-05
 
-The [startup comparison and validation snapshot](https://github.com/pszemraj/parakit/pull/13#issuecomment-5988562906)
-records lower initial CUDA/Vulkan allocations with the short GPU readiness
-probe. Longer real recordings still grow the workspace; first-use Vulkan
-shader compilation can add latency. That comparison uses the unchanged native
-dependency. The dated tables below retain their original warmup policies and
-platform coverage; they do not validate every subsequent change.
+The short GPU readiness probe lowers initial CUDA/Vulkan allocations. The
+[startup comparison](https://github.com/pszemraj/parakit/pull/13#issuecomment-5988562906)
+records its scope and limitations. Longer recordings can still grow the
+workspace, and the dated tables below retain their original warmup policies.
 
 ## Repeatable Measurements
 
@@ -44,10 +42,10 @@ Match whether that cache is populated between comparisons.
 The example records JSON checkpoints before loading, after loading, after
 warmup, after short/full transcription, after offload (or the retained
 baseline), and after final close. Records include operation elapsed time.
-Repeated full transcripts must match exactly and be nonempty; failures return
-nonzero. The example saves input paths and sizes, command, platform,
-commit/submodule identity, working-tree state, `metrics.jsonl`, and transcript
-hashes. It does not persist audio or transcripts.
+Both transcripts must be nonempty; failures return nonzero. The example saves
+input paths and sizes, command, platform, commit/submodule identity,
+working-tree state, and `metrics.jsonl`. It does not persist audio or
+transcripts.
 The retained baseline opens once; the offload run opens on every cycle.
 
 Each checkpoint also records `host_interval_peak`: the largest host residency
@@ -75,8 +73,8 @@ overrides the probe after the first session; the default `production` follows
 the daemon. The first session always uses startup warmup. Exclude that first
 cycle when comparing reload timings. Use `--full-first` to transcribe the full
 recording before the short excerpt, so a preceding short inference cannot hide
-the cost of a cold full recording. Both transcripts must be nonempty and stable
-within each run; compare their checkpoint hashes across policies as well.
+the cost of a cold full recording. Both transcripts must be nonempty. Use the
+PTT worker simulation for readable transcript-quality comparisons.
 
 Test worker admission, queueing, and configured timeouts separately with the
 [PTT worker simulation](quality.md#ptt-worker-simulation). Follow the
@@ -184,8 +182,8 @@ availability, not execution. Avoid placement dumps in timed comparisons.
 
 Fix retention at its owner after reproducing it. Do not add forced allocator
 purges, GPU resets, or change warmup solely to reduce a single memory counter.
-A native patch needs a minimal reproducer, immutable revision, transcript
-comparison, and backend validation.
+A native patch needs a minimal reproducer, immutable revision, readable
+transcript comparison, and backend validation.
 
 ## Native Results, 2026-09-30
 
@@ -198,16 +196,8 @@ The baseline retained its session, matching the previous daemon lifetime; the
 comparison dropped the same native session between dictations. Engine and
 native inference code were unchanged.
 
-Input identities:
-
-- Model SHA256: `10f38dd9ce69ce555a413d9b4201ae5d93c2d7cadc91a285f4bfeeec6eee635a`.
-- Juniper WAV: `local-scratch/Juniper_St_NE_5.wav`, 55.36 seconds;
-  SHA256 `d79d7f729b192642b91aef5e1486b97c1cb7f4c34f6ce4a0d45199a9ff23ab5f`.
-- CrispASR pin: `5f1bb858e803167f1b5fc1eb9a90ffdd1970f7ed`, unchanged.
-- Full phase aggregates and native library identity:
-  [memory-results-2026-09-30.json](memory-results-2026-09-30.json).
-
-All numbers below are `ps` RSS in MiB. Ranges cover ten cycles.
+The runs used the same model, 55.36-second reference WAV, and unchanged
+CrispASR pin. All numbers below are `ps` RSS in MiB; ranges cover ten cycles.
 
 | Checkpoint | CPU resident baseline | CPU offload run | Metal resident baseline | Metal offload run |
 | --- | ---: | ---: | ---: | ---: |
@@ -232,8 +222,8 @@ A separate scheduler trace from the freshly built Metal target confirmed
 `MUL_MAT` and `IM2COL` nodes assigned to `MTL0`, with depthwise `CONV_2D_DW`
 and associated `CONT` nodes assigned to CPU. Inference completed successfully.
 There is real GPU execution and real CPU fallback within the encoder, in
-addition to the manual CPU decoder. CUDA/Vulkan placement still needs the same
-native check. The trace is in `target/tmp/offload-memory/metal-placement.err`.
+addition to the manual CPU decoder. CUDA/Vulkan placement needs the same native
+check before drawing backend-specific conclusions.
 
 `vmmap` supplies further accounting:
 
@@ -253,46 +243,10 @@ separately below.
 These macOS measurements do not explain the reported 3+ GiB Windows/Linux host
 memory. The Linux follow-up below did not reproduce it; Windows remains pending.
 
-Desktop testing did expose a separate ownership defect in parakit's stop path:
-IPC called process exit while the worker still owned a loaded session. Metal's
-static device teardown asserted because live residency-set buffers remained.
-Stop now requests worker exit and waits for the session destructor before
-native static teardown. The existing bounded stop budget remains; a timeout
-uses immediate process termination instead of racing native destructors. This
-fix is in parakit, with no CrispASR patch or dependency update.
-
-Timing medians from the ten-cycle offload runs were 123 ms CPU / 93 ms Metal
-for open, 187 ms / 745 ms for warmup, and 328 ms / 132 ms for the two-second
-excerpt. Full-clip resident/offload medians were 7.62/8.81 seconds CPU and
-1.56/2.19 seconds Metal. Native toolchain compilation overlapped some runs and
-the machine was thermally active, so these timings cannot establish a throughput
-regression. The cleanest Metal full-clip observations in both modes were about
-1.55 seconds. Process-cold Metal initialization can add several seconds before
-the open timer; reopening within the same daemon reuses that device state.
-
-All repeated full transcripts matched exactly within each run. The production
-Metal worker's raw transcript also matched the unchanged pre-implementation
-binary exactly, including after reload. Both CPU and Metal workers passed two
-real one-minute timeout/offload cycles with immediate queued audio on the next
-press. The CPU timed run used `--quiet` and emitted zero bytes on both streams.
-Local raw artifacts are under ignored `target/tmp/offload-memory/` in directories
-named `resident-metal`, `offload-metal`, `resident-cpu-corrected`, `offload-cpu`,
-and `offload-metal-extended`. The earlier `resident-cpu` trial initialized a GPU
-probe unnecessarily and is excluded from the report.
-
-Validation status:
-
-| Surface | Result |
-| --- | --- |
-| macOS CPU and Metal allocation/session cycles | Passed ten each; thirty additional Metal cycles |
-| Production worker configured timeout, automatic reload, transcript parity | Passed CPU and Metal |
-| Deterministic activity, failure/recovery, status/history, configuration and cleanup tests | Passed |
-| macOS permissions, microphone readiness, guarded insertion (`doctor --deep`) | Passed |
-| Fresh native Metal build, operation placement, disabled offload, missing-model and required-silence failures | Passed |
-| Native macOS PTT, insertion, first post-idle reload, missing-model recovery, status/history, stop/restart | Passed with an isolated daemon and native hotkey/microphone/input APIs; sounds enabled without backend errors |
-| Audible cue verification and actual system sleep/wake | Pending human listening and native sleep/wake checks |
-| Windows CPU/CUDA/Vulkan | Pending native measurements and desktop validation |
-| Linux CPU/CUDA/Vulkan | Native measurements, worker cycles, and automated X11 capture/insertion passed; human checks pending |
+Timing in these runs was affected by concurrent native compilation and thermal
+activity, so it cannot establish a throughput regression. Process-cold Metal
+initialization also occurs before the open timer; reopening within one daemon
+reuses that device state.
 
 ### Reload Warmup Comparison
 
@@ -310,35 +264,14 @@ ran concurrently.
 | One-second probe | 288 (275-303) | 1770 (1728-1819) |
 | None | 200 (197-258) | 1693 (1653-1780) |
 
-All short/full transcript hashes matched across all policies, orders, and 72
-sessions. In short-first runs, median RSS immediately after warmup was 893 MiB
-for the startup sequence and 875 MiB for the one-second probe; after full
-transcription and offload, the corresponding medians were 169 and 164 MiB.
-The one-second probe retains a real readiness check before queued dictation,
-while avoiding larger synthetic shapes on every reload. These runs retained the
-five-plus-thirty-second startup sequence. They support that reload choice on
-Metal; they do not establish CUDA/Vulkan latency or explain Windows/Linux
-host-memory retention.
+The one-second probe retains a real readiness check before queued dictation
+while avoiding larger synthetic shapes on every reload. The measurements
+support that reload choice on Metal; they do not establish CUDA/Vulkan latency
+or explain Windows/Linux host-memory retention.
 
 The totals exclude sampler pauses and earlier process/device initialization.
-They approximate immediate-release readiness plus inference, rather than
-perceived latency when loading overlaps a live recording. Exact phase ranges,
-memory samples, input/native/executable identities, and transcript hashes are in
-[reload-warmup-results-2026-09-30.json](reload-warmup-results-2026-09-30.json).
-
-With the shorter probe, the production Metal worker completed two real
-one-minute timeout/offload cycles with identical raw output to the previous
-binary. CPU repeat/quiet checks and the native microphone/guarded-insertion
-diagnostic passed. A repeat acoustic desktop test produced no speech with system
-output muted at volume zero; speech-driven insertion on this revision remains
-unverified by that run. The test-owned daemon stopped cleanly.
-
-The full Rust validation loop passed. Raw all-features configuration encountered
-the expected missing CUDA Toolkit on macOS; the documented `CRISPASR_LIB_DIR`
-fallback passed Rust all-features checking. Known vendored CrispASR deprecation
-warnings remain. Rust 1.98.1 also reports the existing `block 0.1.6` dependency's
-uninhabited-static future-incompatibility warning; dependency migration is
-outside this change. Project clippy checks pass with warnings denied.
+They approximate immediate-release readiness plus inference rather than
+perceived latency when loading overlaps a live recording.
 
 ## Native Linux Results, 2026-10-01
 
@@ -359,12 +292,9 @@ These runs used Rust dev-profile executables and Release native libraries:
 default features for CPU, `--features cuda` for CUDA, and `--features vulkan`
 for Vulkan.
 Each retained/offload pair ran ten cycles with two inference threads on CPU
-cores 0 and 1, the same Q8_0 model (745,121,632 bytes), and the 55.36-second
-`local-scratch/juniper-voicememo-DO_NOT_DELETE.wav`. No concurrent build or
-other test workload ran during sampling. The installed idle daemon remained
-running during profiling; its allocations are excluded from the per-process
-counters. Model and audio contents were not hashed or saved by the profiler.
-The profiler's short checkpoint used the first two seconds of that WAV.
+cores 0 and 1, the same Q8_0 model, and the same 55.36-second reference WAV.
+No concurrent build or other test workload ran during sampling. The profiler's
+short checkpoint used the first two seconds of the WAV.
 
 All host figures below are MiB from `smaps_rollup`; GPU figures are separate
 per-process `nvidia-smi` readings. Ranges cover ten cycles. Do not add GPU
@@ -410,65 +340,6 @@ or device reset was added.
 
 Reload medians exclude cycle 1 and include the production one-second readiness
 probe. Sampler pauses are excluded; these are diagnostic timings on two CPU
-cores, not latency guarantees. Short/full output remained stable within each
-pair. Real production-worker runs also completed two one-minute idle periods
-on CPU, CUDA, and Vulkan, including immediate simulated release during reload.
-Quiet runs with offload disabled completed repeated transcription with both
-output streams empty on all three backends.
-Separate two-cycle full-first runs passed on each backend. Scheduler diagnostics
-showed encoder operations on CUDA0 and Vulkan0, with CPU splits where required;
-device enumeration alone was not used as placement evidence. Restricting GPU
-visibility to none in each test process made forced GPU startup exit 1 without
-CPU fallback.
-
-Native X11 checks used a separate daemon, isolated config/cache/runtime paths,
-and a test-owned hardlink of the model. The installed instance was stopped only
-for conflicting hotkey registration and restored after each run. A temporary
-PipeWire null sink fed the short speech fixture through the actual CPAL capture
-path; the desktop fixture was the first five seconds of the same WAV.
-An X11 receiver checked the resulting clipboard paste. This validates
-native capture and insertion with a virtual audio source. The physical
-RØDE NT-USB+ capture path was ready, but spoken microphone input was not observed.
-Keep isolated runtime paths short enough for Unix sockets and preserve the
-native audio endpoint with `PIPEWIRE_RUNTIME_DIR` when changing `XDG_RUNTIME_DIR`.
-
-| Backend | First / post-idle / recovered insertions | Status/history polling idle interval, s | Loaded / offloaded stop, s |
-| --- | --- | ---: | ---: |
-| CPU | Passed once each | 60.10 | 0.22 / 0.06 |
-| CUDA | Passed once each | 60.21 | 0.31 / 0.21 |
-| Vulkan | Passed once each | 60.15 | 0.11 / 0.11 |
-
-Each backend passed `doctor --deep`, CLI-over-config precedence, restart with
-the retained config timeout, and missing-model failure with no insertion,
-followed by recovery and error clearing on the next press. Status/history
-polling preserved history without loading the offloaded model or postponing
-offload. On CPU, a silent 61-second active capture stayed loaded past the
-one-minute timeout and produced no transcription or insertion after release.
-
-The real daemon reported the default ten-minute timeout with the config value
-omitted. Rapid overlapping XTest PTT captures exposed a Linux paste conflict:
-the first paste released Control and stopped the second capture. The modifier
-check fixes the reproduced case: two transcripts completed, the second capture
-stayed active until explicit release, and the earlier transcript remained in
-clipboard/history when automatic paste was withheld. This uses automated X11
-keys; a physical-keyboard overlap was not observed. Short silence produced no
-extra transcript or insertion. Rebuilt CUDA and Vulkan daemons also passed
-the overlapping-capture and short-silence checks with the modifier fix.
-
-On the common CPU worker/input path, stopping during native transcription took
-1.18 seconds and stopping during an in-flight IPC paste took 0.27 seconds.
-Both exited 0 without native teardown assertions, removed the runtime socket,
-left no synthetic modifiers held, and allowed restart with the unchanged test
-configuration. Recording/queued-work/transcription/insertion activity guards
-also passed the deterministic lifecycle tests.
-
-The complete Linux Rust validation loop passed, including native all-features
-checking without a library fallback. Known CrispASR deprecation warnings and
-the intentional ignored Metal feature warning remain. The Rust example tests
-cover interval-peak resets, platform metric naming, and Linux proc parsing. No
-CI jobs were added.
-
-Measurement files, mapping snapshots, loader inspection, and native diagnostics
-remain local under `target/tmp/linux-validation/`; generated artifacts and
-private transcripts are not tracked. Audible cues and physical sleep/wake
-remain pending by request. Windows native runs remain pending independently.
+cores, not latency guarantees. Scheduler diagnostics confirmed encoder work on
+CUDA0 and Vulkan0 with expected CPU splits. These results establish allocation
+placement for this host, not memory ceilings or native Windows behavior.

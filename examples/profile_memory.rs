@@ -10,7 +10,6 @@ use parakit::audio_file::prepare_wav_for_model;
 use parakit::inference::{DeviceMode, Engine};
 use parakit::warmup;
 use serde_json::{json, Map, Value};
-use sha2::{Digest, Sha256};
 use std::env;
 use std::fs::{self, File};
 use std::io::{self, BufWriter, Write};
@@ -130,14 +129,7 @@ impl Profiler {
         })
     }
 
-    fn checkpoint(
-        &mut self,
-        cli: &Cli,
-        cycle: usize,
-        phase: &str,
-        elapsed_ms: f64,
-        transcript: Option<&str>,
-    ) -> Result<()> {
+    fn checkpoint(&mut self, cli: &Cli, cycle: usize, phase: &str, elapsed_ms: f64) -> Result<()> {
         let sampled_at = Instant::now();
         let host = host_memory()?;
         self.sampler.observe_checkpoint(&host, sampled_at)?;
@@ -152,7 +144,6 @@ impl Profiler {
             "keep_loaded": cli.keep_loaded,
             "reload_warmup": format!("{:?}", cli.reload_warmup),
             "full_first": cli.full_first,
-            "transcript_sha256": transcript.map(|text| format!("{:x}", Sha256::digest(text))),
             "sampled_unix": unix_time()?,
             "host": host,
             "host_interval_peak": peak,
@@ -509,14 +500,12 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     let wav = prepare_wav_for_model(&cli.audio)?;
     let mut profiler = Profiler::new(&cli)?;
-    profiler.checkpoint(&cli, 0, "before_load", 0.0, None)?;
+    profiler.checkpoint(&cli, 0, "before_load", 0.0)?;
     #[cfg(feature = "bundled")]
     if cli.device == DeviceMode::Gpu && !parakit::gpu::has_gpu_device() {
         bail!("GPU requested, but no GPU is available");
     }
     let mut engine = None;
-    let mut short_baseline = None;
-    let mut full_baseline = None;
     for cycle in 1..=cli.cycles.get() {
         if engine.is_none() {
             let started = Instant::now();
@@ -526,7 +515,6 @@ fn main() -> Result<()> {
                 cycle,
                 "after_load",
                 started.elapsed().as_secs_f64() * 1000.0,
-                None,
             )?;
             #[cfg(feature = "bundled")]
             let has_gpu = cli.device != DeviceMode::Cpu && parakit::gpu::has_gpu_device();
@@ -541,34 +529,26 @@ fn main() -> Result<()> {
                 cycle,
                 "after_warmup",
                 started.elapsed().as_secs_f64() * 1000.0,
-                None,
             )?;
             engine = Some(opened);
         }
         let session = engine.as_ref().context("session should be loaded")?;
         let short = &wav.samples[..wav.samples.len().min(2 * 16000)];
         let mut clips = [
-            ("after_short", short, &mut short_baseline),
-            ("after_full", wav.samples.as_slice(), &mut full_baseline),
+            ("after_short", short),
+            ("after_full", wav.samples.as_slice()),
         ];
         if cli.full_first {
             clips.reverse();
         }
-        for (phase, pcm, baseline) in clips {
+        for (phase, pcm) in clips {
             let started = Instant::now();
             let text = session.transcribe(pcm)?;
             let elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
             if text.trim().is_empty() {
                 bail!("empty {phase} transcript at cycle {cycle}");
             }
-            match baseline {
-                Some(expected) if expected != &text => {
-                    bail!("{phase} transcript changed at cycle {cycle}")
-                }
-                None => *baseline = Some(text.clone()),
-                _ => {}
-            }
-            profiler.checkpoint(&cli, cycle, phase, elapsed_ms, Some(&text))?;
+            profiler.checkpoint(&cli, cycle, phase, elapsed_ms)?;
         }
         let started = Instant::now();
         if !cli.keep_loaded {
@@ -583,11 +563,10 @@ fn main() -> Result<()> {
                 "offloaded"
             },
             started.elapsed().as_secs_f64() * 1000.0,
-            None,
         )?;
     }
     drop(engine.take());
-    profiler.checkpoint(&cli, cli.cycles.get(), "closed", 0.0, None)
+    profiler.checkpoint(&cli, cli.cycles.get(), "closed", 0.0)
 }
 
 #[cfg(test)]

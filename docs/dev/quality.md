@@ -30,7 +30,7 @@ cargo check --workspace --all-targets --all-features
 Remove-Item Env:\CRISPASR_LIB_DIR
 ```
 
-This fallback does not replace real GPU validation. Also run the CUDA and Vulkan Windows scripts plus simulated-dictation smoke tests against `local-scratch\Juniper_St_NE_5.wav` when touching Windows GPU behavior.
+This fallback does not replace real GPU validation. Also run the CUDA and Vulkan Windows scripts plus simulated-dictation smoke tests against `local-scratch\juniper-voicememo-DO_NOT_DELETE.wav` when touching Windows GPU behavior.
 
 On macOS, raw `--all-features` also enables CUDA and can fail in CMake before Rust typechecking when the CUDA Toolkit is not installed. Use the same `CRISPASR_LIB_DIR` fallback to validate the Rust all-features surface; validate Metal with the native macOS build and `doctor`.
 
@@ -101,7 +101,7 @@ Use the hidden simulation path when you need the daemon worker flow without a li
 PARAKIT_CONFIG_PATH=$PWD/target/tmp/ptt-missing.toml \
 XDG_CACHE_HOME=$PWD/target/tmp/ptt-cache \
   cargo run -- start -m path/to/model.gguf --threads 8 --no-cleaning \
-  --simulate-ptt-audio local-scratch/Juniper_St_NE_5.wav \
+  --simulate-ptt-audio local-scratch/juniper-voicememo-DO_NOT_DELETE.wav \
   --model-idle-minutes 1 --simulate-ptt-repeat 2 --simulate-ptt-idle-seconds 61
 ```
 
