@@ -42,7 +42,10 @@ fn filter_lines(mut reader: impl Read, writer: impl Write) -> io::Result<()> {
     let mut disposition = LineDisposition::Undecided;
 
     loop {
-        let read = reader.read(&mut buffer)?;
+        let read = match reader.read(&mut buffer) {
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            result => result?,
+        };
         if read == 0 {
             if disposition == LineDisposition::Undecided {
                 writer.write_all(&prefix)?;
@@ -78,6 +81,9 @@ fn filter_lines(mut reader: impl Read, writer: impl Write) -> io::Result<()> {
                 disposition = LineDisposition::Undecided;
             }
         }
+        // Native loader failures must remain visible while the loader is still
+        // running; retaining a diagnostic until EOF loses it if the process aborts.
+        writer.flush()?;
     }
 }
 
@@ -127,5 +133,90 @@ mod tests {
         )
         .unwrap();
         assert_eq!(output, b"kept\n");
+    }
+
+    #[test]
+    fn forwarded_output_is_flushed_before_the_next_read() {
+        use std::sync::{Arc, Mutex};
+
+        struct ObservedReader {
+            step: u8,
+            output: Arc<Mutex<Vec<u8>>>,
+        }
+
+        impl Read for ObservedReader {
+            fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+                match self.step {
+                    0 => {
+                        self.step = 1;
+                        let message = b"parakeet: failed to allocate backend buffer\n";
+                        buffer[..message.len()].copy_from_slice(message);
+                        Ok(message.len())
+                    }
+                    _ => {
+                        assert_eq!(
+                            self.output.lock().unwrap().as_slice(),
+                            b"parakeet: failed to allocate backend buffer\n"
+                        );
+                        Ok(0)
+                    }
+                }
+            }
+        }
+
+        struct ObservedWriter(Arc<Mutex<Vec<u8>>>);
+
+        impl Write for ObservedWriter {
+            fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(buffer);
+                Ok(buffer.len())
+            }
+
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let output = Arc::new(Mutex::new(Vec::new()));
+        filter_lines(
+            ObservedReader {
+                step: 0,
+                output: Arc::clone(&output),
+            },
+            ObservedWriter(output),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn interrupted_reads_are_retried() {
+        struct InterruptedOnce {
+            interrupted: bool,
+            bytes: &'static [u8],
+        }
+
+        impl Read for InterruptedOnce {
+            fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+                if !self.interrupted {
+                    self.interrupted = true;
+                    return Err(io::Error::from(io::ErrorKind::Interrupted));
+                }
+                let len = self.bytes.len().min(buffer.len());
+                buffer[..len].copy_from_slice(&self.bytes[..len]);
+                self.bytes = &self.bytes[len..];
+                Ok(len)
+            }
+        }
+
+        let mut output = Vec::new();
+        filter_lines(
+            InterruptedOnce {
+                interrupted: false,
+                bytes: b"native failure remains visible\n",
+            },
+            &mut output,
+        )
+        .unwrap();
+        assert_eq!(output, b"native failure remains visible\n");
     }
 }
