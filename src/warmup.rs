@@ -3,9 +3,9 @@
 use crate::constants::TARGET_RATE;
 
 const CPU_ENGINE_WARMUP_SECONDS: &[usize] = &[1];
-// Cover short dictations and the common longer shape at process startup.
-// Reloads use the separate one-second readiness probe below.
-const GPU_ENGINE_WARMUP_SECONDS: &[usize] = &[5, 30];
+// Cover the common short-dictation shape without making startup reserve a
+// longer recording's workspace. Longer first recordings grow it on demand.
+const GPU_ENGINE_WARMUP_SECONDS: &[usize] = &[5];
 
 /// Return the startup readiness warmup shapes for the requested device policy.
 ///
@@ -16,7 +16,7 @@ const GPU_ENGINE_WARMUP_SECONDS: &[usize] = &[5, 30];
 ///
 /// # Returns
 ///
-/// One second for CPU, or five and thirty seconds for a visible GPU.
+/// One second for CPU, or five seconds for a visible GPU.
 pub fn engine_warmup_seconds(
     device_mode: crate::inference::DeviceMode,
     has_gpu: bool,
@@ -89,7 +89,7 @@ mod tests {
         use crate::inference::DeviceMode;
 
         assert_eq!(engine_warmup_seconds(DeviceMode::Cpu, false), &[1]);
-        assert_eq!(engine_warmup_seconds(DeviceMode::Gpu, true), &[5, 30]);
+        assert_eq!(engine_warmup_seconds(DeviceMode::Gpu, true), &[5]);
         assert_eq!(reload_warmup_seconds(), &[1]);
     }
 }
