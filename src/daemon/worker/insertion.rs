@@ -11,6 +11,8 @@ use parakit::data_log::{DataLogger, InsertionLogFields, RecordId};
 use std::cell::Cell;
 use std::sync::Arc;
 
+const REQUIRE_VERIFIED_FOCUS: bool = cfg!(any(target_os = "macos", target_os = "windows"));
+
 /// Initialize the insertion backend for the worker's configured paste mode.
 ///
 /// # Returns
@@ -491,21 +493,29 @@ fn clipboard_policy(keep_transcript_clipboard: bool) -> ClipboardPolicy {
 fn focus_allows_insertion(focus: FocusCheck<'_>, log: &Logger) -> bool {
     let Some(snapshot) = focus.snapshot else {
         focus.verification.set("unavailable");
-        if cfg!(any(target_os = "macos", target_os = "windows")) {
-            // macOS and Windows insertion must prove the current foreground
-            // target still matches the hotkey target; unknown focus is not
-            // safe to paste.
-            log.warn("recording focus was unavailable; automatic paste skipped");
-            return false;
-        }
-
-        // Linux/X11 focus can be transiently unavailable. Preserve the existing
-        // behavior there so a temporary X11 query failure does not drop speech.
-        log.verbose("recording focus was unavailable; pasting without focus guard");
-        return true;
+        return unavailable_focus_allows_insertion(REQUIRE_VERIFIED_FOCUS, log);
     };
 
-    focus_verification_allows_insertion(snapshot.verify_current(), focus.verification, log)
+    focus_verification_allows_insertion(
+        snapshot.verify_current(),
+        focus.verification,
+        REQUIRE_VERIFIED_FOCUS,
+        log,
+    )
+}
+
+fn unavailable_focus_allows_insertion(require_verified_focus: bool, log: &Logger) -> bool {
+    if require_verified_focus {
+        // macOS and Windows insertion must prove the current foreground target
+        // still matches the hotkey target; unknown focus is not safe to paste.
+        log.warn("recording focus was unavailable; automatic paste skipped");
+        return false;
+    }
+
+    // Linux/X11 focus can be transiently unavailable. Preserve the existing
+    // behavior there so a temporary X11 query failure does not drop speech.
+    log.verbose("recording focus was unavailable; pasting without focus guard");
+    true
 }
 
 /// Recheck Linux direct-mode focus without treating an observation failure as
@@ -524,6 +534,7 @@ fn focus_allows_direct_insertion(focus: FocusCheck<'_>, log: &Logger) -> Result<
     Ok(focus_verification_allows_insertion(
         Ok(verification),
         focus.verification,
+        REQUIRE_VERIFIED_FOCUS,
         log,
     ))
 }
@@ -531,6 +542,7 @@ fn focus_allows_direct_insertion(focus: FocusCheck<'_>, log: &Logger) -> Result<
 fn focus_verification_allows_insertion(
     result: Result<FocusVerification>,
     verification: &Cell<&'static str>,
+    require_verified_focus: bool,
     log: &Logger,
 ) -> bool {
     match result {
@@ -551,7 +563,7 @@ fn focus_verification_allows_insertion(
                 }
             }
         }
-        Err(err) if cfg!(any(target_os = "macos", target_os = "windows")) => {
+        Err(err) if require_verified_focus => {
             verification.set("not_applicable");
             log.warn(format!(
                 "could not verify recording focus ({err:#}); automatic paste skipped"

@@ -11,12 +11,14 @@ fn unavailable_or_unverified_focus_uses_platform_policy() {
     assert!(focus_verification_allows_insertion(
         Ok(FocusVerification::Matched),
         &verification,
+        false,
         &log
     ));
     assert_eq!(verification.get(), "matched");
     assert!(!focus_verification_allows_insertion(
         Ok(FocusVerification::Changed),
         &verification,
+        false,
         &log
     ));
     assert_eq!(verification.get(), "changed");
@@ -25,44 +27,29 @@ fn unavailable_or_unverified_focus_uses_platform_policy() {
         assert!(focus_verification_allows_insertion(
             Ok(FocusVerification::AxUnsupported),
             &verification,
+            true,
             &log
         ));
         assert_eq!(verification.get(), "ax_unsupported");
     }
 
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
-    {
-        let verification = Cell::new("not_applicable");
-        let focus = FocusCheck {
-            snapshot: None,
-            verification: &verification,
-        };
-        assert!(!focus_allows_insertion(focus, &log));
-        assert_eq!(verification.get(), "unavailable");
-        assert!(!focus_verification_allows_insertion(
-            Err(anyhow::anyhow!("focus unavailable")),
-            &verification,
-            &log
-        ));
-        assert_eq!(verification.get(), "not_applicable");
-    }
+    assert!(!unavailable_focus_allows_insertion(true, &log));
+    assert!(unavailable_focus_allows_insertion(false, &log));
 
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    {
-        let verification = Cell::new("not_applicable");
-        let focus = FocusCheck {
-            snapshot: None,
-            verification: &verification,
-        };
-        assert!(focus_allows_insertion(focus, &log));
-        assert_eq!(verification.get(), "unavailable");
-        assert!(focus_verification_allows_insertion(
-            Err(anyhow::anyhow!("temporary X11 failure")),
-            &verification,
-            &log
-        ));
-        assert_eq!(verification.get(), "not_applicable");
-    }
+    assert!(!focus_verification_allows_insertion(
+        Err(anyhow::anyhow!("focus unavailable")),
+        &verification,
+        true,
+        &log
+    ));
+    assert_eq!(verification.get(), "not_applicable");
+    assert!(focus_verification_allows_insertion(
+        Err(anyhow::anyhow!("temporary X11 failure")),
+        &verification,
+        false,
+        &log
+    ));
+    assert_eq!(verification.get(), "not_applicable");
 }
 
 #[test]
