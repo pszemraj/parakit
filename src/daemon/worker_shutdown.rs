@@ -9,7 +9,7 @@ use std::time::Duration;
 /// Worker release budget for fatal daemon exits outside the IPC stop path.
 const FATAL_EXIT_WORKER_WAIT: Duration = Duration::from_secs(5);
 
-/// Lives from startup until the worker has dropped its engine and other locals.
+/// Lives from startup until the worker has released its inference session.
 pub(crate) struct WorkerLifetime {
     _complete: Sender<()>,
 }
