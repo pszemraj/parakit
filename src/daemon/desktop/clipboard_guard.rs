@@ -68,10 +68,7 @@ impl StagedClipboard {
     /// Whether the staged text and its observed owner/generation still match.
     pub(super) fn is_current<C: ClipboardStore>(&self, clipboard: &mut C) -> bool {
         let before = match clipboard.change_stamp() {
-            Ok(stamp) => {
-                self.clear_observation_error();
-                stamp
-            }
+            Ok(stamp) => stamp,
             Err(err) => {
                 self.record_observation_error("could not read clipboard stamp", err);
                 return false;

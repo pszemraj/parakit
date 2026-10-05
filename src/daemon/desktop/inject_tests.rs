@@ -2045,6 +2045,28 @@ fn unreadable_clipboard_stamp_fails_closed_before_chord() {
 }
 
 #[test]
+fn recovered_stamp_read_preserves_a_failed_capture_diagnostic() {
+    let mut clipboard = MockClipboard::new("dictated text");
+    clipboard.stamp_unavailable.set(true);
+    let staged = StagedClipboard::capture(
+        &mut clipboard,
+        ClipboardSnapshot::Text("old clipboard".to_string()),
+        "dictated text",
+    );
+
+    clipboard.stamp_unavailable.set(false);
+    assert!(!staged.is_current(&mut clipboard));
+    assert!(
+        staged
+            .observation_error()
+            .as_deref()
+            .is_some_and(|diagnostic| diagnostic.contains("could not capture clipboard stamp")),
+        "successful retry must not erase a failed capture diagnostic: {:?}",
+        staged.observation_error()
+    );
+}
+
+#[test]
 fn unreadable_clipboard_text_preserves_the_cause_before_chord() {
     let mut clipboard = MockClipboard::new("old clipboard");
     clipboard.text_unavailable.set(true);
