@@ -32,6 +32,8 @@ use x11rb::connection::Connection as _;
 #[cfg(target_os = "linux")]
 use x11rb::protocol::xproto::ConnectionExt as _;
 #[cfg(target_os = "linux")]
+use x11rb::protocol::Event as X11Event;
+#[cfg(target_os = "linux")]
 use x11rb::rust_connection::RustConnection;
 
 #[cfg(target_os = "windows")]
@@ -544,6 +546,10 @@ pub(crate) struct FocusSnapshot {
     input_focus: Option<u32>,
     #[cfg(target_os = "linux")]
     active_window: Option<u32>,
+    #[cfg(target_os = "linux")]
+    linux_connection: RustConnection,
+    #[cfg(target_os = "linux")]
+    linux_root: u32,
     #[cfg(target_os = "windows")]
     windows: super::windows_focus::WindowsFocusSnapshot,
     #[cfg(target_os = "macos")]
@@ -578,6 +584,8 @@ impl FocusSnapshot {
             Ok(Self {
                 input_focus,
                 active_window,
+                linux_connection: conn,
+                linux_root: root,
             })
         }
 
@@ -609,13 +617,10 @@ impl FocusSnapshot {
     pub(crate) fn verify_current(&self) -> Result<FocusVerification> {
         #[cfg(target_os = "linux")]
         {
-            let (conn, screen_num) = RustConnection::connect(None)
-                .context("could not reconnect to X11 while checking recording focus")?;
-            let root = super::x11::root_window(&conn, screen_num)
-                .context("could not read X11 root window for focus check")?;
             if let Some(expected) = self.active_window {
-                if let Some(current) = super::x11::active_window(&conn, root)
-                    .context("could not query the current X11 active window")?
+                if let Some(current) =
+                    super::x11::active_window(&self.linux_connection, self.linux_root)
+                        .context("could not query the current X11 active window")?
                 {
                     return Ok(FocusVerification::from_matches(current == expected));
                 }
@@ -627,7 +632,7 @@ impl FocusSnapshot {
                 );
             };
             Ok(FocusVerification::from_matches(
-                linux_current_input_focus(&conn)
+                linux_current_input_focus(&self.linux_connection)
                     .context("could not query the current X11 focus")?
                     == expected,
             ))
@@ -1007,7 +1012,7 @@ impl Injector {
         }
         let result = self
             .x11_direct
-            .as_ref()
+            .as_mut()
             .expect("X11 modifier probe was just initialized")
             .modifiers_held();
         if result.is_err() {
@@ -1062,7 +1067,7 @@ impl Injector {
         }
         let paste = self
             .x11_paste
-            .as_ref()
+            .as_mut()
             .expect("X11 paste backend was just initialized");
         let ready = wait_for_x11_modifier_release(LINUX_PASTE_MODIFIER_RELEASE_TIMEOUT, || {
             paste.modifiers_held()
@@ -1102,7 +1107,7 @@ impl Injector {
 
         let result = self
             .x11_paste
-            .as_ref()
+            .as_mut()
             .expect("X11 paste backend was just initialized")
             .send_paste_chord(mode);
         if result.is_err() {
@@ -1837,8 +1842,10 @@ struct ResolvedX11KeyStep {
 struct LinuxX11Paste {
     conn: RustConnection,
     root: u32,
+    mode: PasteMode,
     standard_steps: Vec<ResolvedX11KeyStep>,
     terminal_steps: Vec<ResolvedX11KeyStep>,
+    modifier_keycodes: Vec<u8>,
 }
 
 #[cfg(target_os = "linux")]
@@ -1851,24 +1858,20 @@ impl LinuxX11Paste {
         let (conn, screen_num) =
             RustConnection::connect(None).context("could not connect to X11")?;
         let root = super::x11::root_window(&conn, screen_num)?;
-        let (standard_steps, terminal_steps) = if mode == PasteMode::Direct {
-            // Direct typing needs a modifier query, not Ctrl/Shift/V keycodes.
-            (Vec::new(), Vec::new())
-        } else {
-            (
-                linux_resolved_paste_chord_steps(&conn, PasteMode::Standard)?,
-                linux_resolved_paste_chord_steps(&conn, PasteMode::Terminal)?,
-            )
-        };
-        Ok(Self {
+        let mut paste = Self {
             conn,
             root,
-            standard_steps,
-            terminal_steps,
-        })
+            mode,
+            standard_steps: Vec::new(),
+            terminal_steps: Vec::new(),
+            modifier_keycodes: Vec::new(),
+        };
+        paste.refresh_mapping()?;
+        Ok(paste)
     }
 
-    fn send_paste_chord(&self, mode: PasteMode) -> Result<PasteDispatch> {
+    fn send_paste_chord(&mut self, mode: PasteMode) -> Result<PasteDispatch> {
+        self.refresh_mapping_if_needed()?;
         let steps = match mode {
             PasteMode::Standard => &self.standard_steps,
             PasteMode::Terminal => &self.terminal_steps,
@@ -1878,30 +1881,52 @@ impl LinuxX11Paste {
             conn: &self.conn,
             root: self.root,
         };
-        let modifier_keycodes = self.modifier_keycodes()?;
         send_x11_paste_chord_with_modifier_flush(
             &mut sink,
             steps,
-            &modifier_keycodes,
+            &self.modifier_keycodes,
             &self.keymap()?,
         )
     }
 
-    fn modifiers_held(&self) -> Result<bool> {
-        Ok(x11_modifier_held(
-            &self.keymap()?,
-            &self.modifier_keycodes()?,
-        ))
+    fn modifiers_held(&mut self) -> Result<bool> {
+        self.refresh_mapping_if_needed()?;
+        Ok(x11_modifier_held(&self.keymap()?, &self.modifier_keycodes))
     }
 
-    fn modifier_keycodes(&self) -> Result<Vec<u8>> {
-        let keycodes =
+    fn refresh_mapping_if_needed(&mut self) -> Result<()> {
+        let mut changed = false;
+        while let Some(event) = self
+            .conn
+            .poll_for_event()
+            .context("could not poll X11 mapping changes")?
+        {
+            changed |= matches!(event, X11Event::MappingNotify(_));
+        }
+        if changed {
+            self.refresh_mapping()?;
+        }
+        Ok(())
+    }
+
+    fn refresh_mapping(&mut self) -> Result<()> {
+        let modifier_keycodes =
             super::x11::keycodes_for_keysyms(&self.conn, linux_modifier_cleanup_keysyms())?;
         anyhow::ensure!(
-            !keycodes.is_empty(),
+            !modifier_keycodes.is_empty(),
             "could not resolve X11 modifier keycodes"
         );
-        Ok(keycodes)
+        self.modifier_keycodes = modifier_keycodes;
+        if self.mode == PasteMode::Direct {
+            self.standard_steps.clear();
+            self.terminal_steps.clear();
+        } else {
+            self.standard_steps =
+                linux_resolved_paste_chord_steps(&self.conn, PasteMode::Standard)?;
+            self.terminal_steps =
+                linux_resolved_paste_chord_steps(&self.conn, PasteMode::Terminal)?;
+        }
+        Ok(())
     }
 
     fn keymap(&self) -> Result<[u8; 32]> {

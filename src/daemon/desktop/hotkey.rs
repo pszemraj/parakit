@@ -30,6 +30,8 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 #[cfg(target_os = "linux")]
 use std::{fs::File, io, path::PathBuf};
+#[cfg(target_os = "linux")]
+use x11rb::{connection::Connection as _, protocol::Event as X11Event};
 
 #[cfg(target_os = "macos")]
 mod macos;
@@ -521,7 +523,7 @@ fn run_linux_registered_hotkey_loop(tx: Sender<HotkeyTransition>) -> anyhow::Res
 
     let receiver = GlobalHotKeyEvent::receiver();
     let mut latch = RegisteredHotkeyLatch::default();
-    let physical = X11PhysicalHotkeyProbe::open()
+    let mut physical = X11PhysicalHotkeyProbe::open()
         .context("could not initialize physical Ctrl+Space state probe")?;
     loop {
         let event = if latch.needs_physical_poll() {
@@ -529,7 +531,7 @@ fn run_linux_registered_hotkey_loop(tx: Sender<HotkeyTransition>) -> anyhow::Res
                 Ok(event) => event,
                 Err(RecvTimeoutError::Timeout) => {
                     let now = Instant::now();
-                    let physical_state = physical_hotkey_state(&physical);
+                    let physical_state = physical_hotkey_state(&mut physical);
                     if let Some(action) = latch.physical_poll(physical_state, now) {
                         send_hotkey_transition(action, &tx);
                     }
@@ -549,7 +551,7 @@ fn run_linux_registered_hotkey_loop(tx: Sender<HotkeyTransition>) -> anyhow::Res
         }
 
         let now = Instant::now();
-        let action = latch.event(event.state, physical_hotkey_state(&physical), now);
+        let action = latch.event(event.state, physical_hotkey_state(&mut physical), now);
         if let Some(action) = action {
             send_hotkey_transition(action, &tx);
         }
@@ -634,7 +636,7 @@ impl PhysicalHotkeyState {
 }
 
 #[cfg(target_os = "linux")]
-fn physical_hotkey_state(physical: &X11PhysicalHotkeyProbe) -> PhysicalHotkeyState {
+fn physical_hotkey_state(physical: &mut X11PhysicalHotkeyProbe) -> PhysicalHotkeyState {
     physical.state().unwrap_or_default()
 }
 
@@ -667,8 +669,34 @@ impl X11PhysicalHotkeyProbe {
         })
     }
 
-    fn state(&self) -> anyhow::Result<PhysicalHotkeyState> {
+    fn state(&mut self) -> anyhow::Result<PhysicalHotkeyState> {
         use x11rb::protocol::xproto::ConnectionExt as _;
+
+        let mut mapping_changed = false;
+        while let Some(event) = self
+            .conn
+            .poll_for_event()
+            .context("could not poll X11 hotkey mapping changes")?
+        {
+            mapping_changed |= matches!(event, X11Event::MappingNotify(_));
+        }
+        if mapping_changed {
+            self.space = super::x11::keycodes_for_keysyms(&self.conn, &[super::x11::SPACE_KEYSYM])
+                .context("could not refresh X11 Space keycodes")?;
+            self.control = super::x11::keycodes_for_keysyms(
+                &self.conn,
+                &[super::x11::CONTROL_L_KEYSYM, super::x11::CONTROL_R_KEYSYM],
+            )
+            .context("could not refresh X11 Control keycodes")?;
+            anyhow::ensure!(
+                !self.space.is_empty(),
+                "could not resolve X11 Space keycode"
+            );
+            anyhow::ensure!(
+                !self.control.is_empty(),
+                "could not resolve X11 Control keycode"
+            );
+        }
 
         let reply = self
             .conn
@@ -677,16 +705,27 @@ impl X11PhysicalHotkeyProbe {
             .reply()
             .context("could not read X11 keymap")?;
 
-        Ok(PhysicalHotkeyState {
-            ctrl: self
-                .control
-                .iter()
-                .any(|keycode| super::x11::keycode_down(&reply.keys, *keycode)),
-            space: self
-                .space
-                .iter()
-                .any(|keycode| super::x11::keycode_down(&reply.keys, *keycode)),
-        })
+        Ok(physical_state_from_keycodes(
+            &reply.keys,
+            &self.control,
+            &self.space,
+        ))
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn physical_state_from_keycodes(
+    keys: &[u8; 32],
+    control: &[u8],
+    space: &[u8],
+) -> PhysicalHotkeyState {
+    PhysicalHotkeyState {
+        ctrl: control
+            .iter()
+            .any(|keycode| super::x11::keycode_down(keys, *keycode)),
+        space: space
+            .iter()
+            .any(|keycode| super::x11::keycode_down(keys, *keycode)),
     }
 }
 

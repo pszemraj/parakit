@@ -409,6 +409,25 @@ fn registered_hotkey_waits_for_space_release_after_ctrl_first_stop() {
     assert!(!state.needs_physical_poll());
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn registered_hotkey_physical_state_uses_refreshed_keycodes() {
+    let mut keys = [0_u8; 32];
+    keys[12] |= 1 << 1; // keycode 97: remapped Control
+    keys[8] |= 1 << 1; // keycode 65: Space
+
+    assert_eq!(
+        physical_state_from_keycodes(&keys, &[37], &[65]),
+        physical(false, true),
+        "the startup Control mapping is stale"
+    );
+    assert_eq!(
+        physical_state_from_keycodes(&keys, &[97], &[65]),
+        physical(true, true),
+        "a MappingNotify refresh must use the new Control keycode"
+    );
+}
+
 #[test]
 fn hotkey_actions_emit_logical_transitions_only() {
     let now = base_time();
