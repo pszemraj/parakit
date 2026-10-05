@@ -90,7 +90,7 @@ Stop it:
 parakit stop
 ```
 
-`parakit stop` uses the local daemon control channel. Use `pkill parakit` as a last resort if the process is wedged before IPC starts.
+`parakit stop` uses the local daemon control channel, waits for worker and insertion shutdown, and confirms that the process singleton lock was released before printing `stopped`. It exits with an error if shutdown exceeds its bounded wait. Use `pkill parakit` as a last resort if the process is wedged before IPC starts.
 
 ## Daemon Control
 
@@ -104,7 +104,7 @@ parakit history
 parakit test-paste "hello from parakit"
 ```
 
-`status` and `stop` are safe when no daemon is running. They print `parakit: not running` or `parakit: not running; nothing to stop` and exit successfully. Commands that need daemon state (`history`, `copy-last`, and `test-paste`) instead report that the daemon is not running and point to `parakit start`.
+`status` and `stop` are safe when no daemon is running. They print `parakit: not running` or `parakit: not running; nothing to stop` and exit successfully. If the control endpoint is absent while the singleton lock remains held, `stop` exits with an error because the daemon may still be starting, stopping, or otherwise unreachable. Commands that need daemon state (`history`, `copy-last`, and `test-paste`) instead report that the daemon is not running and point to `parakit start`.
 
 The daemon keeps a ring buffer of recent transcripts in memory (`daemon.transcript_history` entries, 10 by default). `copy-last` acts on the most recent one by default; pass `N` (1-based, counting back from the most recent) to reach further back, e.g. `parakit copy-last 3` for the third-most-recent transcript. `parakit history` lists what the daemon currently remembers, newest first; `--limit N` caps how many entries print. The ring disappears when the daemon stops, so treat it as a same-session convenience. `test-paste` runs clipboard staging, focus checks, paste sanitization, and the paste chord without using the microphone.
 

@@ -599,7 +599,7 @@ pub(crate) fn run_client(command: IpcCommand, quiet: bool, verbose: bool) -> Res
                 wait_for_daemon_stop()?;
             }
             if !quiet {
-                println!("{message}");
+                println!("{}", completed_command_message(&command, &message));
             }
             Ok(())
         }
@@ -629,6 +629,15 @@ pub(crate) fn run_client(command: IpcCommand, quiet: bool, verbose: bool) -> Res
             Ok(())
         }
         IpcResponse::Err { message } => bail!("{message}"),
+    }
+}
+
+#[cfg(any(unix, target_os = "windows"))]
+fn completed_command_message<'a>(command: &IpcCommand, server_message: &'a str) -> &'a str {
+    if matches!(command, IpcCommand::Stop) {
+        "stopped"
+    } else {
+        server_message
     }
 }
 
@@ -678,9 +687,15 @@ enum DaemonNotRunningDisposition {
 /// Status queries and stop requests are idempotent state checks, while the
 /// remaining commands require live daemon state and therefore stay failures.
 #[cfg(any(unix, target_os = "windows"))]
-fn daemon_not_running_disposition(command: &IpcCommand) -> DaemonNotRunningDisposition {
+fn daemon_not_running_disposition(
+    command: &IpcCommand,
+    singleton_held: bool,
+) -> DaemonNotRunningDisposition {
     match command {
         IpcCommand::Status => DaemonNotRunningDisposition::Success("parakit: not running"),
+        IpcCommand::Stop if singleton_held => DaemonNotRunningDisposition::Error(
+            "daemon control endpoint is unavailable while the singleton lock is held; it may still be starting or stopping",
+        ),
         IpcCommand::Stop => {
             DaemonNotRunningDisposition::Success("parakit: not running; nothing to stop")
         }
@@ -694,7 +709,19 @@ fn daemon_not_running_disposition(command: &IpcCommand) -> DaemonNotRunningDispo
 
 #[cfg(any(unix, target_os = "windows"))]
 fn handle_daemon_not_running(command: &IpcCommand, quiet: bool) -> Result<()> {
-    match daemon_not_running_disposition(command) {
+    let singleton_held = if matches!(command, IpcCommand::Stop) {
+        match preflight::acquire_singleton_lock() {
+            Ok(lock) => {
+                drop(lock);
+                false
+            }
+            Err(error) if error.is::<preflight::DaemonAlreadyRunning>() => true,
+            Err(error) => return Err(error.context("probe daemon singleton lock")),
+        }
+    } else {
+        false
+    };
+    match daemon_not_running_disposition(command, singleton_held) {
         DaemonNotRunningDisposition::Success(message) => {
             if !quiet {
                 println!("{message}");
@@ -2266,8 +2293,27 @@ mod tests {
         ];
 
         for (command, expected) in cases {
-            assert_eq!(daemon_not_running_disposition(&command), expected);
+            assert_eq!(daemon_not_running_disposition(&command, false), expected);
         }
+        assert_eq!(
+            daemon_not_running_disposition(&IpcCommand::Stop, true),
+            DaemonNotRunningDisposition::Error(
+                "daemon control endpoint is unavailable while the singleton lock is held; it may still be starting or stopping"
+            )
+        );
+    }
+
+    #[cfg(any(unix, target_os = "windows"))]
+    #[test]
+    fn stop_success_message_describes_the_completed_state() {
+        assert_eq!(
+            completed_command_message(&IpcCommand::Stop, "stopping"),
+            "stopped"
+        );
+        assert_eq!(
+            completed_command_message(&IpcCommand::CopyLast { index: 0 }, "copied"),
+            "copied"
+        );
     }
 
     #[cfg(any(unix, target_os = "windows"))]
