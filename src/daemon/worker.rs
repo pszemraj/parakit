@@ -303,6 +303,9 @@ where
                         completion.fail(error.clone());
                         log.error(&format!("dictation discarded: {error}"));
                         state.set_phase("idle");
+                        // The press-time cue reported the first load failure;
+                        // this cue reports the distinct release retry failure
+                        // that discards the completed capture.
                         sounds.error();
                         notifier.dictation_discarded(&error);
                         continue;
