@@ -651,26 +651,37 @@ impl NvidiaPeakSampler {
     fn start() -> Self {
         let mut state = PeakState::new(Instant::now(), NVIDIA_SAMPLE_INTERVAL);
         let (commands, requests) = mpsc::channel();
-        let thread = thread::spawn(move || loop {
-            match requests.recv_timeout(NVIDIA_SAMPLE_INTERVAL) {
-                Ok(NvidiaSamplerCommand::Checkpoint(reply)) => {
-                    let sampled_at = Instant::now();
-                    let reading = nvidia_memory();
-                    if let Some(value) = reading.total_mib() {
-                        state.observe("used_gpu_MiB", value, sampled_at);
+        let thread = thread::spawn(move || {
+            let mut next_sample = Instant::now();
+            loop {
+                let wait = next_sample.saturating_duration_since(Instant::now());
+                match requests.recv_timeout(wait) {
+                    Ok(NvidiaSamplerCommand::Checkpoint(reply)) => {
+                        let sampled_at = Instant::now();
+                        let reading = nvidia_memory();
+                        if let Some(value) = reading.total_mib() {
+                            state.observe("used_gpu_MiB", value, sampled_at);
+                        }
+                        let snapshot = state.snapshot();
+                        state.reset_at(Instant::now());
+                        let _ = reply.send((reading.to_json(), snapshot));
+                        next_sample = Instant::now() + NVIDIA_SAMPLE_INTERVAL;
                     }
-                    let snapshot = state.snapshot();
-                    state.reset_at(Instant::now());
-                    let _ = reply.send((reading.to_json(), snapshot));
-                }
-                Ok(NvidiaSamplerCommand::Stop) | Err(mpsc::RecvTimeoutError::Disconnected) => {
-                    break;
-                }
-                Err(mpsc::RecvTimeoutError::Timeout) => {
-                    let sampled_at = Instant::now();
-                    let reading = nvidia_memory();
-                    if let Some(value) = reading.total_mib() {
-                        state.observe("used_gpu_MiB", value, sampled_at);
+                    Ok(NvidiaSamplerCommand::Stop) | Err(mpsc::RecvTimeoutError::Disconnected) => {
+                        break;
+                    }
+                    Err(mpsc::RecvTimeoutError::Timeout) => {
+                        let sampled_at = Instant::now();
+                        let reading = nvidia_memory();
+                        if let Some(value) = reading.total_mib() {
+                            state.observe("used_gpu_MiB", value, sampled_at);
+                        }
+                        next_sample += NVIDIA_SAMPLE_INTERVAL;
+                        if next_sample <= Instant::now() {
+                            // A slow vendor query must yield to queued checkpoint
+                            // requests before beginning another bounded query.
+                            next_sample = Instant::now() + Duration::from_millis(1);
+                        }
                     }
                 }
             }
