@@ -517,9 +517,9 @@ fn x11_keymap_bit_probe_detects_down_keycodes() {
     let mut keys = [0_u8; 32];
     keys[4] = 0b0010_0000;
 
-    assert!(keycode_down(&keys, 37));
-    assert!(!keycode_down(&keys, 36));
-    assert!(!keycode_down(&keys, 255));
+    assert!(super::super::x11::keycode_down(&keys, 37));
+    assert!(!super::super::x11::keycode_down(&keys, 36));
+    assert!(!super::super::x11::keycode_down(&keys, 255));
 }
 
 #[cfg(target_os = "linux")]

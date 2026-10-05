@@ -1796,7 +1796,6 @@ struct LinuxX11Paste {
     root: u32,
     standard_steps: Vec<ResolvedX11KeyStep>,
     terminal_steps: Vec<ResolvedX11KeyStep>,
-    modifier_cleanup_keycodes: Vec<u8>,
 }
 
 #[cfg(target_os = "linux")]
@@ -1818,13 +1817,11 @@ impl LinuxX11Paste {
                 linux_resolved_paste_chord_steps(&conn, PasteMode::Terminal)?,
             )
         };
-        let modifier_cleanup_keycodes = linux_resolved_modifier_cleanup_keycodes(&conn);
         Ok(Self {
             conn,
             root,
             standard_steps,
             terminal_steps,
-            modifier_cleanup_keycodes,
         })
     }
 
@@ -1838,10 +1835,11 @@ impl LinuxX11Paste {
             conn: &self.conn,
             root: self.root,
         };
+        let modifier_keycodes = self.modifier_keycodes()?;
         send_x11_paste_chord_with_modifier_flush(
             &mut sink,
             steps,
-            &self.modifier_cleanup_keycodes,
+            &modifier_keycodes,
             &self.keymap()?,
         )
     }
@@ -1849,8 +1847,18 @@ impl LinuxX11Paste {
     fn modifiers_held(&self) -> Result<bool> {
         Ok(x11_modifier_held(
             &self.keymap()?,
-            &self.modifier_cleanup_keycodes,
+            &self.modifier_keycodes()?,
         ))
+    }
+
+    fn modifier_keycodes(&self) -> Result<Vec<u8>> {
+        let keycodes =
+            super::x11::keycodes_for_keysyms(&self.conn, linux_modifier_cleanup_keysyms())?;
+        anyhow::ensure!(
+            !keycodes.is_empty(),
+            "could not resolve X11 modifier keycodes"
+        );
+        Ok(keycodes)
     }
 
     fn keymap(&self) -> Result<[u8; 32]> {
@@ -1900,7 +1908,7 @@ fn wait_for_x11_modifier_release(
 fn x11_modifier_held(keymap: &[u8; 32], modifier_keycodes: &[u8]) -> bool {
     modifier_keycodes
         .iter()
-        .any(|keycode| keymap[usize::from(keycode / 8)] & (1 << (keycode % 8)) != 0)
+        .any(|keycode| super::x11::keycode_down(keymap, *keycode))
 }
 
 #[cfg(target_os = "linux")]
@@ -1914,15 +1922,8 @@ fn linux_modifier_cleanup_keysyms() -> &'static [u32] {
         super::x11::ALT_R_KEYSYM,
         super::x11::SUPER_L_KEYSYM,
         super::x11::SUPER_R_KEYSYM,
+        super::x11::ISO_LEVEL3_SHIFT_KEYSYM,
     ]
-}
-
-#[cfg(target_os = "linux")]
-fn linux_resolved_modifier_cleanup_keycodes(conn: &RustConnection) -> Vec<u8> {
-    linux_modifier_cleanup_keysyms()
-        .iter()
-        .filter_map(|keysym| super::x11::keycode_for_keysym(conn, *keysym).ok())
-        .collect()
 }
 
 #[cfg(target_os = "linux")]

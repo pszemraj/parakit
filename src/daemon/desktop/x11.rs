@@ -23,6 +23,8 @@ pub(crate) const ALT_R_KEYSYM: u32 = 0xffea;
 pub(crate) const SUPER_L_KEYSYM: u32 = 0xffeb;
 /// X11 keysym for right Super.
 pub(crate) const SUPER_R_KEYSYM: u32 = 0xffec;
+/// X11 keysym commonly emitted by AltGr.
+pub(crate) const ISO_LEVEL3_SHIFT_KEYSYM: u32 = 0xfe03;
 /// X11 keysym for lowercase `v`.
 pub(crate) const V_KEYSYM: u32 = b'v' as u32;
 
@@ -81,6 +83,18 @@ pub(crate) fn root_window(conn: &RustConnection, screen_num: usize) -> Result<Wi
 /// Returns an error if the keyboard mapping cannot be read or does not contain
 /// the requested keysym.
 pub(crate) fn keycode_for_keysym(conn: &RustConnection, keysym: u32) -> Result<Keycode> {
+    keycodes_for_keysyms(conn, &[keysym])?
+        .into_iter()
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("could not map X11 keysym {keysym} to a keycode"))
+}
+
+/// Map X11 keysyms to every keycode that emits at least one of them.
+///
+/// This intentionally returns every match: user remaps can place Control or
+/// another modifier on additional physical keys while leaving the original
+/// mapping present.
+pub(crate) fn keycodes_for_keysyms(conn: &RustConnection, keysyms: &[u32]) -> Result<Vec<Keycode>> {
     let setup = conn.setup();
     let min_keycode = setup.min_keycode;
     let max_keycode = setup.max_keycode;
@@ -92,13 +106,41 @@ pub(crate) fn keycode_for_keysym(conn: &RustConnection, keysym: u32) -> Result<K
         .context("could not read X11 keyboard mapping")?;
     let keysyms_per_keycode = mapping.keysyms_per_keycode as usize;
 
-    for (offset, keysyms) in mapping.keysyms.chunks(keysyms_per_keycode).enumerate() {
-        if keysyms.contains(&keysym) {
-            return Ok(min_keycode + offset as u8);
-        }
-    }
+    Ok(keycodes_for_mapping(
+        min_keycode,
+        keysyms_per_keycode,
+        &mapping.keysyms,
+        keysyms,
+    ))
+}
 
-    anyhow::bail!("could not map X11 keysym {keysym} to a keycode")
+fn keycodes_for_mapping(
+    min_keycode: Keycode,
+    keysyms_per_keycode: usize,
+    mapping: &[u32],
+    requested: &[u32],
+) -> Vec<Keycode> {
+    if keysyms_per_keycode == 0 {
+        return Vec::new();
+    }
+    mapping
+        .chunks(keysyms_per_keycode)
+        .enumerate()
+        .filter_map(|(offset, mapped)| {
+            mapped
+                .iter()
+                .any(|keysym| requested.contains(keysym))
+                .then_some(min_keycode + offset as u8)
+        })
+        .collect()
+}
+
+/// Whether `keycode` is pressed in an X11 `QueryKeymap` bitmap.
+pub(crate) fn keycode_down(keys: &[u8; 32], keycode: Keycode) -> bool {
+    let index = usize::from(keycode / 8);
+    let bit = keycode % 8;
+    keys.get(index)
+        .is_some_and(|byte| byte & (1_u8 << bit) != 0)
 }
 
 /// Return the EWMH active toplevel window when the window manager exposes it.
@@ -130,4 +172,35 @@ pub(crate) fn active_window(conn: &RustConnection, root: Window) -> Result<Optio
     Ok(reply
         .value32()
         .and_then(|mut values| values.find(|window| *window != x11rb::NONE)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mapping_returns_every_keycode_for_requested_modifiers() {
+        let mapping = [
+            SPACE_KEYSYM,
+            0,
+            CONTROL_L_KEYSYM,
+            0,
+            CONTROL_L_KEYSYM,
+            ISO_LEVEL3_SHIFT_KEYSYM,
+            b'a' as u32,
+            0,
+        ];
+        assert_eq!(
+            keycodes_for_mapping(8, 2, &mapping, &[CONTROL_L_KEYSYM, ISO_LEVEL3_SHIFT_KEYSYM]),
+            vec![9, 10]
+        );
+    }
+
+    #[test]
+    fn keymap_bitmap_handles_bounds_and_pressed_bits() {
+        let mut keys = [0_u8; 32];
+        keys[4] |= 1 << 5;
+        assert!(keycode_down(&keys, 37));
+        assert!(!keycode_down(&keys, 36));
+    }
 }

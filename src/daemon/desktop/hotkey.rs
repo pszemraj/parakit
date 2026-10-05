@@ -641,9 +641,8 @@ fn physical_hotkey_state(physical: &X11PhysicalHotkeyProbe) -> PhysicalHotkeySta
 #[cfg(target_os = "linux")]
 struct X11PhysicalHotkeyProbe {
     conn: x11rb::rust_connection::RustConnection,
-    space: u8,
-    ctrl_l: u8,
-    ctrl_r: u8,
+    space: Vec<u8>,
+    control: Vec<u8>,
 }
 
 #[cfg(target_os = "linux")]
@@ -651,18 +650,20 @@ impl X11PhysicalHotkeyProbe {
     fn open() -> anyhow::Result<Self> {
         let (conn, _) = x11rb::rust_connection::RustConnection::connect(None)
             .context("could not connect to X11 for physical hotkey probe")?;
-        let space = super::x11::keycode_for_keysym(&conn, super::x11::SPACE_KEYSYM)
-            .context("could not resolve X11 Space keycode")?;
-        let ctrl_l = super::x11::keycode_for_keysym(&conn, super::x11::CONTROL_L_KEYSYM)
-            .context("could not resolve X11 Control_L keycode")?;
-        let ctrl_r = super::x11::keycode_for_keysym(&conn, super::x11::CONTROL_R_KEYSYM)
-            .context("could not resolve X11 Control_R keycode")?;
+        let space = super::x11::keycodes_for_keysyms(&conn, &[super::x11::SPACE_KEYSYM])
+            .context("could not resolve X11 Space keycodes")?;
+        let control = super::x11::keycodes_for_keysyms(
+            &conn,
+            &[super::x11::CONTROL_L_KEYSYM, super::x11::CONTROL_R_KEYSYM],
+        )
+        .context("could not resolve X11 Control keycodes")?;
+        anyhow::ensure!(!space.is_empty(), "could not resolve X11 Space keycode");
+        anyhow::ensure!(!control.is_empty(), "could not resolve X11 Control keycode");
 
         Ok(Self {
             conn,
             space,
-            ctrl_l,
-            ctrl_r,
+            control,
         })
     }
 
@@ -677,17 +678,16 @@ impl X11PhysicalHotkeyProbe {
             .context("could not read X11 keymap")?;
 
         Ok(PhysicalHotkeyState {
-            ctrl: keycode_down(&reply.keys, self.ctrl_l) || keycode_down(&reply.keys, self.ctrl_r),
-            space: keycode_down(&reply.keys, self.space),
+            ctrl: self
+                .control
+                .iter()
+                .any(|keycode| super::x11::keycode_down(&reply.keys, *keycode)),
+            space: self
+                .space
+                .iter()
+                .any(|keycode| super::x11::keycode_down(&reply.keys, *keycode)),
         })
     }
-}
-
-#[cfg(target_os = "linux")]
-fn keycode_down(keys: &[u8; 32], keycode: u8) -> bool {
-    let idx = usize::from(keycode / 8);
-    let bit = keycode % 8;
-    keys.get(idx).is_some_and(|byte| byte & (1_u8 << bit) != 0)
 }
 
 #[cfg(target_os = "linux")]
