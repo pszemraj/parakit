@@ -15,13 +15,15 @@ use std::fs::{self, File};
 use std::io::{self, BufWriter, Write};
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Output, Stdio};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const SAMPLE_INTERVAL: Duration = Duration::from_millis(20);
 const NVIDIA_SAMPLE_INTERVAL: Duration = Duration::from_millis(50);
+const NVIDIA_QUERY_TIMEOUT: Duration = Duration::from_secs(2);
+const NVIDIA_CHECKPOINT_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Copy, Debug, Default, ValueEnum)]
 enum ReloadWarmup {
@@ -134,7 +136,7 @@ impl Profiler {
         let sampled_at = Instant::now();
         let host = host_memory()?;
         self.sampler.observe_checkpoint(&host, sampled_at)?;
-        let peak = self.sampler.snapshot()?;
+        let peak = host_interval_peak(&host, self.sampler.snapshot()?);
         let mut record = json!({
             "pid": std::process::id(),
             "cycle": cycle,
@@ -166,10 +168,8 @@ impl Profiler {
         self.metrics.flush()?;
         println!("{record}");
         io::stdout().flush()?;
+        reset_host_interval_peak()?;
         self.sampler.reset()?;
-        if let Some(sampler) = &self.nvidia_sampler {
-            sampler.reset()?;
-        }
         Ok(())
     }
 
@@ -362,6 +362,27 @@ fn resident_metric(host: &Value) -> Option<(&'static str, u64)> {
     host.get("rss_bytes")
         .and_then(Value::as_u64)
         .map(|value| ("rss_bytes", value))
+}
+
+fn host_interval_peak(host: &Value, mut sampled: Value) -> Value {
+    #[cfg(target_os = "linux")]
+    if let Some(kernel_peak) = host.pointer("/status_bytes/VmHWM").and_then(Value::as_u64) {
+        if let Some(object) = sampled.as_object_mut() {
+            object.insert("rss_bytes".into(), json!(kernel_peak));
+            object.insert("source".into(), json!("linux_VmHWM"));
+        }
+    }
+    sampled
+}
+
+#[cfg(target_os = "linux")]
+fn reset_host_interval_peak() -> Result<()> {
+    fs::write("/proc/self/clear_refs", b"5\n").context("reset Linux VmHWM")
+}
+
+#[cfg(not(target_os = "linux"))]
+fn reset_host_interval_peak() -> Result<()> {
+    Ok(())
 }
 
 #[cfg(target_os = "linux")]
@@ -558,12 +579,45 @@ fn parse_nvidia_process_rows(input: &str, pid: u32) -> (Vec<NvidiaProcessRow>, b
     (rows, complete)
 }
 
+enum TimedOutput {
+    Completed(Output),
+    TimedOut,
+}
+
+fn command_output_with_timeout(
+    command: &mut Command,
+    timeout: Duration,
+) -> io::Result<TimedOutput> {
+    let mut child = command
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    let deadline = Instant::now() + timeout;
+    loop {
+        if child.try_wait()?.is_some() {
+            return child.wait_with_output().map(TimedOutput::Completed);
+        }
+        let now = Instant::now();
+        if now >= deadline {
+            let _ = child.kill();
+            let _ = child.wait_with_output();
+            return Ok(TimedOutput::TimedOut);
+        }
+        thread::sleep((deadline - now).min(Duration::from_millis(10)));
+    }
+}
+
 fn nvidia_memory() -> NvidiaMemory {
-    let output = match Command::new("nvidia-smi")
-        .args(["-q", "-d", "PIDS"])
-        .output()
-    {
-        Ok(output) => output,
+    let mut command = Command::new("nvidia-smi");
+    command.args(["-q", "-d", "PIDS"]);
+    let output = match command_output_with_timeout(&mut command, NVIDIA_QUERY_TIMEOUT) {
+        Ok(TimedOutput::Completed(output)) => output,
+        Ok(TimedOutput::TimedOut) => {
+            return NvidiaMemory::unavailable(Some(format!(
+                "nvidia-smi timed out after {:.0}s",
+                NVIDIA_QUERY_TIMEOUT.as_secs_f64()
+            )));
+        }
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
             return NvidiaMemory::unavailable(None);
         }
@@ -582,76 +636,63 @@ fn nvidia_memory() -> NvidiaMemory {
 }
 
 struct NvidiaPeakSampler {
-    state: Arc<Mutex<PeakState>>,
-    query: Arc<Mutex<()>>,
-    stop: mpsc::Sender<()>,
+    commands: mpsc::Sender<NvidiaSamplerCommand>,
     thread: Option<JoinHandle<()>>,
+}
+
+enum NvidiaSamplerCommand {
+    Checkpoint(mpsc::SyncSender<(Value, Value)>),
+    Stop,
 }
 
 impl NvidiaPeakSampler {
     fn start() -> Self {
-        let state = Arc::new(Mutex::new(PeakState::new(
-            Instant::now(),
-            NVIDIA_SAMPLE_INTERVAL,
-        )));
-        let thread_state = Arc::clone(&state);
-        let query = Arc::new(Mutex::new(()));
-        let thread_query = Arc::clone(&query);
-        let (stop, stopped) = mpsc::channel();
+        let mut state = PeakState::new(Instant::now(), NVIDIA_SAMPLE_INTERVAL);
+        let (commands, requests) = mpsc::channel();
         let thread = thread::spawn(move || loop {
-            let iteration_started = Instant::now();
-            if let Ok(_query) = thread_query.lock() {
-                let sampled_at = Instant::now();
-                let reading = nvidia_memory();
-                if let Some(value) = reading.total_mib() {
-                    if let Ok(mut state) = thread_state.lock() {
+            match requests.recv_timeout(NVIDIA_SAMPLE_INTERVAL) {
+                Ok(NvidiaSamplerCommand::Checkpoint(reply)) => {
+                    let sampled_at = Instant::now();
+                    let reading = nvidia_memory();
+                    if let Some(value) = reading.total_mib() {
+                        state.observe("used_gpu_MiB", value, sampled_at);
+                    }
+                    let snapshot = state.snapshot();
+                    state.reset_at(Instant::now());
+                    let _ = reply.send((reading.to_json(), snapshot));
+                }
+                Ok(NvidiaSamplerCommand::Stop) | Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    break;
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    let sampled_at = Instant::now();
+                    let reading = nvidia_memory();
+                    if let Some(value) = reading.total_mib() {
                         state.observe("used_gpu_MiB", value, sampled_at);
                     }
                 }
             }
-            let remaining = NVIDIA_SAMPLE_INTERVAL.saturating_sub(iteration_started.elapsed());
-            match stopped.recv_timeout(remaining) {
-                Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
-                Err(mpsc::RecvTimeoutError::Timeout) => {}
-            }
         });
         Self {
-            state,
-            query,
-            stop,
+            commands,
             thread: Some(thread),
         }
     }
 
     fn checkpoint(&self) -> Result<(Value, Value)> {
-        let _query = self
-            .query
-            .lock()
-            .map_err(|_| anyhow::anyhow!("NVIDIA query lock poisoned"))?;
-        let sampled_at = Instant::now();
-        let reading = nvidia_memory();
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| anyhow::anyhow!("NVIDIA peak sampler lock poisoned"))?;
-        if let Some(value) = reading.total_mib() {
-            state.observe("used_gpu_MiB", value, sampled_at);
-        }
-        Ok((reading.to_json(), state.snapshot()))
-    }
-
-    fn reset(&self) -> Result<()> {
-        self.state
-            .lock()
-            .map_err(|_| anyhow::anyhow!("NVIDIA peak sampler lock poisoned"))?
-            .reset_at(Instant::now());
-        Ok(())
+        let (reply, result) = mpsc::sync_channel(1);
+        self.commands
+            .send(NvidiaSamplerCommand::Checkpoint(reply))
+            .context("NVIDIA sampler stopped before checkpoint")?;
+        result
+            .recv_timeout(NVIDIA_CHECKPOINT_TIMEOUT)
+            .context("NVIDIA sampler checkpoint timed out")
     }
 }
 
 impl Drop for NvidiaPeakSampler {
     fn drop(&mut self) {
-        let _ = self.stop.send(());
+        let _ = self.commands.send(NvidiaSamplerCommand::Stop);
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
         }
@@ -841,5 +882,45 @@ mod tests {
         assert_eq!(fields["Pss"], 3 * 1024);
         assert!(!fields.contains_key("Threads"));
         assert_eq!(proc_kib_field(input, "VmRSS"), Some(12 * 1024));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_interval_peak_uses_kernel_high_water_mark() {
+        let host = json!({"status_bytes": {"VmRSS": 40, "VmHWM": 120}});
+        let sampled = json!({
+            "rss_bytes": 80,
+            "samples": 4,
+            "interval_seconds": SAMPLE_INTERVAL.as_secs_f64(),
+        });
+
+        let peak = host_interval_peak(&host, sampled);
+
+        assert_eq!(peak["rss_bytes"], 120);
+        assert_eq!(peak["source"], "linux_VmHWM");
+        assert_eq!(peak["samples"], 4);
+    }
+
+    #[test]
+    fn command_timeout_kills_a_slow_child() {
+        const CHILD: &str = "PARAKIT_PROFILE_TIMEOUT_TEST_CHILD";
+        if std::env::var_os(CHILD).is_some() {
+            thread::sleep(Duration::from_millis(250));
+            return;
+        }
+
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        command
+            .args([
+                "--exact",
+                "tests::command_timeout_kills_a_slow_child",
+                "--nocapture",
+            ])
+            .env(CHILD, "1");
+        let started = Instant::now();
+        let outcome = command_output_with_timeout(&mut command, Duration::from_millis(20)).unwrap();
+
+        assert!(matches!(outcome, TimedOutput::TimedOut));
+        assert!(started.elapsed() < Duration::from_secs(1));
     }
 }
