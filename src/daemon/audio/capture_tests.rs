@@ -364,6 +364,36 @@ fn sent_audio_control_start_timeout_does_not_fallback_to_direct_state() {
 }
 
 #[test]
+fn abandoned_drain_start_rolls_back_recording_state() {
+    let ring = HeapRb::<f32>::new(8);
+    let (_producer, mut consumer) = ring.split();
+    let state = Mutex::new(CaptureState::new());
+    let session_epoch = AtomicU64::new(0);
+    let mut pipeline = CapturePipeline::default();
+    let mut input = vec![0.0; DRAIN_SCRATCH_FRAMES];
+    let mut resampled = Vec::new();
+    let (ack_tx, ack_rx) = bounded(1);
+    drop(ack_rx);
+
+    handle_audio_control(
+        DrainControl::Start {
+            epoch: 42,
+            include_pre_roll: false,
+            ack: ack_tx,
+        },
+        &mut consumer,
+        &state,
+        &session_epoch,
+        &mut pipeline,
+        &mut input,
+        &mut resampled,
+    );
+
+    assert_eq!(session_epoch.load(Ordering::Acquire), 0);
+    assert!(state.lock().buffer.is_empty());
+}
+
+#[test]
 fn full_audio_control_queue_does_not_block_or_fallback() {
     let (control_tx, _control_rx) = bounded::<AudioControl>(1);
     let (ack_tx, _ack_rx) = bounded(1);

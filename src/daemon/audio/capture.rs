@@ -969,7 +969,13 @@ fn handle_audio_control(
                 state.lock().begin_recording_without_pre_roll();
             }
             session_epoch.store(epoch, Ordering::Release);
-            let _ = ack.send(());
+            if ack.send(()).is_err() {
+                // The manager timed out waiting for this queued Start. Do not
+                // leave a capture active after its caller abandoned it.
+                session_epoch.store(0, Ordering::Release);
+                let _ = state.lock().take_recording();
+                pipeline.reset_recording();
+            }
         }
         DrainControl::Stop { ack } => {
             while drain_audio_ring(consumer, state, session_epoch, pipeline, input, resampled) {}
