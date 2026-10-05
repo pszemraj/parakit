@@ -94,6 +94,20 @@ pub(crate) fn keycode_for_keysym(conn: &RustConnection, keysym: u32) -> Result<K
 /// This intentionally returns every match: user remaps can place Control or
 /// another modifier on additional physical keys while leaving the original
 /// mapping present.
+///
+/// # Arguments
+///
+/// * `conn` - Active X11 connection.
+/// * `keysyms` - Modifier or other keysyms to locate.
+///
+/// # Returns
+///
+/// Every active keycode that emits at least one requested keysym.
+///
+/// # Errors
+///
+/// Returns an error when the active keyboard mapping cannot be requested or
+/// read.
 pub(crate) fn keycodes_for_keysyms(conn: &RustConnection, keysyms: &[u32]) -> Result<Vec<Keycode>> {
     let setup = conn.setup();
     let min_keycode = setup.min_keycode;
@@ -136,6 +150,20 @@ fn keycodes_for_mapping(
 }
 
 /// Whether `keycode` is pressed in an X11 `QueryKeymap` bitmap.
+///
+/// # Arguments
+///
+/// * `keys` - The 256-bit `QueryKeymap` state.
+/// * `keycode` - X11 keycode to inspect.
+///
+/// # Returns
+///
+/// True when the keycode's bit is set.
+///
+/// # Panics
+///
+/// Does not panic: an X11 keycode fits the fixed bitmap, and the bit offset is
+/// reduced modulo eight before shifting.
 pub(crate) fn keycode_down(keys: &[u8; 32], keycode: Keycode) -> bool {
     let index = usize::from(keycode / 8);
     let bit = keycode % 8;

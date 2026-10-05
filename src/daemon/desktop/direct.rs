@@ -22,14 +22,29 @@ impl DirectTypingFailure {
         }
     }
 
+    /// Number of characters successfully emitted before typing stopped.
+    ///
+    /// # Returns
+    ///
+    /// Completed Unicode scalar values.
     pub(crate) fn typed_chars(&self) -> usize {
         self.typed_chars
     }
 
+    /// Total characters requested for the insertion attempt.
+    ///
+    /// # Returns
+    ///
+    /// Requested Unicode scalar values.
     pub(crate) fn total_chars(&self) -> usize {
         self.total_chars
     }
 
+    /// Human-readable cause reported by the failed guard or backend call.
+    ///
+    /// # Returns
+    ///
+    /// The complete formatted error chain.
     pub(crate) fn reason(&self) -> String {
         format!("{:#}", self.cause)
     }

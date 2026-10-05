@@ -135,6 +135,11 @@ impl StagedClipboard {
     }
 
     /// Most recent clipboard observation error, when a read failed.
+    ///
+    /// # Returns
+    ///
+    /// The latest formatted read failure, or `None` when every observation
+    /// succeeded.
     pub(super) fn observation_error(&self) -> Option<String> {
         self.observation_error.borrow().clone()
     }

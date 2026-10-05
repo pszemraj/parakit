@@ -27,6 +27,16 @@ pub(crate) fn with_stderr_suppressed<T>(f: impl FnOnce() -> T) -> T {
 /// Redirection is process-global, so suppression and forwarding filters share
 /// one lock. The filter receives the pipe reader and a duplicate of the real
 /// stderr descriptor. If setup fails, `f` still runs with stderr unchanged.
+///
+/// # Arguments
+///
+/// * `f` - Closure to execute while stderr is redirected.
+/// * `filter` - Background pipe consumer that decides which bytes to forward.
+///
+/// # Returns
+///
+/// The closure return value, whether redirection succeeds or falls back to the
+/// unchanged stderr stream.
 pub(crate) fn with_stderr_filtered<T>(
     f: impl FnOnce() -> T,
     filter: impl FnOnce(Box<dyn Read + Send>, Box<dyn Write + Send>) + Send + 'static,
