@@ -300,7 +300,13 @@ fn paste_transcript(
                 return Ok(InsertReport::from_paste(InsertOutcome::Blocked, report));
             }
             crate::daemon::inject::PasteOutcome::ClipboardChanged => {
-                log.warn("clipboard changed or could not be verified; current clipboard preserved");
+                if let Some(diagnostic) = report.diagnostic.as_deref() {
+                    log.warn(format!(
+                        "clipboard could not be verified ({diagnostic}); current clipboard preserved"
+                    ));
+                } else {
+                    log.warn("clipboard changed; current clipboard preserved");
+                }
                 notifier.paste_blocked(PasteBlockReason::ClipboardChanged.notice());
                 return Ok(InsertReport::from_paste(InsertOutcome::Blocked, report));
             }
@@ -374,8 +380,14 @@ fn warn_if_clipboard_restore_failed(
     keep_transcript_clipboard: bool,
     report: &crate::daemon::inject::PasteReport,
 ) {
+    if let Some(diagnostic) = report.diagnostic.as_deref() {
+        log.warn(format!(
+            "clipboard could not be verified after paste ({diagnostic}); current clipboard preserved"
+        ));
+    }
     if report.telemetry.acknowledgement_ms.is_some()
         && report.telemetry.clipboard_restored.is_none()
+        && report.diagnostic.is_none()
     {
         log.verbose("parakit: clipboard restoration skipped because contents changed or could not be verified; current clipboard preserved");
     }
@@ -417,10 +429,18 @@ fn copy_or_block_transcript(
             notifier.paste_blocked(reason.notice());
             Ok(InsertReport::from_stage(InsertOutcome::Blocked, true))
         }
-        crate::daemon::inject::StageOutcome::ClipboardChanged => {
-            log.warn("clipboard changed or could not be verified; current clipboard preserved");
+        crate::daemon::inject::StageOutcome::ClipboardChanged(diagnostic) => {
+            if let Some(diagnostic) = diagnostic.as_deref() {
+                log.warn(format!(
+                    "clipboard could not be verified ({diagnostic}); current clipboard preserved"
+                ));
+            } else {
+                log.warn("clipboard changed; current clipboard preserved");
+            }
             notifier.paste_blocked(PasteBlockReason::ClipboardChanged.notice());
-            Ok(InsertReport::placeholder(InsertOutcome::Blocked, false))
+            let mut report = InsertReport::placeholder(InsertOutcome::Blocked, false);
+            report.failure_reason = diagnostic;
+            Ok(report)
         }
     }
 }
@@ -712,7 +732,7 @@ impl InsertReport {
             outcome,
             telemetry: report.telemetry,
             typed_chars: None,
-            failure_reason: None,
+            failure_reason: report.diagnostic,
         }
     }
 

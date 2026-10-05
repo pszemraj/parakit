@@ -174,12 +174,15 @@ impl InsertionTelemetry {
 }
 
 /// Outcome of a guarded paste attempt plus its insertion telemetry.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct PasteReport {
     /// Coarse guarded-paste result.
     pub(crate) outcome: PasteOutcome,
     /// Acknowledgement and clipboard details shared with the worker report.
     pub(crate) telemetry: InsertionTelemetry,
+    /// Clipboard observation error retained for diagnostics on a safe,
+    /// non-destructive outcome.
+    pub(crate) diagnostic: Option<String>,
 }
 
 impl PasteReport {
@@ -192,6 +195,15 @@ impl PasteReport {
         Self {
             outcome,
             telemetry: InsertionTelemetry::not_applicable(paste_event_posted, clipboard_restored),
+            diagnostic: None,
+        }
+    }
+
+    fn clipboard_changed(diagnostic: Option<String>) -> Self {
+        Self {
+            outcome: PasteOutcome::ClipboardChanged,
+            telemetry: InsertionTelemetry::not_applicable(false, None),
+            diagnostic,
         }
     }
 }
@@ -206,21 +218,19 @@ fn report_from_stage_outcome(outcome: StageOutcome) -> PasteReport {
     match outcome {
         StageOutcome::CopiedOnly => PasteReport::new(PasteOutcome::CopiedOnly, false, Some(false)),
         StageOutcome::Blocked => PasteReport::new(PasteOutcome::Blocked, false, Some(true)),
-        StageOutcome::ClipboardChanged => {
-            PasteReport::new(PasteOutcome::ClipboardChanged, false, None)
-        }
+        StageOutcome::ClipboardChanged(diagnostic) => PasteReport::clipboard_changed(diagnostic),
     }
 }
 
 /// Result of staging clipboard text without sending paste or type input.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum StageOutcome {
     /// The transcript was left on the clipboard.
     CopiedOnly,
     /// The previous clipboard policy was applied after staging.
     Blocked,
     /// Another clipboard value was preserved instead of restoring or copying.
-    ClipboardChanged,
+    ClipboardChanged(Option<String>),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1225,11 +1235,7 @@ where
     // may block. A changed or unreadable clipboard must never be pasted or
     // overwritten by error cleanup/fallback.
     if !previous.is_current(clipboard) {
-        return Ok(PasteReport::new(
-            PasteOutcome::ClipboardChanged,
-            false,
-            None,
-        ));
+        return Ok(PasteReport::clipboard_changed(previous.observation_error()));
     }
 
     for attempt in 0..2 {
@@ -1253,11 +1259,9 @@ where
                     clipboard_policy,
                 );
                 return match restore_result {
-                    Ok(ClipboardRestore::Changed) => Ok(PasteReport::new(
-                        PasteOutcome::ClipboardChanged,
-                        false,
-                        None,
-                    )),
+                    Ok(ClipboardRestore::Changed(diagnostic)) => {
+                        Ok(PasteReport::clipboard_changed(diagnostic))
+                    }
                     Ok(_) => Err(err),
                     Err(restore_err) => Err(err.context(format!("{restore_err:#}"))),
                 };
@@ -1271,11 +1275,7 @@ where
             // it back once, then recheck focus before sending any input.
             continue;
         }
-        return Ok(PasteReport::new(
-            PasteOutcome::ClipboardChanged,
-            false,
-            None,
-        ));
+        return Ok(PasteReport::clipboard_changed(previous.observation_error()));
     }
     let paste_result = paste();
     match paste_result {
@@ -1295,11 +1295,7 @@ where
             // shortcut or release a held push-to-talk chord. No input was sent,
             // so leave the staged transcript on the clipboard for recovery.
             if !previous.is_current(clipboard) {
-                return Ok(PasteReport::new(
-                    PasteOutcome::ClipboardChanged,
-                    false,
-                    None,
-                ));
+                return Ok(PasteReport::clipboard_changed(previous.observation_error()));
             }
             Ok(PasteReport::new(
                 PasteOutcome::UnsafeModifiers,
@@ -1316,11 +1312,9 @@ where
                 clipboard_policy,
             );
             match restore_result {
-                Ok(ClipboardRestore::Changed) => Ok(PasteReport::new(
-                    PasteOutcome::ClipboardChanged,
-                    false,
-                    None,
-                )),
+                Ok(ClipboardRestore::Changed(diagnostic)) => {
+                    Ok(PasteReport::clipboard_changed(diagnostic))
+                }
                 Ok(_) => Err(paste_err),
                 Err(restore_err) => Err(paste_err.context(format!("{restore_err:#}"))),
             }
@@ -1389,22 +1383,24 @@ where
     );
 
     match confirmation {
-        PasteConfirmation::Confirmed { elapsed, kind } => PasteReport {
-            outcome: PasteOutcome::Pasted,
-            telemetry: InsertionTelemetry::acknowledged(
-                kind,
-                elapsed,
-                clipboard_restored_after_paste(clipboard, previous, clipboard_policy),
-            ),
-        },
-        PasteConfirmation::Unverified { elapsed, kind } => PasteReport {
-            outcome: PasteOutcome::PastedUnverified,
-            telemetry: InsertionTelemetry::acknowledged(
-                kind,
-                elapsed,
-                clipboard_restored_after_paste(clipboard, previous, clipboard_policy),
-            ),
-        },
+        PasteConfirmation::Confirmed { elapsed, kind } => {
+            let (clipboard_restored, diagnostic) =
+                clipboard_restored_after_paste(clipboard, previous, clipboard_policy);
+            PasteReport {
+                outcome: PasteOutcome::Pasted,
+                telemetry: InsertionTelemetry::acknowledged(kind, elapsed, clipboard_restored),
+                diagnostic,
+            }
+        }
+        PasteConfirmation::Unverified { elapsed, kind } => {
+            let (clipboard_restored, diagnostic) =
+                clipboard_restored_after_paste(clipboard, previous, clipboard_policy);
+            PasteReport {
+                outcome: PasteOutcome::PastedUnverified,
+                telemetry: InsertionTelemetry::acknowledged(kind, elapsed, clipboard_restored),
+                diagnostic,
+            }
+        }
         PasteConfirmation::UnverifiedFocusLost { elapsed, kind } => {
             // The chord was posted into a verified-focused target and very
             // likely landed, but the target became unobservable (app switch,
@@ -1414,13 +1410,15 @@ where
             // so `previous` is dropped here without being restored: the
             // transcript is the only remaining copy if the paste did not
             // land after all.
+            let current = previous.is_current(clipboard);
             PasteReport {
                 outcome: PasteOutcome::PastedUnverified,
                 telemetry: InsertionTelemetry::acknowledged(
                     kind,
                     elapsed,
-                    previous.is_current(clipboard).then_some(false),
+                    current.then_some(false),
                 ),
+                diagnostic: previous.observation_error(),
             }
         }
         PasteConfirmation::NoEvidence { elapsed, kind } => {
@@ -1443,6 +1441,7 @@ where
                     elapsed,
                     current.then_some(false),
                 ),
+                diagnostic: previous.observation_error(),
             }
         }
     }
@@ -1454,17 +1453,16 @@ where
 ///
 /// # Returns
 ///
-/// `Some(true)` for restoration, `Some(false)` for retention or a failed
-/// restore, and `None` when a competing or unreadable clipboard was preserved.
+/// The restore telemetry plus a retained clipboard-observation diagnostic.
 fn clipboard_restored_after_paste<C: ClipboardStore>(
     clipboard: &mut C,
     previous: StagedClipboard,
     clipboard_policy: ClipboardPolicy,
-) -> Option<bool> {
+) -> (Option<bool>, Option<String>) {
     match previous.restore(clipboard, clipboard_policy) {
-        Ok(ClipboardRestore::Restored) => Some(true),
-        Ok(ClipboardRestore::KeptTranscript) | Err(_) => Some(false),
-        Ok(ClipboardRestore::Changed) => None,
+        Ok(ClipboardRestore::Restored) => (Some(true), None),
+        Ok(ClipboardRestore::KeptTranscript) | Err(_) => (Some(false), None),
+        Ok(ClipboardRestore::Changed(diagnostic)) => (None, diagnostic),
     }
 }
 
@@ -1500,7 +1498,7 @@ where
         clipboard_policy,
     )?;
     Ok(match restored {
-        ClipboardRestore::Changed => StageOutcome::ClipboardChanged,
+        ClipboardRestore::Changed(diagnostic) => StageOutcome::ClipboardChanged(diagnostic),
         _ => StageOutcome::Blocked,
     })
 }
@@ -1528,7 +1526,7 @@ where
         ClipboardRestore::KeptTranscript => {
             PasteReport::new(PasteOutcome::CopiedOnly, false, Some(false))
         }
-        ClipboardRestore::Changed => PasteReport::new(PasteOutcome::ClipboardChanged, false, None),
+        ClipboardRestore::Changed(diagnostic) => PasteReport::clipboard_changed(diagnostic),
     })
 }
 

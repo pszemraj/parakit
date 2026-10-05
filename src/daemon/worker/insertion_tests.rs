@@ -279,3 +279,18 @@ fn no_evidence_with_competing_clipboard_alerts_without_claiming_a_block() {
     assert_eq!(report.outcome.log_label(), "pasted_unverified");
     assert!(report.needs_alert());
 }
+
+#[test]
+fn clipboard_observation_failure_reaches_worker_diagnostics() {
+    let paste_report = crate::daemon::inject::PasteReport {
+        outcome: crate::daemon::inject::PasteOutcome::ClipboardChanged,
+        telemetry: InsertionTelemetry::not_applicable(false, None),
+        diagnostic: Some("could not read clipboard text: unavailable".to_string()),
+    };
+    let report = InsertReport::from_paste(InsertOutcome::Blocked, paste_report);
+    assert_eq!(
+        report.failure_reason.as_deref(),
+        Some("could not read clipboard text: unavailable")
+    );
+    assert!(report.needs_alert());
+}

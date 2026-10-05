@@ -67,7 +67,7 @@ Fields, in serialization order:
 | `acknowledgement_kind` | string | `ax_confirmed`, `unverified_timeout`, `unverified_no_baseline`, `unverified_short_transcript`, `unverified_focus_lost`, `no_evidence`, or `not_applicable`. |
 | `acknowledgement_ms` | integer or null | Milliseconds spent waiting for acknowledgement; `null` when no wait occurred. |
 | `clipboard_restored` | boolean or null | `true` when supported prior contents were restored or an unsupported payload's staged replacement was cleared; `false` for retained transcript text or a failed restore; `null` when unknown or inapplicable, including a competing or unreadable clipboard left untouched. |
-| `failure_reason` | string or null | Error or degraded-outcome detail. A blocked partial direct insertion records how many characters completed before typing stopped. |
+| `failure_reason` | string or null | Error or degraded-outcome detail. A blocked partial direct insertion records how many characters completed before typing stopped; an unreadable clipboard records the failed observation. |
 
 No field on the insertion line is omitted; absent values serialize as `null`. An `error` record is assembled without a completed insertion report, so `clipboard_restored` is `null` even though the clipboard may have been touched, and `paste_event_posted` is `false` whether or not an event was attempted.
 

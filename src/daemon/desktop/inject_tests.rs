@@ -41,6 +41,7 @@ struct MockClipboard {
     generation: u64,
     pending_external_write: Rc<RefCell<Option<MockClipboardContent>>>,
     stamp_unavailable: Rc<Cell<bool>>,
+    text_unavailable: Rc<Cell<bool>>,
     guard_read: bool,
     after_guard_read: Option<MockClipboardContent>,
 }
@@ -56,6 +57,7 @@ impl MockClipboard {
             generation: 1,
             pending_external_write: Rc::new(RefCell::new(None)),
             stamp_unavailable: Rc::new(Cell::new(false)),
+            text_unavailable: Rc::new(Cell::new(false)),
             guard_read: false,
             after_guard_read: None,
         }
@@ -164,6 +166,9 @@ impl ClipboardStore for MockClipboard {
 
     fn get_text(&mut self) -> Result<String> {
         self.apply_external_write();
+        if self.text_unavailable.get() {
+            anyhow::bail!("clipboard text unavailable");
+        }
         self.events.borrow_mut().push(
             if self.guard_read {
                 "guard-read"
@@ -1784,7 +1789,7 @@ fn clipboard_manager_rich_handoffs_with_identical_text_preserve_files_and_images
             assert!(!staged.is_current(&mut clipboard));
             assert!(matches!(
                 staged.restore(&mut clipboard, policy).unwrap(),
-                ClipboardRestore::Changed
+                ClipboardRestore::Changed(_)
             ));
             assert_eq!(clipboard.content, competing);
             assert_eq!(clipboard.generation, 2);
@@ -1810,7 +1815,7 @@ fn unchanged_clipboard_owner_with_changed_text_is_not_current() {
         staged
             .restore(&mut clipboard, ClipboardPolicy::RestorePrevious)
             .unwrap(),
-        ClipboardRestore::Changed
+        ClipboardRestore::Changed(_)
     ));
     assert_eq!(clipboard.text(), Some("new copy"));
 }
@@ -1972,7 +1977,7 @@ fn stage_only_restore_wait_preserves_new_clipboard() {
         ClipboardPolicy::RestorePrevious,
     )
     .expect("clipboard competition is recoverable");
-    assert!(matches!(outcome, StageOutcome::ClipboardChanged));
+    assert!(matches!(outcome, StageOutcome::ClipboardChanged(_)));
     assert_eq!(clipboard.content, competing);
 }
 
@@ -2006,7 +2011,45 @@ fn unreadable_clipboard_stamp_fails_closed_before_chord() {
         assert_eq!(report.telemetry.clipboard_restored, None);
         assert_eq!(clipboard.text(), Some("dictated text"));
         assert!(!report.telemetry.paste_event_posted);
+        assert!(
+            report
+                .diagnostic
+                .as_deref()
+                .is_some_and(|diagnostic| diagnostic.contains("clipboard stamp unavailable")),
+            "missing stamp failure for fail_capture={fail_capture}: {:?}",
+            report.diagnostic
+        );
     }
+}
+
+#[test]
+fn unreadable_clipboard_text_preserves_the_cause_before_chord() {
+    let mut clipboard = MockClipboard::new("old clipboard");
+    clipboard.text_unavailable.set(true);
+    let report = paste_with_clipboard_swap_guarded(
+        &mut clipboard,
+        "dictated text",
+        PasteMode::Standard,
+        || true,
+        || panic!("unreadable text must prevent dispatch"),
+        Duration::ZERO,
+        restore_plan(&quiet_gate()),
+        ClipboardPolicy::RestorePrevious,
+        None,
+        || Ok(true),
+    )
+    .expect("failed observation must preserve clipboard rather than trigger fallback");
+    assert_eq!(report.outcome, PasteOutcome::ClipboardChanged);
+    assert_eq!(report.telemetry.clipboard_restored, None);
+    assert_eq!(clipboard.text(), Some("dictated text"));
+    assert!(
+        report
+            .diagnostic
+            .as_deref()
+            .is_some_and(|diagnostic| diagnostic.contains("clipboard text unavailable")),
+        "missing text-read failure: {:?}",
+        report.diagnostic
+    );
 }
 
 #[test]
@@ -2056,4 +2099,12 @@ fn unreadable_clipboard_stamp_after_confirmation_prevents_restoration() {
     assert_eq!(report.outcome, PasteOutcome::Pasted);
     assert_eq!(report.telemetry.clipboard_restored, None);
     assert_eq!(clipboard.text(), Some("dictated text"));
+    assert!(
+        report
+            .diagnostic
+            .as_deref()
+            .is_some_and(|diagnostic| diagnostic.contains("clipboard stamp unavailable")),
+        "missing post-confirmation stamp failure: {:?}",
+        report.diagnostic
+    );
 }

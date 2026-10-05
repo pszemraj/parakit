@@ -8,20 +8,21 @@ use super::{restore_or_clear_clipboard, ClipboardPolicy, ClipboardSnapshot, Clip
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use anyhow::Context;
 use anyhow::Result;
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 
 /// Clipboard state displaced by a transcript, paired with its staged value.
 pub(super) struct StagedClipboard {
     previous: ClipboardSnapshot,
     transcript: String,
     stamp: Cell<Option<u64>>,
+    observation_error: RefCell<Option<String>>,
 }
 
 /// Whether the previous clipboard was restored, retained, or superseded.
 pub(super) enum ClipboardRestore {
     Restored,
     KeptTranscript,
-    Changed,
+    Changed(Option<String>),
 }
 
 impl StagedClipboard {
@@ -41,10 +42,18 @@ impl StagedClipboard {
         previous: ClipboardSnapshot,
         transcript: &str,
     ) -> Self {
+        let (stamp, observation_error) = match clipboard.change_stamp() {
+            Ok(stamp) => (Some(stamp), None),
+            Err(err) => (
+                None,
+                Some(format!("could not capture clipboard stamp: {err:#}")),
+            ),
+        };
         Self {
             previous,
             transcript: transcript.to_owned(),
-            stamp: Cell::new(clipboard.change_stamp().ok()),
+            stamp: Cell::new(stamp),
+            observation_error: RefCell::new(observation_error),
         }
     }
 
@@ -58,8 +67,12 @@ impl StagedClipboard {
     ///
     /// Whether the staged text and its observed owner/generation still match.
     pub(super) fn is_current<C: ClipboardStore>(&self, clipboard: &mut C) -> bool {
-        let Ok(before) = clipboard.change_stamp() else {
-            return false;
+        let before = match clipboard.change_stamp() {
+            Ok(stamp) => stamp,
+            Err(err) => {
+                self.record_observation_error("could not read clipboard stamp", err);
+                return false;
+            }
         };
         let Some(staged) = self.stamp.get() else {
             return false;
@@ -67,10 +80,14 @@ impl StagedClipboard {
         if before != staged && !cfg!(target_os = "linux") {
             return false;
         }
-        if !clipboard
-            .get_text()
-            .is_ok_and(|text| text == self.transcript)
-        {
+        let current_text = match clipboard.get_text() {
+            Ok(text) => text,
+            Err(err) => {
+                self.record_observation_error("could not read clipboard text", err);
+                return false;
+            }
+        };
+        if current_text != self.transcript {
             return false;
         }
         // X11 managers may acquire the selection while retaining our text.
@@ -83,8 +100,13 @@ impl StagedClipboard {
         {
             return false;
         }
-        if clipboard.change_stamp().ok() != Some(before) {
-            return false;
+        match clipboard.change_stamp() {
+            Ok(after) if after == before => {}
+            Ok(_) => return false,
+            Err(err) => {
+                self.record_observation_error("could not recheck clipboard stamp", err);
+                return false;
+            }
         }
         self.stamp.set(Some(before));
         true
@@ -100,7 +122,25 @@ impl StagedClipboard {
     ///
     /// Whether the stamp remains readable and equal to the staged stamp.
     pub(super) fn stamp_is_current<C: ClipboardStore>(&self, clipboard: &mut C) -> bool {
-        self.stamp.get().is_some() && clipboard.change_stamp().ok() == self.stamp.get()
+        let Some(staged) = self.stamp.get() else {
+            return false;
+        };
+        match clipboard.change_stamp() {
+            Ok(current) => current == staged,
+            Err(err) => {
+                self.record_observation_error("could not recheck clipboard stamp", err);
+                false
+            }
+        }
+    }
+
+    /// Most recent clipboard observation error, when a read failed.
+    pub(super) fn observation_error(&self) -> Option<String> {
+        self.observation_error.borrow().clone()
+    }
+
+    fn record_observation_error(&self, context: &str, err: anyhow::Error) {
+        *self.observation_error.borrow_mut() = Some(format!("{context}: {err:#}"));
     }
 
     /// Restore only while the clipboard still matches the staged transcript.
@@ -123,7 +163,7 @@ impl StagedClipboard {
         policy: ClipboardPolicy,
     ) -> Result<ClipboardRestore> {
         if !self.is_current(clipboard) {
-            return Ok(ClipboardRestore::Changed);
+            return Ok(ClipboardRestore::Changed(self.observation_error()));
         }
         restore_or_clear_clipboard(clipboard, self.previous, policy)?;
         Ok(match policy {
