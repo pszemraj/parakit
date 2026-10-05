@@ -97,6 +97,9 @@ pub(super) fn run_ptt_audio_simulation(
                 completion: Some(done_tx),
             })
             .context("send simulated PTT stop")?;
+            // Inference has no cancellation boundary. A receive timeout would
+            // abandon the acknowledgement while the same worker and native
+            // session kept running, so wait for completion or disconnection.
             done_rx
                 .recv()
                 .context("worker disconnected before dictation completion")?
