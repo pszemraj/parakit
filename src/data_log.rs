@@ -94,7 +94,7 @@ pub struct InsertionLogFields<'a> {
     pub acknowledgement_ms: Option<u128>,
     /// Whether the previous clipboard contents were restored after insertion.
     pub clipboard_restored: Option<bool>,
-    /// Human-readable failure reason when insertion errored.
+    /// Human-readable error or degraded-outcome diagnostic.
     pub failure_reason: Option<&'a str>,
 }
 

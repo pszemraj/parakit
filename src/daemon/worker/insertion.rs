@@ -243,7 +243,13 @@ fn paste_transcript(
             mode,
             clipboard_policy(keep_transcript_clipboard),
             focus.snapshot,
-            || Ok(focus_allows_insertion(focus, log)),
+            || {
+                if mode == PasteMode::Direct {
+                    focus_allows_direct_insertion(focus, log)
+                } else {
+                    Ok(focus_allows_insertion(focus, log))
+                }
+            },
         );
     let paste_error = match paste_result {
         Ok(report) => match report.outcome {
@@ -296,6 +302,29 @@ fn paste_transcript(
         },
         Err(err) => err,
     };
+
+    if let Some(failure) = paste_error.downcast_ref::<crate::daemon::inject::DirectTypingFailure>()
+    {
+        let reason = failure.reason();
+        log.warn(format!(
+            "direct insertion stopped after {} of {} characters: {reason}",
+            failure.typed_chars(),
+            failure.total_chars()
+        ));
+        notifier.paste_blocked(format!(
+            "Direct typing stopped after {} of {} characters. Check the target before using copy-last; the full transcript remains in history.",
+            failure.typed_chars(),
+            failure.total_chars()
+        ));
+        return Ok(InsertReport::direct_failure(
+            failure.typed_chars(),
+            format!(
+                "direct typing stopped after {} of {} characters: {reason}",
+                failure.typed_chars(),
+                failure.total_chars()
+            ),
+        ));
+    }
 
     if paste_failure_uses_clipboard_fallback(mode, &paste_error, keep_transcript_clipboard) {
         with_injector(injector, |injector| injector.copy_text(text)).map_err(|copy_error| {
@@ -461,6 +490,26 @@ fn focus_allows_insertion(focus: FocusCheck<'_>, log: &Logger) -> bool {
     };
 
     focus_verification_allows_insertion(snapshot.verify_current(), focus.verification, log)
+}
+
+/// Recheck Linux direct-mode focus without treating an observation failure as
+/// permission to continue posting characters.
+fn focus_allows_direct_insertion(focus: FocusCheck<'_>, log: &Logger) -> Result<bool> {
+    let Some(snapshot) = focus.snapshot else {
+        focus.verification.set("unavailable");
+        log.verbose("recording focus was unavailable; direct typing has no focus baseline");
+        return Ok(true);
+    };
+
+    let verification = snapshot.verify_current().map_err(|err| {
+        focus.verification.set("not_applicable");
+        err.context("could not verify recording focus during direct typing")
+    })?;
+    Ok(focus_verification_allows_insertion(
+        Ok(verification),
+        focus.verification,
+        log,
+    ))
 }
 
 fn focus_verification_allows_insertion(
@@ -638,12 +687,16 @@ impl InsertOutcome {
 /// needed for [`log_insertion_outcome`], replacing the pre-acknowledgement
 /// approximations (`paste_event_posted` inferred from the outcome label,
 /// `clipboard_restored` always `None`).
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct InsertReport {
     /// Coarse worker-level insertion result.
     pub(crate) outcome: InsertOutcome,
     /// Acknowledgement and clipboard details from the insertion path.
     pub(crate) telemetry: InsertionTelemetry,
+    /// Characters whose direct-typing backend calls completed before a block.
+    pub(crate) typed_chars: Option<usize>,
+    /// Diagnostic for a completed but degraded insertion outcome.
+    pub(crate) failure_reason: Option<String>,
 }
 
 impl InsertReport {
@@ -653,6 +706,8 @@ impl InsertReport {
         Self {
             outcome,
             telemetry: report.telemetry,
+            typed_chars: None,
+            failure_reason: None,
         }
     }
 
@@ -662,6 +717,8 @@ impl InsertReport {
         Self {
             outcome,
             telemetry: InsertionTelemetry::not_applicable(false, Some(clipboard_restored)),
+            typed_chars: None,
+            failure_reason: None,
         }
     }
 
@@ -671,6 +728,17 @@ impl InsertReport {
         Self {
             outcome,
             telemetry: InsertionTelemetry::not_applicable(paste_event_posted, None),
+            typed_chars: None,
+            failure_reason: None,
+        }
+    }
+
+    fn direct_failure(typed_chars: usize, failure_reason: String) -> Self {
+        Self {
+            outcome: InsertOutcome::Blocked,
+            telemetry: InsertionTelemetry::not_applicable(typed_chars > 0, None),
+            typed_chars: Some(typed_chars),
+            failure_reason: Some(failure_reason),
         }
     }
 

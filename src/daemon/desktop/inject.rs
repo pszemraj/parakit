@@ -55,6 +55,7 @@ mod inject_smoke;
 #[cfg(target_os = "linux")]
 #[path = "direct.rs"]
 mod direct;
+pub(crate) use direct::DirectTypingFailure;
 
 /// Error label used when paste succeeded but previous clipboard restore failed.
 pub(crate) const CLIPBOARD_RESTORE_ERROR: &str = "could not restore previous clipboard contents";
@@ -862,7 +863,8 @@ impl Injector {
         if mode == PasteMode::Direct {
             #[cfg(target_os = "linux")]
             {
-                self.type_linux_text_guarded(text, before_chord)?;
+                self.type_linux_text_guarded(text, before_chord)
+                    .map_err(anyhow::Error::new)?;
                 return Ok(PasteReport::new(PasteOutcome::Pasted, true, None));
             }
             #[cfg(not(target_os = "linux"))]
@@ -1014,7 +1016,7 @@ impl Injector {
         &mut self,
         text: &str,
         before_character: impl FnMut() -> Result<bool>,
-    ) -> Result<()> {
+    ) -> std::result::Result<usize, DirectTypingFailure> {
         let input = RefCell::new(self);
         direct::type_text_guarded(
             text,

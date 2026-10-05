@@ -189,6 +189,8 @@ fn needs_alert_matches_outcome_and_paste_event_posted() {
         InsertReport {
             outcome,
             telemetry: InsertionTelemetry::not_applicable(paste_event_posted, None),
+            typed_chars: None,
+            failure_reason: None,
         }
     }
 
@@ -245,4 +247,18 @@ fn needs_alert_matches_outcome_and_paste_event_posted() {
         failures.len(),
         failures.join("\n")
     );
+}
+
+#[test]
+fn direct_typing_failure_reports_progress_and_alerts() {
+    let report = InsertReport::direct_failure(2, "focus changed".to_string());
+    assert_eq!(report.outcome, InsertOutcome::Blocked);
+    assert_eq!(report.typed_chars, Some(2));
+    assert_eq!(report.failure_reason.as_deref(), Some("focus changed"));
+    assert!(report.telemetry.paste_event_posted);
+    assert!(report.needs_alert());
+
+    let before_input = InsertReport::direct_failure(0, "modifier held".to_string());
+    assert!(!before_input.telemetry.paste_event_posted);
+    assert!(before_input.needs_alert());
 }

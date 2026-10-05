@@ -388,7 +388,7 @@ where
                                     outcome.log_label(),
                                     focus_at_start.as_deref(),
                                     transcript_chars,
-                                    None,
+                                    report.failure_reason.clone(),
                                     focus_verification.get(),
                                     Some(&report),
                                 );

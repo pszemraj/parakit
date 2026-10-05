@@ -1,7 +1,51 @@
 //! Linux direct typing guards shared with focused regression tests.
 
-use anyhow::{bail, Result};
+use anyhow::{anyhow, Result};
+use std::error::Error;
+use std::fmt;
 use std::time::Duration;
+
+/// Direct typing stopped after posting only part of the requested text.
+#[derive(Debug)]
+pub(crate) struct DirectTypingFailure {
+    typed_chars: usize,
+    total_chars: usize,
+    cause: anyhow::Error,
+}
+
+impl DirectTypingFailure {
+    fn new(typed_chars: usize, total_chars: usize, cause: anyhow::Error) -> Self {
+        Self {
+            typed_chars,
+            total_chars,
+            cause,
+        }
+    }
+
+    pub(crate) fn typed_chars(&self) -> usize {
+        self.typed_chars
+    }
+
+    pub(crate) fn total_chars(&self) -> usize {
+        self.total_chars
+    }
+
+    pub(crate) fn reason(&self) -> String {
+        format!("{:#}", self.cause)
+    }
+}
+
+impl fmt::Display for DirectTypingFailure {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "direct insertion stopped after {} of {} characters: {:#}",
+            self.typed_chars, self.total_chars, self.cause
+        )
+    }
+}
+
+impl Error for DirectTypingFailure {}
 
 /// Type printable text after waiting for modifiers, then recheck each character.
 ///
@@ -15,7 +59,7 @@ use std::time::Duration;
 ///
 /// # Returns
 ///
-/// Success after every character has been posted.
+/// The number of characters posted after every character succeeds.
 ///
 /// # Errors
 ///
@@ -27,23 +71,51 @@ pub(super) fn type_text_guarded(
     mut modifiers_held: impl FnMut() -> Result<bool>,
     mut before_character: impl FnMut() -> Result<bool>,
     mut type_character: impl FnMut(char) -> Result<()>,
-) -> Result<()> {
+) -> std::result::Result<usize, DirectTypingFailure> {
+    let total_chars = text.chars().count();
     if text.chars().any(char::is_control) {
-        bail!("Linux direct insertion cannot type control characters, including tabs and newlines");
+        return Err(DirectTypingFailure::new(
+            0,
+            total_chars,
+            anyhow!(
+                "Linux direct insertion cannot type control characters, including tabs and newlines"
+            ),
+        ));
     }
-    if !super::wait_for_x11_modifier_release(timeout, &mut modifiers_held)? {
-        bail!("direct insertion blocked because physical modifiers remained held");
+    let modifiers_released = super::wait_for_x11_modifier_release(timeout, &mut modifiers_held)
+        .map_err(|cause| DirectTypingFailure::new(0, total_chars, cause))?;
+    if !modifiers_released {
+        return Err(DirectTypingFailure::new(
+            0,
+            total_chars,
+            anyhow!("direct insertion blocked because physical modifiers remained held"),
+        ));
     }
+    let mut typed_chars = 0;
     for character in text.chars() {
-        if !before_character()? {
-            bail!("direct insertion stopped because focus changed");
+        let focus_matches = before_character()
+            .map_err(|cause| DirectTypingFailure::new(typed_chars, total_chars, cause))?;
+        if !focus_matches {
+            return Err(DirectTypingFailure::new(
+                typed_chars,
+                total_chars,
+                anyhow!("direct insertion stopped because focus changed"),
+            ));
         }
-        if modifiers_held()? {
-            bail!("direct insertion stopped because a physical modifier is held");
+        let modifier_held = modifiers_held()
+            .map_err(|cause| DirectTypingFailure::new(typed_chars, total_chars, cause))?;
+        if modifier_held {
+            return Err(DirectTypingFailure::new(
+                typed_chars,
+                total_chars,
+                anyhow!("direct insertion stopped because a physical modifier is held"),
+            ));
         }
-        type_character(character)?;
+        type_character(character)
+            .map_err(|cause| DirectTypingFailure::new(typed_chars, total_chars, cause))?;
+        typed_chars += 1;
     }
-    Ok(())
+    Ok(typed_chars)
 }
 
 #[cfg(test)]
@@ -82,7 +154,7 @@ mod tests {
         let result = type_text_guarded(
             "a",
             Duration::ZERO,
-            || bail!("X11 query failed"),
+            || anyhow::bail!("X11 query failed"),
             || panic!("unreadable modifiers must block"),
             |_| panic!("unreadable modifiers must not post input"),
         );
@@ -94,7 +166,7 @@ mod tests {
         let ready = Cell::new(false);
         let mut polls = 0;
         let mut typed = String::new();
-        type_text_guarded(
+        let typed_chars = type_text_guarded(
             "é日🚀",
             Duration::from_millis(100),
             || {
@@ -114,6 +186,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(typed, "é日🚀");
+        assert_eq!(typed_chars, 3);
     }
 
     #[test]
@@ -130,7 +203,9 @@ mod tests {
                 Ok(())
             },
         );
-        assert!(result.is_err());
+        let failure = result.unwrap_err();
+        assert_eq!(failure.typed_chars(), 1);
+        assert_eq!(failure.total_chars(), 2);
         assert_eq!(typed, "a");
     }
 
@@ -148,7 +223,9 @@ mod tests {
                 Ok(())
             },
         );
-        assert!(result.is_err());
+        let failure = result.unwrap_err();
+        assert_eq!(failure.typed_chars(), 1);
+        assert_eq!(failure.total_chars(), 2);
         assert_eq!(typed, "a");
     }
 
@@ -162,7 +239,7 @@ mod tests {
             || {
                 queries += 1;
                 if queries == 3 {
-                    bail!("X11 query failed");
+                    anyhow::bail!("X11 query failed");
                 }
                 Ok(false)
             },
@@ -172,7 +249,46 @@ mod tests {
                 Ok(())
             },
         );
-        assert!(result.unwrap_err().to_string().contains("X11 query failed"));
+        let failure = result.unwrap_err();
+        assert_eq!(failure.typed_chars(), 1);
+        assert_eq!(failure.total_chars(), 2);
+        assert!(failure.to_string().contains("X11 query failed"));
         assert_eq!(typed, "a");
+    }
+
+    #[test]
+    fn focus_query_and_backend_failures_preserve_unicode_progress() {
+        for fail_focus in [true, false] {
+            let mut typed = String::new();
+            let mut focus_checks = 0;
+            let result = type_text_guarded(
+                "é日🚀",
+                Duration::ZERO,
+                || Ok(false),
+                || {
+                    focus_checks += 1;
+                    if fail_focus && focus_checks == 2 {
+                        anyhow::bail!("focus query failed");
+                    }
+                    Ok(true)
+                },
+                |character| {
+                    if !fail_focus && character == '日' {
+                        anyhow::bail!("typing backend failed");
+                    }
+                    typed.push(character);
+                    Ok(())
+                },
+            );
+            let failure = result.unwrap_err();
+            assert_eq!(failure.typed_chars(), 1);
+            assert_eq!(failure.total_chars(), 3);
+            assert_eq!(typed, "é");
+            assert!(failure.reason().contains(if fail_focus {
+                "focus query failed"
+            } else {
+                "typing backend failed"
+            }));
+        }
     }
 }
