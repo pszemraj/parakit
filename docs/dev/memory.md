@@ -5,13 +5,22 @@ that complete session; it does not unload libraries or reset a process-wide GPU
 device. Configuration and user behavior are described in
 [running.md](../running.md#idle-model-offload).
 
-## Current Linux Reload Measurements, 2026-10-05
+## Linux Reload Measurements, 2026-10-05
 
 Three-cycle, eight-thread runs measured the current production policy on CPU,
 CUDA, and Vulkan. The table excludes the process-initialization cycle and shows
 reload cycles 2-3. Host peaks are Linux's reset `VmHWM`, while GPU figures are
-sampled per-process framebuffer allocation. Offloaded endpoints are read after
-the profiler's 250 ms settling interval.
+sampled per-process framebuffer allocation. Offloaded endpoints use the fixed
+checkpoint 250 ms after session close.
+
+The CPU run metadata records revision `c1c2992`; the CUDA and Vulkan runs used
+the profiler and production policy at `3b5b4ed`, immediately before this table
+was documented in `c2400e6`. All were Rust dev-profile builds with Rust 1.98.0,
+the CrispASR `5f1bb858e803167f1b5fc1eb9a90ffdd1970f7ed` pin, the 745,121,632-byte
+Q8_0 model, and the 5,314,638-byte Juniper reference WAV. The host was Ubuntu
+24.04.5 on Linux 6.17.0-29-generic with a Ryzen 7 7700X and RTX 5090 (NVIDIA
+595.91.07, CUDA 12.9.86, Vulkan instance 1.3.275). CPU, CUDA, and Vulkan ran
+sequentially, with no concurrent inference or measurement workload.
 
 | Backend | Reload host peak | Post-load host | Post-full host | Offloaded host | GPU after reload warmup | Post-full GPU | Offloaded GPU |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -19,11 +28,13 @@ the profiler's 250 ms settling interval.
 | CUDA | 1.21-1.33 GiB | 0.52-0.64 GiB | 0.64 GiB | 0.64 GiB | 1308 MiB | 2054 MiB | 568 MiB |
 | Vulkan | 0.88 GiB | 0.19 GiB | 0.28 GiB | 0.19 GiB | 746 MiB | 1491 MiB | 22 MiB |
 
-The CPU result is consistent with the corrected earlier range of 1.35-1.48 GiB
-reload peak versus 0.71-0.84 GiB loaded: reopening can briefly need roughly
-twice the post-load residency. CUDA and Vulkan also have load-time host peaks
-far above their post-load endpoints. GPU allocation grows further during the
-one-second reload warmup and long inference, then falls after session release.
+The separate reviewer reproduction originally reported a decimal/binary unit
+conversion incorrectly; its corrected range is 1.35-1.48 GiB reload peak
+versus 0.71-0.84 GiB loaded. That agrees with the table: reopening can briefly
+need roughly twice the post-load residency. CUDA and Vulkan also have load-time
+host peaks far above their post-load endpoints. GPU allocation grows further
+during the one-second reload warmup and long inference, then falls after session
+release.
 These are per-process memory measurements, not timing benchmarks or memory
 ceilings. Longer recordings can still grow the workspace, and the dated tables
 below retain their original policies.
@@ -67,8 +78,9 @@ The retained baseline opens once; the offload run opens on every cycle.
 Each checkpoint also records `host_interval_peak`. On Linux, the profiler reads
 the kernel's `VmHWM` and resets it through `/proc/self/clear_refs` after every
 checkpoint; `source: linux_VmHWM` identifies that exact interval high-water
-mark. A parallel 20 ms sampler supplies the sample count and provides the peak
-on macOS and Windows, where shorter spikes can still be missed. At `after_load`,
+mark. If that reset is unavailable, it records `source: sampled` instead of
+aborting. A parallel 20 ms sampler supplies the sample count and provides the
+peak on macOS and Windows, where shorter spikes can still be missed. At `after_load`,
 compare cycle 2 and later peaks with the preceding `offloaded` endpoint when
 sizing RAM for idle offload. A reload can temporarily use more RAM than the
 loaded checkpoint, even when offload releases memory between dictations.
@@ -90,9 +102,10 @@ Loading time excludes earlier process/device initialization. Add warmup time
 to open time to estimate readiness after offload. Checkpoint collection occurs
 outside those operation timings; background sampling adds a small amount of
 measurement overhead during operations. These are diagnostic measurements, not
-an isolated latency benchmark. The `offloaded` checkpoint waits 250 ms after
-the measured session close so allocator release can settle; close timing itself
-excludes that wait.
+an isolated latency benchmark. The `offloaded` checkpoint is standardized at
+250 ms after the measured session close for comparable endpoint readings; that
+delay is not evidence that allocator release is complete or that every backend
+settles within 250 ms. Close timing itself excludes the wait.
 
 For reload comparisons, `--reload-warmup startup`, `one-second`, or `none`
 overrides the probe after the first session; the default `production` follows

@@ -3,8 +3,8 @@
 use crate::constants::TARGET_RATE;
 
 const CPU_ENGINE_WARMUP_SECONDS: &[usize] = &[1];
-// Cover the common short-dictation shape without making startup reserve a
-// longer recording's workspace. Longer first recordings grow it on demand.
+// Bound GPU startup readiness work without reserving a longer recording's
+// workspace. Longer first recordings grow it on demand.
 const GPU_ENGINE_WARMUP_SECONDS: &[usize] = &[5];
 
 /// Return the startup readiness warmup shapes for the requested device policy.

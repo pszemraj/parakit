@@ -106,15 +106,15 @@ If that did not fix it, paste modes, focus guards, and clipboard restore policy 
 
 ## macOS Paste Could Not Be Confirmed
 
-macOS plays the error tone and shows a "Paste blocked" notification reading `Paste could not be confirmed; transcript copied. Press Cmd+V to insert it.`
+macOS plays the error tone and shows a "Paste unconfirmed" notification when it cannot prove that a posted paste landed.
 
 The target did not provide [paste acknowledgement](macos-desktop.md#insertion). Recover the text as follows.
 
 > [!IMPORTANT]
 > Look at the target application before you press `Cmd+V`. The paste may have already landed and parakit only failed to observe it. Pasting again over text that is already there inserts a second copy.
 
-1. If the text is not there, press `Cmd+V`. The transcript is the current clipboard contents.
-2. Expect the previous clipboard contents to be gone. This path deliberately skips the clipboard restore so the transcript cannot be destroyed by a wrong guess. Recover the old contents from a clipboard manager if you need them.
+1. If the notification says the transcript was copied and the text is not in the target, press `Cmd+V`. This path deliberately leaves the transcript on the clipboard and skips restoration so an uncertain paste cannot destroy its only copy.
+2. If the notification says the clipboard changed, do not paste blindly: another application owns the current clipboard. Inspect the target first, then use `parakit copy-last` when transcript history is enabled.
 3. If it happens once against a busy or slow target, treat it as a timeout and move on. Confirmation has a fixed deadline, and a target that takes longer than that to update its accessibility value reports no evidence even on a successful paste.
 4. If it repeats against the same application, reproduce it without dictating. Focus that application and run:
 
@@ -124,7 +124,7 @@ The target did not provide [paste acknowledgement](macos-desktop.md#insertion). 
 
    If the text lands every time but is still reported unconfirmed, that application does not expose the pasted text through Accessibility in a form parakit can match. Restart the daemon with `parakit start --paste-mode direct` while you work in that application; direct typing never touches the clipboard and never runs the acknowledgement step.
 
-5. If JSONL logging is enabled, the insertion record for the dictation has `"outcome":"copied_only"` with `"acknowledgement_kind":"no_evidence"`. That distinguishes this case from `pasted_unverified`, which is the separate and quieter path taken when the field withholds its value entirely, as password and other secure fields do.
+5. If JSONL logging is enabled, `"acknowledgement_kind":"no_evidence"` identifies this case. The outcome is `copied_only` while the staged transcript remains current, or `pasted_unverified` when another application replaced the clipboard. Fields that withhold their value use one of the separate `unverified_*` acknowledgement kinds.
 
 If the notification never appears at all, follow the macOS notification note in [macos-desktop.md#insertion](macos-desktop.md#insertion). Acknowledgement and clipboard outcomes are described there and in [logging.md#insertion-outcomes](logging.md#insertion-outcomes).
 

@@ -117,8 +117,6 @@ The similar implementations below stay separate because their invariants differ.
   head-plus-tail shape, different unit systems (normalized chars with
   whitespace stripping for layout-independent matching vs raw UTF-16 units at
   the FFI boundary). Cross-referenced in comments at both sites.
-- `daemon/stderr.rs` unix vs windows suppressors: a pipe plus drain thread vs
-  a `NUL` redirect. Only the guard structure is similar, not the mechanism.
 - `daemon/ipc.rs` unix vs windows `handle_client`: the ~15 glue lines differ
   in three real ways (stream timeouts, warning wording, and Unix socket
   cleanup after a stop response); the business logic is already
