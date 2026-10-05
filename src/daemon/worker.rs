@@ -238,6 +238,17 @@ where
                     sounds.reload();
                 }
                 model.ensure_loaded(&mut load, |status| state.set_model_status(status));
+                if !model.is_loaded() && !state.shutdown.requested() {
+                    let error = model
+                        .status()
+                        .last_error
+                        .unwrap_or_else(|| "model reload failed for an unknown reason".to_string());
+                    log.error(&format!(
+                        "{error}; recording continues and reload will retry on release"
+                    ));
+                    notifier.model_unavailable(&error);
+                    sounds.error();
+                }
                 if model.is_loaded()
                     && recording.load(Ordering::Acquire)
                     && !state.shutdown.requested()
@@ -728,9 +739,13 @@ mod tests {
             } else {
                 wait_for_state(&state, Residency::Offloaded);
                 assert_eq!(reloads.load(Ordering::SeqCst), 1);
+                assert!(matches!(
+                    cues.recv_timeout(Duration::from_secs(1)).unwrap(),
+                    Cue::Error
+                ));
                 assert!(
                     cues.try_recv().is_err(),
-                    "failed reload must not announce readiness"
+                    "failure must not announce readiness"
                 );
             }
             capture_active.store(false, Ordering::Release);

@@ -44,6 +44,21 @@ impl Notifier {
         self.show("Paste blocked", reason.as_ref());
     }
 
+    /// Notify that an offloaded model could not be reopened at PTT start.
+    ///
+    /// # Arguments
+    ///
+    /// * `error` - Saved model reload error.
+    pub(crate) fn model_unavailable(&self, error: impl AsRef<str>) {
+        self.show(
+            "Model unavailable",
+            format!(
+                "{}. Recording will retry when push-to-talk is released.",
+                error.as_ref()
+            ),
+        );
+    }
+
     /// Notify that microphone capture failed and the daemon is trying to reopen it.
     ///
     /// # Arguments
