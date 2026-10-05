@@ -77,12 +77,17 @@ fn render_signed_numbers(input: String) -> String {
 fn replace_numbers_preserving_literals(input: &str, language: &Language, threshold: f64) -> String {
     static PROTECTED_WORD: OnceLock<Regex> = OnceLock::new();
     static PREVIOUS_TOKEN: OnceLock<Regex> = OnceLock::new();
+    static FOLLOWING_SCALE: OnceLock<Regex> = OnceLock::new();
     let protected_re = PROTECTED_WORD.get_or_init(|| {
         Regex::new(r"(?i)\b(?:second|tens|hundreds|thousands|millions|billions|trillions)\b")
             .expect("protected number-word regex must compile")
     });
     let previous_re = PREVIOUS_TOKEN.get_or_init(|| {
         Regex::new(r"(?i)([a-z0-9]+)([-\s]+)$").expect("previous-token regex must compile")
+    });
+    let following_scale_re = FOLLOWING_SCALE.get_or_init(|| {
+        Regex::new(r"(?i)^(?:\s+(?:hundred|thousand|million|billion|trillion)\b)+")
+            .expect("following-scale regex must compile")
     });
 
     let protected_words: Vec<_> = protected_re
@@ -107,13 +112,23 @@ fn replace_numbers_preserving_literals(input: &str, language: &Language, thresho
         } else {
             last_end + preceding_number_start(prefix, language).unwrap_or(prefix.len())
         };
+        // An adjacent singular scale belongs to the same literal phrase:
+        // parsing "million" separately after "hundreds" invents an exact count.
+        let protected_end = if found.as_str().eq_ignore_ascii_case("second") {
+            found.end()
+        } else {
+            found.end()
+                + following_scale_re
+                    .find(&input[found.end()..])
+                    .map_or(0, |following| following.end())
+        };
         output.push_str(&replace_numbers_with_hybrid_magnitudes(
             &input[last_end..protected_start],
             language,
             threshold,
         ));
-        output.push_str(&input[protected_start..found.end()]);
-        last_end = found.end();
+        output.push_str(&input[protected_start..protected_end]);
+        last_end = protected_end;
     }
     output.push_str(&replace_numbers_with_hybrid_magnitudes(
         &input[last_end..],
@@ -123,19 +138,33 @@ fn replace_numbers_preserving_literals(input: &str, language: &Language, thresho
     output
 }
 
-/// Return the start of the final parsed number in a text slice, when it is
-/// immediately followed only by whitespace. The caller keeps that raw span
+/// Return the start of the contiguous trailing number phrases in a text slice,
+/// when followed only by whitespace. The caller keeps that raw span
 /// with the adjacent plural magnitude instead of converting it separately.
 fn preceding_number_start(input: &str, language: &Language) -> Option<usize> {
     let tokens = number_tokens(input);
     let occurrences = find_numbers(tokens.iter(), language, 0.0);
-    let occurrence = occurrences.last()?;
-    (occurrence.start < occurrence.end
-        && occurrence.end == tokens.len()
-        && input[tokens[occurrence.end - 1].end..]
+    let last = occurrences.last()?;
+    if last.start == last.end
+        || last.end != tokens.len()
+        || !input[tokens[last.end - 1].end..]
             .chars()
-            .all(char::is_whitespace))
-    .then(|| tokens[occurrence.start].start)
+            .all(char::is_whitespace)
+    {
+        return None;
+    }
+    let mut start = last.start;
+    for previous in occurrences.iter().rev().skip(1) {
+        if previous.end != start
+            || !input[tokens[previous.end - 1].end..tokens[start].start]
+                .chars()
+                .all(char::is_whitespace)
+        {
+            break;
+        }
+        start = previous.start;
+    }
+    Some(tokens[start].start)
 }
 
 fn number_tokens(input: &str) -> Vec<NumberToken<'_>> {

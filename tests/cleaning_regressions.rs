@@ -22,6 +22,19 @@ fn plural_magnitudes_preserve_words_in_both_profiles_and_thresholds() {
             "Hundreds! Thousands? MILLIONS; billions.",
         ),
         ("Hundreds of files.", "Hundreds of files."),
+        ("one two three hundreds", "One two three hundreds"),
+        (
+            "seven hundreds million parameters",
+            "Seven hundreds million parameters",
+        ),
+        (
+            "Seven hundreds MILLION billion parameters; six million rows.",
+            "Seven hundreds MILLION billion parameters; 6 million rows.",
+        ),
+        (
+            "Seven hundreds, million parameters.",
+            "Seven hundreds, 1M parameters.",
+        ),
         (
             "There are thousands of people.",
             "There are thousands of people.",
@@ -88,6 +101,14 @@ fn plural_magnitudes_preserve_words_in_both_profiles_and_thresholds() {
         let all_numbers = build_cleaner(false, profile, false, Some(0.0), &[], &[])
             .unwrap()
             .unwrap();
+        assert_eq!(
+            all_numbers.clean_text("one two three hundreds"),
+            "One two three hundreds"
+        );
+        assert_eq!(
+            all_numbers.clean_text("seven hundreds million parameters"),
+            "Seven hundreds million parameters"
+        );
         assert_eq!(
             all_numbers.clean_text("Hundreds of files and three records."),
             "Hundreds of files and 3 records."
