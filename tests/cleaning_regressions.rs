@@ -48,6 +48,14 @@ fn plural_magnitudes_preserve_words_in_both_profiles_and_thresholds() {
             "Tens of thousands and hundreds of millions.",
         ),
         (
+            "A few million people, several thousand files, and a couple of hundred rows.",
+            "A few million people, several thousand files, and a couple of hundred rows.",
+        ),
+        (
+            "Few million parameters and a couple billion tokens.",
+            "Few million parameters and a couple billion tokens.",
+        ),
+        (
             "In the early nineteen hundreds, we moved.",
             "In the early nineteen hundreds, we moved.",
         ),
@@ -112,6 +120,10 @@ fn plural_magnitudes_preserve_words_in_both_profiles_and_thresholds() {
         assert_eq!(
             all_numbers.clean_text("Hundreds of files and three records."),
             "Hundreds of files and 3 records."
+        );
+        assert_eq!(
+            all_numbers.clean_text("A few million people and six million rows."),
+            "A few million people and 6 million rows."
         );
         assert_eq!(
             all_numbers.clean_text("Three records and five millions of rows."),

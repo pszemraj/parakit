@@ -79,8 +79,10 @@ fn replace_numbers_preserving_literals(input: &str, language: &Language, thresho
     static PREVIOUS_TOKEN: OnceLock<Regex> = OnceLock::new();
     static FOLLOWING_SCALE: OnceLock<Regex> = OnceLock::new();
     let protected_re = PROTECTED_WORD.get_or_init(|| {
-        Regex::new(r"(?i)\b(?:second|tens|hundreds|thousands|millions|billions|trillions)\b")
-            .expect("protected number-word regex must compile")
+        Regex::new(
+            r"(?i)\b(?:(?:(?:a[ \t]+)?few|several|(?:a[ \t]+)?couple(?:[ \t]+of)?)[ \t]+(?:hundred|thousand|million|billion|trillion)|second|tens|hundreds|thousands|millions|billions|trillions)\b",
+        )
+        .expect("protected number-word regex must compile")
     });
     let previous_re = PREVIOUS_TOKEN.get_or_init(|| {
         Regex::new(r"(?i)([a-z0-9]+)([-\s]+)$").expect("previous-token regex must compile")
