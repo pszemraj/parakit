@@ -45,15 +45,31 @@ The child pauses at each JSON checkpoint until the collector samples it:
 before loading, after loading, after warmup, after short/full transcription,
 after offload (or retained baseline), and after final close. Records include
 operation elapsed time. Repeated full transcripts must match exactly and be
-nonempty; failures return nonzero. The collector saves input paths and sizes, command,
+nonempty; failed children and incomplete checkpoint lifecycles return nonzero.
+The collector saves input paths and sizes, command,
 platform, commit/submodule identity, working-tree state, `metrics.jsonl`, native
 diagnostics, and transcript hashes. It does not persist audio or transcripts.
 The retained baseline opens once; the offload run opens on every cycle.
 
+Each checkpoint also records `host_interval_peak`: the largest host residency
+sample since the preceding acknowledgement, using a 20 ms sampling interval
+plus the checkpoint reading. At `after_load`, this captures sampled transient
+loading and reload peaks that paused readings can miss. Compare cycle 2 and
+later `after_load` peaks with the preceding `offloaded` residency when sizing
+RAM for idle offload. A reload can temporarily use more RAM than the loaded
+checkpoint, even when offload releases memory between dictations.
+The metric is RSS on Linux/macOS and working set on Windows; it resets for each
+operation instead of reusing a process-lifetime high-water mark. Sample counts
+and the interval are saved with each peak. Sampling and native-query latency can
+miss shorter spikes, so these figures are observed lower bounds, not guaranteed
+memory ceilings. The older tables below contain only paused checkpoint readings
+and do not measure transient reload peaks.
+
 Loading time excludes earlier process/device initialization. Add warmup time
-to open time to estimate readiness after offload. OS sampling adds pauses
-outside those operation timings. These are diagnostic measurements, not an
-isolated latency benchmark.
+to open time to estimate readiness after offload. Checkpoint sampling adds pauses
+outside those operation timings; background sampling also adds measurement
+overhead during operations. These are diagnostic measurements, not an isolated
+latency benchmark.
 
 For reload comparisons, `--reload-warmup startup`, `one-second`, or `none`
 overrides the probe after the first session; the default `production` follows
@@ -334,10 +350,11 @@ CUDA, and Vulkan libraries used the unchanged CrispASR pin
 `5f1bb858e803167f1b5fc1eb9a90ffdd1970f7ed`, OpenBLAS, OpenMP, CPU repacking,
 and native CPU instructions. CUDA targeted SM120; Vulkan explicitly selected
 the RTX 5090 with `GGML_VK_VISIBLE_DEVICES=1` rather than the AMD integrated GPU.
-The measured inference code was revision `2e0c457`; subsequent changes correct
-collector metadata and Linux held-modifier paste handling. The backend-specific
-executables resolved their matching native libraries through `RPATH`, without
-`RUNPATH`, under `target/debug/build/parakit-*/out/lib`.
+The measured inference code was revision `2e0c457`, before the shorter GPU
+startup readiness probe in `1cd2214`. These tables retain the earlier startup
+warmup policy; their post-startup-warmup allocations do not describe the current
+probe. The backend-specific executables resolved their matching native libraries
+through `RPATH`, without `RUNPATH`, under `target/debug/build/parakit-*/out/lib`.
 
 These runs used Rust dev-profile executables and Release native libraries:
 default features for CPU, `--features cuda` for CUDA, and `--features vulkan`
