@@ -24,6 +24,7 @@ const SAMPLE_INTERVAL: Duration = Duration::from_millis(20);
 const NVIDIA_SAMPLE_INTERVAL: Duration = Duration::from_millis(50);
 const NVIDIA_QUERY_TIMEOUT: Duration = Duration::from_secs(2);
 const NVIDIA_CHECKPOINT_TIMEOUT: Duration = Duration::from_secs(5);
+const OFFLOAD_SETTLE: Duration = Duration::from_millis(250);
 
 #[derive(Clone, Copy, Debug, Default, ValueEnum)]
 enum ReloadWarmup {
@@ -118,6 +119,7 @@ impl Profiler {
             "working_tree": git_text(&["status", "--short"]),
             "measurement_scope": "self",
             "sampling_interval_seconds": SAMPLE_INTERVAL.as_secs_f64(),
+            "offload_settle_seconds": OFFLOAD_SETTLE.as_secs_f64(),
         });
         let mut encoded = serde_json::to_vec_pretty(&metadata)?;
         encoded.push(b'\n');
@@ -757,6 +759,10 @@ fn main() -> Result<()> {
         if !cli.keep_loaded {
             drop(engine.take());
         }
+        let close_elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
+        if !cli.keep_loaded {
+            thread::sleep(OFFLOAD_SETTLE);
+        }
         profiler.checkpoint(
             &cli,
             cycle,
@@ -765,7 +771,7 @@ fn main() -> Result<()> {
             } else {
                 "offloaded"
             },
-            started.elapsed().as_secs_f64() * 1000.0,
+            close_elapsed_ms,
         )?;
     }
     drop(engine.take());
