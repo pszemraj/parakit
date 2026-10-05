@@ -34,6 +34,7 @@ enum MockClipboardContent {
 #[derive(Debug)]
 struct MockClipboard {
     content: MockClipboardContent,
+    text_alternative: Option<String>,
     events: Rc<RefCell<Vec<String>>>,
     fail_next_set: bool,
     fail_set_matching: Option<String>,
@@ -48,6 +49,7 @@ impl MockClipboard {
     fn with_content(content: MockClipboardContent) -> Self {
         Self {
             content,
+            text_alternative: None,
             events: Rc::new(RefCell::new(Vec::new())),
             fail_next_set: false,
             fail_set_matching: None,
@@ -180,7 +182,10 @@ impl ClipboardStore for MockClipboard {
                 alt_text: Some(text),
                 ..
             } => Ok(text.clone()),
-            _ => anyhow::bail!("clipboard is not text"),
+            _ => self
+                .text_alternative
+                .clone()
+                .ok_or_else(|| anyhow::anyhow!("clipboard is not text")),
         };
         let after_read = if self.guard_read {
             self.after_guard_read.take()
@@ -1751,6 +1756,41 @@ fn clipboard_manager_handoffs_keep_identical_text_pasteable_and_restorable() {
             assert_eq!(
                 guards, 3,
                 "focus must be rechecked after reading the new owner"
+            );
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn clipboard_manager_rich_handoffs_with_identical_text_preserve_files_and_images() {
+    for competing in [
+        MockClipboard::file_list(&["/copied/document.txt"]).content,
+        MockClipboard::image().content,
+    ] {
+        for policy in [
+            ClipboardPolicy::RestorePrevious,
+            ClipboardPolicy::KeepTranscript,
+        ] {
+            let mut clipboard = MockClipboard::new("dictated text");
+            let staged = StagedClipboard::capture(
+                &mut clipboard,
+                ClipboardSnapshot::Text("old clipboard".to_string()),
+                "dictated text",
+            );
+            clipboard.text_alternative = Some("dictated text".to_string());
+            *clipboard.pending_external_write.borrow_mut() = Some(competing.clone());
+
+            assert!(!staged.is_current(&mut clipboard));
+            assert!(matches!(
+                staged.restore(&mut clipboard, policy).unwrap(),
+                ClipboardRestore::Changed
+            ));
+            assert_eq!(clipboard.content, competing);
+            assert_eq!(clipboard.generation, 2);
+            assert_eq!(
+                clipboard.events.borrow().as_slice(),
+                ["external-write", "guard-read", "guard-read"]
             );
         }
     }
