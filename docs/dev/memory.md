@@ -5,30 +5,28 @@ that complete session; it does not unload libraries or reset a process-wide GPU
 device. Configuration and user behavior are described in
 [running.md](../running.md#idle-model-offload).
 
-## Startup Comparison, 2026-10-05
+## Current Linux Reload Measurements, 2026-10-05
 
-Linux CPU measurements with eight threads observed 1.39-1.52 GiB reload peaks,
-versus 0.73-0.86 GiB at the loaded checkpoint. Allow roughly twice the loaded
-CPU residency while reopening a session.
+Three-cycle, eight-thread runs measured the current production policy on CPU,
+CUDA, and Vulkan. The table excludes the process-initialization cycle and shows
+reload cycles 2-3. Host peaks are Linux's reset `VmHWM`, while GPU figures are
+sampled per-process framebuffer allocation. Offloaded endpoints are read after
+the profiler's 250 ms settling interval.
 
-Fresh three-cycle NVIDIA runs measured reload cycles 2-3 with the current
-production warmup. Host figures are sampled RSS; GPU figures are sampled
-per-process framebuffer allocation. The GPU interval peak matched its endpoint
-reading in these runs, but both backends had a much larger transient host peak
-than the post-load checkpoint:
+| Backend | Reload host peak | Post-load host | Post-full host | Offloaded host | GPU after reload warmup | Post-full GPU | Offloaded GPU |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| CPU | 1.46-1.47 GiB | 0.76-0.78 GiB | 1.57 GiB | 0.08-0.14 GiB | unavailable | unavailable | unavailable |
+| CUDA | 1.21-1.33 GiB | 0.52-0.64 GiB | 0.64 GiB | 0.64 GiB | 1308 MiB | 2054 MiB | 568 MiB |
+| Vulkan | 0.88 GiB | 0.19 GiB | 0.28 GiB | 0.19 GiB | 746 MiB | 1491 MiB | 22 MiB |
 
-| Backend | Reload host peak | Post-load host | Offloaded host | Reload GPU peak / endpoint | Post-full GPU | Offloaded GPU |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| CUDA | 1.07-1.11 GiB | 0.52-0.54 GiB | 0.54 GiB | 1278-1280 MiB | 2054 MiB | 568 MiB |
-| Vulkan | 0.85-0.88 GiB | 0.19 GiB | 0.19 GiB | 732 MiB | 1491 MiB | 22 MiB |
-
-The retained post-full baselines were about 632 MiB host / 2052 MiB GPU for
-CUDA and 280-281 MiB host / 1491 MiB GPU for Vulkan. Offload reduced device
-allocation substantially, but reopening still needed considerably more host
-RAM than either the offloaded or post-load checkpoint showed. These were
-per-process memory measurements, not timing benchmarks; another idle process
-held GPU memory during collection. Longer recordings can still grow the
-workspace, and the dated tables below retain their original policies.
+The CPU result is consistent with the corrected earlier range of 1.35-1.48 GiB
+reload peak versus 0.71-0.84 GiB loaded: reopening can briefly need roughly
+twice the post-load residency. CUDA and Vulkan also have load-time host peaks
+far above their post-load endpoints. GPU allocation grows further during the
+one-second reload warmup and long inference, then falls after session release.
+These are per-process memory measurements, not timing benchmarks or memory
+ceilings. Longer recordings can still grow the workspace, and the dated tables
+below retain their original policies.
 
 ## Repeatable Measurements
 
@@ -66,34 +64,35 @@ working-tree state, and `metrics.jsonl`. It does not persist audio or
 transcripts.
 The retained baseline opens once; the offload run opens on every cycle.
 
-Each checkpoint also records `host_interval_peak`: the largest host residency
-sample since the preceding checkpoint, using a 20 ms sampling interval plus
-the checkpoint reading. At `after_load`, this captures sampled transient loading
-and reload peaks that checkpoint-only readings can miss. Compare cycle 2 and
-later `after_load` peaks with the preceding `offloaded` residency when sizing
-RAM for idle offload. A reload can temporarily use more RAM than the loaded
-checkpoint, even when offload releases memory between dictations.
-The metric is RSS on Linux/macOS and working set on Windows; it resets for each
-operation instead of reusing a process-lifetime high-water mark. Sample counts
-and the interval are saved with each peak. Sampling and native-query latency can
-miss shorter spikes, so these figures are observed lower bounds, not guaranteed
-memory ceilings. The older tables below contain only checkpoint readings and do
-not measure transient reload peaks.
+Each checkpoint also records `host_interval_peak`. On Linux, the profiler reads
+the kernel's `VmHWM` and resets it through `/proc/self/clear_refs` after every
+checkpoint; `source: linux_VmHWM` identifies that exact interval high-water
+mark. A parallel 20 ms sampler supplies the sample count and provides the peak
+on macOS and Windows, where shorter spikes can still be missed. At `after_load`,
+compare cycle 2 and later peaks with the preceding `offloaded` endpoint when
+sizing RAM for idle offload. A reload can temporarily use more RAM than the
+loaded checkpoint, even when offload releases memory between dictations.
+The older tables below contain only checkpoint readings and do not measure
+transient reload peaks.
 
-With `--nvidia`, a separate 50 ms sampler records `nvidia_interval_peak` without
-reducing host-sampling frequency. It uses NVIDIA's process view so both compute
-and graphics/Vulkan contexts are eligible, sums this process's numeric rows
-across devices per observation, and includes a fresh checkpoint reading. Empty,
-failed, incomplete, or `N/A` process readings remain unavailable rather than
-becoming zero. NVIDIA sampling launches a vendor query outside the measured
-process; its sampled maxima remain lower bounds, not guaranteed VRAM ceilings.
-Use the relevant vendor profiler or device-memory trace on non-NVIDIA hardware.
+With `--nvidia`, a separate sampler targets 50 ms between query starts and
+records `nvidia_interval_peak` without reducing host-sampling frequency. One
+worker owns all vendor queries, each `nvidia-smi` invocation has a two-second
+timeout, and a checkpoint has a five-second response bound. The query uses
+NVIDIA's process view so both compute and graphics/Vulkan contexts are eligible,
+sums this process's numeric rows across devices per observation, and includes a
+fresh checkpoint reading. Empty, failed, incomplete, or `N/A` process readings
+remain unavailable rather than becoming zero. Sampled maxima remain lower
+bounds, not guaranteed VRAM ceilings. Use the relevant vendor profiler or
+device-memory trace on non-NVIDIA hardware.
 
 Loading time excludes earlier process/device initialization. Add warmup time
 to open time to estimate readiness after offload. Checkpoint collection occurs
 outside those operation timings; background sampling adds a small amount of
 measurement overhead during operations. These are diagnostic measurements, not
-an isolated latency benchmark.
+an isolated latency benchmark. The `offloaded` checkpoint waits 250 ms after
+the measured session close so allocator release can settle; close timing itself
+excludes that wait.
 
 For reload comparisons, `--reload-warmup startup`, `one-second`, or `none`
 overrides the probe after the first session; the default `production` follows
@@ -129,6 +128,32 @@ Use native CPU, `--features cuda`, and `--features vulkan` builds in separate
 output directories. Vulkan needs the development SDK and SPIR-V headers; see
 [build instructions](../build.md). Use `--device gpu` for each GPU build so
 device absence cannot silently choose CPU.
+
+The current three-cycle comparison can be reproduced sequentially with an
+explicit model and WAV. Do not run these measurements or another inference
+workload in parallel:
+
+```bash
+cargo build --example profile-memory
+CARGO_TARGET_DIR=target/profile-cuda cargo build --features cuda --example profile-memory
+CARGO_TARGET_DIR=target/profile-vulkan cargo build --features vulkan --example profile-memory
+mkdir -p target/tmp/memory
+target/debug/examples/profile-memory \
+  --output target/tmp/memory/linux-cpu \
+  --model path/to/model.gguf --audio path/to/recording.wav \
+  --device cpu --threads 8 --cycles 3
+target/profile-cuda/debug/examples/profile-memory \
+  --output target/tmp/memory/linux-cuda --nvidia \
+  --model path/to/model.gguf --audio path/to/recording.wav \
+  --device gpu --threads 8 --cycles 3
+GGML_VK_VISIBLE_DEVICES=1 target/profile-vulkan/debug/examples/profile-memory \
+  --output target/tmp/memory/linux-vulkan --nvidia \
+  --model path/to/model.gguf --audio path/to/recording.wav \
+  --device gpu --threads 8 --cycles 3
+```
+
+`GGML_VK_VISIBLE_DEVICES=1` is host-specific: select the index reported for the
+intended discrete GPU rather than copying it blindly.
 
 The example reads `/proc/self/smaps_rollup` and `status`, retaining RSS, PSS,
 anonymous memory, file-backed PSS, private dirty pages, and swap in bytes. For
