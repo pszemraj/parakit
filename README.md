@@ -28,12 +28,26 @@ cd parakit
 cargo install --path .
 ```
 
+This builds for CPU.[^3]
+
+[^3]: On Linux and macOS, keep the repository's build directory: the installed binary still uses its generated shared libraries.
+
 On Windows, use the bundle script instead of `cargo install` when you want a runnable app directory. See [scripts/windows/README.md](scripts/windows/README.md).
 
 Make sure Cargo's bin directory is on `PATH`:
 
 ```bash
 export PATH="$HOME/.cargo/bin:$PATH"
+```
+
+### GPU Acceleration
+
+From the same checkout, choose the backend for your machine. Install its native prerequisites from [docs/build.md](docs/build.md#native-dependencies) first.
+
+```bash
+cargo install --path . --features cuda    # Linux, NVIDIA CUDA
+cargo install --path . --features vulkan  # Linux, Vulkan
+cargo install --path . --features metal   # macOS, Apple Silicon
 ```
 
 ## First Run
@@ -48,7 +62,7 @@ If `doctor` finds issues with the setup/build, it will exit 1 and print details 
 
 1. Switch to another app or text field, and put the cursor where you want text inserted.
 2. Press and hold `Ctrl+Space`, say something, then release.
-   - Sounds indicate start, stop, or error states.
+   - Sounds indicate listening, completion, or errors. After idle offload, a three-note cue announces reloading before the listening tone.
 3. Watch the dictated text appear at your cursor.
 
 For background mode, paste options, and other runtime-related options see [docs/running.md](docs/running.md).
