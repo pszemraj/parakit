@@ -288,6 +288,11 @@ fn paste_transcript(
                 notifier.paste_blocked(PasteBlockReason::FocusChangedBeforePaste.notice());
                 return Ok(InsertReport::from_paste(InsertOutcome::Blocked, report));
             }
+            crate::daemon::inject::PasteOutcome::ClipboardChanged => {
+                log.warn("clipboard changed or could not be verified; current clipboard preserved");
+                notifier.paste_blocked(PasteBlockReason::ClipboardChanged.notice());
+                return Ok(InsertReport::from_paste(InsertOutcome::Blocked, report));
+            }
         },
         Err(err) => err,
     };
@@ -372,6 +377,11 @@ fn copy_or_block_transcript(
             ));
             notifier.paste_blocked(reason.notice());
             Ok(InsertReport::from_stage(InsertOutcome::Blocked, true))
+        }
+        crate::daemon::inject::StageOutcome::ClipboardChanged => {
+            log.warn("clipboard changed or could not be verified; current clipboard preserved");
+            notifier.paste_blocked(PasteBlockReason::ClipboardChanged.notice());
+            Ok(InsertReport::placeholder(InsertOutcome::Blocked, false))
         }
     }
 }
@@ -531,6 +541,8 @@ pub(crate) enum PasteBlockReason {
     /// The paste chord was sent but never acknowledged, so the transcript was
     /// deliberately left on the clipboard for the user to paste manually.
     Unconfirmed,
+    /// Clipboard contents changed or could not be verified during insertion.
+    ClipboardChanged,
 }
 
 impl PasteBlockReason {
@@ -548,6 +560,7 @@ impl PasteBlockReason {
             Self::FocusChangedBeforePaste => "focus changed immediately before paste",
             Self::UnsafeModifiers => "physical modifiers made the paste shortcut unsafe",
             Self::Unconfirmed => "paste not acknowledged",
+            Self::ClipboardChanged => "clipboard changed or unavailable",
         }
     }
 
@@ -565,6 +578,9 @@ impl PasteBlockReason {
             Self::FocusChangedBeforePaste => "Focus changed immediately before paste.",
             Self::UnsafeModifiers => {
                 "Push-to-talk keys remained held; transcript copied for manual paste."
+            }
+            Self::ClipboardChanged => {
+                "Clipboard changed or was unavailable; automatic insertion stopped."
             }
             // The unacknowledged tier is only reachable where a platform
             // overrides `await_paste_confirmation` (macOS today), but name

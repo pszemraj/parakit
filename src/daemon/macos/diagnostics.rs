@@ -822,6 +822,10 @@ fn check_paste_report(
              (outcome=Blocked, kind={kind:?}); this indicates a bug in the harness itself, not \
              the production paste path"
         )),
+        (PasteOutcome::ClipboardChanged, kind) => Err(format!(
+            "clipboard changed or was unavailable during the probe \
+             (outcome=ClipboardChanged, kind={kind:?}); current clipboard contents were preserved"
+        )),
     }
 }
 
@@ -1069,6 +1073,20 @@ mod tests {
                     expect_ok: false,
                 },
             ],
+            PasteOutcome::ClipboardChanged => &[
+                ReportRow {
+                    name: "changed_clipboard_fails_ax_available",
+                    kind: "not_applicable",
+                    ax_focused: true,
+                    expect_ok: false,
+                },
+                ReportRow {
+                    name: "changed_clipboard_fails_ax_unavailable",
+                    kind: "not_applicable",
+                    ax_focused: false,
+                    expect_ok: false,
+                },
+            ],
         }
     }
 
@@ -1080,6 +1098,7 @@ mod tests {
             PasteOutcome::CopiedOnly,
             PasteOutcome::UnsafeModifiers,
             PasteOutcome::Blocked,
+            PasteOutcome::ClipboardChanged,
         ];
 
         let failures: Vec<String> = outcomes

@@ -44,9 +44,17 @@ use super::clipboard_restore::{
 };
 use super::FocusVerification;
 
+#[path = "clipboard_guard.rs"]
+mod clipboard_guard;
+use clipboard_guard::{ClipboardRestore, StagedClipboard};
+
 #[cfg(target_os = "linux")]
 #[path = "inject_smoke.rs"]
 mod inject_smoke;
+
+#[cfg(target_os = "linux")]
+#[path = "direct.rs"]
+mod direct;
 
 /// Error label used when paste succeeded but previous clipboard restore failed.
 pub(crate) const CLIPBOARD_RESTORE_ERROR: &str = "could not restore previous clipboard contents";
@@ -100,6 +108,9 @@ pub(crate) enum PasteOutcome {
     UnsafeModifiers,
     /// No paste chord was sent and clipboard policy was applied.
     Blocked,
+    /// Clipboard contents changed or could not be verified; no replacement
+    /// paste or clipboard fallback is allowed.
+    ClipboardChanged,
 }
 
 /// Paths that never send a paste chord (staging, guard-blocked, direct
@@ -119,7 +130,8 @@ pub(crate) struct InsertionTelemetry {
     /// acknowledgement was attempted.
     pub(crate) acknowledgement_ms: Option<u128>,
     /// Whether the previous clipboard contents were restored, when the
-    /// clipboard was touched at all.
+    /// restore policy was applied. `None` also records a deliberately skipped
+    /// restore when the staged clipboard no longer matched or was unreadable.
     pub(crate) clipboard_restored: Option<bool>,
 }
 
@@ -149,13 +161,13 @@ impl InsertionTelemetry {
     fn acknowledged(
         acknowledgement_kind: &'static str,
         elapsed: Duration,
-        clipboard_restored: bool,
+        clipboard_restored: Option<bool>,
     ) -> Self {
         Self {
             paste_event_posted: true,
             acknowledgement_kind,
             acknowledgement_ms: Some(elapsed.as_millis()),
-            clipboard_restored: Some(clipboard_restored),
+            clipboard_restored,
         }
     }
 }
@@ -193,6 +205,9 @@ fn report_from_stage_outcome(outcome: StageOutcome) -> PasteReport {
     match outcome {
         StageOutcome::CopiedOnly => PasteReport::new(PasteOutcome::CopiedOnly, false, Some(false)),
         StageOutcome::Blocked => PasteReport::new(PasteOutcome::Blocked, false, Some(true)),
+        StageOutcome::ClipboardChanged => {
+            PasteReport::new(PasteOutcome::ClipboardChanged, false, None)
+        }
     }
 }
 
@@ -203,6 +218,8 @@ pub(crate) enum StageOutcome {
     CopiedOnly,
     /// The previous clipboard policy was applied after staging.
     Blocked,
+    /// Another clipboard value was preserved instead of restoring or copying.
+    ClipboardChanged,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -284,6 +301,18 @@ pub(crate) fn smoke_test(mode: PasteMode) -> Result<()> {
 
 /// Minimal clipboard operations used by insertion and smoke-test paths.
 pub(super) trait ClipboardStore {
+    /// Observe the native clipboard generation, or the selection owner on X11.
+    ///
+    /// # Returns
+    ///
+    /// A stamp that changes when another clipboard write is observable.
+    /// X11 owner stamps do not detect updates by the same owner.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the clipboard state cannot be observed.
+    fn change_stamp(&mut self) -> Result<u64>;
+
     /// Return the current text clipboard contents.
     ///
     /// # Returns
@@ -450,6 +479,10 @@ pub(crate) fn restore_html_clipboard(
 }
 
 impl ClipboardStore for Clipboard {
+    fn change_stamp(&mut self) -> Result<u64> {
+        clipboard_guard::platform_change_stamp()
+    }
+
     fn get_text(&mut self) -> Result<String> {
         Clipboard::get_text(self).context("could not read system clipboard")
     }
@@ -801,7 +834,8 @@ impl Injector {
     /// [`PasteOutcome::UnsafeModifiers`] when physical modifiers prevented a
     /// safe chord, or
     /// [`PasteOutcome::Blocked`] when no input was sent and the previous
-    /// clipboard was restored.
+    /// clipboard was restored, or [`PasteOutcome::ClipboardChanged`] when
+    /// competing or unreadable clipboard contents were preserved.
     ///
     /// The `UnsafeModifiers` case always keeps the transcript on the
     /// clipboard and ignores `clipboard_policy`, even when the caller asked
@@ -819,14 +853,23 @@ impl Injector {
         mode: PasteMode,
         clipboard_policy: ClipboardPolicy,
         focus: Option<&FocusSnapshot>,
-        mut before_chord: impl FnMut() -> Result<bool>,
+        before_chord: impl FnMut() -> Result<bool>,
     ) -> Result<PasteReport> {
         if mode == PasteMode::Direct {
-            if before_chord()? {
-                self.type_text(text)?;
+            #[cfg(target_os = "linux")]
+            {
+                self.type_linux_text_guarded(text, before_chord)?;
                 return Ok(PasteReport::new(PasteOutcome::Pasted, true, None));
             }
-            anyhow::bail!("direct insertion blocked by safety guard");
+            #[cfg(not(target_os = "linux"))]
+            {
+                let mut before_chord = before_chord;
+                if before_chord()? {
+                    self.type_text(text)?;
+                    return Ok(PasteReport::new(PasteOutcome::Pasted, true, None));
+                }
+                anyhow::bail!("direct insertion blocked by safety guard");
+            }
         }
 
         let mut clipboard = self.take_clipboard()?;
@@ -934,6 +977,43 @@ impl Injector {
             .text(text)
             .map_err(|e| anyhow::anyhow!("enigo type failed: {e:?}"))
             .context("could not type text at cursor")
+    }
+
+    /// Type Linux text while checking physical modifiers and focus per character.
+    ///
+    /// # Errors
+    ///
+    /// Rejects control characters, held or unreadable modifiers, changed focus,
+    /// and failed key events. A mid-text failure stops further insertion.
+    #[cfg(target_os = "linux")]
+    fn type_linux_text_guarded(
+        &mut self,
+        text: &str,
+        before_character: impl FnMut() -> Result<bool>,
+    ) -> Result<()> {
+        let input = RefCell::new(self);
+        direct::type_text_guarded(
+            text,
+            LINUX_PASTE_MODIFIER_RELEASE_TIMEOUT,
+            || {
+                let mut injector = input.borrow_mut();
+                if injector.x11_paste.is_none() {
+                    injector.x11_paste = Some(LinuxX11Paste::open()?);
+                }
+                injector
+                    .x11_paste
+                    .as_ref()
+                    .expect("X11 modifier probe was just initialized")
+                    .modifiers_held()
+            },
+            before_character,
+            |character| {
+                let mut encoded = [0; 4];
+                input
+                    .borrow_mut()
+                    .type_text(character.encode_utf8(&mut encoded))
+            },
+        )
     }
 
     /// Wait until no held modifier can alter or interrupt the paste chord.
@@ -1105,11 +1185,15 @@ where
         ));
     }
 
-    let previous = ClipboardSnapshot::capture(clipboard);
+    let previous = match clipboard_policy {
+        ClipboardPolicy::RestorePrevious => ClipboardSnapshot::capture(clipboard),
+        ClipboardPolicy::KeepTranscript => ClipboardSnapshot::Unsupported,
+    };
     let write_before = restore_plan.before_transcript_write();
     clipboard
         .set_text(text.to_owned())
         .context("could not copy transcript to clipboard")?;
+    let previous = StagedClipboard::capture(clipboard, previous, text);
     let write_token = restore_plan.after_transcript_write(write_before);
 
     sleep_if_nonzero(settle_delay);
@@ -1120,6 +1204,17 @@ where
     // The guard immediately below still proves the captured target remains
     // current before `paste()` posts any input.
     let baseline = restore_plan.capture_paste_baseline(focus);
+
+    // Read the payload before the final focus check: external clipboard reads
+    // may block. A changed or unreadable clipboard must never be pasted or
+    // overwritten by error cleanup/fallback.
+    if !previous.is_current(clipboard) {
+        return Ok(PasteReport::new(
+            PasteOutcome::ClipboardChanged,
+            false,
+            None,
+        ));
+    }
 
     match before_chord() {
         Ok(true) => {}
@@ -1141,12 +1236,24 @@ where
                 clipboard_policy,
             );
             return match restore_result {
-                Ok(()) => Err(err),
+                Ok(ClipboardRestore::Changed) => Ok(PasteReport::new(
+                    PasteOutcome::ClipboardChanged,
+                    false,
+                    None,
+                )),
+                Ok(_) => Err(err),
                 Err(restore_err) => Err(err.context(format!("{restore_err:#}"))),
             };
         }
     }
 
+    if !previous.stamp_is_current(clipboard) {
+        return Ok(PasteReport::new(
+            PasteOutcome::ClipboardChanged,
+            false,
+            None,
+        ));
+    }
     let paste_result = paste();
     match paste_result {
         Ok(PasteDispatch::Posted) => Ok(finish_confirmed_paste(
@@ -1164,6 +1271,13 @@ where
             // A live modifier made dispatch unsafe. Posting could change the
             // shortcut or release a held push-to-talk chord. No input was sent,
             // so leave the staged transcript on the clipboard for recovery.
+            if !previous.is_current(clipboard) {
+                return Ok(PasteReport::new(
+                    PasteOutcome::ClipboardChanged,
+                    false,
+                    None,
+                ));
+            }
             Ok(PasteReport::new(
                 PasteOutcome::UnsafeModifiers,
                 false,
@@ -1179,7 +1293,12 @@ where
                 clipboard_policy,
             );
             match restore_result {
-                Ok(()) => Err(paste_err),
+                Ok(ClipboardRestore::Changed) => Ok(PasteReport::new(
+                    PasteOutcome::ClipboardChanged,
+                    false,
+                    None,
+                )),
+                Ok(_) => Err(paste_err),
                 Err(restore_err) => Err(paste_err.context(format!("{restore_err:#}"))),
             }
         }
@@ -1212,7 +1331,8 @@ where
 /// also report `clipboard_restored: Some(false)`, but deliberately: the
 /// insertion target became unobservable (or never showed evidence) before a
 /// restore could be trusted, so `previous` is dropped without being
-/// restored to keep the transcript as the only remaining copy. That is not a
+/// restored when the transcript is still current. A superseding clipboard value
+/// is preserved and reported with `clipboard_restored: None`. That is not a
 /// restore failure and must not be logged as one — see the `daemon::worker`
 /// call site that tells the two situations apart.
 #[allow(
@@ -1222,7 +1342,7 @@ where
 )]
 fn finish_confirmed_paste<C, H>(
     clipboard: &mut C,
-    previous: ClipboardSnapshot,
+    previous: StagedClipboard,
     write_token: ClipboardWriteToken,
     restore_plan: ClipboardRestorePlan<'_, H>,
     clipboard_policy: ClipboardPolicy,
@@ -1273,7 +1393,11 @@ where
             // land after all.
             PasteReport {
                 outcome: PasteOutcome::PastedUnverified,
-                telemetry: InsertionTelemetry::acknowledged(kind, elapsed, false),
+                telemetry: InsertionTelemetry::acknowledged(
+                    kind,
+                    elapsed,
+                    previous.is_current(clipboard).then_some(false),
+                ),
             }
         }
         PasteConfirmation::NoEvidence { elapsed, kind } => {
@@ -1281,9 +1405,18 @@ where
             // dropped here without being restored, and the transcript
             // intentionally stays on the clipboard so it is not lost.
             // Uncertainty must never destroy the transcript.
+            let current = previous.is_current(clipboard);
             PasteReport {
-                outcome: PasteOutcome::CopiedOnly,
-                telemetry: InsertionTelemetry::acknowledged(kind, elapsed, false),
+                outcome: if current {
+                    PasteOutcome::CopiedOnly
+                } else {
+                    PasteOutcome::ClipboardChanged
+                },
+                telemetry: InsertionTelemetry::acknowledged(
+                    kind,
+                    elapsed,
+                    current.then_some(false),
+                ),
             }
         }
     }
@@ -1293,30 +1426,19 @@ where
 /// as unverified), treating a failed restore as "not restored" rather than
 /// turning an already-successful paste into an error.
 ///
-/// The paste itself succeeded by this point, so losing the previous
-/// clipboard contents is a secondary, recoverable problem, not a paste
-/// failure: it must not be reported as one to the caller's retry/circuit-
-/// breaker logic. A failed restore here means the transcript is left
-/// sitting on the clipboard exactly as it would be under
-/// [`ClipboardPolicy::KeepTranscript`]; the returned `bool` cannot
-/// distinguish the two cases, and the underlying error is dropped along with
-/// them, since this module has no logger to report it through. The
-/// `daemon::worker` call site recovers the distinction from the combination
-/// of its own `clipboard_policy` request and this `bool`, and logs a
-/// warning through the [`crate::daemon::logging::Logger`] it holds.
-///
 /// # Returns
 ///
-/// `true` when [`ClipboardPolicy::RestorePrevious`] was requested and the
-/// previous clipboard was successfully restored.
+/// `Some(true)` for restoration, `Some(false)` for retention or a failed
+/// restore, and `None` when a competing or unreadable clipboard was preserved.
 fn clipboard_restored_after_paste<C: ClipboardStore>(
     clipboard: &mut C,
-    previous: ClipboardSnapshot,
+    previous: StagedClipboard,
     clipboard_policy: ClipboardPolicy,
-) -> bool {
-    match restore_or_clear_clipboard(clipboard, previous, clipboard_policy) {
-        Ok(()) => clipboard_policy == ClipboardPolicy::RestorePrevious,
-        Err(_) => false,
+) -> Option<bool> {
+    match previous.restore(clipboard, clipboard_policy) {
+        Ok(ClipboardRestore::Restored) => Some(true),
+        Ok(ClipboardRestore::KeptTranscript) | Err(_) => Some(false),
+        Ok(ClipboardRestore::Changed) => None,
     }
 }
 
@@ -1342,20 +1464,24 @@ where
     clipboard
         .set_text(text.to_owned())
         .context("could not copy transcript to clipboard")?;
+    let previous = StagedClipboard::capture(clipboard, previous, text);
     let write_token = restore_plan.after_transcript_write(write_before);
-    restore_after_delay(
+    let restored = restore_after_delay(
         clipboard,
         previous,
         write_token,
         restore_plan,
         clipboard_policy,
     )?;
-    Ok(StageOutcome::Blocked)
+    Ok(match restored {
+        ClipboardRestore::Changed => StageOutcome::ClipboardChanged,
+        _ => StageOutcome::Blocked,
+    })
 }
 
 fn finish_blocked_clipboard<C, H>(
     clipboard: &mut C,
-    previous: ClipboardSnapshot,
+    previous: StagedClipboard,
     write_token: ClipboardWriteToken,
     restore_plan: ClipboardRestorePlan<'_, H>,
     clipboard_policy: ClipboardPolicy,
@@ -1364,20 +1490,19 @@ where
     C: ClipboardStore,
     H: ClipboardRestoreGate + ?Sized,
 {
-    restore_after_delay(
+    let restored = restore_after_delay(
         clipboard,
         previous,
         write_token,
         restore_plan,
         clipboard_policy,
     )?;
-    Ok(match clipboard_policy {
-        ClipboardPolicy::RestorePrevious => {
-            PasteReport::new(PasteOutcome::Blocked, false, Some(true))
-        }
-        ClipboardPolicy::KeepTranscript => {
+    Ok(match restored {
+        ClipboardRestore::Restored => PasteReport::new(PasteOutcome::Blocked, false, Some(true)),
+        ClipboardRestore::KeptTranscript => {
             PasteReport::new(PasteOutcome::CopiedOnly, false, Some(false))
         }
+        ClipboardRestore::Changed => PasteReport::new(PasteOutcome::ClipboardChanged, false, None),
     })
 }
 
@@ -1398,11 +1523,11 @@ where
 /// Returns an error if the previous clipboard payload cannot be restored.
 fn restore_after_delay<C, H>(
     clipboard: &mut C,
-    previous: ClipboardSnapshot,
+    previous: StagedClipboard,
     write_token: ClipboardWriteToken,
     restore_plan: ClipboardRestorePlan<'_, H>,
     clipboard_policy: ClipboardPolicy,
-) -> Result<()>
+) -> Result<ClipboardRestore>
 where
     C: ClipboardStore,
     H: ClipboardRestoreGate + ?Sized,
@@ -1410,7 +1535,7 @@ where
     if clipboard_policy == ClipboardPolicy::RestorePrevious {
         restore_plan.wait_before_restore(write_token);
     }
-    restore_or_clear_clipboard(clipboard, previous, clipboard_policy)
+    previous.restore(clipboard, clipboard_policy)
 }
 
 /// Best-effort snapshot of supported clipboard payloads before staging text.

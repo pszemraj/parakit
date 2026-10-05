@@ -65,6 +65,8 @@ If one is still held, it keeps the transcript on the clipboard instead of sendin
 a chord that could release an overlapping push-to-talk capture.
 The transcript remains available in history for recovery after releasing the keys.
 
+Direct typing also waits for modifiers, then rechecks focus and modifiers before each character. An unreadable modifier state blocks typing; a detected change stops the remaining text, so part of a transcript may already have been inserted. Tabs, newlines, and other control characters are rejected before typing because synthetic keys could navigate fields or submit text. Direct mode never copies a blocked transcript to the clipboard; use daemon history for recovery.
+
 ## Passive X11 Listen
 
 The `x11-listen` backend is for debugging hotkey state without registering or grabbing the chord:

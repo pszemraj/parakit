@@ -68,11 +68,15 @@
 # Linux requires X11 for every mode. Linux direct typing may mishandle emoji
 # or rare scripts; Windows direct supports Unicode; macOS direct requires
 # Accessibility permission.
+# Linux direct rejects control characters (including tabs/newlines), waits
+# for modifiers, and stops remaining text if focus or modifier state changes.
 
 # daemon.keep_transcript_clipboard
 # Type: boolean (optional). Default: false.
 # Clipboard modes restore the prior supported payload when false and leave
 # the transcript when true.
+# A detected competing clipboard write or unreadable state suppresses paste
+# and restoration as applicable, preserving the current clipboard instead.
 # CLI --keep-transcript-clipboard/--no-keep-transcript-clipboard override it
 # in either direction; the two flags conflict with each other. Ignored in
 # "direct" mode.

@@ -3,7 +3,7 @@
 use super::*;
 use crate::daemon::desktop::clipboard_restore::default_paste_confirmation;
 use std::borrow::Cow;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
 use std::rc::Rc;
 
@@ -37,6 +37,11 @@ struct MockClipboard {
     events: Rc<RefCell<Vec<String>>>,
     fail_next_set: bool,
     fail_set_matching: Option<String>,
+    generation: u64,
+    pending_external_write: Rc<RefCell<Option<MockClipboardContent>>>,
+    stamp_unavailable: Rc<Cell<bool>>,
+    guard_read: bool,
+    after_guard_read: Option<MockClipboardContent>,
 }
 
 impl MockClipboard {
@@ -46,6 +51,11 @@ impl MockClipboard {
             events: Rc::new(RefCell::new(Vec::new())),
             fail_next_set: false,
             fail_set_matching: None,
+            generation: 1,
+            pending_external_write: Rc::new(RefCell::new(None)),
+            stamp_unavailable: Rc::new(Cell::new(false)),
+            guard_read: false,
+            after_guard_read: None,
         }
     }
 
@@ -129,12 +139,38 @@ impl MockClipboard {
         }
         Ok(())
     }
+
+    fn apply_external_write(&mut self) {
+        let content = self.pending_external_write.borrow_mut().take();
+        if let Some(content) = content {
+            self.content = content;
+            self.generation += 1;
+            self.events.borrow_mut().push("external-write".to_string());
+        }
+    }
 }
 
 impl ClipboardStore for MockClipboard {
+    fn change_stamp(&mut self) -> Result<u64> {
+        self.apply_external_write();
+        self.guard_read = true;
+        if self.stamp_unavailable.get() {
+            anyhow::bail!("clipboard stamp unavailable");
+        }
+        Ok(self.generation)
+    }
+
     fn get_text(&mut self) -> Result<String> {
-        self.events.borrow_mut().push("read".to_string());
-        match &self.content {
+        self.apply_external_write();
+        self.events.borrow_mut().push(
+            if self.guard_read {
+                "guard-read"
+            } else {
+                "read"
+            }
+            .to_string(),
+        );
+        let text = match &self.content {
             MockClipboardContent::Text(text) => Ok(text.clone()),
             MockClipboardContent::Html {
                 alt_text: Some(text),
@@ -145,13 +181,24 @@ impl ClipboardStore for MockClipboard {
                 ..
             } => Ok(text.clone()),
             _ => anyhow::bail!("clipboard is not text"),
+        };
+        let after_read = if self.guard_read {
+            self.after_guard_read.take()
+        } else {
+            None
+        };
+        if let Some(content) = after_read {
+            *self.pending_external_write.borrow_mut() = Some(content);
         }
+        text
     }
 
     fn set_text(&mut self, text: String) -> Result<()> {
         self.events.borrow_mut().push(format!("set:{text}"));
         self.fail_set_if_needed(Some(&text))?;
         self.content = MockClipboardContent::Text(text);
+        self.generation += 1;
+        self.guard_read = false;
         Ok(())
     }
 
@@ -170,6 +217,8 @@ impl ClipboardStore for MockClipboard {
         ));
         self.fail_set_if_needed(None)?;
         self.content = MockClipboardContent::Html { html, alt_text };
+        self.generation += 1;
+        self.guard_read = false;
         Ok(())
     }
 
@@ -186,6 +235,8 @@ impl ClipboardStore for MockClipboard {
             .push(format!("set-files:{}", files.len()));
         self.fail_set_if_needed(None)?;
         self.content = MockClipboardContent::FileList(files.to_vec());
+        self.generation += 1;
+        self.guard_read = false;
         Ok(())
     }
 
@@ -223,12 +274,16 @@ impl ClipboardStore for MockClipboard {
             height: image.height,
             bytes: image.bytes.into_owned(),
         };
+        self.generation += 1;
+        self.guard_read = false;
         Ok(())
     }
 
     fn clear(&mut self) -> Result<()> {
         self.events.borrow_mut().push("clear".to_string());
         self.content = MockClipboardContent::Empty;
+        self.generation += 1;
+        self.guard_read = false;
         Ok(())
     }
 }
@@ -240,6 +295,8 @@ struct MockRestoreGate {
     timeout: bool,
     confirmation_override: Option<PasteConfirmation>,
     record_baseline: bool,
+    on_wait: Option<Rc<dyn Fn()>>,
+    on_confirmation: Option<Rc<dyn Fn()>>,
 }
 
 impl MockRestoreGate {
@@ -250,6 +307,8 @@ impl MockRestoreGate {
             timeout: false,
             confirmation_override: None,
             record_baseline: false,
+            on_wait: None,
+            on_confirmation: None,
         }
     }
 
@@ -275,6 +334,16 @@ impl MockRestoreGate {
         self.record_baseline = true;
         self
     }
+
+    fn on_wait(mut self, hook: impl Fn() + 'static) -> Self {
+        self.on_wait = Some(Rc::new(hook));
+        self
+    }
+
+    fn on_confirmation(mut self, hook: impl Fn() + 'static) -> Self {
+        self.on_confirmation = Some(Rc::new(hook));
+        self
+    }
 }
 
 impl ClipboardRestoreGate for MockRestoreGate {
@@ -294,6 +363,9 @@ impl ClipboardRestoreGate for MockRestoreGate {
     }
 
     fn wait_before_restore(&self, token: ClipboardWriteToken, _fallback_delay: Duration) {
+        if let Some(hook) = &self.on_wait {
+            hook();
+        }
         self.events.borrow_mut().push(format!(
             "{}:{}->{}",
             if self.timeout { "wait-timeout" } else { "wait" },
@@ -316,6 +388,9 @@ impl ClipboardRestoreGate for MockRestoreGate {
         paste_consume_delay: Duration,
         _ctx: &PasteConfirmationContext<'_>,
     ) -> PasteConfirmation {
+        if let Some(hook) = &self.on_confirmation {
+            hook();
+        }
         match self.confirmation_override {
             Some(confirmation) => {
                 self.events
@@ -832,7 +907,7 @@ fn clipboard_swap_cases_are_stable() {
         }
         assert_eq!(clipboard.text(), case.expected_text, "{}", case.name);
         assert_eq!(
-            events.borrow().as_slice(),
+            transaction_events(&events).as_slice(),
             case.expected_events,
             "{}",
             case.name
@@ -870,7 +945,7 @@ fn modifier_wait_and_baseline_complete_before_final_focus_recheck() {
 
     assert_eq!(result.outcome, PasteOutcome::Pasted);
     assert_eq!(
-        events.borrow().as_slice(),
+        transaction_events(&events).as_slice(),
         [
             "guard",
             "modifier-wait",
@@ -919,7 +994,7 @@ fn modifier_wait_timeout_keeps_transcript_without_posting() {
     assert_eq!(result.telemetry.clipboard_restored, Some(false));
     assert_eq!(clipboard.text(), Some("dictated text"));
     assert_eq!(
-        events.borrow().as_slice(),
+        transaction_events(&events).as_slice(),
         ["guard", "modifier-wait", "set:dictated text"]
     );
 }
@@ -954,7 +1029,7 @@ fn unsafe_modifier_skip_keeps_staged_transcript_without_posting() {
     assert_eq!(result.telemetry.clipboard_restored, Some(false));
     assert_eq!(clipboard.text(), Some("dictated text"));
     assert_eq!(
-        events.borrow().as_slice(),
+        transaction_events(&events).as_slice(),
         [
             "guard",
             "read",
@@ -963,6 +1038,17 @@ fn unsafe_modifier_skip_keeps_staged_transcript_without_posting() {
             "paste-attempt"
         ]
     );
+}
+
+// These transaction-order checks retain all staging, focus, dispatch and
+// restoration events. Race tests below separately verify the read-back guard.
+fn transaction_events(events: &Rc<RefCell<Vec<String>>>) -> Vec<String> {
+    events
+        .borrow()
+        .iter()
+        .filter(|event| event.as_str() != "guard-read")
+        .cloned()
+        .collect()
 }
 
 #[derive(Clone, Copy)]
@@ -1075,7 +1161,6 @@ fn clipboard_restore_gate_cases_are_stable() {
             expected_text: "dictated text",
             expected_events: &[
                 "guard",
-                "read",
                 "before-write:10",
                 "set:dictated text",
                 "after-write:11",
@@ -1142,11 +1227,7 @@ fn clipboard_restore_gate_cases_are_stable() {
         assert_eq!(result.outcome, case.expected_outcome, "{}", case.name);
         assert_eq!(clipboard.text(), Some(case.expected_text), "{}", case.name);
         assert_eq!(
-            events
-                .borrow()
-                .iter()
-                .map(String::as_str)
-                .collect::<Vec<_>>(),
+            transaction_events(&events),
             case.expected_events,
             "{}",
             case.name
@@ -1267,7 +1348,11 @@ fn clipboard_restore_policy_preserves_supported_non_text_payloads() {
 
         assert_eq!(result.outcome, PasteOutcome::Pasted, "{name}");
         assert_eq!(clipboard.content, expected_content, "{name}");
-        assert_eq!(events.borrow().as_slice(), expected_events, "{name}");
+        assert_eq!(
+            transaction_events(&events).as_slice(),
+            expected_events,
+            "{name}"
+        );
     }
 }
 
@@ -1300,7 +1385,7 @@ fn unsupported_previous_clipboard_clears_staged_transcript_on_guard_block() {
     assert_eq!(result.outcome, PasteOutcome::Blocked);
     assert_eq!(clipboard.content, MockClipboardContent::Empty);
     assert_eq!(
-        events.borrow().as_slice(),
+        transaction_events(&events).as_slice(),
         ["guard", "read", "set:dictated text", "guard", "clear"]
     );
 }
@@ -1507,4 +1592,246 @@ fn paste_survives_a_failed_clipboard_restore() {
         );
         assert_eq!(clipboard.text(), Some("dictated text"), "{}", case.name);
     }
+}
+
+fn competing_clipboard_payloads() -> [MockClipboardContent; 3] {
+    [
+        MockClipboardContent::Text("new copy".to_string()),
+        MockClipboardContent::Image {
+            width: 1,
+            height: 1,
+            bytes: vec![1, 2, 3, 255],
+        },
+        // A new rich payload can have the same plain text as our transcript.
+        // Text comparison alone must not authorize pasting/restoring it.
+        MockClipboardContent::Html {
+            html: "<b>dictated text</b>".to_string(),
+            alt_text: Some("dictated text".to_string()),
+        },
+    ]
+}
+
+#[test]
+fn competing_clipboard_during_final_focus_guard_skips_chord_and_preserves_payload() {
+    for policy in [
+        ClipboardPolicy::RestorePrevious,
+        ClipboardPolicy::KeepTranscript,
+    ] {
+        for competing in competing_clipboard_payloads() {
+            let mut clipboard = MockClipboard::new("old clipboard");
+            let pending = Rc::clone(&clipboard.pending_external_write);
+            let mut guard_calls = 0;
+            let report = paste_with_clipboard_swap_guarded(
+                &mut clipboard,
+                "dictated text",
+                PasteMode::Standard,
+                || true,
+                || panic!("a competing clipboard must never be pasted"),
+                Duration::ZERO,
+                restore_plan(&quiet_gate()),
+                policy,
+                None,
+                || {
+                    guard_calls += 1;
+                    if guard_calls == 2 {
+                        *pending.borrow_mut() = Some(competing.clone());
+                    }
+                    Ok(true)
+                },
+            )
+            .expect("clipboard competition is recoverable without fallback");
+            assert_eq!(report.outcome, PasteOutcome::ClipboardChanged);
+            assert!(!report.telemetry.paste_event_posted);
+            assert_eq!(report.telemetry.clipboard_restored, None);
+            assert_eq!(clipboard.content, competing);
+            assert_eq!(
+                clipboard
+                    .events
+                    .borrow()
+                    .iter()
+                    .filter(|event| event.starts_with("set:"))
+                    .count(),
+                1
+            );
+        }
+    }
+}
+
+#[test]
+fn competing_clipboard_during_confirmation_is_preserved_after_posted_paste() {
+    for policy in [
+        ClipboardPolicy::RestorePrevious,
+        ClipboardPolicy::KeepTranscript,
+    ] {
+        for competing in competing_clipboard_payloads() {
+            let mut clipboard = MockClipboard::new("old clipboard");
+            let pending = Rc::clone(&clipboard.pending_external_write);
+            let queued = competing.clone();
+            let gate = quiet_gate().on_confirmation(move || {
+                *pending.borrow_mut() = Some(queued.clone());
+            });
+            let report = paste_with_clipboard_swap_guarded(
+                &mut clipboard,
+                "dictated text",
+                PasteMode::Standard,
+                || true,
+                || Ok(PasteDispatch::Posted),
+                Duration::ZERO,
+                restore_plan(&gate),
+                policy,
+                None,
+                || Ok(true),
+            )
+            .expect("already posted paste must remain successful");
+            assert_eq!(report.outcome, PasteOutcome::Pasted);
+            assert!(report.telemetry.paste_event_posted);
+            assert_eq!(report.telemetry.clipboard_restored, None);
+            assert_eq!(clipboard.content, competing);
+        }
+    }
+}
+
+#[test]
+fn competing_clipboard_during_error_cleanup_suppresses_fallback() {
+    for fail_guard in [true, false] {
+        for policy in [
+            ClipboardPolicy::RestorePrevious,
+            ClipboardPolicy::KeepTranscript,
+        ] {
+            let mut clipboard = MockClipboard::new("old clipboard");
+            let guard_pending = Rc::clone(&clipboard.pending_external_write);
+            let paste_pending = Rc::clone(&clipboard.pending_external_write);
+            let competing = MockClipboardContent::Text("new copy".to_string());
+            let mut guard_calls = 0;
+            let report = paste_with_clipboard_swap_guarded(
+                &mut clipboard,
+                "dictated text",
+                PasteMode::Standard,
+                || true,
+                || {
+                    assert!(!fail_guard);
+                    *paste_pending.borrow_mut() = Some(competing.clone());
+                    anyhow::bail!("dispatch failed")
+                },
+                Duration::ZERO,
+                restore_plan(&quiet_gate()),
+                policy,
+                None,
+                || {
+                    guard_calls += 1;
+                    if fail_guard && guard_calls == 2 {
+                        *guard_pending.borrow_mut() = Some(competing.clone());
+                        anyhow::bail!("focus unavailable");
+                    }
+                    Ok(true)
+                },
+            )
+            .expect("competing clipboard cleanup must not trigger fallback copying");
+            assert_eq!(report.outcome, PasteOutcome::ClipboardChanged);
+            assert_eq!(report.telemetry.clipboard_restored, None);
+            assert_eq!(clipboard.content, competing);
+        }
+    }
+}
+
+#[test]
+fn stage_only_restore_wait_preserves_new_clipboard() {
+    let mut clipboard = MockClipboard::new("old clipboard");
+    let pending = Rc::clone(&clipboard.pending_external_write);
+    let competing = MockClipboardContent::Text("new copy".to_string());
+    let queued = competing.clone();
+    let gate = quiet_gate().on_wait(move || {
+        *pending.borrow_mut() = Some(queued.clone());
+    });
+    let outcome = stage_text_without_paste(
+        &mut clipboard,
+        "dictated text",
+        restore_plan(&gate),
+        ClipboardPolicy::RestorePrevious,
+    )
+    .expect("clipboard competition is recoverable");
+    assert!(matches!(outcome, StageOutcome::ClipboardChanged));
+    assert_eq!(clipboard.content, competing);
+}
+
+#[test]
+fn unreadable_clipboard_stamp_fails_closed_before_chord() {
+    for fail_capture in [true, false] {
+        let mut clipboard = MockClipboard::new("old clipboard");
+        clipboard.stamp_unavailable.set(fail_capture);
+        let unavailable = Rc::clone(&clipboard.stamp_unavailable);
+        let mut guards = 0;
+        let report = paste_with_clipboard_swap_guarded(
+            &mut clipboard,
+            "dictated text",
+            PasteMode::Standard,
+            || true,
+            || panic!("unreadable stamp must prevent dispatch"),
+            Duration::ZERO,
+            restore_plan(&quiet_gate()),
+            ClipboardPolicy::RestorePrevious,
+            None,
+            || {
+                guards += 1;
+                if guards == 2 {
+                    unavailable.set(true);
+                }
+                Ok(true)
+            },
+        )
+        .expect("failed observation must preserve clipboard rather than trigger fallback");
+        assert_eq!(report.outcome, PasteOutcome::ClipboardChanged);
+        assert_eq!(report.telemetry.clipboard_restored, None);
+        assert_eq!(clipboard.text(), Some("dictated text"));
+        assert!(!report.telemetry.paste_event_posted);
+    }
+}
+
+#[test]
+fn clipboard_stamp_recheck_detects_same_plain_payload_changed_during_read() {
+    let mut clipboard = MockClipboard::new("old clipboard");
+    let competing = MockClipboardContent::Html {
+        html: "<i>dictated text</i>".to_string(),
+        alt_text: Some("dictated text".to_string()),
+    };
+    clipboard.after_guard_read = Some(competing.clone());
+    let report = paste_with_clipboard_swap_guarded(
+        &mut clipboard,
+        "dictated text",
+        PasteMode::Standard,
+        || true,
+        || panic!("a payload changed during read must never be pasted"),
+        Duration::ZERO,
+        restore_plan(&quiet_gate()),
+        ClipboardPolicy::RestorePrevious,
+        None,
+        || Ok(true),
+    )
+    .expect("read-back race must preserve competing data");
+    assert_eq!(report.outcome, PasteOutcome::ClipboardChanged);
+    assert_eq!(clipboard.content, competing);
+    assert_eq!(report.telemetry.clipboard_restored, None);
+}
+
+#[test]
+fn unreadable_clipboard_stamp_after_confirmation_prevents_restoration() {
+    let mut clipboard = MockClipboard::new("old clipboard");
+    let unavailable = Rc::clone(&clipboard.stamp_unavailable);
+    let gate = quiet_gate().on_confirmation(move || unavailable.set(true));
+    let report = paste_with_clipboard_swap_guarded(
+        &mut clipboard,
+        "dictated text",
+        PasteMode::Standard,
+        || true,
+        || Ok(PasteDispatch::Posted),
+        Duration::ZERO,
+        restore_plan(&gate),
+        ClipboardPolicy::RestorePrevious,
+        None,
+        || Ok(true),
+    )
+    .expect("already posted paste remains successful");
+    assert_eq!(report.outcome, PasteOutcome::Pasted);
+    assert_eq!(report.telemetry.clipboard_restored, None);
+    assert_eq!(clipboard.text(), Some("dictated text"));
 }
