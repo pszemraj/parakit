@@ -55,6 +55,7 @@ mod inject_smoke;
 #[cfg(target_os = "linux")]
 #[path = "direct.rs"]
 mod direct;
+#[cfg(target_os = "linux")]
 pub(crate) use direct::DirectTypingFailure;
 
 /// Error label used when paste succeeded but previous clipboard restore failed.

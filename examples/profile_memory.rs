@@ -366,14 +366,19 @@ fn resident_metric(host: &Value) -> Option<(&'static str, u64)> {
         .map(|value| ("rss_bytes", value))
 }
 
+#[cfg(target_os = "linux")]
 fn host_interval_peak(host: &Value, mut sampled: Value) -> Value {
-    #[cfg(target_os = "linux")]
     if let Some(kernel_peak) = host.pointer("/status_bytes/VmHWM").and_then(Value::as_u64) {
         if let Some(object) = sampled.as_object_mut() {
             object.insert("rss_bytes".into(), json!(kernel_peak));
             object.insert("source".into(), json!("linux_VmHWM"));
         }
     }
+    sampled
+}
+
+#[cfg(not(target_os = "linux"))]
+fn host_interval_peak(_host: &Value, sampled: Value) -> Value {
     sampled
 }
 

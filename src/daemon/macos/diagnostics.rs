@@ -963,6 +963,7 @@ mod tests {
                 acknowledgement_ms: Some(42),
                 clipboard_restored: Some(true),
             },
+            diagnostic: None,
         }
     }
 

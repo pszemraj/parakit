@@ -307,6 +307,7 @@ fn paste_transcript(
         Err(err) => err,
     };
 
+    #[cfg(target_os = "linux")]
     if let Some(failure) = paste_error.downcast_ref::<crate::daemon::inject::DirectTypingFailure>()
     {
         let reason = failure.reason();
