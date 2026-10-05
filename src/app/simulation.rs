@@ -64,7 +64,7 @@ pub(super) fn run_ptt_audio_simulation(
         data_log,
         sounds: Sounds::new(false),
         log: Arc::clone(&log),
-        notifier: Notifier::new(Arc::new(Logger::new(LogLevel::Quiet))),
+        notifier: Notifier::silent(Arc::new(Logger::new(LogLevel::Quiet))),
         state: Arc::clone(&state),
         paste_mode: start.effective_paste_mode(config),
         keep_transcript_clipboard: start.effective_keep_transcript_clipboard(config),

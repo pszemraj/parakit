@@ -58,7 +58,7 @@ pub(super) fn insertion_result_remembers_transcript(result: &Result<InsertReport
 ///   to recover a target bundle identifier on platforms that expose one.
 /// * `transcript_chars` - Character count of the transcript offered for
 ///   insertion.
-/// * `failure_reason` - Error display text when `outcome` is `"error"`.
+/// * `failure_reason` - Error or degraded-outcome diagnostic text.
 /// * `focus_verification` - How focus was verified before insertion, as
 ///   observed by the last live recheck performed for this attempt (or
 ///   `"not_applicable"` when insertion never reached a focus check, e.g.
@@ -258,9 +258,8 @@ fn paste_transcript(
                     report.telemetry.acknowledgement_kind,
                 ));
                 if report.telemetry.acknowledgement_kind == "no_evidence" {
-                    notifier.paste_blocked(
-                        "Paste could not be confirmed and the clipboard changed. Inspect the target before retrying; the full transcript remains in history.",
-                    );
+                    notifier
+                        .paste_unconfirmed(PasteBlockReason::UnconfirmedClipboardChanged.notice());
                 }
                 return Ok(InsertReport::from_paste(
                     InsertOutcome::PastedUnverified,
@@ -273,7 +272,7 @@ fn paste_transcript(
                     // alarm fatigue from a second silent failure path and
                     // tell the user the transcript is safe on the
                     // clipboard.
-                    notifier.paste_blocked(PasteBlockReason::Unconfirmed.notice());
+                    notifier.paste_unconfirmed(PasteBlockReason::Unconfirmed.notice());
                 } else {
                     notifier.transcript_copied(PasteBlockReason::FocusChangedBeforePaste.notice());
                 }
@@ -310,6 +309,9 @@ fn paste_transcript(
     #[cfg(target_os = "linux")]
     if let Some(failure) = paste_error.downcast_ref::<crate::daemon::inject::DirectTypingFailure>()
     {
+        if !failure.is_blocked() {
+            return Err(paste_error);
+        }
         let reason = failure.reason();
         log.warn(format!(
             "direct insertion stopped after {} of {} characters: {reason}",
@@ -317,7 +319,7 @@ fn paste_transcript(
             failure.total_chars()
         ));
         notifier.paste_blocked(format!(
-            "Direct typing stopped after {} of {} characters. Check the target before using copy-last; the full transcript remains in history.",
+            "Direct typing stopped after {} of {} characters. Check the target before retrying; dictations remain available through copy-last when history is enabled.",
             failure.typed_chars(),
             failure.total_chars()
         ));
@@ -624,6 +626,9 @@ pub(crate) enum PasteBlockReason {
     /// The paste chord was sent but never acknowledged, so the transcript was
     /// deliberately left on the clipboard for the user to paste manually.
     Unconfirmed,
+    /// The paste chord was sent without acknowledgement and another process
+    /// replaced the staged clipboard text before recovery.
+    UnconfirmedClipboardChanged,
     /// Clipboard contents changed or could not be verified during insertion.
     ClipboardChanged,
 }
@@ -643,6 +648,7 @@ impl PasteBlockReason {
             Self::FocusChangedBeforePaste => "focus changed immediately before paste",
             Self::UnsafeModifiers => "physical modifiers made the paste shortcut unsafe",
             Self::Unconfirmed => "paste not acknowledged",
+            Self::UnconfirmedClipboardChanged => "paste not acknowledged and clipboard replaced",
             Self::ClipboardChanged => "clipboard changed or unavailable",
         }
     }
@@ -665,6 +671,9 @@ impl PasteBlockReason {
             Self::ClipboardChanged => {
                 "Clipboard changed or was unavailable; automatic insertion stopped."
             }
+            Self::UnconfirmedClipboardChanged => {
+                "Paste could not be confirmed and the clipboard changed. Inspect the target before retrying."
+            }
             // The unacknowledged tier is only reachable where a platform
             // overrides `await_paste_confirmation` (macOS today), but name
             // the right chord for whatever platform this compiles for.
@@ -686,9 +695,8 @@ pub(crate) enum InsertOutcome {
     Pasted,
     /// The paste chord was sent, but insertion could not be positively
     /// confirmed within the acknowledgement grace period. Treated as a
-    /// success (the clipboard was restored per policy, same as
-    /// [`Self::Pasted`]); distinct telemetry so this degraded case remains
-    /// visible.
+    /// success; clipboard disposition depends on the acknowledgement path and
+    /// is reported separately in telemetry.
     PastedUnverified,
     CopiedOnly,
     Blocked,

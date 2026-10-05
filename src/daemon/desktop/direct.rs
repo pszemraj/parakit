@@ -10,14 +10,25 @@ use std::time::Duration;
 pub(crate) struct DirectTypingFailure {
     typed_chars: usize,
     total_chars: usize,
+    blocked: bool,
     cause: anyhow::Error,
 }
 
 impl DirectTypingFailure {
-    fn new(typed_chars: usize, total_chars: usize, cause: anyhow::Error) -> Self {
+    fn blocked(typed_chars: usize, total_chars: usize, cause: anyhow::Error) -> Self {
         Self {
             typed_chars,
             total_chars,
+            blocked: true,
+            cause,
+        }
+    }
+
+    fn operational(typed_chars: usize, total_chars: usize, cause: anyhow::Error) -> Self {
+        Self {
+            typed_chars,
+            total_chars,
+            blocked: false,
             cause,
         }
     }
@@ -47,6 +58,16 @@ impl DirectTypingFailure {
     /// The complete formatted error chain.
     pub(crate) fn reason(&self) -> String {
         format!("{:#}", self.cause)
+    }
+
+    /// Whether a deliberate focus/modifier/input guard stopped insertion.
+    ///
+    /// # Returns
+    ///
+    /// `true` for an intentional safety block, or `false` for an operational
+    /// backend failure.
+    pub(crate) fn is_blocked(&self) -> bool {
+        self.blocked
     }
 }
 
@@ -89,7 +110,7 @@ pub(super) fn type_text_guarded(
 ) -> std::result::Result<usize, DirectTypingFailure> {
     let total_chars = text.chars().count();
     if text.chars().any(char::is_control) {
-        return Err(DirectTypingFailure::new(
+        return Err(DirectTypingFailure::blocked(
             0,
             total_chars,
             anyhow!(
@@ -98,9 +119,9 @@ pub(super) fn type_text_guarded(
         ));
     }
     let modifiers_released = super::wait_for_x11_modifier_release(timeout, &mut modifiers_held)
-        .map_err(|cause| DirectTypingFailure::new(0, total_chars, cause))?;
+        .map_err(|cause| DirectTypingFailure::operational(0, total_chars, cause))?;
     if !modifiers_released {
-        return Err(DirectTypingFailure::new(
+        return Err(DirectTypingFailure::blocked(
             0,
             total_chars,
             anyhow!("direct insertion blocked because physical modifiers remained held"),
@@ -109,25 +130,25 @@ pub(super) fn type_text_guarded(
     let mut typed_chars = 0;
     for character in text.chars() {
         let focus_matches = before_character()
-            .map_err(|cause| DirectTypingFailure::new(typed_chars, total_chars, cause))?;
+            .map_err(|cause| DirectTypingFailure::operational(typed_chars, total_chars, cause))?;
         if !focus_matches {
-            return Err(DirectTypingFailure::new(
+            return Err(DirectTypingFailure::blocked(
                 typed_chars,
                 total_chars,
                 anyhow!("direct insertion stopped because focus changed"),
             ));
         }
         let modifier_held = modifiers_held()
-            .map_err(|cause| DirectTypingFailure::new(typed_chars, total_chars, cause))?;
+            .map_err(|cause| DirectTypingFailure::operational(typed_chars, total_chars, cause))?;
         if modifier_held {
-            return Err(DirectTypingFailure::new(
+            return Err(DirectTypingFailure::blocked(
                 typed_chars,
                 total_chars,
                 anyhow!("direct insertion stopped because a physical modifier is held"),
             ));
         }
         type_character(character)
-            .map_err(|cause| DirectTypingFailure::new(typed_chars, total_chars, cause))?;
+            .map_err(|cause| DirectTypingFailure::operational(typed_chars, total_chars, cause))?;
         typed_chars += 1;
     }
     Ok(typed_chars)
@@ -148,7 +169,7 @@ mod tests {
                 || panic!("control text must not query focus"),
                 |_| panic!("control text must not post input"),
             );
-            assert!(result.is_err(), "{text:?}");
+            assert!(result.unwrap_err().is_blocked(), "{text:?}");
         }
     }
 
@@ -161,7 +182,7 @@ mod tests {
             || panic!("focus must be checked after modifier readiness"),
             |_| panic!("held modifiers must not post input"),
         );
-        assert!(result.is_err());
+        assert!(result.unwrap_err().is_blocked());
     }
 
     #[test]
@@ -173,7 +194,9 @@ mod tests {
             || panic!("unreadable modifiers must block"),
             |_| panic!("unreadable modifiers must not post input"),
         );
-        assert!(result.unwrap_err().to_string().contains("X11 query failed"));
+        let failure = result.unwrap_err();
+        assert!(!failure.is_blocked());
+        assert!(failure.to_string().contains("X11 query failed"));
     }
 
     #[test]
@@ -221,6 +244,7 @@ mod tests {
         let failure = result.unwrap_err();
         assert_eq!(failure.typed_chars(), 1);
         assert_eq!(failure.total_chars(), 2);
+        assert!(failure.is_blocked());
         assert_eq!(typed, "a");
     }
 
@@ -241,6 +265,7 @@ mod tests {
         let failure = result.unwrap_err();
         assert_eq!(failure.typed_chars(), 1);
         assert_eq!(failure.total_chars(), 2);
+        assert!(failure.is_blocked());
         assert_eq!(typed, "a");
     }
 
@@ -267,6 +292,7 @@ mod tests {
         let failure = result.unwrap_err();
         assert_eq!(failure.typed_chars(), 1);
         assert_eq!(failure.total_chars(), 2);
+        assert!(!failure.is_blocked());
         assert!(failure.to_string().contains("X11 query failed"));
         assert_eq!(typed, "a");
     }
@@ -298,6 +324,7 @@ mod tests {
             let failure = result.unwrap_err();
             assert_eq!(failure.typed_chars(), 1);
             assert_eq!(failure.total_chars(), 3);
+            assert!(!failure.is_blocked());
             assert_eq!(typed, "é");
             assert!(failure.reason().contains(if fail_focus {
                 "focus query failed"

@@ -3,6 +3,11 @@
 #[cfg(target_os = "macos")]
 use anyhow::Context;
 use std::sync::Arc;
+#[cfg(test)]
+use std::sync::Mutex;
+
+#[cfg(test)]
+type RecordedNotifications = Arc<Mutex<Vec<(String, String)>>>;
 
 use super::{audio::MicInfo, logging::Logger};
 
@@ -10,6 +15,15 @@ use super::{audio::MicInfo, logging::Logger};
 #[derive(Clone)]
 pub(crate) struct Notifier {
     log: Arc<Logger>,
+    delivery: NotificationDelivery,
+}
+
+#[derive(Clone)]
+enum NotificationDelivery {
+    Desktop,
+    Silent,
+    #[cfg(test)]
+    Recording(RecordedNotifications),
 }
 
 impl Notifier {
@@ -23,7 +37,39 @@ impl Notifier {
     ///
     /// A notifier that falls back to verbose logging when notifications fail.
     pub(crate) fn new(log: Arc<Logger>) -> Self {
-        Self { log }
+        Self {
+            log,
+            delivery: NotificationDelivery::Desktop,
+        }
+    }
+
+    /// Build a notifier that deliberately emits no desktop messages.
+    ///
+    /// # Returns
+    ///
+    /// A notifier that ignores all messages.
+    pub(crate) fn silent(log: Arc<Logger>) -> Self {
+        Self {
+            log,
+            delivery: NotificationDelivery::Silent,
+        }
+    }
+
+    #[cfg(test)]
+    /// Build a notifier that records messages for assertions without desktop I/O.
+    ///
+    /// # Returns
+    ///
+    /// The notifier and its shared recorded-message buffer.
+    pub(crate) fn recording(log: Arc<Logger>) -> (Self, RecordedNotifications) {
+        let messages = Arc::new(Mutex::new(Vec::new()));
+        (
+            Self {
+                log,
+                delivery: NotificationDelivery::Recording(Arc::clone(&messages)),
+            },
+            messages,
+        )
     }
 
     /// Notify that a transcript was copied without sending a paste chord.
@@ -42,6 +88,11 @@ impl Notifier {
     /// * `reason` - Short reason for the block.
     pub(crate) fn paste_blocked(&self, reason: impl AsRef<str>) {
         self.show("Paste blocked", reason.as_ref());
+    }
+
+    /// Notify that a posted paste could not be confirmed.
+    pub(crate) fn paste_unconfirmed(&self, reason: impl AsRef<str>) {
+        self.show("Paste unconfirmed", reason.as_ref());
     }
 
     /// Notify that an offloaded model could not be reopened at PTT start.
@@ -81,9 +132,32 @@ impl Notifier {
     }
 
     fn show(&self, summary: &str, body: impl AsRef<str>) {
-        if let Err(err) = show_notification(summary, body.as_ref()) {
-            self.log
-                .verbose(format!("parakit: desktop notification failed: {err:#}"));
+        match &self.delivery {
+            NotificationDelivery::Silent => {}
+            #[cfg(test)]
+            NotificationDelivery::Recording(messages) => {
+                messages
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner())
+                    .push((summary.to_owned(), body.as_ref().to_owned()));
+            }
+            NotificationDelivery::Desktop => {
+                let summary = summary.to_owned();
+                let body = body.as_ref().to_owned();
+                let log = Arc::clone(&self.log);
+                if let Err(error) = std::thread::Builder::new()
+                    .name("parakit-notification".into())
+                    .spawn(move || {
+                        if let Err(error) = show_notification(&summary, &body) {
+                            log.verbose(format!("parakit: desktop notification failed: {error:#}"));
+                        }
+                    })
+                {
+                    self.log.verbose(format!(
+                        "parakit: could not start desktop notification: {error}"
+                    ));
+                }
+            }
         }
     }
 }
@@ -100,12 +174,9 @@ fn show_notification(summary: &str, body: &str) -> anyhow::Result<()> {
 
 /// Show a macOS Notification Center banner through `osascript`.
 ///
-/// This runs `osascript` synchronously. `display notification` returns
-/// quickly (it does not wait for user interaction), and this call already
-/// happens on the worker thread after insertion has resolved, so blocking
-/// briefly here does not add to dictation latency; a synchronous call also
-/// keeps failures visible to the caller for the existing verbose-log
-/// fallback instead of silently dropping them in a detached thread.
+/// Notification delivery runs on the notifier's detached delivery thread, so
+/// a slow or unavailable notification server cannot delay worker cues,
+/// transcript retention, or insertion completion.
 #[cfg(target_os = "macos")]
 fn show_notification(summary: &str, body: &str) -> anyhow::Result<()> {
     let script = format!(
@@ -156,6 +227,27 @@ fn applescript_quote(s: &str) -> String {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod recording_tests {
+    use super::*;
+    use crate::daemon::logging::{LogLevel, Logger};
+
+    #[test]
+    fn unconfirmed_paste_has_a_truthful_distinct_title() {
+        let (notifier, messages) = Notifier::recording(Arc::new(Logger::new(LogLevel::Quiet)));
+
+        notifier.paste_unconfirmed("Inspect the target before retrying.");
+
+        assert_eq!(
+            messages.lock().unwrap().as_slice(),
+            &[(
+                "Paste unconfirmed".to_string(),
+                "Inspect the target before retrying.".to_string()
+            )]
+        );
+    }
 }
 
 #[cfg(all(test, target_os = "macos"))]

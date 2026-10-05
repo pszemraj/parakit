@@ -613,7 +613,7 @@ mod tests {
         let state = Arc::new(SharedState::with_history_limit(2));
         state.activity.ready();
         let log = Arc::new(Logger::new(super::super::logging::LogLevel::Quiet));
-        let notifier = Notifier::new(Arc::clone(&log));
+        let notifier = Notifier::silent(Arc::clone(&log));
         let (tx, rx) = crossbeam_channel::bounded(WORKER_QUEUE_CAPACITY);
         let reloads = Arc::new(AtomicUsize::new(0));
         let transcriptions = Arc::new(AtomicUsize::new(0));
