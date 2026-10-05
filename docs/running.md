@@ -155,7 +155,7 @@ Press PTT normally after an idle period. A three-note cue announces model reload
 
 Startup warms one second of synthetic audio on CPU, or five seconds on GPU. Reload uses a one-second readiness probe on every backend. Longer dictations allocate larger buffers as needed; the first use of a new shape can also incur backend compilation work. [Reload measurements](dev/memory.md#reload-warmup-comparison) compare latency, transcript parity, and memory for the reload policy.
 
-`parakit --verbose status` reports `loaded`, `loading`, or `offloaded`, the effective timeout, and the last reload error until a successful reload clears it. Residency is separate from the recording/transcribing phase. Queries never load the model, and responses from older daemons can omit these fields.
+`parakit --verbose status` reports `loaded`, `loading`, or `offloaded`, the effective timeout, and the last reload error until a successful reload clears it. Residency is separate from the recording/transcribing phase. Queries never load the model. During startup, residency can be unavailable until the worker publishes its initial state.
 
 Session destruction releases owned CPU/GPU allocations, but process and driver caches can remain. See the [native memory measurements and platform procedure](dev/memory.md); GPU inference does not imply zero host memory.
 
