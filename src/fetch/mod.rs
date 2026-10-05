@@ -408,10 +408,14 @@ fn acquire_artifact_lock(dest: &Path) -> Result<File> {
     Ok(lock)
 }
 
+fn sidecar_path(path: &Path, suffix: &str) -> PathBuf {
+    let mut sidecar = path.as_os_str().to_os_string();
+    sidecar.push(suffix);
+    PathBuf::from(sidecar)
+}
+
 fn partial_path(dest: &Path) -> PathBuf {
-    let mut partial = dest.as_os_str().to_os_string();
-    partial.push(".part");
-    PathBuf::from(partial)
+    sidecar_path(dest, ".part")
 }
 
 #[derive(Debug)]

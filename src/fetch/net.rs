@@ -329,9 +329,7 @@ fn prepare_download_request(
 }
 
 fn resume_validator_path(path: &Path) -> PathBuf {
-    let mut validator = path.as_os_str().to_os_string();
-    validator.push(".validator");
-    PathBuf::from(validator)
+    super::sidecar_path(path, ".validator")
 }
 
 fn load_resume_validator(path: &Path) -> Option<HeaderValue> {
