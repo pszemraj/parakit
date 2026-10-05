@@ -139,4 +139,49 @@ mod tests {
         assert!(shutdown.request_and_wait(&activity, Duration::ZERO));
         assert!(WorkerShutdown::default().request_and_wait(&activity, Duration::ZERO));
     }
+
+    #[test]
+    fn hotkey_failure_exits_only_after_worker_resource_release() {
+        const CHILD: &str = "PARAKIT_HOTKEY_EXIT_TEST_CHILD";
+        if std::env::var_os(CHILD).is_some() {
+            struct Session;
+            impl Drop for Session {
+                fn drop(&mut self) {
+                    use std::io::Write;
+                    println!("test worker session released");
+                    std::io::stdout().flush().unwrap();
+                }
+            }
+
+            let state = Arc::new(super::super::ipc::SharedState::with_history_limit(1));
+            let lifetime = state.shutdown.register();
+            let worker_state = Arc::clone(&state);
+            std::thread::spawn(move || {
+                let session = Session;
+                worker_state.activity.changes().recv().unwrap();
+                assert!(worker_state.shutdown.requested());
+                drop(session);
+                drop(lifetime);
+            });
+            crate::app::finish_hotkey_loop(Err(super::super::hotkey::HotkeyLoopFailed), &state);
+            panic!("fatal hotkey failure returned without exiting");
+        }
+
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "daemon::worker_shutdown::tests::hotkey_failure_exits_only_after_worker_resource_release",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(2));
+        assert!(String::from_utf8_lossy(&output.stdout).contains("test worker session released"));
+        assert!(
+            output.stderr.is_empty(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 }

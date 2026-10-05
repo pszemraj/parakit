@@ -397,29 +397,51 @@ fn run_daemon(cli: &Cli, start: &StartCli) -> Result<()> {
         lifetime: worker_lifetime,
     });
     let (hotkey_tx, hotkey_rx) = unbounded();
-    let coordinator = daemon::recording::spawn_recording_coordinator(
+    let coordinator = match daemon::recording::spawn_recording_coordinator(
         hotkey_rx,
         tx,
         audio,
         Arc::clone(&log),
         Arc::clone(&ipc_state.activity),
     )
-    .context("spawn recording coordinator")?;
+    .context("spawn recording coordinator")
+    {
+        Ok(coordinator) => coordinator,
+        Err(err) => {
+            log.error(&format!("{err:#}"));
+            ipc_state.shutdown.exit_after_worker(&ipc_state.activity, 1);
+        }
+    };
 
     // Hotkey grab loop. Blocks forever (until grab returns or process exits).
     ipc_state.set_phase("idle");
     ipc_state.activity.ready();
     log.ready();
 
-    if daemon::hotkey::run_grab_loop(hotkey_tx, hotkey_backend, Arc::clone(&log)).is_err() {
-        // The worker may own a loaded session; release it before native teardown.
-        ipc_state.shutdown.exit_after_worker(&ipc_state.activity, 2);
-    }
+    finish_hotkey_loop(
+        daemon::hotkey::run_grab_loop(hotkey_tx, hotkey_backend, Arc::clone(&log)),
+        &ipc_state,
+    );
 
     // Tear down.
     let _ = coordinator.join();
     let _ = worker.join();
     Ok(())
+}
+
+/// Release worker-owned native resources before exiting on a hotkey failure.
+///
+/// # Arguments
+///
+/// * `result` - Outcome of the blocking hotkey loop.
+/// * `state` - Shared daemon state used to coordinate worker shutdown.
+pub(crate) fn finish_hotkey_loop(
+    result: Result<(), daemon::hotkey::HotkeyLoopFailed>,
+    state: &daemon::ipc::SharedState,
+) {
+    if result.is_err() {
+        state.shutdown.exit_after_worker(&state.activity, 2);
+    }
 }
 
 /// Convert the CLI's 1-based `copy-last` index into the wire protocol's

@@ -265,6 +265,12 @@ where
                 let drain_elapsed = stop_started.saturating_duration_since(stopped_at);
                 let secs = pcm.len() as f32 / TARGET_RATE as f32;
                 let wall_secs = stopped_at.duration_since(started_at).as_secs_f32();
+                // A transient reload failure at PTT start must not discard the
+                // capture: try once more now that recording has finished.
+                model.ensure_loaded(&mut load, |status| state.set_model_status(status));
+                if state.shutdown.requested() {
+                    break;
+                }
                 if model.engine().is_ok() && capture_should_skip(&pcm) {
                     log.verbose(format!(
                         "parakit: skipped silent capture ({secs:.2}s audio, {wall_secs:.2}s wall)"
@@ -574,6 +580,11 @@ mod tests {
     }
 
     #[test]
+    fn worker_retries_transient_reload_failure_after_recording_stops() {
+        exercise_blocked_reload(ReloadCase::Recovered);
+    }
+
+    #[test]
     fn worker_shutdown_during_reload_drops_session_and_queued_capture() {
         exercise_blocked_reload(ReloadCase::Shutdown);
     }
@@ -583,6 +594,7 @@ mod tests {
         Held,
         Released,
         Failed,
+        Recovered,
         Shutdown,
     }
 
@@ -612,10 +624,12 @@ mod tests {
                 // A reload may admit other activity; it must not inherit the
                 // gate mutex held by the offload decision.
                 let _admission = loader_activity.begin();
-                loader_reloads.fetch_add(1, Ordering::SeqCst);
-                load_started_tx.send(()).unwrap();
-                load_release_rx.recv().unwrap();
-                if case == ReloadCase::Failed {
+                let attempt = loader_reloads.fetch_add(1, Ordering::SeqCst);
+                if attempt == 0 {
+                    load_started_tx.send(()).unwrap();
+                    load_release_rx.recv().unwrap();
+                }
+                if case == ReloadCase::Failed || (case == ReloadCase::Recovered && attempt == 0) {
                     anyhow::bail!("reload failed in test");
                 }
                 Ok(FakeEngine {
@@ -687,7 +701,10 @@ mod tests {
         };
         // The released capture remains queued; a held capture stops only after
         // readiness is heard below.
-        let held_capture = if case == ReloadCase::Held {
+        let held_capture = if matches!(
+            case,
+            ReloadCase::Held | ReloadCase::Failed | ReloadCase::Recovered
+        ) {
             Some(stopped)
         } else {
             capture_active.store(false, Ordering::Release);
@@ -703,10 +720,19 @@ mod tests {
         }
         load_release_tx.send(()).unwrap();
         if let Some(stopped) = held_capture {
-            assert!(matches!(
-                cues.recv_timeout(Duration::from_secs(1)).unwrap(),
-                Cue::Start(_)
-            ));
+            if case == ReloadCase::Held {
+                assert!(matches!(
+                    cues.recv_timeout(Duration::from_secs(1)).unwrap(),
+                    Cue::Start(_)
+                ));
+            } else {
+                wait_for_state(&state, Residency::Offloaded);
+                assert_eq!(reloads.load(Ordering::SeqCst), 1);
+                assert!(
+                    cues.try_recv().is_err(),
+                    "failed reload must not announce readiness"
+                );
+            }
             capture_active.store(false, Ordering::Release);
             tx.send(stopped).unwrap();
         }
@@ -745,7 +771,14 @@ mod tests {
         }
 
         let completion = completion_rx.recv_timeout(Duration::from_secs(1)).unwrap();
-        assert_eq!(reloads.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            reloads.load(Ordering::SeqCst),
+            if matches!(case, ReloadCase::Failed | ReloadCase::Recovered) {
+                2
+            } else {
+                1
+            }
+        );
         if case == ReloadCase::Failed {
             assert!(completion.unwrap_err().contains("reload failed in test"));
             assert_eq!(transcriptions.load(Ordering::SeqCst), 0);

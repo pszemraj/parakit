@@ -315,6 +315,9 @@ mod tests {
         let log = Logger::new(LogLevel::Quiet);
         let (hotkey_tx, hotkey_rx) = unbounded();
         let (worker_tx, worker_rx) = bounded(2);
+        let activity = ActivityGate::new();
+        activity.ready();
+        let coordinator_activity = Arc::clone(&activity);
         let coordinator = thread::spawn(move || {
             recording_coordinator_loop_with_max_utterance(
                 hotkey_rx,
@@ -322,7 +325,7 @@ mod tests {
                 audio,
                 Duration::from_millis(10),
                 &log,
-                ActivityGate::new(),
+                coordinator_activity,
             );
         });
 
@@ -337,16 +340,19 @@ mod tests {
             panic!("expected recording start");
         };
 
-        assert_empty_stopped_event(
-            worker_rx
-                .recv_timeout(EVENT_TIMEOUT)
-                .expect("timeout stop event"),
-            started_at,
-        );
+        let stopped = worker_rx
+            .recv_timeout(EVENT_TIMEOUT)
+            .expect("timeout stop event");
+        assert_eq!(activity.remaining(Some(Duration::ZERO)), None);
+        assert_empty_stopped_event(stopped, started_at);
         assert!(!recording.load(Ordering::Acquire));
 
         drop(hotkey_tx);
         coordinator.join().expect("coordinator should exit cleanly");
+        assert_eq!(
+            activity.remaining(Some(Duration::ZERO)),
+            Some(Duration::ZERO)
+        );
     }
 
     #[test]
@@ -403,6 +409,9 @@ mod tests {
         let log = Logger::new(LogLevel::Quiet);
         let (hotkey_tx, hotkey_rx) = unbounded();
         let (worker_tx, worker_rx) = bounded(0);
+        let activity = ActivityGate::new();
+        activity.ready();
+        let coordinator_activity = Arc::clone(&activity);
         let coordinator = thread::spawn(move || {
             recording_coordinator_loop_with_max_utterance(
                 hotkey_rx,
@@ -410,7 +419,7 @@ mod tests {
                 audio,
                 Duration::from_millis(10),
                 &log,
-                ActivityGate::new(),
+                coordinator_activity,
             );
         });
 
@@ -428,6 +437,10 @@ mod tests {
         coordinator.join().expect("coordinator should exit cleanly");
         assert!(worker_rx.try_recv().is_err());
         assert!(!observed_audio.test_is_recording());
+        assert_eq!(
+            activity.remaining(Some(Duration::ZERO)),
+            Some(Duration::ZERO)
+        );
     }
 
     #[test]
@@ -507,6 +520,10 @@ mod tests {
         let log = Logger::new(LogLevel::Quiet);
         let (hotkey_tx, hotkey_rx) = unbounded();
         let (worker_tx, worker_rx) = bounded(2);
+        let activity = ActivityGate::new();
+        activity.ready();
+        let coordinator_activity = Arc::clone(&activity);
+        let mut model = super::super::model_lifecycle::ModelSlot::new((), 1);
         let coordinator = thread::spawn(move || {
             recording_coordinator_loop_with_max_utterance(
                 hotkey_rx,
@@ -514,7 +531,7 @@ mod tests {
                 audio,
                 Duration::from_secs(60),
                 &log,
-                ActivityGate::new(),
+                coordinator_activity,
             );
         });
         let first_at = Instant::now();
@@ -527,10 +544,15 @@ mod tests {
             panic!("expected first start");
         };
         assert!(first.load(Ordering::Acquire));
+        assert!(!model.offload(&activity, Some(Duration::ZERO)));
         hotkey_tx
             .send(HotkeyTransition::Released { at: Instant::now() })
             .unwrap();
-        assert_empty_stopped_event(worker_rx.recv_timeout(EVENT_TIMEOUT).unwrap(), first_at);
+        let stopped = worker_rx.recv_timeout(EVENT_TIMEOUT).unwrap();
+        assert!(!model.offload(&activity, Some(Duration::ZERO)));
+        assert_empty_stopped_event(stopped, first_at);
+        assert!(model.offload(&activity, Some(Duration::ZERO)));
+        model.ensure_loaded(|| Ok(()), |_| {});
         assert!(!first.load(Ordering::Acquire));
 
         hotkey_tx
@@ -542,10 +564,12 @@ mod tests {
             panic!("expected next start");
         };
         assert!(next.load(Ordering::Acquire));
+        assert!(!model.offload(&activity, Some(Duration::ZERO)));
         assert!(!first.load(Ordering::Acquire));
         drop(hotkey_tx);
         coordinator.join().unwrap();
         assert!(!next.load(Ordering::Acquire));
         assert!(!observed_audio.test_is_recording());
+        assert!(model.offload(&activity, Some(Duration::ZERO)));
     }
 }
