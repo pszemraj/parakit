@@ -1,7 +1,8 @@
 //! Programmatic audio cues for the daemon.
 //!
-//! Three tones are generated on the fly:
+//! Cues are generated on the fly:
 //!   - Start  : low ding (A4 = 440 Hz, ~80 ms)
+//!   - Reload : ascending three-note cue while an offloaded model reopens
 //!   - Stop   : high ding (E5 = 659 Hz, ~80 ms) — successful transcription
 //!   - Error  : two-pulse low buzz (A3 = 220 Hz, ~110 ms each)
 //!
@@ -13,17 +14,29 @@
 use crossbeam_channel::{bounded, Sender};
 use rodio::source::Source;
 use rodio::{OutputStream, Sink};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 use std::time::Duration;
 
 const CUE_SAMPLE_RATE: u32 = 44_100;
 const CUE_OUTPUT_WARMUP: Duration = Duration::from_millis(60);
 const CUE_OUTPUT_DRAIN: Duration = Duration::from_millis(60);
 
-#[derive(Clone, Copy)]
-enum Cue {
-    Start,
+/// Requests serialized by the audio thread; start cues expire on PTT release.
+#[derive(Debug)]
+pub(super) enum Cue {
+    Start(Arc<AtomicBool>),
+    Reload,
     Success,
     Error,
+}
+
+impl Cue {
+    fn is_current(&self) -> bool {
+        !matches!(self, Self::Start(recording) if !recording.load(Ordering::Acquire))
+    }
 }
 
 /// Public handle. Cheap to clone (it's just a channel sender).
@@ -65,9 +78,14 @@ impl Sounds {
         Self { tx: Some(tx) }
     }
 
-    /// Play the recording-start cue.
-    pub fn start(&self) {
-        self.send(Cue::Start);
+    /// Play the ready/listening cue while this capture is still active.
+    pub fn start(&self, recording: Arc<AtomicBool>) {
+        self.send(Cue::Start(recording));
+    }
+
+    /// Play the three-note model-reloading cue.
+    pub fn reload(&self) {
+        self.send(Cue::Reload);
     }
 
     /// Play the successful-transcription cue.
@@ -87,16 +105,41 @@ impl Sounds {
             let _ = tx.try_send(cue);
         }
     }
+
+    /// Capture cue requests without opening an audio device.
+    ///
+    /// # Returns
+    ///
+    /// A sound handle and its cue receiver for worker lifecycle tests.
+    #[cfg(test)]
+    pub(super) fn test_channel() -> (Self, crossbeam_channel::Receiver<Cue>) {
+        let (tx, rx) = bounded(8);
+        (Self { tx: Some(tx) }, rx)
+    }
 }
 
 fn play_cue(cue: Cue) -> Result<(), String> {
+    // A short reload can finish before its three-note cue. Recheck here so
+    // releasing PTT while that cue plays does not produce a late start ding.
+    if !cue.is_current() {
+        return Ok(());
+    }
     let (_stream, handle) =
         OutputStream::try_default().map_err(|e| format!("audio output: {e:?}"))?;
     let sink = Sink::try_new(&handle).map_err(|e| format!("sink: {e:?}"))?;
     sink.append(silence(CUE_OUTPUT_WARMUP));
     match cue {
-        Cue::Start => {
+        Cue::Start(_) => {
             sink.append(sine_with_envelope(440.0, Duration::from_millis(80), 0.6));
+        }
+        Cue::Reload => {
+            for frequency in [330.0, 440.0, 554.0] {
+                sink.append(sine_with_envelope(
+                    frequency,
+                    Duration::from_millis(80),
+                    0.6,
+                ));
+            }
         }
         Cue::Success => {
             sink.append(sine_with_envelope(659.0, Duration::from_millis(80), 0.6));
@@ -139,4 +182,24 @@ fn sine_with_envelope(freq: f32, dur: Duration, vol: f32) -> impl Source<Item = 
 fn silence(dur: Duration) -> impl Source<Item = f32> {
     let total_samples = (CUE_SAMPLE_RATE as f32 * dur.as_secs_f32()) as usize;
     rodio::buffer::SamplesBuffer::new(1, CUE_SAMPLE_RATE, vec![0.0; total_samples])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn queued_start_expires_on_release_without_canceling_the_next_capture() {
+        let (sounds, cues) = Sounds::test_channel();
+        let first = Arc::new(AtomicBool::new(true));
+        sounds.reload();
+        sounds.start(Arc::clone(&first));
+        first.store(false, Ordering::Release);
+        let next = Arc::new(AtomicBool::new(true));
+        sounds.start(next);
+
+        assert!(matches!(cues.recv().unwrap(), Cue::Reload));
+        assert!(!cues.recv().unwrap().is_current());
+        assert!(cues.recv().unwrap().is_current());
+    }
 }

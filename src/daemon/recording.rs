@@ -3,6 +3,7 @@
 use super::model_lifecycle::{ActivityGate, ActivityGuard};
 use super::{audio::AudioHandle, inject::FocusSnapshot, logging::Logger, worker::WorkerEvent};
 use crossbeam_channel::{Receiver, RecvTimeoutError, Sender, TrySendError};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
@@ -77,6 +78,7 @@ fn recording_coordinator_loop_with_max_utterance(
     activity: Arc<ActivityGate>,
 ) {
     let mut recording_activity = None;
+    let mut listening: Option<Arc<AtomicBool>> = None;
     let mut started_at = None;
     let mut focus_at_start = None;
 
@@ -87,6 +89,9 @@ fn recording_coordinator_loop_with_max_utterance(
             CoordinatorEvent::Hotkey(HotkeyTransition::Pressed { .. }) => None,
         };
         if let Some(stopped_at) = stopped_at {
+            if let Some(recording) = listening.take() {
+                recording.store(false, Ordering::Release);
+            }
             if let Some(started_at) = started_at.take() {
                 if stop_and_send_recording(
                     &tx,
@@ -113,7 +118,14 @@ fn recording_coordinator_loop_with_max_utterance(
                     focus_at_start = None;
                     continue;
                 }
-                match try_send_worker_event(&tx, WorkerEvent::Started, log) {
+                let recording = Arc::new(AtomicBool::new(true));
+                match try_send_worker_event(
+                    &tx,
+                    WorkerEvent::Started {
+                        recording: Arc::clone(&recording),
+                    },
+                    log,
+                ) {
                     WorkerSendStatus::Sent => {}
                     WorkerSendStatus::Full => {
                         stop_rejected_recording(
@@ -134,12 +146,16 @@ fn recording_coordinator_loop_with_max_utterance(
                     }
                 }
                 recording_activity = Some(lease);
+                listening = Some(recording);
                 started_at = Some(at);
             }
             CoordinatorEvent::Hotkey(HotkeyTransition::Pressed { .. }) => {}
             CoordinatorEvent::Hotkey(HotkeyTransition::Released { .. })
             | CoordinatorEvent::MaxUtterance => unreachable!("handled above"),
         }
+    }
+    if let Some(recording) = listening {
+        recording.store(false, Ordering::Release);
     }
     if started_at.is_some() {
         stop_rejected_recording(&audio, "coordinator shutdown", log);
@@ -286,7 +302,7 @@ mod tests {
                 assert!(stopped_at >= started_at);
                 assert!(pcm.is_empty());
             }
-            WorkerEvent::Started => panic!("unexpected second start event"),
+            WorkerEvent::Started { .. } => panic!("unexpected second start event"),
             WorkerEvent::Failed { message, .. } => {
                 panic!("unexpected recording failure event: {message}")
             }
@@ -315,10 +331,11 @@ mod tests {
             .send(HotkeyTransition::Pressed { at: started_at })
             .expect("hotkey press should send");
 
-        assert!(matches!(
-            worker_rx.recv_timeout(EVENT_TIMEOUT).expect("start event"),
-            WorkerEvent::Started
-        ));
+        let WorkerEvent::Started { recording } =
+            worker_rx.recv_timeout(EVENT_TIMEOUT).expect("start event")
+        else {
+            panic!("expected recording start");
+        };
 
         assert_empty_stopped_event(
             worker_rx
@@ -326,6 +343,7 @@ mod tests {
                 .expect("timeout stop event"),
             started_at,
         );
+        assert!(!recording.load(Ordering::Acquire));
 
         drop(hotkey_tx);
         coordinator.join().expect("coordinator should exit cleanly");
@@ -335,7 +353,9 @@ mod tests {
     fn terminal_failure_is_delivered_after_started_when_worker_queue_is_full() {
         let (worker_tx, worker_rx) = bounded(1);
         worker_tx
-            .try_send(WorkerEvent::Started)
+            .try_send(WorkerEvent::Started {
+                recording: Arc::new(AtomicBool::new(true)),
+            })
             .expect("preload started event");
         let started_at = Instant::now();
         let stopped_at = started_at + Duration::from_millis(5);
@@ -357,7 +377,7 @@ mod tests {
 
         assert!(matches!(
             worker_rx.recv_timeout(EVENT_TIMEOUT).expect("start event"),
-            WorkerEvent::Started
+            WorkerEvent::Started { .. }
         ));
         match worker_rx
             .recv_timeout(EVENT_TIMEOUT)
@@ -367,7 +387,7 @@ mod tests {
                 assert!(message.contains("could not stop audio recording"));
                 assert!(message.contains("accepted Stop"));
             }
-            WorkerEvent::Started => panic!("unexpected second start event"),
+            WorkerEvent::Started { .. } => panic!("unexpected second start event"),
             WorkerEvent::Stopped { .. } => panic!("unexpected stop event"),
         }
         assert_eq!(
@@ -467,7 +487,7 @@ mod tests {
 
         assert!(matches!(
             worker_rx.recv_timeout(EVENT_TIMEOUT).expect("start event"),
-            WorkerEvent::Started
+            WorkerEvent::Started { .. }
         ));
         assert_empty_stopped_event(
             worker_rx
@@ -478,5 +498,54 @@ mod tests {
 
         drop(hotkey_tx);
         coordinator.join().expect("coordinator should exit cleanly");
+    }
+
+    #[test]
+    fn listening_cue_tracks_each_capture_through_release_and_shutdown() {
+        let audio = AudioHandle::test_handle();
+        let observed_audio = audio.clone();
+        let log = Logger::new(LogLevel::Quiet);
+        let (hotkey_tx, hotkey_rx) = unbounded();
+        let (worker_tx, worker_rx) = bounded(2);
+        let coordinator = thread::spawn(move || {
+            recording_coordinator_loop_with_max_utterance(
+                hotkey_rx,
+                worker_tx,
+                audio,
+                Duration::from_secs(60),
+                &log,
+                ActivityGate::new(),
+            );
+        });
+        let first_at = Instant::now();
+        hotkey_tx
+            .send(HotkeyTransition::Pressed { at: first_at })
+            .unwrap();
+        let WorkerEvent::Started { recording: first } =
+            worker_rx.recv_timeout(EVENT_TIMEOUT).unwrap()
+        else {
+            panic!("expected first start");
+        };
+        assert!(first.load(Ordering::Acquire));
+        hotkey_tx
+            .send(HotkeyTransition::Released { at: Instant::now() })
+            .unwrap();
+        assert_empty_stopped_event(worker_rx.recv_timeout(EVENT_TIMEOUT).unwrap(), first_at);
+        assert!(!first.load(Ordering::Acquire));
+
+        hotkey_tx
+            .send(HotkeyTransition::Pressed { at: Instant::now() })
+            .unwrap();
+        let WorkerEvent::Started { recording: next } =
+            worker_rx.recv_timeout(EVENT_TIMEOUT).unwrap()
+        else {
+            panic!("expected next start");
+        };
+        assert!(next.load(Ordering::Acquire));
+        assert!(!first.load(Ordering::Acquire));
+        drop(hotkey_tx);
+        coordinator.join().unwrap();
+        assert!(!next.load(Ordering::Acquire));
+        assert!(!observed_audio.test_is_recording());
     }
 }

@@ -87,8 +87,10 @@ pub(super) fn run_ptt_audio_simulation(
             let lease = state.activity.begin();
             let started_at = Instant::now();
             let (done_tx, done_rx) = bounded(1);
-            tx.send(WorkerEvent::Started)
-                .context("send simulated PTT start")?;
+            tx.send(WorkerEvent::Started {
+                recording: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            })
+            .context("send simulated PTT start")?;
             // Immediate release exercises a short PTT while reload is still busy.
             tx.send(WorkerEvent::Stopped {
                 started_at,

@@ -6,6 +6,7 @@ use parakit::data_log::{CleaningLogFields, DataLogger};
 use parakit::inference::Engine;
 use parakit::rules::{Cleaner, RuleHit, CLEANER_VERSION};
 use std::cell::Cell;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -31,7 +32,10 @@ const SILENCE_RMS_THRESHOLD: f32 = 0.0005;
 /// Events consumed by the transcription worker.
 pub(crate) enum WorkerEvent {
     /// Recording began at this instant.
-    Started,
+    Started {
+        /// Cleared on release so readiness cannot announce an ended capture.
+        recording: Arc<AtomicBool>,
+    },
     /// Recording began but failed before PCM could be handed to the worker.
     Failed {
         /// User-facing failure message without the standard log prefix.
@@ -227,11 +231,19 @@ where
             break;
         }
         match ev {
-            WorkerEvent::Started => {
+            WorkerEvent::Started { recording } => {
                 state.set_phase("recording");
-                sounds.start();
                 log.line("parakit: recording...");
+                if !model.is_loaded() {
+                    sounds.reload();
+                }
                 model.ensure_loaded(&mut load, |status| state.set_model_status(status));
+                if model.is_loaded()
+                    && recording.load(Ordering::Acquire)
+                    && !state.shutdown.requested()
+                {
+                    sounds.start(recording);
+                }
             }
             WorkerEvent::Failed { message, activity } => {
                 let _activity = activity;
@@ -501,6 +513,7 @@ fn capture_should_skip(pcm: &[f32]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::super::model_lifecycle::Residency;
+    use super::super::sounds::Cue;
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -547,15 +560,33 @@ mod tests {
 
     #[test]
     fn worker_loop_offloads_then_reloads_and_transcribes_queued_capture() {
-        exercise_blocked_reload(false);
+        exercise_blocked_reload(ReloadCase::Released);
+    }
+
+    #[test]
+    fn worker_announces_reload_then_readiness_while_ptt_held() {
+        exercise_blocked_reload(ReloadCase::Held);
+    }
+
+    #[test]
+    fn worker_failed_reload_never_announces_readiness() {
+        exercise_blocked_reload(ReloadCase::Failed);
     }
 
     #[test]
     fn worker_shutdown_during_reload_drops_session_and_queued_capture() {
-        exercise_blocked_reload(true);
+        exercise_blocked_reload(ReloadCase::Shutdown);
     }
 
-    fn exercise_blocked_reload(shutdown_during_reload: bool) {
+    #[derive(Clone, Copy, PartialEq)]
+    enum ReloadCase {
+        Held,
+        Released,
+        Failed,
+        Shutdown,
+    }
+
+    fn exercise_blocked_reload(case: ReloadCase) {
         let state = Arc::new(SharedState::with_history_limit(2));
         state.activity.ready();
         let log = Arc::new(Logger::new(super::super::logging::LogLevel::Quiet));
@@ -574,6 +605,7 @@ mod tests {
         let lifetime = state.shutdown.register();
         let (load_started_tx, load_started_rx) = crossbeam_channel::bounded(1);
         let (load_release_tx, load_release_rx) = crossbeam_channel::bounded(1);
+        let (sounds, cues) = Sounds::test_channel();
 
         let worker = std::thread::spawn(move || {
             let load = move || {
@@ -583,6 +615,9 @@ mod tests {
                 loader_reloads.fetch_add(1, Ordering::SeqCst);
                 load_started_tx.send(()).unwrap();
                 load_release_rx.recv().unwrap();
+                if case == ReloadCase::Failed {
+                    anyhow::bail!("reload failed in test");
+                }
                 Ok(FakeEngine {
                     transcriptions: Arc::clone(&loader_transcriptions),
                     drops: Arc::clone(&loader_drops),
@@ -602,7 +637,7 @@ mod tests {
                 model_idle_minutes: 1,
                 cleaner: None,
                 data_log: None,
-                sounds: Sounds::new(false),
+                sounds,
                 log,
                 notifier,
                 state: worker_state,
@@ -618,6 +653,7 @@ mod tests {
         wait_for_state(&state, Residency::Offloaded);
         assert_eq!(drops.load(Ordering::SeqCst), 1);
         assert_eq!(reloads.load(Ordering::SeqCst), 0);
+        assert!(cues.try_recv().is_err(), "offloading alone is silent");
 
         // Keep the reloaded model resident until all post-completion checks
         // have observed it; the capture lease moves into `Stopped` below.
@@ -625,39 +661,71 @@ mod tests {
         let recording = state.activity.begin();
         let (completion_tx, completion_rx) = crossbeam_channel::bounded(1);
         let now = Instant::now();
-        tx.send(WorkerEvent::Started).unwrap();
+        let capture_active = Arc::new(AtomicBool::new(true));
+        tx.send(WorkerEvent::Started {
+            recording: Arc::clone(&capture_active),
+        })
+        .unwrap();
         load_started_rx
             .recv_timeout(Duration::from_secs(1))
             .unwrap();
-        tx.send(WorkerEvent::Stopped {
+        assert!(matches!(
+            cues.recv_timeout(Duration::from_secs(1)).unwrap(),
+            Cue::Reload
+        ));
+        assert!(
+            cues.try_recv().is_err(),
+            "must not announce readiness during reload"
+        );
+        let stopped = WorkerEvent::Stopped {
             started_at: now,
             stopped_at: now,
             pcm: vec![0.01; 16],
             focus_at_start: None,
             activity: Some(recording),
             completion: Some(completion_tx),
-        })
-        .unwrap();
+        };
+        // The released capture remains queued; a held capture stops only after
+        // readiness is heard below.
+        let held_capture = if case == ReloadCase::Held {
+            Some(stopped)
+        } else {
+            capture_active.store(false, Ordering::Release);
+            tx.send(stopped).unwrap();
+            None
+        };
         let completion_before_reload = completion_rx.try_recv();
-        if shutdown_during_reload {
+        if case == ReloadCase::Shutdown {
             assert_eq!(state.model_status().unwrap().residency, Residency::Loading);
             assert!(!state
                 .shutdown
                 .request_and_wait(&state.activity, Duration::ZERO));
         }
         load_release_tx.send(()).unwrap();
+        if let Some(stopped) = held_capture {
+            assert!(matches!(
+                cues.recv_timeout(Duration::from_secs(1)).unwrap(),
+                Cue::Start(_)
+            ));
+            capture_active.store(false, Ordering::Release);
+            tx.send(stopped).unwrap();
+        }
         assert_eq!(
             completion_before_reload,
             Err(crossbeam_channel::TryRecvError::Empty)
         );
 
-        if shutdown_during_reload {
+        if case == ReloadCase::Shutdown {
             assert!(state
                 .shutdown
                 .request_and_wait(&state.activity, Duration::from_secs(1)));
             // Shutdown must not report completion with a live native session.
             assert_eq!(drops.load(Ordering::SeqCst), 2);
             worker.join().unwrap();
+            assert!(
+                cues.try_recv().is_err(),
+                "shutdown must not announce readiness"
+            );
             // The producer owns the channel's remaining queued payloads until
             // it also stops; no receiver may process them after worker exit.
             drop(tx);
@@ -676,15 +744,65 @@ mod tests {
             return;
         }
 
-        assert_eq!(
-            completion_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
-            Ok(())
-        );
+        let completion = completion_rx.recv_timeout(Duration::from_secs(1)).unwrap();
         assert_eq!(reloads.load(Ordering::SeqCst), 1);
-        assert_eq!(transcriptions.load(Ordering::SeqCst), 1);
-        assert_eq!(state.model_status().unwrap().residency, Residency::Loaded);
-        assert_eq!(state.resolve_transcript(0).unwrap(), "reloaded dictation");
+        if case == ReloadCase::Failed {
+            assert!(completion.unwrap_err().contains("reload failed in test"));
+            assert_eq!(transcriptions.load(Ordering::SeqCst), 0);
+            assert_eq!(
+                state.model_status().unwrap().residency,
+                Residency::Offloaded
+            );
+            assert!(state.resolve_transcript(0).is_err());
+            assert!(matches!(
+                cues.recv_timeout(Duration::from_secs(1)).unwrap(),
+                Cue::Error
+            ));
+        } else {
+            assert_eq!(completion, Ok(()));
+            assert_eq!(transcriptions.load(Ordering::SeqCst), 1);
+            assert_eq!(state.model_status().unwrap().residency, Residency::Loaded);
+            assert_eq!(state.resolve_transcript(0).unwrap(), "reloaded dictation");
+            assert!(matches!(
+                cues.recv_timeout(Duration::from_secs(1)).unwrap(),
+                Cue::Success
+            ));
+        }
         assert!(state.resolve_transcript(1).is_err());
+
+        if case == ReloadCase::Held {
+            // A later PTT with the model resident needs only the normal cue.
+            let next = Arc::new(AtomicBool::new(true));
+            tx.send(WorkerEvent::Started {
+                recording: Arc::clone(&next),
+            })
+            .unwrap();
+            assert!(matches!(
+                cues.recv_timeout(Duration::from_secs(1)).unwrap(),
+                Cue::Start(_)
+            ));
+            next.store(false, Ordering::Release);
+            let (done_tx, done_rx) = crossbeam_channel::bounded(1);
+            tx.send(WorkerEvent::Stopped {
+                started_at: now,
+                stopped_at: now,
+                pcm: vec![0.01; 16],
+                focus_at_start: None,
+                activity: Some(state.activity.begin()),
+                completion: Some(done_tx),
+            })
+            .unwrap();
+            assert_eq!(
+                done_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
+                Ok(())
+            );
+            assert!(matches!(
+                cues.recv_timeout(Duration::from_secs(1)).unwrap(),
+                Cue::Success
+            ));
+            assert_eq!(reloads.load(Ordering::SeqCst), 1);
+            assert_eq!(transcriptions.load(Ordering::SeqCst), 2);
+        }
 
         drop(verify_residency);
         drop(tx);
@@ -693,6 +811,10 @@ mod tests {
             completion_rx.try_recv(),
             Err(crossbeam_channel::TryRecvError::Disconnected)
         );
-        assert_eq!(drops.load(Ordering::SeqCst), 2);
+        assert!(cues.try_recv().is_err());
+        assert_eq!(
+            drops.load(Ordering::SeqCst),
+            if case == ReloadCase::Failed { 1 } else { 2 }
+        );
     }
 }
