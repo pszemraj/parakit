@@ -23,7 +23,7 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 use std::time::Instant;
 
-#[cfg(unix)]
+#[cfg(any(unix, target_os = "windows"))]
 use super::preflight;
 #[cfg(any(unix, target_os = "windows"))]
 use super::{
@@ -53,6 +53,8 @@ pub(crate) const MAX_TRANSCRIPT_HISTORY: usize = 100;
 const HISTORY_PREVIEW_MAX_CHARS: usize = 72;
 #[cfg(any(unix, target_os = "windows"))]
 const STOP_RESPONSE_GRACE: Duration = Duration::from_millis(50);
+#[cfg(any(unix, target_os = "windows"))]
+const STOP_LOCK_POLL: Duration = Duration::from_millis(10);
 
 /// Marker used by both local IPC transports when no daemon endpoint exists.
 ///
@@ -594,6 +596,9 @@ pub(crate) fn run_client(command: IpcCommand, quiet: bool, verbose: bool) -> Res
     };
     match response {
         IpcResponse::Ok { message } => {
+            if matches!(&command, IpcCommand::Stop) {
+                wait_for_daemon_stop()?;
+            }
             if !quiet {
                 println!("{message}");
             }
@@ -625,6 +630,40 @@ pub(crate) fn run_client(command: IpcCommand, quiet: bool, verbose: bool) -> Res
             Ok(())
         }
         IpcResponse::Err { message } => bail!("{message}"),
+    }
+}
+
+#[cfg(any(unix, target_os = "windows"))]
+fn wait_for_daemon_stop() -> Result<()> {
+    wait_for_daemon_stop_with(
+        STOP_INSERTION_WAIT + STOP_RESPONSE_GRACE + IPC_TRANSPORT_TIMEOUT,
+        STOP_LOCK_POLL,
+        || match preflight::acquire_singleton_lock() {
+            Ok(lock) => {
+                drop(lock);
+                Ok(true)
+            }
+            Err(err) if err.is::<preflight::DaemonAlreadyRunning>() => Ok(false),
+            Err(err) => Err(err.context("probe daemon singleton lock after stop")),
+        },
+    )
+}
+
+#[cfg(any(unix, target_os = "windows"))]
+fn wait_for_daemon_stop_with(
+    timeout: Duration,
+    poll: Duration,
+    mut singleton_available: impl FnMut() -> Result<bool>,
+) -> Result<()> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if singleton_available()? {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            bail!("daemon did not finish stopping within the shutdown timeout");
+        }
+        thread::sleep(poll.min(deadline.saturating_duration_since(Instant::now())));
     }
 }
 
@@ -2283,6 +2322,23 @@ mod tests {
             failures.len(),
             failures.join("\n")
         );
+    }
+
+    #[cfg(any(unix, target_os = "windows"))]
+    #[test]
+    fn stop_client_waits_for_singleton_release_and_times_out() {
+        let attempts = Cell::new(0);
+        wait_for_daemon_stop_with(Duration::from_secs(1), Duration::ZERO, || {
+            let next = attempts.get() + 1;
+            attempts.set(next);
+            Ok(next >= 3)
+        })
+        .expect("stop should complete when the singleton becomes available");
+        assert_eq!(attempts.get(), 3);
+
+        let error = wait_for_daemon_stop_with(Duration::ZERO, Duration::ZERO, || Ok(false))
+            .expect_err("a held singleton must keep stop from reporting completion");
+        assert!(error.to_string().contains("shutdown timeout"));
     }
 
     #[cfg(any(unix, target_os = "windows"))]
