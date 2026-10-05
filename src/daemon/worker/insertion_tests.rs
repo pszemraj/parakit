@@ -169,6 +169,12 @@ fn paste_sanitizer_cases_are_stable() {
             },
         ),
         (
+            "direct multiline paste",
+            "first\nsecond".to_string(),
+            PasteMode::Direct,
+            PastePlan::Paste("first\nsecond".to_string()),
+        ),
+        (
             "empty standard skip",
             "\0\x07\n".to_string(),
             PasteMode::Standard,

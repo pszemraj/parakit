@@ -163,25 +163,16 @@ pub(crate) fn insert_text(
             notifier,
         ),
         PastePlan::CopyOnly { text, reason } => {
-            if mode == PasteMode::Direct {
-                log.warn(format!(
-                    "direct insertion blocked by sanitizer ({}); transcript was not copied",
-                    reason.log_tag()
-                ));
-                notifier.paste_blocked(reason.notice());
-                Ok(InsertReport::placeholder(InsertOutcome::Blocked, false))
-            } else {
-                log.warn(format!("paste blocked by sanitizer ({})", reason.log_tag()));
-                copy_or_block_transcript(
-                    injector,
-                    &text,
-                    keep_transcript_clipboard,
-                    "sanitized transcript clipboard fallback failed",
-                    reason,
-                    log,
-                    notifier,
-                )
-            }
+            log.warn(format!("paste blocked by sanitizer ({})", reason.log_tag()));
+            copy_or_block_transcript(
+                injector,
+                &text,
+                keep_transcript_clipboard,
+                "sanitized transcript clipboard fallback failed",
+                reason,
+                log,
+                notifier,
+            )
         }
         PastePlan::Skip { reason } => {
             log.warn(format!("paste skipped by sanitizer: {}", reason.log_tag()));
