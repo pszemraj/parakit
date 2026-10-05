@@ -21,6 +21,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const SAMPLE_INTERVAL: Duration = Duration::from_millis(20);
+const NVIDIA_SAMPLE_INTERVAL: Duration = Duration::from_millis(50);
 
 #[derive(Clone, Copy, Debug, Default, ValueEnum)]
 enum ReloadWarmup {
@@ -70,7 +71,7 @@ struct Cli {
     /// Save macOS `vmmap -summary` output at every checkpoint.
     #[arg(long)]
     vmmap: bool,
-    /// Sample per-process allocations reported by `nvidia-smi`.
+    /// Sample per-process NVIDIA allocations at checkpoints and during operations.
     #[arg(long)]
     nvidia: bool,
     /// Experimental reload warmup; the first session always uses startup policy.
@@ -90,8 +91,8 @@ struct Profiler {
     output: PathBuf,
     metrics: BufWriter<File>,
     sampler: PeakSampler,
+    nvidia_sampler: Option<NvidiaPeakSampler>,
     vmmap: bool,
-    nvidia: bool,
 }
 
 impl Profiler {
@@ -123,9 +124,9 @@ impl Profiler {
         Ok(Self {
             output: cli.output.clone(),
             metrics: BufWriter::new(File::create(cli.output.join("metrics.jsonl"))?),
-            sampler: PeakSampler::start(),
+            sampler: PeakSampler::start(SAMPLE_INTERVAL),
+            nvidia_sampler: cli.nvidia.then(NvidiaPeakSampler::start),
             vmmap: cli.vmmap,
-            nvidia: cli.nvidia,
         })
     }
 
@@ -151,8 +152,10 @@ impl Profiler {
         let object = record
             .as_object_mut()
             .context("checkpoint record should be a JSON object")?;
-        if self.nvidia {
-            object.insert("nvidia".into(), nvidia_memory());
+        if let Some(sampler) = &self.nvidia_sampler {
+            let (reading, peak) = sampler.checkpoint()?;
+            object.insert("nvidia".into(), reading);
+            object.insert("nvidia_interval_peak".into(), peak);
         }
         if self.vmmap && cfg!(target_os = "macos") {
             object.insert("vmmap".into(), self.save_vmmap(cycle, phase)?);
@@ -164,6 +167,9 @@ impl Profiler {
         println!("{record}");
         io::stdout().flush()?;
         self.sampler.reset()?;
+        if let Some(sampler) = &self.nvidia_sampler {
+            sampler.reset()?;
+        }
         Ok(())
     }
 
@@ -229,15 +235,17 @@ fn unix_time() -> Result<f64> {
 #[derive(Debug)]
 struct PeakState {
     started: Instant,
+    interval: Duration,
     metric: Option<&'static str>,
     peak: u64,
     samples: u64,
 }
 
 impl PeakState {
-    fn new(started: Instant) -> Self {
+    fn new(started: Instant, interval: Duration) -> Self {
         Self {
             started,
+            interval,
             metric: None,
             peak: 0,
             samples: 0,
@@ -265,7 +273,7 @@ impl PeakState {
         snapshot.insert("samples".into(), json!(self.samples));
         snapshot.insert(
             "interval_seconds".into(),
-            json!(SAMPLE_INTERVAL.as_secs_f64()),
+            json!(self.interval.as_secs_f64()),
         );
         Value::Object(snapshot)
     }
@@ -285,8 +293,8 @@ struct PeakSampler {
 }
 
 impl PeakSampler {
-    fn start() -> Self {
-        let state = Arc::new(Mutex::new(PeakState::new(Instant::now())));
+    fn start(interval: Duration) -> Self {
+        let state = Arc::new(Mutex::new(PeakState::new(Instant::now(), interval)));
         let thread_state = Arc::clone(&state);
         let (stop, stopped) = mpsc::channel();
         let thread = thread::spawn(move || loop {
@@ -296,7 +304,7 @@ impl PeakSampler {
                     state.observe(metric, value, sampled_at);
                 }
             }
-            match stopped.recv_timeout(SAMPLE_INTERVAL) {
+            match stopped.recv_timeout(interval) {
                 Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
             }
@@ -460,40 +468,194 @@ fn proc_kib_field(input: &str, wanted: &str) -> Option<u64> {
     })
 }
 
-fn nvidia_memory() -> Value {
+#[derive(Debug, PartialEq)]
+struct NvidiaProcessRow {
+    used_gpu_mib: Option<u64>,
+    reported: String,
+}
+
+#[derive(Debug)]
+struct NvidiaMemory {
+    available: bool,
+    process_rows: Vec<NvidiaProcessRow>,
+    process_rows_complete: bool,
+    error: Option<String>,
+}
+
+impl NvidiaMemory {
+    fn unavailable(error: Option<String>) -> Self {
+        Self {
+            available: false,
+            process_rows: Vec::new(),
+            process_rows_complete: false,
+            error,
+        }
+    }
+
+    fn total_mib(&self) -> Option<u64> {
+        if !self.available || !self.process_rows_complete || self.process_rows.is_empty() {
+            return None;
+        }
+        self.process_rows
+            .iter()
+            .try_fold(0_u64, |total, row| total.checked_add(row.used_gpu_mib?))
+    }
+
+    fn to_json(&self) -> Value {
+        let process_rows: Vec<_> = self
+            .process_rows
+            .iter()
+            .map(|row| {
+                json!({
+                    "used_gpu_MiB": row.used_gpu_mib,
+                    "reported": row.reported,
+                })
+            })
+            .collect();
+        json!({
+            "available": self.available,
+            "process_rows": process_rows,
+            "process_rows_complete": self.process_rows_complete,
+            "error": self.error,
+        })
+    }
+}
+
+fn parse_nvidia_process_rows(input: &str, pid: u32) -> (Vec<NvidiaProcessRow>, bool) {
+    let wanted = pid.to_string();
+    let mut rows = Vec::new();
+    let mut matching_process = false;
+    let mut complete = true;
+
+    for line in input.lines() {
+        let Some((label, value)) = line.split_once(':') else {
+            continue;
+        };
+        match label.trim() {
+            "Process ID" => {
+                if matching_process {
+                    complete = false;
+                }
+                matching_process = value.trim() == wanted;
+            }
+            "Used GPU Memory" if matching_process => {
+                let reported = value.trim().to_owned();
+                let used_gpu_mib = reported
+                    .strip_suffix(" MiB")
+                    .and_then(|value| value.parse().ok());
+                rows.push(NvidiaProcessRow {
+                    used_gpu_mib,
+                    reported,
+                });
+                matching_process = false;
+            }
+            _ => {}
+        }
+    }
+    if matching_process {
+        complete = false;
+    }
+    (rows, complete)
+}
+
+fn nvidia_memory() -> NvidiaMemory {
     let output = match Command::new("nvidia-smi")
-        .args([
-            "--query-compute-apps=pid,used_gpu_memory",
-            "--format=csv,noheader,nounits",
-        ])
+        .args(["-q", "-d", "PIDS"])
         .output()
     {
         Ok(output) => output,
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            return json!({"available": false});
+            return NvidiaMemory::unavailable(None);
         }
-        Err(error) => return json!({"available": false, "error": error.to_string()}),
+        Err(error) => return NvidiaMemory::unavailable(Some(error.to_string())),
     };
-    let pid = std::process::id().to_string();
-    let process_rows: Vec<_> = String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .filter_map(|line| {
-            let (row_pid, memory) = line.split_once(',')?;
-            (row_pid.trim() == pid).then(|| {
-                let reported = memory.trim();
-                json!({
-                    "used_gpu_MiB": reported.parse::<u64>().ok(),
-                    "reported": reported,
-                })
-            })
-        })
-        .collect();
-    json!({
-        "available": output.status.success(),
-        "process_rows": process_rows,
-        "error": (!output.stderr.is_empty())
+    let available = output.status.success();
+    let (process_rows, process_rows_complete) =
+        parse_nvidia_process_rows(&String::from_utf8_lossy(&output.stdout), std::process::id());
+    NvidiaMemory {
+        available,
+        process_rows,
+        process_rows_complete,
+        error: (!output.stderr.is_empty())
             .then(|| String::from_utf8_lossy(&output.stderr).trim().to_owned()),
-    })
+    }
+}
+
+struct NvidiaPeakSampler {
+    state: Arc<Mutex<PeakState>>,
+    query: Arc<Mutex<()>>,
+    stop: mpsc::Sender<()>,
+    thread: Option<JoinHandle<()>>,
+}
+
+impl NvidiaPeakSampler {
+    fn start() -> Self {
+        let state = Arc::new(Mutex::new(PeakState::new(
+            Instant::now(),
+            NVIDIA_SAMPLE_INTERVAL,
+        )));
+        let thread_state = Arc::clone(&state);
+        let query = Arc::new(Mutex::new(()));
+        let thread_query = Arc::clone(&query);
+        let (stop, stopped) = mpsc::channel();
+        let thread = thread::spawn(move || loop {
+            let iteration_started = Instant::now();
+            if let Ok(_query) = thread_query.lock() {
+                let sampled_at = Instant::now();
+                let reading = nvidia_memory();
+                if let Some(value) = reading.total_mib() {
+                    if let Ok(mut state) = thread_state.lock() {
+                        state.observe("used_gpu_MiB", value, sampled_at);
+                    }
+                }
+            }
+            let remaining = NVIDIA_SAMPLE_INTERVAL.saturating_sub(iteration_started.elapsed());
+            match stopped.recv_timeout(remaining) {
+                Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+            }
+        });
+        Self {
+            state,
+            query,
+            stop,
+            thread: Some(thread),
+        }
+    }
+
+    fn checkpoint(&self) -> Result<(Value, Value)> {
+        let _query = self
+            .query
+            .lock()
+            .map_err(|_| anyhow::anyhow!("NVIDIA query lock poisoned"))?;
+        let sampled_at = Instant::now();
+        let reading = nvidia_memory();
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| anyhow::anyhow!("NVIDIA peak sampler lock poisoned"))?;
+        if let Some(value) = reading.total_mib() {
+            state.observe("used_gpu_MiB", value, sampled_at);
+        }
+        Ok((reading.to_json(), state.snapshot()))
+    }
+
+    fn reset(&self) -> Result<()> {
+        self.state
+            .lock()
+            .map_err(|_| anyhow::anyhow!("NVIDIA peak sampler lock poisoned"))?
+            .reset_at(Instant::now());
+        Ok(())
+    }
+}
+
+impl Drop for NvidiaPeakSampler {
+    fn drop(&mut self) {
+        let _ = self.stop.send(());
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
 }
 
 fn main() -> Result<()> {
@@ -576,7 +738,7 @@ mod tests {
     #[test]
     fn interval_peak_reset_rejects_late_samples() {
         let start = Instant::now();
-        let mut state = PeakState::new(start);
+        let mut state = PeakState::new(start, SAMPLE_INTERVAL);
         state.observe("rss_bytes", 100, start);
         state.observe("rss_bytes", 40, start + Duration::from_millis(1));
         assert_eq!(state.snapshot()["rss_bytes"], 100);
@@ -592,10 +754,83 @@ mod tests {
     #[test]
     fn interval_peak_preserves_windows_metric_name() {
         let start = Instant::now();
-        let mut state = PeakState::new(start);
+        let mut state = PeakState::new(start, SAMPLE_INTERVAL);
         state.observe("working_set_bytes", 50, start);
         assert_eq!(state.snapshot()["working_set_bytes"], 50);
         assert!(state.snapshot().get("rss_bytes").is_none());
+    }
+
+    #[test]
+    fn nvidia_rows_sum_current_process_across_devices() {
+        let input = r#"
+        Process ID                        : 41
+            Used GPU Memory               : 120 MiB
+        Process ID                        : 99
+            Used GPU Memory               : 999 MiB
+        Process ID                        : 41
+            Used GPU Memory               : 23 MiB
+        "#;
+        let (rows, complete) = parse_nvidia_process_rows(input, 41);
+        let reading = NvidiaMemory {
+            available: true,
+            process_rows: rows,
+            process_rows_complete: complete,
+            error: None,
+        };
+        assert_eq!(reading.total_mib(), Some(143));
+    }
+
+    #[test]
+    fn nvidia_unavailable_rows_never_become_zero() {
+        for input in [
+            "",
+            "Process ID : 99\n    Used GPU Memory : 7 MiB",
+            "Process ID : 41\n    Used GPU Memory : N/A",
+            "Process ID : 41\n    Used GPU Memory : 7 MiB\nProcess ID : 41",
+        ] {
+            let (rows, complete) = parse_nvidia_process_rows(input, 41);
+            let reading = NvidiaMemory {
+                available: true,
+                process_rows: rows,
+                process_rows_complete: complete,
+                error: None,
+            };
+            assert_eq!(reading.total_mib(), None, "input: {input:?}");
+        }
+        assert_eq!(
+            NvidiaMemory::unavailable(Some("failed".into())).total_mib(),
+            None
+        );
+
+        let (rows, complete) =
+            parse_nvidia_process_rows("Process ID : 41\nUsed GPU Memory : 0 MiB", 41);
+        let zero = NvidiaMemory {
+            available: true,
+            process_rows: rows,
+            process_rows_complete: complete,
+            error: None,
+        };
+        assert_eq!(zero.total_mib(), Some(0));
+    }
+
+    #[test]
+    fn nvidia_interval_peak_keeps_transient_and_its_own_interval() {
+        let start = Instant::now();
+        let mut state = PeakState::new(start, NVIDIA_SAMPLE_INTERVAL);
+        state.observe("used_gpu_MiB", 200, start);
+        state.observe("used_gpu_MiB", 80, start + Duration::from_millis(1));
+        assert_eq!(state.snapshot()["used_gpu_MiB"], 200);
+        assert_eq!(
+            state.snapshot()["interval_seconds"],
+            NVIDIA_SAMPLE_INTERVAL.as_secs_f64()
+        );
+
+        let next = start + Duration::from_secs(1);
+        state.reset_at(next);
+        state.observe("used_gpu_MiB", 300, start + Duration::from_millis(2));
+        state.observe("used_gpu_MiB", 70, next);
+        assert_eq!(state.snapshot()["used_gpu_MiB"], 70);
+        assert_eq!(state.snapshot()["samples"], 1);
     }
 
     #[test]

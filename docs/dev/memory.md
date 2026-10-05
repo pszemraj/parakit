@@ -9,10 +9,26 @@ device. Configuration and user behavior are described in
 
 Linux CPU measurements with eight threads observed 1.39-1.52 GiB reload peaks,
 versus 0.73-0.86 GiB at the loaded checkpoint. Allow roughly twice the loaded
-CPU residency while reopening a session. The
-[GPU startup comparison](https://github.com/pszemraj/parakit/pull/13#issuecomment-5988562906)
-records separate startup results and limitations. Longer recordings can still
-grow the workspace, and the dated tables below retain their original policies.
+CPU residency while reopening a session.
+
+Fresh three-cycle NVIDIA runs measured reload cycles 2-3 with the current
+production warmup. Host figures are sampled RSS; GPU figures are sampled
+per-process framebuffer allocation. The GPU interval peak matched its endpoint
+reading in these runs, but both backends had a much larger transient host peak
+than the post-load checkpoint:
+
+| Backend | Reload host peak | Post-load host | Offloaded host | Reload GPU peak / endpoint | Post-full GPU | Offloaded GPU |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| CUDA | 1.07-1.11 GiB | 0.52-0.54 GiB | 0.54 GiB | 1278-1280 MiB | 2054 MiB | 568 MiB |
+| Vulkan | 0.85-0.88 GiB | 0.19 GiB | 0.19 GiB | 732 MiB | 1491 MiB | 22 MiB |
+
+The retained post-full baselines were about 632 MiB host / 2052 MiB GPU for
+CUDA and 280-281 MiB host / 1491 MiB GPU for Vulkan. Offload reduced device
+allocation substantially, but reopening still needed considerably more host
+RAM than either the offloaded or post-load checkpoint showed. These were
+per-process memory measurements, not timing benchmarks; another idle process
+held GPU memory during collection. Longer recordings can still grow the
+workspace, and the dated tables below retain their original policies.
 
 ## Repeatable Measurements
 
@@ -51,9 +67,9 @@ transcripts.
 The retained baseline opens once; the offload run opens on every cycle.
 
 Each checkpoint also records `host_interval_peak`: the largest host residency
-sample since the preceding checkpoint, using a 20 ms sampling interval
-plus the checkpoint reading. At `after_load`, this captures sampled transient
-loading and reload peaks that checkpoint-only readings can miss. Compare cycle 2 and
+sample since the preceding checkpoint, using a 20 ms sampling interval plus
+the checkpoint reading. At `after_load`, this captures sampled transient loading
+and reload peaks that checkpoint-only readings can miss. Compare cycle 2 and
 later `after_load` peaks with the preceding `offloaded` residency when sizing
 RAM for idle offload. A reload can temporarily use more RAM than the loaded
 checkpoint, even when offload releases memory between dictations.
@@ -64,10 +80,14 @@ miss shorter spikes, so these figures are observed lower bounds, not guaranteed
 memory ceilings. The older tables below contain only checkpoint readings and do
 not measure transient reload peaks.
 
-The background sampler measures host residency only. With `--nvidia`, device
-memory is queried at checkpoints, not throughout each interval, so it cannot
-capture a transient GPU reload spike. Use a vendor profiler or device-memory
-trace when sizing GPU headroom.
+With `--nvidia`, a separate 50 ms sampler records `nvidia_interval_peak` without
+reducing host-sampling frequency. It uses NVIDIA's process view so both compute
+and graphics/Vulkan contexts are eligible, sums this process's numeric rows
+across devices per observation, and includes a fresh checkpoint reading. Empty,
+failed, incomplete, or `N/A` process readings remain unavailable rather than
+becoming zero. NVIDIA sampling launches a vendor query outside the measured
+process; its sampled maxima remain lower bounds, not guaranteed VRAM ceilings.
+Use the relevant vendor profiler or device-memory trace on non-NVIDIA hardware.
 
 Loading time excludes earlier process/device initialization. Add warmup time
 to open time to estimate readiness after offload. Checkpoint collection occurs
