@@ -100,11 +100,28 @@ impl Notifier {
     /// # Arguments
     ///
     /// * `error` - Saved model reload error.
-    pub(crate) fn model_unavailable(&self, error: impl AsRef<str>) {
+    pub(crate) fn model_unavailable(&self, error: impl AsRef<str>, recording_active: bool) {
+        let recovery = if recording_active {
+            "Recording continues; reload will retry when push-to-talk is released."
+        } else {
+            "Push-to-talk is already released; reload will retry before transcription."
+        };
         self.show(
             "Model unavailable",
+            format!("{}. {recovery}", error.as_ref()),
+        );
+    }
+
+    /// Notify that both model reload attempts failed and the capture was discarded.
+    ///
+    /// # Arguments
+    ///
+    /// * `error` - Saved model reload error.
+    pub(crate) fn dictation_discarded(&self, error: impl AsRef<str>) {
+        self.show(
+            "Dictation discarded",
             format!(
-                "{}. Recording will retry when push-to-talk is released.",
+                "{}. The model could not be reloaded; the next push-to-talk will retry.",
                 error.as_ref()
             ),
         );
