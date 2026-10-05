@@ -1,13 +1,15 @@
-//! Filter only the pinned Parakeet loader's two unconditional informational lines.
+//! Filter only the pinned Parakeet loader's unconditional informational lines.
 //!
-//! Quiet model reloads use this filter. Unlike the discard/NUL guard used for
+//! Quiet model reloads use this filter. Unlike the discard guard used for
 //! quiet startup, it forwards every other stderr line, including concurrent
 //! microphone, sound, and IPC errors.
 
-use std::io::{self, BufRead, BufReader, Read, Write};
-use std::sync::Mutex;
+use std::io::{self, BufWriter, Read, Write};
 
-static REDIRECT: Mutex<()> = Mutex::new(());
+const FILTERED_PREFIXES: [&[u8]; 2] = [
+    b"parakeet: vocab=",
+    b"parakeet: BN folded into conv_dw weights for ",
+];
 
 /// Run model initialization while preserving all stderr except known loader info.
 ///
@@ -15,118 +17,66 @@ static REDIRECT: Mutex<()> = Mutex::new(());
 ///
 /// The closure result, also when redirection is unavailable.
 pub(crate) fn with_model_output_filtered<T>(f: impl FnOnce() -> T) -> T {
-    let _lock = REDIRECT.lock().unwrap_or_else(|err| err.into_inner());
-    let Some(_guard) = Redirect::new() else {
-        return f();
-    };
-    f()
+    super::stderr::with_stderr_filtered(f, |reader, writer| {
+        let _ = filter_lines(reader, writer);
+    })
 }
 
-struct Fd(libc::c_int);
-
-impl Drop for Fd {
-    fn drop(&mut self) {
-        unsafe { libc::close(self.0) };
-    }
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum LineDisposition {
+    Undecided,
+    Forward,
+    Suppress,
 }
 
-impl Read for Fd {
-    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
-        // Windows CRT uses unsigned int, POSIX size_t. Bound before casting.
-        let size = buffer.len().min(i32::MAX as usize);
-        let result = unsafe { libc::read(self.0, buffer.as_mut_ptr().cast(), size as _) };
-        if result < 0 {
-            Err(io::Error::last_os_error())
-        } else {
-            Ok(result as usize)
-        }
-    }
-}
+fn filter_lines(mut reader: impl Read, writer: impl Write) -> io::Result<()> {
+    let mut writer = BufWriter::new(writer);
+    let mut buffer = [0_u8; 8192];
+    let mut prefix = Vec::with_capacity(
+        FILTERED_PREFIXES
+            .iter()
+            .map(|candidate| candidate.len())
+            .max()
+            .unwrap_or_default(),
+    );
+    let mut disposition = LineDisposition::Undecided;
 
-impl Write for Fd {
-    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
-        let size = buffer.len().min(i32::MAX as usize);
-        let result = unsafe { libc::write(self.0, buffer.as_ptr().cast(), size as _) };
-        if result < 0 {
-            Err(io::Error::last_os_error())
-        } else {
-            Ok(result as usize)
-        }
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
-    }
-}
-
-struct Redirect {
-    saved: Fd,
-    drain: Option<std::thread::JoinHandle<()>>,
-}
-
-impl Redirect {
-    fn new() -> Option<Self> {
-        let mut pipe = [-1; 2];
-        #[cfg(unix)]
-        let result = unsafe { libc::pipe(pipe.as_mut_ptr()) };
-        #[cfg(windows)]
-        let result = unsafe { libc::pipe(pipe.as_mut_ptr(), 8192, libc::O_BINARY) };
-        if result < 0 {
-            return None;
-        }
-        let read = Fd(pipe[0]);
-        let write = Fd(pipe[1]);
-        let saved = unsafe { libc::dup(2) };
-        if saved < 0 {
-            return None;
-        }
-        let saved = Fd(saved);
-        let forward = unsafe { libc::dup(saved.0) };
-        if forward < 0 {
-            return None;
-        }
-        let forward = Fd(forward);
-        // Spawn before redirecting: thread creation failure must not strand stderr.
-        let drain = std::thread::Builder::new()
-            .name("parakit-model-stderr".into())
-            .spawn(move || {
-                let _ = filter_lines(read, forward);
-            })
-            .ok()?;
-        if unsafe { libc::dup2(write.0, 2) } < 0 {
-            drop(write);
-            let _ = drain.join();
-            return None;
-        }
-        Some(Self {
-            saved,
-            drain: Some(drain),
-        })
-    }
-}
-
-impl Drop for Redirect {
-    fn drop(&mut self) {
-        unsafe { libc::dup2(self.saved.0, 2) };
-        if let Some(drain) = self.drain.take() {
-            let _ = drain.join();
-        }
-    }
-}
-
-fn filter_lines(reader: impl Read, mut writer: impl Write) -> io::Result<()> {
-    let mut reader = BufReader::new(reader);
-    let mut line = Vec::with_capacity(8192);
     loop {
-        line.clear();
-        // Bound buffering even if a diagnostic contains no newline.
-        if reader.by_ref().take(8192).read_until(b'\n', &mut line)? == 0 {
-            return Ok(());
+        let read = reader.read(&mut buffer)?;
+        if read == 0 {
+            if disposition == LineDisposition::Undecided {
+                writer.write_all(&prefix)?;
+            }
+            return writer.flush();
         }
-        if !line.starts_with(b"parakeet: vocab=")
-            && !line.starts_with(b"parakeet: BN folded into conv_dw weights for ")
-        {
-            writer.write_all(&line)?;
+
+        for &byte in &buffer[..read] {
+            match disposition {
+                LineDisposition::Undecided => {
+                    prefix.push(byte);
+                    if FILTERED_PREFIXES
+                        .iter()
+                        .any(|candidate| prefix.starts_with(candidate))
+                    {
+                        prefix.clear();
+                        disposition = LineDisposition::Suppress;
+                    } else if !FILTERED_PREFIXES
+                        .iter()
+                        .any(|candidate| candidate.starts_with(&prefix))
+                    {
+                        writer.write_all(&prefix)?;
+                        prefix.clear();
+                        disposition = LineDisposition::Forward;
+                    }
+                }
+                LineDisposition::Forward => writer.write_all(&[byte])?,
+                LineDisposition::Suppress => {}
+            }
+
+            if byte == b'\n' {
+                prefix.clear();
+                disposition = LineDisposition::Undecided;
+            }
         }
     }
 }
@@ -145,9 +95,37 @@ mod tests {
 
     #[test]
     fn long_unknown_lines_are_forwarded_verbatim() {
-        let input = vec![b'x'; 100_000];
+        let mut input = vec![b'x'; 8192];
+        input.extend_from_slice(b"parakeet: vocab=important diagnostic tail\n");
+        input.extend_from_slice(&vec![b'y'; 100_000]);
         let mut output = Vec::new();
         filter_lines(&input[..], &mut output).unwrap();
         assert_eq!(output, input);
+    }
+
+    #[test]
+    fn filtered_prefix_split_across_reads_is_still_suppressed() {
+        struct ShortReads<'a> {
+            bytes: &'a [u8],
+        }
+
+        impl Read for ShortReads<'_> {
+            fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+                let len = self.bytes.len().min(buffer.len()).min(3);
+                buffer[..len].copy_from_slice(&self.bytes[..len]);
+                self.bytes = &self.bytes[len..];
+                Ok(len)
+            }
+        }
+
+        let mut output = Vec::new();
+        filter_lines(
+            ShortReads {
+                bytes: b"parakeet: vocab=8192\nkept\n",
+            },
+            &mut output,
+        )
+        .unwrap();
+        assert_eq!(output, b"kept\n");
     }
 }
