@@ -51,10 +51,6 @@ pub(super) fn run_ptt_audio_simulation(
         prepare_started.elapsed().as_secs_f32() * 1000.0,
         wav.source_rate, wav.source_samples, wav.samples.len()
     ));
-    log.verbose(format!(
-        "parakit: memory checkpoint before_load pid={}",
-        std::process::id()
-    ));
     let OpenedEngine { engine, recipe, .. } =
         open_cli_engine(start, config, verbose, cli.quiet || !verbose, &log)?;
     let state = Arc::new(daemon::ipc::SharedState::new());
@@ -115,10 +111,6 @@ pub(super) fn run_ptt_audio_simulation(
                 None => baseline = Some(transcript),
                 _ => {}
             }
-            log.verbose(format!(
-                "parakit: memory checkpoint after_dictation cycle={cycle} elapsed_ms={:.0}",
-                started_at.elapsed().as_secs_f64() * 1000.0
-            ));
             if !idle.is_zero() {
                 thread::sleep(idle);
                 let expected = if timeout.is_some_and(|timeout| idle >= timeout) {
@@ -144,10 +136,6 @@ pub(super) fn run_ptt_audio_simulation(
                     }
                     thread::sleep(Duration::from_millis(10));
                 }
-                log.verbose(format!(
-                    "parakit: memory checkpoint after_idle cycle={cycle} residency={}",
-                    expected.label()
-                ));
             }
         }
         Ok(())
