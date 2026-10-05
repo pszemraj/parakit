@@ -62,9 +62,8 @@
 # "terminal" sends Ctrl+Shift+V on Linux/Windows and Cmd+V on macOS, removes
 # trailing newlines, and refuses remaining multiline text. "standard" sends
 # Ctrl+V or Cmd+V. "direct" types through the platform keyboard API and never
-# uses the clipboard. Refused batch insertion leaves the transcript only when
-# daemon.keep_transcript_clipboard is true; otherwise it restores the prior
-# clipboard. Refused direct insertion blocks.
+# uses the clipboard. Batch insertion follows daemon.keep_transcript_clipboard
+# and the recovery exceptions below. Refused direct insertion blocks.
 # Linux requires X11 for every mode. Linux direct typing may mishandle emoji
 # or rare scripts; Windows direct supports Unicode; macOS direct requires
 # Accessibility permission.
@@ -73,8 +72,10 @@
 
 # daemon.keep_transcript_clipboard
 # Type: boolean (optional). Default: false.
-# Clipboard modes restore the prior supported payload when false and leave
-# the transcript when true.
+# Clipboard modes normally restore the prior supported payload when false
+# and leave the transcript when true. Linux/macOS modifier timeouts retain
+# staged text regardless of this setting. macOS also retains it when paste
+# acknowledgement reports no evidence or loses the target during polling.
 # A detected competing clipboard write or unreadable state suppresses paste
 # and restoration as applicable, preserving the current clipboard instead.
 # CLI --keep-transcript-clipboard/--no-keep-transcript-clipboard override it
@@ -83,7 +84,7 @@
 
 # daemon.sounds
 # Type: boolean (optional). Default: true. Enables asynchronous
-# start/success/error cues.
+# start/reload/success/error cues.
 # CLI --sounds/--no-sounds override it in either direction; the two flags
 # conflict with each other. Cue-device failures warn but do not fail
 # dictation. CLI --quiet does not disable cues; PTT audio simulation always

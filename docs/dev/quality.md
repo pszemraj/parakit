@@ -208,8 +208,13 @@ Run daemon/IPC checks sequentially with isolated config, cache/runtime paths,
 and a model copy. After a configured idle timeout, verify the first PTT still
 captures and inserts once, then check status and history. Make the test model
 unavailable while offloaded to verify reload failure, restore it, and confirm
-the next PTT recovers. Check stop/restart and sleep/wake on the native desktop,
-including start/completion/error cues. Headless simulation does not validate
-these input, audio, or insertion paths. Record unavailable backend runs as pending.
+the next PTT recovers. Check stop/restart and sleep/wake on the native desktop.
+For audible cues, idle offload is silent. Hold PTT through reload and listen for
+the three-note reload cue followed by the usual listening tone when ready.
+Release during reload and confirm there is no delayed listening tone; a failed
+reload must not announce readiness. Check the normal completion/error cues and
+`--no-sounds` too. Headless tests verify cue ordering and cancellation, but do
+not validate audible playback, physical input, or insertion. Record unobserved
+human checks and unavailable backend runs as pending.
 
 For allocation comparisons, use the [memory harness and platform measurements](memory.md).

@@ -78,14 +78,14 @@ The transcript is printed or logged but nothing arrives in the focused applicati
 
    In `standard` and `terminal` modes this is a real paste round trip on all three platforms. In `direct` mode on Linux and Windows it performs backend preflight only and never types into the probe, so a passing `direct` deep check proves less than a passing clipboard-mode one. On macOS, `direct` mode still runs the suppressed key-event tap.
 
-3. Recover the transcript before doing anything else. It is not lost.
+3. Check daemon history for the transcript. Recovery requires history to be enabled and the entry still retained.
 
    ```text
    parakit history
    parakit copy-last
    ```
 
-   In non-direct paste modes the transcript was staged on the clipboard even when the paste was blocked, so OS clipboard history also has it. On Windows that is `Win+V`, which the user has to enable first.
+   Enabled OS clipboard history is another possible recovery source, but a blocked paste does not guarantee that text was staged or observed by the manager. On Windows, check `Win+V`. If transcription logging was enabled, its raw/clean text is another recovery source.
 
 4. Try a different paste mode against the same target. The default is `terminal` on Linux and `standard` elsewhere.
 
@@ -100,7 +100,7 @@ The transcript is printed or logged but nothing arrives in the focused applicati
 6. On Linux, use an X11 session. Insertion goes through X11/XTest for every paste mode, including `direct`.
 7. On macOS, check [permissions and deep diagnostics](macos-desktop.md#permissions) in an active GUI login.
 8. On Windows, check whether the target runs elevated. A normal user process cannot inject into an administrator or elevated application, and parakit cannot work around that.
-9. If focus changed between the hotkey release and the paste, parakit skips automatic insertion on purpose. Recover the transcript with `history` or `copy-last`; clipboard modes also leave a copy in OS clipboard history. It remains the active clipboard only when the keep-transcript policy applies. Hold focus on the target until the success cue.
+9. If focus changed between recording start and insertion, parakit skips automatic insertion on purpose. Recover the transcript through the sources above. Clipboard handling follows the selected policy and preserves detected competing writes. Hold focus on the target until the success cue.
 
 If that did not fix it, paste modes, focus guards, and clipboard restore policy are in [running.md#insertion](running.md#insertion). Platform specifics are in [linux-desktop.md#deep-doctor-check](linux-desktop.md#deep-doctor-check), [macos-desktop.md#doctor---deep](macos-desktop.md#doctor---deep), and [windows-desktop.md#doctor---deep](windows-desktop.md#doctor---deep).
 

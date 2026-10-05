@@ -5,6 +5,15 @@ that complete session; it does not unload libraries or reset a process-wide GPU
 device. Configuration and user behavior are described in
 [running.md](../running.md#idle-model-offload).
 
+## Startup Comparison, 2026-10-05
+
+The [startup comparison and validation snapshot](https://github.com/pszemraj/parakit/pull/13#issuecomment-5988562906)
+records lower initial CUDA/Vulkan allocations with the short GPU readiness
+probe. Longer real recordings still grow the workspace; first-use Vulkan
+shader compilation can add latency. That comparison uses the unchanged native
+dependency. The dated tables below retain their original warmup policies and
+platform coverage; they do not validate every subsequent change.
+
 ## Repeatable Measurements
 
 Build `parakit` and the `profile-memory` example with the same features, native
@@ -135,6 +144,13 @@ and a ggml scheduler. The decoder runs manually on CPU even when the encoder
 runs on GPU. GPU selection therefore does not eliminate CPU allocations.
 `parakeet_free` frees scheduler, model buffer/context, both backend instances,
 and the context containing those vectors.
+
+The quantized weight-file size therefore is not a runtime RAM or VRAM budget.
+Loading can temporarily keep a file mapping alongside copied weights. Inference
+also needs activation workspace, decoder copies, and runtime/driver state.
+Workspace grows with audio length and can retain its high-water capacity until
+session destruction. Compare loading peaks and retained post-inference memory
+separately, with host and device allocations reported independently.
 
 The [GGUF loader](../../vendor/CrispASR/src/core/gguf_loader.cpp) has opt-in CPU and Metal file-mapping
 paths (`CRISPASR_GGUF_MMAP=1`); the default allocates a backend buffer and copies
