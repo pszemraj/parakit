@@ -16,6 +16,7 @@ use std::io::{self, BufWriter, Write};
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -25,6 +26,8 @@ const NVIDIA_SAMPLE_INTERVAL: Duration = Duration::from_millis(50);
 const NVIDIA_QUERY_TIMEOUT: Duration = Duration::from_secs(2);
 const NVIDIA_CHECKPOINT_TIMEOUT: Duration = Duration::from_secs(5);
 const OFFLOAD_SETTLE: Duration = Duration::from_millis(250);
+const COMMAND_REAP_TIMEOUT: Duration = Duration::from_millis(250);
+static COMMAND_CAPTURE_ID: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Copy, Debug, Default, ValueEnum)]
 enum ReloadWarmup {
@@ -95,6 +98,7 @@ struct Profiler {
     metrics: BufWriter<File>,
     sampler: PeakSampler,
     nvidia_sampler: Option<NvidiaPeakSampler>,
+    host_interval_peak_supported: bool,
     vmmap: bool,
 }
 
@@ -107,6 +111,7 @@ impl Profiler {
         }
         fs::create_dir_all(&cli.output)
             .with_context(|| format!("create output directory {}", cli.output.display()))?;
+        let host_interval_peak_supported = reset_host_interval_peak().is_ok();
 
         let metadata = json!({
             "command": env::args().collect::<Vec<_>>(),
@@ -129,7 +134,10 @@ impl Profiler {
             output: cli.output.clone(),
             metrics: BufWriter::new(File::create(cli.output.join("metrics.jsonl"))?),
             sampler: PeakSampler::start(SAMPLE_INTERVAL),
-            nvidia_sampler: cli.nvidia.then(NvidiaPeakSampler::start),
+            nvidia_sampler: cli
+                .nvidia
+                .then(|| NvidiaPeakSampler::start(cli.output.clone())),
+            host_interval_peak_supported,
             vmmap: cli.vmmap,
         })
     }
@@ -138,7 +146,11 @@ impl Profiler {
         let sampled_at = Instant::now();
         let host = host_memory()?;
         self.sampler.observe_checkpoint(&host, sampled_at)?;
-        let peak = host_interval_peak(&host, self.sampler.snapshot()?);
+        let peak = host_interval_peak(
+            &host,
+            self.sampler.snapshot()?,
+            self.host_interval_peak_supported,
+        );
         let mut record = json!({
             "pid": std::process::id(),
             "cycle": cycle,
@@ -170,7 +182,7 @@ impl Profiler {
         self.metrics.flush()?;
         println!("{record}");
         io::stdout().flush()?;
-        reset_host_interval_peak()?;
+        self.host_interval_peak_supported = reset_host_interval_peak().is_ok();
         self.sampler.reset()?;
         Ok(())
     }
@@ -367,18 +379,23 @@ fn resident_metric(host: &Value) -> Option<(&'static str, u64)> {
 }
 
 #[cfg(target_os = "linux")]
-fn host_interval_peak(host: &Value, mut sampled: Value) -> Value {
-    if let Some(kernel_peak) = host.pointer("/status_bytes/VmHWM").and_then(Value::as_u64) {
-        if let Some(object) = sampled.as_object_mut() {
+fn host_interval_peak(host: &Value, mut sampled: Value, kernel_peak_supported: bool) -> Value {
+    if let Some(object) = sampled.as_object_mut() {
+        if let Some(kernel_peak) = kernel_peak_supported
+            .then(|| host.pointer("/status_bytes/VmHWM").and_then(Value::as_u64))
+            .flatten()
+        {
             object.insert("rss_bytes".into(), json!(kernel_peak));
             object.insert("source".into(), json!("linux_VmHWM"));
+        } else {
+            object.insert("source".into(), json!("sampled"));
         }
     }
     sampled
 }
 
 #[cfg(not(target_os = "linux"))]
-fn host_interval_peak(_host: &Value, sampled: Value) -> Value {
+fn host_interval_peak(_host: &Value, sampled: Value, _kernel_peak_supported: bool) -> Value {
     sampled
 }
 
@@ -594,30 +611,65 @@ enum TimedOutput {
 fn command_output_with_timeout(
     command: &mut Command,
     timeout: Duration,
+    capture_dir: &Path,
 ) -> io::Result<TimedOutput> {
+    fs::create_dir_all(capture_dir)?;
+    let capture_id = COMMAND_CAPTURE_ID.fetch_add(1, Ordering::Relaxed);
+    let capture_prefix = format!(".command-{}-{capture_id}", std::process::id());
+    let stdout_path = capture_dir.join(format!("{capture_prefix}.stdout.tmp"));
+    let stderr_path = capture_dir.join(format!("{capture_prefix}.stderr.tmp"));
+    let stdout = File::create(&stdout_path)?;
+    let stderr = match File::create(&stderr_path) {
+        Ok(stderr) => stderr,
+        Err(error) => {
+            let _ = fs::remove_file(&stdout_path);
+            return Err(error);
+        }
+    };
     let mut child = command
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()?;
+        .stdout(Stdio::from(stdout))
+        .stderr(Stdio::from(stderr))
+        .spawn()
+        .inspect_err(|_| {
+            let _ = fs::remove_file(&stdout_path);
+            let _ = fs::remove_file(&stderr_path);
+        })?;
     let deadline = Instant::now() + timeout;
     loop {
-        if child.try_wait()?.is_some() {
-            return child.wait_with_output().map(TimedOutput::Completed);
+        if let Some(status) = child.try_wait()? {
+            let stdout = fs::read(&stdout_path);
+            let stderr = fs::read(&stderr_path);
+            let _ = fs::remove_file(&stdout_path);
+            let _ = fs::remove_file(&stderr_path);
+            return Ok(TimedOutput::Completed(Output {
+                status,
+                stdout: stdout?,
+                stderr: stderr?,
+            }));
         }
         let now = Instant::now();
         if now >= deadline {
             let _ = child.kill();
-            let _ = child.wait_with_output();
+            let reap_deadline = Instant::now() + COMMAND_REAP_TIMEOUT;
+            while Instant::now() < reap_deadline {
+                if child.try_wait()?.is_some() {
+                    break;
+                }
+                thread::sleep(Duration::from_millis(5));
+            }
+            let _ = fs::remove_file(&stdout_path);
+            let _ = fs::remove_file(&stderr_path);
             return Ok(TimedOutput::TimedOut);
         }
         thread::sleep((deadline - now).min(Duration::from_millis(10)));
     }
 }
 
-fn nvidia_memory() -> NvidiaMemory {
+fn nvidia_memory(capture_dir: &Path) -> NvidiaMemory {
     let mut command = Command::new("nvidia-smi");
     command.args(["-q", "-d", "PIDS"]);
-    let output = match command_output_with_timeout(&mut command, NVIDIA_QUERY_TIMEOUT) {
+    let output = match command_output_with_timeout(&mut command, NVIDIA_QUERY_TIMEOUT, capture_dir)
+    {
         Ok(TimedOutput::Completed(output)) => output,
         Ok(TimedOutput::TimedOut) => {
             return NvidiaMemory::unavailable(Some(format!(
@@ -653,7 +705,7 @@ enum NvidiaSamplerCommand {
 }
 
 impl NvidiaPeakSampler {
-    fn start() -> Self {
+    fn start(capture_dir: PathBuf) -> Self {
         let mut state = PeakState::new(Instant::now(), NVIDIA_SAMPLE_INTERVAL);
         let (commands, requests) = mpsc::channel();
         let thread = thread::spawn(move || {
@@ -663,7 +715,7 @@ impl NvidiaPeakSampler {
                 match requests.recv_timeout(wait) {
                     Ok(NvidiaSamplerCommand::Checkpoint(reply)) => {
                         let sampled_at = Instant::now();
-                        let reading = nvidia_memory();
+                        let reading = nvidia_memory(&capture_dir);
                         if let Some(value) = reading.total_mib() {
                             state.observe("used_gpu_MiB", value, sampled_at);
                         }
@@ -677,7 +729,7 @@ impl NvidiaPeakSampler {
                     }
                     Err(mpsc::RecvTimeoutError::Timeout) => {
                         let sampled_at = Instant::now();
-                        let reading = nvidia_memory();
+                        let reading = nvidia_memory(&capture_dir);
                         if let Some(value) = reading.total_mib() {
                             state.observe("used_gpu_MiB", value, sampled_at);
                         }
@@ -916,21 +968,37 @@ mod tests {
             "interval_seconds": SAMPLE_INTERVAL.as_secs_f64(),
         });
 
-        let peak = host_interval_peak(&host, sampled);
+        let peak = host_interval_peak(&host, sampled, true);
 
         assert_eq!(peak["rss_bytes"], 120);
         assert_eq!(peak["source"], "linux_VmHWM");
         assert_eq!(peak["samples"], 4);
     }
 
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_interval_peak_falls_back_when_kernel_reset_is_unavailable() {
+        let host = json!({"status_bytes": {"VmRSS": 40, "VmHWM": 120}});
+        let sampled = json!({"rss_bytes": 80, "samples": 4});
+
+        let peak = host_interval_peak(&host, sampled, false);
+
+        assert_eq!(peak["rss_bytes"], 80);
+        assert_eq!(peak["source"], "sampled");
+    }
+
     #[test]
     fn command_timeout_kills_a_slow_child() {
         const CHILD: &str = "PARAKIT_PROFILE_TIMEOUT_TEST_CHILD";
+        const MARKER: &str = "PARAKIT_PROFILE_TIMEOUT_TEST_MARKER";
         if std::env::var_os(CHILD).is_some() {
             thread::sleep(Duration::from_millis(250));
+            fs::write(std::env::var_os(MARKER).unwrap(), b"completed").unwrap();
             return;
         }
 
+        let capture = command_test_dir("timeout");
+        let marker = capture.join("completed");
         let mut command = Command::new(std::env::current_exe().unwrap());
         command
             .args([
@@ -938,11 +1006,97 @@ mod tests {
                 "tests::command_timeout_kills_a_slow_child",
                 "--nocapture",
             ])
-            .env(CHILD, "1");
+            .env(CHILD, "1")
+            .env(MARKER, &marker);
         let started = Instant::now();
-        let outcome = command_output_with_timeout(&mut command, Duration::from_millis(20)).unwrap();
+        let outcome =
+            command_output_with_timeout(&mut command, Duration::from_millis(20), &capture).unwrap();
 
         assert!(matches!(outcome, TimedOutput::TimedOut));
         assert!(started.elapsed() < Duration::from_secs(1));
+        thread::sleep(Duration::from_millis(300));
+        assert!(
+            !marker.exists(),
+            "timed-out child survived long enough to finish"
+        );
+        fs::remove_dir_all(capture).unwrap();
+    }
+
+    #[test]
+    fn command_capture_does_not_deadlock_on_large_output() {
+        const CHILD: &str = "PARAKIT_PROFILE_LARGE_OUTPUT_CHILD";
+        if std::env::var_os(CHILD).is_some() {
+            io::stdout().write_all(&vec![b'x'; 300_000]).unwrap();
+            return;
+        }
+
+        let capture = command_test_dir("large-output");
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        command
+            .args([
+                "--exact",
+                "tests::command_capture_does_not_deadlock_on_large_output",
+                "--nocapture",
+            ])
+            .env(CHILD, "1");
+
+        let outcome =
+            command_output_with_timeout(&mut command, Duration::from_secs(1), &capture).unwrap();
+        let TimedOutput::Completed(output) = outcome else {
+            panic!("large completed output was misclassified as a timeout");
+        };
+        assert!(output.status.success());
+        assert!(output.stdout.len() >= 300_000);
+        fs::remove_dir_all(capture).unwrap();
+    }
+
+    #[test]
+    fn descendant_holding_output_does_not_extend_parent_timeout() {
+        const ROLE: &str = "PARAKIT_PROFILE_DESCENDANT_ROLE";
+        match std::env::var(ROLE).as_deref() {
+            Ok("grandchild") => {
+                thread::sleep(Duration::from_millis(500));
+                return;
+            }
+            Ok("parent") => {
+                let _child = Command::new(std::env::current_exe().unwrap())
+                    .args([
+                        "--exact",
+                        "tests::descendant_holding_output_does_not_extend_parent_timeout",
+                        "--nocapture",
+                    ])
+                    .env(ROLE, "grandchild")
+                    .spawn()
+                    .unwrap();
+                return;
+            }
+            _ => {}
+        }
+
+        let capture = command_test_dir("descendant");
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        command
+            .args([
+                "--exact",
+                "tests::descendant_holding_output_does_not_extend_parent_timeout",
+                "--nocapture",
+            ])
+            .env(ROLE, "parent");
+        let started = Instant::now();
+        let outcome =
+            command_output_with_timeout(&mut command, Duration::from_secs(1), &capture).unwrap();
+
+        assert!(matches!(outcome, TimedOutput::Completed(_)));
+        assert!(started.elapsed() < Duration::from_millis(400));
+        fs::remove_dir_all(capture).unwrap();
+    }
+
+    fn command_test_dir(name: &str) -> PathBuf {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("target/tmp/profile-command-tests")
+            .join(format!("{}-{name}", std::process::id()));
+        let _ = fs::remove_dir_all(&path);
+        fs::create_dir_all(&path).unwrap();
+        path
     }
 }
