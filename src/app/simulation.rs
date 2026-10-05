@@ -106,6 +106,8 @@ pub(super) fn run_ptt_audio_simulation(
                 .context("worker disconnected before dictation completion")?
                 .map_err(anyhow::Error::msg)?;
             let transcript = state.resolve_transcript(0)?;
+            // Same-process parity is a reload invariant, not a cross-build
+            // reference-transcript quality gate.
             match &baseline {
                 Some(expected) if expected != &transcript => {
                     anyhow::bail!("transcript changed on simulated cycle {cycle}")

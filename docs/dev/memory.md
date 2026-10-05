@@ -7,10 +7,12 @@ device. Configuration and user behavior are described in
 
 ## Startup Comparison, 2026-10-05
 
-The short GPU readiness probe lowers initial CUDA/Vulkan allocations. The
-[startup comparison](https://github.com/pszemraj/parakit/pull/13#issuecomment-5988562906)
-records its scope and limitations. Longer recordings can still grow the
-workspace, and the dated tables below retain their original warmup policies.
+Linux CPU measurements with eight threads observed 1.39-1.52 GiB reload peaks,
+versus 0.73-0.86 GiB at the loaded checkpoint. Allow roughly twice the loaded
+CPU residency while reopening a session. The
+[GPU startup comparison](https://github.com/pszemraj/parakit/pull/13#issuecomment-5988562906)
+records separate startup results and limitations. Longer recordings can still
+grow the workspace, and the dated tables below retain their original policies.
 
 ## Repeatable Measurements
 
@@ -51,7 +53,7 @@ The retained baseline opens once; the offload run opens on every cycle.
 Each checkpoint also records `host_interval_peak`: the largest host residency
 sample since the preceding checkpoint, using a 20 ms sampling interval
 plus the checkpoint reading. At `after_load`, this captures sampled transient
-loading and reload peaks that paused readings can miss. Compare cycle 2 and
+loading and reload peaks that checkpoint-only readings can miss. Compare cycle 2 and
 later `after_load` peaks with the preceding `offloaded` residency when sizing
 RAM for idle offload. A reload can temporarily use more RAM than the loaded
 checkpoint, even when offload releases memory between dictations.
@@ -59,8 +61,13 @@ The metric is RSS on Linux/macOS and working set on Windows; it resets for each
 operation instead of reusing a process-lifetime high-water mark. Sample counts
 and the interval are saved with each peak. Sampling and native-query latency can
 miss shorter spikes, so these figures are observed lower bounds, not guaranteed
-memory ceilings. The older tables below contain only paused checkpoint readings
-and do not measure transient reload peaks.
+memory ceilings. The older tables below contain only checkpoint readings and do
+not measure transient reload peaks.
+
+The background sampler measures host residency only. With `--nvidia`, device
+memory is queried at checkpoints, not throughout each interval, so it cannot
+capture a transient GPU reload spike. Use a vendor profiler or device-memory
+trace when sizing GPU headroom.
 
 Loading time excludes earlier process/device initialization. Add warmup time
 to open time to estimate readiness after offload. Checkpoint collection occurs
@@ -251,16 +258,14 @@ reuses that device state.
 ### Reload Warmup Comparison
 
 Sequential Metal measurements on the same machine, model, WAV, native library,
-and eight threads compare startup warmup on every open, a one-second reload
-probe, and no reload warmup. Each case ran two rounds of six sessions, with case
-order reversed in round two. The first session always used startup warmup and
-is excluded below, leaving ten reloads per cell. Short-first and full-first runs
-measure the first real inference separately. No build or other parakit daemon
-ran concurrently.
+and eight threads compare a one-second reload probe with no reload warmup. Each
+case ran two rounds of six sessions, with case order reversed in round two. The
+first session used the then-current startup warmup and is excluded below,
+leaving ten reloads per cell. Short-first and full-first runs measure the first
+real inference separately. No build or other parakit daemon ran concurrently.
 
 | Reload warmup | Open + warmup + 2 s clip, median (range), ms | Open + warmup + 55.36 s clip, median (range), ms |
 | --- | ---: | ---: |
-| Startup sequence (5 + 30 s) | 817 (800-840) | 2276 (2251-2378) |
 | One-second probe | 288 (275-303) | 1770 (1728-1819) |
 | None | 200 (197-258) | 1693 (1653-1780) |
 
@@ -269,7 +274,8 @@ while avoiding larger synthetic shapes on every reload. The measurements
 support that reload choice on Metal; they do not establish CUDA/Vulkan latency
 or explain Windows/Linux host-memory retention.
 
-The totals exclude sampler pauses and earlier process/device initialization.
+The totals exclude checkpoint collection and earlier process/device
+initialization.
 They approximate immediate-release readiness plus inference rather than
 perceived latency when loading overlaps a live recording.
 
@@ -339,7 +345,7 @@ or device reset was added.
 | Vulkan | 93 / 1707 | 92 / 1699 | 251 |
 
 Reload medians exclude cycle 1 and include the production one-second readiness
-probe. Sampler pauses are excluded; these are diagnostic timings on two CPU
-cores, not latency guarantees. Scheduler diagnostics confirmed encoder work on
+probe. Checkpoint collection is excluded; these are diagnostic timings on two
+CPU cores, not latency guarantees. Scheduler diagnostics confirmed encoder work on
 CUDA0 and Vulkan0 with expected CPU splits. These results establish allocation
 placement for this host, not memory ceilings or native Windows behavior.
