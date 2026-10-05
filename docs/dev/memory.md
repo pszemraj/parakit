@@ -25,34 +25,33 @@ the daemon's [startup and reload warmup policy](../running.md#idle-model-offload
 ```bash
 cargo build --release --features metal --bin parakit --example profile-memory
 mkdir -p target/tmp/memory
-python scripts/profile_memory.py --output target/tmp/memory/resident --vmmap -- \
-  target/release/examples/profile-memory \
+target/release/examples/profile-memory \
+  --output target/tmp/memory/resident --vmmap \
   --model path/to/model.gguf --audio path/to/recording.wav \
   --device gpu --threads 8 --cycles 10 --keep-loaded
-python scripts/profile_memory.py --output target/tmp/memory/offload --vmmap -- \
-  target/release/examples/profile-memory \
+target/release/examples/profile-memory \
+  --output target/tmp/memory/offload --vmmap \
   --model path/to/model.gguf --audio path/to/recording.wav \
   --device gpu --threads 8 --cycles 10
 ```
 
-Use an existing Python environment; the collector needs only the standard
-library. Output directories must be new.
+Output directories must be new. The example measures its own process, so its
+small, fixed profiling thread and output buffers are included in every reading.
 The example requires an explicit local model and never downloads one. Set
 `GGML_METAL_PIPELINE_CACHE` under `target/tmp/` when isolating Metal's disk cache.
 Match whether that cache is populated between comparisons.
 
-The child pauses at each JSON checkpoint until the collector samples it:
-before loading, after loading, after warmup, after short/full transcription,
-after offload (or retained baseline), and after final close. Records include
-operation elapsed time. Repeated full transcripts must match exactly and be
-nonempty; failed children and incomplete checkpoint lifecycles return nonzero.
-The collector saves input paths and sizes, command,
-platform, commit/submodule identity, working-tree state, `metrics.jsonl`, native
-diagnostics, and transcript hashes. It does not persist audio or transcripts.
+The example records JSON checkpoints before loading, after loading, after
+warmup, after short/full transcription, after offload (or the retained
+baseline), and after final close. Records include operation elapsed time.
+Repeated full transcripts must match exactly and be nonempty; failures return
+nonzero. The example saves input paths and sizes, command, platform,
+commit/submodule identity, working-tree state, `metrics.jsonl`, and transcript
+hashes. It does not persist audio or transcripts.
 The retained baseline opens once; the offload run opens on every cycle.
 
 Each checkpoint also records `host_interval_peak`: the largest host residency
-sample since the preceding acknowledgement, using a 20 ms sampling interval
+sample since the preceding checkpoint, using a 20 ms sampling interval
 plus the checkpoint reading. At `after_load`, this captures sampled transient
 loading and reload peaks that paused readings can miss. Compare cycle 2 and
 later `after_load` peaks with the preceding `offloaded` residency when sizing
@@ -66,10 +65,10 @@ memory ceilings. The older tables below contain only paused checkpoint readings
 and do not measure transient reload peaks.
 
 Loading time excludes earlier process/device initialization. Add warmup time
-to open time to estimate readiness after offload. Checkpoint sampling adds pauses
-outside those operation timings; background sampling also adds measurement
-overhead during operations. These are diagnostic measurements, not an isolated
-latency benchmark.
+to open time to estimate readiness after offload. Checkpoint collection occurs
+outside those operation timings; background sampling adds a small amount of
+measurement overhead during operations. These are diagnostic measurements, not
+an isolated latency benchmark.
 
 For reload comparisons, `--reload-warmup startup`, `one-second`, or `none`
 overrides the probe after the first session; the default `production` follows
@@ -88,7 +87,7 @@ Test worker admission, queueing, and configured timeouts separately with the
 ### macOS
 
 Build with `--features metal`, then test `--device cpu` and `--device gpu`
-separately. The collector records RSS from `ps` and saves `vmmap -summary`
+separately. The example records RSS from `ps` and saves `vmmap -summary`
 output with `--vmmap`. Inspect physical footprint, mapped files, MALLOC regions
 (including empty retained regions), and IOKit/IOAccelerator categories. A
 `vmmap` permission failure stays visible in the output; rerun in a permitted
@@ -106,9 +105,9 @@ output directories. Vulkan needs the development SDK and SPIR-V headers; see
 [build instructions](../build.md). Use `--device gpu` for each GPU build so
 device absence cannot silently choose CPU.
 
-The collector reads `/proc/<pid>/smaps_rollup` and `status`, retaining RSS, PSS,
+The example reads `/proc/self/smaps_rollup` and `status`, retaining RSS, PSS,
 anonymous memory, file-backed PSS, private dirty pages, and swap in bytes. For
-attribution, save `/proc/<pid>/smaps` at the paused checkpoints or attach a native
+attribution, save `/proc/<pid>/smaps` alongside selected checkpoints or attach a native
 heap profiler. Definitions and accounting are in the
 [Linux proc documentation](https://www.kernel.org/doc/html/latest/filesystems/proc.html).
 
@@ -131,8 +130,8 @@ $env:CRISPASR_LIB_DIR = (Resolve-Path 'target/cuda/release/build/parakit-<hash>/
 cargo build --release --features cuda --example profile-memory
 Remove-Item Env:\CRISPASR_LIB_DIR
 Copy-Item target/release/examples/profile-memory.exe target/parakit-windows-x86_64-cuda/
-python scripts/profile_memory.py --output target/tmp/memory/windows-cuda --nvidia -- `
-  target/parakit-windows-x86_64-cuda/profile-memory.exe `
+target/parakit-windows-x86_64-cuda/profile-memory.exe `
+  --output target/tmp/memory/windows-cuda --nvidia `
   --model path/to/model.gguf --audio path/to/recording.wav `
   --device gpu --threads 8 --cycles 10
 ```
@@ -143,13 +142,13 @@ feature and use `--device cpu`. Repeat with `--keep-loaded` and a new output
 directory for the resident baseline. These commands require native Windows
 validation; the measured results below cover macOS and Linux.
 
-The collector calls `GetProcessMemoryInfo` to record working set, peak working
+The example calls `GetProcessMemoryInfo` to record working set, peak working
 set, and private committed bytes. These measures are distinct; see Microsoft's
 [PROCESS_MEMORY_COUNTERS_EX](https://learn.microsoft.com/en-us/windows/win32/api/psapi/ns-psapi-process_memory_counters_ex).
 Use Sysinternals VMMap for heap/mapped-file attribution. In Task Manager's
 Details tab, add dedicated and shared GPU memory columns, or collect matching
 GPU Process Memory performance counters during checkpoints. WDDM can make
-`nvidia-smi` process memory unavailable; the collector records that explicitly.
+`nvidia-smi` process memory unavailable; the example records that explicitly.
 Do not count shared GPU pages twice against host totals.
 
 ## Allocation Ownership And Operation Placement
@@ -364,7 +363,7 @@ cores 0 and 1, the same Q8_0 model (745,121,632 bytes), and the 55.36-second
 `local-scratch/juniper-voicememo-DO_NOT_DELETE.wav`. No concurrent build or
 other test workload ran during sampling. The installed idle daemon remained
 running during profiling; its allocations are excluded from the per-process
-counters. Model and audio contents were not hashed or saved by the collector.
+counters. Model and audio contents were not hashed or saved by the profiler.
 The profiler's short checkpoint used the first two seconds of that WAV.
 
 All host figures below are MiB from `smaps_rollup`; GPU figures are separate
@@ -463,11 +462,11 @@ left no synthetic modifiers held, and allowed restart with the unchanged test
 configuration. Recording/queued-work/transcription/insertion activity guards
 also passed the deterministic lifecycle tests.
 
-The complete Linux Rust validation loop passed, including 299 tests and native
-all-features checking without a library fallback. Known CrispASR deprecation
-warnings and the intentional ignored Metal feature warning remain. Two Python
-regressions verify collector input metadata for both argument spellings without
-reading fixture contents. No CI jobs were added.
+The complete Linux Rust validation loop passed, including native all-features
+checking without a library fallback. Known CrispASR deprecation warnings and
+the intentional ignored Metal feature warning remain. The Rust example tests
+cover interval-peak resets, platform metric naming, and Linux proc parsing. No
+CI jobs were added.
 
 Measurement files, mapping snapshots, loader inspection, and native diagnostics
 remain local under `target/tmp/linux-validation/`; generated artifacts and

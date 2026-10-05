@@ -31,6 +31,7 @@ path = "examples/audit_cleaning.rs"
 [[example]]
 name = "profile-memory"
 path = "examples/profile_memory.rs"
+test = true
 
 [dependencies]
 # CLI parsing
@@ -119,6 +120,7 @@ windows = { version = "0.62.2", features = [
   "Win32_Security",
   "Win32_System_DataExchange",
   "Win32_System_LibraryLoader",
+  "Win32_System_ProcessStatus",
   "Win32_System_Threading",
   "Win32_UI_Input_KeyboardAndMouse",
   "Win32_UI_WindowsAndMessaging",
