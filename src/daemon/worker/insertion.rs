@@ -264,6 +264,11 @@ fn paste_transcript(
                     report.telemetry.acknowledgement_ms.unwrap_or_default(),
                     report.telemetry.acknowledgement_kind,
                 ));
+                if report.telemetry.acknowledgement_kind == "no_evidence" {
+                    notifier.paste_blocked(
+                        "Paste could not be confirmed and the clipboard changed. Inspect the target before retrying; the full transcript remains in history.",
+                    );
+                }
                 return Ok(InsertReport::from_paste(
                     InsertOutcome::PastedUnverified,
                     report,
@@ -759,6 +764,8 @@ impl InsertReport {
     pub(super) fn needs_alert(&self) -> bool {
         matches!(self.outcome, InsertOutcome::Blocked)
             || (self.outcome == InsertOutcome::CopiedOnly && self.telemetry.paste_event_posted)
+            || (self.outcome == InsertOutcome::PastedUnverified
+                && self.telemetry.acknowledgement_kind == "no_evidence")
     }
 }
 

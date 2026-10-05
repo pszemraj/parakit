@@ -262,3 +262,20 @@ fn direct_typing_failure_reports_progress_and_alerts() {
     assert!(!before_input.telemetry.paste_event_posted);
     assert!(before_input.needs_alert());
 }
+
+#[test]
+fn no_evidence_with_competing_clipboard_alerts_without_claiming_a_block() {
+    let report = InsertReport {
+        outcome: InsertOutcome::PastedUnverified,
+        telemetry: InsertionTelemetry {
+            paste_event_posted: true,
+            acknowledgement_kind: "no_evidence",
+            acknowledgement_ms: Some(1800),
+            clipboard_restored: None,
+        },
+        typed_chars: None,
+        failure_reason: None,
+    };
+    assert_eq!(report.outcome.log_label(), "pasted_unverified");
+    assert!(report.needs_alert());
+}
