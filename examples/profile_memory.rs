@@ -25,8 +25,7 @@ const SAMPLE_INTERVAL: Duration = Duration::from_millis(20);
 const NVIDIA_SAMPLE_INTERVAL: Duration = Duration::from_millis(50);
 const NVIDIA_QUERY_TIMEOUT: Duration = Duration::from_secs(2);
 const NVIDIA_CHECKPOINT_TIMEOUT: Duration = Duration::from_secs(5);
-const OFFLOAD_SETTLE: Duration = Duration::from_millis(250);
-const COMMAND_REAP_TIMEOUT: Duration = Duration::from_millis(250);
+const OFFLOAD_OBSERVATION_DELAY: Duration = Duration::from_millis(250);
 static COMMAND_CAPTURE_ID: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Copy, Debug, Default, ValueEnum)]
@@ -124,7 +123,7 @@ impl Profiler {
             "working_tree": git_text(&["status", "--short"]),
             "measurement_scope": "self",
             "sampling_interval_seconds": SAMPLE_INTERVAL.as_secs_f64(),
-            "offload_settle_seconds": OFFLOAD_SETTLE.as_secs_f64(),
+            "offload_observation_delay_seconds": OFFLOAD_OBSERVATION_DELAY.as_secs_f64(),
         });
         let mut encoded = serde_json::to_vec_pretty(&metadata)?;
         encoded.push(b'\n');
@@ -608,6 +607,18 @@ enum TimedOutput {
     TimedOut,
 }
 
+struct CommandCapture {
+    stdout: PathBuf,
+    stderr: PathBuf,
+}
+
+impl Drop for CommandCapture {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.stdout);
+        let _ = fs::remove_file(&self.stderr);
+    }
+}
+
 fn command_output_with_timeout(
     command: &mut Command,
     timeout: Duration,
@@ -616,49 +627,29 @@ fn command_output_with_timeout(
     fs::create_dir_all(capture_dir)?;
     let capture_id = COMMAND_CAPTURE_ID.fetch_add(1, Ordering::Relaxed);
     let capture_prefix = format!(".command-{}-{capture_id}", std::process::id());
-    let stdout_path = capture_dir.join(format!("{capture_prefix}.stdout.tmp"));
-    let stderr_path = capture_dir.join(format!("{capture_prefix}.stderr.tmp"));
-    let stdout = File::create(&stdout_path)?;
-    let stderr = match File::create(&stderr_path) {
-        Ok(stderr) => stderr,
-        Err(error) => {
-            let _ = fs::remove_file(&stdout_path);
-            return Err(error);
-        }
+    let capture = CommandCapture {
+        stdout: capture_dir.join(format!("{capture_prefix}.stdout.tmp")),
+        stderr: capture_dir.join(format!("{capture_prefix}.stderr.tmp")),
     };
+    let stdout = File::create(&capture.stdout)?;
+    let stderr = File::create(&capture.stderr)?;
     let mut child = command
         .stdout(Stdio::from(stdout))
         .stderr(Stdio::from(stderr))
-        .spawn()
-        .inspect_err(|_| {
-            let _ = fs::remove_file(&stdout_path);
-            let _ = fs::remove_file(&stderr_path);
-        })?;
+        .spawn()?;
     let deadline = Instant::now() + timeout;
     loop {
         if let Some(status) = child.try_wait()? {
-            let stdout = fs::read(&stdout_path);
-            let stderr = fs::read(&stderr_path);
-            let _ = fs::remove_file(&stdout_path);
-            let _ = fs::remove_file(&stderr_path);
             return Ok(TimedOutput::Completed(Output {
                 status,
-                stdout: stdout?,
-                stderr: stderr?,
+                stdout: fs::read(&capture.stdout)?,
+                stderr: fs::read(&capture.stderr)?,
             }));
         }
         let now = Instant::now();
         if now >= deadline {
             let _ = child.kill();
-            let reap_deadline = Instant::now() + COMMAND_REAP_TIMEOUT;
-            while Instant::now() < reap_deadline {
-                if child.try_wait()?.is_some() {
-                    break;
-                }
-                thread::sleep(Duration::from_millis(5));
-            }
-            let _ = fs::remove_file(&stdout_path);
-            let _ = fs::remove_file(&stderr_path);
+            child.wait()?;
             return Ok(TimedOutput::TimedOut);
         }
         thread::sleep((deadline - now).min(Duration::from_millis(10)));
@@ -829,7 +820,7 @@ fn main() -> Result<()> {
         }
         let close_elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
         if !cli.keep_loaded {
-            thread::sleep(OFFLOAD_SETTLE);
+            thread::sleep(OFFLOAD_OBSERVATION_DELAY);
         }
         profiler.checkpoint(
             &cli,

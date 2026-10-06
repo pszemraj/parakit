@@ -11,7 +11,8 @@ Three-cycle, eight-thread runs measured the current production policy on CPU,
 CUDA, and Vulkan. The table excludes the process-initialization cycle and shows
 reload cycles 2-3. Host peaks are Linux's reset `VmHWM`, while GPU figures are
 sampled per-process framebuffer allocation. Offloaded endpoints use the fixed
-checkpoint 250 ms after session close.
+checkpoint 250 ms after session close. Each backend row comes from one run, so
+its range shows within-run cycle variation rather than run-to-run repeatability.
 
 All three run metadata files record revision `5066d9f`. They were Rust
 dev-profile builds with Rust 1.98.0,

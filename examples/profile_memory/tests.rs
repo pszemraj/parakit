@@ -143,14 +143,21 @@ fn linux_interval_peak_falls_back_when_kernel_reset_is_unavailable() {
 fn command_timeout_kills_a_slow_child() {
     const CHILD: &str = "PARAKIT_PROFILE_TIMEOUT_TEST_CHILD";
     const MARKER: &str = "PARAKIT_PROFILE_TIMEOUT_TEST_MARKER";
+    const PID_MARKER: &str = "PARAKIT_PROFILE_TIMEOUT_TEST_PID";
     if std::env::var_os(CHILD).is_some() {
-        thread::sleep(Duration::from_millis(250));
+        fs::write(
+            std::env::var_os(PID_MARKER).unwrap(),
+            std::process::id().to_string(),
+        )
+        .unwrap();
+        thread::sleep(Duration::from_millis(500));
         fs::write(std::env::var_os(MARKER).unwrap(), b"completed").unwrap();
         return;
     }
 
     let capture = command_test_dir("timeout");
     let marker = capture.join("completed");
+    let pid_marker = capture.join("pid");
     let mut command = Command::new(std::env::current_exe().unwrap());
     command
         .args([
@@ -159,10 +166,11 @@ fn command_timeout_kills_a_slow_child() {
             "--nocapture",
         ])
         .env(CHILD, "1")
-        .env(MARKER, &marker);
+        .env(MARKER, &marker)
+        .env(PID_MARKER, &pid_marker);
     let started = Instant::now();
     let outcome =
-        command_output_with_timeout(&mut command, Duration::from_millis(20), &capture).unwrap();
+        command_output_with_timeout(&mut command, Duration::from_millis(100), &capture).unwrap();
 
     assert!(matches!(outcome, TimedOutput::TimedOut));
     assert!(started.elapsed() < Duration::from_secs(1));
@@ -170,6 +178,22 @@ fn command_timeout_kills_a_slow_child() {
     assert!(
         !marker.exists(),
         "timed-out child survived long enough to finish"
+    );
+    #[cfg(target_os = "linux")]
+    {
+        let pid = fs::read_to_string(&pid_marker).expect("child should record its pid");
+        assert!(
+            !Path::new("/proc").join(pid.trim()).exists(),
+            "timed-out child was killed but not reaped"
+        );
+    }
+    assert!(
+        fs::read_dir(&capture).unwrap().all(|entry| !entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .ends_with(".tmp")),
+        "temporary command captures were not removed"
     );
     fs::remove_dir_all(capture).unwrap();
 }
