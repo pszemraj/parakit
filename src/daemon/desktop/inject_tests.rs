@@ -353,16 +353,27 @@ fn linux_file_list_adapter_removes_crlf_separator_without_changing_path_bytes() 
     let unchanged = dir.join("other.txt");
     let both_normal = dir.join("both.txt");
     let both_cr = dir.join("both.txt\r");
+    let dangling_normal = dir.join("dangling.txt");
+    let dangling_cr = dir.join("dangling.txt\r");
     let non_utf8 = dir.join(OsString::from_vec(b"non-utf8-\xff.txt".to_vec()));
-    for path in [&normal, &unchanged, &both_normal, &both_cr, &non_utf8] {
+    for path in [
+        &normal,
+        &unchanged,
+        &both_normal,
+        &both_cr,
+        &dangling_normal,
+        &non_utf8,
+    ] {
         std::fs::write(path, b"").unwrap();
     }
+    std::os::unix::fs::symlink(dir.join("missing-target"), &dangling_cr).unwrap();
     let unresolved = dir.join("missing.txt\r");
     let paths = vec![
         dir.join("document.txt\r"),
         unchanged.clone(),
         both_cr.clone(),
         both_normal.clone(),
+        dangling_cr.clone(),
         dir.join(OsString::from_vec(b"non-utf8-\xff.txt\r".to_vec())),
         non_utf8.clone(),
         unresolved.clone(),
@@ -374,6 +385,7 @@ fn linux_file_list_adapter_removes_crlf_separator_without_changing_path_bytes() 
             unchanged,
             both_cr,
             both_normal,
+            dangling_cr,
             non_utf8.clone(),
             non_utf8,
             unresolved,

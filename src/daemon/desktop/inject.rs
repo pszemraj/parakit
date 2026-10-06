@@ -571,19 +571,20 @@ fn linux_file_list_paths(files: Vec<PathBuf>) -> Vec<PathBuf> {
     use std::os::unix::ffi::OsStrExt;
 
     // arboard 3.6.1 retains CR from CRLF separators, but decoding also turns
-    // an encoded filename suffix %0D into CR. Preserve any existing original;
-    // use the stripped path only when it identifies an existing copied file.
+    // an encoded filename suffix %0D into CR. Preserve any existing directory
+    // entry, including a dangling symlink; never substitute its valid sibling.
+    // Use the stripped path only when that directory entry exists.
     files
         .into_iter()
         .map(|path| {
             let Some(bytes) = path.as_os_str().as_bytes().strip_suffix(b"\r") else {
                 return path;
             };
-            if path.exists() {
+            if path.symlink_metadata().is_ok() {
                 return path;
             }
             let stripped = PathBuf::from(OsStr::from_bytes(bytes));
-            if stripped.exists() {
+            if stripped.symlink_metadata().is_ok() {
                 stripped
             } else {
                 path
