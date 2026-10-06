@@ -276,6 +276,14 @@ fn run_daemon(cli: &Cli, start: &StartCli) -> Result<()> {
     daemon::inject::preflight(paste_mode).context("text insertion preflight failed")?;
     log.verbose("parakit: insertion preflight passed");
 
+    let ipc_state = Arc::new(daemon::ipc::SharedState::with_history_limit(
+        start.effective_transcript_history(&config),
+    ));
+    // Register before the engine so reverse local-drop order releases the
+    // native session before this guard on every failed-startup path. IPC is
+    // still exposed only after quiet engine startup restores stderr.
+    let worker_lifetime = ipc_state.shutdown.register();
+
     // Quiet engine startup redirects process-wide stderr. Open it before any
     // daemon-owned background thread can emit a warning or panic into that
     // temporary sink.
@@ -288,14 +296,9 @@ fn run_daemon(cli: &Cli, start: &StartCli) -> Result<()> {
     let model_dtype = model_dtype_label(&model_path);
 
     let notifier = Notifier::new(Arc::clone(&log));
-    let ipc_state = Arc::new(daemon::ipc::SharedState::with_history_limit(
-        start.effective_transcript_history(&config),
-    ));
     let keep_transcript_clipboard = start.effective_keep_transcript_clipboard(&config);
     let log_dir = start.effective_log_dir(&config);
     let data_log = log_dir.clone().map(|dir| Arc::new(DataLogger::new(dir)));
-    // Register before IPC exists; this guard outlives a startup engine too.
-    let worker_lifetime = ipc_state.shutdown.register();
     #[cfg(any(unix, target_os = "windows"))]
     let _ipc_server = daemon::ipc::spawn_server(
         Arc::clone(&ipc_state),
