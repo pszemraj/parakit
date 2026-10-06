@@ -76,10 +76,18 @@ fn command_output_with_timeout(command: &mut Command, timeout: Duration) -> Opti
         .ok()?;
     let mut stdout = child.stdout.take()?;
     let (sender, receiver) = mpsc::sync_channel(1);
-    thread::spawn(move || {
-        let mut bytes = Vec::new();
-        let _ = sender.send(stdout.read_to_end(&mut bytes).map(|_| bytes));
-    });
+    if thread::Builder::new()
+        .name("pactl-stdout".into())
+        .spawn(move || {
+            let mut bytes = Vec::new();
+            let _ = sender.send(stdout.read_to_end(&mut bytes).map(|_| bytes));
+        })
+        .is_err()
+    {
+        let _ = child.kill();
+        let _ = child.wait();
+        return None;
+    }
     let deadline = Instant::now() + timeout;
     let status = wait_with_timeout(&mut child, timeout).ok()??;
     let stdout = receiver
