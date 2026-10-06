@@ -543,6 +543,35 @@ fn x11_keymap_bit_probe_detects_down_keycodes() {
 
 #[cfg(target_os = "linux")]
 #[test]
+fn x11_hotkey_mapping_refresh_keeps_complete_previous_mapping_on_failure() {
+    let mut mapping = X11HotkeyMapping {
+        space: vec![65],
+        control: vec![37, 105],
+    };
+    let previous = X11HotkeyMapping {
+        space: vec![65],
+        control: vec![37, 105],
+    };
+
+    assert!(mapping
+        .refresh_with(|| anyhow::bail!("Control keycodes unavailable"))
+        .is_err());
+    assert_eq!(mapping, previous);
+
+    mapping
+        .refresh_with(|| {
+            Ok(X11HotkeyMapping {
+                space: vec![66],
+                control: vec![38, 106],
+            })
+        })
+        .unwrap();
+    assert_eq!(mapping.space, [66]);
+    assert_eq!(mapping.control, [38, 106]);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
 fn linux_backend_aliases_resolve_to_one_route() {
     for (backend, expected) in [
         (HotkeyBackend::Auto, LinuxHotkeyRoute::RegisteredX11),

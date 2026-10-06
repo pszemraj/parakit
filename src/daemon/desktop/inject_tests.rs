@@ -1367,6 +1367,31 @@ fn clipboard_restore_policy_preserves_supported_non_text_payloads() {
 }
 
 #[test]
+fn empty_file_list_with_text_alternative_restores_text() {
+    let mut clipboard = MockClipboard::file_list(&[]);
+    clipboard.text_alternative = Some("copied URI text".to_string());
+    let snapshot = ClipboardSnapshot::capture(&mut clipboard).unwrap();
+    assert!(matches!(snapshot, ClipboardSnapshot::Text(ref text) if text == "copied URI text"));
+
+    let report = paste_with_clipboard_swap_guarded(
+        &mut clipboard,
+        "dictated text",
+        PasteMode::Standard,
+        || true,
+        || Ok(PasteDispatch::Posted),
+        Duration::ZERO,
+        restore_plan(&quiet_gate()),
+        ClipboardPolicy::RestorePrevious,
+        None,
+        || Ok(true),
+    )
+    .unwrap();
+
+    assert_eq!(report.outcome, PasteOutcome::Pasted);
+    assert_eq!(clipboard.text(), Some("copied URI text"));
+}
+
+#[test]
 fn unsupported_previous_clipboard_clears_staged_transcript_on_guard_block() {
     let mut clipboard = MockClipboard::unsupported();
     let events = clipboard.events();

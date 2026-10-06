@@ -219,3 +219,5 @@ not validate audible playback, physical input, or insertion. Record unobserved
 human checks and unavailable backend runs as pending.
 
 For allocation comparisons, use the [memory harness and platform measurements](memory.md).
+
+TODO: Reproduce a hung X11 clipboard owner and design bounded snapshot reads that preserve the prior clipboard. Arboard reads formats sequentially and its public API does not distinguish a read timeout from an unavailable format.

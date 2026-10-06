@@ -647,8 +647,38 @@ fn physical_hotkey_state(
 #[cfg(target_os = "linux")]
 struct X11PhysicalHotkeyProbe {
     conn: x11rb::rust_connection::RustConnection,
+    mapping: X11HotkeyMapping,
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Debug, Eq, PartialEq)]
+struct X11HotkeyMapping {
     space: Vec<u8>,
     control: Vec<u8>,
+}
+
+#[cfg(target_os = "linux")]
+impl X11HotkeyMapping {
+    fn resolve(conn: &x11rb::rust_connection::RustConnection) -> anyhow::Result<Self> {
+        let space = super::x11::keycodes_for_keysyms(conn, &[super::x11::SPACE_KEYSYM])
+            .context("could not resolve X11 Space keycodes")?;
+        let control = super::x11::keycodes_for_keysyms(
+            conn,
+            &[super::x11::CONTROL_L_KEYSYM, super::x11::CONTROL_R_KEYSYM],
+        )
+        .context("could not resolve X11 Control keycodes")?;
+        anyhow::ensure!(!space.is_empty(), "could not resolve X11 Space keycode");
+        anyhow::ensure!(!control.is_empty(), "could not resolve X11 Control keycode");
+        Ok(Self { space, control })
+    }
+
+    fn refresh_with(
+        &mut self,
+        resolve: impl FnOnce() -> anyhow::Result<Self>,
+    ) -> anyhow::Result<()> {
+        *self = resolve()?;
+        Ok(())
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -656,21 +686,9 @@ impl X11PhysicalHotkeyProbe {
     fn open() -> anyhow::Result<Self> {
         let (conn, _) = x11rb::rust_connection::RustConnection::connect(None)
             .context("could not connect to X11 for physical hotkey probe")?;
-        let space = super::x11::keycodes_for_keysyms(&conn, &[super::x11::SPACE_KEYSYM])
-            .context("could not resolve X11 Space keycodes")?;
-        let control = super::x11::keycodes_for_keysyms(
-            &conn,
-            &[super::x11::CONTROL_L_KEYSYM, super::x11::CONTROL_R_KEYSYM],
-        )
-        .context("could not resolve X11 Control keycodes")?;
-        anyhow::ensure!(!space.is_empty(), "could not resolve X11 Space keycode");
-        anyhow::ensure!(!control.is_empty(), "could not resolve X11 Control keycode");
+        let mapping = X11HotkeyMapping::resolve(&conn)?;
 
-        Ok(Self {
-            conn,
-            space,
-            control,
-        })
+        Ok(Self { conn, mapping })
     }
 
     fn state(&mut self) -> anyhow::Result<PhysicalHotkeyState> {
@@ -685,21 +703,14 @@ impl X11PhysicalHotkeyProbe {
             mapping_changed |= matches!(event, X11Event::MappingNotify(_));
         }
         if mapping_changed {
-            self.space = super::x11::keycodes_for_keysyms(&self.conn, &[super::x11::SPACE_KEYSYM])
-                .context("could not refresh X11 Space keycodes")?;
-            self.control = super::x11::keycodes_for_keysyms(
-                &self.conn,
-                &[super::x11::CONTROL_L_KEYSYM, super::x11::CONTROL_R_KEYSYM],
-            )
-            .context("could not refresh X11 Control keycodes")?;
-            anyhow::ensure!(
-                !self.space.is_empty(),
-                "could not resolve X11 Space keycode"
-            );
-            anyhow::ensure!(
-                !self.control.is_empty(),
-                "could not resolve X11 Control keycode"
-            );
+            // Each X11 connection owns its MappingNotify queue and mapping cache;
+            // the paste connection cannot share this refresh.
+            if let Err(err) = self
+                .mapping
+                .refresh_with(|| X11HotkeyMapping::resolve(&self.conn))
+            {
+                eprintln!("parakit: could not refresh X11 hotkey mapping; keeping previous keycodes: {err:#}");
+            }
         }
 
         let reply = self
@@ -711,8 +722,8 @@ impl X11PhysicalHotkeyProbe {
 
         Ok(physical_state_from_keycodes(
             &reply.keys,
-            &self.control,
-            &self.space,
+            &self.mapping.control,
+            &self.mapping.space,
         ))
     }
 }

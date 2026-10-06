@@ -1630,7 +1630,9 @@ impl ClipboardSnapshot {
     /// Returns an error when reading an available clipboard payload fails.
     pub(super) fn capture<C: ClipboardStore>(clipboard: &mut C) -> Result<Self> {
         match clipboard.get_file_list() {
-            Ok(files) => return Ok(Self::FileList(files)),
+            Ok(files) if !files.is_empty() => return Ok(Self::FileList(files)),
+            // A text/uri-list without file:// entries parses as an empty file list.
+            Ok(_) => {}
             Err(error) if clipboard_content_unavailable(&error) => {}
             Err(error) => return Err(error.context("could not snapshot file-list clipboard")),
         }
