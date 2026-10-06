@@ -531,7 +531,7 @@ fn run_linux_registered_hotkey_loop(tx: Sender<HotkeyTransition>) -> anyhow::Res
                 Ok(event) => event,
                 Err(RecvTimeoutError::Timeout) => {
                     let now = Instant::now();
-                    let physical_state = physical_hotkey_state(&mut physical);
+                    let physical_state = physical_hotkey_state(&mut physical)?;
                     if let Some(action) = latch.physical_poll(physical_state, now) {
                         send_hotkey_transition(action, &tx);
                     }
@@ -551,7 +551,7 @@ fn run_linux_registered_hotkey_loop(tx: Sender<HotkeyTransition>) -> anyhow::Res
         }
 
         let now = Instant::now();
-        let action = latch.event(event.state, physical_hotkey_state(&mut physical), now);
+        let action = latch.event(event.state, physical_hotkey_state(&mut physical)?, now);
         if let Some(action) = action {
             send_hotkey_transition(action, &tx);
         }
@@ -636,8 +636,12 @@ impl PhysicalHotkeyState {
 }
 
 #[cfg(target_os = "linux")]
-fn physical_hotkey_state(physical: &mut X11PhysicalHotkeyProbe) -> PhysicalHotkeyState {
-    physical.state().unwrap_or_default()
+fn physical_hotkey_state(
+    physical: &mut X11PhysicalHotkeyProbe,
+) -> anyhow::Result<PhysicalHotkeyState> {
+    physical
+        .state()
+        .context("could not refresh physical Ctrl+Space state")
 }
 
 #[cfg(target_os = "linux")]

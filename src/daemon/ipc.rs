@@ -669,7 +669,9 @@ fn wait_for_daemon_stop_with(
             return Ok(());
         }
         if Instant::now() >= deadline {
-            bail!("daemon did not finish stopping within the shutdown timeout");
+            bail!(
+                "daemon did not finish stopping within the shutdown timeout; retry `parakit stop`, then inspect the parakit process before terminating it"
+            );
         }
         thread::sleep(poll.min(deadline.saturating_duration_since(Instant::now())));
     }
@@ -692,10 +694,12 @@ fn daemon_not_running_disposition(
     singleton_held: bool,
 ) -> DaemonNotRunningDisposition {
     match command {
+        IpcCommand::Status | IpcCommand::Stop if singleton_held => {
+            DaemonNotRunningDisposition::Error(
+                "daemon control endpoint is unavailable while the singleton lock is held; it may still be starting or stopping. Retry shortly; if it persists, inspect the parakit process before terminating it",
+            )
+        }
         IpcCommand::Status => DaemonNotRunningDisposition::Success("parakit: not running"),
-        IpcCommand::Stop if singleton_held => DaemonNotRunningDisposition::Error(
-            "daemon control endpoint is unavailable while the singleton lock is held; it may still be starting or stopping",
-        ),
         IpcCommand::Stop => {
             DaemonNotRunningDisposition::Success("parakit: not running; nothing to stop")
         }
@@ -709,7 +713,7 @@ fn daemon_not_running_disposition(
 
 #[cfg(any(unix, target_os = "windows"))]
 fn handle_daemon_not_running(command: &IpcCommand, quiet: bool) -> Result<()> {
-    let singleton_held = if matches!(command, IpcCommand::Stop) {
+    let singleton_held = if matches!(command, IpcCommand::Status | IpcCommand::Stop) {
         match preflight::acquire_singleton_lock() {
             Ok(lock) => {
                 drop(lock);
@@ -2298,7 +2302,13 @@ mod tests {
         assert_eq!(
             daemon_not_running_disposition(&IpcCommand::Stop, true),
             DaemonNotRunningDisposition::Error(
-                "daemon control endpoint is unavailable while the singleton lock is held; it may still be starting or stopping"
+                "daemon control endpoint is unavailable while the singleton lock is held; it may still be starting or stopping. Retry shortly; if it persists, inspect the parakit process before terminating it"
+            )
+        );
+        assert_eq!(
+            daemon_not_running_disposition(&IpcCommand::Status, true),
+            DaemonNotRunningDisposition::Error(
+                "daemon control endpoint is unavailable while the singleton lock is held; it may still be starting or stopping. Retry shortly; if it persists, inspect the parakit process before terminating it"
             )
         );
     }
@@ -2384,6 +2394,7 @@ mod tests {
         let error = wait_for_daemon_stop_with(Duration::ZERO, Duration::ZERO, || Ok(false))
             .expect_err("a held singleton must keep stop from reporting completion");
         assert!(error.to_string().contains("shutdown timeout"));
+        assert!(error.to_string().contains("inspect the parakit process"));
     }
 
     #[cfg(any(unix, target_os = "windows"))]
