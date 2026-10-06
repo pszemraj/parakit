@@ -33,7 +33,7 @@ Empty captures are skipped before inference. Short captures are right-padded wit
 
 Model residency has a separate `loaded -> offloaded -> loading -> loaded` lifecycle. Startup remains eager; only the worker destroys or reopens the session. A shared activity gate admits recording before audio starts, and its lease follows PCM through queued transcription and insertion. IPC insertion takes the same gate before waiting for the insertion mutex. Expiry holds the gate through session destruction so a new PTT cannot race an unload; loading releases the gate so capture continues. The last lease release restarts the idle deadline, including failure and silence paths. Status/history reads take no lease and never load the model.
 
-The reload recipe retains the resolved local path, threads, and device policy. Startup and reload use the [readiness probes](../running.md#idle-model-offload) selected for their lifecycle stage. Failure leaves the slot offloaded with an error; a later PTT retries. Quiet startup discards native loader output, as before offload support. Quiet reload filters only two known native informational lines and forwards other stderr, including errors from concurrent audio/IPC work.
+The reload recipe retains the resolved local path, threads, and device policy. Startup and reload use the [readiness probes](../running.md#idle-model-offload) selected for their lifecycle stage. Failure leaves the slot offloaded with an error; a later PTT retries. Quiet startup discards native loader output before daemon background threads start. Reload leaves stderr untouched, including the native loader's informational lines and errors from concurrent audio or IPC work.
 
 IPC stop wakes the worker and waits for its engine to be destroyed before
 running native process teardown. The lifetime guard is registered before IPC
@@ -73,7 +73,7 @@ Cross-thread communication uses atomics, mutex-protected buffers, and crossbeam 
 | `src/daemon/audio/pactl.rs` | Linux `pactl` parsing for startup/reopen microphone display details. |
 | `src/daemon/worker.rs` | Worker events, model lifecycle, ASR, cleanup, and completion. |
 | `src/daemon/worker/insertion.rs` | Paste sanitizer, focus guard, clipboard fallback, and insertion reporting. |
-| `src/daemon/{model_lifecycle,engine_runtime,model_output}.rs` | Activity admission, session residency, shared open/warmup recipe, and selective native output filtering. |
+| `src/daemon/{model_lifecycle,engine_runtime}.rs` | Activity admission, session residency, and the shared open/warmup recipe. |
 | `src/daemon/worker_shutdown.rs` | Worker lifetime and bounded IPC shutdown handshake. |
 | `src/app/simulation.rs` | Acknowledged WAV dictations and configured idle/reload validation. |
 | `src/daemon/ipc.rs` | Local IPC transport for `status`, `stop`, `copy-last`, `history`, and `test-paste`; serves an in-memory transcript ring buffer. |

@@ -243,15 +243,9 @@ where
                         .status()
                         .last_error
                         .unwrap_or_else(|| "model reload failed for an unknown reason".to_string());
-                    let recording_active = recording.load(Ordering::Acquire);
-                    let recovery = if recording_active {
-                        "recording continues and reload will retry on release"
-                    } else {
-                        "recording has ended and reload will retry before transcription"
-                    };
-                    log.error(&format!("{error}; {recovery}"));
+                    log.error(&format!("{error}; reload will retry before transcription"));
                     sounds.error();
-                    notifier.model_unavailable(&error, recording_active);
+                    notifier.model_unavailable(&error);
                 }
                 if model.is_loaded()
                     && recording.load(Ordering::Acquire)
@@ -638,7 +632,7 @@ mod tests {
         let state = Arc::new(SharedState::with_history_limit(2));
         state.activity.ready();
         let log = Arc::new(Logger::new(super::super::logging::LogLevel::Quiet));
-        let (notifier, notifications) = Notifier::recording(Arc::clone(&log));
+        let notifier = Notifier::silent(Arc::clone(&log));
         let (tx, rx) = crossbeam_channel::bounded(WORKER_QUEUE_CAPACITY);
         let reloads = Arc::new(AtomicUsize::new(0));
         let transcriptions = Arc::new(AtomicUsize::new(0));
@@ -853,36 +847,6 @@ mod tests {
             ));
         }
         assert!(state.resolve_transcript(1).is_err());
-
-        let recorded = notifications
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        match case {
-            ReloadCase::Failed => {
-                assert_eq!(recorded.len(), 2);
-                assert_eq!(recorded[0].0, "Model unavailable");
-                assert!(recorded[0]
-                    .1
-                    .contains("will retry when push-to-talk is released"));
-                assert_eq!(recorded[1].0, "Dictation discarded");
-                assert!(recorded[1].1.contains("next push-to-talk will retry"));
-            }
-            ReloadCase::Recovered => {
-                assert_eq!(recorded.len(), 1);
-                assert!(recorded[0]
-                    .1
-                    .contains("will retry when push-to-talk is released"));
-            }
-            ReloadCase::ReleasedRecovered => {
-                assert_eq!(recorded.len(), 1);
-                assert!(recorded[0].1.contains("already released"));
-                assert!(!recorded[0]
-                    .1
-                    .contains("will retry when push-to-talk is released"));
-            }
-            _ => assert!(recorded.is_empty()),
-        }
-        drop(recorded);
 
         if case == ReloadCase::Held {
             // A later PTT with the model resident needs only the normal cue.

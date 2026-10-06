@@ -549,6 +549,7 @@ impl Drop for IpcServer {
 /// * `keep_transcript_clipboard` - Whether command insertion leaves text on
 ///   the clipboard.
 /// * `log` - Logger for socket errors.
+/// * `notifier` - Daemon notifier shared with IPC insertion commands.
 ///
 /// # Returns
 ///
@@ -563,8 +564,28 @@ pub(crate) fn spawn_server(
     paste_mode: PasteMode,
     keep_transcript_clipboard: bool,
     log: Arc<Logger>,
+    notifier: Notifier,
 ) -> Result<IpcServer> {
-    spawn_server_impl(state, paste_mode, keep_transcript_clipboard, log)
+    spawn_server_impl(state, paste_mode, keep_transcript_clipboard, log, notifier)
+}
+
+/// Check whether the daemon control endpoint answers a status request.
+///
+/// # Returns
+///
+/// `true` only when a live endpoint returns a status response.
+///
+/// # Errors
+///
+/// Returns transport errors other than an absent endpoint.
+#[cfg(any(unix, target_os = "windows"))]
+pub(crate) fn daemon_responsive() -> Result<bool> {
+    match send_command(&IpcCommand::Status) {
+        Ok(IpcResponse::Status { .. }) => Ok(true),
+        Ok(_) => Ok(false),
+        Err(error) if error.is::<DaemonNotRunning>() => Ok(false),
+        Err(error) => Err(error),
+    }
 }
 
 /// Run one IPC client command and print a concise response.
@@ -643,37 +664,18 @@ fn completed_command_message<'a>(command: &IpcCommand, server_message: &'a str) 
 
 #[cfg(any(unix, target_os = "windows"))]
 fn wait_for_daemon_stop() -> Result<()> {
-    wait_for_daemon_stop_with(
-        STOP_INSERTION_WAIT + STOP_RESPONSE_GRACE + IPC_TRANSPORT_TIMEOUT,
-        STOP_LOCK_POLL,
-        || match preflight::acquire_singleton_lock() {
-            Ok(lock) => {
-                drop(lock);
-                Ok(true)
-            }
-            Err(err) if err.is::<preflight::DaemonAlreadyRunning>() => Ok(false),
-            Err(err) => Err(err.context("probe daemon singleton lock after stop")),
-        },
-    )
-}
-
-#[cfg(any(unix, target_os = "windows"))]
-fn wait_for_daemon_stop_with(
-    timeout: Duration,
-    poll: Duration,
-    mut singleton_available: impl FnMut() -> Result<bool>,
-) -> Result<()> {
-    let deadline = Instant::now() + timeout;
+    let deadline =
+        Instant::now() + STOP_INSERTION_WAIT + STOP_RESPONSE_GRACE + IPC_TRANSPORT_TIMEOUT;
     loop {
-        if singleton_available()? {
-            return Ok(());
+        match preflight::acquire_singleton_lock() {
+            Ok(_lock) => return Ok(()),
+            Err(error) if error.is::<preflight::DaemonAlreadyRunning>() => {}
+            Err(error) => return Err(error.context("check daemon shutdown")),
         }
         if Instant::now() >= deadline {
-            bail!(
-                "daemon did not finish stopping within the shutdown timeout; retry `parakit stop`, then inspect the parakit process before terminating it"
-            );
+            bail!("daemon stop timed out");
         }
-        thread::sleep(poll.min(deadline.saturating_duration_since(Instant::now())));
+        thread::sleep(STOP_LOCK_POLL);
     }
 }
 
@@ -689,16 +691,8 @@ enum DaemonNotRunningDisposition {
 /// Status queries and stop requests are idempotent state checks, while the
 /// remaining commands require live daemon state and therefore stay failures.
 #[cfg(any(unix, target_os = "windows"))]
-fn daemon_not_running_disposition(
-    command: &IpcCommand,
-    singleton_held: bool,
-) -> DaemonNotRunningDisposition {
+fn daemon_not_running_disposition(command: &IpcCommand) -> DaemonNotRunningDisposition {
     match command {
-        IpcCommand::Status | IpcCommand::Stop if singleton_held => {
-            DaemonNotRunningDisposition::Error(
-                "daemon control endpoint is unavailable while the singleton lock is held; it may still be starting or stopping. Retry shortly; if it persists, inspect the parakit process before terminating it",
-            )
-        }
         IpcCommand::Status => DaemonNotRunningDisposition::Success("parakit: not running"),
         IpcCommand::Stop => {
             DaemonNotRunningDisposition::Success("parakit: not running; nothing to stop")
@@ -713,19 +707,7 @@ fn daemon_not_running_disposition(
 
 #[cfg(any(unix, target_os = "windows"))]
 fn handle_daemon_not_running(command: &IpcCommand, quiet: bool) -> Result<()> {
-    let singleton_held = if matches!(command, IpcCommand::Status | IpcCommand::Stop) {
-        match preflight::acquire_singleton_lock() {
-            Ok(lock) => {
-                drop(lock);
-                false
-            }
-            Err(error) if error.is::<preflight::DaemonAlreadyRunning>() => true,
-            Err(error) => return Err(error.context("probe daemon singleton lock")),
-        }
-    } else {
-        false
-    };
-    match daemon_not_running_disposition(command, singleton_held) {
+    match daemon_not_running_disposition(command) {
         DaemonNotRunningDisposition::Success(message) => {
             if !quiet {
                 println!("{message}");
@@ -864,6 +846,7 @@ fn spawn_server_impl(
     paste_mode: PasteMode,
     keep_transcript_clipboard: bool,
     log: Arc<Logger>,
+    notifier: Notifier,
 ) -> Result<IpcServer> {
     use std::io::ErrorKind;
     use std::os::unix::fs::PermissionsExt;
@@ -891,6 +874,7 @@ fn spawn_server_impl(
                     Ok(stream) => {
                         let state = Arc::clone(&state);
                         let log = Arc::clone(&log);
+                        let notifier = notifier.clone();
                         let _ = thread::Builder::new()
                             .name("parakit-ipc-client".into())
                             .spawn(move || {
@@ -900,6 +884,7 @@ fn spawn_server_impl(
                                     paste_mode,
                                     keep_transcript_clipboard,
                                     log,
+                                    notifier,
                                 )
                             });
                     }
@@ -922,8 +907,8 @@ fn handle_client(
     paste_mode: PasteMode,
     keep_transcript_clipboard: bool,
     log: Arc<Logger>,
+    notifier: Notifier,
 ) {
-    let notifier = Notifier::new(Arc::clone(&log));
     let _ = stream.set_read_timeout(Some(IPC_TRANSPORT_TIMEOUT));
     let _ = stream.set_write_timeout(Some(IPC_TRANSPORT_TIMEOUT));
     let outcome = client_command_outcome(
@@ -1255,8 +1240,9 @@ fn spawn_server_impl(
     paste_mode: PasteMode,
     keep_transcript_clipboard: bool,
     log: Arc<Logger>,
+    notifier: Notifier,
 ) -> Result<IpcServer> {
-    windows_pipe::spawn_server_impl(state, paste_mode, keep_transcript_clipboard, log)
+    windows_pipe::spawn_server_impl(state, paste_mode, keep_transcript_clipboard, log, notifier)
 }
 
 #[cfg(target_os = "windows")]
@@ -1404,6 +1390,7 @@ mod windows_pipe {
         paste_mode: PasteMode,
         keep_transcript_clipboard: bool,
         log: Arc<Logger>,
+        notifier: Notifier,
     ) -> Result<IpcServer> {
         let identity = DaemonPipeIdentity::current()?;
         let thread = thread::Builder::new()
@@ -1416,6 +1403,7 @@ mod windows_pipe {
                     Ok(pipe) => {
                         let state = Arc::clone(&state);
                         let log = Arc::clone(&log);
+                        let notifier = notifier.clone();
                         let _ = thread::Builder::new()
                             .name("parakit-ipc-client".into())
                             .spawn(move || {
@@ -1425,6 +1413,7 @@ mod windows_pipe {
                                     paste_mode,
                                     keep_transcript_clipboard,
                                     log,
+                                    notifier,
                                 )
                             });
                     }
@@ -1467,8 +1456,8 @@ mod windows_pipe {
         paste_mode: PasteMode,
         keep_transcript_clipboard: bool,
         log: Arc<Logger>,
+        notifier: Notifier,
     ) {
-        let notifier = Notifier::new(Arc::clone(&log));
         let outcome = client_command_outcome(
             read_command(&pipe),
             &state,
@@ -2297,20 +2286,8 @@ mod tests {
         ];
 
         for (command, expected) in cases {
-            assert_eq!(daemon_not_running_disposition(&command, false), expected);
+            assert_eq!(daemon_not_running_disposition(&command), expected);
         }
-        assert_eq!(
-            daemon_not_running_disposition(&IpcCommand::Stop, true),
-            DaemonNotRunningDisposition::Error(
-                "daemon control endpoint is unavailable while the singleton lock is held; it may still be starting or stopping. Retry shortly; if it persists, inspect the parakit process before terminating it"
-            )
-        );
-        assert_eq!(
-            daemon_not_running_disposition(&IpcCommand::Status, true),
-            DaemonNotRunningDisposition::Error(
-                "daemon control endpoint is unavailable while the singleton lock is held; it may still be starting or stopping. Retry shortly; if it persists, inspect the parakit process before terminating it"
-            )
-        );
     }
 
     #[cfg(any(unix, target_os = "windows"))]
@@ -2377,24 +2354,6 @@ mod tests {
             failures.len(),
             failures.join("\n")
         );
-    }
-
-    #[cfg(any(unix, target_os = "windows"))]
-    #[test]
-    fn stop_client_waits_for_singleton_release_and_times_out() {
-        let attempts = Cell::new(0);
-        wait_for_daemon_stop_with(Duration::from_secs(1), Duration::ZERO, || {
-            let next = attempts.get() + 1;
-            attempts.set(next);
-            Ok(next >= 3)
-        })
-        .expect("stop should complete when the singleton becomes available");
-        assert_eq!(attempts.get(), 3);
-
-        let error = wait_for_daemon_stop_with(Duration::ZERO, Duration::ZERO, || Ok(false))
-            .expect_err("a held singleton must keep stop from reporting completion");
-        assert!(error.to_string().contains("shutdown timeout"));
-        assert!(error.to_string().contains("inspect the parakit process"));
     }
 
     #[cfg(any(unix, target_os = "windows"))]
@@ -3074,7 +3033,8 @@ mod tests {
         let started = Instant::now();
         let handler = thread::spawn(move || {
             let log = Arc::new(Logger::new(LogLevel::Quiet));
-            handle_client(server, &state, PasteMode::Terminal, false, log);
+            let notifier = Notifier::silent(Arc::clone(&log));
+            handle_client(server, &state, PasteMode::Terminal, false, log, notifier);
         });
         handler.join().expect("handler should return after timeout");
         assert!(started.elapsed() < Duration::from_secs(2));

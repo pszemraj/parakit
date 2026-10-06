@@ -115,9 +115,7 @@ fn open_engine(
             super::stderr::with_stderr_suppressed(|| Engine::open(path, threads, device_mode))
         }
         // Reload runs beside capture, cues, and IPC, so their errors must survive.
-        LoadPolicy::Reload => super::model_output::with_model_output_filtered(|| {
-            Engine::open(path, threads, device_mode)
-        }),
+        LoadPolicy::Reload => Engine::open(path, threads, device_mode),
     }
 }
 

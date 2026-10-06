@@ -2,8 +2,11 @@
 
 use std::io::Read;
 use std::process::{Command, Output, Stdio};
+use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
+
+use crate::daemon::subprocess::wait_with_timeout;
 
 const PACTL_TIMEOUT: Duration = Duration::from_millis(750);
 
@@ -72,36 +75,22 @@ fn command_output_with_timeout(command: &mut Command, timeout: Duration) -> Opti
         .spawn()
         .ok()?;
     let mut stdout = child.stdout.take()?;
-    let reader = thread::spawn(move || {
+    let (sender, receiver) = mpsc::sync_channel(1);
+    thread::spawn(move || {
         let mut bytes = Vec::new();
-        stdout.read_to_end(&mut bytes).map(|_| bytes)
+        let _ = sender.send(stdout.read_to_end(&mut bytes).map(|_| bytes));
     });
     let deadline = Instant::now() + timeout;
-    loop {
-        match child.try_wait() {
-            Ok(Some(status)) => {
-                let stdout = reader.join().ok()?.ok()?;
-                return Some(Output {
-                    status,
-                    stdout,
-                    stderr: Vec::new(),
-                });
-            }
-            Ok(None) if Instant::now() >= deadline => {
-                let _ = child.kill();
-                let _ = child.wait();
-                let _ = reader.join();
-                return None;
-            }
-            Ok(None) => thread::sleep(Duration::from_millis(10)),
-            Err(_) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                let _ = reader.join();
-                return None;
-            }
-        }
-    }
+    let status = wait_with_timeout(&mut child, timeout).ok()??;
+    let stdout = receiver
+        .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+        .ok()?
+        .ok()?;
+    Some(Output {
+        status,
+        stdout,
+        stderr: Vec::new(),
+    })
 }
 
 fn parse_pactl_sources(text: &str) -> Vec<PactlSourceInfo> {
@@ -205,5 +194,47 @@ Source #43
 
         assert!(output.status.success());
         assert!(output.stdout.len() >= 300_000);
+    }
+
+    #[test]
+    #[allow(clippy::zombie_processes)] // The descendant outlives its parent to hold stdout open.
+    fn command_output_stops_waiting_for_descendant_stdout() {
+        const ROLE: &str = "PARAKIT_PACTL_INHERITED_STDOUT_ROLE";
+        match std::env::var(ROLE).as_deref() {
+            Ok("descendant") => {
+                thread::sleep(Duration::from_millis(600));
+                return;
+            }
+            Ok("child") => {
+                Command::new(std::env::current_exe().unwrap())
+                    .args([
+                        "--exact",
+                        "daemon::audio::pactl::tests::command_output_stops_waiting_for_descendant_stdout",
+                        "--nocapture",
+                    ])
+                    .env(ROLE, "descendant")
+                    .spawn()
+                    .unwrap();
+                return;
+            }
+            _ => {}
+        }
+
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        command
+            .args([
+                "--exact",
+                "daemon::audio::pactl::tests::command_output_stops_waiting_for_descendant_stdout",
+                "--nocapture",
+            ])
+            .env(ROLE, "child");
+        let started = Instant::now();
+        let output = command_output_with_timeout(&mut command, Duration::from_millis(200));
+
+        assert!(
+            output.is_none(),
+            "inherited stdout should exceed the budget"
+        );
+        assert!(started.elapsed() < Duration::from_millis(450));
     }
 }

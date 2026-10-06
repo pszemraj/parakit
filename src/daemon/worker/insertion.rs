@@ -194,8 +194,9 @@ pub(crate) fn insert_text(
             Ok(InsertReport::placeholder(InsertOutcome::Skipped, false))
         }
     };
-    if result.is_err() {
-        notifier.insertion_failed();
+    if let Err(error) = &result {
+        let typed_chars = insertion_error_report(error).and_then(|report| report.typed_chars);
+        notifier.insertion_failed(typed_chars);
     }
     result
 }

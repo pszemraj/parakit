@@ -228,6 +228,7 @@ fn run_daemon(cli: &Cli, start: &StartCli) -> Result<()> {
         match daemon::preflight::acquire_singleton_lock() {
             Ok(lock) => Some(lock),
             Err(err) if err.is::<daemon::preflight::DaemonAlreadyRunning>() => {
+                ensure_existing_daemon_responsive(daemon::ipc::daemon_responsive()?)?;
                 if !cli.quiet {
                     println!("parakit: already running");
                 }
@@ -245,7 +246,6 @@ fn run_daemon(cli: &Cli, start: &StartCli) -> Result<()> {
     let verbose = cli.effective_verbose(&config);
     configure_native_logging(verbose);
     let log = Arc::new(Logger::new(log_level(cli, &config)));
-    let notifier = Notifier::new(Arc::clone(&log));
     #[cfg(target_os = "linux")]
     let hotkey_backend = start.effective_hotkey_backend(&config);
     #[cfg(not(target_os = "linux"))]
@@ -275,6 +275,19 @@ fn run_daemon(cli: &Cli, start: &StartCli) -> Result<()> {
     ));
     daemon::inject::preflight(paste_mode).context("text insertion preflight failed")?;
     log.verbose("parakit: insertion preflight passed");
+
+    // Quiet engine startup redirects process-wide stderr. Open it before any
+    // daemon-owned background thread can emit a warning or panic into that
+    // temporary sink.
+    let OpenedEngine {
+        model_path,
+        engine,
+        device_summary,
+        recipe,
+    } = open_cli_engine(start, &config, verbose, cli.quiet, &log)?;
+    let model_dtype = model_dtype_label(&model_path);
+
+    let notifier = Notifier::new(Arc::clone(&log));
     let ipc_state = Arc::new(daemon::ipc::SharedState::with_history_limit(
         start.effective_transcript_history(&config),
     ));
@@ -289,6 +302,7 @@ fn run_daemon(cli: &Cli, start: &StartCli) -> Result<()> {
         paste_mode,
         keep_transcript_clipboard,
         Arc::clone(&log),
+        notifier.clone(),
     )
     .context("start daemon control socket")?;
 
@@ -302,14 +316,6 @@ fn run_daemon(cli: &Cli, start: &StartCli) -> Result<()> {
         .mic_info()
         .context("audio manager started without reporting a microphone")?;
     warn_about_bluetooth_mic_if_needed(&log, &mic_info);
-
-    let OpenedEngine {
-        model_path,
-        engine,
-        device_summary,
-        recipe,
-    } = open_cli_engine(start, &config, verbose, cli.quiet, &log)?;
-    let model_dtype = model_dtype_label(&model_path);
 
     // Banner.
     let model_name = model_file_name(&model_path);
@@ -426,6 +432,14 @@ fn run_daemon(cli: &Cli, start: &StartCli) -> Result<()> {
     // Tear down.
     let _ = coordinator.join();
     let _ = worker.join();
+    Ok(())
+}
+
+fn ensure_existing_daemon_responsive(responsive: bool) -> Result<()> {
+    anyhow::ensure!(
+        responsive,
+        "daemon singleton lock is held, but its control endpoint is unavailable; retry shortly or inspect the parakit process"
+    );
     Ok(())
 }
 
@@ -1072,6 +1086,15 @@ mod app_tests {
             .expect_err("an unmatched quote should be rejected");
 
         assert!(format!("{err:#}").contains("unmatched quote"));
+    }
+
+    #[test]
+    fn held_daemon_lock_requires_a_responsive_control_endpoint() {
+        ensure_existing_daemon_responsive(true).unwrap();
+        let error = ensure_existing_daemon_responsive(false).unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("control endpoint is unavailable"));
     }
 
     #[test]

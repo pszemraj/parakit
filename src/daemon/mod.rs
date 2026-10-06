@@ -17,8 +17,6 @@ pub(crate) mod logging;
 pub(crate) mod macos;
 /// Coordinates model residency and admission of recording/insertion activity.
 pub(crate) mod model_lifecycle;
-/// Filters native model informational output without discarding other errors.
-pub(crate) mod model_output;
 /// Sends user-visible desktop notifications.
 pub(crate) mod notifications;
 /// Checks runtime prerequisites before the daemon starts.
@@ -29,6 +27,8 @@ pub(crate) mod recording;
 pub(crate) mod sounds;
 /// Temporarily suppresses noisy native stderr around structured diagnostics.
 pub(crate) mod stderr;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod subprocess;
 /// Runs transcription and post-processing work off the hotkey thread.
 pub(crate) mod worker;
 /// Bounds IPC shutdown while allowing the worker to release native resources.
