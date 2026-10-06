@@ -30,8 +30,6 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 #[cfg(target_os = "linux")]
 use std::{fs::File, io, path::PathBuf};
-#[cfg(target_os = "linux")]
-use x11rb::{connection::Connection as _, protocol::Event as X11Event};
 
 #[cfg(target_os = "macos")]
 mod macos;
@@ -694,15 +692,7 @@ impl X11PhysicalHotkeyProbe {
     fn state(&mut self) -> anyhow::Result<PhysicalHotkeyState> {
         use x11rb::protocol::xproto::ConnectionExt as _;
 
-        let mut mapping_changed = false;
-        while let Some(event) = self
-            .conn
-            .poll_for_event()
-            .context("could not poll X11 hotkey mapping changes")?
-        {
-            mapping_changed |= matches!(event, X11Event::MappingNotify(_));
-        }
-        if mapping_changed {
+        if super::x11::mapping_changed(&self.conn)? {
             // Each X11 connection owns its MappingNotify queue and mapping cache;
             // the paste connection cannot share this refresh.
             if let Err(err) = self

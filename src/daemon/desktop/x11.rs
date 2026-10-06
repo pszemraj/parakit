@@ -1,6 +1,7 @@
 //! Shared X11 helpers used by Linux daemon backends.
 
 use anyhow::{Context, Result};
+use std::time::{Duration, Instant};
 use x11rb::connection::Connection;
 use x11rb::protocol::xproto::{AtomEnum, ConnectionExt, Keycode, Screen, Window};
 use x11rb::rust_connection::RustConnection;
@@ -200,6 +201,60 @@ pub(crate) fn active_window(conn: &RustConnection, root: Window) -> Result<Optio
     Ok(reply
         .value32()
         .and_then(|mut values| values.find(|window| *window != x11rb::NONE)))
+}
+
+/// Drain this connection's events and report keyboard mapping changes.
+///
+/// Each connection owns its own MappingNotify queue; callers refresh their
+/// local mapping when this returns true.
+///
+/// # Returns
+///
+/// Whether any pending event announced a keyboard mapping change.
+///
+/// # Errors
+///
+/// Returns an error when the X11 event queue cannot be polled.
+pub(crate) fn mapping_changed(conn: &RustConnection) -> Result<bool> {
+    let mut changed = false;
+    while let Some(event) = conn
+        .poll_for_event()
+        .context("could not poll X11 mapping changes")?
+    {
+        changed |= matches!(event, x11rb::protocol::Event::MappingNotify(_));
+    }
+    Ok(changed)
+}
+
+/// Poll physical modifiers until they are released or the budget expires.
+///
+/// # Arguments
+///
+/// * `timeout` - Maximum wait after the first poll.
+/// * `modifiers_held` - Reads whether any paste-relevant modifier is down.
+///
+/// # Returns
+///
+/// `true` once no modifier is held, or `false` if one is still held at the
+/// deadline.
+///
+/// # Errors
+///
+/// Returns the first keymap query failure.
+pub(crate) fn wait_for_modifier_release(
+    timeout: Duration,
+    mut modifiers_held: impl FnMut() -> Result<bool>,
+) -> Result<bool> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if !modifiers_held()? {
+            return Ok(true);
+        }
+        if Instant::now() >= deadline {
+            return Ok(false);
+        }
+        std::thread::sleep(Duration::from_millis(15));
+    }
 }
 
 #[cfg(test)]

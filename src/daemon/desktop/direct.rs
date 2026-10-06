@@ -118,8 +118,9 @@ pub(super) fn type_text_guarded(
             ),
         ));
     }
-    let modifiers_released = super::wait_for_x11_modifier_release(timeout, &mut modifiers_held)
-        .map_err(|cause| DirectTypingFailure::operational(0, total_chars, cause))?;
+    let modifiers_released =
+        crate::daemon::desktop::x11::wait_for_modifier_release(timeout, &mut modifiers_held)
+            .map_err(|cause| DirectTypingFailure::operational(0, total_chars, cause))?;
     if !modifiers_released {
         return Err(DirectTypingFailure::blocked(
             0,

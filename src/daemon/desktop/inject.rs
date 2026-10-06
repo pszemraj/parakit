@@ -24,8 +24,6 @@ use objc2::rc::autoreleasepool;
 use objc2_app_kit::{NSPasteboard, NSPasteboardTypeHTML, NSPasteboardTypeString};
 #[cfg(target_os = "macos")]
 use objc2_foundation::NSString;
-#[cfg(target_os = "linux")]
-use std::time::Instant;
 use std::{borrow::Cow, cell::RefCell, path::PathBuf, time::Duration};
 #[cfg(target_os = "windows")]
 use windows::{
@@ -33,11 +31,7 @@ use windows::{
     Win32::System::DataExchange::{IsClipboardFormatAvailable, RegisterClipboardFormatW},
 };
 #[cfg(target_os = "linux")]
-use x11rb::connection::Connection as _;
-#[cfg(target_os = "linux")]
 use x11rb::protocol::xproto::ConnectionExt as _;
-#[cfg(target_os = "linux")]
-use x11rb::protocol::Event as X11Event;
 #[cfg(target_os = "linux")]
 use x11rb::rust_connection::RustConnection;
 
@@ -64,6 +58,14 @@ mod inject_smoke;
 mod direct;
 #[cfg(target_os = "linux")]
 pub(crate) use direct::DirectTypingFailure;
+
+#[cfg(target_os = "linux")]
+#[path = "x11_paste.rs"]
+mod x11_paste;
+#[cfg(target_os = "linux")]
+use super::x11::wait_for_modifier_release;
+#[cfg(target_os = "linux")]
+use x11_paste::{linux_x11_xtest_preflight, LinuxX11Paste};
 
 /// Error label used when paste succeeded but previous clipboard restore failed.
 pub(crate) const CLIPBOARD_RESTORE_ERROR: &str = "could not restore previous clipboard contents";
@@ -260,8 +262,6 @@ enum PasteDispatch {
 /// dictation can finish before the rest of the chord is naturally released.
 #[cfg(target_os = "linux")]
 const LINUX_PASTE_MODIFIER_RELEASE_TIMEOUT: Duration = Duration::from_secs(2);
-#[cfg(target_os = "linux")]
-const LINUX_PASTE_MODIFIER_RELEASE_POLL: Duration = Duration::from_millis(15);
 
 /// Clipboard retention policy after staging text for paste.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1090,7 +1090,7 @@ impl Injector {
             .x11_paste
             .as_mut()
             .expect("X11 paste backend was just initialized");
-        let ready = wait_for_x11_modifier_release(LINUX_PASTE_MODIFIER_RELEASE_TIMEOUT, || {
+        let ready = wait_for_modifier_release(LINUX_PASTE_MODIFIER_RELEASE_TIMEOUT, || {
             paste.modifiers_held()
         });
         ready.unwrap_or_else(|_| {
@@ -1845,390 +1845,6 @@ fn clipboard_restore_delay() -> Duration {
     {
         Duration::from_millis(750)
     }
-}
-
-#[cfg(target_os = "linux")]
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct X11KeyStep {
-    keysym: u32,
-    press: bool,
-}
-
-#[cfg(target_os = "linux")]
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct ResolvedX11KeyStep {
-    keycode: u8,
-    press: bool,
-}
-
-#[cfg(target_os = "linux")]
-struct LinuxX11Paste {
-    conn: RustConnection,
-    root: u32,
-    mode: PasteMode,
-    standard_steps: Vec<ResolvedX11KeyStep>,
-    terminal_steps: Vec<ResolvedX11KeyStep>,
-    modifier_keycodes: Vec<u8>,
-}
-
-#[cfg(target_os = "linux")]
-impl LinuxX11Paste {
-    fn open() -> Result<Self> {
-        Self::open_for_mode(PasteMode::Standard)
-    }
-
-    fn open_for_mode(mode: PasteMode) -> Result<Self> {
-        let (conn, screen_num) =
-            RustConnection::connect(None).context("could not connect to X11")?;
-        let root = super::x11::root_window(&conn, screen_num)?;
-        let mut paste = Self {
-            conn,
-            root,
-            mode,
-            standard_steps: Vec::new(),
-            terminal_steps: Vec::new(),
-            modifier_keycodes: Vec::new(),
-        };
-        paste.refresh_mapping()?;
-        Ok(paste)
-    }
-
-    fn send_paste_chord(&mut self, mode: PasteMode) -> Result<PasteDispatch> {
-        self.refresh_mapping_if_needed()?;
-        let steps = match mode {
-            PasteMode::Standard => &self.standard_steps,
-            PasteMode::Terminal => &self.terminal_steps,
-            PasteMode::Direct => anyhow::bail!("direct mode does not use the X11 paste chord"),
-        };
-        let mut sink = X11ConnectionKeySink {
-            conn: &self.conn,
-            root: self.root,
-        };
-        send_x11_paste_chord_with_modifier_flush(
-            &mut sink,
-            steps,
-            &self.modifier_keycodes,
-            &self.keymap()?,
-        )
-    }
-
-    fn modifiers_held(&mut self) -> Result<bool> {
-        self.refresh_mapping_if_needed()?;
-        Ok(x11_modifier_held(&self.keymap()?, &self.modifier_keycodes))
-    }
-
-    fn refresh_mapping_if_needed(&mut self) -> Result<()> {
-        let mut changed = false;
-        while let Some(event) = self
-            .conn
-            .poll_for_event()
-            .context("could not poll X11 mapping changes")?
-        {
-            changed |= matches!(event, X11Event::MappingNotify(_));
-        }
-        if changed {
-            self.refresh_mapping()?;
-        }
-        Ok(())
-    }
-
-    fn refresh_mapping(&mut self) -> Result<()> {
-        let modifier_keycodes =
-            super::x11::keycodes_for_keysyms(&self.conn, linux_modifier_cleanup_keysyms())?;
-        anyhow::ensure!(
-            !modifier_keycodes.is_empty(),
-            "could not resolve X11 modifier keycodes"
-        );
-        self.modifier_keycodes = modifier_keycodes;
-        if self.mode == PasteMode::Direct {
-            self.standard_steps.clear();
-            self.terminal_steps.clear();
-        } else {
-            self.standard_steps =
-                linux_resolved_paste_chord_steps(&self.conn, PasteMode::Standard)?;
-            self.terminal_steps =
-                linux_resolved_paste_chord_steps(&self.conn, PasteMode::Terminal)?;
-        }
-        Ok(())
-    }
-
-    fn keymap(&self) -> Result<[u8; 32]> {
-        Ok(self
-            .conn
-            .query_keymap()
-            .context("could not query X11 modifiers before paste")?
-            .reply()
-            .context("could not read X11 modifiers before paste")?
-            .keys)
-    }
-}
-
-/// Poll physical modifiers until they are released or the budget expires.
-///
-/// # Arguments
-///
-/// * `timeout` - Maximum wait after the first poll.
-/// * `modifiers_held` - Reads whether any paste-relevant modifier is down.
-///
-/// # Returns
-///
-/// `true` once no modifier is held, or `false` if one is still held at the
-/// deadline.
-///
-/// # Errors
-///
-/// Returns the first keymap query failure.
-#[cfg(target_os = "linux")]
-fn wait_for_x11_modifier_release(
-    timeout: Duration,
-    mut modifiers_held: impl FnMut() -> Result<bool>,
-) -> Result<bool> {
-    let deadline = Instant::now() + timeout;
-    loop {
-        if !modifiers_held()? {
-            return Ok(true);
-        }
-        if Instant::now() >= deadline {
-            return Ok(false);
-        }
-        std::thread::sleep(LINUX_PASTE_MODIFIER_RELEASE_POLL);
-    }
-}
-
-#[cfg(target_os = "linux")]
-fn x11_modifier_held(keymap: &[u8; 32], modifier_keycodes: &[u8]) -> bool {
-    modifier_keycodes
-        .iter()
-        .any(|keycode| super::x11::keycode_down(keymap, *keycode))
-}
-
-#[cfg(target_os = "linux")]
-fn linux_modifier_cleanup_keysyms() -> &'static [u32] {
-    &[
-        super::x11::CONTROL_L_KEYSYM,
-        super::x11::CONTROL_R_KEYSYM,
-        super::x11::SHIFT_L_KEYSYM,
-        super::x11::SHIFT_R_KEYSYM,
-        super::x11::ALT_L_KEYSYM,
-        super::x11::ALT_R_KEYSYM,
-        super::x11::SUPER_L_KEYSYM,
-        super::x11::SUPER_R_KEYSYM,
-        super::x11::ISO_LEVEL3_SHIFT_KEYSYM,
-    ]
-}
-
-#[cfg(target_os = "linux")]
-fn linux_paste_chord_steps(mode: PasteMode) -> Vec<X11KeyStep> {
-    let mut steps = vec![X11KeyStep {
-        keysym: super::x11::CONTROL_L_KEYSYM,
-        press: true,
-    }];
-    if mode == PasteMode::Terminal {
-        steps.push(X11KeyStep {
-            keysym: super::x11::SHIFT_L_KEYSYM,
-            press: true,
-        });
-    }
-    steps.push(X11KeyStep {
-        keysym: super::x11::V_KEYSYM,
-        press: true,
-    });
-    steps.push(X11KeyStep {
-        keysym: super::x11::V_KEYSYM,
-        press: false,
-    });
-    if mode == PasteMode::Terminal {
-        steps.push(X11KeyStep {
-            keysym: super::x11::SHIFT_L_KEYSYM,
-            press: false,
-        });
-    }
-    steps.push(X11KeyStep {
-        keysym: super::x11::CONTROL_L_KEYSYM,
-        press: false,
-    });
-    steps
-}
-
-#[cfg(target_os = "linux")]
-fn linux_resolved_paste_chord_steps(
-    conn: &RustConnection,
-    mode: PasteMode,
-) -> Result<Vec<ResolvedX11KeyStep>> {
-    linux_paste_chord_steps(mode)
-        .into_iter()
-        .map(|step| {
-            Ok(ResolvedX11KeyStep {
-                keycode: super::x11::keycode_for_keysym(conn, step.keysym)?,
-                press: step.press,
-            })
-        })
-        .collect()
-}
-
-#[cfg(target_os = "linux")]
-trait X11KeySink {
-    /// Send a key press or release event.
-    ///
-    /// # Arguments
-    ///
-    /// * `keycode` - X11 keycode to send.
-    /// * `press` - `true` for key press, `false` for key release.
-    ///
-    /// # Returns
-    ///
-    /// `Ok(())` when the sink accepted the key event.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the backend rejects the key event.
-    fn key(&mut self, keycode: u8, press: bool) -> Result<()>;
-    /// Flush queued key events to the X11 server.
-    ///
-    /// # Returns
-    ///
-    /// `Ok(())` when pending key events have been submitted.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the backend cannot flush pending events.
-    fn flush(&mut self) -> Result<()>;
-}
-
-#[cfg(target_os = "linux")]
-struct X11ConnectionKeySink<'a> {
-    conn: &'a x11rb::rust_connection::RustConnection,
-    root: u32,
-}
-
-#[cfg(target_os = "linux")]
-impl X11KeySink for X11ConnectionKeySink<'_> {
-    fn key(&mut self, keycode: u8, press: bool) -> Result<()> {
-        use x11rb::protocol::xproto::{KEY_PRESS_EVENT, KEY_RELEASE_EVENT};
-        use x11rb::protocol::xtest::ConnectionExt as XtestConnectionExt;
-
-        let event_type = if press {
-            KEY_PRESS_EVENT
-        } else {
-            KEY_RELEASE_EVENT
-        };
-        self.conn
-            .xtest_fake_input(event_type, keycode, 0, self.root, 0, 0, 0)
-            .context("could not send XTest key event")?
-            .check()
-            .context("X11 rejected XTest key event")?;
-        Ok(())
-    }
-
-    fn flush(&mut self) -> Result<()> {
-        self.conn
-            .flush()
-            .context("could not flush XTest paste chord")
-    }
-}
-
-#[cfg(target_os = "linux")]
-fn send_x11_key_steps<S: X11KeySink>(sink: &mut S, steps: &[ResolvedX11KeyStep]) -> Result<()> {
-    let mut pressed = Vec::new();
-    for step in steps {
-        if let Err(err) = sink.key(step.keycode, step.press) {
-            let cleanup = release_pressed_x11_keys(sink, &mut pressed);
-            return combine_primary_cleanup_error(
-                err.context("could not send XTest paste chord"),
-                cleanup,
-            );
-        }
-
-        if step.press {
-            pressed.push(step.keycode);
-        } else if let Some(index) = pressed.iter().rposition(|key| *key == step.keycode) {
-            pressed.remove(index);
-        }
-    }
-
-    if let Err(err) = sink.flush() {
-        let cleanup = release_pressed_x11_keys(sink, &mut pressed);
-        return combine_primary_cleanup_error(err, cleanup);
-    }
-
-    Ok(())
-}
-
-#[cfg(target_os = "linux")]
-fn send_x11_paste_chord_with_modifier_flush<S: X11KeySink>(
-    sink: &mut S,
-    steps: &[ResolvedX11KeyStep],
-    modifier_keycodes: &[u8],
-    keymap: &[u8; 32],
-) -> Result<PasteDispatch> {
-    // The chord and cleanup release modifiers, which would stop another held
-    // push-to-talk capture or interfere with the user's current shortcut.
-    // This instant check guards changes after the bounded readiness wait.
-    // QueryKeymap cannot distinguish a lost release from a genuinely held key;
-    // clearing an apparent "stuck" modifier here would release the latter too.
-    if x11_modifier_held(keymap, modifier_keycodes) {
-        return Ok(PasteDispatch::SkippedUnsafeModifiers);
-    }
-    send_x11_key_steps(sink, steps)?;
-    // Best-effort blanket releases protect against focus changes during the
-    // paste chord that leave the X server believing a modifier is still held.
-    let _ = flush_x11_modifier_releases(sink, modifier_keycodes);
-    Ok(PasteDispatch::Posted)
-}
-
-#[cfg(target_os = "linux")]
-fn flush_x11_modifier_releases<S: X11KeySink>(
-    sink: &mut S,
-    modifier_keycodes: &[u8],
-) -> Result<()> {
-    for keycode in modifier_keycodes {
-        sink.key(*keycode, false)
-            .context("could not send XTest modifier cleanup release")?;
-    }
-    sink.flush()
-        .context("could not flush XTest modifier cleanup")
-}
-
-#[cfg(target_os = "linux")]
-fn release_pressed_x11_keys<S: X11KeySink>(sink: &mut S, pressed: &mut Vec<u8>) -> Result<()> {
-    let mut release_error = None;
-    while let Some(keycode) = pressed.pop() {
-        if let Err(err) = sink.key(keycode, false) {
-            release_error.get_or_insert_with(|| err.context("could not release XTest key"));
-        }
-    }
-
-    let flush_error = sink.flush().err();
-    match (release_error, flush_error) {
-        (None, None) => Ok(()),
-        (Some(err), None) | (None, Some(err)) => Err(err),
-        (Some(release_err), Some(flush_err)) => Err(anyhow::anyhow!(
-            "{release_err:#}; XTest cleanup flush also failed: {flush_err:#}"
-        )),
-    }
-}
-
-#[cfg(target_os = "linux")]
-fn combine_primary_cleanup_error(primary: anyhow::Error, cleanup: Result<()>) -> Result<()> {
-    match cleanup {
-        Ok(()) => Err(primary),
-        Err(cleanup_err) => Err(anyhow::anyhow!(
-            "{primary:#}; cleanup while releasing pressed XTest keys failed: {cleanup_err:#}"
-        )),
-    }
-}
-
-#[cfg(target_os = "linux")]
-fn linux_x11_xtest_preflight() -> Result<()> {
-    use x11rb::protocol::xtest::ConnectionExt as XtestConnectionExt;
-    use x11rb::rust_connection::RustConnection;
-
-    let (conn, _) = RustConnection::connect(None).context("could not connect to X11")?;
-    conn.xtest_get_version(2, 2)
-        .context("could not request XTest version")?
-        .reply()
-        .context("XTest extension is unavailable")?;
-    Ok(())
 }
 
 #[cfg(test)]
