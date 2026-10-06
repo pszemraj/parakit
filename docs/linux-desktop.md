@@ -3,7 +3,7 @@
 parakit needs a desktop input backend for `Ctrl+Space`.
 
 See [idle model offload](running.md#idle-model-offload) for runtime behavior and
-[Linux memory measurements](dev/memory.md#linux) for CPU, CUDA, and Vulkan checks.
+[Linux reload measurements](dev/memory.md#linux-reload-measurements) for CPU, CUDA, and Vulkan context.
 
 Default behavior:
 

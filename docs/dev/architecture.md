@@ -90,7 +90,6 @@ Cross-thread communication uses atomics, mutex-protected buffers, and crossbeam 
 | `src/data_log.rs` | JSONL transcription and insertion-outcome logging. |
 | `src/audio_file.rs` | WAV decoding, mono mixing, and file resampling for quality tools and PTT simulation. |
 | `examples/transcribe_file.rs` | Raw file-based inference smoke and quality checks. |
-| `examples/profile_memory.rs` | Repeated session checkpoints and native per-process memory collection. |
 | `scripts/transcribe_nemo_parakeet.py` | NeMo reference transcription helper. |
 | `build.rs`, `build/{openblas_roots,unix_openblas,windows_openblas}.rs` | CrispASR CMake orchestration, accelerator selection, runtime paths, and cross-platform BLAS discovery. |
 | `build/windows_{artifacts,cuda,manifest}.rs`, `scripts/windows/{build,common,toolchains,install}.ps1` | Windows toolchain discovery, runtime-manifest generation, bundle assembly, and per-user installation. |

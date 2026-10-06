@@ -153,11 +153,11 @@ Recording, queued dictations, transcription, and insertion prevent offloading. T
 
 Press PTT normally after an idle period. A three-note cue announces model reloading, followed by the normal listening tone once the model is ready if PTT is still held. Audio records throughout reload, so early speech is preserved. An early release queues that audio until the model is ready and suppresses the delayed listening tone. Successful dictation retains its normal completion cue. Reload uses the resolved local file without downloading it again, preserving the thread count and [device policy](#device-selection). If reopening at PTT start fails, parakit plays its two-pulse error cue and retries once when PTT is released so a temporary failure can still preserve the dictation. If that retry also fails, it plays the error cue again and reports the dictation discarded without insertion; the next PTT retries automatically. `--no-sounds` disables these cues.
 
-Startup warms one second of synthetic audio on CPU, or five seconds on GPU. Reload uses a one-second readiness probe on every backend. Longer dictations allocate larger buffers as needed; the first use of a new shape can also incur backend compilation work. [Reload measurements](dev/memory.md#reload-warmup-comparison) compare latency, transcript parity, and memory for the reload policy.
+Startup warms one second of synthetic audio on CPU, or five seconds on GPU. Reload uses a one-second readiness probe on every backend. Longer dictations allocate larger buffers as needed; the first use of a new shape can also incur backend compilation work. [Linux reload measurements](dev/memory.md#linux-reload-measurements) show host and GPU memory for this policy.
 
 `parakit --verbose status` reports `loaded`, `loading`, or `offloaded`, the effective timeout, and the last reload error until a successful reload clears it. Residency is separate from the recording/transcribing phase. Queries never load the model. During startup, residency can be unavailable until the worker publishes its initial state.
 
-Session destruction releases owned CPU/GPU allocations, but process and driver caches can remain. See the [native memory measurements and platform procedure](dev/memory.md); GPU inference does not imply zero host memory.
+Session destruction releases owned CPU/GPU allocations, but process and driver caches can remain. See the [memory measurements and allocation notes](dev/memory.md); GPU inference does not imply zero host memory.
 
 ## Model Cache
 

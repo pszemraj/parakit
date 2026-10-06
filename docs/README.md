@@ -21,5 +21,5 @@
 
 - [dev/architecture.md](dev/architecture.md) - module map and platform work.
 - [dev/quality.md](dev/quality.md) - validation and quality checks.
-- [dev/memory.md](dev/memory.md) - memory profiling, allocation ownership, and native results.
+- [dev/memory.md](dev/memory.md) - Linux reload measurements and allocation ownership.
 - [dev/README.md](dev/README.md) - maintainer notes.

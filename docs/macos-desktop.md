@@ -87,7 +87,7 @@ Transcripts under 12 normalized characters require an exact baseline-to-current 
 ## Metal Verification
 
 See [idle model offload](running.md#idle-model-offload) for runtime behavior and
-[macOS memory measurements](dev/memory.md#macos) for CPU and Metal checks.
+[memory allocation notes](dev/memory.md#allocation-ownership) for the distinction between session and process-wide state.
 
 Use verbose doctor output to confirm the Metal build and visible compute device:
 

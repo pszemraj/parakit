@@ -109,7 +109,7 @@ Use a real WAV with a known transcript. The pinned Juniper voice memo is 55.36 s
 
 The worker acknowledges each required transcript, checks exact parity across repeats in the same process, and verifies the expected residency after each wait (including the last). This parity check verifies that reloading recreates the same session; it is not a cross-build reference-transcript comparison. Missing transcripts, reload failures, or missed offloads return a failure exit status. An immediate simulated release exercises queuing while reload is busy. Use `--model-idle-minutes 0` to check disabled offloading. For one dictation without an idle wait, omit `--simulate-ptt-repeat` and `--simulate-ptt-idle-seconds`; both options require `--simulate-ptt-audio`.
 
-For ten-cycle memory comparisons and OS-specific measurements, use the [memory harness](memory.md). This is separate from the real-time worker timeout test.
+The [Linux reload measurements](memory.md#linux-reload-measurements) describe observed host and GPU allocation. This is separate from the real-time worker timeout test.
 
 ## NeMo Reference Helper
 
@@ -218,6 +218,6 @@ completion/error cues and `--no-sounds` too. Headless tests verify cue ordering 
 not validate audible playback, physical input, or insertion. Record unobserved
 human checks and unavailable backend runs as pending.
 
-For allocation comparisons, use the [memory harness and platform measurements](memory.md).
+For allocation context, see the [Linux reload measurements and ownership notes](memory.md).
 
 TODO: Reproduce a hung X11 clipboard owner and design bounded snapshot reads that preserve the prior clipboard. Arboard reads formats sequentially and its public API does not distinguish a read timeout from an unavailable format.

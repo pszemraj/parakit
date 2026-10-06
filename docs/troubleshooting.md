@@ -159,8 +159,8 @@ visibility with `parakit --verbose doctor`. Restore the file or device and
 press PTT again; [reload behavior](running.md#idle-model-offload) retries without
 a daemon restart. A changed model path or device setting requires a restart.
 
-For unexpectedly high memory after offload, use the [platform measurements](dev/memory.md#platform-measurements)
-to distinguish live allocations, file mappings, and backend caches.
+For unexpectedly high memory after offload, see the [allocation ownership notes](dev/memory.md#allocation-ownership)
+for the distinction between session allocations and process-wide backend caches.
 
 ## Build And Model Issues
 

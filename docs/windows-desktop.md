@@ -5,7 +5,7 @@ parakit runs from a Windows terminal and installs as a per-user bundle. Its hotk
 ## Build
 
 See [idle model offload](running.md#idle-model-offload) for runtime behavior and
-[Windows memory measurements](dev/memory.md#windows) for backend checks.
+[memory allocation notes](dev/memory.md#allocation-ownership) for the distinction between session and process-wide state.
 
 Build and install with the [Windows bundle scripts](../scripts/windows/README.md); a bare `cargo install --path .` does not copy the generated CrispASR/ggml DLLs beside `parakit.exe`. Shared native dependencies and backend controls are in [build.md](build.md).
 
