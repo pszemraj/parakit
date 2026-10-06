@@ -27,6 +27,11 @@ use objc2_foundation::NSString;
 #[cfg(target_os = "linux")]
 use std::time::Instant;
 use std::{borrow::Cow, cell::RefCell, path::PathBuf, time::Duration};
+#[cfg(target_os = "windows")]
+use windows::{
+    core::w,
+    Win32::System::DataExchange::{IsClipboardFormatAvailable, RegisterClipboardFormatW},
+};
 #[cfg(target_os = "linux")]
 use x11rb::connection::Connection as _;
 #[cfg(target_os = "linux")]
@@ -506,6 +511,22 @@ impl ClipboardStore for Clipboard {
     }
 
     fn get_html(&mut self) -> Result<String> {
+        #[cfg(target_os = "windows")]
+        {
+            // arboard reports an absent Windows HTML format as `Unknown`,
+            // which would make ordinary text, image, and empty clipboards look
+            // unreadable. Ask Windows whether that representation exists so
+            // snapshot capture can distinguish absence from a real read error.
+            let html_format = unsafe { RegisterClipboardFormatW(w!("HTML Format")) };
+            if html_format == 0 {
+                return Err(anyhow::anyhow!(
+                    "could not register Windows HTML clipboard format"
+                ));
+            }
+            if unsafe { IsClipboardFormatAvailable(html_format) }.is_err() {
+                return Err(arboard::Error::ContentNotAvailable.into());
+            }
+        }
         self.get()
             .html()
             .context("could not read HTML clipboard contents")
