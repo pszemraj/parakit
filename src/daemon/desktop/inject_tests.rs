@@ -44,6 +44,7 @@ struct MockClipboard {
     text_unavailable: Rc<Cell<bool>>,
     guard_read: bool,
     after_guard_read: Option<MockClipboardContent>,
+    after_snapshot_read: Option<MockClipboardContent>,
 }
 
 impl MockClipboard {
@@ -60,6 +61,7 @@ impl MockClipboard {
             text_unavailable: Rc::new(Cell::new(false)),
             guard_read: false,
             after_guard_read: None,
+            after_snapshot_read: None,
         }
     }
 
@@ -157,7 +159,7 @@ impl MockClipboard {
 impl ClipboardStore for MockClipboard {
     fn change_stamp(&mut self) -> Result<u64> {
         self.apply_external_write();
-        self.guard_read = true;
+        self.guard_read = self.generation > 1 || self.after_guard_read.is_some();
         if self.stamp_unavailable.get() {
             anyhow::bail!("clipboard stamp unavailable");
         }
@@ -192,7 +194,9 @@ impl ClipboardStore for MockClipboard {
                 .clone()
                 .ok_or_else(|| arboard::Error::ContentNotAvailable.into()),
         };
-        let after_read = if self.guard_read {
+        let after_read = if self.after_snapshot_read.is_some() {
+            self.after_snapshot_read.take()
+        } else if self.guard_read {
             self.after_guard_read.take()
         } else {
             None
@@ -296,6 +300,123 @@ impl ClipboardStore for MockClipboard {
         self.guard_read = false;
         Ok(())
     }
+}
+
+#[test]
+fn snapshot_owner_change_preserves_competing_copy_before_staging() {
+    for paste in [false, true] {
+        let mut clipboard = MockClipboard::new("old clipboard");
+        let competing = MockClipboardContent::Text("new copy".to_owned());
+        clipboard.after_snapshot_read = Some(competing.clone());
+        if paste {
+            let report = paste_with_clipboard_swap_guarded(
+                &mut clipboard,
+                "dictated text",
+                PasteMode::Standard,
+                || true,
+                || panic!("a changed snapshot must prevent dispatch"),
+                Duration::ZERO,
+                restore_plan(&quiet_gate()),
+                ClipboardPolicy::RestorePrevious,
+                None,
+                || Ok(true),
+            )
+            .unwrap();
+            assert_eq!(report.outcome, PasteOutcome::ClipboardChanged);
+        } else {
+            let outcome = stage_text_without_paste(
+                &mut clipboard,
+                "dictated text",
+                restore_plan(&quiet_gate()),
+                ClipboardPolicy::RestorePrevious,
+            )
+            .unwrap();
+            assert!(matches!(outcome, StageOutcome::ClipboardChanged(_)));
+        }
+        assert_eq!(clipboard.content, competing);
+        assert!(!clipboard
+            .events
+            .borrow()
+            .iter()
+            .any(|event| event.starts_with("set:")));
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn linux_file_list_adapter_removes_crlf_separator_without_changing_path_bytes() {
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt;
+
+    let dir = crate::test_support::fixture_root("parakit-clipboard-test", "file-list-crlf");
+    let normal = dir.join("document.txt");
+    let unchanged = dir.join("other.txt");
+    let both_normal = dir.join("both.txt");
+    let both_cr = dir.join("both.txt\r");
+    let non_utf8 = dir.join(OsString::from_vec(b"non-utf8-\xff.txt".to_vec()));
+    for path in [&normal, &unchanged, &both_normal, &both_cr, &non_utf8] {
+        std::fs::write(path, b"").unwrap();
+    }
+    let unresolved = dir.join("missing.txt\r");
+    let paths = vec![
+        dir.join("document.txt\r"),
+        unchanged.clone(),
+        both_cr.clone(),
+        both_normal.clone(),
+        dir.join(OsString::from_vec(b"non-utf8-\xff.txt\r".to_vec())),
+        non_utf8.clone(),
+        unresolved.clone(),
+    ];
+    assert_eq!(
+        linux_file_list_paths(paths),
+        vec![
+            normal,
+            unchanged,
+            both_cr,
+            both_normal,
+            non_utf8.clone(),
+            non_utf8,
+            unresolved,
+        ]
+    );
+}
+
+#[test]
+fn empty_selection_owner_zero_can_be_staged_and_restored() {
+    let mut clipboard = MockClipboard::empty();
+    clipboard.generation = 0;
+    let outcome = stage_text_without_paste(
+        &mut clipboard,
+        "dictated text",
+        restore_plan(&quiet_gate()),
+        ClipboardPolicy::RestorePrevious,
+    )
+    .unwrap();
+    assert!(matches!(outcome, StageOutcome::Blocked));
+    assert_eq!(clipboard.content, MockClipboardContent::Empty);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn unsupported_restore_preserves_identical_text_from_replacement_owner() {
+    let mut clipboard = MockClipboard::new("dictated text");
+    let staged = StagedClipboard::capture(
+        &mut clipboard,
+        ClipboardSnapshot::Unsupported,
+        "dictated text",
+    );
+    *clipboard.pending_external_write.borrow_mut() =
+        Some(MockClipboardContent::Text("dictated text".to_owned()));
+    // A prior insertion check may have accepted a manager handoff. The
+    // unsupported restore must still compare against our original owner.
+    assert!(staged.is_current(&mut clipboard));
+    assert!(matches!(
+        staged
+            .restore(&mut clipboard, ClipboardPolicy::RestorePrevious)
+            .unwrap(),
+        ClipboardRestore::Changed(_)
+    ));
+    assert_eq!(clipboard.text(), Some("dictated text"));
 }
 
 #[derive(Clone)]
@@ -1779,7 +1900,14 @@ fn unreadable_clipboard_stamp_fails_closed_before_chord() {
         .expect("failed observation must preserve clipboard rather than trigger fallback");
         assert_eq!(report.outcome, PasteOutcome::ClipboardChanged);
         assert_eq!(report.telemetry.clipboard_restored, None);
-        assert_eq!(clipboard.text(), Some("dictated text"));
+        assert_eq!(
+            clipboard.text(),
+            Some(if fail_capture {
+                "old clipboard"
+            } else {
+                "dictated text"
+            })
+        );
         assert!(!report.telemetry.paste_event_posted);
         assert!(
             report

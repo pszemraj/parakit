@@ -47,7 +47,7 @@ use super::FocusVerification;
 
 #[path = "clipboard_guard.rs"]
 mod clipboard_guard;
-use clipboard_guard::{ClipboardRestore, StagedClipboard};
+use clipboard_guard::{ClipboardBeforeStaging, ClipboardRestore, StagedClipboard};
 
 #[cfg(target_os = "linux")]
 #[path = "inject_smoke.rs"]
@@ -537,9 +537,13 @@ impl ClipboardStore for Clipboard {
     }
 
     fn get_file_list(&mut self) -> Result<Vec<PathBuf>> {
-        self.get()
+        let files = self
+            .get()
             .file_list()
-            .context("could not read file-list clipboard contents")
+            .context("could not read file-list clipboard contents")?;
+        #[cfg(target_os = "linux")]
+        let files = linux_file_list_paths(files);
+        Ok(files)
     }
 
     fn set_file_list(&mut self, files: &[PathBuf]) -> Result<()> {
@@ -559,6 +563,33 @@ impl ClipboardStore for Clipboard {
     fn clear(&mut self) -> Result<()> {
         Clipboard::clear(self).context("could not clear system clipboard")
     }
+}
+
+#[cfg(target_os = "linux")]
+fn linux_file_list_paths(files: Vec<PathBuf>) -> Vec<PathBuf> {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+
+    // arboard 3.6.1 retains CR from CRLF separators, but decoding also turns
+    // an encoded filename suffix %0D into CR. Preserve any existing original;
+    // use the stripped path only when it identifies an existing copied file.
+    files
+        .into_iter()
+        .map(|path| {
+            let Some(bytes) = path.as_os_str().as_bytes().strip_suffix(b"\r") else {
+                return path;
+            };
+            if path.exists() {
+                return path;
+            }
+            let stripped = PathBuf::from(OsStr::from_bytes(bytes));
+            if stripped.exists() {
+                stripped
+            } else {
+                path
+            }
+        })
+        .collect()
 }
 
 /// Focus owner captured when recording begins.
@@ -1239,10 +1270,18 @@ where
     }
 
     let previous = match clipboard_policy {
-        ClipboardPolicy::RestorePrevious => ClipboardSnapshot::capture(clipboard)?,
-        ClipboardPolicy::KeepTranscript => ClipboardSnapshot::Unsupported,
+        ClipboardPolicy::RestorePrevious => Some(ClipboardBeforeStaging::capture(clipboard)?),
+        ClipboardPolicy::KeepTranscript => None,
     };
     let write_before = restore_plan.before_transcript_write();
+    if let Some(previous) = &previous {
+        match previous.is_current(clipboard) {
+            Ok(true) => {}
+            Ok(false) => return Ok(PasteReport::clipboard_changed(None)),
+            Err(err) => return Ok(PasteReport::clipboard_changed(Some(format!("{err:#}")))),
+        }
+    }
+    let previous = previous.map_or(ClipboardSnapshot::Unsupported, |previous| previous.snapshot);
     clipboard
         .set_text(text.to_owned())
         .context("could not copy transcript to clipboard")?;
@@ -1522,12 +1561,17 @@ where
         return Ok(StageOutcome::CopiedOnly);
     }
 
-    let previous = ClipboardSnapshot::capture(clipboard)?;
+    let previous = ClipboardBeforeStaging::capture(clipboard)?;
     let write_before = restore_plan.before_transcript_write();
+    match previous.is_current(clipboard) {
+        Ok(true) => {}
+        Ok(false) => return Ok(StageOutcome::ClipboardChanged(None)),
+        Err(err) => return Ok(StageOutcome::ClipboardChanged(Some(format!("{err:#}")))),
+    }
     clipboard
         .set_text(text.to_owned())
         .context("could not copy transcript to clipboard")?;
-    let previous = StagedClipboard::capture(clipboard, previous, text);
+    let previous = StagedClipboard::capture(clipboard, previous.snapshot, text);
     let write_token = restore_plan.after_transcript_write(write_before);
     let restored = restore_after_delay(
         clipboard,

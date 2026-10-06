@@ -15,7 +15,48 @@ pub(super) struct StagedClipboard {
     previous: ClipboardSnapshot,
     transcript: String,
     stamp: Cell<Option<u64>>,
+    original_stamp: Option<u64>,
     observation_error: RefCell<Option<String>>,
+}
+
+/// Payload and owner observed before staging can replace the clipboard.
+pub(super) struct ClipboardBeforeStaging {
+    pub(super) snapshot: ClipboardSnapshot,
+    stamp: Result<u64, String>,
+}
+
+impl ClipboardBeforeStaging {
+    /// Capture the owner before reading the supported clipboard formats.
+    ///
+    /// # Returns
+    ///
+    /// The supported payload and its initial owner observation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a supported payload cannot be read.
+    pub(super) fn capture<C: ClipboardStore>(clipboard: &mut C) -> Result<Self> {
+        let stamp = clipboard.change_stamp().map_err(|err| format!("{err:#}"));
+        let snapshot = ClipboardSnapshot::capture(clipboard)?;
+        Ok(Self { snapshot, stamp })
+    }
+
+    /// Check the captured owner immediately before writing the transcript.
+    ///
+    /// # Returns
+    ///
+    /// Whether the owner is unchanged since snapshot capture began.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when either owner observation failed.
+    pub(super) fn is_current<C: ClipboardStore>(&self, clipboard: &mut C) -> Result<bool> {
+        let before = self
+            .stamp
+            .as_ref()
+            .map_err(|err| anyhow::anyhow!("{err}"))?;
+        Ok(*before == clipboard.change_stamp()?)
+    }
 }
 
 /// Whether the previous clipboard was restored, retained, or superseded.
@@ -53,6 +94,7 @@ impl StagedClipboard {
             previous,
             transcript: transcript.to_owned(),
             stamp: Cell::new(stamp),
+            original_stamp: stamp,
             observation_error: RefCell::new(observation_error),
         }
     }
@@ -180,6 +222,21 @@ impl StagedClipboard {
         if !self.is_current(clipboard) {
             return Ok(ClipboardRestore::Changed(self.observation_error()));
         }
+        if cfg!(target_os = "linux")
+            && policy == ClipboardPolicy::RestorePrevious
+            && matches!(self.previous, ClipboardSnapshot::Unsupported)
+        {
+            // Clearing an unsupported snapshot is safe only while our own
+            // original write owns the selection, even after a manager handoff.
+            match clipboard.change_stamp() {
+                Ok(stamp) if Some(stamp) == self.original_stamp => {}
+                Ok(_) => return Ok(ClipboardRestore::Changed(self.observation_error())),
+                Err(err) => {
+                    self.record_observation_error("could not recheck clipboard stamp", err);
+                    return Ok(ClipboardRestore::Changed(self.observation_error()));
+                }
+            }
+        }
         restore_or_clear_clipboard(clipboard, self.previous, policy)?;
         Ok(match policy {
             ClipboardPolicy::RestorePrevious => ClipboardRestore::Restored,
@@ -205,7 +262,7 @@ pub(super) fn platform_change_stamp() -> Result<u64> {
             x11rb::connect(None).context("open clipboard observation connection")?;
         let selection = connection.intern_atom(false, b"CLIPBOARD")?.reply()?.atom;
         let owner = connection.get_selection_owner(selection)?.reply()?.owner;
-        anyhow::ensure!(owner != x11rb::NONE, "clipboard has no owner");
+        // NONE is a valid observation of an empty selection before staging.
         Ok(u64::from(owner))
     }
     #[cfg(target_os = "windows")]
