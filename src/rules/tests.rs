@@ -475,6 +475,46 @@ fn fraction_guards_preserve_numerators_without_absorbing_independent_counts() {
                 "between 2000 and half a million",
             ),
             (
+                "both five and half a million parameters are allowed",
+                "both 5 and half a million parameters are allowed",
+            ),
+            (
+                "between about five and half a million parameters",
+                "between about 5 and half a million parameters",
+            ),
+            (
+                "between nearly five and half a million parameters",
+                "between nearly 5 and half a million parameters",
+            ),
+            (
+                "between almost five and half a million parameters",
+                "between almost 5 and half a million parameters",
+            ),
+            (
+                "the models are both about five and a half million parameters",
+                "the models are both about five and a half million parameters",
+            ),
+            (
+                "they are both roughly five and a half million parameters",
+                "they are both roughly five and a half million parameters",
+            ),
+            (
+                "models are both five and a half million parameters",
+                "models are both five and a half million parameters",
+            ),
+            (
+                "we chose between models, then five and a half million parameters",
+                "we chose between models, then five and a half million parameters",
+            ),
+            (
+                "I like them both\nfive and a half million parameters fit",
+                "I like them both\nfive and a half million parameters fit",
+            ),
+            (
+                "between about\r\nfive and a half million parameters fit",
+                "between about\r\nfive and a half million parameters fit",
+            ),
+            (
                 "chapter five half a million words long",
                 "chapter 5 half a million words long",
             ),

@@ -206,11 +206,27 @@ fn preceding_fraction_start(input: &str, phrase: &str, language: &Language) -> O
         .split_ascii_whitespace()
         .any(|word| word.eq_ignore_ascii_case("halves") || word.eq_ignore_ascii_case("quarters"));
     if joined {
-        // "between X and half a million" joins range bounds, not a mixed
-        // fraction. The preceding exact bound still converts normally.
+        // "both/between X and half a million" coordinates separate quantities,
+        // even when X is approximate. Do not scan earlier clause context: an
+        // unrelated "between" must not turn a mixed fraction into a range.
+        // Mid-clause "both" can modify the subject ("models are both five
+        // and a half million"), so retain the conservative fraction guard there.
         if number_tokens(&input[..start])
-            .last()
-            .is_some_and(|token| token.lowercase == "between")
+            .iter()
+            .enumerate()
+            .rev()
+            .find(|(_, token)| {
+                !matches!(
+                    token.lowercase.as_str(),
+                    "about" | "around" | "approximately" | "roughly" | "nearly" | "almost"
+                )
+            })
+            .is_some_and(|(index, token)| {
+                (token.lowercase == "between" || (token.lowercase == "both" && index == 0))
+                    && input[token.end..start]
+                        .chars()
+                        .all(|ch| !ch.is_whitespace() || matches!(ch, ' ' | '\t'))
+            })
         {
             return None;
         }

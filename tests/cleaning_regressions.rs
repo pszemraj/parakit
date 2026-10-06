@@ -88,6 +88,26 @@ fn plural_magnitudes_preserve_words_in_both_profiles_and_thresholds() {
             "Between 2000 and half a million people came.",
         ),
         (
+            "Both five and half a million parameters are allowed.",
+            "Both 5 and half a million parameters are allowed.",
+        ),
+        (
+            "Between about five and half a million parameters are allowed.",
+            "Between about 5 and half a million parameters are allowed.",
+        ),
+        (
+            "Between nearly five and half a million parameters are allowed.",
+            "Between nearly 5 and half a million parameters are allowed.",
+        ),
+        (
+            "Between almost five and half a million parameters are allowed.",
+            "Between almost 5 and half a million parameters are allowed.",
+        ),
+        (
+            "The models are both about five and a half million parameters.",
+            "The models are both about five and a half million parameters.",
+        ),
+        (
             "Chapter five half a million words long.",
             "Chapter 5 half a million words long.",
         ),
