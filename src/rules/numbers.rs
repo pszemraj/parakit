@@ -81,7 +81,7 @@ fn replace_numbers_preserving_literals(input: &str, language: &Language, thresho
     static FOLLOWING_SCALE: OnceLock<Regex> = OnceLock::new();
     let protected_re = PROTECTED_WORD.get_or_init(|| {
         Regex::new(
-            r"(?i)\b(?:(?:and[ \t]+)?(?:a[ \t]+)?(?:half|quarter)(?:[ \t]+of)?(?:[ \t]+a)?[ \t]+(?:hundred|thousand|million|billion|trillion)|(?:(?:a[ \t]+)?few|several|(?:a[ \t]+)?couple(?:[ \t]+of)?)[ \t]+(?:hundred|thousand|million|billion|trillion)|second|tens|hundreds|thousands|millions|billions|trillions)\b",
+            r"(?i)\b(?:(?:and[ \t]+)?(?:a[ \t]+)?(?:half|quarter)(?:[ \t]+of)?(?:[ \t]+a)?[ \t]+(?:hundred|thousand|million|billion|trillion)|(?:halves|quarters)(?:[ \t]+of)?(?:[ \t]+a)?[ \t]+(?:hundred|thousand|million|billion|trillion)|(?:(?:a[ \t]+)?few|several|(?:a[ \t]+)?couple(?:[ \t]+of)?)[ \t]+(?:hundred|thousand|million|billion|trillion)|second|tens|hundreds|thousands|millions|billions|trillions)\b",
         )
         .expect("protected number-word regex must compile")
     });
@@ -119,14 +119,17 @@ fn replace_numbers_preserving_literals(input: &str, language: &Language, thresho
             .split_ascii_whitespace()
             .next()
             .is_some_and(|word| word.eq_ignore_ascii_case("and"));
-        let protected_start = if is_plural_magnitude || is_mixed_fraction {
+        let is_plural_fraction = phrase.split_ascii_whitespace().next().is_some_and(|word| {
+            word.eq_ignore_ascii_case("halves") || word.eq_ignore_ascii_case("quarters")
+        });
+        let protected_start = if is_plural_magnitude || is_mixed_fraction || is_plural_fraction {
             last_end + preceding_number_start(prefix, language).unwrap_or(prefix.len())
         } else {
             found.start()
         };
-        // An adjacent singular scale belongs to the same literal phrase:
-        // parsing "million" separately after "hundreds" invents an exact count.
-        let protected_end = if is_plural_magnitude {
+        // Adjacent singular scales belong to the same indefinite quantity:
+        // parsing a later scale separately invents an exact count.
+        let protected_end = if !phrase.eq_ignore_ascii_case("second") {
             found.end()
                 + following_scale_re
                     .find(&input[found.end()..])
@@ -167,11 +170,19 @@ fn preceding_number_start(input: &str, language: &Language) -> Option<usize> {
     }
     let mut start = last.start;
     for previous in occurrences.iter().rev().skip(1) {
-        if previous.end != start
-            || !input[tokens[previous.end - 1].end..tokens[start].start]
+        let adjacent = previous.end == start
+            && input[tokens[previous.end - 1].end..tokens[start].start]
+                .chars()
+                .all(char::is_whitespace);
+        let joined_fraction = previous.end + 1 == start
+            && tokens[previous.end].lowercase == "and"
+            && input[tokens[previous.end - 1].end..tokens[previous.end].start]
                 .chars()
                 .all(char::is_whitespace)
-        {
+            && input[tokens[previous.end].end..tokens[start].start]
+                .chars()
+                .all(char::is_whitespace);
+        if !adjacent && !joined_fraction {
             break;
         }
         start = previous.start;

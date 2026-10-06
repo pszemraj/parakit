@@ -52,8 +52,16 @@ fn plural_magnitudes_preserve_words_in_both_profiles_and_thresholds() {
             "A few million people, several thousand files, and a couple of hundred rows.",
         ),
         (
+            "A few hundred thousand dollars, several hundred thousand files, and a few hundred million parameters.",
+            "A few hundred thousand dollars, several hundred thousand files, and a few hundred million parameters.",
+        ),
+        (
             "Half a million people, a quarter of a billion rows, and two and a half million files.",
             "Half a million people, a quarter of a billion rows, and two and a half million files.",
+        ),
+        (
+            "Three quarters of a million people, five halves of a billion rows, and one and three quarters of a million files.",
+            "Three quarters of a million people, five halves of a billion rows, and one and three quarters of a million files.",
         ),
         (
             "In the year two thousand a few hundred people came.",
@@ -138,6 +146,23 @@ fn plural_magnitudes_preserve_words_in_both_profiles_and_thresholds() {
                 "Half a million people, quarter of a billion rows, and two and a half million files."
             ),
             "Half a million people, quarter of a billion rows, and two and a half million files."
+        );
+        assert_eq!(
+            all_numbers.clean_text(
+                "A few hundred thousand dollars, several hundred thousand files, and a few hundred million parameters."
+            ),
+            "A few hundred thousand dollars, several hundred thousand files, and a few hundred million parameters."
+        );
+        assert_eq!(
+            all_numbers.clean_text(
+                "Three quarters of a million people and one and three quarters of a billion rows."
+            ),
+            "Three quarters of a million people and one and three quarters of a billion rows."
+        );
+        assert_eq!(
+            all_numbers
+                .clean_text("Three hundred thousand dollars and three hundred million parameters."),
+            "300000 dollars and 300M parameters."
         );
         assert_eq!(
             all_numbers.clean_text("In the year two thousand a few hundred people came."),
