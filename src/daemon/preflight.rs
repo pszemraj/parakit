@@ -230,7 +230,7 @@ fn doctor_ready(
 /// cannot be opened, or another process already holds the lock.
 pub(crate) fn acquire_singleton_lock() -> Result<DaemonLock> {
     let path = singleton_lock_path()?;
-    acquire_singleton_lock_at(&path)
+    acquire_singleton_lock_at(&path, SINGLETON_START_WAIT)
 }
 
 /// Check an existing daemon lock without creating runtime state.
@@ -330,7 +330,7 @@ pub(crate) fn daemon_runtime_dir() -> Result<PathBuf> {
     }
 }
 
-fn acquire_singleton_lock_at(path: &Path) -> Result<DaemonLock> {
+fn acquire_singleton_lock_at(path: &Path, wait: Duration) -> Result<DaemonLock> {
     if let Some(parent) = path.parent() {
         create_dir_all(parent)
             .with_context(|| format!("create daemon lock dir {}", parent.display()))?;
@@ -345,7 +345,7 @@ fn acquire_singleton_lock_at(path: &Path) -> Result<DaemonLock> {
 
     // Status/doctor briefly hold shared probe locks. Allow those probes to
     // finish before concluding that another daemon owns the singleton.
-    let deadline = Instant::now() + SINGLETON_START_WAIT;
+    let deadline = Instant::now() + wait;
     loop {
         match FileExt::try_lock_exclusive(&file) {
             Ok(()) => return Ok(DaemonLock { file }),
@@ -977,16 +977,18 @@ mod tests {
         let path = crate::test_support::fixture_root("parakit-lock-test", "singleton")
             .join("parakit.lock");
 
-        let first = acquire_singleton_lock_at(&path).expect("first lock should succeed");
+        let first = acquire_singleton_lock_at(&path, SINGLETON_START_WAIT)
+            .expect("first lock should succeed");
         assert!(singleton_lock_held_at(&path).expect("held lock should be observable"));
-        let Err(second) = acquire_singleton_lock_at(&path) else {
+        let Err(second) = acquire_singleton_lock_at(&path, SINGLETON_START_WAIT) else {
             panic!("a held daemon lock should reject another owner");
         };
         assert!(second.is::<DaemonAlreadyRunning>(), "{second:#}");
         assert_eq!(second.to_string(), "daemon is already running");
         drop(first);
         assert!(!singleton_lock_held_at(&path).expect("released lock should be observable"));
-        let third = acquire_singleton_lock_at(&path).expect("lock should release after drop");
+        let third = acquire_singleton_lock_at(&path, SINGLETON_START_WAIT)
+            .expect("lock should release after drop");
         drop(third);
     }
 
@@ -1018,7 +1020,7 @@ mod tests {
             drop(probe);
         });
 
-        let daemon = acquire_singleton_lock_at(&path)
+        let daemon = acquire_singleton_lock_at(&path, Duration::from_secs(5))
             .expect("startup should wait for the short shared probe");
         release.join().unwrap();
         assert!(singleton_lock_held_at(&path).unwrap());

@@ -246,7 +246,7 @@ fn stop_waits_for_shutdown_after_the_control_endpoint_disappears() {
         .stderr(std::process::Stdio::piped())
         .spawn()
         .unwrap();
-    std::thread::sleep(std::time::Duration::from_millis(100));
+    std::thread::sleep(std::time::Duration::from_secs(1));
     assert!(
         stop.try_wait().unwrap().is_none(),
         "stop must wait for the held lock"
@@ -295,6 +295,7 @@ fn stop_reaches_a_daemon_that_exposes_control_after_the_request_starts() {
     while Instant::now() < deadline {
         match listener.accept() {
             Ok((mut stream, _)) => {
+                stream.set_nonblocking(false).unwrap();
                 stream
                     .set_read_timeout(Some(Duration::from_secs(1)))
                     .unwrap();
