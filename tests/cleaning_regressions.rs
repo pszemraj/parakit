@@ -72,6 +72,14 @@ fn plural_magnitudes_preserve_words_in_both_profiles_and_thresholds() {
             "In the year 2000 a few hundred people came.",
         ),
         (
+            "In the year two thousand half a million people came.",
+            "In the year 2000 half a million people came.",
+        ),
+        (
+            "In the year two thousand quarter of a million people came.",
+            "In the year 2000 quarter of a million people came.",
+        ),
+        (
             "Few million parameters and a couple billion tokens.",
             "Few million parameters and a couple billion tokens.",
         ),
@@ -176,6 +184,14 @@ fn plural_magnitudes_preserve_words_in_both_profiles_and_thresholds() {
         assert_eq!(
             all_numbers.clean_text("In the year two thousand a few hundred people came."),
             "In the year 2000 a few hundred people came."
+        );
+        assert_eq!(
+            all_numbers.clean_text("In the year two thousand half a million people came."),
+            "In the year 2000 half a million people came."
+        );
+        assert_eq!(
+            all_numbers.clean_text("In the year two thousand quarter of a million people came."),
+            "In the year 2000 quarter of a million people came."
         );
         assert_eq!(
             all_numbers.clean_text("Three records and five millions of rows."),

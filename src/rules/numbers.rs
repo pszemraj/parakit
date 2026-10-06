@@ -122,7 +122,12 @@ fn replace_numbers_preserving_literals(input: &str, language: &Language, thresho
             )
         });
         let protected_start = if is_plural_magnitude || is_fraction {
-            last_end + preceding_number_start(prefix, language).unwrap_or(prefix.len())
+            let preceding = if is_fraction {
+                preceding_fraction_start(prefix, phrase, language)
+            } else {
+                preceding_number_start(prefix, language)
+            };
+            last_end + preceding.unwrap_or(prefix.len())
         } else {
             found.start()
         };
@@ -187,6 +192,25 @@ fn preceding_number_start(input: &str, language: &Language) -> Option<usize> {
         start = previous.start;
     }
     Some(tokens[start].start)
+}
+
+/// Keep a fraction's numerator, but leave a separate compound count available
+/// for conversion before a bare singular `half` or `quarter`.
+fn preceding_fraction_start(input: &str, phrase: &str, language: &Language) -> Option<usize> {
+    let start = preceding_number_start(input, language)?;
+    let joined = phrase
+        .split_ascii_whitespace()
+        .next()
+        .is_some_and(|word| word.eq_ignore_ascii_case("and"));
+    let plural = phrase
+        .split_ascii_whitespace()
+        .any(|word| word.eq_ignore_ascii_case("halves") || word.eq_ignore_ascii_case("quarters"));
+    if joined || plural {
+        return Some(start);
+    }
+    let numerator = number_tokens(&input[start..]);
+    (numerator.len() == 1 || numerator.iter().any(|token| token.lowercase == "and"))
+        .then_some(start)
 }
 
 fn number_tokens(input: &str) -> Vec<NumberToken<'_>> {
