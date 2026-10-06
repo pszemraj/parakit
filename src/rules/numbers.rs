@@ -115,14 +115,13 @@ fn replace_numbers_preserving_literals(input: &str, language: &Language, thresho
             phrase.to_ascii_lowercase().as_str(),
             "tens" | "hundreds" | "thousands" | "millions" | "billions" | "trillions"
         );
-        let is_mixed_fraction = phrase
-            .split_ascii_whitespace()
-            .next()
-            .is_some_and(|word| word.eq_ignore_ascii_case("and"));
-        let is_plural_fraction = phrase.split_ascii_whitespace().next().is_some_and(|word| {
-            word.eq_ignore_ascii_case("halves") || word.eq_ignore_ascii_case("quarters")
+        let is_fraction = phrase.split_ascii_whitespace().any(|word| {
+            matches!(
+                word.to_ascii_lowercase().as_str(),
+                "half" | "quarter" | "halves" | "quarters"
+            )
         });
-        let protected_start = if is_plural_magnitude || is_mixed_fraction || is_plural_fraction {
+        let protected_start = if is_plural_magnitude || is_fraction {
             last_end + preceding_number_start(prefix, language).unwrap_or(prefix.len())
         } else {
             found.start()

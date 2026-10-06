@@ -53,7 +53,7 @@ pub use engine::Cleaner;
 pub use user::{RulePosition, UserRule};
 
 /// Schema/behavior version recorded in transcription logs.
-pub const CLEANER_VERSION: u32 = 16;
+pub const CLEANER_VERSION: u32 = 17;
 
 /// Default minimum isolated number converted to digits when
 /// `cleaning.number_threshold` is left unset.

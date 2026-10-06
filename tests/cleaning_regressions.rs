@@ -64,6 +64,10 @@ fn plural_magnitudes_preserve_words_in_both_profiles_and_thresholds() {
             "Three quarters of a million people, five halves of a billion rows, and one and three quarters of a million files.",
         ),
         (
+            "One quarter of a million dollars, one half million parameters, and five and one quarter million tokens.",
+            "One quarter of a million dollars, one half million parameters, and five and one quarter million tokens.",
+        ),
+        (
             "In the year two thousand a few hundred people came.",
             "In the year 2000 a few hundred people came.",
         ),
@@ -158,6 +162,11 @@ fn plural_magnitudes_preserve_words_in_both_profiles_and_thresholds() {
                 "Three quarters of a million people and one and three quarters of a billion rows."
             ),
             "Three quarters of a million people and one and three quarters of a billion rows."
+        );
+        assert_eq!(
+            all_numbers
+                .clean_text("One quarter million dollars and one and one half billion parameters."),
+            "One quarter million dollars and one and one half billion parameters."
         );
         assert_eq!(
             all_numbers
