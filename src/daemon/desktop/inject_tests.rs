@@ -394,18 +394,38 @@ fn linux_file_list_adapter_removes_crlf_separator_without_changing_path_bytes() 
 }
 
 #[test]
-fn empty_selection_owner_zero_can_be_staged_and_restored() {
-    let mut clipboard = MockClipboard::empty();
-    clipboard.generation = 0;
-    let outcome = stage_text_without_paste(
-        &mut clipboard,
-        "dictated text",
-        restore_plan(&quiet_gate()),
-        ClipboardPolicy::RestorePrevious,
-    )
-    .unwrap();
-    assert!(matches!(outcome, StageOutcome::Blocked));
-    assert_eq!(clipboard.content, MockClipboardContent::Empty);
+fn empty_clipboard_stamp_zero_can_be_staged_pasted_and_restored() {
+    for paste in [false, true] {
+        let mut clipboard = MockClipboard::empty();
+        clipboard.generation = 0;
+        if paste {
+            let report = paste_with_clipboard_swap_guarded(
+                &mut clipboard,
+                "dictated text",
+                PasteMode::Standard,
+                || true,
+                || Ok(PasteDispatch::Posted),
+                Duration::ZERO,
+                restore_plan(&quiet_gate()),
+                ClipboardPolicy::RestorePrevious,
+                None,
+                || Ok(true),
+            )
+            .unwrap();
+            assert_eq!(report.outcome, PasteOutcome::Pasted);
+            assert!(report.telemetry.paste_event_posted);
+        } else {
+            let outcome = stage_text_without_paste(
+                &mut clipboard,
+                "dictated text",
+                restore_plan(&quiet_gate()),
+                ClipboardPolicy::RestorePrevious,
+            )
+            .unwrap();
+            assert!(matches!(outcome, StageOutcome::Blocked));
+        }
+        assert_eq!(clipboard.content, MockClipboardContent::Empty);
+    }
 }
 
 #[cfg(target_os = "linux")]

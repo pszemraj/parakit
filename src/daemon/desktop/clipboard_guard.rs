@@ -270,7 +270,8 @@ pub(super) fn platform_change_stamp() -> Result<u64> {
         // SAFETY: This read-only Windows API takes no pointers or handles.
         let sequence =
             unsafe { windows::Win32::System::DataExchange::GetClipboardSequenceNumber() };
-        anyhow::ensure!(sequence != 0, "clipboard sequence unavailable");
+        // Treat the counter as an observation, including zero before staging.
+        // Snapshot/read/write operations still report actual access failures.
         Ok(u64::from(sequence))
     }
     #[cfg(target_os = "macos")]
