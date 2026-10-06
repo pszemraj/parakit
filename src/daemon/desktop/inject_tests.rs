@@ -159,7 +159,8 @@ impl MockClipboard {
 impl ClipboardStore for MockClipboard {
     fn change_stamp(&mut self) -> Result<u64> {
         self.apply_external_write();
-        self.guard_read = self.generation > 1 || self.after_guard_read.is_some();
+        // Guard reads follow a write; snapshot reads precede the first one.
+        self.guard_read = self.generation > 1;
         if self.stamp_unavailable.get() {
             anyhow::bail!("clipboard stamp unavailable");
         }
@@ -210,6 +211,8 @@ impl ClipboardStore for MockClipboard {
     fn set_text(&mut self, text: String) -> Result<()> {
         self.events.borrow_mut().push(format!("set:{text}"));
         self.fail_set_if_needed(Some(&text))?;
+        // Unreadable text belongs to the replaced payload, not the clipboard.
+        self.text_unavailable.set(false);
         self.content = MockClipboardContent::Text(text);
         self.generation += 1;
         self.guard_read = false;
@@ -303,18 +306,21 @@ impl ClipboardStore for MockClipboard {
 }
 
 #[test]
-fn snapshot_owner_change_preserves_competing_copy_before_staging() {
+fn snapshot_owner_change_before_staging_still_delivers_transcript() {
     for paste in [false, true] {
         let mut clipboard = MockClipboard::new("old clipboard");
-        let competing = MockClipboardContent::Text("new copy".to_owned());
-        clipboard.after_snapshot_read = Some(competing.clone());
+        clipboard.after_snapshot_read = Some(MockClipboardContent::Text("new copy".to_owned()));
         if paste {
+            let mut dispatched = false;
             let report = paste_with_clipboard_swap_guarded(
                 &mut clipboard,
                 "dictated text",
                 PasteMode::Standard,
                 || true,
-                || panic!("a changed snapshot must prevent dispatch"),
+                || {
+                    dispatched = true;
+                    Ok(PasteDispatch::Posted)
+                },
                 Duration::ZERO,
                 restore_plan(&quiet_gate()),
                 ClipboardPolicy::RestorePrevious,
@@ -322,7 +328,13 @@ fn snapshot_owner_change_preserves_competing_copy_before_staging() {
                 || Ok(true),
             )
             .unwrap();
-            assert_eq!(report.outcome, PasteOutcome::ClipboardChanged);
+            assert!(dispatched, "a changed snapshot must not withhold the paste");
+            assert_eq!(report.outcome, PasteOutcome::Pasted);
+            assert_eq!(report.telemetry.clipboard_restored, Some(false));
+            assert!(report
+                .diagnostic
+                .as_deref()
+                .is_some_and(|diagnostic| diagnostic.contains("changed while it was being saved")));
         } else {
             let outcome = stage_text_without_paste(
                 &mut clipboard,
@@ -331,14 +343,9 @@ fn snapshot_owner_change_preserves_competing_copy_before_staging() {
                 ClipboardPolicy::RestorePrevious,
             )
             .unwrap();
-            assert!(matches!(outcome, StageOutcome::ClipboardChanged(_)));
+            assert_eq!(outcome, StageOutcome::CopiedOnly);
         }
-        assert_eq!(clipboard.content, competing);
-        assert!(!clipboard
-            .events
-            .borrow()
-            .iter()
-            .any(|event| event.starts_with("set:")));
+        assert_eq!(clipboard.text(), Some("dictated text"));
     }
 }
 
@@ -1905,7 +1912,7 @@ fn stage_only_restore_wait_preserves_new_clipboard() {
 }
 
 #[test]
-fn unreadable_clipboard_stamp_fails_closed_before_chord() {
+fn unreadable_clipboard_stamp_withholds_chord_but_leaves_transcript() {
     for fail_capture in [true, false] {
         let mut clipboard = MockClipboard::new("old clipboard");
         clipboard.stamp_unavailable.set(fail_capture);
@@ -1929,17 +1936,12 @@ fn unreadable_clipboard_stamp_fails_closed_before_chord() {
                 Ok(true)
             },
         )
-        .expect("failed observation must preserve clipboard rather than trigger fallback");
+        .expect("failed observation must leave the transcript rather than fail");
+        // Without a readable stamp the staged text cannot be verified, so no
+        // chord is sent, but the transcript stays on the clipboard.
         assert_eq!(report.outcome, PasteOutcome::ClipboardChanged);
         assert_eq!(report.telemetry.clipboard_restored, None);
-        assert_eq!(
-            clipboard.text(),
-            Some(if fail_capture {
-                "old clipboard"
-            } else {
-                "dictated text"
-            })
-        );
+        assert_eq!(clipboard.text(), Some("dictated text"));
         assert!(!report.telemetry.paste_event_posted);
         assert!(
             report
@@ -1975,27 +1977,54 @@ fn recovered_stamp_read_preserves_a_failed_capture_diagnostic() {
 }
 
 #[test]
-fn unreadable_clipboard_text_preserves_the_cause_before_chord() {
-    let mut clipboard = MockClipboard::new("old clipboard");
-    clipboard.text_unavailable.set(true);
-    let error = paste_with_clipboard_swap_guarded(
-        &mut clipboard,
-        "dictated text",
-        PasteMode::Standard,
-        || true,
-        || panic!("unreadable text must prevent dispatch"),
-        Duration::ZERO,
-        restore_plan(&quiet_gate()),
-        ClipboardPolicy::RestorePrevious,
-        None,
-        || Ok(true),
-    )
-    .expect_err("failed initial read must abort before staging");
-    assert_eq!(clipboard.text(), Some("old clipboard"));
-    assert!(
-        format!("{error:#}").contains("clipboard text unavailable"),
-        "missing text-read failure: {error:#}"
-    );
+fn unreadable_previous_clipboard_still_pastes_and_keeps_transcript() {
+    for paste in [false, true] {
+        let mut clipboard = MockClipboard::new("old clipboard");
+        clipboard.text_unavailable.set(true);
+        if paste {
+            let mut dispatched = false;
+            let report = paste_with_clipboard_swap_guarded(
+                &mut clipboard,
+                "dictated text",
+                PasteMode::Standard,
+                || true,
+                || {
+                    dispatched = true;
+                    Ok(PasteDispatch::Posted)
+                },
+                Duration::ZERO,
+                restore_plan(&quiet_gate()),
+                ClipboardPolicy::RestorePrevious,
+                None,
+                || Ok(true),
+            )
+            .expect("an unreadable previous clipboard must not fail the dictation");
+            assert!(
+                dispatched,
+                "an unreadable snapshot must not withhold the paste"
+            );
+            assert_eq!(report.outcome, PasteOutcome::Pasted);
+            assert_eq!(report.telemetry.clipboard_restored, Some(false));
+            assert!(
+                report
+                    .diagnostic
+                    .as_deref()
+                    .is_some_and(|diagnostic| diagnostic.contains("clipboard text unavailable")),
+                "missing text-read failure: {:?}",
+                report.diagnostic
+            );
+        } else {
+            let outcome = stage_text_without_paste(
+                &mut clipboard,
+                "dictated text",
+                restore_plan(&quiet_gate()),
+                ClipboardPolicy::RestorePrevious,
+            )
+            .expect("an unreadable previous clipboard must not fail staging");
+            assert_eq!(outcome, StageOutcome::CopiedOnly);
+        }
+        assert_eq!(clipboard.text(), Some("dictated text"));
+    }
 }
 
 #[test]

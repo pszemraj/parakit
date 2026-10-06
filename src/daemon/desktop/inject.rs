@@ -216,6 +216,15 @@ impl PasteReport {
             diagnostic,
         }
     }
+
+    /// Record why the previous clipboard was not saved, unless a later
+    /// observation already explains this outcome.
+    fn with_retention_diagnostic(mut self, diagnostic: Option<String>) -> Self {
+        if self.diagnostic.is_none() {
+            self.diagnostic = diagnostic;
+        }
+        self
+    }
 }
 
 /// Convert a completed clipboard-staging outcome into a [`PasteReport`].
@@ -1270,19 +1279,9 @@ where
         ));
     }
 
-    let previous = match clipboard_policy {
-        ClipboardPolicy::RestorePrevious => Some(ClipboardBeforeStaging::capture(clipboard)?),
-        ClipboardPolicy::KeepTranscript => None,
-    };
+    let (previous, clipboard_policy, retention_diagnostic) =
+        previous_clipboard_for_policy(clipboard, clipboard_policy);
     let write_before = restore_plan.before_transcript_write();
-    if let Some(previous) = &previous {
-        match previous.is_current(clipboard) {
-            Ok(true) => {}
-            Ok(false) => return Ok(PasteReport::clipboard_changed(None)),
-            Err(err) => return Ok(PasteReport::clipboard_changed(Some(format!("{err:#}")))),
-        }
-    }
-    let previous = previous.map_or(ClipboardSnapshot::Unsupported, |previous| previous.snapshot);
     clipboard
         .set_text(text.to_owned())
         .context("could not copy transcript to clipboard")?;
@@ -1315,7 +1314,8 @@ where
                     write_token,
                     restore_plan,
                     clipboard_policy,
-                );
+                )
+                .map(|report| report.with_retention_diagnostic(retention_diagnostic));
             }
             Err(err) => {
                 let restore_result = restore_after_delay(
@@ -1356,7 +1356,8 @@ where
             text,
             mode,
             baseline.as_ref(),
-        )),
+        )
+        .with_retention_diagnostic(retention_diagnostic)),
         Ok(PasteDispatch::SkippedUnsafeModifiers) => {
             // A live modifier made dispatch unsafe. Posting could change the
             // shortcut or release a held push-to-talk chord. No input was sent,
@@ -1364,11 +1365,10 @@ where
             if !previous.is_current(clipboard) {
                 return Ok(PasteReport::clipboard_changed(previous.observation_error()));
             }
-            Ok(PasteReport::new(
-                PasteOutcome::UnsafeModifiers,
-                false,
-                Some(false),
-            ))
+            Ok(
+                PasteReport::new(PasteOutcome::UnsafeModifiers, false, Some(false))
+                    .with_retention_diagnostic(retention_diagnostic),
+            )
         }
         Err(paste_err) => {
             let restore_result = restore_after_delay(
@@ -1545,6 +1545,44 @@ fn clipboard_changed_with_primary_error(
     PasteReport::clipboard_changed(Some(diagnostic))
 }
 
+/// Save the clipboard for a later restore, or keep the transcript instead.
+///
+/// Delivering the dictation outranks restoring the previous clipboard, which
+/// clipboard history managers retain anyway. A payload that cannot be read,
+/// or that changes while it is read, switches only this transaction to
+/// [`ClipboardPolicy::KeepTranscript`] rather than withholding the paste.
+///
+/// # Arguments
+///
+/// * `clipboard` - Clipboard backend to inspect.
+/// * `clipboard_policy` - Requested retention policy.
+///
+/// # Returns
+///
+/// The snapshot to restore, the policy to apply, and the reason the
+/// previous clipboard could not be saved, if any.
+fn previous_clipboard_for_policy<C: ClipboardStore>(
+    clipboard: &mut C,
+    clipboard_policy: ClipboardPolicy,
+) -> (ClipboardSnapshot, ClipboardPolicy, Option<String>) {
+    if clipboard_policy == ClipboardPolicy::KeepTranscript {
+        return (ClipboardSnapshot::Unsupported, clipboard_policy, None);
+    }
+    let unsaved = match ClipboardBeforeStaging::capture(clipboard) {
+        Ok(previous) => match previous.is_current(clipboard) {
+            Ok(true) => return (previous.snapshot, clipboard_policy, None),
+            Ok(false) => "clipboard changed while it was being saved".to_owned(),
+            Err(err) => format!("could not verify the saved clipboard: {err:#}"),
+        },
+        Err(err) => format!("could not save the previous clipboard: {err:#}"),
+    };
+    (
+        ClipboardSnapshot::Unsupported,
+        ClipboardPolicy::KeepTranscript,
+        Some(unsaved),
+    )
+}
+
 fn stage_text_without_paste<C, H>(
     clipboard: &mut C,
     text: &str,
@@ -1555,6 +1593,8 @@ where
     C: ClipboardStore,
     H: ClipboardRestoreGate + ?Sized,
 {
+    let (previous, clipboard_policy, _) =
+        previous_clipboard_for_policy(clipboard, clipboard_policy);
     if clipboard_policy == ClipboardPolicy::KeepTranscript {
         clipboard
             .set_text(text.to_owned())
@@ -1562,17 +1602,11 @@ where
         return Ok(StageOutcome::CopiedOnly);
     }
 
-    let previous = ClipboardBeforeStaging::capture(clipboard)?;
     let write_before = restore_plan.before_transcript_write();
-    match previous.is_current(clipboard) {
-        Ok(true) => {}
-        Ok(false) => return Ok(StageOutcome::ClipboardChanged(None)),
-        Err(err) => return Ok(StageOutcome::ClipboardChanged(Some(format!("{err:#}")))),
-    }
     clipboard
         .set_text(text.to_owned())
         .context("could not copy transcript to clipboard")?;
-    let previous = StagedClipboard::capture(clipboard, previous.snapshot, text);
+    let previous = StagedClipboard::capture(clipboard, previous, text);
     let write_token = restore_plan.after_transcript_write(write_before);
     let restored = restore_after_delay(
         clipboard,
