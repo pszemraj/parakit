@@ -105,6 +105,12 @@ pub(crate) fn windows_paste_smoke_test(mode: PasteMode) -> Result<()> {
     let test_result = (|| -> Result<()> {
         Clipboard::set_text(&mut clipboard, sentinel.clone())
             .context("could not stage Windows paste smoke sentinel on clipboard")?;
+        match ClipboardSnapshot::capture(&mut clipboard)
+            .context("could not snapshot text-only Windows smoke clipboard")?
+        {
+            ClipboardSnapshot::Text(text) if text == sentinel => {}
+            _ => bail!("Windows text-only clipboard snapshot did not preserve the sentinel"),
+        }
         thread::sleep(CLIPBOARD_SETTLE);
         super::windows_input::send_paste_chord(mode == PasteMode::Terminal)
             .context("Windows paste smoke insertion failed")?;
