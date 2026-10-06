@@ -2,10 +2,11 @@
 
 #[cfg(target_os = "macos")]
 use anyhow::Context;
-use std::sync::Arc;
+use std::sync::{mpsc, Arc};
 #[cfg(target_os = "macos")]
 use std::time::Duration;
 
+const NOTIFICATION_QUEUE_CAPACITY: usize = 16;
 #[cfg(target_os = "macos")]
 const NOTIFICATION_TIMEOUT: Duration = Duration::from_secs(3);
 
@@ -17,7 +18,12 @@ use super::{audio::MicInfo, logging::Logger};
 #[derive(Clone)]
 pub(crate) struct Notifier {
     log: Arc<Logger>,
-    enabled: bool,
+    delivery: Option<mpsc::SyncSender<NotificationMessage>>,
+}
+
+struct NotificationMessage {
+    summary: String,
+    body: String,
 }
 
 impl Notifier {
@@ -31,7 +37,8 @@ impl Notifier {
     ///
     /// A notifier that falls back to verbose logging when notifications fail.
     pub(crate) fn new(log: Arc<Logger>) -> Self {
-        Self { log, enabled: true }
+        let delivery = start_desktop_delivery(&log);
+        Self { log, delivery }
     }
 
     /// Build a notifier that deliberately emits no desktop messages.
@@ -42,7 +49,7 @@ impl Notifier {
     pub(crate) fn silent(log: Arc<Logger>) -> Self {
         Self {
             log,
-            enabled: false,
+            delivery: None,
         }
     }
 
@@ -120,11 +127,45 @@ impl Notifier {
     }
 
     fn show(&self, summary: &str, body: impl AsRef<str>) {
-        if self.enabled {
-            if let Err(error) = show_notification(summary, body.as_ref()) {
-                self.log
-                    .verbose(format!("parakit: desktop notification failed: {error:#}"));
+        if let Some(delivery) = &self.delivery {
+            let message = NotificationMessage {
+                summary: summary.to_owned(),
+                body: body.as_ref().to_owned(),
+            };
+            if let Err(error) = delivery.try_send(message) {
+                self.log.verbose(format!(
+                    "parakit: desktop notification queue unavailable: {error}"
+                ));
             }
+        }
+    }
+}
+
+fn start_desktop_delivery(log: &Arc<Logger>) -> Option<mpsc::SyncSender<NotificationMessage>> {
+    let (sender, receiver) = mpsc::sync_channel(NOTIFICATION_QUEUE_CAPACITY);
+    let worker_log = Arc::clone(log);
+    match std::thread::Builder::new()
+        .name("parakit-notification".into())
+        .spawn(move || deliver_notifications(receiver, &worker_log, show_notification))
+    {
+        Ok(_) => Some(sender),
+        Err(error) => {
+            log.verbose(format!(
+                "parakit: could not start desktop notification worker: {error}"
+            ));
+            None
+        }
+    }
+}
+
+fn deliver_notifications(
+    receiver: mpsc::Receiver<NotificationMessage>,
+    log: &Logger,
+    mut deliver: impl FnMut(&str, &str) -> anyhow::Result<()>,
+) {
+    while let Ok(message) = receiver.recv() {
+        if let Err(error) = deliver(&message.summary, &message.body) {
+            log.verbose(format!("parakit: desktop notification failed: {error:#}"));
         }
     }
 }
@@ -154,8 +195,8 @@ fn show_notification(summary: &str, body: &str) -> anyhow::Result<()> {
 
 /// Show a macOS Notification Center banner through `osascript`.
 ///
-/// The subprocess is bounded so an unavailable notification server cannot
-/// block the caller indefinitely.
+/// Delivery runs on the notifier thread, and the subprocess is bounded so one
+/// unavailable helper cannot prevent later notifications indefinitely.
 #[cfg(target_os = "macos")]
 fn show_notification(summary: &str, body: &str) -> anyhow::Result<()> {
     let script = format!(
@@ -214,6 +255,7 @@ fn applescript_quote(s: &str) -> String {
 #[cfg(test)]
 mod message_tests {
     use super::*;
+    use crate::daemon::logging::LogLevel;
 
     #[test]
     fn insertion_failure_reports_direct_typing_progress_without_history_advice() {
@@ -233,6 +275,29 @@ mod message_tests {
             model_unavailable_body("reload failed"),
             "reload failed. Reload will retry before transcription."
         );
+    }
+
+    #[test]
+    fn queued_notifications_are_delivered_in_order() {
+        let (sender, receiver) = mpsc::sync_channel(3);
+        for summary in ["first", "second", "third"] {
+            sender
+                .send(NotificationMessage {
+                    summary: summary.to_string(),
+                    body: String::new(),
+                })
+                .unwrap();
+        }
+        drop(sender);
+
+        let log = Logger::new(LogLevel::Quiet);
+        let mut delivered = Vec::new();
+        deliver_notifications(receiver, &log, |summary, _| {
+            delivered.push(summary.to_string());
+            Ok(())
+        });
+
+        assert_eq!(delivered, ["first", "second", "third"]);
     }
 }
 
