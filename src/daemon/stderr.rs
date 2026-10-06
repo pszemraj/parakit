@@ -63,6 +63,11 @@ impl BoundedCapture {
 ///
 /// The closure return value. If stderr cannot be redirected, the closure still
 /// runs normally.
+///
+/// # Panics
+///
+/// Resumes any panic raised by `f` after restoring stderr and replaying the
+/// bounded captured tail.
 pub(crate) fn with_stderr_suppressed<T>(f: impl FnOnce() -> T) -> T {
     let captured = Arc::new(Mutex::new(BoundedCapture::default()));
     let drain_capture = Arc::clone(&captured);

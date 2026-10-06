@@ -46,6 +46,10 @@ pub(super) fn insertion_result_remembers_transcript(result: &Result<InsertReport
 
 /// Return telemetry retained by an insertion error, when the failure happened
 /// after a backend had already posted some direct input.
+///
+/// # Returns
+///
+/// The retained report for a progress-aware insertion error, otherwise `None`.
 pub(super) fn insertion_error_report(error: &anyhow::Error) -> Option<&InsertReport> {
     error
         .downcast_ref::<ReportedInsertionError>()
@@ -73,9 +77,9 @@ pub(super) fn insertion_error_report(error: &anyhow::Error) -> Option<&InsertRep
 ///   `"not_applicable"` when insertion never reached a focus check, e.g.
 ///   sanitizer skip/copy-only paths and PTT audio simulation).
 /// * `report` - Real acknowledgement/clipboard telemetry for this attempt,
-///   when one is available (every `Ok` insertion result has one; `None` for
-///   PTT audio simulation and the `"error"` outcome, which have nothing to
-///   report).
+///   when one is available (every `Ok` insertion result and a partial direct
+///   backend error have one; `None` for PTT audio simulation and errors that
+///   fail before observable input).
 #[allow(
     clippy::too_many_arguments,
     reason = "each parameter is an independently observed fact about one insertion (logger, \

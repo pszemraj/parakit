@@ -90,7 +90,7 @@ Stop it:
 parakit stop
 ```
 
-`parakit stop` uses the local daemon control channel, waits for worker and insertion shutdown, and confirms that the process singleton lock was released before printing `stopped`. It exits with an error if shutdown exceeds its bounded wait. Use `pkill parakit` as a last resort if the process is wedged before IPC starts.
+`parakit stop` uses the local daemon control channel, gives in-flight worker and insertion cleanup up to five seconds, and confirms that the process singleton lock was released before printing `stopped`. The client allows about six seconds for that final confirmation. On a timeout, retry `parakit stop`, then inspect the process (`pgrep -af parakit` on Unix-like systems or Task Manager on Windows) before terminating it; use `pkill parakit` only as a Unix last resort.
 
 ## Daemon Control
 
@@ -104,7 +104,7 @@ parakit history
 parakit test-paste "hello from parakit"
 ```
 
-`status` and `stop` are safe when no daemon is running. They print `parakit: not running` or `parakit: not running; nothing to stop` and exit successfully. If the control endpoint is absent while the singleton lock remains held, `stop` exits with an error because the daemon may still be starting, stopping, or otherwise unreachable. Commands that need daemon state (`history`, `copy-last`, and `test-paste`) instead report that the daemon is not running and point to `parakit start`.
+When the control endpoint is absent and the singleton lock is free, `status` and `stop` print `parakit: not running` or `parakit: not running; nothing to stop` and exit successfully. If the endpoint is absent while the lock remains held, both commands return an error because the daemon may still be starting, stopping, or otherwise unreachable; retry shortly, then inspect the process before terminating it. Commands that need daemon state (`history`, `copy-last`, and `test-paste`) instead report that the daemon is not running and point to `parakit start`.
 
 The daemon keeps a ring buffer of recent transcripts in memory (`daemon.transcript_history` entries, 10 by default). `copy-last` acts on the most recent one by default; pass `N` (1-based, counting back from the most recent) to reach further back, e.g. `parakit copy-last 3` for the third-most-recent transcript. `parakit history` lists what the daemon currently remembers, newest first; `--limit N` caps how many entries print. The ring disappears when the daemon stops, so treat it as a same-session convenience. `test-paste` runs clipboard staging, focus checks, paste sanitization, and the paste chord without using the microphone.
 
@@ -151,7 +151,7 @@ wake; sleeping for ten minutes does not itself make the model eligible for offlo
 
 Recording, queued dictations, transcription, and insertion prevent offloading. The interval restarts when all work finishes, including silent captures and failures. Hotkeys, microphone policy, IPC, and transcript history remain available. Reading status or history does not postpone offloading.
 
-Press PTT normally after an idle period. A three-note cue announces model reloading, followed by the normal listening tone once the model is ready if PTT is still held. Audio records throughout reload, so early speech is preserved. An early release queues that audio until the model is ready and suppresses the delayed listening tone. Successful dictation retains its normal completion cue. Reload uses the resolved local file without downloading it again, preserving the thread count and [device policy](#device-selection). If reopening fails, the worker retries once when PTT is released so a temporary failure can still preserve the dictation. If that retry also fails, the dictation reports an error without insertion; the next PTT retries automatically. `--no-sounds` disables these cues.
+Press PTT normally after an idle period. A three-note cue announces model reloading, followed by the normal listening tone once the model is ready if PTT is still held. Audio records throughout reload, so early speech is preserved. An early release queues that audio until the model is ready and suppresses the delayed listening tone. Successful dictation retains its normal completion cue. Reload uses the resolved local file without downloading it again, preserving the thread count and [device policy](#device-selection). If reopening at PTT start fails, parakit plays its two-pulse error cue and retries once when PTT is released so a temporary failure can still preserve the dictation. If that retry also fails, it plays the error cue again and reports the dictation discarded without insertion; the next PTT retries automatically. `--no-sounds` disables these cues.
 
 Startup warms one second of synthetic audio on CPU, or five seconds on GPU. Reload uses a one-second readiness probe on every backend. Longer dictations allocate larger buffers as needed; the first use of a new shape can also incur backend compilation work. [Reload measurements](dev/memory.md#reload-warmup-comparison) compare latency, transcript parity, and memory for the reload policy.
 
