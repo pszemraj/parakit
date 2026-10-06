@@ -1,13 +1,57 @@
 //! Serialized native stderr redirection for noisy C/C++ calls.
 
+use std::collections::VecDeque;
 use std::io::{self, Read, Write};
+#[cfg(unix)]
+use std::os::fd::IntoRawFd;
 use std::panic::{self, AssertUnwindSafe};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
 const STDERR_FD: libc::c_int = 2;
 const DRAIN_TIMEOUT: Duration = Duration::from_millis(250);
+const CAPTURE_LIMIT: usize = 64 * 1024;
 static REDIRECT: Mutex<()> = Mutex::new(());
+
+#[derive(Default)]
+struct BoundedCapture {
+    bytes: VecDeque<u8>,
+    truncated: bool,
+}
+
+impl BoundedCapture {
+    fn extend(&mut self, bytes: &[u8]) {
+        let excess = self
+            .bytes
+            .len()
+            .saturating_add(bytes.len())
+            .saturating_sub(CAPTURE_LIMIT);
+        if excess > 0 {
+            let remove = excess.min(self.bytes.len());
+            self.bytes.drain(..remove);
+            self.truncated = true;
+        }
+        let bytes = if bytes.len() > CAPTURE_LIMIT {
+            self.truncated = true;
+            &bytes[bytes.len() - CAPTURE_LIMIT..]
+        } else {
+            bytes
+        };
+        self.bytes.extend(bytes);
+    }
+
+    fn replay(&self, writer: &mut impl Write) {
+        if self.truncated {
+            let _ = writeln!(
+                writer,
+                "parakit: native stderr truncated to the last {CAPTURE_LIMIT} bytes"
+            );
+        }
+        let (first, second) = self.bytes.as_slices();
+        let _ = writer.write_all(first);
+        let _ = writer.write_all(second);
+    }
+}
 
 /// Run a closure while temporarily suppressing native stderr.
 ///
@@ -20,22 +64,31 @@ static REDIRECT: Mutex<()> = Mutex::new(());
 /// The closure return value. If stderr cannot be redirected, the closure still
 /// runs normally.
 pub(crate) fn with_stderr_suppressed<T>(f: impl FnOnce() -> T) -> T {
-    let captured = Arc::new(Mutex::new(Vec::new()));
+    let captured = Arc::new(Mutex::new(BoundedCapture::default()));
     let drain_capture = Arc::clone(&captured);
     let result = panic::catch_unwind(AssertUnwindSafe(|| {
         with_stderr_filtered(f, move |mut reader, _writer| {
-            let mut bytes = Vec::new();
-            let _ = reader.read_to_end(&mut bytes);
-            *drain_capture
-                .lock()
-                .unwrap_or_else(|error| error.into_inner()) = bytes;
+            let mut buffer = [0; 8192];
+            loop {
+                match reader.read(&mut buffer) {
+                    Ok(0) => break,
+                    Ok(count) => drain_capture
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner())
+                        .extend(&buffer[..count]),
+                    Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                    Err(_) => break,
+                }
+            }
         })
     }));
     match result {
         Ok(value) => value,
         Err(payload) => {
-            let bytes = captured.lock().unwrap_or_else(|error| error.into_inner());
-            let _ = io::stderr().write_all(&bytes);
+            captured
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .replay(&mut io::stderr());
             panic::resume_unwind(payload)
         }
     }
@@ -116,36 +169,9 @@ impl Redirect {
     fn new(
         filter: impl FnOnce(Box<dyn Read + Send>, Box<dyn Write + Send>) + Send + 'static,
     ) -> Option<Self> {
-        let mut pipe = [-1; 2];
-        #[cfg(unix)]
-        let result = unsafe { libc::pipe(pipe.as_mut_ptr()) };
-        #[cfg(windows)]
-        let result =
-            unsafe { libc::pipe(pipe.as_mut_ptr(), 8192, libc::O_BINARY | libc::O_NOINHERIT) };
-        if result < 0 {
-            return None;
-        }
-        let read = Fd(pipe[0]);
-        let write = Fd(pipe[1]);
-        if !set_close_on_exec(read.0) || !set_close_on_exec(write.0) {
-            return None;
-        }
-        let saved = unsafe { libc::dup(STDERR_FD) };
-        if saved < 0 {
-            return None;
-        }
-        let saved = Fd(saved);
-        if !set_close_on_exec(saved.0) {
-            return None;
-        }
-        let forward = unsafe { libc::dup(saved.0) };
-        if forward < 0 {
-            return None;
-        }
-        let forward = Fd(forward);
-        if !set_close_on_exec(forward.0) {
-            return None;
-        }
+        let (read, write) = open_pipe()?;
+        let saved = duplicate_cloexec(STDERR_FD).ok()?;
+        let forward = duplicate_cloexec(saved.0).ok()?;
         // Spawn before redirecting: thread creation failure must not strand stderr.
         let (drained_tx, drained) = mpsc::sync_channel(1);
         let drain = std::thread::Builder::new()
@@ -206,35 +232,88 @@ fn duplicate_to(source: libc::c_int, target: libc::c_int) -> io::Result<()> {
             return Ok(());
         }
         let error = io::Error::last_os_error();
-        if error.kind() != io::ErrorKind::Interrupted {
-            return Err(error);
+        if error.kind() == io::ErrorKind::Interrupted {
+            continue;
         }
+        #[cfg(target_os = "linux")]
+        if error.raw_os_error() == Some(libc::EBUSY) {
+            continue;
+        }
+        return Err(error);
     }
 }
 
 #[cfg(unix)]
-fn set_close_on_exec(fd: libc::c_int) -> bool {
-    let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
-    flags >= 0 && unsafe { libc::fcntl(fd, libc::F_SETFD, flags | libc::FD_CLOEXEC) } >= 0
+fn open_pipe() -> Option<(Fd, Fd)> {
+    let (read, write) = std::io::pipe().ok()?;
+    Some((Fd(read.into_raw_fd()), Fd(write.into_raw_fd())))
 }
 
 #[cfg(windows)]
-fn set_close_on_exec(fd: libc::c_int) -> bool {
-    const HANDLE_FLAG_INHERIT: u32 = 1;
-    #[link(name = "kernel32")]
-    unsafe extern "system" {
-        fn SetHandleInformation(handle: *mut std::ffi::c_void, mask: u32, flags: u32) -> i32;
-    }
+fn open_pipe() -> Option<(Fd, Fd)> {
+    let mut pipe = [-1; 2];
+    let result = unsafe { libc::pipe(pipe.as_mut_ptr(), 8192, libc::O_BINARY | libc::O_NOINHERIT) };
+    (result >= 0).then(|| (Fd(pipe[0]), Fd(pipe[1])))
+}
 
-    let handle = unsafe { libc::_get_osfhandle(fd) };
-    handle != -1
-        && unsafe { SetHandleInformation(handle as *mut std::ffi::c_void, HANDLE_FLAG_INHERIT, 0) }
-            != 0
+#[cfg(unix)]
+fn duplicate_cloexec(fd: libc::c_int) -> io::Result<Fd> {
+    let duplicate = unsafe { libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, 0) };
+    if duplicate < 0 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(Fd(duplicate))
+    }
+}
+
+#[cfg(windows)]
+fn duplicate_cloexec(fd: libc::c_int) -> io::Result<Fd> {
+    use windows::Win32::Foundation::{
+        SetHandleInformation, HANDLE, HANDLE_FLAGS, HANDLE_FLAG_INHERIT,
+    };
+
+    let duplicate = unsafe { libc::dup(fd) };
+    if duplicate < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let duplicate = Fd(duplicate);
+    let handle = unsafe { libc::get_osfhandle(duplicate.0) };
+    if handle == -1 {
+        return Err(io::Error::last_os_error());
+    }
+    unsafe {
+        SetHandleInformation(
+            HANDLE(handle as *mut std::ffi::c_void),
+            HANDLE_FLAG_INHERIT.0,
+            HANDLE_FLAGS(0),
+        )
+    }
+    .map_err(|error| io::Error::other(error.to_string()))?;
+    Ok(duplicate)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn suppressed_capture_keeps_only_the_bounded_tail() {
+        let mut capture = BoundedCapture::default();
+        capture.extend(&vec![b'a'; CAPTURE_LIMIT]);
+        capture.extend(&[b'b'; 32]);
+
+        assert_eq!(capture.bytes.len(), CAPTURE_LIMIT);
+        assert!(capture.truncated);
+        assert_eq!(
+            capture.bytes.iter().filter(|&&byte| byte == b'b').count(),
+            32
+        );
+        assert!(capture
+            .bytes
+            .iter()
+            .take(CAPTURE_LIMIT - 32)
+            .all(|&byte| byte == b'a'));
+    }
 
     #[test]
     fn shared_redirect_delivers_native_stderr_to_filter() {
