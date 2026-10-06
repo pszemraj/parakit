@@ -8,7 +8,7 @@ parakit runs in the foreground by default. Use that mode once after install, the
 parakit doctor && parakit
 ```
 
-`parakit doctor` checks hotkey access, the selected microphone, insertion support, and the daemon singleton lock without downloading or loading the model. It exits `0` when startup should proceed and `1` when a blocking issue remains. An already-running daemon makes readiness fail. Starting again is harmless: `parakit start` prints `parakit: already running` and exits successfully.
+`parakit doctor` checks hotkey access, the selected microphone, insertion support, and the daemon singleton lock without downloading or loading the model. It exits `0` when startup should proceed and `1` when a blocking issue remains. An already-running daemon makes readiness fail. Starting again is harmless: when the running daemon answers, `parakit start` prints `parakit: already running` and exits successfully.
 
 Useful variants:
 
@@ -20,7 +20,7 @@ parakit doctor --deep
 
 `--verbose` and `--quiet` are global flags: they work whether they come before or after `doctor`. On Linux, Wayland sessions fail insertion preflight even when XWayland exposes a `DISPLAY`; use an X11 session. On macOS, `doctor` checks Accessibility, Input Monitoring, and Microphone status for the terminal that launched parakit.
 
-The daemon checks the hotkey backend, insertion backend, and singleton lock before any model download. If those preflights pass, it opens the microphone, warns when the selected source looks like Bluetooth, downloads the default Q8_0 GGUF if it is not already cached, opens the model, and starts the hotkey loop. Linux backend details are in [linux-desktop.md](linux-desktop.md).
+The daemon checks the hotkey backend, insertion backend, and singleton lock before any model download. If those preflights pass, it starts the control endpoint, opens the microphone, warns when the selected source looks like Bluetooth, downloads the default Q8_0 GGUF if it is not already cached, opens the model, and starts the hotkey loop. `status`, `stop`, and a second `start` remain available while the model downloads or loads. Linux backend details are in [linux-desktop.md](linux-desktop.md).
 
 Normal startup:
 
@@ -90,7 +90,7 @@ Stop it:
 parakit stop
 ```
 
-`parakit stop` uses the local daemon control channel, gives in-flight worker and insertion cleanup up to five seconds, and confirms that the process singleton lock was released before printing `stopped`. The client allows about six seconds for that final confirmation. On a timeout, retry `parakit stop`, then inspect the process (`pgrep -af parakit` on Unix-like systems or Task Manager on Windows) before terminating it; use `pkill parakit` only as a Unix last resort.
+`parakit stop` uses the local daemon control channel, gives in-flight worker and insertion cleanup up to five seconds, and confirms that the process singleton lock was released before printing `stopped`. The client allows about six seconds for that final confirmation, including when the endpoint has already disappeared during shutdown. If a timeout persists, identify the daemon with `pgrep -af parakit` on Unix-like systems or `Get-Process parakit` on Windows, then end that specific process.
 
 ## Daemon Control
 
@@ -104,7 +104,7 @@ parakit history
 parakit test-paste "hello from parakit"
 ```
 
-When the control endpoint is absent and the singleton lock is free, `status` and `stop` print `parakit: not running` or `parakit: not running; nothing to stop` and exit successfully. If the endpoint is absent while the lock remains held, both commands return an error because the daemon may still be starting, stopping, or otherwise unreachable; retry shortly, then inspect the process before terminating it. Commands that need daemon state (`history`, `copy-last`, and `test-paste`) instead report that the daemon is not running and point to `parakit start`.
+When the control endpoint is absent and the singleton lock is free, `status` and `stop` print `parakit: not running` or `parakit: not running; nothing to stop` and exit successfully. If the endpoint is absent while the lock remains held, `status` reports that the daemon may still be starting or stopping; `stop` waits within its remaining deadline for the lock to release. Commands that need daemon state (`history`, `copy-last`, and `test-paste`) instead report that the daemon is not running and point to `parakit start`.
 
 The daemon keeps a ring buffer of recent transcripts in memory (`daemon.transcript_history` entries, 10 by default). `copy-last` acts on the most recent one by default; pass `N` (1-based, counting back from the most recent) to reach further back, e.g. `parakit copy-last 3` for the third-most-recent transcript. `parakit history` lists what the daemon currently remembers, newest first; `--limit N` caps how many entries print. The ring disappears when the daemon stops, so treat it as a same-session convenience. `test-paste` runs clipboard staging, focus checks, paste sanitization, and the paste chord without using the microphone.
 

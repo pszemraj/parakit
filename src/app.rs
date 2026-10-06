@@ -280,21 +280,8 @@ fn run_daemon(cli: &Cli, start: &StartCli) -> Result<()> {
         start.effective_transcript_history(&config),
     ));
     // Register before the engine so reverse local-drop order releases the
-    // native session before this guard on every failed-startup path. IPC is
-    // still exposed only after quiet engine startup restores stderr.
+    // native session before this guard on every failed-startup path.
     let worker_lifetime = ipc_state.shutdown.register();
-
-    // Quiet engine startup redirects process-wide stderr. Open it before any
-    // daemon-owned background thread can emit a warning or panic into that
-    // temporary sink.
-    let OpenedEngine {
-        model_path,
-        engine,
-        device_summary,
-        recipe,
-    } = open_cli_engine(start, &config, verbose, cli.quiet, &log)?;
-    let model_dtype = model_dtype_label(&model_path);
-
     let notifier = Notifier::new(Arc::clone(&log));
     let keep_transcript_clipboard = start.effective_keep_transcript_clipboard(&config);
     let log_dir = start.effective_log_dir(&config);
@@ -319,6 +306,15 @@ fn run_daemon(cli: &Cli, start: &StartCli) -> Result<()> {
         .mic_info()
         .context("audio manager started without reporting a microphone")?;
     warn_about_bluetooth_mic_if_needed(&log, &mic_info);
+
+    // Keep control available during model download and loading, including stop.
+    let OpenedEngine {
+        model_path,
+        engine,
+        device_summary,
+        recipe,
+    } = open_cli_engine(start, &config, verbose, cli.quiet, &log)?;
+    let model_dtype = model_dtype_label(&model_path);
 
     // Banner.
     let model_name = model_file_name(&model_path);

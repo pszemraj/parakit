@@ -607,17 +607,19 @@ pub(crate) fn daemon_responsive() -> Result<bool> {
 /// no daemon is listening, or when the daemon reports failure. An absent
 /// daemon is a successful state for `Status` and `Stop`.
 pub(crate) fn run_client(command: IpcCommand, quiet: bool, verbose: bool) -> Result<()> {
+    let stop_deadline =
+        Instant::now() + STOP_INSERTION_WAIT + STOP_RESPONSE_GRACE + IPC_TRANSPORT_TIMEOUT;
     let response = match send_command(&command) {
         Ok(response) => response,
         Err(err) if err.is::<DaemonNotRunning>() => {
-            return handle_daemon_not_running(&command, quiet);
+            return handle_daemon_not_running(&command, quiet, stop_deadline);
         }
         Err(err) => return Err(err),
     };
     match response {
         IpcResponse::Ok { message } => {
             if matches!(&command, IpcCommand::Stop) {
-                wait_for_daemon_stop()?;
+                wait_for_daemon_stop(stop_deadline)?;
             }
             if !quiet {
                 println!("{}", completed_command_message(&command, &message));
@@ -663,26 +665,32 @@ fn completed_command_message<'a>(command: &IpcCommand, server_message: &'a str) 
 }
 
 #[cfg(any(unix, target_os = "windows"))]
-fn wait_for_daemon_stop() -> Result<()> {
-    let deadline =
-        Instant::now() + STOP_INSERTION_WAIT + STOP_RESPONSE_GRACE + IPC_TRANSPORT_TIMEOUT;
-    loop {
-        match preflight::acquire_singleton_lock() {
-            Ok(_lock) => return Ok(()),
-            Err(error) if error.is::<preflight::DaemonAlreadyRunning>() => {}
-            Err(error) => return Err(error.context("check daemon shutdown")),
-        }
+fn wait_for_daemon_stop(deadline: Instant) -> Result<()> {
+    wait_for_daemon_stop_with_probe(deadline, preflight::singleton_lock_held)
+}
+
+#[cfg(any(unix, target_os = "windows"))]
+fn wait_for_daemon_stop_with_probe(
+    deadline: Instant,
+    mut lock_held: impl FnMut() -> Result<bool>,
+) -> Result<()> {
+    while lock_held().context("check daemon shutdown")? {
         if Instant::now() >= deadline {
-            bail!("daemon stop timed out");
+            #[cfg(not(target_os = "windows"))]
+            bail!("daemon stop timed out; if this persists, identify the daemon with `pgrep -af parakit` and end that process");
+            #[cfg(target_os = "windows")]
+            bail!("daemon stop timed out; if this persists, identify the daemon with `Get-Process parakit` and end it with `Stop-Process -Id <PID>`");
         }
         thread::sleep(STOP_LOCK_POLL);
     }
+    Ok(())
 }
 
 #[cfg(any(unix, target_os = "windows"))]
 #[derive(Debug, Eq, PartialEq)]
 enum DaemonNotRunningDisposition {
     Success(&'static str),
+    WaitForStop,
     Error(&'static str),
 }
 
@@ -697,7 +705,8 @@ fn daemon_not_running_disposition(
     singleton_held: bool,
 ) -> DaemonNotRunningDisposition {
     match command {
-        IpcCommand::Status | IpcCommand::Stop if singleton_held => {
+        IpcCommand::Stop if singleton_held => DaemonNotRunningDisposition::WaitForStop,
+        IpcCommand::Status if singleton_held => {
             DaemonNotRunningDisposition::Error(
                 "daemon control endpoint is unavailable while the singleton lock is held; it may still be starting or stopping",
             )
@@ -715,13 +724,20 @@ fn daemon_not_running_disposition(
 }
 
 #[cfg(any(unix, target_os = "windows"))]
-fn handle_daemon_not_running(command: &IpcCommand, quiet: bool) -> Result<()> {
+fn handle_daemon_not_running(command: &IpcCommand, quiet: bool, deadline: Instant) -> Result<()> {
     let singleton_held = if matches!(command, IpcCommand::Status | IpcCommand::Stop) {
         preflight::singleton_lock_held().context("probe existing daemon singleton lock")?
     } else {
         false
     };
     match daemon_not_running_disposition(command, singleton_held) {
+        DaemonNotRunningDisposition::WaitForStop => {
+            wait_for_daemon_stop(deadline)?;
+            if !quiet {
+                println!("stopped");
+            }
+            Ok(())
+        }
         DaemonNotRunningDisposition::Success(message) => {
             if !quiet {
                 println!("{message}");
@@ -2311,8 +2327,28 @@ mod tests {
         );
         assert_eq!(
             daemon_not_running_disposition(&IpcCommand::Stop, true),
-            held
+            DaemonNotRunningDisposition::WaitForStop
         );
+    }
+
+    #[cfg(any(unix, target_os = "windows"))]
+    #[test]
+    fn stop_waits_for_a_held_lock_and_reports_a_persistent_holder() {
+        let mut probes = 0;
+        wait_for_daemon_stop_with_probe(Instant::now() + Duration::from_secs(1), || {
+            probes += 1;
+            Ok(probes < 3)
+        })
+        .expect("stop should wait until the lock is released");
+        assert_eq!(probes, 3);
+
+        let error = wait_for_daemon_stop_with_probe(Instant::now(), || Ok(true))
+            .expect_err("a persistent lock holder should time out");
+        assert!(error.to_string().contains("if this persists"));
+        #[cfg(not(target_os = "windows"))]
+        assert!(error.to_string().contains("pgrep -af parakit"));
+        #[cfg(target_os = "windows")]
+        assert!(error.to_string().contains("Get-Process parakit"));
     }
 
     #[cfg(any(unix, target_os = "windows"))]

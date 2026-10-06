@@ -7,6 +7,10 @@ use std::fmt::Write as _;
 use std::fs::{create_dir_all, File, OpenOptions};
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
+
+const SINGLETON_START_WAIT: Duration = Duration::from_millis(100);
+const SINGLETON_RETRY_INTERVAL: Duration = Duration::from_millis(5);
 
 use super::hotkey::HotkeyBackend;
 #[cfg(target_os = "linux")]
@@ -258,9 +262,11 @@ impl std::fmt::Display for DaemonAlreadyRunning {
 impl std::error::Error for DaemonAlreadyRunning {}
 
 fn singleton_lock_probe() -> Result<()> {
-    let lock = acquire_singleton_lock()?;
-    drop(lock);
-    Ok(())
+    if singleton_lock_held()? {
+        Err(DaemonAlreadyRunning.into())
+    } else {
+        Ok(())
+    }
 }
 
 /// Per-user daemon singleton lock.
@@ -337,10 +343,22 @@ fn acquire_singleton_lock_at(path: &Path) -> Result<DaemonLock> {
         .open(path)
         .with_context(|| format!("open daemon lock {}", path.display()))?;
 
-    match file.try_lock_exclusive() {
-        Ok(()) => Ok(DaemonLock { file }),
-        Err(err) if is_daemon_lock_contention(&err) => Err(DaemonAlreadyRunning.into()),
-        Err(err) => Err(err).with_context(|| format!("lock daemon lock {}", path.display())),
+    // Status/doctor briefly hold shared probe locks. Allow those probes to
+    // finish before concluding that another daemon owns the singleton.
+    let deadline = Instant::now() + SINGLETON_START_WAIT;
+    loop {
+        match FileExt::try_lock_exclusive(&file) {
+            Ok(()) => return Ok(DaemonLock { file }),
+            Err(err) if is_daemon_lock_contention(&err) => {
+                if Instant::now() >= deadline {
+                    return Err(DaemonAlreadyRunning.into());
+                }
+                std::thread::sleep(SINGLETON_RETRY_INTERVAL);
+            }
+            Err(err) => {
+                return Err(err).with_context(|| format!("lock daemon lock {}", path.display()));
+            }
+        }
     }
 }
 
@@ -980,5 +998,31 @@ mod tests {
         assert!(!path.exists());
         assert!(!singleton_lock_held_at(&path).expect("missing lock should be free"));
         assert!(!path.exists());
+    }
+
+    #[test]
+    fn singleton_start_waits_for_a_transient_shared_probe() {
+        let path = crate::test_support::fixture_root("parakit-lock-test", "shared-probe")
+            .join("parakit.lock");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let probe = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(&path)
+            .unwrap();
+        FileExt::lock_shared(&probe).unwrap();
+        let release = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(20));
+            drop(probe);
+        });
+
+        let daemon = acquire_singleton_lock_at(&path)
+            .expect("startup should wait for the short shared probe");
+        release.join().unwrap();
+        assert!(singleton_lock_held_at(&path).unwrap());
+        drop(daemon);
+        assert!(!singleton_lock_held_at(&path).unwrap());
     }
 }
