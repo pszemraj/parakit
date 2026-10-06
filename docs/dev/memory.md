@@ -52,3 +52,5 @@ The default GGUF loader copies weights into a backend buffer;
 CUDA, Vulkan, Metal, and their drivers can retain process-wide state or caches
 after a session closes. Residual process memory alone does not prove that the
 inference session remains live or identify an allocator leak.
+
+TODO: Test CUDA reload under VRAM pressure with an isolated daemon while live GPU dictation and other GPU work are paused. The pinned ggml CUDA scratch allocator can abort on allocation failure, so successful normal reload does not establish recovery from GPU exhaustion. `model_idle_minutes = 0` avoids this offload/reload window for GPU-heavy sessions; it does not prevent other GPU out-of-memory failures.
