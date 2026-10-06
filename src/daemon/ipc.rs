@@ -688,11 +688,20 @@ enum DaemonNotRunningDisposition {
 
 /// Return the user-facing result for a command when no daemon endpoint exists.
 ///
-/// Status queries and stop requests are idempotent state checks, while the
-/// remaining commands require live daemon state and therefore stay failures.
+/// Status queries and stop requests are idempotent state checks once the
+/// singleton lock is free. A held lock means the daemon may still be starting
+/// or stopping, so reporting a settled "not running" state would be misleading.
 #[cfg(any(unix, target_os = "windows"))]
-fn daemon_not_running_disposition(command: &IpcCommand) -> DaemonNotRunningDisposition {
+fn daemon_not_running_disposition(
+    command: &IpcCommand,
+    singleton_held: bool,
+) -> DaemonNotRunningDisposition {
     match command {
+        IpcCommand::Status | IpcCommand::Stop if singleton_held => {
+            DaemonNotRunningDisposition::Error(
+                "daemon control endpoint is unavailable while the singleton lock is held; it may still be starting or stopping",
+            )
+        }
         IpcCommand::Status => DaemonNotRunningDisposition::Success("parakit: not running"),
         IpcCommand::Stop => {
             DaemonNotRunningDisposition::Success("parakit: not running; nothing to stop")
@@ -707,7 +716,12 @@ fn daemon_not_running_disposition(command: &IpcCommand) -> DaemonNotRunningDispo
 
 #[cfg(any(unix, target_os = "windows"))]
 fn handle_daemon_not_running(command: &IpcCommand, quiet: bool) -> Result<()> {
-    match daemon_not_running_disposition(command) {
+    let singleton_held = if matches!(command, IpcCommand::Status | IpcCommand::Stop) {
+        preflight::singleton_lock_held().context("probe existing daemon singleton lock")?
+    } else {
+        false
+    };
+    match daemon_not_running_disposition(command, singleton_held) {
         DaemonNotRunningDisposition::Success(message) => {
             if !quiet {
                 println!("{message}");
@@ -2286,8 +2300,19 @@ mod tests {
         ];
 
         for (command, expected) in cases {
-            assert_eq!(daemon_not_running_disposition(&command), expected);
+            assert_eq!(daemon_not_running_disposition(&command, false), expected);
         }
+        let held = DaemonNotRunningDisposition::Error(
+            "daemon control endpoint is unavailable while the singleton lock is held; it may still be starting or stopping",
+        );
+        assert_eq!(
+            daemon_not_running_disposition(&IpcCommand::Status, true),
+            held
+        );
+        assert_eq!(
+            daemon_not_running_disposition(&IpcCommand::Stop, true),
+            held
+        );
     }
 
     #[cfg(any(unix, target_os = "windows"))]

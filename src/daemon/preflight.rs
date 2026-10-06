@@ -229,6 +229,22 @@ pub(crate) fn acquire_singleton_lock() -> Result<DaemonLock> {
     acquire_singleton_lock_at(&path)
 }
 
+/// Check an existing daemon lock without creating runtime state.
+///
+/// Shared probes do not contend with one another, but they fail while the
+/// daemon owns its exclusive lock.
+///
+/// # Returns
+///
+/// `true` when an existing lock file is exclusively held, otherwise `false`.
+///
+/// # Errors
+///
+/// Returns an error when an existing lock file cannot be opened or queried.
+pub(crate) fn singleton_lock_held() -> Result<bool> {
+    singleton_lock_held_at(&singleton_lock_path()?)
+}
+
 /// Marker returned when another process already owns the daemon lock.
 #[derive(Debug)]
 pub(crate) struct DaemonAlreadyRunning;
@@ -325,6 +341,26 @@ fn acquire_singleton_lock_at(path: &Path) -> Result<DaemonLock> {
         Ok(()) => Ok(DaemonLock { file }),
         Err(err) if is_daemon_lock_contention(&err) => Err(DaemonAlreadyRunning.into()),
         Err(err) => Err(err).with_context(|| format!("lock daemon lock {}", path.display())),
+    }
+}
+
+fn singleton_lock_held_at(path: &Path) -> Result<bool> {
+    let file = match OpenOptions::new().read(true).write(true).open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(false),
+        Err(error) => {
+            return Err(error).with_context(|| format!("open daemon lock {}", path.display()));
+        }
+    };
+
+    match FileExt::try_lock_shared(&file) {
+        Ok(()) => {
+            FileExt::unlock(&file)
+                .with_context(|| format!("unlock daemon lock probe {}", path.display()))?;
+            Ok(false)
+        }
+        Err(error) if is_daemon_lock_contention(&error) => Ok(true),
+        Err(error) => Err(error).with_context(|| format!("probe daemon lock {}", path.display())),
     }
 }
 
@@ -924,13 +960,25 @@ mod tests {
             .join("parakit.lock");
 
         let first = acquire_singleton_lock_at(&path).expect("first lock should succeed");
+        assert!(singleton_lock_held_at(&path).expect("held lock should be observable"));
         let Err(second) = acquire_singleton_lock_at(&path) else {
             panic!("a held daemon lock should reject another owner");
         };
         assert!(second.is::<DaemonAlreadyRunning>(), "{second:#}");
         assert_eq!(second.to_string(), "daemon is already running");
         drop(first);
+        assert!(!singleton_lock_held_at(&path).expect("released lock should be observable"));
         let third = acquire_singleton_lock_at(&path).expect("lock should release after drop");
         drop(third);
+    }
+
+    #[test]
+    fn singleton_lock_probe_does_not_create_missing_state() {
+        let path = crate::test_support::fixture_root("parakit-lock-test", "missing-probe")
+            .join("missing")
+            .join("parakit.lock");
+        assert!(!path.exists());
+        assert!(!singleton_lock_held_at(&path).expect("missing lock should be free"));
+        assert!(!path.exists());
     }
 }
