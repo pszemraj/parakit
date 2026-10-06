@@ -3,11 +3,11 @@
 #[cfg(target_os = "macos")]
 use anyhow::Context;
 use std::sync::{mpsc, Arc};
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::time::Duration;
 
 const NOTIFICATION_QUEUE_CAPACITY: usize = 16;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 const NOTIFICATION_TIMEOUT: Duration = Duration::from_secs(3);
 
 #[cfg(target_os = "macos")]
@@ -21,9 +21,10 @@ pub(crate) struct Notifier {
     delivery: Option<mpsc::SyncSender<NotificationMessage>>,
 }
 
-struct NotificationMessage {
-    summary: String,
-    body: String,
+/// One desktop message waiting in the bounded delivery queue.
+pub(crate) struct NotificationMessage {
+    pub(crate) summary: String,
+    pub(crate) body: String,
 }
 
 impl Notifier {
@@ -51,6 +52,23 @@ impl Notifier {
             log,
             delivery: None,
         }
+    }
+
+    /// Build a notifier using the production queue without desktop delivery.
+    ///
+    /// # Returns
+    ///
+    /// The notifier and a receiver for its queued messages.
+    #[cfg(test)]
+    pub(crate) fn test_channel(log: Arc<Logger>) -> (Self, mpsc::Receiver<NotificationMessage>) {
+        let (sender, receiver) = mpsc::sync_channel(NOTIFICATION_QUEUE_CAPACITY);
+        (
+            Self {
+                log,
+                delivery: Some(sender),
+            },
+            receiver,
+        )
     }
 
     /// Notify that a transcript was copied without sending a paste chord.
@@ -185,12 +203,43 @@ fn model_unavailable_body(error: &str) -> String {
 
 #[cfg(target_os = "linux")]
 fn show_notification(summary: &str, body: &str) -> anyhow::Result<()> {
-    notify_rust::Notification::new()
-        .appname("parakit")
-        .summary(summary)
-        .body(body)
-        .show()?;
+    let mut notification = notify_rust::Notification::new();
+    notification.appname("parakit").summary(summary).body(body);
+    notification_with_timeout(notification.show_async(), NOTIFICATION_TIMEOUT)??;
     Ok(())
+}
+
+/// Poll the nonblocking D-Bus future on the delivery thread, dropping it at
+/// the deadline so a stalled connection or reply cannot wedge the queue.
+#[cfg(target_os = "linux")]
+fn notification_with_timeout<F: std::future::Future>(
+    future: F,
+    timeout: Duration,
+) -> anyhow::Result<F::Output> {
+    use std::task::{Context, Poll, Wake, Waker};
+
+    struct DeliveryWake(std::thread::Thread);
+    impl Wake for DeliveryWake {
+        fn wake(self: Arc<Self>) {
+            self.0.unpark();
+        }
+    }
+
+    let deadline = std::time::Instant::now() + timeout;
+    let waker = Waker::from(Arc::new(DeliveryWake(std::thread::current())));
+    let mut context = Context::from_waker(&waker);
+    let mut future = std::pin::pin!(future);
+    loop {
+        anyhow::ensure!(
+            std::time::Instant::now() < deadline,
+            "desktop notification timed out"
+        );
+        if let Poll::Ready(result) = future.as_mut().poll(&mut context) {
+            return Ok(result);
+        }
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        std::thread::park_timeout(remaining);
+    }
 }
 
 /// Show a macOS Notification Center banner through `osascript`.
@@ -298,6 +347,77 @@ mod message_tests {
         });
 
         assert_eq!(delivered, ["first", "second", "third"]);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn notification_deadline_completes_and_honors_wakes() {
+        assert_eq!(
+            notification_with_timeout(std::future::ready(7), Duration::from_secs(1)).unwrap(),
+            7
+        );
+        let mut first_poll = true;
+        let future = std::future::poll_fn(|context| {
+            if first_poll {
+                first_poll = false;
+                context.waker().wake_by_ref();
+                std::task::Poll::Pending
+            } else {
+                std::task::Poll::Ready(9)
+            }
+        });
+        assert_eq!(
+            notification_with_timeout(future, Duration::from_secs(1)).unwrap(),
+            9
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn stalled_notification_times_out_and_later_messages_are_delivered() {
+        let (sender, receiver) = mpsc::sync_channel(2);
+        for summary in ["stalled", "next"] {
+            sender
+                .send(NotificationMessage {
+                    summary: summary.to_string(),
+                    body: String::new(),
+                })
+                .unwrap();
+        }
+        drop(sender);
+
+        let dropped = std::cell::Cell::new(false);
+        struct DropNotice<'a>(&'a std::cell::Cell<bool>);
+        impl Drop for DropNotice<'_> {
+            fn drop(&mut self) {
+                self.0.set(true);
+            }
+        }
+
+        let timeout = Duration::from_millis(20);
+        let started = std::time::Instant::now();
+        let log = Logger::new(LogLevel::Quiet);
+        let mut delivered = Vec::new();
+        deliver_notifications(receiver, &log, |summary, _| {
+            if summary == "stalled" {
+                let notice = DropNotice(&dropped);
+                let future = async move {
+                    let _notice = notice;
+                    std::future::pending::<()>().await;
+                };
+                let error = notification_with_timeout(future, timeout).unwrap_err();
+                assert!(error.to_string().contains("timed out"));
+                return Err(error);
+            }
+            assert!(dropped.get(), "timed-out delivery must be cancelled");
+            notification_with_timeout(std::future::ready(()), timeout)?;
+            delivered.push(summary.to_string());
+            Ok(())
+        });
+
+        assert_eq!(delivered, ["next"]);
+        assert!(started.elapsed() >= timeout);
+        assert!(started.elapsed() < Duration::from_secs(1));
     }
 }
 

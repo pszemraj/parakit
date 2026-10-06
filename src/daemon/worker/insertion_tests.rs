@@ -322,3 +322,154 @@ fn clipboard_observation_failure_reaches_worker_diagnostics() {
     );
     assert!(report.needs_alert());
 }
+
+#[test]
+fn paste_completion_sends_outcome_notifications() {
+    use crate::daemon::inject::{PasteOutcome, PasteReport};
+
+    let cases = [
+        (
+            PasteOutcome::Pasted,
+            true,
+            "target_value_changed",
+            InsertOutcome::Pasted,
+            None,
+            false,
+        ),
+        (
+            PasteOutcome::PastedUnverified,
+            true,
+            "unverified_focus_lost",
+            InsertOutcome::PastedUnverified,
+            None,
+            false,
+        ),
+        (
+            PasteOutcome::PastedUnverified,
+            true,
+            "no_evidence",
+            InsertOutcome::PastedUnverified,
+            Some((
+                "Paste unconfirmed",
+                PasteBlockReason::UnconfirmedClipboardChanged.notice(),
+            )),
+            true,
+        ),
+        (
+            PasteOutcome::CopiedOnly,
+            false,
+            "not_applicable",
+            InsertOutcome::CopiedOnly,
+            Some((
+                "Transcript copied",
+                PasteBlockReason::FocusChangedBeforePaste.notice(),
+            )),
+            false,
+        ),
+        (
+            PasteOutcome::CopiedOnly,
+            true,
+            "no_evidence",
+            InsertOutcome::CopiedOnly,
+            Some(("Paste unconfirmed", PasteBlockReason::Unconfirmed.notice())),
+            true,
+        ),
+        (
+            PasteOutcome::Blocked,
+            false,
+            "not_applicable",
+            InsertOutcome::Blocked,
+            Some((
+                "Paste blocked",
+                PasteBlockReason::FocusChangedBeforePaste.notice(),
+            )),
+            true,
+        ),
+        (
+            PasteOutcome::ClipboardChanged,
+            false,
+            "not_applicable",
+            InsertOutcome::Blocked,
+            Some(("Paste blocked", PasteBlockReason::ClipboardChanged.notice())),
+            true,
+        ),
+    ];
+    for (outcome, posted, acknowledgement_kind, expected_outcome, notice, alert) in cases {
+        let log = Arc::new(Logger::new(LogLevel::Quiet));
+        let (notifier, messages) = Notifier::test_channel(Arc::clone(&log));
+        let report = finish_paste(
+            PasteReport {
+                outcome,
+                telemetry: InsertionTelemetry {
+                    paste_event_posted: posted,
+                    acknowledgement_kind,
+                    acknowledgement_ms: posted.then_some(12),
+                    clipboard_restored: None,
+                },
+                diagnostic: None,
+            },
+            false,
+            &log,
+            &notifier,
+        );
+        assert_eq!(report.outcome, expected_outcome, "{outcome:?}");
+        assert_eq!(report.needs_alert(), alert, "{outcome:?}");
+        if let Some((summary, body)) = notice {
+            let actual = messages.try_recv().expect("outcome notification");
+            assert_eq!(actual.summary, summary, "{outcome:?}");
+            assert_eq!(actual.body, body, "{outcome:?}");
+        }
+        assert!(matches!(
+            messages.try_recv(),
+            Err(std::sync::mpsc::TryRecvError::Empty)
+        ));
+    }
+}
+
+#[test]
+fn held_modifiers_warn_even_in_quiet_mode_and_notify_copy_only() {
+    // A child captures actual stderr without replacing the production logger.
+    const CHILD: &str = "PARAKIT_TEST_HELD_MODIFIERS_WARNING";
+    if std::env::var_os(CHILD).is_none() {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "daemon::worker::insertion::tests::held_modifiers_warn_even_in_quiet_mode_and_notify_copy_only",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        assert!(stderr.contains("warning:"), "{stderr:?}");
+        assert!(
+            stderr.contains(PasteBlockReason::UnsafeModifiers.notice()),
+            "{stderr:?}"
+        );
+        return;
+    }
+
+    let log = Arc::new(Logger::new(LogLevel::Quiet));
+    let (notifier, messages) = Notifier::test_channel(Arc::clone(&log));
+    let report = finish_paste(
+        crate::daemon::inject::PasteReport {
+            outcome: crate::daemon::inject::PasteOutcome::UnsafeModifiers,
+            telemetry: InsertionTelemetry::not_applicable(false, Some(false)),
+            diagnostic: None,
+        },
+        false,
+        &log,
+        &notifier,
+    );
+    assert_eq!(report.outcome, InsertOutcome::CopiedOnly);
+    assert!(!report.telemetry.paste_event_posted);
+    assert!(!report.needs_alert());
+    let notice = messages.try_recv().expect("held-modifier notification");
+    assert_eq!(notice.summary, "Transcript copied");
+    assert_eq!(notice.body, PasteBlockReason::UnsafeModifiers.notice());
+    assert!(matches!(
+        messages.try_recv(),
+        Err(std::sync::mpsc::TryRecvError::Empty)
+    ));
+}

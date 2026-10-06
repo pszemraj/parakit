@@ -263,64 +263,14 @@ fn paste_transcript(
             },
         );
     let paste_error = match paste_result {
-        Ok(report) => match report.outcome {
-            crate::daemon::inject::PasteOutcome::Pasted => {
-                warn_if_clipboard_restore_failed(log, keep_transcript_clipboard, &report);
-                return Ok(InsertReport::from_paste(InsertOutcome::Pasted, report));
-            }
-            crate::daemon::inject::PasteOutcome::PastedUnverified => {
-                warn_if_clipboard_restore_failed(log, keep_transcript_clipboard, &report);
-                log.verbose(format!(
-                    "parakit: paste sent but insertion could not be confirmed within {}ms ({}); treating as pasted",
-                    report.telemetry.acknowledgement_ms.unwrap_or_default(),
-                    report.telemetry.acknowledgement_kind,
-                ));
-                if report.telemetry.acknowledgement_kind == "no_evidence" {
-                    notifier
-                        .paste_unconfirmed(PasteBlockReason::UnconfirmedClipboardChanged.notice());
-                }
-                return Ok(InsertReport::from_paste(
-                    InsertOutcome::PastedUnverified,
-                    report,
-                ));
-            }
-            crate::daemon::inject::PasteOutcome::CopiedOnly => {
-                if report.telemetry.paste_event_posted {
-                    // The paste chord was sent but never confirmed: avoid
-                    // alarm fatigue from a second silent failure path and
-                    // tell the user the transcript is safe on the
-                    // clipboard.
-                    notifier.paste_unconfirmed(PasteBlockReason::Unconfirmed.notice());
-                } else {
-                    notifier.transcript_copied(PasteBlockReason::FocusChangedBeforePaste.notice());
-                }
-                return Ok(InsertReport::from_paste(InsertOutcome::CopiedOnly, report));
-            }
-            crate::daemon::inject::PasteOutcome::UnsafeModifiers => {
-                // No chord was ever posted (`report.telemetry.paste_event_posted` is
-                // always false here) and the transcript is intentionally
-                // kept on the clipboard, exactly like the pre-chord
-                // `CopiedOnly` case above: this is the quiet "copied, not
-                // pasted" outcome, not a `Blocked` failure.
-                notifier.transcript_copied(PasteBlockReason::UnsafeModifiers.notice());
-                return Ok(InsertReport::from_paste(InsertOutcome::CopiedOnly, report));
-            }
-            crate::daemon::inject::PasteOutcome::Blocked => {
-                notifier.paste_blocked(PasteBlockReason::FocusChangedBeforePaste.notice());
-                return Ok(InsertReport::from_paste(InsertOutcome::Blocked, report));
-            }
-            crate::daemon::inject::PasteOutcome::ClipboardChanged => {
-                if let Some(diagnostic) = report.diagnostic.as_deref() {
-                    log.warn(format!(
-                        "clipboard could not be verified ({diagnostic}); current clipboard preserved"
-                    ));
-                } else {
-                    log.warn("clipboard changed; current clipboard preserved");
-                }
-                notifier.paste_blocked(PasteBlockReason::ClipboardChanged.notice());
-                return Ok(InsertReport::from_paste(InsertOutcome::Blocked, report));
-            }
-        },
+        Ok(report) => {
+            return Ok(finish_paste(
+                report,
+                keep_transcript_clipboard,
+                log,
+                notifier,
+            ))
+        }
         Err(err) => err,
     };
 
@@ -372,6 +322,65 @@ fn paste_transcript(
     }
 
     Err(paste_error)
+}
+
+/// Report the actual paste outcome through the worker's existing UI channels.
+fn finish_paste(
+    report: crate::daemon::inject::PasteReport,
+    keep_transcript_clipboard: bool,
+    log: &Logger,
+    notifier: &Notifier,
+) -> InsertReport {
+    use crate::daemon::inject::PasteOutcome;
+
+    let outcome = match report.outcome {
+        PasteOutcome::Pasted => {
+            warn_if_clipboard_restore_failed(log, keep_transcript_clipboard, &report);
+            InsertOutcome::Pasted
+        }
+        PasteOutcome::PastedUnverified => {
+            warn_if_clipboard_restore_failed(log, keep_transcript_clipboard, &report);
+            log.verbose(format!(
+                "parakit: paste sent but insertion could not be confirmed within {}ms ({}); treating as pasted",
+                report.telemetry.acknowledgement_ms.unwrap_or_default(),
+                report.telemetry.acknowledgement_kind,
+            ));
+            if report.telemetry.acknowledgement_kind == "no_evidence" {
+                notifier.paste_unconfirmed(PasteBlockReason::UnconfirmedClipboardChanged.notice());
+            }
+            InsertOutcome::PastedUnverified
+        }
+        PasteOutcome::CopiedOnly => {
+            if report.telemetry.paste_event_posted {
+                notifier.paste_unconfirmed(PasteBlockReason::Unconfirmed.notice());
+            } else {
+                notifier.transcript_copied(PasteBlockReason::FocusChangedBeforePaste.notice());
+            }
+            InsertOutcome::CopiedOnly
+        }
+        PasteOutcome::UnsafeModifiers => {
+            log.warn(PasteBlockReason::UnsafeModifiers.notice());
+            notifier.transcript_copied(PasteBlockReason::UnsafeModifiers.notice());
+            // No chord was posted; preserve the quieter copy-only tone.
+            InsertOutcome::CopiedOnly
+        }
+        PasteOutcome::Blocked => {
+            notifier.paste_blocked(PasteBlockReason::FocusChangedBeforePaste.notice());
+            InsertOutcome::Blocked
+        }
+        PasteOutcome::ClipboardChanged => {
+            if let Some(diagnostic) = report.diagnostic.as_deref() {
+                log.warn(format!(
+                    "clipboard could not be verified ({diagnostic}); current clipboard preserved"
+                ));
+            } else {
+                log.warn("clipboard changed; current clipboard preserved");
+            }
+            notifier.paste_blocked(PasteBlockReason::ClipboardChanged.notice());
+            InsertOutcome::Blocked
+        }
+    };
+    InsertReport::from_paste(outcome, report)
 }
 
 /// Warn when a paste that already landed (or was accepted as unverified)
