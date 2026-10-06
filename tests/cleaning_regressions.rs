@@ -56,6 +56,10 @@ fn plural_magnitudes_preserve_words_in_both_profiles_and_thresholds() {
             "A few hundred thousand dollars, several hundred thousand files, and a few hundred million parameters.",
         ),
         (
+            "A few hundred-thousand dollars, several hundred-million files, and a couple of hundred-billion tokens.",
+            "A few hundred-thousand dollars, several hundred-million files, and a couple of hundred-billion tokens.",
+        ),
+        (
             "Half a million people, a quarter of a billion rows, and two and a half million files.",
             "Half a million people, a quarter of a billion rows, and two and a half million files.",
         ),
@@ -74,6 +78,18 @@ fn plural_magnitudes_preserve_words_in_both_profiles_and_thresholds() {
         (
             "In the year two thousand half a million people came.",
             "In the year 2000 half a million people came.",
+        ),
+        (
+            "In the year two thousand and five half a million people came.",
+            "In the year 2005 half a million people came.",
+        ),
+        (
+            "Between two thousand and half a million people came.",
+            "Between 2000 and half a million people came.",
+        ),
+        (
+            "Chapter five half a million words long.",
+            "Chapter 5 half a million words long.",
         ),
         (
             "In the year two thousand quarter of a million people came.",
@@ -137,6 +153,30 @@ fn plural_magnitudes_preserve_words_in_both_profiles_and_thresholds() {
         let all_numbers = build_cleaner(false, profile, false, Some(0.0), &[], &[])
             .unwrap()
             .unwrap();
+        for (input, expected) in [
+            (
+                "In the year two thousand and five half a million people came.",
+                "In the year 2005 half a million people came.",
+            ),
+            (
+                "Between two thousand and half a million people came.",
+                "Between 2000 and half a million people came.",
+            ),
+            (
+                "Chapter five half a million words long.",
+                "Chapter 5 half a million words long.",
+            ),
+            (
+                "A few hundred-thousand dollars.",
+                "A few hundred-thousand dollars.",
+            ),
+        ] {
+            assert_eq!(
+                all_numbers.clean_text(input),
+                expected,
+                "{profile:?}: {input}"
+            );
+        }
         assert_eq!(
             all_numbers.clean_text("one two three hundreds"),
             "One two three hundreds"

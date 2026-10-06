@@ -89,7 +89,7 @@ fn replace_numbers_preserving_literals(input: &str, language: &Language, thresho
         Regex::new(r"(?i)([a-z0-9]+)([-\s]+)$").expect("previous-token regex must compile")
     });
     let following_scale_re = FOLLOWING_SCALE.get_or_init(|| {
-        Regex::new(r"(?i)^(?:\s+(?:hundred|thousand|million|billion|trillion)\b)+")
+        Regex::new(r"(?i)^(?:[-\s]+(?:hundred|thousand|million|billion|trillion)\b)+")
             .expect("following-scale regex must compile")
     });
 
@@ -194,8 +194,8 @@ fn preceding_number_start(input: &str, language: &Language) -> Option<usize> {
     Some(tokens[start].start)
 }
 
-/// Keep a fraction's numerator, but leave a separate compound count available
-/// for conversion before a bare singular `half` or `quarter`.
+/// Keep a fraction's numerator or mixed count, but leave independent exact
+/// counts available for conversion before a singular `half` or `quarter`.
 fn preceding_fraction_start(input: &str, phrase: &str, language: &Language) -> Option<usize> {
     let start = preceding_number_start(input, language)?;
     let joined = phrase
@@ -205,12 +205,34 @@ fn preceding_fraction_start(input: &str, phrase: &str, language: &Language) -> O
     let plural = phrase
         .split_ascii_whitespace()
         .any(|word| word.eq_ignore_ascii_case("halves") || word.eq_ignore_ascii_case("quarters"));
-    if joined || plural {
+    if joined {
+        // "between X and half a million" joins range bounds, not a mixed
+        // fraction. The preceding exact bound still converts normally.
+        if number_tokens(&input[..start])
+            .last()
+            .is_some_and(|token| token.lowercase == "between")
+        {
+            return None;
+        }
+        return Some(start);
+    }
+    if plural {
         return Some(start);
     }
     let numerator = number_tokens(&input[start..]);
-    (numerator.len() == 1 || numerator.iter().any(|token| token.lowercase == "and"))
-        .then_some(start)
+    let occurrences = find_numbers(numerator.iter(), language, 0.0);
+    let has_article = phrase
+        .split_ascii_whitespace()
+        .any(|word| word.eq_ignore_ascii_case("a"));
+    // An article already supplies the singular fraction's numerator. Preserve
+    // an explicit "one", but do not absorb a nearby chapter or year count.
+    let singular_numerator = numerator.len() == 1
+        && (!has_article || occurrences.last().is_some_and(|number| number.value == 1.0));
+    // `text2num` recognizes a compound count such as "two thousand and five"
+    // as one expression. Separate counts joined by "and" form a mixed fraction.
+    let mixed_numerator =
+        occurrences.len() > 1 && numerator.iter().any(|token| token.lowercase == "and");
+    (singular_numerator || mixed_numerator).then_some(start)
 }
 
 fn number_tokens(input: &str) -> Vec<NumberToken<'_>> {

@@ -463,6 +463,53 @@ fn spoken_number_threshold_preserves_only_values_strictly_below_it() {
 }
 
 #[test]
+fn fraction_guards_preserve_numerators_without_absorbing_independent_counts() {
+    for threshold in [0.0, DEFAULT_NUMBER_THRESHOLD, 5.0] {
+        for (input, expected) in [
+            (
+                "in the year two thousand and five half a million people",
+                "in the year 2005 half a million people",
+            ),
+            (
+                "between two thousand and half a million",
+                "between 2000 and half a million",
+            ),
+            (
+                "chapter five half a million words long",
+                "chapter 5 half a million words long",
+            ),
+            ("two and a half million", "two and a half million"),
+            ("one and half a million", "one and half a million"),
+            ("one half million", "one half million"),
+            ("one quarter of a million", "one quarter of a million"),
+            (
+                "five and one quarter million",
+                "five and one quarter million",
+            ),
+            (
+                "one and three quarters of a million",
+                "one and three quarters of a million",
+            ),
+            (
+                "a few hundred-thousand dollars",
+                "a few hundred-thousand dollars",
+            ),
+        ] {
+            assert_eq!(
+                super::numbers::normalize_spoken_numbers(input, threshold).text,
+                expected,
+                "{threshold}: {input}"
+            );
+        }
+    }
+    assert_eq!(
+        super::numbers::normalize_spoken_numbers("chapter five half a million words long", 10.0)
+            .text,
+        "chapter five half a million words long"
+    );
+}
+
+#[test]
 fn explicit_zero_number_threshold_is_the_opt_out_that_converts_every_value() {
     let cleaner = cleaner_with_number_threshold(Some(0.0));
     assert_eq!(
