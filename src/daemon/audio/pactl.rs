@@ -1,5 +1,6 @@
 //! PulseAudio/PipeWire source enrichment through `pactl`.
 
+use std::io::Read;
 use std::process::{Command, Output, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -59,22 +60,46 @@ pub(crate) fn pactl_default_source_name() -> Option<String> {
 }
 
 fn pactl_output(args: &[&str]) -> Option<Output> {
-    let mut child = Command::new("pactl")
-        .args(args)
+    let mut command = Command::new("pactl");
+    command.args(args);
+    command_output_with_timeout(&mut command, PACTL_TIMEOUT)
+}
+
+fn command_output_with_timeout(command: &mut Command, timeout: Duration) -> Option<Output> {
+    let mut child = command
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
         .ok()?;
-    let deadline = Instant::now() + PACTL_TIMEOUT;
+    let mut stdout = child.stdout.take()?;
+    let reader = thread::spawn(move || {
+        let mut bytes = Vec::new();
+        stdout.read_to_end(&mut bytes).map(|_| bytes)
+    });
+    let deadline = Instant::now() + timeout;
     loop {
-        match child.try_wait().ok()? {
-            Some(_) => return child.wait_with_output().ok(),
-            None if Instant::now() >= deadline => {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                let stdout = reader.join().ok()?.ok()?;
+                return Some(Output {
+                    status,
+                    stdout,
+                    stderr: Vec::new(),
+                });
+            }
+            Ok(None) if Instant::now() >= deadline => {
                 let _ = child.kill();
                 let _ = child.wait();
+                let _ = reader.join();
                 return None;
             }
-            None => thread::sleep(Duration::from_millis(10)),
+            Ok(None) => thread::sleep(Duration::from_millis(10)),
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = reader.join();
+                return None;
+            }
         }
     }
 }
@@ -131,6 +156,7 @@ fn parse_sample_spec(spec: &str) -> (Option<String>, Option<u16>, Option<u32>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
 
     #[test]
     fn pactl_source_parser_extracts_description_and_rate() {
@@ -156,5 +182,28 @@ Source #43
                 sample_format: Some("s24le".to_string()),
             }
         );
+    }
+
+    #[test]
+    fn command_output_drains_large_stdout_while_waiting() {
+        const CHILD: &str = "PARAKIT_PACTL_OUTPUT_TEST_CHILD";
+        if std::env::var_os(CHILD).is_some() {
+            std::io::stdout().write_all(&vec![b'x'; 300_000]).unwrap();
+            return;
+        }
+
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        command
+            .args([
+                "--exact",
+                "daemon::audio::pactl::tests::command_output_drains_large_stdout_while_waiting",
+                "--nocapture",
+            ])
+            .env(CHILD, "1");
+        let output = command_output_with_timeout(&mut command, Duration::from_secs(1))
+            .expect("large output should not block child completion");
+
+        assert!(output.status.success());
+        assert!(output.stdout.len() >= 300_000);
     }
 }
