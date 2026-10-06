@@ -430,6 +430,7 @@ where
                                 }
                             }
                             Err(e) => {
+                                let report = insertion::insertion_error_report(&e);
                                 log_insertion_outcome(
                                     &data_log,
                                     record_id,
@@ -438,7 +439,7 @@ where
                                     transcript_chars,
                                     Some(format!("{e:#}")),
                                     focus_verification.get(),
-                                    None,
+                                    report,
                                 );
                                 log.error(&format!("paste failed: {e:#}"));
                                 state.set_phase("idle");

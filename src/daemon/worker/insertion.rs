@@ -9,6 +9,7 @@ use crate::daemon::notifications::Notifier;
 use anyhow::{Context, Result};
 use parakit::data_log::{DataLogger, InsertionLogFields, RecordId};
 use std::cell::Cell;
+use std::fmt;
 use std::sync::Arc;
 
 const REQUIRE_VERIFIED_FOCUS: bool = cfg!(any(target_os = "macos", target_os = "windows"));
@@ -41,6 +42,14 @@ pub(super) fn insertion_result_remembers_transcript(result: &Result<InsertReport
             ..
         })
     )
+}
+
+/// Return telemetry retained by an insertion error, when the failure happened
+/// after a backend had already posted some direct input.
+pub(super) fn insertion_error_report(error: &anyhow::Error) -> Option<&InsertReport> {
+    error
+        .downcast_ref::<ReportedInsertionError>()
+        .map(|error| &error.report)
 }
 
 /// Write an insertion-outcome telemetry record correlated with the
@@ -154,7 +163,7 @@ pub(crate) fn insert_text(
     ui: (&Logger, &Notifier),
 ) -> Result<InsertReport> {
     let (log, notifier) = ui;
-    match sanitize_for_paste(raw_text, mode) {
+    let result = match sanitize_for_paste(raw_text, mode) {
         PastePlan::Paste(text) => paste_transcript(
             injector,
             &text,
@@ -180,7 +189,11 @@ pub(crate) fn insert_text(
             log.warn(format!("paste skipped by sanitizer: {}", reason.log_tag()));
             Ok(InsertReport::placeholder(InsertOutcome::Skipped, false))
         }
+    };
+    if result.is_err() {
+        notifier.insertion_failed();
     }
+    result
 }
 
 fn paste_transcript(
@@ -310,7 +323,18 @@ fn paste_transcript(
     if let Some(failure) = paste_error.downcast_ref::<crate::daemon::inject::DirectTypingFailure>()
     {
         if !failure.is_blocked() {
-            return Err(paste_error);
+            let failure_reason = format!(
+                "direct typing failed after {} of {} characters: {}",
+                failure.typed_chars(),
+                failure.total_chars(),
+                failure.reason()
+            );
+            log.warn(&failure_reason);
+            return Err(ReportedInsertionError {
+                report: InsertReport::direct_failure(failure.typed_chars(), failure_reason.clone()),
+                message: failure_reason,
+            }
+            .into());
         }
         let reason = failure.reason();
         log.warn(format!(
@@ -376,10 +400,9 @@ fn warn_if_clipboard_restore_failed(
     keep_transcript_clipboard: bool,
     report: &crate::daemon::inject::PasteReport,
 ) {
-    if let Some(diagnostic) = report.diagnostic.as_deref() {
-        log.warn(format!(
-            "clipboard could not be verified after paste ({diagnostic}); current clipboard preserved"
-        ));
+    if let Some(warning) = clipboard_restore_warning(keep_transcript_clipboard, report) {
+        log.warn(warning);
+        return;
     }
     if report.telemetry.acknowledgement_ms.is_some()
         && report.telemetry.clipboard_restored.is_none()
@@ -387,15 +410,32 @@ fn warn_if_clipboard_restore_failed(
     {
         log.verbose("parakit: clipboard restoration skipped because contents changed or could not be verified; current clipboard preserved");
     }
-    if !keep_transcript_clipboard
-        && report.telemetry.clipboard_restored == Some(false)
-        && report.telemetry.acknowledgement_kind != "unverified_focus_lost"
-    {
+    if let Some(diagnostic) = report.diagnostic.as_deref() {
         log.warn(format!(
-            "paste succeeded, but {}; the transcript is likely still on the clipboard",
-            crate::daemon::inject::CLIPBOARD_RESTORE_ERROR
+            "clipboard could not be verified after paste ({diagnostic}); current clipboard preserved"
         ));
     }
+}
+
+fn clipboard_restore_warning(
+    keep_transcript_clipboard: bool,
+    report: &crate::daemon::inject::PasteReport,
+) -> Option<String> {
+    if keep_transcript_clipboard
+        || report.telemetry.clipboard_restored != Some(false)
+        || report.telemetry.acknowledgement_kind == "unverified_focus_lost"
+    {
+        return None;
+    }
+    let diagnostic = report
+        .diagnostic
+        .as_deref()
+        .map(|diagnostic| format!(" ({diagnostic})"))
+        .unwrap_or_default();
+    Some(format!(
+        "paste succeeded, but {}{diagnostic}; the transcript is likely still on the clipboard",
+        crate::daemon::inject::CLIPBOARD_RESTORE_ERROR
+    ))
 }
 
 fn copy_or_block_transcript(
@@ -736,6 +776,20 @@ pub(crate) struct InsertReport {
     pub(crate) failure_reason: Option<String>,
 }
 
+#[derive(Debug)]
+struct ReportedInsertionError {
+    message: String,
+    report: InsertReport,
+}
+
+impl fmt::Display for ReportedInsertionError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for ReportedInsertionError {}
+
 impl InsertReport {
     /// Build a report from a completed [`crate::daemon::inject::PasteReport`],
     /// carrying its real acknowledgement/clipboard telemetry through.
@@ -770,6 +824,7 @@ impl InsertReport {
         }
     }
 
+    #[cfg(any(target_os = "linux", test))]
     fn direct_failure(typed_chars: usize, failure_reason: String) -> Self {
         Self {
             outcome: InsertOutcome::Blocked,

@@ -257,6 +257,41 @@ fn direct_typing_failure_reports_progress_and_alerts() {
 }
 
 #[test]
+fn operational_direct_failure_keeps_progress_telemetry_on_the_error() {
+    let report = InsertReport::direct_failure(3, "X11 key event failed".to_string());
+    let error: anyhow::Error = ReportedInsertionError {
+        message: "direct typing failed after 3 of 8 characters".to_string(),
+        report: report.clone(),
+    }
+    .into();
+
+    assert_eq!(insertion_error_report(&error), Some(&report));
+    assert_eq!(report.typed_chars, Some(3));
+    assert!(report.telemetry.paste_event_posted);
+    assert!(format!("{error:#}").contains("3 of 8"));
+}
+
+#[test]
+fn restore_failure_warning_does_not_claim_the_clipboard_was_preserved() {
+    let report = crate::daemon::inject::PasteReport {
+        outcome: crate::daemon::inject::PasteOutcome::Pasted,
+        telemetry: InsertionTelemetry {
+            paste_event_posted: true,
+            acknowledgement_kind: "target_value_changed",
+            acknowledgement_ms: Some(12),
+            clipboard_restored: Some(false),
+        },
+        diagnostic: Some("clipboard restore write failed".to_string()),
+    };
+
+    let warning = clipboard_restore_warning(false, &report).expect("restore failure warning");
+    assert!(warning.contains(crate::daemon::inject::CLIPBOARD_RESTORE_ERROR));
+    assert!(warning.contains("clipboard restore write failed"));
+    assert!(!warning.contains("current clipboard preserved"));
+    assert_eq!(clipboard_restore_warning(true, &report), None);
+}
+
+#[test]
 fn no_evidence_with_competing_clipboard_alerts_without_claiming_a_block() {
     let report = InsertReport {
         outcome: InsertOutcome::PastedUnverified,

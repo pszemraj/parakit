@@ -82,6 +82,8 @@ impl StagedClipboard {
         }
         let current_text = match clipboard.get_text() {
             Ok(text) => text,
+            #[cfg(target_os = "linux")]
+            Err(err) if super::clipboard_content_unavailable(&err) => return false,
             Err(err) => {
                 self.record_observation_error("could not read clipboard text", err);
                 return false;

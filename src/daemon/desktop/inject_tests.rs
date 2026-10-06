@@ -1796,6 +1796,11 @@ fn clipboard_manager_rich_handoffs_with_identical_text_preserve_files_and_images
             *clipboard.pending_external_write.borrow_mut() = Some(competing.clone());
 
             assert!(!staged.is_current(&mut clipboard));
+            assert_eq!(
+                staged.observation_error(),
+                None,
+                "an image/file clipboard without plain text is a competing payload, not a read failure"
+            );
             assert!(matches!(
                 staged.restore(&mut clipboard, policy).unwrap(),
                 ClipboardRestore::Changed(_)

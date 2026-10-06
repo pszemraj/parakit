@@ -2,9 +2,15 @@
 
 #[cfg(target_os = "macos")]
 use anyhow::Context;
-use std::sync::Arc;
 #[cfg(test)]
 use std::sync::Mutex;
+use std::sync::{mpsc, Arc};
+#[cfg(target_os = "macos")]
+use std::time::{Duration, Instant};
+
+const NOTIFICATION_QUEUE_CAPACITY: usize = 16;
+#[cfg(target_os = "macos")]
+const NOTIFICATION_TIMEOUT: Duration = Duration::from_secs(3);
 
 #[cfg(test)]
 type RecordedNotifications = Arc<Mutex<Vec<(String, String)>>>;
@@ -20,10 +26,19 @@ pub(crate) struct Notifier {
 
 #[derive(Clone)]
 enum NotificationDelivery {
-    Desktop,
+    Desktop(Arc<DesktopDelivery>),
     Silent,
     #[cfg(test)]
     Recording(RecordedNotifications),
+}
+
+struct DesktopDelivery {
+    sender: mpsc::SyncSender<NotificationMessage>,
+}
+
+struct NotificationMessage {
+    summary: String,
+    body: String,
 }
 
 impl Notifier {
@@ -37,10 +52,11 @@ impl Notifier {
     ///
     /// A notifier that falls back to verbose logging when notifications fail.
     pub(crate) fn new(log: Arc<Logger>) -> Self {
-        Self {
-            log,
-            delivery: NotificationDelivery::Desktop,
-        }
+        let delivery = start_desktop_delivery(&log)
+            .map_or(NotificationDelivery::Silent, |sender| {
+                NotificationDelivery::Desktop(Arc::new(DesktopDelivery { sender }))
+            });
+        Self { log, delivery }
     }
 
     /// Build a notifier that deliberately emits no desktop messages.
@@ -93,6 +109,14 @@ impl Notifier {
     /// Notify that a posted paste could not be confirmed.
     pub(crate) fn paste_unconfirmed(&self, reason: impl AsRef<str>) {
         self.show("Paste unconfirmed", reason.as_ref());
+    }
+
+    /// Notify that insertion aborted with an operational error.
+    pub(crate) fn insertion_failed(&self) {
+        self.show(
+            "Insertion failed",
+            "Check the target before retrying. If transcript history is enabled, recover the dictation with parakit copy-last.",
+        );
     }
 
     /// Notify that an offloaded model could not be reopened at PTT start.
@@ -158,23 +182,46 @@ impl Notifier {
                     .unwrap_or_else(|error| error.into_inner())
                     .push((summary.to_owned(), body.as_ref().to_owned()));
             }
-            NotificationDelivery::Desktop => {
-                let summary = summary.to_owned();
-                let body = body.as_ref().to_owned();
-                let log = Arc::clone(&self.log);
-                if let Err(error) = std::thread::Builder::new()
-                    .name("parakit-notification".into())
-                    .spawn(move || {
-                        if let Err(error) = show_notification(&summary, &body) {
-                            log.verbose(format!("parakit: desktop notification failed: {error:#}"));
-                        }
-                    })
-                {
+            NotificationDelivery::Desktop(delivery) => {
+                let message = NotificationMessage {
+                    summary: summary.to_owned(),
+                    body: body.as_ref().to_owned(),
+                };
+                if let Err(error) = delivery.sender.try_send(message) {
                     self.log.verbose(format!(
-                        "parakit: could not start desktop notification: {error}"
+                        "parakit: desktop notification queue unavailable: {error}"
                     ));
                 }
             }
+        }
+    }
+}
+
+fn start_desktop_delivery(log: &Arc<Logger>) -> Option<mpsc::SyncSender<NotificationMessage>> {
+    let (sender, receiver) = mpsc::sync_channel(NOTIFICATION_QUEUE_CAPACITY);
+    let worker_log = Arc::clone(log);
+    match std::thread::Builder::new()
+        .name("parakit-notification".into())
+        .spawn(move || deliver_notifications(receiver, &worker_log, show_notification))
+    {
+        Ok(_) => Some(sender),
+        Err(error) => {
+            log.verbose(format!(
+                "parakit: could not start desktop notification worker: {error}"
+            ));
+            None
+        }
+    }
+}
+
+fn deliver_notifications(
+    receiver: mpsc::Receiver<NotificationMessage>,
+    log: &Logger,
+    mut deliver: impl FnMut(&str, &str) -> anyhow::Result<()>,
+) {
+    while let Ok(message) = receiver.recv() {
+        if let Err(error) = deliver(&message.summary, &message.body) {
+            log.verbose(format!("parakit: desktop notification failed: {error:#}"));
         }
     }
 }
@@ -201,11 +248,26 @@ fn show_notification(summary: &str, body: &str) -> anyhow::Result<()> {
         applescript_quote(body),
         applescript_quote(summary)
     );
-    let status = std::process::Command::new("osascript")
+    let mut child = std::process::Command::new("osascript")
         .arg("-e")
         .arg(&script)
-        .status()
+        .spawn()
         .context("could not spawn osascript for desktop notification")?;
+    let deadline = Instant::now() + NOTIFICATION_TIMEOUT;
+    let status = loop {
+        if let Some(status) = child
+            .try_wait()
+            .context("could not query osascript notification status")?
+        {
+            break status;
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            anyhow::bail!("osascript notification timed out");
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
     anyhow::ensure!(status.success(), "osascript exited with {status}");
     Ok(())
 }
@@ -264,6 +326,43 @@ mod recording_tests {
                 "Inspect the target before retrying.".to_string()
             )]
         );
+    }
+
+    #[test]
+    fn insertion_failure_points_to_conditional_history_recovery() {
+        let (notifier, messages) = Notifier::recording(Arc::new(Logger::new(LogLevel::Quiet)));
+
+        notifier.insertion_failed();
+
+        let messages = messages.lock().unwrap();
+        assert_eq!(messages.len(), 1);
+        let message = &messages[0];
+        assert_eq!(message.0, "Insertion failed");
+        assert!(message.1.contains("If transcript history is enabled"));
+        assert!(message.1.contains("parakit copy-last"));
+    }
+
+    #[test]
+    fn queued_notifications_are_delivered_in_order() {
+        let (sender, receiver) = mpsc::sync_channel(3);
+        for summary in ["first", "second", "third"] {
+            sender
+                .send(NotificationMessage {
+                    summary: summary.to_string(),
+                    body: String::new(),
+                })
+                .unwrap();
+        }
+        drop(sender);
+
+        let log = Logger::new(LogLevel::Quiet);
+        let mut delivered = Vec::new();
+        deliver_notifications(receiver, &log, |summary, _| {
+            delivered.push(summary.to_string());
+            Ok(())
+        });
+
+        assert_eq!(delivered, ["first", "second", "third"]);
     }
 }
 
