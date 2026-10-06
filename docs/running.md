@@ -90,7 +90,7 @@ Stop it:
 parakit stop
 ```
 
-`parakit stop` uses the local daemon control channel, gives in-flight worker and insertion cleanup up to five seconds, and confirms that the process singleton lock was released before printing `stopped`. The client allows about six seconds for that final confirmation, including when the endpoint has already disappeared during shutdown. If a timeout persists, identify the daemon with `pgrep -af parakit` on Unix-like systems or `Get-Process parakit` on Windows, then end that specific process.
+`parakit stop` uses the local daemon control channel, gives in-flight worker and insertion cleanup up to five seconds, and confirms that the process singleton lock was released before printing `stopped`. The client allows about six seconds for that final confirmation, including when the endpoint has already disappeared during shutdown. If startup holds the lock before exposing control, the client first allows a separate bounded discovery window, then gives an acknowledged stop its full cleanup budget. If a timeout persists, identify the daemon with `pgrep -af parakit` on Unix-like systems or `Get-Process parakit` on Windows, then end that specific process.
 
 ## Daemon Control
 
@@ -104,7 +104,7 @@ parakit history
 parakit test-paste "hello from parakit"
 ```
 
-When the control endpoint is absent and the singleton lock is free, `status` and `stop` print `parakit: not running` or `parakit: not running; nothing to stop` and exit successfully. If the endpoint is absent while the lock remains held, `status` reports that the daemon may still be starting or stopping; `stop` waits within its remaining deadline for the lock to release. Commands that need daemon state (`history`, `copy-last`, and `test-paste`) instead report that the daemon is not running and point to `parakit start`.
+When the control endpoint is absent and the singleton lock is free, `status` and `stop` print `parakit: not running` or `parakit: not running; nothing to stop` and exit successfully. If the endpoint is absent while the lock remains held, `status` reports that the daemon may still be starting or stopping; `stop` waits within its remaining deadline, sending the request if startup exposes the endpoint and confirming that the lock releases. Commands that need daemon state (`history`, `copy-last`, and `test-paste`) instead report that the daemon is not running and point to `parakit start`.
 
 The daemon keeps a ring buffer of recent transcripts in memory (`daemon.transcript_history` entries, 10 by default). `copy-last` acts on the most recent one by default; pass `N` (1-based, counting back from the most recent) to reach further back, e.g. `parakit copy-last 3` for the third-most-recent transcript. `parakit history` lists what the daemon currently remembers, newest first; `--limit N` caps how many entries print. The ring disappears when the daemon stops, so treat it as a same-session convenience. `test-paste` runs clipboard staging, focus checks, paste sanitization, and the paste chord without using the microphone.
 

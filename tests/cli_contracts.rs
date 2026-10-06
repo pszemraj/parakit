@@ -258,6 +258,80 @@ fn stop_waits_for_shutdown_after_the_control_endpoint_disappears() {
     assert!(output.stderr.is_empty());
 }
 
+#[cfg(unix)]
+#[test]
+fn stop_reaches_a_daemon_that_exposes_control_after_the_request_starts() {
+    use std::io::{BufRead, BufReader, Write};
+    use std::os::unix::net::UnixListener;
+    use std::time::{Duration, Instant};
+
+    let root = common::fixture_root("cli-contracts", "stop-during-startup");
+    #[cfg(target_os = "linux")]
+    let runtime = root.join("runtime").join("parakit");
+    #[cfg(not(target_os = "linux"))]
+    let runtime = root.join("cache").join("parakit").join("run");
+    std::fs::create_dir_all(&runtime).unwrap();
+    let lock = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(runtime.join("parakit.lock"))
+        .unwrap();
+    fs2::FileExt::lock_exclusive(&lock).unwrap();
+    let mut stop = isolated_parakit(&root)
+        .arg("stop")
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    std::thread::sleep(Duration::from_secs(1));
+    assert!(stop.try_wait().unwrap().is_none());
+
+    let listener = UnixListener::bind(runtime.join("control.sock")).unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(1);
+    let mut delivered = false;
+    while Instant::now() < deadline {
+        match listener.accept() {
+            Ok((mut stream, _)) => {
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(1)))
+                    .unwrap();
+                let mut request = String::new();
+                BufReader::new(&stream).read_line(&mut request).unwrap();
+                assert_eq!(request, "\"stop\"\n");
+                stream
+                    .write_all(b"{\"ok\":{\"message\":\"stopping\"}}\n")
+                    .unwrap();
+                delivered = true;
+                break;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+            Err(error) => panic!("test control endpoint failed: {error}"),
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    if delivered {
+        // Acknowledgement must end transport retries, not the shutdown wait.
+        std::thread::sleep(Duration::from_millis(5050));
+        assert!(stop.try_wait().unwrap().is_none());
+        assert!(matches!(
+            listener.accept(),
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock
+        ));
+    }
+    drop(lock);
+    let output = stop.wait_with_output().unwrap();
+    assert!(
+        delivered,
+        "stop never reached the starting daemon: {output:?}"
+    );
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(output.stdout, b"stopped\n");
+    assert!(output.stderr.is_empty());
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 #[ignore = "requires an X11 desktop and microphone; opens a passive test daemon without recording"]

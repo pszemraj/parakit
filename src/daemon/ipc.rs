@@ -619,7 +619,7 @@ pub(crate) fn run_client(command: IpcCommand, quiet: bool, verbose: bool) -> Res
     match response {
         IpcResponse::Ok { message } => {
             if matches!(&command, IpcCommand::Stop) {
-                wait_for_daemon_stop(stop_deadline)?;
+                wait_for_daemon_stop(stop_deadline, false)?;
             }
             if !quiet {
                 println!("{}", completed_command_message(&command, &message));
@@ -665,7 +665,28 @@ fn completed_command_message<'a>(command: &IpcCommand, server_message: &'a str) 
 }
 
 #[cfg(any(unix, target_os = "windows"))]
-fn wait_for_daemon_stop(deadline: Instant) -> Result<()> {
+fn wait_for_daemon_stop(mut deadline: Instant, stop_pending: bool) -> Result<()> {
+    if stop_pending {
+        // An absent endpoint can mean startup, not just teardown. Deliver the
+        // pending stop within a bounded discovery window, then allow the
+        // daemon its full existing worker/insertion shutdown budget.
+        while preflight::singleton_lock_held()? && Instant::now() < deadline {
+            match send_command(&IpcCommand::Stop) {
+                Ok(IpcResponse::Ok { .. }) => {
+                    deadline = Instant::now()
+                        + STOP_INSERTION_WAIT
+                        + STOP_RESPONSE_GRACE
+                        + IPC_TRANSPORT_TIMEOUT;
+                    break;
+                }
+                Ok(IpcResponse::Err { message }) => bail!("{message}"),
+                Ok(_) => bail!("unexpected daemon stop response"),
+                Err(error) if error.is::<DaemonNotRunning>() => {}
+                Err(error) => return Err(error),
+            }
+            thread::sleep(STOP_LOCK_POLL);
+        }
+    }
     wait_for_daemon_stop_with_probe(deadline, preflight::singleton_lock_held)
 }
 
@@ -732,7 +753,7 @@ fn handle_daemon_not_running(command: &IpcCommand, quiet: bool, deadline: Instan
     };
     match daemon_not_running_disposition(command, singleton_held) {
         DaemonNotRunningDisposition::WaitForStop => {
-            wait_for_daemon_stop(deadline)?;
+            wait_for_daemon_stop(deadline, true)?;
             if !quiet {
                 println!("stopped");
             }
