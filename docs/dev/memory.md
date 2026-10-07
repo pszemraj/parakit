@@ -16,7 +16,7 @@ checkpoints. GPU columns are sampled per-process framebuffer allocations.
 Offloaded endpoints were read 250 ms after session close.
 
 All three run metadata files recorded Parakit revision `5066d9f`, CrispASR pin
-`5f1bb858e803167f1b5fc1eb9a90ffdd1970f7ed`, Rust 1.98.0 dev-profile
+`5f1bb858e803167f1b5fc1eb9a90ffdd1970f7ed` (upstream later rewrote it as `2f8dd068`, the current pin, with identical build inputs), Rust 1.98.0 dev-profile
 builds, the 745,121,632-byte Q8_0 model, and the 5,314,638-byte Juniper WAV.
 The host was Ubuntu 24.04.5, Linux 6.17.0-29-generic, Ryzen 7 7700X, and
 RTX 5090 with NVIDIA driver 595.91.07. Runs were sequential without another
