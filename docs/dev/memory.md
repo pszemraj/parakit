@@ -53,4 +53,6 @@ CUDA, Vulkan, Metal, and their drivers can retain process-wide state or caches
 after a session closes. Residual process memory alone does not prove that the
 inference session remains live or identify an allocator leak.
 
-TODO: Test CUDA reload under VRAM pressure with an isolated daemon while live GPU dictation and other GPU work are paused. The pinned ggml CUDA scratch allocator can abort on allocation failure, so successful normal reload does not establish recovery from GPU exhaustion. `model_idle_minutes = 0` avoids this offload/reload window for GPU-heavy sessions; it does not prevent other GPU out-of-memory failures.
+## Reload Under GPU Memory Pressure
+
+On the RTX 5090 with CUDA, a 55-second dictation needed about 1.5 GB free beyond the retained context: 710 MiB of weights plus a 749 MiB compute buffer and scratch pool. With less than the 710 MiB of weights free, weight allocation failed and reload reported an error. Between that and about 1.5 GB free, reload succeeded, then ggml aborted the process on the first real dictation: the VMM pool's `cuMemCreate` in `ggml-cuda.cu`, or the unchecked `ggml_gallocr_reserve_n` result leading to a `GGML_ASSERT` in `ggml-backend.cpp`. Reload therefore requires the model size plus 1 GiB free before it opens on a GPU (see [idle model offload](../running.md#idle-model-offload)). The check cannot reserve memory, and the compute buffer grows with dictation length, so a GPU filled after reload can still abort a long dictation.

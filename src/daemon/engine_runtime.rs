@@ -50,14 +50,16 @@ impl EngineRecipe {
     fn open_with_policy(&self, log: &Logger, policy: LoadPolicy) -> Result<(Engine, String)> {
         // Startup is preflighted before a missing default model can trigger a
         // download. Reload has no resolver boundary, so it validates here.
+        let mut device_mode = self.device_mode;
         if policy.requires_device_preflight() {
             validate_device_request(self.device_mode, log)?;
+            device_mode = self.reload_device_mode(log)?;
         }
         let started = Instant::now();
         let engine = open_engine(
             &self.model_path,
             self.threads,
-            self.device_mode,
+            device_mode,
             self.verbose,
             policy,
         )
@@ -76,6 +78,86 @@ impl EngineRecipe {
             log,
         )?;
         Ok((engine, device_summary))
+    }
+
+    /// Choose the reload device from the GPU memory free right now.
+    ///
+    /// Other programs may fill the GPU while the model is offloaded, and ggml
+    /// aborts the process when a session cannot grow its GPU buffers. `auto`
+    /// therefore reloads on CPU until the next offload when the GPU lacks room
+    /// for the weights plus a typical dictation's workspace.
+    ///
+    /// # Returns
+    ///
+    /// The device mode to open this session with.
+    ///
+    /// # Errors
+    ///
+    /// Reports `--device gpu` when the GPU lacks that room.
+    fn reload_device_mode(&self, log: &Logger) -> Result<DeviceMode> {
+        #[cfg(feature = "bundled")]
+        {
+            if self.device_mode == DeviceMode::Cpu {
+                return Ok(DeviceMode::Cpu);
+            }
+            let devices = parakit::gpu::devices();
+            let free_bytes = parakit::gpu::preferred_gpu_device_in(&devices)
+                .filter(|device| device.total_bytes > 0)
+                .map(|device| device.free_bytes as u64);
+            let needed_bytes = std::fs::metadata(&self.model_path)
+                .map_or(0, |metadata| metadata.len())
+                + RELOAD_GPU_WORKSPACE_BYTES;
+            let free_mib = free_bytes.unwrap_or_default() / 1_048_576;
+            let needed_mib = needed_bytes / 1_048_576;
+            match reload_device_for_free_memory(self.device_mode, free_bytes, needed_bytes) {
+                Some(mode) if mode != self.device_mode => {
+                    log.warn(format!(
+                        "only {free_mib} MiB GPU memory free (about {needed_mib} MiB needed); reloading the model on CPU until the next offload"
+                    ));
+                    Ok(mode)
+                }
+                Some(mode) => Ok(mode),
+                None => anyhow::bail!(
+                    "only {free_mib} MiB GPU memory free; --device gpu needs about {needed_mib} MiB to reload the model. Free GPU memory, or set model_idle_minutes = 0 to keep the model resident"
+                ),
+            }
+        }
+
+        #[cfg(not(feature = "bundled"))]
+        {
+            let _ = log;
+            Ok(self.device_mode)
+        }
+    }
+}
+
+/// GPU memory to keep free beyond the model weights when reloading: the
+/// compute buffer and scratch pool of a dictation up to about a minute long.
+#[cfg(feature = "bundled")]
+const RELOAD_GPU_WORKSPACE_BYTES: u64 = 1 << 30;
+
+/// Decide the reload device from free GPU memory.
+///
+/// # Arguments
+///
+/// * `requested` - Configured device policy.
+/// * `free_bytes` - Free memory on the preferred GPU, when known.
+/// * `needed_bytes` - Weights plus reload workspace.
+///
+/// # Returns
+///
+/// The device to reload on, or `None` when `--device gpu` lacks room.
+#[cfg(feature = "bundled")]
+fn reload_device_for_free_memory(
+    requested: DeviceMode,
+    free_bytes: Option<u64>,
+    needed_bytes: u64,
+) -> Option<DeviceMode> {
+    match (requested, free_bytes) {
+        (DeviceMode::Cpu, _) | (_, None) => Some(requested),
+        (_, Some(free)) if free >= needed_bytes => Some(requested),
+        (DeviceMode::Auto, Some(_)) => Some(DeviceMode::Cpu),
+        (DeviceMode::Gpu, Some(_)) => None,
     }
 }
 
@@ -215,6 +297,28 @@ fn format_warmup_sequence(sequence: &[usize]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "bundled")]
+    #[test]
+    fn reload_falls_back_to_cpu_only_when_the_gpu_lacks_room() {
+        const NEED: u64 = 2_000;
+        for (requested, free, expected) in [
+            (DeviceMode::Auto, Some(NEED), Some(DeviceMode::Auto)),
+            (DeviceMode::Auto, Some(NEED - 1), Some(DeviceMode::Cpu)),
+            (DeviceMode::Auto, None, Some(DeviceMode::Auto)),
+            (DeviceMode::Gpu, Some(NEED), Some(DeviceMode::Gpu)),
+            (DeviceMode::Gpu, Some(NEED - 1), None),
+            (DeviceMode::Gpu, None, Some(DeviceMode::Gpu)),
+            (DeviceMode::Cpu, Some(0), Some(DeviceMode::Cpu)),
+        ] {
+            assert_eq!(
+                reload_device_for_free_memory(requested, free, NEED),
+                expected,
+                "{requested:?} with {free:?} free"
+            );
+        }
+    }
+
     #[test]
     fn warmup_policy_uses_gpu_sequence_only_for_a_visible_gpu() {
         for mode in [DeviceMode::Cpu, DeviceMode::Auto, DeviceMode::Gpu] {
