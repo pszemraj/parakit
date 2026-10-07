@@ -144,12 +144,22 @@ pub fn devices() -> Vec<DeviceInfo> {
         }
         let device_ref = unsafe { &*device };
         let (free_bytes, total_bytes) = device_memory(device, device_ref);
+        let name = device_ref
+            .iface
+            .get_name
+            .map(|get_name| c_string_lossy(unsafe { get_name(device) }))
+            .unwrap_or_default();
+        #[cfg(target_os = "macos")]
+        let free_bytes = if name.starts_with("MTL") {
+            // ggml subtracts only this process's Metal allocations from the
+            // device budget. Account for other programs using unified memory
+            // too, without claiming more room than Metal itself recommends.
+            macos_available_memory().map_or(free_bytes, |available| free_bytes.min(available))
+        } else {
+            free_bytes
+        };
         out.push(DeviceInfo {
-            name: device_ref
-                .iface
-                .get_name
-                .map(|get_name| c_string_lossy(unsafe { get_name(device) }))
-                .unwrap_or_default(),
+            name,
             description: device_ref
                 .iface
                 .get_description
@@ -211,12 +221,63 @@ fn device_memory(device: GgmlBackendDev, device_ref: &GgmlBackendDevice) -> (usi
             get_memory(device, &mut free_bytes, &mut total_bytes);
         }
     }
-    (free_bytes, total_bytes)
+    normalize_device_memory(free_bytes, total_bytes)
+}
+
+fn normalize_device_memory(free_bytes: usize, total_bytes: usize) -> (usize, usize) {
+    // Metal's unsigned budget-minus-allocation subtraction can wrap when a
+    // process exceeds its recommended working set. Treat that as no room.
+    if total_bytes > 0 && free_bytes > total_bytes {
+        (0, total_bytes)
+    } else {
+        (free_bytes, total_bytes)
+    }
+}
+
+#[cfg(target_os = "macos")]
+// libc deprecates its Mach bindings in favor of a separate crate; these
+// stable OS calls keep this small probe within the existing dependency set.
+#[allow(deprecated)]
+fn macos_available_memory() -> Option<usize> {
+    extern "C" {
+        fn mach_port_deallocate(
+            task: libc::mach_port_t,
+            name: libc::mach_port_t,
+        ) -> libc::kern_return_t;
+    }
+    let mut stats: libc::vm_statistics64 = unsafe { std::mem::zeroed() };
+    let mut count = libc::HOST_VM_INFO64_COUNT;
+    let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
+    let host = unsafe { libc::mach_host_self() };
+    let stats_result = unsafe {
+        libc::host_statistics64(
+            host,
+            libc::HOST_VM_INFO64,
+            (&mut stats as *mut libc::vm_statistics64).cast(),
+            &mut count,
+        )
+    };
+    unsafe { mach_port_deallocate(libc::mach_task_self(), host) };
+    if stats_result != libc::KERN_SUCCESS || page_size <= 0 {
+        return None;
+    }
+    // Speculative pages are already included in free_count. Purgeable pages
+    // can overlap the active/inactive queues, so adding them double-counts.
+    (stats.free_count as usize)
+        .checked_add(stats.inactive_count as usize)?
+        .checked_mul(page_size as usize)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn over_budget_device_memory_does_not_wrap_into_available_space() {
+        assert_eq!(normalize_device_memory(usize::MAX - 1, 1024), (0, 1024));
+        assert_eq!(normalize_device_memory(512, 1024), (512, 1024));
+        assert_eq!(normalize_device_memory(0, 0), (0, 0));
+    }
 
     #[test]
     fn maps_ggml_device_types() {
