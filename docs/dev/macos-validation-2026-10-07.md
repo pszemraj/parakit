@@ -34,8 +34,8 @@ validates the fallback/rejection paths, not literal GPU exhaustion or desktop
 notification display.
 
 A bounded physical-pressure attempt held 7.25 GiB of additional Metal buffers,
-but free and inactive host memory remained at least 5.31 GiB. It did not reach
-the 1600 MiB target, so `auto` correctly stayed on Metal and both WAV
+but native readings of free and inactive host memory stayed above 5.31 GiB.
+It did not reach the 1600 MiB target, so `auto` stayed on Metal and both WAV
 transcripts matched. All buffers were released within 2.422 seconds; kernel
 pressure remained at its initial warning level. Forced-GPU physical stress
 was skipped because the automatic fallback condition was not reached.
@@ -94,9 +94,11 @@ The upstream `block` 0.1.6 dependency also reports a future incompatibility for
 its uninhabited `_NSConcreteStackBlock` static; it does not fail the current
 build or tests.
 
-Literal near-exhaustion testing remains pending because the bounded physical
-allocation did not reach the reload threshold. Physical keyboard input,
-audible cue observation, sleep/wake, held-modifier direct typing, overlap,
+On this unified-memory Mac, literal near-exhaustion stress is outside the
+validation scope. Native host-memory measurements and the real reload guard
+cover memory selection; forced Metal use, automatic CPU fallback, and clean
+forced-GPU rejection passed. Physical keyboard input, audible cue observation,
+sleep/wake, held-modifier direct typing, overlap,
 and clipboard-manager behavior remain human checks. Rich text coverage here
 is HTML; it does not establish restoration of RTF or arbitrary application
 formats. Windows results are independent and unchanged.
