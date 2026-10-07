@@ -637,6 +637,9 @@ impl PhysicalHotkeyState {
 fn physical_hotkey_state(
     physical: &mut X11PhysicalHotkeyProbe,
 ) -> anyhow::Result<PhysicalHotkeyState> {
+    // A failed probe is unknown state, not a physical release. Propagate it
+    // through the loop so the daemon shuts down after releasing worker resources
+    // rather than submitting an in-progress recording on an invented key-up.
     physical
         .state()
         .context("could not refresh physical Ctrl+Space state")

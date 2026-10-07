@@ -119,6 +119,10 @@ impl StagedClipboard {
         let Some(staged) = self.stamp.get() else {
             return false;
         };
+        // macOS/Windows stamps identify writes, so an identical-text republish
+        // still supersedes our staged write. Do not paste or restore over it:
+        // equal plain text cannot establish ownership of the new payload.
+        // X11 exposes only an owner window; its manager handoff is checked below.
         if before != staged && !cfg!(target_os = "linux") {
             return false;
         }

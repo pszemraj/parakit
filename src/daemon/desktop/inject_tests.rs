@@ -1556,8 +1556,8 @@ fn paste_survives_a_failed_clipboard_restore() {
     }
 }
 
-fn competing_clipboard_payloads() -> [MockClipboardContent; 3] {
-    [
+fn competing_clipboard_payloads() -> Vec<MockClipboardContent> {
+    let mut payloads = vec![
         MockClipboardContent::Text("new copy".to_string()),
         MockClipboardContent::Image {
             width: 1,
@@ -1570,7 +1570,13 @@ fn competing_clipboard_payloads() -> [MockClipboardContent; 3] {
             html: "<b>dictated text</b>".to_string(),
             alt_text: Some("dictated text".to_string()),
         },
-    ]
+    ];
+    if !cfg!(target_os = "linux") {
+        // macOS/Windows generations track writes: an identical-text republish
+        // competes with our write, while X11 manager handoffs are tested below.
+        payloads.push(MockClipboardContent::Text("dictated text".to_string()));
+    }
+    payloads
 }
 
 #[test]
