@@ -81,7 +81,15 @@ fn replace_numbers_preserving_literals(input: &str, language: &Language, thresho
     static FOLLOWING_SCALE: OnceLock<Regex> = OnceLock::new();
     let protected_re = PROTECTED_WORD.get_or_init(|| {
         Regex::new(
-            r"(?i)\b(?:(?:and[ \t]+)?(?:a[ \t]+)?(?:half|quarter)(?:[ \t]+of)?(?:[ \t]+a)?[ \t]+(?:hundred|thousand|million|billion|trillion)|(?:halves|quarters)(?:[ \t]+of)?(?:[ \t]+a)?[ \t]+(?:hundred|thousand|million|billion|trillion)|(?:(?:a[ \t]+)?few|several|(?:a[ \t]+)?couple(?:[ \t]+of)?)[ \t]+(?:hundred|thousand|million|billion|trillion)|second|tens|hundreds|thousands|millions|billions|trillions)\b",
+            concat!(
+                r"(?i)\b(?:",
+                r"(?P<scale_first>(?:a[ \t]+)?(?:hundred|thousand|million|billion|trillion)[ \t]+and[ \t]+a[ \t]+(?:half|quarter))|",
+                r"(?:and[ \t]+)?(?:a[ \t]+)?(?:half|quarter)(?:[ \t]+of)?(?:[ \t]+a)?[ \t]+(?:hundred|thousand|million|billion|trillion)|",
+                r"(?:halves|quarters)(?:[ \t]+of)?(?:[ \t]+a)?[ \t]+(?:hundred|thousand|million|billion|trillion)|",
+                r"(?:(?:a[ \t]+)?few|several|(?:a[ \t]+)?couple(?:[ \t]+of)?)[ \t]+(?:hundred|thousand|million|billion|trillion)|",
+                r"(?P<denominator>[a-z]+(?:-[a-z]+)*)[ \t]+of(?:[ \t]+a)?[ \t]+(?:hundred|thousand|million|billion|trillion)|",
+                r"second|tens|hundreds|thousands|millions|billions|trillions)\b",
+            ),
         )
         .expect("protected number-word regex must compile")
     });
@@ -94,10 +102,49 @@ fn replace_numbers_preserving_literals(input: &str, language: &Language, thresho
     });
 
     let protected_words: Vec<_> = protected_re
-        .find_iter(input)
-        .filter(|found| {
-            !found.as_str().eq_ignore_ascii_case("second")
-                || second_is_time_unit(&input[..found.start()], previous_re, language)
+        .captures_iter(input)
+        .filter_map(|captures| {
+            let found = captures.get(0).expect("whole match is required");
+            let mut ordinal_start = None;
+            if let Some(denominator) = captures.name("denominator") {
+                // Use the parser's full ordinal boundary, including spaced
+                // compounds such as "twenty first" or "one hundredth".
+                let tokens = number_tokens(&input[..denominator.end()]);
+                let occurrences = find_numbers(tokens.iter(), language, 0.0);
+                let ordinal = occurrences
+                    .last()
+                    .filter(|number| number.end == tokens.len() && number.is_ordinal);
+                let Some(ordinal) = ordinal else {
+                    // A rejected fraction candidate can contain a literal
+                    // plural magnitude. Preserve that original guard instead
+                    // of letting this broader candidate hide it.
+                    return plural_magnitude(denominator.as_str()).then_some((
+                        denominator,
+                        false,
+                        None,
+                    ));
+                };
+                let mut start = ordinal.start;
+                // Include only the adjacent fraction connectors; text2num
+                // remains responsible for every word inside the denominator.
+                for connector in ["a", "and"] {
+                    if start > 0
+                        && tokens[start - 1].lowercase == connector
+                        && input[tokens[start - 1].end..tokens[start].start]
+                            .bytes()
+                            .all(|byte| matches!(byte, b' ' | b'\t'))
+                    {
+                        start -= 1;
+                    }
+                }
+                ordinal_start = Some(tokens[start].start.min(found.start()));
+            }
+            if found.as_str().eq_ignore_ascii_case("second")
+                && !second_is_time_unit(&input[..found.start()], previous_re, language)
+            {
+                return None;
+            }
+            Some((found, captures.name("scale_first").is_some(), ordinal_start))
         })
         .collect();
     if protected_words.is_empty() {
@@ -108,28 +155,36 @@ fn replace_numbers_preserving_literals(input: &str, language: &Language, thresho
     // and time units while exact quantities elsewhere still convert normally.
     let mut output = String::with_capacity(input.len());
     let mut last_end = 0;
-    for found in protected_words {
-        let prefix = &input[last_end..found.start()];
-        let phrase = found.as_str();
-        let is_plural_magnitude = matches!(
-            phrase.to_ascii_lowercase().as_str(),
-            "tens" | "hundreds" | "thousands" | "millions" | "billions" | "trillions"
-        );
-        let is_fraction = phrase.split_ascii_whitespace().any(|word| {
-            matches!(
-                word.to_ascii_lowercase().as_str(),
-                "half" | "quarter" | "halves" | "quarters"
-            )
-        });
+    for (index, (found, scale_first, ordinal_start)) in protected_words.iter().enumerate() {
+        let phrase_start = ordinal_start.unwrap_or(found.start()).max(last_end);
+        let prefix = &input[last_end..phrase_start];
+        let phrase = &input[phrase_start..found.end()];
+        let is_plural_magnitude = plural_magnitude(phrase);
+        let is_fraction = ordinal_start.is_some()
+            || phrase.split_ascii_whitespace().any(|word| {
+                matches!(
+                    word.to_ascii_lowercase().as_str(),
+                    "half" | "quarter" | "halves" | "quarters"
+                )
+            });
         let protected_start = if is_plural_magnitude || is_fraction {
-            let preceding = if is_fraction {
-                preceding_fraction_start(prefix, phrase, language)
+            let preceding = if *scale_first
+                && phrase
+                    .split_ascii_whitespace()
+                    .next()
+                    .is_some_and(|word| word.eq_ignore_ascii_case("a"))
+            {
+                // The article already starts this quantity; a preceding year
+                // or chapter count is independent and must remain convertible.
+                None
+            } else if is_fraction && !scale_first {
+                preceding_fraction_start(prefix, phrase, language, last_end == 0)
             } else {
                 preceding_number_start(prefix, language)
             };
             last_end + preceding.unwrap_or(prefix.len())
         } else {
-            found.start()
+            phrase_start
         };
         // Adjacent singular scales belong to the same indefinite quantity:
         // parsing a later scale separately invents an exact count.
@@ -141,6 +196,14 @@ fn replace_numbers_preserving_literals(input: &str, language: &Language, thresho
         } else {
             found.end()
         };
+        // A following-scale extension must not swallow the beginning of the
+        // next protected phrase (e.g. "hundreds million and a half").
+        let protected_end =
+            protected_words
+                .get(index + 1)
+                .map_or(protected_end, |(next, _, ordinal_start)| {
+                    protected_end.min(ordinal_start.unwrap_or(next.start()).max(found.end()))
+                });
         output.push_str(&replace_numbers_with_hybrid_magnitudes(
             &input[last_end..protected_start],
             language,
@@ -157,7 +220,15 @@ fn replace_numbers_preserving_literals(input: &str, language: &Language, thresho
     output
 }
 
-/// Return the start of the contiguous trailing number phrases in a text slice,
+/// Whether a word is one of the literal plural magnitude guards.
+fn plural_magnitude(phrase: &str) -> bool {
+    matches!(
+        phrase.to_ascii_lowercase().as_str(),
+        "tens" | "hundreds" | "thousands" | "millions" | "billions" | "trillions"
+    )
+}
+
+/// Return the start of the contiguous trailing cardinal phrases in a text slice,
 /// when followed only by whitespace. The caller keeps that raw span
 /// with the adjacent plural magnitude instead of converting it separately.
 fn preceding_number_start(input: &str, language: &Language) -> Option<usize> {
@@ -165,6 +236,7 @@ fn preceding_number_start(input: &str, language: &Language) -> Option<usize> {
     let occurrences = find_numbers(tokens.iter(), language, 0.0);
     let last = occurrences.last()?;
     if last.start == last.end
+        || last.is_ordinal
         || last.end != tokens.len()
         || !input[tokens[last.end - 1].end..]
             .chars()
@@ -174,6 +246,11 @@ fn preceding_number_start(input: &str, language: &Language) -> Option<usize> {
     }
     let mut start = last.start;
     for previous in occurrences.iter().rev().skip(1) {
+        // A preceding date/chapter ordinal is an independent exact quantity,
+        // even beside a plural magnitude or a phrase such as "quarter million".
+        if previous.is_ordinal {
+            break;
+        }
         let adjacent = previous.end == start
             && input[tokens[previous.end - 1].end..tokens[start].start]
                 .chars()
@@ -195,8 +272,13 @@ fn preceding_number_start(input: &str, language: &Language) -> Option<usize> {
 }
 
 /// Keep a fraction's numerator or mixed count, but leave independent exact
-/// counts available for conversion before a singular `half` or `quarter`.
-fn preceding_fraction_start(input: &str, phrase: &str, language: &Language) -> Option<usize> {
+/// counts available for conversion before a singular fraction.
+fn preceding_fraction_start(
+    input: &str,
+    phrase: &str,
+    language: &Language,
+    at_input_start: bool,
+) -> Option<usize> {
     let start = preceding_number_start(input, language)?;
     let joined = phrase
         .split_ascii_whitespace()
@@ -213,16 +295,18 @@ fn preceding_fraction_start(input: &str, phrase: &str, language: &Language) -> O
         // and a half million"), so retain the conservative fraction guard there.
         if number_tokens(&input[..start])
             .iter()
-            .enumerate()
             .rev()
-            .find(|(_, token)| {
+            .find(|token| {
                 !matches!(
                     token.lowercase.as_str(),
                     "about" | "around" | "approximately" | "roughly" | "nearly" | "almost"
                 )
             })
-            .is_some_and(|(index, token)| {
-                (token.lowercase == "between" || (token.lowercase == "both" && index == 0))
+            .is_some_and(|token| {
+                let before = input[..token.start].trim_end_matches([' ', '\t']);
+                let clause_initial = (at_input_start && before.is_empty())
+                    || before.ends_with(['.', '!', '?', ',', ';', ':', '\n', '\r', '(']);
+                (token.lowercase == "between" || (token.lowercase == "both" && clause_initial))
                     && input[token.end..start]
                         .chars()
                         .all(|ch| !ch.is_whitespace() || matches!(ch, ' ' | '\t'))

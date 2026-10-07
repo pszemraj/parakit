@@ -341,6 +341,14 @@ fn text2num_renders_ordinals_and_spoken_years() {
             ),
             ("Use the one hundredth entry.", "Use the 100th entry."),
             (
+                "in the fourth quarter million-dollar deals closed",
+                "In the 4th quarter million-dollar deals closed",
+            ),
+            (
+                "January fifth thousands of people arrived",
+                "January 5th thousands of people arrived",
+            ),
+            (
                 "The release is from two thousand twenty-four.",
                 "The release is from 2024.",
             ),
@@ -517,6 +525,101 @@ fn fraction_guards_preserve_numerators_without_absorbing_independent_counts() {
             (
                 "chapter five half a million words long",
                 "chapter 5 half a million words long",
+            ),
+            (
+                "Both five and half a million. Both five and half a million.",
+                "Both 5 and half a million. Both 5 and half a million.",
+            ),
+            (
+                "Count them; both five and half a million are allowed",
+                "Count them; both 5 and half a million are allowed",
+            ),
+            (
+                "Count them, both about five and half a million are allowed",
+                "Count them, both about 5 and half a million are allowed",
+            ),
+            (
+                "Next option:\nBoth five and half a million",
+                "Next option:\nBoth 5 and half a million",
+            ),
+            (
+                "January fifth thousands of people",
+                "January 5th thousands of people",
+            ),
+            (
+                "a million and a half parameters",
+                "a million and a half parameters",
+            ),
+            (
+                "two million and a half parameters",
+                "two million and a half parameters",
+            ),
+            (
+                "five million and a quarter rows",
+                "five million and a quarter rows",
+            ),
+            ("a hundred and a half rows", "a hundred and a half rows"),
+            ("It is a third of a million", "It is a third of a million"),
+            ("A fifth of a billion rows", "A fifth of a billion rows"),
+            ("one third of a million", "one third of a million"),
+            (
+                "five and a third of a million",
+                "five and a third of a million",
+            ),
+            (
+                "Both five and a third of a million",
+                "Both 5 and a third of a million",
+            ),
+            (
+                "chapter five a third of a million words long",
+                "chapter 5 a third of a million words long",
+            ),
+            (
+                "a twenty-first of a million rows",
+                "a twenty-first of a million rows",
+            ),
+            (
+                "a twenty first of a million rows",
+                "a twenty first of a million rows",
+            ),
+            (
+                "a one hundredth of a billion rows",
+                "a one hundredth of a billion rows",
+            ),
+            (
+                "a one-hundredth of a billion rows",
+                "a one-hundredth of a billion rows",
+            ),
+            (
+                "five and a twenty first of a million rows",
+                "five and a twenty first of a million rows",
+            ),
+            (
+                "chapter five a twenty first of a million words",
+                "chapter 5 a twenty first of a million words",
+            ),
+            ("a group of a million rows", "a group of 1 million rows"),
+            (
+                "hundreds million and a half rows",
+                "hundreds million and a half rows",
+            ),
+            (
+                "year two thousand a million and a half parameters",
+                "year 2000 a million and a half parameters",
+            ),
+            (
+                "chapter five a million and a half words",
+                "chapter 5 a million and a half words",
+            ),
+            (
+                "nineteen hundreds of a million",
+                "nineteen hundreds of 1 million",
+            ),
+            ("five millions of a billion", "five millions of 1 billion"),
+            ("a hundreds of a million", "a hundreds of 1 million"),
+            (
+                "half a million both five and a half million",
+                "half a million both five and a half million",
             ),
             ("two and a half million", "two and a half million"),
             ("one and half a million", "one and half a million"),
