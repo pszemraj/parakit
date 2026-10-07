@@ -108,6 +108,14 @@ impl Notifier {
         self.show("Model unavailable", model_unavailable_body(error.as_ref()));
     }
 
+    /// Notify that low free GPU memory moved a model reload onto CPU.
+    pub(crate) fn model_reloaded_on_cpu(&self) {
+        self.show(
+            "Low GPU memory",
+            "Not enough GPU memory was free to reload the model, so it runs on CPU until the next idle offload. Free GPU memory, or set model_idle_minutes = 0 to keep the model on the GPU.",
+        );
+    }
+
     /// Notify that both model reload attempts failed and the capture was discarded.
     ///
     /// # Arguments

@@ -143,8 +143,14 @@ fn worker_loop(ctx: WorkerCtx) {
     let recipe = ctx.recipe.clone();
     let reload_log = Arc::clone(&ctx.log);
     let reload_state = Arc::clone(&ctx.state);
+    let reload_notifier = ctx.notifier.clone();
     let load = move || {
         let (engine, device) = recipe.reload(&reload_log)?;
+        // Reload changes the device only when `auto` lacks GPU room; its
+        // stderr warning is invisible to a daemon started in the background.
+        if engine.device_mode() != recipe.device_mode {
+            reload_notifier.model_reloaded_on_cpu();
+        }
         reload_state.update_engine_info(engine.backend(), device);
         Ok(engine)
     };
