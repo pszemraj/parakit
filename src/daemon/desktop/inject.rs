@@ -1758,10 +1758,16 @@ impl ClipboardSnapshot {
 }
 
 fn clipboard_content_unavailable(error: &anyhow::Error) -> bool {
-    matches!(
-        error.downcast_ref::<arboard::Error>(),
-        Some(arboard::Error::ContentNotAvailable)
-    )
+    match error.downcast_ref::<arboard::Error>() {
+        Some(arboard::Error::ContentNotAvailable) => true,
+        // X11 owners such as xclip answer every requested format with their
+        // own data type. arboard 3.6 reports that mismatch as an unknown
+        // error, but the requested format is simply not offered.
+        Some(arboard::Error::Unknown { description }) => {
+            description == "incorrect type received from clipboard"
+        }
+        _ => false,
+    }
 }
 
 /// Copy a borrowed clipboard image payload into an owned, `'static` one.

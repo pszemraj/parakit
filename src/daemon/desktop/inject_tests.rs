@@ -349,6 +349,23 @@ fn snapshot_owner_change_before_staging_still_delivers_transcript() {
     }
 }
 
+#[test]
+fn mismatched_owner_format_counts_as_unavailable_content() {
+    let mismatch = anyhow::Error::new(arboard::Error::Unknown {
+        description: "incorrect type received from clipboard".to_owned(),
+    })
+    .context("could not read clipboard file list");
+    assert!(clipboard_content_unavailable(&mismatch));
+
+    let other = anyhow::Error::new(arboard::Error::Unknown {
+        description: "selection owner timed out".to_owned(),
+    });
+    assert!(!clipboard_content_unavailable(&other));
+    assert!(!clipboard_content_unavailable(&anyhow::Error::new(
+        arboard::Error::ClipboardOccupied
+    )));
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn linux_file_list_adapter_removes_crlf_separator_without_changing_path_bytes() {
