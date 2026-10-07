@@ -179,7 +179,9 @@ Run it again with `--profile aggressive` when changing an aggressive-only pass. 
 
 The audit removes one terminal period by default, matching daemon behavior. Add `--keep-trailing-period` when comparing prose-oriented output separately, and use `--number-threshold VALUE` to replay a non-default isolated-number threshold.
 
-The audit applies built-in rules only. It does not load `config.toml` or `[[rules.user]]`; pass profile, threshold, trailing-period, and disabled-rule choices explicitly. Use `parakit rules test` to validate the currently configured user rules. Number-conversion changes must be evaluated as `text2num` integration and context-formatting changes, not by adding a second local number grammar.
+The audit applies built-in rules only. It does not load `config.toml` or `[[rules.user]]`; pass profile, threshold, trailing-period, and disabled-rule choices explicitly. Use `parakit rules test` to validate the currently configured user rules.
+
+Number recognition belongs to `text2num`. Bounded preservation guards may use context word lists and parsed numbers to keep ambiguous, indefinite or fractional quantities unchanged; do not add a second cardinal grammar. Cover both preservation and nearby exact counts in the existing regression matrix. Personal vocabulary belongs in `config.toml` user rules, rather than built-in number guards.
 
 ## Runtime Smoke Checks
 
@@ -221,3 +223,9 @@ human checks and unavailable backend runs as pending.
 For allocation context, see the [Linux reload measurements and ownership notes](memory.md).
 
 TODO: Reproduce a hung X11 clipboard owner and design bounded snapshot reads that preserve the prior clipboard. Arboard reads formats sequentially and its public API does not distinguish a read timeout from an unavailable format.
+
+TODO: On a native Linux desktop, exercise direct typing and guarded paste with
+physical modifier/focus changes, key-probe failures, keyboard-map changes,
+readiness-error reconnection and clipboard-manager handoffs. Closure tests and
+Mac runs do not establish those X11 results. Windows generation changes and
+delayed rendering also need native clipboard-manager or RDP verification.
