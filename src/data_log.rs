@@ -6,7 +6,7 @@ use chrono::{Local, NaiveDate, SecondsFormat, Utc};
 use parking_lot::Mutex;
 use serde::Serialize;
 use std::fs::{create_dir_all, File, OpenOptions};
-use std::io::Write;
+use std::io::{Seek, SeekFrom, Write};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -294,7 +294,8 @@ impl DataLogger {
         let path = self.dir.join(file_name(date));
         let file = OpenOptions::new()
             .create(true)
-            .append(true)
+            .write(true)
+            .truncate(false)
             .open(&path)
             .with_context(|| format!("failed to open log file {}", path.display()))?;
         Ok(file)
@@ -326,7 +327,9 @@ fn append_with_rollback<F>(file: &mut File, write: F) -> std::io::Result<()>
 where
     F: FnOnce(&mut File) -> std::io::Result<()>,
 {
-    let original_len = file.metadata()?.len();
+    // Windows append-only handles cannot truncate a failed partial write.
+    // The logger's state mutex serializes writes; position each one at EOF.
+    let original_len = file.seek(SeekFrom::End(0))?;
     if let Err(error) = write(file) {
         file.set_len(original_len)?;
         return Err(error);
@@ -675,15 +678,11 @@ mod tests {
     #[test]
     fn failed_partial_append_restores_the_previous_file() {
         let dir = crate::test_support::fixture_root("parakit-log-test", "partial-write-rollback");
-        let path = dir.join("records.jsonl");
-        let mut file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)
-            .expect("open rollback fixture");
-        file.write_all(b"{\"valid\":true}\n")
-            .expect("write existing record");
-        file.flush().expect("flush existing record");
+        let date = Local::now().date_naive();
+        let path = dir.join(file_name(date));
+        std::fs::write(&path, b"{\"valid\":true}\n").expect("write existing record");
+        let logger = DataLogger::new(dir);
+        let mut file = logger.open_for_date(date).expect("open rollback fixture");
 
         let result = append_with_rollback(&mut file, |file| {
             file.write_all(b"{\"partial\":")?;
@@ -694,10 +693,16 @@ mod tests {
             result.expect_err("injected append should fail").to_string(),
             "injected write failure"
         );
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("read rolled-back fixture"),
+            "{\"valid\":true}\n"
+        );
+        append_with_rollback(&mut file, |file| file.write_all(b"{\"next\":true}\n"))
+            .expect("append after rollback");
         drop(file);
         assert_eq!(
             std::fs::read_to_string(path).expect("read rolled-back fixture"),
-            "{\"valid\":true}\n"
+            "{\"valid\":true}\n{\"next\":true}\n"
         );
     }
 
