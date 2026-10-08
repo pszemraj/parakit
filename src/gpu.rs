@@ -149,6 +149,20 @@ pub fn devices() -> Vec<DeviceInfo> {
             .get_name
             .map(|get_name| c_string_lossy(unsafe { get_name(device) }))
             .unwrap_or_default();
+        let description = device_ref
+            .iface
+            .get_description
+            .map(|get_description| c_string_lossy(unsafe { get_description(device) }))
+            .unwrap_or_default();
+        #[cfg(target_os = "windows")]
+        let free_bytes = if description.starts_with("NVIDIA") {
+            // CUDA's WDDM reading does not include other processes' allocations.
+            // The driver's device-wide reading also covers NVIDIA Vulkan.
+            windows_nvidia_free_memory(&description)
+                .map_or(free_bytes, |available| free_bytes.min(available))
+        } else {
+            free_bytes
+        };
         #[cfg(target_os = "macos")]
         let free_bytes = if name.starts_with("MTL") {
             // ggml subtracts only this process's Metal allocations from the
@@ -160,11 +174,7 @@ pub fn devices() -> Vec<DeviceInfo> {
         };
         out.push(DeviceInfo {
             name,
-            description: device_ref
-                .iface
-                .get_description
-                .map(|get_description| c_string_lossy(unsafe { get_description(device) }))
-                .unwrap_or_default(),
+            description,
             kind: DeviceKind::from(
                 device_ref
                     .iface
@@ -232,6 +242,96 @@ fn normalize_device_memory(free_bytes: usize, total_bytes: usize) -> (usize, usi
     } else {
         (free_bytes, total_bytes)
     }
+}
+
+/// Read device-wide NVIDIA free memory rather than a WDDM process budget.
+///
+/// # Returns
+///
+/// Free bytes for the matching adapter, or none when the driver probe is unavailable.
+#[cfg(target_os = "windows")]
+fn windows_nvidia_free_memory(description: &str) -> Option<usize> {
+    use std::ffi::c_void;
+    use windows::core::{s, w};
+    use windows::Win32::Foundation::{FreeLibrary, HMODULE};
+    use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
+
+    type Proc = unsafe extern "system" fn() -> isize;
+    type Init = unsafe extern "C" fn() -> u32;
+    type Count = unsafe extern "C" fn(*mut u32) -> u32;
+    type Device = unsafe extern "C" fn(u32, *mut *mut c_void) -> u32;
+    type Name = unsafe extern "C" fn(*mut c_void, *mut c_char, u32) -> u32;
+    type Memory = unsafe extern "C" fn(*mut c_void, *mut NvmlMemory) -> u32;
+
+    #[repr(C)]
+    struct NvmlMemory {
+        total: u64,
+        free: u64,
+        used: u64,
+    }
+
+    struct Library(HMODULE);
+    impl Drop for Library {
+        fn drop(&mut self) {
+            unsafe {
+                let _ = FreeLibrary(self.0);
+            }
+        }
+    }
+
+    // NVML ships with the NVIDIA display driver; no import library or toolkit
+    // is required at runtime. Keep the module alive through every native call.
+    let library = Library(unsafe { LoadLibraryW(w!("nvml.dll")) }.ok()?);
+    // SAFETY: These signatures match the driver's public NVML C API.
+    let (init, shutdown, count, device, name, memory) = unsafe {
+        (
+            std::mem::transmute::<Proc, Init>(GetProcAddress(library.0, s!("nvmlInit_v2"))?),
+            std::mem::transmute::<Proc, Init>(GetProcAddress(library.0, s!("nvmlShutdown"))?),
+            std::mem::transmute::<Proc, Count>(GetProcAddress(
+                library.0,
+                s!("nvmlDeviceGetCount_v2"),
+            )?),
+            std::mem::transmute::<Proc, Device>(GetProcAddress(
+                library.0,
+                s!("nvmlDeviceGetHandleByIndex_v2"),
+            )?),
+            std::mem::transmute::<Proc, Name>(GetProcAddress(library.0, s!("nvmlDeviceGetName"))?),
+            std::mem::transmute::<Proc, Memory>(GetProcAddress(
+                library.0,
+                s!("nvmlDeviceGetMemoryInfo"),
+            )?),
+        )
+    };
+    if unsafe { init() } != 0 {
+        return None;
+    }
+    let available = (|| {
+        let mut device_count = 0;
+        if unsafe { count(&mut device_count) } != 0 {
+            return None;
+        }
+        for index in 0..device_count {
+            let mut handle = std::ptr::null_mut();
+            let mut buffer = [0; 96];
+            if unsafe { device(index, &mut handle) } != 0
+                || unsafe { name(handle, buffer.as_mut_ptr(), buffer.len() as u32) } != 0
+                || c_string_lossy(buffer.as_ptr()) != description
+            {
+                continue;
+            }
+            let mut info = NvmlMemory {
+                total: 0,
+                free: 0,
+                used: 0,
+            };
+            if unsafe { memory(handle, &mut info) } == 0 {
+                return usize::try_from(info.free).ok();
+            }
+        }
+        None
+    })();
+    unsafe { shutdown() };
+    available
 }
 
 #[cfg(target_os = "macos")]
