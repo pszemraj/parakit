@@ -746,6 +746,8 @@ mod tests {
                     }
                     Err(err) => panic!("test server accept failed: {err}"),
                 };
+                // Windows inherits the listener's nonblocking mode on accept.
+                stream.set_nonblocking(false).unwrap();
                 requests += 1;
 
                 let mut request = Vec::new();
