@@ -130,7 +130,7 @@ fn reload_failure_is_visible_and_next_start_retries_once() {
 }
 
 #[test]
-fn admission_waits_until_destructor_finishes() {
+fn idle_decision_serializes_activity_admission() {
     let gate = ActivityGate::new();
     gate.ready();
     let (entered_tx, entered_rx) = bounded(1);

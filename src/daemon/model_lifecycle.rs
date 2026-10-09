@@ -77,10 +77,10 @@ struct Activity {
     idle_since: Instant,
 }
 
-/// Serializes session destruction with admission of new recording/insertion work.
+/// Serializes the idle offload decision with admission of recording/insertion work.
 ///
-/// The lock is held only for bookkeeping and destruction, never during loading,
-/// capture, inference, or paste. A token follows audio through the bounded queue.
+/// The lock covers bookkeeping and session removal, never native destruction,
+/// loading, capture, inference, or paste. A token follows audio through the queue.
 pub(crate) struct ActivityGate {
     inner: Mutex<Activity>,
     changed_tx: Sender<()>,
@@ -160,8 +160,8 @@ impl ActivityGate {
         if !activity.ready || activity.count != 0 || activity.idle_since.elapsed() < timeout {
             return false;
         }
-        // Admission cannot race the destructor. Do not hold this lock while
-        // publishing status (which has a different mutex) or reopening a model.
+        // Commit session removal before admitting new work. Native destruction
+        // runs after unlocking so a new recording can start immediately.
         unload();
         true
     }
@@ -265,11 +265,11 @@ impl<T> ModelSlot<T> {
         publish(self.status());
     }
 
-    /// Destroy the session under the activity gate once its timeout expires.
+    /// Remove an idle session under the activity gate, then destroy it unlocked.
     ///
     /// # Arguments
     ///
-    /// * `gate` - Serializes destruction with recording/insertion admission.
+    /// * `gate` - Serializes session removal with recording/insertion admission.
     /// * `timeout` - Idle interval, or none to keep the session resident.
     ///
     /// # Returns
@@ -279,9 +279,13 @@ impl<T> ModelSlot<T> {
         let Some(timeout) = timeout.filter(|_| self.engine.is_some()) else {
             return false;
         };
-        if !gate.unload_if_idle(timeout, || drop(self.engine.take())) {
+        let mut retired = None;
+        if !gate.unload_if_idle(timeout, || retired = self.engine.take()) {
             return false;
         }
+        // The worker finishes destruction before consuming a queued start/reload,
+        // while the recording coordinator can capture and release during teardown.
+        drop(retired);
         self.status.residency = Residency::Offloaded;
         true
     }

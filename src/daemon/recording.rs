@@ -290,6 +290,78 @@ mod tests {
 
     const EVENT_TIMEOUT: Duration = Duration::from_secs(2);
 
+    #[test]
+    fn capture_starts_and_stops_while_idle_session_destruction_is_blocked() {
+        struct SlowSession {
+            entered: Sender<()>,
+            release: Receiver<()>,
+        }
+        impl Drop for SlowSession {
+            fn drop(&mut self) {
+                self.entered.send(()).unwrap();
+                self.release.recv().unwrap();
+            }
+        }
+
+        let activity = ActivityGate::new();
+        activity.ready();
+        let (entered_tx, entered_rx) = bounded(1);
+        let (release_tx, release_rx) = bounded(1);
+        let unload_activity = Arc::clone(&activity);
+        let unload = thread::spawn(move || {
+            let mut model = super::super::model_lifecycle::ModelSlot::new(
+                SlowSession {
+                    entered: entered_tx,
+                    release: release_rx,
+                },
+                1,
+            );
+            model.offload(&unload_activity, Some(Duration::ZERO))
+        });
+        entered_rx.recv_timeout(EVENT_TIMEOUT).unwrap();
+
+        let audio = AudioHandle::test_handle();
+        let observed_audio = audio.clone();
+        let log = Logger::new(LogLevel::Quiet);
+        let (hotkey_tx, hotkey_rx) = unbounded();
+        let (worker_tx, worker_rx) = bounded(2);
+        let coordinator_activity = Arc::clone(&activity);
+        let coordinator = thread::spawn(move || {
+            recording_coordinator_loop(hotkey_rx, worker_tx, audio, &log, coordinator_activity);
+        });
+        let started_at = Instant::now();
+        hotkey_tx
+            .send(HotkeyTransition::Pressed { at: started_at })
+            .unwrap();
+        let started = worker_rx.recv_timeout(EVENT_TIMEOUT);
+        let captured_before_destruction_finished = observed_audio.test_is_recording();
+        hotkey_tx
+            .send(HotkeyTransition::Released { at: Instant::now() })
+            .unwrap();
+        let stopped = if started.is_ok() {
+            worker_rx.recv_timeout(EVENT_TIMEOUT).ok()
+        } else {
+            None
+        };
+        // Release and join even when the regression fails, so no thread stays blocked.
+        release_tx.send(()).unwrap();
+        drop(hotkey_tx);
+        assert!(unload.join().unwrap());
+        coordinator.join().unwrap();
+        assert!(matches!(started.unwrap(), WorkerEvent::Started { .. }));
+        assert!(captured_before_destruction_finished);
+        assert!(!observed_audio.test_is_recording());
+        assert_eq!(activity.remaining(Some(Duration::ZERO)), None);
+        assert_empty_stopped_event(
+            stopped.expect("release must finish during destruction"),
+            started_at,
+        );
+        assert_eq!(
+            activity.remaining(Some(Duration::ZERO)),
+            Some(Duration::ZERO)
+        );
+    }
+
     fn assert_empty_stopped_event(event: WorkerEvent, started_at: Instant) {
         match event {
             WorkerEvent::Stopped {
