@@ -651,15 +651,17 @@ struct X11PhysicalHotkeyProbe {
     mapping: X11HotkeyMapping,
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", test))]
 #[derive(Debug, Eq, PartialEq)]
 struct X11HotkeyMapping {
     space: Vec<u8>,
     control: Vec<u8>,
+    needs_refresh: bool,
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", test))]
 impl X11HotkeyMapping {
+    #[cfg(target_os = "linux")]
     fn resolve(conn: &x11rb::rust_connection::RustConnection) -> anyhow::Result<Self> {
         let space = super::x11::keycodes_for_keysyms(conn, &[super::x11::SPACE_KEYSYM])
             .context("could not resolve X11 Space keycodes")?;
@@ -670,14 +672,25 @@ impl X11HotkeyMapping {
         .context("could not resolve X11 Control keycodes")?;
         anyhow::ensure!(!space.is_empty(), "could not resolve X11 Space keycode");
         anyhow::ensure!(!control.is_empty(), "could not resolve X11 Control keycode");
-        Ok(Self { space, control })
+        Ok(Self {
+            space,
+            control,
+            needs_refresh: false,
+        })
     }
 
     fn refresh_with(
         &mut self,
+        mapping_changed: bool,
         resolve: impl FnOnce() -> anyhow::Result<Self>,
     ) -> anyhow::Result<()> {
-        *self = resolve()?;
+        // MappingNotify is consumed before resolution. Keep it pending on failure
+        // so the next physical-state query retries without needing another event.
+        self.needs_refresh |= mapping_changed;
+        if self.needs_refresh {
+            *self = resolve()?;
+            self.needs_refresh = false;
+        }
         Ok(())
     }
 }
@@ -695,15 +708,16 @@ impl X11PhysicalHotkeyProbe {
     fn state(&mut self) -> anyhow::Result<PhysicalHotkeyState> {
         use x11rb::protocol::xproto::ConnectionExt as _;
 
-        if super::x11::mapping_changed(&self.conn)? {
-            // Each X11 connection owns its MappingNotify queue and mapping cache;
-            // the paste connection cannot share this refresh.
-            if let Err(err) = self
-                .mapping
-                .refresh_with(|| X11HotkeyMapping::resolve(&self.conn))
-            {
-                eprintln!("parakit: could not refresh X11 hotkey mapping; keeping previous keycodes: {err:#}");
-            }
+        // Each X11 connection owns its MappingNotify queue and mapping cache;
+        // the paste connection cannot share this refresh.
+        let mapping_changed = super::x11::mapping_changed(&self.conn)?;
+        if let Err(err) = self
+            .mapping
+            .refresh_with(mapping_changed, || X11HotkeyMapping::resolve(&self.conn))
+        {
+            eprintln!(
+                "parakit: could not refresh X11 hotkey mapping; keeping previous keycodes: {err:#}"
+            );
         }
 
         let reply = self

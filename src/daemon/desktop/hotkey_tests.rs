@@ -541,33 +541,48 @@ fn x11_keymap_bit_probe_detects_down_keycodes() {
     assert!(!super::super::x11::keycode_down(&keys, 255));
 }
 
-#[cfg(target_os = "linux")]
 #[test]
-fn x11_hotkey_mapping_refresh_keeps_complete_previous_mapping_on_failure() {
+fn x11_hotkey_mapping_refresh_retries_failure_without_another_mapping_event() {
     let mut mapping = X11HotkeyMapping {
         space: vec![65],
         control: vec![37, 105],
-    };
-    let previous = X11HotkeyMapping {
-        space: vec![65],
-        control: vec![37, 105],
+        needs_refresh: false,
     };
 
     assert!(mapping
-        .refresh_with(|| anyhow::bail!("Control keycodes unavailable"))
+        .refresh_with(true, || anyhow::bail!("Control keycodes unavailable"))
         .is_err());
-    assert_eq!(mapping, previous);
+    assert_eq!(mapping.space, [65]);
+    assert_eq!(mapping.control, [37, 105]);
+    assert!(mapping.needs_refresh);
+
+    assert!(mapping
+        .refresh_with(false, || anyhow::bail!(
+            "Control keycodes still unavailable"
+        ))
+        .is_err());
+    assert_eq!(mapping.space, [65]);
+    assert_eq!(mapping.control, [37, 105]);
+    assert!(mapping.needs_refresh);
 
     mapping
-        .refresh_with(|| {
+        .refresh_with(false, || {
             Ok(X11HotkeyMapping {
                 space: vec![66],
                 control: vec![38, 106],
+                needs_refresh: false,
             })
         })
         .unwrap();
     assert_eq!(mapping.space, [66]);
     assert_eq!(mapping.control, [38, 106]);
+    assert!(!mapping.needs_refresh);
+
+    mapping
+        .refresh_with(false, || {
+            panic!("successful refresh must clear the pending retry")
+        })
+        .unwrap();
 }
 
 #[cfg(target_os = "linux")]
