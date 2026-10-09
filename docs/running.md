@@ -71,7 +71,7 @@ parakit --quiet &
 disown
 ```
 
-`--quiet` suppresses normal stdout, including startup lines and transcripts, and informational model-loader output during reload. Errors and warnings still go to stderr. Use `--verbose` for native loader diagnostics.
+`--quiet` suppresses normal stdout, including startup lines and transcripts. Errors and warnings still go to stderr. Native model-loader output is separate from `--quiet`: unless `--verbose` is set, startup discards it and idle reloads omit Parakeet's informational loader lines. Use `--verbose` for native loader diagnostics.
 
 On Linux, start parakit from a terminal in the current desktop session. Tmux, X11 auth, and evdev details are in [linux-desktop.md](linux-desktop.md).
 
