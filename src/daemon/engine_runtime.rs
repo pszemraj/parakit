@@ -196,8 +196,11 @@ fn open_engine(
         LoadPolicy::Startup => {
             super::stderr::with_stderr_suppressed(|| Engine::open(path, threads, device_mode))
         }
-        // Reload runs beside capture, cues, and IPC, so their errors must survive.
-        LoadPolicy::Reload => Engine::open(path, threads, device_mode),
+        // Reload runs beside capture, cues, and IPC. Remove only the loader's
+        // direct informational prints; native and concurrent errors must survive.
+        LoadPolicy::Reload => super::stderr::with_parakeet_info_suppressed(|| {
+            Engine::open(path, threads, device_mode)
+        }),
     }
 }
 
