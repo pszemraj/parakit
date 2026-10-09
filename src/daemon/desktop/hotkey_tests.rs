@@ -542,7 +542,7 @@ fn x11_keymap_bit_probe_detects_down_keycodes() {
 }
 
 #[test]
-fn x11_hotkey_mapping_refresh_retries_failure_without_another_mapping_event() {
+fn x11_hotkey_mapping_refresh_retries_failure_and_reports_once_per_mapping_event() {
     let mut mapping = X11HotkeyMapping {
         space: vec![65],
         control: vec![37, 105],
@@ -551,21 +551,30 @@ fn x11_hotkey_mapping_refresh_retries_failure_without_another_mapping_event() {
 
     assert!(mapping
         .refresh_with(true, || anyhow::bail!("Control keycodes unavailable"))
-        .is_err());
+        .is_some());
+    assert_eq!(mapping.space, [65]);
+    assert_eq!(mapping.control, [37, 105]);
+    assert!(mapping.needs_refresh);
+
+    // A poll without a new MappingNotify retries but does not report again.
+    let mut retried = false;
+    assert!(mapping
+        .refresh_with(false, || {
+            retried = true;
+            anyhow::bail!("Control keycodes still unavailable")
+        })
+        .is_none());
+    assert!(retried);
     assert_eq!(mapping.space, [65]);
     assert_eq!(mapping.control, [37, 105]);
     assert!(mapping.needs_refresh);
 
     assert!(mapping
-        .refresh_with(false, || anyhow::bail!(
-            "Control keycodes still unavailable"
-        ))
-        .is_err());
-    assert_eq!(mapping.space, [65]);
-    assert_eq!(mapping.control, [37, 105]);
+        .refresh_with(true, || anyhow::bail!("Control keycodes unavailable again"))
+        .is_some());
     assert!(mapping.needs_refresh);
 
-    mapping
+    assert!(mapping
         .refresh_with(false, || {
             Ok(X11HotkeyMapping {
                 space: vec![66],
@@ -573,16 +582,16 @@ fn x11_hotkey_mapping_refresh_retries_failure_without_another_mapping_event() {
                 needs_refresh: false,
             })
         })
-        .unwrap();
+        .is_none());
     assert_eq!(mapping.space, [66]);
     assert_eq!(mapping.control, [38, 106]);
     assert!(!mapping.needs_refresh);
 
-    mapping
+    assert!(mapping
         .refresh_with(false, || {
             panic!("successful refresh must clear the pending retry")
         })
-        .unwrap();
+        .is_none());
 }
 
 #[cfg(target_os = "linux")]

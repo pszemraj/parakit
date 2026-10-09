@@ -683,15 +683,23 @@ impl X11HotkeyMapping {
         &mut self,
         mapping_changed: bool,
         resolve: impl FnOnce() -> anyhow::Result<Self>,
-    ) -> anyhow::Result<()> {
+    ) -> Option<anyhow::Error> {
         // MappingNotify is consumed before resolution. Keep it pending on failure
         // so the next physical-state query retries without needing another event.
         self.needs_refresh |= mapping_changed;
-        if self.needs_refresh {
-            *self = resolve()?;
-            self.needs_refresh = false;
+        if !self.needs_refresh {
+            return None;
         }
-        Ok(())
+        match resolve() {
+            Ok(mapping) => {
+                *self = mapping;
+                self.needs_refresh = false;
+                None
+            }
+            // Retries run on every hotkey poll. Report a failure once per
+            // mapping change rather than at the poll rate.
+            Err(err) => mapping_changed.then_some(err),
+        }
     }
 }
 
@@ -711,7 +719,7 @@ impl X11PhysicalHotkeyProbe {
         // Each X11 connection owns its MappingNotify queue and mapping cache;
         // the paste connection cannot share this refresh.
         let mapping_changed = super::x11::mapping_changed(&self.conn)?;
-        if let Err(err) = self
+        if let Some(err) = self
             .mapping
             .refresh_with(mapping_changed, || X11HotkeyMapping::resolve(&self.conn))
         {
