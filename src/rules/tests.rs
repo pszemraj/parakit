@@ -508,11 +508,6 @@ fn fraction_guards_preserve_numerators_without_absorbing_independent_counts() {
             ("a half a million rows", "a half a million rows"),
             ("half a million rows", "half a million rows"),
             (
-                "seven hundred\n\nthousands of people",
-                "seven hundred\n\nthousands of people",
-            ),
-            ("a few hundred\nmillion", "a few hundred\nmillion"),
-            (
                 "in the year two thousand and five half a million people",
                 "in the year 2005 half a million people",
             ),
@@ -688,6 +683,32 @@ fn fraction_guards_preserve_numerators_without_absorbing_independent_counts() {
             .text,
         "chapter five half a million words long"
     );
+}
+
+#[test]
+fn line_breaks_end_spoken_numbers_and_their_guards() {
+    for threshold in [0.0, DEFAULT_NUMBER_THRESHOLD, 5.0] {
+        for (input, expected) in [
+            (
+                "seven hundred\n\nthousands of people",
+                "700\n\nthousands of people",
+            ),
+            (
+                "a few hundred\nthousands of people",
+                "a few hundred\nthousands of people",
+            ),
+            ("seven hundred\nthousand people", "700\n1000 people"),
+            ("twenty\nfive people", "20\n5 people"),
+            ("seven hundred\r\nthousand people", "700\r\n1000 people"),
+            ("minus\nfive", "minus\n5"),
+        ] {
+            assert_eq!(
+                super::numbers::normalize_spoken_numbers(input, threshold).text,
+                expected,
+                "{threshold}: {input:?}"
+            );
+        }
+    }
 }
 
 #[test]

@@ -34,7 +34,8 @@ impl Token for &NumberToken<'_> {
 /// `text2num`'s full-digit rendering. Contexts where `"second"` is a time
 /// unit rather than an ordinal, indefinite magnitudes such as `"hundreds"`
 /// and `"a few million"`, and fractional quantities such as `"half a
-/// million"`, are protected from conversion.
+/// million"`, are protected from conversion. A line break ends every
+/// expression: each line is converted independently and every break is kept.
 ///
 /// # Arguments
 ///
@@ -52,8 +53,18 @@ impl Token for &NumberToken<'_> {
 /// `Result`, and never returns an `Err`.
 pub(crate) fn normalize_spoken_numbers(input: &str, threshold: f64) -> TransformResult {
     let language = Language::english();
-    let text = replace_numbers_preserving_literals(input, &language, threshold);
-    let text = render_signed_numbers(text);
+    // text2num tokenizes across all whitespace, so a multi-line input would
+    // join "twenty\nfive" into "25" and drop the break. Guards would likewise
+    // absorb a count from the previous paragraph.
+    let text = input
+        .split('\n')
+        .map(|line| {
+            render_signed_numbers(replace_numbers_preserving_literals(
+                line, &language, threshold,
+            ))
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
     TransformResult {
         matches: usize::from(text != input),
         text,
