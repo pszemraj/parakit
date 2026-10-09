@@ -6,7 +6,9 @@ use chrono::{Local, NaiveDate, SecondsFormat, Utc};
 use parking_lot::Mutex;
 use serde::Serialize;
 use std::fs::{create_dir_all, File, OpenOptions};
-use std::io::{Seek, SeekFrom, Write};
+use std::io::Write;
+#[cfg(windows)]
+use std::io::{Seek, SeekFrom};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -292,10 +294,15 @@ impl DataLogger {
         create_dir_all(&self.dir)
             .with_context(|| format!("failed to create log dir {}", self.dir.display()))?;
         let path = self.dir.join(file_name(date));
-        let file = OpenOptions::new()
-            .create(true)
-            .write(true)
-            .truncate(false)
+        let mut options = OpenOptions::new();
+        options.create(true);
+        // Preserve OS append positioning across independent Unix loggers.
+        #[cfg(not(windows))]
+        options.append(true);
+        // Windows append-only handles cannot truncate a failed partial write.
+        #[cfg(windows)]
+        options.write(true).truncate(false);
+        let file = options
             .open(&path)
             .with_context(|| format!("failed to open log file {}", path.display()))?;
         Ok(file)
@@ -327,8 +334,10 @@ fn append_with_rollback<F>(file: &mut File, write: F) -> std::io::Result<()>
 where
     F: FnOnce(&mut File) -> std::io::Result<()>,
 {
-    // Windows append-only handles cannot truncate a failed partial write.
-    // The logger's state mutex serializes writes; position each one at EOF.
+    #[cfg(not(windows))]
+    let original_len = file.metadata()?.len();
+    // Windows uses a writable handle for rollback, so position each write at EOF.
+    #[cfg(windows)]
     let original_len = file.seek(SeekFrom::End(0))?;
     if let Err(error) = write(file) {
         file.set_len(original_len)?;
@@ -703,6 +712,35 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(path).expect("read rolled-back fixture"),
             "{\"valid\":true}\n{\"next\":true}\n"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn independent_handles_append_after_another_logger_writes() {
+        let dir = crate::test_support::fixture_root("parakit-log-test", "independent-append");
+        let date = Local::now().date_naive();
+        let path = dir.join(file_name(date));
+        let logger = DataLogger::new(dir);
+        let mut first = logger
+            .open_for_date(date)
+            .expect("open first logger handle");
+        let mut second = logger
+            .open_for_date(date)
+            .expect("open second logger handle");
+
+        append_with_rollback(&mut first, |first| {
+            // Another process can append after this write observed the old EOF.
+            append_with_rollback(&mut second, |second| {
+                second.write_all(b"{\"second\":true}\n")
+            })?;
+            first.write_all(b"{\"first\":true}\n")
+        })
+        .expect("append both records");
+
+        assert_eq!(
+            std::fs::read_to_string(path).expect("read shared daily log"),
+            "{\"second\":true}\n{\"first\":true}\n"
         );
     }
 
