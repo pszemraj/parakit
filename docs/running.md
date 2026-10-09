@@ -262,7 +262,7 @@ parakit start --log-dir "$HOME/.parakit/logs"
 
 Set the same directory persistently with `logging.dir`. Logging is off by default and stores transcript text as plaintext. File layout, privacy implications, record correlation, and the complete schema are in [logging.md](logging.md).
 
-Disable cue tones:
+A capture with no detectable speech inserts nothing, so it plays the two-pulse error cue instead of the completion cue. Disable cue tones:
 
 ```bash
 parakit start --no-sounds

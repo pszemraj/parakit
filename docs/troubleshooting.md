@@ -130,7 +130,7 @@ If the notification never appears at all, follow the macOS notification note in 
 
 ## Wrong Microphone
 
-parakit records from a different input device than the one you expect.
+parakit records from a different input device than the one you expect. A typical symptom is the error tone right after you speak; without `--quiet`, the daemon also prints `parakit: no speech detected`.
 
 1. Check what parakit selected. `parakit doctor` prints the `mic` line; a running daemon reports the same thing under `parakit status --verbose`.
 2. Change the operating system default input device. parakit follows the OS default and has no device-selection flag. Use desktop sound settings, `pavucontrol` on Linux, System Settings > Sound > Input on macOS, or Settings > System > Sound on Windows.

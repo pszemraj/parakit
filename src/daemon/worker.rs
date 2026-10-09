@@ -292,7 +292,8 @@ where
                     ));
                     log.line("parakit: no speech detected");
                     state.set_phase("idle");
-                    sounds.success();
+                    // Nothing reaches the target, so a success cue would mislead.
+                    sounds.error();
                     continue;
                 }
                 let engine = match model.engine() {
@@ -450,7 +451,7 @@ where
                     Ok(None) => {
                         log.line("parakit: no speech detected");
                         state.set_phase("idle");
-                        sounds.success();
+                        sounds.error();
                     }
                     Err(e) => {
                         completion.fail(format!("{e:#}"));
@@ -592,6 +593,85 @@ mod tests {
         assert!(capture_should_skip(&[0.0001; 160]));
         assert!(!capture_should_skip(&[0.0, 0.2]));
         assert!(!capture_should_skip(&[0.01; 16]));
+    }
+
+    struct BlankEngine {
+        transcriptions: Arc<AtomicUsize>,
+    }
+
+    impl WorkerEngine for BlankEngine {
+        fn transcribe(&self, _pcm: &[f32]) -> Result<String> {
+            self.transcriptions.fetch_add(1, Ordering::SeqCst);
+            Ok(" ".to_string())
+        }
+    }
+
+    #[test]
+    fn worker_plays_error_cue_when_no_speech_is_detected() {
+        // Silence stops at the gate; audible noise reaches inference and comes
+        // back blank. Neither inserts text, so neither may sound successful.
+        for (pcm, inferred) in [(vec![0.0; 160], 0), (vec![0.01; 16], 1)] {
+            let state = Arc::new(SharedState::with_history_limit(2));
+            state.activity.ready();
+            let log = Arc::new(Logger::new(super::super::logging::LogLevel::Quiet));
+            let notifier = Notifier::silent(Arc::clone(&log));
+            let (tx, rx) = crossbeam_channel::bounded(WORKER_QUEUE_CAPACITY);
+            let (sounds, cues) = Sounds::test_channel();
+            let transcriptions = Arc::new(AtomicUsize::new(0));
+            let ctx = WorkerCtx {
+                engine: BlankEngine {
+                    transcriptions: Arc::clone(&transcriptions),
+                },
+                recipe: EngineRecipe {
+                    model_path: std::path::PathBuf::new(),
+                    threads: 1,
+                    device_mode: parakit::inference::DeviceMode::Cpu,
+                    verbose: false,
+                },
+                model_idle_minutes: 0,
+                cleaner: None,
+                data_log: None,
+                sounds,
+                log,
+                notifier,
+                state: Arc::clone(&state),
+                paste_mode: PasteMode::Standard,
+                keep_transcript_clipboard: false,
+                insert_transcripts: false,
+                rx,
+                lifetime: state.shutdown.register(),
+            };
+            let worker = std::thread::spawn(move || {
+                worker_loop_with(ctx, None, || -> Result<BlankEngine> {
+                    anyhow::bail!("resident model must not reload")
+                });
+            });
+
+            let now = Instant::now();
+            let (done_tx, done_rx) = crossbeam_channel::bounded(1);
+            tx.send(WorkerEvent::Stopped {
+                started_at: now,
+                stopped_at: now,
+                pcm,
+                focus_at_start: None,
+                activity: None,
+                completion: Some(done_tx),
+            })
+            .unwrap();
+            assert_eq!(
+                done_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
+                Err("dictation produced no transcript".to_string())
+            );
+            assert!(matches!(
+                cues.recv_timeout(Duration::from_secs(1)).unwrap(),
+                Cue::Error
+            ));
+            drop(tx);
+            worker.join().unwrap();
+            assert!(cues.try_recv().is_err());
+            assert_eq!(transcriptions.load(Ordering::SeqCst), inferred);
+            assert!(state.resolve_transcript(0).is_err());
+        }
     }
 
     #[test]

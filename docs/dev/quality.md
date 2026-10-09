@@ -216,7 +216,7 @@ the three-note reload cue followed by the usual listening tone when ready.
 Release during reload and confirm there is no delayed listening tone; a failed
 reload must not announce readiness. A failure at PTT start plays one two-pulse
 error cue; if the release retry also fails, it plays a second. Check the normal
-completion/error cues and `--no-sounds` too. Headless tests verify cue ordering and cancellation, but do
+completion/error cues, the error cue after a capture with no speech, and `--no-sounds` too. Headless tests verify cue ordering and cancellation, but do
 not validate audible playback, physical input, or insertion. Record unobserved
 human checks and unavailable backend runs as pending.
 
