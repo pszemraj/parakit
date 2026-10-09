@@ -474,6 +474,44 @@ fn spoken_number_threshold_preserves_only_values_strictly_below_it() {
 fn fraction_guards_preserve_numerators_without_absorbing_independent_counts() {
     for threshold in [0.0, DEFAULT_NUMBER_THRESHOLD, 5.0] {
         for (input, expected) in [
+            ("three-quarters of a million", "three-quarters of a million"),
+            ("one-half of a million", "one-half of a million"),
+            ("three quarters of a million", "three quarters of a million"),
+            (
+                "In the fourth quarter a million users signed up",
+                if threshold > 4.0 {
+                    "In the fourth quarter 1 million users signed up"
+                } else {
+                    "In the 4th quarter 1 million users signed up"
+                },
+            ),
+            (
+                "In the fourth quarter, a million users signed up",
+                if threshold > 4.0 {
+                    "In the fourth quarter, 1 million users signed up"
+                } else {
+                    "In the 4th quarter, 1 million users signed up"
+                },
+            ),
+            (
+                "In the second half a million users signed up",
+                if threshold > 2.0 {
+                    "In the second half 1 million users signed up"
+                } else {
+                    "In the 2nd half 1 million users signed up"
+                },
+            ),
+            ("a quarter a million rows", "a quarter a million rows"),
+            ("one quarter a million rows", "one quarter a million rows"),
+            ("one-quarter a million rows", "one-quarter a million rows"),
+            ("quarter of a million rows", "quarter of a million rows"),
+            ("a half a million rows", "a half a million rows"),
+            ("half a million rows", "half a million rows"),
+            (
+                "seven hundred\n\nthousands of people",
+                "seven hundred\n\nthousands of people",
+            ),
+            ("a few hundred\nmillion", "a few hundred\nmillion"),
             (
                 "in the year two thousand and five half a million people",
                 "in the year 2005 half a million people",

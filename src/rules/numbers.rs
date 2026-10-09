@@ -84,7 +84,9 @@ fn replace_numbers_preserving_literals(input: &str, language: &Language, thresho
             concat!(
                 r"(?i)\b(?:",
                 r"(?P<scale_first>(?:a[ \t]+)?(?:hundred|thousand|million|billion|trillion)[ \t]+and[ \t]+a[ \t]+(?:half|quarter))|",
-                r"(?:and[ \t]+)?(?:a[ \t]+)?(?:half|quarter)(?:[ \t]+of)?(?:[ \t]+a)?[ \t]+(?:hundred|thousand|million|billion|trillion)|",
+                r"(?:and[ \t]+)?(?:a[ \t]+)?half(?:[ \t]+of)?(?:[ \t]+a)?[ \t]+(?:hundred|thousand|million|billion|trillion)|",
+                r"(?:(?:and[ \t]+(?:a[ \t]+)?|a[ \t]+)quarter(?:[ \t]+of)?(?:[ \t]+a)?|quarter(?:[ \t]+of(?:[ \t]+a)?)?)[ \t]+(?:hundred|thousand|million|billion|trillion)|",
+                r"(?P<quarter_article>quarter[ \t]+a[ \t]+(?:hundred|thousand|million|billion|trillion))|",
                 r"(?:halves|quarters)(?:[ \t]+of)?(?:[ \t]+a)?[ \t]+(?:hundred|thousand|million|billion|trillion)|",
                 r"(?:(?:a[ \t]+)?few|several|(?:a[ \t]+)?couple(?:[ \t]+of)?)[ \t]+(?:hundred|thousand|million|billion|trillion)|",
                 r"(?P<denominator>[a-z]+(?:-[a-z]+)*)[ \t]+of(?:[ \t]+a)?[ \t]+(?:hundred|thousand|million|billion|trillion)|",
@@ -106,6 +108,18 @@ fn replace_numbers_preserving_literals(input: &str, language: &Language, thresho
         .filter_map(|captures| {
             let found = captures.get(0).expect("whole match is required");
             let mut ordinal_start = None;
+            if captures.name("quarter_article").is_some() {
+                let prefix = &input[..found.start()];
+                // An explicit numerator makes "one quarter a million" a
+                // fraction; a noun such as "fourth quarter" supplies none.
+                let prefix = prefix.strip_suffix('-').unwrap_or(prefix);
+                ordinal_start = Some(preceding_fraction_start(
+                    prefix,
+                    found.as_str(),
+                    language,
+                    true,
+                )?);
+            }
             if let Some(denominator) = captures.name("denominator") {
                 // Use the parser's full ordinal boundary, including spaced
                 // compounds such as "twenty first" or "one hundredth".
@@ -115,6 +129,20 @@ fn replace_numbers_preserving_literals(input: &str, language: &Language, thresho
                     .last()
                     .filter(|number| number.end == tokens.len() && number.is_ordinal);
                 let Some(ordinal) = ordinal else {
+                    // The broad denominator candidate starts at the numerator
+                    // of "three-quarters" or "one-half". Retry its last word
+                    // so that it cannot hide an ordinary fraction guard.
+                    if let Some((_, suffix)) = denominator.as_str().rsplit_once('-') {
+                        let start = denominator.end() - suffix.len();
+                        if protected_re.captures_at(input, start).is_some_and(|retry| {
+                            retry.name("denominator").is_none()
+                                && retry.get(0).is_some_and(|fraction| {
+                                    fraction.start() == start && fraction.end() == found.end()
+                                })
+                        }) {
+                            return Some((found, false, Some(found.start())));
+                        }
+                    }
                     // A rejected fraction candidate can contain a literal
                     // plural magnitude. Preserve that original guard instead
                     // of letting this broader candidate hide it.
@@ -138,6 +166,23 @@ fn replace_numbers_preserving_literals(input: &str, language: &Language, thresho
                     }
                 }
                 ordinal_start = Some(tokens[start].start.min(found.start()));
+            }
+            if found
+                .as_str()
+                .to_ascii_lowercase()
+                .split_ascii_whitespace()
+                .take(2)
+                .eq(["half", "a"])
+            {
+                let tokens = number_tokens(&input[..found.start()]);
+                if find_numbers(tokens.iter(), language, 0.0)
+                    .last()
+                    .is_some_and(|number| number.end == tokens.len() && number.is_ordinal)
+                {
+                    // In "the second half a million users joined", half names
+                    // a period; the following count is an independent quantity.
+                    return None;
+                }
             }
             if found.as_str().eq_ignore_ascii_case("second")
                 && !second_is_time_unit(&input[..found.start()], previous_re, language)
