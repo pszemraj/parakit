@@ -3,12 +3,11 @@
 use crate::rules::RuleHit;
 use anyhow::{Context, Result};
 use chrono::{Local, NaiveDate, SecondsFormat, Utc};
+use fs2::FileExt;
 use parking_lot::Mutex;
 use serde::Serialize;
 use std::fs::{create_dir_all, File, OpenOptions};
-use std::io::Write;
-#[cfg(windows)]
-use std::io::{Seek, SeekFrom};
+use std::io::{Seek, SeekFrom, Write};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -329,21 +328,22 @@ fn write_jsonl_record<T: Serialize>(
     .context("failed to append complete jsonl record")
 }
 
-/// Append one record and restore the previous file length if the write fails.
+/// Serialize append/rollback across logger handles sharing the daily file.
 fn append_with_rollback<F>(file: &mut File, write: F) -> std::io::Result<()>
 where
     F: FnOnce(&mut File) -> std::io::Result<()>,
 {
-    #[cfg(not(windows))]
-    let original_len = file.metadata()?.len();
-    // Windows uses a writable handle for rollback, so position each write at EOF.
-    #[cfg(windows)]
-    let original_len = file.seek(SeekFrom::End(0))?;
-    if let Err(error) = write(file) {
-        file.set_len(original_len)?;
-        return Err(error);
-    }
-    Ok(())
+    FileExt::lock_exclusive(file)?;
+    let result = (|| {
+        let original_len = file.seek(SeekFrom::End(0))?;
+        if let Err(error) = write(file) {
+            file.set_len(original_len)?;
+            return Err(error);
+        }
+        Ok(())
+    })();
+    let unlocked = FileExt::unlock(file);
+    result.and(unlocked)
 }
 
 fn file_name(date: NaiveDate) -> String {
@@ -362,7 +362,11 @@ mod tests {
 
         let mut threads = Vec::new();
         for thread_id in 0..10 {
-            let logger = Arc::clone(&logger);
+            let logger = if thread_id < 5 {
+                Arc::clone(&logger)
+            } else {
+                Arc::new(DataLogger::new(dir.clone()))
+            };
             threads.push(std::thread::spawn(move || {
                 for i in 0..100 {
                     logger
@@ -710,9 +714,83 @@ mod tests {
             .expect("append after rollback");
         drop(file);
         assert_eq!(
-            std::fs::read_to_string(path).expect("read rolled-back fixture"),
+            std::fs::read_to_string(&path).expect("read rolled-back fixture"),
             "{\"valid\":true}\n{\"next\":true}\n"
         );
+        // A failed rollback must also release the lock for another handle.
+        let mut read_only = File::open(&path).unwrap();
+        assert!(append_with_rollback(&mut read_only, |file| file.write_all(b"bad")).is_err());
+        let other = logger.open_for_date(date).unwrap();
+        FileExt::try_lock_exclusive(&other).expect("release lock after failed rollback");
+        FileExt::unlock(&other).unwrap();
+    }
+
+    #[test]
+    fn independent_writable_handles_serialize_append_and_rollback() {
+        use std::io::{Seek, SeekFrom};
+        use std::sync::mpsc::channel;
+
+        for fail_first in [true, false] {
+            let dir = crate::test_support::fixture_root(
+                "parakit-log-test",
+                &format!("writable-append-{fail_first}"),
+            );
+            create_dir_all(&dir).unwrap();
+            let path = dir.join("shared.jsonl");
+            // Exercise Windows-style writable handles on every platform.
+            let open = || {
+                OpenOptions::new()
+                    .create(true)
+                    .write(true)
+                    .truncate(false)
+                    .open(&path)
+                    .unwrap()
+            };
+            let mut first = open();
+            let mut second = open();
+            let (entered_tx, entered_rx) = channel();
+            let (release_tx, release_rx) = channel();
+            let first_writer = std::thread::spawn(move || {
+                append_with_rollback(&mut first, |file| {
+                    entered_tx.send(()).unwrap();
+                    release_rx.recv().unwrap();
+                    file.write_all(b"{\"first\":true}\n")?;
+                    if fail_first {
+                        return Err(std::io::Error::other("injected write failure"));
+                    }
+                    Ok(())
+                })
+            });
+            entered_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+            let (attempt_tx, attempt_rx) = channel();
+            let (done_tx, done_rx) = channel();
+            let second_writer = std::thread::spawn(move || {
+                // Match the current Windows position before entering the transaction.
+                second.seek(SeekFrom::End(0)).unwrap();
+                attempt_tx.send(()).unwrap();
+                let result = append_with_rollback(&mut second, |file| {
+                    file.write_all(b"{\"second\":true}\n")
+                });
+                done_tx.send(()).unwrap();
+                result
+            });
+            attempt_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+            let wrote_during_first = done_rx.recv_timeout(Duration::from_millis(100)).is_ok();
+            release_tx.send(()).unwrap();
+            let first_result = first_writer.join().unwrap();
+            second_writer.join().unwrap().unwrap();
+            assert_eq!(first_result.is_err(), fail_first);
+            let expected = if fail_first {
+                "{\"second\":true}\n"
+            } else {
+                "{\"first\":true}\n{\"second\":true}\n"
+            };
+            assert_eq!(std::fs::read_to_string(path).unwrap(), expected);
+            assert!(
+                !wrote_during_first,
+                "another handle wrote before append/rollback finished"
+            );
+        }
     }
 
     #[cfg(unix)]
@@ -730,10 +808,9 @@ mod tests {
             .expect("open second logger handle");
 
         append_with_rollback(&mut first, |first| {
-            // Another process can append after this write observed the old EOF.
-            append_with_rollback(&mut second, |second| {
-                second.write_all(b"{\"second\":true}\n")
-            })?;
+            // Unix append positioning still protects against an unrelated writer
+            // that does not take the logger's advisory lock.
+            second.write_all(b"{\"second\":true}\n")?;
             first.write_all(b"{\"first\":true}\n")
         })
         .expect("append both records");

@@ -6,6 +6,8 @@ Audio and redirected console output are never logged, but the raw and cleaned tr
 
 One append-only `parakit-YYYY-MM-DD.jsonl` file is written per local day, rotating when the local date changes. Each JSON object is written and flushed synchronously before the worker continues. There is no filesystem sync guarantee; an interrupted write can leave a partial final line.
 
+Independent logger instances sharing a daily file take an exclusive file lock for each append and any failed-write rollback, so their records cannot overwrite each other.
+
 ## How To Read A Dictation
 
 A completed dictation normally produces two lines: a transcription line, written as soon as the model and cleaner finish, and a later insertion line, written once parakit knows what happened to the paste attempt.
