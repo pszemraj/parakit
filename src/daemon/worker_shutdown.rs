@@ -95,13 +95,27 @@ impl WorkerShutdown {
 /// # Returns
 ///
 /// Never returns; the process exits with `code`.
+///
+/// # Panics
+///
+/// On Windows, if the OS rejects or returns from terminating the current process.
 pub(crate) fn terminate_process(code: i32, graceful: bool) -> ! {
     if graceful {
         std::process::exit(code);
     }
-    // A wedged worker/insertion must not hang exit, or race C++ static
-    // destructors with live native buffers. The OS reclaims process resources.
-    unsafe { libc::_exit(code) }
+    // A wedged worker/insertion must not hang exit or run native destructors
+    // against live buffers. Windows CRT _exit calls ExitProcess, which runs
+    // DLL detach hooks after killing other threads; bypass those hooks too.
+    #[cfg(windows)]
+    unsafe {
+        use windows::Win32::System::Threading::{GetCurrentProcess, TerminateProcess};
+        TerminateProcess(GetCurrentProcess(), code as u32).expect("terminate the current process");
+        unreachable!("self-termination does not return");
+    }
+    #[cfg(not(windows))]
+    unsafe {
+        libc::_exit(code)
+    }
 }
 
 #[cfg(test)]
@@ -138,6 +152,73 @@ mod tests {
         drop(lifetime);
         assert!(shutdown.request_and_wait(&activity, Duration::ZERO));
         assert!(WorkerShutdown::default().request_and_wait(&activity, Duration::ZERO));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn forced_worker_exit_skips_dll_teardown() {
+        const CHILD: &str = "PARAKIT_FORCED_EXIT_TEST_CHILD";
+        if let Some(mode) = std::env::var_os(CHILD) {
+            use std::os::windows::ffi::OsStrExt;
+            use windows::core::PCWSTR;
+            use windows::Win32::System::LibraryLoader::LoadLibraryW;
+
+            let dll = std::env::var_os("PARAKIT_DETACH_DLL").unwrap();
+            let wide: Vec<u16> = dll.encode_wide().chain(Some(0)).collect();
+            // Keep the probe loaded until process termination.
+            unsafe { LoadLibraryW(PCWSTR(wide.as_ptr())).unwrap() };
+            let shutdown = WorkerShutdown::default();
+            let activity = ActivityGate::new();
+            let lifetime = shutdown.register();
+            if mode == "graceful" {
+                drop(lifetime);
+            }
+            let graceful = shutdown.request_and_wait(&activity, Duration::ZERO);
+            assert_eq!(graceful, mode == "graceful");
+            terminate_process(23, graceful);
+        }
+
+        let root = crate::test_support::fixture_root("parakit-shutdown-test", "dll-detach");
+        let dll = root.join("detach_probe.dll");
+        let built = std::process::Command::new("rustc")
+            .args(["--crate-type", "cdylib", "--edition=2021"])
+            .arg(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/fixtures/windows_detach_probe.rs"
+            ))
+            .arg("-o")
+            .arg(&dll)
+            .output()
+            .unwrap();
+        assert!(
+            built.status.success(),
+            "{}",
+            String::from_utf8_lossy(&built.stderr)
+        );
+        for (mode, expected) in [("graceful", "attach\ndetach\n"), ("forced", "attach\n")] {
+            let marker = root.join(format!("{mode}.txt"));
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "daemon::worker_shutdown::tests::forced_worker_exit_skips_dll_teardown",
+                    "--nocapture",
+                ])
+                .env(CHILD, mode)
+                .env("PARAKIT_DETACH_DLL", std::fs::canonicalize(&dll).unwrap())
+                .env(
+                    "PARAKIT_DETACH_MARKER",
+                    root.canonicalize().unwrap().join(format!("{mode}.txt")),
+                )
+                .output()
+                .unwrap();
+            assert_eq!(
+                output.status.code(),
+                Some(23),
+                "{mode}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert_eq!(std::fs::read_to_string(marker).unwrap(), expected, "{mode}");
+        }
     }
 
     #[test]
