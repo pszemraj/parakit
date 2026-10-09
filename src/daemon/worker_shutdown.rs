@@ -95,10 +95,6 @@ impl WorkerShutdown {
 /// # Returns
 ///
 /// Never returns; the process exits with `code`.
-///
-/// # Panics
-///
-/// On Windows, if the OS rejects or returns from terminating the current process.
 pub(crate) fn terminate_process(code: i32, graceful: bool) -> ! {
     if graceful {
         std::process::exit(code);
@@ -109,13 +105,11 @@ pub(crate) fn terminate_process(code: i32, graceful: bool) -> ! {
     #[cfg(windows)]
     unsafe {
         use windows::Win32::System::Threading::{GetCurrentProcess, TerminateProcess};
-        TerminateProcess(GetCurrentProcess(), code as u32).expect("terminate the current process");
-        unreachable!("self-termination does not return");
+        // Success does not return. If the OS refuses, still exit below: a
+        // panic on this IPC thread would leave the daemon half-stopped.
+        let _ = TerminateProcess(GetCurrentProcess(), code as u32);
     }
-    #[cfg(not(windows))]
-    unsafe {
-        libc::_exit(code)
-    }
+    unsafe { libc::_exit(code) }
 }
 
 #[cfg(test)]
