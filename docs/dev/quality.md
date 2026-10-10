@@ -98,14 +98,15 @@ a minute-long timeout.
 Use the hidden simulation path when you need the daemon worker flow without a live keyboard, microphone, or text insertion:
 
 ```bash
-PARAKIT_CONFIG_PATH=$PWD/target/tmp/ptt-missing.toml \
+mkdir -p target/tmp && : > target/tmp/ptt-empty.toml
+PARAKIT_CONFIG_PATH=$PWD/target/tmp/ptt-empty.toml \
 XDG_CACHE_HOME=$PWD/target/tmp/ptt-cache \
   cargo run -- start -m path/to/model.gguf --threads 8 --no-cleaning \
   --simulate-ptt-audio local-scratch/juniper-voicememo-DO_NOT_DELETE.wav \
   --model-idle-minutes 1 --simulate-ptt-repeat 2 --simulate-ptt-idle-seconds 61
 ```
 
-Use a real WAV with a known transcript. The pinned Juniper voice memo is 55.36 seconds; its local filename can vary by machine. Compare the readable transcript with task-appropriate tolerance rather than hashing the fixture. The command resamples it to the model rate and sends worker start/stop events with owned PCM. `--no-cleaning` exposes raw output for comparison; omit it to exercise cleanup too. Add the build feature and `--device` for the backend being tested. On PowerShell, set the environment variables with `$env:NAME = ...` and use the Windows WAV path.
+The empty config file keeps your own `config.toml` out of the run; `PARAKIT_CONFIG_PATH` must name a file that exists. Use a real WAV with a known transcript. The pinned Juniper voice memo is 55.36 seconds; its local filename can vary by machine. Compare the readable transcript with task-appropriate tolerance rather than hashing the fixture. The command resamples it to the model rate and sends worker start/stop events with owned PCM. `--no-cleaning` exposes raw output for comparison; omit it to exercise cleanup too. Add the build feature and `--device` for the backend being tested. On PowerShell, create the empty file with `New-Item -ItemType File -Force target/tmp/ptt-empty.toml`, set the environment variables with `$env:NAME = ...`, and use the Windows WAV path.
 
 The worker acknowledges each required transcript, checks exact parity across repeats in the same process, and verifies the expected residency after each wait (including the last). This parity check verifies that reloading recreates the same session; it is not a cross-build reference-transcript comparison. Missing transcripts, reload failures, or missed offloads return a failure exit status. An immediate simulated release exercises queuing while reload is busy. Use `--model-idle-minutes 0` to check disabled offloading. For one dictation without an idle wait, omit `--simulate-ptt-repeat` and `--simulate-ptt-idle-seconds`; both options require `--simulate-ptt-audio`.
 

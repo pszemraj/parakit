@@ -283,14 +283,30 @@ fn xdg_config_base() -> Result<PathBuf> {
 ///
 /// # Returns
 ///
-/// The parsed config, or built-in defaults when the file does not exist.
+/// The parsed config, or built-in defaults when no file exists at the default location.
 ///
 /// # Errors
 ///
-/// Returns an error if the config path cannot be resolved, the file exists but cannot be read, the file is not valid TOML for [`ConfigFile`], `daemon.transcript_history` exceeds its limit, `daemon.model` or `logging.dir` is an empty path, a user-defined rule fails validation (empty or non-canonical name, empty pattern, invalid regex, a name colliding with a built-in rule, or a duplicate user rule name), or `cleaning.disabled_rules` names a rule that does not exist.
+/// Returns an error if the config path cannot be resolved, `$PARAKIT_CONFIG_PATH` names a file that does not exist, the file exists but cannot be read, the file is not valid TOML for [`ConfigFile`], `daemon.transcript_history` exceeds its limit, `daemon.model` or `logging.dir` is an empty path, a user-defined rule fails validation (empty or non-canonical name, empty pattern, invalid regex, a name colliding with a built-in rule, or a duplicate user rule name), or `cleaning.disabled_rules` names a rule that does not exist.
 /// Parse and validation errors are annotated with the config file path.
 pub(crate) fn load() -> Result<ConfigFile> {
-    load_from_path(&config_path()?)
+    load_with_override(std::env::var_os(CONFIG_PATH_ENV))
+}
+
+/// Load the config from an already-read `$PARAKIT_CONFIG_PATH` value.
+///
+/// A missing file at the default location means "use the defaults", but an explicit override names a file the user expects to be read, so a missing one is almost always a typo.
+fn load_with_override(override_path: Option<std::ffi::OsString>) -> Result<ConfigFile> {
+    let explicit = override_path.is_some();
+    let path = config_path_with_override(override_path)?;
+    // A failed existence probe falls through, so the read reports the real error.
+    if explicit && matches!(path.try_exists(), Ok(false)) {
+        anyhow::bail!(
+            "{CONFIG_PATH_ENV} names {}, which does not exist; create it with `parakit config init`, or unset {CONFIG_PATH_ENV} to use the default config location",
+            path.display()
+        );
+    }
+    load_from_path(&path)
 }
 
 /// Load and validate a config file at an explicit path. Split out from
@@ -619,6 +635,25 @@ replacement = "hello"
         let path = dir.join("custom-config.toml");
         let resolved = config_path_with_override(Some(path.clone().into_os_string()));
         assert_eq!(resolved.expect("env override should resolve"), path);
+    }
+
+    #[test]
+    fn missing_config_path_env_override_is_an_error() {
+        let dir = crate::test_support::fixture_root("parakit-config-test", "env-override-missing");
+        let missing = dir.join("typo-config.toml");
+        let err = load_with_override(Some(missing.clone().into_os_string()))
+            .expect_err("a missing override file must not silently give defaults");
+        let message = format!("{err:#}");
+        assert!(message.contains("PARAKIT_CONFIG_PATH names"), "{message}");
+        assert!(
+            message.contains(&missing.display().to_string()),
+            "{message}"
+        );
+
+        let existing = write_fixture("env-override-existing", "[daemon]\nthreads = 3\n");
+        let config = load_with_override(Some(existing.into_os_string()))
+            .expect("an existing override file loads");
+        assert_eq!(config.daemon.threads, NonZeroUsize::new(3));
     }
 
     #[test]

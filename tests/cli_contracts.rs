@@ -85,6 +85,56 @@ fn broken_config_does_not_block_documented_control_and_repair_commands() {
 }
 
 #[test]
+fn missing_config_override_fails_reads_but_not_path_or_init() {
+    let root = common::fixture_root("cli-contracts", "missing-config-override");
+    std::fs::create_dir_all(&root).expect("fixture root should be created");
+    let config = root.join("typo.toml");
+
+    // Commands that read the config refuse a mistyped override instead of
+    // silently running on defaults.
+    for args in [
+        &["rules", "list"][..],
+        &["config", "show"][..],
+        &["doctor"][..],
+    ] {
+        let output = isolated_parakit(&root)
+            .args(args)
+            .env("PARAKIT_CONFIG_PATH", &config)
+            .output()
+            .expect("parakit should run");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(!output.status.success(), "{args:?} succeeded: {stderr}");
+        assert!(
+            stderr.contains("PARAKIT_CONFIG_PATH names") && stderr.contains("does not exist"),
+            "{args:?}: {stderr}"
+        );
+    }
+
+    // The repair path still works: `config path` names the file and
+    // `config init` creates it, after which reads succeed.
+    for args in [
+        &["config", "path"][..],
+        &["config", "init"][..],
+        &["rules", "list"][..],
+    ] {
+        let output = isolated_parakit(&root)
+            .args(args)
+            .env("PARAKIT_CONFIG_PATH", &config)
+            .output()
+            .expect("parakit should run");
+        assert!(
+            output.status.success(),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    assert!(
+        config.is_file(),
+        "config init should create the override file"
+    );
+}
+
+#[test]
 fn quiet_path_commands_still_report_resolution_and_parse_errors() {
     let root = common::fixture_root("cli-contracts", "quiet-path-errors");
     std::fs::create_dir_all(&root).expect("fixture root should be created");
