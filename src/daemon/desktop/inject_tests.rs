@@ -1783,6 +1783,60 @@ fn clipboard_restage_does_not_override_final_focus_safety() {
 }
 
 #[test]
+fn a_new_copy_during_restaged_focus_check_prevents_dispatch() {
+    for competing in [
+        MockClipboardContent::Text("latest copy".to_owned()),
+        MockClipboard::image().content,
+    ] {
+        for policy in [
+            ClipboardPolicy::RestorePrevious,
+            ClipboardPolicy::KeepTranscript,
+        ] {
+            let mut clipboard = MockClipboard::new("old clipboard");
+            let pending = Rc::clone(&clipboard.pending_external_write);
+            let mut guards = 0;
+            let report = paste_with_clipboard_swap_guarded(
+                &mut clipboard,
+                "dictated text",
+                PasteMode::Standard,
+                || true,
+                || panic!("a copy during the restaged focus check must prevent dispatch"),
+                Duration::ZERO,
+                restore_plan(&quiet_gate()),
+                policy,
+                None,
+                || {
+                    guards += 1;
+                    if guards == 2 {
+                        *pending.borrow_mut() =
+                            Some(MockClipboardContent::Text("first copy".to_owned()));
+                    } else if guards == 3 {
+                        *pending.borrow_mut() = Some(competing.clone());
+                    }
+                    Ok(true)
+                },
+            )
+            .unwrap();
+            assert_eq!(report.outcome, PasteOutcome::ClipboardChanged);
+            assert!(!report.telemetry.paste_event_posted);
+            assert_eq!(report.telemetry.clipboard_restored, None);
+            assert_eq!(clipboard.content, competing);
+            assert_eq!(guards, 3);
+            assert_eq!(
+                clipboard
+                    .events
+                    .borrow()
+                    .iter()
+                    .filter(|event| *event == "set:dictated text")
+                    .count(),
+                2,
+                "do not retry staging over a second competing copy"
+            );
+        }
+    }
+}
+
+#[test]
 fn a_new_copy_after_restaged_paste_is_preserved() {
     let mut clipboard = MockClipboard::new("old clipboard");
     let pending = Rc::clone(&clipboard.pending_external_write);

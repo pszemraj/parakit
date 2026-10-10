@@ -438,22 +438,32 @@ fn copy_or_block_transcript(
     notifier: &Notifier,
 ) -> Result<InsertReport> {
     let policy = clipboard_policy(keep_transcript_clipboard);
-    match with_injector(injector, |injector| {
+    let outcome = with_injector(injector, |injector| {
         injector.stage_text_for_history(text, policy)
     })
-    .context(copy_context)?
-    {
+    .context(copy_context)?;
+    Ok(finish_staging(outcome, reason, log, notifier))
+}
+
+/// Report a clipboard fallback after its primary insertion diagnostic.
+fn finish_staging(
+    outcome: crate::daemon::inject::StageOutcome,
+    reason: PasteBlockReason,
+    log: &Logger,
+    notifier: &Notifier,
+) -> InsertReport {
+    match outcome {
         crate::daemon::inject::StageOutcome::CopiedOnly => {
             notifier.transcript_copied(reason.notice());
-            Ok(InsertReport::from_stage(InsertOutcome::CopiedOnly, false))
+            InsertReport::from_stage(InsertOutcome::CopiedOnly, false)
         }
         crate::daemon::inject::StageOutcome::Blocked => {
-            log.warn(format!(
+            log.verbose(format!(
                 "automatic paste skipped ({}); transcript staged for clipboard history",
                 reason.log_tag()
             ));
             notifier.paste_blocked(reason.notice());
-            Ok(InsertReport::from_stage(InsertOutcome::Blocked, true))
+            InsertReport::from_stage(InsertOutcome::Blocked, true)
         }
         crate::daemon::inject::StageOutcome::ClipboardChanged(diagnostic) => {
             if let Some(diagnostic) = diagnostic.as_deref() {
@@ -466,7 +476,7 @@ fn copy_or_block_transcript(
             notifier.paste_blocked(PasteBlockReason::ClipboardChanged.notice());
             let mut report = InsertReport::placeholder(InsertOutcome::Blocked, false);
             report.failure_reason = diagnostic;
-            Ok(report)
+            report
         }
     }
 }
@@ -827,7 +837,8 @@ impl InsertReport {
     /// Whether this outcome should play the daemon's error tone instead of
     /// its success tone.
     ///
-    /// [`InsertOutcome::Blocked`] always alarms. A post-chord
+    /// [`InsertOutcome::Blocked`] and [`InsertOutcome::Skipped`] always alarm:
+    /// neither delivered text. A post-chord
     /// [`InsertOutcome::CopiedOnly`] (a paste chord was actually sent but
     /// insertion was never confirmed) is a safe degradation, not a backend
     /// failure, but the user still needs to know the paste did not land; a
@@ -839,8 +850,10 @@ impl InsertReport {
     ///
     /// `true` when the daemon should play its error tone for this outcome.
     pub(super) fn needs_alert(&self) -> bool {
-        matches!(self.outcome, InsertOutcome::Blocked)
-            || (self.outcome == InsertOutcome::CopiedOnly && self.telemetry.paste_event_posted)
+        matches!(
+            self.outcome,
+            InsertOutcome::Blocked | InsertOutcome::Skipped
+        ) || (self.outcome == InsertOutcome::CopiedOnly && self.telemetry.paste_event_posted)
             || (self.outcome == InsertOutcome::PastedUnverified
                 && self.telemetry.acknowledgement_kind == "no_evidence")
     }

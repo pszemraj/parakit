@@ -1358,6 +1358,19 @@ where
             };
         }
     }
+    // The restage can require another focus query. Preserve a copy observed
+    // during that query instead of sending it to the target. Unreadable stamps
+    // retain the existing fallback: stage once, then paste without restoring.
+    if !previous.stamp_is_current(clipboard) && previous.observation_error().is_none() {
+        return finish_blocked_clipboard(
+            clipboard,
+            previous,
+            write_token,
+            restore_plan,
+            clipboard_policy,
+        )
+        .map(|report| report.with_retention_diagnostic(retention_diagnostic));
+    }
     let paste_result = paste();
     match paste_result {
         Ok(PasteDispatch::Posted) => Ok(finish_confirmed_paste(

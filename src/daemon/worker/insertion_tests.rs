@@ -197,7 +197,7 @@ fn needs_alert_matches_outcome_and_paste_event_posted() {
         match outcome {
             InsertOutcome::Pasted => &[(true, false)],
             InsertOutcome::PastedUnverified => &[(true, false)],
-            InsertOutcome::Skipped => &[(false, false)],
+            InsertOutcome::Skipped => &[(false, true)],
             InsertOutcome::Blocked => &[(false, true), (true, true)],
             InsertOutcome::CopiedOnly => &[
                 // pre-chord CopiedOnly (guard-blocked, focus changed, or
@@ -360,6 +360,7 @@ fn completed_paste_and_empty_transcript_diagnostics_are_verbose_only() {
     .unwrap();
     assert_eq!(report.outcome, InsertOutcome::Skipped);
     assert!(!report.telemetry.paste_event_posted);
+    assert!(report.needs_alert());
     assert!(injector.is_none());
     assert!(matches!(
         messages.try_recv(),
@@ -500,6 +501,68 @@ fn paste_completion_sends_outcome_notifications() {
             Err(std::sync::mpsc::TryRecvError::Empty)
         ));
     }
+}
+
+#[test]
+fn focus_block_reports_one_warning_and_verbose_clipboard_details() {
+    const CHILD: &str = "PARAKIT_TEST_FOCUS_BLOCK_DIAGNOSTICS";
+    let level = match std::env::var(CHILD).as_deref() {
+        Ok("quiet") => LogLevel::Quiet,
+        Ok("normal") => LogLevel::Normal,
+        Ok("verbose") => LogLevel::Verbose,
+        _ => {
+            for level in ["quiet", "normal", "verbose"] {
+                let output = std::process::Command::new(std::env::current_exe().unwrap())
+                    .args([
+                        "--exact",
+                        "daemon::worker::insertion::tests::focus_block_reports_one_warning_and_verbose_clipboard_details",
+                        "--nocapture",
+                    ])
+                    .env(CHILD, level)
+                    .output()
+                    .unwrap();
+                assert!(output.status.success(), "{level}: {output:?}");
+                let stderr = String::from_utf8(output.stderr).unwrap();
+                assert_eq!(stderr.matches("warning:").count(), 1, "{stderr}");
+                assert!(
+                    stderr.contains("focus changed before insertion"),
+                    "{stderr}"
+                );
+                let stdout = String::from_utf8(output.stdout).unwrap();
+                assert_eq!(
+                    stdout.contains("transcript staged for clipboard history"),
+                    level == "verbose",
+                    "{stdout}"
+                );
+            }
+            return;
+        }
+    };
+    let log = Arc::new(Logger::new(level));
+    let (notifier, messages) = Notifier::test_channel(Arc::clone(&log));
+    let verification = Cell::new("not_applicable");
+    assert!(!focus_verification_allows_insertion(
+        Ok(FocusVerification::Changed),
+        &verification,
+        true,
+        &log,
+    ));
+    let report = finish_staging(
+        crate::daemon::inject::StageOutcome::Blocked,
+        PasteBlockReason::FocusChangedBeforeInsertion,
+        &log,
+        &notifier,
+    );
+    assert_eq!(report.outcome, InsertOutcome::Blocked);
+    assert!(report.needs_alert());
+    assert!(!report.telemetry.paste_event_posted);
+    assert_eq!(report.telemetry.clipboard_restored, Some(true));
+    let notice = messages.try_recv().unwrap();
+    assert_eq!(notice.summary, "Paste blocked");
+    assert!(matches!(
+        messages.try_recv(),
+        Err(std::sync::mpsc::TryRecvError::Empty)
+    ));
 }
 
 #[test]
