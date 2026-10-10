@@ -234,35 +234,12 @@ fn render_spoken_version_candidate(input: &str, words: &[WordSpan]) -> Option<St
     if components.len() < 3 {
         return None;
     }
-    let explicit_version = input[..words[0].start]
-        .split_whitespace()
-        .last()
-        .is_some_and(|word| word.eq_ignore_ascii_case("v") || word.eq_ignore_ascii_case("version"));
     let mut rendered = String::new();
     for (index, component) in components.iter().enumerate() {
         if index > 0 {
             rendered.push('.');
         }
-        // "two point five three point zero" can straddle two decimals.
-        // A component spoken as separate digits requires an explicit version
-        // cue to join it across both points. A hyphenated component already
-        // supplies that boundary ("zero-three").
-        if !explicit_version
-            && index > 0
-            && index + 1 < components.len()
-            && component.len() > 1
-            && component.iter().all(|span| {
-                render_number_component(&input[span.start..span.end])
-                    .is_some_and(|value| value.len() == 1)
-            })
-        {
-            let last = component.len() - 1;
-            rendered.push_str(&parse_number_component(input, &component[..last])?);
-            rendered.push(' ');
-            rendered.push_str(&parse_number_component(input, &component[last..])?);
-        } else {
-            rendered.push_str(&parse_number_component(input, component)?);
-        }
+        rendered.push_str(&parse_number_component(input, component)?);
     }
     Some(rendered)
 }
