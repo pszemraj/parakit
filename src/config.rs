@@ -81,7 +81,7 @@ pub(crate) struct CleaningConfig {
     /// CLI `--cleaning-profile`.
     pub(crate) profile: Option<CleaningProfile>,
     /// Keep the single terminal period that cleanup removes by default.
-    /// CLI `--keep-trailing-period` forces this on.
+    /// CLI `--keep-trailing-period` forces this on, and `--no-keep-trailing-period` forces it off.
     pub(crate) keep_trailing_period: Option<bool>,
     /// Threshold of the spoken-numbers rule.
     /// Only isolated single-digit cardinals ("zero" to "nine") and isolated ordinals are compared with it: below it they stay exactly as the ASR model produced them, and at or above it they become digits.
@@ -128,55 +128,62 @@ pub(crate) struct RulesConfig {
 pub(crate) const TEMPLATE: &str = r#"# parakit config.toml
 #
 # Precedence: CLI flags > this file > built-in defaults.
-# Every key below is optional. Uncomment and edit the keys you want to
-# override; leave the rest commented out to keep the built-in default.
+# Every key below is optional.
+# Uncomment and edit the keys you want to override, and leave the rest commented out to keep the built-in default.
 
 [daemon]
-# Path to a GGUF model file. Overrides the cached Q8_0 model.
+# Path to a GGUF model file.
+# Overrides the cached Q8_0 model.
 # model = "/path/to/model.gguf"
 
 # Runtime compute device: "auto", "cpu", or "gpu".
 # device = "auto"
 
-# CPU inference threads. Defaults to a conservative detected count.
+# CPU inference threads, 1 or more.
+# Unset: half the logical CPUs the process may use, with a minimum of 2, or 1 on a single-CPU machine.
 # threads = 4
 
-# Unload the model after this many idle minutes. 0 keeps it resident.
+# Unload the model after this many idle minutes.
+# 0 keeps it resident.
 # The next dictation automatically reloads it while audio is captured.
 # model_idle_minutes = 10
 
 # Batch insertion style: "terminal", "standard", or "direct".
+# Unset: "terminal" on Linux, "standard" on macOS and Windows.
 # paste_mode = "standard"
 
-# Leave dictated text on the clipboard after paste instead of restoring
-# the previous clipboard contents.
+# Leave dictated text on the clipboard after paste instead of restoring the previous clipboard contents.
 # keep_transcript_clipboard = false
 
 # Play the audio cues (start / success / error tones).
 # sounds = true
 
-# Verbose diagnostics: paths, backend details, and timing lines. A CLI
-# --quiet flag always wins over this setting.
+# Print diagnostics: model path, microphone and backend details, timings, clipboard diagnostics, and the native inference library's own log messages.
+# Applies to `parakit start`, `parakit doctor`, and `parakit rules`.
+# Other commands take only the --verbose flag.
+# The global --verbose flag turns diagnostics on whatever this key says, and the global --quiet flag always wins.
 # verbose = false
 
 # Number of transcripts kept in daemon memory for `copy-last` and `history`.
-# Valid range: 0 through 100. 0 disables both. History lives only in daemon
-# memory, is never written to disk, and is cleared when the daemon stops.
+# Valid range: 0 through 100.
+# 0 disables both.
+# History lives only in daemon memory and is cleared when the daemon stops.
+# This key never writes it to disk, though logging.dir can log the same transcripts.
 # transcript_history = 10
 
 [cleaning]
 # Enable the text-cleaning pipeline.
 # enabled = true
 
-# Cleanup behavior tier: "safe" or "aggressive". Safe performs mechanical
-# cleanup and high-confidence normalization only. Aggressive additionally
-# deletes discourse markers such as filler "like", "you know", and "I mean",
-# which can change meaning. Overridden by CLI --cleaning-profile.
+# Cleanup behavior tier: "safe" or "aggressive".
+# Safe performs mechanical cleanup and high-confidence normalization only.
+# Aggressive additionally deletes discourse markers such as filler "like", "you know", and "I mean", which can change meaning, and collapses repeats of that, no, can, had, and do.
+# Overridden by CLI --cleaning-profile.
 # profile = "safe"
 
-# Keep the single terminal period. Cleanup drops it by default because
-# parakit is used mostly for messaging-style dictation. CLI
-# --keep-trailing-period forces this on.
+# Keep the single terminal period.
+# Cleanup drops it by default because parakit is used mostly for messaging-style dictation.
+# CLI --keep-trailing-period forces this on, and --no-keep-trailing-period forces it off.
 # keep_trailing_period = false
 
 # Threshold of the spoken-numbers rule, 0 or more.
@@ -189,26 +196,27 @@ pub(crate) const TEMPLATE: &str = r#"# parakit config.toml
 # Even at 0, adjacent small-number runs ("one two three"), plural magnitudes, fractions, and the time unit "second" stay as words.
 # number_threshold = 5
 
-# Rule names to disable. Merged with any CLI --disable-rule flags. Run
-# `parakit rules list` to see all built-in and user rule names.
+# Rule names to disable.
+# Merged with any CLI --disable-rule flags.
+# Run `parakit rules list` to see all built-in and user rule names.
 # disabled_rules = ["fix-trailing-period"]
 
 [logging]
-# Directory for JSONL transcription logs. One file is written per local day.
+# Directory for JSONL transcription logs.
+# One file is written per local day.
 # Unset disables transcription logging.
 # dir = "/home/user/.parakit/logs"
 
 [hotkey]
-# Linux hotkey backend: "auto", "desktop", "x11-global-hotkey",
-# "x11-listen", or "evdev-proxy-experimental". Linux only.
+# Linux hotkey backend: "auto", "desktop", "x11-global-hotkey", "x11-listen", or "evdev-proxy-experimental".
+# Linux only.
 # backend = "auto"
 
 # User-defined text-cleaning rules, applied alongside the built-in rules.
-# Repeat the [[rules.user]] table for each additional rule; uncomment the
-# [[rules.user]] header itself, or the keys below land in [hotkey]. See
-# docs/cleaning-rules.md for the full user-rule format and validation
-# rules (names must not collide with a built-in rule or another user rule,
-# and `pattern` must be a valid Rust `regex` crate pattern).
+# Repeat the [[rules.user]] table for each additional rule.
+# Uncomment the [[rules.user]] header itself, or the keys below land in [hotkey].
+# Names must not collide with a built-in rule or another user rule, and `pattern` must be a valid Rust `regex` crate pattern.
+# See docs/config_reference.toml for every user-rule key, its validation, and the replacement syntax.
 # [[rules.user]]
 # name = "weights-and-biases-to-wandb"
 # description = "Map 'weights and biases' to 'wandb'"

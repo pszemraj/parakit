@@ -350,7 +350,8 @@ backend = "auto"
 
 # EDITOR
 # Editor for `parakit config edit` when VISUAL is unset or blank, parsed the same way.
-# With neither set the command fails and prints the path to edit by hand. If the config file did not exist, the template is written first.
+# A blank EDITOR is ignored too.
+# With neither one set to a nonblank value the command fails and prints the path to edit by hand. If the config file did not exist, the template is written first.
 
 # DISPLAY
 # Linux. Must be present for the daemon and for the X11 checks of `parakit doctor`. parakit checks only that it is set. Whether it is usable is decided when the X11 connection opens.

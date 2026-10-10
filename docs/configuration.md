@@ -40,7 +40,7 @@ parakit config show
 parakit config edit
 ```
 
-`config init` creates any missing parent directories and writes the fully commented template. `config show`, which is also what bare `parakit config` runs, loads and validates the file and prints the resolved path plus the effective value of every key. `config edit` writes the template first when the file is missing, then opens the file in `$VISUAL`, or in `$EDITOR` when `VISUAL` is unset.
+`config init` creates any missing parent directories and writes the fully commented template. `config show`, which is also what bare `parakit config` runs, loads and validates the file and prints the resolved path plus the effective value of every key. `config edit` writes the template first when the file is missing, then opens the file in `$VISUAL`, or in `$EDITOR` when `VISUAL` is unset, empty, or whitespace-only.
 
 `config show` output for the example config above:
 
@@ -83,7 +83,7 @@ A key that is not set in the file shows a parenthesized default (`device`, `thre
 
 `--quiet config show` prints nothing but still resolves, loads, and validates the config file, so it can be used as a silent validation command. `--quiet` likewise silences `config path` and the `wrote <path>` line from `config init`, though those commands still perform their normal path resolution and file operations.
 
-`$VISUAL` and `$EDITOR` are split into an executable plus arguments using shell-style quoting, then launched directly with the config path appended. Values such as `EDITOR="code -w"` therefore work without invoking a shell. With neither variable set, `config edit` errors and prints the path to edit by hand.
+`$VISUAL` and `$EDITOR` are split into an executable plus arguments using shell-style quoting, then launched directly with the config path appended. Values such as `EDITOR="code -w"` therefore work without invoking a shell. An empty or whitespace-only value counts as unset, so a blank `VISUAL` falls through to `EDITOR`. With neither variable set to a nonblank value, `config edit` errors and prints the path to edit by hand.
 
 `config edit` stays available when the config is broken, and it does not validate the file after the editor exits. Run `parakit config show` afterward.
 
