@@ -63,7 +63,14 @@ impl EngineRecipe {
             self.verbose,
             policy,
         )
-        .with_context(|| format!("could not open model {}", self.model_path.display()))?;
+        .with_context(|| {
+            let hint = if !self.verbose && matches!(policy, LoadPolicy::Startup) {
+                "; rerun with --verbose for native loader diagnostics"
+            } else {
+                ""
+            };
+            format!("could not open model {}{hint}", self.model_path.display())
+        })?;
         let (device_summary, has_gpu) = resolve_runtime_device(engine.device_mode());
         log.verbose(format!(
             "parakit: model opened in {:.0}ms with backend={} threads={} device={}",
@@ -131,10 +138,11 @@ impl EngineRecipe {
     }
 }
 
-/// GPU memory to keep free beyond the model weights when reloading: the
-/// compute buffer and scratch pool of a dictation up to about a minute long.
+/// GPU workspace allowance beyond the model weights on reload. CUDA measurements
+/// near the 270-second recording limit used up to 3,801 MiB; see docs/dev/memory.md.
+/// This free-memory estimate cannot reserve space against competing allocations.
 #[cfg(feature = "bundled")]
-const RELOAD_GPU_WORKSPACE_BYTES: u64 = 1 << 30;
+const RELOAD_GPU_WORKSPACE_BYTES: u64 = 4 << 30;
 
 /// Decide the reload device from free GPU memory.
 ///
@@ -191,8 +199,8 @@ fn open_engine(
         return Engine::open(path, threads, device_mode);
     }
     match policy {
-        // Quiet startup discards native loader output; a mistaken model file
-        // is reported once through the returned error, not low-level GGUF lines.
+        // Non-verbose startup suppresses process-wide stderr, including capture
+        // and IPC diagnostics. The returned error points to --verbose for details.
         LoadPolicy::Startup => {
             super::stderr::with_stderr_suppressed(|| Engine::open(path, threads, device_mode))
         }
@@ -301,10 +309,63 @@ fn format_warmup_sequence(sequence: &[usize]) -> String {
 mod tests {
     use super::*;
 
+    #[test]
+    fn startup_model_error_points_to_suppressed_diagnostics() {
+        const CHILD: &str = "PARAKIT_MODEL_OPEN_ERROR_CHILD";
+        if let Ok(verbose) = std::env::var(CHILD) {
+            let root = crate::test_support::fixture_root("model-open", "invalid-gguf");
+            let path = root.join("invalid.gguf");
+            std::fs::write(&path, b"not a GGUF model").unwrap();
+            let verbose = verbose == "true";
+            let recipe = EngineRecipe {
+                model_path: path,
+                threads: 1,
+                device_mode: DeviceMode::Cpu,
+                verbose,
+            };
+            let log = Logger::new(super::super::logging::LogLevel::Quiet);
+            let error = match recipe.open(&log) {
+                Ok(_) => panic!("invalid model unexpectedly opened"),
+                Err(error) => format!("{error:#}"),
+            };
+            assert!(error.contains("could not open model"));
+            assert_eq!(error.contains("rerun with --verbose"), !verbose);
+            return;
+        }
+        // Native stderr suppression is process-wide, so isolate both cases
+        // from other tests and inspect what reaches the actual descriptor.
+        for verbose in [false, true] {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "daemon::engine_runtime::tests::startup_model_error_points_to_suppressed_diagnostics",
+                    "--nocapture",
+                ])
+                .env(CHILD, verbose.to_string())
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            if !verbose {
+                assert!(
+                    output.stderr.is_empty(),
+                    "{}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            }
+        }
+    }
+
     #[cfg(feature = "bundled")]
     #[test]
     fn reload_falls_back_to_cpu_only_when_the_gpu_lacks_room() {
-        const NEED: u64 = 2_000;
+        // The old one-GiB reserve admitted these long-dictation workloads even
+        // though their measured CUDA workspace would exhaust the available room.
+        const WEIGHTS: u64 = 745_121_632;
+        const NEED: u64 = WEIGHTS + RELOAD_GPU_WORKSPACE_BYTES;
         for (requested, free, expected) in [
             (DeviceMode::Auto, Some(NEED), Some(DeviceMode::Auto)),
             (DeviceMode::Auto, Some(NEED - 1), Some(DeviceMode::Cpu)),
@@ -313,6 +374,12 @@ mod tests {
             (DeviceMode::Gpu, Some(NEED - 1), None),
             (DeviceMode::Gpu, None, Some(DeviceMode::Gpu)),
             (DeviceMode::Cpu, Some(0), Some(DeviceMode::Cpu)),
+            (
+                DeviceMode::Auto,
+                Some(WEIGHTS + 3_641 * 1_048_576),
+                Some(DeviceMode::Cpu),
+            ),
+            (DeviceMode::Gpu, Some(WEIGHTS + 3_801 * 1_048_576), None),
         ] {
             assert_eq!(
                 reload_device_for_free_memory(requested, free, NEED),
