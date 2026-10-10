@@ -138,11 +138,13 @@ impl EngineRecipe {
     }
 }
 
-/// GPU workspace allowance beyond the model weights on reload. CUDA measurements
-/// near the 270-second recording limit used up to 3,801 MiB; see docs/dev/memory.md.
-/// This free-memory estimate cannot reserve space against competing allocations.
+/// GPU memory to keep free beyond the model weights when reloading: the
+/// compute buffer and scratch pool of a typical dictation. CUDA used about
+/// 14 MiB per second of audio, so this covers roughly 75 seconds; sizing for
+/// the 270-second limit would push smaller GPUs to CPU on every reload.
+/// See docs/dev/memory.md.
 #[cfg(feature = "bundled")]
-const RELOAD_GPU_WORKSPACE_BYTES: u64 = 4 << 30;
+const RELOAD_GPU_WORKSPACE_BYTES: u64 = 1 << 30;
 
 /// Decide the reload device from free GPU memory.
 ///
@@ -362,10 +364,7 @@ mod tests {
     #[cfg(feature = "bundled")]
     #[test]
     fn reload_falls_back_to_cpu_only_when_the_gpu_lacks_room() {
-        // The old one-GiB reserve admitted these long-dictation workloads even
-        // though their measured CUDA workspace would exhaust the available room.
-        const WEIGHTS: u64 = 745_121_632;
-        const NEED: u64 = WEIGHTS + RELOAD_GPU_WORKSPACE_BYTES;
+        const NEED: u64 = 2_000;
         for (requested, free, expected) in [
             (DeviceMode::Auto, Some(NEED), Some(DeviceMode::Auto)),
             (DeviceMode::Auto, Some(NEED - 1), Some(DeviceMode::Cpu)),
@@ -374,12 +373,6 @@ mod tests {
             (DeviceMode::Gpu, Some(NEED - 1), None),
             (DeviceMode::Gpu, None, Some(DeviceMode::Gpu)),
             (DeviceMode::Cpu, Some(0), Some(DeviceMode::Cpu)),
-            (
-                DeviceMode::Auto,
-                Some(WEIGHTS + 3_641 * 1_048_576),
-                Some(DeviceMode::Cpu),
-            ),
-            (DeviceMode::Gpu, Some(WEIGHTS + 3_801 * 1_048_576), None),
         ] {
             assert_eq!(
                 reload_device_for_free_memory(requested, free, NEED),
