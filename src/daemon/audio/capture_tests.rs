@@ -1,5 +1,9 @@
 //! Unit tests for live audio selection and recording buffer helpers.
 
+use super::device::{
+    is_bluetooth_input_name, is_virtual_input_name, lower_cost_mono_config_note,
+    preferred_mono_config_from_ranges, source_aware_mic_identity, MicIdentity,
+};
 use super::*;
 
 #[test]
@@ -55,7 +59,7 @@ fn mic_summary_and_detail_lines_cases_are_stable() {
                 "capture path: CPAL opened 4ch; callback downmixes to mono before resampling",
             ],
         },
-        // Previously uncovered: `MicInfo::summary` (capture.rs ~238) has a
+        // Previously uncovered: `MicInfo::summary` (capture_device.rs) has a
         // third `!resampling` arm that neither original test exercised
         // (both used `resampling: true`). Mono, no resampling.
         MicSummaryCase {
@@ -149,8 +153,8 @@ fn preferred_mono_config_and_lower_cost_note_cases_are_stable() {
                 stream_config_range(1, 48_000, 48_000, SampleFormat::I16),
             ],
             expect_preferred: None,
-            // Production (`select_preferred_input_config`, capture.rs
-            // ~1145) only calls `lower_cost_mono_config_note` once
+            // Production (`select_preferred_input_config`, capture_device.rs)
+            // only calls `lower_cost_mono_config_note` once
             // `preferred_mono_config_from_ranges` returns `None`, so this
             // row's ranges also exercise that note path.
             expect_note: Some(
@@ -167,8 +171,8 @@ fn preferred_mono_config_and_lower_cost_note_cases_are_stable() {
                 "16000 Hz mono is available as F32, but not selected because the current policy preserves the OS default sample rate",
             ),
         },
-        // Previously uncovered: `lower_cost_mono_config_note` (capture.rs
-        // ~1184) returns `None` when the advertised ranges contain neither
+        // Previously uncovered: `lower_cost_mono_config_note`
+        // (capture_device.rs) returns `None` when the advertised ranges contain neither
         // a same-rate-other-format nor a target-rate-mono candidate (here,
         // no mono config is advertised at all).
         MonoConfigCase {
