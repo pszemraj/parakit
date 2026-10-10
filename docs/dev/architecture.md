@@ -66,7 +66,7 @@ Cross-thread communication uses atomics, mutex-protected buffers, and crossbeam 
 | --- | --- |
 | `src/{main,cli,app}.rs` | Binary entrypoint, CLI definitions and precedence merge, command dispatch, daemon setup, and batch PTT simulation helper. |
 | `src/config.rs` | `config.toml` path resolution, parsing, validation, and template. |
-| `src/daemon/desktop/hotkey.rs`, `src/daemon/desktop/hotkey/macos.rs` | Hotkey backends and hotkey state helpers. |
+| `src/daemon/desktop/hotkey.rs`, `src/daemon/desktop/hotkey/{linux,macos}.rs` | Hotkey backends and hotkey state helpers. |
 | `src/daemon/hotkey_help.rs` | Shared user-facing hotkey remediation text. |
 | `src/daemon/recording.rs` | Hotkey transition coordinator, focus snapshot, audio start/stop, and PCM handoff. |
 | `src/daemon/audio/capture.rs` | Microphone selection, live stream ownership, ring-buffer drain, pre-roll, resampling, and restart. |
