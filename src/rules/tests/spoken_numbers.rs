@@ -291,6 +291,38 @@ fn ambiguous_or_stacked_scales_keep_their_wording() {
 }
 
 #[test]
+fn a_decimal_coefficient_keeps_its_scale_words() {
+    // text2num cannot scale a decimal, which left "2.5 1000". Any count after
+    // the scale words starts another number instead of joining that scale.
+    assert_clean_at_thresholds(&[
+        ("Use two point five thousand.", "Use 2.5 thousand."),
+        ("One point five hundred.", "1.5 hundred."),
+        (
+            "Use two point five hundred thousand.",
+            "Use 2.5 hundred thousand.",
+        ),
+        ("Use three point zero million.", "Use 3.0 million."),
+        (
+            "Use three point zero million and two point zero billion.",
+            "Use 3.0 million and 2.0 billion.",
+        ),
+        (
+            "We have two point five million three point six million.",
+            "We have 2.5 million 3.6 million.",
+        ),
+        (
+            "Use two point five thousand five hundred.",
+            "Use 2.5 thousand 500.",
+        ),
+        ("Minus two point five thousand.", "-2.5 thousand."),
+        (
+            "The model has two point five thousand parameters.",
+            "The model has 2.5K parameters.",
+        ),
+    ]);
+}
+
+#[test]
 fn scale_coefficient_splits_leave_valid_compounds_alone() {
     assert_clean_at_thresholds(&[
         ("Use one hundred and five thousand.", "Use 105000."),

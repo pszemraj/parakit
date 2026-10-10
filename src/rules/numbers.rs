@@ -521,7 +521,8 @@ fn number_breaks(input: &str, language: &Language) -> Vec<usize> {
                 };
                 match stranded_scale(input, &tokens, count, scale, language)? {
                     StrandedScale::Coefficient(at) => Some(tokens[at].start),
-                    StrandedScale::Ambiguous => None,
+                    StrandedScale::Decimal(end) if end < scale.end => Some(tokens[end].start),
+                    StrandedScale::Decimal(_) | StrandedScale::Ambiguous => None,
                 }
             })
             .collect();
@@ -533,6 +534,9 @@ fn number_breaks(input: &str, language: &Language) -> Vec<usize> {
 enum StrandedScale {
     /// The count starting at this token is the scale's coefficient.
     Coefficient(usize),
+    /// A decimal coefficient takes the scale words before this token, which
+    /// starts the next number.
+    Decimal(usize),
     /// More than one split is grammatical, or the scales may stack.
     Ambiguous,
 }
@@ -562,8 +566,12 @@ fn stranded_scale(
         return None;
     }
     let words = &tokens[count.start..count.end];
+    // text2num cannot scale a decimal at all; its scale words end the quantity.
     if words.iter().any(|token| token.lowercase == "point") {
-        return None;
+        let end = (scale.start..scale.end)
+            .find(|&at| tokens[at].lowercase != "-" && scale_rank(&tokens[at].lowercase).is_none())
+            .unwrap_or(scale.end);
+        return Some(StrandedScale::Decimal(end));
     }
     // "fifteen hundred thousand" can stack its scales into 1500000.
     let largest = words
@@ -650,17 +658,31 @@ fn render_hybrid_magnitudes(input: &str, language: &Language, threshold: f64) ->
         index = end + 1;
     }
 
-    // Breaks already gave every unambiguous stranded scale its coefficient.
-    // One that remains would render as a bare 100 or 1000, so keep the words.
+    // A decimal coefficient keeps its scale words, as text2num cannot scale it:
+    // "two point five thousand" is 2.5 thousand. Breaks already gave every
+    // other unambiguous stranded scale its coefficient. One that remains would
+    // render as a bare 100 or 1000, so keep the words.
     for pair in occurrences.windows(2) {
         let [count, scale] = pair else {
             continue;
         };
-        if stranded_scale(input, &tokens, count, scale, language).is_some() {
-            let start = tokens[count.start].start;
-            let end = tokens[scale.end - 1].end;
-            replacements.push((start, end, input[start..end].to_owned()));
-        }
+        let Some(stranded) = stranded_scale(input, &tokens, count, scale, language) else {
+            continue;
+        };
+        let start = tokens[count.start].start;
+        let end = tokens[scale.end - 1].end;
+        let replacement = match stranded {
+            StrandedScale::Decimal(scale_end) if scale_end == scale.end => {
+                let scales: Vec<_> = tokens[scale.start..scale.end]
+                    .iter()
+                    .filter(|token| scale_rank(&token.lowercase).is_some())
+                    .map(|token| token.lowercase.as_str())
+                    .collect();
+                format!("{} {}", count.text, scales.join(" "))
+            }
+            _ => input[start..end].to_owned(),
+        };
+        replacements.push((start, end, replacement));
     }
 
     for (scale_index, scale_token) in tokens.iter().enumerate() {
