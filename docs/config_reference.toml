@@ -43,7 +43,9 @@
 [daemon]
 # path string (optional). Path to the GGUF speech-model file that the daemon loads.
 # Unset: the daemon uses the hosted Q8_0 model, parakeet-tdt-0.6b-v3-Q8_0.gguf, in the model cache directory (see PARAKIT_MODELS_DIR at the end of this file), and downloads it at startup when it is missing.
-# Overridden by: the -m/--model flag. When the flag is given, the path in this key is never checked or used, so a wrong path here is harmless.
+# Overridden by: the -m/--model flag. When the flag is given, the path in this key is never checked for a file or used, so a wrong path here is harmless.
+# An empty string fails config load with "daemon.model is set but empty", even when -m is given.
+# An empty -m or --model value is a command-line parse error.
 # The file must exist and be a regular file (a symlink to one is fine). Otherwise startup fails with "model path is not a file".
 # This check runs right after the config loads, before the hotkey and microphone checks.
 # The path must also be valid UTF-8, or startup fails with "model path is not valid UTF-8" when the model is opened.
@@ -251,8 +253,9 @@ disabled_rules = []
 # A write failure prints `parakit: transcription log write failed: ...` (or `insertion log write failed`) to stderr, which --quiet does not suppress. Dictation continues, and the next dictation tries again.
 # Silent or no-speech captures and failed transcriptions are not logged. Audio is never logged.
 # This is independent of daemon.transcript_history, which keeps recent transcripts in daemon memory only.
+# An empty string fails config load with "logging.dir is set but empty".
+# An empty --log-dir value is a command-line parse error.
 # Warning: the log holds the raw and cleaned dictated text in plain text.
-# Warning: an empty string "" is accepted and writes the log files into the daemon's working directory.
 # dir = "/home/user/.parakit/logs"
 
 

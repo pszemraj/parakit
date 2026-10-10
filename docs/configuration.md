@@ -107,7 +107,7 @@ Short-lived `rules test` and `rules list` processes each load the current file, 
 
 ## Validation and Recovery
 
-`parakit config show` catches TOML and schema errors, invalid cleaning thresholds, unknown disabled-rule names, and invalid or conflicting user rules. Daemon startup additionally checks resources that depend on the real machine, such as the model file, compute device, insertion backend, hotkey, audio, and permissions. The log directory is created and checked lazily on the first transcription write, so neither `config show` nor daemon startup can prove it is writable.
+`parakit config show` catches TOML and schema errors, an empty `daemon.model` or `logging.dir`, invalid cleaning thresholds, unknown disabled-rule names, and invalid or conflicting user rules. Daemon startup additionally checks resources that depend on the real machine, such as the model file, compute device, insertion backend, hotkey, audio, and permissions. The log directory is created and checked lazily on the first transcription write, so neither `config show` nor daemon startup can prove it is writable.
 
 Use this edit loop for cleaning and user-rule changes:
 

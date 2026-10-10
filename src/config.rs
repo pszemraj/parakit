@@ -287,12 +287,7 @@ fn xdg_config_base() -> Result<PathBuf> {
 ///
 /// # Errors
 ///
-/// Returns an error if the config path cannot be resolved, the file exists
-/// but cannot be read, the file is not valid TOML for [`ConfigFile`], a
-/// user-defined rule fails validation (empty or non-canonical name, empty
-/// pattern, invalid regex, a name colliding with a built-in rule, or a
-/// duplicate user rule name), or `cleaning.disabled_rules` names a rule that
-/// does not exist.
+/// Returns an error if the config path cannot be resolved, the file exists but cannot be read, the file is not valid TOML for [`ConfigFile`], `daemon.transcript_history` exceeds its limit, `daemon.model` or `logging.dir` is an empty path, a user-defined rule fails validation (empty or non-canonical name, empty pattern, invalid regex, a name colliding with a built-in rule, or a duplicate user rule name), or `cleaning.disabled_rules` names a rule that does not exist.
 /// Parse and validation errors are annotated with the config file path.
 pub(crate) fn load() -> Result<ConfigFile> {
     load_from_path(&config_path()?)
@@ -335,6 +330,19 @@ pub(crate) fn load_from_path(path: &Path) -> Result<ConfigFile> {
             path.display(),
             crate::daemon::ipc::MAX_TRANSCRIPT_HISTORY
         );
+    }
+
+    // An empty path is never intended: as logging.dir it writes logs into the daemon's working directory, and as daemon.model it fails only at startup with a blank path in the error.
+    for (key, value) in [
+        ("daemon.model", config.daemon.model.as_deref()),
+        ("logging.dir", config.logging.dir.as_deref()),
+    ] {
+        if value.is_some_and(|value| value.as_os_str().is_empty()) {
+            anyhow::bail!(
+                "invalid config in {}: {key} is set but empty",
+                path.display()
+            );
+        }
     }
 
     parakit::rules::validate_configured_rules(
@@ -498,6 +506,23 @@ position = "first"
             "{message}"
         );
         assert!(message.contains(&path.display().to_string()), "{message}");
+    }
+
+    #[test]
+    fn empty_model_and_log_dir_paths_are_rejected() {
+        for (slug, toml, key) in [
+            ("empty-model", "[daemon]\nmodel = \"\"\n", "daemon.model"),
+            ("empty-log-dir", "[logging]\ndir = \"\"\n", "logging.dir"),
+        ] {
+            let path = write_fixture(slug, toml);
+            let err = load_from_path(&path).expect_err("an empty path must fail config load");
+            let message = format!("{err:#}");
+            assert!(
+                message.contains(&format!("{key} is set but empty")),
+                "{message}"
+            );
+            assert!(message.contains(&path.display().to_string()), "{message}");
+        }
     }
 
     #[test]

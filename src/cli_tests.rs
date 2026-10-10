@@ -608,3 +608,13 @@ fn model_idle_minutes_precedence_and_validation() {
     }
     assert!(Cli::try_parse_from(["parakit", "start", "--simulate-ptt-repeat", "2"]).is_err());
 }
+
+#[test]
+fn empty_model_and_log_dir_flags_are_rejected_like_their_config_keys() {
+    // config::load_from_path rejects an empty daemon.model or logging.dir, so the flags must not accept the empty path the config forbids.
+    for flag in ["-m", "--model", "--log-dir"] {
+        let error = Cli::try_parse_from(["parakit", "start", flag, ""])
+            .expect_err("an empty path flag must not parse");
+        assert_eq!(error.kind(), clap::error::ErrorKind::InvalidValue, "{flag}");
+    }
+}
