@@ -180,15 +180,6 @@ pub fn devices() -> Vec<DeviceInfo> {
         } else {
             free_bytes
         };
-        #[cfg(target_os = "macos")]
-        let free_bytes = if name.starts_with("MTL") {
-            // ggml subtracts only this process's Metal allocations from the
-            // device budget. Account for other programs using unified memory
-            // too, without claiming more room than Metal itself recommends.
-            macos_available_memory().map_or(free_bytes, |available| free_bytes.min(available))
-        } else {
-            free_bytes
-        };
         out.push(DeviceInfo {
             name,
             description,
@@ -349,40 +340,6 @@ fn windows_nvidia_free_memory(pci_bus_id: &std::ffi::CStr) -> Option<usize> {
     })();
     unsafe { shutdown() };
     available
-}
-
-#[cfg(target_os = "macos")]
-// libc deprecates its Mach bindings in favor of a separate crate; these
-// stable OS calls keep this small probe within the existing dependency set.
-#[allow(deprecated)]
-fn macos_available_memory() -> Option<usize> {
-    extern "C" {
-        fn mach_port_deallocate(
-            task: libc::mach_port_t,
-            name: libc::mach_port_t,
-        ) -> libc::kern_return_t;
-    }
-    let mut stats: libc::vm_statistics64 = unsafe { std::mem::zeroed() };
-    let mut count = libc::HOST_VM_INFO64_COUNT;
-    let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
-    let host = unsafe { libc::mach_host_self() };
-    let stats_result = unsafe {
-        libc::host_statistics64(
-            host,
-            libc::HOST_VM_INFO64,
-            (&mut stats as *mut libc::vm_statistics64).cast(),
-            &mut count,
-        )
-    };
-    unsafe { mach_port_deallocate(libc::mach_task_self(), host) };
-    if stats_result != libc::KERN_SUCCESS || page_size <= 0 {
-        return None;
-    }
-    // Speculative pages are already included in free_count. Purgeable pages
-    // can overlap the active/inactive queues, so adding them double-counts.
-    (stats.free_count as usize)
-        .checked_add(stats.inactive_count as usize)?
-        .checked_mul(page_size as usize)
 }
 
 #[cfg(test)]

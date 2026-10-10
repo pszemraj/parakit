@@ -57,9 +57,11 @@ inference session remains live or identify an allocator leak.
 
 On the RTX 5090 with CUDA, a 55-second dictation needed about 1.5 GB free beyond the retained context: 710 MiB of weights plus a 749 MiB compute buffer and scratch pool. With less than the 710 MiB of weights free, weight allocation failed and reload reported an error. Between that and about 1.5 GB free, reload succeeded, then ggml aborted the process on the first real dictation: the VMM pool's `cuMemCreate` in `ggml-cuda.cu`, or the unchecked `ggml_gallocr_reserve_n` result leading to a `GGML_ASSERT` in `ggml-backend.cpp`. Additional CUDA runs on 2026-10-10 measured 777 MiB of workspace for 55 seconds of audio, 3,641 MiB for 265 seconds, and 3,801 MiB for 277 seconds, beyond the 566 MiB retained context and approximately 711 MiB of model weights. Reload requires the model size plus 1 GiB free before it opens on a GPU (see [idle model offload](../running.md#idle-model-offload)), which covers dictations of about a minute. Sizing the allowance for the 270-second limit would move smaller GPUs to CPU after every offload. The check cannot reserve memory, and the compute buffer grows with dictation length, so a GPU filled after reload can still abort a long dictation.
 
-On macOS, the Metal budget tracks only this process's allocations. Parakit
-caps that free-memory estimate by macOS free and inactive host pages so
-other programs' unified-memory use also affects reload selection. This
-remains an estimate and does not reserve memory. The
+On macOS, Metal shares unified memory with the system, so the reload check
+uses ggml's Metal budget as reported: `recommendedMaxWorkingSetSize`, which
+follows the GPU wired-memory limit, minus this process's Metal allocations.
+After an offload this is close to the wired limit, so the check only moves
+reload to CPU when that limit cannot hold the model and its workspace. Memory
+used by other programs is left to macOS paging rather than estimated. The
 [native macOS validation report](macos-validation-2026-10-07.md) records
 CPU/Metal offload measurements and the limits of the pressure checks.

@@ -83,7 +83,9 @@ as zero available bytes, with a regression test. Speculative pages are already
 included in free pages, and purgeable pages can overlap other queues; neither
 is added again. This remains an estimate, without reserving memory. If the
 native host probe is unavailable, the existing backend reading remains the
-fallback.
+fallback. The host-page cap was removed on 2026-10-10: unified memory pages
+under pressure instead of failing an allocation, so the reload check now uses
+the Metal budget alone (see [memory](memory.md)).
 
 The full Rust loop passed: package formatting, strict rustdoc (95 files,
 zero issues), workspace/all-targets checking, 370 tests, strict default and
