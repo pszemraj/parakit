@@ -137,9 +137,7 @@ pub(crate) fn spawn_worker(ctx: WorkerCtx) -> std::thread::JoinHandle<()> {
 }
 
 fn worker_loop(ctx: WorkerCtx) {
-    // Config/CLI validation has already checked the supported clock range.
-    let timeout = super::model_lifecycle::idle_timeout(ctx.model_idle_minutes)
-        .expect("validated model idle timeout");
+    let timeout = super::model_lifecycle::idle_timeout(ctx.model_idle_minutes);
     let recipe = ctx.recipe.clone();
     let reload_log = Arc::clone(&ctx.log);
     let reload_state = Arc::clone(&ctx.state);

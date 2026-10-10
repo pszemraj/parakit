@@ -1,6 +1,6 @@
 //! Model residency and activity admission shared by capture, worker, and IPC.
 
-use anyhow::{bail, Result};
+use anyhow::Result;
 use crossbeam_channel::{bounded, Receiver, Sender};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
@@ -10,27 +10,14 @@ use std::time::{Duration, Instant};
 /// Default uninterrupted idle interval before releasing the inference session.
 pub(crate) const DEFAULT_MODEL_IDLE_MINUTES: u64 = 10;
 
-/// Convert whole minutes to a representable monotonic timeout; zero disables it.
+/// Convert whole minutes to a timeout; zero disables it.
 ///
 /// # Returns
 ///
-/// A timeout, or none when disabled.
-///
-/// # Errors
-///
-/// Rejects multiplication overflow and intervals outside the host clock range.
-pub(crate) fn idle_timeout(minutes: u64) -> Result<Option<Duration>> {
-    if minutes == 0 {
-        return Ok(None);
-    }
-    let Some(seconds) = minutes.checked_mul(60) else {
-        bail!("model idle minutes is too large");
-    };
-    let duration = Duration::from_secs(seconds);
-    if Instant::now().checked_add(duration).is_none() {
-        bail!("model idle minutes exceeds the supported clock range");
-    }
-    Ok(Some(duration))
+/// A timeout saturating at the maximum seconds, or none when disabled.
+/// Unrepresentable channel deadlines simply never expire.
+pub(crate) fn idle_timeout(minutes: u64) -> Option<Duration> {
+    (minutes != 0).then(|| Duration::from_secs(minutes.saturating_mul(60)))
 }
 
 /// Residency is independent of the recording/transcribing daemon phase.

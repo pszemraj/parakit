@@ -18,11 +18,19 @@ fn slot() -> (ModelSlot<Session>, Arc<AtomicUsize>) {
 }
 
 #[test]
-fn timeout_defaults_disable_and_overflow() {
+fn timeout_defaults_disable_and_saturate_without_expiring() {
     assert_eq!(DEFAULT_MODEL_IDLE_MINUTES, 10);
-    assert_eq!(idle_timeout(10).unwrap(), Some(Duration::from_secs(600)));
-    assert_eq!(idle_timeout(0).unwrap(), None);
-    assert!(idle_timeout(u64::MAX).is_err());
+    assert_eq!(idle_timeout(10), Some(Duration::from_secs(600)));
+    assert_eq!(idle_timeout(0), None);
+    let timeout = idle_timeout(u64::MAX);
+    assert_eq!(timeout, Some(Duration::from_secs(u64::MAX)));
+    let gate = ActivityGate::new();
+    gate.ready();
+    let (mut slot, drops) = slot();
+    assert!(!slot.offload(&gate, timeout));
+    let deadline = crossbeam_channel::after(gate.remaining(timeout).unwrap());
+    assert!(deadline.try_recv().is_err());
+    assert_eq!(drops.load(Ordering::SeqCst), 0);
 }
 
 #[test]

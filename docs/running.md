@@ -142,7 +142,7 @@ The detail block reflects the daemon's own state at query time, not the querying
 
 ## Idle Model Offload
 
-The model loads and warms at startup, then releases its inference session after ten uninterrupted idle minutes. Set `[daemon] model_idle_minutes = N` in the config, or run `parakit start --model-idle-minutes N`. The flag overrides the config. Nonnegative whole minutes are required; `0` keeps the model resident. Negative, fractional, and overflowing durations are rejected.
+The model loads and warms at startup, then releases its inference session after ten uninterrupted idle minutes. Set `[daemon] model_idle_minutes = N` in the config, or run `parakit start --model-idle-minutes N`. The flag overrides the config. Nonnegative whole minutes are required; `0` keeps the model resident.
 
 The idle interval uses monotonic elapsed time, not calendar time. Whether system
 sleep counts toward it depends on the OS and Rust's [clock implementation](https://doc.rust-lang.org/std/time/struct.Instant.html).

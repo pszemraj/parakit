@@ -56,14 +56,6 @@ impl Cli {
     }
 }
 
-fn parse_model_idle_minutes(raw: &str) -> Result<u64, String> {
-    let minutes: u64 = raw
-        .parse()
-        .map_err(|_| "model idle minutes must be a nonnegative whole number".to_string())?;
-    crate::daemon::model_lifecycle::idle_timeout(minutes).map_err(|err| err.to_string())?;
-    Ok(minutes)
-}
-
 /// Top-level subcommands.
 #[derive(Subcommand, Debug)]
 pub(crate) enum Commands {
@@ -106,7 +98,7 @@ pub(crate) struct StartCli {
     pub(crate) threads: Option<NonZeroUsize>,
 
     /// Unload the model after N idle minutes (default 10). Zero keeps it loaded.
-    #[arg(long, value_name = "N", value_parser = parse_model_idle_minutes)]
+    #[arg(long, value_name = "N")]
     pub(crate) model_idle_minutes: Option<u64>,
 
     /// Runtime compute device. `auto` uses the best GPU when available and CPU otherwise.
@@ -1389,7 +1381,12 @@ mod tests {
             start_from(&["--model-idle-minutes", "0"]).effective_model_idle_minutes(&config),
             0
         );
-        for raw in ["-1", "0.5", "18446744073709551615", "forever"] {
+        assert_eq!(
+            start_from(&["--model-idle-minutes", "18446744073709551615"])
+                .effective_model_idle_minutes(&config),
+            u64::MAX
+        );
+        for raw in ["-1", "0.5", "18446744073709551616", "forever"] {
             assert!(
                 Cli::try_parse_from(["parakit", "start", "--model-idle-minutes", raw]).is_err(),
                 "{raw}"

@@ -36,7 +36,7 @@ pub(super) fn run_ptt_audio_simulation(
         .effective_log_dir(config)
         .map(|dir| Arc::new(DataLogger::new(dir)));
     let minutes = start.effective_model_idle_minutes(config);
-    let timeout = idle_timeout(minutes)?;
+    let timeout = idle_timeout(minutes);
     let idle = Duration::from_secs(start.simulate_ptt_idle_seconds.unwrap_or(0));
     let repeats = start.simulate_ptt_repeat.map_or(1, NonZeroUsize::get);
     // Validate before model initialization rather than overflowing a sleep later.

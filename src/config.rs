@@ -313,15 +313,6 @@ pub(crate) fn load_from_path(path: &Path) -> Result<ConfigFile> {
     let config: ConfigFile = toml::from_str(&raw)
         .with_context(|| format!("failed to parse config file {}", path.display()))?;
 
-    if let Some(minutes) = config.daemon.model_idle_minutes {
-        crate::daemon::model_lifecycle::idle_timeout(minutes).with_context(|| {
-            format!(
-                "invalid config in {}: daemon.model_idle_minutes",
-                path.display()
-            )
-        })?;
-    }
-
     if config
         .daemon
         .transcript_history
@@ -655,7 +646,7 @@ replacement = "hello"
     }
     #[test]
     fn model_idle_config_accepts_zero_and_rejects_invalid_durations() {
-        for minutes in [0, 1, 10] {
+        for minutes in [0, 1, 10, i64::MAX as u64] {
             let path = write_fixture(
                 "idle-valid",
                 &format!("[daemon]\nmodel_idle_minutes = {minutes}\n"),
@@ -665,7 +656,7 @@ replacement = "hello"
                 Some(minutes)
             );
         }
-        for raw in ["-1", "1.5", "9223372036854775807", "\"ten\""] {
+        for raw in ["-1", "1.5", "9223372036854775808", "\"ten\""] {
             let path = write_fixture(
                 "idle-invalid",
                 &format!("[daemon]\nmodel_idle_minutes = {raw}\n"),
