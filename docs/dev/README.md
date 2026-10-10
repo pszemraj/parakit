@@ -54,7 +54,6 @@ Current Rust files over the approximate 1k LoC target:
 | `src/app.rs` | Holds top-level command dispatch and daemon bootstrap. Extract command handlers when a stable subsystem boundary appears. |
 | `src/daemon/desktop/hotkey.rs` | Is only slightly over the target and already delegates macOS code. Extract Linux backend implementations if it grows further. |
 | `src/daemon/desktop/inject_tests.rs` | Keeps the clipboard and insertion transaction regression matrix together. Split by transaction phase when shared fixtures no longer dominate. |
-| `src/rules/tests.rs` | Keeps the cleaning pipeline regression matrix beside shared rule fixtures. Split by rule group when the shared setup no longer dominates the file. |
 
 ## Deferred Runtime Work
 
