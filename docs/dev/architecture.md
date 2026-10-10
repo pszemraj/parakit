@@ -76,6 +76,7 @@ Cross-thread communication uses atomics, mutex-protected buffers, and crossbeam 
 | `src/daemon/{model_lifecycle,engine_runtime}.rs` | Activity admission, session residency, and the shared open/warmup recipe. |
 | `src/daemon/worker_shutdown.rs` | Worker lifetime and bounded IPC shutdown handshake. |
 | `src/app/simulation.rs` | Acknowledged WAV dictations and configured idle/reload validation. |
+| `src/app/config_command.rs` | `parakit config` subcommands: show, path, init, and edit. |
 | `src/daemon/ipc.rs` | Local IPC transport for `status`, `stop`, `copy-last`, `history`, and `test-paste`; serves an in-memory transcript ring buffer. |
 | `src/daemon/desktop/windows_{clipboard_history,focus,input,paste_smoke,security}.rs` | Windows clipboard-history acknowledgement, foreground checks, `SendInput` helpers, deep paste smoke test, and privilege diagnostics. |
 | `src/daemon/{preflight,audio/alsa,desktop/session,desktop/x11}.rs`, `src/daemon/macos.rs`, `src/daemon/macos/{permissions,focus,insertion_cgevent,pasteboard,diagnostics}.rs` | Startup checks, macOS TCC/focus/insertion/acknowledgement helpers, the deep paste-transaction smoke test, ALSA stderr suppression, session events, and X11 helpers. |
