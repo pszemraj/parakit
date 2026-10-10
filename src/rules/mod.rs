@@ -324,8 +324,9 @@ pub fn assert_rule_name_exists(name: &str, user_rules: &[UserRule]) -> Result<()
 ///
 /// # Errors
 ///
-/// Returns an error when a user rule has an invalid name or empty pattern, or
-/// when a name in `disabled_rules` matches neither a built-in nor a user rule.
+/// Returns an error when a user rule has an invalid name or empty pattern,
+/// when a name in `disabled_rules` matches neither a built-in nor a user rule,
+/// or when stdout cannot be written (see [`crate::output::write_stdout`]).
 pub fn print_rule_list(
     profile: CleaningProfile,
     drop_trailing_period: bool,
@@ -338,11 +339,10 @@ pub fn print_rule_list(
         return Ok(());
     }
     let disabled: HashSet<&str> = disabled_rules.iter().map(String::as_str).collect();
-    print!(
+    crate::output::write_stdout(format_args!(
         "{}",
         render_rule_list(profile, drop_trailing_period, &disabled, user_rules)
-    );
-    Ok(())
+    ))
 }
 
 /// Render the rule listing after names have been validated.

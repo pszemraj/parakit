@@ -12,6 +12,7 @@ use parakit::fetch::{self, FetchOptions, FetchSource};
 use parakit::gguf;
 use parakit::inference::{default_thread_count, DeviceMode, Engine};
 use parakit::model;
+use parakit::outln;
 use parakit::rules;
 use simulation::run_ptt_audio_simulation;
 use std::ffi::{c_char, c_void, CStr};
@@ -195,8 +196,8 @@ fn run_rules_command(cli: &Cli, rules_cli: &RulesCli) -> Result<()> {
             let raw = input.as_str();
             let cleaned = cleaner.clean(raw);
             if !cli.quiet {
-                println!("Raw:     {}", raw);
-                println!("Clean:   {}", cleaned.text);
+                outln!("Raw:     {}", raw)?;
+                outln!("Clean:   {}", cleaned.text)?;
                 if let Some(failure) = &cleaned.failure {
                     eprintln!("parakit: cleaning failed, raw text kept: {failure}");
                 } else if !cleaned.rules_fired.is_empty() {
@@ -205,7 +206,7 @@ fn run_rules_command(cli: &Cli, rules_cli: &RulesCli) -> Result<()> {
                         .iter()
                         .map(|hit| format!("{}x{}", hit.name, hit.matches))
                         .collect();
-                    println!("Rules:   {}", fired.join(", "));
+                    outln!("Rules:   {}", fired.join(", "))?;
                 }
             }
             Ok(())
@@ -230,7 +231,7 @@ fn run_daemon(cli: &Cli, start: &StartCli) -> Result<()> {
             Err(err) if err.is::<daemon::preflight::DaemonAlreadyRunning>() => {
                 ensure_existing_daemon_responsive(daemon::ipc::daemon_responsive()?)?;
                 if !cli.quiet {
-                    println!("parakit: already running");
+                    outln!("parakit: already running")?;
                 }
                 return Ok(());
             }
@@ -715,7 +716,7 @@ fn run_cache_command(cache: &CacheCli, quiet: bool) -> Result<()> {
         CacheCommand::Dir => {
             let dir = model::models_dir()?;
             if !quiet {
-                println!("{}", dir.display());
+                outln!("{}", dir.display())?;
             }
         }
         CacheCommand::List => print_cache_list(quiet)?,
@@ -728,10 +729,10 @@ fn print_cache_list(quiet: bool) -> Result<()> {
     if quiet {
         return Ok(());
     }
-    println!("parakit cache");
-    println!("  dir: {}", dir.display());
+    outln!("parakit cache")?;
+    outln!("  dir: {}", dir.display())?;
     if !dir.is_dir() {
-        println!("  models: none");
+        outln!("  models: none")?;
         return Ok(());
     }
 
@@ -741,16 +742,16 @@ fn print_cache_list(quiet: bool) -> Result<()> {
     extra.sort();
 
     if top_level.is_empty() && extra.is_empty() {
-        println!("  models: none");
+        outln!("  models: none")?;
         return Ok(());
     }
 
-    println!("  models:");
+    outln!("  models:")?;
     for path in &top_level {
-        print_cache_entry(&dir, path, &model_file_name(path));
+        print_cache_entry(&dir, path, &model_file_name(path))?;
     }
     for path in &extra {
-        print_cache_entry(&dir, path, &relative_cache_display(&dir, path));
+        print_cache_entry(&dir, path, &relative_cache_display(&dir, path))?;
     }
     Ok(())
 }
@@ -798,7 +799,7 @@ fn relative_cache_display(dir: &Path, path: &Path) -> String {
         .unwrap_or_else(|_| model_file_name(path))
 }
 
-fn print_cache_entry(dir: &Path, path: &Path, display_name: &str) {
+fn print_cache_entry(dir: &Path, path: &Path, display_name: &str) -> Result<()> {
     let dtype = gguf::dtype_label(path);
     let size = path
         .metadata()
@@ -806,7 +807,7 @@ fn print_cache_entry(dir: &Path, path: &Path, display_name: &str) {
         .unwrap_or_else(|_| "unknown size".to_string());
     let is_default_q8 = model_file_name(path) == model::Q8_FILENAME && path.parent() == Some(dir);
     let default_marker = if is_default_q8 { " default" } else { "" };
-    println!("    {display_name}{default_marker}: {dtype}, {size}");
+    outln!("    {display_name}{default_marker}: {dtype}, {size}")
 }
 
 fn format_file_size(bytes: u64) -> String {

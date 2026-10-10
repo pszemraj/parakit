@@ -24,7 +24,7 @@ pub(super) fn run_config_command(config_cli: &ConfigCli, quiet: bool) -> Result<
         ConfigCommand::Path => {
             let path = config::config_path()?;
             if !quiet {
-                println!("{}", path.display());
+                outln!("{}", path.display())?;
             }
         }
         ConfigCommand::Init { force } => init_config_file(*force, quiet)?,
@@ -64,7 +64,7 @@ fn init_config_file(force: bool, quiet: bool) -> Result<()> {
         .with_context(|| format!("failed to write config file {}", path.display()))?;
 
     if !quiet {
-        println!("wrote {}", path.display());
+        outln!("wrote {}", path.display())?;
     }
     Ok(())
 }
@@ -84,52 +84,52 @@ fn print_config_show(quiet: bool) -> Result<()> {
     }
     let start = StartCli::default();
 
-    println!("parakit config");
-    println!("  path: {}", path.display());
-    println!("  exists: {}", path.is_file());
-    println!("  daemon:");
-    println!(
+    outln!("parakit config")?;
+    outln!("  path: {}", path.display())?;
+    outln!("  exists: {}", path.is_file())?;
+    outln!("  daemon:")?;
+    outln!(
         "    model: {}",
         start
             .effective_model(&config)
             .as_ref()
             .map(|p| p.display().to_string())
             .unwrap_or_else(|| "(default: hosted Q8_0)".to_string())
-    );
-    println!(
+    )?;
+    outln!(
         "    device: {}",
         if config.daemon.device.is_some() {
             start.effective_device(&config).as_str().to_string()
         } else {
             format!("(default: {})", start.effective_device(&config).as_str())
         }
-    );
-    println!(
+    )?;
+    outln!(
         "    threads: {}",
         start
             .effective_threads(&config)
             .map(|t| t.to_string())
             .unwrap_or_else(|| "(default: auto-detected)".to_string())
-    );
-    println!(
+    )?;
+    outln!(
         "    paste_mode: {}",
         if config.daemon.paste_mode.is_some() {
             start.effective_paste_mode(&config).label().to_string()
         } else {
             "(default: platform)".to_string()
         }
-    );
-    println!(
+    )?;
+    outln!(
         "    keep_transcript_clipboard: {}",
         start.effective_keep_transcript_clipboard(&config)
-    );
-    println!("    sounds: {}", start.effective_sounds_enabled(&config));
-    println!("    verbose: {}", config.daemon.verbose.unwrap_or(false));
-    println!(
+    )?;
+    outln!("    sounds: {}", start.effective_sounds_enabled(&config))?;
+    outln!("    verbose: {}", config.daemon.verbose.unwrap_or(false))?;
+    outln!(
         "    model_idle_minutes: {}",
         start.effective_model_idle_minutes(&config)
-    );
-    println!(
+    )?;
+    outln!(
         "    transcript_history: {}",
         config
             .daemon
@@ -139,25 +139,25 @@ fn print_config_show(quiet: bool) -> Result<()> {
                 "(default: {})",
                 start.effective_transcript_history(&config)
             ))
-    );
-    println!("  cleaning:");
-    println!("    enabled: {}", start.effective_cleaning_enabled(&config));
-    println!("    profile: {}", start.effective_cleaning_profile(&config));
-    println!(
+    )?;
+    outln!("  cleaning:")?;
+    outln!("    enabled: {}", start.effective_cleaning_enabled(&config))?;
+    outln!("    profile: {}", start.effective_cleaning_profile(&config))?;
+    outln!(
         "    keep_trailing_period: {}",
         !start.effective_drops_trailing_period(&config)
-    );
-    println!(
+    )?;
+    outln!(
         "    number_threshold: {}",
         config
             .cleaning
             .number_threshold
             .map(|value| value.to_string())
             .unwrap_or_else(|| format!("(default: {})", rules::DEFAULT_NUMBER_THRESHOLD))
-    );
-    println!("    disabled_rules: {:?}", config.cleaning.disabled_rules);
-    println!("  logging:");
-    println!(
+    )?;
+    outln!("    disabled_rules: {:?}", config.cleaning.disabled_rules)?;
+    outln!("  logging:")?;
+    outln!(
         "    dir: {}",
         config
             .logging
@@ -165,23 +165,23 @@ fn print_config_show(quiet: bool) -> Result<()> {
             .as_ref()
             .map(|p| p.display().to_string())
             .unwrap_or_else(|| "(disabled)".to_string())
-    );
+    )?;
     #[cfg(target_os = "linux")]
     {
-        println!("  hotkey:");
-        println!(
+        outln!("  hotkey:")?;
+        outln!(
             "    backend: {}",
             config
                 .hotkey
                 .backend
                 .map(|b| b.label().to_string())
                 .unwrap_or_else(|| "(default: auto)".to_string())
-        );
+        )?;
     }
-    println!("  rules:");
-    println!("    user rules: {}", config.rules.user.len());
+    outln!("  rules:")?;
+    outln!("    user rules: {}", config.rules.user.len())?;
     for user_rule in &config.rules.user {
-        println!("      {} ({})", user_rule.name, user_rule.position.as_str());
+        outln!("      {} ({})", user_rule.name, user_rule.position.as_str())?;
     }
     Ok(())
 }

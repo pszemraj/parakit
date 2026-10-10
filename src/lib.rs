@@ -23,6 +23,8 @@ pub mod gpu;
 pub mod inference;
 /// Canonical model names and cache paths.
 pub mod model;
+/// Command output on stdout that stops quietly when its reader goes away.
+pub mod output;
 /// Regex-based transcript cleanup rules.
 pub mod rules;
 #[cfg(test)]

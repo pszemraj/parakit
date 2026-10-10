@@ -1,6 +1,7 @@
 //! Client side of the control protocol: helper-command dispatch, daemon-absent handling, and output.
 
 use super::*;
+use parakit::outln;
 
 /// Check whether the daemon control endpoint answers a status request.
 ///
@@ -55,7 +56,7 @@ pub(crate) fn run_client(command: IpcCommand, quiet: bool, verbose: bool) -> Res
                 wait_for_daemon_stop(stop_deadline, false)?;
             }
             if !quiet {
-                println!("{}", completed_command_message(&command, &message));
+                outln!("{}", completed_command_message(&command, &message))?;
             }
             Ok(())
         }
@@ -67,20 +68,20 @@ pub(crate) fn run_client(command: IpcCommand, quiet: bool, verbose: bool) -> Res
             if !quiet {
                 // These two lines must stay byte-identical to the pre-verbose
                 // output: existing scripts parse them.
-                println!("parakit: {phase}");
-                println!(
+                outln!("parakit: {phase}")?;
+                outln!(
                     "last transcript: {}",
                     last_transcript_summary(last_transcript_len, detail.as_deref())
-                );
+                )?;
                 if verbose {
-                    print_status_detail(detail.as_deref());
+                    print_status_detail(detail.as_deref())?;
                 }
             }
             Ok(())
         }
         IpcResponse::History { entries } => {
             if !quiet {
-                print_history(&entries);
+                print_history(&entries)?;
             }
             Ok(())
         }
@@ -188,13 +189,13 @@ fn handle_daemon_not_running(command: &IpcCommand, quiet: bool, deadline: Instan
         DaemonNotRunningDisposition::WaitForStop => {
             wait_for_daemon_stop(deadline, true)?;
             if !quiet {
-                println!("stopped");
+                outln!("stopped")?;
             }
             Ok(())
         }
         DaemonNotRunningDisposition::Success(message) => {
             if !quiet {
-                println!("{message}");
+                outln!("{message}")?;
             }
             Ok(())
         }
@@ -207,20 +208,24 @@ fn handle_daemon_not_running(command: &IpcCommand, quiet: bool, deadline: Instan
 /// # Arguments
 ///
 /// * `entries` - Transcripts remembered by the daemon, newest first.
-fn print_history(entries: &[HistoryEntry]) {
+///
+/// # Errors
+///
+/// Returns an error when stdout cannot be written.
+fn print_history(entries: &[HistoryEntry]) -> Result<()> {
     if entries.is_empty() {
-        println!("no transcripts remembered in this daemon session");
-        return;
+        return outln!("no transcripts remembered in this daemon session");
     }
     for entry in entries {
-        println!(
+        outln!(
             "{index:<3}{age:<10}{chars:>4} chars  {preview}",
             index = entry.index,
             age = format_age(entry.age_secs),
             chars = entry.chars,
             preview = entry.preview,
-        );
+        )?;
     }
+    Ok(())
 }
 
 /// Print the `--verbose status` detail block.
@@ -230,39 +235,45 @@ fn print_history(entries: &[HistoryEntry]) {
 /// * `detail` - Extended runtime detail from the daemon's `Status` response,
 ///   or `None` when the daemon has not yet called `set_info` (e.g. still
 ///   starting up).
-fn print_status_detail(detail: Option<&StatusDetail>) {
+///
+/// # Errors
+///
+/// Returns an error when stdout cannot be written.
+fn print_status_detail(detail: Option<&StatusDetail>) -> Result<()> {
     let Some(detail) = detail else {
-        println!("  detail unavailable (daemon starting)");
-        return;
+        return outln!("  detail unavailable (daemon starting)");
     };
-    println!("  pid:        {}", detail.pid);
-    println!("  uptime:     {}", format_uptime(detail.uptime_secs));
-    println!("  dictations: {}", detail.dictation_count);
-    println!("  mic:        {}", detail.mic);
-    println!("  model:      {} ({})", detail.model, detail.dtype);
+    outln!("  pid:        {}", detail.pid)?;
+    outln!("  uptime:     {}", format_uptime(detail.uptime_secs))?;
+    outln!("  dictations: {}", detail.dictation_count)?;
+    outln!("  mic:        {}", detail.mic)?;
+    outln!("  model:      {} ({})", detail.model, detail.dtype)?;
     if let Some(model) = &detail.model_status {
-        println!("  residency:  {}", model.residency.label());
+        outln!("  residency:  {}", model.residency.label())?;
         if model.idle_minutes == 0 {
-            println!("  model idle: disabled");
+            outln!("  model idle: disabled")?;
         } else {
-            println!("  model idle: {} minutes", model.idle_minutes);
+            outln!("  model idle: {} minutes", model.idle_minutes)?;
         }
         if let Some(error) = &model.last_error {
-            println!("  model error: {error}");
+            outln!("  model error: {error}")?;
         }
     }
-    println!(
+    outln!(
         "  device:     {} ({}, {} threads)",
-        detail.device, detail.backend, detail.threads
-    );
-    println!("  paste mode: {}", detail.paste_mode);
-    println!("  sounds:     {}", if detail.sounds { "on" } else { "off" });
-    println!("  cleaning:   {}", detail.cleaning);
-    println!("  logging:    {}", detail.log.as_deref().unwrap_or("off"));
-    println!("  history:    {}", detail.history);
+        detail.device,
+        detail.backend,
+        detail.threads
+    )?;
+    outln!("  paste mode: {}", detail.paste_mode)?;
+    outln!("  sounds:     {}", if detail.sounds { "on" } else { "off" })?;
+    outln!("  cleaning:   {}", detail.cleaning)?;
+    outln!("  logging:    {}", detail.log.as_deref().unwrap_or("off"))?;
+    outln!("  history:    {}", detail.history)?;
     if let Some(hotkey_backend) = &detail.hotkey_backend {
-        println!("  hotkey:     {hotkey_backend}");
+        outln!("  hotkey:     {hotkey_backend}")?;
     }
+    Ok(())
 }
 
 /// Humanize a duration in seconds as `1h 23m`, `23m 5s`, or `5s`.

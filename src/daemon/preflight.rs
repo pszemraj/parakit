@@ -3,6 +3,7 @@
 use anyhow::{bail, Context, Result};
 use fs2::FileExt;
 use parakit::build_info;
+use parakit::outln;
 use std::fmt::Write as _;
 use std::fs::{create_dir_all, File, OpenOptions};
 use std::io::ErrorKind;
@@ -75,8 +76,10 @@ pub fn print_doctor(
         return ok;
     }
 
-    if verbose {
-        print_doctor_details(&report, &daemon_lock, &mic, &insertion, paste_mode, deep);
+    // Readiness decides the exit status; a closed stdout only cuts the report
+    // short.
+    let _ = if verbose {
+        print_doctor_details(&report, &daemon_lock, &mic, &insertion, paste_mode, deep)
     } else {
         print_doctor_summary(
             &report,
@@ -86,8 +89,8 @@ pub fn print_doctor(
             paste_mode,
             deep,
             ok,
-        );
-    }
+        )
+    };
 
     ok
 }
@@ -107,16 +110,16 @@ fn print_doctor_summary(
     paste_mode: PasteMode,
     deep: bool,
     ok: bool,
-) {
-    println!("parakit doctor: {}", if ok { "OK" } else { "FAIL" });
-    print_status_line("hotkey", !report.blocking, &report.status);
+) -> Result<()> {
+    outln!("parakit doctor: {}", if ok { "OK" } else { "FAIL" })?;
+    print_status_line("hotkey", !report.blocking, &report.status)?;
     match daemon_lock {
-        Ok(()) => print_status_line("daemon", true, "no existing daemon lock"),
-        Err(err) => print_status_line("daemon", false, &format!("{err:#}")),
+        Ok(()) => print_status_line("daemon", true, "no existing daemon lock")?,
+        Err(err) => print_status_line("daemon", false, &format!("{err:#}"))?,
     }
     match mic {
-        Ok(mic) => print_status_line("mic", true, &mic.summary()),
-        Err(err) => print_status_line("mic", false, &format!("{err:#}")),
+        Ok(mic) => print_status_line("mic", true, &mic.summary())?,
+        Err(err) => print_status_line("mic", false, &format!("{err:#}"))?,
     }
     let insertion_label = if deep {
         format!("{} guarded smoke test", paste_mode.label())
@@ -124,20 +127,21 @@ fn print_doctor_summary(
         format!("{} preflight", paste_mode.label())
     };
     match insertion {
-        Ok(()) => print_status_line("insertion", true, &insertion_label),
-        Err(err) => print_status_line("insertion", false, &format!("{err:#}")),
+        Ok(()) => print_status_line("insertion", true, &insertion_label)?,
+        Err(err) => print_status_line("insertion", false, &format!("{err:#}"))?,
     }
 
     if !ok {
-        println!("  details:   parakit --verbose doctor");
+        outln!("  details:   parakit --verbose doctor")?;
     }
+    Ok(())
 }
 
-fn print_status_line(label: &str, ok: bool, detail: &str) {
-    println!(
+fn print_status_line(label: &str, ok: bool, detail: &str) -> Result<()> {
+    outln!(
         "  {label:<10} {} ({detail})",
         if ok { "OK " } else { "FAIL" }
-    );
+    )
 }
 
 fn print_doctor_details(
@@ -147,67 +151,70 @@ fn print_doctor_details(
     insertion: &Result<()>,
     paste_mode: PasteMode,
     deep: bool,
-) {
-    println!("{}", report.details.trim_end());
+) -> Result<()> {
+    outln!("{}", report.details.trim_end())?;
     match daemon_lock {
-        Ok(()) => println!("  daemon lock:   OK"),
-        Err(err) => println!("  daemon lock:   FAIL ({err:#})"),
+        Ok(()) => outln!("  daemon lock:   OK")?,
+        Err(err) => outln!("  daemon lock:   FAIL ({err:#})")?,
     }
     match mic {
         Ok(mic) => {
-            println!("  mic:            {}", mic.summary());
+            outln!("  mic:            {}", mic.summary())?;
             for line in mic.detail_lines() {
-                println!("  audio detail:   {line}");
+                outln!("  audio detail:   {line}")?;
             }
-            println!("  audio status:   OK");
+            outln!("  audio status:   OK")?;
         }
         Err(err) => {
-            println!("  mic:            unavailable ({err:#})");
-            println!("  audio status:   FAIL");
+            outln!("  mic:            unavailable ({err:#})")?;
+            outln!("  audio status:   FAIL")?;
         }
     }
     match insertion {
-        Ok(()) if deep => println!(
+        Ok(()) if deep => outln!(
             "  insertion:     OK ({} guarded smoke test)",
             paste_mode.label()
-        ),
-        Ok(()) => println!("  insertion:     OK ({} preflight)", paste_mode.label()),
-        Err(err) => println!("  insertion:     FAIL ({err:#})"),
+        )?,
+        Ok(()) => outln!("  insertion:     OK ({} preflight)", paste_mode.label())?,
+        Err(err) => outln!("  insertion:     FAIL ({err:#})")?,
     }
-    println!("  build:");
+    outln!("  build:")?;
     for line in build_info::diagnostic_lines() {
-        println!("    {line}");
+        outln!("    {line}")?;
     }
-    print_compute_details();
+    print_compute_details()
 }
 
 #[cfg(feature = "bundled")]
-fn print_compute_details() {
-    println!("  compute:");
+fn print_compute_details() -> Result<()> {
+    outln!("  compute:")?;
     #[cfg(target_os = "macos")]
     for line in super::macos::architecture_warning_lines() {
-        println!("    {line}");
+        outln!("    {line}")?;
     }
     let devices = super::stderr::with_stderr_suppressed(parakit::gpu::devices);
     if devices.is_empty() {
-        println!("    no ggml devices reported");
+        outln!("    no ggml devices reported")?;
     } else {
         for device in &devices {
-            println!("    {}", device.diagnostic_line());
+            outln!("    {}", device.diagnostic_line())?;
         }
         if let Some(device) = parakit::gpu::preferred_gpu_device_in(&devices) {
-            println!("    auto selects: {}", device.diagnostic_line());
+            outln!("    auto selects: {}", device.diagnostic_line())?;
         }
     }
     if build_info::accelerator_enabled()
         && !devices.iter().any(parakit::gpu::DeviceInfo::is_gpu_like)
     {
-        println!("    warning: accelerator build has no GPU or iGPU visible to ggml");
+        outln!("    warning: accelerator build has no GPU or iGPU visible to ggml")?;
     }
+    Ok(())
 }
 
 #[cfg(not(feature = "bundled"))]
-fn print_compute_details() {}
+fn print_compute_details() -> Result<()> {
+    Ok(())
+}
 
 fn doctor_ready(
     report: &HotkeyReport,

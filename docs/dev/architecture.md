@@ -65,6 +65,7 @@ Cross-thread communication uses atomics, mutex-protected buffers, and crossbeam 
 | Path | Responsibility |
 | --- | --- |
 | `src/{main,cli,app}.rs` | Binary entrypoint, CLI definitions and precedence merge, command dispatch, daemon setup, and batch PTT simulation helper. |
+| `src/output.rs` | Command output on stdout that ends quietly when its reader closes the pipe. |
 | `src/config.rs` | `config.toml` path resolution, parsing, validation, and template. |
 | `src/daemon/desktop/hotkey.rs`, `src/daemon/desktop/hotkey/{linux,macos}.rs` | Hotkey backends and hotkey state helpers. |
 | `src/daemon/hotkey_help.rs` | Shared user-facing hotkey remediation text. |

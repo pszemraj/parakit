@@ -29,6 +29,11 @@ use std::io::Write as _;
 
 fn main() {
     if let Err(err) = app::run() {
+        // A reader that stops early, as in `parakit status | head -1`, ends the
+        // command normally.
+        if err.is::<parakit::output::StdoutClosed>() {
+            return;
+        }
         // A closed launching terminal must not turn exit status 1 into a panic.
         let _ = writeln!(std::io::stderr(), "parakit: error: {err:#}");
         std::process::exit(1);

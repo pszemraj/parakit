@@ -437,3 +437,32 @@ fn config_show_reports_resolved_defaults() {
         );
     }
 }
+
+#[test]
+fn closed_stdout_ends_output_commands_quietly() {
+    let commands: &[&[&str]] = &[
+        &["config", "show"],
+        &["cache", "list"],
+        &["rules", "list"],
+        &["rules", "test", "So, um, the cat ran."],
+        &["status"],
+    ];
+    for args in commands {
+        // A reader that already went away, as after `parakit status | head -1`.
+        let (reader, writer) = std::io::pipe().expect("pipe should open");
+        drop(reader);
+        let output = isolated_parakit_with_empty_config("closed-stdout")
+            .args(*args)
+            .stdout(writer)
+            .output()
+            .expect("parakit should run");
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            output.status.success(),
+            "{args:?} exited with {}: {stderr}",
+            output.status
+        );
+        assert!(stderr.is_empty(), "{args:?} wrote to stderr: {stderr}");
+    }
+}
