@@ -58,17 +58,54 @@ pub(crate) fn normalize_spoken_numbers(input: &str, threshold: f64) -> Transform
     // absorb a count from the previous paragraph.
     let text = input
         .split('\n')
-        .map(|line| {
-            render_signed_numbers(replace_numbers_preserving_literals(
-                line, &language, threshold,
-            ))
-        })
+        .map(|line| render_signed_numbers(replace_numbers_in_segments(line, &language, threshold)))
         .collect::<Vec<_>>()
         .join("\n");
     TransformResult {
         matches: usize::from(text != input),
         text,
     }
+}
+
+/// Convert a line in segments separated by `and` between equal scales.
+///
+/// text2num reads "five thousand and ten thousand" as 5010 and 1000, but
+/// quantities ending in the same scale word never form one number. Differing
+/// scales still join: "one hundred and five thousand" is 105000.
+fn replace_numbers_in_segments(line: &str, language: &Language, threshold: f64) -> String {
+    let tokens = number_tokens(line);
+    let boundary = tokens.windows(2).enumerate().find_map(|(index, pair)| {
+        let [scale, conjunction] = pair else {
+            return None;
+        };
+        if conjunction.lowercase != "and"
+            || !matches!(
+                scale.lowercase.as_str(),
+                "hundred" | "thousand" | "million" | "billion"
+            )
+        {
+            return None;
+        }
+        let following = &tokens[index + 2..];
+        let next = find_numbers(following.iter(), language, 0.0)
+            .into_iter()
+            .next()?;
+        // text2num ends a decimal before its scale: "three point six" then "million".
+        let ends_in_scale = following[next.end - 1..]
+            .iter()
+            .take(2)
+            .any(|token| token.lowercase == scale.lowercase);
+        (next.start == 0 && ends_in_scale).then_some(conjunction)
+    });
+    let Some(conjunction) = boundary else {
+        return replace_numbers_preserving_literals(line, language, threshold);
+    };
+    format!(
+        "{}{}{}",
+        replace_numbers_preserving_literals(&line[..conjunction.start], language, threshold),
+        &line[conjunction.start..conjunction.end],
+        replace_numbers_in_segments(&line[conjunction.end..], language, threshold),
+    )
 }
 
 /// Replace a spoken sign immediately before a number rendered by `text2num`.

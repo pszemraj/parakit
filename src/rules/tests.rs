@@ -429,6 +429,26 @@ fn large_spoken_magnitudes_use_readable_hybrid_notation() {
 }
 
 #[test]
+fn equal_scales_joined_by_and_remain_separate_quantities() {
+    assert_clean_cases(
+        CleaningProfile::Safe,
+        &[
+            (
+                "Between five thousand and ten thousand rows.",
+                "Between 5000 and 10000 rows.",
+            ),
+            (
+                "Use two point five million and three point six million rows.",
+                "Use 2.5 million and 3.6 million rows.",
+            ),
+            ("Use five hundred and six hundred.", "Use 500 and 600."),
+            ("Use one hundred and five thousand.", "Use 105000."),
+            ("Use two million and five.", "Use 2000005."),
+        ],
+    );
+}
+
+#[test]
 fn large_magnitude_formatting_preserves_compounds_and_numeric_literals() {
     assert_clean_cases(
         CleaningProfile::Safe,

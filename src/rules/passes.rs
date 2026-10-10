@@ -259,6 +259,15 @@ fn render_number_component(phrase: &str) -> Option<String> {
     let words = phrase
         .split(|ch: char| ch.is_whitespace() || ch == '-')
         .filter(|word| !word.is_empty());
+    // Digits after a point never carry a large scale: "two point five million
+    // and three point six million" is two quantities, not version 2.5000003.6000000.
+    if words.clone().any(|word| {
+        ["thousand", "million", "billion"]
+            .iter()
+            .any(|scale| word.eq_ignore_ascii_case(scale))
+    }) {
+        return None;
+    }
     let digit_words: Option<String> = words
         .clone()
         .map(|word| {
