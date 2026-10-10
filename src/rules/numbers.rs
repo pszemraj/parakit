@@ -3,7 +3,7 @@
 use regex::Regex;
 use std::borrow::Cow;
 use std::sync::OnceLock;
-use text2num::{find_numbers, replace_numbers_in_text, text2digits, Language, Token};
+use text2num::{find_numbers, replace_numbers_in_text, text2digits, Language, Occurence, Token};
 
 use super::engine::TransformResult;
 
@@ -449,11 +449,158 @@ fn number_tokens(input: &str) -> Vec<NumberToken<'_>> {
         .collect()
 }
 
+/// Private-use character that makes text2num end a number before the next
+/// word. Like punctuation it ends the number without breaking a listing, so the
+/// next value keeps its threshold context. It never leaves this module.
+const NUMBER_BREAK: char = '\u{E000}';
+
+/// Convert a span after moving the ends that text2num's greedy parse misplaces.
+///
+/// text2num extends a number with every word that still fits. It reads "two
+/// hundred three hundred" as 203 and a bare 100, and "fifty and three" as 53.
+/// Each round marks where a new number starts and parses again, because a
+/// break after "and" can expose a count that the following scale then takes.
 fn replace_numbers_with_hybrid_magnitudes(
     input: &str,
     language: &Language,
     threshold: f64,
 ) -> String {
+    // Text that already holds the marker cannot be marked; a stranded scale
+    // there keeps its wording instead.
+    if input.contains(NUMBER_BREAK) {
+        return render_hybrid_magnitudes(input, language, threshold);
+    }
+    let mut marked: Option<String> = None;
+    // "and" breaks come first and stranded scales second, so two rounds
+    // suffice; the bound only guards against a cycle.
+    for _ in 0..4 {
+        let text = marked.as_deref().unwrap_or(input);
+        let breaks = number_breaks(text, language);
+        if breaks.is_empty() {
+            break;
+        }
+        let mut next = String::with_capacity(text.len() + breaks.len() * NUMBER_BREAK.len_utf8());
+        let mut last = 0;
+        for at in breaks {
+            next.push_str(&text[last..at]);
+            next.push(NUMBER_BREAK);
+            last = at;
+        }
+        next.push_str(&text[last..]);
+        marked = Some(next);
+    }
+    match marked {
+        Some(text) => {
+            render_hybrid_magnitudes(&text, language, threshold).replace(NUMBER_BREAK, "")
+        }
+        None => render_hybrid_magnitudes(input, language, threshold),
+    }
+}
+
+/// Byte offsets, ascending, where a new number starts inside a text2num match.
+fn number_breaks(input: &str, language: &Language) -> Vec<usize> {
+    let tokens = number_tokens(input);
+    let occurrences = find_numbers(tokens.iter(), language, 0.0);
+    // "and" continues a number after a scale ("two hundred and fifty"), never
+    // after a count: "fifty and three" is two numbers, not 53.
+    let mut breaks: Vec<usize> = occurrences
+        .iter()
+        .filter(|number| !number.is_ordinal)
+        .flat_map(|number| number.start + 1..number.end.saturating_sub(1))
+        .filter(|&at| {
+            tokens[at].lowercase == "and" && scale_rank(&tokens[at - 1].lowercase).is_none()
+        })
+        .map(|at| tokens[at + 1].start)
+        .collect();
+    if breaks.is_empty() {
+        breaks = occurrences
+            .windows(2)
+            .filter_map(|pair| {
+                let [count, scale] = pair else {
+                    return None;
+                };
+                match stranded_scale(input, &tokens, count, scale, language)? {
+                    StrandedScale::Coefficient(at) => Some(tokens[at].start),
+                    StrandedScale::Ambiguous => None,
+                }
+            })
+            .collect();
+    }
+    breaks
+}
+
+/// How to read a scale word that text2num could not apply to the number before it.
+enum StrandedScale {
+    /// The count starting at this token is the scale's coefficient.
+    Coefficient(usize),
+    /// More than one split is grammatical, or the scales may stack.
+    Ambiguous,
+}
+
+/// Classify a number that starts with a bare scale word right after another.
+///
+/// text2num cannot apply "hundred" to 203 or "thousand" to 1502, so it ends
+/// the first number and gives the scale an implicit coefficient of 1. The
+/// trailing count of the first number is the coefficient that was spoken. A
+/// split is accepted only when exactly one count position leaves two complete
+/// numbers.
+fn stranded_scale(
+    input: &str,
+    tokens: &[NumberToken<'_>],
+    count: &Occurence,
+    scale: &Occurence,
+    language: &Language,
+) -> Option<StrandedScale> {
+    let rank = scale_rank(&tokens[scale.start].lowercase)?;
+    if count.is_ordinal
+        || scale.is_ordinal
+        || count.end != scale.start
+        || !input[tokens[count.end - 1].end..tokens[scale.start].start]
+            .chars()
+            .all(char::is_whitespace)
+    {
+        return None;
+    }
+    let words = &tokens[count.start..count.end];
+    if words.iter().any(|token| token.lowercase == "point") {
+        return None;
+    }
+    // "fifteen hundred thousand" can stack its scales into 1500000.
+    let largest = words
+        .iter()
+        .filter_map(|token| scale_rank(&token.lowercase))
+        .max();
+    if scale_rank(&words.last()?.lowercase).is_some()
+        && largest.is_some_and(|largest| largest < rank)
+    {
+        return Some(StrandedScale::Ambiguous);
+    }
+    let mut splits = (count.start + 1..count.end).filter(|&at| {
+        let previous = &tokens[at - 1].lowercase;
+        let head_end = if previous == "and" { at - 1 } else { at };
+        tokens[at].lowercase != "and"
+            && scale_rank(&tokens[at].lowercase).is_none()
+            && previous != "-"
+            && is_one_number(&tokens[count.start..head_end], language)
+            && is_one_number(&tokens[at..scale.end], language)
+    });
+    let first = splits.next()?;
+    Some(if splits.next().is_some() {
+        StrandedScale::Ambiguous
+    } else {
+        StrandedScale::Coefficient(first)
+    })
+}
+
+/// Whether text2num reads all of `tokens` as exactly one cardinal.
+fn is_one_number(tokens: &[NumberToken<'_>], language: &Language) -> bool {
+    matches!(
+        find_numbers(tokens.iter(), language, 0.0).as_slice(),
+        [number] if number.start == 0 && number.end == tokens.len() && !number.is_ordinal
+    )
+}
+
+fn render_hybrid_magnitudes(input: &str, language: &Language, threshold: f64) -> String {
     static NUMERIC_MAGNITUDE: OnceLock<Regex> = OnceLock::new();
     let numeric_re = NUMERIC_MAGNITUDE.get_or_init(|| {
         Regex::new(r"(?i)\b\d+(?:\.\d+)?[ \t]+(?:million|billion)\b")
@@ -501,6 +648,19 @@ fn replace_numbers_with_hybrid_magnitudes(
             replacements.push((start, end, input[start..end].to_owned()));
         }
         index = end + 1;
+    }
+
+    // Breaks already gave every unambiguous stranded scale its coefficient.
+    // One that remains would render as a bare 100 or 1000, so keep the words.
+    for pair in occurrences.windows(2) {
+        let [count, scale] = pair else {
+            continue;
+        };
+        if stranded_scale(input, &tokens, count, scale, language).is_some() {
+            let start = tokens[count.start].start;
+            let end = tokens[scale.end - 1].end;
+            replacements.push((start, end, input[start..end].to_owned()));
+        }
     }
 
     for (scale_index, scale_token) in tokens.iter().enumerate() {

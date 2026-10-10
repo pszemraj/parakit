@@ -180,6 +180,158 @@ fn equal_scales_joined_by_and_remain_separate_quantities() {
     );
 }
 
+/// Assert each case at the default threshold and at `0` and `10`.
+fn assert_clean_at_thresholds(cases: &[(&str, &str)]) {
+    let failures: Vec<String> = [None, Some(0.0), Some(10.0)]
+        .into_iter()
+        .flat_map(|threshold| {
+            let cleaner = cleaner_with_number_threshold(threshold);
+            cases.iter().filter_map(move |(input, expected)| {
+                let actual = cleaner.clean_text(input);
+                (actual != *expected).then(|| {
+                    format!("{threshold:?} {input:?}: expected {expected:?}, got {actual:?}")
+                })
+            })
+        })
+        .collect();
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn a_scale_takes_the_count_spoken_before_it() {
+    // text2num ends a number at the first scale it cannot apply, which left
+    // that scale bare: "1502 1500" and "203 100".
+    assert_clean_at_thresholds(&[
+        (
+            "Fifteen hundred and two thousand five hundred.",
+            "1500 and 2500.",
+        ),
+        (
+            "It costs fifteen hundred two thousand five hundred.",
+            "It costs 1500 2500.",
+        ),
+        ("Rows two hundred three hundred.", "Rows 200 300."),
+        ("Rows five hundred five hundred.", "Rows 500 500."),
+        ("Use one thousand two thousand.", "Use 1000 2000."),
+        ("Use ten thousand two thousand.", "Use 10000 2000."),
+        (
+            "Use two hundred thousand three hundred thousand.",
+            "Use 200000 300000.",
+        ),
+        ("Use two hundred five hundred thousand.", "Use 200 500000."),
+        (
+            "Use five million three million.",
+            "Use 5 million 3 million.",
+        ),
+        (
+            "Use twenty-five hundred and two thousand.",
+            "Use 2500 and 2000.",
+        ),
+    ]);
+}
+
+#[test]
+fn and_after_a_count_starts_another_number() {
+    assert_clean_at_thresholds(&[
+        (
+            "Between two hundred and fifty and three hundred rows.",
+            "Between 250 and 300 rows.",
+        ),
+        (
+            "Between two hundred and fifty and three hundred and fifty dollars.",
+            "Between 250 and 350 dollars.",
+        ),
+        (
+            "Between twenty and five degrees.",
+            "Between 20 and 5 degrees.",
+        ),
+        ("Use fifty and two hundred.", "Use 50 and 200."),
+        (
+            "Use one hundred and twenty and five hundred.",
+            "Use 120 and 500.",
+        ),
+        (
+            "Use fifty and two point five million.",
+            "Use 50 and 2.5 million.",
+        ),
+        // Without the article, text2num scaled the count itself: 2000, 1500.
+        (
+            "Somewhere between twenty and hundred.",
+            "Somewhere between 20 and 100.",
+        ),
+        (
+            "Between fifteen and hundred rows.",
+            "Between 15 and 100 rows.",
+        ),
+    ]);
+}
+
+#[test]
+fn ambiguous_or_stacked_scales_keep_their_wording() {
+    // Both "100 2300" and "120 300" are grammatical, and "fifteen hundred
+    // thousand" may stack into 1500000; none of them is a bare scale.
+    assert_clean_at_thresholds(&[
+        (
+            "Use one hundred twenty three hundred.",
+            "Use one hundred twenty three hundred.",
+        ),
+        (
+            "Use two thousand twenty three hundred.",
+            "Use two thousand twenty three hundred.",
+        ),
+        (
+            "Use fifteen hundred thousand.",
+            "Use fifteen hundred thousand.",
+        ),
+        (
+            "Use twenty five hundred thousand.",
+            "Use twenty five hundred thousand.",
+        ),
+    ]);
+}
+
+#[test]
+fn scale_coefficient_splits_leave_valid_compounds_alone() {
+    assert_clean_at_thresholds(&[
+        ("Use one hundred and five thousand.", "Use 105000."),
+        (
+            "Use one hundred and twenty thousand five hundred.",
+            "Use 120500.",
+        ),
+        (
+            "Use one million two hundred and five thousand.",
+            "Use 1205000.",
+        ),
+        ("It was two thousand and five.", "It was 2005."),
+        ("Nine thousand four hundred and fifty-three.", "9453."),
+        ("Use twenty-three hundred.", "Use 2300."),
+        (
+            "Between five thousand and ten thousand five hundred rows.",
+            "Between 5000 and 10500 rows.",
+        ),
+        (
+            "Between two hundred and fifty thousand and three hundred thousand rows.",
+            "Between 250000 and 300000 rows.",
+        ),
+        (
+            "Use two point five million and three point six million rows.",
+            "Use 2.5 million and 3.6 million rows.",
+        ),
+        (
+            "Windows ten point zero point nineteen thousand forty five.",
+            "Windows 10.0.19045.",
+        ),
+        ("The year twenty twenty two.", "The year twenty twenty two."),
+        ("Use twenty and a half.", "Use 20 and a half."),
+        (
+            "About two and a half million users.",
+            "About two and a half million users.",
+        ),
+        ("A few hundred.", "A few hundred."),
+        ("In the nineteen hundreds.", "In the nineteen hundreds."),
+    ]);
+}
+
 #[test]
 fn large_magnitude_formatting_preserves_compounds_and_numeric_literals() {
     assert_clean_cases(
