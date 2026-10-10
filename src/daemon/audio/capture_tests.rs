@@ -4,6 +4,10 @@ use super::device::{
     is_bluetooth_input_name, is_virtual_input_name, lower_cost_mono_config_note,
     preferred_mono_config_from_ranges, source_aware_mic_identity, MicIdentity,
 };
+use super::drain::{
+    handle_audio_control, make_resampler, spawn_audio_drain, AudioDrain, CapturePipeline,
+    DrainControl, DRAIN_SCRATCH_FRAMES,
+};
 use super::*;
 
 #[test]

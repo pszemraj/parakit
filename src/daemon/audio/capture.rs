@@ -9,15 +9,12 @@ use anyhow::{anyhow, Context, Result};
 use cpal::traits::{DeviceTrait, StreamTrait};
 use cpal::{SampleFormat, Stream, StreamConfig};
 use crossbeam_channel::{bounded, Receiver, RecvTimeoutError, Sender, TrySendError};
-use parakit::audio_file::{process_resample_chunk, resampler_params, RESAMPLE_CHUNK_SIZE};
 use parking_lot::Mutex;
 use ringbuf::{
-    traits::{Consumer, Producer, Split},
-    HeapCons, HeapProd, HeapRb,
+    traits::{Producer, Split},
+    HeapProd, HeapRb,
 };
-use rubato::{Resampler, SincFixedIn};
 use std::collections::VecDeque;
-use std::io::Write as _;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
@@ -36,6 +33,9 @@ use device::{
     mic_info_from_identity, mic_snapshot_from_selected, select_input_device, selected_mic_identity,
     selected_mic_info, MicIdentity,
 };
+#[path = "capture_drain.rs"]
+mod drain;
+use drain::{make_resampler, spawn_audio_drain, AudioDrain, CapturePipeline, DrainControl};
 
 /// Reusable capacity for ordinary dictation bursts.
 const RECORDING_CAPACITY: usize = TARGET_RATE as usize * 90;
@@ -47,10 +47,6 @@ const PRE_ROLL_SAMPLES: usize = TARGET_RATE as usize * 350 / 1000;
 const AUDIO_RING_SECONDS: usize = 6;
 const AUDIO_RING_MIN_CAPACITY: usize = TARGET_RATE as usize * AUDIO_RING_SECONDS;
 const DEFAULT_CALLBACK_SCRATCH_FRAMES: usize = 8192;
-/// Scratch capacity for the drain loop's per-iteration input/resample buffers.
-/// Sized independently of [`DEFAULT_CALLBACK_SCRATCH_FRAMES`]; the two happen
-/// to share a value but are separate sizing decisions.
-const DRAIN_SCRATCH_FRAMES: usize = 8192;
 const AUDIO_CONTROL_TIMEOUT: Duration = Duration::from_secs(1);
 const DEVICE_POLL_INTERVAL: Duration = Duration::from_secs(1);
 const DEVICE_RETRY_MAX_INTERVAL: Duration = Duration::from_secs(10);
@@ -647,33 +643,6 @@ enum AudioControl {
     Stop { ack: Sender<Result<Vec<f32>>> },
 }
 
-enum DrainControl {
-    Start {
-        epoch: u64,
-        include_pre_roll: bool,
-        ack: Sender<()>,
-    },
-    Stop {
-        ack: Sender<Vec<f32>>,
-    },
-}
-
-struct AudioDrain {
-    alive: Arc<AtomicBool>,
-    wake: Sender<()>,
-    thread: Option<JoinHandle<()>>,
-}
-
-impl Drop for AudioDrain {
-    fn drop(&mut self) {
-        self.alive.store(false, Ordering::Release);
-        let _ = self.wake.try_send(());
-        if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
-        }
-    }
-}
-
 /// Probe the currently selected input without opening a stream.
 ///
 /// # Returns
@@ -779,280 +748,6 @@ fn callback_scratch_frames(config: &StreamConfig) -> usize {
         cpal::BufferSize::Default => DEFAULT_CALLBACK_SCRATCH_FRAMES,
     }
     .max(1)
-}
-
-fn spawn_audio_drain(
-    consumer: HeapCons<f32>,
-    wake_rx: Receiver<()>,
-    control_rx: Receiver<DrainControl>,
-    state: Arc<Mutex<CaptureState>>,
-    session_epoch: Arc<AtomicU64>,
-    pipeline: CapturePipeline,
-    alive: Arc<AtomicBool>,
-) -> std::io::Result<JoinHandle<()>> {
-    thread::Builder::new()
-        .name("parakit-audio-drain".into())
-        .spawn(move || {
-            audio_drain_loop(
-                consumer,
-                wake_rx,
-                control_rx,
-                state,
-                session_epoch,
-                pipeline,
-                alive,
-            )
-        })
-}
-
-fn audio_drain_loop(
-    mut consumer: HeapCons<f32>,
-    wake_rx: Receiver<()>,
-    control_rx: Receiver<DrainControl>,
-    state: Arc<Mutex<CaptureState>>,
-    session_epoch: Arc<AtomicU64>,
-    mut pipeline: CapturePipeline,
-    alive: Arc<AtomicBool>,
-) {
-    let mut input = vec![0.0_f32; DRAIN_SCRATCH_FRAMES];
-    let mut resampled = Vec::with_capacity(DRAIN_SCRATCH_FRAMES);
-    while alive.load(Ordering::Acquire) {
-        while let Ok(control) = control_rx.try_recv() {
-            handle_audio_control(
-                control,
-                &mut consumer,
-                &state,
-                &session_epoch,
-                &mut pipeline,
-                &mut input,
-                &mut resampled,
-            );
-        }
-        let drained_any = drain_audio_ring(
-            &mut consumer,
-            &state,
-            &session_epoch,
-            &mut pipeline,
-            &mut input,
-            &mut resampled,
-        );
-        if !drained_any {
-            crossbeam_channel::select! {
-                recv(control_rx) -> msg => {
-                    match msg {
-                        Ok(control) => handle_audio_control(
-                            control,
-                            &mut consumer,
-                            &state,
-                            &session_epoch,
-                            &mut pipeline,
-                            &mut input,
-                            &mut resampled,
-                        ),
-                        Err(_) => break,
-                    }
-                }
-                recv(wake_rx) -> _ => {}
-            }
-        }
-    }
-}
-
-fn handle_audio_control(
-    control: DrainControl,
-    consumer: &mut HeapCons<f32>,
-    state: &Mutex<CaptureState>,
-    session_epoch: &AtomicU64,
-    pipeline: &mut CapturePipeline,
-    input: &mut [f32],
-    resampled: &mut Vec<f32>,
-) {
-    match control {
-        DrainControl::Start {
-            epoch,
-            include_pre_roll,
-            ack,
-        } => {
-            if include_pre_roll {
-                while drain_audio_ring(consumer, state, session_epoch, pipeline, input, resampled) {
-                }
-            } else {
-                discard_audio_ring(consumer, input);
-            }
-            pipeline.reset_recording();
-            if include_pre_roll {
-                state.lock().begin_recording();
-            } else {
-                state.lock().begin_recording_without_pre_roll();
-            }
-            session_epoch.store(epoch, Ordering::Release);
-            if ack.send(()).is_err() {
-                // The manager timed out waiting for this queued Start. Do not
-                // leave a capture active after its caller abandoned it.
-                session_epoch.store(0, Ordering::Release);
-                let _ = state.lock().take_recording();
-                pipeline.reset_recording();
-            }
-        }
-        DrainControl::Stop { ack } => {
-            while drain_audio_ring(consumer, state, session_epoch, pipeline, input, resampled) {}
-            resampled.clear();
-            pipeline.finish_recording(resampled);
-            if !resampled.is_empty() {
-                append_processed_samples(state, session_epoch, resampled);
-            }
-            resampled.clear();
-            session_epoch.store(0, Ordering::Release);
-            let pcm = state.lock().take_recording();
-            pipeline.reset_recording();
-            let _ = ack.send(pcm);
-        }
-    }
-}
-
-fn discard_audio_ring(consumer: &mut HeapCons<f32>, input: &mut [f32]) {
-    while consumer.pop_slice(input) != 0 {}
-}
-
-fn drain_audio_ring(
-    consumer: &mut HeapCons<f32>,
-    state: &Mutex<CaptureState>,
-    session_epoch: &AtomicU64,
-    pipeline: &mut CapturePipeline,
-    input: &mut [f32],
-    resampled: &mut Vec<f32>,
-) -> bool {
-    let mut drained_any = false;
-    loop {
-        let n = consumer.pop_slice(input);
-        if n == 0 {
-            break;
-        }
-        drained_any = true;
-        let processed = pipeline.process(&input[..n], resampled);
-        if !processed.is_empty() {
-            append_processed_samples(state, session_epoch, processed);
-        }
-    }
-    drained_any
-}
-
-fn make_resampler(hw_rate: u32) -> Result<Option<ResamplerState>> {
-    if hw_rate == TARGET_RATE {
-        return Ok(None);
-    }
-
-    let resampler = SincFixedIn::<f32>::new(
-        TARGET_RATE as f64 / hw_rate as f64,
-        2.0,
-        resampler_params(),
-        RESAMPLE_CHUNK_SIZE,
-        1,
-    )
-    .context("failed to construct resampler")?;
-    Ok(Some(ResamplerState::new(resampler, RESAMPLE_CHUNK_SIZE)))
-}
-
-#[derive(Default)]
-struct CapturePipeline {
-    resampler: Option<ResamplerState>,
-}
-
-impl CapturePipeline {
-    fn reset_recording(&mut self) {
-        if let Some(resampler) = &mut self.resampler {
-            resampler.reset_recording();
-        }
-    }
-
-    fn process<'a>(&mut self, input: &'a [f32], out: &'a mut Vec<f32>) -> &'a [f32] {
-        match &mut self.resampler {
-            Some(resampler) => {
-                out.clear();
-                resampler.process(input, out);
-                out
-            }
-            None => input,
-        }
-    }
-
-    fn finish_recording(&mut self, out: &mut Vec<f32>) {
-        if let Some(resampler) = &mut self.resampler {
-            resampler.flush_recording(out);
-        }
-    }
-}
-
-/// Per-stream state for resampling one recording at a time.
-struct ResamplerState {
-    resampler: SincFixedIn<f32>,
-    scratch: Vec<f32>,
-    input_buf: Vec<Vec<f32>>,
-    output_buf: Vec<Vec<f32>>,
-    chunk_size: usize,
-}
-
-impl ResamplerState {
-    fn new(resampler: SincFixedIn<f32>, chunk_size: usize) -> Self {
-        let output_len = resampler.output_frames_max();
-        Self {
-            resampler,
-            scratch: Vec::with_capacity(chunk_size * 4),
-            input_buf: vec![vec![0.0; chunk_size]],
-            output_buf: vec![vec![0.0; output_len]],
-            chunk_size,
-        }
-    }
-
-    fn process(&mut self, input: &[f32], out: &mut Vec<f32>) {
-        self.scratch.extend_from_slice(input);
-        let mut processed = 0;
-        while self.scratch.len().saturating_sub(processed) >= self.chunk_size {
-            self.input_buf[0]
-                .copy_from_slice(&self.scratch[processed..processed + self.chunk_size]);
-            self.process_chunk(out);
-            processed += self.chunk_size;
-        }
-        if processed > 0 {
-            let remaining = self.scratch.len() - processed;
-            if remaining == 0 {
-                self.scratch.clear();
-            } else {
-                self.scratch.copy_within(processed.., 0);
-                self.scratch.truncate(remaining);
-            }
-        }
-    }
-
-    fn flush_recording(&mut self, out: &mut Vec<f32>) {
-        if !self.scratch.is_empty() {
-            debug_assert!(self.scratch.len() < self.chunk_size);
-            self.input_buf[0].fill(0.0);
-            self.input_buf[0][..self.scratch.len()].copy_from_slice(&self.scratch);
-            self.scratch.clear();
-            self.process_chunk(out);
-        }
-        self.resampler.reset();
-    }
-
-    fn reset_recording(&mut self) {
-        self.scratch.clear();
-        self.resampler.reset();
-    }
-
-    fn process_chunk(&mut self, out: &mut Vec<f32>) {
-        if let Err(e) = process_resample_chunk(
-            &mut self.resampler,
-            &self.input_buf,
-            &mut self.output_buf,
-            out,
-        ) {
-            let _ = writeln!(
-                std::io::stderr(),
-                "parakit: resampler error (dropped chunk): {e}"
-            );
-        }
-    }
 }
 
 fn build_stream<T>(
