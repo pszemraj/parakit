@@ -14,6 +14,7 @@
 use crossbeam_channel::{bounded, Sender};
 use rodio::source::Source;
 use rodio::{OutputStream, Sink};
+use std::io::Write as _;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
@@ -66,7 +67,8 @@ impl Sounds {
             .spawn(move || {
                 while let Ok(cue) = rx.recv() {
                     if let Err(e) = play_cue(cue) {
-                        eprintln!(
+                        let _ = writeln!(
+                            std::io::stderr(),
                             "parakit: sound cue dropped: {e}\n\
                              (Pass --no-sounds to silence this warning.)"
                         );

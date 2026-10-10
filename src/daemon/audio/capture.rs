@@ -17,6 +17,7 @@ use ringbuf::{
 };
 use rubato::{Resampler, SincFixedIn};
 use std::collections::VecDeque;
+use std::io::Write as _;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
@@ -1483,7 +1484,10 @@ impl ResamplerState {
             &mut self.output_buf,
             out,
         ) {
-            eprintln!("parakit: resampler error (dropped chunk): {e}");
+            let _ = writeln!(
+                std::io::stderr(),
+                "parakit: resampler error (dropped chunk): {e}"
+            );
         }
     }
 }

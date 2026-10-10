@@ -8,6 +8,8 @@ One append-only `parakit-YYYY-MM-DD.jsonl` file is written per local day, rotati
 
 Independent logger instances sharing a daily file take an exclusive file lock for each append and any failed-write rollback, so their records cannot overwrite each other.
 
+Terminal output is best-effort. A closed terminal or failed stdout/stderr write does not stop dictation or JSONL logging. JSONL write failures are reported when stderr is available; they do not stop the worker.
+
 ## How To Read A Dictation
 
 A completed dictation normally produces two lines: a transcription line, written as soon as the model and cleaner finish, and a later insertion line, written once parakit knows what happened to the paste attempt.

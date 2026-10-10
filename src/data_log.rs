@@ -201,7 +201,10 @@ impl DataLogger {
         match self.try_log(timestamp, audio_secs, infer, raw, cleaned, cleaning) {
             Ok(()) => Some(id),
             Err(e) => {
-                eprintln!("parakit: transcription log write failed: {e:#}");
+                let _ = writeln!(
+                    std::io::stderr(),
+                    "parakit: transcription log write failed: {e:#}"
+                );
                 None
             }
         }
@@ -223,7 +226,10 @@ impl DataLogger {
     /// * `fields` - Insertion telemetry to record.
     pub fn log_insertion(&self, id: &RecordId, fields: InsertionLogFields<'_>) {
         if let Err(e) = self.try_log_insertion(id, fields) {
-            eprintln!("parakit: insertion log write failed: {e:#}");
+            let _ = writeln!(
+                std::io::stderr(),
+                "parakit: insertion log write failed: {e:#}"
+            );
         }
     }
 

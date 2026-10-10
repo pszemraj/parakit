@@ -22,6 +22,7 @@ use rdev::Key;
 use rdev::Key;
 #[cfg(target_os = "linux")]
 use rdev::{Event, EventType, Key};
+use std::io::Write as _;
 #[cfg(not(target_os = "macos"))]
 use std::sync::Arc;
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
@@ -493,7 +494,11 @@ pub(super) fn report_hotkey_loop_failure(
     help: impl FnOnce() -> String,
 ) -> Result<(), HotkeyLoopFailed> {
     result.map_err(|err| {
-        eprintln!("parakit: {backend} failed: {err:#}\n{}", help());
+        let _ = writeln!(
+            std::io::stderr(),
+            "parakit: {backend} failed: {err:#}\n{}",
+            help()
+        );
         HotkeyLoopFailed
     })
 }
@@ -723,7 +728,8 @@ impl X11PhysicalHotkeyProbe {
             .mapping
             .refresh_with(mapping_changed, || X11HotkeyMapping::resolve(&self.conn))
         {
-            eprintln!(
+            let _ =
+                writeln!(std::io::stderr(),
                 "parakit: could not refresh X11 hotkey mapping; keeping previous keycodes: {err:#}"
             );
         }

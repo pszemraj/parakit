@@ -90,6 +90,9 @@ fn with_stderr_redirected<T>(keep_diagnostics: bool, f: impl FnOnce() -> T) -> T
             // Do not acquire Rust's stderr lock: a concurrent producer can hold
             // it while filling the pipe. Write to the saved descriptor directly.
             let _ = forward_diagnostics(&mut reader, &mut StderrWriter(saved));
+            // A closed terminal can reject forwarded diagnostics. Continue
+            // draining so native writers do not get EPIPE or fill the pipe.
+            let _ = io::copy(&mut reader, &mut io::sink());
         } else {
             let _ = io::copy(&mut reader, &mut io::sink());
         }
@@ -190,6 +193,11 @@ mod tests {
     fn reload_filter_preserves_concurrent_diagnostics_and_restores_stderr() {
         const CHILD: &str = "PARAKIT_STDERR_FILTER_CHILD";
         if std::env::var_os(CHILD).is_some() {
+            let closed_terminal = std::env::var(CHILD).unwrap() == "closed";
+            #[cfg(target_os = "linux")]
+            if closed_terminal {
+                crate::test_support::disconnect_test_terminal();
+            }
             with_stderr_suppressed(|| {
                 StderrWriter(STDERR_FD)
                     .write_all(b"startup noise\n")
@@ -210,6 +218,16 @@ mod tests {
                 .unwrap();
                 native.write_all(b"native error: loader failed\n").unwrap();
             });
+            if closed_terminal {
+                assert_eq!(
+                    StderrWriter(STDERR_FD)
+                        .write_all(b"stderr restored\n")
+                        .unwrap_err()
+                        .raw_os_error(),
+                    Some(libc::EIO)
+                );
+                std::process::exit(0);
+            }
             eprintln!("stderr restored");
             return;
         }
@@ -237,5 +255,23 @@ mod tests {
             .lines()
             .any(|line| line == "native error: loader failed"));
         assert!(stderr.ends_with("stderr restored\n") || stderr.ends_with("stderr restored\r\n"));
+
+        #[cfg(target_os = "linux")]
+        {
+            let status = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "daemon::stderr::tests::reload_filter_preserves_concurrent_diagnostics_and_restores_stderr",
+                    "--nocapture",
+                ])
+                .env(CHILD, "closed")
+                .output()
+                .unwrap()
+                .status;
+            assert!(
+                status.success(),
+                "closed-terminal stderr filter exited: {status}"
+            );
+        }
     }
 }

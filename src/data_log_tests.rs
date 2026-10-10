@@ -307,11 +307,17 @@ fn insertion_record_stays_in_the_transcriptions_daily_file() {
 
 #[test]
 fn failed_transcription_write_returns_no_record_id() {
+    const CHILD: &str = "PARAKIT_CLOSED_TERMINAL_DATA_LOG_CHILD";
+    let is_child = std::env::var_os(CHILD).is_some();
+    #[cfg(target_os = "linux")]
+    if is_child {
+        crate::test_support::disconnect_test_terminal();
+    }
     let root = crate::test_support::fixture_root("parakit-log-test", "write-failure");
     let blocked_dir = root.join("not-a-directory");
     std::fs::write(&blocked_dir, b"file blocks log directory")
         .expect("create log-directory blocker");
-    let logger = DataLogger::new(blocked_dir);
+    let logger = DataLogger::new(blocked_dir.clone());
 
     let id = logger.log(
         1.0,
@@ -322,6 +328,45 @@ fn failed_transcription_write_returns_no_record_id() {
     );
 
     assert!(id.is_none());
+    let timestamp = LogTimestamp::now(Arc::clone(&logger.session_id), 0);
+    logger.log_insertion(&timestamp.record_id, sample_insertion_fields());
+
+    // Logging can resume after the directory is repaired, even if reporting
+    // the earlier failure also failed because the terminal was closed.
+    std::fs::remove_file(&blocked_dir).unwrap();
+    let id = logger
+        .log(
+            1.0,
+            Duration::ZERO,
+            "next",
+            "Next",
+            sample_cleaning_fields(),
+        )
+        .expect("write after directory recovery");
+    logger.log_insertion(&id, sample_insertion_fields());
+    let contents = std::fs::read_to_string(blocked_dir.join(file_name(id.local_date))).unwrap();
+    assert_eq!(contents.lines().count(), 2);
+
+    if is_child {
+        std::process::exit(0);
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "data_log::tests::failed_transcription_write_returns_no_record_id",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .output()
+            .unwrap()
+            .status;
+        assert!(
+            status.success(),
+            "closed-terminal JSONL logger exited: {status}"
+        );
+    }
 }
 
 #[test]
