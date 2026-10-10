@@ -337,28 +337,15 @@ fn ambiguous_quantities_remain_words_across_profiles_and_thresholds() {
             "Use one hundred ninety two point one hundred sixty eight point zero point one.",
             "Use 192.168.0.1.",
         ),
-        ("Use one twenty eight K context.", "Use 128K context."),
-        ("Use one twenty eight M parameters.", "Use 128M parameters."),
-        ("Use one twenty eight B parameters.", "Use 128B parameters."),
         (
-            "Use one twenty eight\nK context.",
-            "Use one twenty eight\nK context.",
+            "Use one twenty eight K context.",
+            "Use one twenty eight K context.",
         ),
+        ("Llama three seventy B.", "Llama three seventy B."),
+        ("GPT two one twenty four M.", "GPT two one twenty four M."),
         ("OK five thirty.", "OK five thirty."),
         ("RTX fifty ninety.", "RTX fifty ninety."),
         ("SM one twenty.", "SM one twenty."),
-        (
-            "Use one twenty eight k context.",
-            "Use one twenty eight k context.",
-        ),
-        (
-            "Use one twenty eight, K context.",
-            "Use one twenty eight, K context.",
-        ),
-        (
-            "Use one twenty eight KB context.",
-            "Use one twenty eight KB context.",
-        ),
         (
             "The value is three point one four one five.",
             "The value is 3.1415.",

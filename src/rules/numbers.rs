@@ -429,21 +429,11 @@ fn replace_numbers_with_hybrid_magnitudes(
             end += 1;
         }
         if end > index {
+            // A suffix such as "K" or "B" does not disambiguate the run either:
+            // "Llama three seventy B" names version 3 at 70B, not 370B.
             let start = tokens[first.start].start;
-            let last = &occurrences[end];
-            let end = tokens[last.end - 1].end;
-            // A directly following uppercase magnitude suffix makes the
-            // digit groups structural ("one twenty eight K" -> "128K").
-            // Identifier prefixes alone do not disambiguate spoken counts.
-            let magnitude_suffix = tokens.get(last.end).is_some_and(|token| {
-                matches!(token.text, "K" | "M" | "B")
-                    && input[end..token.start]
-                        .bytes()
-                        .all(|byte| matches!(byte, b' ' | b'\t'))
-            });
-            if !magnitude_suffix {
-                replacements.push((start, end, input[start..end].to_owned()));
-            }
+            let end = tokens[occurrences[end].end - 1].end;
+            replacements.push((start, end, input[start..end].to_owned()));
         }
         index = end + 1;
     }
