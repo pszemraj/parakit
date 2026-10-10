@@ -1361,7 +1361,12 @@ where
     // The restage can require another focus query. Preserve a copy observed
     // during that query instead of sending it to the target. Unreadable stamps
     // retain the existing fallback: stage once, then paste without restoring.
-    if !previous.stamp_is_current(clipboard) && previous.observation_error().is_none() {
+    // X11 stamps name the selection owner, not a write: a clipboard manager
+    // re-owning the staged transcript is the handoff `is_current` accepts.
+    if !cfg!(target_os = "linux")
+        && !previous.stamp_is_current(clipboard)
+        && previous.observation_error().is_none()
+    {
         return finish_blocked_clipboard(
             clipboard,
             previous,

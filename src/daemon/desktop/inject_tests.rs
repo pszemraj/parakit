@@ -1782,6 +1782,9 @@ fn clipboard_restage_does_not_override_final_focus_safety() {
     }
 }
 
+// X11 stamps name the selection owner rather than a write; see
+// `clipboard_manager_reown_after_restage_still_pastes`.
+#[cfg(not(target_os = "linux"))]
 #[test]
 fn a_new_copy_during_restaged_focus_check_prevents_dispatch() {
     for competing in [
@@ -2020,6 +2023,43 @@ fn clipboard_manager_handoffs_restage_before_paste_and_allow_restore_after_paste
         }
         assert_eq!(guards, if handoff_before_paste { 3 } else { 2 });
     }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn clipboard_manager_reown_after_restage_still_pastes() {
+    let mut clipboard = MockClipboard::new("old clipboard");
+    let pending = Rc::clone(&clipboard.pending_external_write);
+    let posted = Cell::new(false);
+    let mut guards = 0;
+    let report = paste_with_clipboard_swap_guarded(
+        &mut clipboard,
+        "dictated text",
+        PasteMode::Standard,
+        || true,
+        || {
+            posted.set(true);
+            Ok(PasteDispatch::Posted)
+        },
+        Duration::ZERO,
+        restore_plan(&quiet_gate()),
+        ClipboardPolicy::RestorePrevious,
+        None,
+        || {
+            guards += 1;
+            // The manager re-owns the transcript during both final focus checks.
+            if guards >= 2 {
+                *pending.borrow_mut() =
+                    Some(MockClipboardContent::Text("dictated text".to_owned()));
+            }
+            Ok(true)
+        },
+    )
+    .unwrap();
+    assert_eq!(report.outcome, PasteOutcome::Pasted);
+    assert!(posted.get());
+    assert_eq!(clipboard.text(), Some("dictated text"));
+    assert_eq!(guards, 3);
 }
 
 #[cfg(target_os = "linux")]
