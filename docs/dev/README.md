@@ -48,7 +48,6 @@ Current Rust files over the approximate 1k LoC target:
 
 | Path | Reason and split boundary |
 | --- | --- |
-| `src/daemon/audio/capture.rs` | Owns the coupled CPAL stream-recovery, SPSC drain, resampling, and pre-roll boundary. Split into stream, drain, and device modules when their ownership boundaries are stable. |
 | `src/daemon/desktop/inject.rs` | Owns the cross-platform clipboard transaction, focus snapshots, and insertion contract. X11 paste synthesis is separate; split clipboard transaction and focus code when their ownership boundaries settle. |
 | `src/daemon/ipc.rs` | Contains both Unix-socket and Windows named-pipe transports plus their policy tests. Extract the Windows transport after its behavior settles. |
 | `src/daemon/desktop/inject_tests.rs` | Keeps the clipboard and insertion transaction regression matrix together. Split by transaction phase when shared fixtures no longer dominate. |

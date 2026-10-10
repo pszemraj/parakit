@@ -17,7 +17,7 @@ use super::{append_processed_samples, CaptureState, TARGET_RATE};
 /// Sized independently of [`DEFAULT_CALLBACK_SCRATCH_FRAMES`]; the two happen
 /// to share a value but are separate sizing decisions.
 ///
-/// [`DEFAULT_CALLBACK_SCRATCH_FRAMES`]: super::DEFAULT_CALLBACK_SCRATCH_FRAMES
+/// [`DEFAULT_CALLBACK_SCRATCH_FRAMES`]: super::stream::DEFAULT_CALLBACK_SCRATCH_FRAMES
 pub(super) const DRAIN_SCRATCH_FRAMES: usize = 8192;
 
 /// Commands the drain thread accepts to begin or end a recording.

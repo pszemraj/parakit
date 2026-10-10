@@ -9,6 +9,11 @@ use super::drain::{
     DrainControl, DRAIN_SCRATCH_FRAMES,
 };
 use super::*;
+use cpal::SampleFormat;
+use ringbuf::{
+    traits::{Producer, Split},
+    HeapProd, HeapRb,
+};
 
 #[test]
 fn input_name_classifiers_are_stable() {
