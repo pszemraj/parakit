@@ -180,7 +180,7 @@ keep_trailing_period = false
 # number, 0 or more (integer or float). Decides which spoken numbers the spoken-numbers rule turns into digits.
 # Only isolated single-digit numbers ("zero" to "nine") and isolated ordinals ("first", "twenty first") are compared with the threshold.
 # One whose value is below the threshold is left exactly as the model produced it, neither forced to words nor to digits. One at or above it becomes digits.
-# Numbers of 10 or more are converted at any threshold. So is a number listed next to other numbers: "Zero, one, two, three, four." becomes "0, 1, 2, 3, 4" at the default.
+# Cardinal numbers of 10 or more are converted at any threshold. So is a number listed next to other numbers: "Zero, one, two, three, four." becomes "0, 1, 2, 3, 4" at the default.
 # Example: with 5, "four apples" and "two apples" stay as written and "five apples" becomes "5 apples". With the default 4, zero through three stay as written.
 # 0 converts every recognized isolated number. Protections still apply at 0: a run of adjacent small numbers ("one two three"), plural magnitudes, fractions, and the time unit "second" stay as words.
 # The effective default is 4, applied when the key is absent. An explicit 0 is a different setting from absent.
