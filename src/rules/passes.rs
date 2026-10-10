@@ -224,17 +224,47 @@ fn render_spoken_version_candidate(input: &str, words: &[WordSpan]) -> Option<St
         if component_start == index {
             return None;
         }
-        components.push(parse_number_component(
-            input,
-            &words[component_start..index],
-        )?);
+        components.push(&words[component_start..index]);
         component_start = index + 1;
     }
     if component_start == words.len() {
         return None;
     }
-    components.push(parse_number_component(input, &words[component_start..])?);
-    (components.len() >= 3).then(|| components.join("."))
+    components.push(&words[component_start..]);
+    if components.len() < 3 {
+        return None;
+    }
+    let explicit_version = input[..words[0].start]
+        .split_whitespace()
+        .last()
+        .is_some_and(|word| word.eq_ignore_ascii_case("v") || word.eq_ignore_ascii_case("version"));
+    let mut rendered = String::new();
+    for (index, component) in components.iter().enumerate() {
+        if index > 0 {
+            rendered.push('.');
+        }
+        // "two point five three point zero" can straddle two decimals.
+        // A component spoken as separate digits requires an explicit version
+        // cue to join it across both points. A hyphenated component already
+        // supplies that boundary ("zero-three").
+        if !explicit_version
+            && index > 0
+            && index + 1 < components.len()
+            && component.len() > 1
+            && component.iter().all(|span| {
+                render_number_component(&input[span.start..span.end])
+                    .is_some_and(|value| value.len() == 1)
+            })
+        {
+            let last = component.len() - 1;
+            rendered.push_str(&parse_number_component(input, &component[..last])?);
+            rendered.push(' ');
+            rendered.push_str(&parse_number_component(input, &component[last..])?);
+        } else {
+            rendered.push_str(&parse_number_component(input, component)?);
+        }
+    }
+    Some(rendered)
 }
 
 fn parse_number_component(input: &str, words: &[WordSpan]) -> Option<String> {
@@ -252,14 +282,16 @@ fn render_number_component(phrase: &str) -> Option<String> {
     let words = phrase
         .split(|ch: char| ch.is_whitespace() || ch == '-')
         .filter(|word| !word.is_empty());
-    let rendered = if words.clone().next()?.eq_ignore_ascii_case("zero") {
-        words
-            .map(|word| {
-                text2digits(word, &language)
-                    .ok()
-                    .filter(|value| value.len() == 1)
-            })
-            .collect::<Option<String>>()?
+    let digit_words: Option<String> = words
+        .clone()
+        .map(|word| {
+            text2digits(word, &language)
+                .ok()
+                .filter(|value| value.len() == 1)
+        })
+        .collect();
+    let rendered = if words.clone().next()?.eq_ignore_ascii_case("zero") || digit_words.is_some() {
+        digit_words?
     } else {
         text2digits(&phrase, &language).ok()?
     };

@@ -125,8 +125,13 @@ fn replace_numbers_preserving_literals(input: &str, language: &Language, thresho
                 // denominator through its singular form while preserving the
                 // original text and byte positions for the literal span.
                 if let Some(last) = tokens.last_mut() {
-                    if let Some(singular) = last.lowercase.strip_suffix('s') {
-                        last.lowercase = singular.to_owned();
+                    if is_plural_ordinal(
+                        &last.lowercase,
+                        &input[..last.start],
+                        previous_re,
+                        language,
+                    ) {
+                        last.lowercase.pop();
                     }
                 }
                 let occurrences = find_numbers(tokens.iter(), language, 0.0);
@@ -211,7 +216,7 @@ fn replace_numbers_preserving_literals(input: &str, language: &Language, thresho
                 // or chapter count is independent and must remain convertible.
                 None
             } else if is_fraction && !scale_first {
-                preceding_fraction_start(prefix, phrase, language)
+                preceding_fraction_start(prefix, phrase, previous_re, language)
             } else {
                 preceding_number_start(prefix, language)
             };
@@ -306,22 +311,26 @@ fn preceding_number_start(input: &str, language: &Language) -> Option<usize> {
 
 /// Keep a fraction's numerator or mixed count, but leave independent exact
 /// counts available for conversion before a singular fraction.
-fn preceding_fraction_start(input: &str, phrase: &str, language: &Language) -> Option<usize> {
+fn preceding_fraction_start(
+    input: &str,
+    phrase: &str,
+    previous_re: &Regex,
+    language: &Language,
+) -> Option<usize> {
     let input = input.strip_suffix('-').unwrap_or(input);
     let start = preceding_number_start(input, language)?;
     let joined = phrase
         .split_ascii_whitespace()
         .next()
         .is_some_and(|word| word.eq_ignore_ascii_case("and"));
-    let plural = phrase.split_ascii_whitespace().any(|word| {
-        let word = word.to_ascii_lowercase();
-        matches!(word.as_str(), "halves" | "quarters")
-            || word.strip_suffix('s').is_some_and(|singular| {
-                let tokens = number_tokens(singular);
-                find_numbers(tokens.iter(), language, 0.0)
-                    .last()
-                    .is_some_and(|number| number.is_ordinal)
-            })
+    let plural = number_tokens(phrase).iter().any(|token| {
+        matches!(token.lowercase.as_str(), "halves" | "quarters")
+            || is_plural_ordinal(
+                &token.lowercase,
+                &format!("{input}{}", &phrase[..token.start]),
+                previous_re,
+                language,
+            )
     });
     // A conjunction can introduce either a mixed fraction or independent
     // quantities. Preserve it with the count instead of guessing from nearby
@@ -343,6 +352,20 @@ fn preceding_fraction_start(input: &str, phrase: &str, language: &Language) -> O
     let mixed_numerator =
         occurrences.len() > 1 && numerator.iter().any(|token| token.lowercase == "and");
     (singular_numerator || mixed_numerator).then_some(start)
+}
+
+/// Classify plural denominators without mistaking elapsed seconds for fractions.
+fn is_plural_ordinal(word: &str, prefix: &str, previous_re: &Regex, language: &Language) -> bool {
+    let Some(singular) = word.strip_suffix('s') else {
+        return false;
+    };
+    if singular == "second" && second_is_time_unit(prefix, previous_re, language) {
+        return false;
+    }
+    let tokens = number_tokens(singular);
+    find_numbers(tokens.iter(), language, 0.0)
+        .last()
+        .is_some_and(|number| number.is_ordinal && number.end == tokens.len())
 }
 
 fn number_tokens(input: &str) -> Vec<NumberToken<'_>> {
@@ -373,15 +396,15 @@ fn replace_numbers_with_hybrid_magnitudes(
     });
 
     let tokens = number_tokens(input);
-    let occurrences = find_numbers(tokens.iter(), language, threshold);
+    let occurrences = find_numbers(tokens.iter(), language, 0.0);
     let mut replacements: Vec<_> = numeric_re
         .find_iter(input)
         .map(|found| (found.start(), found.end(), found.as_str().to_string()))
         .collect();
 
-    // Adjacent spoken two-digit integers can name a year ("twenty twenty two")
-    // or separate values. Keep the words instead of splitting or joining that
-    // ambiguous quantity. Punctuation and existing digits remain boundaries.
+    // Adjacent spoken small integers can name a year, time, phone number, or
+    // separate values. Preserve the entire run rather than interpreting it.
+    // Punctuation, explicit scales, decimals, and existing digits are boundaries.
     let mut index = 0;
     while index + 1 < occurrences.len() {
         let first = &occurrences[index];
@@ -390,7 +413,7 @@ fn replace_numbers_with_hybrid_magnitudes(
             let previous = &occurrences[end];
             if [previous, next].iter().any(|number| {
                 number.is_ordinal
-                    || !(10.0..100.0).contains(&number.value)
+                    || !(0.0..100.0).contains(&number.value)
                     || number.value.fract() != 0.0
                     || tokens[number.start..number.end]
                         .iter()

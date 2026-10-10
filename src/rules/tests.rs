@@ -373,6 +373,23 @@ fn text2num_renders_ordinals_and_spoken_years() {
             ("Use twenty point zero twenty point zero.", "Use 20.0 20.0."),
             ("Use twenty twenty point zero.", "Use 20 20.0."),
             ("Use twenty point zero twenty.", "Use 20.0 20."),
+            ("Meet at ten thirty.", "Meet at ten thirty."),
+            ("Meet at five thirty.", "Meet at five thirty."),
+            ("Meet at one thirty.", "Meet at one thirty."),
+            (
+                "My number is five five five twenty twelve.",
+                "My number is five five five twenty twelve.",
+            ),
+            ("Use five, thirty.", "Use 5, 30."),
+            (
+                "Use five thirty files and six rows.",
+                "Use five thirty files and 6 rows.",
+            ),
+            ("Use two point zero two point zero.", "Use 2.0 2.0."),
+            ("Use two point zero three point zero.", "Use 2.0 3.0."),
+            ("Use two point oh three point five.", "Use 2.0 3.5."),
+            ("Use two point five two point five.", "Use 2.5 2.5."),
+            ("Use two point five three point six.", "Use 2.5 3.6."),
             (
                 "We need twenty ten-cent stamps.",
                 "We need 20 ten-cent stamps.",
@@ -508,6 +525,18 @@ fn fraction_guards_preserve_numerators_without_absorbing_independent_counts() {
             ("three quarters of a million", "three quarters of a million"),
             ("five thirds of a million", "five thirds of a million"),
             ("four fifths of a million", "four fifths of a million"),
+            (
+                "ten seconds of a million rows",
+                "10 seconds of 1 million rows",
+            ),
+            (
+                "ten SECONDS of a billion rows",
+                "10 SECONDS of 1 billion rows",
+            ),
+            (
+                "ten seconds and five thirds of a million",
+                "10 seconds and five thirds of a million",
+            ),
             ("five-thirds of a million", "five-thirds of a million"),
             (
                 "five twenty-firsts of a million",
@@ -860,6 +889,13 @@ fn version_components_use_text2num_without_a_custom_number_parser() {
             ("V one point zero zero five point two.", "v1.005.2."),
             ("V one point oh five point two.", "v1.05.2."),
             ("V one point zero-five point two.", "v1.05.2."),
+            ("V two point zero two point zero.", "v2.02.0."),
+            ("V two point five two point zero.", "v2.52.0."),
+            (
+                "Version two point zero three point zero.",
+                "Version 2.03.0.",
+            ),
+            ("V two point zero zero three point zero.", "v2.003.0."),
             (
                 "V one point twenty one point one hundred twenty.",
                 "v1.21.120.",
