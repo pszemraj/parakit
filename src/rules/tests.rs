@@ -444,6 +444,18 @@ fn equal_scales_joined_by_and_remain_separate_quantities() {
             ("Use five hundred and six hundred.", "Use 500 and 600."),
             ("Use one hundred and five thousand.", "Use 105000."),
             ("Use two million and five.", "Use 2000005."),
+            (
+                "Use one hundred and twenty thousand five hundred.",
+                "Use 120500.",
+            ),
+            (
+                "Between two hundred and fifty thousand and three hundred thousand rows.",
+                "Between 250000 and 300000 rows.",
+            ),
+            (
+                "Between five thousand and ten thousand five hundred rows.",
+                "Between 5000 and 10500 rows.",
+            ),
         ],
     );
 }
@@ -901,6 +913,10 @@ fn version_components_use_text2num_without_a_custom_number_parser() {
         &[
             ("V zero point five point two.", "v0.5.2."),
             ("PyTorch two point thirteen point oh.", "PyTorch 2.13.0."),
+            (
+                "Windows ten point zero point nineteen thousand forty five.",
+                "Windows 10.0.19045.",
+            ),
             (
                 "Ubuntu twenty two point zero four point three.",
                 "Ubuntu 22.04.3.",

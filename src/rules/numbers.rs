@@ -69,33 +69,50 @@ pub(crate) fn normalize_spoken_numbers(input: &str, threshold: f64) -> Transform
 
 /// Convert a line in segments separated by `and` between equal scales.
 ///
-/// text2num reads "five thousand and ten thousand" as 5010 and 1000, but
-/// quantities ending in the same scale word never form one number. Differing
-/// scales still join: "one hundred and five thousand" is 105000.
+/// text2num reads "five thousand and ten thousand" as 5010 and 1000, but a
+/// quantity whose largest scale equals the one before `and` cannot continue
+/// that number. Other scales still join: "one hundred and twenty thousand five
+/// hundred" is 120500, and "two thousand and five hundred" is 2500.
 fn replace_numbers_in_segments(line: &str, language: &Language, threshold: f64) -> String {
     let tokens = number_tokens(line);
     let boundary = tokens.windows(2).enumerate().find_map(|(index, pair)| {
         let [scale, conjunction] = pair else {
             return None;
         };
-        if conjunction.lowercase != "and"
-            || !matches!(
-                scale.lowercase.as_str(),
-                "hundred" | "thousand" | "million" | "billion"
-            )
-        {
+        let rank = scale_rank(&scale.lowercase)?;
+        if conjunction.lowercase != "and" {
             return None;
         }
         let following = &tokens[index + 2..];
         let next = find_numbers(following.iter(), language, 0.0)
             .into_iter()
             .next()?;
+        if next.start != 0 {
+            return None;
+        }
+        // Within one number, "and" follows a scale ("two hundred and fifty
+        // thousand"). Greedy parsing can also carry the next quantity across an
+        // "and" after a plain count ("fifty and two hundred"); stop there.
+        let lead = (1..next.end)
+            .find(|&at| {
+                following[at].lowercase == "and"
+                    && scale_rank(&following[at - 1].lowercase).is_none()
+            })
+            .unwrap_or(next.end);
         // text2num ends a decimal before its scale: "three point six" then "million".
-        let ends_in_scale = following[next.end - 1..]
+        let decimal = following[..lead]
             .iter()
-            .take(2)
-            .any(|token| token.lowercase == scale.lowercase);
-        (next.start == 0 && ends_in_scale).then_some(conjunction)
+            .any(|token| token.lowercase == "point");
+        let end = if decimal && lead == next.end {
+            (lead + 1).min(following.len())
+        } else {
+            lead
+        };
+        let largest = following[..end]
+            .iter()
+            .filter_map(|token| scale_rank(&token.lowercase))
+            .max();
+        (largest == Some(rank)).then_some(conjunction)
     });
     let Some(conjunction) = boundary else {
         return replace_numbers_preserving_literals(line, language, threshold);
@@ -106,6 +123,17 @@ fn replace_numbers_in_segments(line: &str, language: &Language, threshold: f64) 
         &line[conjunction.start..conjunction.end],
         replace_numbers_in_segments(&line[conjunction.end..], language, threshold),
     )
+}
+
+/// Order of magnitude for the scale words that can close a spoken quantity.
+fn scale_rank(word: &str) -> Option<u8> {
+    match word {
+        "hundred" => Some(2),
+        "thousand" => Some(3),
+        "million" => Some(6),
+        "billion" => Some(9),
+        _ => None,
+    }
 }
 
 /// Replace a spoken sign immediately before a number rendered by `text2num`.
