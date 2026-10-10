@@ -25,9 +25,12 @@ mod daemon;
 #[cfg(test)]
 mod test_support;
 
+use std::io::Write as _;
+
 fn main() {
     if let Err(err) = app::run() {
-        eprintln!("parakit: error: {err:#}");
+        // A closed launching terminal must not turn exit status 1 into a panic.
+        let _ = writeln!(std::io::stderr(), "parakit: error: {err:#}");
         std::process::exit(1);
     }
 }

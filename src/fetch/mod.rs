@@ -17,6 +17,7 @@ use sha2::{Digest, Sha256};
 use std::env;
 use std::ffi::{OsStr, OsString};
 use std::fs::{File, OpenOptions};
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -33,16 +34,18 @@ pub struct FetchOptions {
     pub source: FetchSource,
 }
 
+// Status output is best-effort: daemon startup can fetch after its launching
+// terminal closed, and a failed write must not abort the download.
 impl FetchOptions {
     fn status(&self, message: std::fmt::Arguments<'_>) {
         if !self.quiet {
-            println!("{message}");
+            let _ = writeln!(std::io::stdout(), "{message}");
         }
     }
 
     fn verbose_status(&self, message: std::fmt::Arguments<'_>) {
         if !self.quiet && self.verbose {
-            println!("{message}");
+            let _ = writeln!(std::io::stdout(), "{message}");
         }
     }
 }
