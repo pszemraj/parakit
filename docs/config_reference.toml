@@ -339,7 +339,8 @@ backend = "auto"
 
 # HOME
 # Linux and macOS. Fallback for XDG_CONFIG_HOME and XDG_CACHE_HOME.
-# When it is unset, those paths cannot be resolved and the command fails with "HOME is not set". When it is set but empty, the paths silently become relative to the working directory.
+# An empty value counts as unset.
+# When it is unset or empty and the XDG variable gives no base, those paths cannot be resolved and the command fails with "HOME is unset or empty".
 
 # XDG_RUNTIME_DIR
 # Linux. Directory whose parakit subdirectory holds the daemon lock file (parakit.lock) and control socket (control.sock). An empty value counts as unset.
