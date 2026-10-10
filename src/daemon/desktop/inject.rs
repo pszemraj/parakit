@@ -217,7 +217,7 @@ impl PasteReport {
         }
     }
 
-    /// Record why the previous clipboard was not saved, unless a later
+    /// Record why the previous clipboard was not restored, unless a later
     /// observation already explains this outcome.
     fn with_retention_diagnostic(mut self, diagnostic: Option<String>) -> Self {
         if self.diagnostic.is_none() {
@@ -1279,14 +1279,14 @@ where
         ));
     }
 
-    let (previous, clipboard_policy, retention_diagnostic) =
+    let (previous, mut clipboard_policy, mut retention_diagnostic) =
         previous_clipboard_for_policy(clipboard, clipboard_policy);
     let write_before = restore_plan.before_transcript_write();
     clipboard
         .set_text(text.to_owned())
         .context("could not copy transcript to clipboard")?;
-    let previous = StagedClipboard::capture(clipboard, previous, text);
-    let write_token = restore_plan.after_transcript_write(write_before);
+    let mut previous = StagedClipboard::capture(clipboard, previous, text);
+    let mut write_token = restore_plan.after_transcript_write(write_before);
 
     sleep_if_nonzero(settle_delay);
 
@@ -1297,52 +1297,66 @@ where
     // current before `paste()` posts any input.
     let baseline = restore_plan.capture_paste_baseline(focus);
 
-    // Read the payload before the final focus check: external clipboard reads
-    // may block. A changed or unreadable clipboard must never be pasted or
-    // overwritten by error cleanup/fallback.
-    if !previous.is_current(clipboard) {
-        return Ok(PasteReport::clipboard_changed(previous.observation_error()));
-    }
+    // Payload reads may block, so finish them before checking focus. A failed
+    // observation calls for re-staging immediately before a safe chord, not
+    // withholding the transcript or risking a paste of someone else's copy.
+    let restage_reason = (!previous.is_current(clipboard)).then(|| {
+        previous
+            .observation_error()
+            .unwrap_or_else(|| "clipboard changed after staging".to_owned())
+    });
 
-    for attempt in 0..2 {
-        match before_chord() {
-            Ok(true) => {}
-            Ok(false) => {
-                return finish_blocked_clipboard(
-                    clipboard,
-                    previous,
-                    write_token,
-                    restore_plan,
-                    clipboard_policy,
-                )
-                .map(|report| report.with_retention_diagnostic(retention_diagnostic));
-            }
-            Err(err) => {
-                let restore_result = restore_after_delay(
-                    clipboard,
-                    previous,
-                    write_token,
-                    restore_plan,
-                    clipboard_policy,
-                );
-                return match restore_result {
-                    Ok(ClipboardRestore::Changed(diagnostic)) => {
-                        Ok(clipboard_changed_with_primary_error(err, diagnostic))
-                    }
-                    Ok(_) => Err(err),
-                    Err(restore_err) => Err(err.context(format!("{restore_err:#}"))),
-                };
-            }
+    let mut focus_check = before_chord();
+    if matches!(focus_check, Ok(true)) {
+        let restage_reason = restage_reason.or_else(|| {
+            (!previous.stamp_is_current(clipboard)).then(|| {
+                previous
+                    .observation_error()
+                    .unwrap_or_else(|| "clipboard changed during the final focus check".to_owned())
+            })
+        });
+        if let Some(reason) = restage_reason {
+            let write_before = restore_plan.before_transcript_write();
+            clipboard
+                .set_text(text.to_owned())
+                .context("could not re-copy transcript to clipboard")?;
+            previous = StagedClipboard::capture(clipboard, ClipboardSnapshot::Unsupported, text);
+            write_token = restore_plan.after_transcript_write(write_before);
+            clipboard_policy = ClipboardPolicy::KeepTranscript;
+            retention_diagnostic = Some(reason);
+            // The write and native stamp capture can block. Recheck focus
+            // after them, without retrying the clipboard transaction.
+            focus_check = before_chord();
         }
-        if previous.stamp_is_current(clipboard) {
-            break;
+    }
+    match focus_check {
+        Ok(true) => {}
+        Ok(false) => {
+            return finish_blocked_clipboard(
+                clipboard,
+                previous,
+                write_token,
+                restore_plan,
+                clipboard_policy,
+            )
+            .map(|report| report.with_retention_diagnostic(retention_diagnostic));
         }
-        if attempt == 0 && cfg!(target_os = "linux") && previous.is_current(clipboard) {
-            // A manager acquired identical text during the focus query. Read
-            // it back once, then recheck focus before sending any input.
-            continue;
+        Err(err) => {
+            let restore_result = restore_after_delay(
+                clipboard,
+                previous,
+                write_token,
+                restore_plan,
+                clipboard_policy,
+            );
+            return match restore_result {
+                Ok(ClipboardRestore::Changed(diagnostic)) => {
+                    Ok(clipboard_changed_with_primary_error(err, diagnostic))
+                }
+                Ok(_) => Err(err),
+                Err(restore_err) => Err(err.context(format!("{restore_err:#}"))),
+            };
         }
-        return Ok(PasteReport::clipboard_changed(previous.observation_error()));
     }
     let paste_result = paste();
     match paste_result {
@@ -1363,7 +1377,12 @@ where
             // shortcut or release a held push-to-talk chord. No input was sent,
             // so leave the staged transcript on the clipboard for recovery.
             if !previous.is_current(clipboard) {
-                return Ok(PasteReport::clipboard_changed(previous.observation_error()));
+                retention_diagnostic = Some(previous.observation_error().unwrap_or_else(|| {
+                    "clipboard changed while modifiers prevented paste".to_owned()
+                }));
+                clipboard
+                    .set_text(text.to_owned())
+                    .context("could not re-copy transcript to clipboard")?;
             }
             Ok(
                 PasteReport::new(PasteOutcome::UnsafeModifiers, false, Some(false))

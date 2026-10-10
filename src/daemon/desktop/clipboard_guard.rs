@@ -1,4 +1,4 @@
-//! Preserve competing clipboard writes during a staged insertion.
+//! Observe staged clipboard text and preserve newer copies during restoration.
 //!
 //! Native stamps and text read-back bound the staging/restore races. They are
 //! observations, not a lock on another application's future clipboard read.
@@ -77,7 +77,8 @@ impl StagedClipboard {
     ///
     /// # Returns
     ///
-    /// A guard; failed observations make later checks fail closed.
+    /// A guard; failed observations require re-staging before paste and prevent
+    /// restoring a previous clipboard over an unverified value.
     pub(super) fn capture<C: ClipboardStore>(
         clipboard: &mut C,
         previous: ClipboardSnapshot,
@@ -120,8 +121,8 @@ impl StagedClipboard {
             return false;
         };
         // macOS/Windows stamps identify writes, so an identical-text republish
-        // still supersedes our staged write. Do not paste or restore over it:
-        // equal plain text cannot establish ownership of the new payload.
+        // still supersedes our staged write. Re-stage before paste, and do not
+        // restore over it: equal text cannot establish ownership of the payload.
         // X11 exposes only an owner window; its manager handoff is checked below.
         if before != staged && !cfg!(target_os = "linux") {
             return false;

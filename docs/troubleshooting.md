@@ -85,7 +85,7 @@ The transcript is printed or logged but nothing arrives in the focused applicati
    parakit copy-last
    ```
 
-   Enabled OS clipboard history is another possible recovery source, but a blocked paste does not guarantee that text was staged or observed by the manager. On Windows, check `Win+V`. If transcription logging was enabled, its raw/clean text is another recovery source.
+   When the clipboard changes or cannot be read after staging, parakit re-copies the transcript once before a safe paste and keeps it on the clipboard. If held modifiers prevent the paste, it leaves the transcript there for manual insertion. Focus changes still block automatic insertion, and newer copies made after dispatch are preserved. Enabled OS clipboard history is another possible recovery source; on Windows, check `Win+V`. If transcription logging was enabled, its raw/clean text is another recovery source.
 
 4. Try a different paste mode against the same target. The default is `terminal` on Linux and `standard` elsewhere.
 
