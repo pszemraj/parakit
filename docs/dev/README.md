@@ -53,7 +53,6 @@ Current Rust files over the approximate 1k LoC target:
 | `src/daemon/ipc.rs` | Contains both Unix-socket and Windows named-pipe transports plus their policy tests. Extract the Windows transport after its behavior settles. |
 | `src/daemon/macos/diagnostics.rs` | Owns the AppKit probe window and the two-stage macOS deep insertion check. Extract the probe-window harness if either diagnostic stage grows. |
 | `src/app.rs` | Holds top-level command dispatch and daemon bootstrap. Extract command handlers when a stable subsystem boundary appears. |
-| `src/cli.rs` | Keeps clap declarations, effective-option precedence, and parser tests together. Split declarations from resolution policy after the new command surface settles. |
 | `src/daemon/desktop/hotkey.rs` | Is only slightly over the target and already delegates macOS code. Extract Linux backend implementations if it grows further. |
 | `src/daemon/desktop/inject_tests.rs` | Keeps the clipboard and insertion transaction regression matrix together. Split by transaction phase when shared fixtures no longer dominate. |
 | `src/daemon/macos/pasteboard.rs` | Owns the macOS paste-acknowledgement evidence policy: baseline capture, confirmation polling, transcript matching, and their regression tests, which dominate the count. Extract `TranscriptMatcher` and its tests into a sibling module if the evidence rules grow further. |
