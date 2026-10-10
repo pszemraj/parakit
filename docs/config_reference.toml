@@ -59,7 +59,7 @@
 # "auto" uses the best GPU when one is available and the CPU otherwise. The daemon banner and `parakit --verbose status` show which one was chosen.
 # "cpu" never uses a GPU.
 # "gpu" requires a GPU. In the default build (Cargo feature `bundled`), startup fails before the model is fetched or opened when ggml reports no GPU or iGPU device.
-# That startup message says "--device gpu" even when the value came from this key.
+# That startup message, and the failed-reload message below, name the value as device "gpu" (from --device or daemon.device), because either one can set it.
 # In a build without the `bundled` feature (an external libcrispasr) there is no device probe. Startup only warns and still opens the model with the GPU requested, and the CrispASR library decides what happens without one.
 # Overridden by: the --device flag.
 # Only used when: the model is opened. The policy is applied again on every idle reload (see daemon.model_idle_minutes).

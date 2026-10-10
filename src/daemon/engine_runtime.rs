@@ -100,7 +100,7 @@ impl EngineRecipe {
     ///
     /// # Errors
     ///
-    /// Reports `--device gpu` when the GPU lacks that room.
+    /// Reports an error when the device policy is `gpu` and the GPU lacks that room.
     fn reload_device_mode(&self, log: &Logger) -> Result<DeviceMode> {
         #[cfg(feature = "bundled")]
         {
@@ -124,9 +124,7 @@ impl EngineRecipe {
                     Ok(mode)
                 }
                 Some(mode) => Ok(mode),
-                None => anyhow::bail!(
-                    "only {free_mib} MiB GPU memory free; --device gpu needs about {needed_mib} MiB to reload the model. Free GPU memory, or set model_idle_minutes = 0 to keep the model resident"
-                ),
+                None => anyhow::bail!(gpu_reload_lacks_memory_message(free_mib, needed_mib)),
             }
         }
 
@@ -156,7 +154,7 @@ const RELOAD_GPU_WORKSPACE_BYTES: u64 = 1 << 30;
 ///
 /// # Returns
 ///
-/// The device to reload on, or `None` when `--device gpu` lacks room.
+/// The device to reload on, or `None` when the `gpu` policy lacks room.
 #[cfg(feature = "bundled")]
 fn reload_device_for_free_memory(
     requested: DeviceMode,
@@ -236,23 +234,48 @@ pub(crate) fn validate_device_request(device_mode: DeviceMode, log: &Logger) -> 
     #[cfg(feature = "bundled")]
     {
         if !parakit::gpu::has_gpu_device() {
-            let message = "--device gpu requested, but ggml reports no GPU or iGPU devices; run `parakit --verbose doctor` for compute diagnostics";
+            let message = no_gpu_device_message();
             #[cfg(target_os = "macos")]
-            let message = crate::daemon::macos::no_gpu_hint()
-                .map_or_else(|| message.to_string(), |hint| format!("{message}; {hint}"));
+            let message = match crate::daemon::macos::no_gpu_hint() {
+                Some(hint) => format!("{message}; {hint}"),
+                None => message,
+            };
             anyhow::bail!(message);
         }
     }
 
     #[cfg(not(feature = "bundled"))]
     {
-        log.warn(
-            "--device gpu requested, but this build does not include the bundled ggml device probe; continuing without GPU preflight",
-        );
+        log.warn(unprobed_gpu_warning());
     }
 
     let _ = log;
     Ok(())
+}
+
+/// How GPU errors name the device request.
+/// Startup only sees the merged value, which `--device` or `daemon.device` may have set, so the message names both instead of guessing.
+const GPU_DEVICE_REQUEST: &str = r#"device "gpu" (from --device or daemon.device)"#;
+
+#[cfg(any(feature = "bundled", test))]
+fn gpu_reload_lacks_memory_message(free_mib: u64, needed_mib: u64) -> String {
+    format!(
+        "only {free_mib} MiB GPU memory free; {GPU_DEVICE_REQUEST} needs about {needed_mib} MiB to reload the model. Free GPU memory, or set model_idle_minutes = 0 to keep the model resident"
+    )
+}
+
+#[cfg(any(feature = "bundled", test))]
+fn no_gpu_device_message() -> String {
+    format!(
+        "{GPU_DEVICE_REQUEST} requested, but ggml reports no GPU or iGPU devices; run `parakit --verbose doctor` for compute diagnostics"
+    )
+}
+
+#[cfg(any(not(feature = "bundled"), test))]
+fn unprobed_gpu_warning() -> String {
+    format!(
+        "{GPU_DEVICE_REQUEST} requested, but this build does not include the bundled ggml device probe; continuing without GPU preflight"
+    )
 }
 
 fn resolve_runtime_device(device_mode: DeviceMode) -> (String, bool) {
@@ -379,6 +402,21 @@ mod tests {
                 expected,
                 "{requested:?} with {free:?} free"
             );
+        }
+    }
+
+    #[test]
+    fn gpu_errors_name_both_sources_of_the_device_request() {
+        for message in [
+            gpu_reload_lacks_memory_message(512, 2048),
+            no_gpu_device_message(),
+            unprobed_gpu_warning(),
+        ] {
+            assert!(
+                message.contains(r#"device "gpu" (from --device or daemon.device)"#),
+                "{message}"
+            );
+            assert!(!message.contains("--device gpu"), "{message}");
         }
     }
 
