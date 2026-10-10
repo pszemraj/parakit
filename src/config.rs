@@ -667,3 +667,7 @@ replacement = "hello"
         }
     }
 }
+
+#[cfg(test)]
+#[path = "config_reference_tests.rs"]
+mod reference_tests;

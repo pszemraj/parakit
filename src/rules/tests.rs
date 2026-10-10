@@ -7,6 +7,8 @@ use super::engine::CLEANUP_BOUNDARY_RULE_NAME;
 use super::passes::capitalize_sentence_starts;
 use super::*;
 
+#[path = "tests/config_reference.rs"]
+mod config_reference;
 #[path = "tests/spoken_numbers.rs"]
 mod spoken_numbers;
 #[path = "tests/user_rules.rs"]
