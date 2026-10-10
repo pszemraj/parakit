@@ -94,7 +94,7 @@ pub(crate) struct StartCli {
     pub(crate) model: Option<PathBuf>,
 
     /// CPU inference threads. Defaults to half the logical CPUs, at least 2 (1 on a single-CPU machine).
-    #[arg(long, value_name = "N")]
+    #[arg(long, value_name = "N", value_parser = parse_thread_count)]
     pub(crate) threads: Option<NonZeroUsize>,
 
     /// Unload the model after N idle minutes (default 10). Zero keeps it loaded.
@@ -512,6 +512,30 @@ fn parse_sha256_arg(value: &str) -> Result<String, String> {
             value.len()
         ))
     }
+}
+
+/// Parse `--threads` with the same bounds config load applies to `daemon.threads`.
+///
+/// # Arguments
+///
+/// * `value` - Raw flag value.
+///
+/// # Returns
+///
+/// The thread count.
+///
+/// # Errors
+///
+/// Returns a message when `value` is not a positive integer or exceeds [`parakit::inference::MAX_THREADS`].
+fn parse_thread_count(value: &str) -> Result<NonZeroUsize, String> {
+    let threads: NonZeroUsize = value.parse().map_err(|err| format!("{err}"))?;
+    if threads.get() > parakit::inference::MAX_THREADS {
+        return Err(format!(
+            "must be at most {}",
+            parakit::inference::MAX_THREADS
+        ));
+    }
+    Ok(threads)
 }
 
 /// Arguments for runtime prerequisite checks.

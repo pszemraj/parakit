@@ -67,13 +67,12 @@
 # Recommended: "auto".
 device = "auto"
 
-# integer, 1 or more (optional). Number of CPU threads used for inference. The value is passed to the engine in every device mode.
+# integer, 1 to 2147483647 (optional). Number of CPU threads used for inference. The value is passed to the engine in every device mode.
 # Unset: computed from the number of logical CPUs the process may use. One CPU gives 1 thread, otherwise half the CPUs with a minimum of 2.
 # If the CPU count cannot be detected, 4 is assumed, which gives 2 threads. Examples: 4 CPUs give 2 threads, 8 give 4, 16 give 8.
 # Under a container CPU quota or a CPU affinity mask the process may see fewer CPUs than the machine has.
 # Overridden by: the --threads flag.
-# 0, negative values, and non-integers fail config load.
-# A value above 2147483647 loads, but opening the model then fails with "thread count is too large for CrispASR" in every device mode.
+# 0, negative values, non-integers, and values above 2147483647 (the C int that the engine takes) fail config load, before any model is fetched. The --threads flag rejects the same values.
 # Warning: an explicit value is not clamped to the CPU count, so a large value oversubscribes the machine.
 # On Windows, every time the model is opened (at startup and on each idle reload), parakit sets OMP_NUM_THREADS to the effective thread count, OPENBLAS_NUM_THREADS to 1, and OMP_WAIT_POLICY to PASSIVE in its own environment.
 # A variable that is already set, even to an empty string, is left alone. Linux and macOS are not touched.

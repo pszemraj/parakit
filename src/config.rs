@@ -139,7 +139,7 @@ pub(crate) const TEMPLATE: &str = r#"# parakit config.toml
 # Runtime compute device: "auto", "cpu", or "gpu".
 # device = "auto"
 
-# CPU inference threads, 1 or more.
+# CPU inference threads, 1 to 2147483647.
 # Unset: half the logical CPUs the process may use, with a minimum of 2, or 1 on a single-CPU machine.
 # threads = 4
 
@@ -287,7 +287,7 @@ fn xdg_config_base() -> Result<PathBuf> {
 ///
 /// # Errors
 ///
-/// Returns an error if the config path cannot be resolved, `$PARAKIT_CONFIG_PATH` names a file that does not exist, the file exists but cannot be read, the file is not valid TOML for [`ConfigFile`], `daemon.transcript_history` exceeds its limit, `daemon.model` or `logging.dir` is an empty path, a user-defined rule fails validation (empty or non-canonical name, empty pattern, invalid regex, a name colliding with a built-in rule, or a duplicate user rule name), or `cleaning.disabled_rules` names a rule that does not exist.
+/// Returns an error if the config path cannot be resolved, `$PARAKIT_CONFIG_PATH` names a file that does not exist, the file exists but cannot be read, the file is not valid TOML for [`ConfigFile`], `daemon.transcript_history` or `daemon.threads` exceeds its limit, `daemon.model` or `logging.dir` is an empty path, a user-defined rule fails validation (empty or non-canonical name, empty pattern, invalid regex, a name colliding with a built-in rule, or a duplicate user rule name), or `cleaning.disabled_rules` names a rule that does not exist.
 /// Parse and validation errors are annotated with the config file path.
 pub(crate) fn load() -> Result<ConfigFile> {
     load_with_override(std::env::var_os(CONFIG_PATH_ENV))
@@ -345,6 +345,19 @@ pub(crate) fn load_from_path(path: &Path) -> Result<ConfigFile> {
             "invalid config in {}: daemon.transcript_history must be between 0 and {}",
             path.display(),
             crate::daemon::ipc::MAX_TRANSCRIPT_HISTORY
+        );
+    }
+
+    // Checked here so the daemon never fetches or opens a model it would then refuse.
+    if config
+        .daemon
+        .threads
+        .is_some_and(|threads| threads.get() > parakit::inference::MAX_THREADS)
+    {
+        anyhow::bail!(
+            "invalid config in {}: daemon.threads must be between 1 and {}",
+            path.display(),
+            parakit::inference::MAX_THREADS
         );
     }
 
@@ -539,6 +552,22 @@ position = "first"
             );
             assert!(message.contains(&path.display().to_string()), "{message}");
         }
+    }
+
+    #[test]
+    fn thread_count_above_the_c_int_range_is_rejected_at_load() {
+        let max = write_fixture("threads-max", "[daemon]\nthreads = 2147483647\n");
+        assert_eq!(
+            load_from_path(&max).unwrap().daemon.threads,
+            NonZeroUsize::new(2_147_483_647)
+        );
+
+        let path = write_fixture("threads-too-many", "[daemon]\nthreads = 2147483648\n");
+        let message = format!("{:#}", load_from_path(&path).unwrap_err());
+        assert!(
+            message.contains("daemon.threads must be between 1 and 2147483647"),
+            "{message}"
+        );
     }
 
     #[test]

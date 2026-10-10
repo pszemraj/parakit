@@ -618,3 +618,21 @@ fn empty_model_and_log_dir_flags_are_rejected_like_their_config_keys() {
         assert_eq!(error.kind(), clap::error::ErrorKind::InvalidValue, "{flag}");
     }
 }
+
+#[test]
+fn threads_flag_has_the_same_bounds_as_its_config_key() {
+    let start = start_from(&["--threads", "2147483647"]);
+    assert_eq!(
+        start.effective_threads(&ConfigFile::default()),
+        NonZeroUsize::new(2_147_483_647)
+    );
+    for value in ["0", "2147483648"] {
+        let error = Cli::try_parse_from(["parakit", "start", "--threads", value])
+            .expect_err("an out-of-range thread count must not parse");
+        assert_eq!(
+            error.kind(),
+            clap::error::ErrorKind::ValueValidation,
+            "{value}"
+        );
+    }
+}

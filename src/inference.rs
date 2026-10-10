@@ -219,6 +219,9 @@ fn validate_detected_backend(backend: String) -> Result<String> {
     Ok(backend.to_string())
 }
 
+/// Largest CPU thread count parakit accepts. CrispASR's session-open entry points take a C `int`, so config load and `--threads` reject larger values before any model is fetched or opened.
+pub const MAX_THREADS: usize = std::ffi::c_int::MAX as usize;
+
 /// Return the default CPU thread count for inference.
 ///
 /// # Returns
