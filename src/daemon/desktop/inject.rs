@@ -22,8 +22,6 @@ use std::{cell::RefCell, time::Duration};
 
 #[cfg(target_os = "windows")]
 use super::clipboard_restore::clipboard_history_debug;
-#[cfg(test)]
-use super::clipboard_restore::ClipboardWriteSnapshot;
 use super::clipboard_restore::{ClipboardRestorePlan, PlatformClipboardRestoreGate};
 #[cfg(target_os = "linux")]
 use super::FocusVerification;

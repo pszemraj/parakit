@@ -42,14 +42,6 @@ After rebuilding a release artifact, upload F16 and Q8_0 to the hosted repo.
 
 GPU build and runtime checks are in [quality.md#gpu-feature-validation](quality.md#gpu-feature-validation).
 
-## File Size Exceptions
-
-Current Rust files over the approximate 1k LoC target:
-
-| Path | Reason and split boundary |
-| --- | --- |
-| `src/daemon/desktop/inject_tests.rs` | Keeps the clipboard and insertion transaction regression matrix together. Split by transaction phase when shared fixtures no longer dominate. |
-
 ## Deferred Runtime Work
 
 TODO: Config does not yet support remapping the actual PTT chord (e.g. a custom macOS fallback of right Command alone, or right Command plus right Option). Keep the default chords as-is until that lands: Linux/Windows use `Ctrl+Space`, and macOS uses `Left Control+Space`.
