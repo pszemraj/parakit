@@ -27,7 +27,7 @@ impl Token for &NumberToken<'_> {
 
 /// Convert English number expressions to digits by delegating to `text2num`.
 ///
-/// `threshold` is the minimum isolated numeric value rendered as digits.
+/// `threshold` gates only isolated single-digit cardinals and ordinals: those below it keep their wording, and cardinals of 10 or more always convert.
 /// Expressions ending in one explicit `million` or `billion` scale retain
 /// that word with a numeric coefficient for readability (e.g. `"three
 /// billion"` becomes `"3 billion"`). Multi-scale expressions retain
@@ -40,7 +40,7 @@ impl Token for &NumberToken<'_> {
 /// # Arguments
 ///
 /// * `input` - Transcript text to normalize.
-/// * `threshold` - Minimum isolated numeric value rendered as digits.
+/// * `threshold` - Value at or above which isolated single-digit cardinals and ordinals become digits.
 ///
 /// # Returns
 ///

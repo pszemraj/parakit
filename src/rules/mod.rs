@@ -152,9 +152,7 @@ pub struct CleanResult {
 /// * `profile` - Selected [`CleaningProfile`].
 /// * `drop_trailing_period` - Enable the messaging-style terminal-period
 ///   removal rule.
-/// * `number_threshold` - Minimum isolated number converted to digits.
-///   `None` resolves to [`DEFAULT_NUMBER_THRESHOLD`]; `Some(0.0)` is the
-///   explicit opt-out that converts every recognized number.
+/// * `number_threshold` - Value at or above which isolated single-digit cardinals and ordinals become digits. `None` resolves to [`DEFAULT_NUMBER_THRESHOLD`]; `Some(0.0)` converts every isolated single digit and ordinal.
 /// * `disabled_rules` - Rule names supplied by repeated `--disable-rule`
 ///   and/or `cleaning.disabled_rules` in `config.toml`. May name a built-in
 ///   or a user rule.

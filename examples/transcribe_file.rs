@@ -29,7 +29,7 @@ struct Cli {
     #[arg(short = 'a', long)]
     audio: PathBuf,
 
-    /// CPU inference threads. Defaults to a conservative detected count.
+    /// CPU inference threads. Defaults to half the logical CPUs, at least 2 (1 on a single-CPU machine).
     #[arg(long, value_name = "N")]
     threads: Option<NonZeroUsize>,
 

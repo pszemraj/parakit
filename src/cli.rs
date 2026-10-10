@@ -93,7 +93,7 @@ pub(crate) struct StartCli {
     #[arg(short = 'm', long, value_name = "PATH")]
     pub(crate) model: Option<PathBuf>,
 
-    /// CPU inference threads. Defaults to a conservative detected count.
+    /// CPU inference threads. Defaults to half the logical CPUs, at least 2 (1 on a single-CPU machine).
     #[arg(long, value_name = "N")]
     pub(crate) threads: Option<NonZeroUsize>,
 
