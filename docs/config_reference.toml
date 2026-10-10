@@ -73,6 +73,7 @@ device = "auto"
 # Under a container CPU quota or a CPU affinity mask the process may see fewer CPUs than the machine has.
 # Overridden by: the --threads flag.
 # 0, negative values, and non-integers fail config load.
+# A value above 2147483647 loads, but opening the model then fails with "thread count is too large for CrispASR" in every device mode.
 # Warning: an explicit value is not clamped to the CPU count, so a large value oversubscribes the machine.
 # On Windows, every time the model is opened (at startup and on each idle reload), parakit sets OMP_NUM_THREADS to the effective thread count, OPENBLAS_NUM_THREADS to 1, and OMP_WAIT_POLICY to PASSIVE in its own environment.
 # A variable that is already set, even to an empty string, is left alone. Linux and macOS are not touched.
