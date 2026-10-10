@@ -232,6 +232,10 @@ pub fn default_thread_count() -> usize {
 
 /// Convert available logical parallelism into an interactive-daemon default.
 ///
+/// # Arguments
+///
+/// * `available_threads` - Logical CPUs the process may use; 0 is treated as 1.
+///
 /// # Returns
 ///
 /// Roughly half the available logical CPUs, with guards for small machines.
@@ -239,7 +243,7 @@ pub fn default_thread_count() -> usize {
 ///
 /// # Panics
 ///
-/// This function does not panic because the clamp bounds are fixed and valid.
+/// Does not panic. The only division is by the constant 2.
 pub fn recommended_thread_count(available_threads: usize) -> usize {
     let available_threads = available_threads.max(1);
     if available_threads == 1 {
