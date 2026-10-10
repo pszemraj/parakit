@@ -272,23 +272,99 @@ fn operational_direct_failure_keeps_progress_telemetry_on_the_error() {
 }
 
 #[test]
-fn restore_failure_warning_does_not_claim_the_clipboard_was_preserved() {
-    let report = crate::daemon::inject::PasteReport {
-        outcome: crate::daemon::inject::PasteOutcome::Pasted,
-        telemetry: InsertionTelemetry {
-            paste_event_posted: true,
-            acknowledgement_kind: "target_value_changed",
-            acknowledgement_ms: Some(12),
-            clipboard_restored: Some(false),
-        },
-        diagnostic: Some("clipboard restore write failed".to_string()),
+fn completed_paste_and_empty_transcript_diagnostics_are_verbose_only() {
+    use crate::daemon::inject::{PasteOutcome, PasteReport};
+
+    const CHILD: &str = "PARAKIT_TEST_COMPLETED_PASTE_DIAGNOSTICS";
+    let level = match std::env::var(CHILD).as_deref() {
+        Ok("quiet") => LogLevel::Quiet,
+        Ok("normal") => LogLevel::Normal,
+        Ok("verbose") => LogLevel::Verbose,
+        _ => {
+            for level in ["quiet", "normal", "verbose"] {
+                let output = std::process::Command::new(std::env::current_exe().unwrap())
+                    .args([
+                        "--exact",
+                        "daemon::worker::insertion::tests::completed_paste_and_empty_transcript_diagnostics_are_verbose_only",
+                        "--nocapture",
+                    ])
+                    .env(CHILD, level)
+                    .output()
+                    .unwrap();
+                assert!(output.status.success(), "{level}: {output:?}");
+                assert!(output.stderr.is_empty(), "{level}: {output:?}");
+                let stdout = String::from_utf8(output.stdout).unwrap();
+                for diagnostic in [
+                    "clipboard restore write failed",
+                    "clipboard changed after staging",
+                    "could not save the previous clipboard",
+                    "could not read clipboard after paste",
+                    "paste skipped by sanitizer",
+                ] {
+                    assert_eq!(stdout.contains(diagnostic), level == "verbose", "{stdout}");
+                }
+                assert!(!stdout.contains("paste succeeded, but could not restore"));
+            }
+            return;
+        }
     };
 
-    let warning = clipboard_restore_warning(false, &report).expect("restore failure warning");
-    assert!(warning.contains(crate::daemon::inject::CLIPBOARD_RESTORE_ERROR));
-    assert!(warning.contains("clipboard restore write failed"));
-    assert!(!warning.contains("current clipboard preserved"));
-    assert_eq!(clipboard_restore_warning(true, &report), None);
+    let log = Arc::new(Logger::new(level));
+    let (notifier, messages) = Notifier::test_channel(Arc::clone(&log));
+    for outcome in [PasteOutcome::Pasted, PasteOutcome::PastedUnverified] {
+        for (restored, diagnostic) in [
+            (Some(false), Some("clipboard restore write failed")),
+            (Some(false), Some("clipboard changed after staging")),
+            (Some(false), Some("could not save the previous clipboard")),
+            (None, Some("could not read clipboard after paste")),
+            (None, None),
+            (Some(true), None),
+        ] {
+            let paste_report = PasteReport {
+                outcome,
+                telemetry: InsertionTelemetry {
+                    paste_event_posted: true,
+                    acknowledgement_kind: "unverified_timeout",
+                    acknowledgement_ms: Some(12),
+                    clipboard_restored: restored,
+                },
+                diagnostic: diagnostic.map(str::to_owned),
+            };
+            assert_eq!(clipboard_restore_diagnostic(true, &paste_report), None);
+            let report = finish_paste(paste_report, false, &log, &notifier);
+            assert_eq!(
+                report.outcome,
+                if outcome == PasteOutcome::Pasted {
+                    InsertOutcome::Pasted
+                } else {
+                    InsertOutcome::PastedUnverified
+                }
+            );
+            assert_eq!(report.telemetry.clipboard_restored, restored);
+            assert_eq!(report.failure_reason.as_deref(), diagnostic);
+        }
+    }
+    let mut injector = None;
+    let verification = Cell::new("not_applicable");
+    let report = insert_text(
+        &mut injector,
+        "",
+        PasteMode::Standard,
+        false,
+        FocusCheck {
+            snapshot: None,
+            verification: &verification,
+        },
+        (&log, &notifier),
+    )
+    .unwrap();
+    assert_eq!(report.outcome, InsertOutcome::Skipped);
+    assert!(!report.telemetry.paste_event_posted);
+    assert!(injector.is_none());
+    assert!(matches!(
+        messages.try_recv(),
+        Err(std::sync::mpsc::TryRecvError::Empty)
+    ));
 }
 
 #[test]

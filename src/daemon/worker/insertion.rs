@@ -190,7 +190,7 @@ pub(crate) fn insert_text(
             )
         }
         PastePlan::Skip { reason } => {
-            log.warn(format!("paste skipped by sanitizer: {}", reason.log_tag()));
+            log.verbose(format!("paste skipped by sanitizer: {}", reason.log_tag()));
             Ok(InsertReport::placeholder(InsertOutcome::Skipped, false))
         }
     };
@@ -335,11 +335,11 @@ fn finish_paste(
 
     let outcome = match report.outcome {
         PasteOutcome::Pasted => {
-            warn_if_clipboard_restore_failed(log, keep_transcript_clipboard, &report);
+            log_clipboard_restore_diagnostic(log, keep_transcript_clipboard, &report);
             InsertOutcome::Pasted
         }
         PasteOutcome::PastedUnverified => {
-            warn_if_clipboard_restore_failed(log, keep_transcript_clipboard, &report);
+            log_clipboard_restore_diagnostic(log, keep_transcript_clipboard, &report);
             log.verbose(format!(
                 "parakit: paste sent but insertion could not be confirmed within {}ms ({}); treating as pasted",
                 report.telemetry.acknowledgement_ms.unwrap_or_default(),
@@ -383,39 +383,16 @@ fn finish_paste(
     InsertReport::from_paste(outcome, report)
 }
 
-/// Warn when a paste that already landed (or was accepted as unverified)
-/// could not restore the caller's previous clipboard contents.
-///
-/// `Injector::paste_text_guarded` never turns a failed restore into an error
-/// once the paste itself reached the `Pasted`/`PastedUnverified` tier: the
-/// paste already happened, so losing the previous clipboard is a secondary,
-/// recoverable problem, not a paste failure. That fix means this is the only
-/// place the failure becomes visible, since the low-level insertion module
-/// has no logger of its own to report through.
-///
-/// `report.telemetry.clipboard_restored == Some(false)` is ambiguous on its own: it is
-/// also what a deliberate [`ClipboardPolicy::KeepTranscript`] request looks
-/// like. Restricting the warning to `!keep_transcript_clipboard` (the caller
-/// asked for [`ClipboardPolicy::RestorePrevious`]) resolves that half of the
-/// ambiguity, since that combination usually can only mean the restore was
-/// attempted and failed.
-///
-/// The remaining exception is `acknowledgement_kind: "unverified_focus_lost"`
-/// (see [`crate::daemon::desktop::clipboard_restore::PasteConfirmation::UnverifiedFocusLost`]):
-/// there, `finish_confirmed_paste` never even attempts a restore, because the
-/// insertion target became unobservable before one could be trusted, and
-/// deliberately keeps the transcript for the same reason the `CopiedOnly`
-/// no-evidence path does. Warning about a "failed" restore that was never
-/// attempted would misreport a deliberate, correct decision as a clipboard
-/// bug, so that kind is excluded here exactly as `CopiedOnly` already is by
-/// this function never being called for that outcome.
-fn warn_if_clipboard_restore_failed(
+/// Report secondary clipboard details only in verbose output after delivery.
+/// A false restoration flag can mean deliberate retention or a failed write;
+/// the insertion record retains the diagnostic in either case.
+fn log_clipboard_restore_diagnostic(
     log: &Logger,
     keep_transcript_clipboard: bool,
     report: &crate::daemon::inject::PasteReport,
 ) {
-    if let Some(warning) = clipboard_restore_warning(keep_transcript_clipboard, report) {
-        log.warn(warning);
+    if let Some(diagnostic) = clipboard_restore_diagnostic(keep_transcript_clipboard, report) {
+        log.verbose(diagnostic);
         return;
     }
     if report.telemetry.acknowledgement_ms.is_some()
@@ -425,13 +402,13 @@ fn warn_if_clipboard_restore_failed(
         log.verbose("parakit: clipboard restoration skipped because contents changed or could not be verified; current clipboard preserved");
     }
     if let Some(diagnostic) = report.diagnostic.as_deref() {
-        log.warn(format!(
+        log.verbose(format!(
             "clipboard could not be verified after paste ({diagnostic}); current clipboard preserved"
         ));
     }
 }
 
-fn clipboard_restore_warning(
+fn clipboard_restore_diagnostic(
     keep_transcript_clipboard: bool,
     report: &crate::daemon::inject::PasteReport,
 ) -> Option<String> {
@@ -447,8 +424,7 @@ fn clipboard_restore_warning(
         .map(|diagnostic| format!(" ({diagnostic})"))
         .unwrap_or_default();
     Some(format!(
-        "paste succeeded, but {}{diagnostic}; the transcript is likely still on the clipboard",
-        crate::daemon::inject::CLIPBOARD_RESTORE_ERROR
+        "parakit: paste completed without restoring previous clipboard contents{diagnostic}"
     ))
 }
 
