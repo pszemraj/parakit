@@ -2,25 +2,15 @@
 
 parakit reads an optional TOML file for daemon defaults, cleaning behavior, transcription logging, the Linux hotkey backend, and user-defined cleaning rules. A missing file is valid and selects built-in defaults.
 
-A small config that pins the thread count, keeps the trailing period that cleanup drops by default, leaves spoken numbers below five as the model produced them, and turns on transcription logging:
+A small config that keeps the trailing period that cleanup drops by default and leaves spoken single-digit numbers below five as the model produced them:
 
 ```toml
-[daemon]
-threads = 8
-paste_mode = "standard"
-transcript_history = 20
-model_idle_minutes = 10
-
 [cleaning]
-profile = "safe"
 keep_trailing_period = true
 number_threshold = 5
-
-[logging]
-dir = "/home/user/.parakit/logs"
 ```
 
-Save that as `config.toml` at the path printed by `parakit config path`. Every key is optional, and `parakit config init` writes a commented template listing all of them. The type, default, valid values, interactions, and warnings for each key and each parakit-owned runtime environment variable are in [config_reference.toml](config_reference.toml).
+That is the same config as the commented starter file [example.toml](example.toml), which explains each choice. Save it as `config.toml` at the path printed by `parakit config path`. Every key is optional, and `parakit config init` writes a commented template listing all of them. The type, default, valid values, interactions, and warnings for each key and each parakit-owned runtime environment variable are in [config_reference.toml](config_reference.toml), which is itself a valid config file that holds every default.
 
 > [!IMPORTANT]
 > The daemon reads this file once at startup and does not watch it. Restart the daemon after every edit.
@@ -62,13 +52,13 @@ parakit config
   daemon:
     model: (default: hosted Q8_0)
     device: (default: auto)
-    threads: 8
-    paste_mode: standard
+    threads: (default: auto-detected)
+    paste_mode: (default: platform)
     keep_transcript_clipboard: false
     sounds: true
     verbose: false
     model_idle_minutes: 10
-    transcript_history: 20
+    transcript_history: (default: 10)
   cleaning:
     enabled: true
     profile: safe
@@ -76,12 +66,14 @@ parakit config
     number_threshold: 5
     disabled_rules: []
   logging:
-    dir: /home/user/.parakit/logs
+    dir: (disabled)
+  hotkey:
+    backend: (default: auto)
   rules:
     user rules: 0
 ```
 
-Some unset keys show a parenthesized default; booleans, cleaning settings, and the idle timeout print their effective values directly. On Linux the output has an extra `hotkey:` section with the selected `backend`. Each user rule adds a `name (position)` line under the `user rules` count.
+A key that is not set in the file shows a parenthesized default (`device`, `threads`, `paste_mode`, `transcript_history`, `number_threshold`, `hotkey.backend`), `(default: hosted Q8_0)` for `model`, or `(disabled)` for `logging.dir`. Booleans, `profile`, `keep_trailing_period`, `disabled_rules`, and the idle timeout print their effective values directly. On Linux the output has the `hotkey:` section shown above with the selected `backend`; other platforms omit it. Each user rule adds a `name (position)` line under the `user rules` count.
 
 ### Details
 
