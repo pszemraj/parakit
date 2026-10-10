@@ -1,0 +1,13 @@
+# example.toml: the smallest useful parakit config.
+# Every key is optional, so an empty file is valid too. This one changes two cleanup defaults and leaves everything else at the built-in default.
+# Save it at the path printed by `parakit config path`, check it with `parakit config show`, then restart the daemon, which reads the config once at startup.
+# Every other key, with its default, is in config_reference.toml.
+
+[cleaning]
+# Keep the single final period that cleanup removes by default.
+# Delete this line if you dictate short chat-style messages and prefer no trailing period.
+keep_trailing_period = true
+
+# Leave spoken single-digit numbers below 5 as the model wrote them ("two" stays "two"), and write 5 and above as digits.
+# The default is 4. Set 0 to convert isolated single digits from zero up as well, or delete this line to keep the default.
+number_threshold = 5

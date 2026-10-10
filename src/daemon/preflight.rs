@@ -3,10 +3,15 @@
 use anyhow::{bail, Context, Result};
 use fs2::FileExt;
 use parakit::build_info;
+use parakit::outln;
 use std::fmt::Write as _;
 use std::fs::{create_dir_all, File, OpenOptions};
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
+
+const SINGLETON_START_WAIT: Duration = Duration::from_millis(100);
+const SINGLETON_RETRY_INTERVAL: Duration = Duration::from_millis(5);
 
 use super::hotkey::HotkeyBackend;
 #[cfg(target_os = "linux")]
@@ -71,8 +76,10 @@ pub fn print_doctor(
         return ok;
     }
 
-    if verbose {
-        print_doctor_details(&report, &daemon_lock, &mic, &insertion, paste_mode, deep);
+    // Readiness decides the exit status; a closed stdout only cuts the report
+    // short.
+    let _ = if verbose {
+        print_doctor_details(&report, &daemon_lock, &mic, &insertion, paste_mode, deep)
     } else {
         print_doctor_summary(
             &report,
@@ -82,8 +89,8 @@ pub fn print_doctor(
             paste_mode,
             deep,
             ok,
-        );
-    }
+        )
+    };
 
     ok
 }
@@ -103,16 +110,16 @@ fn print_doctor_summary(
     paste_mode: PasteMode,
     deep: bool,
     ok: bool,
-) {
-    println!("parakit doctor: {}", if ok { "OK" } else { "FAIL" });
-    print_status_line("hotkey", !report.blocking, &report.status);
+) -> Result<()> {
+    outln!("parakit doctor: {}", if ok { "OK" } else { "FAIL" })?;
+    print_status_line("hotkey", !report.blocking, &report.status)?;
     match daemon_lock {
-        Ok(()) => print_status_line("daemon", true, "no existing daemon lock"),
-        Err(err) => print_status_line("daemon", false, &format!("{err:#}")),
+        Ok(()) => print_status_line("daemon", true, "no existing daemon lock")?,
+        Err(err) => print_status_line("daemon", false, &format!("{err:#}"))?,
     }
     match mic {
-        Ok(mic) => print_status_line("mic", true, &mic.summary()),
-        Err(err) => print_status_line("mic", false, &format!("{err:#}")),
+        Ok(mic) => print_status_line("mic", true, &mic.summary())?,
+        Err(err) => print_status_line("mic", false, &format!("{err:#}"))?,
     }
     let insertion_label = if deep {
         format!("{} guarded smoke test", paste_mode.label())
@@ -120,20 +127,21 @@ fn print_doctor_summary(
         format!("{} preflight", paste_mode.label())
     };
     match insertion {
-        Ok(()) => print_status_line("insertion", true, &insertion_label),
-        Err(err) => print_status_line("insertion", false, &format!("{err:#}")),
+        Ok(()) => print_status_line("insertion", true, &insertion_label)?,
+        Err(err) => print_status_line("insertion", false, &format!("{err:#}"))?,
     }
 
     if !ok {
-        println!("  details:   parakit --verbose doctor");
+        outln!("  details:   parakit --verbose doctor")?;
     }
+    Ok(())
 }
 
-fn print_status_line(label: &str, ok: bool, detail: &str) {
-    println!(
+fn print_status_line(label: &str, ok: bool, detail: &str) -> Result<()> {
+    outln!(
         "  {label:<10} {} ({detail})",
         if ok { "OK " } else { "FAIL" }
-    );
+    )
 }
 
 fn print_doctor_details(
@@ -143,67 +151,70 @@ fn print_doctor_details(
     insertion: &Result<()>,
     paste_mode: PasteMode,
     deep: bool,
-) {
-    println!("{}", report.details.trim_end());
+) -> Result<()> {
+    outln!("{}", report.details.trim_end())?;
     match daemon_lock {
-        Ok(()) => println!("  daemon lock:   OK"),
-        Err(err) => println!("  daemon lock:   FAIL ({err:#})"),
+        Ok(()) => outln!("  daemon lock:   OK")?,
+        Err(err) => outln!("  daemon lock:   FAIL ({err:#})")?,
     }
     match mic {
         Ok(mic) => {
-            println!("  mic:            {}", mic.summary());
+            outln!("  mic:            {}", mic.summary())?;
             for line in mic.detail_lines() {
-                println!("  audio detail:   {line}");
+                outln!("  audio detail:   {line}")?;
             }
-            println!("  audio status:   OK");
+            outln!("  audio status:   OK")?;
         }
         Err(err) => {
-            println!("  mic:            unavailable ({err:#})");
-            println!("  audio status:   FAIL");
+            outln!("  mic:            unavailable ({err:#})")?;
+            outln!("  audio status:   FAIL")?;
         }
     }
     match insertion {
-        Ok(()) if deep => println!(
+        Ok(()) if deep => outln!(
             "  insertion:     OK ({} guarded smoke test)",
             paste_mode.label()
-        ),
-        Ok(()) => println!("  insertion:     OK ({} preflight)", paste_mode.label()),
-        Err(err) => println!("  insertion:     FAIL ({err:#})"),
+        )?,
+        Ok(()) => outln!("  insertion:     OK ({} preflight)", paste_mode.label())?,
+        Err(err) => outln!("  insertion:     FAIL ({err:#})")?,
     }
-    println!("  build:");
+    outln!("  build:")?;
     for line in build_info::diagnostic_lines() {
-        println!("    {line}");
+        outln!("    {line}")?;
     }
-    print_compute_details();
+    print_compute_details()
 }
 
 #[cfg(feature = "bundled")]
-fn print_compute_details() {
-    println!("  compute:");
+fn print_compute_details() -> Result<()> {
+    outln!("  compute:")?;
     #[cfg(target_os = "macos")]
     for line in super::macos::architecture_warning_lines() {
-        println!("    {line}");
+        outln!("    {line}")?;
     }
     let devices = super::stderr::with_stderr_suppressed(parakit::gpu::devices);
     if devices.is_empty() {
-        println!("    no ggml devices reported");
+        outln!("    no ggml devices reported")?;
     } else {
         for device in &devices {
-            println!("    {}", device.diagnostic_line());
+            outln!("    {}", device.diagnostic_line())?;
         }
         if let Some(device) = parakit::gpu::preferred_gpu_device_in(&devices) {
-            println!("    auto selects: {}", device.diagnostic_line());
+            outln!("    auto selects: {}", device.diagnostic_line())?;
         }
     }
     if build_info::accelerator_enabled()
         && !devices.iter().any(parakit::gpu::DeviceInfo::is_gpu_like)
     {
-        println!("    warning: accelerator build has no GPU or iGPU visible to ggml");
+        outln!("    warning: accelerator build has no GPU or iGPU visible to ggml")?;
     }
+    Ok(())
 }
 
 #[cfg(not(feature = "bundled"))]
-fn print_compute_details() {}
+fn print_compute_details() -> Result<()> {
+    Ok(())
+}
 
 fn doctor_ready(
     report: &HotkeyReport,
@@ -226,7 +237,23 @@ fn doctor_ready(
 /// cannot be opened, or another process already holds the lock.
 pub(crate) fn acquire_singleton_lock() -> Result<DaemonLock> {
     let path = singleton_lock_path()?;
-    acquire_singleton_lock_at(&path)
+    acquire_singleton_lock_at(&path, SINGLETON_START_WAIT)
+}
+
+/// Check an existing daemon lock without creating runtime state.
+///
+/// Shared probes do not contend with one another, but they fail while the
+/// daemon owns its exclusive lock.
+///
+/// # Returns
+///
+/// `true` when an existing lock file is exclusively held, otherwise `false`.
+///
+/// # Errors
+///
+/// Returns an error when an existing lock file cannot be opened or queried.
+pub(crate) fn singleton_lock_held() -> Result<bool> {
+    singleton_lock_held_at(&singleton_lock_path()?)
 }
 
 /// Marker returned when another process already owns the daemon lock.
@@ -242,9 +269,11 @@ impl std::fmt::Display for DaemonAlreadyRunning {
 impl std::error::Error for DaemonAlreadyRunning {}
 
 fn singleton_lock_probe() -> Result<()> {
-    let lock = acquire_singleton_lock()?;
-    drop(lock);
-    Ok(())
+    if singleton_lock_held()? {
+        Err(DaemonAlreadyRunning.into())
+    } else {
+        Ok(())
+    }
 }
 
 /// Per-user daemon singleton lock.
@@ -308,7 +337,7 @@ pub(crate) fn daemon_runtime_dir() -> Result<PathBuf> {
     }
 }
 
-fn acquire_singleton_lock_at(path: &Path) -> Result<DaemonLock> {
+fn acquire_singleton_lock_at(path: &Path, wait: Duration) -> Result<DaemonLock> {
     if let Some(parent) = path.parent() {
         create_dir_all(parent)
             .with_context(|| format!("create daemon lock dir {}", parent.display()))?;
@@ -321,10 +350,42 @@ fn acquire_singleton_lock_at(path: &Path) -> Result<DaemonLock> {
         .open(path)
         .with_context(|| format!("open daemon lock {}", path.display()))?;
 
-    match file.try_lock_exclusive() {
-        Ok(()) => Ok(DaemonLock { file }),
-        Err(err) if is_daemon_lock_contention(&err) => Err(DaemonAlreadyRunning.into()),
-        Err(err) => Err(err).with_context(|| format!("lock daemon lock {}", path.display())),
+    // Status/doctor briefly hold shared probe locks. Allow those probes to
+    // finish before concluding that another daemon owns the singleton.
+    let deadline = Instant::now() + wait;
+    loop {
+        match FileExt::try_lock_exclusive(&file) {
+            Ok(()) => return Ok(DaemonLock { file }),
+            Err(err) if is_daemon_lock_contention(&err) => {
+                if Instant::now() >= deadline {
+                    return Err(DaemonAlreadyRunning.into());
+                }
+                std::thread::sleep(SINGLETON_RETRY_INTERVAL);
+            }
+            Err(err) => {
+                return Err(err).with_context(|| format!("lock daemon lock {}", path.display()));
+            }
+        }
+    }
+}
+
+fn singleton_lock_held_at(path: &Path) -> Result<bool> {
+    let file = match OpenOptions::new().read(true).write(true).open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(false),
+        Err(error) => {
+            return Err(error).with_context(|| format!("open daemon lock {}", path.display()));
+        }
+    };
+
+    match FileExt::try_lock_shared(&file) {
+        Ok(()) => {
+            FileExt::unlock(&file)
+                .with_context(|| format!("unlock daemon lock probe {}", path.display()))?;
+            Ok(false)
+        }
+        Err(error) if is_daemon_lock_contention(&error) => Ok(true),
+        Err(error) => Err(error).with_context(|| format!("probe daemon lock {}", path.display())),
     }
 }
 
@@ -797,140 +858,5 @@ fn hotkey_report(_backend: HotkeyBackend, _prompt_accessibility: bool) -> Hotkey
 }
 
 #[cfg(test)]
-mod tests {
-    use super::super::audio::MicInfo;
-    use super::*;
-
-    #[test]
-    #[cfg(target_os = "linux")]
-    fn selected_hotkey_backend_controls_readiness() {
-        let cases = [
-            (LinuxHotkeyRoute::RegisteredX11, true, false, false),
-            (LinuxHotkeyRoute::RegisteredX11, false, true, true),
-            (LinuxHotkeyRoute::PassiveX11, true, false, false),
-            (LinuxHotkeyRoute::PassiveX11, false, true, true),
-            (LinuxHotkeyRoute::EvdevProxy, false, true, false),
-            (LinuxHotkeyRoute::EvdevProxy, true, false, true),
-        ];
-        for (route, x11_ready, evdev_ready, expected) in cases {
-            assert_eq!(
-                linux_hotkey_startup_blocked(route, x11_ready, evdev_ready),
-                expected,
-                "route={route:?} x11_ready={x11_ready} evdev_ready={evdev_ready}"
-            );
-        }
-    }
-
-    #[cfg(target_os = "linux")]
-    fn evdev_report_with_hotkey_keyboards(hotkey_keyboards: usize) -> EvdevReport {
-        EvdevReport {
-            event_devices: 4,
-            readable: 1,
-            hotkey_keyboards,
-            denied: 3,
-            uinput_writable: true,
-            uinput_error: None,
-            other_errors: Vec::new(),
-        }
-    }
-
-    #[test]
-    #[cfg(target_os = "linux")]
-    fn evdev_readiness_allows_denied_non_candidates() {
-        let report = evdev_report_with_hotkey_keyboards(1);
-
-        assert!(report.grab_likely_available());
-        assert_eq!(report.status_label(), "ready");
-    }
-
-    #[test]
-    #[cfg(target_os = "linux")]
-    fn evdev_readiness_still_requires_hotkey_candidate() {
-        let report = evdev_report_with_hotkey_keyboards(0);
-
-        assert!(!report.grab_likely_available());
-        assert_eq!(report.status_label(), "no keyboard candidates");
-    }
-
-    #[cfg(target_os = "macos")]
-    fn macos_permissions(
-        accessibility: super::super::macos::PermissionStatus,
-        input_monitoring: super::super::macos::PermissionStatus,
-    ) -> super::super::macos::PermissionReport {
-        super::super::macos::PermissionReport {
-            accessibility,
-            microphone: super::super::macos::PermissionStatus::Granted,
-            input_monitoring,
-        }
-    }
-
-    #[test]
-    #[cfg(target_os = "macos")]
-    fn macos_hotkey_readiness_requires_accessibility_and_input_monitoring() {
-        use super::super::macos::PermissionStatus;
-
-        let ready = macos_permissions(PermissionStatus::Granted, PermissionStatus::Granted);
-        assert!(!macos_hotkey_startup_blocked(&ready));
-        assert_eq!(
-            macos_hotkey_status(&ready),
-            "macOS Accessibility and Input Monitoring ready for Left Control+Space"
-        );
-
-        let missing_input = macos_permissions(PermissionStatus::Granted, PermissionStatus::Denied);
-        assert!(macos_hotkey_startup_blocked(&missing_input));
-        assert_eq!(
-            macos_hotkey_status(&missing_input),
-            "macOS Input Monitoring permission missing"
-        );
-
-        let missing_both =
-            macos_permissions(PermissionStatus::Denied, PermissionStatus::NotDetermined);
-        assert!(macos_hotkey_startup_blocked(&missing_both));
-        assert_eq!(
-            macos_hotkey_status(&missing_both),
-            "macOS Accessibility and Input Monitoring permissions missing"
-        );
-    }
-
-    #[test]
-    fn doctor_ready_requires_free_daemon_lock() {
-        let report = HotkeyReport {
-            blocking: false,
-            status: "ready".to_string(),
-            summary: String::new(),
-            details: String::new(),
-        };
-        let mic = Ok(MicInfo {
-            name: "Test Mic".to_string(),
-            input_rate: 16_000,
-            channels: 1,
-            sample_format: "F32".to_string(),
-            source_id: None,
-            resampling: false,
-            config_note: None,
-        });
-        let insertion = Ok(());
-
-        let free_lock = Ok(());
-        assert!(doctor_ready(&report, &free_lock, &mic, &insertion));
-
-        let held_lock: Result<()> = Err(anyhow::anyhow!("already running"));
-        assert!(!doctor_ready(&report, &held_lock, &mic, &insertion));
-    }
-
-    #[test]
-    fn singleton_lock_blocks_second_holder() {
-        let path = crate::test_support::fixture_root("parakit-lock-test", "singleton")
-            .join("parakit.lock");
-
-        let first = acquire_singleton_lock_at(&path).expect("first lock should succeed");
-        let Err(second) = acquire_singleton_lock_at(&path) else {
-            panic!("a held daemon lock should reject another owner");
-        };
-        assert!(second.is::<DaemonAlreadyRunning>(), "{second:#}");
-        assert_eq!(second.to_string(), "daemon is already running");
-        drop(first);
-        let third = acquire_singleton_lock_at(&path).expect("lock should release after drop");
-        drop(third);
-    }
-}
+#[path = "preflight_tests.rs"]
+mod tests;

@@ -100,10 +100,17 @@ pub(crate) fn windows_paste_smoke_test(mode: PasteMode) -> Result<()> {
     // process Ctrl+V until after restore. Keep the smoke focused on Win32 input
     // acceptance and read-back; unit tests cover the restore gate ordering.
     let mut clipboard = Clipboard::new().context("could not open system clipboard")?;
-    let previous = ClipboardSnapshot::capture(&mut clipboard);
+    let previous = ClipboardSnapshot::capture(&mut clipboard)
+        .context("could not capture clipboard before Windows paste smoke test")?;
     let test_result = (|| -> Result<()> {
         Clipboard::set_text(&mut clipboard, sentinel.clone())
             .context("could not stage Windows paste smoke sentinel on clipboard")?;
+        match ClipboardSnapshot::capture(&mut clipboard)
+            .context("could not snapshot text-only Windows smoke clipboard")?
+        {
+            ClipboardSnapshot::Text(text) if text == sentinel => {}
+            _ => bail!("Windows text-only clipboard snapshot did not preserve the sentinel"),
+        }
         thread::sleep(CLIPBOARD_SETTLE);
         super::windows_input::send_paste_chord(mode == PasteMode::Terminal)
             .context("Windows paste smoke insertion failed")?;

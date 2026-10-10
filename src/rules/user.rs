@@ -72,7 +72,9 @@ pub struct UserRule {
     /// Rust `regex` crate pattern (same dialect as built-in `regex`-engine
     /// rules).
     pub pattern: String,
-    /// Replacement string. Supports `$1`, `$2`, etc. capture references.
+    /// Replacement string in the `regex` crate's expansion syntax: `$0`, `$1`, `$name`, `${name}`, and `$$` for a literal dollar sign.
+    /// The name after a `$` is the longest run of letters, digits, and underscores, so `$1b` means a group named "1b"; write `${1}b` for group 1 followed by "b".
+    /// A reference to a group that does not exist expands to empty text without an error.
     pub replacement: String,
     /// Where this rule is spliced relative to the built-in rule list.
     #[serde(default)]

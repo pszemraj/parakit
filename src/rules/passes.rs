@@ -224,25 +224,62 @@ fn render_spoken_version_candidate(input: &str, words: &[WordSpan]) -> Option<St
         if component_start == index {
             return None;
         }
-        components.push(parse_number_component(
-            input,
-            &words[component_start..index],
-        )?);
+        components.push(&words[component_start..index]);
         component_start = index + 1;
     }
     if component_start == words.len() {
         return None;
     }
-    components.push(parse_number_component(input, &words[component_start..])?);
-    (components.len() >= 3).then(|| components.join("."))
+    components.push(&words[component_start..]);
+    if components.len() < 3 {
+        return None;
+    }
+    let mut rendered = String::new();
+    for (index, component) in components.iter().enumerate() {
+        if index > 0 {
+            rendered.push('.');
+        }
+        rendered.push_str(&parse_number_component(input, component)?);
+    }
+    Some(rendered)
 }
 
 fn parse_number_component(input: &str, words: &[WordSpan]) -> Option<String> {
     let first = words.first()?;
     let last = words.last()?;
-    let phrase = canonicalize_number_aliases(&input[first.start..last.end]);
+    render_number_component(&input[first.start..last.end])
+}
+
+fn render_number_component(phrase: &str) -> Option<String> {
+    let phrase = canonicalize_number_aliases(phrase);
     let language = Language::english();
-    let rendered = text2digits(&phrase, &language).ok()?;
+    // A leading zero followed by a whole count can straddle two decimals:
+    // "twenty point zero twenty point zero" means "20.0 20.0".
+    // Keep leading-zero version components only when spoken digit by digit.
+    let words = phrase
+        .split(|ch: char| ch.is_whitespace() || ch == '-')
+        .filter(|word| !word.is_empty());
+    // A component never reaches a million, and "thousand and" starts another
+    // quantity: "two point five million and three point six million" is not
+    // version 2.5000003.6000000. Build numbers such as "nineteen thousand forty
+    // five" stay valid.
+    let has = |target: &str| words.clone().any(|word| word.eq_ignore_ascii_case(target));
+    if has("million") || has("billion") || (has("thousand") && has("and")) {
+        return None;
+    }
+    let digit_words: Option<String> = words
+        .clone()
+        .map(|word| {
+            text2digits(word, &language)
+                .ok()
+                .filter(|value| value.len() == 1)
+        })
+        .collect();
+    let rendered = if words.clone().next()?.eq_ignore_ascii_case("zero") || digit_words.is_some() {
+        digit_words?
+    } else {
+        text2digits(&phrase, &language).ok()?
+    };
     rendered
         .chars()
         .all(|character| character.is_ascii_digit())
@@ -291,7 +328,6 @@ pub(crate) fn normalize_numeric_point_suffixes(input: &str) -> TransformResult {
             .expect("numeric point suffix regex must compile")
     });
 
-    let language = Language::english();
     let mut text = input.to_string();
     let mut total_matches = 0;
 
@@ -303,15 +339,11 @@ pub(crate) fn normalize_numeric_point_suffixes(input: &str) -> TransformResult {
         for captures in re.captures_iter(&text) {
             let found = captures.get(0).expect("full point-suffix match");
             let numeric = captures.get(1).expect("numeric point prefix").as_str();
-            let component = canonicalize_number_aliases(
-                captures.get(2).expect("spoken point component").as_str(),
-            );
-            let Ok(rendered) = text2digits(&component, &language) else {
+            let Some(rendered) =
+                render_number_component(captures.get(2).expect("spoken point component").as_str())
+            else {
                 continue;
             };
-            if !rendered.chars().all(|character| character.is_ascii_digit()) {
-                continue;
-            }
 
             output.push_str(&text[last_end..found.start()]);
             write!(output, "{numeric}.{rendered}").expect("writing to String cannot fail");

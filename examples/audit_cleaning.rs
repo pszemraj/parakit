@@ -34,8 +34,7 @@ struct Cli {
     #[arg(long)]
     keep_trailing_period: bool,
 
-    /// Minimum isolated numeric value converted to digits. Omit to use the
-    /// built-in default of 4; pass 0 to convert every recognized number.
+    /// Value at or above which isolated single-digit numbers and ordinals become digits; larger cardinals always convert. Omit to use the built-in default of 4; pass 0 to convert every isolated single digit and ordinal.
     #[arg(long, value_name = "VALUE")]
     number_threshold: Option<f64>,
 

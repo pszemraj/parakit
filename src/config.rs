@@ -54,6 +54,8 @@ pub(crate) struct DaemonConfig {
     pub(crate) device: Option<DeviceMode>,
     /// CPU inference threads.
     pub(crate) threads: Option<NonZeroUsize>,
+    /// Release the session after this many idle minutes; zero disables offload.
+    pub(crate) model_idle_minutes: Option<u64>,
     /// Batch insertion style.
     pub(crate) paste_mode: Option<PasteMode>,
     /// Leave dictated text on the clipboard after paste instead of
@@ -79,12 +81,13 @@ pub(crate) struct CleaningConfig {
     /// CLI `--cleaning-profile`.
     pub(crate) profile: Option<CleaningProfile>,
     /// Keep the single terminal period that cleanup removes by default.
-    /// CLI `--keep-trailing-period` forces this on.
+    /// CLI `--keep-trailing-period` forces this on, and `--no-keep-trailing-period` forces it off.
     pub(crate) keep_trailing_period: Option<bool>,
-    /// Minimum isolated numeric value converted to digits. Unset resolves
-    /// to the built-in default of 4: isolated values below 4 are left
-    /// exactly as the ASR model produced them. `0` is the explicit opt-out
-    /// that converts every recognized number.
+    /// Threshold of the spoken-numbers rule.
+    /// Only isolated single-digit cardinals ("zero" to "nine") and isolated ordinals are compared with it: below it they stay exactly as the ASR model produced them, and at or above it they become digits.
+    /// Cardinals of 10 or more always convert.
+    /// Unset resolves to the built-in default of 4, so isolated zero through three stay as produced.
+    /// `0` converts every isolated single-digit cardinal and ordinal, while adjacent small-number runs, plural magnitudes, fractions, and the time unit "second" still stay as words.
     pub(crate) number_threshold: Option<f64>,
     /// Rule names to disable. Merged with CLI `--disable-rule` flags.
     pub(crate) disabled_rules: Vec<String>,
@@ -125,80 +128,95 @@ pub(crate) struct RulesConfig {
 pub(crate) const TEMPLATE: &str = r#"# parakit config.toml
 #
 # Precedence: CLI flags > this file > built-in defaults.
-# Every key below is optional. Uncomment and edit the keys you want to
-# override; leave the rest commented out to keep the built-in default.
+# Every key below is optional.
+# Uncomment and edit the keys you want to override, and leave the rest commented out to keep the built-in default.
 
 [daemon]
-# Path to a GGUF model file. Overrides the cached Q8_0 model.
+# Path to a GGUF model file.
+# Overrides the cached Q8_0 model.
 # model = "/path/to/model.gguf"
 
 # Runtime compute device: "auto", "cpu", or "gpu".
 # device = "auto"
 
-# CPU inference threads. Defaults to a conservative detected count.
+# CPU inference threads, 1 to 2147483647.
+# Unset: half the logical CPUs the process may use, with a minimum of 2, or 1 on a single-CPU machine.
 # threads = 4
 
+# Unload the model after this many idle minutes.
+# 0 keeps it resident.
+# The next dictation automatically reloads it while audio is captured.
+# model_idle_minutes = 10
+
 # Batch insertion style: "terminal", "standard", or "direct".
+# Unset: "terminal" on Linux, "standard" on macOS and Windows.
 # paste_mode = "standard"
 
-# Leave dictated text on the clipboard after paste instead of restoring
-# the previous clipboard contents.
+# Leave dictated text on the clipboard after paste instead of restoring the previous clipboard contents.
 # keep_transcript_clipboard = false
 
 # Play the audio cues (start / success / error tones).
 # sounds = true
 
-# Verbose diagnostics: paths, backend details, and timing lines. A CLI
-# --quiet flag always wins over this setting.
+# Print diagnostics: model path, microphone and backend details, timings, clipboard diagnostics, and the native inference library's own log messages.
+# Applies to `parakit start`, `parakit doctor`, and `parakit rules`.
+# Other commands take only the --verbose flag.
+# The global --verbose flag turns diagnostics on whatever this key says, and the global --quiet flag always wins.
 # verbose = false
 
 # Number of transcripts kept in daemon memory for `copy-last` and `history`.
-# Valid range: 0 through 100. 0 disables both. History lives only in daemon
-# memory, is never written to disk, and is cleared when the daemon stops.
+# Valid range: 0 through 100.
+# 0 disables both.
+# History lives only in daemon memory and is cleared when the daemon stops.
+# This key never writes it to disk, though logging.dir can log the same transcripts.
 # transcript_history = 10
 
 [cleaning]
 # Enable the text-cleaning pipeline.
 # enabled = true
 
-# Cleanup behavior tier: "safe" or "aggressive". Safe performs mechanical
-# cleanup and high-confidence normalization only. Aggressive additionally
-# deletes discourse markers such as filler "like", "you know", and "I mean",
-# which can change meaning. Overridden by CLI --cleaning-profile.
+# Cleanup behavior tier: "safe" or "aggressive".
+# Safe performs mechanical cleanup and high-confidence normalization only.
+# Aggressive additionally deletes discourse markers such as filler "like", "you know", and "I mean", which can change meaning, and collapses repeats of that, no, can, had, and do.
+# Overridden by CLI --cleaning-profile.
 # profile = "safe"
 
-# Keep the single terminal period. Cleanup drops it by default because
-# parakit is used mostly for messaging-style dictation. CLI
-# --keep-trailing-period forces this on.
+# Keep the single terminal period.
+# Cleanup drops it by default because parakit is used mostly for messaging-style dictation.
+# CLI --keep-trailing-period forces this on, and --no-keep-trailing-period forces it off.
 # keep_trailing_period = false
 
-# Minimum isolated numeric value rendered as digits. Leave unset to use the
-# built-in default of 4: isolated values below the threshold are left
-# exactly as the ASR model produced them, never forced to words or digits.
-# Set to 0 to instead convert every recognized number. For example, 5 keeps
-# isolated zero through four as-is and converts five and larger values.
+# Threshold of the spoken-numbers rule, 0 or more.
+# Only isolated single-digit numbers ("zero" to "nine") and isolated ordinals ("first", "twenty first") are compared with it.
+# One below the threshold is left exactly as the ASR model produced it, never forced to words or digits, and one at or above it becomes digits.
+# Cardinal numbers of 10 or more always convert, and so do numbers listed next to other numbers.
+# Leave unset to use the built-in default of 4, which leaves isolated zero through three as produced.
+# For example, 5 also leaves isolated four as produced and converts five and up.
+# Set to 0 to convert every isolated single-digit number and ordinal.
+# Even at 0, adjacent small-number runs ("one two three"), plural magnitudes, fractions, and the time unit "second" stay as words.
 # number_threshold = 5
 
-# Rule names to disable. Merged with any CLI --disable-rule flags. Run
-# `parakit rules list` to see all built-in and user rule names.
+# Rule names to disable.
+# Merged with any CLI --disable-rule flags.
+# Run `parakit rules list` to see all built-in and user rule names.
 # disabled_rules = ["fix-trailing-period"]
 
 [logging]
-# Directory for JSONL transcription logs. One file is written per local day.
+# Directory for JSONL transcription logs.
+# One file is written per local day.
 # Unset disables transcription logging.
 # dir = "/home/user/.parakit/logs"
 
 [hotkey]
-# Linux hotkey backend: "auto", "desktop", "x11-global-hotkey",
-# "x11-listen", or "evdev-proxy-experimental". Linux only.
+# Linux hotkey backend: "auto", "desktop", "x11-global-hotkey", "x11-listen", or "evdev-proxy-experimental".
+# Linux only.
 # backend = "auto"
 
 # User-defined text-cleaning rules, applied alongside the built-in rules.
-# Repeat the [[rules.user]] table for each additional rule; uncomment the
-# [[rules.user]] header itself, or the keys below land in [hotkey]. See
-# docs/cleaning-rules.md for the full user-rule format and validation
-# rules (names must not collide with a built-in rule or another user rule,
-# and `pattern` must be a valid Rust `regex` crate pattern).
+# Repeat the [[rules.user]] table for each additional rule.
+# Uncomment the [[rules.user]] header itself, or the keys below land in [hotkey].
+# Names must not collide with a built-in rule or another user rule, and `pattern` must be a valid Rust `regex` crate pattern.
+# See docs/config_reference.toml for every user-rule key, its validation, and the replacement syntax.
 # [[rules.user]]
 # name = "weights-and-biases-to-wandb"
 # description = "Map 'weights and biases' to 'wandb'"
@@ -265,19 +283,30 @@ fn xdg_config_base() -> Result<PathBuf> {
 ///
 /// # Returns
 ///
-/// The parsed config, or built-in defaults when the file does not exist.
+/// The parsed config, or built-in defaults when no file exists at the default location.
 ///
 /// # Errors
 ///
-/// Returns an error if the config path cannot be resolved, the file exists
-/// but cannot be read, the file is not valid TOML for [`ConfigFile`], a
-/// user-defined rule fails validation (empty or non-canonical name, empty
-/// pattern, invalid regex, a name colliding with a built-in rule, or a
-/// duplicate user rule name), or `cleaning.disabled_rules` names a rule that
-/// does not exist.
+/// Returns an error if the config path cannot be resolved, `$PARAKIT_CONFIG_PATH` names a file that does not exist, the file exists but cannot be read, the file is not valid TOML for [`ConfigFile`], `daemon.transcript_history` or `daemon.threads` exceeds its limit, `daemon.model` or `logging.dir` is an empty path, a user-defined rule fails validation (empty or non-canonical name, empty pattern, invalid regex, a name colliding with a built-in rule, or a duplicate user rule name), or `cleaning.disabled_rules` names a rule that does not exist.
 /// Parse and validation errors are annotated with the config file path.
 pub(crate) fn load() -> Result<ConfigFile> {
-    load_from_path(&config_path()?)
+    load_with_override(std::env::var_os(CONFIG_PATH_ENV))
+}
+
+/// Load the config from an already-read `$PARAKIT_CONFIG_PATH` value.
+///
+/// A missing file at the default location means "use the defaults", but an explicit override names a file the user expects to be read, so a missing one is almost always a typo.
+fn load_with_override(override_path: Option<std::ffi::OsString>) -> Result<ConfigFile> {
+    let explicit = override_path.is_some();
+    let path = config_path_with_override(override_path)?;
+    // A failed existence probe falls through, so the read reports the real error.
+    if explicit && matches!(path.try_exists(), Ok(false)) {
+        anyhow::bail!(
+            "{CONFIG_PATH_ENV} names {}, which does not exist; create it with `parakit config init`, or unset {CONFIG_PATH_ENV} to use the default config location",
+            path.display()
+        );
+    }
+    load_from_path(&path)
 }
 
 /// Load and validate a config file at an explicit path. Split out from
@@ -317,6 +346,32 @@ pub(crate) fn load_from_path(path: &Path) -> Result<ConfigFile> {
             path.display(),
             crate::daemon::ipc::MAX_TRANSCRIPT_HISTORY
         );
+    }
+
+    // Checked here so the daemon never fetches or opens a model it would then refuse.
+    if config
+        .daemon
+        .threads
+        .is_some_and(|threads| threads.get() > parakit::inference::MAX_THREADS)
+    {
+        anyhow::bail!(
+            "invalid config in {}: daemon.threads must be between 1 and {}",
+            path.display(),
+            parakit::inference::MAX_THREADS
+        );
+    }
+
+    // An empty path is never intended: as logging.dir it writes logs into the daemon's working directory, and as daemon.model it fails only at startup with a blank path in the error.
+    for (key, value) in [
+        ("daemon.model", config.daemon.model.as_deref()),
+        ("logging.dir", config.logging.dir.as_deref()),
+    ] {
+        if value.is_some_and(|value| value.as_os_str().is_empty()) {
+            anyhow::bail!(
+                "invalid config in {}: {key} is set but empty",
+                path.display()
+            );
+        }
     }
 
     parakit::rules::validate_configured_rules(
@@ -483,6 +538,39 @@ position = "first"
     }
 
     #[test]
+    fn empty_model_and_log_dir_paths_are_rejected() {
+        for (slug, toml, key) in [
+            ("empty-model", "[daemon]\nmodel = \"\"\n", "daemon.model"),
+            ("empty-log-dir", "[logging]\ndir = \"\"\n", "logging.dir"),
+        ] {
+            let path = write_fixture(slug, toml);
+            let err = load_from_path(&path).expect_err("an empty path must fail config load");
+            let message = format!("{err:#}");
+            assert!(
+                message.contains(&format!("{key} is set but empty")),
+                "{message}"
+            );
+            assert!(message.contains(&path.display().to_string()), "{message}");
+        }
+    }
+
+    #[test]
+    fn thread_count_above_the_c_int_range_is_rejected_at_load() {
+        let max = write_fixture("threads-max", "[daemon]\nthreads = 2147483647\n");
+        assert_eq!(
+            load_from_path(&max).unwrap().daemon.threads,
+            NonZeroUsize::new(2_147_483_647)
+        );
+
+        let path = write_fixture("threads-too-many", "[daemon]\nthreads = 2147483648\n");
+        let message = format!("{:#}", load_from_path(&path).unwrap_err());
+        assert!(
+            message.contains("daemon.threads must be between 1 and 2147483647"),
+            "{message}"
+        );
+    }
+
+    #[test]
     fn parse_error_includes_file_path() {
         let path = write_fixture("bad-toml", "not = [valid");
         let err = load_from_path(&path).unwrap_err();
@@ -491,37 +579,52 @@ position = "first"
     }
 
     #[test]
-    fn misspelled_user_rule_position_is_rejected() {
-        let toml = r#"
+    fn user_rule_validation_errors_include_failure_and_config_path() {
+        for (name, toml, expected_error) in [
+            (
+                "misspelled-user-rule-position",
+                r#"
 [[rules.user]]
 name = "custom-hello"
 pattern = "(?i)hi"
 replacement = "hello"
 positon = "last"
-"#;
-        let path = write_fixture("misspelled-user-rule-position", toml);
-        let err = load_from_path(&path).unwrap_err();
-        let message = format!("{err:#}");
-        assert!(message.contains("unknown field `positon`"), "{message}");
-        assert!(message.contains(&path.display().to_string()), "{message}");
-    }
-
-    #[test]
-    fn validation_error_includes_rule_failure_and_config_path() {
-        let toml = r#"
+"#,
+                "unknown field `positon`",
+            ),
+            (
+                "bad-regex",
+                r#"
 [[rules.user]]
 name = "bad"
 pattern = "(unclosed"
 replacement = "x"
-"#;
-        let path = write_fixture("bad-regex", toml);
-        let err = load_from_path(&path).unwrap_err();
-        let message = format!("{err:#}");
-        assert!(message.contains("invalid regex"), "message: {message}");
-        assert!(
-            message.contains(&path.display().to_string()),
-            "config path missing from {message}"
-        );
+"#,
+                "invalid regex",
+            ),
+            (
+                "disabled-user-rule-bad-regex",
+                r#"
+[cleaning]
+disabled_rules = ["broken"]
+
+[[rules.user]]
+name = "broken"
+pattern = "(unclosed"
+replacement = "x"
+"#,
+                "invalid regex",
+            ),
+        ] {
+            let path = write_fixture(name, toml);
+            let err = load_from_path(&path).expect_err(name);
+            let message = format!("{err:#}");
+            assert!(message.contains(expected_error), "{name}: {message}");
+            assert!(
+                message.contains(&path.display().to_string()),
+                "{name}: config path missing from {message}"
+            );
+        }
     }
 
     #[test]
@@ -544,22 +647,6 @@ replacement = "hello"
     }
 
     #[test]
-    fn disabling_a_user_rule_does_not_hide_an_invalid_regex() {
-        let toml = r#"
-[cleaning]
-disabled_rules = ["broken"]
-
-[[rules.user]]
-name = "broken"
-pattern = "(unclosed"
-replacement = "x"
-"#;
-        let path = write_fixture("disabled-user-rule-bad-regex", toml);
-        let err = load_from_path(&path).expect_err("every configured regex must be valid");
-        assert!(format!("{err:#}").contains("invalid regex"));
-    }
-
-    #[test]
     fn unknown_config_keys_are_rejected() {
         for (name, toml, key) in [
             ("unknown-top-level", "typo = true", "typo"),
@@ -577,6 +664,25 @@ replacement = "x"
         let path = dir.join("custom-config.toml");
         let resolved = config_path_with_override(Some(path.clone().into_os_string()));
         assert_eq!(resolved.expect("env override should resolve"), path);
+    }
+
+    #[test]
+    fn missing_config_path_env_override_is_an_error() {
+        let dir = crate::test_support::fixture_root("parakit-config-test", "env-override-missing");
+        let missing = dir.join("typo-config.toml");
+        let err = load_with_override(Some(missing.clone().into_os_string()))
+            .expect_err("a missing override file must not silently give defaults");
+        let message = format!("{err:#}");
+        assert!(message.contains("PARAKIT_CONFIG_PATH names"), "{message}");
+        assert!(
+            message.contains(&missing.display().to_string()),
+            "{message}"
+        );
+
+        let existing = write_fixture("env-override-existing", "[daemon]\nthreads = 3\n");
+        let config = load_with_override(Some(existing.into_os_string()))
+            .expect("an existing override file loads");
+        assert_eq!(config.daemon.threads, NonZeroUsize::new(3));
     }
 
     #[test]
@@ -639,4 +745,30 @@ replacement = "x"
 
         assert_eq!(config.hotkey._backend.as_deref(), Some("x11-listen"));
     }
+    #[test]
+    fn model_idle_config_accepts_zero_and_rejects_invalid_durations() {
+        for minutes in [0, 1, 10, i64::MAX as u64] {
+            let path = write_fixture(
+                "idle-valid",
+                &format!("[daemon]\nmodel_idle_minutes = {minutes}\n"),
+            );
+            assert_eq!(
+                load_from_path(&path).unwrap().daemon.model_idle_minutes,
+                Some(minutes)
+            );
+        }
+        for raw in ["-1", "1.5", "9223372036854775808", "\"ten\""] {
+            let path = write_fixture(
+                "idle-invalid",
+                &format!("[daemon]\nmodel_idle_minutes = {raw}\n"),
+            );
+            let message = format!("{:#}", load_from_path(&path).unwrap_err());
+            assert!(message.contains("model_idle_minutes"), "{message}");
+            assert!(message.contains(&path.display().to_string()), "{message}");
+        }
+    }
 }
+
+#[cfg(test)]
+#[path = "config_reference_tests.rs"]
+mod reference_tests;

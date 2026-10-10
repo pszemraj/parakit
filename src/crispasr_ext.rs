@@ -29,6 +29,24 @@ extern "C" {
     ) -> *mut crispasr_sys::CrispasrSession;
 }
 
+/// Convert a thread count to the C `int` that every CrispASR session-open entry point takes.
+///
+/// # Arguments
+///
+/// * `threads` - Requested CPU thread count.
+///
+/// # Returns
+///
+/// `threads` as a C `int`.
+///
+/// # Errors
+///
+/// Returns an error when `threads` exceeds `c_int::MAX`, so an out-of-range count is rejected instead of wrapping to a negative value.
+pub(crate) fn crispasr_thread_count(threads: usize) -> Result<c_int, String> {
+    c_int::try_from(threads)
+        .map_err(|_| format!("thread count is too large for CrispASR: {threads}"))
+}
+
 /// Raw CrispASR session opened through `crispasr_session_open_with_params`.
 pub(crate) struct OwnedSession {
     handle: *mut crispasr_sys::CrispasrSession,
@@ -44,7 +62,7 @@ impl OwnedSession {
     ///
     /// * `model_path` - GGUF model path passed to CrispASR.
     /// * `backend` - Backend label detected from the GGUF metadata.
-    /// * `threads` - CPU thread count for CrispASR.
+    /// * `n_threads` - CPU thread count for CrispASR, from [`crispasr_thread_count`].
     /// * `use_gpu` - Whether CrispASR should enable GPU use during open.
     ///
     /// # Returns
@@ -58,14 +76,12 @@ impl OwnedSession {
     pub(crate) fn open_with_params(
         model_path: &str,
         backend: &str,
-        threads: usize,
+        n_threads: c_int,
         use_gpu: bool,
     ) -> Result<Self, String> {
         let path = CString::new(model_path).map_err(|err| format!("invalid path: {err}"))?;
         let backend =
             CString::new(backend).map_err(|err| format!("invalid backend name: {err}"))?;
-        let n_threads = c_int::try_from(threads)
-            .map_err(|_| format!("thread count is too large for CrispASR: {threads}"))?;
         let params = CrispAsrOpenParamsV1 {
             abi_version: 2,
             n_threads,

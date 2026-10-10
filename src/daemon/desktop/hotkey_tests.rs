@@ -11,6 +11,19 @@ fn at(start: Instant, millis: u64) -> Instant {
 }
 
 #[test]
+fn hotkey_loop_failure_returns_to_daemon_owner_instead_of_exiting() {
+    assert!(report_hotkey_loop_failure(Ok(()), "test hotkey", || unreachable!()).is_ok());
+    let mut help_shown = false;
+    let failed =
+        report_hotkey_loop_failure(Err(anyhow::anyhow!("grab lost")), "test hotkey", || {
+            help_shown = true;
+            "recovery help".to_string()
+        });
+    assert!(failed.is_err());
+    assert!(help_shown);
+}
+
+#[test]
 fn ctrl_space_starts_and_stops() {
     let now = base_time();
     let mut state = HotkeyState::default();
@@ -328,74 +341,6 @@ fn registered_hotkey_press_release_starts_and_stops_once() {
     assert_eq!(state.stop(at(now, 310)), None);
 }
 
-#[cfg(target_os = "linux")]
-fn physical(ctrl: bool, space: bool) -> PhysicalHotkeyState {
-    PhysicalHotkeyState { ctrl, space }
-}
-
-#[cfg(target_os = "linux")]
-#[test]
-fn registered_hotkey_physical_poll_keeps_recording_while_chord_is_down() {
-    let now = base_time();
-    let mut state = RegisteredHotkeyLatch::default();
-
-    state.event(RegisteredHotKeyState::Pressed, physical(true, true), now);
-
-    assert_eq!(state.physical_poll(physical(true, true), at(now, 50)), None);
-    assert!(state.is_recording());
-}
-
-#[cfg(target_os = "linux")]
-#[test]
-fn registered_hotkey_release_is_ignored_while_physical_chord_is_still_down() {
-    let now = base_time();
-    let mut state = RegisteredHotkeyLatch::default();
-
-    state.event(RegisteredHotKeyState::Pressed, physical(true, true), now);
-
-    assert_eq!(
-        state.event(
-            RegisteredHotKeyState::Released,
-            physical(true, true),
-            at(now, 50)
-        ),
-        None
-    );
-    assert!(state.is_recording());
-}
-
-#[cfg(target_os = "linux")]
-#[test]
-fn registered_hotkey_waits_for_space_release_after_ctrl_first_stop() {
-    let now = base_time();
-    let mut state = RegisteredHotkeyLatch::default();
-
-    state.event(RegisteredHotKeyState::Pressed, physical(true, true), now);
-    assert_eq!(
-        state.physical_poll(physical(false, true), at(now, 50)),
-        Some(HotkeyAction::Stop {
-            stopped_at: at(now, 50)
-        })
-    );
-
-    assert!(!state.is_recording());
-    assert!(state.needs_physical_poll());
-    assert_eq!(
-        state.event(
-            RegisteredHotKeyState::Pressed,
-            physical(true, true),
-            at(now, 75)
-        ),
-        None
-    );
-
-    assert_eq!(
-        state.physical_poll(physical(false, false), at(now, 100)),
-        None
-    );
-    assert!(!state.needs_physical_poll());
-}
-
 #[test]
 fn hotkey_actions_emit_logical_transitions_only() {
     let now = base_time();
@@ -504,9 +449,62 @@ fn x11_keymap_bit_probe_detects_down_keycodes() {
     let mut keys = [0_u8; 32];
     keys[4] = 0b0010_0000;
 
-    assert!(keycode_down(&keys, 37));
-    assert!(!keycode_down(&keys, 36));
-    assert!(!keycode_down(&keys, 255));
+    assert!(super::super::x11::keycode_down(&keys, 37));
+    assert!(!super::super::x11::keycode_down(&keys, 36));
+    assert!(!super::super::x11::keycode_down(&keys, 255));
+}
+
+#[test]
+fn x11_hotkey_mapping_refresh_retries_failure_and_reports_once_per_mapping_event() {
+    let mut mapping = X11HotkeyMapping {
+        space: vec![65],
+        control: vec![37, 105],
+        needs_refresh: false,
+    };
+
+    assert!(mapping
+        .refresh_with(true, || anyhow::bail!("Control keycodes unavailable"))
+        .is_some());
+    assert_eq!(mapping.space, [65]);
+    assert_eq!(mapping.control, [37, 105]);
+    assert!(mapping.needs_refresh);
+
+    // A poll without a new MappingNotify retries but does not report again.
+    let mut retried = false;
+    assert!(mapping
+        .refresh_with(false, || {
+            retried = true;
+            anyhow::bail!("Control keycodes still unavailable")
+        })
+        .is_none());
+    assert!(retried);
+    assert_eq!(mapping.space, [65]);
+    assert_eq!(mapping.control, [37, 105]);
+    assert!(mapping.needs_refresh);
+
+    assert!(mapping
+        .refresh_with(true, || anyhow::bail!("Control keycodes unavailable again"))
+        .is_some());
+    assert!(mapping.needs_refresh);
+
+    assert!(mapping
+        .refresh_with(false, || {
+            Ok(X11HotkeyMapping {
+                space: vec![66],
+                control: vec![38, 106],
+                needs_refresh: false,
+            })
+        })
+        .is_none());
+    assert_eq!(mapping.space, [66]);
+    assert_eq!(mapping.control, [38, 106]);
+    assert!(!mapping.needs_refresh);
+
+    assert!(mapping
+        .refresh_with(false, || {
+            panic!("successful refresh must clear the pending retry")
+        })
+        .is_none());
 }
 
 #[cfg(target_os = "linux")]
@@ -527,46 +525,4 @@ fn linux_backend_aliases_resolve_to_one_route() {
     ] {
         assert_eq!(backend.linux_route(), expected);
     }
-}
-
-#[cfg(target_os = "linux")]
-#[test]
-fn passive_listen_handler_emits_transitions_without_returning_suppression() {
-    use std::time::SystemTime;
-
-    fn event(event_type: EventType) -> Event {
-        Event {
-            time: SystemTime::now(),
-            name: None,
-            event_type,
-        }
-    }
-
-    let state = Arc::new(Mutex::new(HotkeyState::default()));
-    let (tx, rx) = crossbeam_channel::unbounded();
-
-    handle_listen_event(event(EventType::KeyPress(Key::ControlLeft)), &state, &tx);
-    handle_listen_event(event(EventType::KeyPress(Key::Space)), &state, &tx);
-    let pressed = rx.recv().unwrap();
-    handle_listen_event(event(EventType::KeyRelease(Key::Space)), &state, &tx);
-    let released = rx.recv().unwrap();
-
-    assert!(matches!(pressed, HotkeyTransition::Pressed { .. }));
-    assert!(matches!(released, HotkeyTransition::Released { .. }));
-    assert!(rx.try_recv().is_err());
-}
-
-#[cfg(target_os = "linux")]
-#[test]
-fn evdev_input_files_are_opened_nonblocking() {
-    use std::os::fd::AsRawFd;
-
-    let dir = crate::test_support::fixture_root("parakit-hotkey-test", "evdev-input");
-    let path = dir.join("event-test");
-    std::fs::write(&path, b"").expect("create test input file");
-
-    let file = open_evdev_input(&path).expect("open test input file");
-    let flags = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_GETFL) };
-    assert_ne!(flags, -1);
-    assert_ne!(flags & libc::O_NONBLOCK, 0);
 }
