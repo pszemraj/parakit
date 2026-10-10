@@ -393,9 +393,7 @@ fn download_and_verify(
 }
 
 fn acquire_artifact_lock(dest: &Path) -> Result<File> {
-    let mut lock_path = dest.as_os_str().to_os_string();
-    lock_path.push(".lock");
-    let lock_path = PathBuf::from(lock_path);
+    let lock_path = artifact_sidecar_path(dest, ".lock");
     let lock = OpenOptions::new()
         .create(true)
         .read(true)
@@ -409,9 +407,13 @@ fn acquire_artifact_lock(dest: &Path) -> Result<File> {
 }
 
 fn partial_path(dest: &Path) -> PathBuf {
-    let mut partial = dest.as_os_str().to_os_string();
-    partial.push(".part");
-    PathBuf::from(partial)
+    artifact_sidecar_path(dest, ".part")
+}
+
+fn artifact_sidecar_path(dest: &Path, suffix: &str) -> PathBuf {
+    let mut path = dest.as_os_str().to_os_string();
+    path.push(suffix);
+    PathBuf::from(path)
 }
 
 #[derive(Debug)]
@@ -698,21 +700,25 @@ mod tests {
     use std::sync::{mpsc, Arc, Barrier};
     use std::time::{Duration, Instant};
 
+    fn read_request_headers(stream: &mut impl Read) -> Vec<u8> {
+        let mut request = Vec::new();
+        let mut buffer = [0_u8; 1024];
+        while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+            let count = stream.read(&mut buffer).unwrap();
+            if count == 0 {
+                break;
+            }
+            request.extend_from_slice(&buffer[..count]);
+        }
+        request
+    }
+
     fn serve_model_once(body: &'static [u8]) -> (String, std::thread::JoinHandle<String>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
         let handle = std::thread::spawn(move || {
             let (mut stream, _) = listener.accept().unwrap();
-            let mut request = Vec::new();
-            let mut buffer = [0_u8; 1024];
-            while !request.windows(4).any(|window| window == b"\r\n\r\n") {
-                let count = stream.read(&mut buffer).unwrap();
-                if count == 0 {
-                    break;
-                }
-                request.extend_from_slice(&buffer[..count]);
-            }
-            let request_text = String::from_utf8(request).unwrap();
+            let request_text = String::from_utf8(read_request_headers(&mut stream)).unwrap();
             let status = if request_text.to_ascii_lowercase().contains("\r\nrange:") {
                 "206 Partial Content"
             } else {
@@ -750,15 +756,7 @@ mod tests {
                 stream.set_nonblocking(false).unwrap();
                 requests += 1;
 
-                let mut request = Vec::new();
-                let mut buffer = [0_u8; 1024];
-                while !request.windows(4).any(|window| window == b"\r\n\r\n") {
-                    let count = stream.read(&mut buffer).unwrap();
-                    if count == 0 {
-                        break;
-                    }
-                    request.extend_from_slice(&buffer[..count]);
-                }
+                read_request_headers(&mut stream);
                 write!(
                     stream,
                     "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nETag: \"concurrent\"\r\nConnection: close\r\n\r\n",
