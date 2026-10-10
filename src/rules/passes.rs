@@ -240,9 +240,29 @@ fn render_spoken_version_candidate(input: &str, words: &[WordSpan]) -> Option<St
 fn parse_number_component(input: &str, words: &[WordSpan]) -> Option<String> {
     let first = words.first()?;
     let last = words.last()?;
-    let phrase = canonicalize_number_aliases(&input[first.start..last.end]);
+    render_number_component(&input[first.start..last.end])
+}
+
+fn render_number_component(phrase: &str) -> Option<String> {
+    let phrase = canonicalize_number_aliases(phrase);
     let language = Language::english();
-    let rendered = text2digits(&phrase, &language).ok()?;
+    // A leading zero followed by a whole count can straddle two decimals:
+    // "twenty point zero twenty point zero" means "20.0 20.0".
+    // Keep leading-zero version components only when spoken digit by digit.
+    let words = phrase
+        .split(|ch: char| ch.is_whitespace() || ch == '-')
+        .filter(|word| !word.is_empty());
+    let rendered = if words.clone().next()?.eq_ignore_ascii_case("zero") {
+        words
+            .map(|word| {
+                text2digits(word, &language)
+                    .ok()
+                    .filter(|value| value.len() == 1)
+            })
+            .collect::<Option<String>>()?
+    } else {
+        text2digits(&phrase, &language).ok()?
+    };
     rendered
         .chars()
         .all(|character| character.is_ascii_digit())
@@ -291,7 +311,6 @@ pub(crate) fn normalize_numeric_point_suffixes(input: &str) -> TransformResult {
             .expect("numeric point suffix regex must compile")
     });
 
-    let language = Language::english();
     let mut text = input.to_string();
     let mut total_matches = 0;
 
@@ -303,15 +322,11 @@ pub(crate) fn normalize_numeric_point_suffixes(input: &str) -> TransformResult {
         for captures in re.captures_iter(&text) {
             let found = captures.get(0).expect("full point-suffix match");
             let numeric = captures.get(1).expect("numeric point prefix").as_str();
-            let component = canonicalize_number_aliases(
-                captures.get(2).expect("spoken point component").as_str(),
-            );
-            let Ok(rendered) = text2digits(&component, &language) else {
+            let Some(rendered) =
+                render_number_component(captures.get(2).expect("spoken point component").as_str())
+            else {
                 continue;
             };
-            if !rendered.chars().all(|character| character.is_ascii_digit()) {
-                continue;
-            }
 
             output.push_str(&text[last_end..found.start()]);
             write!(output, "{numeric}.{rendered}").expect("writing to String cannot fail");

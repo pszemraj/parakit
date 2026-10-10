@@ -85,23 +85,23 @@ fn plural_magnitudes_preserve_words_in_both_profiles_and_thresholds() {
         ),
         (
             "Between two thousand and half a million people came.",
-            "Between 2000 and half a million people came.",
+            "Between two thousand and half a million people came.",
         ),
         (
             "Both five and half a million parameters are allowed.",
-            "Both 5 and half a million parameters are allowed.",
+            "Both five and half a million parameters are allowed.",
         ),
         (
             "Between about five and half a million parameters are allowed.",
-            "Between about 5 and half a million parameters are allowed.",
+            "Between about five and half a million parameters are allowed.",
         ),
         (
             "Between nearly five and half a million parameters are allowed.",
-            "Between nearly 5 and half a million parameters are allowed.",
+            "Between nearly five and half a million parameters are allowed.",
         ),
         (
             "Between almost five and half a million parameters are allowed.",
-            "Between almost 5 and half a million parameters are allowed.",
+            "Between almost five and half a million parameters are allowed.",
         ),
         (
             "The models are both about five and a half million parameters.",
@@ -180,7 +180,7 @@ fn plural_magnitudes_preserve_words_in_both_profiles_and_thresholds() {
             ),
             (
                 "Between two thousand and half a million people came.",
-                "Between 2000 and half a million people came.",
+                "Between two thousand and half a million people came.",
             ),
             (
                 "Chapter five half a million words long.",
@@ -261,6 +261,80 @@ fn plural_magnitudes_preserve_words_in_both_profiles_and_thresholds() {
             all_numbers.clean_text("Use the second batch of hundreds after one second."),
             "Use the 2nd batch of hundreds after 1 second."
         );
+    }
+}
+
+#[test]
+fn ambiguous_quantities_remain_words_across_profiles_and_thresholds() {
+    let cases = [
+        (
+            "Five thirds of a million rows.",
+            "Five thirds of a million rows.",
+        ),
+        (
+            "Four fifths of a million rows.",
+            "Four fifths of a million rows.",
+        ),
+        (
+            "The fifth of a hundred children.",
+            "The fifth of a hundred children.",
+        ),
+        (
+            "Six quarters a million users joined.",
+            "Six quarters a million users joined.",
+        ),
+        (
+            "Between two hundred and half a million.",
+            "Between two hundred and half a million.",
+        ),
+        (
+            "We gained two hundred and half a million more.",
+            "We gained two hundred and half a million more.",
+        ),
+        (
+            "The release was in twenty twenty two.",
+            "The release was in twenty twenty two.",
+        ),
+        (
+            "It happened in nineteen ninety-nine.",
+            "It happened in nineteen ninety-nine.",
+        ),
+        (
+            "Six quarters, a million users joined.",
+            "6 quarters, 1 million users joined.",
+        ),
+        (
+            "Use twenty, twenty two, and ninety nine.",
+            "Use 20, 22, and 99.",
+        ),
+        (
+            "The release was in two thousand twenty two.",
+            "The release was in 2022.",
+        ),
+        ("Use twenty point five twenty point six.", "Use 20.5 20.6."),
+        ("Use twenty point zero twenty point zero.", "Use 20.0 20.0."),
+        (
+            "We need twenty ten-cent stamps.",
+            "We need 20 ten-cent stamps.",
+        ),
+        (
+            "We need twenty twenty-two-cent stamps.",
+            "We need 20 twenty-two-cent stamps.",
+        ),
+    ];
+    for profile in [CleaningProfile::Safe, CleaningProfile::Aggressive] {
+        for threshold in [0.0, 4.0, 5.0] {
+            let cleaner = build_cleaner(false, profile, false, Some(threshold), &[], &[])
+                .unwrap()
+                .unwrap();
+            for (input, expected) in cases {
+                assert_eq!(
+                    cleaner.clean_text(input),
+                    expected,
+                    "{profile:?} {threshold}: {input}"
+                );
+            }
+        }
     }
 }
 

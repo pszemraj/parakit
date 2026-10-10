@@ -95,9 +95,7 @@ fn replace_numbers_preserving_literals(input: &str, language: &Language, thresho
             concat!(
                 r"(?i)\b(?:",
                 r"(?P<scale_first>(?:a[ \t]+)?(?:hundred|thousand|million|billion|trillion)[ \t]+and[ \t]+a[ \t]+(?:half|quarter))|",
-                r"(?:and[ \t]+)?(?:a[ \t]+)?half(?:[ \t]+of)?(?:[ \t]+a)?[ \t]+(?:hundred|thousand|million|billion|trillion)|",
-                r"(?:(?:and[ \t]+(?:a[ \t]+)?|a[ \t]+)quarter(?:[ \t]+of)?(?:[ \t]+a)?|quarter(?:[ \t]+of(?:[ \t]+a)?)?)[ \t]+(?:hundred|thousand|million|billion|trillion)|",
-                r"(?P<quarter_article>quarter[ \t]+a[ \t]+(?:hundred|thousand|million|billion|trillion))|",
+                r"(?:and[ \t]+)?(?:a[ \t]+)?(?:half|quarter)(?:[ \t]+of)?(?:[ \t]+a)?[ \t]+(?:hundred|thousand|million|billion|trillion)|",
                 r"(?:halves|quarters)(?:[ \t]+of)?(?:[ \t]+a)?[ \t]+(?:hundred|thousand|million|billion|trillion)|",
                 r"(?:(?:a[ \t]+)?few|several|(?:a[ \t]+)?couple(?:[ \t]+of)?)[ \t]+(?:hundred|thousand|million|billion|trillion)|",
                 r"(?P<denominator>[a-z]+(?:-[a-z]+)*)[ \t]+of(?:[ \t]+a)?[ \t]+(?:hundred|thousand|million|billion|trillion)|",
@@ -119,22 +117,18 @@ fn replace_numbers_preserving_literals(input: &str, language: &Language, thresho
         .filter_map(|captures| {
             let found = captures.get(0).expect("whole match is required");
             let mut ordinal_start = None;
-            if captures.name("quarter_article").is_some() {
-                let prefix = &input[..found.start()];
-                // An explicit numerator makes "one quarter a million" a
-                // fraction; a noun such as "fourth quarter" supplies none.
-                let prefix = prefix.strip_suffix('-').unwrap_or(prefix);
-                ordinal_start = Some(preceding_fraction_start(
-                    prefix,
-                    found.as_str(),
-                    language,
-                    true,
-                )?);
-            }
             if let Some(denominator) = captures.name("denominator") {
                 // Use the parser's full ordinal boundary, including spaced
                 // compounds such as "twenty first" or "one hundredth".
-                let tokens = number_tokens(&input[..denominator.end()]);
+                let mut tokens = number_tokens(&input[..denominator.end()]);
+                // text2num recognizes singular ordinals. Classify a plural
+                // denominator through its singular form while preserving the
+                // original text and byte positions for the literal span.
+                if let Some(last) = tokens.last_mut() {
+                    if let Some(singular) = last.lowercase.strip_suffix('s') {
+                        last.lowercase = singular.to_owned();
+                    }
+                }
                 let occurrences = find_numbers(tokens.iter(), language, 0.0);
                 let ordinal = occurrences
                     .last()
@@ -178,23 +172,6 @@ fn replace_numbers_preserving_literals(input: &str, language: &Language, thresho
                 }
                 ordinal_start = Some(tokens[start].start.min(found.start()));
             }
-            if found
-                .as_str()
-                .to_ascii_lowercase()
-                .split_ascii_whitespace()
-                .take(2)
-                .eq(["half", "a"])
-            {
-                let tokens = number_tokens(&input[..found.start()]);
-                if find_numbers(tokens.iter(), language, 0.0)
-                    .last()
-                    .is_some_and(|number| number.end == tokens.len() && number.is_ordinal)
-                {
-                    // In "the second half a million users joined", half names
-                    // a period; the following count is an independent quantity.
-                    return None;
-                }
-            }
             if found.as_str().eq_ignore_ascii_case("second")
                 && !second_is_time_unit(&input[..found.start()], previous_re, language)
             {
@@ -234,7 +211,7 @@ fn replace_numbers_preserving_literals(input: &str, language: &Language, thresho
                 // or chapter count is independent and must remain convertible.
                 None
             } else if is_fraction && !scale_first {
-                preceding_fraction_start(prefix, phrase, language, last_end == 0)
+                preceding_fraction_start(prefix, phrase, language)
             } else {
                 preceding_number_start(prefix, language)
             };
@@ -329,50 +306,27 @@ fn preceding_number_start(input: &str, language: &Language) -> Option<usize> {
 
 /// Keep a fraction's numerator or mixed count, but leave independent exact
 /// counts available for conversion before a singular fraction.
-fn preceding_fraction_start(
-    input: &str,
-    phrase: &str,
-    language: &Language,
-    at_input_start: bool,
-) -> Option<usize> {
+fn preceding_fraction_start(input: &str, phrase: &str, language: &Language) -> Option<usize> {
+    let input = input.strip_suffix('-').unwrap_or(input);
     let start = preceding_number_start(input, language)?;
     let joined = phrase
         .split_ascii_whitespace()
         .next()
         .is_some_and(|word| word.eq_ignore_ascii_case("and"));
-    let plural = phrase
-        .split_ascii_whitespace()
-        .any(|word| word.eq_ignore_ascii_case("halves") || word.eq_ignore_ascii_case("quarters"));
-    if joined {
-        // "both/between X and half a million" coordinates separate quantities,
-        // even when X is approximate. Do not scan earlier clause context: an
-        // unrelated "between" must not turn a mixed fraction into a range.
-        // Mid-clause "both" can modify the subject ("models are both five
-        // and a half million"), so retain the conservative fraction guard there.
-        if number_tokens(&input[..start])
-            .iter()
-            .rev()
-            .find(|token| {
-                !matches!(
-                    token.lowercase.as_str(),
-                    "about" | "around" | "approximately" | "roughly" | "nearly" | "almost"
-                )
+    let plural = phrase.split_ascii_whitespace().any(|word| {
+        let word = word.to_ascii_lowercase();
+        matches!(word.as_str(), "halves" | "quarters")
+            || word.strip_suffix('s').is_some_and(|singular| {
+                let tokens = number_tokens(singular);
+                find_numbers(tokens.iter(), language, 0.0)
+                    .last()
+                    .is_some_and(|number| number.is_ordinal)
             })
-            .is_some_and(|token| {
-                let before = input[..token.start].trim_end_matches([' ', '\t']);
-                let clause_initial = (at_input_start && before.is_empty())
-                    || before.ends_with(['.', '!', '?', ',', ';', ':', '\n', '\r', '(']);
-                (token.lowercase == "between" || (token.lowercase == "both" && clause_initial))
-                    && input[token.end..start]
-                        .chars()
-                        .all(|ch| !ch.is_whitespace() || matches!(ch, ' ' | '\t'))
-            })
-        {
-            return None;
-        }
-        return Some(start);
-    }
-    if plural {
+    });
+    // A conjunction can introduce either a mixed fraction or independent
+    // quantities. Preserve it with the count instead of guessing from nearby
+    // words such as "both" or "between".
+    if joined || plural {
         return Some(start);
     }
     let numerator = number_tokens(&input[start..]);
@@ -424,6 +378,40 @@ fn replace_numbers_with_hybrid_magnitudes(
         .find_iter(input)
         .map(|found| (found.start(), found.end(), found.as_str().to_string()))
         .collect();
+
+    // Adjacent spoken two-digit integers can name a year ("twenty twenty two")
+    // or separate values. Keep the words instead of splitting or joining that
+    // ambiguous quantity. Punctuation and existing digits remain boundaries.
+    let mut index = 0;
+    while index + 1 < occurrences.len() {
+        let first = &occurrences[index];
+        let mut end = index;
+        while let Some(next) = occurrences.get(end + 1) {
+            let previous = &occurrences[end];
+            if [previous, next].iter().any(|number| {
+                number.is_ordinal
+                    || !(10.0..100.0).contains(&number.value)
+                    || number.value.fract() != 0.0
+                    || tokens[number.start..number.end]
+                        .iter()
+                        .any(|token| token.lowercase == "point")
+                    || input[tokens[number.end - 1].end..].starts_with('-')
+            }) || previous.end != next.start
+                || !input[tokens[previous.start].start..tokens[next.end - 1].end]
+                    .chars()
+                    .all(|ch| ch.is_ascii_alphabetic() || matches!(ch, ' ' | '\t' | '-'))
+            {
+                break;
+            }
+            end += 1;
+        }
+        if end > index {
+            let start = tokens[first.start].start;
+            let end = tokens[occurrences[end].end - 1].end;
+            replacements.push((start, end, input[start..end].to_owned()));
+        }
+        index = end + 1;
+    }
 
     for (scale_index, scale_token) in tokens.iter().enumerate() {
         let Some((scale_word, scale_value)) = magnitude_scale(&scale_token.lowercase) else {

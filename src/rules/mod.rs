@@ -53,7 +53,8 @@ pub use engine::Cleaner;
 pub use user::{RulePosition, UserRule};
 
 /// Schema/behavior version recorded in transcription logs.
-pub const CLEANER_VERSION: u32 = 23;
+/// Keep revisions distinct even when their package version is unchanged.
+pub const CLEANER_VERSION: u32 = 24;
 
 /// Default minimum isolated number converted to digits when
 /// `cleaning.number_threshold` is left unset.

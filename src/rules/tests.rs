@@ -352,6 +352,35 @@ fn text2num_renders_ordinals_and_spoken_years() {
                 "The release is from two thousand twenty-four.",
                 "The release is from 2024.",
             ),
+            (
+                "The release is from twenty twenty two.",
+                "The release is from twenty twenty two.",
+            ),
+            (
+                "It happened in nineteen ninety-nine.",
+                "It happened in nineteen ninety-nine.",
+            ),
+            (
+                "Use twenty, twenty two, and ninety nine.",
+                "Use 20, 22, and 99.",
+            ),
+            (
+                "Use twenty two records and ninety nine files.",
+                "Use 22 records and 99 files.",
+            ),
+            ("The counts are 20 22.", "The counts are 20 22."),
+            ("Use twenty point five twenty point six.", "Use 20.5 20.6."),
+            ("Use twenty point zero twenty point zero.", "Use 20.0 20.0."),
+            ("Use twenty twenty point zero.", "Use 20 20.0."),
+            ("Use twenty point zero twenty.", "Use 20.0 20."),
+            (
+                "We need twenty ten-cent stamps.",
+                "We need 20 ten-cent stamps.",
+            ),
+            (
+                "We need twenty twenty-two-cent stamps.",
+                "We need 20 twenty-two-cent stamps.",
+            ),
         ],
     );
 }
@@ -477,12 +506,39 @@ fn fraction_guards_preserve_numerators_without_absorbing_independent_counts() {
             ("three-quarters of a million", "three-quarters of a million"),
             ("one-half of a million", "one-half of a million"),
             ("three quarters of a million", "three quarters of a million"),
+            ("five thirds of a million", "five thirds of a million"),
+            ("four fifths of a million", "four fifths of a million"),
+            ("five-thirds of a million", "five-thirds of a million"),
+            (
+                "five twenty-firsts of a million",
+                "five twenty-firsts of a million",
+            ),
+            (
+                "five and four fifths of a billion",
+                "five and four fifths of a billion",
+            ),
+            ("the first of a million", "the first of a million"),
+            ("the fifth of a hundred", "the fifth of a hundred"),
+            ("six quarters a million", "six quarters a million"),
+            (
+                "in the last six quarters a million users joined",
+                "in the last six quarters a million users joined",
+            ),
+            ("six quarters, a million", "6 quarters, 1 million"),
+            (
+                "between two hundred and half a million",
+                "between two hundred and half a million",
+            ),
+            (
+                "we gained two hundred and half a million more",
+                "we gained two hundred and half a million more",
+            ),
             (
                 "In the fourth quarter a million users signed up",
                 if threshold > 4.0 {
-                    "In the fourth quarter 1 million users signed up"
+                    "In the fourth quarter a million users signed up"
                 } else {
-                    "In the 4th quarter 1 million users signed up"
+                    "In the 4th quarter a million users signed up"
                 },
             ),
             (
@@ -496,9 +552,17 @@ fn fraction_guards_preserve_numerators_without_absorbing_independent_counts() {
             (
                 "In the second half a million users signed up",
                 if threshold > 2.0 {
-                    "In the second half 1 million users signed up"
+                    "In the second half a million users signed up"
                 } else {
-                    "In the 2nd half 1 million users signed up"
+                    "In the 2nd half a million users signed up"
+                },
+            ),
+            (
+                "In the second half, a million users signed up",
+                if threshold > 2.0 {
+                    "In the second half, 1 million users signed up"
+                } else {
+                    "In the 2nd half, 1 million users signed up"
                 },
             ),
             ("a quarter a million rows", "a quarter a million rows"),
@@ -513,23 +577,23 @@ fn fraction_guards_preserve_numerators_without_absorbing_independent_counts() {
             ),
             (
                 "between two thousand and half a million",
-                "between 2000 and half a million",
+                "between two thousand and half a million",
             ),
             (
                 "both five and half a million parameters are allowed",
-                "both 5 and half a million parameters are allowed",
+                "both five and half a million parameters are allowed",
             ),
             (
                 "between about five and half a million parameters",
-                "between about 5 and half a million parameters",
+                "between about five and half a million parameters",
             ),
             (
                 "between nearly five and half a million parameters",
-                "between nearly 5 and half a million parameters",
+                "between nearly five and half a million parameters",
             ),
             (
                 "between almost five and half a million parameters",
-                "between almost 5 and half a million parameters",
+                "between almost five and half a million parameters",
             ),
             (
                 "the models are both about five and a half million parameters",
@@ -561,19 +625,19 @@ fn fraction_guards_preserve_numerators_without_absorbing_independent_counts() {
             ),
             (
                 "Both five and half a million. Both five and half a million.",
-                "Both 5 and half a million. Both 5 and half a million.",
+                "Both five and half a million. Both five and half a million.",
             ),
             (
                 "Count them; both five and half a million are allowed",
-                "Count them; both 5 and half a million are allowed",
+                "Count them; both five and half a million are allowed",
             ),
             (
                 "Count them, both about five and half a million are allowed",
-                "Count them, both about 5 and half a million are allowed",
+                "Count them, both about five and half a million are allowed",
             ),
             (
                 "Next option:\nBoth five and half a million",
-                "Next option:\nBoth 5 and half a million",
+                "Next option:\nBoth five and half a million",
             ),
             (
                 "January fifth thousands of people",
@@ -601,7 +665,7 @@ fn fraction_guards_preserve_numerators_without_absorbing_independent_counts() {
             ),
             (
                 "Both five and a third of a million",
-                "Both 5 and a third of a million",
+                "Both five and a third of a million",
             ),
             (
                 "chapter five a third of a million words long",
@@ -789,6 +853,17 @@ fn version_components_use_text2num_without_a_custom_number_parser() {
             ("PyTorch two point thirteen point oh.", "PyTorch 2.13.0."),
             ("CUDA 12 point nine.", "CUDA 12.9."),
             ("B0.1 point two.", "B0.1.2."),
+            ("B1 point zero-five point two.", "B1.05.2."),
+            ("B1 point oh-five point two.", "B1.05.2."),
+            ("Use 20 point zero twenty point zero.", "Use 20.0 20.0."),
+            ("V one point zero five point two.", "v1.05.2."),
+            ("V one point zero zero five point two.", "v1.005.2."),
+            ("V one point oh five point two.", "v1.05.2."),
+            ("V one point zero-five point two.", "v1.05.2."),
+            (
+                "V one point twenty one point one hundred twenty.",
+                "v1.21.120.",
+            ),
         ],
     );
 }
