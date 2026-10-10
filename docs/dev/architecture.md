@@ -87,7 +87,7 @@ Cross-thread communication uses atomics, mutex-protected buffers, and crossbeam 
 | `src/{build_info,gpu,warmup,ffi_util}.rs` | Build diagnostics, bundled ggml device listing, synthetic warmup PCM, and local FFI helpers. |
 | `src/inference.rs`, `src/crispasr_ext.rs` | [CrispASR](https://github.com/CrispStrobe/CrispASR) session ownership wrapper and short-audio padding. |
 | `src/rules/` | Transcript cleanup pipeline: profiles, the built-in rule table, procedural passes, and user rules from `config.toml`. |
-| `src/daemon/desktop/{inject,clipboard_guard,direct,clipboard_restore}.rs` | Clipboard transaction and change detection, X11/XTest paste chord, guarded direct insertion, and restore timing. |
+| `src/daemon/desktop/{inject,focus_snapshot,clipboard_store,paste_transaction,clipboard_guard,direct,clipboard_restore}.rs` | Insertion contract and injector, focus snapshots, clipboard backend and snapshots, the guarded paste transaction and change detection, X11/XTest paste chord, guarded direct insertion, and restore timing. |
 | `src/data_log.rs` | JSONL transcription and insertion-outcome logging. |
 | `src/audio_file.rs` | WAV decoding, mono mixing, and file resampling for quality tools and PTT simulation. |
 | `examples/transcribe_file.rs` | Raw file-based inference smoke and quality checks. |
@@ -107,11 +107,7 @@ Runtime failures are reported and the daemon continues when possible: sound cues
 
 The similar implementations below stay separate because their invariants differ.
 
-- `daemon/macos/diagnostics.rs` `DoctorClipboardSnapshot` vs
-  `daemon/desktop/inject.rs` `ClipboardSnapshot`: `doctor --deep` keeps an
-  independent capture/restore oracle so it verifies the production clipboard
-  path instead of trusting it. Sharing the implementation would let a bug
-  pass its own verification.
+- `daemon/macos/diagnostics.rs` `DoctorClipboardSnapshot` vs `daemon/desktop/clipboard_store.rs` `ClipboardSnapshot`: `doctor --deep` keeps an independent capture/restore oracle so it verifies the production clipboard path instead of trusting it. Sharing the implementation would let a bug pass its own verification.
 - `daemon/macos/pasteboard.rs` `BoundedNormalizedValue` vs
   `daemon/macos/focus.rs` `cfstring_to_bounded_value`: same bounded
   head-plus-tail shape, different unit systems (normalized chars with

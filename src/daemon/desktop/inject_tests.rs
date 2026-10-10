@@ -1,11 +1,22 @@
 //! Unit tests for clipboard, paste, and XTest cleanup helpers.
 
+use super::clipboard_guard::{ClipboardRestore, StagedClipboard};
+use super::clipboard_store::clipboard_content_unavailable;
+#[cfg(target_os = "linux")]
+use super::clipboard_store::linux_file_list_paths;
+use super::paste_transaction::report_from_stage_outcome;
 use super::*;
-use crate::daemon::desktop::clipboard_restore::default_paste_confirmation;
+use crate::daemon::desktop::clipboard_restore::{
+    default_paste_confirmation, ClipboardRestoreGate, ClipboardWriteToken, PasteConfirmation,
+    PasteConfirmationContext, PasteTargetValue,
+};
+use arboard::ImageData;
 use std::borrow::Cow;
 use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
 use std::rc::Rc;
+#[cfg(target_os = "linux")]
+use x11rb::protocol::xproto::ConnectionExt as _;
 
 #[derive(Clone, Debug, PartialEq)]
 enum MockClipboardContent {
