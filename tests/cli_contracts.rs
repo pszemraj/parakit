@@ -19,6 +19,17 @@ fn isolated_parakit(root: &Path) -> Command {
     command
 }
 
+fn isolated_parakit_with_empty_config(name: &str) -> Command {
+    let root = common::fixture_root("cli-contracts", name);
+    std::fs::create_dir_all(&root).expect("fixture root should be created");
+    let config = root.join("config.toml");
+    std::fs::write(&config, "").expect("empty config fixture should be written");
+
+    let mut command = isolated_parakit(&root);
+    command.env("PARAKIT_CONFIG_PATH", config);
+    command
+}
+
 #[test]
 fn broken_config_does_not_block_documented_control_and_repair_commands() {
     let root = common::fixture_root("cli-contracts", "broken-config-control");
@@ -134,14 +145,8 @@ fn quiet_path_commands_still_report_resolution_and_parse_errors() {
 
 #[test]
 fn quiet_rules_list_still_validates_disabled_rule_names() {
-    let root = common::fixture_root("cli-contracts", "quiet-rules-validation");
-    std::fs::create_dir_all(&root).expect("fixture root should be created");
-    let config = root.join("config.toml");
-    std::fs::write(&config, "").expect("empty config fixture should be written");
-
-    let output = isolated_parakit(&root)
+    let output = isolated_parakit_with_empty_config("quiet-rules-validation")
         .args(["--quiet", "rules", "list", "--disable-rule", "typo"])
-        .env("PARAKIT_CONFIG_PATH", &config)
         .output()
         .expect("parakit should run");
 
@@ -224,9 +229,10 @@ fn daemon_only_commands_report_an_absent_daemon_cleanly() {
 }
 
 #[cfg(unix)]
-#[test]
-fn stop_waits_for_shutdown_after_the_control_endpoint_disappears() {
-    let root = common::fixture_root("cli-contracts", "stopping-daemon");
+fn spawn_stop_with_held_lock(
+    name: &str,
+) -> (std::path::PathBuf, std::fs::File, std::process::Child) {
+    let root = common::fixture_root("cli-contracts", name);
     #[cfg(target_os = "linux")]
     let runtime = root.join("runtime").join("parakit");
     #[cfg(not(target_os = "linux"))]
@@ -240,12 +246,19 @@ fn stop_waits_for_shutdown_after_the_control_endpoint_disappears() {
         .open(runtime.join("parakit.lock"))
         .unwrap();
     fs2::FileExt::lock_exclusive(&lock).unwrap();
-    let mut stop = isolated_parakit(&root)
+    let stop = isolated_parakit(&root)
         .arg("stop")
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
         .unwrap();
+    (runtime, lock, stop)
+}
+
+#[cfg(unix)]
+#[test]
+fn stop_waits_for_shutdown_after_the_control_endpoint_disappears() {
+    let (_, lock, mut stop) = spawn_stop_with_held_lock("stopping-daemon");
     std::thread::sleep(std::time::Duration::from_secs(1));
     assert!(
         stop.try_wait().unwrap().is_none(),
@@ -265,26 +278,7 @@ fn stop_reaches_a_daemon_that_exposes_control_after_the_request_starts() {
     use std::os::unix::net::UnixListener;
     use std::time::{Duration, Instant};
 
-    let root = common::fixture_root("cli-contracts", "stop-during-startup");
-    #[cfg(target_os = "linux")]
-    let runtime = root.join("runtime").join("parakit");
-    #[cfg(not(target_os = "linux"))]
-    let runtime = root.join("cache").join("parakit").join("run");
-    std::fs::create_dir_all(&runtime).unwrap();
-    let lock = std::fs::OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .read(true)
-        .write(true)
-        .open(runtime.join("parakit.lock"))
-        .unwrap();
-    fs2::FileExt::lock_exclusive(&lock).unwrap();
-    let mut stop = isolated_parakit(&root)
-        .arg("stop")
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .unwrap();
+    let (runtime, lock, mut stop) = spawn_stop_with_held_lock("stop-during-startup");
     std::thread::sleep(Duration::from_secs(1));
     assert!(stop.try_wait().unwrap().is_none());
 
@@ -416,14 +410,8 @@ fn daemon_control_remains_available_during_model_download() {
 
 #[test]
 fn config_show_reports_resolved_defaults() {
-    let root = common::fixture_root("cli-contracts", "config-show-defaults");
-    std::fs::create_dir_all(&root).expect("fixture root should be created");
-    let config = root.join("config.toml");
-    std::fs::write(&config, "").expect("empty config fixture should be written");
-
-    let output = isolated_parakit(&root)
+    let output = isolated_parakit_with_empty_config("config-show-defaults")
         .args(["config", "show"])
-        .env("PARAKIT_CONFIG_PATH", &config)
         .output()
         .expect("parakit should run");
 

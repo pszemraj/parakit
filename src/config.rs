@@ -506,37 +506,52 @@ position = "first"
     }
 
     #[test]
-    fn misspelled_user_rule_position_is_rejected() {
-        let toml = r#"
+    fn user_rule_validation_errors_include_failure_and_config_path() {
+        for (name, toml, expected_error) in [
+            (
+                "misspelled-user-rule-position",
+                r#"
 [[rules.user]]
 name = "custom-hello"
 pattern = "(?i)hi"
 replacement = "hello"
 positon = "last"
-"#;
-        let path = write_fixture("misspelled-user-rule-position", toml);
-        let err = load_from_path(&path).unwrap_err();
-        let message = format!("{err:#}");
-        assert!(message.contains("unknown field `positon`"), "{message}");
-        assert!(message.contains(&path.display().to_string()), "{message}");
-    }
-
-    #[test]
-    fn validation_error_includes_rule_failure_and_config_path() {
-        let toml = r#"
+"#,
+                "unknown field `positon`",
+            ),
+            (
+                "bad-regex",
+                r#"
 [[rules.user]]
 name = "bad"
 pattern = "(unclosed"
 replacement = "x"
-"#;
-        let path = write_fixture("bad-regex", toml);
-        let err = load_from_path(&path).unwrap_err();
-        let message = format!("{err:#}");
-        assert!(message.contains("invalid regex"), "message: {message}");
-        assert!(
-            message.contains(&path.display().to_string()),
-            "config path missing from {message}"
-        );
+"#,
+                "invalid regex",
+            ),
+            (
+                "disabled-user-rule-bad-regex",
+                r#"
+[cleaning]
+disabled_rules = ["broken"]
+
+[[rules.user]]
+name = "broken"
+pattern = "(unclosed"
+replacement = "x"
+"#,
+                "invalid regex",
+            ),
+        ] {
+            let path = write_fixture(name, toml);
+            let err = load_from_path(&path).expect_err(name);
+            let message = format!("{err:#}");
+            assert!(message.contains(expected_error), "{name}: {message}");
+            assert!(
+                message.contains(&path.display().to_string()),
+                "{name}: config path missing from {message}"
+            );
+        }
     }
 
     #[test]
@@ -556,22 +571,6 @@ replacement = "hello"
             config.cleaning.disabled_rules,
             vec!["custom-hello".to_string()]
         );
-    }
-
-    #[test]
-    fn disabling_a_user_rule_does_not_hide_an_invalid_regex() {
-        let toml = r#"
-[cleaning]
-disabled_rules = ["broken"]
-
-[[rules.user]]
-name = "broken"
-pattern = "(unclosed"
-replacement = "x"
-"#;
-        let path = write_fixture("disabled-user-rule-bad-regex", toml);
-        let err = load_from_path(&path).expect_err("every configured regex must be valid");
-        assert!(format!("{err:#}").contains("invalid regex"));
     }
 
     #[test]

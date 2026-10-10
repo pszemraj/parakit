@@ -890,20 +890,21 @@ mod tests {
 
     #[test]
     #[cfg(target_os = "linux")]
-    fn evdev_readiness_allows_denied_non_candidates() {
-        let report = evdev_report_with_hotkey_keyboards(1);
+    fn evdev_readiness_requires_a_candidate_but_allows_denied_non_candidates() {
+        for (name, hotkey_keyboards, ready, status) in [
+            ("denied non-candidates are allowed", 1, true, "ready"),
+            (
+                "hotkey candidate is required",
+                0,
+                false,
+                "no keyboard candidates",
+            ),
+        ] {
+            let report = evdev_report_with_hotkey_keyboards(hotkey_keyboards);
 
-        assert!(report.grab_likely_available());
-        assert_eq!(report.status_label(), "ready");
-    }
-
-    #[test]
-    #[cfg(target_os = "linux")]
-    fn evdev_readiness_still_requires_hotkey_candidate() {
-        let report = evdev_report_with_hotkey_keyboards(0);
-
-        assert!(!report.grab_likely_available());
-        assert_eq!(report.status_label(), "no keyboard candidates");
+            assert_eq!(report.grab_likely_available(), ready, "{name}");
+            assert_eq!(report.status_label(), status, "{name}");
+        }
     }
 
     #[cfg(target_os = "macos")]
