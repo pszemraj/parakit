@@ -372,10 +372,6 @@ fn configure_blas(cfg: &mut cmake::Config) -> BlasConfig {
     }
 
     println!(
-        "cargo:rustc-env=PARAKIT_BUILD_BLAS_REQUEST={}",
-        blas.requested
-    );
-    println!(
         "cargo:rustc-env=PARAKIT_BUILD_BLAS_SELECTED={}",
         blas.selected
     );
