@@ -29,6 +29,8 @@ Parakit's integration changes below also remove competing native compilation and
 
 Ordinary transcription retains a default single-pass duration cap of 300 seconds, subject to the orchestrator's memory policy. The dependency update therefore brings its orchestration and gap repair without forcing every dictation into 30-second windows. See the [strategy resolver](https://github.com/CrispStrobe/CrispASR/blob/v0.8.42/src/parakeet_orchestrate.cpp#L525-L594).
 
+Gap repair checks the word timeline for uncovered spans at the beginning, middle and end of the input. With upstream defaults it retries gaps of at least three seconds in windows no longer than approximately 30 seconds, with 0.2 seconds of surrounding context and at most two repair rounds. This is directly relevant to occasional missing sentences in longer dictations. It is a mitigation, not evidence that every previously reported omission is fixed: smaller gaps, inaccurate timestamps and speech absent from the captured PCM remain outside that guarantee. Nonempty text without word timings bypasses repair. See the [gap detection](https://github.com/CrispStrobe/CrispASR/blob/v0.8.42/src/parakeet_orchestrate.h#L198-L237) and [repair implementation](https://github.com/CrispStrobe/CrispASR/blob/v0.8.42/src/parakeet_orchestrate.cpp#L242-L355).
+
 The separate bounded-default experiment requests approximately 30-second windows through `transcribe_chunked(pcm, 0, -1)`. It was evaluated on 29/31-second boundaries and the 55/125/265-second corpus on CPU, CUDA and Vulkan. It remains unshipped because of the recognition changes and 31-second latency regressions documented below. The supplied usage durations determined test priority; long-audio evaluation was also completed.
 
 ## Integration changes
@@ -41,7 +43,7 @@ A small C++ adapter replaces Rust's private ggml layout mirrors. It compiles aga
 
 The daemon and `transcribe-file` initialize these defaults before starting threads or opening a model. Library users can supply the variables when launching their process or call the unsafe startup initializer before threads and native initialization. `Engine::open` does not mutate these variables from an inference worker. No CLI flag or configuration key is added.
 
-Worker ownership, startup/reload warmup shapes, idle offload and the 1 GiB reload allowance are unchanged. README, CI and Parakit's version are unchanged.
+Worker ownership, startup/reload warmup shapes, idle offload and the 1 GiB reload allowance are unchanged. Parakit receives one patch increment from 0.4.1 to 0.4.2. Installation guidance now uses the validated lockfile, names the optional accelerator features and explains the installed binary's native-library dependency. CI is unchanged.
 
 ## Inputs and method
 
@@ -132,6 +134,8 @@ All three launches and five warm repetitions return empty text for one second of
 
 The 0.5-second speech slice is an inadequate quality fixture: it cuts through speech and both versions produce unrelated mixed-language text. CPU changes `Ham keine Autom.` to `I'm keine Autom.`; CUDA returns `I'm keine Autom.` in both versions, and Vulkan returns truncated variants. Nonempty output does not establish successful recognition here. Timing and memory are measured, but subsecond recognition remains unresolved without a complete utterance and an audio-checked reference. The frozen slice is retained rather than silently replaced after seeing its outputs.
 
+A separate 0.8-second candidate fixture uses the 50.8–51.6-second interval of the 55-second memo. Old and shipping production workers all return `Yeah.` on CPU, CUDA and Vulkan, with clean main-daemon activity guards. These six functional checks add no timing claim. Listening confirmation that the crop contains the complete utterance is still pending; timestamp selection and agreement between runtimes cannot establish that on their own.
+
 ## Bounded-default experiment
 
 The isolated `transcribe_chunked(pcm, 0, -1)` route does not improve the 31-second boundary case. Ordinary v0.8.42 ends the relevant phrase with `forever`, matching the supplied full-memo reference. Bounded mode instead returns `for a virtual` on every backend, consistently across launches and repetitions. The cut lacks an independently checked short reference, but this new wording is sufficient reason to withhold adoption.
@@ -198,6 +202,8 @@ The unchanged lockfile failed Rust 1.87 because image 0.25.10 requires 1.88. Wit
 
 CPU worker smokes for both old and new runtimes passed on the real 55-second memo and match the supplied reference apart from capitalization. Quiet output, missing-model handling, isolated cache commands and ELF library resolution passed. ELF uses RPATH rather than RUNPATH. Unix quantizer help executes using the same sibling-library environment as the existing fetch helper; converter source still accepts `--nemo` and `--output`. No model conversion was attempted.
 
+A separate CPU release build with `PARAKIT_BLAS=off` also passes the real 55-second worker simulation, matching the supplied reference apart from capitalization. Its CMake cache confirms `GGML_BLAS=OFF` and `CRISPASR_MEL_BLAS=OFF`; ELF resolution and the process library map select that build's matching CrispASR/ggml libraries, with no BLAS library dependency. The installed daemon's activity guard remained clean. This is a functional fallback check, not a performance comparison with the OpenBLAS builds. The rebuilt binary reports Parakit 0.4.2, matching the manifest and locked package version.
+
 Fresh CPU/CUDA/Vulkan release daemons also transcribed the 8.2-second fixture with both weight-copy variables absent from their launch environment. They selected CPU, CUDA0 and Vulkan1 respectively and produced the expected text. The CPU `transcribe-file` example passed the same check. Setting both variables explicitly to `1` preserved the transcript and increased CPU host HWM from 932 to 1,091 MiB, corroborating that explicit overrides remain effective. These are functional checks, not additional latency samples. Main-daemon monitoring remained clean and its dictation count stayed unchanged.
 
 Lifecycle tests cover release during reload, queued capture, failed reload and recovery, shutdown during loading/inference, and destruction outside the activity lock. Low-memory guard fixtures exercise policy, not actual VRAM exhaustion. Production repeated offload/reload measurements pass on each Linux backend with the lower-memory controls set to zero.
@@ -219,6 +225,6 @@ The implementation uses ordinary transcription and the approved lower-memory def
 Final acceptance remains paused on:
 
 - Audio review of the four added words in the 125-second recording. Ordinary recognition agrees with the baseline on the other measured long inputs.
-- A complete subsecond utterance and audio-checked reference; the frozen clipped-speech fixture cannot establish this quality requirement. Short cuts also lack independent audio-checked references.
+- Listening confirmation of the separate 0.8-second utterance and its reference; all six old/new Linux worker checks return `Yeah.`, but the original clipped-speech fixture cannot establish this quality requirement. Short cuts also lack independent audio-checked references.
 
 Native macOS/Windows inference and packaging remain for laptop testing. Actual allocation exhaustion and populated-cache startup were not evaluated. The branch is prepared for review without pushing or merging; passing compilation and the completed measurements do not constitute full recognition acceptance.

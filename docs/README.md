@@ -22,5 +22,6 @@
 
 - [dev/architecture.md](dev/architecture.md) - module map and platform work.
 - [dev/quality.md](dev/quality.md) - validation and quality checks.
-- [dev/memory.md](dev/memory.md) - Linux reload measurements and allocation ownership.
+- [dev/memory.md](dev/memory.md) - historical Linux reload measurements and current loader accounting.
+- [dev/crispasr-upgrade.md](dev/crispasr-upgrade.md) - CrispASR v0.8.42 upgrade rationale, measurements, and acceptance status.
 - [dev/README.md](dev/README.md) - maintainer notes.
