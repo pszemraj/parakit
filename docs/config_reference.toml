@@ -397,6 +397,16 @@ backend = "auto"
 # The library treats a value starting with 0 as off, and any other value, including an empty string or an absent variable, as on.
 # To use another value, set it in the environment that launches parakit. The model is opened by that same process, and a change made while it runs has no effect. There is no config key or command-line flag for it.
 
+# CUDA_VISIBLE_DEVICES
+# CUDA builds. Read by the CUDA runtime, not by parakit. A comma-separated list of NVIDIA GPU indices or UUIDs that the process may use, so a single index pins inference to that GPU.
+# An empty value hides every GPU: daemon.device "auto" then runs on the CPU and "gpu" fails at startup. `parakit --verbose doctor` lists the devices that remain visible.
+# There is no per-device config key or command-line flag, because the Parakeet backend ignores CrispASR's device index.
+
+# GGML_VK_VISIBLE_DEVICES
+# Vulkan builds. Read by ggml's Vulkan backend, not by parakit. A comma-separated list of indices into the Vulkan driver's physical-device list (the GPU0, GPU1 order of `vulkaninfo --summary`), so a single index pins inference to that device.
+# The Vulkan0, Vulkan1 names in `parakit --verbose doctor` number only the visible devices, so they can differ from these indices.
+# An index the driver does not report disables the Vulkan backend: daemon.device "auto" then runs on the CPU and "gpu" fails at startup.
+
 # HF_ENDPOINT
 # Base URL that replaces https://huggingface.co for the default model download, `parakit fetch <repo>`, and `parakit fetch --from-source`. This includes the download the daemon runs at startup when no model is set.
 # A blank value means the default. Trailing slashes are trimmed. It does not apply to `parakit fetch <url>`.

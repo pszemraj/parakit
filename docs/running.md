@@ -55,7 +55,7 @@ parakit start --device gpu
 
 `--device cpu` opens the session with GPU use disabled. `--device gpu` requests the GPU path and, on bundled builds, fails before model load if ggml reports no discrete or integrated GPU device. On system-library builds without the bundled ggml probe, `--device gpu` continues with a warning because parakit cannot verify device visibility before opening the session.
 
-Per-device CLI selection is not exposed. The Parakeet backend currently ignores CrispASR's `gpu_device` field, so pinning remains backend-specific environment configuration:
+Per-device selection has no flag or config key because the Parakeet backend ignores CrispASR's `gpu_device` field. Pin a device with the backend's environment variable, whose format is in [config_reference.toml](config_reference.toml):
 
 ```bash
 CUDA_VISIBLE_DEVICES=0 parakit start --device gpu
