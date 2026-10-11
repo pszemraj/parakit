@@ -143,9 +143,11 @@ Use 5 to 10 real clips that cover:
 
 Compare against:
 
-1. NeMo or another trusted Parakeet reference implementation.
+1. NVIDIA's official Parakeet-TDT-0.6B-v3 through NeMo on the same WAV inputs.
 2. parakit with an F16 GGUF model.
 3. parakit with the cached Q8_0 GGUF model.
+
+Use the official implementation's output as the model reference. Previous Parakit/CrispASR output is a regression baseline, not ground truth; matching it does not establish correct recognition. Label human audio-reviewed transcripts separately, and use the recording to adjudicate what was actually spoken when outputs differ. A full-recording transcript does not establish recognition at the boundaries of a shorter crop.
 
 Acceptable differences:
 

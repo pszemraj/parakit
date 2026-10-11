@@ -54,7 +54,7 @@ The unchanged copied installed Q8 model is 745,121,632 bytes and contains `parak
 
 The supplied usage EDA reports a median capture of 8.24 seconds, P75 of 16.56 seconds and P90 of 29.28 seconds. Captures of at least 30 seconds are 9.5% of entries. Everyday 2/5/8.2/15/25-second cases take priority, with 29/31-second boundaries, subsecond speech and silence also included. Long coverage inputs are two real recordings of 55.36 and 125.48 seconds, plus a clearly labeled 265-second repeated-audio stress input. The latter is not an independent natural dictation.
 
-The supplied 55-second reference is frozen locally. A complete audio-checked reference is not available for the 125-second recording; the user reviewed its disputed longer excerpt as described below. Raw text is compared before cleanup, and voiced fixtures must produce expected content. Capitalization and punctuation alone do not fail quality.
+The supplied 55-second expected text is frozen locally from the existing validation guidance. Its provenance has not been established as official NVIDIA/NeMo output or an independently audio-checked transcript, so it is historical expected text, not an authoritative reference. Old Parakit/CrispASR outputs are comparison baselines only: agreement shows unchanged output, not correct recognition. The official model reference must come from NVIDIA's original Parakeet-TDT-0.6B-v3 through NeMo on the same WAV inputs; that comparison has not been performed for this upgrade corpus. Human listening evidence is labeled separately, including the user's review of the disputed 125-second excerpt. Raw text is compared before cleanup. Nonempty output alone does not establish recognition quality; capitalization and punctuation alone do not fail quality.
 
 Measurements use the same `--threads 8` request with fixed OpenMP/OpenBLAS/MKL thread settings, the same compiler, release profile and warmup policy. Source inspection confirms that v0.6.6 stores the requested count without applying it to its ggml CPU backends, which initialize with a four-thread default. v0.8.42 applies the request to both the selected CPU backend and CPU fallback. The results therefore compare actual old/new behavior at the same user setting, including this upstream fix; they are not comparisons with an identical effective ggml CPU thread count. The CPU gains cannot be attributed solely to other kernel changes. See the [old initialization](https://github.com/CrispStrobe/CrispASR/blob/v0.6.6/src/parakeet.cpp#L1201-L1219), [old backend default](https://github.com/CrispStrobe/CrispASR/blob/v0.6.6/ggml/src/ggml-cpu/ggml-cpu.cpp#L217-L226) and [new initialization](https://github.com/CrispStrobe/CrispASR/blob/v0.8.42/src/parakeet.cpp#L3115-L3130).
 
@@ -127,9 +127,9 @@ First inference also passes the latency gate on each of these clips. Retained CP
 
 Vulkan cold readiness consistently rises from approximately 2.30–2.31 seconds to 2.74–2.82 seconds, a 19–22% regression across these independent launches. This reproduces the earlier readiness failure rather than resolving it. The user accepted this fresh-process Vulkan trade-off. Production reloads are evaluated separately; populated-cache startup performance is not established.
 
-The 2-second candidate recognizes `Um so` where the baseline returns `Um`; the supplied full-memo reference begins with those words. Other raw text on the 5/8.2/15/25-second clips agrees across versions and backends. This is limited corpus evidence, not a general accuracy improvement claim.
+The 2-second candidate recognizes `Um so` where the baseline returns `Um`; the historical full-memo expected text begins with those words. Other raw text on the 5/8.2/15/25-second clips agrees across versions and backends. These are output comparisons, not recognition-quality passes against an official reference.
 
-At 29 seconds, CPU/CUDA change `going to` to `gonna`; at 31 seconds, all three backends change `for over` to `forever`. Both candidate forms match the supplied full-memo reference. No new omission or boundary repetition appears in these ordinary-transcription outputs. Cut boundaries still lack independently audio-checked short references.
+At 29 seconds, CPU/CUDA change `going to` to `gonna`; at 31 seconds, all three backends change `for over` to `forever`. Both candidate forms match the historical full-memo expected text. Their correctness is not established by that agreement. The exact cuts still need official NeMo comparison and contextual listening checks at their boundaries.
 
 ### Silence and subsecond input
 
@@ -141,7 +141,7 @@ A separate 0.8-second fixture uses the 50.8–51.6-second interval of the 55-sec
 
 ## Bounded-default experiment
 
-The isolated `transcribe_chunked(pcm, 0, -1)` route does not improve the 31-second boundary case. Ordinary v0.8.42 ends the relevant phrase with `forever`, matching the supplied full-memo reference. Bounded mode instead returns `for a virtual` on every backend, consistently across launches and repetitions. The cut lacks an independently checked short reference, but this new wording is sufficient reason to withhold adoption.
+The isolated `transcribe_chunked(pcm, 0, -1)` route changes the 31-second boundary case. Ordinary v0.8.42 ends the relevant phrase with `forever`, matching the historical full-memo expected text. Bounded mode instead returns `for a virtual` on every backend, consistently across launches and repetitions. Without an official comparison and a contextual boundary review, this wording change remains unadjudicated. The latency failures below independently block adoption.
 
 | 31-second warm inference | Ordinary candidate | Bounded candidate |
 |---|---:|---:|
@@ -179,11 +179,11 @@ Ordinary raw output matches the baseline on the 55- and 265-second inputs across
 
 A focused CUDA production-worker replay with only `CRISPASR_GAP_FILL=0` reproduces the baseline transcript and removes the added `think that else. Uh`. The main-daemon activity guard is clean. This isolates the changed wording to the repair pass on this input; it is a functional diagnostic, not another timing sample. Gap repair remains enabled in the shipping candidate. Disabling it globally would also remove the omission mitigation being evaluated.
 
-Bounded mode substantially reduces the 265-second workspace, but its raw text also changes on all three long inputs. The 55-second result includes `order` → `before`, in addition to the 31-second boundary problem. These quality findings outweigh its stress-input memory benefit for adoption here.
+Bounded mode substantially reduces the 265-second workspace, but its raw text also changes on all three long inputs. The 55-second result includes `order` → `before`, in addition to the unadjudicated 31-second wording change. The latency failures and unresolved recognition changes preclude adoption despite its stress-input memory benefit.
 
 ## Production offload and reload
 
-The headless daemon simulation uses the real worker, immediate PTT release during reload, unchanged one-minute idle policy and three reload transitions. Four WAV inferences and four offloads occur in one process. GPU runs request automatic device selection; both GPU backends select the NVIDIA GPU. Memory analysis uses the middle half of each post-inference/offloaded interval to avoid destruction/reload boundaries. This test checks repeat equality within a process and does not replace the cross-version reference comparison.
+The headless daemon simulation uses the real worker, immediate PTT release during reload, unchanged one-minute idle policy and three reload transitions. Four WAV inferences and four offloads occur in one process. GPU runs request automatic device selection; both GPU backends select the NVIDIA GPU. Memory analysis uses the middle half of each post-inference/offloaded interval to avoid destruction/reload boundaries. This test checks repeat equality within a process and does not replace official-reference comparison or listening review.
 
 The lower-memory Vulkan candidate passes matched total-memory gates with stable post-inference residency over the three reloaded cycles. Retained GPU allocation is 837.22 MiB for the baseline and 837.66 MiB for the candidate. Both retain 14.09 MiB after offload. Reloaded post-inference host RSS is 338.70 versus 353.14 MiB. Candidate offloaded RSS ranges from 268 to 323 MiB, without continuing growth; baseline reloaded offloaded RSS is 313 MiB.
 
@@ -205,9 +205,9 @@ All three Rust checkpoints passed formatting, strict rustdoc, workspace/all-targ
 
 The unchanged lockfile failed Rust 1.87 because image 0.25.10 requires 1.88. With approval, image is locked to 0.25.9 with only its necessary moxcms, tiff and zune dependency changes. Rust 1.87 passes on the ordinary candidate, including the startup-default change, with its matching native library; the declared minimum is unchanged.
 
-CPU worker smokes for both old and new runtimes passed on the real 55-second memo and match the supplied reference apart from capitalization. Quiet output, missing-model handling, isolated cache commands and ELF library resolution passed. ELF uses RPATH rather than RUNPATH. Unix quantizer help executes using the same sibling-library environment as the existing fetch helper; converter source still accepts `--nemo` and `--output`. No model conversion was attempted.
+CPU worker smokes for both old and new runtimes passed on the real 55-second memo and match the historical expected text apart from capitalization. This checks the functional flow, not accuracy against an official reference. Quiet output, missing-model handling, isolated cache commands and ELF library resolution passed. ELF uses RPATH rather than RUNPATH. Unix quantizer help executes using the same sibling-library environment as the existing fetch helper; converter source still accepts `--nemo` and `--output`. No model conversion was attempted.
 
-A separate CPU release build with `PARAKIT_BLAS=off` also passes the real 55-second worker simulation, matching the supplied reference apart from capitalization. Its CMake cache confirms `GGML_BLAS=OFF` and `CRISPASR_MEL_BLAS=OFF`; ELF resolution and the process library map select that build's matching CrispASR/ggml libraries, with no BLAS library dependency. The installed daemon's activity guard remained clean. This is a functional fallback check, not a performance comparison with the OpenBLAS builds. The rebuilt binary reports Parakit 0.4.2, matching the manifest and locked package version.
+A separate CPU release build with `PARAKIT_BLAS=off` also passes the real 55-second worker simulation, matching the historical expected text apart from capitalization. Its CMake cache confirms `GGML_BLAS=OFF` and `CRISPASR_MEL_BLAS=OFF`; ELF resolution and the process library map select that build's matching CrispASR/ggml libraries, with no BLAS library dependency. The installed daemon's activity guard remained clean. This is a functional fallback check, not an official-reference accuracy check or a performance comparison with the OpenBLAS builds. The rebuilt binary reports Parakit 0.4.2, matching the manifest and locked package version.
 
 Fresh CPU/CUDA/Vulkan release daemons also transcribed the 8.2-second fixture with both weight-copy variables absent from their launch environment. They selected CPU, CUDA0 and Vulkan1 respectively and produced the expected text. The CPU `transcribe-file` example passed the same check. Setting both variables explicitly to `1` preserved the transcript and increased CPU host HWM from 932 to 1,091 MiB, corroborating that explicit overrides remain effective. These are functional checks, not additional latency samples. Main-daemon monitoring remained clean and its dictation count stayed unchanged.
 
@@ -227,11 +227,9 @@ macOS and Windows checks are best effort on Linux. The Windows shim branch passe
 
 ## Acceptance status
 
-The implementation uses ordinary transcription and the approved lower-memory defaults. Linux everyday first/warm inference and comparable memory gates pass, as do three production offload/reload transitions on CPU, CUDA and Vulkan. The user accepted the reproducible Vulkan fresh-process readiness regression and the approximately 143 MiB CUDA standalone post-offload exception after the 125-second clip. The corroborating production worker stays below the absolute memory gate. Bounded mode remains unshipped because of its recognition and boundary findings.
+The implementation uses ordinary transcription and the approved lower-memory defaults. Linux everyday first/warm inference and comparable memory gates pass, as do three production offload/reload transitions on CPU, CUDA and Vulkan. The user accepted the reproducible Vulkan fresh-process readiness regression and the approximately 143 MiB CUDA standalone post-offload exception after the 125-second clip. The corroborating production worker stays below the absolute memory gate. Bounded mode remains unshipped because of its latency failures and unresolved wording changes.
 
-Final acceptance remains paused on:
-
-- Short cuts still lack independently audio-checked boundary references. Standalone subsecond recognition is excluded from acceptance; the isolated tiny-crop checks exercise input handling only.
+Final recognition acceptance still requires comparison against the official NVIDIA/NeMo implementation on the same corpus, plus contextual listening checks at short-cut boundaries. Agreement with the old runtime or historical expected text does not satisfy that requirement. Standalone subsecond recognition is excluded from acceptance; the isolated tiny-crop checks exercise input handling only.
 
 The 125-second excerpt has received contextual listening review: the candidate partially recovers the real quiet aside omitted by the baseline, with imperfect wording, while preserving the clear task sentence. This is no longer an unresolved audio-review item.
 
