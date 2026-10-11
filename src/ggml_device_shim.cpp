@@ -25,8 +25,9 @@ int parakit_ggml_device_get(size_t index, ParakitGgmlDeviceInfo * info) {
 
     *info = {};
     info->kind = -1;
-    // Some Windows import libraries omit the public property accessors.
-    // Reading callbacks here makes the native compiler own their layout.
+    // The public property accessors live in ggml-base, which Parakit does not
+    // link directly. Reading the callbacks here leaves their layout to the
+    // native compiler and the selected headers.
     if (device->iface.get_name != nullptr) {
         info->name = device->iface.get_name(device);
     }
