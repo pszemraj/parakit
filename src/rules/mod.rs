@@ -45,7 +45,6 @@ mod engine;
 mod numbers;
 mod passes;
 #[cfg(test)]
-#[path = "tests.rs"]
 mod tests;
 mod user;
 
