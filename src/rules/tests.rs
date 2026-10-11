@@ -640,6 +640,21 @@ fn final_period_removal_is_off_by_default_and_can_be_enabled() {
 }
 
 #[test]
+fn final_period_removal_keeps_other_terminal_punctuation() {
+    let messaging = cleaner_messaging_default(CleaningProfile::Safe);
+    for (input, expected) in [
+        ("Is it done?", "Is it done?"),
+        ("That is great!", "That is great!"),
+        ("Really?!", "Really?!"),
+        ("Was it rewritten, etc.?", "Was it rewritten, etc.?"),
+        ("Hmm...", "Hmm..."),
+        (".", ""),
+    ] {
+        assert_eq!(messaging.clean_text(input), expected, "{input:?}");
+    }
+}
+
+#[test]
 fn dangling_connective_matrix() {
     assert_clean_cases(
         CleaningProfile::Safe,

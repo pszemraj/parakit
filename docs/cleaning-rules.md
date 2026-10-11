@@ -24,7 +24,7 @@ The `aggressive` profile includes every safe pass and adds stylistic deletion of
 parakit start --cleaning-profile aggressive
 ```
 
-A single terminal period is removed by default because parakit primarily targets messaging-style dictation. Preserve it when the target context expects conventional prose punctuation:
+A single terminal period is removed by default because parakit primarily targets messaging-style dictation. A final `?`, `!`, or ellipsis is kept. Preserve the period when the target context expects conventional prose punctuation:
 
 ```bash
 parakit start --keep-trailing-period

@@ -239,7 +239,7 @@ number_threshold = 4
 #   fix-trim (safe): trim leading and trailing whitespace.
 #   fix-leading-comma (safe): remove one comma left at the start.
 #   capitalize-sentence-starts (safe): capitalize sentence starts, leaving tokens that contain "." or "@", URLs, and tokens with inner capitals alone.
-#   fix-trailing-period (messaging-default): remove one final ".".
+#   fix-trailing-period (messaging-default): remove one final "." that is not part of an ellipsis; "?" and "!" are kept.
 disabled_rules = []
 
 

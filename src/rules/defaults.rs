@@ -325,9 +325,9 @@ pub(crate) const DEFAULT_RULES: &[Rule] = &[
     ),
     regex_rule!(
         "fix-trailing-period",
-        "Drop one terminal period for messaging-style output unless explicitly kept",
+        "Drop one terminal period, but not an ellipsis, for messaging-style output unless explicitly kept",
         Activation::DropTrailingPeriod,
-        r#"\.$"#,
-        ""
+        r#"(^|[^.])\.$"#,
+        "$1"
     ),
 ];
