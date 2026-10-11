@@ -4,7 +4,60 @@ The branch pins [CrispASR v0.8.42](https://github.com/CrispStrobe/CrispASR/relea
 at `3be8bcb4390b8080dc73f807b7abb34dc0aca9c3`. Ordinary transcription remains
 the shipping path. The reviewed lower-memory controls are now startup defaults;
 explicit environment overrides are preserved. Linux acceptance remains pending
-on the final memory and recognition findings below.
+on the recognition findings below; the measured memory exception and Vulkan
+cold-start trade-off have been accepted.
+
+## Why this release and what changes at runtime
+
+The upgrade brings Parakit's native runtime, ggml and Rust bindings to one
+tagged release. The reasons extend beyond memory measurements:
+
+- **Session behavior:** Ordinary non-Japanese Parakeet transcription now uses
+  the shared orchestrator, including memory-aware strategy selection and
+  post-decode gap repair. This changes recognition behavior even though
+  Parakit keeps calling ordinary `transcribe`. The four added words in the
+  125-second comparison demonstrate the new gap-repair route; their correctness
+  still needs audio review. See the
+  [pinned session dispatch](https://github.com/CrispStrobe/CrispASR/blob/v0.8.42/src/crispasr_c_api.cpp#L6201-L6252).
+- **Allocation handling:** The encoder checks its estimated allocation against
+  available physical memory before constructing an unsafe full-attention graph.
+  This is separate from strategy selection and does not establish recovery
+  from every GPU allocation failure. See the
+  [allocation guard](https://github.com/CrispStrobe/CrispASR/blob/v0.8.42/src/parakeet.cpp#L1008-L1030).
+- **Model loading:** The newer loader uses mmap by default, changing loading
+  and host residency accounting. Repeated offload/reload was therefore tested
+  explicitly. This report does not attribute a mapping leak to the old pin.
+  See the
+  [loader default](https://github.com/CrispStrobe/CrispASR/blob/v0.8.42/src/core/gguf_loader.cpp#L499-L504).
+- **Backend compatibility:** The ggml update includes the restored Metal
+  matrix-multiplication kernel needed to avoid an abort on affected Apple GPUs.
+  This is an upstream fix to validate on the laptop, not a locally demonstrated
+  Mac result. See the
+  [v0.8.42 release](https://github.com/CrispStrobe/CrispASR/releases/tag/v0.8.42).
+- **Model correctness:** The release includes the corrected default for missing
+  Parakeet v3 encoder-scaling metadata. The unchanged daily Q8 model already
+  explicitly disables that scaling, so this fix does not establish an accuracy
+  improvement for this artifact. See the
+  [metadata fallback](https://github.com/CrispStrobe/CrispASR/blob/v0.8.42/src/parakeet.cpp#L373-L386).
+
+Parakit's integration changes below also remove competing native compilation
+and replace its private ggml layout assumptions. Those changes make the chosen
+runtime and device-query ABI consistent across the native and Rust components.
+
+### Long-audio behavior shipped
+
+Ordinary transcription retains a default single-pass duration cap of 300
+seconds, subject to the orchestrator's memory policy. The dependency update
+therefore brings its orchestration and gap repair without forcing every
+dictation into 30-second windows. See the
+[strategy resolver](https://github.com/CrispStrobe/CrispASR/blob/v0.8.42/src/parakeet_orchestrate.cpp#L525-L594).
+
+The separate bounded-default experiment requests approximately 30-second
+windows through `transcribe_chunked(pcm, 0, -1)`. It was evaluated on 29/31-second
+boundaries and the 55/125/265-second corpus on CPU, CUDA and Vulkan. It remains
+unshipped because of the recognition changes and 31-second latency regressions
+documented below. The supplied usage durations determined test priority;
+long-audio evaluation was also completed.
 
 ## Integration changes
 
