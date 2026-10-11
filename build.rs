@@ -80,6 +80,7 @@ fn main() {
     let bundled = cargo_feature("bundled");
     build_alsa_silencer(cargo_feature("daemon"));
     native_link::emit_cpp_runtime();
+    native_link::warn_if_sys_native_build_ran();
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
     if bundled {
         native_link::build_device_shim(&locate_source(&manifest_dir));

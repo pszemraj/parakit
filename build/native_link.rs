@@ -12,6 +12,21 @@ pub(crate) fn emit_cpp_runtime() {
     }
 }
 
+/// Warn when crispasr-sys located or built its own CrispASR library.
+///
+/// Only crispasr-sys's build script publishes `LIB_DIR` link metadata, and
+/// the repository's Cargo `links` override replaces that script. The
+/// variable therefore means Cargo did not load `.cargo/config.toml`, usually
+/// because it ran outside the repository root.
+pub(crate) fn warn_if_sys_native_build_ran() {
+    if let Some(dir) = env::var_os("DEP_CRISPASR_LIB_DIR") {
+        println!(
+            "cargo:warning=crispasr-sys used its own CrispASR build at {}; run Cargo from the parakit repository root so .cargo/config.toml leaves native compilation to parakit",
+            Path::new(&dir).display()
+        );
+    }
+}
+
 /// Emit the explicit external library directory followed by system prefixes.
 ///
 /// # Arguments
