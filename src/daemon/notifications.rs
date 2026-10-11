@@ -2,14 +2,29 @@
 
 #[cfg(target_os = "macos")]
 use anyhow::Context;
-use std::sync::Arc;
+use std::sync::{mpsc, Arc};
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use std::time::Duration;
 
+const NOTIFICATION_QUEUE_CAPACITY: usize = 16;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+const NOTIFICATION_TIMEOUT: Duration = Duration::from_secs(3);
+
+#[cfg(target_os = "macos")]
+use super::subprocess::wait_with_timeout;
 use super::{audio::MicInfo, logging::Logger};
 
 /// Thin notification wrapper with stderr logging fallback.
 #[derive(Clone)]
 pub(crate) struct Notifier {
     log: Arc<Logger>,
+    delivery: Option<mpsc::SyncSender<NotificationMessage>>,
+}
+
+/// One desktop message waiting in the bounded delivery queue.
+pub(crate) struct NotificationMessage {
+    pub(crate) summary: String,
+    pub(crate) body: String,
 }
 
 impl Notifier {
@@ -23,7 +38,37 @@ impl Notifier {
     ///
     /// A notifier that falls back to verbose logging when notifications fail.
     pub(crate) fn new(log: Arc<Logger>) -> Self {
-        Self { log }
+        let delivery = start_desktop_delivery(&log);
+        Self { log, delivery }
+    }
+
+    /// Build a notifier that deliberately emits no desktop messages.
+    ///
+    /// # Returns
+    ///
+    /// A notifier that ignores all messages.
+    pub(crate) fn silent(log: Arc<Logger>) -> Self {
+        Self {
+            log,
+            delivery: None,
+        }
+    }
+
+    /// Build a notifier using the production queue without desktop delivery.
+    ///
+    /// # Returns
+    ///
+    /// The notifier and a receiver for its queued messages.
+    #[cfg(test)]
+    pub(crate) fn test_channel(log: Arc<Logger>) -> (Self, mpsc::Receiver<NotificationMessage>) {
+        let (sender, receiver) = mpsc::sync_channel(NOTIFICATION_QUEUE_CAPACITY);
+        (
+            Self {
+                log,
+                delivery: Some(sender),
+            },
+            receiver,
+        )
     }
 
     /// Notify that a transcript was copied without sending a paste chord.
@@ -42,6 +87,48 @@ impl Notifier {
     /// * `reason` - Short reason for the block.
     pub(crate) fn paste_blocked(&self, reason: impl AsRef<str>) {
         self.show("Paste blocked", reason.as_ref());
+    }
+
+    /// Notify that a posted paste could not be confirmed.
+    pub(crate) fn paste_unconfirmed(&self, reason: impl AsRef<str>) {
+        self.show("Paste unconfirmed", reason.as_ref());
+    }
+
+    /// Notify that insertion aborted with an operational error.
+    pub(crate) fn insertion_failed(&self, typed_chars: Option<usize>) {
+        self.show("Insertion failed", insertion_failure_body(typed_chars));
+    }
+
+    /// Notify that an offloaded model could not be reopened at PTT start.
+    ///
+    /// # Arguments
+    ///
+    /// * `error` - Saved model reload error.
+    pub(crate) fn model_unavailable(&self, error: impl AsRef<str>) {
+        self.show("Model unavailable", model_unavailable_body(error.as_ref()));
+    }
+
+    /// Notify that low free GPU memory moved a model reload onto CPU.
+    pub(crate) fn model_reloaded_on_cpu(&self) {
+        self.show(
+            "Low GPU memory",
+            "Not enough GPU memory was free to reload the model, so it runs on CPU until the next idle offload. Free GPU memory, or set model_idle_minutes = 0 to keep the model on the GPU.",
+        );
+    }
+
+    /// Notify that both model reload attempts failed and the capture was discarded.
+    ///
+    /// # Arguments
+    ///
+    /// * `error` - Saved model reload error.
+    pub(crate) fn dictation_discarded(&self, error: impl AsRef<str>) {
+        self.show(
+            "Dictation discarded",
+            format!(
+                "{}. The model could not be reloaded; the next push-to-talk will retry.",
+                error.as_ref()
+            ),
+        );
     }
 
     /// Notify that microphone capture failed and the daemon is trying to reopen it.
@@ -66,31 +153,107 @@ impl Notifier {
     }
 
     fn show(&self, summary: &str, body: impl AsRef<str>) {
-        if let Err(err) = show_notification(summary, body.as_ref()) {
-            self.log
-                .verbose(format!("parakit: desktop notification failed: {err:#}"));
+        if let Some(delivery) = &self.delivery {
+            let message = NotificationMessage {
+                summary: summary.to_owned(),
+                body: body.as_ref().to_owned(),
+            };
+            if let Err(error) = delivery.try_send(message) {
+                self.log.verbose(format!(
+                    "parakit: desktop notification queue unavailable: {error}"
+                ));
+            }
         }
     }
 }
 
+fn start_desktop_delivery(log: &Arc<Logger>) -> Option<mpsc::SyncSender<NotificationMessage>> {
+    let (sender, receiver) = mpsc::sync_channel(NOTIFICATION_QUEUE_CAPACITY);
+    let worker_log = Arc::clone(log);
+    match std::thread::Builder::new()
+        .name("parakit-notification".into())
+        .spawn(move || deliver_notifications(receiver, &worker_log, show_notification))
+    {
+        Ok(_) => Some(sender),
+        Err(error) => {
+            log.verbose(format!(
+                "parakit: could not start desktop notification worker: {error}"
+            ));
+            None
+        }
+    }
+}
+
+fn deliver_notifications(
+    receiver: mpsc::Receiver<NotificationMessage>,
+    log: &Logger,
+    mut deliver: impl FnMut(&str, &str) -> anyhow::Result<()>,
+) {
+    while let Ok(message) = receiver.recv() {
+        if let Err(error) = deliver(&message.summary, &message.body) {
+            log.verbose(format!("parakit: desktop notification failed: {error:#}"));
+        }
+    }
+}
+
+fn insertion_failure_body(typed_chars: Option<usize>) -> String {
+    match typed_chars {
+        Some(chars) => format!(
+            "Direct typing stopped after {chars} characters. Check the target before retrying."
+        ),
+        None => "Check the target before retrying.".to_string(),
+    }
+}
+
+fn model_unavailable_body(error: &str) -> String {
+    format!("{error}. Reload will retry before transcription.")
+}
+
 #[cfg(target_os = "linux")]
 fn show_notification(summary: &str, body: &str) -> anyhow::Result<()> {
-    notify_rust::Notification::new()
-        .appname("parakit")
-        .summary(summary)
-        .body(body)
-        .show()?;
+    let mut notification = notify_rust::Notification::new();
+    notification.appname("parakit").summary(summary).body(body);
+    notification_with_timeout(notification.show_async(), NOTIFICATION_TIMEOUT)??;
     Ok(())
+}
+
+/// Poll the nonblocking D-Bus future on the delivery thread, dropping it at
+/// the deadline so a stalled connection or reply cannot wedge the queue.
+#[cfg(target_os = "linux")]
+fn notification_with_timeout<F: std::future::Future>(
+    future: F,
+    timeout: Duration,
+) -> anyhow::Result<F::Output> {
+    use std::task::{Context, Poll, Wake, Waker};
+
+    struct DeliveryWake(std::thread::Thread);
+    impl Wake for DeliveryWake {
+        fn wake(self: Arc<Self>) {
+            self.0.unpark();
+        }
+    }
+
+    let deadline = std::time::Instant::now() + timeout;
+    let waker = Waker::from(Arc::new(DeliveryWake(std::thread::current())));
+    let mut context = Context::from_waker(&waker);
+    let mut future = std::pin::pin!(future);
+    loop {
+        anyhow::ensure!(
+            std::time::Instant::now() < deadline,
+            "desktop notification timed out"
+        );
+        if let Poll::Ready(result) = future.as_mut().poll(&mut context) {
+            return Ok(result);
+        }
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        std::thread::park_timeout(remaining);
+    }
 }
 
 /// Show a macOS Notification Center banner through `osascript`.
 ///
-/// This runs `osascript` synchronously. `display notification` returns
-/// quickly (it does not wait for user interaction), and this call already
-/// happens on the worker thread after insertion has resolved, so blocking
-/// briefly here does not add to dictation latency; a synchronous call also
-/// keeps failures visible to the caller for the existing verbose-log
-/// fallback instead of silently dropping them in a detached thread.
+/// Delivery runs on the notifier thread, and the subprocess is bounded so one
+/// unavailable helper cannot prevent later notifications indefinitely.
 #[cfg(target_os = "macos")]
 fn show_notification(summary: &str, body: &str) -> anyhow::Result<()> {
     let script = format!(
@@ -98,11 +261,14 @@ fn show_notification(summary: &str, body: &str) -> anyhow::Result<()> {
         applescript_quote(body),
         applescript_quote(summary)
     );
-    let status = std::process::Command::new("osascript")
+    let mut child = std::process::Command::new("osascript")
         .arg("-e")
         .arg(&script)
-        .status()
+        .spawn()
         .context("could not spawn osascript for desktop notification")?;
+    let status = wait_with_timeout(&mut child, NOTIFICATION_TIMEOUT)
+        .context("could not query osascript notification status")?
+        .context("osascript notification timed out")?;
     anyhow::ensure!(status.success(), "osascript exited with {status}");
     Ok(())
 }
@@ -141,6 +307,126 @@ fn applescript_quote(s: &str) -> String {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod message_tests {
+    use super::*;
+    use crate::daemon::logging::LogLevel;
+
+    #[test]
+    fn insertion_failure_reports_direct_typing_progress_without_history_advice() {
+        assert_eq!(
+            insertion_failure_body(Some(3)),
+            "Direct typing stopped after 3 characters. Check the target before retrying."
+        );
+        assert_eq!(
+            insertion_failure_body(None),
+            "Check the target before retrying."
+        );
+    }
+
+    #[test]
+    fn model_reload_notice_uses_one_retry_message() {
+        assert_eq!(
+            model_unavailable_body("reload failed"),
+            "reload failed. Reload will retry before transcription."
+        );
+    }
+
+    #[test]
+    fn queued_notifications_are_delivered_in_order() {
+        let (sender, receiver) = mpsc::sync_channel(3);
+        for summary in ["first", "second", "third"] {
+            sender
+                .send(NotificationMessage {
+                    summary: summary.to_string(),
+                    body: String::new(),
+                })
+                .unwrap();
+        }
+        drop(sender);
+
+        let log = Logger::new(LogLevel::Quiet);
+        let mut delivered = Vec::new();
+        deliver_notifications(receiver, &log, |summary, _| {
+            delivered.push(summary.to_string());
+            Ok(())
+        });
+
+        assert_eq!(delivered, ["first", "second", "third"]);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn notification_deadline_completes_and_honors_wakes() {
+        assert_eq!(
+            notification_with_timeout(std::future::ready(7), Duration::from_secs(1)).unwrap(),
+            7
+        );
+        let mut first_poll = true;
+        let future = std::future::poll_fn(|context| {
+            if first_poll {
+                first_poll = false;
+                context.waker().wake_by_ref();
+                std::task::Poll::Pending
+            } else {
+                std::task::Poll::Ready(9)
+            }
+        });
+        assert_eq!(
+            notification_with_timeout(future, Duration::from_secs(1)).unwrap(),
+            9
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn stalled_notification_times_out_and_later_messages_are_delivered() {
+        let (sender, receiver) = mpsc::sync_channel(2);
+        for summary in ["stalled", "next"] {
+            sender
+                .send(NotificationMessage {
+                    summary: summary.to_string(),
+                    body: String::new(),
+                })
+                .unwrap();
+        }
+        drop(sender);
+
+        let dropped = std::cell::Cell::new(false);
+        struct DropNotice<'a>(&'a std::cell::Cell<bool>);
+        impl Drop for DropNotice<'_> {
+            fn drop(&mut self) {
+                self.0.set(true);
+            }
+        }
+
+        let timeout = Duration::from_millis(20);
+        let started = std::time::Instant::now();
+        let log = Logger::new(LogLevel::Quiet);
+        let mut delivered = Vec::new();
+        deliver_notifications(receiver, &log, |summary, _| {
+            if summary == "stalled" {
+                let notice = DropNotice(&dropped);
+                let future = async move {
+                    let _notice = notice;
+                    std::future::pending::<()>().await;
+                };
+                let error = notification_with_timeout(future, timeout).unwrap_err();
+                assert!(error.to_string().contains("timed out"));
+                return Err(error);
+            }
+            assert!(dropped.get(), "timed-out delivery must be cancelled");
+            notification_with_timeout(std::future::ready(()), timeout)?;
+            delivered.push(summary.to_string());
+            Ok(())
+        });
+
+        assert_eq!(delivered, ["next"]);
+        assert!(started.elapsed() >= timeout);
+        assert!(started.elapsed() < Duration::from_secs(1));
+    }
 }
 
 #[cfg(all(test, target_os = "macos"))]

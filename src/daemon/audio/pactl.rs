@@ -1,8 +1,12 @@
 //! PulseAudio/PipeWire source enrichment through `pactl`.
 
+use std::io::Read;
 use std::process::{Command, Output, Stdio};
+use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
+
+use crate::daemon::subprocess::wait_with_timeout;
 
 const PACTL_TIMEOUT: Duration = Duration::from_millis(750);
 
@@ -59,24 +63,42 @@ pub(crate) fn pactl_default_source_name() -> Option<String> {
 }
 
 fn pactl_output(args: &[&str]) -> Option<Output> {
-    let mut child = Command::new("pactl")
-        .args(args)
+    let mut command = Command::new("pactl");
+    command.args(args);
+    command_output_with_timeout(&mut command, PACTL_TIMEOUT)
+}
+
+fn command_output_with_timeout(command: &mut Command, timeout: Duration) -> Option<Output> {
+    let mut child = command
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
         .ok()?;
-    let deadline = Instant::now() + PACTL_TIMEOUT;
-    loop {
-        match child.try_wait().ok()? {
-            Some(_) => return child.wait_with_output().ok(),
-            None if Instant::now() >= deadline => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return None;
-            }
-            None => thread::sleep(Duration::from_millis(10)),
-        }
+    let mut stdout = child.stdout.take()?;
+    let (sender, receiver) = mpsc::sync_channel(1);
+    if thread::Builder::new()
+        .name("pactl-stdout".into())
+        .spawn(move || {
+            let mut bytes = Vec::new();
+            let _ = sender.send(stdout.read_to_end(&mut bytes).map(|_| bytes));
+        })
+        .is_err()
+    {
+        let _ = child.kill();
+        let _ = child.wait();
+        return None;
     }
+    let deadline = Instant::now() + timeout;
+    let status = wait_with_timeout(&mut child, timeout).ok()??;
+    let stdout = receiver
+        .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+        .ok()?
+        .ok()?;
+    Some(Output {
+        status,
+        stdout,
+        stderr: Vec::new(),
+    })
 }
 
 fn parse_pactl_sources(text: &str) -> Vec<PactlSourceInfo> {
@@ -131,6 +153,7 @@ fn parse_sample_spec(spec: &str) -> (Option<String>, Option<u16>, Option<u32>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
 
     #[test]
     fn pactl_source_parser_extracts_description_and_rate() {
@@ -156,5 +179,70 @@ Source #43
                 sample_format: Some("s24le".to_string()),
             }
         );
+    }
+
+    #[test]
+    fn command_output_drains_large_stdout_while_waiting() {
+        const CHILD: &str = "PARAKIT_PACTL_OUTPUT_TEST_CHILD";
+        if std::env::var_os(CHILD).is_some() {
+            std::io::stdout().write_all(&vec![b'x'; 300_000]).unwrap();
+            return;
+        }
+
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        command
+            .args([
+                "--exact",
+                "daemon::audio::pactl::tests::command_output_drains_large_stdout_while_waiting",
+                "--nocapture",
+            ])
+            .env(CHILD, "1");
+        let output = command_output_with_timeout(&mut command, Duration::from_secs(1))
+            .expect("large output should not block child completion");
+
+        assert!(output.status.success());
+        assert!(output.stdout.len() >= 300_000);
+    }
+
+    #[test]
+    #[allow(clippy::zombie_processes)] // The descendant outlives its parent to hold stdout open.
+    fn command_output_stops_waiting_for_descendant_stdout() {
+        const ROLE: &str = "PARAKIT_PACTL_INHERITED_STDOUT_ROLE";
+        match std::env::var(ROLE).as_deref() {
+            Ok("descendant") => {
+                thread::sleep(Duration::from_millis(600));
+                return;
+            }
+            Ok("child") => {
+                Command::new(std::env::current_exe().unwrap())
+                    .args([
+                        "--exact",
+                        "daemon::audio::pactl::tests::command_output_stops_waiting_for_descendant_stdout",
+                        "--nocapture",
+                    ])
+                    .env(ROLE, "descendant")
+                    .spawn()
+                    .unwrap();
+                return;
+            }
+            _ => {}
+        }
+
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        command
+            .args([
+                "--exact",
+                "daemon::audio::pactl::tests::command_output_stops_waiting_for_descendant_stdout",
+                "--nocapture",
+            ])
+            .env(ROLE, "child");
+        let started = Instant::now();
+        let output = command_output_with_timeout(&mut command, Duration::from_millis(200));
+
+        assert!(
+            output.is_none(),
+            "inherited stdout should exceed the budget"
+        );
+        assert!(started.elapsed() < Duration::from_millis(450));
     }
 }

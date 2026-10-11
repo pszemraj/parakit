@@ -15,36 +15,55 @@
 //!     terminal that launched parakit.
 
 use anyhow::{Context, Result};
-use arboard::{Clipboard, ImageData};
+use arboard::Clipboard;
 use clap::ValueEnum;
 use enigo::{Enigo, Keyboard, Settings};
-#[cfg(target_os = "macos")]
-use objc2::rc::autoreleasepool;
-#[cfg(target_os = "macos")]
-use objc2_app_kit::{NSPasteboard, NSPasteboardTypeHTML, NSPasteboardTypeString};
-#[cfg(target_os = "macos")]
-use objc2_foundation::NSString;
-use std::{borrow::Cow, path::PathBuf, time::Duration};
-#[cfg(target_os = "linux")]
-use x11rb::connection::Connection as _;
-#[cfg(target_os = "linux")]
-use x11rb::protocol::xproto::ConnectionExt as _;
-#[cfg(target_os = "linux")]
-use x11rb::rust_connection::RustConnection;
+use std::{cell::RefCell, time::Duration};
 
 #[cfg(target_os = "windows")]
 use super::clipboard_restore::clipboard_history_debug;
-#[cfg(test)]
-use super::clipboard_restore::ClipboardWriteSnapshot;
-use super::clipboard_restore::{
-    sleep_if_nonzero, ClipboardRestoreGate, ClipboardRestorePlan, ClipboardWriteToken,
-    PasteConfirmation, PasteConfirmationContext, PasteTargetValue, PlatformClipboardRestoreGate,
-};
+use super::clipboard_restore::{ClipboardRestorePlan, PlatformClipboardRestoreGate};
+#[cfg(target_os = "linux")]
 use super::FocusVerification;
+
+#[path = "clipboard_guard.rs"]
+mod clipboard_guard;
+
+#[path = "clipboard_store.rs"]
+mod clipboard_store;
+#[cfg(target_os = "linux")]
+use clipboard_store::clipboard_content_unavailable;
+#[cfg(target_os = "macos")]
+pub(crate) use clipboard_store::{owned_image, restore_html_clipboard};
+pub(super) use clipboard_store::{restore_or_clear_clipboard, ClipboardSnapshot, ClipboardStore};
+
+#[path = "focus_snapshot.rs"]
+mod focus_snapshot;
+#[cfg(target_os = "linux")]
+use focus_snapshot::linux_current_input_focus;
+pub(crate) use focus_snapshot::FocusSnapshot;
+
+#[path = "paste_transaction.rs"]
+mod paste_transaction;
+use paste_transaction::{paste_with_clipboard_swap_guarded, stage_text_without_paste};
 
 #[cfg(target_os = "linux")]
 #[path = "inject_smoke.rs"]
 mod inject_smoke;
+
+#[cfg(target_os = "linux")]
+#[path = "direct.rs"]
+mod direct;
+#[cfg(target_os = "linux")]
+pub(crate) use direct::DirectTypingFailure;
+
+#[cfg(target_os = "linux")]
+#[path = "x11_paste.rs"]
+mod x11_paste;
+#[cfg(target_os = "linux")]
+use super::x11::wait_for_modifier_release;
+#[cfg(target_os = "linux")]
+use x11_paste::{linux_x11_xtest_preflight, LinuxX11Paste};
 
 /// Error label used when paste succeeded but previous clipboard restore failed.
 pub(crate) const CLIPBOARD_RESTORE_ERROR: &str = "could not restore previous clipboard contents";
@@ -98,6 +117,9 @@ pub(crate) enum PasteOutcome {
     UnsafeModifiers,
     /// No paste chord was sent and clipboard policy was applied.
     Blocked,
+    /// Clipboard contents changed or could not be verified; no replacement
+    /// paste or clipboard fallback is allowed.
+    ClipboardChanged,
 }
 
 /// Paths that never send a paste chord (staging, guard-blocked, direct
@@ -117,7 +139,8 @@ pub(crate) struct InsertionTelemetry {
     /// acknowledgement was attempted.
     pub(crate) acknowledgement_ms: Option<u128>,
     /// Whether the previous clipboard contents were restored, when the
-    /// clipboard was touched at all.
+    /// restore policy was applied. `None` also records a deliberately skipped
+    /// restore when the staged clipboard no longer matched or was unreadable.
     pub(crate) clipboard_restored: Option<bool>,
 }
 
@@ -147,24 +170,27 @@ impl InsertionTelemetry {
     fn acknowledged(
         acknowledgement_kind: &'static str,
         elapsed: Duration,
-        clipboard_restored: bool,
+        clipboard_restored: Option<bool>,
     ) -> Self {
         Self {
             paste_event_posted: true,
             acknowledgement_kind,
             acknowledgement_ms: Some(elapsed.as_millis()),
-            clipboard_restored: Some(clipboard_restored),
+            clipboard_restored,
         }
     }
 }
 
 /// Outcome of a guarded paste attempt plus its insertion telemetry.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct PasteReport {
     /// Coarse guarded-paste result.
     pub(crate) outcome: PasteOutcome,
     /// Acknowledgement and clipboard details shared with the worker report.
     pub(crate) telemetry: InsertionTelemetry,
+    /// Clipboard observation error retained for diagnostics on a safe,
+    /// non-destructive outcome.
+    pub(crate) diagnostic: Option<String>,
 }
 
 impl PasteReport {
@@ -177,55 +203,58 @@ impl PasteReport {
         Self {
             outcome,
             telemetry: InsertionTelemetry::not_applicable(paste_event_posted, clipboard_restored),
+            diagnostic: None,
         }
     }
-}
 
-/// Convert a completed clipboard-staging outcome into a [`PasteReport`].
-///
-/// Staging never sends a paste chord. [`StageOutcome::CopiedOnly`] means the
-/// transcript was intentionally left on the clipboard (no restore);
-/// [`StageOutcome::Blocked`] means the previous clipboard contents were
-/// restored.
-fn report_from_stage_outcome(outcome: StageOutcome) -> PasteReport {
-    match outcome {
-        StageOutcome::CopiedOnly => PasteReport::new(PasteOutcome::CopiedOnly, false, Some(false)),
-        StageOutcome::Blocked => PasteReport::new(PasteOutcome::Blocked, false, Some(true)),
+    fn clipboard_changed(diagnostic: Option<String>) -> Self {
+        Self {
+            outcome: PasteOutcome::ClipboardChanged,
+            telemetry: InsertionTelemetry::not_applicable(false, None),
+            diagnostic,
+        }
+    }
+
+    /// Record why the previous clipboard was not restored, unless a later
+    /// observation already explains this outcome.
+    fn with_retention_diagnostic(mut self, diagnostic: Option<String>) -> Self {
+        if self.diagnostic.is_none() {
+            self.diagnostic = diagnostic;
+        }
+        self
     }
 }
 
 /// Result of staging clipboard text without sending paste or type input.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum StageOutcome {
     /// The transcript was left on the clipboard.
     CopiedOnly,
     /// The previous clipboard policy was applied after staging.
     Blocked,
+    /// Another clipboard value was preserved instead of restoring or copying.
+    ClipboardChanged(Option<String>),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum PasteDispatch {
     Posted,
     #[cfg_attr(
-        not(target_os = "macos"),
+        not(any(target_os = "macos", target_os = "linux")),
         allow(
             dead_code,
-            reason = "only the macOS chord backend can withhold a dispatch for live modifiers"
+            reason = "only the macOS and Linux chord backends can withhold a dispatch for live modifiers"
         )
     )]
     SkippedUnsafeModifiers,
 }
 
-fn wait_for_paste_shortcut_safety() -> bool {
-    #[cfg(target_os = "macos")]
-    {
-        crate::daemon::macos::wait_for_safe_paste_modifiers()
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        true
-    }
-}
+/// Maximum time Linux batch paste waits for physical modifiers to be released.
+///
+/// Matches macOS: releasing Space before Ctrl stops a recording, and a short
+/// dictation can finish before the rest of the chord is naturally released.
+#[cfg(target_os = "linux")]
+const LINUX_PASTE_MODIFIER_RELEASE_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Clipboard retention policy after staging text for paste.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -282,415 +311,6 @@ pub(crate) fn smoke_test(mode: PasteMode) -> Result<()> {
     platform_paste_smoke_test(mode)
 }
 
-/// Minimal clipboard operations used by insertion and smoke-test paths.
-pub(super) trait ClipboardStore {
-    /// Return the current text clipboard contents.
-    ///
-    /// # Returns
-    ///
-    /// The current text clipboard value.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the clipboard is unavailable or does not hold text.
-    fn get_text(&mut self) -> Result<String>;
-    /// Replace the current text clipboard contents.
-    ///
-    /// # Returns
-    ///
-    /// `Ok(())` when the clipboard accepted the new text.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the clipboard cannot be written.
-    fn set_text(&mut self, text: String) -> Result<()>;
-
-    /// Return current HTML clipboard contents.
-    ///
-    /// # Returns
-    ///
-    /// The current HTML clipboard value.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the clipboard does not expose HTML data.
-    fn get_html(&mut self) -> Result<String>;
-
-    /// Replace the clipboard with HTML and an optional plain-text alternative.
-    ///
-    /// # Arguments
-    ///
-    /// * `html` - HTML payload to restore.
-    /// * `alt_text` - Optional plain-text alternative for targets that prefer text.
-    ///
-    /// # Returns
-    ///
-    /// `Ok(())` when the clipboard accepted the HTML data.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the clipboard cannot be written.
-    fn set_html(&mut self, html: String, alt_text: Option<String>) -> Result<()>;
-
-    /// Return current file-list clipboard contents.
-    ///
-    /// # Returns
-    ///
-    /// The current list of copied file paths.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the clipboard does not expose file-list data.
-    fn get_file_list(&mut self) -> Result<Vec<PathBuf>>;
-
-    /// Replace the clipboard with a file-list payload.
-    ///
-    /// # Returns
-    ///
-    /// `Ok(())` when the clipboard accepted the file list.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the clipboard cannot be written.
-    fn set_file_list(&mut self, files: &[PathBuf]) -> Result<()>;
-
-    /// Return current image clipboard contents.
-    ///
-    /// # Returns
-    ///
-    /// The current image clipboard value.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the clipboard does not expose image data.
-    fn get_image(&mut self) -> Result<ImageData<'static>>;
-
-    /// Replace the clipboard with image data.
-    ///
-    /// # Returns
-    ///
-    /// `Ok(())` when the clipboard accepted the image.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the clipboard cannot be written.
-    fn set_image(&mut self, image: ImageData<'static>) -> Result<()>;
-
-    /// Clear all current clipboard contents.
-    ///
-    /// # Returns
-    ///
-    /// `Ok(())` when the clipboard was cleared.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the clipboard cannot be cleared.
-    fn clear(&mut self) -> Result<()>;
-}
-
-/// Restore HTML and its optional plain-text alternative to the clipboard.
-///
-/// arboard's macOS HTML setter always surrounds the supplied HTML with a
-/// synthetic document wrapper. That is useful when copying a fresh fragment,
-/// but restoring an already-captured payload through it nests another wrapper
-/// after every dictation. Write the two native pasteboard types directly on
-/// macOS so the captured HTML is preserved verbatim.
-///
-/// # Arguments
-///
-/// * `clipboard` - Open clipboard handle used by non-macOS backends.
-/// * `html` - Captured HTML payload to restore.
-/// * `alt_text` - Optional plain-text representation of the same payload.
-///
-/// # Returns
-///
-/// `Ok(())` when every requested pasteboard representation was written.
-///
-/// # Errors
-///
-/// Returns an error if the platform clipboard rejects either representation.
-pub(crate) fn restore_html_clipboard(
-    clipboard: &mut Clipboard,
-    html: String,
-    alt_text: Option<String>,
-) -> Result<()> {
-    #[cfg(target_os = "macos")]
-    {
-        let _ = clipboard;
-        autoreleasepool(|_| {
-            let pasteboard = NSPasteboard::generalPasteboard();
-            pasteboard.clearContents();
-            // SAFETY: AppKit exports these immutable, process-lifetime
-            // pasteboard type constants whenever the linked framework is
-            // loaded.
-            let (html_type, string_type) =
-                unsafe { (NSPasteboardTypeHTML, NSPasteboardTypeString) };
-
-            if !pasteboard.setString_forType(&NSString::from_str(&html), html_type) {
-                return Err(anyhow::anyhow!(
-                    "could not write native HTML clipboard contents"
-                ));
-            }
-            if let Some(alt_text) = alt_text {
-                if !pasteboard.setString_forType(&NSString::from_str(&alt_text), string_type) {
-                    return Err(anyhow::anyhow!(
-                        "could not write native plain-text clipboard alternative"
-                    ));
-                }
-            }
-            Ok(())
-        })
-    }
-
-    #[cfg(not(target_os = "macos"))]
-    clipboard
-        .set()
-        .html(html, alt_text)
-        .context("could not write HTML clipboard contents")
-}
-
-impl ClipboardStore for Clipboard {
-    fn get_text(&mut self) -> Result<String> {
-        Clipboard::get_text(self).context("could not read system clipboard")
-    }
-
-    fn set_text(&mut self, text: String) -> Result<()> {
-        Clipboard::set_text(self, text).context("could not write system clipboard")
-    }
-
-    fn get_html(&mut self) -> Result<String> {
-        self.get()
-            .html()
-            .context("could not read HTML clipboard contents")
-    }
-
-    fn set_html(&mut self, html: String, alt_text: Option<String>) -> Result<()> {
-        restore_html_clipboard(self, html, alt_text)
-    }
-
-    fn get_file_list(&mut self) -> Result<Vec<PathBuf>> {
-        self.get()
-            .file_list()
-            .context("could not read file-list clipboard contents")
-    }
-
-    fn set_file_list(&mut self, files: &[PathBuf]) -> Result<()> {
-        self.set()
-            .file_list(files)
-            .context("could not write file-list clipboard contents")
-    }
-
-    fn get_image(&mut self) -> Result<ImageData<'static>> {
-        Clipboard::get_image(self).context("could not read image clipboard contents")
-    }
-
-    fn set_image(&mut self, image: ImageData<'static>) -> Result<()> {
-        Clipboard::set_image(self, image).context("could not write image clipboard contents")
-    }
-
-    fn clear(&mut self) -> Result<()> {
-        Clipboard::clear(self).context("could not clear system clipboard")
-    }
-}
-
-/// Focus owner captured when recording begins.
-pub(crate) struct FocusSnapshot {
-    #[cfg(target_os = "linux")]
-    input_focus: Option<u32>,
-    #[cfg(target_os = "linux")]
-    active_window: Option<u32>,
-    #[cfg(target_os = "windows")]
-    windows: super::windows_focus::WindowsFocusSnapshot,
-    #[cfg(target_os = "macos")]
-    macos: crate::daemon::macos::MacOsFocusSnapshot,
-}
-
-impl FocusSnapshot {
-    /// Capture the current focus owner for later drift checks.
-    ///
-    /// # Returns
-    ///
-    /// A focus snapshot that can be compared before insertion.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the platform focus cannot be read or has no
-    /// concrete target window.
-    pub(crate) fn capture() -> Result<Self> {
-        #[cfg(target_os = "linux")]
-        {
-            let (conn, screen_num) = RustConnection::connect(None)
-                .context("could not connect to X11 while capturing recording focus")?;
-            let root = super::x11::root_window(&conn, screen_num)
-                .context("could not read X11 root window for focus snapshot")?;
-            let focus = linux_current_input_focus(&conn)?;
-            let input_focus = linux_focus_is_insertable(focus).then_some(focus);
-            let active_window = super::x11::active_window(&conn, root)
-                .context("could not read X11 active window for focus snapshot")?;
-            if input_focus.is_none() && active_window.is_none() {
-                anyhow::bail!("X11 focus is not an insertable application window");
-            }
-            Ok(Self {
-                input_focus,
-                active_window,
-            })
-        }
-
-        #[cfg(target_os = "windows")]
-        {
-            Ok(Self {
-                windows: super::windows_focus::WindowsFocusSnapshot::capture()?,
-            })
-        }
-
-        #[cfg(target_os = "macos")]
-        {
-            Ok(Self {
-                macos: crate::daemon::macos::MacOsFocusSnapshot::capture()?,
-            })
-        }
-    }
-
-    /// Compare the current focus against this snapshot with one platform read.
-    ///
-    /// # Returns
-    ///
-    /// A verification value carrying both the telemetry label and insertion
-    /// decision for the same live focus observation.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the current focus cannot be read.
-    pub(crate) fn verify_current(&self) -> Result<FocusVerification> {
-        #[cfg(target_os = "linux")]
-        {
-            let (conn, screen_num) = RustConnection::connect(None)
-                .context("could not reconnect to X11 while checking recording focus")?;
-            let root = super::x11::root_window(&conn, screen_num)
-                .context("could not read X11 root window for focus check")?;
-            if let Some(expected) = self.active_window {
-                if let Some(current) = super::x11::active_window(&conn, root)
-                    .context("could not query the current X11 active window")?
-                {
-                    return Ok(FocusVerification::from_matches(current == expected));
-                }
-            }
-
-            let Some(expected) = self.input_focus else {
-                anyhow::bail!(
-                    "X11 active window is unavailable and no input focus fallback exists"
-                );
-            };
-            Ok(FocusVerification::from_matches(
-                linux_current_input_focus(&conn)
-                    .context("could not query the current X11 focus")?
-                    == expected,
-            ))
-        }
-
-        #[cfg(target_os = "windows")]
-        {
-            self.windows
-                .matches_current()
-                .map(FocusVerification::from_matches)
-        }
-
-        #[cfg(target_os = "macos")]
-        {
-            Ok(self.macos.verify_current())
-        }
-    }
-
-    /// Return the bundle identifier of the captured insertion target, when
-    /// the platform focus snapshot carries one.
-    ///
-    /// # Returns
-    ///
-    /// `Some` bundle identifier on macOS when the frontmost application
-    /// reported one; `None` on platforms whose focus snapshot has no
-    /// application bundle identifier concept.
-    #[cfg(target_os = "macos")]
-    pub(crate) fn target_bundle_id(&self) -> Option<&str> {
-        self.macos.bundle_id()
-    }
-
-    /// Return the bundle identifier of the captured insertion target, when
-    /// the platform focus snapshot carries one.
-    ///
-    /// # Returns
-    ///
-    /// Always `None`: Linux and Windows focus snapshots do not carry an
-    /// application bundle identifier today.
-    #[cfg(not(target_os = "macos"))]
-    pub(crate) fn target_bundle_id(&self) -> Option<&str> {
-        None
-    }
-
-    /// Return the focused Accessibility element captured for this snapshot,
-    /// when one is available for post-paste `AXValue` acknowledgement
-    /// polling.
-    ///
-    /// # Returns
-    ///
-    /// `Some` when this snapshot captured a focused Accessibility element
-    /// (see [`crate::daemon::macos::MacOsFocusSnapshot::ax_element`] for the
-    /// cases where it did not, e.g. capture-time Accessibility failure or an
-    /// application that exposes no focused element).
-    #[cfg(target_os = "macos")]
-    pub(crate) fn macos_ax_element(&self) -> Option<&crate::daemon::macos::AxElementSnapshot> {
-        self.macos.ax_element()
-    }
-
-    /// Reacquire and read the current focused macOS Accessibility value.
-    ///
-    /// # Arguments
-    ///
-    /// * `max_utf16_units` - Maximum number of UTF-16 code units copied from
-    ///   the complete value.
-    ///
-    /// # Returns
-    ///
-    /// The current bounded value and whether the live Accessibility object
-    /// is identical to the originally captured one.
-    ///
-    /// # Errors
-    ///
-    /// Returns `Err(())` when the frontmost application changed or its focus
-    /// state cannot be read.
-    #[cfg(target_os = "macos")]
-    pub(crate) fn macos_poll_current_value(
-        &self,
-        max_utf16_units: usize,
-    ) -> Result<Option<(PasteTargetValue, bool)>, ()> {
-        self.macos.poll_current_value(max_utf16_units)
-    }
-
-    /// Return the pid of the frontmost application this snapshot captured.
-    ///
-    /// # Returns
-    ///
-    /// The process id macOS reported as frontmost at capture time.
-    #[cfg(target_os = "macos")]
-    pub(crate) fn macos_pid(&self) -> libc::pid_t {
-        self.macos.pid()
-    }
-}
-
-#[cfg(target_os = "linux")]
-fn linux_focus_is_insertable(focus: u32) -> bool {
-    focus != x11rb::NONE && focus != u32::from(x11rb::protocol::xproto::InputFocus::POINTER_ROOT)
-}
-
-#[cfg(target_os = "linux")]
-fn linux_current_input_focus(conn: &RustConnection) -> Result<u32> {
-    Ok(conn
-        .get_input_focus()
-        .context("could not request current X11 input focus")?
-        .reply()
-        .context("could not read current X11 input focus")?
-        .focus)
-}
-
 /// Open a text insertion handle.
 pub struct Injector {
     enigo: Option<Enigo>,
@@ -699,6 +319,8 @@ pub struct Injector {
     clipboard_history: Option<super::windows_clipboard_history::ClipboardHistoryListener>,
     #[cfg(target_os = "linux")]
     x11_paste: Option<LinuxX11Paste>,
+    #[cfg(target_os = "linux")]
+    x11_direct: Option<LinuxX11Paste>,
 }
 
 impl Injector {
@@ -735,6 +357,8 @@ impl Injector {
             clipboard_history,
             #[cfg(target_os = "linux")]
             x11_paste: None,
+            #[cfg(target_os = "linux")]
+            x11_direct: None,
         })
     }
 
@@ -801,7 +425,8 @@ impl Injector {
     /// [`PasteOutcome::UnsafeModifiers`] when physical modifiers prevented a
     /// safe chord, or
     /// [`PasteOutcome::Blocked`] when no input was sent and the previous
-    /// clipboard was restored.
+    /// clipboard was restored, or [`PasteOutcome::ClipboardChanged`] when
+    /// competing or unreadable clipboard contents were preserved.
     ///
     /// The `UnsafeModifiers` case always keeps the transcript on the
     /// clipboard and ignores `clipboard_policy`, even when the caller asked
@@ -819,14 +444,24 @@ impl Injector {
         mode: PasteMode,
         clipboard_policy: ClipboardPolicy,
         focus: Option<&FocusSnapshot>,
-        mut before_chord: impl FnMut() -> Result<bool>,
+        before_chord: impl FnMut() -> Result<bool>,
     ) -> Result<PasteReport> {
         if mode == PasteMode::Direct {
-            if before_chord()? {
-                self.type_text(text)?;
+            #[cfg(target_os = "linux")]
+            {
+                self.type_linux_text_guarded(text, before_chord)
+                    .map_err(anyhow::Error::new)?;
                 return Ok(PasteReport::new(PasteOutcome::Pasted, true, None));
             }
-            anyhow::bail!("direct insertion blocked by safety guard");
+            #[cfg(not(target_os = "linux"))]
+            {
+                let mut before_chord = before_chord;
+                if before_chord()? {
+                    self.type_text(text)?;
+                    return Ok(PasteReport::new(PasteOutcome::Pasted, true, None));
+                }
+                anyhow::bail!("direct insertion blocked by safety guard");
+            }
         }
 
         let mut clipboard = self.take_clipboard()?;
@@ -836,12 +471,15 @@ impl Injector {
             restore_gate.paste_consume_delay(),
             &restore_gate,
         );
+        // Readiness and dispatch share the platform input backend; the
+        // transaction calls them sequentially, never re-entrantly.
+        let input = RefCell::new(&mut *self);
         let result = paste_with_clipboard_swap_guarded(
             &mut clipboard,
             text,
             mode,
-            wait_for_paste_shortcut_safety,
-            || self.paste_clipboard(mode),
+            || input.borrow_mut().wait_for_paste_shortcut_safety(),
+            || input.borrow_mut().paste_clipboard(mode),
             clipboard_settle_delay(),
             restore_plan,
             clipboard_policy,
@@ -933,6 +571,104 @@ impl Injector {
             .context("could not type text at cursor")
     }
 
+    /// Query Linux modifiers through the direct-typing connection.
+    ///
+    /// A failed query discards the cached connection so the next dictation
+    /// reopens it instead of remaining broken until restart.
+    #[cfg(target_os = "linux")]
+    fn linux_direct_modifiers_held(&mut self) -> Result<bool> {
+        if self.x11_direct.is_none() {
+            self.x11_direct = Some(LinuxX11Paste::open_for_mode(PasteMode::Direct)?);
+        }
+        let result = self
+            .x11_direct
+            .as_mut()
+            .expect("X11 modifier probe was just initialized")
+            .modifiers_held();
+        if result.is_err() {
+            self.x11_direct = None;
+        }
+        result
+    }
+
+    /// Type Linux text while checking physical modifiers and focus per character.
+    ///
+    /// # Errors
+    ///
+    /// Rejects control characters, held or unreadable modifiers, changed focus,
+    /// and failed key events. A mid-text failure stops further insertion.
+    #[cfg(target_os = "linux")]
+    fn type_linux_text_guarded(
+        &mut self,
+        text: &str,
+        before_character: impl FnMut() -> Result<bool>,
+    ) -> std::result::Result<usize, DirectTypingFailure> {
+        let input = RefCell::new(self);
+        direct::type_text_guarded(
+            text,
+            LINUX_PASTE_MODIFIER_RELEASE_TIMEOUT,
+            || input.borrow_mut().linux_direct_modifiers_held(),
+            before_character,
+            |character| {
+                let mut encoded = [0; 4];
+                input
+                    .borrow_mut()
+                    .type_text(character.encode_utf8(&mut encoded))
+            },
+        )
+    }
+
+    /// Wait until no held modifier can alter or interrupt the paste chord.
+    ///
+    /// Runs before the transaction's final focus recheck, so waiting cannot
+    /// leave a stale focus decision authorizing the chord.
+    ///
+    /// # Returns
+    ///
+    /// `false` when a modifier stayed down for the whole bounded wait.
+    #[cfg(target_os = "linux")]
+    fn wait_for_paste_shortcut_safety(&mut self) -> bool {
+        if self.x11_paste.is_none() {
+            match LinuxX11Paste::open() {
+                Ok(paste) => self.x11_paste = Some(paste),
+                // Dispatch reopens X11 and reports the connection error.
+                Err(_) => return true,
+            }
+        }
+        let paste = self
+            .x11_paste
+            .as_mut()
+            .expect("X11 paste backend was just initialized");
+        let ready = wait_for_modifier_release(LINUX_PASTE_MODIFIER_RELEASE_TIMEOUT, || {
+            paste.modifiers_held()
+        });
+        ready.unwrap_or_else(|_| {
+            // Dispatch reopens X11 and rechecks modifiers before sending input.
+            self.x11_paste = None;
+            true
+        })
+    }
+
+    /// Wait until no held modifier can alter the synthetic Cmd+V chord.
+    ///
+    /// # Returns
+    ///
+    /// `false` when a conflicting key stayed down for the whole bounded wait.
+    #[cfg(target_os = "macos")]
+    fn wait_for_paste_shortcut_safety(&mut self) -> bool {
+        crate::daemon::macos::wait_for_safe_paste_modifiers()
+    }
+
+    /// Windows sends its chord without a modifier readiness wait.
+    ///
+    /// # Returns
+    ///
+    /// Always `true`.
+    #[cfg(target_os = "windows")]
+    fn wait_for_paste_shortcut_safety(&mut self) -> bool {
+        true
+    }
+
     #[cfg(target_os = "linux")]
     fn paste_clipboard(&mut self, mode: PasteMode) -> Result<PasteDispatch> {
         if self.x11_paste.is_none() {
@@ -941,13 +677,13 @@ impl Injector {
 
         let result = self
             .x11_paste
-            .as_ref()
+            .as_mut()
             .expect("X11 paste backend was just initialized")
             .send_paste_chord(mode);
         if result.is_err() {
             self.x11_paste = None;
         }
-        result.map(|()| PasteDispatch::Posted)
+        result
     }
 
     #[cfg(target_os = "windows")]
@@ -994,486 +730,6 @@ impl Injector {
         {
             PlatformClipboardRestoreGate::fallback()
         }
-    }
-}
-
-#[allow(
-    clippy::too_many_arguments,
-    reason = "each parameter is an independently meaningful piece of the guarded-paste transaction \
-              (clipboard, transcript, modifier readiness, paste sender, timing, restore policy, \
-              clipboard policy, focus context for acknowledgement, and the safety-recheck closure); \
-              grouping them would just move the complexity into an ad hoc params struct with no real \
-              callers besides this fn"
-)]
-fn paste_with_clipboard_swap_guarded<C, R, P, G, H>(
-    clipboard: &mut C,
-    text: &str,
-    mode: PasteMode,
-    mut prepare_paste: R,
-    mut paste: P,
-    settle_delay: Duration,
-    restore_plan: ClipboardRestorePlan<'_, H>,
-    clipboard_policy: ClipboardPolicy,
-    focus: Option<&FocusSnapshot>,
-    mut before_chord: G,
-) -> Result<PasteReport>
-where
-    C: ClipboardStore,
-    R: FnMut() -> bool,
-    P: FnMut() -> Result<PasteDispatch>,
-    G: FnMut() -> Result<bool>,
-    H: ClipboardRestoreGate + ?Sized,
-{
-    match before_chord() {
-        Ok(true) => {}
-        Ok(false) => {
-            return stage_text_without_paste(clipboard, text, restore_plan, clipboard_policy)
-                .map(report_from_stage_outcome);
-        }
-        Err(err) => return Err(err),
-    }
-
-    // The macOS backend may need to wait for the physical PTT chord (or
-    // another modifier) to be released. Do that before staging and, most
-    // importantly, before the final focus recheck below. A timed-out wait
-    // leaves the transcript on the clipboard for manual recovery.
-    if !prepare_paste() {
-        stage_text_without_paste(
-            clipboard,
-            text,
-            restore_plan,
-            ClipboardPolicy::KeepTranscript,
-        )?;
-        return Ok(PasteReport::new(
-            PasteOutcome::UnsafeModifiers,
-            false,
-            Some(false),
-        ));
-    }
-
-    let previous = ClipboardSnapshot::capture(clipboard);
-    let write_before = restore_plan.before_transcript_write();
-    clipboard
-        .set_text(text.to_owned())
-        .context("could not copy transcript to clipboard")?;
-    let write_token = restore_plan.after_transcript_write(write_before);
-
-    sleep_if_nonzero(settle_delay);
-
-    // Capture the target value before the final focus recheck. macOS AX
-    // reads are bounded but blocking; keeping them on this side of the guard
-    // leaves no AX round-trip between the last focus decision and the chord.
-    // The guard immediately below still proves the captured target remains
-    // current before `paste()` posts any input.
-    let baseline = restore_plan.capture_paste_baseline(focus);
-
-    match before_chord() {
-        Ok(true) => {}
-        Ok(false) => {
-            return finish_blocked_clipboard(
-                clipboard,
-                previous,
-                write_token,
-                restore_plan,
-                clipboard_policy,
-            );
-        }
-        Err(err) => {
-            let restore_result = restore_after_delay(
-                clipboard,
-                previous,
-                write_token,
-                restore_plan,
-                clipboard_policy,
-            );
-            return match restore_result {
-                Ok(()) => Err(err),
-                Err(restore_err) => Err(err.context(format!("{restore_err:#}"))),
-            };
-        }
-    }
-
-    let paste_result = paste();
-    match paste_result {
-        Ok(PasteDispatch::Posted) => Ok(finish_confirmed_paste(
-            clipboard,
-            previous,
-            write_token,
-            restore_plan,
-            clipboard_policy,
-            focus,
-            text,
-            mode,
-            baseline.as_ref(),
-        )),
-        Ok(PasteDispatch::SkippedUnsafeModifiers) => {
-            // A modifier became active after the bounded readiness wait.
-            // Posting would turn Cmd+V into a different shortcut. No input
-            // was sent, so leave the staged transcript on the clipboard for
-            // recovery and report that fact honestly.
-            Ok(PasteReport::new(
-                PasteOutcome::UnsafeModifiers,
-                false,
-                Some(false),
-            ))
-        }
-        Err(paste_err) => {
-            let restore_result = restore_after_delay(
-                clipboard,
-                previous,
-                write_token,
-                restore_plan,
-                clipboard_policy,
-            );
-            match restore_result {
-                Ok(()) => Err(paste_err),
-                Err(restore_err) => Err(paste_err.context(format!("{restore_err:#}"))),
-            }
-        }
-    }
-}
-
-/// Resolve the outcome of a paste chord that was sent successfully: await
-/// acknowledgement, then restore or retain the clipboard per policy and the
-/// acknowledgement tier reached.
-///
-/// # Arguments
-///
-/// * `clipboard` - Clipboard backend to update.
-/// * `previous` - Snapshot captured before staging transcript text.
-/// * `write_token` - Clipboard write token for the staged transcript.
-/// * `restore_plan` - Restore timing/acknowledgement policy.
-/// * `clipboard_policy` - Policy deciding whether restoration should occur.
-/// * `focus` - Focus snapshot passed through to the acknowledgement strategy.
-/// * `text` - Transcript text that was just pasted.
-/// * `mode` - Paste mode used to select safe acknowledgement evidence.
-/// * `baseline` - Target's observable value read before the chord was sent.
-///
-/// Never fails: the paste chord was already sent by this point, so a
-/// problem restoring the previous clipboard (see
-/// [`clipboard_restored_after_paste`]) is reported through
-/// `clipboard_restored: Some(false)` on the returned report rather than
-/// turned into an error that would discard an already-landed paste.
-///
-/// [`PasteConfirmation::UnverifiedFocusLost`] and [`PasteConfirmation::NoEvidence`]
-/// also report `clipboard_restored: Some(false)`, but deliberately: the
-/// insertion target became unobservable (or never showed evidence) before a
-/// restore could be trusted, so `previous` is dropped without being
-/// restored to keep the transcript as the only remaining copy. That is not a
-/// restore failure and must not be logged as one — see the `daemon::worker`
-/// call site that tells the two situations apart.
-#[allow(
-    clippy::too_many_arguments,
-    reason = "mirrors the guarded-paste transaction's own parameter set; each is an \
-              independently meaningful piece of resolving one paste"
-)]
-fn finish_confirmed_paste<C, H>(
-    clipboard: &mut C,
-    previous: ClipboardSnapshot,
-    write_token: ClipboardWriteToken,
-    restore_plan: ClipboardRestorePlan<'_, H>,
-    clipboard_policy: ClipboardPolicy,
-    focus: Option<&FocusSnapshot>,
-    text: &str,
-    mode: PasteMode,
-    baseline: Option<&PasteTargetValue>,
-) -> PasteReport
-where
-    C: ClipboardStore,
-    H: ClipboardRestoreGate + ?Sized,
-{
-    let confirmation = restore_plan.await_paste_confirmation(
-        write_token,
-        &PasteConfirmationContext {
-            focus,
-            transcript: text,
-            mode,
-            baseline,
-        },
-    );
-
-    match confirmation {
-        PasteConfirmation::Confirmed { elapsed, kind } => PasteReport {
-            outcome: PasteOutcome::Pasted,
-            telemetry: InsertionTelemetry::acknowledged(
-                kind,
-                elapsed,
-                clipboard_restored_after_paste(clipboard, previous, clipboard_policy),
-            ),
-        },
-        PasteConfirmation::Unverified { elapsed, kind } => PasteReport {
-            outcome: PasteOutcome::PastedUnverified,
-            telemetry: InsertionTelemetry::acknowledged(
-                kind,
-                elapsed,
-                clipboard_restored_after_paste(clipboard, previous, clipboard_policy),
-            ),
-        },
-        PasteConfirmation::UnverifiedFocusLost { elapsed, kind } => {
-            // The chord was posted into a verified-focused target and very
-            // likely landed, but the target became unobservable (app switch,
-            // or focus state that can no longer be read) before any
-            // evidence could appear. Unlike `Unverified`, where the same
-            // target stays observable, that target can never be re-checked,
-            // so `previous` is dropped here without being restored: the
-            // transcript is the only remaining copy if the paste did not
-            // land after all.
-            PasteReport {
-                outcome: PasteOutcome::PastedUnverified,
-                telemetry: InsertionTelemetry::acknowledged(kind, elapsed, false),
-            }
-        }
-        PasteConfirmation::NoEvidence { elapsed, kind } => {
-            // No evidence the target consumed the paste: `previous` is
-            // dropped here without being restored, and the transcript
-            // intentionally stays on the clipboard so it is not lost.
-            // Uncertainty must never destroy the transcript.
-            PasteReport {
-                outcome: PasteOutcome::CopiedOnly,
-                telemetry: InsertionTelemetry::acknowledged(kind, elapsed, false),
-            }
-        }
-    }
-}
-
-/// Restore the clipboard after a paste that already landed (or was accepted
-/// as unverified), treating a failed restore as "not restored" rather than
-/// turning an already-successful paste into an error.
-///
-/// The paste itself succeeded by this point, so losing the previous
-/// clipboard contents is a secondary, recoverable problem, not a paste
-/// failure: it must not be reported as one to the caller's retry/circuit-
-/// breaker logic. A failed restore here means the transcript is left
-/// sitting on the clipboard exactly as it would be under
-/// [`ClipboardPolicy::KeepTranscript`]; the returned `bool` cannot
-/// distinguish the two cases, and the underlying error is dropped along with
-/// them, since this module has no logger to report it through. The
-/// `daemon::worker` call site recovers the distinction from the combination
-/// of its own `clipboard_policy` request and this `bool`, and logs a
-/// warning through the [`crate::daemon::logging::Logger`] it holds.
-///
-/// # Returns
-///
-/// `true` when [`ClipboardPolicy::RestorePrevious`] was requested and the
-/// previous clipboard was successfully restored.
-fn clipboard_restored_after_paste<C: ClipboardStore>(
-    clipboard: &mut C,
-    previous: ClipboardSnapshot,
-    clipboard_policy: ClipboardPolicy,
-) -> bool {
-    match restore_or_clear_clipboard(clipboard, previous, clipboard_policy) {
-        Ok(()) => clipboard_policy == ClipboardPolicy::RestorePrevious,
-        Err(_) => false,
-    }
-}
-
-fn stage_text_without_paste<C, H>(
-    clipboard: &mut C,
-    text: &str,
-    restore_plan: ClipboardRestorePlan<'_, H>,
-    clipboard_policy: ClipboardPolicy,
-) -> Result<StageOutcome>
-where
-    C: ClipboardStore,
-    H: ClipboardRestoreGate + ?Sized,
-{
-    if clipboard_policy == ClipboardPolicy::KeepTranscript {
-        clipboard
-            .set_text(text.to_owned())
-            .context("could not copy transcript to clipboard")?;
-        return Ok(StageOutcome::CopiedOnly);
-    }
-
-    let previous = ClipboardSnapshot::capture(clipboard);
-    let write_before = restore_plan.before_transcript_write();
-    clipboard
-        .set_text(text.to_owned())
-        .context("could not copy transcript to clipboard")?;
-    let write_token = restore_plan.after_transcript_write(write_before);
-    restore_after_delay(
-        clipboard,
-        previous,
-        write_token,
-        restore_plan,
-        clipboard_policy,
-    )?;
-    Ok(StageOutcome::Blocked)
-}
-
-fn finish_blocked_clipboard<C, H>(
-    clipboard: &mut C,
-    previous: ClipboardSnapshot,
-    write_token: ClipboardWriteToken,
-    restore_plan: ClipboardRestorePlan<'_, H>,
-    clipboard_policy: ClipboardPolicy,
-) -> Result<PasteReport>
-where
-    C: ClipboardStore,
-    H: ClipboardRestoreGate + ?Sized,
-{
-    restore_after_delay(
-        clipboard,
-        previous,
-        write_token,
-        restore_plan,
-        clipboard_policy,
-    )?;
-    Ok(match clipboard_policy {
-        ClipboardPolicy::RestorePrevious => {
-            PasteReport::new(PasteOutcome::Blocked, false, Some(true))
-        }
-        ClipboardPolicy::KeepTranscript => {
-            PasteReport::new(PasteOutcome::CopiedOnly, false, Some(false))
-        }
-    })
-}
-
-/// Wait for the fallback/history-based restore signal, then restore or
-/// clear the clipboard per policy.
-///
-/// Used by every guarded-cancellation and error path that never reaches a
-/// paste chord (and therefore never has paste-acknowledgement evidence to
-/// consult): the guard-blocked-after-staging path, the post-settle guard
-/// recheck failure path, the paste-error path, and plain staging. The
-/// post-paste-chord success path uses
-/// [`ClipboardRestorePlan::await_paste_confirmation`] instead (see
-/// [`finish_confirmed_paste`]), since by then a paste chord was actually
-/// sent and a real acknowledgement signal may be available.
-///
-/// # Errors
-///
-/// Returns an error if the previous clipboard payload cannot be restored.
-fn restore_after_delay<C, H>(
-    clipboard: &mut C,
-    previous: ClipboardSnapshot,
-    write_token: ClipboardWriteToken,
-    restore_plan: ClipboardRestorePlan<'_, H>,
-    clipboard_policy: ClipboardPolicy,
-) -> Result<()>
-where
-    C: ClipboardStore,
-    H: ClipboardRestoreGate + ?Sized,
-{
-    if clipboard_policy == ClipboardPolicy::RestorePrevious {
-        restore_plan.wait_before_restore(write_token);
-    }
-    restore_or_clear_clipboard(clipboard, previous, clipboard_policy)
-}
-
-/// Best-effort snapshot of supported clipboard payloads before staging text.
-pub(super) enum ClipboardSnapshot {
-    Text(String),
-    Html {
-        html: String,
-        alt_text: Option<String>,
-    },
-    FileList(Vec<PathBuf>),
-    Image(ImageData<'static>),
-    Unsupported,
-}
-
-impl ClipboardSnapshot {
-    /// Capture the current clipboard payload if it is one of the supported kinds.
-    ///
-    /// # Arguments
-    ///
-    /// * `clipboard` - Clipboard backend to inspect.
-    ///
-    /// # Returns
-    ///
-    /// A supported clipboard snapshot, or [`ClipboardSnapshot::Unsupported`]
-    /// when the current payload cannot be restored by Parakit.
-    pub(super) fn capture<C: ClipboardStore>(clipboard: &mut C) -> Self {
-        if let Ok(files) = clipboard.get_file_list() {
-            return Self::FileList(files);
-        }
-
-        if let Ok(html) = clipboard.get_html() {
-            let alt_text = clipboard.get_text().ok();
-            // Browser image copies can expose transient HTML plus bitmap data.
-            // Without a text alternative, the decoded image is usually the
-            // restorable user-visible payload.
-            if alt_text.as_deref().is_none_or(str::is_empty) {
-                if let Ok(image) = clipboard.get_image() {
-                    return Self::Image(owned_image(image));
-                }
-            }
-            return Self::Html { html, alt_text };
-        }
-
-        if let Ok(image) = clipboard.get_image() {
-            return Self::Image(owned_image(image));
-        }
-
-        match clipboard.get_text().ok() {
-            Some(text) => Self::Text(text),
-            None => Self::Unsupported,
-        }
-    }
-}
-
-/// Copy a borrowed clipboard image payload into an owned, `'static` one.
-///
-/// # Arguments
-///
-/// * `image` - Image data borrowed from a clipboard read.
-///
-/// # Returns
-///
-/// An equivalent `ImageData` that owns its pixel bytes.
-pub(crate) fn owned_image(image: ImageData<'_>) -> ImageData<'static> {
-    ImageData {
-        width: image.width,
-        height: image.height,
-        bytes: Cow::Owned(image.bytes.into_owned()),
-    }
-}
-
-/// Restore a previous clipboard snapshot unless the transcript should be retained.
-///
-/// # Arguments
-///
-/// * `clipboard` - Clipboard backend to update.
-/// * `previous` - Snapshot captured before staging transcript text.
-/// * `clipboard_policy` - Policy deciding whether restoration should occur.
-///
-/// # Returns
-///
-/// `Ok(())` when restoration is skipped or the previous payload is restored.
-///
-/// # Errors
-///
-/// Returns an error if the previous supported payload cannot be written back
-/// to the clipboard.
-pub(super) fn restore_or_clear_clipboard<C: ClipboardStore>(
-    clipboard: &mut C,
-    previous: ClipboardSnapshot,
-    clipboard_policy: ClipboardPolicy,
-) -> Result<()> {
-    if clipboard_policy == ClipboardPolicy::KeepTranscript {
-        return Ok(());
-    }
-    match previous {
-        ClipboardSnapshot::Text(previous) => clipboard
-            .set_text(previous)
-            .map_err(|err| anyhow::anyhow!("{CLIPBOARD_RESTORE_ERROR}: {err:#}")),
-        ClipboardSnapshot::Html { html, alt_text } => clipboard
-            .set_html(html, alt_text)
-            .map_err(|err| anyhow::anyhow!("{CLIPBOARD_RESTORE_ERROR}: {err:#}")),
-        ClipboardSnapshot::FileList(files) => clipboard
-            .set_file_list(&files)
-            .map_err(|err| anyhow::anyhow!("{CLIPBOARD_RESTORE_ERROR}: {err:#}")),
-        ClipboardSnapshot::Image(image) => clipboard
-            .set_image(image)
-            .map_err(|err| anyhow::anyhow!("{CLIPBOARD_RESTORE_ERROR}: {err:#}")),
-        ClipboardSnapshot::Unsupported => clipboard
-            .clear()
-            .or_else(|_| clipboard.set_text(String::new()))
-            .map_err(|err| {
-                anyhow::anyhow!(
-                    "{CLIPBOARD_RESTORE_ERROR}: previous clipboard format unsupported and staged transcript could not be cleared: {err:#}"
-                )
-            }),
     }
 }
 
@@ -1572,288 +828,6 @@ fn clipboard_restore_delay() -> Duration {
     {
         Duration::from_millis(750)
     }
-}
-
-#[cfg(target_os = "linux")]
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct X11KeyStep {
-    keysym: u32,
-    press: bool,
-}
-
-#[cfg(target_os = "linux")]
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct ResolvedX11KeyStep {
-    keycode: u8,
-    press: bool,
-}
-
-#[cfg(target_os = "linux")]
-struct LinuxX11Paste {
-    conn: RustConnection,
-    root: u32,
-    standard_steps: Vec<ResolvedX11KeyStep>,
-    terminal_steps: Vec<ResolvedX11KeyStep>,
-    modifier_cleanup_keycodes: Vec<u8>,
-}
-
-#[cfg(target_os = "linux")]
-impl LinuxX11Paste {
-    fn open() -> Result<Self> {
-        let (conn, screen_num) =
-            RustConnection::connect(None).context("could not connect to X11")?;
-        let root = super::x11::root_window(&conn, screen_num)?;
-        let standard_steps = linux_resolved_paste_chord_steps(&conn, PasteMode::Standard)?;
-        let terminal_steps = linux_resolved_paste_chord_steps(&conn, PasteMode::Terminal)?;
-        let modifier_cleanup_keycodes = linux_resolved_modifier_cleanup_keycodes(&conn);
-        Ok(Self {
-            conn,
-            root,
-            standard_steps,
-            terminal_steps,
-            modifier_cleanup_keycodes,
-        })
-    }
-
-    fn send_paste_chord(&self, mode: PasteMode) -> Result<()> {
-        let steps = match mode {
-            PasteMode::Standard => &self.standard_steps,
-            PasteMode::Terminal => &self.terminal_steps,
-            PasteMode::Direct => anyhow::bail!("direct mode does not use the X11 paste chord"),
-        };
-        let mut sink = X11ConnectionKeySink {
-            conn: &self.conn,
-            root: self.root,
-        };
-        send_x11_paste_chord_with_modifier_flush(&mut sink, steps, &self.modifier_cleanup_keycodes)
-    }
-}
-
-#[cfg(target_os = "linux")]
-fn linux_modifier_cleanup_keysyms() -> &'static [u32] {
-    &[
-        super::x11::CONTROL_L_KEYSYM,
-        super::x11::CONTROL_R_KEYSYM,
-        super::x11::SHIFT_L_KEYSYM,
-        super::x11::SHIFT_R_KEYSYM,
-        super::x11::ALT_L_KEYSYM,
-        super::x11::ALT_R_KEYSYM,
-        super::x11::SUPER_L_KEYSYM,
-        super::x11::SUPER_R_KEYSYM,
-    ]
-}
-
-#[cfg(target_os = "linux")]
-fn linux_resolved_modifier_cleanup_keycodes(conn: &RustConnection) -> Vec<u8> {
-    linux_modifier_cleanup_keysyms()
-        .iter()
-        .filter_map(|keysym| super::x11::keycode_for_keysym(conn, *keysym).ok())
-        .collect()
-}
-
-#[cfg(target_os = "linux")]
-fn linux_paste_chord_steps(mode: PasteMode) -> Vec<X11KeyStep> {
-    let mut steps = vec![X11KeyStep {
-        keysym: super::x11::CONTROL_L_KEYSYM,
-        press: true,
-    }];
-    if mode == PasteMode::Terminal {
-        steps.push(X11KeyStep {
-            keysym: super::x11::SHIFT_L_KEYSYM,
-            press: true,
-        });
-    }
-    steps.push(X11KeyStep {
-        keysym: super::x11::V_KEYSYM,
-        press: true,
-    });
-    steps.push(X11KeyStep {
-        keysym: super::x11::V_KEYSYM,
-        press: false,
-    });
-    if mode == PasteMode::Terminal {
-        steps.push(X11KeyStep {
-            keysym: super::x11::SHIFT_L_KEYSYM,
-            press: false,
-        });
-    }
-    steps.push(X11KeyStep {
-        keysym: super::x11::CONTROL_L_KEYSYM,
-        press: false,
-    });
-    steps
-}
-
-#[cfg(target_os = "linux")]
-fn linux_resolved_paste_chord_steps(
-    conn: &RustConnection,
-    mode: PasteMode,
-) -> Result<Vec<ResolvedX11KeyStep>> {
-    linux_paste_chord_steps(mode)
-        .into_iter()
-        .map(|step| {
-            Ok(ResolvedX11KeyStep {
-                keycode: super::x11::keycode_for_keysym(conn, step.keysym)?,
-                press: step.press,
-            })
-        })
-        .collect()
-}
-
-#[cfg(target_os = "linux")]
-trait X11KeySink {
-    /// Send a key press or release event.
-    ///
-    /// # Arguments
-    ///
-    /// * `keycode` - X11 keycode to send.
-    /// * `press` - `true` for key press, `false` for key release.
-    ///
-    /// # Returns
-    ///
-    /// `Ok(())` when the sink accepted the key event.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the backend rejects the key event.
-    fn key(&mut self, keycode: u8, press: bool) -> Result<()>;
-    /// Flush queued key events to the X11 server.
-    ///
-    /// # Returns
-    ///
-    /// `Ok(())` when pending key events have been submitted.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the backend cannot flush pending events.
-    fn flush(&mut self) -> Result<()>;
-}
-
-#[cfg(target_os = "linux")]
-struct X11ConnectionKeySink<'a> {
-    conn: &'a x11rb::rust_connection::RustConnection,
-    root: u32,
-}
-
-#[cfg(target_os = "linux")]
-impl X11KeySink for X11ConnectionKeySink<'_> {
-    fn key(&mut self, keycode: u8, press: bool) -> Result<()> {
-        use x11rb::protocol::xproto::{KEY_PRESS_EVENT, KEY_RELEASE_EVENT};
-        use x11rb::protocol::xtest::ConnectionExt as XtestConnectionExt;
-
-        let event_type = if press {
-            KEY_PRESS_EVENT
-        } else {
-            KEY_RELEASE_EVENT
-        };
-        self.conn
-            .xtest_fake_input(event_type, keycode, 0, self.root, 0, 0, 0)
-            .context("could not send XTest key event")?
-            .check()
-            .context("X11 rejected XTest key event")?;
-        Ok(())
-    }
-
-    fn flush(&mut self) -> Result<()> {
-        self.conn
-            .flush()
-            .context("could not flush XTest paste chord")
-    }
-}
-
-#[cfg(target_os = "linux")]
-fn send_x11_key_steps<S: X11KeySink>(sink: &mut S, steps: &[ResolvedX11KeyStep]) -> Result<()> {
-    let mut pressed = Vec::new();
-    for step in steps {
-        if let Err(err) = sink.key(step.keycode, step.press) {
-            let cleanup = release_pressed_x11_keys(sink, &mut pressed);
-            return combine_primary_cleanup_error(
-                err.context("could not send XTest paste chord"),
-                cleanup,
-            );
-        }
-
-        if step.press {
-            pressed.push(step.keycode);
-        } else if let Some(index) = pressed.iter().rposition(|key| *key == step.keycode) {
-            pressed.remove(index);
-        }
-    }
-
-    if let Err(err) = sink.flush() {
-        let cleanup = release_pressed_x11_keys(sink, &mut pressed);
-        return combine_primary_cleanup_error(err, cleanup);
-    }
-
-    Ok(())
-}
-
-#[cfg(target_os = "linux")]
-fn send_x11_paste_chord_with_modifier_flush<S: X11KeySink>(
-    sink: &mut S,
-    steps: &[ResolvedX11KeyStep],
-    modifier_keycodes: &[u8],
-) -> Result<()> {
-    send_x11_key_steps(sink, steps)?;
-    // Best-effort blanket releases protect against focus changes during the
-    // paste chord that leave the X server believing a modifier is still held.
-    let _ = flush_x11_modifier_releases(sink, modifier_keycodes);
-    Ok(())
-}
-
-#[cfg(target_os = "linux")]
-fn flush_x11_modifier_releases<S: X11KeySink>(
-    sink: &mut S,
-    modifier_keycodes: &[u8],
-) -> Result<()> {
-    for keycode in modifier_keycodes {
-        sink.key(*keycode, false)
-            .context("could not send XTest modifier cleanup release")?;
-    }
-    sink.flush()
-        .context("could not flush XTest modifier cleanup")
-}
-
-#[cfg(target_os = "linux")]
-fn release_pressed_x11_keys<S: X11KeySink>(sink: &mut S, pressed: &mut Vec<u8>) -> Result<()> {
-    let mut release_error = None;
-    while let Some(keycode) = pressed.pop() {
-        if let Err(err) = sink.key(keycode, false) {
-            release_error.get_or_insert_with(|| err.context("could not release XTest key"));
-        }
-    }
-
-    let flush_error = sink.flush().err();
-    match (release_error, flush_error) {
-        (None, None) => Ok(()),
-        (Some(err), None) | (None, Some(err)) => Err(err),
-        (Some(release_err), Some(flush_err)) => Err(anyhow::anyhow!(
-            "{release_err:#}; XTest cleanup flush also failed: {flush_err:#}"
-        )),
-    }
-}
-
-#[cfg(target_os = "linux")]
-fn combine_primary_cleanup_error(primary: anyhow::Error, cleanup: Result<()>) -> Result<()> {
-    match cleanup {
-        Ok(()) => Err(primary),
-        Err(cleanup_err) => Err(anyhow::anyhow!(
-            "{primary:#}; cleanup while releasing pressed XTest keys failed: {cleanup_err:#}"
-        )),
-    }
-}
-
-#[cfg(target_os = "linux")]
-fn linux_x11_xtest_preflight() -> Result<()> {
-    use x11rb::protocol::xtest::ConnectionExt as XtestConnectionExt;
-    use x11rb::rust_connection::RustConnection;
-
-    let (conn, _) = RustConnection::connect(None).context("could not connect to X11")?;
-    conn.xtest_get_version(2, 2)
-        .context("could not request XTest version")?
-        .reply()
-        .context("XTest extension is unavailable")?;
-    Ok(())
 }
 
 #[cfg(test)]

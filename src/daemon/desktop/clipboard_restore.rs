@@ -572,7 +572,10 @@ fn wait_for_windows_clipboard_history(
 /// * `message` - Lazily formatted diagnostic.
 pub(super) fn clipboard_history_debug(message: impl std::fmt::Display) {
     #[cfg(debug_assertions)]
-    eprintln!("parakit: debug: {message}");
+    {
+        use std::io::Write as _;
+        let _ = writeln!(std::io::stderr(), "parakit: debug: {message}");
+    }
     #[cfg(not(debug_assertions))]
     let _ = message;
 }

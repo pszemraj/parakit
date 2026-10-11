@@ -329,9 +329,7 @@ fn prepare_download_request(
 }
 
 fn resume_validator_path(path: &Path) -> PathBuf {
-    let mut validator = path.as_os_str().to_os_string();
-    validator.push(".validator");
-    PathBuf::from(validator)
+    super::artifact_sidecar_path(path, ".validator")
 }
 
 fn load_resume_validator(path: &Path) -> Option<HeaderValue> {
@@ -460,40 +458,29 @@ mod tests {
     }
 
     #[test]
-    fn partial_without_a_validator_restarts_from_scratch() {
-        let dir = crate::test_support::fixture_root("parakit-fetch-tests", "resume-no-validator");
-        let partial = dir.join("model.gguf.part");
-        std::fs::write(&partial, b"stale").unwrap();
+    fn partial_without_a_valid_validator_restarts_from_scratch() {
+        for (name, validator) in [
+            ("resume-no-validator", None),
+            ("resume-bad-validator", Some("bad\nheader")),
+        ] {
+            let dir = crate::test_support::fixture_root("parakit-fetch-tests", name);
+            let partial = dir.join("model.gguf.part");
+            std::fs::write(&partial, b"stale").unwrap();
+            if let Some(validator) = validator {
+                std::fs::write(resume_validator_path(&partial), validator).unwrap();
+            }
 
-        let client = build_client().unwrap();
-        let (start, request) =
-            prepare_download_request(&client, "https://example.com/model.gguf", &partial, None)
-                .unwrap();
-        let request = request.build().unwrap();
+            let client = build_client().unwrap();
+            let (start, request) =
+                prepare_download_request(&client, "https://example.com/model.gguf", &partial, None)
+                    .unwrap();
+            let request = request.build().unwrap();
 
-        assert_eq!(start, 0);
-        assert!(!partial.exists());
-        assert!(!request.headers().contains_key(RANGE));
-        assert!(!request.headers().contains_key(IF_RANGE));
-    }
-
-    #[test]
-    fn partial_with_an_invalid_validator_restarts_from_scratch() {
-        let dir = crate::test_support::fixture_root("parakit-fetch-tests", "resume-bad-validator");
-        let partial = dir.join("model.gguf.part");
-        std::fs::write(&partial, b"stale").unwrap();
-        std::fs::write(resume_validator_path(&partial), b"bad\nheader").unwrap();
-
-        let client = build_client().unwrap();
-        let (start, request) =
-            prepare_download_request(&client, "https://example.com/model.gguf", &partial, None)
-                .unwrap();
-        let request = request.build().unwrap();
-
-        assert_eq!(start, 0);
-        assert!(!partial.exists());
-        assert!(!request.headers().contains_key(RANGE));
-        assert!(!request.headers().contains_key(IF_RANGE));
+            assert_eq!(start, 0, "{name}");
+            assert!(!partial.exists(), "{name}");
+            assert!(!request.headers().contains_key(RANGE), "{name}");
+            assert!(!request.headers().contains_key(IF_RANGE), "{name}");
+        }
     }
 
     #[test]

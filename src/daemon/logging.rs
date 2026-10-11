@@ -1,9 +1,12 @@
 //! Terminal-aware daemon logging.
+//!
+//! Output is best-effort: closing the launching terminal must not kill a daemon thread.
 
 use anstyle::{AnsiColor, Style};
 use chrono::{SecondsFormat, Utc};
 use parakit::build_info;
 use std::fmt::Display;
+use std::io::Write as _;
 use std::path::Path;
 use std::time::Duration;
 
@@ -48,25 +51,33 @@ impl Logger {
     /// Print a normal status line.
     pub(crate) fn line(&self, msg: &str) {
         if self.level != LogLevel::Quiet {
-            anstream::println!("{msg}");
+            let _ = writeln!(anstream::stdout(), "{msg}");
         }
     }
 
     /// Print a verbose diagnostic line with an ISO timestamp.
     pub(crate) fn verbose(&self, msg: impl Display) {
         if self.is_verbose() {
-            anstream::println!("{} {msg}", style_dim(timestamp()));
+            let _ = writeln!(anstream::stdout(), "{} {msg}", style_dim(timestamp()));
         }
     }
 
     /// Print a warning line to stderr regardless of quiet mode.
     pub(crate) fn warn(&self, msg: impl Display) {
-        anstream::eprintln!("{} {msg}", style_warn("parakit: warning:"));
+        let _ = writeln!(
+            anstream::stderr(),
+            "{} {msg}",
+            style_warn("parakit: warning:")
+        );
     }
 
     /// Print an error line to stderr regardless of quiet mode.
     pub(crate) fn error(&self, msg: &str) {
-        anstream::eprintln!("{} {msg}", style_error("parakit: error:"));
+        let _ = writeln!(
+            anstream::stderr(),
+            "{} {msg}",
+            style_error("parakit: error:")
+        );
     }
 
     /// Print a concise startup banner.
@@ -75,25 +86,29 @@ impl Logger {
             return;
         }
 
-        anstream::println!("{}", style_title("parakit"));
-        anstream::println!("  model: {}", info.model_name);
-        anstream::println!("  dtype: {}", info.dtype);
-        anstream::println!("  mic:   {}", info.mic.summary());
+        let _ = writeln!(anstream::stdout(), "{}", style_title("parakit"));
+        let _ = writeln!(anstream::stdout(), "  model: {}", info.model_name);
+        let _ = writeln!(anstream::stdout(), "  dtype: {}", info.dtype);
+        let _ = writeln!(anstream::stdout(), "  mic:   {}", info.mic.summary());
         if self.is_verbose() {
             for line in info.mic.detail_lines() {
-                anstream::println!("  audio: {line}");
+                let _ = writeln!(anstream::stdout(), "  audio: {line}");
             }
-            anstream::println!("  path:  {}", info.model_path.display());
-            anstream::println!("  rules: {}", info.cleaning);
-            anstream::println!("  sounds: {}", info.sounds);
-            anstream::println!("  logging: {}", info.transcription_logging);
-            anstream::println!("  insert: {}", info.insertion);
-            anstream::println!("  threads: {}", info.threads);
-            anstream::println!("  backend: {}", info.backend);
-            anstream::println!("  device: {}", info.device);
-            anstream::println!("  build:");
+            let _ = writeln!(anstream::stdout(), "  path:  {}", info.model_path.display());
+            let _ = writeln!(anstream::stdout(), "  rules: {}", info.cleaning);
+            let _ = writeln!(anstream::stdout(), "  sounds: {}", info.sounds);
+            let _ = writeln!(
+                anstream::stdout(),
+                "  logging: {}",
+                info.transcription_logging
+            );
+            let _ = writeln!(anstream::stdout(), "  insert: {}", info.insertion);
+            let _ = writeln!(anstream::stdout(), "  threads: {}", info.threads);
+            let _ = writeln!(anstream::stdout(), "  backend: {}", info.backend);
+            let _ = writeln!(anstream::stdout(), "  device: {}", info.device);
+            let _ = writeln!(anstream::stdout(), "  build:");
             for line in build_info::diagnostic_lines() {
-                anstream::println!("    {line}");
+                let _ = writeln!(anstream::stdout(), "    {line}");
             }
         }
     }
@@ -140,15 +155,22 @@ impl Logger {
 
         let infer_ms = infer.as_secs_f32() * 1000.0;
         if raw == cleaned {
-            anstream::println!(
+            let _ = writeln!(
+                anstream::stdout(),
                 "{} {}  {}",
                 style_clean("Clean:"),
                 style_clean_text(cleaned),
                 style_dim(format!("({infer_ms:.0}ms)"))
             );
         } else {
-            anstream::println!("{}    {}", style_raw("Raw:"), style_raw_text(raw));
-            anstream::println!(
+            let _ = writeln!(
+                anstream::stdout(),
+                "{}    {}",
+                style_raw("Raw:"),
+                style_raw_text(raw)
+            );
+            let _ = writeln!(
+                anstream::stdout(),
                 "{}  {}  {}",
                 style_clean("Clean:"),
                 style_clean_text(cleaned),
@@ -231,4 +253,70 @@ fn style_dim(text: impl Display) -> String {
         text,
         Style::new().fg_color(Some(AnsiColor::BrightBlack.into())),
     )
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn closed_terminal_does_not_stop_runtime_logging() {
+        const CHILD: &str = "PARAKIT_CLOSED_TERMINAL_LOGGER_CHILD";
+        if std::env::var_os(CHILD).is_some() {
+            crate::test_support::disconnect_test_terminal();
+            std::thread::spawn(|| {
+                let mic = MicInfo {
+                    name: "test microphone".into(),
+                    input_rate: 16_000,
+                    channels: 1,
+                    sample_format: "f32".into(),
+                    source_id: None,
+                    resampling: false,
+                    config_note: None,
+                };
+                for level in [LogLevel::Quiet, LogLevel::Normal, LogLevel::Verbose] {
+                    let log = Logger::new(level);
+                    log.warn("focus changed before insertion");
+                    log.error("model reload failed");
+                    log.line("continuing dictation");
+                    log.verbose("diagnostic");
+                    log.banner(BannerInfo {
+                        model_name: "test.gguf",
+                        model_path: Path::new("target/tmp/test.gguf"),
+                        dtype: "Q8_0",
+                        mic: &mic,
+                        cleaning: "off".into(),
+                        sounds: "off",
+                        transcription_logging: "off".into(),
+                        insertion: "off".into(),
+                        threads: 1,
+                        backend: "test".into(),
+                        device: "cpu".into(),
+                    });
+                    log.ready();
+                    log.mic_changed(&mic);
+                    log.transcribing(1.0, 1.0);
+                    log.transcript("first", "First", Duration::ZERO);
+                    log.transcript("next dictation", "next dictation", Duration::ZERO);
+                }
+            })
+            .join()
+            .expect("terminal write failures must not kill the worker");
+            // The test harness itself prints through panicking std macros.
+            std::process::exit(0);
+        }
+
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "daemon::logging::tests::closed_terminal_does_not_stop_runtime_logging",
+                "--nocapture",
+                "--quiet",
+            ])
+            .env(CHILD, "1")
+            .output()
+            .unwrap()
+            .status;
+        assert!(status.success(), "closed-terminal worker exited: {status}");
+    }
 }

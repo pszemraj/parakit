@@ -388,21 +388,31 @@ mod tests {
     }
 
     #[test]
-    fn partial_send_attempts_owned_key_cleanup() {
-        let mut sender = MockInputSender::new(&[2, 2]);
-        let err = send_paste_chord_with(false, &mut sender).expect_err("partial send should fail");
+    fn partial_send_attempts_owned_key_cleanup_and_reports_failures() {
+        for (name, terminal, responses, expected_calls, expected_error) in [
+            (
+                "partial send with successful cleanup",
+                false,
+                [2, 2],
+                [4, 2],
+                "paste chord: SendInput sent 2/4 events",
+            ),
+            (
+                "partial send with failed cleanup",
+                true,
+                [3, 1],
+                [6, 3],
+                "paste key cleanup also failed",
+            ),
+        ] {
+            let mut sender = MockInputSender::new(&responses);
+            let err = send_paste_chord_with(terminal, &mut sender).expect_err(name);
 
-        assert_eq!(sender.calls, vec![4, 2]);
-        assert!(format!("{err:#}").contains("paste chord: SendInput sent 2/4 events"));
-    }
-
-    #[test]
-    fn partial_send_reports_cleanup_failure() {
-        let mut sender = MockInputSender::new(&[3, 1]);
-        let err =
-            send_paste_chord_with(true, &mut sender).expect_err("partial cleanup should fail");
-
-        assert_eq!(sender.calls, vec![6, 3]);
-        assert!(format!("{err:#}").contains("paste key cleanup also failed"));
+            assert_eq!(sender.calls, expected_calls, "{name}");
+            assert!(
+                format!("{err:#}").contains(expected_error),
+                "{name}: {err:#}"
+            );
+        }
     }
 }

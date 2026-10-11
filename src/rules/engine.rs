@@ -652,8 +652,7 @@ fn compute_ruleset_id(
 ///
 /// # Arguments
 ///
-/// * `threshold` - Minimum isolated numeric value rendered as digits, or
-///   `None` to resolve to [`DEFAULT_NUMBER_THRESHOLD`].
+/// * `threshold` - Value at or above which isolated single-digit cardinals and ordinals become digits, or `None` to resolve to [`DEFAULT_NUMBER_THRESHOLD`].
 ///
 /// # Returns
 ///

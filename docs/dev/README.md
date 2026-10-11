@@ -21,7 +21,7 @@ Hosted release files:
 | `parakeet-tdt-0.6b-v3-Q8_0.gguf` | Default user artifact. |
 | `parakeet-tdt-0.6b-v3-F16.gguf` | Source GGUF kept for maintainers and future re-quantization work. |
 
-The CLI has no quant selector. Q8_0 is the default hosted model. Runtime model precedence is in [running.md#model-cache](../running.md#model-cache). Avoid unrelated names, nested directories, or model-card-only links for release artifacts.
+Avoid unrelated names, nested directories, or model-card-only links for release artifacts.
 
 The Parakeet converter, loader, and `crispasr-quantize` path are built around F16/F32 tensors. Treat BF16 as future work until it has explicit support and validation.
 
@@ -41,24 +41,6 @@ On Windows, the hosted Q8_0 path is the normal model setup. `fetch --from-source
 After rebuilding a release artifact, upload F16 and Q8_0 to the hosted repo.
 
 GPU build and runtime checks are in [quality.md#gpu-feature-validation](quality.md#gpu-feature-validation).
-
-## File Size Exceptions
-
-Current Rust files over the approximate 1k LoC target:
-
-| Path | Reason and split boundary |
-| --- | --- |
-| `src/daemon/audio/capture.rs` | Owns the coupled CPAL stream-recovery, SPSC drain, resampling, and pre-roll boundary. Split into stream, drain, and device modules when their ownership boundaries are stable. |
-| `src/daemon/desktop/inject.rs` | Owns the cross-platform clipboard transaction and insertion contract. Split clipboard, X11 paste, and focus code without changing paste safety. |
-| `src/daemon/ipc.rs` | Contains both Unix-socket and Windows named-pipe transports plus their policy tests. Extract the Windows transport after its behavior settles. |
-| `src/daemon/macos/diagnostics.rs` | Owns the AppKit probe window and the two-stage macOS deep insertion check. Extract the probe-window harness if either diagnostic stage grows. |
-| `src/daemon/worker.rs` | Coordinates ASR, cleaning, logging, recovery history, and insertion. Extract stable policy helpers without splitting the end-to-end worker state machine. |
-| `src/app.rs` | Holds top-level command dispatch and daemon bootstrap. Extract command handlers when a stable subsystem boundary appears. |
-| `src/cli.rs` | Keeps clap declarations, effective-option precedence, and parser tests together. Split declarations from resolution policy after the new command surface settles. |
-| `src/daemon/desktop/hotkey.rs` | Is only slightly over the target and already delegates macOS code. Extract Linux backend implementations if it grows further. |
-| `src/daemon/desktop/inject_tests.rs` | Keeps the clipboard and insertion transaction regression matrix together. Split by transaction phase when shared fixtures no longer dominate. |
-| `src/daemon/macos/pasteboard.rs` | Owns the macOS paste-acknowledgement evidence policy: baseline capture, confirmation polling, transcript matching, and their regression tests, which dominate the count. Extract `TranscriptMatcher` and its tests into a sibling module if the evidence rules grow further. |
-| `src/rules/tests.rs` | Keeps the cleaning pipeline regression matrix beside shared rule fixtures. Split by rule group when the shared setup no longer dominates the file. |
 
 ## Deferred Runtime Work
 

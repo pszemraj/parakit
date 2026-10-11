@@ -32,8 +32,8 @@ The push-to-talk chord does nothing, or something else on the desktop reacts ins
 
 4. Free the chord if another application already owns it. Follow the conflict checks for [Linux](linux-desktop.md#shortcut-conflicts) or [macOS](macos-desktop.md#hotkey).
 
-5. On macOS, grant Accessibility and Input Monitoring to the terminal application that launches parakit, then restart parakit. The CoreGraphics event tap does not survive a privacy-setting change, so a hotkey that worked before you touched System Settings needs a restart to come back.
-6. On Linux, start parakit from a terminal opened in the current graphical login. A tmux server that outlived a logout carries stale `DISPLAY` or `XAUTHORITY` values, and `doctor` then reports an X11 error such as `Connection refused`.
+5. On macOS, follow the [permission recovery steps](macos-desktop.md#permissions), then restart parakit.
+6. On Linux, start from the [current X11 session](linux-desktop.md#x11-sessions); a tmux server from an earlier login may have stale display credentials.
 7. Rerun `parakit doctor`.
 
 WSL is not the native Windows daemon path. Validate Windows hotkeys, focus checks, and paste behavior from native Windows PowerShell with the Windows bundle.
@@ -78,14 +78,14 @@ The transcript is printed or logged but nothing arrives in the focused applicati
 
    In `standard` and `terminal` modes this is a real paste round trip on all three platforms. In `direct` mode on Linux and Windows it performs backend preflight only and never types into the probe, so a passing `direct` deep check proves less than a passing clipboard-mode one. On macOS, `direct` mode still runs the suppressed key-event tap.
 
-3. Recover the transcript before doing anything else. It is not lost.
+3. Check daemon history for the transcript. Recovery requires history to be enabled and the entry still retained.
 
    ```text
    parakit history
    parakit copy-last
    ```
 
-   In non-direct paste modes the transcript was staged on the clipboard even when the paste was blocked, so OS clipboard history also has it. On Windows that is `Win+V`, which the user has to enable first.
+   When the clipboard changes or cannot be read after staging, parakit re-copies the transcript once before a safe paste and keeps it on the clipboard. If held modifiers prevent the paste, it leaves the transcript there for manual insertion. Focus changes still block automatic insertion, and newer copies made after dispatch are preserved. Enabled OS clipboard history is another possible recovery source; on Windows, check `Win+V`. If transcription logging was enabled, its raw/clean text is another recovery source.
 
 4. Try a different paste mode against the same target. The default is `terminal` on Linux and `standard` elsewhere.
 
@@ -94,26 +94,27 @@ The transcript is printed or logged but nothing arrives in the focused applicati
    parakit start --paste-mode direct
    ```
 
-   Use `standard` for applications that only accept `Ctrl+V` and ignore `Ctrl+Shift+V`. Use `direct` only when an application refuses clipboard paste entirely; it types through the platform keyboard API, is slower, and is less reliable for non-ASCII text. On Linux it still requires an X11 session.
+   Choose the mode using the [insertion table](running.md#insertion).
 
-5. Check for a sanitization block rather than a backend failure. Terminal mode strips trailing newlines and refuses multi-line text outright, because pasting a newline into a shell submits the command. A multi-line dictation in `terminal` mode is copied, not pasted, by design; switch to `standard` for prose targets.
+5. For multi-line prose, switch from `terminal` to `standard`; see [paste modes](running.md#insertion).
 6. On Linux, use an X11 session. Insertion goes through X11/XTest for every paste mode, including `direct`.
-7. On macOS, grant Accessibility and Input Monitoring to the terminal application that launches parakit, restart parakit, and rerun `parakit doctor --deep`. Stage 2 of the deep check needs an active GUI login, not an SSH-only session.
+7. On macOS, check [permissions and deep diagnostics](macos-desktop.md#permissions) in an active GUI login.
 8. On Windows, check whether the target runs elevated. A normal user process cannot inject into an administrator or elevated application, and parakit cannot work around that.
-9. If focus changed between the hotkey release and the paste, parakit skips automatic insertion on purpose. Recover the transcript with `history` or `copy-last`; clipboard modes also leave a copy in OS clipboard history. It remains the active clipboard only when the keep-transcript policy applies. Hold focus on the target until the success cue.
+9. If focus changed between recording start and insertion, parakit skips automatic insertion on purpose. Recover the transcript through the sources above. Clipboard handling follows the selected policy and preserves detected competing writes. Hold focus on the target until the success cue.
+
 If that did not fix it, paste modes, focus guards, and clipboard restore policy are in [running.md#insertion](running.md#insertion). Platform specifics are in [linux-desktop.md#deep-doctor-check](linux-desktop.md#deep-doctor-check), [macos-desktop.md#doctor---deep](macos-desktop.md#doctor---deep), and [windows-desktop.md#doctor---deep](windows-desktop.md#doctor---deep).
 
 ## macOS Paste Could Not Be Confirmed
 
-macOS plays the error tone and shows a "Paste blocked" notification reading `Paste could not be confirmed; transcript copied. Press Cmd+V to insert it.`
+macOS plays the error tone and shows a "Paste unconfirmed" notification when it cannot prove that a posted paste landed.
 
-parakit sent `Cmd+V`, then polled the focused Accessibility element's value for about 1.8 seconds looking for the transcript. The element exposed a value, but the transcript never appeared in it. parakit cannot tell whether the paste landed, so it left the transcript on the clipboard instead of restoring the previous clipboard contents. The paste may still have succeeded.
+The target did not provide [paste acknowledgement](macos-desktop.md#insertion). Recover the text as follows.
 
 > [!IMPORTANT]
 > Look at the target application before you press `Cmd+V`. The paste may have already landed and parakit only failed to observe it. Pasting again over text that is already there inserts a second copy.
 
-1. If the text is not there, press `Cmd+V`. The transcript is the current clipboard contents.
-2. Expect the previous clipboard contents to be gone. This path deliberately skips the clipboard restore so the transcript cannot be destroyed by a wrong guess. Recover the old contents from a clipboard manager if you need them.
+1. If the notification says the transcript was copied and the text is not in the target, press `Cmd+V`. This path deliberately leaves the transcript on the clipboard and skips restoration so an uncertain paste cannot destroy its only copy.
+2. If the notification says the clipboard changed, do not paste blindly: another application owns the current clipboard. Inspect the target first, then use `parakit copy-last` when transcript history is enabled.
 3. If it happens once against a busy or slow target, treat it as a timeout and move on. Confirmation has a fixed deadline, and a target that takes longer than that to update its accessibility value reports no evidence even on a successful paste.
 4. If it repeats against the same application, reproduce it without dictating. Focus that application and run:
 
@@ -123,13 +124,13 @@ parakit sent `Cmd+V`, then polled the focused Accessibility element's value for 
 
    If the text lands every time but is still reported unconfirmed, that application does not expose the pasted text through Accessibility in a form parakit can match. Restart the daemon with `parakit start --paste-mode direct` while you work in that application; direct typing never touches the clipboard and never runs the acknowledgement step.
 
-5. If JSONL logging is enabled, the insertion record for the dictation has `"outcome":"copied_only"` with `"acknowledgement_kind":"no_evidence"`. That distinguishes this case from `pasted_unverified`, which is the separate and quieter path taken when the field withholds its value entirely, as password and other secure fields do.
+5. If JSONL logging is enabled, `"acknowledgement_kind":"no_evidence"` identifies this case. The outcome is `copied_only` while the staged transcript remains current, or `pasted_unverified` when another application replaced the clipboard. Fields that withhold their value use one of the separate `unverified_*` acknowledgement kinds.
 
 If the notification never appears at all, follow the macOS notification note in [macos-desktop.md#insertion](macos-desktop.md#insertion). Acknowledgement and clipboard outcomes are described there and in [logging.md#insertion-outcomes](logging.md#insertion-outcomes).
 
 ## Wrong Microphone
 
-parakit records from a different input device than the one you expect.
+parakit records from a different input device than the one you expect. A typical symptom is the error tone right after you speak; without `--quiet`, the daemon also prints `parakit: no speech detected`.
 
 1. Check what parakit selected. `parakit doctor` prints the `mic` line; a running daemon reports the same thing under `parakit status --verbose`.
 2. Change the operating system default input device. parakit follows the OS default and has no device-selection flag. Use desktop sound settings, `pavucontrol` on Linux, System Settings > Sound > Input on macOS, or Settings > System > Sound on Windows.
@@ -147,6 +148,19 @@ parakit records from a different input device than the one you expect.
 7. If parakit warned about a Bluetooth microphone, that is not an error. Bluetooth microphones are allowed, but headset profiles add latency and reduce speech quality, so prefer a wired or USB microphone when transcription accuracy matters.
 
 If that did not fix it, device following, downmixing, and the pre-roll buffer are described in [running.md#microphone](running.md#microphone).
+
+If Windows cannot open any microphone, check [desktop microphone permissions](windows-desktop.md#microphone-permissions).
+
+## Model Reload Fails After Idle
+
+Run `parakit --verbose status` and read `model error`. Confirm that the model
+path resolved at startup still exists and is readable, then check device
+visibility with `parakit --verbose doctor`. Restore the file or device and
+press PTT again; [reload behavior](running.md#idle-model-offload) retries without
+a daemon restart. A changed model path or device setting requires a restart.
+
+For unexpectedly high memory after offload, see the [allocation ownership notes](dev/memory.md#allocation-ownership)
+for the distinction between session allocations and process-wide backend caches.
 
 ## Build And Model Issues
 

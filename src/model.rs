@@ -116,16 +116,47 @@ pub fn xdg_cache_base() -> Result<PathBuf> {
 ///
 /// # Errors
 ///
-/// Returns an error if no usable home directory is available.
+/// Returns an error if `env_var` does not supply the base and `HOME` is unset or empty.
 #[cfg(not(target_os = "windows"))]
 pub fn xdg_base(env_var: &str, fallback_subdir: &str) -> Result<PathBuf> {
-    if let Some(path) = std::env::var_os(env_var) {
-        if !path.as_os_str().is_empty() {
-            return Ok(PathBuf::from(path));
-        }
+    resolve_xdg_base(
+        std::env::var_os(env_var),
+        std::env::var_os("HOME"),
+        fallback_subdir,
+    )
+}
+
+/// Resolve an XDG-style base directory from already-read environment values.
+///
+/// Keeping the environment reads in [`xdg_base`] lets tests cover empty and missing values without mutating process-global environment state.
+/// An empty value counts as unset for both variables, so an empty `HOME` never yields a path relative to the working directory.
+///
+/// # Arguments
+///
+/// * `xdg` - Value of the XDG environment variable, if set.
+/// * `home` - Value of `HOME`, if set.
+/// * `fallback_subdir` - Subdirectory of `home` to fall back to.
+///
+/// # Returns
+///
+/// `xdg` when nonempty, otherwise `home` joined with `fallback_subdir`.
+///
+/// # Errors
+///
+/// Returns an error if `xdg` is unset or empty and `home` is unset or empty.
+#[cfg(not(target_os = "windows"))]
+fn resolve_xdg_base(
+    xdg: Option<std::ffi::OsString>,
+    home: Option<std::ffi::OsString>,
+    fallback_subdir: &str,
+) -> Result<PathBuf> {
+    if let Some(path) = xdg.filter(|path| !path.is_empty()) {
+        return Ok(PathBuf::from(path));
     }
 
-    let home = std::env::var_os("HOME").context("HOME is not set")?;
+    let home = home
+        .filter(|home| !home.is_empty())
+        .context("HOME is unset or empty")?;
     Ok(PathBuf::from(home).join(fallback_subdir))
 }
 
@@ -157,4 +188,42 @@ fn override_models_dir() -> Result<Option<PathBuf>> {
         anyhow::bail!("{MODELS_DIR_ENV} is set but empty");
     }
     Ok(Some(PathBuf::from(raw)))
+}
+
+#[cfg(all(test, not(target_os = "windows")))]
+mod tests {
+    use super::*;
+    use std::ffi::OsString;
+
+    fn os(value: &str) -> Option<OsString> {
+        Some(OsString::from(value))
+    }
+
+    #[test]
+    fn nonempty_xdg_value_wins_over_home() {
+        let base = resolve_xdg_base(os("/xdg/cache"), os("/home/user"), ".cache").unwrap();
+        assert_eq!(base, PathBuf::from("/xdg/cache"));
+    }
+
+    #[test]
+    fn unset_or_empty_xdg_value_falls_back_to_home() {
+        for xdg in [None, os("")] {
+            let base = resolve_xdg_base(xdg.clone(), os("/home/user"), ".cache").unwrap();
+            assert_eq!(base, PathBuf::from("/home/user/.cache"), "{xdg:?}");
+        }
+    }
+
+    #[test]
+    fn unset_or_empty_home_is_an_error_not_a_relative_path() {
+        for xdg in [None, os("")] {
+            for home in [None, os("")] {
+                let err = resolve_xdg_base(xdg.clone(), home.clone(), ".config")
+                    .expect_err("no usable base must be an error");
+                assert!(
+                    err.to_string().contains("HOME is unset or empty"),
+                    "xdg {xdg:?}, home {home:?}: {err:#}"
+                );
+            }
+        }
+    }
 }

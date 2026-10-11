@@ -1,7 +1,7 @@
 //! Inference wrapper around a `crispasr::Session`.
 
 use crate::constants::TARGET_RATE;
-use crate::crispasr_ext::OwnedSession;
+use crate::crispasr_ext::{crispasr_thread_count, OwnedSession};
 use crate::model::validate_model_file;
 use anyhow::{bail, Context, Result};
 use clap::ValueEnum;
@@ -105,8 +105,7 @@ impl Engine {
     ///
     /// # Errors
     ///
-    /// Returns an error if the model path is not a file, is not UTF-8, the
-    /// thread count is zero, or CrispASR cannot load the model.
+    /// Returns an error if the thread count is zero or above `i32::MAX`, the model path is not a file or is not UTF-8, or CrispASR cannot load the model.
     pub fn open<P: AsRef<Path>>(
         model_path: P,
         threads: usize,
@@ -115,6 +114,8 @@ impl Engine {
         if threads == 0 {
             return Err(anyhow::anyhow!("thread count must be at least 1"));
         }
+        // Every device mode passes the same checked count, so an out-of-range value fails here instead of wrapping negative.
+        let n_threads = crispasr_thread_count(threads).map_err(anyhow::Error::msg)?;
         let path = model_path.as_ref();
         validate_model_file(path)?;
         let path_str = path
@@ -131,11 +132,11 @@ impl Engine {
             .with_context(|| format!("failed to detect backend for model {}", path_str))?;
         let session = match device_mode.use_gpu_override() {
             Some(use_gpu) => EngineSession::WithParams(
-                OwnedSession::open_with_params(path_str, &backend, threads, use_gpu)
+                OwnedSession::open_with_params(path_str, &backend, n_threads, use_gpu)
                     .map_err(|e| anyhow::anyhow!("crispasr open failed: {e}"))?,
             ),
             None => EngineSession::Auto(
-                crispasr::Session::open_with_backend(path_str, &backend, threads as i32)
+                crispasr::Session::open_with_backend(path_str, &backend, n_threads)
                     .map_err(|e| anyhow::anyhow!("crispasr open failed: {e}"))?,
             ),
         };
@@ -218,6 +219,9 @@ fn validate_detected_backend(backend: String) -> Result<String> {
     Ok(backend.to_string())
 }
 
+/// Largest CPU thread count parakit accepts. CrispASR's session-open entry points take a C `int`, so config load and `--threads` reject larger values before any model is fetched or opened.
+pub const MAX_THREADS: usize = std::ffi::c_int::MAX as usize;
+
 /// Return the default CPU thread count for inference.
 ///
 /// # Returns
@@ -232,6 +236,10 @@ pub fn default_thread_count() -> usize {
 
 /// Convert available logical parallelism into an interactive-daemon default.
 ///
+/// # Arguments
+///
+/// * `available_threads` - Logical CPUs the process may use; 0 is treated as 1.
+///
 /// # Returns
 ///
 /// Roughly half the available logical CPUs, with guards for small machines.
@@ -239,7 +247,7 @@ pub fn default_thread_count() -> usize {
 ///
 /// # Panics
 ///
-/// This function does not panic because the clamp bounds are fixed and valid.
+/// Does not panic. The only division is by the constant 2.
 pub fn recommended_thread_count(available_threads: usize) -> usize {
     let available_threads = available_threads.max(1);
     if available_threads == 1 {
@@ -368,6 +376,35 @@ mod tests {
             Err(err) => err,
         };
         assert!(err.to_string().contains("model path is not a file"));
+    }
+
+    #[test]
+    fn crispasr_thread_count_accepts_the_c_int_range_only() {
+        let max = usize::try_from(i32::MAX).unwrap();
+        assert_eq!(crispasr_thread_count(1), Ok(1));
+        assert_eq!(crispasr_thread_count(max), Ok(i32::MAX));
+        assert!(crispasr_thread_count(max + 1).is_err());
+    }
+
+    #[test]
+    fn out_of_range_thread_count_is_rejected_in_every_device_mode() {
+        // Auto mode used to cast with `as i32`, wrapping the count negative.
+        let too_many = usize::try_from(i32::MAX).unwrap() + 1;
+        for device in DeviceMode::value_variants() {
+            let err = match Engine::open(
+                "target/tmp/definitely-missing-parakit-model.gguf",
+                too_many,
+                *device,
+            ) {
+                Ok(_) => panic!("{device:?}: an out-of-range thread count must fail"),
+                Err(err) => err,
+            };
+            assert!(
+                err.to_string()
+                    .contains("thread count is too large for CrispASR"),
+                "{device:?}: {err:#}"
+            );
+        }
     }
 
     #[test]

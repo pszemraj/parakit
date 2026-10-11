@@ -40,24 +40,32 @@ const MACOS_KEY_RIGHT_SHIFT: i64 = MACOS_RIGHT_SHIFT_KEYCODE as i64;
 const MACOS_KEY_RIGHT_OPTION: i64 = MACOS_RIGHT_OPTION_KEYCODE as i64;
 const MACOS_KEY_RIGHT_CONTROL: i64 = MACOS_RIGHT_CONTROL_KEYCODE as i64;
 
-/// Run the macOS hotkey loop until the process exits.
+/// Run the macOS hotkey loop until it ends or the process exits.
 ///
 /// # Arguments
 ///
 /// * `tx` - Coordinator channel used to post logical hotkey transitions.
 /// * `_backend` - Ignored backend preference on macOS.
 /// * `log` - Logger used for backend diagnostics.
+///
+/// # Returns
+///
+/// Success when the loop ends normally.
+///
+/// # Errors
+///
+/// Returns [`super::HotkeyLoopFailed`] after printing recovery help.
 pub(crate) fn run_grab_loop(
     tx: Sender<HotkeyTransition>,
     _backend: HotkeyBackend,
     log: Arc<Logger>,
-) {
+) -> Result<(), super::HotkeyLoopFailed> {
     log.verbose("parakit: macOS hotkey backend: CoreGraphics session event tap Left Control+Space");
-    super::run_hotkey_loop_or_exit(
+    super::report_hotkey_loop_failure(
         run_event_tap_loop(tx),
         "macOS hotkey event tap",
         crate::daemon::hotkey_help::macos_failure_help,
-    );
+    )
 }
 
 fn run_event_tap_loop(tx: Sender<HotkeyTransition>) -> anyhow::Result<()> {

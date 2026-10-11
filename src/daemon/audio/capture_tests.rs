@@ -1,6 +1,19 @@
 //! Unit tests for live audio selection and recording buffer helpers.
 
+use super::device::{
+    is_bluetooth_input_name, is_virtual_input_name, lower_cost_mono_config_note,
+    preferred_mono_config_from_ranges, source_aware_mic_identity, MicIdentity,
+};
+use super::drain::{
+    handle_audio_control, make_resampler, spawn_audio_drain, AudioDrain, CapturePipeline,
+    DrainControl, DRAIN_SCRATCH_FRAMES,
+};
 use super::*;
+use cpal::SampleFormat;
+use ringbuf::{
+    traits::{Producer, Split},
+    HeapProd, HeapRb,
+};
 
 #[test]
 fn input_name_classifiers_are_stable() {
@@ -55,7 +68,7 @@ fn mic_summary_and_detail_lines_cases_are_stable() {
                 "capture path: CPAL opened 4ch; callback downmixes to mono before resampling",
             ],
         },
-        // Previously uncovered: `MicInfo::summary` (capture.rs ~238) has a
+        // Previously uncovered: `MicInfo::summary` (capture_device.rs) has a
         // third `!resampling` arm that neither original test exercised
         // (both used `resampling: true`). Mono, no resampling.
         MicSummaryCase {
@@ -149,8 +162,8 @@ fn preferred_mono_config_and_lower_cost_note_cases_are_stable() {
                 stream_config_range(1, 48_000, 48_000, SampleFormat::I16),
             ],
             expect_preferred: None,
-            // Production (`select_preferred_input_config`, capture.rs
-            // ~1145) only calls `lower_cost_mono_config_note` once
+            // Production (`select_preferred_input_config`, capture_device.rs)
+            // only calls `lower_cost_mono_config_note` once
             // `preferred_mono_config_from_ranges` returns `None`, so this
             // row's ranges also exercise that note path.
             expect_note: Some(
@@ -167,8 +180,8 @@ fn preferred_mono_config_and_lower_cost_note_cases_are_stable() {
                 "16000 Hz mono is available as F32, but not selected because the current policy preserves the OS default sample rate",
             ),
         },
-        // Previously uncovered: `lower_cost_mono_config_note` (capture.rs
-        // ~1184) returns `None` when the advertised ranges contain neither
+        // Previously uncovered: `lower_cost_mono_config_note`
+        // (capture_device.rs) returns `None` when the advertised ranges contain neither
         // a same-rate-other-format nor a target-rate-mono candidate (here,
         // no mono config is advertised at all).
         MonoConfigCase {
@@ -361,6 +374,36 @@ fn sent_audio_control_start_timeout_does_not_fallback_to_direct_state() {
     assert!(format!("{err:#}").contains("accepted Start"));
     assert_eq!(handle.session_epoch.load(Ordering::Acquire), 0);
     assert!(handle.state.lock().buffer.is_empty());
+}
+
+#[test]
+fn abandoned_drain_start_rolls_back_recording_state() {
+    let ring = HeapRb::<f32>::new(8);
+    let (_producer, mut consumer) = ring.split();
+    let state = Mutex::new(CaptureState::new());
+    let session_epoch = AtomicU64::new(0);
+    let mut pipeline = CapturePipeline::default();
+    let mut input = vec![0.0; DRAIN_SCRATCH_FRAMES];
+    let mut resampled = Vec::new();
+    let (ack_tx, ack_rx) = bounded(1);
+    drop(ack_rx);
+
+    handle_audio_control(
+        DrainControl::Start {
+            epoch: 42,
+            include_pre_roll: false,
+            ack: ack_tx,
+        },
+        &mut consumer,
+        &state,
+        &session_epoch,
+        &mut pipeline,
+        &mut input,
+        &mut resampled,
+    );
+
+    assert_eq!(session_epoch.load(Ordering::Acquire), 0);
+    assert!(state.lock().buffer.is_empty());
 }
 
 #[test]

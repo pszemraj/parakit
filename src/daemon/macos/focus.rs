@@ -584,6 +584,20 @@ fn cfstring_range_to_string(value: CFStringRef, location: usize, length: usize) 
 mod tests {
     use super::*;
 
+    fn test_cfstring(input: &str) -> AxElementHandle {
+        let value = unsafe {
+            CFStringCreateWithBytes(
+                ptr::null(),
+                input.as_ptr(),
+                input.len() as CFIndex,
+                K_CF_STRING_ENCODING_UTF8,
+                0,
+            )
+        };
+        assert!(!value.is_null());
+        AxElementHandle(value.cast_mut())
+    }
+
     #[test]
     fn messaging_timeout_bounds_each_confirmation_poll() {
         const MAX_AX_CALLS_PER_POLL: u32 = 3;
@@ -598,17 +612,7 @@ mod tests {
     #[test]
     fn cfstring_conversion_copies_only_bounded_ends() {
         let input = format!("{}{}", "a".repeat(80), "z".repeat(80));
-        let value = unsafe {
-            CFStringCreateWithBytes(
-                ptr::null(),
-                input.as_ptr(),
-                input.len() as CFIndex,
-                K_CF_STRING_ENCODING_UTF8,
-                0,
-            )
-        };
-        assert!(!value.is_null());
-        let value = AxElementHandle(value.cast_mut());
+        let value = test_cfstring(&input);
 
         let bounded =
             cfstring_to_bounded_value(value.as_cftype().cast(), 64).expect("valid CFString");
@@ -633,17 +637,7 @@ mod tests {
                 "z".repeat(31),
             ),
         ] {
-            let value = unsafe {
-                CFStringCreateWithBytes(
-                    ptr::null(),
-                    input.as_ptr(),
-                    input.len() as CFIndex,
-                    K_CF_STRING_ENCODING_UTF8,
-                    0,
-                )
-            };
-            assert!(!value.is_null());
-            let value = AxElementHandle(value.cast_mut());
+            let value = test_cfstring(&input);
 
             let bounded =
                 cfstring_to_bounded_value(value.as_cftype().cast(), 64).expect("valid CFString");

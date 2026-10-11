@@ -9,7 +9,7 @@ type GgmlBackendDev = *mut GgmlBackendDevice;
 // `ggml_backend_device_i` fields. The public header declares accessors for
 // these fields, but the pinned Windows import library does not export them.
 // Keep this in sync with vendor/CrispASR/ggml/src/ggml-backend-impl.h through
-// `get_type`.
+// `get_props`.
 #[repr(C)]
 struct GgmlBackendDevice {
     iface: GgmlBackendDeviceIface,
@@ -21,6 +21,22 @@ struct GgmlBackendDeviceIface {
     get_description: Option<unsafe extern "C" fn(GgmlBackendDev) -> *const c_char>,
     get_memory: Option<unsafe extern "C" fn(GgmlBackendDev, *mut usize, *mut usize)>,
     get_type: Option<unsafe extern "C" fn(GgmlBackendDev) -> c_int>,
+    #[cfg(any(target_os = "windows", test))]
+    get_props: Option<unsafe extern "C" fn(GgmlBackendDev, *mut GgmlBackendDeviceProps)>,
+}
+
+// Mirror ggml_backend_dev_props, including all four ggml_backend_dev_caps
+// bool fields. get_props writes the whole structure, not just device_id.
+#[cfg(any(target_os = "windows", test))]
+#[repr(C)]
+struct GgmlBackendDeviceProps {
+    name: *const c_char,
+    description: *const c_char,
+    memory_free: usize,
+    memory_total: usize,
+    kind: c_int,
+    device_id: *const c_char,
+    caps: [bool; 4],
 }
 
 extern "C" {
@@ -144,17 +160,29 @@ pub fn devices() -> Vec<DeviceInfo> {
         }
         let device_ref = unsafe { &*device };
         let (free_bytes, total_bytes) = device_memory(device, device_ref);
+        let name = device_ref
+            .iface
+            .get_name
+            .map(|get_name| c_string_lossy(unsafe { get_name(device) }))
+            .unwrap_or_default();
+        let description = device_ref
+            .iface
+            .get_description
+            .map(|get_description| c_string_lossy(unsafe { get_description(device) }))
+            .unwrap_or_default();
+        #[cfg(target_os = "windows")]
+        let free_bytes = if description.starts_with("NVIDIA") {
+            // CUDA's WDDM reading does not include other processes' allocations.
+            // The driver's device-wide reading also covers NVIDIA Vulkan.
+            device_pci_bus_id(device, device_ref)
+                .and_then(|id| windows_nvidia_free_memory(&id))
+                .map_or(free_bytes, |available| free_bytes.min(available))
+        } else {
+            free_bytes
+        };
         out.push(DeviceInfo {
-            name: device_ref
-                .iface
-                .get_name
-                .map(|get_name| c_string_lossy(unsafe { get_name(device) }))
-                .unwrap_or_default(),
-            description: device_ref
-                .iface
-                .get_description
-                .map(|get_description| c_string_lossy(unsafe { get_description(device) }))
-                .unwrap_or_default(),
+            name,
+            description,
             kind: DeviceKind::from(
                 device_ref
                     .iface
@@ -211,12 +239,165 @@ fn device_memory(device: GgmlBackendDev, device_ref: &GgmlBackendDevice) -> (usi
             get_memory(device, &mut free_bytes, &mut total_bytes);
         }
     }
-    (free_bytes, total_bytes)
+    normalize_device_memory(free_bytes, total_bytes)
+}
+
+fn normalize_device_memory(free_bytes: usize, total_bytes: usize) -> (usize, usize) {
+    // Metal's unsigned budget-minus-allocation subtraction can wrap when a
+    // process exceeds its recommended working set. Treat that as no room.
+    if total_bytes > 0 && free_bytes > total_bytes {
+        (0, total_bytes)
+    } else {
+        (free_bytes, total_bytes)
+    }
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn device_pci_bus_id(
+    device: GgmlBackendDev,
+    device_ref: &GgmlBackendDevice,
+) -> Option<std::ffi::CString> {
+    let get_props = device_ref.iface.get_props?;
+    let mut props: GgmlBackendDeviceProps = unsafe { std::mem::zeroed() };
+    // SAFETY: The callback and full output layout match the pinned ggml ABI.
+    unsafe { get_props(device, &mut props) };
+    if props.device_id.is_null() {
+        return None;
+    }
+    // ggml owns this NUL-terminated ID. Copy it before the next native call.
+    let id = unsafe { std::ffi::CStr::from_ptr(props.device_id) };
+    (!id.is_empty()).then(|| id.to_owned())
+}
+
+/// Read device-wide NVIDIA free memory for the selected physical adapter.
+///
+/// # Returns
+///
+/// Free bytes for the PCI bus ID, or none when the driver probe is unavailable.
+#[cfg(target_os = "windows")]
+fn windows_nvidia_free_memory(pci_bus_id: &std::ffi::CStr) -> Option<usize> {
+    use std::ffi::c_void;
+    use windows::core::{s, w};
+    use windows::Win32::Foundation::{FreeLibrary, HMODULE};
+    use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
+
+    type Proc = unsafe extern "system" fn() -> isize;
+    type Init = unsafe extern "C" fn() -> u32;
+    type Device = unsafe extern "C" fn(*const c_char, *mut *mut c_void) -> u32;
+    type Memory = unsafe extern "C" fn(*mut c_void, *mut NvmlMemory) -> u32;
+
+    #[repr(C)]
+    struct NvmlMemory {
+        total: u64,
+        free: u64,
+        used: u64,
+    }
+
+    struct Library(HMODULE);
+    impl Drop for Library {
+        fn drop(&mut self) {
+            unsafe {
+                let _ = FreeLibrary(self.0);
+            }
+        }
+    }
+
+    // NVML ships with the NVIDIA display driver; no import library or toolkit
+    // is required at runtime. Keep the module alive through every native call.
+    let library = Library(unsafe { LoadLibraryW(w!("nvml.dll")) }.ok()?);
+    // SAFETY: These signatures match the driver's public NVML C API.
+    let (init, shutdown, device, memory) = unsafe {
+        (
+            std::mem::transmute::<Proc, Init>(GetProcAddress(library.0, s!("nvmlInit_v2"))?),
+            std::mem::transmute::<Proc, Init>(GetProcAddress(library.0, s!("nvmlShutdown"))?),
+            std::mem::transmute::<Proc, Device>(GetProcAddress(
+                library.0,
+                s!("nvmlDeviceGetHandleByPciBusId_v2"),
+            )?),
+            std::mem::transmute::<Proc, Memory>(GetProcAddress(
+                library.0,
+                s!("nvmlDeviceGetMemoryInfo"),
+            )?),
+        )
+    };
+    if unsafe { init() } != 0 {
+        return None;
+    }
+    let available = (|| {
+        let mut handle = std::ptr::null_mut();
+        if unsafe { device(pci_bus_id.as_ptr(), &mut handle) } != 0 {
+            return None;
+        }
+        let mut info = NvmlMemory {
+            total: 0,
+            free: 0,
+            used: 0,
+        };
+        if unsafe { memory(handle, &mut info) } == 0 {
+            return usize::try_from(info.free).ok();
+        }
+        None
+    })();
+    unsafe { shutdown() };
+    available
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn identical_gpu_descriptions_keep_their_own_pci_bus_ids() {
+        use std::ffi::CStr;
+
+        #[repr(C)]
+        struct FakeDevice {
+            backend: GgmlBackendDevice,
+            pci_bus_id: *const c_char,
+        }
+
+        unsafe extern "C" fn get_props(device: GgmlBackendDev, props: *mut GgmlBackendDeviceProps) {
+            let device = unsafe { &*device.cast::<FakeDevice>() };
+            unsafe {
+                (*props).description = c"NVIDIA RTX".as_ptr();
+                (*props).device_id = device.pci_bus_id;
+            }
+        }
+
+        for (id, expected) in [
+            (Some(c"0000:01:00.0"), Some(c"0000:01:00.0")),
+            (Some(c"0000:07:00.0"), Some(c"0000:07:00.0")),
+            (Some(c""), None),
+            (None, None),
+        ] {
+            let mut device = FakeDevice {
+                backend: GgmlBackendDevice {
+                    iface: GgmlBackendDeviceIface {
+                        get_name: None,
+                        get_description: None,
+                        get_memory: None,
+                        get_type: None,
+                        get_props: Some(get_props),
+                    },
+                },
+                pci_bus_id: id.map_or(std::ptr::null(), CStr::as_ptr),
+            };
+            let handle = &mut device.backend as GgmlBackendDev;
+            assert_eq!(
+                device_pci_bus_id(handle, &device.backend).as_deref(),
+                expected
+            );
+            device.backend.iface.get_props = None;
+            assert_eq!(device_pci_bus_id(handle, &device.backend), None);
+        }
+    }
+
+    #[test]
+    fn over_budget_device_memory_does_not_wrap_into_available_space() {
+        assert_eq!(normalize_device_memory(usize::MAX - 1, 1024), (0, 1024));
+        assert_eq!(normalize_device_memory(512, 1024), (512, 1024));
+        assert_eq!(normalize_device_memory(0, 0), (0, 0));
+    }
 
     #[test]
     fn maps_ggml_device_types() {

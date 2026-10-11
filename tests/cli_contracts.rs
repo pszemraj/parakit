@@ -19,6 +19,17 @@ fn isolated_parakit(root: &Path) -> Command {
     command
 }
 
+fn isolated_parakit_with_empty_config(name: &str) -> Command {
+    let root = common::fixture_root("cli-contracts", name);
+    std::fs::create_dir_all(&root).expect("fixture root should be created");
+    let config = root.join("config.toml");
+    std::fs::write(&config, "").expect("empty config fixture should be written");
+
+    let mut command = isolated_parakit(&root);
+    command.env("PARAKIT_CONFIG_PATH", config);
+    command
+}
+
 #[test]
 fn broken_config_does_not_block_documented_control_and_repair_commands() {
     let root = common::fixture_root("cli-contracts", "broken-config-control");
@@ -71,6 +82,56 @@ fn broken_config_does_not_block_documented_control_and_repair_commands() {
             "{args:?} unexpectedly loaded the broken config: {stderr}"
         );
     }
+}
+
+#[test]
+fn missing_config_override_fails_reads_but_not_path_or_init() {
+    let root = common::fixture_root("cli-contracts", "missing-config-override");
+    std::fs::create_dir_all(&root).expect("fixture root should be created");
+    let config = root.join("typo.toml");
+
+    // Commands that read the config refuse a mistyped override instead of
+    // silently running on defaults.
+    for args in [
+        &["rules", "list"][..],
+        &["config", "show"][..],
+        &["doctor"][..],
+    ] {
+        let output = isolated_parakit(&root)
+            .args(args)
+            .env("PARAKIT_CONFIG_PATH", &config)
+            .output()
+            .expect("parakit should run");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(!output.status.success(), "{args:?} succeeded: {stderr}");
+        assert!(
+            stderr.contains("PARAKIT_CONFIG_PATH names") && stderr.contains("does not exist"),
+            "{args:?}: {stderr}"
+        );
+    }
+
+    // The repair path still works: `config path` names the file and
+    // `config init` creates it, after which reads succeed.
+    for args in [
+        &["config", "path"][..],
+        &["config", "init"][..],
+        &["rules", "list"][..],
+    ] {
+        let output = isolated_parakit(&root)
+            .args(args)
+            .env("PARAKIT_CONFIG_PATH", &config)
+            .output()
+            .expect("parakit should run");
+        assert!(
+            output.status.success(),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    assert!(
+        config.is_file(),
+        "config init should create the override file"
+    );
 }
 
 #[test]
@@ -134,14 +195,8 @@ fn quiet_path_commands_still_report_resolution_and_parse_errors() {
 
 #[test]
 fn quiet_rules_list_still_validates_disabled_rule_names() {
-    let root = common::fixture_root("cli-contracts", "quiet-rules-validation");
-    std::fs::create_dir_all(&root).expect("fixture root should be created");
-    let config = root.join("config.toml");
-    std::fs::write(&config, "").expect("empty config fixture should be written");
-
-    let output = isolated_parakit(&root)
+    let output = isolated_parakit_with_empty_config("quiet-rules-validation")
         .args(["--quiet", "rules", "list", "--disable-rule", "typo"])
-        .env("PARAKIT_CONFIG_PATH", &config)
         .output()
         .expect("parakit should run");
 
@@ -219,18 +274,194 @@ fn daemon_only_commands_report_an_absent_daemon_cleanly() {
         assert!(output.stdout.is_empty(), "{command}");
         assert!(output.stderr.is_empty(), "{command}");
     }
+    assert!(!root.join("runtime").exists());
+    assert!(!root.join("cache").exists());
+}
+
+#[cfg(unix)]
+fn spawn_stop_with_held_lock(
+    name: &str,
+) -> (std::path::PathBuf, std::fs::File, std::process::Child) {
+    let root = common::fixture_root("cli-contracts", name);
+    #[cfg(target_os = "linux")]
+    let runtime = root.join("runtime").join("parakit");
+    #[cfg(not(target_os = "linux"))]
+    let runtime = root.join("cache").join("parakit").join("run");
+    std::fs::create_dir_all(&runtime).unwrap();
+    let lock = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(runtime.join("parakit.lock"))
+        .unwrap();
+    fs2::FileExt::lock_exclusive(&lock).unwrap();
+    let stop = isolated_parakit(&root)
+        .arg("stop")
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    (runtime, lock, stop)
+}
+
+#[cfg(unix)]
+#[test]
+fn stop_waits_for_shutdown_after_the_control_endpoint_disappears() {
+    let (_, lock, mut stop) = spawn_stop_with_held_lock("stopping-daemon");
+    std::thread::sleep(std::time::Duration::from_secs(1));
+    assert!(
+        stop.try_wait().unwrap().is_none(),
+        "stop must wait for the held lock"
+    );
+    drop(lock);
+    let output = stop.wait_with_output().unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(output.stdout, b"stopped\n");
+    assert!(output.stderr.is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn stop_reaches_a_daemon_that_exposes_control_after_the_request_starts() {
+    use std::io::{BufRead, BufReader, Write};
+    use std::os::unix::net::UnixListener;
+    use std::time::{Duration, Instant};
+
+    let (runtime, lock, mut stop) = spawn_stop_with_held_lock("stop-during-startup");
+    std::thread::sleep(Duration::from_secs(1));
+    assert!(stop.try_wait().unwrap().is_none());
+
+    let listener = UnixListener::bind(runtime.join("control.sock")).unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(1);
+    let mut delivered = false;
+    while Instant::now() < deadline {
+        match listener.accept() {
+            Ok((mut stream, _)) => {
+                stream.set_nonblocking(false).unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(1)))
+                    .unwrap();
+                let mut request = String::new();
+                BufReader::new(&stream).read_line(&mut request).unwrap();
+                assert_eq!(request, "\"stop\"\n");
+                stream
+                    .write_all(b"{\"ok\":{\"message\":\"stopping\"}}\n")
+                    .unwrap();
+                delivered = true;
+                break;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+            Err(error) => panic!("test control endpoint failed: {error}"),
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    if delivered {
+        // Acknowledgement must end transport retries, not the shutdown wait.
+        std::thread::sleep(Duration::from_millis(5050));
+        assert!(stop.try_wait().unwrap().is_none());
+        assert!(matches!(
+            listener.accept(),
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock
+        ));
+    }
+    drop(lock);
+    let output = stop.wait_with_output().unwrap();
+    assert!(
+        delivered,
+        "stop never reached the starting daemon: {output:?}"
+    );
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(output.stdout, b"stopped\n");
+    assert!(output.stderr.is_empty());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "requires an X11 desktop and microphone; opens a passive test daemon without recording"]
+fn daemon_control_remains_available_during_model_download() {
+    use anyhow::{bail, ensure, Result};
+    use std::time::{Duration, Instant};
+
+    let root = common::fixture_root("cli-contracts", "startup-control");
+    std::fs::create_dir_all(&root).unwrap();
+    let config = root.join("config.toml");
+    std::fs::write(&config, "").unwrap();
+    let stderr_path = root.join("startup.err");
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let mut daemon = isolated_parakit(&root)
+        .args([
+            "--verbose",
+            "start",
+            "--hotkey-backend",
+            "x11-listen",
+            "--no-sounds",
+            "--no-cleaning",
+            "--device",
+            "cpu",
+        ])
+        .env("PARAKIT_CONFIG_PATH", &config)
+        .env("PARAKIT_MODELS_DIR", root.join("models"))
+        .env(
+            "HF_ENDPOINT",
+            format!("http://{}", listener.local_addr().unwrap()),
+        )
+        .env_remove("HF_TOKEN")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::fs::File::create(&stderr_path).unwrap())
+        .spawn()
+        .unwrap();
+
+    let result = (|| -> Result<()> {
+        let deadline = Instant::now() + Duration::from_secs(15);
+        let _download = loop {
+            match listener.accept() {
+                Ok((stream, _)) => break stream,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+                Err(error) => return Err(error.into()),
+            }
+            if let Some(status) = daemon.try_wait()? {
+                bail!(
+                    "startup exited {status}: {}",
+                    std::fs::read_to_string(&stderr_path)?
+                );
+            }
+            ensure!(
+                Instant::now() < deadline,
+                "startup never requested the model"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        // The local server deliberately withholds its response, exercising the
+        // real startup path without downloading a model or entering the hotkey loop.
+        for (args, expected) in [
+            (&["status"][..], "parakit: starting"),
+            (&["start"][..], "parakit: already running"),
+            (&["stop"][..], "stopped"),
+        ] {
+            let output = isolated_parakit(&root).args(args).output()?;
+            ensure!(output.status.success(), "{args:?}: {output:?}");
+            ensure!(
+                String::from_utf8_lossy(&output.stdout).contains(expected),
+                "{args:?}: {output:?}"
+            );
+            ensure!(output.stderr.is_empty(), "{args:?}: {output:?}");
+        }
+        ensure!(daemon.wait()?.success(), "test daemon failed during stop");
+        Ok(())
+    })();
+    // Clean up only the test-owned process if any assertion or startup check failed.
+    let _ = daemon.kill();
+    let _ = daemon.wait();
+    result.unwrap();
 }
 
 #[test]
 fn config_show_reports_resolved_defaults() {
-    let root = common::fixture_root("cli-contracts", "config-show-defaults");
-    std::fs::create_dir_all(&root).expect("fixture root should be created");
-    let config = root.join("config.toml");
-    std::fs::write(&config, "").expect("empty config fixture should be written");
-
-    let output = isolated_parakit(&root)
+    let output = isolated_parakit_with_empty_config("config-show-defaults")
         .args(["config", "show"])
-        .env("PARAKIT_CONFIG_PATH", &config)
         .output()
         .expect("parakit should run");
 
@@ -254,5 +485,34 @@ fn config_show_reports_resolved_defaults() {
             stdout.contains(expected),
             "missing {expected:?} in:\n{stdout}"
         );
+    }
+}
+
+#[test]
+fn closed_stdout_ends_output_commands_quietly() {
+    let commands: &[&[&str]] = &[
+        &["config", "show"],
+        &["cache", "list"],
+        &["rules", "list"],
+        &["rules", "test", "So, um, the cat ran."],
+        &["status"],
+    ];
+    for args in commands {
+        // A reader that already went away, as after `parakit status | head -1`.
+        let (reader, writer) = std::io::pipe().expect("pipe should open");
+        drop(reader);
+        let output = isolated_parakit_with_empty_config("closed-stdout")
+            .args(*args)
+            .stdout(writer)
+            .output()
+            .expect("parakit should run");
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            output.status.success(),
+            "{args:?} exited with {}: {stderr}",
+            output.status
+        );
+        assert!(stderr.is_empty(), "{args:?} wrote to stderr: {stderr}");
     }
 }

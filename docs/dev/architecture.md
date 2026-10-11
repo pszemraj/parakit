@@ -10,7 +10,7 @@ recording coordinator thread hotkey transition -> focus snapshot -> audio start/
 audio manager thread         owns the current cpal::Stream and follows the default mic
 cpal callback thread         mixes input to mono and pushes frames into a bounded SPSC ring
 audio drain thread           drains ring -> resamples -> updates pre-roll and active recording
-worker thread                owns Engine and runs transcribe -> clean -> insert
+worker thread                owns optional Engine, reload/offload, transcribe -> clean -> insert
 optional sound thread        opens rodio output only while playing cue tones
 IPC listener thread          accepts local control connections
 IPC client threads           handle status, stop, copy-last, history, and test-paste
@@ -31,7 +31,20 @@ Idle
 
 Empty captures are skipped before inference. Short captures are right-padded with silence before inference instead of being rejected.
 
-Live capture drains callback audio through a bounded single-producer/single-consumer ring buffer. Linux and macOS keep the microphone stream open for 350 ms pre-roll; Windows opens the stream paused and resumes it only while recording so `audiodg.exe` and driver-level processing do not run while idle. Recording uses a session epoch so stale drained samples from a stopped utterance cannot append into the next utterance.
+Model residency has a separate `loaded -> offloaded -> loading -> loaded` lifecycle. Startup remains eager; only the worker destroys or reopens the session. A shared activity gate admits recording before audio starts, and its lease follows PCM through queued transcription and insertion. IPC insertion takes the same gate before waiting for the insertion mutex. Expiry removes the session from the worker slot under the gate, then destroys it after unlocking. A new PTT can capture during destruction; the worker finishes teardown before reloading. Loading also leaves the gate unlocked. The last lease release restarts the idle deadline, including failure and silence paths. Status/history reads take no lease and never load the model.
+
+The reload recipe retains the resolved local path, threads, and device policy. Startup and reload use the [readiness probes](../running.md#idle-model-offload) selected for their lifecycle stage. Failure leaves the slot offloaded with an error; a later PTT retries. Without `--verbose`, startup discards process-wide stderr during model opening, including native errors and diagnostics from the already-running IPC, capture, and sound threads. A model-open error directs the user to rerun with `--verbose` for those details. Reload instead passes stderr through a line filter that drops only Parakeet's two informational loader lines, so native errors and concurrent audio or IPC diagnostics still appear. `--verbose` disables both.
+
+IPC stop wakes the worker and waits for its engine to be destroyed before
+running native process teardown. The lifetime guard is registered before IPC
+startup and transferred with the engine. Stop shares a bounded budget with
+insertion completion, without holding the insertion mutex while waiting for
+the worker. If the budget expires, immediate process termination avoids racing
+C++ static destructors with live native buffers. A failed hotkey backend
+returns to the daemon owner, which uses the same handshake before exiting with
+status 2.
+
+Live capture drains callback audio through a bounded single-producer/single-consumer ring buffer. Recording uses a session epoch so stale drained samples from a stopped utterance cannot append into the next utterance. Platform stream and pre-roll policies are in [microphone behavior](../running.md#microphone).
 
 ## Ownership Constraints
 
@@ -52,14 +65,20 @@ Cross-thread communication uses atomics, mutex-protected buffers, and crossbeam 
 | Path | Responsibility |
 | --- | --- |
 | `src/{main,cli,app}.rs` | Binary entrypoint, CLI definitions and precedence merge, command dispatch, daemon setup, and batch PTT simulation helper. |
+| `src/output.rs` | Command output on stdout that ends quietly when its reader closes the pipe. |
 | `src/config.rs` | `config.toml` path resolution, parsing, validation, and template. |
-| `src/daemon/desktop/hotkey.rs`, `src/daemon/desktop/hotkey/macos.rs` | Hotkey backends and hotkey state helpers. |
+| `src/daemon/desktop/hotkey.rs`, `src/daemon/desktop/hotkey/{linux,macos}.rs` | Hotkey backends and hotkey state helpers. |
 | `src/daemon/hotkey_help.rs` | Shared user-facing hotkey remediation text. |
 | `src/daemon/recording.rs` | Hotkey transition coordinator, focus snapshot, audio start/stop, and PCM handoff. |
-| `src/daemon/audio/capture.rs` | Microphone selection, live stream ownership, ring-buffer drain, pre-roll, resampling, and restart. |
+| `src/daemon/audio/capture.rs`, `src/daemon/audio/capture_{device,drain,stream}.rs` | Capture handle and pre-roll, microphone selection, ring-buffer drain and resampling, and live stream ownership and restart. |
 | `src/daemon/audio/pactl.rs` | Linux `pactl` parsing for startup/reopen microphone display details. |
-| `src/daemon/worker.rs` | ASR worker, paste sanitizer, focus guard, and clipboard fallback. |
-| `src/daemon/ipc.rs` | Local IPC transport for `status`, `stop`, `copy-last`, `history`, and `test-paste`; serves an in-memory transcript ring buffer. |
+| `src/daemon/worker.rs` | Worker events, model lifecycle, ASR, cleanup, and completion. |
+| `src/daemon/worker/insertion.rs` | Paste sanitizer, focus guard, clipboard fallback, and insertion reporting. |
+| `src/daemon/{model_lifecycle,engine_runtime}.rs` | Activity admission, session residency, and the shared open/warmup recipe. |
+| `src/daemon/worker_shutdown.rs` | Worker lifetime and bounded IPC shutdown handshake. |
+| `src/app/simulation.rs` | Acknowledged WAV dictations and configured idle/reload validation. |
+| `src/app/config_command.rs` | `parakit config` subcommands: show, path, init, and edit. |
+| `src/daemon/ipc.rs`, `src/daemon/ipc/{client,unix_socket,windows_pipe}.rs` | Local IPC for `status`, `stop`, `copy-last`, `history`, and `test-paste`: shared protocol and in-memory transcript ring buffer, the control client, and the Unix-socket and Windows named-pipe transports. |
 | `src/daemon/desktop/windows_{clipboard_history,focus,input,paste_smoke,security}.rs` | Windows clipboard-history acknowledgement, foreground checks, `SendInput` helpers, deep paste smoke test, and privilege diagnostics. |
 | `src/daemon/{preflight,audio/alsa,desktop/session,desktop/x11}.rs`, `src/daemon/macos.rs`, `src/daemon/macos/{permissions,focus,insertion_cgevent,pasteboard,diagnostics}.rs` | Startup checks, macOS TCC/focus/insertion/acknowledgement helpers, the deep paste-transaction smoke test, ALSA stderr suppression, session events, and X11 helpers. |
 | `src/daemon/{logging,notifications,sounds}.rs` | Runtime logging, desktop notifications, and generated audio cues. |
@@ -69,7 +88,7 @@ Cross-thread communication uses atomics, mutex-protected buffers, and crossbeam 
 | `src/{build_info,gpu,warmup,ffi_util}.rs` | Build diagnostics, bundled ggml device listing, synthetic warmup PCM, and local FFI helpers. |
 | `src/inference.rs`, `src/crispasr_ext.rs` | [CrispASR](https://github.com/CrispStrobe/CrispASR) session ownership wrapper and short-audio padding. |
 | `src/rules/` | Transcript cleanup pipeline: profiles, the built-in rule table, procedural passes, and user rules from `config.toml`. |
-| `src/daemon/desktop/{inject,clipboard_restore}.rs` | Clipboard transaction, X11/XTest paste chord, direct insertion, and restore timing. |
+| `src/daemon/desktop/{inject,focus_snapshot,clipboard_store,paste_transaction,clipboard_guard,direct,clipboard_restore}.rs` | Insertion contract and injector, focus snapshots, clipboard backend and snapshots, the guarded paste transaction and change detection, X11/XTest paste chord, guarded direct insertion, and restore timing. |
 | `src/data_log.rs` | JSONL transcription and insertion-outcome logging. |
 | `src/audio_file.rs` | WAV decoding, mono mixing, and file resampling for quality tools and PTT simulation. |
 | `examples/transcribe_file.rs` | Raw file-based inference smoke and quality checks. |
@@ -89,21 +108,15 @@ Runtime failures are reported and the daemon continues when possible: sound cues
 
 The similar implementations below stay separate because their invariants differ.
 
-- `daemon/macos/diagnostics.rs` `DoctorClipboardSnapshot` vs
-  `daemon/desktop/inject.rs` `ClipboardSnapshot`: `doctor --deep` keeps an
-  independent capture/restore oracle so it verifies the production clipboard
-  path instead of trusting it. Sharing the implementation would let a bug
-  pass its own verification.
+- `daemon/macos/diagnostics.rs` `DoctorClipboardSnapshot` vs `daemon/desktop/clipboard_store.rs` `ClipboardSnapshot`: `doctor --deep` keeps an independent capture/restore oracle so it verifies the production clipboard path instead of trusting it. Sharing the implementation would let a bug pass its own verification.
 - `daemon/macos/pasteboard.rs` `BoundedNormalizedValue` vs
   `daemon/macos/focus.rs` `cfstring_to_bounded_value`: same bounded
   head-plus-tail shape, different unit systems (normalized chars with
   whitespace stripping for layout-independent matching vs raw UTF-16 units at
   the FFI boundary). Cross-referenced in comments at both sites.
-- `daemon/stderr.rs` unix vs windows suppressors: a pipe plus drain thread vs
-  a `NUL` redirect. Only the guard structure is similar, not the mechanism.
 - `daemon/ipc.rs` unix vs windows `handle_client`: the ~15 glue lines differ
-  in three real ways (stream timeouts, warning wording, the
-  `schedule_exit_after_response` argument); the business logic is already
+  in three real ways (stream timeouts, warning wording, and Unix socket
+  cleanup after a stop response); the business logic is already
   shared via `client_command_outcome`. A transport trait was evaluated and
   rejected as net-negative.
 - `src/test_support.rs` vs `tests/common/mod.rs` `fixture_root`: unit-test vs
@@ -135,7 +148,7 @@ The similar implementations below stay separate because their invariants differ.
   than the per-getter tests they would replace.
 - The `classify_source`/`source_from_cli` tests in `src/fetch/hub.rs`, the
   fetch-parse tests in `src/cli.rs`, and the paste-fallback test in
-  `src/daemon/worker.rs`: case-table conversions were applied and reverted -
+  `src/daemon/worker/insertion_tests.rs`: case-table conversions were applied and reverted -
   each table roughly doubled the lines while adding no new coverage and no
   meaningful compile-time enforcement (`SourceKind` has two variants), so
   direct asserts are shorter and equally legible. A table here must earn

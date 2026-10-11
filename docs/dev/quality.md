@@ -8,7 +8,7 @@ Run the full loop in order before pushing Rust or runtime changes:
 
 ```bash
 cargo fmt --package parakit
-rustdoc-checker . --exclude vendor,local-scratch --strict
+rustdoc-checker . --exclude target,vendor,.claude,local-scratch --strict
 cargo check --workspace --all-targets
 cargo test
 cargo clippy --workspace --all-targets -- -D warnings
@@ -30,9 +30,17 @@ cargo check --workspace --all-targets --all-features
 Remove-Item Env:\CRISPASR_LIB_DIR
 ```
 
-This fallback does not replace real GPU validation. Also run the CUDA and Vulkan Windows scripts plus simulated-dictation smoke tests against `local-scratch\Juniper_St_NE_5.wav` when touching Windows GPU behavior.
+This fallback does not replace real GPU validation. Also run the CUDA and Vulkan Windows scripts plus simulated-dictation smoke tests against `local-scratch\juniper-voicememo-DO_NOT_DELETE.wav` when touching Windows GPU behavior.
 
 On macOS, raw `--all-features` also enables CUDA and can fail in CMake before Rust typechecking when the CUDA Toolkit is not installed. Use the same `CRISPASR_LIB_DIR` fallback to validate the Rust all-features surface; validate Metal with the native macOS build and `doctor`.
+
+```bash
+CRISPASR_LIB_DIR="$PWD/target/debug/build/parakit-<hash>/out/lib" \
+  cargo check --workspace --all-targets --all-features
+```
+
+Replace `<hash>` with the directory from the successful native build; do not
+point the fallback at an unrelated or stale library.
 
 ## Rust Source Coverage
 
@@ -82,14 +90,27 @@ For latency work, use short real clips around 2s, 5s, 15s, and 25s. Longer quali
 
 ## PTT Worker Simulation
 
+The Rust suite also runs the production worker loop with a fake inference engine.
+It checks timed offload, audio queued during a blocked reload, one transcription
+and completion, transcript history, and session destruction without a model or
+a minute-long timeout.
+
 Use the hidden simulation path when you need the daemon worker flow without a live keyboard, microphone, or text insertion:
 
 ```bash
-cargo run -- start \
-  --simulate-ptt-audio target/tmp/ptt-audio/example.wav
+mkdir -p target/tmp && : > target/tmp/ptt-empty.toml
+PARAKIT_CONFIG_PATH=$PWD/target/tmp/ptt-empty.toml \
+XDG_CACHE_HOME=$PWD/target/tmp/ptt-cache \
+  cargo run -- start -m path/to/model.gguf --threads 8 --no-cleaning \
+  --simulate-ptt-audio local-scratch/juniper-voicememo-DO_NOT_DELETE.wav \
+  --model-idle-minutes 1 --simulate-ptt-repeat 2 --simulate-ptt-idle-seconds 61
 ```
 
-Use a real WAV with a known transcript. The command resamples it to the model rate, sends worker start/stop events with owned PCM, runs inference and cleanup, and prints the transcript. It does not test registered hotkeys, evdev-proxy capture, or paste insertion.
+The empty config file keeps your own `config.toml` out of the run; `PARAKIT_CONFIG_PATH` must name a file that exists. Use a real WAV with a known transcript. The pinned Juniper voice memo is 55.36 seconds; its local filename can vary by machine. Compare the readable transcript with task-appropriate tolerance rather than hashing the fixture. The command resamples it to the model rate and sends worker start/stop events with owned PCM. `--no-cleaning` exposes raw output for comparison; omit it to exercise cleanup too. Add the build feature and `--device` for the backend being tested. On PowerShell, create the empty file with `New-Item -ItemType File -Force target/tmp/ptt-empty.toml`, set the environment variables with `$env:NAME = ...`, and use the Windows WAV path.
+
+The worker acknowledges each required transcript, checks exact parity across repeats in the same process, and verifies the expected residency after each wait (including the last). This parity check verifies that reloading recreates the same session; it is not a cross-build reference-transcript comparison. Missing transcripts, reload failures, or missed offloads return a failure exit status. An immediate simulated release exercises queuing while reload is busy. Use `--model-idle-minutes 0` to check disabled offloading. For one dictation without an idle wait, omit `--simulate-ptt-repeat` and `--simulate-ptt-idle-seconds`; both options require `--simulate-ptt-audio`.
+
+The [Linux reload measurements](memory.md#linux-reload-measurements) describe observed host and GPU allocation. This is separate from the real-time worker timeout test.
 
 ## NeMo Reference Helper
 
@@ -159,7 +180,9 @@ Run it again with `--profile aggressive` when changing an aggressive-only pass. 
 
 The audit removes one terminal period by default, matching daemon behavior. Add `--keep-trailing-period` when comparing prose-oriented output separately, and use `--number-threshold VALUE` to replay a non-default isolated-number threshold.
 
-The audit applies built-in rules only. It does not load `config.toml` or `[[rules.user]]`; pass profile, threshold, trailing-period, and disabled-rule choices explicitly. Use `parakit rules test` to validate the currently configured user rules. Number-conversion changes must be evaluated as `text2num` integration and context-formatting changes, not by adding a second local number grammar.
+The audit applies built-in rules only. It does not load `config.toml` or `[[rules.user]]`; pass profile, threshold, trailing-period, and disabled-rule choices explicitly. Use `parakit rules test` to validate the currently configured user rules.
+
+Number recognition belongs to `text2num`. Bounded preservation guards may use context word lists and parsed numbers to keep ambiguous, indefinite or fractional quantities unchanged; do not add a second cardinal grammar. Cover both preservation and nearby exact counts in the existing regression matrix. Personal vocabulary belongs in `config.toml` user rules, rather than built-in number guards.
 
 ## Runtime Smoke Checks
 
@@ -184,10 +207,26 @@ Check:
 - sounds still play in quiet mode unless `--no-sounds` is set;
 - logging writes raw and cleaned text without crashing the daemon.
 
-For a long-running check:
+Run daemon/IPC checks sequentially with isolated config, cache/runtime paths,
+and a model copy. After a configured idle timeout, verify the first PTT still
+captures and inserts once, then check status and history. Make the test model
+unavailable while offloaded to verify reload failure, restore it, and confirm
+the next PTT recovers. Check stop/restart and sleep/wake on the native desktop.
+For audible cues, idle offload is silent. Hold PTT through reload and listen for
+the three-note reload cue followed by the usual listening tone when ready.
+Release during reload and confirm there is no delayed listening tone; a failed
+reload must not announce readiness. A failure at PTT start plays one two-pulse
+error cue; if the release retry also fails, it plays a second. Check the normal
+completion/error cues, the error cue after a capture with no speech, and `--no-sounds` too. Headless tests verify cue ordering and cancellation, but do
+not validate audible playback, physical input, or insertion. Record unobserved
+human checks and unavailable backend runs as pending.
 
-```bash
-ps -o pid,rss,vsz -p "$(pgrep parakit)"
-```
+For allocation context, see the [Linux reload measurements and ownership notes](memory.md).
 
-RSS should settle near model size plus runtime overhead.
+TODO: Reproduce a hung X11 clipboard owner and design bounded snapshot reads that preserve the prior clipboard. Arboard reads formats sequentially and its public API does not distinguish a read timeout from an unavailable format.
+
+TODO: On a native Linux desktop, exercise direct typing and guarded paste with
+physical modifier/focus changes, key-probe failures, keyboard-map changes,
+readiness-error reconnection and clipboard-manager handoffs. Closure tests and
+Mac runs do not establish those X11 results. Windows generation changes and
+delayed rendering also need native clipboard-manager or RDP verification.
