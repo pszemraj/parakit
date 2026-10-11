@@ -78,8 +78,7 @@ Inspect the compiled flags:
 parakit --verbose doctor
 ```
 
-Benchmark different thread counts with the daemon-free
-[WAV quality target](dev/quality.md#wav-quality-target).
+Benchmark different thread counts with the daemon-free [WAV quality target](dev/quality.md#wav-quality-target).
 
 ## BLAS And MKL
 
@@ -121,11 +120,7 @@ The repository vendors [CrispASR](https://github.com/CrispStrobe/CrispASR) as a 
 
 `CRISPASR_LIB_DIR` is for advanced local experiments with an already-built compatible CrispASR tree. The library must match the pinned C ABI, including `crispasr_session_open_with_params`. Bundled builds must also provide compatible ggml libraries with the exported device registry entry points used by `parakit doctor` and `--device gpu` preflight. Parakit compiles its device-query adapter against the selected native source headers, including when `CRISPASR_LIB_DIR` skips native compilation; those headers must match the supplied libraries.
 
-`CRISPASR_SRC_DIR` is an optional path to another CrispASR source tree containing
-`CMakeLists.txt`; by default, the bundled CMake build uses the vendored tree. An
-alternative tree must remain ABI-compatible with the vendored Rust crates; this override changes native sources and headers only, not the Rust path dependencies. It
-cannot replace a missing submodule because Cargo resolves those path dependencies
-before `build.rs` runs.
+`CRISPASR_SRC_DIR` is an optional path to another CrispASR source tree containing `CMakeLists.txt`; by default, the bundled CMake build uses the vendored tree. An alternative tree must remain ABI-compatible with the vendored Rust crates; this override changes native sources and headers only, not the Rust path dependencies. It cannot replace a missing submodule because Cargo resolves those path dependencies before `build.rs` runs.
 
 For CUDA builds, `PARAKIT_CUDA_ARCHS` is trimmed and, when nonempty, passed as `CMAKE_CUDA_ARCHITECTURES`; omission or a blank value keeps ggml's native selection. CMake accepts values such as `89-real` and semicolon-separated architecture lists.
 

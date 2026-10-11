@@ -1,7 +1,6 @@
 # Development Notes
 
-Source-coverage setup and report commands are in
-[quality.md#rust-source-coverage](quality.md#rust-source-coverage).
+Source-coverage setup and report commands are in [quality.md#rust-source-coverage](quality.md#rust-source-coverage).
 
 ## Proportional Checks
 
@@ -11,8 +10,7 @@ Hashes belong in an explicit `--sha256` request or a release process that actual
 
 ## Model Artifacts
 
-End-user download, cache, and model-override behavior is in
-[running.md#model-cache](../running.md#model-cache).
+End-user download, cache, and model-override behavior is in [running.md#model-cache](../running.md#model-cache).
 
 Hosted release files:
 

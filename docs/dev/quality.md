@@ -39,8 +39,7 @@ CRISPASR_LIB_DIR="$PWD/target/debug/build/parakit-<hash>/out/lib" \
   cargo check --workspace --all-targets --all-features
 ```
 
-Replace `<hash>` with the directory from the successful native build; do not
-point the fallback at an unrelated or stale library.
+Replace `<hash>` with the directory from the successful native build; do not point the fallback at an unrelated or stale library.
 
 ## Rust Source Coverage
 
@@ -51,8 +50,7 @@ rustup component add llvm-tools-preview
 cargo install cargo-llvm-cov --locked
 ```
 
-Run the workspace tests with source instrumentation and print the Rust
-coverage summary:
+Run the workspace tests with source instrumentation and print the Rust coverage summary:
 
 ```bash
 cargo coverage
@@ -66,14 +64,7 @@ Generate a browsable per-line report when investigating an untested branch:
 cargo coverage-html
 ```
 
-The aliases are defined in [`.cargo/config.toml`](../../.cargo/config.toml).
-By default, `cargo-llvm-cov` keeps instrumented artifacts under
-`target/llvm-cov-target`, separate from ordinary builds. Reports cover
-parakit's Rust code, not linked CrispASR C/C++ code. They also cover only
-code compiled for the current host and feature set, so macOS coverage does
-not validate Linux or Windows branches. Use coverage to locate test gaps; do
-not treat a percentage as evidence of transcription quality, desktop
-integration, or paste safety.
+The aliases are defined in [`.cargo/config.toml`](../../.cargo/config.toml). By default, `cargo-llvm-cov` keeps instrumented artifacts under `target/llvm-cov-target`, separate from ordinary builds. Reports cover parakit's Rust code, not linked CrispASR C/C++ code. They also cover only code compiled for the current host and feature set, so macOS coverage does not validate Linux or Windows branches. Use coverage to locate test gaps; do not treat a percentage as evidence of transcription quality, desktop integration, or paste safety.
 
 ## WAV Quality Target
 
@@ -90,10 +81,7 @@ For latency work, use short real clips around 2s, 5s, 15s, and 25s. Longer quali
 
 ## PTT Worker Simulation
 
-The Rust suite also runs the production worker loop with a fake inference engine.
-It checks timed offload, audio queued during a blocked reload, one transcription
-and completion, transcript history, and session destruction without a model or
-a minute-long timeout.
+The Rust suite also runs the production worker loop with a fake inference engine. It checks timed offload, audio queued during a blocked reload, one transcription and completion, transcript history, and session destruction without a model or a minute-long timeout.
 
 Use the hidden simulation path when you need the daemon worker flow without a live keyboard, microphone, or text insertion:
 
@@ -209,26 +197,10 @@ Check:
 - sounds still play in quiet mode unless `--no-sounds` is set;
 - logging writes raw and cleaned text without crashing the daemon.
 
-Run daemon/IPC checks sequentially with isolated config, cache/runtime paths,
-and a model copy. After a configured idle timeout, verify the first PTT still
-captures and inserts once, then check status and history. Make the test model
-unavailable while offloaded to verify reload failure, restore it, and confirm
-the next PTT recovers. Check stop/restart and sleep/wake on the native desktop.
-For audible cues, idle offload is silent. Hold PTT through reload and listen for
-the three-note reload cue followed by the usual listening tone when ready.
-Release during reload and confirm there is no delayed listening tone; a failed
-reload must not announce readiness. A failure at PTT start plays one two-pulse
-error cue; if the release retry also fails, it plays a second. Check the normal
-completion/error cues, the error cue after a capture with no speech, and `--no-sounds` too. Headless tests verify cue ordering and cancellation, but do
-not validate audible playback, physical input, or insertion. Record unobserved
-human checks and unavailable backend runs as pending.
+Run daemon/IPC checks sequentially with isolated config, cache/runtime paths, and a model copy. After a configured idle timeout, verify the first PTT still captures and inserts once, then check status and history. Make the test model unavailable while offloaded to verify reload failure, restore it, and confirm the next PTT recovers. Check stop/restart and sleep/wake on the native desktop. For audible cues, idle offload is silent. Hold PTT through reload and listen for the three-note reload cue followed by the usual listening tone when ready. Release during reload and confirm there is no delayed listening tone; a failed reload must not announce readiness. A failure at PTT start plays one two-pulse error cue; if the release retry also fails, it plays a second. Check the normal completion/error cues, the error cue after a capture with no speech, and `--no-sounds` too. Headless tests verify cue ordering and cancellation, but do not validate audible playback, physical input, or insertion. Record unobserved human checks and unavailable backend runs as pending.
 
 For allocation context, see the [Linux reload measurements and ownership notes](memory.md).
 
 TODO: Reproduce a hung X11 clipboard owner and design bounded snapshot reads that preserve the prior clipboard. Arboard reads formats sequentially and its public API does not distinguish a read timeout from an unavailable format.
 
-TODO: On a native Linux desktop, exercise direct typing and guarded paste with
-physical modifier/focus changes, key-probe failures, keyboard-map changes,
-readiness-error reconnection and clipboard-manager handoffs. Closure tests and
-Mac runs do not establish those X11 results. Windows generation changes and
-delayed rendering also need native clipboard-manager or RDP verification.
+TODO: On a native Linux desktop, exercise direct typing and guarded paste with physical modifier/focus changes, key-probe failures, keyboard-map changes, readiness-error reconnection and clipboard-manager handoffs. Closure tests and Mac runs do not establish those X11 results. Windows generation changes and delayed rendering also need native clipboard-manager or RDP verification.

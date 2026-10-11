@@ -127,9 +127,7 @@ Rules use Rust's `regex` crate dialect:
 - capture replacement uses `$1`, `$2`, and so on;
 - use `(?i)` for case-insensitive matches.
 
-Increment `CLEANER_VERSION` whenever built-in behavior, rule identity, or
-ordering changes so historical logs continue to identify the cleaner that
-produced a transcript.
+Increment `CLEANER_VERSION` whenever built-in behavior, rule identity, or ordering changes so historical logs continue to identify the cleaner that produced a transcript.
 
 ## User Rules
 
@@ -146,10 +144,7 @@ replacement = "wandb"
 position = "standard"   # "first", "standard" (default), or "last"
 ```
 
-The key contracts, validation constraints, replacement syntax, and exact
-splice points for `first`, `standard`, and `last` are in
-[config_reference.toml](config_reference.toml). Use `standard` for ordinary
-vocabulary substitutions.
+The key contracts, validation constraints, replacement syntax, and exact splice points for `first`, `standard`, and `last` are in [config_reference.toml](config_reference.toml). Use `standard` for ordinary vocabulary substitutions.
 
 Disable a user rule the same way as a built-in rule:
 
@@ -166,21 +161,11 @@ disabled_rules = ["weights-and-biases-to-wandb"]
 
 ### Edit Rules Without Rebuilding
 
-User rules are runtime configuration, not compiled into the parakit binary.
-They are validated and compiled during process startup, then reused for each
-dictation without TOML parsing or regex compilation on the hot path. Editing
-a rule does not run Cargo, rebuild Parakit, download a model, or convert model
-weights.
+User rules are runtime configuration, not compiled into the parakit binary. They are validated and compiled during process startup, then reused for each dictation without TOML parsing or regex compilation on the hot path. Editing a rule does not run Cargo, rebuild Parakit, download a model, or convert model weights.
 
-Use the edit, validation, and restart workflow in
-[configuration.md#validation-and-recovery](configuration.md#validation-and-recovery).
+Use the edit, validation, and restart workflow in [configuration.md#validation-and-recovery](configuration.md#validation-and-recovery).
 
-A built-in rule can be replaced without rebuilding by listing its name in
-`cleaning.disabled_rules` and adding a differently named `[[rules.user]]`
-replacement. Runtime user rules deliberately use the standard Rust `regex`
-dialect. Context-sensitive procedural transforms such as number/version
-parsing and sentence capitalization remain Rust code unless they expose a
-specific config setting such as `cleaning.number_threshold`.
+A built-in rule can be replaced without rebuilding by listing its name in `cleaning.disabled_rules` and adding a differently named `[[rules.user]]` replacement. Runtime user rules deliberately use the standard Rust `regex` dialect. Context-sensitive procedural transforms such as number/version parsing and sentence capitalization remain Rust code unless they expose a specific config setting such as `cleaning.number_threshold`.
 
 ## Regression Workflow
 
@@ -192,7 +177,6 @@ When a cleanup worsens a transcript:
 4. Narrow the pattern or add a more specific rule before the generic one.
 5. Add a case to the `rules` unit tests or `tests/cleaning_regressions.rs`.
 
-For historical JSONL replay, use
-[dev/quality.md#cleaning-corpus-replay](dev/quality.md#cleaning-corpus-replay).
+For historical JSONL replay, use [dev/quality.md#cleaning-corpus-replay](dev/quality.md#cleaning-corpus-replay).
 
 Avoid disabling broad rule categories to fix a narrow failure. If the failure is personal vocabulary rather than a general defect, add a user rule instead.

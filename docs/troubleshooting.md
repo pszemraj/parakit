@@ -153,14 +153,9 @@ If Windows cannot open any microphone, check [desktop microphone permissions](wi
 
 ## Model Reload Fails After Idle
 
-Run `parakit --verbose status` and read `model error`. Confirm that the model
-path resolved at startup still exists and is readable, then check device
-visibility with `parakit --verbose doctor`. Restore the file or device and
-press PTT again; [reload behavior](running.md#idle-model-offload) retries without
-a daemon restart. A changed model path or device setting requires a restart.
+Run `parakit --verbose status` and read `model error`. Confirm that the model path resolved at startup still exists and is readable, then check device visibility with `parakit --verbose doctor`. Restore the file or device and press PTT again; [reload behavior](running.md#idle-model-offload) retries without a daemon restart. A changed model path or device setting requires a restart.
 
-For unexpectedly high memory after offload, see the [allocation ownership notes](dev/memory.md#allocation-ownership)
-for the distinction between session allocations and process-wide backend caches.
+For unexpectedly high memory after offload, see the [allocation ownership notes](dev/memory.md#allocation-ownership) for the distinction between session allocations and process-wide backend caches.
 
 ## Build And Model Issues
 
