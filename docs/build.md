@@ -39,16 +39,16 @@ git submodule update --init --recursive
 Linux developer install:
 
 ```bash
-cargo install --path .
+cargo install --locked --path .
 ```
 
 macOS Apple Silicon install:
 
 ```bash
-cargo install --path . --features metal
+cargo install --locked --path . --features metal
 ```
 
-`cargo install --path .` installs the release binary to Cargo's bin directory, usually `~/.cargo/bin`.
+`cargo install --locked --path .` installs the release binary to Cargo's bin directory, usually `~/.cargo/bin`, using the validated `Cargo.lock` dependency set that supports the declared Rust 1.87 minimum.
 
 Install behavior:
 
@@ -56,14 +56,12 @@ Install behavior:
 - Linux and macOS source installs currently depend on the generated CrispASR shared libraries under Cargo's build output. Do not delete the repository `target/` tree.
 - GitHub auto-generated source archives are unsupported because they do not include the CrispASR submodule. A public release must ship either a source archive with submodules or a binary bundle whose shared libraries are colocated with the executable.
 
-Add `--locked` only when you specifically want Cargo to use the exact dependency versions in `Cargo.lock`.
-
 Optional accelerator builds:
 
 ```bash
-cargo install --path . --features cuda
-cargo install --path . --features vulkan
-cargo install --path . --features metal  # Apple targets only
+cargo install --locked --path . --features cuda
+cargo install --locked --path . --features vulkan
+cargo install --locked --path . --features metal  # Apple targets only
 ```
 
 For Windows bundles, build one accelerator backend at a time. A combined CUDA+Vulkan bundle is rejected by the Windows scripts because it would hard-load both accelerator DLL chains while ggml would choose CUDA first anyway.
@@ -89,9 +87,9 @@ Benchmark different thread counts with the daemon-free
 The build defaults to `PARAKIT_BLAS=auto`. If no supported BLAS is detected, parakit uses native ggml CPU kernels. BLAS/MKL can help some matrix paths but adds system-library dependencies. Values are trimmed and case-insensitive; an explicitly empty value disables BLAS, while an unset value selects `auto`.
 
 ```bash
-PARAKIT_BLAS=openblas cargo install --path .
-PARAKIT_BLAS=mkl cargo install --path .
-PARAKIT_BLAS=generic cargo install --path .
+PARAKIT_BLAS=openblas cargo install --locked --path .
+PARAKIT_BLAS=mkl cargo install --locked --path .
+PARAKIT_BLAS=generic cargo install --locked --path .
 ```
 
 Supported values:
@@ -111,7 +109,7 @@ Ubuntu/Debian OpenBLAS:
 
 ```bash
 sudo apt install libopenblas-dev
-PARAKIT_BLAS=openblas cargo install --path .
+PARAKIT_BLAS=openblas cargo install --locked --path .
 ```
 
 OpenBLAS prefix detection recognizes `PARAKIT_OPENBLAS_ROOT`, `OPENBLAS_ROOT`,
