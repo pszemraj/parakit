@@ -282,8 +282,9 @@ comparison after the normal one-minute idle timeout gives offloaded RSS of
 128 MiB absolute gate, but does not negate the three-launch standalone failure.
 The settled idle windows are flat in both worker runs. The exact owner of the
 retained anonymous pages is not established; these observations do not prove
-leak freedom. Acceptance of this narrow standalone offload regression requires
-a separate decision.
+leak freedom. The user accepted this narrow standalone post-offload exception
+on 2026-10-11. The measured increase remains documented; other memory gates
+and recognition requirements are unchanged.
 
 | 265-second peak memory, original → ordinary → bounded | Host HWM | Sampled GPU allocation peak |
 |---|---:|---:|
@@ -410,14 +411,14 @@ staging/example exclusions and embedded Metal shaders. Native testing remains:
 The implementation uses ordinary transcription and the approved lower-memory
 defaults. Linux everyday first/warm inference and comparable memory gates pass,
 as do three production offload/reload transitions on CPU, CUDA and Vulkan.
-The user accepted the reproducible Vulkan fresh-process readiness regression.
-Bounded mode remains unshipped because of its recognition and boundary findings.
+The user accepted the reproducible Vulkan fresh-process readiness regression
+and the approximately 143 MiB CUDA standalone post-offload exception after the
+125-second clip. The corroborating production worker stays below the absolute
+memory gate. Bounded mode remains unshipped because of its recognition and
+boundary findings.
 
 Final acceptance remains paused on:
 
-- A decision on the reproducible 125-second CUDA standalone post-offload
-  increase of approximately 143 MiB. The corroborating production worker stays
-  below the absolute gate, but does not erase that separate failure.
 - Audio review of the four added words in the 125-second recording. Ordinary
   recognition agrees with the baseline on the other measured long inputs.
 - A complete subsecond utterance and audio-checked reference; the frozen
