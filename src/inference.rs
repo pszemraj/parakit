@@ -5,7 +5,6 @@ use crate::crispasr_ext::{crispasr_thread_count, OwnedSession};
 use crate::model::validate_model_file;
 use anyhow::{bail, Context, Result};
 use clap::ValueEnum;
-use crispasr::SessionSegment;
 use std::borrow::Cow;
 use std::path::Path;
 
@@ -100,10 +99,12 @@ impl EngineSession {
         }
     }
 
-    fn transcribe(&self, pcm: &[f32]) -> Result<Vec<SessionSegment>, String> {
+    fn transcribe(&self, pcm: &[f32]) -> Result<String, String> {
         match self {
-            Self::Auto(session) => session.transcribe(pcm),
-            Self::WithParams(session) => session.transcribe(pcm),
+            Self::Auto(session) => session.transcribe(pcm).map(|segments| {
+                join_segment_text(segments.into_iter().map(|segment| segment.text))
+            }),
+            Self::WithParams(session) => session.transcribe(pcm).map(join_segment_text),
         }
     }
 }
@@ -210,21 +211,19 @@ impl Engine {
     /// Returns an error if CrispASR rejects the audio or inference fails.
     pub fn transcribe(&self, pcm: &[f32]) -> Result<String> {
         let pcm = pad_short_pcm(pcm);
-        let segments = self
-            .session
+        self.session
             .transcribe(pcm.as_ref())
-            .map_err(|e| anyhow::anyhow!("crispasr transcribe failed: {e}"))?;
-        Ok(join_segment_text(segments))
+            .map_err(|e| anyhow::anyhow!("crispasr transcribe failed: {e}"))
     }
 }
 
-fn join_segment_text(segments: Vec<SessionSegment>) -> String {
+fn join_segment_text(segments: impl IntoIterator<Item = String>) -> String {
     let mut out = String::new();
     for seg in segments {
         if !out.is_empty() && !out.ends_with(' ') {
             out.push(' ');
         }
-        out.push_str(seg.text.trim());
+        out.push_str(seg.trim());
     }
     out
 }
@@ -365,24 +364,27 @@ mod tests {
 
     #[test]
     fn segment_text_is_joined_with_single_spaces() {
-        let segments = vec![
-            SessionSegment {
-                text: " hello ".to_string(),
-                start: 0.0,
-                end: 0.5,
-                no_speech_prob: -1.0,
-                words: Vec::new(),
-            },
-            SessionSegment {
-                text: "world".to_string(),
-                start: 0.5,
-                end: 1.0,
-                no_speech_prob: -1.0,
-                words: Vec::new(),
-            },
-        ];
+        let segments = vec![" hello ".to_string(), "world".to_string()];
 
         assert_eq!(join_segment_text(segments), "hello world");
+    }
+
+    #[test]
+    fn segment_text_preserves_empty_segment_spacing() {
+        let cases: &[(&[&str], &str)] = &[
+            (&[], ""),
+            (&["", " \t\n"], ""),
+            (&["", " hello", "", "\t", "world\n"], "hello world"),
+            (&["hello", "", " \t"], "hello "),
+            (&[" \u{2003}hello  world\n"], "hello  world"),
+        ];
+        for &(segments, expected) in cases {
+            assert_eq!(
+                join_segment_text(segments.iter().map(|text| (*text).to_string())),
+                expected,
+                "{segments:?}"
+            );
+        }
     }
 
     #[test]

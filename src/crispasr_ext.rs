@@ -5,7 +5,6 @@
 //! open without modifying the submodule.
 
 use crate::ffi_util::c_string_lossy;
-use crispasr::{SessionSegment, SessionWord};
 use std::ffi::CString;
 use std::os::raw::{c_float, c_int};
 
@@ -114,7 +113,7 @@ impl OwnedSession {
     ///
     /// # Returns
     ///
-    /// CrispASR session segments.
+    /// Copied text from each CrispASR session segment.
     ///
     /// # Errors
     ///
@@ -123,8 +122,8 @@ impl OwnedSession {
     ///
     /// # Panics
     ///
-    /// Panics only if allocating the returned segment or word vectors fails.
-    pub(crate) fn transcribe(&self, pcm: &[f32]) -> Result<Vec<SessionSegment>, String> {
+    /// Panics only if allocating the returned segment texts fails.
+    pub(crate) fn transcribe(&self, pcm: &[f32]) -> Result<Vec<String>, String> {
         let n_samples = c_int::try_from(pcm.len())
             .map_err(|_| format!("audio buffer too large for CrispASR: {} samples", pcm.len()))?;
         let result = unsafe {
@@ -146,61 +145,9 @@ impl OwnedSession {
         unsafe {
             let n_segments = crispasr_sys::crispasr_session_result_n_segments(result.0);
             for segment_index in 0..n_segments {
-                let text = c_string_lossy(crispasr_sys::crispasr_session_result_segment_text(
-                    result.0,
-                    segment_index,
-                ))
-                .trim()
-                .to_string();
-                let start =
-                    crispasr_sys::crispasr_session_result_segment_t0(result.0, segment_index)
-                        as f64
-                        / 100.0;
-                let end = crispasr_sys::crispasr_session_result_segment_t1(result.0, segment_index)
-                    as f64
-                    / 100.0;
-
-                let n_words =
-                    crispasr_sys::crispasr_session_result_n_words(result.0, segment_index);
-                let n_words = n_words.max(0);
-                let mut words = Vec::with_capacity(usize::try_from(n_words).unwrap_or(0));
-                for word_index in 0..n_words {
-                    let confidence = crispasr_sys::crispasr_session_result_word_p(
-                        result.0,
-                        segment_index,
-                        word_index,
-                    );
-                    words.push(SessionWord {
-                        text: c_string_lossy(crispasr_sys::crispasr_session_result_word_text(
-                            result.0,
-                            segment_index,
-                            word_index,
-                        )),
-                        start: crispasr_sys::crispasr_session_result_word_t0(
-                            result.0,
-                            segment_index,
-                            word_index,
-                        ) as f64
-                            / 100.0,
-                        end: crispasr_sys::crispasr_session_result_word_t1(
-                            result.0,
-                            segment_index,
-                            word_index,
-                        ) as f64
-                            / 100.0,
-                        confidence: if confidence < 0.0 { 1.0 } else { confidence },
-                    });
-                }
-                segments.push(SessionSegment {
-                    text,
-                    start,
-                    end,
-                    no_speech_prob: crispasr_sys::crispasr_session_result_segment_no_speech_prob(
-                        result.0,
-                        segment_index,
-                    ),
-                    words,
-                });
+                segments.push(c_string_lossy(
+                    crispasr_sys::crispasr_session_result_segment_text(result.0, segment_index),
+                ));
             }
         }
 

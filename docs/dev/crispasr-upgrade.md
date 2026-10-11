@@ -38,7 +38,7 @@ The separate bounded-default experiment requests approximately 30-second windows
 
 Parakit owns native compilation through concrete Cargo `links` overrides for Linux GNU x86_64/aarch64, Apple arm64, and Windows x86_64 MSVC/GNU. Its parent build script retains external-library discovery, backend/BLAS selection, C++ runtime linkage, RPATHs, quantizer installation and Windows staging. Run Cargo from the repository root so its configuration is loaded. See [build instructions](../build.md) for the source and library overrides.
 
-The exact nested pins are ggml `c36dab89b662838f0f5d4826c399198c0b90bbfc` and c2pa-audio `e40329b83f16f67bb5ddc7bb13ae18de0a9376fc`. The two Rust path crates and lockfile move with the native sources. The session adapter retains ABI version 2, checked sample counts, explicit CPU/GPU selection and RAII cleanup. Segment no-speech values come from the native accessor; unavailable test values remain `-1.0`.
+The exact nested pins are ggml `c36dab89b662838f0f5d4826c399198c0b90bbfc` and c2pa-audio `e40329b83f16f67bb5ddc7bb13ae18de0a9376fc`. The two Rust path crates and lockfile move with the native sources. The session adapter retains ABI version 2, checked sample counts, explicit CPU/GPU selection and RAII cleanup. It copies only segment text, avoiding word, timing, confidence and no-speech metadata that Parakit's text-only transcription API does not use. Automatic device selection continues through the upstream Rust wrapper; both paths share the same text joining behavior.
 
 A small C++ adapter replaces Rust's private ggml layout mirrors. It compiles against the selected native headers and preserves PCI matching, conservative Windows NVIDIA free-memory readings and Metal wrapped-value handling. Optional Opus/AMR decoders are disabled for Parakit's PCM input. Mel BLAS follows Parakit's BLAS selection. Parakit disables the extra pointwise-Q8 and fused-QKV weight copies by default with `CRISPASR_FC_PW_Q8=0` and `CRISPASR_FC_FUSED_QKV=0`. Other upstream compute defaults are retained.
 
@@ -224,7 +224,9 @@ CUDA passes the matched total-memory gates and repeated-transcript check. Logged
 
 ## Compatibility checks
 
-All three Rust checkpoints passed formatting, strict rustdoc, workspace/all-target checking, tests, strict Clippy, build and all-features checking. The final loop passed 414 tests with three ignored. Existing vendor deprecation warnings remain. The old-pin all-features check compiled native backends; the candidate Rust loops used their matching prebuilt native CPU library, with independent CPU/CUDA/Vulkan release builds providing native validation.
+Rust checkpoints passed formatting, strict rustdoc, workspace/all-target checking, tests, strict Clippy, build and all-features checking. The final loop passed 415 tests with three ignored. Existing vendor deprecation warnings remain. The old-pin all-features check compiled native backends; the candidate Rust loops used their matching prebuilt native CPU library, with independent CPU/CUDA/Vulkan release builds providing native validation.
+
+The text-only adapter consolidation passed the same Rust loop and real 55-second worker smokes in explicit CPU and automatic modes. The performance tables above measure the upgrade before this Rust-only consolidation; no additional speed or memory improvement is claimed.
 
 The unchanged lockfile failed Rust 1.87 because image 0.25.10 requires 1.88. With approval, image is locked to 0.25.9 with only its necessary moxcms, tiff and zune dependency changes. Rust 1.87 passes on the ordinary candidate, including the startup-default change, with its matching native library; the declared minimum is unchanged.
 
