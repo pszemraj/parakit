@@ -245,6 +245,7 @@ Headless WAV replay does not exercise microphone capture or stream recovery. It 
 macOS and Windows checks are best effort on Linux. The Windows shim branch passes a Clang syntax check against the pinned headers; this does not validate MSVC/GNU DLL imports. Source checks preserve ggml import declarations, Windows staging/example exclusions and embedded Metal shaders. Native testing remains:
 
 - Build CPU and the laptop's accelerator backend; verify selected devices and loaded libraries with `doctor` and real inference.
+- With neither weight-copy variable set in the launching environment, run one `--verbose` WAV replay and confirm stderr has no `repacked ... F16 matmul tensors` or `fused Q/K/V` line. On Windows this checks that the startup defaults reach CrispASR's `getenv` through the shared C runtime.
 - Compare unchanged Q8 recognition and first/warm latency on everyday clips, including technical terms, then check long-input coverage separately.
 - Measure loaded, post-short/post-long, idle and offloaded memory. Run three production reload transitions and confirm residency settles.
 - Release during reload, queue audio, exercise reload recovery, and stop during loading/inference; verify captured audio and clean shutdown.

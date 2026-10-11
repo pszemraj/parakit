@@ -19,7 +19,8 @@ const MIN_INFERENCE_SAMPLES: usize = TARGET_RATE as usize;
 ///
 /// Disables extra pointwise-Q8 and fused-QKV weight copies. Library callers
 /// can use this initializer at startup or provide these environment variables
-/// when launching their process; `Engine::open` does not mutate them.
+/// when launching their process; `Engine::open` does not mutate them. On
+/// Windows the defaults are also written to the C runtime's environment table.
 ///
 /// # Safety
 ///
@@ -29,7 +30,24 @@ pub unsafe fn initialize_crispasr_runtime_defaults() {
     for key in ["CRISPASR_FC_PW_Q8", "CRISPASR_FC_FUSED_QKV"] {
         if std::env::var_os(key).is_none() {
             std::env::set_var(key, "0");
+            #[cfg(target_os = "windows")]
+            set_windows_crt_env_default(key);
         }
+    }
+}
+
+/// Mirror a startup default into the Windows C runtime's `getenv` table.
+///
+/// The C runtime copies the environment before Rust's `main`, and
+/// `std::env::set_var` updates only the process environment block. CrispASR
+/// reads these controls with `getenv`, which uses the C runtime copy; the
+/// MSVC build shares that runtime with CrispASR through `/MD`.
+#[cfg(target_os = "windows")]
+fn set_windows_crt_env_default(key: &str) {
+    if let Ok(key) = std::ffi::CString::new(key) {
+        // SAFETY: Both arguments are NUL-terminated and `_putenv_s` copies
+        // them. Callers uphold the single-threaded startup contract above.
+        unsafe { libc::putenv_s(key.as_ptr(), c"0".as_ptr()) };
     }
 }
 
