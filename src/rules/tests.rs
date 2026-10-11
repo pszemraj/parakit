@@ -164,6 +164,37 @@ fn filled_pauses_are_removed_without_matching_er_acronym() {
 }
 
 #[test]
+fn standalone_filler_sentences_leave_no_orphaned_punctuation() {
+    assert_clean_cases(
+        CleaningProfile::Safe,
+        &[
+            (
+                "I need to order groceries. Um. Then the furniture.",
+                "I need to order groceries. Then the furniture.",
+            ),
+            (
+                "I need to order groceries. Uh, um. Then the furniture.",
+                "I need to order groceries. Then the furniture.",
+            ),
+            (
+                "Okay. Um. Uh. Then the furniture.",
+                "Okay. Then the furniture.",
+            ),
+            ("Okay. Um? Sure.", "Okay. Sure."),
+            ("Um. Then the furniture.", "Then the furniture."),
+            ("Is it done? Um.", "Is it done?"),
+            ("That is great! Uh.", "That is great!"),
+            // Unspaced punctuation runs are not removal debris.
+            ("Wait... What?! Really?", "Wait... What?! Really?"),
+        ],
+    );
+
+    // The orphan otherwise shields the real final period from messaging mode.
+    let messaging = cleaner_messaging_default(CleaningProfile::Safe);
+    assert_eq!(messaging.clean_text("Okay. Um."), "Okay");
+}
+
+#[test]
 fn fancy_regex_collapses_only_safe_repeated_words_by_default() {
     assert_clean_cases(
         CleaningProfile::Safe,

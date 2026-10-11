@@ -278,6 +278,17 @@ pub(crate) const DEFAULT_RULES: &[Rule] = &[
         drop_dangling_connective
     ),
     // Mechanical cleanup and boundary-aware capitalization run last.
+    // Removing a standalone filler sentence such as "Um." leaves its
+    // terminator behind as whitespace plus punctuation after the previous
+    // sentence end or at the start. Unspaced runs such as "..." and "?!" are
+    // not orphans and stay intact.
+    regex_rule!(
+        "fix-orphan-punct",
+        "Remove sentence punctuation orphaned at the start or after a sentence end",
+        Activation::Safe,
+        r#"(^|[.!?])(?:\s+[.!?])+"#,
+        "$1"
+    ),
     regex_rule!(
         "fix-space-before-punct",
         "Remove whitespace before comma/period/semicolon/colon/exclamation/question",

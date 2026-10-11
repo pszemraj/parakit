@@ -145,7 +145,7 @@ fn user_rule_standard_position_stays_before_cleanup_when_boundary_is_disabled() 
         "be right back",
         RulePosition::Standard,
     )];
-    let disabled = HashSet::from(["fix-space-before-punct".to_string()]);
+    let disabled = HashSet::from([CLEANUP_BOUNDARY_RULE_NAME.to_string()]);
     let cleaner = build_cleaner_for_test(CleaningProfile::Safe, false, &disabled, &rules);
 
     assert_eq!(cleaner.clean_text("brb"), "Be right back");

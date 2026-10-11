@@ -233,6 +233,7 @@ number_threshold = 4
 #   casual-gimme (safe): expand gimme to "give me".
 #   drop-right-tag-question (safe): replace a ", right?" tag question with a period.
 #   drop-dangling-connective (safe): remove a trailing so, but, and, or, or because, promoting a comma, semicolon, or colon before it to a period.
+#   fix-orphan-punct (safe): remove a ".", "!", or "?" separated by whitespace from the start or from a previous sentence end, such as the one a removed standalone "Um." leaves behind.
 #   fix-space-before-punct (safe): remove whitespace (including newlines) before , . ; : ! or ?.
 #   fix-collapse-spaces (safe): collapse runs of spaces and tabs.
 #   fix-trim (safe): trim leading and trailing whitespace.
@@ -309,7 +310,7 @@ backend = "auto"
 # replacement = "wandb"
 # "first" | "standard" | "last". Default: "standard". Where the rule runs relative to the built-in rules.
 # "first" runs before every built-in rule.
-# "standard" runs immediately before the built-in fix-space-before-punct rule, even when that rule is disabled.
+# "standard" runs immediately before the built-in fix-orphan-punct rule, even when that rule is disabled.
 # That is after the number, casual-form, tag-question, and dangling-connective rules, and before the whitespace and punctuation cleanup, capitalization, and terminal-period rules.
 # "last" runs after every built-in rule, including capitalize-sentence-starts and fix-trailing-period, so no later cleanup repairs its output.
 # Recommended: "standard" for ordinary substitutions.
