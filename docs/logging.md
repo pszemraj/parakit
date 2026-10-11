@@ -69,7 +69,7 @@ Fields, in serialization order:
 | `paste_event_posted` | boolean | Whether a paste chord or type event was sent. |
 | `pasteboard_requested` | null | Reserved for a clipboard read-back signal; always `null` today. |
 | `acknowledgement_kind` | string | `ax_confirmed`, `unverified_timeout`, `unverified_no_baseline`, `unverified_short_transcript`, `unverified_focus_lost`, `no_evidence`, or `not_applicable`. |
-| `acknowledgement_ms` | integer or null | Milliseconds spent waiting for acknowledgement; `null` when no wait occurred. |
+| `acknowledgement_ms` | integer or null | Milliseconds of the post-paste wait: the Accessibility acknowledgement poll on macOS, or the clipboard-restore wait on Linux and Windows; `null` when that wait did not run. |
 | `clipboard_restored` | boolean or null | `true` when supported prior contents were restored or an unsupported payload's staged replacement was cleared; `false` for retained transcript text or a failed restore; `null` when unknown or inapplicable, including a competing or unreadable clipboard left untouched. |
 | `failure_reason` | string or null | Error or degraded-outcome detail. On Linux, a blocked partial direct insertion records how many characters completed before typing stopped. An unreadable clipboard records the failed observation; when the previous clipboard could not be saved, the transcript is still pasted and kept on the clipboard (`clipboard_restored: false`). |
 

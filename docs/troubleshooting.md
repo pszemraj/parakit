@@ -142,7 +142,7 @@ parakit records from a different input device than the one you expect. A typical
    parakit doctor
    ```
 
-4. Wait a few seconds and rerun `parakit doctor`. An idle daemon switches on its own when CPAL reports a changed default device and prints the new microphone unless `--quiet` is set.
+4. Wait a few seconds and rerun `parakit doctor`. An idle daemon switches on its own when the default input changes and prints the new microphone unless `--quiet` is set.
 5. Restart parakit if the audio server itself is not reporting the new default source.
 6. If the selected device is a monitor, loopback, or virtual source, parakit picked it because no better input was available. Connect or enable a real input device and rerun `parakit doctor`.
 7. If parakit warned about a Bluetooth microphone, that is not an error. Bluetooth microphones are allowed, but headset profiles add latency and reduce speech quality, so prefer a wired or USB microphone when transcription accuracy matters.
@@ -212,7 +212,7 @@ parakit fetch
 
 A GPU bundle fails to start, or `parakit start --device gpu` fails before the model loads.
 
-1. Open a new terminal. The installer updates persistent User `PATH` but does not broadcast the change to already-running shells.
+1. Open a new terminal. The installer updates persistent User `PATH`, but already-running terminals keep their old environment.
 2. If startup fails with `0xC0000135` or `STATUS_DLL_NOT_FOUND`, Windows could not resolve a load-time DLL. For a Vulkan bundle, `vulkan-1.dll` comes from the GPU driver, not from parakit: install or update the NVIDIA, AMD, or Intel driver. For a CUDA bundle, the CUDA runtime and cuBLAS DLLs must be reachable from the install directory or `PATH`, or the bundle has to be rebuilt with `--bundle-cuda-dlls`.
 3. List the compute devices the bundled ggml can actually see:
 

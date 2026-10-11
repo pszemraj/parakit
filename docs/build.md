@@ -75,8 +75,7 @@ The bundled CMake path enables ggml native CPU code, OpenMP, and CPU repacking. 
 Inspect the compiled flags:
 
 ```bash
-parakit doctor
-parakit doctor --verbose
+parakit --verbose doctor
 ```
 
 Benchmark different thread counts with the daemon-free
@@ -112,14 +111,9 @@ sudo apt install libopenblas-dev
 PARAKIT_BLAS=openblas cargo install --locked --path .
 ```
 
-OpenBLAS prefix detection recognizes `PARAKIT_OPENBLAS_ROOT`, `OPENBLAS_ROOT`,
-`OpenBLAS_ROOT`, `OPENBLAS_HOME`, active Conda environments,
-`CMAKE_PREFIX_PATH`, and vcpkg installs. It also checks common Conda and native
-installation prefixes on Windows and `/usr`, `/usr/local`, and `/opt/OpenBLAS`
-on Linux. Explicit `BLAS_INCLUDE_DIRS` plus `BLAS_LIBRARIES` remain the final
-manual override.
+OpenBLAS prefix detection recognizes `PARAKIT_OPENBLAS_ROOT`, `OPENBLAS_ROOT`, `OpenBLAS_ROOT`, `OPENBLAS_HOME`, active Conda environments, `CMAKE_PREFIX_PATH`, vcpkg installs, and, outside Windows, `HOMEBREW_PREFIX`. It also checks common Conda and native installation prefixes on Windows and `/usr/local`, `/usr`, `/opt/openblas`, and `/opt/OpenBLAS` elsewhere. Explicit `BLAS_INCLUDE_DIRS` plus `BLAS_LIBRARIES` remain the final manual override.
 
-Explicit `PARAKIT_BLAS` builds print the selected mode, and `parakit doctor` reports the requested and selected modes.
+Explicit `PARAKIT_BLAS` builds print the requested and selected modes as a Cargo warning, and `parakit --verbose doctor` reports the selected mode on its `cpu:` line.
 
 ## CrispASR And Backends
 
@@ -133,10 +127,7 @@ alternative tree must remain ABI-compatible with the vendored Rust crates; this 
 cannot replace a missing submodule because Cargo resolves those path dependencies
 before `build.rs` runs.
 
-For CUDA builds, a nonempty `PARAKIT_CUDA_ARCHS` is passed unchanged as
-`CMAKE_CUDA_ARCHITECTURES`; omission or an empty value keeps ggml's native
-selection. CMake accepts values such as `89-real` and semicolon-separated
-architecture lists.
+For CUDA builds, `PARAKIT_CUDA_ARCHS` is trimmed and, when nonempty, passed as `CMAKE_CUDA_ARCHITECTURES`; omission or a blank value keeps ggml's native selection. CMake accepts values such as `89-real` and semicolon-separated architecture lists.
 
 Feature mapping:
 

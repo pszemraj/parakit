@@ -78,7 +78,7 @@ scripts\windows\build.bat --backend cpu --blas openblas --openblas-root C:\path\
 
 `--openblas-root` is used with `--blas auto` or `--blas openblas` and ignored by other BLAS modes. Advanced CMake path overrides are documented in the build guide; explicit library paths skip automatic OpenBLAS DLL bundling.
 
-When `build.rs` selects a Windows OpenBLAS install, the bundle includes `openblas.dll` plus adjacent known runtime DLLs such as OpenMP, gfortran, GCC, quadmath, and winpthreads libraries when present. `parakit doctor` reports the requested and selected BLAS modes.
+When `build.rs` selects a Windows OpenBLAS install, the bundle includes its OpenBLAS runtime DLL plus adjacent known runtime DLLs such as OpenMP, gfortran, GCC, quadmath, and winpthreads libraries when present.
 
 ## Backend Requirements
 
@@ -98,7 +98,7 @@ scripts\windows\build.bat --backend cuda --bundle-cuda-dlls
 
 CUDA 12.x and 13.x toolkits are supported by the vendored ggml. CUDA 13.x toolkits do not install a display driver as part of the toolkit; install a compatible NVIDIA display driver separately. The default CUDA architecture behavior is ggml's native build for the GPU present on the machine; the cross-platform `PARAKIT_CUDA_ARCHS` override is in [the build guide](../../docs/build.md#crispasr-and-backends).
 
-GPU builds use `CMAKE_GENERATOR=Ninja`. The script restores an inherited generator afterward, activates an amd64 Visual Studio C++ environment before Cargo runs, and verifies `cl.exe`, `link.exe`, and `ninja.exe`. This avoids stale versioned CUDA MSBuild BuildCustomizations selecting a toolkit other than `nvcc` and `CUDA_PATH`.
+GPU builds use `CMAKE_GENERATOR=Ninja`. The script restores an inherited generator afterward, reuses an already-active Visual Studio developer environment or activates an amd64 one before Cargo runs, and verifies `cl.exe`, `link.exe`, and `ninja.exe`. This avoids stale versioned CUDA MSBuild BuildCustomizations selecting a toolkit other than `nvcc` and `CUDA_PATH`.
 
 Windows MSVC bundle builds set `GGML_CCACHE=OFF`. A `ccache` executable on `PATH` is not used by this build path.
 
@@ -117,12 +117,13 @@ If path shortening does not fix a Vulkan shader-gen failure, capture the exact `
 
 `build.ps1` runs this sequence:
 
-1. Ignores `CRISPASR_LIB_DIR` for the bundled build so it produces a fresh runtime manifest and colocated DLL staging directory, then restores the inherited value.
+1. Gives the backend its own Cargo target directory and, for Vulkan, checks the shader-generator path depth.
 2. Checks `vendor\CrispASR`, accepting any populated checkout and initializing submodules non-interactively only when needed.
-3. Configures BLAS and the selected accelerator, including the MSVC amd64 environment and Ninja for GPU builds.
-4. Gives the backend its own Cargo target directory, then runs `cargo build` with the requested profile and backend feature.
-5. Creates `target\parakit-windows-x86_64-<backend>` and copies the runtime manifest, its required files, `LICENSE`, and `README.md`.
-6. Calls `install.ps1` unless `--no-install` is set.
+3. Configures BLAS.
+4. Ignores `CRISPASR_LIB_DIR` for the bundled build so it produces a fresh runtime manifest and colocated DLL staging directory, then restores the inherited value.
+5. Configures the selected accelerator, including the MSVC environment, Ninja, and the CUDA or Vulkan toolkit checks for GPU builds, then runs `cargo build` with the requested profile and backend feature.
+6. Creates `target\parakit-windows-x86_64-<backend>` and copies the runtime manifest, its required files, `LICENSE`, and `README.md`.
+7. Calls `install.ps1` unless `--no-install` is set.
 
 The default `%LOCALAPPDATA%\Programs\parakit` directory is dedicated to parakit and is replaced on each install. Custom install directories are wiped only when marked by `.parakit-install`; an unmarked non-empty custom destination is refused instead of merged, because stale accelerator DLLs can change loader behavior.
 
@@ -147,7 +148,7 @@ What `doctor --deep` actually does on Windows is described in [windows-desktop.m
 
 The version smoke test does not touch the hotkey, microphone, daemon lock, model cache, or clipboard. If Windows reports `0xC0000135`, the installer translates it to a missing-runtime-DLL message before PATH updates.
 
-The installer updates persistent User `PATH`; it does not broadcast an environment change to already-running applications. Open a new terminal after install.
+The installer updates persistent User `PATH`, but already-running terminals keep their old environment. Open a new terminal after install.
 
 If Group Policy blocks User `PATH` writes, the install still succeeds and prints a warning. Run `%LOCALAPPDATA%\Programs\parakit\parakit.exe` directly, add the directory through your approved endpoint-management path, or rerun with `--no-user-path` when PATH changes are not allowed.
 
