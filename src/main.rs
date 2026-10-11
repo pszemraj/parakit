@@ -28,6 +28,8 @@ mod test_support;
 use std::io::Write as _;
 
 fn main() {
+    // Apply environment defaults before starting threads or opening a model.
+    unsafe { parakit::inference::initialize_crispasr_runtime_defaults() };
     if let Err(err) = app::run() {
         // A reader that stops early, as in `parakit status | head -1`, ends the
         // command normally.

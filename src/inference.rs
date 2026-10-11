@@ -16,6 +16,24 @@ use std::path::Path;
 /// without dropping the user's utterance.
 const MIN_INFERENCE_SAMPLES: usize = TARGET_RATE as usize;
 
+/// Initialize Parakit's lower-memory CrispASR defaults without replacing overrides.
+///
+/// Disables extra pointwise-Q8 and fused-QKV weight copies. Library callers
+/// can use this initializer at startup or provide these environment variables
+/// when launching their process; `Engine::open` does not mutate them.
+///
+/// # Safety
+///
+/// Call before starting any threads and before native model initialization.
+/// Native code can read the process environment and caches these controls.
+pub unsafe fn initialize_crispasr_runtime_defaults() {
+    for key in ["CRISPASR_FC_PW_Q8", "CRISPASR_FC_FUSED_QKV"] {
+        if std::env::var_os(key).is_none() {
+            std::env::set_var(key, "0");
+        }
+    }
+}
+
 /// Runtime CPU/GPU selection requested by the user.
 #[derive(
     Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum, serde::Serialize, serde::Deserialize,
