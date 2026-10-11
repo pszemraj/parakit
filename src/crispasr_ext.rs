@@ -1,14 +1,13 @@
 //! Local extensions over the pinned CrispASR Rust bindings.
 //!
-//! The vendored C API exports `crispasr_session_open_with_params`, but the
-//! `crispasr-sys` Rust bindings have not exposed it yet. This module keeps the
-//! raw ABI use narrow so parakit can choose CPU or GPU at session open without
-//! modifying the submodule.
+//! The safe wrapper does not expose parameterized session open. This module
+//! keeps the raw ABI use narrow so parakit can choose CPU or GPU at session
+//! open without modifying the submodule.
 
 use crate::ffi_util::c_string_lossy;
 use crispasr::{SessionSegment, SessionWord};
 use std::ffi::CString;
-use std::os::raw::{c_char, c_float, c_int};
+use std::os::raw::{c_float, c_int};
 
 #[repr(C)]
 struct CrispAsrOpenParamsV1 {
@@ -19,14 +18,6 @@ struct CrispAsrOpenParamsV1 {
     flash_attn: c_int,
     n_gpu_layers: c_int,
     reserved: [c_int; 6],
-}
-
-extern "C" {
-    fn crispasr_session_open_with_params(
-        model_path: *const c_char,
-        backend_name: *const c_char,
-        params: *const CrispAsrOpenParamsV1,
-    ) -> *mut crispasr_sys::CrispasrSession;
 }
 
 /// Convert a thread count to the C `int` that every CrispASR session-open entry point takes.
@@ -91,8 +82,13 @@ impl OwnedSession {
             n_gpu_layers: -1,
             reserved: [0; 6],
         };
-        let handle =
-            unsafe { crispasr_session_open_with_params(path.as_ptr(), backend.as_ptr(), &params) };
+        let handle = unsafe {
+            crispasr_sys::crispasr_session_open_with_params(
+                path.as_ptr(),
+                backend.as_ptr(),
+                std::ptr::from_ref(&params).cast(),
+            )
+        };
         if handle.is_null() {
             let available = crispasr::Session::available_backends().join(",");
             return Err(format!(
@@ -199,6 +195,10 @@ impl OwnedSession {
                     text,
                     start,
                     end,
+                    no_speech_prob: crispasr_sys::crispasr_session_result_segment_no_speech_prob(
+                        result.0,
+                        segment_index,
+                    ),
                     words,
                 });
             }

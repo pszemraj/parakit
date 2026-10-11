@@ -352,12 +352,14 @@ mod tests {
                 text: " hello ".to_string(),
                 start: 0.0,
                 end: 0.5,
+                no_speech_prob: -1.0,
                 words: Vec::new(),
             },
             SessionSegment {
                 text: "world".to_string(),
                 start: 0.5,
                 end: 1.0,
+                no_speech_prob: -1.0,
                 words: Vec::new(),
             },
         ];

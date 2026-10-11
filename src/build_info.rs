@@ -33,6 +33,13 @@ pub fn diagnostic_lines() -> Vec<String> {
         build_value!("PARAKIT_BUILD_GGML_BACKEND_DL")
     ));
     lines.push(format!(
+        "native extras:  mel blas={}, tinyblas={}, opus={}, amr={}",
+        build_value!("PARAKIT_BUILD_CRISPASR_MEL_BLAS"),
+        build_value!("PARAKIT_BUILD_GGML_LLAMAFILE"),
+        build_value!("PARAKIT_BUILD_CRISPASR_OPUS"),
+        build_value!("PARAKIT_BUILD_CRISPASR_AMR")
+    ));
+    lines.push(format!(
         "cpu flags:      {}",
         option_env!("PARAKIT_BUILD_CPU_FLAGS").unwrap_or("unknown")
     ));

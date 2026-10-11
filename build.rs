@@ -80,12 +80,16 @@ fn main() {
     let bundled = cargo_feature("bundled");
     build_alsa_silencer(cargo_feature("daemon"));
     native_link::emit_cpp_runtime();
+    let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
+    if bundled {
+        native_link::build_device_shim(&locate_source(&manifest_dir));
+    }
 
     // 1. Honor an explicit lib-dir override regardless of feature flags.
     if let Ok(dir) = env::var("CRISPASR_LIB_DIR") {
         native_link::emit_external_search_paths(Some(Path::new(&dir)));
         emit_rpath(Path::new(&dir));
-        emit_direct_ggml_link_if_bundled(bundled);
+        native_link::emit_direct_ggml_link_if_bundled(bundled);
         return;
     }
 
@@ -96,7 +100,6 @@ fn main() {
     }
 
     // 3. Locate the CrispASR source tree.
-    let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
     let src_dir = locate_source(&manifest_dir);
     println!(
         "cargo:rerun-if-changed={}/CMakeLists.txt",
@@ -147,6 +150,7 @@ fn main() {
     let accelerators = AcceleratorConfig::from_env();
 
     let blas = configure_blas(&mut cfg);
+    native_link::configure_pcm_runtime(&mut cfg, blas.enabled);
     cfg.define("GGML_CUDA", cmake_bool(accelerators.cuda_enabled));
     if accelerators.cuda_enabled {
         cfg.define("GGML_CUDA_NCCL", "OFF");
@@ -174,7 +178,7 @@ fn main() {
     let install_dir = cfg.build();
     emit_build_report(&install_dir, &accelerators);
 
-    // 5. CrispASR v0.6.6 installs `libcrispasr` as the umbrella library.
+    // 5. CrispASR installs `libcrispasr` as the umbrella library.
     //    `crispasr-sys` links that exact name, so fail clearly if the pinned
     //    submodule stops producing it.
     let lib_dir = install_dir.join("lib");
@@ -213,7 +217,7 @@ fn main() {
     }
 
     println!("cargo:rustc-link-search=native={}", final_lib_dir.display());
-    emit_direct_ggml_link_if_bundled(bundled);
+    native_link::emit_direct_ggml_link_if_bundled(bundled);
 
     // Windows DLLs land in bin/, not lib/. Add it for completeness.
     if bin_dir.is_dir() {
@@ -276,6 +280,10 @@ fn emit_build_report(install_dir: &Path, accelerators: &AcceleratorConfig) {
         "GGML_BACKEND_DL",
         "GGML_BLAS",
         "GGML_BLAS_VENDOR",
+        "CRISPASR_MEL_BLAS",
+        "GGML_LLAMAFILE",
+        "CRISPASR_OPUS",
+        "CRISPASR_AMR",
         "COHERE_MKL",
         "GGML_CUDA",
         "GGML_VULKAN",
@@ -713,12 +721,6 @@ fn summarize_cpu_flags(flags: &str) -> String {
 fn emit_env_from_cache(cache: &BTreeMap<String, String>, cache_key: &str, env_key: &str) {
     if let Some(value) = cache.get(cache_key) {
         println!("cargo:rustc-env={env_key}={value}");
-    }
-}
-
-fn emit_direct_ggml_link_if_bundled(bundled: bool) {
-    if bundled {
-        println!("cargo:rustc-link-lib=dylib=ggml");
     }
 }
 

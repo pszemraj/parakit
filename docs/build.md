@@ -125,13 +125,13 @@ Explicit `PARAKIT_BLAS` builds print the selected mode, and `parakit doctor` rep
 
 ## CrispASR And Backends
 
-The repository vendors [CrispASR](https://github.com/CrispStrobe/CrispASR) as a git submodule. `build.rs` builds it with CMake and installs shared libraries under `target/<profile>/build/parakit-*/out/lib`. Source rebuild requirements are in [dev/README.md#source-rebuild](dev/README.md#source-rebuild).
+The repository vendors [CrispASR](https://github.com/CrispStrobe/CrispASR) as a git submodule. `build.rs` owns its CMake build and installs shared libraries under `target/<profile>/build/parakit-*/out/lib`. Concrete target overrides in `.cargo/config.toml` suppress the sys crate's competing native build. Run Cargo from the repository root so this configuration is loaded; an outside-directory `cargo build --manifest-path ...` does not load it. Source rebuild requirements are in [dev/README.md#source-rebuild](dev/README.md#source-rebuild).
 
-`CRISPASR_LIB_DIR` is for advanced local experiments with an already-built compatible CrispASR tree. The library must match the pinned C ABI, including `crispasr_session_open_with_params`. Bundled builds must also provide compatible ggml libraries with the exported device registry entry points and the pinned device struct prefix used by `parakit doctor` and `--device gpu` preflight.
+`CRISPASR_LIB_DIR` is for advanced local experiments with an already-built compatible CrispASR tree. The library must match the pinned C ABI, including `crispasr_session_open_with_params`. Bundled builds must also provide compatible ggml libraries with the exported device registry entry points used by `parakit doctor` and `--device gpu` preflight. Parakit compiles its device-query adapter against the selected native source headers, including when `CRISPASR_LIB_DIR` skips native compilation; those headers must match the supplied libraries.
 
 `CRISPASR_SRC_DIR` is an optional path to another CrispASR source tree containing
 `CMakeLists.txt`; by default, the bundled CMake build uses the vendored tree. An
-alternative tree must remain ABI-compatible with the vendored Rust crates. It
+alternative tree must remain ABI-compatible with the vendored Rust crates; this override changes native sources and headers only, not the Rust path dependencies. It
 cannot replace a missing submodule because Cargo resolves those path dependencies
 before `build.rs` runs.
 
