@@ -72,7 +72,7 @@ TODO: Add a Windows PE dependency-walker validation pass for the CPU bundle so r
 
 TODO: Run the full Windows BLAS/thread benchmark matrix for CPU builds, including no BLAS, OpenBLAS with controlled OpenMP ownership, and relevant `--threads` values against the pinned voice-memo smoke file.
 
-TODO: Complete official NVIDIA/NeMo comparisons on the v0.8.42 upgrade corpus and contextual short-cut boundary listening checks; previous Parakit output is a baseline, not ground truth, and standalone subsecond speech is not a quality acceptance case. See the [upgrade report](crispasr-upgrade.md#acceptance-status).
+TODO: Complete the contextual listening check at the 31-second crop boundary in the v0.8.42 upgrade corpus. Official NVIDIA/NeMo comparison is complete; previous Parakit output remains a baseline, not ground truth, and standalone subsecond speech is not a quality acceptance case. See the [upgrade report](crispasr-upgrade.md#acceptance-status).
 
 TODO: Add native Linux and Windows CI coverage for target-gated desktop transports, input backends, and their tests.
 
