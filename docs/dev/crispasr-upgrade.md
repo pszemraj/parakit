@@ -1,6 +1,6 @@
 # CrispASR v0.8.42 upgrade
 
-The branch pins [CrispASR v0.8.42](https://github.com/CrispStrobe/CrispASR/releases/tag/v0.8.42) at `3be8bcb4390b8080dc73f807b7abb34dc0aca9c3`. Ordinary transcription remains the shipping path. The reviewed lower-memory controls are now startup defaults; explicit environment overrides are preserved. Official NVIDIA/NeMo comparison is complete. Linux recognition acceptance retains one contextual check at the 31-second crop boundary; the measured memory exception and Vulkan cold-start trade-off have been accepted.
+The branch pins [CrispASR v0.8.42](https://github.com/CrispStrobe/CrispASR/releases/tag/v0.8.42) at `3be8bcb4390b8080dc73f807b7abb34dc0aca9c3`. Ordinary transcription remains the shipping path. The reviewed lower-memory controls are now startup defaults; explicit environment overrides are preserved. Official NVIDIA/NeMo comparison and contextual listening review are complete. Linux acceptance is complete for the tested ordinary-transcription path, with the reviewed memory exception and Vulkan cold-start trade-off accepted.
 
 ## Summary
 
@@ -11,7 +11,7 @@ The chart compares an isolated pre-upgrade main build (v0.6.6) with this branch'
 - **Everyday speed:** Warm inference for this clip falls by 39% on CPU, 92% on CUDA and 65% on Vulkan. First and warm inference pass the agreed latency gate across the measured 2–31-second clips.
 - **Memory:** Retained host RSS after this clip rises by approximately 13/30/18 MiB on CPU/CUDA/Vulkan; retained GPU allocation rises by 36 MiB on CUDA and less than 1 MiB on Vulkan. CPU process peak falls from 1,433 to 925 MiB, a 35% reduction.
 - **Accepted trade-offs:** Fresh-process Vulkan readiness is about 20% slower. The separate 125-second CUDA test retains about 143 MiB more host memory after standalone model offload, versus 92 MiB more in the real worker. Both exceptions were reviewed and accepted; their detailed measurements remain below.
-- **Long audio and quality:** Official NeMo output matches ordinary transcription on the full 55-second and repeated 265-second inputs apart from case/punctuation. Direct listening identifies a very quiet aside in the 125-second recording that both old CrispASR and full-input NeMo omit; the candidate partially recovers it, with word errors. The clear task sentence survives in every implementation. The 31-second crop retains a contextual boundary check. Bounded mode remains unshipped because of wording changes and boundary latency regressions; native macOS/Windows testing remains for the laptops.
+- **Long audio and quality:** Official NeMo output matches ordinary transcription on the full 55-second and repeated 265-second inputs apart from case/punctuation. Direct listening identifies a very quiet aside in the 125-second recording that both old CrispASR and full-input NeMo omit; the candidate partially recovers it, with word errors. The clear task sentence survives in every implementation. Listening also confirms the candidate's `forever` in the 31-second case, despite an audible disturbance within the word. Bounded mode remains unshipped because of wording changes and boundary latency regressions; native macOS/Windows testing remains for the laptops.
 
 ## Why this release and what changes at runtime
 
@@ -84,14 +84,14 @@ Comparison covered every distinct raw transcript from the clean native launches 
 | 5 / 8.2 / 15 seconds | Old and candidate match NeMo apart from case/punctuation. | No differing words. |
 | 25 seconds | NeMo writes `me'cause`; both native versions write `me because`. | Contraction/spacing difference with the same meaning. |
 | 29 seconds | NeMo and candidate use `gonna`; old CPU/CUDA use `going to`, while old Vulkan matches. | Equivalent wording. |
-| 31 seconds | NeMo and old CrispASR end with `for over`; candidate ends with `forever`. | Contextual boundary check remains: full-input NeMo says `forever`, but that does not establish whether the cropped word is complete. |
+| 31 seconds | NeMo and old CrispASR end with `for over`; candidate ends with `forever`. | Human contextual listening confirms `this person just pacing around forever`, with an audible disturbance within `forever`. Candidate wording agrees with the spoken phrase. |
 | Full 55 seconds | Both native versions match NeMo apart from case/punctuation. | Independently corroborates the historical expected words. |
 | Full 125 seconds | Old CrispASR matches NeMo; candidate adds `think that else. Uh`. | Human listening confirms real quiet speech; the candidate's partial recovery has word errors. See below. |
 | Repeated 265 seconds | Both native versions match NeMo apart from case/punctuation. | No new word omissions or repetitions relative to the official output on this synthetic stress input. |
 | 1-second silence | NeMo and both native versions return empty text. | Silence behavior agrees. |
 | 11-second quiet-aside excerpt | NeMo returns `Um think of it else. Uh I need to do things also`. | NeMo also recovers part of the aside with local context, despite omitting it on the full recording. Human listening remains the wording evidence. |
 
-The 31-second crop is the only ordinary-candidate word discrepancy still awaiting contextual adjudication. A 10-second listening excerpt spanning source seconds 23–33 includes two seconds beyond the tested cut and remains ignored at `target/tmp/crispasr-upgrade/audio-review/boundary-context-23-33s.wav`. The full-recording output is context, not a substitute for checking the crop boundary.
+The user reviewed the 10-second contextual excerpt spanning source seconds 23–33 on 2026-10-11 and confirmed `this person just pacing around forever`, followed by fillers and further speech. The user also reported an audible disturbance specifically within `forever`, absent from the surrounding words. This resolves the candidate's disputed wording in favor of the spoken phrase; the disturbance's cause was not diagnosed. The listening excerpt includes two seconds beyond the tested cut and remains ignored at `target/tmp/crispasr-upgrade/audio-review/boundary-context-23-33s.wav`. Official same-input NeMo output remains recorded separately; its `for over` is a model-reference discrepancy, not the human-confirmed wording.
 
 ## Initial 8.2-second results
 
@@ -152,7 +152,7 @@ Vulkan cold readiness consistently rises from approximately 2.30–2.31 seconds 
 
 The 2-second candidate recognizes `Um so` where the baseline returns `Um`; the official same-input NeMo result confirms the candidate's added word. Old and candidate outputs match NeMo apart from case/punctuation on the 5/8.2/15-second clips. At 25 seconds both native versions expand NeMo's `me'cause` to `me because`, preserving the meaning.
 
-At 29 seconds, CPU/CUDA change `going to` to `gonna`, matching the official same-input NeMo output with equivalent meaning. At 31 seconds, all three backends change `for over` to `forever`; NeMo returns `for over` on that crop and `forever` on the full recording. Contextual listening at this cut remains required before treating the change as a recognition improvement or regression.
+At 29 seconds, CPU/CUDA change `going to` to `gonna`, matching the official same-input NeMo output with equivalent meaning. At 31 seconds, all three backends change `for over` to `forever`; NeMo returns `for over` on that crop and `forever` on the full recording. The user's contextual listening confirms that `forever` is spoken, with an audible disturbance within the word. The ordinary candidate preserves the confirmed wording.
 
 ### Silence and subsecond input
 
@@ -164,7 +164,7 @@ A separate 0.8-second fixture uses the 50.8–51.6-second interval of the 55-sec
 
 ## Bounded-default experiment
 
-The isolated `transcribe_chunked(pcm, 0, -1)` route changes the 31-second boundary case. Ordinary v0.8.42 ends the relevant phrase with `forever`; official same-input NeMo returns `for over`. Bounded mode instead returns `for a virtual` on every backend, consistently across launches and repetitions. Contextual boundary review remains pending, and the latency failures below independently block adoption.
+The isolated `transcribe_chunked(pcm, 0, -1)` route changes the 31-second boundary case. Ordinary v0.8.42 ends the relevant phrase with `forever`; official same-input NeMo returns `for over`. Bounded mode instead returns `for a virtual` on every backend, consistently across launches and repetitions. The user's contextual listening confirms `forever`, so the bounded wording is incorrect. The latency failures below independently block adoption.
 
 | 31-second warm inference | Ordinary candidate | Bounded candidate |
 |---|---:|---:|
@@ -202,7 +202,7 @@ Ordinary raw output matches both the baseline and official NeMo on the 55- and 2
 
 A focused CUDA production-worker replay with only `CRISPASR_GAP_FILL=0` reproduces the baseline transcript and removes the added `think that else. Uh`. The main-daemon activity guard is clean. This isolates the changed wording to the repair pass on this input; it is a functional diagnostic, not another timing sample. Gap repair remains enabled in the shipping candidate. Disabling it globally would also remove the omission mitigation being evaluated.
 
-Bounded mode substantially reduces the 265-second workspace, but differs from official NeMo on all three long inputs. The 55-second result changes `order` to `before`. The 125-second result changes `pilot` to `PAL`, among other wording changes, and adds the partially recovered aside. On the repeated 265-second input, a minimum word-edit alignment finds four `order` to `before` substitutions on CPU and three on CUDA/Vulkan, plus three added `maybe` tokens on each backend. CUDA/Vulkan also expand one `gonna` to `going to`. These changes supplement the unadjudicated 31-second boundary wording. The latency failures and unresolved recognition changes preclude adoption despite its stress-input memory benefit.
+Bounded mode substantially reduces the 265-second workspace, but differs from official NeMo on all three long inputs. The 55-second result changes `order` to `before`. The 125-second result changes `pilot` to `PAL`, among other wording changes, and adds the partially recovered aside. On the repeated 265-second input, a minimum word-edit alignment finds four `order` to `before` substitutions on CPU and three on CUDA/Vulkan, plus three added `maybe` tokens on each backend. CUDA/Vulkan also expand one `gonna` to `going to`. These changes supplement the human-confirmed 31-second wording error. The latency failures and recognition findings preclude adoption despite its stress-input memory benefit.
 
 ## Production offload and reload
 
@@ -250,10 +250,10 @@ macOS and Windows checks are best effort on Linux. The Windows shim branch passe
 
 ## Acceptance status
 
-The implementation uses ordinary transcription and the approved lower-memory defaults. Linux everyday first/warm inference and comparable memory gates pass, as do three production offload/reload transitions on CPU, CUDA and Vulkan. The user accepted the reproducible Vulkan fresh-process readiness regression and the approximately 143 MiB CUDA standalone post-offload exception after the 125-second clip. The corroborating production worker stays below the absolute memory gate. Bounded mode remains unshipped because of its latency failures and unresolved wording changes.
+The implementation uses ordinary transcription and the approved lower-memory defaults. Linux everyday first/warm inference and comparable memory gates pass, as do three production offload/reload transitions on CPU, CUDA and Vulkan. The user accepted the reproducible Vulkan fresh-process readiness regression and the approximately 143 MiB CUDA standalone post-offload exception after the 125-second clip. The corroborating production worker stays below the absolute memory gate. Bounded mode remains unshipped because of its latency failures and recognition findings.
 
-Official NVIDIA/NeMo comparison is complete on all seven 2–31-second clips, the three long inputs, silence and the contextual quiet-aside excerpt. It corroborates ordinary-candidate words on the 5/8.2/15/55/265-second inputs and the candidate's added `so` at two seconds. The 25/29-second differences preserve meaning. Final recognition acceptance retains one contextual listening check: the 31-second crop ends `for over` in NeMo and `forever` in the candidate. Full-input NeMo's `forever` does not establish whether the word is complete at the shorter cut. Standalone subsecond recognition is excluded from acceptance; the isolated tiny-crop checks exercise input handling only.
+Official NVIDIA/NeMo comparison is complete on all seven 2–31-second clips, the three long inputs, silence and the contextual quiet-aside excerpt. It corroborates ordinary-candidate words on the 5/8.2/15/55/265-second inputs and the candidate's added `so` at two seconds. The 25/29-second differences preserve meaning. The user's contextual listening confirms the candidate's `forever` in the 31-second case, resolving the final ordinary-path wording check. Standalone subsecond recognition is excluded from acceptance; the isolated tiny-crop checks exercise input handling only.
 
 The 125-second excerpt has received contextual listening review: the candidate partially recovers the real quiet aside omitted by the baseline, with imperfect wording, while preserving the clear task sentence. This is no longer an unresolved audio-review item.
 
-Native macOS/Windows inference and packaging remain for laptop testing. Actual allocation exhaustion and populated-cache startup were not evaluated. The branch is prepared for review without pushing or merging; passing compilation and the completed measurements do not constitute full recognition acceptance.
+Linux acceptance is complete for the measured corpus and tested ordinary-transcription path, with the two reviewed performance/memory exceptions above. Native macOS/Windows inference and packaging remain for laptop testing. Actual allocation exhaustion and populated-cache startup were not evaluated. The branch is prepared for review without pushing or merging; these results do not establish accuracy on every recording or resolve every historical omission.
