@@ -72,7 +72,7 @@ TODO: Add a Windows PE dependency-walker validation pass for the CPU bundle so r
 
 TODO: Run the full Windows BLAS/thread benchmark matrix for CPU builds, including no BLAS, OpenBLAS with controlled OpenMP ownership, and relevant `--threads` values against the pinned voice-memo smoke file.
 
-TODO: Review the four added words in the 125-second v0.8.42 recognition comparison against the audio and reference before treating Linux recognition acceptance as complete; see the [upgrade report](crispasr-upgrade.md#acceptance-status).
+TODO: Complete the contextual short-cut boundary reference checks for the v0.8.42 recognition comparison; standalone subsecond speech is not a quality acceptance case. See the [upgrade report](crispasr-upgrade.md#acceptance-status).
 
 TODO: Add native Linux and Windows CI coverage for target-gated desktop transports, input backends, and their tests.
 
