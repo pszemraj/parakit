@@ -35,7 +35,7 @@
 # `parakit config init` writes a commented template with the same keys, and `parakit config edit` opens the file in $VISUAL or $EDITOR.
 #
 # No key is deprecated or internal. The value "evdev-proxy-experimental" of hotkey.backend is experimental.
-# The environment variables that parakit reads are listed at the end of this file. They are not config keys.
+# The environment variables that parakit reads or sets are listed at the end of this file. They are not config keys.
 
 
 # ---------- [daemon]: model, device, insertion, and daemon behavior ----------
@@ -172,7 +172,7 @@ enabled = true
 # Recommended: "safe", unless you want discourse markers deleted and accept that it can change meaning.
 profile = "safe"
 
-# bool. Keep the single final period of a transcript. false removes it, which suits messaging-style dictation. Only one period is removed, so "wait..." ends in "..".
+# bool. Keep the single final period of a transcript. false removes it, which suits messaging-style dictation. Only a single final period is removed: a final "?" or "!" is kept, and so is a final period that directly follows another period, so the ellipsis in "Wait..." survives.
 # This is the built-in rule fix-trailing-period. It is in the pipeline only when this key is false and the rule is not named in cleaning.disabled_rules.
 # Disabling that rule by name has the same visible effect as setting this key to true.
 # Only used when: cleaning.enabled is true.
@@ -239,7 +239,7 @@ number_threshold = 4
 #   fix-trim (safe): trim leading and trailing whitespace.
 #   fix-leading-comma (safe): remove one comma left at the start.
 #   capitalize-sentence-starts (safe): capitalize sentence starts, leaving tokens that contain "." or "@", URLs, and tokens with inner capitals alone.
-#   fix-trailing-period (messaging-default): remove one final "." that is not part of an ellipsis; "?" and "!" are kept.
+#   fix-trailing-period (messaging-default): remove one final "." unless it directly follows another "." (an ellipsis is kept); "?" and "!" are kept.
 disabled_rules = []
 
 
@@ -384,6 +384,18 @@ backend = "auto"
 
 # OMP_WAIT_POLICY
 # Windows. Set by parakit to PASSIVE unless it is already set to anything, including an empty string.
+
+# CRISPASR_FC_PW_Q8
+# All platforms. Switch read by the native CrispASR library when it loads the model, and cached after the first read. It controls whether the F16 convolution pointwise weights of each layer are repacked into an extra Q8_0 copy.
+# Set by every parakit command to 0 at process start, which turns the repack off, unless it is already set to anything, including an empty string.
+# The library treats a value starting with 0 as off, any other nonempty value as on, and an empty or absent value as automatic, which repacks only a model that is already quantized.
+# To use another value, set it in the environment that launches parakit. The model is opened by that same process, and a change made while it runs has no effect. There is no config key or command-line flag for it.
+
+# CRISPASR_FC_FUSED_QKV
+# All platforms. Switch read by the native CrispASR library when it loads the model, and cached after the first read. It controls whether the attention query, key, and value weights of each layer are concatenated into an extra fused copy.
+# Set by every parakit command to 0 at process start, which turns the fused copy off, unless it is already set to anything, including an empty string.
+# The library treats a value starting with 0 as off, and any other value, including an empty string or an absent variable, as on.
+# To use another value, set it in the environment that launches parakit. The model is opened by that same process, and a change made while it runs has no effect. There is no config key or command-line flag for it.
 
 # HF_ENDPOINT
 # Base URL that replaces https://huggingface.co for the default model download, `parakit fetch <repo>`, and `parakit fetch --from-source`. This includes the download the daemon runs at startup when no model is set.
