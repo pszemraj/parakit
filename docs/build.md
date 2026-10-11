@@ -1,6 +1,6 @@
 # Build
 
-parakit is a Rust 1.87+ binary that links to the vendored [CrispASR](https://github.com/CrispStrobe/CrispASR) submodule. The default build is CPU-only and may use detected CPU BLAS libraries.
+parakit is a Rust binary that links to the vendored [CrispASR](https://github.com/CrispStrobe/CrispASR) submodule. The default build is CPU-only and may use detected CPU BLAS libraries.
 
 Command examples use a POSIX shell unless the surrounding section is Windows-specific. Windows-only commands are shown as `bat` or `powershell`.
 
@@ -162,7 +162,5 @@ macOS uses `@rpath` and sibling dylib install names. Verify:
 otool -L target/debug/build/parakit-*/out/lib/libggml.dylib
 otool -l target/debug/parakit | grep -A2 LC_RPATH
 ```
-
-For installed macOS source builds, the binary rpath points into the repository build tree. This matches the Linux source-build contract.
 
 Metal-specific checks are in [macos-desktop.md#metal-verification](macos-desktop.md#metal-verification).

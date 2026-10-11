@@ -25,7 +25,7 @@ A dictation where push-to-talk modifiers were still held down at paste time look
 {"kind":"insertion","ts":"2026-07-27T14:05:42.118Z","session_id":"2026-07-27T14:05:41.900123000Z-p4388-l0","ref_id":9,"outcome":"copied_only","target_bundle_id":"com.apple.Terminal","focus_verification":"matched","transcript_chars":18,"paste_event_posted":false,"pasteboard_requested":null,"acknowledgement_kind":"not_applicable","acknowledgement_ms":null,"clipboard_restored":false,"failure_reason":null}
 ```
 
-Join a transcription line to its insertion line by matching (`session_id`, `record_id`) on the transcription record to (`session_id`, `ref_id`) on the insertion record. `session_id` identifies one logger instance (normally one per daemon start), and the numeric sequence restarts at zero on every new session, so the combined key stays unambiguous even after a daemon restart appends to the same daily file. The transcription line is written and flushed before insertion starts, so quitting mid-insertion can leave a transcription line with no matching insertion line; as noted above, this is not a filesystem-sync guarantee.
+Join a transcription line to its insertion line by matching (`session_id`, `record_id`) on the transcription record to (`session_id`, `ref_id`) on the insertion record. `session_id` identifies one logger instance (normally one per daemon start), and the numeric sequence restarts at zero on every new session, so the combined key stays unambiguous even after a daemon restart appends to the same daily file. The transcription line is written and flushed before insertion starts, so quitting mid-insertion can leave a transcription line with no matching insertion line.
 
 ## Transcription Record Fields
 
@@ -50,7 +50,7 @@ Fields, in serialization order:
 | `rules_fired` | array | Passes that changed text, in application order, as `{"name":...,"matches":...}` objects. |
 | `cleaning_failure` | string | Error text from a bounded matcher that exceeded its limit; the cleaner then keeps the original transcript instead of inserting a partial transformation. Omitted when cleaning succeeded. |
 
-`ruleset_id` and `cleaning_failure` are the only omittable fields on this line. Everything else is always present, and `number_threshold` carries whatever threshold was actually in effect, dropping to `null` only when cleaning was disabled. Pass semantics are in [cleaning-rules.md](cleaning-rules.md).
+`ruleset_id` and `cleaning_failure` are the only omittable fields on this line; everything else is always present. Pass semantics are in [cleaning-rules.md](cleaning-rules.md).
 
 ## Insertion Record Fields
 

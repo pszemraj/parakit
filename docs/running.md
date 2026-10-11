@@ -236,9 +236,7 @@ After staging, parakit checks that the staged text and native clipboard state st
 
 Linux clipboard modes use a fixed-delay restore gate. Platform-specific timing is covered under [Windows insertion](windows-desktop.md#insertion) and [macOS acknowledgement](macos-desktop.md#insertion).
 
-Use [daemon history](#daemon-control) for same-session recovery or [JSONL logging](logging.md) for durable transcript records. Clipboard history managers can also retain staged text; on Windows, enable the built-in history and open it with `Win+V`.
-
-Clipboard history tools do retain transcript text after parakit restores the active clipboard. That is the point, but it also means dictated text outlives the paste; disable the manager if that retention is not acceptable for your workflow.
+Use [daemon history](#daemon-control) for same-session recovery or [JSONL logging](logging.md) for durable transcript records. Clipboard history managers also retain staged transcripts after parakit restores the active clipboard; on Windows, enable the built-in history and open it with `Win+V`. Disable the manager if dictated text must not outlive the paste.
 
 ### Focus Changes
 
