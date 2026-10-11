@@ -132,7 +132,7 @@ last transcript: 42 bytes
   device:     cpu (parakeet, 8 threads)
   paste mode: standard
   sounds:     on
-  cleaning:   on (safe, 30 rules)
+  cleaning:   on (safe, 29 rules)
   logging:    JSONL to /home/user/.parakit/logs
   history:    3 of 10
   hotkey:     auto

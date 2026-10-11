@@ -33,7 +33,7 @@ pub(crate) const FANCY_BACKTRACK_LIMIT: usize = 100_000;
 /// instead. The boundary is anchored to the canonical built-in order, so
 /// disabling the boundary rule does not move `Standard` rules behind later
 /// cleanup and capitalization passes.
-pub(crate) const CLEANUP_BOUNDARY_RULE_NAME: &str = "fix-orphan-punct";
+pub(crate) const CLEANUP_BOUNDARY_RULE_NAME: &str = "fix-space-before-punct";
 
 /// Built-in cleanup activation tier.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

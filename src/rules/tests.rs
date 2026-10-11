@@ -184,12 +184,17 @@ fn standalone_filler_sentences_leave_no_orphaned_punctuation() {
             ("Um. Then the furniture.", "Then the furniture."),
             ("Is it done? Um.", "Is it done?"),
             ("That is great! Uh.", "That is great!"),
-            // Unspaced punctuation runs are not removal debris.
+            ("Okay, um. Sure.", "Okay. Sure."),
+            // Punctuation runs that no filler left behind stay intact,
+            // whether or not the model spaced them.
             ("Wait... What?! Really?", "Wait... What?! Really?"),
+            ("Really ? !", "Really?!"),
+            ("Wait . . . what", "Wait... What"),
         ],
     );
 
-    // The orphan otherwise shields the real final period from messaging mode.
+    // A leftover terminator would otherwise shield the real final period from
+    // messaging mode.
     let messaging = cleaner_messaging_default(CleaningProfile::Safe);
     assert_eq!(messaging.clean_text("Okay. Um."), "Okay");
 }
