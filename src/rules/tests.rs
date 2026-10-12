@@ -7,11 +7,8 @@ use super::engine::CLEANUP_BOUNDARY_RULE_NAME;
 use super::passes::capitalize_sentence_starts;
 use super::*;
 
-#[path = "tests/config_reference.rs"]
 mod config_reference;
-#[path = "tests/spoken_numbers.rs"]
 mod spoken_numbers;
-#[path = "tests/user_rules.rs"]
 mod user_rules;
 
 fn build_cleaner_for_test(
@@ -164,6 +161,42 @@ fn filled_pauses_are_removed_without_matching_er_acronym() {
             ("The ER team arrived.", "The ER team arrived."),
         ],
     );
+}
+
+#[test]
+fn standalone_filler_sentences_leave_no_orphaned_punctuation() {
+    assert_clean_cases(
+        CleaningProfile::Safe,
+        &[
+            (
+                "I need to order groceries. Um. Then the furniture.",
+                "I need to order groceries. Then the furniture.",
+            ),
+            (
+                "I need to order groceries. Uh, um. Then the furniture.",
+                "I need to order groceries. Then the furniture.",
+            ),
+            (
+                "Okay. Um. Uh. Then the furniture.",
+                "Okay. Then the furniture.",
+            ),
+            ("Okay. Um? Sure.", "Okay. Sure."),
+            ("Um. Then the furniture.", "Then the furniture."),
+            ("Is it done? Um.", "Is it done?"),
+            ("That is great! Uh.", "That is great!"),
+            ("Okay, um. Sure.", "Okay. Sure."),
+            // Punctuation runs that no filler left behind stay intact,
+            // whether or not the model spaced them.
+            ("Wait... What?! Really?", "Wait... What?! Really?"),
+            ("Really ? !", "Really?!"),
+            ("Wait . . . what", "Wait... What"),
+        ],
+    );
+
+    // A leftover terminator would otherwise shield the real final period from
+    // messaging mode.
+    let messaging = cleaner_messaging_default(CleaningProfile::Safe);
+    assert_eq!(messaging.clean_text("Okay. Um."), "Okay");
 }
 
 #[test]
@@ -609,6 +642,21 @@ fn final_period_removal_is_off_by_default_and_can_be_enabled() {
     let dropped = cleaner_messaging_default(CleaningProfile::Safe);
     assert_eq!(dropped.clean_text("Drop this period."), "Drop this period");
     assert!(dropped.drops_trailing_period());
+}
+
+#[test]
+fn final_period_removal_keeps_other_terminal_punctuation() {
+    let messaging = cleaner_messaging_default(CleaningProfile::Safe);
+    for (input, expected) in [
+        ("Is it done?", "Is it done?"),
+        ("That is great!", "That is great!"),
+        ("Really?!", "Really?!"),
+        ("Was it rewritten, etc.?", "Was it rewritten, etc.?"),
+        ("Hmm...", "Hmm..."),
+        (".", ""),
+    ] {
+        assert_eq!(messaging.clean_text(input), expected, "{input:?}");
+    }
 }
 
 #[test]

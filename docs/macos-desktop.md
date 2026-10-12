@@ -45,7 +45,7 @@ tccutil reset Microphone com.apple.Terminal
 `parakit doctor --deep` runs a deeper insertion smoke test than plain `doctor`. For the `standard`/`terminal` paste modes it runs two stages and reports which one failed:
 
 1. A suppressed Cmd+V event-tap smoke test: parakit posts a synthetic paste chord and confirms, via a CoreGraphics event tap that suppresses the chord before it reaches any app, that the chord was actually posted.
-2. A real end-to-end paste-transaction smoke test: parakit briefly opens a small, unobtrusive titled window with a text field, pastes a unique sentinel into it through the same production clipboard-swap/paste/`AXValue`-acknowledgement path the daemon uses for real dictation, then verifies the text landed, was Accessibility-acknowledged, and that supported text, HTML, file-list, or image clipboard content was restored. Unsupported clipboard formats are cleared instead of being reconstructed; the format limits are described in [running.md#insertion](running.md#insertion).
+2. A real end-to-end paste-transaction smoke test: parakit briefly opens a small, unobtrusive titled window with a text view, pastes a unique sentinel into it through the same production clipboard-swap/paste/`AXValue`-acknowledgement path the daemon uses for real dictation, then verifies the text landed, was Accessibility-acknowledged, and that supported text, HTML, file-list, or image clipboard content was restored. Unsupported clipboard formats are cleared instead of being reconstructed; the format limits are described in [running.md#insertion](running.md#insertion).
 
 For `direct` mode, only the suppressed key-event tap runs (direct typing never touches the clipboard or `AXValue` acknowledgement, so there is no transaction to open a window and test).
 
@@ -85,9 +85,6 @@ Matching ignores whitespace on both sides rather than comparing verbatim. A term
 Transcripts under 12 normalized characters require an exact baseline-to-current insertion delta. Longer transcripts can also use selection geometry to confirm a reformatted value. In `standard` mode, an increased occurrence count for the whole transcript or a 32-character leading/trailing window can confirm when the value grew. `terminal` mode disables occurrence-count evidence because old text can scroll into its sliding rendered value; exact normalized deltas still confirm hard-wrapped text.
 
 ## Metal Verification
-
-See [idle model offload](running.md#idle-model-offload) for runtime behavior and
-[memory allocation notes](dev/memory.md#allocation-ownership) for the distinction between session and process-wide state.
 
 Use verbose doctor output to confirm the Metal build and visible compute device:
 

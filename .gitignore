@@ -8,6 +8,7 @@
 # Source helper for root build.rs; keep other root build/ outputs ignored.
 !/build/
 /build/*
+!/build/native_link.rs
 !/build/openblas_roots.rs
 !/build/unix_openblas.rs
 !/build/windows_openblas.rs

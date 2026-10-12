@@ -3,45 +3,21 @@
 use crate::ffi_util::c_string_lossy;
 use std::os::raw::{c_char, c_int};
 
-type GgmlBackendDev = *mut GgmlBackendDevice;
-
-// Prefix mirror of ggml's `ggml_backend_device` and leading
-// `ggml_backend_device_i` fields. The public header declares accessors for
-// these fields, but the pinned Windows import library does not export them.
-// Keep this in sync with vendor/CrispASR/ggml/src/ggml-backend-impl.h through
-// `get_props`.
+// This layout belongs to Parakit, not ggml. The native shim compiles all
+// ggml device/callback/property accesses against the selected native headers.
 #[repr(C)]
-struct GgmlBackendDevice {
-    iface: GgmlBackendDeviceIface,
-}
-
-#[repr(C)]
-struct GgmlBackendDeviceIface {
-    get_name: Option<unsafe extern "C" fn(GgmlBackendDev) -> *const c_char>,
-    get_description: Option<unsafe extern "C" fn(GgmlBackendDev) -> *const c_char>,
-    get_memory: Option<unsafe extern "C" fn(GgmlBackendDev, *mut usize, *mut usize)>,
-    get_type: Option<unsafe extern "C" fn(GgmlBackendDev) -> c_int>,
-    #[cfg(any(target_os = "windows", test))]
-    get_props: Option<unsafe extern "C" fn(GgmlBackendDev, *mut GgmlBackendDeviceProps)>,
-}
-
-// Mirror ggml_backend_dev_props, including all four ggml_backend_dev_caps
-// bool fields. get_props writes the whole structure, not just device_id.
-#[cfg(any(target_os = "windows", test))]
-#[repr(C)]
-struct GgmlBackendDeviceProps {
+struct NativeDeviceInfo {
     name: *const c_char,
     description: *const c_char,
-    memory_free: usize,
-    memory_total: usize,
-    kind: c_int,
     device_id: *const c_char,
-    caps: [bool; 4],
+    free_bytes: usize,
+    total_bytes: usize,
+    kind: c_int,
 }
 
 extern "C" {
-    fn ggml_backend_dev_count() -> usize;
-    fn ggml_backend_dev_get(index: usize) -> GgmlBackendDev;
+    fn parakit_ggml_device_count() -> usize;
+    fn parakit_ggml_device_get(index: usize, info: *mut NativeDeviceInfo) -> c_int;
 }
 
 /// ggml compute device class.
@@ -151,30 +127,25 @@ impl DeviceInfo {
 ///
 /// Device information for each non-null ggml device handle.
 pub fn devices() -> Vec<DeviceInfo> {
-    let count = unsafe { ggml_backend_dev_count() };
+    let count = unsafe { parakit_ggml_device_count() };
     let mut out = Vec::with_capacity(count);
     for index in 0..count {
-        let device = unsafe { ggml_backend_dev_get(index) };
-        if device.is_null() {
+        // SAFETY: The shim output contains only pointers and integers, for
+        // which the all-zero representation is valid, and initializes all
+        // fields before reporting a device. Strings are borrowed from ggml.
+        let mut native: NativeDeviceInfo = unsafe { std::mem::zeroed() };
+        if unsafe { parakit_ggml_device_get(index, &mut native) } == 0 {
             continue;
         }
-        let device_ref = unsafe { &*device };
-        let (free_bytes, total_bytes) = device_memory(device, device_ref);
-        let name = device_ref
-            .iface
-            .get_name
-            .map(|get_name| c_string_lossy(unsafe { get_name(device) }))
-            .unwrap_or_default();
-        let description = device_ref
-            .iface
-            .get_description
-            .map(|get_description| c_string_lossy(unsafe { get_description(device) }))
-            .unwrap_or_default();
+        let (free_bytes, total_bytes) =
+            normalize_device_memory(native.free_bytes, native.total_bytes);
+        let name = c_string_lossy(native.name);
+        let description = c_string_lossy(native.description);
         #[cfg(target_os = "windows")]
         let free_bytes = if description.starts_with("NVIDIA") {
             // CUDA's WDDM reading does not include other processes' allocations.
             // The driver's device-wide reading also covers NVIDIA Vulkan.
-            device_pci_bus_id(device, device_ref)
+            device_pci_bus_id(native.device_id)
                 .and_then(|id| windows_nvidia_free_memory(&id))
                 .map_or(free_bytes, |available| free_bytes.min(available))
         } else {
@@ -183,13 +154,7 @@ pub fn devices() -> Vec<DeviceInfo> {
         out.push(DeviceInfo {
             name,
             description,
-            kind: DeviceKind::from(
-                device_ref
-                    .iface
-                    .get_type
-                    .map(|get_type| unsafe { get_type(device) })
-                    .unwrap_or(-1),
-            ),
+            kind: DeviceKind::from(native.kind),
             free_bytes,
             total_bytes,
         });
@@ -231,17 +196,6 @@ fn bytes_to_mib(bytes: usize) -> usize {
     bytes / 1_048_576
 }
 
-fn device_memory(device: GgmlBackendDev, device_ref: &GgmlBackendDevice) -> (usize, usize) {
-    let mut free_bytes = 0;
-    let mut total_bytes = 0;
-    if let Some(get_memory) = device_ref.iface.get_memory {
-        unsafe {
-            get_memory(device, &mut free_bytes, &mut total_bytes);
-        }
-    }
-    normalize_device_memory(free_bytes, total_bytes)
-}
-
 fn normalize_device_memory(free_bytes: usize, total_bytes: usize) -> (usize, usize) {
     // Metal's unsigned budget-minus-allocation subtraction can wrap when a
     // process exceeds its recommended working set. Treat that as no room.
@@ -253,19 +207,12 @@ fn normalize_device_memory(free_bytes: usize, total_bytes: usize) -> (usize, usi
 }
 
 #[cfg(any(target_os = "windows", test))]
-fn device_pci_bus_id(
-    device: GgmlBackendDev,
-    device_ref: &GgmlBackendDevice,
-) -> Option<std::ffi::CString> {
-    let get_props = device_ref.iface.get_props?;
-    let mut props: GgmlBackendDeviceProps = unsafe { std::mem::zeroed() };
-    // SAFETY: The callback and full output layout match the pinned ggml ABI.
-    unsafe { get_props(device, &mut props) };
-    if props.device_id.is_null() {
+fn device_pci_bus_id(device_id: *const c_char) -> Option<std::ffi::CString> {
+    if device_id.is_null() {
         return None;
     }
     // ggml owns this NUL-terminated ID. Copy it before the next native call.
-    let id = unsafe { std::ffi::CStr::from_ptr(props.device_id) };
+    let id = unsafe { std::ffi::CStr::from_ptr(device_id) };
     (!id.is_empty()).then(|| id.to_owned())
 }
 
@@ -347,22 +294,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn identical_gpu_descriptions_keep_their_own_pci_bus_ids() {
+    fn reported_pci_bus_ids_remain_distinct() {
         use std::ffi::CStr;
-
-        #[repr(C)]
-        struct FakeDevice {
-            backend: GgmlBackendDevice,
-            pci_bus_id: *const c_char,
-        }
-
-        unsafe extern "C" fn get_props(device: GgmlBackendDev, props: *mut GgmlBackendDeviceProps) {
-            let device = unsafe { &*device.cast::<FakeDevice>() };
-            unsafe {
-                (*props).description = c"NVIDIA RTX".as_ptr();
-                (*props).device_id = device.pci_bus_id;
-            }
-        }
 
         for (id, expected) in [
             (Some(c"0000:01:00.0"), Some(c"0000:01:00.0")),
@@ -370,25 +303,10 @@ mod tests {
             (Some(c""), None),
             (None, None),
         ] {
-            let mut device = FakeDevice {
-                backend: GgmlBackendDevice {
-                    iface: GgmlBackendDeviceIface {
-                        get_name: None,
-                        get_description: None,
-                        get_memory: None,
-                        get_type: None,
-                        get_props: Some(get_props),
-                    },
-                },
-                pci_bus_id: id.map_or(std::ptr::null(), CStr::as_ptr),
-            };
-            let handle = &mut device.backend as GgmlBackendDev;
             assert_eq!(
-                device_pci_bus_id(handle, &device.backend).as_deref(),
+                device_pci_bus_id(id.map_or(std::ptr::null(), CStr::as_ptr)).as_deref(),
                 expected
             );
-            device.backend.iface.get_props = None;
-            assert_eq!(device_pci_bus_id(handle, &device.backend), None);
         }
     }
 

@@ -7,18 +7,20 @@
 //!   - Configure & build via the `cmake` crate. Output is cached in
 //!     `OUT_DIR` so subsequent `cargo build` invocations are incremental.
 //!   - Backend selection (`cuda` / `metal` / `vulkan`) is driven by parakit's
-//!     own cargo features, not by `crispasr-sys` (which is a pure shim and
-//!     doesn't compile anything).
+//!     own cargo features. The repository's Cargo links overrides suppress
+//!     `crispasr-sys`'s independent native build script on supported targets.
 //!   - Emits a `rustc-link-search` so `crispasr-sys`'s `link-lib=crispasr`
 //!     resolves to our just-built library.
 //!   - Emits an rpath on Unix so the binary finds the dylib at runtime
 //!     without needing LD_LIBRARY_PATH.
 //!
-//! Escape hatches (any one of these skips the bundled build):
+//! External-library modes (either skips the bundled build):
 //!   - `--no-default-features`              : the user takes responsibility for
 //!     providing libcrispasr; add `--features daemon` when building the daemon.
 //!   - `CRISPASR_LIB_DIR=/path/to/libdir`   : link-search path override.
-//!   - `CRISPASR_SRC_DIR=/path/to/source`   : use this checkout instead of the vendored source.
+//!
+//! `CRISPASR_SRC_DIR=/path/to/source` changes the bundled native source tree;
+//! it does not change the vendored Rust dependencies.
 //!
 //! These still require Cargo to load the `crispasr` Rust path dependency unless
 //! the manifest is changed, so a missing submodule must be fixed before Cargo
@@ -28,6 +30,9 @@ use std::collections::BTreeMap;
 use std::env;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+
+#[path = "build/native_link.rs"]
+mod native_link;
 
 #[path = "build/openblas_roots.rs"]
 mod openblas_roots;
@@ -64,6 +69,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed=BLAS_INCLUDE_DIRS");
     println!("cargo:rerun-if-env-changed=BLAS_LIBRARIES");
     println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-changed=build/native_link.rs");
     println!("cargo:rerun-if-changed=build/openblas_roots.rs");
     println!("cargo:rerun-if-changed=build/unix_openblas.rs");
     println!("cargo:rerun-if-changed=build/windows_openblas.rs");
@@ -73,25 +79,28 @@ fn main() {
 
     let bundled = cargo_feature("bundled");
     build_alsa_silencer(cargo_feature("daemon"));
+    native_link::emit_cpp_runtime();
+    native_link::warn_if_sys_native_build_ran();
+    let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
+    if bundled {
+        native_link::build_device_shim(&locate_source(&manifest_dir));
+    }
 
     // 1. Honor an explicit lib-dir override regardless of feature flags.
-    //    crispasr-sys reads CRISPASR_LIB_DIR too — we add to its search path
-    //    here so `cargo build` works without the user re-exporting the var.
     if let Ok(dir) = env::var("CRISPASR_LIB_DIR") {
-        println!("cargo:rustc-link-search=native={dir}");
+        native_link::emit_external_search_paths(Some(Path::new(&dir)));
         emit_rpath(Path::new(&dir));
-        emit_direct_ggml_link_if_bundled(bundled);
+        native_link::emit_direct_ggml_link_if_bundled(bundled);
         return;
     }
 
-    // 2. If the user disabled the `bundled` feature, do nothing.
-    //    crispasr-sys's own build.rs will probe /usr/local/lib, /opt/homebrew/lib, etc.
+    // 2. Without `bundled`, resolve the installed library without building it.
     if !bundled {
+        native_link::emit_external_search_paths(None);
         return;
     }
 
     // 3. Locate the CrispASR source tree.
-    let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
     let src_dir = locate_source(&manifest_dir);
     println!(
         "cargo:rerun-if-changed={}/CMakeLists.txt",
@@ -142,6 +151,7 @@ fn main() {
     let accelerators = AcceleratorConfig::from_env();
 
     let blas = configure_blas(&mut cfg);
+    native_link::configure_pcm_runtime(&mut cfg, blas.enabled);
     cfg.define("GGML_CUDA", cmake_bool(accelerators.cuda_enabled));
     if accelerators.cuda_enabled {
         cfg.define("GGML_CUDA_NCCL", "OFF");
@@ -169,7 +179,7 @@ fn main() {
     let install_dir = cfg.build();
     emit_build_report(&install_dir, &accelerators);
 
-    // 5. CrispASR v0.6.6 installs `libcrispasr` as the umbrella library.
+    // 5. CrispASR installs `libcrispasr` as the umbrella library.
     //    `crispasr-sys` links that exact name, so fail clearly if the pinned
     //    submodule stops producing it.
     let lib_dir = install_dir.join("lib");
@@ -208,7 +218,7 @@ fn main() {
     }
 
     println!("cargo:rustc-link-search=native={}", final_lib_dir.display());
-    emit_direct_ggml_link_if_bundled(bundled);
+    native_link::emit_direct_ggml_link_if_bundled(bundled);
 
     // Windows DLLs land in bin/, not lib/. Add it for completeness.
     if bin_dir.is_dir() {
@@ -271,6 +281,10 @@ fn emit_build_report(install_dir: &Path, accelerators: &AcceleratorConfig) {
         "GGML_BACKEND_DL",
         "GGML_BLAS",
         "GGML_BLAS_VENDOR",
+        "CRISPASR_MEL_BLAS",
+        "GGML_LLAMAFILE",
+        "CRISPASR_OPUS",
+        "CRISPASR_AMR",
         "COHERE_MKL",
         "GGML_CUDA",
         "GGML_VULKAN",
@@ -357,10 +371,6 @@ fn configure_blas(cfg: &mut cmake::Config) -> BlasConfig {
         }
     }
 
-    println!(
-        "cargo:rustc-env=PARAKIT_BUILD_BLAS_REQUEST={}",
-        blas.requested
-    );
     println!(
         "cargo:rustc-env=PARAKIT_BUILD_BLAS_SELECTED={}",
         blas.selected
@@ -708,12 +718,6 @@ fn summarize_cpu_flags(flags: &str) -> String {
 fn emit_env_from_cache(cache: &BTreeMap<String, String>, cache_key: &str, env_key: &str) {
     if let Some(value) = cache.get(cache_key) {
         println!("cargo:rustc-env={env_key}={value}");
-    }
-}
-
-fn emit_direct_ggml_link_if_bundled(bundled: bool) {
-    if bundled {
-        println!("cargo:rustc-link-lib=dylib=ggml");
     }
 }
 

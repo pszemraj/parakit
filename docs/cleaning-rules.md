@@ -24,7 +24,7 @@ The `aggressive` profile includes every safe pass and adds stylistic deletion of
 parakit start --cleaning-profile aggressive
 ```
 
-A single terminal period is removed by default because parakit primarily targets messaging-style dictation. Preserve it when the target context expects conventional prose punctuation:
+A single terminal period is removed by default because parakit primarily targets messaging-style dictation. A final `?`, `!`, or ellipsis is kept. Preserve the period when the target context expects conventional prose punctuation:
 
 ```bash
 parakit start --keep-trailing-period
@@ -64,7 +64,7 @@ Multi-point versions are parsed component by component through `text2num`; parak
 
 ### Casual Forms And Stutters
 
-Safe casual-form normalization expands `gonna` and `gunna` to `going to`, `gotta` to `got to`, and `wanna` and `wana` to `want to`. The complete tag question `, right?` becomes a period, while ordinary questions such as `Did I turn right?` and `Is that right?` remain unchanged. When the replacement is the dictation's final character, the default terminal-period pass removes it unless `--keep-trailing-period` is set.
+Safe casual-form normalization expands `gonna` and `gunna` to `going to`, `gotta` to `got to`, `wanna` and `wana` to `want to`, `kinda` to `kind of`, and `gimme` to `give me`. The complete tag question `, right?` becomes a period, while ordinary questions such as `Did I turn right?` and `Is that right?` remain unchanged. When the replacement is the dictation's final character, the default terminal-period pass removes it unless `--keep-trailing-period` is set.
 
 Safe dangling-connective removal drops a trailing `so`, `but`, `and`, `or`, or `because` (case-insensitive) when it is the transcript's final word and the text underneath still ends in sentence punctuation, so `The build is green. But` becomes `The build is green.`, which the default terminal-period pass then trims to `The build is green` the same way it trims `, right?`. A trailing `,`, `;`, or `:` left under the removed word is promoted to `.`, a trailing `.`, `!`, or `?` is kept as-is, and the rule chains, so `It works. And so.` loses both dangling words and becomes `It works.`. It needs punctuation to fall back on: `I like cats and dogs and` has no preceding sentence punctuation, so the rule cannot distinguish a stranded conjunction from an unfinished thought and leaves the text alone.
 
@@ -127,9 +127,7 @@ Rules use Rust's `regex` crate dialect:
 - capture replacement uses `$1`, `$2`, and so on;
 - use `(?i)` for case-insensitive matches.
 
-Increment `CLEANER_VERSION` whenever built-in behavior, rule identity, or
-ordering changes so historical logs continue to identify the cleaner that
-produced a transcript.
+Increment `CLEANER_VERSION` whenever built-in behavior, rule identity, or ordering changes so historical logs continue to identify the cleaner that produced a transcript.
 
 ## User Rules
 
@@ -146,10 +144,7 @@ replacement = "wandb"
 position = "standard"   # "first", "standard" (default), or "last"
 ```
 
-The key contracts, validation constraints, replacement syntax, and exact
-splice points for `first`, `standard`, and `last` are in
-[config_reference.toml](config_reference.toml). Use `standard` for ordinary
-vocabulary substitutions.
+The key contracts, validation constraints, replacement syntax, and exact splice points for `first`, `standard`, and `last` are in [config_reference.toml](config_reference.toml). Use `standard` for ordinary vocabulary substitutions.
 
 Disable a user rule the same way as a built-in rule:
 
@@ -166,21 +161,11 @@ disabled_rules = ["weights-and-biases-to-wandb"]
 
 ### Edit Rules Without Rebuilding
 
-User rules are runtime configuration, not compiled into the parakit binary.
-They are validated and compiled during process startup, then reused for each
-dictation without TOML parsing or regex compilation on the hot path. Editing
-a rule does not run Cargo, rebuild Parakit, download a model, or convert model
-weights.
+User rules are runtime configuration, not compiled into the parakit binary. They are validated and compiled during process startup, then reused for each dictation without TOML parsing or regex compilation on the hot path. Editing a rule does not run Cargo, rebuild Parakit, download a model, or convert model weights.
 
-Use the edit, validation, and restart workflow in
-[configuration.md#validation-and-recovery](configuration.md#validation-and-recovery).
+Use the edit, validation, and restart workflow in [configuration.md#validation-and-recovery](configuration.md#validation-and-recovery).
 
-A built-in rule can be replaced without rebuilding by listing its name in
-`cleaning.disabled_rules` and adding a differently named `[[rules.user]]`
-replacement. Runtime user rules deliberately use the standard Rust `regex`
-dialect. Context-sensitive procedural transforms such as number/version
-parsing and sentence capitalization remain Rust code unless they expose a
-specific config setting such as `cleaning.number_threshold`.
+A built-in rule can be replaced without rebuilding by listing its name in `cleaning.disabled_rules` and adding a differently named `[[rules.user]]` replacement. Runtime user rules deliberately use the standard Rust `regex` dialect. Context-sensitive procedural transforms such as number/version parsing and sentence capitalization remain Rust code unless they expose a specific config setting such as `cleaning.number_threshold`.
 
 ## Regression Workflow
 
@@ -192,7 +177,6 @@ When a cleanup worsens a transcript:
 4. Narrow the pattern or add a more specific rule before the generic one.
 5. Add a case to the `rules` unit tests or `tests/cleaning_regressions.rs`.
 
-For historical JSONL replay, use
-[dev/quality.md#cleaning-corpus-replay](dev/quality.md#cleaning-corpus-replay).
+For historical JSONL replay, use [dev/quality.md#cleaning-corpus-replay](dev/quality.md#cleaning-corpus-replay).
 
 Avoid disabling broad rule categories to fix a narrow failure. If the failure is personal vocabulary rather than a general defect, add a user rule instead.

@@ -2,9 +2,6 @@
 
 parakit needs a desktop input backend for `Ctrl+Space`.
 
-See [idle model offload](running.md#idle-model-offload) for runtime behavior and
-[Linux reload measurements](dev/memory.md#linux-reload-measurements) for CPU, CUDA, and Vulkan context.
-
 Default behavior:
 
 - `auto` and `desktop` register `Ctrl+Space` with the X11 session through `global-hotkey`.
@@ -17,9 +14,7 @@ Default behavior:
 
 ## X11 Sessions
 
-Start Parakit from a terminal opened in the current graphical login. General
-foreground and background commands are in
-[running.md#background-use](running.md#background-use).
+Start Parakit from a terminal opened in the current graphical login. General foreground and background commands are in [running.md#background-use](running.md#background-use).
 
 Tmux is fine when the tmux server was started from the current desktop login. A tmux server that survived a GNOME logout/login can keep stale `DISPLAY` or `XAUTHORITY` values from the old session. In that case, `parakit doctor` may report an X11 error such as `Connection refused`.
 
@@ -58,12 +53,7 @@ In `terminal` or `standard` mode, `parakit doctor --deep` creates and focuses a 
 
 The X11 focus guard, fail-open query behavior, and clipboard fallback are described in [running.md#insertion](running.md#insertion). Parakit does not inspect application internals with AT-SPI.
 
-Batch paste also checks the current X11 modifier state before sending input.
-It waits up to two seconds for Control, Shift, Alt, and Super to be released,
-which covers releasing `Space` before `Ctrl` at the end of a short dictation.
-If one is still held, it keeps the transcript on the clipboard instead of sending
-a chord that could release an overlapping push-to-talk capture.
-The transcript remains available in history for recovery after releasing the keys.
+Batch paste also checks the current X11 modifier state before sending input. It waits up to two seconds for Control, Shift, Alt, Super, and AltGr to be released, which covers releasing `Space` before `Ctrl` at the end of a short dictation. If one is still held, it keeps the transcript on the clipboard instead of sending a chord that could release an overlapping push-to-talk capture. The transcript remains available in history for recovery after releasing the keys.
 
 Direct typing also waits for modifiers, then rechecks focus and modifiers before each character. An unreadable modifier state blocks typing; a detected change stops the remaining text, so part of a transcript may already have been inserted. Tabs, newlines, and other control characters are rejected before typing because synthetic keys could navigate fields or submit text. Direct mode never copies a blocked transcript to the clipboard; use daemon history for recovery.
 

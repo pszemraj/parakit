@@ -1,3 +1,20 @@
 [alias]
 coverage = "llvm-cov --workspace"
 coverage-html = "llvm-cov --workspace --html --output-dir target/llvm-cov/html"
+
+# Parakit owns native compilation and library discovery. Suppress the sys
+# crate's independent CMake fallback while retaining its native link directive.
+[target.x86_64-unknown-linux-gnu.crispasr]
+rustc-link-lib = ["dylib=crispasr"]
+
+[target.aarch64-unknown-linux-gnu.crispasr]
+rustc-link-lib = ["dylib=crispasr"]
+
+[target.aarch64-apple-darwin.crispasr]
+rustc-link-lib = ["dylib=crispasr"]
+
+[target.x86_64-pc-windows-msvc.crispasr]
+rustc-link-lib = ["dylib=crispasr"]
+
+[target.x86_64-pc-windows-gnu.crispasr]
+rustc-link-lib = ["dylib=crispasr"]

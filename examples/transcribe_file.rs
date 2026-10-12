@@ -47,6 +47,8 @@ struct Cli {
 }
 
 fn main() -> Result<()> {
+    // Apply environment defaults before starting threads or opening a model.
+    unsafe { parakit::inference::initialize_crispasr_runtime_defaults() };
     let cli = Cli::parse();
 
     let wav = prepare_wav_for_model(&cli.audio)?;

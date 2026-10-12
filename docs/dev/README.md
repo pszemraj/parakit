@@ -1,7 +1,6 @@
 # Development Notes
 
-Source-coverage setup and report commands are in
-[quality.md#rust-source-coverage](quality.md#rust-source-coverage).
+Source-coverage setup and report commands are in [quality.md#rust-source-coverage](quality.md#rust-source-coverage).
 
 ## Proportional Checks
 
@@ -11,8 +10,7 @@ Hashes belong in an explicit `--sha256` request or a release process that actual
 
 ## Model Artifacts
 
-End-user download, cache, and model-override behavior is in
-[running.md#model-cache](../running.md#model-cache).
+End-user download, cache, and model-override behavior is in [running.md#model-cache](../running.md#model-cache).
 
 Hosted release files:
 
@@ -70,21 +68,24 @@ TODO: Benchmark an opt-in Windows MSVC `/GL` + `/LTCG` build after the CPU daemo
 
 TODO: Add a Windows PE dependency-walker validation pass for the CPU bundle so release packaging verifies every transitive DLL dependency instead of relying only on build-time known runtime DLL names.
 
-TODO: Run the full Windows BLAS/thread benchmark matrix for CPU builds, including no BLAS, OpenBLAS with controlled OpenMP ownership, and relevant `--threads` values against the pinned voice-memo smoke file. This is separate from upstream CrispASR issue #88 and remains open after the v0.6.6 pin.
-
-TODO: Re-run the problematic long dictation from CrispASR [issue #88](https://github.com/CrispStrobe/CrispASR/issues/88) against the pinned v0.6.6 backend. The pin includes the upstream NeMo parity fix for blank plus duration-0 TDT decode retries, and the upstream issue is closed. Remove this local note only after the original reproducer confirms that tail speech survives; add a temporary Parakit diagnostic workaround only if it still fails.
+TODO: Run the full Windows BLAS/thread benchmark matrix for CPU builds, including no BLAS, OpenBLAS with controlled OpenMP ownership, and relevant `--threads` values against the pinned voice-memo smoke file.
 
 TODO: Add native Linux and Windows CI coverage for target-gated desktop transports, input backends, and their tests.
 
 ## Updating [CrispASR](https://github.com/CrispStrobe/CrispASR)
 
-Keep submodule updates separate from parakit code changes:
+Update the native sources and Rust bindings together:
 
 ```bash
+git submodule update --init --recursive
 cd vendor/CrispASR
-git fetch
+git fetch --tags
 git checkout <tag-or-commit>
+git submodule update --init --recursive
 cd ../..
-git add vendor/CrispASR
-cargo build
+cargo check
+git add vendor/CrispASR Cargo.lock
+cargo check --locked
 ```
+
+The submodule tag updates both Rust path crates with the native sources; `cargo check` refreshes the lockfile while preserving unrelated locked dependencies. Update the CrispASR gitlink, both Rust path crates, and `Cargo.lock` together so they stay on the same release; use the full [upgrade report](crispasr-upgrade.md) for the acceptance checks.

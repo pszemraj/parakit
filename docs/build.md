@@ -1,6 +1,6 @@
 # Build
 
-parakit is a Rust 1.87+ binary that links to the vendored [CrispASR](https://github.com/CrispStrobe/CrispASR) submodule. The default build is CPU-only and may use detected CPU BLAS libraries.
+parakit is a Rust binary that links to the vendored [CrispASR](https://github.com/CrispStrobe/CrispASR) submodule. The default build is CPU-only and may use detected CPU BLAS libraries.
 
 Command examples use a POSIX shell unless the surrounding section is Windows-specific. Windows-only commands are shown as `bat` or `powershell`.
 
@@ -39,16 +39,16 @@ git submodule update --init --recursive
 Linux developer install:
 
 ```bash
-cargo install --path .
+cargo install --locked --path .
 ```
 
 macOS Apple Silicon install:
 
 ```bash
-cargo install --path . --features metal
+cargo install --locked --path . --features metal
 ```
 
-`cargo install --path .` installs the release binary to Cargo's bin directory, usually `~/.cargo/bin`.
+`cargo install --locked --path .` installs the release binary to Cargo's bin directory, usually `~/.cargo/bin`, using the validated `Cargo.lock` dependency set that supports the declared Rust 1.87 minimum.
 
 Install behavior:
 
@@ -56,14 +56,12 @@ Install behavior:
 - Linux and macOS source installs currently depend on the generated CrispASR shared libraries under Cargo's build output. Do not delete the repository `target/` tree.
 - GitHub auto-generated source archives are unsupported because they do not include the CrispASR submodule. A public release must ship either a source archive with submodules or a binary bundle whose shared libraries are colocated with the executable.
 
-Add `--locked` only when you specifically want Cargo to use the exact dependency versions in `Cargo.lock`.
-
 Optional accelerator builds:
 
 ```bash
-cargo install --path . --features cuda
-cargo install --path . --features vulkan
-cargo install --path . --features metal  # Apple targets only
+cargo install --locked --path . --features cuda
+cargo install --locked --path . --features vulkan
+cargo install --locked --path . --features metal  # Apple targets only
 ```
 
 For Windows bundles, build one accelerator backend at a time. A combined CUDA+Vulkan bundle is rejected by the Windows scripts because it would hard-load both accelerator DLL chains while ggml would choose CUDA first anyway.
@@ -77,21 +75,19 @@ The bundled CMake path enables ggml native CPU code, OpenMP, and CPU repacking. 
 Inspect the compiled flags:
 
 ```bash
-parakit doctor
-parakit doctor --verbose
+parakit --verbose doctor
 ```
 
-Benchmark different thread counts with the daemon-free
-[WAV quality target](dev/quality.md#wav-quality-target).
+Benchmark different thread counts with the daemon-free [WAV quality target](dev/quality.md#wav-quality-target).
 
 ## BLAS And MKL
 
 The build defaults to `PARAKIT_BLAS=auto`. If no supported BLAS is detected, parakit uses native ggml CPU kernels. BLAS/MKL can help some matrix paths but adds system-library dependencies. Values are trimmed and case-insensitive; an explicitly empty value disables BLAS, while an unset value selects `auto`.
 
 ```bash
-PARAKIT_BLAS=openblas cargo install --path .
-PARAKIT_BLAS=mkl cargo install --path .
-PARAKIT_BLAS=generic cargo install --path .
+PARAKIT_BLAS=openblas cargo install --locked --path .
+PARAKIT_BLAS=mkl cargo install --locked --path .
+PARAKIT_BLAS=generic cargo install --locked --path .
 ```
 
 Supported values:
@@ -111,34 +107,22 @@ Ubuntu/Debian OpenBLAS:
 
 ```bash
 sudo apt install libopenblas-dev
-PARAKIT_BLAS=openblas cargo install --path .
+PARAKIT_BLAS=openblas cargo install --locked --path .
 ```
 
-OpenBLAS prefix detection recognizes `PARAKIT_OPENBLAS_ROOT`, `OPENBLAS_ROOT`,
-`OpenBLAS_ROOT`, `OPENBLAS_HOME`, active Conda environments,
-`CMAKE_PREFIX_PATH`, and vcpkg installs. It also checks common Conda and native
-installation prefixes on Windows and `/usr`, `/usr/local`, and `/opt/OpenBLAS`
-on Linux. Explicit `BLAS_INCLUDE_DIRS` plus `BLAS_LIBRARIES` remain the final
-manual override.
+OpenBLAS prefix detection recognizes `PARAKIT_OPENBLAS_ROOT`, `OPENBLAS_ROOT`, `OpenBLAS_ROOT`, `OPENBLAS_HOME`, active Conda environments, `CMAKE_PREFIX_PATH`, vcpkg installs, and, outside Windows, `HOMEBREW_PREFIX`. It also checks common Conda and native installation prefixes on Windows and `/usr/local`, `/usr`, `/opt/openblas`, and `/opt/OpenBLAS` elsewhere. Explicit `BLAS_INCLUDE_DIRS` plus `BLAS_LIBRARIES` remain the final manual override.
 
-Explicit `PARAKIT_BLAS` builds print the selected mode, and `parakit doctor` reports the requested and selected modes.
+Explicit `PARAKIT_BLAS` builds print the requested and selected modes as a Cargo warning, and `parakit --verbose doctor` reports the selected mode on its `cpu:` line.
 
 ## CrispASR And Backends
 
-The repository vendors [CrispASR](https://github.com/CrispStrobe/CrispASR) as a git submodule. `build.rs` builds it with CMake and installs shared libraries under `target/<profile>/build/parakit-*/out/lib`. Source rebuild requirements are in [dev/README.md#source-rebuild](dev/README.md#source-rebuild).
+The repository vendors [CrispASR](https://github.com/CrispStrobe/CrispASR) as a git submodule. `build.rs` owns its CMake build and installs shared libraries under `target/<profile>/build/parakit-*/out/lib`. Concrete target overrides in `.cargo/config.toml` suppress the sys crate's competing native build. Run Cargo from the repository root so this configuration is loaded; an outside-directory `cargo build --manifest-path ...` does not load it. Source rebuild requirements are in [dev/README.md#source-rebuild](dev/README.md#source-rebuild).
 
-`CRISPASR_LIB_DIR` is for advanced local experiments with an already-built compatible CrispASR tree. The library must match the pinned C ABI, including `crispasr_session_open_with_params`. Bundled builds must also provide compatible ggml libraries with the exported device registry entry points and the pinned device struct prefix used by `parakit doctor` and `--device gpu` preflight.
+`CRISPASR_LIB_DIR` is for advanced local experiments with an already-built compatible CrispASR tree. The library must match the pinned C ABI, including `crispasr_session_open_with_params`. Bundled builds must also provide compatible ggml libraries with the exported device registry entry points used by `parakit doctor` and `--device gpu` preflight. Parakit compiles its device-query adapter against the selected native source headers, including when `CRISPASR_LIB_DIR` skips native compilation; those headers must match the supplied libraries.
 
-`CRISPASR_SRC_DIR` is an optional path to another CrispASR source tree containing
-`CMakeLists.txt`; by default, the bundled CMake build uses the vendored tree. An
-alternative tree must remain ABI-compatible with the vendored Rust crates. It
-cannot replace a missing submodule because Cargo resolves those path dependencies
-before `build.rs` runs.
+`CRISPASR_SRC_DIR` is an optional path to another CrispASR source tree containing `CMakeLists.txt`; by default, the bundled CMake build uses the vendored tree. An alternative tree must remain ABI-compatible with the vendored Rust crates; this override changes native sources and headers only, not the Rust path dependencies. It cannot replace a missing submodule because Cargo resolves those path dependencies before `build.rs` runs.
 
-For CUDA builds, a nonempty `PARAKIT_CUDA_ARCHS` is passed unchanged as
-`CMAKE_CUDA_ARCHITECTURES`; omission or an empty value keeps ggml's native
-selection. CMake accepts values such as `89-real` and semicolon-separated
-architecture lists.
+For CUDA builds, `PARAKIT_CUDA_ARCHS` is trimmed and, when nonempty, passed as `CMAKE_CUDA_ARCHITECTURES`; omission or a blank value keeps ggml's native selection. CMake accepts values such as `89-real` and semicolon-separated architecture lists.
 
 Feature mapping:
 
@@ -173,7 +157,5 @@ macOS uses `@rpath` and sibling dylib install names. Verify:
 otool -L target/debug/build/parakit-*/out/lib/libggml.dylib
 otool -l target/debug/parakit | grep -A2 LC_RPATH
 ```
-
-For installed macOS source builds, the binary rpath points into the repository build tree. This matches the Linux source-build contract.
 
 Metal-specific checks are in [macos-desktop.md#metal-verification](macos-desktop.md#metal-verification).

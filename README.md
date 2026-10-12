@@ -25,8 +25,14 @@ Install the native, OS-specific packages needed[^2] as explained in [docs/build.
 ```bash
 git clone --recurse-submodules https://github.com/pszemraj/parakit.git
 cd parakit
-cargo install --path .
+cargo install --locked --path .
 ```
+
+The default build is CPU-only. Append `--features cuda` or `--features vulkan` on Linux, or `--features metal` on Apple Silicon macOS.
+
+On Linux/macOS, keep the native build directory.[^3]
+
+[^3]: The installed binary loads CrispASR/ggml shared libraries from Cargo's build output (`target/` by default). See [install behavior](docs/build.md#install).
 
 On Windows, use the bundle script instead of `cargo install` when you want a runnable app directory. See [scripts/windows/README.md](scripts/windows/README.md).
 

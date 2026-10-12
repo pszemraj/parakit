@@ -25,12 +25,6 @@ parakit resolves one config path:
 
 Setting `PARAKIT_CONFIG_PATH` to an empty value is an error. So is pointing it at a file that does not exist: `start`, `doctor`, `rules`, and `config show` refuse to run on defaults in that case, while `config path`, `config init`, and `config edit` still work so the file can be created. A missing file at the default location is fine and selects built-in defaults. A relative override path stays relative to the process working directory. All configured paths, including `PARAKIT_CONFIG_PATH`, `daemon.model`, and `logging.dir`, are used literally; parakit does not expand `~` or environment variables inside them. On Linux and macOS, resolution fails with `HOME is unset or empty` when neither `XDG_CONFIG_HOME` nor `HOME` is set to a nonempty value.
 
-Print the resolved path without reading the file:
-
-```bash
-parakit config path
-```
-
 ## Commands
 
 ```bash
@@ -40,7 +34,7 @@ parakit config show
 parakit config edit
 ```
 
-`config init` creates any missing parent directories and writes the fully commented template. `config show`, which is also what bare `parakit config` runs, loads and validates the file and prints the resolved path plus the effective value of every key. `config edit` writes the template first when the file is missing, then opens the file in `$VISUAL`, or in `$EDITOR` when `VISUAL` is unset, empty, or whitespace-only.
+`config path` prints the resolved path without reading the file. `config init` creates any missing parent directories and writes the fully commented template. `config show`, which is also what bare `parakit config` runs, loads and validates the file and prints the resolved path plus the effective value of every key. `config edit` writes the template first when the file is missing, then opens the file in `$VISUAL`, or in `$EDITOR` when `VISUAL` is unset, empty, or whitespace-only.
 
 `config show` output for the example config above:
 
@@ -102,8 +96,6 @@ Four booleans (`daemon.sounds`, `cleaning.enabled`, `cleaning.keep_trailing_peri
 Unknown keys are errors at every level, including inside each `[[rules.user]]` entry. Invalid TOML, invalid values, and rule-validation failures are hard errors that name the config path.
 
 For `daemon.model_idle_minutes` behavior, see [idle model offload](running.md#idle-model-offload).
-
-Short-lived `rules test` and `rules list` processes each load the current file, which makes them useful for checking a change before restarting the daemon.
 
 ## Validation and Recovery
 
