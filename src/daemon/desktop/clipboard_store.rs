@@ -352,7 +352,7 @@ impl ClipboardSnapshot {
                 // restorable user-visible payload.
                 if alt_text.as_deref().is_none_or(str::is_empty) {
                     match clipboard.get_image() {
-                        Ok(image) => return Ok(Self::Image(owned_image(image))),
+                        Ok(image) => return Ok(Self::Image(image)),
                         Err(error) if clipboard_content_unavailable(&error) => {}
                         Err(error) => {
                             return Err(error.context("could not snapshot image clipboard"));
@@ -366,7 +366,7 @@ impl ClipboardSnapshot {
         }
 
         match clipboard.get_image() {
-            Ok(image) => return Ok(Self::Image(owned_image(image))),
+            Ok(image) => return Ok(Self::Image(image)),
             Err(error) if clipboard_content_unavailable(&error) => {}
             Err(error) => return Err(error.context("could not snapshot image clipboard")),
         }
@@ -500,22 +500,5 @@ pub(super) fn clipboard_content_unavailable(error: &anyhow::Error) -> bool {
             description == "incorrect type received from clipboard"
         }
         _ => false,
-    }
-}
-
-/// Copy a borrowed clipboard image payload into an owned, `'static` one.
-///
-/// # Arguments
-///
-/// * `image` - Image data borrowed from a clipboard read.
-///
-/// # Returns
-///
-/// An equivalent `ImageData` that owns its pixel bytes.
-fn owned_image(image: ImageData<'_>) -> ImageData<'static> {
-    ImageData {
-        width: image.width,
-        height: image.height,
-        bytes: Cow::Owned(image.bytes.into_owned()),
     }
 }

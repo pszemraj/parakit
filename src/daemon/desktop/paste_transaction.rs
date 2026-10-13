@@ -163,13 +163,7 @@ where
                 restore_plan,
                 clipboard_policy,
             );
-            return match restore_result {
-                Ok(ClipboardRestore::Changed(diagnostic)) => {
-                    Ok(clipboard_changed_with_primary_error(err, diagnostic))
-                }
-                Ok(_) => Err(err),
-                Err(restore_err) => Err(err.context(format!("{restore_err:#}"))),
-            };
+            return resolve_failed_paste(err, restore_result);
         }
     }
     // The restage can require another focus query. Preserve a copy observed
@@ -229,13 +223,7 @@ where
                 restore_plan,
                 clipboard_policy,
             );
-            match restore_result {
-                Ok(ClipboardRestore::Changed(diagnostic)) => {
-                    Ok(clipboard_changed_with_primary_error(paste_err, diagnostic))
-                }
-                Ok(_) => Err(paste_err),
-                Err(restore_err) => Err(paste_err.context(format!("{restore_err:#}"))),
-            }
+            resolve_failed_paste(paste_err, restore_result)
         }
     }
 }
@@ -381,15 +369,22 @@ fn clipboard_restored_after_paste<C: ClipboardStore>(
     }
 }
 
-fn clipboard_changed_with_primary_error(
+/// Preserve a primary insertion error while resolving its clipboard cleanup.
+fn resolve_failed_paste(
     primary: anyhow::Error,
-    clipboard_diagnostic: Option<String>,
-) -> PasteReport {
-    let diagnostic = match clipboard_diagnostic {
-        Some(clipboard) => format!("{primary:#}; {clipboard}"),
-        None => format!("{primary:#}"),
-    };
-    PasteReport::clipboard_changed(Some(diagnostic))
+    restored: Result<ClipboardRestore>,
+) -> Result<PasteReport> {
+    match restored {
+        Ok(ClipboardRestore::Changed(diagnostic)) => {
+            let diagnostic = match diagnostic {
+                Some(clipboard) => format!("{primary:#}; {clipboard}"),
+                None => format!("{primary:#}"),
+            };
+            Ok(PasteReport::clipboard_changed(Some(diagnostic)))
+        }
+        Ok(_) => Err(primary),
+        Err(restore_err) => Err(primary.context(format!("{restore_err:#}"))),
+    }
 }
 
 /// Save the clipboard for a later restore, or keep the transcript instead.

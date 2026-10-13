@@ -22,7 +22,7 @@ use std::io::{BufRead, BufReader, Read as _, Write};
 ///
 /// Returns an error when the socket directory cannot be secured or the control
 /// socket cannot be bound.
-pub(super) fn spawn_server_impl(
+pub(crate) fn spawn_server_impl(
     state: Arc<SharedState>,
     paste_mode: PasteMode,
     keep_transcript_clipboard: bool,

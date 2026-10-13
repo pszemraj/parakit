@@ -93,13 +93,14 @@ fn recording_coordinator_loop_with_max_utterance(
                 recording.store(false, Ordering::Release);
             }
             if let Some(started_at) = started_at.take() {
-                if stop_and_send_recording(
+                let activity = recording_activity.take();
+                if send_recording_result(
                     &tx,
-                    &audio,
+                    audio.stop_recording(),
                     started_at,
                     stopped_at,
                     &mut focus_at_start,
-                    recording_activity.take(),
+                    activity,
                     log,
                 ) == WorkerSendStatus::Disconnected
                 {
@@ -191,26 +192,6 @@ enum WorkerSendStatus {
     Sent,
     Full,
     Disconnected,
-}
-
-fn stop_and_send_recording(
-    tx: &Sender<WorkerEvent>,
-    audio: &AudioHandle,
-    started_at: Instant,
-    stopped_at: Instant,
-    focus_at_start: &mut Option<FocusSnapshot>,
-    activity: Option<ActivityGuard>,
-    log: &Logger,
-) -> WorkerSendStatus {
-    send_recording_result(
-        tx,
-        audio.stop_recording(),
-        started_at,
-        stopped_at,
-        focus_at_start,
-        activity,
-        log,
-    )
 }
 
 fn send_recording_result(

@@ -178,11 +178,7 @@ pub(super) fn handle_audio_control(
                 discard_audio_ring(consumer, input);
             }
             pipeline.reset_recording();
-            if include_pre_roll {
-                state.lock().begin_recording();
-            } else {
-                state.lock().begin_recording_without_pre_roll();
-            }
+            state.lock().begin_recording(include_pre_roll);
             session_epoch.store(epoch, Ordering::Release);
             if ack.send(()).is_err() {
                 // The manager timed out waiting for this queued Start. Do not

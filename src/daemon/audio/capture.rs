@@ -170,7 +170,7 @@ impl AudioHandle {
                 while let Ok(command) = control_rx.recv() {
                     match command {
                         AudioControl::Start { epoch, ack } => {
-                            manager_state.lock().begin_recording();
+                            manager_state.lock().begin_recording(true);
                             manager_epoch.store(epoch, Ordering::Release);
                             let _ = ack.send(Ok(()));
                         }
@@ -224,15 +224,7 @@ impl CaptureState {
         }
     }
 
-    fn begin_recording(&mut self) {
-        self.begin_recording_with_pre_roll(true);
-    }
-
-    fn begin_recording_without_pre_roll(&mut self) {
-        self.begin_recording_with_pre_roll(false);
-    }
-
-    fn begin_recording_with_pre_roll(&mut self, include_pre_roll: bool) {
+    fn begin_recording(&mut self, include_pre_roll: bool) {
         if self.buffer.capacity() < RECORDING_CAPACITY {
             self.buffer
                 .reserve_exact(RECORDING_CAPACITY - self.buffer.capacity());

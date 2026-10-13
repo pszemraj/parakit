@@ -133,7 +133,7 @@ unsafe extern "system" {
 ///
 /// Returns an error when the per-user pipe name or listener thread cannot
 /// be initialized.
-pub(super) fn spawn_server_impl(
+pub(crate) fn spawn_server_impl(
     state: Arc<SharedState>,
     paste_mode: PasteMode,
     keep_transcript_clipboard: bool,

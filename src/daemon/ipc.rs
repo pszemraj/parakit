@@ -41,7 +41,13 @@ mod windows_pipe;
 pub(crate) use client::daemon_responsive;
 pub(crate) use client::run_client;
 #[cfg(unix)]
-use unix_socket::{send_command, spawn_server_impl};
+use unix_socket::send_command;
+#[cfg(unix)]
+pub(crate) use unix_socket::spawn_server_impl as spawn_server;
+#[cfg(target_os = "windows")]
+use windows_pipe::send_command;
+#[cfg(target_os = "windows")]
+pub(crate) use windows_pipe::spawn_server_impl as spawn_server;
 
 #[cfg(any(unix, target_os = "windows"))]
 const IPC_TRANSPORT_TIMEOUT: Duration = Duration::from_millis(750);
@@ -550,35 +556,6 @@ impl Drop for IpcServer {
     }
 }
 
-/// Start the daemon control socket.
-///
-/// # Arguments
-///
-/// * `state` - Shared daemon status and transcript history.
-/// * `paste_mode` - Paste mode used by paste-related commands.
-/// * `keep_transcript_clipboard` - Whether command insertion leaves text on
-///   the clipboard.
-/// * `log` - Logger for socket errors.
-/// * `notifier` - Daemon notifier shared with IPC insertion commands.
-///
-/// # Returns
-///
-/// A server handle that removes the socket path on drop.
-///
-/// # Errors
-///
-/// Returns an error when the control socket cannot be bound.
-#[cfg(any(unix, target_os = "windows"))]
-pub(crate) fn spawn_server(
-    state: Arc<SharedState>,
-    paste_mode: PasteMode,
-    keep_transcript_clipboard: bool,
-    log: Arc<Logger>,
-    notifier: Notifier,
-) -> Result<IpcServer> {
-    spawn_server_impl(state, paste_mode, keep_transcript_clipboard, log, notifier)
-}
-
 /// Format the stable second status line, distinguishing disabled history from
 /// an enabled history that simply has no transcript yet.
 fn last_transcript_summary(
@@ -643,59 +620,47 @@ fn handle_command(
     log: &Logger,
     notifier: &Notifier,
 ) -> Result<CommandOutcome> {
-    match command {
-        IpcCommand::Status => Ok(CommandOutcome {
-            response: state.status(),
-            stop_after_response: false,
-        }),
-        IpcCommand::Stop => Ok(CommandOutcome {
-            response: IpcResponse::Ok {
-                message: "stopping".to_string(),
-            },
-            stop_after_response: true,
-        }),
+    let stop_after_response = matches!(&command, IpcCommand::Stop);
+    let response = match command {
+        IpcCommand::Status => state.status(),
+        IpcCommand::Stop => IpcResponse::Ok {
+            message: "stopping".to_string(),
+        },
         IpcCommand::CopyLast { index } => {
             state.with_insertion_lock(|| {
                 let text = state.resolve_transcript(index)?;
                 copy_text(&text)
             })?;
-            Ok(CommandOutcome {
-                response: IpcResponse::Ok {
-                    message: format!("copied {}", history_ref_label(index)),
-                },
-                stop_after_response: false,
-            })
+            IpcResponse::Ok {
+                message: format!("copied {}", history_ref_label(index)),
+            }
         }
         IpcCommand::History { limit } => {
             state.ensure_history_enabled()?;
-            Ok(CommandOutcome {
-                response: IpcResponse::History {
-                    entries: state.history_snapshot(limit),
-                },
-                stop_after_response: false,
-            })
+            IpcResponse::History {
+                entries: state.history_snapshot(limit),
+            }
         }
         IpcCommand::TestPaste { text } => {
             let result = state.with_insertion_lock(|| {
                 paste_text(&text, paste_mode, keep_transcript_clipboard, log, notifier)
             })?;
-            Ok(CommandOutcome {
-                response: IpcResponse::Ok {
-                    message: match result {
-                        InsertOutcome::Pasted => "test paste sent",
-                        InsertOutcome::PastedUnverified => {
-                            "test paste sent (insertion unconfirmed)"
-                        }
-                        InsertOutcome::CopiedOnly => "test text copied",
-                        InsertOutcome::Blocked => "test paste blocked",
-                        InsertOutcome::Skipped => "test paste skipped",
-                    }
-                    .to_string(),
-                },
-                stop_after_response: false,
-            })
+            IpcResponse::Ok {
+                message: match result {
+                    InsertOutcome::Pasted => "test paste sent",
+                    InsertOutcome::PastedUnverified => "test paste sent (insertion unconfirmed)",
+                    InsertOutcome::CopiedOnly => "test text copied",
+                    InsertOutcome::Blocked => "test paste blocked",
+                    InsertOutcome::Skipped => "test paste skipped",
+                }
+                .to_string(),
+            }
         }
-    }
+    };
+    Ok(CommandOutcome {
+        response,
+        stop_after_response,
+    })
 }
 
 #[cfg(any(unix, target_os = "windows"))]
@@ -803,22 +768,6 @@ fn paste_text(
 fn copy_text(text: &str) -> Result<()> {
     let mut injector = super::inject::Injector::new().context("could not initialize clipboard")?;
     injector.copy_text(text)
-}
-
-#[cfg(target_os = "windows")]
-fn spawn_server_impl(
-    state: Arc<SharedState>,
-    paste_mode: PasteMode,
-    keep_transcript_clipboard: bool,
-    log: Arc<Logger>,
-    notifier: Notifier,
-) -> Result<IpcServer> {
-    windows_pipe::spawn_server_impl(state, paste_mode, keep_transcript_clipboard, log, notifier)
-}
-
-#[cfg(target_os = "windows")]
-fn send_command(command: &IpcCommand) -> Result<IpcResponse> {
-    windows_pipe::send_command(command)
 }
 
 #[cfg(test)]
