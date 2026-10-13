@@ -202,23 +202,16 @@ impl RecordingLatch {
 #[derive(Clone, Copy, Debug, Default)]
 #[cfg(any(not(target_os = "windows"), test))]
 struct HotkeyState {
-    ctrl_left: bool,
-    ctrl_right: bool,
-    shift_left: bool,
-    shift_right: bool,
-    alt: bool,
-    alt_gr: bool,
-    meta_left: bool,
-    meta_right: bool,
+    modifiers: ModifierState,
     space: bool,
     suppress_space_release: bool,
     recording: RecordingLatch,
     last_start: Option<Instant>,
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(not(target_os = "windows"), test))]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-struct MacOsModifierState {
+struct ModifierState {
     ctrl_left: bool,
     ctrl_right: bool,
     shift_left: bool,
@@ -268,37 +261,21 @@ impl HotkeyState {
     #[cfg(target_os = "macos")]
     fn macos_sync_modifiers(
         &mut self,
-        physical: MacOsModifierState,
+        physical: ModifierState,
         now: Instant,
     ) -> Option<HotkeyAction> {
-        self.set_key(Key::ControlRight, physical.ctrl_right);
-        self.set_key(Key::ShiftLeft, physical.shift_left);
-        self.set_key(Key::ShiftRight, physical.shift_right);
-        self.set_key(Key::Alt, physical.alt);
-        self.set_key(Key::AltGr, physical.alt_gr);
-        self.set_key(Key::MetaLeft, physical.meta_left);
-        self.set_key(Key::MetaRight, physical.meta_right);
-
-        if self.ctrl_left == physical.ctrl_left {
-            None
-        } else if physical.ctrl_left {
-            self.set_key(Key::ControlLeft, true);
-            None
-        } else {
+        let was_ctrl_left = self.modifiers.ctrl_left;
+        self.modifiers = physical;
+        if was_ctrl_left && !physical.ctrl_left {
             self.release(Key::ControlLeft, now).0
+        } else {
+            None
         }
     }
 
     #[cfg(target_os = "macos")]
     fn reset_after_tap_disabled(&mut self, now: Instant) -> Option<HotkeyAction> {
-        self.ctrl_left = false;
-        self.ctrl_right = false;
-        self.shift_left = false;
-        self.shift_right = false;
-        self.alt = false;
-        self.alt_gr = false;
-        self.meta_left = false;
-        self.meta_right = false;
+        self.modifiers = ModifierState::default();
         self.space = false;
         self.suppress_space_release = false;
         self.stop_recording(now)
@@ -326,13 +303,13 @@ impl HotkeyState {
 
     #[cfg(not(target_os = "macos"))]
     fn ctrl_held(&self) -> bool {
-        self.ctrl_left || self.ctrl_right
+        self.modifiers.ctrl_left || self.modifiers.ctrl_right
     }
 
     fn ptt_ctrl_held(&self) -> bool {
         #[cfg(target_os = "macos")]
         {
-            self.ctrl_left
+            self.modifiers.ctrl_left
         }
 
         #[cfg(not(target_os = "macos"))]
@@ -342,18 +319,18 @@ impl HotkeyState {
     }
 
     fn extra_modifier_held(&self) -> bool {
-        self.shift_left
-            || self.shift_right
-            || self.alt
-            || self.alt_gr
-            || self.meta_left
-            || self.meta_right
+        self.modifiers.shift_left
+            || self.modifiers.shift_right
+            || self.modifiers.alt
+            || self.modifiers.alt_gr
+            || self.modifiers.meta_left
+            || self.modifiers.meta_right
     }
 
     fn ctrl_only(&self) -> bool {
         #[cfg(target_os = "macos")]
         {
-            self.ctrl_left && !self.ctrl_right && !self.extra_modifier_held()
+            self.modifiers.ctrl_left && !self.modifiers.ctrl_right && !self.extra_modifier_held()
         }
 
         #[cfg(not(target_os = "macos"))]
@@ -364,14 +341,14 @@ impl HotkeyState {
 
     fn set_key(&mut self, key: Key, pressed: bool) {
         match key {
-            Key::ControlLeft => self.ctrl_left = pressed,
-            Key::ControlRight => self.ctrl_right = pressed,
-            Key::ShiftLeft => self.shift_left = pressed,
-            Key::ShiftRight => self.shift_right = pressed,
-            Key::Alt => self.alt = pressed,
-            Key::AltGr => self.alt_gr = pressed,
-            Key::MetaLeft => self.meta_left = pressed,
-            Key::MetaRight => self.meta_right = pressed,
+            Key::ControlLeft => self.modifiers.ctrl_left = pressed,
+            Key::ControlRight => self.modifiers.ctrl_right = pressed,
+            Key::ShiftLeft => self.modifiers.shift_left = pressed,
+            Key::ShiftRight => self.modifiers.shift_right = pressed,
+            Key::Alt => self.modifiers.alt = pressed,
+            Key::AltGr => self.modifiers.alt_gr = pressed,
+            Key::MetaLeft => self.modifiers.meta_left = pressed,
+            Key::MetaRight => self.modifiers.meta_right = pressed,
             Key::Space => self.space = pressed,
             _ => {}
         }
