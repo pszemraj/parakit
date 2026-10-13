@@ -238,7 +238,7 @@ impl DaemonPipeIdentity {
     fn current() -> Result<Self> {
         let user_sid = super::super::windows_security::current_user_sid_string()
             .context("read current Windows user SID for daemon pipe")?;
-        let pipe_name = encode_wide_null(&format!(r"\\.\pipe\parakit-daemon-{user_sid}"));
+        let pipe_name = encode_wide_null(format!(r"\\.\pipe\parakit-daemon-{user_sid}"));
         Ok(Self {
             pipe_name,
             user_sid,
@@ -622,7 +622,7 @@ struct PipeSecurity {
 
 impl PipeSecurity {
     fn for_user_sid(user_sid: &str) -> Result<Self> {
-        let sddl = encode_wide_null(&current_user_only_pipe_sddl(user_sid));
+        let sddl = encode_wide_null(current_user_only_pipe_sddl(user_sid));
         let mut descriptor = null_mut::<c_void>();
         if unsafe {
             ConvertStringSecurityDescriptorToSecurityDescriptorW(
