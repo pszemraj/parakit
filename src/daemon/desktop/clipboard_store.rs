@@ -1,7 +1,7 @@
 //! Clipboard backend trait, its arboard adapter, and restorable payload snapshots.
 
 use super::clipboard_guard;
-use super::{ClipboardPolicy, CLIPBOARD_RESTORE_ERROR};
+use super::CLIPBOARD_RESTORE_ERROR;
 use anyhow::{Context, Result};
 use arboard::{Clipboard, ImageData};
 #[cfg(target_os = "macos")]
@@ -18,7 +18,7 @@ use windows::{
 };
 
 /// Minimal clipboard operations used by insertion and smoke-test paths.
-pub(in crate::daemon::desktop) trait ClipboardStore {
+pub(crate) trait ClipboardStore {
     /// Observe the native clipboard generation, or the selection owner on X11.
     ///
     /// # Returns
@@ -156,7 +156,7 @@ pub(in crate::daemon::desktop) trait ClipboardStore {
 /// # Errors
 ///
 /// Returns an error if the platform clipboard rejects either representation.
-pub(crate) fn restore_html_clipboard(
+fn restore_html_clipboard(
     clipboard: &mut Clipboard,
     html: String,
     alt_text: Option<String>,
@@ -303,7 +303,7 @@ pub(super) fn linux_file_list_paths(files: Vec<PathBuf>) -> Vec<PathBuf> {
 }
 
 /// Best-effort snapshot of supported clipboard payloads before staging text.
-pub(in crate::daemon::desktop) enum ClipboardSnapshot {
+pub(crate) enum ClipboardSnapshot {
     Text(String),
     Html {
         html: String,
@@ -329,9 +329,7 @@ impl ClipboardSnapshot {
     /// # Errors
     ///
     /// Returns an error when reading an available clipboard payload fails.
-    pub(in crate::daemon::desktop) fn capture<C: ClipboardStore>(
-        clipboard: &mut C,
-    ) -> Result<Self> {
+    pub(crate) fn capture<C: ClipboardStore>(clipboard: &mut C) -> Result<Self> {
         match clipboard.get_file_list() {
             Ok(files) if !files.is_empty() => return Ok(Self::FileList(files)),
             // A text/uri-list without file:// entries parses as an empty file list.
@@ -379,6 +377,107 @@ impl ClipboardSnapshot {
             Err(error) => Err(error.context("could not snapshot text clipboard")),
         }
     }
+
+    /// Restore the saved payload without consuming it, so cleanup can retry.
+    ///
+    /// # Arguments
+    ///
+    /// * `clipboard` - Clipboard backend to update.
+    ///
+    /// # Returns
+    ///
+    /// `Ok(())` when the saved payload was written or unsupported data cleared.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the clipboard cannot accept the saved payload.
+    pub(crate) fn restore<C: ClipboardStore>(&self, clipboard: &mut C) -> Result<()> {
+        let result = match self {
+            Self::Text(text) => clipboard.set_text(text.clone()),
+            Self::Html { html, alt_text } => clipboard.set_html(html.clone(), alt_text.clone()),
+            Self::FileList(files) => clipboard.set_file_list(files),
+            Self::Image(image) => clipboard.set_image(ImageData {
+                width: image.width,
+                height: image.height,
+                bytes: Cow::Owned(image.bytes.to_vec()),
+            }),
+            Self::Unsupported => {
+                return clipboard
+                    .clear()
+                    .or_else(|_| clipboard.set_text(String::new()))
+                    .map_err(|err| {
+                        anyhow::anyhow!(
+                            "{CLIPBOARD_RESTORE_ERROR}: previous clipboard format unsupported and staged transcript could not be cleared: {err:#}"
+                        )
+                    });
+            }
+        };
+        result.map_err(|err| anyhow::anyhow!("{CLIPBOARD_RESTORE_ERROR}: {err:#}"))
+    }
+
+    /// Compare every supported representation and its complete payload.
+    ///
+    /// # Arguments
+    ///
+    /// * `other` - Independently captured clipboard payload to compare.
+    ///
+    /// # Returns
+    ///
+    /// Whether the payload kinds and their contents match exactly.
+    #[cfg(any(target_os = "macos", test))]
+    pub(crate) fn same_payload(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Text(expected), Self::Text(actual)) => expected == actual,
+            (
+                Self::Html {
+                    html: expected_html,
+                    alt_text: expected_alt,
+                },
+                Self::Html {
+                    html: actual_html,
+                    alt_text: actual_alt,
+                },
+            ) => expected_html == actual_html && expected_alt == actual_alt,
+            (Self::FileList(expected), Self::FileList(actual)) => expected == actual,
+            (Self::Image(expected), Self::Image(actual)) => {
+                expected.width == actual.width
+                    && expected.height == actual.height
+                    && expected.bytes == actual.bytes
+            }
+            (Self::Unsupported, Self::Unsupported) => true,
+            _ => false,
+        }
+    }
+
+    /// Check that this payload is plain text equal to the staged sentinel.
+    ///
+    /// # Arguments
+    ///
+    /// * `expected` - Sentinel text owned by the diagnostic.
+    ///
+    /// # Returns
+    ///
+    /// Whether this is plain text containing exactly the sentinel.
+    #[cfg(any(target_os = "macos", test))]
+    pub(crate) fn is_text(&self, expected: &str) -> bool {
+        matches!(self, Self::Text(actual) if actual == expected)
+    }
+
+    /// Name the captured payload kind in a clipboard diagnostic.
+    ///
+    /// # Returns
+    ///
+    /// A readable label for the supported kind or unsupported clipboard.
+    #[cfg(any(target_os = "macos", test))]
+    pub(crate) fn kind(&self) -> &'static str {
+        match self {
+            Self::Text(_) => "text",
+            Self::Html { .. } => "HTML",
+            Self::FileList(_) => "file list",
+            Self::Image(_) => "image",
+            Self::Unsupported => "empty or unsupported",
+        }
+    }
 }
 
 /// Report whether a clipboard read failed only because the format is not offered.
@@ -413,58 +512,10 @@ pub(super) fn clipboard_content_unavailable(error: &anyhow::Error) -> bool {
 /// # Returns
 ///
 /// An equivalent `ImageData` that owns its pixel bytes.
-pub(crate) fn owned_image(image: ImageData<'_>) -> ImageData<'static> {
+fn owned_image(image: ImageData<'_>) -> ImageData<'static> {
     ImageData {
         width: image.width,
         height: image.height,
         bytes: Cow::Owned(image.bytes.into_owned()),
-    }
-}
-
-/// Restore a previous clipboard snapshot unless the transcript should be retained.
-///
-/// # Arguments
-///
-/// * `clipboard` - Clipboard backend to update.
-/// * `previous` - Snapshot captured before staging transcript text.
-/// * `clipboard_policy` - Policy deciding whether restoration should occur.
-///
-/// # Returns
-///
-/// `Ok(())` when restoration is skipped or the previous payload is restored.
-///
-/// # Errors
-///
-/// Returns an error if the previous supported payload cannot be written back
-/// to the clipboard.
-pub(in crate::daemon::desktop) fn restore_or_clear_clipboard<C: ClipboardStore>(
-    clipboard: &mut C,
-    previous: ClipboardSnapshot,
-    clipboard_policy: ClipboardPolicy,
-) -> Result<()> {
-    if clipboard_policy == ClipboardPolicy::KeepTranscript {
-        return Ok(());
-    }
-    match previous {
-        ClipboardSnapshot::Text(previous) => clipboard
-            .set_text(previous)
-            .map_err(|err| anyhow::anyhow!("{CLIPBOARD_RESTORE_ERROR}: {err:#}")),
-        ClipboardSnapshot::Html { html, alt_text } => clipboard
-            .set_html(html, alt_text)
-            .map_err(|err| anyhow::anyhow!("{CLIPBOARD_RESTORE_ERROR}: {err:#}")),
-        ClipboardSnapshot::FileList(files) => clipboard
-            .set_file_list(&files)
-            .map_err(|err| anyhow::anyhow!("{CLIPBOARD_RESTORE_ERROR}: {err:#}")),
-        ClipboardSnapshot::Image(image) => clipboard
-            .set_image(image)
-            .map_err(|err| anyhow::anyhow!("{CLIPBOARD_RESTORE_ERROR}: {err:#}")),
-        ClipboardSnapshot::Unsupported => clipboard
-            .clear()
-            .or_else(|_| clipboard.set_text(String::new()))
-            .map_err(|err| {
-                anyhow::anyhow!(
-                    "{CLIPBOARD_RESTORE_ERROR}: previous clipboard format unsupported and staged transcript could not be cleared: {err:#}"
-                )
-            }),
     }
 }

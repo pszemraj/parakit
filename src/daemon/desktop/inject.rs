@@ -33,9 +33,7 @@ mod clipboard_guard;
 mod clipboard_store;
 #[cfg(target_os = "linux")]
 use clipboard_store::clipboard_content_unavailable;
-#[cfg(target_os = "macos")]
-pub(crate) use clipboard_store::{owned_image, restore_html_clipboard};
-pub(super) use clipboard_store::{restore_or_clear_clipboard, ClipboardSnapshot, ClipboardStore};
+pub(crate) use clipboard_store::{ClipboardSnapshot, ClipboardStore};
 
 #[path = "focus_snapshot.rs"]
 mod focus_snapshot;

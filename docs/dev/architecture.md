@@ -96,11 +96,12 @@ Any failed required startup or preflight step stops the process. This includes c
 
 Runtime failures are reported and the daemon continues when possible: sound cues, log writes, individual transcriptions, and text insertion failures.
 
+Clipboard snapshots share capture, restoration, and exact payload comparison in `daemon/desktop/clipboard_store.rs`. macOS `doctor --deep` independently reads back clipboard contents after the production transaction and repairs only its own staged sentinel; the production generation guards remain separate.
+
 ## Intentional Duplication
 
 The similar implementations below stay separate because their invariants differ.
 
-- `daemon/macos/diagnostics.rs` `DoctorClipboardSnapshot` vs `daemon/desktop/clipboard_store.rs` `ClipboardSnapshot`: `doctor --deep` keeps an independent capture/restore oracle so it verifies the production clipboard path instead of trusting it. Sharing the implementation would let a bug pass its own verification.
 - `daemon/macos/pasteboard.rs` `BoundedNormalizedValue` vs `daemon/macos/focus.rs` `cfstring_to_bounded_value`: same bounded head-plus-tail shape, different unit systems (normalized chars with whitespace stripping for layout-independent matching vs raw UTF-16 units at the FFI boundary). Cross-referenced in comments at both sites.
 - `daemon/ipc.rs` unix vs windows `handle_client`: the ~15 glue lines differ in three real ways (stream timeouts, warning wording, and Unix socket cleanup after a stop response); the business logic is already shared via `client_command_outcome`. A transport trait was evaluated and rejected as net-negative.
 - `src/test_support.rs` vs `tests/common/mod.rs` `fixture_root`: unit-test vs integration-test crate boundary; they cannot share code and differ by design (eager creation and nanosecond suffix vs caller-driven layout).

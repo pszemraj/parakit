@@ -358,6 +358,184 @@ fn unsupported_previous_clipboard_clears_staged_transcript_on_guard_block() {
     );
 }
 
+#[test]
+fn empty_file_lists_do_not_hide_supported_payloads() {
+    for (mut clipboard, expected_kind) in [
+        (MockClipboard::empty(), "empty or unsupported"),
+        (MockClipboard::new("copied URI text"), "text"),
+        (MockClipboard::html("<b>copied</b>", Some("copied")), "HTML"),
+        (MockClipboard::image(), "image"),
+    ] {
+        let expected = ClipboardSnapshot::capture(&mut clipboard).unwrap();
+        clipboard.empty_file_list_available = true;
+        let actual = ClipboardSnapshot::capture(&mut clipboard).unwrap();
+        assert_eq!(actual.kind(), expected_kind);
+        assert!(expected.same_payload(&actual), "{expected_kind}");
+    }
+}
+
+#[test]
+fn clipboard_snapshot_read_errors_are_not_unavailable_formats() {
+    for (format, mut clipboard, expected_context) in [
+        (
+            "file-list",
+            MockClipboard::new("text"),
+            "file-list clipboard",
+        ),
+        ("HTML", MockClipboard::new("text"), "HTML clipboard"),
+        ("image", MockClipboard::new("text"), "image clipboard"),
+        ("text", MockClipboard::new("text"), "text clipboard"),
+        (
+            "text",
+            MockClipboard::html("<b>text</b>", Some("text")),
+            "clipboard text alternative",
+        ),
+        (
+            "image",
+            MockClipboard::html_image("<img>", None),
+            "image clipboard",
+        ),
+    ] {
+        clipboard.failed_read_format = Some(format);
+        let error = ClipboardSnapshot::capture(&mut clipboard)
+            .err()
+            .expect("a failed format read must fail capture");
+        let message = format!("{error:#}");
+        assert!(message.contains(expected_context), "{message}");
+        assert!(
+            message.contains(&format!("{format} read failed")),
+            "{message}"
+        );
+        assert!(!clipboard
+            .events
+            .borrow()
+            .iter()
+            .any(|event| { event.starts_with("set") || event == "clear" }));
+    }
+}
+
+#[test]
+fn failed_clipboard_restore_retains_the_snapshot_for_retry() {
+    for (mut clipboard, expected_kind) in [
+        (MockClipboard::new("previous text"), "text"),
+        (MockClipboard::html("<b>old</b>", Some("old")), "HTML"),
+        (
+            MockClipboard::file_list(&["one.txt", "two.txt"]),
+            "file list",
+        ),
+        (MockClipboard::image(), "image"),
+    ] {
+        let previous = ClipboardSnapshot::capture(&mut clipboard).unwrap();
+        assert_eq!(previous.kind(), expected_kind);
+        clipboard.set_text("staged sentinel".to_owned()).unwrap();
+        clipboard.fail_next_set.set(true);
+        let error = previous.restore(&mut clipboard).unwrap_err();
+        assert!(format!("{error:#}").contains(CLIPBOARD_RESTORE_ERROR));
+        assert_eq!(clipboard.text(), Some("staged sentinel"));
+
+        previous.restore(&mut clipboard).unwrap();
+        let restored = ClipboardSnapshot::capture(&mut clipboard).unwrap();
+        assert!(previous.same_payload(&restored), "{expected_kind}");
+    }
+}
+
+#[test]
+fn failure_cleanup_only_replaces_the_staged_sentinel() {
+    let sentinel = "parakit-doctor-macos-smoke-123-1";
+    assert!(ClipboardSnapshot::Text(sentinel.to_owned()).is_text(sentinel));
+    assert!(!ClipboardSnapshot::Text("newer user value".to_owned()).is_text(sentinel));
+    assert!(!ClipboardSnapshot::Html {
+        html: "<b>newer payload</b>".to_owned(),
+        alt_text: Some(sentinel.to_owned()),
+    }
+    .is_text(sentinel));
+    assert!(!ClipboardSnapshot::Unsupported.is_text(sentinel));
+}
+
+#[test]
+fn clipboard_snapshots_compare_complete_payload_contents() {
+    let image = |width, height, bytes: &[u8]| {
+        ClipboardSnapshot::Image(ImageData {
+            width,
+            height,
+            bytes: Cow::Owned(bytes.to_vec()),
+        })
+    };
+    let html = |html: &str, alt: Option<&str>| ClipboardSnapshot::Html {
+        html: html.to_owned(),
+        alt_text: alt.map(str::to_owned),
+    };
+    let files =
+        |names: &[&str]| ClipboardSnapshot::FileList(names.iter().map(PathBuf::from).collect());
+    for (expected, actual, matches) in [
+        (
+            html("<b>hello</b>", Some("hello")),
+            html("<b>hello</b>", Some("hello")),
+            true,
+        ),
+        (
+            html("<b>hello</b>", Some("hello")),
+            html("<i>hello</i>", Some("hello")),
+            false,
+        ),
+        (
+            html("<b>hello</b>", Some("hello")),
+            html("<b>hello</b>", Some("changed")),
+            false,
+        ),
+        (
+            html("<b>hello</b>", None),
+            html("<b>hello</b>", Some("")),
+            false,
+        ),
+        (
+            ClipboardSnapshot::Text("hello".to_owned()),
+            html("<b>hello</b>", Some("hello")),
+            false,
+        ),
+        (image(1, 1, &[0, 1, 2, 3]), image(1, 1, &[0, 1, 2, 3]), true),
+        (
+            image(1, 1, &[0, 1, 2, 3]),
+            image(1, 1, &[3, 2, 1, 0]),
+            false,
+        ),
+        (
+            image(2, 1, &[0, 1, 2, 3]),
+            image(1, 2, &[0, 1, 2, 3]),
+            false,
+        ),
+        (
+            files(&["one.txt", "two.txt"]),
+            files(&["one.txt", "two.txt"]),
+            true,
+        ),
+        (
+            files(&["one.txt", "two.txt"]),
+            files(&["two.txt", "one.txt"]),
+            false,
+        ),
+        (files(&["one.txt"]), files(&["other.txt"]), false),
+        (
+            ClipboardSnapshot::Unsupported,
+            ClipboardSnapshot::Unsupported,
+            true,
+        ),
+        (
+            ClipboardSnapshot::Unsupported,
+            ClipboardSnapshot::Text(String::new()),
+            false,
+        ),
+    ] {
+        assert_eq!(
+            expected.same_payload(&actual),
+            matches,
+            "{}",
+            expected.kind()
+        );
+        assert_eq!(actual.same_payload(&expected), matches, "{}", actual.kind());
+    }
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn clipboard_manager_rich_handoffs_with_identical_text_preserve_files_and_images() {

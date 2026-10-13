@@ -4,7 +4,7 @@
 //! observations, not a lock on another application's future clipboard read.
 //! In particular, X11 exposes an owner window rather than a content generation.
 
-use super::{restore_or_clear_clipboard, ClipboardPolicy, ClipboardSnapshot, ClipboardStore};
+use super::{ClipboardPolicy, ClipboardSnapshot, ClipboardStore};
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use anyhow::Context;
 use anyhow::Result;
@@ -242,11 +242,11 @@ impl StagedClipboard {
                 }
             }
         }
-        restore_or_clear_clipboard(clipboard, self.previous, policy)?;
-        Ok(match policy {
-            ClipboardPolicy::RestorePrevious => ClipboardRestore::Restored,
-            ClipboardPolicy::KeepTranscript => ClipboardRestore::KeptTranscript,
-        })
+        if policy == ClipboardPolicy::KeepTranscript {
+            return Ok(ClipboardRestore::KeptTranscript);
+        }
+        self.previous.restore(clipboard)?;
+        Ok(ClipboardRestore::Restored)
     }
 }
 

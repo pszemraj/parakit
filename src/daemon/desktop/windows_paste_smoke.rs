@@ -18,7 +18,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WS_OVERLAPPEDWINDOW, WS_TABSTOP, WS_VISIBLE,
 };
 
-use super::inject::{restore_or_clear_clipboard, ClipboardPolicy, ClipboardSnapshot, PasteMode};
+use super::inject::{ClipboardSnapshot, PasteMode};
 use super::windows_clipboard_history::{hwnd_from_raw, register_window_class};
 
 const FOCUS_SETTLE: Duration = Duration::from_millis(200);
@@ -125,8 +125,7 @@ pub(crate) fn windows_paste_smoke_test(mode: PasteMode) -> Result<()> {
         Ok(())
     })();
 
-    let restore_result =
-        restore_or_clear_clipboard(&mut clipboard, previous, ClipboardPolicy::RestorePrevious);
+    let restore_result = previous.restore(&mut clipboard);
     match (test_result, restore_result) {
         (Ok(()), Ok(())) => Ok(()),
         (Err(err), Ok(())) => Err(err),

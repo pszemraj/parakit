@@ -77,7 +77,7 @@
 //! same, already-relied-upon property rather than adding anything new.
 
 use anyhow::{bail, Context, Result};
-use arboard::{Clipboard, ImageData};
+use arboard::Clipboard;
 use objc2::rc::{autoreleasepool, Retained};
 use objc2::{sel, MainThreadMarker, MainThreadOnly as _};
 use objc2_app_kit::{
@@ -85,8 +85,6 @@ use objc2_app_kit::{
     NSMenuItem, NSTextView, NSWindow, NSWindowStyleMask,
 };
 use objc2_foundation::{NSDate, NSDefaultRunLoopMode, NSPoint, NSRect, NSSize, NSString};
-use std::borrow::Cow;
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, TryRecvError};
 use std::sync::Arc;
@@ -94,8 +92,8 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::daemon::desktop::inject::{
-    owned_image, restore_html_clipboard, ClipboardPolicy, FocusSnapshot, Injector, PasteMode,
-    PasteOutcome, PasteReport,
+    ClipboardPolicy, ClipboardSnapshot, FocusSnapshot, Injector, PasteMode, PasteOutcome,
+    PasteReport,
 };
 use crate::daemon::macos::pasteboard;
 
@@ -186,116 +184,6 @@ const PROBE_WINDOW_TITLE: &str = "parakit paste smoke";
 const PROBE_ORIGIN: (f64, f64) = (80.0, 80.0);
 const PROBE_SIZE: (f64, f64) = (360.0, 90.0);
 
-/// Clipboard payload kinds the production swap path can restore.
-///
-/// The doctor harness captures the same supported formats independently so
-/// it can verify restoration rather than trusting `PasteReport` telemetry.
-enum DoctorClipboardSnapshot {
-    Text(String),
-    Html {
-        html: String,
-        alt_text: Option<String>,
-    },
-    FileList(Vec<PathBuf>),
-    Image(ImageData<'static>),
-    EmptyOrUnsupported,
-}
-
-impl DoctorClipboardSnapshot {
-    fn capture(clipboard: &mut Clipboard) -> Self {
-        if let Ok(files) = clipboard.get().file_list() {
-            return Self::FileList(files);
-        }
-
-        if let Ok(html) = clipboard.get().html() {
-            let alt_text = Clipboard::get_text(clipboard).ok();
-            if alt_text.as_deref().is_none_or(str::is_empty) {
-                if let Ok(image) = Clipboard::get_image(clipboard) {
-                    return Self::Image(owned_image(image));
-                }
-            }
-            return Self::Html { html, alt_text };
-        }
-
-        if let Ok(image) = Clipboard::get_image(clipboard) {
-            return Self::Image(owned_image(image));
-        }
-
-        match Clipboard::get_text(clipboard).ok() {
-            Some(text) => Self::Text(text),
-            None => Self::EmptyOrUnsupported,
-        }
-    }
-
-    fn restore(&self, clipboard: &mut Clipboard) -> Result<()> {
-        match self {
-            Self::Text(text) => Clipboard::set_text(clipboard, text.clone())
-                .context("could not restore the doctor smoke test's previous clipboard text"),
-            Self::Html { html, alt_text } => {
-                restore_html_clipboard(clipboard, html.clone(), alt_text.clone())
-                    .context("could not restore the doctor smoke test's previous HTML clipboard")
-            }
-            Self::FileList(files) => clipboard
-                .set()
-                .file_list(files)
-                .context("could not restore the doctor smoke test's previous file-list clipboard"),
-            Self::Image(image) => Clipboard::set_image(
-                clipboard,
-                ImageData {
-                    width: image.width,
-                    height: image.height,
-                    bytes: Cow::Owned(image.bytes.to_vec()),
-                },
-            )
-            .context("could not restore the doctor smoke test's previous image clipboard"),
-            Self::EmptyOrUnsupported => Clipboard::clear(clipboard)
-                .context("could not clear the clipboard after the doctor smoke test"),
-        }
-    }
-
-    fn matches_current(&self, clipboard: &mut Clipboard) -> bool {
-        self.same_payload(&Self::capture(clipboard))
-    }
-
-    fn same_payload(&self, other: &Self) -> bool {
-        match (self, other) {
-            (Self::Text(expected), Self::Text(actual)) => expected == actual,
-            (
-                Self::Html {
-                    html: expected_html,
-                    alt_text: expected_alt,
-                },
-                Self::Html {
-                    html: actual_html,
-                    alt_text: actual_alt,
-                },
-            ) => expected_html == actual_html && expected_alt == actual_alt,
-            (Self::FileList(expected), Self::FileList(actual)) => expected == actual,
-            (Self::Image(expected), Self::Image(actual)) => {
-                expected.width == actual.width
-                    && expected.height == actual.height
-                    && expected.bytes == actual.bytes
-            }
-            (Self::EmptyOrUnsupported, Self::EmptyOrUnsupported) => true,
-            _ => false,
-        }
-    }
-
-    fn is_text(&self, expected: &str) -> bool {
-        matches!(self, Self::Text(actual) if actual == expected)
-    }
-
-    fn kind(&self) -> &'static str {
-        match self {
-            Self::Text(_) => "text",
-            Self::Html { .. } => "HTML",
-            Self::FileList(_) => "file list",
-            Self::Image(_) => "image",
-            Self::EmptyOrUnsupported => "empty or unsupported",
-        }
-    }
-}
-
 /// Main-thread failsafe for the clipboard mutation performed by the worker.
 ///
 /// Normal completion verifies every supported payload kind. On an earlier
@@ -304,7 +192,7 @@ impl DoctorClipboardSnapshot {
 /// stranding it on the user's clipboard.
 struct DoctorClipboardGuard {
     clipboard: Clipboard,
-    previous: DoctorClipboardSnapshot,
+    previous: ClipboardSnapshot,
     sentinel: Option<String>,
     finished: bool,
 }
@@ -313,7 +201,8 @@ impl DoctorClipboardGuard {
     fn capture() -> Result<Self> {
         let mut clipboard = Clipboard::new()
             .context("could not open the system clipboard for the doctor paste smoke test")?;
-        let previous = DoctorClipboardSnapshot::capture(&mut clipboard);
+        let previous = ClipboardSnapshot::capture(&mut clipboard)
+            .context("could not save the previous clipboard before the doctor paste smoke test")?;
         Ok(Self {
             clipboard,
             previous,
@@ -328,7 +217,8 @@ impl DoctorClipboardGuard {
 
     /// Verify the production restore and repair it before returning an error.
     fn verify_and_repair(&mut self) -> Result<()> {
-        let current = DoctorClipboardSnapshot::capture(&mut self.clipboard);
+        let current = ClipboardSnapshot::capture(&mut self.clipboard)
+            .context("could not verify the clipboard after the doctor paste smoke test")?;
         if self.previous.same_payload(&current) {
             self.finished = true;
             return Ok(());
@@ -360,7 +250,9 @@ impl DoctorClipboardGuard {
                      {expected_kind} clipboard payload, and diagnostic cleanup also failed"
                 )
             })?;
-        let repaired = self.previous.matches_current(&mut self.clipboard);
+        let current = ClipboardSnapshot::capture(&mut self.clipboard)
+            .context("could not read back diagnostic clipboard cleanup")?;
+        let repaired = self.previous.same_payload(&current);
         self.finished = repaired;
         if repaired {
             bail!(
@@ -378,10 +270,13 @@ impl DoctorClipboardGuard {
         let Some(sentinel) = self.sentinel.as_deref() else {
             return Ok(());
         };
-        let current = DoctorClipboardSnapshot::capture(&mut self.clipboard);
+        let current = ClipboardSnapshot::capture(&mut self.clipboard)
+            .context("could not inspect the clipboard before diagnostic cleanup")?;
         if current.is_text(sentinel) {
             self.previous.restore(&mut self.clipboard)?;
-            self.finished = self.previous.matches_current(&mut self.clipboard);
+            let current = ClipboardSnapshot::capture(&mut self.clipboard)
+                .context("could not read back the restored pre-diagnostic clipboard")?;
+            self.finished = self.previous.same_payload(&current);
             if !self.finished {
                 bail!(
                     "restored the pre-diagnostic clipboard after a failed paste smoke test, but \
