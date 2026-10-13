@@ -1,4 +1,4 @@
-//! Native log filtering and engine-config resolution regressions.
+//! Native log filtering and startup-configuration resolution regressions.
 
 use super::*;
 
@@ -155,6 +155,80 @@ fn explicit_gpu_validation_runs_before_default_model_fetch() {
 
     assert_eq!(err.to_string(), "gpu unavailable");
     assert!(!fetched_default.get());
+}
+
+#[test]
+fn worker_settings_preserve_defaults_config_and_cli_precedence() {
+    use crate::daemon::inject::PasteMode;
+
+    let defaults = ConfigFile::default();
+    let mut configured = ConfigFile::default();
+    configured.daemon.model_idle_minutes = Some(2);
+    configured.daemon.paste_mode = Some(PasteMode::Direct);
+    configured.daemon.keep_transcript_clipboard = Some(true);
+    configured.logging.dir = Some(PathBuf::from("target/tmp/config-logs"));
+
+    let cases = [
+        (
+            &defaults,
+            &[][..],
+            daemon::model_lifecycle::DEFAULT_MODEL_IDLE_MINUTES,
+            crate::cli::default_paste_mode(),
+            false,
+            None,
+        ),
+        (
+            &configured,
+            &[][..],
+            2,
+            PasteMode::Direct,
+            true,
+            Some("JSONL to target/tmp/config-logs"),
+        ),
+        (
+            &configured,
+            &[
+                "--model-idle-minutes",
+                "0",
+                "--paste-mode",
+                "standard",
+                "--no-keep-transcript-clipboard",
+                "--log-dir",
+                "target/tmp/cli-logs",
+            ][..],
+            0,
+            PasteMode::Standard,
+            false,
+            Some("JSONL to target/tmp/cli-logs"),
+        ),
+        (
+            &defaults,
+            &["--keep-transcript-clipboard"][..],
+            daemon::model_lifecycle::DEFAULT_MODEL_IDLE_MINUTES,
+            crate::cli::default_paste_mode(),
+            true,
+            None,
+        ),
+    ];
+    for (config, args, minutes, paste_mode, keep_clipboard, expected_log) in cases {
+        let cli = Cli::parse_from(["parakit", "start"].into_iter().chain(args.iter().copied()));
+        let Some(Commands::Start(start)) = cli.command else {
+            panic!("expected start command");
+        };
+        let (settings, log_summary) = resolve_worker_settings(&start, config);
+        assert_eq!(settings.model_idle_minutes, minutes, "{args:?}");
+        assert_eq!(settings.paste_mode, paste_mode, "{args:?}");
+        assert_eq!(
+            settings.keep_transcript_clipboard, keep_clipboard,
+            "{args:?}"
+        );
+        assert_eq!(
+            settings.data_log.is_some(),
+            expected_log.is_some(),
+            "{args:?}"
+        );
+        assert_eq!(log_summary.as_deref(), expected_log, "{args:?}");
+    }
 }
 
 #[test]

@@ -12,6 +12,7 @@ use std::thread;
 /// * `cli` - Global output flags.
 /// * `start` - Runtime and simulation options.
 /// * `config` - Validated daemon defaults.
+/// * `settings` - Effective settings shared with normal daemon startup.
 /// * `log` - Shared process logger.
 /// * `audio_path` - Real WAV fixture to replay.
 ///
@@ -27,16 +28,13 @@ pub(super) fn run_ptt_audio_simulation(
     cli: &Cli,
     start: &StartCli,
     config: &ConfigFile,
+    settings: WorkerSettings,
     log: Arc<Logger>,
     audio_path: &Path,
 ) -> Result<()> {
     let verbose = cli.effective_verbose(config);
     let cleaner = build_cli_cleaner(start, config)?.map(Arc::new);
-    let data_log = start
-        .effective_log_dir(config)
-        .map(|dir| Arc::new(DataLogger::new(dir)));
-    let minutes = start.effective_model_idle_minutes(config);
-    let timeout = idle_timeout(minutes);
+    let timeout = idle_timeout(settings.model_idle_minutes);
     let idle = Duration::from_secs(start.simulate_ptt_idle_seconds.unwrap_or(0));
     let repeats = start.simulate_ptt_repeat.map_or(1, NonZeroUsize::get);
     // Validate before model initialization rather than overflowing a sleep later.
@@ -59,15 +57,12 @@ pub(super) fn run_ptt_audio_simulation(
     let worker = spawn_worker(WorkerCtx {
         engine,
         recipe,
-        model_idle_minutes: minutes,
+        settings,
         cleaner,
-        data_log,
         sounds: Sounds::new(false),
         log: Arc::clone(&log),
         notifier: Notifier::silent(Arc::new(Logger::new(LogLevel::Quiet))),
         state: Arc::clone(&state),
-        paste_mode: start.effective_paste_mode(config),
-        keep_transcript_clipboard: start.effective_keep_transcript_clipboard(config),
         insert_transcripts: false,
         rx,
         lifetime: worker_lifetime,

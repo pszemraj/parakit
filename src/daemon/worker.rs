@@ -60,18 +60,29 @@ pub(crate) enum WorkerEvent {
     },
 }
 
+/// Effective settings shared by daemon and WAV-simulation workers.
+pub(crate) struct WorkerSettings {
+    /// Effective user setting, also exposed in status.
+    pub(crate) model_idle_minutes: u64,
+    /// Optional transcription metadata logger.
+    pub(crate) data_log: Option<Arc<DataLogger>>,
+    /// Paste chord mode.
+    pub(crate) paste_mode: PasteMode,
+    /// Leave transcript text on the clipboard after paste/fallback instead of
+    /// restoring previous supported clipboard contents.
+    pub(crate) keep_transcript_clipboard: bool,
+}
+
 /// Dependencies owned by the transcription worker thread.
 pub(crate) struct WorkerCtx<E = Engine> {
     /// Open transcription engine.
     pub(crate) engine: E,
     /// Startup parameters reused when the model has been offloaded.
     pub(crate) recipe: EngineRecipe,
-    /// Effective user setting, also exposed in status.
-    pub(crate) model_idle_minutes: u64,
+    /// Shared resolved configuration.
+    pub(crate) settings: WorkerSettings,
     /// Optional transcript cleaner.
     pub(crate) cleaner: Option<Arc<Cleaner>>,
-    /// Optional transcription metadata logger.
-    pub(crate) data_log: Option<Arc<DataLogger>>,
     /// Audio cue player.
     pub(crate) sounds: Sounds,
     /// Process logger.
@@ -80,11 +91,6 @@ pub(crate) struct WorkerCtx<E = Engine> {
     pub(crate) notifier: Notifier,
     /// Shared state exposed through local IPC.
     pub(crate) state: Arc<SharedState>,
-    /// Paste chord mode.
-    pub(crate) paste_mode: PasteMode,
-    /// Leave transcript text on the clipboard after paste/fallback instead of
-    /// restoring previous supported clipboard contents.
-    pub(crate) keep_transcript_clipboard: bool,
     /// Whether transcripts should be inserted after inference.
     pub(crate) insert_transcripts: bool,
     /// Worker event receiver.
@@ -137,7 +143,7 @@ pub(crate) fn spawn_worker(ctx: WorkerCtx) -> std::thread::JoinHandle<()> {
 }
 
 fn worker_loop(ctx: WorkerCtx) {
-    let timeout = super::model_lifecycle::idle_timeout(ctx.model_idle_minutes);
+    let timeout = super::model_lifecycle::idle_timeout(ctx.settings.model_idle_minutes);
     let recipe = ctx.recipe.clone();
     let reload_log = Arc::clone(&ctx.log);
     let reload_state = Arc::clone(&ctx.state);
@@ -164,15 +170,18 @@ where
     let WorkerCtx {
         engine,
         recipe: _,
-        model_idle_minutes,
+        settings:
+            WorkerSettings {
+                model_idle_minutes,
+                data_log,
+                paste_mode,
+                keep_transcript_clipboard,
+            },
         cleaner,
-        data_log,
         sounds,
         log,
         notifier,
         state,
-        paste_mode,
-        keep_transcript_clipboard,
         insert_transcripts,
         rx,
         lifetime: _lifetime,
@@ -626,15 +635,17 @@ mod tests {
                     device_mode: parakit::inference::DeviceMode::Cpu,
                     verbose: false,
                 },
-                model_idle_minutes: 0,
+                settings: WorkerSettings {
+                    model_idle_minutes: 0,
+                    data_log: None,
+                    paste_mode: PasteMode::Standard,
+                    keep_transcript_clipboard: false,
+                },
                 cleaner: None,
-                data_log: None,
                 sounds,
                 log,
                 notifier,
                 state: Arc::clone(&state),
-                paste_mode: PasteMode::Standard,
-                keep_transcript_clipboard: false,
                 insert_transcripts: false,
                 rx,
                 lifetime: state.shutdown.register(),
@@ -765,15 +776,17 @@ mod tests {
                     device_mode: parakit::inference::DeviceMode::Cpu,
                     verbose: false,
                 },
-                model_idle_minutes: 1,
+                settings: WorkerSettings {
+                    model_idle_minutes: 1,
+                    data_log: None,
+                    paste_mode: PasteMode::Standard,
+                    keep_transcript_clipboard: false,
+                },
                 cleaner: None,
-                data_log: None,
                 sounds,
                 log,
                 notifier,
                 state: worker_state,
-                paste_mode: PasteMode::Standard,
-                keep_transcript_clipboard: false,
                 insert_transcripts: false,
                 rx,
                 lifetime,

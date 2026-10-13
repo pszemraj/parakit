@@ -34,7 +34,9 @@ use crate::daemon::hotkey::HotkeyBackend;
 use crate::daemon::logging::{BannerInfo, LogLevel, Logger};
 use crate::daemon::notifications::Notifier;
 use crate::daemon::sounds::Sounds;
-use crate::daemon::worker::{spawn_worker, WorkerCtx, WorkerEvent, WORKER_QUEUE_CAPACITY};
+use crate::daemon::worker::{
+    spawn_worker, WorkerCtx, WorkerEvent, WorkerSettings, WORKER_QUEUE_CAPACITY,
+};
 
 const GGML_LOG_LEVEL_NONE: i32 = 0;
 const GGML_LOG_LEVEL_WARN: i32 = 3;
@@ -251,10 +253,19 @@ fn run_daemon(cli: &Cli, start: &StartCli) -> Result<()> {
     let hotkey_backend = start.effective_hotkey_backend(&config);
     #[cfg(not(target_os = "linux"))]
     let hotkey_backend = HotkeyBackend::Auto;
-    let paste_mode = start.effective_paste_mode(&config);
+    let (worker_settings, log_summary) = resolve_worker_settings(start, &config);
+    let paste_mode = worker_settings.paste_mode;
+    let keep_transcript_clipboard = worker_settings.keep_transcript_clipboard;
 
     if let Some(audio_path) = &start.simulate_ptt_audio {
-        return run_ptt_audio_simulation(cli, start, &config, Arc::clone(&log), audio_path);
+        return run_ptt_audio_simulation(
+            cli,
+            start,
+            &config,
+            worker_settings,
+            Arc::clone(&log),
+            audio_path,
+        );
     }
 
     if let Some(path) = start.effective_model(&config) {
@@ -284,9 +295,6 @@ fn run_daemon(cli: &Cli, start: &StartCli) -> Result<()> {
     // native session before this guard on every failed-startup path.
     let worker_lifetime = ipc_state.shutdown.register();
     let notifier = Notifier::new(Arc::clone(&log));
-    let keep_transcript_clipboard = start.effective_keep_transcript_clipboard(&config);
-    let log_dir = start.effective_log_dir(&config);
-    let data_log = log_dir.clone().map(|dir| Arc::new(DataLogger::new(dir)));
     #[cfg(any(unix, target_os = "windows"))]
     let _ipc_server = daemon::ipc::spawn_server(
         Arc::clone(&ipc_state),
@@ -341,10 +349,7 @@ fn run_daemon(cli: &Cli, start: &StartCli) -> Result<()> {
         mic: &mic_info,
         cleaning: cleaning_summary.clone(),
         sounds: if sounds_enabled { "on" } else { "off" },
-        transcription_logging: match &log_dir {
-            Some(dir) => format!("JSONL to {}", dir.display()),
-            None => "off".to_string(),
-        },
+        transcription_logging: log_summary.clone().unwrap_or_else(|| "off".to_string()),
         insertion: format!(
             "batch paste ({}, {})",
             paste_mode.label(),
@@ -376,9 +381,7 @@ fn run_daemon(cli: &Cli, start: &StartCli) -> Result<()> {
         paste_mode: paste_mode.label(),
         cleaning_summary,
         sounds_on: sounds_enabled,
-        log_summary: log_dir
-            .as_ref()
-            .map(|dir| format!("JSONL to {}", dir.display())),
+        log_summary,
         hotkey_backend_label,
     });
 
@@ -389,15 +392,12 @@ fn run_daemon(cli: &Cli, start: &StartCli) -> Result<()> {
     let worker = spawn_worker(WorkerCtx {
         engine,
         recipe,
-        model_idle_minutes: start.effective_model_idle_minutes(&config),
+        settings: worker_settings,
         cleaner,
-        data_log,
         sounds: sounds.clone(),
         log: Arc::clone(&log),
         notifier: notifier.clone(),
         state: Arc::clone(&ipc_state),
-        paste_mode,
-        keep_transcript_clipboard,
         insert_transcripts: true,
         rx,
         lifetime: worker_lifetime,
@@ -573,6 +573,30 @@ fn warn_about_bluetooth_mic_if_needed(log: &Logger, mic_info: &daemon::audio::Mi
             mic_info.summary()
         ));
     }
+}
+
+/// Resolve the worker settings and matching banner/status logging description.
+///
+/// # Returns
+///
+/// The shared effective settings and an optional JSONL destination label.
+fn resolve_worker_settings(
+    start: &StartCli,
+    config: &ConfigFile,
+) -> (WorkerSettings, Option<String>) {
+    let log_dir = start.effective_log_dir(config);
+    let log_summary = log_dir
+        .as_ref()
+        .map(|dir| format!("JSONL to {}", dir.display()));
+    (
+        WorkerSettings {
+            model_idle_minutes: start.effective_model_idle_minutes(config),
+            data_log: log_dir.map(|dir| Arc::new(DataLogger::new(dir))),
+            paste_mode: start.effective_paste_mode(config),
+            keep_transcript_clipboard: start.effective_keep_transcript_clipboard(config),
+        },
+        log_summary,
+    )
 }
 
 fn build_cli_cleaner(start: &StartCli, config: &ConfigFile) -> Result<Option<rules::Cleaner>> {
