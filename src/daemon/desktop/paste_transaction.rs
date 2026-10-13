@@ -95,12 +95,13 @@ where
 
     let (previous, mut clipboard_policy, mut retention_diagnostic) =
         previous_clipboard_for_policy(clipboard, clipboard_policy);
-    let write_before = restore_plan.before_transcript_write();
-    clipboard
-        .set_text(text.to_owned())
-        .context("could not copy transcript to clipboard")?;
-    let mut previous = StagedClipboard::capture(clipboard, previous, text);
-    let mut write_token = restore_plan.after_transcript_write(write_before);
+    let (mut previous, mut write_token) = stage_transcript_write(
+        clipboard,
+        text,
+        previous,
+        &restore_plan,
+        "could not copy transcript to clipboard",
+    )?;
 
     sleep_if_nonzero(settle_delay);
 
@@ -130,12 +131,13 @@ where
             })
         });
         if let Some(reason) = restage_reason {
-            let write_before = restore_plan.before_transcript_write();
-            clipboard
-                .set_text(text.to_owned())
-                .context("could not re-copy transcript to clipboard")?;
-            previous = StagedClipboard::capture(clipboard, ClipboardSnapshot::Unsupported, text);
-            write_token = restore_plan.after_transcript_write(write_before);
+            (previous, write_token) = stage_transcript_write(
+                clipboard,
+                text,
+                ClipboardSnapshot::Unsupported,
+                &restore_plan,
+                "could not re-copy transcript to clipboard",
+            )?;
             clipboard_policy = ClipboardPolicy::KeepTranscript;
             retention_diagnostic = Some(reason);
             // The write and native stamp capture can block. Recheck focus
@@ -464,12 +466,13 @@ where
         return Ok(StageOutcome::CopiedOnly);
     }
 
-    let write_before = restore_plan.before_transcript_write();
-    clipboard
-        .set_text(text.to_owned())
-        .context("could not copy transcript to clipboard")?;
-    let previous = StagedClipboard::capture(clipboard, previous, text);
-    let write_token = restore_plan.after_transcript_write(write_before);
+    let (previous, write_token) = stage_transcript_write(
+        clipboard,
+        text,
+        previous,
+        &restore_plan,
+        "could not copy transcript to clipboard",
+    )?;
     let restored = restore_after_delay(
         clipboard,
         previous,
@@ -481,6 +484,21 @@ where
         ClipboardRestore::Changed(diagnostic) => StageOutcome::ClipboardChanged(diagnostic),
         _ => StageOutcome::Blocked,
     })
+}
+
+/// Stage text and capture its owner between the restore gate's observations.
+fn stage_transcript_write<C: ClipboardStore, H: ClipboardRestoreGate + ?Sized>(
+    clipboard: &mut C,
+    text: &str,
+    previous: ClipboardSnapshot,
+    restore_plan: &ClipboardRestorePlan<'_, H>,
+    context: &'static str,
+) -> Result<(StagedClipboard, ClipboardWriteToken)> {
+    let write_before = restore_plan.before_transcript_write();
+    clipboard.set_text(text.to_owned()).context(context)?;
+    let staged = StagedClipboard::capture(clipboard, previous, text);
+    let write_token = restore_plan.after_transcript_write(write_before);
+    Ok((staged, write_token))
 }
 
 fn finish_blocked_clipboard<C, H>(
