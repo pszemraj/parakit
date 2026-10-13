@@ -64,12 +64,15 @@ const PASTE_MODIFIER_RELEASE_POLL: Duration = Duration::from_millis(15);
 ///
 /// # Returns
 ///
-/// `Ok(())` when the action succeeds and key-down/key-up events are observed.
+/// `Ok(())` when the action succeeds and a synthetic key-down event is
+/// observed. A key-up is deliberately not required: enigo's macOS text path
+/// posts unicode key-down events only (one per chunk), and that is exactly
+/// what production direct typing emits.
 ///
 /// # Errors
 ///
 /// Returns an error if the event tap cannot be created, the action fails, or no
-/// key events are observed.
+/// key-down event is observed.
 pub(crate) fn suppressed_key_event_smoke(action: impl FnOnce() -> Result<()>) -> Result<()> {
     suppressed_key_event_smoke_with_expectation(action, None, 0)
 }
@@ -113,17 +116,7 @@ fn suppressed_key_event_smoke_with_expectation(
         | event_mask(K_CG_EVENT_FLAGS_CHANGED);
     let tap = SmokeTap::install(&state, mask)?;
     run_smoke_action(tap, action, || wait_for_smoke_events(&state))?;
-    if state.saw_key_down.load(Ordering::Acquire) && state.saw_key_up.load(Ordering::Acquire) {
-        if expected_keycode.is_some()
-            && (!state.saw_expected_key_down.load(Ordering::Acquire)
-                || !state.saw_expected_key_up.load(Ordering::Acquire))
-        {
-            bail!("macOS insertion smoke test did not observe expected Cmd+V key down/up events")
-        }
-        Ok(())
-    } else {
-        bail!("macOS insertion smoke test did not observe synthetic key down/up events")
-    }
+    state.verify()
 }
 
 /// Installed smoke tap whose lifetime keeps `SmokeTapState::user_info` valid.
@@ -420,13 +413,37 @@ fn smoke_tap_callback_inner(
 }
 
 impl SmokeTapState {
+    /// Whether every event the expectation requires has been observed.
+    ///
+    /// With an expected keycode (the Cmd+V paste chord) both the expected key
+    /// down and up are required. Without one (direct typing) a single
+    /// synthetic key-down is enough, because enigo's macOS text path never
+    /// posts a matching key-up.
     fn complete(&self) -> bool {
         if self.expected_keycode.is_some() {
             self.saw_expected_key_down.load(Ordering::Acquire)
                 && self.saw_expected_key_up.load(Ordering::Acquire)
         } else {
-            self.saw_key_down.load(Ordering::Acquire) && self.saw_key_up.load(Ordering::Acquire)
+            self.saw_key_down.load(Ordering::Acquire)
         }
+    }
+
+    /// Final check once the smoke action and wait have finished.
+    fn verify(&self) -> Result<()> {
+        let saw_key_down = self.saw_key_down.load(Ordering::Acquire);
+        if self.expected_keycode.is_none() {
+            if saw_key_down {
+                return Ok(());
+            }
+            bail!("macOS insertion smoke test did not observe a synthetic key-down event")
+        }
+        if !(saw_key_down && self.saw_key_up.load(Ordering::Acquire)) {
+            bail!("macOS insertion smoke test did not observe synthetic key down/up events")
+        }
+        if !self.complete() {
+            bail!("macOS insertion smoke test did not observe expected Cmd+V key down/up events")
+        }
+        Ok(())
     }
 
     fn matches_expected(&self, event: CGEventRef) -> bool {
@@ -478,6 +495,51 @@ mod tests {
         }));
         assert!(unwind.is_err());
         assert!(dropped.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn direct_smoke_needs_only_a_key_down() {
+        // enigo's macOS text path posts unicode key-down events and no key-up.
+        let state = SmokeTapState::default();
+        assert!(!state.complete());
+        assert!(state.verify().is_err());
+
+        state.saw_key_down.store(true, Ordering::Release);
+        assert!(state.complete());
+        assert!(state.verify().is_ok());
+    }
+
+    #[test]
+    fn direct_smoke_ignores_a_lone_key_up() {
+        let state = SmokeTapState::default();
+        state.saw_key_up.store(true, Ordering::Release);
+        assert!(!state.complete());
+        assert!(state.verify().is_err());
+    }
+
+    #[test]
+    fn paste_shortcut_smoke_still_needs_expected_down_and_up() {
+        let expected = Some(i64::from(MACOS_V_KEYCODE));
+        let state = SmokeTapState {
+            expected_keycode: expected,
+            ..SmokeTapState::default()
+        };
+        assert!(!state.complete());
+
+        // Unrelated key traffic (down and up) is not the Cmd+V chord.
+        state.saw_key_down.store(true, Ordering::Release);
+        state.saw_key_up.store(true, Ordering::Release);
+        assert!(!state.complete());
+        assert!(state.verify().is_err());
+
+        // The expected key-down alone is still incomplete.
+        state.saw_expected_key_down.store(true, Ordering::Release);
+        assert!(!state.complete());
+        assert!(state.verify().is_err());
+
+        state.saw_expected_key_up.store(true, Ordering::Release);
+        assert!(state.complete());
+        assert!(state.verify().is_ok());
     }
 
     #[test]

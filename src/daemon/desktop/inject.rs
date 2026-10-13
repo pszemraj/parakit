@@ -770,9 +770,10 @@ fn platform_paste_smoke_test(mode: PasteMode) -> Result<()> {
 /// Run the macOS `doctor --deep` insertion smoke test.
 ///
 /// Direct mode runs a single stage: a suppressed synthetic key-event tap
-/// proving parakit can post keystrokes at all (there is no clipboard/paste
-/// chord/`AXValue` acknowledgement pipeline in direct-typing mode for a
-/// second stage to exercise).
+/// proving parakit can post keystrokes at all (it passes on a synthetic
+/// key-down alone, matching what direct typing emits; there is no
+/// clipboard/paste chord/`AXValue` acknowledgement pipeline in direct-typing
+/// mode for a second stage to exercise).
 ///
 /// Standard/Terminal mode runs two stages, and reports which one failed:
 ///   1. A suppressed Cmd+V event tap (fast, low-level, side-effect-free)
