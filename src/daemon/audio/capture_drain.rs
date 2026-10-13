@@ -1,8 +1,8 @@
 //! Sample-ring drain thread, recording pipeline, and resampling.
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use crossbeam_channel::{Receiver, Sender};
-use parakit::audio_file::{process_resample_chunk, resampler_params, RESAMPLE_CHUNK_SIZE};
+use parakit::audio_file::{new_target_resampler, process_resample_chunk, RESAMPLE_CHUNK_SIZE};
 use parking_lot::Mutex;
 use ringbuf::{traits::Consumer, HeapCons};
 use rubato::{Resampler, SincFixedIn};
@@ -249,14 +249,7 @@ pub(super) fn make_resampler(hw_rate: u32) -> Result<Option<ResamplerState>> {
         return Ok(None);
     }
 
-    let resampler = SincFixedIn::<f32>::new(
-        TARGET_RATE as f64 / hw_rate as f64,
-        2.0,
-        resampler_params(),
-        RESAMPLE_CHUNK_SIZE,
-        1,
-    )
-    .context("failed to construct resampler")?;
+    let resampler = new_target_resampler(hw_rate)?;
     Ok(Some(ResamplerState::new(resampler, RESAMPLE_CHUNK_SIZE)))
 }
 

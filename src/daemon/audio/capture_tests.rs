@@ -377,6 +377,35 @@ fn sent_audio_control_start_timeout_does_not_fallback_to_direct_state() {
 }
 
 #[test]
+fn control_ack_preserves_operation_results_payloads_and_transport_layers() {
+    let (tx, rx) = bounded::<Result<()>>(1);
+    tx.send(Err(anyhow!("manager operation failed"))).unwrap();
+    let operation = recv_audio_control_ack(rx, "audio manager", "Start").unwrap();
+    assert_eq!(
+        operation.unwrap_err().to_string(),
+        "manager operation failed"
+    );
+
+    let (tx, rx) = bounded(1);
+    tx.send(vec![0.25, -0.5]).unwrap();
+    assert_eq!(
+        recv_audio_control_ack(rx, "audio drain", "Stop").unwrap(),
+        vec![0.25, -0.5]
+    );
+
+    for (layer, label) in [("audio manager", "Start"), ("audio drain", "Stop")] {
+        let (tx, rx) = bounded::<()>(1);
+        drop(tx);
+        assert_eq!(
+            recv_audio_control_ack(rx, layer, label)
+                .unwrap_err()
+                .to_string(),
+            format!("{layer} accepted {label} but disconnected before acknowledging")
+        );
+    }
+}
+
+#[test]
 fn abandoned_drain_start_rolls_back_recording_state() {
     let ring = HeapRb::<f32>::new(8);
     let (_producer, mut consumer) = ring.split();

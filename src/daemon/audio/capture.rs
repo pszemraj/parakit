@@ -98,13 +98,13 @@ impl AudioHandle {
     fn start_on_manager(&self, epoch: u64) -> Result<()> {
         let (ack_tx, ack_rx) = bounded(1);
         send_audio_control(&self.control, AudioControl::Start { epoch, ack: ack_tx })?;
-        recv_audio_control_ack(ack_rx, "audio manager", "Start")
+        recv_audio_control_ack(ack_rx, "audio manager", "Start")?
     }
 
     fn stop_on_manager(&self) -> Result<Vec<f32>> {
         let (ack_tx, ack_rx) = bounded(1);
         send_audio_control(&self.control, AudioControl::Stop { ack: ack_tx })?;
-        recv_audio_control_ack(ack_rx, "audio manager", "Stop")
+        recv_audio_control_ack(ack_rx, "audio manager", "Stop")?
     }
 }
 
@@ -121,14 +121,13 @@ fn send_audio_control(control: &Sender<AudioControl>, command: AudioControl) -> 
 }
 
 fn recv_audio_control_ack<T>(
-    ack_rx: Receiver<Result<T>>,
+    ack_rx: Receiver<T>,
     layer: &'static str,
     label: &'static str,
 ) -> Result<T> {
-    match ack_rx.recv_timeout(AUDIO_CONTROL_TIMEOUT) {
-        Ok(result) => result,
-        Err(err) => Err(audio_control_ack_error(layer, label, err)),
-    }
+    ack_rx
+        .recv_timeout(AUDIO_CONTROL_TIMEOUT)
+        .map_err(|err| audio_control_ack_error(layer, label, err))
 }
 
 fn audio_control_ack_error(

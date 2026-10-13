@@ -3,7 +3,7 @@
 use anyhow::{anyhow, Context, Result};
 use cpal::traits::{DeviceTrait, StreamTrait};
 use cpal::{SampleFormat, Stream, StreamConfig};
-use crossbeam_channel::{bounded, Receiver, Sender};
+use crossbeam_channel::{bounded, Sender};
 use parking_lot::Mutex;
 use ringbuf::{
     traits::{Producer, Split},
@@ -19,10 +19,7 @@ use super::device::{
     MicIdentity, MicInfo,
 };
 use super::drain::{make_resampler, spawn_audio_drain, AudioDrain, CapturePipeline, DrainControl};
-use super::{
-    audio_control_ack_error, AudioControl, AudioManagerCtx, CaptureState, AUDIO_CONTROL_TIMEOUT,
-    TARGET_RATE,
-};
+use super::{recv_audio_control_ack, AudioControl, AudioManagerCtx, CaptureState, TARGET_RATE};
 
 const AUDIO_RING_SECONDS: usize = 6;
 const AUDIO_RING_MIN_CAPACITY: usize = TARGET_RATE as usize * AUDIO_RING_SECONDS;
@@ -210,7 +207,7 @@ fn start_audio_drain(live: &mut LiveStream, epoch: u64, include_pre_roll: bool) 
             ack: ack_tx,
         })
         .context("audio drain is not available")?;
-    recv_drain_control_ack(ack_rx, "Start")
+    recv_audio_control_ack(ack_rx, "audio drain", "Start")
 }
 
 fn stop_live_recording(live: &mut LiveStream) -> Result<Vec<f32>> {
@@ -218,7 +215,7 @@ fn stop_live_recording(live: &mut LiveStream) -> Result<Vec<f32>> {
     live.drain_control
         .send(DrainControl::Stop { ack: ack_tx })
         .context("audio drain is not available")?;
-    recv_drain_control_ack(ack_rx, "Stop")
+    recv_audio_control_ack(ack_rx, "audio drain", "Stop")
 }
 
 fn pause_live_stream(live: &mut LiveStream, idle_policy: IdleStreamPolicy) -> Result<()> {
@@ -228,12 +225,6 @@ fn pause_live_stream(live: &mut LiveStream, idle_policy: IdleStreamPolicy) -> Re
     live.stream.pause().context("stream.pause() failed")?;
     live.paused = true;
     Ok(())
-}
-
-fn recv_drain_control_ack<T>(ack_rx: Receiver<T>, label: &'static str) -> Result<T> {
-    ack_rx
-        .recv_timeout(AUDIO_CONTROL_TIMEOUT)
-        .map_err(|err| audio_control_ack_error("audio drain", label, err))
 }
 
 fn reopen_until_success(host: &cpal::Host, ctx: &AudioManagerCtx) -> Option<LiveStream> {
