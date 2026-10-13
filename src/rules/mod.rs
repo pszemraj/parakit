@@ -65,7 +65,7 @@ pub const CLEANER_VERSION: u32 = 32;
 pub const DEFAULT_NUMBER_THRESHOLD: f64 = 4.0;
 
 /// Built-in cleanup behavior tiers.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, clap::ValueEnum, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum CleaningProfile {
     /// Mechanical cleanup and high-confidence normalization only.

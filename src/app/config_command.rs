@@ -82,7 +82,6 @@ fn print_config_show(quiet: bool) -> Result<()> {
     if quiet {
         return Ok(());
     }
-    let start = StartCli::default();
 
     outln!("parakit config")?;
     outln!("  path: {}", path.display())?;
@@ -90,8 +89,9 @@ fn print_config_show(quiet: bool) -> Result<()> {
     outln!("  daemon:")?;
     outln!(
         "    model: {}",
-        start
-            .effective_model(&config)
+        config
+            .daemon
+            .model
             .as_ref()
             .map(|p| p.display().to_string())
             .unwrap_or_else(|| "(default: hosted Q8_0)".to_string())
@@ -99,35 +99,36 @@ fn print_config_show(quiet: bool) -> Result<()> {
     outln!(
         "    device: {}",
         if config.daemon.device.is_some() {
-            start.effective_device(&config).as_str().to_string()
+            config.daemon.effective_device().as_str().to_string()
         } else {
-            format!("(default: {})", start.effective_device(&config).as_str())
+            format!("(default: {})", config.daemon.effective_device().as_str())
         }
     )?;
     outln!(
         "    threads: {}",
-        start
-            .effective_threads(&config)
+        config
+            .daemon
+            .threads
             .map(|t| t.to_string())
             .unwrap_or_else(|| "(default: auto-detected)".to_string())
     )?;
     outln!(
         "    paste_mode: {}",
         if config.daemon.paste_mode.is_some() {
-            start.effective_paste_mode(&config).label().to_string()
+            config.daemon.effective_paste_mode().label().to_string()
         } else {
             "(default: platform)".to_string()
         }
     )?;
     outln!(
         "    keep_transcript_clipboard: {}",
-        start.effective_keep_transcript_clipboard(&config)
+        config.daemon.keep_transcript_clipboard()
     )?;
-    outln!("    sounds: {}", start.effective_sounds_enabled(&config))?;
-    outln!("    verbose: {}", config.daemon.verbose.unwrap_or(false))?;
+    outln!("    sounds: {}", config.daemon.sounds_enabled())?;
+    outln!("    verbose: {}", config.daemon.verbose())?;
     outln!(
         "    model_idle_minutes: {}",
-        start.effective_model_idle_minutes(&config)
+        config.daemon.effective_model_idle_minutes()
     )?;
     outln!(
         "    transcript_history: {}",
@@ -137,17 +138,15 @@ fn print_config_show(quiet: bool) -> Result<()> {
             .map(|n| n.to_string())
             .unwrap_or_else(|| format!(
                 "(default: {})",
-                start.effective_transcript_history(&config)
+                config.daemon.effective_transcript_history()
             ))
     )?;
     outln!("  cleaning:")?;
-    outln!("    enabled: {}", start.effective_cleaning_enabled(&config))?;
-    outln!("    profile: {}", start.effective_cleaning_profile(&config))?;
+    outln!("    enabled: {}", config.cleaning.enabled())?;
+    outln!("    profile: {}", config.cleaning.effective_profile())?;
     outln!(
         "    keep_trailing_period: {}",
-        !start
-            .cleaning_overrides
-            .effective_drops_trailing_period(&config)
+        config.cleaning.keep_trailing_period()
     )?;
     outln!(
         "    number_threshold: {}",

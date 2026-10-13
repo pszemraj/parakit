@@ -10,7 +10,7 @@
 
 use anyhow::{anyhow, Result};
 use regex::Regex;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
 use super::defaults::DEFAULT_RULES;
@@ -23,7 +23,7 @@ use super::defaults::DEFAULT_RULES;
 /// see raw ASR output before any built-in rule touches it, or that must run
 /// after all built-in cleanup (including whitespace/punctuation and sentence
 /// capitalization) has settled.
-#[derive(Debug, Clone, Copy, Default, Eq, PartialEq, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, Eq, PartialEq, clap::ValueEnum, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum RulePosition {
     /// Run before every built-in rule.

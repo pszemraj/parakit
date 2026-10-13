@@ -290,7 +290,7 @@ fn run_daemon(cli: &Cli, start: &StartCli) -> Result<()> {
     log.verbose("parakit: insertion preflight passed");
 
     let ipc_state = Arc::new(daemon::ipc::SharedState::with_history_limit(
-        start.effective_transcript_history(&config),
+        config.daemon.effective_transcript_history(),
     ));
     // Register before the engine so reverse local-drop order releases the
     // native session before this guard on every failed-startup path.

@@ -8,7 +8,6 @@
 //! undocumented, and a documented key cannot outlive its removal.
 
 use super::*;
-use crate::cli::{Cli, StartCli};
 use clap::ValueEnum;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -239,19 +238,11 @@ fn write_fixture(name: &str, contents: &str) -> PathBuf {
 /// Render every effective value of the config, one entry per scalar key,
 /// resolved the way the daemon resolves it with no CLI flags.
 fn effective_snapshot(config: &ConfigFile) -> BTreeMap<&'static str, String> {
-    let start = StartCli::default();
-    let cli = Cli {
-        command: None,
-        quiet: false,
-        verbose: false,
-    };
     let cleaner = parakit::rules::build_enabled_cleaner(
-        start.effective_cleaning_profile(config),
-        start
-            .cleaning_overrides
-            .effective_drops_trailing_period(config),
+        config.cleaning.effective_profile(),
+        !config.cleaning.keep_trailing_period(),
         config.cleaning.number_threshold,
-        &start.cleaning_overrides.effective_disabled_rules(config),
+        &config.cleaning.merged_disabled_rules(&[]),
         &config.rules.user,
     )
     .expect("a loaded config builds a cleaner");
@@ -260,45 +251,31 @@ fn effective_snapshot(config: &ConfigFile) -> BTreeMap<&'static str, String> {
     let mut put = |key: &'static str, value: String| {
         snapshot.insert(key, value);
     };
-    put(
-        "daemon.model",
-        format!("{:?}", start.effective_model(config)),
-    );
+    put("daemon.model", format!("{:?}", config.daemon.model));
     put(
         "daemon.device",
-        format!("{:?}", start.effective_device(config)),
+        format!("{:?}", config.daemon.effective_device()),
     );
-    put(
-        "daemon.threads",
-        format!("{:?}", start.effective_threads(config)),
-    );
+    put("daemon.threads", format!("{:?}", config.daemon.threads));
     put(
         "daemon.model_idle_minutes",
-        start.effective_model_idle_minutes(config).to_string(),
+        config.daemon.effective_model_idle_minutes().to_string(),
     );
     put(
         "daemon.paste_mode",
-        format!("{:?}", start.effective_paste_mode(config)),
+        format!("{:?}", config.daemon.effective_paste_mode()),
     );
     put(
         "daemon.keep_transcript_clipboard",
-        start
-            .effective_keep_transcript_clipboard(config)
-            .to_string(),
+        config.daemon.keep_transcript_clipboard().to_string(),
     );
-    put(
-        "daemon.sounds",
-        start.effective_sounds_enabled(config).to_string(),
-    );
-    put("daemon.verbose", cli.effective_verbose(config).to_string());
+    put("daemon.sounds", config.daemon.sounds_enabled().to_string());
+    put("daemon.verbose", config.daemon.verbose().to_string());
     put(
         "daemon.transcript_history",
-        start.effective_transcript_history(config).to_string(),
+        config.daemon.effective_transcript_history().to_string(),
     );
-    put(
-        "cleaning.enabled",
-        start.effective_cleaning_enabled(config).to_string(),
-    );
+    put("cleaning.enabled", config.cleaning.enabled().to_string());
     put("cleaning.profile", cleaner.profile().to_string());
     put(
         "cleaning.keep_trailing_period",
@@ -310,19 +287,13 @@ fn effective_snapshot(config: &ConfigFile) -> BTreeMap<&'static str, String> {
     );
     put(
         "cleaning.disabled_rules",
-        format!(
-            "{:?}",
-            start.cleaning_overrides.effective_disabled_rules(config)
-        ),
+        format!("{:?}", config.cleaning.merged_disabled_rules(&[])),
     );
-    put(
-        "logging.dir",
-        format!("{:?}", start.effective_log_dir(config)),
-    );
+    put("logging.dir", format!("{:?}", config.logging.dir));
     #[cfg(target_os = "linux")]
     put(
         "hotkey.backend",
-        format!("{:?}", start.effective_hotkey_backend(config)),
+        format!("{:?}", config.hotkey.effective_backend()),
     );
     // Off Linux the key is accepted and never read, so no value can differ.
     #[cfg(not(target_os = "linux"))]
@@ -485,19 +456,10 @@ fn assert_values_listed(key: &str, values: &[String]) {
 fn closed_value_sets_are_fully_enumerated() {
     assert_values_listed("daemon.device", &variant_names::<DeviceMode>());
     assert_values_listed("daemon.paste_mode", &variant_names::<PasteMode>());
-    assert_values_listed(
-        "cleaning.profile",
-        &[CleaningProfile::Safe, CleaningProfile::Aggressive]
-            .map(|profile| profile.as_str().to_owned()),
-    );
+    assert_values_listed("cleaning.profile", &variant_names::<CleaningProfile>());
     assert_values_listed(
         "rules.user[].position",
-        &[
-            parakit::rules::RulePosition::First,
-            parakit::rules::RulePosition::Standard,
-            parakit::rules::RulePosition::Last,
-        ]
-        .map(|position| position.as_str().to_owned()),
+        &variant_names::<parakit::rules::RulePosition>(),
     );
 }
 
