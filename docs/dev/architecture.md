@@ -51,6 +51,8 @@ Live capture drains callback audio through a bounded single-producer/single-cons
 
 Cross-thread communication uses atomics, mutex-protected buffers, and channels.
 
+Normal startup and WAV simulation share resolved idle, logging, paste-mode, and clipboard-retention values through `WorkerSettings`. Mode-specific resources remain explicit in `WorkerCtx`: simulation has a silent notifier, disabled sounds and insertion, and no daemon singleton or control endpoint. Normal startup exposes IPC before cleaner/model initialization; the worker lifetime still follows native-session ownership.
+
 ## Module Map
 
 | Path | Responsibility |
@@ -62,7 +64,7 @@ Cross-thread communication uses atomics, mutex-protected buffers, and channels.
 | `src/daemon/hotkey_help.rs` | Shared user-facing hotkey remediation text. |
 | `src/daemon/recording.rs` | Hotkey transition coordinator, focus snapshot, audio start/stop, and PCM handoff. |
 | `src/daemon/audio/capture.rs`, `src/daemon/audio/capture_{device,drain,stream}.rs` | Capture handle and pre-roll, microphone selection, ring-buffer drain and resampling, and live stream ownership and restart. |
-| `src/daemon/audio/pactl.rs` | Linux `pactl` parsing for startup/reopen microphone display details. |
+| `src/daemon/audio/pactl.rs` | Linux `pactl` queries for default-source identity polling and startup/reopen microphone display details. |
 | `src/daemon/worker.rs` | Worker events, model lifecycle, ASR, cleanup, and completion. |
 | `src/daemon/worker/insertion.rs` | Paste sanitizer, focus guard, clipboard fallback, and insertion reporting. |
 | `src/daemon/{model_lifecycle,engine_runtime}.rs` | Activity admission, session residency, and the shared open/warmup recipe. |
@@ -96,7 +98,9 @@ Any failed required startup or preflight step stops the process. This includes c
 
 Runtime failures are reported and the daemon continues when possible: sound cues, log writes, individual transcriptions, and text insertion failures.
 
-Clipboard snapshots share capture, restoration, and exact payload comparison in `daemon/desktop/clipboard_store.rs`. macOS `doctor --deep` independently reads back clipboard contents after the production transaction and repairs only its own staged sentinel; the production generation guards remain separate.
+`ClipboardSnapshot` in `daemon/desktop/clipboard_store.rs` shares capture, borrowed restoration, and exact payload comparison. Borrowed restoration retains the saved value for cleanup retries. The macOS doctor's independent read-back and repair behavior is described under [deep diagnostics](../macos-desktop.md#doctor---deep); production generation checks remain in `StagedClipboard`.
+
+`PasteReport` describes transaction results and acknowledgement telemetry. `InsertReport` adds worker policy, direct-typing progress, and degraded-outcome diagnostics. Staging uses one `From<StageOutcome>` conversion into paste telemetry; the worker retains separate notifications, history, and alert decisions. The serialized fields and outcome meanings are in [logging](../logging.md#insertion-record-fields).
 
 ## Intentional Duplication
 

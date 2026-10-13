@@ -49,6 +49,8 @@ tccutil reset Microphone com.apple.Terminal
 
 For `direct` mode, only the suppressed key-event tap runs (direct typing never touches the clipboard or `AXValue` acknowledgement, so there is no transaction to open a window and test).
 
+The transaction check uses the production snapshot rules: an empty file list does not hide another supported format, and a real clipboard read error fails the check instead of being treated as unavailable content. It independently reads the clipboard back after restoration and compares the complete saved payload. Failure cleanup retries restoration only while its plain-text sentinel is still current; a newer user payload, including HTML whose text alternative equals the sentinel, is left untouched.
+
 Because stage 2 opens a real window and drives real Accessibility APIs, `doctor --deep` on macOS requires an active GUI login session (not a headless or SSH-only session) with Accessibility already granted to the terminal. The window closes itself automatically once the check completes.
 
 ## Hotkey

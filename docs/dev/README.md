@@ -70,7 +70,7 @@ TODO: Add a Windows PE dependency-walker validation pass for the CPU bundle so r
 
 TODO: Run the full Windows BLAS/thread benchmark matrix for CPU builds, including no BLAS, OpenBLAS with controlled OpenMP ownership, and relevant `--threads` values against the pinned voice-memo smoke file.
 
-TODO: Add native Linux and Windows CI coverage for target-gated desktop transports, input backends, and their tests.
+TODO: Complete native Linux and Windows validation for target-gated desktop transports, input backends, and their tests using the [runtime smoke checks](quality.md#runtime-smoke-checks). CI remains limited to static checks unless its scope and cost are separately agreed.
 
 ## Updating [CrispASR](https://github.com/CrispStrobe/CrispASR)
 

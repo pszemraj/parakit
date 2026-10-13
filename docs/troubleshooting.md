@@ -183,7 +183,7 @@ The build fails, the binary will not start, or the model will not load.
    parakit fetch --force
    ```
 
-   `-m /path/to/model.gguf` overrides `daemon.model`; either custom-model setting disables automatic fetch. `PARAKIT_MODELS_DIR` only relocates the default model cache.
+   `-m /path/to/model.gguf` overrides `daemon.model`; either custom-model setting disables automatic fetch. `PARAKIT_MODELS_DIR` relocates the model cache, including Hub and URL downloads; it does not change an explicit model path.
 
 If that did not fix it, native dependencies are in [build.md#native-dependencies](build.md#native-dependencies), library path rules are in [build.md#runtime-library-paths](build.md#runtime-library-paths), the Windows scripts are in [../scripts/windows/README.md](../scripts/windows/README.md), and cache behavior is in [running.md#model-cache](running.md#model-cache).
 

@@ -1,6 +1,6 @@
 # Native macOS validation, 2026-10-07
 
-This report covers PR #13 on an Apple M5 MacBook Air with 32 GiB unified memory, macOS 26.7 (25G229), and Rust/Cargo 1.98.1. Runtime source is `c71b104`; the CPU memory run used its parent, `b77276f`, before the Metal-only memory probe fix. CrispASR remains at `5f1bb858e803167f1b5fc1eb9a90ffdd1970f7ed`. Upstream later rewrote that commit as `2f8dd068`, the current pin, with identical build inputs.
+This report covers PR #13 on an Apple M5 MacBook Air with 32 GiB unified memory, macOS 26.7 (25G229), and Rust/Cargo 1.98.1. Runtime source is `c71b104`; the CPU memory run used its parent, `b77276f`, before the Metal-only memory probe fix. These runs used CrispASR v0.6.6 at `5f1bb858e803167f1b5fc1eb9a90ffdd1970f7ed`, later rewritten upstream as `2f8dd068` with identical build inputs. The later v0.8.42 results are in [CrispASR macOS validation](crispasr-macos-validation.md).
 
 The daemon was built with `--features metal` in Rust's dev profile. Its native libraries are Release builds with Accelerate, OpenMP, and embedded Metal; `otool` confirmed the bundled libraries and build-directory RPATH. Dedicated worker and daemon runs used eight threads and isolated config, cache/runtime directories, model copy, and Metal pipeline cache. Raw measurements, transcripts, and diagnostics remain ignored under `target/tmp/macos-validation/`; the audio fixtures stay local.
 
