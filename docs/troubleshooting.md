@@ -85,7 +85,7 @@ The transcript is printed or logged but nothing arrives in the focused applicati
    parakit copy-last
    ```
 
-   When the clipboard changes or cannot be read after staging, parakit re-copies the transcript once before a safe paste and keeps it on the clipboard. If held modifiers prevent the paste, it leaves the transcript there for manual insertion. Focus changes still block automatic insertion, and newer copies made after dispatch are preserved. Enabled OS clipboard history is another possible recovery source; on Windows, check `Win+V`. If transcription logging was enabled, its raw/clean text is another recovery source.
+   Check the target before pasting manually, since an unconfirmed paste may have landed. Clipboard retention depends on the [staging outcome](running.md#clipboard-staging-and-restore). Enabled OS clipboard history is another recovery source; on Windows, check `Win+V`. If transcription logging was enabled, recover the raw or cleaned text from the [JSONL records](logging.md#how-to-read-a-dictation).
 
 4. Try a different paste mode against the same target. The default is `terminal` on Linux and `standard` elsewhere.
 
@@ -124,7 +124,7 @@ The target did not provide [paste acknowledgement](macos-desktop.md#insertion). 
 
    If the text lands every time but is still reported unconfirmed, that application does not expose the pasted text through Accessibility in a form parakit can match. Restart the daemon with `parakit start --paste-mode direct` while you work in that application; direct typing never touches the clipboard and never runs the acknowledgement step.
 
-5. If JSONL logging is enabled, `"acknowledgement_kind":"no_evidence"` identifies this case. The outcome is `copied_only` while the staged transcript remains current, or `pasted_unverified` when another application replaced the clipboard. Fields that withhold their value use one of the separate `unverified_*` acknowledgement kinds.
+5. If JSONL logging is enabled, inspect `acknowledgement_kind` and the [insertion outcome](logging.md#insertion-outcomes). `no_evidence` identifies this case; the separate `unverified_*` kinds distinguish unavailable values, baselines, short transcripts, and lost focus.
 
 If the notification never appears at all, follow the macOS notification note in [macos-desktop.md#insertion](macos-desktop.md#insertion). Acknowledgement and clipboard outcomes are described there and in [logging.md#insertion-outcomes](logging.md#insertion-outcomes).
 

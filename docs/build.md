@@ -42,12 +42,6 @@ Linux developer install:
 cargo install --locked --path .
 ```
 
-macOS Apple Silicon install:
-
-```bash
-cargo install --locked --path . --features metal
-```
-
 `cargo install --locked --path .` installs the release binary to Cargo's bin directory, usually `~/.cargo/bin`, using the validated `Cargo.lock` dependency set that supports the declared Rust 1.87 minimum.
 
 Install behavior:
@@ -64,7 +58,7 @@ cargo install --locked --path . --features vulkan
 cargo install --locked --path . --features metal  # Apple targets only
 ```
 
-For Windows bundles, build one accelerator backend at a time. A combined CUDA+Vulkan bundle is rejected by the Windows scripts because it would hard-load both accelerator DLL chains while ggml would choose CUDA first anyway.
+For Windows bundles, use the [backend selector and requirements](../scripts/windows/README.md#backend-requirements).
 
 On macOS, `aarch64-apple-darwin` is the supported target. Build from a native arm64 terminal; an x86_64/Rosetta build may not expose the Metal backend to ggml.
 

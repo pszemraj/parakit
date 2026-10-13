@@ -172,7 +172,7 @@ The audit removes one terminal period by default, matching daemon behavior. Add 
 
 The audit applies built-in rules only. It does not load `config.toml` or `[[rules.user]]`; pass profile, threshold, trailing-period, and disabled-rule choices explicitly. Use `parakit rules test` to validate the currently configured user rules.
 
-Number recognition belongs to `text2num`. Bounded preservation guards may use context word lists and parsed numbers to keep ambiguous, indefinite or fractional quantities unchanged; do not add a second cardinal grammar. Cover both preservation and nearby exact counts in the existing regression matrix. Personal vocabulary belongs in `config.toml` user rules, rather than built-in number guards.
+Number-rule invariants and personal vocabulary handling are in [cleaning rules](../cleaning-rules.md#numbers). Cover both preservation and nearby exact counts in the existing regression matrix.
 
 ## Runtime Smoke Checks
 
