@@ -118,21 +118,17 @@ pub(super) fn run_ptt_audio_simulation(
                 };
                 // Leave a bounded scheduling margin at the exact timeout boundary.
                 let deadline = Instant::now() + Duration::from_secs(2);
-                loop {
-                    if state
+                let ready = daemon::poll_ticks(deadline, Duration::from_millis(10)).any(|()| {
+                    state
                         .model_status()
                         .is_some_and(|status| status.residency == expected)
-                    {
-                        break;
-                    }
-                    if Instant::now() >= deadline {
-                        anyhow::bail!(
-                            "expected model {} after simulated idle, got {:?}",
-                            expected.label(),
-                            state.model_status()
-                        );
-                    }
-                    thread::sleep(Duration::from_millis(10));
+                });
+                if !ready {
+                    anyhow::bail!(
+                        "expected model {} after simulated idle, got {:?}",
+                        expected.label(),
+                        state.model_status()
+                    );
                 }
             }
         }

@@ -126,7 +126,7 @@ fn singleton_lock_blocks_second_holder() {
         crate::test_support::fixture_root("parakit-lock-test", "singleton").join("parakit.lock");
 
     let first =
-        acquire_singleton_lock_at(&path, SINGLETON_START_WAIT).expect("first lock should succeed");
+        acquire_singleton_lock_at(&path, Duration::ZERO).expect("first lock should succeed");
     assert!(singleton_lock_held_at(&path).expect("held lock should be observable"));
     let Err(second) = acquire_singleton_lock_at(&path, SINGLETON_START_WAIT) else {
         panic!("a held daemon lock should reject another owner");

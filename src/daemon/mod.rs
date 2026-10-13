@@ -37,6 +37,33 @@ pub(crate) mod worker_shutdown;
 /// Re-export commonly used desktop helpers for the daemon entrypoint.
 pub(crate) use desktop::{hotkey, inject};
 
+/// Yield an immediate polling attempt, then fixed-interval attempts until the deadline.
+///
+/// The first attempt runs even when the deadline has expired. Later attempts
+/// check the deadline before sleeping, preserving a full interval and one final
+/// probe when that sleep crosses the deadline. Callers own probe/error policy.
+///
+/// # Arguments
+///
+/// * `deadline` - Absolute end of the wait budget, including time spent probing.
+/// * `interval` - Full sleep between unsuccessful attempts.
+///
+/// # Returns
+///
+/// An iterator yielding one unit value per allowed attempt.
+pub(crate) fn poll_ticks(
+    deadline: std::time::Instant,
+    interval: std::time::Duration,
+) -> impl Iterator<Item = ()> {
+    std::iter::once(()).chain(std::iter::from_fn(move || {
+        if std::time::Instant::now() >= deadline {
+            return None;
+        }
+        std::thread::sleep(interval);
+        Some(())
+    }))
+}
+
 #[cfg(target_os = "linux")]
 /// Re-export Linux desktop/session helpers.
 pub(crate) use desktop::{session, wsl};
@@ -47,3 +74,14 @@ pub(crate) use desktop::x11;
 #[cfg(target_os = "windows")]
 /// Re-export Windows desktop integration helpers.
 pub(crate) use desktop::{windows_input, windows_security};
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn expired_poll_deadline_still_allows_one_attempt() {
+        let mut ticks =
+            super::poll_ticks(std::time::Instant::now(), std::time::Duration::from_secs(1));
+        assert_eq!(ticks.next(), Some(()));
+        assert_eq!(ticks.next(), None);
+    }
+}

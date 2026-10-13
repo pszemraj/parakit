@@ -246,15 +246,12 @@ pub(crate) fn wait_for_modifier_release(
     mut modifiers_held: impl FnMut() -> Result<bool>,
 ) -> Result<bool> {
     let deadline = Instant::now() + timeout;
-    loop {
+    for () in crate::daemon::poll_ticks(deadline, Duration::from_millis(15)) {
         if !modifiers_held()? {
             return Ok(true);
         }
-        if Instant::now() >= deadline {
-            return Ok(false);
-        }
-        std::thread::sleep(Duration::from_millis(15));
     }
+    Ok(false)
 }
 
 #[cfg(test)]

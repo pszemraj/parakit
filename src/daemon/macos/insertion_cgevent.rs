@@ -362,15 +362,8 @@ fn release_events(events: &[CGEventRef]) {
 /// the deadline.
 fn wait_for_safe_paste_modifiers_with(timeout: Duration, key_down: impl Fn(u16) -> bool) -> bool {
     let deadline = Instant::now() + timeout;
-    loop {
-        if safe_paste_modifiers_with(&key_down) {
-            return true;
-        }
-        if Instant::now() >= deadline {
-            return false;
-        }
-        thread::sleep(PASTE_MODIFIER_RELEASE_POLL);
-    }
+    crate::daemon::poll_ticks(deadline, PASTE_MODIFIER_RELEASE_POLL)
+        .any(|()| safe_paste_modifiers_with(&key_down))
 }
 
 fn safe_paste_modifiers_with(key_down: impl Fn(u16) -> bool) -> bool {

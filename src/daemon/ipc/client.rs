@@ -129,16 +129,15 @@ fn wait_for_daemon_stop_with_probe(
     deadline: Instant,
     mut lock_held: impl FnMut() -> Result<bool>,
 ) -> Result<()> {
-    while lock_held().context("check daemon shutdown")? {
-        if Instant::now() >= deadline {
-            #[cfg(not(target_os = "windows"))]
-            bail!("daemon stop timed out; if this persists, identify the daemon with `pgrep -af parakit` and end that process");
-            #[cfg(target_os = "windows")]
-            bail!("daemon stop timed out; if this persists, identify the daemon with `Get-Process parakit` and end it with `Stop-Process -Id <PID>`");
+    for () in crate::daemon::poll_ticks(deadline, STOP_LOCK_POLL) {
+        if !lock_held().context("check daemon shutdown")? {
+            return Ok(());
         }
-        thread::sleep(STOP_LOCK_POLL);
     }
-    Ok(())
+    #[cfg(not(target_os = "windows"))]
+    bail!("daemon stop timed out; if this persists, identify the daemon with `pgrep -af parakit` and end that process");
+    #[cfg(target_os = "windows")]
+    bail!("daemon stop timed out; if this persists, identify the daemon with `Get-Process parakit` and end it with `Stop-Process -Id <PID>`");
 }
 
 #[cfg(any(unix, target_os = "windows"))]
