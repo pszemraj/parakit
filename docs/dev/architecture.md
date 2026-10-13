@@ -51,7 +51,7 @@ Live capture drains callback audio through a bounded single-producer/single-cons
 
 Cross-thread communication uses atomics, mutex-protected buffers, and channels.
 
-Normal startup and WAV simulation share resolved idle, logging, paste-mode, and clipboard-retention values through `WorkerSettings`. Mode-specific resources remain explicit in `WorkerCtx`: simulation has a silent notifier, disabled sounds and insertion, and no daemon singleton or control endpoint. Normal startup exposes IPC before cleaner/model initialization; the worker lifetime still follows native-session ownership.
+Configuration sections provide built-in fallbacks; CLI resolvers apply overrides. Normal startup and WAV simulation share resolved idle, logging, paste-mode, and clipboard-retention values through `WorkerSettings`. The banner borrows the `DaemonInfo` stored for IPC status. Mode-specific resources remain explicit in `WorkerCtx`: simulation has a silent notifier, disabled sounds and insertion, and no daemon singleton or control endpoint. Normal startup exposes IPC before cleaner/model initialization; the worker lifetime still follows native-session ownership.
 
 ## Module Map
 
@@ -85,7 +85,7 @@ Normal startup and WAV simulation share resolved idle, logging, paste-mode, and 
 | `src/rules/` | Transcript cleanup pipeline: profiles, the built-in rule table, procedural passes, and user rules from `config.toml`. |
 | `src/daemon/desktop/{inject,focus_snapshot,clipboard_store,paste_transaction,clipboard_guard,x11_paste,direct,clipboard_restore}.rs` | Insertion contract and injector, focus snapshots, clipboard backend and snapshots, the guarded paste transaction and change detection, X11/XTest paste chord, guarded direct insertion, and restore timing. |
 | `src/data_log.rs` | JSONL transcription and insertion-outcome logging. |
-| `src/audio_file.rs` | WAV decoding, mono mixing, and file resampling for quality tools and PTT simulation. |
+| `src/audio_file.rs` | WAV decoding and mono mixing; target-rate resampler construction shared by files and live capture. |
 | `examples/transcribe_file.rs` | Raw file-based inference smoke and quality checks. |
 | `examples/audit_cleaning.rs` | Built-in cleaner replay over historical JSONL logs. |
 | `scripts/transcribe_nemo_parakeet.py` | NeMo reference transcription helper. |
@@ -113,5 +113,5 @@ The similar implementations below stay separate because their invariants differ.
 - `rules/engine.rs` `RuleKind::engine` vs `CompiledTransform::engine`: a three-arm match on a definition type vs a compiled type; a shared trait costs more than the duplication.
 - `fetch::FetchSource::HubRepo` stores a joined `owner/repo` string that `fetch/hub.rs` re-splits: the joined form is the display format, and the defensive re-split guards public construction of the enum.
 - `gguf.rs` `COMMON_DTYPE_NAMES` is shared across the `general.file_type` and tensor-type code spaces on purpose; verified against the vendored `ggml/include/ggml.h` and commented at the site.
-- X11 `X11KeySink` vs Windows `InputSender` test seams: the same injectable design pattern over incompatible OS APIs; only one side compiles per target.
+- X11 `X11KeySink` vs Windows `InputSender` test seams: native sending, modifier guards, and flushes use incompatible OS APIs. Chord generation and accepted-prefix key release tracking share pure helpers in `daemon/desktop/mod.rs`.
 - Capture rejection tests use separate live-channel scaffolding to control drop timing. Precedence tests return unrelated types, and fetch/paste tests exercise different entry points. Keep their individual cases explicit rather than introducing a shared expectation type or generic test framework.
