@@ -265,17 +265,14 @@ mod tests {
             std::process::exit(0);
         }
 
-        let status = std::process::Command::new(std::env::current_exe().unwrap())
-            .args([
-                "--exact",
-                "daemon::logging::tests::closed_terminal_does_not_stop_runtime_logging",
-                "--nocapture",
-                "--quiet",
-            ])
-            .env(CHILD, "1")
-            .output()
-            .unwrap()
-            .status;
+        let status = crate::test_support::exact_test_command(
+            "daemon::logging::tests::closed_terminal_does_not_stop_runtime_logging",
+        )
+        .arg("--quiet")
+        .env(CHILD, "1")
+        .output()
+        .unwrap()
+        .status;
         assert!(status.success(), "closed-terminal worker exited: {status}");
     }
 }

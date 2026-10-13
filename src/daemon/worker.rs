@@ -564,18 +564,72 @@ mod tests {
     struct FakeEngine {
         transcriptions: Arc<AtomicUsize>,
         drops: Arc<AtomicUsize>,
+        transcript: &'static str,
     }
 
     impl WorkerEngine for FakeEngine {
         fn transcribe(&self, _pcm: &[f32]) -> Result<String> {
             self.transcriptions.fetch_add(1, Ordering::SeqCst);
-            Ok("reloaded dictation".to_string())
+            Ok(self.transcript.to_string())
         }
     }
 
     impl Drop for FakeEngine {
         fn drop(&mut self) {
             self.drops.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    fn test_worker_ctx(
+        engine: FakeEngine,
+        state: &Arc<SharedState>,
+        sounds: Sounds,
+        rx: Receiver<WorkerEvent>,
+        model_idle_minutes: u64,
+    ) -> WorkerCtx<FakeEngine> {
+        let log = Arc::new(Logger::new(super::super::logging::LogLevel::Quiet));
+        WorkerCtx {
+            engine,
+            recipe: EngineRecipe {
+                model_path: std::path::PathBuf::new(),
+                threads: 1,
+                device_mode: parakit::inference::DeviceMode::Cpu,
+                verbose: false,
+            },
+            settings: WorkerSettings {
+                model_idle_minutes,
+                data_log: None,
+                paste_mode: PasteMode::Standard,
+                keep_transcript_clipboard: false,
+            },
+            cleaner: None,
+            sounds,
+            notifier: Notifier::silent(Arc::clone(&log)),
+            log,
+            state: Arc::clone(state),
+            insert_transcripts: false,
+            rx,
+            lifetime: state.shutdown.register(),
+        }
+    }
+
+    fn next_cue(cues: &Receiver<Cue>) -> Cue {
+        cues.recv_timeout(Duration::from_secs(1)).unwrap()
+    }
+
+    fn stopped_capture(
+        now: Instant,
+        pcm: Vec<f32>,
+        activity: Option<ActivityGuard>,
+        completion: Sender<Result<(), String>>,
+    ) -> WorkerEvent {
+        WorkerEvent::Stopped {
+            started_at: now,
+            stopped_at: now,
+            pcm,
+            focus_at_start: None,
+            activity,
+            completion: Some(completion),
         }
     }
 
@@ -602,17 +656,6 @@ mod tests {
         assert!(!capture_should_skip(&[0.01; 16]));
     }
 
-    struct BlankEngine {
-        transcriptions: Arc<AtomicUsize>,
-    }
-
-    impl WorkerEngine for BlankEngine {
-        fn transcribe(&self, _pcm: &[f32]) -> Result<String> {
-            self.transcriptions.fetch_add(1, Ordering::SeqCst);
-            Ok(" ".to_string())
-        }
-    }
-
     #[test]
     fn worker_plays_error_cue_when_no_speech_is_detected() {
         // Silence stops at the gate; audible noise reaches inference and comes
@@ -620,61 +663,34 @@ mod tests {
         for (pcm, inferred) in [(vec![0.0; 160], 0), (vec![0.01; 16], 1)] {
             let state = Arc::new(SharedState::with_history_limit(2));
             state.activity.ready();
-            let log = Arc::new(Logger::new(super::super::logging::LogLevel::Quiet));
-            let notifier = Notifier::silent(Arc::clone(&log));
             let (tx, rx) = crossbeam_channel::bounded(WORKER_QUEUE_CAPACITY);
             let (sounds, cues) = Sounds::test_channel();
             let transcriptions = Arc::new(AtomicUsize::new(0));
-            let ctx = WorkerCtx {
-                engine: BlankEngine {
+            let ctx = test_worker_ctx(
+                FakeEngine {
                     transcriptions: Arc::clone(&transcriptions),
+                    drops: Arc::new(AtomicUsize::new(0)),
+                    transcript: " ",
                 },
-                recipe: EngineRecipe {
-                    model_path: std::path::PathBuf::new(),
-                    threads: 1,
-                    device_mode: parakit::inference::DeviceMode::Cpu,
-                    verbose: false,
-                },
-                settings: WorkerSettings {
-                    model_idle_minutes: 0,
-                    data_log: None,
-                    paste_mode: PasteMode::Standard,
-                    keep_transcript_clipboard: false,
-                },
-                cleaner: None,
+                &state,
                 sounds,
-                log,
-                notifier,
-                state: Arc::clone(&state),
-                insert_transcripts: false,
                 rx,
-                lifetime: state.shutdown.register(),
-            };
+                0,
+            );
             let worker = std::thread::spawn(move || {
-                worker_loop_with(ctx, None, || -> Result<BlankEngine> {
+                worker_loop_with(ctx, None, || -> Result<FakeEngine> {
                     anyhow::bail!("resident model must not reload")
                 });
             });
 
             let now = Instant::now();
             let (done_tx, done_rx) = crossbeam_channel::bounded(1);
-            tx.send(WorkerEvent::Stopped {
-                started_at: now,
-                stopped_at: now,
-                pcm,
-                focus_at_start: None,
-                activity: None,
-                completion: Some(done_tx),
-            })
-            .unwrap();
+            tx.send(stopped_capture(now, pcm, None, done_tx)).unwrap();
             assert_eq!(
                 done_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
                 Err("dictation produced no transcript".to_string())
             );
-            assert!(matches!(
-                cues.recv_timeout(Duration::from_secs(1)).unwrap(),
-                Cue::Error
-            ));
+            assert!(matches!(next_cue(&cues), Cue::Error));
             drop(tx);
             worker.join().unwrap();
             assert!(cues.try_recv().is_err());
@@ -726,8 +742,6 @@ mod tests {
     fn exercise_blocked_reload(case: ReloadCase) {
         let state = Arc::new(SharedState::with_history_limit(2));
         state.activity.ready();
-        let log = Arc::new(Logger::new(super::super::logging::LogLevel::Quiet));
-        let notifier = Notifier::silent(Arc::clone(&log));
         let (tx, rx) = crossbeam_channel::bounded(WORKER_QUEUE_CAPACITY);
         let reloads = Arc::new(AtomicUsize::new(0));
         let transcriptions = Arc::new(AtomicUsize::new(0));
@@ -736,13 +750,20 @@ mod tests {
         let loader_reloads = Arc::clone(&reloads);
         let loader_transcriptions = Arc::clone(&transcriptions);
         let loader_drops = Arc::clone(&drops);
-        let initial_transcriptions = Arc::clone(&transcriptions);
-        let initial_drops = Arc::clone(&drops);
-        let worker_state = Arc::clone(&state);
-        let lifetime = state.shutdown.register();
         let (load_started_tx, load_started_rx) = crossbeam_channel::bounded(1);
         let (load_release_tx, load_release_rx) = crossbeam_channel::bounded(1);
         let (sounds, cues) = Sounds::test_channel();
+        let ctx = test_worker_ctx(
+            FakeEngine {
+                transcriptions: Arc::clone(&transcriptions),
+                drops: Arc::clone(&drops),
+                transcript: "reloaded dictation",
+            },
+            &state,
+            sounds,
+            rx,
+            1,
+        );
 
         let worker = std::thread::spawn(move || {
             let load = move || {
@@ -763,33 +784,8 @@ mod tests {
                 Ok(FakeEngine {
                     transcriptions: Arc::clone(&loader_transcriptions),
                     drops: Arc::clone(&loader_drops),
+                    transcript: "reloaded dictation",
                 })
-            };
-            let ctx = WorkerCtx {
-                engine: FakeEngine {
-                    transcriptions: initial_transcriptions,
-                    drops: initial_drops,
-                },
-                recipe: EngineRecipe {
-                    model_path: std::path::PathBuf::new(),
-                    threads: 1,
-                    device_mode: parakit::inference::DeviceMode::Cpu,
-                    verbose: false,
-                },
-                settings: WorkerSettings {
-                    model_idle_minutes: 1,
-                    data_log: None,
-                    paste_mode: PasteMode::Standard,
-                    keep_transcript_clipboard: false,
-                },
-                cleaner: None,
-                sounds,
-                log,
-                notifier,
-                state: worker_state,
-                insert_transcripts: false,
-                rx,
-                lifetime,
             };
             worker_loop_with(ctx, Some(Duration::from_millis(10)), load);
         });
@@ -813,22 +809,12 @@ mod tests {
         load_started_rx
             .recv_timeout(Duration::from_secs(1))
             .unwrap();
-        assert!(matches!(
-            cues.recv_timeout(Duration::from_secs(1)).unwrap(),
-            Cue::Reload
-        ));
+        assert!(matches!(next_cue(&cues), Cue::Reload));
         assert!(
             cues.try_recv().is_err(),
             "must not announce readiness during reload"
         );
-        let stopped = WorkerEvent::Stopped {
-            started_at: now,
-            stopped_at: now,
-            pcm: vec![0.01; 16],
-            focus_at_start: None,
-            activity: Some(recording),
-            completion: Some(completion_tx),
-        };
+        let stopped = stopped_capture(now, vec![0.01; 16], Some(recording), completion_tx);
         // The released capture remains queued; a held capture stops only after
         // readiness is heard below.
         let held_capture = if matches!(
@@ -851,17 +837,11 @@ mod tests {
         load_release_tx.send(()).unwrap();
         if let Some(stopped) = held_capture {
             if case == ReloadCase::Held {
-                assert!(matches!(
-                    cues.recv_timeout(Duration::from_secs(1)).unwrap(),
-                    Cue::Start(_)
-                ));
+                assert!(matches!(next_cue(&cues), Cue::Start(_)));
             } else {
                 wait_for_state(&state, Residency::Offloaded);
                 assert_eq!(reloads.load(Ordering::SeqCst), 1);
-                assert!(matches!(
-                    cues.recv_timeout(Duration::from_secs(1)).unwrap(),
-                    Cue::Error
-                ));
+                assert!(matches!(next_cue(&cues), Cue::Error));
                 assert!(
                     cues.try_recv().is_err(),
                     "failure must not announce readiness"
@@ -870,10 +850,7 @@ mod tests {
             capture_active.store(false, Ordering::Release);
             tx.send(stopped).unwrap();
         } else if case == ReloadCase::ReleasedRecovered {
-            assert!(matches!(
-                cues.recv_timeout(Duration::from_secs(1)).unwrap(),
-                Cue::Error
-            ));
+            assert!(matches!(next_cue(&cues), Cue::Error));
         }
         assert_eq!(
             completion_before_reload,
@@ -929,19 +906,13 @@ mod tests {
                 Residency::Offloaded
             );
             assert!(state.resolve_transcript(0).is_err());
-            assert!(matches!(
-                cues.recv_timeout(Duration::from_secs(1)).unwrap(),
-                Cue::Error
-            ));
+            assert!(matches!(next_cue(&cues), Cue::Error));
         } else {
             assert_eq!(completion, Ok(()));
             assert_eq!(transcriptions.load(Ordering::SeqCst), 1);
             assert_eq!(state.model_status().unwrap().residency, Residency::Loaded);
             assert_eq!(state.resolve_transcript(0).unwrap(), "reloaded dictation");
-            assert!(matches!(
-                cues.recv_timeout(Duration::from_secs(1)).unwrap(),
-                Cue::Success
-            ));
+            assert!(matches!(next_cue(&cues), Cue::Success));
         }
         assert!(state.resolve_transcript(1).is_err());
 
@@ -952,29 +923,21 @@ mod tests {
                 recording: Arc::clone(&next),
             })
             .unwrap();
-            assert!(matches!(
-                cues.recv_timeout(Duration::from_secs(1)).unwrap(),
-                Cue::Start(_)
-            ));
+            assert!(matches!(next_cue(&cues), Cue::Start(_)));
             next.store(false, Ordering::Release);
             let (done_tx, done_rx) = crossbeam_channel::bounded(1);
-            tx.send(WorkerEvent::Stopped {
-                started_at: now,
-                stopped_at: now,
-                pcm: vec![0.01; 16],
-                focus_at_start: None,
-                activity: Some(state.activity.begin()),
-                completion: Some(done_tx),
-            })
+            tx.send(stopped_capture(
+                now,
+                vec![0.01; 16],
+                Some(state.activity.begin()),
+                done_tx,
+            ))
             .unwrap();
             assert_eq!(
                 done_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
                 Ok(())
             );
-            assert!(matches!(
-                cues.recv_timeout(Duration::from_secs(1)).unwrap(),
-                Cue::Success
-            ));
+            assert!(matches!(next_cue(&cues), Cue::Success));
             assert_eq!(reloads.load(Ordering::SeqCst), 1);
             assert_eq!(transcriptions.load(Ordering::SeqCst), 2);
         }
