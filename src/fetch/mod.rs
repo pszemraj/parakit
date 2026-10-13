@@ -150,11 +150,7 @@ fn run_hosted_q8(options: &FetchOptions, endpoint: &str, token: Option<&str>) ->
     let paths = FetchPaths::new_prepared()?;
     let url = net::rewrite_pinned_url(HOSTED_Q8_URL, endpoint);
 
-    if !options.force && paths.q8.is_file() {
-        options.verbose_status(format_args!(
-            "parakit: using cached model: {}",
-            paths.q8.display()
-        ));
+    if !options.force && use_cached_download(options, &paths.q8, None)? {
         return Ok(paths.q8);
     }
 
@@ -261,10 +257,10 @@ fn url_cache_dir(models_dir: &Path, url: &str) -> PathBuf {
     models_dir.join("url").join(key)
 }
 
-/// Use a cached `hub/…`/`url/…` download when the destination exists and, when
+/// Use a cached model download when the destination exists and, when
 /// the user supplied one, its SHA256 matches `expected_sha`.
 ///
-/// Shared by [`run_url`] and `hub::run_hub_repo`.
+/// Shared by hosted, direct-URL, and Hugging Face repo downloads.
 ///
 /// # Arguments
 ///
