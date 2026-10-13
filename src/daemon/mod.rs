@@ -72,11 +72,35 @@ pub(crate) use desktop::{session, wsl};
 pub(crate) use desktop::x11;
 
 #[cfg(target_os = "windows")]
+/// Encode a Windows string or path with its terminating NUL.
+///
+/// # Arguments
+///
+/// * `text` - Native Windows text, including paths with unpaired surrogates.
+///
+/// # Returns
+///
+/// The original UTF-16 code units followed by one NUL code unit.
+pub(crate) fn encode_wide_null(text: impl AsRef<std::ffi::OsStr>) -> Vec<u16> {
+    use std::os::windows::ffi::OsStrExt;
+    text.as_ref().encode_wide().chain(Some(0)).collect()
+}
+
+#[cfg(target_os = "windows")]
 /// Re-export Windows desktop integration helpers.
 pub(crate) use desktop::{windows_input, windows_security};
 
 #[cfg(test)]
 mod tests {
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_path_encoding_preserves_unpaired_surrogates() {
+        use std::os::windows::ffi::OsStringExt;
+        let path = std::ffi::OsString::from_wide(&[0xd800]);
+        assert_eq!(super::encode_wide_null(path), [0xd800, 0]);
+        assert_eq!(super::encode_wide_null("a"), [97, 0]);
+    }
+
     #[test]
     fn expired_poll_deadline_still_allows_one_attempt() {
         let mut ticks =

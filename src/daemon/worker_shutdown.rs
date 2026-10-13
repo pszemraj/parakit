@@ -153,12 +153,11 @@ mod tests {
     fn forced_worker_exit_skips_dll_teardown() {
         const CHILD: &str = "PARAKIT_FORCED_EXIT_TEST_CHILD";
         if let Some(mode) = std::env::var_os(CHILD) {
-            use std::os::windows::ffi::OsStrExt;
             use windows::core::PCWSTR;
             use windows::Win32::System::LibraryLoader::LoadLibraryW;
 
             let dll = std::env::var_os("PARAKIT_DETACH_DLL").unwrap();
-            let wide: Vec<u16> = dll.encode_wide().chain(Some(0)).collect();
+            let wide = crate::daemon::encode_wide_null(&dll);
             // Keep the probe loaded until process termination.
             unsafe { LoadLibraryW(PCWSTR(wide.as_ptr())).unwrap() };
             let shutdown = WorkerShutdown::default();

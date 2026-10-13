@@ -1,12 +1,13 @@
 //! Windows named-pipe transport for the daemon control protocol.
 
 use super::*;
+use crate::daemon::encode_wide_null;
 use std::{
     ffi::c_void,
     ptr::{null, null_mut},
 };
 use windows::core::PCWSTR;
-use windows::Win32::Foundation::{CloseHandle, HANDLE};
+use windows::Win32::Foundation::{CloseHandle, LocalFree, HANDLE, HLOCAL};
 
 const PIPE_BUFFER_SIZE: u32 = 64 * 1024;
 const IPC_CLIENT_TIMEOUT_MS: u32 = 750;
@@ -90,7 +91,6 @@ unsafe extern "system" {
         bytes_transferred: *mut u32,
         wait: i32,
     ) -> i32;
-    fn LocalFree(mem: *mut c_void) -> *mut c_void;
     fn ReadFile(
         file: HANDLE,
         buffer: *mut c_void,
@@ -657,7 +657,7 @@ impl Drop for PipeSecurity {
     fn drop(&mut self) {
         if !self.descriptor.is_null() {
             unsafe {
-                let _ = LocalFree(self.descriptor);
+                let _ = LocalFree(Some(HLOCAL(self.descriptor)));
             }
         }
     }
@@ -673,10 +673,6 @@ impl Drop for PipeHandle {
             let _ = CloseHandle(self.0);
         }
     }
-}
-
-fn encode_wide_null(text: &str) -> Vec<u16> {
-    text.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
 fn invalid_handle() -> HANDLE {

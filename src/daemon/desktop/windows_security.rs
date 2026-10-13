@@ -3,15 +3,14 @@
 #![cfg(target_os = "windows")]
 
 use std::{
-    ffi::c_void,
     mem::{size_of, MaybeUninit},
     ptr::null_mut,
 };
-use windows::Win32::Foundation::{CloseHandle, HANDLE};
+use windows::Win32::Foundation::{CloseHandle, LocalFree, HANDLE, HLOCAL};
 use windows::Win32::Security::{
     GetSidSubAuthority, GetSidSubAuthorityCount, GetTokenInformation, TokenElevation,
-    TokenIntegrityLevel, TokenUser, PSID, TOKEN_ELEVATION, TOKEN_MANDATORY_LABEL, TOKEN_QUERY,
-    TOKEN_USER,
+    TokenIntegrityLevel, TokenUser, PSID, TOKEN_ELEVATION, TOKEN_INFORMATION_CLASS,
+    TOKEN_MANDATORY_LABEL, TOKEN_QUERY, TOKEN_USER,
 };
 use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
@@ -22,11 +21,6 @@ const SECURITY_MANDATORY_SYSTEM_RID: u32 = 0x0000_4000;
 #[link(name = "advapi32")]
 unsafe extern "system" {
     fn ConvertSidToStringSidW(sid: PSID, string_sid: *mut *mut u16) -> i32;
-}
-
-#[link(name = "kernel32")]
-unsafe extern "system" {
-    fn LocalFree(mem: *mut c_void) -> *mut c_void;
 }
 
 /// Best-effort process privilege report for doctor output.
@@ -90,25 +84,29 @@ impl TokenHandle {
         Some(elevation.TokenIsElevated != 0)
     }
 
-    fn integrity_label(&self) -> Option<String> {
+    fn query_info<T>(&self, class: TOKEN_INFORMATION_CLASS) -> Option<(Vec<MaybeUninit<T>>, u32)> {
         let mut needed = 0_u32;
-        let _ = unsafe { GetTokenInformation(self.0, TokenIntegrityLevel, None, 0, &mut needed) };
+        let _ = unsafe { GetTokenInformation(self.0, class, None, 0, &mut needed) };
         if needed == 0 {
             return None;
         }
 
-        let mut buf = token_info_storage::<TOKEN_MANDATORY_LABEL>(needed)?;
+        let mut buf = token_info_storage::<T>(needed)?;
         unsafe {
             GetTokenInformation(
                 self.0,
-                TokenIntegrityLevel,
+                class,
                 Some(buf.as_mut_ptr() as *mut _),
                 needed,
                 &mut needed,
             )
         }
         .ok()?;
+        Some((buf, needed))
+    }
 
+    fn integrity_label(&self) -> Option<String> {
+        let (buf, needed) = self.query_info::<TOKEN_MANDATORY_LABEL>(TokenIntegrityLevel)?;
         let label = token_info_head::<TOKEN_MANDATORY_LABEL>(&buf, needed)?;
         let count = unsafe { GetSidSubAuthorityCount(label.Label.Sid) };
         if count.is_null() || unsafe { *count } == 0 {
@@ -123,24 +121,7 @@ impl TokenHandle {
     }
 
     fn user_sid_string(&self) -> Option<String> {
-        let mut needed = 0_u32;
-        let _ = unsafe { GetTokenInformation(self.0, TokenUser, None, 0, &mut needed) };
-        if needed == 0 {
-            return None;
-        }
-
-        let mut buf = token_info_storage::<TOKEN_USER>(needed)?;
-        unsafe {
-            GetTokenInformation(
-                self.0,
-                TokenUser,
-                Some(buf.as_mut_ptr() as *mut _),
-                needed,
-                &mut needed,
-            )
-        }
-        .ok()?;
-
+        let (buf, needed) = self.query_info::<TOKEN_USER>(TokenUser)?;
         let user = token_info_head::<TOKEN_USER>(&buf, needed)?;
         let mut sid = null_mut::<u16>();
         if unsafe { ConvertSidToStringSidW(user.User.Sid, &mut sid) } == 0 || sid.is_null() {
@@ -148,7 +129,7 @@ impl TokenHandle {
         }
         let result = unsafe { wide_ptr_to_string(sid) };
         unsafe {
-            let _ = LocalFree(sid as *mut c_void);
+            let _ = LocalFree(Some(HLOCAL(sid.cast())));
         }
         result
     }
