@@ -326,7 +326,7 @@ fn run_daemon(cli: &Cli, start: &StartCli) -> Result<()> {
     } = open_cli_engine(start, &config, verbose, cli.quiet, &log)?;
     let model_dtype = model_dtype_label(&model_path);
 
-    // Banner.
+    // Resolve startup metadata once for the banner and IPC status.
     let model_name = model_file_name(&model_path);
     let cleaning_summary = match cleaner.as_deref() {
         Some(c) => format!(
@@ -341,50 +341,39 @@ fn run_daemon(cli: &Cli, start: &StartCli) -> Result<()> {
         ),
         None => "off".to_string(),
     };
-    let backend_label = engine.backend().to_string();
-    let engine_threads = engine.threads();
+    #[cfg(target_os = "linux")]
+    let hotkey_backend_label = Some(hotkey_backend.label());
+    #[cfg(not(target_os = "linux"))]
+    let hotkey_backend_label = None;
+    let daemon_info = daemon::ipc::DaemonInfo {
+        pid: std::process::id(),
+        model_name,
+        dtype: model_dtype,
+        mic_summary: mic_info.summary(),
+        backend: engine.backend().to_string(),
+        device: device_summary,
+        threads: engine.threads(),
+        paste_mode: paste_mode.label(),
+        cleaning_summary,
+        sounds_on: sounds_enabled,
+        log_summary,
+        hotkey_backend_label,
+    };
     log.banner(BannerInfo {
-        model_name: &model_name,
+        daemon: &daemon_info,
         model_path: &model_path,
-        dtype: &model_dtype,
         mic: &mic_info,
-        cleaning: cleaning_summary.clone(),
-        sounds: if sounds_enabled { "on" } else { "off" },
-        transcription_logging: log_summary.clone().unwrap_or_else(|| "off".to_string()),
         insertion: format!(
             "batch paste ({}, {})",
-            paste_mode.label(),
+            daemon_info.paste_mode,
             if keep_transcript_clipboard {
                 "keep transcript clipboard"
             } else {
                 "restore clipboard"
             }
         ),
-        threads: engine_threads,
-        backend: backend_label.clone(),
-        device: device_summary.clone(),
     });
-
-    // Status detail: mirrors the banner fields above so `parakit --verbose
-    // status` can report the same effective values without re-deriving them.
-    #[cfg(target_os = "linux")]
-    let hotkey_backend_label = Some(hotkey_backend.label());
-    #[cfg(not(target_os = "linux"))]
-    let hotkey_backend_label = None;
-    ipc_state.set_info(daemon::ipc::DaemonInfo {
-        pid: std::process::id(),
-        model_name,
-        dtype: model_dtype,
-        mic_summary: mic_info.summary(),
-        backend: backend_label,
-        device: device_summary,
-        threads: engine_threads,
-        paste_mode: paste_mode.label(),
-        cleaning_summary,
-        sounds_on: sounds_enabled,
-        log_summary,
-        hotkey_backend_label,
-    });
+    ipc_state.set_info(daemon_info);
 
     // Worker thread takes exclusive ownership of `engine`. `crispasr::Session`
     // is `Send` but not `Sync`, which is fine: only one thread ever calls

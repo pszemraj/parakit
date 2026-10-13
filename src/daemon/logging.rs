@@ -10,7 +10,7 @@ use std::io::Write as _;
 use std::path::Path;
 use std::time::Duration;
 
-use crate::daemon::{audio::MicInfo, hotkey};
+use crate::daemon::{audio::MicInfo, hotkey, ipc::DaemonInfo};
 
 /// Runtime logging level selected by CLI flags.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -91,25 +91,30 @@ impl Logger {
         }
 
         let _ = writeln!(anstream::stdout(), "{}", paint("parakit", AnsiColor::Cyan));
-        let _ = writeln!(anstream::stdout(), "  model: {}", info.model_name);
-        let _ = writeln!(anstream::stdout(), "  dtype: {}", info.dtype);
-        let _ = writeln!(anstream::stdout(), "  mic:   {}", info.mic.summary());
+        let daemon = info.daemon;
+        let _ = writeln!(anstream::stdout(), "  model: {}", daemon.model_name);
+        let _ = writeln!(anstream::stdout(), "  dtype: {}", daemon.dtype);
+        let _ = writeln!(anstream::stdout(), "  mic:   {}", daemon.mic_summary);
         if self.is_verbose() {
             for line in info.mic.detail_lines() {
                 let _ = writeln!(anstream::stdout(), "  audio: {line}");
             }
             let _ = writeln!(anstream::stdout(), "  path:  {}", info.model_path.display());
-            let _ = writeln!(anstream::stdout(), "  rules: {}", info.cleaning);
-            let _ = writeln!(anstream::stdout(), "  sounds: {}", info.sounds);
+            let _ = writeln!(anstream::stdout(), "  rules: {}", daemon.cleaning_summary);
+            let _ = writeln!(
+                anstream::stdout(),
+                "  sounds: {}",
+                if daemon.sounds_on { "on" } else { "off" }
+            );
             let _ = writeln!(
                 anstream::stdout(),
                 "  logging: {}",
-                info.transcription_logging
+                daemon.log_summary.as_deref().unwrap_or("off")
             );
             let _ = writeln!(anstream::stdout(), "  insert: {}", info.insertion);
-            let _ = writeln!(anstream::stdout(), "  threads: {}", info.threads);
-            let _ = writeln!(anstream::stdout(), "  backend: {}", info.backend);
-            let _ = writeln!(anstream::stdout(), "  device: {}", info.device);
+            let _ = writeln!(anstream::stdout(), "  threads: {}", daemon.threads);
+            let _ = writeln!(anstream::stdout(), "  backend: {}", daemon.backend);
+            let _ = writeln!(anstream::stdout(), "  device: {}", daemon.device);
             let _ = writeln!(anstream::stdout(), "  build:");
             for line in build_info::diagnostic_lines() {
                 let _ = writeln!(anstream::stdout(), "    {line}");
@@ -181,28 +186,14 @@ impl Logger {
 
 /// Startup fields rendered by [`Logger::banner`].
 pub(crate) struct BannerInfo<'a> {
-    /// Model file name.
-    pub(crate) model_name: &'a str,
+    /// Effective daemon metadata also exposed through IPC status.
+    pub(crate) daemon: &'a DaemonInfo,
     /// Full model path for verbose output.
     pub(crate) model_path: &'a Path,
-    /// Dtype and size label.
-    pub(crate) dtype: &'a str,
     /// Selected microphone.
     pub(crate) mic: &'a MicInfo,
-    /// Cleaning state label.
-    pub(crate) cleaning: String,
-    /// Sounds state label.
-    pub(crate) sounds: &'a str,
-    /// Transcription logging state.
-    pub(crate) transcription_logging: String,
     /// Text insertion state.
     pub(crate) insertion: String,
-    /// Inference thread count.
-    pub(crate) threads: usize,
-    /// CrispASR backend label.
-    pub(crate) backend: String,
-    /// Requested runtime compute device.
-    pub(crate) device: String,
 }
 
 fn timestamp() -> String {
@@ -233,6 +224,20 @@ mod tests {
                     resampling: false,
                     config_note: None,
                 };
+                let daemon = DaemonInfo {
+                    pid: std::process::id(),
+                    model_name: "test.gguf".into(),
+                    dtype: "Q8_0".into(),
+                    mic_summary: mic.summary(),
+                    cleaning_summary: "off".into(),
+                    sounds_on: false,
+                    log_summary: None,
+                    threads: 1,
+                    backend: "test".into(),
+                    device: "cpu".into(),
+                    paste_mode: "standard",
+                    hotkey_backend_label: None,
+                };
                 for level in [LogLevel::Quiet, LogLevel::Normal, LogLevel::Verbose] {
                     let log = Logger::new(level);
                     log.warn("focus changed before insertion");
@@ -240,17 +245,10 @@ mod tests {
                     log.line("continuing dictation");
                     log.verbose("diagnostic");
                     log.banner(BannerInfo {
-                        model_name: "test.gguf",
+                        daemon: &daemon,
                         model_path: Path::new("target/tmp/test.gguf"),
-                        dtype: "Q8_0",
                         mic: &mic,
-                        cleaning: "off".into(),
-                        sounds: "off",
-                        transcription_logging: "off".into(),
                         insertion: "off".into(),
-                        threads: 1,
-                        backend: "test".into(),
-                        device: "cpu".into(),
                     });
                     log.ready();
                     log.mic_changed(&mic);
