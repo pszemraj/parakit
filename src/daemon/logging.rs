@@ -58,7 +58,11 @@ impl Logger {
     /// Print a verbose diagnostic line with an ISO timestamp.
     pub(crate) fn verbose(&self, msg: impl Display) {
         if self.is_verbose() {
-            let _ = writeln!(anstream::stdout(), "{} {msg}", style_dim(timestamp()));
+            let _ = writeln!(
+                anstream::stdout(),
+                "{} {msg}",
+                paint(timestamp(), AnsiColor::BrightBlack)
+            );
         }
     }
 
@@ -67,7 +71,7 @@ impl Logger {
         let _ = writeln!(
             anstream::stderr(),
             "{} {msg}",
-            style_warn("parakit: warning:")
+            paint("parakit: warning:", AnsiColor::Yellow)
         );
     }
 
@@ -76,7 +80,7 @@ impl Logger {
         let _ = writeln!(
             anstream::stderr(),
             "{} {msg}",
-            style_error("parakit: error:")
+            paint("parakit: error:", AnsiColor::Red)
         );
     }
 
@@ -86,7 +90,7 @@ impl Logger {
             return;
         }
 
-        let _ = writeln!(anstream::stdout(), "{}", style_title("parakit"));
+        let _ = writeln!(anstream::stdout(), "{}", paint("parakit", AnsiColor::Cyan));
         let _ = writeln!(anstream::stdout(), "  model: {}", info.model_name);
         let _ = writeln!(anstream::stdout(), "  dtype: {}", info.dtype);
         let _ = writeln!(anstream::stdout(), "  mic:   {}", info.mic.summary());
@@ -154,29 +158,24 @@ impl Logger {
         }
 
         let infer_ms = infer.as_secs_f32() * 1000.0;
-        if raw == cleaned {
-            let _ = writeln!(
-                anstream::stdout(),
-                "{} {}  {}",
-                style_clean("Clean:"),
-                style_clean_text(cleaned),
-                style_dim(format!("({infer_ms:.0}ms)"))
-            );
+        let spacing = if raw == cleaned {
+            " "
         } else {
             let _ = writeln!(
                 anstream::stdout(),
                 "{}    {}",
-                style_raw("Raw:"),
-                style_raw_text(raw)
+                paint("Raw:", AnsiColor::Yellow),
+                paint(raw, AnsiColor::BrightYellow)
             );
-            let _ = writeln!(
-                anstream::stdout(),
-                "{}  {}  {}",
-                style_clean("Clean:"),
-                style_clean_text(cleaned),
-                style_dim(format!("({infer_ms:.0}ms)"))
-            );
-        }
+            "  "
+        };
+        let _ = writeln!(
+            anstream::stdout(),
+            "{}{spacing}{}  {}",
+            paint("Clean:", AnsiColor::Green),
+            paint(cleaned, AnsiColor::BrightGreen),
+            paint(format!("({infer_ms:.0}ms)"), AnsiColor::BrightBlack)
+        );
     }
 }
 
@@ -210,49 +209,9 @@ fn timestamp() -> String {
     Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)
 }
 
-fn paint(text: impl Display, style: Style) -> String {
+fn paint(text: impl Display, color: AnsiColor) -> String {
+    let style = Style::new().fg_color(Some(color.into()));
     format!("{}{}{}", style.render(), text, style.render_reset())
-}
-
-fn style_title(text: impl Display) -> String {
-    paint(text, Style::new().fg_color(Some(AnsiColor::Cyan.into())))
-}
-
-fn style_raw(text: impl Display) -> String {
-    paint(text, Style::new().fg_color(Some(AnsiColor::Yellow.into())))
-}
-
-fn style_clean(text: impl Display) -> String {
-    paint(text, Style::new().fg_color(Some(AnsiColor::Green.into())))
-}
-
-fn style_raw_text(text: impl Display) -> String {
-    paint(
-        text,
-        Style::new().fg_color(Some(AnsiColor::BrightYellow.into())),
-    )
-}
-
-fn style_clean_text(text: impl Display) -> String {
-    paint(
-        text,
-        Style::new().fg_color(Some(AnsiColor::BrightGreen.into())),
-    )
-}
-
-fn style_warn(text: impl Display) -> String {
-    paint(text, Style::new().fg_color(Some(AnsiColor::Yellow.into())))
-}
-
-fn style_error(text: impl Display) -> String {
-    paint(text, Style::new().fg_color(Some(AnsiColor::Red.into())))
-}
-
-fn style_dim(text: impl Display) -> String {
-    paint(
-        text,
-        Style::new().fg_color(Some(AnsiColor::BrightBlack.into())),
-    )
 }
 
 #[cfg(all(test, target_os = "linux"))]
