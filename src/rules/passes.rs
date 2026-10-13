@@ -8,9 +8,7 @@
 //! consecutive words, or tracking sentence-boundary state across the whole
 //! input).
 
-use regex::Regex;
 use std::fmt::Write as _;
-use std::sync::OnceLock;
 use text2num::{text2digits, Language};
 
 use super::engine::TransformResult;
@@ -33,10 +31,10 @@ use super::engine::TransformResult;
 /// Does not panic in practice. The regex is a compile-time literal, and
 /// capture zero always exists for each item from `captures_iter`.
 pub(crate) fn normalize_apostrophe_cause(input: &str) -> TransformResult {
-    static CAUSE: OnceLock<Regex> = OnceLock::new();
-    let re = CAUSE.get_or_init(|| {
-        Regex::new(r#"(?i)['\u{2019}]cause\b"#).expect("apostrophe-cause regex must compile")
-    });
+    let re = regex_static!(
+        r#"(?i)['\u{2019}]cause\b"#,
+        "apostrophe-cause regex must compile"
+    );
 
     let replacements = re
         .captures_iter(input)
@@ -81,10 +79,7 @@ pub(crate) fn normalize_apostrophe_cause(input: &str) -> TransformResult {
 /// Byte-range slicing uses offsets returned by this same regex's matches on
 /// `input`, which are always valid UTF-8 boundaries of `input`.
 pub(crate) fn normalize_spaced_acronyms(input: &str) -> TransformResult {
-    static RUN: OnceLock<Regex> = OnceLock::new();
-    let re = RUN.get_or_init(|| {
-        Regex::new(r"\b[A-Z](?: [A-Z])+\b").expect("spaced acronym regex must compile")
-    });
+    let re = regex_static!(r"\b[A-Z](?: [A-Z])+\b", "spaced acronym regex must compile");
 
     let replacements: Vec<(usize, usize, String)> = re
         .find_iter(input)
@@ -135,10 +130,7 @@ struct WordSpan {
 /// Slicing uses offsets returned by this same regex's matches on `input`,
 /// which are always valid UTF-8 boundaries of `input`.
 pub(crate) fn normalize_spoken_versions(input: &str) -> TransformResult {
-    static WORD: OnceLock<Regex> = OnceLock::new();
-    let word_re = WORD.get_or_init(|| {
-        Regex::new(r"[A-Za-z]+(?:-[A-Za-z]+)*").expect("word span regex must compile")
-    });
+    let word_re = regex_static!(r"[A-Za-z]+(?:-[A-Za-z]+)*", "word span regex must compile");
     let words: Vec<WordSpan> = word_re
         .find_iter(input)
         .map(|found| WordSpan {
@@ -287,8 +279,7 @@ fn render_number_component(phrase: &str) -> Option<String> {
 }
 
 fn canonicalize_number_aliases(input: &str) -> String {
-    static OH: OnceLock<Regex> = OnceLock::new();
-    let re = OH.get_or_init(|| Regex::new(r"(?i)\boh\b").expect("oh alias regex must compile"));
+    let re = regex_static!(r"(?i)\boh\b", "oh alias regex must compile");
     re.replace_all(input, "zero").into_owned()
 }
 
@@ -322,11 +313,10 @@ fn canonicalize_number_aliases(input: &str) -> String {
 /// uses offsets returned by this same regex's matches on `text`, which are
 /// always valid UTF-8 boundaries of `text`.
 pub(crate) fn normalize_numeric_point_suffixes(input: &str) -> TransformResult {
-    static POINT_SUFFIX: OnceLock<Regex> = OnceLock::new();
-    let re = POINT_SUFFIX.get_or_init(|| {
-        Regex::new(r"(?i)(\d+(?:\.\d+)*)[ \t]+point[ \t]+([A-Za-z]+(?:-[A-Za-z]+)?)\b")
-            .expect("numeric point suffix regex must compile")
-    });
+    let re = regex_static!(
+        r"(?i)(\d+(?:\.\d+)*)[ \t]+point[ \t]+([A-Za-z]+(?:-[A-Za-z]+)?)\b",
+        "numeric point suffix regex must compile"
+    );
 
     let mut text = input.to_string();
     let mut total_matches = 0;
@@ -398,11 +388,10 @@ pub(crate) fn normalize_numeric_point_suffixes(input: &str) -> TransformResult {
 /// Slicing uses offsets returned by this same regex's matches on `input`,
 /// which are always valid UTF-8 boundaries of `input`.
 pub(crate) fn normalize_numeric_identifier_groups(input: &str) -> TransformResult {
-    static GROUPS: OnceLock<Regex> = OnceLock::new();
-    let re = GROUPS.get_or_init(|| {
-        Regex::new(r"\b[A-Z][A-Z0-9]*\b(?:[ \t]+\d{1,2}){2,}\b")
-            .expect("numeric identifier group regex must compile")
-    });
+    let re = regex_static!(
+        r"\b[A-Z][A-Z0-9]*\b(?:[ \t]+\d{1,2}){2,}\b",
+        "numeric identifier group regex must compile"
+    );
 
     let mut replacements = Vec::new();
     for found in re.find_iter(input) {
@@ -457,11 +446,10 @@ pub(crate) fn normalize_numeric_identifier_groups(input: &str) -> TransformResul
 /// Slicing uses offsets returned by this same regex's matches on `input`,
 /// which are always valid UTF-8 boundaries of `input`.
 pub(crate) fn normalize_magnitude_suffixes(input: &str) -> TransformResult {
-    static MAGNITUDE: OnceLock<Regex> = OnceLock::new();
-    let re = MAGNITUDE.get_or_init(|| {
-        Regex::new(r"\b\d+(?:\.\d+)?(?:[ \t]+\d+)*[ \t]+[KMB]\b")
-            .expect("numeric magnitude regex must compile")
-    });
+    let re = regex_static!(
+        r"\b\d+(?:\.\d+)?(?:[ \t]+\d+)*[ \t]+[KMB]\b",
+        "numeric magnitude regex must compile"
+    );
 
     let replacements: Vec<(usize, usize, String)> = re
         .find_iter(input)
@@ -501,20 +489,18 @@ pub(crate) fn normalize_magnitude_suffixes(input: &str) -> TransformResult {
 /// Does not panic in practice. Both regexes are fixed patterns validated when
 /// first used, and every capture read below is required by its pattern.
 pub(crate) fn normalize_parameter_counts(input: &str) -> TransformResult {
-    static DIRECT_COUNT: OnceLock<Regex> = OnceLock::new();
-    static RANGE_COUNT: OnceLock<Regex> = OnceLock::new();
     const COUNT: &str = r"(?:\d+(?:\.\d+)?[ \t]+(?:thousand|million|billion)|\d{4,})";
 
-    let direct = DIRECT_COUNT.get_or_init(|| {
-        Regex::new(&format!(r"(?i)\b({COUNT})(?:[ \t-]+)parameters?\b"))
-            .expect("direct parameter-count regex must compile")
-    });
-    let range = RANGE_COUNT.get_or_init(|| {
-        Regex::new(&format!(
+    let direct = regex_static!(
+        &format!(r"(?i)\b({COUNT})(?:[ \t-]+)parameters?\b"),
+        "direct parameter-count regex must compile"
+    );
+    let range = regex_static!(
+        &format!(
             r"(?i)\b({COUNT})[ \t]+(?:up[ \t]+to|to|through|and)[ \t]+(?:maybe[ \t]+|about[ \t]+|roughly[ \t]+)?{COUNT}(?:[ \t-]+)parameters?\b"
-        ))
-        .expect("parameter-count range regex must compile")
-    });
+        ),
+        "parameter-count range regex must compile"
+    );
 
     let mut replacements: Vec<_> = direct
         .captures_iter(input)

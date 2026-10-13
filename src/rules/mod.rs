@@ -40,6 +40,14 @@ use std::fmt;
 use std::fmt::Write as _;
 use std::str::FromStr;
 
+// Each call site owns its cache; pattern expressions run only on first use.
+macro_rules! regex_static {
+    ($pattern:expr, $error:literal $(,)?) => {{
+        static RE: ::std::sync::OnceLock<::regex::Regex> = ::std::sync::OnceLock::new();
+        RE.get_or_init(|| ::regex::Regex::new($pattern).expect($error))
+    }};
+}
+
 mod defaults;
 mod engine;
 mod numbers;
