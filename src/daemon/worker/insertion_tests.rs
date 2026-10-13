@@ -452,6 +452,17 @@ fn paste_completion_sends_outcome_notifications() {
             true,
         ),
         (
+            PasteOutcome::UnsafeModifiers,
+            false,
+            "not_applicable",
+            InsertOutcome::CopiedOnly,
+            Some((
+                "Transcript copied",
+                PasteBlockReason::UnsafeModifiers.notice(),
+            )),
+            false,
+        ),
+        (
             PasteOutcome::Blocked,
             false,
             "not_applicable",
@@ -496,6 +507,66 @@ fn paste_completion_sends_outcome_notifications() {
             assert_eq!(actual.summary, summary, "{outcome:?}");
             assert_eq!(actual.body, body, "{outcome:?}");
         }
+        assert!(matches!(
+            messages.try_recv(),
+            Err(std::sync::mpsc::TryRecvError::Empty)
+        ));
+    }
+}
+
+#[test]
+fn staging_completion_preserves_telemetry_diagnostics_and_notifications() {
+    use crate::daemon::inject::StageOutcome;
+
+    let reason = PasteBlockReason::FocusChangedBeforeInsertion;
+    for (stage, outcome, restored, diagnostic, summary, body) in [
+        (
+            StageOutcome::CopiedOnly,
+            InsertOutcome::CopiedOnly,
+            Some(false),
+            None,
+            "Transcript copied",
+            reason.notice(),
+        ),
+        (
+            StageOutcome::Blocked,
+            InsertOutcome::Blocked,
+            Some(true),
+            None,
+            "Paste blocked",
+            reason.notice(),
+        ),
+        (
+            StageOutcome::ClipboardChanged(None),
+            InsertOutcome::Blocked,
+            None,
+            None,
+            "Paste blocked",
+            PasteBlockReason::ClipboardChanged.notice(),
+        ),
+        (
+            StageOutcome::ClipboardChanged(Some("clipboard unavailable".to_string())),
+            InsertOutcome::Blocked,
+            None,
+            Some("clipboard unavailable"),
+            "Paste blocked",
+            PasteBlockReason::ClipboardChanged.notice(),
+        ),
+    ] {
+        let log = Arc::new(Logger::new(LogLevel::Quiet));
+        let (notifier, messages) = Notifier::test_channel(Arc::clone(&log));
+        let report = finish_staging(stage, reason, &log, &notifier);
+        assert_eq!(report.outcome, outcome);
+        assert_eq!(
+            report.telemetry,
+            InsertionTelemetry::not_applicable(false, restored)
+        );
+        assert_eq!(report.failure_reason.as_deref(), diagnostic);
+        assert_eq!(report.typed_chars, None);
+        assert_eq!(report.needs_alert(), outcome == InsertOutcome::Blocked);
+        let notice = messages.try_recv().expect("staging notification");
+        assert_eq!(notice.summary, summary);
+        assert_eq!(notice.body, body);
         assert!(matches!(
             messages.try_recv(),
             Err(std::sync::mpsc::TryRecvError::Empty)

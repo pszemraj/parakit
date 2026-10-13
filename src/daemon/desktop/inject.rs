@@ -234,6 +234,17 @@ pub(crate) enum StageOutcome {
     ClipboardChanged(Option<String>),
 }
 
+/// Preserve staging's clipboard disposition without claiming a paste event.
+impl From<StageOutcome> for PasteReport {
+    fn from(outcome: StageOutcome) -> Self {
+        match outcome {
+            StageOutcome::CopiedOnly => Self::new(PasteOutcome::CopiedOnly, false, Some(false)),
+            StageOutcome::Blocked => Self::new(PasteOutcome::Blocked, false, Some(true)),
+            StageOutcome::ClipboardChanged(diagnostic) => Self::clipboard_changed(diagnostic),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum PasteDispatch {
     Posted,

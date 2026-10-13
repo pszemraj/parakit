@@ -13,24 +13,6 @@ use crate::daemon::desktop::clipboard_restore::{
 use anyhow::{Context, Result};
 use std::time::Duration;
 
-/// Convert a completed clipboard-staging outcome into a [`PasteReport`].
-///
-/// Staging never sends a paste chord. [`StageOutcome::CopiedOnly`] means the
-/// transcript was intentionally left on the clipboard (no restore);
-/// [`StageOutcome::Blocked`] means the previous clipboard contents were
-/// restored.
-///
-/// # Returns
-///
-/// A report that mirrors the staging result and records no posted paste event.
-pub(super) fn report_from_stage_outcome(outcome: StageOutcome) -> PasteReport {
-    match outcome {
-        StageOutcome::CopiedOnly => PasteReport::new(PasteOutcome::CopiedOnly, false, Some(false)),
-        StageOutcome::Blocked => PasteReport::new(PasteOutcome::Blocked, false, Some(true)),
-        StageOutcome::ClipboardChanged(diagnostic) => PasteReport::clipboard_changed(diagnostic),
-    }
-}
-
 /// Stage the transcript, recheck focus, send the paste chord, and restore the
 /// previous clipboard per policy.
 ///
@@ -88,7 +70,7 @@ where
         Ok(true) => {}
         Ok(false) => {
             return stage_text_without_paste(clipboard, text, restore_plan, clipboard_policy)
-                .map(report_from_stage_outcome);
+                .map(PasteReport::from);
         }
         Err(err) => return Err(err),
     }
@@ -319,20 +301,16 @@ where
     );
 
     match confirmation {
-        PasteConfirmation::Confirmed { elapsed, kind } => {
+        PasteConfirmation::Confirmed { elapsed, kind }
+        | PasteConfirmation::Unverified { elapsed, kind } => {
             let (clipboard_restored, diagnostic) =
                 clipboard_restored_after_paste(clipboard, previous, clipboard_policy);
             PasteReport {
-                outcome: PasteOutcome::Pasted,
-                telemetry: InsertionTelemetry::acknowledged(kind, elapsed, clipboard_restored),
-                diagnostic,
-            }
-        }
-        PasteConfirmation::Unverified { elapsed, kind } => {
-            let (clipboard_restored, diagnostic) =
-                clipboard_restored_after_paste(clipboard, previous, clipboard_policy);
-            PasteReport {
-                outcome: PasteOutcome::PastedUnverified,
+                outcome: if matches!(confirmation, PasteConfirmation::Confirmed { .. }) {
+                    PasteOutcome::Pasted
+                } else {
+                    PasteOutcome::PastedUnverified
+                },
                 telemetry: InsertionTelemetry::acknowledged(kind, elapsed, clipboard_restored),
                 diagnostic,
             }

@@ -369,18 +369,22 @@ fn finish_paste(
             InsertOutcome::Blocked
         }
         PasteOutcome::ClipboardChanged => {
-            if let Some(diagnostic) = report.diagnostic.as_deref() {
-                log.warn(format!(
-                    "clipboard could not be verified ({diagnostic}); current clipboard preserved"
-                ));
-            } else {
-                log.warn("clipboard changed; current clipboard preserved");
-            }
+            log_clipboard_changed(log, report.diagnostic.as_deref());
             notifier.paste_blocked(PasteBlockReason::ClipboardChanged.notice());
             InsertOutcome::Blocked
         }
     };
     InsertReport::from_paste(outcome, report)
+}
+
+fn log_clipboard_changed(log: &Logger, diagnostic: Option<&str>) {
+    if let Some(diagnostic) = diagnostic {
+        log.warn(format!(
+            "clipboard could not be verified ({diagnostic}); current clipboard preserved"
+        ));
+    } else {
+        log.warn("clipboard changed; current clipboard preserved");
+    }
 }
 
 /// Report secondary clipboard details only in verbose output after delivery.
@@ -452,10 +456,10 @@ fn finish_staging(
     log: &Logger,
     notifier: &Notifier,
 ) -> InsertReport {
-    match outcome {
+    let worker_outcome = match &outcome {
         crate::daemon::inject::StageOutcome::CopiedOnly => {
             notifier.transcript_copied(reason.notice());
-            InsertReport::from_stage(InsertOutcome::CopiedOnly, false)
+            InsertOutcome::CopiedOnly
         }
         crate::daemon::inject::StageOutcome::Blocked => {
             log.verbose(format!(
@@ -463,22 +467,15 @@ fn finish_staging(
                 reason.log_tag()
             ));
             notifier.paste_blocked(reason.notice());
-            InsertReport::from_stage(InsertOutcome::Blocked, true)
+            InsertOutcome::Blocked
         }
         crate::daemon::inject::StageOutcome::ClipboardChanged(diagnostic) => {
-            if let Some(diagnostic) = diagnostic.as_deref() {
-                log.warn(format!(
-                    "clipboard could not be verified ({diagnostic}); current clipboard preserved"
-                ));
-            } else {
-                log.warn("clipboard changed; current clipboard preserved");
-            }
+            log_clipboard_changed(log, diagnostic.as_deref());
             notifier.paste_blocked(PasteBlockReason::ClipboardChanged.notice());
-            let mut report = InsertReport::placeholder(InsertOutcome::Blocked, false);
-            report.failure_reason = diagnostic;
-            report
+            InsertOutcome::Blocked
         }
-    }
+    };
+    InsertReport::from_paste(worker_outcome, outcome.into())
 }
 
 fn with_injector<R>(
@@ -799,17 +796,6 @@ impl InsertReport {
             telemetry: report.telemetry,
             typed_chars: None,
             failure_reason: report.diagnostic,
-        }
-    }
-
-    /// Build a report for a clipboard-staging-only path (no paste chord
-    /// sent), with a known clipboard-restore outcome.
-    fn from_stage(outcome: InsertOutcome, clipboard_restored: bool) -> Self {
-        Self {
-            outcome,
-            telemetry: InsertionTelemetry::not_applicable(false, Some(clipboard_restored)),
-            typed_chars: None,
-            failure_reason: None,
         }
     }
 
