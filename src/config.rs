@@ -349,11 +349,8 @@ pub(crate) fn config_path() -> Result<PathBuf> {
 /// Keeping the environment read at the public boundary lets tests exercise
 /// override precedence without mutating process-global environment state.
 fn config_path_with_override(override_path: Option<std::ffi::OsString>) -> Result<PathBuf> {
-    if let Some(raw) = override_path {
-        if raw.is_empty() {
-            anyhow::bail!("{CONFIG_PATH_ENV} is set but empty");
-        }
-        return Ok(PathBuf::from(raw));
+    if let Some(path) = parakit::model::non_empty_env_path(CONFIG_PATH_ENV, override_path)? {
+        return Ok(path);
     }
 
     #[cfg(target_os = "windows")]
