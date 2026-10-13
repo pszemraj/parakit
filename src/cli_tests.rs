@@ -29,7 +29,7 @@ fn bare_start_parses_to_default_start_cli() {
         Some(Commands::Start(start)) => {
             assert_eq!(start.model, None);
             assert!(!start.no_cleaning);
-            assert!(start.disable_rule.is_empty());
+            assert!(start.cleaning_overrides.disable_rule.is_empty());
         }
         other => panic!("expected Commands::Start, got {other:?}"),
     }
@@ -299,7 +299,11 @@ fn bool_flag_pairs_override_config_in_both_directions() {
             set_config_for_effective: |config, value| {
                 config.cleaning.keep_trailing_period = Some(!value)
             },
-            effective: StartCli::effective_drops_trailing_period,
+            effective: |start, config| {
+                start
+                    .cleaning_overrides
+                    .effective_drops_trailing_period(config)
+            },
         },
         BoolFlagPairCase {
             label: "keep_transcript_clipboard",
@@ -428,7 +432,7 @@ fn effective_disabled_rules_merges_cli_and_config_without_duplicates() {
         "--disable-rule",
         "lead-discourse-comma",
     ]);
-    let mut merged = start.effective_disabled_rules(&config);
+    let mut merged = start.cleaning_overrides.effective_disabled_rules(&config);
     merged.sort();
     let mut expected = vec![
         "filled-pauses".to_string(),

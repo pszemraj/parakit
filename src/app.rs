@@ -186,8 +186,9 @@ fn run_rules_command(cli: &Cli, rules_cli: &RulesCli) -> Result<()> {
         RulesCommand::List(args) => {
             rules::print_rule_list(
                 args.effective_cleaning_profile(&config),
-                args.effective_drops_trailing_period(&config),
-                &args.effective_disabled_rules(&config),
+                args.cleaning_overrides
+                    .effective_drops_trailing_period(&config),
+                &args.cleaning_overrides.effective_disabled_rules(&config),
                 &config.rules.user,
                 cli.quiet,
             )?;
@@ -603,9 +604,11 @@ fn build_cli_cleaner(start: &StartCli, config: &ConfigFile) -> Result<Option<rul
     rules::build_cleaner(
         !start.effective_cleaning_enabled(config),
         start.effective_cleaning_profile(config),
-        start.effective_drops_trailing_period(config),
+        start
+            .cleaning_overrides
+            .effective_drops_trailing_period(config),
         config.cleaning.number_threshold,
-        &start.effective_disabled_rules(config),
+        &start.cleaning_overrides.effective_disabled_rules(config),
         &config.rules.user,
     )
 }
@@ -617,9 +620,10 @@ fn build_cli_cleaner(start: &StartCli, config: &ConfigFile) -> Result<Option<rul
 fn build_rules_cleaner(args: &RulesArgs, config: &ConfigFile) -> Result<rules::Cleaner> {
     rules::build_enabled_cleaner(
         args.effective_cleaning_profile(config),
-        args.effective_drops_trailing_period(config),
+        args.cleaning_overrides
+            .effective_drops_trailing_period(config),
         config.cleaning.number_threshold,
-        &args.effective_disabled_rules(config),
+        &args.cleaning_overrides.effective_disabled_rules(config),
         &config.rules.user,
     )
 }

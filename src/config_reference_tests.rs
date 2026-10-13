@@ -247,9 +247,11 @@ fn effective_snapshot(config: &ConfigFile) -> BTreeMap<&'static str, String> {
     };
     let cleaner = parakit::rules::build_enabled_cleaner(
         start.effective_cleaning_profile(config),
-        start.effective_drops_trailing_period(config),
+        start
+            .cleaning_overrides
+            .effective_drops_trailing_period(config),
         config.cleaning.number_threshold,
-        &start.effective_disabled_rules(config),
+        &start.cleaning_overrides.effective_disabled_rules(config),
         &config.rules.user,
     )
     .expect("a loaded config builds a cleaner");
@@ -308,7 +310,10 @@ fn effective_snapshot(config: &ConfigFile) -> BTreeMap<&'static str, String> {
     );
     put(
         "cleaning.disabled_rules",
-        format!("{:?}", start.effective_disabled_rules(config)),
+        format!(
+            "{:?}",
+            start.cleaning_overrides.effective_disabled_rules(config)
+        ),
     );
     put(
         "logging.dir",

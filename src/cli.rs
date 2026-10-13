@@ -151,21 +151,9 @@ pub(crate) struct StartCli {
     #[arg(long, value_name = "PROFILE", value_parser = clap::value_parser!(CleaningProfile))]
     pub(crate) cleaning_profile: Option<CleaningProfile>,
 
-    /// Keep the single terminal period that messaging-style cleanup removes by
-    /// default. Overrides a configured `cleaning.keep_trailing_period = false`;
-    /// conflicts with `--no-keep-trailing-period`.
-    #[arg(long, conflicts_with = "no_keep_trailing_period")]
-    pub(crate) keep_trailing_period: bool,
-
-    /// Drop the single terminal period even when configured to keep it.
-    /// Overrides a configured `cleaning.keep_trailing_period = true`;
-    /// conflicts with `--keep-trailing-period`.
-    #[arg(long, conflicts_with = "keep_trailing_period")]
-    pub(crate) no_keep_trailing_period: bool,
-
-    /// Disable a specific rule by name. Repeatable: `--disable-rule a --disable-rule b`.
-    #[arg(long, value_name = "NAME")]
-    pub(crate) disable_rule: Vec<String>,
+    /// Cleaning overrides shared with the `rules` subcommands.
+    #[command(flatten)]
+    pub(crate) cleaning_overrides: CleaningOverrides,
 
     /// Linux hotkey backend. `auto` registers Ctrl+Space with the X11 session.
     /// Defaults to `config.toml`'s `hotkey.backend`, then `auto`.
@@ -319,32 +307,6 @@ impl StartCli {
         resolve_cleaning_profile(self.cleaning_profile, config)
     }
 
-    /// Return whether cleanup should drop one terminal period: explicit
-    /// `--keep-trailing-period` forces it kept (`false`), explicit
-    /// `--no-keep-trailing-period` forces it dropped (`true`); with neither
-    /// flag, falls back to the inverse of config
-    /// `cleaning.keep_trailing_period` (default kept `false`, i.e. dropped by
-    /// default). The two flags conflict with each other, so at most one
-    /// applies per invocation.
-    ///
-    /// Dropping the period is the default because parakit is used mostly for
-    /// messaging-style dictation, where a trailing period reads as terse.
-    ///
-    /// # Arguments
-    ///
-    /// * `config` - Loaded configuration file values.
-    ///
-    /// # Returns
-    ///
-    /// `true` when the terminal-period pass should be enabled.
-    pub(crate) fn effective_drops_trailing_period(&self, config: &ConfigFile) -> bool {
-        resolve_drops_trailing_period(
-            self.keep_trailing_period,
-            self.no_keep_trailing_period,
-            config,
-        )
-    }
-
     /// Return whether the transcript should stay on the clipboard after
     /// paste: explicit `--keep-transcript-clipboard` forces `true`, explicit
     /// `--no-keep-transcript-clipboard` forces `false`; with neither flag,
@@ -375,16 +337,6 @@ impl StartCli {
             .daemon
             .transcript_history
             .unwrap_or(DEFAULT_TRANSCRIPT_HISTORY)
-    }
-
-    /// Return the union of CLI `--disable-rule` names and config
-    /// `cleaning.disabled_rules`, without duplicates.
-    ///
-    /// # Returns
-    ///
-    /// The merged list of rule names to disable.
-    pub(crate) fn effective_disabled_rules(&self, config: &ConfigFile) -> Vec<String> {
-        resolve_disabled_rules(&self.disable_rule, config)
     }
 }
 
@@ -618,8 +570,8 @@ pub(crate) enum RulesCommand {
 }
 
 /// Options shared by `rules list` and `rules test`, resolved the same way as
-/// their `start` counterparts (see [`resolve_cleaning_profile`],
-/// [`resolve_drops_trailing_period`], and [`resolve_disabled_rules`]).
+/// their `start` counterparts (see [`resolve_cleaning_profile`] and
+/// [`CleaningOverrides`]).
 ///
 /// No `--cleaning`/`--no-cleaning` here: testing or listing rules with
 /// cleaning off is meaningless.
@@ -631,10 +583,14 @@ pub(crate) struct RulesArgs {
     #[arg(long, value_name = "PROFILE", value_parser = clap::value_parser!(CleaningProfile))]
     pub(crate) profile: Option<CleaningProfile>,
 
-    /// Disable a specific rule by name. Repeatable: `--disable-rule a --disable-rule b`.
-    #[arg(long, value_name = "NAME")]
-    pub(crate) disable_rule: Vec<String>,
+    /// Cleaning overrides shared with `start`.
+    #[command(flatten)]
+    pub(crate) cleaning_overrides: CleaningOverrides,
+}
 
+/// Common rule-disable and terminal-period flags for `start` and `rules`.
+#[derive(Args, Debug, Default)]
+pub(crate) struct CleaningOverrides {
     /// Keep the single terminal period that messaging-style cleanup removes by
     /// default. Overrides a configured `cleaning.keep_trailing_period = false`;
     /// conflicts with `--no-keep-trailing-period`.
@@ -646,6 +602,10 @@ pub(crate) struct RulesArgs {
     /// conflicts with `--keep-trailing-period`.
     #[arg(long, conflicts_with = "keep_trailing_period")]
     pub(crate) no_keep_trailing_period: bool,
+
+    /// Disable a specific rule by name. Repeatable: `--disable-rule a --disable-rule b`.
+    #[arg(long, value_name = "NAME")]
+    pub(crate) disable_rule: Vec<String>,
 }
 
 impl RulesArgs {
@@ -659,31 +619,38 @@ impl RulesArgs {
     pub(crate) fn effective_cleaning_profile(&self, config: &ConfigFile) -> CleaningProfile {
         resolve_cleaning_profile(self.profile, config)
     }
+}
 
-    /// Return whether cleanup should drop one terminal period. See
-    /// [`StartCli::effective_drops_trailing_period`] for the shared
-    /// precedence.
+impl CleaningOverrides {
+    /// Resolve terminal-period cleanup: an explicit keep/drop flag wins,
+    /// otherwise use the inverse of `cleaning.keep_trailing_period`.
+    /// The default drops the period for messaging-style dictation.
     ///
     /// # Returns
     ///
     /// `true` when the terminal-period pass should be enabled.
     pub(crate) fn effective_drops_trailing_period(&self, config: &ConfigFile) -> bool {
-        resolve_drops_trailing_period(
-            self.keep_trailing_period,
+        resolve_bool_override(
             self.no_keep_trailing_period,
-            config,
+            self.keep_trailing_period,
+            !config.cleaning.keep_trailing_period.unwrap_or(false),
         )
     }
 
     /// Return the union of CLI `--disable-rule` names and config
-    /// `cleaning.disabled_rules`, without duplicates. See
-    /// [`StartCli::effective_disabled_rules`] for the shared precedence.
+    /// `cleaning.disabled_rules`, without duplicates.
     ///
     /// # Returns
     ///
     /// The merged list of rule names to disable.
     pub(crate) fn effective_disabled_rules(&self, config: &ConfigFile) -> Vec<String> {
-        resolve_disabled_rules(&self.disable_rule, config)
+        let mut merged = self.disable_rule.clone();
+        for name in &config.cleaning.disabled_rules {
+            if !merged.contains(name) {
+                merged.push(name.clone());
+            }
+        }
+        merged
     }
 }
 
@@ -747,28 +714,6 @@ fn resolve_cleaning_profile(
         .unwrap_or(CleaningProfile::Safe)
 }
 
-/// Shared trailing-period precedence: explicit `--keep-trailing-period`
-/// forces it kept (`false`), explicit `--no-keep-trailing-period` forces it
-/// dropped (`true`); with neither flag, falls back to the inverse of config
-/// `cleaning.keep_trailing_period` (default kept `false`, i.e. dropped by
-/// default). Used by [`StartCli`] and [`RulesArgs`] so the two surfaces
-/// cannot drift apart.
-///
-/// # Returns
-///
-/// `true` when the terminal-period pass should be enabled.
-fn resolve_drops_trailing_period(
-    keep_trailing_period: bool,
-    no_keep_trailing_period: bool,
-    config: &ConfigFile,
-) -> bool {
-    resolve_bool_override(
-        no_keep_trailing_period,
-        keep_trailing_period,
-        !config.cleaning.keep_trailing_period.unwrap_or(false),
-    )
-}
-
 /// Resolve one mutually exclusive positive/negative CLI flag pair.
 ///
 /// # Arguments
@@ -788,23 +733,6 @@ const fn resolve_bool_override(force_true: bool, force_false: bool, fallback: bo
     } else {
         fallback
     }
-}
-
-/// Shared disabled-rules precedence: the union of CLI `--disable-rule` names
-/// and config `cleaning.disabled_rules`, without duplicates. Used by
-/// [`StartCli`] and [`RulesArgs`] so the two surfaces cannot drift apart.
-///
-/// # Returns
-///
-/// The merged list of rule names to disable.
-fn resolve_disabled_rules(cli_rules: &[String], config: &ConfigFile) -> Vec<String> {
-    let mut merged = cli_rules.to_vec();
-    for name in &config.cleaning.disabled_rules {
-        if !merged.contains(name) {
-            merged.push(name.clone());
-        }
-    }
-    merged
 }
 
 #[cfg(test)]

@@ -145,7 +145,9 @@ fn print_config_show(quiet: bool) -> Result<()> {
     outln!("    profile: {}", start.effective_cleaning_profile(&config))?;
     outln!(
         "    keep_trailing_period: {}",
-        !start.effective_drops_trailing_period(&config)
+        !start
+            .cleaning_overrides
+            .effective_drops_trailing_period(&config)
     )?;
     outln!(
         "    number_threshold: {}",
