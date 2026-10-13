@@ -33,6 +33,31 @@ pub(crate) fn fixture_root(namespace: &str, name: &str) -> PathBuf {
     root
 }
 
+/// Write `config.toml` in a clean fixture directory and return its path.
+///
+/// # Arguments
+///
+/// * `namespace` - Directory grouping for a related fixture suite.
+/// * `name` - Specific fixture case name.
+/// * `contents` - TOML text to write to the fixture config.
+///
+/// # Returns
+///
+/// Created fixture config path.
+///
+/// # Panics
+///
+/// Panics if the fixture directory or config file cannot be created.
+#[allow(
+    dead_code,
+    reason = "configuration fixtures belong to binary tests; this module also serves library tests"
+)]
+pub(crate) fn write_config_fixture(namespace: &str, name: &str, contents: &str) -> PathBuf {
+    let path = fixture_root(namespace, name).join("config.toml");
+    fs::write(&path, contents).expect("write fixture config file");
+    path
+}
+
 /// Disconnect a test child's stdout/stderr as if its terminal tab closed.
 ///
 /// Call only in a dedicated child that exits without returning to the harness.

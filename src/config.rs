@@ -387,15 +387,9 @@ pub(crate) fn load_from_path(path: &Path) -> Result<ConfigFile> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
 
     fn write_fixture(name: &str, contents: &str) -> PathBuf {
-        let dir = crate::test_support::fixture_root("parakit-config-test", name);
-        let path = dir.join("config.toml");
-        let mut file = std::fs::File::create(&path).expect("create fixture config file");
-        file.write_all(contents.as_bytes())
-            .expect("write fixture config file");
-        path
+        crate::test_support::write_config_fixture("parakit-config-test", name, contents)
     }
 
     #[test]

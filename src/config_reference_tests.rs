@@ -168,12 +168,7 @@ fn flatten(value: &toml::Value, path: &str, keys: &mut BTreeSet<String>) {
 
 /// Return the key paths a TOML text uses, counting commented-out example keys.
 fn documented_key_paths(text: &str) -> BTreeSet<String> {
-    let table: toml::Table = uncomment_examples(text)
-        .parse()
-        .expect("text must parse once its examples are uncommented");
-    let mut keys = BTreeSet::new();
-    flatten(&toml::Value::Table(table), "", &mut keys);
-    keys
+    set_key_paths(&uncomment_examples(text))
 }
 
 /// Return the key paths a TOML text sets without uncommenting anything.
@@ -238,10 +233,7 @@ fn key_blocks(text: &str) -> BTreeMap<String, KeyBlock> {
 }
 
 fn write_fixture(name: &str, contents: &str) -> PathBuf {
-    let dir = crate::test_support::fixture_root("parakit-config-reference-test", name);
-    let path = dir.join("config.toml");
-    std::fs::write(&path, contents).expect("write fixture config file");
-    path
+    crate::test_support::write_config_fixture("parakit-config-reference-test", name, contents)
 }
 
 /// Render every effective value of the config, one entry per scalar key,
@@ -352,28 +344,26 @@ fn accepted_keys_are_listed_per_table() {
     }
 }
 
-#[test]
-fn reference_documents_exactly_the_accepted_keys() {
+/// Assert that a config document names every accepted key and no unknown keys.
+fn assert_documents_accepted_keys(label: &str, text: &str) {
     let accepted = accepted_key_paths();
-    let documented = documented_key_paths(REFERENCE);
+    let documented = documented_key_paths(text);
     let undocumented: Vec<_> = accepted.difference(&documented).collect();
     let unknown: Vec<_> = documented.difference(&accepted).collect();
     assert!(
         undocumented.is_empty() && unknown.is_empty(),
-        "docs/config_reference.toml is out of step with the schema\n  accepted but not documented: {undocumented:?}\n  documented but not accepted: {unknown:?}"
+        "{label} is out of step with the schema\n  accepted but not documented: {undocumented:?}\n  documented but not accepted: {unknown:?}"
     );
 }
 
 #[test]
+fn reference_documents_exactly_the_accepted_keys() {
+    assert_documents_accepted_keys("docs/config_reference.toml", REFERENCE);
+}
+
+#[test]
 fn template_documents_exactly_the_accepted_keys() {
-    let accepted = accepted_key_paths();
-    let documented = documented_key_paths(TEMPLATE);
-    let undocumented: Vec<_> = accepted.difference(&documented).collect();
-    let unknown: Vec<_> = documented.difference(&accepted).collect();
-    assert!(
-        undocumented.is_empty() && unknown.is_empty(),
-        "config::TEMPLATE is out of step with the schema\n  accepted but not in the template: {undocumented:?}\n  in the template but not accepted: {unknown:?}"
-    );
+    assert_documents_accepted_keys("config::TEMPLATE", TEMPLATE);
 
     let path = write_fixture("template-uncommented", &uncomment_examples(TEMPLATE));
     load_from_path(&path).expect("every example value in the template must load");
