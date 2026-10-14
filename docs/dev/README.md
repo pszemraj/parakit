@@ -57,7 +57,7 @@ parakit fetch --from-source --model-preset parakeet-redux --keep-f16
 | `parakeet-ultra` | [moondream/parakeet-ultra](https://huggingface.co/moondream/parakeet-ultra) |
 | `parakeet-redux` | [moondream/parakeet-redux](https://huggingface.co/moondream/parakeet-redux) |
 
-The pipeline downloads and retains the original snapshot under `<model cache>/checkpoints/<preset-id>/`, converts it to F16 with the vendored model converter, then runs the built `crispasr-quantize` with `q8_0`. `--keep-f16` retains the intermediate GGUF beside the final Q8_0; without it the intermediate is removed once Q8_0 is ready, including on a completed Q8_0 cache hit. `--keep-nemo` applies only to the original Parakeet v3 path.
+The pipeline downloads and retains the original snapshot under `<model cache>/checkpoints/<preset-id>/<source-commit>/`, converts it to F16 with the vendored model converter, then runs the built `crispasr-quantize` with `q8_0`. `--keep-f16` retains the intermediate GGUF beside the final Q8_0; without it the intermediate is removed once Q8_0 is ready, including on a completed Q8_0 cache hit. `--keep-nemo` applies only to the original Parakeet v3 path.
 
 For an existing original Hugging Face snapshot, add `--checkpoint-dir`:
 
@@ -68,7 +68,7 @@ parakit fetch --from-source --model-preset qwen3-asr-1.7b \
 
 This directory must contain the original checkpoint and tokenizer/configuration files, not a GGUF. It requires `--from-source` with a Qwen or Moondream preset. The pipeline never removes the supplied directory.
 
-A completed Q8_0 artifact in the preset cache is reused before checking Python dependencies or accessing the network. `--keep-f16` does not create a missing F16 intermediate on that cache hit. If only F16 is cached, it is quantized without re-reading the checkpoint, including a supplied `--checkpoint-dir`. Add `--force` to repeat conversion and quantization; for downloaded checkpoints this also refreshes the original snapshot. Rebuilt Q8_0 goes to the same destination as the hosted preset: `parakit start --model-preset NAME` selects it without changing daemon configuration or the application default. There is no quantization selector; this path produces Q8_0.
+A completed Q8_0 artifact in the preset cache is reused before checking Python dependencies or accessing the network. `--keep-f16` does not create a missing F16 intermediate on that cache hit. If only F16 is cached, it is quantized without re-reading the checkpoint, including a supplied `--checkpoint-dir`. Add `--force` to repeat conversion and quantization; for downloaded checkpoints this also refreshes the selected source commit. The four new presets record fixed provider and source commits in the model catalog, so refresh does not silently select a newer upstream revision. A new catalog revision uses a separate checkpoint directory, preventing stale shards from another revision entering conversion. Rebuilt Q8_0 goes to the same destination as the hosted preset: `parakit start --model-preset NAME` selects it without changing daemon configuration or the application default. There is no quantization selector; this path produces Q8_0.
 
 Redux conversion reconstructs its packed ternary weights into ordinary F16 weights before Q8_0 quantization. The resulting GGUF does not retain Photon's 178 MB representation, ternary acceleration, or Moondream VAD head. Building the artifact also does not establish transcription quality; follow the [conversion acceptance checks](quality.md#checkpoint-conversion-acceptance).
 

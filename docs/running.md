@@ -201,7 +201,7 @@ parakit start --model-preset parakeet-redux
 
 Redux's GGUF contains ordinary reconstructed weights. Photon's packed 178 MB weight footprint and [published CPU results](https://huggingface.co/moondream/parakeet-redux#performance) do not describe Parakit's runtime. The GGUF conversion also omits Moondream's VAD head, so Photon's pause-based segmentation is not a Parakit guarantee.
 
-Presets use the exact file above and check the local cache before contacting Hugging Face. Once fetched, they work offline. Parakeet v3 keeps its existing top-level cache path; the other presets use the Hub cache layout described below. `fetch --model-preset` does not read daemon configuration. It accepts `--force` and conflicts with a custom source, `--file`, and `--sha256`.
+Presets use the exact file above and check the local cache before contacting Hugging Face. Once fetched, they work offline. The four new presets select fixed provider commits from the model catalog; `--force` downloads that selected revision again. Parakeet v3 keeps its existing revision policy and top-level cache path; the other presets use the revision-specific Hub cache layout described below. Previously downloaded files remain usable with `-m`; changing a preset revision selects a separate cache destination. `fetch --model-preset` does not read daemon configuration. It accepts `--force` and conflicts with a custom source, `--file`, and `--sha256`.
 
 To convert an original checkpoint and quantize it locally, combine the preset with `--from-source`:
 

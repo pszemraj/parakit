@@ -212,7 +212,14 @@ fn preset_cache_path(models_dir: &Path, preset: ModelPreset) -> PathBuf {
         return models_dir.join(Q8_FILENAME);
     }
     let (owner, repo) = preset.repo().split_once('/').expect("preset owner/repo");
-    hub::hub_cache_dir(models_dir, owner, repo, "main", preset.filename()).join(preset.filename())
+    hub::hub_cache_dir(
+        models_dir,
+        owner,
+        repo,
+        preset.revision(),
+        preset.filename(),
+    )
+    .join(preset.filename())
 }
 
 fn run_preset(
@@ -231,7 +238,7 @@ fn run_preset(
     }
 
     let (owner, repo) = preset.repo().split_once('/').expect("preset owner/repo");
-    let url = hub::resolve_url(endpoint, owner, repo, "main", preset.filename());
+    let url = hub::resolve_url(endpoint, owner, repo, preset.revision(), preset.filename());
     let client = net::build_client()?;
     let bearer = net::bearer_for(&url, endpoint, token);
     options.status(format_args!("parakit: downloading {url}"));

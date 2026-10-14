@@ -31,18 +31,19 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("repo", help="original Hugging Face model repository")
     parser.add_argument("destination", type=Path, help="checkpoint cache directory")
+    parser.add_argument("--revision", required=True, help="original checkpoint commit revision")
     parser.add_argument("--force", action="store_true", help="download checkpoint files again")
     return parser.parse_args(argv)
 
 
-def download_checkpoint(repo: str, destination: Path, force: bool) -> None:
+def download_checkpoint(repo: str, destination: Path, revision: str, force: bool) -> None:
     """Download only original model weights, configuration and tokenizer files."""
     from huggingface_hub import snapshot_download
 
     endpoint = os.environ.get("HF_ENDPOINT", "").strip().rstrip("/") or "https://huggingface.co"
     token = os.environ.get("HF_TOKEN", "").strip() or False
     snapshot_download(
-        repo_id=repo, local_dir=destination, allow_patterns=PATTERNS,
+        repo_id=repo, revision=revision, local_dir=destination, allow_patterns=PATTERNS,
         endpoint=endpoint, token=token, force_download=force,
     )
 
@@ -51,7 +52,7 @@ def main(argv: list[str] | None = None) -> int:
     """Download a checkpoint or report a readable failure."""
     args = parse_args(argv)
     try:
-        download_checkpoint(args.repo, args.destination, args.force)
+        download_checkpoint(args.repo, args.destination, args.revision, args.force)
     except KeyboardInterrupt:
         return 130
     except Exception as error:

@@ -34,8 +34,9 @@ fn all_presets_reuse_cached_artifacts_without_network() {
             assert_eq!(dest, dir.join(Q8_FILENAME));
         } else {
             let (owner, repo) = preset.repo().split_once('/').unwrap();
-            let custom_hub_path = hub::hub_cache_dir(&dir, owner, repo, "main", preset.filename())
-                .join(preset.filename());
+            let custom_hub_path =
+                hub::hub_cache_dir(&dir, owner, repo, preset.revision(), preset.filename())
+                    .join(preset.filename());
             assert_eq!(dest, custom_hub_path);
         }
     }
@@ -62,9 +63,10 @@ fn preset_force_fetches_exact_artifact_from_mirror_with_token() {
         dest
     );
     let request = server.join().unwrap();
-    assert!(
-        request.starts_with("GET /cstr/qwen3-asr-0.6b-GGUF/resolve/main/qwen3-asr-0.6b-q8_0.gguf ")
-    );
+    assert!(request.starts_with(&format!(
+        "GET /cstr/qwen3-asr-0.6b-GGUF/resolve/{}/qwen3-asr-0.6b-q8_0.gguf ",
+        preset.revision()
+    )));
     assert!(request
         .to_ascii_lowercase()
         .contains("authorization: bearer preset-token\r\n"));

@@ -78,6 +78,34 @@ impl ModelPreset {
         }
     }
 
+    /// Return the selected hosted artifact revision.
+    ///
+    /// # Returns
+    /// A fixed provider commit for new presets, or the existing v3 `main`.
+    pub const fn revision(self) -> &'static str {
+        match self {
+            Self::ParakeetV3 => "main",
+            Self::Qwen3Asr06b => "58bd3202f835f46b24b17142cb503b0860c737a5",
+            Self::Qwen3Asr17b => "674df5d44b50a63e7102a18895ed20e3f91de301",
+            Self::ParakeetUltra => "252cd632a21e98ba5edbdeb61c7274d01c54cb73",
+            Self::ParakeetRedux => "3f288b7fb33caff80f1424bd5ea1cecaf9808209",
+        }
+    }
+
+    /// Return the original checkpoint revision used by source rebuilding.
+    ///
+    /// # Returns
+    /// A fixed source commit for Qwen/Moondream; v3 uses its existing Nemo URL.
+    pub const fn source_revision(self) -> Option<&'static str> {
+        match self {
+            Self::ParakeetV3 => None,
+            Self::Qwen3Asr06b => Some("5eb144179a02acc5e5ba31e748d22b0cf3e303b0"),
+            Self::Qwen3Asr17b => Some("7278e1e70fe206f11671096ffdd38061171dd6e5"),
+            Self::ParakeetUltra => Some("73175eb7aeb0d82f1e2a6b53b3aabc10a90bcd0b"),
+            Self::ParakeetRedux => Some("2bf128600aac4b16946f7ed8372e56117fe5e23b"),
+        }
+    }
+
     /// Return the original Hugging Face checkpoint used for source conversion.
     ///
     /// # Returns

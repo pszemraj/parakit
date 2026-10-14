@@ -185,6 +185,14 @@ fn select_gguf_file<'a>(
             });
     }
 
+    // Calibration matrices share the GGUF container but are not ASR models.
+    // Keep real models named `*-imatrix.gguf`, and honor explicit --file above.
+    let candidates: Vec<&Sibling> = gguf_files
+        .iter()
+        .copied()
+        .filter(|s| !s.rfilename.to_ascii_lowercase().ends_with(".imatrix.gguf"))
+        .collect();
+    let gguf_files = candidates.as_slice();
     if gguf_files.is_empty() {
         bail!("no .gguf files found in repo");
     }
@@ -564,6 +572,36 @@ mod tests {
     #[test]
     fn select_gguf_file_cases() {
         let cases = [
+            SelectCase {
+                name: "calibration alone is not an automatic model",
+                files: &["qwen-en-de.imatrix.gguf"],
+                requested: None,
+                expect: ExpectedSelection::Err(&[]),
+            },
+            SelectCase {
+                name: "explicit calibration filename remains selectable",
+                files: &["qwen-en-de.imatrix.gguf"],
+                requested: Some("qwen-en-de.imatrix.gguf"),
+                expect: ExpectedSelection::Picked("qwen-en-de.imatrix.gguf"),
+            },
+            SelectCase {
+                name: "real imatrix model survives calibration exclusion",
+                files: &["qwen-en-de.imatrix.gguf", "qwen-q4_k-imatrix.gguf"],
+                requested: None,
+                expect: ExpectedSelection::Picked("qwen-q4_k-imatrix.gguf"),
+            },
+            SelectCase {
+                name: "calibration does not create Q8 ambiguity",
+                files: &["qwen-q8_0.IMATRIX.GGUF", "qwen-q8_0.gguf"],
+                requested: None,
+                expect: ExpectedSelection::Picked("qwen-q8_0.gguf"),
+            },
+            SelectCase {
+                name: "extra future Q8 sibling retains ambiguity error",
+                files: &["qwen-q8_0.gguf", "future-q8_0.gguf", "qwen.imatrix.gguf"],
+                requested: None,
+                expect: ExpectedSelection::Err(&["--file", "qwen-q8_0.gguf", "future-q8_0.gguf"]),
+            },
             SelectCase {
                 name: "selects the sole .gguf file",
                 files: &["model-Q8_0.gguf"],

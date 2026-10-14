@@ -63,7 +63,11 @@ pub(super) fn run(
 
     let quantizer = quantize_bin_path()?;
     if options.force || !f16.is_file() {
-        let downloaded_dir = models_dir.join("checkpoints").join(preset.id());
+        let revision = preset.source_revision().expect("source preset revision");
+        let downloaded_dir = models_dir
+            .join("checkpoints")
+            .join(preset.id())
+            .join(revision);
         let checkpoint = checkpoint_dir.unwrap_or(&downloaded_dir);
         if checkpoint_dir.is_some() && !checkpoint.is_dir() {
             bail!(
@@ -88,6 +92,8 @@ pub(super) fn run(
                 .arg(downloader)
                 .arg(repo)
                 .arg(checkpoint)
+                .arg("--revision")
+                .arg(revision)
                 .env(HF_ENDPOINT_ENV, endpoint)
                 .env(HF_TOKEN_ENV, token.unwrap_or(""));
             if options.force {
