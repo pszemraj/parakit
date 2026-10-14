@@ -197,6 +197,8 @@ parakit start --model-preset parakeet-redux
 | `parakeet-ultra` | [cstr/parakeet-ultra-GGUF](https://huggingface.co/cstr/parakeet-ultra-GGUF) | `parakeet-ultra-q8_0.gguf` |
 | `parakeet-redux` | [cstr/parakeet-redux-GGUF](https://huggingface.co/cstr/parakeet-redux-GGUF) | `parakeet-redux-q8_0.gguf` |
 
+**Redux on CPU:** Parakit runs Redux as an ordinary Q8_0 GGUF with reconstructed weights. Moondream's [published CPU results](https://huggingface.co/moondream/parakeet-redux#performance) use [Photon](https://moondream.ai/photon), which reads the packed ternary weights directly. Photon's 178 MB weight footprint and ternary CPU acceleration do not apply to Parakit's GGUF runtime. The GGUF conversion also omits Moondream's VAD head, so Photon's pause-based segmentation is not a Parakit guarantee.
+
 Presets use the exact file above and check the local cache before contacting Hugging Face. Once fetched, they work offline. Parakeet v3 keeps its existing top-level cache path; the other presets use the Hub cache layout described below. `fetch --model-preset` does not read daemon configuration. It accepts `--force` and conflicts with a custom source, `--file`, and `--sha256`.
 
 To convert an original checkpoint and quantize it locally, combine the preset with `--from-source`:
@@ -211,7 +213,7 @@ Qwen defaults to automatic language identification and a maximum of 512 generate
 
 Cleaning remains enabled by default and includes English rules. For multilingual dictation, use `--no-cleaning`, or set `[cleaning] enabled = false`; both bypass built-in and user cleaning rules.
 
-The [Qwen team](https://huggingface.co/Qwen/Qwen3-ASR-0.6B) publishes Qwen3-ASR under [Apache 2.0](https://www.apache.org/licenses/LICENSE-2.0). [Moondream Ultra](https://huggingface.co/moondream/parakeet-ultra) and [Redux](https://huggingface.co/moondream/parakeet-redux) derive from NVIDIA Parakeet v3 and use [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/); the linked cstr repositories provide the GGUF conversions. Redux's GGUF contains ordinary reconstructed weights, so Photon's packed 178 MB footprint and ternary acceleration do not apply. The GGUF conversion omits Moondream's VAD head; Photon's pause-based segmentation and published runtime results are not guarantees for parakit.
+The [Qwen team](https://huggingface.co/Qwen/Qwen3-ASR-0.6B) publishes Qwen3-ASR under [Apache 2.0](https://www.apache.org/licenses/LICENSE-2.0). [Moondream Ultra](https://huggingface.co/moondream/parakeet-ultra) and [Redux](https://huggingface.co/moondream/parakeet-redux) derive from NVIDIA Parakeet v3 and use [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/); the linked cstr repositories provide the GGUF conversions.
 
 ### Other GGUF Builds
 
