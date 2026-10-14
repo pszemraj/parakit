@@ -111,13 +111,13 @@ fn main() {
         "CMakeLists.txt",
         "src/parakeet.cpp",
         "src/crispasr_c_api.cpp",
+        "src/parakeet_orchestrate.cpp",
     ] {
         println!("cargo:rerun-if-changed={}", src_dir.join(source).display());
     }
-    let patched_c_api =
+    let (patched_c_api, patched_parakeet) =
         native_correctness::prepare(&src_dir, &PathBuf::from(env::var_os("OUT_DIR").unwrap()))
             .unwrap_or_else(|err| panic!("could not prepare CrispASR session corrections: {err}"));
-
     // 4. Run cmake. The `cmake` crate handles incremental builds, MSVC
     //    detection on Windows, generator selection, parallelism, and
     //    install-step plumbing.
@@ -129,6 +129,7 @@ fn main() {
             manifest_dir.join("build/native_correctness.cmake"),
         )
         .define("PARAKIT_CRISPASR_C_API_SOURCE", &patched_c_api)
+        .define("PARAKIT_PARAKEET_SOURCE", &patched_parakeet)
         .define(
             "PARAKIT_NATIVE_CORRECTNESS_INCLUDE",
             manifest_dir.join("build/native"),
@@ -163,7 +164,6 @@ fn main() {
         .define("CMAKE_INSTALL_RPATH_USE_LINK_PATH", "ON");
 
     configure_windows_msvc_release(&mut cfg);
-
     let accelerators = AcceleratorConfig::from_env();
 
     let blas = configure_blas(&mut cfg);

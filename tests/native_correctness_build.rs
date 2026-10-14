@@ -9,6 +9,7 @@ use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 const SOURCE: &str = include_str!("../vendor/CrispASR/src/crispasr_c_api.cpp");
+const PARAKEET_SOURCE: &str = include_str!("../vendor/CrispASR/src/parakeet_orchestrate.cpp");
 
 struct Scratch(PathBuf);
 
@@ -69,6 +70,24 @@ fn windows_line_endings_apply_the_same_corrections() {
         native_correctness::patch_source(&SOURCE.replace('\n', "\r\n")).unwrap()
             == native_correctness::patch_source(SOURCE).unwrap()
     );
+    assert!(
+        native_correctness::patch_parakeet_source(&PARAKEET_SOURCE.replace('\n', "\r\n")).unwrap()
+            == native_correctness::patch_parakeet_source(PARAKEET_SOURCE).unwrap()
+    );
+}
+
+#[test]
+fn parakeet_recovery_notice_is_removed_without_hiding_warnings() {
+    let patched = native_correctness::patch_parakeet_source(PARAKEET_SOURCE).unwrap();
+    assert!(!patched.contains("gap-fill recovered %d word(s)"));
+    let unchanged_tail =
+        "        // Re-sort and rebuild only the segments a word was inserted into.";
+    assert!(
+        patched.split_once(unchanged_tail).unwrap().1
+            == PARAKEET_SOURCE.split_once(unchanged_tail).unwrap().1
+    );
+    assert!(patched.contains("single-pass encode failed (likely VRAM OOM"));
+    assert!(native_correctness::patch_parakeet_source(&patched).is_err());
 }
 
 #[test]
@@ -78,8 +97,10 @@ fn preparation_writes_only_the_output_copy() {
     let input = source_dir.join("src/crispasr_c_api.cpp");
     fs::create_dir_all(input.parent().unwrap()).unwrap();
     fs::write(&input, SOURCE).unwrap();
+    let orchestration = source_dir.join("src/parakeet_orchestrate.cpp");
+    fs::write(&orchestration, PARAKEET_SOURCE).unwrap();
     let output_dir = scratch.0.join("out");
-    let output = native_correctness::prepare(&source_dir, &output_dir).unwrap();
+    let (output, parakeet_output) = native_correctness::prepare(&source_dir, &output_dir).unwrap();
     assert!(output.starts_with(&output_dir));
     assert_eq!(fs::read_to_string(&input).unwrap(), SOURCE);
     assert_eq!(
@@ -93,6 +114,12 @@ fn preparation_writes_only_the_output_copy() {
         .unwrap();
     native_correctness::prepare(&source_dir, &output_dir).unwrap();
     assert_eq!(fs::metadata(&output).unwrap().modified().unwrap(), old_time);
+    assert_eq!(fs::read_to_string(&orchestration).unwrap(), PARAKEET_SOURCE);
+    assert!(parakeet_output.starts_with(&output_dir));
+    assert_eq!(
+        fs::read_to_string(&parakeet_output).unwrap(),
+        native_correctness::patch_parakeet_source(PARAKEET_SOURCE).unwrap()
+    );
     let revised = format!("// revised source\n{SOURCE}");
     fs::write(&input, &revised).unwrap();
     native_correctness::prepare(&source_dir, &output_dir).unwrap();
@@ -126,7 +153,12 @@ fn cmake_hook_compiles_the_copy_and_excludes_the_original() {
     .unwrap();
     fs::write(
         root.join("src/CMakeLists.txt"),
-        "add_library(crispasr-lib STATIC crispasr_c_api.cpp)\n",
+        "add_library(crispasr-lib STATIC crispasr_c_api.cpp)\nadd_library(parakeet STATIC parakeet_orchestrate.cpp)\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("src/parakeet_orchestrate.cpp"),
+        "#error original must not compile\n",
     )
     .unwrap();
     fs::write(
@@ -136,6 +168,8 @@ fn cmake_hook_compiles_the_copy_and_excludes_the_original() {
     .unwrap();
     let copy = root.join("patched.cpp");
     fs::write(&copy, "#include \"qwen_correctness.hpp\"\nint answer() { return parakit_asr::decode_completed({5}, 5, 8, 1) ? 42 : 0; }\n").unwrap();
+    let parakeet_copy = root.join("patched-parakeet.cpp");
+    fs::write(&parakeet_copy, "int parakeet_answer() { return 42; }\n").unwrap();
     let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
     checked(
         Command::new("cmake")
@@ -150,6 +184,10 @@ fn cmake_hook_compiles_the_copy_and_excludes_the_original() {
             .arg(format!(
                 "-DPARAKIT_CRISPASR_C_API_SOURCE={}",
                 copy.display()
+            ))
+            .arg(format!(
+                "-DPARAKIT_PARAKEET_SOURCE={}",
+                parakeet_copy.display()
             ))
             .arg(format!(
                 "-DPARAKIT_NATIVE_CORRECTNESS_INCLUDE={}",

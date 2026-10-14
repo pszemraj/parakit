@@ -1,35 +1,74 @@
-//! Correct the pinned native session in an OUT_DIR copy, without editing vendor.
+//! Correct pinned native sources in OUT_DIR copies, without editing vendor.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// Produce the bundled C API copy compiled by the CMake project hook.
+/// Produce the bundled source copies compiled by the CMake project hook.
 ///
 /// # Arguments
 ///
-/// * `source_dir` - CrispASR checkout containing the pinned C API source.
+/// * `source_dir` - CrispASR checkout containing the pinned native sources.
 /// * `out_dir` - Cargo build output directory receiving the corrected copy.
 ///
 /// # Returns
 ///
-/// The path of the corrected C API translation unit.
+/// Paths of the corrected C API and Parakeet orchestration translation units.
 ///
 /// # Errors
 ///
 /// Reports unreadable source, unsupported source anchors, or output write errors.
-pub fn prepare(source_dir: &Path, out_dir: &Path) -> Result<PathBuf, String> {
-    let source_path = source_dir.join("src/crispasr_c_api.cpp");
+pub fn prepare(source_dir: &Path, out_dir: &Path) -> Result<(PathBuf, PathBuf), String> {
+    Ok((
+        prepare_source(source_dir, out_dir, "crispasr_c_api.cpp", patch_source)?,
+        prepare_source(
+            source_dir,
+            out_dir,
+            "parakeet_orchestrate.cpp",
+            patch_parakeet_source,
+        )?,
+    ))
+}
+
+fn prepare_source(
+    source_dir: &Path,
+    out_dir: &Path,
+    filename: &str,
+    patch: fn(&str) -> Result<String, String>,
+) -> Result<PathBuf, String> {
+    let source_path = source_dir.join("src").join(filename);
     let source = fs::read_to_string(&source_path)
         .map_err(|err| format!("read {}: {err}", source_path.display()))?;
-    let patched = patch_source(&source)?;
+    let patched = patch(&source)?;
     let output_dir = out_dir.join("native-correctness");
     fs::create_dir_all(&output_dir)
         .map_err(|err| format!("create {}: {err}", output_dir.display()))?;
-    let output = output_dir.join("crispasr_c_api.cpp");
+    let output = output_dir.join(filename);
     if fs::read_to_string(&output).ok().as_deref() != Some(patched.as_str()) {
         fs::write(&output, patched).map_err(|err| format!("write {}: {err}", output.display()))?;
     }
     Ok(output)
+}
+
+/// Remove the successful gap-recovery notice while preserving native warnings.
+///
+/// # Arguments
+///
+/// * `source` - Original pinned Parakeet orchestration translation unit.
+///
+/// # Returns
+///
+/// A source copy that performs the same recovery without informational stderr.
+///
+/// # Errors
+///
+/// Reports a missing or duplicate notice anchor in an unreviewed source version.
+pub fn patch_parakeet_source(source: &str) -> Result<String, String> {
+    replace_once(
+        &source.replace("\r\n", "\n"),
+        "        if (!no_prints)\n            fprintf(stderr, \"crispasr[parakeet]: gap-fill recovered %d word(s) the first pass dropped\\n\", recovered);",
+        "        (void)no_prints; // Successful recovery does not need an informational stderr notice.",
+        "Parakeet recovery notice",
+    )
 }
 
 /// Apply the small corrections to exactly the source version we reviewed.
