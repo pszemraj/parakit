@@ -306,3 +306,20 @@ Use controlled text, HTML/text alternatives, images, copied files, and an empty 
 TODO: Reproduce a hung X11 clipboard owner and design bounded snapshot reads that preserve the prior clipboard. Arboard reads formats sequentially and its public API does not distinguish a read timeout from an unavailable format.
 
 TODO: On a native Linux desktop, exercise direct typing and guarded paste with physical modifier/focus changes, key-probe failures, keyboard-map changes, readiness-error reconnection and clipboard-manager handoffs. Closure tests and Mac runs do not establish those X11 results. Windows generation changes and delayed rendering also need native clipboard-manager or RDP verification.
+
+### Ordered audio and loaded Qwen failures
+
+Repeat `transcribe-file --audio` to run short, long, and short inputs on one loaded engine. The hidden worker simulation also accepts repeated `--simulate-ptt-audio` paths; it replays the full ordered sequence per `--simulate-ptt-repeat` cycle, then applies the requested idle interval. This exercises resident context reuse before offload/reload. Its failure path reads history back and rejects replacement of the preceding successful transcript.
+
+The loaded-session fault driver is a local Linux check with an explicit Qwen model:
+
+```bash
+python tests/native/run_qwen_faults.py \
+  --native-build <isolated-target>/debug/build/parakit-<id>/out/build \
+  --binary-dir <isolated-target>/debug \
+  --model <qwen-q8.gguf> \
+  --audio vendor/CrispASR/bindings/go/samples/jfk.wav \
+  --output target/tmp/qwen-native-faults
+```
+
+Use the completed CPU native build directory containing `compile_commands.json`, and a fresh output directory. The driver compiles a separate corrected C API copy and relinks its own test library. Only that library contains fault controls; normal binaries and vendor sources are unchanged. First/middle/last chunk failures and greedy embedding/forward failures run through both file and worker paths. The worker first remembers a successful dictation, then checks history preservation and absence of successful logging/insertion for the failed input. Separate prefix cases inspect actual native English, Cantonese, and Filipino assistant prefills. They force those languages on English fixture audio to inspect prompt construction, not to measure multilingual recognition quality.

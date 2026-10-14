@@ -251,7 +251,7 @@ fn run_daemon(cli: &Cli, start: &StartCli) -> Result<()> {
     // The hidden audio simulation is a one-shot worker validation, not a
     // daemon instance, so it intentionally does not participate in the
     // singleton lock.
-    let _daemon_lock = if start.simulate_ptt_audio.is_none() {
+    let _daemon_lock = if start.simulate_ptt_audio.is_empty() {
         match daemon::preflight::acquire_singleton_lock() {
             Ok(lock) => Some(lock),
             Err(err) if err.is::<daemon::preflight::DaemonAlreadyRunning>() => {
@@ -281,14 +281,14 @@ fn run_daemon(cli: &Cli, start: &StartCli) -> Result<()> {
     let paste_mode = worker_settings.paste_mode;
     let keep_transcript_clipboard = worker_settings.keep_transcript_clipboard;
 
-    if let Some(audio_path) = &start.simulate_ptt_audio {
+    if !start.simulate_ptt_audio.is_empty() {
         return run_ptt_audio_simulation(
             cli,
             start,
             &config,
             worker_settings,
             Arc::clone(&log),
-            audio_path,
+            &start.simulate_ptt_audio,
         );
     }
 

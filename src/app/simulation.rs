@@ -14,7 +14,7 @@ use std::thread;
 /// * `config` - Validated daemon defaults.
 /// * `settings` - Effective settings shared with normal daemon startup.
 /// * `log` - Shared process logger.
-/// * `audio_path` - Real WAV fixture to replay.
+/// * `audio_paths` - Real WAV fixtures to replay in order on one worker.
 ///
 /// # Returns
 ///
@@ -30,7 +30,7 @@ pub(super) fn run_ptt_audio_simulation(
     config: &ConfigFile,
     settings: WorkerSettings,
     log: Arc<Logger>,
-    audio_path: &Path,
+    audio_paths: &[PathBuf],
 ) -> Result<()> {
     let verbose = cli.effective_verbose(config);
     let cleaner = build_cli_cleaner(start, config)?.map(Arc::new);
@@ -42,12 +42,14 @@ pub(super) fn run_ptt_audio_simulation(
         anyhow::bail!("simulated idle interval exceeds the supported clock range");
     }
     let prepare_started = Instant::now();
-    let wav = prepare_wav_for_model(audio_path)?;
-    let audio_secs = wav.audio_secs();
+    let wavs = audio_paths
+        .iter()
+        .map(|path| prepare_wav_for_model(path))
+        .collect::<Result<Vec<_>>>()?;
     log.verbose(format!(
-        "parakit: simulated audio prepared in {:.0}ms (source_rate={} Hz, source_samples={}, target_samples={})",
+        "parakit: simulated audio prepared in {:.0}ms ({} files)",
         prepare_started.elapsed().as_secs_f32() * 1000.0,
-        wav.source_rate, wav.source_samples, wav.samples.len()
+        wavs.len()
     ));
     let OpenedEngine { engine, recipe, .. } =
         open_cli_engine(start, config, verbose, cli.quiet || !verbose, &log)?;
@@ -69,45 +71,58 @@ pub(super) fn run_ptt_audio_simulation(
     });
     state.activity.ready();
     let result = (|| {
-        let mut baseline = None;
+        let mut baselines = vec![None; wavs.len()];
         for cycle in 1..=repeats {
-            log.line(&format!(
-                "parakit: simulating PTT from {} ({audio_secs:.2}s, cycle {cycle}/{repeats})",
-                audio_path.display()
-            ));
-            let lease = state.activity.begin();
-            let started_at = Instant::now();
-            let (done_tx, done_rx) = bounded(1);
-            tx.send(WorkerEvent::Started {
-                recording: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            })
-            .context("send simulated PTT start")?;
-            // Immediate release exercises a short PTT while reload is still busy.
-            tx.send(WorkerEvent::Stopped {
-                started_at,
-                stopped_at: started_at + Duration::from_secs_f32(audio_secs),
-                pcm: wav.samples.clone(),
-                focus_at_start: None,
-                activity: Some(lease),
-                completion: Some(done_tx),
-            })
-            .context("send simulated PTT stop")?;
-            // Inference has no cancellation boundary. A receive timeout would
-            // abandon the acknowledgement while the same worker and native
-            // session kept running, so wait for completion or disconnection.
-            done_rx
-                .recv()
-                .context("worker disconnected before dictation completion")?
-                .map_err(anyhow::Error::msg)?;
-            let transcript = state.resolve_transcript(0)?;
-            // Same-process parity is a reload invariant, not a cross-build
-            // reference-transcript quality gate.
-            match &baseline {
-                Some(expected) if expected != &transcript => {
-                    anyhow::bail!("transcript changed on simulated cycle {cycle}")
+            for (baseline, (audio_path, wav)) in
+                baselines.iter_mut().zip(audio_paths.iter().zip(&wavs))
+            {
+                let audio_secs = wav.audio_secs();
+                let previous = state.resolve_transcript(0).ok();
+                log.line(&format!(
+                    "parakit: simulating PTT from {} ({audio_secs:.2}s, cycle {cycle}/{repeats})",
+                    audio_path.display()
+                ));
+                let lease = state.activity.begin();
+                let started_at = Instant::now();
+                let (done_tx, done_rx) = bounded(1);
+                tx.send(WorkerEvent::Started {
+                    recording: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                })
+                .context("send simulated PTT start")?;
+                // Immediate release exercises a short PTT while reload is still busy.
+                tx.send(WorkerEvent::Stopped {
+                    started_at,
+                    stopped_at: started_at + Duration::from_secs_f32(audio_secs),
+                    pcm: wav.samples.clone(),
+                    focus_at_start: None,
+                    activity: Some(lease),
+                    completion: Some(done_tx),
+                })
+                .context("send simulated PTT stop")?;
+                // Inference has no cancellation boundary. A receive timeout would
+                // abandon the acknowledgement while the same worker and native
+                // session kept running, so wait for completion or disconnection.
+                let completed = done_rx
+                    .recv()
+                    .context("worker disconnected before dictation completion")?;
+                if let Err(error) = completed {
+                    anyhow::ensure!(
+                        state.resolve_transcript(0).ok() == previous,
+                        "failed simulated dictation replaced transcript history"
+                    );
+                    log.verbose("parakit: failed simulated dictation left history unchanged");
+                    return Err(anyhow::Error::msg(error));
                 }
-                None => baseline = Some(transcript),
-                _ => {}
+                let transcript = state.resolve_transcript(0)?;
+                // Same-process parity is a reload invariant, not a cross-build
+                // reference-transcript quality gate.
+                match &*baseline {
+                    Some(expected) if expected != &transcript => {
+                        anyhow::bail!("transcript changed on simulated cycle {cycle}")
+                    }
+                    None => *baseline = Some(transcript),
+                    _ => {}
+                }
             }
             if !idle.is_zero() {
                 thread::sleep(idle);

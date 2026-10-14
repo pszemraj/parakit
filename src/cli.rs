@@ -185,7 +185,7 @@ pub(crate) struct StartCli {
 
     /// Hidden validation path: send a WAV through the daemon PTT worker without insertion.
     #[arg(long, hide = true, value_name = "WAV")]
-    pub(crate) simulate_ptt_audio: Option<PathBuf>,
+    pub(crate) simulate_ptt_audio: Vec<PathBuf>,
 
     /// Repeat the hidden WAV validation flow in one worker process.
     #[arg(long, hide = true, requires = "simulate_ptt_audio", value_name = "N")]
