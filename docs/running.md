@@ -197,7 +197,15 @@ parakit start --model-preset parakeet-redux
 | `parakeet-ultra` | [cstr/parakeet-ultra-GGUF](https://huggingface.co/cstr/parakeet-ultra-GGUF) | `parakeet-ultra-q8_0.gguf` |
 | `parakeet-redux` | [cstr/parakeet-redux-GGUF](https://huggingface.co/cstr/parakeet-redux-GGUF) | `parakeet-redux-q8_0.gguf` |
 
-Presets use the exact file above and check the local cache before contacting Hugging Face. Once fetched, they work offline. Parakeet v3 keeps its existing top-level cache path; the other presets use the Hub cache layout described below. `fetch --model-preset` does not read daemon configuration. It accepts `--force` and conflicts with a custom source, `--file`, `--sha256`, and `--from-source`.
+Presets use the exact file above and check the local cache before contacting Hugging Face. Once fetched, they work offline. Parakeet v3 keeps its existing top-level cache path; the other presets use the Hub cache layout described below. `fetch --model-preset` does not read daemon configuration. It accepts `--force` and conflicts with a custom source, `--file`, and `--sha256`.
+
+To convert an original checkpoint and quantize it locally, combine the preset with `--from-source`:
+
+```bash
+parakit fetch --from-source --model-preset qwen3-asr-1.7b --keep-f16
+```
+
+Both Qwen sizes and Moondream presets support this path. Add `--checkpoint-dir /path/to/original-snapshot` to use a local Hugging Face checkpoint instead of downloading one; the supplied directory is retained. A completed cached Q8_0 artifact is reused without network or conversion dependencies, so add `--force` to rebuild it. The rebuilt artifact uses the preset's normal cache destination and is selected by `start --model-preset NAME`. Dependencies, original model repositories, and Windows quantizer requirements are in [source rebuild](dev/README.md#source-rebuild). The unchanged `fetch --from-source` default rebuilds NVIDIA Parakeet v3 from `.nemo`.
 
 Qwen defaults to automatic language identification and a maximum of 512 generated tokens per native chunk. Use `--qwen-language en` (or `English`) to force a supported language, and `--qwen-max-new-tokens N` to set a budget from 1 to 4096. An incomplete decode fails the dictation rather than returning partial text. Qwen splits long audio into native chunks of at most 30 seconds. Explicit Qwen flags require a Qwen model; persistent `[qwen]` settings are inactive for Parakeet. The [configuration reference](config_reference.toml) lists all supported language codes and names.
 

@@ -25,7 +25,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::cli::{
-    CacheCli, CacheCommand, Cli, Commands, DoctorCli, RulesArgs, RulesCli, RulesCommand, StartCli,
+    CacheCli, CacheCommand, Cli, Commands, DoctorCli, FetchCli, RulesArgs, RulesCli, RulesCommand,
+    StartCli,
 };
 use crate::config::{self, ConfigFile};
 use crate::daemon;
@@ -82,20 +83,7 @@ pub(crate) fn run() -> Result<()> {
     // they report/apply the same effective values the daemon would use.
     match &cli.command {
         Some(Commands::Fetch(fetch_cli)) => {
-            let source = if fetch_cli.from_source {
-                FetchSource::OfficialNemo {
-                    keep_nemo: fetch_cli.keep_nemo,
-                    keep_f16: fetch_cli.keep_f16,
-                }
-            } else if let Some(preset) = fetch_cli.model_preset {
-                FetchSource::Preset(preset)
-            } else {
-                fetch::source_from_cli(
-                    fetch_cli.source.clone(),
-                    fetch_cli.file.clone(),
-                    fetch_cli.sha256.clone(),
-                )?
-            };
+            let source = resolve_fetch_source(fetch_cli)?;
             fetch::run(FetchOptions {
                 force: fetch_cli.force,
                 quiet: cli.quiet,
@@ -219,6 +207,37 @@ fn run_rules_command(cli: &Cli, rules_cli: &RulesCli) -> Result<()> {
             Ok(())
         }
     }
+}
+
+/// Resolve source rebuilding independently of daemon configuration.
+///
+/// # Errors
+/// Returns an error for source-only options that do not apply to the selected model.
+fn resolve_fetch_source(cli: &FetchCli) -> Result<FetchSource> {
+    if cli.from_source {
+        let preset = cli.model_preset.unwrap_or(ModelPreset::ParakeetV3);
+        if preset == ModelPreset::ParakeetV3 {
+            if cli.checkpoint_dir.is_some() {
+                anyhow::bail!("--checkpoint-dir requires a Qwen or Moondream model preset");
+            }
+            return Ok(FetchSource::OfficialNemo {
+                keep_nemo: cli.keep_nemo,
+                keep_f16: cli.keep_f16,
+            });
+        }
+        if cli.keep_nemo {
+            anyhow::bail!("--keep-nemo applies only to the parakeet-v3 source rebuild");
+        }
+        return Ok(FetchSource::PresetSource {
+            preset,
+            checkpoint_dir: cli.checkpoint_dir.clone(),
+            keep_f16: cli.keep_f16,
+        });
+    }
+    if let Some(preset) = cli.model_preset {
+        return Ok(FetchSource::Preset(preset));
+    }
+    fetch::source_from_cli(cli.source.clone(), cli.file.clone(), cli.sha256.clone())
 }
 
 /// Run the push-to-talk daemon: the full startup sequence when no

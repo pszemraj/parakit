@@ -1,6 +1,7 @@
 //! Parser, effective-option precedence, and flag-conflict regressions for the CLI.
 
 use super::*;
+use clap::ValueEnum;
 
 fn start_from(args: &[&str]) -> StartCli {
     let mut full = vec!["parakit", "start"];
@@ -75,7 +76,7 @@ fn qwen_controls_prefer_cli_and_validate_before_acquisition() {
         vec!["start", "--qwen-max-new-tokens", "0"],
         vec!["start", "--qwen-max-new-tokens", "4097"],
         vec!["fetch", "--model-preset", "parakeet-ultra", "owner/repo"],
-        vec!["fetch", "--model-preset", "parakeet-redux", "--from-source"],
+        vec!["fetch", "--checkpoint-dir", "checkpoint"],
         vec![
             "fetch",
             "--model-preset",
@@ -89,6 +90,39 @@ fn qwen_controls_prefer_cli_and_validate_before_acquisition() {
             "{args:?}"
         );
     }
+}
+
+#[test]
+fn every_preset_accepts_explicit_source_rebuilding() {
+    for preset in ModelPreset::value_variants() {
+        let cli = cli_from(&[
+            "fetch",
+            "--model-preset",
+            preset.id(),
+            "--from-source",
+            "--keep-f16",
+        ]);
+        let Some(Commands::Fetch(fetch)) = cli.command else {
+            panic!("expected fetch");
+        };
+        assert_eq!(fetch.model_preset, Some(*preset));
+        assert!(fetch.from_source && fetch.keep_f16);
+    }
+    let cli = cli_from(&[
+        "fetch",
+        "--model-preset",
+        "qwen3-asr-0.6b",
+        "--from-source",
+        "--checkpoint-dir",
+        "local checkpoint",
+    ]);
+    let Some(Commands::Fetch(fetch)) = cli.command else {
+        panic!("expected fetch");
+    };
+    assert_eq!(
+        fetch.checkpoint_dir,
+        Some(PathBuf::from("local checkpoint"))
+    );
 }
 
 #[test]

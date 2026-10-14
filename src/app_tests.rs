@@ -7,6 +7,55 @@ const GGML_LOG_LEVEL_INFO: i32 = 2;
 const GGML_LOG_LEVEL_ERROR: i32 = 4;
 
 #[test]
+fn source_rebuild_dispatch_preserves_legacy_and_selects_new_checkpoints() {
+    fn source(args: &[&str]) -> Result<FetchSource> {
+        let cli = Cli::parse_from(["parakit", "fetch"].into_iter().chain(args.iter().copied()));
+        let Some(Commands::Fetch(fetch)) = cli.command else {
+            panic!("expected fetch");
+        };
+        resolve_fetch_source(&fetch)
+    }
+    assert_eq!(
+        source(&["--from-source", "--keep-nemo", "--keep-f16"]).unwrap(),
+        FetchSource::OfficialNemo {
+            keep_nemo: true,
+            keep_f16: true,
+        }
+    );
+    assert_eq!(
+        source(&["--from-source", "--model-preset", "parakeet-v3"]).unwrap(),
+        FetchSource::OfficialNemo {
+            keep_nemo: false,
+            keep_f16: false,
+        }
+    );
+    assert_eq!(
+        source(&[
+            "--from-source",
+            "--model-preset",
+            "parakeet-redux",
+            "--checkpoint-dir",
+            "snapshot",
+            "--keep-f16",
+        ])
+        .unwrap(),
+        FetchSource::PresetSource {
+            preset: ModelPreset::ParakeetRedux,
+            checkpoint_dir: Some(PathBuf::from("snapshot")),
+            keep_f16: true,
+        }
+    );
+    assert!(source(&["--from-source", "--checkpoint-dir", "snapshot"]).is_err());
+    assert!(source(&[
+        "--from-source",
+        "--model-preset",
+        "parakeet-ultra",
+        "--keep-nemo",
+    ])
+    .is_err());
+}
+
+#[test]
 fn held_daemon_lock_requires_a_responsive_control_endpoint() {
     ensure_existing_daemon_responsive(true).unwrap();
     let error = ensure_existing_daemon_responsive(false).unwrap_err();

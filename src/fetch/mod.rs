@@ -1,9 +1,10 @@
 //! Model acquisition for `parakit fetch`: hosted Q8_0 presets, a
-//! source rebuild from NVIDIA's official `.nemo` checkpoint, a Hugging Face
-//! repo (see [`hub`]), or a direct URL.
+//! source rebuild from original checkpoints, a Hugging Face repo (see [`hub`]),
+//! or a direct URL.
 
 mod hub;
 mod net;
+mod source;
 
 pub use hub::source_from_cli;
 
@@ -57,6 +58,15 @@ pub enum FetchSource {
     HostedQ8,
     /// Download the exact hosted Q8_0 artifact for a named model preset.
     Preset(ModelPreset),
+    /// Convert an original Hugging Face checkpoint and quantize it to Q8_0.
+    PresetSource {
+        /// Named model whose original checkpoint is converted.
+        preset: ModelPreset,
+        /// User-owned local snapshot; absent downloads into the model cache.
+        checkpoint_dir: Option<PathBuf>,
+        /// Keep the intermediate F16 GGUF after Q8_0 is ready.
+        keep_f16: bool,
+    },
     /// Rebuild Q8_0 locally from NVIDIA's official `.nemo` checkpoint.
     OfficialNemo {
         /// Keep the downloaded `.nemo` after the final Q8_0 model is produced.
@@ -136,7 +146,7 @@ pub fn ensure_preset_model_with_verbosity(
 /// # Returns
 ///
 /// The path to the model the requested [`FetchSource`] produced: the
-/// preset cache path for [`FetchSource::Preset`], canonical cached Q8_0 path for
+/// preset cache path for [`FetchSource::Preset`] and [`FetchSource::PresetSource`], canonical cached Q8_0 path for
 /// [`FetchSource::HostedQ8`] and [`FetchSource::OfficialNemo`], or the `hub/…`/`url/…` cache path for
 /// [`FetchSource::HubRepo`]/[`FetchSource::Url`].
 ///
@@ -160,6 +170,19 @@ pub fn run(options: FetchOptions) -> Result<PathBuf> {
             &endpoint,
             token.as_deref(),
             *preset,
+            &models_dir()?,
+        ),
+        FetchSource::PresetSource {
+            preset,
+            checkpoint_dir,
+            keep_f16,
+        } => source::run(
+            &options,
+            &endpoint,
+            token.as_deref(),
+            *preset,
+            checkpoint_dir.as_deref(),
+            *keep_f16,
             &models_dir()?,
         ),
         FetchSource::OfficialNemo {
@@ -278,7 +301,7 @@ fn run_official_nemo_with_paths(
         preflight_python.as_deref(),
         options,
     )?;
-    ensure_q8(&paths, &quantize_bin, options)?;
+    ensure_q8(&paths.f16, &paths.q8, &quantize_bin, options)?;
 
     cleanup_intermediates(&paths, keep_nemo, keep_f16)?;
     options.status(format_args!("parakit: model ready: {}", paths.q8.display()));
@@ -551,19 +574,26 @@ fn ensure_f16(
     Ok(())
 }
 
-fn ensure_q8(paths: &FetchPaths, quantize_bin: &Path, options: &FetchOptions) -> Result<()> {
-    let tmp_q8 = paths.q8.with_extension("gguf.quantizing");
+fn ensure_q8(f16: &Path, q8: &Path, quantize_bin: &Path, options: &FetchOptions) -> Result<()> {
+    let tmp_q8 = q8.with_extension("gguf.quantizing");
     remove_if_exists(&tmp_q8)?;
     options.status(format_args!("parakit: quantizing F16 GGUF to Q8_0"));
     let mut command = Command::new(quantize_bin);
-    command.arg(&paths.f16).arg(&tmp_q8).arg("q8_0");
+    command
+        .arg(f16)
+        .arg(&tmp_q8)
+        .arg("q8_0")
+        .env("CRISPASR_QWEN3ASR_QUANT_AUDIO", "0");
+    if options.quiet {
+        command.stdout(Stdio::null());
+    }
     add_bundled_library_path(&mut command, quantize_bin);
     if let Err(err) = run_command(&mut command, "quantize GGUF to Q8_0") {
         let _ = remove_if_exists(&tmp_q8);
         return Err(err);
     }
 
-    move_into_place(&tmp_q8, &paths.q8)?;
+    move_into_place(&tmp_q8, q8)?;
     Ok(())
 }
 

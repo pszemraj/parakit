@@ -184,6 +184,14 @@ Record raw transcripts, omissions, negation and number/entity disagreements, fai
 
 Native platform acceptance remains separate: on macOS run both CPU and Metal for all presets; on Windows run the CPU bundle and available GPU backend. On each, check short and long WAV transcription, silence, repeated inference, idle offload/reload, explicit Qwen controls, quiet-mode errors, and real PTT insertion. Record unavailable runs as pending; Linux results do not establish these native platform results.
 
+### Checkpoint Conversion Acceptance
+
+Use the [source-rebuild commands](README.md#source-rebuild) with an isolated model cache and `--keep-f16 --force` to exercise original checkpoint download, F16 conversion, and Q8_0 quantization for both Qwen sizes and both Moondream models. Also run one rebuild from a local original snapshot with `--checkpoint-dir`; verify that the supplied snapshot remains after success and failure. Existing Parakeet v3 `.nemo` rebuilding must continue to work.
+
+For each rebuilt model, open the retained F16 and resulting Q8_0 artifacts through `transcribe-file` and the actual daemon worker. Compare both against the original implementation on the same audio using the quality procedure above. A successful converter or quantizer exit alone is insufficient: check consequential omissions, negations, numbers/entities, silence, and chunk-boundary speech. Treat any existing runtime quality limitation as unresolved until these comparisons establish otherwise.
+
+Confirm `start --model-preset NAME` resolves the rebuilt cache artifact. Repeat `fetch --from-source --model-preset NAME` with the completed artifact present and no usable Python converter/network access; it must reuse the cached Q8_0. Then exercise `--force`, intermediate F16 retention/removal, retained downloaded snapshots, and conversion/quantization failures without replacing a completed cached model. Keep generated models and reports in ignored test directories. These are local acceptance checks; they do not add model downloads, conversion, inference, or new jobs to CI.
+
 ## Cleaning Corpus Replay
 
 Use the audit example to measure a cleanup change over historical JSONL dictation logs without loading a speech model:

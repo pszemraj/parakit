@@ -438,6 +438,10 @@ backend = "auto"
 # The Vulkan0, Vulkan1 names in `parakit --verbose doctor` number only the visible devices, so they can differ from these indices.
 # An index the driver does not report disables the Vulkan backend: daemon.device "auto" then runs on the CPU and "gpu" fails at startup.
 
+# CRISPASR_QWEN3ASR_QUANT_AUDIO
+# Native Qwen quantizer override. A nonempty value not starting with 0 allows audio-encoder tensors to use the target quantization below the normal Q8_0 floor.
+# `parakit fetch --from-source` sets it to 0 for the quantizer child process, preserving the native audio-encoder precision policy regardless of the launching environment. It does not change the parent environment or runtime inference.
+
 # HF_ENDPOINT
 # Base URL that replaces https://huggingface.co for default/preset model downloads, `parakit fetch <repo>`, and `parakit fetch --from-source`. This includes automatic startup downloads.
 # A blank value means the default. Trailing slashes are trimmed. It does not apply to `parakit fetch <url>`.

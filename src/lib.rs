@@ -11,7 +11,7 @@ pub mod constants;
 mod crispasr_ext;
 /// Transcription log writer for raw/cleaned text pairs.
 pub mod data_log;
-/// Model acquisition pipeline for the official Parakeet checkpoint.
+/// Hosted model acquisition and original-checkpoint conversion/quantization.
 pub mod fetch;
 mod ffi_util;
 /// Minimal GGUF metadata reader for dtype reporting.

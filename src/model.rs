@@ -78,6 +78,22 @@ impl ModelPreset {
         }
     }
 
+    /// Return the original Hugging Face checkpoint used for source conversion.
+    ///
+    /// # Returns
+    ///
+    /// The checkpoint repository for Qwen and Moondream, or `None` for Parakeet
+    /// v3, whose existing source workflow downloads NVIDIA's `.nemo` file.
+    pub const fn source_repo(self) -> Option<&'static str> {
+        match self {
+            Self::ParakeetV3 => None,
+            Self::Qwen3Asr06b => Some("Qwen/Qwen3-ASR-0.6B"),
+            Self::Qwen3Asr17b => Some("Qwen/Qwen3-ASR-1.7B"),
+            Self::ParakeetUltra => Some("moondream/parakeet-ultra"),
+            Self::ParakeetRedux => Some("moondream/parakeet-redux"),
+        }
+    }
+
     /// Return the CrispASR backend expected for this preset.
     ///
     /// # Returns
