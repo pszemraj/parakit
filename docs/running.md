@@ -197,7 +197,9 @@ parakit start --model-preset parakeet-redux
 | `parakeet-ultra` | [cstr/parakeet-ultra-GGUF](https://huggingface.co/cstr/parakeet-ultra-GGUF) | `parakeet-ultra-q8_0.gguf` |
 | `parakeet-redux` | [cstr/parakeet-redux-GGUF](https://huggingface.co/cstr/parakeet-redux-GGUF) | `parakeet-redux-q8_0.gguf` |
 
-**Redux on CPU:** Parakit runs Redux as an ordinary Q8_0 GGUF with reconstructed weights. Moondream's [published CPU results](https://huggingface.co/moondream/parakeet-redux#performance) use [Photon](https://moondream.ai/photon), which reads the packed ternary weights directly. Photon's 178 MB weight footprint and ternary CPU acceleration do not apply to Parakit's GGUF runtime. The GGUF conversion also omits Moondream's VAD head, so Photon's pause-based segmentation is not a Parakit guarantee.
+**Redux on CPU:** Redux uses the same Parakeet GGUF backend as the other Parakeet presets, without a dedicated ternary CPU fast path. In our [Parakit CPU comparison](dev/quality.md#parakeet-cpu-comparison), Redux was slower than Ultra and used similar RAM. Those results cover one CPU and recording; compare the presets on your own hardware and audio before choosing for speed or memory.
+
+Redux's GGUF contains ordinary reconstructed weights. Photon's packed 178 MB weight footprint and [published CPU results](https://huggingface.co/moondream/parakeet-redux#performance) do not describe Parakit's runtime. The GGUF conversion also omits Moondream's VAD head, so Photon's pause-based segmentation is not a Parakit guarantee.
 
 Presets use the exact file above and check the local cache before contacting Hugging Face. Once fetched, they work offline. Parakeet v3 keeps its existing top-level cache path; the other presets use the Hub cache layout described below. `fetch --model-preset` does not read daemon configuration. It accepts `--force` and conflicts with a custom source, `--file`, and `--sha256`.
 

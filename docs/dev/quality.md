@@ -184,6 +184,20 @@ Record raw transcripts, omissions, negation and number/entity disagreements, fai
 
 Native platform acceptance remains separate: on macOS run both CPU and Metal for all presets; on Windows run the CPU bundle and available GPU backend. On each, check short and long WAV transcription, silence, repeated inference, idle offload/reload, explicit Qwen controls, quiet-mode errors, and real PTT insertion. Record unavailable runs as pending; Linux results do not establish these native platform results.
 
+### Parakeet CPU Comparison
+
+An acceptance run on October 14, 2026 compared the three Parakeet Q8_0 presets on an AMD Ryzen 7 7700X, using eight inference and OpenMP/BLAS threads, OpenBLAS, and the CPU-only bundled build. The native C++ library was optimized; the Rust file helper was a debug build. Each model transcribed the same 55.36-second Juniper memo twice after loading.
+
+| Preset | First inference | Repeat inference | Peak process RSS |
+| --- | ---: | ---: | ---: |
+| `parakeet-v3` | 5.60 s | 5.33 s | 1.56 GiB |
+| `parakeet-ultra` | 5.00 s | 4.60 s | 1.49 GiB |
+| `parakeet-redux` | 6.12 s | 5.66 s | 1.49 GiB |
+
+Inference times exclude model loading. RSS includes loading and both passes; it is not the model's download size. Filesystem caches were not flushed, and other host processes were present. These two runs on one recording do not establish a general speed ranking or transcription-quality advantage. Redux did not provide a CPU speed or memory advantage over Ultra in this check.
+
+Use the [WAV quality target](#wav-quality-target) with `--device cpu --repeat 3` and each `--model-preset` to compare your own CPU and recordings. Check raw-text fidelity alongside timing, especially omissions, negations, numbers, and names.
+
 ### Checkpoint Conversion Acceptance
 
 Use the [source-rebuild commands](README.md#source-rebuild) with an isolated model cache and `--keep-f16 --force` to exercise original checkpoint download, F16 conversion, and Q8_0 quantization for both Qwen sizes and both Moondream models. Also run one rebuild from a local original snapshot with `--checkpoint-dir`; verify that the supplied snapshot remains after success and failure. Existing Parakeet v3 `.nemo` rebuilding must continue to work.
