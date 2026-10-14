@@ -73,7 +73,7 @@ CUDA_VISIBLE_DEVICES=0 GGML_VK_VISIBLE_DEVICES= \
   "$CARGO_TARGET_DIR/debug/examples/transcribe-file" \
   --model-preset qwen3-asr-0.6b --device gpu --threads 8 \
   --audio local-scratch/juniper-voicememo-DO_NOT_DELETE.wav \
-  --warmup-seconds 5 --repeat 2
+  --warmup --repeat 2
 CUDA_VISIBLE_DEVICES=0 GGML_VK_VISIBLE_DEVICES= \
   "$CARGO_TARGET_DIR/debug/parakit" --verbose start \
   --model-preset qwen3-asr-0.6b --device gpu --threads 8 --no-cleaning \
@@ -132,7 +132,7 @@ cargo run --release --no-default-features --features bundled --example transcrib
 
 The example does not read daemon configuration. `--model` and `--model-preset` conflict, and Qwen controls require a Qwen GGUF. Token exhaustion without EOS or a failed native chunk must fail the full transcription rather than print an incomplete success.
 
-For latency work, use short real clips around 2s, 5s, 15s, and 25s. Longer quality clips are still useful for catching transcription drift, but they should not drive startup or post-release latency policy. Use repeatable `--warmup-seconds N` flags when calibrating GPU cold-start behavior; each flag runs one synthetic warmup pass before timing the real clip.
+For latency work, use short real clips around 2s, 5s, 15s, and 25s. Longer quality clips are still useful for catching transcription drift, but they should not drive startup or post-release latency policy. Use `transcribe-file --warmup` for the same model-aware readiness as daemon startup/reload. Qwen uses embedded human speech with automatic language and 512 tokens, then restores the user's options; Parakeet retains synthetic warmup. Repeatable `--warmup-seconds N` flags remain available for Parakeet shape diagnostics and are rejected for Qwen.
 
 ## PTT Worker Simulation
 

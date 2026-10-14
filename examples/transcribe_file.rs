@@ -27,7 +27,7 @@ struct Cli {
     #[arg(short = 'm', long, conflicts_with = "model_preset")]
     model: Option<PathBuf>,
 
-    /// Hosted Q8_0 model preset; defaults to parakeet-v3.
+    /// Hosted Q8_0 model preset; defaults to parakeet-v3. Qwen is experimental.
     #[arg(long, value_enum)]
     model_preset: Option<ModelPreset>,
 
@@ -54,6 +54,10 @@ struct Cli {
     /// Repeat inference on the same loaded model for timing comparisons.
     #[arg(long, default_value = "1")]
     repeat: NonZeroUsize,
+
+    /// Run the same model-aware readiness probe as daemon startup/reload.
+    #[arg(long, conflicts_with = "warmup_seconds")]
+    warmup: bool,
 
     /// Run one synthetic warmup pass before timing the real clip. Repeat for multiple passes.
     #[arg(long, value_name = "SECONDS")]
@@ -110,6 +114,9 @@ fn main() -> Result<()> {
     let engine = Engine::open_with_options(&model_path, threads, cli.device, &qwen)
         .with_context(|| format!("could not open model {}", model_path.display()))?;
     let dtype = gguf::dtype_label(&model_path);
+    if engine.backend() == "qwen3" && !cli.warmup_seconds.is_empty() {
+        anyhow::bail!("--warmup-seconds is synthetic Parakeet warmup; use --warmup for Qwen");
+    }
 
     println!("model:   {}", model_path.display());
     println!("dtype:   {dtype}");
@@ -118,6 +125,16 @@ fn main() -> Result<()> {
     println!("device:  {}", engine.device_mode().as_str());
     println!("audio:   {:.2}s", audio_secs);
     println!("source:  {} Hz", original_rate);
+
+    if cli.warmup {
+        #[cfg(feature = "bundled")]
+        let has_gpu = parakit::gpu::has_gpu_device();
+        #[cfg(not(feature = "bundled"))]
+        let has_gpu = false;
+        let started = Instant::now();
+        warmup::run(&engine, warmup::engine_warmup_seconds(cli.device, has_gpu))?;
+        println!("warmup: {:.0}ms", started.elapsed().as_secs_f32() * 1000.0);
+    }
 
     for seconds in &cli.warmup_seconds {
         let warmup_pcm = warmup::synthetic_pcm(*seconds);

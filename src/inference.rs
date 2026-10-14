@@ -103,6 +103,7 @@ pub struct Engine {
     backend: String,
     threads: usize,
     device_mode: DeviceMode,
+    qwen: Option<QwenOptions>,
 }
 
 enum EngineSession {
@@ -231,12 +232,44 @@ impl Engine {
                 .context("could not configure Qwen inference")?;
         }
         let backend = session.backend();
+        let qwen = (backend == "qwen3").then(|| options.clone());
         Ok(Self {
             session,
             backend,
             threads,
             device_mode,
+            qwen,
         })
+    }
+
+    /// Transcribe Qwen readiness speech with temporary automatic/512 options.
+    ///
+    /// # Arguments
+    /// * `pcm` - Embedded human speech at 16 kHz.
+    ///
+    /// # Returns
+    /// Success after readiness and restoration of the user's options.
+    ///
+    /// # Errors
+    /// Reports inference, configuration, or option-restoration errors.
+    pub(crate) fn transcribe_readiness(&self, pcm: &[f32]) -> Result<()> {
+        let options = self.qwen.as_ref().context("readiness requires Qwen")?;
+        let language = options.normalized_language().map_err(anyhow::Error::msg)?;
+        let restore = QwenOptionRestore {
+            session: &self.session,
+            language: language.unwrap_or_default(),
+            budget: options.max_new_tokens as i32,
+            active: true,
+        };
+        let result = self
+            .session
+            .configure_qwen("", 512)
+            .map_err(anyhow::Error::msg)
+            .and_then(|()| self.transcribe(pcm).map(|_| ()));
+        restore
+            .restore()
+            .context("restore Qwen options after readiness")?;
+        result
     }
 
     /// Return the CrispASR backend used for this model.
@@ -285,6 +318,30 @@ impl Engine {
         self.session
             .transcribe(pcm.as_ref())
             .map_err(|e| anyhow::anyhow!("crispasr transcribe failed: {e}"))
+    }
+}
+
+struct QwenOptionRestore<'a> {
+    session: &'a EngineSession,
+    language: String,
+    budget: i32,
+    active: bool,
+}
+
+impl QwenOptionRestore<'_> {
+    fn restore(mut self) -> Result<()> {
+        self.active = false;
+        self.session
+            .configure_qwen(&self.language, self.budget)
+            .map_err(anyhow::Error::msg)
+    }
+}
+
+impl Drop for QwenOptionRestore<'_> {
+    fn drop(&mut self) {
+        if self.active {
+            let _ = self.session.configure_qwen(&self.language, self.budget);
+        }
     }
 }
 

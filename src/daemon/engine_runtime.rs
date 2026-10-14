@@ -332,16 +332,15 @@ fn resolve_runtime_device(device_mode: DeviceMode) -> (String, bool) {
 
 fn warm_up_engine(engine: &Engine, sequence: &[usize], log: &Logger) -> Result<()> {
     let started = Instant::now();
-    for seconds in sequence {
-        let warmup = warmup::synthetic_pcm(*seconds);
-        engine
-            .transcribe(&warmup)
-            .context("engine warmup transcription failed")?;
-    }
+    warmup::run(engine, sequence).context("engine warmup transcription failed")?;
+    let input = if engine.backend() == "qwen3" {
+        "11s speech".to_owned()
+    } else {
+        format!("{} synthetic input", format_warmup_sequence(sequence))
+    };
     log.verbose(format!(
-        "parakit: engine warmup took {:.0}ms ({} synthetic input)",
+        "parakit: engine warmup took {:.0}ms ({input})",
         started.elapsed().as_secs_f32() * 1000.0,
-        format_warmup_sequence(sequence)
     ));
     Ok(())
 }
