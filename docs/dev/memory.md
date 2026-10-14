@@ -2,6 +2,16 @@
 
 The daemon owns one inference session on its worker thread. Idle offload drops that session, releasing its owned CPU and GPU allocations. It does not unload native libraries or reset process-wide device and driver state. See [idle model offload](../running.md#idle-model-offload) for the user-facing policy.
 
+## Qwen GPU Reload Measurements
+
+Linux measurements on 2026-10-14 used the Qwen 0.6B and 1.7B Q8_0 presets, CrispASR v0.8.42 (`3be8bcb`), an RTX 5090 with NVIDIA driver 595.91.07, and eight inference/BLAS/OpenMP threads. Rust front ends used the dev profile; native C++ was optimized. CUDA was built with `PARAKIT_CUDA_ARCHS=120-real`. Each backend ran the 55.36-second Juniper memo, 29/30/31-second chunk-boundary inputs, silence, repeated inference, and idle offload/reload. Startup warmed five seconds of synthetic audio; reload warmed one second. Qwen used automatic language detection and the default 512-token budget.
+
+Beyond the model file and retained offloaded GPU state, the largest observed allocations needed about 1.6 GiB for 0.6B and 1.8 GiB for 1.7B. The former model-size-plus-1-GiB reload check therefore admitted sessions without enough room for their observed dictation workspace. Bundled Qwen reloads now require the model file size plus 2 GiB; other backends retain the 1 GiB allowance. The reload recipe retains the backend detected by the startup session, so this also applies to custom Qwen paths rather than depending on preset filenames.
+
+Compare the allocation rise from an offloaded session with the free-memory requirement. Retained driver state is already excluded from free GPU memory and should not be charged again. CUDA retained about 568 MiB in these Qwen runs; Vulkan retained about 68-70 MiB. Host RSS and GPU allocation describe different accounting domains and should not be added together. Session close did not return all host RSS to the OS, and reload could peak above steady loaded RSS.
+
+The initial matrix sampled at 50 ms; the calibrated worker pass used nominal 5 ms active and 50 ms idle intervals. These are observed lower bounds, not allocation ceilings. The 2 GiB allowance covers the tested Q8_0 inputs and default budget on this host; larger budgets, other artifacts, and native Metal/Windows behavior remain uncalibrated. No VRAM-filling pressure test was performed. The check does not reserve memory or prevent later allocation failure. Follow the [Linux GPU procedure](quality.md#linux-cudavulkan) to record commands, per-process stage measurements, and raw transcripts for another build.
+
 ## Linux Reload Measurements
 
 These Linux measurements describe the historical CrispASR v0.6.6 runtime; they do not characterize the current v0.8.42 runtime.

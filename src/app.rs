@@ -668,10 +668,17 @@ fn open_cli_engine(
         model_path: std::path::absolute(&model_path)?,
         threads: engine_config.threads,
         device_mode: engine_config.device_mode,
+        #[cfg(feature = "bundled")]
+        backend: String::new(),
         qwen: engine_config.qwen,
         verbose,
     };
     let (engine, device_summary) = recipe.open(log)?;
+    #[cfg(feature = "bundled")]
+    let recipe = EngineRecipe {
+        backend: engine.backend().to_owned(),
+        ..recipe
+    };
     Ok(OpenedEngine {
         model_path,
         engine,

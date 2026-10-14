@@ -597,6 +597,8 @@ mod tests {
                 threads: 1,
                 qwen: parakit::qwen::QwenOptions::default(),
                 device_mode: parakit::inference::DeviceMode::Cpu,
+                #[cfg(feature = "bundled")]
+                backend: String::new(),
                 verbose: false,
             },
             settings: WorkerSettings {

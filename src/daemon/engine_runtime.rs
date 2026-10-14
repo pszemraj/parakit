@@ -17,6 +17,9 @@ pub(crate) struct EngineRecipe {
     pub(crate) threads: usize,
     /// Requested device policy, revalidated on every reload.
     pub(crate) device_mode: DeviceMode,
+    /// Backend identified at startup, used to size GPU reload workspace.
+    #[cfg(feature = "bundled")]
+    pub(crate) backend: String,
     /// Qwen options resolved at startup and reapplied after idle offload.
     pub(crate) qwen: QwenOptions,
     /// Whether native informational diagnostics should be emitted.
@@ -117,7 +120,7 @@ impl EngineRecipe {
                 .map(|device| device.free_bytes as u64);
             let needed_bytes = std::fs::metadata(&self.model_path)
                 .map_or(0, |metadata| metadata.len())
-                + RELOAD_GPU_WORKSPACE_BYTES;
+                + reload_gpu_workspace_bytes(&self.backend);
             let free_mib = free_bytes.unwrap_or_default() / 1_048_576;
             let needed_mib = needed_bytes / 1_048_576;
             match reload_device_for_free_memory(self.device_mode, free_bytes, needed_bytes) {
@@ -140,13 +143,29 @@ impl EngineRecipe {
     }
 }
 
-/// GPU memory to keep free beyond the model weights when reloading: the
-/// compute buffer and scratch pool of a typical dictation. CUDA used about
-/// 14 MiB per second of audio, so this covers roughly 75 seconds; sizing for
-/// the 270-second limit would push smaller GPUs to CPU on every reload.
-/// See docs/dev/memory.md.
+/// GPU workspace for typical Parakeet dictation, beyond the model file size.
+/// Longer audio can exceed this allowance; see docs/dev/memory.md.
 #[cfg(feature = "bundled")]
 const RELOAD_GPU_WORKSPACE_BYTES: u64 = 1 << 30;
+
+/// Size reload workspace for the backend identified by the startup session.
+///
+/// # Arguments
+///
+/// * `backend` - Native backend name retained from the initial session.
+///
+/// # Returns
+///
+/// Two GiB for Qwen, whose Q8_0 CUDA/Vulkan runs needed more than one GiB
+/// beyond weights, or the existing one-GiB allowance for other backends.
+#[cfg(feature = "bundled")]
+fn reload_gpu_workspace_bytes(backend: &str) -> u64 {
+    if backend == "qwen3" {
+        2 << 30
+    } else {
+        RELOAD_GPU_WORKSPACE_BYTES
+    }
+}
 
 /// Decide the reload device from free GPU memory.
 ///
@@ -351,6 +370,8 @@ mod tests {
                 model_path: path,
                 threads: 1,
                 device_mode: DeviceMode::Cpu,
+                #[cfg(feature = "bundled")]
+                backend: String::new(),
                 qwen: QwenOptions::default(),
                 verbose,
             };
@@ -383,6 +404,31 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[cfg(feature = "bundled")]
+    #[test]
+    fn qwen_reload_requires_room_for_its_larger_workspace() {
+        let model_bytes = 960 * 1_048_576;
+        let free_bytes = model_bytes + (1 << 30);
+        let qwen_needed = model_bytes + reload_gpu_workspace_bytes("qwen3");
+        let parakeet_needed = model_bytes + reload_gpu_workspace_bytes("parakeet");
+        assert_eq!(
+            reload_device_for_free_memory(DeviceMode::Auto, Some(free_bytes), qwen_needed),
+            Some(DeviceMode::Cpu)
+        );
+        assert_eq!(
+            reload_device_for_free_memory(DeviceMode::Gpu, Some(free_bytes), qwen_needed),
+            None
+        );
+        assert_eq!(
+            reload_device_for_free_memory(DeviceMode::Gpu, Some(qwen_needed), qwen_needed),
+            Some(DeviceMode::Gpu)
+        );
+        assert_eq!(
+            reload_device_for_free_memory(DeviceMode::Auto, Some(free_bytes), parakeet_needed),
+            Some(DeviceMode::Auto)
+        );
     }
 
     #[cfg(feature = "bundled")]

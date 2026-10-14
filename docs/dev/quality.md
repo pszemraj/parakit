@@ -58,13 +58,31 @@ Fetch the selected preset into this isolated cache first, or reuse an existing t
 ```bash
 CUDA_VISIBLE_DEVICES=0 GGML_VK_VISIBLE_DEVICES= \
   "$CARGO_TARGET_DIR/debug/parakit" --verbose doctor
-CUDA_VISIBLE_DEVICES= \
+env -u GGML_VK_VISIBLE_DEVICES CUDA_VISIBLE_DEVICES= \
   "$CARGO_TARGET_DIR/debug/parakit" --verbose doctor
 ```
 
 The first command exposes CUDA and hides Vulkan; the second hides CUDA and lets Vulkan select a discrete GPU. Check the device name in the native diagnostics. Use `GGML_VK_VISIBLE_DEVICES` to pin a Vulkan device when necessary, as described in [the environment reference](../config_reference.toml). `--device gpu` alone does not distinguish CUDA from Vulkan in a build containing both.
 
-For each backend, run the [WAV helper](#wav-quality-target) with `--device gpu --warmup-seconds 5 --repeat 2`, then the [real worker simulation](#ptt-worker-simulation) with `--device gpu --no-cleaning --model-idle-minutes 1 --simulate-ptt-repeat 2 --simulate-ptt-idle-seconds 63`. Prefix both commands with the same backend environment used for `doctor`. Exercise `parakeet-v3`, both Qwen sizes, `parakeet-ultra`, and `parakeet-redux` on the full Juniper memo and silence. For Qwen, also test 29-, 30-, and 31-second crops across its chunk boundary. Silence should produce an empty `Raw:` transcript in the helper and a worker no-speech error, without a successful transcript record.
+A verbose Vulkan run in a dual-backend build can report `no CUDA-capable device is detected` because CUDA was deliberately hidden. Confirm that the selected device is Vulkan on the intended GPU.
+
+Run the built [WAV helper](#wav-quality-target) and [real worker simulation](#ptt-worker-simulation) directly, preserving the GPU build's feature set:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 GGML_VK_VISIBLE_DEVICES= \
+  "$CARGO_TARGET_DIR/debug/examples/transcribe-file" \
+  --model-preset qwen3-asr-0.6b --device gpu --threads 8 \
+  --audio local-scratch/juniper-voicememo-DO_NOT_DELETE.wav \
+  --warmup-seconds 5 --repeat 2
+CUDA_VISIBLE_DEVICES=0 GGML_VK_VISIBLE_DEVICES= \
+  "$CARGO_TARGET_DIR/debug/parakit" --verbose start \
+  --model-preset qwen3-asr-0.6b --device gpu --threads 8 --no-cleaning \
+  --simulate-ptt-audio local-scratch/juniper-voicememo-DO_NOT_DELETE.wav \
+  --model-idle-minutes 1 --simulate-ptt-repeat 2 --simulate-ptt-idle-seconds 63 \
+  --log-dir "$PWD/target/tmp/validation/logs"
+```
+
+For Vulkan, replace the CUDA environment prefix on both commands with `env -u GGML_VK_VISIBLE_DEVICES CUDA_VISIBLE_DEVICES=` or pin a Vulkan device explicitly. Exercise `parakeet-v3`, both Qwen sizes, `parakeet-ultra`, and `parakeet-redux` on the full Juniper memo and silence. For Qwen, also test 29-, 30-, and 31-second crops across its chunk boundary. Silence should produce an empty `Raw:` transcript in the helper and a worker no-speech error, without a successful transcript record. The worker's two idle waits take at least 126 seconds per model/backend pair.
 
 Retain commands, device diagnostics, raw transcripts, exit statuses, timings, and per-process memory samples under the ignored `target/tmp/` tree. For reload calibration, sample host RSS and GPU allocations through startup warmup, full inference, loaded idle, offload, and reload. Compare the increase from the offloaded GPU allocation with the model file size plus the reload allowance; retained driver memory is already unavailable to the free-memory check. Label sampled peaks as observations rather than ceilings. Successful runs with ample free VRAM do not establish out-of-memory recovery.
 
