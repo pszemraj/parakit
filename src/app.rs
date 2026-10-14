@@ -371,6 +371,17 @@ fn run_daemon(cli: &Cli, start: &StartCli) -> Result<()> {
     let daemon_info = daemon::ipc::DaemonInfo {
         pid: std::process::id(),
         model_name,
+        model_preset: recipe.model_preset.map(|preset| preset.id().to_owned()),
+        qwen_language: engine
+            .qwen_options()
+            .map(|options| {
+                options
+                    .normalized_language()
+                    .map(|language| language.unwrap_or_else(|| "auto".to_owned()))
+            })
+            .transpose()
+            .map_err(anyhow::Error::msg)?,
+        qwen_max_new_tokens: engine.qwen_options().map(|options| options.max_new_tokens),
         dtype: model_dtype,
         mic_summary: mic_info.summary(),
         backend: engine.backend().to_string(),
@@ -666,6 +677,7 @@ fn open_cli_engine(
     let model_path = engine_config.model_path;
     let recipe = EngineRecipe {
         model_path: std::path::absolute(&model_path)?,
+        model_preset: engine_config.model_preset,
         threads: engine_config.threads,
         device_mode: engine_config.device_mode,
         #[cfg(feature = "bundled")]
@@ -697,6 +709,7 @@ struct OpenedEngine {
 #[derive(Debug)]
 struct EngineConfig {
     model_path: PathBuf,
+    model_preset: Option<ModelPreset>,
     threads: usize,
     device_mode: DeviceMode,
     qwen: QwenOptions,
@@ -735,6 +748,10 @@ where
         anyhow::bail!("Qwen controls require a Qwen3-ASR model");
     }
     validate_device(device_mode)?;
+    let model_preset = match &selection {
+        ModelSelection::Preset(preset) => Some(*preset),
+        ModelSelection::Local(_) => None,
+    };
     let model_path = match selection {
         ModelSelection::Local(path) => path,
         ModelSelection::Preset(preset) => fetch_default_model(preset)?,
@@ -755,6 +772,7 @@ where
         .unwrap_or_else(default_thread_count);
     Ok(EngineConfig {
         model_path,
+        model_preset,
         threads,
         device_mode,
         qwen,

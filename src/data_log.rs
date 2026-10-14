@@ -51,6 +51,36 @@ pub struct CleaningLogFields<'a> {
     pub failure: Option<&'a str>,
 }
 
+/// Inference identity for one successful transcription, including reload policy.
+#[derive(Clone, Debug, Serialize)]
+pub struct InferenceLogFields {
+    /// Selected file name, without its parent directory.
+    pub model: String,
+    /// Explicitly selected preset; absent for a custom local model.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_preset: Option<String>,
+    /// Native backend detected from the model.
+    pub backend: String,
+    /// GGUF quantization label.
+    pub quantization: String,
+    /// User's original device policy.
+    pub requested_device: crate::inference::DeviceMode,
+    /// Policy actually used to open the current session, including CPU fallback.
+    pub session_device: crate::inference::DeviceMode,
+    /// Execution device only when established; GPU inventory is insufficient.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub confirmed_device: Option<String>,
+    /// Canonical forced language or `auto`; absent for other backends.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub qwen_language: Option<String>,
+    /// Per-chunk generation budget; absent for other backends.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub qwen_max_new_tokens: Option<usize>,
+    /// Version reported by the linked native C API.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub native_api_version: Option<String>,
+}
+
 #[derive(Serialize)]
 struct LogRecord<'a> {
     ts: String,
@@ -63,6 +93,8 @@ struct LogRecord<'a> {
     cleaned: &'a str,
     #[serde(flatten)]
     cleaning: CleaningLogFields<'a>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    inference: Option<InferenceLogFields>,
 }
 
 /// Insertion-outcome telemetry correlated with a previously logged
@@ -180,6 +212,7 @@ impl DataLogger {
     /// * `cleaned` - Transcript after cleanup rules were applied.
     /// * `cleaning` - Cleaning telemetry describing how `cleaned` was derived
     ///   from `raw`.
+    /// * `inference` - Identity and controls of the session producing this row.
     ///
     /// # Returns
     ///
@@ -192,13 +225,21 @@ impl DataLogger {
         raw: &str,
         cleaned: &str,
         cleaning: CleaningLogFields<'_>,
+        inference: Option<InferenceLogFields>,
     ) -> Option<RecordId> {
         let timestamp = LogTimestamp::now(
             Arc::clone(&self.session_id),
             self.next_id.fetch_add(1, Ordering::Relaxed),
         );
         let id = timestamp.record_id.clone();
-        match self.try_log(timestamp, audio_secs, infer, raw, cleaned, cleaning) {
+        match self.try_log(
+            timestamp,
+            audio_secs,
+            infer,
+            (raw, cleaned),
+            cleaning,
+            inference,
+        ) {
             Ok(()) => Some(id),
             Err(e) => {
                 let _ = writeln!(
@@ -238,9 +279,9 @@ impl DataLogger {
         timestamp: LogTimestamp,
         audio_secs: f32,
         infer: Duration,
-        raw: &str,
-        cleaned: &str,
+        text: (&str, &str),
         cleaning: CleaningLogFields<'_>,
+        inference: Option<InferenceLogFields>,
     ) -> Result<()> {
         let record = LogRecord {
             ts: timestamp.utc_rfc3339,
@@ -249,9 +290,10 @@ impl DataLogger {
             parakit_version: crate::build_info::PACKAGE_VERSION,
             audio_secs,
             infer_ms: infer.as_millis(),
-            raw,
-            cleaned,
+            raw: text.0,
+            cleaned: text.1,
             cleaning,
+            inference,
         };
 
         self.with_state(timestamp.record_id.local_date, |state| {

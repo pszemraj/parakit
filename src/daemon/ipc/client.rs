@@ -247,6 +247,12 @@ fn print_status_detail(detail: Option<&StatusDetail>) -> Result<()> {
     outln!("  dictations: {}", detail.dictation_count)?;
     outln!("  mic:        {}", detail.mic)?;
     outln!("  model:      {} ({})", detail.model, detail.dtype)?;
+    if let Some(preset) = &detail.model_preset {
+        outln!("  preset:     {preset}")?;
+    }
+    if let (Some(language), Some(budget)) = (&detail.qwen_language, detail.qwen_max_new_tokens) {
+        outln!("  Qwen:       language={language}, max_new_tokens={budget}")?;
+    }
     if let Some(model) = &detail.model_status {
         outln!("  residency:  {}", model.residency.label())?;
         if model.idle_minutes == 0 {

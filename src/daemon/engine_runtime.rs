@@ -13,6 +13,8 @@ use std::time::Instant;
 pub(crate) struct EngineRecipe {
     /// Resolved model path, reused without fetching during recording.
     pub(crate) model_path: PathBuf,
+    /// Preset chosen at startup; never inferred from a local filename.
+    pub(crate) model_preset: Option<parakit::model::ModelPreset>,
     /// Requested CPU thread count.
     pub(crate) threads: usize,
     /// Requested device policy, revalidated on every reload.
@@ -312,7 +314,11 @@ fn resolve_runtime_device(device_mode: DeviceMode) -> (String, bool) {
         let devices = parakit::gpu::devices();
         let preferred = parakit::gpu::preferred_gpu_device_in(&devices);
         let summary = match preferred {
-            Some(device) => format!("{} -> {}", device_mode.as_str(), device.diagnostic_line()),
+            Some(device) => format!(
+                "{} (GPU inventory: {}; execution unconfirmed)",
+                device_mode.as_str(),
+                device.diagnostic_line()
+            ),
             None if device_mode == DeviceMode::Auto => {
                 "auto -> CPU fallback (no GPU/iGPU visible)".to_string()
             }
@@ -367,6 +373,7 @@ mod tests {
             let verbose = verbose == "true";
             let recipe = EngineRecipe {
                 model_path: path,
+                model_preset: None,
                 threads: 1,
                 device_mode: DeviceMode::Cpu,
                 #[cfg(feature = "bundled")]

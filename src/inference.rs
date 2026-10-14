@@ -286,6 +286,31 @@ impl Engine {
         }
     }
 
+    /// Return the resolved Qwen controls, absent for other backends.
+    ///
+    /// # Returns
+    /// The user options restored after every readiness probe.
+    pub fn qwen_options(&self) -> Option<&QwenOptions> {
+        self.qwen.as_ref()
+    }
+
+    /// Read the version reported by the linked native C API.
+    ///
+    /// # Returns
+    /// A version string, or `None` when the native API provides none.
+    pub fn native_api_version(&self) -> Option<String> {
+        let version = unsafe { crispasr_sys::crispasr_c_api_version() };
+        if version.is_null() {
+            None
+        } else {
+            Some(
+                unsafe { std::ffi::CStr::from_ptr(version) }
+                    .to_string_lossy()
+                    .into_owned(),
+            )
+        }
+    }
+
     /// Return the requested inference thread count.
     ///
     /// # Returns
