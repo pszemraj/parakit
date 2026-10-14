@@ -41,6 +41,33 @@ CRISPASR_LIB_DIR="$PWD/target/debug/build/parakit-<hash>/out/lib" \
 
 Replace `<hash>` with the directory from the successful native build; do not point the fallback at an unrelated or stale library.
 
+### Linux CUDA/Vulkan
+
+Check `nvidia-smi` for active compute jobs before loading models. Build the daemon and helper in an [isolated target directory](../build.md#isolated-development-builds); do not install the validation binary over the running daemon. The commands below assume `CARGO_TARGET_DIR` still names that GPU build.
+
+```bash
+mkdir -p target/tmp/validation
+printf '# Isolated validation configuration.\n' > target/tmp/validation/config.toml
+export PARAKIT_CONFIG_PATH="$PWD/target/tmp/validation/config.toml"
+export XDG_CACHE_HOME="$PWD/target/tmp/validation/cache"
+export PARAKIT_MODELS_DIR="$XDG_CACHE_HOME/parakit/models"
+```
+
+Fetch the selected preset into this isolated cache first, or reuse an existing test cache by setting `PARAKIT_MODELS_DIR` to it. Check backend visibility before inference:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 GGML_VK_VISIBLE_DEVICES= \
+  "$CARGO_TARGET_DIR/debug/parakit" --verbose doctor
+CUDA_VISIBLE_DEVICES= \
+  "$CARGO_TARGET_DIR/debug/parakit" --verbose doctor
+```
+
+The first command exposes CUDA and hides Vulkan; the second hides CUDA and lets Vulkan select a discrete GPU. Check the device name in the native diagnostics. Use `GGML_VK_VISIBLE_DEVICES` to pin a Vulkan device when necessary, as described in [the environment reference](../config_reference.toml). `--device gpu` alone does not distinguish CUDA from Vulkan in a build containing both.
+
+For each backend, run the [WAV helper](#wav-quality-target) with `--device gpu --warmup-seconds 5 --repeat 2`, then the [real worker simulation](#ptt-worker-simulation) with `--device gpu --no-cleaning --model-idle-minutes 1 --simulate-ptt-repeat 2 --simulate-ptt-idle-seconds 63`. Prefix both commands with the same backend environment used for `doctor`. Exercise `parakeet-v3`, both Qwen sizes, `parakeet-ultra`, and `parakeet-redux` on the full Juniper memo and silence. For Qwen, also test 29-, 30-, and 31-second crops across its chunk boundary. Silence should produce an empty `Raw:` transcript in the helper and a worker no-speech error, without a successful transcript record.
+
+Retain commands, device diagnostics, raw transcripts, exit statuses, timings, and per-process memory samples under the ignored `target/tmp/` tree. For reload calibration, sample host RSS and GPU allocations through startup warmup, full inference, loaded idle, offload, and reload. Compare the increase from the offloaded GPU allocation with the model file size plus the reload allowance; retained driver memory is already unavailable to the free-memory check. Label sampled peaks as observations rather than ceilings. Successful runs with ample free VRAM do not establish out-of-memory recovery.
+
 ## Rust Source Coverage
 
 Install Rust's coverage tools once:

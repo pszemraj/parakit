@@ -64,6 +64,30 @@ For Windows bundles, use the [backend selector and requirements](../scripts/wind
 
 On macOS, `aarch64-apple-darwin` is the supported target. Build from a native arm64 terminal; an x86_64/Rosetta build may not expose the Metal backend to ggml.
 
+## Isolated Development Builds
+
+Use `cargo build` with a separate [Cargo target directory](https://doc.rust-lang.org/cargo/reference/build-cache.html) when validating changes alongside an installed daemon. Build both the daemon and WAV helper, then invoke those binaries by path:
+
+```bash
+export CARGO_TARGET_DIR="$PWD/target/tmp/validation/cargo"
+cargo build --locked --bin parakit --example transcribe-file
+"$CARGO_TARGET_DIR/debug/parakit" --version
+```
+
+For Linux CUDA/Vulkan validation, use a separate GPU directory. This RTX 5090 example requires a CUDA Toolkit that supports architecture 120:
+
+```bash
+export CARGO_TARGET_DIR="$PWD/target/tmp/validation/cargo-gpu"
+export PARAKIT_CUDA_ARCHS=120-real
+export CARGO_BUILD_JOBS=2
+export CMAKE_BUILD_PARALLEL_LEVEL=2
+cargo build --locked --features cuda,vulkan --bin parakit --example transcribe-file
+```
+
+Use the architecture supported by your GPU and toolkit. The job limits bound compilation parallelism, not inference threads. Reuse the same directory, feature set, profile, and native build settings for subsequent builds. Changing them can require another native compile; `cargo check` does not produce the runnable binaries. An existing directory built with `--all-features` should keep that feature set when rebuilding; Linux intentionally ignores the unsupported Metal feature.
+
+Keep each binary's generated native libraries with its build tree. On Linux, check `ldd "$CARGO_TARGET_DIR/debug/parakit"` and `readelf -d "$CARGO_TARGET_DIR/debug/parakit"`: CrispASR/ggml should resolve inside that isolated directory, with `RPATH`. These builds do not install a binary or restart a running daemon. Runtime validation also needs isolated configuration and model state; follow the [Linux GPU procedure](dev/quality.md#linux-cudavulkan).
+
 ## CPU Builds
 
 The bundled CMake path enables ggml native CPU code, OpenMP, and CPU repacking. On Linux with GCC or Clang this usually means `-march=native` for the local machine.
