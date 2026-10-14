@@ -10,6 +10,8 @@ Install Rust via [rustup](https://rustup.rs) if you do not already have a toolch
 
 Cargo handles Rust packages. System packages are still needed for audio, desktop input, X11/XTest insertion, CMake, and optional accelerator SDKs.
 
+CMake 3.19 or newer is required for bundled builds.
+
 | OS | Packages |
 | --- | --- |
 | Ubuntu 24.04 | `cmake build-essential libasound2-dev libxtst-dev libxi-dev libx11-dev libxkbcommon-dev libevdev-dev libxdo-dev libgomp1 pkg-config` |
@@ -112,7 +114,11 @@ Explicit `PARAKIT_BLAS` builds print the requested and selected modes as a Cargo
 
 The repository vendors [CrispASR](https://github.com/CrispStrobe/CrispASR) as a git submodule. `build.rs` owns its CMake build and installs shared libraries under `target/<profile>/build/parakit-*/out/lib`. Concrete target overrides in `.cargo/config.toml` suppress the sys crate's competing native build. Run Cargo from the repository root so this configuration is loaded; an outside-directory `cargo build --manifest-path ...` does not load it. Source rebuild requirements are in [dev/README.md#source-rebuild](dev/README.md#source-rebuild).
 
+The bundled build compiles a patched copy of CrispASR's session source under Cargo's `OUT_DIR`; it leaves the submodule unchanged. The patches make chunk failures fail the whole utterance, require Qwen decoding to reach EOS, and restrict language-metadata parsing to the output header. A deferred CMake hook substitutes that one translation unit, which requires CMake 3.19+.
+
 `CRISPASR_LIB_DIR` is for advanced local experiments with an already-built compatible CrispASR tree. The library must match the pinned C ABI, including `crispasr_session_open_with_params`. Bundled builds must also provide compatible ggml libraries with the exported device registry entry points used by `parakit doctor` and `--device gpu` preflight. Parakit compiles its device-query adapter against the selected native source headers, including when `CRISPASR_LIB_DIR` skips native compilation; those headers must match the supplied libraries.
+
+External libraries must also supply the Qwen language/token setters and equivalent native correctness fixes before using Qwen. Selecting an external library skips the bundled source patches; the bundled build is the initial Qwen acceptance target.
 
 `CRISPASR_SRC_DIR` is an optional path to another CrispASR source tree containing `CMakeLists.txt`; by default, the bundled CMake build uses the vendored tree. An alternative tree must remain ABI-compatible with the vendored Rust crates; this override changes native sources and headers only, not the Rust path dependencies. It cannot replace a missing submodule because Cargo resolves those path dependencies before `build.rs` runs.
 
