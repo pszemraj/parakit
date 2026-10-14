@@ -77,6 +77,16 @@ cargo run --release --no-default-features --features bundled --example transcrib
 
 The helper accepts WAV input, uses the same raw `Engine` path as the daemon, and prints raw inference text and timing. It intentionally does not import or apply parakit text-cleaning rules. This command avoids live daemon desktop/audio dependencies while keeping the bundled CrispASR build. Model cache behavior is in [running.md#model-cache](../running.md#model-cache). Pass `--model /path/to/model.gguf` only when comparing a specific custom GGUF. The source lives at [examples/transcribe_file.rs](../../examples/transcribe_file.rs); it is a Cargo example target so it is not installed as an end-user binary.
 
+Use `--model-preset` for any [hosted preset](../running.md#model-presets), including both Qwen sizes and the Moondream models:
+
+```bash
+cargo run --release --no-default-features --features bundled --example transcribe-file -- \
+  --audio clips/example.wav --model-preset qwen3-asr-1.7b \
+  --qwen-language auto --qwen-max-new-tokens 512
+```
+
+The example does not read daemon configuration. `--model` and `--model-preset` conflict, and Qwen controls require a Qwen GGUF. Token exhaustion without EOS or a failed native chunk must fail the full transcription rather than print an incomplete success.
+
 For latency work, use short real clips around 2s, 5s, 15s, and 25s. Longer quality clips are still useful for catching transcription drift, but they should not drive startup or post-release latency policy. Use repeatable `--warmup-seconds N` flags when calibrating GPU cold-start behavior; each flag runs one synthetic warmup pass before timing the real clip.
 
 ## PTT Worker Simulation
@@ -156,6 +166,23 @@ Not acceptable:
 If F16 differs materially from the reference, inspect CrispASR's Parakeet preprocessor first. If F16 matches but Q8_0 is worse, suspect the hosted artifact or quantizer path.
 
 Parakeet-v3 auto-detects language. It has no parakit language flag today, so non-English or code-switched dictation should be checked against real clips before relying on it. Accents, noise, proper nouns, and technical vocabulary can change language detection behavior.
+
+### Qwen And Moondream Comparisons
+
+Start Qwen comparisons with 1.7B: run the same known-bad recordings through Parakeet v3, Qwen 1.7B F16, and Qwen 1.7B Q8_0, then repeat for 0.6B. Fetch the exact F16 files with the existing custom fetch path:
+
+```bash
+parakit fetch cstr/qwen3-asr-1.7b-GGUF --file qwen3-asr-1.7b-f16.gguf
+parakit fetch cstr/qwen3-asr-0.6b-GGUF --file qwen3-asr-0.6b.gguf
+```
+
+Use the resulting printed model paths with `transcribe-file --model`. Compare against the [official Qwen implementation](https://huggingface.co/Qwen/Qwen3-ASR-0.6B#python-package-usage) as a separate reference. Keep forced language and token budget the same across comparisons; automatic detection and forced English are distinct cases. Include short speech, silence, the pinned Juniper recording, and speech spanning a 30-second Qwen chunk boundary. Use raw output (`--no-cleaning` in daemon simulation), then verify repeated inference and idle offload/reload preserve the options and transcript.
+
+For [Ultra](https://huggingface.co/moondream/parakeet-ultra) and [Redux](https://huggingface.co/moondream/parakeet-redux), compare the Q8_0 presets with the original checkpoints through CrispASR's existing Hugging Face reference helpers and a short independent Photon run. Photon's packed Redux implementation and VAD segmentation differ from the GGUF runtime; record those conditions rather than attributing their speed or memory figures to parakit.
+
+Record raw transcripts, omissions, negation and number/entity disagreements, failures, cold/warm latency, and host/GPU memory. Listen to consequential disagreements and label human-reviewed text separately. Keep downloaded reference weights, dependencies, and generated evidence under ignored scratch directories. Check for active training or other GPU jobs before each hardware run and defer GPU tests while they occupy the device.
+
+Native platform acceptance remains separate: on macOS run both CPU and Metal for all presets; on Windows run the CPU bundle and available GPU backend. On each, check short and long WAV transcription, silence, repeated inference, idle offload/reload, explicit Qwen controls, quiet-mode errors, and real PTT insertion. Record unavailable runs as pending; Linux results do not establish these native platform results.
 
 ## Cleaning Corpus Replay
 

@@ -17,6 +17,8 @@
 
 use anyhow::{Context, Result};
 use parakit::inference::DeviceMode;
+use parakit::model::ModelPreset;
+use parakit::qwen::QwenOptions;
 use parakit::rules::{CleaningProfile, UserRule};
 use serde::Deserialize;
 use std::num::NonZeroUsize;
@@ -42,6 +44,7 @@ pub(crate) struct ConfigFile {
     pub(crate) logging: LoggingConfig,
     pub(crate) hotkey: HotkeyConfig,
     pub(crate) rules: RulesConfig,
+    pub(crate) qwen: QwenConfig,
 }
 
 /// `[daemon]` section: daemon runtime defaults.
@@ -50,6 +53,8 @@ pub(crate) struct ConfigFile {
 pub(crate) struct DaemonConfig {
     /// Path to a GGUF model file. Overrides the cached Q8_0 model.
     pub(crate) model: Option<PathBuf>,
+    /// Named hosted Q8_0 model, mutually exclusive with `model`.
+    pub(crate) model_preset: Option<ModelPreset>,
     /// Runtime compute device.
     pub(crate) device: Option<DeviceMode>,
     /// CPU inference threads.
@@ -69,6 +74,29 @@ pub(crate) struct DaemonConfig {
     /// `history`. `0` disables both. History lives only in daemon memory;
     /// nothing is written to disk, and it is cleared when the daemon stops.
     pub(crate) transcript_history: Option<usize>,
+}
+
+/// `[qwen]` settings apply only to Qwen3-ASR sessions.
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct QwenConfig {
+    /// Source language code/name; unset or `auto` detects the language.
+    pub(crate) language: Option<String>,
+    /// Generated-token budget per native chunk, 1 through 4096.
+    pub(crate) max_new_tokens: Option<usize>,
+}
+
+impl QwenConfig {
+    /// Resolve the built-in automatic-language and 512-token defaults.
+    ///
+    /// # Returns
+    /// The configured Qwen options, including effective defaults.
+    pub(crate) fn options(&self) -> QwenOptions {
+        QwenOptions {
+            language: self.language.clone(),
+            max_new_tokens: self.max_new_tokens.unwrap_or(512),
+        }
+    }
 }
 
 impl DaemonConfig {
@@ -240,6 +268,11 @@ pub(crate) const TEMPLATE: &str = r#"# parakit config.toml
 # Overrides the cached Q8_0 model.
 # model = "/path/to/model.gguf"
 
+# Hosted Q8_0 preset, mutually exclusive with model.
+# Choices: parakeet-v3, qwen3-asr-0.6b, qwen3-asr-1.7b, parakeet-ultra, parakeet-redux.
+# Unset: parakeet-v3. Qwen presets are experimental.
+# model_preset = "qwen3-asr-1.7b"
+
 # Runtime compute device: "auto", "cpu", or "gpu".
 # device = "auto"
 
@@ -275,8 +308,18 @@ pub(crate) const TEMPLATE: &str = r#"# parakit config.toml
 # This key never writes it to disk, though logging.dir can log the same transcripts.
 # transcript_history = 10
 
+[qwen]
+# Source language code or English name; auto detects the supported language.
+# Applies only to Qwen3-ASR. CLI --qwen-language overrides it.
+# language = "auto"
+
+# Maximum generated tokens per native chunk, 1 through 4096.
+# Applies only to Qwen3-ASR. CLI --qwen-max-new-tokens overrides it.
+# max_new_tokens = 512
+
 [cleaning]
 # Enable the text-cleaning pipeline.
+# Set false for raw multilingual dictation without English or user cleaning rules.
 # enabled = true
 
 # Cleanup behavior tier: "safe" or "aggressive".
@@ -449,6 +492,20 @@ pub(crate) fn load_from_path(path: &Path) -> Result<ConfigFile> {
         );
     }
 
+    parakit::model::resolve_model_selection(
+        None,
+        None,
+        config.daemon.model.as_deref(),
+        config.daemon.model_preset,
+    )
+    .with_context(|| format!("invalid config in {}", path.display()))?;
+    config
+        .qwen
+        .options()
+        .validate()
+        .map_err(anyhow::Error::msg)
+        .with_context(|| format!("invalid config in {}", path.display()))?;
+
     // Checked here so the daemon never fetches or opens a model it would then refuse.
     if config
         .daemon
@@ -488,6 +545,28 @@ pub(crate) fn load_from_path(path: &Path) -> Result<ConfigFile> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn model_alternatives_and_qwen_controls_are_validated_on_load() {
+        let path = write_fixture("qwen", "[daemon]\nmodel_preset = 'qwen3-asr-0.6b'\n[qwen]\nlanguage = 'yue'\nmax_new_tokens = 4096\n[cleaning]\nenabled = false\n");
+        let config = load_from_path(&path).unwrap();
+        assert_eq!(config.daemon.model_preset, Some(ModelPreset::Qwen3Asr06b));
+        assert_eq!(
+            config.qwen.options().normalized_language().unwrap(),
+            Some("Cantonese".to_owned())
+        );
+        assert!(!config.cleaning.enabled());
+        for text in [
+            "[daemon]\nmodel = 'a'\nmodel_preset = 'parakeet-v3'\n",
+            "[daemon]\nmodel_preset = 'unknown'\n",
+            "[qwen]\nlanguage = 'unsupported'\n",
+            "[qwen]\nmax_new_tokens = 0\n",
+            "[qwen]\nmax_new_tokens = 4097\n",
+        ] {
+            let path = write_fixture("bad-qwen", text);
+            assert!(load_from_path(&path).is_err(), "{text}");
+        }
+    }
 
     fn write_fixture(name: &str, contents: &str) -> PathBuf {
         crate::test_support::write_config_fixture("parakit-config-test", name, contents)

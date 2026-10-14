@@ -12,6 +12,8 @@ Hashes belong in an explicit `--sha256` request or a release process that actual
 
 End-user download, cache, and model-override behavior is in [running.md#model-cache](../running.md#model-cache).
 
+Both Qwen3-ASR sizes and Moondream Ultra/Redux use externally hosted Q8_0 [presets](../running.md#model-presets). They do not require local conversion or parakit-hosted artifacts. F16 and official-runtime comparison procedures are in [quality.md#qwen-and-moondream-comparisons](quality.md#qwen-and-moondream-comparisons).
+
 Hosted release files:
 
 | File | Role |

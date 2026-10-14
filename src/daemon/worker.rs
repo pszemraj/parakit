@@ -564,13 +564,15 @@ mod tests {
     struct FakeEngine {
         transcriptions: Arc<AtomicUsize>,
         drops: Arc<AtomicUsize>,
-        transcript: &'static str,
+        transcript: std::result::Result<&'static str, &'static str>,
     }
 
     impl WorkerEngine for FakeEngine {
         fn transcribe(&self, _pcm: &[f32]) -> Result<String> {
             self.transcriptions.fetch_add(1, Ordering::SeqCst);
-            Ok(self.transcript.to_string())
+            self.transcript
+                .map(str::to_owned)
+                .map_err(anyhow::Error::msg)
         }
     }
 
@@ -593,6 +595,7 @@ mod tests {
             recipe: EngineRecipe {
                 model_path: std::path::PathBuf::new(),
                 threads: 1,
+                qwen: parakit::qwen::QwenOptions::default(),
                 device_mode: parakit::inference::DeviceMode::Cpu,
                 verbose: false,
             },
@@ -670,7 +673,7 @@ mod tests {
                 FakeEngine {
                     transcriptions: Arc::clone(&transcriptions),
                     drops: Arc::new(AtomicUsize::new(0)),
-                    transcript: " ",
+                    transcript: Ok(" "),
                 },
                 &state,
                 sounds,
@@ -702,6 +705,42 @@ mod tests {
     #[test]
     fn worker_loop_offloads_then_reloads_and_transcribes_queued_capture() {
         exercise_blocked_reload(ReloadCase::Released);
+    }
+
+    #[test]
+    fn failed_transcription_keeps_previous_history_and_reports_failure() {
+        let state = Arc::new(SharedState::with_history_limit(2));
+        state.activity.ready();
+        state.remember_transcript("previous dictation".to_owned());
+        let (tx, rx) = crossbeam_channel::bounded(WORKER_QUEUE_CAPACITY);
+        let (sounds, cues) = Sounds::test_channel();
+        let ctx = test_worker_ctx(
+            FakeEngine {
+                transcriptions: Arc::new(AtomicUsize::new(0)),
+                drops: Arc::new(AtomicUsize::new(0)),
+                transcript: Err("incomplete native decoding"),
+            },
+            &state,
+            sounds,
+            rx,
+            0,
+        );
+        let worker = std::thread::spawn(move || {
+            worker_loop_with(ctx, None, || panic!("resident model must not reload"))
+        });
+        let (done_tx, done_rx) = crossbeam_channel::bounded(1);
+        let capture = stopped_capture(Instant::now(), vec![0.1; 160], None, done_tx);
+        tx.send(capture).unwrap();
+        assert!(done_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap()
+            .unwrap_err()
+            .contains("incomplete native decoding"));
+        assert!(matches!(next_cue(&cues), Cue::Error));
+        drop(tx);
+        worker.join().unwrap();
+        assert_eq!(state.resolve_transcript(0).unwrap(), "previous dictation");
+        assert!(state.resolve_transcript(1).is_err());
     }
 
     #[test]
@@ -757,7 +796,7 @@ mod tests {
             FakeEngine {
                 transcriptions: Arc::clone(&transcriptions),
                 drops: Arc::clone(&drops),
-                transcript: "reloaded dictation",
+                transcript: Ok("reloaded dictation"),
             },
             &state,
             sounds,
@@ -784,7 +823,7 @@ mod tests {
                 Ok(FakeEngine {
                     transcriptions: Arc::clone(&loader_transcriptions),
                     drops: Arc::clone(&loader_drops),
-                    transcript: "reloaded dictation",
+                    transcript: Ok("reloaded dictation"),
                 })
             };
             worker_loop_with(ctx, Some(Duration::from_millis(10)), load);

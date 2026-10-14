@@ -24,6 +24,7 @@ const PROBE_KEY: &str = "zz_probe";
 /// table missing here surfaces as an undocumented leaf key.
 const TABLES: &[&str] = &[
     "daemon",
+    "qwen",
     "cleaning",
     "logging",
     "hotkey",
@@ -253,6 +254,18 @@ fn effective_snapshot(config: &ConfigFile) -> BTreeMap<&'static str, String> {
     };
     put("daemon.model", format!("{:?}", config.daemon.model));
     put(
+        "daemon.model_preset",
+        format!("{:?}", config.daemon.model_preset),
+    );
+    put(
+        "qwen.language",
+        format!("{:?}", config.qwen.options().normalized_language().unwrap()),
+    );
+    put(
+        "qwen.max_new_tokens",
+        config.qwen.options().max_new_tokens.to_string(),
+    );
+    put(
         "daemon.device",
         format!("{:?}", config.daemon.effective_device()),
     );
@@ -341,8 +354,7 @@ fn reference_documents_exactly_the_accepted_keys() {
 fn template_documents_exactly_the_accepted_keys() {
     assert_documents_accepted_keys("config::TEMPLATE", TEMPLATE);
 
-    let path = write_fixture("template-uncommented", &uncomment_examples(TEMPLATE));
-    load_from_path(&path).expect("every example value in the template must load");
+    assert_model_alternatives_load("template-uncommented", TEMPLATE);
 }
 
 #[test]
@@ -358,14 +370,39 @@ fn reference_loads_and_every_value_is_the_default() {
 
 #[test]
 fn reference_examples_load_once_uncommented() {
-    let path = write_fixture("reference-uncommented", &uncomment_examples(REFERENCE));
-    let loaded = load_from_path(&path)
-        .expect("every commented-out example in docs/config_reference.toml must load");
+    let loaded = assert_model_alternatives_load("reference-uncommented", REFERENCE);
     assert_eq!(
         loaded.rules.user.len(),
         1,
         "one example [[rules.user]] entry"
     );
+}
+
+/// Validate path and preset examples separately, since they are alternatives.
+fn assert_model_alternatives_load(name: &str, text: &str) -> ConfigFile {
+    let text = uncomment_examples(text);
+    let mut value: toml::Table = text.parse().unwrap();
+    let daemon = value.get_mut("daemon").unwrap().as_table_mut().unwrap();
+    let path = daemon.remove("model");
+    let preset = daemon.remove("model_preset");
+    let mut loaded = None;
+    for (key, selected) in [("model", path), ("model_preset", preset)] {
+        let mut alternative = value.clone();
+        if let Some(selected) = selected {
+            alternative
+                .get_mut("daemon")
+                .unwrap()
+                .as_table_mut()
+                .unwrap()
+                .insert(key.to_owned(), selected);
+        }
+        let path = write_fixture(
+            &format!("{name}-{key}"),
+            &toml::to_string(&alternative).unwrap(),
+        );
+        loaded = Some(load_from_path(&path).expect("each model example must load separately"));
+    }
+    loaded.unwrap()
 }
 
 #[test]
@@ -454,6 +491,7 @@ fn assert_values_listed(key: &str, values: &[String]) {
 
 #[test]
 fn closed_value_sets_are_fully_enumerated() {
+    assert_values_listed("daemon.model_preset", &variant_names::<ModelPreset>());
     assert_values_listed("daemon.device", &variant_names::<DeviceMode>());
     assert_values_listed("daemon.paste_mode", &variant_names::<PasteMode>());
     assert_values_listed("cleaning.profile", &variant_names::<CleaningProfile>());

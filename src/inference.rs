@@ -3,6 +3,7 @@
 use crate::constants::TARGET_RATE;
 use crate::crispasr_ext::{crispasr_thread_count, OwnedSession};
 use crate::model::validate_model_file;
+use crate::qwen::QwenOptions;
 use anyhow::{bail, Context, Result};
 use clap::ValueEnum;
 use std::borrow::Cow;
@@ -110,6 +111,19 @@ enum EngineSession {
 }
 
 impl EngineSession {
+    fn configure_qwen(&self, language: &str, max_new_tokens: i32) -> Result<(), String> {
+        match self {
+            Self::Auto(session) => {
+                session.set_source_language(language)?;
+                session.set_max_new_tokens(max_new_tokens)
+            }
+            Self::WithParams(session) => {
+                session.set_source_language(language)?;
+                session.set_max_new_tokens(max_new_tokens)
+            }
+        }
+    }
+
     fn backend(&self) -> String {
         match self {
             Self::Auto(session) => session.backend(),
@@ -148,6 +162,32 @@ impl Engine {
         threads: usize,
         device_mode: DeviceMode,
     ) -> Result<Self> {
+        Self::open_with_options(model_path, threads, device_mode, &QwenOptions::default())
+    }
+
+    /// Open a GGUF model, applying Qwen controls when its backend is `qwen3`.
+    ///
+    /// # Arguments
+    ///
+    /// * `model_path` - GGUF model file to load.
+    /// * `threads` - CPU inference thread count requested from CrispASR.
+    /// * `device_mode` - CPU/GPU behavior to request at session open.
+    /// * `options` - Language and generation controls; ignored for other backends.
+    ///
+    /// # Returns
+    ///
+    /// An initialized transcription engine with its session controls applied.
+    ///
+    /// # Errors
+    ///
+    /// Returns the model/thread errors of [`Self::open`], or an error when Qwen
+    /// controls are invalid or rejected by the native session.
+    pub fn open_with_options<P: AsRef<Path>>(
+        model_path: P,
+        threads: usize,
+        device_mode: DeviceMode,
+        options: &QwenOptions,
+    ) -> Result<Self> {
         if threads == 0 {
             return Err(anyhow::anyhow!("thread count must be at least 1"));
         }
@@ -167,6 +207,9 @@ impl Engine {
             .with_context(|| format!("failed to detect backend for model {}", path_str))?;
         let backend = validate_detected_backend(detected_backend)
             .with_context(|| format!("failed to detect backend for model {}", path_str))?;
+        if backend == "qwen3" {
+            options.validate().map_err(anyhow::Error::msg)?;
+        }
         let session = match device_mode.use_gpu_override() {
             Some(use_gpu) => EngineSession::WithParams(
                 OwnedSession::open_with_params(path_str, &backend, n_threads, use_gpu)
@@ -177,6 +220,16 @@ impl Engine {
                     .map_err(|e| anyhow::anyhow!("crispasr open failed: {e}"))?,
             ),
         };
+        if backend == "qwen3" {
+            let language = options.normalized_language().map_err(anyhow::Error::msg)?;
+            session
+                .configure_qwen(
+                    language.as_deref().unwrap_or(""),
+                    options.max_new_tokens as i32,
+                )
+                .map_err(anyhow::Error::msg)
+                .context("could not configure Qwen inference")?;
+        }
         let backend = session.backend();
         Ok(Self {
             session,

@@ -12,7 +12,9 @@ use parakit::fetch::{self, FetchOptions, FetchSource};
 use parakit::gguf;
 use parakit::inference::{default_thread_count, DeviceMode, Engine};
 use parakit::model;
+use parakit::model::{ModelPreset, ModelSelection};
 use parakit::outln;
+use parakit::qwen::QwenOptions;
 use parakit::rules;
 use simulation::run_ptt_audio_simulation;
 use std::ffi::{c_char, c_void, CStr};
@@ -85,6 +87,8 @@ pub(crate) fn run() -> Result<()> {
                     keep_nemo: fetch_cli.keep_nemo,
                     keep_f16: fetch_cli.keep_f16,
                 }
+            } else if let Some(preset) = fetch_cli.model_preset {
+                FetchSource::Preset(preset)
             } else {
                 fetch::source_from_cli(
                     fetch_cli.source.clone(),
@@ -269,7 +273,7 @@ fn run_daemon(cli: &Cli, start: &StartCli) -> Result<()> {
         );
     }
 
-    if let Some(path) = start.effective_model(&config) {
+    if let ModelSelection::Local(path) = start.effective_model_selection(&config)? {
         model::validate_model_file(&path)?;
     }
 
@@ -637,7 +641,7 @@ fn open_cli_engine(
     let engine_config = resolve_engine_config(
         start,
         config,
-        || fetch::ensure_default_model_with_verbosity(fetch_quiet, verbose),
+        |preset| fetch::ensure_preset_model_with_verbosity(preset, fetch_quiet, verbose),
         log,
     )?;
     let model_path = engine_config.model_path;
@@ -645,6 +649,7 @@ fn open_cli_engine(
         model_path: std::path::absolute(&model_path)?,
         threads: engine_config.threads,
         device_mode: engine_config.device_mode,
+        qwen: engine_config.qwen,
         verbose,
     };
     let (engine, device_summary) = recipe.open(log)?;
@@ -668,6 +673,7 @@ struct EngineConfig {
     model_path: PathBuf,
     threads: usize,
     device_mode: DeviceMode,
+    qwen: QwenOptions,
 }
 
 fn resolve_engine_config<F>(
@@ -677,7 +683,7 @@ fn resolve_engine_config<F>(
     log: &Logger,
 ) -> Result<EngineConfig>
 where
-    F: FnOnce() -> Result<PathBuf>,
+    F: FnOnce(ModelPreset) -> Result<PathBuf>,
 {
     resolve_engine_config_with_validator(start, config, fetch_default_model, |device_mode| {
         validate_device_request(device_mode, log)
@@ -691,15 +697,32 @@ fn resolve_engine_config_with_validator<F, V>(
     validate_device: V,
 ) -> Result<EngineConfig>
 where
-    F: FnOnce() -> Result<PathBuf>,
+    F: FnOnce(ModelPreset) -> Result<PathBuf>,
     V: FnOnce(DeviceMode) -> Result<()>,
 {
     let device_mode = start.effective_device(config);
+    let qwen = start.effective_qwen_options(config)?;
+    let selection = start.effective_model_selection(config)?;
+    if start.has_qwen_controls()
+        && matches!(&selection, ModelSelection::Preset(preset) if preset.backend() != "qwen3")
+    {
+        anyhow::bail!("Qwen controls require a Qwen3-ASR model");
+    }
     validate_device(device_mode)?;
-    let model_path = match start.effective_model(config) {
-        Some(path) => path,
-        None => fetch_default_model()?,
+    let model_path = match selection {
+        ModelSelection::Local(path) => path,
+        ModelSelection::Preset(preset) => fetch_default_model(preset)?,
     };
+    if start.has_qwen_controls() {
+        model::validate_model_file(&model_path)?;
+        let model_str = model_path
+            .to_str()
+            .context("model path is not valid UTF-8")?;
+        let backend = crispasr::Session::detect_backend(model_str).map_err(anyhow::Error::msg)?;
+        if backend != "qwen3" {
+            anyhow::bail!("Qwen controls require a Qwen3-ASR model (detected {backend})");
+        }
+    }
     let threads = start
         .effective_threads(config)
         .map(NonZeroUsize::get)
@@ -708,6 +731,7 @@ where
         model_path,
         threads,
         device_mode,
+        qwen,
     })
 }
 

@@ -10,6 +10,8 @@ use parakit::audio_file::prepare_wav_for_model;
 use parakit::fetch;
 use parakit::gguf;
 use parakit::inference::{default_thread_count, DeviceMode, Engine};
+use parakit::model::{resolve_model_selection, ModelPreset, ModelSelection};
+use parakit::qwen::{normalize_qwen_language, QwenOptions};
 use parakit::warmup;
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
@@ -22,8 +24,20 @@ use std::time::{Duration, Instant};
 )]
 struct Cli {
     /// Path to a GGUF model file. Overrides the cached Q8_0 model.
-    #[arg(short = 'm', long)]
+    #[arg(short = 'm', long, conflicts_with = "model_preset")]
     model: Option<PathBuf>,
+
+    /// Hosted Q8_0 model preset; defaults to parakeet-v3.
+    #[arg(long, value_enum)]
+    model_preset: Option<ModelPreset>,
+
+    /// Qwen source language code/name, or auto (default).
+    #[arg(long)]
+    qwen_language: Option<String>,
+
+    /// Qwen generation budget per chunk (1 to 4096; default 512).
+    #[arg(long, value_parser = clap::value_parser!(u32).range(1..=4096))]
+    qwen_max_new_tokens: Option<u32>,
 
     /// Path to a WAV file. The tool mixes to mono and resamples to 16 kHz.
     #[arg(short = 'a', long)]
@@ -50,20 +64,50 @@ fn main() -> Result<()> {
     // Apply environment defaults before starting threads or opening a model.
     unsafe { parakit::inference::initialize_crispasr_runtime_defaults() };
     let cli = Cli::parse();
+    let qwen = QwenOptions {
+        language: cli
+            .qwen_language
+            .as_deref()
+            .map(normalize_qwen_language)
+            .transpose()
+            .map_err(anyhow::Error::msg)?
+            .flatten(),
+        max_new_tokens: cli.qwen_max_new_tokens.unwrap_or(512) as usize,
+    };
+    qwen.validate().map_err(anyhow::Error::msg)?;
+    let explicit_qwen = cli.qwen_language.is_some() || cli.qwen_max_new_tokens.is_some();
+    let selection = resolve_model_selection(cli.model.as_deref(), cli.model_preset, None, None)?;
+    if explicit_qwen
+        && matches!(&selection, ModelSelection::Preset(preset) if preset.backend() != "qwen3")
+    {
+        anyhow::bail!("Qwen controls require a Qwen3-ASR model");
+    }
 
     let wav = prepare_wav_for_model(&cli.audio)?;
     let original_rate = wav.source_rate;
     let audio_secs = wav.audio_secs();
 
-    let model_path = match cli.model.as_deref() {
-        Some(path) => path.to_path_buf(),
-        None => fetch::ensure_default_model_with_verbosity(false, false)?,
+    let model_path = match selection {
+        ModelSelection::Local(path) => path,
+        ModelSelection::Preset(preset) => {
+            fetch::ensure_preset_model_with_verbosity(preset, false, false)?
+        }
     };
+    if explicit_qwen {
+        parakit::model::validate_model_file(&model_path)?;
+        let model_str = model_path
+            .to_str()
+            .context("model path is not valid UTF-8")?;
+        let backend = crispasr::Session::detect_backend(model_str).map_err(anyhow::Error::msg)?;
+        if backend != "qwen3" {
+            anyhow::bail!("Qwen controls require a Qwen3-ASR model (detected {backend})");
+        }
+    }
     let threads = cli
         .threads
         .map(NonZeroUsize::get)
         .unwrap_or_else(default_thread_count);
-    let engine = Engine::open(&model_path, threads, cli.device)
+    let engine = Engine::open_with_options(&model_path, threads, cli.device, &qwen)
         .with_context(|| format!("could not open model {}", model_path.display()))?;
     let dtype = gguf::dtype_label(&model_path);
 

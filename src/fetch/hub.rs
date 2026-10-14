@@ -245,7 +245,26 @@ fn api_url(endpoint: &str, owner: &str, repo: &str, revision: &str) -> String {
     )
 }
 
-fn resolve_url(endpoint: &str, owner: &str, repo: &str, revision: &str, rfilename: &str) -> String {
+/// Build the exact-file download URL shared by custom Hub sources and presets.
+///
+/// # Arguments
+///
+/// * `endpoint` - Resolved Hub endpoint.
+/// * `owner` - Repository owner.
+/// * `repo` - Repository name.
+/// * `revision` - Branch or revision to fetch.
+/// * `rfilename` - Exact repository-relative file path.
+///
+/// # Returns
+///
+/// A URL with repository, revision and filename segments percent-encoded.
+pub(super) fn resolve_url(
+    endpoint: &str,
+    owner: &str,
+    repo: &str,
+    revision: &str,
+    rfilename: &str,
+) -> String {
     format!(
         "{endpoint}/{}/{}/resolve/{}/{}",
         percent_encode_segment(owner),
@@ -255,7 +274,20 @@ fn resolve_url(endpoint: &str, owner: &str, repo: &str, revision: &str, rfilenam
     )
 }
 
-fn hub_cache_dir(
+/// Compute the existing file-specific Hub cache directory without network IO.
+///
+/// # Arguments
+///
+/// * `models_dir` - Root model cache directory.
+/// * `owner` - Repository owner.
+/// * `repo` - Repository name.
+/// * `revision` - Branch or revision to fetch.
+/// * `rfilename` - Exact repository-relative file path.
+///
+/// # Returns
+///
+/// The cache directory shared by custom Hub sources and matching presets.
+pub(super) fn hub_cache_dir(
     models_dir: &Path,
     owner: &str,
     repo: &str,

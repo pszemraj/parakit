@@ -1,4 +1,4 @@
-//! Model acquisition for `parakit fetch`: the default hosted Q8_0 GGUF, a
+//! Model acquisition for `parakit fetch`: hosted Q8_0 presets, a
 //! source rebuild from NVIDIA's official `.nemo` checkpoint, a Hugging Face
 //! repo (see [`hub`]), or a direct URL.
 
@@ -8,7 +8,7 @@ mod net;
 pub use hub::source_from_cli;
 
 use crate::model::{
-    models_dir, F16_FILENAME, HOSTED_Q8_URL, NEMO_FILENAME, OFFICIAL_NEMO_URL, Q8_FILENAME,
+    models_dir, ModelPreset, F16_FILENAME, NEMO_FILENAME, OFFICIAL_NEMO_URL, Q8_FILENAME,
 };
 use anyhow::{anyhow, bail, Context, Result};
 use fs2::FileExt;
@@ -55,6 +55,8 @@ impl FetchOptions {
 pub enum FetchSource {
     /// Download the owner-hosted Q8_0 GGUF.
     HostedQ8,
+    /// Download the exact hosted Q8_0 artifact for a named model preset.
+    Preset(ModelPreset),
     /// Rebuild Q8_0 locally from NVIDIA's official `.nemo` checkpoint.
     OfficialNemo {
         /// Keep the downloaded `.nemo` after the final Q8_0 model is produced.
@@ -98,11 +100,34 @@ pub enum FetchSource {
 /// Returns an error if the model cannot be downloaded, verified, or written
 /// into the platform cache directory.
 pub fn ensure_default_model_with_verbosity(quiet: bool, verbose: bool) -> Result<PathBuf> {
+    ensure_preset_model_with_verbosity(ModelPreset::ParakeetV3, quiet, verbose)
+}
+
+/// Ensure a preset's exact hosted Q8_0 model is present in the cache.
+///
+/// # Arguments
+///
+/// * `preset` - The named hosted model to use.
+/// * `quiet` - Suppress stdout status messages.
+/// * `verbose` - Print cache-hit diagnostics when an existing model is used.
+///
+/// # Returns
+///
+/// The preset's cached GGUF path, without any network request on a cache hit.
+///
+/// # Errors
+///
+/// Returns an error if the model cannot be downloaded or written to the cache.
+pub fn ensure_preset_model_with_verbosity(
+    preset: ModelPreset,
+    quiet: bool,
+    verbose: bool,
+) -> Result<PathBuf> {
     run(FetchOptions {
         force: false,
         quiet,
         verbose,
-        source: FetchSource::HostedQ8,
+        source: FetchSource::Preset(preset),
     })
 }
 
@@ -111,8 +136,8 @@ pub fn ensure_default_model_with_verbosity(quiet: bool, verbose: bool) -> Result
 /// # Returns
 ///
 /// The path to the model the requested [`FetchSource`] produced: the
-/// canonical cached Q8_0 path for [`FetchSource::HostedQ8`] and
-/// [`FetchSource::OfficialNemo`], or the `hub/…`/`url/…` cache path for
+/// preset cache path for [`FetchSource::Preset`], canonical cached Q8_0 path for
+/// [`FetchSource::HostedQ8`] and [`FetchSource::OfficialNemo`], or the `hub/…`/`url/…` cache path for
 /// [`FetchSource::HubRepo`]/[`FetchSource::Url`].
 ///
 /// # Errors
@@ -123,7 +148,20 @@ pub fn run(options: FetchOptions) -> Result<PathBuf> {
     let endpoint = net::resolve_endpoint();
     let token = net::resolve_token();
     match &options.source {
-        FetchSource::HostedQ8 => run_hosted_q8(&options, &endpoint, token.as_deref()),
+        FetchSource::HostedQ8 => run_preset(
+            &options,
+            &endpoint,
+            token.as_deref(),
+            ModelPreset::ParakeetV3,
+            &models_dir()?,
+        ),
+        FetchSource::Preset(preset) => run_preset(
+            &options,
+            &endpoint,
+            token.as_deref(),
+            *preset,
+            &models_dir()?,
+        ),
         FetchSource::OfficialNemo {
             keep_nemo,
             keep_f16,
@@ -146,21 +184,38 @@ pub fn run(options: FetchOptions) -> Result<PathBuf> {
     }
 }
 
-fn run_hosted_q8(options: &FetchOptions, endpoint: &str, token: Option<&str>) -> Result<PathBuf> {
-    let paths = FetchPaths::new_prepared()?;
-    let url = net::rewrite_pinned_url(HOSTED_Q8_URL, endpoint);
+fn preset_cache_path(models_dir: &Path, preset: ModelPreset) -> PathBuf {
+    if preset == ModelPreset::ParakeetV3 {
+        return models_dir.join(Q8_FILENAME);
+    }
+    let (owner, repo) = preset.repo().split_once('/').expect("preset owner/repo");
+    hub::hub_cache_dir(models_dir, owner, repo, "main", preset.filename()).join(preset.filename())
+}
 
-    if !options.force && use_cached_download(options, &paths.q8, None)? {
-        return Ok(paths.q8);
+fn run_preset(
+    options: &FetchOptions,
+    endpoint: &str,
+    token: Option<&str>,
+    preset: ModelPreset,
+    models_dir: &Path,
+) -> Result<PathBuf> {
+    let dest = preset_cache_path(models_dir, preset);
+    let dest_dir = dest.parent().expect("preset cache parent");
+    std::fs::create_dir_all(dest_dir).with_context(|| format!("create {}", dest_dir.display()))?;
+
+    if !options.force && use_cached_download(options, &dest, None)? {
+        return Ok(dest);
     }
 
+    let (owner, repo) = preset.repo().split_once('/').expect("preset owner/repo");
+    let url = hub::resolve_url(endpoint, owner, repo, "main", preset.filename());
     let client = net::build_client()?;
     let bearer = net::bearer_for(&url, endpoint, token);
     options.status(format_args!("parakit: downloading {url}"));
-    download_and_verify(options, &client, &url, &paths.q8, bearer, None)?;
+    download_and_verify(options, &client, &url, &dest, bearer, None)?;
 
-    options.status(format_args!("parakit: model ready: {}", paths.q8.display()));
-    Ok(paths.q8)
+    options.status(format_args!("parakit: model ready: {}", dest.display()));
+    Ok(dest)
 }
 
 fn run_official_nemo(

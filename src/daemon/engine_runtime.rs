@@ -3,6 +3,7 @@
 use super::logging::Logger;
 use anyhow::{Context, Result};
 use parakit::inference::{DeviceMode, Engine};
+use parakit::qwen::QwenOptions;
 use parakit::warmup::{self, engine_warmup_seconds};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -16,6 +17,8 @@ pub(crate) struct EngineRecipe {
     pub(crate) threads: usize,
     /// Requested device policy, revalidated on every reload.
     pub(crate) device_mode: DeviceMode,
+    /// Qwen options resolved at startup and reapplied after idle offload.
+    pub(crate) qwen: QwenOptions,
     /// Whether native informational diagnostics should be emitted.
     pub(crate) verbose: bool,
 }
@@ -60,6 +63,7 @@ impl EngineRecipe {
             &self.model_path,
             self.threads,
             device_mode,
+            &self.qwen,
             self.verbose,
             policy,
         )
@@ -192,22 +196,23 @@ fn open_engine(
     path: &Path,
     threads: usize,
     device_mode: DeviceMode,
+    qwen: &QwenOptions,
     verbose: bool,
     policy: LoadPolicy,
 ) -> Result<Engine> {
     if verbose {
-        return Engine::open(path, threads, device_mode);
+        return Engine::open_with_options(path, threads, device_mode, qwen);
     }
     match policy {
         // Non-verbose startup suppresses process-wide stderr, including capture
         // and IPC diagnostics. The returned error points to --verbose for details.
-        LoadPolicy::Startup => {
-            super::stderr::with_stderr_suppressed(|| Engine::open(path, threads, device_mode))
-        }
+        LoadPolicy::Startup => super::stderr::with_stderr_suppressed(|| {
+            Engine::open_with_options(path, threads, device_mode, qwen)
+        }),
         // Reload runs beside capture, cues, and IPC. Remove only the loader's
         // direct informational prints; native and concurrent errors must survive.
         LoadPolicy::Reload => super::stderr::with_parakeet_info_suppressed(|| {
-            Engine::open(path, threads, device_mode)
+            Engine::open_with_options(path, threads, device_mode, qwen)
         }),
     }
 }
@@ -346,6 +351,7 @@ mod tests {
                 model_path: path,
                 threads: 1,
                 device_mode: DeviceMode::Cpu,
+                qwen: QwenOptions::default(),
                 verbose,
             };
             let log = Logger::new(super::super::logging::LogLevel::Quiet);

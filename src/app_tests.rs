@@ -142,7 +142,7 @@ fn explicit_gpu_validation_runs_before_default_model_fetch() {
     let err = resolve_engine_config_with_validator(
         &start,
         &config,
-        || {
+        |_| {
             fetched_default.set(true);
             Ok(PathBuf::from("target/tmp/default-model.gguf"))
         },
@@ -155,6 +155,31 @@ fn explicit_gpu_validation_runs_before_default_model_fetch() {
 
     assert_eq!(err.to_string(), "gpu unavailable");
     assert!(!fetched_default.get());
+}
+
+#[test]
+fn explicit_qwen_controls_reject_parakeet_before_download() {
+    let start = match Cli::parse_from([
+        "parakit",
+        "start",
+        "--model-preset",
+        "parakeet-redux",
+        "--qwen-language",
+        "en",
+    ])
+    .command
+    {
+        Some(Commands::Start(start)) => start,
+        _ => unreachable!(),
+    };
+    let error = resolve_engine_config_with_validator(
+        &start,
+        &ConfigFile::default(),
+        |_| panic!("invalid controls must not download"),
+        |_| Ok(()),
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("Qwen controls require"));
 }
 
 #[test]
