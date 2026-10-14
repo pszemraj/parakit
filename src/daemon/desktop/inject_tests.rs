@@ -55,6 +55,8 @@ struct MockClipboard {
     pending_external_write: Rc<RefCell<Option<MockClipboardContent>>>,
     stamp_unavailable: Rc<Cell<bool>>,
     text_unavailable: Rc<Cell<bool>>,
+    failed_read_format: Option<&'static str>,
+    empty_file_list_available: bool,
     guard_read: bool,
     after_guard_read: Option<MockClipboardContent>,
     after_snapshot_read: Option<MockClipboardContent>,
@@ -72,6 +74,8 @@ impl MockClipboard {
             pending_external_write: Rc::new(RefCell::new(None)),
             stamp_unavailable: Rc::new(Cell::new(false)),
             text_unavailable: Rc::new(Cell::new(false)),
+            failed_read_format: None,
+            empty_file_list_available: false,
             guard_read: false,
             after_guard_read: None,
             after_snapshot_read: None,
@@ -181,6 +185,9 @@ impl ClipboardStore for MockClipboard {
 
     fn get_text(&mut self) -> Result<String> {
         self.apply_external_write();
+        if self.failed_read_format == Some("text") {
+            anyhow::bail!("clipboard text read failed");
+        }
         if self.text_unavailable.get() {
             anyhow::bail!("clipboard text unavailable");
         }
@@ -232,6 +239,9 @@ impl ClipboardStore for MockClipboard {
     }
 
     fn get_html(&mut self) -> Result<String> {
+        if self.failed_read_format == Some("HTML") {
+            anyhow::bail!("clipboard HTML read failed");
+        }
         match &self.content {
             MockClipboardContent::Html { html, .. }
             | MockClipboardContent::HtmlImage { html, .. } => Ok(html.clone()),
@@ -252,6 +262,12 @@ impl ClipboardStore for MockClipboard {
     }
 
     fn get_file_list(&mut self) -> Result<Vec<PathBuf>> {
+        if self.failed_read_format == Some("file-list") {
+            anyhow::bail!("clipboard file-list read failed");
+        }
+        if self.empty_file_list_available {
+            return Ok(Vec::new());
+        }
         match &self.content {
             MockClipboardContent::FileList(paths) => Ok(paths.clone()),
             _ => Err(arboard::Error::ContentNotAvailable.into()),
@@ -270,6 +286,9 @@ impl ClipboardStore for MockClipboard {
     }
 
     fn get_image(&mut self) -> Result<ImageData<'static>> {
+        if self.failed_read_format == Some("image") {
+            anyhow::bail!("clipboard image read failed");
+        }
         match &self.content {
             MockClipboardContent::Image {
                 width,

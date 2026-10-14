@@ -178,35 +178,14 @@ fn linux_modifier_cleanup_keysyms() -> &'static [u32] {
 }
 
 fn linux_paste_chord_steps(mode: PasteMode) -> Vec<X11KeyStep> {
-    let mut steps = vec![X11KeyStep {
-        keysym: x11::CONTROL_L_KEYSYM,
-        press: true,
-    }];
-    if mode == PasteMode::Terminal {
-        steps.push(X11KeyStep {
-            keysym: x11::SHIFT_L_KEYSYM,
-            press: true,
-        });
-    }
-    steps.push(X11KeyStep {
-        keysym: x11::V_KEYSYM,
-        press: true,
-    });
-    steps.push(X11KeyStep {
-        keysym: x11::V_KEYSYM,
-        press: false,
-    });
-    if mode == PasteMode::Terminal {
-        steps.push(X11KeyStep {
-            keysym: x11::SHIFT_L_KEYSYM,
-            press: false,
-        });
-    }
-    steps.push(X11KeyStep {
-        keysym: x11::CONTROL_L_KEYSYM,
-        press: false,
-    });
-    steps
+    super::super::paste_chord_steps(
+        x11::CONTROL_L_KEYSYM,
+        (mode == PasteMode::Terminal).then_some(x11::SHIFT_L_KEYSYM),
+        x11::V_KEYSYM,
+    )
+    .into_iter()
+    .map(|(keysym, press)| X11KeyStep { keysym, press })
+    .collect()
 }
 
 fn linux_resolved_paste_chord_steps(
@@ -283,25 +262,18 @@ impl X11KeySink for X11ConnectionKeySink<'_> {
 }
 
 fn send_x11_key_steps<S: X11KeySink>(sink: &mut S, steps: &[ResolvedX11KeyStep]) -> Result<()> {
-    let mut pressed = Vec::new();
-    for step in steps {
+    for (index, step) in steps.iter().enumerate() {
         if let Err(err) = sink.key(step.keycode, step.press) {
-            let cleanup = release_pressed_x11_keys(sink, &mut pressed);
+            let cleanup = release_pressed_x11_keys(sink, &steps[..index]);
             return combine_primary_cleanup_error(
                 err.context("could not send XTest paste chord"),
                 cleanup,
             );
         }
-
-        if step.press {
-            pressed.push(step.keycode);
-        } else if let Some(index) = pressed.iter().rposition(|key| *key == step.keycode) {
-            pressed.remove(index);
-        }
     }
 
     if let Err(err) = sink.flush() {
-        let cleanup = release_pressed_x11_keys(sink, &mut pressed);
+        let cleanup = release_pressed_x11_keys(sink, steps);
         return combine_primary_cleanup_error(err, cleanup);
     }
 
@@ -341,9 +313,14 @@ fn flush_x11_modifier_releases<S: X11KeySink>(
         .context("could not flush XTest modifier cleanup")
 }
 
-fn release_pressed_x11_keys<S: X11KeySink>(sink: &mut S, pressed: &mut Vec<u8>) -> Result<()> {
+fn release_pressed_x11_keys<S: X11KeySink>(
+    sink: &mut S,
+    accepted: &[ResolvedX11KeyStep],
+) -> Result<()> {
     let mut release_error = None;
-    while let Some(keycode) = pressed.pop() {
+    for keycode in
+        super::super::unreleased_keys(accepted.iter().map(|step| (step.keycode, step.press)))
+    {
         if let Err(err) = sink.key(keycode, false) {
             release_error.get_or_insert_with(|| err.context("could not release XTest key"));
         }

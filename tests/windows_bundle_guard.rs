@@ -33,6 +33,22 @@ fn run_powershell(script: &str) -> std::process::Output {
 }
 
 #[cfg(windows)]
+fn installer_command(bundle: &std::path::Path, install: &std::path::Path) -> std::process::Command {
+    let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut command = std::process::Command::new("powershell");
+    command
+        .current_dir(repo)
+        .args(["-NoProfile", "-ExecutionPolicy", "RemoteSigned", "-File"])
+        .arg(repo.join("scripts/windows/install.ps1"))
+        .arg("-BundleDir")
+        .arg(bundle)
+        .arg("-InstallDir")
+        .arg(install)
+        .arg("-NoUserPath");
+    command
+}
+
+#[cfg(windows)]
 fn bundle_target_root(base: &std::path::Path, backend: &str) -> std::path::PathBuf {
     let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let toolchains = repo.join("scripts/windows/toolchains.ps1");
@@ -149,7 +165,6 @@ fn cuda_path_bin_is_added_before_nvcc_validation() {
 #[test]
 fn installer_refuses_unmarked_custom_destination() {
     use std::fs;
-    use std::process::Command;
 
     let root = common::fixture_root("windows-bundle-guard", "unmarked-non-empty");
     let bundle = root.join("bundle");
@@ -165,16 +180,7 @@ fn installer_refuses_unmarked_custom_destination() {
     fs::write(bundle.join("parakit.exe"), b"").expect("dummy exe should be written");
     fs::write(install.join("ggml-cuda.dll"), b"stale").expect("stale dll should be written");
 
-    let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-    let output = Command::new("powershell")
-        .current_dir(repo)
-        .args(["-NoProfile", "-ExecutionPolicy", "RemoteSigned", "-File"])
-        .arg(repo.join("scripts/windows/install.ps1"))
-        .arg("-BundleDir")
-        .arg(&bundle)
-        .arg("-InstallDir")
-        .arg(&install)
-        .arg("-NoUserPath")
+    let output = installer_command(&bundle, &install)
         .output()
         .expect("install.ps1 should run");
 
@@ -201,7 +207,6 @@ fn installer_refuses_unmarked_custom_destination() {
 #[test]
 fn installer_replaces_unmarked_default_bundle_and_removes_stale_backend_files() {
     use std::fs;
-    use std::process::Command;
 
     let root = common::fixture_root("windows-bundle-guard", "unmarked-default-switch");
     let local_app_data = root.join("local-app-data");
@@ -226,17 +231,8 @@ fn installer_replaces_unmarked_default_bundle_and_removes_stale_backend_files() 
     fs::write(install.join("ggml-cuda.dll"), b"stale")
         .expect("stale backend dll should be written");
 
-    let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-    let output = Command::new("powershell")
-        .current_dir(repo)
+    let output = installer_command(&bundle, &install)
         .env("LOCALAPPDATA", &local_app_data)
-        .args(["-NoProfile", "-ExecutionPolicy", "RemoteSigned", "-File"])
-        .arg(repo.join("scripts/windows/install.ps1"))
-        .arg("-BundleDir")
-        .arg(&bundle)
-        .arg("-InstallDir")
-        .arg(&install)
-        .arg("-NoUserPath")
         .output()
         .expect("install.ps1 should run");
 
@@ -264,7 +260,6 @@ fn installer_replaces_unmarked_default_bundle_and_removes_stale_backend_files() 
 #[test]
 fn installer_preserves_existing_bundle_when_staged_smoke_fails() {
     use std::fs;
-    use std::process::Command;
 
     let root = common::fixture_root("windows-bundle-guard", "failed-staged-smoke");
     let local_app_data = root.join("local-app-data");
@@ -285,17 +280,8 @@ fn installer_preserves_existing_bundle_when_staged_smoke_fails() {
     fs::write(bundle.join("parakit.exe"), b"not a Windows executable")
         .expect("broken incoming executable should be written");
 
-    let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-    let output = Command::new("powershell")
-        .current_dir(repo)
+    let output = installer_command(&bundle, &install)
         .env("LOCALAPPDATA", &local_app_data)
-        .args(["-NoProfile", "-ExecutionPolicy", "RemoteSigned", "-File"])
-        .arg(repo.join("scripts/windows/install.ps1"))
-        .arg("-BundleDir")
-        .arg(&bundle)
-        .arg("-InstallDir")
-        .arg(&install)
-        .arg("-NoUserPath")
         .output()
         .expect("install.ps1 should run");
 

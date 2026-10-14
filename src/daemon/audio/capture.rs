@@ -98,13 +98,13 @@ impl AudioHandle {
     fn start_on_manager(&self, epoch: u64) -> Result<()> {
         let (ack_tx, ack_rx) = bounded(1);
         send_audio_control(&self.control, AudioControl::Start { epoch, ack: ack_tx })?;
-        recv_audio_control_ack(ack_rx, "audio manager", "Start")
+        recv_audio_control_ack(ack_rx, "audio manager", "Start")?
     }
 
     fn stop_on_manager(&self) -> Result<Vec<f32>> {
         let (ack_tx, ack_rx) = bounded(1);
         send_audio_control(&self.control, AudioControl::Stop { ack: ack_tx })?;
-        recv_audio_control_ack(ack_rx, "audio manager", "Stop")
+        recv_audio_control_ack(ack_rx, "audio manager", "Stop")?
     }
 }
 
@@ -121,14 +121,13 @@ fn send_audio_control(control: &Sender<AudioControl>, command: AudioControl) -> 
 }
 
 fn recv_audio_control_ack<T>(
-    ack_rx: Receiver<Result<T>>,
+    ack_rx: Receiver<T>,
     layer: &'static str,
     label: &'static str,
 ) -> Result<T> {
-    match ack_rx.recv_timeout(AUDIO_CONTROL_TIMEOUT) {
-        Ok(result) => result,
-        Err(err) => Err(audio_control_ack_error(layer, label, err)),
-    }
+    ack_rx
+        .recv_timeout(AUDIO_CONTROL_TIMEOUT)
+        .map_err(|err| audio_control_ack_error(layer, label, err))
 }
 
 fn audio_control_ack_error(
@@ -170,7 +169,7 @@ impl AudioHandle {
                 while let Ok(command) = control_rx.recv() {
                     match command {
                         AudioControl::Start { epoch, ack } => {
-                            manager_state.lock().begin_recording();
+                            manager_state.lock().begin_recording(true);
                             manager_epoch.store(epoch, Ordering::Release);
                             let _ = ack.send(Ok(()));
                         }
@@ -224,15 +223,7 @@ impl CaptureState {
         }
     }
 
-    fn begin_recording(&mut self) {
-        self.begin_recording_with_pre_roll(true);
-    }
-
-    fn begin_recording_without_pre_roll(&mut self) {
-        self.begin_recording_with_pre_roll(false);
-    }
-
-    fn begin_recording_with_pre_roll(&mut self, include_pre_roll: bool) {
+    fn begin_recording(&mut self, include_pre_roll: bool) {
         if self.buffer.capacity() < RECORDING_CAPACITY {
             self.buffer
                 .reserve_exact(RECORDING_CAPACITY - self.buffer.capacity());

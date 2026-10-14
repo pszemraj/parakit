@@ -353,20 +353,16 @@ fn acquire_singleton_lock_at(path: &Path, wait: Duration) -> Result<DaemonLock> 
     // Status/doctor briefly hold shared probe locks. Allow those probes to
     // finish before concluding that another daemon owns the singleton.
     let deadline = Instant::now() + wait;
-    loop {
+    for () in super::poll_ticks(deadline, SINGLETON_RETRY_INTERVAL) {
         match FileExt::try_lock_exclusive(&file) {
             Ok(()) => return Ok(DaemonLock { file }),
-            Err(err) if is_daemon_lock_contention(&err) => {
-                if Instant::now() >= deadline {
-                    return Err(DaemonAlreadyRunning.into());
-                }
-                std::thread::sleep(SINGLETON_RETRY_INTERVAL);
-            }
+            Err(err) if is_daemon_lock_contention(&err) => {}
             Err(err) => {
                 return Err(err).with_context(|| format!("lock daemon lock {}", path.display()));
             }
         }
     }
+    Err(DaemonAlreadyRunning.into())
 }
 
 fn singleton_lock_held_at(path: &Path) -> Result<bool> {

@@ -153,12 +153,11 @@ mod tests {
     fn forced_worker_exit_skips_dll_teardown() {
         const CHILD: &str = "PARAKIT_FORCED_EXIT_TEST_CHILD";
         if let Some(mode) = std::env::var_os(CHILD) {
-            use std::os::windows::ffi::OsStrExt;
             use windows::core::PCWSTR;
             use windows::Win32::System::LibraryLoader::LoadLibraryW;
 
             let dll = std::env::var_os("PARAKIT_DETACH_DLL").unwrap();
-            let wide: Vec<u16> = dll.encode_wide().chain(Some(0)).collect();
+            let wide = crate::daemon::encode_wide_null(&dll);
             // Keep the probe loaded until process termination.
             unsafe { LoadLibraryW(PCWSTR(wide.as_ptr())).unwrap() };
             let shutdown = WorkerShutdown::default();
@@ -191,20 +190,17 @@ mod tests {
         );
         for (mode, expected) in [("graceful", "attach\ndetach\n"), ("forced", "attach\n")] {
             let marker = root.join(format!("{mode}.txt"));
-            let output = std::process::Command::new(std::env::current_exe().unwrap())
-                .args([
-                    "--exact",
-                    "daemon::worker_shutdown::tests::forced_worker_exit_skips_dll_teardown",
-                    "--nocapture",
-                ])
-                .env(CHILD, mode)
-                .env("PARAKIT_DETACH_DLL", std::fs::canonicalize(&dll).unwrap())
-                .env(
-                    "PARAKIT_DETACH_MARKER",
-                    root.canonicalize().unwrap().join(format!("{mode}.txt")),
-                )
-                .output()
-                .unwrap();
+            let output = crate::test_support::exact_test_command(
+                "daemon::worker_shutdown::tests::forced_worker_exit_skips_dll_teardown",
+            )
+            .env(CHILD, mode)
+            .env("PARAKIT_DETACH_DLL", std::fs::canonicalize(&dll).unwrap())
+            .env(
+                "PARAKIT_DETACH_MARKER",
+                root.canonicalize().unwrap().join(format!("{mode}.txt")),
+            )
+            .output()
+            .unwrap();
             assert_eq!(
                 output.status.code(),
                 Some(23),
@@ -242,12 +238,7 @@ mod tests {
             panic!("fatal hotkey failure returned without exiting");
         }
 
-        let output = std::process::Command::new(std::env::current_exe().unwrap())
-            .args([
-                "--exact",
-                "daemon::worker_shutdown::tests::hotkey_failure_exits_only_after_worker_resource_release",
-                "--nocapture",
-            ])
+        let output = crate::test_support::exact_test_command("daemon::worker_shutdown::tests::hotkey_failure_exits_only_after_worker_resource_release")
             .env(CHILD, "1")
             .output()
             .unwrap();

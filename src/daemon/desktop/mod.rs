@@ -3,6 +3,32 @@
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 compile_error!("parakit desktop mode supports Linux, macOS, and Windows only");
 
+/// Build modifier-down, paste-key down/up, and reverse modifier-up steps.
+#[cfg(any(target_os = "linux", target_os = "windows", test))]
+fn paste_chord_steps<K: Copy>(control: K, shift: Option<K>, paste: K) -> Vec<(K, bool)> {
+    let mut keys = vec![control];
+    keys.extend(shift);
+    keys.push(paste);
+    let mut steps: Vec<_> = keys.iter().copied().map(|key| (key, true)).collect();
+    steps.extend(keys.into_iter().rev().map(|key| (key, false)));
+    steps
+}
+
+/// Return accepted downs without matching ups, in reverse press order.
+#[cfg(any(target_os = "linux", target_os = "windows", test))]
+fn unreleased_keys<K: Copy + Eq>(steps: impl IntoIterator<Item = (K, bool)>) -> Vec<K> {
+    let mut pressed = Vec::new();
+    for (key, press) in steps {
+        if press {
+            pressed.push(key);
+        } else if let Some(index) = pressed.iter().rposition(|pressed| *pressed == key) {
+            pressed.remove(index);
+        }
+    }
+    pressed.reverse();
+    pressed
+}
+
 /// One live comparison between a captured focus owner and the current target.
 ///
 /// The label and insertion decision deliberately live on the same value so
@@ -81,3 +107,45 @@ pub(crate) mod windows_paste_smoke;
 #[cfg(target_os = "windows")]
 /// Windows security and process-context helpers.
 pub(crate) mod windows_security;
+
+#[cfg(test)]
+mod tests {
+    use super::{paste_chord_steps, unreleased_keys};
+
+    #[test]
+    fn paste_chord_cleanup_matches_every_accepted_prefix() {
+        let standard = [(1, true), (3, true), (3, false), (1, false)];
+        let terminal = [
+            (1, true),
+            (2, true),
+            (3, true),
+            (3, false),
+            (2, false),
+            (1, false),
+        ];
+        let standard_cleanup: &[&[u8]] = &[&[], &[1], &[3, 1], &[1], &[]];
+        let terminal_cleanup: &[&[u8]] = &[&[], &[1], &[2, 1], &[3, 2, 1], &[2, 1], &[1], &[]];
+        for (shift, expected_steps, expected_cleanup) in [
+            (None, standard.as_slice(), standard_cleanup),
+            (Some(2), terminal.as_slice(), terminal_cleanup),
+        ] {
+            let steps = paste_chord_steps(1, shift, 3);
+            assert_eq!(steps, expected_steps);
+            for (accepted, expected) in expected_cleanup.iter().enumerate() {
+                assert_eq!(
+                    unreleased_keys(steps.iter().copied().take(accepted)),
+                    *expected,
+                    "shift {shift:?}, accepted {accepted}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn cleanup_preserves_repeated_downs_and_ignores_unmatched_ups() {
+        assert_eq!(
+            unreleased_keys([(9, false), (1, true), (1, true), (2, true), (1, false)]),
+            [2, 1]
+        );
+    }
+}

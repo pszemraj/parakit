@@ -139,14 +139,7 @@ fn resample_to_target(samples: Vec<f32>, source_rate: u32) -> Result<Vec<f32>> {
         anyhow::bail!("source sample rate must be greater than zero");
     }
 
-    let mut resampler = SincFixedIn::<f32>::new(
-        TARGET_RATE as f64 / source_rate as f64,
-        2.0,
-        resampler_params(),
-        RESAMPLE_CHUNK_SIZE,
-        1,
-    )
-    .context("failed to construct resampler")?;
+    let mut resampler = new_target_resampler(source_rate)?;
 
     let expected_len =
         (samples.len() as f64 * TARGET_RATE as f64 / source_rate as f64).ceil() as usize;
@@ -207,6 +200,34 @@ pub fn process_resample_chunk(
         out.extend_from_slice(&ch0[..written]);
     }
     Ok(())
+}
+
+/// Build the mono sinc resampler shared by file and live audio paths.
+///
+/// # Arguments
+///
+/// * `source_rate` - Validated, nonzero source PCM sample rate.
+///
+/// # Returns
+///
+/// A resampler producing mono PCM at [`TARGET_RATE`].
+///
+/// # Errors
+///
+/// Returns an error if the resampler cannot be constructed.
+///
+/// # Panics
+///
+/// No panics are expected for a valid, nonzero source rate.
+pub fn new_target_resampler(source_rate: u32) -> Result<SincFixedIn<f32>> {
+    SincFixedIn::<f32>::new(
+        f64::from(TARGET_RATE) / f64::from(source_rate),
+        2.0,
+        resampler_params(),
+        RESAMPLE_CHUNK_SIZE,
+        1,
+    )
+    .context("failed to construct resampler")
 }
 
 /// Return the sinc resampler parameters used for file and live audio paths.

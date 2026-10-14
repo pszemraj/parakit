@@ -2,7 +2,6 @@
 
 use regex::Regex;
 use std::borrow::Cow;
-use std::sync::OnceLock;
 use text2num::{find_numbers, replace_numbers_in_text, text2digits, Language, Occurence, Token};
 
 use super::engine::TransformResult;
@@ -138,13 +137,10 @@ fn scale_rank(word: &str) -> Option<u8> {
 
 /// Replace a spoken sign immediately before a number rendered by `text2num`.
 fn render_signed_numbers(input: String) -> String {
-    static SIGNED_NUMBER: OnceLock<Regex> = OnceLock::new();
-    let signed_number = SIGNED_NUMBER.get_or_init(|| {
-        Regex::new(
-            r"(?i)(^|[^[:alnum:]_-])(?:negative|minus)[ \t]+(\d+(?:\.\d+)?(?:[ \t]+(?:million|billion))?)\b",
-        )
-            .expect("signed-number regex must compile")
-    });
+    let signed_number = regex_static!(
+        r"(?i)(^|[^[:alnum:]_-])(?:negative|minus)[ \t]+(\d+(?:\.\d+)?(?:[ \t]+(?:million|billion))?)\b",
+        "signed-number regex must compile"
+    );
     if !signed_number.is_match(&input) {
         return input;
     }
@@ -152,30 +148,26 @@ fn render_signed_numbers(input: String) -> String {
 }
 
 fn replace_numbers_preserving_literals(input: &str, language: &Language, threshold: f64) -> String {
-    static PROTECTED_WORD: OnceLock<Regex> = OnceLock::new();
-    static PREVIOUS_TOKEN: OnceLock<Regex> = OnceLock::new();
-    static FOLLOWING_SCALE: OnceLock<Regex> = OnceLock::new();
-    let protected_re = PROTECTED_WORD.get_or_init(|| {
-        Regex::new(
-            concat!(
-                r"(?i)\b(?:",
-                r"(?P<scale_first>(?:a[ \t]+)?(?:hundred|thousand|million|billion|trillion)[ \t]+and[ \t]+a[ \t]+(?:half|quarter))|",
-                r"(?:and[ \t]+)?(?:a[ \t]+)?(?:half|quarter)(?:[ \t]+of)?(?:[ \t]+a)?[ \t]+(?:hundred|thousand|million|billion|trillion)|",
-                r"(?:halves|quarters)(?:[ \t]+of)?(?:[ \t]+a)?[ \t]+(?:hundred|thousand|million|billion|trillion)|",
-                r"(?:(?:a[ \t]+)?few|several|(?:a[ \t]+)?couple(?:[ \t]+of)?)[ \t]+(?:hundred|thousand|million|billion|trillion)|",
-                r"(?P<denominator>[a-z]+(?:-[a-z]+)*)[ \t]+of(?:[ \t]+a)?[ \t]+(?:hundred|thousand|million|billion|trillion)|",
-                r"second|tens|hundreds|thousands|millions|billions|trillions)\b",
-            ),
-        )
-        .expect("protected number-word regex must compile")
-    });
-    let previous_re = PREVIOUS_TOKEN.get_or_init(|| {
-        Regex::new(r"(?i)([a-z0-9]+)([-\s]+)$").expect("previous-token regex must compile")
-    });
-    let following_scale_re = FOLLOWING_SCALE.get_or_init(|| {
-        Regex::new(r"(?i)^(?:[-\s]+(?:hundred|thousand|million|billion|trillion)\b)+")
-            .expect("following-scale regex must compile")
-    });
+    let protected_re = regex_static!(
+        concat!(
+            r"(?i)\b(?:",
+            r"(?P<scale_first>(?:a[ \t]+)?(?:hundred|thousand|million|billion|trillion)[ \t]+and[ \t]+a[ \t]+(?:half|quarter))|",
+            r"(?:and[ \t]+)?(?:a[ \t]+)?(?:half|quarter)(?:[ \t]+of)?(?:[ \t]+a)?[ \t]+(?:hundred|thousand|million|billion|trillion)|",
+            r"(?:halves|quarters)(?:[ \t]+of)?(?:[ \t]+a)?[ \t]+(?:hundred|thousand|million|billion|trillion)|",
+            r"(?:(?:a[ \t]+)?few|several|(?:a[ \t]+)?couple(?:[ \t]+of)?)[ \t]+(?:hundred|thousand|million|billion|trillion)|",
+            r"(?P<denominator>[a-z]+(?:-[a-z]+)*)[ \t]+of(?:[ \t]+a)?[ \t]+(?:hundred|thousand|million|billion|trillion)|",
+            r"second|tens|hundreds|thousands|millions|billions|trillions)\b",
+        ),
+        "protected number-word regex must compile"
+    );
+    let previous_re = regex_static!(
+        r"(?i)([a-z0-9]+)([-\s]+)$",
+        "previous-token regex must compile"
+    );
+    let following_scale_re = regex_static!(
+        r"(?i)^(?:[-\s]+(?:hundred|thousand|million|billion|trillion)\b)+",
+        "following-scale regex must compile"
+    );
 
     let protected_words: Vec<_> = protected_re
         .captures_iter(input)
@@ -434,9 +426,7 @@ fn is_plural_ordinal(word: &str, prefix: &str, previous_re: &Regex, language: &L
 }
 
 fn number_tokens(input: &str) -> Vec<NumberToken<'_>> {
-    static TOKEN: OnceLock<Regex> = OnceLock::new();
-    let token_re =
-        TOKEN.get_or_init(|| Regex::new(r"[A-Za-z0-9]+|[^\s]").expect("number token regex"));
+    let token_re = regex_static!(r"[A-Za-z0-9]+|[^\s]", "number token regex");
 
     token_re
         .find_iter(input)
@@ -609,11 +599,10 @@ fn is_one_number(tokens: &[NumberToken<'_>], language: &Language) -> bool {
 }
 
 fn render_hybrid_magnitudes(input: &str, language: &Language, threshold: f64) -> String {
-    static NUMERIC_MAGNITUDE: OnceLock<Regex> = OnceLock::new();
-    let numeric_re = NUMERIC_MAGNITUDE.get_or_init(|| {
-        Regex::new(r"(?i)\b\d+(?:\.\d+)?[ \t]+(?:million|billion)\b")
-            .expect("numeric magnitude regex")
-    });
+    let numeric_re = regex_static!(
+        r"(?i)\b\d+(?:\.\d+)?[ \t]+(?:million|billion)\b",
+        "numeric magnitude regex"
+    );
 
     let tokens = number_tokens(input);
     let occurrences = find_numbers(tokens.iter(), language, 0.0);

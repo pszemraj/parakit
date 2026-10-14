@@ -232,12 +232,7 @@ mod tests {
             return;
         }
 
-        let output = std::process::Command::new(std::env::current_exe().unwrap())
-            .args([
-                "--exact",
-                "daemon::stderr::tests::reload_filter_preserves_concurrent_diagnostics_and_restores_stderr",
-                "--nocapture",
-            ])
+        let output = crate::test_support::exact_test_command("daemon::stderr::tests::reload_filter_preserves_concurrent_diagnostics_and_restores_stderr")
             .env(CHILD, "1")
             .output()
             .unwrap();
@@ -258,12 +253,7 @@ mod tests {
 
         #[cfg(target_os = "linux")]
         {
-            let status = std::process::Command::new(std::env::current_exe().unwrap())
-                .args([
-                    "--exact",
-                    "daemon::stderr::tests::reload_filter_preserves_concurrent_diagnostics_and_restores_stderr",
-                    "--nocapture",
-                ])
+            let status = crate::test_support::exact_test_command("daemon::stderr::tests::reload_filter_preserves_concurrent_diagnostics_and_restores_stderr")
                 .env(CHILD, "closed")
                 .output()
                 .unwrap()

@@ -5,8 +5,8 @@
 //! user-defined cleaning rules. Every key is optional; a missing file or a
 //! missing key falls back to built-in defaults.
 //!
-//! Precedence is CLI flags > config file > built-in defaults. See
-//! `Cli::effective_*` in `cli.rs` for the merge logic.
+//! Precedence is CLI flags > config file > built-in defaults. Section methods
+//! resolve config/default values; the CLI's `effective_*` methods add overrides.
 //!
 //! A broken config file must never break commands that do not need it
 //! (`fetch`, `cache`, `status`, `stop`, `copy-last`, `history`, `test-paste`);
@@ -71,6 +71,62 @@ pub(crate) struct DaemonConfig {
     pub(crate) transcript_history: Option<usize>,
 }
 
+impl DaemonConfig {
+    /// # Returns
+    /// The configured compute device, or automatic selection.
+    pub(crate) fn effective_device(&self) -> DeviceMode {
+        self.device.unwrap_or_default()
+    }
+
+    /// # Returns
+    /// The configured paste mode, or the platform default.
+    pub(crate) fn effective_paste_mode(&self) -> PasteMode {
+        self.paste_mode.unwrap_or_else(default_paste_mode)
+    }
+
+    /// # Returns
+    /// Whether transcripts remain on the clipboard; disabled by default.
+    pub(crate) fn keep_transcript_clipboard(&self) -> bool {
+        self.keep_transcript_clipboard.unwrap_or(false)
+    }
+
+    /// # Returns
+    /// Whether audio cues are enabled; enabled by default.
+    pub(crate) fn sounds_enabled(&self) -> bool {
+        self.sounds.unwrap_or(true)
+    }
+
+    /// # Returns
+    /// Whether verbose diagnostics are enabled; disabled by default.
+    pub(crate) fn verbose(&self) -> bool {
+        self.verbose.unwrap_or(false)
+    }
+
+    /// # Returns
+    /// The configured idle timeout, including zero to disable offload.
+    pub(crate) fn effective_model_idle_minutes(&self) -> u64 {
+        self.model_idle_minutes
+            .unwrap_or(crate::daemon::model_lifecycle::DEFAULT_MODEL_IDLE_MINUTES)
+    }
+
+    /// # Returns
+    /// The configured transcript history depth; zero disables history.
+    pub(crate) fn effective_transcript_history(&self) -> usize {
+        self.transcript_history
+            .unwrap_or(crate::daemon::ipc::DEFAULT_TRANSCRIPT_HISTORY)
+    }
+}
+
+/// # Returns
+/// Terminal paste on Linux, standard paste on other platforms.
+pub(crate) fn default_paste_mode() -> PasteMode {
+    if cfg!(target_os = "linux") {
+        PasteMode::Terminal
+    } else {
+        PasteMode::Standard
+    }
+}
+
 /// `[cleaning]` section: text-cleaning pipeline defaults.
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -93,6 +149,45 @@ pub(crate) struct CleaningConfig {
     pub(crate) disabled_rules: Vec<String>,
 }
 
+impl CleaningConfig {
+    /// # Returns
+    /// Whether transcript cleaning is enabled; enabled by default.
+    pub(crate) fn enabled(&self) -> bool {
+        self.enabled.unwrap_or(true)
+    }
+
+    /// # Returns
+    /// The configured cleanup tier, or the safe profile.
+    pub(crate) fn effective_profile(&self) -> CleaningProfile {
+        self.profile.unwrap_or(CleaningProfile::Safe)
+    }
+
+    /// # Returns
+    /// Whether to keep the terminal period; dropped by default.
+    pub(crate) fn keep_trailing_period(&self) -> bool {
+        self.keep_trailing_period.unwrap_or(false)
+    }
+
+    /// Merge explicit rule overrides with configured disabled rules.
+    ///
+    /// # Arguments
+    ///
+    /// * `overrides` - Explicit rule names, retained in their original order.
+    ///
+    /// # Returns
+    ///
+    /// The overrides followed by configured names not already present.
+    pub(crate) fn merged_disabled_rules(&self, overrides: &[String]) -> Vec<String> {
+        let mut merged = overrides.to_vec();
+        for name in &self.disabled_rules {
+            if !merged.contains(name) {
+                merged.push(name.clone());
+            }
+        }
+        merged
+    }
+}
+
 /// `[logging]` section: transcription log defaults.
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -112,6 +207,15 @@ pub(crate) struct HotkeyConfig {
     #[cfg(not(target_os = "linux"))]
     #[serde(rename = "backend")]
     pub(crate) _backend: Option<String>,
+}
+
+#[cfg(target_os = "linux")]
+impl HotkeyConfig {
+    /// # Returns
+    /// The configured hotkey backend, or automatic selection.
+    pub(crate) fn effective_backend(&self) -> HotkeyBackend {
+        self.backend.unwrap_or(HotkeyBackend::Auto)
+    }
 }
 
 /// `[rules]` section: user-defined cleaning rules.
@@ -245,11 +349,8 @@ pub(crate) fn config_path() -> Result<PathBuf> {
 /// Keeping the environment read at the public boundary lets tests exercise
 /// override precedence without mutating process-global environment state.
 fn config_path_with_override(override_path: Option<std::ffi::OsString>) -> Result<PathBuf> {
-    if let Some(raw) = override_path {
-        if raw.is_empty() {
-            anyhow::bail!("{CONFIG_PATH_ENV} is set but empty");
-        }
-        return Ok(PathBuf::from(raw));
+    if let Some(path) = parakit::model::non_empty_env_path(CONFIG_PATH_ENV, override_path)? {
+        return Ok(path);
     }
 
     #[cfg(target_os = "windows")]
@@ -387,15 +488,9 @@ pub(crate) fn load_from_path(path: &Path) -> Result<ConfigFile> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
 
     fn write_fixture(name: &str, contents: &str) -> PathBuf {
-        let dir = crate::test_support::fixture_root("parakit-config-test", name);
-        let path = dir.join("config.toml");
-        let mut file = std::fs::File::create(&path).expect("create fixture config file");
-        file.write_all(contents.as_bytes())
-            .expect("write fixture config file");
-        path
+        crate::test_support::write_config_fixture("parakit-config-test", name, contents)
     }
 
     #[test]
@@ -719,18 +814,12 @@ replacement = "hello"
     }
 
     #[test]
-    fn paste_mode_serde_matches_clap_value_strings() {
+    fn enum_serde_matches_clap_value_strings() {
         assert_serde_matches_clap::<PasteMode>();
-    }
-
-    #[test]
-    fn device_mode_serde_matches_clap_value_strings() {
         assert_serde_matches_clap::<DeviceMode>();
-    }
-
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn hotkey_backend_serde_matches_clap_value_strings() {
+        assert_serde_matches_clap::<CleaningProfile>();
+        assert_serde_matches_clap::<parakit::rules::RulePosition>();
+        #[cfg(target_os = "linux")]
         assert_serde_matches_clap::<HotkeyBackend>();
     }
 

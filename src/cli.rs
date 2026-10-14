@@ -10,7 +10,6 @@ use crate::config::ConfigFile;
 #[cfg(target_os = "linux")]
 use crate::daemon::hotkey::HotkeyBackend;
 use crate::daemon::inject::PasteMode;
-use crate::daemon::ipc::DEFAULT_TRANSCRIPT_HISTORY;
 
 /// Parsed global options and the subcommand to run.
 ///
@@ -52,7 +51,7 @@ impl Cli {
     ///
     /// `true` when verbose diagnostics should print.
     pub(crate) fn effective_verbose(&self, config: &ConfigFile) -> bool {
-        !self.quiet && (self.verbose || config.daemon.verbose.unwrap_or(false))
+        !self.quiet && (self.verbose || config.daemon.verbose())
     }
 }
 
@@ -148,24 +147,12 @@ pub(crate) struct StartCli {
     /// Cleanup behavior tier. `safe` keeps semantic discourse markers such as
     /// comparative `like`; `aggressive` also deletes them. Defaults to
     /// `config.toml`'s `cleaning.profile`, then `safe`.
-    #[arg(long, value_name = "PROFILE", value_parser = clap::value_parser!(CleaningProfile))]
+    #[arg(long, value_name = "PROFILE", value_parser = <CleaningProfile as std::str::FromStr>::from_str)]
     pub(crate) cleaning_profile: Option<CleaningProfile>,
 
-    /// Keep the single terminal period that messaging-style cleanup removes by
-    /// default. Overrides a configured `cleaning.keep_trailing_period = false`;
-    /// conflicts with `--no-keep-trailing-period`.
-    #[arg(long, conflicts_with = "no_keep_trailing_period")]
-    pub(crate) keep_trailing_period: bool,
-
-    /// Drop the single terminal period even when configured to keep it.
-    /// Overrides a configured `cleaning.keep_trailing_period = true`;
-    /// conflicts with `--keep-trailing-period`.
-    #[arg(long, conflicts_with = "keep_trailing_period")]
-    pub(crate) no_keep_trailing_period: bool,
-
-    /// Disable a specific rule by name. Repeatable: `--disable-rule a --disable-rule b`.
-    #[arg(long, value_name = "NAME")]
-    pub(crate) disable_rule: Vec<String>,
+    /// Cleaning overrides shared with the `rules` subcommands.
+    #[command(flatten)]
+    pub(crate) cleaning_overrides: CleaningOverrides,
 
     /// Linux hotkey backend. `auto` registers Ctrl+Space with the X11 session.
     /// Defaults to `config.toml`'s `hotkey.backend`, then `auto`.
@@ -203,8 +190,7 @@ impl StartCli {
     /// The selected minutes, including zero when offload is disabled.
     pub(crate) fn effective_model_idle_minutes(&self, config: &ConfigFile) -> u64 {
         self.model_idle_minutes
-            .or(config.daemon.model_idle_minutes)
-            .unwrap_or(crate::daemon::model_lifecycle::DEFAULT_MODEL_IDLE_MINUTES)
+            .unwrap_or_else(|| config.daemon.effective_model_idle_minutes())
     }
     /// Return the selected paste mode: CLI flag, then config, then the
     /// platform default.
@@ -213,7 +199,8 @@ impl StartCli {
     ///
     /// Returns the explicitly configured paste mode or the default for the current platform.
     pub(crate) fn effective_paste_mode(&self, config: &ConfigFile) -> PasteMode {
-        resolve_paste_mode(self.paste_mode, config)
+        self.paste_mode
+            .unwrap_or_else(|| config.daemon.effective_paste_mode())
     }
 
     /// Return the selected model path: CLI `-m/--model`, then config
@@ -233,7 +220,8 @@ impl StartCli {
     ///
     /// The effective device mode.
     pub(crate) fn effective_device(&self, config: &ConfigFile) -> DeviceMode {
-        self.device.or(config.daemon.device).unwrap_or_default()
+        self.device
+            .unwrap_or_else(|| config.daemon.effective_device())
     }
 
     /// Return the selected CPU thread count override: CLI `--threads`, then
@@ -265,7 +253,8 @@ impl StartCli {
     /// The effective hotkey backend.
     #[cfg(target_os = "linux")]
     pub(crate) fn effective_hotkey_backend(&self, config: &ConfigFile) -> HotkeyBackend {
-        resolve_hotkey_backend(self.hotkey_backend, config)
+        self.hotkey_backend
+            .unwrap_or_else(|| config.hotkey.effective_backend())
     }
 
     /// Return whether audio cues are enabled: explicit `--sounds` forces
@@ -277,11 +266,7 @@ impl StartCli {
     ///
     /// `true` when start/success/error tones should play.
     pub(crate) fn effective_sounds_enabled(&self, config: &ConfigFile) -> bool {
-        resolve_bool_override(
-            self.sounds,
-            self.no_sounds,
-            config.daemon.sounds.unwrap_or(true),
-        )
+        resolve_bool_override(self.sounds, self.no_sounds, config.daemon.sounds_enabled())
     }
 
     /// Return whether the text-cleaning pipeline is enabled: explicit
@@ -294,11 +279,7 @@ impl StartCli {
     ///
     /// `true` when the cleaning pipeline should run.
     pub(crate) fn effective_cleaning_enabled(&self, config: &ConfigFile) -> bool {
-        resolve_bool_override(
-            self.cleaning,
-            self.no_cleaning,
-            config.cleaning.enabled.unwrap_or(true),
-        )
+        resolve_bool_override(self.cleaning, self.no_cleaning, config.cleaning.enabled())
     }
 
     /// Return the cleanup behavior tier: CLI `--cleaning-profile`, then config
@@ -316,33 +297,8 @@ impl StartCli {
     ///
     /// The profile the cleaner should be built with.
     pub(crate) fn effective_cleaning_profile(&self, config: &ConfigFile) -> CleaningProfile {
-        resolve_cleaning_profile(self.cleaning_profile, config)
-    }
-
-    /// Return whether cleanup should drop one terminal period: explicit
-    /// `--keep-trailing-period` forces it kept (`false`), explicit
-    /// `--no-keep-trailing-period` forces it dropped (`true`); with neither
-    /// flag, falls back to the inverse of config
-    /// `cleaning.keep_trailing_period` (default kept `false`, i.e. dropped by
-    /// default). The two flags conflict with each other, so at most one
-    /// applies per invocation.
-    ///
-    /// Dropping the period is the default because parakit is used mostly for
-    /// messaging-style dictation, where a trailing period reads as terse.
-    ///
-    /// # Arguments
-    ///
-    /// * `config` - Loaded configuration file values.
-    ///
-    /// # Returns
-    ///
-    /// `true` when the terminal-period pass should be enabled.
-    pub(crate) fn effective_drops_trailing_period(&self, config: &ConfigFile) -> bool {
-        resolve_drops_trailing_period(
-            self.keep_trailing_period,
-            self.no_keep_trailing_period,
-            config,
-        )
+        self.cleaning_profile
+            .unwrap_or_else(|| config.cleaning.effective_profile())
     }
 
     /// Return whether the transcript should stay on the clipboard after
@@ -359,32 +315,8 @@ impl StartCli {
         resolve_bool_override(
             self.keep_transcript_clipboard,
             self.no_keep_transcript_clipboard,
-            config.daemon.keep_transcript_clipboard.unwrap_or(false),
+            config.daemon.keep_transcript_clipboard(),
         )
-    }
-
-    /// Return the number of transcripts kept in daemon memory: config
-    /// `daemon.transcript_history`, then [`DEFAULT_TRANSCRIPT_HISTORY`].
-    /// `0` disables `copy-last` and `history`.
-    ///
-    /// # Returns
-    ///
-    /// The effective transcript history depth.
-    pub(crate) fn effective_transcript_history(&self, config: &ConfigFile) -> usize {
-        config
-            .daemon
-            .transcript_history
-            .unwrap_or(DEFAULT_TRANSCRIPT_HISTORY)
-    }
-
-    /// Return the union of CLI `--disable-rule` names and config
-    /// `cleaning.disabled_rules`, without duplicates.
-    ///
-    /// # Returns
-    ///
-    /// The merged list of rule names to disable.
-    pub(crate) fn effective_disabled_rules(&self, config: &ConfigFile) -> Vec<String> {
-        resolve_disabled_rules(&self.disable_rule, config)
     }
 }
 
@@ -572,7 +504,8 @@ impl DoctorCli {
     ///
     /// Returns the explicitly configured paste mode or the default for the current platform.
     pub(crate) fn effective_paste_mode(&self, config: &ConfigFile) -> PasteMode {
-        resolve_paste_mode(self.paste_mode, config)
+        self.paste_mode
+            .unwrap_or_else(|| config.daemon.effective_paste_mode())
     }
 
     /// Return the Linux hotkey backend this check should validate: CLI flag,
@@ -584,7 +517,8 @@ impl DoctorCli {
     /// The effective hotkey backend.
     #[cfg(target_os = "linux")]
     pub(crate) fn effective_hotkey_backend(&self, config: &ConfigFile) -> HotkeyBackend {
-        resolve_hotkey_backend(self.hotkey_backend, config)
+        self.hotkey_backend
+            .unwrap_or_else(|| config.hotkey.effective_backend())
     }
 }
 
@@ -618,8 +552,8 @@ pub(crate) enum RulesCommand {
 }
 
 /// Options shared by `rules list` and `rules test`, resolved the same way as
-/// their `start` counterparts (see [`resolve_cleaning_profile`],
-/// [`resolve_drops_trailing_period`], and [`resolve_disabled_rules`]).
+/// their `start` counterparts (see [`crate::config::CleaningConfig`] and
+/// [`CleaningOverrides`]).
 ///
 /// No `--cleaning`/`--no-cleaning` here: testing or listing rules with
 /// cleaning off is meaningless.
@@ -628,13 +562,17 @@ pub(crate) struct RulesArgs {
     /// Cleanup behavior tier. `safe` keeps semantic discourse markers such as
     /// comparative `like`; `aggressive` also deletes them. Defaults to
     /// `config.toml`'s `cleaning.profile`, then `safe`.
-    #[arg(long, value_name = "PROFILE", value_parser = clap::value_parser!(CleaningProfile))]
+    #[arg(long, value_name = "PROFILE", value_parser = <CleaningProfile as std::str::FromStr>::from_str)]
     pub(crate) profile: Option<CleaningProfile>,
 
-    /// Disable a specific rule by name. Repeatable: `--disable-rule a --disable-rule b`.
-    #[arg(long, value_name = "NAME")]
-    pub(crate) disable_rule: Vec<String>,
+    /// Cleaning overrides shared with `start`.
+    #[command(flatten)]
+    pub(crate) cleaning_overrides: CleaningOverrides,
+}
 
+/// Common rule-disable and terminal-period flags for `start` and `rules`.
+#[derive(Args, Debug, Default)]
+pub(crate) struct CleaningOverrides {
     /// Keep the single terminal period that messaging-style cleanup removes by
     /// default. Overrides a configured `cleaning.keep_trailing_period = false`;
     /// conflicts with `--no-keep-trailing-period`.
@@ -646,6 +584,10 @@ pub(crate) struct RulesArgs {
     /// conflicts with `--keep-trailing-period`.
     #[arg(long, conflicts_with = "keep_trailing_period")]
     pub(crate) no_keep_trailing_period: bool,
+
+    /// Disable a specific rule by name. Repeatable: `--disable-rule a --disable-rule b`.
+    #[arg(long, value_name = "NAME")]
+    pub(crate) disable_rule: Vec<String>,
 }
 
 impl RulesArgs {
@@ -657,116 +599,36 @@ impl RulesArgs {
     ///
     /// The profile the cleaner should be built with.
     pub(crate) fn effective_cleaning_profile(&self, config: &ConfigFile) -> CleaningProfile {
-        resolve_cleaning_profile(self.profile, config)
+        self.profile
+            .unwrap_or_else(|| config.cleaning.effective_profile())
     }
+}
 
-    /// Return whether cleanup should drop one terminal period. See
-    /// [`StartCli::effective_drops_trailing_period`] for the shared
-    /// precedence.
+impl CleaningOverrides {
+    /// Resolve terminal-period cleanup: an explicit keep/drop flag wins,
+    /// otherwise use the inverse of `cleaning.keep_trailing_period`.
+    /// The default drops the period for messaging-style dictation.
     ///
     /// # Returns
     ///
     /// `true` when the terminal-period pass should be enabled.
     pub(crate) fn effective_drops_trailing_period(&self, config: &ConfigFile) -> bool {
-        resolve_drops_trailing_period(
-            self.keep_trailing_period,
+        resolve_bool_override(
             self.no_keep_trailing_period,
-            config,
+            self.keep_trailing_period,
+            !config.cleaning.keep_trailing_period(),
         )
     }
 
     /// Return the union of CLI `--disable-rule` names and config
-    /// `cleaning.disabled_rules`, without duplicates. See
-    /// [`StartCli::effective_disabled_rules`] for the shared precedence.
+    /// `cleaning.disabled_rules`, without duplicates.
     ///
     /// # Returns
     ///
     /// The merged list of rule names to disable.
     pub(crate) fn effective_disabled_rules(&self, config: &ConfigFile) -> Vec<String> {
-        resolve_disabled_rules(&self.disable_rule, config)
+        config.cleaning.merged_disabled_rules(&self.disable_rule)
     }
-}
-
-/// Return the platform-specific default paste mode.
-///
-/// # Returns
-///
-/// Returns terminal paste on Linux and standard paste on other platforms.
-pub(crate) fn default_paste_mode() -> PasteMode {
-    #[cfg(target_os = "linux")]
-    {
-        PasteMode::Terminal
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    {
-        PasteMode::Standard
-    }
-}
-
-/// Shared paste-mode precedence: CLI flag, then config `daemon.paste_mode`,
-/// then the platform default. Used by both [`StartCli`] and [`DoctorCli`] so
-/// the two surfaces cannot drift apart.
-///
-/// # Returns
-///
-/// The effective paste mode.
-fn resolve_paste_mode(cli_value: Option<PasteMode>, config: &ConfigFile) -> PasteMode {
-    cli_value
-        .or(config.daemon.paste_mode)
-        .unwrap_or_else(default_paste_mode)
-}
-
-/// Shared Linux hotkey-backend precedence: CLI flag, then config
-/// `hotkey.backend`, then [`HotkeyBackend::Auto`]. Used by both [`StartCli`]
-/// and [`DoctorCli`] so the two surfaces cannot drift apart.
-///
-/// # Returns
-///
-/// The effective hotkey backend.
-#[cfg(target_os = "linux")]
-fn resolve_hotkey_backend(cli_value: Option<HotkeyBackend>, config: &ConfigFile) -> HotkeyBackend {
-    cli_value
-        .or(config.hotkey.backend)
-        .unwrap_or(HotkeyBackend::Auto)
-}
-
-/// Shared cleaning-profile precedence: CLI flag, then config
-/// `cleaning.profile`, then [`CleaningProfile::Safe`]. Used by [`StartCli`]
-/// and [`RulesArgs`] so the two surfaces cannot drift apart.
-///
-/// # Returns
-///
-/// The profile the cleaner should be built with.
-fn resolve_cleaning_profile(
-    cli_value: Option<CleaningProfile>,
-    config: &ConfigFile,
-) -> CleaningProfile {
-    cli_value
-        .or(config.cleaning.profile)
-        .unwrap_or(CleaningProfile::Safe)
-}
-
-/// Shared trailing-period precedence: explicit `--keep-trailing-period`
-/// forces it kept (`false`), explicit `--no-keep-trailing-period` forces it
-/// dropped (`true`); with neither flag, falls back to the inverse of config
-/// `cleaning.keep_trailing_period` (default kept `false`, i.e. dropped by
-/// default). Used by [`StartCli`] and [`RulesArgs`] so the two surfaces
-/// cannot drift apart.
-///
-/// # Returns
-///
-/// `true` when the terminal-period pass should be enabled.
-fn resolve_drops_trailing_period(
-    keep_trailing_period: bool,
-    no_keep_trailing_period: bool,
-    config: &ConfigFile,
-) -> bool {
-    resolve_bool_override(
-        no_keep_trailing_period,
-        keep_trailing_period,
-        !config.cleaning.keep_trailing_period.unwrap_or(false),
-    )
 }
 
 /// Resolve one mutually exclusive positive/negative CLI flag pair.
@@ -788,23 +650,6 @@ const fn resolve_bool_override(force_true: bool, force_false: bool, fallback: bo
     } else {
         fallback
     }
-}
-
-/// Shared disabled-rules precedence: the union of CLI `--disable-rule` names
-/// and config `cleaning.disabled_rules`, without duplicates. Used by
-/// [`StartCli`] and [`RulesArgs`] so the two surfaces cannot drift apart.
-///
-/// # Returns
-///
-/// The merged list of rule names to disable.
-fn resolve_disabled_rules(cli_rules: &[String], config: &ConfigFile) -> Vec<String> {
-    let mut merged = cli_rules.to_vec();
-    for name in &config.cleaning.disabled_rules {
-        if !merged.contains(name) {
-            merged.push(name.clone());
-        }
-    }
-    merged
 }
 
 #[cfg(test)]

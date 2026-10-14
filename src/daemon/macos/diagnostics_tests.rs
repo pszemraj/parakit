@@ -1,4 +1,4 @@
-//! Doctor sentinel, clipboard snapshot comparison, and paste-report verdict regressions.
+//! Doctor sentinel and paste-report verdict regressions.
 
 use super::*;
 
@@ -10,56 +10,6 @@ fn sentinel_is_unique_per_pid_and_nonce() {
     assert_ne!(a, b);
     assert_ne!(a, c);
     assert!(a.starts_with("parakit-doctor-macos-smoke-123-"));
-}
-
-#[test]
-fn failure_cleanup_only_replaces_the_staged_sentinel() {
-    let sentinel = "parakit-doctor-macos-smoke-123-1";
-    assert!(DoctorClipboardSnapshot::Text(sentinel.to_owned()).is_text(sentinel));
-    assert!(
-        !DoctorClipboardSnapshot::Text("a newer user clipboard value".to_owned()).is_text(sentinel)
-    );
-    assert!(!DoctorClipboardSnapshot::Html {
-        html: "<b>newer payload</b>".to_owned(),
-        alt_text: Some(sentinel.to_owned()),
-    }
-    .is_text(sentinel));
-}
-
-#[test]
-fn non_text_clipboard_snapshots_compare_payload_contents() {
-    let html = DoctorClipboardSnapshot::Html {
-        html: "<b>hello</b>".to_owned(),
-        alt_text: Some("hello".to_owned()),
-    };
-    let changed_html = DoctorClipboardSnapshot::Html {
-        html: "<b>hello</b>".to_owned(),
-        alt_text: Some("different".to_owned()),
-    };
-    assert!(html.same_payload(&DoctorClipboardSnapshot::Html {
-        html: "<b>hello</b>".to_owned(),
-        alt_text: Some("hello".to_owned()),
-    }));
-    assert!(!html.same_payload(&changed_html));
-
-    let image = DoctorClipboardSnapshot::Image(ImageData {
-        width: 1,
-        height: 1,
-        bytes: Cow::Owned(vec![0, 1, 2, 3]),
-    });
-    let changed_image = DoctorClipboardSnapshot::Image(ImageData {
-        width: 1,
-        height: 1,
-        bytes: Cow::Owned(vec![3, 2, 1, 0]),
-    });
-    assert!(!image.same_payload(&changed_image));
-
-    let files = DoctorClipboardSnapshot::FileList(vec![PathBuf::from("one.txt")]);
-    assert!(
-        files.same_payload(&DoctorClipboardSnapshot::FileList(vec![PathBuf::from(
-            "one.txt"
-        )]))
-    );
 }
 
 fn report(outcome: PasteOutcome, acknowledgement_kind: &'static str) -> PasteReport {

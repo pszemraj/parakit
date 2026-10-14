@@ -1,12 +1,13 @@
 //! Windows named-pipe transport for the daemon control protocol.
 
 use super::*;
+use crate::daemon::encode_wide_null;
 use std::{
     ffi::c_void,
     ptr::{null, null_mut},
 };
 use windows::core::PCWSTR;
-use windows::Win32::Foundation::{CloseHandle, HANDLE};
+use windows::Win32::Foundation::{CloseHandle, LocalFree, HANDLE, HLOCAL};
 
 const PIPE_BUFFER_SIZE: u32 = 64 * 1024;
 const IPC_CLIENT_TIMEOUT_MS: u32 = 750;
@@ -90,7 +91,6 @@ unsafe extern "system" {
         bytes_transferred: *mut u32,
         wait: i32,
     ) -> i32;
-    fn LocalFree(mem: *mut c_void) -> *mut c_void;
     fn ReadFile(
         file: HANDLE,
         buffer: *mut c_void,
@@ -133,7 +133,7 @@ unsafe extern "system" {
 ///
 /// Returns an error when the per-user pipe name or listener thread cannot
 /// be initialized.
-pub(super) fn spawn_server_impl(
+pub(crate) fn spawn_server_impl(
     state: Arc<SharedState>,
     paste_mode: PasteMode,
     keep_transcript_clipboard: bool,
@@ -238,7 +238,7 @@ impl DaemonPipeIdentity {
     fn current() -> Result<Self> {
         let user_sid = super::super::windows_security::current_user_sid_string()
             .context("read current Windows user SID for daemon pipe")?;
-        let pipe_name = encode_wide_null(&format!(r"\\.\pipe\parakit-daemon-{user_sid}"));
+        let pipe_name = encode_wide_null(format!(r"\\.\pipe\parakit-daemon-{user_sid}"));
         Ok(Self {
             pipe_name,
             user_sid,
@@ -622,7 +622,7 @@ struct PipeSecurity {
 
 impl PipeSecurity {
     fn for_user_sid(user_sid: &str) -> Result<Self> {
-        let sddl = encode_wide_null(&current_user_only_pipe_sddl(user_sid));
+        let sddl = encode_wide_null(current_user_only_pipe_sddl(user_sid));
         let mut descriptor = null_mut::<c_void>();
         if unsafe {
             ConvertStringSecurityDescriptorToSecurityDescriptorW(
@@ -657,7 +657,7 @@ impl Drop for PipeSecurity {
     fn drop(&mut self) {
         if !self.descriptor.is_null() {
             unsafe {
-                let _ = LocalFree(self.descriptor);
+                let _ = LocalFree(Some(HLOCAL(self.descriptor)));
             }
         }
     }
@@ -673,10 +673,6 @@ impl Drop for PipeHandle {
             let _ = CloseHandle(self.0);
         }
     }
-}
-
-fn encode_wide_null(text: &str) -> Vec<u16> {
-    text.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
 fn invalid_handle() -> HANDLE {

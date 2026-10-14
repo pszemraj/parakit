@@ -113,17 +113,42 @@ fn macos_tap_disabled_resets_state_and_allows_next_ptt_cycle() {
 
 #[cfg(target_os = "macos")]
 #[test]
+fn macos_physical_left_control_release_stops_active_recording() {
+    let now = base_time();
+    let mut state = HotkeyState::default();
+    state.press(Key::ControlLeft, now);
+    state.press(Key::Space, at(now, 10));
+    assert!(state.is_recording());
+    assert_eq!(
+        state.macos_sync_modifiers(
+            ModifierState {
+                ctrl_right: true,
+                ..ModifierState::default()
+            },
+            at(now, 20)
+        ),
+        Some(HotkeyAction::Stop {
+            stopped_at: at(now, 20)
+        })
+    );
+    assert!(!state.is_recording());
+    assert!(!state.modifiers.ctrl_left);
+    assert!(state.modifiers.ctrl_right);
+}
+
+#[cfg(target_os = "macos")]
+#[test]
 fn macos_stale_left_control_state_does_not_start_on_plain_space() {
     let now = base_time();
     let mut state = HotkeyState::default();
     state.press(Key::ControlLeft, now);
-    assert!(state.ctrl_left);
+    assert!(state.modifiers.ctrl_left);
 
     assert_eq!(
-        state.macos_sync_modifiers(MacOsModifierState::default(), at(now, 10)),
+        state.macos_sync_modifiers(ModifierState::default(), at(now, 10)),
         None
     );
-    assert!(!state.ctrl_left);
+    assert!(!state.modifiers.ctrl_left);
     assert_eq!(state.press(Key::Space, at(now, 20)), (None, false));
     assert!(!state.is_recording());
 }
@@ -136,15 +161,15 @@ fn macos_physical_left_control_state_can_start_next_space_press() {
 
     assert_eq!(
         state.macos_sync_modifiers(
-            MacOsModifierState {
+            ModifierState {
                 ctrl_left: true,
-                ..MacOsModifierState::default()
+                ..ModifierState::default()
             },
             now
         ),
         None
     );
-    assert!(state.ctrl_left);
+    assert!(state.modifiers.ctrl_left);
     assert_eq!(
         state.press(Key::Space, at(now, 10)),
         (
@@ -161,10 +186,10 @@ fn macos_physical_left_control_state_can_start_next_space_press() {
 fn macos_modified_space_tap_does_not_start_or_suppress() {
     let now = base_time();
     let mut state = HotkeyState::default();
-    let modifiers = MacOsModifierState {
+    let modifiers = ModifierState {
         ctrl_left: true,
         shift_left: true,
-        ..MacOsModifierState::default()
+        ..ModifierState::default()
     };
 
     assert_eq!(
@@ -191,26 +216,26 @@ fn macos_flags_changed_tracks_right_control_as_extra_modifier() {
             &mut state,
             super::macos::K_CG_EVENT_FLAGS_CHANGED,
             0,
-            MacOsModifierState {
+            ModifierState {
                 ctrl_left: true,
                 ctrl_right: true,
-                ..MacOsModifierState::default()
+                ..ModifierState::default()
             },
             now
         ),
         (None, false)
     );
-    assert!(state.ctrl_left);
-    assert!(state.ctrl_right);
+    assert!(state.modifiers.ctrl_left);
+    assert!(state.modifiers.ctrl_right);
     assert_eq!(
         super::macos::handle_tap_event(
             &mut state,
             super::macos::K_CG_EVENT_KEY_DOWN,
             super::macos::MACOS_KEY_SPACE,
-            MacOsModifierState {
+            ModifierState {
                 ctrl_left: true,
                 ctrl_right: true,
-                ..MacOsModifierState::default()
+                ..ModifierState::default()
             },
             at(now, 10)
         ),

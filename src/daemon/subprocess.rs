@@ -45,7 +45,6 @@ pub(super) fn wait_with_timeout(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::process::Command;
 
     #[test]
     fn timeout_kills_and_reaps_child() {
@@ -55,15 +54,12 @@ mod tests {
             return;
         }
 
-        let mut child = Command::new(std::env::current_exe().unwrap())
-            .args([
-                "--exact",
-                "daemon::subprocess::tests::timeout_kills_and_reaps_child",
-                "--nocapture",
-            ])
-            .env(CHILD, "1")
-            .spawn()
-            .unwrap();
+        let mut child = crate::test_support::exact_test_command(
+            "daemon::subprocess::tests::timeout_kills_and_reaps_child",
+        )
+        .env(CHILD, "1")
+        .spawn()
+        .unwrap();
         let started = Instant::now();
 
         assert!(wait_with_timeout(&mut child, Duration::from_millis(100))

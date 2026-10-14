@@ -150,9 +150,7 @@ First inference also passes the latency gate on each of these clips. Retained CP
 
 Vulkan cold readiness consistently rises from approximately 2.30-2.31 seconds to 2.74-2.82 seconds, a 19-22% regression across these independent launches. This reproduces the earlier readiness failure rather than resolving it. The user accepted this fresh-process Vulkan trade-off. Production reloads are evaluated separately; populated-cache startup performance is not established.
 
-The 2-second candidate recognizes `Um so` where the baseline returns `Um`; the official same-input NeMo result confirms the candidate's added word. Old and candidate outputs match NeMo apart from case/punctuation on the 5/8.2/15-second clips. At 25 seconds both native versions expand NeMo's `me'cause` to `me because`, preserving the meaning.
-
-At 29 seconds, CPU/CUDA change `going to` to `gonna`, matching the official same-input NeMo output with equivalent meaning. At 31 seconds, all three backends change `for over` to `forever`; NeMo returns `for over` on that crop and `forever` on the full recording. The user's contextual listening confirms that `forever` is spoken, with an audible disturbance within the word. The ordinary candidate preserves the confirmed wording.
+Recognition checks for these clips use the [official reference and contextual listening results](#official-nvidianemo-comparison).
 
 ### Silence and subsecond input
 
@@ -242,7 +240,7 @@ Headless WAV replay does not exercise microphone capture or stream recovery. It 
 
 ## Native laptop checklist
 
-macOS CPU/Metal inference, reloads and desktop smoke checks are recorded in the [native Mac validation report](crispasr-macos-validation.md). The Windows shim branch passes a Clang syntax check against the pinned headers; this does not validate MSVC/GNU DLL imports. Source checks preserve ggml import declarations, Windows staging/example exclusions and embedded Metal shaders. Remaining native coverage includes:
+macOS CPU/Metal inference, reloads and desktop smoke checks are recorded in the [native Mac validation report](crispasr-macos-validation.md). The Windows shim branch passes a Clang syntax check against the pinned headers; this does not validate MSVC/GNU DLL imports. Actual allocation exhaustion was not evaluated, and populated-cache startup is covered on macOS only. Source checks preserve ggml import declarations, Windows staging/example exclusions and embedded Metal shaders. Remaining native coverage includes:
 
 - Build CPU and the laptop's accelerator backend; verify selected devices and loaded libraries with `doctor` and real inference.
 - With neither weight-copy variable set in the launching environment, run one `--verbose` WAV replay and confirm stderr has no `repacked ... F16 matmul tensors` or `fused Q/K/V` line. On Windows this checks that the startup defaults reach CrispASR's `getenv` through the shared C runtime.
@@ -250,13 +248,3 @@ macOS CPU/Metal inference, reloads and desktop smoke checks are recorded in the 
 - Measure loaded, post-short/post-long, idle and offloaded memory. Run three production reload transitions and confirm residency settles.
 - Release during reload, queue audio, exercise reload recovery, and stop during loading/inference; verify captured audio and clean shutdown.
 - Launch the extracted Windows bundle away from the source/build directories and verify its sibling DLLs. On Apple, verify Metal inference and embedded shader availability.
-
-## Acceptance status
-
-The implementation uses ordinary transcription and the approved lower-memory defaults. Linux everyday first/warm inference and comparable memory gates pass, as do three production offload/reload transitions on CPU, CUDA and Vulkan. The user accepted the reproducible Vulkan fresh-process readiness regression and the approximately 143 MiB CUDA standalone post-offload exception after the 125-second clip. The corroborating production worker stays below the absolute memory gate. Bounded mode remains unshipped because of its latency failures and recognition findings.
-
-Official NVIDIA/NeMo comparison is complete on all seven 2-31-second clips, the three long inputs, silence and the contextual quiet-aside excerpt. It corroborates ordinary-candidate words on the 5/8.2/15/55/265-second inputs and the candidate's added `so` at two seconds. The 25/29-second differences preserve meaning. The user's contextual listening confirms the candidate's `forever` in the 31-second case, resolving the final ordinary-path wording check. Standalone subsecond recognition is excluded from acceptance; the isolated tiny-crop checks exercise input handling only.
-
-The 125-second excerpt has received contextual listening review: the candidate partially recovers the real quiet aside omitted by the baseline, with imperfect wording, while preserving the clear task sentence. This is no longer an unresolved audio-review item.
-
-Linux acceptance is complete for the measured corpus and tested ordinary-transcription path, with the two reviewed performance/memory exceptions above. Native macOS CPU/Metal and desktop smoke checks pass for the pinned memo and its short excerpt ([results](crispasr-macos-validation.md)); Windows inference and packaging remain for laptop testing. Actual allocation exhaustion was not evaluated. Populated-cache startup is covered on macOS only. These results do not establish accuracy on every recording or resolve every historical omission.

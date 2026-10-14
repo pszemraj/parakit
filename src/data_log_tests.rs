@@ -352,16 +352,13 @@ fn failed_transcription_write_returns_no_record_id() {
     }
     #[cfg(target_os = "linux")]
     {
-        let status = std::process::Command::new(std::env::current_exe().unwrap())
-            .args([
-                "--exact",
-                "data_log::tests::failed_transcription_write_returns_no_record_id",
-                "--nocapture",
-            ])
-            .env(CHILD, "1")
-            .output()
-            .unwrap()
-            .status;
+        let status = crate::test_support::exact_test_command(
+            "data_log::tests::failed_transcription_write_returns_no_record_id",
+        )
+        .env(CHILD, "1")
+        .output()
+        .unwrap()
+        .status;
         assert!(
             status.success(),
             "closed-terminal JSONL logger exited: {status}"
@@ -421,7 +418,7 @@ fn failed_partial_append_restores_the_previous_file() {
 #[test]
 fn independent_writable_handles_serialize_append_and_rollback() {
     use std::io::{BufRead, BufReader, Seek, SeekFrom};
-    use std::process::{Command, Stdio};
+    use std::process::Stdio;
     use std::sync::mpsc::channel;
 
     const CHILD_PATH: &str = "PARAKIT_TEST_LOG_APPEND_PATH";
@@ -468,16 +465,13 @@ fn independent_writable_handles_serialize_append_and_rollback() {
             })
         });
         entered_rx.recv_timeout(Duration::from_secs(2)).unwrap();
-        let mut second_writer = Command::new(std::env::current_exe().unwrap())
-            .args([
-                "--exact",
-                "data_log::tests::independent_writable_handles_serialize_append_and_rollback",
-                "--nocapture",
-            ])
-            .env(CHILD_PATH, &path)
-            .stdout(Stdio::piped())
-            .spawn()
-            .unwrap();
+        let mut second_writer = crate::test_support::exact_test_command(
+            "data_log::tests::independent_writable_handles_serialize_append_and_rollback",
+        )
+        .env(CHILD_PATH, &path)
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
         let mut output = BufReader::new(second_writer.stdout.take().unwrap());
         let mut ready = false;
         loop {
@@ -537,48 +531,6 @@ fn independent_handles_append_after_another_logger_writes() {
     );
 }
 
-/// Expected shape of one optional-vs-nullable field in the JSON record.
-///
-/// `ruleset_id` and `cleaning_failure` use
-/// `#[serde(skip_serializing_if = "Option::is_none")]`, so a `None` value
-/// is OMITTED from the JSON entirely. `number_threshold` has no such
-/// attribute, so a `None` value is ALWAYS PRESENT, serialized as JSON
-/// `null`. There is deliberately no bare-null catch-all variant here: a
-/// row must say which of the two contracts it expects for each field.
-enum Field {
-    Omitted,
-    Value(serde_json::Value),
-}
-
-fn assert_field(value: &serde_json::Value, key: &str, expect: &Field, label: &str) {
-    match expect {
-        Field::Omitted => assert!(
-            value.get(key).is_none(),
-            "{label}: {key} should be omitted, got {:?}",
-            value.get(key)
-        ),
-        Field::Value(expected) => {
-            let actual = value
-                .get(key)
-                .unwrap_or_else(|| panic!("{label}: {key} should be present"));
-            assert_eq!(actual, expected, "{label}: {key}");
-        }
-    }
-}
-
-/// One row of [`cleaning_log_fields_serialize_with_omit_vs_null_contract`].
-struct CleaningLogCase<'a> {
-    label: &'static str,
-    fields: CleaningLogFields<'a>,
-    expect_ruleset_id: Field,
-    expect_number_threshold: Field,
-    expect_rules_fired: serde_json::Value,
-    expect_cleaning_failure: Field,
-    expect_cleaner_version: serde_json::Value,
-    expect_cleaning_profile: serde_json::Value,
-    expect_drops_trailing_period: serde_json::Value,
-}
-
 #[test]
 fn cleaning_log_fields_serialize_with_omit_vs_null_contract() {
     let hits = vec![
@@ -592,10 +544,12 @@ fn cleaning_log_fields_serialize_with_omit_vs_null_contract() {
         },
     ];
 
-    let cases = vec![
-        CleaningLogCase {
-            label: "ruleset_id and number_threshold both present",
-            fields: CleaningLogFields {
+    // Omitted keys are absent from these objects; number_threshold remains
+    // present as null when unset. Whole-object equality checks both contracts.
+    let cases = [
+        (
+            "ruleset_id and number_threshold both present",
+            CleaningLogFields {
                 rules_active: 4,
                 cleaner_version: 7,
                 profile: "aggressive",
@@ -605,20 +559,22 @@ fn cleaning_log_fields_serialize_with_omit_vs_null_contract() {
                 rules_fired: &hits,
                 failure: None,
             },
-            expect_ruleset_id: Field::Value(serde_json::json!("aggressive-v7")),
-            expect_number_threshold: Field::Value(serde_json::json!(5.0)),
-            expect_rules_fired: serde_json::json!([
-                {"name": "trailing_period", "matches": 2},
-                {"name": "filler_words", "matches": 5},
-            ]),
-            expect_cleaning_failure: Field::Omitted,
-            expect_cleaner_version: serde_json::json!(7),
-            expect_cleaning_profile: serde_json::json!("aggressive"),
-            expect_drops_trailing_period: serde_json::json!(true),
-        },
-        CleaningLogCase {
-            label: "ruleset_id omitted, number_threshold null, cleaning_failure omitted",
-            fields: CleaningLogFields {
+            serde_json::json!({
+                "rules_active": 4,
+                "cleaner_version": 7,
+                "cleaning_profile": "aggressive",
+                "ruleset_id": "aggressive-v7",
+                "drops_trailing_period": true,
+                "number_threshold": 5.0,
+                "rules_fired": [
+                    {"name": "trailing_period", "matches": 2},
+                    {"name": "filler_words", "matches": 5},
+                ],
+            }),
+        ),
+        (
+            "ruleset_id omitted, number_threshold null, cleaning_failure omitted",
+            CleaningLogFields {
                 rules_active: 0,
                 cleaner_version: 1,
                 profile: "disabled",
@@ -628,70 +584,37 @@ fn cleaning_log_fields_serialize_with_omit_vs_null_contract() {
                 rules_fired: &[],
                 failure: None,
             },
-            expect_ruleset_id: Field::Omitted,
-            expect_number_threshold: Field::Value(serde_json::Value::Null),
-            expect_rules_fired: serde_json::json!([]),
-            expect_cleaning_failure: Field::Omitted,
-            expect_cleaner_version: serde_json::json!(1),
-            expect_cleaning_profile: serde_json::json!("disabled"),
-            expect_drops_trailing_period: serde_json::json!(false),
-        },
-        CleaningLogCase {
-            label: "cleaning_failure is recorded as a present value",
-            fields: CleaningLogFields {
+            serde_json::json!({
+                "rules_active": 0,
+                "cleaner_version": 1,
+                "cleaning_profile": "disabled",
+                "drops_trailing_period": false,
+                "number_threshold": null,
+                "rules_fired": [],
+            }),
+        ),
+        (
+            "cleaning_failure is recorded as a present value",
+            CleaningLogFields {
                 failure: Some("panic: rule 'foo' bar"),
                 ..sample_cleaning_fields()
             },
-            // sample_cleaning_fields() sets ruleset_id: Some("safe-v1")
-            // and number_threshold: None; asserting both here (not just
-            // cleaning_failure, which is all the replaced test checked)
-            // is a deliberate uniform-coverage increase.
-            expect_ruleset_id: Field::Value(serde_json::json!("safe-v1")),
-            expect_number_threshold: Field::Value(serde_json::Value::Null),
-            expect_rules_fired: serde_json::json!([]),
-            expect_cleaning_failure: Field::Value(serde_json::json!("panic: rule 'foo' bar")),
-            expect_cleaner_version: serde_json::json!(1),
-            expect_cleaning_profile: serde_json::json!("safe"),
-            expect_drops_trailing_period: serde_json::json!(true),
-        },
+            serde_json::json!({
+                "rules_active": 3,
+                "cleaner_version": 1,
+                "cleaning_profile": "safe",
+                "ruleset_id": "safe-v1",
+                "drops_trailing_period": true,
+                "number_threshold": null,
+                "rules_fired": [],
+                "cleaning_failure": "panic: rule 'foo' bar",
+            }),
+        ),
     ];
 
-    for case in cases {
-        let value = serde_json::to_value(case.fields)
-            .unwrap_or_else(|e| panic!("{}: serialize cleaning fields: {e}", case.label));
-
-        assert_field(&value, "ruleset_id", &case.expect_ruleset_id, case.label);
-        assert_field(
-            &value,
-            "number_threshold",
-            &case.expect_number_threshold,
-            case.label,
-        );
-        assert_field(
-            &value,
-            "cleaning_failure",
-            &case.expect_cleaning_failure,
-            case.label,
-        );
-        assert_eq!(
-            value["rules_fired"], case.expect_rules_fired,
-            "{}: rules_fired",
-            case.label
-        );
-        assert_eq!(
-            value["cleaner_version"], case.expect_cleaner_version,
-            "{}: cleaner_version",
-            case.label
-        );
-        assert_eq!(
-            value["cleaning_profile"], case.expect_cleaning_profile,
-            "{}: cleaning_profile",
-            case.label
-        );
-        assert_eq!(
-            value["drops_trailing_period"], case.expect_drops_trailing_period,
-            "{}: drops_trailing_period",
-            case.label
-        );
+    for (label, fields, expected) in cases {
+        let actual = serde_json::to_value(fields)
+            .unwrap_or_else(|error| panic!("{label}: serialize cleaning fields: {error}"));
+        assert_eq!(actual, expected, "{label}");
     }
 }

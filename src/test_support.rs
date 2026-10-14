@@ -2,6 +2,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Return a clean, process-scoped fixture directory under `target/tmp`.
@@ -31,6 +32,50 @@ pub(crate) fn fixture_root(namespace: &str, name: &str) -> PathBuf {
     let _ = fs::remove_dir_all(&root);
     fs::create_dir_all(&root).expect("fixture root should be created");
     root
+}
+
+/// Write `config.toml` in a clean fixture directory and return its path.
+///
+/// # Arguments
+///
+/// * `namespace` - Directory grouping for a related fixture suite.
+/// * `name` - Specific fixture case name.
+/// * `contents` - TOML text to write to the fixture config.
+///
+/// # Returns
+///
+/// Created fixture config path.
+///
+/// # Panics
+///
+/// Panics if the fixture directory or config file cannot be created.
+#[allow(
+    dead_code,
+    reason = "configuration fixtures belong to binary tests; this module also serves library tests"
+)]
+pub(crate) fn write_config_fixture(namespace: &str, name: &str, contents: &str) -> PathBuf {
+    let path = fixture_root(namespace, name).join("config.toml");
+    fs::write(&path, contents).expect("write fixture config file");
+    path
+}
+
+/// Build a command that reruns one test in an isolated child process.
+///
+/// # Arguments
+///
+/// * `name` - Fully qualified test name in the current test binary.
+///
+/// # Returns
+///
+/// A command selecting that test with output capture disabled.
+///
+/// # Panics
+///
+/// Panics if the current test executable cannot be located.
+pub(crate) fn exact_test_command(name: &str) -> Command {
+    let mut command = Command::new(std::env::current_exe().unwrap());
+    command.args(["--exact", name, "--nocapture"]);
+    command
 }
 
 /// Disconnect a test child's stdout/stderr as if its terminal tab closed.

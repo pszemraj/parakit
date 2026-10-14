@@ -1,6 +1,5 @@
 //! Insertion contract and transaction ordering tests: guards, modifiers, and restore gating.
 
-use super::super::paste_transaction::report_from_stage_outcome;
 use super::*;
 
 #[test]
@@ -516,7 +515,7 @@ fn clipboard_restore_gate_cases_are_stable() {
                 restore_plan(&gate),
                 case.policy,
             )
-            .map(report_from_stage_outcome),
+            .map(PasteReport::from),
         }
         .expect(case.name);
 

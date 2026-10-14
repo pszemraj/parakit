@@ -29,7 +29,7 @@ fn bare_start_parses_to_default_start_cli() {
         Some(Commands::Start(start)) => {
             assert_eq!(start.model, None);
             assert!(!start.no_cleaning);
-            assert!(start.disable_rule.is_empty());
+            assert!(start.cleaning_overrides.disable_rule.is_empty());
         }
         other => panic!("expected Commands::Start, got {other:?}"),
     }
@@ -78,6 +78,35 @@ fn rules_test_parses_input_and_profile() {
 }
 
 #[test]
+fn profile_value_enum_preserves_cli_from_str_compatibility() {
+    for (value, expected) in [
+        ("safe", CleaningProfile::Safe),
+        (" SAFE ", CleaningProfile::Safe),
+        (" AgGrEsSiVe ", CleaningProfile::Aggressive),
+    ] {
+        assert_eq!(
+            start_from(&["--cleaning-profile", value]).cleaning_profile,
+            Some(expected)
+        );
+        match Cli::parse_from(["parakit", "rules", "test", "x", "--profile", value]).command {
+            Some(Commands::Rules(RulesCli {
+                command: Some(RulesCommand::Test { args, .. }),
+            })) => assert_eq!(args.profile, Some(expected)),
+            other => panic!("expected rules test, got {other:?}"),
+        }
+    }
+    for args in [
+        vec!["parakit", "start", "--cleaning-profile", " invalid "],
+        vec!["parakit", "rules", "test", "x", "--profile", " invalid "],
+    ] {
+        let error = Cli::try_parse_from(args).expect_err("unknown profile should fail");
+        assert!(error
+            .to_string()
+            .contains("unknown cleaning profile 'invalid'. Expected 'safe' or 'aggressive'"));
+    }
+}
+
+#[test]
 fn rules_trailing_period_pair_conflicts() {
     let error = Cli::try_parse_from([
         "parakit",
@@ -112,7 +141,7 @@ fn effective_paste_mode_prefers_cli_then_config_then_platform_default() {
     let mut config = ConfigFile::default();
     assert_eq!(
         start_from(&[]).effective_paste_mode(&config),
-        default_paste_mode()
+        crate::config::default_paste_mode()
     );
 
     config.daemon.paste_mode = Some(PasteMode::Direct);
@@ -178,7 +207,7 @@ fn doctor_effective_paste_mode_prefers_cli_then_config_then_platform_default() {
 
     assert_eq!(
         doctor_cli(&[]).effective_paste_mode(&config),
-        default_paste_mode()
+        crate::config::default_paste_mode()
     );
 
     config.daemon.paste_mode = Some(PasteMode::Direct);
@@ -299,7 +328,11 @@ fn bool_flag_pairs_override_config_in_both_directions() {
             set_config_for_effective: |config, value| {
                 config.cleaning.keep_trailing_period = Some(!value)
             },
-            effective: StartCli::effective_drops_trailing_period,
+            effective: |start, config| {
+                start
+                    .cleaning_overrides
+                    .effective_drops_trailing_period(config)
+            },
         },
         BoolFlagPairCase {
             label: "keep_transcript_clipboard",
@@ -428,7 +461,7 @@ fn effective_disabled_rules_merges_cli_and_config_without_duplicates() {
         "--disable-rule",
         "lead-discourse-comma",
     ]);
-    let mut merged = start.effective_disabled_rules(&config);
+    let mut merged = start.cleaning_overrides.effective_disabled_rules(&config);
     merged.sort();
     let mut expected = vec![
         "filled-pauses".to_string(),
@@ -443,15 +476,15 @@ fn effective_disabled_rules_merges_cli_and_config_without_duplicates() {
 fn effective_transcript_history_prefers_config_then_default() {
     let mut config = ConfigFile::default();
     assert_eq!(
-        start_from(&[]).effective_transcript_history(&config),
-        DEFAULT_TRANSCRIPT_HISTORY
+        config.daemon.effective_transcript_history(),
+        crate::daemon::ipc::DEFAULT_TRANSCRIPT_HISTORY
     );
 
     config.daemon.transcript_history = Some(0);
-    assert_eq!(start_from(&[]).effective_transcript_history(&config), 0);
+    assert_eq!(config.daemon.effective_transcript_history(), 0);
 
     config.daemon.transcript_history = Some(25);
-    assert_eq!(start_from(&[]).effective_transcript_history(&config), 25);
+    assert_eq!(config.daemon.effective_transcript_history(), 25);
 }
 
 /// Build a `Vec<String>` from string literals; shared by the `fetch`

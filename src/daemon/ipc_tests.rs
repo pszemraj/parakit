@@ -55,15 +55,16 @@ fn ipc_command_response_timeout_matrix() {
     );
 }
 
+/// Hold the insertion lock on another thread until the returned sender releases it.
 #[cfg(any(unix, target_os = "windows"))]
-#[test]
-fn stop_finalization_waits_for_in_flight_insertion_and_excludes_new_insertions() {
+fn hold_insertion_lock(
+    state: &Arc<SharedState>,
+) -> (std::sync::mpsc::Sender<()>, thread::JoinHandle<()>) {
     use std::sync::mpsc;
 
-    let state = Arc::new(SharedState::new());
     let (insertion_started_tx, insertion_started_rx) = mpsc::channel();
     let (release_insertion_tx, release_insertion_rx) = mpsc::channel();
-    let insertion_state = Arc::clone(&state);
+    let insertion_state = Arc::clone(state);
     let insertion = thread::spawn(move || {
         insertion_state.with_insertion_lock(|| {
             insertion_started_tx
@@ -77,6 +78,16 @@ fn stop_finalization_waits_for_in_flight_insertion_and_excludes_new_insertions()
     insertion_started_rx
         .recv()
         .expect("insertion should acquire the lock");
+    (release_insertion_tx, insertion)
+}
+
+#[cfg(any(unix, target_os = "windows"))]
+#[test]
+fn stop_finalization_waits_for_in_flight_insertion_and_excludes_new_insertions() {
+    use std::sync::mpsc;
+
+    let state = Arc::new(SharedState::new());
+    let (release_insertion_tx, insertion) = hold_insertion_lock(&state);
 
     let (stop_started_tx, stop_started_rx) = mpsc::channel();
     let (stop_has_lock_tx, stop_has_lock_rx) = mpsc::channel();
@@ -163,25 +174,8 @@ fn stop_waits_for_worker_without_holding_its_insertion_lock() {
 #[cfg(any(unix, target_os = "windows"))]
 #[test]
 fn stop_finalization_forces_termination_when_insertion_is_wedged() {
-    use std::sync::mpsc;
-
     let state = Arc::new(SharedState::new());
-    let (insertion_started_tx, insertion_started_rx) = mpsc::channel();
-    let (release_insertion_tx, release_insertion_rx) = mpsc::channel();
-    let insertion_state = Arc::clone(&state);
-    let insertion = thread::spawn(move || {
-        insertion_state.with_insertion_lock(|| {
-            insertion_started_tx
-                .send(())
-                .expect("test should observe in-flight insertion");
-            release_insertion_rx
-                .recv()
-                .expect("test should release in-flight insertion");
-        });
-    });
-    insertion_started_rx
-        .recv()
-        .expect("insertion should acquire the lock");
+    let (release_insertion_tx, insertion) = hold_insertion_lock(&state);
 
     let started = Instant::now();
     let terminated =

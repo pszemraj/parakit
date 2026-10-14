@@ -82,7 +82,7 @@ fn missing_named_pipe_is_classified_as_daemon_not_running() {
         .duration_since(std::time::UNIX_EPOCH)
         .expect("system time should be after epoch")
         .as_nanos();
-    let pipe_name = encode_wide_null(&format!(
+    let pipe_name = encode_wide_null(format!(
         r"\\.\pipe\parakit-ipc-missing-test-{}-{unique}",
         std::process::id()
     ));
@@ -211,7 +211,7 @@ fn connected_test_pipe(overlapped: bool) -> Result<(PipeHandle, PipeHandle)> {
         .duration_since(std::time::UNIX_EPOCH)
         .expect("system time should be after epoch")
         .as_nanos();
-    let pipe_name = encode_wide_null(&format!(
+    let pipe_name = encode_wide_null(format!(
         r"\\.\pipe\parakit-ipc-test-{}-{unique}",
         std::process::id()
     ));

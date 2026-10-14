@@ -62,7 +62,7 @@ pub fn validate_model_file(path: &Path) -> Result<()> {
 /// Returns an error if the operating system does not expose a usable user
 /// cache or local-data directory.
 pub fn models_dir() -> Result<PathBuf> {
-    if let Some(path) = override_models_dir()? {
+    if let Some(path) = non_empty_env_path(MODELS_DIR_ENV, std::env::var_os(MODELS_DIR_ENV))? {
         return Ok(path);
     }
 
@@ -180,12 +180,29 @@ pub fn slash_joined(rel: &Path) -> String {
         .join("/")
 }
 
-fn override_models_dir() -> Result<Option<PathBuf>> {
-    let Some(raw) = std::env::var_os(MODELS_DIR_ENV) else {
+/// Resolve an optional explicit path override without reading the environment.
+///
+/// # Arguments
+///
+/// * `var_name` - Environment variable named in an empty-value error.
+/// * `raw` - Already-read variable value; non-Unicode paths are preserved.
+///
+/// # Returns
+///
+/// The configured path, or `None` when the variable is unset.
+///
+/// # Errors
+///
+/// Returns an error when the variable is set to an empty value.
+pub fn non_empty_env_path(
+    var_name: &str,
+    raw: Option<std::ffi::OsString>,
+) -> Result<Option<PathBuf>> {
+    let Some(raw) = raw else {
         return Ok(None);
     };
     if raw.is_empty() {
-        anyhow::bail!("{MODELS_DIR_ENV} is set but empty");
+        anyhow::bail!("{var_name} is set but empty");
     }
     Ok(Some(PathBuf::from(raw)))
 }

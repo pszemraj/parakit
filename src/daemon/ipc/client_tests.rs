@@ -55,6 +55,8 @@ fn daemon_not_running_disposition_covers_every_control_command() {
 #[cfg(any(unix, target_os = "windows"))]
 #[test]
 fn stop_waits_for_a_held_lock_and_reports_a_persistent_holder() {
+    wait_for_daemon_stop_with_probe(Instant::now(), || Ok(false))
+        .expect("an expired budget still probes a free lock successfully");
     let mut probes = 0;
     wait_for_daemon_stop_with_probe(Instant::now() + Duration::from_secs(1), || {
         probes += 1;

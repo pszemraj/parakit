@@ -96,6 +96,8 @@ XDG_CACHE_HOME=$PWD/target/tmp/ptt-cache \
 
 The empty config file keeps your own `config.toml` out of the run; `PARAKIT_CONFIG_PATH` must name a file that exists. Use a real WAV with a known transcript. The pinned Juniper voice memo is 55.36 seconds; its local filename can vary by machine. Compare the readable transcript with task-appropriate tolerance rather than hashing the fixture. The command resamples it to the model rate and sends worker start/stop events with owned PCM. `--no-cleaning` exposes raw output for comparison; omit it to exercise cleanup too. Add the build feature and `--device` for the backend being tested. On PowerShell, create the empty file with `New-Item -ItemType File -Force target/tmp/ptt-empty.toml`, set the environment variables with `$env:NAME = ...`, and use the Windows WAV path.
 
+Simulation bypasses the daemon singleton and opens no control endpoint. It uses the same resolved worker settings as normal startup, but disables insertion, sounds, and desktop notifications. Avoid concurrent inference when measuring timings; simulation does not pause an already-running daemon.
+
 The worker acknowledges each required transcript, checks exact parity across repeats in the same process, and verifies the expected residency after each wait (including the last). This parity check verifies that reloading recreates the same session; it is not a cross-build reference-transcript comparison. Missing transcripts, reload failures, or missed offloads return a failure exit status. An immediate simulated release exercises queuing while reload is busy. Use `--model-idle-minutes 0` to check disabled offloading. For one dictation without an idle wait, omit `--simulate-ptt-repeat` and `--simulate-ptt-idle-seconds`; both options require `--simulate-ptt-audio`.
 
 The [Linux reload measurements](memory.md#linux-reload-measurements) describe observed host and GPU allocation. This is separate from the real-time worker timeout test.
@@ -172,7 +174,7 @@ The audit removes one terminal period by default, matching daemon behavior. Add 
 
 The audit applies built-in rules only. It does not load `config.toml` or `[[rules.user]]`; pass profile, threshold, trailing-period, and disabled-rule choices explicitly. Use `parakit rules test` to validate the currently configured user rules.
 
-Number recognition belongs to `text2num`. Bounded preservation guards may use context word lists and parsed numbers to keep ambiguous, indefinite or fractional quantities unchanged; do not add a second cardinal grammar. Cover both preservation and nearby exact counts in the existing regression matrix. Personal vocabulary belongs in `config.toml` user rules, rather than built-in number guards.
+Number-rule invariants and personal vocabulary handling are in [cleaning rules](../cleaning-rules.md#numbers). Cover both preservation and nearby exact counts in the existing regression matrix.
 
 ## Runtime Smoke Checks
 
@@ -200,6 +202,12 @@ Check:
 Run daemon/IPC checks sequentially with isolated config, cache/runtime paths, and a model copy. After a configured idle timeout, verify the first PTT still captures and inserts once, then check status and history. Make the test model unavailable while offloaded to verify reload failure, restore it, and confirm the next PTT recovers. Check stop/restart and sleep/wake on the native desktop. For audible cues, idle offload is silent. Hold PTT through reload and listen for the three-note reload cue followed by the usual listening tone when ready. Release during reload and confirm there is no delayed listening tone; a failed reload must not announce readiness. A failure at PTT start plays one two-pulse error cue; if the release retry also fails, it plays a second. Check the normal completion/error cues, the error cue after a capture with no speech, and `--no-sounds` too. Headless tests verify cue ordering and cancellation, but do not validate audible playback, physical input, or insertion. Record unobserved human checks and unavailable backend runs as pending.
 
 For allocation context, see the [Linux reload measurements and ownership notes](memory.md).
+
+### Clipboard Checks
+
+Portable tests cover snapshot format selection, unavailable formats versus real read errors, complete payload comparisons, restoration retry, sentinel recognition, and insertion reports/notifications. Native `doctor --deep` transactions still need an interactive desktop; follow the [Linux](../linux-desktop.md#deep-doctor-check), [macOS](../macos-desktop.md#doctor---deep), or [Windows](../windows-desktop.md#doctor---deep) procedure.
+
+Use controlled text, HTML/text alternatives, images, copied files, and an empty clipboard. Independently read back restored contents: compare HTML and its text alternative, file paths/order, and image dimensions/pixels. Exercise failed cleanup and a newer competing copy where reproducible, checking the macOS diagnostic's [sentinel ownership limits](../macos-desktop.md#doctor---deep). Source checks and SDK-less cross-target compilation do not establish native clipboard serialization or GUI cleanup.
 
 TODO: Reproduce a hung X11 clipboard owner and design bounded snapshot reads that preserve the prior clipboard. Arboard reads formats sequentially and its public API does not distinguish a read timeout from an unavailable format.
 

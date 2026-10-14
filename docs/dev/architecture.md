@@ -51,6 +51,8 @@ Live capture drains callback audio through a bounded single-producer/single-cons
 
 Cross-thread communication uses atomics, mutex-protected buffers, and channels.
 
+Configuration sections provide built-in fallbacks; CLI resolvers apply overrides. Normal startup and WAV simulation share resolved idle, logging, paste-mode, and clipboard-retention values through `WorkerSettings`. The banner borrows the `DaemonInfo` stored for IPC status. Mode-specific resources remain explicit in `WorkerCtx`: simulation has a silent notifier, disabled sounds and insertion, and no daemon singleton or control endpoint. Normal startup exposes IPC before cleaner/model initialization; the worker lifetime still follows native-session ownership.
+
 ## Module Map
 
 | Path | Responsibility |
@@ -62,7 +64,7 @@ Cross-thread communication uses atomics, mutex-protected buffers, and channels.
 | `src/daemon/hotkey_help.rs` | Shared user-facing hotkey remediation text. |
 | `src/daemon/recording.rs` | Hotkey transition coordinator, focus snapshot, audio start/stop, and PCM handoff. |
 | `src/daemon/audio/capture.rs`, `src/daemon/audio/capture_{device,drain,stream}.rs` | Capture handle and pre-roll, microphone selection, ring-buffer drain and resampling, and live stream ownership and restart. |
-| `src/daemon/audio/pactl.rs` | Linux `pactl` parsing for startup/reopen microphone display details. |
+| `src/daemon/audio/pactl.rs` | Linux `pactl` queries for default-source identity polling and startup/reopen microphone display details. |
 | `src/daemon/worker.rs` | Worker events, model lifecycle, ASR, cleanup, and completion. |
 | `src/daemon/worker/insertion.rs` | Paste sanitizer, focus guard, clipboard fallback, and insertion reporting. |
 | `src/daemon/{model_lifecycle,engine_runtime}.rs` | Activity admission, session residency, and the shared open/warmup recipe. |
@@ -83,7 +85,7 @@ Cross-thread communication uses atomics, mutex-protected buffers, and channels.
 | `src/rules/` | Transcript cleanup pipeline: profiles, the built-in rule table, procedural passes, and user rules from `config.toml`. |
 | `src/daemon/desktop/{inject,focus_snapshot,clipboard_store,paste_transaction,clipboard_guard,x11_paste,direct,clipboard_restore}.rs` | Insertion contract and injector, focus snapshots, clipboard backend and snapshots, the guarded paste transaction and change detection, X11/XTest paste chord, guarded direct insertion, and restore timing. |
 | `src/data_log.rs` | JSONL transcription and insertion-outcome logging. |
-| `src/audio_file.rs` | WAV decoding, mono mixing, and file resampling for quality tools and PTT simulation. |
+| `src/audio_file.rs` | WAV decoding and mono mixing; target-rate resampler construction shared by files and live capture. |
 | `examples/transcribe_file.rs` | Raw file-based inference smoke and quality checks. |
 | `examples/audit_cleaning.rs` | Built-in cleaner replay over historical JSONL logs. |
 | `scripts/transcribe_nemo_parakeet.py` | NeMo reference transcription helper. |
@@ -96,11 +98,14 @@ Any failed required startup or preflight step stops the process. This includes c
 
 Runtime failures are reported and the daemon continues when possible: sound cues, log writes, individual transcriptions, and text insertion failures.
 
+`ClipboardSnapshot` in `daemon/desktop/clipboard_store.rs` shares capture, borrowed restoration, and exact payload comparison. Borrowed restoration retains the saved value for cleanup retries. The macOS doctor's independent read-back and repair behavior is described under [deep diagnostics](../macos-desktop.md#doctor---deep); production generation checks remain in `StagedClipboard`.
+
+`PasteReport` describes transaction results and acknowledgement telemetry. `InsertReport` adds worker policy, direct-typing progress, and degraded-outcome diagnostics. Staging uses one `From<StageOutcome>` conversion into paste telemetry; the worker retains separate notifications, history, and alert decisions. The serialized fields and outcome meanings are in [logging](../logging.md#insertion-record-fields).
+
 ## Intentional Duplication
 
 The similar implementations below stay separate because their invariants differ.
 
-- `daemon/macos/diagnostics.rs` `DoctorClipboardSnapshot` vs `daemon/desktop/clipboard_store.rs` `ClipboardSnapshot`: `doctor --deep` keeps an independent capture/restore oracle so it verifies the production clipboard path instead of trusting it. Sharing the implementation would let a bug pass its own verification.
 - `daemon/macos/pasteboard.rs` `BoundedNormalizedValue` vs `daemon/macos/focus.rs` `cfstring_to_bounded_value`: same bounded head-plus-tail shape, different unit systems (normalized chars with whitespace stripping for layout-independent matching vs raw UTF-16 units at the FFI boundary). Cross-referenced in comments at both sites.
 - `daemon/ipc.rs` unix vs windows `handle_client`: the ~15 glue lines differ in three real ways (stream timeouts, warning wording, and Unix socket cleanup after a stop response); the business logic is already shared via `client_command_outcome`. A transport trait was evaluated and rejected as net-negative.
 - `src/test_support.rs` vs `tests/common/mod.rs` `fixture_root`: unit-test vs integration-test crate boundary; they cannot share code and differ by design (eager creation and nanosecond suffix vs caller-driven layout).
@@ -108,7 +113,5 @@ The similar implementations below stay separate because their invariants differ.
 - `rules/engine.rs` `RuleKind::engine` vs `CompiledTransform::engine`: a three-arm match on a definition type vs a compiled type; a shared trait costs more than the duplication.
 - `fetch::FetchSource::HubRepo` stores a joined `owner/repo` string that `fetch/hub.rs` re-splits: the joined form is the display format, and the defensive re-split guards public construction of the enum.
 - `gguf.rs` `COMMON_DTYPE_NAMES` is shared across the `general.file_type` and tensor-type code spaces on purpose; verified against the vendored `ggml/include/ggml.h` and commented at the site.
-- X11 `X11KeySink` vs Windows `InputSender` test seams: the same injectable design pattern over incompatible OS APIs; only one side compiles per target.
-- The three `start_recording` rejection tests in `daemon/audio/capture_tests.rs`: a table-driven merge was attempted and reverted - each case needs different live-channel scaffolding to control drop timing, and the table cost more than the shared assertion lines.
-- The `effective_*` precedence tests in `src/cli_tests.rs`: a single cli-over-config-over-default mega-table spanning every getter was evaluated and rejected - the getters return unrelated types, so a shared table needs an expectation enum plus per-type accessors that cost more than the per-getter tests they would replace.
-- The `classify_source`/`source_from_cli` tests in `src/fetch/hub.rs`, the fetch-parse tests in `src/cli_tests.rs`, and the paste-fallback test in `src/daemon/worker/insertion_tests.rs`: case-table conversions were applied and reverted - each table roughly doubled the lines while adding no new coverage and no meaningful compile-time enforcement (`SourceKind` has two variants), so direct asserts are shorter and equally legible. A table here must earn its scaffolding with an exhaustive expectation map over a real enum, new case-points, or five-plus rows.
+- X11 `X11KeySink` vs Windows `InputSender` test seams: native sending, modifier guards, and flushes use incompatible OS APIs. Chord generation and accepted-prefix key release tracking share pure helpers in `daemon/desktop/mod.rs`.
+- Capture rejection tests use separate live-channel scaffolding to control drop timing. Precedence tests return unrelated types, and fetch/paste tests exercise different entry points. Keep their individual cases explicit rather than introducing a shared expectation type or generic test framework.

@@ -155,56 +155,24 @@ struct KeyEvent {
 }
 
 fn paste_chord_events(use_shift: bool) -> Vec<KeyEvent> {
-    let mut events = Vec::with_capacity(if use_shift { 6 } else { 4 });
-    events.push(KeyEvent {
-        vk: VK_CONTROL,
-        key_up: false,
-    });
-    if use_shift {
-        events.push(KeyEvent {
-            vk: VK_SHIFT,
-            key_up: false,
-        });
-    }
-    events.push(KeyEvent {
-        vk: VK_V,
-        key_up: false,
-    });
-    events.push(KeyEvent {
-        vk: VK_V,
-        key_up: true,
-    });
-    if use_shift {
-        events.push(KeyEvent {
-            vk: VK_SHIFT,
-            key_up: true,
-        });
-    }
-    events.push(KeyEvent {
-        vk: VK_CONTROL,
-        key_up: true,
-    });
-    events
+    super::paste_chord_steps(VK_CONTROL, use_shift.then_some(VK_SHIFT), VK_V)
+        .into_iter()
+        .map(|(vk, press)| KeyEvent { vk, key_up: !press })
+        .collect()
 }
 
 fn paste_cleanup_events_for_partial_send(events: &[KeyEvent], sent: usize) -> Vec<KeyEvent> {
-    let mut down = Vec::new();
-
-    for event in events.iter().take(sent.min(events.len())) {
-        if event.key_up {
-            if let Some(pos) = down.iter().rposition(|vk| *vk == event.vk) {
-                down.remove(pos);
-            }
-        } else if !down.contains(&event.vk) {
-            down.push(event.vk);
-        }
-    }
-
     // Release only keys whose synthetic down was accepted without its matching up.
-    down.into_iter()
-        .rev()
-        .map(|vk| KeyEvent { vk, key_up: true })
-        .collect()
+    // Paste chords contain each key once, unlike arbitrary X11 step sequences.
+    super::unreleased_keys(
+        events
+            .iter()
+            .take(sent.min(events.len()))
+            .map(|event| (event.vk, !event.key_up)),
+    )
+    .into_iter()
+    .map(|vk| KeyEvent { vk, key_up: true })
+    .collect()
 }
 
 /// Send a short Alt tap to unlock Windows foreground activation.

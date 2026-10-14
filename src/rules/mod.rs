@@ -40,6 +40,14 @@ use std::fmt;
 use std::fmt::Write as _;
 use std::str::FromStr;
 
+// Each call site owns its cache; pattern expressions run only on first use.
+macro_rules! regex_static {
+    ($pattern:expr, $error:literal $(,)?) => {{
+        static RE: ::std::sync::OnceLock<::regex::Regex> = ::std::sync::OnceLock::new();
+        RE.get_or_init(|| ::regex::Regex::new($pattern).expect($error))
+    }};
+}
+
 mod defaults;
 mod engine;
 mod numbers;
@@ -65,7 +73,7 @@ pub const CLEANER_VERSION: u32 = 32;
 pub const DEFAULT_NUMBER_THRESHOLD: f64 = 4.0;
 
 /// Built-in cleanup behavior tiers.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, clap::ValueEnum, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum CleaningProfile {
     /// Mechanical cleanup and high-confidence normalization only.

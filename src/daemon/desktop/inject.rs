@@ -33,9 +33,7 @@ mod clipboard_guard;
 mod clipboard_store;
 #[cfg(target_os = "linux")]
 use clipboard_store::clipboard_content_unavailable;
-#[cfg(target_os = "macos")]
-pub(crate) use clipboard_store::{owned_image, restore_html_clipboard};
-pub(super) use clipboard_store::{restore_or_clear_clipboard, ClipboardSnapshot, ClipboardStore};
+pub(crate) use clipboard_store::{ClipboardSnapshot, ClipboardStore};
 
 #[path = "focus_snapshot.rs"]
 mod focus_snapshot;
@@ -234,6 +232,17 @@ pub(crate) enum StageOutcome {
     Blocked,
     /// Another clipboard value was preserved instead of restoring or copying.
     ClipboardChanged(Option<String>),
+}
+
+/// Preserve staging's clipboard disposition without claiming a paste event.
+impl From<StageOutcome> for PasteReport {
+    fn from(outcome: StageOutcome) -> Self {
+        match outcome {
+            StageOutcome::CopiedOnly => Self::new(PasteOutcome::CopiedOnly, false, Some(false)),
+            StageOutcome::Blocked => Self::new(PasteOutcome::Blocked, false, Some(true)),
+            StageOutcome::ClipboardChanged(diagnostic) => Self::clipboard_changed(diagnostic),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -761,9 +770,10 @@ fn platform_paste_smoke_test(mode: PasteMode) -> Result<()> {
 /// Run the macOS `doctor --deep` insertion smoke test.
 ///
 /// Direct mode runs a single stage: a suppressed synthetic key-event tap
-/// proving parakit can post keystrokes at all (there is no clipboard/paste
-/// chord/`AXValue` acknowledgement pipeline in direct-typing mode for a
-/// second stage to exercise).
+/// proving parakit can post keystrokes at all (it passes on a synthetic
+/// key-down alone, matching what direct typing emits; there is no
+/// clipboard/paste chord/`AXValue` acknowledgement pipeline in direct-typing
+/// mode for a second stage to exercise).
 ///
 /// Standard/Terminal mode runs two stages, and reports which one failed:
 ///   1. A suppressed Cmd+V event tap (fast, low-level, side-effect-free)

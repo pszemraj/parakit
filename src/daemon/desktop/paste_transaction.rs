@@ -13,24 +13,6 @@ use crate::daemon::desktop::clipboard_restore::{
 use anyhow::{Context, Result};
 use std::time::Duration;
 
-/// Convert a completed clipboard-staging outcome into a [`PasteReport`].
-///
-/// Staging never sends a paste chord. [`StageOutcome::CopiedOnly`] means the
-/// transcript was intentionally left on the clipboard (no restore);
-/// [`StageOutcome::Blocked`] means the previous clipboard contents were
-/// restored.
-///
-/// # Returns
-///
-/// A report that mirrors the staging result and records no posted paste event.
-pub(super) fn report_from_stage_outcome(outcome: StageOutcome) -> PasteReport {
-    match outcome {
-        StageOutcome::CopiedOnly => PasteReport::new(PasteOutcome::CopiedOnly, false, Some(false)),
-        StageOutcome::Blocked => PasteReport::new(PasteOutcome::Blocked, false, Some(true)),
-        StageOutcome::ClipboardChanged(diagnostic) => PasteReport::clipboard_changed(diagnostic),
-    }
-}
-
 /// Stage the transcript, recheck focus, send the paste chord, and restore the
 /// previous clipboard per policy.
 ///
@@ -88,7 +70,7 @@ where
         Ok(true) => {}
         Ok(false) => {
             return stage_text_without_paste(clipboard, text, restore_plan, clipboard_policy)
-                .map(report_from_stage_outcome);
+                .map(PasteReport::from);
         }
         Err(err) => return Err(err),
     }
@@ -113,12 +95,13 @@ where
 
     let (previous, mut clipboard_policy, mut retention_diagnostic) =
         previous_clipboard_for_policy(clipboard, clipboard_policy);
-    let write_before = restore_plan.before_transcript_write();
-    clipboard
-        .set_text(text.to_owned())
-        .context("could not copy transcript to clipboard")?;
-    let mut previous = StagedClipboard::capture(clipboard, previous, text);
-    let mut write_token = restore_plan.after_transcript_write(write_before);
+    let (mut previous, mut write_token) = stage_transcript_write(
+        clipboard,
+        text,
+        previous,
+        &restore_plan,
+        "could not copy transcript to clipboard",
+    )?;
 
     sleep_if_nonzero(settle_delay);
 
@@ -148,12 +131,13 @@ where
             })
         });
         if let Some(reason) = restage_reason {
-            let write_before = restore_plan.before_transcript_write();
-            clipboard
-                .set_text(text.to_owned())
-                .context("could not re-copy transcript to clipboard")?;
-            previous = StagedClipboard::capture(clipboard, ClipboardSnapshot::Unsupported, text);
-            write_token = restore_plan.after_transcript_write(write_before);
+            (previous, write_token) = stage_transcript_write(
+                clipboard,
+                text,
+                ClipboardSnapshot::Unsupported,
+                &restore_plan,
+                "could not re-copy transcript to clipboard",
+            )?;
             clipboard_policy = ClipboardPolicy::KeepTranscript;
             retention_diagnostic = Some(reason);
             // The write and native stamp capture can block. Recheck focus
@@ -181,13 +165,7 @@ where
                 restore_plan,
                 clipboard_policy,
             );
-            return match restore_result {
-                Ok(ClipboardRestore::Changed(diagnostic)) => {
-                    Ok(clipboard_changed_with_primary_error(err, diagnostic))
-                }
-                Ok(_) => Err(err),
-                Err(restore_err) => Err(err.context(format!("{restore_err:#}"))),
-            };
+            return resolve_failed_paste(err, restore_result);
         }
     }
     // The restage can require another focus query. Preserve a copy observed
@@ -247,13 +225,7 @@ where
                 restore_plan,
                 clipboard_policy,
             );
-            match restore_result {
-                Ok(ClipboardRestore::Changed(diagnostic)) => {
-                    Ok(clipboard_changed_with_primary_error(paste_err, diagnostic))
-                }
-                Ok(_) => Err(paste_err),
-                Err(restore_err) => Err(paste_err.context(format!("{restore_err:#}"))),
-            }
+            resolve_failed_paste(paste_err, restore_result)
         }
     }
 }
@@ -319,20 +291,16 @@ where
     );
 
     match confirmation {
-        PasteConfirmation::Confirmed { elapsed, kind } => {
+        PasteConfirmation::Confirmed { elapsed, kind }
+        | PasteConfirmation::Unverified { elapsed, kind } => {
             let (clipboard_restored, diagnostic) =
                 clipboard_restored_after_paste(clipboard, previous, clipboard_policy);
             PasteReport {
-                outcome: PasteOutcome::Pasted,
-                telemetry: InsertionTelemetry::acknowledged(kind, elapsed, clipboard_restored),
-                diagnostic,
-            }
-        }
-        PasteConfirmation::Unverified { elapsed, kind } => {
-            let (clipboard_restored, diagnostic) =
-                clipboard_restored_after_paste(clipboard, previous, clipboard_policy);
-            PasteReport {
-                outcome: PasteOutcome::PastedUnverified,
+                outcome: if matches!(confirmation, PasteConfirmation::Confirmed { .. }) {
+                    PasteOutcome::Pasted
+                } else {
+                    PasteOutcome::PastedUnverified
+                },
                 telemetry: InsertionTelemetry::acknowledged(kind, elapsed, clipboard_restored),
                 diagnostic,
             }
@@ -403,15 +371,22 @@ fn clipboard_restored_after_paste<C: ClipboardStore>(
     }
 }
 
-fn clipboard_changed_with_primary_error(
+/// Preserve a primary insertion error while resolving its clipboard cleanup.
+fn resolve_failed_paste(
     primary: anyhow::Error,
-    clipboard_diagnostic: Option<String>,
-) -> PasteReport {
-    let diagnostic = match clipboard_diagnostic {
-        Some(clipboard) => format!("{primary:#}; {clipboard}"),
-        None => format!("{primary:#}"),
-    };
-    PasteReport::clipboard_changed(Some(diagnostic))
+    restored: Result<ClipboardRestore>,
+) -> Result<PasteReport> {
+    match restored {
+        Ok(ClipboardRestore::Changed(diagnostic)) => {
+            let diagnostic = match diagnostic {
+                Some(clipboard) => format!("{primary:#}; {clipboard}"),
+                None => format!("{primary:#}"),
+            };
+            Ok(PasteReport::clipboard_changed(Some(diagnostic)))
+        }
+        Ok(_) => Err(primary),
+        Err(restore_err) => Err(primary.context(format!("{restore_err:#}"))),
+    }
 }
 
 /// Save the clipboard for a later restore, or keep the transcript instead.
@@ -491,12 +466,13 @@ where
         return Ok(StageOutcome::CopiedOnly);
     }
 
-    let write_before = restore_plan.before_transcript_write();
-    clipboard
-        .set_text(text.to_owned())
-        .context("could not copy transcript to clipboard")?;
-    let previous = StagedClipboard::capture(clipboard, previous, text);
-    let write_token = restore_plan.after_transcript_write(write_before);
+    let (previous, write_token) = stage_transcript_write(
+        clipboard,
+        text,
+        previous,
+        &restore_plan,
+        "could not copy transcript to clipboard",
+    )?;
     let restored = restore_after_delay(
         clipboard,
         previous,
@@ -508,6 +484,21 @@ where
         ClipboardRestore::Changed(diagnostic) => StageOutcome::ClipboardChanged(diagnostic),
         _ => StageOutcome::Blocked,
     })
+}
+
+/// Stage text and capture its owner between the restore gate's observations.
+fn stage_transcript_write<C: ClipboardStore, H: ClipboardRestoreGate + ?Sized>(
+    clipboard: &mut C,
+    text: &str,
+    previous: ClipboardSnapshot,
+    restore_plan: &ClipboardRestorePlan<'_, H>,
+    context: &'static str,
+) -> Result<(StagedClipboard, ClipboardWriteToken)> {
+    let write_before = restore_plan.before_transcript_write();
+    clipboard.set_text(text.to_owned()).context(context)?;
+    let staged = StagedClipboard::capture(clipboard, previous, text);
+    let write_token = restore_plan.after_transcript_write(write_before);
+    Ok((staged, write_token))
 }
 
 fn finish_blocked_clipboard<C, H>(

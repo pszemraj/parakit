@@ -37,7 +37,7 @@ fn broken_config_does_not_block_documented_control_and_repair_commands() {
     let config = root.join("broken.toml");
     std::fs::write(&config, "not = [valid").expect("broken config fixture should be written");
 
-    let local_commands: &[&[&str]] = &[
+    let commands: Vec<&[&str]> = vec![
         &["fetch", "not-a-repo-or-url"],
         &["cache", "dir"],
         &["cache", "list"],
@@ -45,35 +45,27 @@ fn broken_config_does_not_block_documented_control_and_repair_commands() {
         &["config", "init"],
         &["config", "edit"],
     ];
-    for args in local_commands {
-        let mut process = isolated_parakit(&root);
-        process
-            .args(*args)
-            .env("PARAKIT_CONFIG_PATH", &config)
-            .env_remove("VISUAL")
-            .env_remove("EDITOR");
-        let output = process.output().expect("parakit should run");
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        assert!(
-            !stderr.contains("failed to parse config") && !stderr.contains("failed to read config"),
-            "{args:?} unexpectedly loaded the broken config: {stderr}"
-        );
-    }
-
     // Unix daemon endpoints are isolated under XDG_RUNTIME_DIR. The Windows
     // named pipe is keyed directly by the user's SID and has no test-path
     // override, so these commands must not contact it from the test suite.
     #[cfg(unix)]
-    for args in [
-        &["status"][..],
-        &["stop"][..],
-        &["copy-last"][..],
-        &["history"][..],
-        &["test-paste", "test"][..],
-    ] {
+    let commands = [
+        commands,
+        vec![
+            &["status"][..],
+            &["stop"][..],
+            &["copy-last"][..],
+            &["history"][..],
+            &["test-paste", "test"][..],
+        ],
+    ]
+    .concat();
+    for args in commands {
         let output = isolated_parakit(&root)
             .args(args)
             .env("PARAKIT_CONFIG_PATH", &config)
+            .env_remove("VISUAL")
+            .env_remove("EDITOR")
             .output()
             .expect("parakit should run");
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -251,6 +243,8 @@ fn daemon_only_commands_report_an_absent_daemon_cleanly() {
             "",
             "parakit: error: daemon is not running; start it with `parakit start` first\n",
         ),
+        (&["--quiet", "status"], 0, "", ""),
+        (&["--quiet", "stop"], 0, "", ""),
     ];
 
     for (args, expected_code, expected_stdout, expected_stderr) in cases {
@@ -264,16 +258,6 @@ fn daemon_only_commands_report_an_absent_daemon_cleanly() {
         assert_eq!(String::from_utf8_lossy(&output.stderr), *expected_stderr);
     }
 
-    for command in ["status", "stop"] {
-        let output = isolated_parakit(&root)
-            .args(["--quiet", command])
-            .output()
-            .expect("parakit should run");
-
-        assert!(output.status.success(), "{command}");
-        assert!(output.stdout.is_empty(), "{command}");
-        assert!(output.stderr.is_empty(), "{command}");
-    }
     assert!(!root.join("runtime").exists());
     assert!(!root.join("cache").exists());
 }

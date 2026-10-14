@@ -1,7 +1,7 @@
 //! macOS CoreGraphics push-to-talk hotkey tap.
 
 use super::{
-    send_hotkey_transition, HotkeyAction, HotkeyBackend, HotkeyState, MacOsModifierState,
+    send_hotkey_transition, HotkeyAction, HotkeyBackend, HotkeyState, ModifierState,
     MACOS_LEFT_COMMAND_KEYCODE, MACOS_LEFT_OPTION_KEYCODE, MACOS_LEFT_SHIFT_KEYCODE,
     MACOS_PTT_LEFT_CONTROL_KEYCODE, MACOS_PTT_SPACE_KEYCODE, MACOS_RIGHT_COMMAND_KEYCODE,
     MACOS_RIGHT_CONTROL_KEYCODE, MACOS_RIGHT_OPTION_KEYCODE, MACOS_RIGHT_SHIFT_KEYCODE,
@@ -205,7 +205,7 @@ pub(super) fn handle_tap_event(
     hotkey: &mut HotkeyState,
     event_type: u32,
     keycode: i64,
-    modifiers: MacOsModifierState,
+    modifiers: ModifierState,
     now: Instant,
 ) -> (Option<HotkeyAction>, bool) {
     match (event_type, keycode) {
@@ -229,8 +229,8 @@ pub(super) fn handle_tap_event(
 // the shared physical_key_down takes the u16 keycode ABI type; casting back
 // here is lossless since every constant is itself derived from a u16 keycode
 // via `as i64`.
-fn physical_modifier_state() -> MacOsModifierState {
-    MacOsModifierState {
+fn physical_modifier_state() -> ModifierState {
+    ModifierState {
         ctrl_left: physical_key_down(MACOS_KEY_LEFT_CONTROL as u16),
         ctrl_right: physical_key_down(MACOS_KEY_RIGHT_CONTROL as u16),
         shift_left: physical_key_down(MACOS_KEY_LEFT_SHIFT as u16),

@@ -360,12 +360,7 @@ mod tests {
         // Native stderr suppression is process-wide, so isolate both cases
         // from other tests and inspect what reaches the actual descriptor.
         for verbose in [false, true] {
-            let output = std::process::Command::new(std::env::current_exe().unwrap())
-                .args([
-                    "--exact",
-                    "daemon::engine_runtime::tests::startup_model_error_points_to_suppressed_diagnostics",
-                    "--nocapture",
-                ])
+            let output = crate::test_support::exact_test_command("daemon::engine_runtime::tests::startup_model_error_points_to_suppressed_diagnostics")
                 .env(CHILD, verbose.to_string())
                 .output()
                 .unwrap();

@@ -189,14 +189,10 @@ Source #43
             return;
         }
 
-        let mut command = Command::new(std::env::current_exe().unwrap());
-        command
-            .args([
-                "--exact",
-                "daemon::audio::pactl::tests::command_output_drains_large_stdout_while_waiting",
-                "--nocapture",
-            ])
-            .env(CHILD, "1");
+        let mut command = crate::test_support::exact_test_command(
+            "daemon::audio::pactl::tests::command_output_drains_large_stdout_while_waiting",
+        );
+        command.env(CHILD, "1");
         let output = command_output_with_timeout(&mut command, Duration::from_secs(1))
             .expect("large output should not block child completion");
 
@@ -214,12 +210,7 @@ Source #43
                 return;
             }
             Ok("child") => {
-                Command::new(std::env::current_exe().unwrap())
-                    .args([
-                        "--exact",
-                        "daemon::audio::pactl::tests::command_output_stops_waiting_for_descendant_stdout",
-                        "--nocapture",
-                    ])
+                crate::test_support::exact_test_command("daemon::audio::pactl::tests::command_output_stops_waiting_for_descendant_stdout")
                     .env(ROLE, "descendant")
                     .spawn()
                     .unwrap();
@@ -228,14 +219,10 @@ Source #43
             _ => {}
         }
 
-        let mut command = Command::new(std::env::current_exe().unwrap());
-        command
-            .args([
-                "--exact",
-                "daemon::audio::pactl::tests::command_output_stops_waiting_for_descendant_stdout",
-                "--nocapture",
-            ])
-            .env(ROLE, "child");
+        let mut command = crate::test_support::exact_test_command(
+            "daemon::audio::pactl::tests::command_output_stops_waiting_for_descendant_stdout",
+        );
+        command.env(ROLE, "child");
         let started = Instant::now();
         let output = command_output_with_timeout(&mut command, Duration::from_millis(200));
 
