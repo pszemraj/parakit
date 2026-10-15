@@ -18,6 +18,31 @@ struct ChunkResult {
 };
 int ChunkResult::live = 0;
 
+void quiet_range_selection_is_gain_independent() {
+    constexpr size_t window = 1600;
+    const float amplitudes[] = {6e-6f, 1.2e-5f, 2.3e-5f, .001f, .002f, .003f, 6e-6f, 1.2e-5f, 2.3e-5f, 0};
+    std::vector<float> pcm;
+    for (float amplitude : amplitudes)
+        pcm.insert(pcm.end(), window, amplitude);
+    const std::vector<std::pair<size_t, size_t>> ranges = {
+        {0, 3 * window}, {3 * window, 6 * window}, {6 * window, 9 * window}, {9 * window, 10 * window}};
+    const std::vector<std::pair<size_t, size_t>> expected(ranges.begin(), ranges.begin() + 3);
+    assert(audio_chunking::drop_speechless_ranges(pcm.data(), pcm.size(), ranges, window).size() == 1);
+    assert(parakit_asr::qwen_speech_ranges(pcm.data(), pcm.size(), ranges, window) == expected);
+    for (float& sample : pcm)
+        sample *= 100;
+    assert(parakit_asr::qwen_speech_ranges(pcm.data(), pcm.size(), ranges, window) == expected);
+    for (float& sample : pcm)
+        sample *= 1e-6f;
+    assert(parakit_asr::qwen_speech_ranges(pcm.data(), pcm.size(), ranges, window) == expected);
+    std::vector<float> noise(9 * window, .0002f);
+    std::fill(noise.begin() + 3 * window, noise.begin() + 6 * window, .1f);
+    const auto kept = parakit_asr::qwen_speech_ranges(noise.data(), noise.size(),
+        {ranges[0], ranges[1], ranges[2]}, window);
+    const std::vector<std::pair<size_t, size_t>> only_noise_free{ranges[1]};
+    assert(kept == only_noise_free);
+}
+
 void chunks_are_all_or_nothing() {
     const std::vector<int> ranges{0, 1, 2};
     for (int fail : {-1, 0, 1, 2}) {
@@ -128,6 +153,7 @@ void metadata_preserves_spoken_text() {
 
 int main() {
     chunks_are_all_or_nothing();
+    quiet_range_selection_is_gain_independent();
     real_decoder_failure_contract();
     metadata_preserves_spoken_text();
     std::cout << "native correctness checks passed\n";

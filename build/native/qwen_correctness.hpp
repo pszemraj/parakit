@@ -5,11 +5,38 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <string>
 #include <vector>
+#include "core/audio_chunking.h"
 
 namespace parakit_asr {
+
+// Exclude actual zero padding when estimating the relative noise floor. The
+// pinned 1e-5 cutoff also excluded quiet nonzero windows, raising the estimate
+// and dropping spoken clauses when the whole recording had low absolute gain.
+// Keep speech above twice that floor: the pinned four-times threshold also
+// discarded recoverable low-level PCM16 clauses around a louder speaker.
+inline std::vector<std::pair<size_t, size_t>> qwen_speech_ranges(
+    const float* pcm, size_t count, const std::vector<std::pair<size_t, size_t>>& ranges,
+    size_t window) {
+    if (ranges.size() <= 1)
+        return ranges;
+    const auto levels = audio_chunking::estimate_energy_levels(
+        pcm, count, window, std::numeric_limits<float>::min());
+    const float threshold = std::min(2.0f * levels.floor,
+        levels.floor + 0.2f * (levels.loud - levels.floor));
+    std::vector<std::pair<size_t, size_t>> kept;
+    for (const auto& range : ranges) {
+        float peak = 0;
+        for (float rms : audio_chunking::window_rms_list(pcm + range.first, range.second - range.first, window))
+            peak = std::max(peak, rms);
+        if (peak > threshold)
+            kept.push_back(range);
+    }
+    return kept;
+}
 
 // A failed slice invalidates the complete recording. Owning both results here
 // also discards accumulated text when a later slice fails.

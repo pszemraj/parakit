@@ -101,6 +101,12 @@ pub fn patch_source(source: &str) -> Result<String, String> {
         "#include \"crispasr_session.h\"\n#include \"qwen_correctness.hpp\"",
         "correctness helper include",
     )?;
+    source = replace_once(
+        &source,
+        "        ranges = audio_chunking::drop_speechless_ranges(pcm, (size_t)n_samples, ranges, (size_t)(SR / 10));",
+        "        ranges = s->backend == \"qwen3\"\n            ? parakit_asr::qwen_speech_ranges(pcm, (size_t)n_samples, ranges, (size_t)(SR / 10))\n            : audio_chunking::drop_speechless_ranges(pcm, (size_t)n_samples, ranges, (size_t)(SR / 10));",
+        "Qwen gain-independent range filter",
+    )?;
 
     let begin = source
         .find("static crispasr_session_result* transcribe_autochunk(")

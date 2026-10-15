@@ -173,7 +173,7 @@ fn cmake_hook_compiles_the_copy_and_excludes_the_original() {
     fs::create_dir_all(root.join("src")).unwrap();
     fs::write(
         root.join("CMakeLists.txt"),
-        "cmake_minimum_required(VERSION 3.19)\nproject(crispasr LANGUAGES CXX)\nadd_subdirectory(src)\n",
+        "cmake_minimum_required(VERSION 3.19)\nproject(crispasr LANGUAGES CXX)\nset(CMAKE_CXX_STANDARD 17)\nadd_subdirectory(src)\n",
     )
     .unwrap();
     fs::write(
@@ -196,6 +196,12 @@ fn cmake_hook_compiles_the_copy_and_excludes_the_original() {
     let parakeet_copy = root.join("patched-parakeet.cpp");
     fs::write(&parakeet_copy, "int parakeet_answer() { return 42; }\n").unwrap();
     let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+    fs::create_dir_all(root.join("src/core")).unwrap();
+    fs::copy(
+        manifest.join("vendor/CrispASR/src/core/audio_chunking.h"),
+        root.join("src/core/audio_chunking.h"),
+    )
+    .unwrap();
     checked(
         Command::new("cmake")
             .arg("-S")
