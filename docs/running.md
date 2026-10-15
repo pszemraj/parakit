@@ -152,7 +152,7 @@ Press PTT normally after an idle period. A three-note cue announces model reload
 
 Other programs can fill the GPU while the model is offloaded. Before a bundled build reloads on a GPU, parakit checks that the model file size plus working space is free: 2 GiB for Qwen, or 1 GiB for other backends. If it is not, `auto` reloads on CPU until the next offload and says so in a warning and a desktop notification; `--device gpu` fails the reload with the free and needed amounts. This check does not reserve memory or bound the workspace for long audio. Later allocations can still exhaust memory and abort the daemon; `model_idle_minutes = 0` avoids repeated offload/reload but does not prevent out-of-memory failures. The [historical pressure measurements](dev/memory.md#reload-under-gpu-memory-pressure) explain the original Parakeet allowance and its limits; they are not current-runtime memory ceilings.
 
-Qwen's larger allowance follows [Linux CUDA/Vulkan measurements](dev/memory.md#qwen-gpu-reload-measurements) with the 0.6B and 1.7B Q8_0 presets. The original 1 GiB allowance was smaller than their observed working space. These measurements cover the Juniper memo and chunk-boundary inputs at the default token budget; larger budgets, other artifacts, and native Metal/Windows behavior remain uncalibrated. A model's download size is not its runtime memory requirement.
+Qwen's larger allowance follows [Linux CUDA/Vulkan measurements](dev/memory.md#qwen-gpu-reload-measurements) with the 0.6B and 1.7B Q8_0 presets. The original 1 GiB allowance was smaller than their observed working space. These measurements cover the Juniper memo, chunk-boundary inputs, and a 270-second repeated-speech stress input at token budgets 512 and 4096. The margin is narrow for 1.7B; other artifacts and native Metal/Windows behavior remain uncalibrated. A model's download size is not its runtime memory requirement.
 
 Parakeet startup warms one second of synthetic audio on CPU, or five seconds on GPU; reload uses one second. Qwen startup and reload instead transcribe an embedded 11-second human speech sample with automatic language and a fixed 512-token budget. Readiness text is discarded and the user's language and token budget are restored before dictation. A deliberately tiny user budget can therefore fail the actual transcription without preventing readiness. Longer dictations allocate larger buffers as needed; the first use of a new shape can also incur backend compilation work. [Linux reload measurements](dev/memory.md#linux-reload-measurements) show host and GPU memory for the earlier synthetic policy.
 
@@ -180,7 +180,7 @@ For locked-down or offline machines, seed the default model by placing `parakeet
 
 ### Model Presets
 
-Choose a hosted Q8_0 model explicitly:
+Choose a hosted Q8_0 model explicitly. Qwen presets are experimental:
 
 ```bash
 parakit fetch --model-preset qwen3-asr-1.7b

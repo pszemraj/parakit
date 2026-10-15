@@ -74,7 +74,7 @@
 # Overridden by: the --device flag.
 # Only used when: the model is opened. The policy is applied again on every idle reload (see daemon.model_idle_minutes).
 # On a bundled reload, "auto" loads on the CPU until the next offload when free GPU memory is below the model file size plus working space: 2 GiB for Qwen, or 1 GiB for other backends. It says so in a warning and a desktop notification. "gpu" fails that reload instead.
-# Warning: the Qwen allowance follows Linux CUDA/Vulkan Q8_0 measurements at the default token budget; it does not bound every recording, artifact or token budget, and native Metal/Windows calibration remains pending.
+# Warning: the Qwen allowance follows Linux CUDA/Vulkan Q8_0 measurements at token budgets 512 and 4096, including a 270-second repeated-speech input. The 1.7B margin is narrow; this is not an allocation ceiling, and other artifacts and native Metal/Windows calibration remain pending.
 # Recommended: "auto".
 device = "auto"
 

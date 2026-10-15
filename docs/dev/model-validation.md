@@ -4,6 +4,17 @@ This is the remaining native desktop checklist for the experimental model preset
 
 Use repository-local build and runtime directories. Keep the installed command, its native libraries, and its configuration intact. Coordinate the physical hotkey checks with the existing daemon: only the intended test instance should receive the PTT chord.
 
+For an unpushed branch, transfer the prepared Git bundle to a separate full checkout on the laptop. Fetching it does not publish the branch:
+
+```bash
+git fetch /path/to/feat-new-models.bundle feat/new-models
+git switch --detach FETCH_HEAD
+git submodule update --init --recursive
+git rev-parse HEAD
+```
+
+Use the same commands in PowerShell with the transferred bundle's Windows path. Keep the printed commit with the returned results.
+
 ## macOS CPU and Metal
 
 Start in a full checkout with initialized submodules and the [native build prerequisites](../build.md). These commands build an isolated Metal-capable binary; `--device cpu` tests its explicit CPU path.
@@ -34,6 +45,14 @@ for preset in parakeet-v3 qwen3-asr-0.6b qwen3-asr-1.7b parakeet-ultra parakeet-
       --model-preset "$preset" --device "$device" --threads 8 --warmup --repeat 2 \
       --audio vendor/CrispASR/bindings/go/samples/jfk.wav \
       > "target/tmp/mv/$preset-$device-file.out" 2> "target/tmp/mv/$preset-$device-file.err"
+    printf '%s\n' "$?" > "target/tmp/mv/$preset-$device-file.exit"
+    "$CARGO_TARGET_DIR/release/parakit" --verbose start \
+      --model-preset "$preset" --device "$device" --threads 8 \
+      --no-cleaning --no-sounds --model-idle-minutes 0 \
+      --simulate-ptt-audio vendor/CrispASR/bindings/go/samples/jfk.wav \
+      --simulate-ptt-repeat 2 --log-dir "target/tmp/mv/$preset-$device-jsonl" \
+      > "target/tmp/mv/$preset-$device-worker.out" 2> "target/tmp/mv/$preset-$device-worker.err"
+    printf '%s\n' "$?" > "target/tmp/mv/$preset-$device-worker.exit"
   done
 done
 ```
@@ -57,12 +76,14 @@ Build Vulkan when the laptop has a supported GPU and its SDK. On an NVIDIA lapto
 Validate each supported bundle after extracting it to a fresh repository-local directory. For example, after a Vulkan build:
 
 ```powershell
-$Run = Join-Path $PWD "target\tmp\mv"
+$Backend = "vulkan"
+$Device = if ($Backend -eq "cpu") { "cpu" } else { "gpu" }
+$Run = Join-Path $PWD "target\tmp\mv\$Backend"
 New-Item -ItemType Directory -Force $Run | Out-Null
-Compress-Archive -Path "target\parakit-windows-x86_64-vulkan\*" -DestinationPath "$Run\vulkan.zip" -Force
-Expand-Archive -Path "$Run\vulkan.zip" -DestinationPath "$Run\vulkan-extracted" -Force
-$Bin = "$Run\vulkan-extracted\parakit.exe"
-$env:PARAKIT_MODELS_DIR = "$Run\models"
+Compress-Archive -Path "target\parakit-windows-x86_64-$Backend\*" -DestinationPath "$Run\bundle.zip" -Force
+Expand-Archive -Path "$Run\bundle.zip" -DestinationPath "$Run\extracted" -Force
+$Bin = "$Run\extracted\parakit.exe"
+$env:PARAKIT_MODELS_DIR = Join-Path $PWD "target\tmp\mv\models"
 $env:PARAKIT_CONFIG_PATH = "$Run\config.toml"
 [System.IO.File]::WriteAllText($env:PARAKIT_CONFIG_PATH, "# Isolated native validation`n")
 git rev-parse HEAD | Out-File "$Run\commit.txt"
@@ -77,7 +98,7 @@ Repeat extraction and loading for the CPU bundle and each supported accelerator.
 ```powershell
 foreach ($Preset in @("parakeet-v3", "qwen3-asr-0.6b", "qwen3-asr-1.7b", "parakeet-ultra", "parakeet-redux")) {
     & $Bin fetch --model-preset $Preset
-    & $Bin --verbose start --model-preset $Preset --device gpu --threads 8 --no-cleaning --no-sounds --model-idle-minutes 0 --simulate-ptt-audio "vendor\CrispASR\bindings\go\samples\jfk.wav" --simulate-ptt-repeat 2 --log-dir "$Run\$Preset-jsonl" *> "$Run\$Preset-worker.txt"
+    & $Bin --verbose start --model-preset $Preset --device $Device --threads 8 --no-cleaning --no-sounds --model-idle-minutes 0 --simulate-ptt-audio "vendor\CrispASR\bindings\go\samples\jfk.wav" --simulate-ptt-repeat 2 --log-dir "$Run\$Preset-jsonl" *> "$Run\$Preset-worker.txt"
     $LASTEXITCODE | Out-File "$Run\$Preset-exit.txt"
 }
 ```
@@ -86,8 +107,18 @@ Use `--device cpu` for the CPU bundle. For the matching Vulkan file helper, run 
 
 ```powershell
 cargo build --locked --release --features vulkan --example transcribe-file --target-dir "$env:CARGO_TARGET_DIR\vulkan"
-$env:PATH = "$Run\vulkan-extracted;" + $env:PATH
+$env:PATH = "$Run\extracted;" + $env:PATH
 & "$env:CARGO_TARGET_DIR\vulkan\release\examples\transcribe-file.exe" --model-preset qwen3-asr-1.7b --device gpu --threads 8 --warmup --repeat 2 --audio "vendor\CrispASR\bindings\go\samples\jfk.wav"
+```
+
+After building the matching helper, retain every preset's file result too:
+
+```powershell
+$Helper = "$env:CARGO_TARGET_DIR\$Backend\release\examples\transcribe-file.exe"
+foreach ($Preset in @("parakeet-v3", "qwen3-asr-0.6b", "qwen3-asr-1.7b", "parakeet-ultra", "parakeet-redux")) {
+    & $Helper --model-preset $Preset --device $Device --threads 8 --warmup --repeat 2 --audio "vendor\CrispASR\bindings\go\samples\jfk.wav" *> "$Run\$Preset-file.txt"
+    $LASTEXITCODE | Out-File "$Run\$Preset-file-exit.txt"
+}
 ```
 
 For CPU, omit `--features vulkan`, select the `cpu` target subdirectory and extracted CPU bundle on `PATH`, and use `--device cpu`. For CUDA, select the matching feature, target subdirectory and bundle. The helper needs its matching DLLs; copying only its executable elsewhere is insufficient.
@@ -114,7 +145,25 @@ Repeat for 0.6B, CPU, and automatic language/default budget. On Windows use the 
 
 Also run forced German on the public German clip with cleaning disabled and budget 128, silence, and the quiet/boundary fixtures. With budget 1, Qwen readiness must succeed and the real dictation must fail without successful JSONL/insertion/history replacement. The spoken word `language` in `fleurs-en_us-422.wav` must survive forced English. Status must show the chosen preset and user options, rather than temporary readiness settings.
 
+The controlled quiet fixtures use complete recorded phrases, float samples, and a 26 dB quieter opening/closing around the middle. `quiet-rms26-complete-lowgain.wav` uniformly lowers the same waveform by another 40 dB. Check that both retain the opening “Do not deface” and closing “not going to be goodbye” clauses. `human-speech-noise-tail.wav` appends constructed stationary noise to recorded speech; it must not add speech over the tail. The original `quiet-loud-quiet.wav` is a separate, severely attenuated PCM16 diagnostic near the quantization floor; keep its recognition errors separate from the controlled float comparison.
+
 ## Physical checks on each desktop
+
+Put the tested selections in the isolated configuration so restart checks exercise saved settings. For example:
+
+```toml
+[daemon]
+model_preset = "qwen3-asr-1.7b"
+device = "gpu"
+threads = 8
+model_idle_minutes = 1
+
+[qwen]
+language = "en"
+max_new_tokens = 4096
+```
+
+Use `device = "cpu"` for the CPU path. Start without model, device, or Qwen CLI overrides, then compare status before and after restart. Change the preset for the other model checks; persistent Qwen settings are inactive for Parakeet.
 
 Run the isolated test daemon in the foreground when the normal instance will not compete for the hotkey. Use both Qwen sizes and one Parakeet preset, then inspect `status`, `history`, and JSONL state with the same isolated configuration:
 
@@ -124,4 +173,16 @@ Run the isolated test daemon in the foreground when the normal instance will not
 4. Check normal start/completion/error cues and `--no-sounds`. Silence and a deliberate tiny-budget failure must not paste text or replace the previous successful history entry.
 5. Stop, restart with the same isolated configuration, and confirm configuration persists. Check sleep/wake, a subsequent capture, and insertion. Do not infer audible or physical behavior from headless tests.
 
-Return the logs, current commit/hardware/backend details, and a pass/fail observation for each numbered item. Review disagreements against the recording or a human listener. Dataset reading text and official-model output are useful references, but neither resolves an unheard disagreement automatically.
+Return the logs, current commit/hardware/backend details, and a pass/fail observation for each numbered item. Review disagreements against the recording or a human listener. Dataset reading text and official-model output are useful references, but neither resolves an unheard disagreement automatically. Deliberately filling VRAM and physical stop-to-insert p50/p95 are agreed follow-ups, outside this closure gate.
+
+Package the results without the downloaded models. On macOS:
+
+```bash
+tar --exclude=models -czf target/tmp/model-validation-results.tar.gz -C target/tmp/mv .
+```
+
+On Windows:
+
+```powershell
+Get-ChildItem "target\tmp\mv" -Exclude models | Compress-Archive -DestinationPath "target\tmp\model-validation-results.zip" -Force
+```
