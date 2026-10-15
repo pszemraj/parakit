@@ -127,6 +127,19 @@ For CPU, omit `--features vulkan`, select the `cpu` target subdirectory and extr
 
 Use the supplied public fixture ZIP, extracted beneath `target/tmp/`, or equivalent human recordings with known text. `short.wav` contains a negation; `repeated-speech-270s.wav` is repeated JFK speech for memory/context stress, not a natural 270-second quality sample. Keep the fixture attribution with the files.
 
+Extract the transferred ZIP to the paths used below. On macOS:
+
+```bash
+mkdir -p target/tmp/model-fixtures
+unzip /path/to/laptop-fixtures.zip -d target/tmp/model-fixtures
+```
+
+On Windows:
+
+```powershell
+Expand-Archive -Path "C:\path\to\laptop-fixtures.zip" -DestinationPath "target\tmp\model-fixtures" -Force
+```
+
 On each native CPU and supported GPU path, run both Qwen sizes with this ordered sequence. The Unix example uses the macOS variables above:
 
 ```bash
@@ -170,7 +183,7 @@ Run the isolated test daemon in the foreground when the normal instance will not
 1. Dictate a short sentence containing a negation, number and the word `language`. Confirm insertion exactly once and review the actual words before cleanup. Repeat with normal cleaning separately.
 2. Wait for idle offload. Hold PTT through reload, speak, and release. Confirm readiness precedes listening, the full capture is inserted once, and user options persist.
 3. Release PTT immediately during reload. Confirm the queued capture completes once and no delayed listening cue follows release.
-4. Check normal start/completion/error cues and `--no-sounds`. Silence and a deliberate tiny-budget failure must not paste text or replace the previous successful history entry.
+4. Check normal start/completion/error cues and `--no-sounds`. After a successful dictation, silence must not paste text or replace that history entry. In a separate startup with `--qwen-max-new-tokens 1`, compare history before and after a failed dictation: it must not add or replace an entry. History is in memory and starts empty after restart; saved configuration and JSONL logs are separate.
 5. Stop, restart with the same isolated configuration, and confirm configuration persists. Check sleep/wake, a subsequent capture, and insertion. Do not infer audible or physical behavior from headless tests.
 
 Return the logs, current commit/hardware/backend details, and a pass/fail observation for each numbered item. Review disagreements against the recording or a human listener. Dataset reading text and official-model output are useful references, but neither resolves an unheard disagreement automatically. Deliberately filling VRAM and physical stop-to-insert p50/p95 are agreed follow-ups, outside this closure gate.
