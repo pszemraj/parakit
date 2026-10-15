@@ -180,13 +180,12 @@ For locked-down or offline machines, seed the default model by placing `parakeet
 
 ### Model Presets
 
-Choose a hosted Q8_0 model explicitly. Qwen presets are experimental:
+Choose a hosted Q8_0 model explicitly. Qwen presets are experimental; Redux is retained for testing and comparison only:
 
 ```bash
 parakit fetch --model-preset qwen3-asr-1.7b
 parakit start --model-preset qwen3-asr-1.7b --no-cleaning
 parakit start --model-preset parakeet-ultra
-parakit start --model-preset parakeet-redux
 ```
 
 | Preset | Hosted repository | Exact artifact |
@@ -197,7 +196,7 @@ parakit start --model-preset parakeet-redux
 | `parakeet-ultra` | [cstr/parakeet-ultra-GGUF](https://huggingface.co/cstr/parakeet-ultra-GGUF) | `parakeet-ultra-q8_0.gguf` |
 | `parakeet-redux` | [cstr/parakeet-redux-GGUF](https://huggingface.co/cstr/parakeet-redux-GGUF) | `parakeet-redux-q8_0.gguf` |
 
-**Redux on CPU:** Redux uses the same Parakeet GGUF backend as the other Parakeet presets, without a dedicated ternary CPU fast path. In our [Parakit CPU comparison](dev/quality.md#parakeet-cpu-comparison), Redux was slower than Ultra and used similar RAM. Those results cover one CPU and recording; compare the presets on your own hardware and audio before choosing for speed or memory.
+**Redux is experimental and for testing only.** It is not recommended for normal dictation in Parakit. It uses the ordinary Parakeet GGUF backend without packed ternary acceleration. In our [CPU comparison](dev/quality.md#parakeet-cpu-comparison), it was slower than Ultra and used similar RAM. The preset remains available for checkpoint and conversion comparisons.
 
 Redux's GGUF contains ordinary reconstructed weights. Photon's packed 178 MB weight footprint and [published CPU results](https://huggingface.co/moondream/parakeet-redux#performance) do not describe Parakit's runtime. The GGUF conversion also omits Moondream's VAD head, so Photon's pause-based segmentation is not a Parakit guarantee.
 

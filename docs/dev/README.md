@@ -12,7 +12,7 @@ Hashes belong in an explicit `--sha256` request or a release process that actual
 
 End-user download, cache, and model-override behavior is in [running.md#model-cache](../running.md#model-cache).
 
-Both Qwen3-ASR sizes and Moondream Ultra/Redux have externally hosted Q8_0 [presets](../running.md#model-presets). They can also be rebuilt from their original checkpoints with `fetch --from-source`. F16 and official-runtime comparison procedures are in [quality.md#qwen-and-moondream-comparisons](quality.md#qwen-and-moondream-comparisons).
+Both Qwen3-ASR sizes and Moondream Ultra/Redux have externally hosted Q8_0 [presets](../running.md#model-presets). Qwen is experimental; Redux is retained for testing/comparison only and is not recommended for normal dictation. They can also be rebuilt from their original checkpoints with `fetch --from-source`. F16 and official-runtime comparison procedures are in [quality.md#qwen-and-moondream-comparisons](quality.md#qwen-and-moondream-comparisons).
 
 Hosted release files:
 
@@ -47,6 +47,7 @@ Rebuild Qwen or Moondream from the original Hugging Face checkpoint instead of d
 parakit fetch --from-source --model-preset qwen3-asr-1.7b --keep-f16
 parakit fetch --from-source --model-preset qwen3-asr-0.6b --keep-f16
 parakit fetch --from-source --model-preset parakeet-ultra --keep-f16
+# Experimental comparison only:
 parakit fetch --from-source --model-preset parakeet-redux --keep-f16
 ```
 

@@ -26,7 +26,7 @@ pub enum ModelPreset {
     #[value(name = "parakeet-ultra")]
     #[serde(rename = "parakeet-ultra")]
     ParakeetUltra,
-    /// Moondream's ternary-trained Parakeet model in ordinary Q8_0 GGUF form.
+    /// Experimental Redux for testing only; no packed ternary acceleration.
     #[value(name = "parakeet-redux")]
     #[serde(rename = "parakeet-redux")]
     ParakeetRedux,

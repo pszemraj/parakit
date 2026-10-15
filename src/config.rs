@@ -270,7 +270,7 @@ pub(crate) const TEMPLATE: &str = r#"# parakit config.toml
 
 # Hosted Q8_0 preset, mutually exclusive with model.
 # Choices: parakeet-v3, qwen3-asr-0.6b, qwen3-asr-1.7b, parakeet-ultra, parakeet-redux.
-# Unset: parakeet-v3. Qwen presets are experimental.
+# Unset: parakeet-v3. Qwen presets are experimental; Redux is for testing only.
 # model_preset = "qwen3-asr-1.7b"
 
 # Runtime compute device: "auto", "cpu", or "gpu".

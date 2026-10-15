@@ -57,6 +57,7 @@
 # model = "/path/to/model.gguf"
 
 # "parakeet-v3" | "qwen3-asr-0.6b" | "qwen3-asr-1.7b" | "parakeet-ultra" | "parakeet-redux" (optional). Hosted Q8_0 model to load.
+# Experimental: Qwen presets. Redux is for testing/comparison only and is not recommended for normal dictation.
 # Unset: daemon.model selects a local GGUF; when both selectors are absent, the daemon uses the original parakeet-v3 hosted Q8_0 model.
 # Conflicts with: daemon.model; setting both fails config load even when a CLI model selection overrides them.
 # Overridden by: -m/--model or --model-preset; either CLI selection replaces the configured selection.
