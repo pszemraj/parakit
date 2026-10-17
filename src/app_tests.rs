@@ -46,6 +46,10 @@ fn source_rebuild_dispatch_preserves_legacy_and_selects_new_checkpoints() {
         }
     );
     assert!(source(&["--from-source", "--checkpoint-dir", "snapshot"]).is_err());
+    assert!(source(&["--from-source", "--model-preset", "parakeet-v2"])
+        .unwrap_err()
+        .to_string()
+        .contains("parakeet-v2 source rebuilding is not available"));
     assert!(source(&[
         "--from-source",
         "--model-preset",
@@ -58,6 +62,7 @@ fn source_rebuild_dispatch_preserves_legacy_and_selects_new_checkpoints() {
 #[test]
 fn q6_fetch_selects_local_quantization_and_rejects_conflicting_inputs() {
     for preset in [
+        ModelPreset::ParakeetV2,
         ModelPreset::ParakeetV3,
         ModelPreset::Qwen3Asr06b,
         ModelPreset::Qwen3Asr17b,

@@ -190,6 +190,7 @@ parakit start --model-preset parakeet-ultra
 
 | Preset | Hosted repository | Exact artifact |
 | --- | --- | --- |
+| `parakeet-v2` (English-only) | [cstr/parakeet-tdt-0.6b-v2-GGUF](https://huggingface.co/cstr/parakeet-tdt-0.6b-v2-GGUF) | `parakeet-tdt-0.6b-v2-q8_0.gguf` |
 | `parakeet-v3` | [pszemraj/parakeet-tdt-0.6b-v3-gguf](https://huggingface.co/pszemraj/parakeet-tdt-0.6b-v3-gguf) | `parakeet-tdt-0.6b-v3-Q8_0.gguf` |
 | `qwen3-asr-0.6b` | [cstr/qwen3-asr-0.6b-GGUF](https://huggingface.co/cstr/qwen3-asr-0.6b-GGUF) | `qwen3-asr-0.6b-q8_0.gguf` |
 | `qwen3-asr-1.7b` | [cstr/qwen3-asr-1.7b-GGUF](https://huggingface.co/cstr/qwen3-asr-1.7b-GGUF) | `qwen3-asr-1.7b-q8_0.gguf` |
@@ -200,7 +201,7 @@ parakit start --model-preset parakeet-ultra
 
 Redux's GGUF contains ordinary reconstructed weights. Photon's packed 178 MB weight footprint and [published CPU results](https://huggingface.co/moondream/parakeet-redux#performance) do not describe Parakit's runtime. The GGUF conversion also omits Moondream's VAD head, so Photon's pause-based segmentation is not a Parakit guarantee.
 
-Presets use the exact file above and check the local cache before contacting Hugging Face. Once fetched, they work offline. The four new presets select fixed provider commits from the model catalog; `--force` downloads that selected revision again. Parakeet v3 keeps its existing revision policy and top-level cache path; the other presets use the revision-specific Hub cache layout described below. Previously downloaded files remain usable with `-m`; changing a preset revision selects a separate cache destination. `fetch --model-preset` does not read daemon configuration. It accepts `--force` and conflicts with a custom source, `--file`, and `--sha256`.
+Presets use the exact file above and check the local cache before contacting Hugging Face. Once fetched, they work offline. All presets except v3 select fixed provider commits from the model catalog; `--force` downloads that selected revision again. Parakeet v3 keeps its existing revision policy and top-level cache path; the other presets use the revision-specific Hub cache layout described below. Previously downloaded files remain usable with `-m`; changing a preset revision selects a separate cache destination. `fetch --model-preset` does not read daemon configuration. It accepts `--force` and conflicts with a custom source, `--file`, and `--sha256`.
 
 To convert an original checkpoint and quantize it locally, combine the preset with `--from-source`:
 
@@ -208,7 +209,7 @@ To convert an original checkpoint and quantize it locally, combine the preset wi
 parakit fetch --from-source --model-preset qwen3-asr-1.7b --keep-f16
 ```
 
-Both Qwen sizes and Moondream presets support this path. Add `--checkpoint-dir /path/to/original-snapshot` to use a local Hugging Face checkpoint instead of downloading one; the supplied directory is retained. A completed cached Q8_0 artifact is reused without network or conversion dependencies, so add `--force` to rebuild it. The rebuilt artifact uses the preset's normal cache destination and is selected by `start --model-preset NAME`. Dependencies, original model repositories, and Windows quantizer requirements are in [source rebuild](dev/README.md#source-rebuild). The unchanged `fetch --from-source` default rebuilds NVIDIA Parakeet v3 from `.nemo`.
+Both Qwen sizes and Moondream presets support this path. Add `--checkpoint-dir /path/to/original-snapshot` to use a local Hugging Face checkpoint instead of downloading one; the supplied directory is retained. A completed cached Q8_0 artifact is reused without network or conversion dependencies, so add `--force` to rebuild it. The rebuilt artifact uses the preset's normal cache destination and is selected by `start --model-preset NAME`. Dependencies, original model repositories, and Windows quantizer requirements are in [source rebuild](dev/README.md#source-rebuild). The unchanged `fetch --from-source` default rebuilds NVIDIA Parakeet v3 from `.nemo`. V2 supports hosted Q8_0 and local Q6_K acquisition, without source rebuilding.
 
 For a locally generated Q6_K, download the preset's F16 GGUF and quantize it in one command:
 
@@ -216,6 +217,7 @@ For a locally generated Q6_K, download the preset's F16 GGUF and quantize it in 
 parakit fetch --model-preset qwen3-asr-0.6b --quantize q6_k
 parakit fetch --model-preset qwen3-asr-1.7b --quantize q6_k
 parakit fetch --model-preset parakeet-v3 --quantize q6_k
+parakit fetch --model-preset parakeet-v2 --quantize q6_k
 parakit fetch --model-preset parakeet-ultra --quantize q6_k
 parakit start -m /path/printed/by/fetch/qwen3-asr-1.7b-q6_k.gguf --device gpu
 ```

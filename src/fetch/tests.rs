@@ -11,6 +11,11 @@ fn q6_cache_hit_needs_neither_f16_nor_network_and_preserves_q8() {
     let dir = crate::test_support::fixture_root("parakit-fetch-tests", "q6-cache");
     for (preset, f16_name, q6_name) in [
         (
+            ModelPreset::ParakeetV2,
+            "parakeet-tdt-0.6b-v2.gguf",
+            "parakeet-tdt-0.6b-v2-q6_k.gguf",
+        ),
+        (
             ModelPreset::ParakeetV3,
             F16_FILENAME,
             "parakeet-tdt-0.6b-v3-q6_k.gguf",
@@ -87,6 +92,7 @@ fn failed_q6_quantization_preserves_completed_model_and_cleans_staging() {
 fn all_presets_reuse_cached_artifacts_without_network() {
     let dir = crate::test_support::fixture_root("parakit-fetch-tests", "preset-cache");
     for preset in [
+        ModelPreset::ParakeetV2,
         ModelPreset::ParakeetV3,
         ModelPreset::Qwen3Asr06b,
         ModelPreset::Qwen3Asr17b,

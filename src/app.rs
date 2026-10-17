@@ -216,6 +216,9 @@ fn run_rules_command(cli: &Cli, rules_cli: &RulesCli) -> Result<()> {
 fn resolve_fetch_source(cli: &FetchCli) -> Result<FetchSource> {
     if cli.from_source {
         let preset = cli.model_preset.unwrap_or(ModelPreset::ParakeetV3);
+        if preset == ModelPreset::ParakeetV2 {
+            anyhow::bail!("parakeet-v2 source rebuilding is not available; use its hosted Q8_0 or --quantize q6_k");
+        }
         if preset == ModelPreset::ParakeetV3 {
             if cli.checkpoint_dir.is_some() {
                 anyhow::bail!("--checkpoint-dir requires a Qwen or Moondream model preset");

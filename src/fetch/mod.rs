@@ -266,6 +266,7 @@ fn run_preset_q6(
     models_dir: &Path,
 ) -> Result<PathBuf> {
     let f16_filename = match preset {
+        ModelPreset::ParakeetV2 => "parakeet-tdt-0.6b-v2.gguf",
         ModelPreset::ParakeetV3 => F16_FILENAME,
         ModelPreset::Qwen3Asr06b => "qwen3-asr-0.6b.gguf",
         ModelPreset::Qwen3Asr17b => "qwen3-asr-1.7b-f16.gguf",

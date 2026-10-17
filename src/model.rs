@@ -10,6 +10,10 @@ use std::path::{Path, PathBuf};
     Clone, Copy, Debug, Eq, PartialEq, clap::ValueEnum, serde::Serialize, serde::Deserialize,
 )]
 pub enum ModelPreset {
+    /// NVIDIA's English-only Parakeet v2 model.
+    #[value(name = "parakeet-v2")]
+    #[serde(rename = "parakeet-v2")]
+    ParakeetV2,
     /// The original NVIDIA Parakeet v3 model and application default.
     #[value(name = "parakeet-v3")]
     #[serde(rename = "parakeet-v3")]
@@ -40,6 +44,7 @@ impl ModelPreset {
     /// The preset's stable identifier.
     pub const fn id(self) -> &'static str {
         match self {
+            Self::ParakeetV2 => "parakeet-v2",
             Self::ParakeetV3 => "parakeet-v3",
             Self::Qwen3Asr06b => "qwen3-asr-0.6b",
             Self::Qwen3Asr17b => "qwen3-asr-1.7b",
@@ -55,6 +60,7 @@ impl ModelPreset {
     /// The hosted artifact's `owner/repo` identifier.
     pub const fn repo(self) -> &'static str {
         match self {
+            Self::ParakeetV2 => "cstr/parakeet-tdt-0.6b-v2-GGUF",
             Self::ParakeetV3 => "pszemraj/parakeet-tdt-0.6b-v3-gguf",
             Self::Qwen3Asr06b => "cstr/qwen3-asr-0.6b-GGUF",
             Self::Qwen3Asr17b => "cstr/qwen3-asr-1.7b-GGUF",
@@ -70,6 +76,7 @@ impl ModelPreset {
     /// The filename inside the hosted repository.
     pub const fn filename(self) -> &'static str {
         match self {
+            Self::ParakeetV2 => "parakeet-tdt-0.6b-v2-q8_0.gguf",
             Self::ParakeetV3 => Q8_FILENAME,
             Self::Qwen3Asr06b => "qwen3-asr-0.6b-q8_0.gguf",
             Self::Qwen3Asr17b => "qwen3-asr-1.7b-q8_0.gguf",
@@ -84,6 +91,7 @@ impl ModelPreset {
     /// A fixed provider commit for new presets, or the existing v3 `main`.
     pub const fn revision(self) -> &'static str {
         match self {
+            Self::ParakeetV2 => "8878172f3c45ba231fac8cfd4aff2542b13bc875",
             Self::ParakeetV3 => "main",
             Self::Qwen3Asr06b => "58bd3202f835f46b24b17142cb503b0860c737a5",
             Self::Qwen3Asr17b => "674df5d44b50a63e7102a18895ed20e3f91de301",
@@ -95,10 +103,11 @@ impl ModelPreset {
     /// Return the original checkpoint revision used by source rebuilding.
     ///
     /// # Returns
-    /// A fixed source commit for Qwen/Moondream; v3 uses its existing Nemo URL.
+    /// A fixed source commit for Qwen/Moondream; v3 uses its existing Nemo URL,
+    /// and v2 has no source-rebuild path.
     pub const fn source_revision(self) -> Option<&'static str> {
         match self {
-            Self::ParakeetV3 => None,
+            Self::ParakeetV2 | Self::ParakeetV3 => None,
             Self::Qwen3Asr06b => Some("5eb144179a02acc5e5ba31e748d22b0cf3e303b0"),
             Self::Qwen3Asr17b => Some("7278e1e70fe206f11671096ffdd38061171dd6e5"),
             Self::ParakeetUltra => Some("73175eb7aeb0d82f1e2a6b53b3aabc10a90bcd0b"),
@@ -110,11 +119,11 @@ impl ModelPreset {
     ///
     /// # Returns
     ///
-    /// The checkpoint repository for Qwen and Moondream, or `None` for Parakeet
-    /// v3, whose existing source workflow downloads NVIDIA's `.nemo` file.
+    /// The checkpoint repository for Qwen and Moondream. V3 uses NVIDIA's
+    /// `.nemo` workflow; v2 supports hosted GGUF acquisition only.
     pub const fn source_repo(self) -> Option<&'static str> {
         match self {
-            Self::ParakeetV3 => None,
+            Self::ParakeetV2 | Self::ParakeetV3 => None,
             Self::Qwen3Asr06b => Some("Qwen/Qwen3-ASR-0.6B"),
             Self::Qwen3Asr17b => Some("Qwen/Qwen3-ASR-1.7B"),
             Self::ParakeetUltra => Some("moondream/parakeet-ultra"),
@@ -130,7 +139,9 @@ impl ModelPreset {
     pub const fn backend(self) -> &'static str {
         match self {
             Self::Qwen3Asr06b | Self::Qwen3Asr17b => "qwen3",
-            Self::ParakeetV3 | Self::ParakeetUltra | Self::ParakeetRedux => "parakeet",
+            Self::ParakeetV2 | Self::ParakeetV3 | Self::ParakeetUltra | Self::ParakeetRedux => {
+                "parakeet"
+            }
         }
     }
 }
@@ -397,6 +408,13 @@ mod preset_tests {
     #[test]
     fn preset_names_and_artifacts_are_explicit() {
         for (preset, id, repo, filename, backend) in [
+            (
+                ModelPreset::ParakeetV2,
+                "parakeet-v2",
+                "cstr/parakeet-tdt-0.6b-v2-GGUF",
+                "parakeet-tdt-0.6b-v2-q8_0.gguf",
+                "parakeet",
+            ),
             (
                 ModelPreset::ParakeetV3,
                 "parakeet-v3",
