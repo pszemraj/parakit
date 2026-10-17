@@ -9,7 +9,8 @@ mod source;
 pub use hub::source_from_cli;
 
 use crate::model::{
-    models_dir, ModelPreset, F16_FILENAME, NEMO_FILENAME, OFFICIAL_NEMO_URL, Q8_FILENAME,
+    models_dir, ModelPreset, ModelQuantization, F16_FILENAME, NEMO_FILENAME, OFFICIAL_NEMO_URL,
+    Q8_FILENAME,
 };
 use anyhow::{anyhow, bail, Context, Result};
 use fs2::FileExt;
@@ -112,14 +113,20 @@ pub enum FetchSource {
 /// Returns an error if the model cannot be downloaded, verified, or written
 /// into the platform cache directory.
 pub fn ensure_default_model_with_verbosity(quiet: bool, verbose: bool) -> Result<PathBuf> {
-    ensure_preset_model_with_verbosity(ModelPreset::ParakeetV3, quiet, verbose)
+    ensure_preset_model_with_verbosity(
+        ModelPreset::ParakeetV3,
+        ModelQuantization::Q8,
+        quiet,
+        verbose,
+    )
 }
 
-/// Ensure a preset's exact hosted Q8_0 model is present in the cache.
+/// Ensure a preset's selected precision is present in the cache.
 ///
 /// # Arguments
 ///
 /// * `preset` - The named hosted model to use.
+/// * `quantization` - Hosted Q8_0 or locally generated Q6_K.
 /// * `quiet` - Suppress stdout status messages.
 /// * `verbose` - Print cache-hit diagnostics when an existing model is used.
 ///
@@ -132,6 +139,7 @@ pub fn ensure_default_model_with_verbosity(quiet: bool, verbose: bool) -> Result
 /// Returns an error if the model cannot be downloaded or written to the cache.
 pub fn ensure_preset_model_with_verbosity(
     preset: ModelPreset,
+    quantization: ModelQuantization,
     quiet: bool,
     verbose: bool,
 ) -> Result<PathBuf> {
@@ -139,7 +147,10 @@ pub fn ensure_preset_model_with_verbosity(
         force: false,
         quiet,
         verbose,
-        source: FetchSource::Preset(preset),
+        source: match quantization {
+            ModelQuantization::Q8 => FetchSource::Preset(preset),
+            ModelQuantization::Q6K => FetchSource::PresetQ6(preset),
+        },
     })
 }
 
@@ -287,6 +298,7 @@ fn run_preset_q6(
         print_ready_with_hint(options, &q6);
         return Ok(q6);
     }
+    let _ = writeln!(std::io::stderr(), "parakit: preparing {preset} Q6_K locally; this may download a large F16 model and take several minutes");
     let quantizer = quantize_bin_path()?;
     let f16 = dir.join(f16_filename);
     if options.force || !use_cached_download(options, &f16, None)? {

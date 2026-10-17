@@ -5,6 +5,33 @@ use anyhow::{Context, Result};
 use directories::BaseDirs;
 use std::path::{Path, PathBuf};
 
+/// Weight format acquired for a named preset.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, clap::ValueEnum, serde::Deserialize)]
+pub enum ModelQuantization {
+    /// Use the provider's hosted Q8_0 artifact.
+    #[default]
+    #[value(name = "q8_0")]
+    #[serde(rename = "q8_0")]
+    Q8,
+    /// Generate and cache Q6_K locally from the provider's F16 artifact.
+    #[value(name = "q6_k")]
+    #[serde(rename = "q6_k")]
+    Q6K,
+}
+
+impl ModelQuantization {
+    /// Return the spelling accepted by CLI and config.
+    ///
+    /// # Returns
+    /// `q8_0` or `q6_k`.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Q8 => "q8_0",
+            Self::Q6K => "q6_k",
+        }
+    }
+}
+
 /// Hosted Q8_0 model choices supported by parakit.
 #[derive(
     Clone, Copy, Debug, Eq, PartialEq, clap::ValueEnum, serde::Serialize, serde::Deserialize,

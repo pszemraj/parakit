@@ -95,7 +95,10 @@ fn print_config_show(quiet: bool) -> Result<()> {
             .as_ref()
             .map(|p| p.display().to_string())
             .unwrap_or_else(|| config.daemon.model_preset.map_or_else(
-                || "(default: hosted Q8_0)".to_owned(),
+                || match config.daemon.quantize.unwrap_or_default() {
+                    ModelQuantization::Q8 => "(default: hosted Q8_0)".to_owned(),
+                    ModelQuantization::Q6K => "(default: parakeet-v3 Q6_K)".to_owned(),
+                },
                 |preset| format!("(preset: {})", preset.id())
             ))
     )?;
@@ -106,6 +109,14 @@ fn print_config_show(quiet: bool) -> Result<()> {
             .model_preset
             .map(|preset| preset.id())
             .unwrap_or("(default: parakeet-v3)")
+    )?;
+    outln!(
+        "    quantize: {}",
+        if config.daemon.model.is_some() {
+            "(from model file)"
+        } else {
+            config.daemon.quantize.unwrap_or_default().as_str()
+        }
     )?;
     outln!(
         "    device: {}",

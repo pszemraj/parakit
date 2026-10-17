@@ -420,6 +420,17 @@ fn daemon_control_remains_available_during_model_download() {
         };
         // The local server deliberately withholds its response, exercising the
         // real startup path without downloading a model or entering the hotkey loop.
+        let requested = isolated_parakit(&root)
+            .args(["--quiet", "start", "--quantize", "q6_k"])
+            .output()?;
+        ensure!(
+            requested.status.success() && requested.stdout.is_empty(),
+            "{requested:?}"
+        );
+        ensure!(
+            String::from_utf8_lossy(&requested.stderr).contains("options were not applied"),
+            "{requested:?}"
+        );
         for (args, expected) in [
             (&["status"][..], "parakit: starting"),
             (&["start"][..], "parakit: already running"),

@@ -31,6 +31,10 @@ struct Cli {
     #[arg(long, value_enum)]
     model_preset: Option<ModelPreset>,
 
+    /// Preset precision; missing Q6_K is generated and cached locally.
+    #[arg(long, value_enum, conflicts_with = "model")]
+    quantize: Option<parakit::model::ModelQuantization>,
+
     /// Qwen source language code/name, or auto (default).
     #[arg(long)]
     qwen_language: Option<String>,
@@ -95,9 +99,12 @@ fn main() -> Result<()> {
 
     let model_path = match selection {
         ModelSelection::Local(path) => path,
-        ModelSelection::Preset(preset) => {
-            fetch::ensure_preset_model_with_verbosity(preset, false, false)?
-        }
+        ModelSelection::Preset(preset) => fetch::ensure_preset_model_with_verbosity(
+            preset,
+            cli.quantize.unwrap_or_default(),
+            false,
+            false,
+        )?,
     };
     if explicit_qwen {
         parakit::model::validate_model_file(&model_path)?;

@@ -188,6 +188,25 @@ parakit start --model-preset qwen3-asr-1.7b --no-cleaning
 parakit start --model-preset parakeet-ultra
 ```
 
+`start` handles acquisition automatically. You do not need to run `fetch` first. To generate Q6_K on first use and reuse it on later starts:
+
+```bash
+parakit start --model-preset parakeet-ultra --quantize q6_k \
+  --log-dir "$HOME/.parakit/logs" --quiet & disown
+```
+
+Use `parakeet-v2` for English-only v2, `parakeet-v3` for the original default, or either Qwen name in the table below. Without `--model-preset`, `--quantize q6_k` prepares v3. Missing Q6_K causes startup to download F16 if needed and quantize it locally; a first-preparation notice appears on stderr even with `--quiet`. Wait for readiness before dictating. Cached Q6_K starts work offline and idle reload reuses the resolved file.
+
+To keep the same startup command each time, set these fields in the file printed by `parakit config path`:
+
+```toml
+[daemon]
+model_preset = "parakeet-ultra"
+quantize = "q6_k"
+```
+
+Then use `parakit start --log-dir "$HOME/.parakit/logs" --quiet & disown`. Install a build containing these options first, and restart an existing daemon with `parakit stop` before starting it with the new settings. Another `start` does not change a running daemon; explicit model/precision flags print a restart notice in that case. `--quantize q8_0` overrides a configured Q6_K choice, and `-m` loads a custom file at its existing precision. The WAV helper accepts the same `--quantize` flag with preset selection.
+
 | Preset | Hosted repository | Exact artifact |
 | --- | --- | --- |
 | `parakeet-v2` (English-only) | [cstr/parakeet-tdt-0.6b-v2-GGUF](https://huggingface.co/cstr/parakeet-tdt-0.6b-v2-GGUF) | `parakeet-tdt-0.6b-v2-q8_0.gguf` |
@@ -224,7 +243,7 @@ parakit start -m /path/printed/by/fetch/qwen3-asr-1.7b-q6_k.gguf --device gpu
 
 This path uses the preset's provider revision and bundled `crispasr-quantize`; it needs no Python conversion environment or upload. Parakeet v3 retains its existing `main` provider revision; the other presets use fixed revisions. A completed Q6_K is reused offline without the F16 source or quantizer. The downloaded F16 stays cached for requantization. `--force` refreshes F16 and rebuilds Q6_K. Qwen's audio encoder retains a Q8_0 precision floor, with source floating-point tensors where required. Parakeet's eligible encoder and decoder matrices use Q6_K. Incompatible row shapes use the native quantizer's higher-precision fallbacks, and non-quantizable tensors retain their source precision. Validate recognition on your own recordings before relying on a new quantization.
 
-`--quantize q6_k` supports all named presets and conflicts with `--from-source`. Redux remains experimental for testing and comparison. Q8_0 preset downloads and source rebuilding keep their existing behavior. Select the printed Q6_K path with `-m` or `daemon.model`; `--model-preset` still selects Q8_0. GGUF Q6_K and [MLX's affine 6-bit quantization](https://ml-explore.github.io/mlx/build/html/python/_autosummary/mlx.core.quantize.html) use different representations; their recognition quality needs separate evaluation. Windows requires a compatible external `crispasr-quantize.exe` on `PATH`, as with [source rebuilding](dev/README.md#source-rebuild).
+`fetch --quantize q6_k` supports all named presets and conflicts with `--from-source`. Redux remains experimental for testing and comparison. Q8_0 preset downloads and source rebuilding keep their existing behavior. Select the printed Q6_K path with `-m` or `daemon.model`, or use `start --model-preset NAME --quantize q6_k` to resolve the same cached file. GGUF Q6_K and [MLX's affine 6-bit quantization](https://ml-explore.github.io/mlx/build/html/python/_autosummary/mlx.core.quantize.html) use different representations; their recognition quality needs separate evaluation. Windows requires a compatible external `crispasr-quantize.exe` on `PATH`, as with [source rebuilding](dev/README.md#source-rebuild).
 
 Qwen defaults to automatic language identification and a maximum of 512 generated tokens per native chunk. Use `--qwen-language en` (or `English`) to force a supported language, and `--qwen-max-new-tokens N` to set a budget from 1 to 4096. An incomplete decode fails the dictation rather than returning partial text. Qwen splits long audio into native chunks of at most 30 seconds, resetting decoder context for each chunk. The published Qwen ASR input capability of 1,200 seconds does not change Parakit's 270-second capture limit or imply continuous linguistic context across these cuts. Explicit Qwen flags require a Qwen model; persistent `[qwen]` settings are inactive for Parakeet. The [configuration reference](config_reference.toml) lists all supported language codes and names.
 

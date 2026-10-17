@@ -258,6 +258,15 @@ fn effective_snapshot(config: &ConfigFile) -> BTreeMap<&'static str, String> {
         format!("{:?}", config.daemon.model_preset),
     );
     put(
+        "daemon.quantize",
+        config
+            .daemon
+            .quantize
+            .unwrap_or_default()
+            .as_str()
+            .to_owned(),
+    );
+    put(
         "qwen.language",
         format!("{:?}", config.qwen.options().normalized_language().unwrap()),
     );
@@ -385,9 +394,20 @@ fn assert_model_alternatives_load(name: &str, text: &str) -> ConfigFile {
     let daemon = value.get_mut("daemon").unwrap().as_table_mut().unwrap();
     let path = daemon.remove("model");
     let preset = daemon.remove("model_preset");
+    let quantize = daemon.remove("quantize");
     let mut loaded = None;
     for (key, selected) in [("model", path), ("model_preset", preset)] {
         let mut alternative = value.clone();
+        if key == "model_preset" {
+            if let Some(quantize) = &quantize {
+                alternative
+                    .get_mut("daemon")
+                    .unwrap()
+                    .as_table_mut()
+                    .unwrap()
+                    .insert("quantize".to_owned(), quantize.clone());
+            }
+        }
         if let Some(selected) = selected {
             alternative
                 .get_mut("daemon")
@@ -492,6 +512,7 @@ fn assert_values_listed(key: &str, values: &[String]) {
 #[test]
 fn closed_value_sets_are_fully_enumerated() {
     assert_values_listed("daemon.model_preset", &variant_names::<ModelPreset>());
+    assert_values_listed("daemon.quantize", &variant_names::<ModelQuantization>());
     assert_values_listed("daemon.device", &variant_names::<DeviceMode>());
     assert_values_listed("daemon.paste_mode", &variant_names::<PasteMode>());
     assert_values_listed("cleaning.profile", &variant_names::<CleaningProfile>());

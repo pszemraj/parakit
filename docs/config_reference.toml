@@ -42,8 +42,8 @@
 
 [daemon]
 # path string (optional). Path to the GGUF speech-model file that the daemon loads.
-# Unset: daemon.model_preset selects a hosted Q8_0 model; when both selectors are absent, the daemon uses parakeet-tdt-0.6b-v3-Q8_0.gguf in the model cache and downloads it when missing.
-# Conflicts with: daemon.model_preset; setting both fails config load even when a CLI model selection overrides them.
+# Unset: daemon.model_preset selects the model and daemon.quantize selects its precision; when both selectors are absent, the model is parakeet-v3 in Q8_0 by default.
+# Conflicts with: daemon.model_preset and daemon.quantize; setting either with daemon.model fails config load even when a CLI model selection overrides them.
 # Overridden by: -m/--model or --model-preset. When either flag is given, the path in this key is never checked for a file or used, so a wrong path here is harmless.
 # An empty string fails config load with "daemon.model is set but empty", even when -m is given.
 # An empty -m or --model value is a command-line parse error.
@@ -56,15 +56,23 @@
 # `parakit doctor` does not check this key.
 # model = "/path/to/model.gguf"
 
-# "parakeet-v2" | "parakeet-v3" | "qwen3-asr-0.6b" | "qwen3-asr-1.7b" | "parakeet-ultra" | "parakeet-redux" (optional). Hosted Q8_0 model to load. V2 is English-only.
+# "parakeet-v2" | "parakeet-v3" | "qwen3-asr-0.6b" | "qwen3-asr-1.7b" | "parakeet-ultra" | "parakeet-redux" (optional). Model preset to load; daemon.quantize defaults to hosted Q8_0. V2 is English-only.
 # Experimental: Qwen presets. Redux is for testing/comparison only and is not recommended for normal dictation.
-# Unset: daemon.model selects a local GGUF; when both selectors are absent, the daemon uses the original parakeet-v3 hosted Q8_0 model.
+# Unset: daemon.model selects a local GGUF; when both selectors are absent, the daemon uses parakeet-v3 at daemon.quantize precision (Q8_0 by default).
 # Conflicts with: daemon.model; setting both fails config load even when a CLI model selection overrides them.
 # Overridden by: -m/--model or --model-preset; either CLI selection replaces the configured selection.
 # The exact preset artifact is downloaded when absent, using the model cache, HF_ENDPOINT, and HF_TOKEN. A cached artifact is used without network access.
 # parakeet-v3 keeps its existing top-level cache path. Other presets use the separate Hub cache directories.
 # Reload reuses the resolved local file and never downloads it again. `parakit fetch` never reads this key.
 # model_preset = "qwen3-asr-1.7b"
+
+# "q8_0" | "q6_k" (optional). Precision acquired for daemon.model_preset, or for parakeet-v3 when the preset is unset.
+# Unset: q8_0, the provider's hosted artifact. q6_k downloads F16 if needed and runs the bundled quantizer locally before readiness; subsequent starts reuse cached Q6_K offline.
+# Conflicts with: daemon.model; setting both fails config load. Explicit CLI --quantize also conflicts with -m/--model.
+# Overridden by: --quantize. An explicit CLI -m/--model ignores this configured precision and loads that file as it is.
+# Warning: a first Q6_K preparation can download several GB and take minutes; a preparation notice is printed to stderr even with --quiet. Windows needs a compatible crispasr-quantize.exe on PATH.
+# This only selects the acquisition format; it does not requantize an existing -m file or change a running daemon. Restart after edits. Idle reload reuses the resolved path without fetching or quantizing again.
+# quantize = "q6_k"
 
 # "auto" | "cpu" | "gpu". Where speech recognition runs.
 # "auto" uses the best GPU when one is available and the CPU otherwise. The daemon banner and `parakit --verbose status` show which one was chosen.

@@ -46,6 +46,7 @@ parakit config
   daemon:
     model: (default: hosted Q8_0)
     model_preset: (default: parakeet-v3)
+    quantize: q8_0
     device: (default: auto)
     threads: (default: auto-detected)
     paste_mode: (default: platform)
@@ -73,7 +74,7 @@ parakit config
 
 A key that is not set in the file shows a parenthesized default (`device`, `threads`, `paste_mode`, `transcript_history`, `number_threshold`, `hotkey.backend`), `(default: hosted Q8_0)` for `model`, or `(disabled)` for `logging.dir`. Booleans, `profile`, `keep_trailing_period`, `disabled_rules`, and the idle timeout print their effective values directly. On Linux the output has the `hotkey:` section shown above with the selected `backend`; other platforms omit it. Each user rule adds a `name (position)` line under the `user rules` count.
 
-`model_preset` shows the selected name, or `(default: parakeet-v3)` when unset. When a preset is configured, `model` shows `(preset: NAME)`. The `qwen` section reports the normalized language (`auto` when detection is enabled) and effective token budget even when the selected model is Parakeet.
+`model_preset` shows the selected name, or `(default: parakeet-v3)` when unset. When a preset is configured, `model` shows `(preset: NAME)`. `quantize` shows `q8_0`, `q6_k`, or `(from model file)` for a custom path. Startup prepares an uncached Q6_K automatically. The `qwen` section reports the normalized language (`auto` when detection is enabled) and effective token budget even when the selected model is Parakeet.
 
 ### Details
 

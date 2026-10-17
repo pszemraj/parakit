@@ -2,7 +2,7 @@
 
 use clap::{Args, Parser, Subcommand};
 use parakit::inference::DeviceMode;
-use parakit::model::{resolve_model_selection, ModelPreset, ModelSelection};
+use parakit::model::{resolve_model_selection, ModelPreset, ModelQuantization, ModelSelection};
 use parakit::qwen::QwenOptions;
 use parakit::rules::CleaningProfile;
 use std::num::NonZeroUsize;
@@ -99,9 +99,13 @@ pub(crate) struct StartCli {
     )]
     pub(crate) model: Option<PathBuf>,
 
-    /// Select a hosted Q8_0 model. Defaults to parakeet-v3; Qwen is experimental and Redux is for testing only.
+    /// Select a model preset. Defaults to parakeet-v3; Qwen is experimental and Redux is for testing only.
     #[arg(long, value_enum)]
     pub(crate) model_preset: Option<ModelPreset>,
+
+    /// Preset precision: q8_0 (default) or locally cached q6_k. Acquire it automatically when missing.
+    #[arg(long, value_enum, conflicts_with = "model")]
+    pub(crate) quantize: Option<ModelQuantization>,
 
     /// Qwen source language code or name; auto detects the language (default).
     #[arg(long, value_name = "LANGUAGE", value_parser = parse_qwen_language)]
@@ -202,6 +206,14 @@ pub(crate) struct StartCli {
 }
 
 impl StartCli {
+    /// Resolve preset precision; this value is unused for an explicit model file.
+    ///
+    /// # Returns
+    /// CLI precision, configured precision, or Q8_0.
+    pub(crate) fn effective_quantization(&self, config: &ConfigFile) -> ModelQuantization {
+        self.quantize.or(config.daemon.quantize).unwrap_or_default()
+    }
+
     /// Effective idle timeout in whole minutes; CLI overrides config and default.
     ///
     /// # Returns
@@ -448,9 +460,14 @@ pub(crate) struct FetchCli {
     #[arg(long, value_enum, conflicts_with_all = ["source", "file", "sha256"])]
     pub(crate) model_preset: Option<ModelPreset>,
 
-    /// Cache a local Q6_K made from the preset's hosted F16 GGUF; load it with -m.
-    #[arg(long, value_parser = ["q6_k"], requires = "model_preset", conflicts_with = "from_source")]
-    pub(crate) quantize: Option<String>,
+    /// Acquire hosted q8_0 or cache local q6_k made from the preset's F16 GGUF.
+    #[arg(
+        long,
+        value_enum,
+        requires = "model_preset",
+        conflicts_with = "from_source"
+    )]
+    pub(crate) quantize: Option<ModelQuantization>,
     /// Model source: a Hugging Face repo (`owner/repo` or
     /// `owner/repo@revision`) or a direct `http://`/`https://` URL to a
     /// `.gguf` file. Omit to fetch the default hosted Q8_0 GGUF.

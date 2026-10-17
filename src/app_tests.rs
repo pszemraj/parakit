@@ -245,7 +245,7 @@ fn explicit_gpu_validation_runs_before_default_model_fetch() {
     let err = resolve_engine_config_with_validator(
         &start,
         &config,
-        |_| {
+        |_, _| {
             fetched_default.set(true);
             Ok(PathBuf::from("target/tmp/default-model.gguf"))
         },
@@ -258,6 +258,87 @@ fn explicit_gpu_validation_runs_before_default_model_fetch() {
 
     assert_eq!(err.to_string(), "gpu unavailable");
     assert!(!fetched_default.get());
+}
+
+#[test]
+fn startup_precision_selection_preserves_cli_config_and_local_path_precedence() {
+    let config: ConfigFile =
+        toml::from_str("[daemon]\nmodel_preset = 'parakeet-v2'\nquantize = 'q6_k'\n").unwrap();
+    for (args, settings, preset, quantization) in [
+        (
+            vec!["--quantize", "q6_k"],
+            ConfigFile::default(),
+            ModelPreset::ParakeetV3,
+            ModelQuantization::Q6K,
+        ),
+        (
+            vec![],
+            toml::from_str("[daemon]\nmodel_preset = 'parakeet-v2'\nquantize = 'q6_k'\n").unwrap(),
+            ModelPreset::ParakeetV2,
+            ModelQuantization::Q6K,
+        ),
+        (
+            vec!["--model-preset", "parakeet-ultra", "--quantize", "q8_0"],
+            config,
+            ModelPreset::ParakeetUltra,
+            ModelQuantization::Q8,
+        ),
+    ] {
+        let Some(Commands::Start(start)) =
+            Cli::parse_from(["parakit", "start"].into_iter().chain(args)).command
+        else {
+            unreachable!()
+        };
+        let resolved = resolve_engine_config_with_validator(
+            &start,
+            &settings,
+            |actual_preset, actual_quantization| {
+                assert_eq!((actual_preset, actual_quantization), (preset, quantization));
+                Ok(PathBuf::from("selected.gguf"))
+            },
+            |_| Ok(()),
+        )
+        .unwrap();
+        assert_eq!(resolved.model_preset, Some(preset));
+    }
+    let Some(Commands::Start(start)) =
+        Cli::parse_from(["parakit", "start", "-m", "custom.gguf"]).command
+    else {
+        unreachable!()
+    };
+    let config = toml::from_str("[daemon]\nquantize = 'q6_k'\n").unwrap();
+    let resolved = resolve_engine_config_with_validator(
+        &start,
+        &config,
+        |_, _| panic!("local files must not acquire another model"),
+        |_| Ok(()),
+    )
+    .unwrap();
+    assert_eq!(resolved.model_path, PathBuf::from("custom.gguf"));
+    assert!(Cli::try_parse_from([
+        "parakit",
+        "start",
+        "-m",
+        "custom.gguf",
+        "--quantize",
+        "q6_k"
+    ])
+    .is_err());
+    let Some(Commands::Start(start)) =
+        Cli::parse_from(["parakit", "start", "--quantize", "q6_k"]).command
+    else {
+        unreachable!()
+    };
+    let config = toml::from_str("[daemon]\nmodel = 'custom.gguf'\n").unwrap();
+    assert!(resolve_engine_config_with_validator(
+        &start,
+        &config,
+        |_, _| panic!("invalid selection must not fetch"),
+        |_| Ok(())
+    )
+    .unwrap_err()
+    .to_string()
+    .contains("use --model-preset"));
 }
 
 #[test]
@@ -278,7 +359,7 @@ fn explicit_qwen_controls_reject_parakeet_before_download() {
     let error = resolve_engine_config_with_validator(
         &start,
         &ConfigFile::default(),
-        |_| panic!("invalid controls must not download"),
+        |_, _| panic!("invalid controls must not download"),
         |_| Ok(()),
     )
     .unwrap_err();

@@ -17,7 +17,7 @@
 
 use anyhow::{Context, Result};
 use parakit::inference::DeviceMode;
-use parakit::model::ModelPreset;
+use parakit::model::{ModelPreset, ModelQuantization};
 use parakit::qwen::QwenOptions;
 use parakit::rules::{CleaningProfile, UserRule};
 use serde::Deserialize;
@@ -53,8 +53,10 @@ pub(crate) struct ConfigFile {
 pub(crate) struct DaemonConfig {
     /// Path to a GGUF model file. Overrides the cached Q8_0 model.
     pub(crate) model: Option<PathBuf>,
-    /// Named hosted Q8_0 model, mutually exclusive with `model`.
+    /// Named model preset, mutually exclusive with `model`.
     pub(crate) model_preset: Option<ModelPreset>,
+    /// Preset precision; startup acquires Q8_0 or generates cached Q6_K.
+    pub(crate) quantize: Option<ModelQuantization>,
     /// Runtime compute device.
     pub(crate) device: Option<DeviceMode>,
     /// CPU inference threads.
@@ -268,10 +270,14 @@ pub(crate) const TEMPLATE: &str = r#"# parakit config.toml
 # Overrides the cached Q8_0 model.
 # model = "/path/to/model.gguf"
 
-# Hosted Q8_0 preset, mutually exclusive with model.
+# Model preset, mutually exclusive with model. Precision defaults to Q8_0.
 # Choices: parakeet-v2, parakeet-v3, qwen3-asr-0.6b, qwen3-asr-1.7b, parakeet-ultra, parakeet-redux.
 # Unset: parakeet-v3. Qwen presets are experimental; Redux is for testing only.
 # model_preset = "qwen3-asr-1.7b"
+
+# Preset precision: q8_0 (default) or locally generated q6_k.
+# Missing models are prepared automatically at startup. Conflicts with model.
+# quantize = "q6_k"
 
 # Runtime compute device: "auto", "cpu", or "gpu".
 # device = "auto"
@@ -499,6 +505,12 @@ pub(crate) fn load_from_path(path: &Path) -> Result<ConfigFile> {
         config.daemon.model_preset,
     )
     .with_context(|| format!("invalid config in {}", path.display()))?;
+    if config.daemon.model.is_some() && config.daemon.quantize.is_some() {
+        anyhow::bail!(
+            "invalid config in {}: daemon.model and daemon.quantize cannot be set together",
+            path.display()
+        );
+    }
     config
         .qwen
         .options()
@@ -559,6 +571,8 @@ mod tests {
         for text in [
             "[daemon]\nmodel = 'a'\nmodel_preset = 'parakeet-v3'\n",
             "[daemon]\nmodel_preset = 'unknown'\n",
+            "[daemon]\nmodel = 'a'\nquantize = 'q6_k'\n",
+            "[daemon]\nquantize = 'q4_k'\n",
             "[qwen]\nlanguage = 'unsupported'\n",
             "[qwen]\nmax_new_tokens = 0\n",
             "[qwen]\nmax_new_tokens = 4097\n",

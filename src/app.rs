@@ -12,7 +12,7 @@ use parakit::fetch::{self, FetchOptions, FetchSource};
 use parakit::gguf;
 use parakit::inference::{default_thread_count, DeviceMode, Engine};
 use parakit::model;
-use parakit::model::{ModelPreset, ModelSelection};
+use parakit::model::{ModelPreset, ModelQuantization, ModelSelection};
 use parakit::outln;
 use parakit::qwen::QwenOptions;
 use parakit::rules;
@@ -238,7 +238,7 @@ fn resolve_fetch_source(cli: &FetchCli) -> Result<FetchSource> {
         });
     }
     if let Some(preset) = cli.model_preset {
-        if cli.quantize.is_some() {
+        if cli.quantize == Some(ModelQuantization::Q6K) {
             return Ok(FetchSource::PresetQ6(preset));
         }
         return Ok(FetchSource::Preset(preset));
@@ -262,6 +262,10 @@ fn run_daemon(cli: &Cli, start: &StartCli) -> Result<()> {
             Ok(lock) => Some(lock),
             Err(err) if err.is::<daemon::preflight::DaemonAlreadyRunning>() => {
                 ensure_existing_daemon_responsive(daemon::ipc::daemon_responsive()?)?;
+                if start.model.is_some() || start.model_preset.is_some() || start.quantize.is_some()
+                {
+                    eprintln!("parakit: daemon is already running; model/precision options were not applied. Run `parakit stop`, then start again with the requested options");
+                }
                 if !cli.quiet {
                     outln!("parakit: already running")?;
                 }
@@ -677,7 +681,9 @@ fn open_cli_engine(
     let engine_config = resolve_engine_config(
         start,
         config,
-        |preset| fetch::ensure_preset_model_with_verbosity(preset, fetch_quiet, verbose),
+        |preset, quantization| {
+            fetch::ensure_preset_model_with_verbosity(preset, quantization, fetch_quiet, verbose)
+        },
         log,
     )?;
     let model_path = engine_config.model_path;
@@ -728,7 +734,7 @@ fn resolve_engine_config<F>(
     log: &Logger,
 ) -> Result<EngineConfig>
 where
-    F: FnOnce(ModelPreset) -> Result<PathBuf>,
+    F: FnOnce(ModelPreset, ModelQuantization) -> Result<PathBuf>,
 {
     resolve_engine_config_with_validator(start, config, fetch_default_model, |device_mode| {
         validate_device_request(device_mode, log)
@@ -742,12 +748,18 @@ fn resolve_engine_config_with_validator<F, V>(
     validate_device: V,
 ) -> Result<EngineConfig>
 where
-    F: FnOnce(ModelPreset) -> Result<PathBuf>,
+    F: FnOnce(ModelPreset, ModelQuantization) -> Result<PathBuf>,
     V: FnOnce(DeviceMode) -> Result<()>,
 {
     let device_mode = start.effective_device(config);
     let qwen = start.effective_qwen_options(config)?;
     let selection = start.effective_model_selection(config)?;
+    let quantization = start.effective_quantization(config);
+    if matches!(selection, ModelSelection::Local(_)) && start.quantize.is_some() {
+        anyhow::bail!(
+            "--quantize selects a preset's precision; use --model-preset to override daemon.model"
+        );
+    }
     if start.has_qwen_controls()
         && matches!(&selection, ModelSelection::Preset(preset) if preset.backend() != "qwen3")
     {
@@ -760,7 +772,7 @@ where
     };
     let model_path = match selection {
         ModelSelection::Local(path) => path,
-        ModelSelection::Preset(preset) => fetch_default_model(preset)?,
+        ModelSelection::Preset(preset) => fetch_default_model(preset, quantization)?,
     };
     if start.has_qwen_controls() {
         model::validate_model_file(&model_path)?;
