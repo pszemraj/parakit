@@ -9,14 +9,37 @@ use std::time::{Duration, Instant};
 #[test]
 fn q6_cache_hit_needs_neither_f16_nor_network_and_preserves_q8() {
     let dir = crate::test_support::fixture_root("parakit-fetch-tests", "q6-cache");
-    for (preset, f16_name) in [
-        (ModelPreset::Qwen3Asr06b, "qwen3-asr-0.6b.gguf"),
-        (ModelPreset::Qwen3Asr17b, "qwen3-asr-1.7b-f16.gguf"),
+    for (preset, f16_name, q6_name) in [
+        (
+            ModelPreset::ParakeetV3,
+            F16_FILENAME,
+            "parakeet-tdt-0.6b-v3-q6_k.gguf",
+        ),
+        (
+            ModelPreset::Qwen3Asr06b,
+            "qwen3-asr-0.6b.gguf",
+            "qwen3-asr-0.6b-q6_k.gguf",
+        ),
+        (
+            ModelPreset::Qwen3Asr17b,
+            "qwen3-asr-1.7b-f16.gguf",
+            "qwen3-asr-1.7b-q6_k.gguf",
+        ),
+        (
+            ModelPreset::ParakeetUltra,
+            "parakeet-ultra-f16.gguf",
+            "parakeet-ultra-q6_k.gguf",
+        ),
+        (
+            ModelPreset::ParakeetRedux,
+            "parakeet-redux-f16.gguf",
+            "parakeet-redux-q6_k.gguf",
+        ),
     ] {
         let (owner, repo) = preset.repo().split_once('/').unwrap();
         let parent = hub::hub_cache_dir(&dir, owner, repo, preset.revision(), f16_name);
         std::fs::create_dir_all(&parent).unwrap();
-        let q6 = parent.join(preset.filename().replace("-q8_0", "-q6_k"));
+        let q6 = parent.join(q6_name);
         std::fs::write(&q6, b"cached Q6").unwrap();
         let q8 = preset_cache_path(&dir, preset);
         std::fs::create_dir_all(q8.parent().unwrap()).unwrap();
@@ -28,7 +51,7 @@ fn q6_cache_hit_needs_neither_f16_nor_network_and_preserves_q8() {
             source: FetchSource::PresetQ6(preset),
         };
         assert_eq!(
-            run_qwen_q6(&options, "https://example.invalid", None, preset, &dir).unwrap(),
+            run_preset_q6(&options, "https://example.invalid", None, preset, &dir).unwrap(),
             q6
         );
         assert!(!parent.join(f16_name).exists());

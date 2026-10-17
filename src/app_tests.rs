@@ -57,7 +57,13 @@ fn source_rebuild_dispatch_preserves_legacy_and_selects_new_checkpoints() {
 
 #[test]
 fn q6_fetch_selects_local_quantization_and_rejects_conflicting_inputs() {
-    for preset in [ModelPreset::Qwen3Asr06b, ModelPreset::Qwen3Asr17b] {
+    for preset in [
+        ModelPreset::ParakeetV3,
+        ModelPreset::Qwen3Asr06b,
+        ModelPreset::Qwen3Asr17b,
+        ModelPreset::ParakeetUltra,
+        ModelPreset::ParakeetRedux,
+    ] {
         let cli = Cli::parse_from([
             "parakit",
             "fetch",

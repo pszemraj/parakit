@@ -58,7 +58,7 @@ pub enum FetchSource {
     HostedQ8,
     /// Download the exact hosted Q8_0 artifact for a named model preset.
     Preset(ModelPreset),
-    /// Download a Qwen preset's F16 GGUF and cache a locally quantized Q6_K.
+    /// Download a preset's F16 GGUF and cache a locally quantized Q6_K.
     PresetQ6(ModelPreset),
     /// Convert an original Hugging Face checkpoint and quantize it to Q8_0.
     PresetSource {
@@ -175,7 +175,7 @@ pub fn run(options: FetchOptions) -> Result<PathBuf> {
             *preset,
             &models_dir()?,
         ),
-        FetchSource::PresetQ6(preset) => run_qwen_q6(
+        FetchSource::PresetQ6(preset) => run_preset_q6(
             &options,
             &endpoint,
             token.as_deref(),
@@ -258,7 +258,7 @@ fn run_preset(
     Ok(dest)
 }
 
-fn run_qwen_q6(
+fn run_preset_q6(
     options: &FetchOptions,
     endpoint: &str,
     token: Option<&str>,
@@ -266,14 +266,21 @@ fn run_qwen_q6(
     models_dir: &Path,
 ) -> Result<PathBuf> {
     let f16_filename = match preset {
+        ModelPreset::ParakeetV3 => F16_FILENAME,
         ModelPreset::Qwen3Asr06b => "qwen3-asr-0.6b.gguf",
         ModelPreset::Qwen3Asr17b => "qwen3-asr-1.7b-f16.gguf",
-        _ => bail!("--quantize q6_k requires a Qwen model preset"),
+        ModelPreset::ParakeetUltra => "parakeet-ultra-f16.gguf",
+        ModelPreset::ParakeetRedux => "parakeet-redux-f16.gguf",
     };
     let (owner, repo) = preset.repo().split_once('/').expect("preset owner/repo");
     let dir = hub::hub_cache_dir(models_dir, owner, repo, preset.revision(), f16_filename);
     std::fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
-    let q6 = dir.join(preset.filename().replace("-q8_0.gguf", "-q6_k.gguf"));
+    let q6 = dir.join(
+        preset
+            .filename()
+            .to_ascii_lowercase()
+            .replace("-q8_0.gguf", "-q6_k.gguf"),
+    );
     let _lock = acquire_artifact_lock(&q6)?;
     if !options.force && q6.is_file() {
         print_ready_with_hint(options, &q6);
@@ -721,7 +728,7 @@ fn quantize_bin_path() -> Result<PathBuf> {
 
     #[cfg(target_os = "windows")]
     bail!(
-        "crispasr-quantize.exe was not found. Windows bundled CPU builds skip the CrispASR examples tree because the pinned server example does not compile under MSVC. Use the hosted Q8 model, or put a compatible crispasr-quantize.exe on PATH before running fetch --from-source."
+        "crispasr-quantize.exe was not found. Windows bundled CPU builds skip the CrispASR examples tree because the pinned server example does not compile under MSVC. Use the hosted Q8 model, or put a compatible crispasr-quantize.exe on PATH before running fetch --from-source or --quantize q6_k."
     );
 
     #[cfg(not(target_os = "windows"))]
