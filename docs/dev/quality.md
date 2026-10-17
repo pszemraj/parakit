@@ -218,10 +218,31 @@ Start Qwen comparisons with 1.7B: run the same known-bad recordings through Para
 
 ```bash
 parakit fetch cstr/qwen3-asr-1.7b-GGUF --file qwen3-asr-1.7b-f16.gguf
-parakit fetch cstr/qwen3-asr-0.6b-GGUF --file qwen3-asr-0.6b.gguf
+parakit fetch cstr/qwen3-asr-0.6b-GGUF --file qwen3-asr-0.6b-f16.gguf
 ```
 
 Use the resulting printed model paths with `transcribe-file --model`. Compare against the [official Qwen implementation](https://huggingface.co/Qwen/Qwen3-ASR-0.6B#python-package-usage) as a separate reference. Keep forced language and token budget the same across comparisons; automatic detection and forced English are distinct cases. Include short speech, silence, the pinned Juniper recording, and speech spanning a 30-second Qwen chunk boundary. Use raw output (`--no-cleaning` in daemon simulation), then verify repeated inference and idle offload/reload preserve the options and transcript.
+
+The legacy `qwen-asr` 0.0.6 eager/SDPA audio encoder computes window boundaries but does not apply its window mask. CrispASR's default dense audio attention matches that path, so agreement between these implementations can reproduce shared attention behavior. [Qwen PR #103](https://github.com/QwenLM/Qwen3-ASR/pull/103) passes the mask to the encoder layers. The native Qwen implementation in Transformers 5.13.0 instead splits eager/SDPA attention into separate audio windows; use the official [`-hf` checkpoints](https://huggingface.co/Qwen/Qwen3-ASR-1.7B-hf) for that reference.
+
+To investigate a consequential disagreement, compare F16 with dense and windowed audio attention using CrispASR's existing environment switch. Disable its repetition repair in both diagnostic arms so the generated output remains observable:
+
+```bash
+CRISPASR_NGRAM_LOOPFIX_OFF=1 CRISP_AUDIO_WINDOWED_ATTN=0 \
+  "$CARGO_TARGET_DIR/debug/examples/transcribe-file" \
+  --model path/to/qwen3-asr-1.7b-f16.gguf --device gpu \
+  --audio clips/example-16k.wav --warmup --repeat 2 \
+  --qwen-language auto --qwen-max-new-tokens 512
+CRISPASR_NGRAM_LOOPFIX_OFF=1 CRISP_AUDIO_WINDOWED_ATTN=1 \
+  "$CARGO_TARGET_DIR/debug/examples/transcribe-file" \
+  --model path/to/qwen3-asr-1.7b-f16.gguf --device gpu \
+  --audio clips/example-16k.wav --warmup --repeat 2 \
+  --qwen-language auto --qwen-max-new-tokens 512
+```
+
+Use the same build and backend in both arms. Prepare one mono 16-kHz PCM input and give each implementation the same sample ranges. Native long-input chunks use energy-dependent boundaries below the 30-second limit; transcribing the whole recording in Python changes the decoder context. Record actual native chunk ranges when diagnosing a difference, then feed those exact slices to the reference. Include clips around the audio encoder's 8-second window boundary as well as the long-input chunk boundary.
+
+Keep context, system text and hotwords empty, with batch size one and greedy decoding. Record the reference versions and checkpoint revisions, the audio encoder's effective attention implementation and mask or per-window call shapes, and raw generated tokens through EOS or token exhaustion. A requested attention setting alone does not establish execution. Score complete outputs separately from failed or budget-exhausted decodes, and listen to polarity and omission disagreements before choosing a default. Check quiet speech, noisy tails, silence and repeated long input for regressions in both modes.
 
 For [Ultra](https://huggingface.co/moondream/parakeet-ultra) and [Redux](https://huggingface.co/moondream/parakeet-redux), compare the Q8_0 presets with the original checkpoints through CrispASR's existing Hugging Face reference helpers and a short independent Photon run. Photon's packed Redux implementation and VAD segmentation differ from the GGUF runtime; record those conditions rather than attributing their speed or memory figures to parakit.
 
