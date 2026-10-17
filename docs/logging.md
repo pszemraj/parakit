@@ -1,6 +1,6 @@
 # Transcription And Insertion Logs
 
-parakit can write one JSON object per line (JSONL) for every dictation: what the model heard, what cleanup did to it, and what happened when parakit tried to insert it into the focused application. Logging is off by default. Turn it on with the `logging.dir` config key (see [configuration.md](configuration.md) and [config_reference.toml](config_reference.toml)) or `parakit start`'s `--log-dir` flag (see [running.md#logging-and-sounds](running.md#logging-and-sounds)).
+parakit can write JSONL records for completed dictations: what the model heard, which model and quantization produced it, what cleanup did to it, and what happened when parakit tried to insert it into the focused application. Logging is off by default. Turn it on with the `logging.dir` config key (see [configuration.md](configuration.md) and [config_reference.toml](config_reference.toml)) or `parakit start`'s `--log-dir` flag (see [running.md#logging-and-sounds](running.md#logging-and-sounds)). Failed transcriptions and no-speech captures produce no transcription record.
 
 Audio and redirected console output are never logged, but the raw and cleaned transcript text is, in plaintext, with no built-in retention or size cap. Protect the log directory and rotate or delete old files to match the sensitivity of your dictation.
 
@@ -15,7 +15,7 @@ Terminal output is best-effort. A closed terminal or failed stdout/stderr write 
 A completed dictation normally produces two lines: a transcription line, written as soon as the model and cleaner finish, and a later insertion line, written once parakit knows what happened to the paste attempt.
 
 ```json
-{"ts":"2026-07-27T14:02:11.482Z","session_id":"2026-07-27T14:02:10.981234000Z-p4312-l0","record_id":7,"parakit_version":"0.4.2","audio_secs":4.21,"infer_ms":187,"raw":"so the build is green now.","cleaned":"So the build is green now","rules_active":29,"cleaner_version":32,"cleaning_profile":"safe","ruleset_id":"v32-safe-bf1d2214e0848c42","drops_trailing_period":true,"number_threshold":4.0,"rules_fired":[{"name":"capitalize-sentence-starts","matches":1},{"name":"fix-trailing-period","matches":1}]}
+{"ts":"2026-07-27T14:02:11.482Z","session_id":"2026-07-27T14:02:10.981234000Z-p4312-l0","record_id":7,"parakit_version":"0.4.3","audio_secs":4.21,"infer_ms":187,"raw":"so the build is green now.","cleaned":"So the build is green now","rules_active":29,"cleaner_version":32,"cleaning_profile":"safe","ruleset_id":"v32-safe-bf1d2214e0848c42","drops_trailing_period":true,"number_threshold":4.0,"rules_fired":[{"name":"capitalize-sentence-starts","matches":1},{"name":"fix-trailing-period","matches":1}],"inference":{"model":"qwen3-asr-1.7b-q8_0.gguf","model_preset":"qwen3-asr-1.7b","backend":"qwen3","quantization":"Q8_0","requested_device":"gpu","session_device":"gpu","qwen_language":"auto","qwen_max_new_tokens":512,"native_api_version":"0.7.0"}}
 {"kind":"insertion","ts":"2026-07-27T14:02:11.930Z","session_id":"2026-07-27T14:02:10.981234000Z-p4312-l0","ref_id":7,"outcome":"pasted","target_bundle_id":"com.mitchellh.ghostty","focus_verification":"matched","transcript_chars":25,"paste_event_posted":true,"pasteboard_requested":null,"acknowledgement_kind":"ax_confirmed","acknowledgement_ms":312,"clipboard_restored":true,"failure_reason":null}
 ```
 
@@ -53,7 +53,24 @@ Fields, in serialization order:
 
 `ruleset_id`, `cleaning_failure`, and `inference` can be omitted. Pass semantics are in [cleaning-rules.md](cleaning-rules.md).
 
-The `inference` object records `model` (filename), optional `model_preset`, `backend`, `quantization`, `requested_device`, and `session_device`. The requested policy remains fixed; the session policy reflects an Auto reload on CPU. `confirmed_device` is present for explicitly opened CPU sessions and otherwise omitted: an enumerated GPU does not establish where every model graph executed. Status likewise labels GPU inventory separately from confirmed execution.
+The daemon supplies an `inference` object on each successful transcription:
+
+| Field | Meaning |
+| --- | --- |
+| `model` | Loaded GGUF filename, including a custom model selected with `-m`. |
+| `model_preset` | Named preset, when selected. Omitted for custom files, including locally generated Q6_K selected with `-m`. |
+| `backend` | Model backend family, such as `parakeet` or `qwen3`. |
+| `quantization` | GGUF file-level quantization label. If its file-type header is absent, the tensor type containing the most model elements. |
+| `requested_device` | Original `auto`, `cpu` or `gpu` policy. |
+| `session_device` | Policy used to open the current session, including CPU fallback after reload. |
+| `confirmed_device` | `cpu` for explicitly opened CPU sessions; otherwise omitted when execution is unconfirmed. |
+| `qwen_language` | Effective forced language, or `auto`; Qwen only. |
+| `qwen_max_new_tokens` | Effective per-chunk generation budget; Qwen only. |
+| `native_api_version` | Linked native C API version, when reported. |
+
+Mixed-precision artifacts retain higher-precision tensors: Qwen Q6_K generation keeps the audio encoder at Q8_0 or source floating precision, while the overall label remains `Q6_K`. Small F32 biases and normalization tensors can coexist with a reported `F16` model. The label summarizes the artifact recipe rather than every tensor.
+
+The requested device policy remains fixed; the session policy reflects an Auto reload on CPU. GPU execution backend (CUDA/Vulkan/Metal) and GPU name are not confirmed by these JSONL fields. Status labels GPU inventory separately from confirmed execution.
 
 Qwen rows include the effective canonical `qwen_language` (`auto` when unforced) and per-chunk `qwen_max_new_tokens`. These describe user inference after readiness, not temporary warmup options or a detected language. Other backends omit them. `native_api_version`, when available, is the linked C API's reported version; it is not the CrispASR release tag. No audio or model-parent directory is added to the record. Readers should accept older rows without `inference` and ignore unfamiliar fields.
 

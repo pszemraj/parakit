@@ -101,16 +101,17 @@ pub fn dtype_label(path: &Path) -> String {
 }
 
 fn dominant_tensor_type(file: &mut File, tensor_count: u64) -> Result<Option<&'static str>> {
-    let mut counts: HashMap<u32, usize> = HashMap::new();
+    let mut counts: HashMap<u32, u64> = HashMap::new();
     for _ in 0..tensor_count {
         let _name = read_string(file)?;
         let dims = read_u32(file)?;
+        let mut elements = 1;
         for _ in 0..dims {
-            let _ = read_u64(file)?;
+            elements *= read_u64(file)?;
         }
         let tensor_type = read_u32(file)?;
         let _offset = read_u64(file)?;
-        *counts.entry(tensor_type).or_default() += 1;
+        *counts.entry(tensor_type).or_default() += elements;
     }
 
     Ok(counts
@@ -220,6 +221,31 @@ mod tests {
         drop(file);
 
         assert_eq!(detect_dtype(&path).unwrap().as_deref(), Some("Q8_0"));
+    }
+
+    #[test]
+    fn small_f32_biases_do_not_hide_f16_weights_without_file_type() {
+        let dir = crate::test_support::fixture_root("gguf-tests", "mixed-f16");
+        let path = dir.join("mixed.gguf");
+        let mut file = File::create(&path).unwrap();
+        file.write_all(b"GGUF").unwrap();
+        file.write_all(&3_u32.to_le_bytes()).unwrap();
+        file.write_all(&4_u64.to_le_bytes()).unwrap();
+        file.write_all(&0_u64.to_le_bytes()).unwrap();
+        for (name, elements, dtype) in [
+            ("weight", 1024_u64, 1_u32),
+            ("bias", 8, 0),
+            ("norm.weight", 8, 0),
+            ("norm.bias", 8, 0),
+        ] {
+            write_string(&mut file, name);
+            file.write_all(&1_u32.to_le_bytes()).unwrap();
+            file.write_all(&elements.to_le_bytes()).unwrap();
+            file.write_all(&dtype.to_le_bytes()).unwrap();
+            file.write_all(&0_u64.to_le_bytes()).unwrap();
+        }
+        drop(file);
+        assert_eq!(dtype_label(&path), "F16");
     }
 
     fn write_string(file: &mut File, s: &str) {

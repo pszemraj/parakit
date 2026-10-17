@@ -278,7 +278,7 @@ disabled_rules = []
 # ---------- [logging]: transcription log ----------
 
 [logging]
-# path string (optional). Directory for JSONL transcription logs: one record per dictation (raw and cleaned text, cleaning metadata, timings) and one per insertion attempt (outcome and clipboard telemetry).
+# path string (optional). Directory for JSONL transcription logs: one record per completed dictation (raw and cleaned text, model filename/preset, quantization, device policy, effective Qwen controls, cleaning metadata and timings) and one per insertion attempt (outcome and clipboard telemetry).
 # Unset: transcription logging is off.
 # Overridden by: the --log-dir flag. No flag turns a configured directory off.
 # Files are named parakit-YYYY-MM-DD.jsonl by local date and are appended to, one file per day. parakit never rotates or deletes them.
