@@ -483,6 +483,9 @@ fn sample_daemon_info() -> DaemonInfo {
     DaemonInfo {
         pid: 4242,
         model_name: "parakeet-tdt-0.6b-v3-Q8_0.gguf".to_string(),
+        model_preset: None,
+        qwen_language: None,
+        qwen_max_new_tokens: None,
         dtype: "Q8_0 (745 MB)".to_string(),
         mic_summary: "Test Mic, 48000 Hz mono input -> 16000 Hz mono model, F32".to_string(),
         backend: "CPU".to_string(),
@@ -543,6 +546,9 @@ fn status_detail_serde_round_trips() {
         dictation_count: 7,
         mic: "Test Mic".to_string(),
         model: "model.gguf".to_string(),
+        model_preset: None,
+        qwen_language: None,
+        qwen_max_new_tokens: None,
         dtype: "Q8_0".to_string(),
         device: "cpu".to_string(),
         backend: "CPU".to_string(),
@@ -698,4 +704,34 @@ fn parse_command_still_accepts_the_current_wire_format() {
     let command = parse_command(r#"{"copy_last":{"index":2}}"#)
         .expect("current copy_last encoding should still parse");
     assert!(matches!(command, IpcCommand::CopyLast { index: 2 }));
+}
+
+#[test]
+fn qwen_status_retains_selection_and_options_when_device_changes() {
+    let state = SharedState::new();
+    let mut info = sample_daemon_info();
+    info.model_preset = Some("qwen3-asr-1.7b".into());
+    info.qwen_language = Some("Filipino".into());
+    info.qwen_max_new_tokens = Some(4096);
+    state.set_info(info);
+    state.update_engine_info("qwen3", "cpu".into());
+    let IpcResponse::Status {
+        detail: Some(detail),
+        ..
+    } = state.status()
+    else {
+        panic!("missing status");
+    };
+    assert_eq!(detail.model_preset.as_deref(), Some("qwen3-asr-1.7b"));
+    assert_eq!(detail.qwen_language.as_deref(), Some("Filipino"));
+    assert_eq!(detail.qwen_max_new_tokens, Some(4096));
+    assert_eq!(detail.device, "cpu");
+    let mut json = serde_json::to_value(&detail).unwrap();
+    for key in ["model_preset", "qwen_language", "qwen_max_new_tokens"] {
+        json.as_object_mut().unwrap().remove(key);
+    }
+    let older: StatusDetail = serde_json::from_value(json).unwrap();
+    assert_eq!(older.model_preset, None);
+    assert_eq!(older.qwen_language, None);
+    assert_eq!(older.qwen_max_new_tokens, None);
 }

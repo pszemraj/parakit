@@ -227,6 +227,9 @@ mod tests {
                 let daemon = DaemonInfo {
                     pid: std::process::id(),
                     model_name: "test.gguf".into(),
+                    model_preset: None,
+                    qwen_language: None,
+                    qwen_max_new_tokens: None,
                     dtype: "Q8_0".into(),
                     mic_summary: mic.summary(),
                     cleaning_summary: "off".into(),

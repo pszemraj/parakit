@@ -20,7 +20,7 @@
 #
 # Unknown keys are rejected at every level: at the top level, in every table, and inside every [[rules.user]] entry.
 # An unknown key, invalid TOML, a wrong type, an unknown enum string, or a failed validation is a hard error that names the config file.
-# Enum strings are lowercase and case-sensitive.
+# Enum strings are lowercase and case-sensitive, except qwen.language accepts case-insensitive codes and names.
 #
 # When it is read: once per process, at startup. The daemon never watches the file, so restart it after every edit.
 # These commands read the file: `parakit start` (and bare `parakit`), `parakit doctor`, `parakit rules list`, `parakit rules test`, and `parakit config show`.
@@ -42,18 +42,29 @@
 
 [daemon]
 # path string (optional). Path to the GGUF speech-model file that the daemon loads.
-# Unset: the daemon uses the hosted Q8_0 model, parakeet-tdt-0.6b-v3-Q8_0.gguf, in the model cache directory (see PARAKIT_MODELS_DIR at the end of this file), and downloads it at startup when it is missing.
-# Overridden by: the -m/--model flag. When the flag is given, the path in this key is never checked for a file or used, so a wrong path here is harmless.
+# Unset: daemon.model_preset selects a hosted Q8_0 model; when both selectors are absent, the daemon uses parakeet-tdt-0.6b-v3-Q8_0.gguf in the model cache and downloads it when missing.
+# Conflicts with: daemon.model_preset; setting both fails config load even when a CLI model selection overrides them.
+# Overridden by: -m/--model or --model-preset. When either flag is given, the path in this key is never checked for a file or used, so a wrong path here is harmless.
 # An empty string fails config load with "daemon.model is set but empty", even when -m is given.
 # An empty -m or --model value is a command-line parse error.
 # The file must exist and be a regular file (a symlink to one is fine). Otherwise startup fails with "model path is not a file".
 # This check runs right after the config loads, before the hotkey and microphone checks.
 # The path must also be valid UTF-8, or startup fails with "model path is not valid UTF-8" when the model is opened.
-# The contents are not checked until the model is opened. A file that is not a usable Parakeet GGUF fails then with "could not open model".
+# The contents are not checked until the model is opened. A file that is not a usable supported GGUF fails then with "could not open model".
 # A relative path resolves against the working directory of the daemon process at startup. It is converted to an absolute path once, and that path is reused for every idle reload.
 # Setting this key turns off the automatic download. Models fetched with `parakit fetch <repo-or-url>` are never used unless they are named here or with -m.
 # `parakit doctor` does not check this key.
 # model = "/path/to/model.gguf"
+
+# "parakeet-v3" | "qwen3-asr-0.6b" | "qwen3-asr-1.7b" | "parakeet-ultra" | "parakeet-redux" (optional). Hosted Q8_0 model to load.
+# Experimental: Qwen presets. Redux is for testing/comparison only and is not recommended for normal dictation.
+# Unset: daemon.model selects a local GGUF; when both selectors are absent, the daemon uses the original parakeet-v3 hosted Q8_0 model.
+# Conflicts with: daemon.model; setting both fails config load even when a CLI model selection overrides them.
+# Overridden by: -m/--model or --model-preset; either CLI selection replaces the configured selection.
+# The exact preset artifact is downloaded when absent, using the model cache, HF_ENDPOINT, and HF_TOKEN. A cached artifact is used without network access.
+# parakeet-v3 keeps its existing top-level cache path. Other presets use the separate Hub cache directories.
+# Reload reuses the resolved local file and never downloads it again. `parakit fetch` never reads this key.
+# model_preset = "qwen3-asr-1.7b"
 
 # "auto" | "cpu" | "gpu". Where speech recognition runs.
 # "auto" uses the best GPU when one is available and the CPU otherwise. The daemon banner and `parakit --verbose status` show which one was chosen.
@@ -63,7 +74,8 @@
 # In a build without the `bundled` feature (an external libcrispasr) there is no device probe. Startup only warns and still opens the model with the GPU requested, and the CrispASR library decides what happens without one.
 # Overridden by: the --device flag.
 # Only used when: the model is opened. The policy is applied again on every idle reload (see daemon.model_idle_minutes).
-# On a reload, "auto" loads on the CPU until the next offload when free GPU memory is below the model file size plus 1 GiB, and says so in a warning and a desktop notification. "gpu" fails that reload instead.
+# On a bundled reload, "auto" loads on the CPU until the next offload when free GPU memory is below the model file size plus working space: 2 GiB for Qwen, or 1 GiB for other backends. It says so in a warning and a desktop notification. "gpu" fails that reload instead.
+# Warning: the Qwen allowance follows Linux CUDA/Vulkan Q8_0 measurements at token budgets 512 and 4096, including a 270-second repeated-speech input. The 1.7B margin is narrow; this is not an allocation ceiling, and other artifacts and native Metal/Windows calibration remain pending.
 # Recommended: "auto".
 device = "auto"
 
@@ -83,7 +95,7 @@ device = "auto"
 # Recording, queued dictations, transcription, text insertion, `parakit copy-last`, and `parakit test-paste` count as activity. `parakit status`, `history`, and `stop` do not.
 # After an offload, pressing the push-to-talk key reloads the model while audio is already being recorded. A three-note cue plays, then the normal listening tone once the model is ready if the key is still held.
 # If the key is released first, the audio is queued until the model is ready.
-# A reload never downloads anything. It uses the absolute model path, the thread count, and the device policy fixed at startup.
+# A reload never downloads anything. It uses the absolute model path, the thread count, Qwen settings, and the device policy fixed at startup.
 # If a reload fails (the model file was deleted or moved, or daemon.device is "gpu" and GPU memory is short), the error cue plays and a "Model unavailable" notification appears.
 # The reload is retried once when the key is released. If that also fails, the dictation is discarded without inserting anything ("Dictation discarded"), and the next key press tries again.
 # Overridden by: the --model-idle-minutes flag. An explicit flag value of 0 wins over a nonzero value here.
@@ -152,11 +164,32 @@ verbose = false
 transcript_history = 10
 
 
+# ---------- [qwen]: language hints and generation limits ----------
+
+[qwen]
+# string. "auto" detects the source language; otherwise a supported language code or English name forces it.
+# Supported codes/names (case-insensitive, surrounding whitespace ignored): zh/Chinese, en/English, yue/Cantonese, ar/Arabic, de/German, fr/French, es/Spanish, pt/Portuguese, id/Indonesian, it/Italian, ko/Korean, ru/Russian, th/Thai, vi/Vietnamese, ja/Japanese, tr/Turkish, hi/Hindi, ms/Malay, nl/Dutch, sv/Swedish, da/Danish, fi/Finnish, pl/Polish, cs/Czech, fil/Filipino, fa/Persian, el/Greek, hu/Hungarian, mk/Macedonian, ro/Romanian.
+# Empty strings and unsupported names/codes fail config load; regional codes such as en-US are not accepted.
+# Only used when: the loaded GGUF has the Qwen3-ASR backend. Other models ignore this setting after config validation.
+# Overridden by: --qwen-language. Explicit Qwen CLI controls fail with a non-Qwen model.
+# The normalized canonical name is reapplied on every idle reload.
+# Recommended: use cleaning.enabled = false for multilingual dictation to bypass English built-in rules and all user cleaning rules.
+language = "auto"
+
+# integer, 1 to 4096. Maximum generated tokens per native Qwen audio chunk, including the token that ends decoding.
+# An utterance fails if any chunk reaches the budget without EOS, or another native decoding error occurs; incomplete text is not inserted or added as a successful transcript.
+# Only used when: the loaded GGUF has the Qwen3-ASR backend. Other models ignore this setting after config validation.
+# Overridden by: --qwen-max-new-tokens. Explicit Qwen CLI controls fail with a non-Qwen model.
+# The same budget is reapplied on every idle reload. 0, fractions, negative values, and values above 4096 fail config load.
+max_new_tokens = 512
+
+
 # ---------- [cleaning]: transcript cleanup ----------
 
 [cleaning]
 # bool. Run the cleaning pipeline on each transcript. false inserts the model's raw transcript unchanged: no built-in rule and no [[rules.user]] entry runs.
 # Overridden by: the --cleaning and --no-cleaning flags, which force the value either way and conflict with each other.
+# Recommended: false for multilingual dictation when English cleanup could alter the transcript; --no-cleaning has the same effect for one start command.
 # Validation still happens when false: cleaning.disabled_rules, cleaning.number_threshold, and every [[rules.user]] entry (including each regex) must be valid or the config fails to load.
 # `parakit rules test` and `parakit rules list` ignore this key and always apply or list the rules.
 enabled = true
@@ -330,7 +363,7 @@ backend = "auto"
 # PARAKIT_MODELS_DIR
 # Directory that holds downloaded models. Used verbatim when set. Empty is an error. A relative path is relative to the working directory.
 # Default on Linux and macOS: $XDG_CACHE_HOME/parakit/models, or $HOME/.cache/parakit/models. Default on Windows: parakit\Cache\models inside the Local AppData folder.
-# Read only by commands that touch the model cache: `fetch`, `cache`, and daemon startup when neither -m nor daemon.model is set. It is not consulted when a model path is given.
+# Read only by commands that touch the model cache: `fetch`, `cache`, and daemon startup when a preset or the default model is selected. It is not consulted when the selected model is an explicit local path.
 
 # XDG_CONFIG_HOME
 # Linux and macOS. Base of the default config path. A relative value is used as given, and an empty value counts as unset. Ignored when PARAKIT_CONFIG_PATH is set.
@@ -406,8 +439,12 @@ backend = "auto"
 # The Vulkan0, Vulkan1 names in `parakit --verbose doctor` number only the visible devices, so they can differ from these indices.
 # An index the driver does not report disables the Vulkan backend: daemon.device "auto" then runs on the CPU and "gpu" fails at startup.
 
+# CRISPASR_QWEN3ASR_QUANT_AUDIO
+# Native Qwen quantizer override. A nonempty value not starting with 0 allows audio-encoder tensors to use the target quantization below the normal Q8_0 floor.
+# `parakit fetch --from-source` sets it to 0 for the quantizer child process, preserving the native audio-encoder precision policy regardless of the launching environment. It does not change the parent environment or runtime inference.
+
 # HF_ENDPOINT
-# Base URL that replaces https://huggingface.co for the default model download, `parakit fetch <repo>`, and `parakit fetch --from-source`. This includes the download the daemon runs at startup when no model is set.
+# Base URL that replaces https://huggingface.co for default/preset model downloads, `parakit fetch <repo>`, and `parakit fetch --from-source`. This includes automatic startup downloads.
 # A blank value means the default. Trailing slashes are trimmed. It does not apply to `parakit fetch <url>`.
 
 # HF_TOKEN

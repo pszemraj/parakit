@@ -3,6 +3,7 @@
 use super::logging::Logger;
 use anyhow::{Context, Result};
 use parakit::inference::{DeviceMode, Engine};
+use parakit::qwen::QwenOptions;
 use parakit::warmup::{self, engine_warmup_seconds};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -12,10 +13,17 @@ use std::time::Instant;
 pub(crate) struct EngineRecipe {
     /// Resolved model path, reused without fetching during recording.
     pub(crate) model_path: PathBuf,
+    /// Preset chosen at startup; never inferred from a local filename.
+    pub(crate) model_preset: Option<parakit::model::ModelPreset>,
     /// Requested CPU thread count.
     pub(crate) threads: usize,
     /// Requested device policy, revalidated on every reload.
     pub(crate) device_mode: DeviceMode,
+    /// Backend identified at startup, used to size GPU reload workspace.
+    #[cfg(feature = "bundled")]
+    pub(crate) backend: String,
+    /// Qwen options resolved at startup and reapplied after idle offload.
+    pub(crate) qwen: QwenOptions,
     /// Whether native informational diagnostics should be emitted.
     pub(crate) verbose: bool,
 }
@@ -60,6 +68,7 @@ impl EngineRecipe {
             &self.model_path,
             self.threads,
             device_mode,
+            &self.qwen,
             self.verbose,
             policy,
         )
@@ -113,7 +122,7 @@ impl EngineRecipe {
                 .map(|device| device.free_bytes as u64);
             let needed_bytes = std::fs::metadata(&self.model_path)
                 .map_or(0, |metadata| metadata.len())
-                + RELOAD_GPU_WORKSPACE_BYTES;
+                + reload_gpu_workspace_bytes(&self.backend);
             let free_mib = free_bytes.unwrap_or_default() / 1_048_576;
             let needed_mib = needed_bytes / 1_048_576;
             match reload_device_for_free_memory(self.device_mode, free_bytes, needed_bytes) {
@@ -136,13 +145,29 @@ impl EngineRecipe {
     }
 }
 
-/// GPU memory to keep free beyond the model weights when reloading: the
-/// compute buffer and scratch pool of a typical dictation. CUDA used about
-/// 14 MiB per second of audio, so this covers roughly 75 seconds; sizing for
-/// the 270-second limit would push smaller GPUs to CPU on every reload.
-/// See docs/dev/memory.md.
+/// GPU workspace for typical Parakeet dictation, beyond the model file size.
+/// Longer audio can exceed this allowance; see docs/dev/memory.md.
 #[cfg(feature = "bundled")]
 const RELOAD_GPU_WORKSPACE_BYTES: u64 = 1 << 30;
+
+/// Size reload workspace for the backend identified by the startup session.
+///
+/// # Arguments
+///
+/// * `backend` - Native backend name retained from the initial session.
+///
+/// # Returns
+///
+/// Two GiB for Qwen, whose Q8_0 CUDA/Vulkan runs needed more than one GiB
+/// beyond weights, or the existing one-GiB allowance for other backends.
+#[cfg(feature = "bundled")]
+fn reload_gpu_workspace_bytes(backend: &str) -> u64 {
+    if backend == "qwen3" {
+        2 << 30
+    } else {
+        RELOAD_GPU_WORKSPACE_BYTES
+    }
+}
 
 /// Decide the reload device from free GPU memory.
 ///
@@ -192,22 +217,23 @@ fn open_engine(
     path: &Path,
     threads: usize,
     device_mode: DeviceMode,
+    qwen: &QwenOptions,
     verbose: bool,
     policy: LoadPolicy,
 ) -> Result<Engine> {
     if verbose {
-        return Engine::open(path, threads, device_mode);
+        return Engine::open_with_options(path, threads, device_mode, qwen);
     }
     match policy {
         // Non-verbose startup suppresses process-wide stderr, including capture
         // and IPC diagnostics. The returned error points to --verbose for details.
-        LoadPolicy::Startup => {
-            super::stderr::with_stderr_suppressed(|| Engine::open(path, threads, device_mode))
-        }
+        LoadPolicy::Startup => super::stderr::with_stderr_suppressed(|| {
+            Engine::open_with_options(path, threads, device_mode, qwen)
+        }),
         // Reload runs beside capture, cues, and IPC. Remove only the loader's
         // direct informational prints; native and concurrent errors must survive.
         LoadPolicy::Reload => super::stderr::with_parakeet_info_suppressed(|| {
-            Engine::open(path, threads, device_mode)
+            Engine::open_with_options(path, threads, device_mode, qwen)
         }),
     }
 }
@@ -288,7 +314,11 @@ fn resolve_runtime_device(device_mode: DeviceMode) -> (String, bool) {
         let devices = parakit::gpu::devices();
         let preferred = parakit::gpu::preferred_gpu_device_in(&devices);
         let summary = match preferred {
-            Some(device) => format!("{} -> {}", device_mode.as_str(), device.diagnostic_line()),
+            Some(device) => format!(
+                "{} (GPU inventory: {}; execution unconfirmed)",
+                device_mode.as_str(),
+                device.diagnostic_line()
+            ),
             None if device_mode == DeviceMode::Auto => {
                 "auto -> CPU fallback (no GPU/iGPU visible)".to_string()
             }
@@ -308,16 +338,15 @@ fn resolve_runtime_device(device_mode: DeviceMode) -> (String, bool) {
 
 fn warm_up_engine(engine: &Engine, sequence: &[usize], log: &Logger) -> Result<()> {
     let started = Instant::now();
-    for seconds in sequence {
-        let warmup = warmup::synthetic_pcm(*seconds);
-        engine
-            .transcribe(&warmup)
-            .context("engine warmup transcription failed")?;
-    }
+    warmup::run(engine, sequence).context("engine warmup transcription failed")?;
+    let input = if engine.backend() == "qwen3" {
+        "11s speech".to_owned()
+    } else {
+        format!("{} synthetic input", format_warmup_sequence(sequence))
+    };
     log.verbose(format!(
-        "parakit: engine warmup took {:.0}ms ({} synthetic input)",
+        "parakit: engine warmup took {:.0}ms ({input})",
         started.elapsed().as_secs_f32() * 1000.0,
-        format_warmup_sequence(sequence)
     ));
     Ok(())
 }
@@ -344,8 +373,12 @@ mod tests {
             let verbose = verbose == "true";
             let recipe = EngineRecipe {
                 model_path: path,
+                model_preset: None,
                 threads: 1,
                 device_mode: DeviceMode::Cpu,
+                #[cfg(feature = "bundled")]
+                backend: String::new(),
+                qwen: QwenOptions::default(),
                 verbose,
             };
             let log = Logger::new(super::super::logging::LogLevel::Quiet);
@@ -377,6 +410,31 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[cfg(feature = "bundled")]
+    #[test]
+    fn qwen_reload_requires_room_for_its_larger_workspace() {
+        let model_bytes = 960 * 1_048_576;
+        let free_bytes = model_bytes + (1 << 30);
+        let qwen_needed = model_bytes + reload_gpu_workspace_bytes("qwen3");
+        let parakeet_needed = model_bytes + reload_gpu_workspace_bytes("parakeet");
+        assert_eq!(
+            reload_device_for_free_memory(DeviceMode::Auto, Some(free_bytes), qwen_needed),
+            Some(DeviceMode::Cpu)
+        );
+        assert_eq!(
+            reload_device_for_free_memory(DeviceMode::Gpu, Some(free_bytes), qwen_needed),
+            None
+        );
+        assert_eq!(
+            reload_device_for_free_memory(DeviceMode::Gpu, Some(qwen_needed), qwen_needed),
+            Some(DeviceMode::Gpu)
+        );
+        assert_eq!(
+            reload_device_for_free_memory(DeviceMode::Auto, Some(free_bytes), parakeet_needed),
+            Some(DeviceMode::Auto)
+        );
     }
 
     #[cfg(feature = "bundled")]

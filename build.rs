@@ -33,7 +33,9 @@ use std::process::Command;
 
 #[path = "build/native_link.rs"]
 mod native_link;
-
+use native_link::cmake_bool;
+#[path = "build/native_correctness.rs"]
+mod native_correctness;
 #[path = "build/openblas_roots.rs"]
 mod openblas_roots;
 use openblas_roots::{
@@ -70,6 +72,9 @@ fn main() {
     println!("cargo:rerun-if-env-changed=BLAS_LIBRARIES");
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=build/native_link.rs");
+    println!("cargo:rerun-if-changed=build/native_correctness.rs");
+    println!("cargo:rerun-if-changed=build/native_correctness.cmake");
+    println!("cargo:rerun-if-changed=build/native/qwen_correctness.hpp");
     println!("cargo:rerun-if-changed=build/openblas_roots.rs");
     println!("cargo:rerun-if-changed=build/unix_openblas.rs");
     println!("cargo:rerun-if-changed=build/windows_openblas.rs");
@@ -102,21 +107,33 @@ fn main() {
 
     // 3. Locate the CrispASR source tree.
     let src_dir = locate_source(&manifest_dir);
-    println!(
-        "cargo:rerun-if-changed={}/CMakeLists.txt",
-        src_dir.display()
-    );
-    println!(
-        "cargo:rerun-if-changed={}/src/parakeet.cpp",
-        src_dir.display()
-    );
-
+    for source in [
+        "CMakeLists.txt",
+        "src/parakeet.cpp",
+        "src/crispasr_c_api.cpp",
+        "src/parakeet_orchestrate.cpp",
+    ] {
+        println!("cargo:rerun-if-changed={}", src_dir.join(source).display());
+    }
+    let (patched_c_api, patched_parakeet) =
+        native_correctness::prepare(&src_dir, &PathBuf::from(env::var_os("OUT_DIR").unwrap()))
+            .unwrap_or_else(|err| panic!("could not prepare CrispASR session corrections: {err}"));
     // 4. Run cmake. The `cmake` crate handles incremental builds, MSVC
     //    detection on Windows, generator selection, parallelism, and
     //    install-step plumbing.
     let build_crispasr_examples = !target_is_windows();
     let mut cfg = cmake::Config::new(&src_dir);
     cfg.profile("Release")
+        .define(
+            "CMAKE_PROJECT_crispasr_INCLUDE",
+            manifest_dir.join("build/native_correctness.cmake"),
+        )
+        .define("PARAKIT_CRISPASR_C_API_SOURCE", &patched_c_api)
+        .define("PARAKIT_PARAKEET_SOURCE", &patched_parakeet)
+        .define(
+            "PARAKIT_NATIVE_CORRECTNESS_INCLUDE",
+            manifest_dir.join("build/native"),
+        )
         .define("BUILD_SHARED_LIBS", "ON")
         // parakit is normally built from source for the machine it runs on.
         // Make the CPU policy explicit instead of relying on ggml defaults.
@@ -147,7 +164,6 @@ fn main() {
         .define("CMAKE_INSTALL_RPATH_USE_LINK_PATH", "ON");
 
     configure_windows_msvc_release(&mut cfg);
-
     let accelerators = AcceleratorConfig::from_env();
 
     let blas = configure_blas(&mut cfg);
@@ -718,14 +734,6 @@ fn summarize_cpu_flags(flags: &str) -> String {
 fn emit_env_from_cache(cache: &BTreeMap<String, String>, cache_key: &str, env_key: &str) {
     if let Some(value) = cache.get(cache_key) {
         println!("cargo:rustc-env={env_key}={value}");
-    }
-}
-
-const fn cmake_bool(enabled: bool) -> &'static str {
-    if enabled {
-        "ON"
-    } else {
-        "OFF"
     }
 }
 

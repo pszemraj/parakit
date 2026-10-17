@@ -9,6 +9,9 @@
 !/build/
 /build/*
 !/build/native_link.rs
+!/build/native_correctness.rs
+!/build/native_correctness.cmake
+!/build/native/
 !/build/openblas_roots.rs
 !/build/unix_openblas.rs
 !/build/windows_openblas.rs

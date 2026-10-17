@@ -6,6 +6,111 @@ use std::net::TcpListener;
 use std::sync::{mpsc, Arc, Barrier};
 use std::time::{Duration, Instant};
 
+#[test]
+fn all_presets_reuse_cached_artifacts_without_network() {
+    let dir = crate::test_support::fixture_root("parakit-fetch-tests", "preset-cache");
+    for preset in [
+        ModelPreset::ParakeetV3,
+        ModelPreset::Qwen3Asr06b,
+        ModelPreset::Qwen3Asr17b,
+        ModelPreset::ParakeetUltra,
+        ModelPreset::ParakeetRedux,
+    ] {
+        let dest = preset_cache_path(&dir, preset);
+        std::fs::create_dir_all(dest.parent().unwrap()).unwrap();
+        std::fs::write(&dest, b"cached-model").unwrap();
+        let options = FetchOptions {
+            force: false,
+            quiet: true,
+            verbose: false,
+            source: FetchSource::Preset(preset),
+        };
+        assert_eq!(
+            run_preset(&options, "https://example.invalid", None, preset, &dir).unwrap(),
+            dest
+        );
+        assert_eq!(std::fs::read(&dest).unwrap(), b"cached-model");
+        if preset == ModelPreset::ParakeetV3 {
+            assert_eq!(dest, dir.join(Q8_FILENAME));
+        } else {
+            let (owner, repo) = preset.repo().split_once('/').unwrap();
+            let custom_hub_path =
+                hub::hub_cache_dir(&dir, owner, repo, preset.revision(), preset.filename())
+                    .join(preset.filename());
+            assert_eq!(dest, custom_hub_path);
+        }
+    }
+}
+
+#[test]
+fn preset_force_fetches_exact_artifact_from_mirror_with_token() {
+    let dir = crate::test_support::fixture_root("parakit-fetch-tests", "preset-force");
+    let preset = ModelPreset::Qwen3Asr06b;
+    let dest = preset_cache_path(&dir, preset);
+    std::fs::create_dir_all(dest.parent().unwrap()).unwrap();
+    std::fs::write(&dest, b"cached-model").unwrap();
+    std::fs::write(partial_path(&dest), b"stale-partial").unwrap();
+    let (url, server) = serve_model_once(b"fresh-model");
+    let endpoint = url.strip_suffix("/model.gguf").unwrap();
+    let options = FetchOptions {
+        force: true,
+        quiet: true,
+        verbose: false,
+        source: FetchSource::Preset(preset),
+    };
+    assert_eq!(
+        run_preset(&options, endpoint, Some("preset-token"), preset, &dir).unwrap(),
+        dest
+    );
+    let request = server.join().unwrap();
+    assert!(request.starts_with(&format!(
+        "GET /cstr/qwen3-asr-0.6b-GGUF/resolve/{}/qwen3-asr-0.6b-q8_0.gguf ",
+        preset.revision()
+    )));
+    assert!(request
+        .to_ascii_lowercase()
+        .contains("authorization: bearer preset-token\r\n"));
+    assert!(!request.to_ascii_lowercase().contains("\r\nrange:"));
+    assert_eq!(std::fs::read(dest).unwrap(), b"fresh-model");
+}
+
+#[test]
+fn failed_preset_download_never_publishes_or_replaces_a_model() {
+    let dir = crate::test_support::fixture_root("parakit-fetch-tests", "preset-failure");
+    let preset = ModelPreset::ParakeetRedux;
+    let dest = preset_cache_path(&dir, preset);
+    for cached in [false, true] {
+        if cached {
+            std::fs::write(&dest, b"existing-model").unwrap();
+        }
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            read_request_headers(&mut stream);
+            stream
+                .write_all(
+                    b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                )
+                .unwrap();
+        });
+        let options = FetchOptions {
+            force: cached,
+            quiet: true,
+            verbose: false,
+            source: FetchSource::Preset(preset),
+        };
+        let error = run_preset(&options, &endpoint, None, preset, &dir).unwrap_err();
+        server.join().unwrap();
+        assert!(format!("{error:#}").contains("404"), "{error:#}");
+        if cached {
+            assert_eq!(std::fs::read(&dest).unwrap(), b"existing-model");
+        } else {
+            assert!(!dest.exists());
+        }
+    }
+}
+
 fn read_request_headers(stream: &mut impl Read) -> Vec<u8> {
     let mut request = Vec::new();
     let mut buffer = [0_u8; 1024];

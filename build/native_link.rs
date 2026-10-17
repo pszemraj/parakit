@@ -3,6 +3,18 @@
 use std::env;
 use std::path::Path;
 
+/// Convert a Rust boolean into a CMake option value.
+///
+/// # Returns
+/// `ON` for true and `OFF` for false.
+pub(crate) const fn cmake_bool(enabled: bool) -> &'static str {
+    if enabled {
+        "ON"
+    } else {
+        "OFF"
+    }
+}
+
 /// Link the platform C++ runtime used by the CrispASR native library.
 pub(crate) fn emit_cpp_runtime() {
     match env::var("CARGO_CFG_TARGET_OS").unwrap_or_default().as_str() {

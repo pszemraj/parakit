@@ -3,6 +3,7 @@
 use crate::constants::TARGET_RATE;
 use crate::crispasr_ext::{crispasr_thread_count, OwnedSession};
 use crate::model::validate_model_file;
+use crate::qwen::QwenOptions;
 use anyhow::{bail, Context, Result};
 use clap::ValueEnum;
 use std::borrow::Cow;
@@ -102,6 +103,7 @@ pub struct Engine {
     backend: String,
     threads: usize,
     device_mode: DeviceMode,
+    qwen: Option<QwenOptions>,
 }
 
 enum EngineSession {
@@ -110,6 +112,19 @@ enum EngineSession {
 }
 
 impl EngineSession {
+    fn configure_qwen(&self, language: &str, max_new_tokens: i32) -> Result<(), String> {
+        match self {
+            Self::Auto(session) => {
+                session.set_source_language(language)?;
+                session.set_max_new_tokens(max_new_tokens)
+            }
+            Self::WithParams(session) => {
+                session.set_source_language(language)?;
+                session.set_max_new_tokens(max_new_tokens)
+            }
+        }
+    }
+
     fn backend(&self) -> String {
         match self {
             Self::Auto(session) => session.backend(),
@@ -148,6 +163,32 @@ impl Engine {
         threads: usize,
         device_mode: DeviceMode,
     ) -> Result<Self> {
+        Self::open_with_options(model_path, threads, device_mode, &QwenOptions::default())
+    }
+
+    /// Open a GGUF model, applying Qwen controls when its backend is `qwen3`.
+    ///
+    /// # Arguments
+    ///
+    /// * `model_path` - GGUF model file to load.
+    /// * `threads` - CPU inference thread count requested from CrispASR.
+    /// * `device_mode` - CPU/GPU behavior to request at session open.
+    /// * `options` - Language and generation controls; ignored for other backends.
+    ///
+    /// # Returns
+    ///
+    /// An initialized transcription engine with its session controls applied.
+    ///
+    /// # Errors
+    ///
+    /// Returns the model/thread errors of [`Self::open`], or an error when Qwen
+    /// controls are invalid or rejected by the native session.
+    pub fn open_with_options<P: AsRef<Path>>(
+        model_path: P,
+        threads: usize,
+        device_mode: DeviceMode,
+        options: &QwenOptions,
+    ) -> Result<Self> {
         if threads == 0 {
             return Err(anyhow::anyhow!("thread count must be at least 1"));
         }
@@ -167,6 +208,9 @@ impl Engine {
             .with_context(|| format!("failed to detect backend for model {}", path_str))?;
         let backend = validate_detected_backend(detected_backend)
             .with_context(|| format!("failed to detect backend for model {}", path_str))?;
+        if backend == "qwen3" {
+            options.validate().map_err(anyhow::Error::msg)?;
+        }
         let session = match device_mode.use_gpu_override() {
             Some(use_gpu) => EngineSession::WithParams(
                 OwnedSession::open_with_params(path_str, &backend, n_threads, use_gpu)
@@ -177,13 +221,55 @@ impl Engine {
                     .map_err(|e| anyhow::anyhow!("crispasr open failed: {e}"))?,
             ),
         };
+        if backend == "qwen3" {
+            let language = options.normalized_language().map_err(anyhow::Error::msg)?;
+            session
+                .configure_qwen(
+                    language.as_deref().unwrap_or(""),
+                    options.max_new_tokens as i32,
+                )
+                .map_err(anyhow::Error::msg)
+                .context("could not configure Qwen inference")?;
+        }
         let backend = session.backend();
+        let qwen = (backend == "qwen3").then(|| options.clone());
         Ok(Self {
             session,
             backend,
             threads,
             device_mode,
+            qwen,
         })
+    }
+
+    /// Transcribe Qwen readiness speech with temporary automatic/512 options.
+    ///
+    /// # Arguments
+    /// * `pcm` - Embedded human speech at 16 kHz.
+    ///
+    /// # Returns
+    /// Success after readiness and restoration of the user's options.
+    ///
+    /// # Errors
+    /// Reports inference, configuration, or option-restoration errors.
+    pub(crate) fn transcribe_readiness(&self, pcm: &[f32]) -> Result<()> {
+        let options = self.qwen.as_ref().context("readiness requires Qwen")?;
+        let language = options.normalized_language().map_err(anyhow::Error::msg)?;
+        let restore = QwenOptionRestore {
+            session: &self.session,
+            language: language.unwrap_or_default(),
+            budget: options.max_new_tokens as i32,
+            active: true,
+        };
+        let result = self
+            .session
+            .configure_qwen("", 512)
+            .map_err(anyhow::Error::msg)
+            .and_then(|()| self.transcribe(pcm).map(|_| ()));
+        restore
+            .restore()
+            .context("restore Qwen options after readiness")?;
+        result
     }
 
     /// Return the CrispASR backend used for this model.
@@ -197,6 +283,31 @@ impl Engine {
             "unknown"
         } else {
             &self.backend
+        }
+    }
+
+    /// Return the resolved Qwen controls, absent for other backends.
+    ///
+    /// # Returns
+    /// The user options restored after every readiness probe.
+    pub fn qwen_options(&self) -> Option<&QwenOptions> {
+        self.qwen.as_ref()
+    }
+
+    /// Read the version reported by the linked native C API.
+    ///
+    /// # Returns
+    /// A version string, or `None` when the native API provides none.
+    pub fn native_api_version(&self) -> Option<String> {
+        let version = unsafe { crispasr_sys::crispasr_c_api_version() };
+        if version.is_null() {
+            None
+        } else {
+            Some(
+                unsafe { std::ffi::CStr::from_ptr(version) }
+                    .to_string_lossy()
+                    .into_owned(),
+            )
         }
     }
 
@@ -232,6 +343,30 @@ impl Engine {
         self.session
             .transcribe(pcm.as_ref())
             .map_err(|e| anyhow::anyhow!("crispasr transcribe failed: {e}"))
+    }
+}
+
+struct QwenOptionRestore<'a> {
+    session: &'a EngineSession,
+    language: String,
+    budget: i32,
+    active: bool,
+}
+
+impl QwenOptionRestore<'_> {
+    fn restore(mut self) -> Result<()> {
+        self.active = false;
+        self.session
+            .configure_qwen(&self.language, self.budget)
+            .map_err(anyhow::Error::msg)
+    }
+}
+
+impl Drop for QwenOptionRestore<'_> {
+    fn drop(&mut self) {
+        if self.active {
+            let _ = self.session.configure_qwen(&self.language, self.budget);
+        }
     }
 }
 

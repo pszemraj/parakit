@@ -1,6 +1,7 @@
 //! Parser, effective-option precedence, and flag-conflict regressions for the CLI.
 
 use super::*;
+use clap::ValueEnum;
 
 fn start_from(args: &[&str]) -> StartCli {
     let mut full = vec!["parakit", "start"];
@@ -21,6 +22,107 @@ fn cli_from(args: &[&str]) -> Cli {
 fn bare_parakit_parses_with_no_command() {
     let cli = Cli::parse_from(["parakit"]);
     assert!(cli.command.is_none());
+}
+
+#[test]
+fn preset_selection_overrides_the_other_config_selection_kind() {
+    let mut config = ConfigFile::default();
+    config.daemon.model = Some(PathBuf::from("configured.gguf"));
+    let start = start_from(&["--model-preset", "qwen3-asr-1.7b", "--qwen-language", "fil"]);
+    assert_eq!(
+        start.effective_model_selection(&config).unwrap(),
+        ModelSelection::Preset(ModelPreset::Qwen3Asr17b)
+    );
+    assert_eq!(
+        start
+            .effective_qwen_options(&config)
+            .unwrap()
+            .normalized_language()
+            .unwrap(),
+        Some("Filipino".to_owned())
+    );
+    config.daemon.model = None;
+    config.daemon.model_preset = Some(ModelPreset::ParakeetRedux);
+    assert_eq!(
+        start_from(&["--model", "cli.gguf"])
+            .effective_model_selection(&config)
+            .unwrap(),
+        ModelSelection::Local(PathBuf::from("cli.gguf"))
+    );
+}
+
+#[test]
+fn qwen_controls_prefer_cli_and_validate_before_acquisition() {
+    let mut config = ConfigFile::default();
+    config.qwen.language = Some("de".to_owned());
+    config.qwen.max_new_tokens = Some(1024);
+    assert_eq!(
+        start_from(&[])
+            .effective_qwen_options(&config)
+            .unwrap()
+            .max_new_tokens,
+        1024
+    );
+    let start = start_from(&["--qwen-language", "yue", "--qwen-max-new-tokens", "4096"]);
+    let options = start.effective_qwen_options(&config).unwrap();
+    assert_eq!(
+        options.normalized_language().unwrap(),
+        Some("Cantonese".to_owned())
+    );
+    assert_eq!(options.max_new_tokens, 4096);
+    for args in [
+        vec!["start", "--model", "a", "--model-preset", "parakeet-v3"],
+        vec!["start", "--qwen-language", "unsupported"],
+        vec!["start", "--qwen-max-new-tokens", "0"],
+        vec!["start", "--qwen-max-new-tokens", "4097"],
+        vec!["fetch", "--model-preset", "parakeet-ultra", "owner/repo"],
+        vec!["fetch", "--checkpoint-dir", "checkpoint"],
+        vec![
+            "fetch",
+            "--model-preset",
+            "qwen3-asr-0.6b",
+            "--file",
+            "a.gguf",
+        ],
+    ] {
+        assert!(
+            Cli::try_parse_from(["parakit"].into_iter().chain(args.iter().copied())).is_err(),
+            "{args:?}"
+        );
+    }
+}
+
+#[test]
+fn every_preset_accepts_explicit_source_rebuilding() {
+    for preset in ModelPreset::value_variants() {
+        let cli = cli_from(&[
+            "fetch",
+            "--model-preset",
+            preset.id(),
+            "--from-source",
+            "--keep-f16",
+        ]);
+        let Some(Commands::Fetch(fetch)) = cli.command else {
+            panic!("expected fetch");
+        };
+        assert_eq!(fetch.model_preset, Some(*preset));
+        assert!(fetch.from_source && fetch.keep_f16);
+    }
+    let cli = cli_from(&[
+        "fetch",
+        "--model-preset",
+        "qwen3-asr-0.6b",
+        "--from-source",
+        "--checkpoint-dir",
+        "local checkpoint",
+    ]);
+    let Some(Commands::Fetch(fetch)) = cli.command else {
+        panic!("expected fetch");
+    };
+    assert_eq!(
+        fetch.checkpoint_dir,
+        Some(PathBuf::from("local checkpoint"))
+    );
 }
 
 #[test]
@@ -227,7 +329,10 @@ fn effective_model_and_threads_and_log_dir_prefer_cli_then_config() {
     let mut config = ConfigFile::default();
 
     let start = start_from(&[]);
-    assert_eq!(start.effective_model(&config), None);
+    assert_eq!(
+        start.effective_model_selection(&config).unwrap(),
+        ModelSelection::Preset(ModelPreset::ParakeetV3)
+    );
     assert_eq!(start.effective_threads(&config), None);
     assert_eq!(start.effective_log_dir(&config), None);
 
@@ -237,8 +342,8 @@ fn effective_model_and_threads_and_log_dir_prefer_cli_then_config() {
 
     let start = start_from(&[]);
     assert_eq!(
-        start.effective_model(&config),
-        Some(PathBuf::from("/config/model.gguf"))
+        start.effective_model_selection(&config).unwrap(),
+        ModelSelection::Local(PathBuf::from("/config/model.gguf"))
     );
     assert_eq!(start.effective_threads(&config), NonZeroUsize::new(2));
     assert_eq!(
@@ -255,8 +360,8 @@ fn effective_model_and_threads_and_log_dir_prefer_cli_then_config() {
         "/cli/logs",
     ]);
     assert_eq!(
-        start.effective_model(&config),
-        Some(PathBuf::from("/cli/model.gguf"))
+        start.effective_model_selection(&config).unwrap(),
+        ModelSelection::Local(PathBuf::from("/cli/model.gguf"))
     );
     assert_eq!(start.effective_threads(&config), NonZeroUsize::new(8));
     assert_eq!(

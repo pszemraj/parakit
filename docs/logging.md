@@ -49,8 +49,13 @@ Fields, in serialization order:
 | `number_threshold` | number or null | The isolated-value cutoff for digit conversion that was actually in effect, 4 by default; `null` only when cleaning is disabled entirely. |
 | `rules_fired` | array | Passes that changed text, in application order, as `{"name":...,"matches":...}` objects. |
 | `cleaning_failure` | string | Error text from a bounded matcher that exceeded its limit; the cleaner then keeps the original transcript instead of inserting a partial transformation. Omitted when cleaning succeeded. |
+| `inference` | object | Model identity and controls for this transcription. Absent in older rows and when a library caller provides no metadata. |
 
-`ruleset_id` and `cleaning_failure` are the only omittable fields on this line; everything else is always present. Pass semantics are in [cleaning-rules.md](cleaning-rules.md).
+`ruleset_id`, `cleaning_failure`, and `inference` can be omitted. Pass semantics are in [cleaning-rules.md](cleaning-rules.md).
+
+The `inference` object records `model` (filename), optional `model_preset`, `backend`, `quantization`, `requested_device`, and `session_device`. The requested policy remains fixed; the session policy reflects an Auto reload on CPU. `confirmed_device` is present for explicitly opened CPU sessions and otherwise omitted: an enumerated GPU does not establish where every model graph executed. Status likewise labels GPU inventory separately from confirmed execution.
+
+Qwen rows include the effective canonical `qwen_language` (`auto` when unforced) and per-chunk `qwen_max_new_tokens`. These describe user inference after readiness, not temporary warmup options or a detected language. Other backends omit them. `native_api_version`, when available, is the linked C API's reported version; it is not the CrispASR release tag. No audio or model-parent directory is added to the record. Readers should accept older rows without `inference` and ignore unfamiliar fields.
 
 ## Insertion Record Fields
 

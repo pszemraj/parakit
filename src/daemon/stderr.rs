@@ -18,7 +18,7 @@ pub(crate) fn with_stderr_suppressed<T>(f: impl FnOnce() -> T) -> T {
     with_stderr_redirected(false, f)
 }
 
-/// Remove Parakeet's two informational loader lines while retaining diagnostics.
+/// Remove known Parakeet/Qwen informational loader lines while retaining diagnostics.
 ///
 /// # Arguments
 ///
@@ -151,8 +151,12 @@ fn forward_diagnostics(reader: &mut impl BufRead, output: &mut impl Write) -> io
         // Match the complete native fprintf formats, not their prefixes: a
         // warning that includes a model field or layer count must stay visible.
         Regex::new(concat!(
-            r"\Aparakeet: (?:vocab=[0-9]+  d_model=[0-9]+  n_layers=[0-9]+  n_heads=[0-9]+  ff=[0-9]+  pred=[0-9]+  joint=[0-9]+|",
-            r"BN folded into conv_dw weights for [0-9]+ layers)\r?\n\z"
+            r"\A(?:parakeet: (?:vocab=[0-9]+  d_model=[0-9]+  n_layers=[0-9]+  n_heads=[0-9]+  ff=[0-9]+  pred=[0-9]+  joint=[0-9]+|",
+            r"BN folded into conv_dw weights for [0-9]+ layers)|",
+            r"qwen3_asr: (?:loaded [^\r\n]+  \(audio [0-9]+ layers, llm [0-9]+ layers, vocab [0-9]+\)|",
+            r"layer offload: gpu=\[0,[0-9]+\), cpu=\[[0-9]+,[0-9]+\) \(CRISPASR_N_GPU_LAYERS=[0-9]+\)|",
+            r"fused QKV for [0-9]+ LLM layers \([0-9]+\+[0-9]+\+[0-9]+→[0-9]+, type=[a-zA-Z0-9_]+\)|",
+            r"kv cache [0-9]+ MiB \(head_dim=[0-9]+ max_ctx=[0-9]+ n_kv=[0-9]+ n_layers=[0-9]+\)))\r?\n\z"
         ))
         .expect("native loader info regex must compile")
     });
@@ -169,6 +173,24 @@ fn forward_diagnostics(reader: &mut impl BufRead, output: &mut impl Write) -> io
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn qwen_loader_info_is_filtered_without_hiding_decode_errors() {
+        let input = concat!(
+            "qwen3_asr: loaded model.gguf  (audio 18 layers, llm 28 layers, vocab 151936)\n",
+            "qwen3_asr: layer offload: gpu=[0,10), cpu=[10,28) (CRISPASR_N_GPU_LAYERS=10)\n",
+            "qwen3_asr: fused QKV for 28 LLM layers (1024+1024+1024→3072, type=q8_0)\n",
+            "qwen3_asr: kv cache 448 MiB (head_dim=128 max_ctx=4096 n_kv=8 n_layers=28)\n",
+            "qwen3_asr: loaded warning: missing tensor\n",
+            "qwen3_asr: decoder stopped before EOS\n",
+        );
+        let mut output = Vec::new();
+        forward_diagnostics(&mut io::Cursor::new(input), &mut output).unwrap();
+        assert_eq!(
+            String::from_utf8(output).unwrap(),
+            "qwen3_asr: loaded warning: missing tensor\nqwen3_asr: decoder stopped before EOS\n"
+        );
+    }
 
     #[test]
     fn filtering_preserves_warnings_errors_and_incomplete_or_non_utf8_output() {

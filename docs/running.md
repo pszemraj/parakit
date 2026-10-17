@@ -71,7 +71,7 @@ parakit --quiet &
 disown
 ```
 
-`--quiet` suppresses normal stdout, including startup lines and transcripts. Errors and warnings still go to stderr. Native model-loader output is separate from `--quiet`: unless `--verbose` is set, startup discards it and idle reloads omit Parakeet's informational loader lines. Use `--verbose` for native loader diagnostics.
+`--quiet` suppresses normal stdout, including startup lines and transcripts. Errors and warnings still go to stderr. Unless `--verbose` is set, native informational loader lines are omitted while useful errors remain visible. Use `--verbose` for native loader diagnostics.
 
 On Linux, start parakit from a terminal in the current desktop session. Tmux, X11 auth, and evdev details are in [linux-desktop.md](linux-desktop.md).
 
@@ -150,9 +150,11 @@ Recording, queued dictations, transcription, and insertion prevent offloading. T
 
 Press PTT normally after an idle period. A three-note cue announces model reloading, followed by the normal listening tone once the model is ready if PTT is still held. Audio records throughout reload, so early speech is preserved. An early release queues that audio until the model is ready and suppresses the delayed listening tone. Successful dictation retains its normal completion cue. Reload uses the resolved local file without downloading it again, preserving the thread count and [device policy](#device-selection). If reopening at PTT start fails, parakit plays its two-pulse error cue and retries once when PTT is released so a temporary failure can still preserve the dictation. If that retry also fails, it plays the error cue again and reports the dictation discarded without insertion; the next PTT retries automatically. `--no-sounds` disables these cues.
 
-Other programs can fill the GPU while the model is offloaded. Before reloading on a GPU, parakit checks that the model size plus 1 GiB of working space is free. If it is not, `auto` reloads on CPU until the next offload and says so in a warning and a desktop notification; `--device gpu` fails the reload with the free and needed amounts. This check does not reserve memory or bound the workspace for long audio. Later allocations can still exhaust memory and abort the daemon; `model_idle_minutes = 0` avoids repeated offload/reload but does not prevent out-of-memory failures. The [historical pressure measurements](dev/memory.md#reload-under-gpu-memory-pressure) explain the allowance and its limits; they are not current-runtime memory ceilings.
+Other programs can fill the GPU while the model is offloaded. Before a bundled build reloads on a GPU, parakit checks that the model file size plus working space is free: 2 GiB for Qwen, or 1 GiB for other backends. If it is not, `auto` reloads on CPU until the next offload and says so in a warning and a desktop notification; `--device gpu` fails the reload with the free and needed amounts. This check does not reserve memory or bound the workspace for long audio. Later allocations can still exhaust memory and abort the daemon; `model_idle_minutes = 0` avoids repeated offload/reload but does not prevent out-of-memory failures. The [historical pressure measurements](dev/memory.md#reload-under-gpu-memory-pressure) explain the original Parakeet allowance and its limits; they are not current-runtime memory ceilings.
 
-Startup warms one second of synthetic audio on CPU, or five seconds on GPU. Reload uses a one-second readiness probe on every backend. Longer dictations allocate larger buffers as needed; the first use of a new shape can also incur backend compilation work. [Linux reload measurements](dev/memory.md#linux-reload-measurements) show host and GPU memory for this policy.
+Qwen's larger allowance follows [Linux CUDA/Vulkan measurements](dev/memory.md#qwen-gpu-reload-measurements) with the 0.6B and 1.7B Q8_0 presets. The original 1 GiB allowance was smaller than their observed working space. These measurements cover the Juniper memo, chunk-boundary inputs, and a 270-second repeated-speech stress input at token budgets 512 and 4096. The margin is narrow for 1.7B; other artifacts and native Metal/Windows behavior remain uncalibrated. A model's download size is not its runtime memory requirement.
+
+Parakeet startup warms one second of synthetic audio on CPU, or five seconds on GPU; reload uses one second. Qwen startup and reload instead transcribe an embedded 11-second human speech sample with automatic language and a fixed 512-token budget. Readiness text is discarded and the user's language and token budget are restored before dictation. A deliberately tiny user budget can therefore fail the actual transcription without preventing readiness. Longer dictations allocate larger buffers as needed; the first use of a new shape can also incur backend compilation work. [Linux reload measurements](dev/memory.md#linux-reload-measurements) show host and GPU memory for the earlier synthetic policy.
 
 `parakit --verbose status` reports `loaded`, `loading`, or `offloaded`, the effective timeout, and the last reload error until a successful reload clears it. Residency is separate from the recording/transcribing phase. Queries never load the model. During startup, residency can be unavailable until the worker publishes its initial state.
 
@@ -160,7 +162,7 @@ Session destruction releases owned CPU/GPU allocations, but process and driver c
 
 ## Model Cache
 
-With no `-m`, parakit uses the hosted [Q8_0 GGUF model](https://huggingface.co/pszemraj/parakeet-tdt-0.6b-v3-gguf). `PARAKIT_MODELS_DIR` overrides the model directory. Without that override, `XDG_CACHE_HOME` is honored on Linux and macOS, both fall back to `~/.cache/parakit/models/`, and Windows uses `%LOCALAPPDATA%\parakit\Cache\models\`.
+Without a CLI or configured model selection, parakit uses the hosted [Parakeet v3 Q8_0 GGUF model](https://huggingface.co/pszemraj/parakeet-tdt-0.6b-v3-gguf). `PARAKIT_MODELS_DIR` overrides the model directory. Without that override, `XDG_CACHE_HOME` is honored on Linux and macOS, both fall back to `~/.cache/parakit/models/`, and Windows uses `%LOCALAPPDATA%\parakit\Cache\models\`.
 
 Useful commands:
 
@@ -172,13 +174,51 @@ parakit cache dir
 parakit start -m /path/to/model.gguf
 ```
 
-`-m <path>` always wins and disables automatic fetch.
+`-m <path>` disables automatic fetch. It conflicts with `--model-preset` in the same command. Either CLI selection overrides both configured model selectors; `daemon.model` and `daemon.model_preset` conflict with each other even when a CLI selection is supplied.
 
 For locked-down or offline machines, seed the default model by placing `parakeet-tdt-0.6b-v3-Q8_0.gguf` in the directory printed by `parakit cache dir`. Use `PARAKIT_MODELS_DIR` when the approved model location is managed by IT or shared across a build image.
 
+### Model Presets
+
+Choose a hosted Q8_0 model explicitly. Qwen presets are experimental; Redux is retained for testing and comparison only:
+
+```bash
+parakit fetch --model-preset qwen3-asr-1.7b
+parakit start --model-preset qwen3-asr-1.7b --no-cleaning
+parakit start --model-preset parakeet-ultra
+```
+
+| Preset | Hosted repository | Exact artifact |
+| --- | --- | --- |
+| `parakeet-v3` | [pszemraj/parakeet-tdt-0.6b-v3-gguf](https://huggingface.co/pszemraj/parakeet-tdt-0.6b-v3-gguf) | `parakeet-tdt-0.6b-v3-Q8_0.gguf` |
+| `qwen3-asr-0.6b` | [cstr/qwen3-asr-0.6b-GGUF](https://huggingface.co/cstr/qwen3-asr-0.6b-GGUF) | `qwen3-asr-0.6b-q8_0.gguf` |
+| `qwen3-asr-1.7b` | [cstr/qwen3-asr-1.7b-GGUF](https://huggingface.co/cstr/qwen3-asr-1.7b-GGUF) | `qwen3-asr-1.7b-q8_0.gguf` |
+| `parakeet-ultra` | [cstr/parakeet-ultra-GGUF](https://huggingface.co/cstr/parakeet-ultra-GGUF) | `parakeet-ultra-q8_0.gguf` |
+| `parakeet-redux` | [cstr/parakeet-redux-GGUF](https://huggingface.co/cstr/parakeet-redux-GGUF) | `parakeet-redux-q8_0.gguf` |
+
+**Redux is experimental and for testing only.** It is not recommended for normal dictation in Parakit. It uses the ordinary Parakeet GGUF backend without packed ternary acceleration. In our [CPU comparison](dev/quality.md#parakeet-cpu-comparison), it was slower than Ultra and used similar RAM. The preset remains available for checkpoint and conversion comparisons.
+
+Redux's GGUF contains ordinary reconstructed weights. Photon's packed 178 MB weight footprint and [published CPU results](https://huggingface.co/moondream/parakeet-redux#performance) do not describe Parakit's runtime. The GGUF conversion also omits Moondream's VAD head, so Photon's pause-based segmentation is not a Parakit guarantee.
+
+Presets use the exact file above and check the local cache before contacting Hugging Face. Once fetched, they work offline. The four new presets select fixed provider commits from the model catalog; `--force` downloads that selected revision again. Parakeet v3 keeps its existing revision policy and top-level cache path; the other presets use the revision-specific Hub cache layout described below. Previously downloaded files remain usable with `-m`; changing a preset revision selects a separate cache destination. `fetch --model-preset` does not read daemon configuration. It accepts `--force` and conflicts with a custom source, `--file`, and `--sha256`.
+
+To convert an original checkpoint and quantize it locally, combine the preset with `--from-source`:
+
+```bash
+parakit fetch --from-source --model-preset qwen3-asr-1.7b --keep-f16
+```
+
+Both Qwen sizes and Moondream presets support this path. Add `--checkpoint-dir /path/to/original-snapshot` to use a local Hugging Face checkpoint instead of downloading one; the supplied directory is retained. A completed cached Q8_0 artifact is reused without network or conversion dependencies, so add `--force` to rebuild it. The rebuilt artifact uses the preset's normal cache destination and is selected by `start --model-preset NAME`. Dependencies, original model repositories, and Windows quantizer requirements are in [source rebuild](dev/README.md#source-rebuild). The unchanged `fetch --from-source` default rebuilds NVIDIA Parakeet v3 from `.nemo`.
+
+Qwen defaults to automatic language identification and a maximum of 512 generated tokens per native chunk. Use `--qwen-language en` (or `English`) to force a supported language, and `--qwen-max-new-tokens N` to set a budget from 1 to 4096. An incomplete decode fails the dictation rather than returning partial text. Qwen splits long audio into native chunks of at most 30 seconds, resetting decoder context for each chunk. The published Qwen ASR input capability of 1,200 seconds does not change Parakit's 270-second capture limit or imply continuous linguistic context across these cuts. Explicit Qwen flags require a Qwen model; persistent `[qwen]` settings are inactive for Parakeet. The [configuration reference](config_reference.toml) lists all supported language codes and names.
+
+Cleaning remains enabled by default and includes English rules. For multilingual dictation, use `--no-cleaning`, or set `[cleaning] enabled = false`; both bypass built-in and user cleaning rules.
+
+The [Qwen team](https://huggingface.co/Qwen/Qwen3-ASR-0.6B) publishes Qwen3-ASR under [Apache 2.0](https://www.apache.org/licenses/LICENSE-2.0). [Moondream Ultra](https://huggingface.co/moondream/parakeet-ultra) and [Redux](https://huggingface.co/moondream/parakeet-redux) derive from NVIDIA Parakeet v3 and use [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/); the linked cstr repositories provide the GGUF conversions.
+
 ### Other GGUF Builds
 
-`parakit fetch` can also acquire other Parakeet GGUF builds instead of the hosted default, for example the CrispASR author's repo or the widely-used `handy-computer` build:
+`parakit fetch` can also acquire custom GGUF builds instead of a preset, for example the CrispASR author's Parakeet repo or the widely-used `handy-computer` build:
 
 ```bash
 parakit fetch cstr/parakeet-tdt-0.6b-v3-GGUF
@@ -189,7 +229,7 @@ parakit fetch https://example.com/models/parakeet-q8.gguf --sha256 <64-hex-sha25
 
 The first positional argument is either a Hugging Face repo (`owner/repo`, optionally `owner/repo@revision`) or a direct `http://`/`https://` URL. Other URL schemes are rejected before any request. For a repo source, `--file` selects a specific `.gguf` file when the repo publishes more than one and none of them is uniquely named `q8_0`; otherwise parakit auto-selects the sole `.gguf` file, or the sole `q8_0` file among several. `--sha256` checks the completed download when you explicitly supply it; parakit does not otherwise hash models or turn an unpinned URL into a persistent checksum policy. Resumed downloads use the server's strong ETag or Last-Modified value through `If-Range`; a partial with no usable validator restarts instead of being appended blindly. `--force` discards any partial and replaces the cached file.
 
-Repo fetches land under `<cache dir>/hub/<owner>--<repo>--<key>/<file>`, where the key hashes the repo, revision, and file path; URL fetches land under `<cache dir>/url/<url-key>/<file>`, where the key separates exact source URLs that share a filename. Different revisions and URLs therefore cannot overwrite or resume onto one another. Both source classes are separate from the canonical top-level `parakeet-tdt-0.6b-v3-Q8_0.gguf`, and different repos remain separate even when they publish identically named files. `parakit cache list` shows each model's path, GGUF type, and size without reading every model to compute hashes. These fetched models are never picked up automatically: activate one with `parakit start -m <path>` or by setting `daemon.model = "<path>"` in `config.toml`, exactly as with any other custom GGUF.
+Repo fetches land under `<cache dir>/hub/<owner>--<repo>--<key>/<file>`, where the key hashes the repo, revision, and file path; URL fetches land under `<cache dir>/url/<url-key>/<file>`, where the key separates exact source URLs that share a filename. Different revisions and URLs therefore cannot overwrite or resume onto one another. Both source classes are separate from the canonical top-level `parakeet-tdt-0.6b-v3-Q8_0.gguf`, and different repos remain separate even when they publish identically named files. `parakit cache list` shows each model's path, GGUF type, and size without reading every model to compute hashes. Custom fetches are never picked up automatically: activate one with `parakit start -m <path>` or by setting `daemon.model = "<path>"` in `config.toml`, exactly as with any other custom GGUF. A preset selects its matching cached artifact.
 
 On a corporate network, set `HF_ENDPOINT` to point every Hugging Face request (including the default hosted download) at an internal mirror, and `HF_TOKEN` to authenticate against it or a gated repo. See [troubleshooting.md](troubleshooting.md#downloads-behind-a-corporate-proxy) for proxy and TLS-interception guidance.
 

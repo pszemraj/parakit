@@ -10,6 +10,8 @@ Install Rust via [rustup](https://rustup.rs) if you do not already have a toolch
 
 Cargo handles Rust packages. System packages are still needed for audio, desktop input, X11/XTest insertion, CMake, and optional accelerator SDKs.
 
+CMake 3.19 or newer is required for bundled builds.
+
 | OS | Packages |
 | --- | --- |
 | Ubuntu 24.04 | `cmake build-essential libasound2-dev libxtst-dev libxi-dev libx11-dev libxkbcommon-dev libevdev-dev libxdo-dev libgomp1 pkg-config` |
@@ -62,6 +64,30 @@ For Windows bundles, use the [backend selector and requirements](../scripts/wind
 
 On macOS, `aarch64-apple-darwin` is the supported target. Build from a native arm64 terminal; an x86_64/Rosetta build may not expose the Metal backend to ggml.
 
+## Isolated Development Builds
+
+Use `cargo build` with a separate [Cargo target directory](https://doc.rust-lang.org/cargo/reference/build-cache.html) when validating changes alongside an installed daemon. Build both the daemon and WAV helper, then invoke those binaries by path:
+
+```bash
+export CARGO_TARGET_DIR="$PWD/target/tmp/validation/cargo"
+cargo build --locked --bin parakit --example transcribe-file
+"$CARGO_TARGET_DIR/debug/parakit" --version
+```
+
+For Linux CUDA/Vulkan validation, use a separate GPU directory. This RTX 5090 example requires a CUDA Toolkit that supports architecture 120:
+
+```bash
+export CARGO_TARGET_DIR="$PWD/target/tmp/validation/cargo-gpu"
+export PARAKIT_CUDA_ARCHS=120-real
+export CARGO_BUILD_JOBS=2
+export CMAKE_BUILD_PARALLEL_LEVEL=2
+cargo build --locked --features cuda,vulkan --bin parakit --example transcribe-file
+```
+
+Use the architecture supported by your GPU and toolkit. The job limits bound compilation parallelism, not inference threads. Reuse the same directory, feature set, profile, and native build settings for subsequent builds. Changing them can require another native compile; `cargo check` does not produce the runnable binaries. An existing directory built with `--all-features` should keep that feature set when rebuilding; Linux intentionally ignores the unsupported Metal feature.
+
+Keep each binary's generated native libraries with its build tree. On Linux, check `ldd "$CARGO_TARGET_DIR/debug/parakit"` and `readelf -d "$CARGO_TARGET_DIR/debug/parakit"`: CrispASR/ggml should resolve inside that isolated directory, with `RPATH`. These builds do not install a binary or restart a running daemon. Runtime validation also needs isolated configuration and model state; follow the [Linux GPU procedure](dev/quality.md#linux-cudavulkan).
+
 ## CPU Builds
 
 The bundled CMake path enables ggml native CPU code, OpenMP, and CPU repacking. On Linux with GCC or Clang this usually means `-march=native` for the local machine.
@@ -112,7 +138,11 @@ Explicit `PARAKIT_BLAS` builds print the requested and selected modes as a Cargo
 
 The repository vendors [CrispASR](https://github.com/CrispStrobe/CrispASR) as a git submodule. `build.rs` owns its CMake build and installs shared libraries under `target/<profile>/build/parakit-*/out/lib`. Concrete target overrides in `.cargo/config.toml` suppress the sys crate's competing native build. Run Cargo from the repository root so this configuration is loaded; an outside-directory `cargo build --manifest-path ...` does not load it. Source rebuild requirements are in [dev/README.md#source-rebuild](dev/README.md#source-rebuild).
 
+The bundled build compiles patched copies of CrispASR's session and Parakeet orchestration sources under Cargo's `OUT_DIR`; it leaves the submodule unchanged. The patches make chunk failures fail the whole utterance, require Qwen decoding to reach EOS, and restrict language-metadata parsing to the output header. Qwen's energy filter also retains recoverable quiet clauses around louder speech. The orchestration copy removes the informational gap-recovery notice while preserving warnings, including the streamed-encoding fallback after an allocation failure. A deferred CMake hook substitutes these two translation units, which requires CMake 3.19+.
+
 `CRISPASR_LIB_DIR` is for advanced local experiments with an already-built compatible CrispASR tree. The library must match the pinned C ABI, including `crispasr_session_open_with_params`. Bundled builds must also provide compatible ggml libraries with the exported device registry entry points used by `parakit doctor` and `--device gpu` preflight. Parakit compiles its device-query adapter against the selected native source headers, including when `CRISPASR_LIB_DIR` skips native compilation; those headers must match the supplied libraries.
+
+External libraries must also supply the Qwen language/token setters and equivalent native correctness fixes before using Qwen. Selecting an external library skips the bundled source patches; the bundled build is the initial Qwen acceptance target.
 
 `CRISPASR_SRC_DIR` is an optional path to another CrispASR source tree containing `CMakeLists.txt`; by default, the bundled CMake build uses the vendored tree. An alternative tree must remain ABI-compatible with the vendored Rust crates; this override changes native sources and headers only, not the Rust path dependencies. It cannot replace a missing submodule because Cargo resolves those path dependencies before `build.rs` runs.
 
