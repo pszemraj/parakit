@@ -210,6 +210,18 @@ parakit fetch --from-source --model-preset qwen3-asr-1.7b --keep-f16
 
 Both Qwen sizes and Moondream presets support this path. Add `--checkpoint-dir /path/to/original-snapshot` to use a local Hugging Face checkpoint instead of downloading one; the supplied directory is retained. A completed cached Q8_0 artifact is reused without network or conversion dependencies, so add `--force` to rebuild it. The rebuilt artifact uses the preset's normal cache destination and is selected by `start --model-preset NAME`. Dependencies, original model repositories, and Windows quantizer requirements are in [source rebuild](dev/README.md#source-rebuild). The unchanged `fetch --from-source` default rebuilds NVIDIA Parakeet v3 from `.nemo`.
 
+For a locally generated Qwen Q6_K, download the preset's F16 GGUF and quantize it in one command:
+
+```bash
+parakit fetch --model-preset qwen3-asr-0.6b --quantize q6_k
+parakit fetch --model-preset qwen3-asr-1.7b --quantize q6_k
+parakit start -m /path/printed/by/fetch/qwen3-asr-1.7b-q6_k.gguf --device gpu
+```
+
+This path uses the preset's fixed provider revision and bundled `crispasr-quantize`; it needs no Python conversion environment or upload. A completed Q6_K is reused offline without the F16 source or quantizer. The downloaded F16 stays cached for requantization. `--force` refreshes F16 and rebuilds Q6_K. The audio encoder retains a Q8_0 precision floor, with source floating-point tensors where required; incompatible Q6_K row shapes also use the native quantizer's higher-precision fallbacks. Validate recognition on your own recordings before relying on a new quantization.
+
+`--quantize q6_k` currently supports the two Qwen presets and conflicts with `--from-source`. Q8_0 preset downloads and source rebuilding keep their existing behavior. Select the printed Q6_K path with `-m` or `daemon.model`; `--model-preset` still selects Q8_0. Windows requires a compatible external `crispasr-quantize.exe` on `PATH`, as with [source rebuilding](dev/README.md#source-rebuild).
+
 Qwen defaults to automatic language identification and a maximum of 512 generated tokens per native chunk. Use `--qwen-language en` (or `English`) to force a supported language, and `--qwen-max-new-tokens N` to set a budget from 1 to 4096. An incomplete decode fails the dictation rather than returning partial text. Qwen splits long audio into native chunks of at most 30 seconds, resetting decoder context for each chunk. The published Qwen ASR input capability of 1,200 seconds does not change Parakit's 270-second capture limit or imply continuous linguistic context across these cuts. Explicit Qwen flags require a Qwen model; persistent `[qwen]` settings are inactive for Parakeet. The [configuration reference](config_reference.toml) lists all supported language codes and names.
 
 Cleaning remains enabled by default and includes English rules. For multilingual dictation, use `--no-cleaning`, or set `[cleaning] enabled = false`; both bypass built-in and user cleaning rules.

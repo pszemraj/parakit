@@ -58,6 +58,8 @@ pub enum FetchSource {
     HostedQ8,
     /// Download the exact hosted Q8_0 artifact for a named model preset.
     Preset(ModelPreset),
+    /// Download a Qwen preset's F16 GGUF and cache a locally quantized Q6_K.
+    PresetQ6(ModelPreset),
     /// Convert an original Hugging Face checkpoint and quantize it to Q8_0.
     PresetSource {
         /// Named model whose original checkpoint is converted.
@@ -148,7 +150,8 @@ pub fn ensure_preset_model_with_verbosity(
 /// The path to the model the requested [`FetchSource`] produced: the
 /// preset cache path for [`FetchSource::Preset`] and [`FetchSource::PresetSource`], canonical cached Q8_0 path for
 /// [`FetchSource::HostedQ8`] and [`FetchSource::OfficialNemo`], or the `hub/…`/`url/…` cache path for
-/// [`FetchSource::HubRepo`]/[`FetchSource::Url`].
+/// [`FetchSource::HubRepo`]/[`FetchSource::Url`]. [`FetchSource::PresetQ6`] returns
+/// a separate cached Q6_K path beside the preset's hosted F16 source.
 ///
 /// # Errors
 ///
@@ -166,6 +169,13 @@ pub fn run(options: FetchOptions) -> Result<PathBuf> {
             &models_dir()?,
         ),
         FetchSource::Preset(preset) => run_preset(
+            &options,
+            &endpoint,
+            token.as_deref(),
+            *preset,
+            &models_dir()?,
+        ),
+        FetchSource::PresetQ6(preset) => run_qwen_q6(
             &options,
             &endpoint,
             token.as_deref(),
@@ -246,6 +256,47 @@ fn run_preset(
 
     options.status(format_args!("parakit: model ready: {}", dest.display()));
     Ok(dest)
+}
+
+fn run_qwen_q6(
+    options: &FetchOptions,
+    endpoint: &str,
+    token: Option<&str>,
+    preset: ModelPreset,
+    models_dir: &Path,
+) -> Result<PathBuf> {
+    let f16_filename = match preset {
+        ModelPreset::Qwen3Asr06b => "qwen3-asr-0.6b.gguf",
+        ModelPreset::Qwen3Asr17b => "qwen3-asr-1.7b-f16.gguf",
+        _ => bail!("--quantize q6_k requires a Qwen model preset"),
+    };
+    let (owner, repo) = preset.repo().split_once('/').expect("preset owner/repo");
+    let dir = hub::hub_cache_dir(models_dir, owner, repo, preset.revision(), f16_filename);
+    std::fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
+    let q6 = dir.join(preset.filename().replace("-q8_0.gguf", "-q6_k.gguf"));
+    let _lock = acquire_artifact_lock(&q6)?;
+    if !options.force && q6.is_file() {
+        print_ready_with_hint(options, &q6);
+        return Ok(q6);
+    }
+    let quantizer = quantize_bin_path()?;
+    let f16 = dir.join(f16_filename);
+    if options.force || !use_cached_download(options, &f16, None)? {
+        let url = hub::resolve_url(endpoint, owner, repo, preset.revision(), f16_filename);
+        let client = net::build_client()?;
+        options.status(format_args!("parakit: downloading {url}"));
+        download_and_verify(
+            options,
+            &client,
+            &url,
+            &f16,
+            net::bearer_for(&url, endpoint, token),
+            None,
+        )?;
+    }
+    quantize_gguf(&f16, &q6, &quantizer, "q6_k", options)?;
+    print_ready_with_hint(options, &q6);
+    Ok(q6)
 }
 
 fn run_official_nemo(
@@ -582,25 +633,38 @@ fn ensure_f16(
 }
 
 fn ensure_q8(f16: &Path, q8: &Path, quantize_bin: &Path, options: &FetchOptions) -> Result<()> {
-    let tmp_q8 = q8.with_extension("gguf.quantizing");
-    remove_if_exists(&tmp_q8)?;
-    options.status(format_args!("parakit: quantizing F16 GGUF to Q8_0"));
+    quantize_gguf(f16, q8, quantize_bin, "q8_0", options)
+}
+
+fn quantize_gguf(
+    f16: &Path,
+    dest: &Path,
+    quantize_bin: &Path,
+    quant: &str,
+    options: &FetchOptions,
+) -> Result<()> {
+    let staging = dest.with_extension("gguf.quantizing");
+    remove_if_exists(&staging)?;
+    options.status(format_args!(
+        "parakit: quantizing F16 GGUF to {}",
+        quant.to_ascii_uppercase()
+    ));
     let mut command = Command::new(quantize_bin);
     command
         .arg(f16)
-        .arg(&tmp_q8)
-        .arg("q8_0")
+        .arg(&staging)
+        .arg(quant)
         .env("CRISPASR_QWEN3ASR_QUANT_AUDIO", "0");
     if options.quiet {
         command.stdout(Stdio::null());
     }
     add_bundled_library_path(&mut command, quantize_bin);
-    if let Err(err) = run_command(&mut command, "quantize GGUF to Q8_0") {
-        let _ = remove_if_exists(&tmp_q8);
+    if let Err(err) = run_command(&mut command, "quantize GGUF") {
+        let _ = remove_if_exists(&staging);
         return Err(err);
     }
 
-    move_into_place(&tmp_q8, q8)?;
+    move_into_place(&staging, dest)?;
     Ok(())
 }
 

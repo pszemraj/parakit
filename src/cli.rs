@@ -66,7 +66,7 @@ pub(crate) enum Commands {
     Rules(RulesCli),
     /// Acquire a GGUF model: a hosted Q8_0 preset, a Hugging Face repo, or a direct URL.
     #[command(
-        long_about = "Acquire a GGUF model.\n\nWith no arguments, downloads the default Parakeet v3 Q8_0 GGUF. Named presets also select Q8_0. Add --from-source to convert the selected model's original checkpoint to F16 and quantize it locally to Q8_0.\n\nExamples:\n  parakit fetch\n  parakit fetch --model-preset qwen3-asr-1.7b\n  parakit fetch --model-preset parakeet-ultra\n  parakit fetch --from-source --model-preset qwen3-asr-1.7b --keep-f16\n  parakit fetch --from-source --model-preset parakeet-ultra --checkpoint-dir /path/to/snapshot\n  parakit fetch cstr/parakeet-tdt-0.6b-v3-GGUF --file parakeet-tdt-0.6b-v3-q4_k.gguf\n  parakit fetch handy-computer/parakeet-tdt-0.6b-v3-gguf@main\n  parakit fetch https://example.com/models/parakeet-q8.gguf --sha256 <64-hex>\n  parakit fetch --from-source\n\nFetching does not activate a model. Select a preset with `parakit start --model-preset NAME` or `daemon.model_preset`. Select a custom file with `-m <path>` or `daemon.model`."
+        long_about = "Acquire a GGUF model.\n\nWith no arguments, downloads the default Parakeet v3 Q8_0 GGUF. Named presets select Q8_0. For either Qwen preset, --quantize q6_k downloads its F16 GGUF and caches a local Q6_K; select the printed path with -m. Add --from-source to convert the selected model's original checkpoint to F16 and quantize it locally to Q8_0.\n\nExamples:\n  parakit fetch\n  parakit fetch --model-preset qwen3-asr-1.7b\n  parakit fetch --model-preset parakeet-ultra\n  parakit fetch --from-source --model-preset qwen3-asr-1.7b --keep-f16\n  parakit fetch --from-source --model-preset parakeet-ultra --checkpoint-dir /path/to/snapshot\n  parakit fetch cstr/parakeet-tdt-0.6b-v3-GGUF --file parakeet-tdt-0.6b-v3-q4_k.gguf\n  parakit fetch handy-computer/parakeet-tdt-0.6b-v3-gguf@main\n  parakit fetch https://example.com/models/parakeet-q8.gguf --sha256 <64-hex>\n  parakit fetch --from-source\n\nFetching does not activate a model. Select a preset with `parakit start --model-preset NAME` or `daemon.model_preset`. Select a custom file with `-m <path>` or `daemon.model`."
     )]
     Fetch(FetchCli),
     /// Inspect the parakit model cache.
@@ -447,6 +447,10 @@ pub(crate) struct FetchCli {
     /// Select a model's hosted Q8_0 artifact, or rebuild it with --from-source.
     #[arg(long, value_enum, conflicts_with_all = ["source", "file", "sha256"])]
     pub(crate) model_preset: Option<ModelPreset>,
+
+    /// Cache a local Qwen Q6_K made from the preset's hosted F16 GGUF; load it with -m.
+    #[arg(long, value_parser = ["q6_k"], requires = "model_preset", conflicts_with = "from_source")]
+    pub(crate) quantize: Option<String>,
     /// Model source: a Hugging Face repo (`owner/repo` or
     /// `owner/repo@revision`) or a direct `http://`/`https://` URL to a
     /// `.gguf` file. Omit to fetch the default hosted Q8_0 GGUF.

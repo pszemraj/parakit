@@ -7,6 +7,60 @@ use std::sync::{mpsc, Arc, Barrier};
 use std::time::{Duration, Instant};
 
 #[test]
+fn q6_cache_hit_needs_neither_f16_nor_network_and_preserves_q8() {
+    let dir = crate::test_support::fixture_root("parakit-fetch-tests", "q6-cache");
+    for (preset, f16_name) in [
+        (ModelPreset::Qwen3Asr06b, "qwen3-asr-0.6b.gguf"),
+        (ModelPreset::Qwen3Asr17b, "qwen3-asr-1.7b-f16.gguf"),
+    ] {
+        let (owner, repo) = preset.repo().split_once('/').unwrap();
+        let parent = hub::hub_cache_dir(&dir, owner, repo, preset.revision(), f16_name);
+        std::fs::create_dir_all(&parent).unwrap();
+        let q6 = parent.join(preset.filename().replace("-q8_0", "-q6_k"));
+        std::fs::write(&q6, b"cached Q6").unwrap();
+        let q8 = preset_cache_path(&dir, preset);
+        std::fs::create_dir_all(q8.parent().unwrap()).unwrap();
+        std::fs::write(&q8, b"existing Q8").unwrap();
+        let options = FetchOptions {
+            force: false,
+            quiet: true,
+            verbose: false,
+            source: FetchSource::PresetQ6(preset),
+        };
+        assert_eq!(
+            run_qwen_q6(&options, "https://example.invalid", None, preset, &dir).unwrap(),
+            q6
+        );
+        assert!(!parent.join(f16_name).exists());
+        assert_eq!(std::fs::read(q8).unwrap(), b"existing Q8");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn failed_q6_quantization_preserves_completed_model_and_cleans_staging() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = crate::test_support::fixture_root("parakit-fetch-tests", "q6-failure");
+    let quantizer = dir.join("quantizer");
+    std::fs::write(&quantizer, "#!/bin/sh\n[ \"$3\" = q6_k ] && [ \"$CRISPASR_QWEN3ASR_QUANT_AUDIO\" = 0 ] || exit 2\nprintf partial > \"$2\"\nexit 1\n").unwrap();
+    std::fs::set_permissions(&quantizer, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let f16 = dir.join("f16.gguf");
+    let q6 = dir.join("q6.gguf");
+    std::fs::write(&f16, b"source").unwrap();
+    std::fs::write(&q6, b"completed").unwrap();
+    let options = FetchOptions {
+        force: true,
+        quiet: true,
+        verbose: false,
+        source: FetchSource::PresetQ6(ModelPreset::Qwen3Asr06b),
+    };
+    let error = quantize_gguf(&f16, &q6, &quantizer, "q6_k", &options).unwrap_err();
+    assert!(format!("{error:#}").contains("exit status: 1"), "{error:#}");
+    assert_eq!(std::fs::read(&q6).unwrap(), b"completed");
+    assert!(!q6.with_extension("gguf.quantizing").exists());
+}
+
+#[test]
 fn all_presets_reuse_cached_artifacts_without_network() {
     let dir = crate::test_support::fixture_root("parakit-fetch-tests", "preset-cache");
     for preset in [

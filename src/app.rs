@@ -235,6 +235,9 @@ fn resolve_fetch_source(cli: &FetchCli) -> Result<FetchSource> {
         });
     }
     if let Some(preset) = cli.model_preset {
+        if cli.quantize.is_some() {
+            return Ok(FetchSource::PresetQ6(preset));
+        }
         return Ok(FetchSource::Preset(preset));
     }
     fetch::source_from_cli(cli.source.clone(), cli.file.clone(), cli.sha256.clone())

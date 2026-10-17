@@ -56,6 +56,49 @@ fn source_rebuild_dispatch_preserves_legacy_and_selects_new_checkpoints() {
 }
 
 #[test]
+fn q6_fetch_selects_local_quantization_and_rejects_conflicting_inputs() {
+    for preset in [ModelPreset::Qwen3Asr06b, ModelPreset::Qwen3Asr17b] {
+        let cli = Cli::parse_from([
+            "parakit",
+            "fetch",
+            "--model-preset",
+            preset.id(),
+            "--quantize",
+            "q6_k",
+        ]);
+        let Some(Commands::Fetch(fetch)) = cli.command else {
+            panic!("expected fetch")
+        };
+        assert_eq!(
+            resolve_fetch_source(&fetch).unwrap(),
+            FetchSource::PresetQ6(preset)
+        );
+    }
+    for args in [
+        vec!["parakit", "fetch", "--quantize", "q6_k"],
+        vec![
+            "parakit",
+            "fetch",
+            "--model-preset",
+            "qwen3-asr-0.6b",
+            "--quantize",
+            "q4_k",
+        ],
+        vec![
+            "parakit",
+            "fetch",
+            "--model-preset",
+            "qwen3-asr-0.6b",
+            "--quantize",
+            "q6_k",
+            "--from-source",
+        ],
+    ] {
+        assert!(Cli::try_parse_from(args).is_err());
+    }
+}
+
+#[test]
 fn held_daemon_lock_requires_a_responsive_control_endpoint() {
     ensure_existing_daemon_responsive(true).unwrap();
     let error = ensure_existing_daemon_responsive(false).unwrap_err();
