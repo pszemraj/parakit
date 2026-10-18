@@ -8,7 +8,7 @@ Linux measurements on 2026-10-14 used the Qwen 0.6B and 1.7B Q8_0 presets, Crisp
 
 The resident-engine sequence was memo, short speech, 270 seconds of repeated JFK speech, then the same short speech; it ran twice with an idle offload after each cycle. Separate runs used automatic language/512 tokens and forced English/4096 tokens. The latter selects the maximum supported budget; it does not mean each chunk generated 4096 tokens. Repeated JFK is an artificial memory/context stress input, not a natural long-form quality recording.
 
-Beyond the model file and retained offloaded GPU state, these runs needed up to about 1.6 GiB for 0.6B and 1.8 GiB for 1.7B. The former model-size-plus-1-GiB reload check therefore admitted sessions without enough room for their observed dictation workspace. Bundled Qwen reloads require the model file size plus 2 GiB; other backends retain the 1 GiB allowance. The reload recipe retains the backend detected by the startup session, so this also applies to custom Qwen paths rather than depending on preset filenames.
+Beyond the model file and retained offloaded GPU state, these runs needed up to about 1.6 GiB for 0.6B and 1.8 GiB for 1.7B. See [idle model offload](../running.md#idle-model-offload) for the reload allowance and device policy.
 
 The following peaks are from the explicit GPU 4096-token lifecycle runs. Host high-water RSS includes startup and reload; it is not steady inference residency.
 
@@ -21,7 +21,9 @@ The following peaks are from the explicit GPU 4096-token lifecycle runs. Host hi
 
 Compare the allocation rise from an offloaded session with the free-memory requirement. Retained driver state is already excluded from free GPU memory and should not be charged again. CUDA retained about 568 MiB in these Qwen runs; Vulkan retained about 68-70 MiB. Host RSS and GPU allocation describe different accounting domains and should not be added together. Session close did not return all host RSS to the OS, and reload could peak above steady loaded RSS.
 
-The initial matrix sampled at 50 ms; the final worker pass used nominal 5 ms active and 50 ms idle intervals. These are observed lower bounds, not allocation ceilings. The 2 GiB allowance covers the tested Q8_0 inputs at budgets 512 and 4096 on this host, with a narrow margin for 1.7B. Other artifacts and native Metal/Windows behavior remain uncalibrated. No VRAM-filling pressure test was performed. The check does not reserve memory or prevent later allocation failure. Follow the [Linux GPU procedure](quality.md#linux-cudavulkan) to record commands, per-process stage measurements, and raw transcripts for another build.
+The initial matrix sampled at 50 ms; the final worker pass used nominal 5 ms active and 50 ms idle intervals. These are observed lower bounds, not allocation ceilings. The 2 GiB allowance covers the tested Q8_0 inputs at budgets 512 and 4096 on this host, with a narrow margin for 1.7B. These Q8 measurements do not qualify other artifacts or native Metal/Windows behavior. No VRAM-filling pressure test was performed. The check does not reserve memory or prevent later allocation failure. Follow the [Linux GPU procedure](quality.md#linux-cudavulkan) to record commands, per-process stage measurements, and raw transcripts for another build.
+
+An October 18 release-worker check with the shared native resampler and windowed attention measured Qwen 1.7B Q6_K on CUDA with forced English and a 4096-token budget. The memo output and options survived idle offload/reload. Process VRAM peaked at 4316 MiB against a 568 MiB offloaded baseline: 3748 MiB incremental, leaving about 221 MiB within the model-file-plus-2-GiB allowance. Sampled host RSS peaked at 2602 MiB and VmHWM at 2668 MiB. This qualifies that Q6 case only; the complete per-phase observations are retained under ignored `target/tmp/new-models/native-preprocessing/reload/runtime/`.
 
 ## Linux Reload Measurements
 
@@ -37,7 +39,7 @@ All three run metadata files recorded Parakit revision `5066d9f`, CrispASR pin `
 | CUDA | 1.26-1.27 GiB | 0.57-0.58 GiB | 0.68 GiB | 0.58 GiB | 1312 MiB | 2054 MiB | 566 MiB |
 | Vulkan | 0.88 GiB | 0.19 GiB | 0.28 GiB | 0.19 GiB | 746 MiB | 1491 MiB | 22 MiB |
 
-The CPU reload peak is almost twice its post-load residency. CUDA and Vulkan also peak above their post-load host checkpoints. A model file's size or a loaded checkpoint therefore does not bound RAM needed to reopen the session. GPU allocation rises during warmup and long inference, then falls after close. These are per-process observations for this host and recording, not memory ceilings; longer audio can require larger workspaces. Host and GPU counters describe different accounting domains and should not be added together.
+The CPU reload peak is almost twice its post-load residency. CUDA and Vulkan also peak above their post-load host checkpoints. A model file's size or a loaded checkpoint therefore does not bound RAM needed to reopen the session. GPU allocation rises during warmup and long inference, then falls after close. These are per-process observations for this host and recording, not memory ceilings; longer audio can require larger workspaces.
 
 ## Allocation Ownership
 

@@ -10,7 +10,7 @@ keep_trailing_period = true
 number_threshold = 5
 ```
 
-That is the same config as the commented starter file [example.toml](example.toml), which explains each choice. Save it as `config.toml` at the path printed by `parakit config path`. Every key is optional, and `parakit config init` writes a commented template listing all of them. The type, default, valid values, interactions, and warnings for each key and each parakit-owned runtime environment variable are in [config_reference.toml](config_reference.toml), which is itself a valid config file that holds every default.
+That is the same config as the commented starter file [example.toml](example.toml), which explains each choice. Save it as `config.toml` at the path printed by `parakit config path`. Every key is optional, and `parakit config init` writes a commented template listing all of them. The [annotated reference](config_reference.toml) lists every key with its type, default, accepted values, interactions, and warnings, and documents parakit-owned environment variables. It is itself a valid config file that holds every default.
 
 > [!IMPORTANT]
 > The daemon reads this file once at startup and does not watch it. Restart the daemon after every edit.
@@ -36,45 +36,7 @@ parakit config edit
 
 `config path` prints the resolved path without reading the file. `config init` creates any missing parent directories and writes the fully commented template. `config show`, which is also what bare `parakit config` runs, loads and validates the file and prints the resolved path plus the effective value of every key. `config edit` writes the template first when the file is missing, then opens the file in `$VISUAL`, or in `$EDITOR` when `VISUAL` is unset, empty, or whitespace-only.
 
-`config show` output for the example config above:
-
-```text
-$ parakit config show
-parakit config
-  path: /home/user/.config/parakit/config.toml
-  exists: true
-  daemon:
-    model: (default: hosted Q8_0)
-    model_preset: (default: parakeet-v3)
-    quantize: q8_0
-    device: (default: auto)
-    threads: (default: auto-detected)
-    paste_mode: (default: platform)
-    keep_transcript_clipboard: false
-    sounds: true
-    verbose: false
-    model_idle_minutes: 10
-    transcript_history: (default: 10)
-  qwen:
-    language: auto
-    max_new_tokens: 512
-  cleaning:
-    enabled: true
-    profile: safe
-    keep_trailing_period: true
-    number_threshold: 5
-    disabled_rules: []
-  logging:
-    dir: (disabled)
-  hotkey:
-    backend: (default: auto)
-  rules:
-    user rules: 0
-```
-
-A key that is not set in the file shows a parenthesized default (`device`, `threads`, `paste_mode`, `transcript_history`, `number_threshold`, `hotkey.backend`), `(default: hosted Q8_0)` for `model`, or `(disabled)` for `logging.dir`. Booleans, `profile`, `keep_trailing_period`, `disabled_rules`, and the idle timeout print their effective values directly. On Linux the output has the `hotkey:` section shown above with the selected `backend`; other platforms omit it. Each user rule adds a `name (position)` line under the `user rules` count.
-
-`model_preset` shows the selected name, or `(default: parakeet-v3)` when unset. When a preset is configured, `model` shows `(preset: NAME)`. `quantize` shows `q8_0`, `q6_k`, or `(from model file)` for a custom path. Startup prepares an uncached Q6_K automatically. The `qwen` section reports the normalized language (`auto` when detection is enabled) and effective token budget even when the selected model is Parakeet.
+On Linux, `config show` also includes the selected hotkey backend.
 
 ### Details
 
@@ -100,7 +62,7 @@ These daemon and cleaning flags live on `parakit start`. The profile, trailing-p
 
 Four booleans (`daemon.sounds`, `cleaning.enabled`, `cleaning.keep_trailing_period`, and `daemon.keep_transcript_clipboard`) each have a paired CLI flag, one that forces the value on and one that forces it off (for example `--sounds`/`--no-sounds`), so a config default can be overridden in either direction for a single invocation; the two flags in a pair conflict with each other. Disabled rule names from the CLI and the config are merged, and a few settings are config-only. Those exact interactions are documented on each key in [config_reference.toml](config_reference.toml).
 
-Model selection is resolved as one choice per source: CLI path or preset, then configured path or preset, then the unchanged Parakeet v3 default. `daemon.model` and `daemon.model_preset` conflict; setting both fails config validation even when a CLI selection overrides them. The same conflict applies to `--model` and `--model-preset` in one command. To use Qwen persistently:
+To configure Qwen persistently, select a preset and set the language and token budget:
 
 ```toml
 [daemon]
@@ -114,17 +76,17 @@ max_new_tokens = 512
 enabled = false
 ```
 
-The [preset table](running.md#model-presets) lists all five choices and their exact hosted artifacts. Qwen accepts the 30 supported language codes or English names listed in the reference, case-insensitively, including `yue`/`Cantonese` and `fil`/`Filipino`. `auto` detects the language; `max_new_tokens` accepts integers from 1 to 4096. `--qwen-language` and `--qwen-max-new-tokens` override these settings on `start`. Persistent Qwen settings are validated but inactive for Parakeet; explicit Qwen CLI controls with a non-Qwen model fail.
+See the [model preset guide](running.md#model-presets) for available models and the [configuration reference](config_reference.toml) for supported Qwen values. Persistent Qwen settings are validated but inactive for Parakeet.
 
 Cleaning is still enabled by default. The example disables it for multilingual dictation because built-in cleanup includes English rules. `enabled = false` bypasses both built-in and user rules, as does `parakit start --no-cleaning` for one invocation.
 
-Unknown keys are errors at every level, including inside each `[[rules.user]]` entry. Invalid TOML, invalid values, and rule-validation failures are hard errors that name the config path.
+TOML, unknown-key, invalid-value, and rule-validation errors name the config path. The [configuration reference](config_reference.toml) lists the accepted keys and values.
 
 For `daemon.model_idle_minutes` behavior, see [idle model offload](running.md#idle-model-offload).
 
 ## Validation and Recovery
 
-`parakit config show` catches TOML and schema errors, an empty `daemon.model` or `logging.dir`, conflicting model selectors, unknown presets, unsupported Qwen languages or token budgets, invalid cleaning thresholds, unknown disabled-rule names, and invalid or conflicting user rules. Daemon startup additionally checks resources that depend on the real machine, such as the model file, compute device, insertion backend, hotkey, audio, and permissions. The log directory is created and checked lazily on the first transcription write, so neither `config show` nor daemon startup can prove it is writable.
+`parakit config show` catches TOML and configuration errors. Daemon startup additionally checks machine-dependent resources such as the model file, compute device, insertion backend, hotkey, audio, and permissions. The log directory is created and checked on the first transcription write, so neither `config show` nor startup can prove it is writable.
 
 Use this edit loop for cleaning and user-rule changes:
 
@@ -139,7 +101,7 @@ When the result is right, stop the daemon and start it again with the startup co
 
 ```bash
 parakit stop
-parakit --quiet &
+parakit start --log-dir "$HOME/.parakit/logs" --quiet & disown
 ```
 
 A broken config does not block repair or control commands that do not need daemon settings: `fetch`, `cache`, `config path`, `config init`, `config edit`, `status`, `stop`, `copy-last`, `history`, and `test-paste`. `config show`, `doctor`, `rules list`, `rules test`, PTT simulation, and daemon startup do load it.

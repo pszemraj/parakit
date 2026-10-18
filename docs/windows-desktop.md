@@ -4,7 +4,7 @@ parakit runs from a Windows terminal and installs as a per-user bundle. Its hotk
 
 ## Build
 
-Build and install with the [Windows bundle scripts](../scripts/windows/README.md); a bare `cargo install --path .` does not copy the generated CrispASR/ggml DLLs beside `parakit.exe`. Shared native dependencies and backend controls are in [build.md](build.md).
+Build and install with the [Windows bundle scripts](../scripts/windows/README.md). Shared native dependencies are in [build.md#native-dependencies](build.md#native-dependencies). Native model and resampler checks are in [model validation](dev/model-validation.md#windows-cpu-and-supported-gpu-backends).
 
 ## Microphone Permissions
 
@@ -24,13 +24,7 @@ The chord is not configurable yet; Windows uses `Ctrl+Space`.
 
 ## Insertion
 
-See [insertion](running.md#insertion) for paste modes, clipboard staging, restore policy, and focus-change handling.
-
-Batch paste sends the selected chord as a single `SendInput` call. `direct` mode uses `enigo`'s Unicode `SendInput` path.
-
-Windows has no post-paste confirmation step like macOS's Accessibility polling. A background clipboard-history listener - a hidden message-only window that watches for clipboard-update notifications - lets parakit wait for its own staged write to actually reach the clipboard before restoring the previous contents, instead of guessing with a fixed delay. That listener only times the clipboard restore; it never confirms that the paste landed in the focused application. Because there is no landing signal, every Windows insertion record's `acknowledgement_kind` is `not_applicable`, whether or not clipboard-history observation was available for that paste. Full field semantics are in [logging.md](logging.md).
-
-Foreground-window capture, the pre-paste focus recheck, and the restriction against injecting into an elevated target application are described in [running.md#focus-changes](running.md#focus-changes).
+Paste modes, clipboard staging, and focus checks are described under [insertion](running.md#insertion). When its background clipboard-history listener is available, Windows uses it to time restoration after the staged write reaches the clipboard; otherwise it uses a timed fallback. Neither path confirms that text landed in the target; see [insertion outcomes](logging.md#insertion-outcomes).
 
 ## `doctor --deep`
 

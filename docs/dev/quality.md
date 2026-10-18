@@ -82,7 +82,7 @@ CUDA_VISIBLE_DEVICES=0 GGML_VK_VISIBLE_DEVICES= \
   --log-dir "$PWD/target/tmp/validation/logs"
 ```
 
-For Vulkan, replace the CUDA environment prefix on both commands with `env -u GGML_VK_VISIBLE_DEVICES CUDA_VISIBLE_DEVICES=` or pin a Vulkan device explicitly. Exercise `parakeet-v3`, both Qwen sizes, `parakeet-ultra`, and `parakeet-redux` on the full Juniper memo and silence. For Qwen, also test 29-, 30-, and 31-second crops across its chunk boundary. Silence should produce an empty `Raw:` transcript in the helper and a worker no-speech error, without a successful transcript record. The worker's two idle waits take at least 126 seconds per model/backend pair.
+For Vulkan, replace the CUDA environment prefix on both commands with `env -u GGML_VK_VISIBLE_DEVICES CUDA_VISIBLE_DEVICES=` or pin a Vulkan device explicitly. Apply these commands to the six-preset Q8_0/Q6_K matrix and speech, silence, chunk-boundary, and reload cases in [native model validation](model-validation.md). Silence should produce an empty `Raw:` transcript in the helper and a worker no-speech error, without a successful transcript record. The worker's two idle waits take at least 126 seconds per model/backend pair.
 
 Retain commands, device diagnostics, raw transcripts, exit statuses, timings, and per-process memory samples under the ignored `target/tmp/` tree. For reload calibration, sample host RSS and GPU allocations through startup warmup, full inference, loaded idle, offload, and reload. Compare the increase from the offloaded GPU allocation with the model file size plus the reload allowance; retained driver memory is already unavailable to the free-memory check. Label sampled peaks as observations rather than ceilings. Successful runs with ample free VRAM do not establish out-of-memory recovery.
 
@@ -253,8 +253,6 @@ Keep context, system text and hotwords empty, with batch size one and greedy dec
 For [Ultra](https://huggingface.co/moondream/parakeet-ultra) and [Redux](https://huggingface.co/moondream/parakeet-redux), compare the Q8_0 presets with the original checkpoints through CrispASR's existing Hugging Face reference helpers and a short independent Photon run. Photon's packed Redux implementation and VAD segmentation differ from the GGUF runtime; record those conditions rather than attributing their speed or memory figures to parakit.
 
 Record raw transcripts, omissions, negation and number/entity disagreements, failures, cold/warm latency, and host/GPU memory. Listen to consequential disagreements and label human-reviewed text separately. Keep downloaded reference weights, dependencies, and generated evidence under ignored scratch directories. Check for active training or other GPU jobs before each hardware run and defer GPU tests while they occupy the device.
-
-Native platform acceptance remains separate: on macOS run both CPU and Metal for all presets; on Windows run the CPU bundle and available GPU backend. On each, check short and long WAV transcription, silence, repeated inference, idle offload/reload, explicit Qwen controls, quiet-mode errors, and real PTT insertion. Record unavailable runs as pending; Linux results do not establish these native platform results.
 
 ### Parakeet CPU Comparison
 

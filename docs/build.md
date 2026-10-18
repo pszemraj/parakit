@@ -17,7 +17,7 @@ CMake 3.19 or newer is required for bundled builds.
 | Ubuntu 24.04 | `cmake build-essential libasound2-dev libxtst-dev libxi-dev libx11-dev libxkbcommon-dev libevdev-dev libxdo-dev libgomp1 pkg-config` |
 | Fedora | `cmake gcc-c++ alsa-lib-devel libXtst-devel libXi-devel libX11-devel libxkbcommon-devel libevdev-devel xdotool-devel pkgconf` |
 | Arch | `cmake base-devel alsa-lib libxtst libxi libx11 libxkbcommon libevdev xdotool pkgconf` |
-| Windows | Visual Studio 2022 with the "Desktop development with C++" workload, plus CMake on `PATH`. GPU builds through the Windows scripts also require Ninja. |
+| Windows | Visual Studio 2022 with the "Desktop development with C++" workload, plus CMake on `PATH`. Windows bundle prerequisites and procedures are in the [Windows build guide](../scripts/windows/README.md). |
 | macOS | Apple Silicon with Xcode command line tools plus `cmake pkg-config`. |
 
 CUDA builds need the CUDA Toolkit with `nvcc` on `PATH`.
@@ -48,7 +48,7 @@ cargo install --locked --path .
 
 Install behavior:
 
-- Windows `cargo install --path .` copies `parakit.exe` but not the generated CrispASR/ggml DLLs. Use the scripts in [../scripts/windows/README.md](../scripts/windows/README.md) for a normal Windows install.
+- Windows installs need the generated CrispASR/ggml DLLs alongside `parakit.exe`; use the [Windows bundle procedure](../scripts/windows/README.md).
 - Linux and macOS source installs currently depend on the generated CrispASR shared libraries under Cargo's build output. Do not delete the repository `target/` tree.
 - GitHub auto-generated source archives are unsupported because they do not include the CrispASR submodule. A public release must ship either a source archive with submodules or a binary bundle whose shared libraries are colocated with the executable.
 
@@ -79,12 +79,10 @@ For Linux CUDA/Vulkan validation, use a separate GPU directory. This RTX 5090 ex
 ```bash
 export CARGO_TARGET_DIR="$PWD/target/tmp/validation/cargo-gpu"
 export PARAKIT_CUDA_ARCHS=120-real
-export CARGO_BUILD_JOBS=2
-export CMAKE_BUILD_PARALLEL_LEVEL=2
 cargo build --locked --features cuda,vulkan --bin parakit --example transcribe-file
 ```
 
-Use the architecture supported by your GPU and toolkit. The job limits bound compilation parallelism, not inference threads. Reuse the same directory, feature set, profile, and native build settings for subsequent builds. Changing them can require another native compile; `cargo check` does not produce the runnable binaries. An existing directory built with `--all-features` should keep that feature set when rebuilding; Linux intentionally ignores the unsupported Metal feature.
+Use the architecture supported by your GPU and toolkit. Reuse the same directory, feature set, profile, and native build settings for subsequent builds. Changing them can require another native compile; `cargo check` does not produce the runnable binaries. An existing directory built with `--all-features` should keep that feature set when rebuilding; Linux intentionally ignores the unsupported Metal feature.
 
 Keep each binary's generated native libraries with its build tree. On Linux, check `ldd "$CARGO_TARGET_DIR/debug/parakit"` and `readelf -d "$CARGO_TARGET_DIR/debug/parakit"`: CrispASR/ggml should resolve inside that isolated directory, with `RPATH`. These builds do not install a binary or restart a running daemon. Runtime validation also needs isolated configuration and model state; follow the [Linux GPU procedure](dev/quality.md#linux-cudavulkan).
 
@@ -182,4 +180,4 @@ otool -L target/debug/build/parakit-*/out/lib/libggml.dylib
 otool -l target/debug/parakit | grep -A2 LC_RPATH
 ```
 
-Metal-specific checks are in [macos-desktop.md#metal-verification](macos-desktop.md#metal-verification).
+Metal build and runtime checks are in [model-validation.md#macos-cpu-and-metal](dev/model-validation.md#macos-cpu-and-metal).

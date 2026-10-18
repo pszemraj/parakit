@@ -22,7 +22,8 @@
 
 - [dev/architecture.md](dev/architecture.md) - module map and platform work.
 - [dev/quality.md](dev/quality.md) - validation and quality checks.
+- [dev/model-validation.md](dev/model-validation.md) - native model, resampler, bundle, and physical desktop checks.
 - [dev/memory.md](dev/memory.md) - historical Linux reload measurements and current loader accounting.
-- [dev/crispasr-upgrade.md](dev/crispasr-upgrade.md) - CrispASR v0.8.42 upgrade rationale, measurements, and acceptance status.
+- [dev/crispasr-upgrade.md](dev/crispasr-upgrade.md) - CrispASR pin, dependency updates, measurements, and validation limits.
 - [dev/crispasr-macos-validation.md](dev/crispasr-macos-validation.md) - native CPU/Metal upgrade validation; the [earlier offload report](dev/macos-validation-2026-10-07.md) covers v0.6.6.
 - [dev/README.md](dev/README.md) - maintainer notes.

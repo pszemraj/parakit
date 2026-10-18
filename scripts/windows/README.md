@@ -33,14 +33,7 @@ The installer is intentionally per-user. It refuses system locations such as `C:
 
 If you omit `--backend`, the script opens a keyboard menu. It accepts Up/Down, `1`/`2`/`3`, and Enter. CPU starts highlighted, so pressing Enter selects CPU.
 
-`build.bat` is a `cmd.exe` wrapper around the PowerShell implementation. From PowerShell, call the implementation directly:
-
-```powershell
-.\scripts\windows\build.ps1
-.\scripts\windows\build.ps1 --backend vulkan
-```
-
-Run `.\scripts\windows\build.ps1 --help` for the script's live help.
+`build.bat` is a `cmd.exe` wrapper around the PowerShell implementation. In PowerShell, invoke `build.ps1` directly; pass `--help` for the script's live options.
 
 ## Build Options
 
@@ -89,6 +82,8 @@ Only one compute backend is supported per bundle.
 | CPU | `build.ps1 --backend cpu` | Visual Studio C++ tools, CMake, Rust | Generated CrispASR/ggml DLLs are bundled. BLAS is autodetected unless overridden. |
 | CUDA | `build.ps1 --backend cuda` | Visual Studio C++ tools, Ninja, NVIDIA CUDA Toolkit with `nvcc`; `CUDA_PATH` may be inferred from `nvcc.exe` on `PATH` | NVIDIA-only. CUDA runtime and cuBLAS DLLs must be found from the installed app directory or `PATH`, unless `--bundle-cuda-dlls` is used. |
 | Vulkan | `build.ps1 --backend vulkan` | Visual Studio C++ tools, Ninja, LunarG Vulkan SDK with `glslc`; `VULKAN_SDK` may be autodetected from `C:\VulkanSDK\*` or inferred from `glslc.exe` on `PATH` | Recommended Windows GPU backend for NVIDIA, AMD, and Intel. `vulkan-1.dll` is provided by the installed GPU driver. |
+
+Hosted Q8_0 inference does not need a local quantizer. Windows `fetch --quantize q6_k` and `fetch --from-source` require a compatible external `crispasr-quantize.exe` on `PATH`; source conversion also has Python requirements. See [source rebuild](../../docs/dev/README.md#source-rebuild).
 
 CUDA runtime DLL bundling is opt-in because `cublasLt64_*.dll` is large:
 

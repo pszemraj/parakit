@@ -67,8 +67,7 @@ Use `parakit --verbose doctor` to list the compute devices visible to bundled gg
 ## Background Use
 
 ```bash
-parakit --quiet &
-disown
+parakit start --log-dir "$HOME/.parakit/logs" --quiet & disown
 ```
 
 `--quiet` suppresses normal stdout, including startup lines and transcripts. Errors and warnings still go to stderr. Unless `--verbose` is set, native informational loader lines are omitted while useful errors remain visible. Use `--verbose` for native loader diagnostics.
@@ -222,30 +221,26 @@ Redux's GGUF contains ordinary reconstructed weights. Photon's packed 178 MB wei
 
 Presets use the exact file above and check the local cache before contacting Hugging Face. Once fetched, they work offline. All presets except v3 select fixed provider commits from the model catalog; `--force` downloads that selected revision again. Parakeet v3 keeps its existing revision policy and top-level cache path; the other presets use the revision-specific Hub cache layout described below. Previously downloaded files remain usable with `-m`; changing a preset revision selects a separate cache destination. `fetch --model-preset` does not read daemon configuration. It accepts `--force` and conflicts with a custom source, `--file`, and `--sha256`.
 
-To convert an original checkpoint and quantize it locally, combine the preset with `--from-source`:
+Qwen and Moondream presets can also be rebuilt from their original checkpoints with `--from-source`:
 
 ```bash
 parakit fetch --from-source --model-preset qwen3-asr-1.7b --keep-f16
 ```
 
-Both Qwen sizes and Moondream presets support this path. Add `--checkpoint-dir /path/to/original-snapshot` to use a local Hugging Face checkpoint instead of downloading one; the supplied directory is retained. A completed cached Q8_0 artifact is reused without network or conversion dependencies, so add `--force` to rebuild it. The rebuilt artifact uses the preset's normal cache destination and is selected by `start --model-preset NAME`. Dependencies, original model repositories, and Windows quantizer requirements are in [source rebuild](dev/README.md#source-rebuild). The unchanged `fetch --from-source` default rebuilds NVIDIA Parakeet v3 from `.nemo`. V2 supports hosted Q8_0 and local Q6_K acquisition, without source rebuilding.
+Use `--checkpoint-dir /path/to/original-snapshot` to supply a local checkpoint. The rebuild uses the preset's normal cache destination and is selected with `start --model-preset NAME`. Dependencies, supported checkpoints, and platform requirements are in [source rebuild](dev/README.md#source-rebuild). Without a preset, `fetch --from-source` continues to rebuild NVIDIA Parakeet v3 from `.nemo`; v2 has no source-rebuild path.
 
-For a locally generated Q6_K, download the preset's F16 GGUF and quantize it in one command:
+To prepare a locally generated Q6_K, fetch a preset's F16 GGUF and quantize it:
 
 ```bash
-parakit fetch --model-preset qwen3-asr-0.6b --quantize q6_k
 parakit fetch --model-preset qwen3-asr-1.7b --quantize q6_k
-parakit fetch --model-preset parakeet-v3 --quantize q6_k
-parakit fetch --model-preset parakeet-v2 --quantize q6_k
-parakit fetch --model-preset parakeet-ultra --quantize q6_k
 parakit start -m /path/printed/by/fetch/qwen3-asr-1.7b-q6_k.gguf --device gpu
 ```
 
-This path uses the preset's provider revision and bundled `crispasr-quantize`; it needs no Python conversion environment or upload. Parakeet v3 retains its existing `main` provider revision; the other presets use fixed revisions. A completed Q6_K is reused offline without the F16 source or quantizer. The downloaded F16 stays cached for requantization. `--force` refreshes F16 and rebuilds Q6_K. Qwen's audio encoder retains a Q8_0 precision floor, with source floating-point tensors where required. Parakeet's eligible encoder and decoder matrices use Q6_K. Incompatible row shapes use the native quantizer's higher-precision fallbacks, and non-quantizable tensors retain their source precision. Validate recognition on your own recordings before relying on a new quantization.
+The same command accepts any preset in the table, including Redux. It uses the preset's provider revision and bundled `crispasr-quantize`, with no Python conversion environment or upload. Cached Q6_K works offline; `--force` refreshes F16 and rebuilds it. Qwen retains a Q8_0-or-higher audio encoder, while Parakeet quantizes eligible encoder and decoder matrices to Q6_K; unsupported tensors keep higher precision. Validate recognition on your own recordings before relying on a new quantization.
 
-`fetch --quantize q6_k` supports all named presets and conflicts with `--from-source`. Redux remains experimental for testing and comparison. Q8_0 preset downloads and source rebuilding keep their existing behavior. Select the printed Q6_K path with `-m` or `daemon.model`, or use `start --model-preset NAME --quantize q6_k` to resolve the same cached file. GGUF Q6_K and [MLX's affine 6-bit quantization](https://ml-explore.github.io/mlx/build/html/python/_autosummary/mlx.core.quantize.html) use different representations; their recognition quality needs separate evaluation. Windows requires a compatible external `crispasr-quantize.exe` on `PATH`, as with [source rebuilding](dev/README.md#source-rebuild).
+`fetch --quantize q6_k` conflicts with `--from-source`. Select the generated file with `-m` or `daemon.model`, or resolve it through `start --model-preset NAME --quantize q6_k`. GGUF Q6_K differs from [MLX's affine 6-bit quantization](https://ml-explore.github.io/mlx/build/html/python/_autosummary/mlx.core.quantize.html), so evaluate them separately. Windows requires a compatible external `crispasr-quantize.exe` on `PATH`; see [source rebuild](dev/README.md#source-rebuild).
 
-Qwen defaults to automatic language identification and a maximum of 512 generated tokens per native chunk. Use `--qwen-language en` (or `English`) to force a supported language, and `--qwen-max-new-tokens N` to set a budget from 1 to 4096. An incomplete decode fails the dictation rather than returning partial text. Qwen splits long audio into native chunks of at most 30 seconds, resetting decoder context for each chunk. The published Qwen ASR input capability of 1,200 seconds does not change Parakit's 270-second capture limit or imply continuous linguistic context across these cuts. Explicit Qwen flags require a Qwen model; persistent `[qwen]` settings are inactive for Parakeet. The [configuration reference](config_reference.toml) lists all supported language codes and names.
+Qwen defaults to automatic language identification and a maximum of 512 generated tokens per native chunk. Use `--qwen-language en` (or `English`) to force a supported language, and `--qwen-max-new-tokens N` to set a budget from 1 to 4096. An incomplete decode fails the dictation rather than returning partial text. Qwen splits long audio into native chunks of at most 30 seconds, resetting decoder context for each chunk. Windowed audio attention is enabled by default; set `CRISP_AUDIO_WINDOWED_ATTN` in the launching environment to override it for native comparisons. The [Qwen validation procedure](dev/quality.md#qwen-and-moondream-comparisons) covers the comparison. The published Qwen ASR input capability of 1,200 seconds does not change Parakit's 270-second capture limit or imply continuous linguistic context across these cuts. Explicit Qwen flags require a Qwen model; persistent `[qwen]` settings are inactive for Parakeet. The [configuration reference](config_reference.toml) lists all supported language codes and names, plus the environment override.
 
 Cleaning remains enabled by default and includes English rules. For multilingual dictation, use `--no-cleaning`, or set `[cleaning] enabled = false`; both bypass built-in and user cleaning rules.
 
@@ -270,7 +265,9 @@ On a corporate network, set `HF_ENDPOINT` to point every Hugging Face request (i
 
 ## Microphone
 
-parakit follows the OS default input device and avoids monitor/loopback/virtual sources unless no better input is available. When CPAL reports a mono stream with the same sample rate and sample format as the default stream, parakit opens the mono stream. Otherwise it opens the default stream and downmixes multi-channel input to mono before resampling and before model inference. The model input is always 16 kHz mono PCM. Microphone capture and WAV helpers share native resampling, including draining the final filter tail; no Python preprocessing step or additional startup option is needed.
+parakit follows the OS default input device and avoids monitor/loopback/virtual sources unless no better input is available. When CPAL reports a mono stream with the same sample rate and sample format as the default stream, parakit opens the mono stream. Otherwise it opens the default stream and downmixes multi-channel input to mono before resampling and before model inference. The model input is always 16 kHz mono PCM.
+
+Microphone capture and WAV helpers share [native resampling](dev/quality.md#qwen-and-moondream-comparisons) on every platform and model when the input is not already 16 kHz. They drain the final filter tail to the recording's nominal sample count and reset between recordings. No Python preprocessing step or additional startup option is needed.
 
 On Linux and macOS, the microphone stream stays warm while the daemon is running; a bounded ring buffer feeds a drain thread that keeps 350 ms of pre-roll so the beginning of an utterance is less likely to be clipped. On Windows, parakit pauses the input stream while idle so `audiodg.exe` and driver-level microphone processing do not burn CPU when no recording is active. Recording start/stop is event-driven; idle device-change polling runs once per second.
 

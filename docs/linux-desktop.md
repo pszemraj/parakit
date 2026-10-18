@@ -51,7 +51,7 @@ In `terminal` or `standard` mode, `parakit doctor --deep` creates and focuses a 
 
 ## Focus Guard
 
-The X11 focus guard, fail-open query behavior, and clipboard fallback are described in [running.md#insertion](running.md#insertion). Parakit does not inspect application internals with AT-SPI.
+The X11 focus guard, fail-open query behavior, and clipboard fallback are described under [insertion](running.md#insertion). Parakit does not inspect application internals with AT-SPI.
 
 Batch paste follows the shared [modifier wait and clipboard-retention behavior](running.md#clipboard-staging-and-restore).
 

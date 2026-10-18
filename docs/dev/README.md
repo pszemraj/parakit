@@ -2,19 +2,11 @@
 
 Source-coverage setup and report commands are in [quality.md#rust-source-coverage](quality.md#rust-source-coverage).
 
-## Proportional Checks
-
-Every automatic check needs a concrete, repository-specific failure that it prevents. In parakit, security theater is integrity or safety machinery without a credible threat model, especially when it adds persistent state or can reject legitimate changes. Do not reintroduce automatic model hashing, TOFU or provenance manifests, cache-list verification, backend-switch approval flags, speculative circuit breakers, or compatibility layers for retired pre-1.0 CLI and wire formats.
-
-Hashes belong in an explicit `--sha256` request or a release process that actually requires byte identity, not normal fetch, startup, cache, build, or test paths. Keep checks that prevent demonstrated data loss, wrong-target insertion, unloadable bundles, credential leakage, or deletion outside a requested directory. A proposed manifest, validator, approval gate, retry policy, or compatibility shim should otherwise stay out unless its concrete failure mode and regression test justify the added state and friction.
-
 ## Model Artifacts
 
-End-user download, cache, and model-override behavior is in [running.md#model-cache](../running.md#model-cache).
+End-user model selection, downloads, cache behavior, and quantization are in [running.md#model-cache](../running.md#model-cache). F16 and official-runtime comparison procedures are in [quality.md#qwen-and-moondream-comparisons](quality.md#qwen-and-moondream-comparisons).
 
-Both Qwen3-ASR sizes and Moondream Ultra/Redux have externally hosted Q8_0 [presets](../running.md#model-presets). Qwen is experimental; Redux is retained for testing/comparison only and is not recommended for normal dictation. They can also be rebuilt from their original checkpoints with `fetch --from-source`. F16 and official-runtime comparison procedures are in [quality.md#qwen-and-moondream-comparisons](quality.md#qwen-and-moondream-comparisons).
-
-Hosted release files:
+Maintainer release files:
 
 | File | Role |
 | --- | --- |
@@ -69,7 +61,7 @@ parakit fetch --from-source --model-preset qwen3-asr-1.7b \
 
 This directory must contain the original checkpoint and tokenizer/configuration files, not a GGUF. It requires `--from-source` with a Qwen or Moondream preset. The pipeline never removes the supplied directory.
 
-A completed Q8_0 artifact in the preset cache is reused before checking Python dependencies or accessing the network. `--keep-f16` does not create a missing F16 intermediate on that cache hit. If only F16 is cached, it is quantized without re-reading the checkpoint, including a supplied `--checkpoint-dir`. Add `--force` to repeat conversion and quantization; for downloaded checkpoints this also refreshes the selected source commit. The four new presets record fixed provider and source commits in the model catalog, so refresh does not silently select a newer upstream revision. A new catalog revision uses a separate checkpoint directory, preventing stale shards from another revision entering conversion. Rebuilt Q8_0 goes to the same destination as the hosted preset: `parakit start --model-preset NAME` selects it without changing daemon configuration or the application default. There is no quantization selector; this path produces Q8_0.
+A completed Q8_0 artifact in the preset cache is reused before checking Python dependencies or accessing the network. `--keep-f16` does not create a missing F16 intermediate on that cache hit. If only F16 is cached, it is quantized without re-reading the checkpoint, including a supplied `--checkpoint-dir`. Add `--force` to repeat conversion and quantization; for downloaded checkpoints this also refreshes the selected source commit. Qwen and Moondream presets record fixed provider and source commits in the model catalog, so refresh does not silently select a newer upstream revision. A new catalog revision uses a separate checkpoint directory, preventing stale shards from another revision entering conversion. Rebuilt Q8_0 goes to the same destination as the hosted preset: `parakit start --model-preset NAME` selects it without changing daemon configuration or the application default. Source rebuilding produces Q8_0; the [cached Q6_K workflow](../running.md#model-presets) uses provider F16 instead.
 
 Redux conversion reconstructs its packed ternary weights into ordinary F16 weights before Q8_0 quantization. The resulting GGUF does not retain Photon's 178 MB representation, ternary acceleration, or Moondream VAD head. Building the artifact also does not establish transcription quality; follow the [conversion acceptance checks](quality.md#checkpoint-conversion-acceptance).
 
@@ -113,18 +105,4 @@ TODO: Complete native Linux and Windows validation for target-gated desktop tran
 
 ## Updating [CrispASR](https://github.com/CrispStrobe/CrispASR)
 
-Update the native sources and Rust bindings together:
-
-```bash
-git submodule update --init --recursive
-cd vendor/CrispASR
-git fetch --tags
-git checkout <tag-or-commit>
-git submodule update --init --recursive
-cd ../..
-cargo check
-git add vendor/CrispASR Cargo.lock
-cargo check --locked
-```
-
-The submodule tag updates both Rust path crates with the native sources; `cargo check` refreshes the lockfile while preserving unrelated locked dependencies. Update the CrispASR gitlink, both Rust path crates, and `Cargo.lock` together so they stay on the same release; use the full [upgrade report](crispasr-upgrade.md) for the acceptance checks.
+Use the [dependency update procedure](crispasr-upgrade.md#updating-crispasr) to keep native sources, Rust bindings, and the lockfile aligned.
