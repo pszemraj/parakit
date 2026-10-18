@@ -21,12 +21,13 @@ Use a full checkout with initialized submodules and the [native build prerequisi
 
 ~~~bash
 export CARGO_TARGET_DIR="$PWD/target/tmp/new-models/cargo-macos"
-export XDG_CACHE_HOME="$PWD/target/tmp/new-models/macos/cache"
+export XDG_CACHE_HOME="$PWD/target/nm-cache"
 export XDG_CONFIG_HOME="$PWD/target/tmp/new-models/macos/config"
 export XDG_RUNTIME_DIR="$PWD/target/tmp/new-models/macos/runtime"
 export PARAKIT_MODELS_DIR="$PWD/target/tmp/new-models/macos/models"
 export PARAKIT_CONFIG_PATH="$PWD/target/tmp/new-models/macos/config.toml"
-mkdir -p "$XDG_CACHE_HOME" "$XDG_CONFIG_HOME" "$XDG_RUNTIME_DIR" "$PARAKIT_MODELS_DIR" target/tmp/new-models/macos
+export GGML_METAL_PIPELINE_CACHE="$PWD/target/tmp/new-models/macos/metal-cache"
+mkdir -p "$XDG_CACHE_HOME" "$XDG_CONFIG_HOME" "$XDG_RUNTIME_DIR" "$PARAKIT_MODELS_DIR" "$GGML_METAL_PIPELINE_CACHE" target/tmp/new-models/macos
 printf '# Isolated native validation\n' > "$PARAKIT_CONFIG_PATH"
 git rev-parse HEAD > target/tmp/new-models/macos/commit.txt
 sw_vers > target/tmp/new-models/macos/os.txt
@@ -39,6 +40,8 @@ mkdir -p "$FIXTURES"
 unzip -o target/tmp/new-models/closure/laptop-fixtures.zip -d "$FIXTURES"
 "$BIN" --verbose doctor > target/tmp/new-models/macos/doctor.txt 2>&1
 ~~~
+
+Keep the cache root short enough for macOS's Unix-socket pathname limit. macOS places the control socket under `XDG_CACHE_HOME`, regardless of `XDG_RUNTIME_DIR`. The Metal cache override isolates the shader archive from the installed daemon's cache.
 
 Run both precisions for all six presets on CPU and Metal. Start with the isolated empty model directory: Q6_K fetch downloads the preset's F16 file and invokes the local quantizer, so its first run records cold quantization. Keep each command's output and exit status.
 
