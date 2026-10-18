@@ -250,7 +250,11 @@ pub(super) fn make_resampler(hw_rate: u32) -> Result<Option<ResamplerState>> {
     }
 
     let resampler = new_target_resampler(hw_rate)?;
-    Ok(Some(ResamplerState::new(resampler, RESAMPLE_CHUNK_SIZE)))
+    Ok(Some(ResamplerState::new(
+        resampler,
+        RESAMPLE_CHUNK_SIZE,
+        hw_rate,
+    )))
 }
 
 /// Optional resampling stage between the sample ring and the recording buffer.
@@ -303,10 +307,13 @@ pub(super) struct ResamplerState {
     pub(super) input_buf: Vec<Vec<f32>>,
     pub(super) output_buf: Vec<Vec<f32>>,
     pub(super) chunk_size: usize,
+    source_rate: u32,
+    input_samples: usize,
+    output_samples: usize,
 }
 
 impl ResamplerState {
-    fn new(resampler: SincFixedIn<f32>, chunk_size: usize) -> Self {
+    fn new(resampler: SincFixedIn<f32>, chunk_size: usize, source_rate: u32) -> Self {
         let output_len = resampler.output_frames_max();
         Self {
             resampler,
@@ -314,10 +321,14 @@ impl ResamplerState {
             input_buf: vec![vec![0.0; chunk_size]],
             output_buf: vec![vec![0.0; output_len]],
             chunk_size,
+            source_rate,
+            input_samples: 0,
+            output_samples: 0,
         }
     }
 
     fn process(&mut self, input: &[f32], out: &mut Vec<f32>) {
+        self.input_samples += input.len();
         self.scratch.extend_from_slice(input);
         let mut processed = 0;
         while self.scratch.len().saturating_sub(processed) >= self.chunk_size {
@@ -338,6 +349,11 @@ impl ResamplerState {
     }
 
     fn flush_recording(&mut self, out: &mut Vec<f32>) {
+        let expected = (self.input_samples as f64 * f64::from(TARGET_RATE)
+            / f64::from(self.source_rate))
+        .ceil() as usize;
+        let remaining = expected.saturating_sub(self.output_samples);
+        let start = out.len();
         if !self.scratch.is_empty() {
             debug_assert!(self.scratch.len() < self.chunk_size);
             self.input_buf[0].fill(0.0);
@@ -345,15 +361,23 @@ impl ResamplerState {
             self.scratch.clear();
             self.process_chunk(out);
         }
-        self.resampler.reset();
+        if self.output_samples < expected {
+            self.input_buf[0].fill(0.0);
+            self.process_chunk(out);
+        }
+        out.truncate(start + remaining);
+        self.reset_recording();
     }
 
     fn reset_recording(&mut self) {
         self.scratch.clear();
         self.resampler.reset();
+        self.input_samples = 0;
+        self.output_samples = 0;
     }
 
     fn process_chunk(&mut self, out: &mut Vec<f32>) {
+        let start = out.len();
         if let Err(e) = process_resample_chunk(
             &mut self.resampler,
             &self.input_buf,
@@ -365,5 +389,6 @@ impl ResamplerState {
                 "parakit: resampler error (dropped chunk): {e}"
             );
         }
+        self.output_samples += out.len() - start;
     }
 }

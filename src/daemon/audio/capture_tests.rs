@@ -686,3 +686,54 @@ fn resampler_flushes_resets_tail_and_reuses_chunk_buffers() {
     assert_eq!(resampler.output_buf[0].capacity(), output_capacity);
     assert!(resampler.scratch.is_empty());
 }
+
+#[test]
+fn capture_resampling_matches_wav_across_callbacks_and_recording_resets() {
+    use parakit::audio_file::prepare_wav_for_model;
+
+    let root = crate::test_support::fixture_root("capture-resampling", "wav-parity");
+    for rate in [8_000, 44_100, 48_000, 96_000] {
+        let mut pipeline = CapturePipeline {
+            resampler: make_resampler(rate).unwrap(),
+        };
+        for count in [100, 1024, 3072, 3172] {
+            let input = (0..count)
+                .map(|i| (i as f32 * 0.17).sin() * 0.25)
+                .collect::<Vec<_>>();
+            let path = root.join(format!("{rate}-{count}.wav"));
+            let mut writer = hound::WavWriter::create(
+                &path,
+                hound::WavSpec {
+                    channels: 1,
+                    sample_rate: rate,
+                    bits_per_sample: 32,
+                    sample_format: hound::SampleFormat::Float,
+                },
+            )
+            .unwrap();
+            for sample in &input {
+                writer.write_sample(*sample).unwrap();
+            }
+            writer.finalize().unwrap();
+            let expected = prepare_wav_for_model(&path).unwrap().samples;
+            for callback in [1, 480, 2048] {
+                pipeline.reset_recording();
+                let mut actual = Vec::new();
+                let mut scratch = Vec::new();
+                for chunk in input.chunks(callback) {
+                    actual.extend_from_slice(pipeline.process(chunk, &mut scratch));
+                }
+                pipeline.finish_recording(&mut actual);
+                assert_eq!(actual.len(), expected.len());
+                assert!(actual
+                    .iter()
+                    .zip(&expected)
+                    .all(|(a, b)| (a - b).abs() < 1e-6));
+                pipeline.reset_recording();
+                let mut empty = Vec::new();
+                pipeline.finish_recording(&mut empty);
+                assert!(empty.is_empty(), "the next recording inherited a tail");
+            }
+        }
+    }
+}

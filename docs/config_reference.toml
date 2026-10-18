@@ -437,6 +437,12 @@ backend = "auto"
 # The library treats a value starting with 0 as off, and any other value, including an empty string or an absent variable, as on.
 # To use another value, set it in the environment that launches parakit. The model is opened by that same process, and a change made while it runs has no effect. There is no config key or command-line flag for it.
 
+# CRISP_AUDIO_WINDOWED_ATTN
+# All platforms. Native Qwen audio-encoder attention control. Parakit sets it to 1 before native initialization unless it is already present, including an empty string.
+# Unset: windowed attention using the model's inference windows. Parakeet models do not use this control.
+# A value parsed as a nonzero integer enables windowing; 0, an empty value or a nonnumeric value keeps the native dense path for models without windowed-attention metadata. Models with explicit windowed-attention metadata retain that behavior.
+# Override it in the launching environment for reference comparisons; restart after changes. There is no config key or command-line flag for it.
+
 # CUDA_VISIBLE_DEVICES
 # CUDA builds. Read by the CUDA runtime, not by parakit. A comma-separated list of NVIDIA GPU indices or UUIDs that the process may use, so a single index pins inference to that GPU.
 # An empty value hides every GPU: daemon.device "auto" then runs on the CPU and "gpu" fails at startup. `parakit --verbose doctor` lists the devices that remain visible.

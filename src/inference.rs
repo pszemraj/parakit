@@ -16,9 +16,10 @@ use std::path::Path;
 /// without dropping the user's utterance.
 const MIN_INFERENCE_SAMPLES: usize = TARGET_RATE as usize;
 
-/// Initialize Parakit's lower-memory CrispASR defaults without replacing overrides.
+/// Initialize Parakit's CrispASR defaults without replacing overrides.
 ///
-/// Disables extra pointwise-Q8 and fused-QKV weight copies. Library callers
+/// Disables extra pointwise-Q8 and fused-QKV weight copies and enables windowed
+/// Qwen audio attention. Library callers
 /// can use this initializer at startup or provide these environment variables
 /// when launching their process; `Engine::open` does not mutate them. On
 /// Windows the defaults are also written to the C runtime's environment table.
@@ -28,11 +29,15 @@ const MIN_INFERENCE_SAMPLES: usize = TARGET_RATE as usize;
 /// Call before starting any threads and before native model initialization.
 /// Native code can read the process environment and caches these controls.
 pub unsafe fn initialize_crispasr_runtime_defaults() {
-    for key in ["CRISPASR_FC_PW_Q8", "CRISPASR_FC_FUSED_QKV"] {
+    for (key, value) in [
+        ("CRISPASR_FC_PW_Q8", "0"),
+        ("CRISPASR_FC_FUSED_QKV", "0"),
+        ("CRISP_AUDIO_WINDOWED_ATTN", "1"),
+    ] {
         if std::env::var_os(key).is_none() {
-            std::env::set_var(key, "0");
+            std::env::set_var(key, value);
             #[cfg(target_os = "windows")]
-            set_windows_crt_env_default(key);
+            set_windows_crt_env_default(key, value);
         }
     }
 }
@@ -44,11 +49,11 @@ pub unsafe fn initialize_crispasr_runtime_defaults() {
 /// reads these controls with `getenv`, which uses the C runtime copy; the
 /// MSVC build shares that runtime with CrispASR through `/MD`.
 #[cfg(target_os = "windows")]
-fn set_windows_crt_env_default(key: &str) {
-    if let Ok(key) = std::ffi::CString::new(key) {
+fn set_windows_crt_env_default(key: &str, value: &str) {
+    if let (Ok(key), Ok(value)) = (std::ffi::CString::new(key), std::ffi::CString::new(value)) {
         // SAFETY: Both arguments are NUL-terminated and `_putenv_s` copies
         // them. Callers uphold the single-threaded startup contract above.
-        unsafe { libc::putenv_s(key.as_ptr(), c"0".as_ptr()) };
+        unsafe { libc::putenv_s(key.as_ptr(), value.as_ptr()) };
     }
 }
 
