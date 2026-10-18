@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Exercise loaded Qwen session failures with a separate test-only native library.
 
-Requires a completed Linux bundled build with compile_commands.json. The source
+Requires a completed Linux or macOS bundled build with compile_commands.json. The source
 copy, object, library and results are written beneath --output. No vendor source,
 normal build object or installed library is changed. Run explicitly; this is not
 part of CI or the default Rust suite.
@@ -93,9 +93,21 @@ def build_library(build: Path, output: Path) -> Path:
     subprocess.run(compile_args, cwd=entry["directory"], check=True)
     link_args = shlex.split((build / "src/CMakeFiles/crispasr-lib.dir/link.txt").read_text(encoding="utf-8"))
     link_args = [str(obj) if arg.endswith("crispasr_c_api.cpp.o") else arg for arg in link_args]
-    library = output / "libcrispasr-faults.so"
+    original_library = Path(link_args[link_args.index("-o") + 1]).name
+    library = output / (original_library if sys.platform == "darwin" else "libcrispasr-faults.so")
     link_args[link_args.index("-o") + 1] = str(library)
     subprocess.run(link_args, cwd=build / "src", check=True)
+    if sys.platform == "darwin":
+        # dyld resolves the executable's existing install name from this
+        # directory. Keep every version alias local to the fault library.
+        for installed in (build.parent / "lib").glob("libcrispasr*.dylib"):
+            alias = output / installed.name
+            if alias != library:
+                alias.symlink_to(library.name)
+    (output / "build-commands.json").write_text(json.dumps({
+        "compile": compile_args, "compile_cwd": entry["directory"],
+        "link": link_args, "link_cwd": str(build / "src"),
+    }, indent=2) + "\n", encoding="utf-8")
     return library
 
 
@@ -108,7 +120,7 @@ def run_case(label: str, command: list[str], env: dict[str, str], output: Path) 
     return result.returncode, (output / f"{label}.out").read_text(encoding="utf-8"), (output / f"{label}.err").read_text(encoding="utf-8")
 
 
-def execute(native_build: Path, binary_dir: Path, model: Path, audio_path: Path, output: Path) -> None:
+def execute(native_build: Path, binary_dir: Path, model: Path, audio_path: Path, output: Path, device: str = "cpu") -> None:
     """Run five fault modes through both file and production worker paths."""
     output = output.resolve()
     output.mkdir(parents=True, exist_ok=True)
@@ -124,13 +136,17 @@ def execute(native_build: Path, binary_dir: Path, model: Path, audio_path: Path,
     library = build_library(native_build.resolve(), output)
     binary = binary_dir.resolve()
     speech = Path("vendor/CrispASR/bindings/go/samples/jfk.wav").resolve()
-    env = dict(os.environ, LD_PRELOAD=str(library), LD_LIBRARY_PATH=str(native_build.resolve().parent / "lib"),
+    native_libraries = str(native_build.resolve().parent / "lib")
+    loader = ({"DYLD_LIBRARY_PATH": f"{output}{os.pathsep}{native_libraries}"}
+              if sys.platform == "darwin" else
+              {"LD_PRELOAD": str(library), "LD_LIBRARY_PATH": native_libraries})
+    env = dict(os.environ, **loader,
                PARAKIT_CONFIG_PATH=str(output / "config.toml"),
                XDG_CACHE_HOME=str(output / "cache"), XDG_RUNTIME_DIR=str(Path("target/tmp/nmf-run").resolve()),
                OMP_NUM_THREADS="8", OPENBLAS_NUM_THREADS="8")
     Path(env["XDG_RUNTIME_DIR"]).mkdir(exist_ok=True)
     (output / "config.toml").write_text("# Isolated native correctness tests.\n", encoding="utf-8")
-    common = ["--model", str(model.resolve()), "--device", "cpu", "--threads", "8", "--qwen-language", "en"]
+    common = ["--model", str(model.resolve()), "--device", device, "--threads", "8", "--qwen-language", "en"]
     for mode in ("chunk-first", "chunk-middle", "chunk-last", "embed", "forward"):
         mode_env = dict(env, PARAKIT_TEST_QWEN_FAILURE=mode)
         for surface in ("file", "worker"):
@@ -153,15 +169,15 @@ def execute(native_build: Path, binary_dir: Path, model: Path, audio_path: Path,
                     raise RuntimeError(f"{label}: missing history read-back")
             print(f"passed {label}", flush=True)
     for language, canonical in (("en", "English"), ("yue", "Cantonese"), ("fil", "Filipino")):
-        command = [str(binary / "examples/transcribe-file"), "--model", str(model.resolve()), "--device", "cpu", "--threads", "8", "--warmup", "--audio", str(speech), "--qwen-language", language]
-        _, _, stderr = run_case(f"prefix-{language}", command, env, output)
-        if f"PARAKIT_TEST_PREFILL:language {canonical}<asr_text>" not in stderr:
-            raise RuntimeError(f"incorrect native assistant prefix for {language}")
+        command = [str(binary / "examples/transcribe-file"), "--model", str(model.resolve()), "--device", device, "--threads", "8", "--warmup", "--audio", str(speech), "--qwen-language", language]
+        status, _, stderr = run_case(f"prefix-{language}", command, env, output)
+        if status or f"PARAKIT_TEST_PREFILL:language {canonical}<asr_text>" not in stderr:
+            raise RuntimeError(f"native prefix check failed for {language} (exit {status})")
         print(f"passed native prefix {language}", flush=True)
     harness = max((path for path in (binary / "deps").glob("native_correctness_build-*")
                    if path.is_file() and os.access(path, os.X_OK)), key=lambda path: path.stat().st_mtime)
     status, stdout, stderr = run_case("warmup-restoration", [str(harness), "--exact", "qwen_readiness_error_restores_user_options", "--ignored", "--nocapture"],
-                                     dict(env, PARAKIT_TEST_QWEN_FAILURE="warmup-embed", PARAKIT_TEST_QWEN_MODEL=str(model.resolve())), output)
+                                     dict(env, PARAKIT_TEST_QWEN_FAILURE="warmup-embed", PARAKIT_TEST_QWEN_MODEL=str(model.resolve()), PARAKIT_TEST_QWEN_DEVICE=device), output)
     if status or "1 passed" not in stdout or "generated 1 of 1 tokens" not in stderr or "PARAKIT_TEST_PREFILL:language English<asr_text>" not in stderr:
         raise RuntimeError(f"failed readiness did not restore actual native user controls: {stderr[-1000:]}")
     print("passed failed readiness option restoration", flush=True)
@@ -170,14 +186,15 @@ def execute(native_build: Path, binary_dir: Path, model: Path, audio_path: Path,
 def main() -> int:
     """Parse explicit model/build inputs and run loaded native correctness checks."""
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    parser.add_argument("--native-build", type=Path, required=True, help="CMake build directory from the bundled CPU Cargo build")
+    parser.add_argument("--native-build", type=Path, required=True, help="CMake build directory from the bundled Cargo build")
     parser.add_argument("--binary-dir", type=Path, required=True, help="directory containing parakit and examples/transcribe-file")
     parser.add_argument("--model", type=Path, required=True, help="Qwen GGUF to load")
     parser.add_argument("--audio", type=Path, required=True, help="human speech WAV used to construct a 90-second failure fixture")
     parser.add_argument("--output", type=Path, required=True, help="ignored repository-local results/build directory; use a fresh directory")
+    parser.add_argument("--device", choices=("cpu", "gpu"), default="cpu", help="native device to exercise; GPU requires a matching bundled build")
     args = parser.parse_args()
     try:
-        execute(args.native_build, args.binary_dir, args.model, args.audio, args.output)
+        execute(args.native_build, args.binary_dir, args.model, args.audio, args.output, args.device)
     except (OSError, ValueError, wave.Error, RuntimeError, subprocess.CalledProcessError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 1

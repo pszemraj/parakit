@@ -10,16 +10,23 @@ use std::path::{Path, PathBuf};
 #[ignore = "requires PARAKIT_TEST_QWEN_MODEL and the separate warmup-embed fault library"]
 fn qwen_readiness_error_restores_user_options() {
     let model = std::env::var("PARAKIT_TEST_QWEN_MODEL").expect("explicit Qwen model");
+    let requested = std::env::var("PARAKIT_TEST_QWEN_DEVICE").unwrap_or_else(|_| "cpu".into());
+    let device = match requested.as_str() {
+        "cpu" => parakit::inference::DeviceMode::Cpu,
+        "gpu" => parakit::inference::DeviceMode::Gpu,
+        _ => panic!("PARAKIT_TEST_QWEN_DEVICE must be cpu or gpu"),
+    };
     let engine = parakit::inference::Engine::open_with_options(
         model,
         8,
-        parakit::inference::DeviceMode::Cpu,
+        device,
         &parakit::qwen::QwenOptions {
             language: Some("English".into()),
             max_new_tokens: 1,
         },
     )
     .unwrap();
+    assert_eq!(engine.device_mode(), device);
     assert!(parakit::warmup::run(&engine, &[1]).is_err());
     let wav = parakit::audio_file::prepare_wav_for_model(Path::new(
         "vendor/CrispASR/bindings/go/samples/jfk.wav",

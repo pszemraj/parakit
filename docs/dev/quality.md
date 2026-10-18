@@ -336,17 +336,18 @@ TODO: On a native Linux desktop, exercise direct typing and guarded paste with p
 
 Repeat `transcribe-file --audio` to run short, long, and short inputs on one loaded engine. The hidden worker simulation also accepts repeated `--simulate-ptt-audio` paths; it replays the full ordered sequence per `--simulate-ptt-repeat` cycle, then applies the requested idle interval. This exercises resident context reuse before offload/reload. Its failure path reads history back and rejects replacement of the preceding successful transcript.
 
-The loaded-session fault driver is a local Linux check with an explicit Qwen model:
+The loaded-session fault driver runs on Linux and macOS with an explicit Qwen model:
 
 ```bash
 python tests/native/run_qwen_faults.py \
   --native-build <isolated-target>/debug/build/parakit-<id>/out/build \
   --binary-dir <isolated-target>/debug \
   --model <qwen-q8.gguf> \
+  --device cpu \
   --audio vendor/CrispASR/bindings/go/samples/jfk.wav \
   --output target/tmp/qwen-native-faults
 ```
 
-First run `cargo test --test native_correctness_build` in the same isolated target directory to build the readiness-restoration test harness. Use its completed CPU native build directory containing `compile_commands.json`, and a fresh output directory. The driver compiles a separate corrected C API copy and relinks its own test library. Only that library contains fault controls; normal binaries and vendor sources are unchanged. First/middle/last chunk failures and greedy embedding/forward failures run through both file and worker paths. The worker first remembers a successful dictation, then checks history preservation and absence of successful logging/insertion for the failed input. Separate prefix cases inspect actual native English, Cantonese, and Filipino assistant prefills. They force those languages on English fixture audio to inspect prompt construction, not to measure multilingual recognition quality.
+First run `cargo test --test native_correctness_build` in the same isolated target directory to build the readiness-restoration test harness. Use the matching completed native build directory containing `compile_commands.json`, and a fresh output directory. CPU is the default; to test Metal, build both binaries and the readiness harness with `--features metal`, then pass `--device gpu`. On macOS the driver preserves the dylib basename and version aliases and sets `DYLD_LIBRARY_PATH` to load its private fault library. The driver compiles a separate corrected C API copy and relinks its own test library. Only that library contains fault controls; normal binaries and vendor sources are unchanged. First/middle/last chunk failures and greedy embedding/forward failures run through both file and worker paths. The worker first remembers a successful dictation, then checks history preservation and absence of successful logging/insertion for the failed input. Separate prefix cases inspect actual native English, Cantonese, and Filipino assistant prefills. They force those languages on English fixture audio to inspect prompt construction, not to measure multilingual recognition quality.
 
 The remaining native desktop checklist is in [model-validation.md](model-validation.md).
