@@ -98,4 +98,4 @@ otool -l "$(command -v parakit)" | grep -A2 LC_RPATH
 otool -s __DATA __ggml_metallib target/release/build/parakit-*/out/lib/libggml-metal.dylib | head
 ```
 
-A successful build or visible device does not establish macOS inference acceptance for Qwen, Parakeet v2, Q6_K, or the shared resampler; those native checks remain pending. Follow the [macOS CPU and Metal model-validation checklist](dev/model-validation.md#macos-cpu-and-metal) for model runs and the [quality procedures](dev/quality.md#qwen-and-moondream-comparisons) for resampler comparisons.
+Build success and device visibility alone do not establish inference acceptance. The [macOS validation report](dev/macos-model-validation-2026-10-18.md) records CPU/Metal model coverage and remaining physical checks. Use the [model-validation checklist](dev/model-validation.md#macos-cpu-and-metal) and [quality procedures](dev/quality.md#qwen-and-moondream-comparisons) when repeating those checks.
