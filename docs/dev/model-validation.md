@@ -2,7 +2,7 @@
 
 Run this checklist on the final feature-branch source on each available Mac and Windows laptop. Record the current commit, OS, hardware, backend, command logs, and physical observations. Linux results do not establish Metal or Windows behavior. A missing device or an unperformed physical check stays pending.
 
-The current Linux acceptance report covers all six presets at Q8_0 and Q6_K on CPU, CUDA, and Vulkan. Native Mac/Windows execution, physical microphone/PTT/insertion/cue checks, and fresh listening remain pending. The earlier [CrispASR macOS report](crispasr-macos-validation.md) and [October 7 macOS report](macos-validation-2026-10-07.md) document historical runs only; they do not qualify the current Qwen presets or shared resampler.
+The Linux acceptance report covers all six presets at Q8_0 and Q6_K on CPU, CUDA, and Vulkan. The [October 18 macOS report](macos-model-validation-2026-10-18.md) covers CPU/Metal execution at both precisions on the tested M5, including shared-resampler and idle-reload checks. Physical desktop checks, fresh listening, and native Windows execution remain pending. The earlier [CrispASR macOS report](crispasr-macos-validation.md) and [October 7 macOS report](macos-validation-2026-10-07.md) document historical runs only.
 
 Transfer the Git bundle, public fixture ZIP, and source archive from the closure package. Keep downloaded models and all test state inside the checkout. The Git bundle can be loaded into a full checkout without publishing it:
 
