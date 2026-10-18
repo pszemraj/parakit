@@ -320,6 +320,24 @@ Check:
 
 Run daemon/IPC checks sequentially with isolated config, cache/runtime paths, and a model copy. After a configured idle timeout, verify the first PTT still captures and inserts once, then check status and history. Make the test model unavailable while offloaded to verify reload failure, restore it, and confirm the next PTT recovers. Check stop/restart and sleep/wake on the native desktop. For audible cues, idle offload is silent. Hold PTT through reload and listen for the three-note reload cue followed by the usual listening tone when ready. Release during reload and confirm there is no delayed listening tone; a failed reload must not announce readiness. A failure at PTT start plays one two-pulse error cue; if the release retry also fails, it plays a second. Check the normal completion/error cues, the error cue after a capture with no speech, and `--no-sounds` too. Headless tests verify cue ordering and cancellation, but do not validate audible playback, physical input, or insertion. Record unobserved human checks and unavailable backend runs as pending.
 
+On macOS, an opt-in acoustic control plays two WAVs through the speakers and records them through the production CPAL/Rubato microphone path. It checks three successive captures (first WAV, second WAV, first WAV), retains only text and signal measurements, and can measure the real speaker cues. This does not synthesize or validate the physical global hotkey. Use public speech WAVs, an active desktop with microphone permission, and repository-local model, WAV, and report paths. The report file must already exist:
+
+```bash
+mkdir -p target/tmp/live-audio
+touch target/tmp/live-audio/capture.json
+PARAKIT_LIVE_MODEL=target/tmp/models/model.gguf \
+PARAKIT_LIVE_DEVICE=gpu \
+PARAKIT_LIVE_WAV=target/tmp/first.wav \
+PARAKIT_LIVE_SECOND_WAV=target/tmp/second.wav \
+PARAKIT_LIVE_REPORT=target/tmp/live-audio/capture.json \
+PARAKIT_LIVE_CUES=1 \
+CRISPASR_FC_PW_Q8=0 CRISPASR_FC_FUSED_QKV=0 CRISP_AUDIO_WINDOWED_ATTN=1 \
+  cargo test --release --features metal --bin parakit \
+  daemon::audio::live_smoke::speaker_wav_through_live_capture -- --ignored --nocapture
+```
+
+Use `PARAKIT_LIVE_DEVICE=cpu` for CPU. Omit `PARAKIT_LIVE_CUES` to skip cue playback. Inspect the report even on failure: silent input, insufficient acoustic volume, and recognition failure are different outcomes. Compare the transcripts with the WAVs and inspect the following quiet capture for leftover samples. This test does not save microphone audio.
+
 For allocation context, see the [Linux reload measurements and ownership notes](memory.md).
 
 ### Clipboard Checks
