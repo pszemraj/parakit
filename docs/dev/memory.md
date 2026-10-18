@@ -25,6 +25,12 @@ The initial matrix sampled at 50 ms; the final worker pass used nominal 5 ms act
 
 An October 18 release-worker check with the shared native resampler and windowed attention measured Qwen 1.7B Q6_K on CUDA with forced English and a 4096-token budget. The memo output and options survived idle offload/reload. Process VRAM peaked at 4316 MiB against a 568 MiB offloaded baseline: 3748 MiB incremental, leaving about 221 MiB within the model-file-plus-2-GiB allowance. Sampled host RSS peaked at 2602 MiB and VmHWM at 2668 MiB. This qualifies that Q6 case only; the complete per-phase observations are retained under ignored `target/tmp/new-models/native-preprocessing/reload/runtime/`.
 
+## Metal Qwen Reload Accounting
+
+Qwen's main model and shared audio tower each register a full-file Metal buffer view with the default mmap loader. The audio tower filters tensor names, but the Metal fast path still registers the entire mapped GGUF. Metal's `currentAllocatedSize` therefore includes both registrations. The reload guard counts twice the selected model file size plus 2 GiB of workspace for Metal Qwen; CUDA/Vulkan retain their model-file-plus-2-GiB allowance.
+
+Use Metal allocation figures and host RSS separately because their unified-memory accounting overlaps. The guard follows the same Metal counter used by the free-memory query; it does not reserve memory or establish a universal allocation bound. Other artifacts, overrides and hardware still need native measurements using the [validation procedure](model-validation.md#qwen-options-long-input-and-reload).
+
 ## Linux Reload Measurements
 
 These Linux measurements describe the historical CrispASR v0.6.6 runtime; they do not characterize the current v0.8.42 runtime.

@@ -117,12 +117,17 @@ impl EngineRecipe {
                 return Ok(DeviceMode::Cpu);
             }
             let devices = parakit::gpu::devices();
-            let free_bytes = parakit::gpu::preferred_gpu_device_in(&devices)
+            let gpu = parakit::gpu::preferred_gpu_device_in(&devices);
+            let free_bytes = gpu
                 .filter(|device| device.total_bytes > 0)
                 .map(|device| device.free_bytes as u64);
-            let needed_bytes = std::fs::metadata(&self.model_path)
-                .map_or(0, |metadata| metadata.len())
-                + reload_gpu_workspace_bytes(&self.backend);
+            let model_bytes =
+                std::fs::metadata(&self.model_path).map_or(0, |metadata| metadata.len());
+            let needed_bytes = reload_gpu_required_bytes(
+                &self.backend,
+                model_bytes,
+                gpu.map(|device| device.name.as_str()),
+            );
             let free_mib = free_bytes.unwrap_or_default() / 1_048_576;
             let needed_mib = needed_bytes / 1_048_576;
             match reload_device_for_free_memory(self.device_mode, free_bytes, needed_bytes) {
@@ -167,6 +172,32 @@ fn reload_gpu_workspace_bytes(backend: &str) -> u64 {
     } else {
         RELOAD_GPU_WORKSPACE_BYTES
     }
+}
+
+/// Include the model registrations counted by the selected GPU's memory API.
+///
+/// # Arguments
+///
+/// * `backend` - Native speech backend identified at startup.
+/// * `model_bytes` - Size of the selected GGUF file.
+/// * `gpu_name` - Preferred ggml device name, such as Metal's `MTL0`.
+///
+/// # Returns
+///
+/// Model bytes plus workspace. Qwen's main model and shared audio tower each
+/// register a full-file mmap view on Metal, including the filtered tower load.
+/// Count both views in the same accounting domain as Metal's free-memory API.
+#[cfg(feature = "bundled")]
+fn reload_gpu_required_bytes(backend: &str, model_bytes: u64, gpu_name: Option<&str>) -> u64 {
+    let model_views = if backend == "qwen3" && gpu_name.is_some_and(|name| name.starts_with("MTL"))
+    {
+        2
+    } else {
+        1
+    };
+    model_bytes
+        .saturating_mul(model_views)
+        .saturating_add(reload_gpu_workspace_bytes(backend))
 }
 
 /// Decide the reload device from free GPU memory.
@@ -434,6 +465,42 @@ mod tests {
         assert_eq!(
             reload_device_for_free_memory(DeviceMode::Auto, Some(free_bytes), parakeet_needed),
             Some(DeviceMode::Auto)
+        );
+    }
+
+    #[cfg(feature = "bundled")]
+    #[test]
+    fn metal_qwen_reload_counts_both_registered_model_views() {
+        let model_bytes = 2390 * 1_048_576;
+        let free_bytes = 5 << 30;
+        let metal_needed = reload_gpu_required_bytes("qwen3", model_bytes, Some("MTL0"));
+        let cuda_needed = reload_gpu_required_bytes("qwen3", model_bytes, Some("CUDA0"));
+
+        // Five GiB passed the old guard but is below measured 1.7B Q8 Metal
+        // readiness allocation. Auto must fall back; explicit GPU must refuse.
+        assert_eq!(
+            reload_device_for_free_memory(DeviceMode::Auto, Some(free_bytes), metal_needed),
+            Some(DeviceMode::Cpu)
+        );
+        assert_eq!(
+            reload_device_for_free_memory(DeviceMode::Gpu, Some(free_bytes), metal_needed),
+            None
+        );
+        assert_eq!(
+            reload_device_for_free_memory(DeviceMode::Gpu, Some(metal_needed), metal_needed),
+            Some(DeviceMode::Gpu)
+        );
+        for name in ["CUDA0", "Vulkan0"] {
+            let needed = reload_gpu_required_bytes("qwen3", model_bytes, Some(name));
+            assert_eq!(needed, cuda_needed);
+            assert_eq!(
+                reload_device_for_free_memory(DeviceMode::Gpu, Some(free_bytes), needed),
+                Some(DeviceMode::Gpu)
+            );
+        }
+        assert_eq!(
+            reload_gpu_required_bytes("parakeet", model_bytes, Some("MTL0")),
+            model_bytes + RELOAD_GPU_WORKSPACE_BYTES
         );
     }
 

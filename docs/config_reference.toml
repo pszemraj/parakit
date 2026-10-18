@@ -82,8 +82,8 @@
 # In a build without the `bundled` feature (an external libcrispasr) there is no device probe. Startup only warns and still opens the model with the GPU requested, and the CrispASR library decides what happens without one.
 # Overridden by: the --device flag.
 # Only used when: the model is opened. The policy is applied again on every idle reload (see daemon.model_idle_minutes).
-# On a bundled reload, "auto" loads on the CPU until the next offload when free GPU memory is below the model file size plus working space: 2 GiB for Qwen, or 1 GiB for other backends. It says so in a warning and a desktop notification. "gpu" fails that reload instead.
-# Warning: the Qwen allowance follows Linux CUDA/Vulkan Q8_0 measurements at token budgets 512 and 4096, including a 270-second repeated-speech input. The 1.7B margin is narrow; this is not an allocation ceiling, and other artifacts and native Metal/Windows calibration remain pending.
+# On a bundled reload, "auto" loads on the CPU until the next offload when free GPU memory is below the required model registrations plus working space. Qwen on Metal counts two model file sizes plus 2 GiB; other Qwen GPUs count one file size plus 2 GiB; other models count one file size plus 1 GiB. It says so in a warning and a desktop notification. "gpu" fails that reload instead.
+# Warning: these Qwen allowances follow Linux CUDA/Vulkan and macOS Metal measurements at token budgets 512 and 4096, including a 270-second repeated-speech input. They are not allocation ceilings; other artifacts, hardware and native Windows calibration remain pending.
 # Recommended: "auto".
 device = "auto"
 
