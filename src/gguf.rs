@@ -68,13 +68,9 @@ fn detect_dtype(path: &Path) -> Result<Option<String>> {
         let value_type = read_u32(&mut file)?;
         if key == "general.file_type" {
             return match value_type {
-                GGUF_TYPE_UINT32 => Ok(file_type_name(read_u32(&mut file)?).map(str::to_string)),
-                GGUF_TYPE_INT32 => {
-                    let value = read_i32(&mut file)?;
-                    Ok(u32::try_from(value)
-                        .ok()
-                        .and_then(file_type_name)
-                        .map(str::to_string))
+                // Known file-type codes are nonnegative; sign-bit values are unknown.
+                GGUF_TYPE_UINT32 | GGUF_TYPE_INT32 => {
+                    Ok(file_type_name(read_u32(&mut file)?).map(str::to_string))
                 }
                 other => {
                     skip_value(&mut file, other)?;
@@ -194,12 +190,6 @@ fn read_u32(file: &mut File) -> Result<u32> {
     Ok(u32::from_le_bytes(buf))
 }
 
-fn read_i32(file: &mut File) -> Result<i32> {
-    let mut buf = [0_u8; 4];
-    file.read_exact(&mut buf)?;
-    Ok(i32::from_le_bytes(buf))
-}
-
 fn read_u64(file: &mut File) -> Result<u64> {
     let mut buf = [0_u8; 8];
     file.read_exact(&mut buf)?;
@@ -215,17 +205,21 @@ mod tests {
     fn detects_general_file_type() {
         let dir = crate::test_support::fixture_root("gguf-tests", "general-file-type");
         let path = dir.join("q8.gguf");
-        let mut file = File::create(&path).unwrap();
-        file.write_all(b"GGUF").unwrap();
-        file.write_all(&3_u32.to_le_bytes()).unwrap();
-        file.write_all(&0_u64.to_le_bytes()).unwrap();
-        file.write_all(&1_u64.to_le_bytes()).unwrap();
-        write_string(&mut file, "general.file_type");
-        file.write_all(&GGUF_TYPE_UINT32.to_le_bytes()).unwrap();
-        file.write_all(&7_u32.to_le_bytes()).unwrap();
-        drop(file);
+        for value_type in [GGUF_TYPE_UINT32, GGUF_TYPE_INT32] {
+            for (value, expected) in [(7_u32, Some("Q8_0")), (u32::MAX, None), (1 << 31, None)] {
+                let mut file = File::create(&path).unwrap();
+                file.write_all(b"GGUF").unwrap();
+                file.write_all(&3_u32.to_le_bytes()).unwrap();
+                file.write_all(&0_u64.to_le_bytes()).unwrap();
+                file.write_all(&1_u64.to_le_bytes()).unwrap();
+                write_string(&mut file, "general.file_type");
+                file.write_all(&value_type.to_le_bytes()).unwrap();
+                file.write_all(&value.to_le_bytes()).unwrap();
+                drop(file);
 
-        assert_eq!(detect_dtype(&path).unwrap().as_deref(), Some("Q8_0"));
+                assert_eq!(detect_dtype(&path).unwrap().as_deref(), expected);
+            }
+        }
     }
 
     #[test]
