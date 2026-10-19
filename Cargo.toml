@@ -79,6 +79,7 @@ serde_json = "1"
 # proxy support keep corporate Windows installs working behind managed TLS
 # inspection and proxy policy without disabling certificate validation.
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls-native-roots", "system-proxy"] }
+indicatif = { version = "0.18", default-features = false }
 sha2 = "0.10"
 
 # User config file (config.toml)

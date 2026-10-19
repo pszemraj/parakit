@@ -198,6 +198,8 @@ parakit start --model-preset parakeet-ultra --quantize q6_k \
 
 Use `parakeet-v2` for English-only v2, `parakeet-v3` for the original default, or either Qwen name in the table below. Without `--model-preset`, `--quantize q6_k` prepares v3. Missing Q6_K causes startup to download F16 if needed and quantize it locally; a first-preparation notice appears on stderr even with `--quiet`. Wait for readiness before dictating. Cached Q6_K starts work offline and idle reload reuses the resolved file.
 
+Interactive downloads show a progress bar with bytes downloaded, transfer speed, and ETA. If the server omits the file size, a byte counter is shown instead. Progress bars are hidden with `--quiet` or when stderr is redirected. Quantization is a separate stage announced after the download.
+
 To keep the same startup command each time, set these fields in the file printed by `parakit config path`:
 
 ```toml

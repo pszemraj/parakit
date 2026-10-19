@@ -12,6 +12,7 @@
 //! instead of an opaque `rustls`/`reqwest` error.
 
 use anyhow::{bail, Context, Result};
+use indicatif::{HumanBytes, ProgressBar, ProgressDrawTarget, ProgressState, ProgressStyle};
 use reqwest::blocking::{Client, RequestBuilder};
 use reqwest::header::{
     HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_RANGE, ETAG, IF_RANGE, LAST_MODIFIED, RANGE,
@@ -206,6 +207,7 @@ fn chain_looks_like_cert_failure(err: &anyhow::Error) -> bool {
 /// * `url` - URL to download.
 /// * `path` - Destination file; appended to if it already exists.
 /// * `bearer` - Bearer token to attach, if any (see [`bearer_for`]).
+/// * `quiet` - Hide the terminal download progress bar.
 ///
 /// # Returns
 ///
@@ -221,8 +223,9 @@ pub(super) fn download_with_resume(
     url: &str,
     path: &Path,
     bearer: Option<&str>,
+    quiet: bool,
 ) -> Result<()> {
-    with_cert_hint(download_with_resume_inner(client, url, path, bearer))
+    with_cert_hint(download_with_resume_inner(client, url, path, bearer, quiet))
 }
 
 fn download_with_resume_inner(
@@ -230,6 +233,7 @@ fn download_with_resume_inner(
     url: &str,
     path: &Path,
     bearer: Option<&str>,
+    quiet: bool,
 ) -> Result<()> {
     let (mut start, request) = prepare_download_request(client, url, path, bearer)?;
 
@@ -282,10 +286,56 @@ fn download_with_resume_inner(
             .open(path)
             .with_context(|| format!("open {}", path.display()))?
     };
-    std::io::copy(&mut response, &mut file)?;
-    file.flush()?;
+    let progress = download_progress(start, response.content_length(), quiet);
+    let result =
+        std::io::copy(&mut progress.wrap_read(&mut response), &mut file).and_then(|_| file.flush());
+    match result {
+        Ok(()) => progress.finish(),
+        Err(error) => {
+            progress.abandon_with_message("download interrupted; partial file kept");
+            return Err(error.into());
+        }
+    }
     let _ = super::remove_if_exists(&validator_path);
     Ok(())
+}
+
+fn download_progress(start: u64, remaining: Option<u64>, quiet: bool) -> ProgressBar {
+    let total = remaining.and_then(|remaining| start.checked_add(remaining));
+    let target = if quiet {
+        ProgressDrawTarget::hidden()
+    } else {
+        // Indicatif hides terminal redraws automatically when stderr is redirected.
+        ProgressDrawTarget::stderr()
+    };
+    let progress = ProgressBar::with_draw_target(total, target);
+    let template = if total.is_some() {
+        "{msg} [{wide_bar}] {percent:>3}% {bytes}/{total_bytes} {download_rate} ETA {eta}"
+    } else {
+        "{msg} {bytes} {download_rate}"
+    };
+    progress.set_style(
+        ProgressStyle::with_template(template)
+            .expect("valid download progress template")
+            .progress_chars("=> ")
+            .with_key(
+                "download_rate",
+                move |state: &ProgressState, writer: &mut dyn std::fmt::Write| {
+                    // Indicatif's finished rate includes the initial offset.
+                    let rate = if state.is_finished() {
+                        state.pos().saturating_sub(start) as f64 / state.elapsed().as_secs_f64()
+                    } else {
+                        state.per_sec()
+                    };
+                    let _ = write!(writer, "{}/s", HumanBytes(rate as u64));
+                },
+            ),
+    );
+    progress.set_message("parakit: downloading");
+    progress.set_position(start);
+    // Start live transfer estimates after the cached bytes.
+    progress.reset_eta();
+    progress
 }
 
 fn content_range_start(headers: &HeaderMap) -> Option<u64> {
@@ -519,10 +569,64 @@ mod tests {
             });
 
             let client = Client::builder().no_proxy().build().unwrap();
-            download_with_resume(&client, &url, &partial, None).unwrap();
+            download_with_resume(&client, &url, &partial, None, true).unwrap();
             server.join().unwrap();
 
             assert_eq!(std::fs::read(&partial).unwrap(), b"complete", "{name}");
+        }
+    }
+
+    #[test]
+    fn progress_downloads_preserve_resumes_unknown_lengths_and_partial_failures() {
+        for (name, prefix, response, expected, succeeds) in [
+            (
+                "resume-with-progress",
+                b"prefix".as_slice(),
+                "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 6-9/10\r\nContent-Length: 4\r\nConnection: close\r\n\r\ntail",
+                b"prefixtail".as_slice(),
+                true,
+            ),
+            (
+                "unknown-length-progress",
+                b"".as_slice(),
+                "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nETag: \"revision-1\"\r\nConnection: close\r\n\r\n6\r\nprefix\r\n4\r\ntail\r\n0\r\n\r\n",
+                b"prefixtail".as_slice(),
+                true,
+            ),
+            (
+                "interrupted-progress",
+                b"".as_slice(),
+                "HTTP/1.1 200 OK\r\nContent-Length: 10\r\nETag: \"revision-1\"\r\nConnection: close\r\n\r\nprefix",
+                b"prefix".as_slice(),
+                false,
+            ),
+        ] {
+            let dir = crate::test_support::fixture_root("parakit-fetch-tests", name);
+            let partial = dir.join("model.gguf.part");
+            if !prefix.is_empty() {
+                std::fs::write(&partial, prefix).unwrap();
+                std::fs::write(resume_validator_path(&partial), b"\"revision-1\"").unwrap();
+            }
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let url = format!("http://{}/model.gguf", listener.local_addr().unwrap());
+            let server = thread::spawn(move || {
+                use std::io::BufRead;
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut reader = std::io::BufReader::new(&mut stream);
+                let mut request = String::new();
+                while !request.ends_with("\r\n\r\n") {
+                    assert_ne!(reader.read_line(&mut request).unwrap(), 0);
+                }
+                assert_eq!(request.contains("range: bytes=6-"), !prefix.is_empty());
+                stream.write_all(response.as_bytes()).unwrap();
+            });
+
+            let client = Client::builder().no_proxy().build().unwrap();
+            let result = download_with_resume(&client, &url, &partial, None, false);
+            server.join().unwrap();
+            assert_eq!(result.is_ok(), succeeds, "{name}: {result:?}");
+            assert_eq!(std::fs::read(&partial).unwrap(), expected, "{name}");
+            assert_eq!(resume_validator_path(&partial).exists(), !succeeds, "{name}");
         }
     }
 

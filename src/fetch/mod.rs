@@ -534,7 +534,7 @@ fn download_and_verify(
     if options.force {
         remove_if_exists(&partial)?;
     }
-    net::download_with_resume(client, url, &partial, bearer)?;
+    net::download_with_resume(client, url, &partial, bearer, options.quiet)?;
     if let Some(expected) = expected_sha {
         let sha = crate::checksum::sha256_file_hex(&partial)?;
         if sha != expected {
