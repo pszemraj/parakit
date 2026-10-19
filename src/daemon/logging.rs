@@ -168,7 +168,7 @@ impl Logger {
         }
     }
 
-    /// Print the final transcript; raw text and timing require verbose mode.
+    /// Compare raw and cleaned text when they differ; timing requires verbose mode.
     ///
     /// # Arguments
     ///
@@ -180,17 +180,6 @@ impl Logger {
             return;
         }
 
-        if !self.is_verbose() {
-            let _ = writeln!(
-                anstream::stdout(),
-                "{} {}",
-                paint("Clean:", AnsiColor::Green),
-                paint(cleaned, AnsiColor::BrightGreen)
-            );
-            return;
-        }
-
-        let infer_ms = infer.as_secs_f32() * 1000.0;
         let spacing = if raw == cleaned {
             " "
         } else {
@@ -202,12 +191,20 @@ impl Logger {
             );
             "  "
         };
+        let timing = if self.is_verbose() {
+            let infer_ms = infer.as_secs_f32() * 1000.0;
+            format!(
+                "  {}",
+                paint(format!("({infer_ms:.0}ms)"), AnsiColor::BrightBlack)
+            )
+        } else {
+            String::new()
+        };
         let _ = writeln!(
             anstream::stdout(),
-            "{}{spacing}{}  {}",
+            "{}{spacing}{}{timing}",
             paint("Clean:", AnsiColor::Green),
-            paint(cleaned, AnsiColor::BrightGreen),
-            paint(format!("({infer_ms:.0}ms)"), AnsiColor::BrightBlack)
+            paint(cleaned, AnsiColor::BrightGreen)
         );
     }
 }

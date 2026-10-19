@@ -33,7 +33,7 @@ parakit
 Ready: hold Ctrl+Space to dictate. Ctrl+C to stop.
 ```
 
-On macOS the ready line says `Left Control+Space`; on Linux and Windows it says `Ctrl+Space`. Loading and conversion show an activity indicator in a terminal. Normal dictation prints the final cleaned transcript; raw text, timings, audio formats, and backend details require `--verbose`.
+On macOS the ready line says `Left Control+Space`; on Linux and Windows it says `Ctrl+Space`. Loading and conversion show an activity indicator in a terminal. Normal dictation shows the raw and cleaned transcripts when cleaning changes the text. Timings, audio formats, and backend details require `--verbose`.
 
 Use `--verbose` only when debugging startup, backend selection, or latency:
 
