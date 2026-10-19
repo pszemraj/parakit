@@ -305,39 +305,18 @@ where
                 diagnostic,
             }
         }
-        PasteConfirmation::UnverifiedFocusLost { elapsed, kind } => {
-            // The chord was posted into a verified-focused target and very
-            // likely landed, but the target became unobservable (app switch,
-            // or focus state that can no longer be read) before any
-            // evidence could appear. Unlike `Unverified`, where the same
-            // target stays observable, that target can never be re-checked,
-            // so `previous` is dropped here without being restored: the
-            // transcript is the only remaining copy if the paste did not
-            // land after all.
+        PasteConfirmation::UnverifiedFocusLost { elapsed, kind }
+        | PasteConfirmation::NoEvidence { elapsed, kind } => {
+            // Both cases retain the transcript instead of restoring over it;
+            // a superseding clipboard value must also remain untouched.
             let current = previous.is_current(clipboard);
             PasteReport {
-                outcome: PasteOutcome::PastedUnverified,
-                telemetry: InsertionTelemetry::acknowledged(
-                    kind,
-                    elapsed,
-                    current.then_some(false),
-                ),
-                diagnostic: previous.observation_error(),
-            }
-        }
-        PasteConfirmation::NoEvidence { elapsed, kind } => {
-            // No evidence the target consumed the paste: `previous` is
-            // dropped here without being restored, and the transcript
-            // intentionally stays on the clipboard so it is not lost.
-            // Uncertainty must never destroy the transcript.
-            let current = previous.is_current(clipboard);
-            PasteReport {
-                outcome: if current {
+                outcome: if current && matches!(confirmation, PasteConfirmation::NoEvidence { .. })
+                {
                     PasteOutcome::CopiedOnly
                 } else {
-                    // The chord may have landed before another copy replaced
-                    // the transcript. Reporting a pre-dispatch block invites
-                    // a duplicate insertion from history.
+                    // Lost focus or a superseding copy cannot rule out delivery;
+                    // reporting a pre-dispatch block invites a duplicate insertion.
                     PasteOutcome::PastedUnverified
                 },
                 telemetry: InsertionTelemetry::acknowledged(
