@@ -42,7 +42,7 @@ Ten English FLEURS clips were transcribed across all 24 configurations. Dataset 
 
 ## Metal reload correction
 
-The old Qwen requirement, one model file plus 2 GiB, was below observed Metal allocation. The pinned mmap loader registers the entire GGUF separately for Qwen's main model and its filtered audio tower. The reload guard now counts both registrations on Metal: twice the selected file size plus 2 GiB. CUDA/Vulkan and Parakeet accounting retain their existing policies. See [memory accounting](memory.md#metal-qwen-reload-accounting).
+The old Qwen requirement, one model file plus 2 GiB, was below observed Metal allocation. The corrected [reload requirement](../running.md#idle-model-offload) accounts for the loader's [two Metal buffer views](memory.md#metal-qwen-reload-accounting). CUDA/Vulkan and Parakeet policies were unchanged.
 
 The table summarizes profiled Qwen GPU short/long/reload runs, including the final large-model memo replay. Metal samples were taken at nominal 50 ms; host RSS was sampled separately at nominal 200 ms. These accounting domains overlap on unified memory and must not be added. Peaks are sampled observations, not allocation bounds.
 

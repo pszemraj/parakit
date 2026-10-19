@@ -67,13 +67,13 @@ for preset in "${PRESETS[@]}"; do
 done
 ~~~
 
-The fixture-rate files are upsampled constructions from public `short.wav`, not independent native-rate recordings. They cover 44.1 kHz mono, 48 kHz stereo/downmix, and full/partial 1024-frame source blocks; `short.wav` is 16 kHz and bypasses resampling. The helper and simulated worker both use the WAV loader; microphone capture needs the physical checks below. Compare their transcripts and run the existing resampler tests on each host:
+The fixture-rate files are upsampled constructions from public `short.wav`, not independent native-rate recordings. They cover 44.1 kHz mono, 48 kHz stereo/downmix, and full/partial 1024-frame source blocks; `short.wav` is 16 kHz and bypasses resampling. Follow the [WAV helper](quality.md#wav-quality-target) and [worker simulation](quality.md#ptt-worker-simulation) procedures; microphone capture needs the physical checks below. Compare their transcripts and run the existing resampler tests on each host:
 
 ~~~bash
 cargo test resampl
 ~~~
 
-The filter covers chunk/tail drain, reset/reuse, callback parity, recording boundaries, and the 16 kHz bypass. Retain build and doctor output; device inventory alone does not prove that inference used the accelerator. macOS build prerequisites are in [build.md](../build.md).
+The filter covers chunk/tail drain, reset/reuse, callback parity, recording boundaries, and the 16 kHz bypass. Retain build and doctor output; device inventory alone does not prove that inference used the accelerator.
 
 ## Windows CPU and supported GPU backends
 

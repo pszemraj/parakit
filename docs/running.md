@@ -226,24 +226,18 @@ Redux's GGUF contains ordinary reconstructed weights. Photon's packed 178 MB wei
 
 Presets use the exact file above and check the local cache before contacting Hugging Face. Once fetched, they work offline. All presets except v3 select fixed provider commits from the model catalog; `--force` downloads that selected revision again. Parakeet v3 keeps its existing revision policy and top-level cache path; the other presets use the revision-specific Hub cache layout described below. Previously downloaded files remain usable with `-m`; changing a preset revision selects a separate cache destination. `fetch --model-preset` does not read daemon configuration. It accepts `--force` and conflicts with a custom source, `--file`, and `--sha256`.
 
-Qwen and Moondream presets can also be rebuilt from their original checkpoints with `--from-source`:
+Qwen, Moondream, and NVIDIA v3 checkpoints can also be [rebuilt from source](dev/README.md#source-rebuild). Source rebuilds use the preset's normal Q8_0 cache destination; v2 has no source-rebuild path.
 
-```bash
-parakit fetch --from-source --model-preset qwen3-asr-1.7b --keep-f16
-```
-
-Use `--checkpoint-dir /path/to/original-snapshot` to supply a local checkpoint. The rebuild uses the preset's normal cache destination and is selected with `start --model-preset NAME`. Dependencies, supported checkpoints, and platform requirements are in [source rebuild](dev/README.md#source-rebuild). Without a preset, `fetch --from-source` continues to rebuild NVIDIA Parakeet v3 from `.nemo`; v2 has no source-rebuild path.
-
-To prepare a locally generated Q6_K, fetch a preset's F16 GGUF and quantize it:
+To prepare Q6_K without starting the daemon:
 
 ```bash
 parakit fetch --model-preset qwen3-asr-1.7b --quantize q6_k
 parakit start -m /path/printed/by/fetch/qwen3-asr-1.7b-q6_k.gguf --device gpu
 ```
 
-The same command accepts any preset in the table, including Redux. It uses the preset's provider revision and bundled `crispasr-quantize`, with no Python conversion environment or upload. Cached Q6_K works offline; `--force` refreshes F16 and rebuilds it. Qwen retains a Q8_0-or-higher audio encoder, while Parakeet quantizes eligible encoder and decoder matrices to Q6_K; unsupported tensors keep higher precision. Validate recognition on your own recordings before relying on a new quantization.
+This accepts every preset above and uses its provider revision with `crispasr-quantize`; no Python environment or upload is needed. `--force` refreshes F16 and rebuilds Q6_K. Qwen retains a Q8_0-or-higher audio encoder, while Parakeet quantizes eligible encoder and decoder matrices to Q6_K; unsupported tensors keep higher precision. Validate recognition on your own recordings before relying on a new quantization.
 
-`fetch --quantize q6_k` conflicts with `--from-source`. Select the generated file with `-m` or `daemon.model`, or resolve it through `start --model-preset NAME --quantize q6_k`. GGUF Q6_K differs from [MLX's affine 6-bit quantization](https://ml-explore.github.io/mlx/build/html/python/_autosummary/mlx.core.quantize.html), so evaluate them separately. Windows requires a compatible external `crispasr-quantize.exe` on `PATH`; see [source rebuild](dev/README.md#source-rebuild).
+`fetch --quantize q6_k` conflicts with `--from-source`. GGUF Q6_K differs from [MLX's affine 6-bit quantization](https://ml-explore.github.io/mlx/build/html/python/_autosummary/mlx.core.quantize.html), so evaluate them separately. Windows requires a compatible external `crispasr-quantize.exe` on `PATH`; see [source rebuild](dev/README.md#source-rebuild).
 
 Qwen defaults to automatic language identification and a maximum of 512 generated tokens per native chunk. Use `--qwen-language en` (or `English`) to force a supported language, and `--qwen-max-new-tokens N` to set a budget from 1 to 4096. An incomplete decode fails the dictation rather than returning partial text. Qwen splits long audio into native chunks of at most 30 seconds, resetting decoder context for each chunk. Windowed audio attention is enabled by default; set `CRISP_AUDIO_WINDOWED_ATTN` in the launching environment to override it for native comparisons. The [Qwen validation procedure](dev/quality.md#qwen-and-moondream-comparisons) covers the comparison. The published Qwen ASR input capability of 1,200 seconds does not change Parakit's 270-second capture limit or imply continuous linguistic context across these cuts. Explicit Qwen flags require a Qwen model; persistent `[qwen]` settings are inactive for Parakeet. The [configuration reference](config_reference.toml) lists all supported language codes and names, plus the environment override.
 
@@ -266,7 +260,7 @@ The first positional argument is either a Hugging Face repo (`owner/repo`, optio
 
 Repo fetches land under `<cache dir>/hub/<owner>--<repo>--<key>/<file>`, where the key hashes the repo, revision, and file path; URL fetches land under `<cache dir>/url/<url-key>/<file>`, where the key separates exact source URLs that share a filename. Different revisions and URLs therefore cannot overwrite or resume onto one another. Both source classes are separate from the canonical top-level `parakeet-tdt-0.6b-v3-Q8_0.gguf`, and different repos remain separate even when they publish identically named files. `parakit cache list` shows each model's path, GGUF type, and size without reading every model to compute hashes. Custom fetches are never picked up automatically: activate one with `parakit start -m <path>` or by setting `daemon.model = "<path>"` in `config.toml`, exactly as with any other custom GGUF. A preset selects its matching cached artifact.
 
-On a corporate network, set `HF_ENDPOINT` to point every Hugging Face request (including the default hosted download) at an internal mirror, and `HF_TOKEN` to authenticate against it or a gated repo. See [troubleshooting.md](troubleshooting.md#downloads-behind-a-corporate-proxy) for proxy and TLS-interception guidance.
+For mirrors, authentication, proxies, and TLS interception, see [corporate-network downloads](troubleshooting.md#downloads-behind-a-corporate-proxy).
 
 ## Microphone
 
@@ -332,7 +326,7 @@ Enable text-only JSONL logging with:
 parakit start --log-dir "$HOME/.parakit/logs"
 ```
 
-Set the same directory persistently with `logging.dir`. Logging is off by default and stores transcript text as plaintext. File layout, privacy implications, record correlation, and the complete schema are in [logging.md](logging.md).
+Set the same directory persistently with `logging.dir`. File layout, privacy implications, record correlation, and the complete schema are in [logging.md](logging.md).
 
 A capture with no detectable speech inserts nothing, so it plays the two-pulse error cue instead of the completion cue. Disable cue tones:
 

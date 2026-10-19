@@ -18,12 +18,7 @@ Start Parakit from a terminal opened in the current graphical login. General for
 
 Tmux is fine when the tmux server was started from the current desktop login. A tmux server that survived a GNOME logout/login can keep stale `DISPLAY` or `XAUTHORITY` values from the old session. In that case, `parakit doctor` may report an X11 error such as `Connection refused`.
 
-Fix that by starting a new terminal or tmux server from the current desktop session, then rerun:
-
-```bash
-parakit doctor && parakit --quiet &
-disown
-```
+Start a new terminal or tmux server from the current desktop session, rerun `parakit doctor`, then use the [background commands](running.md#background-use).
 
 If `doctor` reports that `Ctrl+Space` could not be registered, disable any desktop shortcut, input method, or keyboard remapper that already owns that chord and rerun `parakit doctor`. Ubuntu/GNOME IBus commonly uses `Ctrl+Space` to switch input methods, so check IBus first when the registered backend is intermittent after login, suspend, or an input-method state change.
 
@@ -96,11 +91,6 @@ test -w /dev/uinput
 parakit doctor --hotkey-backend evdev-proxy-experimental
 ```
 
-When `doctor` reports `hotkey OK`, run:
-
-```bash
-parakit doctor --hotkey-backend evdev-proxy-experimental && parakit start --hotkey-backend evdev-proxy-experimental --quiet &
-disown
-```
+When `doctor` reports `hotkey OK`, use the [background commands](running.md#background-use), adding `--hotkey-backend evdev-proxy-experimental` to `parakit start`.
 
 Avoid running parakit with `sudo`; audio, X11, clipboard, and text insertion belong to the regular desktop user session.

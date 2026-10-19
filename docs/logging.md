@@ -1,6 +1,6 @@
 # Transcription And Insertion Logs
 
-parakit can write JSONL records for completed dictations: what the model heard, which model and quantization produced it, what cleanup did to it, and what happened when parakit tried to insert it into the focused application. Logging is off by default. Turn it on with the `logging.dir` config key (see [configuration.md](configuration.md) and [config_reference.toml](config_reference.toml)) or `parakit start`'s `--log-dir` flag (see [running.md#logging-and-sounds](running.md#logging-and-sounds)). Failed transcriptions and no-speech captures produce no transcription record.
+parakit can write JSONL records for completed dictations: model output, inference settings, cleaning, and insertion into the focused application. Logging is off by default; [enable it with `--log-dir` or `logging.dir`](running.md#logging-and-sounds). Failed transcriptions and no-speech captures produce no transcription record.
 
 Audio and redirected console output are never logged, but the raw and cleaned transcript text is, in plaintext, with no built-in retention or size cap. Protect the log directory and rotate or delete old files to match the sensitivity of your dictation.
 
@@ -51,7 +51,7 @@ Fields, in serialization order:
 | `cleaning_failure` | string | Error text from a bounded matcher that exceeded its limit; the cleaner then keeps the original transcript instead of inserting a partial transformation. Omitted when cleaning succeeded. |
 | `inference` | object | Model identity and controls for this transcription. Absent in older rows and when a library caller provides no metadata. |
 
-`ruleset_id`, `cleaning_failure`, and `inference` can be omitted. Pass semantics are in [cleaning-rules.md](cleaning-rules.md).
+Pass semantics are in [cleaning-rules.md](cleaning-rules.md).
 
 The daemon supplies an `inference` object on each successful transcription:
 
@@ -72,7 +72,7 @@ Mixed-precision artifacts retain higher-precision tensors: Qwen Q6_K generation 
 
 The requested device policy remains fixed; the session policy reflects an Auto reload on CPU. GPU execution backend (CUDA/Vulkan/Metal) and GPU name are not confirmed by these JSONL fields. Status labels GPU inventory separately from confirmed execution.
 
-Qwen rows include the effective canonical `qwen_language` (`auto` when unforced) and per-chunk `qwen_max_new_tokens`. These describe user inference after readiness, not temporary warmup options or a detected language. Other backends omit them. `native_api_version`, when available, is the linked C API's reported version; it is not the CrispASR release tag. No audio or model-parent directory is added to the record. Readers should accept older rows without `inference` and ignore unfamiliar fields.
+Qwen controls describe user inference after readiness, not temporary warmup options or a detected language. `native_api_version` is not the CrispASR release tag. No model-parent directory is recorded. Readers should accept older rows without `inference` and ignore unfamiliar fields.
 
 ## Insertion Record Fields
 

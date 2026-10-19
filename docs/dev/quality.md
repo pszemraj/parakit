@@ -20,7 +20,7 @@ The all-features check can request accelerator toolchains that the current host 
 
 ## GPU Feature Validation
 
-Use the Windows scripts for CUDA/Vulkan validation; they default to Ninja. Raw `cargo check --workspace --all-targets --all-features` may still enter CMake's Visual Studio generator and fail before Rust typechecking if Visual Studio CUDA BuildCustomizations are stale. A known failure leaves `CudaToolkitDir` empty and reports `CUDA Toolkit directory '' does not exist`.
+Use the [Windows scripts](../../scripts/windows/README.md) for native CUDA/Vulkan builds. Raw `cargo check --workspace --all-targets --all-features` may still enter CMake's Visual Studio generator and fail before Rust typechecking if Visual Studio CUDA BuildCustomizations are stale. A known failure leaves `CudaToolkitDir` empty and reports `CUDA Toolkit directory '' does not exist`.
 
 When that happens, record the exact CUDA/MSBuild error, then validate the Rust all-features surface with an existing bundled library directory:
 
@@ -30,7 +30,7 @@ cargo check --workspace --all-targets --all-features
 Remove-Item Env:\CRISPASR_LIB_DIR
 ```
 
-This fallback does not replace real GPU validation. Also run the CUDA and Vulkan Windows scripts plus simulated-dictation smoke tests against `local-scratch\juniper-voicememo-DO_NOT_DELETE.wav` when touching Windows GPU behavior.
+This fallback does not replace the [native Windows build and inference checks](model-validation.md#windows-cpu-and-supported-gpu-backends).
 
 On macOS, raw `--all-features` also enables CUDA and can fail in CMake before Rust typechecking when the CUDA Toolkit is not installed. Use the same `CRISPASR_LIB_DIR` fallback to validate the Rust all-features surface; validate Metal with the native macOS build and `doctor`.
 
@@ -82,7 +82,7 @@ CUDA_VISIBLE_DEVICES=0 GGML_VK_VISIBLE_DEVICES= \
   --log-dir "$PWD/target/tmp/validation/logs"
 ```
 
-For Vulkan, replace the CUDA environment prefix on both commands with `env -u GGML_VK_VISIBLE_DEVICES CUDA_VISIBLE_DEVICES=` or pin a Vulkan device explicitly. Apply these commands to the six-preset Q8_0/Q6_K matrix and speech, silence, chunk-boundary, and reload cases in [native model validation](model-validation.md). Silence should produce an empty `Raw:` transcript in the helper and a worker no-speech error, without a successful transcript record. The worker's two idle waits take at least 126 seconds per model/backend pair.
+For Vulkan, replace the CUDA environment prefix on both commands with `env -u GGML_VK_VISIBLE_DEVICES CUDA_VISIBLE_DEVICES=` or pin a Vulkan device explicitly. Apply these commands to the matrix and acceptance cases in [native model validation](model-validation.md). The worker's two idle waits take at least 126 seconds per model/backend pair.
 
 Retain commands, device diagnostics, raw transcripts, exit statuses, timings, and per-process memory samples under the ignored `target/tmp/` tree. For reload calibration, sample host RSS and GPU allocations through startup warmup, full inference, loaded idle, offload, and reload. Compare the increase from the offloaded GPU allocation with the model file size plus the reload allowance; retained driver memory is already unavailable to the free-memory check. Label sampled peaks as observations rather than ceilings. Successful runs with ample free VRAM do not establish out-of-memory recovery.
 
@@ -154,8 +154,6 @@ The empty config file keeps your own `config.toml` out of the run; `PARAKIT_CONF
 Simulation bypasses the daemon singleton and opens no control endpoint. It uses the same resolved worker settings as normal startup, but disables insertion, sounds, and desktop notifications. Avoid concurrent inference when measuring timings; simulation does not pause an already-running daemon.
 
 The worker acknowledges each required transcript, checks exact parity across repeats in the same process, and verifies the expected residency after each wait (including the last). This parity check verifies that reloading recreates the same session; it is not a cross-build reference-transcript comparison. Missing transcripts, reload failures, or missed offloads return a failure exit status. An immediate simulated release exercises queuing while reload is busy. Use `--model-idle-minutes 0` to check disabled offloading. For one dictation without an idle wait, omit `--simulate-ptt-repeat` and `--simulate-ptt-idle-seconds`; both options require `--simulate-ptt-audio`.
-
-The [Linux reload measurements](memory.md#linux-reload-measurements) describe observed host and GPU allocation. This is separate from the real-time worker timeout test.
 
 ## NeMo Reference Helper
 
@@ -352,7 +350,7 @@ TODO: On a native Linux desktop, exercise direct typing and guarded paste with p
 
 ### Ordered audio and loaded Qwen failures
 
-Repeat `transcribe-file --audio` to run short, long, and short inputs on one loaded engine. The hidden worker simulation also accepts repeated `--simulate-ptt-audio` paths; it replays the full ordered sequence per `--simulate-ptt-repeat` cycle, then applies the requested idle interval. This exercises resident context reuse before offload/reload. Its failure path reads history back and rejects replacement of the preceding successful transcript.
+Repeat `transcribe-file --audio` to run ordered inputs on one loaded engine. [Worker simulation](#ptt-worker-simulation) accepts repeated `--simulate-ptt-audio` paths; it replays the full sequence per cycle before the idle interval. Its failure path reads history back and rejects replacement of the preceding successful transcript. See the [native Qwen sequence](model-validation.md#qwen-options-long-input-and-reload) for the short/long/short acceptance case.
 
 The loaded-session fault driver runs on Linux and macOS with an explicit Qwen model:
 

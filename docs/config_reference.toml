@@ -7,12 +7,7 @@
 # src/config_reference_tests.rs fails when a key is added to or removed from the schema without being documented here, when this file does not load, when a value set here differs from the program default, and when a closed set of values drifts.
 # src/rules/tests/config_reference.rs does the same for the built-in rule inventory below.
 #
-# Location: the path printed by `parakit config path`.
-# If PARAKIT_CONFIG_PATH is set, it is used verbatim. An empty value is an error, and a relative path stays relative to the working directory.
-# Otherwise Linux and macOS use $XDG_CONFIG_HOME/parakit/config.toml, falling back to $HOME/.config/parakit/config.toml when XDG_CONFIG_HOME is unset or empty.
-# Otherwise Windows uses parakit\config.toml inside the Roaming AppData folder, normally %APPDATA%\parakit\config.toml.
-# A missing file at the default location is not an error: every key takes its built-in default, and `parakit config show` prints `exists: false`.
-# A missing file named by PARAKIT_CONFIG_PATH is an error for every command that reads the config, so a mistyped path cannot silently give defaults. `parakit config path`, `init`, and `edit` still work, so `parakit config init` creates the file.
+# File locations and config-command workflows: [configuration](configuration.md).
 #
 # Precedence, highest first: a command-line flag, this file, the built-in default.
 # The flags named on each key belong to `parakit start` unless stated otherwise. A bare `parakit` is `parakit start` with no flags, so it cannot take them.
@@ -31,8 +26,6 @@
 # Value conventions: paths are used literally, with no ~ and no environment-variable expansion.
 # A relative path resolves against the working directory of the process that reads it, not against the directory of this file.
 # A whole-number key needs a TOML integer. A fraction such as 1.5 is rejected.
-# `parakit config show` prints the effective value of every key, merged with the built-in defaults but not with command-line flags.
-# `parakit config init` writes a commented template with the same keys, and `parakit config edit` opens the file in $VISUAL or $EDITOR.
 #
 # No key is deprecated or internal. The value "evdev-proxy-experimental" of hotkey.backend is experimental.
 # The environment variables that parakit reads or sets are listed at the end of this file. They are not config keys.

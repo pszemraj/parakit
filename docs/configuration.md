@@ -60,7 +60,7 @@ CLI flag > config value > built-in default
 
 These daemon and cleaning flags live on `parakit start`. The profile, trailing-period, and disable-rule flags also work the same way on `parakit rules list`/`parakit rules test` for checking a change before restarting the daemon (`cleaning.profile`'s flag is spelled `--profile` there instead of `--cleaning-profile`); `--cleaning`/`--no-cleaning` exist only on `start`.
 
-Four booleans (`daemon.sounds`, `cleaning.enabled`, `cleaning.keep_trailing_period`, and `daemon.keep_transcript_clipboard`) each have a paired CLI flag, one that forces the value on and one that forces it off (for example `--sounds`/`--no-sounds`), so a config default can be overridden in either direction for a single invocation; the two flags in a pair conflict with each other. Disabled rule names from the CLI and the config are merged, and a few settings are config-only. Those exact interactions are documented on each key in [config_reference.toml](config_reference.toml).
+Boolean flag pairs, merged disabled-rule names, and config-only settings have per-key interactions described in [config_reference.toml](config_reference.toml).
 
 To configure Qwen persistently, select a preset and set the language and token budget:
 
@@ -76,11 +76,9 @@ max_new_tokens = 512
 enabled = false
 ```
 
-See the [model preset guide](running.md#model-presets) for available models and the [configuration reference](config_reference.toml) for supported Qwen values. Persistent Qwen settings are validated but inactive for Parakeet.
+The example disables English cleaning for multilingual dictation. Available models, Qwen controls, and cleaning guidance are under [model presets](running.md#model-presets); accepted config values are in [config_reference.toml](config_reference.toml).
 
-Cleaning is still enabled by default. The example disables it for multilingual dictation because built-in cleanup includes English rules. `enabled = false` bypasses both built-in and user rules, as does `parakit start --no-cleaning` for one invocation.
-
-TOML, unknown-key, invalid-value, and rule-validation errors name the config path. The [configuration reference](config_reference.toml) lists the accepted keys and values.
+TOML, unknown-key, invalid-value, and rule-validation errors name the config path.
 
 For `daemon.model_idle_minutes` behavior, see [idle model offload](running.md#idle-model-offload).
 

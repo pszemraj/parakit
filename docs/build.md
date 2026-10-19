@@ -84,7 +84,7 @@ cargo build --locked --features cuda,vulkan --bin parakit --example transcribe-f
 
 Use the architecture supported by your GPU and toolkit. Reuse the same directory, feature set, profile, and native build settings for subsequent builds. Changing them can require another native compile; `cargo check` does not produce the runnable binaries. An existing directory built with `--all-features` should keep that feature set when rebuilding; Linux intentionally ignores the unsupported Metal feature.
 
-Keep each binary's generated native libraries with its build tree. On Linux, check `ldd "$CARGO_TARGET_DIR/debug/parakit"` and `readelf -d "$CARGO_TARGET_DIR/debug/parakit"`: CrispASR/ggml should resolve inside that isolated directory, with `RPATH`. These builds do not install a binary or restart a running daemon. Runtime validation also needs isolated configuration and model state; follow the [Linux GPU procedure](dev/quality.md#linux-cudavulkan).
+These builds do not install a binary or restart a running daemon. Verify [runtime library paths](#runtime-library-paths) against the isolated directory, then follow the [Linux GPU procedure](dev/quality.md#linux-cudavulkan) for isolated configuration and model state.
 
 ## CPU Builds
 

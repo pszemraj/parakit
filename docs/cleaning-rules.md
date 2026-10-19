@@ -161,9 +161,7 @@ disabled_rules = ["weights-and-biases-to-wandb"]
 
 ### Edit Rules Without Rebuilding
 
-User rules are runtime configuration, not compiled into the parakit binary. They are validated and compiled during process startup, then reused for each dictation without TOML parsing or regex compilation on the hot path. Editing a rule does not run Cargo, rebuild Parakit, download a model, or convert model weights.
-
-Use the edit, validation, and restart workflow in [configuration.md#validation-and-recovery](configuration.md#validation-and-recovery).
+User rules are runtime configuration, not compiled into the parakit binary. Follow the [edit, validation, and restart workflow](configuration.md#validation-and-recovery); no Cargo build, model download, or conversion is needed.
 
 A built-in rule can be replaced without rebuilding by listing its name in `cleaning.disabled_rules` and adding a differently named `[[rules.user]]` replacement. Runtime user rules deliberately use the standard Rust `regex` dialect. Context-sensitive procedural transforms such as number/version parsing and sentence capitalization remain Rust code unless they expose a specific config setting such as `cleaning.number_threshold`.
 

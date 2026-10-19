@@ -93,8 +93,6 @@ The shared library and run-path checks are in [build.md#runtime-library-paths](b
 ```bash
 parakit doctor --verbose
 ls target/release/build/parakit-*/out/lib/libggml-metal.dylib
-otool -L target/release/build/parakit-*/out/lib/libggml.dylib
-otool -l "$(command -v parakit)" | grep -A2 LC_RPATH
 otool -s __DATA __ggml_metallib target/release/build/parakit-*/out/lib/libggml-metal.dylib | head
 ```
 

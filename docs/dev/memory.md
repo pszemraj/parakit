@@ -27,7 +27,7 @@ An October 18 release-worker check with the shared native resampler and windowed
 
 ## Metal Qwen Reload Accounting
 
-Qwen's main model and shared audio tower each register a full-file Metal buffer view with the default mmap loader. The audio tower filters tensor names, but the Metal fast path still registers the entire mapped GGUF. Metal's `currentAllocatedSize` therefore includes both registrations. The reload guard counts twice the selected model file size plus 2 GiB of workspace for Metal Qwen; CUDA/Vulkan retain their model-file-plus-2-GiB allowance.
+Qwen's main model and shared audio tower each register a full-file Metal buffer view with the default mmap loader. The audio tower filters tensor names, but the Metal fast path still registers the entire mapped GGUF. Metal's `currentAllocatedSize` therefore includes both registrations. The [reload requirement](../running.md#idle-model-offload) accounts for both views.
 
 The [October 18 macOS report](macos-model-validation-2026-10-18.md#metal-reload-correction) records Q8_0/Q6_K peaks for both Qwen sizes and the controlled-budget reload checks.
 

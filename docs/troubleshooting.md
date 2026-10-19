@@ -70,7 +70,7 @@ If speaking triggers the error tone or `parakit: no speech detected`, check the 
    parakit doctor
    ```
 
-An idle daemon follows a changed default device. Bluetooth headsets are supported, though their profiles can add latency and reduce speech quality. For Windows microphone access, see [desktop microphone permissions](windows-desktop.md#microphone-permissions). Device behavior is described under [microphone](running.md#microphone).
+Default-device switching and Bluetooth behavior are described under [microphone](running.md#microphone). For Windows microphone access, see [desktop microphone permissions](windows-desktop.md#microphone-permissions).
 
 ## Model Reload Fails After Idle
 
@@ -84,15 +84,7 @@ If a build cannot find the CrispASR path dependency, initialize the existing sub
 git submodule update --init --recursive
 ```
 
-Use [native dependencies](build.md#native-dependencies) for missing headers or shared libraries, and the [Windows bundle scripts](../scripts/windows/README.md) for Windows installs. Inspect the model cache or refetch a model with:
-
-```bash
-parakit cache dir
-parakit cache list
-parakit fetch --force
-```
-
-`-m /path/to/model.gguf` disables automatic fetch. Cache-directory settings affect downloaded models, not an explicit model path. Custom model paths and cache locations are described under [model cache](running.md#model-cache).
+Use [native dependencies](build.md#native-dependencies) for missing headers or shared libraries, and the [Windows bundle scripts](../scripts/windows/README.md) for Windows installs. For model paths, cache inspection, and refetch commands, see [model cache](running.md#model-cache).
 
 ## Downloads Behind A Corporate Proxy
 

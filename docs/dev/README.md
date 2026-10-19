@@ -33,14 +33,10 @@ parakit fetch --from-source --keep-f16 --keep-nemo
 
 That path downloads [NVIDIA's official `.nemo`](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3), converts it with `vendor/CrispASR/models/convert-parakeet-to-gguf.py`, and quantizes the intermediate GGUF with `crispasr-quantize`.
 
-Rebuild Qwen or Moondream from the original Hugging Face checkpoint instead of downloading a GGUF:
+Rebuild a Qwen or Moondream preset from its original Hugging Face checkpoint:
 
 ```bash
 parakit fetch --from-source --model-preset qwen3-asr-1.7b --keep-f16
-parakit fetch --from-source --model-preset qwen3-asr-0.6b --keep-f16
-parakit fetch --from-source --model-preset parakeet-ultra --keep-f16
-# Experimental comparison only:
-parakit fetch --from-source --model-preset parakeet-redux --keep-f16
 ```
 
 | Preset | Original checkpoint |
@@ -66,8 +62,6 @@ A completed Q8_0 artifact in the preset cache is reused before checking Python d
 Redux conversion reconstructs its packed ternary weights into ordinary F16 weights before Q8_0 quantization. The resulting GGUF does not retain Photon's 178 MB representation, ternary acceleration, or Moondream VAD head. Building the artifact also does not establish transcription quality; follow the [conversion acceptance checks](quality.md#checkpoint-conversion-acceptance).
 
 On Windows, the hosted Q8_0 path is the normal model setup. `fetch --from-source` requires a compatible `crispasr-quantize.exe` on `PATH` because bundled CPU builds skip the CrispASR examples tree under MSVC.
-
-Publishing rebuilt artifacts is a separate maintainer step.
 
 GPU build and runtime checks are in [quality.md#gpu-feature-validation](quality.md#gpu-feature-validation).
 
