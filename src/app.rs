@@ -291,6 +291,10 @@ fn run_daemon(cli: &Cli, start: &StartCli) -> Result<()> {
     let paste_mode = worker_settings.paste_mode;
     let keep_transcript_clipboard = worker_settings.keep_transcript_clipboard;
 
+    if let ModelSelection::Local(path) = start.effective_model_selection(&config)? {
+        model::validate_model_file(&path)?;
+    }
+
     if !start.simulate_ptt_audio.is_empty() {
         return run_ptt_audio_simulation(
             cli,
@@ -300,10 +304,6 @@ fn run_daemon(cli: &Cli, start: &StartCli) -> Result<()> {
             Arc::clone(&log),
             &start.simulate_ptt_audio,
         );
-    }
-
-    if let ModelSelection::Local(path) = start.effective_model_selection(&config)? {
-        model::validate_model_file(&path)?;
     }
 
     #[cfg(target_os = "linux")]

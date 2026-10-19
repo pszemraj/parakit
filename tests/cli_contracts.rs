@@ -31,6 +31,35 @@ fn isolated_parakit_with_empty_config(name: &str) -> Command {
 }
 
 #[test]
+fn simulated_ptt_rejects_missing_model_before_loading_output() {
+    for quiet in [false, true] {
+        let mut command = isolated_parakit_with_empty_config(if quiet {
+            "missing-simulated-model-quiet"
+        } else {
+            "missing-simulated-model"
+        });
+        if quiet {
+            command.arg("--quiet");
+        }
+        let output = command
+            .args([
+                "start",
+                "--model",
+                "target/tmp/nonexistent-model-for-ptt-canary.gguf",
+                "--simulate-ptt-audio",
+                "vendor/CrispASR/bindings/go/samples/jfk.wav",
+            ])
+            .output()
+            .expect("parakit should run");
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
+        assert!(output.stdout.is_empty(), "{output:?}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("model path is not a file"), "{stderr}");
+        assert!(!stderr.contains("gguf_init"), "{stderr}");
+    }
+}
+
+#[test]
 fn broken_config_does_not_block_documented_control_and_repair_commands() {
     let root = common::fixture_root("cli-contracts", "broken-config-control");
     std::fs::create_dir_all(&root).expect("fixture root should be created");
