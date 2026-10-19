@@ -105,13 +105,18 @@ fn dominant_tensor_type(file: &mut File, tensor_count: u64) -> Result<Option<&'s
     for _ in 0..tensor_count {
         let _name = read_string(file)?;
         let dims = read_u32(file)?;
-        let mut elements = 1;
+        let mut elements = 1_u64;
         for _ in 0..dims {
-            elements *= read_u64(file)?;
+            elements = elements
+                .checked_mul(read_u64(file)?)
+                .context("GGUF tensor element count overflow")?;
         }
         let tensor_type = read_u32(file)?;
         let _offset = read_u64(file)?;
-        *counts.entry(tensor_type).or_default() += elements;
+        let count = counts.entry(tensor_type).or_default();
+        *count = count
+            .checked_add(elements)
+            .context("GGUF tensor type element count overflow")?;
     }
 
     Ok(counts
@@ -246,6 +251,42 @@ mod tests {
         }
         drop(file);
         assert_eq!(dtype_label(&path), "F16");
+    }
+
+    #[test]
+    fn tensor_element_counts_reject_overflow_and_accept_u64_boundary() {
+        for (name, tensors, valid) in [
+            ("dimension-product", vec![vec![u64::MAX, 2]], false),
+            ("type-sum", vec![vec![u64::MAX], vec![1]], false),
+            ("product-boundary", vec![vec![u64::MAX, 1]], true),
+            ("sum-boundary", vec![vec![u64::MAX - 1], vec![1]], true),
+        ] {
+            let dir = crate::test_support::fixture_root("gguf-tests", name);
+            let path = dir.join("counts.gguf");
+            let mut file = File::create(&path).unwrap();
+            file.write_all(b"GGUF").unwrap();
+            file.write_all(&3_u32.to_le_bytes()).unwrap();
+            file.write_all(&(tensors.len() as u64).to_le_bytes())
+                .unwrap();
+            file.write_all(&0_u64.to_le_bytes()).unwrap();
+            for (index, dimensions) in tensors.iter().enumerate() {
+                write_string(&mut file, &format!("weight.{index}"));
+                file.write_all(&(dimensions.len() as u32).to_le_bytes())
+                    .unwrap();
+                for dimension in dimensions {
+                    file.write_all(&dimension.to_le_bytes()).unwrap();
+                }
+                file.write_all(&1_u32.to_le_bytes()).unwrap();
+                file.write_all(&0_u64.to_le_bytes()).unwrap();
+            }
+            drop(file);
+            assert_eq!(detect_dtype(&path).is_ok(), valid, "{name}");
+            assert_eq!(
+                dtype_label(&path),
+                if valid { "F16" } else { "unknown" },
+                "{name}"
+            );
+        }
     }
 
     fn write_string(file: &mut File, s: &str) {
