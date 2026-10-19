@@ -60,6 +60,19 @@ impl FetchOptions {
                 quant.as_str()
             ));
         } else {
+            #[cfg(target_os = "windows")]
+            {
+                self.status(format_args!(
+                    "parakit: run in PowerShell: `parakit start -m {}`",
+                    command_path(path)
+                ));
+                if let Some(path) = command_prompt_path(path) {
+                    self.status(format_args!(
+                        "parakit: run in Command Prompt: `parakit start -m {path}`"
+                    ));
+                }
+            }
+            #[cfg(not(target_os = "windows"))]
             self.status(format_args!(
                 "parakit: run `parakit start -m {}`",
                 command_path(path)
@@ -139,19 +152,62 @@ fn command_path(path: &Path) -> String {
     }
 }
 
+#[cfg(target_os = "windows")]
+fn command_prompt_path(path: &Path) -> Option<String> {
+    let path = path.to_string_lossy();
+    // cmd expands variables even inside quotes; the PowerShell hint remains literal.
+    (!path.contains(['%', '!'])).then(|| format!("\"{path}\""))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[cfg(not(target_os = "windows"))]
     #[test]
     fn custom_model_start_command_preserves_shell_metacharacters() {
+        #[cfg(not(target_os = "windows"))]
         for name in ["target/a model.gguf", "target/a'$model`name`.gguf"] {
             let command = format!("parakit start -m {}", command_path(Path::new(name)));
             assert_eq!(
                 shlex::split(&command).unwrap(),
                 ["parakit", "start", "-m", name]
             );
+        }
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt as _;
+            let root = crate::test_support::fixture_root("parakit-fetch-tests", "shell quoting");
+            for name in [
+                "a model.gguf",
+                "a'$model`name` & (one).gguf",
+                "a%PATH%!model.gguf",
+            ] {
+                let path = root.join(name);
+                std::fs::write(&path, b"model").unwrap();
+                for (candidate, exists) in [(&path, true), (&path.with_extension("missing"), false)]
+                {
+                    let script = format!(
+                        "if (Test-Path -LiteralPath {}) {{ exit 0 }} else {{ exit 1 }}",
+                        command_path(candidate)
+                    );
+                    let output = Command::new("powershell.exe")
+                        .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+                        .output()
+                        .unwrap();
+                    assert_eq!(output.status.success(), exists, "{script}: {output:?}");
+                    if let Some(quoted) = command_prompt_path(candidate) {
+                        let script = format!("if exist {quoted} (exit 0) else (exit 1)");
+                        let output = Command::new("cmd.exe")
+                            .args(["/D", "/V:OFF", "/C"])
+                            .raw_arg(&script)
+                            .output()
+                            .unwrap();
+                        assert_eq!(output.status.success(), exists, "{script}: {output:?}");
+                    } else {
+                        assert!(name.contains(['%', '!']));
+                    }
+                }
+            }
         }
     }
 
