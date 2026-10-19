@@ -20,6 +20,7 @@ use sha2::{Digest, Sha256};
 use std::env;
 use std::ffi::{OsStr, OsString};
 use std::fs::{File, OpenOptions};
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -286,12 +287,17 @@ fn run_preset_q6(
     if !options.force && q6.is_file() {
         return Ok(q6);
     }
-    options.status(format_args!(
+    let _ = writeln!(
+        std::io::stderr(),
         "parakit: preparing {preset} Q6_K; a larger temporary download may be needed"
-    ));
+    );
     let quantizer = quantize_bin_path()?;
     let f16 = dir.join(f16_filename);
-    if options.force || !use_cached_download(options, &f16, None)? {
+    // A custom Hub fetch may own the published F16 path; keep preparation private.
+    let temporary_f16 = artifact_sidecar_path(&f16, ".q6-source");
+    let source = if !options.force && use_cached_download(options, &f16, None)? {
+        &f16
+    } else {
         let url = hub::resolve_url(endpoint, owner, repo, preset.revision(), f16_filename);
         let client = net::build_client()?;
         options.downloading(&url);
@@ -299,13 +305,16 @@ fn run_preset_q6(
             options,
             &client,
             &url,
-            &f16,
+            &temporary_f16,
             net::bearer_for(&url, endpoint, token),
             None,
         )?;
+        &temporary_f16
+    };
+    quantize_gguf(source, &q6, &quantizer, "q6_k", options)?;
+    if source == &temporary_f16 {
+        remove_if_exists(&temporary_f16)?;
     }
-    quantize_gguf(&f16, &q6, &quantizer, "q6_k", options)?;
-    remove_if_exists(&f16)?;
     Ok(q6)
 }
 
