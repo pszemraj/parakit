@@ -4,6 +4,7 @@
 
 mod hub;
 mod net;
+mod output;
 mod source;
 
 pub use hub::source_from_cli;
@@ -19,7 +20,6 @@ use sha2::{Digest, Sha256};
 use std::env;
 use std::ffi::{OsStr, OsString};
 use std::fs::{File, OpenOptions};
-use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -34,22 +34,6 @@ pub struct FetchOptions {
     pub verbose: bool,
     /// Which acquisition path to use.
     pub source: FetchSource,
-}
-
-// Status output is best-effort: daemon startup can fetch after its launching
-// terminal closed, and a failed write must not abort the download.
-impl FetchOptions {
-    fn status(&self, message: std::fmt::Arguments<'_>) {
-        if !self.quiet {
-            let _ = writeln!(std::io::stdout(), "{message}");
-        }
-    }
-
-    fn verbose_status(&self, message: std::fmt::Arguments<'_>) {
-        if !self.quiet && self.verbose {
-            let _ = writeln!(std::io::stdout(), "{message}");
-        }
-    }
 }
 
 /// Model acquisition source for `parakit fetch`.
@@ -143,7 +127,7 @@ pub fn ensure_preset_model_with_verbosity(
     quiet: bool,
     verbose: bool,
 ) -> Result<PathBuf> {
-    run(FetchOptions {
+    acquire(&FetchOptions {
         force: false,
         quiet,
         verbose,
@@ -169,25 +153,31 @@ pub fn ensure_preset_model_with_verbosity(
 /// Returns an error if the model cannot be looked up, downloaded, verified,
 /// converted, quantized, or written into the platform cache directory.
 pub fn run(options: FetchOptions) -> Result<PathBuf> {
+    let path = acquire(&options)?;
+    options.ready(&path);
+    Ok(path)
+}
+
+fn acquire(options: &FetchOptions) -> Result<PathBuf> {
     let endpoint = net::resolve_endpoint();
     let token = net::resolve_token();
     match &options.source {
         FetchSource::HostedQ8 => run_preset(
-            &options,
+            options,
             &endpoint,
             token.as_deref(),
             ModelPreset::ParakeetV3,
             &models_dir()?,
         ),
         FetchSource::Preset(preset) => run_preset(
-            &options,
+            options,
             &endpoint,
             token.as_deref(),
             *preset,
             &models_dir()?,
         ),
         FetchSource::PresetQ6(preset) => run_preset_q6(
-            &options,
+            options,
             &endpoint,
             token.as_deref(),
             *preset,
@@ -198,7 +188,7 @@ pub fn run(options: FetchOptions) -> Result<PathBuf> {
             checkpoint_dir,
             keep_f16,
         } => source::run(
-            &options,
+            options,
             &endpoint,
             token.as_deref(),
             *preset,
@@ -209,14 +199,14 @@ pub fn run(options: FetchOptions) -> Result<PathBuf> {
         FetchSource::OfficialNemo {
             keep_nemo,
             keep_f16,
-        } => run_official_nemo(&options, &endpoint, token.as_deref(), *keep_nemo, *keep_f16),
+        } => run_official_nemo(options, &endpoint, token.as_deref(), *keep_nemo, *keep_f16),
         FetchSource::HubRepo {
             repo,
             revision,
             file,
             sha256,
         } => hub::run_hub_repo(
-            &options,
+            options,
             &endpoint,
             token.as_deref(),
             repo,
@@ -224,7 +214,7 @@ pub fn run(options: FetchOptions) -> Result<PathBuf> {
             file.as_deref(),
             sha256.as_deref(),
         ),
-        FetchSource::Url { url, sha256 } => run_url(&options, url, sha256.as_deref()),
+        FetchSource::Url { url, sha256 } => run_url(options, url, sha256.as_deref()),
     }
 }
 
@@ -262,10 +252,9 @@ fn run_preset(
     let url = hub::resolve_url(endpoint, owner, repo, preset.revision(), preset.filename());
     let client = net::build_client()?;
     let bearer = net::bearer_for(&url, endpoint, token);
-    options.status(format_args!("parakit: downloading {url}"));
+    options.downloading(&url);
     download_and_verify(options, &client, &url, &dest, bearer, None)?;
 
-    options.status(format_args!("parakit: model ready: {}", dest.display()));
     Ok(dest)
 }
 
@@ -295,16 +284,17 @@ fn run_preset_q6(
     );
     let _lock = acquire_artifact_lock(&q6)?;
     if !options.force && q6.is_file() {
-        print_ready_with_hint(options, &q6);
         return Ok(q6);
     }
-    let _ = writeln!(std::io::stderr(), "parakit: preparing {preset} Q6_K locally; this may download a large F16 model and take several minutes");
+    options.status(format_args!(
+        "parakit: preparing {preset} Q6_K; a larger temporary download may be needed"
+    ));
     let quantizer = quantize_bin_path()?;
     let f16 = dir.join(f16_filename);
     if options.force || !use_cached_download(options, &f16, None)? {
         let url = hub::resolve_url(endpoint, owner, repo, preset.revision(), f16_filename);
         let client = net::build_client()?;
-        options.status(format_args!("parakit: downloading {url}"));
+        options.downloading(&url);
         download_and_verify(
             options,
             &client,
@@ -315,7 +305,7 @@ fn run_preset_q6(
         )?;
     }
     quantize_gguf(&f16, &q6, &quantizer, "q6_k", options)?;
-    print_ready_with_hint(options, &q6);
+    remove_if_exists(&f16)?;
     Ok(q6)
 }
 
@@ -382,7 +372,6 @@ fn run_official_nemo_with_paths(
     ensure_q8(&paths.f16, &paths.q8, &quantize_bin, options)?;
 
     cleanup_intermediates(&paths, keep_nemo, keep_f16)?;
-    options.status(format_args!("parakit: model ready: {}", paths.q8.display()));
     Ok(paths.q8)
 }
 
@@ -398,13 +387,12 @@ fn run_url(options: &FetchOptions, url: &str, expected_sha: Option<&str>) -> Res
     }
 
     let client = net::build_client()?;
-    options.status(format_args!("parakit: downloading {url}"));
+    options.downloading(url);
     // A user-supplied --url is never sent the Hub bearer token, even if it
     // happens to point at the resolved Hub endpoint host: the token is only
     // for requests parakit itself builds against the Hub.
     download_and_verify(options, &client, url, &dest, None, expected_sha)?;
 
-    print_ready_with_hint(options, &dest);
     Ok(dest)
 }
 
@@ -490,21 +478,6 @@ fn validate_download_file_name(name: &str) -> Result<()> {
         bail!("file name '{name}' is reserved on Windows");
     }
     Ok(())
-}
-
-/// Print the three-line "model ready" hint used by non-default fetch sources
-/// (Hugging Face repo and direct URL), which — unlike the hosted Q8_0
-/// default — are not picked up automatically and need `-m`/`daemon.model` to
-/// be used.
-fn print_ready_with_hint(options: &FetchOptions, path: &Path) {
-    options.status(format_args!("parakit: model ready: {}", path.display()));
-    options.status(format_args!(
-        "parakit: run `parakit start -m <model-path>` to use it"
-    ));
-    let config_path = toml_path_literal(path);
-    options.status(format_args!(
-        "parakit: or set daemon.model = {config_path} in config.toml"
-    ));
 }
 
 fn toml_path_literal(path: &Path) -> String {
@@ -608,7 +581,7 @@ fn ensure_nemo(
 
     let client = net::build_client()?;
     let bearer = net::bearer_for(nemo_url, endpoint, token);
-    options.status(format_args!("parakit: downloading {nemo_url}"));
+    options.downloading(nemo_url);
     download_and_verify(options, &client, nemo_url, &paths.nemo, bearer, None)?;
     Ok(())
 }
@@ -635,15 +608,14 @@ fn ensure_f16(
     };
     let tmp_f16 = paths.f16.with_extension("gguf.converting");
     remove_if_exists(&tmp_f16)?;
-    options.status(format_args!("parakit: converting .nemo to F16 GGUF"));
-    if let Err(err) = run_command(
+    if let Err(err) = options.run_command(
         Command::new(&python)
             .arg(converter_script)
             .arg("--nemo")
             .arg(&paths.nemo)
             .arg("--output")
             .arg(&tmp_f16),
-        "convert Parakeet .nemo to GGUF",
+        "converting checkpoint",
     ) {
         let _ = remove_if_exists(&tmp_f16);
         return Err(err);
@@ -665,21 +637,17 @@ fn quantize_gguf(
 ) -> Result<()> {
     let staging = dest.with_extension("gguf.quantizing");
     remove_if_exists(&staging)?;
-    options.status(format_args!(
-        "parakit: quantizing F16 GGUF to {}",
-        quant.to_ascii_uppercase()
-    ));
     let mut command = Command::new(quantize_bin);
     command
         .arg(f16)
         .arg(&staging)
         .arg(quant)
         .env("CRISPASR_QWEN3ASR_QUANT_AUDIO", "0");
-    if options.quiet {
-        command.stdout(Stdio::null());
-    }
     add_bundled_library_path(&mut command, quantize_bin);
-    if let Err(err) = run_command(&mut command, "quantize GGUF") {
+    if let Err(err) = options.run_command(
+        &mut command,
+        &format!("preparing {} model", quant.to_ascii_uppercase()),
+    ) {
         let _ = remove_if_exists(&staging);
         return Err(err);
     }

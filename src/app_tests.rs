@@ -85,8 +85,23 @@ fn q6_fetch_selects_local_quantization_and_rejects_conflicting_inputs() {
             FetchSource::PresetQ6(preset)
         );
     }
+    let cli = Cli::parse_from(["parakit", "fetch", "--quantize", "q6_k"]);
+    let Some(Commands::Fetch(fetch)) = cli.command else {
+        panic!("expected fetch")
+    };
+    assert_eq!(
+        resolve_fetch_source(&fetch).unwrap(),
+        FetchSource::PresetQ6(ModelPreset::ParakeetV3)
+    );
     for args in [
-        vec!["parakit", "fetch", "--quantize", "q6_k"],
+        vec![
+            "parakit",
+            "fetch",
+            "https://example.com/model.gguf",
+            "--quantize",
+            "q6_k",
+        ],
+        vec!["parakit", "fetch", "--from-source", "--quantize", "q6_k"],
         vec![
             "parakit",
             "fetch",

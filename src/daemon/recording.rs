@@ -239,7 +239,7 @@ fn try_send_worker_event(
     match tx.try_send(event) {
         Ok(()) => WorkerSendStatus::Sent,
         Err(TrySendError::Full(_)) => {
-            log.warn("transcription worker is busy; dropping recording");
+            log.warn("still processing an earlier dictation; this recording was skipped. Wait for it to finish, then try again");
             WorkerSendStatus::Full
         }
         Err(TrySendError::Disconnected(_)) => {

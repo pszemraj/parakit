@@ -2,6 +2,8 @@
 
 use super::*;
 use parakit::outln;
+use parakit::output::ProgressStage;
+use std::io::IsTerminal;
 
 /// Check whether the daemon control endpoint answers a status request.
 ///
@@ -53,6 +55,7 @@ pub(crate) fn run_client(command: IpcCommand, quiet: bool, verbose: bool) -> Res
     match response {
         IpcResponse::Ok { message } => {
             if matches!(&command, IpcCommand::Stop) {
+                let _progress = stopping_progress(quiet);
                 wait_for_daemon_stop(stop_deadline, false)?;
             }
             if !quiet {
@@ -87,6 +90,11 @@ pub(crate) fn run_client(command: IpcCommand, quiet: bool, verbose: bool) -> Res
         }
         IpcResponse::Err { message } => bail!("{message}"),
     }
+}
+
+fn stopping_progress(quiet: bool) -> Option<ProgressStage> {
+    (!quiet && std::io::stdout().is_terminal())
+        .then(|| ProgressStage::new("parakit: stopping...", false))
 }
 
 #[cfg(any(unix, target_os = "windows"))]
@@ -186,7 +194,10 @@ fn handle_daemon_not_running(command: &IpcCommand, quiet: bool, deadline: Instan
     };
     match daemon_not_running_disposition(command, singleton_held) {
         DaemonNotRunningDisposition::WaitForStop => {
-            wait_for_daemon_stop(deadline, true)?;
+            {
+                let _progress = stopping_progress(quiet);
+                wait_for_daemon_stop(deadline, true)?;
+            }
             if !quiet {
                 outln!("stopped")?;
             }

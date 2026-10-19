@@ -22,7 +22,7 @@ use crate::daemon::inject::PasteMode;
     name = "parakit",
     version,
     about = "Push-to-talk dictation daemon backed by CrispASR.",
-    long_about = "Push-to-talk dictation daemon. Hold the platform hotkey to record, release to transcribe and insert text at the cursor.\n\nRunning with no subcommand is the same as `parakit start`. Pass --verbose for diagnostic paths and timings, or --quiet for background daemon mode."
+    long_about = "Local push-to-talk dictation. Hold the hotkey to record, then release to insert the transcript.\n\nRun `parakit` to start. The default model downloads automatically on first use. Run `parakit doctor` if setup is blocked, and `parakit stop` to stop a running instance. Use --verbose for diagnostics or --quiet for background use."
 )]
 pub(crate) struct Cli {
     /// Subcommand to run. Defaults to starting the push-to-talk daemon (as
@@ -66,7 +66,7 @@ pub(crate) enum Commands {
     Rules(RulesCli),
     /// Acquire a GGUF model: a hosted Q8_0 preset, a Hugging Face repo, or a direct URL.
     #[command(
-        long_about = "Acquire a GGUF model.\n\nWith no arguments, downloads the default Parakeet v3 Q8_0 GGUF. Named presets select Q8_0. For any preset, --quantize q6_k downloads its F16 GGUF and caches a local Q6_K; select the printed path with -m. Add --from-source to convert the selected model's original checkpoint to F16 and quantize it locally to Q8_0.\n\nExamples:\n  parakit fetch\n  parakit fetch --model-preset qwen3-asr-1.7b\n  parakit fetch --model-preset parakeet-ultra\n  parakit fetch --from-source --model-preset qwen3-asr-1.7b --keep-f16\n  parakit fetch --from-source --model-preset parakeet-ultra --checkpoint-dir /path/to/snapshot\n  parakit fetch cstr/parakeet-tdt-0.6b-v3-GGUF --file parakeet-tdt-0.6b-v3-q4_k.gguf\n  parakit fetch handy-computer/parakeet-tdt-0.6b-v3-gguf@main\n  parakit fetch https://example.com/models/parakeet-q8.gguf --sha256 <64-hex>\n  parakit fetch --from-source\n\nFetching does not activate a model. Select a preset with `parakit start --model-preset NAME` or `daemon.model_preset`. Select a custom file with `-m <path>` or `daemon.model`."
+        long_about = "Download a model without starting dictation.\n\nWith no arguments, downloads the default Parakeet v3 Q8_0 model. Use --model-preset to select another model, or add --quantize q6_k to prepare Q6_K locally. Run the same command again to resume an interrupted download.\n\nExamples:\n  parakit fetch\n  parakit fetch --model-preset qwen3-asr-1.7b --quantize q6_k\n  parakit fetch --model-preset parakeet-ultra\n\nFetching does not change the running model. The command prints how to start with the downloaded model. Normal startup downloads missing models automatically, so a separate fetch is optional.\n\nAdvanced: pass a Hugging Face repo or direct GGUF URL as the source, or use --from-source to convert the original checkpoint locally."
     )]
     Fetch(FetchCli),
     /// Inspect the parakit model cache.
@@ -88,7 +88,7 @@ pub(crate) enum Commands {
 }
 
 /// Arguments for starting the push-to-talk daemon.
-#[derive(Args, Debug, Default)]
+#[derive(Args, Debug, Default, PartialEq)]
 pub(crate) struct StartCli {
     /// Path to a GGUF model file. Overrides the cached Q8_0 model.
     #[arg(
@@ -206,6 +206,14 @@ pub(crate) struct StartCli {
 }
 
 impl StartCli {
+    /// Return whether this invocation supplies settings for a new daemon.
+    ///
+    /// # Returns
+    /// `true` when an already-running daemon would ignore supplied options.
+    pub(crate) fn has_runtime_overrides(&self) -> bool {
+        self != &Self::default()
+    }
+
     /// Resolve preset precision; this value is unused for an explicit model file.
     ///
     /// # Returns
@@ -464,8 +472,7 @@ pub(crate) struct FetchCli {
     #[arg(
         long,
         value_enum,
-        requires = "model_preset",
-        conflicts_with = "from_source"
+        conflicts_with_all = ["from_source", "source", "file", "sha256"]
     )]
     pub(crate) quantize: Option<ModelQuantization>,
     /// Model source: a Hugging Face repo (`owner/repo` or
@@ -671,7 +678,7 @@ pub(crate) struct RulesArgs {
 }
 
 /// Common rule-disable and terminal-period flags for `start` and `rules`.
-#[derive(Args, Debug, Default)]
+#[derive(Args, Debug, Default, PartialEq)]
 pub(crate) struct CleaningOverrides {
     /// Keep the single terminal period that messaging-style cleanup removes by
     /// default. Overrides a configured `cleaning.keep_trailing_period = false`;

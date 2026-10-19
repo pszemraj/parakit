@@ -467,6 +467,7 @@ where
                                 ));
                                 state.set_phase("idle");
                                 if report.needs_alert() {
+                                    log_recovery_hint(&state, &log);
                                     sounds.error();
                                 } else {
                                     sounds.success();
@@ -485,6 +486,7 @@ where
                                     report,
                                 );
                                 log.error(&format!("paste failed: {e:#}"));
+                                log_recovery_hint(&state, &log);
                                 state.set_phase("idle");
                                 sounds.error();
                             }
@@ -569,6 +571,13 @@ fn transcribe_clean<E: WorkerEngine>(
         infer_elapsed,
         clean_elapsed: clean_started.elapsed(),
     }))
+}
+
+/// Explain recovery only when the dictation was actually retained.
+fn log_recovery_hint(state: &SharedState, log: &Logger) {
+    if state.resolve_transcript(0).is_ok() {
+        log.warn("transcript saved; check the target before retrying. Recover it with `parakit copy-last`");
+    }
 }
 
 /// Reject effectively silent captures before ASR can turn background noise

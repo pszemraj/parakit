@@ -25,6 +25,22 @@ fn bare_parakit_parses_with_no_command() {
 }
 
 #[test]
+fn startup_options_are_recognized_as_settings_for_a_new_instance() {
+    assert!(!start_from(&[]).has_runtime_overrides());
+    assert!(!start_from(&["--quiet"]).has_runtime_overrides());
+    for args in [
+        &["--device", "cpu"][..],
+        &["--threads", "2"],
+        &["--no-sounds"],
+        &["--qwen-language", "en"],
+        &["--keep-trailing-period"],
+        &["--quantize", "q6_k"],
+    ] {
+        assert!(start_from(args).has_runtime_overrides(), "{args:?}");
+    }
+}
+
+#[test]
 fn preset_selection_overrides_the_other_config_selection_kind() {
     let mut config = ConfigFile::default();
     config.daemon.model = Some(PathBuf::from("configured.gguf"));

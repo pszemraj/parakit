@@ -293,7 +293,7 @@ fn download_with_resume_inner(
         Ok(()) => progress.finish(),
         Err(error) => {
             progress.abandon_with_message("download interrupted; partial file kept");
-            return Err(error.into());
+            return Err(error).context("download interrupted; retry the same command to resume");
         }
     }
     let _ = super::remove_if_exists(&validator_path);

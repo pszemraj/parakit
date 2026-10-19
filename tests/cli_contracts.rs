@@ -432,7 +432,7 @@ fn daemon_control_remains_available_during_model_download() {
             "{requested:?}"
         );
         for (args, expected) in [
-            (&["status"][..], "parakit: starting"),
+            (&["status"][..], "parakit: preparing model"),
             (&["start"][..], "parakit: already running"),
             (&["stop"][..], "stopped"),
         ] {

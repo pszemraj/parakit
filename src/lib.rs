@@ -23,7 +23,7 @@ pub mod gpu;
 pub mod inference;
 /// Canonical model names and cache paths.
 pub mod model;
-/// Command output on stdout that stops quietly when its reader goes away.
+/// Command output and temporary activity indicators.
 pub mod output;
 /// Qwen3-ASR language hints and generation controls.
 pub mod qwen;

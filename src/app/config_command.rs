@@ -29,7 +29,12 @@ pub(super) fn run_config_command(config_cli: &ConfigCli, quiet: bool) -> Result<
         }
         ConfigCommand::Init { force } => init_config_file(*force, quiet)?,
         ConfigCommand::Show => print_config_show(quiet)?,
-        ConfigCommand::Edit => edit_config_file()?,
+        ConfigCommand::Edit => {
+            edit_config_file()?;
+            if !quiet {
+                outln!("Changes apply on the next start.")?;
+            }
+        }
     }
     Ok(())
 }

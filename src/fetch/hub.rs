@@ -415,10 +415,9 @@ pub(super) fn run_hub_repo(
     }
 
     let bearer = net::bearer_for(&resolve, endpoint, token);
-    options.status(format_args!("parakit: downloading {resolve}"));
+    options.downloading(&resolve);
     super::download_and_verify(options, &client, &resolve, &dest, bearer, sha256_override)?;
 
-    super::print_ready_with_hint(options, &dest);
     Ok(dest)
 }
 

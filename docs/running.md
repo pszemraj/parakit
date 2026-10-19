@@ -25,14 +25,15 @@ The daemon checks the hotkey backend, insertion backend, and singleton lock befo
 Normal startup:
 
 ```text
+parakit: loading model...
 parakit
   model: parakeet-tdt-0.6b-v3-Q8_0.gguf
   dtype: Q8_0 (745 MB)
-  mic:   USB Speech Mic Mono, 48000 Hz mono input -> 16000 Hz mono model, F32
-Ready: hold Ctrl+Space to dictate.
+  mic:   USB Speech Mic Mono
+Ready: hold Ctrl+Space to dictate. Ctrl+C to stop.
 ```
 
-On macOS the ready line says `Left Control+Space`; on Linux and Windows it says `Ctrl+Space`.
+On macOS the ready line says `Left Control+Space`; on Linux and Windows it says `Ctrl+Space`. Loading and conversion show an activity indicator in a terminal. Normal dictation prints the final cleaned transcript; raw text, timings, audio formats, and backend details require `--verbose`.
 
 Use `--verbose` only when debugging startup, backend selection, or latency:
 
@@ -196,9 +197,9 @@ parakit start --model-preset parakeet-ultra --quantize q6_k \
   --log-dir "$HOME/.parakit/logs" --quiet & disown
 ```
 
-Use `parakeet-v2` for English-only v2, `parakeet-v3` for the original default, or either Qwen name in the table below. Without `--model-preset`, `--quantize q6_k` prepares v3. Missing Q6_K causes startup to download F16 if needed and quantize it locally; a first-preparation notice appears on stderr even with `--quiet`. Wait for readiness before dictating. Cached Q6_K starts work offline and idle reload reuses the resolved file.
+Use `parakeet-v2` for English-only v2, `parakeet-v3` for the original default, or either Qwen name in the table below. Without `--model-preset`, `--quantize q6_k` prepares v3. Missing Q6_K causes startup to download F16 if needed and quantize it locally. The temporary F16 is removed after successful quantization and kept after a failure so retrying can reuse it. Wait for readiness before dictating. Cached Q6_K starts work offline and idle reload reuses the resolved file.
 
-Interactive downloads show a progress bar with bytes downloaded, transfer speed, and ETA. If the server omits the file size, a byte counter is shown instead. Progress bars are hidden with `--quiet` or when stderr is redirected. Quantization is a separate stage announced after the download.
+Interactive downloads show a progress bar with bytes downloaded, transfer speed, and ETA. If the server omits the file size, a byte counter is shown instead. Progress bars are hidden with `--quiet` or when stderr is redirected. Quantization is a separate stage announced after the download. URLs and native converter output require `--verbose`; failed tools report a short diagnostic. An explicit `fetch` confirms the cached model and prints its startup command, while daemon startup continues directly to loading.
 
 To keep the same startup command each time, set these fields in the file printed by `parakit config path`:
 

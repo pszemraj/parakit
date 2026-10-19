@@ -149,7 +149,7 @@ impl Notifier {
     ///
     /// * `mic` - Reopened microphone summary.
     pub(crate) fn microphone_recovered(&self, mic: &MicInfo) {
-        self.show("Microphone recovered", mic.summary());
+        self.show("Microphone recovered", &mic.name);
     }
 
     fn show(&self, summary: &str, body: impl AsRef<str>) {

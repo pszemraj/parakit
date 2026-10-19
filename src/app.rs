@@ -237,10 +237,12 @@ fn resolve_fetch_source(cli: &FetchCli) -> Result<FetchSource> {
             keep_f16: cli.keep_f16,
         });
     }
+    if cli.quantize == Some(ModelQuantization::Q6K) {
+        return Ok(FetchSource::PresetQ6(
+            cli.model_preset.unwrap_or(ModelPreset::ParakeetV3),
+        ));
+    }
     if let Some(preset) = cli.model_preset {
-        if cli.quantize == Some(ModelQuantization::Q6K) {
-            return Ok(FetchSource::PresetQ6(preset));
-        }
         return Ok(FetchSource::Preset(preset));
     }
     fetch::source_from_cli(cli.source.clone(), cli.file.clone(), cli.sha256.clone())
@@ -262,11 +264,9 @@ fn run_daemon(cli: &Cli, start: &StartCli) -> Result<()> {
             Ok(lock) => Some(lock),
             Err(err) if err.is::<daemon::preflight::DaemonAlreadyRunning>() => {
                 ensure_existing_daemon_responsive(daemon::ipc::daemon_responsive()?)?;
-                if start.model.is_some() || start.model_preset.is_some() || start.quantize.is_some()
-                {
-                    eprintln!("parakit: daemon is already running; model/precision options were not applied. Run `parakit stop`, then start again with the requested options");
-                }
-                if !cli.quiet {
+                if start.has_runtime_overrides() {
+                    eprintln!("parakit: already running; new startup options were not applied. Run `parakit stop`, then start again with the requested options");
+                } else if !cli.quiet {
                     outln!("parakit: already running")?;
                 }
                 return Ok(());
@@ -351,6 +351,7 @@ fn run_daemon(cli: &Cli, start: &StartCli) -> Result<()> {
     warn_about_bluetooth_mic_if_needed(&log, &mic_info);
 
     // Keep control available during model download and loading, including stop.
+    ipc_state.set_phase("preparing model");
     let OpenedEngine {
         model_path,
         engine,
@@ -604,7 +605,7 @@ fn warn_about_bluetooth_mic_if_needed(log: &Logger, mic_info: &daemon::audio::Mi
     if mic_info.looks_bluetooth() {
         log.warn(format!(
             "selected microphone appears to be Bluetooth ({}); use a wired or local mic if latency or quality is poor",
-            mic_info.summary()
+            mic_info.name
         ));
     }
 }

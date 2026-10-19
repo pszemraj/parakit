@@ -83,7 +83,10 @@ fn failed_q6_quantization_preserves_completed_model_and_cleans_staging() {
         source: FetchSource::PresetQ6(ModelPreset::Qwen3Asr06b),
     };
     let error = quantize_gguf(&f16, &q6, &quantizer, "q6_k", &options).unwrap_err();
-    assert!(format!("{error:#}").contains("exit status: 1"), "{error:#}");
+    assert!(
+        format!("{error:#}").contains("preparing Q6_K model failed"),
+        "{error:#}"
+    );
     assert_eq!(std::fs::read(&q6).unwrap(), b"completed");
     assert!(!q6.with_extension("gguf.quantizing").exists());
 }

@@ -5,6 +5,7 @@
 use anstyle::{AnsiColor, Style};
 use chrono::{SecondsFormat, Utc};
 use parakit::build_info;
+use parakit::output::ProgressStage;
 use std::fmt::Display;
 use std::io::Write as _;
 use std::path::Path;
@@ -55,6 +56,18 @@ impl Logger {
         }
     }
 
+    /// Show activity during long work without interleaving verbose diagnostics.
+    ///
+    /// # Returns
+    /// A guard that clears the indicator at the end of the operation.
+    pub(crate) fn progress(&self, message: impl Into<String>) -> ProgressStage {
+        let message = message.into();
+        if self.is_verbose() {
+            self.verbose(&message);
+        }
+        ProgressStage::new(message, self.level != LogLevel::Normal)
+    }
+
     /// Print a verbose diagnostic line with an ISO timestamp.
     pub(crate) fn verbose(&self, msg: impl Display) {
         if self.is_verbose() {
@@ -94,7 +107,7 @@ impl Logger {
         let daemon = info.daemon;
         let _ = writeln!(anstream::stdout(), "  model: {}", daemon.model_name);
         let _ = writeln!(anstream::stdout(), "  dtype: {}", daemon.dtype);
-        let _ = writeln!(anstream::stdout(), "  mic:   {}", daemon.mic_summary);
+        let _ = writeln!(anstream::stdout(), "  mic:   {}", info.mic.name);
         if self.is_verbose() {
             for line in info.mic.detail_lines() {
                 let _ = writeln!(anstream::stdout(), "  audio: {line}");
@@ -125,17 +138,18 @@ impl Logger {
     /// Print the ready line.
     pub(crate) fn ready(&self) {
         self.line(&format!(
-            "Ready: hold {} to dictate.",
+            "Ready: hold {} to dictate. Ctrl+C to stop.",
             hotkey::default_ptt_hint()
         ));
-        if self.is_verbose() {
-            self.line("Ctrl+C in this terminal to exit.");
-        }
     }
 
     /// Print a microphone switch notice.
     pub(crate) fn mic_changed(&self, mic: &MicInfo) {
-        self.line(&format!("parakit: mic changed: {}", mic.summary()));
+        self.line(&format!("parakit: mic changed: {}", mic.name));
+        self.verbose(format!(
+            "parakit: microphone configuration: {}",
+            mic.summary()
+        ));
     }
 
     /// Print a transcription-start line.
@@ -145,12 +159,16 @@ impl Logger {
     /// * `audio_secs` - Captured audio duration in seconds.
     /// * `wall_secs` - Wall-clock recording duration in seconds.
     pub(crate) fn transcribing(&self, audio_secs: f32, wall_secs: f32) {
-        self.line(&format!(
-            "parakit: transcribing ({audio_secs:.2}s audio, {wall_secs:.2}s wall)..."
-        ));
+        if self.is_verbose() {
+            self.line(&format!(
+                "parakit: transcribing ({audio_secs:.2}s audio, {wall_secs:.2}s wall)..."
+            ));
+        } else {
+            self.line("parakit: transcribing...");
+        }
     }
 
-    /// Print one transcript pair and inference timing.
+    /// Print the final transcript; raw text and timing require verbose mode.
     ///
     /// # Arguments
     ///
@@ -159,6 +177,16 @@ impl Logger {
     /// * `infer` - Time spent in model inference.
     pub(crate) fn transcript(&self, raw: &str, cleaned: &str, infer: Duration) {
         if self.level == LogLevel::Quiet {
+            return;
+        }
+
+        if !self.is_verbose() {
+            let _ = writeln!(
+                anstream::stdout(),
+                "{} {}",
+                paint("Clean:", AnsiColor::Green),
+                paint(cleaned, AnsiColor::BrightGreen)
+            );
             return;
         }
 
@@ -204,6 +232,10 @@ fn paint(text: impl Display, color: AnsiColor) -> String {
     let style = Style::new().fg_color(Some(color.into()));
     format!("{}{}{}", style.render(), text, style.render_reset())
 }
+
+#[cfg(test)]
+#[path = "logging_tests.rs"]
+mod feedback_tests;
 
 #[cfg(all(test, target_os = "linux"))]
 mod tests {

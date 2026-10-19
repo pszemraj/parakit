@@ -117,7 +117,6 @@ pub(super) fn run(
     if !keep_f16 {
         remove_if_exists(&f16)?;
     }
-    options.status(format_args!("parakit: model ready: {}", q8.display()));
     Ok(q8)
 }
 
@@ -171,7 +170,6 @@ fn convert_f16(
 ) -> Result<()> {
     let staging = f16.with_extension("gguf.converting");
     remove_if_exists(&staging)?;
-    options.status(format_args!("parakit: converting checkpoint to F16 GGUF"));
     let input_flag = if preset.backend() == "qwen3" {
         "--input"
     } else {
@@ -184,10 +182,7 @@ fn convert_f16(
         .arg(checkpoint)
         .arg("--output")
         .arg(&staging);
-    if options.quiet {
-        command.stdout(Stdio::null());
-    }
-    if let Err(error) = run_command(&mut command, "convert checkpoint to F16 GGUF") {
+    if let Err(error) = options.run_command(&mut command, "converting checkpoint") {
         let _ = remove_if_exists(&staging);
         return Err(error);
     }

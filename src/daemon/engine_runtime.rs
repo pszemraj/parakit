@@ -63,6 +63,13 @@ impl EngineRecipe {
             validate_device_request(self.device_mode, log)?;
             device_mode = self.reload_device_mode(log)?;
         }
+        let _progress = log.progress(format!(
+            "parakit: {} model...",
+            match policy {
+                LoadPolicy::Startup => "loading",
+                LoadPolicy::Reload => "reloading",
+            }
+        ));
         let started = Instant::now();
         let engine = open_engine(
             &self.model_path,
