@@ -615,22 +615,38 @@ fn ensure_f16(
         Some(path) => path.to_path_buf(),
         None => python_with_converter_deps()?,
     };
-    let tmp_f16 = paths.f16.with_extension("gguf.converting");
-    remove_if_exists(&tmp_f16)?;
-    if let Err(err) = options.run_command(
-        Command::new(&python)
-            .arg(converter_script)
-            .arg("--nemo")
-            .arg(&paths.nemo)
-            .arg("--output")
-            .arg(&tmp_f16),
-        "converting checkpoint",
-    ) {
-        let _ = remove_if_exists(&tmp_f16);
-        return Err(err);
+    convert_f16(
+        "--nemo",
+        &paths.nemo,
+        &paths.f16,
+        &python,
+        converter_script,
+        options,
+    )
+}
+
+fn convert_f16(
+    input_flag: &str,
+    checkpoint: &Path,
+    f16: &Path,
+    python: &Path,
+    converter: &Path,
+    options: &FetchOptions,
+) -> Result<()> {
+    let staging = f16.with_extension("gguf.converting");
+    remove_if_exists(&staging)?;
+    let mut command = Command::new(python);
+    command
+        .arg(converter)
+        .arg(input_flag)
+        .arg(checkpoint)
+        .arg("--output")
+        .arg(&staging);
+    if let Err(error) = options.run_command(&mut command, "converting checkpoint") {
+        let _ = remove_if_exists(&staging);
+        return Err(error);
     }
-    move_into_place(&tmp_f16, &paths.f16)?;
-    Ok(())
+    move_into_place(&staging, f16)
 }
 
 fn ensure_q8(f16: &Path, q8: &Path, quantize_bin: &Path, options: &FetchOptions) -> Result<()> {
@@ -666,10 +682,17 @@ fn quantize_gguf(
 }
 
 fn python_with_converter_deps() -> Result<PathBuf> {
+    python_with_imports(
+        "import gguf, numpy, sentencepiece, torch",
+        "Conversion requires Python 3 with torch, numpy, gguf, and sentencepiece. Install with: pip install -r scripts/requirements-convert.txt",
+    )
+}
+
+fn python_with_imports(imports: &str, dependency_error: &str) -> Result<PathBuf> {
     let python = find_python()?;
     let status = Command::new(&python)
         .arg("-c")
-        .arg("import gguf, numpy, sentencepiece, torch")
+        .arg(imports)
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status()
@@ -678,9 +701,7 @@ fn python_with_converter_deps() -> Result<PathBuf> {
         return Ok(python);
     }
 
-    bail!(
-        "Conversion requires Python 3 with torch, numpy, gguf, and sentencepiece. Install with: pip install -r scripts/requirements-convert.txt"
-    );
+    bail!("{dependency_error}");
 }
 
 fn find_python() -> Result<PathBuf> {

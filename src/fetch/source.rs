@@ -1,7 +1,7 @@
 //! Original Hugging Face checkpoint conversion for the named model presets.
 
 use super::{
-    acquire_artifact_lock, ensure_q8, find_python, move_into_place, preset_cache_path,
+    acquire_artifact_lock, convert_f16, ensure_q8, preset_cache_path, python_with_imports,
     quantize_bin_path, remove_if_exists, run_command, FetchOptions,
 };
 use crate::model::{ModelPreset, HF_ENDPOINT_ENV, HF_TOKEN_ENV};
@@ -106,7 +106,12 @@ pub(super) fn run(
             }
             run_command(&mut command, "download original Hugging Face checkpoint")?;
         }
-        convert_f16(preset, checkpoint, &f16, &python, &converter, options)?;
+        let input_flag = if preset.backend() == "qwen3" {
+            "--input"
+        } else {
+            "--hf"
+        };
+        convert_f16(input_flag, checkpoint, &f16, &python, &converter, options)?;
     } else {
         options.status(format_args!(
             "parakit: using cached F16 GGUF: {}",
@@ -137,7 +142,6 @@ fn converter_path(preset: ModelPreset) -> PathBuf {
 }
 
 fn conversion_python(preset: ModelPreset, download: bool) -> Result<PathBuf> {
-    let python = find_python()?;
     let mut imports = "import gguf, numpy, torch, safetensors".to_string();
     if preset.backend() == "parakeet" {
         imports.push_str(", sentencepiece, yaml, librosa");
@@ -145,48 +149,10 @@ fn conversion_python(preset: ModelPreset, download: bool) -> Result<PathBuf> {
     if download {
         imports.push_str(", huggingface_hub");
     }
-    let status = Command::new(&python)
-        .arg("-c")
-        .arg(imports)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .with_context(|| format!("run {}", python.display()))?;
-    if !status.success() {
-        bail!(
-            "Checkpoint conversion requires Python dependencies. Install with: pip install -r scripts/requirements-convert.txt"
-        );
-    }
-    Ok(python)
-}
-
-fn convert_f16(
-    preset: ModelPreset,
-    checkpoint: &Path,
-    f16: &Path,
-    python: &Path,
-    converter: &Path,
-    options: &FetchOptions,
-) -> Result<()> {
-    let staging = f16.with_extension("gguf.converting");
-    remove_if_exists(&staging)?;
-    let input_flag = if preset.backend() == "qwen3" {
-        "--input"
-    } else {
-        "--hf"
-    };
-    let mut command = Command::new(python);
-    command
-        .arg(converter)
-        .arg(input_flag)
-        .arg(checkpoint)
-        .arg("--output")
-        .arg(&staging);
-    if let Err(error) = options.run_command(&mut command, "converting checkpoint") {
-        let _ = remove_if_exists(&staging);
-        return Err(error);
-    }
-    move_into_place(&staging, f16)
+    python_with_imports(
+        &imports,
+        "Checkpoint conversion requires Python dependencies. Install with: pip install -r scripts/requirements-convert.txt",
+    )
 }
 
 #[cfg(test)]
@@ -279,9 +245,9 @@ mod tests {
         }
     }
 
-    #[cfg(unix)]
     #[test]
-    fn failed_conversion_and_quantization_clean_staging_and_preserve_existing_artifacts() {
+    fn conversion_and_quantization_clean_staging_and_preserve_existing_artifacts_on_failure() {
+        #[cfg(unix)]
         use std::os::unix::fs::PermissionsExt;
         let root =
             crate::test_support::fixture_root("parakit-fetch-tests", "source-presets-failure");
@@ -289,22 +255,73 @@ mod tests {
         let f16 = root.join("existing-f16.gguf");
         std::fs::write(&q8, b"existing Q8").unwrap();
         std::fs::write(&f16, b"existing F16").unwrap();
-        let fake_python = root.join("fake-python");
-        std::fs::write(&fake_python, "#!/bin/sh\nprintf partial > \"$5\"\nexit 1\n").unwrap();
-        std::fs::set_permissions(&fake_python, std::fs::Permissions::from_mode(0o755)).unwrap();
-        assert!(convert_f16(
-            ModelPreset::Qwen3Asr06b,
-            &root,
-            &f16,
-            &fake_python,
-            Path::new("converter.py"),
-            &options(ModelPreset::Qwen3Asr06b, true)
+        let fake_python = root.join(if cfg!(windows) {
+            "fake-python.cmd"
+        } else {
+            "fake-python"
+        });
+        let converter = if cfg!(windows) {
+            "@echo off\r\necho partial>\"%~5\"\r\necho %~2>\"%~5.flag\"\r\nexit /b "
+        } else {
+            "#!/bin/sh\nprintf partial > \"$5\"\nprintf %s \"$2\" > \"$5.flag\"\nexit "
+        };
+        for input_flag in ["--nemo", "--hf", "--input"] {
+            for success in [false, true] {
+                std::fs::write(&f16, b"existing F16").unwrap();
+                std::fs::write(&fake_python, format!("{converter}{}\n", u8::from(!success)))
+                    .unwrap();
+                #[cfg(unix)]
+                std::fs::set_permissions(&fake_python, std::fs::Permissions::from_mode(0o755))
+                    .unwrap();
+                assert_eq!(
+                    convert_f16(
+                        input_flag,
+                        &root,
+                        &f16,
+                        &fake_python,
+                        Path::new("converter.py"),
+                        &options(ModelPreset::Qwen3Asr06b, true)
+                    )
+                    .is_ok(),
+                    success
+                );
+                assert!(!f16.with_extension("gguf.converting").exists());
+                assert_eq!(
+                    std::fs::read_to_string(f16.with_extension("gguf.converting.flag"))
+                        .unwrap()
+                        .trim(),
+                    input_flag
+                );
+                let contents = std::fs::read_to_string(&f16).unwrap();
+                assert_eq!(
+                    contents,
+                    if success {
+                        if cfg!(windows) {
+                            "partial\r\n"
+                        } else {
+                            "partial"
+                        }
+                    } else {
+                        "existing F16"
+                    }
+                );
+            }
+        }
+        let quantizer = root.join(if cfg!(windows) {
+            "fake-quantizer.cmd"
+        } else {
+            "fake-quantizer"
+        });
+        std::fs::write(
+            &quantizer,
+            if cfg!(windows) {
+                "@echo off\r\necho partial>\"%~2\"\r\nexit /b 1\r\n"
+            } else {
+                "#!/bin/sh\nprintf partial > \"$2\"\nexit 1\n"
+            },
         )
-        .is_err());
-        assert!(!f16.with_extension("gguf.converting").exists());
-        assert_eq!(std::fs::read(&f16).unwrap(), b"existing F16");
-        let quantizer = root.join("fake-quantizer");
-        std::fs::write(&quantizer, "#!/bin/sh\nprintf partial > \"$2\"\nexit 1\n").unwrap();
+        .unwrap();
+        #[cfg(unix)]
         std::fs::set_permissions(&quantizer, std::fs::Permissions::from_mode(0o755)).unwrap();
         assert!(ensure_q8(
             &f16,
