@@ -3,8 +3,7 @@
 # An uncommented key is set to its literal default.
 # A commented-out key has no literal default (it is unset, depends on the platform, or is computed), and the value shown is only an example.
 # To start a config of your own, copy example.toml. Use this file to look keys up.
-# Tests keep this file in step with the program, so it cannot silently go stale.
-# src/config_reference_tests.rs fails when a key is added to or removed from the schema without being documented here, when this file does not load, when a value set here differs from the program default, and when a closed set of values drifts.
+# src/config_reference_tests.rs checks documented keys, loadable defaults and examples, and closed sets of accepted values.
 # src/rules/tests/config_reference.rs does the same for the built-in rule inventory below.
 #
 # File locations and config-command workflows: [configuration](configuration.md).
@@ -448,7 +447,7 @@ backend = "auto"
 
 # CRISPASR_QWEN3ASR_QUANT_AUDIO
 # Native Qwen quantizer override. A nonempty value not starting with 0 allows audio-encoder tensors to use the target quantization below the normal Q8_0 floor.
-# `parakit fetch --from-source` sets it to 0 for the quantizer child process, preserving the native audio-encoder precision policy regardless of the launching environment. It does not change the parent environment or runtime inference.
+# `parakit fetch --from-source` and Q6_K preparation (`fetch` or automatic startup) set it to 0 for the quantizer child process, preserving the native audio-encoder precision policy regardless of the launching environment. It does not change the parent environment or runtime inference.
 
 # HF_ENDPOINT
 # Base URL that replaces https://huggingface.co for default/preset model downloads, `parakit fetch <repo>`, and `parakit fetch --from-source`. This includes automatic startup downloads.
@@ -464,9 +463,9 @@ backend = "auto"
 # Read by the TLS library for additional trusted certificates when downloading models.
 
 # PATH
-# `parakit fetch --from-source` searches it for python3 or python, and for the crispasr-quantize tool when it is not at the location built into the binary.
+# `parakit fetch --from-source` searches it for python3 or python. Both source rebuilds and Q6_K preparation search it for crispasr-quantize when the tool is not at the location built into the binary.
 # `parakit config edit` relies on it to find the editor program.
 
 # LD_LIBRARY_PATH, DYLD_LIBRARY_PATH
-# LD_LIBRARY_PATH on Linux and DYLD_LIBRARY_PATH on macOS. For a quantizer that ships with its own lib directory, `fetch --from-source` prepends that directory to the existing value for the quantizer child process only.
+# LD_LIBRARY_PATH on Linux and DYLD_LIBRARY_PATH on macOS. Source rebuilds and Q6_K preparation prepend a quantizer's accompanying lib directory to the existing value for the quantizer child process only.
 # On Windows the same prepending is done to PATH.

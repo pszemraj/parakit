@@ -29,3 +29,5 @@ Paste modes, clipboard staging, and focus checks are described under [insertion]
 ## `doctor --deep`
 
 In `standard` or `terminal` mode, `doctor --deep` opens a visible Win32 edit window, briefly takes focus, stages a sentinel on the clipboard, sends the configured paste chord, reads the text back, and restores supported clipboard content. Windows may use a brief cursor-click fallback to focus the probe, then restores the cursor position afterward. Run it from an unlocked interactive desktop. In `direct` mode, it performs backend preflight only and does not type into the probe.
+
+The probe checks Win32 input delivery and edit-control readback. It stages and restores the clipboard directly, so passing does not establish the daemon's clipboard-history timing or restore gate, or paste behavior in other applications.

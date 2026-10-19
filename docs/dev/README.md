@@ -25,7 +25,7 @@ Install the conversion dependencies once in the Python environment used by `fetc
 python -m pip install -r scripts/requirements-convert.txt
 ```
 
-With no preset, or with `--model-preset parakeet-v3`, the existing NVIDIA `.nemo` rebuild remains unchanged:
+With no preset, or with `--model-preset parakeet-v3`, rebuild from NVIDIA's `.nemo` checkpoint:
 
 ```bash
 parakit fetch --from-source --keep-f16 --keep-nemo
@@ -75,8 +75,6 @@ TODO: Add a Linux `doctor` warning for known IBus `Ctrl+Space` conflicts, or clo
 
 TODO: Remove the [Unix source-install dependency on the repository `target/` library tree](../build.md#install) in a dedicated follow-up PR. First try to work upstream with CrispASR for static/manual linking support; if that is not viable, revisit full vendoring or an aggregate static-link strategy in parakit. Do not patch the CrispASR submodule locally for this.
 
-TODO: Add a secondary recording watchdog for missed key-release events from the registered X11 hotkey backend. The existing max-utterance timeout bounds the failure, but a silence-based stop would recover sooner when a backend misses release ordering.
-
 TODO: Revisit Linux/macOS microphone idle policy. Either move them to the same pause/resume default as Windows or keep 350 ms warm pre-roll only with measured idle CPU and first-syllable evidence that justifies the cost.
 
 TODO: Replace fallback microphone device polling with platform event notifications when the audio layer is split: Windows `IMMNotificationClient`, PipeWire/PulseAudio registry events, and macOS `AudioObject` property listeners. Expose stream state, callback drops, and recovery counters through daemon status at the same time.
@@ -95,7 +93,7 @@ TODO: Add a Windows PE dependency-walker validation pass for the CPU bundle so r
 
 TODO: Run the full Windows BLAS/thread benchmark matrix for CPU builds, including no BLAS, OpenBLAS with controlled OpenMP ownership, and relevant `--threads` values against the pinned voice-memo smoke file.
 
-TODO: Complete native Linux and Windows validation for target-gated desktop transports, input backends, and their tests using the [runtime smoke checks](quality.md#runtime-smoke-checks). CI remains limited to static checks unless its scope and cost are separately agreed.
+TODO: Complete the remaining [native model and physical desktop checks](model-validation.md), including target-gated Linux and Windows transports and input backends. CI remains limited to static checks unless its scope and cost are separately agreed.
 
 ## Updating [CrispASR](https://github.com/CrispStrobe/CrispASR)
 

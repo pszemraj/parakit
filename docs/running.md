@@ -71,7 +71,7 @@ Use `parakit --verbose doctor` to list the compute devices visible to bundled gg
 parakit start --log-dir "$HOME/.parakit/logs" --quiet & disown
 ```
 
-`--quiet` suppresses normal stdout, including startup lines and transcripts. Errors and warnings still go to stderr. Unless `--verbose` is set, native informational loader lines are omitted while useful errors remain visible. Use `--verbose` for native loader diagnostics.
+`--quiet` suppresses normal stdout, including startup lines and transcripts. Errors, warnings, and the [Q6 preparation notice](#model-presets) still go to stderr. Use `--verbose` for native loader diagnostics, including details hidden while the model opens at startup.
 
 On Linux, start parakit from a terminal in the current desktop session. Tmux, X11 auth, and evdev details are in [linux-desktop.md](linux-desktop.md).
 
@@ -197,7 +197,7 @@ parakit start --model-preset parakeet-ultra --quantize q6_k \
   --log-dir "$HOME/.parakit/logs" --quiet & disown
 ```
 
-Use `parakeet-v2` for English-only v2, `parakeet-v3` for the original default, or either Qwen name in the table below. Without `--model-preset`, `--quantize q6_k` prepares v3. Missing Q6_K causes startup to download F16 if needed and quantize it locally. The temporary F16 is removed after successful quantization and kept after a failure so retrying can reuse it. Wait for readiness before dictating. Cached Q6_K starts work offline and idle reload reuses the resolved file.
+Use `parakeet-v2` for English-only v2, `parakeet-v3` for the original default, or either Qwen name in the table below. Without `--model-preset`, `--quantize q6_k` prepares v3. Preparing a missing Q6_K prints a notice to stderr even with `--quiet`, since a larger download and local quantization may be needed. It reuses an explicitly fetched F16 when available; otherwise it downloads a private F16 intermediate. That private file is removed after success and kept after failure for retry. Explicitly fetched F16 files are preserved, including during `--force` rebuilds, which download a fresh private intermediate. Wait for readiness before dictating. Cached Q6_K starts work offline and idle reload reuses the resolved file.
 
 Interactive downloads show a progress bar with bytes downloaded, transfer speed, and ETA. If the server omits the file size, a byte counter is shown instead. Progress bars are hidden with `--quiet` or when stderr is redirected. Quantization is a separate stage announced after the download. URLs and native converter output require `--verbose`; failed tools report a short diagnostic. An explicit `fetch` confirms the cached model and prints its startup command, while daemon startup continues directly to loading.
 
@@ -235,7 +235,7 @@ parakit fetch --model-preset qwen3-asr-1.7b --quantize q6_k
 parakit start -m /path/printed/by/fetch/qwen3-asr-1.7b-q6_k.gguf --device gpu
 ```
 
-This accepts every preset above and uses its provider revision with `crispasr-quantize`; no Python environment or upload is needed. `--force` refreshes F16 and rebuilds Q6_K. Qwen retains a Q8_0-or-higher audio encoder, while Parakeet quantizes eligible encoder and decoder matrices to Q6_K; unsupported tensors keep higher precision. Validate recognition on your own recordings before relying on a new quantization.
+This accepts every preset above and uses its provider revision with `crispasr-quantize`; no Python environment or upload is needed. `--force` rebuilds Q6_K. Qwen retains a Q8_0-or-higher audio encoder, while Parakeet quantizes eligible encoder and decoder matrices to Q6_K; unsupported tensors keep higher precision. Validate recognition on your own recordings before relying on a new quantization.
 
 `fetch --quantize q6_k` conflicts with `--from-source`. GGUF Q6_K differs from [MLX's affine 6-bit quantization](https://ml-explore.github.io/mlx/build/html/python/_autosummary/mlx.core.quantize.html), so evaluate them separately. Windows requires a compatible external `crispasr-quantize.exe` on `PATH`; see [source rebuild](dev/README.md#source-rebuild).
 

@@ -78,6 +78,7 @@ Configuration sections provide built-in fallbacks; CLI resolvers apply overrides
 | `src/daemon/{stderr,subprocess}.rs` | Native stderr suppression and the reload loader-line filter, and bounded waits for desktop helper commands. |
 | `src/fetch/` | Preset Q8_0 downloads, cached Q6_K generation, Hugging Face repo and direct-URL sources, source rebuilds, and explicit `--sha256` checks. |
 | `src/model.rs` | Presets, provider revisions, model selection, quantization choices, and cache paths. |
+| `src/qwen.rs` | Qwen source-language normalization and generation-budget validation. |
 | `src/gguf.rs` | Minimal GGUF dtype reader for startup reporting. |
 | `src/{build_info,gpu,warmup,ffi_util}.rs`, `src/ggml_device_shim.cpp` | Build diagnostics, bundled ggml device listing through the C++ device shim, Qwen speech and Parakeet synthetic readiness probes, and local FFI helpers. |
 | `src/inference.rs`, `src/crispasr_ext.rs` | [CrispASR](https://github.com/CrispStrobe/CrispASR) session ownership wrapper, startup defaults including windowed Qwen attention (explicit overrides are retained), short-audio padding, and raw-ABI CPU/GPU session opening. See the [Qwen comparison guide](quality.md#qwen-and-moondream-comparisons) for the attention control. |
@@ -90,6 +91,7 @@ Configuration sections provide built-in fallbacks; CLI resolvers apply overrides
 | `examples/audit_cleaning.rs` | Built-in cleaner replay over historical JSONL logs. |
 | `scripts/transcribe_nemo_parakeet.py` | NeMo reference transcription helper. |
 | `build.rs`, `build/{native_link,openblas_roots,unix_openblas,windows_openblas}.rs` | CrispASR CMake orchestration, accelerator selection, runtime paths, C++ runtime linkage and device-shim compilation, and cross-platform BLAS discovery. |
+| `build/native_correctness.{rs,cmake}`, `build/native/qwen_correctness.hpp` | [Bundled native corrections](../build.md#crispasr-and-backends) compiled from generated source copies. |
 | `build/windows_{artifacts,cuda,manifest}.rs`, `scripts/windows/{build,common,toolchains,install}.ps1` | Windows toolchain discovery, runtime-manifest generation, bundle assembly, and per-user installation. |
 
 ## Failure Policy

@@ -2,7 +2,7 @@
 
 Run this checklist on the final feature-branch source on each available Mac and Windows laptop. Record the current commit, OS, hardware, backend, command logs, and physical observations. Linux results do not establish Metal or Windows behavior. A missing device or an unperformed physical check stays pending.
 
-The Linux acceptance report covers all six presets at Q8_0 and Q6_K on CPU, CUDA, and Vulkan. The [October 18 macOS report](macos-model-validation-2026-10-18.md) covers CPU/Metal execution at both precisions on the tested M5, including shared-resampler and idle-reload checks. Physical desktop checks, fresh listening, and native Windows execution remain pending. The earlier [CrispASR macOS report](crispasr-macos-validation.md) and [October 7 macOS report](macos-validation-2026-10-07.md) document historical runs only.
+The Linux acceptance report covers all six presets at Q8_0 and Q6_K on CPU, CUDA, and Vulkan. The [October 18 macOS report](macos-model-validation-2026-10-18.md) covers CPU/Metal execution at both precisions on the tested M5, including shared-resampler and idle-reload checks. [Focused Windows results](#focused-windows-results-2026-10-19) cover a smaller model set. The full Windows matrix, physical desktop checks, and fresh human listening remain pending. The earlier [CrispASR macOS report](crispasr-macos-validation.md) and [October 7 macOS report](macos-validation-2026-10-07.md) document historical runs only.
 
 Transfer the Git bundle, public fixture ZIP, and source archive from the closure package. Keep downloaded models and all test state inside the checkout. The Git bundle can be loaded into a full checkout without publishing it:
 
@@ -89,7 +89,7 @@ git rev-parse HEAD | Out-File "target\tmp\new-models\windows\commit.txt"
 Get-CimInstance Win32_OperatingSystem | Out-File "target\tmp\new-models\windows\os.txt"
 Get-CimInstance Win32_ComputerSystem | Out-File "target\tmp\new-models\windows\hardware.txt"
 Get-CimInstance Win32_VideoController | Out-File "target\tmp\new-models\windows\hardware.txt" -Append
-$Backends = @("cpu", "vulkan") # Add cuda only on a supported NVIDIA/CUDA system.
+$Backends = @("cpu") # Add vulkan or cuda only when its SDK and supported device are available.
 foreach ($Backend in $Backends) { .\scripts\windows\build.ps1 --backend $Backend --no-install }
 ~~~
 
@@ -137,6 +137,14 @@ foreach ($Backend in $Backends) {
 ~~~
 
 Run `cargo test resampl` in the Windows checkout too. The DLL path is restored after each backend. Fixture rates and test interpretation match macOS. Keep each extracted directory fresh on reruns so stale DLLs cannot mask bundle omissions.
+
+### Focused Windows results (2026-10-19)
+
+At `55cb08a`, native Windows 11 builds and freshly extracted CPU, CUDA, and Vulkan bundles passed Parakeet v3 Q8_0 and Qwen 0.6B Q8_0 canaries on a Ryzen 9 8945HS with an RTX 4070 Laptop GPU. Each backend ran the real 55.36-second Juniper WAV through the helper and production worker, with exact helper/worker transcript parity, normal/quiet output checks, and correlated JSONL records across separate process sessions. CPU-first CLI canaries covered first-run configuration, model fetch/cache reuse, and missing-model errors. CUDA inference retained a compiled-13.1/runtime-13.0 version warning; quiet CUDA stderr contained that warning.
+
+Subsequent review fixes and consolidation through `cacfd8e` passed focused CPU Parakeet v3 worker/JSONL and CLI checks. The consolidation passed 92 focused fetch, GGUF, clipboard, worker, and configuration tests plus formatting, strict rustdoc, workspace checks, Clippy, build, and the Rust all-features check using retained CPU native libraries. Tiny local fixtures and native tool stand-ins checked conversion arguments, cache preservation, and failure cleanup; they did not perform real model conversion. GPU runs were not repeated after these changes.
+
+These checks preserved the installed daemon and settings and reused isolated models/audio. They do not complete the six-model/two-precision matrix, native microphone/hotkey/insertion/cue or sleep/wake checks, GPU memory-pressure tests, or human recognition adjudication. Qwen had recognition disagreements despite helper/worker parity. No inference-speed improvement or full-suite result is claimed for the consolidation.
 
 ## Qwen options, long input, and reload
 
@@ -186,7 +194,7 @@ silence.wav and noise-only.wav are synthetic controls; inspect unwanted insertio
 Use isolated configuration for the tested preset, precision, device, and Qwen options; leave installed settings intact. Check both Qwen sizes, both precisions, and one Parakeet preset on each available native device path.
 
 1. Dictate a sentence with a negation, number, and the word language. Confirm one insertion, inspect the transcript, and repeat with normal cleaning enabled.
-2. After idle offload, hold PTT through reload, speak, and release. Confirm readiness before recording and one complete insertion. Release PTT immediately during reload separately; confirm the queued capture completes once and no late listening cue follows.
+2. After idle offload, hold PTT through reload, speak, and release. Confirm early speech is retained, readiness precedes the listening cue, and insertion happens once. Release PTT immediately during reload separately; confirm the queued capture completes once and no late listening cue follows.
 3. Check normal start/completion/error cues and repeat with sounds disabled. Check silence and synthetic noise without treating them as acoustic room tests.
 4. Stop and restart the isolated daemon without CLI overrides; confirm saved selection and Qwen options persist. Test sleep/wake, another capture, and insertion.
 5. Record real quiet speech and nonspeech in a room with fan, keyboard, breathing, or microphone handling sounds, paired with quiet and breathless speech. Record the environment and listen to disagreements. These real-world recordings remain pending until performed; do not add or assume a new VAD/rejection rule.
