@@ -8,7 +8,9 @@ use std::time::{Duration, Instant};
 
 #[test]
 fn q6_acquisition_preserves_cached_models_and_reports_preparation() {
+    #[cfg(target_os = "windows")]
     const CASE: &str = "PARAKIT_Q6_ACQUISITION_CASE";
+    #[cfg(target_os = "windows")]
     if let Ok(case) = std::env::var(CASE) {
         let dir = crate::test_support::fixture_root("parakit-fetch-tests", &case);
         let preset = ModelPreset::ParakeetV3;
@@ -140,11 +142,13 @@ fn q6_acquisition_preserves_cached_models_and_reports_preparation() {
         assert_eq!(std::fs::read(q8).unwrap(), b"existing Q8");
     }
 
-    // A tiny native tool exercises the transaction on Windows without converting a model.
-    let bin = dir.join("bin");
-    std::fs::create_dir_all(&bin).unwrap();
-    let source = bin.join("quantizer.rs");
-    std::fs::write(&source, r#"
+    // Unix prefers its bundled quantizer over PATH; this stand-in is Windows-only.
+    #[cfg(target_os = "windows")]
+    {
+        let bin = dir.join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let source = bin.join("quantizer.rs");
+        std::fs::write(&source, r#"
 fn main() {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
     assert_eq!(args[2], "q6_k");
@@ -153,34 +157,35 @@ fn main() {
     std::fs::write(std::path::Path::new(&args[1]).with_extension("input"), args[0].to_str().unwrap()).unwrap();
 }
 "#).unwrap();
-    let quantizer = bin.join(exe_name("crispasr-quantize"));
-    let compiled = Command::new("rustc")
-        .arg(&source)
-        .arg("-o")
-        .arg(&quantizer)
-        .output()
-        .unwrap();
-    assert!(compiled.status.success(), "{compiled:?}");
-    let path = joined_path_with_prepended(&bin, std::env::var_os("PATH")).unwrap();
-    for case in ["cached", "cold", "force"] {
-        let output = crate::test_support::exact_test_command(
-            "fetch::tests::q6_acquisition_preserves_cached_models_and_reports_preparation",
-        )
-        .env(CASE, case)
-        .env("PATH", &path)
-        .output()
-        .unwrap();
-        assert!(output.status.success(), "{case}: {output:?}");
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        assert_eq!(
-            stderr.matches("preparing parakeet-v3 Q6_K").count(),
-            1,
-            "{case}: {stderr}"
-        );
-        assert!(
-            !String::from_utf8_lossy(&output.stdout).contains("parakit:"),
-            "{case}: {output:?}"
-        );
+        let quantizer = bin.join(exe_name("crispasr-quantize"));
+        let compiled = Command::new("rustc")
+            .arg(&source)
+            .arg("-o")
+            .arg(&quantizer)
+            .output()
+            .unwrap();
+        assert!(compiled.status.success(), "{compiled:?}");
+        let path = joined_path_with_prepended(&bin, std::env::var_os("PATH")).unwrap();
+        for case in ["cached", "cold", "force"] {
+            let output = crate::test_support::exact_test_command(
+                "fetch::tests::q6_acquisition_preserves_cached_models_and_reports_preparation",
+            )
+            .env(CASE, case)
+            .env("PATH", &path)
+            .output()
+            .unwrap();
+            assert!(output.status.success(), "{case}: {output:?}");
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert_eq!(
+                stderr.matches("preparing parakeet-v3 Q6_K").count(),
+                1,
+                "{case}: {stderr}"
+            );
+            assert!(
+                !String::from_utf8_lossy(&output.stdout).contains("parakit:"),
+                "{case}: {output:?}"
+            );
+        }
     }
 }
 
