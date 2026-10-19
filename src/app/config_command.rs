@@ -109,11 +109,15 @@ fn print_config_show(quiet: bool) -> Result<()> {
     )?;
     outln!(
         "    model_preset: {}",
-        config
-            .daemon
-            .model_preset
-            .map(|preset| preset.id())
-            .unwrap_or("(default: parakeet-v3)")
+        if config.daemon.model.is_some() {
+            "(not applicable: local model)"
+        } else {
+            config
+                .daemon
+                .model_preset
+                .map(|preset| preset.id())
+                .unwrap_or("(default: parakeet-v3)")
+        }
     )?;
     outln!(
         "    quantize: {}",

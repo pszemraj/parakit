@@ -483,32 +483,69 @@ fn daemon_control_remains_available_during_model_download() {
 }
 
 #[test]
-fn config_show_reports_resolved_defaults() {
-    let output = isolated_parakit_with_empty_config("config-show-defaults")
-        .args(["config", "show"])
-        .output()
-        .expect("parakit should run");
-
-    assert!(output.status.success());
-    assert!(output.stderr.is_empty());
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    for expected in [
-        "    model: (default: hosted Q8_0)",
-        "    device: (default: auto)",
-        "    threads: (default: auto-detected)",
-        "    paste_mode: (default: platform)",
-        "    keep_transcript_clipboard: false",
-        "    sounds: true",
-        "    transcript_history: (default: 10)",
-        "    enabled: true",
-        "    profile: safe",
-        "    keep_trailing_period: false",
-        "    number_threshold: (default: 4)",
+fn config_show_reports_resolved_model_selection() {
+    for (name, config, model, preset, quantize) in [
+        (
+            "default",
+            "",
+            "(default: hosted Q8_0)",
+            "(default: parakeet-v3)",
+            "q8_0",
+        ),
+        (
+            "local",
+            "[daemon]\nmodel = 'custom.gguf'\n",
+            "custom.gguf",
+            "(not applicable: local model)",
+            "(from model file)",
+        ),
+        (
+            "preset",
+            "[daemon]\nmodel_preset = 'qwen3-asr-0.6b'\n",
+            "(preset: qwen3-asr-0.6b)",
+            "qwen3-asr-0.6b",
+            "q8_0",
+        ),
     ] {
-        assert!(
-            stdout.contains(expected),
-            "missing {expected:?} in:\n{stdout}"
-        );
+        let root = common::fixture_root_with_files("cli-contracts", name, &["config.toml"]);
+        let config_path = root.join("config.toml");
+        std::fs::write(&config_path, config).unwrap();
+        let output = isolated_parakit(&root)
+            .env("PARAKIT_CONFIG_PATH", config_path)
+            .args(["config", "show"])
+            .output()
+            .expect("parakit should run");
+
+        assert!(output.status.success(), "{name}: {output:?}");
+        assert!(output.stderr.is_empty(), "{name}: {output:?}");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        for expected in [
+            format!("    model: {model}"),
+            format!("    model_preset: {preset}"),
+            format!("    quantize: {quantize}"),
+        ] {
+            assert!(
+                stdout.contains(&expected),
+                "{name}: missing {expected:?} in:\n{stdout}"
+            );
+        }
+        for expected in [
+            "    device: (default: auto)",
+            "    threads: (default: auto-detected)",
+            "    paste_mode: (default: platform)",
+            "    keep_transcript_clipboard: false",
+            "    sounds: true",
+            "    transcript_history: (default: 10)",
+            "    enabled: true",
+            "    profile: safe",
+            "    keep_trailing_period: false",
+            "    number_threshold: (default: 4)",
+        ] {
+            assert!(
+                stdout.contains(expected),
+                "missing {expected:?} in:\n{stdout}"
+            );
+        }
     }
 }
 
