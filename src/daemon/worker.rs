@@ -426,20 +426,23 @@ where
                             snapshot: focus_at_start.as_deref(),
                             verification: &focus_verification,
                         };
-                        let insert_result = state.with_insertion_lock(|| {
-                            let result = insert_text(
-                                &mut injector,
-                                &cleaned,
-                                paste_mode,
-                                keep_transcript_clipboard,
-                                focus_check,
-                                (log.as_ref(), &notifier),
-                            );
-                            if insertion_result_remembers_transcript(&result) {
-                                state.remember_transcript(cleaned);
-                            }
-                            result
-                        });
+                        let (insert_result, remembers_transcript) =
+                            state.with_insertion_lock(|| {
+                                let result = insert_text(
+                                    &mut injector,
+                                    &cleaned,
+                                    paste_mode,
+                                    keep_transcript_clipboard,
+                                    focus_check,
+                                    (log.as_ref(), &notifier),
+                                );
+                                let remembers_transcript =
+                                    insertion_result_remembers_transcript(&result);
+                                if remembers_transcript {
+                                    state.remember_transcript(cleaned);
+                                }
+                                (result, remembers_transcript)
+                            });
                         match insert_result {
                             Ok(report) => {
                                 let outcome = report.outcome;
@@ -467,7 +470,9 @@ where
                                 ));
                                 state.set_phase("idle");
                                 if report.needs_alert() {
-                                    log_recovery_hint(&state, &log);
+                                    if remembers_transcript {
+                                        log_recovery_hint(&state, &log);
+                                    }
                                     sounds.error();
                                 } else {
                                     sounds.success();

@@ -155,34 +155,64 @@ fn worker_loop_offloads_then_reloads_and_transcribes_queued_capture() {
 }
 
 #[test]
-fn failed_transcription_keeps_previous_history_and_reports_failure() {
+fn failed_or_skipped_transcription_keeps_previous_history_without_recovery_hint() {
+    const CHILD: &str = "PARAKIT_TEST_RETAINED_HISTORY";
+    let skipped = match std::env::var(CHILD).as_deref() {
+        Ok("skipped") => true,
+        Ok("failed") => false,
+        _ => {
+            for case in ["failed", "skipped"] {
+                let output = crate::test_support::exact_test_command(
+                    "daemon::worker::tests::failed_or_skipped_transcription_keeps_previous_history_without_recovery_hint",
+                )
+                .env(CHILD, case)
+                .output()
+                .unwrap();
+                assert!(output.status.success(), "{case}: {output:?}");
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                assert!(!stderr.contains("transcript saved"), "{case}: {stderr}");
+                assert!(!stderr.contains("copy-last"), "{case}: {stderr}");
+            }
+            return;
+        }
+    };
     let state = Arc::new(SharedState::with_history_limit(2));
     state.activity.ready();
     state.remember_transcript("previous dictation".to_owned());
     let (tx, rx) = crossbeam_channel::bounded(WORKER_QUEUE_CAPACITY);
     let (sounds, cues) = Sounds::test_channel();
-    let ctx = test_worker_ctx(
+    let mut ctx = test_worker_ctx(
         FakeEngine {
             transcriptions: Arc::new(AtomicUsize::new(0)),
             drops: Arc::new(AtomicUsize::new(0)),
-            transcript: Err("incomplete native decoding"),
+            transcript: if skipped {
+                Ok("\x1b")
+            } else {
+                Err("incomplete native decoding")
+            },
         },
         &state,
         sounds,
         rx,
         0,
     );
+    // The control-only transcript is skipped before any clipboard write or input.
+    ctx.insert_transcripts = skipped;
+    ctx.log = Arc::new(Logger::new(super::super::logging::LogLevel::Normal));
     let worker = std::thread::spawn(move || {
         worker_loop_with(ctx, None, || panic!("resident model must not reload"))
     });
     let (done_tx, done_rx) = crossbeam_channel::bounded(1);
     let capture = stopped_capture(Instant::now(), vec![0.1; 160], None, done_tx);
     tx.send(capture).unwrap();
-    assert!(done_rx
-        .recv_timeout(Duration::from_secs(1))
-        .unwrap()
-        .unwrap_err()
-        .contains("incomplete native decoding"));
+    let completed = done_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+    if skipped {
+        completed.unwrap();
+    } else {
+        assert!(completed
+            .unwrap_err()
+            .contains("incomplete native decoding"));
+    }
     assert!(matches!(next_cue(&cues), Cue::Error));
     drop(tx);
     worker.join().unwrap();
