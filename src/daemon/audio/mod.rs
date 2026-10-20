@@ -11,3 +11,6 @@ mod pactl;
 
 /// Re-export audio capture primitives used by the daemon.
 pub(crate) use capture::{probe_default_input, AudioCapture, AudioHandle, MicInfo, TARGET_RATE};
+
+#[cfg(all(test, target_os = "macos"))]
+mod live_smoke;

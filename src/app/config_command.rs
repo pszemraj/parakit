@@ -29,7 +29,12 @@ pub(super) fn run_config_command(config_cli: &ConfigCli, quiet: bool) -> Result<
         }
         ConfigCommand::Init { force } => init_config_file(*force, quiet)?,
         ConfigCommand::Show => print_config_show(quiet)?,
-        ConfigCommand::Edit => edit_config_file()?,
+        ConfigCommand::Edit => {
+            edit_config_file()?;
+            if !quiet {
+                outln!("Changes apply on the next start.")?;
+            }
+        }
     }
     Ok(())
 }
@@ -94,7 +99,33 @@ fn print_config_show(quiet: bool) -> Result<()> {
             .model
             .as_ref()
             .map(|p| p.display().to_string())
-            .unwrap_or_else(|| "(default: hosted Q8_0)".to_string())
+            .unwrap_or_else(|| config.daemon.model_preset.map_or_else(
+                || match config.daemon.quantize.unwrap_or_default() {
+                    ModelQuantization::Q8 => "(default: hosted Q8_0)".to_owned(),
+                    ModelQuantization::Q6K => "(default: parakeet-v3 Q6_K)".to_owned(),
+                },
+                |preset| format!("(preset: {})", preset.id())
+            ))
+    )?;
+    outln!(
+        "    model_preset: {}",
+        if config.daemon.model.is_some() {
+            "(not applicable: local model)"
+        } else {
+            config
+                .daemon
+                .model_preset
+                .map(|preset| preset.id())
+                .unwrap_or("(default: parakeet-v3)")
+        }
+    )?;
+    outln!(
+        "    quantize: {}",
+        if config.daemon.model.is_some() {
+            "(from model file)"
+        } else {
+            config.daemon.quantize.unwrap_or_default().as_str()
+        }
     )?;
     outln!(
         "    device: {}",
@@ -141,6 +172,16 @@ fn print_config_show(quiet: bool) -> Result<()> {
                 config.daemon.effective_transcript_history()
             ))
     )?;
+    let qwen = config.qwen.options();
+    outln!("  qwen:")?;
+    outln!(
+        "    language: {}",
+        qwen.normalized_language()
+            .map_err(anyhow::Error::msg)?
+            .as_deref()
+            .unwrap_or("auto")
+    )?;
+    outln!("    max_new_tokens: {}", qwen.max_new_tokens)?;
     outln!("  cleaning:")?;
     outln!("    enabled: {}", config.cleaning.enabled())?;
     outln!("    profile: {}", config.cleaning.effective_profile())?;

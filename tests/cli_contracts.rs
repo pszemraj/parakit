@@ -31,6 +31,35 @@ fn isolated_parakit_with_empty_config(name: &str) -> Command {
 }
 
 #[test]
+fn simulated_ptt_rejects_missing_model_before_loading_output() {
+    for quiet in [false, true] {
+        let mut command = isolated_parakit_with_empty_config(if quiet {
+            "missing-simulated-model-quiet"
+        } else {
+            "missing-simulated-model"
+        });
+        if quiet {
+            command.arg("--quiet");
+        }
+        let output = command
+            .args([
+                "start",
+                "--model",
+                "target/tmp/nonexistent-model-for-ptt-canary.gguf",
+                "--simulate-ptt-audio",
+                "vendor/CrispASR/bindings/go/samples/jfk.wav",
+            ])
+            .output()
+            .expect("parakit should run");
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
+        assert!(output.stdout.is_empty(), "{output:?}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("model path is not a file"), "{stderr}");
+        assert!(!stderr.contains("gguf_init"), "{stderr}");
+    }
+}
+
+#[test]
 fn broken_config_does_not_block_documented_control_and_repair_commands() {
     let root = common::fixture_root("cli-contracts", "broken-config-control");
     std::fs::create_dir_all(&root).expect("fixture root should be created");
@@ -420,8 +449,19 @@ fn daemon_control_remains_available_during_model_download() {
         };
         // The local server deliberately withholds its response, exercising the
         // real startup path without downloading a model or entering the hotkey loop.
+        let requested = isolated_parakit(&root)
+            .args(["--quiet", "start", "--quantize", "q6_k"])
+            .output()?;
+        ensure!(
+            requested.status.success() && requested.stdout.is_empty(),
+            "{requested:?}"
+        );
+        ensure!(
+            String::from_utf8_lossy(&requested.stderr).contains("options were not applied"),
+            "{requested:?}"
+        );
         for (args, expected) in [
-            (&["status"][..], "parakit: starting"),
+            (&["status"][..], "parakit: preparing model"),
             (&["start"][..], "parakit: already running"),
             (&["stop"][..], "stopped"),
         ] {
@@ -443,32 +483,69 @@ fn daemon_control_remains_available_during_model_download() {
 }
 
 #[test]
-fn config_show_reports_resolved_defaults() {
-    let output = isolated_parakit_with_empty_config("config-show-defaults")
-        .args(["config", "show"])
-        .output()
-        .expect("parakit should run");
-
-    assert!(output.status.success());
-    assert!(output.stderr.is_empty());
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    for expected in [
-        "    model: (default: hosted Q8_0)",
-        "    device: (default: auto)",
-        "    threads: (default: auto-detected)",
-        "    paste_mode: (default: platform)",
-        "    keep_transcript_clipboard: false",
-        "    sounds: true",
-        "    transcript_history: (default: 10)",
-        "    enabled: true",
-        "    profile: safe",
-        "    keep_trailing_period: false",
-        "    number_threshold: (default: 4)",
+fn config_show_reports_resolved_model_selection() {
+    for (name, config, model, preset, quantize) in [
+        (
+            "default",
+            "",
+            "(default: hosted Q8_0)",
+            "(default: parakeet-v3)",
+            "q8_0",
+        ),
+        (
+            "local",
+            "[daemon]\nmodel = 'custom.gguf'\n",
+            "custom.gguf",
+            "(not applicable: local model)",
+            "(from model file)",
+        ),
+        (
+            "preset",
+            "[daemon]\nmodel_preset = 'qwen3-asr-0.6b'\n",
+            "(preset: qwen3-asr-0.6b)",
+            "qwen3-asr-0.6b",
+            "q8_0",
+        ),
     ] {
-        assert!(
-            stdout.contains(expected),
-            "missing {expected:?} in:\n{stdout}"
-        );
+        let root = common::fixture_root_with_files("cli-contracts", name, &["config.toml"]);
+        let config_path = root.join("config.toml");
+        std::fs::write(&config_path, config).unwrap();
+        let output = isolated_parakit(&root)
+            .env("PARAKIT_CONFIG_PATH", config_path)
+            .args(["config", "show"])
+            .output()
+            .expect("parakit should run");
+
+        assert!(output.status.success(), "{name}: {output:?}");
+        assert!(output.stderr.is_empty(), "{name}: {output:?}");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        for expected in [
+            format!("    model: {model}"),
+            format!("    model_preset: {preset}"),
+            format!("    quantize: {quantize}"),
+        ] {
+            assert!(
+                stdout.contains(&expected),
+                "{name}: missing {expected:?} in:\n{stdout}"
+            );
+        }
+        for expected in [
+            "    device: (default: auto)",
+            "    threads: (default: auto-detected)",
+            "    paste_mode: (default: platform)",
+            "    keep_transcript_clipboard: false",
+            "    sounds: true",
+            "    transcript_history: (default: 10)",
+            "    enabled: true",
+            "    profile: safe",
+            "    keep_trailing_period: false",
+            "    number_threshold: (default: 4)",
+        ] {
+            assert!(
+                stdout.contains(expected),
+                "missing {expected:?} in:\n{stdout}"
+            );
+        }
     }
 }
 

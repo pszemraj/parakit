@@ -68,13 +68,9 @@ fn detect_dtype(path: &Path) -> Result<Option<String>> {
         let value_type = read_u32(&mut file)?;
         if key == "general.file_type" {
             return match value_type {
-                GGUF_TYPE_UINT32 => Ok(file_type_name(read_u32(&mut file)?).map(str::to_string)),
-                GGUF_TYPE_INT32 => {
-                    let value = read_i32(&mut file)?;
-                    Ok(u32::try_from(value)
-                        .ok()
-                        .and_then(file_type_name)
-                        .map(str::to_string))
+                // Known file-type codes are nonnegative; sign-bit values are unknown.
+                GGUF_TYPE_UINT32 | GGUF_TYPE_INT32 => {
+                    Ok(file_type_name(read_u32(&mut file)?).map(str::to_string))
                 }
                 other => {
                     skip_value(&mut file, other)?;
@@ -101,16 +97,22 @@ pub fn dtype_label(path: &Path) -> String {
 }
 
 fn dominant_tensor_type(file: &mut File, tensor_count: u64) -> Result<Option<&'static str>> {
-    let mut counts: HashMap<u32, usize> = HashMap::new();
+    let mut counts: HashMap<u32, u64> = HashMap::new();
     for _ in 0..tensor_count {
         let _name = read_string(file)?;
         let dims = read_u32(file)?;
+        let mut elements = 1_u64;
         for _ in 0..dims {
-            let _ = read_u64(file)?;
+            elements = elements
+                .checked_mul(read_u64(file)?)
+                .context("GGUF tensor element count overflow")?;
         }
         let tensor_type = read_u32(file)?;
         let _offset = read_u64(file)?;
-        *counts.entry(tensor_type).or_default() += 1;
+        let count = counts.entry(tensor_type).or_default();
+        *count = count
+            .checked_add(elements)
+            .context("GGUF tensor type element count overflow")?;
     }
 
     Ok(counts
@@ -188,12 +190,6 @@ fn read_u32(file: &mut File) -> Result<u32> {
     Ok(u32::from_le_bytes(buf))
 }
 
-fn read_i32(file: &mut File) -> Result<i32> {
-    let mut buf = [0_u8; 4];
-    file.read_exact(&mut buf)?;
-    Ok(i32::from_le_bytes(buf))
-}
-
 fn read_u64(file: &mut File) -> Result<u64> {
     let mut buf = [0_u8; 8];
     file.read_exact(&mut buf)?;
@@ -209,17 +205,82 @@ mod tests {
     fn detects_general_file_type() {
         let dir = crate::test_support::fixture_root("gguf-tests", "general-file-type");
         let path = dir.join("q8.gguf");
+        for value_type in [GGUF_TYPE_UINT32, GGUF_TYPE_INT32] {
+            for (value, expected) in [(7_u32, Some("Q8_0")), (u32::MAX, None), (1 << 31, None)] {
+                let mut file = File::create(&path).unwrap();
+                file.write_all(b"GGUF").unwrap();
+                file.write_all(&3_u32.to_le_bytes()).unwrap();
+                file.write_all(&0_u64.to_le_bytes()).unwrap();
+                file.write_all(&1_u64.to_le_bytes()).unwrap();
+                write_string(&mut file, "general.file_type");
+                file.write_all(&value_type.to_le_bytes()).unwrap();
+                file.write_all(&value.to_le_bytes()).unwrap();
+                drop(file);
+
+                assert_eq!(detect_dtype(&path).unwrap().as_deref(), expected);
+            }
+        }
+    }
+
+    #[test]
+    fn small_f32_biases_do_not_hide_f16_weights_without_file_type() {
+        let dir = crate::test_support::fixture_root("gguf-tests", "mixed-f16");
+        let path = dir.join("mixed.gguf");
         let mut file = File::create(&path).unwrap();
         file.write_all(b"GGUF").unwrap();
         file.write_all(&3_u32.to_le_bytes()).unwrap();
+        file.write_all(&4_u64.to_le_bytes()).unwrap();
         file.write_all(&0_u64.to_le_bytes()).unwrap();
-        file.write_all(&1_u64.to_le_bytes()).unwrap();
-        write_string(&mut file, "general.file_type");
-        file.write_all(&GGUF_TYPE_UINT32.to_le_bytes()).unwrap();
-        file.write_all(&7_u32.to_le_bytes()).unwrap();
+        for (name, elements, dtype) in [
+            ("weight", 1024_u64, 1_u32),
+            ("bias", 8, 0),
+            ("norm.weight", 8, 0),
+            ("norm.bias", 8, 0),
+        ] {
+            write_string(&mut file, name);
+            file.write_all(&1_u32.to_le_bytes()).unwrap();
+            file.write_all(&elements.to_le_bytes()).unwrap();
+            file.write_all(&dtype.to_le_bytes()).unwrap();
+            file.write_all(&0_u64.to_le_bytes()).unwrap();
+        }
         drop(file);
+        assert_eq!(dtype_label(&path), "F16");
+    }
 
-        assert_eq!(detect_dtype(&path).unwrap().as_deref(), Some("Q8_0"));
+    #[test]
+    fn tensor_element_counts_reject_overflow_and_accept_u64_boundary() {
+        for (name, tensors, valid) in [
+            ("dimension-product", vec![vec![u64::MAX, 2]], false),
+            ("type-sum", vec![vec![u64::MAX], vec![1]], false),
+            ("product-boundary", vec![vec![u64::MAX, 1]], true),
+            ("sum-boundary", vec![vec![u64::MAX - 1], vec![1]], true),
+        ] {
+            let dir = crate::test_support::fixture_root("gguf-tests", name);
+            let path = dir.join("counts.gguf");
+            let mut file = File::create(&path).unwrap();
+            file.write_all(b"GGUF").unwrap();
+            file.write_all(&3_u32.to_le_bytes()).unwrap();
+            file.write_all(&(tensors.len() as u64).to_le_bytes())
+                .unwrap();
+            file.write_all(&0_u64.to_le_bytes()).unwrap();
+            for (index, dimensions) in tensors.iter().enumerate() {
+                write_string(&mut file, &format!("weight.{index}"));
+                file.write_all(&(dimensions.len() as u32).to_le_bytes())
+                    .unwrap();
+                for dimension in dimensions {
+                    file.write_all(&dimension.to_le_bytes()).unwrap();
+                }
+                file.write_all(&1_u32.to_le_bytes()).unwrap();
+                file.write_all(&0_u64.to_le_bytes()).unwrap();
+            }
+            drop(file);
+            assert_eq!(detect_dtype(&path).is_ok(), valid, "{name}");
+            assert_eq!(
+                dtype_label(&path),
+                if valid { "F16" } else { "unknown" },
+                "{name}"
+            );
+        }
     }
 
     fn write_string(file: &mut File, s: &str) {

@@ -2,6 +2,8 @@
 
 use super::*;
 use parakit::outln;
+use parakit::output::ProgressStage;
+use std::io::IsTerminal;
 
 /// Check whether the daemon control endpoint answers a status request.
 ///
@@ -53,6 +55,7 @@ pub(crate) fn run_client(command: IpcCommand, quiet: bool, verbose: bool) -> Res
     match response {
         IpcResponse::Ok { message } => {
             if matches!(&command, IpcCommand::Stop) {
+                let _progress = stopping_progress(quiet);
                 wait_for_daemon_stop(stop_deadline, false)?;
             }
             if !quiet {
@@ -87,6 +90,11 @@ pub(crate) fn run_client(command: IpcCommand, quiet: bool, verbose: bool) -> Res
         }
         IpcResponse::Err { message } => bail!("{message}"),
     }
+}
+
+fn stopping_progress(quiet: bool) -> Option<ProgressStage> {
+    (!quiet && std::io::stdout().is_terminal())
+        .then(|| ProgressStage::new("parakit: stopping...", false))
 }
 
 #[cfg(any(unix, target_os = "windows"))]
@@ -186,7 +194,10 @@ fn handle_daemon_not_running(command: &IpcCommand, quiet: bool, deadline: Instan
     };
     match daemon_not_running_disposition(command, singleton_held) {
         DaemonNotRunningDisposition::WaitForStop => {
-            wait_for_daemon_stop(deadline, true)?;
+            {
+                let _progress = stopping_progress(quiet);
+                wait_for_daemon_stop(deadline, true)?;
+            }
             if !quiet {
                 outln!("stopped")?;
             }
@@ -247,6 +258,12 @@ fn print_status_detail(detail: Option<&StatusDetail>) -> Result<()> {
     outln!("  dictations: {}", detail.dictation_count)?;
     outln!("  mic:        {}", detail.mic)?;
     outln!("  model:      {} ({})", detail.model, detail.dtype)?;
+    if let Some(preset) = &detail.model_preset {
+        outln!("  preset:     {preset}")?;
+    }
+    if let (Some(language), Some(budget)) = (&detail.qwen_language, detail.qwen_max_new_tokens) {
+        outln!("  Qwen:       language={language}, max_new_tokens={budget}")?;
+    }
     if let Some(model) = &detail.model_status {
         outln!("  residency:  {}", model.residency.label())?;
         if model.idle_minutes == 0 {

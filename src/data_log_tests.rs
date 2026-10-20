@@ -27,6 +27,7 @@ fn concurrent_jsonl_logging_writes_all_lines() {
                             rules_active: 72,
                             ..sample_cleaning_fields()
                         },
+                        None,
                     )
                     .expect("write concurrent log record");
             }
@@ -62,6 +63,7 @@ fn jsonl_round_trips_adversarial_transcript_content() {
             raw,
             cleaned,
             sample_cleaning_fields(),
+            None,
         )
         .expect("write adversarial log record");
 
@@ -122,6 +124,7 @@ fn jsonl_log_insertion_emits_correlated_second_line() {
             "raw text",
             "cleaned text",
             sample_cleaning_fields(),
+            None,
         )
         .expect("write transcript record");
     logger.log_insertion(&id, sample_insertion_fields());
@@ -211,6 +214,7 @@ fn logger_sessions_disambiguate_sequence_restarts_in_one_daily_file() {
             "first raw",
             "first cleaned",
             sample_cleaning_fields(),
+            None,
         )
         .expect("write first-session transcript");
     first_logger.log_insertion(&first_id, sample_insertion_fields());
@@ -224,6 +228,7 @@ fn logger_sessions_disambiguate_sequence_restarts_in_one_daily_file() {
             "second raw",
             "second cleaned",
             sample_cleaning_fields(),
+            None,
         )
         .expect("write second-session transcript");
     second_logger.log_insertion(&second_id, sample_insertion_fields());
@@ -270,9 +275,9 @@ fn insertion_record_stays_in_the_transcriptions_daily_file() {
             },
             1.0,
             Duration::from_millis(10),
-            "first raw",
-            "first cleaned",
+            ("first raw", "first cleaned"),
             sample_cleaning_fields(),
+            None,
         )
         .expect("write first-day transcript");
     logger
@@ -283,9 +288,9 @@ fn insertion_record_stays_in_the_transcriptions_daily_file() {
             },
             1.0,
             Duration::from_millis(10),
-            "next raw",
-            "next cleaned",
+            ("next raw", "next cleaned"),
             sample_cleaning_fields(),
+            None,
         )
         .expect("rotate to next-day transcript");
 
@@ -325,6 +330,7 @@ fn failed_transcription_write_returns_no_record_id() {
         "raw",
         "cleaned",
         sample_cleaning_fields(),
+        None,
     );
 
     assert!(id.is_none());
@@ -341,6 +347,7 @@ fn failed_transcription_write_returns_no_record_id() {
             "next",
             "Next",
             sample_cleaning_fields(),
+            None,
         )
         .expect("write after directory recovery");
     logger.log_insertion(&id, sample_insertion_fields());
@@ -617,4 +624,51 @@ fn cleaning_log_fields_serialize_with_omit_vs_null_contract() {
             .unwrap_or_else(|error| panic!("{label}: serialize cleaning fields: {error}"));
         assert_eq!(actual, expected, "{label}");
     }
+}
+
+#[test]
+fn inference_metadata_preserves_requested_policy_across_cpu_reload() {
+    let dir = crate::test_support::fixture_root("parakit-log-test", "inference-metadata");
+    let logger = DataLogger::new(dir.clone());
+    for session_device in [
+        crate::inference::DeviceMode::Auto,
+        crate::inference::DeviceMode::Cpu,
+    ] {
+        logger
+            .log(
+                1.0,
+                Duration::from_millis(10),
+                "raw",
+                "cleaned",
+                sample_cleaning_fields(),
+                Some(InferenceLogFields {
+                    model: "qwen.gguf".into(),
+                    model_preset: Some("qwen3-asr-0.6b".into()),
+                    backend: "qwen3".into(),
+                    quantization: "Q8_0".into(),
+                    requested_device: crate::inference::DeviceMode::Auto,
+                    session_device,
+                    confirmed_device: (session_device == crate::inference::DeviceMode::Cpu)
+                        .then(|| "cpu".into()),
+                    qwen_language: Some("Cantonese".into()),
+                    qwen_max_new_tokens: Some(4096),
+                    native_api_version: Some("0.7.0".into()),
+                }),
+            )
+            .unwrap();
+    }
+    let rows: Vec<serde_json::Value> =
+        std::fs::read_to_string(dir.join(file_name(Local::now().date_naive())))
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+    assert_eq!(rows[0]["inference"]["requested_device"], "auto");
+    assert_eq!(rows[1]["inference"]["requested_device"], "auto");
+    assert_eq!(rows[1]["inference"]["session_device"], "cpu");
+    assert!(rows[0]["inference"].get("confirmed_device").is_none());
+    assert_eq!(rows[1]["inference"]["confirmed_device"], "cpu");
+    assert_eq!(rows[1]["inference"]["qwen_language"], "Cantonese");
+    assert_eq!(rows[1]["inference"]["qwen_max_new_tokens"], 4096);
+    assert_eq!(rows[0]["raw"], "raw");
 }

@@ -268,6 +268,13 @@ fn competing_clipboard_during_confirmation_is_preserved_after_posted_paste() {
                 },
                 PasteOutcome::PastedUnverified,
             ),
+            (
+                PasteConfirmation::UnverifiedFocusLost {
+                    elapsed: Duration::from_millis(900),
+                    kind: "unverified_focus_lost",
+                },
+                PasteOutcome::PastedUnverified,
+            ),
         ] {
             for competing in competing_clipboard_payloads() {
                 let mut clipboard = MockClipboard::new("old clipboard");

@@ -2,6 +2,37 @@
 
 The daemon owns one inference session on its worker thread. Idle offload drops that session, releasing its owned CPU and GPU allocations. It does not unload native libraries or reset process-wide device and driver state. See [idle model offload](../running.md#idle-model-offload) for the user-facing policy.
 
+## Qwen GPU Reload Measurements
+
+Linux measurements on 2026-10-14 used the Qwen 0.6B and 1.7B Q8_0 presets, CrispASR v0.8.42 (`3be8bcb`), an RTX 5090 with NVIDIA driver 595.91.07, and eight inference/BLAS/OpenMP threads. Rust front ends used the dev profile; native C++ was optimized. CUDA was built with `PARAKIT_CUDA_ARCHS=120-real`. Each backend ran the 55.36-second Juniper memo, 29/30/31-second chunk-boundary inputs, silence, repeated inference, and idle offload/reload. Startup and reload used the embedded 11-second JFK speech readiness probe at automatic language/512 tokens, restoring user options before dictation.
+
+The resident-engine sequence was memo, short speech, 270 seconds of repeated JFK speech, then the same short speech; it ran twice with an idle offload after each cycle. Separate runs used automatic language/512 tokens and forced English/4096 tokens. The latter selects the maximum supported budget; it does not mean each chunk generated 4096 tokens. Repeated JFK is an artificial memory/context stress input, not a natural long-form quality recording.
+
+Beyond the model file and retained offloaded GPU state, these runs needed up to about 1.6 GiB for 0.6B and 1.8 GiB for 1.7B. See [idle model offload](../running.md#idle-model-offload) for the reload allowance and device policy.
+
+The following peaks are from the explicit GPU 4096-token lifecycle runs. Host high-water RSS includes startup and reload; it is not steady inference residency.
+
+| Backend / Qwen | Peak VRAM | Offloaded VRAM | Beyond file and offloaded state | Margin within 2 GiB | Host high-water RSS |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| CUDA / 0.6B | 3142 MiB | 568 MiB | 1614 MiB | 434 MiB | 1741 MiB |
+| CUDA / 1.7B | 4838 MiB | 568 MiB | 1879 MiB | 169 MiB | 3183 MiB |
+| Vulkan / 0.6B | 2620 MiB | 68 MiB | 1592 MiB | 456 MiB | 1459 MiB |
+| Vulkan / 1.7B | 4326 MiB | 70 MiB | 1865 MiB | 183 MiB | 2898 MiB |
+
+Compare the allocation rise from an offloaded session with the free-memory requirement. Retained driver state is already excluded from free GPU memory and should not be charged again. CUDA retained about 568 MiB in these Qwen runs; Vulkan retained about 68-70 MiB. Host RSS and GPU allocation describe different accounting domains and should not be added together. Session close did not return all host RSS to the OS, and reload could peak above steady loaded RSS.
+
+The initial matrix sampled at 50 ms; the final worker pass used nominal 5 ms active and 50 ms idle intervals. These are observed lower bounds, not allocation ceilings. The 2 GiB allowance covers the tested Q8_0 inputs at budgets 512 and 4096 on this host, with a narrow margin for 1.7B. These Q8 measurements do not qualify other artifacts or native Metal/Windows behavior. No VRAM-filling pressure test was performed. The check does not reserve memory or prevent later allocation failure. Follow the [Linux GPU procedure](quality.md#linux-cudavulkan) to record commands, per-process stage measurements, and raw transcripts for another build.
+
+An October 18 release-worker check with the shared native resampler and windowed attention measured Qwen 1.7B Q6_K on CUDA with forced English and a 4096-token budget. The memo output and options survived idle offload/reload. Process VRAM peaked at 4316 MiB against a 568 MiB offloaded baseline: 3748 MiB incremental, leaving about 221 MiB within the model-file-plus-2-GiB allowance. Sampled host RSS peaked at 2602 MiB and VmHWM at 2668 MiB. This qualifies that Q6 case only; the complete per-phase observations are retained under ignored `target/tmp/new-models/native-preprocessing/reload/runtime/`.
+
+## Metal Qwen Reload Accounting
+
+Qwen's main model and shared audio tower each register a full-file Metal buffer view with the default mmap loader. The audio tower filters tensor names, but the Metal fast path still registers the entire mapped GGUF. Metal's `currentAllocatedSize` therefore includes both registrations. The [reload requirement](../running.md#idle-model-offload) accounts for both views.
+
+The [October 18 macOS report](macos-model-validation-2026-10-18.md#metal-reload-correction) records Q8_0/Q6_K peaks for both Qwen sizes and the controlled-budget reload checks.
+
+Use Metal allocation figures and host RSS separately because their unified-memory accounting overlaps. The guard follows the same Metal counter used by the free-memory query; it does not reserve memory or establish a universal allocation bound. Other artifacts, overrides and hardware still need native measurements using the [validation procedure](model-validation.md#qwen-options-long-input-and-reload).
+
 ## Linux Reload Measurements
 
 These Linux measurements describe the historical CrispASR v0.6.6 runtime; they do not characterize the current v0.8.42 runtime.
@@ -16,7 +47,7 @@ All three run metadata files recorded Parakit revision `5066d9f`, CrispASR pin `
 | CUDA | 1.26-1.27 GiB | 0.57-0.58 GiB | 0.68 GiB | 0.58 GiB | 1312 MiB | 2054 MiB | 566 MiB |
 | Vulkan | 0.88 GiB | 0.19 GiB | 0.28 GiB | 0.19 GiB | 746 MiB | 1491 MiB | 22 MiB |
 
-The CPU reload peak is almost twice its post-load residency. CUDA and Vulkan also peak above their post-load host checkpoints. A model file's size or a loaded checkpoint therefore does not bound RAM needed to reopen the session. GPU allocation rises during warmup and long inference, then falls after close. These are per-process observations for this host and recording, not memory ceilings; longer audio can require larger workspaces. Host and GPU counters describe different accounting domains and should not be added together.
+The CPU reload peak is almost twice its post-load residency. CUDA and Vulkan also peak above their post-load host checkpoints. A model file's size or a loaded checkpoint therefore does not bound RAM needed to reopen the session. GPU allocation rises during warmup and long inference, then falls after close. These are per-process observations for this host and recording, not memory ceilings; longer audio can require larger workspaces.
 
 ## Allocation Ownership
 

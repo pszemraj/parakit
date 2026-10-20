@@ -109,6 +109,53 @@ impl OwnedSession {
         c_string_lossy(ptr)
     }
 
+    /// Set or clear the source-language hint, checking the native result.
+    ///
+    /// # Arguments
+    ///
+    /// * `language` - Canonical language name, or an empty string to clear the hint.
+    ///
+    /// # Returns
+    ///
+    /// Success after the native session accepts the hint.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an interior NUL or a native setter failure.
+    pub(crate) fn set_source_language(&self, language: &str) -> Result<(), String> {
+        let language = CString::new(language).map_err(|err| err.to_string())?;
+        let rc = unsafe {
+            crispasr_sys::crispasr_session_set_source_language(self.handle, language.as_ptr())
+        };
+        if rc != 0 {
+            return Err(format!("set_source_language failed (rc={rc})"));
+        }
+        Ok(())
+    }
+
+    /// Set the validated generated-token budget, checking the native result.
+    ///
+    /// # Arguments
+    ///
+    /// * `max_new_tokens` - Budget already validated against Qwen's accepted range.
+    ///
+    /// # Returns
+    ///
+    /// Success after the native session accepts the budget.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the native setter fails.
+    pub(crate) fn set_max_new_tokens(&self, max_new_tokens: c_int) -> Result<(), String> {
+        let rc = unsafe {
+            crispasr_sys::crispasr_session_set_max_new_tokens(self.handle, max_new_tokens)
+        };
+        if rc != 0 {
+            return Err(format!("set_max_new_tokens failed (rc={rc})"));
+        }
+        Ok(())
+    }
+
     /// Transcribe 16 kHz mono PCM through the raw session.
     ///
     /// # Returns

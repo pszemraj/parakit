@@ -10,6 +10,8 @@ use parakit::audio_file::prepare_wav_for_model;
 use parakit::fetch;
 use parakit::gguf;
 use parakit::inference::{default_thread_count, DeviceMode, Engine};
+use parakit::model::{resolve_model_selection, ModelPreset, ModelSelection};
+use parakit::qwen::{normalize_qwen_language, QwenOptions};
 use parakit::warmup;
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
@@ -22,12 +24,28 @@ use std::time::{Duration, Instant};
 )]
 struct Cli {
     /// Path to a GGUF model file. Overrides the cached Q8_0 model.
-    #[arg(short = 'm', long)]
+    #[arg(short = 'm', long, conflicts_with = "model_preset")]
     model: Option<PathBuf>,
 
-    /// Path to a WAV file. The tool mixes to mono and resamples to 16 kHz.
-    #[arg(short = 'a', long)]
-    audio: PathBuf,
+    /// Hosted Q8_0 preset; defaults to parakeet-v3. Qwen is experimental and Redux is for testing only.
+    #[arg(long, value_enum)]
+    model_preset: Option<ModelPreset>,
+
+    /// Preset precision; missing Q6_K is generated and cached locally.
+    #[arg(long, value_enum, conflicts_with = "model")]
+    quantize: Option<parakit::model::ModelQuantization>,
+
+    /// Qwen source language code/name, or auto (default).
+    #[arg(long)]
+    qwen_language: Option<String>,
+
+    /// Qwen generation budget per chunk (1 to 4096; default 512).
+    #[arg(long, value_parser = clap::value_parser!(u32).range(1..=4096))]
+    qwen_max_new_tokens: Option<u32>,
+
+    /// WAV input; repeat --audio to transcribe a sequence on one loaded engine.
+    #[arg(short = 'a', long, required = true)]
+    audio: Vec<PathBuf>,
 
     /// CPU inference threads. Defaults to half the logical CPUs, at least 2 (1 on a single-CPU machine).
     #[arg(long, value_name = "N")]
@@ -41,6 +59,10 @@ struct Cli {
     #[arg(long, default_value = "1")]
     repeat: NonZeroUsize,
 
+    /// Run the same model-aware readiness probe as daemon startup/reload.
+    #[arg(long, conflicts_with = "warmup_seconds")]
+    warmup: bool,
+
     /// Run one synthetic warmup pass before timing the real clip. Repeat for multiple passes.
     #[arg(long, value_name = "SECONDS")]
     warmup_seconds: Vec<usize>,
@@ -50,30 +72,76 @@ fn main() -> Result<()> {
     // Apply environment defaults before starting threads or opening a model.
     unsafe { parakit::inference::initialize_crispasr_runtime_defaults() };
     let cli = Cli::parse();
-
-    let wav = prepare_wav_for_model(&cli.audio)?;
-    let original_rate = wav.source_rate;
-    let audio_secs = wav.audio_secs();
-
-    let model_path = match cli.model.as_deref() {
-        Some(path) => path.to_path_buf(),
-        None => fetch::ensure_default_model_with_verbosity(false, false)?,
+    let qwen = QwenOptions {
+        language: cli
+            .qwen_language
+            .as_deref()
+            .map(normalize_qwen_language)
+            .transpose()
+            .map_err(anyhow::Error::msg)?
+            .flatten(),
+        max_new_tokens: cli.qwen_max_new_tokens.unwrap_or(512) as usize,
     };
+    qwen.validate().map_err(anyhow::Error::msg)?;
+    let explicit_qwen = cli.qwen_language.is_some() || cli.qwen_max_new_tokens.is_some();
+    let selection = resolve_model_selection(cli.model.as_deref(), cli.model_preset, None, None)?;
+    if explicit_qwen
+        && matches!(&selection, ModelSelection::Preset(preset) if preset.backend() != "qwen3")
+    {
+        anyhow::bail!("Qwen controls require a Qwen3-ASR model");
+    }
+
+    let wavs = cli
+        .audio
+        .iter()
+        .map(|path| prepare_wav_for_model(path))
+        .collect::<Result<Vec<_>>>()?;
+
+    let model_path = match selection {
+        ModelSelection::Local(path) => path,
+        ModelSelection::Preset(preset) => fetch::ensure_preset_model_with_verbosity(
+            preset,
+            cli.quantize.unwrap_or_default(),
+            false,
+            false,
+        )?,
+    };
+    if explicit_qwen {
+        parakit::model::validate_model_file(&model_path)?;
+        let model_str = model_path
+            .to_str()
+            .context("model path is not valid UTF-8")?;
+        let backend = crispasr::Session::detect_backend(model_str).map_err(anyhow::Error::msg)?;
+        if backend != "qwen3" {
+            anyhow::bail!("Qwen controls require a Qwen3-ASR model (detected {backend})");
+        }
+    }
     let threads = cli
         .threads
         .map(NonZeroUsize::get)
         .unwrap_or_else(default_thread_count);
-    let engine = Engine::open(&model_path, threads, cli.device)
+    let engine = Engine::open_with_options(&model_path, threads, cli.device, &qwen)
         .with_context(|| format!("could not open model {}", model_path.display()))?;
     let dtype = gguf::dtype_label(&model_path);
+    if engine.backend() == "qwen3" && !cli.warmup_seconds.is_empty() {
+        anyhow::bail!("--warmup-seconds is synthetic Parakeet warmup; use --warmup for Qwen");
+    }
 
     println!("model:   {}", model_path.display());
     println!("dtype:   {dtype}");
     println!("backend: {}", engine.backend());
     println!("threads: {}", engine.threads());
     println!("device:  {}", engine.device_mode().as_str());
-    println!("audio:   {:.2}s", audio_secs);
-    println!("source:  {} Hz", original_rate);
+
+    if cli.warmup {
+        #[cfg(feature = "bundled")]
+        let has_gpu = parakit::gpu::has_gpu_device();
+        #[cfg(not(feature = "bundled"))]
+        let has_gpu = false;
+        let started = Instant::now();
+        warmup::run(&engine, warmup::engine_warmup_seconds(cli.device, has_gpu))?;
+        println!("warmup: {:.0}ms", started.elapsed().as_secs_f32() * 1000.0);
+    }
 
     for seconds in &cli.warmup_seconds {
         let warmup_pcm = warmup::synthetic_pcm(*seconds);
@@ -84,29 +152,35 @@ fn main() -> Result<()> {
         println!("warmup: {:.0}ms", elapsed.as_secs_f32() * 1000.0);
     }
 
-    let mut timings = Vec::with_capacity(cli.repeat.get());
-    for idx in 1..=cli.repeat.get() {
-        let started = Instant::now();
-        let raw = engine.transcribe(&wav.samples)?;
-        let infer = started.elapsed();
-        timings.push(infer);
+    for (path, wav) in cli.audio.iter().zip(&wavs) {
+        let audio_secs = wav.audio_secs();
+        println!("input:   {}", path.display());
+        println!("audio:   {:.2}s", audio_secs);
+        println!("source:  {} Hz", wav.source_rate);
+        let mut timings = Vec::with_capacity(cli.repeat.get());
+        for idx in 1..=cli.repeat.get() {
+            let started = Instant::now();
+            let raw = engine.transcribe(&wav.samples)?;
+            let infer = started.elapsed();
+            timings.push(infer);
 
-        if cli.repeat.get() > 1 {
-            println!("run:     {idx}/{}", cli.repeat);
+            if cli.repeat.get() > 1 {
+                println!("run:     {idx}/{}", cli.repeat);
+            }
+            println!("infer:   {:.0}ms", infer.as_secs_f32() * 1000.0);
+            println!("rtf:     {:.2}x", real_time_factor(audio_secs, infer));
+            println!(
+                "speed:   {:.2}x realtime",
+                realtime_speed(audio_secs, infer)
+            );
+            println!("Raw:     {}", raw);
         }
-        println!("infer:   {:.0}ms", infer.as_secs_f32() * 1000.0);
-        println!("rtf:     {:.2}x", real_time_factor(audio_secs, infer));
-        println!(
-            "speed:   {:.2}x realtime",
-            realtime_speed(audio_secs, infer)
-        );
-        println!("Raw:     {}", raw);
-    }
 
-    if timings.len() > 1 {
-        let avg_ms =
-            timings.iter().map(Duration::as_secs_f32).sum::<f32>() * 1000.0 / timings.len() as f32;
-        println!("avg:     {avg_ms:.0}ms");
+        if timings.len() > 1 {
+            let avg_ms = timings.iter().map(Duration::as_secs_f32).sum::<f32>() * 1000.0
+                / timings.len() as f32;
+            println!("avg:     {avg_ms:.0}ms");
+        }
     }
 
     Ok(())
@@ -129,6 +203,38 @@ fn realtime_speed(audio_secs: f32, infer: Duration) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ordered_audio_uses_one_invocation_and_warmup_modes_are_exclusive() {
+        let cli = Cli::try_parse_from([
+            "transcribe-file",
+            "--audio",
+            "short.wav",
+            "--audio",
+            "long.wav",
+            "--audio",
+            "short.wav",
+            "--warmup",
+        ])
+        .unwrap();
+        assert_eq!(
+            cli.audio,
+            [
+                PathBuf::from("short.wav"),
+                PathBuf::from("long.wav"),
+                PathBuf::from("short.wav")
+            ]
+        );
+        assert!(Cli::try_parse_from([
+            "transcribe-file",
+            "--audio",
+            "short.wav",
+            "--warmup",
+            "--warmup-seconds",
+            "1"
+        ])
+        .is_err());
+    }
 
     #[test]
     fn rtf_is_inference_time_over_audio_duration() {

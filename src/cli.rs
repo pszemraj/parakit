@@ -2,6 +2,8 @@
 
 use clap::{Args, Parser, Subcommand};
 use parakit::inference::DeviceMode;
+use parakit::model::{resolve_model_selection, ModelPreset, ModelQuantization, ModelSelection};
+use parakit::qwen::QwenOptions;
 use parakit::rules::CleaningProfile;
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
@@ -19,8 +21,8 @@ use crate::daemon::inject::PasteMode;
 #[command(
     name = "parakit",
     version,
-    about = "Push-to-talk dictation daemon (Parakeet-TDT via CrispASR).",
-    long_about = "Push-to-talk dictation daemon. Hold the platform hotkey to record, release to transcribe and insert text at the cursor.\n\nRunning with no subcommand is the same as `parakit start`. Pass --verbose for diagnostic paths and timings, or --quiet for background daemon mode."
+    about = "Push-to-talk dictation daemon backed by CrispASR.",
+    long_about = "Local push-to-talk dictation. Hold the hotkey to record, then release to insert the transcript.\n\nRun `parakit` to start. The default model downloads automatically on first use. Run `parakit doctor` if setup is blocked, and `parakit stop` to stop a running instance. Use --verbose for diagnostics or --quiet for background use."
 )]
 pub(crate) struct Cli {
     /// Subcommand to run. Defaults to starting the push-to-talk daemon (as
@@ -62,9 +64,9 @@ pub(crate) enum Commands {
     Start(StartCli),
     /// Inspect and test the transcript cleaning rules.
     Rules(RulesCli),
-    /// Acquire a Parakeet GGUF: the default hosted Q8_0, a Hugging Face repo, or a direct URL.
+    /// Acquire a GGUF model: a hosted Q8_0 preset, a Hugging Face repo, or a direct URL.
     #[command(
-        long_about = "Acquire a Parakeet GGUF model.\n\nWith no arguments, downloads the default hosted Q8_0 GGUF.\n\nExamples:\n  parakit fetch\n  parakit fetch cstr/parakeet-tdt-0.6b-v3-GGUF\n  parakit fetch cstr/parakeet-tdt-0.6b-v3-GGUF --file parakeet-tdt-0.6b-v3-q4_k.gguf\n  parakit fetch handy-computer/parakeet-tdt-0.6b-v3-gguf@main\n  parakit fetch https://example.com/models/parakeet-q8.gguf --sha256 <64-hex>\n  parakit fetch --from-source\n\nFetched repo/URL models land under the cache directory (see `parakit cache dir`) but are not used automatically: pass `-m <path>` to `parakit start`, or set `daemon.model` in config.toml."
+        long_about = "Download a model without starting dictation.\n\nWith no arguments, downloads the default Parakeet v3 Q8_0 model. Use --model-preset to select another model, or add --quantize q6_k to prepare Q6_K locally. Run the same command again to resume an interrupted download.\n\nExamples:\n  parakit fetch\n  parakit fetch --model-preset qwen3-asr-1.7b --quantize q6_k\n  parakit fetch --model-preset parakeet-ultra\n\nFetching does not change the running model. The command prints how to start with the downloaded model. Normal startup downloads missing models automatically, so a separate fetch is optional.\n\nAdvanced: pass a Hugging Face repo or direct GGUF URL as the source, or use --from-source to convert the original checkpoint locally."
     )]
     Fetch(FetchCli),
     /// Inspect the parakit model cache.
@@ -86,11 +88,32 @@ pub(crate) enum Commands {
 }
 
 /// Arguments for starting the push-to-talk daemon.
-#[derive(Args, Debug, Default)]
+#[derive(Args, Debug, Default, PartialEq)]
 pub(crate) struct StartCli {
     /// Path to a GGUF model file. Overrides the cached Q8_0 model.
-    #[arg(short = 'm', long, value_name = "PATH")]
+    #[arg(
+        short = 'm',
+        long,
+        value_name = "PATH",
+        conflicts_with = "model_preset"
+    )]
     pub(crate) model: Option<PathBuf>,
+
+    /// Select a model preset. Defaults to parakeet-v3; Qwen is experimental and Redux is for testing only.
+    #[arg(long, value_enum)]
+    pub(crate) model_preset: Option<ModelPreset>,
+
+    /// Preset precision: q8_0 (default) or locally cached q6_k. Acquire it automatically when missing.
+    #[arg(long, value_enum, conflicts_with = "model")]
+    pub(crate) quantize: Option<ModelQuantization>,
+
+    /// Qwen source language code or name; auto detects the language (default).
+    #[arg(long, value_name = "LANGUAGE", value_parser = parse_qwen_language)]
+    pub(crate) qwen_language: Option<String>,
+
+    /// Qwen generation budget per native chunk (1 to 4096; default 512).
+    #[arg(long, value_name = "N", value_parser = clap::value_parser!(u32).range(1..=4096))]
+    pub(crate) qwen_max_new_tokens: Option<u32>,
 
     /// CPU inference threads. Defaults to half the logical CPUs, at least 2 (1 on a single-CPU machine).
     #[arg(long, value_name = "N", value_parser = parse_thread_count)]
@@ -166,7 +189,7 @@ pub(crate) struct StartCli {
 
     /// Hidden validation path: send a WAV through the daemon PTT worker without insertion.
     #[arg(long, hide = true, value_name = "WAV")]
-    pub(crate) simulate_ptt_audio: Option<PathBuf>,
+    pub(crate) simulate_ptt_audio: Vec<PathBuf>,
 
     /// Repeat the hidden WAV validation flow in one worker process.
     #[arg(long, hide = true, requires = "simulate_ptt_audio", value_name = "N")]
@@ -183,6 +206,22 @@ pub(crate) struct StartCli {
 }
 
 impl StartCli {
+    /// Return whether this invocation supplies settings for a new daemon.
+    ///
+    /// # Returns
+    /// `true` when an already-running daemon would ignore supplied options.
+    pub(crate) fn has_runtime_overrides(&self) -> bool {
+        self != &Self::default()
+    }
+
+    /// Resolve preset precision; this value is unused for an explicit model file.
+    ///
+    /// # Returns
+    /// CLI precision, configured precision, or Q8_0.
+    pub(crate) fn effective_quantization(&self, config: &ConfigFile) -> ModelQuantization {
+        self.quantize.or(config.daemon.quantize).unwrap_or_default()
+    }
+
     /// Effective idle timeout in whole minutes; CLI overrides config and default.
     ///
     /// # Returns
@@ -203,14 +242,57 @@ impl StartCli {
             .unwrap_or_else(|| config.daemon.effective_paste_mode())
     }
 
-    /// Return the selected model path: CLI `-m/--model`, then config
-    /// `daemon.model`. `None` means "fetch the default hosted model".
+    /// Resolve the CLI model choice before the configured choice and default.
     ///
     /// # Returns
+    /// The selected local path or hosted preset.
     ///
-    /// The effective model path override, if any.
-    pub(crate) fn effective_model(&self, config: &ConfigFile) -> Option<PathBuf> {
-        self.model.clone().or_else(|| config.daemon.model.clone())
+    /// # Errors
+    /// Returns an error when a source sets both a path and a preset.
+    pub(crate) fn effective_model_selection(
+        &self,
+        config: &ConfigFile,
+    ) -> anyhow::Result<ModelSelection> {
+        resolve_model_selection(
+            self.model.as_deref(),
+            self.model_preset,
+            config.daemon.model.as_deref(),
+            config.daemon.model_preset,
+        )
+    }
+
+    /// Resolve and validate Qwen controls before model acquisition.
+    ///
+    /// # Returns
+    /// The effective Qwen options.
+    ///
+    /// # Errors
+    /// Returns an error for an unsupported language or token budget.
+    pub(crate) fn effective_qwen_options(
+        &self,
+        config: &ConfigFile,
+    ) -> anyhow::Result<QwenOptions> {
+        let options = QwenOptions {
+            language: self
+                .qwen_language
+                .clone()
+                .or_else(|| config.qwen.language.clone()),
+            max_new_tokens: self
+                .qwen_max_new_tokens
+                .map(|value| value as usize)
+                .or(config.qwen.max_new_tokens)
+                .unwrap_or(512),
+        };
+        options.validate().map_err(anyhow::Error::msg)?;
+        Ok(options)
+    }
+
+    /// Whether this invocation explicitly requests Qwen-only controls.
+    ///
+    /// # Returns
+    /// True when either Qwen flag was supplied.
+    pub(crate) fn has_qwen_controls(&self) -> bool {
+        self.qwen_language.is_some() || self.qwen_max_new_tokens.is_some()
     }
 
     /// Return the selected compute device: CLI `--device`, then config
@@ -382,6 +464,17 @@ pub(crate) enum ConfigCommand {
 /// Arguments controlling model acquisition for `parakit fetch`.
 #[derive(Args, Debug)]
 pub(crate) struct FetchCli {
+    /// Select a model's hosted Q8_0 artifact, or rebuild it with --from-source.
+    #[arg(long, value_enum, conflicts_with_all = ["source", "file", "sha256"])]
+    pub(crate) model_preset: Option<ModelPreset>,
+
+    /// Acquire hosted q8_0 or cache local q6_k made from the preset's F16 GGUF.
+    #[arg(
+        long,
+        value_enum,
+        conflicts_with_all = ["from_source", "source", "file", "sha256"]
+    )]
+    pub(crate) quantize: Option<ModelQuantization>,
     /// Model source: a Hugging Face repo (`owner/repo` or
     /// `owner/repo@revision`) or a direct `http://`/`https://` URL to a
     /// `.gguf` file. Omit to fetch the default hosted Q8_0 GGUF.
@@ -413,9 +506,13 @@ pub(crate) struct FetchCli {
     #[arg(long)]
     pub(crate) force: bool,
 
-    /// Rebuild Q8_0 locally from NVIDIA's official .nemo checkpoint.
+    /// Convert the selected model's original checkpoint to F16, then quantize to Q8_0.
     #[arg(long, conflicts_with_all = ["source", "file", "sha256"])]
     pub(crate) from_source: bool,
+
+    /// Use a local Hugging Face checkpoint directory for a Qwen or Moondream rebuild.
+    #[arg(long, value_name = "PATH", requires = "from_source")]
+    pub(crate) checkpoint_dir: Option<PathBuf>,
 
     /// Keep the downloaded 2.4 GB .nemo checkpoint after source rebuild.
     #[arg(long, requires = "from_source")]
@@ -424,6 +521,16 @@ pub(crate) struct FetchCli {
     /// Keep the intermediate F16 GGUF after source rebuild.
     #[arg(long, requires = "from_source")]
     pub(crate) keep_f16: bool,
+}
+
+/// Normalize a Qwen CLI language to its canonical model name.
+///
+/// # Errors
+/// Returns a message for an unsupported language.
+fn parse_qwen_language(value: &str) -> Result<String, String> {
+    parakit::qwen::normalize_qwen_language(value)
+        .map(|language| language.unwrap_or_else(|| "auto".to_owned()))
+        .map_err(|error| error.to_string())
 }
 
 /// Validate a `--sha256` CLI value: exactly 64 hexadecimal characters.
@@ -571,7 +678,7 @@ pub(crate) struct RulesArgs {
 }
 
 /// Common rule-disable and terminal-period flags for `start` and `rules`.
-#[derive(Args, Debug, Default)]
+#[derive(Args, Debug, Default, PartialEq)]
 pub(crate) struct CleaningOverrides {
     /// Keep the single terminal period that messaging-style cleanup removes by
     /// default. Overrides a configured `cleaning.keep_trailing_period = false`;

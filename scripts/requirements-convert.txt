@@ -2,8 +2,13 @@
 # `parakit fetch --from-source`.
 #
 # The Rust daemon and default hosted-model fetch do not use these packages.
-# They are only needed to run vendor/CrispASR/models/convert-parakeet-to-gguf.py.
+# They are only needed to download original checkpoints and run the vendored
+# Parakeet or Qwen3-ASR GGUF converters.
 gguf
 numpy
 sentencepiece
 torch
+huggingface-hub
+safetensors
+pyyaml
+librosa

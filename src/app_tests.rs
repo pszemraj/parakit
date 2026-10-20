@@ -7,6 +7,124 @@ const GGML_LOG_LEVEL_INFO: i32 = 2;
 const GGML_LOG_LEVEL_ERROR: i32 = 4;
 
 #[test]
+fn source_rebuild_dispatch_preserves_legacy_and_selects_new_checkpoints() {
+    fn source(args: &[&str]) -> Result<FetchSource> {
+        let cli = Cli::parse_from(["parakit", "fetch"].into_iter().chain(args.iter().copied()));
+        let Some(Commands::Fetch(fetch)) = cli.command else {
+            panic!("expected fetch");
+        };
+        resolve_fetch_source(&fetch)
+    }
+    assert_eq!(
+        source(&["--from-source", "--keep-nemo", "--keep-f16"]).unwrap(),
+        FetchSource::OfficialNemo {
+            keep_nemo: true,
+            keep_f16: true,
+        }
+    );
+    assert_eq!(
+        source(&["--from-source", "--model-preset", "parakeet-v3"]).unwrap(),
+        FetchSource::OfficialNemo {
+            keep_nemo: false,
+            keep_f16: false,
+        }
+    );
+    assert_eq!(
+        source(&[
+            "--from-source",
+            "--model-preset",
+            "parakeet-redux",
+            "--checkpoint-dir",
+            "snapshot",
+            "--keep-f16",
+        ])
+        .unwrap(),
+        FetchSource::PresetSource {
+            preset: ModelPreset::ParakeetRedux,
+            checkpoint_dir: Some(PathBuf::from("snapshot")),
+            keep_f16: true,
+        }
+    );
+    assert!(source(&["--from-source", "--checkpoint-dir", "snapshot"]).is_err());
+    assert!(source(&["--from-source", "--model-preset", "parakeet-v2"])
+        .unwrap_err()
+        .to_string()
+        .contains("parakeet-v2 source rebuilding is not available"));
+    assert!(source(&[
+        "--from-source",
+        "--model-preset",
+        "parakeet-ultra",
+        "--keep-nemo",
+    ])
+    .is_err());
+}
+
+#[test]
+fn q6_fetch_selects_local_quantization_and_rejects_conflicting_inputs() {
+    for preset in [
+        ModelPreset::ParakeetV2,
+        ModelPreset::ParakeetV3,
+        ModelPreset::Qwen3Asr06b,
+        ModelPreset::Qwen3Asr17b,
+        ModelPreset::ParakeetUltra,
+        ModelPreset::ParakeetRedux,
+    ] {
+        let cli = Cli::parse_from([
+            "parakit",
+            "fetch",
+            "--model-preset",
+            preset.id(),
+            "--quantize",
+            "q6_k",
+        ]);
+        let Some(Commands::Fetch(fetch)) = cli.command else {
+            panic!("expected fetch")
+        };
+        assert_eq!(
+            resolve_fetch_source(&fetch).unwrap(),
+            FetchSource::PresetQ6(preset)
+        );
+    }
+    let cli = Cli::parse_from(["parakit", "fetch", "--quantize", "q6_k"]);
+    let Some(Commands::Fetch(fetch)) = cli.command else {
+        panic!("expected fetch")
+    };
+    assert_eq!(
+        resolve_fetch_source(&fetch).unwrap(),
+        FetchSource::PresetQ6(ModelPreset::ParakeetV3)
+    );
+    for args in [
+        vec![
+            "parakit",
+            "fetch",
+            "https://example.com/model.gguf",
+            "--quantize",
+            "q6_k",
+        ],
+        vec!["parakit", "fetch", "--from-source", "--quantize", "q6_k"],
+        vec![
+            "parakit",
+            "fetch",
+            "--model-preset",
+            "qwen3-asr-0.6b",
+            "--quantize",
+            "q4_k",
+        ],
+        vec![
+            "parakit",
+            "fetch",
+            "--model-preset",
+            "qwen3-asr-0.6b",
+            "--quantize",
+            "q6_k",
+            "--from-source",
+        ],
+    ] {
+        assert!(Cli::try_parse_from(args).is_err());
+    }
+}
+
+#[test]
 fn held_daemon_lock_requires_a_responsive_control_endpoint() {
     ensure_existing_daemon_responsive(true).unwrap();
     let error = ensure_existing_daemon_responsive(false).unwrap_err();
@@ -142,7 +260,7 @@ fn explicit_gpu_validation_runs_before_default_model_fetch() {
     let err = resolve_engine_config_with_validator(
         &start,
         &config,
-        || {
+        |_, _| {
             fetched_default.set(true);
             Ok(PathBuf::from("target/tmp/default-model.gguf"))
         },
@@ -155,6 +273,112 @@ fn explicit_gpu_validation_runs_before_default_model_fetch() {
 
     assert_eq!(err.to_string(), "gpu unavailable");
     assert!(!fetched_default.get());
+}
+
+#[test]
+fn startup_precision_selection_preserves_cli_config_and_local_path_precedence() {
+    let config: ConfigFile =
+        toml::from_str("[daemon]\nmodel_preset = 'parakeet-v2'\nquantize = 'q6_k'\n").unwrap();
+    for (args, settings, preset, quantization) in [
+        (
+            vec!["--quantize", "q6_k"],
+            ConfigFile::default(),
+            ModelPreset::ParakeetV3,
+            ModelQuantization::Q6K,
+        ),
+        (
+            vec![],
+            toml::from_str("[daemon]\nmodel_preset = 'parakeet-v2'\nquantize = 'q6_k'\n").unwrap(),
+            ModelPreset::ParakeetV2,
+            ModelQuantization::Q6K,
+        ),
+        (
+            vec!["--model-preset", "parakeet-ultra", "--quantize", "q8_0"],
+            config,
+            ModelPreset::ParakeetUltra,
+            ModelQuantization::Q8,
+        ),
+    ] {
+        let Some(Commands::Start(start)) =
+            Cli::parse_from(["parakit", "start"].into_iter().chain(args)).command
+        else {
+            unreachable!()
+        };
+        let resolved = resolve_engine_config_with_validator(
+            &start,
+            &settings,
+            |actual_preset, actual_quantization| {
+                assert_eq!((actual_preset, actual_quantization), (preset, quantization));
+                Ok(PathBuf::from("selected.gguf"))
+            },
+            |_| Ok(()),
+        )
+        .unwrap();
+        assert_eq!(resolved.model_preset, Some(preset));
+    }
+    let Some(Commands::Start(start)) =
+        Cli::parse_from(["parakit", "start", "-m", "custom.gguf"]).command
+    else {
+        unreachable!()
+    };
+    let config = toml::from_str("[daemon]\nquantize = 'q6_k'\n").unwrap();
+    let resolved = resolve_engine_config_with_validator(
+        &start,
+        &config,
+        |_, _| panic!("local files must not acquire another model"),
+        |_| Ok(()),
+    )
+    .unwrap();
+    assert_eq!(resolved.model_path, PathBuf::from("custom.gguf"));
+    assert!(Cli::try_parse_from([
+        "parakit",
+        "start",
+        "-m",
+        "custom.gguf",
+        "--quantize",
+        "q6_k"
+    ])
+    .is_err());
+    let Some(Commands::Start(start)) =
+        Cli::parse_from(["parakit", "start", "--quantize", "q6_k"]).command
+    else {
+        unreachable!()
+    };
+    let config = toml::from_str("[daemon]\nmodel = 'custom.gguf'\n").unwrap();
+    assert!(resolve_engine_config_with_validator(
+        &start,
+        &config,
+        |_, _| panic!("invalid selection must not fetch"),
+        |_| Ok(())
+    )
+    .unwrap_err()
+    .to_string()
+    .contains("use --model-preset"));
+}
+
+#[test]
+fn explicit_qwen_controls_reject_parakeet_before_download() {
+    let start = match Cli::parse_from([
+        "parakit",
+        "start",
+        "--model-preset",
+        "parakeet-redux",
+        "--qwen-language",
+        "en",
+    ])
+    .command
+    {
+        Some(Commands::Start(start)) => start,
+        _ => unreachable!(),
+    };
+    let error = resolve_engine_config_with_validator(
+        &start,
+        &ConfigFile::default(),
+        |_, _| panic!("invalid controls must not download"),
+        |_| Ok(()),
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("Qwen controls require"));
 }
 
 #[test]

@@ -12,7 +12,9 @@ use parakit::fetch::{self, FetchOptions, FetchSource};
 use parakit::gguf;
 use parakit::inference::{default_thread_count, DeviceMode, Engine};
 use parakit::model;
+use parakit::model::{ModelPreset, ModelQuantization, ModelSelection};
 use parakit::outln;
+use parakit::qwen::QwenOptions;
 use parakit::rules;
 use simulation::run_ptt_audio_simulation;
 use std::ffi::{c_char, c_void, CStr};
@@ -23,7 +25,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::cli::{
-    CacheCli, CacheCommand, Cli, Commands, DoctorCli, RulesArgs, RulesCli, RulesCommand, StartCli,
+    CacheCli, CacheCommand, Cli, Commands, DoctorCli, FetchCli, RulesArgs, RulesCli, RulesCommand,
+    StartCli,
 };
 use crate::config::{self, ConfigFile};
 use crate::daemon;
@@ -80,18 +83,7 @@ pub(crate) fn run() -> Result<()> {
     // they report/apply the same effective values the daemon would use.
     match &cli.command {
         Some(Commands::Fetch(fetch_cli)) => {
-            let source = if fetch_cli.from_source {
-                FetchSource::OfficialNemo {
-                    keep_nemo: fetch_cli.keep_nemo,
-                    keep_f16: fetch_cli.keep_f16,
-                }
-            } else {
-                fetch::source_from_cli(
-                    fetch_cli.source.clone(),
-                    fetch_cli.file.clone(),
-                    fetch_cli.sha256.clone(),
-                )?
-            };
+            let source = resolve_fetch_source(fetch_cli)?;
             fetch::run(FetchOptions {
                 force: fetch_cli.force,
                 quiet: cli.quiet,
@@ -217,6 +209,45 @@ fn run_rules_command(cli: &Cli, rules_cli: &RulesCli) -> Result<()> {
     }
 }
 
+/// Resolve source rebuilding independently of daemon configuration.
+///
+/// # Errors
+/// Returns an error for source-only options that do not apply to the selected model.
+fn resolve_fetch_source(cli: &FetchCli) -> Result<FetchSource> {
+    if cli.from_source {
+        let preset = cli.model_preset.unwrap_or(ModelPreset::ParakeetV3);
+        if preset == ModelPreset::ParakeetV2 {
+            anyhow::bail!("parakeet-v2 source rebuilding is not available; use its hosted Q8_0 or --quantize q6_k");
+        }
+        if preset == ModelPreset::ParakeetV3 {
+            if cli.checkpoint_dir.is_some() {
+                anyhow::bail!("--checkpoint-dir requires a Qwen or Moondream model preset");
+            }
+            return Ok(FetchSource::OfficialNemo {
+                keep_nemo: cli.keep_nemo,
+                keep_f16: cli.keep_f16,
+            });
+        }
+        if cli.keep_nemo {
+            anyhow::bail!("--keep-nemo applies only to the parakeet-v3 source rebuild");
+        }
+        return Ok(FetchSource::PresetSource {
+            preset,
+            checkpoint_dir: cli.checkpoint_dir.clone(),
+            keep_f16: cli.keep_f16,
+        });
+    }
+    if cli.quantize == Some(ModelQuantization::Q6K) {
+        return Ok(FetchSource::PresetQ6(
+            cli.model_preset.unwrap_or(ModelPreset::ParakeetV3),
+        ));
+    }
+    if let Some(preset) = cli.model_preset {
+        return Ok(FetchSource::Preset(preset));
+    }
+    fetch::source_from_cli(cli.source.clone(), cli.file.clone(), cli.sha256.clone())
+}
+
 /// Run the push-to-talk daemon: the full startup sequence when no
 /// subcommand is given, or when `start` is given explicitly.
 ///
@@ -228,12 +259,14 @@ fn run_daemon(cli: &Cli, start: &StartCli) -> Result<()> {
     // The hidden audio simulation is a one-shot worker validation, not a
     // daemon instance, so it intentionally does not participate in the
     // singleton lock.
-    let _daemon_lock = if start.simulate_ptt_audio.is_none() {
+    let _daemon_lock = if start.simulate_ptt_audio.is_empty() {
         match daemon::preflight::acquire_singleton_lock() {
             Ok(lock) => Some(lock),
             Err(err) if err.is::<daemon::preflight::DaemonAlreadyRunning>() => {
                 ensure_existing_daemon_responsive(daemon::ipc::daemon_responsive()?)?;
-                if !cli.quiet {
+                if start.has_runtime_overrides() {
+                    eprintln!("parakit: already running; new startup options were not applied. Run `parakit stop`, then start again with the requested options");
+                } else if !cli.quiet {
                     outln!("parakit: already running")?;
                 }
                 return Ok(());
@@ -258,19 +291,19 @@ fn run_daemon(cli: &Cli, start: &StartCli) -> Result<()> {
     let paste_mode = worker_settings.paste_mode;
     let keep_transcript_clipboard = worker_settings.keep_transcript_clipboard;
 
-    if let Some(audio_path) = &start.simulate_ptt_audio {
+    if let ModelSelection::Local(path) = start.effective_model_selection(&config)? {
+        model::validate_model_file(&path)?;
+    }
+
+    if !start.simulate_ptt_audio.is_empty() {
         return run_ptt_audio_simulation(
             cli,
             start,
             &config,
             worker_settings,
             Arc::clone(&log),
-            audio_path,
+            &start.simulate_ptt_audio,
         );
-    }
-
-    if let Some(path) = start.effective_model(&config) {
-        model::validate_model_file(&path)?;
     }
 
     #[cfg(target_os = "linux")]
@@ -318,6 +351,7 @@ fn run_daemon(cli: &Cli, start: &StartCli) -> Result<()> {
     warn_about_bluetooth_mic_if_needed(&log, &mic_info);
 
     // Keep control available during model download and loading, including stop.
+    ipc_state.set_phase("preparing model");
     let OpenedEngine {
         model_path,
         engine,
@@ -348,6 +382,17 @@ fn run_daemon(cli: &Cli, start: &StartCli) -> Result<()> {
     let daemon_info = daemon::ipc::DaemonInfo {
         pid: std::process::id(),
         model_name,
+        model_preset: recipe.model_preset.map(|preset| preset.id().to_owned()),
+        qwen_language: engine
+            .qwen_options()
+            .map(|options| {
+                options
+                    .normalized_language()
+                    .map(|language| language.unwrap_or_else(|| "auto".to_owned()))
+            })
+            .transpose()
+            .map_err(anyhow::Error::msg)?,
+        qwen_max_new_tokens: engine.qwen_options().map(|options| options.max_new_tokens),
         dtype: model_dtype,
         mic_summary: mic_info.summary(),
         backend: engine.backend().to_string(),
@@ -560,7 +605,7 @@ fn warn_about_bluetooth_mic_if_needed(log: &Logger, mic_info: &daemon::audio::Mi
     if mic_info.looks_bluetooth() {
         log.warn(format!(
             "selected microphone appears to be Bluetooth ({}); use a wired or local mic if latency or quality is poor",
-            mic_info.summary()
+            mic_info.name
         ));
     }
 }
@@ -637,17 +682,28 @@ fn open_cli_engine(
     let engine_config = resolve_engine_config(
         start,
         config,
-        || fetch::ensure_default_model_with_verbosity(fetch_quiet, verbose),
+        |preset, quantization| {
+            fetch::ensure_preset_model_with_verbosity(preset, quantization, fetch_quiet, verbose)
+        },
         log,
     )?;
     let model_path = engine_config.model_path;
     let recipe = EngineRecipe {
         model_path: std::path::absolute(&model_path)?,
+        model_preset: engine_config.model_preset,
         threads: engine_config.threads,
         device_mode: engine_config.device_mode,
+        #[cfg(feature = "bundled")]
+        backend: String::new(),
+        qwen: engine_config.qwen,
         verbose,
     };
     let (engine, device_summary) = recipe.open(log)?;
+    #[cfg(feature = "bundled")]
+    let recipe = EngineRecipe {
+        backend: engine.backend().to_owned(),
+        ..recipe
+    };
     Ok(OpenedEngine {
         model_path,
         engine,
@@ -666,8 +722,10 @@ struct OpenedEngine {
 #[derive(Debug)]
 struct EngineConfig {
     model_path: PathBuf,
+    model_preset: Option<ModelPreset>,
     threads: usize,
     device_mode: DeviceMode,
+    qwen: QwenOptions,
 }
 
 fn resolve_engine_config<F>(
@@ -677,7 +735,7 @@ fn resolve_engine_config<F>(
     log: &Logger,
 ) -> Result<EngineConfig>
 where
-    F: FnOnce() -> Result<PathBuf>,
+    F: FnOnce(ModelPreset, ModelQuantization) -> Result<PathBuf>,
 {
     resolve_engine_config_with_validator(start, config, fetch_default_model, |device_mode| {
         validate_device_request(device_mode, log)
@@ -691,23 +749,52 @@ fn resolve_engine_config_with_validator<F, V>(
     validate_device: V,
 ) -> Result<EngineConfig>
 where
-    F: FnOnce() -> Result<PathBuf>,
+    F: FnOnce(ModelPreset, ModelQuantization) -> Result<PathBuf>,
     V: FnOnce(DeviceMode) -> Result<()>,
 {
     let device_mode = start.effective_device(config);
+    let qwen = start.effective_qwen_options(config)?;
+    let selection = start.effective_model_selection(config)?;
+    let quantization = start.effective_quantization(config);
+    if matches!(selection, ModelSelection::Local(_)) && start.quantize.is_some() {
+        anyhow::bail!(
+            "--quantize selects a preset's precision; use --model-preset to override daemon.model"
+        );
+    }
+    if start.has_qwen_controls()
+        && matches!(&selection, ModelSelection::Preset(preset) if preset.backend() != "qwen3")
+    {
+        anyhow::bail!("Qwen controls require a Qwen3-ASR model");
+    }
     validate_device(device_mode)?;
-    let model_path = match start.effective_model(config) {
-        Some(path) => path,
-        None => fetch_default_model()?,
+    let model_preset = match &selection {
+        ModelSelection::Preset(preset) => Some(*preset),
+        ModelSelection::Local(_) => None,
     };
+    let model_path = match selection {
+        ModelSelection::Local(path) => path,
+        ModelSelection::Preset(preset) => fetch_default_model(preset, quantization)?,
+    };
+    if start.has_qwen_controls() {
+        model::validate_model_file(&model_path)?;
+        let model_str = model_path
+            .to_str()
+            .context("model path is not valid UTF-8")?;
+        let backend = crispasr::Session::detect_backend(model_str).map_err(anyhow::Error::msg)?;
+        if backend != "qwen3" {
+            anyhow::bail!("Qwen controls require a Qwen3-ASR model (detected {backend})");
+        }
+    }
     let threads = start
         .effective_threads(config)
         .map(NonZeroUsize::get)
         .unwrap_or_else(default_thread_count);
     Ok(EngineConfig {
         model_path,
+        model_preset,
         threads,
         device_mode,
+        qwen,
     })
 }
 

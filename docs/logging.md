@@ -1,6 +1,6 @@
 # Transcription And Insertion Logs
 
-parakit can write one JSON object per line (JSONL) for every dictation: what the model heard, what cleanup did to it, and what happened when parakit tried to insert it into the focused application. Logging is off by default. Turn it on with the `logging.dir` config key (see [configuration.md](configuration.md) and [config_reference.toml](config_reference.toml)) or `parakit start`'s `--log-dir` flag (see [running.md#logging-and-sounds](running.md#logging-and-sounds)).
+parakit can write JSONL records for completed dictations: model output, inference settings, cleaning, and insertion into the focused application. Logging is off by default; [enable it with `--log-dir` or `logging.dir`](running.md#logging-and-sounds). Failed transcriptions and no-speech captures produce no transcription record.
 
 Audio and redirected console output are never logged, but the raw and cleaned transcript text is, in plaintext, with no built-in retention or size cap. Protect the log directory and rotate or delete old files to match the sensitivity of your dictation.
 
@@ -15,7 +15,7 @@ Terminal output is best-effort. A closed terminal or failed stdout/stderr write 
 A completed dictation normally produces two lines: a transcription line, written as soon as the model and cleaner finish, and a later insertion line, written once parakit knows what happened to the paste attempt.
 
 ```json
-{"ts":"2026-07-27T14:02:11.482Z","session_id":"2026-07-27T14:02:10.981234000Z-p4312-l0","record_id":7,"parakit_version":"0.4.2","audio_secs":4.21,"infer_ms":187,"raw":"so the build is green now.","cleaned":"So the build is green now","rules_active":29,"cleaner_version":32,"cleaning_profile":"safe","ruleset_id":"v32-safe-bf1d2214e0848c42","drops_trailing_period":true,"number_threshold":4.0,"rules_fired":[{"name":"capitalize-sentence-starts","matches":1},{"name":"fix-trailing-period","matches":1}]}
+{"ts":"2026-07-27T14:02:11.482Z","session_id":"2026-07-27T14:02:10.981234000Z-p4312-l0","record_id":7,"parakit_version":"0.4.3","audio_secs":4.21,"infer_ms":187,"raw":"so the build is green now.","cleaned":"So the build is green now","rules_active":29,"cleaner_version":32,"cleaning_profile":"safe","ruleset_id":"v32-safe-bf1d2214e0848c42","drops_trailing_period":true,"number_threshold":4.0,"rules_fired":[{"name":"capitalize-sentence-starts","matches":1},{"name":"fix-trailing-period","matches":1}],"inference":{"model":"qwen3-asr-1.7b-q8_0.gguf","model_preset":"qwen3-asr-1.7b","backend":"qwen3","quantization":"Q8_0","requested_device":"gpu","session_device":"gpu","qwen_language":"auto","qwen_max_new_tokens":512,"native_api_version":"0.7.0"}}
 {"kind":"insertion","ts":"2026-07-27T14:02:11.930Z","session_id":"2026-07-27T14:02:10.981234000Z-p4312-l0","ref_id":7,"outcome":"pasted","target_bundle_id":"com.mitchellh.ghostty","focus_verification":"matched","transcript_chars":25,"paste_event_posted":true,"pasteboard_requested":null,"acknowledgement_kind":"ax_confirmed","acknowledgement_ms":312,"clipboard_restored":true,"failure_reason":null}
 ```
 
@@ -49,8 +49,30 @@ Fields, in serialization order:
 | `number_threshold` | number or null | The isolated-value cutoff for digit conversion that was actually in effect, 4 by default; `null` only when cleaning is disabled entirely. |
 | `rules_fired` | array | Passes that changed text, in application order, as `{"name":...,"matches":...}` objects. |
 | `cleaning_failure` | string | Error text from a bounded matcher that exceeded its limit; the cleaner then keeps the original transcript instead of inserting a partial transformation. Omitted when cleaning succeeded. |
+| `inference` | object | Model identity and controls for this transcription. Absent in older rows and when a library caller provides no metadata. |
 
-`ruleset_id` and `cleaning_failure` are the only omittable fields on this line; everything else is always present. Pass semantics are in [cleaning-rules.md](cleaning-rules.md).
+Pass semantics are in [cleaning-rules.md](cleaning-rules.md).
+
+The daemon supplies an `inference` object on each successful transcription:
+
+| Field | Meaning |
+| --- | --- |
+| `model` | Loaded GGUF filename, including a custom model selected with `-m`. |
+| `model_preset` | Named preset, when selected. Omitted for custom files, including locally generated Q6_K selected with `-m`. |
+| `backend` | Model backend family, such as `parakeet` or `qwen3`. |
+| `quantization` | GGUF file-level quantization label. If its file-type header is absent, the tensor type containing the most model elements; `unknown` when metadata cannot be read or identified. |
+| `requested_device` | Original `auto`, `cpu` or `gpu` policy. |
+| `session_device` | Policy used to open the current session, including CPU fallback after reload. |
+| `confirmed_device` | `cpu` for explicitly opened CPU sessions; otherwise omitted when execution is unconfirmed. |
+| `qwen_language` | Effective forced language, or `auto`; Qwen only. |
+| `qwen_max_new_tokens` | Effective per-chunk generation budget; Qwen only. |
+| `native_api_version` | Linked native C API version, when reported. |
+
+Mixed-precision artifacts retain higher-precision tensors: Qwen Q6_K generation keeps the audio encoder at Q8_0 or source floating precision, while the overall label remains `Q6_K`. Small F32 biases and normalization tensors can coexist with a reported `F16` model. The label summarizes the artifact recipe rather than every tensor.
+
+The requested device policy remains fixed; the session policy reflects an Auto reload on CPU. GPU execution backend (CUDA/Vulkan/Metal) and GPU name are not confirmed by these JSONL fields. Status labels GPU inventory separately from confirmed execution.
+
+Qwen controls describe user inference after readiness, not temporary warmup options or a detected language. `native_api_version` is not the CrispASR release tag. No model-parent directory is recorded. Readers should accept older rows without `inference` and ignore unfamiliar fields.
 
 ## Insertion Record Fields
 
@@ -90,7 +112,7 @@ No field on the insertion line is omitted; absent values serialize as `null`. Mo
   `unverified_timeout`, `unverified_no_baseline`, and `unverified_short_transcript` apply the restore policy only while the staged clipboard still matches, as with `pasted`. `unverified_focus_lost` skips restoration: the transcript remains if still current (`clipboard_restored: false`), otherwise the competing or unreadable clipboard is preserved (`null`). This is not a restore failure and prints no restore warning.
 - **`copied_only`** - the transcript remains active on the clipboard because automatic insertion did not complete. With `paste_event_posted: false`, this covers terminal-mode multiline text and pre-paste fallbacks such as held modifiers, an unavailable backend, or focus rejection when the transcript-retention policy applies. Pre-chord paths that restore or preserve another clipboard payload report `blocked` instead. With `paste_event_posted: true` on macOS and `acknowledgement_kind: no_evidence`, the chord was sent but never confirmed, so parakit keeps the transcript active, plays the error tone, and asks you to inspect the target before pasting manually.
 - **`blocked`** - a focus or clipboard guard prevented completion, and parakit plays the error tone. A competing or unverifiable clipboard is preserved with `clipboard_restored: null`; otherwise restoration follows policy. On Linux, direct-typing guards also report `blocked`; `failure_reason` gives the completed character count, and the full transcript remains available through `copy-last` when history is enabled.
-- **`skipped`** - insertion was intentionally omitted. This means either nothing printable survived sanitization or the WAV worker simulation disabled desktop insertion; no paste or clipboard action occurs. When sanitization leaves no printable text, parakit plays the error tone rather than signaling a successful insertion.
+- **`skipped`** - insertion was intentionally omitted. This means either nothing printable survived sanitization or the WAV worker simulation disabled desktop insertion; no paste or clipboard action occurs. When sanitization leaves no printable text, parakit plays the error tone, leaves transcript history unchanged, and prints no recovery hint for that dictation. The simulation path retains its transcript in history.
 - **`error`** - insertion actually failed: the platform backend could not be prepared, the paste chord could not be sent, or a clipboard restore failed on a path that never reached a landed paste. `failure_reason` carries the error text.
 
 A clipboard-restore failure is not always an `error`. If restoration fails or is deliberately skipped *after* a paste already landed or was accepted as unverified, the outcome stays `pasted` or `pasted_unverified`. Clipboard details appear only with `--verbose` and in the insertion record's `clipboard_restored` and `failure_reason` fields; they do not print stderr warnings or fail the dictation.

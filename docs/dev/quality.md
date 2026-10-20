@@ -20,7 +20,7 @@ The all-features check can request accelerator toolchains that the current host 
 
 ## GPU Feature Validation
 
-Use the Windows scripts for CUDA/Vulkan validation; they default to Ninja. Raw `cargo check --workspace --all-targets --all-features` may still enter CMake's Visual Studio generator and fail before Rust typechecking if Visual Studio CUDA BuildCustomizations are stale. A known failure leaves `CudaToolkitDir` empty and reports `CUDA Toolkit directory '' does not exist`.
+Use the [Windows scripts](../../scripts/windows/README.md) for native CUDA/Vulkan builds. Raw `cargo check --workspace --all-targets --all-features` may still enter CMake's Visual Studio generator and fail before Rust typechecking if Visual Studio CUDA BuildCustomizations are stale. A known failure leaves `CudaToolkitDir` empty and reports `CUDA Toolkit directory '' does not exist`.
 
 When that happens, record the exact CUDA/MSBuild error, then validate the Rust all-features surface with an existing bundled library directory:
 
@@ -30,7 +30,7 @@ cargo check --workspace --all-targets --all-features
 Remove-Item Env:\CRISPASR_LIB_DIR
 ```
 
-This fallback does not replace real GPU validation. Also run the CUDA and Vulkan Windows scripts plus simulated-dictation smoke tests against `local-scratch\juniper-voicememo-DO_NOT_DELETE.wav` when touching Windows GPU behavior.
+This fallback does not replace the [native Windows build and inference checks](model-validation.md#windows-cpu-and-supported-gpu-backends).
 
 On macOS, raw `--all-features` also enables CUDA and can fail in CMake before Rust typechecking when the CUDA Toolkit is not installed. Use the same `CRISPASR_LIB_DIR` fallback to validate the Rust all-features surface; validate Metal with the native macOS build and `doctor`.
 
@@ -40,6 +40,51 @@ CRISPASR_LIB_DIR="$PWD/target/debug/build/parakit-<hash>/out/lib" \
 ```
 
 Replace `<hash>` with the directory from the successful native build; do not point the fallback at an unrelated or stale library.
+
+### Linux CUDA/Vulkan
+
+Check `nvidia-smi` for active compute jobs before loading models. Build the daemon and helper in an [isolated target directory](../build.md#isolated-development-builds); do not install the validation binary over the running daemon. The commands below assume `CARGO_TARGET_DIR` still names that GPU build.
+
+```bash
+mkdir -p target/tmp/validation
+printf '# Isolated validation configuration.\n' > target/tmp/validation/config.toml
+export PARAKIT_CONFIG_PATH="$PWD/target/tmp/validation/config.toml"
+export XDG_CACHE_HOME="$PWD/target/tmp/validation/cache"
+export PARAKIT_MODELS_DIR="$XDG_CACHE_HOME/parakit/models"
+```
+
+Fetch the selected preset into this isolated cache first, or reuse an existing test cache by setting `PARAKIT_MODELS_DIR` to it. Check backend visibility before inference:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 GGML_VK_VISIBLE_DEVICES= \
+  "$CARGO_TARGET_DIR/debug/parakit" --verbose doctor
+env -u GGML_VK_VISIBLE_DEVICES CUDA_VISIBLE_DEVICES= \
+  "$CARGO_TARGET_DIR/debug/parakit" --verbose doctor
+```
+
+The first command exposes CUDA and hides Vulkan; the second hides CUDA and lets Vulkan select a discrete GPU. Check the device name in the native diagnostics. Use `GGML_VK_VISIBLE_DEVICES` to pin a Vulkan device when necessary, as described in [the environment reference](../config_reference.toml). `--device gpu` alone does not distinguish CUDA from Vulkan in a build containing both.
+
+A verbose Vulkan run in a dual-backend build can report `no CUDA-capable device is detected` because CUDA was deliberately hidden. Confirm that the selected device is Vulkan on the intended GPU.
+
+Run the built [WAV helper](#wav-quality-target) and [real worker simulation](#ptt-worker-simulation) directly, preserving the GPU build's feature set:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 GGML_VK_VISIBLE_DEVICES= \
+  "$CARGO_TARGET_DIR/debug/examples/transcribe-file" \
+  --model-preset qwen3-asr-0.6b --device gpu --threads 8 \
+  --audio local-scratch/juniper-voicememo-DO_NOT_DELETE.wav \
+  --warmup --repeat 2
+CUDA_VISIBLE_DEVICES=0 GGML_VK_VISIBLE_DEVICES= \
+  "$CARGO_TARGET_DIR/debug/parakit" --verbose start \
+  --model-preset qwen3-asr-0.6b --device gpu --threads 8 --no-cleaning \
+  --simulate-ptt-audio local-scratch/juniper-voicememo-DO_NOT_DELETE.wav \
+  --model-idle-minutes 1 --simulate-ptt-repeat 2 --simulate-ptt-idle-seconds 63 \
+  --log-dir "$PWD/target/tmp/validation/logs"
+```
+
+For Vulkan, replace the CUDA environment prefix on both commands with `env -u GGML_VK_VISIBLE_DEVICES CUDA_VISIBLE_DEVICES=` or pin a Vulkan device explicitly. Apply these commands to the matrix and acceptance cases in [native model validation](model-validation.md). The worker's two idle waits take at least 126 seconds per model/backend pair.
+
+Retain commands, device diagnostics, raw transcripts, exit statuses, timings, and per-process memory samples under the ignored `target/tmp/` tree. For reload calibration, sample host RSS and GPU allocations through startup warmup, full inference, loaded idle, offload, and reload. Compare the increase from the offloaded GPU allocation with the model file size plus the reload allowance; retained driver memory is already unavailable to the free-memory check. Label sampled peaks as observations rather than ceilings. Successful runs with ample free VRAM do not establish out-of-memory recovery.
 
 ## Rust Source Coverage
 
@@ -77,7 +122,17 @@ cargo run --release --no-default-features --features bundled --example transcrib
 
 The helper accepts WAV input, uses the same raw `Engine` path as the daemon, and prints raw inference text and timing. It intentionally does not import or apply parakit text-cleaning rules. This command avoids live daemon desktop/audio dependencies while keeping the bundled CrispASR build. Model cache behavior is in [running.md#model-cache](../running.md#model-cache). Pass `--model /path/to/model.gguf` only when comparing a specific custom GGUF. The source lives at [examples/transcribe_file.rs](../../examples/transcribe_file.rs); it is a Cargo example target so it is not installed as an end-user binary.
 
-For latency work, use short real clips around 2s, 5s, 15s, and 25s. Longer quality clips are still useful for catching transcription drift, but they should not drive startup or post-release latency policy. Use repeatable `--warmup-seconds N` flags when calibrating GPU cold-start behavior; each flag runs one synthetic warmup pass before timing the real clip.
+Use `--model-preset` for any [hosted preset](../running.md#model-presets), including both Qwen sizes and the Moondream models:
+
+```bash
+cargo run --release --no-default-features --features bundled --example transcribe-file -- \
+  --audio clips/example.wav --model-preset qwen3-asr-1.7b \
+  --qwen-language auto --qwen-max-new-tokens 512
+```
+
+The example does not read daemon configuration. `--model` and `--model-preset` conflict, and Qwen controls require a Qwen GGUF. Token exhaustion without EOS or a failed native chunk must fail the full transcription rather than print an incomplete success.
+
+For latency work, use short real clips around 2s, 5s, 15s, and 25s. Longer quality clips are still useful for catching transcription drift, but they should not drive startup or post-release latency policy. Use `transcribe-file --warmup` for the same model-aware readiness as daemon startup/reload. Qwen uses embedded human speech with automatic language and 512 tokens, then restores the user's options; Parakeet retains synthetic warmup. Repeatable `--warmup-seconds N` flags remain available for Parakeet shape diagnostics and are rejected for Qwen.
 
 ## PTT Worker Simulation
 
@@ -99,8 +154,6 @@ The empty config file keeps your own `config.toml` out of the run; `PARAKIT_CONF
 Simulation bypasses the daemon singleton and opens no control endpoint. It uses the same resolved worker settings as normal startup, but disables insertion, sounds, and desktop notifications. Avoid concurrent inference when measuring timings; simulation does not pause an already-running daemon.
 
 The worker acknowledges each required transcript, checks exact parity across repeats in the same process, and verifies the expected residency after each wait (including the last). This parity check verifies that reloading recreates the same session; it is not a cross-build reference-transcript comparison. Missing transcripts, reload failures, or missed offloads return a failure exit status. An immediate simulated release exercises queuing while reload is busy. Use `--model-idle-minutes 0` to check disabled offloading. For one dictation without an idle wait, omit `--simulate-ptt-repeat` and `--simulate-ptt-idle-seconds`; both options require `--simulate-ptt-audio`.
-
-The [Linux reload measurements](memory.md#linux-reload-measurements) describe observed host and GPU allocation. This is separate from the real-time worker timeout test.
 
 ## NeMo Reference Helper
 
@@ -157,6 +210,70 @@ If F16 differs materially from the reference, inspect CrispASR's Parakeet prepro
 
 Parakeet-v3 auto-detects language. It has no parakit language flag today, so non-English or code-switched dictation should be checked against real clips before relying on it. Accents, noise, proper nouns, and technical vocabulary can change language detection behavior.
 
+### Qwen And Moondream Comparisons
+
+Start Qwen comparisons with 1.7B: run the same known-bad recordings through Parakeet v3, Qwen 1.7B F16, and Qwen 1.7B Q8_0, then repeat for 0.6B. Fetch the exact F16 files with the existing custom fetch path:
+
+```bash
+parakit fetch cstr/qwen3-asr-1.7b-GGUF --file qwen3-asr-1.7b-f16.gguf
+parakit fetch cstr/qwen3-asr-0.6b-GGUF --file qwen3-asr-0.6b.gguf
+```
+
+Use the resulting printed model paths with `transcribe-file --model`. Compare against the [official Qwen implementation](https://huggingface.co/Qwen/Qwen3-ASR-0.6B#python-package-usage) as a separate reference. Keep forced language and token budget the same across comparisons; automatic detection and forced English are distinct cases. Include short speech, silence, the pinned Juniper recording, and speech spanning a 30-second Qwen chunk boundary. Use raw output (`--no-cleaning` in daemon simulation), then verify repeated inference and idle offload/reload preserve the options and transcript.
+
+The legacy `qwen-asr` 0.0.6 eager/SDPA audio encoder computes window boundaries but does not apply its window mask. CrispASR's dense audio attention matches that path, so agreement between these implementations can reproduce shared attention behavior. Parakit enables windowed Qwen audio attention by default; explicit environment overrides are retained. [Qwen PR #103](https://github.com/QwenLM/Qwen3-ASR/pull/103) passes the mask to the encoder layers. The native Qwen implementation in Transformers 5.13.0 instead splits eager/SDPA attention into separate audio windows; use the official [`-hf` checkpoints](https://huggingface.co/Qwen/Qwen3-ASR-1.7B-hf) for that reference.
+
+To investigate a consequential disagreement, compare F16 with dense and windowed audio attention using CrispASR's existing environment switch. Disable its repetition repair in both diagnostic arms so the generated output remains observable:
+
+```bash
+CRISPASR_NGRAM_LOOPFIX_OFF=1 CRISP_AUDIO_WINDOWED_ATTN=0 \
+  "$CARGO_TARGET_DIR/debug/examples/transcribe-file" \
+  --model path/to/qwen3-asr-1.7b-f16.gguf --device gpu \
+  --audio clips/example-16k.wav --warmup --repeat 2 \
+  --qwen-language auto --qwen-max-new-tokens 512
+CRISPASR_NGRAM_LOOPFIX_OFF=1 CRISP_AUDIO_WINDOWED_ATTN=1 \
+  "$CARGO_TARGET_DIR/debug/examples/transcribe-file" \
+  --model path/to/qwen3-asr-1.7b-f16.gguf --device gpu \
+  --audio clips/example-16k.wav --warmup --repeat 2 \
+  --qwen-language auto --qwen-max-new-tokens 512
+```
+
+Use the same build and backend in both arms. Prepare one mono 16-kHz PCM input and give each implementation the same sample ranges. Native long-input chunks use energy-dependent boundaries below the 30-second limit; transcribing the whole recording in Python changes the decoder context. Record actual native chunk ranges when diagnosing a difference, then feed those exact slices to the reference. Include clips around the audio encoder's 8-second window boundary as well as the long-input chunk boundary.
+
+For preprocessing comparisons, also start from the original recording and capture the output of the production WAV and microphone resamplers. Record decoded sample counts, channel mixing, scaling, filter settings, alignment and flushed tails before comparing that PCM with SciPy or the demo's librosa path. A delay reported by a resampler is not sufficient evidence to trim samples; measure alignment on the resulting waveforms.
+
+Librosa's `soxr_hq` path calls SoXR at HQ quality with energy scaling disabled and fixes the final length to the ceiling of the sample-rate ratio. A native comparison can use SoXR directly with float32 mono input, matching quality and final-length handling; streaming comparisons must also signal end of input and drain the output. Parakit's file and microphone paths instead share a 256-tap Rubato sinc resampler with 256 oversampling, .95 cutoff and linear interpolation. Both drain the final filter tail to the recording's nominal sample count and reset between recordings. This is a separate native resampler, not an exact SoXR implementation, and the attention environment switch does not change it.
+
+Compare float32 mel features on identical PCM before changing the encoder. If generated tokens differ, inspect encoder embeddings and the first differing logits under the same preceding tokens. F16 weights do not imply identical intermediate precision or GPU kernels, and a small numeric difference can change later words after greedy decoding diverges. Keep native F16, native quantized and Python BF16 results separate.
+
+Keep context, system text and hotwords empty, with batch size one and greedy decoding. Record the reference versions and checkpoint revisions, model dtype, the audio encoder's effective attention implementation and mask or per-window call shapes, and raw generated tokens through EOS or token exhaustion. For web-demo comparisons, also record the uploaded file's sample rate, decoded PCM and resampling method; a separately prepared 16-kHz waveform can produce different recognition. A requested attention setting alone does not establish execution. Score complete outputs separately from failed or budget-exhausted decodes, and listen to polarity and omission disagreements before choosing a default. Check quiet speech, noisy tails, silence and repeated long input for regressions in both modes.
+
+For [Ultra](https://huggingface.co/moondream/parakeet-ultra) and [Redux](https://huggingface.co/moondream/parakeet-redux), compare the Q8_0 presets with the original checkpoints through CrispASR's existing Hugging Face reference helpers and a short independent Photon run. Photon's packed Redux implementation and VAD segmentation differ from the GGUF runtime; record those conditions rather than attributing their speed or memory figures to parakit.
+
+Record raw transcripts, omissions, negation and number/entity disagreements, failures, cold/warm latency, and host/GPU memory. Listen to consequential disagreements and label human-reviewed text separately. Keep downloaded reference weights, dependencies, and generated evidence under ignored scratch directories. Check for active training or other GPU jobs before each hardware run and defer GPU tests while they occupy the device.
+
+### Parakeet CPU Comparison
+
+An acceptance run on October 14, 2026 compared the three Parakeet Q8_0 presets on an AMD Ryzen 7 7700X, using eight inference and OpenMP/BLAS threads, OpenBLAS, and the CPU-only bundled build. The native C++ library was optimized; the Rust file helper was a debug build. Each model transcribed the same 55.36-second Juniper memo twice after loading.
+
+| Preset | First inference | Repeat inference | Peak process RSS |
+| --- | ---: | ---: | ---: |
+| `parakeet-v3` | 5.60 s | 5.33 s | 1.56 GiB |
+| `parakeet-ultra` | 5.00 s | 4.60 s | 1.49 GiB |
+| `parakeet-redux` | 6.12 s | 5.66 s | 1.49 GiB |
+
+Inference times exclude model loading. RSS includes loading and both passes; it is not the model's download size. Filesystem caches were not flushed, and other host processes were present. These two runs on one recording do not establish a general speed ranking or transcription-quality advantage. Redux did not provide a CPU speed or memory advantage over Ultra in this check.
+
+Use the [WAV quality target](#wav-quality-target) with `--device cpu --repeat 3` and each `--model-preset` to compare your own CPU and recordings. Check raw-text fidelity alongside timing, especially omissions, negations, numbers, and names.
+
+### Checkpoint Conversion Acceptance
+
+Use the [source-rebuild commands](README.md#source-rebuild) with an isolated model cache and `--keep-f16 --force` to exercise original checkpoint download, F16 conversion, and Q8_0 quantization for both Qwen sizes and both Moondream models. Also run one rebuild from a local original snapshot with `--checkpoint-dir`; verify that the supplied snapshot remains after success and failure. Existing Parakeet v3 `.nemo` rebuilding must continue to work.
+
+For each rebuilt model, open the retained F16 and resulting Q8_0 artifacts through `transcribe-file` and the actual daemon worker. Compare both against the original implementation on the same audio using the quality procedure above. A successful converter or quantizer exit alone is insufficient: check consequential omissions, negations, numbers/entities, silence, and chunk-boundary speech. Treat any existing runtime quality limitation as unresolved until these comparisons establish otherwise.
+
+Confirm `start --model-preset NAME` resolves the rebuilt cache artifact. Repeat `fetch --from-source --model-preset NAME` with the completed artifact present and no usable Python converter/network access; it must reuse the cached Q8_0. Then exercise `--force`, intermediate F16 retention/removal, retained downloaded snapshots, and conversion/quantization failures without replacing a completed cached model. Keep generated models and reports in ignored test directories. These are local acceptance checks; they do not add model downloads, conversion, inference, or new jobs to CI.
+
 ## Cleaning Corpus Replay
 
 Use the audit example to measure a cleanup change over historical JSONL dictation logs without loading a speech model:
@@ -201,6 +318,24 @@ Check:
 
 Run daemon/IPC checks sequentially with isolated config, cache/runtime paths, and a model copy. After a configured idle timeout, verify the first PTT still captures and inserts once, then check status and history. Make the test model unavailable while offloaded to verify reload failure, restore it, and confirm the next PTT recovers. Check stop/restart and sleep/wake on the native desktop. For audible cues, idle offload is silent. Hold PTT through reload and listen for the three-note reload cue followed by the usual listening tone when ready. Release during reload and confirm there is no delayed listening tone; a failed reload must not announce readiness. A failure at PTT start plays one two-pulse error cue; if the release retry also fails, it plays a second. Check the normal completion/error cues, the error cue after a capture with no speech, and `--no-sounds` too. Headless tests verify cue ordering and cancellation, but do not validate audible playback, physical input, or insertion. Record unobserved human checks and unavailable backend runs as pending.
 
+On macOS, an opt-in acoustic control plays two WAVs through the speakers and records them through the production CPAL/Rubato microphone path. It checks three successive captures (first WAV, second WAV, first WAV), retains only text and signal measurements, and can measure the real speaker cues. This does not synthesize or validate the physical global hotkey. Use public speech WAVs, an active desktop with microphone permission, and repository-local model, WAV, and report paths. The report file must already exist:
+
+```bash
+mkdir -p target/tmp/live-audio
+touch target/tmp/live-audio/capture.json
+PARAKIT_LIVE_MODEL=target/tmp/models/model.gguf \
+PARAKIT_LIVE_DEVICE=gpu \
+PARAKIT_LIVE_WAV=target/tmp/first.wav \
+PARAKIT_LIVE_SECOND_WAV=target/tmp/second.wav \
+PARAKIT_LIVE_REPORT=target/tmp/live-audio/capture.json \
+PARAKIT_LIVE_CUES=1 \
+CRISPASR_FC_PW_Q8=0 CRISPASR_FC_FUSED_QKV=0 CRISP_AUDIO_WINDOWED_ATTN=1 \
+  cargo test --release --features metal --bin parakit \
+  daemon::audio::live_smoke::speaker_wav_through_live_capture -- --ignored --nocapture
+```
+
+Use `PARAKIT_LIVE_DEVICE=cpu` for CPU. Omit `PARAKIT_LIVE_CUES` to skip cue playback. Inspect the report even on failure: silent input, insufficient acoustic volume, and recognition failure are different outcomes. Compare the transcripts with the WAVs and inspect the following quiet capture for leftover samples. This test does not save microphone audio.
+
 For allocation context, see the [Linux reload measurements and ownership notes](memory.md).
 
 ### Clipboard Checks
@@ -212,3 +347,23 @@ Use controlled text, HTML/text alternatives, images, copied files, and an empty 
 TODO: Reproduce a hung X11 clipboard owner and design bounded snapshot reads that preserve the prior clipboard. Arboard reads formats sequentially and its public API does not distinguish a read timeout from an unavailable format.
 
 TODO: On a native Linux desktop, exercise direct typing and guarded paste with physical modifier/focus changes, key-probe failures, keyboard-map changes, readiness-error reconnection and clipboard-manager handoffs. Closure tests and Mac runs do not establish those X11 results. Windows generation changes and delayed rendering also need native clipboard-manager or RDP verification.
+
+### Ordered audio and loaded Qwen failures
+
+Repeat `transcribe-file --audio` to run ordered inputs on one loaded engine. [Worker simulation](#ptt-worker-simulation) accepts repeated `--simulate-ptt-audio` paths; it replays the full sequence per cycle before the idle interval. Its failure path reads history back and rejects replacement of the preceding successful transcript. See the [native Qwen sequence](model-validation.md#qwen-options-long-input-and-reload) for the short/long/short acceptance case.
+
+The loaded-session fault driver runs on Linux and macOS with an explicit Qwen model:
+
+```bash
+python tests/native/run_qwen_faults.py \
+  --native-build <isolated-target>/debug/build/parakit-<id>/out/build \
+  --binary-dir <isolated-target>/debug \
+  --model <qwen-q8.gguf> \
+  --device cpu \
+  --audio vendor/CrispASR/bindings/go/samples/jfk.wav \
+  --output target/tmp/qwen-native-faults
+```
+
+First run `cargo test --test native_correctness_build` in the same isolated target directory to build the readiness-restoration test harness. Use the matching completed native build directory containing `compile_commands.json`, and a fresh output directory. CPU is the default; to test Metal, build both binaries and the readiness harness with `--features metal`, then pass `--device gpu`. On macOS the driver preserves the dylib basename and version aliases and sets `DYLD_LIBRARY_PATH` to load its private fault library. The driver compiles a separate corrected C API copy and relinks its own test library. Only that library contains fault controls; normal binaries and vendor sources are unchanged. First/middle/last chunk failures and greedy embedding/forward failures run through both file and worker paths. The worker first remembers a successful dictation, then checks history preservation and absence of successful logging/insertion for the failed input. Separate prefix cases inspect actual native English, Cantonese, and Filipino assistant prefills. They force those languages on English fixture audio to inspect prompt construction, not to measure multilingual recognition quality.
+
+The remaining native desktop checklist is in [model-validation.md](model-validation.md).

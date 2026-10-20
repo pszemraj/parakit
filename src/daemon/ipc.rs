@@ -207,6 +207,15 @@ pub(crate) struct StatusDetail {
     pub(crate) mic: String,
     /// Model file name.
     pub(crate) model: String,
+    /// Explicit preset selection, absent for a local model path.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) model_preset: Option<String>,
+    /// Effective canonical Qwen language, including `auto`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) qwen_language: Option<String>,
+    /// Effective per-chunk Qwen generation budget.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) qwen_max_new_tokens: Option<usize>,
     /// Model dtype/size label.
     pub(crate) dtype: String,
     /// Resolved runtime compute device summary.
@@ -243,6 +252,12 @@ pub(crate) struct DaemonInfo {
     pub(crate) pid: u32,
     /// Model file name.
     pub(crate) model_name: String,
+    /// Explicit preset selection, absent for a local model path.
+    pub(crate) model_preset: Option<String>,
+    /// Effective canonical Qwen language, including `auto`.
+    pub(crate) qwen_language: Option<String>,
+    /// Effective per-chunk Qwen generation budget.
+    pub(crate) qwen_max_new_tokens: Option<usize>,
     /// Model dtype/size label.
     pub(crate) dtype: String,
     /// Selected microphone summary.
@@ -411,6 +426,9 @@ impl SharedState {
                 dictation_count: self.dictation_count.load(Ordering::Relaxed),
                 mic: info.mic_summary.clone(),
                 model: info.model_name.clone(),
+                model_preset: info.model_preset.clone(),
+                qwen_language: info.qwen_language.clone(),
+                qwen_max_new_tokens: info.qwen_max_new_tokens,
                 dtype: info.dtype.clone(),
                 device: info.device.clone(),
                 backend: info.backend.clone(),

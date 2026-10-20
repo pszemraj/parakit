@@ -159,7 +159,17 @@ fn resample_to_target(samples: Vec<f32>, source_rate: u32) -> Result<Vec<f32>> {
         .context("failed to resample WAV chunk")?;
     }
 
-    output.truncate(expected_len.min(output.len()));
+    if output.len() < expected_len {
+        input_frames[0].fill(0.0);
+        process_resample_chunk(
+            &mut resampler,
+            &input_frames,
+            &mut output_frames,
+            &mut output,
+        )
+        .context("failed to drain WAV resampler")?;
+    }
+    output.truncate(expected_len);
     Ok(output)
 }
 
@@ -237,10 +247,10 @@ pub fn new_target_resampler(source_rate: u32) -> Result<SincFixedIn<f32>> {
 /// The rubato sinc interpolation parameters.
 pub fn resampler_params() -> SincInterpolationParameters {
     SincInterpolationParameters {
-        sinc_len: 64,
+        sinc_len: 256,
         f_cutoff: 0.95,
         interpolation: SincInterpolationType::Linear,
-        oversampling_factor: 128,
+        oversampling_factor: 256,
         window: WindowFunction::BlackmanHarris2,
     }
 }
@@ -328,6 +338,25 @@ mod tests {
             resample_to_target(vec![0.1, -0.1], TARGET_RATE).unwrap(),
             vec![0.1, -0.1]
         );
+    }
+
+    #[test]
+    fn resampling_drains_full_and_partial_chunks_without_extending_duration() {
+        for rate in [8_000, 44_100, 48_000, 96_000, 192_000] {
+            for count in [1, 100, 1024, 3072, 3172] {
+                let input = (0..count).map(|i| (i as f32 * 0.17).sin() * 0.25).collect();
+                let output = resample_to_target(input, rate).unwrap();
+                let expected =
+                    (count as f64 * f64::from(TARGET_RATE) / f64::from(rate)).ceil() as usize;
+                assert_eq!(output.len(), expected, "rate={rate}, input={count}");
+                assert!(output.iter().all(|sample| sample.is_finite()));
+                if count >= 1024 {
+                    assert!(output[output.len() - 4..]
+                        .iter()
+                        .any(|sample| sample.abs() > 0.001));
+                }
+            }
+        }
     }
 
     #[test]

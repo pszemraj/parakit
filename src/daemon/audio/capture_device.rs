@@ -195,7 +195,7 @@ pub(super) fn select_input_device(host: &cpal::Host) -> Result<SelectedInput> {
     virtual_inputs
         .into_iter()
         .next()
-        .ok_or_else(|| anyhow!("no usable input device"))
+        .ok_or_else(|| anyhow!("no microphone is available; connect or enable an input device, then run `parakit doctor`"))
 }
 
 fn select_preferred_input_config(

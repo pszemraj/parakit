@@ -9,7 +9,7 @@
 - Recommended Windows GPU install: run `scripts\windows\build.bat --backend vulkan`.
 - CUDA install: run `scripts\windows\build.bat --backend cuda` only when you specifically need NVIDIA CUDA.
 - Build without replacing the installed command: add `--no-install`.
-- After install, open a new terminal and run `parakit doctor --deep`.
+- After install, follow the [runtime checks](#runtime-manifest).
 
 From PowerShell, use `.\scripts\windows\build.ps1 ...` instead of `build.bat`. For debug builds, use `-Profile debug`.
 
@@ -25,22 +25,13 @@ The script creates `target\parakit-windows-x86_64-<backend>`, installs it to `%L
 
 The scripts do not edit the system `PATH`, create firewall rules, open TCP ports, create symlinks or junctions, map temporary drive letters, require Windows Developer Mode, or require administrator rights.
 
-All backends install into the same default per-user app directory. Installing a different backend replaces the previous bundle and removes its stale DLLs.
-
 The installer is intentionally per-user. It refuses system locations such as `C:\Windows` and `C:\Program Files\...`; those paths require admin rights on normal Windows systems and are the wrong default for a developer or corporate laptop.
 
 ## Backend Selection
 
 If you omit `--backend`, the script opens a keyboard menu. It accepts Up/Down, `1`/`2`/`3`, and Enter. CPU starts highlighted, so pressing Enter selects CPU.
 
-`build.bat` is a `cmd.exe` wrapper around the PowerShell implementation. From PowerShell, call the implementation directly:
-
-```powershell
-.\scripts\windows\build.ps1
-.\scripts\windows\build.ps1 --backend vulkan
-```
-
-Run `.\scripts\windows\build.ps1 --help` for the script's live help.
+`build.bat` is a `cmd.exe` wrapper around the PowerShell implementation. In PowerShell, invoke `build.ps1` directly; pass `--help` for the script's live options.
 
 ## Build Options
 
@@ -51,7 +42,7 @@ Run `.\scripts\windows\build.ps1 --help` for the script's live help.
 | `--cuda` | Alias for `--backend cuda`. Requires the NVIDIA CUDA Toolkit on this machine. |
 | `--vulkan` | Alias for `--backend vulkan`. Requires the LunarG Vulkan SDK and `glslc`. |
 | `--blas auto\|off\|openblas\|mkl\|generic` | Sets `PARAKIT_BLAS` for this build. Omit it for normal autodetection. |
-| `--openblas-root DIR` | Sets `PARAKIT_OPENBLAS_ROOT` for this build. `DIR` must contain a Windows OpenBLAS layout with `include\`, `lib\`, and `bin\`. |
+| `--openblas-root DIR` | Sets `PARAKIT_OPENBLAS_ROOT` with `--blas auto` or `--blas openblas`; ignored by other modes. `DIR` must contain a Windows OpenBLAS layout with `include\`, `lib\`, and `bin\`. |
 | `--bundle-cuda-dlls` | CUDA only: copies `cudart64_*.dll`, `cublas64_*.dll`, and `cublasLt64_*.dll` into the bundle. |
 | `--release` | Builds the Cargo `release` profile and bundles it. This is the default. |
 | `--debug` | Legacy shorthand. PowerShell can consume it before the script sees it; use `-Profile debug` for debug builds. |
@@ -76,19 +67,19 @@ scripts\windows\build.bat --backend cpu --blas off
 scripts\windows\build.bat --backend cpu --blas openblas --openblas-root C:\path\to\OpenBLAS
 ```
 
-`--openblas-root` is used with `--blas auto` or `--blas openblas` and ignored by other BLAS modes. Advanced CMake path overrides are documented in the build guide; explicit library paths skip automatic OpenBLAS DLL bundling.
+Advanced CMake path overrides are documented in the build guide; explicit library paths skip automatic OpenBLAS DLL bundling.
 
 When `build.rs` selects a Windows OpenBLAS install, the bundle includes its OpenBLAS runtime DLL plus adjacent known runtime DLLs such as OpenMP, gfortran, GCC, quadmath, and winpthreads libraries when present.
 
 ## Backend Requirements
 
-Only one compute backend is supported per bundle.
-
 | Backend | Command | Build-time requirements | Runtime expectation |
 | --- | --- | --- | --- |
 | CPU | `build.ps1 --backend cpu` | Visual Studio C++ tools, CMake, Rust | Generated CrispASR/ggml DLLs are bundled. BLAS is autodetected unless overridden. |
 | CUDA | `build.ps1 --backend cuda` | Visual Studio C++ tools, Ninja, NVIDIA CUDA Toolkit with `nvcc`; `CUDA_PATH` may be inferred from `nvcc.exe` on `PATH` | NVIDIA-only. CUDA runtime and cuBLAS DLLs must be found from the installed app directory or `PATH`, unless `--bundle-cuda-dlls` is used. |
-| Vulkan | `build.ps1 --backend vulkan` | Visual Studio C++ tools, Ninja, LunarG Vulkan SDK with `glslc`; `VULKAN_SDK` may be autodetected from `C:\VulkanSDK\*` or inferred from `glslc.exe` on `PATH` | Recommended Windows GPU backend for NVIDIA, AMD, and Intel. `vulkan-1.dll` is provided by the installed GPU driver. |
+| Vulkan | `build.ps1 --backend vulkan` | Visual Studio C++ tools, Ninja, LunarG Vulkan SDK with `glslc`; `VULKAN_SDK` may be autodetected from `C:\VulkanSDK\*` or inferred from `glslc.exe` on `PATH` | Recommended Windows GPU backend for NVIDIA, AMD, and Intel. Install a compatible GPU driver; its `vulkan-1.dll` must be present through System32 or `PATH`. |
+
+Hosted Q8_0 inference does not need a local quantizer. Windows `fetch --quantize q6_k` and `fetch --from-source` require a compatible external `crispasr-quantize.exe` on `PATH`; source conversion also has Python requirements. See [source rebuild](../../docs/dev/README.md#source-rebuild).
 
 CUDA runtime DLL bundling is opt-in because `cublasLt64_*.dll` is large:
 
@@ -118,7 +109,7 @@ If path shortening does not fix a Vulkan shader-gen failure, capture the exact `
 `build.ps1` runs this sequence:
 
 1. Gives the backend its own Cargo target directory and, for Vulkan, checks the shader-generator path depth.
-2. Checks `vendor\CrispASR`, accepting any populated checkout and initializing submodules non-interactively only when needed.
+2. Checks `vendor\CrispASR` and initializes it when needed.
 3. Configures BLAS.
 4. Ignores `CRISPASR_LIB_DIR` for the bundled build so it produces a fresh runtime manifest and colocated DLL staging directory, then restores the inherited value.
 5. Configures the selected accelerator, including the MSVC environment, Ninja, and the CUDA or Vulkan toolkit checks for GPU builds, then runs `cargo build` with the requested profile and backend feature.
@@ -133,9 +124,9 @@ The build script checks whether `vendor\CrispASR` is already populated before to
 
 The build writes `parakit-runtime-manifest.json` beside `parakit.exe`. The bundle copies every file in `required_files`, and the installer validates those entries before installing.
 
-`install.ps1` checks external CUDA/Vulkan runtime DLLs, refuses unsafe or non-owned custom destinations, copies the bundle, runs `parakit --version` as a loader smoke test, and updates User `PATH` unless `--no-user-path` is set.
+`install.ps1` checks external CUDA/Vulkan runtime DLLs, copies the bundle, and runs `parakit --version` as a loader smoke test.
 
-The manifest records the selected accelerator and external runtime DLLs. CUDA external DLLs are hard requirements unless they were bundled. Vulkan's `vulkan-1.dll` is driver-managed and must be present through System32 or `PATH`; install or update the NVIDIA, AMD, or Intel GPU driver before installing the Vulkan bundle.
+The manifest records the selected accelerator and external runtime DLLs required by each [backend](#backend-requirements).
 
 After installing, open a new terminal and run:
 
@@ -147,8 +138,6 @@ parakit
 What `doctor --deep` actually does on Windows is described in [windows-desktop.md#doctor---deep](../../docs/windows-desktop.md#doctor---deep).
 
 The version smoke test does not touch the hotkey, microphone, daemon lock, model cache, or clipboard. If Windows reports `0xC0000135`, the installer translates it to a missing-runtime-DLL message before PATH updates.
-
-The installer updates persistent User `PATH`, but already-running terminals keep their old environment. Open a new terminal after install.
 
 If Group Policy blocks User `PATH` writes, the install still succeeds and prints a warning. Run `%LOCALAPPDATA%\Programs\parakit\parakit.exe` directly, add the directory through your approved endpoint-management path, or rerun with `--no-user-path` when PATH changes are not allowed.
 
