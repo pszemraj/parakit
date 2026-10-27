@@ -572,8 +572,9 @@ mod tests {
         let observed_audio = audio.clone();
         let log = Logger::new(LogLevel::Quiet);
         let (hotkey_tx, hotkey_rx) = unbounded();
-        let (worker_tx, worker_rx) = bounded(1);
+        let (worker_tx, worker_rx) = bounded(2);
         drop(worker_rx);
+        let (finished_tx, finished_rx) = bounded(1);
         let coordinator = thread::spawn(move || {
             recording_coordinator_loop_with_max_utterance(
                 hotkey_rx,
@@ -583,14 +584,20 @@ mod tests {
                 &log,
                 ActivityGate::new(),
             );
+            finished_tx.send(()).unwrap();
         });
 
         hotkey_tx
             .send(HotkeyTransition::Pressed { at: Instant::now() })
             .expect("hotkey press should send");
+        let exited_on_disconnect = finished_rx.recv_timeout(EVENT_TIMEOUT).is_ok();
         drop(hotkey_tx);
 
         coordinator.join().expect("coordinator should exit cleanly");
+        assert!(
+            exited_on_disconnect,
+            "worker disconnection must end capture"
+        );
         assert!(!observed_audio.test_is_recording());
     }
 
