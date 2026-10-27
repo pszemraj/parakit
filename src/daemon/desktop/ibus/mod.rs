@@ -6,7 +6,7 @@ use crossbeam_channel::Sender;
 #[cfg(feature = "ibus")]
 mod native;
 #[cfg(feature = "ibus")]
-pub(crate) use native::{probe_status, run_helper, IbusClient};
+pub(crate) use native::{probe_status, IbusClient};
 
 /// Input-method target bound to one helper, attachment, engine and focus lifetime.
 #[repr(C)]
@@ -36,7 +36,7 @@ impl NativeTarget {
     }
 }
 
-/// Native submission evidence; uncertain delivery must never trigger fallback.
+/// Native submission evidence; uncertain delivery must never trigger another insertion.
 #[derive(Debug, Eq, PartialEq)]
 #[cfg_attr(
     not(feature = "ibus"),
@@ -150,18 +150,6 @@ pub(crate) fn probe_status() -> IbusProbe {
         engine_listed: false,
         active_engine: None,
     }
-}
-
-#[cfg(not(feature = "ibus"))]
-/// Reject an input-method launch when native support was omitted.
-///
-/// # Returns
-/// No helper process is started.
-///
-/// # Errors
-/// Always reports that IBus support is disabled.
-pub(crate) fn run_helper() -> anyhow::Result<()> {
-    anyhow::bail!("IBus support is disabled in this build")
 }
 
 #[cfg(test)]

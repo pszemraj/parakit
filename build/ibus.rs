@@ -13,6 +13,11 @@ pub(crate) fn build() {
     let library = pkg_config::Config::new().probe("ibus-1.0").expect(
         "Linux IBus support requires libibus development files (libibus-1.0-dev on Debian/Ubuntu); use --no-default-features --features bundled,daemon for an X11-only build",
     );
+    // The standalone engine does not link the parakit Rust library, so it
+    // needs the bridge's system dependencies on its own linker command.
+    for name in &library.libs {
+        println!("cargo:rustc-link-arg-bin=parakit-ibus=-l{name}");
+    }
     let mut build = cc::Build::new();
     for path in [
         "src/daemon/desktop/ibus/client.c",

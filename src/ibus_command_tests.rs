@@ -16,13 +16,13 @@ fn install_upgrade_and_uninstall_preserve_other_components() {
     std::fs::write(&other, "unrelated component").unwrap();
     let executable = std::env::current_dir()
         .unwrap()
-        .join("target/debug/parakit");
+        .join("target/debug/parakit-ibus");
     let path = install(&root, &executable, "us", "").unwrap();
     let initial = std::fs::read_to_string(&path).unwrap();
     assert!(initial.contains("<layout>us</layout>"));
     assert!(initial.contains("<layout_variant></layout_variant>"));
     assert!(initial.contains("org.freedesktop.IBus.Parakit"));
-    assert!(initial.contains("ibus engine</exec>"));
+    assert!(initial.contains("parakit-ibus&apos;</exec>"));
 
     install(&root, &executable, "de", "nodeadkeys").unwrap();
     let updated = std::fs::read_to_string(&path).unwrap();
@@ -45,10 +45,10 @@ fn install_upgrade_and_uninstall_preserve_other_components() {
 
 #[test]
 fn executable_command_keeps_special_characters_in_one_argument() {
-    let executable = "/home/user/Parakit's & <tools>/parakit";
+    let executable = "/home/user/Parakit's & <tools>/parakit-ibus";
     let quoted = quote_argument(executable);
-    let words = shlex::split(&format!("{quoted} ibus engine")).unwrap();
-    assert_eq!(words, [executable, "ibus", "engine"]);
+    let words = shlex::split(&quoted).unwrap();
+    assert_eq!(words, [executable]);
     let xml = component_xml(Path::new(executable), "us&intl", "<variant>").unwrap();
     assert!(xml.contains("Parakit&apos;\\&apos;&apos;s &amp; &lt;tools&gt;"));
     assert!(xml.contains("<layout>us&amp;intl</layout>"));

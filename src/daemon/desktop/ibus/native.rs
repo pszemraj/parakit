@@ -23,7 +23,6 @@ unsafe extern "C" {
     ) -> c_int;
     fn parakit_ibus_client_stop(client: *mut c_void);
     fn parakit_ibus_client_free(client: *mut c_void);
-    fn parakit_ibus_run_engine() -> c_int;
     fn parakit_ibus_probe(listed: *mut c_int, active: *mut *mut c_char) -> c_int;
     fn parakit_ibus_string_free(text: *mut c_char);
 }
@@ -244,21 +243,6 @@ unsafe extern "C" fn event(
             let _ = sender.send(transition);
         }
     }
-}
-
-/// Run IBus's lightweight factory/engine without daemon configuration or ASR.
-///
-/// # Returns
-/// Success after the helper's IBus connection ends.
-///
-/// # Errors
-/// Reports an unavailable bus or component-name ownership failure.
-pub(crate) fn run_helper() -> Result<()> {
-    anyhow::ensure!(
-        unsafe { parakit_ibus_run_engine() } == 0,
-        "could not start the Parakit IBus engine"
-    );
-    Ok(())
 }
 
 /// Probe IBus registration and selection without attaching to the helper.

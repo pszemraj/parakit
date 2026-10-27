@@ -17,6 +17,11 @@ name = "parakit"
 path = "src/main.rs"
 required-features = ["daemon"]
 
+[[bin]]
+name = "parakit-ibus"
+path = "src/ibus_main.rs"
+required-features = ["ibus"]
+
 [[example]]
 name = "transcribe-file"
 path = "examples/transcribe_file.rs"

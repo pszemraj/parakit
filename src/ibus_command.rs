@@ -1,4 +1,4 @@
-//! Install, inspect, and run Parakit's Linux IBus component.
+//! Install and inspect Parakit's Linux IBus component.
 
 use anyhow::{Context, Result};
 use clap::{Args, Subcommand};
@@ -16,7 +16,7 @@ pub(crate) struct IbusCli {
     command: Option<IbusCommand>,
 }
 
-/// Registration operations and the IBus-managed engine entry point.
+/// Registration and inspection operations for the IBus-managed engine.
 #[derive(Subcommand, Debug)]
 enum IbusCommand {
     /// Install Parakit's component XML; the system directory needs administrator privileges.
@@ -43,9 +43,6 @@ enum IbusCommand {
         #[arg(long, default_value = DEFAULT_COMPONENT_DIR)]
         component_dir: PathBuf,
     },
-    /// Run the input method process managed by ibus-daemon.
-    #[command(hide = true)]
-    Engine,
 }
 
 /// Run a component command without loading daemon configuration or models.
@@ -76,6 +73,12 @@ pub(crate) fn run(cli: &IbusCli, quiet: bool) -> Result<()> {
             }
             let executable =
                 std::env::current_exe().context("could not locate parakit executable")?;
+            let executable = executable.with_file_name("parakit-ibus");
+            anyhow::ensure!(
+                executable.is_file(),
+                "IBus engine executable not found at {}; install both parakit and parakit-ibus before registering the component",
+                executable.display()
+            );
             let path = install(component_dir, &executable, layout, variant)?;
             if !quiet {
                 outln!("wrote {}", path.display())?;
@@ -99,7 +102,6 @@ pub(crate) fn run(cli: &IbusCli, quiet: bool) -> Result<()> {
             Ok(())
         }
         Some(IbusCommand::Status { component_dir }) => print_status(component_dir, quiet),
-        Some(IbusCommand::Engine) => crate::daemon::desktop::ibus::run_helper(),
         None => print_status(Path::new(DEFAULT_COMPONENT_DIR), quiet),
     }
 }
@@ -193,7 +195,7 @@ fn component_xml(executable: &Path, layout: &str, variant: &str) -> Result<Strin
     let executable = executable
         .to_str()
         .context("IBus component executable path is not UTF-8")?;
-    let command = format!("{} ibus engine", quote_argument(executable));
+    let command = quote_argument(executable);
     Ok(format!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
 <component>\n\
