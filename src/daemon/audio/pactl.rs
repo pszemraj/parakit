@@ -89,7 +89,7 @@ fn command_output_with_timeout(command: &mut Command, timeout: Duration) -> Opti
         return None;
     }
     let deadline = Instant::now() + timeout;
-    let status = wait_with_timeout(&mut child, timeout).ok()??;
+    let status = wait_with_timeout(&mut child, timeout, Duration::from_millis(5)).ok()??;
     let stdout = receiver
         .recv_timeout(deadline.saturating_duration_since(Instant::now()))
         .ok()?

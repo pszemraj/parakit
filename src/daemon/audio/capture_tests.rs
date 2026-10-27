@@ -242,7 +242,7 @@ fn stream_config_range(
 }
 
 #[test]
-fn audio_handle_reuses_recording_capacity_after_stop() {
+fn audio_handle_preserves_recording_reservation_after_stop() {
     let handle = AudioHandle::test_handle();
 
     handle.start_recording().expect("recording should start");

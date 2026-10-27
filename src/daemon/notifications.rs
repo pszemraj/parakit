@@ -266,7 +266,7 @@ fn show_notification(summary: &str, body: &str) -> anyhow::Result<()> {
         .arg(&script)
         .spawn()
         .context("could not spawn osascript for desktop notification")?;
-    let status = wait_with_timeout(&mut child, NOTIFICATION_TIMEOUT)
+    let status = wait_with_timeout(&mut child, NOTIFICATION_TIMEOUT, Duration::from_millis(10))
         .context("could not query osascript notification status")?
         .context("osascript notification timed out")?;
     anyhow::ensure!(status.success(), "osascript exited with {status}");

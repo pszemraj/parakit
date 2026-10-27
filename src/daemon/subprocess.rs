@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 ///
 /// * `child` - Spawned process to wait for.
 /// * `timeout` - Maximum time to allow the child to run.
+/// * `poll_interval` - Maximum delay between child-status checks.
 ///
 /// # Returns
 ///
@@ -22,6 +23,7 @@ use std::time::{Duration, Instant};
 pub(super) fn wait_with_timeout(
     child: &mut Child,
     timeout: Duration,
+    poll_interval: Duration,
 ) -> io::Result<Option<ExitStatus>> {
     let deadline = Instant::now() + timeout;
     loop {
@@ -32,7 +34,11 @@ pub(super) fn wait_with_timeout(
                 child.wait()?;
                 return Ok(None);
             }
-            Ok(None) => thread::sleep(Duration::from_millis(10)),
+            Ok(None) => thread::sleep(
+                deadline
+                    .saturating_duration_since(Instant::now())
+                    .min(poll_interval),
+            ),
             Err(error) => {
                 let _ = child.kill();
                 let _ = child.wait();
@@ -54,18 +60,22 @@ mod tests {
             return;
         }
 
-        let mut child = crate::test_support::exact_test_command(
-            "daemon::subprocess::tests::timeout_kills_and_reaps_child",
-        )
-        .env(CHILD, "1")
-        .spawn()
-        .unwrap();
-        let started = Instant::now();
+        for poll_interval in [Duration::from_millis(5), Duration::from_millis(10)] {
+            let mut child = crate::test_support::exact_test_command(
+                "daemon::subprocess::tests::timeout_kills_and_reaps_child",
+            )
+            .env(CHILD, "1")
+            .spawn()
+            .unwrap();
+            let started = Instant::now();
 
-        assert!(wait_with_timeout(&mut child, Duration::from_millis(100))
-            .unwrap()
-            .is_none());
-        assert!(started.elapsed() < Duration::from_millis(500));
-        assert!(child.try_wait().unwrap().is_some());
+            assert!(
+                wait_with_timeout(&mut child, Duration::from_millis(100), poll_interval)
+                    .unwrap()
+                    .is_none()
+            );
+            assert!(started.elapsed() < Duration::from_millis(500));
+            assert!(child.try_wait().unwrap().is_some());
+        }
     }
 }

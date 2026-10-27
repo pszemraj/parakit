@@ -30,7 +30,7 @@ mod drain;
 mod stream;
 use stream::audio_manager_loop;
 
-/// Reusable capacity for ordinary dictation bursts.
+/// Initial reservation for ordinary dictation bursts.
 const RECORDING_CAPACITY: usize = TARGET_RATE as usize * 90;
 /// Hard cap for one held recording to prevent unbounded memory growth.
 const RECORDING_HARD_CAP_HEADROOM_SECONDS: usize = 30;
