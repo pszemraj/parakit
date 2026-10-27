@@ -59,7 +59,7 @@ If `doctor` finds issues with the setup/build, it will exit 1 and print details 
 
 For background mode, paste options, and other runtime-related options see [docs/running.md](docs/running.md).
 
-Linux currently requires an X11 session for desktop hotkeys and text insertion; see [docs/linux-desktop.md](docs/linux-desktop.md).
+Linux prefers IBus text insertion on X11 and GNOME Wayland, with X11 fallback. Wayland push-to-talk works in focused editable fields while the Parakit input source is selected; see [docs/linux-desktop.md](docs/linux-desktop.md).
 
 ## Docs
 
