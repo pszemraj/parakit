@@ -4,9 +4,9 @@ use super::*;
 use clap::ValueEnum;
 
 fn start_from(args: &[&str]) -> StartCli {
-    let mut full = vec!["parakit", "start"];
+    let mut full = vec!["start"];
     full.extend_from_slice(args);
-    match Cli::parse_from(full).command {
+    match cli_from(&full).command {
         Some(Commands::Start(start)) => start,
         other => panic!("expected Commands::Start, got {other:?}"),
     }
