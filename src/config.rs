@@ -96,15 +96,19 @@ pub(crate) struct QwenConfig {
 }
 
 impl QwenConfig {
-    /// Resolve the built-in automatic-language and 512-token defaults.
+    /// Resolve configured controls over the shared Qwen defaults.
     ///
     /// # Returns
     /// The configured Qwen options, including effective defaults.
     pub(crate) fn options(&self) -> QwenOptions {
-        QwenOptions {
-            language: self.language.clone(),
-            max_new_tokens: self.max_new_tokens.unwrap_or(512),
+        let mut options = QwenOptions::default();
+        if let Some(language) = &self.language {
+            options.language = Some(language.clone());
         }
+        if let Some(max_new_tokens) = self.max_new_tokens {
+            options.max_new_tokens = max_new_tokens;
+        }
+        options
     }
 }
 

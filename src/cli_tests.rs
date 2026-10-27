@@ -70,6 +70,10 @@ fn preset_selection_overrides_the_other_config_selection_kind() {
 #[test]
 fn qwen_controls_prefer_cli_and_validate_before_acquisition() {
     let mut config = ConfigFile::default();
+    assert_eq!(
+        start_from(&[]).effective_qwen_options(&config).unwrap(),
+        QwenOptions::default()
+    );
     config.qwen.language = Some("de".to_owned());
     config.qwen.max_new_tokens = Some(1024);
     assert_eq!(
@@ -86,6 +90,11 @@ fn qwen_controls_prefer_cli_and_validate_before_acquisition() {
         Some("Cantonese".to_owned())
     );
     assert_eq!(options.max_new_tokens, 4096);
+    let options = start_from(&["--qwen-language", "auto"])
+        .effective_qwen_options(&config)
+        .unwrap();
+    assert_eq!(options.normalized_language().unwrap(), None);
+    assert_eq!(options.max_new_tokens, 1024);
     for args in [
         vec!["start", "--model", "a", "--model-preset", "parakeet-v3"],
         vec!["start", "--qwen-language", "unsupported"],

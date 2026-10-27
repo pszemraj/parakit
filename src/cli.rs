@@ -292,17 +292,13 @@ impl StartCli {
         &self,
         config: &ConfigFile,
     ) -> anyhow::Result<QwenOptions> {
-        let options = QwenOptions {
-            language: self
-                .qwen_language
-                .clone()
-                .or_else(|| config.qwen.language.clone()),
-            max_new_tokens: self
-                .qwen_max_new_tokens
-                .map(|value| value as usize)
-                .or(config.qwen.max_new_tokens)
-                .unwrap_or(512),
-        };
+        let mut options = config.qwen.options();
+        if let Some(language) = &self.qwen_language {
+            options.language = Some(language.clone());
+        }
+        if let Some(max_new_tokens) = self.qwen_max_new_tokens {
+            options.max_new_tokens = max_new_tokens as usize;
+        }
         options.validate().map_err(anyhow::Error::msg)?;
         Ok(options)
     }
