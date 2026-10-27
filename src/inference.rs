@@ -1,4 +1,4 @@
-//! Inference wrapper around a `crispasr::Session`.
+//! Model inference through one owned CrispASR session.
 
 use crate::constants::TARGET_RATE;
 use crate::crispasr_ext::{crispasr_thread_count, OwnedSession};
@@ -87,64 +87,20 @@ impl DeviceMode {
             Self::Gpu => "gpu",
         }
     }
-
-    fn use_gpu_override(self) -> Option<bool> {
-        match self {
-            Self::Auto => None,
-            Self::Cpu => Some(false),
-            Self::Gpu => Some(true),
-        }
-    }
 }
 
 /// Thin wrapper so the rest of the code never touches `crispasr` directly.
 ///
-/// Owned exclusively by the worker thread. `crispasr::Session` is `Send`
+/// Owned exclusively by the worker thread. The native session is `Send`
 /// (we can move it across threads at startup) but not `Sync` (we can't
 /// hand out `&Engine` from multiple threads). The architecture respects
 /// that: only the worker thread ever calls `transcribe`.
 pub struct Engine {
-    session: EngineSession,
+    session: OwnedSession,
     backend: String,
     threads: usize,
     device_mode: DeviceMode,
     qwen: Option<QwenOptions>,
-}
-
-enum EngineSession {
-    Auto(crispasr::Session),
-    WithParams(OwnedSession),
-}
-
-impl EngineSession {
-    fn configure_qwen(&self, language: &str, max_new_tokens: i32) -> Result<(), String> {
-        match self {
-            Self::Auto(session) => {
-                session.set_source_language(language)?;
-                session.set_max_new_tokens(max_new_tokens)
-            }
-            Self::WithParams(session) => {
-                session.set_source_language(language)?;
-                session.set_max_new_tokens(max_new_tokens)
-            }
-        }
-    }
-
-    fn backend(&self) -> String {
-        match self {
-            Self::Auto(session) => session.backend(),
-            Self::WithParams(session) => session.backend(),
-        }
-    }
-
-    fn transcribe(&self, pcm: &[f32]) -> Result<String, String> {
-        match self {
-            Self::Auto(session) => session.transcribe(pcm).map(|segments| {
-                join_segment_text(segments.into_iter().map(|segment| segment.text))
-            }),
-            Self::WithParams(session) => session.transcribe(pcm).map(join_segment_text),
-        }
-    }
 }
 
 impl Engine {
@@ -216,25 +172,22 @@ impl Engine {
         if backend == "qwen3" {
             options.validate().map_err(anyhow::Error::msg)?;
         }
-        let session = match device_mode.use_gpu_override() {
-            Some(use_gpu) => EngineSession::WithParams(
-                OwnedSession::open_with_params(path_str, &backend, n_threads, use_gpu)
-                    .map_err(|e| anyhow::anyhow!("crispasr open failed: {e}"))?,
-            ),
-            None => EngineSession::Auto(
-                crispasr::Session::open_with_backend(path_str, &backend, n_threads)
-                    .map_err(|e| anyhow::anyhow!("crispasr open failed: {e}"))?,
-            ),
-        };
+        let session = OwnedSession::open_with_params(
+            path_str,
+            &backend,
+            n_threads,
+            device_mode != DeviceMode::Cpu,
+        )
+        .map_err(|e| anyhow::anyhow!("crispasr open failed: {e}"))?;
         if backend == "qwen3" {
             let language = options.normalized_language().map_err(anyhow::Error::msg)?;
-            session
-                .configure_qwen(
-                    language.as_deref().unwrap_or(""),
-                    options.max_new_tokens as i32,
-                )
-                .map_err(anyhow::Error::msg)
-                .context("could not configure Qwen inference")?;
+            configure_qwen(
+                &session,
+                language.as_deref().unwrap_or(""),
+                options.max_new_tokens as i32,
+            )
+            .map_err(anyhow::Error::msg)
+            .context("could not configure Qwen inference")?;
         }
         let backend = session.backend();
         let qwen = (backend == "qwen3").then(|| options.clone());
@@ -266,9 +219,7 @@ impl Engine {
             budget: options.max_new_tokens as i32,
             active: true,
         };
-        let result = self
-            .session
-            .configure_qwen("", 512)
+        let result = configure_qwen(&self.session, "", 512)
             .map_err(anyhow::Error::msg)
             .and_then(|()| self.transcribe(pcm).map(|_| ()));
         restore
@@ -347,12 +298,23 @@ impl Engine {
         let pcm = pad_short_pcm(pcm);
         self.session
             .transcribe(pcm.as_ref())
+            .map(join_segment_text)
             .map_err(|e| anyhow::anyhow!("crispasr transcribe failed: {e}"))
     }
 }
 
+/// Apply Qwen's language hint before its validated generation budget.
+fn configure_qwen(
+    session: &OwnedSession,
+    language: &str,
+    max_new_tokens: i32,
+) -> Result<(), String> {
+    session.set_source_language(language)?;
+    session.set_max_new_tokens(max_new_tokens)
+}
+
 struct QwenOptionRestore<'a> {
-    session: &'a EngineSession,
+    session: &'a OwnedSession,
     language: String,
     budget: i32,
     active: bool,
@@ -361,16 +323,14 @@ struct QwenOptionRestore<'a> {
 impl QwenOptionRestore<'_> {
     fn restore(mut self) -> Result<()> {
         self.active = false;
-        self.session
-            .configure_qwen(&self.language, self.budget)
-            .map_err(anyhow::Error::msg)
+        configure_qwen(self.session, &self.language, self.budget).map_err(anyhow::Error::msg)
     }
 }
 
 impl Drop for QwenOptionRestore<'_> {
     fn drop(&mut self) {
         if self.active {
-            let _ = self.session.configure_qwen(&self.language, self.budget);
+            let _ = configure_qwen(self.session, &self.language, self.budget);
         }
     }
 }
@@ -568,7 +528,6 @@ mod tests {
 
     #[test]
     fn out_of_range_thread_count_is_rejected_in_every_device_mode() {
-        // Auto mode used to cast with `as i32`, wrapping the count negative.
         let too_many = usize::try_from(i32::MAX).unwrap() + 1;
         for device in DeviceMode::value_variants() {
             let err = match Engine::open(
