@@ -415,7 +415,7 @@ where
                             &transcript.cleaned,
                             transcript.infer_elapsed,
                         );
-                        if !insert_transcripts {
+                        let insert_elapsed = if !insert_transcripts {
                             log.verbose("parakit: insertion skipped for PTT audio simulation");
                             log_insertion_outcome(
                                 &data_log,
@@ -431,86 +431,90 @@ where
                             state.remember_transcript(transcript.cleaned);
                             state.set_phase("idle");
                             sounds.success();
-                            continue;
-                        }
-                        let insert_started = Instant::now();
-                        let cleaned = transcript.cleaned;
-                        let focus_verification = Cell::new("not_applicable");
-                        let focus_check = FocusCheck {
-                            snapshot: focus_at_start.as_deref(),
-                            verification: &focus_verification,
-                        };
-                        let (insert_result, remembers_transcript) =
-                            state.with_insertion_lock(|| {
-                                let result = insert_text(
-                                    &mut injector,
-                                    &cleaned,
-                                    paste_mode,
-                                    keep_transcript_clipboard,
-                                    focus_check,
-                                    (log.as_ref(), &notifier),
-                                );
-                                let remembers_transcript =
-                                    insertion_result_remembers_transcript(&result);
-                                if remembers_transcript {
-                                    state.remember_transcript(cleaned);
-                                }
-                                (result, remembers_transcript)
-                            });
-                        match insert_result {
-                            Ok(report) => {
-                                let outcome = report.outcome;
-                                log_insertion_outcome(
-                                    &data_log,
-                                    record_id,
-                                    outcome.log_label(),
-                                    focus_at_start.as_deref(),
-                                    transcript_chars,
-                                    report.failure_reason.clone(),
-                                    focus_verification.get(),
-                                    Some(&report),
-                                    paste_mode,
-                                );
-                                let insert_elapsed = insert_started.elapsed();
-                                let worker_elapsed = stop_started.elapsed();
-                                let total_elapsed = release_to_worker + worker_elapsed;
-                                log.verbose(format!(
-                                    "parakit: timings release_to_worker={}ms infer={}ms clean={}ms insert={}ms worker={}ms total={}ms",
-                                    release_to_worker.as_secs_f32() * 1000.0,
-                                    transcript.infer_elapsed.as_secs_f32() * 1000.0,
-                                    transcript.clean_elapsed.as_secs_f32() * 1000.0,
-                                    insert_elapsed.as_secs_f32() * 1000.0,
-                                    worker_elapsed.as_secs_f32() * 1000.0,
-                                    total_elapsed.as_secs_f32() * 1000.0
-                                ));
-                                state.set_phase("idle");
-                                if report.needs_alert() {
+                            Duration::ZERO
+                        } else {
+                            let insert_started = Instant::now();
+                            let cleaned = transcript.cleaned;
+                            let focus_verification = Cell::new("not_applicable");
+                            let focus_check = FocusCheck {
+                                snapshot: focus_at_start.as_deref(),
+                                verification: &focus_verification,
+                            };
+                            let (insert_result, remembers_transcript) =
+                                state.with_insertion_lock(|| {
+                                    let result = insert_text(
+                                        &mut injector,
+                                        &cleaned,
+                                        paste_mode,
+                                        keep_transcript_clipboard,
+                                        focus_check,
+                                        (log.as_ref(), &notifier),
+                                    );
+                                    let remembers_transcript =
+                                        insertion_result_remembers_transcript(&result);
                                     if remembers_transcript {
-                                        log_recovery_hint(&state, &log);
+                                        state.remember_transcript(cleaned);
                                     }
+                                    (result, remembers_transcript)
+                                });
+                            let insert_elapsed = insert_started.elapsed();
+                            match insert_result {
+                                Ok(report) => {
+                                    let outcome = report.outcome;
+                                    log_insertion_outcome(
+                                        &data_log,
+                                        record_id,
+                                        outcome.log_label(),
+                                        focus_at_start.as_deref(),
+                                        transcript_chars,
+                                        report.failure_reason.clone(),
+                                        focus_verification.get(),
+                                        Some(&report),
+                                        paste_mode,
+                                    );
+                                    state.set_phase("idle");
+                                    if report.needs_alert() {
+                                        if remembers_transcript {
+                                            log_recovery_hint(&state, &log);
+                                        }
+                                        sounds.error();
+                                    } else {
+                                        sounds.success();
+                                    }
+                                }
+                                Err(e) => {
+                                    let report = insertion::insertion_error_report(&e);
+                                    log_insertion_outcome(
+                                        &data_log,
+                                        record_id,
+                                        "error",
+                                        focus_at_start.as_deref(),
+                                        transcript_chars,
+                                        Some(format!("{e:#}")),
+                                        focus_verification.get(),
+                                        report,
+                                        paste_mode,
+                                    );
+                                    log.error(&format!("paste failed: {e:#}"));
+                                    log_recovery_hint(&state, &log);
+                                    state.set_phase("idle");
                                     sounds.error();
-                                } else {
-                                    sounds.success();
                                 }
                             }
-                            Err(e) => {
-                                let report = insertion::insertion_error_report(&e);
-                                log_insertion_outcome(
-                                    &data_log,
-                                    record_id,
-                                    "error",
-                                    focus_at_start.as_deref(),
-                                    transcript_chars,
-                                    Some(format!("{e:#}")),
-                                    focus_verification.get(),
-                                    report,
-                                    paste_mode,
-                                );
-                                log.error(&format!("paste failed: {e:#}"));
-                                log_recovery_hint(&state, &log);
-                                state.set_phase("idle");
-                                sounds.error();
-                            }
+                            insert_elapsed
+                        };
+                        if log.is_verbose() {
+                            let worker_elapsed = stop_started.elapsed();
+                            let total_elapsed = release_to_worker + worker_elapsed;
+                            log.verbose(format!(
+                                "parakit: timings release_to_worker={}ms infer={}ms clean={}ms insert={}ms worker={}ms total={}ms",
+                                release_to_worker.as_secs_f32() * 1000.0,
+                                transcript.infer_elapsed.as_secs_f32() * 1000.0,
+                                transcript.clean_elapsed.as_secs_f32() * 1000.0,
+                                insert_elapsed.as_secs_f32() * 1000.0,
+                                worker_elapsed.as_secs_f32() * 1000.0,
+                                total_elapsed.as_secs_f32() * 1000.0
+                            ));
                         }
                     }
                     Ok(None) => {
