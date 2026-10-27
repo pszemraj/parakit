@@ -454,7 +454,7 @@ impl BlasConfig {
             "" | "0" | "false" | "no" | "none" | "off" => Self::off(raw, explicit),
             "auto" => Self::auto(raw, explicit),
             "mkl" | "intel" | "intel-mkl" => Self::mkl(raw, explicit),
-            "openblas" => Self::openblas(raw, explicit, detected_openblas(true, true)),
+            "openblas" => Self::openblas(raw, explicit, detected_openblas()),
             "accelerate" | "apple" => Self::accelerate(raw, explicit),
             "1" | "true" | "yes" | "on" | "blas" | "generic" | "system" => {
                 Self::generic(raw, explicit)
@@ -812,23 +812,16 @@ fn locate_source(manifest_dir: &Path) -> PathBuf {
     );
 }
 
-fn detected_openblas(
-    explicit_openblas: bool,
-    include_conventional: bool,
-) -> Option<OpenBlasInstall> {
+fn detected_openblas() -> Option<OpenBlasInstall> {
     if target_is_windows() {
-        return windows_openblas_from_env(explicit_openblas).map(OpenBlasInstall::Windows);
+        return windows_openblas_from_env(true).map(OpenBlasInstall::Windows);
     }
     if !target_is_linux() {
         return None;
     }
 
-    unix_openblas_from_configured_roots(explicit_openblas)
-        .or_else(|| {
-            include_conventional
-                .then(unix_openblas_from_conventional_roots)
-                .flatten()
-        })
+    unix_openblas_from_configured_roots(true)
+        .or_else(unix_openblas_from_conventional_roots)
         .map(OpenBlasInstall::Unix)
 }
 
