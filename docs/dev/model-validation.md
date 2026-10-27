@@ -1,19 +1,10 @@
 # Native model validation
 
-Run this checklist on the final feature-branch source on each available Mac and Windows laptop. Record the current commit, OS, hardware, backend, command logs, and physical observations. Linux results do not establish Metal or Windows behavior. A missing device or an unperformed physical check stays pending.
+Run this checklist on the checked-out commit under test on each available Mac and Windows laptop. Record the commit, OS, hardware, backend, command logs, and physical observations. Linux results do not establish Metal or Windows behavior. A missing device or an unperformed physical check stays pending.
 
-The Linux acceptance report covers all six presets at Q8_0 and Q6_K on CPU, CUDA, and Vulkan. The [October 18 macOS report](macos-model-validation-2026-10-18.md) covers CPU/Metal execution at both precisions on the tested M5, including shared-resampler and idle-reload checks. [Focused Windows results](#focused-windows-results-2026-10-19) cover a smaller model set. The full Windows matrix, physical desktop checks, and fresh human listening remain pending. The earlier [CrispASR macOS report](crispasr-macos-validation.md) and [October 7 macOS report](macos-validation-2026-10-07.md) document historical runs only.
+Earlier Linux checks covered all six presets at Q8_0 and Q6_K on CPU, CUDA, and Vulkan. The [October 18 macOS report](macos-model-validation-2026-10-18.md) covers CPU/Metal execution at both precisions on the tested M5, including shared-resampler and idle-reload checks. [Focused Windows results](#focused-windows-results-2026-10-19) cover a smaller model set. The full Windows matrix, physical desktop checks, and fresh human listening remain pending. The earlier [CrispASR macOS report](crispasr-macos-validation.md) and [October 7 macOS report](macos-validation-2026-10-07.md) document historical runs only.
 
-Transfer the Git bundle, public fixture ZIP, and source archive from the closure package. Keep downloaded models and all test state inside the checkout. The Git bundle can be loaded into a full checkout without publishing it:
-
-~~~bash
-git fetch /path/to/closure/feat-new-models.bundle feat/new-models
-git switch --detach FETCH_HEAD
-git submodule update --init --recursive
-git rev-parse HEAD
-~~~
-
-Keep the printed commit with the returned results. The fixture archive contains public FLEURS clips and constructed controls; preserve its README attribution. The source archive includes initialized submodule sources for machines that cannot fetch them.
+Use a full checkout with initialized submodules. Supply the public fixture ZIP separately in the ignored checkout, and set the fixture ZIP variable below to its path. It must contain the named speech, resampling, boundary, silence, and noise fixtures used here, including public FLEURS clips and constructed controls. Preserve its README attribution. Keep downloaded models and test state inside the checkout.
 
 ## macOS CPU and Metal
 
@@ -36,8 +27,9 @@ cargo build --locked --release --features metal --bin parakit --example transcri
 BIN="$CARGO_TARGET_DIR/release/parakit"
 HELPER="$CARGO_TARGET_DIR/release/examples/transcribe-file"
 FIXTURES=target/tmp/new-models/fixtures
+FIXTURE_ZIP=target/tmp/new-models/laptop-fixtures.zip
 mkdir -p "$FIXTURES"
-unzip -o target/tmp/new-models/closure/laptop-fixtures.zip -d "$FIXTURES"
+unzip -o "$FIXTURE_ZIP" -d "$FIXTURES"
 "$BIN" --verbose doctor > target/tmp/new-models/macos/doctor.txt 2>&1
 ~~~
 
@@ -79,6 +71,8 @@ The filter covers chunk/tail drain, reset/reuse, callback parity, recording boun
 
 Use the [Windows prerequisites and build scripts](../../scripts/windows/README.md) from an x64 Visual Studio developer PowerShell, with a short checkout path for Vulkan. CPU is required. Add Vulkan when its SDK/device is available, and CUDA on a supported NVIDIA/CUDA setup. Record unavailable backends and their hardware/toolkit reason as pending.
 
+The simulated worker does not acquire the daemon singleton lock. A real daemon uses the same user's lock and named pipe even with separate model and configuration paths, and `doctor` checks that lock. Stop an existing same-user daemon before those checks and preserve its settings.
+
 ~~~powershell
 $env:CARGO_TARGET_DIR = Join-Path $PWD "target\native"
 $env:PARAKIT_MODELS_DIR = Join-Path $PWD "target\tmp\new-models\windows\models"
@@ -93,12 +87,13 @@ $Backends = @("cpu") # Add vulkan or cuda only when its SDK and supported device
 foreach ($Backend in $Backends) { .\scripts\windows\build.ps1 --backend $Backend --no-install }
 ~~~
 
-For each backend, extract a fresh bundle, add its DLL directory to PATH for the test process, and build its matching WAV helper. Windows Q6_K generation requires a compatible crispasr-quantize.exe on PATH; see [model presets](../running.md#model-presets). The script below records separate outputs for each preset, precision, and backend.
+For each backend, extract a fresh bundle, add its DLL directory to PATH for the test process, and build its matching WAV helper. Windows Q6_K generation requires a compatible crispasr-quantize.exe on PATH; see [model presets](../running.md#model-presets). The script records the matrix and [Qwen sequence](#qwen-options-long-input-and-reload) separately for each backend.
 
 ~~~powershell
 $Fixtures = Join-Path $PWD "target\tmp\new-models\fixtures"
+$FixtureZip = Join-Path $PWD "target\tmp\new-models\laptop-fixtures.zip"
 New-Item -ItemType Directory -Force $Fixtures | Out-Null
-Expand-Archive -Path "target\tmp\new-models\closure\laptop-fixtures.zip" -DestinationPath $Fixtures -Force
+Expand-Archive -Path $FixtureZip -DestinationPath $Fixtures -Force
 $Presets = @("parakeet-v2", "parakeet-v3", "parakeet-ultra", "parakeet-redux", "qwen3-asr-0.6b", "qwen3-asr-1.7b")
 $Quants = @("q8_0", "q6_k")
 $OriginalPath = $env:PATH
@@ -106,10 +101,10 @@ $OriginalGenerator = $env:CMAKE_GENERATOR
 foreach ($Backend in $Backends) {
     $Run = Join-Path $PWD "target\tmp\new-models\windows\$Backend"
     $Bundle = Join-Path $PWD "target\parakit-windows-x86_64-$Backend"
-    $Extract = Join-Path $Run "extracted"
+    $Extract = Join-Path $Run ("extracted-" + [Guid]::NewGuid().ToString("N"))
     New-Item -ItemType Directory -Force $Run | Out-Null
     Compress-Archive -Path (Join-Path $Bundle "*") -DestinationPath (Join-Path $Run "bundle.zip") -Force
-    Expand-Archive -Path (Join-Path $Run "bundle.zip") -DestinationPath $Extract -Force
+    Expand-Archive -Path (Join-Path $Run "bundle.zip") -DestinationPath $Extract
     $env:PATH = "$Extract;$OriginalPath"
     $Bin = Join-Path $Extract "parakit.exe"
     $Features = switch ($Backend) { "cpu" { @() } "cuda" { @("--features", "cuda") } "vulkan" { @("--features", "vulkan") } }
@@ -130,6 +125,17 @@ foreach ($Backend in $Backends) {
             & $Helper @HelperArgs *> (Join-Path $Case "file.txt"); $LASTEXITCODE | Out-File (Join-Path $Case "file.exit")
             $WorkerArgs = @("--verbose", "start", "--model-preset", $Preset, "--quantize", $Quant, "--device", $Device, "--threads", "8", "--no-cleaning", "--no-sounds", "--model-idle-minutes", "0") + ($AudioArgs | ForEach-Object { if ($_ -eq "--audio") { "--simulate-ptt-audio" } else { $_ } }) + @("--log-dir", (Join-Path $Case "worker-jsonl"))
             & $Bin @WorkerArgs *> (Join-Path $Case "worker.txt"); $LASTEXITCODE | Out-File (Join-Path $Case "worker.exit")
+        }
+    }
+    foreach ($Preset in @("qwen3-asr-0.6b", "qwen3-asr-1.7b")) {
+        foreach ($Quant in $Quants) {
+            $Case = Join-Path $Run "context-$Preset-$Quant"
+            New-Item -ItemType Directory -Force $Case | Out-Null
+            $Options = @("--model-preset", $Preset, "--quantize", $Quant, "--device", $Device, "--threads", "8", "--qwen-language", "en", "--qwen-max-new-tokens", "4096")
+            & $Helper @Options --warmup --audio (Join-Path $Fixtures "short.wav") --audio (Join-Path $Fixtures "repeated-speech-270s.wav") --audio (Join-Path $Fixtures "short.wav") *> (Join-Path $Case "sequence.txt")
+            $LASTEXITCODE | Out-File (Join-Path $Case "sequence.exit")
+            & $Bin --verbose start @Options --no-cleaning --no-sounds --model-idle-minutes 1 --simulate-ptt-repeat 2 --simulate-ptt-idle-seconds 63 --simulate-ptt-audio (Join-Path $Fixtures "short.wav") --log-dir (Join-Path $Case "reload-jsonl") *> (Join-Path $Case "reload.txt")
+            $LASTEXITCODE | Out-File (Join-Path $Case "reload.exit")
         }
     }
     $env:PATH = $OriginalPath
@@ -158,28 +164,14 @@ for preset in qwen3-asr-0.6b qwen3-asr-1.7b; do
     for device in cpu gpu; do
       RUN="target/tmp/new-models/macos/qwen-$preset-$quant-$device"
       mkdir -p "$RUN"
-      "$HELPER" --model-preset "$preset" --quantize "$quant" --device "$device" --threads 8 --qwen-language en --qwen-max-new-tokens 4096 --warmup --audio "$FIXTURES/short.wav" --audio "$FIXTURES/repeated-speech-270s.wav" --audio "$FIXTURES/short.wav" > "$RUN/sequence.out" 2> "$RUN/sequence.err"
-      "$BIN" --verbose start --model-preset "$preset" --quantize "$quant" --device "$device" --threads 8 --qwen-language en --qwen-max-new-tokens 4096 --no-cleaning --no-sounds --model-idle-minutes 1 --simulate-ptt-repeat 2 --simulate-ptt-idle-seconds 63 --simulate-ptt-audio "$FIXTURES/short.wav" --log-dir "$RUN/reload-jsonl" > "$RUN/reload.out" 2> "$RUN/reload.err"
+      record sequence "$HELPER" --model-preset "$preset" --quantize "$quant" --device "$device" --threads 8 --qwen-language en --qwen-max-new-tokens 4096 --warmup --audio "$FIXTURES/short.wav" --audio "$FIXTURES/repeated-speech-270s.wav" --audio "$FIXTURES/short.wav"
+      record reload "$BIN" --verbose start --model-preset "$preset" --quantize "$quant" --device "$device" --threads 8 --qwen-language en --qwen-max-new-tokens 4096 --no-cleaning --no-sounds --model-idle-minutes 1 --simulate-ptt-repeat 2 --simulate-ptt-idle-seconds 63 --simulate-ptt-audio "$FIXTURES/short.wav" --log-dir "$RUN/reload-jsonl"
     done
   done
 done
 ~~~
 
-On Windows, run the equivalent sequence after each backend's matrix, while `$Bin`, `$Helper`, and `$Device` still select that backend:
-
-~~~powershell
-foreach ($Preset in @("qwen3-asr-0.6b", "qwen3-asr-1.7b")) {
-    foreach ($Quant in $Quants) {
-        $Case = Join-Path $Run "context-$Preset-$Quant"
-        New-Item -ItemType Directory -Force $Case | Out-Null
-        $Options = @("--model-preset", $Preset, "--quantize", $Quant, "--device", $Device, "--threads", "8", "--qwen-language", "en", "--qwen-max-new-tokens", "4096")
-        & $Helper @Options --warmup --audio (Join-Path $Fixtures "short.wav") --audio (Join-Path $Fixtures "repeated-speech-270s.wav") --audio (Join-Path $Fixtures "short.wav") *> (Join-Path $Case "sequence.txt")
-        $LASTEXITCODE | Out-File (Join-Path $Case "sequence.exit")
-        & $Bin --verbose start @Options --no-cleaning --no-sounds --model-idle-minutes 1 --simulate-ptt-repeat 2 --simulate-ptt-idle-seconds 63 --simulate-ptt-audio (Join-Path $Fixtures "short.wav") --log-dir (Join-Path $Case "reload-jsonl") *> (Join-Path $Case "reload.txt")
-        $LASTEXITCODE | Out-File (Join-Path $Case "reload.exit")
-    }
-}
-~~~
+The Windows matrix above runs the equivalent sequence before restoring each backend's DLL path.
 
 Also record default auto/512, forced German on `fleurs-de_de-0.wav`, and forced English on `fleurs-en_us-422.wav` (containing the spoken word "language"). Use a budget of 1 for a separate failure-path check: readiness should complete, while actual transcription fails without a successful JSONL row or history entry.
 
@@ -200,4 +192,4 @@ Use isolated configuration for the tested preset, precision, device, and Qwen op
 
 Check status, history, logs, and inserted text after each run. History is in memory and starts empty after restart; configuration and JSONL logs are separate. Mark each item pass, fail, or pending with evidence. Fresh listening and physical microphone results are required; dataset references and official-model output are not ground truth. Filling VRAM and physical stop-to-insert p50/p95 remain outside this closure gate.
 
-Return logs and hardware/backend details without model files. Keep outputs under `target/tmp/new-models`. Closure package paths are `target/tmp/new-models/closure/feat-new-models.bundle`, `target/tmp/new-models/closure/laptop-fixtures.zip`, and `target/tmp/new-models/closure/parakit-model-source.tar.gz`.
+Return logs and hardware/backend details without model files. Keep outputs under `target/tmp/new-models`.

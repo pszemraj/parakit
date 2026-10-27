@@ -39,7 +39,7 @@ Update the native source, its nested submodules, both Rust path crates, and `Car
 git submodule update --init --recursive
 cd vendor/CrispASR
 git fetch --tags
-git checkout <tag-or-commit>
+git checkout '<tag-or-commit>'
 git submodule update --init --recursive
 cd ../..
 cargo check
@@ -49,7 +49,7 @@ cargo check --locked
 
 The submodule contains the two Rust path crates. The root `cargo check` refreshes `Cargo.lock`; stage it with the changed CrispASR gitlink, then use `cargo check --locked` to verify the lockfile. Keep the C++ device adapter aligned with the selected ggml headers and libraries. See the [build guide](../build.md#crispasr-and-backends) for supported CMake settings, external-library requirements, and the matching ABI, and [architecture](architecture.md) for worker ownership and reload behavior.
 
-Check the PCM input contract, segment-text handling, runtime defaults, and model preprocessing/orchestration when upstream behavior changes. The native defaults used by the daemon and `transcribe-file` are initialized before threads or model opening; library callers must set equivalent environment variables before native initialization. See the [model validation guide](model-validation.md) for current build, inference, and desktop checks.
+Check the PCM input contract, segment-text handling, runtime defaults, and model preprocessing/orchestration when upstream behavior changes. The daemon and `transcribe-file` initialize native defaults before threads or model opening. Library callers can call `initialize_crispasr_runtime_defaults` at that point or set the equivalent environment variables before native initialization. See the [model validation guide](model-validation.md) for current build, inference, and desktop checks.
 
 ## Inputs and method
 
