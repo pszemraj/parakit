@@ -123,7 +123,7 @@ pub(crate) enum RuleKind {
         pattern: &'static str,
         replacement: &'static str,
     },
-    Procedural(fn(&str) -> TransformResult),
+    Procedural(fn(&str) -> TransformResult<'_>),
     SpokenNumbers,
 }
 
@@ -149,9 +149,9 @@ pub(crate) struct Rule {
     pub(crate) kind: RuleKind,
 }
 
-/// Output of one rule/pass application.
-pub(crate) struct TransformResult {
-    pub(crate) text: String,
+/// Output of one rule/pass application; no-op passes can borrow their input.
+pub(crate) struct TransformResult<'a> {
+    pub(crate) text: Cow<'a, str>,
     pub(crate) matches: usize,
 }
 
@@ -165,7 +165,7 @@ enum CompiledTransform {
         re: FancyRegex,
         replacement: &'static str,
     },
-    Procedural(fn(&str) -> TransformResult),
+    Procedural(fn(&str) -> TransformResult<'_>),
     SpokenNumbers {
         threshold: f64,
     },
@@ -202,51 +202,59 @@ struct CompiledRule {
     transform: CompiledTransform,
 }
 
-struct RuleApplication<'a> {
-    text: Cow<'a, str>,
-    matches: usize,
+/// Expand each match directly into the regex engine's output buffer.
+struct CountedReplacement<'a> {
+    replacement: &'a str,
+    matches: &'a mut usize,
+}
+
+impl regex::Replacer for CountedReplacement<'_> {
+    fn replace_append(&mut self, captures: &regex::Captures<'_>, output: &mut String) {
+        *self.matches += 1;
+        captures.expand(self.replacement, output);
+    }
+}
+
+impl fancy_regex::Replacer for CountedReplacement<'_> {
+    fn replace_append(&mut self, captures: &fancy_regex::Captures<'_>, output: &mut String) {
+        *self.matches += 1;
+        captures.expand(self.replacement, output);
+    }
 }
 
 impl CompiledRule {
-    fn apply<'a>(&self, input: &'a str) -> Result<RuleApplication<'a>> {
+    fn apply<'a>(&self, input: &'a str) -> Result<TransformResult<'a>> {
         match &self.transform {
             CompiledTransform::Regex { re, replacement } => {
                 let mut matches = 0;
-                let text = re.replace_all(input, |captures: &regex::Captures<'_>| {
-                    matches += 1;
-                    let mut expanded = String::new();
-                    captures.expand(replacement.as_ref(), &mut expanded);
-                    expanded
-                });
-                Ok(RuleApplication { text, matches })
+                let text = re.replace_all(
+                    input,
+                    CountedReplacement {
+                        replacement: replacement.as_ref(),
+                        matches: &mut matches,
+                    },
+                );
+                Ok(TransformResult { text, matches })
             }
             CompiledTransform::FancyRegex { re, replacement } => {
                 let mut matches = 0;
                 let text = re
-                    .try_replacen(input, 0, |captures: &fancy_regex::Captures<'_>| {
-                        matches += 1;
-                        let mut expanded = String::new();
-                        captures.expand(replacement, &mut expanded);
-                        expanded
-                    })
+                    .try_replacen(
+                        input,
+                        0,
+                        CountedReplacement {
+                            replacement,
+                            matches: &mut matches,
+                        },
+                    )
                     .with_context(|| {
                         format!("rule '{}' failed during fancy-regex application", self.name)
                     })?;
-                Ok(RuleApplication { text, matches })
+                Ok(TransformResult { text, matches })
             }
-            CompiledTransform::Procedural(transform) => {
-                let transformed = transform(input);
-                Ok(RuleApplication {
-                    text: Cow::Owned(transformed.text),
-                    matches: transformed.matches,
-                })
-            }
+            CompiledTransform::Procedural(transform) => Ok(transform(input)),
             CompiledTransform::SpokenNumbers { threshold } => {
-                let transformed = super::numbers::normalize_spoken_numbers(input, *threshold);
-                Ok(RuleApplication {
-                    text: Cow::Owned(transformed.text),
-                    matches: transformed.matches,
-                })
+                Ok(super::numbers::normalize_spoken_numbers(input, *threshold))
             }
         }
     }
@@ -323,7 +331,7 @@ impl Cleaner {
     ///
     /// # Errors
     ///
-    /// Same as [`Cleaner::new`].
+    /// Returns an error when a rule pattern cannot compile.
     #[cfg(test)]
     pub(crate) fn new_with_backtrack_limit(
         profile: CleaningProfile,
@@ -353,8 +361,8 @@ impl Cleaner {
     ) -> Result<Self> {
         // `None` (the key left unset) resolves to `DEFAULT_NUMBER_THRESHOLD`.
         // An explicit `Some(0.0)` is preserved verbatim as the opt-out that
-        // converts every recognized number, so it now produces a different
-        // ruleset id than an unset threshold. Validation has already
+        // converts every recognized number and has a different ruleset id
+        // than an unset threshold. Validation has already
         // rejected negative and non-finite values.
         let number_threshold = number_threshold.unwrap_or(DEFAULT_NUMBER_THRESHOLD);
         let mut enabled_defaults = Vec::with_capacity(DEFAULT_RULES.len());
@@ -697,5 +705,32 @@ mod rule_application_tests {
             .expect("apply matching regex");
         assert_eq!(applied.matches, 2);
         assert_eq!(applied.text, "replacement and replacement");
+    }
+
+    #[test]
+    fn regex_expansion_preserves_capture_and_literal_dollar_semantics() {
+        for transform in [
+            CompiledTransform::Regex {
+                re: Regex::new(r"(?P<letter>[a-z])").unwrap(),
+                replacement: Cow::Borrowed("${letter}$$${missing}"),
+            },
+            CompiledTransform::FancyRegex {
+                re: FancyRegex::new(r"(?P<letter>[a-z])\1").unwrap(),
+                replacement: "${letter}$$${missing}",
+            },
+        ] {
+            let is_fancy = matches!(transform, CompiledTransform::FancyRegex { .. });
+            let rule = CompiledRule {
+                name: "capture-expansion".to_string(),
+                position: None,
+                transform,
+            };
+            let unchanged = rule.apply("123").unwrap();
+            assert!(matches!(unchanged.text, Cow::Borrowed("123")));
+            let input = if is_fancy { "aa bb" } else { "a b" };
+            let changed = rule.apply(input).unwrap();
+            assert_eq!(changed.text, "a$ b$");
+            assert_eq!(changed.matches, 2);
+        }
     }
 }
