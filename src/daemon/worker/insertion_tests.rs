@@ -5,53 +5,96 @@ use crate::daemon::logging::LogLevel;
 
 #[cfg(target_os = "linux")]
 #[test]
-fn unavailable_native_target_never_stages_clipboard_or_opens_x11() {
+fn native_failures_attempt_clipboard_before_history_without_display() {
+    const CHILD: &str = "PARAKIT_NATIVE_RECOVERY_NO_DISPLAY";
+    if std::env::var_os(CHILD).is_none() {
+        let output = crate::test_support::exact_test_command(
+            "daemon::worker::insertion::tests::native_failures_attempt_clipboard_before_history_without_display",
+        )
+        .env(CHILD, "1")
+        .env_remove("DISPLAY")
+        .env_remove("WAYLAND_DISPLAY")
+        .output()
+        .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        return;
+    }
     let log = Arc::new(Logger::new(LogLevel::Quiet));
     let notifier = Notifier::silent(Arc::clone(&log));
     let snapshot = FocusSnapshot::from_native(None, None);
-    let mut injector = None;
-    let verification = Cell::new("not_applicable");
-    let report = insert_text(
-        &mut injector,
-        "recover this dictation",
-        PasteMode::Terminal,
-        true,
-        FocusCheck {
-            snapshot: Some(&snapshot),
-            verification: &verification,
-        },
-        (&log, &notifier),
-    )
-    .unwrap();
-    assert_eq!(report.outcome, InsertOutcome::Blocked);
-    assert!(injector.is_none());
-    assert!(!report.telemetry.paste_event_posted);
-    assert_eq!(report.telemetry.clipboard_restored, None);
-    assert!(insertion_result_remembers_transcript(&Ok(report)));
+    for (text, kind) in [
+        ("recover this dictation", "ibus_rejected"),
+        ("one\ttwo", "not_applicable"),
+        ("one\ntwo", "not_applicable"),
+    ] {
+        let mut injector = None;
+        let verification = Cell::new("not_applicable");
+        let result = insert_text(
+            &mut injector,
+            text,
+            PasteMode::Terminal,
+            true,
+            FocusCheck {
+                snapshot: Some(&snapshot),
+                verification: &verification,
+            },
+            (&log, &notifier),
+        );
+        assert!(insertion_result_remembers_transcript(&result));
+        let error = result.unwrap_err();
+        assert!(format!("{error:#}").contains("native transcript clipboard recovery failed"));
+        let report = insertion_error_report(&error).expect("native failure evidence");
+        assert_eq!(report.outcome, InsertOutcome::Blocked);
+        assert!(injector.is_some(), "clipboard recovery was never attempted");
+        assert_eq!(report.telemetry.acknowledgement_kind, kind);
+        assert!(!report.telemetry.paste_event_posted);
+        if kind == "not_applicable" {
+            assert!(report
+                .failure_reason
+                .as_deref()
+                .unwrap()
+                .contains("terminal content policy"));
+        }
+        assert_eq!(verification.get(), "not_applicable");
+    }
 }
 
 #[cfg(target_os = "linux")]
 #[test]
-fn native_terminal_controls_are_blocked_before_submission() {
-    let log = Arc::new(Logger::new(LogLevel::Quiet));
-    let notifier = Notifier::silent(Arc::clone(&log));
-    let snapshot = FocusSnapshot::from_native(None, None);
-    for text in ["one\ttwo", "one\ntwo"] {
-        let verification = Cell::new("not_applicable");
-        let report = insert_native(
-            text,
-            PasteMode::Terminal,
-            &snapshot,
-            &verification,
-            &log,
-            &notifier,
-        );
-        assert_eq!(report.outcome, InsertOutcome::Blocked);
-        assert!(report
-            .failure_reason
-            .unwrap()
-            .contains("terminal content policy"));
-        assert_eq!(verification.get(), "not_applicable");
+fn native_recovery_preserves_uncertainty_and_clipboard_disposition() {
+    for outcome in [InsertOutcome::Blocked, InsertOutcome::Uncertain] {
+        let mut native = InsertReport::placeholder(outcome, false);
+        let kind = if outcome == InsertOutcome::Uncertain {
+            "ibus_uncertain"
+        } else {
+            "ibus_rejected"
+        };
+        native.telemetry.acknowledgement_kind = kind;
+        native.failure_reason = Some("native target unavailable".to_owned());
+        for (recovered, restored) in [
+            (InsertOutcome::CopiedOnly, Some(false)),
+            (InsertOutcome::Blocked, Some(true)),
+        ] {
+            let mut recovery = InsertReport::placeholder(recovered, false);
+            recovery.telemetry.clipboard_restored = restored;
+            let report = finish_native_recovery(native.clone(), Ok(recovery)).unwrap();
+            assert_eq!(
+                report.outcome,
+                if outcome == InsertOutcome::Uncertain {
+                    outcome
+                } else {
+                    recovered
+                }
+            );
+            assert_eq!(report.telemetry.acknowledgement_kind, kind);
+            assert_eq!(report.telemetry.clipboard_restored, restored);
+            assert!(!report.telemetry.paste_event_posted);
+        }
+        let error = finish_native_recovery(native, Err(anyhow::anyhow!("clipboard unavailable")))
+            .unwrap_err();
+        let report = insertion_error_report(&error).unwrap();
+        assert_eq!(report.outcome, outcome);
+        assert_eq!(report.telemetry.acknowledgement_kind, kind);
     }
 }
 
@@ -133,10 +176,21 @@ fn paste_failures_use_clipboard_fallback_only_when_safe() {
         false
     ));
 
-    let restore_error = anyhow::anyhow!("{}: lost", crate::daemon::inject::CLIPBOARD_RESTORE_ERROR);
+    let restore_error = anyhow::Error::new(crate::daemon::inject::ClipboardRestoreError(
+        anyhow::anyhow!("lost"),
+    ))
+    .context("clipboard transaction failed");
     assert!(!paste_failure_uses_clipboard_fallback(
         PasteMode::Terminal,
         &restore_error,
+        true
+    ));
+
+    let unrelated_message =
+        anyhow::anyhow!("unrelated backend reported could not restore previous clipboard contents");
+    assert!(paste_failure_uses_clipboard_fallback(
+        PasteMode::Terminal,
+        &unrelated_message,
         true
     ));
 

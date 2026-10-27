@@ -20,7 +20,6 @@ use super::notifications::Notifier;
 use super::sounds::Sounds;
 
 mod insertion;
-#[cfg(not(target_os = "linux"))]
 use insertion::prepared_injector;
 pub(crate) use insertion::{insert_text, FocusCheck, InsertOutcome};
 use insertion::{insertion_result_remembers_transcript, log_insertion_outcome};
@@ -239,9 +238,10 @@ where
         .is_some_and(Cleaner::drops_trailing_period);
     let number_threshold = cleaner.as_deref().map(Cleaner::number_threshold);
     #[cfg(target_os = "linux")]
-    let mut injector = None;
+    let prepare_insertion = !state.focus_source.read().uses_native();
     #[cfg(not(target_os = "linux"))]
-    let mut injector = if insert_transcripts {
+    let prepare_insertion = true;
+    let mut injector = if insert_transcripts && prepare_insertion {
         match prepared_injector(paste_mode) {
             Ok(injector) => Some(injector),
             Err(err) => {

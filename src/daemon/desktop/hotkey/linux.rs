@@ -5,9 +5,6 @@ use super::{
     HotkeyBackend, HotkeyLoopFailed, HotkeyState, LinuxHotkeyRoute, RecordingLatch,
     X11HotkeyMapping,
 };
-use crate::daemon::desktop::ibus::NativeTarget;
-use crate::daemon::desktop::linux_insertion::{FocusSource, InsertionBackend};
-use crate::daemon::inject::PasteMode;
 use crate::daemon::logging::Logger;
 use crate::daemon::recording::HotkeyTransition;
 use anyhow::Context as _;
@@ -24,55 +21,6 @@ use std::{fs::File, io, path::PathBuf};
 
 const REGISTERED_HOTKEY_PHYSICAL_POLL: Duration = Duration::from_millis(25);
 
-/// Bind native target state before a PTT event enters the coordinator queue.
-struct HotkeySink {
-    tx: Sender<HotkeyTransition>,
-    focus_source: FocusSource,
-}
-
-impl HotkeySink {
-    fn send(&self, action: HotkeyAction) {
-        let native = self
-            .focus_source
-            .client
-            .as_ref()
-            .and_then(|client| client.snapshot());
-        match native_hotkey_transition(
-            action,
-            self.focus_source.mode,
-            self.focus_source.backend,
-            native,
-            super::super::session::is_wayland(),
-        ) {
-            Some(transition) => {
-                let _ = self.tx.send(transition);
-            }
-            None => send_hotkey_transition(action, &self.tx),
-        }
-    }
-}
-
-fn native_hotkey_transition(
-    action: HotkeyAction,
-    mode: PasteMode,
-    backend: InsertionBackend,
-    native: Option<NativeTarget>,
-    wayland: bool,
-) -> Option<HotkeyTransition> {
-    let HotkeyAction::Start { started_at } = action else {
-        return None;
-    };
-    if mode == PasteMode::Direct || backend == InsertionBackend::X11 {
-        return None;
-    }
-    let target = native
-        .or_else(|| (backend == InsertionBackend::Ibus || wayland).then(NativeTarget::default))?;
-    Some(HotkeyTransition::NativePressed {
-        at: started_at,
-        target,
-    })
-}
-
 /// Run the platform hotkey loop until it ends or the process exits.
 ///
 /// # Arguments
@@ -80,7 +28,6 @@ fn native_hotkey_transition(
 /// * `tx` - Coordinator channel used to post logical hotkey transitions.
 /// * `backend` - Linux backend preference.
 /// * `log` - Logger used for backend diagnostics.
-/// * `focus_source` - Transport preference and cached native target at key-down.
 ///
 /// # Returns
 ///
@@ -93,9 +40,7 @@ pub(crate) fn run_grab_loop(
     tx: Sender<HotkeyTransition>,
     backend: HotkeyBackend,
     log: Arc<Logger>,
-    focus_source: FocusSource,
 ) -> Result<(), HotkeyLoopFailed> {
-    let sink = HotkeySink { tx, focus_source };
     let route = backend.linux_route();
     if route == LinuxHotkeyRoute::EvdevProxy {
         log.warn(
@@ -109,33 +54,33 @@ pub(crate) fn run_grab_loop(
             std::thread::park();
         },
         LinuxHotkeyRoute::RegisteredX11 => report_hotkey_loop_failure(
-            run_linux_registered_hotkey_loop(sink),
+            run_linux_registered_hotkey_loop(tx),
             "registered X11 hotkey",
             crate::daemon::hotkey_help::registered_linux_failure_help,
         ),
         LinuxHotkeyRoute::PassiveX11 => report_hotkey_loop_failure(
-            run_linux_x11_listen_loop(sink),
+            run_linux_x11_listen_loop(tx),
             "passive X11 hotkey listen",
             crate::daemon::hotkey_help::x11_listen_linux_failure_help,
         ),
         LinuxHotkeyRoute::EvdevProxy => report_hotkey_loop_failure(
-            run_linux_evdev_grab_loop(sink, Arc::clone(&log)).map_err(Into::into),
+            run_linux_evdev_grab_loop(tx, Arc::clone(&log)).map_err(Into::into),
             "evdev keyboard grab",
             crate::daemon::hotkey_help::evdev_linux_failure_help,
         ),
     }
 }
 
-fn run_linux_x11_listen_loop(sink: HotkeySink) -> anyhow::Result<()> {
+fn run_linux_x11_listen_loop(tx: Sender<HotkeyTransition>) -> anyhow::Result<()> {
     super::super::session::ensure_x11_session_supported()?;
 
     let state = Arc::new(Mutex::new(HotkeyState::default()));
     let callback_state = Arc::clone(&state);
-    rdev::listen(move |event| handle_listen_event(event, &callback_state, &sink))
+    rdev::listen(move |event| handle_listen_event(event, &callback_state, &tx))
         .map_err(|err| anyhow::anyhow!("rdev::listen: {err:?}"))
 }
 
-fn run_linux_registered_hotkey_loop(sink: HotkeySink) -> anyhow::Result<()> {
+fn run_linux_registered_hotkey_loop(tx: Sender<HotkeyTransition>) -> anyhow::Result<()> {
     super::super::session::ensure_x11_session_supported()?;
     let manager =
         GlobalHotKeyManager::new().map_err(|err| anyhow::anyhow!("init hotkey manager: {err}"))?;
@@ -156,7 +101,7 @@ fn run_linux_registered_hotkey_loop(sink: HotkeySink) -> anyhow::Result<()> {
                     let now = Instant::now();
                     let physical_state = physical_hotkey_state(&mut physical)?;
                     if let Some(action) = latch.physical_poll(physical_state, now) {
-                        sink.send(action);
+                        send_hotkey_transition(action, &tx);
                     }
                     continue;
                 }
@@ -176,7 +121,7 @@ fn run_linux_registered_hotkey_loop(sink: HotkeySink) -> anyhow::Result<()> {
         let now = Instant::now();
         let action = latch.event(event.state, physical_hotkey_state(&mut physical)?, now);
         if let Some(action) = action {
-            sink.send(action);
+            send_hotkey_transition(action, &tx);
         }
     }
 }
@@ -354,7 +299,7 @@ fn ctrl_space_hotkey() -> HotKey {
     HotKey::new(Some(Modifiers::CONTROL), Code::Space)
 }
 
-fn run_linux_evdev_grab_loop(sink: HotkeySink, log: Arc<Logger>) -> io::Result<()> {
+fn run_linux_evdev_grab_loop(tx: Sender<HotkeyTransition>, log: Arc<Logger>) -> io::Result<()> {
     let mut devices = open_keyboard_devices(&log)?;
     if devices.is_empty() {
         return Err(io::Error::new(
@@ -418,7 +363,7 @@ fn run_linux_evdev_grab_loop(sink: HotkeySink, log: Arc<Logger>) -> io::Result<(
         )?;
     }
 
-    let result = linux_evdev_event_loop(epoll_fd, &mut grabbed, &state, &sink);
+    let result = linux_evdev_event_loop(epoll_fd, &mut grabbed, &state, &tx);
 
     for device in &mut grabbed {
         let _ = device.device.grab(evdev_rs::GrabMode::Ungrab);
@@ -449,7 +394,7 @@ fn linux_evdev_event_loop(
     epoll_fd: std::os::fd::RawFd,
     devices: &mut [LinuxKeyboardDevice],
     state: &Arc<Mutex<HotkeyState>>,
-    sink: &HotkeySink,
+    tx: &Sender<HotkeyTransition>,
 ) -> io::Result<()> {
     let mut epoll_buffer = [epoll::Event::new(epoll::Events::empty(), 0); 8];
     loop {
@@ -467,7 +412,7 @@ fn linux_evdev_event_loop(
                     Err(err) => return Err(err),
                 };
 
-                let suppress = linux_evdev_event_suppressed(&input_event, state, sink);
+                let suppress = linux_evdev_event_suppressed(&input_event, state, tx);
                 if !suppress {
                     device.output.write_event(&input_event)?;
                 }
@@ -479,13 +424,15 @@ fn linux_evdev_event_loop(
 fn linux_evdev_event_suppressed(
     event: &evdev_rs::InputEvent,
     state: &Arc<Mutex<HotkeyState>>,
-    sink: &HotkeySink,
+    tx: &Sender<HotkeyTransition>,
 ) -> bool {
     let Some(event_type) = linux_evdev_key_event_type(event) else {
         return false;
     };
 
-    handle_key_event(event_type, state, |action| sink.send(action))
+    handle_key_event(event_type, state, |action| {
+        send_hotkey_transition(action, tx)
+    })
 }
 
 fn linux_evdev_key_event_type(event: &evdev_rs::InputEvent) -> Option<EventType> {
@@ -611,8 +558,14 @@ fn linux_device_label(path: &std::path::Path, device: &evdev_rs::Device) -> Stri
     }
 }
 
-fn handle_listen_event(event: Event, state: &Arc<Mutex<HotkeyState>>, sink: &HotkeySink) {
-    let _ = handle_key_event(event.event_type, state, |action| sink.send(action));
+fn handle_listen_event(
+    event: Event,
+    state: &Arc<Mutex<HotkeyState>>,
+    tx: &Sender<HotkeyTransition>,
+) {
+    let _ = handle_key_event(event.event_type, state, |action| {
+        send_hotkey_transition(action, tx)
+    });
 }
 
 #[cfg(test)]

@@ -449,13 +449,49 @@ fn failed_clipboard_restore_retains_the_snapshot_for_retry() {
         clipboard.set_text("staged sentinel".to_owned()).unwrap();
         clipboard.fail_next_set.set(true);
         let error = previous.restore(&mut clipboard).unwrap_err();
-        assert!(format!("{error:#}").contains(CLIPBOARD_RESTORE_ERROR));
+        assert!(error.is::<ClipboardRestoreError>());
+        assert!(format!("{error:#}").contains("could not restore previous clipboard contents"));
         assert_eq!(clipboard.text(), Some("staged sentinel"));
 
         previous.restore(&mut clipboard).unwrap();
         let restored = ClipboardSnapshot::capture(&mut clipboard).unwrap();
         assert!(previous.same_payload(&restored), "{expected_kind}");
     }
+}
+
+#[test]
+fn consumed_clipboard_restore_moves_text_and_image_allocations() {
+    let text = "previous text".to_owned();
+    let text_pointer = text.as_ptr();
+    let mut clipboard = MockClipboard::empty();
+    ClipboardSnapshot::Text(text)
+        .restore_owned(&mut clipboard)
+        .unwrap();
+    let MockClipboardContent::Text(restored) = &clipboard.content else {
+        panic!("text payload was not restored");
+    };
+    assert_eq!(restored, "previous text");
+    assert_eq!(restored.as_ptr(), text_pointer);
+
+    let bytes = vec![31_u8; 16];
+    let image_pointer = bytes.as_ptr();
+    ClipboardSnapshot::Image(ImageData {
+        width: 2,
+        height: 2,
+        bytes: Cow::Owned(bytes),
+    })
+    .restore_owned(&mut clipboard)
+    .unwrap();
+    let MockClipboardContent::Image {
+        width,
+        height,
+        bytes,
+    } = &clipboard.content
+    else {
+        panic!("image payload was not restored");
+    };
+    assert_eq!((*width, *height, bytes.len()), (2, 2, 16));
+    assert_eq!(bytes.as_ptr(), image_pointer);
 }
 
 #[test]
@@ -632,10 +668,8 @@ fn linux_clipboard_stamp_matches_selection_owner() {
         .unwrap()
         .owner;
     assert_ne!(owner, x11rb::NONE);
-    assert_eq!(
-        clipboard_guard::platform_change_stamp().unwrap(),
-        u64::from(owner)
-    );
+    let mut clipboard = SystemClipboard::new().unwrap();
+    assert_eq!(clipboard.change_stamp().unwrap(), u64::from(owner));
 }
 
 #[test]

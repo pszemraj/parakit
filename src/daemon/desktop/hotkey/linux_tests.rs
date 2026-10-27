@@ -106,18 +106,10 @@ fn passive_listen_handler_emits_transitions_without_returning_suppression() {
 
     let state = Arc::new(Mutex::new(HotkeyState::default()));
     let (tx, rx) = crossbeam_channel::unbounded();
-    let sink = HotkeySink {
-        tx,
-        focus_source: FocusSource {
-            backend: InsertionBackend::X11,
-            ..FocusSource::default()
-        },
-    };
-
-    handle_listen_event(event(EventType::KeyPress(Key::ControlLeft)), &state, &sink);
-    handle_listen_event(event(EventType::KeyPress(Key::Space)), &state, &sink);
+    handle_listen_event(event(EventType::KeyPress(Key::ControlLeft)), &state, &tx);
+    handle_listen_event(event(EventType::KeyPress(Key::Space)), &state, &tx);
     let pressed = rx.recv().unwrap();
-    handle_listen_event(event(EventType::KeyRelease(Key::Space)), &state, &sink);
+    handle_listen_event(event(EventType::KeyRelease(Key::Space)), &state, &tx);
     let released = rx.recv().unwrap();
 
     assert!(matches!(pressed, HotkeyTransition::Pressed { .. }));
@@ -126,102 +118,26 @@ fn passive_listen_handler_emits_transitions_without_returning_suppression() {
 }
 
 #[test]
-fn native_press_carries_the_event_boundary_target() {
+fn registered_hotkey_press_uses_ordinary_capture_transitions() {
     let now = base_time();
-    let at_press = NativeTarget {
-        helper_epoch: 7,
-        attachment_epoch: 3,
-        engine_id: 1,
-        focus_generation: 12,
-        ..NativeTarget::default()
-    };
-    let queued = native_hotkey_transition(
-        HotkeyAction::Start { started_at: now },
-        PasteMode::Terminal,
-        InsertionBackend::Auto,
-        Some(at_press),
-        false,
-    )
-    .unwrap();
-    let later_focus = NativeTarget {
-        focus_generation: 13,
-        ..at_press
-    };
-    assert_ne!(at_press, later_focus);
+    let mut latch = RegisteredHotkeyLatch::default();
+    let (tx, rx) = crossbeam_channel::unbounded();
+    let pressed = latch
+        .event(RegisteredHotKeyState::Pressed, physical(true, true), now)
+        .unwrap();
+    send_hotkey_transition(pressed, &tx);
+    let released = latch
+        .event(
+            RegisteredHotKeyState::Released,
+            physical(false, false),
+            at(now, 50),
+        )
+        .unwrap();
+    send_hotkey_transition(released, &tx);
+    assert_eq!(rx.recv().unwrap(), HotkeyTransition::Pressed { at: now });
     assert_eq!(
-        queued,
-        HotkeyTransition::NativePressed {
-            at: now,
-            target: at_press
-        }
-    );
-}
-
-#[test]
-fn unavailable_native_press_is_fail_closed_only_when_required() {
-    let now = base_time();
-    let action = HotkeyAction::Start { started_at: now };
-    for (backend, wayland) in [
-        (InsertionBackend::Ibus, false),
-        (InsertionBackend::Auto, true),
-    ] {
-        assert_eq!(
-            native_hotkey_transition(action, PasteMode::Terminal, backend, None, wayland),
-            Some(HotkeyTransition::NativePressed {
-                at: now,
-                target: NativeTarget::default()
-            })
-        );
-    }
-    assert_eq!(
-        native_hotkey_transition(
-            action,
-            PasteMode::Terminal,
-            InsertionBackend::Auto,
-            None,
-            false
-        ),
-        None
-    );
-}
-
-#[test]
-fn explicit_legacy_transport_and_release_do_not_bind_native_targets() {
-    let now = base_time();
-    let action = HotkeyAction::Start { started_at: now };
-    let target = Some(NativeTarget {
-        engine_id: 1,
-        ..NativeTarget::default()
-    });
-    assert_eq!(
-        native_hotkey_transition(
-            action,
-            PasteMode::Direct,
-            InsertionBackend::Auto,
-            target,
-            false
-        ),
-        None
-    );
-    assert_eq!(
-        native_hotkey_transition(
-            action,
-            PasteMode::Terminal,
-            InsertionBackend::X11,
-            target,
-            false
-        ),
-        None
-    );
-    assert_eq!(
-        native_hotkey_transition(
-            HotkeyAction::Stop { stopped_at: now },
-            PasteMode::Terminal,
-            InsertionBackend::Ibus,
-            target,
-            false
-        ),
-        None
+        rx.recv().unwrap(),
+        HotkeyTransition::Released { at: at(now, 50) }
     );
 }
 

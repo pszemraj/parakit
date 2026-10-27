@@ -1,18 +1,16 @@
 //! Real end-to-end paste-transaction smoke test for `parakit doctor --deep`.
 //!
 //! [`crate::daemon::macos::suppressed_paste_shortcut_smoke`] (stage 1 of the
-//! macOS `doctor --deep` insertion check) only proves that parakit can post a
+//! macOS `doctor --deep` insertion check) proves that parakit can post a
 //! synthetic Cmd+V chord and that the CoreGraphics event tap observes it —
 //! the tap *suppresses* the chord, so it never reaches a real application.
-//! That leaves the entire production paste transaction unverified: the
-//! clipboard swap, the focus-verification `before_chord` recheck (commit 3),
-//! the full Cmd-down/V-down/V-up/Cmd-up chord delivery (commit 4), and the
-//! `AXValue` post-paste acknowledgement polling in
-//! [`crate::daemon::macos::pasteboard`] (commit 5).
+//! This probe additionally exercises the production clipboard swap, final
+//! focus recheck, Cmd-down/V-down/V-up/Cmd-up delivery, and Accessibility
+//! acknowledgement polling in [`crate::daemon::macos::pasteboard`].
 //!
 //! This module (stage 2, wired in
-//! [`crate::daemon::desktop::inject::platform_paste_smoke_test`]) closes that
-//! gap: it opens a small throwaway `NSWindow`/`NSTextView`, captures a focus
+//! [`crate::daemon::desktop::inject::platform_paste_smoke_test`]) opens a small
+//! throwaway `NSWindow`/`NSTextView`, captures a focus
 //! snapshot of that window exactly the way the daemon captures one for a
 //! real target, then runs [`Injector::paste_text_guarded`] — the same
 //! production call the worker thread makes — to paste a unique sentinel into
@@ -53,8 +51,7 @@
 //! could never be observed landing and the poll would always end in
 //! [`crate::daemon::desktop::clipboard_restore::PasteConfirmation::NoEvidence`].
 //!
-//! The fix mirrors production exactly rather than inventing new threading:
-//! the paste (clipboard stage, chord send, `AXValue` poll) runs on a
+//! The paste (clipboard stage, chord send, `AXValue` poll) runs on a
 //! short-lived worker thread — exactly where it runs in the real daemon —
 //! while the main thread pumps AppKit events in bounded slices, checking a
 //! channel for the worker's result each tick.
@@ -67,17 +64,12 @@
 //! window never becomes key, even in a perfectly healthy GUI session) and
 //! would likewise never deliver the synthetic paste chord to the text view.
 //!
-//! Moving [`FocusSnapshot`] into the worker thread's closure requires it to
-//! be `Send`. It already is: `WorkerEvent::Stopped` (see
-//! `daemon::worker::WorkerEvent`) carries a `Box<FocusSnapshot>` across the
-//! hotkey-to-worker-thread channel in production today, which only compiles
-//! because every field of `FocusSnapshot` (transitively including
-//! `AxElementHandle`, see its `unsafe impl Send`/`Sync` in
-//! `daemon::macos::focus`) is already `Send`. This module relies on that
-//! same, already-relied-upon property rather than adding anything new.
+//! [`FocusSnapshot`] and its Accessibility element handle are `Send`, allowing
+//! the captured target to move into the paste worker while AppKit objects
+//! remain on the main thread.
 
+use crate::daemon::desktop::inject::SystemClipboard as Clipboard;
 use anyhow::{bail, Context, Result};
-use arboard::Clipboard;
 use objc2::rc::{autoreleasepool, Retained};
 use objc2::{sel, MainThreadMarker, MainThreadOnly as _};
 use objc2_app_kit::{
@@ -662,7 +654,12 @@ fn paste_sentinel_on_worker_thread(
         mode,
         ClipboardPolicy::RestorePrevious,
         Some(focus),
-        || Ok(true),
+        || {
+            Ok(!matches!(
+                focus.verify_current()?,
+                crate::daemon::desktop::FocusVerification::Changed
+            ))
+        },
     )
 }
 
@@ -695,7 +692,7 @@ fn check_paste_report(
         (PasteOutcome::Pasted, kind) => Err(format!(
             "paste landed (outcome=Pasted) but the acknowledgement kind was {kind:?}, not \
              \"ax_confirmed\", even though Accessibility exposed a focused element on the probe \
-             text view; the commit-5 AXValue confirmation path may not be firing"
+             text view; the AXValue confirmation path may not be firing"
         )),
         (PasteOutcome::PastedUnverified, kind) => Err(format!(
             "paste was only Unverified (kind={kind:?}) even though Accessibility exposed a \
@@ -713,9 +710,9 @@ fn check_paste_report(
              rerunning the deep diagnostic"
         )),
         (PasteOutcome::Blocked, kind) => Err(format!(
-            "the doctor smoke harness's own safety-recheck closure blocked insertion \
-             (outcome=Blocked, kind={kind:?}); this indicates a bug in the harness itself, not \
-             the production paste path"
+            "focus changed before the doctor probe could dispatch the paste chord \
+             (outcome=Blocked, kind={kind:?}); insertion was withheld; keep the probe window \
+             focused and rerun the deep diagnostic"
         )),
         (PasteOutcome::ClipboardChanged, kind) => Err(format!(
             "clipboard changed or was unavailable during the probe \

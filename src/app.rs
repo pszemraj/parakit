@@ -153,14 +153,11 @@ fn run_doctor(cli: &Cli, doctor_cli: &DoctorCli) -> Result<()> {
     let focus_source = daemon::inject::FocusSource {
         backend: doctor_cli.effective_insertion_backend(&config),
         mode: paste_mode,
+        hotkey_route: hotkey_backend.linux_route(),
         client: None,
     };
     #[cfg(target_os = "linux")]
-    anyhow::ensure!(
-        paste_mode != daemon::inject::PasteMode::Direct
-            || focus_source.backend != daemon::desktop::linux_insertion::InsertionBackend::Ibus,
-        "direct paste mode conflicts with the IBus insertion backend"
-    );
+    focus_source.validate_options()?;
     #[cfg(not(target_os = "linux"))]
     let focus_source = daemon::inject::FocusSource::default();
     let ok = daemon::preflight::print_doctor(
@@ -330,20 +327,21 @@ fn run_daemon(cli: &Cli, start: &StartCli) -> Result<()> {
     }
 
     #[cfg(target_os = "linux")]
-    let focus_source = daemon::inject::FocusSource {
+    let mut focus_source = daemon::inject::FocusSource {
         backend: start.effective_insertion_backend(&config),
         mode: paste_mode,
-        client: if cfg!(feature = "ibus")
-            && (hotkey_backend.linux_route() == daemon::hotkey::LinuxHotkeyRoute::Ibus
-                || (paste_mode != daemon::inject::PasteMode::Direct
-                    && start.effective_insertion_backend(&config)
-                        != daemon::desktop::linux_insertion::InsertionBackend::X11))
-        {
-            Some(daemon::desktop::ibus::IbusClient::start()?)
-        } else {
-            None
-        },
+        hotkey_route: hotkey_backend.linux_route(),
+        client: None,
     };
+    #[cfg(target_os = "linux")]
+    {
+        focus_source.validate_options()?;
+        if cfg!(feature = "ibus")
+            && focus_source.hotkey_route == daemon::hotkey::LinuxHotkeyRoute::Ibus
+        {
+            focus_source.client = Some(daemon::desktop::ibus::IbusClient::start()?);
+        }
+    }
     #[cfg(not(target_os = "linux"))]
     let focus_source = daemon::inject::FocusSource::default();
 
@@ -524,14 +522,6 @@ fn run_daemon(cli: &Cli, start: &StartCli) -> Result<()> {
     }
     log.ready();
 
-    #[cfg(target_os = "linux")]
-    let hotkey_result = daemon::hotkey::run_grab_loop(
-        hotkey_tx,
-        hotkey_backend,
-        Arc::clone(&log),
-        focus_source.clone(),
-    );
-    #[cfg(not(target_os = "linux"))]
     let hotkey_result = daemon::hotkey::run_grab_loop(hotkey_tx, hotkey_backend, Arc::clone(&log));
     finish_hotkey_loop(hotkey_result, &ipc_state);
 

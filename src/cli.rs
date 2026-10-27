@@ -135,7 +135,7 @@ pub(crate) struct StartCli {
     #[arg(long, value_enum)]
     pub(crate) paste_mode: Option<PasteMode>,
 
-    /// Linux insertion transport: prefer IBus automatically, require IBus, or use X11.
+    /// Linux insertion transport: follow the hotkey backend, require IBus PTT, or use X11.
     #[cfg(target_os = "linux")]
     #[arg(long, value_enum)]
     pub(crate) insertion_backend: Option<crate::daemon::desktop::linux_insertion::InsertionBackend>,

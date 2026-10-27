@@ -31,6 +31,7 @@ fn live_native_worker_inserts_without_x11() {
         backend: crate::daemon::desktop::linux_insertion::InsertionBackend::Auto,
         mode: PasteMode::Standard,
         client: Some(client.clone()),
+        hotkey_route: crate::daemon::hotkey::LinuxHotkeyRoute::Ibus,
     }
     .capture()
     .unwrap();
@@ -48,6 +49,7 @@ fn live_x11_worker_pastes_into_focused_field() {
         backend: crate::daemon::desktop::linux_insertion::InsertionBackend::Auto,
         mode: PasteMode::Standard,
         client: None,
+        hotkey_route: crate::daemon::hotkey::LinuxHotkeyRoute::RegisteredX11,
     }
     .capture()
     .unwrap();
@@ -55,10 +57,75 @@ fn live_x11_worker_pastes_into_focused_field() {
     run_live_worker(focus, "X11 worker café 世界", false);
 }
 
+/// Native rejection and terminal policy retain clipboard recovery with history disabled.
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "requires an isolated X11 clipboard; never sends a paste chord"]
+fn live_native_clipboard_recovery_without_history() {
+    for text in [
+        "native recovery café 世界",
+        "native\ttab",
+        "native\nmultiline",
+    ] {
+        let state = Arc::new(SharedState::with_history_limit(0));
+        *state.focus_source.write() = crate::daemon::inject::FocusSource {
+            backend: crate::daemon::desktop::linux_insertion::InsertionBackend::Ibus,
+            mode: PasteMode::Terminal,
+            client: None,
+            hotkey_route: crate::daemon::hotkey::LinuxHotkeyRoute::Ibus,
+        };
+        let (tx, rx) = crossbeam_channel::bounded(2);
+        let mut ctx = test_worker_ctx(
+            FakeEngine {
+                transcriptions: Arc::new(AtomicUsize::new(0)),
+                drops: Arc::new(AtomicUsize::new(0)),
+                transcript: Ok(text),
+            },
+            &state,
+            Sounds::new(false),
+            rx,
+            0,
+        );
+        ctx.insert_transcripts = true;
+        ctx.settings.paste_mode = PasteMode::Terminal;
+        ctx.settings.keep_transcript_clipboard = false;
+        let worker = std::thread::spawn(move || {
+            worker_loop_with(ctx, None, || anyhow::bail!("unexpected model reload"));
+        });
+        let (done_tx, done_rx) = crossbeam_channel::bounded(1);
+        let now = Instant::now();
+        tx.send(WorkerEvent::Stopped {
+            started_at: now,
+            stopped_at: now,
+            pcm: vec![0.1; 160],
+            focus_at_start: Some(Box::new(FocusSnapshot::from_native(None, None))),
+            activity: None,
+            completion: Some(done_tx),
+        })
+        .unwrap();
+        done_rx
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap()
+            .unwrap();
+        assert_eq!(arboard::Clipboard::new().unwrap().get_text().unwrap(), text);
+        assert!(state.resolve_transcript(0).is_err());
+        drop(tx);
+        worker.join().unwrap();
+    }
+}
+
 /// Send a controlled transcript through production insertion and verify recovery text.
 #[cfg(target_os = "linux")]
 fn run_live_worker(focus: FocusSnapshot, text: &'static str, keep_clipboard: bool) {
     let state = Arc::new(SharedState::new());
+    if focus.is_native() {
+        *state.focus_source.write() = crate::daemon::inject::FocusSource {
+            backend: crate::daemon::desktop::linux_insertion::InsertionBackend::Ibus,
+            mode: PasteMode::Standard,
+            client: None,
+            hotkey_route: crate::daemon::hotkey::LinuxHotkeyRoute::Ibus,
+        };
+    }
     state.activity.ready();
     let (tx, rx) = crossbeam_channel::bounded(2);
     let mut ctx = test_worker_ctx(

@@ -29,7 +29,7 @@ pub(crate) enum HotkeyTransition {
         at: Instant,
     },
     /// PTT press carrying the target captured on the input-method event loop.
-    #[cfg(target_os = "linux")]
+    #[cfg(all(target_os = "linux", feature = "ibus"))]
     NativePressed {
         /// Monotonic timestamp observed when the engine event arrived.
         at: Instant,
@@ -138,7 +138,7 @@ fn recording_coordinator_loop_with_focus(
             CoordinatorEvent::Hotkey(HotkeyTransition::Released { at }) => Some(at),
             CoordinatorEvent::MaxUtterance => Some(Instant::now()),
             CoordinatorEvent::Hotkey(HotkeyTransition::Pressed { .. }) => None,
-            #[cfg(target_os = "linux")]
+            #[cfg(all(target_os = "linux", feature = "ibus"))]
             CoordinatorEvent::Hotkey(HotkeyTransition::NativePressed { .. }) => None,
         };
         if let Some(stopped_at) = stopped_at {
@@ -163,63 +163,67 @@ fn recording_coordinator_loop_with_focus(
             continue;
         }
 
+        if started_at.is_some() {
+            continue;
+        }
+        // This coordinator is the only worker-event producer. Reserve room for
+        // both Started and its terminal event before admitting another capture.
+        if tx
+            .capacity()
+            .is_some_and(|capacity| tx.len().saturating_add(2) > capacity)
+        {
+            log.warn("still processing an earlier dictation; this recording was skipped. Wait for it to finish, then try again");
+            continue;
+        }
+
         let (at, captured_focus) = match event {
             CoordinatorEvent::Hotkey(HotkeyTransition::Pressed { at }) => {
-                #[cfg(target_os = "linux")]
-                let focus = FocusSnapshot::capture().ok();
-                #[cfg(not(target_os = "linux"))]
                 let focus = focus_source.capture().ok();
                 (at, focus)
             }
-            #[cfg(target_os = "linux")]
+            #[cfg(all(target_os = "linux", feature = "ibus"))]
             CoordinatorEvent::Hotkey(HotkeyTransition::NativePressed { at, target }) => {
                 (at, focus_source.capture_native(target).ok())
             }
             _ => unreachable!("release and maximum duration were handled above"),
         };
-        if started_at.is_none() {
-            #[cfg(target_os = "linux")]
-            if captured_focus
-                .as_ref()
-                .is_some_and(|focus| !focus.permits_dictation())
-            {
-                log.warn("native target is unavailable or private; dictation was not started");
-                continue;
-            }
-            let lease = activity.begin();
-            focus_at_start = captured_focus;
-            if let Err(err) = audio.start_recording() {
-                log.error(&format!("could not start audio recording: {err:#}"));
+        #[cfg(target_os = "linux")]
+        if captured_focus
+            .as_ref()
+            .is_some_and(|focus| !focus.permits_dictation())
+        {
+            log.warn("native target is unavailable or private; dictation was not started");
+            continue;
+        }
+        let lease = activity.begin();
+        focus_at_start = captured_focus;
+        if let Err(err) = audio.start_recording() {
+            log.error(&format!("could not start audio recording: {err:#}"));
+            focus_at_start = None;
+            continue;
+        }
+        let recording = Arc::new(AtomicBool::new(true));
+        match try_send_worker_event(
+            &tx,
+            WorkerEvent::Started {
+                recording: Arc::clone(&recording),
+            },
+            log,
+        ) {
+            WorkerSendStatus::Sent => {}
+            WorkerSendStatus::Full => {
+                stop_rejected_recording(&audio, "worker queue rejected recording start", log);
                 focus_at_start = None;
                 continue;
             }
-            let recording = Arc::new(AtomicBool::new(true));
-            match try_send_worker_event(
-                &tx,
-                WorkerEvent::Started {
-                    recording: Arc::clone(&recording),
-                },
-                log,
-            ) {
-                WorkerSendStatus::Sent => {}
-                WorkerSendStatus::Full => {
-                    stop_rejected_recording(&audio, "worker queue rejected recording start", log);
-                    focus_at_start = None;
-                    continue;
-                }
-                WorkerSendStatus::Disconnected => {
-                    stop_rejected_recording(
-                        &audio,
-                        "worker disconnected after recording start",
-                        log,
-                    );
-                    break;
-                }
+            WorkerSendStatus::Disconnected => {
+                stop_rejected_recording(&audio, "worker disconnected after recording start", log);
+                break;
             }
-            recording_activity = Some(lease);
-            listening = Some(recording);
-            started_at = Some(at);
         }
+        recording_activity = Some(lease);
+        listening = Some(recording);
+        started_at = Some(at);
     }
     if let Some(recording) = listening {
         recording.store(false, Ordering::Release);
@@ -591,11 +595,54 @@ mod tests {
     }
 
     #[test]
-    fn coordinator_delivers_terminal_event_after_accepted_start_when_queue_is_full() {
+    fn coordinator_rejects_capture_without_room_for_its_terminal_event() {
         let audio = AudioHandle::test_handle();
         let log = Logger::new(LogLevel::Quiet);
         let (hotkey_tx, hotkey_rx) = unbounded();
-        let (worker_tx, worker_rx) = bounded(1);
+        let (worker_tx, worker_rx) = bounded(2);
+        worker_tx
+            .send(WorkerEvent::Failed {
+                message: "earlier capture".to_owned(),
+                activity: None,
+            })
+            .unwrap();
+        let (finished_tx, finished_rx) = bounded(1);
+        let coordinator = thread::spawn(move || {
+            recording_coordinator_loop_with_max_utterance(
+                hotkey_rx,
+                worker_tx,
+                audio,
+                Duration::from_secs(1),
+                &log,
+                ActivityGate::new(),
+            );
+            finished_tx.send(()).unwrap();
+        });
+        for _ in 0..2 {
+            hotkey_tx
+                .send(HotkeyTransition::Pressed { at: Instant::now() })
+                .unwrap();
+            hotkey_tx
+                .send(HotkeyTransition::Released { at: Instant::now() })
+                .unwrap();
+        }
+        drop(hotkey_tx);
+        let responsive = finished_rx.recv_timeout(EVENT_TIMEOUT).is_ok();
+        // Release a blocked terminal sender even when the assertion regresses.
+        while worker_rx.recv_timeout(Duration::from_millis(10)).is_ok() {}
+        coordinator.join().unwrap();
+        assert!(
+            responsive,
+            "a terminal event blocked later hotkey transitions"
+        );
+    }
+
+    #[test]
+    fn coordinator_uses_reserved_terminal_slot_after_accepted_start() {
+        let audio = AudioHandle::test_handle();
+        let log = Logger::new(LogLevel::Quiet);
+        let (hotkey_tx, hotkey_rx) = unbounded();
+        let (worker_tx, worker_rx) = bounded(2);
         let coordinator = thread::spawn(move || {
             recording_coordinator_loop_with_max_utterance(
                 hotkey_rx,

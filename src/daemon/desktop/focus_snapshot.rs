@@ -45,6 +45,7 @@ enum LinuxFocus {
         active_window: Option<u32>,
         connection: Box<RustConnection>,
         root: u32,
+        active_window_atom: u32,
     },
     Native {
         client: Option<super::super::ibus::IbusClient>,
@@ -82,7 +83,8 @@ impl FocusSnapshot {
                 .context("could not read X11 root window for focus snapshot")?;
             let focus = linux_current_input_focus(&conn)?;
             let input_focus = linux_focus_is_insertable(focus).then_some(focus);
-            let active_window = x11::active_window(&conn, root)
+            let active_window_atom = x11::active_window_atom(&conn)?;
+            let active_window = x11::active_window(&conn, root, active_window_atom)
                 .context("could not read X11 active window for focus snapshot")?;
             if input_focus.is_none() && active_window.is_none() {
                 anyhow::bail!("X11 focus is not an insertable application window");
@@ -93,6 +95,7 @@ impl FocusSnapshot {
                     active_window,
                     connection: Box::new(conn),
                     root,
+                    active_window_atom,
                 },
             })
         }
@@ -125,22 +128,30 @@ impl FocusSnapshot {
     pub(crate) fn verify_current(&self) -> Result<FocusVerification> {
         #[cfg(target_os = "linux")]
         {
-            let (input_focus, active_window, connection, root) = match &self.linux {
-                LinuxFocus::X11 {
-                    input_focus,
-                    active_window,
-                    connection,
-                    root,
-                } => (input_focus, active_window, connection, root),
-                LinuxFocus::Native { client, target } => {
-                    return Ok(FocusVerification::from_matches(
-                        target.is_some()
-                            && client.as_ref().and_then(|client| client.snapshot()) == *target,
-                    ))
-                }
-            };
+            let (input_focus, active_window, connection, root, active_window_atom) =
+                match &self.linux {
+                    LinuxFocus::X11 {
+                        input_focus,
+                        active_window,
+                        connection,
+                        root,
+                        active_window_atom,
+                    } => (
+                        input_focus,
+                        active_window,
+                        connection,
+                        root,
+                        active_window_atom,
+                    ),
+                    LinuxFocus::Native { client, target } => {
+                        return Ok(FocusVerification::from_matches(
+                            target.is_some()
+                                && client.as_ref().and_then(|client| client.snapshot()) == *target,
+                        ))
+                    }
+                };
             if let Some(expected) = *active_window {
-                if let Some(current) = x11::active_window(connection, *root)
+                if let Some(current) = x11::active_window(connection, *root, *active_window_atom)
                     .context("could not query the current X11 active window")?
                 {
                     return Ok(FocusVerification::from_matches(current == expected));

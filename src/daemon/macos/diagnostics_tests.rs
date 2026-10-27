@@ -12,6 +12,15 @@ fn sentinel_is_unique_per_pid_and_nonce() {
     assert!(a.starts_with("parakit-doctor-macos-smoke-123-"));
 }
 
+#[test]
+fn focus_block_is_reported_as_a_withheld_probe() {
+    let report = report(PasteOutcome::Blocked, "not_applicable");
+    let error = check_paste_report(&report, true).unwrap_err();
+    assert!(error.contains("focus changed"), "{error}");
+    assert!(error.contains("insertion was withheld"), "{error}");
+    assert!(!error.contains("bug"), "{error}");
+}
+
 fn report(outcome: PasteOutcome, acknowledgement_kind: &'static str) -> PasteReport {
     PasteReport {
         outcome,
@@ -97,13 +106,6 @@ fn report_rows(outcome: PasteOutcome) -> &'static [ReportRow] {
                 expect_ok: false,
             },
         ],
-        // New coverage: `PasteOutcome::UnsafeModifiers` previously had
-        // zero test coverage despite a dedicated production arm in
-        // `check_paste_report` (~diagnostics.rs:815-819). That arm
-        // returns `Err` unconditionally — unlike the `PastedUnverified`
-        // arm, it carries no `if !ax_focused_element_available` guard —
-        // so both rows below pin `expect_ok: false` regardless of
-        // `ax_focused`.
         PasteOutcome::UnsafeModifiers => &[
             ReportRow {
                 name: "unsafe_modifiers_fails_ax_available",

@@ -68,29 +68,31 @@ pub fn print_doctor(
     backend: HotkeyBackend,
     focus_source: &FocusSource,
 ) -> bool {
+    #[cfg(target_os = "linux")]
+    let native_probe = focus_source
+        .uses_native()
+        .then(super::desktop::ibus::probe_status);
+    #[cfg(target_os = "linux")]
+    let report = match native_probe.as_ref() {
+        Some(probe) => ibus::hotkey_report(probe),
+        None => hotkey_report(backend, !quiet),
+    };
+    #[cfg(not(target_os = "linux"))]
     let report = hotkey_report(backend, !quiet);
     let daemon_lock = singleton_lock_probe();
     let mic = super::audio::probe_default_input();
     #[cfg(target_os = "linux")]
-    let native = ibus::uses_native(focus_source);
+    let native = native_probe.is_some();
     #[cfg(not(target_os = "linux"))]
     let native = {
         let _ = focus_source;
         false
     };
     #[cfg(target_os = "linux")]
-    let native_insertion = native.then(ibus::insertion_check);
+    let native_insertion = native_probe.as_ref().map(ibus::insertion_check);
     #[cfg(not(target_os = "linux"))]
     let native_insertion: Option<Result<()>> = None;
-    #[cfg(target_os = "linux")]
-    let transport = if native {
-        Ok(())
-    } else {
-        focus_source.preflight()
-    };
-    #[cfg(not(target_os = "linux"))]
-    let transport: Result<()> = Ok(());
-    let insertion = transport.and_then(|()| {
+    let insertion = {
         if let Some(result) = native_insertion {
             result
         } else if deep {
@@ -98,7 +100,7 @@ pub fn print_doctor(
         } else {
             inject::preflight(paste_mode)
         }
-    });
+    };
     let insertion_label = if native {
         "IBus connection and registration checks (reception unverified)".to_owned()
     } else if deep {
@@ -127,8 +129,11 @@ pub fn print_doctor(
         )
     };
     #[cfg(target_os = "linux")]
-    if native {
-        let _ = outln!("{}", ibus::insertion_details(focus_source, deep).trim_end());
+    if let Some(probe) = native_probe.as_ref() {
+        let _ = outln!(
+            "{}",
+            ibus::insertion_details(focus_source, probe, deep).trim_end()
+        );
     }
 
     ok
@@ -446,7 +451,7 @@ fn linux_hotkey_startup_blocked(
 fn hotkey_report(backend: HotkeyBackend, _prompt_accessibility: bool) -> HotkeyReport {
     let route = backend.linux_route();
     if route == LinuxHotkeyRoute::Ibus {
-        return ibus::hotkey_report();
+        return ibus::hotkey_report(&super::desktop::ibus::probe_status());
     }
     let session = std::env::var("XDG_SESSION_TYPE").unwrap_or_else(|_| "unknown".to_string());
     let display = std::env::var("DISPLAY").unwrap_or_else(|_| "<unset>".to_string());

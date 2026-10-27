@@ -15,7 +15,6 @@
 //!     terminal that launched parakit.
 
 use anyhow::{Context, Result};
-use arboard::Clipboard;
 use clap::ValueEnum;
 use enigo::{Enigo, Keyboard, Settings};
 use std::{cell::RefCell, time::Duration};
@@ -33,7 +32,7 @@ mod clipboard_guard;
 mod clipboard_store;
 #[cfg(target_os = "linux")]
 use clipboard_store::clipboard_content_unavailable;
-pub(crate) use clipboard_store::{ClipboardSnapshot, ClipboardStore};
+pub(crate) use clipboard_store::{ClipboardSnapshot, ClipboardStore, SystemClipboard};
 
 #[path = "focus_snapshot.rs"]
 mod focus_snapshot;
@@ -67,8 +66,21 @@ use super::x11::wait_for_modifier_release;
 #[cfg(target_os = "linux")]
 use x11_paste::{linux_x11_xtest_preflight, LinuxX11Paste};
 
-/// Error label used when paste succeeded but previous clipboard restore failed.
-pub(crate) const CLIPBOARD_RESTORE_ERROR: &str = "could not restore previous clipboard contents";
+/// A previous clipboard payload could not be restored after staging text.
+#[derive(Debug)]
+pub(crate) struct ClipboardRestoreError(pub(crate) anyhow::Error);
+
+impl std::fmt::Display for ClipboardRestoreError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("could not restore previous clipboard contents")
+    }
+}
+
+impl std::error::Error for ClipboardRestoreError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(self.0.as_ref())
+    }
+}
 
 /// Paste shortcut style for batch transcript insertion.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum, serde::Serialize, serde::Deserialize)]
@@ -327,7 +339,7 @@ pub(crate) fn smoke_test(mode: PasteMode) -> Result<()> {
 /// Open a text insertion handle.
 pub struct Injector {
     enigo: Option<Enigo>,
-    clipboard: Option<Clipboard>,
+    clipboard: Option<SystemClipboard>,
     #[cfg(target_os = "windows")]
     clipboard_history: Option<super::windows_clipboard_history::ClipboardHistoryListener>,
     #[cfg(target_os = "linux")]
@@ -397,7 +409,7 @@ impl Injector {
         }
 
         if mode != PasteMode::Direct && self.clipboard.is_none() {
-            self.clipboard = Some(Clipboard::new().context("could not open system clipboard")?);
+            self.clipboard = Some(SystemClipboard::new()?);
         }
 
         #[cfg(target_os = "linux")]
@@ -558,10 +570,10 @@ impl Injector {
         result
     }
 
-    fn take_clipboard(&mut self) -> Result<Clipboard> {
+    fn take_clipboard(&mut self) -> Result<SystemClipboard> {
         match self.clipboard.take() {
             Some(clipboard) => Ok(clipboard),
-            None => Clipboard::new().context("could not open system clipboard"),
+            None => SystemClipboard::new(),
         }
     }
 

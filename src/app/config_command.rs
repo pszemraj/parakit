@@ -151,6 +151,14 @@ fn print_config_show(quiet: bool) -> Result<()> {
             "(default: platform)".to_string()
         }
     )?;
+    #[cfg(target_os = "linux")]
+    outln!(
+        "    insertion_backend: {}",
+        config.daemon.insertion_backend.map_or_else(
+            || "(default: auto)".to_owned(),
+            |backend| backend.label().to_owned()
+        )
+    )?;
     outln!(
         "    keep_transcript_clipboard: {}",
         config.daemon.keep_transcript_clipboard()

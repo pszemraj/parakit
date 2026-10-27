@@ -1,7 +1,8 @@
 //! Clipboard backend trait, its arboard adapter, and restorable payload snapshots.
 
+#[cfg(not(target_os = "linux"))]
 use super::clipboard_guard;
-use super::CLIPBOARD_RESTORE_ERROR;
+use super::ClipboardRestoreError;
 use anyhow::{Context, Result};
 use arboard::{Clipboard, ImageData};
 #[cfg(target_os = "macos")]
@@ -10,12 +11,36 @@ use objc2::rc::autoreleasepool;
 use objc2_app_kit::{NSPasteboard, NSPasteboardTypeHTML, NSPasteboardTypeString};
 #[cfg(target_os = "macos")]
 use objc2_foundation::NSString;
-use std::{borrow::Cow, path::PathBuf};
+use std::path::PathBuf;
 #[cfg(target_os = "windows")]
 use windows::{
     core::w,
     Win32::System::DataExchange::{IsClipboardFormatAvailable, RegisterClipboardFormatW},
 };
+
+/// System clipboard and the native resources used to observe its ownership.
+pub(crate) struct SystemClipboard {
+    clipboard: Clipboard,
+    #[cfg(target_os = "linux")]
+    observation: Option<(x11rb::rust_connection::RustConnection, u32)>,
+}
+
+impl SystemClipboard {
+    /// Open the clipboard; Linux ownership observation initializes on first use.
+    ///
+    /// # Returns
+    /// An owned clipboard backend.
+    ///
+    /// # Errors
+    /// Reports a failure to open the system clipboard.
+    pub(crate) fn new() -> Result<Self> {
+        Ok(Self {
+            clipboard: Clipboard::new().context("could not open system clipboard")?,
+            #[cfg(target_os = "linux")]
+            observation: None,
+        })
+    }
+}
 
 /// Minimal clipboard operations used by insertion and smoke-test paths.
 pub(crate) trait ClipboardStore {
@@ -196,17 +221,45 @@ fn restore_html_clipboard(
         .context("could not write HTML clipboard contents")
 }
 
-impl ClipboardStore for Clipboard {
+impl ClipboardStore for SystemClipboard {
     fn change_stamp(&mut self) -> Result<u64> {
+        #[cfg(target_os = "linux")]
+        {
+            use x11rb::protocol::xproto::ConnectionExt;
+            if self.observation.is_none() {
+                let (connection, _) =
+                    x11rb::connect(None).context("open clipboard observation connection")?;
+                let selection = connection.intern_atom(false, b"CLIPBOARD")?.reply()?.atom;
+                self.observation = Some((connection, selection));
+            }
+            let (connection, selection) = self
+                .observation
+                .as_ref()
+                .expect("clipboard observation was just initialized");
+            let result = connection
+                .get_selection_owner(*selection)
+                .map_err(anyhow::Error::new)
+                .and_then(|request| request.reply().map_err(anyhow::Error::new))
+                .map(|reply| u64::from(reply.owner));
+            if result.is_err() {
+                self.observation = None;
+            }
+            result
+        }
+        #[cfg(not(target_os = "linux"))]
         clipboard_guard::platform_change_stamp()
     }
 
     fn get_text(&mut self) -> Result<String> {
-        Clipboard::get_text(self).context("could not read system clipboard")
+        self.clipboard
+            .get_text()
+            .context("could not read system clipboard")
     }
 
     fn set_text(&mut self, text: String) -> Result<()> {
-        Clipboard::set_text(self, text).context("could not write system clipboard")
+        self.clipboard
+            .set_text(text)
+            .context("could not write system clipboard")
     }
 
     fn get_html(&mut self) -> Result<String> {
@@ -226,17 +279,19 @@ impl ClipboardStore for Clipboard {
                 return Err(arboard::Error::ContentNotAvailable.into());
             }
         }
-        self.get()
+        self.clipboard
+            .get()
             .html()
             .context("could not read HTML clipboard contents")
     }
 
     fn set_html(&mut self, html: String, alt_text: Option<String>) -> Result<()> {
-        restore_html_clipboard(self, html, alt_text)
+        restore_html_clipboard(&mut self.clipboard, html, alt_text)
     }
 
     fn get_file_list(&mut self) -> Result<Vec<PathBuf>> {
         let files = self
+            .clipboard
             .get()
             .file_list()
             .context("could not read file-list clipboard contents")?;
@@ -246,21 +301,28 @@ impl ClipboardStore for Clipboard {
     }
 
     fn set_file_list(&mut self, files: &[PathBuf]) -> Result<()> {
-        self.set()
+        self.clipboard
+            .set()
             .file_list(files)
             .context("could not write file-list clipboard contents")
     }
 
     fn get_image(&mut self) -> Result<ImageData<'static>> {
-        Clipboard::get_image(self).context("could not read image clipboard contents")
+        self.clipboard
+            .get_image()
+            .context("could not read image clipboard contents")
     }
 
     fn set_image(&mut self, image: ImageData<'static>) -> Result<()> {
-        Clipboard::set_image(self, image).context("could not write image clipboard contents")
+        self.clipboard
+            .set_image(image)
+            .context("could not write image clipboard contents")
     }
 
     fn clear(&mut self) -> Result<()> {
-        Clipboard::clear(self).context("could not clear system clipboard")
+        self.clipboard
+            .clear()
+            .context("could not clear system clipboard")
     }
 }
 
@@ -303,6 +365,7 @@ pub(super) fn linux_file_list_paths(files: Vec<PathBuf>) -> Vec<PathBuf> {
 }
 
 /// Best-effort snapshot of supported clipboard payloads before staging text.
+#[derive(Clone)]
 pub(crate) enum ClipboardSnapshot {
     Text(String),
     Html {
@@ -391,28 +454,33 @@ impl ClipboardSnapshot {
     /// # Errors
     ///
     /// Returns an error when the clipboard cannot accept the saved payload.
+    #[cfg(any(target_os = "macos", test))]
     pub(crate) fn restore<C: ClipboardStore>(&self, clipboard: &mut C) -> Result<()> {
+        self.clone().restore_owned(clipboard)
+    }
+
+    /// Restore a consumed snapshot by moving its payload into the backend.
+    ///
+    /// # Arguments
+    /// * `clipboard` - Clipboard backend receiving the saved payload.
+    ///
+    /// # Returns
+    /// Success when the payload was restored or unsupported data cleared.
+    ///
+    /// # Errors
+    /// Returns [`ClipboardRestoreError`] if the write or clearing fallback fails.
+    pub(super) fn restore_owned<C: ClipboardStore>(self, clipboard: &mut C) -> Result<()> {
         let result = match self {
-            Self::Text(text) => clipboard.set_text(text.clone()),
-            Self::Html { html, alt_text } => clipboard.set_html(html.clone(), alt_text.clone()),
-            Self::FileList(files) => clipboard.set_file_list(files),
-            Self::Image(image) => clipboard.set_image(ImageData {
-                width: image.width,
-                height: image.height,
-                bytes: Cow::Owned(image.bytes.to_vec()),
-            }),
-            Self::Unsupported => {
-                return clipboard
-                    .clear()
-                    .or_else(|_| clipboard.set_text(String::new()))
-                    .map_err(|err| {
-                        anyhow::anyhow!(
-                            "{CLIPBOARD_RESTORE_ERROR}: previous clipboard format unsupported and staged transcript could not be cleared: {err:#}"
-                        )
-                    });
-            }
+            Self::Text(text) => clipboard.set_text(text),
+            Self::Html { html, alt_text } => clipboard.set_html(html, alt_text),
+            Self::FileList(files) => clipboard.set_file_list(&files),
+            Self::Image(image) => clipboard.set_image(image),
+            Self::Unsupported => clipboard
+                .clear()
+                .or_else(|_| clipboard.set_text(String::new()))
+                .context("previous clipboard format unsupported and staged transcript could not be cleared"),
         };
-        result.map_err(|err| anyhow::anyhow!("{CLIPBOARD_RESTORE_ERROR}: {err:#}"))
+        result.map_err(|error| ClipboardRestoreError(error).into())
     }
 
     /// Compare every supported representation and its complete payload.
@@ -424,7 +492,7 @@ impl ClipboardSnapshot {
     /// # Returns
     ///
     /// Whether the payload kinds and their contents match exactly.
-    #[cfg(any(target_os = "macos", test))]
+    #[cfg(any(target_os = "macos", target_os = "windows", test))]
     pub(crate) fn same_payload(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Text(expected), Self::Text(actual)) => expected == actual,
@@ -500,5 +568,28 @@ pub(super) fn clipboard_content_unavailable(error: &anyhow::Error) -> bool {
             description == "incorrect type received from clipboard"
         }
         _ => false,
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::*;
+    use x11rb::connection::Connection as _;
+
+    #[test]
+    #[ignore = "requires an X11 display; does not change clipboard contents"]
+    fn ownership_reads_reuse_the_connection_and_atom() {
+        let mut clipboard = SystemClipboard::new().unwrap();
+        assert!(clipboard.observation.is_none());
+        clipboard.change_stamp().unwrap();
+        let (connection, atom) = clipboard.observation.as_ref().unwrap();
+        let resource_base = connection.setup().resource_id_base;
+        let atom = *atom;
+        for _ in 0..3 {
+            clipboard.change_stamp().unwrap();
+            let (connection, cached_atom) = clipboard.observation.as_ref().unwrap();
+            assert_eq!(connection.setup().resource_id_base, resource_base);
+            assert_eq!(*cached_atom, atom);
+        }
     }
 }
