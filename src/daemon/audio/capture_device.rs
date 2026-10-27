@@ -443,19 +443,22 @@ fn enhance_mic_info(info: &mut MicInfo, is_default: bool) {
     let Some(source) = pactl_default_source_info() else {
         return;
     };
+    apply_source_description(info, source);
+}
+
+/// Attach the physical source's label without replacing the opened CPAL format.
+///
+/// # Arguments
+/// * `info` - Description of the opened CPAL stream to enrich.
+/// * `source` - Physical source label and identifier from PulseAudio/PipeWire.
+#[cfg(target_os = "linux")]
+pub(super) fn apply_source_description(
+    info: &mut MicInfo,
+    source: super::super::pactl::PactlSourceInfo,
+) {
     let source_id = source.name.clone();
     info.name = source.description.unwrap_or(source.name);
-    if let Some(rate) = source.rate {
-        info.input_rate = rate;
-    }
-    if let Some(channels) = source.channels {
-        info.channels = channels;
-    }
-    if let Some(format) = source.sample_format {
-        info.sample_format = format;
-    }
     info.source_id = Some(source_id);
-    info.resampling = info.input_rate != TARGET_RATE;
 }
 
 #[cfg(not(target_os = "linux"))]

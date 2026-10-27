@@ -129,6 +129,9 @@ fn play_cue(cue: Cue) -> Result<(), String> {
     let (_stream, handle) =
         OutputStream::try_default().map_err(|e| format!("audio output: {e:?}"))?;
     let sink = Sink::try_new(&handle).map_err(|e| format!("sink: {e:?}"))?;
+    if !cue.is_current() {
+        return Ok(());
+    }
     sink.append(silence(CUE_OUTPUT_WARMUP));
     match cue {
         Cue::Start(_) => {

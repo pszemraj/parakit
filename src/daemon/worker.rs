@@ -221,7 +221,15 @@ where
         rx,
         lifetime: _lifetime,
     } = ctx;
-    let mut model = ModelSlot::new(engine, model_idle_minutes);
+    // Identity belongs to the resident session, including across file changes.
+    let with_metadata = |engine: E| {
+        let metadata = data_log
+            .as_ref()
+            .and_then(|_| engine.inference_metadata(&recipe));
+        (engine, metadata)
+    };
+    let mut model = ModelSlot::new(with_metadata(engine), model_idle_minutes);
+    let mut load = || load().map(with_metadata);
     state.set_model_status(model.status());
 
     // Cleaner-derived telemetry is fixed for the worker's lifetime; only the
@@ -323,7 +331,7 @@ where
                 let _activity = activity;
                 let mut completion = Completion::new(completion);
                 let stop_started = Instant::now();
-                let drain_elapsed = stop_started.saturating_duration_since(stopped_at);
+                let release_to_worker = stop_started.saturating_duration_since(stopped_at);
                 let secs = pcm.len() as f32 / TARGET_RATE as f32;
                 let wall_secs = stopped_at.duration_since(started_at).as_secs_f32();
                 // A transient reload failure at PTT start must not discard the
@@ -342,7 +350,7 @@ where
                     sounds.error();
                     continue;
                 }
-                let engine = match model.engine() {
+                let (engine, inference_metadata) = match model.engine() {
                     Ok(engine) => engine,
                     Err(error) => {
                         let error = format!("{error:#}");
@@ -398,7 +406,7 @@ where
                                     rules_fired: &transcript.rules_fired,
                                     failure: transcript.cleaning_failure.as_deref(),
                                 },
-                                engine.inference_metadata(&recipe),
+                                inference_metadata.clone(),
                             )
                         });
                         let transcript_chars = transcript.cleaned.chars().count();
@@ -465,10 +473,10 @@ where
                                 );
                                 let insert_elapsed = insert_started.elapsed();
                                 let worker_elapsed = stop_started.elapsed();
-                                let total_elapsed = drain_elapsed + worker_elapsed;
+                                let total_elapsed = release_to_worker + worker_elapsed;
                                 log.verbose(format!(
-                                    "parakit: timings drain={}ms infer={}ms clean={}ms insert={}ms worker={}ms total={}ms",
-                                    drain_elapsed.as_secs_f32() * 1000.0,
+                                    "parakit: timings release_to_worker={}ms infer={}ms clean={}ms insert={}ms worker={}ms total={}ms",
+                                    release_to_worker.as_secs_f32() * 1000.0,
                                     transcript.infer_elapsed.as_secs_f32() * 1000.0,
                                     transcript.clean_elapsed.as_secs_f32() * 1000.0,
                                     insert_elapsed.as_secs_f32() * 1000.0,
@@ -601,14 +609,15 @@ fn capture_should_skip(pcm: &[f32]) -> bool {
         return true;
     }
 
-    let mut peak = 0.0_f32;
     let mut sum_squares = 0.0_f64;
     for sample in pcm {
-        peak = peak.max(sample.abs());
+        if sample.abs() >= SILENCE_PEAK_THRESHOLD {
+            return false;
+        }
         sum_squares += f64::from(*sample) * f64::from(*sample);
     }
     let rms = (sum_squares / pcm.len() as f64).sqrt() as f32;
-    peak < SILENCE_PEAK_THRESHOLD && rms < SILENCE_RMS_THRESHOLD
+    rms < SILENCE_RMS_THRESHOLD
 }
 
 #[cfg(test)]

@@ -648,6 +648,37 @@ fn source_aware_identity_detects_default_source_switch() {
     assert_eq!(first.input_rate, 48_000);
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn source_description_preserves_opened_capture_format() {
+    let mut info = MicInfo {
+        name: "default".to_owned(),
+        input_rate: TARGET_RATE,
+        channels: 1,
+        sample_format: "F32".to_owned(),
+        source_id: None,
+        resampling: false,
+        config_note: None,
+    };
+    super::device::apply_source_description(
+        &mut info,
+        super::super::pactl::PactlSourceInfo {
+            name: "alsa_input.test".to_owned(),
+            description: Some("Physical microphone".to_owned()),
+            rate: Some(48_000),
+            channels: Some(2),
+            sample_format: Some("s24le".to_owned()),
+        },
+    );
+    assert_eq!(info.name, "Physical microphone");
+    assert_eq!(info.source_id.as_deref(), Some("alsa_input.test"));
+    assert_eq!(info.input_rate, TARGET_RATE);
+    assert_eq!(info.channels, 1);
+    assert_eq!(info.sample_format, "F32");
+    assert!(!info.resampling);
+    assert!(info.summary().contains("16000 Hz input/model"));
+}
+
 #[test]
 fn resampler_flushes_resets_tail_and_reuses_chunk_buffers() {
     let mut pipeline = CapturePipeline {

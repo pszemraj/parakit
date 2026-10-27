@@ -3,7 +3,7 @@
 use anyhow::{anyhow, Context, Result};
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{BufReader, Read, Seek};
 use std::path::Path;
 
 const GGUF_TYPE_UINT8: u32 = 0;
@@ -48,7 +48,8 @@ const COMMON_DTYPE_NAMES: &[(u32, &str)] = &[
 /// header. Runtime callers should usually display `unknown` instead of
 /// treating this as fatal.
 fn detect_dtype(path: &Path) -> Result<Option<String>> {
-    let mut file = File::open(path).with_context(|| format!("open {}", path.display()))?;
+    let mut file =
+        BufReader::new(File::open(path).with_context(|| format!("open {}", path.display()))?);
     let mut magic = [0_u8; 4];
     file.read_exact(&mut magic)?;
     if &magic != b"GGUF" {
@@ -96,7 +97,7 @@ pub fn dtype_label(path: &Path) -> String {
         .unwrap_or_else(|| "unknown".to_string())
 }
 
-fn dominant_tensor_type(file: &mut File, tensor_count: u64) -> Result<Option<&'static str>> {
+fn dominant_tensor_type(file: &mut impl Read, tensor_count: u64) -> Result<Option<&'static str>> {
     let mut counts: HashMap<u32, u64> = HashMap::new();
     for _ in 0..tensor_count {
         let _name = read_string(file)?;
@@ -146,12 +147,21 @@ fn dtype_name(code: u32, extras: &[(u32, &'static str)]) -> Option<&'static str>
         .find_map(|(candidate, name)| (*candidate == code).then_some(*name))
 }
 
-fn skip_value(file: &mut File, value_type: u32) -> Result<()> {
+fn fixed_value_size(value_type: u32) -> Option<u64> {
     match value_type {
-        GGUF_TYPE_UINT8 | GGUF_TYPE_INT8 | GGUF_TYPE_BOOL => skip_bytes(file, 1),
-        GGUF_TYPE_UINT16 | GGUF_TYPE_INT16 => skip_bytes(file, 2),
-        GGUF_TYPE_UINT32 | GGUF_TYPE_INT32 | GGUF_TYPE_FLOAT32 => skip_bytes(file, 4),
-        GGUF_TYPE_UINT64 | GGUF_TYPE_INT64 | GGUF_TYPE_FLOAT64 => skip_bytes(file, 8),
+        GGUF_TYPE_UINT8 | GGUF_TYPE_INT8 | GGUF_TYPE_BOOL => Some(1),
+        GGUF_TYPE_UINT16 | GGUF_TYPE_INT16 => Some(2),
+        GGUF_TYPE_UINT32 | GGUF_TYPE_INT32 | GGUF_TYPE_FLOAT32 => Some(4),
+        GGUF_TYPE_UINT64 | GGUF_TYPE_INT64 | GGUF_TYPE_FLOAT64 => Some(8),
+        _ => None,
+    }
+}
+
+fn skip_value(file: &mut (impl Read + Seek), value_type: u32) -> Result<()> {
+    if let Some(size) = fixed_value_size(value_type) {
+        return skip_bytes(file, size);
+    }
+    match value_type {
         GGUF_TYPE_STRING => {
             let len = read_u64(file)?;
             skip_bytes(file, len)
@@ -159,6 +169,13 @@ fn skip_value(file: &mut File, value_type: u32) -> Result<()> {
         GGUF_TYPE_ARRAY => {
             let item_type = read_u32(file)?;
             let len = read_u64(file)?;
+            if let Some(size) = fixed_value_size(item_type) {
+                return skip_bytes(
+                    file,
+                    len.checked_mul(size)
+                        .context("GGUF array byte count overflow")?,
+                );
+            }
             for _ in 0..len {
                 skip_value(file, item_type)?;
             }
@@ -168,13 +185,13 @@ fn skip_value(file: &mut File, value_type: u32) -> Result<()> {
     }
 }
 
-fn skip_bytes(file: &mut File, len: u64) -> Result<()> {
+fn skip_bytes(file: &mut impl Seek, len: u64) -> Result<()> {
     let len = i64::try_from(len).context("GGUF value too large to seek past")?;
-    file.seek(SeekFrom::Current(len))?;
+    file.seek_relative(len)?;
     Ok(())
 }
 
-fn read_string(file: &mut File) -> Result<String> {
+fn read_string(file: &mut impl Read) -> Result<String> {
     let len = read_u64(file)?;
     if len > 1024 * 1024 {
         return Err(anyhow!("GGUF string length is too large: {len}"));
@@ -184,13 +201,13 @@ fn read_string(file: &mut File) -> Result<String> {
     String::from_utf8(buf).context("GGUF string is not UTF-8")
 }
 
-fn read_u32(file: &mut File) -> Result<u32> {
+fn read_u32(file: &mut impl Read) -> Result<u32> {
     let mut buf = [0_u8; 4];
     file.read_exact(&mut buf)?;
     Ok(u32::from_le_bytes(buf))
 }
 
-fn read_u64(file: &mut File) -> Result<u64> {
+fn read_u64(file: &mut impl Read) -> Result<u64> {
     let mut buf = [0_u8; 8];
     file.read_exact(&mut buf)?;
     Ok(u64::from_le_bytes(buf))
@@ -199,7 +216,37 @@ fn read_u64(file: &mut File) -> Result<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
+    use std::io::{Cursor, Write};
+
+    #[test]
+    fn buffered_metadata_skips_arrays_and_preserves_following_values() {
+        let mut bytes = Vec::new();
+        bytes.extend(GGUF_TYPE_FLOAT32.to_le_bytes());
+        bytes.extend(200_000_u64.to_le_bytes());
+        bytes.resize(bytes.len() + 800_000, 0);
+        bytes.extend(GGUF_TYPE_STRING.to_le_bytes());
+        bytes.extend(2_u64.to_le_bytes());
+        for value in ["small", "Unicode 雪"] {
+            bytes.extend((value.len() as u64).to_le_bytes());
+            bytes.extend(value.as_bytes());
+        }
+        bytes.extend(7_u32.to_le_bytes());
+        let mut reader = BufReader::new(Cursor::new(bytes));
+        skip_value(&mut reader, GGUF_TYPE_ARRAY).unwrap();
+        skip_value(&mut reader, GGUF_TYPE_ARRAY).unwrap();
+        assert_eq!(read_u32(&mut reader).unwrap(), 7);
+    }
+
+    #[test]
+    fn numeric_array_skips_reject_overflow() {
+        for len in [u64::MAX, i64::MAX as u64 / 8 + 1] {
+            let mut bytes = Vec::new();
+            bytes.extend(GGUF_TYPE_FLOAT64.to_le_bytes());
+            bytes.extend(len.to_le_bytes());
+            let error = skip_value(&mut Cursor::new(bytes), GGUF_TYPE_ARRAY).unwrap_err();
+            assert!(error.to_string().contains("GGUF"));
+        }
+    }
 
     #[test]
     fn detects_general_file_type() {

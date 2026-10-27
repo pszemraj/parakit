@@ -179,13 +179,13 @@ impl Drop for FakeEngine {
     }
 }
 
-fn test_worker_ctx(
-    engine: FakeEngine,
+fn test_worker_ctx<E>(
+    engine: E,
     state: &Arc<SharedState>,
     sounds: Sounds,
     rx: Receiver<WorkerEvent>,
     model_idle_minutes: u64,
-) -> WorkerCtx<FakeEngine> {
+) -> WorkerCtx<E> {
     let log = Arc::new(Logger::new(super::super::logging::LogLevel::Quiet));
     WorkerCtx {
         engine,
@@ -214,6 +214,96 @@ fn test_worker_ctx(
         rx,
         lifetime: state.shutdown.register(),
     }
+}
+
+#[test]
+fn logging_metadata_stays_with_the_resident_session_until_reload() {
+    struct MetadataEngine(Arc<AtomicUsize>);
+    impl WorkerEngine for MetadataEngine {
+        fn transcribe(&self, _: &[f32]) -> Result<String> {
+            Ok("dictation".to_owned())
+        }
+
+        fn inference_metadata(&self, recipe: &EngineRecipe) -> Option<InferenceLogFields> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Some(InferenceLogFields {
+                model: "fixture.gguf".to_owned(),
+                model_preset: None,
+                backend: "test".to_owned(),
+                quantization: std::fs::read_to_string(&recipe.model_path).unwrap(),
+                requested_device: recipe.device_mode,
+                session_device: recipe.device_mode,
+                confirmed_device: Some("cpu".to_owned()),
+                qwen_language: None,
+                qwen_max_new_tokens: None,
+                native_api_version: None,
+            })
+        }
+    }
+
+    let root = crate::test_support::fixture_root("worker-metadata", "reload");
+    let model_path = root.join("model-label");
+    std::fs::write(&model_path, "Q8_0").unwrap();
+    let state = Arc::new(SharedState::new());
+    state.activity.ready();
+    let lease = state.activity.begin();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let (tx, rx) = crossbeam_channel::bounded(2);
+    let mut ctx = test_worker_ctx(
+        MetadataEngine(Arc::clone(&calls)),
+        &state,
+        Sounds::new(false),
+        rx,
+        1,
+    );
+    ctx.recipe.model_path = model_path.clone();
+    let log_dir = root.join("logs");
+    ctx.settings.data_log = Some(Arc::new(DataLogger::new(log_dir.clone())));
+    let reload_calls = Arc::clone(&calls);
+    let worker = std::thread::spawn(move || {
+        worker_loop_with(ctx, Some(Duration::from_millis(20)), || {
+            Ok(MetadataEngine(Arc::clone(&reload_calls)))
+        });
+    });
+    let transcribe = || {
+        let (done_tx, done_rx) = crossbeam_channel::bounded(1);
+        tx.send(stopped_capture(
+            Instant::now(),
+            vec![0.1; 160],
+            Some(state.activity.begin()),
+            done_tx,
+        ))
+        .unwrap();
+        done_rx
+            .recv_timeout(Duration::from_secs(2))
+            .unwrap()
+            .unwrap();
+    };
+    transcribe();
+    std::fs::write(&model_path, "F16").unwrap();
+    transcribe();
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    drop(lease);
+    wait_for_state(&state, Residency::Offloaded);
+    transcribe();
+    drop(tx);
+    worker.join().unwrap();
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+    let rows: Vec<serde_json::Value> = std::fs::read_dir(log_dir)
+        .unwrap()
+        .flat_map(|entry| {
+            std::fs::read_to_string(entry.unwrap().path())
+                .unwrap()
+                .lines()
+                .map(|line| serde_json::from_str(line).unwrap())
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    let quantizations: Vec<_> = rows
+        .iter()
+        .filter_map(|row| row["inference"]["quantization"].as_str())
+        .collect();
+    assert_eq!(quantizations, ["Q8_0", "Q8_0", "F16"]);
 }
 
 fn next_cue(cues: &Receiver<Cue>) -> Cue {
@@ -257,6 +347,10 @@ fn silence_gate_skips_empty_and_quiet_audio_only() {
     assert!(capture_should_skip(&[0.0001; 160]));
     assert!(!capture_should_skip(&[0.0, 0.2]));
     assert!(!capture_should_skip(&[0.01; 16]));
+    assert!(!capture_should_skip(&[SILENCE_PEAK_THRESHOLD]));
+    assert!(!capture_should_skip(&[-SILENCE_PEAK_THRESHOLD]));
+    assert!(capture_should_skip(&[SILENCE_RMS_THRESHOLD * 0.5; 160]));
+    assert!(!capture_should_skip(&[SILENCE_RMS_THRESHOLD; 160]));
 }
 
 #[test]
