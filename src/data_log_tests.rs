@@ -78,6 +78,7 @@ fn jsonl_round_trips_adversarial_transcript_content() {
 
 fn sample_insertion_fields() -> InsertionLogFields<'static> {
     InsertionLogFields {
+        insertion_backend: Some("clipboard"),
         outcome: "pasted",
         target_bundle_id: Some("com.example.App"),
         focus_verification: "not_applicable",
@@ -179,6 +180,7 @@ fn jsonl_log_insertion_emits_correlated_second_line() {
             "session_id",
             "ref_id",
             "outcome",
+            "insertion_backend",
             "target_bundle_id",
             "focus_verification",
             "transcript_chars",

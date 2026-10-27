@@ -1,6 +1,6 @@
 # Configuration
 
-parakit reads an optional TOML file for daemon defaults, cleaning behavior, transcription logging, the Linux hotkey backend, and user-defined cleaning rules. A missing file is valid and selects built-in defaults.
+parakit reads an optional TOML file for daemon defaults, cleaning behavior, transcription logging, Linux insertion and hotkey backends, and user-defined cleaning rules. A missing file is valid and selects built-in defaults.
 
 A small config that keeps the trailing period that cleanup drops by default and leaves spoken single-digit numbers below five as the model produced them:
 
@@ -36,7 +36,7 @@ parakit config edit
 
 `config path` prints the resolved path without reading the file. `config init` creates any missing parent directories and writes the fully commented template. `config show`, which is also what bare `parakit config` runs, loads and validates the file and prints the resolved path plus the effective value of every key. `config edit` writes the template first when the file is missing, then opens the file in `$VISUAL`, or in `$EDITOR` when `VISUAL` is unset, empty, or whitespace-only.
 
-On Linux, `config show` also includes the selected hotkey backend.
+On Linux, `config show` also includes the selected insertion and hotkey backends. The default `daemon.insertion_backend = "auto"` prefers IBus and retains supported X11 fallback; setup is in [Linux desktop input](linux-desktop.md#ibus-setup).
 
 ### Details
 
@@ -102,4 +102,4 @@ parakit stop
 parakit start --log-dir "$HOME/.parakit/logs" --quiet & disown
 ```
 
-A broken config does not block repair or control commands that do not need daemon settings: `fetch`, `cache`, `config path`, `config init`, `config edit`, `status`, `stop`, `copy-last`, `history`, and `test-paste`. `config show`, `doctor`, `rules list`, `rules test`, PTT simulation, and daemon startup do load it.
+A broken config does not block repair or control commands that do not need daemon settings: `fetch`, `cache`, `config path`, `config init`, `config edit`, `status`, `stop`, `copy-last`, `history`, `test-paste`, and Linux `ibus` commands. `config show`, `doctor`, `rules list`, `rules test`, PTT simulation, and daemon startup do load it.

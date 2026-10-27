@@ -95,6 +95,10 @@ libc = "0.2"
 # Threading conveniences
 crossbeam-channel = "0.5"
 
+# Interactive transcript history; non-terminal output remains plain text.
+ratatui = { version = "0.29", default-features = false, features = ["crossterm", "unstable-rendered-line-info"], optional = true }
+crossterm = { version = "0.28", optional = true }
+
 [target.'cfg(target_os = "linux")'.dependencies]
 # Linux default hotkey capture registers Ctrl+Space with the X11 desktop.
 global-hotkey = { version = "0.8", optional = true }
@@ -137,7 +141,7 @@ objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSAp
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["NSDate", "NSGeometry", "NSObjCRuntime", "NSRunLoop", "NSString"] }
 
 [features]
-default = ["bundled", "daemon"]
+default = ["bundled", "daemon", "ibus"]
 
 # Live push-to-talk daemon dependencies. Keeping this as a feature lets the
 # WAV-only transcribe-file quality target build on machines missing
@@ -145,15 +149,21 @@ default = ["bundled", "daemon"]
 daemon = [
   "dep:arboard",
   "dep:cpal",
+  "dep:crossterm",
   "dep:enigo",
   "dep:epoll",
   "dep:evdev-rs",
   "dep:global-hotkey",
   "dep:notify-rust",
   "dep:rdev",
+  "dep:ratatui",
   "dep:rodio",
   "dep:x11rb",
 ]
+
+# Native Linux input-method insertion. Disable defaults and select bundled,
+# daemon explicitly for an X11-only build. Other platforms do not link IBus.
+ibus = ["daemon"]
 
 # Build libcrispasr from `vendor/CrispASR` via cmake. On by default.
 # Disable with `--no-default-features --features daemon` to build the daemon
@@ -173,6 +183,7 @@ vulkan  = ["bundled"]
 cc = "1"
 cmake = "0.1"
 serde_json = "1"
+pkg-config = "0.3"
 
 [profile.release]
 opt-level = 3

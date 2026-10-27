@@ -2,6 +2,20 @@
 
 use super::*;
 
+#[test]
+fn history_picker_requires_interactive_nonquiet_streams() {
+    assert!(history_picker_enabled(false, None, false, true, true));
+    for (plain, text, quiet, input, output) in [
+        (true, None, false, true, true),
+        (false, Some(1), false, true, true),
+        (false, None, true, true, true),
+        (false, None, false, false, true),
+        (false, None, false, true, false),
+    ] {
+        assert!(!history_picker_enabled(plain, text, quiet, input, output));
+    }
+}
+
 #[cfg(any(unix, target_os = "windows"))]
 #[test]
 fn daemon_not_running_disposition_covers_every_control_command() {
@@ -22,6 +36,28 @@ fn daemon_not_running_disposition_covers_every_control_command() {
         ),
         (
             IpcCommand::History { limit: None },
+            DaemonNotRunningDisposition::Error(
+                "daemon is not running; start it with `parakit start` first",
+            ),
+        ),
+        (
+            IpcCommand::HistoryText {
+                reference: HistoryReference {
+                    session: "previous".into(),
+                    entry: 0,
+                },
+            },
+            DaemonNotRunningDisposition::Error(
+                "daemon is not running; start it with `parakit start` first",
+            ),
+        ),
+        (
+            IpcCommand::CopyHistory {
+                reference: HistoryReference {
+                    session: "previous".into(),
+                    entry: 0,
+                },
+            },
             DaemonNotRunningDisposition::Error(
                 "daemon is not running; start it with `parakit start` first",
             ),

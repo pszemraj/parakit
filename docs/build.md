@@ -8,15 +8,15 @@ Install Rust via [rustup](https://rustup.rs) if you do not already have a toolch
 
 ## Native Dependencies
 
-Cargo handles Rust packages. System packages are still needed for audio, desktop input, X11/XTest insertion, CMake, and optional accelerator SDKs.
+Cargo handles Rust packages. System packages are still needed for audio, IBus input, X11/XTest fallback insertion, CMake, and optional accelerator SDKs.
 
 CMake 3.19 or newer is required for bundled builds.
 
 | OS | Packages |
 | --- | --- |
-| Ubuntu 24.04 | `cmake build-essential libasound2-dev libxtst-dev libxi-dev libx11-dev libxkbcommon-dev libevdev-dev libxdo-dev libgomp1 pkg-config` |
-| Fedora | `cmake gcc-c++ alsa-lib-devel libXtst-devel libXi-devel libX11-devel libxkbcommon-devel libevdev-devel xdotool-devel pkgconf` |
-| Arch | `cmake base-devel alsa-lib libxtst libxi libx11 libxkbcommon libevdev xdotool pkgconf` |
+| Ubuntu 24.04 | `cmake build-essential libasound2-dev libibus-1.0-dev libxtst-dev libxi-dev libx11-dev libxkbcommon-dev libevdev-dev libxdo-dev libgomp1 pkg-config` |
+| Fedora | `cmake gcc-c++ alsa-lib-devel ibus-devel libXtst-devel libXi-devel libX11-devel libxkbcommon-devel libevdev-devel xdotool-devel pkgconf` |
+| Arch | `cmake base-devel alsa-lib ibus libxtst libxi libx11 libxkbcommon libevdev xdotool pkgconf` |
 | Windows | Visual Studio 2022 with the "Desktop development with C++" workload, plus CMake on `PATH`. Windows bundle prerequisites and procedures are in the [Windows build guide](../scripts/windows/README.md). |
 | macOS | Apple Silicon with Xcode command line tools plus `cmake pkg-config`. |
 
@@ -45,6 +45,14 @@ cargo install --locked --path .
 ```
 
 `cargo install --locked --path .` installs the release binary to Cargo's bin directory, usually `~/.cargo/bin`, using the validated `Cargo.lock` dependency set that supports the declared Rust 1.87 minimum.
+
+Linux builds enable IBus by default. Complete the one-time [IBus registration and input-source setup](linux-desktop.md#ibus-setup) after installing. To build an X11-only daemon without the IBus dependency:
+
+```bash
+cargo install --locked --path . --no-default-features --features bundled,daemon
+```
+
+That build retains X11 clipboard paste and direct typing, and cannot provide native GNOME Wayland dictation. Add `--features cuda` or `--features vulkan` when the corresponding accelerator is wanted.
 
 Install behavior:
 

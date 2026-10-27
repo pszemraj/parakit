@@ -1,6 +1,6 @@
 # Architecture
 
-parakit keeps the daemon thread-based. There is no long-running async runtime.
+Parakit keeps the daemon thread-based. There is no long-running Rust async runtime.
 
 ## Thread Model
 
@@ -15,8 +15,11 @@ optional sound thread        opens rodio output only while playing cue tones
 notification thread          delivers desktop notifications from a bounded queue
 IPC listener thread          accepts local control connections
 IPC client threads           handle status, stop, copy-last, history, and test-paste
+Linux IBus client thread     watches the helper and sends guarded native commits through GDBus
 Windows clipboard thread     observes clipboard-history acknowledgement when available
 ```
+
+On Linux, IBus separately manages `parakit ibus engine`. Its GLib event loop owns the factory, `IBusEngineSimple` instances, native target generations, and commit callbacks. It runs no audio, model, or daemon-config code. The user's existing daemon startup remains independent of this input-method process.
 
 ## State Machine
 
@@ -26,7 +29,7 @@ Idle
 Recording
   PTT up
 Transcribing
-  paste, optional clipboard fallback, block, or skip
+  native submission, paste, optional clipboard fallback, block, or skip
 Idle
 ```
 
@@ -46,12 +49,15 @@ Live capture drains callback audio through a bounded single-producer/single-cons
 - `rodio::OutputStream` is not reliably `Send`, so cue playback lives on its own thread and opens output only for the duration of a cue.
 - `crispasr::Session` is `Send` but not `Sync`, so the worker owns `Engine` directly. Do not wrap it in `Arc<Engine>`.
 - Hotkey backends emit only logical press/release transitions. They do not call audio, ASR, clipboard, or insertion code.
+- The IBus engine captures its native target token at the actual PTT press callback. The coordinator carries that token through capture and inference; it does not replace it with a later snapshot.
 - Runtime focus and insertion behavior is in [running.md#insertion](../running.md#insertion); backend setup is in [linux-desktop.md](../linux-desktop.md), [macos-desktop.md](../macos-desktop.md), and [windows-desktop.md](../windows-desktop.md).
 - Normal dictation hotkey backends must suppress the literal Space key before it reaches the focused application. The passive `x11-listen` backend is for debugging and does not suppress keys.
 
 Cross-thread communication uses atomics, mutex-protected buffers, and channels.
 
 Configuration sections provide built-in fallbacks; CLI resolvers apply overrides. Normal startup and WAV simulation share resolved idle, logging, paste-mode, and clipboard-retention values through `WorkerSettings`. The banner borrows the `DaemonInfo` stored for IPC status. Mode-specific resources remain explicit in `WorkerCtx`: simulation has a silent notifier, disabled sounds and insertion, and no daemon singleton or control endpoint. Normal startup exposes IPC before cleaner/model initialization; the worker lifetime still follows native-session ownership.
+
+The Linux daemon attaches to the helper over IBus's private bus and advertises recording readiness. Input callbacks emit directed PTT signals without waiting for daemon work. A native token includes helper/attachment lifetime, engine identity, and focus generation. Validation and `commit_text` run together on the helper's owning loop. Disconnects and relevant lifecycle changes invalidate pending delivery; uncertain submissions are never retried or replayed after reconnect.
 
 ## Module Map
 
@@ -71,7 +77,11 @@ Configuration sections provide built-in fallbacks; CLI resolvers apply overrides
 | `src/daemon/worker_shutdown.rs` | Worker lifetime and bounded IPC shutdown handshake. |
 | `src/app/simulation.rs` | Acknowledged WAV dictations and configured idle/reload validation. |
 | `src/app/config_command.rs` | `parakit config` subcommands: show, path, init, and edit. |
+| `src/ibus_command.rs` | Linux IBus registration, removal, read-only setup status, and the IBus-managed engine entry point. |
+| `src/daemon/desktop/ibus/` | Native IBus engine/factory, daemon GDBus client, target lifetimes, and submission evidence. |
+| `src/daemon/desktop/linux_insertion.rs` | Linux insertion-backend selection and recording target capture independent of clipboard paste mode. |
 | `src/daemon/ipc.rs`, `src/daemon/ipc/{client,unix_socket,windows_pipe}.rs` | Local IPC for `status`, `stop`, `copy-last`, `history`, and `test-paste`: shared protocol and in-memory transcript ring buffer, the control client, and the Unix-socket and Windows named-pipe transports. |
+| `src/daemon/ipc/{history,history_picker}.rs` | Stable full-text history lookup/copy and the terminal picker. |
 | `src/daemon/desktop/windows_{clipboard_history,focus,input,paste_smoke,security}.rs` | Windows clipboard-history acknowledgement, foreground checks, `SendInput` helpers, deep paste smoke test, and privilege diagnostics. |
 | `src/daemon/{preflight,audio/alsa,desktop/session,desktop/wsl,desktop/x11,desktop/inject_smoke}.rs`, `src/daemon/audio/alsa_silence.c`, `src/daemon/macos.rs`, `src/daemon/macos/{permissions,focus,insertion_cgevent,cgevent_ffi,pasteboard,diagnostics}.rs` | Startup checks, macOS TCC/focus/insertion/acknowledgement helpers and event-tap FFI, the macOS and X11 deep paste smoke tests, ALSA stderr suppression, X11/Wayland session and WSL checks, and X11 helpers. |
 | `src/daemon/{logging,notifications,sounds}.rs` | Runtime logging, desktop notifications, and generated audio cues. |
@@ -99,6 +109,8 @@ Configuration sections provide built-in fallbacks; CLI resolvers apply overrides
 Any failed required startup or preflight step stops the process. This includes config and cleaner validation, session and singleton checks, insertion and local IPC setup, and opening the model, microphone, or hotkey backend.
 
 Runtime failures are reported and the daemon continues when possible: sound cues, log writes, individual transcriptions, and text insertion failures.
+
+Native IBus readiness is evaluated at delivery, rather than inferred from a running bus or an XWayland display. A native rejection, submitted commit, and uncertain reply are distinct outcomes. Native paths preserve the clipboard and retain recovery text in enabled daemon history. The history picker uses references scoped to a daemon session and entry, so a new transcript or restarted daemon cannot substitute a different selection.
 
 `ClipboardSnapshot` in `daemon/desktop/clipboard_store.rs` shares capture, borrowed restoration, and exact payload comparison. Borrowed restoration retains the saved value for cleanup retries. The macOS doctor's independent read-back and repair behavior is described under [deep diagnostics](../macos-desktop.md#doctor---deep); production generation checks remain in `StagedClipboard`.
 

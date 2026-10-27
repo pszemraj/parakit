@@ -21,15 +21,14 @@
 //!
 //! `CRISPASR_SRC_DIR=/path/to/source` changes the bundled native source tree;
 //! it does not change the vendored Rust dependencies.
-//!
-//! These still require Cargo to load the `crispasr` Rust path dependency unless
-//! the manifest is changed, so a missing submodule must be fixed before Cargo
-//! can start this script.
 
 use std::collections::BTreeMap;
 use std::env;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+
+#[path = "build/ibus.rs"]
+mod ibus;
 
 #[path = "build/native_link.rs"]
 mod native_link;
@@ -71,6 +70,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed=BLAS_INCLUDE_DIRS");
     println!("cargo:rerun-if-env-changed=BLAS_LIBRARIES");
     println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-changed=build/ibus.rs");
     println!("cargo:rerun-if-changed=build/native_link.rs");
     println!("cargo:rerun-if-changed=build/native_correctness.rs");
     println!("cargo:rerun-if-changed=build/native_correctness.cmake");
@@ -84,6 +84,7 @@ fn main() {
 
     let bundled = cargo_feature("bundled");
     build_alsa_silencer(cargo_feature("daemon"));
+    ibus::build();
     native_link::emit_cpp_runtime();
     native_link::warn_if_sys_native_build_ran();
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());

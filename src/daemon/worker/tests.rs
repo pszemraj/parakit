@@ -11,6 +11,92 @@ struct FakeEngine {
     transcript: std::result::Result<&'static str, &'static str>,
 }
 
+/// Exercise native delivery through the production worker without microphone input.
+#[cfg(all(target_os = "linux", feature = "ibus"))]
+#[test]
+#[ignore = "requires an isolated IBus engine and focused native test application"]
+fn live_native_worker_inserts_without_x11() {
+    use crate::daemon::desktop::ibus::IbusClient;
+    let client = IbusClient::start().unwrap();
+    client.set_ready(true);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if client.snapshot().is_some_and(|target| target.eligible()) {
+            break;
+        }
+        assert!(Instant::now() < deadline, "no eligible native test field");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let focus = crate::daemon::inject::FocusSource {
+        backend: crate::daemon::desktop::linux_insertion::InsertionBackend::Auto,
+        mode: PasteMode::Standard,
+        client: Some(client.clone()),
+    }
+    .capture()
+    .unwrap();
+    assert!(focus.is_native());
+    run_live_worker(focus, "Worker café 世界. e\u{301} 👋", true);
+    client.set_ready(false);
+}
+
+/// Exercise the existing clipboard paste path in an isolated focused X11 field.
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "requires an isolated X11 server and focused text field"]
+fn live_x11_worker_pastes_into_focused_field() {
+    let focus = crate::daemon::inject::FocusSource {
+        backend: crate::daemon::desktop::linux_insertion::InsertionBackend::Auto,
+        mode: PasteMode::Standard,
+        client: None,
+    }
+    .capture()
+    .unwrap();
+    assert!(!focus.is_native());
+    run_live_worker(focus, "X11 worker café 世界", false);
+}
+
+/// Send a controlled transcript through production insertion and verify recovery text.
+#[cfg(target_os = "linux")]
+fn run_live_worker(focus: FocusSnapshot, text: &'static str, keep_clipboard: bool) {
+    let state = Arc::new(SharedState::new());
+    state.activity.ready();
+    let (tx, rx) = crossbeam_channel::bounded(2);
+    let mut ctx = test_worker_ctx(
+        FakeEngine {
+            transcriptions: Arc::new(AtomicUsize::new(0)),
+            drops: Arc::new(AtomicUsize::new(0)),
+            transcript: Ok(text),
+        },
+        &state,
+        Sounds::new(false),
+        rx,
+        0,
+    );
+    ctx.insert_transcripts = true;
+    ctx.settings.keep_transcript_clipboard = keep_clipboard;
+    let worker = std::thread::spawn(move || {
+        worker_loop_with(ctx, None, || anyhow::bail!("unexpected model reload"));
+    });
+    let (done_tx, done_rx) = crossbeam_channel::bounded(1);
+    let now = Instant::now();
+    tx.send(WorkerEvent::Stopped {
+        started_at: now,
+        stopped_at: now + Duration::from_millis(500),
+        pcm: vec![0.1; TARGET_RATE as usize / 2],
+        focus_at_start: Some(Box::new(focus)),
+        activity: Some(state.activity.begin()),
+        completion: Some(done_tx),
+    })
+    .unwrap();
+    drop(tx);
+    done_rx
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap()
+        .unwrap();
+    worker.join().unwrap();
+    assert_eq!(state.resolve_transcript(0).unwrap(), text);
+}
+
 impl WorkerEngine for FakeEngine {
     fn transcribe(&self, _pcm: &[f32]) -> Result<String> {
         self.transcriptions.fetch_add(1, Ordering::SeqCst);

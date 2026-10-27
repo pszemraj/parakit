@@ -3,6 +3,58 @@
 use super::*;
 use crate::daemon::logging::LogLevel;
 
+#[cfg(target_os = "linux")]
+#[test]
+fn unavailable_native_target_never_stages_clipboard_or_opens_x11() {
+    let log = Arc::new(Logger::new(LogLevel::Quiet));
+    let notifier = Notifier::silent(Arc::clone(&log));
+    let snapshot = FocusSnapshot::from_native(None, None);
+    let mut injector = None;
+    let verification = Cell::new("not_applicable");
+    let report = insert_text(
+        &mut injector,
+        "recover this dictation",
+        PasteMode::Terminal,
+        true,
+        FocusCheck {
+            snapshot: Some(&snapshot),
+            verification: &verification,
+        },
+        (&log, &notifier),
+    )
+    .unwrap();
+    assert_eq!(report.outcome, InsertOutcome::Blocked);
+    assert!(injector.is_none());
+    assert!(!report.telemetry.paste_event_posted);
+    assert_eq!(report.telemetry.clipboard_restored, None);
+    assert!(insertion_result_remembers_transcript(&Ok(report)));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn native_terminal_controls_are_blocked_before_submission() {
+    let log = Arc::new(Logger::new(LogLevel::Quiet));
+    let notifier = Notifier::silent(Arc::clone(&log));
+    let snapshot = FocusSnapshot::from_native(None, None);
+    for text in ["one\ttwo", "one\ntwo"] {
+        let verification = Cell::new("not_applicable");
+        let report = insert_native(
+            text,
+            PasteMode::Terminal,
+            &snapshot,
+            &verification,
+            &log,
+            &notifier,
+        );
+        assert_eq!(report.outcome, InsertOutcome::Blocked);
+        assert!(report
+            .failure_reason
+            .unwrap()
+            .contains("terminal content policy"));
+        assert_eq!(verification.get(), "not_applicable");
+    }
+}
+
 fn assert_notice(
     messages: &std::sync::mpsc::Receiver<crate::daemon::notifications::NotificationMessage>,
     expected: Option<(&str, &str)>,
@@ -110,6 +162,8 @@ fn insertion_failures_remember_transcript_for_ipc_recovery() {
     /// expectation.
     fn expected_remembers_transcript(outcome: InsertOutcome) -> bool {
         match outcome {
+            #[cfg(target_os = "linux")]
+            InsertOutcome::Submitted | InsertOutcome::Uncertain => true,
             InsertOutcome::Pasted
             | InsertOutcome::PastedUnverified
             | InsertOutcome::CopiedOnly
@@ -119,6 +173,10 @@ fn insertion_failures_remember_transcript_for_ipc_recovery() {
     }
 
     let outcomes = [
+        #[cfg(target_os = "linux")]
+        InsertOutcome::Submitted,
+        #[cfg(target_os = "linux")]
+        InsertOutcome::Uncertain,
         InsertOutcome::Pasted,
         InsertOutcome::PastedUnverified,
         InsertOutcome::CopiedOnly,
@@ -210,6 +268,10 @@ fn needs_alert_matches_outcome_and_paste_event_posted() {
     /// expectation.
     fn needs_alert_cases(outcome: InsertOutcome) -> &'static [(bool, bool)] {
         match outcome {
+            #[cfg(target_os = "linux")]
+            InsertOutcome::Submitted => &[(false, false)],
+            #[cfg(target_os = "linux")]
+            InsertOutcome::Uncertain => &[(false, true)],
             InsertOutcome::Pasted => &[(true, false)],
             InsertOutcome::PastedUnverified => &[(true, false)],
             InsertOutcome::Skipped => &[(false, true)],
@@ -226,6 +288,10 @@ fn needs_alert_matches_outcome_and_paste_event_posted() {
     }
 
     let outcomes = [
+        #[cfg(target_os = "linux")]
+        InsertOutcome::Submitted,
+        #[cfg(target_os = "linux")]
+        InsertOutcome::Uncertain,
         InsertOutcome::Pasted,
         InsertOutcome::PastedUnverified,
         InsertOutcome::CopiedOnly,

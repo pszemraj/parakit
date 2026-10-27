@@ -19,7 +19,7 @@
 # When it is read: once per process, at startup. The daemon never watches the file, so restart it after every edit.
 # These commands read the file: `parakit start` (and bare `parakit`), `parakit doctor`, `parakit rules list`, `parakit rules test`, and `parakit config show`.
 # Each of them reads the current file on every run, so `rules test` and `config show` check an edit before the daemon is restarted.
-# These commands never read it, so they work with a broken file: `parakit fetch`, `cache`, `status`, `stop`, `copy-last`, `history`, `test-paste`, and `config path`, `init`, `edit`.
+# These commands never read it, so they work with a broken file: `parakit fetch`, `cache`, `status`, `stop`, `copy-last`, `history`, `test-paste`, `ibus`, and `config path`, `init`, `edit`.
 # A second `parakit start` while a daemon is already running prints "already running" and exits before it reads the file.
 #
 # Value conventions: paths are used literally, with no ~ and no environment-variable expansion.
@@ -105,17 +105,26 @@ device = "auto"
 # Recommended: 0 also when the reload delay after a pause is unwelcome. Keep 10, or another value, to free memory during long idle periods.
 model_idle_minutes = 10
 
-# "terminal" | "standard" | "direct" (optional). How a finished transcript is inserted at the cursor.
+# "auto" | "ibus" | "x11". Linux transcript insertion transport.
+# "auto" prefers a valid Parakit IBus target, otherwise retaining supported X11 insertion before native submission.
+# "ibus" requires native insertion. "x11" uses the existing clipboard/direct route and requires an X11 session.
+# Only used when: Linux. macOS and Windows accept any string for dotfile portability, but do not read or validate it.
+# Overridden by: --insertion-backend. `parakit doctor --insertion-backend` overrides it for that check only.
+# See: [Linux setup and native target handling](linux-desktop.md#ibus-setup).
+insertion_backend = "auto"
+
+# "terminal" | "standard" | "direct" (optional). Transcript content policy and the legacy paste shortcut.
 # Unset: "terminal" on Linux, "standard" on macOS and Windows.
-# "terminal" pastes from the clipboard with Ctrl+Shift+V on Linux and Windows and Cmd+V on macOS. Trailing newlines are removed.
-# In "terminal" mode a transcript that still contains a newline is not pasted. It is staged on the clipboard instead (see daemon.keep_transcript_clipboard), with an error tone and a notification.
-# "standard" pastes from the clipboard with Ctrl+V on Linux and Windows and Cmd+V on macOS. Multi-line text is pasted.
+# "terminal" removes trailing newlines and blocks remaining newlines. Native IBus terminal commits also block tabs and retain the transcript in daemon history.
+# The clipboard route uses Ctrl+Shift+V on Linux and Windows and Cmd+V on macOS. Blocked multiline text follows daemon.keep_transcript_clipboard.
+# "standard" allows multi-line text. The clipboard route uses Ctrl+V on Linux and Windows and Cmd+V on macOS.
 # "direct" types the text with synthetic key events and never touches the clipboard. daemon.keep_transcript_clipboard has no effect in this mode.
+# On Linux, "direct" selects X11 even with daemon.insertion_backend = "auto". It conflicts with forced "ibus" and fails startup.
 # On Linux, "direct" blocks a whole transcript that contains a newline, a tab, or another control character after the normalization below, and types nothing.
 # On Linux, "direct" typing waits up to 2 seconds for held modifier keys to be released, and stops partway if focus or modifier state changes.
 # Every mode first normalizes the transcript: CRLF and CR become LF, NUL and the other ASCII control characters except tab and LF are dropped.
 # A transcript that is whitespace-only after normalization is skipped: nothing is pasted or stored in the transcript history, and the error tone plays.
-# Requires: on Linux, an X11 session for every mode (Wayland is rejected at startup), plus the X11 XTest extension for the two paste modes.
+# Requires: on Linux, an X11 session for clipboard paste and direct typing, plus the XTest extension for clipboard paste. Native IBus does not require DISPLAY.
 # Requires: on macOS, Accessibility permission for every mode.
 # Overridden by: the --paste-mode flag. `parakit doctor --paste-mode` overrides this key for that one check only.
 # paste_mode = "standard"
@@ -124,7 +133,7 @@ model_idle_minutes = 10
 # false: after a confirmed paste, the previous clipboard contents (text, HTML, file lists, images) are restored after a short delay.
 # If the previous contents are not a payload parakit can restore, the clipboard is cleared rather than left holding the transcript.
 # true: the transcript stays on the clipboard, and the previous contents are neither read nor restored.
-# Only used when: daemon.paste_mode is "terminal" or "standard". It is ignored with "direct", which never uses the clipboard.
+# Only used when: clipboard insertion with daemon.paste_mode "terminal" or "standard". Native IBus and "direct" never touch the clipboard.
 # Overridden by: the --keep-transcript-clipboard and --no-keep-transcript-clipboard flags, which force the value either way and conflict with each other.
 # The transcript is left on the clipboard whatever this key says in three cases.
 # First, on Linux and macOS, when the modifier keys are still held after waiting 2 seconds. The text is staged for you to paste by hand.
@@ -295,15 +304,16 @@ disabled_rules = []
 # ---------- [hotkey]: Linux push-to-talk capture ----------
 
 [hotkey]
-# "auto" | "desktop" | "x11-global-hotkey" | "x11-listen" | "evdev-proxy-experimental". Which mechanism captures the push-to-talk chord, Ctrl+Space, on Linux. It selects the capture mechanism, not the chord.
+# "auto" | "desktop" | "ibus" | "x11-global-hotkey" | "x11-listen" | "evdev-proxy-experimental". Linux capture mechanism for the Ctrl+Space push-to-talk chord.
 # Linux only. macOS and Windows accept this key so that one config file works everywhere, but they never read it and do not validate its value: any string loads there.
 # On Linux an unknown name fails config load.
-# "auto", "desktop", and "x11-global-hotkey" currently behave identically: Ctrl+Space is registered as an X11 global hotkey.
-# If registration fails, for example because another application already owns Ctrl+Space, startup fails. "auto" does not fall back to another backend.
+# "auto" and "desktop" register a global X11 shortcut on X11 and use the Parakit IBus engine on Wayland.
+# "ibus" captures press/release only in a focused editable field while the Parakit input source is selected. It does not provide global Wayland PTT.
+# "x11-global-hotkey" forces registered X11 capture. Registration failure, such as another application owning Ctrl+Space, stops startup.
 # "x11-listen" passively watches X11 key events. It grabs and suppresses nothing, so Ctrl+Space still reaches the focused application.
 # Experimental: "evdev-proxy-experimental" grabs every readable /dev/input event device that has both a Space key and a Ctrl key (devices already grabbed elsewhere are skipped) and re-emits their input through /dev/uinput.
 # Requires: for "evdev-proxy-experimental", read access to /dev/input and write access to /dev/uinput. `parakit doctor` checks both. The backend logs a warning at startup because it grabs devices.
-# Text insertion and the daemon still require X11, so it does not make Wayland supported.
+# The evdev route remains an X11-only experimental backend. Native Wayland support uses IBus.
 # Warning: do not run parakit with sudo to get those permissions. Audio, the clipboard, and text insertion must stay in the desktop-user session.
 # Machine availability is not checked at config load. Run `parakit doctor`. Daemon startup performs the final check.
 # If the hotkey loop fails while the daemon runs, the daemon exits with code 2.
@@ -392,15 +402,15 @@ backend = "auto"
 # With neither one set to a nonblank value the command fails and prints the path to edit by hand. If the config file did not exist, the template is written first.
 
 # DISPLAY
-# Linux. Must be present for the daemon and for the X11 checks of `parakit doctor`. parakit checks only that it is set. Whether it is usable is decided when the X11 connection opens.
-# Inherit it from the desktop session.
+# Linux. Required by X11 hotkeys, clipboard paste, direct typing, and the existing clipboard-copy backend. Native IBus insertion and focused-field PTT do not require it.
+# Inherit it from the desktop session. An XWayland DISPLAY never enables XTest insertion into native Wayland applications.
 
 # XDG_SESSION_TYPE
-# Linux. A value of "wayland" in any case stops daemon startup, because Wayland is not supported.
+# Linux. A value of "wayland" in any case selects Wayland session handling: automatic hotkeys use IBus and X11 insertion is unavailable.
 # An empty value counts as present, so it also disables the WAYLAND_DISPLAY fallback below.
 
 # WAYLAND_DISPLAY
-# Linux. Consulted only when XDG_SESSION_TYPE is absent. A nonempty value is then treated as Wayland and stops daemon startup.
+# Linux. Consulted only when XDG_SESSION_TYPE is absent. A nonempty value is then treated as a Wayland session.
 
 # XAUTHORITY
 # Linux. Only reported by `parakit doctor --verbose` and by startup failure messages. parakit makes no decision from it. The X11 libraries read it themselves.

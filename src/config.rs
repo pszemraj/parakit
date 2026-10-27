@@ -65,6 +65,13 @@ pub(crate) struct DaemonConfig {
     pub(crate) model_idle_minutes: Option<u64>,
     /// Batch insertion style.
     pub(crate) paste_mode: Option<PasteMode>,
+    /// Linux insertion transport, independent of terminal content policy.
+    #[cfg(target_os = "linux")]
+    pub(crate) insertion_backend: Option<crate::daemon::desktop::linux_insertion::InsertionBackend>,
+    /// Accepted for portable dotfiles and ignored on other platforms.
+    #[cfg(not(target_os = "linux"))]
+    #[serde(rename = "insertion_backend")]
+    pub(crate) _insertion_backend: Option<String>,
     /// Leave dictated text on the clipboard after paste instead of
     /// restoring previous clipboard contents.
     pub(crate) keep_transcript_clipboard: Option<bool>,
@@ -102,6 +109,16 @@ impl QwenConfig {
 }
 
 impl DaemonConfig {
+    /// Resolve Linux native insertion preference, defaulting to automatic selection.
+    ///
+    /// # Returns
+    /// The configured preference or automatic selection.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn effective_insertion_backend(
+        &self,
+    ) -> crate::daemon::desktop::linux_insertion::InsertionBackend {
+        self.insertion_backend.unwrap_or_default()
+    }
     /// # Returns
     /// The configured compute device, or automatic selection.
     pub(crate) fn effective_device(&self) -> DeviceMode {
@@ -294,6 +311,9 @@ pub(crate) const TEMPLATE: &str = r#"# parakit config.toml
 # Batch insertion style: "terminal", "standard", or "direct".
 # Unset: "terminal" on Linux, "standard" on macOS and Windows.
 # paste_mode = "standard"
+
+# Linux insertion transport: "auto", "ibus", or "x11".
+# insertion_backend = "auto"
 
 # Leave dictated text on the clipboard after paste instead of restoring the previous clipboard contents.
 # keep_transcript_clipboard = false

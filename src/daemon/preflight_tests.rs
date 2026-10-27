@@ -13,6 +13,8 @@ fn selected_hotkey_backend_controls_readiness() {
         (LinuxHotkeyRoute::PassiveX11, false, true, true),
         (LinuxHotkeyRoute::EvdevProxy, false, true, false),
         (LinuxHotkeyRoute::EvdevProxy, true, false, true),
+        (LinuxHotkeyRoute::Ibus, true, false, false),
+        (LinuxHotkeyRoute::Ibus, false, true, true),
     ];
     for (route, x11_ready, evdev_ready, expected) in cases {
         assert_eq!(

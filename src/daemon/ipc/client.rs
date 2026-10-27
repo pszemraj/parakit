@@ -88,8 +88,84 @@ pub(crate) fn run_client(command: IpcCommand, quiet: bool, verbose: bool) -> Res
             }
             Ok(())
         }
+        IpcResponse::HistoryText { text } => {
+            if !quiet {
+                outln!("{text}")?;
+            }
+            Ok(())
+        }
         IpcResponse::Err { message } => bail!("{message}"),
     }
+}
+
+/// List remembered transcripts, print one in full, or browse them in a terminal.
+///
+/// # Arguments
+///
+/// * `limit` - Maximum listing or picker entries.
+/// * `plain` - Print the listing even in a terminal.
+/// * `text` - Print this transcript's full text, using a 1-based index.
+/// * `quiet` - Suppress output and interactive selection.
+///
+/// # Returns
+///
+/// Success after printing, browsing, or cancellation.
+///
+/// # Errors
+///
+/// Returns daemon, lookup, clipboard, or terminal errors. Quiet and nonterminal
+/// invocations never enter raw terminal mode.
+pub(crate) fn run_history(
+    limit: Option<usize>,
+    plain: bool,
+    text: Option<usize>,
+    quiet: bool,
+) -> Result<()> {
+    if !history_picker_enabled(
+        plain,
+        text,
+        quiet,
+        std::io::stdin().is_terminal(),
+        std::io::stdout().is_terminal(),
+    ) && text.is_none()
+    {
+        return run_client(IpcCommand::History { limit }, quiet, false);
+    }
+    let entries = match send_command(&IpcCommand::History { limit })? {
+        IpcResponse::History { entries } => entries,
+        IpcResponse::Err { message } => bail!(message),
+        _ => bail!("unexpected history response"),
+    };
+    if let Some(index) = text {
+        let entry = entries.get(index - 1).with_context(|| {
+            format!(
+                "only {} transcripts remembered in this daemon session",
+                entries.len()
+            )
+        })?;
+        return run_client(
+            IpcCommand::HistoryText {
+                reference: entry.reference.clone(),
+            },
+            quiet,
+            false,
+        );
+    }
+    if entries.is_empty() {
+        return print_history(&entries);
+    }
+    super::history_picker::run(entries)
+}
+
+/// Restrict raw-mode interaction to ordinary foreground terminal invocations.
+fn history_picker_enabled(
+    plain: bool,
+    text: Option<usize>,
+    quiet: bool,
+    stdin_terminal: bool,
+    stdout_terminal: bool,
+) -> bool {
+    !plain && text.is_none() && !quiet && stdin_terminal && stdout_terminal
 }
 
 fn stopping_progress(quiet: bool) -> Option<ProgressStage> {
@@ -177,7 +253,7 @@ fn daemon_not_running_disposition(
         IpcCommand::Stop => {
             DaemonNotRunningDisposition::Success("parakit: not running; nothing to stop")
         }
-        IpcCommand::CopyLast { .. } | IpcCommand::History { .. } | IpcCommand::TestPaste { .. } => {
+        IpcCommand::CopyLast { .. } | IpcCommand::History { .. } | IpcCommand::TestPaste { .. } | IpcCommand::HistoryText { .. } | IpcCommand::CopyHistory { .. } => {
             DaemonNotRunningDisposition::Error(
                 "daemon is not running; start it with `parakit start` first",
             )
@@ -282,6 +358,12 @@ fn print_status_detail(detail: Option<&StatusDetail>) -> Result<()> {
         detail.threads
     )?;
     outln!("  paste mode: {}", detail.paste_mode)?;
+    if let Some(backend) = &detail.insertion_backend {
+        outln!("  insertion:  {backend}")?;
+    }
+    if let Some(ibus) = &detail.ibus {
+        outln!("  IBus:       {ibus}")?;
+    }
     outln!("  sounds:     {}", if detail.sounds { "on" } else { "off" })?;
     outln!("  cleaning:   {}", detail.cleaning)?;
     outln!("  logging:    {}", detail.log.as_deref().unwrap_or("off"))?;
@@ -315,7 +397,7 @@ fn format_uptime(total_secs: u64) -> String {
 /// # Returns
 ///
 /// e.g. `"12s ago"`, `"3m 5s ago"`, or `"1h 23m ago"`.
-fn format_age(age_secs: u64) -> String {
+pub(super) fn format_age(age_secs: u64) -> String {
     format!("{} ago", format_uptime(age_secs))
 }
 

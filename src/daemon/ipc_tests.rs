@@ -5,20 +5,16 @@ use super::*;
 #[cfg(any(unix, target_os = "windows"))]
 #[test]
 fn ipc_command_response_timeout_matrix() {
-    /// Expected `IpcCommand::response_timeout()` for `command`.
-    ///
-    /// Exhaustive with no wildcard arm: a new `IpcCommand` variant fails
-    /// compilation here until this function states its response-timeout
-    /// budget. This also closes a real coverage gap: `Stop` and
-    /// `History` were never asserted before this matrix.
+    /// Return the response budget for each control operation.
     fn expected_response_timeout(command: &IpcCommand) -> Duration {
         match command {
-            IpcCommand::CopyLast { .. } | IpcCommand::TestPaste { .. } => {
-                IPC_INSERT_RESPONSE_TIMEOUT
-            }
-            IpcCommand::Status | IpcCommand::Stop | IpcCommand::History { .. } => {
-                IPC_TRANSPORT_TIMEOUT
-            }
+            IpcCommand::CopyLast { .. }
+            | IpcCommand::CopyHistory { .. }
+            | IpcCommand::TestPaste { .. } => IPC_INSERT_RESPONSE_TIMEOUT,
+            IpcCommand::Status
+            | IpcCommand::Stop
+            | IpcCommand::History { .. }
+            | IpcCommand::HistoryText { .. } => IPC_TRANSPORT_TIMEOUT,
         }
     }
 
@@ -27,6 +23,18 @@ fn ipc_command_response_timeout_matrix() {
         IpcCommand::Stop,
         IpcCommand::History { limit: None },
         IpcCommand::CopyLast { index: 0 },
+        IpcCommand::HistoryText {
+            reference: HistoryReference {
+                session: "session".into(),
+                entry: 0,
+            },
+        },
+        IpcCommand::CopyHistory {
+            reference: HistoryReference {
+                session: "session".into(),
+                entry: 0,
+            },
+        },
         IpcCommand::TestPaste {
             text: "test".to_string(),
         },
@@ -206,6 +214,10 @@ fn maximum_history_response_fits_message_limit() {
     let worst_case_preview = preview_text(&"\0".repeat(HISTORY_PREVIEW_MAX_CHARS + 1));
     let entries = (1..=MAX_TRANSCRIPT_HISTORY)
         .map(|index| HistoryEntry {
+            reference: HistoryReference {
+                session: format!("{}-{}-{}", u32::MAX, u128::MAX, u64::MAX),
+                entry: u64::MAX,
+            },
             index,
             age_secs: u64::MAX,
             chars: usize::MAX,
@@ -540,6 +552,8 @@ fn shared_state_set_info_and_record_dictation_populate_status_detail() {
 #[test]
 fn status_detail_serde_round_trips() {
     let detail = StatusDetail {
+        insertion_backend: None,
+        ibus: None,
         model_status: None,
         pid: 1234,
         uptime_secs: 5025,
@@ -674,6 +688,10 @@ fn ipc_command_history_serde_round_trips_with_and_without_limit() {
 fn ipc_response_history_serde_round_trips() {
     let response = IpcResponse::History {
         entries: vec![HistoryEntry {
+            reference: HistoryReference {
+                session: "session".into(),
+                entry: 0,
+            },
             index: 1,
             age_secs: 12,
             chars: 47,

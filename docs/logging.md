@@ -12,7 +12,7 @@ Terminal output is best-effort. A closed terminal or failed stdout/stderr write 
 
 ## How To Read A Dictation
 
-A completed dictation normally produces two lines: a transcription line, written as soon as the model and cleaner finish, and a later insertion line, written once parakit knows what happened to the paste attempt.
+A completed dictation normally produces two lines: a transcription line, written as soon as the model and cleaner finish, and a later insertion line, written once Parakit knows what happened to the insertion attempt.
 
 ```json
 {"ts":"2026-07-27T14:02:11.482Z","session_id":"2026-07-27T14:02:10.981234000Z-p4312-l0","record_id":7,"parakit_version":"0.4.3","audio_secs":4.21,"infer_ms":187,"raw":"so the build is green now.","cleaned":"So the build is green now","rules_active":29,"cleaner_version":32,"cleaning_profile":"safe","ruleset_id":"v32-safe-bf1d2214e0848c42","drops_trailing_period":true,"number_threshold":4.0,"rules_fired":[{"name":"capitalize-sentence-starts","matches":1},{"name":"fix-trailing-period","matches":1}],"inference":{"model":"qwen3-asr-1.7b-q8_0.gguf","model_preset":"qwen3-asr-1.7b","backend":"qwen3","quantization":"Q8_0","requested_device":"gpu","session_device":"gpu","qwen_language":"auto","qwen_max_new_tokens":512,"native_api_version":"0.7.0"}}
@@ -84,24 +84,29 @@ Fields, in serialization order:
 | `ts` | string | UTC RFC 3339 timestamp with milliseconds. |
 | `session_id` | string | Logger-session identifier copied from the correlated transcription record. |
 | `ref_id` | integer | Sequence number matching the correlated transcription record's `record_id`. |
-| `outcome` | string | `pasted`, `pasted_unverified`, `copied_only`, `blocked`, `skipped`, or `error`. See [Insertion Outcomes](#insertion-outcomes). |
+| `insertion_backend` | string or null | Attempted transport: `ibus`, `clipboard`, or `direct`; `null` when no insertion report recorded a route, such as WAV simulation. Older records omit this field. |
+| `outcome` | string | `submitted`, `uncertain`, `pasted`, `pasted_unverified`, `copied_only`, `blocked`, `skipped`, or `error`. See [Insertion Outcomes](#insertion-outcomes). |
 | `target_bundle_id` | string or null | macOS target bundle identifier when known; `null` on Linux and Windows. |
 | `focus_verification` | string | `matched`, `changed`, `ax_unsupported`, `unavailable`, or `not_applicable`. The last value also covers a live focus-recheck error, not only paths that skipped the check. |
 | `transcript_chars` | integer | Character count of the transcript offered for insertion. |
 | `paste_event_posted` | boolean | Whether a paste chord or type event was sent. |
 | `pasteboard_requested` | null | Reserved for a clipboard read-back signal; always `null` today. |
-| `acknowledgement_kind` | string | `ax_confirmed`, `unverified_timeout`, `unverified_no_baseline`, `unverified_short_transcript`, `unverified_focus_lost`, `no_evidence`, or `not_applicable`. |
+| `acknowledgement_kind` | string | `ibus_submitted`, `ibus_uncertain`, `ax_confirmed`, `unverified_timeout`, `unverified_no_baseline`, `unverified_short_transcript`, `unverified_focus_lost`, `no_evidence`, or `not_applicable`. |
 | `acknowledgement_ms` | integer or null | Milliseconds of the post-paste wait: the Accessibility acknowledgement poll on macOS, or the clipboard-restore wait on Linux and Windows; `null` when that wait did not run. |
 | `clipboard_restored` | boolean or null | `true` when supported prior contents were restored or an unsupported payload's staged replacement was cleared; `false` for retained transcript text or a failed restore; `null` when unknown or inapplicable, including a competing or unreadable clipboard left untouched. |
 | `failure_reason` | string or null | Error or degraded-outcome detail. On Linux, a blocked partial direct insertion records how many characters completed before typing stopped. An unreadable clipboard records the failed observation; when the previous clipboard could not be saved, the transcript is still pasted and kept on the clipboard (`clipboard_restored: false`). |
 
-No field on the insertion line is omitted; absent values serialize as `null`. Most `error` records have no completed insertion report, so `clipboard_restored` is `null` and `paste_event_posted` is `false` even though the clipboard may have been touched. On Linux, a direct-typing backend error after partial input retains its completed character count and reports `paste_event_posted: true`.
+Current insertion records include every field above; absent values serialize as `null`. Most `error` records have no completed insertion report, so `clipboard_restored` is `null` and `paste_event_posted` is `false` even though the clipboard may have been touched. On Linux, a direct-typing backend error after partial input retains its completed character count and reports `paste_event_posted: true`.
+
+Native IBus records use `paste_event_posted: false` and `clipboard_restored: null`. Their acknowledgement kind is `ibus_submitted` after commit submission, `ibus_uncertain` after a lost reply, or `not_applicable` when blocked before submission. These labels do not claim application reception.
 
 ## Insertion Outcomes
 
 `outcome` collapses a lot of decision-making into one word. Reading it alongside `paste_event_posted`, `acknowledgement_kind`, and `clipboard_restored` tells you what actually happened:
 
 - **`pasted`** - a paste chord or direct-typed input was sent and either positively confirmed or has no stronger confirmation signal on this platform (`acknowledgement_kind: ax_confirmed` on macOS; `not_applicable` on Linux and Windows). A competing clipboard write can leave this outcome unchanged with `clipboard_restored: null`; that value does not prove the clipboard was unused.
+- **`submitted`** - the IBus helper emitted a native `CommitText` signal after validating the recording target. This reports submission, not application reception. No paste shortcut was sent and the clipboard was unchanged.
+- **`uncertain`** - the native helper may have submitted text before its reply was lost. Parakit does not retry or fall back to clipboard paste. Inspect the target before recovering the transcript from daemon history.
 - **`pasted_unverified`** - a paste chord was sent, but macOS could not positively confirm it landed. `acknowledgement_kind` distinguishes five situations:
   - `unverified_timeout` - no pollable Accessibility value was available at all (no focused element was captured, or the field withholds its value, as secure/password fields do by design).
   - `unverified_no_baseline` - a pollable element existed, but neither the pre-chord read nor the immediate post-chord fallback produced a baseline value to compare later reads against, so confirmation was structurally impossible.
@@ -111,7 +116,7 @@ No field on the insertion line is omitted; absent values serialize as `null`. Mo
 
   `unverified_timeout`, `unverified_no_baseline`, and `unverified_short_transcript` apply the restore policy only while the staged clipboard still matches, as with `pasted`. `unverified_focus_lost` skips restoration: the transcript remains if still current (`clipboard_restored: false`), otherwise the competing or unreadable clipboard is preserved (`null`). This is not a restore failure and prints no restore warning.
 - **`copied_only`** - the transcript remains active on the clipboard because automatic insertion did not complete. With `paste_event_posted: false`, this covers terminal-mode multiline text and pre-paste fallbacks such as held modifiers, an unavailable backend, or focus rejection when the transcript-retention policy applies. Pre-chord paths that restore or preserve another clipboard payload report `blocked` instead. With `paste_event_posted: true` on macOS and `acknowledgement_kind: no_evidence`, the chord was sent but never confirmed, so parakit keeps the transcript active, plays the error tone, and asks you to inspect the target before pasting manually.
-- **`blocked`** - a focus or clipboard guard prevented completion, and parakit plays the error tone. A competing or unverifiable clipboard is preserved with `clipboard_restored: null`; otherwise restoration follows policy. On Linux, direct-typing guards also report `blocked`; `failure_reason` gives the completed character count, and the full transcript remains available through `copy-last` when history is enabled.
+- **`blocked`** - a target, content, or clipboard guard prevented completion, and Parakit plays the error tone. Native IBus rejection leaves the clipboard unchanged. On the clipboard route, a competing or unverifiable clipboard is preserved with `clipboard_restored: null`; otherwise restoration follows policy. Linux direct-typing guards also report `blocked`; `failure_reason` gives the completed character count. Enabled daemon history retains the full transcript for recovery.
 - **`skipped`** - insertion was intentionally omitted. This means either nothing printable survived sanitization or the WAV worker simulation disabled desktop insertion; no paste or clipboard action occurs. When sanitization leaves no printable text, parakit plays the error tone, leaves transcript history unchanged, and prints no recovery hint for that dictation. The simulation path retains its transcript in history.
 - **`error`** - insertion actually failed: the platform backend could not be prepared, the paste chord could not be sent, or a clipboard restore failed on a path that never reached a landed paste. `failure_reason` carries the error text.
 

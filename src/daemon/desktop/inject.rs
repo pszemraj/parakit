@@ -9,8 +9,8 @@
 //!   - Linux X11: uses `XTestFakeKeyEvent` plus a temporary keymap remap
 //!     for non-keyboard characters. Works for ASCII/Latin reliably; some
 //!     emoji or rare scripts may not pass through cleanly.
-//!   - Linux Wayland: unsupported. Startup preflight rejects Wayland sessions
-//!     because XTest cannot insert into focused native Wayland applications.
+//!   - Linux Wayland: this legacy synthetic transport is unsupported; native
+//!     IBus insertion is handled separately without XTest or clipboard staging.
 //!   - macOS: synthesizes via the CGEvent API. Requires Accessibility for the
 //!     terminal that launched parakit.
 
@@ -39,7 +39,7 @@ pub(crate) use clipboard_store::{ClipboardSnapshot, ClipboardStore};
 mod focus_snapshot;
 #[cfg(target_os = "linux")]
 use focus_snapshot::linux_current_input_focus;
-pub(crate) use focus_snapshot::FocusSnapshot;
+pub(crate) use focus_snapshot::{FocusSnapshot, FocusSource};
 
 #[path = "paste_transaction.rs"]
 mod paste_transaction;
@@ -333,20 +333,16 @@ pub struct Injector {
 }
 
 impl Injector {
-    /// Create an injector backed by the platform's keyboard API.
+    /// Create a lazy injector without opening a keyboard or clipboard connection.
     ///
     /// # Returns
     ///
-    /// A ready-to-use text inserter.
+    /// An inserter whose desktop resources are prepared by individual operations.
     ///
     /// # Errors
     ///
-    /// Returns an error if the current desktop session is unsupported or if
-    /// `enigo` cannot initialize the platform keyboard backend.
+    /// Desktop resource errors are reported when an operation prepares its handles.
     pub fn new() -> Result<Self> {
-        #[cfg(target_os = "linux")]
-        super::session::ensure_x11_session_supported()?;
-
         #[cfg(target_os = "windows")]
         let clipboard_history =
             match super::windows_clipboard_history::ClipboardHistoryListener::start() {
@@ -390,6 +386,8 @@ impl Injector {
     ///
     /// Returns an error if a required platform handle cannot be opened.
     pub fn prepare_for_mode(&mut self, mode: PasteMode) -> Result<()> {
+        #[cfg(target_os = "linux")]
+        super::session::ensure_x11_session_supported()?;
         if mode == PasteMode::Direct {
             let _keyboard = self.keyboard()?;
         }

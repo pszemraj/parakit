@@ -20,8 +20,10 @@ use super::notifications::Notifier;
 use super::sounds::Sounds;
 
 mod insertion;
+#[cfg(not(target_os = "linux"))]
+use insertion::prepared_injector;
 pub(crate) use insertion::{insert_text, FocusCheck, InsertOutcome};
-use insertion::{insertion_result_remembers_transcript, log_insertion_outcome, prepared_injector};
+use insertion::{insertion_result_remembers_transcript, log_insertion_outcome};
 
 /// Maximum number of worker events that may queue while ASR or paste is busy.
 pub(crate) const WORKER_QUEUE_CAPACITY: usize = 2;
@@ -236,6 +238,9 @@ where
         .as_deref()
         .is_some_and(Cleaner::drops_trailing_period);
     let number_threshold = cleaner.as_deref().map(Cleaner::number_threshold);
+    #[cfg(target_os = "linux")]
+    let mut injector = None;
+    #[cfg(not(target_os = "linux"))]
     let mut injector = if insert_transcripts {
         match prepared_injector(paste_mode) {
             Ok(injector) => Some(injector),
@@ -413,6 +418,7 @@ where
                                 None,
                                 "not_applicable",
                                 None,
+                                paste_mode,
                             );
                             state.remember_transcript(transcript.cleaned);
                             state.set_phase("idle");
@@ -455,6 +461,7 @@ where
                                     report.failure_reason.clone(),
                                     focus_verification.get(),
                                     Some(&report),
+                                    paste_mode,
                                 );
                                 let insert_elapsed = insert_started.elapsed();
                                 let worker_elapsed = stop_started.elapsed();
@@ -489,6 +496,7 @@ where
                                     Some(format!("{e:#}")),
                                     focus_verification.get(),
                                     report,
+                                    paste_mode,
                                 );
                                 log.error(&format!("paste failed: {e:#}"));
                                 log_recovery_hint(&state, &log);

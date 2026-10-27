@@ -25,13 +25,15 @@ use std::time::Instant;
 use super::preflight;
 #[cfg(any(unix, target_os = "windows"))]
 use super::{
-    inject::{FocusSnapshot, PasteMode},
+    inject::{FocusSource, PasteMode},
     logging::Logger,
     notifications::Notifier,
     worker::{insert_text, FocusCheck, InsertOutcome},
 };
 
 mod client;
+mod history;
+mod history_picker;
 #[cfg(unix)]
 mod unix_socket;
 #[cfg(target_os = "windows")]
@@ -40,6 +42,7 @@ mod windows_pipe;
 #[cfg(any(unix, target_os = "windows"))]
 pub(crate) use client::daemon_responsive;
 pub(crate) use client::run_client;
+pub(crate) use client::run_history;
 #[cfg(unix)]
 use unix_socket::send_command;
 #[cfg(unix)]
@@ -113,6 +116,10 @@ pub(crate) enum IpcCommand {
         /// Cap the number of entries returned. `None` returns all of them.
         limit: Option<usize>,
     },
+    /// Read one transcript identified by its original daemon session and entry.
+    HistoryText { reference: HistoryReference },
+    /// Copy the selected transcript without resolving a changing ring index.
+    CopyHistory { reference: HistoryReference },
     /// Run the insertion path with caller-supplied text, without microphone use.
     TestPaste { text: String },
 }
@@ -125,8 +132,12 @@ impl IpcCommand {
             // lock. CopyLast itself is quick, but it can queue behind a
             // synchronous paste transaction (including macOS modifier and
             // acknowledgement waits), so it needs the same response budget.
-            Self::CopyLast { .. } | Self::TestPaste { .. } => IPC_INSERT_RESPONSE_TIMEOUT,
-            Self::Status | Self::Stop | Self::History { .. } => IPC_TRANSPORT_TIMEOUT,
+            Self::CopyLast { .. } | Self::CopyHistory { .. } | Self::TestPaste { .. } => {
+                IPC_INSERT_RESPONSE_TIMEOUT
+            }
+            Self::Status | Self::Stop | Self::History { .. } | Self::HistoryText { .. } => {
+                IPC_TRANSPORT_TIMEOUT
+            }
         }
     }
 }
@@ -173,6 +184,8 @@ pub(crate) enum IpcResponse {
     },
     /// Transcript history listing, newest first.
     History { entries: Vec<HistoryEntry> },
+    /// Complete text of one remembered transcript.
+    HistoryText { text: String },
     /// Command failed.
     Err { message: String },
 }
@@ -180,6 +193,8 @@ pub(crate) enum IpcResponse {
 /// One remembered transcript, as reported by the `History` command.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub(crate) struct HistoryEntry {
+    /// Stable reference for previewing and copying this particular transcript.
+    pub(crate) reference: HistoryReference,
     /// Position counting back from the most recent, 1-based to match the
     /// number the user passes to `copy-last`.
     pub(crate) index: usize,
@@ -191,10 +206,23 @@ pub(crate) struct HistoryEntry {
     pub(crate) preview: String,
 }
 
+/// Identity of one transcript within one daemon lifetime.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub(crate) struct HistoryReference {
+    /// Daemon lifetime token; references from previous starts are rejected.
+    session: String,
+    /// Monotonically assigned entry number within that lifetime.
+    entry: u64,
+}
+
 /// Extended daemon runtime detail returned by `Status` when
 /// [`SharedState::set_info`] has run.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub(crate) struct StatusDetail {
+    /// Linux transport preference, separate from the actual per-dictation route.
+    pub(crate) insertion_backend: Option<String>,
+    /// Live native input-method connection and selection state on Linux.
+    pub(crate) ibus: Option<String>,
     /// Absent during startup until the worker publishes initial residency.
     pub(crate) model_status: Option<super::model_lifecycle::ModelStatus>,
     /// Daemon process id.
@@ -282,6 +310,9 @@ pub(crate) struct DaemonInfo {
 
 /// Shared in-memory daemon state used by the worker and IPC server.
 pub(crate) struct SharedState {
+    history_session: String,
+    /// Focus provider shared by capture and explicit insertion commands.
+    pub(crate) focus_source: parking_lot::RwLock<FocusSource>,
     /// Admission gate shared by capture, queued work, and all insertion paths.
     pub(crate) activity: Arc<super::model_lifecycle::ActivityGate>,
     /// Session lifetime handshake shared by startup, worker, and IPC stop.
@@ -301,6 +332,7 @@ pub(crate) struct SharedState {
 }
 
 struct StateSnapshot {
+    next_transcript: u64,
     model_status: Option<super::model_lifecycle::ModelStatus>,
     phase: String,
     /// Remembered transcripts, newest first. Never persisted to disk.
@@ -309,6 +341,7 @@ struct StateSnapshot {
 
 /// One transcript remembered in daemon memory.
 struct TranscriptEntry {
+    id: u64,
     text: String,
     at: Instant,
 }
@@ -337,9 +370,12 @@ impl SharedState {
     /// Shared state with no remembered transcripts.
     pub(crate) fn with_history_limit(limit: usize) -> Self {
         Self {
+            history_session: history::session_token(),
+            focus_source: parking_lot::RwLock::new(FocusSource::default()),
             activity: super::model_lifecycle::ActivityGate::new(),
             shutdown: super::worker_shutdown::WorkerShutdown::default(),
             inner: Mutex::new(StateSnapshot {
+                next_transcript: 0,
                 model_status: None,
                 phase: "starting".to_string(),
                 history: VecDeque::new(),
@@ -391,7 +427,10 @@ impl SharedState {
             return;
         }
         let mut inner = self.inner.lock();
+        let id = inner.next_transcript;
+        inner.next_transcript += 1;
         inner.history.push_front(TranscriptEntry {
+            id,
             text,
             at: Instant::now(),
         });
@@ -420,6 +459,35 @@ impl SharedState {
             .lock()
             .as_ref()
             .map(|info| StatusDetail {
+                insertion_backend: {
+                    #[cfg(target_os = "linux")]
+                    {
+                        Some(self.focus_source.read().backend.label().to_owned())
+                    }
+                    #[cfg(not(target_os = "linux"))]
+                    {
+                        None
+                    }
+                },
+                ibus: {
+                    #[cfg(target_os = "linux")]
+                    {
+                        self.focus_source.read().client.as_ref().map(|client| {
+                            let status = client.status();
+                            format!(
+                                "{}; connected={}, helper={}, ready={}",
+                                status.detail,
+                                status.connected,
+                                status.helper_connected,
+                                status.ready
+                            )
+                        })
+                    }
+                    #[cfg(not(target_os = "linux"))]
+                    {
+                        None
+                    }
+                },
                 model_status: inner.model_status.clone(),
                 pid: info.pid,
                 uptime_secs: self.started_at.elapsed().as_secs(),
@@ -534,6 +602,10 @@ impl SharedState {
             .enumerate()
             .take(limit.unwrap_or(usize::MAX))
             .map(|(position, entry)| HistoryEntry {
+                reference: HistoryReference {
+                    session: self.history_session.clone(),
+                    entry: entry.id,
+                },
                 index: position + 1,
                 age_secs: now.saturating_duration_since(entry.at).as_secs(),
                 chars: entry.text.chars().count(),
@@ -659,12 +731,30 @@ fn handle_command(
                 entries: state.history_snapshot(limit),
             }
         }
+        IpcCommand::HistoryText { reference } => history::text_response(&state, &reference)?,
+        IpcCommand::CopyHistory { reference } => {
+            history::copy_selected(&state, &reference, copy_text)?;
+            IpcResponse::Ok {
+                message: "copied selected transcript".to_string(),
+            }
+        }
         IpcCommand::TestPaste { text } => {
             let result = state.with_insertion_lock(|| {
-                paste_text(&text, paste_mode, keep_transcript_clipboard, log, notifier)
+                paste_text(
+                    &text,
+                    paste_mode,
+                    keep_transcript_clipboard,
+                    &state.focus_source.read(),
+                    log,
+                    notifier,
+                )
             })?;
             IpcResponse::Ok {
                 message: match result {
+                    #[cfg(target_os = "linux")]
+                    InsertOutcome::Submitted => "native submission sent",
+                    #[cfg(target_os = "linux")]
+                    InsertOutcome::Uncertain => "native delivery uncertain",
                     InsertOutcome::Pasted => "test paste sent",
                     InsertOutcome::PastedUnverified => "test paste sent (insertion unconfirmed)",
                     InsertOutcome::CopiedOnly => "test text copied",
@@ -760,10 +850,11 @@ fn paste_text(
     text: &str,
     paste_mode: PasteMode,
     keep_transcript_clipboard: bool,
+    focus_source: &FocusSource,
     log: &Logger,
     notifier: &Notifier,
 ) -> Result<InsertOutcome> {
-    let focus = FocusSnapshot::capture().ok();
+    let focus = focus_source.capture().ok();
     let mut injector = None;
     let focus_verification = Cell::new("not_applicable");
     let focus_check = FocusCheck {

@@ -18,7 +18,7 @@ parakit --quiet doctor
 parakit doctor --deep
 ```
 
-`--verbose` and `--quiet` are global flags: they work whether they come before or after `doctor`. On Linux, Wayland sessions fail insertion preflight even when XWayland exposes a `DISPLAY`; use an X11 session. On macOS, `doctor` checks Accessibility, Input Monitoring, and Microphone status for the terminal that launched parakit.
+`--verbose` and `--quiet` are global flags: they work whether they come before or after `doctor`. Linux uses [IBus with supported X11 fallback](linux-desktop.md); GNOME Wayland requires the Parakit input source and supports focused-field push-to-talk. On macOS, `doctor` checks Accessibility, Input Monitoring, and Microphone status for the terminal that launched parakit.
 
 The daemon checks the hotkey backend, insertion backend, and singleton lock before any model download. If those preflights pass, it starts the control endpoint, opens the microphone, warns when the selected source looks like Bluetooth, downloads the default Q8_0 GGUF if it is not already cached, opens the model, and starts the hotkey loop. `status`, `stop`, and a second `start` remain available while the model downloads or loads. Linux backend details are in [linux-desktop.md](linux-desktop.md).
 
@@ -101,12 +101,22 @@ parakit status
 parakit stop
 parakit copy-last [N]
 parakit history
+parakit history --plain
+parakit history --text N
 parakit test-paste "hello from parakit"
 ```
 
 When the control endpoint is absent and the singleton lock is free, `status` and `stop` print `parakit: not running` or `parakit: not running; nothing to stop` and exit successfully. If the endpoint is absent while the lock remains held, `status` reports that the daemon may still be starting or stopping; `stop` waits within its remaining deadline, sending the request if startup exposes the endpoint and confirming that the lock releases. Commands that need daemon state (`history`, `copy-last`, and `test-paste`) instead report that the daemon is not running and point to `parakit start`.
 
-The daemon keeps a ring buffer of recent transcripts in memory (`daemon.transcript_history` entries, 10 by default). `copy-last` acts on the most recent one by default; pass `N` (1-based, counting back from the most recent) to reach further back, e.g. `parakit copy-last 3` for the third-most-recent transcript. `parakit history` lists what the daemon currently remembers, newest first; `--limit N` caps how many entries print. The ring disappears when the daemon stops, so treat it as a same-session convenience. `test-paste` runs clipboard staging, focus checks, paste sanitization, and the paste chord without using the microphone.
+The daemon keeps a ring buffer of recent transcripts in memory (`daemon.transcript_history` entries, 10 by default). `copy-last` acts on the most recent one by default; pass `N` (1-based, counting back from the most recent) to reach further back, e.g. `parakit copy-last 3` for the third-most-recent transcript. The ring disappears when the daemon stops, so treat it as a same-session convenience.
+
+In a terminal, `parakit history` opens a picker with the newest transcript selected. Up/Down selects an entry and shows its full text; PageUp/PageDown scrolls long previews. Enter copies the selected entry and closes the picker after success. Escape or Ctrl+C closes it without copying. A copy failure stays visible in the picker. New dictations cannot silently change which entry is selected; an entry evicted from the ring or lost in a daemon restart reports that it is no longer available.
+
+Piped or redirected `history` output stays a plain newest-first list. Use `--plain` to request that list in a terminal, `--limit N` to limit the entries shown, or `--text N` to print one full transcript without clipboard access. `--quiet` never opens the picker. Full-text previews and output respect the control protocol's 64 KiB response limit; oversized text reports an error without truncation and can still be copied with `copy-last`.
+
+Explicit copying uses the existing platform clipboard backend. On GNOME Wayland, it can use XWayland clipboard access even though IBus dictation itself needs no X11 connection. In a pure session without that clipboard access, use the full-text preview or `history --text N` for recovery.
+
+`test-paste` runs the configured insertion path, including content policy and target checks, without recording microphone audio. The native IBus route submits a commit; the legacy clipboard route stages text and sends its paste chord.
 
 Plain `parakit status` output is unchanged and safe for scripts to parse:
 
@@ -278,12 +288,14 @@ Bluetooth microphones are allowed, but parakit prints a warning because headset 
 
 ## Insertion
 
-parakit transcribes once on hotkey release and hands the text to one of three insertion modes.
+Parakit transcribes once on hotkey release. On Linux, `--insertion-backend auto` prefers IBus delivery through the selected Parakit input source. The native route neither stages the clipboard nor sends a paste chord. It rechecks the native recording target before committing. Native submission is not application acknowledgement; a missing reply can leave delivery uncertain, so inspect the field before retrying. Setup and backend overrides are in [Linux desktop input](linux-desktop.md#ibus-setup).
+
+Paste mode controls transcript content and the shortcut used by the clipboard route:
 
 | Mode | What it sends | When to pick it |
 | --- | --- | --- |
-| `terminal` | `Ctrl+Shift+V` on Linux and Windows, `Cmd+V` on macOS | Terminal emulators, where `Ctrl+V` is not paste. The default on Linux. Trailing newlines are stripped and multiline transcripts are not auto-pasted. |
-| `standard` | `Ctrl+V` on Linux and Windows, `Cmd+V` on macOS | GUI applications. The default on macOS and Windows. |
+| `terminal` | Native IBus commit on Linux when eligible; otherwise `Ctrl+Shift+V` on Linux/Windows or `Cmd+V` on macOS | The Linux default. Trailing newlines are stripped and embedded newlines are blocked. Native terminal commits also block tabs because they lack clipboard bracketed-paste semantics. |
+| `standard` | Native IBus commit on Linux when eligible; otherwise `Ctrl+V` on Linux/Windows or `Cmd+V` on macOS | GUI applications and multiline text. The default on macOS and Windows. |
 | `direct` | Synthetic typing through the platform keyboard API; the clipboard is never touched | App-compatibility fallback when neither chord reaches the target. Slower and less reliable for non-ASCII text. On Linux it still requires an X11 session. |
 
 ```bash
@@ -292,9 +304,13 @@ parakit start --paste-mode standard
 parakit start --paste-mode direct
 ```
 
+Explicit `direct` mode retains X11 typing on Linux, including with automatic transport selection, and conflicts with forced IBus insertion. Native IBus blocks known password/PIN fields and retains blocked or uncertain transcripts in enabled daemon history. Its target invalidation and uncertainty never trigger an automatic fallback paste.
+
 ### Clipboard Staging And Restore
 
-`terminal` and `standard` stage plain text on the system clipboard and send the paste shortcut. Both give the target and clipboard history tools time to observe the staged text, then restore the previous clipboard contents when the clipboard API can round-trip them. Restore support covers text, HTML with a text alternative, copied file lists, and images exposed as normal platform image data. Browser-private image packages, WebP-only payloads, and other clipboard MIME formats are not restorable through `arboard`; when restore is required, parakit clears the staged transcript instead of leaving sensitive text as the active clipboard.
+The clipboard route in `terminal` and `standard` modes stages plain text and sends the paste shortcut. Both give the target and clipboard history tools time to observe the staged text, then restore the previous clipboard contents when the clipboard API can round-trip them. Restore support covers text, HTML with a text alternative, copied file lists, and images exposed as normal platform image data. Browser-private image packages, WebP-only payloads, and other clipboard MIME formats are not restorable through `arboard`; when restore is required, parakit clears the staged transcript instead of leaving sensitive text as the active clipboard.
+
+Native IBus delivery and direct typing skip this transaction. `--keep-transcript-clipboard` has no effect on them, and native delivery leaves the active clipboard unchanged.
 
 Delivering the dictation takes priority over restoring the previous clipboard. If the previous clipboard cannot be read, or changes while parakit saves it, parakit still stages and pastes the transcript and leaves it as the active clipboard for that dictation; a clipboard history manager keeps the previous contents.
 
@@ -308,7 +324,9 @@ Use [daemon history](#daemon-control) for same-session recovery or [JSONL loggin
 
 ### Focus Changes
 
-On Linux/X11, parakit records the active X11 window when recording starts. If focus clearly changes before insertion, it does not send a paste chord, but non-direct modes still stage the transcript before restoring the active clipboard. If focus capture or recheck fails because X11 is transiently unavailable, parakit pastes anyway; the transcript remains available through `parakit copy-last` either way.
+Native IBus captures the recording target's engine and focus generation. Focus loss, relevant resets, input-source changes, engine destruction, and reconnects invalidate pending native insertion even when GNOME reuses the same input-context ID. Unknown native focus blocks delivery. The clipboard remains unchanged and enabled daemon history retains the transcript.
+
+On the legacy Linux/X11 route, parakit records the active X11 window when recording starts. If focus clearly changes before insertion, it does not send a paste chord, but non-direct modes still stage the transcript before restoring the active clipboard. If focus capture or recheck fails because X11 is transiently unavailable, parakit pastes anyway; the transcript remains available through `parakit copy-last` either way.
 
 On Windows, parakit records the foreground window at PTT-down, rechecks it before paste, and sends the paste shortcut with `SendInput`. If the foreground target cannot be captured or verified, automatic paste is skipped, but non-direct modes still stage the transcript before restoring the active clipboard. A normal user process cannot inject into an administrator/elevated target application.
 
