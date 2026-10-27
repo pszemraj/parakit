@@ -55,7 +55,7 @@ Because stage 2 opens a real window and drives real Accessibility APIs, `doctor 
 
 ## Hotkey
 
-The default macOS push-to-talk hotkey is `Left Control+Space`. This deliberately avoids `Command+Space`, which is normally Spotlight. Press and hold `Left Control+Space` while speaking, then release when done. parakit handles the chord with a CoreGraphics event tap and suppresses the Space key while the exact chord is active. Modified chords such as `Left Control+Shift+Space`, `Control+Option+Space`, or `Command+Space` pass through to macOS and the focused app.
+The macOS push-to-talk hotkey is `Left Control+Space` and is not configurable. This deliberately avoids `Command+Space`, which is normally Spotlight. Press and hold `Left Control+Space` while speaking, then release when done. parakit handles the chord with a CoreGraphics event tap and suppresses the Space key while the exact chord is active. Modified chords such as `Left Control+Shift+Space`, `Control+Option+Space`, or `Command+Space` pass through to macOS and the focused app.
 
 macOS may also use `Control+Space` for input-source switching when multiple input sources are configured. If parakit does not react, or if the input-source switcher appears instead:
 
@@ -64,15 +64,13 @@ macOS may also use `Control+Space` for input-source switching when multiple inpu
 3. Check other shortcut categories for warning icons; macOS marks conflicting shortcuts there.
 4. Restart parakit and rerun `parakit doctor`.
 
-The push-to-talk chord is not configurable yet; macOS uses `Left Control+Space`.
-
 ## Background Use
 
 Use the commands in [running.md#background-use](running.md#background-use), launched from the terminal application that holds parakit's privacy permissions.
 
 ## Insertion
 
-Paste modes, focus-change handling, clipboard staging, and recovery commands are in [running.md#insertion](running.md#insertion).
+Parakit matches the frontmost application's focused Accessibility element rather than its on-screen window ID. Same-app field or window changes block insertion without treating palettes, popovers, sheets, or z-order changes as a different target. If an application exposes no focused Accessibility element, matching process and bundle identity provide the fallback; a real application or focused-element mismatch still blocks insertion. Rejected non-direct insertions follow the shared [clipboard staging policy](running.md#clipboard-staging-and-restore). [Paste modes](running.md#insertion) select `Cmd+V` or direct typing through the Accessibility-controlled input path.
 
 After a paste chord is sent, macOS does not restore the previous clipboard contents after a fixed delay. It polls the focused Accessibility element's `AXValue` for evidence that the target consumed the paste, at 40 ms intervals against a roughly 1.8 s deadline. That deadline is a soft target: the poll loop only checks it between reads, not inside one, so a single slow, blocking `AXValue` read can carry the wait past it before the loop notices. Each Accessibility request has its own 250 ms messaging timeout, which bounds how long any one read can block, so an unresponsive target cannot hold the worker for macOS's longer system default. The [insertion outcomes](logging.md#insertion-outcomes) describe acknowledgement states and clipboard decisions. When no value or baseline is available, polling uses a 1500 ms grace period; otherwise it uses the full confirmation window. Direct typing and insertions rejected before posting a paste chord do not run acknowledgement.
 

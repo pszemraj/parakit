@@ -1,6 +1,6 @@
 # Linux Desktop Input
 
-Parakit prefers IBus text insertion on Linux. When its input source is selected and the focused field is eligible, the transcript arrives through IBus without changing the clipboard or sending a paste shortcut. On an X11 session, the default `auto` insertion backend retains clipboard paste as the fallback when native insertion is unavailable before submission.
+Parakit supports IBus native input and the existing X11 insertion route. Choose a transport under [insertion selection](#insertion-selection-and-recovery).
 
 Push-to-talk remains `Ctrl+Space`:
 
@@ -79,13 +79,9 @@ Helper and client restart/reconnect behavior was checked separately through isol
 
 ## Insertion Selection And Recovery
 
-`--insertion-backend ibus` requires native delivery. `--insertion-backend x11` selects the existing X11 clipboard/direct route. The default `auto` prefers IBus, with X11 fallback only where supported. Set `daemon.insertion_backend` to keep that choice across starts.
+`--insertion-backend ibus` requires native delivery. `--insertion-backend x11` selects the existing X11 clipboard/direct route. The default `auto` prefers IBus, with X11 fallback only on a genuine X11 session when native insertion is unavailable before submission. Set `daemon.insertion_backend` to keep that choice across starts. Explicit `direct` mode retains X11 typing with automatic transport selection and conflicts with forced IBus insertion.
 
-Native target state is captured at recording start and checked again immediately before submission. Focus, field, source, reset, engine, or connection changes can invalidate it. Parakit then keeps the transcript in enabled daemon history instead of sending it to a new target. It never falls back after target invalidation or uncertain native delivery, because the text may already have arrived.
-
-IBus reports submission, not application reception. A `submitted` outcome means the native commit was sent. Inspect the target before retrying an `uncertain` outcome. Native delivery leaves the clipboard unchanged, including when `--keep-transcript-clipboard` is configured.
-
-Terminal mode remains the default. Native terminal commits reject tabs and embedded newlines because they do not provide clipboard bracketed-paste semantics. Use [daemon history](running.md#daemon-control) for blocked text. Explicit copying uses the existing clipboard backend, which works through XWayland on normal GNOME Wayland sessions. Without that clipboard connection, the picker still previews text and `parakit history --text N` prints it in full.
+Inspect the [insertion outcome](logging.md#insertion-outcomes) before retrying native delivery. [Paste modes](running.md#insertion) control terminal tabs and newlines; use [daemon history](running.md#daemon-control) for blocked text and explicit copying.
 
 ## X11 Sessions
 
@@ -95,7 +91,7 @@ Tmux is fine when the tmux server was started from the current desktop login. A 
 
 Start a new terminal or tmux server from the current desktop session, rerun `parakit doctor`, then use the [background commands](running.md#background-use).
 
-If `doctor` reports that `Ctrl+Space` could not be registered, disable any desktop shortcut, input method, or keyboard remapper that already owns that chord and rerun `parakit doctor`. Ubuntu/GNOME IBus commonly uses `Ctrl+Space` to switch input methods, so check IBus first when the registered backend is intermittent after login, suspend, or an input-method state change.
+For registration failures or an intermittent shortcut after login, suspend, or an input-method change, follow [shortcut conflicts](#shortcut-conflicts).
 
 ## Shortcut Conflicts
 
@@ -121,11 +117,13 @@ For X11 clipboard insertion in `terminal` or `standard` mode, `parakit doctor --
 
 ## Focus Guard
 
-The legacy X11 focus guard, fail-open query behavior, and clipboard fallback are described under [insertion](running.md#insertion). Native IBus delivery requires a valid native target and does not inherit that fail-open behavior. Parakit does not inspect application internals with AT-SPI.
+Native IBus requires an eligible focused field and blocks known password/PIN fields. It keeps the recording target's engine and focus generation, then checks them immediately before submission. Focus loss, field or source changes, relevant resets, engine destruction, and reconnects invalidate pending insertion even when GNOME reuses the same input-context ID. Unknown native focus blocks delivery. Parakit retains blocked or uncertain transcripts in enabled daemon history and never falls back after target invalidation or uncertain native delivery, because text may already have arrived.
+
+The legacy X11 route compares the active X11 window. A clear focus change prevents the paste chord; non-direct modes still follow the shared clipboard policy. If focus capture or recheck fails because X11 is transiently unavailable, parakit pastes anyway. The transcript remains available through daemon history when enabled. Parakit does not inspect application internals with AT-SPI.
 
 Batch paste follows the shared [modifier wait and clipboard-retention behavior](running.md#clipboard-staging-and-restore).
 
-Direct typing also waits for modifiers, then rechecks focus and modifiers before each character. An unreadable modifier state blocks typing; a detected change stops the remaining text, so part of a transcript may already have been inserted. Tabs, newlines, and other control characters are rejected before typing because synthetic keys could navigate fields or submit text. Direct mode never copies a blocked transcript to the clipboard; use daemon history for recovery.
+Direct typing waits up to two seconds for held modifiers to be released, then rechecks focus and modifiers before each character. An unreadable modifier state blocks typing; a detected change stops the remaining text, so part of a transcript may already have been inserted. Tabs, newlines, and other control characters are rejected before typing because synthetic keys could navigate fields or submit text. Direct mode never copies a blocked transcript to the clipboard; use daemon history for recovery.
 
 ## Passive X11 Listen
 

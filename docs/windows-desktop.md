@@ -12,7 +12,7 @@ In Windows 11, open Settings > Privacy & security > Microphone and enable microp
 
 ## Hotkey
 
-The default push-to-talk chord is `Ctrl+Space`, the same default as Linux. parakit registers it with Win32's `RegisterHotKey`, which gives a clean, OS-level conflict signal instead of racing another listener for the same keys.
+The push-to-talk chord is `Ctrl+Space` and is not configurable. parakit registers it with Win32's `RegisterHotKey`, which gives a clean, OS-level conflict signal instead of racing another listener for the same keys.
 
 `parakit doctor` probes the same registration and releases it immediately, so an already-owned chord shows up as a `hotkey` `FAIL` before you start the daemon. If another application already holds `Ctrl+Space` and you start the daemon anyway, `RegisterHotKey` fails and parakit exits right away with a message pointing back at `doctor`.
 
@@ -20,11 +20,11 @@ Some Windows input methods, particularly CJK IMEs, bind `Ctrl+Space` to toggle i
 
 Windows has a single hotkey backend. The Linux-only `--hotkey-backend` flag documented in [linux-desktop.md](linux-desktop.md) is not accepted on Windows; the `RegisterHotKey` path is always used.
 
-The chord is not configurable yet; Windows uses `Ctrl+Space`.
-
 ## Insertion
 
-Paste modes, clipboard staging, and focus checks are described under [insertion](running.md#insertion). When its background clipboard-history listener is available, Windows uses it to time restoration after the staged write reaches the clipboard; otherwise it uses a timed fallback. Neither path confirms that text landed in the target; see [insertion outcomes](logging.md#insertion-outcomes).
+Parakit compares the recording's foreground window before sending the paste shortcut with `SendInput`. If the target cannot be captured or verified, automatic paste is skipped. A normal user process cannot inject into an administrator/elevated target application. Rejected non-direct insertions still follow the shared [clipboard staging policy](running.md#clipboard-staging-and-restore).
+
+When its background clipboard-history listener is available, Windows uses it to time restoration after the staged write reaches the clipboard; otherwise it uses a timed fallback. Neither path confirms that text landed in the target; see [insertion outcomes](logging.md#insertion-outcomes). [Paste modes](running.md#insertion) select the shortcut or direct typing.
 
 ## `doctor --deep`
 

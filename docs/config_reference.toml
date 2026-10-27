@@ -3,8 +3,6 @@
 # An uncommented key is set to its literal default.
 # A commented-out key has no literal default (it is unset, depends on the platform, or is computed), and the value shown is only an example.
 # To start a config of your own, copy example.toml. Use this file to look keys up.
-# src/config_reference_tests.rs checks documented keys, loadable defaults and examples, and closed sets of accepted values.
-# src/rules/tests/config_reference.rs does the same for the built-in rule inventory below.
 #
 # File locations and config-command workflows: [configuration](configuration.md).
 #
@@ -17,10 +15,7 @@
 # Enum strings are lowercase and case-sensitive, except qwen.language accepts case-insensitive codes and names.
 #
 # When it is read: once per process, at startup. The daemon never watches the file, so restart it after every edit.
-# These commands read the file: `parakit start` (and bare `parakit`), `parakit doctor`, `parakit rules list`, `parakit rules test`, and `parakit config show`.
-# Each of them reads the current file on every run, so `rules test` and `config show` check an edit before the daemon is restarted.
-# These commands never read it, so they work with a broken file: `parakit fetch`, `cache`, `status`, `stop`, `copy-last`, `history`, `test-paste`, `ibus`, and `config path`, `init`, `edit`.
-# A second `parakit start` while a daemon is already running prints "already running" and exits before it reads the file.
+# Commands that load it and commands available for repair: [configuration](configuration.md#validation-and-recovery).
 #
 # Value conventions: paths are used literally, with no ~ and no environment-variable expansion.
 # A relative path resolves against the working directory of the process that reads it, not against the directory of this file.
@@ -74,8 +69,7 @@
 # In a build without the `bundled` feature (an external libcrispasr) there is no device probe. Startup only warns and still opens the model with the GPU requested, and the CrispASR library decides what happens without one.
 # Overridden by: the --device flag.
 # Only used when: the model is opened. The policy is applied again on every idle reload (see daemon.model_idle_minutes).
-# On a bundled reload, "auto" loads on the CPU until the next offload when free GPU memory is below the required model registrations plus working space. Qwen on Metal counts two model file sizes plus 2 GiB; other Qwen GPUs count one file size plus 2 GiB; other models count one file size plus 1 GiB. It says so in a warning and a desktop notification. "gpu" fails that reload instead.
-# Warning: these Qwen allowances follow Linux CUDA/Vulkan and macOS Metal measurements at token budgets 512 and 4096, including a 270-second repeated-speech input. They are not allocation ceilings; other artifacts, hardware and native Windows calibration remain pending.
+# See: [idle reload device selection and memory limits](running.md#idle-model-offload).
 # Recommended: "auto".
 device = "auto"
 
@@ -91,13 +85,7 @@ device = "auto"
 # threads = 4
 
 # integer, 0 to 9223372036854775807. Minutes of uninterrupted idleness after which the daemon releases the speech model from memory. 0 disables offloading, so the model stays loaded.
-# Idle time uses a monotonic clock. It starts when the daemon becomes ready and restarts each time work finishes. Whether time spent in system sleep counts depends on the operating system.
-# Recording, queued dictations, transcription, text insertion, `parakit copy-last`, and `parakit test-paste` count as activity. `parakit status`, `history`, and `stop` do not.
-# After an offload, pressing the push-to-talk key reloads the model while audio is already being recorded. A three-note cue plays, then the normal listening tone once the model is ready if the key is still held.
-# If the key is released first, the audio is queued until the model is ready.
-# A reload never downloads anything. It uses the absolute model path, the thread count, Qwen settings, and the device policy fixed at startup.
-# If a reload fails (the model file was deleted or moved, or daemon.device is "gpu" and GPU memory is short), the error cue plays and a "Model unavailable" notification appears.
-# The reload is retried once when the key is released. If that also fails, the dictation is discarded without inserting anything ("Dictation discarded"), and the next key press tries again.
+# See: [idle timing, recording, reload, and failure recovery](running.md#idle-model-offload).
 # Overridden by: the --model-idle-minutes flag. An explicit flag value of 0 wins over a nonzero value here.
 # Negative values, fractions, non-integers, and integers above 9223372036854775807 fail config load. The flag accepts integers up to 18446744073709551615.
 # A huge value is not rejected at runtime: the model simply never offloads.
@@ -115,33 +103,19 @@ insertion_backend = "auto"
 
 # "terminal" | "standard" | "direct" (optional). Transcript content policy and the legacy paste shortcut.
 # Unset: "terminal" on Linux, "standard" on macOS and Windows.
-# "terminal" removes trailing newlines and blocks remaining newlines. Native IBus terminal commits also block tabs and retain the transcript in daemon history.
-# The clipboard route uses Ctrl+Shift+V on Linux and Windows and Cmd+V on macOS. Blocked multiline text follows daemon.keep_transcript_clipboard.
-# "standard" allows multi-line text. The clipboard route uses Ctrl+V on Linux and Windows and Cmd+V on macOS.
-# "direct" types the text with synthetic key events and never touches the clipboard. daemon.keep_transcript_clipboard has no effect in this mode.
+# See: [mode selection, normalization, and content policy](running.md#insertion).
 # On Linux, "direct" selects X11 even with daemon.insertion_backend = "auto". It conflicts with forced "ibus" and fails startup.
-# On Linux, "direct" blocks a whole transcript that contains a newline, a tab, or another control character after the normalization below, and types nothing.
-# On Linux, "direct" typing waits up to 2 seconds for held modifier keys to be released, and stops partway if focus or modifier state changes.
-# Every mode first normalizes the transcript: CRLF and CR become LF, NUL and the other ASCII control characters except tab and LF are dropped.
-# A transcript that is whitespace-only after normalization is skipped: nothing is pasted or stored in the transcript history, and the error tone plays.
+# See: [Linux direct-typing focus and modifier checks](linux-desktop.md#focus-guard).
 # Requires: on Linux, an X11 session for clipboard paste and direct typing, plus the XTest extension for clipboard paste. Native IBus does not require DISPLAY.
 # Requires: on macOS, Accessibility permission for every mode.
 # Overridden by: the --paste-mode flag. `parakit doctor --paste-mode` overrides this key for that one check only.
 # paste_mode = "standard"
 
 # bool. Whether the dictated text stays on the clipboard after it is pasted.
-# false: after a confirmed paste, the previous clipboard contents (text, HTML, file lists, images) are restored after a short delay.
-# If the previous contents are not a payload parakit can restore, the clipboard is cleared rather than left holding the transcript.
-# true: the transcript stays on the clipboard, and the previous contents are neither read nor restored.
+# false restores the previous supported clipboard payload after a confirmed paste; true retains the transcript without reading or restoring the previous contents.
 # Only used when: clipboard insertion with daemon.paste_mode "terminal" or "standard". Native IBus and "direct" never touch the clipboard.
 # Overridden by: the --keep-transcript-clipboard and --no-keep-transcript-clipboard flags, which force the value either way and conflict with each other.
-# The transcript is left on the clipboard whatever this key says in three cases.
-# First, on Linux and macOS, when the modifier keys are still held after waiting 2 seconds. The text is staged for you to paste by hand.
-# Second, on macOS, when the paste could not be confirmed.
-# Third, when the previous clipboard could not be read, or changed while it was being saved.
-# A transcript that terminal mode refuses (it is multi-line), or whose paste was blocked because focus changed or the paste backend was unavailable, is staged on the clipboard.
-# With false the previous clipboard is restored afterwards and the insertion is logged as "blocked". With true the transcript stays and the insertion is logged as "copied_only".
-# With true, if the paste keystroke itself fails, the transcript is also copied to the clipboard.
+# See: [staging, recovery exceptions, and supported restore formats](running.md#clipboard-staging-and-restore).
 # Warning: parakit never overwrites a clipboard that changed behind its back. If the clipboard no longer holds the staged transcript when the restore would run, the restore is skipped and the newer contents are kept.
 # Warning: on macOS and Windows, a competing clipboard write seen after staging also cancels the paste.
 keep_transcript_clipboard = false
@@ -174,12 +148,12 @@ transcript_history = 10
 
 
 # ---------- [qwen]: language hints and generation limits ----------
+# These settings apply only to Qwen3-ASR GGUFs; other models ignore them after config validation.
 
 [qwen]
 # string. "auto" detects the source language; otherwise a supported language code or English name forces it.
 # Supported codes/names (case-insensitive, surrounding whitespace ignored): zh/Chinese, en/English, yue/Cantonese, ar/Arabic, de/German, fr/French, es/Spanish, pt/Portuguese, id/Indonesian, it/Italian, ko/Korean, ru/Russian, th/Thai, vi/Vietnamese, ja/Japanese, tr/Turkish, hi/Hindi, ms/Malay, nl/Dutch, sv/Swedish, da/Danish, fi/Finnish, pl/Polish, cs/Czech, fil/Filipino, fa/Persian, el/Greek, hu/Hungarian, mk/Macedonian, ro/Romanian.
 # Empty strings and unsupported names/codes fail config load; regional codes such as en-US are not accepted.
-# Only used when: the loaded GGUF has the Qwen3-ASR backend. Other models ignore this setting after config validation.
 # Overridden by: --qwen-language. Explicit Qwen CLI controls fail with a non-Qwen model.
 # The normalized canonical name is reapplied on every idle reload.
 # Recommended: use cleaning.enabled = false for multilingual dictation to bypass English built-in rules and all user cleaning rules.
@@ -187,7 +161,6 @@ language = "auto"
 
 # integer, 1 to 4096. Maximum generated tokens per native Qwen audio chunk, including the token that ends decoding.
 # An utterance fails if any chunk reaches the budget without EOS, or another native decoding error occurs; incomplete text is not inserted or added as a successful transcript.
-# Only used when: the loaded GGUF has the Qwen3-ASR backend. Other models ignore this setting after config validation.
 # Overridden by: --qwen-max-new-tokens. Explicit Qwen CLI controls fail with a non-Qwen model.
 # The same budget is reapplied on every idle reload. 0, fractions, negative values, and values above 4096 fail config load.
 max_new_tokens = 512
@@ -224,10 +197,7 @@ keep_trailing_period = false
 # number, 0 or more (integer or float). Decides which spoken numbers the spoken-numbers rule turns into digits.
 # Only isolated single-digit numbers ("zero" to "nine") and isolated ordinals ("first", "twenty first") are compared with the threshold.
 # One whose value is below the threshold is left exactly as the model produced it, neither forced to words nor to digits. One at or above it becomes digits.
-# Cardinal numbers of 10 or more are converted at any threshold. So is a number listed next to other numbers: "Zero, one, two, three, four." becomes "0, 1, 2, 3, 4" at the default.
-# Example: with 5, "four apples" and "two apples" stay as written and "five apples" becomes "5 apples". With the default 4, zero through three stay as written.
-# 0 converts every recognized isolated number. Protections still apply at 0: a run of adjacent small numbers ("one two three"), plural magnitudes, fractions, and the time unit "second" stay as words.
-# The effective default is 4, applied when the key is absent. An explicit 0 is a different setting from absent.
+# See: [conversion examples, preserved expressions, and the difference between absent and zero](cleaning-rules.md#numbers).
 # Negative, infinite, and NaN values fail config load with "number threshold must be a finite value greater than or equal to 0".
 # Only used when: cleaning.enabled is true and the spoken-numbers rule is not disabled. The value is validated either way.
 # The structural number rules (spoken-version-numbers, numeric-point-suffixes, compact-parameter-counts, and the other numeric rules) do not read it.
@@ -290,14 +260,13 @@ disabled_rules = []
 # path string (optional). Directory for JSONL transcription logs: one record per completed dictation (raw and cleaned text, model filename/preset, quantization, device policy, effective Qwen controls, cleaning metadata and timings) and one per insertion attempt (outcome and clipboard telemetry).
 # Unset: transcription logging is off.
 # Overridden by: the --log-dir flag. No flag turns a configured directory off.
-# Files are named parakit-YYYY-MM-DD.jsonl by local date and are appended to, one file per day. parakit never rotates or deletes them.
 # The directory is created on the first write, so neither `parakit config show` nor daemon startup can prove it is writable.
 # A write failure prints `parakit: transcription log write failed: ...` (or `insertion log write failed`) to stderr, which --quiet does not suppress. Dictation continues, and the next dictation tries again.
-# Silent or no-speech captures and failed transcriptions are not logged. Audio is never logged.
 # This is independent of daemon.transcript_history, which keeps recent transcripts in daemon memory only.
 # An empty string fails config load with "logging.dir is set but empty".
 # An empty --log-dir value is a command-line parse error.
 # Warning: the log holds the raw and cleaned dictated text in plain text.
+# See: [file layout, record fields, and write behavior](logging.md).
 # dir = "/home/user/.parakit/logs"
 
 
@@ -366,9 +335,7 @@ backend = "auto"
 # Variables that matter only when building from source are outside this reference.
 
 # PARAKIT_CONFIG_PATH
-# Path of the config file. Used verbatim when set. Empty is an error. A relative path is relative to the working directory.
-# A path that does not exist makes `start`, `doctor`, `rules`, and `config show` fail with "PARAKIT_CONFIG_PATH names <path>, which does not exist". `config path`, `init`, and `edit` still work. For built-in defaults, point it at an empty file.
-# Read by `start`, `doctor`, `rules`, and every `config` subcommand.
+# Config-file override; path selection and missing-file behavior are in [configuration](configuration.md#file-location).
 
 # PARAKIT_MODELS_DIR
 # Directory that holds downloaded models. Used verbatim when set. Empty is an error. A relative path is relative to the working directory.
@@ -393,13 +360,10 @@ backend = "auto"
 # The socket directory must be owned by you, and parakit sets it to mode 0700.
 
 # VISUAL
-# Editor for `parakit config edit`, tried first. A value that is empty or whitespace-only is ignored, and the command falls through to EDITOR.
-# The value is split into a program and arguments with shell-style quoting (for example `code -w`) and run without a shell, with the config path appended. An unmatched quote is an error.
+# Editor for `parakit config edit`, tried before EDITOR; [selection and command parsing](configuration.md#details).
 
 # EDITOR
-# Editor for `parakit config edit` when VISUAL is unset or blank, parsed the same way.
-# A blank EDITOR is ignored too.
-# With neither one set to a nonblank value the command fails and prints the path to edit by hand. If the config file did not exist, the template is written first.
+# Editor fallback for `parakit config edit`; see VISUAL above.
 
 # DISPLAY
 # Linux. Required by X11 hotkeys, clipboard paste, direct typing, and the existing clipboard-copy backend. Native IBus insertion and focused-field PTT do not require it.
@@ -428,16 +392,15 @@ backend = "auto"
 # Windows. Set by parakit to PASSIVE unless it is already set to anything, including an empty string.
 
 # CRISPASR_FC_PW_Q8
+# The two CRISPASR_FC controls are inherited at launch and cached by the native library; restart after changes. Neither has a config key or command-line flag.
 # All platforms. Switch read by the native CrispASR library when it loads the model, and cached after the first read. It controls whether the F16 convolution pointwise weights of each layer are repacked into an extra Q8_0 copy.
 # Set by every parakit command to 0 at process start, which turns the repack off, unless it is already set to anything, including an empty string.
 # The library treats a value starting with 0 as off, any other nonempty value as on, and an empty or absent value as automatic, which repacks only a model that is already quantized.
-# To use another value, set it in the environment that launches parakit. The model is opened by that same process, and a change made while it runs has no effect. There is no config key or command-line flag for it.
 
 # CRISPASR_FC_FUSED_QKV
 # All platforms. Switch read by the native CrispASR library when it loads the model, and cached after the first read. It controls whether the attention query, key, and value weights of each layer are concatenated into an extra fused copy.
 # Set by every parakit command to 0 at process start, which turns the fused copy off, unless it is already set to anything, including an empty string.
 # The library treats a value starting with 0 as off, and any other value, including an empty string or an absent variable, as on.
-# To use another value, set it in the environment that launches parakit. The model is opened by that same process, and a change made while it runs has no effect. There is no config key or command-line flag for it.
 
 # CRISP_AUDIO_WINDOWED_ATTN
 # All platforms. Native Qwen audio-encoder attention control. Parakit sets it to 1 before native initialization unless it is already present, including an empty string.

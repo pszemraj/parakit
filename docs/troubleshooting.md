@@ -1,19 +1,6 @@
 # Troubleshooting
 
-Start with `parakit doctor`; it does not load the model. Launch behavior and exit codes are in [running.md#first-run](running.md#first-run).
-
-```text
-parakit doctor
-parakit doctor --verbose
-parakit doctor --deep
-```
-
-The `hotkey`, `daemon`, `mic`, and `insertion` status lines identify which checks need attention. If a daemon is already running, use its local control channel:
-
-```text
-parakit status
-parakit stop
-```
+Start with [parakit doctor](running.md#first-run). The `hotkey`, `daemon`, `mic`, and `insertion` status lines identify which checks need attention. For a running daemon, use [status and control commands](running.md#daemon-control).
 
 ## Hotkey Problems
 

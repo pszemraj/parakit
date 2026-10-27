@@ -1,6 +1,6 @@
 # Model Memory and Idle Offload
 
-The daemon owns one inference session on its worker thread. Idle offload drops that session, releasing its owned CPU and GPU allocations. It does not unload native libraries or reset process-wide device and driver state. See [idle model offload](../running.md#idle-model-offload) for the user-facing policy.
+See [idle model offload](../running.md#idle-model-offload) for residency and reload policy. Measurements below distinguish session-owned allocations from retained process and driver state.
 
 ## Qwen GPU Reload Measurements
 

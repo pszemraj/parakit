@@ -10,7 +10,7 @@ keep_trailing_period = true
 number_threshold = 5
 ```
 
-That is the same config as the commented starter file [example.toml](example.toml), which explains each choice. Save it as `config.toml` at the path printed by `parakit config path`. Every key is optional, and `parakit config init` writes a commented template listing all of them. The [annotated reference](config_reference.toml) lists every key with its type, default, accepted values, interactions, and warnings, and documents parakit-owned environment variables. It is itself a valid config file that holds every default.
+Save this [starter config](example.toml) as `config.toml` at the path printed by `parakit config path`. The [annotated reference](config_reference.toml) lists every key, default, accepted value, interaction, and environment variable.
 
 > [!IMPORTANT]
 > The daemon reads this file once at startup and does not watch it. Restart the daemon after every edit.
@@ -23,7 +23,7 @@ parakit resolves one config path:
 2. Linux and macOS: `$XDG_CONFIG_HOME/parakit/config.toml`, or `$HOME/.config/parakit/config.toml` when `XDG_CONFIG_HOME` is unset or empty.
 3. Windows: `%APPDATA%\parakit\config.toml`.
 
-Setting `PARAKIT_CONFIG_PATH` to an empty value is an error. So is pointing it at a file that does not exist: `start`, `doctor`, `rules`, and `config show` refuse to run on defaults in that case, while `config path`, `config init`, and `config edit` still work so the file can be created. A missing file at the default location is fine and selects built-in defaults. A relative override path stays relative to the process working directory. All configured paths, including `PARAKIT_CONFIG_PATH`, `daemon.model`, and `logging.dir`, are used literally; parakit does not expand `~` or environment variables inside them. On Linux and macOS, resolution fails with `HOME is unset or empty` when neither `XDG_CONFIG_HOME` nor `HOME` is set to a nonempty value.
+Setting `PARAKIT_CONFIG_PATH` to an empty value is an error. So is pointing it at a file that does not exist: `start`, `doctor`, `rules`, and `config show` refuse to run on defaults in that case, while `config path`, `config init`, and `config edit` still work so the file can be created. A relative override path stays relative to the process working directory. All configured paths, including `PARAKIT_CONFIG_PATH`, `daemon.model`, and `logging.dir`, are used literally; parakit does not expand `~` or environment variables inside them. On Linux and macOS, resolution fails with `HOME is unset or empty` when neither `XDG_CONFIG_HOME` nor `HOME` is set to a nonempty value.
 
 ## Commands
 

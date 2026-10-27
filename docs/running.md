@@ -18,9 +18,9 @@ parakit --quiet doctor
 parakit doctor --deep
 ```
 
-`--verbose` and `--quiet` are global flags: they work whether they come before or after `doctor`. Linux uses [IBus with supported X11 fallback](linux-desktop.md); GNOME Wayland requires the Parakit input source and supports focused-field push-to-talk. On macOS, `doctor` checks Accessibility, Input Monitoring, and Microphone status for the terminal that launched parakit.
+`--verbose` and `--quiet` are global flags: they work whether they come before or after `doctor`. Follow the desktop setup for [Linux](linux-desktop.md), [macOS](macos-desktop.md), or [Windows](windows-desktop.md).
 
-The daemon checks the hotkey backend, insertion backend, and singleton lock before any model download. If those preflights pass, it starts the control endpoint, opens the microphone, warns when the selected source looks like Bluetooth, downloads the default Q8_0 GGUF if it is not already cached, opens the model, and starts the hotkey loop. `status`, `stop`, and a second `start` remain available while the model downloads or loads. Linux backend details are in [linux-desktop.md](linux-desktop.md).
+The daemon checks the hotkey backend, insertion backend, and singleton lock before any model download. If those preflights pass, it starts the control endpoint, opens the microphone, warns when the selected source looks like Bluetooth, downloads the default Q8_0 GGUF if it is not already cached, opens the model, and starts the hotkey loop. `status`, `stop`, and a second `start` remain available while the model downloads or loads.
 
 Normal startup:
 
@@ -288,7 +288,9 @@ Bluetooth microphones are allowed, but parakit prints a warning because headset 
 
 ## Insertion
 
-Parakit transcribes once on hotkey release. On Linux, `--insertion-backend auto` prefers IBus delivery through the selected Parakit input source. The native route neither stages the clipboard nor sends a paste chord. It rechecks the native recording target before committing. Native submission is not application acknowledgement; a missing reply can leave delivery uncertain, so inspect the field before retrying. Setup and backend overrides are in [Linux desktop input](linux-desktop.md#ibus-setup).
+Parakit transcribes once on hotkey release. Linux supports [IBus and X11 insertion transports](linux-desktop.md#insertion-selection-and-recovery); other platforms use their desktop input APIs.
+
+All modes convert CRLF and CR to LF, then drop NUL and other ASCII control characters except tab and LF. A whitespace-only result follows the [skipped outcome](logging.md#insertion-outcomes).
 
 Paste mode controls transcript content and the shortcut used by the clipboard route:
 
@@ -303,8 +305,6 @@ parakit start --paste-mode terminal
 parakit start --paste-mode standard
 parakit start --paste-mode direct
 ```
-
-Explicit `direct` mode retains X11 typing on Linux, including with automatic transport selection, and conflicts with forced IBus insertion. Native IBus blocks known password/PIN fields and retains blocked or uncertain transcripts in enabled daemon history. Its target invalidation and uncertainty never trigger an automatic fallback paste.
 
 ### Clipboard Staging And Restore
 
@@ -324,13 +324,7 @@ Use [daemon history](#daemon-control) for same-session recovery or [JSONL loggin
 
 ### Focus Changes
 
-Native IBus captures the recording target's engine and focus generation. Focus loss, relevant resets, input-source changes, engine destruction, and reconnects invalidate pending native insertion even when GNOME reuses the same input-context ID. Unknown native focus blocks delivery. The clipboard remains unchanged and enabled daemon history retains the transcript.
-
-On the legacy Linux/X11 route, parakit records the active X11 window when recording starts. If focus clearly changes before insertion, it does not send a paste chord, but non-direct modes still stage the transcript before restoring the active clipboard. If focus capture or recheck fails because X11 is transiently unavailable, parakit pastes anyway; the transcript remains available through `parakit copy-last` either way.
-
-On Windows, parakit records the foreground window at PTT-down, rechecks it before paste, and sends the paste shortcut with `SendInput`. If the foreground target cannot be captured or verified, automatic paste is skipped, but non-direct modes still stage the transcript before restoring the active clipboard. A normal user process cannot inject into an administrator/elevated target application.
-
-On macOS, parakit records the frontmost application's focused Accessibility UI element at PTT-down, rechecks it before paste, and sends `Cmd+V` or direct typing through the Accessibility-controlled desktop input path. Matching is by focused-element identity rather than on-screen window id, so actual same-app field or window changes are detected without relying on transient window-list churn from palettes, popovers, sheets, or z-order changes. When an application exposes no focused Accessibility element, matching process and bundle identity provide the fallback instead of blocking insertion; a real application or focused-element mismatch still blocks it. Non-direct modes still stage the transcript before restoring the active clipboard.
+Parakit captures focus at PTT-down and checks it before insertion. Target identity and failure behavior depend on the platform: [Linux IBus and X11](linux-desktop.md#focus-guard), [Windows](windows-desktop.md#insertion), or [macOS](macos-desktop.md#insertion). Clipboard handling after a rejected non-direct insertion follows the [staging and restore policy](#clipboard-staging-and-restore).
 
 ### Paste Acknowledgement On macOS
 
