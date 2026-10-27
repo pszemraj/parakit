@@ -70,7 +70,7 @@ pub(super) fn text_response(
         text: state.resolve_history_reference(reference)?,
     };
     if serde_json::to_vec(&response)?.len() > IPC_MAX_MESSAGE_SIZE {
-        bail!("transcript is too large for the 64 KiB control response; use copy-last to copy its full text");
+        bail!("transcript is too large for the 64 KiB control response; copy the selected entry with Enter in the history picker");
     }
     Ok(response)
 }
@@ -152,10 +152,18 @@ mod tests {
         let text = "\n".repeat(IPC_MAX_MESSAGE_SIZE / 2);
         state.remember_transcript(text.clone());
         let reference = state.history_snapshot(None)[0].reference.clone();
-        assert!(text_response(&state, &reference)
-            .unwrap_err()
-            .to_string()
-            .contains("64 KiB"));
+        state.remember_transcript("newest entry".into());
+        let message = text_response(&state, &reference).unwrap_err().to_string();
+        assert!(message.contains("64 KiB"));
+        assert!(message.contains("Enter in the history picker"));
+        assert!(!message.contains("copy-last"));
         assert_eq!(state.resolve_history_reference(&reference).unwrap(), text);
+        let mut copied = String::new();
+        copy_selected(&state, &reference, |selected| {
+            copied = selected.to_owned();
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(copied, text);
     }
 }
