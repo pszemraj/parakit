@@ -147,50 +147,51 @@ pub(crate) fn insert_text(
     ui: (&Logger, &Notifier),
 ) -> Result<InsertReport> {
     let (log, notifier) = ui;
-    #[cfg(target_os = "linux")]
-    if focus.snapshot.is_some_and(FocusSnapshot::is_native) {
-        return insert_native(injector, raw_text, mode, focus, (log, notifier));
-    }
-    log.verbose(format!(
-        "parakit: insertion transport={}",
-        if mode == PasteMode::Direct {
-            "direct"
-        } else {
-            "clipboard"
+    let mut perform_insertion = || {
+        #[cfg(target_os = "linux")]
+        if focus.snapshot.is_some_and(FocusSnapshot::is_native) {
+            return insert_native(injector, raw_text, mode, focus, (log, notifier));
         }
-    ));
-    let result = match sanitize_for_paste(raw_text, mode) {
-        PastePlan::Paste(text) => paste_transcript(
-            injector,
-            &text,
-            mode,
-            keep_transcript_clipboard,
-            focus,
-            log,
-            notifier,
-        ),
-        PastePlan::CopyOnly { text, reason } => {
-            log.warn(format!("paste blocked by sanitizer ({})", reason.log_tag()));
-            copy_or_block_transcript(
+        log.verbose(format!(
+            "parakit: insertion transport={}",
+            if mode == PasteMode::Direct {
+                "direct"
+            } else {
+                "clipboard"
+            }
+        ));
+        match sanitize_for_paste(raw_text, mode) {
+            PastePlan::Paste(text) => paste_transcript(
                 injector,
                 &text,
+                mode,
                 keep_transcript_clipboard,
-                "sanitized transcript clipboard fallback failed",
-                reason,
+                focus,
                 log,
                 notifier,
-            )
-        }
-        PastePlan::Skip { reason } => {
-            log.verbose(format!("paste skipped by sanitizer: {}", reason.log_tag()));
-            Ok(InsertReport::placeholder(InsertOutcome::Skipped, false))
+            ),
+            PastePlan::CopyOnly { text, reason } => {
+                log.warn(format!("paste blocked by sanitizer ({})", reason.log_tag()));
+                copy_or_block_transcript(
+                    injector,
+                    &text,
+                    keep_transcript_clipboard,
+                    "sanitized transcript clipboard fallback failed",
+                    reason,
+                    log,
+                    notifier,
+                )
+            }
+            PastePlan::Skip { reason } => {
+                log.verbose(format!("paste skipped by sanitizer: {}", reason.log_tag()));
+                Ok(InsertReport::placeholder(InsertOutcome::Skipped, false))
+            }
         }
     };
-    if let Err(error) = &result {
+    perform_insertion().inspect_err(|error| {
         let typed_chars = insertion_error_report(error).and_then(|report| report.typed_chars);
         notifier.insertion_failed(typed_chars);
-    }
-    result
+    })
 }
 
 fn paste_transcript(

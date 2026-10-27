@@ -20,7 +20,7 @@ fn native_failures_attempt_clipboard_before_history_without_display() {
         return;
     }
     let log = Arc::new(Logger::new(LogLevel::Quiet));
-    let notifier = Notifier::silent(Arc::clone(&log));
+    let (notifier, messages) = Notifier::test_channel(Arc::clone(&log));
     let snapshot = FocusSnapshot::from_native(None, None);
     for (text, kind) in [
         ("recover this dictation", "ibus_rejected"),
@@ -43,6 +43,10 @@ fn native_failures_attempt_clipboard_before_history_without_display() {
         assert!(insertion_result_remembers_transcript(&result));
         let error = result.unwrap_err();
         assert!(format!("{error:#}").contains("native transcript clipboard recovery failed"));
+        assert_notice(
+            &messages,
+            Some(("Insertion failed", "Check the target before retrying.")),
+        );
         let report = insertion_error_report(&error).expect("native failure evidence");
         assert_eq!(report.outcome, InsertOutcome::Blocked);
         assert!(injector.is_some(), "clipboard recovery was never attempted");
