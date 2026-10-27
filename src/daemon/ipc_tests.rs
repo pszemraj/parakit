@@ -491,6 +491,25 @@ fn preview_text_truncates_long_text_on_a_char_boundary() {
     assert!(preview.starts_with(&"é".repeat(72)));
 }
 
+#[test]
+fn history_metadata_preserves_full_unicode_text_and_preview_boundaries() {
+    let state = SharedState::new();
+    let text = format!("  {}\n\t end  ", "雪".repeat(HISTORY_PREVIEW_MAX_CHARS));
+    state.remember_transcript(text.clone());
+    let entries = state.history_snapshot(None);
+    assert_eq!(entries[0].chars, text.chars().count());
+    assert_eq!(
+        entries[0].preview,
+        format!("{}…", "雪".repeat(HISTORY_PREVIEW_MAX_CHARS))
+    );
+    assert_eq!(state.resolve_transcript(0).unwrap(), text);
+    assert_eq!(
+        preview_text(&"雪".repeat(HISTORY_PREVIEW_MAX_CHARS)),
+        "雪".repeat(HISTORY_PREVIEW_MAX_CHARS)
+    );
+    assert_eq!(preview_text(" \t\n\u{2003}"), "");
+}
+
 fn sample_daemon_info() -> DaemonInfo {
     DaemonInfo {
         pid: 4242,

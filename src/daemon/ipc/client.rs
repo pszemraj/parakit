@@ -131,7 +131,15 @@ pub(crate) fn run_history(
     {
         return run_client(IpcCommand::History { limit }, quiet, false);
     }
-    let entries = match send_command(&IpcCommand::History { limit })? {
+    let command = IpcCommand::History { limit };
+    let response = match send_command(&command) {
+        Ok(response) => response,
+        Err(error) if error.is::<DaemonNotRunning>() => {
+            return handle_daemon_not_running(&command, quiet, Instant::now());
+        }
+        Err(error) => return Err(error),
+    };
+    let entries = match response {
         IpcResponse::History { entries } => entries,
         IpcResponse::Err { message } => bail!(message),
         _ => bail!("unexpected history response"),

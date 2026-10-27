@@ -1,7 +1,7 @@
 //! Unix-domain-socket transport for the daemon control protocol.
 
 use super::*;
-use std::io::{BufRead, BufReader, Read as _, Write};
+use std::io::{BufRead, BufReader, BufWriter, Read as _, Write};
 
 /// Start the Unix-domain-socket daemon control server.
 ///
@@ -172,8 +172,10 @@ fn write_response(
     stream: &mut std::os::unix::net::UnixStream,
     response: &IpcResponse,
 ) -> Result<()> {
-    serde_json::to_writer(&mut *stream, response).context("serialize control response")?;
-    stream.write_all(b"\n").context("write control response")?;
+    let mut writer = BufWriter::new(stream);
+    serde_json::to_writer(&mut writer, response).context("serialize control response")?;
+    writer.write_all(b"\n").context("write control response")?;
+    writer.flush().context("flush control response")?;
     Ok(())
 }
 
@@ -213,10 +215,14 @@ pub(super) fn send_command(command: &IpcCommand) -> Result<IpcResponse> {
     stream
         .set_write_timeout(Some(IPC_TRANSPORT_TIMEOUT))
         .context("set daemon control socket write timeout")?;
-    serde_json::to_writer(&mut stream, &command).context("serialize control command")?;
-    stream
-        .write_all(b"\n")
-        .context("write daemon control command")?;
+    {
+        let mut writer = BufWriter::new(&mut stream);
+        serde_json::to_writer(&mut writer, &command).context("serialize control command")?;
+        writer
+            .write_all(b"\n")
+            .context("write daemon control command")?;
+        writer.flush().context("flush daemon control command")?;
+    }
 
     let mut reader = BufReader::new(stream);
     let mut line = String::new();

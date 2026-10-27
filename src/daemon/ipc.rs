@@ -343,6 +343,8 @@ struct StateSnapshot {
 struct TranscriptEntry {
     id: u64,
     text: String,
+    chars: usize,
+    preview: String,
     at: Instant,
 }
 
@@ -426,12 +428,16 @@ impl SharedState {
         if self.history_limit == 0 {
             return;
         }
+        let chars = text.chars().count();
+        let preview = preview_text(&text);
         let mut inner = self.inner.lock();
         let id = inner.next_transcript;
         inner.next_transcript += 1;
         inner.history.push_front(TranscriptEntry {
             id,
             text,
+            chars,
+            preview,
             at: Instant::now(),
         });
         inner.history.truncate(self.history_limit);
@@ -608,8 +614,8 @@ impl SharedState {
                 },
                 index: position + 1,
                 age_secs: now.saturating_duration_since(entry.at).as_secs(),
-                chars: entry.text.chars().count(),
-                preview: preview_text(&entry.text),
+                chars: entry.chars,
+                preview: entry.preview.clone(),
             })
             .collect()
     }
@@ -669,13 +675,15 @@ fn last_transcript_summary(
 /// collapsed to a single space and trimmed, truncated on a char boundary
 /// to 72 characters with a trailing `…` when truncation occurred.
 fn preview_text(text: &str) -> String {
-    let collapsed = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    if collapsed.chars().count() <= HISTORY_PREVIEW_MAX_CHARS {
-        return collapsed;
+    let mut chars = text
+        .split_whitespace()
+        .flat_map(|word| std::iter::once(' ').chain(word.chars()))
+        .skip(1);
+    let mut preview: String = chars.by_ref().take(HISTORY_PREVIEW_MAX_CHARS).collect();
+    if chars.next().is_some() {
+        preview.push('…');
     }
-    let mut truncated: String = collapsed.chars().take(HISTORY_PREVIEW_MAX_CHARS).collect();
-    truncated.push('…');
-    truncated
+    preview
 }
 
 #[cfg(any(unix, target_os = "windows"))]

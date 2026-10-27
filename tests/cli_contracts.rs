@@ -261,6 +261,12 @@ fn daemon_only_commands_report_an_absent_daemon_cleanly() {
             "parakit: error: daemon is not running; start it with `parakit start` first\n",
         ),
         (
+            &["history", "--text", "1"],
+            1,
+            "",
+            "parakit: error: daemon is not running; start it with `parakit start` first\n",
+        ),
+        (
             &["copy-last"],
             1,
             "",
@@ -546,7 +552,26 @@ fn config_show_reports_resolved_model_selection() {
                 "missing {expected:?} in:\n{stdout}"
             );
         }
+        #[cfg(target_os = "linux")]
+        assert!(stdout.contains("    insertion_backend: (default: auto)"));
     }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn config_show_reports_explicit_insertion_backend() {
+    let root =
+        common::fixture_root_with_files("cli-contracts", "insertion-backend", &["config.toml"]);
+    let config_path = root.join("config.toml");
+    std::fs::write(&config_path, "[daemon]\ninsertion_backend = 'x11'\n").unwrap();
+    let output = isolated_parakit(&root)
+        .env("PARAKIT_CONFIG_PATH", config_path)
+        .args(["config", "show"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert!(output.stderr.is_empty(), "{output:?}");
+    assert!(String::from_utf8_lossy(&output.stdout).contains("    insertion_backend: x11"));
 }
 
 #[test]
