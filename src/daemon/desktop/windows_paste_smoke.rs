@@ -18,8 +18,10 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WS_OVERLAPPEDWINDOW, WS_TABSTOP, WS_VISIBLE,
 };
 
-use super::inject::{ClipboardSnapshot, PasteMode};
-use super::windows_clipboard_history::{hwnd_from_raw, register_window_class};
+use super::super::windows_clipboard_history::{hwnd_from_raw, register_window_class};
+use super::super::windows_input;
+use super::clipboard_guard::{ClipboardRestore, StagedClipboard};
+use super::{ClipboardPolicy, ClipboardSnapshot, PasteMode};
 
 const FOCUS_SETTLE: Duration = Duration::from_millis(200);
 const CLIPBOARD_SETTLE: Duration = Duration::from_millis(75);
@@ -81,7 +83,8 @@ struct RawRect {
 ///
 /// # Returns
 ///
-/// `Ok(())` when the sentinel reaches the owned edit window.
+/// `Ok(())` when the sentinel reaches the owned edit window. Cleanup restores
+/// the previous clipboard only while the staged sentinel is still current.
 ///
 /// # Errors
 ///
@@ -102,9 +105,11 @@ pub(crate) fn windows_paste_smoke_test(mode: PasteMode) -> Result<()> {
     let mut clipboard = Clipboard::new().context("could not open system clipboard")?;
     let previous = ClipboardSnapshot::capture(&mut clipboard)
         .context("could not capture clipboard before Windows paste smoke test")?;
+    let staged = Clipboard::set_text(&mut clipboard, sentinel.clone())
+        .context("could not stage Windows paste smoke sentinel on clipboard");
+    let previous = StagedClipboard::capture(&mut clipboard, previous, &sentinel);
     let test_result = (|| -> Result<()> {
-        Clipboard::set_text(&mut clipboard, sentinel.clone())
-            .context("could not stage Windows paste smoke sentinel on clipboard")?;
+        staged?;
         match ClipboardSnapshot::capture(&mut clipboard)
             .context("could not snapshot text-only Windows smoke clipboard")?
         {
@@ -112,7 +117,7 @@ pub(crate) fn windows_paste_smoke_test(mode: PasteMode) -> Result<()> {
             _ => bail!("Windows text-only clipboard snapshot did not preserve the sentinel"),
         }
         thread::sleep(CLIPBOARD_SETTLE);
-        super::windows_input::send_paste_chord(mode == PasteMode::Terminal)
+        windows_input::send_paste_chord(mode == PasteMode::Terminal)
             .context("Windows paste smoke insertion failed")?;
 
         pump_messages_for(PASTE_SETTLE);
@@ -125,7 +130,12 @@ pub(crate) fn windows_paste_smoke_test(mode: PasteMode) -> Result<()> {
         Ok(())
     })();
 
-    let restore_result = previous.restore(&mut clipboard);
+    let restore_result = previous
+        .restore(&mut clipboard, ClipboardPolicy::RestorePrevious)
+        .and_then(|restored| match restored {
+            ClipboardRestore::Changed(Some(diagnostic)) => bail!(diagnostic),
+            _ => Ok(()),
+        });
     match (test_result, restore_result) {
         (Ok(()), Ok(())) => Ok(()),
         (Err(err), Ok(())) => Err(err),
@@ -191,7 +201,7 @@ impl TestEditWindow {
     fn focus(&self) -> Result<()> {
         let _attach = ForegroundThreadAttach::attach();
 
-        let _ = super::windows_input::send_foreground_unlock_alt_tap();
+        let _ = windows_input::send_foreground_unlock_alt_tap();
         unsafe {
             let _ = ShowWindow(self.parent, SW_RESTORE);
             let _ = SetWindowPos(

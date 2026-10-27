@@ -49,6 +49,10 @@ use paste_transaction::{paste_with_clipboard_swap_guarded, stage_text_without_pa
 #[path = "inject_smoke.rs"]
 mod inject_smoke;
 
+#[cfg(target_os = "windows")]
+#[path = "windows_paste_smoke.rs"]
+mod windows_paste_smoke;
+
 #[cfg(target_os = "linux")]
 #[path = "direct.rs"]
 mod direct;
@@ -762,7 +766,7 @@ fn platform_paste_smoke_test(mode: PasteMode) -> Result<()> {
 
 #[cfg(target_os = "windows")]
 fn platform_paste_smoke_test(mode: PasteMode) -> Result<()> {
-    super::windows_paste_smoke::windows_paste_smoke_test(mode)
+    windows_paste_smoke::windows_paste_smoke_test(mode)
 }
 
 /// Run the macOS `doctor --deep` insertion smoke test.

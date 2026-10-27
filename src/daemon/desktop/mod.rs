@@ -110,9 +110,6 @@ pub(crate) mod windows_focus;
 /// Windows keyboard and clipboard insertion helpers.
 pub(crate) mod windows_input;
 #[cfg(target_os = "windows")]
-/// Windows paste-path smoke checks.
-pub(crate) mod windows_paste_smoke;
-#[cfg(target_os = "windows")]
 /// Windows security and process-context helpers.
 pub(crate) mod windows_security;
 
