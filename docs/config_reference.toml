@@ -53,7 +53,7 @@
 # model_preset = "qwen3-asr-1.7b"
 
 # "q8_0" | "q6_k" (optional). Precision acquired for daemon.model_preset, or for parakeet-v3 when the preset is unset.
-# Unset: q8_0, the provider's hosted artifact. q6_k downloads F16 if needed and runs the bundled quantizer locally before readiness; subsequent starts reuse cached Q6_K offline.
+# Unset: q8_0, the provider's hosted artifact. q6_k downloads F16 if needed and runs the quantizer locally before readiness; subsequent starts reuse cached Q6_K offline.
 # Explicit CLI --quantize conflicts with -m/--model; configured model-selection conflicts are listed under daemon.model.
 # Overridden by: --quantize. An explicit CLI -m/--model ignores this configured precision and loads that file as it is.
 # Warning: a first Q6_K preparation can download several GB and take minutes; a preparation notice is printed to stderr even with --quiet. Windows needs a compatible crispasr-quantize.exe on PATH.
@@ -92,7 +92,7 @@ device = "auto"
 model_idle_minutes = 10
 
 # "auto" | "ibus" | "x11". Linux transcript insertion transport.
-# "auto" follows the hotkey route: IBus for engine-owned PTT, X11 for registered or passive X11 hotkeys. Native failures never trigger another paste.
+# "auto" uses IBus for engine-owned PTT unless daemon.paste_mode is "direct"; other combinations use X11. Native failures never trigger another paste.
 # "ibus" requires IBus hotkeys (set hotkey.backend = "ibus" on X11). "x11" requires an X11 session.
 # Only used when: Linux. macOS and Windows accept any string for dotfile portability, but do not read or validate it.
 # Overridden by: --insertion-backend. `parakit doctor --insertion-backend` overrides it for that check only.
@@ -102,7 +102,7 @@ insertion_backend = "auto"
 # "terminal" | "standard" | "direct" (optional). Transcript content policy and the legacy paste shortcut.
 # Unset: "terminal" on Linux, "standard" on macOS and Windows.
 # See: [mode selection, normalization, and content policy](running.md#insertion).
-# On Linux, "direct" selects X11 even with daemon.insertion_backend = "auto". It conflicts with forced "ibus" and fails startup.
+# Conflicts with: daemon.insertion_backend = "ibus" when this mode is "direct"; startup fails.
 # See: [Linux direct-typing focus and modifier checks](linux-desktop.md#focus-guard).
 # Requires: on Linux, an X11 session for clipboard paste and direct typing, plus the XTest extension for clipboard paste. Native IBus does not require DISPLAY.
 # Requires: on macOS, Accessibility permission for every mode.
@@ -146,19 +146,20 @@ transcript_history = 10
 
 # ---------- [qwen]: language hints and generation limits ----------
 # These settings apply only to Qwen3-ASR GGUFs; other models ignore them after config validation.
+# Explicit Qwen CLI controls fail with a non-Qwen model.
 
 [qwen]
 # string. "auto" detects the source language; otherwise a supported language code or English name forces it.
 # Supported codes/names (case-insensitive, surrounding whitespace ignored): zh/Chinese, en/English, yue/Cantonese, ar/Arabic, de/German, fr/French, es/Spanish, pt/Portuguese, id/Indonesian, it/Italian, ko/Korean, ru/Russian, th/Thai, vi/Vietnamese, ja/Japanese, tr/Turkish, hi/Hindi, ms/Malay, nl/Dutch, sv/Swedish, da/Danish, fi/Finnish, pl/Polish, cs/Czech, fil/Filipino, fa/Persian, el/Greek, hu/Hungarian, mk/Macedonian, ro/Romanian.
 # Empty strings and unsupported names/codes fail config load; regional codes such as en-US are not accepted.
-# Overridden by: --qwen-language. Explicit Qwen CLI controls fail with a non-Qwen model.
+# Overridden by: --qwen-language.
 # The normalized canonical name is reapplied on every idle reload.
-# Recommended: use cleaning.enabled = false for multilingual dictation to bypass English built-in rules and all user cleaning rules.
+# See: cleaning.enabled for multilingual cleanup.
 language = "auto"
 
 # integer, 1 to 4096. Maximum generated tokens per native Qwen audio chunk, including the token that ends decoding.
 # An utterance fails if any chunk reaches the budget without EOS, or another native decoding error occurs; incomplete text is not inserted or added as a successful transcript.
-# Overridden by: --qwen-max-new-tokens. Explicit Qwen CLI controls fail with a non-Qwen model.
+# Overridden by: --qwen-max-new-tokens.
 # The same budget is reapplied on every idle reload. 0, fractions, negative values, and values above 4096 fail config load.
 max_new_tokens = 512
 
@@ -400,14 +401,14 @@ backend = "auto"
 # Override it in the launching environment for reference comparisons; restart after changes. There is no config key or command-line flag for it.
 
 # CUDA_VISIBLE_DEVICES
-# CUDA builds. Read by the CUDA runtime, not by parakit. A comma-separated list of NVIDIA GPU indices or UUIDs that the process may use, so a single index pins inference to that GPU.
-# An empty value hides every GPU: daemon.device "auto" then runs on the CPU and "gpu" fails at startup. `parakit --verbose doctor` lists the devices that remain visible.
+# CUDA builds. Read by the CUDA runtime, not by parakit. A comma-separated list of NVIDIA GPU indices or UUIDs that CUDA may use; an empty value hides all CUDA devices.
+# Visibility controls affect only their named backend. In bundled builds, daemon.device "auto" falls back to CPU and "gpu" fails at startup only when no GPU remains visible across enabled backends. `parakit --verbose doctor` lists visible devices.
 # There is no per-device config key or command-line flag, because the Parakeet backend ignores CrispASR's device index.
 
 # GGML_VK_VISIBLE_DEVICES
-# Vulkan builds. Read by ggml's Vulkan backend, not by parakit. A comma-separated list of indices into the Vulkan driver's physical-device list (the GPU0, GPU1 order of `vulkaninfo --summary`), so a single index pins inference to that device.
+# Vulkan builds. Read by ggml's Vulkan backend, not by parakit. A comma-separated list of indices into the Vulkan driver's physical-device list (the GPU0, GPU1 order of `vulkaninfo --summary`) limits which devices Vulkan may use.
 # The Vulkan0, Vulkan1 names in `parakit --verbose doctor` number only the visible devices, so they can differ from these indices.
-# An index the driver does not report disables the Vulkan backend: daemon.device "auto" then runs on the CPU and "gpu" fails at startup.
+# An empty value hides all Vulkan devices; an invalid index disables the Vulkan backend. Other backends follow the visibility rule above.
 
 # CRISPASR_QWEN3ASR_QUANT_AUDIO
 # Native Qwen quantizer override. A nonempty value not starting with 0 allows audio-encoder tensors to use the target quantization below the normal Q8_0 floor.

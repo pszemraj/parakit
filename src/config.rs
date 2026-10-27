@@ -385,7 +385,7 @@ pub(crate) const TEMPLATE: &str = r#"# parakit config.toml
 # dir = "/home/user/.parakit/logs"
 
 [hotkey]
-# Linux hotkey backend: "auto", "desktop", "x11-global-hotkey", "x11-listen", or "evdev-proxy-experimental".
+# Linux hotkey backend: "auto", "desktop", "ibus", "x11-global-hotkey", "x11-listen", or "evdev-proxy-experimental".
 # Linux only.
 # backend = "auto"
 

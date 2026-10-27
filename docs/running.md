@@ -42,6 +42,8 @@ parakit --verbose
 parakit start --threads 8 --verbose
 ```
 
+For a completed transcription, verbose output reports `release_to_worker`, `infer`, `clean`, `insert`, `worker`, and `total` in milliseconds. `release_to_worker` includes audio finalization and queue wait; `worker` includes any reload, inference, cleaning, logging, and insertion. `total` spans hotkey release or forced capture stop to worker completion, including blocked or copied-only insertion. These timings do not confirm when the receiving application displays the text.
+
 ## Device Selection
 
 GPU-capable builds default to `--device auto`. In `auto`, CrispASR asks ggml for the best backend device and falls back to CPU when no GPU backend is available. On hybrid laptops, ggml prefers a discrete GPU over an integrated GPU.
@@ -118,7 +120,7 @@ Explicit copying uses the existing platform clipboard backend. On GNOME Wayland,
 
 `test-paste` runs the configured insertion path, including content policy and target checks, without recording microphone audio. The native IBus route submits a commit; the legacy clipboard route stages text and sends its paste chord.
 
-Plain `parakit status` output is unchanged and safe for scripts to parse:
+Plain `parakit status` prints the current phase and last transcript size:
 
 ```text
 $ parakit status
@@ -261,7 +263,7 @@ The [Qwen team](https://huggingface.co/Qwen/Qwen3-ASR-0.6B) publishes Qwen3-ASR 
 parakit fetch cstr/parakeet-tdt-0.6b-v3-GGUF
 parakit fetch cstr/parakeet-tdt-0.6b-v3-GGUF --file parakeet-tdt-0.6b-v3-q4_k.gguf
 parakit fetch handy-computer/parakeet-tdt-0.6b-v3-gguf@main
-parakit fetch https://example.com/models/parakeet-q8.gguf --sha256 <64-hex-sha256>
+parakit fetch https://example.com/models/parakeet-q8.gguf --sha256 '<64-hex-sha256>'
 ```
 
 The first positional argument is either a Hugging Face repo (`owner/repo`, optionally `owner/repo@revision`) or a direct `http://`/`https://` URL. Other URL schemes are rejected before any request. For a repo source, `--file` selects a specific `.gguf` file when the repo publishes more than one and none of them is uniquely named `q8_0`; otherwise parakit auto-selects the sole `.gguf` file, or the sole `q8_0` file among several. `--sha256` checks the completed download when you explicitly supply it; parakit does not otherwise hash models or turn an unpinned URL into a persistent checksum policy. Resumed downloads use the server's strong ETag or Last-Modified value through `If-Range`; a partial with no usable validator restarts instead of being appended blindly. `--force` discards any partial and replaces the cached file.

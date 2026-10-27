@@ -185,7 +185,8 @@ pub(crate) struct StartCli {
     #[command(flatten)]
     pub(crate) cleaning_overrides: CleaningOverrides,
 
-    /// Linux hotkey backend. `auto` registers Ctrl+Space with the X11 session.
+    /// Linux hotkey backend. `auto` uses IBus on Wayland and registers
+    /// Ctrl+Space on X11.
     /// Defaults to `config.toml`'s `hotkey.backend`, then `auto`.
     #[cfg(target_os = "linux")]
     #[arg(long, value_enum)]

@@ -24,14 +24,14 @@ Linux `x11-listen` is passive and does not suppress Space; switch to the registe
 
 2. Run `parakit doctor --deep` for the platform's insertion-backend check. Platform requirements and the limits of `direct` mode are in the [Linux](linux-desktop.md#deep-doctor-check), [macOS](macos-desktop.md#doctor---deep), and [Windows](windows-desktop.md#doctor---deep) sections.
 3. Inspect the target before recovering the transcript; an unconfirmed paste may have landed. Use [daemon history](running.md#daemon-control), [JSONL logs](logging.md#how-to-read-a-dictation), or clipboard history if enabled.
-4. Try another [paste mode](running.md#insertion):
+4. Check the selected [insertion transport and paste mode](running.md#insertion). On IBus, `terminal` and `standard` both submit native text; `standard` permits tabs and embedded newlines that `terminal` blocks. On the clipboard route, they use different shortcuts on Linux and Windows. To try `standard`:
 
    ```text
    parakit stop
    parakit start --paste-mode standard
    ```
 
-   To try `direct`, repeat the `parakit stop` and `parakit start` pair with `--paste-mode direct`. Linux needs an X11 session even in `direct` mode; macOS needs the terminal's [Accessibility permission](macos-desktop.md#permissions). If focus changed before insertion or the target is elevated on Windows, see [focus changes](running.md#focus-changes).
+   To try `direct`, repeat the `parakit stop` and `parakit start` pair with `--paste-mode direct`. Linux needs an X11 session and cannot use a forced IBus insertion backend; select `--insertion-backend x11` if necessary. macOS needs the terminal's [Accessibility permission](macos-desktop.md#permissions). If focus changed before insertion or the target is elevated on Windows, see [focus changes](running.md#focus-changes).
 
 ## macOS Paste Could Not Be Confirmed
 

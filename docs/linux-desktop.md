@@ -79,7 +79,7 @@ Helper and client restart/reconnect behavior was checked separately through isol
 
 ## Insertion Selection And Recovery
 
-`--insertion-backend ibus` requires engine-owned IBus push-to-talk. `--insertion-backend x11` selects the existing X11 clipboard/direct route. The default `auto` follows the hotkey route: X11 for registered or passive X11 hotkeys, and native delivery for IBus hotkeys. To use native delivery on X11, select `--hotkey-backend ibus`; a registered X11 grab can invalidate an input-method target. Set `daemon.insertion_backend` to keep the transport choice across starts. Explicit `direct` mode retains X11 typing with automatic transport selection and conflicts with forced IBus insertion.
+`--insertion-backend ibus` requires engine-owned IBus push-to-talk. `--insertion-backend x11` selects the existing X11 clipboard/direct route. The default `auto` follows the hotkey route: native delivery for IBus hotkeys and X11 for all others, including the evdev proxy. To use native delivery on X11, select `--hotkey-backend ibus`; a registered X11 grab can invalidate an input-method target. Set `daemon.insertion_backend` to keep the transport choice across starts. Explicit `direct` mode retains X11 typing with automatic transport selection and conflicts with forced IBus insertion.
 
 Inspect the [insertion outcome](logging.md#insertion-outcomes) before retrying native delivery. [Paste modes](running.md#insertion) control terminal tabs and newlines; use [daemon history](running.md#daemon-control) for blocked text and explicit copying.
 
@@ -113,7 +113,7 @@ If any output mentions `<Control>space`, `<Ctrl>space`, or a left-control toggle
 
 ## Deep Doctor Check
 
-For X11 clipboard insertion in `terminal` or `standard` mode, `parakit doctor --deep` creates and focuses a temporary 1x1 X11 window, stages a sentinel through the production guarded clipboard transaction, sends the configured paste chord, and verifies the window observed the V key press and release. It then restores the previous focus and supported clipboard contents and destroys the window. An active X11 desktop is required. Direct mode and the IBus route perform backend checks without synthesizing text into the focused application.
+For X11 clipboard insertion in `terminal` or `standard` mode, `parakit doctor --deep` creates and focuses a temporary 1x1 X11 window, stages a sentinel through the production guarded clipboard transaction, sends the configured paste chord, and verifies the window observed the V key press and release. The transaction applies the normal clipboard restore policy; the check does not verify the restored clipboard contents. It restores the previous focus and destroys the window. An active X11 desktop is required. Direct mode and the IBus route perform backend checks without synthesizing text into the focused application.
 
 ## Focus Guard
 
