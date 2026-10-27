@@ -368,10 +368,11 @@ fn run_official_nemo_with_paths(
     let preflight_python = if paths.f16.is_file() {
         None
     } else {
-        Some(python_with_converter_deps()?)
+        let python = python_with_converter_deps()?;
+        ensure_nemo(&paths, options, &nemo_url, endpoint, token)?;
+        Some(python)
     };
 
-    ensure_nemo(&paths, options, &nemo_url, endpoint, token)?;
     ensure_f16(
         &paths,
         &converter_script,
