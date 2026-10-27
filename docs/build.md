@@ -188,4 +188,4 @@ otool -L target/debug/build/parakit-*/out/lib/libggml.dylib
 otool -l target/debug/parakit | grep -A2 LC_RPATH
 ```
 
-Metal build and runtime checks are in [model-validation.md#macos-cpu-and-metal](dev/model-validation.md#macos-cpu-and-metal).
+See [macOS CPU and Metal validation](dev/model-validation.md#macos-cpu-and-metal) for build and runtime checks.

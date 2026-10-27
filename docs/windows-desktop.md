@@ -28,6 +28,6 @@ When its background clipboard-history listener is available, Windows uses it to 
 
 ## `doctor --deep`
 
-In `standard` or `terminal` mode, `doctor --deep` opens a visible Win32 edit window, briefly takes focus, stages a sentinel on the clipboard, sends the configured paste chord, reads the text back, and restores supported clipboard content. Windows may use a brief cursor-click fallback to focus the probe, then restores the cursor position afterward. Run it from an unlocked interactive desktop. In `direct` mode, it performs backend preflight only and does not type into the probe.
+In `standard` or `terminal` mode, `doctor --deep` opens a visible Win32 edit window, briefly takes focus, stages a sentinel on the clipboard, sends the configured paste chord, and reads the text back. Cleanup restores supported clipboard content only while the staged sentinel remains current; a newer copy is preserved, and clipboard observation errors fail the check. Windows may use a brief cursor-click fallback to focus the probe, then restores the cursor position afterward. Run it from an unlocked interactive desktop. In `direct` mode, it performs backend preflight only and does not type into the probe.
 
-The probe checks Win32 input delivery and edit-control readback. It stages and restores the clipboard directly, so passing does not establish the daemon's clipboard-history timing or restore gate, or paste behavior in other applications.
+The probe checks Win32 input delivery and edit-control readback. Passing does not establish the daemon's clipboard-history timing or paste behavior in other applications.

@@ -12,7 +12,7 @@ WSL is not the native Windows daemon path. Check Windows hotkeys, focus, and pas
 
 ## Literal Space Appears
 
-Linux `x11-listen` is passive and does not suppress Space; switch to the registered backend for normal dictation. The [evdev proxy](linux-desktop.md#evdev-proxy) also needs a readable keyboard event device and writable `/dev/uinput`. Linux insertion requires X11, including in `direct` mode. Other backend details are under [Linux hotkeys](linux-desktop.md).
+Linux `x11-listen` is passive and does not suppress Space; switch to the registered backend on X11 for normal dictation. On GNOME Wayland, use [focused-field IBus capture](linux-desktop.md#ibus-setup). The [evdev proxy](linux-desktop.md#evdev-proxy) also needs a readable keyboard event device and writable `/dev/uinput`. Clipboard paste and `direct` typing require X11; native IBus does not.
 
 ## Text Does Not Insert
 

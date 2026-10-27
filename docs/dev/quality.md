@@ -4,7 +4,7 @@ Build success does not prove transcription quality. Use real user audio, not syn
 
 ## Rust Validation Loop
 
-Run the full loop in order before pushing Rust or runtime changes:
+Run the full loop in order before committing Rust or runtime changes:
 
 ```bash
 cargo fmt --package parakit
@@ -347,6 +347,27 @@ Use controlled text, HTML/text alternatives, images, copied files, and an empty 
 TODO: Reproduce a hung X11 clipboard owner and design bounded snapshot reads that preserve the prior clipboard. Arboard reads formats sequentially and its public API does not distinguish a read timeout from an unavailable format.
 
 TODO: On a native Linux desktop, exercise direct typing and guarded paste with physical modifier/focus changes, key-probe failures, keyboard-map changes, readiness-error reconnection and clipboard-manager handoffs. Closure tests and Mac runs do not establish those X11 results. Windows generation changes and delayed rendering also need native clipboard-manager or RDP verification.
+
+### Linux IBus and X11
+
+Prepare an isolated GNOME Wayland session using the [Linux input-source setup](../linux-desktop.md#ibus-setup), with a disposable text field focused. Confirm the receiving application uses native Wayland, unset `DISPLAY`, and record actual field contents and clipboard readback. Test GTK, Chrome, VS Code, and supported Ghostty/tmux configurations separately; record XWayland results as a different route.
+
+Use private D-Bus/IBus and XDG state. Register components with the binary under test's `ibus install --component-dir target/tmp/ibus-components` and point the private IBus process's `IBUS_COMPONENT_PATH` at that directory. Exercise installation, upgrade, and removal there; compare unrelated input sources and shortcuts before and after.
+
+The opt-in worker checks use controlled inference with production insertion. Run the native check in that private IBus session and the X11 check separately on an isolated X11 display:
+
+```bash
+env -u DISPLAY cargo test --bin parakit daemon::worker::tests::live_native_worker_inserts_without_x11 -- --ignored --exact
+cargo test --bin parakit daemon::worker::tests::live_x11_worker_pastes_into_focused_field -- --ignored --exact
+```
+
+Independently verify Unicode and selection replacement in the receiving application; a submitted commit or passing worker assertion does not prove reception. Check clipboard preservation on native delivery with retention enabled too. Exercise the [focus and delivery rules](../running.md#focus-changes) during recording, inference, and submission, including helper, daemon, and IBus restarts. Check both PTT release orders, repeats, lost releases, terminal tabs/newlines, and password/PIN fields. Ordinary typing, Compose/dead keys, and a non-US layout/variant must remain usable with the daemon unavailable.
+
+### History picker
+
+Use an isolated daemon with non-sensitive transcripts and exercise the [history commands](../running.md#daemon-control) in a terminal, a pipe, plain mode, quiet mode, and full-text mode. Check long wrapped previews, scrolling, resizing, cancellation, and terminal restoration after successful copies and errors.
+
+While one entry is selected, add dictations and confirm preview and clipboard copy still refer to that entry. Check disabled/empty history, eviction, daemon restart, and oversized full-text responses without truncation or substitution. An oversized preview must still allow copying the selected entry with Enter. Force a clipboard failure, verify the picker remains open, retry, and independently read the actual clipboard through its supported platform route.
 
 ### Ordered audio and loaded Qwen failures
 

@@ -117,7 +117,7 @@ For X11 clipboard insertion in `terminal` or `standard` mode, `parakit doctor --
 
 ## Focus Guard
 
-Native IBus requires an eligible focused field and blocks known password/PIN fields. It keeps the recording target's engine and focus generation, then checks them immediately before submission. Focus loss, field or source changes, relevant resets, engine destruction, and reconnects invalidate pending insertion even when GNOME reuses the same input-context ID. Unknown native focus blocks delivery. Parakit retains blocked or uncertain transcripts in enabled daemon history and never falls back after target invalidation or uncertain native delivery, because text may already have arrived.
+Native IBus requires an eligible focused field and blocks fields identified as password, PIN, or private input. It keeps the recording target's engine and focus generation, then checks them immediately before submission. Focus loss, field or source changes, relevant resets, engine destruction, and reconnects invalidate pending insertion even when GNOME reuses the same input-context ID. Unknown native focus blocks delivery. Parakit retains blocked or uncertain transcripts in enabled daemon history and never falls back after target invalidation or uncertain native delivery, because text may already have arrived.
 
 The legacy X11 route compares the active X11 window. A clear focus change prevents the paste chord; non-direct modes still follow the shared clipboard policy. If focus capture or recheck fails because X11 is transiently unavailable, parakit pastes anyway. The transcript remains available through daemon history when enabled. Parakit does not inspect application internals with AT-SPI.
 

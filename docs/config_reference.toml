@@ -8,7 +8,7 @@
 #
 # Precedence, highest first: a command-line flag, this file, the built-in default.
 # The flags named on each key belong to `parakit start` unless stated otherwise. A bare `parakit` is `parakit start` with no flags, so it cannot take them.
-# Exceptions are stated on the key: the boolean pairs can be forced either way from the command line, and cleaning.disabled_rules is merged with its flag instead of being replaced.
+# Boolean flag pairs are mutually exclusive and force either value; cleaning.disabled_rules is merged with --disable-rule instead of being replaced.
 #
 # Unknown keys are rejected at every level: at the top level, in every table, and inside every [[rules.user]] entry.
 # An unknown key, invalid TOML, a wrong type, an unknown enum string, or a failed validation is a hard error that names the config file.
@@ -46,7 +46,6 @@
 # "parakeet-v2" | "parakeet-v3" | "qwen3-asr-0.6b" | "qwen3-asr-1.7b" | "parakeet-ultra" | "parakeet-redux" (optional). Model preset to load; daemon.quantize defaults to hosted Q8_0. V2 is English-only.
 # Experimental: Qwen presets. Redux is for testing/comparison only and is not recommended for normal dictation.
 # Unset: daemon.model selects a local GGUF; when both selectors are absent, the daemon uses parakeet-v3 at daemon.quantize precision (Q8_0 by default).
-# Conflicts with: daemon.model; setting both fails config load even when a CLI model selection overrides them.
 # Overridden by: -m/--model or --model-preset; either CLI selection replaces the configured selection.
 # The exact preset artifact is downloaded when absent, using the model cache, HF_ENDPOINT, and HF_TOKEN. A cached artifact is used without network access.
 # parakeet-v3 keeps its existing top-level cache path. Other presets use the separate Hub cache directories.
@@ -55,7 +54,7 @@
 
 # "q8_0" | "q6_k" (optional). Precision acquired for daemon.model_preset, or for parakeet-v3 when the preset is unset.
 # Unset: q8_0, the provider's hosted artifact. q6_k downloads F16 if needed and runs the bundled quantizer locally before readiness; subsequent starts reuse cached Q6_K offline.
-# Conflicts with: daemon.model; setting both fails config load. Explicit CLI --quantize also conflicts with -m/--model.
+# Explicit CLI --quantize conflicts with -m/--model; configured model-selection conflicts are listed under daemon.model.
 # Overridden by: --quantize. An explicit CLI -m/--model ignores this configured precision and loads that file as it is.
 # Warning: a first Q6_K preparation can download several GB and take minutes; a preparation notice is printed to stderr even with --quiet. Windows needs a compatible crispasr-quantize.exe on PATH.
 # This only selects the acquisition format; it does not requantize an existing -m file or change a running daemon. Restart after edits. Idle reload reuses the resolved path without fetching or quantizing again.
@@ -80,8 +79,7 @@ device = "auto"
 # Overridden by: the --threads flag.
 # 0, negative values, non-integers, and values above 2147483647 (the C int that the engine takes) fail config load, before any model is fetched. The --threads flag rejects the same values.
 # Warning: an explicit value is not clamped to the CPU count, so a large value oversubscribes the machine.
-# On Windows, every time the model is opened (at startup and on each idle reload), parakit sets OMP_NUM_THREADS to the effective thread count, OPENBLAS_NUM_THREADS to 1, and OMP_WAIT_POLICY to PASSIVE in its own environment.
-# A variable that is already set, even to an empty string, is left alone. Linux and macOS are not touched.
+# See: Windows OMP/OpenBLAS environment defaults below.
 # threads = 4
 
 # integer, 0 to 9223372036854775807. Minutes of uninterrupted idleness after which the daemon releases the speech model from memory. 0 disables offloading, so the model stays loaded.
@@ -94,7 +92,7 @@ device = "auto"
 model_idle_minutes = 10
 
 # "auto" | "ibus" | "x11". Linux transcript insertion transport.
-# "auto" prefers a valid Parakit IBus target, otherwise retaining supported X11 insertion before native submission.
+# "auto" captures a native target when available; genuine X11 can otherwise use its legacy route. Once native is selected, no automatic X11 fallback occurs.
 # "ibus" requires native insertion. "x11" uses the existing clipboard/direct route and requires an X11 session.
 # Only used when: Linux. macOS and Windows accept any string for dotfile portability, but do not read or validate it.
 # Overridden by: --insertion-backend. `parakit doctor --insertion-backend` overrides it for that check only.
@@ -112,18 +110,17 @@ insertion_backend = "auto"
 # paste_mode = "standard"
 
 # bool. Whether the dictated text stays on the clipboard after it is pasted.
-# false restores the previous supported clipboard payload after a confirmed paste; true retains the transcript without reading or restoring the previous contents.
+# false requests restoration of the previous supported clipboard payload; true retains the transcript without reading or restoring the previous contents.
 # Only used when: clipboard insertion with daemon.paste_mode "terminal" or "standard". Native IBus and "direct" never touch the clipboard.
-# Overridden by: the --keep-transcript-clipboard and --no-keep-transcript-clipboard flags, which force the value either way and conflict with each other.
+# Overridden by: --keep-transcript-clipboard or --no-keep-transcript-clipboard.
 # See: [staging, recovery exceptions, and supported restore formats](running.md#clipboard-staging-and-restore).
-# Warning: parakit never overwrites a clipboard that changed behind its back. If the clipboard no longer holds the staged transcript when the restore would run, the restore is skipped and the newer contents are kept.
-# Warning: on macOS and Windows, a competing clipboard write seen after staging also cancels the paste.
+# Warning: legacy staging may replace a competing clipboard copy to deliver or retain the transcript. Restoration preserves newer contents that supersede the staged transcript.
 keep_transcript_clipboard = false
 
 # bool. Play short tones for dictation events.
-# The cues are a start tone when listening begins (only if the key is still held), a three-note cue while the model reloads after an idle offload, a success tone after insertion, and a two-tone error cue.
-# The error cue plays for a silent capture, a failed reload, a failed transcription, or an insertion that was blocked, skipped, or only copied.
-# Overridden by: the --sounds and --no-sounds flags, which force the value either way and conflict with each other.
+# The cues are a start tone when listening begins (only if the key is still held), a three-note cue while the model reloads after an idle offload, a completion tone, and a two-tone error cue.
+# Silent captures, failed reloads/transcriptions, and [alerting insertion outcomes](logging.md#insertion-outcomes) play the error cue.
+# Overridden by: --sounds or --no-sounds.
 # The global --quiet flag does not silence the cues.
 # If a cue cannot be played, `parakit: sound cue dropped: <error>` is written to stderr, which --quiet does not suppress, and dictation continues.
 # Cues that pile up faster than they play are dropped.
@@ -170,7 +167,7 @@ max_new_tokens = 512
 
 [cleaning]
 # bool. Run the cleaning pipeline on each transcript. false inserts the model's raw transcript unchanged: no built-in rule and no [[rules.user]] entry runs.
-# Overridden by: the --cleaning and --no-cleaning flags, which force the value either way and conflict with each other.
+# Overridden by: --cleaning or --no-cleaning.
 # Recommended: false for multilingual dictation when English cleanup could alter the transcript; --no-cleaning has the same effect for one start command.
 # Validation still happens when false: cleaning.disabled_rules, cleaning.number_threshold, and every [[rules.user]] entry (including each regex) must be valid or the config fails to load.
 # `parakit rules test` and `parakit rules list` ignore this key and always apply or list the rules.
@@ -191,7 +188,7 @@ profile = "safe"
 # This is the built-in rule fix-trailing-period. It is in the pipeline only when this key is false and the rule is not named in cleaning.disabled_rules.
 # Disabling that rule by name has the same visible effect as setting this key to true.
 # Only used when: cleaning.enabled is true.
-# Overridden by: the --keep-trailing-period and --no-keep-trailing-period flags, which force the value either way and conflict with each other. The same pair exists on `parakit rules list` and `parakit rules test`.
+# Overridden by: --keep-trailing-period or --no-keep-trailing-period, also available on `parakit rules list` and `parakit rules test`.
 keep_trailing_period = false
 
 # number, 0 or more (integer or float). Decides which spoken numbers the spoken-numbers rule turns into digits.
@@ -382,24 +379,18 @@ backend = "auto"
 # USER
 # Linux. Only fills in the user name in the permission fix shown for the evdev-proxy-experimental backend. It has no other effect.
 
-# OMP_NUM_THREADS
-# Windows. Set by parakit to the effective daemon.threads value unless it is already set to anything, including an empty string.
+# OMP_NUM_THREADS, OPENBLAS_NUM_THREADS, OMP_WAIT_POLICY
+# Windows. Each model open sets these to the effective daemon.threads count, 1, and PASSIVE respectively, unless already present, including an empty string. Linux and macOS leave them unchanged.
 
-# OPENBLAS_NUM_THREADS
-# Windows. Set by parakit to 1 unless it is already set to anything, including an empty string.
-
-# OMP_WAIT_POLICY
-# Windows. Set by parakit to PASSIVE unless it is already set to anything, including an empty string.
-
+# The two CRISPASR_FC controls below apply on every platform. Neither has a config key or command-line flag.
+# Every parakit command sets them to 0 at process start unless already present, including an empty string.
+# The native library caches them after the first read; override them in the launching environment and restart after changes.
 # CRISPASR_FC_PW_Q8
-# The two CRISPASR_FC controls are inherited at launch and cached by the native library; restart after changes. Neither has a config key or command-line flag.
-# All platforms. Switch read by the native CrispASR library when it loads the model, and cached after the first read. It controls whether the F16 convolution pointwise weights of each layer are repacked into an extra Q8_0 copy.
-# Set by every parakit command to 0 at process start, which turns the repack off, unless it is already set to anything, including an empty string.
+# Controls whether native model loading repacks the F16 convolution pointwise weights of each layer into an extra Q8_0 copy.
 # The library treats a value starting with 0 as off, any other nonempty value as on, and an empty or absent value as automatic, which repacks only a model that is already quantized.
 
 # CRISPASR_FC_FUSED_QKV
-# All platforms. Switch read by the native CrispASR library when it loads the model, and cached after the first read. It controls whether the attention query, key, and value weights of each layer are concatenated into an extra fused copy.
-# Set by every parakit command to 0 at process start, which turns the fused copy off, unless it is already set to anything, including an empty string.
+# Controls whether native model loading concatenates each layer's attention query, key, and value weights into an extra fused copy.
 # The library treats a value starting with 0 as off, and any other value, including an empty string or an absent variable, as on.
 
 # CRISP_AUDIO_WINDOWED_ATTN
