@@ -158,7 +158,7 @@ struct RejectCase {
     name: &'static str,
     /// (rule name, pattern) pairs handed to the cleaner; replacement is always "x".
     rules: &'static [(&'static str, &'static str)],
-    /// Route through `build_cleaner(true, ...)` (cleaning disabled) instead of `Cleaner::new`.
+    /// Validate metadata with cleaning disabled instead of building a pipeline.
     cleaning_disabled: bool,
     expect_substrings: &'static [&'static str],
 }
@@ -219,17 +219,26 @@ fn user_rule_validation_rejections() {
     let failures: Vec<String> = cases
         .iter()
         .flat_map(|case| {
-            let rules: Vec<UserRule> = case
+            let rules: std::result::Result<Vec<UserRule>, toml::de::Error> = case
                 .rules
                 .iter()
-                .map(|(name, pattern)| user_rule(name, pattern, "x", RulePosition::Standard))
+                .map(|(name, pattern)| {
+                    toml::from_str(&format!(
+                        "name = {name:?}\npattern = {pattern:?}\nreplacement = 'x'\n"
+                    ))
+                })
                 .collect();
-            let err = if case.cleaning_disabled {
-                build_cleaner(true, CleaningProfile::Safe, false, None, &[], &rules).unwrap_err()
-            } else {
-                build_enabled_cleaner(CleaningProfile::Safe, false, None, &[], &rules).unwrap_err()
+            let msg = match rules {
+                Err(error) => error.to_string(),
+                Ok(rules) if case.cleaning_disabled => {
+                    build_cleaner(true, CleaningProfile::Safe, false, None, &[], &rules)
+                        .unwrap_err()
+                        .to_string()
+                }
+                Ok(rules) => build_enabled_cleaner(CleaningProfile::Safe, false, None, &[], &rules)
+                    .unwrap_err()
+                    .to_string(),
             };
-            let msg = err.to_string();
             case.expect_substrings
                 .iter()
                 .filter(|expected| !msg.contains(**expected))
@@ -270,7 +279,7 @@ fn valid_zero_width_user_regexes_are_not_treated_as_missing_patterns() {
 }
 
 #[test]
-fn disabled_user_rule_skips_compilation_and_application() {
+fn disabled_user_rule_skips_application() {
     let mut disabled = HashSet::new();
     disabled.insert("custom-hello".to_string());
     let rules = vec![user_rule(
@@ -284,15 +293,12 @@ fn disabled_user_rule_skips_compilation_and_application() {
 }
 
 #[test]
-fn build_cleaner_validates_regex_for_a_disabled_user_rule() {
-    let rules = vec![user_rule(
-        "broken-regex",
-        "(unclosed",
-        "x",
-        RulePosition::Standard,
-    )];
-    let disabled = vec!["broken-regex".to_string()];
-    let result = build_cleaner(false, CleaningProfile::Safe, false, None, &disabled, &rules);
-    let err = result.expect_err("disabled rules still need valid configuration");
-    assert!(format!("{err:#}").contains("invalid regex"));
+fn deserialization_validates_regexes_before_they_can_be_disabled() {
+    let result = toml::from_str::<UserRule>(
+        "name = 'broken-regex'\npattern = '(unclosed'\nreplacement = 'x'\n",
+    );
+    let error = result.expect_err("every user rule must own a valid regex");
+    assert!(error
+        .to_string()
+        .contains("user rule 'broken-regex' has invalid regex"));
 }

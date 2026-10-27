@@ -79,7 +79,7 @@ fn user_rule(name: &str, pattern: &str, replacement: &str, position: RulePositio
     UserRule {
         name: name.to_string(),
         description: None,
-        pattern: pattern.to_string(),
+        pattern: regex::Regex::new(pattern).expect("valid user-rule test regex"),
         replacement: replacement.to_string(),
         position,
     }
