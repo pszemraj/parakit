@@ -92,8 +92,8 @@ device = "auto"
 model_idle_minutes = 10
 
 # "auto" | "ibus" | "x11". Linux transcript insertion transport.
-# "auto" captures a native target when available; genuine X11 can otherwise use its legacy route. Once native is selected, no automatic X11 fallback occurs.
-# "ibus" requires native insertion. "x11" uses the existing clipboard/direct route and requires an X11 session.
+# "auto" follows the hotkey route: IBus for engine-owned PTT, X11 for registered or passive X11 hotkeys. Native failures never trigger another paste.
+# "ibus" requires IBus hotkeys (set hotkey.backend = "ibus" on X11). "x11" requires an X11 session.
 # Only used when: Linux. macOS and Windows accept any string for dotfile portability, but do not read or validate it.
 # Overridden by: --insertion-backend. `parakit doctor --insertion-backend` overrides it for that check only.
 # See: [Linux setup and native target handling](linux-desktop.md#ibus-setup).
@@ -111,7 +111,7 @@ insertion_backend = "auto"
 
 # bool. Whether the dictated text stays on the clipboard after it is pasted.
 # false requests restoration of the previous supported clipboard payload; true retains the transcript without reading or restoring the previous contents.
-# Only used when: clipboard insertion with daemon.paste_mode "terminal" or "standard". Native IBus and "direct" never touch the clipboard.
+# Only used when: clipboard insertion. Native recovery always retains text; "direct" never touches the clipboard.
 # Overridden by: --keep-transcript-clipboard or --no-keep-transcript-clipboard.
 # See: [staging, recovery exceptions, and supported restore formats](running.md#clipboard-staging-and-restore).
 # Warning: legacy staging may replace a competing clipboard copy to deliver or retain the transcript. Restoration preserves newer contents that supersede the staged transcript.

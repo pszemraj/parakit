@@ -30,7 +30,7 @@ sudo "$(command -v parakit)" ibus install --layout de --variant nodeadkeys
 
 The selected layout supplies ordinary typing; IBus handles Compose and dead keys. The command writes only Parakit's component XML, normally `/usr/share/ibus/component/parakit.xml`. It does not change input-source lists or shortcuts. A user-local component XML file is not sufficient for normal GNOME discovery.
 
-Start and stop the dictation daemon as usual. Existing login/autostart commands stay the same. IBus launches and manages its lightweight engine automatically; ordinary keyboard input continues while the dictation daemon is stopped or preparing its model.
+Start and stop the dictation daemon as usual. Existing login/autostart commands stay the same. IBus launches and manages the separate `parakit-ibus` executable automatically; it links only the input-method libraries. Keep it beside `parakit` when installing or moving the binaries. Ordinary keyboard input continues while the dictation daemon is stopped or preparing its model.
 
 Inspect setup and runtime readiness:
 
@@ -42,7 +42,7 @@ parakit --verbose status
 
 `ibus status` reports the registration file, build support, connection, engine discovery, and active engine. Registration does not prove that the current application accepts native commits. Run `parakit test-paste "hello from parakit"` in a disposable terminal, then inspect the inserted prompt text and [insertion outcome](logging.md#insertion-outcomes).
 
-After an upgrade, restart the daemon. Re-run `ibus install` if the executable path or keyboard layout changed; log out and back in to reload the engine. To remove the integration, first select another input source, remove Parakit from the desktop's source list, then run:
+After an upgrade, restart the daemon. Re-run `ibus install` when upgrading from a component that launched `parakit ibus engine`, or if the executable path or keyboard layout changed; log out and back in to reload the engine. To remove the integration, first select another input source, remove Parakit from the desktop's source list, then run:
 
 ```bash
 sudo "$(command -v parakit)" ibus uninstall
@@ -73,13 +73,13 @@ Close existing application instances before changing their launch options. Chrom
 
 Focused GTK fields also verified selection replacement, rejection after switching fields in the same window, and `Ctrl+Space` with repeats and either release order. Ordinary typing and German `de` / `nodeadkeys` layout with Compose worked while the dictation daemon was absent. The production Rust worker delivered into GTK and Chrome with `DISPLAY` unset; Chrome's existing clipboard text remained unchanged even with transcript clipboard retention enabled.
 
-The production worker also verified automatic native IBus delivery into a GTK X11 field on an isolated X11 server, with its clipboard unchanged. With no native target, automatic selection delivered the exact text through the existing X11 clipboard paste path.
+The production worker also verified native IBus delivery into a GTK X11 field on an isolated X11 server, with its clipboard unchanged. Native delivery on X11 requires `--hotkey-backend ibus`; the default registered shortcut uses X11 clipboard paste.
 
 Helper and client restart/reconnect behavior was checked separately through isolated IBus contexts. Those protocol checks do not establish reception in every application during a restart. The application matrix above covers native Wayland; XWayland reception and an actual interactive coding-assistant UI remain unverified. Terminal checks used input capture programs, without executing dictated text as commands.
 
 ## Insertion Selection And Recovery
 
-`--insertion-backend ibus` requires native delivery. `--insertion-backend x11` selects the existing X11 clipboard/direct route. The default `auto` prefers IBus, with X11 fallback only on a genuine X11 session when native insertion is unavailable before submission. Set `daemon.insertion_backend` to keep that choice across starts. Explicit `direct` mode retains X11 typing with automatic transport selection and conflicts with forced IBus insertion.
+`--insertion-backend ibus` requires engine-owned IBus push-to-talk. `--insertion-backend x11` selects the existing X11 clipboard/direct route. The default `auto` follows the hotkey route: X11 for registered or passive X11 hotkeys, and native delivery for IBus hotkeys. To use native delivery on X11, select `--hotkey-backend ibus`; a registered X11 grab can invalidate an input-method target. Set `daemon.insertion_backend` to keep the transport choice across starts. Explicit `direct` mode retains X11 typing with automatic transport selection and conflicts with forced IBus insertion.
 
 Inspect the [insertion outcome](logging.md#insertion-outcomes) before retrying native delivery. [Paste modes](running.md#insertion) control terminal tabs and newlines; use [daemon history](running.md#daemon-control) for blocked text and explicit copying.
 
@@ -117,7 +117,7 @@ For X11 clipboard insertion in `terminal` or `standard` mode, `parakit doctor --
 
 ## Focus Guard
 
-Native IBus requires an eligible focused field and blocks fields identified as password, PIN, or private input. It keeps the recording target's engine and focus generation, then checks them immediately before submission. Focus loss, field or source changes, relevant resets, engine destruction, and reconnects invalidate pending insertion even when GNOME reuses the same input-context ID. Unknown native focus blocks delivery. Parakit retains blocked or uncertain transcripts in enabled daemon history and never falls back after target invalidation or uncertain native delivery, because text may already have arrived.
+Native IBus requires an eligible focused field and blocks fields identified as password, PIN, or private input. It keeps the recording target's engine and focus generation, then checks them immediately before submission. Focus loss, field or source changes, relevant resets, engine destruction, and reconnects invalidate pending insertion even when GNOME reuses the same input-context ID. Unknown native focus blocks delivery. Rejected, policy-blocked, and uncertain native delivery attempt to copy the transcript to the clipboard without sending another paste or commit. If clipboard access is unavailable, enabled daemon history is the remaining recovery path. Inspect the target before pasting a copied uncertain transcript because text may already have arrived.
 
 The legacy X11 route compares the active X11 window. A clear focus change prevents the paste chord; non-direct modes still follow the shared clipboard policy. If focus capture or recheck fails because X11 is transiently unavailable, parakit pastes anyway. The transcript remains available through daemon history when enabled. Parakit does not inspect application internals with AT-SPI.
 

@@ -310,7 +310,7 @@ parakit start --paste-mode direct
 
 The clipboard route in `terminal` and `standard` modes stages plain text and sends the paste shortcut. Both give the target and clipboard history tools time to observe the staged text, then restore the previous clipboard contents when the clipboard API can round-trip them. Restore support covers text, HTML with a text alternative, copied file lists, and images exposed as normal platform image data. Browser-private image packages, WebP-only payloads, and other clipboard MIME formats are not restorable through `arboard`; when restore is required, parakit clears the staged transcript instead of leaving sensitive text as the active clipboard.
 
-Native IBus delivery and direct typing skip this transaction. `--keep-transcript-clipboard` has no effect on them, and native delivery leaves the active clipboard unchanged.
+Successful native IBus delivery and direct typing skip this transaction. `--keep-transcript-clipboard` has no effect on them. Rejected or uncertain native delivery attempts a clipboard-only recovery copy, retaining the transcript regardless of this setting; it never sends another paste or commit.
 
 Delivering the dictation takes priority over restoring the previous clipboard. If the previous clipboard cannot be read, or changes while parakit saves it, parakit still stages and pastes the transcript and leaves it as the active clipboard for that dictation; a clipboard history manager keeps the previous contents.
 

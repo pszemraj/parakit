@@ -36,7 +36,7 @@ parakit config edit
 
 `config path` prints the resolved path without reading the file. `config init` creates any missing parent directories and writes the fully commented template. `config show`, which is also what bare `parakit config` runs, loads and validates the file and prints the resolved path plus the effective value of every key. `config edit` writes the template first when the file is missing, then opens the file in `$VISUAL`, or in `$EDITOR` when `VISUAL` is unset, empty, or whitespace-only.
 
-On Linux, `config show` also includes the selected insertion and hotkey backends. The default `daemon.insertion_backend = "auto"` prefers IBus and retains supported X11 fallback; setup is in [Linux desktop input](linux-desktop.md#ibus-setup).
+On Linux, `config show` also includes the selected insertion and hotkey backends. The default `daemon.insertion_backend = "auto"` follows the hotkey route: X11 for registered or passive X11 capture, and native insertion for engine-owned IBus capture. Setup is in [Linux desktop input](linux-desktop.md#ibus-setup).
 
 ### Details
 

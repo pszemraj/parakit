@@ -19,7 +19,7 @@ Linux IBus client thread     watches the helper and sends guarded native commits
 Windows clipboard thread     observes clipboard-history acknowledgement when available
 ```
 
-On Linux, IBus separately manages `parakit ibus engine`. Its GLib event loop owns the factory, `IBusEngineSimple` instances, native target generations, and commit callbacks. It runs no audio, model, or daemon-config code. The user's existing daemon startup remains independent of this input-method process.
+On Linux, IBus separately manages `parakit-ibus`. Its GLib event loop owns the factory, `IBusEngineSimple` instances, native target generations, and commit callbacks. The executable links only the input-method bridge and its system libraries, with no audio, model, or daemon-config code. The user's existing daemon startup remains independent of this input-method process.
 
 ## State Machine
 
@@ -76,7 +76,7 @@ The Linux daemon attaches to the helper over IBus's private bus and advertises r
 | `src/daemon/worker_shutdown.rs` | Worker lifetime and bounded IPC shutdown handshake. |
 | `src/app/simulation.rs` | Acknowledged WAV dictations and configured idle/reload validation. |
 | `src/app/config_command.rs` | `parakit config` subcommands: show, path, init, and edit. |
-| `src/ibus_command.rs` | Linux IBus registration, removal, read-only setup status, and the IBus-managed engine entry point. |
+| `src/ibus_command.rs`, `src/ibus_main.rs` | Linux IBus registration, removal, read-only setup status, and the standalone engine executable. |
 | `src/daemon/desktop/ibus/` | Native IBus engine/factory, daemon GDBus client, target lifetimes, and submission evidence. |
 | `src/daemon/desktop/linux_insertion.rs` | Linux insertion-backend selection and recording target capture independent of clipboard paste mode. |
 | `src/daemon/ipc.rs`, `src/daemon/ipc/{client,unix_socket,windows_pipe}.rs` | Local IPC for `status`, `stop`, `copy-last`, `history`, and `test-paste`: shared protocol and in-memory transcript ring buffer, the control client, and the Unix-socket and Windows named-pipe transports. |
@@ -111,6 +111,6 @@ Runtime failures are reported and the daemon continues when possible: sound cues
 
 Native delivery and uncertainty are described under [insertion outcomes](../logging.md#insertion-outcomes).
 
-`ClipboardSnapshot` in `daemon/desktop/clipboard_store.rs` shares capture, borrowed restoration, and exact payload comparison. Borrowed restoration retains the saved value for cleanup retries. The macOS doctor's independent read-back and repair behavior is described under [deep diagnostics](../macos-desktop.md#doctor---deep); production generation checks remain in `StagedClipboard`.
+`ClipboardSnapshot` in `daemon/desktop/clipboard_store.rs` shares capture, restoration, and exact payload comparison. Production restoration consumes the saved value without cloning; diagnostic restoration borrows it for cleanup retries. The macOS doctor's independent read-back and repair behavior is described under [deep diagnostics](../macos-desktop.md#doctor---deep); production generation checks remain in `StagedClipboard`.
 
 `PasteReport` describes transaction results and acknowledgement telemetry. `InsertReport` adds worker policy, direct-typing progress, and degraded-outcome diagnostics. Staging uses one `From<StageOutcome>` conversion into paste telemetry; the worker retains separate notifications, history, and alert decisions. The serialized fields and outcome meanings are in [logging](../logging.md#insertion-record-fields).
