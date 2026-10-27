@@ -191,13 +191,12 @@ silence.wav and noise-only.wav are synthetic controls; inspect unwanted insertio
 
 ## Physical desktop checks
 
-Use isolated configuration for the tested preset, precision, device, and Qwen options; leave installed settings intact. Check both Qwen sizes, both precisions, and one Parakeet preset on each available native device path.
+Use isolated configuration for the tested preset, precision, device, and Qwen options; leave installed settings intact. Check both Qwen sizes, both precisions, and one Parakeet preset on each available native device path. Follow the general [desktop smoke checks](quality.md#runtime-smoke-checks) as well.
 
 1. Dictate a sentence with a negation, number, and the word language. Confirm one insertion, inspect the transcript, and repeat with normal cleaning enabled.
 2. After idle offload, hold PTT through reload, speak, and release. Confirm early speech is retained, readiness precedes the listening cue, and insertion happens once. Release PTT immediately during reload separately; confirm the queued capture completes once and no late listening cue follows.
-3. Check normal start/completion/error cues and repeat with sounds disabled. Check silence and synthetic noise without treating them as acoustic room tests.
-4. Stop and restart the isolated daemon without CLI overrides; confirm saved selection and Qwen options persist. Test sleep/wake, another capture, and insertion.
-5. Record real quiet speech and nonspeech in a room with fan, keyboard, breathing, or microphone handling sounds, paired with quiet and breathless speech. Record the environment and listen to disagreements. These real-world recordings remain pending until performed; do not add or assume a new VAD/rejection rule.
+3. Stop and restart the isolated daemon without CLI overrides; confirm saved selection and Qwen options persist.
+4. Record real quiet speech and nonspeech in a room with fan, keyboard, breathing, or microphone handling sounds, paired with quiet and breathless speech. Record the environment and listen to disagreements. These real-world recordings remain pending until performed; do not add or assume a new VAD/rejection rule.
 
 Check status, history, logs, and inserted text after each run. History is in memory and starts empty after restart; configuration and JSONL logs are separate. Mark each item pass, fail, or pending with evidence. Fresh listening and physical microphone results are required; dataset references and official-model output are not ground truth. Filling VRAM and physical stop-to-insert p50/p95 remain outside this closure gate.
 

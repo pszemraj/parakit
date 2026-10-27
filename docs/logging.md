@@ -68,7 +68,7 @@ The daemon supplies an `inference` object on each successful transcription:
 | `qwen_max_new_tokens` | Effective per-chunk generation budget; Qwen only. |
 | `native_api_version` | Linked native C API version, when reported. |
 
-Mixed-precision artifacts retain higher-precision tensors: Qwen Q6_K generation keeps the audio encoder at Q8_0 or source floating precision, while the overall label remains `Q6_K`. Small F32 biases and normalization tensors can coexist with a reported `F16` model. The label summarizes the artifact recipe rather than every tensor.
+The quantization label summarizes the artifact recipe rather than every tensor: F32 biases and normalization tensors can coexist with a reported `F16` model. See [model presets](running.md#model-presets) for Q6_K precision choices.
 
 The requested device policy remains fixed; the session policy reflects an Auto reload on CPU. GPU execution backend (CUDA/Vulkan/Metal) and GPU name are not confirmed by these JSONL fields. Status labels GPU inventory separately from confirmed execution.
 
