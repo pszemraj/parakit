@@ -2,12 +2,8 @@
 //! element's `AXValue` to confirm a transcript was actually consumed by the
 //! paste chord before the previous clipboard contents are restored.
 //!
-//! Before this module existed, macOS paste always slept a fixed 200ms and
-//! then restored whatever clipboard content preceded the transcript,
-//! regardless of whether the target had consumed the paste yet. On a slow
-//! or busy target that blind restore could destroy the just-dictated
-//! transcript. This module turns that guess into a bounded, evidence-based
-//! wait: uncertainty degrades to [`PasteConfirmation::Unverified`],
+//! Confirmation waits for evidence that the target consumed the transcript
+//! before restoring the clipboard. Uncertainty degrades to [`PasteConfirmation::Unverified`],
 //! [`PasteConfirmation::UnverifiedFocusLost`], or
 //! [`PasteConfirmation::NoEvidence`] — it never silently destroys the
 //! transcript. `Unverified` still restores the previous clipboard contents,
@@ -47,17 +43,9 @@
 //! posted, and its result reaches [`await_paste_confirmation`] as
 //! [`PasteConfirmationContext::baseline`].
 //!
-//! This matters more than it looks. An earlier version took its baseline
-//! from the first *post*-chord read, which races the target: an app that
-//! refreshes its accessibility tree coarsely (terminals especially — ghostty
-//! confirms in ~300ms where Safari and Discord confirm in ~40ms) can already
-//! have the pasted text in that first read. From then on the value never
-//! grows, so a paste that landed perfectly is indistinguishable from one
-//! that was dropped, and the transaction reports
-//! [`PasteConfirmation::NoEvidence`] — an error chime and a withheld
-//! clipboard restore on a completely successful dictation. Whether that
-//! happened came down to timing, which made it look intermittent and
-//! arbitrary from the outside.
+//! A post-chord baseline can already contain the pasted transcript, leaving
+//! no observable insertion delta. The pre-chord read avoids that race; a
+//! post-chord fallback is used only when the earlier read was unavailable.
 //!
 //! ## Why value growth alone is not confirmation
 //!
@@ -326,9 +314,7 @@ pub(crate) fn await_paste_confirmation(ctx: &PasteConfirmationContext<'_>) -> Pa
         });
     };
 
-    // Build transcript evidence once for the whole polling transaction. The
-    // old implementation rebuilt this whitespace-normalized needle on every
-    // 40ms tick.
+    // Normalize transcript evidence once for the polling transaction.
     let matcher = TranscriptMatcher::new(ctx.transcript);
     let (baseline, mut captured_element_usable) = match ctx.baseline {
         Some(baseline) => (
@@ -370,12 +356,17 @@ pub(crate) fn await_paste_confirmation(ctx: &PasteConfirmationContext<'_>) -> Pa
         });
     };
 
+    let baseline_counts = if ctx.mode != PasteMode::Terminal && matcher.meets_evidence_floor {
+        matcher.counts(&baseline)
+    } else {
+        EvidenceCounts::default()
+    };
     let deadline = start + AX_CONFIRM_DEADLINE;
     loop {
         let now = Instant::now();
         if now >= deadline {
             return unless_abandoned(deadline_confirmation(
-                poll_current_focus(ctx, &matcher, Some(&baseline)),
+                poll_current_focus(ctx, &matcher, &baseline, &baseline_counts),
                 &matcher,
                 start.elapsed(),
             ));
@@ -385,7 +376,7 @@ pub(crate) fn await_paste_confirmation(ctx: &PasteConfirmationContext<'_>) -> Pa
         let poll = if captured_element_usable {
             element.poll_value(MAX_AX_VALUE_UTF16_UNITS)
         } else {
-            match poll_current_focus(ctx, &matcher, Some(&baseline)) {
+            match poll_current_focus(ctx, &matcher, &baseline, &baseline_counts) {
                 Ok(true) => {
                     return unless_abandoned(PasteConfirmation::Confirmed {
                         elapsed: start.elapsed(),
@@ -416,6 +407,7 @@ pub(crate) fn await_paste_confirmation(ctx: &PasteConfirmationContext<'_>) -> Pa
                 let current = BoundedNormalizedValue::from_target_value(&current);
                 if matcher.indicates_insertion(
                     Some(&baseline),
+                    &baseline_counts,
                     &current,
                     true,
                     ctx.mode != PasteMode::Terminal,
@@ -481,13 +473,15 @@ fn deadline_confirmation(
 fn poll_current_focus(
     ctx: &PasteConfirmationContext<'_>,
     matcher: &TranscriptMatcher,
-    baseline: Option<&BoundedNormalizedValue>,
+    baseline: &BoundedNormalizedValue,
+    baseline_counts: &EvidenceCounts,
 ) -> Result<bool, ()> {
     let Some((current, same_element)) = poll_current_value(ctx)? else {
         return Ok(false);
     };
     Ok(matcher.indicates_insertion(
-        baseline,
+        Some(baseline),
+        baseline_counts,
         &current,
         same_element,
         ctx.mode != PasteMode::Terminal,
@@ -543,8 +537,13 @@ fn value_indicates_insertion_for_mode(
     let baseline =
         baseline.map(|value| BoundedNormalizedValue::new(value, MAX_AX_VALUE_UTF16_UNITS));
     let current = BoundedNormalizedValue::new(current, MAX_AX_VALUE_UTF16_UNITS);
+    let baseline_counts = baseline
+        .as_ref()
+        .map(|baseline| matcher.counts(baseline))
+        .unwrap_or_default();
     matcher.indicates_insertion(
         baseline.as_ref(),
+        &baseline_counts,
         &current,
         true,
         mode != PasteMode::Terminal,
@@ -639,16 +638,26 @@ impl BoundedNormalizedValue {
             return false;
         }
 
-        self.head.match_indices(inserted).any(|(index, _)| {
-            let suffix_index = index + inserted.len();
-            baseline.head.get(..index).is_some_and(|prefix| {
-                prefix == &self.head[..index]
-                    && baseline
-                        .head
-                        .get(index..)
-                        .is_some_and(|suffix| suffix == &self.head[suffix_index..])
-            })
-        })
+        let prefix: usize = self
+            .head
+            .chars()
+            .zip(baseline.head.chars())
+            .take_while(|(current, previous)| current == previous)
+            .map(|(character, _)| character.len_utf8())
+            .sum();
+        let suffix: usize = self
+            .head
+            .chars()
+            .rev()
+            .zip(baseline.head.chars().rev())
+            .take_while(|(current, previous)| current == previous)
+            .map(|(character, _)| character.len_utf8())
+            .sum();
+        // Valid insertion positions lie between the unchanged suffix start
+        // and the common prefix end. Search that
+        // interval once, including overlapping occurrences and UTF-8 text.
+        let first = baseline.head.len() - suffix;
+        first <= prefix && self.head[first..prefix + inserted.len()].contains(inserted)
     }
 }
 
@@ -766,6 +775,7 @@ impl TranscriptMatcher {
     fn indicates_insertion(
         &self,
         baseline: Option<&BoundedNormalizedValue>,
+        baseline_counts: &EvidenceCounts,
         current: &BoundedNormalizedValue,
         allow_selection_evidence: bool,
         allow_occurrence_evidence: bool,
@@ -774,6 +784,9 @@ impl TranscriptMatcher {
             (Some(whole), Some(baseline)) => current.is_exact_insertion_of(baseline, whole),
             _ => false,
         };
+        if exact_insertion {
+            return true;
+        }
         let distinctive_occurrence = match baseline {
             // Occurrence counts alone are unsafe over a fixed-size rendered
             // AX window: scrolling can reveal an older identical string and
@@ -785,7 +798,6 @@ impl TranscriptMatcher {
                     && current.utf16_units > baseline.utf16_units =>
             {
                 let current_counts = self.counts(current);
-                let baseline_counts = self.counts(baseline);
                 current_counts.whole > baseline_counts.whole
                     || current_counts.head > baseline_counts.head
                     || current_counts.tail > baseline_counts.tail
@@ -793,8 +805,7 @@ impl TranscriptMatcher {
             _ => false,
         };
 
-        exact_insertion
-            || distinctive_occurrence
+        distinctive_occurrence
             || (self.meets_evidence_floor
                 && allow_selection_evidence
                 && baseline

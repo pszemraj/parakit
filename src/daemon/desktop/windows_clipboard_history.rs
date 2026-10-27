@@ -4,8 +4,7 @@
 
 use anyhow::{Context, Result};
 use std::ffi::c_void;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{mpsc, Arc, Condvar, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 use windows::core::{w, Error as WinError, PCWSTR};
@@ -131,83 +130,40 @@ impl ClipboardHistoryHandle {
 }
 
 struct ListenerState {
-    shared: Mutex<ListenerShared>,
-    next_waiter_id: AtomicU64,
+    latest_sequence: Mutex<u32>,
+    changed: Condvar,
 }
 
 impl ListenerState {
     fn new(initial_sequence: u32) -> Self {
         Self {
-            shared: Mutex::new(ListenerShared {
-                latest_sequence: initial_sequence,
-                waiters: Vec::new(),
-            }),
-            next_waiter_id: AtomicU64::new(1),
+            latest_sequence: Mutex::new(initial_sequence),
+            changed: Condvar::new(),
         }
     }
 
     fn observe_sequence(&self, sequence: u32) {
-        let mut shared = self
-            .shared
+        let mut latest = self
+            .latest_sequence
             .lock()
             .expect("clipboard listener mutex poisoned");
-        if sequence > shared.latest_sequence {
-            shared.latest_sequence = sequence;
+        if sequence > *latest {
+            *latest = sequence;
+            self.changed.notify_all();
         }
-
-        let latest = shared.latest_sequence;
-        shared.waiters.retain(|waiter| {
-            if latest >= waiter.target_sequence {
-                let _ = waiter.tx.send(());
-                false
-            } else {
-                true
-            }
-        });
     }
 
     fn wait_for_sequence(&self, target_sequence: u32, timeout: Duration) -> bool {
-        let (tx, rx) = mpsc::channel();
-        let waiter_id = self.next_waiter_id.fetch_add(1, Ordering::Relaxed);
-
-        {
-            let mut shared = self
-                .shared
-                .lock()
-                .expect("clipboard listener mutex poisoned");
-            if shared.latest_sequence >= target_sequence {
-                return true;
-            }
-            shared.waiters.push(ClipboardWaiter {
-                id: waiter_id,
-                target_sequence,
-                tx,
-            });
-        }
-
-        match rx.recv_timeout(timeout) {
-            Ok(()) => true,
-            Err(_) => {
-                let mut shared = self
-                    .shared
-                    .lock()
-                    .expect("clipboard listener mutex poisoned");
-                shared.waiters.retain(|waiter| waiter.id != waiter_id);
-                false
-            }
-        }
+        let latest = self
+            .latest_sequence
+            .lock()
+            .expect("clipboard listener mutex poisoned");
+        let (latest, _) = self
+            .changed
+            .wait_timeout_while(latest, timeout, |latest| *latest < target_sequence)
+            .expect("clipboard listener mutex poisoned");
+        *latest >= target_sequence
     }
-}
-
-struct ListenerShared {
-    latest_sequence: u32,
-    waiters: Vec<ClipboardWaiter>,
-}
-
-struct ClipboardWaiter {
-    id: u64,
-    target_sequence: u32,
-    tx: mpsc::Sender<()>,
 }
 
 fn listener_thread_main(state: Arc<ListenerState>, ready_tx: mpsc::Sender<StartupResult>) {
@@ -367,46 +323,50 @@ mod tests {
     use super::*;
 
     #[test]
-    fn satisfied_waiter_is_removed_when_receiver_is_gone() {
-        let state = ListenerState::new(1);
-        let waiter_id = state.next_waiter_id.fetch_add(1, Ordering::Relaxed);
-        let (tx, rx) = mpsc::channel();
-        drop(rx);
-
-        {
-            let mut shared = state.shared.lock().expect("listener mutex");
-            shared.waiters.push(ClipboardWaiter {
-                id: waiter_id,
-                target_sequence: 2,
-                tx,
-            });
-        }
-
-        state.observe_sequence(2);
-
-        let shared = state.shared.lock().expect("listener mutex");
-        assert!(shared.waiters.is_empty());
+    fn already_observed_sequence_does_not_wait() {
+        let state = ListenerState::new(2);
+        assert!(state.wait_for_sequence(2, Duration::ZERO));
+        state.observe_sequence(1);
+        assert!(state.wait_for_sequence(2, Duration::ZERO));
     }
 
     #[test]
-    fn unsatisfied_waiter_remains_pending() {
+    fn unobserved_sequence_times_out() {
         let state = ListenerState::new(1);
-        let waiter_id = state.next_waiter_id.fetch_add(1, Ordering::Relaxed);
-        let (tx, _rx) = mpsc::channel();
+        assert!(!state.wait_for_sequence(2, Duration::ZERO));
+        assert!(!state.wait_for_sequence(2, Duration::from_millis(5)));
+    }
 
-        {
-            let mut shared = state.shared.lock().expect("listener mutex");
-            shared.waiters.push(ClipboardWaiter {
-                id: waiter_id,
-                target_sequence: 3,
-                tx,
-            });
-        }
+    #[test]
+    fn sequence_update_wakes_all_matching_waiters() {
+        let state = ListenerState::new(1);
+        let ready = std::sync::Barrier::new(4);
+        thread::scope(|scope| {
+            let waits: Vec<_> = (0..3)
+                .map(|_| {
+                    scope.spawn(|| {
+                        ready.wait();
+                        state.wait_for_sequence(3, Duration::from_secs(2))
+                    })
+                })
+                .collect();
+            ready.wait();
+            state.observe_sequence(2);
+            state.observe_sequence(3);
+            for wait in waits {
+                assert!(wait.join().unwrap());
+            }
+        });
+    }
 
-        state.observe_sequence(2);
-
-        let shared = state.shared.lock().expect("listener mutex");
-        assert_eq!(shared.waiters.len(), 1);
-        assert_eq!(shared.waiters[0].id, waiter_id);
+    #[test]
+    fn unrelated_notification_does_not_satisfy_a_waiter() {
+        let state = ListenerState::new(1);
+        thread::scope(|scope| {
+            let wait = scope.spawn(|| state.wait_for_sequence(3, Duration::from_millis(20)));
+            state.changed.notify_all();
+            state.observe_sequence(2);
+            assert!(!wait.join().unwrap());
+        });
     }
 }
