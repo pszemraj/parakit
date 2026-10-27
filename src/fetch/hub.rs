@@ -508,26 +508,28 @@ mod tests {
     }
 
     #[test]
-    fn parses_owner_repo() {
-        let SourceKind::Repo(spec) = classify_source("cstr/parakeet-tdt-0.6b-v3-GGUF").unwrap()
-        else {
-            panic!("expected a repo spec");
-        };
-        assert_eq!(spec.owner, "cstr");
-        assert_eq!(spec.repo, "parakeet-tdt-0.6b-v3-GGUF");
-        assert_eq!(spec.revision, None);
-    }
-
-    #[test]
-    fn parses_owner_repo_with_revision() {
-        let SourceKind::Repo(spec) =
-            classify_source("handy-computer/parakeet-tdt-0.6b-v3-gguf@refs/pr/1").unwrap()
-        else {
-            panic!("expected a repo spec");
-        };
-        assert_eq!(spec.owner, "handy-computer");
-        assert_eq!(spec.repo, "parakeet-tdt-0.6b-v3-gguf");
-        assert_eq!(spec.revision.as_deref(), Some("refs/pr/1"));
+    fn parses_owner_repo_with_optional_revision() {
+        for (input, owner, repo, revision) in [
+            (
+                "cstr/parakeet-tdt-0.6b-v3-GGUF",
+                "cstr",
+                "parakeet-tdt-0.6b-v3-GGUF",
+                None,
+            ),
+            (
+                "handy-computer/parakeet-tdt-0.6b-v3-gguf@refs/pr/1",
+                "handy-computer",
+                "parakeet-tdt-0.6b-v3-gguf",
+                Some("refs/pr/1"),
+            ),
+        ] {
+            let SourceKind::Repo(spec) = classify_source(input).unwrap() else {
+                panic!("expected a repo spec: {input}");
+            };
+            assert_eq!(spec.owner, owner, "{input}");
+            assert_eq!(spec.repo, repo, "{input}");
+            assert_eq!(spec.revision.as_deref(), revision, "{input}");
+        }
     }
 
     #[test]
