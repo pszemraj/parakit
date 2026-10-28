@@ -192,11 +192,9 @@ fn main() {
 #[cfg(unix)]
 #[test]
 fn failed_q6_quantization_preserves_completed_model_and_cleans_staging() {
-    use std::os::unix::fs::PermissionsExt;
     let dir = crate::test_support::fixture_root("parakit-fetch-tests", "q6-failure");
     let quantizer = dir.join("quantizer");
-    std::fs::write(&quantizer, "#!/bin/sh\n[ \"$3\" = q6_k ] && [ \"$CRISPASR_QWEN3ASR_QUANT_AUDIO\" = 0 ] || exit 2\nprintf partial > \"$2\"\nexit 1\n").unwrap();
-    std::fs::set_permissions(&quantizer, std::fs::Permissions::from_mode(0o755)).unwrap();
+    crate::test_support::write_script_fixture(&quantizer, "#!/bin/sh\n[ \"$3\" = q6_k ] && [ \"$CRISPASR_QWEN3ASR_QUANT_AUDIO\" = 0 ] || exit 2\nprintf partial > \"$2\"\nexit 1\n");
     let f16 = dir.join("f16.gguf");
     let q6 = dir.join("q6.gguf");
     std::fs::write(&f16, b"source").unwrap();

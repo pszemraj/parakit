@@ -59,6 +59,90 @@ pub(crate) fn write_config_fixture(namespace: &str, name: &str, contents: &str) 
     path
 }
 
+/// Write a script fixture and wait for Unix executable-file locks to clear.
+///
+/// Unix scripts must exit promptly without side effects when run without
+/// arguments. The probe accepts any exit status and retries only
+/// `ExecutableFileBusy`, for at most one second. Windows only needs the write.
+///
+/// # Arguments
+///
+/// * `path` - Fixture script path in an existing directory.
+/// * `contents` - Complete shell script or Windows batch-file contents.
+///
+/// # Panics
+///
+/// Panics if writing, setting permissions, or probing the script fails.
+pub(crate) fn write_script_fixture(path: &Path, contents: &str) {
+    fs::write(path, contents).expect("write script fixture");
+    #[cfg(unix)]
+    {
+        use std::io::ErrorKind;
+        use std::os::unix::fs::PermissionsExt;
+        use std::time::{Duration, Instant};
+
+        fs::set_permissions(path, fs::Permissions::from_mode(0o755))
+            .expect("make script fixture executable");
+        // Concurrent process creation can briefly inherit the writable file
+        // descriptor even after this thread has closed it.
+        let deadline = Instant::now() + Duration::from_secs(1);
+        loop {
+            match Command::new(path).output() {
+                Ok(_) => break,
+                Err(err)
+                    if err.kind() == ErrorKind::ExecutableFileBusy && Instant::now() < deadline =>
+                {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Err(err) => panic!("probe script fixture {}: {err}", path.display()),
+            }
+        }
+    }
+}
+
+#[test]
+fn executable_fixture_preserves_script_behavior() {
+    let root = fixture_root("script-fixture-tests", "executable");
+    let path = root.join(if cfg!(windows) { "probe.cmd" } else { "probe" });
+    let script = if cfg!(windows) {
+        "@echo off\r\necho %~1\r\nexit /b 7\r\n"
+    } else {
+        "#!/bin/sh\n[ \"$#\" -gt 0 ] || exit 7\nprintf '%s' \"$1\"\nexit 7\n"
+    };
+    write_script_fixture(&path, script);
+
+    #[cfg(target_os = "linux")]
+    {
+        use std::io::ErrorKind;
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        let writer = fs::OpenOptions::new().write(true).open(&path).unwrap();
+        assert_eq!(
+            Command::new(&path).output().unwrap_err().kind(),
+            ErrorKind::ExecutableFileBusy
+        );
+        std::thread::scope(|scope| {
+            let (done_tx, done_rx) = mpsc::channel();
+            let script_path = &path;
+            scope.spawn(move || {
+                write_script_fixture(script_path, script);
+                done_tx.send(()).unwrap();
+            });
+            let before_close = done_rx.recv_timeout(Duration::from_millis(30));
+            drop(writer);
+            assert_eq!(before_close, Err(mpsc::RecvTimeoutError::Timeout));
+            done_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        });
+    }
+
+    let output = Command::new(&path).arg("payload").output().unwrap();
+    assert_eq!(output.status.code(), Some(7));
+    assert_eq!(String::from_utf8(output.stdout).unwrap().trim(), "payload");
+    assert!(output.stderr.is_empty());
+    fs::remove_dir_all(root).unwrap();
+}
+
 /// Build a command that reruns one test in an isolated child process.
 ///
 /// # Arguments
