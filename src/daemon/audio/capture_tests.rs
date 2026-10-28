@@ -665,9 +665,6 @@ fn source_description_preserves_opened_capture_format() {
         super::super::pactl::PactlSourceInfo {
             name: "alsa_input.test".to_owned(),
             description: Some("Physical microphone".to_owned()),
-            rate: Some(48_000),
-            channels: Some(2),
-            sample_format: Some("s24le".to_owned()),
         },
     );
     assert_eq!(info.name, "Physical microphone");

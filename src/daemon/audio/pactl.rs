@@ -17,12 +17,6 @@ pub(crate) struct PactlSourceInfo {
     pub(crate) name: String,
     /// Human-readable source description.
     pub(crate) description: Option<String>,
-    /// Source sample rate.
-    pub(crate) rate: Option<u32>,
-    /// Source channel count.
-    pub(crate) channels: Option<u16>,
-    /// Source sample format label.
-    pub(crate) sample_format: Option<String>,
 }
 
 /// Read the current default PulseAudio/PipeWire source with `pactl`.
@@ -122,11 +116,6 @@ fn parse_pactl_sources(text: &str) -> Vec<PactlSourceInfo> {
             source.name = name.trim().to_string();
         } else if let Some(description) = trimmed.strip_prefix("Description: ") {
             source.description = Some(description.trim().to_string());
-        } else if let Some(spec) = trimmed.strip_prefix("Sample Specification: ") {
-            let (sample_format, channels, rate) = parse_sample_spec(spec.trim());
-            source.sample_format = sample_format;
-            source.channels = channels;
-            source.rate = rate;
         }
     }
 
@@ -136,27 +125,13 @@ fn parse_pactl_sources(text: &str) -> Vec<PactlSourceInfo> {
     out
 }
 
-fn parse_sample_spec(spec: &str) -> (Option<String>, Option<u16>, Option<u32>) {
-    let mut parts = spec.split_whitespace();
-    let sample_format = parts.next().map(str::to_string);
-    let channels = parts
-        .next()
-        .and_then(|part| part.strip_suffix("ch"))
-        .and_then(|part| part.parse().ok());
-    let rate = parts
-        .next()
-        .and_then(|part| part.strip_suffix("Hz"))
-        .and_then(|part| part.parse().ok());
-    (sample_format, channels, rate)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::io::Write;
 
     #[test]
-    fn pactl_source_parser_extracts_description_and_rate() {
+    fn pactl_source_parser_extracts_name_and_description() {
         let sources = parse_pactl_sources(
             r#"Source #42
     Name: alsa_input.usb-Test_Speech_Mic-00.mono-fallback
@@ -174,9 +149,6 @@ Source #43
             PactlSourceInfo {
                 name: "alsa_input.usb-Test_Speech_Mic-00.mono-fallback".to_string(),
                 description: Some("USB Speech Mic Mono".to_string()),
-                rate: Some(48_000),
-                channels: Some(1),
-                sample_format: Some("s24le".to_string()),
             }
         );
     }
