@@ -42,6 +42,8 @@ parakit --verbose status
 
 `ibus status` reports the registration file, build support, connection, engine discovery, and active engine. Registration does not prove that the current application accepts native commits. Run `parakit test-paste "hello from parakit"` in a disposable terminal, then inspect the inserted prompt text and [insertion outcome](logging.md#insertion-outcomes).
 
+Before upgrading a default Linux build, install the IBus development package (`sudo apt install libibus-1.0-dev` on Debian/Ubuntu), including on X11. See the [build dependencies](build.md#native-dependencies) for other distributions and the [X11-only build](build.md#install) to omit IBus.
+
 After an upgrade, restart the daemon. Re-run `ibus install` when upgrading from a component that launched `parakit ibus engine`, or if the executable path or keyboard layout changed; log out and back in to reload the engine. To remove the integration, first select another input source, remove Parakit from the desktop's source list, then run:
 
 ```bash
