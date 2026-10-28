@@ -30,6 +30,28 @@ fn isolated_parakit_with_empty_config(name: &str) -> Command {
     command
 }
 
+#[cfg(all(target_os = "linux", feature = "ibus"))]
+#[test]
+fn ibus_helper_rejects_arguments_before_connecting_to_the_bus() {
+    for argument in ["--help", "--version", "unexpected"] {
+        let output = Command::new(env!("CARGO_BIN_EXE_parakit-ibus"))
+            .arg(argument)
+            .env("IBUS_ADDRESS", "unix:path=/nonexistent-parakit-test-bus")
+            .env(
+                "DBUS_SESSION_BUS_ADDRESS",
+                "unix:path=/nonexistent-parakit-test-bus",
+            )
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(2));
+        assert!(output.stdout.is_empty());
+        assert_eq!(
+            String::from_utf8(output.stderr).unwrap(),
+            "Usage: parakit-ibus\nIBus launches this engine without arguments.\n"
+        );
+    }
+}
+
 #[test]
 fn user_rule_errors_preserve_config_validation_order_and_rule_context() {
     let rules = "[[rules.user]]\nname = 'valid'\npattern = 'ok'\nreplacement = 'yes'\n\n\

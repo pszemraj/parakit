@@ -8,6 +8,10 @@ unsafe extern "C" {
 
 #[cfg(target_os = "linux")]
 fn main() -> std::process::ExitCode {
+    if std::env::args_os().nth(1).is_some() {
+        eprintln!("Usage: parakit-ibus\nIBus launches this engine without arguments.");
+        return std::process::ExitCode::from(2);
+    }
     // The native entry point owns its GLib loop until IBus disconnects.
     if unsafe { parakit_ibus_run_engine() } == 0 {
         std::process::ExitCode::SUCCESS
