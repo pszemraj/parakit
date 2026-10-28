@@ -136,7 +136,7 @@ For latency work, use short real clips around 2s, 5s, 15s, and 25s. Longer quali
 
 ## PTT Worker Simulation
 
-The Rust suite also runs the production worker loop with a fake inference engine. It checks timed offload, audio queued during a blocked reload, one transcription and completion, transcript history, and session destruction without a model or a minute-long timeout.
+The Rust suite runs the production recording coordinator and worker with a test audio manager and fake inference engine. It checks exact PCM captured before and during blocked reload, release before or after readiness, one transcription and completion, transcript history, and session destruction without a model or a minute-long timeout. These checks do not exercise native microphone startup or physical hotkeys; use the [physical desktop checks](model-validation.md#physical-desktop-checks) for those boundaries.
 
 Use the hidden simulation path when you need the daemon worker flow without a live keyboard, microphone, or text insertion:
 

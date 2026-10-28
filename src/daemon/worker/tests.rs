@@ -402,6 +402,126 @@ fn worker_loop_offloads_then_reloads_and_transcribes_queued_capture() {
 }
 
 #[test]
+fn coordinator_keeps_initial_pcm_when_released_during_reload() {
+    exercise_capture_during_reload(false);
+}
+
+#[test]
+fn coordinator_keeps_initial_pcm_when_held_through_reload() {
+    exercise_capture_during_reload(true);
+}
+
+fn exercise_capture_during_reload(held: bool) {
+    use crate::daemon::audio::AudioHandle;
+    use crate::daemon::inject::FocusSource;
+    use crate::daemon::recording::{spawn_recording_coordinator, HotkeyTransition};
+    use std::thread;
+
+    struct RecordingEngine(Sender<Vec<f32>>);
+    impl WorkerEngine for RecordingEngine {
+        fn transcribe(&self, pcm: &[f32]) -> Result<String> {
+            self.0.send(pcm.to_vec()).unwrap();
+            Ok("first words during reload and final words".to_owned())
+        }
+    }
+
+    // The first samples arrive before the audio manager acknowledges Start,
+    // so the worker cannot have begun loading when they enter the buffer.
+    let first = vec![0.125; TARGET_RATE as usize];
+    let during = vec![0.25; TARGET_RATE as usize * 3];
+    let last = vec![-0.375; TARGET_RATE as usize / 2];
+    let audio = AudioHandle::test_handle_with_start_samples(first.clone());
+    let observed_audio = audio.clone();
+    let state = Arc::new(SharedState::new());
+    state.activity.ready();
+    let (worker_tx, worker_rx) = crossbeam_channel::bounded(WORKER_QUEUE_CAPACITY);
+    let (pcm_tx, pcm_rx) = crossbeam_channel::bounded(1);
+    let (entered_tx, entered_rx) = crossbeam_channel::bounded(1);
+    let (release_tx, release_rx) = crossbeam_channel::bounded(1);
+    let (sounds, cues) = Sounds::test_channel();
+    let ctx = test_worker_ctx(
+        RecordingEngine(pcm_tx.clone()),
+        &state,
+        sounds,
+        worker_rx,
+        1,
+    );
+    let log = Arc::clone(&ctx.log);
+    let worker = thread::spawn(move || {
+        worker_loop_with(ctx, Some(Duration::from_millis(10)), || {
+            entered_tx.send(()).unwrap();
+            release_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+            Ok(RecordingEngine(pcm_tx.clone()))
+        });
+    });
+    wait_for_state(&state, Residency::Offloaded);
+    let verify_residency = state.activity.begin();
+    let (hotkey_tx, hotkey_rx) = crossbeam_channel::unbounded();
+    let coordinator = spawn_recording_coordinator(
+        hotkey_rx,
+        worker_tx,
+        audio,
+        log,
+        Arc::clone(&state.activity),
+        FocusSource::default(),
+    )
+    .unwrap();
+
+    hotkey_tx
+        .send(HotkeyTransition::Pressed { at: Instant::now() })
+        .unwrap();
+    entered_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+    assert!(observed_audio.test_is_recording());
+    assert!(matches!(next_cue(&cues), Cue::Reload));
+    observed_audio.test_append_samples(&during);
+    assert!(pcm_rx.try_recv().is_err(), "inference must await reload");
+
+    if held {
+        release_tx.send(()).unwrap();
+        assert!(matches!(next_cue(&cues), Cue::Start(_)));
+        assert!(observed_audio.test_is_recording());
+    }
+    observed_audio.test_append_samples(&last);
+    hotkey_tx
+        .send(HotkeyTransition::Released { at: Instant::now() })
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while observed_audio.test_is_recording() && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(5));
+    }
+    assert!(
+        !observed_audio.test_is_recording(),
+        "release must not wait for reload"
+    );
+    if !held {
+        assert_eq!(state.model_status().unwrap().residency, Residency::Loading);
+        assert!(pcm_rx.try_recv().is_err());
+        assert!(cues.try_recv().is_err());
+        release_tx.send(()).unwrap();
+    }
+    let pcm = pcm_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+    assert_eq!(pcm, [first, during, last].concat());
+    assert!(matches!(next_cue(&cues), Cue::Success));
+    assert_eq!(
+        state.resolve_transcript(0).unwrap(),
+        "first words during reload and final words"
+    );
+    assert!(state.resolve_transcript(1).is_err());
+    drop(hotkey_tx);
+    coordinator.join().unwrap();
+    worker.join().unwrap();
+    drop(verify_residency);
+    assert!(
+        pcm_rx.try_recv().is_err(),
+        "capture must be transcribed once"
+    );
+    assert!(
+        cues.try_recv().is_err(),
+        "early release must not play a late start cue"
+    );
+}
+
+#[test]
 fn failed_or_skipped_transcription_keeps_previous_history_without_recovery_hint() {
     const CHILD: &str = "PARAKIT_TEST_RETAINED_HISTORY";
     let skipped = match std::env::var(CHILD).as_deref() {
