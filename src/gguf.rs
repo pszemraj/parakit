@@ -116,9 +116,10 @@ fn dominant_tensor_type(file: &mut impl Read, tensor_count: u64) -> Result<Optio
             .context("GGUF tensor type element count overflow")?;
     }
 
+    // Equal element totals use the lowest type code, independent of map order.
     Ok(counts
         .into_iter()
-        .max_by_key(|(_, count)| *count)
+        .max_by_key(|(tensor_type, count)| (*count, std::cmp::Reverse(*tensor_type)))
         .and_then(|(tensor_type, _)| tensor_type_name(tensor_type)))
 }
 
@@ -265,6 +266,26 @@ mod tests {
                 drop(file);
 
                 assert_eq!(detect_dtype(&path).unwrap().as_deref(), expected);
+            }
+        }
+    }
+
+    #[test]
+    fn dominant_tensor_type_breaks_equal_element_counts_by_type_code() {
+        for types in [[0_u32, 1_u32], [1, 0]] {
+            let mut bytes = Vec::new();
+            for tensor_type in types {
+                bytes.extend(0_u64.to_le_bytes()); // empty tensor name
+                bytes.extend(1_u32.to_le_bytes()); // one dimension
+                bytes.extend(1024_u64.to_le_bytes());
+                bytes.extend(tensor_type.to_le_bytes());
+                bytes.extend(0_u64.to_le_bytes()); // offset
+            }
+            for _ in 0..32 {
+                assert_eq!(
+                    dominant_tensor_type(&mut Cursor::new(&bytes), 2).unwrap(),
+                    Some("F32")
+                );
             }
         }
     }
