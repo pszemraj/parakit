@@ -26,6 +26,8 @@ use device::selected_mic_info;
 pub use device::MicInfo;
 #[path = "capture_drain.rs"]
 mod drain;
+#[path = "capture_monitor.rs"]
+mod monitor;
 #[path = "capture_stream.rs"]
 mod stream;
 use stream::audio_manager_loop;

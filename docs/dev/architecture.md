@@ -8,6 +8,7 @@ Parakit keeps the daemon thread-based. There is no long-running Rust async runti
 main thread                  CLI, setup, and blocking hotkey backend
 recording coordinator thread hotkey transition -> focus snapshot -> audio start/stop -> PCM handoff
 audio manager thread         owns the current cpal::Stream and follows the default mic
+microphone probe thread      queries the selected input without blocking recording controls
 cpal callback thread         mixes input to mono and pushes frames into a bounded SPSC ring
 audio drain thread           drains ring -> resamples -> updates pre-roll and active recording
 worker thread                owns optional Engine, reload/offload, transcribe -> clean -> insert
@@ -68,7 +69,7 @@ The Linux daemon attaches to the helper over IBus's private bus and advertises r
 | `src/daemon/desktop/hotkey.rs`, `src/daemon/desktop/hotkey/{linux,macos}.rs` | Hotkey backends and hotkey state helpers. |
 | `src/daemon/hotkey_help.rs` | Shared user-facing hotkey remediation text. |
 | `src/daemon/recording.rs` | Hotkey transition coordinator, focus snapshot, audio start/stop, and PCM handoff. |
-| `src/daemon/audio/capture.rs`, `src/daemon/audio/capture_{device,drain,stream}.rs` | Capture handle and pre-roll, microphone selection, ring-buffer drain and resampling, and live stream ownership and restart. |
+| `src/daemon/audio/capture.rs`, `src/daemon/audio/capture_{device,drain,monitor,stream}.rs` | Capture handle and pre-roll, microphone selection, ring-buffer drain and resampling, background device probes and change confirmation, and live stream ownership and restart. |
 | `src/daemon/audio/pactl.rs` | Linux `pactl` queries for default-source identity polling and startup/reopen microphone display details. |
 | `src/daemon/worker.rs` | Worker events, model lifecycle, ASR, cleanup, and completion. |
 | `src/daemon/worker/insertion.rs` | Paste sanitizer, focus guard, clipboard fallback, and insertion reporting. |
