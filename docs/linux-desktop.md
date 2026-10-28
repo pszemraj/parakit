@@ -77,6 +77,8 @@ Focused GTK fields also verified selection replacement, rejection after switchin
 
 The production worker also verified native IBus delivery into a GTK X11 field on an isolated X11 server, with its clipboard unchanged. Native delivery on X11 requires `--hotkey-backend ibus`; the default registered shortcut uses X11 clipboard paste.
 
+On an isolated GNOME Wayland session with XWayland available, rejected and terminal-policy-blocked native dictations copied their full text to the clipboard with history disabled. Clipboard readback matched, and neither GTK field received text. Clipboard recovery needs XWayland clipboard access; native IBus submission itself does not.
+
 Helper and client restart/reconnect behavior was checked separately through isolated IBus contexts. Those protocol checks do not establish reception in every application during a restart. The application matrix above covers native Wayland; XWayland reception and an actual interactive coding-assistant UI remain unverified. Terminal checks used input capture programs, without executing dictated text as commands.
 
 ## Insertion Selection And Recovery
