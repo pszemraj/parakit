@@ -721,7 +721,7 @@ position = "first"
         assert_eq!(config.rules.user.len(), 1);
         assert_eq!(config.rules.user[0].name, "custom-hello");
         assert_eq!(config.rules.user[0].description.as_deref(), Some("greet"));
-        assert_eq!(config.rules.user[0].pattern.as_str(), "(?i)hi");
+        assert_eq!(config.rules.user[0].pattern, "(?i)hi");
         assert_eq!(config.rules.user[0].replacement, "hello");
         assert_eq!(
             config.rules.user[0].position,

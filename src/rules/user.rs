@@ -1,10 +1,9 @@
 //! User-defined cleaning rules loaded from `config.toml`.
 //!
-//! A [`UserRule`] owns its compiled regex. Deserialization compiles the
-//! configured pattern, and [`validate_user_rules`] checks names and required
-//! values. Enabled rules are spliced into the pipeline assembled by
-//! [`crate::rules::engine`] at their configured [`RulePosition`]. Unlike
-//! built-in rules, user rules are never
+//! A [`UserRule`] is validated once at load time (see
+//! [`validate_user_rules`]) and, when enabled, compiled and spliced into the
+//! pipeline assembled by [`crate::rules::engine`] at its configured
+//! [`RulePosition`]. Unlike built-in rules, user rules are never
 //! profile-gated: they are explicitly user-authored, so they are always
 //! active regardless of [`crate::rules::CleaningProfile`]. They still
 //! respect `disabled_rules`.
@@ -58,65 +57,38 @@ impl RulePosition {
 
 /// A user-supplied text-cleaning rule loaded from `config.toml`.
 ///
-/// The pattern compiles during deserialization and is shared with each
-/// cleaner built from this rule. User rules use the `regex` crate, never
-/// `fancy-regex`. Names must not collide with built-in or other user rules.
+/// Compiled the same way as a built-in rule (the `regex` crate; user rules
+/// never use `fancy-regex`), but user-supplied and thus validated at load
+/// time: the pattern must be a valid regex, and the name must not collide
+/// with a built-in rule name or another user rule name.
 #[derive(Debug, Clone, Deserialize)]
-#[serde(try_from = "ConfiguredUserRule")]
+#[serde(deny_unknown_fields)]
 pub struct UserRule {
     /// Unique rule name. Must not have surrounding whitespace or collide
     /// with a built-in rule name or another user rule name.
     pub name: String,
     /// Optional human-readable description, shown by `parakit rules list`.
     pub description: Option<String>,
-    /// Compiled Rust regex; [`Regex::as_str`] returns its configured pattern.
-    pub pattern: Regex,
+    /// Rust `regex` crate pattern (same dialect as built-in `regex`-engine
+    /// rules).
+    pub pattern: String,
     /// Replacement string in the `regex` crate's expansion syntax: `$0`, `$1`, `$name`, `${name}`, and `$$` for a literal dollar sign.
     /// The name after a `$` is the longest run of letters, digits, and underscores, so `$1b` means a group named "1b"; write `${1}b` for group 1 followed by "b".
     /// A reference to a group that does not exist expands to empty text without an error.
     pub replacement: String,
     /// Where this rule is spliced relative to the built-in rule list.
-    pub position: RulePosition,
-}
-
-/// Serialized fields converted into a rule with an owned, compiled pattern.
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ConfiguredUserRule {
-    name: String,
-    description: Option<String>,
-    pattern: String,
-    replacement: String,
     #[serde(default)]
-    position: RulePosition,
-}
-
-impl TryFrom<ConfiguredUserRule> for UserRule {
-    type Error = anyhow::Error;
-
-    /// Compile the configured pattern while retaining its rule name in errors.
-    ///
-    /// # Errors
-    /// Returns a named diagnostic when the regex is invalid.
-    fn try_from(rule: ConfiguredUserRule) -> Result<Self> {
-        let pattern = Regex::new(&rule.pattern)
-            .map_err(|error| anyhow!("user rule '{}' has invalid regex: {error}", rule.name))?;
-        Ok(Self {
-            name: rule.name,
-            description: rule.description,
-            pattern,
-            replacement: rule.replacement,
-            position: rule.position,
-        })
-    }
+    pub position: RulePosition,
 }
 
 /// Validate that every user rule has a canonical, non-empty name and a
 /// non-empty pattern, that no user rule collides with a built-in name, and
 /// that no two user rules share a name. A canonical name has no leading or
 /// trailing whitespace, so validation, `disabled_rules` lookup, and rule-list
-/// output all use exactly the same identifier. Pattern validity follows
-/// from the compiled [`Regex`] owned by every rule.
+/// output all use exactly the same identifier. Regex *validity* (whether the
+/// pattern compiles) is checked when a rule is compiled
+/// ([`compile_user_regex`]), not here, so this stays cheap to call
+/// unconditionally.
 ///
 /// # Returns
 ///
@@ -154,12 +126,26 @@ pub(crate) fn validate_user_rules(user_rules: &[UserRule]) -> Result<()> {
         if !seen.insert(rule.name.as_str()) {
             return Err(anyhow!("duplicate user rule name '{}'", rule.name));
         }
-        if rule.pattern.as_str().is_empty() {
+        if rule.pattern.is_empty() {
             // This is a required-config-value check, not zero-width regex
-            // analysis. Valid expressions that match only a boundary remain
-            // accepted patterns.
+            // analysis. Other valid expressions may intentionally match at a
+            // boundary and are accepted by `compile_user_regex` below.
             return Err(anyhow!("user rule '{}' has an empty pattern", rule.name));
         }
     }
     Ok(())
+}
+
+/// Compile a user rule's `pattern` into a `regex::Regex`.
+///
+/// # Returns
+///
+/// The compiled [`Regex`] for `rule.pattern`.
+///
+/// # Errors
+///
+/// Returns an error naming the rule when its pattern is an invalid regex.
+pub(crate) fn compile_user_regex(rule: &UserRule) -> Result<Regex> {
+    Regex::new(&rule.pattern)
+        .map_err(|err| anyhow!("user rule '{}' has invalid regex: {err}", rule.name))
 }

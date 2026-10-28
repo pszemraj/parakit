@@ -148,9 +148,9 @@ pub struct CleanResult {
 /// Build the cleaner selected by CLI/runtime options.
 ///
 /// Rule-name, user-rule metadata, and threshold validation always run before
-/// the `no_cleaning` check. User rules already own their compiled patterns;
-/// config loading separately calls [`validate_configured_rules`] to check
-/// metadata without compiling the built-in pipeline.
+/// the `no_cleaning` check. Config loading separately calls
+/// [`validate_configured_rules`] so enabled user regexes are also checked
+/// eagerly without compiling the built-in pipeline.
 ///
 /// # Arguments
 ///
@@ -174,7 +174,7 @@ pub struct CleanResult {
 /// Returns an error for a negative or non-finite `number_threshold`, an unknown
 /// disabled rule name, an invalid built-in pattern, an empty or non-canonical
 /// user rule name, an empty user rule pattern, a user rule name colliding with
-/// a built-in name, or a duplicate user rule name.
+/// a built-in name, a duplicate user rule name, or an invalid user rule regex.
 pub fn build_cleaner(
     no_cleaning: bool,
     profile: CleaningProfile,
@@ -234,8 +234,7 @@ pub fn build_enabled_cleaner(
 
 /// Validate config-backed rule inputs without compiling the built-in pipeline.
 ///
-/// User patterns are compiled when deserializing [`UserRule`]s. This checks
-/// their metadata together with thresholds and disabled names.
+/// User regexes are compiled so a broken config still fails at load time.
 ///
 /// # Arguments
 ///
@@ -269,6 +268,9 @@ fn validate_rule_inputs(
     }
     engine::validate_number_threshold(number_threshold)?;
     user::validate_user_rules(user_rules)?;
+    for rule in user_rules {
+        user::compile_user_regex(rule)?;
+    }
     Ok(disabled_rules.iter().cloned().collect())
 }
 

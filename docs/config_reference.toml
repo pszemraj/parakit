@@ -293,7 +293,7 @@ backend = "auto"
 # Each [[rules.user]] table is one regex replacement applied to every transcript alongside the built-in rules. Repeat the header for each rule. The default is no user rules.
 # The example entry below is commented out. Uncomment the [[rules.user]] header together with its keys, or the keys land in the preceding table.
 # Entries run only through the cleaning pipeline, so they follow cleaning.enabled, and they are never gated by cleaning.profile. Within one position they run in file order.
-# Every entry is validated when the config loads. Every enabled entry's regex is compiled once at daemon startup and reused for every dictation.
+# Every entry is validated when the config loads. The daemon reuses compiled patterns for enabled entries across dictations.
 # An invalid entry makes every command that reads the config fail with an error that names the config file and the rule.
 # A rule that changes the text is recorded with its name and its count of non-overlapping matches in the transcription log and in the "Rules:" line of `parakit rules test`.
 # The name, pattern, replacement, position, and order of enabled entries are part of the rule-set id recorded in transcription logs. A description and disabled entries are not.

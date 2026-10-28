@@ -31,6 +31,38 @@ fn isolated_parakit_with_empty_config(name: &str) -> Command {
 }
 
 #[test]
+fn user_rule_errors_preserve_config_validation_order_and_rule_context() {
+    let rules = "[[rules.user]]\nname = 'valid'\npattern = 'ok'\nreplacement = 'yes'\n\n\
+        [[rules.user]]\nname = 'broken'\npattern = '('\nreplacement = 'no'\n";
+    let root = common::fixture_root_with_files("cli-contracts", "rule-errors", &["config.toml"]);
+    let config = root.join("config.toml");
+    for prefix in ["", "[daemon]\ntranscript_history = 101\n"] {
+        std::fs::write(&config, format!("{prefix}{rules}")).unwrap();
+        let output = isolated_parakit(&root)
+            .env("PARAKIT_CONFIG_PATH", &config)
+            .args(["config", "show"])
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        let error = String::from_utf8(output.stderr).unwrap();
+        assert!(error.contains(&config.display().to_string()), "{error}");
+        assert!(!error.contains("TOML parse error"), "{error}");
+        if prefix.is_empty() {
+            assert!(
+                error.contains("user rule 'broken' has invalid regex"),
+                "{error}"
+            );
+        } else {
+            assert!(
+                error.contains("daemon.transcript_history must be between"),
+                "{error}"
+            );
+            assert!(!error.contains("invalid regex"), "{error}");
+        }
+    }
+}
+
+#[test]
 fn simulated_ptt_rejects_missing_model_before_loading_output() {
     for quiet in [false, true] {
         let mut command = isolated_parakit_with_empty_config(if quiet {

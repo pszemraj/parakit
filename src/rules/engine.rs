@@ -18,7 +18,7 @@ use std::collections::HashSet;
 use super::defaults::DEFAULT_RULES;
 #[cfg(test)]
 use super::user::validate_user_rules;
-use super::user::{RulePosition, UserRule};
+use super::user::{compile_user_regex, RulePosition, UserRule};
 use super::{CleanResult, CleaningProfile, RuleHit, CLEANER_VERSION, DEFAULT_NUMBER_THRESHOLD};
 
 /// Backtrack step budget for every `fancy-regex` pass. Bounds worst-case
@@ -292,7 +292,7 @@ impl Cleaner {
     ///
     /// # Errors
     ///
-    /// Returns an error if an enabled built-in regex cannot compile.
+    /// Returns an error if an enabled built-in or user regex cannot compile.
     pub(super) fn new_prevalidated(
         profile: CleaningProfile,
         drop_trailing_period: bool,
@@ -379,7 +379,7 @@ impl Cleaner {
         let cleanup_idx = cleanup_idx.unwrap_or(enabled_defaults.len());
 
         let mut rules = Vec::with_capacity(enabled_defaults.len() + user_rules.len());
-        push_user_rules(&mut rules, user_rules, RulePosition::First, disabled);
+        push_user_rules(&mut rules, user_rules, RulePosition::First, disabled)?;
         for def in &enabled_defaults[..cleanup_idx] {
             rules.push(compile_default_rule(
                 def,
@@ -387,7 +387,7 @@ impl Cleaner {
                 number_threshold,
             )?);
         }
-        push_user_rules(&mut rules, user_rules, RulePosition::Standard, disabled);
+        push_user_rules(&mut rules, user_rules, RulePosition::Standard, disabled)?;
         for def in &enabled_defaults[cleanup_idx..] {
             rules.push(compile_default_rule(
                 def,
@@ -395,7 +395,7 @@ impl Cleaner {
                 number_threshold,
             )?);
         }
-        push_user_rules(&mut rules, user_rules, RulePosition::Last, disabled);
+        push_user_rules(&mut rules, user_rules, RulePosition::Last, disabled)?;
 
         let ruleset_id = compute_ruleset_id(profile, drop_trailing_period, &rules);
         Ok(Self {
@@ -583,30 +583,38 @@ fn compile_default_rule(
     })
 }
 
-fn compiled_user_rule(rule: &UserRule) -> CompiledRule {
-    CompiledRule {
+fn compile_user_rule(rule: &UserRule) -> Result<CompiledRule> {
+    let re = compile_user_regex(rule)?;
+    Ok(CompiledRule {
         name: rule.name.clone(),
         position: Some(rule.position),
         transform: CompiledTransform::Regex {
-            re: rule.pattern.clone(),
+            re,
             replacement: Cow::Owned(rule.replacement.clone()),
         },
-    }
+    })
 }
 
-/// Append enabled compiled user rules at `position`, skipping disabled names.
+/// Compile and append enabled `user_rules` entries at `position` to `rules`,
+/// skipping names present in `disabled`. Every pattern has already passed
+/// load-time validation before this filter runs.
+///
+/// # Errors
+///
+/// Returns an error naming the rule when its pattern is an invalid regex.
 fn push_user_rules(
     rules: &mut Vec<CompiledRule>,
     user_rules: &[UserRule],
     position: RulePosition,
     disabled: &HashSet<String>,
-) {
+) -> Result<()> {
     for rule in user_rules.iter().filter(|rule| rule.position == position) {
         if disabled.contains(&rule.name) {
             continue;
         }
-        rules.push(compiled_user_rule(rule));
+        rules.push(compile_user_rule(rule)?);
     }
+    Ok(())
 }
 
 fn compute_ruleset_id(
@@ -675,37 +683,6 @@ pub(crate) fn validate_number_threshold(threshold: Option<f64>) -> Result<()> {
 #[cfg(test)]
 mod rule_application_tests {
     use super::*;
-
-    #[test]
-    fn configured_user_pattern_is_reused_across_validation_and_cleaner_builds() {
-        let user: UserRule =
-            toml::from_str("name = 'custom-greeting'\npattern = '(?i)hello'\nreplacement = 'hi'\n")
-                .unwrap();
-        let users = [user];
-        let pattern = users[0].pattern.as_str();
-        super::super::validate_configured_rules(None, &[], &users).unwrap();
-
-        for _ in 0..2 {
-            let cleaner = super::super::build_enabled_cleaner(
-                CleaningProfile::Safe,
-                false,
-                None,
-                &[],
-                &users,
-            )
-            .unwrap();
-            let rule = cleaner
-                .rules
-                .iter()
-                .find(|rule| rule.name == "custom-greeting")
-                .unwrap();
-            let CompiledTransform::Regex { re, .. } = &rule.transform else {
-                panic!("user rules must use the compiled regex engine");
-            };
-            assert!(std::ptr::eq(re.as_str(), pattern));
-            assert_eq!(cleaner.clean_text("hello there"), "Hi there");
-        }
-    }
 
     #[test]
     fn regex_rules_borrow_unmatched_input_and_count_replacements() {
