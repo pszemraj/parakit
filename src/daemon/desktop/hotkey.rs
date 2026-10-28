@@ -504,7 +504,7 @@ impl X11HotkeyMapping {
 fn handle_key_event(
     event_type: EventType,
     state: &Arc<Mutex<HotkeyState>>,
-    emit: impl FnOnce(HotkeyAction),
+    tx: &Sender<HotkeyTransition>,
 ) -> bool {
     let now = Instant::now();
     let (action, suppress) = match event_type {
@@ -520,7 +520,7 @@ fn handle_key_event(
     };
 
     if let Some(action) = action {
-        emit(action);
+        send_hotkey_transition(action, tx);
     }
 
     suppress

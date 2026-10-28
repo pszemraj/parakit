@@ -475,9 +475,8 @@ fn run_daemon(cli: &Cli, start: &StartCli) -> Result<()> {
     });
     ipc_state.set_info(daemon_info);
 
-    // Worker thread takes exclusive ownership of `engine`. `crispasr::Session`
-    // is `Send` but not `Sync`, which is fine: only one thread ever calls
-    // `transcribe`, and the hotkey path only posts transitions on a channel.
+    // The worker exclusively owns the engine's Send, non-Sync native session.
+    // Only this thread transcribes; the hotkey path posts channel transitions.
     let (tx, rx) = bounded::<WorkerEvent>(WORKER_QUEUE_CAPACITY);
     let worker = spawn_worker(WorkerCtx {
         engine,
@@ -515,9 +514,7 @@ fn run_daemon(cli: &Cli, start: &StartCli) -> Result<()> {
     ipc_state.activity.ready();
     #[cfg(target_os = "linux")]
     if let Some(client) = &focus_source.client {
-        if hotkey_backend.linux_route() == daemon::hotkey::LinuxHotkeyRoute::Ibus {
-            client.set_ptt_sender(Some(hotkey_tx.clone()));
-        }
+        client.set_ptt_sender(Some(hotkey_tx.clone()));
         client.set_ready(true);
     }
     log.ready();

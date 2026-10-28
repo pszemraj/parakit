@@ -430,9 +430,7 @@ fn linux_evdev_event_suppressed(
         return false;
     };
 
-    handle_key_event(event_type, state, |action| {
-        send_hotkey_transition(action, tx)
-    })
+    handle_key_event(event_type, state, tx)
 }
 
 fn linux_evdev_key_event_type(event: &evdev_rs::InputEvent) -> Option<EventType> {
@@ -563,9 +561,7 @@ fn handle_listen_event(
     state: &Arc<Mutex<HotkeyState>>,
     tx: &Sender<HotkeyTransition>,
 ) {
-    let _ = handle_key_event(event.event_type, state, |action| {
-        send_hotkey_transition(action, tx)
-    });
+    let _ = handle_key_event(event.event_type, state, tx);
 }
 
 #[cfg(test)]
