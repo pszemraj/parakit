@@ -8,7 +8,7 @@ Linux measurements on 2026-10-14 used the Qwen 0.6B and 1.7B Q8_0 presets, Crisp
 
 The resident-engine sequence was memo, short speech, 270 seconds of repeated JFK speech, then the same short speech; it ran twice with an idle offload after each cycle. Separate runs used automatic language/512 tokens and forced English/4096 tokens. The latter selects the maximum supported budget; it does not mean each chunk generated 4096 tokens. Repeated JFK is an artificial memory/context stress input, not a natural long-form quality recording.
 
-Beyond the model file and retained offloaded GPU state, these runs needed up to about 1.6 GiB for 0.6B and 1.8 GiB for 1.7B. See [idle model offload](../running.md#idle-model-offload) for the reload allowance and device policy.
+Beyond the model file and retained offloaded GPU state, these runs needed up to about 1.6 GiB for 0.6B and 1.8 GiB for 1.7B.
 
 The following peaks are from the explicit GPU 4096-token lifecycle runs. Host high-water RSS includes startup and reload; it is not steady inference residency.
 
@@ -31,7 +31,7 @@ Qwen's main model and shared audio tower each register a full-file Metal buffer 
 
 The [October 18 macOS report](macos-model-validation-2026-10-18.md#metal-reload-correction) records Q8_0/Q6_K peaks for both Qwen sizes and the controlled-budget reload checks.
 
-Use Metal allocation figures and host RSS separately because their unified-memory accounting overlaps. The guard follows the same Metal counter used by the free-memory query; it does not reserve memory or establish a universal allocation bound. Other artifacts, overrides and hardware still need native measurements using the [validation procedure](model-validation.md#qwen-options-long-input-and-reload).
+Use Metal allocation figures and host RSS separately because their unified-memory accounting overlaps. The guard follows the same Metal counter used by the free-memory query. For the guard's limits, see [idle model offload](../running.md#idle-model-offload); qualify other artifacts, overrides and hardware with the [validation procedure](model-validation.md#qwen-options-long-input-and-reload).
 
 ## Linux Reload Measurements
 

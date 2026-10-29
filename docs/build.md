@@ -17,7 +17,7 @@ CMake 3.19 or newer is required for bundled builds.
 | Ubuntu 24.04 | `cmake build-essential libasound2-dev libibus-1.0-dev libxtst-dev libxi-dev libx11-dev libxkbcommon-dev libevdev-dev libxdo-dev libgomp1 pkg-config` |
 | Fedora | `cmake gcc-c++ alsa-lib-devel ibus-devel libXtst-devel libXi-devel libX11-devel libxkbcommon-devel libevdev-devel xdotool-devel pkgconf` |
 | Arch | `cmake base-devel alsa-lib ibus libxtst libxi libx11 libxkbcommon libevdev xdotool pkgconf` |
-| Windows | Visual Studio 2022 with the "Desktop development with C++" workload, plus CMake on `PATH`. Windows bundle prerequisites and procedures are in the [Windows build guide](../scripts/windows/README.md). |
+| Windows | See the [Windows backend requirements](../scripts/windows/README.md#backend-requirements). |
 | macOS | Apple Silicon with Xcode command line tools plus `cmake pkg-config`. |
 
 CUDA builds need the CUDA Toolkit with `nvcc` on `PATH`.

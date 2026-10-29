@@ -26,7 +26,7 @@ parakit start --keep-trailing-period
 
 These settings also live in `config.toml` as `cleaning.profile` and `cleaning.keep_trailing_period`. Number conversion has the config-only `cleaning.number_threshold` setting. The exact CLI/config merge behavior is in the per-key [config reference](config_reference.toml).
 
-Disable cleaning entirely:
+Cleaning includes English rules. For multilingual dictation, disable built-in and user cleaning together with `[cleaning] enabled = false` or:
 
 ```bash
 parakit start --no-cleaning

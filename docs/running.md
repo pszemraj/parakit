@@ -86,13 +86,7 @@ mkdir -p "$HOME/.local/state/parakit"
 nohup parakit --quiet >/dev/null 2>>"$HOME/.local/state/parakit/parakit.err" &
 ```
 
-Stop it:
-
-```bash
-parakit stop
-```
-
-`parakit stop` uses the local daemon control channel, gives in-flight worker and insertion cleanup up to five seconds, and confirms that the process singleton lock was released before printing `stopped`. The client allows about six seconds for that final confirmation, including when the endpoint has already disappeared during shutdown. If startup holds the lock before exposing control, the client first allows a separate bounded discovery window, then gives an acknowledged stop its full cleanup budget. If a timeout persists, identify the daemon with `pgrep -af parakit` on Unix-like systems or `Get-Process parakit` on Windows, then end that specific process.
+Stop it with [`parakit stop`](#daemon-control).
 
 ## Daemon Control
 
@@ -107,6 +101,8 @@ parakit history --plain
 parakit history --text N
 parakit test-paste "hello from parakit"
 ```
+
+`parakit stop` uses the local daemon control channel, gives in-flight worker and insertion cleanup up to five seconds, and confirms that the process singleton lock was released before printing `stopped`. The client allows about six seconds for that final confirmation, including when the endpoint has already disappeared during shutdown. If startup holds the lock before exposing control, the client first allows a separate bounded discovery window, then gives an acknowledged stop its full cleanup budget. If a timeout persists, identify the daemon with `pgrep -af parakit` on Unix-like systems or `Get-Process parakit` on Windows, then end that specific process.
 
 When the control endpoint is absent and the singleton lock is free, `status` and `stop` print `parakit: not running` or `parakit: not running; nothing to stop` and exit successfully. If the endpoint is absent while the lock remains held, `status` reports that the daemon may still be starting or stopping; `stop` waits within its remaining deadline, sending the request if startup exposes the endpoint and confirming that the lock releases. Commands that need daemon state (`history`, `copy-last`, and `test-paste`) instead report that the daemon is not running and point to `parakit start`.
 
@@ -128,7 +124,7 @@ parakit: idle
 last transcript: 42 bytes
 ```
 
-Pass the global `--verbose` flag (before or after the subcommand) to also print a detail block (mic, model, device, uptime, dictation count, and more):
+Use `--verbose` for a detail block with the microphone, model, device, uptime, dictation count, and more:
 
 ```text
 $ parakit --verbose status
@@ -212,7 +208,7 @@ parakit start --model-preset parakeet-ultra --quantize q6_k \
   --log-dir "$HOME/.parakit/logs" --quiet & disown
 ```
 
-Use `parakeet-v2` for English-only v2, `parakeet-v3` for the original NVIDIA model, or either Qwen name in the table below. Without a CLI or configured preset, `--quantize q6_k` prepares Ultra. Preparing a missing Q6_K prints a notice to stderr even with `--quiet`, since a larger download and local quantization may be needed. It reuses an explicitly fetched F16 when available; otherwise it downloads a private F16 intermediate. That private file is removed after success and kept after failure for retry. Explicitly fetched F16 files are preserved, including during `--force` rebuilds, which download a fresh private intermediate. Wait for readiness before dictating. Cached Q6_K starts work offline and idle reload reuses the resolved file.
+Use `parakeet-v2` for English-only v2, `parakeet-v3` for the original NVIDIA model, or either Qwen name in the table below. With no CLI or configured model selection, `--quantize q6_k` prepares Ultra. Preparing a missing Q6_K prints a notice to stderr even with `--quiet`, since a larger download and local quantization may be needed. It reuses an explicitly fetched F16 when available; otherwise it downloads a private F16 intermediate. That private file is removed after success and kept after failure for retry. Explicitly fetched F16 files are preserved, including during `--force` rebuilds, which download a fresh private intermediate. Wait for readiness before dictating. Cached Q6_K starts work offline and idle reload reuses the resolved file.
 
 Interactive downloads show a progress bar with bytes downloaded, transfer speed, and ETA. If the server omits the file size, a byte counter is shown instead. Progress bars are hidden with `--quiet` or when stderr is redirected. Quantization is a separate stage announced after the download. URLs and native converter output require `--verbose`; failed tools report a short diagnostic. An explicit `fetch` confirms the cached model and prints its startup command, while daemon startup continues directly to loading.
 
@@ -224,7 +220,7 @@ model_preset = "parakeet-ultra"
 quantize = "q6_k"
 ```
 
-Then use `parakit start --log-dir "$HOME/.parakit/logs" --quiet & disown`. Install a build containing these options first, and restart an existing daemon with `parakit stop` before starting it with the new settings. Another `start` does not change a running daemon; explicit model/precision flags print a restart notice in that case. `--quantize q8_0` overrides a configured Q6_K choice, and `-m` loads a custom file at its existing precision. The WAV helper accepts the same `--quantize` flag with preset selection.
+Apply the settings with the [configuration restart workflow](configuration.md#validation-and-recovery). Another `start` does not change a running daemon; explicit model/precision flags print a restart notice in that case. `--quantize q8_0` overrides a configured Q6_K choice, and `-m` loads a custom file at its existing precision. The WAV helper accepts the same `--quantize` flag with preset selection.
 
 | Preset | Hosted repository | Exact artifact |
 | --- | --- | --- |
@@ -254,7 +250,7 @@ This accepts every preset above and uses its provider revision with `crispasr-qu
 
 Qwen defaults to automatic language identification and a maximum of 512 generated tokens per native chunk. Use `--qwen-language en` (or `English`) to force a supported language, and `--qwen-max-new-tokens N` to set a budget from 1 to 4096. An incomplete decode fails the dictation rather than returning partial text. Qwen splits long audio into native chunks of at most 30 seconds, resetting decoder context for each chunk. Windowed audio attention is enabled by default; set `CRISP_AUDIO_WINDOWED_ATTN` in the launching environment to override it for native comparisons. The [Qwen validation procedure](dev/quality.md#qwen-and-moondream-comparisons) covers the comparison. The published Qwen ASR input capability of 1,200 seconds does not change Parakit's 270-second capture limit or imply continuous linguistic context across these cuts. Explicit Qwen flags require a Qwen model; persistent `[qwen]` settings are inactive for Parakeet. The [configuration reference](config_reference.toml) lists all supported language codes and names, plus the environment override.
 
-Cleaning remains enabled by default and includes English rules. For multilingual dictation, use `--no-cleaning`, or set `[cleaning] enabled = false`; both bypass built-in and user cleaning rules.
+For multilingual dictation, follow the [cleaning profile guidance](cleaning-rules.md#profiles).
 
 The [Qwen team](https://huggingface.co/Qwen/Qwen3-ASR-0.6B) publishes Qwen3-ASR under [Apache 2.0](https://www.apache.org/licenses/LICENSE-2.0). [Moondream Ultra](https://huggingface.co/moondream/parakeet-ultra) and [Redux](https://huggingface.co/moondream/parakeet-redux) derive from NVIDIA Parakeet v3 and use [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/); the linked cstr repositories provide the GGUF conversions.
 

@@ -84,7 +84,7 @@ CUDA_VISIBLE_DEVICES=0 GGML_VK_VISIBLE_DEVICES= \
 
 For Vulkan, replace the CUDA environment prefix on both commands with `env -u GGML_VK_VISIBLE_DEVICES CUDA_VISIBLE_DEVICES=` or pin a Vulkan device explicitly. Apply these commands to the matrix and acceptance cases in [native model validation](model-validation.md). The worker's two idle waits take at least 126 seconds per model/backend pair.
 
-Retain commands, device diagnostics, raw transcripts, exit statuses, timings, and per-process memory samples under the ignored `target/tmp/` tree. For reload calibration, sample host RSS and GPU allocations through startup warmup, full inference, loaded idle, offload, and reload. Compare the increase from the offloaded GPU allocation with the model file size plus the reload allowance; retained driver memory is already unavailable to the free-memory check. Label sampled peaks as observations rather than ceilings. Successful runs with ample free VRAM do not establish out-of-memory recovery.
+Retain commands, device diagnostics, raw transcripts, exit statuses, timings, and per-process memory samples under the ignored `target/tmp/` tree. Follow the [reload measurement checklist](model-validation.md#qwen-options-long-input-and-reload); the earlier [Linux measurements](memory.md#qwen-gpu-reload-measurements) record baseline conditions and limits.
 
 ## Rust Source Coverage
 
@@ -130,9 +130,9 @@ cargo run --release --no-default-features --features bundled --example transcrib
   --qwen-language auto --qwen-max-new-tokens 512
 ```
 
-The example does not read daemon configuration. `--model` and `--model-preset` conflict, and Qwen controls require a Qwen GGUF. Token exhaustion without EOS or a failed native chunk must fail the full transcription rather than print an incomplete success.
+The example does not read daemon configuration. Model selectors, Qwen controls, and incomplete-decode behavior follow [model presets](../running.md#model-presets).
 
-For latency work, use short real clips around 2s, 5s, 15s, and 25s. Longer quality clips are still useful for catching transcription drift, but they should not drive startup or post-release latency policy. Use `transcribe-file --warmup` for the same model-aware readiness as daemon startup/reload. Qwen uses embedded human speech with automatic language and 512 tokens, then restores the user's options; Parakeet retains synthetic warmup. Repeatable `--warmup-seconds N` flags remain available for Parakeet shape diagnostics and are rejected for Qwen.
+For latency work, use short real clips around 2s, 5s, 15s, and 25s. Longer quality clips help catch transcription drift, but should not drive startup or post-release latency policy. Use `transcribe-file --warmup` to apply the [daemon readiness policy](../running.md#idle-model-offload). Repeatable `--warmup-seconds N` flags remain available for Parakeet shape diagnostics and are rejected for Qwen.
 
 ## PTT Worker Simulation
 
@@ -149,7 +149,7 @@ XDG_CACHE_HOME=$PWD/target/tmp/ptt-cache \
   --model-idle-minutes 1 --simulate-ptt-repeat 2 --simulate-ptt-idle-seconds 61
 ```
 
-The empty config file keeps your own `config.toml` out of the run; `PARAKIT_CONFIG_PATH` must name a file that exists. Use a real WAV with a known transcript. The pinned Juniper voice memo is 55.36 seconds; its local filename can vary by machine. Compare the readable transcript with task-appropriate tolerance rather than hashing the fixture. The command resamples it to the model rate and sends worker start/stop events with owned PCM. `--no-cleaning` exposes raw output for comparison; omit it to exercise cleanup too. Add the build feature and `--device` for the backend being tested. On PowerShell, create the empty file with `New-Item -ItemType File -Force target/tmp/ptt-empty.toml`, set the environment variables with `$env:NAME = ...`, and use the Windows WAV path.
+The empty config file keeps your own `config.toml` out of the run; `PARAKIT_CONFIG_PATH` must name a file that exists. Use a real WAV with a known transcript. The pinned Juniper voice memo is 55.36 seconds with SHA256 `d79d7f729b192642b91aef5e1486b97c1cb7f4c34f6ce4a0d45199a9ff23ab5f`; its local filename can vary by machine. Verify the hash to confirm input identity, then compare the readable transcript with task-appropriate tolerance to check recognition. The command resamples it to the model rate and sends worker start/stop events with owned PCM. `--no-cleaning` exposes raw output for comparison; omit it to exercise cleanup too. Add the build feature and `--device` for the backend being tested. On PowerShell, create the empty file with `New-Item -ItemType File -Force target/tmp/ptt-empty.toml`, set the environment variables with `$env:NAME = ...`, and use the Windows WAV path.
 
 Simulation bypasses the daemon singleton and opens no control endpoint. It uses the same resolved worker settings as normal startup, but disables insertion, sounds, and desktop notifications. Avoid concurrent inference when measuring timings; simulation does not pause an already-running daemon.
 
@@ -338,6 +338,25 @@ CRISPASR_FC_PW_Q8=0 CRISPASR_FC_FUSED_QKV=0 CRISP_AUDIO_WINDOWED_ATTN=1 \
 
 Use `PARAKIT_LIVE_DEVICE=cpu` for CPU. Omit `PARAKIT_LIVE_CUES` to skip cue playback. Inspect the report even on failure: silent input, insufficient acoustic volume, and recognition failure are different outcomes. Compare the transcripts with the WAVs and inspect the following quiet capture for leftover samples. This test does not save microphone audio.
 
+### Native Microphone Worker
+
+Use the [native isolation setup](model-validation.md#macos-cpu-and-metal) and a fresh report destination. Place a model and an audible, complete-sentence WAV at the paths below, or edit the two fixture variables. The report file must exist; its sibling `.logs` directory must not already exist.
+
+```sh
+mkdir -p target/tmp/native-worker
+printf '{}\n' > target/tmp/native-worker/cpu.json
+export PARAKIT_LIVE_MODEL="$PWD/target/tmp/native-worker/model.gguf"
+export PARAKIT_LIVE_WAV="$PWD/target/tmp/native-worker/speech.wav"
+export PARAKIT_LIVE_REPORT="$PWD/target/tmp/native-worker/cpu.json"
+export PARAKIT_LIVE_DEVICE=cpu
+export PARAKIT_LIVE_CUES=1
+cargo test --features metal --bin parakit \
+  microphone_coordinator_worker_reloads_after_idle -- \
+  --ignored --nocapture --test-threads=1
+```
+
+Select `gpu` and a fresh report path for Metal. `PARAKIT_LIVE_SECOND_WAV` optionally adds another loaded/offloaded pair. Inspect the recorded transcripts and speech-boundary result.
+
 For allocation context, see the [Linux reload measurements and ownership notes](memory.md).
 
 ### Clipboard Checks
@@ -388,5 +407,3 @@ python tests/native/run_qwen_faults.py \
 ```
 
 First run `cargo test --test native_correctness_build` in the same isolated target directory to build the readiness-restoration test harness. Use the matching completed native build directory containing `compile_commands.json`, and a fresh output directory. CPU is the default; to test Metal, build both binaries and the readiness harness with `--features metal`, then pass `--device gpu`. On macOS the driver preserves the dylib basename and version aliases and sets `DYLD_LIBRARY_PATH` to load its private fault library. The driver compiles a separate corrected C API copy and relinks its own test library. Only that library contains fault controls; normal binaries and vendor sources are unchanged. First/middle/last chunk failures and greedy embedding/forward failures run through both file and worker paths. The worker first remembers a successful dictation, then checks history preservation and absence of successful logging/insertion for the failed input. Separate prefix cases inspect actual native English, Cantonese, and Filipino assistant prefills. They force those languages on English fixture audio to inspect prompt construction, not to measure multilingual recognition quality.
-
-The remaining native desktop checklist is in [model-validation.md](model-validation.md).

@@ -6,13 +6,13 @@ Start with [parakit doctor](running.md#first-run). The `hotkey`, `daemon`, `mic`
 
 If push-to-talk does nothing or another desktop action happens, read `hotkey` in `parakit doctor`, then follow the conflict checks for [Linux](linux-desktop.md#shortcut-conflicts), [macOS](macos-desktop.md#hotkey), or [Windows](windows-desktop.md#hotkey). Confirm only one daemon is running with `parakit status`; see [daemon control](running.md#daemon-control).
 
-On Linux, an X11 connection error can mean the terminal or tmux server retained credentials from an earlier desktop login; start from the [current X11 session](linux-desktop.md#x11-sessions), then rerun `parakit doctor`. On macOS, recover a denied privacy prompt through [Permissions](macos-desktop.md#permissions), then restart parakit and rerun `parakit doctor`.
+For desktop-session or permission failures, follow the [X11 session checks](linux-desktop.md#x11-sessions) or [macOS permission recovery](macos-desktop.md#permissions).
 
 WSL is not the native Windows daemon path. Check Windows hotkeys, focus, and paste from native PowerShell with the Windows bundle.
 
 ## Literal Space Appears
 
-Linux `x11-listen` is passive and does not suppress Space; switch to the registered backend on X11 for normal dictation. On GNOME Wayland, use [focused-field IBus capture](linux-desktop.md#ibus-setup). The [evdev proxy](linux-desktop.md#evdev-proxy) also needs a readable keyboard event device and writable `/dev/uinput`. Clipboard paste and `direct` typing require X11; native IBus does not.
+Follow the checks for [passive X11 capture](linux-desktop.md#passive-x11-listen), [focused-field IBus capture](linux-desktop.md#ibus-setup), or the [evdev proxy](linux-desktop.md#evdev-proxy), depending on the selected backend.
 
 ## Text Does Not Insert
 
@@ -24,14 +24,14 @@ Linux `x11-listen` is passive and does not suppress Space; switch to the registe
 
 2. Run `parakit doctor --deep` for the platform's insertion-backend check. Platform requirements and the limits of `direct` mode are in the [Linux](linux-desktop.md#deep-doctor-check), [macOS](macos-desktop.md#doctor---deep), and [Windows](windows-desktop.md#doctor---deep) sections.
 3. Inspect the target before recovering the transcript; an unconfirmed paste may have landed. Use [daemon history](running.md#daemon-control), [JSONL logs](logging.md#how-to-read-a-dictation), or clipboard history if enabled.
-4. Check the selected [insertion transport and paste mode](running.md#insertion). On IBus, `terminal` and `standard` both submit native text; `standard` permits tabs and embedded newlines that `terminal` blocks. On the clipboard route, they use different shortcuts on Linux and Windows. To try `standard`:
+4. Check the selected [insertion transport and paste mode](running.md#insertion). To try `standard`:
 
    ```text
    parakit stop
    parakit start --paste-mode standard
    ```
 
-   To try `direct`, repeat the `parakit stop` and `parakit start` pair with `--paste-mode direct`. Linux needs an X11 session and cannot use a forced IBus insertion backend; select `--insertion-backend x11` if necessary. macOS needs the terminal's [Accessibility permission](macos-desktop.md#permissions). If focus changed before insertion or the target is elevated on Windows, see [focus changes](running.md#focus-changes).
+   To try `direct`, repeat the `parakit stop` and `parakit start` pair with `--paste-mode direct`, following the [Linux transport constraints](linux-desktop.md#insertion-selection-and-recovery) or [macOS permissions](macos-desktop.md#permissions). If focus changed before insertion or the target is elevated on Windows, see [focus changes](running.md#focus-changes).
 
 ## macOS Paste Could Not Be Confirmed
 
@@ -65,13 +65,7 @@ Read `model error` in `parakit --verbose status`, confirm the resolved model pat
 
 ## Build And Model Issues
 
-If a build cannot find the CrispASR path dependency, initialize the existing submodule:
-
-```bash
-git submodule update --init --recursive
-```
-
-Use [native dependencies](build.md#native-dependencies) for missing headers or shared libraries, and the [Windows bundle scripts](../scripts/windows/README.md) for Windows installs. For model paths, cache inspection, and refetch commands, see [model cache](running.md#model-cache).
+For a missing CrispASR path dependency, follow [submodule setup](build.md#install). Use [native dependencies](build.md#native-dependencies) for missing headers or shared libraries, and the [Windows bundle scripts](../scripts/windows/README.md) for Windows installs. For model paths, cache inspection, and refetch commands, see [model cache](running.md#model-cache).
 
 ## Downloads Behind A Corporate Proxy
 
@@ -91,7 +85,7 @@ parakit fetch
 
 ## Windows GPU Builds
 
-Open a new terminal after installing so the updated User `PATH` is available. If startup reports `0xC0000135` or `STATUS_DLL_NOT_FOUND`, install the graphics driver for a missing Vulkan loader, or make the CUDA runtime and cuBLAS DLLs available to the bundle. Run `parakit doctor --verbose` to inspect visible compute devices and `parakit start --device cpu` to check CPU inference. If startup is slow rather than broken, backend warmup is expected; `--verbose` shows timing. Bundle requirements are in the [Windows scripts guide](../scripts/windows/README.md#runtime-manifest); runtime device selection is in [running.md#device-selection](running.md#device-selection).
+Follow the [Windows loader and runtime checks](../scripts/windows/README.md#runtime-manifest) and [runtime device selection](running.md#device-selection).
 
 ## macOS Metal Builds
 

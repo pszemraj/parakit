@@ -358,7 +358,7 @@ backend = "auto"
 # The socket directory must be owned by you, and parakit sets it to mode 0700.
 
 # VISUAL
-# Editor for `parakit config edit`, tried before EDITOR; [selection and command parsing](configuration.md#details).
+# Editor for `parakit config edit`, tried before EDITOR; [selection and command parsing](configuration.md#editor).
 
 # EDITOR
 # Editor fallback for `parakit config edit`; see VISUAL above.

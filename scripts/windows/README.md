@@ -37,12 +37,12 @@ If you omit `--backend`, the script opens a keyboard menu. It accepts Up/Down, `
 
 | Option | Behavior |
 | --- | --- |
-| `--backend cpu\|cuda\|vulkan` | Selects the compute backend. If omitted, the script opens the interactive selector. |
+| `--backend cpu\|cuda\|vulkan` | Selects the compute backend; omission uses the [interactive selector](#backend-selection). |
 | `--cpu` | Alias for `--backend cpu`. |
-| `--cuda` | Alias for `--backend cuda`. Requires the NVIDIA CUDA Toolkit on this machine. |
-| `--vulkan` | Alias for `--backend vulkan`. Requires the LunarG Vulkan SDK and `glslc`. |
+| `--cuda` | Alias for `--backend cuda`. |
+| `--vulkan` | Alias for `--backend vulkan`. |
 | `--blas auto\|off\|openblas\|mkl\|generic` | Sets `PARAKIT_BLAS` for this build. Omit it for normal autodetection. |
-| `--openblas-root DIR` | Sets `PARAKIT_OPENBLAS_ROOT` with `--blas auto` or `--blas openblas`; ignored by other modes. `DIR` must contain a Windows OpenBLAS layout with `include\`, `lib\`, and `bin\`. |
+| `--openblas-root DIR` | Sets `PARAKIT_OPENBLAS_ROOT` with `--blas auto` or `--blas openblas`; ignored by other modes. See the [OpenBLAS layout](#blas). |
 | `--bundle-cuda-dlls` | CUDA only: copies `cudart64_*.dll`, `cublas64_*.dll`, and `cublasLt64_*.dll` into the bundle. |
 | `--release` | Builds the Cargo `release` profile and bundles it. This is the default. |
 | `--debug` | Legacy shorthand. PowerShell can consume it before the script sees it; use `-Profile debug` for debug builds. |
@@ -73,11 +73,13 @@ When `build.rs` selects a Windows OpenBLAS install, the bundle includes its Open
 
 ## Backend Requirements
 
+All backends need Rust, CMake on `PATH`, and Visual Studio 2022 with the "Desktop development with C++" workload. GPU builds also need Ninja.
+
 | Backend | Command | Build-time requirements | Runtime expectation |
 | --- | --- | --- | --- |
-| CPU | `build.ps1 --backend cpu` | Visual Studio C++ tools, CMake, Rust | Generated CrispASR/ggml DLLs are bundled. BLAS is autodetected unless overridden. |
-| CUDA | `build.ps1 --backend cuda` | Visual Studio C++ tools, Ninja, NVIDIA CUDA Toolkit with `nvcc`; `CUDA_PATH` may be inferred from `nvcc.exe` on `PATH` | NVIDIA-only. CUDA runtime and cuBLAS DLLs must be found from the installed app directory or `PATH`, unless `--bundle-cuda-dlls` is used. |
-| Vulkan | `build.ps1 --backend vulkan` | Visual Studio C++ tools, Ninja, LunarG Vulkan SDK with `glslc`; `VULKAN_SDK` may be autodetected from `C:\VulkanSDK\*` or inferred from `glslc.exe` on `PATH` | Recommended Windows GPU backend for NVIDIA, AMD, and Intel. Install a compatible GPU driver; its `vulkan-1.dll` must be present through System32 or `PATH`. |
+| CPU | `build.ps1 --backend cpu` | No additional SDK. | Generated CrispASR/ggml DLLs are bundled. BLAS is autodetected unless overridden. |
+| CUDA | `build.ps1 --backend cuda` | NVIDIA CUDA Toolkit with `nvcc`; `CUDA_PATH` may be inferred from `nvcc.exe` on `PATH` | NVIDIA-only. CUDA runtime and cuBLAS DLLs must be found from the installed app directory or `PATH`, unless `--bundle-cuda-dlls` is used. |
+| Vulkan | `build.ps1 --backend vulkan` | LunarG Vulkan SDK with `glslc`; `VULKAN_SDK` may be autodetected from `C:\VulkanSDK\*` or inferred from `glslc.exe` on `PATH` | Recommended Windows GPU backend for NVIDIA, AMD, and Intel. Install a compatible GPU driver; its `vulkan-1.dll` must be present through System32 or `PATH`. |
 
 Hosted Q8_0 inference does not need a local quantizer. Windows `fetch --quantize q6_k` and `fetch --from-source` require a compatible external `crispasr-quantize.exe` on `PATH`; source conversion also has Python requirements. See [source rebuild](../../docs/dev/README.md#source-rebuild).
 
@@ -116,7 +118,7 @@ If path shortening does not fix a Vulkan shader-gen failure, capture the exact `
 6. Creates `target\parakit-windows-x86_64-<backend>` and copies the runtime manifest, its required files, `LICENSE`, and `README.md`.
 7. Calls `install.ps1` unless `--no-install` is set.
 
-The default `%LOCALAPPDATA%\Programs\parakit` directory is dedicated to parakit and is replaced on each install. Custom install directories are wiped only when marked by `.parakit-install`; an unmarked non-empty custom destination is refused instead of merged, because stale accelerator DLLs can change loader behavior.
+The default install directory is dedicated to parakit. An existing non-empty custom destination must carry `.parakit-install`; otherwise installation is refused. Bundles replace the directory rather than merging files, so stale accelerator DLLs cannot remain.
 
 The build script checks whether `vendor\CrispASR` is already populated before touching submodules. If the checkout is present, the script does not contact GitHub or require the repository-pinned revision. If it must initialize the submodule, it runs Git non-interactively so firewalled machines fail instead of opening credential prompts. On a firewalled machine, use a checkout or source archive that already includes `vendor\CrispASR`, or pass `--no-submodules` to fail fast instead of trying to initialize it.
 
@@ -124,7 +126,7 @@ The build script checks whether `vendor\CrispASR` is already populated before to
 
 The build writes `parakit-runtime-manifest.json` beside `parakit.exe`. The bundle copies every file in `required_files`, and the installer validates those entries before installing.
 
-`install.ps1` checks external CUDA/Vulkan runtime DLLs, copies the bundle, and runs `parakit --version` as a loader smoke test.
+`install.ps1` checks external CUDA/Vulkan runtime DLLs, copies the bundle into a sibling staging directory, and runs `parakit --version` there before replacing an existing installation. It keeps the old directory as a backup until a second loader check at the installed path passes. On failure, it restores the backup; if rollback itself fails, the error reports the backup's location.
 
 The manifest records the selected accelerator and external runtime DLLs required by each [backend](#backend-requirements).
 
@@ -138,6 +140,8 @@ parakit
 What `doctor --deep` actually does on Windows is described in [windows-desktop.md#doctor---deep](../../docs/windows-desktop.md#doctor---deep).
 
 The version smoke test does not touch the hotkey, microphone, daemon lock, model cache, or clipboard. If Windows reports `0xC0000135`, the installer translates it to a missing-runtime-DLL message before PATH updates.
+
+For loader failures, check the [backend requirements](#backend-requirements). Once the executable starts, run `parakit doctor --verbose` to inspect visible compute devices and `parakit start --device cpu` to check CPU inference. If startup is slow rather than broken, backend warmup is expected; `--verbose` shows timing.
 
 If Group Policy blocks User `PATH` writes, the install still succeeds and prints a warning. Run `%LOCALAPPDATA%\Programs\parakit\parakit.exe` directly, add the directory through your approved endpoint-management path, or rerun with `--no-user-path` when PATH changes are not allowed.
 
