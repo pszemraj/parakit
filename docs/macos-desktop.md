@@ -1,6 +1,6 @@
 # macOS Desktop Setup
 
-parakit supports Apple Silicon macOS as a terminal-run CLI. Build from source, grant the terminal the required privacy permissions once, then run `parakit` from that terminal.
+parakit supports Apple Silicon macOS as a terminal-run CLI. Build from source, grant the launching app the required privacy permissions, then run `parakit` from that app.
 
 ## Build
 
@@ -11,10 +11,11 @@ Install the native Apple Silicon Metal build using [build.md#install](build.md#i
 Grant these in System Settings > Privacy & Security:
 
 - [Accessibility](https://support.apple.com/guide/mac-help/allow-accessibility-apps-to-access-your-mac-mh43185/mac): required for the `Left Control+Space` hotkey and synthetic paste/type events.
-- [Input Monitoring](https://support.apple.com/guide/mac-help/control-access-to-input-monitoring-on-mac-mchl4cedafb6/mac): required for the CoreGraphics event tap that observes `Left Control+Space`.
 - [Microphone](https://support.apple.com/guide/mac-help/control-access-to-the-microphone-on-mac-mchla1b1e1fe/mac): required for audio capture.
 
-Grant permissions to the terminal application that launches parakit, such as Terminal.app, iTerm2, or Ghostty. This is the recommended source-build flow because the grant attaches to the terminal's stable app identity and survives parakit rebuilds.
+Parakit uses a modifying CoreGraphics event tap to suppress the hotkey. [Apple distinguishes this Accessibility-controlled tap from listen-only taps](https://developer.apple.com/videos/play/wwdc2019/701/), which require Input Monitoring. `doctor` reports the separate Input Monitoring status for diagnostics; it does not require that grant.
+
+For ordinary terminal launches, macOS attributes permission requests to the terminal application, such as Terminal.app, iTerm2, or Ghostty. Run `doctor` from the same app you use to launch parakit; results from another terminal, an editor, or a coding agent do not establish that launcher's access.
 
 First-run flow:
 
@@ -23,7 +24,9 @@ parakit doctor
 parakit
 ```
 
-If Accessibility is missing, `doctor` can trigger the macOS prompt. Input Monitoring must be granted manually in System Settings. After changing either permission, restart parakit and rerun `parakit doctor`. If Microphone is not determined yet, the first capture may trigger the Microphone prompt; rerun parakit after granting it.
+If Accessibility is missing, `doctor` can trigger the macOS prompt. After granting it, restart parakit and rerun `parakit doctor`. If Microphone is not determined yet, the first capture may trigger its prompt; rerun parakit after granting it.
+
+If Accessibility is already enabled but `doctor` reports denied, save terminal work, fully quit and reopen the launching app, then rerun `parakit doctor`. An app updated on disk can still have an older process running; the enabled Settings entry does not establish effective access for that process. Try this before resetting permissions.
 
 ### Recovering From a Denied Prompt
 
@@ -34,11 +37,10 @@ If the entry is stuck or you specifically want macOS to ask again, Apple documen
 
 ```bash
 tccutil reset Accessibility com.apple.Terminal
-tccutil reset ListenEvent com.apple.Terminal
 tccutil reset Microphone com.apple.Terminal
 ```
 
-`ListenEvent` is the TCC service behind Input Monitoring. These commands remove Terminal.app's saved decision; they do not grant access. Run parakit again to trigger the applicable prompt, then grant the permission and restart the terminal application. Do not use `sudo`, which broadens the reset beyond the current user. For iTerm2, Ghostty, or another launcher, substitute that application's bundle identifier.
+These commands remove Terminal.app's saved decision; they do not grant access. Run parakit again to trigger the applicable prompt, then grant the permission and restart the terminal application. Do not use `sudo`, which broadens the reset beyond the current user. For iTerm2, Ghostty, or another launcher, substitute that application's bundle identifier.
 
 ### `doctor --deep`
 
