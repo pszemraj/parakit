@@ -34,14 +34,22 @@ impl ModelQuantization {
 
 /// Hosted Q8_0 model choices supported by parakit.
 #[derive(
-    Clone, Copy, Debug, Eq, PartialEq, clap::ValueEnum, serde::Serialize, serde::Deserialize,
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    Eq,
+    PartialEq,
+    clap::ValueEnum,
+    serde::Serialize,
+    serde::Deserialize,
 )]
 pub enum ModelPreset {
     /// NVIDIA's English-only Parakeet v2 model.
     #[value(name = "parakeet-v2")]
     #[serde(rename = "parakeet-v2")]
     ParakeetV2,
-    /// The original NVIDIA Parakeet v3 model and application default.
+    /// The original NVIDIA Parakeet v3 model.
     #[value(name = "parakeet-v3")]
     #[serde(rename = "parakeet-v3")]
     ParakeetV3,
@@ -53,7 +61,8 @@ pub enum ModelPreset {
     #[value(name = "qwen3-asr-1.7b")]
     #[serde(rename = "qwen3-asr-1.7b")]
     Qwen3Asr17b,
-    /// Moondream's post-trained Parakeet v3 model.
+    /// Moondream's post-trained Parakeet v3 model and application default.
+    #[default]
     #[value(name = "parakeet-ultra")]
     #[serde(rename = "parakeet-ultra")]
     ParakeetUltra,
@@ -199,7 +208,7 @@ pub enum ModelSelection {
 ///
 /// # Returns
 ///
-/// The CLI selection, otherwise the configured selection, otherwise Parakeet v3.
+/// The CLI selection, otherwise the configured selection, otherwise Parakeet Ultra.
 ///
 /// # Errors
 ///
@@ -222,7 +231,7 @@ pub fn resolve_model_selection(
         .or_else(|| cli_preset.map(ModelSelection::Preset))
         .or_else(|| config_model.map(|path| ModelSelection::Local(path.to_path_buf())))
         .or_else(|| config_preset.map(ModelSelection::Preset))
-        .unwrap_or(ModelSelection::Preset(ModelPreset::ParakeetV3)))
+        .unwrap_or(ModelSelection::Preset(ModelPreset::default())))
 }
 
 /// Environment variable that overrides the platform model cache directory.
@@ -230,13 +239,13 @@ pub const MODELS_DIR_ENV: &str = "PARAKIT_MODELS_DIR";
 /// Direct download URL for the official `.nemo` checkpoint.
 pub const OFFICIAL_NEMO_URL: &str =
     "https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3/resolve/main/parakeet-tdt-0.6b-v3.nemo";
-/// Direct download URL for the default hosted Q8_0 GGUF.
+/// Direct download URL for the original Parakeet v3 hosted Q8_0 GGUF.
 pub const HOSTED_Q8_URL: &str = "https://huggingface.co/pszemraj/parakeet-tdt-0.6b-v3-gguf/resolve/main/parakeet-tdt-0.6b-v3-Q8_0.gguf";
 /// File name for the downloaded official NeMo checkpoint.
 pub const NEMO_FILENAME: &str = "parakeet-tdt-0.6b-v3.nemo";
 /// File name for the intermediate F16 GGUF.
 pub const F16_FILENAME: &str = "parakeet-tdt-0.6b-v3-F16.gguf";
-/// File name for the canonical Q8_0 GGUF used by parakit by default.
+/// File name for the original Parakeet v3 Q8_0 GGUF, kept at the cache root.
 pub const Q8_FILENAME: &str = "parakeet-tdt-0.6b-v3-Q8_0.gguf";
 /// Environment variable overriding the Hugging Face Hub endpoint used by
 /// `parakit fetch` for Hub API calls, repo downloads, preset downloads, and the
@@ -497,12 +506,12 @@ mod preset_tests {
     }
 
     #[test]
-    fn selection_uses_cli_then_config_then_original_default() {
+    fn selection_uses_cli_then_config_then_ultra_default() {
         let cli_path = Path::new("cli.gguf");
         let config_path = Path::new("config.gguf");
         assert_eq!(
             resolve_model_selection(None, None, None, None).unwrap(),
-            ModelSelection::Preset(ModelPreset::ParakeetV3)
+            ModelSelection::Preset(ModelPreset::ParakeetUltra)
         );
         assert_eq!(
             resolve_model_selection(None, None, Some(config_path), None).unwrap(),

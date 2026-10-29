@@ -30,14 +30,19 @@ fn cached_fetch_confirms_success_and_prints_an_exact_start_command_offline() {
         "cached-fetch",
         &["models/parakeet-tdt-0.6b-v3-Q8_0.gguf"],
     );
+    let ultra = parakit::fetch::preset_cache_path(
+        &root.join("models"),
+        parakit::model::ModelPreset::ParakeetUltra,
+    );
+    common::touch(&ultra);
     for _ in 0..2 {
         let output = fresh_parakit(&root).arg("fetch").output().unwrap();
         assert!(output.status.success(), "{output:?}");
         assert!(output.stderr.is_empty(), "{output:?}");
         let text = String::from_utf8(output.stdout).unwrap();
         assert_eq!(text.lines().count(), 2, "{text}");
-        assert!(text.contains("model ready: parakeet-tdt-0.6b-v3-Q8_0.gguf"));
-        assert!(text.contains("parakit start --model-preset parakeet-v3 --quantize q8_0"));
+        assert!(text.contains("model ready: parakeet-ultra-q8_0.gguf"));
+        assert!(text.contains("parakit start --model-preset parakeet-ultra --quantize q8_0"));
         assert!(!text.contains("downloading") && !text.contains("config.toml"));
     }
     let quiet = fresh_parakit(&root)
@@ -45,6 +50,43 @@ fn cached_fetch_confirms_success_and_prints_an_exact_start_command_offline() {
         .output()
         .unwrap();
     assert!(quiet.status.success() && quiet.stdout.is_empty() && quiet.stderr.is_empty());
+    let rebuilt = fresh_parakit(&root)
+        .args(["fetch", "--from-source"])
+        .output()
+        .unwrap();
+    assert!(
+        rebuilt.status.success() && rebuilt.stderr.is_empty(),
+        "{rebuilt:?}"
+    );
+    assert!(String::from_utf8_lossy(&rebuilt.stdout)
+        .contains("parakit start --model-preset parakeet-ultra --quantize q8_0"));
+    let legacy = fresh_parakit(&root)
+        .args(["fetch", "--model-preset", "parakeet-v3"])
+        .output()
+        .unwrap();
+    assert!(
+        legacy.status.success() && legacy.stderr.is_empty(),
+        "{legacy:?}"
+    );
+    assert!(String::from_utf8_lossy(&legacy.stdout)
+        .contains("parakit start --model-preset parakeet-v3 --quantize q8_0"));
+    let cache = fresh_parakit(&root)
+        .args(["cache", "list"])
+        .output()
+        .unwrap();
+    assert!(
+        cache.status.success() && cache.stderr.is_empty(),
+        "{cache:?}"
+    );
+    let cache_text = String::from_utf8_lossy(&cache.stdout);
+    assert!(
+        cache_text.contains("parakeet-ultra-q8_0.gguf default:"),
+        "{cache_text}"
+    );
+    assert!(
+        !cache_text.contains("parakeet-tdt-0.6b-v3-Q8_0.gguf default:"),
+        "{cache_text}"
+    );
 }
 
 #[cfg(not(target_os = "windows"))]

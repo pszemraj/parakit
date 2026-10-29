@@ -293,7 +293,7 @@ pub(crate) const TEMPLATE: &str = r#"# parakit config.toml
 
 # Model preset, mutually exclusive with model. Precision defaults to Q8_0.
 # Choices: parakeet-v2, parakeet-v3, qwen3-asr-0.6b, qwen3-asr-1.7b, parakeet-ultra, parakeet-redux.
-# Unset: parakeet-v3. Qwen presets are experimental; Redux is for testing only.
+# Unset: parakeet-ultra. Qwen presets are experimental; Redux is for testing only.
 # model_preset = "qwen3-asr-1.7b"
 
 # Preset precision: q8_0 (default) or locally generated q6_k.

@@ -12,7 +12,7 @@ verbatim. If that explicit approval is not present, do not touch this file.
 
 Hold `Ctrl+Space`, speak, release, and the transcript is inserted into the focused application.
 
-Transcription runs locally via [NVIDIA Parakeet-TDT-0.6B-v3](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3), pre-quantized to [Q8_0 by default](https://huggingface.co/pszemraj/parakeet-tdt-0.6b-v3-gguf) through the vendored [CrispASR](https://github.com/CrispStrobe/CrispASR) runtime.
+Transcription runs locally via [Moondream Parakeet Ultra](https://huggingface.co/moondream/parakeet-ultra), pre-quantized to [Q8_0 by default](https://huggingface.co/cstr/parakeet-ultra-GGUF) through the vendored [CrispASR](https://github.com/CrispStrobe/CrispASR) runtime.
 
 <img src="docs/assets/tui.png" alt="parakit TUI" width="90%">
 
@@ -72,4 +72,4 @@ Full index: [docs/README.md](docs/README.md)
 
 ## License
 
-Project code is MIT. See [LICENSE](LICENSE). Downloaded model files keep their upstream licenses; Parakeet-TDT-0.6B-v3 weights are CC-BY-4.0.
+Project code is MIT. See [LICENSE](LICENSE). Downloaded model files keep their upstream licenses; Parakeet Ultra weights are CC-BY-4.0.

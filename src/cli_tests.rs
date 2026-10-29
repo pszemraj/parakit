@@ -356,7 +356,7 @@ fn effective_model_and_threads_and_log_dir_prefer_cli_then_config() {
     let start = start_from(&[]);
     assert_eq!(
         start.effective_model_selection(&config).unwrap(),
-        ModelSelection::Preset(ModelPreset::ParakeetV3)
+        ModelSelection::Preset(ModelPreset::ParakeetUltra)
     );
     assert_eq!(start.effective_threads(&config), None);
     assert_eq!(start.effective_log_dir(&config), None);

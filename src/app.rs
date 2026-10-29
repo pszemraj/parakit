@@ -230,7 +230,7 @@ fn run_rules_command(cli: &Cli, rules_cli: &RulesCli) -> Result<()> {
 /// Returns an error for source-only options that do not apply to the selected model.
 fn resolve_fetch_source(cli: &FetchCli) -> Result<FetchSource> {
     if cli.from_source {
-        let preset = cli.model_preset.unwrap_or(ModelPreset::ParakeetV3);
+        let preset = cli.model_preset.unwrap_or_default();
         if preset == ModelPreset::ParakeetV2 {
             anyhow::bail!("parakeet-v2 source rebuilding is not available; use its hosted Q8_0 or --quantize q6_k");
         }
@@ -253,9 +253,7 @@ fn resolve_fetch_source(cli: &FetchCli) -> Result<FetchSource> {
         });
     }
     if cli.quantize == Some(ModelQuantization::Q6K) {
-        return Ok(FetchSource::PresetQ6(
-            cli.model_preset.unwrap_or(ModelPreset::ParakeetV3),
-        ));
+        return Ok(FetchSource::PresetQ6(cli.model_preset.unwrap_or_default()));
     }
     if let Some(preset) = cli.model_preset {
         return Ok(FetchSource::Preset(preset));
@@ -973,7 +971,7 @@ fn print_cache_entry(dir: &Path, path: &Path, display_name: &str) -> Result<()> 
         .metadata()
         .map(|meta| format_file_size(meta.len()))
         .unwrap_or_else(|_| "unknown size".to_string());
-    let is_default_q8 = model_file_name(path) == model::Q8_FILENAME && path.parent() == Some(dir);
+    let is_default_q8 = path == fetch::preset_cache_path(dir, ModelPreset::default());
     let default_marker = if is_default_q8 { " default" } else { "" };
     outln!("    {display_name}{default_marker}: {dtype}, {size}")
 }

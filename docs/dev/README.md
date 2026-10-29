@@ -10,8 +10,9 @@ Maintainer release files:
 
 | File | Role |
 | --- | --- |
-| `parakeet-tdt-0.6b-v3-Q8_0.gguf` | Default user artifact. |
-| `parakeet-tdt-0.6b-v3-F16.gguf` | Source GGUF kept for maintainers and future re-quantization work. |
+| `parakeet-ultra-q8_0.gguf` | Default user artifact, hosted by [cstr](https://huggingface.co/cstr/parakeet-ultra-GGUF). |
+| `parakeet-tdt-0.6b-v3-Q8_0.gguf` | Original NVIDIA v3 artifact, selected with `--model-preset parakeet-v3`. |
+| `parakeet-tdt-0.6b-v3-F16.gguf` | Original v3 source GGUF kept for maintainers and future re-quantization work. |
 
 Avoid unrelated names, nested directories, or model-card-only links for release artifacts.
 
@@ -25,10 +26,16 @@ Install the conversion dependencies once in the Python environment used by `fetc
 python -m pip install -r scripts/requirements-convert.txt
 ```
 
-With no preset, or with `--model-preset parakeet-v3`, rebuild from NVIDIA's `.nemo` checkpoint:
+With no preset, rebuild Ultra from its original Moondream checkpoint:
 
 ```bash
-parakit fetch --from-source --keep-f16 --keep-nemo
+parakit fetch --from-source --keep-f16
+```
+
+Select `parakeet-v3` explicitly to rebuild from NVIDIA's `.nemo` checkpoint:
+
+```bash
+parakit fetch --from-source --model-preset parakeet-v3 --keep-f16 --keep-nemo
 ```
 
 That path downloads [NVIDIA's official `.nemo`](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3), converts it with `vendor/CrispASR/models/convert-parakeet-to-gguf.py`, and quantizes the intermediate GGUF with `crispasr-quantize`.

@@ -27,8 +27,8 @@ Normal startup:
 ```text
 parakit: loading model...
 parakit
-  model: parakeet-tdt-0.6b-v3-Q8_0.gguf
-  dtype: Q8_0 (745 MB)
+  model: parakeet-ultra-q8_0.gguf
+  dtype: Q8_0 (674 MB)
   mic:   USB Speech Mic Mono
 Ready: hold Ctrl+Space to dictate. Ctrl+C to stop.
 ```
@@ -138,7 +138,7 @@ last transcript: 42 bytes
   uptime:     1h 23m
   dictations: 17
   mic:        USB Speech Mic Mono, 48000 Hz mono input -> 16000 Hz mono model, F32
-  model:      parakeet-tdt-0.6b-v3-Q8_0.gguf (Q8_0 (745 MB))
+  model:      parakeet-ultra-q8_0.gguf (Q8_0 (674 MB))
   residency:  loaded
   model idle: 10 minutes
   device:     cpu (parakeet, 8 threads)
@@ -176,11 +176,14 @@ Session destruction releases owned CPU/GPU allocations, but process and driver c
 
 ## Model Cache
 
-Without a CLI or configured model selection, parakit uses the hosted [Parakeet v3 Q8_0 GGUF model](https://huggingface.co/pszemraj/parakeet-tdt-0.6b-v3-gguf). `PARAKIT_MODELS_DIR` overrides the model directory. Without that override, `XDG_CACHE_HOME` is honored on Linux and macOS, both fall back to `~/.cache/parakit/models/`, and Windows uses `%LOCALAPPDATA%\parakit\Cache\models\`.
+Without a CLI or configured model selection, parakit uses the hosted [Parakeet Ultra Q8_0 GGUF model](https://huggingface.co/cstr/parakeet-ultra-GGUF). `PARAKIT_MODELS_DIR` overrides the model directory. Without that override, `XDG_CACHE_HOME` is honored on Linux and macOS, both fall back to `~/.cache/parakit/models/`, and Windows uses `%LOCALAPPDATA%\parakit\Cache\models\`.
+
+An upgrade uses Ultra when no model selection is configured, downloading it if needed. Existing `daemon.model` and `daemon.model_preset` selections are preserved. To keep NVIDIA v3, use `--model-preset parakeet-v3` or set `daemon.model_preset = "parakeet-v3"`.
 
 Useful commands:
 
 ```bash
+parakit fetch
 parakit fetch --force
 parakit cache
 parakit cache list
@@ -190,7 +193,7 @@ parakit start -m /path/to/model.gguf
 
 `-m <path>` disables automatic fetch. It conflicts with `--model-preset` in the same command. Either CLI selection overrides both configured model selectors; `daemon.model` and `daemon.model_preset` conflict with each other even when a CLI selection is supplied.
 
-For locked-down or offline machines, seed the default model by placing `parakeet-tdt-0.6b-v3-Q8_0.gguf` in the directory printed by `parakit cache dir`. Use `PARAKIT_MODELS_DIR` when the approved model location is managed by IT or shared across a build image.
+For locked-down or offline machines, run `parakit fetch` on a connected machine and copy the directory printed by `parakit cache dir`, preserving its `hub/` layout, to the target machine's model cache. Alternatively, load an approved GGUF directly with `-m <path>`. Use `PARAKIT_MODELS_DIR` when the approved model location is managed by IT or shared across a build image.
 
 ### Model Presets
 
@@ -209,7 +212,7 @@ parakit start --model-preset parakeet-ultra --quantize q6_k \
   --log-dir "$HOME/.parakit/logs" --quiet & disown
 ```
 
-Use `parakeet-v2` for English-only v2, `parakeet-v3` for the original default, or either Qwen name in the table below. Without `--model-preset`, `--quantize q6_k` prepares v3. Preparing a missing Q6_K prints a notice to stderr even with `--quiet`, since a larger download and local quantization may be needed. It reuses an explicitly fetched F16 when available; otherwise it downloads a private F16 intermediate. That private file is removed after success and kept after failure for retry. Explicitly fetched F16 files are preserved, including during `--force` rebuilds, which download a fresh private intermediate. Wait for readiness before dictating. Cached Q6_K starts work offline and idle reload reuses the resolved file.
+Use `parakeet-v2` for English-only v2, `parakeet-v3` for the original NVIDIA model, or either Qwen name in the table below. Without a CLI or configured preset, `--quantize q6_k` prepares Ultra. Preparing a missing Q6_K prints a notice to stderr even with `--quiet`, since a larger download and local quantization may be needed. It reuses an explicitly fetched F16 when available; otherwise it downloads a private F16 intermediate. That private file is removed after success and kept after failure for retry. Explicitly fetched F16 files are preserved, including during `--force` rebuilds, which download a fresh private intermediate. Wait for readiness before dictating. Cached Q6_K starts work offline and idle reload reuses the resolved file.
 
 Interactive downloads show a progress bar with bytes downloaded, transfer speed, and ETA. If the server omits the file size, a byte counter is shown instead. Progress bars are hidden with `--quiet` or when stderr is redirected. Quantization is a separate stage announced after the download. URLs and native converter output require `--verbose`; failed tools report a short diagnostic. An explicit `fetch` confirms the cached model and prints its startup command, while daemon startup continues directly to loading.
 
@@ -229,7 +232,7 @@ Then use `parakit start --log-dir "$HOME/.parakit/logs" --quiet & disown`. Insta
 | `parakeet-v3` | [pszemraj/parakeet-tdt-0.6b-v3-gguf](https://huggingface.co/pszemraj/parakeet-tdt-0.6b-v3-gguf) | `parakeet-tdt-0.6b-v3-Q8_0.gguf` |
 | `qwen3-asr-0.6b` | [cstr/qwen3-asr-0.6b-GGUF](https://huggingface.co/cstr/qwen3-asr-0.6b-GGUF) | `qwen3-asr-0.6b-q8_0.gguf` |
 | `qwen3-asr-1.7b` | [cstr/qwen3-asr-1.7b-GGUF](https://huggingface.co/cstr/qwen3-asr-1.7b-GGUF) | `qwen3-asr-1.7b-q8_0.gguf` |
-| `parakeet-ultra` | [cstr/parakeet-ultra-GGUF](https://huggingface.co/cstr/parakeet-ultra-GGUF) | `parakeet-ultra-q8_0.gguf` |
+| `parakeet-ultra` (default) | [cstr/parakeet-ultra-GGUF](https://huggingface.co/cstr/parakeet-ultra-GGUF) | `parakeet-ultra-q8_0.gguf` |
 | `parakeet-redux` | [cstr/parakeet-redux-GGUF](https://huggingface.co/cstr/parakeet-redux-GGUF) | `parakeet-redux-q8_0.gguf` |
 
 **Redux is for testing and checkpoint comparisons, not normal dictation.** Its reconstructed weights use the ordinary Parakeet backend without packed ternary acceleration or Moondream's VAD head. Photon's 178 MB footprint, [published CPU results](https://huggingface.co/moondream/parakeet-redux#performance), and pause-based segmentation therefore do not describe Parakit. In our [CPU comparison](dev/quality.md#parakeet-cpu-comparison), Redux was slower than Ultra and used similar RAM.
@@ -268,7 +271,7 @@ parakit fetch https://example.com/models/parakeet-q8.gguf --sha256 '<64-hex-sha2
 
 The first positional argument is either a Hugging Face repo (`owner/repo`, optionally `owner/repo@revision`) or a direct `http://`/`https://` URL. Other URL schemes are rejected before any request. For a repo source, `--file` selects a specific `.gguf` file when the repo publishes more than one and none of them is uniquely named `q8_0`; otherwise parakit auto-selects the sole `.gguf` file, or the sole `q8_0` file among several. `--sha256` checks the completed download when you explicitly supply it; parakit does not otherwise hash models or turn an unpinned URL into a persistent checksum policy. Resumed downloads use the server's strong ETag or Last-Modified value through `If-Range`; a partial with no usable validator restarts instead of being appended blindly. `--force` discards any partial and replaces the cached file.
 
-Repo fetches land under `<cache dir>/hub/<owner>--<repo>--<key>/<file>`, where the key hashes the repo, revision, and file path; URL fetches land under `<cache dir>/url/<url-key>/<file>`, where the key separates exact source URLs that share a filename. Different revisions and URLs therefore cannot overwrite or resume onto one another. Both source classes are separate from the canonical top-level `parakeet-tdt-0.6b-v3-Q8_0.gguf`, and different repos remain separate even when they publish identically named files. `parakit cache list` shows each model's path, GGUF type, and size without reading every model to compute hashes. Custom fetches are never picked up automatically: activate one with `parakit start -m <path>` or by setting `daemon.model = "<path>"` in `config.toml`, exactly as with any other custom GGUF. A preset selects its matching cached artifact.
+Repo fetches land under `<cache dir>/hub/<owner>--<repo>--<key>/<file>`, where the key hashes the repo, revision, and file path; URL fetches land under `<cache dir>/url/<url-key>/<file>`, where the key separates exact source URLs that share a filename. Different revisions and URLs therefore cannot overwrite or resume onto one another. Both source classes are separate from the original v3 top-level `parakeet-tdt-0.6b-v3-Q8_0.gguf`, and different repos remain separate even when they publish identically named files. `parakit cache list` shows each model's path, GGUF type, and size without reading every model to compute hashes; it marks the pinned Ultra Q8_0 artifact as `default`. Custom fetches are never picked up automatically: activate one with `parakit start -m <path>` or by setting `daemon.model = "<path>"` in `config.toml`, exactly as with any other custom GGUF. A preset selects its matching cached artifact.
 
 For mirrors, authentication, proxies, and TLS interception, see [corporate-network downloads](troubleshooting.md#downloads-behind-a-corporate-proxy).
 

@@ -69,7 +69,7 @@ pub(crate) enum Commands {
     Rules(RulesCli),
     /// Acquire a GGUF model: a hosted Q8_0 preset, a Hugging Face repo, or a direct URL.
     #[command(
-        long_about = "Download a model without starting dictation.\n\nWith no arguments, downloads the default Parakeet v3 Q8_0 model. Use --model-preset to select another model, or add --quantize q6_k to prepare Q6_K locally. Run the same command again to resume an interrupted download.\n\nExamples:\n  parakit fetch\n  parakit fetch --model-preset qwen3-asr-1.7b --quantize q6_k\n  parakit fetch --model-preset parakeet-ultra\n\nFetching does not change the running model. The command prints how to start with the downloaded model. Normal startup downloads missing models automatically, so a separate fetch is optional.\n\nAdvanced: pass a Hugging Face repo or direct GGUF URL as the source, or use --from-source to convert the original checkpoint locally."
+        long_about = "Download a model without starting dictation.\n\nWith no arguments, downloads the default Parakeet Ultra Q8_0 model. Use --model-preset to select another model, or add --quantize q6_k to prepare Q6_K locally. Run the same command again to resume an interrupted download.\n\nExamples:\n  parakit fetch\n  parakit fetch --model-preset qwen3-asr-1.7b --quantize q6_k\n  parakit fetch --model-preset parakeet-ultra\n\nFetching does not change the running model. The command prints how to start with the downloaded model. Normal startup downloads missing models automatically, so a separate fetch is optional.\n\nAdvanced: pass a Hugging Face repo or direct GGUF URL as the source, or use --from-source to convert the original checkpoint locally."
     )]
     Fetch(FetchCli),
     /// Inspect the parakit model cache.
@@ -102,7 +102,7 @@ pub(crate) struct StartCli {
     )]
     pub(crate) model: Option<PathBuf>,
 
-    /// Select a model preset. Defaults to parakeet-v3; Qwen is experimental and Redux is for testing only.
+    /// Select a model preset. Defaults to parakeet-ultra; Qwen is experimental and Redux is for testing only.
     #[arg(long, value_enum)]
     pub(crate) model_preset: Option<ModelPreset>,
 
@@ -537,7 +537,7 @@ pub(crate) struct FetchCli {
     #[arg(long, value_name = "PATH", requires = "from_source")]
     pub(crate) checkpoint_dir: Option<PathBuf>,
 
-    /// Keep the downloaded 2.4 GB .nemo checkpoint after source rebuild.
+    /// Keep the downloaded .nemo checkpoint after a parakeet-v3 source rebuild.
     #[arg(long, requires = "from_source")]
     pub(crate) keep_nemo: bool,
 

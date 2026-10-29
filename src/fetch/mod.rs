@@ -40,7 +40,7 @@ pub struct FetchOptions {
 /// Model acquisition source for `parakit fetch`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum FetchSource {
-    /// Download the owner-hosted Q8_0 GGUF.
+    /// Download the application default preset's hosted Q8_0 GGUF.
     HostedQ8,
     /// Download the exact hosted Q8_0 artifact for a named model preset.
     Preset(ModelPreset),
@@ -91,7 +91,7 @@ pub enum FetchSource {
 ///
 /// # Returns
 ///
-/// The canonical cached Q8_0 model path.
+/// The default preset's cached Q8_0 model path.
 ///
 /// # Errors
 ///
@@ -99,7 +99,7 @@ pub enum FetchSource {
 /// into the platform cache directory.
 pub fn ensure_default_model_with_verbosity(quiet: bool, verbose: bool) -> Result<PathBuf> {
     ensure_preset_model_with_verbosity(
-        ModelPreset::ParakeetV3,
+        ModelPreset::default(),
         ModelQuantization::Q8,
         quiet,
         verbose,
@@ -144,8 +144,8 @@ pub fn ensure_preset_model_with_verbosity(
 /// # Returns
 ///
 /// The path to the model the requested [`FetchSource`] produced: the
-/// preset cache path for [`FetchSource::Preset`] and [`FetchSource::PresetSource`], canonical cached Q8_0 path for
-/// [`FetchSource::HostedQ8`] and [`FetchSource::OfficialNemo`], or the `hub/…`/`url/…` cache path for
+/// preset cache path for [`FetchSource::Preset`], [`FetchSource::PresetSource`], and
+/// [`FetchSource::HostedQ8`], original v3 Q8_0 path for [`FetchSource::OfficialNemo`], or the `hub/…`/`url/…` cache path for
 /// [`FetchSource::HubRepo`]/[`FetchSource::Url`]. [`FetchSource::PresetQ6`] returns
 /// a separate cached Q6_K path beside the preset's hosted F16 source.
 ///
@@ -167,7 +167,7 @@ fn acquire(options: &FetchOptions) -> Result<PathBuf> {
             options,
             &endpoint,
             token.as_deref(),
-            ModelPreset::ParakeetV3,
+            ModelPreset::default(),
             &models_dir()?,
         ),
         FetchSource::Preset(preset) => run_preset(
@@ -219,7 +219,18 @@ fn acquire(options: &FetchOptions) -> Result<PathBuf> {
     }
 }
 
-fn preset_cache_path(models_dir: &Path, preset: ModelPreset) -> PathBuf {
+/// Return a preset's hosted Q8_0 cache path without accessing the filesystem.
+///
+/// # Arguments
+/// * `models_dir` - Root model cache directory.
+/// * `preset` - Preset whose artifact path is needed.
+///
+/// # Returns
+/// The revision-specific Hub path, or the original top-level path for v3.
+///
+/// # Panics
+/// Panics if a built-in preset repository is missing its owner component.
+pub fn preset_cache_path(models_dir: &Path, preset: ModelPreset) -> PathBuf {
     if preset == ModelPreset::ParakeetV3 {
         return models_dir.join(Q8_FILENAME);
     }

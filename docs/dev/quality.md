@@ -176,6 +176,8 @@ For CUDA, install the PyTorch build appropriate for the machine first if the def
 
 ## Recommended A/B Procedure
 
+For NVIDIA v3 validation, select `--model-preset parakeet-v3` and use its matching F16 and Q8_0 artifacts. The default Parakeet Ultra model uses post-trained weights; follow [Qwen and Moondream comparisons](#qwen-and-moondream-comparisons) for its original-checkpoint reference.
+
 Use 5 to 10 real clips that cover:
 
 - short and long utterances;

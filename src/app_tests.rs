@@ -16,7 +16,14 @@ fn source_rebuild_dispatch_preserves_legacy_and_selects_new_checkpoints() {
         resolve_fetch_source(&fetch)
     }
     assert_eq!(
-        source(&["--from-source", "--keep-nemo", "--keep-f16"]).unwrap(),
+        source(&[
+            "--from-source",
+            "--model-preset",
+            "parakeet-v3",
+            "--keep-nemo",
+            "--keep-f16"
+        ])
+        .unwrap(),
         FetchSource::OfficialNemo {
             keep_nemo: true,
             keep_f16: true,
@@ -45,7 +52,22 @@ fn source_rebuild_dispatch_preserves_legacy_and_selects_new_checkpoints() {
             keep_f16: true,
         }
     );
-    assert!(source(&["--from-source", "--checkpoint-dir", "snapshot"]).is_err());
+    assert_eq!(
+        source(&["--from-source", "--checkpoint-dir", "snapshot"]).unwrap(),
+        FetchSource::PresetSource {
+            preset: ModelPreset::ParakeetUltra,
+            checkpoint_dir: Some(PathBuf::from("snapshot")),
+            keep_f16: false,
+        }
+    );
+    assert_eq!(
+        source(&["--from-source"]).unwrap(),
+        FetchSource::PresetSource {
+            preset: ModelPreset::ParakeetUltra,
+            checkpoint_dir: None,
+            keep_f16: false,
+        }
+    );
     assert!(source(&["--from-source", "--model-preset", "parakeet-v2"])
         .unwrap_err()
         .to_string()
@@ -91,7 +113,7 @@ fn q6_fetch_selects_local_quantization_and_rejects_conflicting_inputs() {
     };
     assert_eq!(
         resolve_fetch_source(&fetch).unwrap(),
-        FetchSource::PresetQ6(ModelPreset::ParakeetV3)
+        FetchSource::PresetQ6(ModelPreset::ParakeetUltra)
     );
     for args in [
         vec![
@@ -281,9 +303,15 @@ fn startup_precision_selection_preserves_cli_config_and_local_path_precedence() 
         toml::from_str("[daemon]\nmodel_preset = 'parakeet-v2'\nquantize = 'q6_k'\n").unwrap();
     for (args, settings, preset, quantization) in [
         (
+            vec![],
+            ConfigFile::default(),
+            ModelPreset::ParakeetUltra,
+            ModelQuantization::Q8,
+        ),
+        (
             vec!["--quantize", "q6_k"],
             ConfigFile::default(),
-            ModelPreset::ParakeetV3,
+            ModelPreset::ParakeetUltra,
             ModelQuantization::Q6K,
         ),
         (
