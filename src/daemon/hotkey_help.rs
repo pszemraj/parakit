@@ -125,9 +125,9 @@ pub(crate) fn evdev_linux_failure_help() -> String {
 #[cfg(target_os = "macos")]
 /// Shared macOS event-tap permission remediation steps.
 pub(crate) const MACOS_EVENT_TAP_FIX: &str = "fix:
-  - Grant Accessibility to your terminal in System Settings > Privacy & Security > Accessibility.
-  - Grant Input Monitoring to your terminal in System Settings > Privacy & Security > Input Monitoring.
-  - Restart parakit after changing either permission so macOS recreates the event tap.
+  - Check Accessibility for the app that launches parakit in System Settings > Privacy & Security > Accessibility.
+  - If already enabled, fully quit and reopen that app, especially after a terminal update; an enabled switch can coexist with a denied running process.
+  - Restart parakit after granting Accessibility so macOS recreates the event tap.
   - Re-run: parakit doctor";
 
 #[cfg(target_os = "macos")]
@@ -148,7 +148,7 @@ pub(crate) fn write_macos_event_tap_fix(out: &mut String) {
 /// Multi-line diagnostic text explaining the event-tap permission requirements.
 pub(crate) fn macos_failure_help() -> String {
     format!(
-        "macOS hotkey capture uses Left Control+Space and requires Accessibility plus Input Monitoring for the terminal that launched parakit.\n{}",
+        "macOS hotkey capture uses Left Control+Space and requires Accessibility for the app that launches parakit.\n{}",
         MACOS_EVENT_TAP_FIX
     )
 }

@@ -100,14 +100,15 @@ pub(crate) struct PermissionReport {
 }
 
 impl PermissionReport {
-    /// Return whether the CoreGraphics session event tap has both permissions
-    /// it requires.
+    /// Return whether the modifying CoreGraphics session event tap is authorized.
     ///
     /// # Returns
     ///
-    /// `true` when Accessibility and Input Monitoring are both granted.
+    /// `true` when Accessibility is granted. Unlike a listen-only tap, the
+    /// modifying tap uses Accessibility and does not require a separate Input
+    /// Monitoring grant.
     pub(crate) fn event_tap_ready(&self) -> bool {
-        self.accessibility.granted() && self.input_monitoring.granted()
+        self.accessibility.granted()
     }
 }
 
@@ -120,7 +121,7 @@ impl PermissionReport {
 ///
 /// # Returns
 ///
-/// The effective TCC states for the responsible terminal process.
+/// The effective TCC states for this process in its current launch context.
 pub(crate) fn permission_report(prompt_accessibility: bool) -> PermissionReport {
     PermissionReport {
         accessibility: accessibility_permission_status(prompt_accessibility),
@@ -166,7 +167,7 @@ pub(crate) fn accessibility_preflight() -> Result<()> {
     }
 
     bail!(
-        "macOS Accessibility permission is not granted; grant Accessibility to your terminal in System Settings > Privacy & Security > Accessibility, then rerun parakit"
+        "macOS Accessibility permission is not granted; check the app that launches parakit in System Settings > Privacy & Security > Accessibility. If already enabled, fully quit and reopen that app, then rerun parakit doctor"
     )
 }
 
@@ -174,13 +175,12 @@ pub(crate) fn accessibility_preflight() -> Result<()> {
 ///
 /// # Returns
 ///
-/// `Ok(())` when the launching terminal can create the session event tap used
-/// for `Left Control+Space`.
+/// `Ok(())` when Accessibility authorizes the modifying session event tap used
+/// for `Left Control+Space`. Event-tap creation can still fail independently.
 ///
 /// # Errors
 ///
-/// Returns an actionable macOS permission error when Accessibility or Input
-/// Monitoring is missing.
+/// Returns an actionable macOS permission error when Accessibility is missing.
 pub(crate) fn event_tap_preflight() -> Result<()> {
     let permissions = permission_report(false);
     if permissions.event_tap_ready() {
@@ -188,7 +188,7 @@ pub(crate) fn event_tap_preflight() -> Result<()> {
     }
 
     bail!(
-        "macOS hotkey capture requires Accessibility and Input Monitoring for the terminal that launched parakit; grant both in System Settings > Privacy & Security, restart parakit, then rerun parakit doctor"
+        "macOS hotkey capture requires Accessibility for the app that launches parakit; check System Settings > Privacy & Security > Accessibility. If already enabled, fully quit and reopen that app, then rerun parakit doctor"
     )
 }
 
@@ -234,7 +234,7 @@ pub(crate) fn microphone_permission_status() -> PermissionStatus {
     }
 }
 
-/// Return the Input Monitoring status required by CoreGraphics session event taps.
+/// Return the separate listen-only Input Monitoring status for diagnostics.
 ///
 /// # Returns
 ///
@@ -370,12 +370,37 @@ mod tests {
     }
 
     #[test]
-    fn event_tap_requires_accessibility_and_input_monitoring() {
+    fn modifying_event_tap_requires_accessibility_without_separate_listen_access() {
         for (accessibility, input_monitoring, expected) in [
             (PermissionStatus::Granted, PermissionStatus::Granted, true),
             (PermissionStatus::Denied, PermissionStatus::Granted, false),
-            (PermissionStatus::Granted, PermissionStatus::Denied, false),
+            (PermissionStatus::Granted, PermissionStatus::Denied, true),
+            (
+                PermissionStatus::Granted,
+                PermissionStatus::NotDetermined,
+                true,
+            ),
+            (
+                PermissionStatus::Granted,
+                PermissionStatus::Unknown(7),
+                true,
+            ),
             (PermissionStatus::Denied, PermissionStatus::Denied, false),
+            (
+                PermissionStatus::Restricted,
+                PermissionStatus::Granted,
+                false,
+            ),
+            (
+                PermissionStatus::NotDetermined,
+                PermissionStatus::Granted,
+                false,
+            ),
+            (
+                PermissionStatus::Unknown(7),
+                PermissionStatus::Granted,
+                false,
+            ),
         ] {
             let report = PermissionReport {
                 accessibility,

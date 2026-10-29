@@ -71,28 +71,28 @@ fn macos_permissions(
 
 #[test]
 #[cfg(target_os = "macos")]
-fn macos_hotkey_readiness_requires_accessibility_and_input_monitoring() {
+fn macos_hotkey_readiness_requires_accessibility_only() {
     use super::super::macos::PermissionStatus;
 
     let ready = macos_permissions(PermissionStatus::Granted, PermissionStatus::Granted);
     assert!(!macos_hotkey_startup_blocked(&ready));
     assert_eq!(
         macos_hotkey_status(&ready),
-        "macOS Accessibility and Input Monitoring ready for Left Control+Space"
+        "macOS Accessibility ready for Left Control+Space"
     );
 
     let missing_input = macos_permissions(PermissionStatus::Granted, PermissionStatus::Denied);
-    assert!(macos_hotkey_startup_blocked(&missing_input));
+    assert!(!macos_hotkey_startup_blocked(&missing_input));
     assert_eq!(
         macos_hotkey_status(&missing_input),
-        "macOS Input Monitoring permission missing"
+        "macOS Accessibility ready for Left Control+Space"
     );
 
     let missing_both = macos_permissions(PermissionStatus::Denied, PermissionStatus::NotDetermined);
     assert!(macos_hotkey_startup_blocked(&missing_both));
     assert_eq!(
         macos_hotkey_status(&missing_both),
-        "macOS Accessibility and Input Monitoring permissions missing"
+        "macOS Accessibility permission missing"
     );
 }
 

@@ -11,6 +11,7 @@ The initial automated macOS follow-up for PR #25 passed after correcting a micro
 - Default CPU and Metal builds, plus an optimized Metal-capable executable and matching WAV helper. The release executable links the freshly built native Release libraries through `CRISPASR_LIB_DIR`.
 - Parakeet v3 Q8_0; the pinned 55.36-second Juniper memo, SHA256 `d79d7f729b192642b91aef5e1486b97c1cb7f4c34f6ce4a0d45199a9ff23ab5f`. This pass does not repeat the six-model/precision matrix.
 - Build output, models, configuration, sockets, logs and Metal pipeline cache were isolated under `target/`. The installed daemon retained its original PID, start time and command. No hotkey daemon was started or stopped for these checks.
+- Processes launched by these checks inherited Codex's permission context. Permission results do not establish effective access from the maintainer's terminal.
 
 Raw evidence and temporary harness source are in the ignored local directory `target/tmp/pr25-mac/`; they are not distributed with the checkout. Original clipboard payloads stayed in memory and were not logged. The native microphone check saved no audio.
 

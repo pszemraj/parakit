@@ -4,6 +4,8 @@ With the installed daemon stopped, the remaining unattended lifecycle, microphon
 
 The host was the same native arm64 Apple M5 MacBook Air with macOS 26.7 used in the [initial report](macos-ibus-validation-2026-10-28.md). All test configuration, models, logs, build output and control sockets remained under `target/`. The installed binary and Parakit configuration were not changed. All isolated daemons and playback processes were stopped after testing.
 
+These launches inherited Codex's permission context. They did not establish that the installed executable could start from the maintainer's terminal; run `parakit doctor` from the intended launcher to verify that separately.
+
 ## Completed checks
 
 | Check | Result |

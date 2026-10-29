@@ -142,7 +142,7 @@ impl SmokeTap {
         let (tap, source, run_loop) = match installed {
             Ok(installed) => installed,
             Err(EventTapInstallError::TapCreateFailed) => bail!(
-                "could not create macOS event tap for insertion smoke test; grant Accessibility and Input Monitoring to your terminal and rerun parakit doctor --deep"
+                "could not create macOS event tap for insertion smoke test; check Accessibility for the app that launches parakit, fully quit and reopen that app if already enabled, then rerun parakit doctor --deep"
             ),
             Err(EventTapInstallError::SourceCreateFailed(tap)) => {
                 unsafe {

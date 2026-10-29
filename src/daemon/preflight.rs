@@ -778,7 +778,7 @@ fn hotkey_report(_backend: HotkeyBackend, prompt_accessibility: bool) -> HotkeyR
     .unwrap();
     writeln!(
         &mut details,
-        "  input monitor: {}",
+        "  input monitor: {} (listen-only; not required for this hotkey)",
         permissions.input_monitoring.label()
     )
     .unwrap();
@@ -798,7 +798,7 @@ fn hotkey_report(_backend: HotkeyBackend, prompt_accessibility: bool) -> HotkeyR
     let summary = if blocking {
         details.clone()
     } else {
-        "macOS Accessibility and Input Monitoring granted; hotkey Left Control+Space".to_string()
+        "macOS Accessibility granted; hotkey Left Control+Space".to_string()
     };
     HotkeyReport {
         blocking,
@@ -810,25 +810,17 @@ fn hotkey_report(_backend: HotkeyBackend, prompt_accessibility: bool) -> HotkeyR
 
 #[cfg(target_os = "macos")]
 fn macos_hotkey_startup_blocked(permissions: &super::macos::PermissionReport) -> bool {
-    // A CoreGraphics session event tap that observes keyDown/keyUp/flagsChanged
-    // needs both synthetic-input trust and listen-event/Input Monitoring trust.
+    // The default (modifying) tap suppresses the PTT chord and uses Accessibility.
+    // Input Monitoring is the separate authorization for listen-only taps.
     !permissions.event_tap_ready()
 }
 
 #[cfg(target_os = "macos")]
 fn macos_hotkey_status(permissions: &super::macos::PermissionReport) -> String {
-    match (
-        permissions.accessibility.granted(),
-        permissions.input_monitoring.granted(),
-    ) {
-        (true, true) => {
-            "macOS Accessibility and Input Monitoring ready for Left Control+Space".to_string()
-        }
-        (false, true) => "macOS Accessibility permission missing".to_string(),
-        (true, false) => "macOS Input Monitoring permission missing".to_string(),
-        (false, false) => {
-            "macOS Accessibility and Input Monitoring permissions missing".to_string()
-        }
+    if permissions.event_tap_ready() {
+        "macOS Accessibility ready for Left Control+Space".to_string()
+    } else {
+        "macOS Accessibility permission missing".to_string()
     }
 }
 
