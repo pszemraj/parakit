@@ -11,6 +11,159 @@ struct FakeEngine {
     transcript: std::result::Result<&'static str, &'static str>,
 }
 
+/// Exercise native delivery through the production worker without microphone input.
+#[cfg(all(target_os = "linux", feature = "ibus"))]
+#[test]
+#[ignore = "requires an isolated IBus engine and focused native test application"]
+fn live_native_worker_inserts_without_x11() {
+    use crate::daemon::desktop::ibus::IbusClient;
+    let client = IbusClient::start().unwrap();
+    client.set_ready(true);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if client.snapshot().is_some_and(|target| target.eligible()) {
+            break;
+        }
+        assert!(Instant::now() < deadline, "no eligible native test field");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let focus = crate::daemon::inject::FocusSource {
+        backend: crate::daemon::desktop::linux_insertion::InsertionBackend::Auto,
+        mode: PasteMode::Standard,
+        client: Some(client.clone()),
+        hotkey_route: crate::daemon::hotkey::LinuxHotkeyRoute::Ibus,
+    }
+    .capture()
+    .unwrap();
+    assert!(focus.is_native());
+    run_live_worker(focus, "Worker café 世界. e\u{301} 👋", true);
+    client.set_ready(false);
+}
+
+/// Exercise the existing clipboard paste path in an isolated focused X11 field.
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "requires an isolated X11 server and focused text field"]
+fn live_x11_worker_pastes_into_focused_field() {
+    let focus = crate::daemon::inject::FocusSource {
+        backend: crate::daemon::desktop::linux_insertion::InsertionBackend::Auto,
+        mode: PasteMode::Standard,
+        client: None,
+        hotkey_route: crate::daemon::hotkey::LinuxHotkeyRoute::RegisteredX11,
+    }
+    .capture()
+    .unwrap();
+    assert!(!focus.is_native());
+    run_live_worker(focus, "X11 worker café 世界", false);
+}
+
+/// Native rejection and terminal policy retain clipboard recovery with history disabled.
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "requires an isolated X11 clipboard; never sends a paste chord"]
+fn live_native_clipboard_recovery_without_history() {
+    for text in [
+        "native recovery café 世界",
+        "native\ttab",
+        "native\nmultiline",
+    ] {
+        let state = Arc::new(SharedState::with_history_limit(0));
+        *state.focus_source.write() = crate::daemon::inject::FocusSource {
+            backend: crate::daemon::desktop::linux_insertion::InsertionBackend::Ibus,
+            mode: PasteMode::Terminal,
+            client: None,
+            hotkey_route: crate::daemon::hotkey::LinuxHotkeyRoute::Ibus,
+        };
+        let (tx, rx) = crossbeam_channel::bounded(2);
+        let mut ctx = test_worker_ctx(
+            FakeEngine {
+                transcriptions: Arc::new(AtomicUsize::new(0)),
+                drops: Arc::new(AtomicUsize::new(0)),
+                transcript: Ok(text),
+            },
+            &state,
+            Sounds::new(false),
+            rx,
+            0,
+        );
+        ctx.insert_transcripts = true;
+        ctx.settings.paste_mode = PasteMode::Terminal;
+        ctx.settings.keep_transcript_clipboard = false;
+        let worker = std::thread::spawn(move || {
+            worker_loop_with(ctx, None, || anyhow::bail!("unexpected model reload"));
+        });
+        let (done_tx, done_rx) = crossbeam_channel::bounded(1);
+        let now = Instant::now();
+        tx.send(WorkerEvent::Stopped {
+            started_at: now,
+            stopped_at: now,
+            pcm: vec![0.1; 160],
+            focus_at_start: Some(Box::new(FocusSnapshot::from_native(None, None))),
+            activity: None,
+            completion: Some(done_tx),
+        })
+        .unwrap();
+        done_rx
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap()
+            .unwrap();
+        assert_eq!(arboard::Clipboard::new().unwrap().get_text().unwrap(), text);
+        assert!(state.resolve_transcript(0).is_err());
+        drop(tx);
+        worker.join().unwrap();
+    }
+}
+
+/// Send a controlled transcript through production insertion and verify recovery text.
+#[cfg(target_os = "linux")]
+fn run_live_worker(focus: FocusSnapshot, text: &'static str, keep_clipboard: bool) {
+    let state = Arc::new(SharedState::new());
+    if focus.is_native() {
+        *state.focus_source.write() = crate::daemon::inject::FocusSource {
+            backend: crate::daemon::desktop::linux_insertion::InsertionBackend::Ibus,
+            mode: PasteMode::Standard,
+            client: None,
+            hotkey_route: crate::daemon::hotkey::LinuxHotkeyRoute::Ibus,
+        };
+    }
+    state.activity.ready();
+    let (tx, rx) = crossbeam_channel::bounded(2);
+    let mut ctx = test_worker_ctx(
+        FakeEngine {
+            transcriptions: Arc::new(AtomicUsize::new(0)),
+            drops: Arc::new(AtomicUsize::new(0)),
+            transcript: Ok(text),
+        },
+        &state,
+        Sounds::new(false),
+        rx,
+        0,
+    );
+    ctx.insert_transcripts = true;
+    ctx.settings.keep_transcript_clipboard = keep_clipboard;
+    let worker = std::thread::spawn(move || {
+        worker_loop_with(ctx, None, || anyhow::bail!("unexpected model reload"));
+    });
+    let (done_tx, done_rx) = crossbeam_channel::bounded(1);
+    let now = Instant::now();
+    tx.send(WorkerEvent::Stopped {
+        started_at: now,
+        stopped_at: now + Duration::from_millis(500),
+        pcm: vec![0.1; TARGET_RATE as usize / 2],
+        focus_at_start: Some(Box::new(focus)),
+        activity: Some(state.activity.begin()),
+        completion: Some(done_tx),
+    })
+    .unwrap();
+    drop(tx);
+    done_rx
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap()
+        .unwrap();
+    worker.join().unwrap();
+    assert_eq!(state.resolve_transcript(0).unwrap(), text);
+}
+
 impl WorkerEngine for FakeEngine {
     fn transcribe(&self, _pcm: &[f32]) -> Result<String> {
         self.transcriptions.fetch_add(1, Ordering::SeqCst);
@@ -26,13 +179,13 @@ impl Drop for FakeEngine {
     }
 }
 
-fn test_worker_ctx(
-    engine: FakeEngine,
+fn test_worker_ctx<E>(
+    engine: E,
     state: &Arc<SharedState>,
     sounds: Sounds,
     rx: Receiver<WorkerEvent>,
     model_idle_minutes: u64,
-) -> WorkerCtx<FakeEngine> {
+) -> WorkerCtx<E> {
     let log = Arc::new(Logger::new(super::super::logging::LogLevel::Quiet));
     WorkerCtx {
         engine,
@@ -61,6 +214,96 @@ fn test_worker_ctx(
         rx,
         lifetime: state.shutdown.register(),
     }
+}
+
+#[test]
+fn logging_metadata_stays_with_the_resident_session_until_reload() {
+    struct MetadataEngine(Arc<AtomicUsize>);
+    impl WorkerEngine for MetadataEngine {
+        fn transcribe(&self, _: &[f32]) -> Result<String> {
+            Ok("dictation".to_owned())
+        }
+
+        fn inference_metadata(&self, recipe: &EngineRecipe) -> Option<InferenceLogFields> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Some(InferenceLogFields {
+                model: "fixture.gguf".to_owned(),
+                model_preset: None,
+                backend: "test".to_owned(),
+                quantization: std::fs::read_to_string(&recipe.model_path).unwrap(),
+                requested_device: recipe.device_mode,
+                session_device: recipe.device_mode,
+                confirmed_device: Some("cpu".to_owned()),
+                qwen_language: None,
+                qwen_max_new_tokens: None,
+                native_api_version: None,
+            })
+        }
+    }
+
+    let root = crate::test_support::fixture_root("worker-metadata", "reload");
+    let model_path = root.join("model-label");
+    std::fs::write(&model_path, "Q8_0").unwrap();
+    let state = Arc::new(SharedState::new());
+    state.activity.ready();
+    let lease = state.activity.begin();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let (tx, rx) = crossbeam_channel::bounded(2);
+    let mut ctx = test_worker_ctx(
+        MetadataEngine(Arc::clone(&calls)),
+        &state,
+        Sounds::new(false),
+        rx,
+        1,
+    );
+    ctx.recipe.model_path = model_path.clone();
+    let log_dir = root.join("logs");
+    ctx.settings.data_log = Some(Arc::new(DataLogger::new(log_dir.clone())));
+    let reload_calls = Arc::clone(&calls);
+    let worker = std::thread::spawn(move || {
+        worker_loop_with(ctx, Some(Duration::from_millis(20)), || {
+            Ok(MetadataEngine(Arc::clone(&reload_calls)))
+        });
+    });
+    let transcribe = || {
+        let (done_tx, done_rx) = crossbeam_channel::bounded(1);
+        tx.send(stopped_capture(
+            Instant::now(),
+            vec![0.1; 160],
+            Some(state.activity.begin()),
+            done_tx,
+        ))
+        .unwrap();
+        done_rx
+            .recv_timeout(Duration::from_secs(2))
+            .unwrap()
+            .unwrap();
+    };
+    transcribe();
+    std::fs::write(&model_path, "F16").unwrap();
+    transcribe();
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    drop(lease);
+    wait_for_state(&state, Residency::Offloaded);
+    transcribe();
+    drop(tx);
+    worker.join().unwrap();
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+    let rows: Vec<serde_json::Value> = std::fs::read_dir(log_dir)
+        .unwrap()
+        .flat_map(|entry| {
+            std::fs::read_to_string(entry.unwrap().path())
+                .unwrap()
+                .lines()
+                .map(|line| serde_json::from_str(line).unwrap())
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    let quantizations: Vec<_> = rows
+        .iter()
+        .filter_map(|row| row["inference"]["quantization"].as_str())
+        .collect();
+    assert_eq!(quantizations, ["Q8_0", "Q8_0", "F16"]);
 }
 
 fn next_cue(cues: &Receiver<Cue>) -> Cue {
@@ -104,6 +347,10 @@ fn silence_gate_skips_empty_and_quiet_audio_only() {
     assert!(capture_should_skip(&[0.0001; 160]));
     assert!(!capture_should_skip(&[0.0, 0.2]));
     assert!(!capture_should_skip(&[0.01; 16]));
+    assert!(!capture_should_skip(&[SILENCE_PEAK_THRESHOLD]));
+    assert!(!capture_should_skip(&[-SILENCE_PEAK_THRESHOLD]));
+    assert!(capture_should_skip(&[SILENCE_RMS_THRESHOLD * 0.5; 160]));
+    assert!(!capture_should_skip(&[SILENCE_RMS_THRESHOLD; 160]));
 }
 
 #[test]
@@ -152,6 +399,126 @@ fn worker_plays_error_cue_when_no_speech_is_detected() {
 #[test]
 fn worker_loop_offloads_then_reloads_and_transcribes_queued_capture() {
     exercise_blocked_reload(ReloadCase::Released);
+}
+
+#[test]
+fn coordinator_keeps_initial_pcm_when_released_during_reload() {
+    exercise_capture_during_reload(false);
+}
+
+#[test]
+fn coordinator_keeps_initial_pcm_when_held_through_reload() {
+    exercise_capture_during_reload(true);
+}
+
+fn exercise_capture_during_reload(held: bool) {
+    use crate::daemon::audio::AudioHandle;
+    use crate::daemon::inject::FocusSource;
+    use crate::daemon::recording::{spawn_recording_coordinator, HotkeyTransition};
+    use std::thread;
+
+    struct RecordingEngine(Sender<Vec<f32>>);
+    impl WorkerEngine for RecordingEngine {
+        fn transcribe(&self, pcm: &[f32]) -> Result<String> {
+            self.0.send(pcm.to_vec()).unwrap();
+            Ok("first words during reload and final words".to_owned())
+        }
+    }
+
+    // The first samples arrive before the audio manager acknowledges Start,
+    // so the worker cannot have begun loading when they enter the buffer.
+    let first = vec![0.125; TARGET_RATE as usize];
+    let during = vec![0.25; TARGET_RATE as usize * 3];
+    let last = vec![-0.375; TARGET_RATE as usize / 2];
+    let audio = AudioHandle::test_handle_with_start_samples(first.clone());
+    let observed_audio = audio.clone();
+    let state = Arc::new(SharedState::new());
+    state.activity.ready();
+    let (worker_tx, worker_rx) = crossbeam_channel::bounded(WORKER_QUEUE_CAPACITY);
+    let (pcm_tx, pcm_rx) = crossbeam_channel::bounded(1);
+    let (entered_tx, entered_rx) = crossbeam_channel::bounded(1);
+    let (release_tx, release_rx) = crossbeam_channel::bounded(1);
+    let (sounds, cues) = Sounds::test_channel();
+    let ctx = test_worker_ctx(
+        RecordingEngine(pcm_tx.clone()),
+        &state,
+        sounds,
+        worker_rx,
+        1,
+    );
+    let log = Arc::clone(&ctx.log);
+    let worker = thread::spawn(move || {
+        worker_loop_with(ctx, Some(Duration::from_millis(10)), || {
+            entered_tx.send(()).unwrap();
+            release_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+            Ok(RecordingEngine(pcm_tx.clone()))
+        });
+    });
+    wait_for_state(&state, Residency::Offloaded);
+    let verify_residency = state.activity.begin();
+    let (hotkey_tx, hotkey_rx) = crossbeam_channel::unbounded();
+    let coordinator = spawn_recording_coordinator(
+        hotkey_rx,
+        worker_tx,
+        audio,
+        log,
+        Arc::clone(&state.activity),
+        FocusSource::default(),
+    )
+    .unwrap();
+
+    hotkey_tx
+        .send(HotkeyTransition::Pressed { at: Instant::now() })
+        .unwrap();
+    entered_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+    assert!(observed_audio.test_is_recording());
+    assert!(matches!(next_cue(&cues), Cue::Reload));
+    observed_audio.test_append_samples(&during);
+    assert!(pcm_rx.try_recv().is_err(), "inference must await reload");
+
+    if held {
+        release_tx.send(()).unwrap();
+        assert!(matches!(next_cue(&cues), Cue::Start(_)));
+        assert!(observed_audio.test_is_recording());
+    }
+    observed_audio.test_append_samples(&last);
+    hotkey_tx
+        .send(HotkeyTransition::Released { at: Instant::now() })
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while observed_audio.test_is_recording() && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(5));
+    }
+    assert!(
+        !observed_audio.test_is_recording(),
+        "release must not wait for reload"
+    );
+    if !held {
+        assert_eq!(state.model_status().unwrap().residency, Residency::Loading);
+        assert!(pcm_rx.try_recv().is_err());
+        assert!(cues.try_recv().is_err());
+        release_tx.send(()).unwrap();
+    }
+    let pcm = pcm_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+    assert_eq!(pcm, [first, during, last].concat());
+    assert!(matches!(next_cue(&cues), Cue::Success));
+    assert_eq!(
+        state.resolve_transcript(0).unwrap(),
+        "first words during reload and final words"
+    );
+    assert!(state.resolve_transcript(1).is_err());
+    drop(hotkey_tx);
+    coordinator.join().unwrap();
+    worker.join().unwrap();
+    drop(verify_residency);
+    assert!(
+        pcm_rx.try_recv().is_err(),
+        "capture must be transcribed once"
+    );
+    assert!(
+        cues.try_recv().is_err(),
+        "early release must not play a late start cue"
+    );
 }
 
 #[test]

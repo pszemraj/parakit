@@ -1,6 +1,6 @@
 # Configuration
 
-parakit reads an optional TOML file for daemon defaults, cleaning behavior, transcription logging, the Linux hotkey backend, and user-defined cleaning rules. A missing file is valid and selects built-in defaults.
+parakit reads an optional TOML file for daemon defaults, cleaning behavior, transcription logging, Linux insertion and hotkey backends, and user-defined cleaning rules. A missing file is valid and selects built-in defaults.
 
 A small config that keeps the trailing period that cleanup drops by default and leaves spoken single-digit numbers below five as the model produced them:
 
@@ -10,7 +10,7 @@ keep_trailing_period = true
 number_threshold = 5
 ```
 
-That is the same config as the commented starter file [example.toml](example.toml), which explains each choice. Save it as `config.toml` at the path printed by `parakit config path`. Every key is optional, and `parakit config init` writes a commented template listing all of them. The [annotated reference](config_reference.toml) lists every key with its type, default, accepted values, interactions, and warnings, and documents parakit-owned environment variables. It is itself a valid config file that holds every default.
+Save this [starter config](example.toml) as `config.toml` at the path printed by `parakit config path`. The [annotated reference](config_reference.toml) lists every key, default, accepted value, interaction, and environment variable.
 
 > [!IMPORTANT]
 > The daemon reads this file once at startup and does not watch it. Restart the daemon after every edit.
@@ -23,7 +23,7 @@ parakit resolves one config path:
 2. Linux and macOS: `$XDG_CONFIG_HOME/parakit/config.toml`, or `$HOME/.config/parakit/config.toml` when `XDG_CONFIG_HOME` is unset or empty.
 3. Windows: `%APPDATA%\parakit\config.toml`.
 
-Setting `PARAKIT_CONFIG_PATH` to an empty value is an error. So is pointing it at a file that does not exist: `start`, `doctor`, `rules`, and `config show` refuse to run on defaults in that case, while `config path`, `config init`, and `config edit` still work so the file can be created. A missing file at the default location is fine and selects built-in defaults. A relative override path stays relative to the process working directory. All configured paths, including `PARAKIT_CONFIG_PATH`, `daemon.model`, and `logging.dir`, are used literally; parakit does not expand `~` or environment variables inside them. On Linux and macOS, resolution fails with `HOME is unset or empty` when neither `XDG_CONFIG_HOME` nor `HOME` is set to a nonempty value.
+Setting `PARAKIT_CONFIG_PATH` to an empty value is an error. So is pointing it at a file that does not exist: `start`, `doctor`, `rules`, and `config show` refuse to run on defaults in that case, while `config path`, `config init`, and `config edit` still work so the file can be created. A relative override path stays relative to the process working directory. All configured paths, including `PARAKIT_CONFIG_PATH`, `daemon.model`, and `logging.dir`, are used literally; parakit does not expand `~` or environment variables inside them. On Linux and macOS, resolution fails with `HOME is unset or empty` when neither `XDG_CONFIG_HOME` nor `HOME` is set to a nonempty value.
 
 ## Commands
 
@@ -36,7 +36,7 @@ parakit config edit
 
 `config path` prints the resolved path without reading the file. `config init` creates any missing parent directories and writes the fully commented template. `config show`, which is also what bare `parakit config` runs, loads and validates the file and prints the resolved path plus the effective value of every key. `config edit` writes the template first when the file is missing, then opens the file in `$VISUAL`, or in `$EDITOR` when `VISUAL` is unset, empty, or whitespace-only.
 
-On Linux, `config show` also includes the selected hotkey backend.
+On Linux, `config show` also includes the selected insertion and hotkey backends. See [Linux desktop input](linux-desktop.md#insertion-selection-and-recovery) for transport selection and setup.
 
 ### Details
 
@@ -102,4 +102,4 @@ parakit stop
 parakit start --log-dir "$HOME/.parakit/logs" --quiet & disown
 ```
 
-A broken config does not block repair or control commands that do not need daemon settings: `fetch`, `cache`, `config path`, `config init`, `config edit`, `status`, `stop`, `copy-last`, `history`, and `test-paste`. `config show`, `doctor`, `rules list`, `rules test`, PTT simulation, and daemon startup do load it.
+A broken config does not block repair or control commands that do not need daemon settings: `fetch`, `cache`, `config path`, `config init`, `config edit`, `status`, `stop`, `copy-last`, `history`, `test-paste`, and Linux `ibus` commands. `config show`, `doctor`, `rules list`, `rules test`, PTT simulation, and daemon startup do load it.

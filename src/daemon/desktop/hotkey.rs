@@ -1,7 +1,7 @@
 //! Push-to-talk hotkey backend.
 //!
-//! Linux defaults to a registered X11 desktop hotkey. Passive X11 listening
-//! and the evdev/uinput keyboard proxy remain explicit non-default backends.
+//! Linux uses a registered global shortcut on X11 and focused-field IBus PTT
+//! on Wayland. Passive X11 listening and the evdev proxy are explicit backends.
 
 #[cfg(target_os = "windows")]
 use crate::daemon::logging::Logger;
@@ -69,6 +69,9 @@ pub(crate) enum HotkeyBackend {
     Auto,
     /// Force the platform desktop hotkey backend.
     Desktop,
+    /// Use focused-field Ctrl+Space through the active Parakit IBus engine.
+    #[cfg(target_os = "linux")]
+    Ibus,
     /// Force the registered X11 global hotkey backend.
     #[cfg(target_os = "linux")]
     #[value(name = "x11-global-hotkey")]
@@ -97,6 +100,8 @@ impl HotkeyBackend {
             Self::Auto => "auto",
             Self::Desktop => "desktop",
             #[cfg(target_os = "linux")]
+            Self::Ibus => "ibus",
+            #[cfg(target_os = "linux")]
             Self::X11GlobalHotkey => "x11-global-hotkey",
             #[cfg(target_os = "linux")]
             Self::X11Listen => "x11-listen",
@@ -109,11 +114,22 @@ impl HotkeyBackend {
     ///
     /// # Returns
     ///
-    /// The concrete registered-X11, passive-X11, or evdev route.
+    /// The concrete input-method, registered-X11, passive-X11, or evdev route.
     #[cfg(target_os = "linux")]
-    pub(crate) const fn linux_route(self) -> LinuxHotkeyRoute {
+    pub(crate) fn linux_route(self) -> LinuxHotkeyRoute {
+        self.linux_route_for_session(super::session::is_wayland())
+    }
+
+    /// Resolve desktop aliases for the supplied display-session type.
+    ///
+    /// # Returns
+    /// The selected native, X11, or experimental evdev route.
+    #[cfg(target_os = "linux")]
+    pub(crate) const fn linux_route_for_session(self, wayland: bool) -> LinuxHotkeyRoute {
         match self {
+            Self::Auto | Self::Desktop if wayland => LinuxHotkeyRoute::Ibus,
             Self::Auto | Self::Desktop | Self::X11GlobalHotkey => LinuxHotkeyRoute::RegisteredX11,
+            Self::Ibus => LinuxHotkeyRoute::Ibus,
             Self::X11Listen => LinuxHotkeyRoute::PassiveX11,
             Self::EvdevProxyExperimental => LinuxHotkeyRoute::EvdevProxy,
         }
@@ -124,6 +140,8 @@ impl HotkeyBackend {
 #[cfg(target_os = "linux")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum LinuxHotkeyRoute {
+    /// Focused-field Ctrl+Space from the selected Parakit input method.
+    Ibus,
     /// Registered X11 `Ctrl+Space`.
     RegisteredX11,
     /// Passive X11 keyboard-event listening.
@@ -141,6 +159,7 @@ impl LinuxHotkeyRoute {
     /// A concise user-facing Linux backend description.
     pub(crate) const fn label(self) -> &'static str {
         match self {
+            Self::Ibus => "focused-field IBus Ctrl+Space",
             Self::RegisteredX11 => "registered X11 Ctrl+Space",
             Self::PassiveX11 => "passive X11 Ctrl+Space listen",
             Self::EvdevProxy => "experimental evdev/uinput keyboard proxy",

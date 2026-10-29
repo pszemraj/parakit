@@ -3,6 +3,27 @@
 use super::*;
 
 #[test]
+fn buffered_response_is_flushed_before_the_connection_closes() {
+    use std::os::unix::net::UnixStream;
+
+    let (server, client) = UnixStream::pair().unwrap();
+    client
+        .set_read_timeout(Some(Duration::from_secs(1)))
+        .unwrap();
+    let response = IpcResponse::Ok {
+        message: "flushed 雪".into(),
+    };
+    let mut server = server;
+    write_response(&mut server, &response).unwrap();
+    let mut line = String::new();
+    BufReader::new(client).read_line(&mut line).unwrap();
+    assert!(line.ends_with('\n'));
+    assert!(
+        matches!(serde_json::from_str::<IpcResponse>(&line).unwrap(), IpcResponse::Ok { message } if message == "flushed 雪")
+    );
+}
+
+#[test]
 fn socket_dir_is_restricted_to_owner() {
     use std::os::unix::fs::PermissionsExt;
 

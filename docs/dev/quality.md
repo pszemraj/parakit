@@ -4,7 +4,7 @@ Build success does not prove transcription quality. Use real user audio, not syn
 
 ## Rust Validation Loop
 
-Run the full loop in order before pushing Rust or runtime changes:
+Run the full loop in order before committing Rust or runtime changes:
 
 ```bash
 cargo fmt --package parakit
@@ -136,7 +136,7 @@ For latency work, use short real clips around 2s, 5s, 15s, and 25s. Longer quali
 
 ## PTT Worker Simulation
 
-The Rust suite also runs the production worker loop with a fake inference engine. It checks timed offload, audio queued during a blocked reload, one transcription and completion, transcript history, and session destruction without a model or a minute-long timeout.
+The Rust suite runs the production recording coordinator and worker with a test audio manager and fake inference engine. It checks exact PCM captured before and during blocked reload, release before or after readiness, one transcription and completion, transcript history, and session destruction without a model or a minute-long timeout. These checks do not exercise native microphone startup or physical hotkeys; use the [physical desktop checks](model-validation.md#physical-desktop-checks) for those boundaries.
 
 Use the hidden simulation path when you need the daemon worker flow without a live keyboard, microphone, or text insertion:
 
@@ -272,7 +272,7 @@ Use the [source-rebuild commands](README.md#source-rebuild) with an isolated mod
 
 For each rebuilt model, open the retained F16 and resulting Q8_0 artifacts through `transcribe-file` and the actual daemon worker. Compare both against the original implementation on the same audio using the quality procedure above. A successful converter or quantizer exit alone is insufficient: check consequential omissions, negations, numbers/entities, silence, and chunk-boundary speech. Treat any existing runtime quality limitation as unresolved until these comparisons establish otherwise.
 
-Confirm `start --model-preset NAME` resolves the rebuilt cache artifact. Repeat `fetch --from-source --model-preset NAME` with the completed artifact present and no usable Python converter/network access; it must reuse the cached Q8_0. Then exercise `--force`, intermediate F16 retention/removal, retained downloaded snapshots, and conversion/quantization failures without replacing a completed cached model. Keep generated models and reports in ignored test directories. These are local acceptance checks; they do not add model downloads, conversion, inference, or new jobs to CI.
+Check the [source-rebuild cache and retention behavior](README.md#source-rebuild) with the converter/network unavailable, `--force`, and injected conversion/quantization failures. Failed rebuilds must preserve the completed cached model. Confirm named-preset startup selects the completed artifact. Keep generated models and reports in ignored test directories.
 
 ## Cleaning Corpus Replay
 
@@ -316,7 +316,7 @@ Check:
 - sounds still play in quiet mode unless `--no-sounds` is set;
 - logging writes raw and cleaned text without crashing the daemon.
 
-Run daemon/IPC checks sequentially with isolated config, cache/runtime paths, and a model copy. After a configured idle timeout, verify the first PTT still captures and inserts once, then check status and history. Make the test model unavailable while offloaded to verify reload failure, restore it, and confirm the next PTT recovers. Check stop/restart and sleep/wake on the native desktop. For audible cues, idle offload is silent. Hold PTT through reload and listen for the three-note reload cue followed by the usual listening tone when ready. Release during reload and confirm there is no delayed listening tone; a failed reload must not announce readiness. A failure at PTT start plays one two-pulse error cue; if the release retry also fails, it plays a second. Check the normal completion/error cues, the error cue after a capture with no speech, and `--no-sounds` too. Headless tests verify cue ordering and cancellation, but do not validate audible playback, physical input, or insertion. Record unobserved human checks and unavailable backend runs as pending.
+Run daemon/IPC checks sequentially with isolated config, cache/runtime paths, and a model copy. Exercise [idle offload and reload](../running.md#idle-model-offload), including a missing model restored before the next PTT, then check status and history. Check stop/restart and sleep/wake on the native desktop. Verify [sound cues](../running.md#logging-and-sounds) while holding and releasing PTT during reload, on failed readiness and silence, and with `--no-sounds`. Headless tests verify cue ordering and cancellation, but do not validate audible playback, physical input, or insertion. Record unobserved human checks and unavailable backend runs as pending.
 
 On macOS, an opt-in acoustic control plays two WAVs through the speakers and records them through the production CPAL/Rubato microphone path. It checks three successive captures (first WAV, second WAV, first WAV), retains only text and signal measurements, and can measure the real speaker cues. This does not synthesize or validate the physical global hotkey. Use public speech WAVs, an active desktop with microphone permission, and repository-local model, WAV, and report paths. The report file must already exist:
 
@@ -347,6 +347,27 @@ Use controlled text, HTML/text alternatives, images, copied files, and an empty 
 TODO: Reproduce a hung X11 clipboard owner and design bounded snapshot reads that preserve the prior clipboard. Arboard reads formats sequentially and its public API does not distinguish a read timeout from an unavailable format.
 
 TODO: On a native Linux desktop, exercise direct typing and guarded paste with physical modifier/focus changes, key-probe failures, keyboard-map changes, readiness-error reconnection and clipboard-manager handoffs. Closure tests and Mac runs do not establish those X11 results. Windows generation changes and delayed rendering also need native clipboard-manager or RDP verification.
+
+### Linux IBus and X11
+
+Prepare an isolated GNOME Wayland session using the [Linux input-source setup](../linux-desktop.md#ibus-setup), with a disposable text field focused. Confirm the receiving application uses native Wayland, unset `DISPLAY`, and record actual field contents and clipboard readback. Test GTK, Chrome, VS Code, and supported Ghostty/tmux configurations separately; record XWayland results as a different route.
+
+Use private D-Bus/IBus and XDG state. Register components with the binary under test's `ibus install --component-dir target/tmp/ibus-components` and point the private IBus process's `IBUS_COMPONENT_PATH` at that directory. Exercise installation, upgrade, and removal there; compare unrelated input sources and shortcuts before and after.
+
+The opt-in worker checks use controlled inference with production insertion. Run the native check in that private IBus session and the X11 check separately on an isolated X11 display:
+
+```bash
+env -u DISPLAY cargo test --bin parakit daemon::worker::tests::live_native_worker_inserts_without_x11 -- --ignored --exact
+cargo test --bin parakit daemon::worker::tests::live_x11_worker_pastes_into_focused_field -- --ignored --exact
+```
+
+Independently verify Unicode and selection replacement in the receiving application; a submitted commit or passing worker assertion does not prove reception. Check clipboard preservation on native delivery with retention enabled too. Exercise the [focus and delivery rules](../running.md#focus-changes) during recording, inference, and submission, including helper, daemon, and IBus restarts. Check both PTT release orders, repeats, lost releases, terminal tabs/newlines, and password/PIN fields. Ordinary typing, Compose/dead keys, and a non-US layout/variant must remain usable with the daemon unavailable.
+
+### History picker
+
+Use an isolated daemon with non-sensitive transcripts and exercise the [history commands](../running.md#daemon-control) in a terminal, a pipe, plain mode, quiet mode, and full-text mode. Check long wrapped previews, scrolling, resizing, cancellation, and terminal restoration after successful copies and errors.
+
+While one entry is selected, add dictations and confirm preview and clipboard copy still refer to that entry. Check disabled/empty history, eviction, daemon restart, and oversized full-text responses without truncation or substitution. An oversized preview must still allow copying the selected entry with Enter. Force a clipboard failure, verify the picker remains open, retry, and independently read the actual clipboard through its supported platform route.
 
 ### Ordered audio and loaded Qwen failures
 

@@ -386,6 +386,14 @@ pub(super) fn run_hub_repo(
         .split_once('/')
         .ok_or_else(|| anyhow!("invalid repo '{repo}': expected owner/repo"))?;
     let revision = revision.unwrap_or("main");
+    let models_dir = crate::model::models_dir()?;
+    if let Some(filename) = file.filter(|filename| is_gguf_name(filename)) {
+        let basename = hub_file_name(filename)?;
+        let dest = hub_cache_dir(&models_dir, owner, name, revision, filename).join(basename);
+        if !options.force && super::use_cached_download(options, &dest, sha256_override)? {
+            return Ok(dest);
+        }
+    }
 
     let client = net::build_client()?;
     let metadata = fetch_repo_metadata(&client, endpoint, token, owner, name, revision)?;
@@ -403,7 +411,6 @@ pub(super) fn run_hub_repo(
     }
     let sibling = selection.sibling();
 
-    let models_dir = crate::model::models_dir()?;
     let dest_dir = hub_cache_dir(&models_dir, owner, name, revision, &sibling.rfilename);
     std::fs::create_dir_all(&dest_dir).with_context(|| format!("create {}", dest_dir.display()))?;
     let basename = hub_file_name(&sibling.rfilename)?;
@@ -425,27 +432,104 @@ pub(super) fn run_hub_repo(
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
     #[test]
-    fn parses_owner_repo() {
-        let SourceKind::Repo(spec) = classify_source("cstr/parakeet-tdt-0.6b-v3-GGUF").unwrap()
-        else {
-            panic!("expected a repo spec");
-        };
-        assert_eq!(spec.owner, "cstr");
-        assert_eq!(spec.repo, "parakeet-tdt-0.6b-v3-GGUF");
-        assert_eq!(spec.revision, None);
+    fn explicit_cached_file_needs_no_hub_request() {
+        const CHILD: &str = "PARAKIT_HUB_CACHE_CHILD";
+        if std::env::var_os(CHILD).is_some() {
+            let models = crate::model::models_dir().unwrap();
+            let filename = "nested/model-Q8_0.gguf";
+            let dest =
+                hub_cache_dir(&models, "owner", "repo", "main", filename).join("model-Q8_0.gguf");
+            std::fs::create_dir_all(dest.parent().unwrap()).unwrap();
+            std::fs::write(&dest, b"cached model").unwrap();
+            let options = FetchOptions {
+                force: false,
+                quiet: true,
+                verbose: false,
+                source: FetchSource::HubRepo {
+                    repo: "owner/repo".into(),
+                    revision: None,
+                    file: Some(filename.into()),
+                    sha256: None,
+                },
+            };
+            assert_eq!(
+                run_hub_repo(
+                    &options,
+                    "http://127.0.0.1:9",
+                    None,
+                    "owner/repo",
+                    None,
+                    Some(filename),
+                    None
+                )
+                .unwrap(),
+                dest
+            );
+            assert!(run_hub_repo(
+                &options,
+                "http://127.0.0.1:9",
+                None,
+                "owner/repo",
+                None,
+                Some(filename),
+                Some(&"0".repeat(64))
+            )
+            .is_err());
+            assert!(run_hub_repo(
+                &FetchOptions {
+                    force: true,
+                    ..options
+                },
+                "http://127.0.0.1:9",
+                None,
+                "owner/repo",
+                None,
+                Some(filename),
+                None
+            )
+            .is_err());
+            assert_eq!(std::fs::read(dest).unwrap(), b"cached model");
+            return;
+        }
+        let root = crate::test_support::fixture_root("hub-cache", "explicit-file");
+        let output = crate::test_support::exact_test_command(
+            "fetch::hub::tests::explicit_cached_file_needs_no_hub_request",
+        )
+        .env(CHILD, "1")
+        .env(
+            "XDG_CACHE_HOME",
+            std::env::current_dir().unwrap().join(root),
+        )
+        .output()
+        .unwrap();
+        assert!(output.status.success(), "{output:?}");
     }
 
     #[test]
-    fn parses_owner_repo_with_revision() {
-        let SourceKind::Repo(spec) =
-            classify_source("handy-computer/parakeet-tdt-0.6b-v3-gguf@refs/pr/1").unwrap()
-        else {
-            panic!("expected a repo spec");
-        };
-        assert_eq!(spec.owner, "handy-computer");
-        assert_eq!(spec.repo, "parakeet-tdt-0.6b-v3-gguf");
-        assert_eq!(spec.revision.as_deref(), Some("refs/pr/1"));
+    fn parses_owner_repo_with_optional_revision() {
+        for (input, owner, repo, revision) in [
+            (
+                "cstr/parakeet-tdt-0.6b-v3-GGUF",
+                "cstr",
+                "parakeet-tdt-0.6b-v3-GGUF",
+                None,
+            ),
+            (
+                "handy-computer/parakeet-tdt-0.6b-v3-gguf@refs/pr/1",
+                "handy-computer",
+                "parakeet-tdt-0.6b-v3-gguf",
+                Some("refs/pr/1"),
+            ),
+        ] {
+            let SourceKind::Repo(spec) = classify_source(input).unwrap() else {
+                panic!("expected a repo spec: {input}");
+            };
+            assert_eq!(spec.owner, owner, "{input}");
+            assert_eq!(spec.repo, repo, "{input}");
+            assert_eq!(spec.revision.as_deref(), revision, "{input}");
+        }
     }
 
     #[test]

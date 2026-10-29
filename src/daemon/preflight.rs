@@ -18,7 +18,11 @@ use super::hotkey::HotkeyBackend;
 use super::hotkey::LinuxHotkeyRoute;
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 use super::hotkey_help;
-use super::inject::{self, PasteMode};
+use super::inject::{self, FocusSource, PasteMode};
+
+#[cfg(target_os = "linux")]
+#[path = "preflight_ibus.rs"]
+mod ibus;
 
 /// Run blocking daemon preflight checks before expensive startup work.
 ///
@@ -51,6 +55,7 @@ pub fn ensure_hotkey_ready(backend: HotkeyBackend) -> Result<()> {
 /// * `paste_mode` - Insertion mode to validate.
 /// * `deep` - Run the platform insertion smoke test when true.
 /// * `backend` - Selected hotkey backend to validate.
+/// * `focus_source` - Resolved insertion transport and native connection.
 ///
 /// # Returns
 ///
@@ -61,14 +66,47 @@ pub fn print_doctor(
     paste_mode: PasteMode,
     deep: bool,
     backend: HotkeyBackend,
+    focus_source: &FocusSource,
 ) -> bool {
+    #[cfg(target_os = "linux")]
+    let native_probe = focus_source
+        .uses_native()
+        .then(super::desktop::ibus::probe_status);
+    #[cfg(target_os = "linux")]
+    let report = match native_probe.as_ref() {
+        Some(probe) => ibus::hotkey_report(probe),
+        None => hotkey_report(backend, !quiet),
+    };
+    #[cfg(not(target_os = "linux"))]
     let report = hotkey_report(backend, !quiet);
     let daemon_lock = singleton_lock_probe();
     let mic = super::audio::probe_default_input();
-    let insertion = if deep {
-        inject::smoke_test(paste_mode)
+    #[cfg(target_os = "linux")]
+    let native = native_probe.is_some();
+    #[cfg(not(target_os = "linux"))]
+    let native = {
+        let _ = focus_source;
+        false
+    };
+    #[cfg(target_os = "linux")]
+    let native_insertion = native_probe.as_ref().map(ibus::insertion_check);
+    #[cfg(not(target_os = "linux"))]
+    let native_insertion: Option<Result<()>> = None;
+    let insertion = {
+        if let Some(result) = native_insertion {
+            result
+        } else if deep {
+            inject::smoke_test(paste_mode)
+        } else {
+            inject::preflight(paste_mode)
+        }
+    };
+    let insertion_label = if native {
+        "IBus connection and registration checks (reception unverified)".to_owned()
+    } else if deep {
+        format!("{} guarded smoke test", paste_mode.label())
     } else {
-        inject::preflight(paste_mode)
+        format!("{} preflight", paste_mode.label())
     };
     let ok = doctor_ready(&report, &daemon_lock, &mic, &insertion);
 
@@ -79,18 +117,24 @@ pub fn print_doctor(
     // Readiness decides the exit status; a closed stdout only cuts the report
     // short.
     let _ = if verbose {
-        print_doctor_details(&report, &daemon_lock, &mic, &insertion, paste_mode, deep)
+        print_doctor_details(&report, &daemon_lock, &mic, &insertion, &insertion_label)
     } else {
         print_doctor_summary(
             &report,
             &daemon_lock,
             &mic,
             &insertion,
-            paste_mode,
-            deep,
+            &insertion_label,
             ok,
         )
     };
+    #[cfg(target_os = "linux")]
+    if let Some(probe) = native_probe.as_ref() {
+        let _ = outln!(
+            "{}",
+            ibus::insertion_details(focus_source, probe, deep).trim_end()
+        );
+    }
 
     ok
 }
@@ -107,8 +151,7 @@ fn print_doctor_summary(
     daemon_lock: &Result<()>,
     mic: &Result<super::audio::MicInfo>,
     insertion: &Result<()>,
-    paste_mode: PasteMode,
-    deep: bool,
+    insertion_label: &str,
     ok: bool,
 ) -> Result<()> {
     outln!("parakit doctor: {}", if ok { "OK" } else { "FAIL" })?;
@@ -121,13 +164,8 @@ fn print_doctor_summary(
         Ok(mic) => print_status_line("mic", true, &mic.summary())?,
         Err(err) => print_status_line("mic", false, &format!("{err:#}"))?,
     }
-    let insertion_label = if deep {
-        format!("{} guarded smoke test", paste_mode.label())
-    } else {
-        format!("{} preflight", paste_mode.label())
-    };
     match insertion {
-        Ok(()) => print_status_line("insertion", true, &insertion_label)?,
+        Ok(()) => print_status_line("insertion", true, insertion_label)?,
         Err(err) => print_status_line("insertion", false, &format!("{err:#}"))?,
     }
 
@@ -149,8 +187,7 @@ fn print_doctor_details(
     daemon_lock: &Result<()>,
     mic: &Result<super::audio::MicInfo>,
     insertion: &Result<()>,
-    paste_mode: PasteMode,
-    deep: bool,
+    insertion_label: &str,
 ) -> Result<()> {
     outln!("{}", report.details.trim_end())?;
     match daemon_lock {
@@ -171,11 +208,7 @@ fn print_doctor_details(
         }
     }
     match insertion {
-        Ok(()) if deep => outln!(
-            "  insertion:     OK ({} guarded smoke test)",
-            paste_mode.label()
-        )?,
-        Ok(()) => outln!("  insertion:     OK ({} preflight)", paste_mode.label())?,
+        Ok(()) => outln!("  insertion:     OK ({insertion_label})")?,
         Err(err) => outln!("  insertion:     FAIL ({err:#})")?,
     }
     outln!("  build:")?;
@@ -404,18 +437,22 @@ fn is_daemon_lock_contention(err: &std::io::Error) -> bool {
 #[cfg(target_os = "linux")]
 fn linux_hotkey_startup_blocked(
     route: LinuxHotkeyRoute,
-    x11_ready: bool,
+    desktop_ready: bool,
     evdev_ready: bool,
 ) -> bool {
     match route {
-        LinuxHotkeyRoute::RegisteredX11 | LinuxHotkeyRoute::PassiveX11 => !x11_ready,
+        LinuxHotkeyRoute::RegisteredX11 | LinuxHotkeyRoute::PassiveX11 => !desktop_ready,
         LinuxHotkeyRoute::EvdevProxy => !evdev_ready,
+        LinuxHotkeyRoute::Ibus => !desktop_ready,
     }
 }
 
 #[cfg(target_os = "linux")]
 fn hotkey_report(backend: HotkeyBackend, _prompt_accessibility: bool) -> HotkeyReport {
     let route = backend.linux_route();
+    if route == LinuxHotkeyRoute::Ibus {
+        return ibus::hotkey_report(&super::desktop::ibus::probe_status());
+    }
     let session = std::env::var("XDG_SESSION_TYPE").unwrap_or_else(|_| "unknown".to_string());
     let display = std::env::var("DISPLAY").unwrap_or_else(|_| "<unset>".to_string());
     let xauthority = std::env::var("XAUTHORITY").unwrap_or_else(|_| "<unset>".to_string());
@@ -432,7 +469,7 @@ fn hotkey_report(backend: HotkeyBackend, _prompt_accessibility: bool) -> HotkeyR
     let x11_ready = match route {
         LinuxHotkeyRoute::RegisteredX11 => registered_ready,
         LinuxHotkeyRoute::PassiveX11 => x11_listen_ready,
-        LinuxHotkeyRoute::EvdevProxy => false,
+        LinuxHotkeyRoute::EvdevProxy | LinuxHotkeyRoute::Ibus => false,
     };
     let evdev = (route == LinuxHotkeyRoute::EvdevProxy).then(evdev_report);
     let evdev_ready = evdev
@@ -510,6 +547,7 @@ fn hotkey_report(backend: HotkeyBackend, _prompt_accessibility: bool) -> HotkeyR
     if blocking {
         writeln!(&mut details, "  status:         FAIL").unwrap();
         match route {
+            LinuxHotkeyRoute::Ibus => unreachable!("IBus has its own readiness report"),
             LinuxHotkeyRoute::RegisteredX11 => {
                 hotkey_help::write_registered_linux_fix(&mut details);
             }
@@ -535,6 +573,7 @@ fn hotkey_report(backend: HotkeyBackend, _prompt_accessibility: bool) -> HotkeyR
         )
         .unwrap();
         match route {
+            LinuxHotkeyRoute::Ibus => unreachable!("IBus has its own readiness report"),
             LinuxHotkeyRoute::RegisteredX11 => {
                 if let Some(Err(err)) = registered.as_ref() {
                     writeln!(&mut summary, "registered hotkey: unavailable ({err:#})").unwrap();

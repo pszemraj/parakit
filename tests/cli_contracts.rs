@@ -30,6 +30,60 @@ fn isolated_parakit_with_empty_config(name: &str) -> Command {
     command
 }
 
+#[cfg(all(target_os = "linux", feature = "ibus"))]
+#[test]
+fn ibus_helper_rejects_arguments_before_connecting_to_the_bus() {
+    for argument in ["--help", "--version", "unexpected"] {
+        let output = Command::new(env!("CARGO_BIN_EXE_parakit-ibus"))
+            .arg(argument)
+            .env("IBUS_ADDRESS", "unix:path=/nonexistent-parakit-test-bus")
+            .env(
+                "DBUS_SESSION_BUS_ADDRESS",
+                "unix:path=/nonexistent-parakit-test-bus",
+            )
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(2));
+        assert!(output.stdout.is_empty());
+        assert_eq!(
+            String::from_utf8(output.stderr).unwrap(),
+            "Usage: parakit-ibus\nIBus launches this engine without arguments.\n"
+        );
+    }
+}
+
+#[test]
+fn user_rule_errors_preserve_config_validation_order_and_rule_context() {
+    let rules = "[[rules.user]]\nname = 'valid'\npattern = 'ok'\nreplacement = 'yes'\n\n\
+        [[rules.user]]\nname = 'broken'\npattern = '('\nreplacement = 'no'\n";
+    let root = common::fixture_root_with_files("cli-contracts", "rule-errors", &["config.toml"]);
+    let config = root.join("config.toml");
+    for prefix in ["", "[daemon]\ntranscript_history = 101\n"] {
+        std::fs::write(&config, format!("{prefix}{rules}")).unwrap();
+        let output = isolated_parakit(&root)
+            .env("PARAKIT_CONFIG_PATH", &config)
+            .args(["config", "show"])
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        let error = String::from_utf8(output.stderr).unwrap();
+        assert!(error.contains(&config.display().to_string()), "{error}");
+        assert!(!error.contains("TOML parse error"), "{error}");
+        if prefix.is_empty() {
+            assert!(
+                error.contains("user rule 'broken' has invalid regex"),
+                "{error}"
+            );
+        } else {
+            assert!(
+                error.contains("daemon.transcript_history must be between"),
+                "{error}"
+            );
+            assert!(!error.contains("invalid regex"), "{error}");
+        }
+    }
+}
+
 #[test]
 fn simulated_ptt_rejects_missing_model_before_loading_output() {
     for quiet in [false, true] {
@@ -256,6 +310,12 @@ fn daemon_only_commands_report_an_absent_daemon_cleanly() {
         (&["stop"], 0, "parakit: not running; nothing to stop\n", ""),
         (
             &["history"],
+            1,
+            "",
+            "parakit: error: daemon is not running; start it with `parakit start` first\n",
+        ),
+        (
+            &["history", "--text", "1"],
             1,
             "",
             "parakit: error: daemon is not running; start it with `parakit start` first\n",
@@ -546,7 +606,26 @@ fn config_show_reports_resolved_model_selection() {
                 "missing {expected:?} in:\n{stdout}"
             );
         }
+        #[cfg(target_os = "linux")]
+        assert!(stdout.contains("    insertion_backend: (default: auto)"));
     }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn config_show_reports_explicit_insertion_backend() {
+    let root =
+        common::fixture_root_with_files("cli-contracts", "insertion-backend", &["config.toml"]);
+    let config_path = root.join("config.toml");
+    std::fs::write(&config_path, "[daemon]\ninsertion_backend = 'x11'\n").unwrap();
+    let output = isolated_parakit(&root)
+        .env("PARAKIT_CONFIG_PATH", config_path)
+        .args(["config", "show"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert!(output.stderr.is_empty(), "{output:?}");
+    assert!(String::from_utf8_lossy(&output.stdout).contains("    insertion_backend: x11"));
 }
 
 #[test]

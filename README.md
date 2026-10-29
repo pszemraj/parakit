@@ -18,7 +18,7 @@ Transcription runs locally via [NVIDIA Parakeet-TDT-0.6B-v3](https://huggingface
 
 ## Install
 
-Install the native, OS-specific packages needed[^2] as explained in [docs/build.md](docs/build.md), then:
+You need Rust 1.87+, CMake 3.19+, and a C/C++ toolchain. Linux also needs audio, IBus, and X11 development packages (including `libibus-1.0-dev` on Debian/Ubuntu); macOS needs Xcode command line tools; Windows needs Visual Studio's C++ workload. Install the native, OS-specific packages needed[^2] as explained in [docs/build.md](docs/build.md), then:
 
 [^2]: These are mostly for audio streaming, hotkey monitoring, and text insertion.
 
@@ -59,7 +59,7 @@ If `doctor` finds issues with the setup/build, it will exit 1 and print details 
 
 For background mode, paste options, and other runtime-related options see [docs/running.md](docs/running.md).
 
-Linux currently requires an X11 session for desktop hotkeys and text insertion; see [docs/linux-desktop.md](docs/linux-desktop.md).
+Linux uses X11 hotkeys and clipboard paste by default on X11, and IBus on GNOME Wayland. Native insertion on X11 requires `--hotkey-backend ibus`; Wayland push-to-talk requires a focused editable field with the Parakit input source selected. See [docs/linux-desktop.md](docs/linux-desktop.md).
 
 ## Docs
 

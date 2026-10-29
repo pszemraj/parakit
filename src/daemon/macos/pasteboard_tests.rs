@@ -3,6 +3,91 @@
 use super::*;
 
 #[test]
+fn exact_insertion_handles_overlapping_occurrences_and_unicode() {
+    for (baseline, inserted) in [
+        ("ab", "aba"),
+        ("tes", "test"),
+        ("ab", "ba"),
+        ("é🙂é", "🙂é"),
+    ] {
+        for index in baseline
+            .char_indices()
+            .map(|(index, _)| index)
+            .chain([baseline.len()])
+        {
+            let current = format!("{}{inserted}{}", &baseline[..index], &baseline[index..]);
+            assert!(
+                value_indicates_insertion(Some(baseline), &current, inserted),
+                "baseline={baseline:?}, inserted={inserted:?}, index={index}"
+            );
+        }
+    }
+}
+
+#[test]
+fn exact_insertion_matches_a_small_exhaustive_oracle() {
+    fn words(alphabet: &[char], length: usize) -> impl Iterator<Item = String> + '_ {
+        (0..alphabet.len().pow(length as u32)).map(move |mut code| {
+            (0..length)
+                .map(|_| {
+                    let character = alphabet[code % alphabet.len()];
+                    code /= alphabet.len();
+                    character
+                })
+                .collect()
+        })
+    }
+    for (alphabet, max_baseline, max_inserted) in
+        [(&['a', 'b'][..], 4, 3), (&['a', 'é', '🙂'][..], 2, 2)]
+    {
+        for baseline_length in 0..=max_baseline {
+            for baseline in words(alphabet, baseline_length) {
+                let previous = BoundedNormalizedValue::new(&baseline, 64);
+                for inserted_length in 1..=max_inserted {
+                    for inserted in words(alphabet, inserted_length) {
+                        for current in words(alphabet, baseline_length + inserted_length) {
+                            let expected = baseline
+                                .char_indices()
+                                .map(|(index, _)| index)
+                                .chain([baseline.len()])
+                                .any(|index| {
+                                    current
+                                        == format!(
+                                            "{}{inserted}{}",
+                                            &baseline[..index],
+                                            &baseline[index..]
+                                        )
+                                });
+                            let actual = BoundedNormalizedValue::new(&current, 64)
+                                .is_exact_insertion_of(&previous, &inserted);
+                            assert_eq!(
+                                actual, expected,
+                                "baseline={baseline:?}, inserted={inserted:?}, current={current:?}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn exact_insertion_rejects_unrelated_unicode_edits() {
+    for (baseline, current, inserted) in [
+        ("é", "êé", "é"),
+        ("é🙂", "ê🙂é", "é"),
+        ("🙂é", "🙂êé", "é"),
+        ("éé", "éêé", "é"),
+        ("🙂🙂", "🙂🙃🙂", "🙂"),
+    ] {
+        let baseline = BoundedNormalizedValue::new(baseline, 64);
+        let current = BoundedNormalizedValue::new(current, 64);
+        assert!(!current.is_exact_insertion_of(&baseline, inserted));
+    }
+}
+
+#[test]
 fn insertion_evidence_matrix() {
     struct InsertionCase {
         name: &'static str,
@@ -399,6 +484,7 @@ fn selection_geometry_confirmation_matrix() {
             });
             let actual = matcher.indicates_insertion(
                 Some(&baseline),
+                &matcher.counts(&baseline),
                 &current,
                 case.allow_selection_evidence,
                 true,

@@ -5,7 +5,7 @@
 //! In particular, X11 exposes an owner window rather than a content generation.
 
 use super::{ClipboardPolicy, ClipboardSnapshot, ClipboardStore};
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(target_os = "macos")]
 use anyhow::Context;
 use anyhow::Result;
 use std::cell::{Cell, RefCell};
@@ -245,7 +245,7 @@ impl StagedClipboard {
         if policy == ClipboardPolicy::KeepTranscript {
             return Ok(ClipboardRestore::KeptTranscript);
         }
-        self.previous.restore(clipboard)?;
+        self.previous.restore_owned(clipboard)?;
         Ok(ClipboardRestore::Restored)
     }
 }
@@ -254,22 +254,13 @@ impl StagedClipboard {
 ///
 /// # Returns
 ///
-/// A Windows/macOS write generation or an X11 selection owner window.
+/// A Windows/macOS clipboard write generation.
 ///
 /// # Errors
 ///
 /// Returns an error when the native observation is unavailable.
+#[cfg(not(target_os = "linux"))]
 pub(super) fn platform_change_stamp() -> Result<u64> {
-    #[cfg(target_os = "linux")]
-    {
-        use x11rb::protocol::xproto::ConnectionExt;
-        let (connection, _) =
-            x11rb::connect(None).context("open clipboard observation connection")?;
-        let selection = connection.intern_atom(false, b"CLIPBOARD")?.reply()?.atom;
-        let owner = connection.get_selection_owner(selection)?.reply()?.owner;
-        // NONE is a valid observation of an empty selection before staging.
-        Ok(u64::from(owner))
-    }
     #[cfg(target_os = "windows")]
     {
         // SAFETY: This read-only Windows API takes no pointers or handles.

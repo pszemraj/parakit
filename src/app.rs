@@ -82,6 +82,8 @@ pub(crate) fn run() -> Result<()> {
     // dispatch-block exceptions: they load config themselves below because
     // they report/apply the same effective values the daemon would use.
     match &cli.command {
+        #[cfg(target_os = "linux")]
+        Some(Commands::Ibus(ibus_cli)) => crate::ibus_command::run(ibus_cli, cli.quiet),
         Some(Commands::Fetch(fetch_cli)) => {
             let source = resolve_fetch_source(fetch_cli)?;
             fetch::run(FetchOptions {
@@ -112,10 +114,11 @@ pub(crate) fn run() -> Result<()> {
         }
         Some(Commands::History(history_cli)) => {
             let limit = wire_history_limit(history_cli.limit)?;
-            daemon::ipc::run_client(
-                daemon::ipc::IpcCommand::History { limit },
+            daemon::ipc::run_history(
+                limit,
+                history_cli.plain,
+                history_cli.text.map(std::num::NonZeroUsize::get),
                 cli.quiet,
-                cli.verbose,
             )
         }
         Some(Commands::TestPaste(test_paste)) => daemon::ipc::run_client(
@@ -146,12 +149,24 @@ fn run_doctor(cli: &Cli, doctor_cli: &DoctorCli) -> Result<()> {
     let hotkey_backend = doctor_cli.effective_hotkey_backend(&config);
     #[cfg(not(target_os = "linux"))]
     let hotkey_backend = HotkeyBackend::Auto;
+    #[cfg(target_os = "linux")]
+    let focus_source = daemon::inject::FocusSource {
+        backend: doctor_cli.effective_insertion_backend(&config),
+        mode: paste_mode,
+        hotkey_route: hotkey_backend.linux_route(),
+        client: None,
+    };
+    #[cfg(target_os = "linux")]
+    focus_source.validate_options()?;
+    #[cfg(not(target_os = "linux"))]
+    let focus_source = daemon::inject::FocusSource::default();
     let ok = daemon::preflight::print_doctor(
         cli.quiet,
         cli.effective_verbose(&config),
         paste_mode,
         doctor_cli.deep,
         hotkey_backend,
+        &focus_source,
     );
     if ok {
         return Ok(());
@@ -312,19 +327,41 @@ fn run_daemon(cli: &Cli, start: &StartCli) -> Result<()> {
     }
 
     #[cfg(target_os = "linux")]
-    daemon::session::ensure_x11_session_supported()?;
+    let mut focus_source = daemon::inject::FocusSource {
+        backend: start.effective_insertion_backend(&config),
+        mode: paste_mode,
+        hotkey_route: hotkey_backend.linux_route(),
+        client: None,
+    };
+    #[cfg(target_os = "linux")]
+    {
+        focus_source.validate_options()?;
+        if cfg!(feature = "ibus")
+            && focus_source.hotkey_route == daemon::hotkey::LinuxHotkeyRoute::Ibus
+        {
+            focus_source.client = Some(daemon::desktop::ibus::IbusClient::start()?);
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    let focus_source = daemon::inject::FocusSource::default();
 
     daemon::preflight::ensure_hotkey_ready(hotkey_backend)?;
     log.verbose(format!(
         "parakit: hotkey preflight passed ({})",
         hotkey_backend.label()
     ));
+    #[cfg(target_os = "linux")]
+    focus_source
+        .preflight()
+        .context("text insertion preflight failed")?;
+    #[cfg(not(target_os = "linux"))]
     daemon::inject::preflight(paste_mode).context("text insertion preflight failed")?;
     log.verbose("parakit: insertion preflight passed");
 
     let ipc_state = Arc::new(daemon::ipc::SharedState::with_history_limit(
         config.daemon.effective_transcript_history(),
     ));
+    *ipc_state.focus_source.write() = focus_source.clone();
     // Register before the engine so reverse local-drop order releases the
     // native session before this guard on every failed-startup path.
     let worker_lifetime = ipc_state.shutdown.register();
@@ -408,21 +445,38 @@ fn run_daemon(cli: &Cli, start: &StartCli) -> Result<()> {
         daemon: &daemon_info,
         model_path: &model_path,
         mic: &mic_info,
-        insertion: format!(
-            "batch paste ({}, {})",
-            daemon_info.paste_mode,
-            if keep_transcript_clipboard {
-                "keep transcript clipboard"
-            } else {
-                "restore clipboard"
+        insertion: {
+            #[cfg(target_os = "linux")]
+            {
+                format!(
+                    "Linux backend={} ({} policy; legacy clipboard={})",
+                    focus_source.backend.label(),
+                    daemon_info.paste_mode,
+                    if keep_transcript_clipboard {
+                        "keep transcript"
+                    } else {
+                        "restore previous"
+                    }
+                )
             }
-        ),
+            #[cfg(not(target_os = "linux"))]
+            {
+                format!(
+                    "batch paste ({}, {})",
+                    daemon_info.paste_mode,
+                    if keep_transcript_clipboard {
+                        "keep transcript clipboard"
+                    } else {
+                        "restore clipboard"
+                    }
+                )
+            }
+        },
     });
     ipc_state.set_info(daemon_info);
 
-    // Worker thread takes exclusive ownership of `engine`. `crispasr::Session`
-    // is `Send` but not `Sync`, which is fine: only one thread ever calls
-    // `transcribe`, and the hotkey path only posts transitions on a channel.
+    // The worker exclusively owns the engine's Send, non-Sync native session.
+    // Only this thread transcribes; the hotkey path posts channel transitions.
     let (tx, rx) = bounded::<WorkerEvent>(WORKER_QUEUE_CAPACITY);
     let worker = spawn_worker(WorkerCtx {
         engine,
@@ -444,6 +498,7 @@ fn run_daemon(cli: &Cli, start: &StartCli) -> Result<()> {
         audio,
         Arc::clone(&log),
         Arc::clone(&ipc_state.activity),
+        focus_source.clone(),
     )
     .context("spawn recording coordinator")
     {
@@ -457,12 +512,21 @@ fn run_daemon(cli: &Cli, start: &StartCli) -> Result<()> {
     // Hotkey grab loop. Blocks forever (until grab returns or process exits).
     ipc_state.set_phase("idle");
     ipc_state.activity.ready();
+    #[cfg(target_os = "linux")]
+    if let Some(client) = &focus_source.client {
+        client.set_ptt_sender(Some(hotkey_tx.clone()));
+        client.set_ready(true);
+    }
     log.ready();
 
-    finish_hotkey_loop(
-        daemon::hotkey::run_grab_loop(hotkey_tx, hotkey_backend, Arc::clone(&log)),
-        &ipc_state,
-    );
+    let hotkey_result = daemon::hotkey::run_grab_loop(hotkey_tx, hotkey_backend, Arc::clone(&log));
+    finish_hotkey_loop(hotkey_result, &ipc_state);
+
+    #[cfg(target_os = "linux")]
+    if let Some(client) = &focus_source.client {
+        client.set_ready(false);
+        client.set_ptt_sender(None);
+    }
 
     // Tear down.
     let _ = coordinator.join();

@@ -106,7 +106,6 @@ fn passive_listen_handler_emits_transitions_without_returning_suppression() {
 
     let state = Arc::new(Mutex::new(HotkeyState::default()));
     let (tx, rx) = crossbeam_channel::unbounded();
-
     handle_listen_event(event(EventType::KeyPress(Key::ControlLeft)), &state, &tx);
     handle_listen_event(event(EventType::KeyPress(Key::Space)), &state, &tx);
     let pressed = rx.recv().unwrap();
@@ -116,6 +115,30 @@ fn passive_listen_handler_emits_transitions_without_returning_suppression() {
     assert!(matches!(pressed, HotkeyTransition::Pressed { .. }));
     assert!(matches!(released, HotkeyTransition::Released { .. }));
     assert!(rx.try_recv().is_err());
+}
+
+#[test]
+fn registered_hotkey_press_uses_ordinary_capture_transitions() {
+    let now = base_time();
+    let mut latch = RegisteredHotkeyLatch::default();
+    let (tx, rx) = crossbeam_channel::unbounded();
+    let pressed = latch
+        .event(RegisteredHotKeyState::Pressed, physical(true, true), now)
+        .unwrap();
+    send_hotkey_transition(pressed, &tx);
+    let released = latch
+        .event(
+            RegisteredHotKeyState::Released,
+            physical(false, false),
+            at(now, 50),
+        )
+        .unwrap();
+    send_hotkey_transition(released, &tx);
+    assert_eq!(rx.recv().unwrap(), HotkeyTransition::Pressed { at: now });
+    assert_eq!(
+        rx.recv().unwrap(),
+        HotkeyTransition::Released { at: at(now, 50) }
+    );
 }
 
 #[test]

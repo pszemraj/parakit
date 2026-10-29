@@ -8,6 +8,7 @@
 //! consecutive words, or tracking sentence-boundary state across the whole
 //! input).
 
+use std::borrow::Cow;
 use std::fmt::Write as _;
 use text2num::{text2digits, Language};
 
@@ -30,7 +31,7 @@ use super::engine::TransformResult;
 ///
 /// Does not panic in practice. The regex is a compile-time literal, and
 /// capture zero always exists for each item from `captures_iter`.
-pub(crate) fn normalize_apostrophe_cause(input: &str) -> TransformResult {
+pub(crate) fn normalize_apostrophe_cause(input: &str) -> TransformResult<'_> {
     let re = regex_static!(
         r#"(?i)['\u{2019}]cause\b"#,
         "apostrophe-cause regex must compile"
@@ -78,7 +79,7 @@ pub(crate) fn normalize_apostrophe_cause(input: &str) -> TransformResult {
 /// validated to compile, which is what the `.expect()` on it documents.
 /// Byte-range slicing uses offsets returned by this same regex's matches on
 /// `input`, which are always valid UTF-8 boundaries of `input`.
-pub(crate) fn normalize_spaced_acronyms(input: &str) -> TransformResult {
+pub(crate) fn normalize_spaced_acronyms(input: &str) -> TransformResult<'_> {
     let re = regex_static!(r"\b[A-Z](?: [A-Z])+\b", "spaced acronym regex must compile");
 
     let replacements: Vec<(usize, usize, String)> = re
@@ -129,7 +130,7 @@ struct WordSpan {
 /// validated to compile, which is what the `.expect()` on it documents.
 /// Slicing uses offsets returned by this same regex's matches on `input`,
 /// which are always valid UTF-8 boundaries of `input`.
-pub(crate) fn normalize_spoken_versions(input: &str) -> TransformResult {
+pub(crate) fn normalize_spoken_versions(input: &str) -> TransformResult<'_> {
     let word_re = regex_static!(r"[A-Za-z]+(?:-[A-Za-z]+)*", "word span regex must compile");
     let words: Vec<WordSpan> = word_re
         .find_iter(input)
@@ -138,7 +139,14 @@ pub(crate) fn normalize_spoken_versions(input: &str) -> TransformResult {
             end: found.end(),
         })
         .collect();
-    if words.len() < 5 {
+    if words.len() < 5
+        || words
+            .iter()
+            .filter(|span| input[span.start..span.end].eq_ignore_ascii_case("point"))
+            .take(2)
+            .count()
+            < 2
+    {
         return unchanged(input);
     }
 
@@ -312,17 +320,17 @@ fn canonicalize_number_aliases(input: &str) -> String {
 /// always `Some` for any match; `write!` to a `String` cannot fail. Slicing
 /// uses offsets returned by this same regex's matches on `text`, which are
 /// always valid UTF-8 boundaries of `text`.
-pub(crate) fn normalize_numeric_point_suffixes(input: &str) -> TransformResult {
+pub(crate) fn normalize_numeric_point_suffixes(input: &str) -> TransformResult<'_> {
     let re = regex_static!(
         r"(?i)(\d+(?:\.\d+)*)[ \t]+point[ \t]+([A-Za-z]+(?:-[A-Za-z]+)?)\b",
         "numeric point suffix regex must compile"
     );
 
-    let mut text = input.to_string();
+    let mut text = Cow::Borrowed(input);
     let mut total_matches = 0;
 
     for _ in 0..8 {
-        let mut output = String::with_capacity(text.len());
+        let mut output = None;
         let mut last_end = 0;
         let mut pass_matches = 0;
 
@@ -335,17 +343,18 @@ pub(crate) fn normalize_numeric_point_suffixes(input: &str) -> TransformResult {
                 continue;
             };
 
+            let output = output.get_or_insert_with(|| String::with_capacity(text.len()));
             output.push_str(&text[last_end..found.start()]);
             write!(output, "{numeric}.{rendered}").expect("writing to String cannot fail");
             last_end = found.end();
             pass_matches += 1;
         }
 
-        if pass_matches == 0 {
+        let Some(mut output) = output else {
             break;
-        }
+        };
         output.push_str(&text[last_end..]);
-        text = output;
+        text = Cow::Owned(output);
         total_matches += pass_matches;
     }
 
@@ -387,7 +396,7 @@ pub(crate) fn normalize_numeric_point_suffixes(input: &str) -> TransformResult {
 /// `[A-Z][A-Z0-9]*` prefix token, so `parts.next()` is always `Some`.
 /// Slicing uses offsets returned by this same regex's matches on `input`,
 /// which are always valid UTF-8 boundaries of `input`.
-pub(crate) fn normalize_numeric_identifier_groups(input: &str) -> TransformResult {
+pub(crate) fn normalize_numeric_identifier_groups(input: &str) -> TransformResult<'_> {
     let re = regex_static!(
         r"\b[A-Z][A-Z0-9]*\b(?:[ \t]+\d{1,2}){2,}\b",
         "numeric identifier group regex must compile"
@@ -445,7 +454,7 @@ pub(crate) fn normalize_numeric_identifier_groups(input: &str) -> TransformResul
 /// validated to compile, which is what the `.expect()` on it documents.
 /// Slicing uses offsets returned by this same regex's matches on `input`,
 /// which are always valid UTF-8 boundaries of `input`.
-pub(crate) fn normalize_magnitude_suffixes(input: &str) -> TransformResult {
+pub(crate) fn normalize_magnitude_suffixes(input: &str) -> TransformResult<'_> {
     let re = regex_static!(
         r"\b\d+(?:\.\d+)?(?:[ \t]+\d+)*[ \t]+[KMB]\b",
         "numeric magnitude regex must compile"
@@ -488,7 +497,7 @@ pub(crate) fn normalize_magnitude_suffixes(input: &str) -> TransformResult {
 ///
 /// Does not panic in practice. Both regexes are fixed patterns validated when
 /// first used, and every capture read below is required by its pattern.
-pub(crate) fn normalize_parameter_counts(input: &str) -> TransformResult {
+pub(crate) fn normalize_parameter_counts(input: &str) -> TransformResult<'_> {
     const COUNT: &str = r"(?:\d+(?:\.\d+)?[ \t]+(?:thousand|million|billion)|\d{4,})";
 
     let direct = regex_static!(
@@ -555,7 +564,10 @@ fn compact_large_count(count: &str) -> Option<String> {
     None
 }
 
-fn apply_replacements(input: &str, replacements: Vec<(usize, usize, String)>) -> TransformResult {
+fn apply_replacements(
+    input: &str,
+    replacements: Vec<(usize, usize, String)>,
+) -> TransformResult<'_> {
     if replacements.is_empty() {
         return unchanged(input);
     }
@@ -570,14 +582,14 @@ fn apply_replacements(input: &str, replacements: Vec<(usize, usize, String)>) ->
     }
     output.push_str(&input[last_end..]);
     TransformResult {
-        text: output,
+        text: Cow::Owned(output),
         matches: replacements.len(),
     }
 }
 
-fn unchanged(input: &str) -> TransformResult {
+fn unchanged(input: &str) -> TransformResult<'_> {
     TransformResult {
-        text: input.to_string(),
+        text: Cow::Borrowed(input),
         matches: 0,
     }
 }
@@ -633,7 +645,7 @@ fn is_dangling_connective(word: &str) -> bool {
 /// byte offset used for slicing comes from `char_indices` on `input` or a
 /// prefix of it, or from `len_utf8` of a character read out of that same
 /// text, so all of them are valid UTF-8 boundaries of `input`.
-pub(crate) fn drop_dangling_connective(input: &str) -> TransformResult {
+pub(crate) fn drop_dangling_connective(input: &str) -> TransformResult<'_> {
     let mut cursor = input.trim_end().len();
 
     // The connective chain's own trailing punctuation (e.g. the period in
@@ -686,7 +698,7 @@ pub(crate) fn drop_dangling_connective(input: &str) -> TransformResult {
     }
 
     TransformResult {
-        text,
+        text: Cow::Owned(text),
         matches: removed,
     }
 }
@@ -718,8 +730,13 @@ pub(crate) fn drop_dangling_connective(input: &str) -> TransformResult {
 ///
 /// This function is infallible: it returns [`TransformResult`], not
 /// `Result`, and never returns an `Err`.
-pub(crate) fn capitalize_sentence_starts(input: &str) -> TransformResult {
-    let mut output = String::with_capacity(input.len());
+///
+/// # Panics
+///
+/// The copied prefix uses an offset from `input.char_indices()`, which
+/// always identifies a valid UTF-8 boundary of `input`.
+pub(crate) fn capitalize_sentence_starts(input: &str) -> TransformResult<'_> {
+    let mut output: Option<String> = None;
     let mut capitalize_next = true;
     let mut changes = 0;
 
@@ -727,10 +744,20 @@ pub(crate) fn capitalize_sentence_starts(input: &str) -> TransformResult {
         if capitalize_next {
             if character.is_alphabetic() {
                 if preserve_sentence_start_token_case(input, byte_index) {
-                    output.push(character);
+                    if let Some(output) = &mut output {
+                        output.push(character);
+                    }
                 } else {
-                    for upper in character.to_uppercase() {
-                        output.push(upper);
+                    let uppercase = character.to_uppercase();
+                    if !uppercase.clone().eq(std::iter::once(character)) {
+                        let output = output.get_or_insert_with(|| {
+                            let mut output = String::with_capacity(input.len());
+                            output.push_str(&input[..byte_index]);
+                            output
+                        });
+                        output.extend(uppercase);
+                    } else if let Some(output) = &mut output {
+                        output.push(character);
                     }
                     if character.is_lowercase() {
                         changes += 1;
@@ -739,21 +766,25 @@ pub(crate) fn capitalize_sentence_starts(input: &str) -> TransformResult {
                 capitalize_next = false;
                 continue;
             }
-            output.push(character);
+            if let Some(output) = &mut output {
+                output.push(character);
+            }
             if character.is_numeric() {
                 capitalize_next = false;
             }
             continue;
         }
 
-        output.push(character);
+        if let Some(output) = &mut output {
+            output.push(character);
+        }
         if punctuation_is_sentence_boundary(input, byte_index, character) {
             capitalize_next = true;
         }
     }
 
     TransformResult {
-        text: output,
+        text: output.map_or(Cow::Borrowed(input), Cow::Owned),
         matches: changes,
     }
 }

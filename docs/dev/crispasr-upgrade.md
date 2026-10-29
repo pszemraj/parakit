@@ -39,7 +39,7 @@ Update the native source, its nested submodules, both Rust path crates, and `Car
 git submodule update --init --recursive
 cd vendor/CrispASR
 git fetch --tags
-git checkout <tag-or-commit>
+git checkout '<tag-or-commit>'
 git submodule update --init --recursive
 cd ../..
 cargo check
@@ -49,7 +49,7 @@ cargo check --locked
 
 The submodule contains the two Rust path crates. The root `cargo check` refreshes `Cargo.lock`; stage it with the changed CrispASR gitlink, then use `cargo check --locked` to verify the lockfile. Keep the C++ device adapter aligned with the selected ggml headers and libraries. See the [build guide](../build.md#crispasr-and-backends) for supported CMake settings, external-library requirements, and the matching ABI, and [architecture](architecture.md) for worker ownership and reload behavior.
 
-Check the PCM input contract, segment-text handling, runtime defaults, and model preprocessing/orchestration when upstream behavior changes. The native defaults used by the daemon and `transcribe-file` are initialized before threads or model opening; library callers must set equivalent environment variables before native initialization. See the [model validation guide](model-validation.md) for current build, inference, and desktop checks.
+Check the PCM input contract, segment-text handling, runtime defaults, and model preprocessing/orchestration when upstream behavior changes. The daemon and `transcribe-file` initialize native defaults before threads or model opening. Library callers can call `initialize_crispasr_runtime_defaults` at that point or set the equivalent environment variables before native initialization. See the [model validation guide](model-validation.md) for current build, inference, and desktop checks.
 
 ## Inputs and method
 
@@ -245,4 +245,4 @@ Headless WAV replay does not exercise microphone capture or stream recovery. It 
 
 ## Native platform coverage
 
-The [October 11 Mac report](crispasr-macos-validation.md) covers Parakeet v3 Q8_0 on the v0.8.42 pin. The later [October 18 Mac report](macos-model-validation-2026-10-18.md) adds all six presets at Q8_0/Q6_K and shared-resampler checks on CPU/Metal; [focused October 19 Windows results](model-validation.md#focused-windows-results-2026-10-19) cover a smaller model set on CPU/CUDA/Vulkan. These separate runs do not extend the Linux performance tables above. Actual allocation exhaustion was not evaluated. See the [model validation guide](model-validation.md) for remaining platform procedures and physical checks.
+The Linux measurements above do not establish native macOS or Windows results. Follow [native model validation](model-validation.md) for platform checks and recorded results. Actual allocation exhaustion was not evaluated.

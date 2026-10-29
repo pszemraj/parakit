@@ -59,7 +59,7 @@ This directory must contain the original checkpoint and tokenizer/configuration 
 
 A completed Q8_0 artifact in the preset cache is reused before checking Python dependencies or accessing the network. `--keep-f16` does not create a missing F16 intermediate on that cache hit. If only F16 is cached, it is quantized without re-reading the checkpoint, including a supplied `--checkpoint-dir`. Add `--force` to repeat conversion and quantization; for downloaded checkpoints this also refreshes the selected source commit. Qwen and Moondream presets record fixed provider and source commits in the model catalog, so refresh does not silently select a newer upstream revision. A new catalog revision uses a separate checkpoint directory, preventing stale shards from another revision entering conversion. Rebuilt Q8_0 goes to the same destination as the hosted preset: `parakit start --model-preset NAME` selects it without changing daemon configuration or the application default. Source rebuilding produces Q8_0; the [cached Q6_K workflow](../running.md#model-presets) uses provider F16 instead.
 
-Redux conversion reconstructs its packed ternary weights into ordinary F16 weights before Q8_0 quantization. The resulting GGUF does not retain Photon's 178 MB representation, ternary acceleration, or Moondream VAD head. Building the artifact also does not establish transcription quality; follow the [conversion acceptance checks](quality.md#checkpoint-conversion-acceptance).
+Redux conversion reconstructs its packed ternary weights into F16 before Q8_0 quantization. See the [Redux limitations](../running.md#model-presets) and [conversion acceptance checks](quality.md#checkpoint-conversion-acceptance).
 
 On Windows, the hosted Q8_0 path is the normal model setup. `fetch --from-source` requires a compatible `crispasr-quantize.exe` on `PATH` because bundled CPU builds skip the CrispASR examples tree under MSVC.
 
@@ -69,9 +69,9 @@ GPU build and runtime checks are in [quality.md#gpu-feature-validation](quality.
 
 TODO: Config does not yet support remapping the actual PTT chord (e.g. a custom macOS fallback of right Command alone, or right Command plus right Option). Keep the default chords as-is until that lands: Linux/Windows use `Ctrl+Space`, and macOS uses `Left Control+Space`.
 
-TODO: Keep the direct platform-hotkey path available when configurable chords land. On macOS, extend the existing CoreGraphics event-tap backend so it owns the selected chord, suppresses only that chord, and handles tap-disabled callbacks. On Linux, keep the registered X11 backend as the normal path and use the evdev/uinput proxy only when users explicitly accept the lower-level permission tradeoff. On Windows, `RegisterHotKey` already gives a clear conflict/error boundary.
+TODO: Keep the direct platform-hotkey path available when configurable chords land. On macOS, extend the existing CoreGraphics event-tap backend so it owns the selected chord, suppresses only that chord, and handles tap-disabled callbacks. On Linux, preserve the [session-specific backends](../linux-desktop.md) and keep the evdev/uinput proxy opt-in. On Windows, `RegisterHotKey` already gives a clear conflict/error boundary.
 
-TODO: Add a Linux `doctor` warning for known IBus `Ctrl+Space` conflicts, or close this if configurable hotkeys make the warning unnecessary. Keep the current Linux docs warning until the default/config story changes.
+TODO: Detect configured Linux input-source shortcut conflicts automatically; diagnostics currently provide a [manual-check advisory](../linux-desktop.md#shortcut-conflicts).
 
 TODO: Remove the [Unix source-install dependency on the repository `target/` library tree](../build.md#install) in a dedicated follow-up PR. First try to work upstream with CrispASR for static/manual linking support; if that is not viable, revisit full vendoring or an aggregate static-link strategy in parakit. Do not patch the CrispASR submodule locally for this.
 
@@ -81,7 +81,7 @@ TODO: Replace fallback microphone device polling with platform event notificatio
 
 TODO: Evaluate callback-confirmed recording cues and a short post-roll window. The current cue fires after the start command succeeds, not after the first input callback, and release drains only already-arrived samples plus the resampler tail.
 
-TODO: Upgrade `enigo` from the 0.2 line in a cross-platform validation branch. Linux batch paste uses X11 directly, Windows batch paste uses `SendInput`, and macOS batch paste uses CoreGraphics Cmd+V events that `doctor --deep` can smoke-test. Keep the dependency update focused on direct typing unless a real desktop paste regression points back to the fallback path.
+TODO: Upgrade `enigo` from the 0.2 line in a cross-platform validation branch. Linux uses IBus native insertion or X11 batch paste, Windows batch paste uses `SendInput`, and macOS batch paste uses CoreGraphics Cmd+V events that `doctor --deep` can smoke-test. Keep the dependency update focused on direct typing unless a real desktop paste regression points back to the fallback path.
 
 TODO: Revisit model durability semantics before packaged releases. Source builds use the XDG-style `~/.cache/parakit/models/` path on Linux and macOS; a future bundle may want a less reclaimable app-data location.
 

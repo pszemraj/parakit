@@ -15,13 +15,15 @@
 //! State machine (single-recording-at-a-time invariant):
 //!   Idle --[Ctrl+Space down]--> Recording --[Ctrl+Space up]--> Transcribing --> Idle
 //!
-//! On Linux, `auto` registers Ctrl+Space with the X11 desktop. The evdev/uinput
-//! keyboard proxy is explicit and experimental.
+//! On Linux, `auto` uses global X11 Ctrl+Space or focused-field IBus PTT on
+//! GNOME Wayland. The evdev/uinput proxy is explicit and experimental.
 
 mod app;
 mod cli;
 mod config;
 mod daemon;
+#[cfg(target_os = "linux")]
+mod ibus_command;
 #[cfg(test)]
 mod test_support;
 

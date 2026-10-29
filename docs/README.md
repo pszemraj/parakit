@@ -4,7 +4,7 @@
 
 - [build.md](build.md) - building from source and native dependencies per platform.
 - [macos-desktop.md](macos-desktop.md) - macOS permissions, the hotkey, and the paste-acknowledgement step.
-- [linux-desktop.md](linux-desktop.md) - Linux X11 requirements and the experimental evdev-proxy hotkey backend.
+- [linux-desktop.md](linux-desktop.md) - IBus setup, focused-field GNOME Wayland dictation, and X11 fallback.
 - [windows-desktop.md](windows-desktop.md) - Windows hotkey registration, insertion, and `doctor --deep`.
 - [Windows bundle scripts](../scripts/windows/README.md) - packaging a runnable Windows bundle.
 

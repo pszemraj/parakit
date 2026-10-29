@@ -3,7 +3,6 @@
 #![cfg(target_os = "windows")]
 
 use anyhow::{bail, Context, Result};
-use arboard::Clipboard;
 use std::thread;
 use std::time::{Duration, Instant};
 use windows::core::w;
@@ -18,12 +17,15 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WS_OVERLAPPEDWINDOW, WS_TABSTOP, WS_VISIBLE,
 };
 
-use super::inject::{ClipboardSnapshot, PasteMode};
-use super::windows_clipboard_history::{hwnd_from_raw, register_window_class};
+use super::super::windows_clipboard_history::{hwnd_from_raw, register_window_class};
+use super::super::windows_input;
+use super::{
+    ClipboardPolicy, ClipboardSnapshot, FocusSnapshot, Injector, PasteMode, PasteOutcome,
+    SystemClipboard,
+};
+use crate::daemon::desktop::FocusVerification;
 
 const FOCUS_SETTLE: Duration = Duration::from_millis(200);
-const CLIPBOARD_SETTLE: Duration = Duration::from_millis(75);
-const PASTE_SETTLE: Duration = Duration::from_millis(400);
 const HWND_TOPMOST_RAW: isize = -1;
 const HWND_NOTOPMOST_RAW: isize = -2;
 const SWP_NOSIZE: u32 = 0x0001;
@@ -81,7 +83,8 @@ struct RawRect {
 ///
 /// # Returns
 ///
-/// `Ok(())` when the sentinel reaches the owned edit window.
+/// `Ok(())` when the production transaction pastes the sentinel into the owned
+/// edit window and reports successful clipboard restoration.
 ///
 /// # Errors
 ///
@@ -95,43 +98,70 @@ pub(crate) fn windows_paste_smoke_test(mode: PasteMode) -> Result<()> {
         .context("focus Windows paste smoke edit window")?;
     pump_messages_for(FOCUS_SETTLE);
 
-    // This smoke window is pumped by the current thread. The production
-    // Injector path waits before restoring, so this same-thread control cannot
-    // process Ctrl+V until after restore. Keep the smoke focused on Win32 input
-    // acceptance and read-back; unit tests cover the restore gate ordering.
-    let mut clipboard = Clipboard::new().context("could not open system clipboard")?;
-    let previous = ClipboardSnapshot::capture(&mut clipboard)
-        .context("could not capture clipboard before Windows paste smoke test")?;
-    let test_result = (|| -> Result<()> {
-        Clipboard::set_text(&mut clipboard, sentinel.clone())
-            .context("could not stage Windows paste smoke sentinel on clipboard")?;
-        match ClipboardSnapshot::capture(&mut clipboard)
-            .context("could not snapshot text-only Windows smoke clipboard")?
-        {
-            ClipboardSnapshot::Text(text) if text == sentinel => {}
-            _ => bail!("Windows text-only clipboard snapshot did not preserve the sentinel"),
-        }
-        thread::sleep(CLIPBOARD_SETTLE);
-        super::windows_input::send_paste_chord(mode == PasteMode::Terminal)
-            .context("Windows paste smoke insertion failed")?;
-
-        pump_messages_for(PASTE_SETTLE);
-        let actual = window
-            .text()
-            .context("read Windows paste smoke edit text")?;
-        if actual != sentinel {
-            bail!("Windows paste smoke inserted wrong text: expected {sentinel:?}, got {actual:?}");
-        }
-        Ok(())
-    })();
-
-    let restore_result = previous.restore(&mut clipboard);
-    match (test_result, restore_result) {
-        (Ok(()), Ok(())) => Ok(()),
-        (Err(err), Ok(())) => Err(err),
-        (Ok(()), Err(restore_err)) => Err(restore_err),
-        (Err(err), Err(restore_err)) => Err(err.context(format!("{restore_err:#}"))),
+    let focus = FocusSnapshot::capture().context("capture Windows paste smoke focus")?;
+    if !window.is_foreground() {
+        bail!("Windows paste smoke focus changed before the transaction; keep the probe window focused and rerun doctor --deep");
     }
+    let parent_raw = window.parent.0 as usize;
+    let worker_sentinel = sentinel.clone();
+    // The window remains on its owning thread, which pumps messages while
+    // the production transaction waits for clipboard consumption/restoration.
+    let worker = thread::Builder::new()
+        .name("parakit-doctor-paste-smoke".to_owned())
+        .spawn(move || {
+            let mut injector = Injector::new().context("open Windows paste smoke injector")?;
+            injector.prepare_for_mode(mode)?;
+            let mut clipboard = SystemClipboard::new()
+                .context("open Windows paste smoke verification clipboard")?;
+            let previous = ClipboardSnapshot::capture(&mut clipboard)
+                .context("capture Windows paste smoke verification clipboard")?;
+            let report = injector.paste_text_guarded(
+                &worker_sentinel,
+                mode,
+                ClipboardPolicy::RestorePrevious,
+                Some(&focus),
+                || {
+                    Ok(focus.verify_current()? == FocusVerification::Matched
+                        && unsafe { GetForegroundWindow().0 as usize } == parent_raw)
+                },
+            )?;
+            let current = ClipboardSnapshot::capture(&mut clipboard)
+                .context("read Windows paste smoke restored clipboard")?;
+            Ok::<_, anyhow::Error>((report, previous.same_payload(&current)))
+        })
+        .context("spawn Windows paste smoke transaction")?;
+    while !worker.is_finished() {
+        pump_messages_for(Duration::from_millis(10));
+    }
+    let (report, clipboard_matches) = worker
+        .join()
+        .map_err(|_| anyhow::anyhow!("Windows paste smoke transaction panicked"))??;
+    if report.outcome == PasteOutcome::Blocked {
+        bail!("Windows paste smoke focus changed before dispatch; insertion was withheld; keep the probe window focused and rerun doctor --deep");
+    }
+    if !matches!(
+        report.outcome,
+        PasteOutcome::Pasted | PasteOutcome::PastedUnverified
+    ) {
+        bail!(
+            "Windows paste smoke transaction did not paste: {:?} ({})",
+            report.outcome,
+            report.diagnostic.as_deref().unwrap_or("no diagnostic")
+        );
+    }
+    let actual = window
+        .text()
+        .context("read Windows paste smoke edit text")?;
+    if actual != sentinel {
+        bail!("Windows paste smoke inserted wrong text: expected {sentinel:?}, got {actual:?}");
+    }
+    if report.telemetry.clipboard_restored != Some(true) || !clipboard_matches {
+        bail!(
+            "Windows paste smoke transaction did not restore the previous clipboard ({})",
+            report.diagnostic.as_deref().unwrap_or("no diagnostic")
+        );
+    }
+    Ok(())
 }
 
 struct TestEditWindow {
@@ -191,7 +221,7 @@ impl TestEditWindow {
     fn focus(&self) -> Result<()> {
         let _attach = ForegroundThreadAttach::attach();
 
-        let _ = super::windows_input::send_foreground_unlock_alt_tap();
+        let _ = windows_input::send_foreground_unlock_alt_tap();
         unsafe {
             let _ = ShowWindow(self.parent, SW_RESTORE);
             let _ = SetWindowPos(

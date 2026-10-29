@@ -9,13 +9,12 @@
 //!   - Linux X11: uses `XTestFakeKeyEvent` plus a temporary keymap remap
 //!     for non-keyboard characters. Works for ASCII/Latin reliably; some
 //!     emoji or rare scripts may not pass through cleanly.
-//!   - Linux Wayland: unsupported. Startup preflight rejects Wayland sessions
-//!     because XTest cannot insert into focused native Wayland applications.
+//!   - Linux Wayland: this legacy synthetic transport is unsupported; native
+//!     IBus insertion is handled separately without XTest or clipboard staging.
 //!   - macOS: synthesizes via the CGEvent API. Requires Accessibility for the
 //!     terminal that launched parakit.
 
 use anyhow::{Context, Result};
-use arboard::Clipboard;
 use clap::ValueEnum;
 use enigo::{Enigo, Keyboard, Settings};
 use std::{cell::RefCell, time::Duration};
@@ -33,13 +32,13 @@ mod clipboard_guard;
 mod clipboard_store;
 #[cfg(target_os = "linux")]
 use clipboard_store::clipboard_content_unavailable;
-pub(crate) use clipboard_store::{ClipboardSnapshot, ClipboardStore};
+pub(crate) use clipboard_store::{ClipboardSnapshot, ClipboardStore, SystemClipboard};
 
 #[path = "focus_snapshot.rs"]
 mod focus_snapshot;
 #[cfg(target_os = "linux")]
 use focus_snapshot::linux_current_input_focus;
-pub(crate) use focus_snapshot::FocusSnapshot;
+pub(crate) use focus_snapshot::{FocusSnapshot, FocusSource};
 
 #[path = "paste_transaction.rs"]
 mod paste_transaction;
@@ -48,6 +47,10 @@ use paste_transaction::{paste_with_clipboard_swap_guarded, stage_text_without_pa
 #[cfg(target_os = "linux")]
 #[path = "inject_smoke.rs"]
 mod inject_smoke;
+
+#[cfg(target_os = "windows")]
+#[path = "windows_paste_smoke.rs"]
+mod windows_paste_smoke;
 
 #[cfg(target_os = "linux")]
 #[path = "direct.rs"]
@@ -63,8 +66,21 @@ use super::x11::wait_for_modifier_release;
 #[cfg(target_os = "linux")]
 use x11_paste::{linux_x11_xtest_preflight, LinuxX11Paste};
 
-/// Error label used when paste succeeded but previous clipboard restore failed.
-pub(crate) const CLIPBOARD_RESTORE_ERROR: &str = "could not restore previous clipboard contents";
+/// A previous clipboard payload could not be restored after staging text.
+#[derive(Debug)]
+pub(crate) struct ClipboardRestoreError(pub(crate) anyhow::Error);
+
+impl std::fmt::Display for ClipboardRestoreError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("could not restore previous clipboard contents")
+    }
+}
+
+impl std::error::Error for ClipboardRestoreError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(self.0.as_ref())
+    }
+}
 
 /// Paste shortcut style for batch transcript insertion.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum, serde::Serialize, serde::Deserialize)]
@@ -323,7 +339,7 @@ pub(crate) fn smoke_test(mode: PasteMode) -> Result<()> {
 /// Open a text insertion handle.
 pub struct Injector {
     enigo: Option<Enigo>,
-    clipboard: Option<Clipboard>,
+    clipboard: Option<SystemClipboard>,
     #[cfg(target_os = "windows")]
     clipboard_history: Option<super::windows_clipboard_history::ClipboardHistoryListener>,
     #[cfg(target_os = "linux")]
@@ -333,20 +349,16 @@ pub struct Injector {
 }
 
 impl Injector {
-    /// Create an injector backed by the platform's keyboard API.
+    /// Create a lazy injector without opening a keyboard or clipboard connection.
     ///
     /// # Returns
     ///
-    /// A ready-to-use text inserter.
+    /// An inserter whose desktop resources are prepared by individual operations.
     ///
     /// # Errors
     ///
-    /// Returns an error if the current desktop session is unsupported or if
-    /// `enigo` cannot initialize the platform keyboard backend.
+    /// Desktop resource errors are reported when an operation prepares its handles.
     pub fn new() -> Result<Self> {
-        #[cfg(target_os = "linux")]
-        super::session::ensure_x11_session_supported()?;
-
         #[cfg(target_os = "windows")]
         let clipboard_history =
             match super::windows_clipboard_history::ClipboardHistoryListener::start() {
@@ -390,12 +402,14 @@ impl Injector {
     ///
     /// Returns an error if a required platform handle cannot be opened.
     pub fn prepare_for_mode(&mut self, mode: PasteMode) -> Result<()> {
+        #[cfg(target_os = "linux")]
+        super::session::ensure_x11_session_supported()?;
         if mode == PasteMode::Direct {
             let _keyboard = self.keyboard()?;
         }
 
         if mode != PasteMode::Direct && self.clipboard.is_none() {
-            self.clipboard = Some(Clipboard::new().context("could not open system clipboard")?);
+            self.clipboard = Some(SystemClipboard::new()?);
         }
 
         #[cfg(target_os = "linux")]
@@ -556,10 +570,10 @@ impl Injector {
         result
     }
 
-    fn take_clipboard(&mut self) -> Result<Clipboard> {
+    fn take_clipboard(&mut self) -> Result<SystemClipboard> {
         match self.clipboard.take() {
             Some(clipboard) => Ok(clipboard),
-            None => Clipboard::new().context("could not open system clipboard"),
+            None => SystemClipboard::new(),
         }
     }
 
@@ -764,7 +778,7 @@ fn platform_paste_smoke_test(mode: PasteMode) -> Result<()> {
 
 #[cfg(target_os = "windows")]
 fn platform_paste_smoke_test(mode: PasteMode) -> Result<()> {
-    super::windows_paste_smoke::windows_paste_smoke_test(mode)
+    windows_paste_smoke::windows_paste_smoke_test(mode)
 }
 
 /// Run the macOS `doctor --deep` insertion smoke test.

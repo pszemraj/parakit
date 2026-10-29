@@ -19,7 +19,7 @@ Windows builds need an installed runnable directory, not only `parakit.exe`. Cri
 
 `cargo build` works for development because `build.rs` copies the generated DLLs next to `parakit.exe` in the active Cargo target directory. That is normally `target\debug` or `target\release`, but `CARGO_TARGET_DIR` can move it.
 
-`cargo install --path .` is different: Cargo installs only `parakit.exe` into Cargo's bin directory. It does not copy the generated CrispASR, ggml, or OpenBLAS DLLs. Use `build.ps1` when you want a normal Windows install.
+`cargo install --path .` is different: Cargo installs executables into Cargo's bin directory but does not copy the generated CrispASR, ggml, or OpenBLAS DLLs. Use `build.ps1` when you want a normal Windows install.
 
 The script creates `target\parakit-windows-x86_64-<backend>`, installs it to `%LOCALAPPDATA%\Programs\parakit`, and adds that install directory to the Windows User `PATH`.
 

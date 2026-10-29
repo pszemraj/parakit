@@ -2,6 +2,17 @@
 
 use anyhow::{bail, Result};
 
+/// Whether the current graphical session uses Wayland rather than X11.
+///
+/// # Returns
+/// True for an explicit Wayland session or its display variable without a session type.
+pub(crate) fn is_wayland() -> bool {
+    linux_session_looks_wayland(
+        std::env::var("XDG_SESSION_TYPE").ok().as_deref(),
+        std::env::var("WAYLAND_DISPLAY").ok().as_deref(),
+    )
+}
+
 /// Ensure the current Linux desktop session is an X11 session.
 ///
 /// # Returns
@@ -18,7 +29,7 @@ pub(crate) fn ensure_x11_session_supported() -> Result<()> {
     if linux_session_looks_wayland(session_type.as_deref(), wayland_display.as_deref()) {
         let display = std::env::var("DISPLAY").unwrap_or_else(|_| "<unset>".to_string());
         bail!(
-            "Linux desktop automation is unsupported on Wayland sessions. Use an X11 session. XDG_SESSION_TYPE={}, DISPLAY={display}, WAYLAND_DISPLAY={wayland_display}",
+            "X11 desktop automation is unsupported on Wayland sessions. Use the IBus backend for GNOME Wayland. XDG_SESSION_TYPE={}, DISPLAY={display}, WAYLAND_DISPLAY={wayland_display}",
             session_type.as_deref().unwrap_or("<unset>"),
             wayland_display = wayland_display.as_deref().unwrap_or("<unset>")
         );

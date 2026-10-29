@@ -116,6 +116,26 @@ pub(super) struct MicIdentity {
     pub(super) sample_format: String,
 }
 
+impl MicIdentity {
+    /// Compare the CPAL device and format independently of optional source metadata.
+    ///
+    /// # Returns
+    /// Whether both identities describe the same CPAL device and stream format.
+    pub(super) fn same_device(&self, other: &Self) -> bool {
+        self.name == other.name
+            && self.input_rate == other.input_rate
+            && self.channels == other.channels
+            && self.sample_format == other.sample_format
+    }
+
+    /// Retain a confirmed source when reopening could not read its metadata.
+    pub(super) fn retain_source(&mut self, confirmed: &Self) {
+        if self.source_id.is_none() && self.same_device(confirmed) {
+            self.source_id.clone_from(&confirmed.source_id);
+        }
+    }
+}
+
 /// Pick the input device, preferring the OS default and physical inputs over virtual ones.
 ///
 /// # Returns
@@ -443,19 +463,22 @@ fn enhance_mic_info(info: &mut MicInfo, is_default: bool) {
     let Some(source) = pactl_default_source_info() else {
         return;
     };
+    apply_source_description(info, source);
+}
+
+/// Attach the physical source's label without replacing the opened CPAL format.
+///
+/// # Arguments
+/// * `info` - Description of the opened CPAL stream to enrich.
+/// * `source` - Physical source label and identifier from PulseAudio/PipeWire.
+#[cfg(target_os = "linux")]
+pub(super) fn apply_source_description(
+    info: &mut MicInfo,
+    source: super::super::pactl::PactlSourceInfo,
+) {
     let source_id = source.name.clone();
     info.name = source.description.unwrap_or(source.name);
-    if let Some(rate) = source.rate {
-        info.input_rate = rate;
-    }
-    if let Some(channels) = source.channels {
-        info.channels = channels;
-    }
-    if let Some(format) = source.sample_format {
-        info.sample_format = format;
-    }
     info.source_id = Some(source_id);
-    info.resampling = info.input_rate != TARGET_RATE;
 }
 
 #[cfg(not(target_os = "linux"))]

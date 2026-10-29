@@ -3,7 +3,7 @@
 use anyhow::{Context, Result};
 use std::time::{Duration, Instant};
 use x11rb::connection::Connection;
-use x11rb::protocol::xproto::{AtomEnum, ConnectionExt, Keycode, Screen, Window};
+use x11rb::protocol::xproto::{Atom, AtomEnum, ConnectionExt, Keycode, Screen, Window};
 use x11rb::rust_connection::RustConnection;
 
 /// X11 keysym for Space.
@@ -172,12 +172,32 @@ pub(crate) fn keycode_down(keys: &[u8; 32], keycode: Keycode) -> bool {
         .is_some_and(|byte| byte & (1_u8 << bit) != 0)
 }
 
+/// Resolve the active-window atom for an owned X11 connection.
+///
+/// # Arguments
+/// * `conn` - Connection whose server owns the atom.
+///
+/// # Returns
+/// The EWMH active-window property atom.
+///
+/// # Errors
+/// Reports a failed atom request or reply.
+pub(crate) fn active_window_atom(conn: &RustConnection) -> Result<Atom> {
+    Ok(conn
+        .intern_atom(false, b"_NET_ACTIVE_WINDOW")
+        .context("could not request X11 _NET_ACTIVE_WINDOW atom")?
+        .reply()
+        .context("could not read X11 _NET_ACTIVE_WINDOW atom")?
+        .atom)
+}
+
 /// Return the EWMH active toplevel window when the window manager exposes it.
 ///
 /// # Arguments
 ///
 /// * `conn` - Active X11 connection.
 /// * `root` - Root window for the active screen.
+/// * `atom` - Active-window atom resolved for this connection.
 ///
 /// # Returns
 ///
@@ -185,14 +205,12 @@ pub(crate) fn keycode_down(keys: &[u8; 32], keycode: Keycode) -> bool {
 ///
 /// # Errors
 ///
-/// Returns an error when X11 rejects the atom or property request.
-pub(crate) fn active_window(conn: &RustConnection, root: Window) -> Result<Option<Window>> {
-    let atom = conn
-        .intern_atom(false, b"_NET_ACTIVE_WINDOW")
-        .context("could not request X11 _NET_ACTIVE_WINDOW atom")?
-        .reply()
-        .context("could not read X11 _NET_ACTIVE_WINDOW atom")?
-        .atom;
+/// Returns an error when X11 rejects the property request.
+pub(crate) fn active_window(
+    conn: &RustConnection,
+    root: Window,
+    atom: Atom,
+) -> Result<Option<Window>> {
     let reply = conn
         .get_property(false, root, atom, AtomEnum::WINDOW, 0, 1)
         .context("could not request X11 _NET_ACTIVE_WINDOW")?
@@ -282,5 +300,100 @@ mod tests {
         keys[4] |= 1 << 5;
         assert!(keycode_down(&keys, 37));
         assert!(!keycode_down(&keys, 36));
+    }
+
+    #[cfg(feature = "ibus")]
+    #[test]
+    #[ignore = "requires isolated X11 and IBus with Parakit selected in an empty GTK field; pastes text"]
+    fn registered_hotkey_keeps_x11_target_with_selected_ibus_engine() -> Result<()> {
+        use crate::daemon::desktop::ibus::{IbusClient, NativeTarget};
+        use crate::daemon::desktop::inject::{ClipboardPolicy, Injector, PasteMode, PasteOutcome};
+        use crate::daemon::desktop::linux_insertion::FocusSource;
+        use crate::daemon::desktop::FocusVerification;
+        use global_hotkey::{
+            hotkey::{Code, HotKey, Modifiers},
+            GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState,
+        };
+        use x11rb::protocol::xproto::{KEY_PRESS_EVENT, KEY_RELEASE_EVENT};
+        use x11rb::protocol::xtest::ConnectionExt as _;
+
+        let client = IbusClient::start()?;
+        client.set_ready(true);
+        let ready = crate::daemon::poll_ticks(
+            Instant::now() + Duration::from_secs(3),
+            Duration::from_millis(20),
+        )
+        .any(|()| client.snapshot().is_some_and(NativeTarget::eligible));
+        anyhow::ensure!(
+            ready,
+            "focus an empty GTK field using Parakit's IBus source"
+        );
+
+        let source = FocusSource {
+            mode: PasteMode::Standard,
+            client: Some(client),
+            ..FocusSource::default()
+        };
+        let manager = GlobalHotKeyManager::new()
+            .map_err(|error| anyhow::anyhow!("initialize hotkey manager: {error}"))?;
+        let hotkey = HotKey::new(Some(Modifiers::CONTROL), Code::Space);
+        manager
+            .register(hotkey)
+            .map_err(|error| anyhow::anyhow!("register Ctrl+Space: {error}"))?;
+        let receiver = GlobalHotKeyEvent::receiver();
+        while receiver.try_recv().is_ok() {}
+
+        let (connection, screen_number) = RustConnection::connect(None)?;
+        let root = root_window(&connection, screen_number)?;
+        let control = keycode_for_keysym(&connection, CONTROL_L_KEYSYM)?;
+        let space = keycode_for_keysym(&connection, SPACE_KEYSYM)?;
+        let send_key = |keycode, event_type| -> Result<()> {
+            connection
+                .xtest_fake_input(event_type, keycode, 0, root, 0, 0, 0)?
+                .check()?;
+            Ok(())
+        };
+        let captured = (|| {
+            send_key(control, KEY_PRESS_EVENT)?;
+            send_key(space, KEY_PRESS_EVENT)?;
+            let deadline = Instant::now() + Duration::from_secs(2);
+            loop {
+                let event = receiver
+                    .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+                    .context("wait for registered Ctrl+Space press")?;
+                if event.id == hotkey.id() && event.state == HotKeyState::Pressed {
+                    break source.capture();
+                }
+            }
+        })();
+        let release_space = send_key(space, KEY_RELEASE_EVENT);
+        let release_control = send_key(control, KEY_RELEASE_EVENT);
+        let unregister = manager
+            .unregister(hotkey)
+            .map_err(|error| anyhow::anyhow!("unregister Ctrl+Space: {error}"));
+        let focus = captured?;
+        release_space?;
+        release_control?;
+        unregister?;
+        anyhow::ensure!(
+            !focus.is_native(),
+            "registered X11 PTT selected native insertion"
+        );
+
+        let baseline = arboard::Clipboard::new()?.get_text()?;
+        let mut injector = Injector::new()?;
+        let report = injector.paste_text_guarded(
+            "Registered X11 café 世界",
+            PasteMode::Standard,
+            ClipboardPolicy::RestorePrevious,
+            Some(&focus),
+            || Ok(focus.verify_current()? == FocusVerification::Matched),
+        )?;
+        anyhow::ensure!(
+            report.outcome == PasteOutcome::Pasted,
+            "registered X11 paste did not complete: {report:?}"
+        );
+        assert_eq!(arboard::Clipboard::new()?.get_text()?, baseline);
+        Ok(())
     }
 }

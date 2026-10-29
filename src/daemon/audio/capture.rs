@@ -26,11 +26,13 @@ use device::selected_mic_info;
 pub use device::MicInfo;
 #[path = "capture_drain.rs"]
 mod drain;
+#[path = "capture_monitor.rs"]
+mod monitor;
 #[path = "capture_stream.rs"]
 mod stream;
 use stream::audio_manager_loop;
 
-/// Reusable capacity for ordinary dictation bursts.
+/// Initial reservation for ordinary dictation bursts.
 const RECORDING_CAPACITY: usize = TARGET_RATE as usize * 90;
 /// Hard cap for one held recording to prevent unbounded memory growth.
 const RECORDING_HARD_CAP_HEADROOM_SECONDS: usize = 30;
@@ -158,6 +160,17 @@ impl AudioHandle {
     ///
     /// Panics if the test audio-manager thread cannot be spawned.
     pub(crate) fn test_handle() -> Self {
+        Self::test_handle_with_start_samples(Vec::new())
+    }
+
+    /// Build a test handle that captures `samples` before acknowledging Start.
+    ///
+    /// # Returns
+    /// An isolated handle for checking audio captured before worker admission.
+    ///
+    /// # Panics
+    /// Panics if the test audio-manager thread cannot be spawned.
+    pub(crate) fn test_handle_with_start_samples(samples: Vec<f32>) -> Self {
         let state = Arc::new(Mutex::new(CaptureState::new()));
         let session_epoch = Arc::new(AtomicU64::new(0));
         let (control, control_rx) = bounded(4);
@@ -171,6 +184,7 @@ impl AudioHandle {
                         AudioControl::Start { epoch, ack } => {
                             manager_state.lock().begin_recording(true);
                             manager_epoch.store(epoch, Ordering::Release);
+                            append_processed_samples(&manager_state, &manager_epoch, &samples);
                             let _ = ack.send(Ok(()));
                         }
                         AudioControl::Stop { ack } => {
@@ -197,6 +211,11 @@ impl AudioHandle {
     /// `true` when the session epoch is non-zero.
     pub(crate) fn test_is_recording(&self) -> bool {
         self.session_epoch.load(Ordering::Acquire) != 0
+    }
+
+    /// Feed processed PCM through the production epoch and recording buffer logic.
+    pub(crate) fn test_append_samples(&self, samples: &[f32]) {
+        append_processed_samples(&self.state, &self.session_epoch, samples);
     }
 }
 

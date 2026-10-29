@@ -17,11 +17,9 @@ const REQUIRE_VERIFIED_FOCUS: bool = cfg!(any(target_os = "macos", target_os = "
 /// Initialize the insertion backend for the worker's configured paste mode.
 ///
 /// # Returns
-///
 /// An injector ready for insertion.
 ///
 /// # Errors
-///
 /// Reports unavailable platform insertion facilities.
 pub(super) fn prepared_injector(paste_mode: PasteMode) -> Result<Injector> {
     let mut injector = Injector::new()?;
@@ -32,7 +30,6 @@ pub(super) fn prepared_injector(paste_mode: PasteMode) -> Result<Injector> {
 /// Retain transcripts for recovery unless sanitization intentionally skipped them.
 ///
 /// # Returns
-///
 /// Whether the outcome belongs in the in-memory transcript history.
 pub(super) fn insertion_result_remembers_transcript(result: &Result<InsertReport>) -> bool {
     !matches!(
@@ -44,49 +41,31 @@ pub(super) fn insertion_result_remembers_transcript(result: &Result<InsertReport
     )
 }
 
-/// Return telemetry retained by an insertion error, when the failure happened
-/// after a backend had already posted some direct input.
+/// Return delivery evidence retained by an insertion or clipboard-recovery failure.
 ///
 /// # Returns
-///
-/// The retained report for a progress-aware insertion error, otherwise `None`.
+/// The retained native/direct report, otherwise `None`.
 pub(super) fn insertion_error_report(error: &anyhow::Error) -> Option<&InsertReport> {
     error
         .downcast_ref::<ReportedInsertionError>()
         .map(|error| &error.report)
 }
 
-/// Write an insertion-outcome telemetry record correlated with the
-/// transcription record `record_id` refers to.
-///
-/// A no-op when `data_log` or `record_id` is `None`, which happens whenever
-/// data logging is disabled or the transcription record itself failed to log.
+/// Write insertion telemetry for a logged transcription; absent logger/id is a no-op.
 ///
 /// # Arguments
-///
 /// * `data_log` - Optional shared transcription logger.
-/// * `record_id` - Identifier of the transcription record to correlate with.
+/// * `record_id` - Transcription record to correlate with.
 /// * `outcome` - Coarse insertion result label.
-/// * `focus_at_start` - Focus captured before insertion became eligible, used
-///   to recover a target bundle identifier on platforms that expose one.
-/// * `transcript_chars` - Character count of the transcript offered for
-///   insertion.
+/// * `focus_at_start` - Original target, including its bundle ID when available.
+/// * `transcript_chars` - Character count offered for insertion.
 /// * `failure_reason` - Error or degraded-outcome diagnostic text.
-/// * `focus_verification` - How focus was verified before insertion, as
-///   observed by the last live recheck performed for this attempt (or
-///   `"not_applicable"` when insertion never reached a focus check, e.g.
-///   sanitizer skip/copy-only paths and PTT audio simulation).
-/// * `report` - Real acknowledgement/clipboard telemetry for this attempt,
-///   when one is available (every `Ok` insertion result and a partial direct
-///   backend error have one; `None` for PTT audio simulation and errors that
-///   fail before observable input).
+/// * `focus_verification` - Last live recheck label, or `"not_applicable"` without a check.
+/// * `report` - Observed acknowledgement/clipboard details, absent before observable input.
+/// * `paste_mode` - Content policy and legacy direct-typing selection.
 #[allow(
     clippy::too_many_arguments,
-    reason = "each parameter is an independently observed fact about one insertion (logger, \
-              record id, outcome, focus at start, transcript length, failure reason, focus \
-              verification, and paste report); the three call sites each learn these at \
-              different points, so bundling them into a struct would only move the argument \
-              list to the construction site"
+    reason = "insertion telemetry combines independently observed facts"
 )]
 pub(super) fn log_insertion_outcome(
     data_log: &Option<Arc<DataLogger>>,
@@ -97,6 +76,7 @@ pub(super) fn log_insertion_outcome(
     failure_reason: Option<String>,
     focus_verification: &'static str,
     report: Option<&InsertReport>,
+    paste_mode: PasteMode,
 ) {
     let (Some(data_log), Some(record_id)) = (data_log, record_id) else {
         return;
@@ -108,14 +88,23 @@ pub(super) fn log_insertion_outcome(
     data_log.log_insertion(
         &record_id,
         InsertionLogFields {
+            insertion_backend: report.map(|_| {
+                #[cfg(target_os = "linux")]
+                if focus_at_start.is_some_and(FocusSnapshot::is_native) {
+                    return "ibus";
+                }
+                if paste_mode == PasteMode::Direct {
+                    "direct"
+                } else {
+                    "clipboard"
+                }
+            }),
             outcome,
             target_bundle_id,
             focus_verification,
             transcript_chars,
             paste_event_posted: telemetry.paste_event_posted,
-            // NSPasteboard/Carbon promise-keeper read evidence is a
-            // deferred follow-up (see `daemon::macos::pasteboard` module
-            // docs); no call site can populate this yet.
+            // Clipboard-read evidence is unavailable from the current backends.
             pasteboard_requested: None,
             acknowledgement_kind: telemetry.acknowledgement_kind,
             acknowledgement_ms: telemetry.acknowledgement_ms,
@@ -125,25 +114,18 @@ pub(super) fn log_insertion_outcome(
     );
 }
 
-/// Focus snapshot captured before insertion became eligible, paired with the
-/// telemetry cell that records the label of the last live focus recheck
-/// performed against it. Bundled together because every insertion call site
-/// that reads one also updates the other.
+/// Original focus snapshot and the telemetry label of its last live recheck.
 #[derive(Clone, Copy)]
 pub(crate) struct FocusCheck<'a> {
     /// Focus captured at PTT-down, when capture succeeded.
     pub(crate) snapshot: Option<&'a FocusSnapshot>,
-    /// Updated with the telemetry label of the last live focus recheck
-    /// performed against `snapshot`. Left at its initial value when
-    /// insertion never reaches a focus check (e.g. sanitizer skip/copy-only
-    /// paths).
+    /// Last live recheck label; unchanged when insertion needs no focus check.
     pub(crate) verification: &'a Cell<&'static str>,
 }
 
 /// Sanitize text and run the shared paste/copy insertion transaction.
 ///
 /// # Arguments
-///
 /// * `injector` - Reused insertion backend, created lazily when needed.
 /// * `raw_text` - Candidate transcript or IPC text.
 /// * `mode` - Paste mode used for sanitizer policy and chord selection.
@@ -152,11 +134,9 @@ pub(crate) struct FocusCheck<'a> {
 /// * `ui` - Daemon logger and desktop notification wrapper.
 ///
 /// # Returns
-///
 /// Worker insertion outcome plus acknowledgement/clipboard telemetry.
 ///
 /// # Errors
-///
 /// Returns an error if clipboard staging, injector initialization, or paste fails.
 pub(crate) fn insert_text(
     injector: &mut Option<Injector>,
@@ -167,38 +147,51 @@ pub(crate) fn insert_text(
     ui: (&Logger, &Notifier),
 ) -> Result<InsertReport> {
     let (log, notifier) = ui;
-    let result = match sanitize_for_paste(raw_text, mode) {
-        PastePlan::Paste(text) => paste_transcript(
-            injector,
-            &text,
-            mode,
-            keep_transcript_clipboard,
-            focus,
-            log,
-            notifier,
-        ),
-        PastePlan::CopyOnly { text, reason } => {
-            log.warn(format!("paste blocked by sanitizer ({})", reason.log_tag()));
-            copy_or_block_transcript(
+    let mut perform_insertion = || {
+        #[cfg(target_os = "linux")]
+        if focus.snapshot.is_some_and(FocusSnapshot::is_native) {
+            return insert_native(injector, raw_text, mode, focus, (log, notifier));
+        }
+        log.verbose(format!(
+            "parakit: insertion transport={}",
+            if mode == PasteMode::Direct {
+                "direct"
+            } else {
+                "clipboard"
+            }
+        ));
+        match sanitize_for_paste(raw_text, mode) {
+            PastePlan::Paste(text) => paste_transcript(
                 injector,
                 &text,
+                mode,
                 keep_transcript_clipboard,
-                "sanitized transcript clipboard fallback failed",
-                reason,
+                focus,
                 log,
                 notifier,
-            )
-        }
-        PastePlan::Skip { reason } => {
-            log.verbose(format!("paste skipped by sanitizer: {}", reason.log_tag()));
-            Ok(InsertReport::placeholder(InsertOutcome::Skipped, false))
+            ),
+            PastePlan::CopyOnly { text, reason } => {
+                log.warn(format!("paste blocked by sanitizer ({})", reason.log_tag()));
+                copy_or_block_transcript(
+                    injector,
+                    &text,
+                    keep_transcript_clipboard,
+                    "sanitized transcript clipboard fallback failed",
+                    reason,
+                    log,
+                    notifier,
+                )
+            }
+            PastePlan::Skip { reason } => {
+                log.verbose(format!("paste skipped by sanitizer: {}", reason.log_tag()));
+                Ok(InsertReport::placeholder(InsertOutcome::Skipped, false))
+            }
         }
     };
-    if let Err(error) = &result {
+    perform_insertion().inspect_err(|error| {
         let typed_chars = insertion_error_report(error).and_then(|report| report.typed_chars);
         notifier.insertion_failed(typed_chars);
-    }
-    result
+    })
 }
 
 fn paste_transcript(
@@ -324,6 +317,125 @@ fn paste_transcript(
     Err(paste_error)
 }
 
+/// Apply content policy and submit once to the recording's native target.
+#[cfg(target_os = "linux")]
+fn insert_native(
+    injector: &mut Option<Injector>,
+    raw_text: &str,
+    mode: PasteMode,
+    focus: FocusCheck<'_>,
+    ui: (&Logger, &Notifier),
+) -> Result<InsertReport> {
+    use crate::daemon::desktop::ibus::CommitOutcome;
+    let (log, notifier) = ui;
+    let plan = sanitize_for_paste(raw_text, mode);
+    let text = match plan {
+        PastePlan::Paste(text) | PastePlan::CopyOnly { text, .. } => text,
+        PastePlan::Skip { .. } => {
+            return Ok(InsertReport::placeholder(InsertOutcome::Skipped, false));
+        }
+    };
+    let terminal_blocked =
+        mode == PasteMode::Terminal && (text.contains('\t') || text.contains('\n'));
+    let (outcome, kind, reason, recovery_reason) = if terminal_blocked {
+        let reason = "terminal content policy blocked native tabs or embedded newlines".to_owned();
+        log.warn(&reason);
+        (
+            InsertOutcome::Blocked,
+            "not_applicable",
+            reason,
+            PasteBlockReason::NativeTerminalControls,
+        )
+    } else {
+        match focus
+            .snapshot
+            .expect("native insertion has a captured route")
+            .commit_native(&text)
+        {
+            CommitOutcome::Submitted => {
+                focus.verification.set("matched");
+                log.verbose(
+                "parakit: transcript submitted through IBus; application reception is unconfirmed",
+            );
+                let mut report = InsertReport::placeholder(InsertOutcome::Submitted, false);
+                report.telemetry.acknowledgement_kind = "ibus_submitted";
+                return Ok(report);
+            }
+            CommitOutcome::Rejected(reason) => {
+                // Rejection does not distinguish target drift from connection loss.
+                focus.verification.set("not_applicable");
+                log.warn(format!("IBus insertion rejected: {reason}"));
+                (
+                    InsertOutcome::Blocked,
+                    "ibus_rejected",
+                    reason,
+                    PasteBlockReason::NativeRejected,
+                )
+            }
+            CommitOutcome::Uncertain(reason) => {
+                focus.verification.set("not_applicable");
+                log.warn(format!(
+                    "IBus delivery is uncertain: {reason}; automatic insertion will not be retried"
+                ));
+                (
+                    InsertOutcome::Uncertain,
+                    "ibus_uncertain",
+                    reason,
+                    PasteBlockReason::NativeUncertain,
+                )
+            }
+        }
+    };
+    let mut report = InsertReport::placeholder(outcome, false);
+    report.telemetry.acknowledgement_kind = kind;
+    report.failure_reason = Some(reason);
+    let recovery = copy_or_block_transcript(
+        injector,
+        &text,
+        // Failed native delivery must remain recoverable even with history
+        // disabled; the successful-paste clipboard preference does not apply.
+        true,
+        "native transcript clipboard recovery failed",
+        recovery_reason,
+        log,
+        notifier,
+    );
+    finish_native_recovery(report, recovery)
+}
+
+/// Retain native delivery evidence while recording clipboard recovery separately.
+#[cfg(target_os = "linux")]
+fn finish_native_recovery(
+    mut native: InsertReport,
+    recovery: Result<InsertReport>,
+) -> Result<InsertReport> {
+    match recovery {
+        Ok(recovery) => {
+            if native.outcome != InsertOutcome::Uncertain {
+                native.outcome = recovery.outcome;
+            }
+            native.telemetry.clipboard_restored = recovery.telemetry.clipboard_restored;
+            if let Some(diagnostic) = recovery.failure_reason {
+                let reason = native.failure_reason.get_or_insert_with(String::new);
+                reason.push_str("; ");
+                reason.push_str(&diagnostic);
+            }
+            Ok(native)
+        }
+        Err(error) => Err(ReportedInsertionError {
+            message: format!(
+                "{}; clipboard recovery failed: {error:#}",
+                native
+                    .failure_reason
+                    .as_deref()
+                    .unwrap_or("native insertion failed")
+            ),
+            report: native,
+        }
+        .into()),
+    }
+}
+
 /// Report the actual paste outcome through the worker's existing UI channels.
 fn finish_paste(
     report: crate::daemon::inject::PasteReport,
@@ -387,9 +499,7 @@ fn log_clipboard_changed(log: &Logger, diagnostic: Option<&str>) {
     }
 }
 
-/// Report secondary clipboard details only in verbose output after delivery.
-/// A false restoration flag can mean deliberate retention or a failed write;
-/// the insertion record retains the diagnostic in either case.
+/// Log secondary clipboard details after delivery, retaining primary diagnostics in telemetry.
 fn log_clipboard_restore_diagnostic(
     log: &Logger,
     keep_transcript_clipboard: bool,
@@ -505,10 +615,9 @@ fn paste_failure_uses_clipboard_fallback(
     error: &anyhow::Error,
     keep_transcript_clipboard: bool,
 ) -> bool {
-    let message = format!("{error:#}");
     keep_transcript_clipboard
         && mode != PasteMode::Direct
-        && !message.contains(crate::daemon::inject::CLIPBOARD_RESTORE_ERROR)
+        && !error.is::<crate::daemon::inject::ClipboardRestoreError>()
 }
 
 fn clipboard_policy(keep_transcript_clipboard: bool) -> ClipboardPolicy {
@@ -519,16 +628,10 @@ fn clipboard_policy(keep_transcript_clipboard: bool) -> ClipboardPolicy {
     }
 }
 
-/// Decide whether insertion may proceed for `focus.snapshot`, recording the
-/// telemetry label for this check into `focus.verification`.
+/// Check the original target and record its live verification label.
 ///
 /// # Arguments
-///
-/// * `focus` - Focus snapshot captured before insertion became eligible,
-///   plus the telemetry cell this check's label is recorded into:
-///   `"unavailable"` when no snapshot was captured at PTT-down, or the
-///   platform's live verification label otherwise (see
-///   [`FocusSnapshot::verify_current`]).
+/// * `focus` - Original target and telemetry cell; missing targets record `"unavailable"`.
 /// * `log` - Daemon logger used for diagnostics.
 fn focus_allows_insertion(focus: FocusCheck<'_>, log: &Logger) -> bool {
     let Some(snapshot) = focus.snapshot else {
@@ -639,12 +742,7 @@ pub(crate) enum PastePlan {
     },
 }
 
-/// Why an utterance was not pasted automatically.
-///
-/// Carries two renderings of the same fact because the two consumers have
-/// different audiences: [`Self::log_tag`] is a lowercase fragment that reads
-/// correctly inside a parenthesized log line, and [`Self::notice`] is the
-/// sentence shown in a desktop notification.
+/// Why automatic insertion stopped, with log and notification descriptions.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum PasteBlockReason {
     /// Nothing printable survived sanitization.
@@ -668,14 +766,19 @@ pub(crate) enum PasteBlockReason {
     UnconfirmedClipboardChanged,
     /// Clipboard contents changed or could not be verified during insertion.
     ClipboardChanged,
+    /// Native insertion rejected its captured target.
+    #[cfg(target_os = "linux")]
+    NativeRejected,
+    /// Native insertion may have submitted text before losing its reply.
+    #[cfg(target_os = "linux")]
+    NativeUncertain,
+    /// Terminal content cannot be sent through the input method automatically.
+    #[cfg(target_os = "linux")]
+    NativeTerminalControls,
 }
 
 impl PasteBlockReason {
-    /// Lowercase fragment for log lines.
-    ///
-    /// # Returns
-    ///
-    /// A short phrase with no leading capital and no trailing period.
+    /// Return a lowercase insertion-stop reason for logs.
     fn log_tag(self) -> &'static str {
         match self {
             Self::EmptyAfterSanitization => "empty transcript after sanitization",
@@ -687,19 +790,27 @@ impl PasteBlockReason {
             Self::Unconfirmed => "paste not acknowledged",
             Self::UnconfirmedClipboardChanged => "paste not acknowledged and clipboard replaced",
             Self::ClipboardChanged => "clipboard changed or unavailable",
+            #[cfg(target_os = "linux")]
+            Self::NativeRejected => "native insertion rejected",
+            #[cfg(target_os = "linux")]
+            Self::NativeUncertain => "native delivery uncertain",
+            #[cfg(target_os = "linux")]
+            Self::NativeTerminalControls => "terminal content blocked native insertion",
         }
     }
 
-    /// Sentence shown in the desktop notification body.
-    ///
-    /// # Returns
-    ///
-    /// A capitalized, punctuated sentence.
+    /// Return the insertion-stop explanation for desktop notifications.
     fn notice(self) -> &'static str {
         match self {
             Self::EmptyAfterSanitization => "Transcript was empty after cleanup.",
             Self::MultilineTerminal => "Multi-line transcript; terminal mode does not auto-paste.",
             Self::BackendUnavailable => "Paste backend was unavailable.",
+            #[cfg(target_os = "linux")]
+            Self::NativeRejected => "Native insertion was rejected. Recover the transcript from the clipboard or history.",
+            #[cfg(target_os = "linux")]
+            Self::NativeUncertain => "Native delivery is uncertain. Inspect the target before manually inserting the recovered transcript.",
+            #[cfg(target_os = "linux")]
+            Self::NativeTerminalControls => "Terminal content policy blocked automatic native insertion.",
             Self::FocusChangedBeforeInsertion => "Focus changed before insertion.",
             Self::FocusChangedBeforePaste => "Focus changed immediately before paste.",
             Self::UnsafeModifiers => {
@@ -711,9 +822,6 @@ impl PasteBlockReason {
             Self::UnconfirmedClipboardChanged => {
                 "Paste could not be confirmed and the clipboard changed. Inspect the target before retrying."
             }
-            // The unacknowledged tier is only reachable where a platform
-            // overrides `await_paste_confirmation` (macOS today), but name
-            // the right chord for whatever platform this compiles for.
             #[cfg(target_os = "macos")]
             Self::Unconfirmed => {
                 "Paste could not be confirmed; transcript copied. Press Cmd+V to insert it."
@@ -729,11 +837,14 @@ impl PasteBlockReason {
 /// Result of a worker-level insertion attempt.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum InsertOutcome {
+    /// Native input method emitted text without application reception evidence.
+    #[cfg(target_os = "linux")]
+    Submitted,
+    /// Native text may have been submitted before its reply was lost.
+    #[cfg(target_os = "linux")]
+    Uncertain,
     Pasted,
-    /// The paste chord was sent, but insertion could not be positively
-    /// confirmed within the acknowledgement grace period. Treated as a
-    /// success; clipboard disposition depends on the acknowledgement path and
-    /// is reported separately in telemetry.
+    /// Paste was sent without confirmation; telemetry records clipboard disposition.
     PastedUnverified,
     CopiedOnly,
     Blocked,
@@ -748,6 +859,10 @@ impl InsertOutcome {
     /// A lowercase, `snake_case` outcome label.
     pub(super) fn log_label(self) -> &'static str {
         match self {
+            #[cfg(target_os = "linux")]
+            Self::Submitted => "submitted",
+            #[cfg(target_os = "linux")]
+            Self::Uncertain => "uncertain",
             Self::Pasted => "pasted",
             Self::PastedUnverified => "pasted_unverified",
             Self::CopiedOnly => "copied_only",
@@ -757,10 +872,7 @@ impl InsertOutcome {
     }
 }
 
-/// Insertion outcome plus the real acknowledgement/clipboard telemetry
-/// needed for [`log_insertion_outcome`], replacing the pre-acknowledgement
-/// approximations (`paste_event_posted` inferred from the outcome label,
-/// `clipboard_restored` always `None`).
+/// Insertion outcome and observed acknowledgement/clipboard telemetry.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct InsertReport {
     /// Coarse worker-level insertion result.
@@ -788,8 +900,7 @@ impl fmt::Display for ReportedInsertionError {
 impl std::error::Error for ReportedInsertionError {}
 
 impl InsertReport {
-    /// Build a report from a completed [`crate::daemon::inject::PasteReport`],
-    /// carrying its real acknowledgement/clipboard telemetry through.
+    /// Retain a completed paste's acknowledgement and clipboard telemetry.
     fn from_paste(outcome: InsertOutcome, report: crate::daemon::inject::PasteReport) -> Self {
         Self {
             outcome,
@@ -799,8 +910,7 @@ impl InsertReport {
         }
     }
 
-    /// Build a report for a path with no acknowledgement or clipboard
-    /// telemetry at all (direct-mode insertion/block, or sanitizer skip).
+    /// Build a report before acknowledgement or clipboard observations exist.
     fn placeholder(outcome: InsertOutcome, paste_event_posted: bool) -> Self {
         Self {
             outcome,
@@ -820,26 +930,21 @@ impl InsertReport {
         }
     }
 
-    /// Whether this outcome should play the daemon's error tone instead of
-    /// its success tone.
-    ///
-    /// [`InsertOutcome::Blocked`] and [`InsertOutcome::Skipped`] always alarm:
-    /// neither delivered text. A post-chord
-    /// [`InsertOutcome::CopiedOnly`] (a paste chord was actually sent but
-    /// insertion was never confirmed) is a safe degradation, not a backend
-    /// failure, but the user still needs to know the paste did not land; a
-    /// pre-chord `CopiedOnly` (no chord was ever sent — guard-blocked, focus
-    /// changed before paste, or held modifiers withheld the chord) keeps the
-    /// quieter existing behavior.
+    /// Alarm for blocked, skipped, or uncertain delivery, and unconfirmed posted pastes.
+    /// Copy-only recovery before any paste chord uses the quieter success cue.
     ///
     /// # Returns
     ///
     /// `true` when the daemon should play its error tone for this outcome.
     pub(super) fn needs_alert(&self) -> bool {
-        matches!(
+        let blocked = matches!(
             self.outcome,
             InsertOutcome::Blocked | InsertOutcome::Skipped
-        ) || (self.outcome == InsertOutcome::CopiedOnly && self.telemetry.paste_event_posted)
+        );
+        #[cfg(target_os = "linux")]
+        let blocked = blocked || self.outcome == InsertOutcome::Uncertain;
+        blocked
+            || (self.outcome == InsertOutcome::CopiedOnly && self.telemetry.paste_event_posted)
             || (self.outcome == InsertOutcome::PastedUnverified
                 && self.telemetry.acknowledgement_kind == "no_evidence")
     }

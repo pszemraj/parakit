@@ -8,15 +8,15 @@ Install Rust via [rustup](https://rustup.rs) if you do not already have a toolch
 
 ## Native Dependencies
 
-Cargo handles Rust packages. System packages are still needed for audio, desktop input, X11/XTest insertion, CMake, and optional accelerator SDKs.
+Cargo handles Rust packages. System packages are still needed for audio, IBus input, X11/XTest fallback insertion, CMake, and optional accelerator SDKs.
 
 CMake 3.19 or newer is required for bundled builds.
 
 | OS | Packages |
 | --- | --- |
-| Ubuntu 24.04 | `cmake build-essential libasound2-dev libxtst-dev libxi-dev libx11-dev libxkbcommon-dev libevdev-dev libxdo-dev libgomp1 pkg-config` |
-| Fedora | `cmake gcc-c++ alsa-lib-devel libXtst-devel libXi-devel libX11-devel libxkbcommon-devel libevdev-devel xdotool-devel pkgconf` |
-| Arch | `cmake base-devel alsa-lib libxtst libxi libx11 libxkbcommon libevdev xdotool pkgconf` |
+| Ubuntu 24.04 | `cmake build-essential libasound2-dev libibus-1.0-dev libxtst-dev libxi-dev libx11-dev libxkbcommon-dev libevdev-dev libxdo-dev libgomp1 pkg-config` |
+| Fedora | `cmake gcc-c++ alsa-lib-devel ibus-devel libXtst-devel libXi-devel libX11-devel libxkbcommon-devel libevdev-devel xdotool-devel pkgconf` |
+| Arch | `cmake base-devel alsa-lib ibus libxtst libxi libx11 libxkbcommon libevdev xdotool pkgconf` |
 | Windows | Visual Studio 2022 with the "Desktop development with C++" workload, plus CMake on `PATH`. Windows bundle prerequisites and procedures are in the [Windows build guide](../scripts/windows/README.md). |
 | macOS | Apple Silicon with Xcode command line tools plus `cmake pkg-config`. |
 
@@ -44,7 +44,15 @@ Linux developer install:
 cargo install --locked --path .
 ```
 
-`cargo install --locked --path .` installs the release binary to Cargo's bin directory, usually `~/.cargo/bin`, using the validated `Cargo.lock` dependency set that supports the declared Rust 1.87 minimum.
+`cargo install --locked --path .` installs the release executables to Cargo's bin directory, usually `~/.cargo/bin`, using the validated `Cargo.lock` dependency set that supports the declared Rust 1.87 minimum.
+
+Linux builds enable IBus by default. Complete the one-time [IBus registration and input-source setup](linux-desktop.md#ibus-setup) after installing. To build an X11-only daemon without the IBus dependency:
+
+```bash
+cargo install --locked --path . --no-default-features --features bundled,daemon
+```
+
+That build retains X11 clipboard paste and direct typing, and cannot provide native GNOME Wayland dictation. Add `--features cuda` or `--features vulkan` when the corresponding accelerator is wanted.
 
 Install behavior:
 
@@ -74,12 +82,18 @@ cargo build --locked --bin parakit --example transcribe-file
 "$CARGO_TARGET_DIR/debug/parakit" --version
 ```
 
+For Linux IBus validation, also build the sibling engine in the same target directory:
+
+```bash
+cargo build --locked --bin parakit-ibus
+```
+
 For Linux CUDA/Vulkan validation, use a separate GPU directory. This RTX 5090 example requires a CUDA Toolkit that supports architecture 120:
 
 ```bash
 export CARGO_TARGET_DIR="$PWD/target/tmp/validation/cargo-gpu"
 export PARAKIT_CUDA_ARCHS=120-real
-cargo build --locked --features cuda,vulkan --bin parakit --example transcribe-file
+cargo build --locked --features cuda,vulkan --bin parakit --bin parakit-ibus --example transcribe-file
 ```
 
 Use the architecture supported by your GPU and toolkit. Reuse the same directory, feature set, profile, and native build settings for subsequent builds. Changing them can require another native compile; `cargo check` does not produce the runnable binaries. An existing directory built with `--all-features` should keep that feature set when rebuilding; Linux intentionally ignores the unsupported Metal feature.
@@ -128,7 +142,7 @@ sudo apt install libopenblas-dev
 PARAKIT_BLAS=openblas cargo install --locked --path .
 ```
 
-OpenBLAS prefix detection recognizes `PARAKIT_OPENBLAS_ROOT`, `OPENBLAS_ROOT`, `OpenBLAS_ROOT`, `OPENBLAS_HOME`, active Conda environments, `CMAKE_PREFIX_PATH`, vcpkg installs, and, outside Windows, `HOMEBREW_PREFIX`. It also checks common Conda and native installation prefixes on Windows and `/usr/local`, `/usr`, `/opt/openblas`, and `/opt/OpenBLAS` elsewhere. Explicit `BLAS_INCLUDE_DIRS` plus `BLAS_LIBRARIES` remain the final manual override.
+Linux and Windows OpenBLAS prefix detection recognizes `PARAKIT_OPENBLAS_ROOT`, `OPENBLAS_ROOT`, `OpenBLAS_ROOT`, `OPENBLAS_HOME`, active Conda environments, `CMAKE_PREFIX_PATH`, and vcpkg installs; Linux also checks `HOMEBREW_PREFIX`. It also checks common Conda and native installation prefixes on Windows and `/usr/local`, `/usr`, `/opt/openblas`, and `/opt/OpenBLAS` on Linux. Explicit `BLAS_INCLUDE_DIRS` plus `BLAS_LIBRARIES` remain the final manual override.
 
 Explicit `PARAKIT_BLAS` builds print the requested and selected modes as a Cargo warning, and `parakit --verbose doctor` reports the selected mode on its `cpu:` line.
 
@@ -180,4 +194,4 @@ otool -L target/debug/build/parakit-*/out/lib/libggml.dylib
 otool -l target/debug/parakit | grep -A2 LC_RPATH
 ```
 
-Metal build and runtime checks are in [model-validation.md#macos-cpu-and-metal](dev/model-validation.md#macos-cpu-and-metal).
+See [macOS CPU and Metal validation](dev/model-validation.md#macos-cpu-and-metal) for build and runtime checks.

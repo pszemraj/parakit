@@ -242,7 +242,7 @@ fn stream_config_range(
 }
 
 #[test]
-fn audio_handle_reuses_recording_capacity_after_stop() {
+fn audio_handle_preserves_recording_reservation_after_stop() {
     let handle = AudioHandle::test_handle();
 
     handle.start_recording().expect("recording should start");
@@ -477,6 +477,35 @@ fn audio_drain_drop_stops_thread() {
 }
 
 #[test]
+fn audio_drain_drop_retains_queued_pcm_and_resampler_tail_during_recording() {
+    for rate in [TARGET_RATE, 48_000] {
+        let mut drain = spawn_test_audio_drain(
+            1_024,
+            CapturePipeline {
+                resampler: make_resampler(rate).expect("resampler"),
+            },
+        );
+        send_drain_start(&drain.control_tx, 7, false);
+        let state = Arc::clone(&drain.state);
+        let session_epoch = Arc::clone(&drain.session_epoch);
+        let retained = vec![0.75, -0.75];
+        state.lock().buffer = retained.clone();
+        let samples = vec![0.25; 100];
+        assert_eq!(drain.producer.push_slice(&samples), samples.len());
+
+        drop(drain);
+
+        let state = state.lock();
+        let expected_tail =
+            (samples.len() as f64 * f64::from(TARGET_RATE) / f64::from(rate)).ceil() as usize;
+        assert_eq!(state.buffer.len(), retained.len() + expected_tail);
+        assert_eq!(&state.buffer[..retained.len()], retained.as_slice());
+        assert_eq!(session_epoch.load(Ordering::Acquire), 7);
+        assert!(state.pre_roll.is_empty());
+    }
+}
+
+#[test]
 fn stop_recording_flushes_resampler_tail_and_keeps_next_pre_roll_clean() {
     let mut drain = spawn_test_audio_drain(
         48_000,
@@ -529,6 +558,7 @@ struct TestAudioDrain {
     producer: HeapProd<f32>,
     wake_tx: Sender<()>,
     control_tx: Sender<DrainControl>,
+    state: Arc<Mutex<CaptureState>>,
     session_epoch: Arc<AtomicU64>,
     _drain: AudioDrain,
 }
@@ -545,7 +575,7 @@ fn spawn_test_audio_drain(capacity: usize, pipeline: CapturePipeline) -> TestAud
         consumer,
         wake_rx,
         control_rx,
-        state,
+        Arc::clone(&state),
         Arc::clone(&session_epoch),
         pipeline,
         Arc::clone(&alive),
@@ -556,6 +586,7 @@ fn spawn_test_audio_drain(capacity: usize, pipeline: CapturePipeline) -> TestAud
         producer,
         wake_tx: wake_tx.clone(),
         control_tx,
+        state,
         session_epoch,
         _drain: AudioDrain {
             alive,
@@ -646,6 +677,34 @@ fn source_aware_identity_detects_default_source_switch() {
     assert_ne!(first, second);
     assert_eq!(first.name, "default");
     assert_eq!(first.input_rate, 48_000);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn source_description_preserves_opened_capture_format() {
+    let mut info = MicInfo {
+        name: "default".to_owned(),
+        input_rate: TARGET_RATE,
+        channels: 1,
+        sample_format: "F32".to_owned(),
+        source_id: None,
+        resampling: false,
+        config_note: None,
+    };
+    super::device::apply_source_description(
+        &mut info,
+        super::super::pactl::PactlSourceInfo {
+            name: "alsa_input.test".to_owned(),
+            description: Some("Physical microphone".to_owned()),
+        },
+    );
+    assert_eq!(info.name, "Physical microphone");
+    assert_eq!(info.source_id.as_deref(), Some("alsa_input.test"));
+    assert_eq!(info.input_rate, TARGET_RATE);
+    assert_eq!(info.channels, 1);
+    assert_eq!(info.sample_format, "F32");
+    assert!(!info.resampling);
+    assert!(info.summary().contains("16000 Hz input/model"));
 }
 
 #[test]

@@ -11,27 +11,37 @@ use ringbuf::{
 };
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
-use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use super::device::{
     mic_info_from_identity, mic_snapshot_from_selected, select_input_device, selected_mic_identity,
     MicIdentity, MicInfo,
 };
 use super::drain::{make_resampler, spawn_audio_drain, AudioDrain, CapturePipeline, DrainControl};
+use super::monitor::{MicChanges, MicProbe};
 use super::{recv_audio_control_ack, AudioControl, AudioManagerCtx, CaptureState, TARGET_RATE};
 
 const AUDIO_RING_SECONDS: usize = 6;
 const AUDIO_RING_MIN_CAPACITY: usize = TARGET_RATE as usize * AUDIO_RING_SECONDS;
 const DEFAULT_CALLBACK_SCRATCH_FRAMES: usize = 8192;
-const DEVICE_POLL_INTERVAL: Duration = Duration::from_secs(1);
+const MANAGER_TICK: Duration = Duration::from_secs(1);
+const DEVICE_POLL_INTERVAL: Duration = Duration::from_secs(5);
+const DEVICE_REOPEN_INTERVAL: Duration = Duration::from_secs(10);
+const MICROPHONE_NOTICE_INTERVAL: Duration = Duration::from_secs(30);
 const DEVICE_RETRY_MAX_INTERVAL: Duration = Duration::from_secs(10);
 
 /// Own the live stream on the manager thread, serving start and stop commands and reopening on failure or input change.
 pub(super) fn audio_manager_loop(ctx: AudioManagerCtx) {
     let host = cpal::default_host();
     let idle_policy = idle_stream_policy();
-    let mut live = match open_live_stream(
+    let mut probe = match MicProbe::spawn(|| selected_mic_identity(&cpal::default_host())) {
+        Ok(probe) => probe,
+        Err(err) => {
+            let _ = ctx.ready.send(Err(err));
+            return;
+        }
+    };
+    let live = match open_live_stream(
         &host,
         Arc::clone(&ctx.state),
         Arc::clone(&ctx.session_epoch),
@@ -49,64 +59,177 @@ pub(super) fn audio_manager_loop(ctx: AudioManagerCtx) {
         }
     };
 
-    while ctx.alive.load(Ordering::SeqCst) {
-        crossbeam_channel::select! {
-            recv(ctx.control_rx) -> msg => {
-                match msg {
-                    Ok(control) => {
-                        handle_manager_control(control, &mut live, &ctx, idle_policy);
-                        continue;
-                    }
-                    Err(_) => break,
-                }
-            }
-            default(DEVICE_POLL_INTERVAL) => {}
-        }
+    let mut changes = MicChanges::default();
+    let mut generation = 0_u64;
+    let mut next_probe = Instant::now() + DEVICE_POLL_INTERVAL;
+    let mut next_reopen = Instant::now();
+    let mut retry_delay = MANAGER_TICK;
+    let mut attempts = 0_u32;
+    let mut last_notice = None;
+    let mut report_recovery = false;
+    let mut healthy_since = Instant::now();
+    let mut reopen_identity = live.identity.clone();
+    let mut live = Some(live);
 
-        if let Some(err) = ctx.stream_error.lock().take() {
+    while ctx.alive.load(Ordering::SeqCst) {
+        // Release the callback's mutex before dropping or opening a CPAL stream.
+        let stream_error = ctx.stream_error.lock().take();
+        if let Some(err) = stream_error {
             ctx.log
                 .warn(format!("microphone stream failed ({err}); reopening"));
-            ctx.notifier.microphone_unavailable(&err);
-            drop(live);
-            let Some(next_live) = reopen_until_success(&host, &ctx) else {
-                break;
-            };
-            live = next_live;
-            ctx.notifier.microphone_recovered(&live.info);
-            continue;
+            if last_notice.is_none_or(|at: Instant| at.elapsed() >= MICROPHONE_NOTICE_INTERVAL) {
+                ctx.notifier.microphone_unavailable(&err);
+                last_notice = Some(Instant::now());
+                report_recovery = true;
+            }
+            if let Some(previous) = live.take() {
+                reopen_identity = previous.identity.clone();
+                drop(previous);
+                ctx.stream_error.lock().take();
+                generation = generation.wrapping_add(1);
+            }
+            *ctx.current.lock() = None;
+            changes.reset();
         }
 
-        let dropped_samples = live.dropped_samples.swap(0, Ordering::AcqRel);
-        if dropped_samples != 0 {
-            ctx.log.warn(format!(
-                "microphone ring overflow dropped {dropped_samples} sample(s)"
-            ));
+        if live.is_none() && Instant::now() >= next_reopen {
+            // Errors from the old stream cannot describe the replacement.
+            ctx.stream_error.lock().take();
+            match open_live_stream(
+                &host,
+                Arc::clone(&ctx.state),
+                Arc::clone(&ctx.session_epoch),
+                Arc::clone(&ctx.stream_error),
+                idle_policy.paused_when_idle && ctx.session_epoch.load(Ordering::Acquire) == 0,
+            ) {
+                Ok(mut opened) => {
+                    opened.identity.retain_source(&reopen_identity);
+                    *ctx.current.lock() = Some(opened.info.clone());
+                    ctx.log.mic_changed(&opened.info);
+                    live = Some(opened);
+                    generation = generation.wrapping_add(1);
+                    healthy_since = Instant::now();
+                    next_reopen = healthy_since + DEVICE_REOPEN_INTERVAL;
+                    next_probe = healthy_since + DEVICE_POLL_INTERVAL;
+                    retry_delay = MANAGER_TICK;
+                    attempts = 0;
+                }
+                Err(err) => {
+                    attempts = attempts.saturating_add(1);
+                    if attempts == 1 || attempts.is_multiple_of(30) {
+                        ctx.log
+                            .warn(format!("no usable microphone yet ({err:#}); retrying"));
+                    } else {
+                        ctx.log
+                            .verbose(format!("microphone still unavailable ({err:#})"));
+                    }
+                    next_reopen = Instant::now() + retry_delay;
+                    retry_delay = (retry_delay * 2).min(DEVICE_RETRY_MAX_INTERVAL);
+                }
+            }
         }
 
-        if ctx.session_epoch.load(Ordering::Relaxed) != 0 {
-            continue;
-        }
-
-        match selected_mic_identity(&host) {
-            Ok(next) if next != live.identity => {
-                let next_info = mic_info_from_identity(&next);
-                ctx.log.verbose(format!(
-                    "parakit: selected input changed from {} to {}",
-                    live.info.summary(),
-                    next_info.summary()
+        if let Some(current) = &live {
+            if report_recovery && healthy_since.elapsed() >= DEVICE_REOPEN_INTERVAL {
+                ctx.notifier.microphone_recovered(&current.info);
+                last_notice = Some(Instant::now());
+                report_recovery = false;
+            }
+            let dropped_samples = current.dropped_samples.swap(0, Ordering::AcqRel);
+            if dropped_samples != 0 {
+                ctx.log.warn(format!(
+                    "microphone ring overflow dropped {dropped_samples} sample(s)"
                 ));
-                drop(live);
-                let Some(next_live) = reopen_until_success(&host, &ctx) else {
-                    break;
-                };
-                live = next_live;
-                ctx.log.mic_changed(&live.info);
             }
-            Ok(_) => {}
-            Err(err) => {
-                ctx.log
-                    .verbose(format!("parakit: input device scan failed: {err:#}"));
+            if ctx.session_epoch.load(Ordering::Relaxed) == 0 && Instant::now() >= next_probe {
+                probe.request(generation);
             }
+        }
+
+        let wait = if live.is_none() {
+            next_reopen
+                .saturating_duration_since(Instant::now())
+                .min(MANAGER_TICK)
+        } else {
+            MANAGER_TICK
+        };
+        crossbeam_channel::select! {
+            recv(ctx.control_rx) -> message => {
+                let Ok(control) = message else { break; };
+                // A queued callback error makes Start fail promptly, even before
+                // the next loop takes that error and tears the stream down.
+                if let Some(current) = live.as_mut().filter(|_| ctx.stream_error.lock().is_none()) {
+                    handle_manager_control(control, current, &ctx, idle_policy);
+                } else {
+                    handle_unavailable_control(
+                        control,
+                        live.as_ref().map(|current| &current.drain_control),
+                        &ctx,
+                    );
+                }
+                changes.reset();
+            }
+            recv(probe.results) -> result => {
+                let Ok((observed_generation, result)) = result else { break; };
+                probe.pending = false;
+                next_probe = Instant::now() + DEVICE_POLL_INTERVAL;
+                if observed_generation != generation || ctx.session_epoch.load(Ordering::Relaxed) != 0 {
+                    changes.reset();
+                    continue;
+                }
+                let Some(current) = live.as_ref() else { continue; };
+                match result {
+                    Ok(next) => {
+                        if let Some(confirmed) = changes.observe(&current.identity, next) {
+                            if Instant::now() >= next_reopen {
+                                ctx.log.verbose(format!(
+                                    "parakit: selected input changed from {} to {}",
+                                    current.info.summary(), mic_info_from_identity(&confirmed).summary()
+                                ));
+                                reopen_identity = confirmed;
+                                drop(live.take());
+                                ctx.stream_error.lock().take();
+                                *ctx.current.lock() = None;
+                                generation = generation.wrapping_add(1);
+                            } else {
+                                next_probe = next_reopen;
+                            }
+                        } else if changes.is_pending() {
+                            next_probe = Instant::now() + MANAGER_TICK;
+                        }
+                    }
+                    Err(err) => {
+                        changes.reset();
+                        ctx.log.verbose(format!("parakit: input device scan failed: {err:#}"));
+                    }
+                }
+            }
+            default(wait) => {}
+        }
+    }
+}
+
+/// Reject new captures while retrying, but preserve PCM from an interrupted recording.
+fn handle_unavailable_control(
+    control: AudioControl,
+    drain_control: Option<&Sender<DrainControl>>,
+    ctx: &AudioManagerCtx,
+) {
+    match control {
+        AudioControl::Start { ack, .. } => {
+            let _ = ack.send(Err(anyhow!("microphone is unavailable; retrying")));
+        }
+        AudioControl::Stop { ack } => {
+            // A callback can fail after the loop's error check but before Stop
+            // is selected. Its drain still owns queued PCM and resampler state;
+            // flush those before clearing the epoch or taking the recording.
+            if let Some(drain_control) = drain_control {
+                let _ = ack.send(stop_audio_drain(drain_control));
+                return;
+            }
+            ctx.session_epoch.store(0, Ordering::Release);
+            let pcm = ctx.state.lock().take_recording();
+            let _ = ack.send(Ok(pcm));
         }
     }
 }
@@ -211,8 +334,12 @@ fn start_audio_drain(live: &mut LiveStream, epoch: u64, include_pre_roll: bool) 
 }
 
 fn stop_live_recording(live: &mut LiveStream) -> Result<Vec<f32>> {
+    stop_audio_drain(&live.drain_control)
+}
+
+fn stop_audio_drain(drain_control: &Sender<DrainControl>) -> Result<Vec<f32>> {
     let (ack_tx, ack_rx) = bounded(1);
-    live.drain_control
+    drain_control
         .send(DrainControl::Stop { ack: ack_tx })
         .context("audio drain is not available")?;
     recv_audio_control_ack(ack_rx, "audio drain", "Stop")
@@ -227,59 +354,12 @@ fn pause_live_stream(live: &mut LiveStream, idle_policy: IdleStreamPolicy) -> Re
     Ok(())
 }
 
-fn reopen_until_success(host: &cpal::Host, ctx: &AudioManagerCtx) -> Option<LiveStream> {
-    let mut retry_delay = DEVICE_POLL_INTERVAL;
-    let mut attempts = 0_u32;
-    while ctx.alive.load(Ordering::SeqCst) {
-        match open_live_stream(
-            host,
-            Arc::clone(&ctx.state),
-            Arc::clone(&ctx.session_epoch),
-            Arc::clone(&ctx.stream_error),
-            idle_stream_policy().paused_when_idle,
-        ) {
-            Ok(live) => {
-                *ctx.current.lock() = Some(live.info.clone());
-                return Some(live);
-            }
-            Err(err) => {
-                attempts = attempts.saturating_add(1);
-                *ctx.current.lock() = None;
-                if attempts == 1 || attempts.is_multiple_of(30) {
-                    ctx.log
-                        .warn(format!("no usable microphone yet ({err:#}); retrying"));
-                } else {
-                    ctx.log
-                        .verbose(format!("microphone still unavailable ({err:#})"));
-                }
-                if !sleep_while_alive(&ctx.alive, retry_delay) {
-                    return None;
-                }
-                retry_delay = (retry_delay * 2).min(DEVICE_RETRY_MAX_INTERVAL);
-            }
-        }
-    }
-    None
-}
-
-fn sleep_while_alive(alive: &AtomicBool, duration: Duration) -> bool {
-    let mut slept = Duration::ZERO;
-    while slept < duration {
-        if !alive.load(Ordering::SeqCst) {
-            return false;
-        }
-        let step = (duration - slept).min(Duration::from_millis(100));
-        thread::sleep(step);
-        slept += step;
-    }
-    alive.load(Ordering::SeqCst)
-}
-
 struct LiveStream {
     info: MicInfo,
     identity: MicIdentity,
-    drain_control: Sender<DrainControl>,
+    // Stop callbacks before closing the drain's command channel.
     stream: Stream,
+    drain_control: Sender<DrainControl>,
     paused: bool,
     dropped_samples: Arc<AtomicU64>,
     _drain: AudioDrain,
@@ -439,4 +519,108 @@ where
         .context("failed to build input stream")?;
 
     Ok(stream)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::daemon::logging::{LogLevel, Logger};
+    use crate::daemon::notifications::Notifier;
+
+    #[test]
+    fn stop_after_callback_error_retains_queued_pcm_and_resampler_tail() {
+        for rate in [TARGET_RATE, 48_000] {
+            let retained = vec![0.75, -0.75];
+            let samples = vec![0.25; 100];
+            let mut expected = retained.clone();
+            let mut pipeline = CapturePipeline {
+                resampler: make_resampler(rate).unwrap(),
+            };
+            let mut resampled = Vec::new();
+            expected.extend_from_slice(pipeline.process(&samples, &mut resampled));
+            pipeline.finish_recording(&mut expected);
+
+            let state = Arc::new(Mutex::new(CaptureState::new()));
+            state.lock().buffer = retained;
+            let epoch = Arc::new(AtomicU64::new(7));
+            let log = Arc::new(Logger::new(LogLevel::Quiet));
+            let ctx = AudioManagerCtx {
+                state: Arc::clone(&state),
+                session_epoch: Arc::clone(&epoch),
+                current: Arc::new(Mutex::new(None)),
+                alive: Arc::new(AtomicBool::new(true)),
+                stream_error: Arc::new(Mutex::new(Some("callback failed".into()))),
+                control_rx: bounded(1).1,
+                log: Arc::clone(&log),
+                notifier: Notifier::silent(log),
+                ready: bounded(1).0,
+            };
+            let (mut producer, consumer) = HeapRb::<f32>::new(1_024).split();
+            assert_eq!(producer.push_slice(&samples), samples.len());
+            let (wake, wake_rx) = bounded(1);
+            let (control, control_rx) = bounded(4);
+            let alive = Arc::new(AtomicBool::new(true));
+            let thread = spawn_audio_drain(
+                consumer,
+                wake_rx,
+                control_rx,
+                Arc::clone(&state),
+                Arc::clone(&epoch),
+                CapturePipeline {
+                    resampler: make_resampler(rate).unwrap(),
+                },
+                Arc::clone(&alive),
+            )
+            .unwrap();
+            let drain = AudioDrain {
+                alive,
+                wake,
+                thread: Some(thread),
+            };
+
+            let (ack, reply) = bounded(1);
+            handle_unavailable_control(AudioControl::Stop { ack }, Some(&control), &ctx);
+            let actual = reply.try_recv().unwrap().unwrap();
+            drop(drain);
+
+            assert_eq!(actual, expected, "input rate {rate}");
+            assert_eq!(epoch.load(Ordering::Acquire), 0);
+            assert!(state.lock().buffer.is_empty());
+            assert!(state.lock().pre_roll.is_empty());
+        }
+    }
+
+    #[test]
+    fn unavailable_microphone_rejects_start_and_returns_retained_audio_on_stop() {
+        let state = Arc::new(Mutex::new(CaptureState::new()));
+        let samples = vec![0.25, -0.5, 0.75];
+        state.lock().buffer = samples.clone();
+        let epoch = Arc::new(AtomicU64::new(7));
+        let log = Arc::new(Logger::new(LogLevel::Quiet));
+        let ctx = AudioManagerCtx {
+            state,
+            session_epoch: Arc::clone(&epoch),
+            current: Arc::new(Mutex::new(None)),
+            alive: Arc::new(AtomicBool::new(true)),
+            stream_error: Arc::new(Mutex::new(None)),
+            control_rx: bounded(1).1,
+            log: Arc::clone(&log),
+            notifier: Notifier::silent(log),
+            ready: bounded(1).0,
+        };
+        let (ack, reply) = bounded(1);
+        handle_unavailable_control(AudioControl::Start { epoch: 8, ack }, None, &ctx);
+        assert!(reply
+            .try_recv()
+            .unwrap()
+            .unwrap_err()
+            .to_string()
+            .contains("unavailable"));
+        assert_eq!(epoch.load(Ordering::Acquire), 7);
+        let (ack, reply) = bounded(1);
+        handle_unavailable_control(AudioControl::Stop { ack }, None, &ctx);
+        assert_eq!(reply.try_recv().unwrap().unwrap(), samples);
+        assert_eq!(epoch.load(Ordering::Acquire), 0);
+        assert!(ctx.state.lock().buffer.is_empty());
+    }
 }

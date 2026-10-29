@@ -180,6 +180,30 @@ fn equal_scales_joined_by_and_remain_separate_quantities() {
     );
 }
 
+#[test]
+fn long_equal_scale_sequences_preserve_every_segment_and_the_final_compound() {
+    let mut input = "five thousand and ten thousand and ".repeat(1024);
+    input.push_str("one hundred and twenty thousand five hundred");
+    let mut expected = "5000 and 10000 and ".repeat(1024);
+    expected.push_str("120500");
+
+    assert_eq!(
+        super::numbers::normalize_spoken_numbers(&input, DEFAULT_NUMBER_THRESHOLD).text,
+        expected
+    );
+}
+
+#[test]
+fn repeated_non_number_conjunction_tails_do_not_split_quantities() {
+    let input = "thousand and ordinary prose ".repeat(512);
+    let expected = "1000 and ordinary prose ".repeat(512);
+
+    assert_eq!(
+        super::numbers::normalize_spoken_numbers(&input, DEFAULT_NUMBER_THRESHOLD).text,
+        expected
+    );
+}
+
 /// Assert each case at the default threshold and at `0` and `10`.
 fn assert_clean_at_thresholds(cases: &[(&str, &str)]) {
     let failures: Vec<String> = [None, Some(0.0), Some(10.0)]

@@ -21,15 +21,14 @@
 //!
 //! `CRISPASR_SRC_DIR=/path/to/source` changes the bundled native source tree;
 //! it does not change the vendored Rust dependencies.
-//!
-//! These still require Cargo to load the `crispasr` Rust path dependency unless
-//! the manifest is changed, so a missing submodule must be fixed before Cargo
-//! can start this script.
 
 use std::collections::BTreeMap;
 use std::env;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+
+#[path = "build/ibus.rs"]
+mod ibus;
 
 #[path = "build/native_link.rs"]
 mod native_link;
@@ -71,6 +70,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed=BLAS_INCLUDE_DIRS");
     println!("cargo:rerun-if-env-changed=BLAS_LIBRARIES");
     println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-changed=build/ibus.rs");
     println!("cargo:rerun-if-changed=build/native_link.rs");
     println!("cargo:rerun-if-changed=build/native_correctness.rs");
     println!("cargo:rerun-if-changed=build/native_correctness.cmake");
@@ -84,6 +84,7 @@ fn main() {
 
     let bundled = cargo_feature("bundled");
     build_alsa_silencer(cargo_feature("daemon"));
+    ibus::build();
     native_link::emit_cpp_runtime();
     native_link::warn_if_sys_native_build_ran();
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
@@ -453,7 +454,7 @@ impl BlasConfig {
             "" | "0" | "false" | "no" | "none" | "off" => Self::off(raw, explicit),
             "auto" => Self::auto(raw, explicit),
             "mkl" | "intel" | "intel-mkl" => Self::mkl(raw, explicit),
-            "openblas" => Self::openblas(raw, explicit, detected_openblas(true, true)),
+            "openblas" => Self::openblas(raw, explicit, detected_openblas()),
             "accelerate" | "apple" => Self::accelerate(raw, explicit),
             "1" | "true" | "yes" | "on" | "blas" | "generic" | "system" => {
                 Self::generic(raw, explicit)
@@ -811,23 +812,16 @@ fn locate_source(manifest_dir: &Path) -> PathBuf {
     );
 }
 
-fn detected_openblas(
-    explicit_openblas: bool,
-    include_conventional: bool,
-) -> Option<OpenBlasInstall> {
+fn detected_openblas() -> Option<OpenBlasInstall> {
     if target_is_windows() {
-        return windows_openblas_from_env(explicit_openblas).map(OpenBlasInstall::Windows);
+        return windows_openblas_from_env(true).map(OpenBlasInstall::Windows);
     }
     if !target_is_linux() {
         return None;
     }
 
-    unix_openblas_from_configured_roots(explicit_openblas)
-        .or_else(|| {
-            include_conventional
-                .then(unix_openblas_from_conventional_roots)
-                .flatten()
-        })
+    unix_openblas_from_configured_roots(true)
+        .or_else(unix_openblas_from_conventional_roots)
         .map(OpenBlasInstall::Unix)
 }
 

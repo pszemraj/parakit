@@ -1,4 +1,4 @@
-//! Linux push-to-talk hotkey backends: registered X11, passive X11 listen, and evdev proxy.
+//! Linux input-method, X11, and evdev push-to-talk backends.
 
 use super::{
     handle_key_event, report_hotkey_loop_failure, send_hotkey_transition, HotkeyAction,
@@ -49,6 +49,10 @@ pub(crate) fn run_grab_loop(
     }
     log.verbose(format!("parakit: Linux hotkey backend: {}", route.label()));
     match route {
+        LinuxHotkeyRoute::Ibus => loop {
+            // The daemon's IBus client owns the event loop and coordinator sender.
+            std::thread::park();
+        },
         LinuxHotkeyRoute::RegisteredX11 => report_hotkey_loop_failure(
             run_linux_registered_hotkey_loop(tx),
             "registered X11 hotkey",
@@ -72,8 +76,7 @@ fn run_linux_x11_listen_loop(tx: Sender<HotkeyTransition>) -> anyhow::Result<()>
 
     let state = Arc::new(Mutex::new(HotkeyState::default()));
     let callback_state = Arc::clone(&state);
-    let callback_tx = tx.clone();
-    rdev::listen(move |event| handle_listen_event(event, &callback_state, &callback_tx))
+    rdev::listen(move |event| handle_listen_event(event, &callback_state, &tx))
         .map_err(|err| anyhow::anyhow!("rdev::listen: {err:?}"))
 }
 

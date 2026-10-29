@@ -83,6 +83,14 @@ pub(crate) mod hotkey;
 pub(crate) mod inject;
 
 #[cfg(target_os = "linux")]
+/// Native Linux input-method engine and its daemon connection.
+pub(crate) mod ibus;
+
+#[cfg(target_os = "linux")]
+/// Linux transport selection and recording-target capture.
+pub(crate) mod linux_insertion;
+
+#[cfg(target_os = "linux")]
 /// Linux desktop session detection helpers.
 pub(crate) mod session;
 #[cfg(target_os = "linux")]
@@ -101,9 +109,6 @@ pub(crate) mod windows_focus;
 #[cfg(target_os = "windows")]
 /// Windows keyboard and clipboard insertion helpers.
 pub(crate) mod windows_input;
-#[cfg(target_os = "windows")]
-/// Windows paste-path smoke checks.
-pub(crate) mod windows_paste_smoke;
 #[cfg(target_os = "windows")]
 /// Windows security and process-context helpers.
 pub(crate) mod windows_security;

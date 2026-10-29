@@ -49,13 +49,13 @@ tccutil reset Microphone com.apple.Terminal
 
 For `direct` mode, only a suppressed key-event tap runs, and it passes once a synthetic key-down is observed (direct typing posts unicode key-down events without a matching key-up, and never touches the clipboard or `AXValue` acknowledgement, so there is no transaction to open a window and test).
 
-The transaction check uses the production snapshot rules: an empty file list does not hide another supported format, and a real clipboard read error fails the check instead of being treated as unavailable content. It independently reads the clipboard back after restoration and compares the complete saved payload. Failure cleanup retries restoration only while its plain-text sentinel is still current; a newer user payload, including HTML whose text alternative equals the sentinel, is left untouched.
+The check reads back the complete restored clipboard payload and fails on read errors; an empty file list does not hide another format. On failure, cleanup retries only while its plain-text sentinel is current, preserving newer copies, including HTML with the same text. See the shared [clipboard staging policy](running.md#clipboard-staging-and-restore).
 
 Because stage 2 opens a real window and drives real Accessibility APIs, `doctor --deep` on macOS requires an active GUI login session (not a headless or SSH-only session) with Accessibility already granted to the terminal. The window closes itself automatically once the check completes.
 
 ## Hotkey
 
-The default macOS push-to-talk hotkey is `Left Control+Space`. This deliberately avoids `Command+Space`, which is normally Spotlight. Press and hold `Left Control+Space` while speaking, then release when done. parakit handles the chord with a CoreGraphics event tap and suppresses the Space key while the exact chord is active. Modified chords such as `Left Control+Shift+Space`, `Control+Option+Space`, or `Command+Space` pass through to macOS and the focused app.
+The macOS push-to-talk hotkey is `Left Control+Space` and is not configurable. This deliberately avoids `Command+Space`, which is normally Spotlight. Press and hold `Left Control+Space` while speaking, then release when done. parakit handles the chord with a CoreGraphics event tap and suppresses the Space key while the exact chord is active. Modified chords such as `Left Control+Shift+Space`, `Control+Option+Space`, or `Command+Space` pass through to macOS and the focused app.
 
 macOS may also use `Control+Space` for input-source switching when multiple input sources are configured. If parakit does not react, or if the input-source switcher appears instead:
 
@@ -64,23 +64,21 @@ macOS may also use `Control+Space` for input-source switching when multiple inpu
 3. Check other shortcut categories for warning icons; macOS marks conflicting shortcuts there.
 4. Restart parakit and rerun `parakit doctor`.
 
-The push-to-talk chord is not configurable yet; macOS uses `Left Control+Space`.
-
 ## Background Use
 
 Use the commands in [running.md#background-use](running.md#background-use), launched from the terminal application that holds parakit's privacy permissions.
 
 ## Insertion
 
-Paste modes, focus-change handling, clipboard staging, and recovery commands are in [running.md#insertion](running.md#insertion).
+Parakit matches the frontmost application's focused Accessibility element rather than its on-screen window ID. Same-app field or window changes block insertion without treating palettes, popovers, sheets, or z-order changes as a different target. If an application exposes no focused Accessibility element, matching process and bundle identity provide the fallback; a real application or focused-element mismatch still blocks insertion. Rejected non-direct insertions follow the shared [clipboard staging policy](running.md#clipboard-staging-and-restore). [Paste modes](running.md#insertion) select `Cmd+V` or direct typing through the Accessibility-controlled input path.
 
-After a paste chord is sent, macOS does not restore the previous clipboard contents after a fixed delay. It polls the focused Accessibility element's `AXValue` for evidence that the target consumed the paste, at 40 ms intervals against a roughly 1.8 s deadline. That deadline is a soft target: the poll loop only checks it between reads, not inside one, so a single slow, blocking `AXValue` read can carry the wait past it before the loop notices. Each Accessibility request has its own 250 ms messaging timeout, which bounds how long any one read can block, so an unresponsive target cannot hold the worker for macOS's longer system default. The [insertion outcomes](logging.md#insertion-outcomes) describe acknowledgement states and clipboard decisions. When no value or baseline is available, polling uses a 1500 ms grace period; otherwise it uses the full confirmation window. Direct typing and insertions rejected before posting a paste chord do not run acknowledgement.
+After a paste chord is sent, macOS does not restore the previous clipboard contents after a fixed delay. It polls the focused Accessibility element's `AXValue` for evidence that the target consumed the paste, at 40 ms intervals against a roughly 1.8 s deadline. That deadline is a soft target: the poll loop only checks it between reads, not inside one, so a single slow, blocking `AXValue` read can carry the wait past it before the loop notices. Each Accessibility request has its own 250 ms messaging timeout, which bounds how long any one read can block, so an unresponsive target cannot hold the worker for macOS's longer system default. The [insertion outcomes](logging.md#insertion-outcomes) describe acknowledgement states and clipboard decisions. When no focused element or baseline is available after the fallback read, a 1500 ms grace period is used; otherwise polling uses the full confirmation window. Direct typing and insertions rejected before posting a paste chord do not run acknowledgement.
 
 Paste-failure and paste-fallback notifications surface as real Notification Center banners sent through `osascript`/`display notification`. If macOS does not show them, check System Settings > Notifications; some versions file these banners under "Script Editor" rather than under "parakit". The user-visible messages and recovery steps are in [troubleshooting.md#macos-paste-could-not-be-confirmed](troubleshooting.md#macos-paste-could-not-be-confirmed).
 
 ### What Counts As Evidence
 
-The baseline value is read before the chord is posted, so a fast target cannot consume the paste before the comparison begins. Bare value growth is insufficient: application output, autocomplete, or another input source can change `AXValue` without the transcript arriving. Confirmation requires newly visible transcript-specific evidence.
+Parakit tries to read a baseline before posting the chord. If that read is unavailable, it attempts a post-chord baseline, which may already include a fast paste. Bare value growth is insufficient: application output, autocomplete, or another input source can change `AXValue` without the transcript arriving. Confirmation requires newly visible transcript-specific evidence.
 
 Matching ignores whitespace on both sides rather than comparing verbatim. A terminal's `AXValue` is its rendered screen, hard-wrapped at the column width and wrapping mid-word, so a pasted transcript comes back with newlines injected at the wrap points. Dropping whitespace makes the comparison independent of that layout.
 

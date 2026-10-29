@@ -247,8 +247,6 @@ mod tests {
 
     #[test]
     fn conversion_and_quantization_clean_staging_and_preserve_existing_artifacts_on_failure() {
-        #[cfg(unix)]
-        use std::os::unix::fs::PermissionsExt;
         let root =
             crate::test_support::fixture_root("parakit-fetch-tests", "source-presets-failure");
         let q8 = root.join("existing-q8.gguf");
@@ -263,16 +261,15 @@ mod tests {
         let converter = if cfg!(windows) {
             "@echo off\r\necho partial>\"%~5\"\r\necho %~2>\"%~5.flag\"\r\nexit /b "
         } else {
-            "#!/bin/sh\nprintf partial > \"$5\"\nprintf %s \"$2\" > \"$5.flag\"\nexit "
+            "#!/bin/sh\n[ \"$#\" -gt 0 ] || exit 0\nprintf partial > \"$5\"\nprintf %s \"$2\" > \"$5.flag\"\nexit "
         };
         for input_flag in ["--nemo", "--hf", "--input"] {
             for success in [false, true] {
                 std::fs::write(&f16, b"existing F16").unwrap();
-                std::fs::write(&fake_python, format!("{converter}{}\n", u8::from(!success)))
-                    .unwrap();
-                #[cfg(unix)]
-                std::fs::set_permissions(&fake_python, std::fs::Permissions::from_mode(0o755))
-                    .unwrap();
+                crate::test_support::write_script_fixture(
+                    &fake_python,
+                    &format!("{converter}{}\n", u8::from(!success)),
+                );
                 assert_eq!(
                     convert_f16(
                         input_flag,
@@ -312,17 +309,14 @@ mod tests {
         } else {
             "fake-quantizer"
         });
-        std::fs::write(
+        crate::test_support::write_script_fixture(
             &quantizer,
             if cfg!(windows) {
                 "@echo off\r\necho partial>\"%~2\"\r\nexit /b 1\r\n"
             } else {
-                "#!/bin/sh\nprintf partial > \"$2\"\nexit 1\n"
+                "#!/bin/sh\n[ \"$#\" -gt 0 ] || exit 0\nprintf partial > \"$2\"\nexit 1\n"
             },
-        )
-        .unwrap();
-        #[cfg(unix)]
-        std::fs::set_permissions(&quantizer, std::fs::Permissions::from_mode(0o755)).unwrap();
+        );
         assert!(ensure_q8(
             &f16,
             &q8,

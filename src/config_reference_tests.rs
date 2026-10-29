@@ -287,6 +287,17 @@ fn effective_snapshot(config: &ConfigFile) -> BTreeMap<&'static str, String> {
         "daemon.paste_mode",
         format!("{:?}", config.daemon.effective_paste_mode()),
     );
+    #[cfg(target_os = "linux")]
+    put(
+        "daemon.insertion_backend",
+        config
+            .daemon
+            .effective_insertion_backend()
+            .label()
+            .to_owned(),
+    );
+    #[cfg(not(target_os = "linux"))]
+    put("daemon.insertion_backend", "ignored".to_owned());
     put(
         "daemon.keep_transcript_clipboard",
         config.daemon.keep_transcript_clipboard().to_string(),
@@ -515,6 +526,11 @@ fn closed_value_sets_are_fully_enumerated() {
     assert_values_listed("daemon.quantize", &variant_names::<ModelQuantization>());
     assert_values_listed("daemon.device", &variant_names::<DeviceMode>());
     assert_values_listed("daemon.paste_mode", &variant_names::<PasteMode>());
+    #[cfg(target_os = "linux")]
+    assert_values_listed(
+        "daemon.insertion_backend",
+        &variant_names::<crate::daemon::desktop::linux_insertion::InsertionBackend>(),
+    );
     assert_values_listed("cleaning.profile", &variant_names::<CleaningProfile>());
     assert_values_listed(
         "rules.user[].position",

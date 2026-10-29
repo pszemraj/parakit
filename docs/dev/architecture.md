@@ -1,6 +1,6 @@
 # Architecture
 
-parakit keeps the daemon thread-based. There is no long-running async runtime.
+Parakit keeps the daemon thread-based. There is no long-running Rust async runtime.
 
 ## Thread Model
 
@@ -8,6 +8,7 @@ parakit keeps the daemon thread-based. There is no long-running async runtime.
 main thread                  CLI, setup, and blocking hotkey backend
 recording coordinator thread hotkey transition -> focus snapshot -> audio start/stop -> PCM handoff
 audio manager thread         owns the current cpal::Stream and follows the default mic
+microphone probe thread      queries the selected input without blocking recording controls
 cpal callback thread         mixes input to mono and pushes frames into a bounded SPSC ring
 audio drain thread           drains ring -> resamples -> updates pre-roll and active recording
 worker thread                owns optional Engine, reload/offload, transcribe -> clean -> insert
@@ -15,8 +16,11 @@ optional sound thread        opens rodio output only while playing cue tones
 notification thread          delivers desktop notifications from a bounded queue
 IPC listener thread          accepts local control connections
 IPC client threads           handle status, stop, copy-last, history, and test-paste
+Linux IBus client thread     watches the helper and sends guarded native commits through GDBus
 Windows clipboard thread     observes clipboard-history acknowledgement when available
 ```
+
+On Linux, IBus separately manages `parakit-ibus`. Its GLib event loop owns the factory, `IBusEngineSimple` instances, native target generations, and commit callbacks. The executable links only the input-method bridge and its system libraries, with no audio, model, or daemon-config code. The user's existing daemon startup remains independent of this input-method process.
 
 ## State Machine
 
@@ -26,7 +30,7 @@ Idle
 Recording
   PTT up
 Transcribing
-  paste, optional clipboard fallback, block, or skip
+  native submission, paste, optional clipboard fallback, block, or skip
 Idle
 ```
 
@@ -44,7 +48,7 @@ Live capture drains callback audio through a bounded single-producer/single-cons
 
 - `cpal::Stream` is not reliably `Send`, so the live stream stays on the audio manager thread.
 - `rodio::OutputStream` is not reliably `Send`, so cue playback lives on its own thread and opens output only for the duration of a cue.
-- `crispasr::Session` is `Send` but not `Sync`, so the worker owns `Engine` directly. Do not wrap it in `Arc<Engine>`.
+- Parakit's `OwnedSession` is `Send` but not `Sync`, so the worker owns `Engine` directly. Do not wrap it in `Arc<Engine>`.
 - Hotkey backends emit only logical press/release transitions. They do not call audio, ASR, clipboard, or insertion code.
 - Runtime focus and insertion behavior is in [running.md#insertion](../running.md#insertion); backend setup is in [linux-desktop.md](../linux-desktop.md), [macos-desktop.md](../macos-desktop.md), and [windows-desktop.md](../windows-desktop.md).
 - Normal dictation hotkey backends must suppress the literal Space key before it reaches the focused application. The passive `x11-listen` backend is for debugging and does not suppress keys.
@@ -52,6 +56,8 @@ Live capture drains callback audio through a bounded single-producer/single-cons
 Cross-thread communication uses atomics, mutex-protected buffers, and channels.
 
 Configuration sections provide built-in fallbacks; CLI resolvers apply overrides. Normal startup and WAV simulation share resolved idle, logging, paste-mode, and clipboard-retention values through `WorkerSettings`. The banner borrows the `DaemonInfo` stored for IPC status. Mode-specific resources remain explicit in `WorkerCtx`: simulation has a silent notifier, disabled sounds and insertion, and no daemon singleton or control endpoint. Normal startup exposes IPC before cleaner/model initialization; the worker lifetime still follows native-session ownership.
+
+The Linux daemon attaches to the helper over IBus's private bus and advertises recording readiness. Input callbacks emit directed PTT signals without waiting for daemon work. At the actual PTT press, the engine captures a token containing helper/attachment lifetime, engine identity, and focus generation. The coordinator carries it unchanged through capture and inference. Validation and `commit_text` run together on the helper's owning loop. See [focus changes](../running.md#focus-changes) for delivery policy.
 
 ## Module Map
 
@@ -63,7 +69,7 @@ Configuration sections provide built-in fallbacks; CLI resolvers apply overrides
 | `src/daemon/desktop/hotkey.rs`, `src/daemon/desktop/hotkey/{linux,macos}.rs` | Hotkey backends and hotkey state helpers. |
 | `src/daemon/hotkey_help.rs` | Shared user-facing hotkey remediation text. |
 | `src/daemon/recording.rs` | Hotkey transition coordinator, focus snapshot, audio start/stop, and PCM handoff. |
-| `src/daemon/audio/capture.rs`, `src/daemon/audio/capture_{device,drain,stream}.rs` | Capture handle and pre-roll, microphone selection, ring-buffer drain and resampling, and live stream ownership and restart. |
+| `src/daemon/audio/capture.rs`, `src/daemon/audio/capture_{device,drain,monitor,stream}.rs` | Capture handle and pre-roll, microphone selection, ring-buffer drain and resampling, background device probes and change confirmation, and live stream ownership and restart. |
 | `src/daemon/audio/pactl.rs` | Linux `pactl` queries for default-source identity polling and startup/reopen microphone display details. |
 | `src/daemon/worker.rs` | Worker events, model lifecycle, ASR, cleanup, and completion. |
 | `src/daemon/worker/insertion.rs` | Paste sanitizer, focus guard, clipboard fallback, and insertion reporting. |
@@ -71,7 +77,11 @@ Configuration sections provide built-in fallbacks; CLI resolvers apply overrides
 | `src/daemon/worker_shutdown.rs` | Worker lifetime and bounded IPC shutdown handshake. |
 | `src/app/simulation.rs` | Acknowledged WAV dictations and configured idle/reload validation. |
 | `src/app/config_command.rs` | `parakit config` subcommands: show, path, init, and edit. |
+| `src/ibus_command.rs`, `src/ibus_main.rs` | Linux IBus registration, removal, read-only setup status, and the standalone engine executable. |
+| `src/daemon/desktop/ibus/` | Native IBus engine/factory, daemon GDBus client, target lifetimes, and submission evidence. |
+| `src/daemon/desktop/linux_insertion.rs` | Linux insertion-backend selection and recording target capture independent of clipboard paste mode. |
 | `src/daemon/ipc.rs`, `src/daemon/ipc/{client,unix_socket,windows_pipe}.rs` | Local IPC for `status`, `stop`, `copy-last`, `history`, and `test-paste`: shared protocol and in-memory transcript ring buffer, the control client, and the Unix-socket and Windows named-pipe transports. |
+| `src/daemon/ipc/{history,history_picker}.rs` | Full-text lookup/copy by daemon-session and entry reference, and the terminal picker. |
 | `src/daemon/desktop/windows_{clipboard_history,focus,input,paste_smoke,security}.rs` | Windows clipboard-history acknowledgement, foreground checks, `SendInput` helpers, deep paste smoke test, and privilege diagnostics. |
 | `src/daemon/{preflight,audio/alsa,desktop/session,desktop/wsl,desktop/x11,desktop/inject_smoke}.rs`, `src/daemon/audio/alsa_silence.c`, `src/daemon/macos.rs`, `src/daemon/macos/{permissions,focus,insertion_cgevent,cgevent_ffi,pasteboard,diagnostics}.rs` | Startup checks, macOS TCC/focus/insertion/acknowledgement helpers and event-tap FFI, the macOS and X11 deep paste smoke tests, ALSA stderr suppression, X11/Wayland session and WSL checks, and X11 helpers. |
 | `src/daemon/{logging,notifications,sounds}.rs` | Runtime logging, desktop notifications, and generated audio cues. |
@@ -100,6 +110,8 @@ Any failed required startup or preflight step stops the process. This includes c
 
 Runtime failures are reported and the daemon continues when possible: sound cues, log writes, individual transcriptions, and text insertion failures.
 
-`ClipboardSnapshot` in `daemon/desktop/clipboard_store.rs` shares capture, borrowed restoration, and exact payload comparison. Borrowed restoration retains the saved value for cleanup retries. The macOS doctor's independent read-back and repair behavior is described under [deep diagnostics](../macos-desktop.md#doctor---deep); production generation checks remain in `StagedClipboard`.
+Native delivery and uncertainty are described under [insertion outcomes](../logging.md#insertion-outcomes).
+
+`ClipboardSnapshot` in `daemon/desktop/clipboard_store.rs` shares capture, restoration, and exact payload comparison. Production restoration consumes the saved value without cloning; diagnostic restoration borrows it for cleanup retries. The macOS doctor's independent read-back and repair behavior is described under [deep diagnostics](../macos-desktop.md#doctor---deep); production generation checks remain in `StagedClipboard`.
 
 `PasteReport` describes transaction results and acknowledgement telemetry. `InsertReport` adds worker policy, direct-typing progress, and degraded-outcome diagnostics. Staging uses one `From<StageOutcome>` conversion into paste telemetry; the worker retains separate notifications, history, and alert decisions. The serialized fields and outcome meanings are in [logging](../logging.md#insertion-record-fields).

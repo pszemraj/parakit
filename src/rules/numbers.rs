@@ -2,7 +2,10 @@
 
 use regex::Regex;
 use std::borrow::Cow;
-use text2num::{find_numbers, replace_numbers_in_text, text2digits, Language, Occurence, Token};
+use text2num::{
+    find_numbers, find_numbers_iter, replace_numbers_in_text, text2digits, Language, Occurence,
+    Token,
+};
 
 use super::engine::TransformResult;
 
@@ -50,7 +53,7 @@ impl Token for &NumberToken<'_> {
 ///
 /// This function is infallible: it returns [`TransformResult`], not
 /// `Result`, and never returns an `Err`.
-pub(crate) fn normalize_spoken_numbers(input: &str, threshold: f64) -> TransformResult {
+pub(crate) fn normalize_spoken_numbers(input: &str, threshold: f64) -> TransformResult<'_> {
     let language = Language::english();
     // text2num tokenizes across all whitespace, so a multi-line input would
     // join "twenty\nfive" into "25" and drop the break. Guards would likewise
@@ -60,9 +63,14 @@ pub(crate) fn normalize_spoken_numbers(input: &str, threshold: f64) -> Transform
         .map(|line| render_signed_numbers(replace_numbers_in_segments(line, &language, threshold)))
         .collect::<Vec<_>>()
         .join("\n");
+    let matches = usize::from(text != input);
     TransformResult {
-        matches: usize::from(text != input),
-        text,
+        text: if matches == 0 {
+            Cow::Borrowed(input)
+        } else {
+            Cow::Owned(text)
+        },
+        matches,
     }
 }
 
@@ -74,20 +82,24 @@ pub(crate) fn normalize_spoken_numbers(input: &str, threshold: f64) -> Transform
 /// hundred" is 120500, and "two thousand and five hundred" is 2500.
 fn replace_numbers_in_segments(line: &str, language: &Language, threshold: f64) -> String {
     let tokens = number_tokens(line);
-    let boundary = tokens.windows(2).enumerate().find_map(|(index, pair)| {
+    let mut output = None;
+    let mut segment_start = 0;
+    for (index, pair) in tokens.windows(2).enumerate() {
         let [scale, conjunction] = pair else {
-            return None;
+            continue;
         };
-        let rank = scale_rank(&scale.lowercase)?;
+        let Some(rank) = scale_rank(&scale.lowercase) else {
+            continue;
+        };
         if conjunction.lowercase != "and" {
-            return None;
+            continue;
         }
         let following = &tokens[index + 2..];
-        let next = find_numbers(following.iter(), language, 0.0)
-            .into_iter()
-            .next()?;
+        let Some(next) = find_numbers_iter(following.iter(), language, 0.0).next() else {
+            continue;
+        };
         if next.start != 0 {
-            return None;
+            continue;
         }
         // Within one number, "and" follows a scale ("two hundred and fifty
         // thousand"). Greedy parsing can also carry the next quantity across an
@@ -111,17 +123,26 @@ fn replace_numbers_in_segments(line: &str, language: &Language, threshold: f64) 
             .iter()
             .filter_map(|token| scale_rank(&token.lowercase))
             .max();
-        (largest == Some(rank)).then_some(conjunction)
-    });
-    let Some(conjunction) = boundary else {
-        return replace_numbers_preserving_literals(line, language, threshold);
-    };
-    format!(
-        "{}{}{}",
-        replace_numbers_preserving_literals(&line[..conjunction.start], language, threshold),
-        &line[conjunction.start..conjunction.end],
-        replace_numbers_in_segments(&line[conjunction.end..], language, threshold),
-    )
+        if largest != Some(rank) {
+            continue;
+        }
+        let output = output.get_or_insert_with(|| String::with_capacity(line.len()));
+        output.push_str(&replace_numbers_preserving_literals(
+            &line[segment_start..conjunction.start],
+            language,
+            threshold,
+        ));
+        output.push_str(&line[conjunction.start..conjunction.end]);
+        segment_start = conjunction.end;
+    }
+    let tail = replace_numbers_preserving_literals(&line[segment_start..], language, threshold);
+    match output {
+        Some(mut output) => {
+            output.push_str(&tail);
+            output
+        }
+        None => tail,
+    }
 }
 
 /// Order of magnitude for the scale words that can close a spoken quantity.

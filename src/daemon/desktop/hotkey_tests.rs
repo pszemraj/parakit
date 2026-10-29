@@ -423,6 +423,8 @@ fn backend_labels_are_stable() {
         (HotkeyBackend::Auto, "auto"),
         (HotkeyBackend::Desktop, "desktop"),
         #[cfg(target_os = "linux")]
+        (HotkeyBackend::Ibus, "ibus"),
+        #[cfg(target_os = "linux")]
         (HotkeyBackend::X11GlobalHotkey, "x11-global-hotkey"),
         #[cfg(target_os = "linux")]
         (HotkeyBackend::X11Listen, "x11-listen"),
@@ -446,6 +448,11 @@ fn linux_backend_names_parse_to_stable_variants() {
         <HotkeyBackend as clap::ValueEnum>::from_str(value, false).unwrap()
     }
 
+    assert_eq!(parse("ibus"), HotkeyBackend::Ibus);
+    assert_eq!(
+        serde_json::from_str::<HotkeyBackend>(r#""ibus""#).unwrap(),
+        HotkeyBackend::Ibus
+    );
     assert_eq!(parse("x11-global-hotkey"), HotkeyBackend::X11GlobalHotkey);
     assert_eq!(parse("x11-listen"), HotkeyBackend::X11Listen);
     assert_eq!(
@@ -537,6 +544,33 @@ fn linux_backend_aliases_resolve_to_one_route() {
             LinuxHotkeyRoute::EvdevProxy,
         ),
     ] {
-        assert_eq!(backend.linux_route(), expected);
+        assert_eq!(backend.linux_route_for_session(false), expected);
     }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn wayland_desktop_routes_use_focused_ibus_and_preserve_explicit_choices() {
+    for backend in [
+        HotkeyBackend::Auto,
+        HotkeyBackend::Desktop,
+        HotkeyBackend::Ibus,
+    ] {
+        assert_eq!(
+            backend.linux_route_for_session(true),
+            LinuxHotkeyRoute::Ibus
+        );
+    }
+    assert_eq!(
+        HotkeyBackend::Ibus.linux_route_for_session(false),
+        LinuxHotkeyRoute::Ibus
+    );
+    assert_eq!(
+        HotkeyBackend::X11GlobalHotkey.linux_route_for_session(true),
+        LinuxHotkeyRoute::RegisteredX11
+    );
+    assert_eq!(
+        HotkeyBackend::X11Listen.linux_route_for_session(true),
+        LinuxHotkeyRoute::PassiveX11
+    );
 }

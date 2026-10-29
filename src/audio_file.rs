@@ -83,7 +83,7 @@ fn read_wav_mono(path: &Path) -> Result<WavData> {
     };
 
     Ok(WavData {
-        samples: mix_to_mono(&samples, spec.channels as usize),
+        samples: mix_to_mono(samples, spec.channels as usize),
         sample_rate: spec.sample_rate,
     })
 }
@@ -288,9 +288,9 @@ fn read_int_samples<R: std::io::Read>(
     }
 }
 
-fn mix_to_mono(samples: &[f32], channels: usize) -> Vec<f32> {
+fn mix_to_mono(samples: Vec<f32>, channels: usize) -> Vec<f32> {
     if channels == 1 {
-        return samples.to_vec();
+        return samples;
     }
 
     samples

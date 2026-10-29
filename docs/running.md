@@ -18,9 +18,9 @@ parakit --quiet doctor
 parakit doctor --deep
 ```
 
-`--verbose` and `--quiet` are global flags: they work whether they come before or after `doctor`. On Linux, Wayland sessions fail insertion preflight even when XWayland exposes a `DISPLAY`; use an X11 session. On macOS, `doctor` checks Accessibility, Input Monitoring, and Microphone status for the terminal that launched parakit.
+`--verbose` and `--quiet` are global flags: they work whether they come before or after `doctor`. Follow the desktop setup for [Linux](linux-desktop.md), [macOS](macos-desktop.md), or [Windows](windows-desktop.md).
 
-The daemon checks the hotkey backend, insertion backend, and singleton lock before any model download. If those preflights pass, it starts the control endpoint, opens the microphone, warns when the selected source looks like Bluetooth, downloads the default Q8_0 GGUF if it is not already cached, opens the model, and starts the hotkey loop. `status`, `stop`, and a second `start` remain available while the model downloads or loads. Linux backend details are in [linux-desktop.md](linux-desktop.md).
+The daemon checks the hotkey backend, insertion backend, and singleton lock before any model download. If those preflights pass, it starts the control endpoint, opens the microphone, warns when the selected source looks like Bluetooth, downloads the default Q8_0 GGUF if it is not already cached, opens the model, and starts the hotkey loop. `status`, `stop`, and a second `start` remain available while the model downloads or loads.
 
 Normal startup:
 
@@ -41,6 +41,8 @@ Use `--verbose` only when debugging startup, backend selection, or latency:
 parakit --verbose
 parakit start --threads 8 --verbose
 ```
+
+For a completed transcription, verbose output reports `release_to_worker`, `infer`, `clean`, `insert`, `worker`, and `total` in milliseconds. `release_to_worker` includes audio finalization and queue wait; `worker` includes any reload, inference, cleaning, logging, and insertion. `total` spans hotkey release or forced capture stop to worker completion, including blocked or copied-only insertion. These timings do not confirm when the receiving application displays the text.
 
 ## Device Selection
 
@@ -101,14 +103,24 @@ parakit status
 parakit stop
 parakit copy-last [N]
 parakit history
+parakit history --plain
+parakit history --text N
 parakit test-paste "hello from parakit"
 ```
 
 When the control endpoint is absent and the singleton lock is free, `status` and `stop` print `parakit: not running` or `parakit: not running; nothing to stop` and exit successfully. If the endpoint is absent while the lock remains held, `status` reports that the daemon may still be starting or stopping; `stop` waits within its remaining deadline, sending the request if startup exposes the endpoint and confirming that the lock releases. Commands that need daemon state (`history`, `copy-last`, and `test-paste`) instead report that the daemon is not running and point to `parakit start`.
 
-The daemon keeps a ring buffer of recent transcripts in memory (`daemon.transcript_history` entries, 10 by default). `copy-last` acts on the most recent one by default; pass `N` (1-based, counting back from the most recent) to reach further back, e.g. `parakit copy-last 3` for the third-most-recent transcript. `parakit history` lists what the daemon currently remembers, newest first; `--limit N` caps how many entries print. The ring disappears when the daemon stops, so treat it as a same-session convenience. `test-paste` runs clipboard staging, focus checks, paste sanitization, and the paste chord without using the microphone.
+The daemon keeps a ring buffer of recent transcripts in memory (`daemon.transcript_history` entries, 10 by default). `copy-last` acts on the most recent one by default; pass `N` (1-based, counting back from the most recent) to reach further back, e.g. `parakit copy-last 3` for the third-most-recent transcript. The ring disappears when the daemon stops, so treat it as a same-session convenience.
 
-Plain `parakit status` output is unchanged and safe for scripts to parse:
+In a terminal, `parakit history` opens a picker with the newest transcript selected. Up/Down selects an entry and shows its full text; PageUp/PageDown scrolls long previews. Enter copies the selected entry and closes the picker after success. Escape or Ctrl+C closes it without copying. A copy failure stays visible in the picker. New dictations cannot silently change which entry is selected; an entry evicted from the ring or lost in a daemon restart reports that it is no longer available.
+
+Piped or redirected `history` output stays a plain newest-first list. Use `--plain` to request that list in a terminal, `--limit N` to limit the entries shown, or `--text N` to print one full transcript without clipboard access. `--quiet` never opens the picker. Full-text previews and output respect the control protocol's 64 KiB response limit; oversized text reports an error without truncation, but Enter can still copy the selected picker entry.
+
+Explicit copying uses the existing platform clipboard backend. On GNOME Wayland, it can use XWayland clipboard access even though IBus dictation itself needs no X11 connection. Without that clipboard access, full-text previews and `history --text N` remain available within the response limit.
+
+`test-paste` runs the configured insertion path, including content policy and target checks, without recording microphone audio. The native IBus route submits a commit; the legacy clipboard route stages text and sends its paste chord.
+
+Plain `parakit status` prints the current phase and last transcript size:
 
 ```text
 $ parakit status
@@ -146,7 +158,7 @@ The model loads and warms at startup, then releases its inference session after 
 
 The idle interval uses monotonic elapsed time, not calendar time. Whether system sleep counts toward it depends on the OS and Rust's [clock implementation](https://doc.rust-lang.org/std/time/struct.Instant.html). On clocks that pause during suspend, the remaining idle interval continues after wake; sleeping for ten minutes does not itself make the model eligible for offload.
 
-Recording, queued dictations, transcription, and insertion prevent offloading. The interval restarts when all work finishes, including silent captures and failures. Hotkeys, microphone policy, IPC, and transcript history remain available. Reading status or history does not postpone offloading.
+Recording, queued dictations, transcription, and insertion prevent offloading. The interval restarts when all work finishes, including silent captures and failures. Hotkeys, microphone policy, IPC, and transcript history remain available. Reading status or browsing history does not postpone offloading; copying a transcript counts as insertion activity.
 
 Press PTT normally after an idle period. A three-note cue announces model reloading, followed by the normal listening tone once the model is ready if PTT is still held. Audio records throughout reload, so early speech is preserved. An early release queues that audio until the model is ready and suppresses the delayed listening tone. Successful dictation retains its normal completion cue. Reload uses the resolved local file without downloading it again, preserving the thread count and [device policy](#device-selection). If reopening at PTT start fails, parakit plays its two-pulse error cue and retries once when PTT is released so a temporary failure can still preserve the dictation. If that retry also fails, it plays the error cue again and reports the dictation discarded without insertion; the next PTT retries automatically. `--no-sounds` disables these cues.
 
@@ -220,9 +232,7 @@ Then use `parakit start --log-dir "$HOME/.parakit/logs" --quiet & disown`. Insta
 | `parakeet-ultra` | [cstr/parakeet-ultra-GGUF](https://huggingface.co/cstr/parakeet-ultra-GGUF) | `parakeet-ultra-q8_0.gguf` |
 | `parakeet-redux` | [cstr/parakeet-redux-GGUF](https://huggingface.co/cstr/parakeet-redux-GGUF) | `parakeet-redux-q8_0.gguf` |
 
-**Redux is experimental and for testing only.** It is not recommended for normal dictation in Parakit. It uses the ordinary Parakeet GGUF backend without packed ternary acceleration. In our [CPU comparison](dev/quality.md#parakeet-cpu-comparison), it was slower than Ultra and used similar RAM. The preset remains available for checkpoint and conversion comparisons.
-
-Redux's GGUF contains ordinary reconstructed weights. Photon's packed 178 MB weight footprint and [published CPU results](https://huggingface.co/moondream/parakeet-redux#performance) do not describe Parakit's runtime. The GGUF conversion also omits Moondream's VAD head, so Photon's pause-based segmentation is not a Parakit guarantee.
+**Redux is for testing and checkpoint comparisons, not normal dictation.** Its reconstructed weights use the ordinary Parakeet backend without packed ternary acceleration or Moondream's VAD head. Photon's 178 MB footprint, [published CPU results](https://huggingface.co/moondream/parakeet-redux#performance), and pause-based segmentation therefore do not describe Parakit. In our [CPU comparison](dev/quality.md#parakeet-cpu-comparison), Redux was slower than Ultra and used similar RAM.
 
 Presets use the exact file above and check the local cache before contacting Hugging Face. Once fetched, they work offline. All presets except v3 select fixed provider commits from the model catalog; `--force` downloads that selected revision again. Parakeet v3 keeps its existing revision policy and top-level cache path; the other presets use the revision-specific Hub cache layout described below. Previously downloaded files remain usable with `-m`; changing a preset revision selects a separate cache destination. `fetch --model-preset` does not read daemon configuration. It accepts `--force` and conflicts with a custom source, `--file`, and `--sha256`.
 
@@ -253,7 +263,7 @@ The [Qwen team](https://huggingface.co/Qwen/Qwen3-ASR-0.6B) publishes Qwen3-ASR 
 parakit fetch cstr/parakeet-tdt-0.6b-v3-GGUF
 parakit fetch cstr/parakeet-tdt-0.6b-v3-GGUF --file parakeet-tdt-0.6b-v3-q4_k.gguf
 parakit fetch handy-computer/parakeet-tdt-0.6b-v3-gguf@main
-parakit fetch https://example.com/models/parakeet-q8.gguf --sha256 <64-hex-sha256>
+parakit fetch https://example.com/models/parakeet-q8.gguf --sha256 '<64-hex-sha256>'
 ```
 
 The first positional argument is either a Hugging Face repo (`owner/repo`, optionally `owner/repo@revision`) or a direct `http://`/`https://` URL. Other URL schemes are rejected before any request. For a repo source, `--file` selects a specific `.gguf` file when the repo publishes more than one and none of them is uniquely named `q8_0`; otherwise parakit auto-selects the sole `.gguf` file, or the sole `q8_0` file among several. `--sha256` checks the completed download when you explicitly supply it; parakit does not otherwise hash models or turn an unpinned URL into a persistent checksum policy. Resumed downloads use the server's strong ETag or Last-Modified value through `If-Range`; a partial with no usable validator restarts instead of being appended blindly. `--force` discards any partial and replaces the cached file.
@@ -268,22 +278,26 @@ parakit follows the OS default input device and avoids monitor/loopback/virtual 
 
 Microphone capture and WAV helpers share [native resampling](dev/quality.md#qwen-and-moondream-comparisons) on every platform and model when the input is not already 16 kHz. They drain the final filter tail to the recording's nominal sample count and reset between recordings. No Python preprocessing step or additional startup option is needed.
 
-On Linux and macOS, the microphone stream stays warm while the daemon is running; a bounded ring buffer feeds a drain thread that keeps 350 ms of pre-roll so the beginning of an utterance is less likely to be clipped. On Windows, parakit pauses the input stream while idle so `audiodg.exe` and driver-level microphone processing do not burn CPU when no recording is active. Recording start/stop is event-driven; idle device-change polling runs once per second.
+On Linux and macOS, the microphone stream stays warm while the daemon is running; a bounded ring buffer feeds a drain thread that keeps 350 ms of pre-roll so the beginning of an utterance is less likely to be clipped. On Windows, parakit pauses the input stream while idle so `audiodg.exe` and driver-level microphone processing do not burn CPU when no recording is active. Recording start/stop is event-driven. Device probes run on a separate thread, normally every five idle seconds, so a slow probe does not delay recording controls.
 
 One continuously held recording is force-stopped and handed to the worker after 270 seconds. This bounds a missed hotkey-release event without discarding the captured audio. It follows the usual transcription path and normal completion cue.
 
-If the default input changes while parakit is idle, the daemon switches to it and prints the new microphone unless `--quiet` is set. Each idle poll reads CPAL's selected input; on Linux PulseAudio/PipeWire systems, when that input is the OS default, it also runs `pactl get-default-source` so a changed default source is detected behind CPAL's generic `default` device. Startup, probe, and stream reopen also read `pactl list sources` to name the source in logs and detect Bluetooth. If an active stream fails, parakit keeps running and retries.
+If the default input changes while parakit is idle, a second probe confirms the change before the daemon switches and prints the new microphone unless `--quiet` is set. Linux probes retain PulseAudio/PipeWire source identity behind CPAL's generic `default` device; failed metadata queries do not count as source changes. Startup, diagnostics and stream reopen also query the source description. Successful reopens are separated by at least ten seconds to bound device flapping; capture continues on a healthy stream during that wait. If a stream fails, retries back off while recording controls remain responsive: new recordings report the unavailable microphone, and stopping returns audio already captured. Microphone notifications are limited, and recovery is announced after a stable interval.
 
 Bluetooth microphones are allowed, but parakit prints a warning because headset profiles often add latency and reduce speech quality. The warning still goes to stderr in `--quiet` mode.
 
 ## Insertion
 
-parakit transcribes once on hotkey release and hands the text to one of three insertion modes.
+Parakit transcribes once on hotkey release. Linux supports [IBus and X11 insertion transports](linux-desktop.md#insertion-selection-and-recovery); other platforms use their desktop input APIs.
+
+All modes convert CRLF and CR to LF, then drop NUL and other ASCII control characters except tab and LF. A whitespace-only result follows the [skipped outcome](logging.md#insertion-outcomes).
+
+Paste mode controls transcript content and the shortcut used by the clipboard route:
 
 | Mode | What it sends | When to pick it |
 | --- | --- | --- |
-| `terminal` | `Ctrl+Shift+V` on Linux and Windows, `Cmd+V` on macOS | Terminal emulators, where `Ctrl+V` is not paste. The default on Linux. Trailing newlines are stripped and multiline transcripts are not auto-pasted. |
-| `standard` | `Ctrl+V` on Linux and Windows, `Cmd+V` on macOS | GUI applications. The default on macOS and Windows. |
+| `terminal` | Native IBus commit on Linux when eligible; otherwise `Ctrl+Shift+V` on Linux/Windows or `Cmd+V` on macOS | The Linux default. Trailing newlines are stripped and embedded newlines are blocked. Native terminal commits also block tabs because they lack clipboard bracketed-paste semantics. |
+| `standard` | Native IBus commit on Linux when eligible; otherwise `Ctrl+V` on Linux/Windows or `Cmd+V` on macOS | GUI applications and multiline text. The default on macOS and Windows. |
 | `direct` | Synthetic typing through the platform keyboard API; the clipboard is never touched | App-compatibility fallback when neither chord reaches the target. Slower and less reliable for non-ASCII text. On Linux it still requires an X11 session. |
 
 ```bash
@@ -294,7 +308,9 @@ parakit start --paste-mode direct
 
 ### Clipboard Staging And Restore
 
-`terminal` and `standard` stage plain text on the system clipboard and send the paste shortcut. Both give the target and clipboard history tools time to observe the staged text, then restore the previous clipboard contents when the clipboard API can round-trip them. Restore support covers text, HTML with a text alternative, copied file lists, and images exposed as normal platform image data. Browser-private image packages, WebP-only payloads, and other clipboard MIME formats are not restorable through `arboard`; when restore is required, parakit clears the staged transcript instead of leaving sensitive text as the active clipboard.
+The clipboard route in `terminal` and `standard` modes stages plain text and sends the paste shortcut. Both give the target and clipboard history tools time to observe the staged text, then restore the previous clipboard contents when the clipboard API can round-trip them. Restore support covers text, HTML with a text alternative, copied file lists, and images exposed as normal platform image data. Browser-private image packages, WebP-only payloads, and other clipboard MIME formats are not restorable through `arboard`; when restore is required, parakit clears the staged transcript instead of leaving sensitive text as the active clipboard.
+
+Successful native IBus delivery and direct typing skip this transaction. `--keep-transcript-clipboard` has no effect on them. Rejected or uncertain native delivery attempts a clipboard-only recovery copy, retaining the transcript regardless of this setting; it never sends another paste or commit.
 
 Delivering the dictation takes priority over restoring the previous clipboard. If the previous clipboard cannot be read, or changes while parakit saves it, parakit still stages and pastes the transcript and leaves it as the active clipboard for that dictation; a clipboard history manager keeps the previous contents.
 
@@ -308,11 +324,7 @@ Use [daemon history](#daemon-control) for same-session recovery or [JSONL loggin
 
 ### Focus Changes
 
-On Linux/X11, parakit records the active X11 window when recording starts. If focus clearly changes before insertion, it does not send a paste chord, but non-direct modes still stage the transcript before restoring the active clipboard. If focus capture or recheck fails because X11 is transiently unavailable, parakit pastes anyway; the transcript remains available through `parakit copy-last` either way.
-
-On Windows, parakit records the foreground window at PTT-down, rechecks it before paste, and sends the paste shortcut with `SendInput`. If the foreground target cannot be captured or verified, automatic paste is skipped, but non-direct modes still stage the transcript before restoring the active clipboard. A normal user process cannot inject into an administrator/elevated target application.
-
-On macOS, parakit records the frontmost application's focused Accessibility UI element at PTT-down, rechecks it before paste, and sends `Cmd+V` or direct typing through the Accessibility-controlled desktop input path. Matching is by focused-element identity rather than on-screen window id, so actual same-app field or window changes are detected without relying on transient window-list churn from palettes, popovers, sheets, or z-order changes. When an application exposes no focused Accessibility element, matching process and bundle identity provide the fallback instead of blocking insertion; a real application or focused-element mismatch still blocks it. Non-direct modes still stage the transcript before restoring the active clipboard.
+Parakit captures focus at PTT-down and checks it before insertion. Target identity and failure behavior depend on the platform: [Linux IBus and X11](linux-desktop.md#focus-guard), [Windows](windows-desktop.md#insertion), or [macOS](macos-desktop.md#insertion). Clipboard handling after a rejected non-direct insertion follows the [staging and restore policy](#clipboard-staging-and-restore).
 
 ### Paste Acknowledgement On macOS
 

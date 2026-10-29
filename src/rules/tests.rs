@@ -518,6 +518,48 @@ fn clean_result_remains_unchanged_when_no_pass_fires() {
 }
 
 #[test]
+fn procedural_noops_borrow_the_original_text() {
+    use super::engine::TransformResult;
+    use super::passes::*;
+    use std::borrow::Cow;
+
+    let transforms: [fn(&str) -> TransformResult<'_>; 9] = [
+        normalize_apostrophe_cause,
+        normalize_spaced_acronyms,
+        normalize_spoken_versions,
+        normalize_numeric_point_suffixes,
+        normalize_numeric_identifier_groups,
+        normalize_magnitude_suffixes,
+        normalize_parameter_counts,
+        drop_dangling_connective,
+        capitalize_sentence_starts,
+    ];
+    let input = "Already clean. Café stays readable.";
+    for transform in transforms {
+        let result = transform(input);
+        assert_eq!(result.matches, 0);
+        assert!(matches!(result.text, Cow::Borrowed(text) if std::ptr::eq(text, input)));
+    }
+    assert!(matches!(
+        super::numbers::normalize_spoken_numbers(input, DEFAULT_NUMBER_THRESHOLD).text,
+        Cow::Borrowed(text) if std::ptr::eq(text, input)
+    ));
+    let one_point = "Version one point two needs attention.";
+    assert!(matches!(
+        normalize_spoken_versions(one_point).text,
+        Cow::Borrowed(text) if std::ptr::eq(text, one_point)
+    ));
+}
+
+#[test]
+fn capitalization_retains_unicode_expansions_after_a_borrowed_prefix() {
+    assert_eq!(
+        capitalize_sentence_starts("Already clean. élan. ßeta. ǅungla.").text,
+        "Already clean. Élan. SSeta. Ǆungla."
+    );
+}
+
+#[test]
 fn repeated_prefix_stutters_are_removed() {
     assert_clean_cases(
         CleaningProfile::Safe,

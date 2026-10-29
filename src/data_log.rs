@@ -105,6 +105,8 @@ struct LogRecord<'a> {
 /// record with how (or whether) it reached the focused application.
 #[derive(Serialize)]
 pub struct InsertionLogFields<'a> {
+    /// Transport used by this attempt; absent when no delivery was attempted.
+    pub insertion_backend: Option<&'static str>,
     /// Coarse insertion result, e.g. `"pasted"`, `"pasted_unverified"`,
     /// `"copied_only"`, `"blocked"`, `"skipped"`, or `"error"`.
     pub outcome: &'static str,

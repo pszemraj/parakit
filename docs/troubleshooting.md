@@ -1,19 +1,6 @@
 # Troubleshooting
 
-Start with `parakit doctor`; it does not load the model. Launch behavior and exit codes are in [running.md#first-run](running.md#first-run).
-
-```text
-parakit doctor
-parakit doctor --verbose
-parakit doctor --deep
-```
-
-The `hotkey`, `daemon`, `mic`, and `insertion` status lines identify which checks need attention. If a daemon is already running, use its local control channel:
-
-```text
-parakit status
-parakit stop
-```
+Start with [parakit doctor](running.md#first-run). The `hotkey`, `daemon`, `mic`, and `insertion` status lines identify which checks need attention. For a running daemon, use [status and control commands](running.md#daemon-control).
 
 ## Hotkey Problems
 
@@ -25,7 +12,7 @@ WSL is not the native Windows daemon path. Check Windows hotkeys, focus, and pas
 
 ## Literal Space Appears
 
-Linux `x11-listen` is passive and does not suppress Space; switch to the registered backend for normal dictation. The [evdev proxy](linux-desktop.md#evdev-proxy) also needs a readable keyboard event device and writable `/dev/uinput`. Linux insertion requires X11, including in `direct` mode. Other backend details are under [Linux hotkeys](linux-desktop.md).
+Linux `x11-listen` is passive and does not suppress Space; switch to the registered backend on X11 for normal dictation. On GNOME Wayland, use [focused-field IBus capture](linux-desktop.md#ibus-setup). The [evdev proxy](linux-desktop.md#evdev-proxy) also needs a readable keyboard event device and writable `/dev/uinput`. Clipboard paste and `direct` typing require X11; native IBus does not.
 
 ## Text Does Not Insert
 
@@ -37,14 +24,14 @@ Linux `x11-listen` is passive and does not suppress Space; switch to the registe
 
 2. Run `parakit doctor --deep` for the platform's insertion-backend check. Platform requirements and the limits of `direct` mode are in the [Linux](linux-desktop.md#deep-doctor-check), [macOS](macos-desktop.md#doctor---deep), and [Windows](windows-desktop.md#doctor---deep) sections.
 3. Inspect the target before recovering the transcript; an unconfirmed paste may have landed. Use [daemon history](running.md#daemon-control), [JSONL logs](logging.md#how-to-read-a-dictation), or clipboard history if enabled.
-4. Try another [paste mode](running.md#insertion):
+4. Check the selected [insertion transport and paste mode](running.md#insertion). On IBus, `terminal` and `standard` both submit native text; `standard` permits tabs and embedded newlines that `terminal` blocks. On the clipboard route, they use different shortcuts on Linux and Windows. To try `standard`:
 
    ```text
    parakit stop
    parakit start --paste-mode standard
    ```
 
-   To try `direct`, repeat the `parakit stop` and `parakit start` pair with `--paste-mode direct`. Linux needs an X11 session even in `direct` mode; macOS needs the terminal's [Accessibility permission](macos-desktop.md#permissions). If focus changed before insertion or the target is elevated on Windows, see [focus changes](running.md#focus-changes).
+   To try `direct`, repeat the `parakit stop` and `parakit start` pair with `--paste-mode direct`. Linux needs an X11 session and cannot use a forced IBus insertion backend; select `--insertion-backend x11` if necessary. macOS needs the terminal's [Accessibility permission](macos-desktop.md#permissions). If focus changed before insertion or the target is elevated on Windows, see [focus changes](running.md#focus-changes).
 
 ## macOS Paste Could Not Be Confirmed
 

@@ -62,6 +62,9 @@ impl Cli {
 pub(crate) enum Commands {
     /// Start the push-to-talk daemon (default when no subcommand is given).
     Start(StartCli),
+    /// Install or inspect the Linux input-method integration.
+    #[cfg(target_os = "linux")]
+    Ibus(crate::ibus_command::IbusCli),
     /// Inspect and test the transcript cleaning rules.
     Rules(RulesCli),
     /// Acquire a GGUF model: a hosted Q8_0 preset, a Hugging Face repo, or a direct URL.
@@ -81,7 +84,7 @@ pub(crate) enum Commands {
     Stop,
     /// Copy a transcript remembered by the running daemon.
     CopyLast(HistoryRefCli),
-    /// List transcripts the running daemon is holding in memory.
+    /// Browse remembered transcripts in a terminal, or print their listing in a pipe.
     History(HistoryCli),
     /// Exercise clipboard staging and paste without recording microphone audio.
     TestPaste(TestPasteCli),
@@ -132,6 +135,11 @@ pub(crate) struct StartCli {
     #[arg(long, value_enum)]
     pub(crate) paste_mode: Option<PasteMode>,
 
+    /// Linux insertion transport: follow the hotkey backend, require IBus PTT, or use X11.
+    #[cfg(target_os = "linux")]
+    #[arg(long, value_enum)]
+    pub(crate) insertion_backend: Option<crate::daemon::desktop::linux_insertion::InsertionBackend>,
+
     /// Leave dictated text on the clipboard after paste instead of restoring
     /// previous clipboard contents. Overrides a configured
     /// `daemon.keep_transcript_clipboard = false`; conflicts with
@@ -177,7 +185,8 @@ pub(crate) struct StartCli {
     #[command(flatten)]
     pub(crate) cleaning_overrides: CleaningOverrides,
 
-    /// Linux hotkey backend. `auto` registers Ctrl+Space with the X11 session.
+    /// Linux hotkey backend. `auto` uses IBus on Wayland and registers
+    /// Ctrl+Space on X11.
     /// Defaults to `config.toml`'s `hotkey.backend`, then `auto`.
     #[cfg(target_os = "linux")]
     #[arg(long, value_enum)]
@@ -206,6 +215,18 @@ pub(crate) struct StartCli {
 }
 
 impl StartCli {
+    /// Resolve Linux insertion transport using CLI, config, then automatic selection.
+    ///
+    /// # Returns
+    /// The effective transport preference for this daemon invocation.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn effective_insertion_backend(
+        &self,
+        config: &ConfigFile,
+    ) -> crate::daemon::desktop::linux_insertion::InsertionBackend {
+        self.insertion_backend
+            .unwrap_or_else(|| config.daemon.effective_insertion_backend())
+    }
     /// Return whether this invocation supplies settings for a new daemon.
     ///
     /// # Returns
@@ -272,17 +293,13 @@ impl StartCli {
         &self,
         config: &ConfigFile,
     ) -> anyhow::Result<QwenOptions> {
-        let options = QwenOptions {
-            language: self
-                .qwen_language
-                .clone()
-                .or_else(|| config.qwen.language.clone()),
-            max_new_tokens: self
-                .qwen_max_new_tokens
-                .map(|value| value as usize)
-                .or(config.qwen.max_new_tokens)
-                .unwrap_or(512),
-        };
+        let mut options = config.qwen.options();
+        if let Some(language) = &self.qwen_language {
+            options.language = Some(language.clone());
+        }
+        if let Some(max_new_tokens) = self.qwen_max_new_tokens {
+            options.max_new_tokens = max_new_tokens as usize;
+        }
         options.validate().map_err(anyhow::Error::msg)?;
         Ok(options)
     }
@@ -410,12 +427,18 @@ pub(crate) struct HistoryRefCli {
     pub(crate) index: Option<usize>,
 }
 
-/// Arguments for listing remembered transcripts.
+/// Arguments for browsing or printing remembered transcripts.
 #[derive(Args, Debug)]
 pub(crate) struct HistoryCli {
     /// Show at most this many entries.
     #[arg(long)]
     pub(crate) limit: Option<usize>,
+    /// Print the history listing instead of opening the terminal picker.
+    #[arg(long, conflicts_with = "text")]
+    pub(crate) plain: bool,
+    /// Print the full text of transcript N, counting from the latest as 1.
+    #[arg(long, value_name = "N", conflicts_with = "limit")]
+    pub(crate) text: Option<NonZeroUsize>,
 }
 
 /// Arguments for model cache inspection commands.
@@ -580,6 +603,10 @@ fn parse_thread_count(value: &str) -> Result<NonZeroUsize, String> {
 /// Arguments for runtime prerequisite checks.
 #[derive(Args, Debug)]
 pub(crate) struct DoctorCli {
+    /// Linux insertion transport to check instead of the configured preference.
+    #[cfg(target_os = "linux")]
+    #[arg(long, value_enum)]
+    pub(crate) insertion_backend: Option<crate::daemon::desktop::linux_insertion::InsertionBackend>,
     /// Run active smoke tests in addition to passive preflight checks.
     ///
     /// Opens a throwaway probe window and takes focus for a moment:
@@ -603,6 +630,18 @@ pub(crate) struct DoctorCli {
 }
 
 impl DoctorCli {
+    /// Resolve Linux insertion transport for this diagnostic invocation.
+    ///
+    /// # Returns
+    /// The effective transport preference without changing daemon configuration.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn effective_insertion_backend(
+        &self,
+        config: &ConfigFile,
+    ) -> crate::daemon::desktop::linux_insertion::InsertionBackend {
+        self.insertion_backend
+            .unwrap_or_else(|| config.daemon.effective_insertion_backend())
+    }
     /// Return the paste mode this check should validate: CLI flag, then
     /// config, then the platform default. Overrides config for this check
     /// only; does not affect a subsequently started daemon.

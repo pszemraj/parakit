@@ -16,16 +16,47 @@ use crate::daemon::desktop::windows_focus::WindowsFocusSnapshot;
 use crate::daemon::desktop::x11;
 use crate::daemon::desktop::FocusVerification;
 
+#[cfg(target_os = "linux")]
+pub(crate) use super::super::linux_insertion::FocusSource;
+
+/// Platform focus provider for the existing non-Linux insertion path.
+#[cfg(not(target_os = "linux"))]
+#[derive(Clone, Default)]
+pub(crate) struct FocusSource {}
+
+#[cfg(not(target_os = "linux"))]
+impl FocusSource {
+    /// Capture the platform's current insertion target.
+    ///
+    /// # Returns
+    /// The current platform focus snapshot.
+    ///
+    /// # Errors
+    /// Reports a platform focus query failure.
+    pub(crate) fn capture(&self) -> Result<FocusSnapshot> {
+        FocusSnapshot::capture()
+    }
+}
+
+#[cfg(target_os = "linux")]
+enum LinuxFocus {
+    X11 {
+        input_focus: Option<u32>,
+        active_window: Option<u32>,
+        connection: Box<RustConnection>,
+        root: u32,
+        active_window_atom: u32,
+    },
+    Native {
+        client: Option<super::super::ibus::IbusClient>,
+        target: Option<super::super::ibus::NativeTarget>,
+    },
+}
+
 /// Focus owner captured when recording begins.
 pub(crate) struct FocusSnapshot {
     #[cfg(target_os = "linux")]
-    input_focus: Option<u32>,
-    #[cfg(target_os = "linux")]
-    active_window: Option<u32>,
-    #[cfg(target_os = "linux")]
-    linux_connection: RustConnection,
-    #[cfg(target_os = "linux")]
-    linux_root: u32,
+    linux: LinuxFocus,
     #[cfg(target_os = "windows")]
     windows: WindowsFocusSnapshot,
     #[cfg(target_os = "macos")]
@@ -52,16 +83,20 @@ impl FocusSnapshot {
                 .context("could not read X11 root window for focus snapshot")?;
             let focus = linux_current_input_focus(&conn)?;
             let input_focus = linux_focus_is_insertable(focus).then_some(focus);
-            let active_window = x11::active_window(&conn, root)
+            let active_window_atom = x11::active_window_atom(&conn)?;
+            let active_window = x11::active_window(&conn, root, active_window_atom)
                 .context("could not read X11 active window for focus snapshot")?;
             if input_focus.is_none() && active_window.is_none() {
                 anyhow::bail!("X11 focus is not an insertable application window");
             }
             Ok(Self {
-                input_focus,
-                active_window,
-                linux_connection: conn,
-                linux_root: root,
+                linux: LinuxFocus::X11 {
+                    input_focus,
+                    active_window,
+                    connection: Box::new(conn),
+                    root,
+                    active_window_atom,
+                },
             })
         }
 
@@ -93,21 +128,43 @@ impl FocusSnapshot {
     pub(crate) fn verify_current(&self) -> Result<FocusVerification> {
         #[cfg(target_os = "linux")]
         {
-            if let Some(expected) = self.active_window {
-                if let Some(current) = x11::active_window(&self.linux_connection, self.linux_root)
+            let (input_focus, active_window, connection, root, active_window_atom) =
+                match &self.linux {
+                    LinuxFocus::X11 {
+                        input_focus,
+                        active_window,
+                        connection,
+                        root,
+                        active_window_atom,
+                    } => (
+                        input_focus,
+                        active_window,
+                        connection,
+                        root,
+                        active_window_atom,
+                    ),
+                    LinuxFocus::Native { client, target } => {
+                        return Ok(FocusVerification::from_matches(
+                            target.is_some()
+                                && client.as_ref().and_then(|client| client.snapshot()) == *target,
+                        ))
+                    }
+                };
+            if let Some(expected) = *active_window {
+                if let Some(current) = x11::active_window(connection, *root, *active_window_atom)
                     .context("could not query the current X11 active window")?
                 {
                     return Ok(FocusVerification::from_matches(current == expected));
                 }
             }
 
-            let Some(expected) = self.input_focus else {
+            let Some(expected) = *input_focus else {
                 anyhow::bail!(
                     "X11 active window is unavailable and no input focus fallback exists"
                 );
             };
             Ok(FocusVerification::from_matches(
-                linux_current_input_focus(&self.linux_connection)
+                linux_current_input_focus(connection)
                     .context("could not query the current X11 focus")?
                     == expected,
             ))
@@ -198,6 +255,58 @@ impl FocusSnapshot {
     #[cfg(target_os = "macos")]
     pub(crate) fn macos_pid(&self) -> libc::pid_t {
         self.macos.pid()
+    }
+
+    /// Capture a native token without requiring an X11 connection.
+    ///
+    /// # Arguments
+    /// * `client` - Connection that owns this recording's native route, when available.
+    /// * `target` - Original target token; absence prevents native delivery.
+    ///
+    /// # Returns
+    /// A native snapshot that cannot fall back to X11 insertion.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn from_native(
+        client: Option<super::super::ibus::IbusClient>,
+        target: Option<super::super::ibus::NativeTarget>,
+    ) -> Self {
+        Self {
+            linux: LinuxFocus::Native { client, target },
+        }
+    }
+
+    /// Whether this capture is bound to native input-method delivery.
+    ///
+    /// # Returns
+    /// True for a native capture, including one with an unavailable target.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn is_native(&self) -> bool {
+        matches!(self.linux, LinuxFocus::Native { .. })
+    }
+
+    /// Whether known native content metadata permits starting a dictation.
+    ///
+    /// # Returns
+    /// False when the captured field is known to be private.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn permits_dictation(&self) -> bool {
+        !matches!(&self.linux, LinuxFocus::Native { target: Some(target), .. } if !target.eligible())
+    }
+
+    /// Submit only through the native owner captured for this recording.
+    ///
+    /// # Returns
+    /// Definite rejection, submission evidence, or uncertain delivery.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn commit_native(&self, text: &str) -> super::super::ibus::CommitOutcome {
+        use super::super::ibus::CommitOutcome;
+        match &self.linux {
+            LinuxFocus::Native {
+                client: Some(client),
+                target: Some(target),
+            } => client.commit(*target, text),
+            _ => CommitOutcome::Rejected("no eligible IBus target was captured".to_string()),
+        }
     }
 }
 
