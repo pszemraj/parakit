@@ -34,7 +34,7 @@ parakit config show
 parakit config edit
 ```
 
-`config path` prints the resolved path without reading the file. `config init` creates any missing parent directories and writes the fully commented template. `config show`, which is also what bare `parakit config` runs, loads and validates the file and prints the resolved path plus the effective value of every key. `config edit` writes the template first when the file is missing, then opens the file in `$VISUAL`, or in `$EDITOR` when `VISUAL` is unset, empty, or whitespace-only.
+`config path` prints the resolved path without reading the file. `config init` creates any missing parent directories and writes the fully commented template. `config show`, which is also what bare `parakit config` runs, loads and validates the file and prints the resolved path plus the effective value of every key. `config edit` writes the template first when the file is missing, then opens the file with the [configured editor](#editor).
 
 On Linux, `config show` also includes the selected insertion and hotkey backends. See [Linux desktop input](linux-desktop.md#insertion-selection-and-recovery) for transport selection and setup.
 
@@ -46,9 +46,11 @@ On Linux, `config show` also includes the selected insertion and hotkey backends
 
 `--quiet config show` prints nothing but still resolves, loads, and validates the config file, so it can be used as a silent validation command. `--quiet` likewise silences `config path` and the `wrote <path>` line from `config init`, though those commands still perform their normal path resolution and file operations.
 
-`$VISUAL` and `$EDITOR` are split into an executable plus arguments using shell-style quoting, then launched directly with the config path appended. Values such as `EDITOR="code -w"` therefore work without invoking a shell. An empty or whitespace-only value counts as unset, so a blank `VISUAL` falls through to `EDITOR`. With neither variable set to a nonblank value, `config edit` errors and prints the path to edit by hand.
+### Editor
 
-`config edit` stays available when the config is broken, and it does not validate the file after the editor exits. Run `parakit config show` afterward.
+`config edit` uses `$VISUAL`, falling back to `$EDITOR` when `VISUAL` is unset, empty, or whitespace-only. The value is split into an executable plus arguments using shell-style quoting, then launched directly with the config path appended. `EDITOR="code -w"` therefore works without invoking a shell. If both variables are blank or unset, the command prints the path to edit by hand and exits with an error.
+
+The editor can repair a broken config, but its exit does not validate the file. Follow the [edit and validation loop](#validation-and-recovery).
 
 ## Precedence and Loading
 
@@ -76,7 +78,7 @@ max_new_tokens = 512
 enabled = false
 ```
 
-The example disables English cleaning for multilingual dictation. Available models, Qwen controls, and cleaning guidance are under [model presets](running.md#model-presets); accepted config values are in [config_reference.toml](config_reference.toml).
+Available models and Qwen controls are under [model presets](running.md#model-presets). See [cleaning profiles](cleaning-rules.md#profiles) for the example's disabled cleaning and [config_reference.toml](config_reference.toml) for accepted values.
 
 TOML, unknown-key, invalid-value, and rule-validation errors name the config path.
 

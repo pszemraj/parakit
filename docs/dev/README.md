@@ -4,16 +4,7 @@ Source-coverage setup and report commands are in [quality.md#rust-source-coverag
 
 ## Model Artifacts
 
-End-user model selection, downloads, cache behavior, and quantization are in [running.md#model-cache](../running.md#model-cache). F16 and official-runtime comparison procedures are in [quality.md#qwen-and-moondream-comparisons](quality.md#qwen-and-moondream-comparisons).
-
-Maintainer release files:
-
-| File | Role |
-| --- | --- |
-| `parakeet-tdt-0.6b-v3-Q8_0.gguf` | Default user artifact. |
-| `parakeet-tdt-0.6b-v3-F16.gguf` | Source GGUF kept for maintainers and future re-quantization work. |
-
-Avoid unrelated names, nested directories, or model-card-only links for release artifacts.
+Use the [preset artifact names](../running.md#model-presets) for maintainer uploads, without nested directories or model-card-only links. Keep F16 source GGUFs, including v3's `parakeet-tdt-0.6b-v3-F16.gguf`, for future re-quantization. Follow the [model comparison procedures](quality.md#qwen-and-moondream-comparisons) for F16 and official-runtime checks.
 
 The Parakeet converter, loader, and `crispasr-quantize` path are built around F16/F32 tensors. Treat BF16 as future work until it has explicit support and validation.
 
@@ -25,10 +16,16 @@ Install the conversion dependencies once in the Python environment used by `fetc
 python -m pip install -r scripts/requirements-convert.txt
 ```
 
-With no preset, or with `--model-preset parakeet-v3`, rebuild from NVIDIA's `.nemo` checkpoint:
+With no preset, rebuild Ultra from its original Moondream checkpoint:
 
 ```bash
-parakit fetch --from-source --keep-f16 --keep-nemo
+parakit fetch --from-source --keep-f16
+```
+
+Select `parakeet-v3` explicitly to rebuild from NVIDIA's `.nemo` checkpoint:
+
+```bash
+parakit fetch --from-source --model-preset parakeet-v3 --keep-f16 --keep-nemo
 ```
 
 That path downloads [NVIDIA's official `.nemo`](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3), converts it with `vendor/CrispASR/models/convert-parakeet-to-gguf.py`, and quantizes the intermediate GGUF with `crispasr-quantize`.

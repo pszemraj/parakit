@@ -41,9 +41,8 @@ impl FetchOptions {
         self.status(format_args!("parakit: model ready: {name}"));
         self.verbose_status(format_args!("parakit: saved to {}", path.display()));
         let preset = match &self.source {
-            FetchSource::HostedQ8 | FetchSource::OfficialNemo { .. } => {
-                Some(ModelPreset::ParakeetV3)
-            }
+            FetchSource::HostedQ8 => Some(ModelPreset::default()),
+            FetchSource::OfficialNemo { .. } => Some(ModelPreset::ParakeetV3),
             FetchSource::Preset(preset)
             | FetchSource::PresetQ6(preset)
             | FetchSource::PresetSource { preset, .. } => Some(*preset),

@@ -31,7 +31,7 @@ Raw evidence and temporary harness source are in the ignored local directory `ta
 | Live microphone retention | The production capture manager passed 300 ms and three-second captures, both without an added idle wait and after ten seconds idle. All returned finite PCM within the duration bounds. Start/Stop latency, process CPU and context switches were recorded; these are development-profile component observations, not wakeup or power measurements. |
 | CLI contracts | Cached fetch/readback passed; quiet rule testing was silent; a missing model exited 1 with empty stdout and the expected file-path error. Mach-O run paths resolved the matching isolated native libraries. |
 
-Owned-window AX acknowledgements took 40–47 ms in the measured matrix; the explicit absent-context cases took about 1500 ms. The harness event pump differs from an ordinary target application, so its CPU use does not measure daemon polling cost. No polling interval or grace period changed.
+Owned-window AX acknowledgements took 40-47 ms in the measured matrix; the explicit absent-context cases took about 1500 ms. The harness event pump differs from an ordinary target application, so its CPU use does not measure daemon polling cost. No polling interval or grace period changed.
 
 The existing vendored CrispASR deprecation warnings and `block` 0.1.6 future-compatibility diagnostic remain. Strict package Clippy passed without new findings.
 

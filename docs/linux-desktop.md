@@ -13,10 +13,9 @@ An XWayland `DISPLAY` does not make XTest insertion usable in native Wayland app
 
 ## IBus Setup
 
-Default Linux builds include the `ibus` feature and require the [native build dependencies](build.md#native-dependencies). Install Parakit, then register its component once:
+After [installing Parakit](build.md#install), register its IBus component once:
 
 ```bash
-cargo install --locked --path .
 sudo "$(command -v parakit)" ibus install
 ```
 
@@ -41,8 +40,6 @@ parakit --verbose status
 ```
 
 `ibus status` reports the registration file, build support, connection, engine discovery, and active engine. Registration does not prove that the current application accepts native commits. Run `parakit test-paste "hello from parakit"` in a disposable terminal, then inspect the inserted prompt text and [insertion outcome](logging.md#insertion-outcomes).
-
-Before upgrading a default Linux build, install the IBus development package (`sudo apt install libibus-1.0-dev` on Debian/Ubuntu), including on X11. See the [build dependencies](build.md#native-dependencies) for other distributions and the [X11-only build](build.md#install) to omit IBus.
 
 After an upgrade, restart the daemon. Re-run `ibus install` when upgrading from a component that launched `parakit ibus engine`, or if the executable path or keyboard layout changed; log out and back in to reload the engine. To remove the integration, first select another input source, remove Parakit from the desktop's source list, then run:
 
@@ -121,7 +118,7 @@ For X11 clipboard insertion in `terminal` or `standard` mode, `parakit doctor --
 
 ## Focus Guard
 
-Native IBus requires an eligible focused field and blocks fields identified as password, PIN, or private input. It keeps the recording target's engine and focus generation, then checks them immediately before submission. Focus loss, field or source changes, relevant resets, engine destruction, and reconnects invalidate pending insertion even when GNOME reuses the same input-context ID. Unknown native focus blocks delivery. Rejected, policy-blocked, and uncertain native delivery attempt to copy the transcript to the clipboard without sending another paste or commit. If clipboard access is unavailable, enabled daemon history is the remaining recovery path. Inspect the target before pasting a copied uncertain transcript because text may already have arrived.
+Native IBus requires an eligible focused field and blocks fields identified as password, PIN, or private input. It keeps the recording target's engine and focus generation, then checks them immediately before submission. Focus loss, field or source changes, relevant resets, engine destruction, and reconnects invalidate pending insertion even when GNOME reuses the same input-context ID. Unknown native focus blocks delivery. Rejected or uncertain delivery follows the shared [clipboard recovery policy](running.md#clipboard-staging-and-restore); inspect [insertion outcomes](logging.md#insertion-outcomes) before retrying. Use [daemon history](running.md#daemon-control) when clipboard access is unavailable.
 
 The legacy X11 route compares the active X11 window. A clear focus change prevents the paste chord; non-direct modes still follow the shared clipboard policy. If focus capture or recheck fails because X11 is transiently unavailable, parakit pastes anyway. The transcript remains available through daemon history when enabled. Parakit does not inspect application internals with AT-SPI.
 

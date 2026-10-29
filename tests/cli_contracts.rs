@@ -549,7 +549,7 @@ fn config_show_reports_resolved_model_selection() {
             "default",
             "",
             "(default: hosted Q8_0)",
-            "(default: parakeet-v3)",
+            "(default: parakeet-ultra)",
             "q8_0",
         ),
         (
@@ -558,6 +558,13 @@ fn config_show_reports_resolved_model_selection() {
             "custom.gguf",
             "(not applicable: local model)",
             "(from model file)",
+        ),
+        (
+            "default-q6",
+            "[daemon]\nquantize = 'q6_k'\n",
+            "(default: parakeet-ultra Q6_K)",
+            "(default: parakeet-ultra)",
+            "q6_k",
         ),
         (
             "preset",

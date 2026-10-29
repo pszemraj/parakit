@@ -34,22 +34,7 @@ Default input/output devices and mute state matched the initial readback. Output
 
 ## Repeat the native worker test
 
-Use the [native isolation setup](model-validation.md#macos-cpu-and-metal), a model and WAV inside the checkout, and a fresh report destination. The report file must exist; its sibling `.logs` directory must not already exist.
-
-```sh
-mkdir -p target/tmp/native-worker
-printf '{}\n' > target/tmp/native-worker/cpu.json
-export PARAKIT_LIVE_MODEL="$PWD/target/tmp/pr25-mac/models/parakeet-tdt-0.6b-v3-Q8_0.gguf"
-export PARAKIT_LIVE_WAV="$PWD/target/tmp/pr25-mac/followup/juniper-complete-sentence-playback.wav"
-export PARAKIT_LIVE_REPORT="$PWD/target/tmp/native-worker/cpu.json"
-export PARAKIT_LIVE_DEVICE=cpu
-export PARAKIT_LIVE_CUES=1
-cargo test --features metal --bin parakit \
-  microphone_coordinator_worker_reloads_after_idle -- \
-  --ignored --nocapture --test-threads=1
-```
-
-Select `gpu` and a fresh report path for Metal. `PARAKIT_LIVE_SECOND_WAV` optionally adds another loaded/offloaded pair. Use an audible, complete utterance and inspect the recorded transcripts and speech-boundary result. The fixture paths above refer to local ignored artifacts; supply equivalent repository-local files in another checkout.
+Follow the [native microphone worker procedure](quality.md#native-microphone-worker).
 
 ## Still unverified
 

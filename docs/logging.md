@@ -4,7 +4,7 @@ parakit can write JSONL records for completed dictations: model output, inferenc
 
 Audio and redirected console output are never logged, but the raw and cleaned transcript text is, in plaintext, with no built-in retention or size cap. Protect the log directory and rotate or delete old files to match the sensitivity of your dictation.
 
-One append-only `parakit-YYYY-MM-DD.jsonl` file is written per local day, rotating when the local date changes. Each JSON object is written and flushed synchronously before the worker continues. There is no filesystem sync guarantee; an interrupted write can leave a partial final line.
+Transcriptions are appended to `parakit-YYYY-MM-DD.jsonl` using their local date. Each insertion record stays in its transcription's file, even when insertion finishes after midnight. Each JSON object is written and flushed synchronously before the worker continues. There is no filesystem sync guarantee; an interrupted write can leave a partial final line.
 
 Independent logger instances sharing a daily file take an exclusive file lock for each append and any failed-write rollback, so their records cannot overwrite each other.
 
@@ -14,7 +14,7 @@ Terminal output is best-effort. A closed terminal or failed stdout/stderr write 
 
 A completed dictation normally produces two lines: a transcription line, written as soon as the model and cleaner finish, and a later insertion line, written once Parakit knows what happened to the insertion attempt.
 
-```json
+```jsonl
 {"ts":"2026-07-27T14:02:11.482Z","session_id":"2026-07-27T14:02:10.981234000Z-p4312-l0","record_id":7,"parakit_version":"0.5.1","audio_secs":4.21,"infer_ms":187,"raw":"so the build is green now.","cleaned":"So the build is green now","rules_active":29,"cleaner_version":32,"cleaning_profile":"safe","ruleset_id":"v32-safe-bf1d2214e0848c42","drops_trailing_period":true,"number_threshold":4.0,"rules_fired":[{"name":"capitalize-sentence-starts","matches":1},{"name":"fix-trailing-period","matches":1}],"inference":{"model":"qwen3-asr-1.7b-q8_0.gguf","model_preset":"qwen3-asr-1.7b","backend":"qwen3","quantization":"Q8_0","requested_device":"gpu","session_device":"gpu","qwen_language":"auto","qwen_max_new_tokens":512,"native_api_version":"0.7.0"}}
 {"kind":"insertion","ts":"2026-07-27T14:02:11.930Z","session_id":"2026-07-27T14:02:10.981234000Z-p4312-l0","ref_id":7,"insertion_backend":"clipboard","outcome":"pasted","target_bundle_id":"com.mitchellh.ghostty","focus_verification":"matched","transcript_chars":25,"paste_event_posted":true,"pasteboard_requested":null,"acknowledgement_kind":"ax_confirmed","acknowledgement_ms":312,"clipboard_restored":true,"failure_reason":null}
 ```

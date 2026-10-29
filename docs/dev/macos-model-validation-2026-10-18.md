@@ -38,7 +38,7 @@ Cold acquisition covered all twelve artifacts, including F16-to-Q6_K quantizatio
 
 Quiet-mode worker checks produced empty stdout/stderr while recording successful JSONL state. Silence and synthetic noise produced no successful transcript or insertion and preserved the previous history entry. Missing-model and CLI/rules smoke checks also passed.
 
-Ten English FLEURS clips were transcribed across all 24 configurations. Dataset reading-text comparisons and raw predictions are retained locally as diagnostic evidence; they were not freshly adjudicated and do not qualify model accuracy. Synthetic noise/quiet controls do not establish real room-noise behavior. Qwen remains experimental, Redux remains testing-only, and Parakeet v3 Q8_0 remains the default.
+Ten English FLEURS clips were transcribed across all 24 configurations. Dataset reading-text comparisons and raw predictions are retained locally as diagnostic evidence; they were not freshly adjudicated and do not qualify model accuracy. Synthetic noise/quiet controls do not establish real room-noise behavior. At the time of these runs, Qwen was experimental, Redux was testing-only, and Parakeet v3 Q8_0 was the default.
 
 ## Metal reload correction
 

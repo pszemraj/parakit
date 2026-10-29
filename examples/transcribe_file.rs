@@ -27,7 +27,7 @@ struct Cli {
     #[arg(short = 'm', long, conflicts_with = "model_preset")]
     model: Option<PathBuf>,
 
-    /// Hosted Q8_0 preset; defaults to parakeet-v3. Qwen is experimental and Redux is for testing only.
+    /// Hosted Q8_0 preset; defaults to parakeet-ultra. Qwen is experimental and Redux is for testing only.
     #[arg(long, value_enum)]
     model_preset: Option<ModelPreset>,
 

@@ -102,7 +102,7 @@ fn print_config_show(quiet: bool) -> Result<()> {
             .unwrap_or_else(|| config.daemon.model_preset.map_or_else(
                 || match config.daemon.quantize.unwrap_or_default() {
                     ModelQuantization::Q8 => "(default: hosted Q8_0)".to_owned(),
-                    ModelQuantization::Q6K => "(default: parakeet-v3 Q6_K)".to_owned(),
+                    ModelQuantization::Q6K => format!("(default: {} Q6_K)", ModelPreset::default()),
                 },
                 |preset| format!("(preset: {})", preset.id())
             ))
@@ -110,13 +110,13 @@ fn print_config_show(quiet: bool) -> Result<()> {
     outln!(
         "    model_preset: {}",
         if config.daemon.model.is_some() {
-            "(not applicable: local model)"
+            "(not applicable: local model)".to_owned()
         } else {
             config
                 .daemon
                 .model_preset
-                .map(|preset| preset.id())
-                .unwrap_or("(default: parakeet-v3)")
+                .map(|preset| preset.to_string())
+                .unwrap_or_else(|| format!("(default: {})", ModelPreset::default()))
         }
     )?;
     outln!(
