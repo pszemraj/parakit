@@ -1,6 +1,8 @@
 # PR #25 macOS validation
 
-The automated macOS follow-up for PR #25 passed after correcting a microphone failure/Stop race in `0b9ce64`. Physical PTT and device-change checks remain pending at the maintainer's request so the installed daemon can stay running. Application-specific TextEdit and terminal checks are also incomplete.
+The [October 29 follow-up](macos-ibus-followup-2026-10-29.md) completes the unattended daemon lifecycle, native microphone pipeline and stock-daemon insertion checks after the installed instance was stopped.
+
+The initial automated macOS follow-up for PR #25 passed after correcting a microphone failure/Stop race in `0b9ce64`. During this pass the installed daemon stayed running at the maintainer's request; physical PTT, device-change and application-specific TextEdit/terminal checks remained pending.
 
 ## Environment and scope
 
