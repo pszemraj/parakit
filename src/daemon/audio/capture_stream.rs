@@ -161,7 +161,11 @@ pub(super) fn audio_manager_loop(ctx: AudioManagerCtx) {
                 if let Some(current) = live.as_mut().filter(|_| ctx.stream_error.lock().is_none()) {
                     handle_manager_control(control, current, &ctx, idle_policy);
                 } else {
-                    handle_unavailable_control(control, &ctx);
+                    handle_unavailable_control(
+                        control,
+                        live.as_ref().map(|current| &current.drain_control),
+                        &ctx,
+                    );
                 }
                 changes.reset();
             }
@@ -206,12 +210,23 @@ pub(super) fn audio_manager_loop(ctx: AudioManagerCtx) {
 }
 
 /// Reject new captures while retrying, but preserve PCM from an interrupted recording.
-fn handle_unavailable_control(control: AudioControl, ctx: &AudioManagerCtx) {
+fn handle_unavailable_control(
+    control: AudioControl,
+    drain_control: Option<&Sender<DrainControl>>,
+    ctx: &AudioManagerCtx,
+) {
     match control {
         AudioControl::Start { ack, .. } => {
             let _ = ack.send(Err(anyhow!("microphone is unavailable; retrying")));
         }
         AudioControl::Stop { ack } => {
+            // A callback can fail after the loop's error check but before Stop
+            // is selected. Its drain still owns queued PCM and resampler state;
+            // flush those before clearing the epoch or taking the recording.
+            if let Some(drain_control) = drain_control {
+                let _ = ack.send(stop_audio_drain(drain_control));
+                return;
+            }
             ctx.session_epoch.store(0, Ordering::Release);
             let pcm = ctx.state.lock().take_recording();
             let _ = ack.send(Ok(pcm));
@@ -319,8 +334,12 @@ fn start_audio_drain(live: &mut LiveStream, epoch: u64, include_pre_roll: bool) 
 }
 
 fn stop_live_recording(live: &mut LiveStream) -> Result<Vec<f32>> {
+    stop_audio_drain(&live.drain_control)
+}
+
+fn stop_audio_drain(drain_control: &Sender<DrainControl>) -> Result<Vec<f32>> {
     let (ack_tx, ack_rx) = bounded(1);
-    live.drain_control
+    drain_control
         .send(DrainControl::Stop { ack: ack_tx })
         .context("audio drain is not available")?;
     recv_audio_control_ack(ack_rx, "audio drain", "Stop")
@@ -509,6 +528,69 @@ mod tests {
     use crate::daemon::notifications::Notifier;
 
     #[test]
+    fn stop_after_callback_error_retains_queued_pcm_and_resampler_tail() {
+        for rate in [TARGET_RATE, 48_000] {
+            let retained = vec![0.75, -0.75];
+            let samples = vec![0.25; 100];
+            let mut expected = retained.clone();
+            let mut pipeline = CapturePipeline {
+                resampler: make_resampler(rate).unwrap(),
+            };
+            let mut resampled = Vec::new();
+            expected.extend_from_slice(pipeline.process(&samples, &mut resampled));
+            pipeline.finish_recording(&mut expected);
+
+            let state = Arc::new(Mutex::new(CaptureState::new()));
+            state.lock().buffer = retained;
+            let epoch = Arc::new(AtomicU64::new(7));
+            let log = Arc::new(Logger::new(LogLevel::Quiet));
+            let ctx = AudioManagerCtx {
+                state: Arc::clone(&state),
+                session_epoch: Arc::clone(&epoch),
+                current: Arc::new(Mutex::new(None)),
+                alive: Arc::new(AtomicBool::new(true)),
+                stream_error: Arc::new(Mutex::new(Some("callback failed".into()))),
+                control_rx: bounded(1).1,
+                log: Arc::clone(&log),
+                notifier: Notifier::silent(log),
+                ready: bounded(1).0,
+            };
+            let (mut producer, consumer) = HeapRb::<f32>::new(1_024).split();
+            assert_eq!(producer.push_slice(&samples), samples.len());
+            let (wake, wake_rx) = bounded(1);
+            let (control, control_rx) = bounded(4);
+            let alive = Arc::new(AtomicBool::new(true));
+            let thread = spawn_audio_drain(
+                consumer,
+                wake_rx,
+                control_rx,
+                Arc::clone(&state),
+                Arc::clone(&epoch),
+                CapturePipeline {
+                    resampler: make_resampler(rate).unwrap(),
+                },
+                Arc::clone(&alive),
+            )
+            .unwrap();
+            let drain = AudioDrain {
+                alive,
+                wake,
+                thread: Some(thread),
+            };
+
+            let (ack, reply) = bounded(1);
+            handle_unavailable_control(AudioControl::Stop { ack }, Some(&control), &ctx);
+            let actual = reply.try_recv().unwrap().unwrap();
+            drop(drain);
+
+            assert_eq!(actual, expected, "input rate {rate}");
+            assert_eq!(epoch.load(Ordering::Acquire), 0);
+            assert!(state.lock().buffer.is_empty());
+            assert!(state.lock().pre_roll.is_empty());
+        }
+    }
+
+    #[test]
     fn unavailable_microphone_rejects_start_and_returns_retained_audio_on_stop() {
         let state = Arc::new(Mutex::new(CaptureState::new()));
         let samples = vec![0.25, -0.5, 0.75];
@@ -527,7 +609,7 @@ mod tests {
             ready: bounded(1).0,
         };
         let (ack, reply) = bounded(1);
-        handle_unavailable_control(AudioControl::Start { epoch: 8, ack }, &ctx);
+        handle_unavailable_control(AudioControl::Start { epoch: 8, ack }, None, &ctx);
         assert!(reply
             .try_recv()
             .unwrap()
@@ -536,7 +618,7 @@ mod tests {
             .contains("unavailable"));
         assert_eq!(epoch.load(Ordering::Acquire), 7);
         let (ack, reply) = bounded(1);
-        handle_unavailable_control(AudioControl::Stop { ack }, &ctx);
+        handle_unavailable_control(AudioControl::Stop { ack }, None, &ctx);
         assert_eq!(reply.try_recv().unwrap().unwrap(), samples);
         assert_eq!(epoch.load(Ordering::Acquire), 0);
         assert!(ctx.state.lock().buffer.is_empty());

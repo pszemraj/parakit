@@ -8,7 +8,13 @@ use crate::daemon::{
 };
 use parakit::inference::{DeviceMode, Engine};
 use serde_json::json;
-use std::{path::PathBuf, process::Command, sync::Arc, thread, time::Duration};
+use std::{
+    path::PathBuf,
+    process::Command,
+    sync::Arc,
+    thread,
+    time::{Duration, Instant},
+};
 
 fn repository_path(key: &str) -> PathBuf {
     let path = PathBuf::from(std::env::var_os(key).expect(key));
@@ -45,6 +51,106 @@ fn metrics(pcm: &[f32]) -> serde_json::Value {
         })
         .collect();
     json!({"samples": pcm.len(), "sample_rate": TARGET_RATE, "rms": rms, "tones": tones})
+}
+
+fn process_usage() -> libc::rusage {
+    let mut usage = std::mem::MaybeUninit::<libc::rusage>::uninit();
+    // SAFETY: getrusage initializes the supplied rusage on success; it does not
+    // retain the pointer, and assume_init is reached only after a successful call.
+    assert_eq!(
+        unsafe { libc::getrusage(libc::RUSAGE_SELF, usage.as_mut_ptr()) },
+        0
+    );
+    unsafe { usage.assume_init() }
+}
+
+fn usage_delta(before: &libc::rusage, after: &libc::rusage) -> serde_json::Value {
+    let seconds = |value: libc::timeval| value.tv_sec as f64 + value.tv_usec as f64 / 1_000_000.0;
+    json!({
+        "scope": "process",
+        "user_cpu_seconds": seconds(after.ru_utime) - seconds(before.ru_utime),
+        "system_cpu_seconds": seconds(after.ru_stime) - seconds(before.ru_stime),
+        "voluntary_context_switches": after.ru_nvcsw - before.ru_nvcsw,
+        "involuntary_context_switches": after.ru_nivcsw - before.ru_nivcsw,
+    })
+}
+
+#[test]
+#[ignore = "opens the real macOS microphone; requires microphone permission and an available input device"]
+fn microphone_capture_retains_samples_after_idle() {
+    let log = Arc::new(Logger::new(LogLevel::Quiet));
+    let audio = AudioCapture::open(Arc::clone(&log), Notifier::silent(log)).unwrap();
+    let mic = audio.mic_info().expect("opened microphone metadata");
+    println!(
+        "{}",
+        json!({
+            "microphone": {
+                "name": mic.name,
+                "input_rate": mic.input_rate,
+                "channels": mic.channels,
+                "sample_format": mic.sample_format,
+                "resampling": mic.resampling,
+                "source_id": mic.source_id,
+                "config_note": mic.config_note,
+            },
+            "model_sample_rate": TARGET_RATE,
+        })
+    );
+    // Warm the always-running macOS stream and its bounded 350 ms pre-roll.
+    thread::sleep(Duration::from_secs(1));
+    for idle_seconds in [0, 10] {
+        for capture_ms in [300, 3_000] {
+            let idle_usage = process_usage();
+            let idle_at = Instant::now();
+            thread::sleep(Duration::from_secs(idle_seconds));
+            let idle_elapsed = idle_at.elapsed();
+            let after_idle = process_usage();
+
+            let capture_usage = process_usage();
+            let start_at = Instant::now();
+            audio.handle.start_recording().unwrap();
+            let start_latency = start_at.elapsed();
+            let held_at = Instant::now();
+            thread::sleep(Duration::from_millis(capture_ms));
+            let held = held_at.elapsed();
+            let stop_at = Instant::now();
+            let pcm = audio.handle.stop_recording().unwrap();
+            let stop_latency = stop_at.elapsed();
+            let total_elapsed = start_at.elapsed();
+            let after_capture = process_usage();
+
+            // Allow callback scheduling slack, plus at most 350 ms of pre-roll.
+            // These bounds check retained duration, not acoustic speech onset.
+            let slack = 0.1_f64.max(held.as_secs_f64() * 0.1);
+            let minimum = ((held.as_secs_f64() - slack).max(0.0) * f64::from(TARGET_RATE)) as usize;
+            let maximum = ((total_elapsed.as_secs_f64() + 0.35 + 0.1) * f64::from(TARGET_RATE))
+                .ceil() as usize;
+            let finite = pcm.iter().all(|sample| sample.is_finite());
+            println!(
+                "{}",
+                json!({
+                    "idle_requested_seconds": idle_seconds,
+                    "idle_elapsed_seconds": idle_elapsed.as_secs_f64(),
+                    "idle_usage": usage_delta(&idle_usage, &after_idle),
+                    "capture_requested_ms": capture_ms,
+                    "held_seconds": held.as_secs_f64(),
+                    "start_control_ms": start_latency.as_secs_f64() * 1_000.0,
+                    "stop_control_ms": stop_latency.as_secs_f64() * 1_000.0,
+                    "capture_usage": usage_delta(&capture_usage, &after_capture),
+                    "samples": pcm.len(),
+                    "sample_rate": TARGET_RATE,
+                    "all_finite": finite,
+                    "minimum_samples": minimum,
+                    "maximum_samples": maximum,
+                })
+            );
+            assert!(finite, "capture contains nonfinite samples");
+            assert!(
+                (minimum..=maximum).contains(&pcm.len()),
+                "retained duration outside bounds after {idle_seconds}s idle/{capture_ms}ms capture"
+            );
+        }
+    }
 }
 
 #[test]
