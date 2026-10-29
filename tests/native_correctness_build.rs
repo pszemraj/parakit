@@ -141,7 +141,9 @@ fn preparation_writes_only_the_output_copy() {
         native_correctness::patch_source(SOURCE).unwrap()
     );
     let old_time = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1);
-    fs::File::open(&output)
+    fs::File::options()
+        .write(true)
+        .open(&output)
         .unwrap()
         .set_times(fs::FileTimes::new().set_modified(old_time))
         .unwrap();
