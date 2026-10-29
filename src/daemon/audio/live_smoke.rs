@@ -16,6 +16,9 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[path = "live_worker_smoke.rs"]
+mod worker_smoke;
+
 fn repository_path(key: &str) -> PathBuf {
     let path = PathBuf::from(std::env::var_os(key).expect(key));
     let root = std::env::current_dir().unwrap().canonicalize().unwrap();
