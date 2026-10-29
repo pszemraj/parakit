@@ -143,6 +143,22 @@ fn audio_drain_loop(
             }
         }
     }
+
+    // A failed stream can be replaced while PTT remains held. Preserve its
+    // queued samples and resampler tail without ending that recording epoch.
+    while drain_audio_ring(
+        &mut consumer,
+        &state,
+        &session_epoch,
+        &mut pipeline,
+        &mut input,
+        &mut resampled,
+    ) {}
+    if session_epoch.load(Ordering::Acquire) != 0 {
+        resampled.clear();
+        pipeline.finish_recording(&mut resampled);
+        append_processed_samples(&state, &session_epoch, &resampled);
+    }
 }
 
 /// Apply one start or stop command to the drain state.

@@ -338,8 +338,9 @@ fn pause_live_stream(live: &mut LiveStream, idle_policy: IdleStreamPolicy) -> Re
 struct LiveStream {
     info: MicInfo,
     identity: MicIdentity,
-    drain_control: Sender<DrainControl>,
+    // Stop callbacks before closing the drain's command channel.
     stream: Stream,
+    drain_control: Sender<DrainControl>,
     paused: bool,
     dropped_samples: Arc<AtomicU64>,
     _drain: AudioDrain,
