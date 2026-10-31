@@ -760,14 +760,14 @@ dependencies = [
 
 [[package]]
 name = "crispasr"
-version = "0.8.42"
+version = "0.8.49"
 dependencies = [
  "crispasr-sys",
 ]
 
 [[package]]
 name = "crispasr-sys"
-version = "0.8.42"
+version = "0.8.49"
 
 [[package]]
 name = "crossbeam-channel"
