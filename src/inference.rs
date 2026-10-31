@@ -303,6 +303,7 @@ impl Engine {
     ///
     /// Call [`initialize_crispasr_runtime_defaults`] at process startup, or set
     /// `CRISPASR_QWEN3_HOTWORDS_AS_CONTEXT=1`, to route the text as raw context.
+    /// Without that native setting, context is ignored.
     /// This method does not reject silent PCM; the daemon filters it before inference.
     ///
     /// # Arguments
@@ -311,21 +312,27 @@ impl Engine {
     ///
     /// # Returns
     /// Joined transcript text. Captures shorter than one second and unusable
-    /// context fall back to ordinary inference.
+    /// context fall back to ordinary inference. Output copied from context is
+    /// retried once without context, including on longer captures.
     ///
     /// # Errors
     /// Reports inference failures or failure to clear the session's context.
     pub fn transcribe_with_context(&self, pcm: &[f32], context: Option<&str>) -> Result<String> {
-        let context = context.filter(|_| pcm.len() >= MIN_INFERENCE_SAMPLES);
+        let mut context = context.filter(|_| {
+            self.qwen.is_some() && pcm.len() >= MIN_INFERENCE_SAMPLES && raw_qwen_context_enabled()
+        });
         let restore = self.qwen.as_ref().map(|_| QwenContextRestore {
             session: &self.session,
             active: true,
         });
-        if restore.is_some() {
-            self.session
+        if restore.is_some()
+            && self
+                .session
                 .set_hotwords(context.unwrap_or_default())
-                .or_else(|_| self.session.set_hotwords(""))
-                .map_err(anyhow::Error::msg)?;
+                .is_err()
+        {
+            context = None;
+            self.session.set_hotwords("").map_err(anyhow::Error::msg)?;
         }
         let pcm = pad_short_pcm(pcm);
         let result = self
@@ -333,13 +340,51 @@ impl Engine {
             .transcribe(pcm.as_ref())
             .map(join_segment_text)
             .map_err(|e| anyhow::anyhow!("crispasr transcribe failed: {e}"));
-        if let Some(restore) = restore {
-            restore
-                .clear()
-                .context("clear Qwen context after transcription")?;
+        let cleared = restore.map_or(Ok(()), QwenContextRestore::clear);
+        match (result, cleared) {
+            (Err(error), Err(clear_error)) => {
+                eprintln!("parakit: warning: failed to clear Qwen context: {clear_error:#}");
+                Err(error)
+            }
+            (Err(error), Ok(())) => Err(error),
+            (Ok(_), Err(error)) => Err(error.context("clear Qwen context after transcription")),
+            (Ok(text), Ok(())) => {
+                if context.is_some_and(|prior| copies_context(&text, prior)) {
+                    self.transcribe(pcm.as_ref())
+                } else {
+                    Ok(text)
+                }
+            }
         }
-        result
     }
+}
+
+/// Match the native runtime's environment table and integer flag semantics.
+fn raw_qwen_context_enabled() -> bool {
+    // Startup defaults precede native threads; inference only reads this value.
+    // On Windows this also observes the CRT table used by CrispASR's getenv.
+    unsafe {
+        let value = libc::getenv(c"CRISPASR_QWEN3_HOTWORDS_AS_CONTEXT".as_ptr());
+        !value.is_null() && libc::atoi(value) != 0
+    }
+}
+
+/// Detect a whole short output or a five-word run copied from prior text.
+fn copies_context(output: &str, context: &str) -> bool {
+    let words = |text: &str| {
+        text.split(|c: char| !c.is_alphanumeric())
+            .filter(|word| !word.is_empty())
+            .map(str::to_lowercase)
+            .collect::<Vec<_>>()
+    };
+    let output = words(output);
+    let context = words(context);
+    let run = output.len().min(5);
+    run != 0
+        && context.len() >= run
+        && output
+            .windows(run)
+            .any(|candidate| context.windows(run).any(|prior| candidate == prior))
 }
 
 /// Clear per-call context on early returns and unwinding.
@@ -522,6 +567,49 @@ mod tests {
     fn long_pcm_is_borrowed_without_copying() {
         let pcm = vec![0.0; MIN_INFERENCE_SAMPLES];
         assert!(matches!(pad_short_pcm(&pcm), Cow::Borrowed(_)));
+    }
+
+    #[test]
+    fn copied_context_matches_normalized_runs_without_rejecting_new_wording() {
+        for (output, context, copied) in [
+            ("", "Earlier text", false),
+            ("...", "Earlier text", false),
+            ("I'm.", "Earlier, I'm ordering groceries.", true),
+            (
+                "Refill vitamin D and fish oil.",
+                "Remember: refill vitamin D and fish oil.",
+                true,
+            ),
+            (
+                "New speech. Will book the ski trip with Lily for March.",
+                "will book the ski trip with Lily for March",
+                true,
+            ),
+            (
+                "CAFÉ, naïve: 雪 and Émilie!",
+                "Earlier: café naïve 雪 and Émilie.",
+                true,
+            ),
+            ("one two three four", "one two three four five", true),
+            ("one two three four new", "one two three four five", false),
+            (
+                "new one two three four five ending",
+                "one two three four five",
+                true,
+            ),
+            (
+                "the thermostat",
+                "another theory about thermodynamics",
+                false,
+            ),
+            (
+                "NeoBERT corrected the domain term",
+                "We discussed NeoBERT and Common Pile.",
+                false,
+            ),
+        ] {
+            assert_eq!(copies_context(output, context), copied, "{output:?}");
+        }
     }
 
     #[test]
