@@ -17,6 +17,16 @@ use std::time::{Duration, Instant};
 pub(crate) const MAX_UTTERANCE_SECONDS: u64 = 270;
 const MAX_UTTERANCE: Duration = Duration::from_secs(MAX_UTTERANCE_SECONDS);
 
+/// Context intent selected when a dictation begins.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) enum DictationMode {
+    /// Use the original hotkey's configured context policy.
+    #[default]
+    Plain,
+    /// Include eligible recent dictations.
+    WithContext,
+}
+
 /// Logical push-to-talk transition emitted by platform hotkey backends.
 ///
 /// Backends should stay on the OS input boundary. The coordinator consumes
@@ -27,12 +37,16 @@ pub(crate) enum HotkeyTransition {
     Pressed {
         /// Monotonic timestamp captured at hotkey activation.
         at: Instant,
+        /// Context intent latched at hotkey activation.
+        mode: DictationMode,
     },
     /// PTT press carrying the target captured on the input-method event loop.
     #[cfg(all(target_os = "linux", feature = "ibus"))]
     NativePressed {
         /// Monotonic timestamp observed when the engine event arrived.
         at: Instant,
+        /// Context intent latched by the input method.
+        mode: DictationMode,
         /// Input-method target bound before the coordinator handles this event.
         target: super::desktop::ibus::NativeTarget,
     },
@@ -132,6 +146,7 @@ fn recording_coordinator_loop_with_focus(
     let mut listening: Option<Arc<AtomicBool>> = None;
     let mut started_at = None;
     let mut focus_at_start = None;
+    let mut recording_mode = DictationMode::Plain;
 
     while let Some(event) = next_coordinator_event(&rx, started_at, max_utterance) {
         let stopped_at = match event {
@@ -150,10 +165,10 @@ fn recording_coordinator_loop_with_focus(
                 if send_recording_result(
                     &tx,
                     audio.stop_recording(),
-                    started_at,
-                    stopped_at,
+                    (started_at, stopped_at),
                     &mut focus_at_start,
                     activity,
+                    recording_mode,
                     log,
                 ) == WorkerSendStatus::Disconnected
                 {
@@ -176,14 +191,14 @@ fn recording_coordinator_loop_with_focus(
             continue;
         }
 
-        let (at, captured_focus) = match event {
-            CoordinatorEvent::Hotkey(HotkeyTransition::Pressed { at }) => {
+        let (at, mode, captured_focus) = match event {
+            CoordinatorEvent::Hotkey(HotkeyTransition::Pressed { at, mode }) => {
                 let focus = focus_source.capture().ok();
-                (at, focus)
+                (at, mode, focus)
             }
             #[cfg(all(target_os = "linux", feature = "ibus"))]
-            CoordinatorEvent::Hotkey(HotkeyTransition::NativePressed { at, target }) => {
-                (at, focus_source.capture_native(target).ok())
+            CoordinatorEvent::Hotkey(HotkeyTransition::NativePressed { at, mode, target }) => {
+                (at, mode, focus_source.capture_native(target).ok())
             }
             _ => unreachable!("release and maximum duration were handled above"),
         };
@@ -222,6 +237,7 @@ fn recording_coordinator_loop_with_focus(
             }
         }
         recording_activity = Some(lease);
+        recording_mode = mode;
         listening = Some(recording);
         started_at = Some(at);
     }
@@ -267,10 +283,10 @@ enum WorkerSendStatus {
 fn send_recording_result(
     tx: &Sender<WorkerEvent>,
     recording: anyhow::Result<Vec<f32>>,
-    started_at: Instant,
-    stopped_at: Instant,
+    (started_at, stopped_at): (Instant, Instant),
     focus_at_start: &mut Option<FocusSnapshot>,
     activity: Option<ActivityGuard>,
+    mode: DictationMode,
     log: &Logger,
 ) -> WorkerSendStatus {
     let pcm = match recording {
@@ -284,6 +300,7 @@ fn send_recording_result(
     send_required_worker_event(
         tx,
         WorkerEvent::Stopped {
+            mode,
             started_at,
             stopped_at,
             pcm,
@@ -382,7 +399,10 @@ mod tests {
         });
         let started_at = Instant::now();
         hotkey_tx
-            .send(HotkeyTransition::Pressed { at: started_at })
+            .send(HotkeyTransition::Pressed {
+                at: started_at,
+                mode: DictationMode::Plain,
+            })
             .unwrap();
         let started = worker_rx.recv_timeout(EVENT_TIMEOUT);
         let captured_before_destruction_finished = observed_audio.test_is_recording();
@@ -454,8 +474,17 @@ mod tests {
 
         let started_at = Instant::now();
         hotkey_tx
-            .send(HotkeyTransition::Pressed { at: started_at })
+            .send(HotkeyTransition::Pressed {
+                at: started_at,
+                mode: DictationMode::WithContext,
+            })
             .expect("hotkey press should send");
+        hotkey_tx
+            .send(HotkeyTransition::Pressed {
+                at: started_at,
+                mode: DictationMode::Plain,
+            })
+            .expect("repeated press should send");
 
         let WorkerEvent::Started { recording } =
             worker_rx.recv_timeout(EVENT_TIMEOUT).expect("start event")
@@ -466,6 +495,13 @@ mod tests {
         let stopped = worker_rx
             .recv_timeout(EVENT_TIMEOUT)
             .expect("timeout stop event");
+        assert!(matches!(
+            &stopped,
+            WorkerEvent::Stopped {
+                mode: DictationMode::WithContext,
+                ..
+            }
+        ));
         assert_eq!(activity.remaining(Some(Duration::ZERO)), None);
         assert_empty_stopped_event(stopped, started_at);
         assert!(!recording.load(Ordering::Acquire));
@@ -496,10 +532,10 @@ mod tests {
                 Err(anyhow::anyhow!(
                     "audio drain accepted Stop but did not acknowledge before timeout"
                 )),
-                started_at,
-                stopped_at,
+                (started_at, stopped_at),
                 &mut focus_at_start,
                 None,
+                DictationMode::Plain,
                 &log,
             )
         });
@@ -548,7 +584,10 @@ mod tests {
 
         let started_at = Instant::now();
         hotkey_tx
-            .send(HotkeyTransition::Pressed { at: started_at })
+            .send(HotkeyTransition::Pressed {
+                at: started_at,
+                mode: DictationMode::Plain,
+            })
             .expect("hotkey press should send");
         hotkey_tx
             .send(HotkeyTransition::Released {
@@ -588,7 +627,10 @@ mod tests {
         });
 
         hotkey_tx
-            .send(HotkeyTransition::Pressed { at: Instant::now() })
+            .send(HotkeyTransition::Pressed {
+                at: Instant::now(),
+                mode: DictationMode::Plain,
+            })
             .expect("hotkey press should send");
         let exited_on_disconnect = finished_rx.recv_timeout(EVENT_TIMEOUT).is_ok();
         drop(hotkey_tx);
@@ -627,7 +669,10 @@ mod tests {
         });
         for _ in 0..2 {
             hotkey_tx
-                .send(HotkeyTransition::Pressed { at: Instant::now() })
+                .send(HotkeyTransition::Pressed {
+                    at: Instant::now(),
+                    mode: DictationMode::Plain,
+                })
                 .unwrap();
             hotkey_tx
                 .send(HotkeyTransition::Released { at: Instant::now() })
@@ -663,7 +708,10 @@ mod tests {
 
         let started_at = Instant::now();
         hotkey_tx
-            .send(HotkeyTransition::Pressed { at: started_at })
+            .send(HotkeyTransition::Pressed {
+                at: started_at,
+                mode: DictationMode::Plain,
+            })
             .expect("hotkey press should send");
         hotkey_tx
             .send(HotkeyTransition::Released {
@@ -709,7 +757,10 @@ mod tests {
         });
         let first_at = Instant::now();
         hotkey_tx
-            .send(HotkeyTransition::Pressed { at: first_at })
+            .send(HotkeyTransition::Pressed {
+                at: first_at,
+                mode: DictationMode::Plain,
+            })
             .unwrap();
         let WorkerEvent::Started { recording: first } =
             worker_rx.recv_timeout(EVENT_TIMEOUT).unwrap()
@@ -729,7 +780,10 @@ mod tests {
         assert!(!first.load(Ordering::Acquire));
 
         hotkey_tx
-            .send(HotkeyTransition::Pressed { at: Instant::now() })
+            .send(HotkeyTransition::Pressed {
+                at: Instant::now(),
+                mode: DictationMode::Plain,
+            })
             .unwrap();
         let WorkerEvent::Started { recording: next } =
             worker_rx.recv_timeout(EVENT_TIMEOUT).unwrap()

@@ -252,6 +252,23 @@ Qwen defaults to automatic language identification and a maximum of 512 generate
 
 For multilingual dictation, follow the [cleaning profile guidance](cleaning-rules.md#profiles).
 
+### Qwen Context
+
+With a Qwen3-ASR model, hold `Ctrl+Alt+Space` to dictate with recent context. On macOS use `Left Control+Left Option+Space`. The context choice is fixed when Space is pressed, so releasing Alt or Option while speaking does not change it or stop recording. The extra shortcut is inactive for other models. If a registered context shortcut is already owned, Parakit warns and keeps the original shortcut available.
+
+By default, the worker takes up to three prior dictations from the last ten minutes across all apps, orders them oldest first, and uses their stored text as context. It retains the last 1,500 Unicode characters of the combined text, including newline separators. History contains cleaned text, or raw text when cleaning is disabled. The same context is supplied to every native audio chunk; output from an earlier chunk is not fed into later chunks.
+
+To use context with the original shortcut too:
+
+```toml
+[qwen]
+context_on_default_hotkey = true
+```
+
+`context_dictations` and `context_max_age_minutes` adjust the count and age. Set `context_dictations = 0` to disable context. These settings reuse the existing [daemon history](#daemon-control), so `daemon.transcript_history` limits available entries and zero disables context too. Nothing extra is stored or written to disk. Empty, expired, disabled, or unavailable context falls back to ordinary dictation. Captures shorter than one second also use ordinary transcription and retain the existing silence padding; context can otherwise make Qwen copy prior text on very short audio.
+
+Restart the daemon after changing configuration. On Linux IBus, install the matching `parakit-ibus` helper and [reload the engine after upgrading](linux-desktop.md#ibus-setup). Recent text can help names and terminology, but an earlier mistranscription can also bias later output. Use the original shortcut with `context_on_default_hotkey = false` for ordinary dictation.
+
 The [Qwen team](https://huggingface.co/Qwen/Qwen3-ASR-0.6B) publishes Qwen3-ASR under [Apache 2.0](https://www.apache.org/licenses/LICENSE-2.0). [Moondream Ultra](https://huggingface.co/moondream/parakeet-ultra) and [Redux](https://huggingface.co/moondream/parakeet-redux) derive from NVIDIA Parakeet v3 and use [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/); the linked cstr repositories provide the GGUF conversions.
 
 ### Other GGUF Builds

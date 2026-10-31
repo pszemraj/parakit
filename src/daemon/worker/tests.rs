@@ -95,6 +95,7 @@ fn live_native_clipboard_recovery_without_history() {
         let (done_tx, done_rx) = crossbeam_channel::bounded(1);
         let now = Instant::now();
         tx.send(WorkerEvent::Stopped {
+            mode: DictationMode::Plain,
             started_at: now,
             stopped_at: now,
             pcm: vec![0.1; 160],
@@ -147,6 +148,7 @@ fn run_live_worker(focus: FocusSnapshot, text: &'static str, keep_clipboard: boo
     let (done_tx, done_rx) = crossbeam_channel::bounded(1);
     let now = Instant::now();
     tx.send(WorkerEvent::Stopped {
+        mode: DictationMode::Plain,
         started_at: now,
         stopped_at: now + Duration::from_millis(500),
         pcm: vec![0.1; TARGET_RATE as usize / 2],
@@ -165,7 +167,7 @@ fn run_live_worker(focus: FocusSnapshot, text: &'static str, keep_clipboard: boo
 }
 
 impl WorkerEngine for FakeEngine {
-    fn transcribe(&self, _pcm: &[f32]) -> Result<String> {
+    fn transcribe(&self, _pcm: &[f32], _context: Option<&str>) -> Result<String> {
         self.transcriptions.fetch_add(1, Ordering::SeqCst);
         self.transcript
             .map(str::to_owned)
@@ -176,6 +178,99 @@ impl WorkerEngine for FakeEngine {
 impl Drop for FakeEngine {
     fn drop(&mut self) {
         self.drops.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+#[test]
+fn prior_context_obeys_mode_defaults_history_and_backend() {
+    struct ContextEngine {
+        observed: Sender<Option<String>>,
+        qwen: bool,
+    }
+    impl WorkerEngine for ContextEngine {
+        fn transcribe(&self, _: &[f32], context: Option<&str>) -> Result<String> {
+            self.observed.send(context.map(str::to_owned)).unwrap();
+            Ok("new dictation".into())
+        }
+
+        fn supports_context(&self) -> bool {
+            self.qwen
+        }
+    }
+    for (qwen, history, count, always, mode, expected) in [
+        (
+            true,
+            2,
+            3,
+            false,
+            DictationMode::WithContext,
+            Some("prior dictation"),
+        ),
+        (true, 2, 3, false, DictationMode::Plain, None),
+        (
+            true,
+            2,
+            3,
+            true,
+            DictationMode::Plain,
+            Some("prior dictation"),
+        ),
+        (true, 0, 3, true, DictationMode::WithContext, None),
+        (true, 2, 0, true, DictationMode::WithContext, None),
+        (false, 2, 3, true, DictationMode::WithContext, None),
+    ] {
+        let state = Arc::new(SharedState::with_history_limit(history));
+        state.remember_transcript("prior dictation".into());
+        let (observed_tx, observed_rx) = crossbeam_channel::unbounded();
+        let (tx, rx) = crossbeam_channel::bounded(2);
+        let mut ctx = test_worker_ctx(
+            ContextEngine {
+                observed: observed_tx,
+                qwen,
+            },
+            &state,
+            Sounds::new(false),
+            rx,
+            0,
+        );
+        ctx.settings.context_on_default_hotkey = always;
+        ctx.settings.context_dictations = count;
+        let worker = std::thread::spawn(move || {
+            worker_loop_with(ctx, None, || anyhow::bail!("unexpected reload"))
+        });
+        let (done_tx, done_rx) = crossbeam_channel::bounded(1);
+        let mut event = stopped_capture(Instant::now(), vec![0.1; 160], None, done_tx);
+        if let WorkerEvent::Stopped {
+            mode: event_mode, ..
+        } = &mut event
+        {
+            *event_mode = mode;
+        }
+        tx.send(event).unwrap();
+        done_rx
+            .recv_timeout(Duration::from_secs(2))
+            .unwrap()
+            .unwrap();
+        assert_eq!(observed_rx.recv().unwrap().as_deref(), expected);
+        if qwen && !always && mode == DictationMode::WithContext {
+            for next_mode in [DictationMode::Plain, DictationMode::WithContext] {
+                let (done_tx, done_rx) = crossbeam_channel::bounded(1);
+                let mut event = stopped_capture(Instant::now(), vec![0.1; 160], None, done_tx);
+                if let WorkerEvent::Stopped { mode, .. } = &mut event {
+                    *mode = next_mode;
+                }
+                tx.send(event).unwrap();
+                done_rx
+                    .recv_timeout(Duration::from_secs(2))
+                    .unwrap()
+                    .unwrap();
+                let expected = (next_mode == DictationMode::WithContext)
+                    .then_some("new dictation\nnew dictation");
+                assert_eq!(observed_rx.recv().unwrap().as_deref(), expected);
+            }
+        }
+        drop(tx);
+        worker.join().unwrap();
     }
 }
 
@@ -204,6 +299,9 @@ fn test_worker_ctx<E>(
             data_log: None,
             paste_mode: PasteMode::Standard,
             keep_transcript_clipboard: false,
+            context_on_default_hotkey: false,
+            context_dictations: 3,
+            context_max_age: Duration::from_secs(600),
         },
         cleaner: None,
         sounds,
@@ -220,7 +318,7 @@ fn test_worker_ctx<E>(
 fn logging_metadata_stays_with_the_resident_session_until_reload() {
     struct MetadataEngine(Arc<AtomicUsize>);
     impl WorkerEngine for MetadataEngine {
-        fn transcribe(&self, _: &[f32]) -> Result<String> {
+        fn transcribe(&self, _: &[f32], _: Option<&str>) -> Result<String> {
             Ok("dictation".to_owned())
         }
 
@@ -317,6 +415,7 @@ fn stopped_capture(
     completion: Sender<Result<(), String>>,
 ) -> WorkerEvent {
     WorkerEvent::Stopped {
+        mode: DictationMode::Plain,
         started_at: now,
         stopped_at: now,
         pcm,
@@ -419,7 +518,7 @@ fn exercise_capture_during_reload(held: bool) {
 
     struct RecordingEngine(Sender<Vec<f32>>);
     impl WorkerEngine for RecordingEngine {
-        fn transcribe(&self, pcm: &[f32]) -> Result<String> {
+        fn transcribe(&self, pcm: &[f32], _: Option<&str>) -> Result<String> {
             self.0.send(pcm.to_vec()).unwrap();
             Ok("first words during reload and final words".to_owned())
         }
@@ -468,7 +567,10 @@ fn exercise_capture_during_reload(held: bool) {
     .unwrap();
 
     hotkey_tx
-        .send(HotkeyTransition::Pressed { at: Instant::now() })
+        .send(HotkeyTransition::Pressed {
+            at: Instant::now(),
+            mode: DictationMode::Plain,
+        })
         .unwrap();
     entered_rx.recv_timeout(Duration::from_secs(2)).unwrap();
     assert!(observed_audio.test_is_recording());

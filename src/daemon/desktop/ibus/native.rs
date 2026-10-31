@@ -1,6 +1,7 @@
 //! Thread-owned libibus bridge and safe daemon-facing handles.
 
 use super::{CommitOutcome, HotkeyTransition, IbusProbe, IbusStatus, NativeTarget, Sender};
+use crate::daemon::recording::DictationMode;
 use anyhow::{Context, Result};
 use parking_lot::Mutex;
 use std::ffi::{c_char, c_int, c_void, CStr, CString};
@@ -15,7 +16,12 @@ type EventCallback = unsafe extern "C" fn(c_int, c_int, c_int, *const NativeTarg
 unsafe extern "C" {
     fn parakit_ibus_client_new(callback: EventCallback, user: *mut c_void) -> *mut c_void;
     fn parakit_ibus_client_run(client: *mut c_void);
-    fn parakit_ibus_client_configure(client: *mut c_void, ready: c_int, ptt: c_int);
+    fn parakit_ibus_client_configure(
+        client: *mut c_void,
+        ready: c_int,
+        ptt: c_int,
+        context_enabled: c_int,
+    );
     fn parakit_ibus_client_commit(
         client: *mut c_void,
         target: *const NativeTarget,
@@ -51,6 +57,7 @@ struct Snapshot {
 struct State {
     snapshot: Mutex<Snapshot>,
     ready: AtomicBool,
+    context_enabled: AtomicBool,
     sender: Mutex<Option<Sender<HotkeyTransition>>>,
     started: Mutex<Option<mpsc::SyncSender<()>>>,
 }
@@ -88,6 +95,7 @@ impl IbusClient {
         let state = Arc::new(State {
             snapshot: Mutex::new(Snapshot::default()),
             ready: AtomicBool::new(false),
+            context_enabled: AtomicBool::new(false),
             sender: Mutex::new(None),
             started: Mutex::new(Some(started_tx)),
         });
@@ -134,8 +142,20 @@ impl IbusClient {
     }
 
     /// Enable focused-field PTT only when the native backend owns the trigger.
-    pub(crate) fn set_ptt_sender(&self, sender: Option<Sender<HotkeyTransition>>) {
+    ///
+    /// # Arguments
+    /// * `sender` - Coordinator channel when IBus owns the trigger.
+    /// * `context_enabled` - Enable Ctrl+Alt+Space for Qwen context.
+    pub(crate) fn set_ptt_sender(
+        &self,
+        sender: Option<Sender<HotkeyTransition>>,
+        context_enabled: bool,
+    ) {
         *self.0.state.sender.lock() = sender;
+        self.0
+            .state
+            .context_enabled
+            .store(context_enabled, Ordering::Release);
         self.configure();
     }
 
@@ -143,7 +163,12 @@ impl IbusClient {
         let ready = self.0.state.ready.load(Ordering::Acquire);
         let ptt = ready && self.0.state.sender.lock().is_some();
         unsafe {
-            parakit_ibus_client_configure(self.0.handle.0.as_ptr(), ready.into(), ptt.into());
+            parakit_ibus_client_configure(
+                self.0.handle.0.as_ptr(),
+                ready.into(),
+                ptt.into(),
+                self.0.state.context_enabled.load(Ordering::Acquire).into(),
+            );
         }
     }
 
@@ -230,9 +255,14 @@ unsafe extern "C" fn event(
     let sender = state.sender.lock().clone();
     if let Some(sender) = sender {
         let transition = match kind {
-            1 if state.ready.load(Ordering::Acquire) => {
+            1 | 4 if state.ready.load(Ordering::Acquire) => {
                 target.map(|target| HotkeyTransition::NativePressed {
                     at: Instant::now(),
+                    mode: if kind == 4 {
+                        DictationMode::WithContext
+                    } else {
+                        DictationMode::Plain
+                    },
                     target,
                 })
             }
@@ -267,5 +297,45 @@ pub(crate) fn probe_status() -> IbusProbe {
         connected,
         engine_listed: listed != 0,
         active_engine,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn native_press_preserves_context_intent_and_readiness() {
+        let (sender, receiver) = crossbeam_channel::unbounded();
+        let state = State {
+            snapshot: Mutex::new(Snapshot::default()),
+            ready: AtomicBool::new(true),
+            context_enabled: AtomicBool::new(true),
+            sender: Mutex::new(Some(sender)),
+            started: Mutex::new(None),
+        };
+        let target = NativeTarget {
+            engine_id: 1,
+            ..NativeTarget::default()
+        };
+        for (kind, expected) in [(1, DictationMode::Plain), (4, DictationMode::WithContext)] {
+            unsafe {
+                event(
+                    kind,
+                    1,
+                    1,
+                    &target,
+                    (&state as *const State).cast_mut().cast(),
+                );
+            }
+            assert!(matches!(receiver.try_recv().unwrap(),
+                HotkeyTransition::NativePressed { mode, target: captured, .. }
+                if mode == expected && captured == target));
+        }
+        state.ready.store(false, Ordering::Release);
+        unsafe {
+            event(4, 1, 1, &target, (&state as *const State).cast_mut().cast());
+        }
+        assert!(receiver.try_recv().is_err());
     }
 }

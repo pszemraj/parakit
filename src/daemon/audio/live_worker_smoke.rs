@@ -12,7 +12,7 @@ use crate::daemon::{
     inject::{FocusSource, PasteMode},
     ipc::SharedState,
     model_lifecycle::Residency,
-    recording::{spawn_recording_coordinator, HotkeyTransition},
+    recording::{spawn_recording_coordinator, DictationMode, HotkeyTransition},
     sounds::Sounds,
     worker::{spawn_worker, WorkerCtx, WorkerSettings, WORKER_QUEUE_CAPACITY},
 };
@@ -82,7 +82,10 @@ fn capture_trial(
         "expected {expected_residency:?} model before capture, got {initial:?}"
     );
     let started = Instant::now();
-    tx.send(HotkeyTransition::Pressed { at: started })?;
+    tx.send(HotkeyTransition::Pressed {
+        at: started,
+        mode: DictationMode::Plain,
+    })?;
     // The shared output stream is already open; enqueue immediately after the
     // logical press while the coordinator performs real focus/audio admission.
     playback.append(source);
@@ -242,6 +245,9 @@ fn microphone_coordinator_worker_reloads_after_idle() {
         engine,
         recipe,
         settings: WorkerSettings {
+            context_on_default_hotkey: false,
+            context_dictations: 3,
+            context_max_age: Duration::from_secs(600),
             model_idle_minutes: 1,
             data_log: Some(Arc::new(DataLogger::new(logs.clone()))),
             paste_mode: PasteMode::Standard,

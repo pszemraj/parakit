@@ -1,8 +1,8 @@
 //! Linux input-method, X11, and evdev push-to-talk backends.
 
 use super::{
-    handle_key_event, report_hotkey_loop_failure, send_hotkey_transition, HotkeyAction,
-    HotkeyBackend, HotkeyLoopFailed, HotkeyState, LinuxHotkeyRoute, RecordingLatch,
+    handle_key_event, report_hotkey_loop_failure, send_hotkey_transition, DictationMode,
+    HotkeyAction, HotkeyBackend, HotkeyLoopFailed, HotkeyState, LinuxHotkeyRoute, RecordingLatch,
     X11HotkeyMapping,
 };
 use crate::daemon::logging::Logger;
@@ -27,6 +27,7 @@ const REGISTERED_HOTKEY_PHYSICAL_POLL: Duration = Duration::from_millis(25);
 ///
 /// * `tx` - Coordinator channel used to post logical hotkey transitions.
 /// * `backend` - Linux backend preference.
+/// * `context_enabled` - Enable the additional Qwen context chord.
 /// * `log` - Logger used for backend diagnostics.
 ///
 /// # Returns
@@ -39,6 +40,7 @@ const REGISTERED_HOTKEY_PHYSICAL_POLL: Duration = Duration::from_millis(25);
 pub(crate) fn run_grab_loop(
     tx: Sender<HotkeyTransition>,
     backend: HotkeyBackend,
+    context_enabled: bool,
     log: Arc<Logger>,
 ) -> Result<(), HotkeyLoopFailed> {
     let route = backend.linux_route();
@@ -54,33 +56,40 @@ pub(crate) fn run_grab_loop(
             std::thread::park();
         },
         LinuxHotkeyRoute::RegisteredX11 => report_hotkey_loop_failure(
-            run_linux_registered_hotkey_loop(tx),
+            run_linux_registered_hotkey_loop(tx, context_enabled, &log),
             "registered X11 hotkey",
             crate::daemon::hotkey_help::registered_linux_failure_help,
         ),
         LinuxHotkeyRoute::PassiveX11 => report_hotkey_loop_failure(
-            run_linux_x11_listen_loop(tx),
+            run_linux_x11_listen_loop(tx, context_enabled),
             "passive X11 hotkey listen",
             crate::daemon::hotkey_help::x11_listen_linux_failure_help,
         ),
         LinuxHotkeyRoute::EvdevProxy => report_hotkey_loop_failure(
-            run_linux_evdev_grab_loop(tx, Arc::clone(&log)).map_err(Into::into),
+            run_linux_evdev_grab_loop(tx, context_enabled, Arc::clone(&log)).map_err(Into::into),
             "evdev keyboard grab",
             crate::daemon::hotkey_help::evdev_linux_failure_help,
         ),
     }
 }
 
-fn run_linux_x11_listen_loop(tx: Sender<HotkeyTransition>) -> anyhow::Result<()> {
+fn run_linux_x11_listen_loop(
+    tx: Sender<HotkeyTransition>,
+    context_enabled: bool,
+) -> anyhow::Result<()> {
     super::super::session::ensure_x11_session_supported()?;
 
-    let state = Arc::new(Mutex::new(HotkeyState::default()));
+    let state = Arc::new(Mutex::new(HotkeyState::new(context_enabled)));
     let callback_state = Arc::clone(&state);
     rdev::listen(move |event| handle_listen_event(event, &callback_state, &tx))
         .map_err(|err| anyhow::anyhow!("rdev::listen: {err:?}"))
 }
 
-fn run_linux_registered_hotkey_loop(tx: Sender<HotkeyTransition>) -> anyhow::Result<()> {
+fn run_linux_registered_hotkey_loop(
+    tx: Sender<HotkeyTransition>,
+    context_enabled: bool,
+    log: &Logger,
+) -> anyhow::Result<()> {
     super::super::session::ensure_x11_session_supported()?;
     let manager =
         GlobalHotKeyManager::new().map_err(|err| anyhow::anyhow!("init hotkey manager: {err}"))?;
@@ -88,6 +97,17 @@ fn run_linux_registered_hotkey_loop(tx: Sender<HotkeyTransition>) -> anyhow::Res
     manager
         .register(hotkey)
         .map_err(|err| anyhow::anyhow!("register Ctrl+Space: {err}"))?;
+    let context_hotkey = context_enabled
+        .then(ctrl_alt_space_hotkey)
+        .filter(|hotkey| match manager.register(*hotkey) {
+            Ok(()) => true,
+            Err(err) => {
+                log.warn(format!(
+                    "could not register Ctrl+Alt+Space: {err}; Ctrl+Space remains available"
+                ));
+                false
+            }
+        });
 
     let receiver = GlobalHotKeyEvent::receiver();
     let mut latch = RegisteredHotkeyLatch::default();
@@ -114,12 +134,21 @@ fn run_linux_registered_hotkey_loop(tx: Sender<HotkeyTransition>) -> anyhow::Res
                 .recv()
                 .map_err(|err| anyhow::anyhow!("hotkey event channel closed: {err}"))?
         };
-        if event.id != hotkey.id() {
+        let mode = if event.id == hotkey.id() {
+            DictationMode::Plain
+        } else if context_hotkey.is_some_and(|hotkey| event.id == hotkey.id()) {
+            DictationMode::WithContext
+        } else {
             continue;
-        }
+        };
 
         let now = Instant::now();
-        let action = latch.event(event.state, physical_hotkey_state(&mut physical)?, now);
+        let action = latch.event(
+            event.state,
+            mode,
+            physical_hotkey_state(&mut physical)?,
+            now,
+        );
         if let Some(action) = action {
             send_hotkey_transition(action, &tx);
         }
@@ -144,13 +173,19 @@ impl RegisteredHotkeyLatch {
     fn event(
         &mut self,
         state: RegisteredHotKeyState,
+        mode: DictationMode,
         physical: PhysicalHotkeyState,
         now: Instant,
     ) -> Option<HotkeyAction> {
         self.sync_space_release(physical);
         match state {
+            RegisteredHotKeyState::Pressed
+                if mode == DictationMode::WithContext && physical.alt_gr =>
+            {
+                None
+            }
             RegisteredHotKeyState::Pressed if self.suppress_until_space_release => None,
-            RegisteredHotKeyState::Pressed => self.recording.start(now),
+            RegisteredHotKeyState::Pressed => self.recording.start(now, mode),
             RegisteredHotKeyState::Released => {
                 if physical.chord_down() {
                     return None;
@@ -191,6 +226,7 @@ impl RegisteredHotkeyLatch {
 struct PhysicalHotkeyState {
     ctrl: bool,
     space: bool,
+    alt_gr: bool,
 }
 
 impl PhysicalHotkeyState {
@@ -251,6 +287,7 @@ impl X11PhysicalHotkeyProbe {
             &reply.keys,
             &self.mapping.control,
             &self.mapping.space,
+            &self.mapping.alt_gr,
         ))
     }
 }
@@ -259,12 +296,16 @@ fn physical_state_from_keycodes(
     keys: &[u8; 32],
     control: &[u8],
     space: &[u8],
+    alt_gr: &[u8],
 ) -> PhysicalHotkeyState {
     PhysicalHotkeyState {
         ctrl: control
             .iter()
             .any(|keycode| super::super::x11::keycode_down(keys, *keycode)),
         space: space
+            .iter()
+            .any(|keycode| super::super::x11::keycode_down(keys, *keycode)),
+        alt_gr: alt_gr
             .iter()
             .any(|keycode| super::super::x11::keycode_down(keys, *keycode)),
     }
@@ -283,23 +324,45 @@ pub(crate) fn registered_hotkey_probe() -> anyhow::Result<()> {
     super::super::session::ensure_x11_session_supported()?;
     let _physical = X11PhysicalHotkeyProbe::open()
         .context("could not initialize physical Ctrl+Space state probe")?;
-    let manager =
-        GlobalHotKeyManager::new().map_err(|err| anyhow::anyhow!("init hotkey manager: {err}"))?;
-    let hotkey = ctrl_space_hotkey();
-    manager
-        .register(hotkey)
-        .map_err(|err| anyhow::anyhow!("register Ctrl+Space: {err}"))?;
-    manager
-        .unregister(hotkey)
-        .map_err(|err| anyhow::anyhow!("unregister Ctrl+Space: {err}"))?;
-    Ok(())
+    probe_registered_chord(ctrl_space_hotkey(), "Ctrl+Space")
 }
 
 fn ctrl_space_hotkey() -> HotKey {
     HotKey::new(Some(Modifiers::CONTROL), Code::Space)
 }
 
-fn run_linux_evdev_grab_loop(tx: Sender<HotkeyTransition>, log: Arc<Logger>) -> io::Result<()> {
+fn ctrl_alt_space_hotkey() -> HotKey {
+    HotKey::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::Space)
+}
+
+/// Probe the optional Ctrl+Alt+Space registration independently of Ctrl+Space.
+///
+/// # Returns
+/// Success when X11 accepts and releases the context chord.
+///
+/// # Errors
+/// Returns an error if the chord is unavailable or X11 cannot be reached.
+pub(crate) fn context_hotkey_probe() -> anyhow::Result<()> {
+    super::super::session::ensure_x11_session_supported()?;
+    probe_registered_chord(ctrl_alt_space_hotkey(), "Ctrl+Alt+Space")
+}
+
+fn probe_registered_chord(hotkey: HotKey, label: &str) -> anyhow::Result<()> {
+    let manager =
+        GlobalHotKeyManager::new().map_err(|err| anyhow::anyhow!("init hotkey manager: {err}"))?;
+    manager
+        .register(hotkey)
+        .map_err(|err| anyhow::anyhow!("register {label}: {err}"))?;
+    manager
+        .unregister(hotkey)
+        .map_err(|err| anyhow::anyhow!("unregister {label}: {err}"))
+}
+
+fn run_linux_evdev_grab_loop(
+    tx: Sender<HotkeyTransition>,
+    context_enabled: bool,
+    log: Arc<Logger>,
+) -> io::Result<()> {
     let mut devices = open_keyboard_devices(&log)?;
     if devices.is_empty() {
         return Err(io::Error::new(
@@ -351,7 +414,7 @@ fn run_linux_evdev_grab_loop(tx: Sender<HotkeyTransition>, log: Arc<Logger>) -> 
             .join(", ")
     ));
 
-    let state = Arc::new(Mutex::new(HotkeyState::default()));
+    let state = Arc::new(Mutex::new(HotkeyState::new(context_enabled)));
     let epoll_fd = epoll::create(true)?;
     for (idx, device) in grabbed.iter().enumerate() {
         let fd = device.raw_fd()?;

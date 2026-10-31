@@ -2,7 +2,7 @@
 
 Parakit supports IBus native input and the existing X11 insertion route. Choose a transport under [insertion selection](#insertion-selection-and-recovery).
 
-Push-to-talk remains `Ctrl+Space`:
+Push-to-talk uses `Ctrl+Space`; Qwen3-ASR also supports `Ctrl+Alt+Space` for [prior-dictation context](running.md#qwen-context):
 
 - On X11, `auto` and `desktop` use the registered global shortcut, preserving the existing workflow.
 - On GNOME Wayland, they use the Parakit IBus engine. Push-to-talk works while that source is selected and an editable field has focus. This is focused-field support, not a global Wayland shortcut.
@@ -41,7 +41,7 @@ parakit --verbose status
 
 `ibus status` reports the registration file, build support, connection, engine discovery, and active engine. Registration does not prove that the current application accepts native commits. Run `parakit test-paste "hello from parakit"` in a disposable terminal, then inspect the inserted prompt text and [insertion outcome](logging.md#insertion-outcomes).
 
-After an upgrade, restart the daemon. Re-run `ibus install` when upgrading from a component that launched `parakit ibus engine`, or if the executable path or keyboard layout changed; log out and back in to reload the engine. To remove the integration, first select another input source, remove Parakit from the desktop's source list, then run:
+After an upgrade, install matching `parakit` and `parakit-ibus` binaries and restart the daemon. Log out and back in to reload the helper when its protocol changes, including the Qwen context-shortcut upgrade. Re-run `ibus install` when upgrading from a component that launched `parakit ibus engine`, or if the executable path or keyboard layout changed. To remove the integration, first select another input source, remove Parakit from the desktop's source list, then run:
 
 ```bash
 sudo "$(command -v parakit)" ibus uninstall
@@ -99,8 +99,8 @@ For registration failures or an intermittent shortcut after login, suspend, or a
 On GNOME/Ubuntu, check the visible shortcuts first:
 
 1. Open Settings > Keyboard > Keyboard Shortcuts.
-2. Check Typing or Input Sources for `Ctrl+Space`.
-3. Disable or change anything that uses `Ctrl+Space`, then rerun `parakit doctor`.
+2. Check Typing or Input Sources for `Ctrl+Space` and, for Qwen context, `Ctrl+Alt+Space`.
+3. Disable or change a conflicting binding, then rerun `parakit doctor`. A conflict on the extra context shortcut warns without blocking ordinary dictation.
 
 Useful command-line checks:
 

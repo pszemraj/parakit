@@ -394,6 +394,7 @@ fn run_daemon(cli: &Cli, start: &StartCli) -> Result<()> {
         recipe,
     } = open_cli_engine(start, &config, verbose, cli.quiet, &log)?;
     let model_dtype = model_dtype_label(&model_path);
+    let context_enabled = engine.qwen_options().is_some();
 
     // Resolve startup metadata once for the banner and IPC status.
     let model_name = model_file_name(&model_path);
@@ -512,18 +513,19 @@ fn run_daemon(cli: &Cli, start: &StartCli) -> Result<()> {
     ipc_state.activity.ready();
     #[cfg(target_os = "linux")]
     if let Some(client) = &focus_source.client {
-        client.set_ptt_sender(Some(hotkey_tx.clone()));
+        client.set_ptt_sender(Some(hotkey_tx.clone()), context_enabled);
         client.set_ready(true);
     }
     log.ready();
 
-    let hotkey_result = daemon::hotkey::run_grab_loop(hotkey_tx, hotkey_backend, Arc::clone(&log));
+    let hotkey_result =
+        daemon::hotkey::run_grab_loop(hotkey_tx, hotkey_backend, context_enabled, Arc::clone(&log));
     finish_hotkey_loop(hotkey_result, &ipc_state);
 
     #[cfg(target_os = "linux")]
     if let Some(client) = &focus_source.client {
         client.set_ready(false);
-        client.set_ptt_sender(None);
+        client.set_ptt_sender(None, false);
     }
 
     // Tear down.
@@ -691,6 +693,9 @@ fn resolve_worker_settings(
             data_log: log_dir.map(|dir| Arc::new(DataLogger::new(dir))),
             paste_mode: start.effective_paste_mode(config),
             keep_transcript_clipboard: start.effective_keep_transcript_clipboard(config),
+            context_on_default_hotkey: config.qwen.context_on_default_hotkey(),
+            context_dictations: config.qwen.context_dictations(),
+            context_max_age: Duration::from_secs(config.qwen.context_max_age_minutes() * 60),
         },
         log_summary,
     )

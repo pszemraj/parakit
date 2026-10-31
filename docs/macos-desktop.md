@@ -57,7 +57,7 @@ Because stage 2 opens a real window and drives real Accessibility APIs, `doctor 
 
 ## Hotkey
 
-The macOS push-to-talk hotkey is `Left Control+Space` and is not configurable. This deliberately avoids `Command+Space`, which is normally Spotlight. Press and hold `Left Control+Space` while speaking, then release when done. parakit handles the chord with a CoreGraphics event tap and suppresses the Space key while the exact chord is active. Modified chords such as `Left Control+Shift+Space`, `Control+Option+Space`, or `Command+Space` pass through to macOS and the focused app.
+The macOS push-to-talk hotkey is `Left Control+Space`. With a Qwen3-ASR model, `Left Control+Left Option+Space` requests [prior-dictation context](running.md#qwen-context). Press and hold the shortcut while speaking, then release Control or Space when done. parakit handles these chords with a CoreGraphics event tap and suppresses their Space events. Other modified chords, including `Left Control+Shift+Space` and `Command+Space`, pass through to macOS and the focused app. The context shortcut also passes through with non-Qwen models.
 
 macOS may also use `Control+Space` for input-source switching when multiple input sources are configured. If parakit does not react, or if the input-source switcher appears instead:
 

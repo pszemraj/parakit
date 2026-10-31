@@ -4,6 +4,7 @@
 const REGISTERED_LINUX_FIX: &str = "fix:
   - Use an X11 session; Wayland is intentionally rejected.
   - Disable any desktop shortcut, input method, or remapper that already owns Ctrl+Space.
+  - Qwen context also uses Ctrl+Alt+Space; if that optional chord is busy, Ctrl+Space remains available.
   - On GNOME/Ubuntu, check Settings > Keyboard > Keyboard Shortcuts > Typing/Input Sources, or run:
       gsettings get org.gnome.desktop.wm.keybindings switch-input-source
       gsettings get org.gnome.desktop.wm.keybindings switch-input-source-backward
@@ -128,6 +129,7 @@ pub(crate) const MACOS_EVENT_TAP_FIX: &str = "fix:
   - Check Accessibility for the app that launches parakit in System Settings > Privacy & Security > Accessibility.
   - If already enabled, fully quit and reopen that app, especially after a terminal update; an enabled switch can coexist with a denied running process.
   - Restart parakit after granting Accessibility so macOS recreates the event tap.
+  - For Qwen context, disable any input-source shortcut using Left Control+Left Option+Space.
   - Re-run: parakit doctor";
 
 #[cfg(target_os = "macos")]
@@ -156,6 +158,7 @@ pub(crate) fn macos_failure_help() -> String {
 #[cfg(target_os = "windows")]
 const WINDOWS_HOTKEY_FIX: &str = "fix:
   - Close any application that already owns Ctrl+Space.
+  - Qwen context also uses Ctrl+Alt+Space; if that optional chord is busy, Ctrl+Space remains available.
   - Re-run: parakit doctor
   - Elevated target apps may still reject paste input from a normal user process.";
 

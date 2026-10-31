@@ -32,7 +32,8 @@ fn ctrl_space_starts_and_stops() {
         state.press(Key::Space, at(now, 10)),
         (
             Some(HotkeyAction::Start {
-                started_at: at(now, 10)
+                started_at: at(now, 10),
+                mode: DictationMode::Plain
             }),
             true
         )
@@ -46,6 +47,78 @@ fn ctrl_space_starts_and_stops() {
             true
         )
     );
+}
+
+#[test]
+fn context_chord_keeps_recording_after_alt_release() {
+    let now = base_time();
+    let mut state = HotkeyState::new(true);
+    state.press(Key::ControlLeft, now);
+    state.press(Key::Alt, now);
+    assert_eq!(
+        state.press(Key::Space, at(now, 10)),
+        (
+            Some(HotkeyAction::Start {
+                started_at: at(now, 10),
+                mode: DictationMode::WithContext
+            }),
+            true
+        )
+    );
+    assert_eq!(state.release(Key::Alt, at(now, 20)), (None, false));
+    assert!(state.is_recording());
+    assert_eq!(state.press(Key::Space, at(now, 30)), (None, true));
+    assert_eq!(
+        state.release(Key::Space, at(now, 40)),
+        (
+            Some(HotkeyAction::Stop {
+                stopped_at: at(now, 40)
+            }),
+            true
+        )
+    );
+}
+
+#[test]
+fn context_chord_rejects_disabled_context_and_extra_modifiers() {
+    let now = base_time();
+    for (context_enabled, extra) in [
+        (false, None),
+        (true, Some(Key::ShiftLeft)),
+        (true, Some(Key::AltGr)),
+        (true, Some(Key::MetaLeft)),
+    ] {
+        let mut state = HotkeyState::new(context_enabled);
+        state.press(Key::ControlLeft, now);
+        state.press(Key::Alt, now);
+        if let Some(extra) = extra {
+            state.press(extra, now);
+        }
+        assert_eq!(state.press(Key::Space, now), (None, false));
+        assert!(!state.is_recording());
+    }
+}
+
+#[test]
+fn context_chord_ctrl_release_does_not_rearm_held_space() {
+    let now = base_time();
+    let mut state = HotkeyState::new(true);
+    state.press(Key::ControlLeft, now);
+    state.press(Key::Alt, now);
+    state.press(Key::Space, now);
+    assert_eq!(
+        state.release(Key::ControlLeft, at(now, 20)),
+        (
+            Some(HotkeyAction::Stop {
+                stopped_at: at(now, 20)
+            }),
+            false
+        )
+    );
+    state.press(Key::ControlLeft, at(now, 300));
+    assert_eq!(state.press(Key::Space, at(now, 310)), (None, true));
+    assert_eq!(state.release(Key::Space, at(now, 320)), (None, true));
+    assert!(!state.is_recording());
 }
 
 #[cfg(target_os = "macos")]
@@ -104,7 +177,8 @@ fn macos_tap_disabled_resets_state_and_allows_next_ptt_cycle() {
         state.press(Key::Space, at(now, 210)),
         (
             Some(HotkeyAction::Start {
-                started_at: at(now, 210)
+                started_at: at(now, 210),
+                mode: DictationMode::Plain
             }),
             true
         )
@@ -174,7 +248,8 @@ fn macos_physical_left_control_state_can_start_next_space_press() {
         state.press(Key::Space, at(now, 10)),
         (
             Some(HotkeyAction::Start {
-                started_at: at(now, 10)
+                started_at: at(now, 10),
+                mode: DictationMode::Plain
             }),
             true
         )
@@ -254,7 +329,8 @@ fn non_macos_right_control_space_starts_and_stops() {
         state.press(Key::Space, at(now, 10)),
         (
             Some(HotkeyAction::Start {
-                started_at: at(now, 10)
+                started_at: at(now, 10),
+                mode: DictationMode::Plain
             }),
             true
         )
@@ -317,7 +393,8 @@ fn repeated_space_press_while_held_is_suppressed_without_restart() {
         state.press(Key::Space, at(now, 10)),
         (
             Some(HotkeyAction::Start {
-                started_at: at(now, 10)
+                started_at: at(now, 10),
+                mode: DictationMode::Plain
             }),
             true
         )
@@ -353,10 +430,13 @@ fn registered_hotkey_press_release_starts_and_stops_once() {
     let now = base_time();
     let mut state = RecordingLatch::default();
     assert_eq!(
-        state.start(now),
-        Some(HotkeyAction::Start { started_at: now })
+        state.start(now, DictationMode::Plain),
+        Some(HotkeyAction::Start {
+            started_at: now,
+            mode: DictationMode::Plain
+        })
     );
-    assert_eq!(state.start(at(now, 10)), None);
+    assert_eq!(state.start(at(now, 10), DictationMode::WithContext), None);
     assert_eq!(
         state.stop(at(now, 300)),
         Some(HotkeyAction::Stop {
@@ -371,7 +451,13 @@ fn hotkey_actions_emit_logical_transitions_only() {
     let now = base_time();
     let (tx, rx) = crossbeam_channel::unbounded();
 
-    send_hotkey_transition(HotkeyAction::Start { started_at: now }, &tx);
+    send_hotkey_transition(
+        HotkeyAction::Start {
+            started_at: now,
+            mode: DictationMode::Plain,
+        },
+        &tx,
+    );
     send_hotkey_transition(
         HotkeyAction::Stop {
             stopped_at: at(now, 250),
@@ -379,7 +465,13 @@ fn hotkey_actions_emit_logical_transitions_only() {
         &tx,
     );
 
-    assert_eq!(rx.recv().unwrap(), HotkeyTransition::Pressed { at: now });
+    assert_eq!(
+        rx.recv().unwrap(),
+        HotkeyTransition::Pressed {
+            at: now,
+            mode: DictationMode::Plain
+        }
+    );
     assert_eq!(
         rx.recv().unwrap(),
         HotkeyTransition::Released { at: at(now, 250) }
@@ -480,6 +572,7 @@ fn x11_hotkey_mapping_refresh_retries_failure_and_reports_once_per_mapping_event
     let mut mapping = X11HotkeyMapping {
         space: vec![65],
         control: vec![37, 105],
+        alt_gr: vec![108],
         needs_refresh: false,
     };
 
@@ -513,6 +606,7 @@ fn x11_hotkey_mapping_refresh_retries_failure_and_reports_once_per_mapping_event
             Ok(X11HotkeyMapping {
                 space: vec![66],
                 control: vec![38, 106],
+                alt_gr: vec![109],
                 needs_refresh: false,
             })
         })

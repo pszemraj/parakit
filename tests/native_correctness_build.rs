@@ -1,4 +1,4 @@
-//! Build-copy and CMake source-substitution tests for bundled native corrections.
+//! Bundled native corrections and opt-in loaded Qwen session checks.
 
 #[path = "../build/native_correctness.rs"]
 mod native_correctness;
@@ -10,13 +10,7 @@ use std::path::{Path, PathBuf};
 #[ignore = "requires PARAKIT_TEST_QWEN_MODEL and the separate warmup-embed fault library"]
 fn qwen_readiness_error_restores_user_options() {
     let model = std::env::var("PARAKIT_TEST_QWEN_MODEL").expect("explicit Qwen model");
-    let requested = std::env::var("PARAKIT_TEST_QWEN_DEVICE").unwrap_or_else(|_| "cpu".into());
-    let device = match requested.as_str() {
-        "auto" => parakit::inference::DeviceMode::Auto,
-        "cpu" => parakit::inference::DeviceMode::Cpu,
-        "gpu" => parakit::inference::DeviceMode::Gpu,
-        _ => panic!("PARAKIT_TEST_QWEN_DEVICE must be auto, cpu, or gpu"),
-    };
+    let device = qwen_test_device();
     let engine = parakit::inference::Engine::open_with_options(
         model,
         8,
@@ -38,6 +32,119 @@ fn qwen_readiness_error_restores_user_options() {
         "the user's one-token budget must be restored after failed readiness"
     );
 }
+
+/// Select the native device explicitly requested for a loaded-model test.
+fn qwen_test_device() -> parakit::inference::DeviceMode {
+    match std::env::var("PARAKIT_TEST_QWEN_DEVICE")
+        .unwrap_or_else(|_| "cpu".into())
+        .as_str()
+    {
+        "auto" => parakit::inference::DeviceMode::Auto,
+        "cpu" => parakit::inference::DeviceMode::Cpu,
+        "gpu" => parakit::inference::DeviceMode::Gpu,
+        _ => panic!("PARAKIT_TEST_QWEN_DEVICE must be auto, cpu, or gpu"),
+    }
+}
+
+/// Load explicit model/audio fixtures and the prior text used by context probes.
+fn qwen_context_fixture() -> (
+    parakit::inference::Engine,
+    parakit::audio_file::PreparedWav,
+    String,
+) {
+    let model = std::env::var("PARAKIT_TEST_QWEN_MODEL").expect("explicit Qwen model");
+    let audio = std::env::var_os("PARAKIT_TEST_QWEN_AUDIO")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("vendor/CrispASR/bindings/go/samples/jfk.wav"));
+    let context = std::env::var("PARAKIT_TEST_QWEN_CONTEXT").unwrap_or_else(|_| {
+        "CrispASR, Qwen3-ASR, ParaKit.\nPrevious dictation: café and naïve.".into()
+    });
+    let engine = parakit::inference::Engine::open_with_options(
+        model,
+        8,
+        qwen_test_device(),
+        &parakit::qwen::QwenOptions {
+            language: Some("English".into()),
+            max_new_tokens: 512,
+        },
+    )
+    .unwrap();
+    let audio = parakit::audio_file::prepare_wav_for_model(&audio).unwrap();
+    (engine, audio, context)
+}
+
+/// Record one actual transcription and its latency for inspection with native traces.
+fn context_probe(
+    engine: &parakit::inference::Engine,
+    pcm: &[f32],
+    label: &str,
+    context: Option<&str>,
+) -> anyhow::Result<String> {
+    eprintln!("PARAKIT_TEST_CALL:{label}");
+    let started = std::time::Instant::now();
+    let result = engine.transcribe_with_context(pcm, context);
+    println!(
+        "PARAKIT_TEST_RESULT:{}",
+        serde_json::json!({
+            "case": label,
+            "seconds": started.elapsed().as_secs_f64(),
+            "raw": result.as_ref().ok(),
+            "error": result.as_ref().err().map(ToString::to_string),
+        })
+    );
+    result
+}
+
+#[test]
+#[ignore = "requires PARAKIT_TEST_QWEN_MODEL and native prompt tracing for routing assertions"]
+fn qwen_context_is_scoped_to_each_transcription() {
+    let (engine, audio, context) = qwen_context_fixture();
+    for (label, prior) in [
+        ("ordinary-baseline", None),
+        ("context-first", Some(context.as_str())),
+        ("ordinary-after-success", None),
+        ("context-again", Some(context.as_str())),
+        ("invalid-context-fallback", Some("unusable\0context")),
+    ] {
+        let transcript = context_probe(&engine, &audio.samples, label, prior).unwrap();
+        assert!(
+            !transcript.trim().is_empty(),
+            "{label}: empty speech transcript"
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires PARAKIT_TEST_QWEN_MODEL and the context-embed fault library"]
+fn qwen_context_error_does_not_affect_next_transcription() {
+    let (engine, audio, context) = qwen_context_fixture();
+    assert!(context_probe(&engine, &audio.samples, "context-failure", Some(&context)).is_err());
+    let transcript =
+        context_probe(&engine, &audio.samples, "ordinary-after-failure", None).unwrap();
+    assert!(!transcript.trim().is_empty());
+}
+
+#[test]
+#[ignore = "requires PARAKIT_TEST_QWEN_MODEL and optional audio/context fixtures"]
+/// Report native outputs; the daemon rejects silent captures before inference.
+fn qwen_context_handles_silent_and_short_audio() {
+    let (engine, audio, context) = qwen_context_fixture();
+    let silence = vec![0.0; 16_000];
+    for (label, prior) in [
+        ("silence-ordinary", None),
+        ("silence-context", Some(context.as_str())),
+    ] {
+        context_probe(&engine, &silence, label, prior).unwrap();
+    }
+    let short = &audio.samples[..audio.samples.len().min(8_000)];
+    let ordinary = context_probe(&engine, short, "short-ordinary", None).unwrap();
+    let contextual = context_probe(&engine, short, "short-context", Some(&context)).unwrap();
+    assert_eq!(
+        contextual, ordinary,
+        "subsecond audio must use ordinary inference"
+    );
+}
+
 use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 

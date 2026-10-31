@@ -10,15 +10,18 @@ use std::time::{Duration, Instant};
 use windows::core::Error as WinError;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, RegisterHotKey, SendInput, UnregisterHotKey, HOT_KEY_MODIFIERS, INPUT,
-    INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYBD_EVENT_FLAGS, KEYEVENTF_KEYUP, MOD_CONTROL,
-    MOD_NOREPEAT, VIRTUAL_KEY, VK_CONTROL, VK_MENU, VK_SHIFT, VK_SPACE,
+    INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYBD_EVENT_FLAGS, KEYEVENTF_KEYUP, MOD_ALT, MOD_CONTROL,
+    MOD_NOREPEAT, VIRTUAL_KEY, VK_CONTROL, VK_MENU, VK_RMENU, VK_SHIFT, VK_SPACE,
 };
 use windows::Win32::UI::WindowsAndMessaging::{GetMessageW, MSG, WM_HOTKEY};
 
-use crate::daemon::recording::HotkeyTransition;
+use crate::daemon::logging::Logger;
+use crate::daemon::recording::{DictationMode, HotkeyTransition};
 
 const PARAKIT_HOTKEY_ID: i32 = 0x504b;
 const PARAKIT_HOTKEY_PROBE_ID: i32 = PARAKIT_HOTKEY_ID + 1;
+const PARAKIT_CONTEXT_HOTKEY_ID: i32 = PARAKIT_HOTKEY_ID + 2;
+const PARAKIT_CONTEXT_PROBE_ID: i32 = PARAKIT_HOTKEY_ID + 3;
 const KEY_DOWN_MASK: i16 = i16::MIN;
 const HOTKEY_RELEASE_POLL: Duration = Duration::from_millis(10);
 const VK_V: VIRTUAL_KEY = VIRTUAL_KEY(0x56);
@@ -33,15 +36,35 @@ const VK_V: VIRTUAL_KEY = VIRTUAL_KEY(0x56);
 ///
 /// Returns an error when Ctrl+Space is already owned or cannot be registered.
 pub(crate) fn registered_hotkey_probe() -> Result<()> {
-    register_ctrl_space(PARAKIT_HOTKEY_PROBE_ID)?;
+    register_ctrl_space(PARAKIT_HOTKEY_PROBE_ID, false)?;
     let _guard = RegisteredHotkeyGuard {
         id: PARAKIT_HOTKEY_PROBE_ID,
     };
     Ok(())
 }
 
+/// Probe whether the optional Ctrl+Alt+Space chord can be registered.
+///
+/// # Returns
+/// Success when Windows accepts and releases the context chord.
+///
+/// # Errors
+/// Returns an error if another application owns the chord.
+pub(crate) fn context_hotkey_probe() -> Result<()> {
+    register_ctrl_space(PARAKIT_CONTEXT_PROBE_ID, true)?;
+    let _guard = RegisteredHotkeyGuard {
+        id: PARAKIT_CONTEXT_PROBE_ID,
+    };
+    Ok(())
+}
+
 /// Run the native Windows registered-hotkey backend until the message loop
 /// ends.
+///
+/// # Arguments
+/// * `tx` - Recording coordinator sender.
+/// * `context_enabled` - Enable the additional Qwen context chord.
+/// * `log` - Reports unavailable optional registration.
 ///
 /// # Returns
 ///
@@ -51,10 +74,29 @@ pub(crate) fn registered_hotkey_probe() -> Result<()> {
 ///
 /// Returns an error when registration, message polling, or coordinator
 /// delivery fails.
-pub(super) fn run_registered_hotkey_loop(tx: Sender<HotkeyTransition>) -> Result<()> {
-    register_ctrl_space(PARAKIT_HOTKEY_ID)?;
+pub(super) fn run_registered_hotkey_loop(
+    tx: Sender<HotkeyTransition>,
+    context_enabled: bool,
+    log: &Logger,
+) -> Result<()> {
+    register_ctrl_space(PARAKIT_HOTKEY_ID, false)?;
     let _registration = RegisteredHotkeyGuard {
         id: PARAKIT_HOTKEY_ID,
+    };
+    let context_registration = if context_enabled {
+        match register_ctrl_space(PARAKIT_CONTEXT_HOTKEY_ID, true) {
+            Ok(()) => Some(RegisteredHotkeyGuard {
+                id: PARAKIT_CONTEXT_HOTKEY_ID,
+            }),
+            Err(err) => {
+                log.warn(format!(
+                    "could not register Ctrl+Alt+Space: {err}; Ctrl+Space remains available"
+                ));
+                None
+            }
+        }
+    } else {
+        None
     };
 
     let mut msg = MSG::default();
@@ -67,18 +109,54 @@ pub(super) fn run_registered_hotkey_loop(tx: Sender<HotkeyTransition>) -> Result
             return Ok(());
         }
 
-        if msg.message == WM_HOTKEY && msg.wParam.0 == PARAKIT_HOTKEY_ID as usize {
-            let _ = tx.send(HotkeyTransition::Pressed { at: Instant::now() });
+        if msg.message == WM_HOTKEY {
+            if !key_is_down(VK_CONTROL) || !key_is_down(VK_SPACE) {
+                continue;
+            }
+            let mode = if msg.wParam.0 == PARAKIT_HOTKEY_ID as usize {
+                DictationMode::Plain
+            } else if context_registration.is_some()
+                && msg.wParam.0 == PARAKIT_CONTEXT_HOTKEY_ID as usize
+            {
+                if key_is_down(VK_RMENU) {
+                    continue;
+                }
+                DictationMode::WithContext
+            } else {
+                continue;
+            };
+            let _ = tx.send(HotkeyTransition::Pressed {
+                at: Instant::now(),
+                mode,
+            });
             wait_until_ctrl_space_released();
             let _ = tx.send(HotkeyTransition::Released { at: Instant::now() });
+            // Releasing Control ends capture, but held Space must not rearm it.
+            while key_is_down(VK_SPACE) {
+                thread::sleep(HOTKEY_RELEASE_POLL);
+            }
         }
     }
 }
 
-fn register_ctrl_space(id: i32) -> Result<()> {
-    let modifiers: HOT_KEY_MODIFIERS = MOD_CONTROL | MOD_NOREPEAT;
-    unsafe { RegisterHotKey(None, id, modifiers, u32::from(VK_SPACE.0)) }
-        .map_err(|err| anyhow::anyhow!("RegisterHotKey Ctrl+Space failed: {err}"))
+fn register_ctrl_space(id: i32, context: bool) -> Result<()> {
+    let modifiers: HOT_KEY_MODIFIERS = MOD_CONTROL
+        | MOD_NOREPEAT
+        | if context {
+            MOD_ALT
+        } else {
+            HOT_KEY_MODIFIERS(0)
+        };
+    unsafe { RegisterHotKey(None, id, modifiers, u32::from(VK_SPACE.0)) }.map_err(|err| {
+        anyhow::anyhow!(
+            "RegisterHotKey {} failed: {err}",
+            if context {
+                "Ctrl+Alt+Space"
+            } else {
+                "Ctrl+Space"
+            }
+        )
+    })
 }
 
 struct RegisteredHotkeyGuard {

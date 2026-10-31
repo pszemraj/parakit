@@ -17,6 +17,7 @@ use super::ipc::SharedState;
 use super::logging::Logger;
 use super::model_lifecycle::{ActivityGuard, ModelSlot};
 use super::notifications::Notifier;
+use super::recording::DictationMode;
 use super::sounds::Sounds;
 
 mod insertion;
@@ -46,6 +47,8 @@ pub(crate) enum WorkerEvent {
     },
     /// Recording ended and the captured PCM moved out of the audio buffer.
     Stopped {
+        /// Context intent latched when the dictation shortcut was pressed.
+        mode: DictationMode,
         /// Monotonic timestamp captured when recording started.
         started_at: Instant,
         /// Monotonic timestamp captured when recording stopped.
@@ -72,6 +75,12 @@ pub(crate) struct WorkerSettings {
     /// Leave transcript text on the clipboard after paste/fallback instead of
     /// restoring previous supported clipboard contents.
     pub(crate) keep_transcript_clipboard: bool,
+    /// Apply recent context to the original shortcut as well as the context shortcut.
+    pub(crate) context_on_default_hotkey: bool,
+    /// Maximum number of prior dictations to include; zero disables context.
+    pub(crate) context_dictations: usize,
+    /// Maximum age of a prior dictation included in context.
+    pub(crate) context_max_age: Duration,
 }
 
 /// Dependencies owned by the transcription worker thread.
@@ -118,6 +127,10 @@ struct TranscriptResult {
 trait WorkerEngine {
     /// Transcribe one owned PCM capture.
     ///
+    /// # Arguments
+    /// * `pcm` - Mono 16 kHz capture.
+    /// * `context` - Eligible prior dictation text, absent for ordinary inference.
+    ///
     /// # Returns
     ///
     /// The raw transcript from the inference session.
@@ -125,7 +138,15 @@ trait WorkerEngine {
     /// # Errors
     ///
     /// Reports session or inference failures to the worker's completion path.
-    fn transcribe(&self, pcm: &[f32]) -> Result<String>;
+    fn transcribe(&self, pcm: &[f32], context: Option<&str>) -> Result<String>;
+
+    /// Whether this engine supports prior-dictation context.
+    ///
+    /// # Returns
+    /// True only for Qwen3-ASR sessions.
+    fn supports_context(&self) -> bool {
+        false
+    }
 
     /// Identity of the current session, absent for model-free test engines.
     ///
@@ -137,8 +158,12 @@ trait WorkerEngine {
 }
 
 impl WorkerEngine for Engine {
-    fn transcribe(&self, pcm: &[f32]) -> Result<String> {
-        Self::transcribe(self, pcm)
+    fn transcribe(&self, pcm: &[f32], context: Option<&str>) -> Result<String> {
+        self.transcribe_with_context(pcm, context)
+    }
+
+    fn supports_context(&self) -> bool {
+        self.qwen_options().is_some()
     }
 
     fn inference_metadata(&self, recipe: &EngineRecipe) -> Option<InferenceLogFields> {
@@ -211,6 +236,9 @@ where
                 data_log,
                 paste_mode,
                 keep_transcript_clipboard,
+                context_on_default_hotkey,
+                context_dictations,
+                context_max_age,
             },
         cleaner,
         sounds,
@@ -321,6 +349,7 @@ where
                 sounds.error();
             }
             WorkerEvent::Stopped {
+                mode,
                 started_at,
                 stopped_at,
                 pcm,
@@ -369,7 +398,12 @@ where
                 state.set_phase("transcribing");
                 log.transcribing(secs, wall_secs);
 
-                let transcription = transcribe_clean(engine, &pcm, cleaner.as_deref());
+                let context = (engine.supports_context()
+                    && (mode == DictationMode::WithContext || context_on_default_hotkey))
+                    .then(|| state.recent_context(context_dictations, context_max_age))
+                    .flatten();
+                let transcription =
+                    transcribe_clean(engine, &pcm, cleaner.as_deref(), context.as_deref());
                 // Inference is the last PCM consumer. Release the potentially
                 // maximum-length capture before modifier-release and paste
                 // acknowledgement waits keep the worker occupied.
@@ -569,9 +603,10 @@ fn transcribe_clean<E: WorkerEngine>(
     engine: &E,
     pcm: &[f32],
     cleaner: Option<&Cleaner>,
+    context: Option<&str>,
 ) -> Result<Option<TranscriptResult>> {
     let infer_started = Instant::now();
-    let raw = engine.transcribe(pcm)?;
+    let raw = engine.transcribe(pcm, context)?;
     let infer_elapsed = infer_started.elapsed();
     if raw.trim().is_empty() {
         return Ok(None);

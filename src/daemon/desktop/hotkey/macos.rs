@@ -46,6 +46,7 @@ const MACOS_KEY_RIGHT_CONTROL: i64 = MACOS_RIGHT_CONTROL_KEYCODE as i64;
 ///
 /// * `tx` - Coordinator channel used to post logical hotkey transitions.
 /// * `_backend` - Ignored backend preference on macOS.
+/// * `context_enabled` - Enable Left Control+Left Option+Space for Qwen context.
 /// * `log` - Logger used for backend diagnostics.
 ///
 /// # Returns
@@ -58,21 +59,22 @@ const MACOS_KEY_RIGHT_CONTROL: i64 = MACOS_RIGHT_CONTROL_KEYCODE as i64;
 pub(crate) fn run_grab_loop(
     tx: Sender<HotkeyTransition>,
     _backend: HotkeyBackend,
+    context_enabled: bool,
     log: Arc<Logger>,
 ) -> Result<(), super::HotkeyLoopFailed> {
     log.verbose("parakit: macOS hotkey backend: CoreGraphics session event tap Left Control+Space");
     super::report_hotkey_loop_failure(
-        run_event_tap_loop(tx),
+        run_event_tap_loop(tx, context_enabled),
         "macOS hotkey event tap",
         crate::daemon::hotkey_help::macos_failure_help,
     )
 }
 
-fn run_event_tap_loop(tx: Sender<HotkeyTransition>) -> anyhow::Result<()> {
+fn run_event_tap_loop(tx: Sender<HotkeyTransition>, context_enabled: bool) -> anyhow::Result<()> {
     crate::daemon::macos::event_tap_preflight()?;
 
     let state = Box::new(MacOsHotkeyTapState {
-        hotkey: Arc::new(Mutex::new(HotkeyState::default())),
+        hotkey: Arc::new(Mutex::new(HotkeyState::new(context_enabled))),
         tx,
         tap: AtomicPtr::new(ptr::null_mut()),
     });

@@ -53,7 +53,13 @@ pub(super) fn run_ptt_audio_simulation(
     ));
     let OpenedEngine { engine, recipe, .. } =
         open_cli_engine(start, config, verbose, cli.quiet || !verbose, &log)?;
-    let state = Arc::new(daemon::ipc::SharedState::new());
+    let context_enabled = engine.qwen_options().is_some()
+        && settings.context_on_default_hotkey
+        && settings.context_dictations != 0
+        && config.daemon.effective_transcript_history() != 0;
+    let state = Arc::new(daemon::ipc::SharedState::with_history_limit(
+        config.daemon.effective_transcript_history(),
+    ));
     let worker_lifetime = state.shutdown.register();
     let (tx, rx) = bounded::<WorkerEvent>(WORKER_QUEUE_CAPACITY);
     let worker = spawn_worker(WorkerCtx {
@@ -91,6 +97,7 @@ pub(super) fn run_ptt_audio_simulation(
                 .context("send simulated PTT start")?;
                 // Immediate release exercises a short PTT while reload is still busy.
                 tx.send(WorkerEvent::Stopped {
+                    mode: daemon::recording::DictationMode::Plain,
                     started_at,
                     stopped_at: started_at + Duration::from_secs_f32(audio_secs),
                     pcm: wav.samples.clone(),
@@ -113,11 +120,15 @@ pub(super) fn run_ptt_audio_simulation(
                     log.verbose("parakit: failed simulated dictation left history unchanged");
                     return Err(anyhow::Error::msg(error));
                 }
-                let transcript = state.resolve_transcript(0)?;
+                let transcript = if config.daemon.effective_transcript_history() == 0 {
+                    continue;
+                } else {
+                    state.resolve_transcript(0)?
+                };
                 // Same-process parity is a reload invariant, not a cross-build
                 // reference-transcript quality gate.
                 match &*baseline {
-                    Some(expected) if expected != &transcript => {
+                    Some(expected) if !context_enabled && expected != &transcript => {
                         anyhow::bail!("transcript changed on simulated cycle {cycle}")
                     }
                     None => *baseline = Some(transcript),

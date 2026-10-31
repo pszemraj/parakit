@@ -3,7 +3,9 @@
 use super::{HistoryReference, IpcResponse, SharedState, IPC_MAX_MESSAGE_SIZE};
 use anyhow::{bail, Context, Result};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+const MAX_CONTEXT_CHARS: usize = 1500;
 
 /// Return a token distinguishing daemon starts and isolated state instances.
 ///
@@ -24,6 +26,39 @@ pub(super) fn session_token() -> String {
 }
 
 impl SharedState {
+    /// Read recent stored dictations oldest first, retaining the newest 1500 characters.
+    ///
+    /// # Arguments
+    /// * `count` - Maximum number of eligible history entries; zero disables context.
+    /// * `max_age` - Maximum age of an entry at worker processing time.
+    ///
+    /// # Returns
+    /// Prior text, or none when history has no eligible nonempty entries.
+    pub(crate) fn recent_context(&self, count: usize, max_age: Duration) -> Option<String> {
+        self.recent_context_at(count, max_age, Instant::now())
+    }
+
+    fn recent_context_at(&self, count: usize, max_age: Duration, now: Instant) -> Option<String> {
+        let inner = self.inner.lock();
+        let mut entries: Vec<_> = inner
+            .history
+            .iter()
+            .filter(|entry| now.saturating_duration_since(entry.at) <= max_age)
+            .map(|entry| entry.text.trim())
+            .filter(|text| !text.is_empty())
+            .take(count)
+            .collect();
+        entries.reverse();
+        let mut text = entries.join("\n");
+        let start = text
+            .char_indices()
+            .rev()
+            .nth(MAX_CONTEXT_CHARS - 1)
+            .map_or(0, |(byte, _)| byte);
+        text.drain(..start);
+        (!text.is_empty()).then_some(text)
+    }
+
     /// Resolve the original entry, rejecting restarted daemons and evicted entries.
     ///
     /// # Returns
@@ -101,6 +136,67 @@ pub(super) fn copy_selected(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn context_selects_newest_eligible_entries_in_chronological_order() {
+        let state = SharedState::with_history_limit(5);
+        for text in ["expired", "boundary", "older", " newest "] {
+            state.remember_transcript(text.into());
+        }
+        let now = Instant::now();
+        {
+            let mut inner = state.inner.lock();
+            inner.history[3].at = now - Duration::from_secs(601);
+            inner.history[2].at = now - Duration::from_secs(600);
+        }
+        let age = Duration::from_secs(600);
+        assert_eq!(
+            state.recent_context_at(3, age, now).as_deref(),
+            Some("boundary\nolder\nnewest")
+        );
+        assert_eq!(
+            state.recent_context_at(2, age, now).as_deref(),
+            Some("older\nnewest")
+        );
+        assert_eq!(state.recent_context_at(0, age, now), None);
+        assert_eq!(
+            state.recent_context_at(5, age, now).as_deref(),
+            Some("boundary\nolder\nnewest")
+        );
+        for entry in &mut state.inner.lock().history {
+            entry.at = now - Duration::from_secs(601);
+        }
+        assert_eq!(state.recent_context_at(3, age, now), None);
+    }
+
+    #[test]
+    fn context_is_bounded_by_retained_history_and_unicode_characters() {
+        let disabled = SharedState::with_history_limit(0);
+        disabled.remember_transcript("discarded".into());
+        assert_eq!(disabled.recent_context(3, Duration::from_secs(600)), None);
+        let state = SharedState::with_history_limit(1);
+        assert_eq!(state.recent_context(3, Duration::from_secs(600)), None);
+        state.remember_transcript("evicted".into());
+        let text = format!("{}終", "雪".repeat(1600));
+        state.remember_transcript(text);
+        let context = state.recent_context(3, Duration::from_secs(600)).unwrap();
+        assert_eq!(context, format!("{}終", "雪".repeat(1499)));
+        assert_eq!(context.chars().count(), MAX_CONTEXT_CHARS);
+        assert!(SharedState::new()
+            .recent_context(3, Duration::from_secs(600))
+            .is_none());
+    }
+
+    #[test]
+    fn context_budget_includes_separators_and_prefers_newer_text() {
+        let state = SharedState::new();
+        state.remember_transcript("a".repeat(1000));
+        state.remember_transcript("b".repeat(1000));
+        assert_eq!(
+            state.recent_context(3, Duration::from_secs(600)),
+            Some(format!("{}\n{}", "a".repeat(499), "b".repeat(1000)))
+        );
+    }
 
     #[test]
     fn selection_survives_new_dictation_without_changing_text() {

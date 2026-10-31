@@ -78,7 +78,7 @@ max_new_tokens = 512
 enabled = false
 ```
 
-Available models and Qwen controls are under [model presets](running.md#model-presets). See [cleaning profiles](cleaning-rules.md#profiles) for the example's disabled cleaning and [config_reference.toml](config_reference.toml) for accepted values.
+Available models and Qwen controls are under [model presets](running.md#model-presets). See [Qwen context](running.md#qwen-context) to use prior dictations with a separate shortcut or enable them for the original shortcut. See [cleaning profiles](cleaning-rules.md#profiles) for the example's disabled cleaning and [config_reference.toml](config_reference.toml) for accepted values.
 
 TOML, unknown-key, invalid-value, and rule-validation errors name the config path.
 

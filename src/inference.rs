@@ -19,7 +19,7 @@ const MIN_INFERENCE_SAMPLES: usize = TARGET_RATE as usize;
 /// Initialize Parakit's CrispASR defaults without replacing overrides.
 ///
 /// Disables extra pointwise-Q8 and fused-QKV weight copies and enables windowed
-/// Qwen audio attention. Library callers
+/// Qwen audio attention and free-form Qwen context. Library callers
 /// can use this initializer at startup or provide these environment variables
 /// when launching their process; `Engine::open` does not mutate them. On
 /// Windows the defaults are also written to the C runtime's environment table.
@@ -33,6 +33,7 @@ pub unsafe fn initialize_crispasr_runtime_defaults() {
         ("CRISPASR_FC_PW_Q8", "0"),
         ("CRISPASR_FC_FUSED_QKV", "0"),
         ("CRISP_AUDIO_WINDOWED_ATTN", "1"),
+        ("CRISPASR_QWEN3_HOTWORDS_AS_CONTEXT", "1"),
     ] {
         if std::env::var_os(key).is_none() {
             std::env::set_var(key, value);
@@ -295,11 +296,71 @@ impl Engine {
     ///
     /// Returns an error if CrispASR rejects the audio or inference fails.
     pub fn transcribe(&self, pcm: &[f32]) -> Result<String> {
+        self.transcribe_with_context(pcm, None)
+    }
+
+    /// Transcribe one capture with optional prior text for Qwen3-ASR.
+    ///
+    /// Call [`initialize_crispasr_runtime_defaults`] at process startup, or set
+    /// `CRISPASR_QWEN3_HOTWORDS_AS_CONTEXT=1`, to route the text as raw context.
+    /// This method does not reject silent PCM; the daemon filters it before inference.
+    ///
+    /// # Arguments
+    /// * `pcm` - Mono PCM at 16 kHz, padded when shorter than one second.
+    /// * `context` - Prior dictation text; ignored by other model backends.
+    ///
+    /// # Returns
+    /// Joined transcript text. Captures shorter than one second and unusable
+    /// context fall back to ordinary inference.
+    ///
+    /// # Errors
+    /// Reports inference failures or failure to clear the session's context.
+    pub fn transcribe_with_context(&self, pcm: &[f32], context: Option<&str>) -> Result<String> {
+        let context = context.filter(|_| pcm.len() >= MIN_INFERENCE_SAMPLES);
+        let restore = self.qwen.as_ref().map(|_| QwenContextRestore {
+            session: &self.session,
+            active: true,
+        });
+        if restore.is_some() {
+            self.session
+                .set_hotwords(context.unwrap_or_default())
+                .or_else(|_| self.session.set_hotwords(""))
+                .map_err(anyhow::Error::msg)?;
+        }
         let pcm = pad_short_pcm(pcm);
-        self.session
+        let result = self
+            .session
             .transcribe(pcm.as_ref())
             .map(join_segment_text)
-            .map_err(|e| anyhow::anyhow!("crispasr transcribe failed: {e}"))
+            .map_err(|e| anyhow::anyhow!("crispasr transcribe failed: {e}"));
+        if let Some(restore) = restore {
+            restore
+                .clear()
+                .context("clear Qwen context after transcription")?;
+        }
+        result
+    }
+}
+
+/// Clear per-call context on early returns and unwinding.
+struct QwenContextRestore<'a> {
+    session: &'a OwnedSession,
+    active: bool,
+}
+
+impl QwenContextRestore<'_> {
+    fn clear(mut self) -> Result<()> {
+        self.session.set_hotwords("").map_err(anyhow::Error::msg)?;
+        self.active = false;
+        Ok(())
+    }
+}
+
+impl Drop for QwenContextRestore<'_> {
+    fn drop(&mut self) {
+        if self.active {
+            let _ = self.session.set_hotwords("");
+        }
     }
 }
 

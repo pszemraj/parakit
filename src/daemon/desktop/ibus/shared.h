@@ -6,7 +6,7 @@
 
 #define PK_COMPONENT "org.freedesktop.IBus.Parakit"
 #define PK_BRIDGE_PATH "/org/parakit/IBusBridge"
-#define PK_BRIDGE_INTERFACE "org.parakit.IBusBridge1"
+#define PK_BRIDGE_INTERFACE "org.parakit.IBusBridge2"
 #define PK_TARGET_TYPE "(ttttuu)"
 
 /* Process, attachment, engine and focus identities precede input metadata. */
