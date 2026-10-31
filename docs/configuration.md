@@ -64,21 +64,7 @@ These daemon and cleaning flags live on `parakit start`. The profile, trailing-p
 
 Boolean flag pairs, merged disabled-rule names, and config-only settings have per-key interactions described in [config_reference.toml](config_reference.toml).
 
-To configure Qwen persistently, select a preset and set the language and token budget:
-
-```toml
-[daemon]
-model_preset = "qwen3-asr-1.7b"
-
-[qwen]
-language = "auto"
-max_new_tokens = 512
-
-[cleaning]
-enabled = false
-```
-
-Available models and Qwen controls are under [model presets](running.md#model-presets). See [cleaning profiles](cleaning-rules.md#profiles) for the example's disabled cleaning and [config_reference.toml](config_reference.toml) for accepted values.
+The [Qwen3-ASR guide](models/qwen3-asr.md) includes a persistent model, language, and context configuration. Other presets are listed under [model selection](running.md#model-presets).
 
 TOML, unknown-key, invalid-value, and rule-validation errors name the config path.
 

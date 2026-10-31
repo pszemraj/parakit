@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise loaded Qwen session failures with a separate test-only native library.
+"""Exercise loaded Qwen failures and context prompts with a test-only native library.
 
 Requires a completed Linux or macOS bundled build with compile_commands.json. The source
 copy, object, library and results are written beneath --output. No vendor source,
@@ -22,8 +22,18 @@ HOOKS = r'''
 #include <cstring>
 #include <cstdlib>
 static thread_local bool parakit_test_user_audio = false;
+static thread_local bool parakit_test_has_context = false;
+static void parakit_test_trace_text(const char* label, const char* text) {
+    fprintf(stderr, "PARAKIT_TEST_%s_HEX:", label);
+    for (const unsigned char* p = (const unsigned char*)text; *p; ++p)
+        fprintf(stderr, "%02x", (unsigned int)*p);
+    fputc('\n', stderr);
+}
 static bool parakit_test_mode(const char* mode) {
     const char* selected = std::getenv("PARAKIT_TEST_QWEN_FAILURE");
+    if (selected && std::strcmp(selected, "context-embed") == 0 &&
+        parakit_test_has_context && std::strcmp(mode, "embed") == 0)
+        return true;
     if (selected && std::strcmp(selected, "warmup-embed") == 0 &&
         !parakit_test_user_audio && std::strcmp(mode, "embed") == 0)
         return true;
@@ -62,6 +72,7 @@ def build_library(build: Path, output: Path) -> Path:
     source = replace_once(source, '#include "qwen3_asr.h"', '#include "qwen3_asr.h"\n' + HOOKS)
     source = replace_once(source, '    const std::string lang = (language && *language) ? language : "en";',
                           '    parakit_test_user_audio = n_samples != 11 * 16000;\n'
+                          '    parakit_test_has_context = !s->hotwords.empty();\n'
                           '    const std::string lang = (language && *language) ? language : "en";')
     source = replace_once(source, "    return parakit_asr::transcribe_chunks<crispasr_session_result>(",
                           "    size_t parakit_test_chunk = 0;\n"
@@ -80,7 +91,11 @@ def build_library(build: Path, output: Path) -> Path:
                           "parakit_test_embed, parakit_test_forward, dec_cfg")
     source = replace_once(source, "        int32_t* raw_ids = qwen3_asr_tokenize(s->qwen3_ctx, text.c_str(), &n_prompt);",
                           '        fprintf(stderr, "PARAKIT_TEST_PREFILL:%s\\n", assistant_prefill.c_str());\n'
+                          '        parakit_test_trace_text("PROMPT", text.c_str());\n'
                           "        int32_t* raw_ids = qwen3_asr_tokenize(s->qwen3_ctx, text.c_str(), &n_prompt);")
+    source = replace_once(source, '    s->hotwords = hotwords ? hotwords : "";',
+                          '    s->hotwords = hotwords ? hotwords : "";\n'
+                          '    parakit_test_trace_text("CONTEXT", s->hotwords.c_str());')
     cpp = output / "crispasr_c_api.cpp"
     cpp.write_text(source, encoding="utf-8")
     obj = output / "crispasr_c_api.cpp.o"
@@ -114,14 +129,38 @@ def build_library(build: Path, output: Path) -> Path:
 def run_case(label: str, command: list[str], env: dict[str, str], output: Path) -> tuple[int, str, str]:
     """Capture one explicitly requested loaded-session case."""
     with (output / f"{label}.out").open("w", encoding="utf-8") as stdout, (output / f"{label}.err").open("w", encoding="utf-8") as stderr:
-        result = subprocess.run(command, env=env, stdout=stdout, stderr=stderr)
+        result = subprocess.run(command, env=env, stdout=stdout, stderr=stderr, check=False)
     with (output / "commands.jsonl").open("a", encoding="utf-8") as records:
         records.write(json.dumps({"case": label, "command": command, "status": result.returncode}) + "\n")
     return result.returncode, (output / f"{label}.out").read_text(encoding="utf-8"), (output / f"{label}.err").read_text(encoding="utf-8")
 
 
+def check_context_trace(stderr: str, expected: dict[str, str], *, chunked: bool) -> None:
+    """Check every chunk's exact system text, forced language, and final context clear."""
+    prompts: dict[str, list[str]] = {label: [] for label in expected}
+    setters: dict[str, list[str]] = {label: [] for label in expected}
+    current = ""
+    for line in stderr.splitlines():
+        if line.startswith("PARAKIT_TEST_CALL:"):
+            current = line.removeprefix("PARAKIT_TEST_CALL:")
+        elif current in expected:
+            for prefix, records in (("PARAKIT_TEST_PROMPT_HEX:", prompts),
+                                    ("PARAKIT_TEST_CONTEXT_HEX:", setters)):
+                if line.startswith(prefix):
+                    records[current].append(bytes.fromhex(line.removeprefix(prefix)).decode("utf-8"))
+    for label, context in expected.items():
+        if not prompts[label] or (chunked and label != "context-failure" and len(prompts[label]) < 2):
+            raise RuntimeError(f"{label}: missing native {'chunked ' if chunked else ''}prompt trace")
+        for prompt in prompts[label]:
+            system = prompt.removeprefix("<|im_start|>system\n").split("<|im_end|>", 1)[0]
+            if system != context or not prompt.endswith("<|im_start|>assistant\nlanguage English<asr_text>"):
+                raise RuntimeError(f"{label}: native context or forced-language prompt changed")
+        if not setters[label] or setters[label][0] != context or setters[label][-1] != "":
+            raise RuntimeError(f"{label}: native session context was not set and cleared within the call")
+
+
 def execute(native_build: Path, binary_dir: Path, model: Path, audio_path: Path, output: Path, device: str = "cpu") -> None:
-    """Run five fault modes through both file and production worker paths."""
+    """Run native failure, language, and scoped-context checks through actual sessions."""
     output = output.resolve()
     output.mkdir(parents=True, exist_ok=True)
     with wave.open(str(audio_path), "rb") as audio:
@@ -181,9 +220,63 @@ def execute(native_build: Path, binary_dir: Path, model: Path, audio_path: Path,
     if status or "1 passed" not in stdout or "generated 1 of 1 tokens" not in stderr or "PARAKIT_TEST_PREFILL:language English<asr_text>" not in stderr:
         raise RuntimeError(f"failed readiness did not restore actual native user controls: {stderr[-1000:]}")
     print("passed failed readiness option restoration", flush=True)
+    context = os.environ.get("PARAKIT_TEST_QWEN_CONTEXT", "CrispASR, Qwen3-ASR, ParaKit.\nPrevious dictation: café and naïve.")
+    context_audio = Path(os.environ.get("PARAKIT_TEST_QWEN_AUDIO", str(long_audio))).resolve()
+    context_env = dict(env, CRISPASR_QWEN3_HOTWORDS_AS_CONTEXT="1",
+                       CRISPASR_QWEN3_SYSPROMPT_LANG="0",
+                       PARAKIT_TEST_QWEN_MODEL=str(model.resolve()), PARAKIT_TEST_QWEN_DEVICE=device,
+                       PARAKIT_TEST_QWEN_AUDIO=str(context_audio), PARAKIT_TEST_QWEN_CONTEXT=context)
+    for label, test, mode, expected in (
+        ("context-success", "qwen_context_is_scoped_to_each_transcription", "",
+         {"ordinary-baseline": "", "context-first": context, "ordinary-after-success": "", "context-again": context,
+          "invalid-context-fallback": ""}),
+        ("context-failure", "qwen_context_error_does_not_affect_next_transcription", "context-embed",
+         {"context-failure": context, "ordinary-after-failure": ""}),
+    ):
+        status, stdout, stderr = run_case(label, [str(harness), "--exact", test, "--ignored", "--nocapture"],
+                                         dict(context_env, PARAKIT_TEST_QWEN_FAILURE=mode), output)
+        if status or "1 passed" not in stdout:
+            raise RuntimeError(f"{label}: loaded context test failed: {stderr[-1000:]}")
+        check_context_trace(stderr, expected, chunked=context_audio == long_audio)
+        if mode and "PARAKIT_TEST: embed failure" not in stderr:
+            raise RuntimeError(f"{label}: contextual inference failure was not injected")
+        print(f"passed {label}", flush=True)
+
+    worker_config = output / "context-worker.toml"
+    worker_config.write_text("[qwen]\ncontext_on_default_hotkey = true\n", encoding="utf-8")
+    worker_logs = output / "context-worker-jsonl"
+    command = [str(binary / "parakit"), "--verbose", "start", *common, "--no-cleaning", "--no-sounds",
+               "--log-dir", str(worker_logs), "--simulate-ptt-audio", str(speech),
+               "--simulate-ptt-audio", str(speech)]
+    status, _, stderr = run_case("context-worker", command,
+                               dict(env, PARAKIT_CONFIG_PATH=str(worker_config),
+                                    CRISPASR_QWEN3_HOTWORDS_AS_CONTEXT="1"), output)
+    rows = [json.loads(line) for path in worker_logs.glob("*.jsonl")
+            for line in path.read_text(encoding="utf-8").splitlines()]
+    transcripts = [row["raw"] for row in rows if "raw" in row]
+    contexts = [bytes.fromhex(line.removeprefix("PARAKIT_TEST_CONTEXT_HEX:")).decode("utf-8")
+                for line in stderr.splitlines() if line.startswith("PARAKIT_TEST_CONTEXT_HEX:")]
+    if status or len(transcripts) != 2 or [text for text in contexts if text] != transcripts[:1]:
+        raise RuntimeError("context-worker: the second capture did not use the first stored transcript")
+    print("passed context-worker history handoff", flush=True)
+
+    silence = output / "silence.wav"
+    with wave.open(str(silence), "wb") as audio:
+        audio.setparams(params)
+        audio.writeframes(bytes(16000 * 2))
+    silent_command = [*command[:-2], "--simulate-ptt-audio", str(silence)]
+    status, stdout, stderr = run_case("context-worker-silence", silent_command,
+                                    dict(env, PARAKIT_CONFIG_PATH=str(worker_config),
+                                         CRISPASR_QWEN3_HOTWORDS_AS_CONTEXT="1"), output)
+    if status != 1 or "no speech detected" not in stdout or "failed simulated dictation left history unchanged" not in stdout:
+        raise RuntimeError("context-worker-silence: silent capture changed history or was accepted")
+    if any(line.removeprefix("PARAKIT_TEST_CONTEXT_HEX:") for line in stderr.splitlines()
+           if line.startswith("PARAKIT_TEST_CONTEXT_HEX:")):
+        raise RuntimeError("context-worker-silence: silent capture reached contextual inference")
+    print("passed context-worker silent capture rejection", flush=True)
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     """Parse explicit model/build inputs and run loaded native correctness checks."""
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument("--native-build", type=Path, required=True, help="CMake build directory from the bundled Cargo build")
@@ -192,7 +285,7 @@ def main() -> int:
     parser.add_argument("--audio", type=Path, required=True, help="human speech WAV used to construct a 90-second failure fixture")
     parser.add_argument("--output", type=Path, required=True, help="ignored repository-local results/build directory; use a fresh directory")
     parser.add_argument("--device", choices=("cpu", "gpu"), default="cpu", help="native device to exercise; GPU requires a matching bundled build")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     try:
         execute(args.native_build, args.binary_dir, args.model, args.audio, args.output, args.device)
     except (OSError, ValueError, wave.Error, RuntimeError, subprocess.CalledProcessError) as error:

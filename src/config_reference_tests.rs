@@ -275,6 +275,18 @@ fn effective_snapshot(config: &ConfigFile) -> BTreeMap<&'static str, String> {
         config.qwen.options().max_new_tokens.to_string(),
     );
     put(
+        "qwen.context_on_default_hotkey",
+        config.qwen.context_on_default_hotkey().to_string(),
+    );
+    put(
+        "qwen.context_dictations",
+        config.qwen.context_dictations().to_string(),
+    );
+    put(
+        "qwen.context_max_age_minutes",
+        config.qwen.context_max_age_minutes().to_string(),
+    );
+    put(
         "daemon.device",
         format!("{:?}", config.daemon.effective_device()),
     );
@@ -368,6 +380,56 @@ fn assert_documents_accepted_keys(label: &str, text: &str) {
 #[test]
 fn reference_documents_exactly_the_accepted_keys() {
     assert_documents_accepted_keys("docs/config_reference.toml", REFERENCE);
+}
+
+#[test]
+fn qwen_context_settings_resolve_defaults_and_explicit_values() {
+    let defaults = QwenConfig::default();
+    assert!(!defaults.context_on_default_hotkey());
+    assert_eq!(defaults.context_dictations(), 3);
+    assert_eq!(defaults.context_max_age_minutes(), 10);
+
+    let path = write_fixture(
+        "qwen-context",
+        "[qwen]\ncontext_on_default_hotkey = true\ncontext_dictations = 0\ncontext_max_age_minutes = 20\n",
+    );
+    let config = load_from_path(&path).unwrap();
+    assert!(config.qwen.context_on_default_hotkey());
+    assert_eq!(config.qwen.context_dictations(), 0);
+    assert_eq!(config.qwen.context_max_age_minutes(), 20);
+
+    for value in ["0", "-1", "1.5", "9223372036854775807"] {
+        let path = write_fixture(
+            "bad-context-age",
+            &format!("[qwen]\ncontext_max_age_minutes = {value}\n"),
+        );
+        let message = format!("{:#}", load_from_path(&path).unwrap_err());
+        assert!(message.contains("context_max_age_minutes"), "{message}");
+        assert!(message.contains(&path.display().to_string()), "{message}");
+    }
+}
+
+#[test]
+fn model_idle_config_accepts_zero_and_rejects_invalid_durations() {
+    for minutes in [0, 1, 10, i64::MAX as u64] {
+        let path = write_fixture(
+            "idle-valid",
+            &format!("[daemon]\nmodel_idle_minutes = {minutes}\n"),
+        );
+        assert_eq!(
+            load_from_path(&path).unwrap().daemon.model_idle_minutes,
+            Some(minutes)
+        );
+    }
+    for raw in ["-1", "1.5", "9223372036854775808", "\"ten\""] {
+        let path = write_fixture(
+            "idle-invalid",
+            &format!("[daemon]\nmodel_idle_minutes = {raw}\n"),
+        );
+        let message = format!("{:#}", load_from_path(&path).unwrap_err());
+        assert!(message.contains("model_idle_minutes"), "{message}");
+        assert!(message.contains(&path.display().to_string()), "{message}");
+    }
 }
 
 #[test]

@@ -51,13 +51,13 @@ These commands remove Terminal.app's saved decision; they do not grant access. R
 
 For `direct` mode, only a suppressed key-event tap runs, and it passes once a synthetic key-down is observed (direct typing posts unicode key-down events without a matching key-up, and never touches the clipboard or `AXValue` acknowledgement, so there is no transaction to open a window and test).
 
-The check reads back the complete restored clipboard payload and fails on read errors; an empty file list does not hide another format. On failure, cleanup retries only while its plain-text sentinel is current, preserving newer copies, including HTML with the same text. See the shared [clipboard staging policy](running.md#clipboard-staging-and-restore).
+The check reads back the complete restored clipboard payload and fails on read errors; an empty file list does not hide another format. On failure, cleanup retries only while its plain-text sentinel is current, preserving newer copies, including HTML with the same text.
 
 Because stage 2 opens a real window and drives real Accessibility APIs, `doctor --deep` on macOS requires an active GUI login session (not a headless or SSH-only session) with Accessibility already granted to the terminal. The window closes itself automatically once the check completes.
 
 ## Hotkey
 
-The macOS push-to-talk hotkey is `Left Control+Space` and is not configurable. This deliberately avoids `Command+Space`, which is normally Spotlight. Press and hold `Left Control+Space` while speaking, then release when done. parakit handles the chord with a CoreGraphics event tap and suppresses the Space key while the exact chord is active. Modified chords such as `Left Control+Shift+Space`, `Control+Option+Space`, or `Command+Space` pass through to macOS and the focused app.
+The macOS push-to-talk hotkey is `Left Control+Space`. With a Qwen3-ASR model, `Left Control+Left Option+Space` requests [prior-dictation context](models/qwen3-asr.md#prior-dictation-context). Press and hold the shortcut while speaking, then release Control or Space when done. parakit handles these chords with a CoreGraphics event tap and suppresses their Space events. Other modified chords, including `Left Control+Shift+Space` and `Command+Space`, pass through to macOS and the focused app. The context shortcut also passes through with non-Qwen models.
 
 macOS may also use `Control+Space` for input-source switching when multiple input sources are configured. If parakit does not react, or if the input-source switcher appears instead:
 

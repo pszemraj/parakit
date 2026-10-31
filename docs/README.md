@@ -11,6 +11,7 @@
 ## Daily Use
 
 - [running.md](running.md) - running the daemon, daemon control, the model cache, and paste modes.
+- [models/qwen3-asr.md](models/qwen3-asr.md) - Qwen model setup, language controls, prior-dictation context, and long-audio behavior.
 - [configuration.md](configuration.md) - the config file, CLI/config precedence, and user-defined cleaning rules.
 - [example.toml](example.toml) - a minimal starter config with a comment on each choice.
 - [config_reference.toml](config_reference.toml) - the per-key configuration reference, itself a loadable config that holds every default.
@@ -23,7 +24,7 @@
 - [dev/architecture.md](dev/architecture.md) - module map and platform work.
 - [dev/quality.md](dev/quality.md) - validation and quality checks.
 - [dev/model-validation.md](dev/model-validation.md) - native model, resampler, bundle, and physical desktop checks, with [focused Windows results](dev/model-validation.md#focused-windows-results-2026-10-19).
-- [dev/memory.md](dev/memory.md) - historical Linux reload measurements and current loader accounting.
-- [dev/crispasr-upgrade.md](dev/crispasr-upgrade.md) - CrispASR pin, dependency updates, measurements, and validation limits.
+- [dev/memory.md](dev/memory.md) - historical Linux reload measurements and allocation ownership.
+- [dev/crispasr-upgrade.md](dev/crispasr-upgrade.md) - the historical CrispASR v0.8.42 evaluation and validation limits.
 - [dev/macos-model-validation-2026-10-18.md](dev/macos-model-validation-2026-10-18.md) - CPU/Metal preset and precision coverage; [upgrade validation](dev/crispasr-macos-validation.md) and [earlier offload measurements](dev/macos-validation-2026-10-07.md) retain their dated results.
 - [dev/README.md](dev/README.md) - maintainer notes.

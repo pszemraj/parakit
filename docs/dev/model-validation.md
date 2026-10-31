@@ -4,11 +4,15 @@ Run this checklist on the checked-out commit under test on each available Mac an
 
 Earlier Linux checks covered all six presets at Q8_0 and Q6_K on CPU, CUDA, and Vulkan. The [October 18 macOS report](macos-model-validation-2026-10-18.md) covers CPU/Metal execution at both precisions on the tested M5, including shared-resampler and idle-reload checks. [Focused Windows results](#focused-windows-results-2026-10-19) cover a smaller model set. The full Windows matrix, physical desktop checks, and fresh human listening remain pending. The earlier [CrispASR macOS report](crispasr-macos-validation.md) and [October 7 macOS report](macos-validation-2026-10-07.md) document historical runs only.
 
+Native macOS and Windows checks have not yet been rerun for CrispASR v0.8.49 and its prior-dictation context path. Earlier reports do not qualify that upgrade.
+
 Use a full checkout with initialized submodules. Supply the public fixture ZIP separately in the ignored checkout, and set the fixture ZIP variable below to its path. It must contain the named speech, resampling, boundary, silence, and noise fixtures used here, including public FLEURS clips and constructed controls. Preserve its README attribution. Keep downloaded models and test state inside the checkout.
 
 ## macOS CPU and Metal
 
 Use a full checkout with initialized submodules and the [native build prerequisites](../build.md). These commands build an isolated Metal-capable release binary and WAV helper. Select cpu for CPU inference and gpu for Metal.
+
+The [October 28-29 macOS validation report](macos-ibus-validation-2026-10-28.md) records the earlier microphone, lifecycle, and insertion checks.
 
 ~~~bash
 export CARGO_TARGET_DIR="$PWD/target/tmp/new-models/cargo-macos"
@@ -154,9 +158,9 @@ These checks preserved the installed daemon and settings and reused isolated mod
 
 ## Qwen options, long input, and reload
 
-Use the language, token, and chunking controls described under [model presets](../running.md#model-presets). Keep Qwen attention overrides unset for acceptance; the default and diagnostic alternatives are described in the [Qwen comparison procedure](quality.md#qwen-and-moondream-comparisons).
+Use the language, token, and chunking controls described in the [Qwen3-ASR guide](../models/qwen3-asr.md). Keep Qwen attention overrides unset for acceptance; the default and diagnostic alternatives are described in the [Qwen comparison procedure](quality.md#qwen-and-moondream-comparisons).
 
-For both Qwen sizes, both precisions, and each native device path, run the helper on short/270-second/short inputs at forced English and a 4096-token budget. Then run two simulated captures with a 63-second idle wait and a one-minute offload setting to verify reload and option restoration. The long fixture repeats public JFK speech for context/memory stress, not natural long-form quality.
+For both Qwen sizes, both precisions, and each native device path, run the helper on short/270-second/short inputs at forced English and a 4096-token budget. Then run two simulated captures with a 63-second idle wait and a one-minute offload setting to verify reload and option restoration. The long fixture repeats public JFK speech for long-input/memory stress, not natural long-form quality.
 
 ~~~bash
 for preset in qwen3-asr-0.6b qwen3-asr-1.7b; do
@@ -173,6 +177,8 @@ done
 
 Also record default auto/512, forced German on `fleurs-de_de-0.wav`, and forced English on `fleurs-en_us-422.wav` (containing the spoken word "language"). Use a budget of 1 for a separate failure-path check: readiness should complete, while actual transcription fails without a successful JSONL row or history entry.
 
+Run the [loaded-context checks](quality.md#ordered-audio-and-loaded-qwen-failures) on supported native hosts, then the [physical shortcut checks](quality.md#runtime-smoke-checks) with Qwen and Parakeet. Compare prior-context quality separately from ordinary repeat/reload invariance, using the [context configuration](../models/qwen3-asr.md#prior-dictation-context).
+
 For every preset and precision, also check representative longer speech, silence, repeats, and idle offload/reload through the helper and worker. Use the 29/30/31-second boundary fixtures for both Qwen sizes. Save exit statuses alongside output for each additional command, as in the matrix. A worker no-speech error is expected for silence; it must not become a successful transcript or insertion. Repeat completed Q6 acquisition with network access disabled and the F16/quantizer unavailable to confirm cached startup needs neither. On Windows, separately record the first-generation result with the external quantizer available.
 
 Sample host RSS/working set and GPU allocation separately through warmup, long inference, idle, offload, and reload. Compare incremental GPU allocation with the [reload allowance](../running.md#idle-model-offload), recording Metal's unified-memory accounting separately from discrete VRAM. Keep measured peaks and sampling intervals with the logs; Linux calibration does not qualify the native platform's memory behavior.
@@ -184,9 +190,8 @@ silence.wav and noise-only.wav are synthetic controls; inspect unwanted insertio
 Use isolated configuration for the tested preset, precision, device, and Qwen options; leave installed settings intact. Check both Qwen sizes, both precisions, and one Parakeet preset on each available native device path. Follow the general [desktop smoke checks](quality.md#runtime-smoke-checks) as well.
 
 1. Dictate a sentence with a negation, number, and the word language. Confirm one insertion, inspect the transcript, and repeat with normal cleaning enabled.
-2. After idle offload, hold PTT through reload, speak, and release. Confirm early speech is retained, readiness precedes the listening cue, and insertion happens once. Release PTT immediately during reload separately; confirm the queued capture completes once and no late listening cue follows.
-3. Stop and restart the isolated daemon without CLI overrides; confirm saved selection and Qwen options persist.
-4. Record real quiet speech and nonspeech in a room with fan, keyboard, breathing, or microphone handling sounds, paired with quiet and breathless speech. Record the environment and listen to disagreements. These real-world recordings remain pending until performed; do not add or assume a new VAD/rejection rule.
+2. Stop and restart the isolated daemon without CLI overrides; confirm saved selection and Qwen options persist.
+3. Record real quiet speech and nonspeech in a room with fan, keyboard, breathing, or microphone handling sounds, paired with quiet and breathless speech. Record the environment and listen to disagreements. These real-world recordings remain pending until performed; do not add or assume a new VAD/rejection rule.
 
 Check status, history, logs, and inserted text after each run. History is in memory and starts empty after restart; configuration and JSONL logs are separate. Mark each item pass, fail, or pending with evidence. Fresh listening and physical microphone results are required; dataset references and official-model output are not ground truth. Filling VRAM and physical stop-to-insert p50/p95 remain outside this closure gate.
 

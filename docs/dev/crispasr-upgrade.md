@@ -1,6 +1,6 @@
 # CrispASR v0.8.42 upgrade
 
-Parakit pins [CrispASR v0.8.42](https://github.com/CrispStrobe/CrispASR/releases/tag/v0.8.42) at `3be8bcb4390b8080dc73f807b7abb34dc0aca9c3`. The measurements compare the v0.6.6 baseline with v0.8.42 using the Parakeet v3 Q8_0 model on Linux. They do not establish results for Qwen, Parakeet v2, Q6_K, or the current shared resampler on macOS or Windows.
+This report records the October 11, 2026 evaluation of [CrispASR v0.8.42](https://github.com/CrispStrobe/CrispASR/releases/tag/v0.8.42) at `3be8bcb4390b8080dc73f807b7abb34dc0aca9c3`. The measurements compare the v0.6.6 baseline with v0.8.42 using the Parakeet v3 Q8_0 model on Linux. They do not establish results for Qwen, Parakeet v2, Q6_K, or later shared-resampler changes on macOS or Windows.
 
 ## Summary
 
@@ -16,16 +16,16 @@ The chart compares an isolated pre-upgrade main build (v0.6.6) with ordinary v0.
 
 The v0.8.42 pin updates Parakit's native runtime, ggml and Rust bindings. Its runtime changes affect execution, memory use and recognition:
 
-- **Session behavior:** Ordinary non-Japanese Parakeet transcription now uses the shared orchestrator, including memory-aware strategy selection and post-decode gap repair. This changes recognition behavior even though Parakit keeps calling ordinary `transcribe`. In the 125-second comparison, repair partially recovers a very quiet spoken aside omitted by the baseline; its wording remains imperfect. See the [pinned session dispatch](https://github.com/CrispStrobe/CrispASR/blob/v0.8.42/src/crispasr_c_api.cpp#L6201-L6252).
+- **Session behavior:** In v0.8.42, ordinary non-Japanese Parakeet transcription used the shared orchestrator, including memory-aware strategy selection and post-decode gap repair. Parakit continued calling ordinary `transcribe`; the [recognition differences](#recognition-differences) include a partially recovered quiet aside. See the [pinned session dispatch](https://github.com/CrispStrobe/CrispASR/blob/v0.8.42/src/crispasr_c_api.cpp#L6201-L6252).
 - **CUDA execution:** The newer encoder selects manual attention on CUDA and replaces the strided sigmoid construction with fused sigmoid GLU, addressing two old operation shapes that forced CPU fallback. These are concrete execution improvements; the timing comparison does not isolate their individual contributions. See the [attention policy](https://github.com/CrispStrobe/CrispASR/blob/v0.8.42/src/core/fastconformer.h#L66-L87) and [fused GLU](https://github.com/CrispStrobe/CrispASR/blob/v0.8.42/src/core/fastconformer.h#L956-L964).
 - **Allocation handling:** The encoder checks its estimated allocation against available physical memory before constructing an unsafe full-attention graph. This is separate from strategy selection and does not establish recovery from every GPU allocation failure. See the [allocation guard](https://github.com/CrispStrobe/CrispASR/blob/v0.8.42/src/parakeet.cpp#L1008-L1030).
 - **Model loading:** The newer loader uses mmap by default, changing loading and host residency accounting. Repeated offload/reload was tested explicitly; no mapping leak was established for the old pin. See the [loader default](https://github.com/CrispStrobe/CrispASR/blob/v0.8.42/src/core/gguf_loader.cpp#L499-L504).
-- **Backend compatibility:** The ggml update includes the restored Metal matrix-multiplication kernel needed to avoid an abort on affected Apple GPUs. Native Metal inference now passes on the Apple M5 laptop ([results](crispasr-macos-validation.md)); other Apple GPUs remain untested. See the [v0.8.42 release](https://github.com/CrispStrobe/CrispASR/releases/tag/v0.8.42).
-- **Model correctness:** Parakeet preprocessing now removes the extra STFT boundary frame to match NeMo's valid mel-frame count; this change applies to the current input path. Upstream also corrected batch-normalization folding for F32 encoder weights and the default for missing v3 encoder-scaling metadata. These fixes improve fidelity to the reference implementation, with applicability depending on the model: the unchanged daily Q8 model already explicitly disables encoder scaling. The quiet-aside recovery below is specifically attributable to gap repair, rather than evidence for an individual encoder fix. See the [mel-frame correction](https://github.com/CrispStrobe/CrispASR/commit/370a2358ea9c54e993d919b044212fc8861183f9), [F32 folding correction](https://github.com/CrispStrobe/CrispASR/commit/73519479854a12f53032b87de435ce07e6fdb7a9) and [scaling fallback](https://github.com/CrispStrobe/CrispASR/blob/v0.8.42/src/parakeet.cpp#L373-L386).
+- **Backend compatibility:** The ggml update included the restored Metal matrix-multiplication kernel needed to avoid an abort on affected Apple GPUs. Native v0.8.42 Metal inference passed on the Apple M5 laptop ([results](crispasr-macos-validation.md)); other Apple GPUs were not tested. See the [v0.8.42 release](https://github.com/CrispStrobe/CrispASR/releases/tag/v0.8.42).
+- **Model correctness:** The tested v0.8.42 Parakeet input path removed the extra STFT boundary frame to match NeMo's valid mel-frame count. Upstream also corrected batch-normalization folding for F32 encoder weights and the default for missing v3 encoder-scaling metadata. These fixes improve fidelity to the reference implementation, with applicability depending on the model: the unchanged daily Q8 model already explicitly disables encoder scaling. The quiet-aside recovery below is specifically attributable to gap repair, rather than evidence for an individual encoder fix. See the [mel-frame correction](https://github.com/CrispStrobe/CrispASR/commit/370a2358ea9c54e993d919b044212fc8861183f9), [F32 folding correction](https://github.com/CrispStrobe/CrispASR/commit/73519479854a12f53032b87de435ce07e6fdb7a9) and [scaling fallback](https://github.com/CrispStrobe/CrispASR/blob/v0.8.42/src/parakeet.cpp#L373-L386).
 
 ### Long-audio behavior shipped
 
-Ordinary transcription retains a default single-pass duration cap of 300 seconds, subject to the orchestrator's memory policy. It uses orchestration and gap repair without fixed 30-second windows. See the [strategy resolver](https://github.com/CrispStrobe/CrispASR/blob/v0.8.42/src/parakeet_orchestrate.cpp#L525-L594).
+Ordinary v0.8.42 transcription retained a default single-pass duration cap of 300 seconds, subject to the orchestrator's memory policy. It used orchestration and gap repair without fixed 30-second windows. See the [strategy resolver](https://github.com/CrispStrobe/CrispASR/blob/v0.8.42/src/parakeet_orchestrate.cpp#L525-L594).
 
 Gap repair checks the word timeline for uncovered spans at the beginning, middle and end of the input. With upstream defaults it retries gaps of at least three seconds in windows no longer than approximately 30 seconds, with 0.2 seconds of surrounding context and at most two repair rounds. This is directly relevant to occasional missing sentences in longer dictations. It is a mitigation, not evidence that every previously reported omission is fixed: smaller gaps, inaccurate timestamps and speech absent from the captured PCM remain outside that guarantee. Nonempty text without word timings bypasses repair. See the [gap detection](https://github.com/CrispStrobe/CrispASR/blob/v0.8.42/src/parakeet_orchestrate.h#L198-L237) and [repair implementation](https://github.com/CrispStrobe/CrispASR/blob/v0.8.42/src/parakeet_orchestrate.cpp#L242-L355).
 
@@ -33,23 +33,7 @@ The separate bounded-mode experiment requests approximately 30-second windows th
 
 ## Updating CrispASR
 
-Update the native source, its nested submodules, both Rust path crates, and `Cargo.lock` together. Review upstream changes to the session ABI, model setters, ggml device registry, loader, and platform-specific link behavior before changing the pin. Run Cargo from the repository root so `.cargo/config.toml` selects Parakit's native-build owner.
-
-```bash
-git submodule update --init --recursive
-cd vendor/CrispASR
-git fetch --tags
-git checkout '<tag-or-commit>'
-git submodule update --init --recursive
-cd ../..
-cargo check
-git add vendor/CrispASR Cargo.lock
-cargo check --locked
-```
-
-The submodule contains the two Rust path crates. The root `cargo check` refreshes `Cargo.lock`; stage it with the changed CrispASR gitlink, then use `cargo check --locked` to verify the lockfile. Keep the C++ device adapter aligned with the selected ggml headers and libraries. See the [build guide](../build.md#crispasr-and-backends) for supported CMake settings, external-library requirements, and the matching ABI, and [architecture](architecture.md) for worker ownership and reload behavior.
-
-Check the PCM input contract, segment-text handling, runtime defaults, and model preprocessing/orchestration when upstream behavior changes. The daemon and `transcribe-file` initialize native defaults before threads or model opening. Library callers can call `initialize_crispasr_runtime_defaults` at that point or set the equivalent environment variables before native initialization. See the [model validation guide](model-validation.md) for current build, inference, and desktop checks.
+Follow the [dependency update procedure](README.md#updating-crispasr).
 
 ## Inputs and method
 
@@ -89,12 +73,14 @@ Comparison covered every distinct raw transcript from the clean native launches 
 | 5 / 8.2 / 15 seconds | Old and candidate match NeMo apart from case/punctuation. | No differing words. |
 | 25 seconds | NeMo writes `me'cause`; both native versions write `me because`. | Contraction/spacing difference with the same meaning. |
 | 29 seconds | NeMo and candidate use `gonna`; old CPU/CUDA use `going to`, while old Vulkan matches. | Equivalent wording. |
-| 31 seconds | NeMo and old CrispASR end with `for over`; candidate ends with `forever`. | Human contextual listening confirms `this person just pacing around forever`, with an audible disturbance within `forever`. Candidate wording agrees with the spoken phrase. |
+| 31 seconds | NeMo and old CrispASR end with `for over`; candidate ends with `forever`. | Candidate agrees with the [contextual listening](#boundary-listening). |
 | Full 55 seconds | Both native versions match NeMo apart from case/punctuation. | Independently corroborates the historical expected words. |
-| Full 125 seconds | Old CrispASR matches NeMo; candidate adds `think that else. Uh`. | Human listening confirms real quiet speech; the candidate's partial recovery has word errors. See below. |
+| Full 125 seconds | Old CrispASR matches NeMo; candidate adds `think that else. Uh`. | See the [listening evidence and gap-fill diagnostic](#recognition-differences). |
 | Repeated 265 seconds | Both native versions match NeMo apart from case/punctuation. | No new word omissions or repetitions relative to the official output on this synthetic stress input. |
 | 1-second silence | NeMo and both native versions return empty text. | Silence behavior agrees. |
 | 11-second quiet-aside excerpt | NeMo returns `Um think of it else. Uh I need to do things also`. | NeMo also recovers part of the aside with local context, despite omitting it on the full recording. Human listening remains the wording evidence. |
+
+### Boundary listening
 
 The user reviewed the 10-second contextual excerpt spanning source seconds 23-33 on 2026-10-11 and confirmed `this person just pacing around forever`, followed by fillers and further speech. The user also reported an audible disturbance specifically within `forever`, absent from the surrounding words; its cause was not diagnosed. The listening excerpt includes two seconds beyond the tested cut and remains ignored at `target/tmp/crispasr-upgrade/audio-review/boundary-context-23-33s.wav`. Official same-input NeMo output remains recorded separately; its `for over` is a model-reference discrepancy, not the human-confirmed wording.
 
@@ -163,11 +149,11 @@ All three launches and five warm repetitions return empty text for one second of
 
 The 0.5-second speech slice cuts through speech and both versions produce unrelated mixed-language text. CPU changes `Ham keine Autom.` to `I'm keine Autom.`; CUDA returns `I'm keine Autom.` in both versions, and Vulkan returns truncated variants. Nonempty output does not establish successful recognition here. Timing and memory are measured, but isolated subsecond speech is not a recognition-quality acceptance case. The frozen slice is retained rather than silently replaced after seeing its outputs.
 
-A separate 0.8-second fixture uses the 50.8-51.6-second interval of the 55-second memo. Old and current production workers all return `Yeah.` on CPU, CUDA and Vulkan, with clean main-daemon activity guards. These six checks exercise input handling only and add no timing or recognition-quality claim. Accuracy comparisons use surrounding speech rather than this isolated crop.
+A separate 0.8-second fixture uses the 50.8-51.6-second interval of the 55-second memo. The v0.6.6 and v0.8.42 production workers all returned `Yeah.` on CPU, CUDA and Vulkan, with clean main-daemon activity guards. These six checks exercise input handling only and add no timing or recognition-quality claim. Accuracy comparisons use surrounding speech rather than this isolated crop.
 
 ## Bounded-default experiment
 
-The isolated `transcribe_chunked(pcm, 0, -1)` route changes the 31-second boundary case. Ordinary v0.8.42 ends the relevant phrase with `forever`; official same-input NeMo returns `for over`. Bounded mode instead returns `for a virtual` on every backend, consistently across launches and repetitions. The user's contextual listening confirms `forever`, so the bounded wording differs from the spoken phrase. Bounded mode also raises latency as shown below.
+The isolated `transcribe_chunked(pcm, 0, -1)` route returns `for a virtual` in the 31-second boundary case on every backend, consistently across launches and repetitions. That wording differs from the [human-confirmed phrase](#boundary-listening). Bounded mode also raises latency as shown below.
 
 | 31-second warm inference | Ordinary candidate | Bounded candidate |
 |---|---:|---:|
@@ -201,7 +187,9 @@ Ordinary transcription passes long-input inference latency, host high-water, sam
 | CUDA | 995 → 1,004 → 1,004 MiB | 4,902 → 4,934 → 1,782 MiB |
 | Vulkan | 889 → 897 → 897 MiB | 4,319 → 4,313 → 1,190 MiB |
 
-Ordinary raw output matches both the baseline and official NeMo on the 55- and 265-second inputs across all backends, apart from case/punctuation. At 125 seconds, every candidate backend adds `think that else. Uh` between the discussion of pilot studies and the next task; the baseline and full-input NeMo both omit the aside. The native log identifies four words recovered by gap fill; that description does not prove exact recognition. The user's direct listening review of the longer source excerpt (75-86 seconds) identifies an opening `um`, a long pause, a barely audible `let me think of what else... uh` while the phone moves, then the clear `I need to do things also.` Official NeMo on this 11-second excerpt returns `Um think of it else. Uh I need to do things also`, also recovering part of the quiet speech with word errors. The candidate's addition is partial recovery of real speech rather than evidence of invented speech over room tone. Every implementation retains the clear task sentence. Exact wording of the quiet aside is not established.
+### Recognition differences
+
+Ordinary raw output matches both the baseline and official NeMo on the 55- and 265-second inputs across all backends, apart from case/punctuation. At 125 seconds, every candidate backend adds `think that else. Uh` between the discussion of pilot studies and the next task; the baseline and full-input NeMo both omit the aside. The native log identifies four words recovered by gap fill; that description does not prove exact recognition. The user's direct listening review of the longer source excerpt (75-86 seconds) identifies an opening `um`, a long pause, a barely audible `let me think of what else... uh` while the phone moves, then the clear `I need to do things also.` The [official excerpt output](#official-nvidianemo-comparison) also recovers part of the quiet speech with word errors. The candidate's addition is partial recovery of real speech rather than evidence of invented speech over room tone. Every implementation retains the clear task sentence. Exact wording of the quiet aside is not established.
 
 A focused CUDA production-worker replay with only `CRISPASR_GAP_FILL=0` reproduces the baseline transcript and removes the added `think that else. Uh`. The main-daemon activity guard is clean. This isolates the changed wording to the repair pass on this input; it is a functional diagnostic, not another timing sample. The default worker path leaves gap repair enabled, which partially recovers the quiet aside in this input.
 

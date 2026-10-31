@@ -35,7 +35,7 @@ Use Metal allocation figures and host RSS separately because their unified-memor
 
 ## Linux Reload Measurements
 
-These Linux measurements describe the historical CrispASR v0.6.6 runtime; they do not characterize the current v0.8.42 runtime.
+These Linux measurements describe the historical CrispASR v0.6.6 runtime; they do not characterize later runtimes.
 
 Three-cycle, eight-thread runs on 2026-10-05 measured the production policy on CPU, CUDA, and Vulkan. The table shows reload cycles 2-3; cycle 1 includes process and device initialization. Each backend row comes from one run, so its range is within-run variation rather than repeatability across runs. Host peaks are interval high-water RSS from Linux `VmHWM`; other host columns are RSS at checkpoints. GPU columns are sampled per-process framebuffer allocations. Offloaded endpoints were read 250 ms after session close.
 
@@ -51,17 +51,17 @@ The CPU reload peak is almost twice its post-load residency. CUDA and Vulkan als
 
 ## Allocation Ownership
 
-The allocation details in this section describe the historical CrispASR v0.6.6 runtime, except where the current loader is identified explicitly.
+The allocation details in this section describe the historical CrispASR v0.6.6 runtime, except where another version is named explicitly.
 
 At the v0.6.6 CrispASR revision measured above, `parakeet.cpp` owns lazy F32 CPU copies of predictor and joint-head weights, graph metadata, and a ggml scheduler. The decoder runs manually on CPU even when the encoder runs on GPU, so GPU inference still uses host memory. `parakeet_free` releases the scheduler, model buffer and context, backend instances, and the context containing those vectors.
 
 Inference also allocates activation and decoder workspace that can grow with audio length and remain at its high-water capacity while a session is loaded. The v0.6.6 default GGUF loader copied weights into a backend buffer; `CRISPASR_GGUF_MMAP=1` opted into supported CPU and Metal mapping paths. CUDA, Vulkan, Metal, and their drivers can retain process-wide state or caches after a session closes. Residual process memory alone does not prove that the inference session remains live or identify an allocator leak.
 
-The current v0.8.42 loader uses mmap by default, and `CRISPASR_GGUF_MMAP=0` opts out. The loader and current allocation accounting are documented in the [CrispASR upgrade report](crispasr-upgrade.md#why-this-release-and-what-changes-at-runtime). These historical measurements do not establish current GPU memory-pressure behavior.
+The v0.8.42 loader used mmap by default, with `CRISPASR_GGUF_MMAP=0` to opt out. Its loader and allocation accounting are documented in the [CrispASR upgrade report](crispasr-upgrade.md#why-this-release-and-what-changes-at-runtime). These historical measurements do not establish current GPU memory-pressure behavior.
 
 ## Reload Under GPU Memory Pressure
 
-The following pressure observations are from the historical v0.6.6 runtime, not current v0.8.42 behavior.
+The following pressure observations are from the historical v0.6.6 runtime.
 
 On the RTX 5090 with CUDA, a 55-second dictation needed about 1.5 GB free beyond the retained context: 710 MiB of weights plus a 749 MiB compute buffer and scratch pool. With less than the 710 MiB of weights free, weight allocation failed and reload reported an error. Between that and about 1.5 GB free, reload succeeded, then ggml aborted the process on the first real dictation: the VMM pool's `cuMemCreate` in `ggml-cuda.cu`, or the unchecked `ggml_gallocr_reserve_n` result leading to a `GGML_ASSERT` in `ggml-backend.cpp`. Additional CUDA runs on 2026-10-10 measured 777 MiB of workspace for 55 seconds of audio, 3,641 MiB for 265 seconds, and 3,801 MiB for 277 seconds, beyond the 566 MiB retained context and approximately 711 MiB of model weights. Parakeet reload requires the model size plus 1 GiB free before it opens on a GPU (see [idle model offload](../running.md#idle-model-offload)), which exceeds the workspace observed for the 55-second recording. Sizing the allowance for the 270-second limit would move smaller GPUs to CPU after every offload. The check cannot reserve memory, and the compute buffer grows with dictation length, so a GPU filled after reload can still abort a long dictation.
 

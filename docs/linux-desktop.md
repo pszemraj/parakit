@@ -2,7 +2,7 @@
 
 Parakit supports IBus native input and the existing X11 insertion route. Choose a transport under [insertion selection](#insertion-selection-and-recovery).
 
-Push-to-talk remains `Ctrl+Space`:
+Push-to-talk uses `Ctrl+Space`; Qwen3-ASR also supports `Ctrl+Alt+Space` for [prior-dictation context](models/qwen3-asr.md#prior-dictation-context):
 
 - On X11, `auto` and `desktop` use the registered global shortcut, preserving the existing workflow.
 - On GNOME Wayland, they use the Parakit IBus engine. Push-to-talk works while that source is selected and an editable field has focus. This is focused-field support, not a global Wayland shortcut.
@@ -41,7 +41,7 @@ parakit --verbose status
 
 `ibus status` reports the registration file, build support, connection, engine discovery, and active engine. Registration does not prove that the current application accepts native commits. Run `parakit test-paste "hello from parakit"` in a disposable terminal, then inspect the inserted prompt text and [insertion outcome](logging.md#insertion-outcomes).
 
-After an upgrade, restart the daemon. Re-run `ibus install` when upgrading from a component that launched `parakit ibus engine`, or if the executable path or keyboard layout changed; log out and back in to reload the engine. To remove the integration, first select another input source, remove Parakit from the desktop's source list, then run:
+After an upgrade, install matching `parakit` and `parakit-ibus` binaries and restart the daemon. Log out and back in to reload the helper when its protocol changes, including the Qwen context-shortcut upgrade. Re-run `ibus install` when upgrading from a component that launched `parakit ibus engine`, or if the executable path or keyboard layout changed. To remove the integration, first select another input source, remove Parakit from the desktop's source list, then run:
 
 ```bash
 sudo "$(command -v parakit)" ibus uninstall
@@ -72,7 +72,7 @@ Close existing application instances before changing their launch options. Chrom
 
 Focused GTK fields also verified selection replacement, rejection after switching fields in the same window, and `Ctrl+Space` with repeats and either release order. Ordinary typing and German `de` / `nodeadkeys` layout with Compose worked while the dictation daemon was absent. The production Rust worker delivered into GTK and Chrome with `DISPLAY` unset; Chrome's existing clipboard text remained unchanged even with transcript clipboard retention enabled.
 
-The production worker also verified native IBus delivery into a GTK X11 field on an isolated X11 server, with its clipboard unchanged. Native delivery on X11 requires `--hotkey-backend ibus`; the default registered shortcut uses X11 clipboard paste.
+The production worker also verified native IBus delivery into a GTK X11 field on an isolated X11 server, with its clipboard unchanged.
 
 On an isolated GNOME Wayland session with XWayland available, rejected and terminal-policy-blocked native dictations copied their full text to the clipboard with history disabled. Clipboard readback matched, and neither GTK field received text. Clipboard recovery needs XWayland clipboard access; native IBus submission itself does not.
 
@@ -99,8 +99,8 @@ For registration failures or an intermittent shortcut after login, suspend, or a
 On GNOME/Ubuntu, check the visible shortcuts first:
 
 1. Open Settings > Keyboard > Keyboard Shortcuts.
-2. Check Typing or Input Sources for `Ctrl+Space`.
-3. Disable or change anything that uses `Ctrl+Space`, then rerun `parakit doctor`.
+2. Check Typing or Input Sources for `Ctrl+Space` and, for Qwen context, `Ctrl+Alt+Space`.
+3. Disable or change a conflicting binding, then rerun `parakit --verbose doctor` to inspect both registrations on X11. A conflict on the extra context shortcut warns at daemon startup without blocking ordinary dictation.
 
 Useful command-line checks:
 
@@ -139,7 +139,7 @@ Because this backend is passive, it cannot prevent the literal Space key from re
 
 ## Evdev Proxy
 
-The evdev-proxy experimental backend is for testing the old keyboard proxy path. It grabs a physical keyboard event device, suppresses the `Ctrl+Space` chord, and forwards other key events through `/dev/uinput`.
+The evdev-proxy experimental backend is for testing the old keyboard proxy path. It grabs a physical keyboard event device, suppresses the dictation chords' Space events, and forwards other key events through `/dev/uinput`.
 
 Only this backend needs at least one readable keyboard event device that exposes both `Ctrl` and `Space`, plus writable `/dev/uinput`. `parakit doctor --hotkey-backend evdev-proxy-experimental` reports unreadable non-keyboard event devices, but they do not block startup when a usable hotkey keyboard candidate is readable.
 

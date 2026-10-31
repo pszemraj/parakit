@@ -136,7 +136,7 @@ sounds = true
 verbose = false
 
 # integer, 0 to 100. How many recent transcripts the daemon keeps in memory for `parakit copy-last` and `parakit history`, newest first.
-# 0 disables both commands: they fail with "transcript history is disabled (daemon.transcript_history = 0)", and `parakit status` reports "last transcript: history disabled".
+# 0 disables Qwen context and both commands: they fail with "transcript history is disabled (daemon.transcript_history = 0)", and `parakit status` reports "last transcript: history disabled".
 # The history exists only in daemon memory. It is cleared when the daemon stops and is never written to disk by this key.
 # Every transcript that reaches insertion is remembered, including one whose paste was blocked or failed. A transcript skipped as whitespace-only is not.
 # logging.dir is independent: it can persist the same transcripts to disk.
@@ -144,7 +144,7 @@ verbose = false
 transcript_history = 10
 
 
-# ---------- [qwen]: language hints and generation limits ----------
+# ---------- [qwen]: language, generation, and prior context ----------
 # These settings apply only to Qwen3-ASR GGUFs; other models ignore them after config validation.
 # Explicit Qwen CLI controls fail with a non-Qwen model.
 
@@ -162,6 +162,18 @@ language = "auto"
 # Overridden by: --qwen-max-new-tokens.
 # The same budget is reapplied on every idle reload. 0, fractions, negative values, and values above 4096 fail config load.
 max_new_tokens = 512
+
+# bool. Request prior-dictation context with the original push-to-talk shortcut as well as the context shortcut.
+# See: [Qwen context](models/qwen3-asr.md#prior-dictation-context) for shortcuts and ordinary-dictation fallback.
+context_on_default_hotkey = false
+
+# integer, 0 or greater. Maximum prior dictations used as context; 0 disables context.
+# Requires: retained daemon.transcript_history entries; this setting never increases retention.
+context_dictations = 3
+
+# positive integer. Maximum age in minutes of prior dictations selected at inference time.
+# Values whose conversion to seconds overflows fail config load.
+context_max_age_minutes = 10
 
 
 # ---------- [cleaning]: transcript cleanup ----------
@@ -399,6 +411,10 @@ backend = "auto"
 # Unset: windowed attention using the model's inference windows. Parakeet models do not use this control.
 # A value parsed as a nonzero integer enables windowing; 0, an empty value or a nonnumeric value keeps the native dense path for models without windowed-attention metadata. Models with explicit windowed-attention metadata retain that behavior.
 # Override it in the launching environment for reference comparisons; restart after changes. There is no config key or command-line flag for it.
+
+# CRISPASR_QWEN3_HOTWORDS_AS_CONTEXT
+# All platforms. Parakit defaults this to 1 at startup so Qwen session hotwords carry free-form context; an existing value is preserved.
+# A nonzero integer enables raw context; zero, empty, or nonnumeric values retain wrapped hotword hints.
 
 # CUDA_VISIBLE_DEVICES
 # CUDA builds. Read by the CUDA runtime, not by parakit. A comma-separated list of NVIDIA GPU indices or UUIDs that CUDA may use; an empty value hides all CUDA devices.

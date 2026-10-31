@@ -5,6 +5,8 @@
 
 #[cfg(target_os = "windows")]
 use crate::daemon::logging::Logger;
+#[cfg(any(not(target_os = "windows"), test))]
+use crate::daemon::recording::DictationMode;
 use crate::daemon::recording::HotkeyTransition;
 #[cfg(target_os = "linux")]
 use anyhow::Context as _;
@@ -187,8 +189,13 @@ pub(crate) fn default_ptt_hint() -> &'static str {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[cfg(any(not(target_os = "windows"), test))]
 enum HotkeyAction {
-    Start { started_at: Instant },
-    Stop { stopped_at: Instant },
+    Start {
+        started_at: Instant,
+        mode: DictationMode,
+    },
+    Stop {
+        stopped_at: Instant,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -203,12 +210,15 @@ impl RecordingLatch {
         self.started_at.is_some()
     }
 
-    fn start(&mut self, now: Instant) -> Option<HotkeyAction> {
+    fn start(&mut self, now: Instant, mode: DictationMode) -> Option<HotkeyAction> {
         if self.is_recording() {
             return None;
         }
         self.started_at = Some(now);
-        Some(HotkeyAction::Start { started_at: now })
+        Some(HotkeyAction::Start {
+            started_at: now,
+            mode,
+        })
     }
 
     fn stop(&mut self, stopped_at: Instant) -> Option<HotkeyAction> {
@@ -221,6 +231,7 @@ impl RecordingLatch {
 #[derive(Clone, Copy, Debug, Default)]
 #[cfg(any(not(target_os = "windows"), test))]
 struct HotkeyState {
+    context_enabled: bool,
     modifiers: ModifierState,
     space: bool,
     suppress_space_release: bool,
@@ -243,15 +254,27 @@ struct ModifierState {
 
 #[cfg(any(not(target_os = "windows"), test))]
 impl HotkeyState {
+    fn new(context_enabled: bool) -> Self {
+        Self {
+            context_enabled,
+            ..Self::default()
+        }
+    }
+
     fn press(&mut self, key: Key, now: Instant) -> (Option<HotkeyAction>, bool) {
         let space_was_held = self.space;
         self.set_key(key, true);
         match key {
             Key::Space if self.is_recording() || self.suppress_space_release => (None, true),
             Key::Space if space_was_held => (None, false),
-            Key::Space if self.ctrl_only() => {
+            Key::Space if self.ctrl_only() || self.context_chord() => {
                 self.suppress_space_release = true;
-                (self.start_recording(now), true)
+                let mode = if self.context_chord() {
+                    DictationMode::WithContext
+                } else {
+                    DictationMode::Plain
+                };
+                (self.start_recording(now, mode), true)
             }
             _ => (None, false),
         }
@@ -300,13 +323,13 @@ impl HotkeyState {
         self.stop_recording(now)
     }
 
-    fn start_recording(&mut self, now: Instant) -> Option<HotkeyAction> {
+    fn start_recording(&mut self, now: Instant, mode: DictationMode) -> Option<HotkeyAction> {
         let debounce_ok = self
             .last_start
             .is_none_or(|last| now.duration_since(last) >= HOTKEY_DEBOUNCE);
         if !self.is_recording() && debounce_ok {
             self.last_start = Some(now);
-            self.recording.start(now)
+            self.recording.start(now, mode)
         } else {
             None
         }
@@ -358,6 +381,18 @@ impl HotkeyState {
         }
     }
 
+    fn context_chord(&self) -> bool {
+        self.context_enabled
+            && self.ptt_ctrl_held()
+            && self.modifiers.alt
+            && !self.modifiers.alt_gr
+            && !self.modifiers.shift_left
+            && !self.modifiers.shift_right
+            && !self.modifiers.meta_left
+            && !self.modifiers.meta_right
+            && (!cfg!(target_os = "macos") || !self.modifiers.ctrl_right)
+    }
+
     fn set_key(&mut self, key: Key, pressed: bool) {
         match key {
             Key::ControlLeft => self.modifiers.ctrl_left = pressed,
@@ -376,7 +411,8 @@ impl HotkeyState {
 
 #[cfg(target_os = "linux")]
 pub(crate) use linux::{
-    linux_device_has_ctrl_space, linux_event_device_paths, registered_hotkey_probe, run_grab_loop,
+    context_hotkey_probe, linux_device_has_ctrl_space, linux_event_device_paths,
+    registered_hotkey_probe, run_grab_loop,
 };
 
 /// Run the platform hotkey loop until it ends or the process exits.
@@ -385,6 +421,7 @@ pub(crate) use linux::{
 ///
 /// * `tx` - Coordinator channel used to post logical hotkey transitions.
 /// * `_backend` - Ignored backend preference on Windows.
+/// * `context_enabled` - Enable the additional Qwen context chord.
 /// * `log` - Logger used for backend diagnostics.
 ///
 /// # Returns
@@ -398,11 +435,12 @@ pub(crate) use linux::{
 pub(crate) fn run_grab_loop(
     tx: Sender<HotkeyTransition>,
     _backend: HotkeyBackend,
+    context_enabled: bool,
     log: Arc<Logger>,
 ) -> Result<(), HotkeyLoopFailed> {
     log.verbose("parakit: Windows hotkey backend: RegisterHotKey Ctrl+Space");
     report_hotkey_loop_failure(
-        super::windows_input::run_registered_hotkey_loop(tx),
+        super::windows_input::run_registered_hotkey_loop(tx, context_enabled, &log),
         "Windows registered hotkey",
         crate::daemon::hotkey_help::windows_failure_help,
     )
@@ -453,6 +491,7 @@ pub(super) fn report_hotkey_loop_failure(
 struct X11HotkeyMapping {
     space: Vec<u8>,
     control: Vec<u8>,
+    alt_gr: Vec<u8>,
     needs_refresh: bool,
 }
 
@@ -467,11 +506,14 @@ impl X11HotkeyMapping {
             &[super::x11::CONTROL_L_KEYSYM, super::x11::CONTROL_R_KEYSYM],
         )
         .context("could not resolve X11 Control keycodes")?;
+        let alt_gr = super::x11::keycodes_for_keysyms(conn, &[super::x11::ISO_LEVEL3_SHIFT_KEYSYM])
+            .context("could not resolve X11 AltGr keycodes")?;
         anyhow::ensure!(!space.is_empty(), "could not resolve X11 Space keycode");
         anyhow::ensure!(!control.is_empty(), "could not resolve X11 Control keycode");
         Ok(Self {
             space,
             control,
+            alt_gr,
             needs_refresh: false,
         })
     }
@@ -529,7 +571,10 @@ fn handle_key_event(
 #[cfg(any(not(target_os = "windows"), test))]
 fn send_hotkey_transition(action: HotkeyAction, tx: &Sender<HotkeyTransition>) {
     let transition = match action {
-        HotkeyAction::Start { started_at } => HotkeyTransition::Pressed { at: started_at },
+        HotkeyAction::Start { started_at, mode } => HotkeyTransition::Pressed {
+            at: started_at,
+            mode,
+        },
         HotkeyAction::Stop { stopped_at } => HotkeyTransition::Released { at: stopped_at },
     };
     let _ = tx.send(transition);

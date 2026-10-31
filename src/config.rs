@@ -79,9 +79,8 @@ pub(crate) struct DaemonConfig {
     pub(crate) sounds: Option<bool>,
     /// Verbose diagnostics: paths, backend details, and timing lines.
     pub(crate) verbose: Option<bool>,
-    /// Count of transcripts kept in daemon memory for `copy-last` and
-    /// `history`. `0` disables both. History lives only in daemon memory;
-    /// nothing is written to disk, and it is cleared when the daemon stops.
+    /// Count of transcripts retained for `copy-last`, `history`, and Qwen context.
+    /// Zero disables retention. History is in memory only and cleared on stop.
     pub(crate) transcript_history: Option<usize>,
 }
 
@@ -93,6 +92,12 @@ pub(crate) struct QwenConfig {
     pub(crate) language: Option<String>,
     /// Generated-token budget per native chunk, 1 through 4096.
     pub(crate) max_new_tokens: Option<usize>,
+    /// Use recent dictations for the original push-to-talk shortcut.
+    pub(crate) context_on_default_hotkey: Option<bool>,
+    /// Maximum prior dictations used as context; zero disables context.
+    pub(crate) context_dictations: Option<usize>,
+    /// Positive maximum age of prior context, in minutes.
+    pub(crate) context_max_age_minutes: Option<u64>,
 }
 
 impl QwenConfig {
@@ -109,6 +114,24 @@ impl QwenConfig {
             options.max_new_tokens = max_new_tokens;
         }
         options
+    }
+
+    /// # Returns
+    /// Whether the original shortcut requests context; disabled by default.
+    pub(crate) fn context_on_default_hotkey(&self) -> bool {
+        self.context_on_default_hotkey.unwrap_or(false)
+    }
+
+    /// # Returns
+    /// Maximum prior dictations to use, defaulting to three.
+    pub(crate) fn context_dictations(&self) -> usize {
+        self.context_dictations.unwrap_or(3)
+    }
+
+    /// # Returns
+    /// Maximum context age in minutes, defaulting to ten.
+    pub(crate) fn context_max_age_minutes(&self) -> u64 {
+        self.context_max_age_minutes.unwrap_or(10)
     }
 }
 
@@ -347,6 +370,15 @@ pub(crate) const TEMPLATE: &str = r#"# parakit config.toml
 # Applies only to Qwen3-ASR. CLI --qwen-max-new-tokens overrides it.
 # max_new_tokens = 512
 
+# Use recent dictations with the original Ctrl+Space shortcut too.
+# context_on_default_hotkey = false
+
+# Prior dictations to use as context, limited by daemon.transcript_history; 0 disables context.
+# context_dictations = 3
+
+# Maximum age of prior context in minutes; must be positive.
+# context_max_age_minutes = 10
+
 [cleaning]
 # Enable the text-cleaning pipeline.
 # Set false for raw multilingual dictation without English or user cleaning rules.
@@ -461,7 +493,8 @@ fn xdg_config_base() -> Result<PathBuf> {
 ///
 /// # Errors
 ///
-/// Returns an error if the config path cannot be resolved, `$PARAKIT_CONFIG_PATH` names a file that does not exist, the file exists but cannot be read, the file is not valid TOML for [`ConfigFile`], `daemon.transcript_history` or `daemon.threads` exceeds its limit, `daemon.model` or `logging.dir` is an empty path, a user-defined rule fails validation (empty or non-canonical name, empty pattern, invalid regex, a name colliding with a built-in rule, or a duplicate user rule name), or `cleaning.disabled_rules` names a rule that does not exist.
+/// Returns an error for an unresolved path, a missing explicit override,
+/// unreadable or invalid TOML, or unsupported daemon, Qwen, or cleaning settings.
 /// Parse and validation errors are annotated with the config file path.
 pub(crate) fn load() -> Result<ConfigFile> {
     load_with_override(std::env::var_os(CONFIG_PATH_ENV))
@@ -541,6 +574,13 @@ pub(crate) fn load_from_path(path: &Path) -> Result<ConfigFile> {
         .validate()
         .map_err(anyhow::Error::msg)
         .with_context(|| format!("invalid config in {}", path.display()))?;
+    let context_age = config.qwen.context_max_age_minutes();
+    if context_age == 0 || context_age.checked_mul(60).is_none() {
+        anyhow::bail!(
+            "invalid config in {}: qwen.context_max_age_minutes must be positive and fit in seconds",
+            path.display()
+        );
+    }
 
     // Checked here so the daemon never fetches or opens a model it would then refuse.
     if config
@@ -612,14 +652,7 @@ mod tests {
 
     #[test]
     fn config_defaults_from_missing_empty_or_template_file() {
-        // Every row asserts the same superset of default fields: the union
-        // of what missing_file_returns_defaults, empty_file_parses_as_defaults,
-        // and template_parses_as_valid_toml_with_all_defaults each checked
-        // individually before this table replaced them. Deliberate
-        // uniform-coverage increase.
-        //
-        // (label, fixture directory slug, file contents; `None` means the
-        // file is absent entirely — never written.)
+        // Missing, empty, and commented-template files select built-in defaults.
         let cases: [(&str, &str, Option<&str>); 3] = [
             ("missing file", "missing", None),
             ("empty file", "empty", Some("")),
@@ -950,28 +983,6 @@ replacement = "hello"
         let config = load_from_path(&path).expect("Linux hotkey config should remain portable");
 
         assert_eq!(config.hotkey._backend.as_deref(), Some("x11-listen"));
-    }
-    #[test]
-    fn model_idle_config_accepts_zero_and_rejects_invalid_durations() {
-        for minutes in [0, 1, 10, i64::MAX as u64] {
-            let path = write_fixture(
-                "idle-valid",
-                &format!("[daemon]\nmodel_idle_minutes = {minutes}\n"),
-            );
-            assert_eq!(
-                load_from_path(&path).unwrap().daemon.model_idle_minutes,
-                Some(minutes)
-            );
-        }
-        for raw in ["-1", "1.5", "9223372036854775808", "\"ten\""] {
-            let path = write_fixture(
-                "idle-invalid",
-                &format!("[daemon]\nmodel_idle_minutes = {raw}\n"),
-            );
-            let message = format!("{:#}", load_from_path(&path).unwrap_err());
-            assert!(message.contains("model_idle_minutes"), "{message}");
-            assert!(message.contains(&path.display().to_string()), "{message}");
-        }
     }
 }
 

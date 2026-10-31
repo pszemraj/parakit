@@ -355,6 +355,7 @@ impl SharedState {
     /// # Returns
     ///
     /// Shared state with no remembered transcripts.
+    #[cfg(test)]
     pub(crate) fn new() -> Self {
         Self::with_history_limit(DEFAULT_TRANSCRIPT_HISTORY)
     }
@@ -365,7 +366,7 @@ impl SharedState {
     /// # Arguments
     ///
     /// * `limit` - Maximum number of transcripts kept in memory. `0`
-    ///   disables `copy-last` and `history`.
+    ///   disables `copy-last`, `history`, and prior-dictation context.
     ///
     /// # Returns
     ///

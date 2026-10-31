@@ -14,7 +14,9 @@ In Windows 11, open Settings > Privacy & security > Microphone and enable microp
 
 The push-to-talk chord is `Ctrl+Space` and is not configurable. parakit registers it with Win32's `RegisterHotKey`, which gives a clean, OS-level conflict signal instead of racing another listener for the same keys.
 
-`parakit doctor` probes the same registration and releases it immediately, so an already-owned chord shows up as a `hotkey` `FAIL` before you start the daemon. If another application already holds `Ctrl+Space` and you start the daemon anyway, `RegisterHotKey` fails and parakit exits right away with a message pointing back at `doctor`.
+With a Qwen3-ASR model, `Ctrl+Alt+Space` requests [prior-dictation context](models/qwen3-asr.md#prior-dictation-context). If that extra chord is already owned, Parakit warns and leaves `Ctrl+Space` available. Other models register only the original chord.
+
+`parakit doctor` probes both registrations and releases them immediately. An already-owned `Ctrl+Space` produces a `hotkey` `FAIL`; an unavailable context chord appears in `parakit --verbose doctor` details without failing the hotkey check. If another application already holds `Ctrl+Space` and you start the daemon anyway, `RegisterHotKey` fails and parakit exits right away with a message pointing back at `doctor`.
 
 Some Windows input methods, particularly CJK IMEs, bind `Ctrl+Space` to toggle input mode. If parakit never reacts to the held chord, check for a conflicting IME shortcut before assuming a bug.
 
