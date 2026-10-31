@@ -17,9 +17,7 @@ use std::sync::Arc;
 use std::thread;
 #[cfg(any(unix, target_os = "windows"))]
 use std::thread::JoinHandle;
-#[cfg(any(unix, target_os = "windows"))]
-use std::time::Duration;
-use std::time::{Instant, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 #[cfg(any(unix, target_os = "windows"))]
 use super::preflight;
@@ -346,8 +344,19 @@ struct TranscriptEntry {
     chars: usize,
     preview: String,
     at: Instant,
-    /// Wall-clock timestamp used for context expiration across system suspend.
+    /// Wall-clock timestamp for displayed age and expiration across suspend.
     recorded_at: SystemTime,
+}
+
+impl TranscriptEntry {
+    /// Age from whichever clock has advanced further, including system suspend.
+    fn age_at(&self, monotonic_now: Instant, wall_now: SystemTime) -> Duration {
+        monotonic_now.saturating_duration_since(self.at).max(
+            wall_now
+                .duration_since(self.recorded_at)
+                .unwrap_or_default(),
+        )
+    }
 }
 
 impl SharedState {
@@ -606,6 +615,7 @@ impl SharedState {
     fn history_snapshot(&self, limit: Option<usize>) -> Vec<HistoryEntry> {
         let inner = self.inner.lock();
         let now = Instant::now();
+        let wall_now = SystemTime::now();
         inner
             .history
             .iter()
@@ -617,7 +627,7 @@ impl SharedState {
                     entry: entry.id,
                 },
                 index: position + 1,
-                age_secs: now.saturating_duration_since(entry.at).as_secs(),
+                age_secs: entry.age_at(now, wall_now).as_secs(),
                 chars: entry.chars,
                 preview: entry.preview.clone(),
             })

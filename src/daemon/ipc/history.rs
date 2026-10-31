@@ -51,12 +51,7 @@ impl SharedState {
             .iter()
             // Wall time includes suspend; monotonic time prevents clock rollback
             // from reviving old dictations. Future wall timestamps are ineligible.
-            .filter(|entry| {
-                monotonic_now.saturating_duration_since(entry.at) <= max_age
-                    && now
-                        .duration_since(entry.recorded_at)
-                        .is_ok_and(|age| age <= max_age)
-            })
+            .filter(|entry| entry.recorded_at <= now && entry.age_at(monotonic_now, now) <= max_age)
             .map(|entry| entry.text.trim())
             .filter(|text| !text.is_empty())
             .take(count)

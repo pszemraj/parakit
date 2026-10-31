@@ -369,6 +369,30 @@ fn history_snapshot_matrix() {
         failures.len(),
         failures.join("\n")
     );
+
+    for (active_secs, wall_secs, future_wall, expected_age) in [
+        (2, 3600, false, 3600),
+        (1200, 300, false, 1200),
+        (20, 300, true, 20),
+    ] {
+        let state = SharedState::new();
+        state.remember_transcript("clock example".into());
+        {
+            let mut inner = state.inner.lock();
+            inner.history[0].at = Instant::now() - Duration::from_secs(active_secs);
+            let wall_age = Duration::from_secs(wall_secs);
+            inner.history[0].recorded_at = if future_wall {
+                SystemTime::now() + wall_age
+            } else {
+                SystemTime::now() - wall_age
+            };
+        }
+        let age = state.history_snapshot(None)[0].age_secs;
+        assert!(
+            age >= expected_age,
+            "history age {age}s understates {expected_age}s"
+        );
+    }
 }
 
 #[cfg(any(unix, target_os = "windows"))]
