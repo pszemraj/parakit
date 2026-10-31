@@ -59,6 +59,68 @@ fn registered_hotkey_release_is_ignored_while_physical_chord_is_still_down() {
 }
 
 #[test]
+fn registered_hotkey_stale_press_waits_for_physical_rearm() {
+    let now = base_time();
+    for mode in [DictationMode::Plain, DictationMode::WithContext] {
+        for (ctrl_held, space_held) in [(false, false), (false, true), (true, false)] {
+            let mut state = RegisteredHotkeyLatch::default();
+            assert_eq!(
+                state.event(
+                    RegisteredHotKeyState::Pressed,
+                    mode,
+                    physical(ctrl_held, space_held),
+                    now
+                ),
+                None,
+            );
+            assert!(!state.is_recording());
+            assert_eq!(state.needs_physical_poll(), space_held);
+            if space_held {
+                assert_eq!(
+                    state.event(
+                        RegisteredHotKeyState::Pressed,
+                        mode,
+                        physical(true, true),
+                        at(now, 10)
+                    ),
+                    None,
+                );
+            }
+            assert_eq!(
+                state.event(
+                    RegisteredHotKeyState::Released,
+                    mode,
+                    physical(false, space_held),
+                    at(now, 20)
+                ),
+                None,
+            );
+            assert_eq!(
+                state.physical_poll(physical(false, space_held), at(now, 30)),
+                None
+            );
+            assert_eq!(
+                state.physical_poll(physical(false, false), at(now, 40)),
+                None
+            );
+            assert!(!state.needs_physical_poll());
+            assert_eq!(
+                state.event(
+                    RegisteredHotKeyState::Pressed,
+                    mode,
+                    physical(true, true),
+                    at(now, 50)
+                ),
+                Some(HotkeyAction::Start {
+                    started_at: at(now, 50),
+                    mode
+                }),
+            );
+        }
+    }
+}
+
+#[test]
 fn registered_hotkey_waits_for_space_release_after_ctrl_first_stop() {
     let now = base_time();
     let mut state = RegisteredHotkeyLatch::default();
@@ -218,6 +280,7 @@ fn registered_context_chord_does_not_restart_when_alt_changes() {
 
 #[test]
 fn registered_context_chord_rejects_alt_gr() {
+    let now = base_time();
     let mut latch = RegisteredHotkeyLatch::default();
     assert_eq!(
         latch.event(
@@ -228,11 +291,49 @@ fn registered_context_chord_rejects_alt_gr() {
                 space: true,
                 alt_gr: true
             },
-            base_time()
+            now
         ),
         None
     );
     assert!(!latch.is_recording());
+    assert!(latch.needs_physical_poll());
+    for mode in [DictationMode::Plain, DictationMode::WithContext] {
+        assert_eq!(
+            latch.event(
+                RegisteredHotKeyState::Pressed,
+                mode,
+                physical(true, true),
+                at(now, 10)
+            ),
+            None,
+        );
+    }
+    assert_eq!(
+        latch.event(
+            RegisteredHotKeyState::Released,
+            DictationMode::WithContext,
+            physical(false, false),
+            at(now, 20)
+        ),
+        None,
+    );
+    assert_eq!(
+        latch.physical_poll(physical(false, false), at(now, 30)),
+        None
+    );
+    assert!(!latch.needs_physical_poll());
+    assert_eq!(
+        latch.event(
+            RegisteredHotKeyState::Pressed,
+            DictationMode::WithContext,
+            physical(true, true),
+            at(now, 40)
+        ),
+        Some(HotkeyAction::Start {
+            started_at: at(now, 40),
+            mode: DictationMode::WithContext
+        }),
+    );
 }
 
 #[test]

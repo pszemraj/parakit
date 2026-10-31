@@ -180,8 +180,10 @@ impl RegisteredHotkeyLatch {
         self.sync_space_release(physical);
         match state {
             RegisteredHotKeyState::Pressed
-                if mode == DictationMode::WithContext && physical.alt_gr =>
+                if !physical.chord_down()
+                    || (mode == DictationMode::WithContext && physical.alt_gr) =>
             {
+                self.suppress_until_space_release = physical.space;
                 None
             }
             RegisteredHotKeyState::Pressed if self.suppress_until_space_release => None,
