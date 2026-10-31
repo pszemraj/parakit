@@ -19,7 +19,7 @@ use std::thread;
 use std::thread::JoinHandle;
 #[cfg(any(unix, target_os = "windows"))]
 use std::time::Duration;
-use std::time::Instant;
+use std::time::{Instant, SystemTime};
 
 #[cfg(any(unix, target_os = "windows"))]
 use super::preflight;
@@ -346,6 +346,8 @@ struct TranscriptEntry {
     chars: usize,
     preview: String,
     at: Instant,
+    /// Wall-clock timestamp used for context expiration across system suspend.
+    recorded_at: SystemTime,
 }
 
 impl SharedState {
@@ -440,6 +442,7 @@ impl SharedState {
             chars,
             preview,
             at: Instant::now(),
+            recorded_at: SystemTime::now(),
         });
         inner.history.truncate(self.history_limit);
     }

@@ -3,7 +3,7 @@
 use super::{HistoryReference, IpcResponse, SharedState, IPC_MAX_MESSAGE_SIZE};
 use anyhow::{bail, Context, Result};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const MAX_CONTEXT_CHARS: usize = 1500;
 
@@ -30,20 +30,29 @@ impl SharedState {
     ///
     /// # Arguments
     /// * `count` - Maximum number of eligible history entries; zero disables context.
-    /// * `max_age` - Maximum age of an entry at worker processing time.
+    /// * `max_age` - Maximum wall-clock age, including time spent suspended.
     ///
     /// # Returns
     /// Prior text, or none when history has no eligible nonempty entries.
     pub(crate) fn recent_context(&self, count: usize, max_age: Duration) -> Option<String> {
-        self.recent_context_at(count, max_age, Instant::now())
+        self.recent_context_at(count, max_age, SystemTime::now())
     }
 
-    fn recent_context_at(&self, count: usize, max_age: Duration, now: Instant) -> Option<String> {
+    fn recent_context_at(
+        &self,
+        count: usize,
+        max_age: Duration,
+        now: SystemTime,
+    ) -> Option<String> {
         let inner = self.inner.lock();
         let mut entries: Vec<_> = inner
             .history
             .iter()
-            .filter(|entry| now.saturating_duration_since(entry.at) <= max_age)
+            // A backwards clock adjustment makes age unknown; omit that entry.
+            .filter(|entry| {
+                now.duration_since(entry.recorded_at)
+                    .is_ok_and(|age| age <= max_age)
+            })
             .map(|entry| entry.text.trim())
             .filter(|text| !text.is_empty())
             .take(count)
@@ -143,11 +152,11 @@ mod tests {
         for text in ["expired", "boundary", "older", " newest "] {
             state.remember_transcript(text.into());
         }
-        let now = Instant::now();
+        let now = SystemTime::now();
         {
             let mut inner = state.inner.lock();
-            inner.history[3].at = now - Duration::from_secs(601);
-            inner.history[2].at = now - Duration::from_secs(600);
+            inner.history[3].recorded_at = now - Duration::from_secs(601);
+            inner.history[2].recorded_at = now - Duration::from_secs(600);
         }
         let age = Duration::from_secs(600);
         assert_eq!(
@@ -163,9 +172,16 @@ mod tests {
             state.recent_context_at(5, age, now).as_deref(),
             Some("boundary\nolder\nnewest")
         );
+        // Suspend can advance wall time without advancing the monotonic clock.
+        assert_eq!(
+            state.recent_context_at(3, age, now + Duration::from_secs(12 * 60 * 60)),
+            None
+        );
         for entry in &mut state.inner.lock().history {
-            entry.at = now - Duration::from_secs(601);
+            entry.recorded_at = now - Duration::from_secs(601);
         }
+        assert_eq!(state.recent_context_at(3, age, now), None);
+        state.inner.lock().history[0].recorded_at = now + Duration::from_secs(1);
         assert_eq!(state.recent_context_at(3, age, now), None);
     }
 
