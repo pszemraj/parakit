@@ -481,6 +481,29 @@ fn worker_settings_preserve_defaults_config_and_cli_precedence() {
         );
         assert_eq!(log_summary.as_deref(), expected_log, "{args:?}");
     }
+
+    for (is_qwen, dictations, history, expected) in [
+        (true, None, None, true),
+        (false, None, None, false),
+        (true, Some(0), None, false),
+        (true, None, Some(0), false),
+        (true, Some(0), Some(0), false),
+        (true, Some(2), Some(5), true),
+    ] {
+        let mut config = ConfigFile::default();
+        config.qwen.context_dictations = dictations;
+        config.daemon.transcript_history = history;
+        for always in [false, true] {
+            config.qwen.context_on_default_hotkey = Some(always);
+            assert_eq!(
+                is_qwen
+                    && config
+                        .qwen
+                        .context_enabled(config.daemon.effective_transcript_history()),
+                expected
+            );
+        }
+    }
 }
 
 #[test]

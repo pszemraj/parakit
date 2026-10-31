@@ -129,6 +129,12 @@ impl QwenConfig {
     }
 
     /// # Returns
+    /// Whether retained history can supply prior-dictation context.
+    pub(crate) fn context_enabled(&self, history_limit: usize) -> bool {
+        self.context_dictations() != 0 && history_limit != 0
+    }
+
+    /// # Returns
     /// Maximum context age in minutes, defaulting to ten.
     pub(crate) fn context_max_age_minutes(&self) -> u64 {
         self.context_max_age_minutes.unwrap_or(10)

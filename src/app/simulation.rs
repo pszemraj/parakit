@@ -55,8 +55,9 @@ pub(super) fn run_ptt_audio_simulation(
         open_cli_engine(start, config, verbose, cli.quiet || !verbose, &log)?;
     let context_enabled = engine.qwen_options().is_some()
         && settings.context_on_default_hotkey
-        && settings.context_dictations != 0
-        && config.daemon.effective_transcript_history() != 0;
+        && config
+            .qwen
+            .context_enabled(config.daemon.effective_transcript_history());
     let state = Arc::new(daemon::ipc::SharedState::with_history_limit(
         config.daemon.effective_transcript_history(),
     ));

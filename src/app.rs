@@ -394,7 +394,10 @@ fn run_daemon(cli: &Cli, start: &StartCli) -> Result<()> {
         recipe,
     } = open_cli_engine(start, &config, verbose, cli.quiet, &log)?;
     let model_dtype = model_dtype_label(&model_path);
-    let context_enabled = engine.qwen_options().is_some();
+    let context_enabled = engine.qwen_options().is_some()
+        && config
+            .qwen
+            .context_enabled(config.daemon.effective_transcript_history());
 
     // Resolve startup metadata once for the banner and IPC status.
     let model_name = model_file_name(&model_path);
