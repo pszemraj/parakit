@@ -28,6 +28,8 @@ typedef struct {
     gboolean ready;
     gboolean ptt;
     gboolean context_enabled;
+    /* Observed Space state survives focus changes and later modifier presses. */
+    gboolean space_held;
     /* Focus/source changes must not rearm a physically held dictation chord. */
     gboolean ptt_inhibited;
     PkEngine *focused;
@@ -101,9 +103,13 @@ static void change_focus(PkEngine *engine) {
 static gboolean process_key(IBusEngine *base, guint keyval, guint keycode, guint state) {
     PkEngine *engine = (PkEngine *)base;
     gboolean release = (state & IBUS_RELEASE_MASK) != 0;
-    if (keyval == IBUS_KEY_Control_L || keyval == IBUS_KEY_Control_R ||
-        (release && keyval == IBUS_KEY_space) ||
-        (!release && !(state & IBUS_CONTROL_MASK)))
+    gboolean space_was_held = helper->space_held;
+    if (keyval == IBUS_KEY_space)
+        helper->space_held = !release;
+    if (!helper->space_held &&
+        (keyval == IBUS_KEY_Control_L || keyval == IBUS_KEY_Control_R ||
+         (release && keyval == IBUS_KEY_space) ||
+         (!release && !(state & IBUS_CONTROL_MASK))))
         helper->ptt_inhibited = FALSE;
     if (keyval == IBUS_KEY_space && engine->space_consumed) {
         if (release) {
@@ -128,15 +134,17 @@ static gboolean process_key(IBusEngine *base, guint keyval, guint keycode, guint
         (modifiers == IBUS_CONTROL_MASK || with_context) && helper->focused == engine) {
         if (helper->ptt_inhibited)
             return TRUE;
-        PkTarget target = current_target();
-        if (target_is_eligible(&target)) {
-            engine->space_consumed = TRUE;
-            if (!helper->held) {
-                helper->held = engine;
-                emit_signal("Ptt", g_variant_new("(bb@" PK_TARGET_TYPE ")", TRUE, with_context,
-                                                pk_target_variant(&target)));
+        if (!space_was_held) {
+            PkTarget target = current_target();
+            if (target_is_eligible(&target)) {
+                engine->space_consumed = TRUE;
+                if (!helper->held) {
+                    helper->held = engine;
+                    emit_signal("Ptt", g_variant_new("(bb@" PK_TARGET_TYPE ")", TRUE, with_context,
+                                                    pk_target_variant(&target)));
+                }
+                return TRUE;
             }
-            return TRUE;
         }
     }
     return IBUS_ENGINE_CLASS(pk_engine_parent_class)->process_key_event(
