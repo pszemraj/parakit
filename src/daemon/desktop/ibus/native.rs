@@ -305,6 +305,42 @@ mod tests {
     use super::*;
 
     #[test]
+    fn native_attach_errors_warn_once_and_allow_recovery() {
+        use std::process::Command;
+
+        let root = crate::test_support::fixture_root("ibus-native", "attach-errors");
+        let binary = root.join("ibus-attach");
+        let flags = Command::new("pkg-config")
+            .args(["--cflags", "--libs", "ibus-1.0"])
+            .output()
+            .unwrap();
+        assert!(flags.status.success(), "{flags:?}");
+        let flags = String::from_utf8(flags.stdout).unwrap();
+        let compiled = Command::new("cc")
+            .args(["-std=c11", "-Wall", "-Wextra", "-Werror"])
+            .arg("tests/native/ibus_attach.c")
+            .args(shlex::split(&flags).unwrap())
+            .arg("-o")
+            .arg(&binary)
+            .env("TMPDIR", &root)
+            .output()
+            .unwrap();
+        assert!(compiled.status.success(), "{compiled:?}");
+        let result = Command::new(binary).output().unwrap();
+        assert!(result.status.success(), "{result:?}");
+        assert!(result.stdout.is_empty());
+        let stderr = String::from_utf8(result.stderr).unwrap();
+        let lines: Vec<_> = stderr.lines().collect();
+        assert_eq!(lines.len(), 2, "{stderr}");
+        for line in lines {
+            assert!(line.starts_with("parakit: warning:"), "{line}");
+            assert!(line.contains("No such interface org.parakit.IBusBridge2"));
+            assert!(line.contains("reinstall matching parakit and parakit-ibus binaries"));
+            assert!(line.contains("log out and back in to reload the helper"));
+        }
+    }
+
+    #[test]
     fn native_press_preserves_context_intent_and_readiness() {
         let (sender, receiver) = crossbeam_channel::unbounded();
         let state = State {

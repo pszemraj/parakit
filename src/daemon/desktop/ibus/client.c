@@ -14,6 +14,7 @@ typedef struct {
     gboolean ready;
     gboolean ptt;
     gboolean context_enabled;
+    gboolean attach_warned;
     gboolean held;
     gboolean stopping;
     guint pending;
@@ -55,15 +56,27 @@ typedef struct {
 static void attached(GObject *object, GAsyncResult *result, gpointer user) {
     AttachRequest *request = user;
     PkClient *client = request->client;
-    GVariant *reply = g_dbus_connection_call_finish(G_DBUS_CONNECTION(object), result, NULL);
+    GError *error = NULL;
+    GVariant *reply = g_dbus_connection_call_finish(G_DBUS_CONNECTION(object), result, &error);
     --client->pending;
-    if (!client->stopping && reply && request->revision == client->revision &&
+    if (!client->stopping && request->revision == client->revision &&
         g_strcmp0(request->owner, client->owner) == 0) {
-        GVariant *value = g_variant_get_child_value(reply, 0);
-        client->target = pk_target_read(value);
-        g_variant_unref(value);
-        notify(client, 0, &client->target);
+        if (reply) {
+            client->attach_warned = FALSE;
+            GVariant *value = g_variant_get_child_value(reply, 0);
+            client->target = pk_target_read(value);
+            g_variant_unref(value);
+            notify(client, 0, &client->target);
+        } else if (!client->attach_warned &&
+                   !g_error_matches(error, G_IO_ERROR, G_IO_ERROR_CANCELLED)) {
+            client->attach_warned = TRUE;
+            g_printerr("parakit: warning: could not attach to parakit-ibus: %s; "
+                       "reinstall matching parakit and parakit-ibus binaries, then "
+                       "log out and back in to reload the helper\n",
+                       error->message);
+        }
     }
+    g_clear_error(&error);
     if (reply)
         g_variant_unref(reply);
     g_free(request->owner);
