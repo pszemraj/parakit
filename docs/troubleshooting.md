@@ -10,9 +10,13 @@ For desktop-session or permission failures, follow the [X11 session checks](linu
 
 WSL is not the native Windows daemon path. Check Windows hotkeys, focus, and paste from native PowerShell with the Windows bundle.
 
+## IBus Dictation Stops After An Upgrade
+
+An older `parakit-ibus` helper cannot attach to a daemon using a newer bridge protocol, which stops ordinary and contextual dictation. If attachment fails or `Ctrl+Space` passes through after an upgrade, reinstall the daemon and matching helper together, then follow the [engine reload steps](linux-desktop.md#ibus-setup).
+
 ## Qwen Context Has No Effect
 
-Confirm a Qwen3-ASR model is active and that `parakit history --plain` contains recent dictations. Inspect `parakit config show` and the [context settings and eligibility rules](models/qwen3-asr.md#prior-dictation-context), then restart the daemon after any configuration change. On registered X11 or Windows, use `parakit --verbose doctor` before startup to inspect the optional context shortcut. On Linux IBus, install the matching helper and follow the [upgrade reload steps](linux-desktop.md#ibus-setup).
+Confirm a Qwen3-ASR model is active and that `parakit history --plain` contains recent dictations. Inspect `parakit config show` and the [context settings and eligibility rules](models/qwen3-asr.md#prior-dictation-context), then restart the daemon after any configuration change. On registered X11 or Windows, use `parakit --verbose doctor` before startup to inspect the optional context shortcut.
 
 ## Literal Space Appears
 

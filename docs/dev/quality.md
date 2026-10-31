@@ -155,6 +155,8 @@ Simulation bypasses the daemon singleton and opens no control endpoint. It uses 
 
 The worker acknowledges each required transcript and verifies the expected residency after each wait (including the last). With history enabled and context disabled, repeated transcripts must match within the same process; this verifies reload behavior rather than recognition quality across builds. Context-enabled repetitions can differ as prior history changes. Missing transcripts, reload failures, or missed offloads return a failure exit status. An immediate simulated release exercises queuing while reload is busy. Use `--model-idle-minutes 0` to check disabled offloading. For one dictation without an idle wait, omit `--simulate-ptt-repeat` and `--simulate-ptt-idle-seconds`; both options require `--simulate-ptt-audio`.
 
+Simulation requests the original shortcut's mode. To compare Qwen context, set `context_on_default_hotkey = true` under `[qwen]` in the isolated configuration, with nonzero `context_dictations` and `daemon.transcript_history`; the first successful capture supplies history for later captures. Keep context disabled for ordinary reload-parity checks.
+
 ## NeMo Reference Helper
 
 The Python helper runs NVIDIA NeMo's official [Parakeet-TDT-0.6B-v3](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3) path:

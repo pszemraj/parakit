@@ -159,6 +159,7 @@ pub(crate) fn macos_failure_help() -> String {
 const WINDOWS_HOTKEY_FIX: &str = "fix:
   - Close any application that already owns Ctrl+Space.
   - Qwen context also uses Ctrl+Alt+Space; if that optional chord is busy, Ctrl+Space remains available.
+  - On AltGr layouts, that registration also consumes AltGr+Space. Set qwen.context_dictations=0 and restart to preserve it.
   - Re-run: parakit doctor
   - Elevated target apps may still reject paste input from a normal user process.";
 

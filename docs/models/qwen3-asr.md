@@ -37,17 +37,21 @@ Apply model and configuration changes through the [restart workflow](../configur
 
 Hold `Ctrl+Alt+Space` to request recent context. On macOS use `Left Control+Left Option+Space`. The original shortcut uses ordinary transcription by default; set `context_on_default_hotkey = true` to use context there too. Context intent is fixed when Space is pressed, so releasing Alt or Option while speaking does not change it or stop recording. Releasing Control or Space stops recording.
 
-The worker selects prior dictations across all apps using the configured count and age limits, orders them oldest first, and keeps the newest 1,500 Unicode characters, including newline separators. It uses stored cleaned text, or raw text when cleaning is disabled. Earlier mistranscriptions can therefore bias later recognition.
+On Windows, registering the context shortcut also consumes `AltGr+Space` on AltGr layouts, although it does not start recording. To preserve `AltGr+Space`, set `context_dictations = 0` and restart; ordinary dictation remains available.
 
-Context reuses [daemon history](../running.md#daemon-control); `daemon.transcript_history` limits available entries and never grows to satisfy a context request. History starts empty after a daemon restart and is not loaded from JSONL logs. Setting either `context_dictations` or `daemon.transcript_history` to zero disables context.
+The worker selects prior dictations across all apps using the configured count and age limits, orders them oldest first, and keeps the newest 1,500 Unicode characters, including newline separators. Age includes time spent suspended. It uses stored cleaned text, or raw text when cleaning is disabled.
 
-Empty, expired, disabled, or unusable context falls back to ordinary dictation. Captures shorter than one second also use ordinary transcription, retaining the existing silence padding, because Qwen can copy prior text on very short audio.
+Context reuses [daemon history](../running.md#daemon-control); `daemon.transcript_history` limits available entries and never grows to satisfy a context request. History starts empty after a daemon restart and is not loaded from JSONL logs. Setting either `context_dictations` or `daemon.transcript_history` to zero disables context and its extra shortcut.
+
+Empty, expired, disabled, or unusable context falls back to ordinary dictation. Captures shorter than one second also use ordinary transcription, retaining the existing silence padding.
+
+Qwen can copy earlier text instead of recognizing the audio, including on longer recordings. After contextual inference, Parakit reruns the capture once without context if the output is wholly contained in the prior text or shares at least five consecutive words with it. Matching compares lowercase Unicode alphanumeric words, ignoring punctuation. This can also rerun genuinely repeated phrases, and it does not catch every substitution caused by context; earlier mistranscriptions and unrelated context can still bias recognition.
 
 The extra shortcut is inactive for other models. If its registered chord is already owned, Parakit warns and keeps the original shortcut usable; the original-shortcut configuration flag remains available. Linux IBus upgrades need the matching `parakit-ibus` helper and an [engine reload](../linux-desktop.md#ibus-setup).
 
 ## Long Audio And Inference
 
-By default, Qwen splits long audio into native chunks around 30 seconds, resetting the decoder for each chunk. Every chunk receives the same prior-dictation context; a preceding chunk's new text is not passed to the next. The model's published 1,200-second input capability does not extend [Parakit's recording limit](../running.md#microphone).
+By default, Qwen splits long audio into native chunks of at most 30 seconds, choosing quiet split points and resetting the decoder for each chunk. Every chunk receives the same prior-dictation context; a preceding chunk's new text is not passed to the next. The model's published 1,200-second input capability does not extend [Parakit's recording limit](../running.md#microphone).
 
 An incomplete decode fails the dictation instead of inserting partial text. Language hints and token budgets are restored after the [readiness and idle-reload flow](../running.md#idle-model-offload). Windowed audio attention is enabled by default; its environment override and reference-comparison settings are covered by the [Qwen validation procedure](../dev/quality.md#qwen-and-moondream-comparisons).
 
