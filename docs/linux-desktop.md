@@ -2,7 +2,7 @@
 
 Parakit supports IBus native input and the existing X11 insertion route. Choose a transport under [insertion selection](#insertion-selection-and-recovery).
 
-Push-to-talk uses `Ctrl+Space`; Qwen3-ASR also supports `Ctrl+Alt+Space` for [prior-dictation context](qwen3-asr.md#prior-dictation-context):
+Push-to-talk uses `Ctrl+Space`; Qwen3-ASR also supports `Ctrl+Alt+Space` for [prior-dictation context](models/qwen3-asr.md#prior-dictation-context):
 
 - On X11, `auto` and `desktop` use the registered global shortcut, preserving the existing workflow.
 - On GNOME Wayland, they use the Parakit IBus engine. Push-to-talk works while that source is selected and an editable field has focus. This is focused-field support, not a global Wayland shortcut.

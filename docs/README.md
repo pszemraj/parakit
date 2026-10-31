@@ -11,7 +11,7 @@
 ## Daily Use
 
 - [running.md](running.md) - running the daemon, daemon control, the model cache, and paste modes.
-- [qwen3-asr.md](qwen3-asr.md) - Qwen model setup, language controls, prior-dictation context, and long-audio behavior.
+- [models/qwen3-asr.md](models/qwen3-asr.md) - Qwen model setup, language controls, prior-dictation context, and long-audio behavior.
 - [configuration.md](configuration.md) - the config file, CLI/config precedence, and user-defined cleaning rules.
 - [example.toml](example.toml) - a minimal starter config with a comment on each choice.
 - [config_reference.toml](config_reference.toml) - the per-key configuration reference, itself a loadable config that holds every default.

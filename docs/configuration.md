@@ -64,7 +64,7 @@ These daemon and cleaning flags live on `parakit start`. The profile, trailing-p
 
 Boolean flag pairs, merged disabled-rule names, and config-only settings have per-key interactions described in [config_reference.toml](config_reference.toml).
 
-The [Qwen3-ASR guide](qwen3-asr.md) includes a persistent model, language, and context configuration. Other presets are listed under [model selection](running.md#model-presets).
+The [Qwen3-ASR guide](models/qwen3-asr.md) includes a persistent model, language, and context configuration. Other presets are listed under [model selection](running.md#model-presets).
 
 TOML, unknown-key, invalid-value, and rule-validation errors name the config path.
 

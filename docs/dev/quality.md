@@ -307,7 +307,7 @@ Run the daemon in foreground mode and exercise real applications:
 
 Check:
 
-- both Qwen [dictation shortcuts](../qwen3-asr.md#prior-dictation-context) suppress literal Space; the extra shortcut stays inactive for Parakeet;
+- both Qwen [dictation shortcuts](../models/qwen3-asr.md#prior-dictation-context) suppress literal Space; the extra shortcut stays inactive for Parakeet;
 - holding each shortcut for 3 to 5 seconds produces exactly one recording start and one stop;
 - rapid double-presses do not wedge the state machine;
 - releasing Control before Space, and Space before Control, each stops recording once;

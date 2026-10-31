@@ -12,7 +12,7 @@ WSL is not the native Windows daemon path. Check Windows hotkeys, focus, and pas
 
 ## Qwen Context Has No Effect
 
-Confirm a Qwen3-ASR model is active and that `parakit history --plain` contains recent dictations. Inspect `parakit config show` and the [context settings and eligibility rules](qwen3-asr.md#prior-dictation-context), then restart the daemon after any configuration change. On registered X11 or Windows, use `parakit --verbose doctor` before startup to inspect the optional context shortcut. On Linux IBus, install the matching helper and follow the [upgrade reload steps](linux-desktop.md#ibus-setup).
+Confirm a Qwen3-ASR model is active and that `parakit history --plain` contains recent dictations. Inspect `parakit config show` and the [context settings and eligibility rules](models/qwen3-asr.md#prior-dictation-context), then restart the daemon after any configuration change. On registered X11 or Windows, use `parakit --verbose doctor` before startup to inspect the optional context shortcut. On Linux IBus, install the matching helper and follow the [upgrade reload steps](linux-desktop.md#ibus-setup).
 
 ## Literal Space Appears
 

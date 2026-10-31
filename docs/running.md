@@ -246,7 +246,7 @@ This accepts every preset above and uses its provider revision with `crispasr-qu
 
 `fetch --quantize q6_k` conflicts with `--from-source`. GGUF Q6_K differs from [MLX's affine 6-bit quantization](https://ml-explore.github.io/mlx/build/html/python/_autosummary/mlx.core.quantize.html), so evaluate them separately. Windows requires a compatible external `crispasr-quantize.exe` on `PATH`; see [source rebuild](dev/README.md#source-rebuild).
 
-Qwen setup, language controls, and prior-dictation context are covered in the [Qwen3-ASR guide](qwen3-asr.md). For multilingual dictation, follow the [cleaning profile guidance](cleaning-rules.md#profiles).
+Qwen setup, language controls, and prior-dictation context are covered in the [Qwen3-ASR guide](models/qwen3-asr.md). For multilingual dictation, follow the [cleaning profile guidance](cleaning-rules.md#profiles).
 
 [Moondream Ultra](https://huggingface.co/moondream/parakeet-ultra) and [Redux](https://huggingface.co/moondream/parakeet-redux) derive from NVIDIA Parakeet v3 and use [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/); the linked cstr repositories provide the GGUF conversions.
 

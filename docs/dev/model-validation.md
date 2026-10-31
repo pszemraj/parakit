@@ -158,7 +158,7 @@ These checks preserved the installed daemon and settings and reused isolated mod
 
 ## Qwen options, long input, and reload
 
-Use the language, token, and chunking controls described in the [Qwen3-ASR guide](../qwen3-asr.md). Keep Qwen attention overrides unset for acceptance; the default and diagnostic alternatives are described in the [Qwen comparison procedure](quality.md#qwen-and-moondream-comparisons).
+Use the language, token, and chunking controls described in the [Qwen3-ASR guide](../models/qwen3-asr.md). Keep Qwen attention overrides unset for acceptance; the default and diagnostic alternatives are described in the [Qwen comparison procedure](quality.md#qwen-and-moondream-comparisons).
 
 For both Qwen sizes, both precisions, and each native device path, run the helper on short/270-second/short inputs at forced English and a 4096-token budget. Then run two simulated captures with a 63-second idle wait and a one-minute offload setting to verify reload and option restoration. The long fixture repeats public JFK speech for long-input/memory stress, not natural long-form quality.
 
@@ -177,7 +177,7 @@ done
 
 Also record default auto/512, forced German on `fleurs-de_de-0.wav`, and forced English on `fleurs-en_us-422.wav` (containing the spoken word "language"). Use a budget of 1 for a separate failure-path check: readiness should complete, while actual transcription fails without a successful JSONL row or history entry.
 
-Run the [loaded-context checks](quality.md#ordered-audio-and-loaded-qwen-failures) on supported native hosts, then the [physical shortcut checks](quality.md#runtime-smoke-checks) with Qwen and Parakeet. Compare prior-context quality separately from ordinary repeat/reload invariance, using the [context configuration](../qwen3-asr.md#prior-dictation-context).
+Run the [loaded-context checks](quality.md#ordered-audio-and-loaded-qwen-failures) on supported native hosts, then the [physical shortcut checks](quality.md#runtime-smoke-checks) with Qwen and Parakeet. Compare prior-context quality separately from ordinary repeat/reload invariance, using the [context configuration](../models/qwen3-asr.md#prior-dictation-context).
 
 For every preset and precision, also check representative longer speech, silence, repeats, and idle offload/reload through the helper and worker. Use the 29/30/31-second boundary fixtures for both Qwen sizes. Save exit statuses alongside output for each additional command, as in the matrix. A worker no-speech error is expected for silence; it must not become a successful transcript or insertion. Repeat completed Q6 acquisition with network access disabled and the F16/quantizer unavailable to confirm cached startup needs neither. On Windows, separately record the first-generation result with the external quantizer available.
 
