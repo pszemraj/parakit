@@ -1,9 +1,9 @@
-//! Stable transcript lookup and copying for the interactive history browser.
+//! Transcript lookup, prior-context selection, and copying from in-memory history.
 
 use super::{HistoryReference, IpcResponse, SharedState, IPC_MAX_MESSAGE_SIZE};
 use anyhow::{bail, Context, Result};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const MAX_CONTEXT_CHARS: usize = 1500;
 
@@ -30,7 +30,7 @@ impl SharedState {
     ///
     /// # Arguments
     /// * `count` - Maximum number of eligible history entries; zero disables context.
-    /// * `max_age` - Maximum wall-clock age, including time spent suspended.
+    /// * `max_age` - Maximum age on both clocks; wall time includes suspend.
     ///
     /// # Returns
     /// Prior text, or none when history has no eligible nonempty entries.
@@ -44,14 +44,18 @@ impl SharedState {
         max_age: Duration,
         now: SystemTime,
     ) -> Option<String> {
+        let monotonic_now = Instant::now();
         let inner = self.inner.lock();
         let mut entries: Vec<_> = inner
             .history
             .iter()
-            // A backwards clock adjustment makes age unknown; omit that entry.
+            // Wall time includes suspend; monotonic time prevents clock rollback
+            // from reviving old dictations. Future wall timestamps are ineligible.
             .filter(|entry| {
-                now.duration_since(entry.recorded_at)
-                    .is_ok_and(|age| age <= max_age)
+                monotonic_now.saturating_duration_since(entry.at) <= max_age
+                    && now
+                        .duration_since(entry.recorded_at)
+                        .is_ok_and(|age| age <= max_age)
             })
             .map(|entry| entry.text.trim())
             .filter(|text| !text.is_empty())
@@ -182,6 +186,13 @@ mod tests {
         }
         assert_eq!(state.recent_context_at(3, age, now), None);
         state.inner.lock().history[0].recorded_at = now + Duration::from_secs(1);
+        assert_eq!(state.recent_context_at(3, age, now), None);
+        {
+            let mut inner = state.inner.lock();
+            inner.history[0].at = Instant::now() - Duration::from_secs(20 * 60);
+            inner.history[0].recorded_at = now - Duration::from_secs(5 * 60);
+        }
+        // Moving wall time backwards must not revive an expired dictation.
         assert_eq!(state.recent_context_at(3, age, now), None);
     }
 
