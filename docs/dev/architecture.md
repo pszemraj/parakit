@@ -34,7 +34,9 @@ Transcribing
 Idle
 ```
 
-Empty captures are skipped before inference. Short captures are right-padded with silence before inference instead of being rejected.
+The worker skips empty and effectively silent captures before inference. Short speech is right-padded with silence instead of being rejected; captures shorter than one second use ordinary transcription even when context was requested. Direct `Engine` calls apply padding and the subsecond fallback but do not run the worker's silence filter.
+
+Hotkey press latches the dictation mode, which the coordinator carries through recording to the worker's stopped-PCM event. Releasing Alt or Option does not change that mode. Immediately before Qwen inference, the worker selects eligible prior text from the existing in-memory transcript history and orders it chronologically. `Engine` applies that text to the native session for the call and clears it after success or failure, preserving the language and token controls. The [context guide](../qwen3-asr.md#prior-dictation-context) describes shortcut behavior, configuration, and history limits.
 
 Model residency has a separate `loaded -> offloaded -> loading -> loaded` lifecycle. Startup remains eager; only the worker destroys or reopens the session. A shared activity gate admits recording before audio starts, and its lease follows PCM through queued transcription and insertion. IPC insertion takes the same gate before waiting for the insertion mutex. Expiry removes the session from the worker slot under the gate, then destroys it after unlocking. A new PTT can capture during destruction; the worker finishes teardown before reloading. Loading also leaves the gate unlocked. The last lease release restarts the idle deadline, including failure and silence paths. Status/history reads take no lease and never load the model.
 
@@ -55,7 +57,7 @@ Live capture drains callback audio through a bounded single-producer/single-cons
 
 Cross-thread communication uses atomics, mutex-protected buffers, and channels.
 
-Configuration sections provide built-in fallbacks; CLI resolvers apply overrides. Normal startup and WAV simulation share resolved idle, logging, paste-mode, and clipboard-retention values through `WorkerSettings`. The banner borrows the `DaemonInfo` stored for IPC status. Mode-specific resources remain explicit in `WorkerCtx`: simulation has a silent notifier, disabled sounds and insertion, and no daemon singleton or control endpoint. Normal startup exposes IPC before cleaner/model initialization; the worker lifetime still follows native-session ownership.
+Configuration sections provide built-in fallbacks; CLI resolvers apply overrides. Normal startup and WAV simulation share resolved idle, logging, paste-mode, clipboard-retention, and context settings through `WorkerSettings`. The banner borrows the `DaemonInfo` stored for IPC status. Mode-specific resources remain explicit in `WorkerCtx`: simulation has a silent notifier, disabled sounds and insertion, and no daemon singleton or control endpoint. Normal startup exposes IPC before cleaner/model initialization; the worker lifetime still follows native-session ownership.
 
 The Linux daemon attaches to the helper over IBus's private bus and advertises recording readiness. Input callbacks emit directed PTT signals without waiting for daemon work. At the actual PTT press, the engine captures a token containing helper/attachment lifetime, engine identity, and focus generation. The coordinator carries it unchanged through capture and inference. Validation and `commit_text` run together on the helper's owning loop. See [focus changes](../running.md#focus-changes) for delivery policy.
 
@@ -81,7 +83,7 @@ The Linux daemon attaches to the helper over IBus's private bus and advertises r
 | `src/daemon/desktop/ibus/` | Native IBus engine/factory, daemon GDBus client, target lifetimes, and submission evidence. |
 | `src/daemon/desktop/linux_insertion.rs` | Linux insertion-backend selection and recording target capture independent of clipboard paste mode. |
 | `src/daemon/ipc.rs`, `src/daemon/ipc/{client,unix_socket,windows_pipe}.rs` | Local IPC for `status`, `stop`, `copy-last`, `history`, and `test-paste`: shared protocol and in-memory transcript ring buffer, the control client, and the Unix-socket and Windows named-pipe transports. |
-| `src/daemon/ipc/{history,history_picker}.rs` | Full-text lookup/copy by daemon-session and entry reference, and the terminal picker. |
+| `src/daemon/ipc/{history,history_picker}.rs` | Prior-context selection, full-text lookup/copy by daemon-session and entry reference, and the terminal picker. |
 | `src/daemon/desktop/windows_{clipboard_history,focus,input,paste_smoke,security}.rs` | Windows clipboard-history acknowledgement, foreground checks, `SendInput` helpers, deep paste smoke test, and privilege diagnostics. |
 | `src/daemon/{preflight,audio/alsa,desktop/session,desktop/wsl,desktop/x11,desktop/inject_smoke}.rs`, `src/daemon/audio/alsa_silence.c`, `src/daemon/macos.rs`, `src/daemon/macos/{permissions,focus,insertion_cgevent,cgevent_ffi,pasteboard,diagnostics}.rs` | Startup checks, macOS TCC/focus/insertion/acknowledgement helpers and event-tap FFI, the macOS and X11 deep paste smoke tests, ALSA stderr suppression, X11/Wayland session and WSL checks, and X11 helpers. |
 | `src/daemon/{logging,notifications,sounds}.rs` | Runtime logging, desktop notifications, and generated audio cues. |
@@ -91,7 +93,7 @@ The Linux daemon attaches to the helper over IBus's private bus and advertises r
 | `src/qwen.rs` | Qwen source-language normalization and generation-budget validation. |
 | `src/gguf.rs` | Minimal GGUF dtype reader for startup reporting. |
 | `src/{build_info,gpu,warmup,ffi_util}.rs`, `src/ggml_device_shim.cpp` | Build diagnostics, bundled ggml device listing through the C++ device shim, Qwen speech and Parakeet synthetic readiness probes, and local FFI helpers. |
-| `src/inference.rs`, `src/crispasr_ext.rs` | [CrispASR](https://github.com/CrispStrobe/CrispASR) session ownership wrapper, startup defaults including windowed Qwen attention (explicit overrides are retained), short-audio padding, and raw-ABI CPU/GPU session opening. See the [Qwen comparison guide](quality.md#qwen-and-moondream-comparisons) for the attention control. |
+| `src/inference.rs`, `src/crispasr_ext.rs` | [CrispASR](https://github.com/CrispStrobe/CrispASR) session ownership, startup defaults (explicit overrides retained), scoped Qwen context, short-audio padding, and raw-ABI CPU/GPU session opening. See the [Qwen comparison guide](quality.md#qwen-and-moondream-comparisons) for windowed audio attention. |
 | `src/{lib,checksum,constants,test_support}.rs` | Library crate root, digest helpers, shared audio and inference constants, and unit-test fixtures. |
 | `src/rules/` | Transcript cleanup pipeline: profiles, the built-in rule table, procedural passes, and user rules from `config.toml`. |
 | `src/daemon/desktop/{inject,focus_snapshot,clipboard_store,paste_transaction,clipboard_guard,x11_paste,direct,clipboard_restore}.rs` | Insertion contract and injector, focus snapshots, clipboard backend and snapshots, the guarded paste transaction and change detection, X11/XTest paste chord, guarded direct insertion, and restore timing. |

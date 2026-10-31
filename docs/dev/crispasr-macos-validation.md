@@ -49,7 +49,7 @@ The unchanged hosted Q8_0 model has SHA256
 The 55.36-second Juniper memo has SHA256
 `d79d7f729b192642b91aef5e1486b97c1cb7f4c34f6ce4a0d45199a9ff23ab5f`.
 An 8.2-second leading excerpt supplies the short-input check. Both backends
-use eight requested threads and the shipping startup defaults, with both
+use eight requested threads and that revision's startup defaults, with both
 weight-copy environment variables absent at launch.
 
 Each direct-engine example produces identical text across three inferences.

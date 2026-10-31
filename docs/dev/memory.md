@@ -51,13 +51,13 @@ The CPU reload peak is almost twice its post-load residency. CUDA and Vulkan als
 
 ## Allocation Ownership
 
-The allocation details in this section describe the historical CrispASR v0.6.6 runtime, except where the current loader is identified explicitly.
+The allocation details in this section describe the historical CrispASR v0.6.6 runtime, except where another version is named explicitly.
 
 At the v0.6.6 CrispASR revision measured above, `parakeet.cpp` owns lazy F32 CPU copies of predictor and joint-head weights, graph metadata, and a ggml scheduler. The decoder runs manually on CPU even when the encoder runs on GPU, so GPU inference still uses host memory. `parakeet_free` releases the scheduler, model buffer and context, backend instances, and the context containing those vectors.
 
 Inference also allocates activation and decoder workspace that can grow with audio length and remain at its high-water capacity while a session is loaded. The v0.6.6 default GGUF loader copied weights into a backend buffer; `CRISPASR_GGUF_MMAP=1` opted into supported CPU and Metal mapping paths. CUDA, Vulkan, Metal, and their drivers can retain process-wide state or caches after a session closes. Residual process memory alone does not prove that the inference session remains live or identify an allocator leak.
 
-The v0.8.42 loader uses mmap by default, and `CRISPASR_GGUF_MMAP=0` opts out. Its loader and allocation accounting are documented in the [CrispASR upgrade report](crispasr-upgrade.md#why-this-release-and-what-changes-at-runtime). These historical measurements do not establish current GPU memory-pressure behavior.
+The v0.8.42 loader used mmap by default, with `CRISPASR_GGUF_MMAP=0` to opt out. Its loader and allocation accounting are documented in the [CrispASR upgrade report](crispasr-upgrade.md#why-this-release-and-what-changes-at-runtime). These historical measurements do not establish current GPU memory-pressure behavior.
 
 ## Reload Under GPU Memory Pressure
 

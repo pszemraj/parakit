@@ -164,7 +164,7 @@ language = "auto"
 max_new_tokens = 512
 
 # bool. Request prior-dictation context with the original push-to-talk shortcut as well as the context shortcut.
-# See: [Qwen context](running.md#qwen-context) for shortcuts and ordinary-dictation fallback.
+# See: [Qwen context](qwen3-asr.md#prior-dictation-context) for shortcuts and ordinary-dictation fallback.
 context_on_default_hotkey = false
 
 # integer, 0 or greater. Maximum prior dictations used as context; 0 disables context.

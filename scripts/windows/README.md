@@ -146,12 +146,3 @@ For loader failures, check the [backend requirements](#backend-requirements). On
 If Group Policy blocks User `PATH` writes, the install still succeeds and prints a warning. Run `%LOCALAPPDATA%\Programs\parakit\parakit.exe` directly, add the directory through your approved endpoint-management path, or rerun with `--no-user-path` when PATH changes are not allowed.
 
 For TLS interception and proxy setup, see [download troubleshooting](../../docs/troubleshooting.md#downloads-behind-a-corporate-proxy).
-
-For development-only bundle checks without installing:
-
-```bat
-scripts\windows\build.bat --backend cpu --no-install
-scripts\windows\build.bat --backend cuda --no-install
-scripts\windows\build.bat --backend vulkan --no-install
-scripts\windows\build.bat -Profile debug --backend cpu --no-install
-```

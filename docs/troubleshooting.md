@@ -10,6 +10,10 @@ For desktop-session or permission failures, follow the [X11 session checks](linu
 
 WSL is not the native Windows daemon path. Check Windows hotkeys, focus, and paste from native PowerShell with the Windows bundle.
 
+## Qwen Context Has No Effect
+
+Confirm a Qwen3-ASR model is active and that `parakit history --plain` contains recent dictations. Inspect `parakit config show` and the [context settings and eligibility rules](qwen3-asr.md#prior-dictation-context), then restart the daemon after any configuration change. On registered X11 or Windows, use `parakit --verbose doctor` before startup to inspect the optional context shortcut. On Linux IBus, install the matching helper and follow the [upgrade reload steps](linux-desktop.md#ibus-setup).
+
 ## Literal Space Appears
 
 Follow the checks for [passive X11 capture](linux-desktop.md#passive-x11-listen), [focused-field IBus capture](linux-desktop.md#ibus-setup), or the [evdev proxy](linux-desktop.md#evdev-proxy), depending on the selected backend.

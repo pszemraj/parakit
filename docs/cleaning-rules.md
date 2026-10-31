@@ -92,6 +92,13 @@ parakit start \
   --disable-rule filled-pauses
 ```
 
+The same names can be set persistently:
+
+```toml
+[cleaning]
+disabled_rules = ["filled-pauses"]
+```
+
 Stutter handling is grouped by shape. Use `stutter-i` for repeated first-person pronouns, `stutter-safe-words` for conservative repeated words, `contracted-have-restart` for false starts such as `I've I already have`, `repeated-prefix-stutter` for repeated letters or `sh`/`th`/`ch` starts before a matching word, and `stutter-ambiguous-words` for the aggressive-only `that`, `no`, `can`, `had`, and `do` set.
 
 ## Rule Order
@@ -142,18 +149,7 @@ position = "standard"   # "first", "standard" (default), or "last"
 
 The key contracts, validation constraints, replacement syntax, and exact splice points for `first`, `standard`, and `last` are in [config_reference.toml](config_reference.toml). Use `standard` for ordinary vocabulary substitutions.
 
-Disable a user rule the same way as a built-in rule:
-
-```bash
-parakit start --disable-rule weights-and-biases-to-wandb
-```
-
-or in `config.toml`:
-
-```toml
-[cleaning]
-disabled_rules = ["weights-and-biases-to-wandb"]
-```
+Disable user rules with the same [named-pass controls](#inspect-and-test) as built-in rules.
 
 ### Edit Rules Without Rebuilding
 
