@@ -316,7 +316,8 @@ fn test_worker_ctx<E>(
 
 #[test]
 fn logging_metadata_stays_with_the_resident_session_until_reload() {
-    struct MetadataEngine(Arc<AtomicUsize>);
+    /// Counts metadata reads; the flag mimics a Qwen session.
+    struct MetadataEngine(Arc<AtomicUsize>, bool);
     impl WorkerEngine for MetadataEngine {
         fn transcribe(&self, _: &[f32], context: Option<&str>) -> Result<(String, ContextUsage)> {
             Ok((
@@ -329,7 +330,7 @@ fn logging_metadata_stays_with_the_resident_session_until_reload() {
         }
 
         fn supports_context(&self) -> bool {
-            true
+            self.1
         }
 
         fn inference_metadata(&self, recipe: &EngineRecipe) -> Option<InferenceLogFields> {
@@ -362,7 +363,7 @@ fn logging_metadata_stays_with_the_resident_session_until_reload() {
     let calls = Arc::new(AtomicUsize::new(0));
     let (tx, rx) = crossbeam_channel::bounded(2);
     let mut ctx = test_worker_ctx(
-        MetadataEngine(Arc::clone(&calls)),
+        MetadataEngine(Arc::clone(&calls), true),
         &state,
         Sounds::new(false),
         rx,
@@ -374,7 +375,8 @@ fn logging_metadata_stays_with_the_resident_session_until_reload() {
     let reload_calls = Arc::clone(&calls);
     let worker = std::thread::spawn(move || {
         worker_loop_with(ctx, Some(Duration::from_millis(20)), || {
-            Ok(MetadataEngine(Arc::clone(&reload_calls)))
+            // The reloaded session cannot take context, like a Parakeet model.
+            Ok(MetadataEngine(Arc::clone(&reload_calls), false))
         });
     });
     let transcribe = |mode| {
@@ -400,6 +402,7 @@ fn logging_metadata_stays_with_the_resident_session_until_reload() {
     transcribe(DictationMode::WithContext);
     std::fs::write(&model_path, "F16").unwrap();
     transcribe(DictationMode::Plain);
+    transcribe(DictationMode::WithContext);
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     drop(lease);
     wait_for_state(&state, Residency::Offloaded);
@@ -421,7 +424,7 @@ fn logging_metadata_stays_with_the_resident_session_until_reload() {
         .iter()
         .filter_map(|row| row["inference"]["quantization"].as_str())
         .collect();
-    assert_eq!(quantizations, ["Q8_0", "Q8_0", "F16"]);
+    assert_eq!(quantizations, ["Q8_0", "Q8_0", "Q8_0", "F16"]);
     let inference: Vec<_> = rows.iter().filter_map(|row| row.get("inference")).collect();
     assert_eq!(inference[0]["context_mode"], "with_context");
     assert_eq!(inference[0]["context_chars"], "café 世界".chars().count());
@@ -435,6 +438,9 @@ fn logging_metadata_stays_with_the_resident_session_until_reload() {
         "café 世界\ndictation\ndictation".chars().count()
     );
     assert_eq!(inference[2]["context_retried"], true);
+    for field in ["context_mode", "context_chars", "context_retried"] {
+        assert!(inference[3].get(field).is_none(), "{field}");
+    }
 }
 
 fn next_cue(cues: &Receiver<Cue>) -> Cue {

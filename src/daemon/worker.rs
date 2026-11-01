@@ -402,7 +402,8 @@ where
                 state.set_phase("transcribing");
                 log.transcribing(secs, wall_secs);
 
-                let context = (engine.supports_context()
+                let supports_context = engine.supports_context();
+                let context = (supports_context
                     && (mode == DictationMode::WithContext || context_on_default_hotkey))
                     .then(|| state.recent_context(context_dictations, context_max_age))
                     .flatten();
@@ -419,15 +420,21 @@ where
 
                 match transcription {
                     Ok(Some(transcript)) => {
-                        let context_mode = match mode {
-                            DictationMode::Plain => "plain",
-                            DictationMode::WithContext => "with_context",
-                        };
-                        let usage = transcript.context_usage;
-                        log.verbose(format!(
-                            "parakit: context_mode={context_mode} context_chars={} context_retried={}",
-                            usage.chars, usage.retried
-                        ));
+                        // Like the other Qwen fields, context telemetry is absent
+                        // for sessions that cannot take context.
+                        let context_telemetry = supports_context.then(|| {
+                            let context_mode = match mode {
+                                DictationMode::Plain => "plain",
+                                DictationMode::WithContext => "with_context",
+                            };
+                            (context_mode, transcript.context_usage)
+                        });
+                        if let Some((context_mode, usage)) = context_telemetry {
+                            log.verbose(format!(
+                                "parakit: context_mode={context_mode} context_chars={} context_retried={}",
+                                usage.chars, usage.retried
+                            ));
+                        }
                         completion.succeed();
                         // Count the dictation itself, once, regardless of how
                         // many insertion attempts or outcomes follow below.
@@ -454,9 +461,11 @@ where
                                     failure: transcript.cleaning_failure.as_deref(),
                                 },
                                 inference_metadata.clone().map(|mut fields| {
-                                    fields.context_mode = Some(context_mode);
-                                    fields.context_chars = Some(usage.chars);
-                                    fields.context_retried = Some(usage.retried);
+                                    if let Some((context_mode, usage)) = context_telemetry {
+                                        fields.context_mode = Some(context_mode);
+                                        fields.context_chars = Some(usage.chars);
+                                        fields.context_retried = Some(usage.retried);
+                                    }
                                     fields
                                 }),
                             )
