@@ -167,10 +167,10 @@ fn run_live_worker(focus: FocusSnapshot, text: &'static str, keep_clipboard: boo
 }
 
 impl WorkerEngine for FakeEngine {
-    fn transcribe(&self, _pcm: &[f32], _context: Option<&str>) -> Result<String> {
+    fn transcribe(&self, _pcm: &[f32], _context: Option<&str>) -> Result<(String, ContextUsage)> {
         self.transcriptions.fetch_add(1, Ordering::SeqCst);
         self.transcript
-            .map(str::to_owned)
+            .map(|text| (text.to_owned(), ContextUsage::default()))
             .map_err(anyhow::Error::msg)
     }
 }
@@ -188,9 +188,9 @@ fn prior_context_obeys_mode_defaults_history_and_backend() {
         qwen: bool,
     }
     impl WorkerEngine for ContextEngine {
-        fn transcribe(&self, _: &[f32], context: Option<&str>) -> Result<String> {
+        fn transcribe(&self, _: &[f32], context: Option<&str>) -> Result<(String, ContextUsage)> {
             self.observed.send(context.map(str::to_owned)).unwrap();
-            Ok("new dictation".into())
+            Ok(("new dictation".into(), ContextUsage::default()))
         }
 
         fn supports_context(&self) -> bool {
@@ -318,8 +318,18 @@ fn test_worker_ctx<E>(
 fn logging_metadata_stays_with_the_resident_session_until_reload() {
     struct MetadataEngine(Arc<AtomicUsize>);
     impl WorkerEngine for MetadataEngine {
-        fn transcribe(&self, _: &[f32], _: Option<&str>) -> Result<String> {
-            Ok("dictation".to_owned())
+        fn transcribe(&self, _: &[f32], context: Option<&str>) -> Result<(String, ContextUsage)> {
+            Ok((
+                "dictation".to_owned(),
+                ContextUsage {
+                    chars: context.map_or(0, |text| text.chars().count()),
+                    retried: context.is_some_and(|text| text.contains("dictation")),
+                },
+            ))
+        }
+
+        fn supports_context(&self) -> bool {
+            true
         }
 
         fn inference_metadata(&self, recipe: &EngineRecipe) -> Option<InferenceLogFields> {
@@ -334,6 +344,9 @@ fn logging_metadata_stays_with_the_resident_session_until_reload() {
                 confirmed_device: Some("cpu".to_owned()),
                 qwen_language: None,
                 qwen_max_new_tokens: None,
+                context_mode: None,
+                context_chars: None,
+                context_retried: None,
                 native_api_version: None,
             })
         }
@@ -343,6 +356,7 @@ fn logging_metadata_stays_with_the_resident_session_until_reload() {
     let model_path = root.join("model-label");
     std::fs::write(&model_path, "Q8_0").unwrap();
     let state = Arc::new(SharedState::new());
+    state.remember_transcript("café 世界".to_owned());
     state.activity.ready();
     let lease = state.activity.begin();
     let calls = Arc::new(AtomicUsize::new(0));
@@ -363,27 +377,33 @@ fn logging_metadata_stays_with_the_resident_session_until_reload() {
             Ok(MetadataEngine(Arc::clone(&reload_calls)))
         });
     });
-    let transcribe = || {
+    let transcribe = |mode| {
         let (done_tx, done_rx) = crossbeam_channel::bounded(1);
-        tx.send(stopped_capture(
+        let mut event = stopped_capture(
             Instant::now(),
             vec![0.1; 160],
             Some(state.activity.begin()),
             done_tx,
-        ))
-        .unwrap();
+        );
+        if let WorkerEvent::Stopped {
+            mode: event_mode, ..
+        } = &mut event
+        {
+            *event_mode = mode;
+        }
+        tx.send(event).unwrap();
         done_rx
             .recv_timeout(Duration::from_secs(2))
             .unwrap()
             .unwrap();
     };
-    transcribe();
+    transcribe(DictationMode::WithContext);
     std::fs::write(&model_path, "F16").unwrap();
-    transcribe();
+    transcribe(DictationMode::Plain);
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     drop(lease);
     wait_for_state(&state, Residency::Offloaded);
-    transcribe();
+    transcribe(DictationMode::WithContext);
     drop(tx);
     worker.join().unwrap();
     assert_eq!(calls.load(Ordering::SeqCst), 2);
@@ -402,6 +422,19 @@ fn logging_metadata_stays_with_the_resident_session_until_reload() {
         .filter_map(|row| row["inference"]["quantization"].as_str())
         .collect();
     assert_eq!(quantizations, ["Q8_0", "Q8_0", "F16"]);
+    let inference: Vec<_> = rows.iter().filter_map(|row| row.get("inference")).collect();
+    assert_eq!(inference[0]["context_mode"], "with_context");
+    assert_eq!(inference[0]["context_chars"], "café 世界".chars().count());
+    assert_eq!(inference[0]["context_retried"], false);
+    assert_eq!(inference[1]["context_mode"], "plain");
+    assert_eq!(inference[1]["context_chars"], 0);
+    assert_eq!(inference[1]["context_retried"], false);
+    assert_eq!(inference[2]["context_mode"], "with_context");
+    assert_eq!(
+        inference[2]["context_chars"],
+        "café 世界\ndictation\ndictation".chars().count()
+    );
+    assert_eq!(inference[2]["context_retried"], true);
 }
 
 fn next_cue(cues: &Receiver<Cue>) -> Cue {
@@ -518,9 +551,12 @@ fn exercise_capture_during_reload(held: bool) {
 
     struct RecordingEngine(Sender<Vec<f32>>);
     impl WorkerEngine for RecordingEngine {
-        fn transcribe(&self, pcm: &[f32], _: Option<&str>) -> Result<String> {
+        fn transcribe(&self, pcm: &[f32], _: Option<&str>) -> Result<(String, ContextUsage)> {
             self.0.send(pcm.to_vec()).unwrap();
-            Ok("first words during reload and final words".to_owned())
+            Ok((
+                "first words during reload and final words".to_owned(),
+                ContextUsage::default(),
+            ))
         }
     }
 

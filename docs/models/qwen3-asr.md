@@ -47,6 +47,8 @@ Empty, expired, disabled, or unusable context falls back to ordinary dictation. 
 
 Qwen can copy earlier text instead of recognizing the audio, including on longer recordings. After contextual inference, Parakit reruns the capture once without context if the output is wholly contained in the prior text or shares at least five consecutive words with it. Matching compares lowercase Unicode alphanumeric words, ignoring punctuation. This can also rerun genuinely repeated phrases, and it does not catch every substitution caused by context; earlier mistranscriptions and unrelated context can still bias recognition.
 
+Use `--verbose` or the [inference log fields](../logging.md#transcription-record-fields) to inspect the shortcut mode, context length, and whether a retry occurred.
+
 The extra shortcut is inactive for other models. If its registered chord is already owned, Parakit warns and keeps the original shortcut usable; the original-shortcut configuration flag remains available. Linux IBus upgrades need the matching `parakit-ibus` helper and an [engine reload](../linux-desktop.md#ibus-setup).
 
 ## Long Audio And Inference

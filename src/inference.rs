@@ -104,6 +104,16 @@ pub struct Engine {
     qwen: Option<QwenOptions>,
 }
 
+/// Context actually supplied to inference for one completed capture.
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ContextUsage {
+    /// Unicode characters supplied to the first inference; zero for ordinary inference.
+    pub chars: usize,
+    /// Whether copied output caused a second inference without context.
+    pub retried: bool,
+}
+
 impl Engine {
     /// Open a GGUF model with a requested CPU thread count and device mode.
     ///
@@ -318,8 +328,33 @@ impl Engine {
     /// # Errors
     /// Reports inference failures or failure to clear the session's context.
     pub fn transcribe_with_context(&self, pcm: &[f32], context: Option<&str>) -> Result<String> {
-        let mut context = context.filter(|_| {
-            self.qwen.is_some() && pcm.len() >= MIN_INFERENCE_SAMPLES && raw_qwen_context_enabled()
+        self.transcribe_with_context_usage(pcm, context)
+            .map(|(text, _)| text)
+    }
+
+    /// Transcribe a capture and report context use after filtering and native setup.
+    /// Used by the daemon binary; the text-only APIs discard this telemetry.
+    ///
+    /// # Arguments
+    /// * `pcm` - Mono PCM at 16 kHz, with the same padding policy as [`Self::transcribe`].
+    /// * `context` - Optional prior text subject to [`Self::transcribe_with_context`]'s safeguards.
+    ///
+    /// # Returns
+    /// Transcript and context telemetry; a retry retains the initial context length.
+    ///
+    /// # Errors
+    /// Reports inference or context-clear failures, including an ordinary retry failure.
+    #[doc(hidden)]
+    pub fn transcribe_with_context_usage(
+        &self,
+        pcm: &[f32],
+        context: Option<&str>,
+    ) -> Result<(String, ContextUsage)> {
+        let mut context = context.filter(|text| {
+            !text.is_empty()
+                && self.qwen.is_some()
+                && pcm.len() >= MIN_INFERENCE_SAMPLES
+                && raw_qwen_context_enabled()
         });
         let restore = self.qwen.as_ref().map(|_| QwenContextRestore {
             session: &self.session,
@@ -349,11 +384,17 @@ impl Engine {
             (Err(error), Ok(())) => Err(error),
             (Ok(_), Err(error)) => Err(error.context("clear Qwen context after transcription")),
             (Ok(text), Ok(())) => {
-                if context.is_some_and(|prior| copies_context(&text, prior)) {
+                let usage = ContextUsage {
+                    chars: context.map_or(0, |prior| prior.chars().count()),
+                    retried: context.is_some_and(|prior| copies_context(&text, prior)),
+                };
+                let text = if usage.retried {
                     self.transcribe(pcm.as_ref())
+                        .context("ordinary inference retry after copied Qwen context")?
                 } else {
-                    Ok(text)
-                }
+                    text
+                };
+                Ok((text, usage))
             }
         }
     }

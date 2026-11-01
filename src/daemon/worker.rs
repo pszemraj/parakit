@@ -3,7 +3,7 @@
 use anyhow::Result;
 use crossbeam_channel::{Receiver, Sender};
 use parakit::data_log::{CleaningLogFields, DataLogger, InferenceLogFields};
-use parakit::inference::Engine;
+use parakit::inference::{ContextUsage, Engine};
 use parakit::rules::{Cleaner, RuleHit, CLEANER_VERSION};
 use std::cell::Cell;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -111,6 +111,7 @@ pub(crate) struct WorkerCtx<E = Engine> {
 
 struct TranscriptResult {
     raw: String,
+    context_usage: ContextUsage,
     cleaned: String,
     /// Cleaning passes that changed the transcript, in application order.
     /// Empty when cleaning is disabled or when cleaning failed open.
@@ -133,12 +134,12 @@ trait WorkerEngine {
     ///
     /// # Returns
     ///
-    /// The raw transcript from the inference session.
+    /// The raw transcript and actual context use from the inference session.
     ///
     /// # Errors
     ///
     /// Reports session or inference failures to the worker's completion path.
-    fn transcribe(&self, pcm: &[f32], context: Option<&str>) -> Result<String>;
+    fn transcribe(&self, pcm: &[f32], context: Option<&str>) -> Result<(String, ContextUsage)>;
 
     /// Whether this engine supports prior-dictation context.
     ///
@@ -158,8 +159,8 @@ trait WorkerEngine {
 }
 
 impl WorkerEngine for Engine {
-    fn transcribe(&self, pcm: &[f32], context: Option<&str>) -> Result<String> {
-        self.transcribe_with_context(pcm, context)
+    fn transcribe(&self, pcm: &[f32], context: Option<&str>) -> Result<(String, ContextUsage)> {
+        self.transcribe_with_context_usage(pcm, context)
     }
 
     fn supports_context(&self) -> bool {
@@ -188,6 +189,9 @@ impl WorkerEngine for Engine {
                     .unwrap_or_else(|| "auto".to_owned())
             }),
             qwen_max_new_tokens: self.qwen_options().map(|options| options.max_new_tokens),
+            context_mode: None,
+            context_chars: None,
+            context_retried: None,
             native_api_version: self.native_api_version(),
         })
     }
@@ -415,6 +419,15 @@ where
 
                 match transcription {
                     Ok(Some(transcript)) => {
+                        let context_mode = match mode {
+                            DictationMode::Plain => "plain",
+                            DictationMode::WithContext => "with_context",
+                        };
+                        let usage = transcript.context_usage;
+                        log.verbose(format!(
+                            "parakit: context_mode={context_mode} context_chars={} context_retried={}",
+                            usage.chars, usage.retried
+                        ));
                         completion.succeed();
                         // Count the dictation itself, once, regardless of how
                         // many insertion attempts or outcomes follow below.
@@ -440,7 +453,12 @@ where
                                     rules_fired: &transcript.rules_fired,
                                     failure: transcript.cleaning_failure.as_deref(),
                                 },
-                                inference_metadata.clone(),
+                                inference_metadata.clone().map(|mut fields| {
+                                    fields.context_mode = Some(context_mode);
+                                    fields.context_chars = Some(usage.chars);
+                                    fields.context_retried = Some(usage.retried);
+                                    fields
+                                }),
                             )
                         });
                         let transcript_chars = transcript.cleaned.chars().count();
@@ -606,7 +624,7 @@ fn transcribe_clean<E: WorkerEngine>(
     context: Option<&str>,
 ) -> Result<Option<TranscriptResult>> {
     let infer_started = Instant::now();
-    let raw = engine.transcribe(pcm, context)?;
+    let (raw, context_usage) = engine.transcribe(pcm, context)?;
     let infer_elapsed = infer_started.elapsed();
     if raw.trim().is_empty() {
         return Ok(None);
@@ -625,6 +643,7 @@ fn transcribe_clean<E: WorkerEngine>(
     };
     Ok(Some(TranscriptResult {
         raw,
+        context_usage,
         cleaned,
         rules_fired,
         cleaning_failure,

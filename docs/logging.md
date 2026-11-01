@@ -66,6 +66,9 @@ The daemon supplies an `inference` object on each successful transcription:
 | `confirmed_device` | `cpu` for explicitly opened CPU sessions; otherwise omitted when execution is unconfirmed. |
 | `qwen_language` | Effective forced language, or `auto`; Qwen only. |
 | `qwen_max_new_tokens` | Effective per-chunk generation budget; Qwen only. |
+| `context_mode` | Shortcut intent latched on press: `plain` for the original shortcut or `with_context` for the context shortcut. The default-hotkey setting can enable context for `plain`. |
+| `context_chars` | Unicode characters actually supplied as prior context, including separators. Zero when history is unavailable or context is discarded before inference. Retains the initial count after a retry. |
+| `context_retried` | Whether copied output triggered an ordinary transcription retry. `infer_ms` includes both attempts. |
 | `native_api_version` | Linked native C API version, when reported. |
 
 The quantization label summarizes the artifact recipe rather than every tensor: F32 biases and normalization tensors can coexist with a reported `F16` model. See [model presets](running.md#model-presets) for Q6_K precision choices.
@@ -73,6 +76,8 @@ The quantization label summarizes the artifact recipe rather than every tensor: 
 The requested device policy remains fixed; the session policy reflects an Auto reload on CPU. GPU execution backend (CUDA/Vulkan/Metal) and GPU name are not confirmed by these JSONL fields. Status labels GPU inventory separately from confirmed execution.
 
 Qwen controls describe user inference after readiness, not temporary warmup options or a detected language. `native_api_version` is not the CrispASR release tag. No model-parent directory is recorded. Readers should accept older rows without `inference` and ignore unfamiliar fields.
+
+The daemon also prints the three context fields with `--verbose`. It records counts and retry status, without logging the supplied prior text. These fields describe inference decisions; assessing accuracy still requires a reference transcript or listening to the audio.
 
 ## Insertion Record Fields
 
