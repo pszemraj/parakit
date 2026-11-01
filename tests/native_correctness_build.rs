@@ -82,7 +82,7 @@ fn context_probe(
 ) -> anyhow::Result<String> {
     eprintln!("PARAKIT_TEST_CALL:{label}");
     let started = std::time::Instant::now();
-    let result = engine.transcribe_with_context_usage(pcm, context);
+    let result = engine.transcribe_with_context(pcm, context);
     println!(
         "PARAKIT_TEST_RESULT:{}",
         serde_json::json!({

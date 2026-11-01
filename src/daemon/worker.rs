@@ -160,7 +160,7 @@ trait WorkerEngine {
 
 impl WorkerEngine for Engine {
     fn transcribe(&self, pcm: &[f32], context: Option<&str>) -> Result<(String, ContextUsage)> {
-        self.transcribe_with_context_usage(pcm, context)
+        self.transcribe_with_context(pcm, context)
     }
 
     fn supports_context(&self) -> bool {

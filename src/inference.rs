@@ -105,7 +105,6 @@ pub struct Engine {
 }
 
 /// Context actually supplied to inference for one completed capture.
-#[doc(hidden)]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct ContextUsage {
     /// Unicode characters supplied to the first inference; zero for ordinary inference.
@@ -307,6 +306,7 @@ impl Engine {
     /// Returns an error if CrispASR rejects the audio or inference fails.
     pub fn transcribe(&self, pcm: &[f32]) -> Result<String> {
         self.transcribe_with_context(pcm, None)
+            .map(|(text, _)| text)
     }
 
     /// Transcribe one capture with optional prior text for Qwen3-ASR.
@@ -321,31 +321,15 @@ impl Engine {
     /// * `context` - Prior dictation text; ignored by other model backends.
     ///
     /// # Returns
-    /// Joined transcript text. Captures shorter than one second and unusable
-    /// context fall back to ordinary inference. Output copied from context is
-    /// retried once without context, including on longer captures.
+    /// Joined transcript text and the context actually supplied. Captures shorter
+    /// than one second and unusable context fall back to ordinary inference.
+    /// Output copied from context is retried once without context, including on
+    /// longer captures; the usage keeps the initial context length.
     ///
     /// # Errors
-    /// Reports inference failures or failure to clear the session's context.
-    pub fn transcribe_with_context(&self, pcm: &[f32], context: Option<&str>) -> Result<String> {
-        self.transcribe_with_context_usage(pcm, context)
-            .map(|(text, _)| text)
-    }
-
-    /// Transcribe a capture and report context use after filtering and native setup.
-    /// Used by the daemon binary; the text-only APIs discard this telemetry.
-    ///
-    /// # Arguments
-    /// * `pcm` - Mono PCM at 16 kHz, with the same padding policy as [`Self::transcribe`].
-    /// * `context` - Optional prior text subject to [`Self::transcribe_with_context`]'s safeguards.
-    ///
-    /// # Returns
-    /// Transcript and context telemetry; a retry retains the initial context length.
-    ///
-    /// # Errors
-    /// Reports inference or context-clear failures, including an ordinary retry failure.
-    #[doc(hidden)]
-    pub fn transcribe_with_context_usage(
+    /// Reports inference failures, an ordinary retry failure, or failure to clear
+    /// the session's context.
+    pub fn transcribe_with_context(
         &self,
         pcm: &[f32],
         context: Option<&str>,
