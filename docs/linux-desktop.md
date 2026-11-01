@@ -120,7 +120,7 @@ For X11 clipboard insertion in `terminal` or `standard` mode, `parakit doctor --
 
 Native IBus requires an eligible focused field and blocks fields identified as password, PIN, or private input. It keeps the recording target's engine and focus generation, then checks them immediately before submission. Focus loss, field or source changes, relevant resets, engine destruction, and reconnects invalidate pending insertion even when GNOME reuses the same input-context ID. Unknown native focus blocks delivery. Rejected or uncertain delivery follows the shared [clipboard recovery policy](running.md#clipboard-staging-and-restore); inspect [insertion outcomes](logging.md#insertion-outcomes) before retrying. Use [daemon history](running.md#daemon-control) when clipboard access is unavailable.
 
-If the first IBus shortcut press after changing input sources does not start recording, release the shortcut fully and press it again.
+IBus can miss Space's release during an input-source switch. If the next shortcut does not start recording, release it fully and press again. Waiting for that release prevents held-key repeats from starting another dictation.
 
 The legacy X11 route compares the active X11 window. A clear focus change prevents the paste chord; non-direct modes still follow the shared clipboard policy. If focus capture or recheck fails because X11 is transiently unavailable, parakit pastes anyway. The transcript remains available through daemon history when enabled. Parakit does not inspect application internals with AT-SPI.
 

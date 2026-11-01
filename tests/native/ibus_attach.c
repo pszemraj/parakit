@@ -94,6 +94,8 @@ static void held_space_requires_release(void) {
         focus_out(IBUS_ENGINE(first));
         g_assert_cmpint(ptt_releases, ==, 1);
         focus_in(IBUS_ENGINE(second));
+        /* A delayed first repeat must not reinterpret a physically held Space. */
+        g_usleep(1100000);
         key_event(second, IBUS_KEY_Control_L, IBUS_RELEASE_MASK);
         key_event(second, IBUS_KEY_Control_L, modifiers);
         g_assert_true(key_event(second, IBUS_KEY_space, modifiers));

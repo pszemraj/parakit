@@ -28,7 +28,8 @@ typedef struct {
     gboolean ready;
     gboolean ptt;
     gboolean context_enabled;
-    /* Observed Space state survives focus changes and later modifier presses. */
+    /* IBus exposes neither physical key state nor a repeat flag. Elapsed time
+       cannot distinguish delayed repeat from a fresh press after missed release. */
     gboolean space_held;
     /* Focus/source changes must not rearm a physically held dictation chord. */
     gboolean ptt_inhibited;
