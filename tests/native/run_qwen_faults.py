@@ -303,11 +303,23 @@ def execute(native_build: Path, binary_dir: Path, model: Path, audio_path: Path,
 
     worker_config = output / "context-worker.toml"
     worker_config.write_text("[qwen]\ncontext_on_default_hotkey = true\n", encoding="utf-8")
+    # Disjoint JFK phrases: unless copying is forced, the second dictation shares
+    # no words with its context, so it must use that context without a retry.
+    with wave.open(str(speech), "rb") as audio:
+        speech_params = audio.getparams()
+        speech_frames = audio.readframes(speech_params.nframes)
+    second = speech_params.framerate * speech_params.sampwidth * speech_params.nchannels
+    clips = []
+    for name, frames in (("head", speech_frames[:3 * second]), ("tail", speech_frames[8 * second:])):
+        clips.append(output / f"jfk-{name}.wav")
+        with wave.open(str(clips[-1]), "wb") as audio:
+            audio.setparams(speech_params)
+            audio.writeframes(frames)
     for label, mode in (("context-worker", ""), ("context-copy-worker", "context-copy")):
         worker_logs = output / f"{label}-jsonl"
         command = [str(binary / "parakit"), "--verbose", "start", *common, "--no-cleaning", "--no-sounds",
-                   "--log-dir", str(worker_logs), "--simulate-ptt-audio", str(speech),
-                   "--simulate-ptt-audio", str(speech)]
+                   "--log-dir", str(worker_logs), "--simulate-ptt-audio", str(clips[0]),
+                   "--simulate-ptt-audio", str(clips[1])]
         status, stdout, stderr = run_case(label, command,
                                    dict(env, PARAKIT_CONFIG_PATH=str(worker_config),
                                         CRISPASR_QWEN3_HOTWORDS_AS_CONTEXT="1", PARAKIT_TEST_QWEN_FAILURE=mode), output)
@@ -332,8 +344,8 @@ def execute(native_build: Path, binary_dir: Path, model: Path, audio_path: Path,
                        f"context_retried={str(usage['context_retried']).lower()}")
             if verbose not in stdout:
                 raise RuntimeError(f"{label}: verbose context telemetry disagrees with JSONL")
-        if mode and (not retried or "PARAKIT_TEST: context copy" not in stderr):
-            raise RuntimeError(f"{label}: copied context did not produce a recorded ordinary retry")
+        if retried != bool(mode) or (mode and "PARAKIT_TEST: context copy" not in stderr):
+            raise RuntimeError(f"{label}: expected retry={bool(mode)} but the native trace shows retry={retried}")
         print(f"passed {label} history handoff and context telemetry", flush=True)
 
     silence = output / "silence.wav"
