@@ -35,23 +35,25 @@ impl SharedState {
     /// # Returns
     /// Prior text, or none when history has no eligible nonempty entries.
     pub(crate) fn recent_context(&self, count: usize, max_age: Duration) -> Option<String> {
-        self.recent_context_at(count, max_age, SystemTime::now())
+        self.recent_context_at(count, max_age, Instant::now(), SystemTime::now())
     }
 
     fn recent_context_at(
         &self,
         count: usize,
         max_age: Duration,
-        now: SystemTime,
+        monotonic_now: Instant,
+        wall_now: SystemTime,
     ) -> Option<String> {
-        let monotonic_now = Instant::now();
         let inner = self.inner.lock();
         let mut entries: Vec<_> = inner
             .history
             .iter()
             // Wall time includes suspend; monotonic time prevents clock rollback
             // from reviving old dictations. Future wall timestamps are ineligible.
-            .filter(|entry| entry.recorded_at <= now && entry.age_at(monotonic_now, now) <= max_age)
+            .filter(|entry| {
+                entry.recorded_at <= wall_now && entry.age_at(monotonic_now, wall_now) <= max_age
+            })
             .map(|entry| entry.text.trim())
             .filter(|text| !text.is_empty())
             .take(count)
@@ -151,44 +153,82 @@ mod tests {
         for text in ["expired", "boundary", "older", " newest "] {
             state.remember_transcript(text.into());
         }
-        let now = SystemTime::now();
+        let monotonic_start = Instant::now();
+        let wall_start = SystemTime::now();
+        let monotonic_now = monotonic_start + Duration::from_secs(601);
+        let wall_now = wall_start + Duration::from_secs(601);
         {
             let mut inner = state.inner.lock();
-            inner.history[3].recorded_at = now - Duration::from_secs(601);
-            inner.history[2].recorded_at = now - Duration::from_secs(600);
+            for (entry, offset) in inner.history.iter_mut().zip([601, 600, 1, 0]) {
+                entry.at = monotonic_start + Duration::from_secs(offset);
+                entry.recorded_at = wall_start + Duration::from_secs(offset);
+            }
         }
         let age = Duration::from_secs(600);
         assert_eq!(
-            state.recent_context_at(3, age, now).as_deref(),
+            state
+                .recent_context_at(3, age, monotonic_now, wall_now)
+                .as_deref(),
             Some("boundary\nolder\nnewest")
         );
         assert_eq!(
-            state.recent_context_at(2, age, now).as_deref(),
+            state
+                .recent_context_at(2, age, monotonic_now, wall_now)
+                .as_deref(),
             Some("older\nnewest")
         );
-        assert_eq!(state.recent_context_at(0, age, now), None);
         assert_eq!(
-            state.recent_context_at(5, age, now).as_deref(),
+            state.recent_context_at(0, age, monotonic_now, wall_now),
+            None
+        );
+        assert_eq!(
+            state
+                .recent_context_at(5, age, monotonic_now, wall_now)
+                .as_deref(),
             Some("boundary\nolder\nnewest")
         );
         // Suspend can advance wall time without advancing the monotonic clock.
         assert_eq!(
-            state.recent_context_at(3, age, now + Duration::from_secs(12 * 60 * 60)),
+            state.recent_context_at(
+                3,
+                age,
+                monotonic_now,
+                wall_now + Duration::from_secs(12 * 60 * 60),
+            ),
             None
         );
         for entry in &mut state.inner.lock().history {
-            entry.recorded_at = now - Duration::from_secs(601);
+            entry.at = monotonic_start;
+            entry.recorded_at = wall_start;
         }
-        assert_eq!(state.recent_context_at(3, age, now), None);
-        state.inner.lock().history[0].recorded_at = now + Duration::from_secs(1);
-        assert_eq!(state.recent_context_at(3, age, now), None);
+        assert_eq!(
+            state.recent_context_at(3, age, monotonic_now, wall_now),
+            None
+        );
         {
             let mut inner = state.inner.lock();
-            inner.history[0].at = Instant::now() - Duration::from_secs(20 * 60);
-            inner.history[0].recorded_at = now - Duration::from_secs(5 * 60);
+            inner.history[0].at = monotonic_now;
+            inner.history[0].recorded_at = wall_now + Duration::from_secs(1);
+        }
+        assert_eq!(
+            state.recent_context_at(3, age, monotonic_now, wall_now),
+            None
+        );
+        {
+            let mut inner = state.inner.lock();
+            inner.history[0].at = monotonic_start;
+            inner.history[0].recorded_at = wall_start + Duration::from_secs(15 * 60);
         }
         // Moving wall time backwards must not revive an expired dictation.
-        assert_eq!(state.recent_context_at(3, age, now), None);
+        assert_eq!(
+            state.recent_context_at(
+                3,
+                age,
+                monotonic_start + Duration::from_secs(20 * 60),
+                wall_start + Duration::from_secs(20 * 60),
+            ),
+            None
+        );
     }
 
     #[test]

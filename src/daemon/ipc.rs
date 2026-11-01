@@ -613,9 +613,18 @@ impl SharedState {
     /// Entries with 1-based `index` counting back from the most recent.
     #[cfg(any(unix, target_os = "windows", test))]
     fn history_snapshot(&self, limit: Option<usize>) -> Vec<HistoryEntry> {
+        self.history_snapshot_at(limit, Instant::now(), SystemTime::now())
+    }
+
+    /// Snapshot history using supplied clocks for deterministic age calculations.
+    #[cfg(any(unix, target_os = "windows", test))]
+    fn history_snapshot_at(
+        &self,
+        limit: Option<usize>,
+        monotonic_now: Instant,
+        wall_now: SystemTime,
+    ) -> Vec<HistoryEntry> {
         let inner = self.inner.lock();
-        let now = Instant::now();
-        let wall_now = SystemTime::now();
         inner
             .history
             .iter()
@@ -627,7 +636,7 @@ impl SharedState {
                     entry: entry.id,
                 },
                 index: position + 1,
-                age_secs: entry.age_at(now, wall_now).as_secs(),
+                age_secs: entry.age_at(monotonic_now, wall_now).as_secs(),
                 chars: entry.chars,
                 preview: entry.preview.clone(),
             })

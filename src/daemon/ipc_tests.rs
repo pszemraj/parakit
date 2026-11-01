@@ -377,21 +377,30 @@ fn history_snapshot_matrix() {
     ] {
         let state = SharedState::new();
         state.remember_transcript("clock example".into());
+        let monotonic_start = Instant::now();
+        let wall_start = SystemTime::now();
+        let wall_age = Duration::from_secs(wall_secs);
         {
             let mut inner = state.inner.lock();
-            inner.history[0].at = Instant::now() - Duration::from_secs(active_secs);
-            let wall_age = Duration::from_secs(wall_secs);
+            inner.history[0].at = monotonic_start;
             inner.history[0].recorded_at = if future_wall {
-                SystemTime::now() + wall_age
+                wall_start + wall_age
             } else {
-                SystemTime::now() - wall_age
+                wall_start
             };
         }
-        let age = state.history_snapshot(None)[0].age_secs;
-        assert!(
-            age >= expected_age,
-            "history age {age}s understates {expected_age}s"
-        );
+        let wall_now = if future_wall {
+            wall_start
+        } else {
+            wall_start + wall_age
+        };
+        let age = state.history_snapshot_at(
+            None,
+            monotonic_start + Duration::from_secs(active_secs),
+            wall_now,
+        )[0]
+        .age_secs;
+        assert_eq!(age, expected_age);
     }
 }
 
