@@ -305,6 +305,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[ignore = "requires the native IBus development tools and C regression fixture"]
     fn native_attach_errors_warn_once_and_allow_recovery() {
         use std::process::Command;
 

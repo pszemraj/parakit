@@ -204,6 +204,9 @@ def execute(native_build: Path, binary_dir: Path, model: Path, audio_path: Path,
                PARAKIT_CONFIG_PATH=str(output / "config.toml"),
                XDG_CACHE_HOME=str(output / "cache"), XDG_RUNTIME_DIR=str(Path("target/tmp/nmf-run").resolve()),
                OMP_NUM_THREADS="8", OPENBLAS_NUM_THREADS="8")
+    for key, value in (("CRISPASR_FC_PW_Q8", "0"), ("CRISPASR_FC_FUSED_QKV", "0"),
+                       ("CRISP_AUDIO_WINDOWED_ATTN", "1"), ("CRISPASR_QWEN3_HOTWORDS_AS_CONTEXT", "1")):
+        env.setdefault(key, value)
     Path(env["XDG_RUNTIME_DIR"]).mkdir(exist_ok=True)
     (output / "config.toml").write_text("# Isolated native correctness tests.\n", encoding="utf-8")
     common = ["--model", str(model.resolve()), "--device", device, "--threads", "8", "--qwen-language", "en"]
@@ -275,8 +278,7 @@ def execute(native_build: Path, binary_dir: Path, model: Path, audio_path: Path,
         print(f"passed {label}", flush=True)
 
     for label, setting in (("unset", None), ("zero", "0")):
-        routing_env = dict(context_env, PARAKIT_TEST_QWEN_DEFAULTS_CHILD="1",
-                           PARAKIT_TEST_QWEN_FAILURE="")
+        routing_env = dict(context_env, PARAKIT_TEST_QWEN_FAILURE="")
         if setting is None:
             routing_env.pop("CRISPASR_QWEN3_HOTWORDS_AS_CONTEXT", None)
         else:
@@ -291,29 +293,55 @@ def execute(native_build: Path, binary_dir: Path, model: Path, audio_path: Path,
         )}, chunked=context_audio == long_audio)
         print(f"passed context-routing-{label}", flush=True)
 
+    status, stdout, stderr = run_case("context-short-silence", [str(harness), "--exact",
+                                     "qwen_context_handles_silent_and_short_audio", "--ignored", "--nocapture"],
+                                     dict(context_env, PARAKIT_TEST_QWEN_FAILURE=""), output)
+    if status or "1 passed" not in stdout:
+        raise RuntimeError(f"context-short-silence: native input probes failed: {stderr[-1000:]}")
+    check_context_trace(stderr, {"short-ordinary": "", "short-context": ""}, chunked=False)
+    print("passed context-short-silence", flush=True)
+
     worker_config = output / "context-worker.toml"
     worker_config.write_text("[qwen]\ncontext_on_default_hotkey = true\n", encoding="utf-8")
-    worker_logs = output / "context-worker-jsonl"
-    command = [str(binary / "parakit"), "--verbose", "start", *common, "--no-cleaning", "--no-sounds",
-               "--log-dir", str(worker_logs), "--simulate-ptt-audio", str(speech),
-               "--simulate-ptt-audio", str(speech)]
-    status, _, stderr = run_case("context-worker", command,
-                               dict(env, PARAKIT_CONFIG_PATH=str(worker_config),
-                                    CRISPASR_QWEN3_HOTWORDS_AS_CONTEXT="1"), output)
-    rows = [json.loads(line) for path in worker_logs.glob("*.jsonl")
-            for line in path.read_text(encoding="utf-8").splitlines()]
-    transcripts = [row["raw"] for row in rows if "raw" in row]
-    contexts = [bytes.fromhex(line.removeprefix("PARAKIT_TEST_CONTEXT_HEX:")).decode("utf-8")
-                for line in stderr.splitlines() if line.startswith("PARAKIT_TEST_CONTEXT_HEX:")]
-    if status or len(transcripts) != 2 or [text for text in contexts if text] != transcripts[:1]:
-        raise RuntimeError("context-worker: the second capture did not use the first stored transcript")
-    print("passed context-worker history handoff", flush=True)
+    for label, mode in (("context-worker", ""), ("context-copy-worker", "context-copy")):
+        worker_logs = output / f"{label}-jsonl"
+        command = [str(binary / "parakit"), "--verbose", "start", *common, "--no-cleaning", "--no-sounds",
+                   "--log-dir", str(worker_logs), "--simulate-ptt-audio", str(speech),
+                   "--simulate-ptt-audio", str(speech)]
+        status, stdout, stderr = run_case(label, command,
+                                   dict(env, PARAKIT_CONFIG_PATH=str(worker_config),
+                                        CRISPASR_QWEN3_HOTWORDS_AS_CONTEXT="1", PARAKIT_TEST_QWEN_FAILURE=mode), output)
+        rows = [json.loads(line) for path in worker_logs.glob("*.jsonl")
+                for line in path.read_text(encoding="utf-8").splitlines()]
+        records = [row for row in rows if "raw" in row]
+        transcripts = [row["cleaned"] for row in records]
+        contexts = [bytes.fromhex(line.removeprefix("PARAKIT_TEST_CONTEXT_HEX:")).decode("utf-8")
+                    for line in stderr.splitlines() if line.startswith("PARAKIT_TEST_CONTEXT_HEX:")]
+        if status or len(transcripts) != 2 or [text for text in contexts if text] != transcripts[:1]:
+            raise RuntimeError(f"{label}: the second capture did not use the first stored transcript")
+        prompts = [bytes.fromhex(line.removeprefix("PARAKIT_TEST_PROMPT_HEX:")).decode("utf-8")
+                   for line in stderr.splitlines() if line.startswith("PARAKIT_TEST_PROMPT_HEX:")]
+        retried = prompts[-1].startswith("<|im_start|>system\n<|im_end|>")
+        for index, row in enumerate(records):
+            usage = row["inference"]
+            if (usage["context_mode"] != "plain" or
+                    usage["context_chars"] != (len(transcripts[0]) if index else 0) or
+                    usage["context_retried"] != (retried if index else False)):
+                raise RuntimeError(f"{label}: JSONL context telemetry disagrees with the native session")
+            verbose = (f"parakit: context_mode=plain context_chars={usage['context_chars']} "
+                       f"context_retried={str(usage['context_retried']).lower()}")
+            if verbose not in stdout:
+                raise RuntimeError(f"{label}: verbose context telemetry disagrees with JSONL")
+        if mode and (not retried or "PARAKIT_TEST: context copy" not in stderr):
+            raise RuntimeError(f"{label}: copied context did not produce a recorded ordinary retry")
+        print(f"passed {label} history handoff and context telemetry", flush=True)
 
     silence = output / "silence.wav"
     with wave.open(str(silence), "wb") as audio:
         audio.setparams(params)
         audio.writeframes(bytes(16000 * 2))
     silent_command = [*command[:-2], "--simulate-ptt-audio", str(silence)]
+    silent_command[silent_command.index("--log-dir") + 1] = str(output / "context-worker-silence-jsonl")
     status, stdout, stderr = run_case("context-worker-silence", silent_command,
                                     dict(env, PARAKIT_CONFIG_PATH=str(worker_config),
                                          CRISPASR_QWEN3_HOTWORDS_AS_CONTEXT="1"), output)

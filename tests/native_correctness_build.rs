@@ -7,7 +7,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 #[test]
-#[ignore = "requires PARAKIT_TEST_QWEN_MODEL and the separate warmup-embed fault library"]
+#[ignore = "run through tests/native/run_qwen_faults.py with an explicit Qwen model"]
 fn qwen_readiness_error_restores_user_options() {
     let model = std::env::var("PARAKIT_TEST_QWEN_MODEL").expect("explicit Qwen model");
     let device = qwen_test_device();
@@ -46,38 +46,12 @@ fn qwen_test_device() -> parakit::inference::DeviceMode {
     }
 }
 
-/// Run context probes in a child with daemon defaults applied before threads start.
-///
-/// Explicit environment overrides are inherited unchanged, including disabled context.
-fn qwen_context_fixture(
-    test_name: &str,
-) -> Option<(
+/// Load the runner's explicit model, audio, and context fixtures.
+fn qwen_context_fixture() -> (
     parakit::inference::Engine,
     parakit::audio_file::PreparedWav,
     String,
-)> {
-    const CHILD: &str = "PARAKIT_TEST_QWEN_DEFAULTS_CHILD";
-    if std::env::var_os(CHILD).is_none() {
-        let mut command = Command::new(std::env::current_exe().unwrap());
-        command.args(["--exact", test_name, "--ignored", "--nocapture"]);
-        command.env(CHILD, "1");
-        for (key, value) in [
-            ("CRISPASR_FC_PW_Q8", "0"),
-            ("CRISPASR_FC_FUSED_QKV", "0"),
-            ("CRISP_AUDIO_WINDOWED_ATTN", "1"),
-            ("CRISPASR_QWEN3_HOTWORDS_AS_CONTEXT", "1"),
-        ] {
-            if std::env::var_os(key).is_none() {
-                command.env(key, value);
-            }
-        }
-        let output = command.output().unwrap();
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        print!("{stdout}");
-        eprint!("{}", String::from_utf8_lossy(&output.stderr));
-        assert!(output.status.success() && stdout.contains("1 passed"));
-        return None;
-    }
+) {
     let model = std::env::var("PARAKIT_TEST_QWEN_MODEL").expect("explicit Qwen model");
     let audio = std::env::var_os("PARAKIT_TEST_QWEN_AUDIO")
         .map(PathBuf::from)
@@ -96,7 +70,7 @@ fn qwen_context_fixture(
     )
     .unwrap();
     let audio = parakit::audio_file::prepare_wav_for_model(&audio).unwrap();
-    Some((engine, audio, context))
+    (engine, audio, context)
 }
 
 /// Record one actual transcription and its latency for inspection with native traces.
@@ -108,27 +82,47 @@ fn context_probe(
 ) -> anyhow::Result<String> {
     eprintln!("PARAKIT_TEST_CALL:{label}");
     let started = std::time::Instant::now();
-    let result = engine.transcribe_with_context(pcm, context);
+    let result = engine.transcribe_with_context_usage(pcm, context);
     println!(
         "PARAKIT_TEST_RESULT:{}",
         serde_json::json!({
             "case": label,
             "seconds": started.elapsed().as_secs_f64(),
-            "raw": result.as_ref().ok(),
+            "raw": result.as_ref().ok().map(|(text, _)| text),
+            "context_chars": result.as_ref().ok().map(|(_, usage)| usage.chars),
+            "context_retried": result.as_ref().ok().map(|(_, usage)| usage.retried),
             "error": result.as_ref().err().map(ToString::to_string),
         })
     );
-    result
+    let (text, usage) = result?;
+    let expected = context.filter(|prior| {
+        pcm.len() >= 16_000
+            && !prior.contains('\0')
+            && std::env::var("CRISPASR_QWEN3_HOTWORDS_AS_CONTEXT").as_deref() == Ok("1")
+    });
+    assert_eq!(
+        usage.chars,
+        expected.map_or(0, |prior| prior.chars().count()),
+        "{label}"
+    );
+    if usage.chars == 0 {
+        assert!(
+            !usage.retried,
+            "{label}: ordinary inference cannot retry context"
+        );
+    } else if std::env::var("PARAKIT_TEST_QWEN_FAILURE").as_deref() == Ok("context-copy") {
+        assert!(
+            usage.retried,
+            "{label}: copied context must trigger a retry"
+        );
+    }
+    Ok(text)
 }
 
 #[test]
-#[ignore = "requires PARAKIT_TEST_QWEN_MODEL and native prompt tracing for routing assertions"]
+#[ignore = "run through tests/native/run_qwen_faults.py with an explicit Qwen model"]
 fn qwen_context_is_scoped_to_each_transcription() {
-    let Some((engine, audio, context)) =
-        qwen_context_fixture("qwen_context_is_scoped_to_each_transcription")
-    else {
-        return;
-    };
+    let (engine, audio, context) = qwen_context_fixture();
     let forced_copy = std::env::var("PARAKIT_TEST_QWEN_FAILURE").as_deref() == Ok("context-copy");
     let mut ordinary = None;
     for (label, prior) in [
@@ -156,13 +150,9 @@ fn qwen_context_is_scoped_to_each_transcription() {
 }
 
 #[test]
-#[ignore = "requires PARAKIT_TEST_QWEN_MODEL and the context-embed fault library"]
+#[ignore = "run through tests/native/run_qwen_faults.py with an explicit Qwen model"]
 fn qwen_context_error_does_not_affect_next_transcription() {
-    let Some((engine, audio, context)) =
-        qwen_context_fixture("qwen_context_error_does_not_affect_next_transcription")
-    else {
-        return;
-    };
+    let (engine, audio, context) = qwen_context_fixture();
     let error =
         context_probe(&engine, &audio.samples, "context-failure", Some(&context)).unwrap_err();
     assert!(error.to_string().contains("crispasr transcribe failed"));
@@ -172,14 +162,10 @@ fn qwen_context_error_does_not_affect_next_transcription() {
 }
 
 #[test]
-#[ignore = "requires PARAKIT_TEST_QWEN_MODEL and optional audio/context fixtures"]
+#[ignore = "run through tests/native/run_qwen_faults.py with an explicit Qwen model"]
 /// Report native outputs; the daemon rejects silent captures before inference.
 fn qwen_context_handles_silent_and_short_audio() {
-    let Some((engine, audio, context)) =
-        qwen_context_fixture("qwen_context_handles_silent_and_short_audio")
-    else {
-        return;
-    };
+    let (engine, audio, context) = qwen_context_fixture();
     let silence = vec![0.0; 16_000];
     for (label, prior) in [
         ("silence-ordinary", None),
