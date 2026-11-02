@@ -325,7 +325,9 @@ Check:
 
 Run daemon/IPC checks sequentially with isolated config, cache/runtime paths, and a model copy. After [idle offload](../running.md#idle-model-offload), hold PTT through reload, speak, and release: early speech must be retained, readiness must precede the listening cue, and insertion must occur once. Release PTT immediately during a separate reload: the queued capture must complete once without a late listening cue. Restore a missing model before the next PTT, then check status and history. Check stop/restart and sleep/wake on the native desktop. Verify [sound cues](../running.md#logging-and-sounds) on failed readiness and silence, and with `--no-sounds`. Headless tests verify cue ordering and cancellation; audible playback, physical input, and insertion require native observation. Mark unobserved checks and unavailable backends pending.
 
-On macOS, an opt-in acoustic control plays two WAVs through the speakers and records them through the production CPAL/Rubato microphone path. It checks three successive captures (first WAV, second WAV, first WAV), retains only text and signal measurements, and can measure the real speaker cues. This does not synthesize or validate the physical global hotkey. Use public speech WAVs, an active desktop with microphone permission, and repository-local model, WAV, and report paths. The report file must already exist:
+On macOS, an opt-in acoustic control plays two WAVs through the speakers and records them through the production CPAL/Rubato microphone path. It checks three successive captures (first WAV, second WAV, first WAV), retains only text and signal measurements, and can measure the real speaker cues. This does not synthesize or validate the physical global hotkey. Use public speech WAVs, an active desktop with microphone permission, and repository-local model, WAV, and report paths. The report file must already exist.
+
+Check fixture signal levels before acoustic runs: the WAV helper can recognize files that are too quiet for speaker playback. Use level-adjusted playback copies as needed and record the source hash and gain.
 
 ```bash
 mkdir -p target/tmp/live-audio

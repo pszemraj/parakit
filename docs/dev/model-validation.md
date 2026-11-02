@@ -4,7 +4,7 @@ Run this checklist on the checked-out commit under test on each available Mac an
 
 Earlier Linux checks covered all six presets at Q8_0 and Q6_K on CPU, CUDA, and Vulkan. The [October 18 macOS report](macos-model-validation-2026-10-18.md) covers CPU/Metal execution at both precisions on the tested M5, including shared-resampler and idle-reload checks. [Focused Windows results](#focused-windows-results-2026-10-19) cover a smaller model set. The full Windows matrix, physical desktop checks, and fresh human listening remain pending. The earlier [CrispASR macOS report](crispasr-macos-validation.md) and [October 7 macOS report](macos-validation-2026-10-07.md) document historical runs only.
 
-Native macOS and Windows checks have not yet been rerun for CrispASR v0.8.49 and its prior-dictation context path. Earlier reports do not qualify that upgrade.
+The [November 2 macOS report](macos-qwen-context-validation-2026-11-02.md) records focused CPU/Metal checks for CrispASR v0.8.49 and prior-dictation context. Native Windows execution for that upgrade and the physical shortcut checks remain pending; earlier reports do not qualify them.
 
 Use a full checkout with initialized submodules. Supply the public fixture ZIP separately in the ignored checkout, and set the fixture ZIP variable below to its path. It must contain the named speech, resampling, boundary, silence, and noise fixtures used here, including public FLEURS clips and constructed controls. Preserve its README attribution. Keep downloaded models and test state inside the checkout.
 
