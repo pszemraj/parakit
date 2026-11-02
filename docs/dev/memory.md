@@ -4,7 +4,7 @@ See [idle model offload](../running.md#idle-model-offload) for residency, readin
 
 ## Allocation Ownership
 
-The daemon worker owns the inference engine and its native session. Offloading removes the engine under the activity gate, then destroys it before processing the next queued reload. Recording can begin while destruction or reload is in progress; the coordinator retains that capture for the worker.
+The worker owns the inference engine and native session; [lifecycle internals](architecture.md#state-machine) describe activity admission, destruction, and queued reloads.
 
 Session destruction releases owned weights, graph state, and backend buffers. Process allocators and GPU drivers can retain caches afterward. Residual process memory alone does not establish that a session remains loaded or identify a leak; check model residency through `parakit --verbose status` as well.
 

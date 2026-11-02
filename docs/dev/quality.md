@@ -356,7 +356,7 @@ cargo test --features metal --bin parakit \
 
 Select `gpu` and a fresh report path for Metal. `PARAKIT_LIVE_SECOND_WAV` optionally adds another loaded/offloaded pair. Inspect the recorded transcripts and speech-boundary result.
 
-For allocation context, see the [Linux reload measurements and ownership notes](memory.md).
+For allocation context, see [memory accounting and measurement](memory.md).
 
 ### Clipboard Checks
 
@@ -408,6 +408,12 @@ python tests/native/run_qwen_faults.py \
 
 First run `cargo test --test native_correctness_build` in the same isolated target directory to build the loaded-session test harness. Run its ignored Qwen cases through the driver, which supplies native defaults in each test process's launch environment. Use the matching completed native build directory containing `compile_commands.json`, and a fresh output directory. CPU is the default; for a GPU run, build both binaries and the harness with the matching accelerator feature, then pass `--device gpu`. On macOS the driver preserves the dylib basename and version aliases and sets `DYLD_LIBRARY_PATH` to load its private fault library. It compiles a separate corrected C API copy and relinks its own test library; normal binaries and vendor sources are unchanged.
 
-First/middle/last chunk failures and greedy embedding/forward failures run through both file and worker paths. The worker first remembers a successful dictation, then checks history preservation and absence of successful logging/insertion for the failed input. Separate prefix cases inspect actual native English, Cantonese, and Filipino assistant prefills. They force those languages on English fixture audio to inspect prompt construction, not multilingual recognition quality.
+The driver checks:
 
-Context cases trace exact native prompt bytes and session setters. They check raw system text and forced-English prefills across chunks, contextual/ordinary/contextual calls on one session, unusable-context fallback, and clearing after successful or failed inference. Worker cases feed two JFK phrases with no shared words. They verify that the second capture receives the first stored transcript without a retry, that forced copying retries it, that JSONL and verbose context telemetry match native use, and that silence reaches no contextual inference or successful history entry. `PARAKIT_TEST_QWEN_AUDIO` and `PARAKIT_TEST_QWEN_CONTEXT` override the session context probes' WAV and prior text; the driver otherwise uses the constructed long fixture and a small vocabulary sample. The Rust context probes print a `PARAKIT_TEST_RESULT` JSON record per call with raw text, elapsed inference seconds, context character count, retry status, and any error. Compare these outputs with the recording and a readable reference; prompt-routing checks alone do not establish quality. The short/silent session probe reports direct-engine silence output and checks subsecond ordinary fallback; direct calls do not use the daemon's silence filter.
+- First/middle/last chunk and greedy embedding/forward failures through file and worker paths. Failed worker input must preserve the preceding successful transcript and produce no successful log or insertion.
+- Native English, Cantonese, and Filipino assistant prefills, forced on English audio to inspect prompt construction rather than multilingual quality.
+- Exact context prompt bytes and session setters: raw system text and forced-English prefills across chunks, contextual/ordinary/contextual calls on one session, unusable-context fallback, and clearing after success or failure.
+- Worker history handoff using two disjoint JFK phrases: context without a retry, forced-copy retry, JSONL/verbose telemetry matching native use, and silence reaching neither contextual inference nor successful history.
+- Direct-engine silence output and subsecond ordinary fallback. Direct calls do not use the worker's silence filter.
+
+`PARAKIT_TEST_QWEN_AUDIO` and `PARAKIT_TEST_QWEN_CONTEXT` override the context probes' WAV and prior text; defaults are the constructed long fixture and a vocabulary sample. Each call prints a `PARAKIT_TEST_RESULT` JSON record with raw text, elapsed inference seconds, context character count, retry status, and any error. Compare it with the recording and a readable reference; prompt-routing checks alone do not establish quality.

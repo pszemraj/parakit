@@ -167,7 +167,7 @@ Run the [loaded-context checks](quality.md#ordered-audio-and-loaded-qwen-failure
 
 For every preset and precision, also check representative longer speech, silence, repeats, and idle offload/reload through the helper and worker. Use the 29/30/31-second boundary fixtures for both Qwen sizes. Save exit statuses alongside output for each additional command, as in the matrix. A worker no-speech error is expected for silence; it must not become a successful transcript or insertion. Repeat completed Q6 acquisition with network access disabled and the F16/quantizer unavailable to confirm cached startup needs neither. On Windows, separately record the first-generation result with the external quantizer available.
 
-Sample host RSS/working set and GPU allocation separately through warmup, long inference, idle, offload, and reload. Compare incremental GPU allocation with the [reload allowance](../running.md#idle-model-offload), recording Metal's unified-memory accounting separately from discrete VRAM. Keep measured peaks and sampling intervals with the logs; Linux calibration does not qualify the native platform's memory behavior.
+Follow the [memory measurement procedure](memory.md#measuring-memory) on each native backend; Linux calibration does not establish Metal or Windows allocation behavior.
 
 silence.wav and noise-only.wav are synthetic controls; inspect unwanted insertion/history changes without treating them as room-noise evidence or adding a new voice-activity/rejection policy. quiet-rms26-complete.wav, quiet-rms26-complete-lowgain.wav, human-speech-noise-tail.wav, and quiet-loud-quiet.wav are controlled diagnostics documented in the fixture README. Compare expected opening/closing phrases and tail behavior, then listen when output disagrees. Constructed noise is not real ambient sound.
 
@@ -179,6 +179,6 @@ Use isolated configuration for the tested preset, precision, device, and Qwen op
 2. Stop and restart the isolated daemon without CLI overrides; confirm saved selection and Qwen options persist.
 3. Record real quiet speech and nonspeech in a room with fan, keyboard, breathing, or microphone handling sounds, paired with quiet and breathless speech. Record the environment and listen to disagreements. These real-world recordings remain pending until performed; do not add or assume a new VAD/rejection rule.
 
-Check status, history, logs, and inserted text after each run. History is in memory and starts empty after restart; configuration and JSONL logs are separate. Mark each item pass, fail, or pending with evidence. Fresh listening and physical microphone results are required; dataset references and official-model output are not ground truth. Filling VRAM and physical stop-to-insert p50/p95 remain outside this closure gate.
+Check status, history, logs, and inserted text after each run. Mark each item pass, fail, or pending with evidence. Listen to the actual recordings to adjudicate recognition; follow the [reference comparison procedure](quality.md#recommended-ab-procedure) when outputs disagree. VRAM-pressure tests and physical stop-to-insert p50/p95 measurements are separate runs.
 
-Return logs and hardware/backend details without model files. Keep outputs under `target/tmp/new-models`.
+Keep outputs and hardware/backend details under `target/tmp/new-models`. Exclude model files when sharing results.
