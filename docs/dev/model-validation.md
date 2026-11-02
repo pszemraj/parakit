@@ -2,17 +2,11 @@
 
 Run this checklist on the checked-out commit under test on each available Mac and Windows laptop. Record the commit, OS, hardware, backend, command logs, and physical observations. Linux results do not establish Metal or Windows behavior. A missing device or an unperformed physical check stays pending.
 
-Earlier Linux checks covered all six presets at Q8_0 and Q6_K on CPU, CUDA, and Vulkan. The [October 18 macOS report](macos-model-validation-2026-10-18.md) covers CPU/Metal execution at both precisions on the tested M5, including shared-resampler and idle-reload checks. [Focused Windows results](#focused-windows-results-2026-10-19) cover a smaller model set. The full Windows matrix, physical desktop checks, and fresh human listening remain pending. The earlier [CrispASR macOS report](crispasr-macos-validation.md) and [October 7 macOS report](macos-validation-2026-10-07.md) document historical runs only.
-
-The [November 2 macOS report](macos-qwen-context-validation-2026-11-02.md) records focused CPU/Metal checks for CrispASR v0.8.49 and prior-dictation context. Native Windows execution for that upgrade and the physical shortcut checks remain pending; earlier reports do not qualify them.
-
 Use a full checkout with initialized submodules. Supply the public fixture ZIP separately in the ignored checkout, and set the fixture ZIP variable below to its path. It must contain the named speech, resampling, boundary, silence, and noise fixtures used here, including public FLEURS clips and constructed controls. Preserve its README attribution. Keep downloaded models and test state inside the checkout.
 
 ## macOS CPU and Metal
 
 Use a full checkout with initialized submodules and the [native build prerequisites](../build.md). These commands build an isolated Metal-capable release binary and WAV helper. Select cpu for CPU inference and gpu for Metal.
-
-The [October 28-29 macOS validation report](macos-ibus-validation-2026-10-28.md) records the earlier microphone, lifecycle, and insertion checks.
 
 ~~~bash
 export CARGO_TARGET_DIR="$PWD/target/tmp/new-models/cargo-macos"
@@ -147,14 +141,6 @@ foreach ($Backend in $Backends) {
 ~~~
 
 Run `cargo test resampl` in the Windows checkout too. The DLL path is restored after each backend. Fixture rates and test interpretation match macOS. Keep each extracted directory fresh on reruns so stale DLLs cannot mask bundle omissions.
-
-### Focused Windows results (2026-10-19)
-
-At `55cb08a`, native Windows 11 builds and freshly extracted CPU, CUDA, and Vulkan bundles passed Parakeet v3 Q8_0 and Qwen 0.6B Q8_0 canaries on a Ryzen 9 8945HS with an RTX 4070 Laptop GPU. Each backend ran the real 55.36-second Juniper WAV through the helper and production worker, with exact helper/worker transcript parity, normal/quiet output checks, and correlated JSONL records across separate process sessions. CPU-first CLI canaries covered first-run configuration, model fetch/cache reuse, and missing-model errors. CUDA inference retained a compiled-13.1/runtime-13.0 version warning; quiet CUDA stderr contained that warning.
-
-Subsequent review fixes and consolidation through `cacfd8e` passed focused CPU Parakeet v3 worker/JSONL and CLI checks. The consolidation passed 92 focused fetch, GGUF, clipboard, worker, and configuration tests plus formatting, strict rustdoc, workspace checks, Clippy, build, and the Rust all-features check using retained CPU native libraries. Tiny local fixtures and native tool stand-ins checked conversion arguments, cache preservation, and failure cleanup; they did not perform real model conversion. GPU runs were not repeated after these changes.
-
-These checks preserved the installed daemon and settings and reused isolated models/audio. They do not complete the six-model/two-precision matrix, native microphone/hotkey/insertion/cue or sleep/wake checks, GPU memory-pressure tests, or human recognition adjudication. Qwen had recognition disagreements despite helper/worker parity. No inference-speed improvement or full-suite result is claimed for the consolidation.
 
 ## Qwen options, long input, and reload
 

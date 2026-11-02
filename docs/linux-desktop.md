@@ -54,40 +54,22 @@ sudo "$(command -v parakit)" ibus uninstall
 
 Log out and back in afterward. Only registration commands need administrator privileges; run the dictation daemon as your desktop user.
 
-## Validated GNOME Wayland Setup
+## Chromium On Wayland
 
-Native reception was verified on GNOME Shell 46.0 with IBus 1.5.29-rc2, with `DISPLAY`, `GTK_IM_MODULE`, and `QT_IM_MODULE` unset and no XWayland server. GTK used GNOME's Wayland text-input path. The results below cover Unicode, combining accents, and emoji:
-
-| Application | Verified reception |
-| --- | --- |
-| GNOME Text Editor 46.3 / GTK 4.14.5 | Saved document contents |
-| Chrome 156.0.8078.47 | Textarea contents and trusted input event |
-| VS Code 1.143.1 | Saved editor buffer |
-| Ghostty 1.3.1 | Canonical terminal input |
-| Ghostty 1.3.1 with tmux 3.4 | Raw terminal input inside tmux |
-
-Chrome and VS Code were launched with explicit Wayland and input-method options:
+If Chrome or VS Code does not accept native text input, try explicit Wayland and input-method options:
 
 ```bash
 google-chrome --ozone-platform=wayland --enable-wayland-ime --wayland-text-input-version=3
 code --ozone-platform=wayland --enable-wayland-ime --wayland-text-input-version=3
 ```
 
-Close existing application instances before changing their launch options. Chromium documents the [Ozone platform selection](https://chromium.googlesource.com/chromium/src/+/main/docs/ozone_overview.md#linux-desktop) and defines the [Wayland IME and text-input version switches](https://github.com/chromium/chromium/blob/main/ui/ozone/public/ozone_switches.cc). These are the tested options for the versions above; application defaults can differ.
-
-Focused GTK fields also verified selection replacement, rejection after switching fields in the same window, and `Ctrl+Space` with repeats and either release order. Ordinary typing and German `de` / `nodeadkeys` layout with Compose worked while the dictation daemon was absent. The production Rust worker delivered into GTK and Chrome with `DISPLAY` unset; Chrome's existing clipboard text remained unchanged even with transcript clipboard retention enabled.
-
-The production worker also verified native IBus delivery into a GTK X11 field on an isolated X11 server, with its clipboard unchanged.
-
-On an isolated GNOME Wayland session with XWayland available, rejected and terminal-policy-blocked native dictations copied their full text to the clipboard with history disabled. Clipboard readback matched, and neither GTK field received text. Clipboard recovery needs XWayland clipboard access; native IBus submission itself does not.
-
-Helper and client restart/reconnect behavior was checked separately through isolated IBus contexts. Those protocol checks do not establish reception in every application during a restart. The application matrix above covers native Wayland; XWayland reception and an actual interactive coding-assistant UI remain unverified. Terminal checks used input capture programs, without executing dictated text as commands.
+Close existing application instances before changing their launch options. Chromium documents the [Ozone platform selection](https://chromium.googlesource.com/chromium/src/+/main/docs/ozone_overview.md#linux-desktop) and defines the [Wayland IME and text-input version switches](https://github.com/chromium/chromium/blob/main/ui/ozone/public/ozone_switches.cc). Application defaults can differ.
 
 ## Insertion Selection And Recovery
 
 `--insertion-backend ibus` requires engine-owned IBus push-to-talk. `--insertion-backend x11` selects the existing X11 clipboard/direct route. The default `auto` follows the hotkey route: native delivery for IBus hotkeys and X11 for all others, including the evdev proxy. To use native delivery on X11, select `--hotkey-backend ibus`; a registered X11 grab can invalidate an input-method target. Set `daemon.insertion_backend` to keep the transport choice across starts. Explicit `direct` mode retains X11 typing with automatic transport selection and conflicts with forced IBus insertion.
 
-Inspect the [insertion outcome](logging.md#insertion-outcomes) before retrying native delivery. [Paste modes](running.md#insertion) control terminal tabs and newlines; use [daemon history](running.md#daemon-control) for blocked text and explicit copying.
+Clipboard recovery needs XWayland clipboard access; native IBus submission itself does not. Inspect the [insertion outcome](logging.md#insertion-outcomes) before retrying native delivery. [Paste modes](running.md#insertion) control terminal tabs and newlines; use [daemon history](running.md#daemon-control) for blocked text and explicit copying.
 
 ## X11 Sessions
 

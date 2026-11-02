@@ -23,8 +23,6 @@
 
 - [dev/architecture.md](dev/architecture.md) - module map and platform work.
 - [dev/quality.md](dev/quality.md) - validation and quality checks.
-- [dev/model-validation.md](dev/model-validation.md) - native model, resampler, bundle, and physical desktop checks, with [focused Windows results](dev/model-validation.md#focused-windows-results-2026-10-19).
-- [dev/memory.md](dev/memory.md) - historical Linux reload measurements and allocation ownership.
-- [dev/crispasr-upgrade.md](dev/crispasr-upgrade.md) - the historical CrispASR v0.8.42 evaluation and validation limits.
-- [dev/macos-model-validation-2026-10-18.md](dev/macos-model-validation-2026-10-18.md) - CPU/Metal preset and precision coverage; [upgrade validation](dev/crispasr-macos-validation.md) and [earlier offload measurements](dev/macos-validation-2026-10-07.md) retain their dated results.
+- [dev/model-validation.md](dev/model-validation.md) - native model, resampler, bundle, and physical desktop checks.
+- [dev/memory.md](dev/memory.md) - session ownership, memory accounting, and reload diagnostics.
 - [dev/README.md](dev/README.md) - maintainer notes.

@@ -84,7 +84,7 @@ CUDA_VISIBLE_DEVICES=0 GGML_VK_VISIBLE_DEVICES= \
 
 For Vulkan, replace the CUDA environment prefix on both commands with `env -u GGML_VK_VISIBLE_DEVICES CUDA_VISIBLE_DEVICES=` or pin a Vulkan device explicitly. Apply these commands to the matrix and acceptance cases in [native model validation](model-validation.md). The worker's two idle waits take at least 126 seconds per model/backend pair.
 
-Retain commands, device diagnostics, raw transcripts, exit statuses, timings, and per-process memory samples under the ignored `target/tmp/` tree. Follow the [reload measurement checklist](model-validation.md#qwen-options-long-input-and-reload); the earlier [Linux measurements](memory.md#qwen-gpu-reload-measurements) record baseline conditions and limits.
+Retain commands, device diagnostics, raw transcripts, exit statuses, timings, and per-process memory samples under the ignored `target/tmp/` tree. Follow the [reload measurement checklist](model-validation.md#qwen-options-long-input-and-reload) and [memory accounting guidance](memory.md#measuring-memory).
 
 ## Rust Source Coverage
 
@@ -258,17 +258,9 @@ Record failures, cold/warm latency, and host/GPU memory. Keep downloaded referen
 
 ### Parakeet CPU Comparison
 
-An acceptance run on October 14, 2026 compared the three Parakeet Q8_0 presets on an AMD Ryzen 7 7700X, using eight inference and OpenMP/BLAS threads, OpenBLAS, and the CPU-only bundled build. The native C++ library was optimized; the Rust file helper was a debug build. Each model transcribed the same 55.36-second Juniper memo twice after loading.
+Use the [WAV quality target](#wav-quality-target) with `--device cpu --repeat 3` and each `--model-preset` on the same recordings. Keep the build profile, native libraries, thread counts, and BLAS settings fixed. Record loading separately from inference, and distinguish the first inference from repeated calls on one loaded engine.
 
-| Preset | First inference | Repeat inference | Peak process RSS |
-| --- | ---: | ---: | ---: |
-| `parakeet-v3` | 5.60 s | 5.33 s | 1.56 GiB |
-| `parakeet-ultra` | 5.00 s | 4.60 s | 1.49 GiB |
-| `parakeet-redux` | 6.12 s | 5.66 s | 1.49 GiB |
-
-Inference times exclude model loading. RSS includes loading and both passes; it is not the model's download size. Filesystem caches were not flushed, and other host processes were present. These two runs on one recording do not establish a general speed ranking or transcription-quality advantage. Redux did not provide a CPU speed or memory advantage over Ultra in this check.
-
-Use the [WAV quality target](#wav-quality-target) with `--device cpu --repeat 3` and each `--model-preset` to compare your own CPU and recordings. Check raw-text fidelity alongside timing, especially omissions, negations, numbers, and names.
+Measure peak process RSS across loading and inference; model download size does not describe runtime memory. Check raw-text fidelity alongside timing, especially omissions, negations, numbers, and names. Keep the per-run results under ignored `target/tmp/`.
 
 ### Checkpoint Conversion Acceptance
 
@@ -374,7 +366,7 @@ Use controlled text, HTML/text alternatives, images, copied files, and an empty 
 
 TODO: Reproduce a hung X11 clipboard owner and design bounded snapshot reads that preserve the prior clipboard. Arboard reads formats sequentially and its public API does not distinguish a read timeout from an unavailable format.
 
-TODO: On a native Linux desktop, exercise direct typing and guarded paste with physical modifier/focus changes, key-probe failures, keyboard-map changes, readiness-error reconnection and clipboard-manager handoffs. Closure tests and Mac runs do not establish those X11 results. Windows generation changes and delayed rendering also need native clipboard-manager or RDP verification.
+On a native Linux desktop, exercise direct typing and guarded paste with physical modifier/focus changes, key-probe failures, keyboard-map changes, readiness-error reconnection and clipboard-manager handoffs. On Windows, include clipboard-generation changes and delayed rendering with a native clipboard manager or RDP.
 
 ### Linux IBus and X11
 

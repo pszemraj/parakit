@@ -96,4 +96,4 @@ ls target/release/build/parakit-*/out/lib/libggml-metal.dylib
 otool -s __DATA __ggml_metallib target/release/build/parakit-*/out/lib/libggml-metal.dylib | head
 ```
 
-Build success and device visibility alone do not establish inference acceptance. The [macOS validation report](dev/macos-model-validation-2026-10-18.md) records CPU/Metal model coverage and remaining physical checks. Use the [model-validation checklist](dev/model-validation.md#macos-cpu-and-metal) and [quality procedures](dev/quality.md#qwen-and-moondream-comparisons) when repeating those checks.
+Build success and device visibility alone do not establish inference acceptance. Use the [model-validation checklist](dev/model-validation.md#macos-cpu-and-metal) and [quality procedures](dev/quality.md#qwen-and-moondream-comparisons) to check CPU/Metal inference and physical desktop behavior.
