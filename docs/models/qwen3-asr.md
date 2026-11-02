@@ -35,7 +35,18 @@ Apply model and configuration changes through the [restart workflow](../configur
 
 ## Prior Dictation Context
 
-Hold `Ctrl+Alt+Space` to request recent context. On macOS use `Left Control+Left Option+Space`. The original shortcut uses ordinary transcription by default; set `context_on_default_hotkey = true` to use context there too. Context intent is fixed when Space is pressed, so releasing Alt or Option while speaking does not change it or stop recording. Releasing Control or Space stops recording.
+The separate shortcut lets you decide for each dictation whether earlier speech is relevant. Request context when continuing a topic or reusing names and terms from recent dictations. Use the original shortcut for unrelated speech: by default, it ignores prior dictations, just like the other models.
+
+Hold the shortcut while speaking:
+
+| Intent | Linux and Windows | macOS |
+| --- | --- | --- |
+| Ordinary dictation, ignoring prior context | `Ctrl+Space` | `Left Control+Space` |
+| Request prior-dictation context | `Ctrl+Alt+Space` | `Left Control+Left Option+Space` |
+
+These are the defaults. Set `context_on_default_hotkey = true` to request context with the original shortcut too; both shortcuts then request context.
+
+Context intent is fixed when Space is pressed, so releasing Alt or Option while speaking does not change it or stop recording. Releasing Control or Space stops recording.
 
 On Windows, registering the context shortcut also consumes `AltGr+Space` on AltGr layouts, although it does not start recording. To preserve `AltGr+Space`, set `context_dictations = 0` and restart; ordinary dictation remains available.
 
