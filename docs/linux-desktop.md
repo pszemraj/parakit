@@ -13,7 +13,7 @@ An XWayland `DISPLAY` does not make XTest insertion usable in native Wayland app
 
 ## IBus Setup
 
-After [installing Parakit](build.md#install), register its IBus component once:
+For native IBus input on GNOME Wayland or with `--hotkey-backend ibus`, [install Parakit](build.md#install) and register its IBus component once. The default X11 shortcut and paste workflow needs no IBus registration or input-source change.
 
 ```bash
 sudo "$(command -v parakit)" ibus install
@@ -29,13 +29,18 @@ sudo "$(command -v parakit)" ibus install --layout de --variant nodeadkeys
 
 The selected layout supplies ordinary typing; IBus handles Compose and dead keys. The command writes only Parakit's component XML, normally `/usr/share/ibus/component/parakit.xml`. It does not change input-source lists or shortcuts. A user-local component XML file is not sufficient for normal GNOME discovery.
 
-Start and stop the dictation daemon as usual. Existing login/autostart commands stay the same. IBus launches and manages the separate `parakit-ibus` executable automatically; it links only the input-method libraries. Keep it beside `parakit` when installing or moving the binaries. Ordinary keyboard input continues while the dictation daemon is stopped or preparing its model.
+Start and stop the dictation daemon with `parakit` as usual. IBus launches and manages `parakit-ibus` automatically; you never need to run the helper manually or add it to login/autostart commands. Keep it beside `parakit` when moving the installed binaries. The helper handles ordinary keyboard input independently of the speech daemon, so typing continues while dictation is stopped or its model is loading.
 
-Inspect setup and runtime readiness:
+Before starting the dictation daemon, inspect registration and startup readiness:
 
 ```bash
 parakit ibus status
 parakit --verbose doctor
+```
+
+Once the daemon is running, inspect it with:
+
+```bash
 parakit --verbose status
 ```
 

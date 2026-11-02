@@ -44,9 +44,12 @@ Linux developer install:
 cargo install --locked --path .
 ```
 
-`cargo install --locked --path .` installs the release executables to Cargo's bin directory, usually `~/.cargo/bin`, using the validated `Cargo.lock` dependency set that supports the declared Rust 1.87 minimum.
+`cargo install --locked --path .` installs one Cargo package to Cargo's bin directory, usually `~/.cargo/bin`, using the validated `Cargo.lock` dependency set that supports the declared Rust 1.87 minimum. With the default Linux features, it installs and updates two executables together:
 
-Linux builds enable IBus by default. Complete the one-time [IBus registration and input-source setup](linux-desktop.md#ibus-setup) after installing. To build an X11-only daemon without the IBus dependency:
+- `parakit`: the CLI and dictation daemon.
+- `parakit-ibus`: the input-method helper; see [automatic startup and upgrades](linux-desktop.md#ibus-setup).
+
+Linux builds enable IBus by default, including when adding `--features cuda`. The IBus development package in the [native dependency table](#native-dependencies) is required even when upgrading an existing X11 installation. Follow the [IBus setup](linux-desktop.md#ibus-setup) when choosing native input. To build an X11-only daemon without IBus support:
 
 ```bash
 cargo install --locked --path . --no-default-features --features bundled,daemon
