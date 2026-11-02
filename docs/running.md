@@ -48,7 +48,7 @@ For a completed transcription, verbose output reports `release_to_worker`, `infe
 
 GPU-capable builds default to `--device auto`. In `auto`, CrispASR asks ggml for the best backend device and falls back to CPU when no GPU backend is available. On hybrid laptops, ggml prefers a discrete GPU over an integrated GPU.
 
-Windows bundle backend selection is covered in [../scripts/windows/README.md#backend-requirements](../scripts/windows/README.md#backend-requirements). At runtime, `--device` controls CPU/GPU use inside the installed build.
+Choose the build backend with the [Windows bundle scripts](../scripts/windows/README.md#backend-requirements). At runtime, `--device` controls CPU/GPU use inside the installed build.
 
 ```bash
 parakit start --device auto
@@ -124,29 +124,13 @@ parakit: idle
 last transcript: 42 bytes
 ```
 
-Use `--verbose` for a detail block with the microphone, model, device, uptime, dictation count, and more:
+Use `--verbose` to inspect the daemon's process, uptime, dictation count, microphone, model and device settings, paste mode, sounds, cleaning, logging, and history capacity:
 
-```text
-$ parakit --verbose status
-parakit: idle
-last transcript: 42 bytes
-  pid:        41213
-  uptime:     1h 23m
-  dictations: 17
-  mic:        USB Speech Mic Mono, 48000 Hz mono input -> 16000 Hz mono model, F32
-  model:      parakeet-ultra-q8_0.gguf (Q8_0 (674 MB))
-  residency:  loaded
-  model idle: 10 minutes
-  device:     cpu (parakeet, 8 threads)
-  paste mode: standard
-  sounds:     on
-  cleaning:   on (safe, 29 rules)
-  logging:    JSONL to /home/user/.parakit/logs
-  history:    3 of 10
-  hotkey:     auto
+```bash
+parakit --verbose status
 ```
 
-The detail block reflects the daemon's own state at query time, not the querying process's flags. The `hotkey` line is Linux-only. `daemon.verbose = true` does not expand `parakit status`; pass the querying command's global `--verbose` flag as shown. Before startup details are available, it prints `detail unavailable (daemon starting)` after the two lines above.
+Selected presets and Qwen controls appear when applicable; Linux adds the hotkey and insertion backend. Model residency and reload errors are described under [idle offload](#idle-model-offload). These values reflect the running daemon. `daemon.verbose = true` does not expand `parakit status`; pass `--verbose` to the status command itself. Before startup details are available, it prints `detail unavailable (daemon starting)`.
 
 ## Idle Model Offload
 
@@ -162,8 +146,6 @@ Other programs can fill the GPU while the model is offloaded. Before a bundled b
 
 This check does not reserve memory or bound the workspace for long audio. Later allocations can still exhaust memory and abort the daemon; `model_idle_minutes = 0` avoids repeated offload/reload but does not prevent out-of-memory failures.
 
-Qwen's Metal requirement accounts for the [main-model and audio-tower mappings](dev/memory.md#metal-qwen-reload-accounting). A model's download size is not its runtime memory requirement; working space depends on the artifact, audio length, generation settings, and backend.
-
 Parakeet startup warms one second of synthetic audio on CPU, or five seconds on GPU; reload uses one second. Qwen startup and reload instead transcribe an embedded 11-second human speech sample with automatic language and a fixed 512-token budget. Readiness text is discarded and the user's language and token budget are restored before dictation. A deliberately tiny user budget can therefore fail the actual transcription without preventing readiness. Longer dictations allocate larger buffers as needed; the first use of a new shape can also incur backend compilation work.
 
 `parakit --verbose status` reports `loaded`, `loading`, or `offloaded`, the effective timeout, and the last reload error until a successful reload clears it. Residency is separate from the recording/transcribing phase. Queries never load the model. During startup, residency can be unavailable until the worker publishes its initial state.
@@ -173,8 +155,6 @@ Session destruction releases owned CPU/GPU allocations, but process and driver c
 ## Model Cache
 
 Without a CLI or configured model selection, parakit uses the hosted [Parakeet Ultra Q8_0 GGUF model](https://huggingface.co/cstr/parakeet-ultra-GGUF). `PARAKIT_MODELS_DIR` overrides the model directory. Without that override, `XDG_CACHE_HOME` is honored on Linux and macOS, both fall back to `~/.cache/parakit/models/`, and Windows uses `%LOCALAPPDATA%\parakit\Cache\models\`.
-
-An upgrade uses Ultra when no model selection is configured, downloading it if needed. Existing `daemon.model` and `daemon.model_preset` selections are preserved. To keep NVIDIA v3, use `--model-preset parakeet-v3` or set `daemon.model_preset = "parakeet-v3"`.
 
 Useful commands:
 
@@ -229,7 +209,7 @@ Apply the settings with the [configuration restart workflow](configuration.md#va
 | `parakeet-ultra` (default) | [cstr/parakeet-ultra-GGUF](https://huggingface.co/cstr/parakeet-ultra-GGUF) | `parakeet-ultra-q8_0.gguf` |
 | `parakeet-redux` | [cstr/parakeet-redux-GGUF](https://huggingface.co/cstr/parakeet-redux-GGUF) | `parakeet-redux-q8_0.gguf` |
 
-**Redux is for testing and checkpoint comparisons, not normal dictation.** Its reconstructed weights use the ordinary Parakeet backend without packed ternary acceleration or Moondream's VAD head. Photon's 178 MB footprint, [published CPU results](https://huggingface.co/moondream/parakeet-redux#performance), and pause-based segmentation therefore do not describe Parakit. In our [CPU comparison](dev/quality.md#parakeet-cpu-comparison), Redux was slower than Ultra and used similar RAM.
+**Redux is for testing and checkpoint comparisons, not normal dictation.** Its reconstructed weights use the ordinary Parakeet backend without packed ternary acceleration or Moondream's VAD head. Photon's 178 MB footprint, [published CPU results](https://huggingface.co/moondream/parakeet-redux#performance), and pause-based segmentation therefore do not describe Parakit. Use the [CPU comparison procedure](dev/quality.md#parakeet-cpu-comparison) to compare presets on your machine.
 
 Presets use the exact file above and check the local cache before contacting Hugging Face. Once fetched, they work offline. All presets except v3 select fixed provider commits from the model catalog; `--force` downloads that selected revision again. Parakeet v3 keeps its existing revision policy and top-level cache path; the other presets use the revision-specific Hub cache layout described below. Previously downloaded files remain usable with `-m`; changing a preset revision selects a separate cache destination. `fetch --model-preset` does not read daemon configuration. It accepts `--force` and conflicts with a custom source, `--file`, and `--sha256`.
 
@@ -271,7 +251,7 @@ For mirrors, authentication, proxies, and TLS interception, see [corporate-netwo
 
 parakit follows the OS default input device and avoids monitor/loopback/virtual sources unless no better input is available. When CPAL reports a mono stream with the same sample rate and sample format as the default stream, parakit opens the mono stream. Otherwise it opens the default stream and downmixes multi-channel input to mono before resampling and before model inference. The model input is always 16 kHz mono PCM.
 
-Microphone capture and WAV helpers share [native resampling](dev/quality.md#qwen-and-moondream-comparisons) on every platform and model when the input is not already 16 kHz. They drain the final filter tail to the recording's nominal sample count and reset between recordings. No Python preprocessing step or additional startup option is needed.
+Microphone capture and WAV helpers use the same [native resampling](dev/quality.md#qwen-and-moondream-comparisons) when input is not already 16 kHz; no Python preprocessing or additional startup option is needed.
 
 On Linux and macOS, the microphone stream stays warm while the daemon is running; a bounded ring buffer feeds a drain thread that keeps 350 ms of pre-roll so the beginning of an utterance is less likely to be clipped. On Windows, parakit pauses the input stream while idle so `audiodg.exe` and driver-level microphone processing do not burn CPU when no recording is active. Recording start/stop is event-driven. Device probes run on a separate thread, normally every five idle seconds, so a slow probe does not delay recording controls.
 

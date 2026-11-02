@@ -18,13 +18,6 @@ To keep the selection, edit the file printed by `parakit config path`:
 [daemon]
 model_preset = "qwen3-asr-1.7b"
 
-[qwen]
-language = "auto"
-max_new_tokens = 512
-context_on_default_hotkey = false
-context_dictations = 3
-context_max_age_minutes = 10
-
 [cleaning]
 enabled = false
 ```
@@ -52,7 +45,7 @@ On Windows, registering the context shortcut also consumes `AltGr+Space` on AltG
 
 The worker selects prior dictations across all apps using the configured count and age limits, orders them oldest first, and keeps the newest 1,500 Unicode characters, including newline separators. Age includes time spent suspended. It uses stored cleaned text, or raw text when cleaning is disabled.
 
-Context reuses [daemon history](../running.md#daemon-control); `daemon.transcript_history` limits available entries and never grows to satisfy a context request. History starts empty after a daemon restart and is not loaded from JSONL logs. Setting either `context_dictations` or `daemon.transcript_history` to zero disables context and its extra shortcut.
+Context draws only from [daemon history](../running.md#daemon-control); it neither increases retention nor loads prior text from JSONL logs. Setting either `context_dictations` or `daemon.transcript_history` to zero disables context and its extra shortcut.
 
 Empty, expired, disabled, or unusable context falls back to ordinary dictation. Captures shorter than one second also use ordinary transcription, retaining the existing silence padding.
 
