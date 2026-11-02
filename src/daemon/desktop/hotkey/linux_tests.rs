@@ -187,17 +187,22 @@ fn passive_listen_handler_emits_transitions_without_returning_suppression() {
         }
     }
 
-    let state = Arc::new(Mutex::new(HotkeyState::default()));
-    let (tx, rx) = crossbeam_channel::unbounded();
-    handle_listen_event(event(EventType::KeyPress(Key::ControlLeft)), &state, &tx);
-    handle_listen_event(event(EventType::KeyPress(Key::Space)), &state, &tx);
-    let pressed = rx.recv().unwrap();
-    handle_listen_event(event(EventType::KeyRelease(Key::Space)), &state, &tx);
-    let released = rx.recv().unwrap();
+    for expected_mode in [DictationMode::Plain, DictationMode::WithContext] {
+        let state = Arc::new(Mutex::new(HotkeyState::new(true)));
+        let (tx, rx) = crossbeam_channel::unbounded();
+        handle_listen_event(event(EventType::KeyPress(Key::ControlLeft)), &state, &tx);
+        if expected_mode == DictationMode::WithContext {
+            handle_listen_event(event(EventType::KeyPress(Key::Alt)), &state, &tx);
+        }
+        handle_listen_event(event(EventType::KeyPress(Key::Space)), &state, &tx);
+        let pressed = rx.try_recv().expect("hotkey press should be delivered");
+        handle_listen_event(event(EventType::KeyRelease(Key::Space)), &state, &tx);
+        let released = rx.try_recv().expect("hotkey release should be delivered");
 
-    assert!(matches!(pressed, HotkeyTransition::Pressed { .. }));
-    assert!(matches!(released, HotkeyTransition::Released { .. }));
-    assert!(rx.try_recv().is_err());
+        assert!(matches!(pressed, HotkeyTransition::Pressed { mode, .. } if mode == expected_mode));
+        assert!(matches!(released, HotkeyTransition::Released { .. }));
+        assert!(rx.try_recv().is_err());
+    }
 }
 
 #[test]

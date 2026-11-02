@@ -505,8 +505,8 @@ fn ctrl_shift_space_does_not_start_or_suppress() {
 fn unrelated_keys_pass_through() {
     let now = base_time();
     let mut state = HotkeyState::default();
-    assert_eq!(state.press(Key::KeyA, now), (None, false));
-    assert_eq!(state.release(Key::KeyA, at(now, 10)), (None, false));
+    assert_eq!(state.press(Key::Other, now), (None, false));
+    assert_eq!(state.release(Key::Other, at(now, 10)), (None, false));
 }
 
 #[test]

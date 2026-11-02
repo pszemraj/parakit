@@ -1,7 +1,7 @@
 //! macOS CoreGraphics push-to-talk hotkey tap.
 
 use super::{
-    send_hotkey_transition, HotkeyAction, HotkeyBackend, HotkeyState, ModifierState,
+    send_hotkey_transition, HotkeyAction, HotkeyBackend, HotkeyState, Key, ModifierState,
     MACOS_LEFT_COMMAND_KEYCODE, MACOS_LEFT_OPTION_KEYCODE, MACOS_LEFT_SHIFT_KEYCODE,
     MACOS_PTT_LEFT_CONTROL_KEYCODE, MACOS_PTT_SPACE_KEYCODE, MACOS_RIGHT_COMMAND_KEYCODE,
     MACOS_RIGHT_CONTROL_KEYCODE, MACOS_RIGHT_OPTION_KEYCODE, MACOS_RIGHT_SHIFT_KEYCODE,
@@ -14,7 +14,6 @@ use crate::daemon::macos::cgevent_ffi::{
 };
 use crate::daemon::recording::HotkeyTransition;
 use crossbeam_channel::Sender;
-use rdev::Key;
 use std::ffi::c_void;
 use std::ptr;
 use std::sync::atomic::{AtomicPtr, Ordering};

@@ -11,12 +11,8 @@ use crate::daemon::recording::HotkeyTransition;
 #[cfg(target_os = "linux")]
 use anyhow::Context as _;
 use crossbeam_channel::Sender;
-#[cfg(all(target_os = "windows", test))]
-use rdev::Key;
-#[cfg(target_os = "macos")]
-use rdev::Key;
 #[cfg(target_os = "linux")]
-use rdev::{EventType, Key};
+use rdev::EventType;
 use std::io::Write as _;
 #[cfg(not(target_os = "macos"))]
 use std::sync::Arc;
@@ -60,6 +56,47 @@ pub(crate) const MACOS_RIGHT_CONTROL_KEYCODE: u16 = 62;
 
 #[cfg(any(not(target_os = "windows"), test))]
 const HOTKEY_DEBOUNCE: Duration = Duration::from_millis(150);
+
+/// Keys relevant to push-to-talk, independent of the native event backend.
+#[cfg(any(not(target_os = "windows"), test))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(
+    not(target_os = "linux"),
+    allow(
+        dead_code,
+        reason = "native backends synchronize modifier state directly; Linux emits individual key transitions"
+    )
+)]
+enum Key {
+    ControlLeft,
+    ControlRight,
+    ShiftLeft,
+    ShiftRight,
+    Alt,
+    AltGr,
+    MetaLeft,
+    MetaRight,
+    Space,
+    Other,
+}
+
+#[cfg(target_os = "linux")]
+impl From<rdev::Key> for Key {
+    fn from(key: rdev::Key) -> Self {
+        match key {
+            rdev::Key::ControlLeft => Self::ControlLeft,
+            rdev::Key::ControlRight => Self::ControlRight,
+            rdev::Key::ShiftLeft => Self::ShiftLeft,
+            rdev::Key::ShiftRight => Self::ShiftRight,
+            rdev::Key::Alt => Self::Alt,
+            rdev::Key::AltGr => Self::AltGr,
+            rdev::Key::MetaLeft => Self::MetaLeft,
+            rdev::Key::MetaRight => Self::MetaRight,
+            rdev::Key::Space => Self::Space,
+            _ => Self::Other,
+        }
+    }
+}
 
 /// Hotkey backend preference.
 #[derive(
@@ -404,7 +441,7 @@ impl HotkeyState {
             Key::MetaLeft => self.modifiers.meta_left = pressed,
             Key::MetaRight => self.modifiers.meta_right = pressed,
             Key::Space => self.space = pressed,
-            _ => {}
+            Key::Other => {}
         }
     }
 }
@@ -553,11 +590,11 @@ fn handle_key_event(
         EventType::KeyPress(key) => state
             .lock()
             .expect("hotkey state lock poisoned")
-            .press(key, now),
+            .press(key.into(), now),
         EventType::KeyRelease(key) => state
             .lock()
             .expect("hotkey state lock poisoned")
-            .release(key, now),
+            .release(key.into(), now),
         _ => return false,
     };
 
