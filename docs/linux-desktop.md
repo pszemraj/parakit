@@ -1,10 +1,10 @@
 # Linux Desktop Input
 
-Parakit supports IBus native input and the existing X11 insertion route. Choose a transport under [insertion selection](#insertion-selection-and-recovery).
+Parakit supports native IBus commits and X11 clipboard paste or direct typing. Choose a transport under [insertion selection](#insertion-selection-and-recovery).
 
 Push-to-talk uses `Ctrl+Space`; Qwen3-ASR also supports `Ctrl+Alt+Space` for [prior-dictation context](models/qwen3-asr.md#prior-dictation-context):
 
-- On X11, `auto` and `desktop` use the registered global shortcut, preserving the existing workflow.
+- On X11, `auto` and `desktop` use the registered global shortcut.
 - On GNOME Wayland, they use the Parakit IBus engine. Push-to-talk works while that source is selected and an editable field has focus. This is focused-field support, not a global Wayland shortcut.
 - `--hotkey-backend ibus` explicitly selects focused-field capture on either session type.
 - The default paths do not read `/dev/input` or require `/dev/uinput`.
@@ -46,7 +46,7 @@ parakit --verbose status
 
 `ibus status` reports the registration file, build support, connection, engine discovery, and active engine. Registration does not prove that the current application accepts native commits. Run `parakit test-paste "hello from parakit"` in a disposable terminal, then inspect the inserted prompt text and [insertion outcome](logging.md#insertion-outcomes).
 
-After an upgrade, install matching `parakit` and `parakit-ibus` binaries and restart the daemon. Log out and back in to reload the helper when its protocol changes, including the Qwen context-shortcut upgrade. Re-run `ibus install` when upgrading from a component that launched `parakit ibus engine`, or if the executable path or keyboard layout changed. To remove the integration, first select another input source, remove Parakit from the desktop's source list, then run:
+After an upgrade, install matching `parakit` and `parakit-ibus` binaries and restart the daemon. Log out and back in to reload the helper when its protocol changes. Re-run `ibus install` when upgrading from a component that launched `parakit ibus engine`, or if the executable path or keyboard layout changed. To remove the integration, first select another input source, remove Parakit from the desktop's source list, then run:
 
 ```bash
 sudo "$(command -v parakit)" ibus uninstall
@@ -67,13 +67,13 @@ Close existing application instances before changing their launch options. Chrom
 
 ## Insertion Selection And Recovery
 
-`--insertion-backend ibus` requires engine-owned IBus push-to-talk. `--insertion-backend x11` selects the existing X11 clipboard/direct route. The default `auto` follows the hotkey route: native delivery for IBus hotkeys and X11 for all others, including the evdev proxy. To use native delivery on X11, select `--hotkey-backend ibus`; a registered X11 grab can invalidate an input-method target. Set `daemon.insertion_backend` to keep the transport choice across starts. Explicit `direct` mode retains X11 typing with automatic transport selection and conflicts with forced IBus insertion.
+`--insertion-backend ibus` requires engine-owned IBus push-to-talk. `--insertion-backend x11` selects X11 clipboard paste or direct typing. The default `auto` follows the hotkey route: native delivery for IBus hotkeys and X11 for all others, including the evdev proxy. To use native delivery on X11, select `--hotkey-backend ibus`; a registered X11 grab can invalidate an input-method target. Set `daemon.insertion_backend` to keep the transport choice across starts. Explicit `direct` mode retains X11 typing with automatic transport selection and conflicts with forced IBus insertion.
 
 Clipboard recovery needs XWayland clipboard access; native IBus submission itself does not. Inspect the [insertion outcome](logging.md#insertion-outcomes) before retrying native delivery. [Paste modes](running.md#insertion) control terminal tabs and newlines; use [daemon history](running.md#daemon-control) for blocked text and explicit copying.
 
 ## X11 Sessions
 
-Start Parakit from a terminal opened in the current graphical login. General foreground and background commands are in [running.md#background-use](running.md#background-use). `x11-global-hotkey` forces registered global capture. The legacy insertion route can be selected with `--insertion-backend x11`.
+Start Parakit from a terminal opened in the current graphical login. Use the [background commands](running.md#background-use); `x11-global-hotkey` forces registered global capture.
 
 Tmux is fine when the tmux server was started from the current desktop login. A tmux server that survived a GNOME logout/login can keep stale `DISPLAY` or `XAUTHORITY` values from the old session. In that case, `parakit doctor` may report an X11 error such as `Connection refused`.
 
@@ -87,7 +87,7 @@ On GNOME/Ubuntu, check the visible shortcuts first:
 
 1. Open Settings > Keyboard > Keyboard Shortcuts.
 2. Check Typing or Input Sources for `Ctrl+Space` and, for Qwen context, `Ctrl+Alt+Space`.
-3. Disable or change a conflicting binding, then rerun `parakit --verbose doctor` to inspect both registrations on X11. A conflict on the extra context shortcut warns at daemon startup without blocking ordinary dictation.
+3. Disable or change a conflicting binding, then rerun `parakit --verbose doctor` to inspect both registrations on X11. See [Qwen shortcut availability](models/qwen3-asr.md#prior-dictation-context) for context-only conflicts.
 
 Useful command-line checks:
 
@@ -109,7 +109,7 @@ Native IBus requires an eligible focused field and blocks fields identified as p
 
 IBus can miss Space's release during an input-source switch. If the next shortcut does not start recording, release it fully and press again. Waiting for that release prevents held-key repeats from starting another dictation.
 
-The legacy X11 route compares the active X11 window. A clear focus change prevents the paste chord; non-direct modes still follow the shared clipboard policy. If focus capture or recheck fails because X11 is transiently unavailable, parakit pastes anyway. The transcript remains available through daemon history when enabled. Parakit does not inspect application internals with AT-SPI.
+The X11 route compares the active X11 window. A clear focus change prevents the paste chord; non-direct modes follow the shared clipboard policy. If focus capture or recheck fails because X11 is transiently unavailable, parakit pastes anyway. The transcript remains available through daemon history when enabled. Parakit does not inspect application internals with AT-SPI.
 
 Batch paste follows the shared [modifier wait and clipboard-retention behavior](running.md#clipboard-staging-and-restore).
 
@@ -128,7 +128,7 @@ Because this backend is passive, it cannot prevent the literal Space key from re
 
 ## Evdev Proxy
 
-The evdev-proxy experimental backend is for testing the old keyboard proxy path. It grabs a physical keyboard event device, suppresses the dictation chords' Space events, and forwards other key events through `/dev/uinput`.
+The experimental evdev proxy grabs a physical keyboard event device, suppresses the dictation chords' Space events, and forwards other key events through `/dev/uinput`.
 
 Only this backend needs at least one readable keyboard event device that exposes both `Ctrl` and `Space`, plus writable `/dev/uinput`. `parakit doctor --hotkey-backend evdev-proxy-experimental` reports unreadable non-keyboard event devices, but they do not block startup when a usable hotkey keyboard candidate is readable.
 

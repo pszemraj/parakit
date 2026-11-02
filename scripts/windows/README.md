@@ -23,9 +23,7 @@ Windows builds need an installed runnable directory, not only `parakit.exe`. Cri
 
 The script creates `target\parakit-windows-x86_64-<backend>`, installs it to `%LOCALAPPDATA%\Programs\parakit`, and adds that install directory to the Windows User `PATH`.
 
-The scripts do not edit the system `PATH`, create firewall rules, open TCP ports, create symlinks or junctions, map temporary drive letters, require Windows Developer Mode, or require administrator rights.
-
-The installer is intentionally per-user. It refuses system locations such as `C:\Windows` and `C:\Program Files\...`; those paths require admin rights on normal Windows systems and are the wrong default for a developer or corporate laptop.
+Installation uses the User `PATH` and requires neither administrator rights nor Windows Developer Mode. It refuses system locations such as `C:\Windows` and `C:\Program Files\...`. The scripts leave the system `PATH` unchanged and use ordinary directories, without symlinks, junctions, drive mappings, firewall rules, or TCP listeners.
 
 ## Backend Selection
 

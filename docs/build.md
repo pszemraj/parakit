@@ -1,6 +1,6 @@
 # Build
 
-parakit is a Rust binary that links to the vendored [CrispASR](https://github.com/CrispStrobe/CrispASR) submodule. The default build is CPU-only and may use detected CPU BLAS libraries.
+Parakit is a Rust application that links to the vendored [CrispASR](https://github.com/CrispStrobe/CrispASR) submodule. The default build is CPU-only and may use detected CPU BLAS libraries.
 
 Command examples use a POSIX shell unless the surrounding section is Windows-specific. Windows-only commands are shown as `bat` or `powershell`.
 
@@ -44,7 +44,7 @@ Linux developer install:
 cargo install --locked --path .
 ```
 
-`cargo install --locked --path .` installs one Cargo package to Cargo's bin directory, usually `~/.cargo/bin`, using the validated `Cargo.lock` dependency set that supports the declared Rust 1.87 minimum. With the default Linux features, it installs and updates two executables together:
+This installs the release build to Cargo's bin directory, usually `~/.cargo/bin`, using the committed `Cargo.lock`. Default Linux features install and update two executables together:
 
 - `parakit`: the CLI and dictation daemon.
 - `parakit-ibus`: the input-method helper; see [automatic startup and upgrades](linux-desktop.md#ibus-setup).
@@ -134,7 +134,7 @@ Supported values:
 | `generic`, `system`, `blas`, `on`, `yes`, `true`, `1` | `GGML_BLAS=ON`, `GGML_BLAS_VENDOR=Generic`. |
 | `accelerate`, `apple` | Apple Accelerate. Apple targets only. |
 
-Windows OpenBLAS layout and bundling behavior are in [../scripts/windows/README.md#blas](../scripts/windows/README.md#blas).
+Windows OpenBLAS layout and bundling behavior are in the [Windows build guide](../scripts/windows/README.md#blas).
 
 Ubuntu/Debian OpenBLAS:
 
