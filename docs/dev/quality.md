@@ -356,6 +356,8 @@ cargo test --features metal --bin parakit \
 
 Select `gpu` and a fresh report path for Metal. `PARAKIT_LIVE_SECOND_WAV` optionally adds another loaded/offloaded pair. Inspect the recorded transcripts and speech-boundary result.
 
+Set `PARAKIT_LIVE_REQUIRE_MATCHING_EDGES=1` to fail the test when the first or last recognized words change after reload. Without it, boundary matching is reported separately from pipeline acceptance.
+
 For allocation context, see [memory accounting and measurement](memory.md).
 
 ### Clipboard Checks
@@ -394,9 +396,11 @@ While one entry is selected, add dictations and confirm preview and clipboard co
 
 Repeat `transcribe-file --audio` to run ordered inputs on one loaded engine. [Worker simulation](#ptt-worker-simulation) accepts repeated `--simulate-ptt-audio` paths; it replays the full sequence per cycle before the idle interval. Its failure path reads history back and rejects replacement of the preceding successful transcript. See the [native Qwen sequence](model-validation.md#qwen-options-long-input-and-reload) for the short/long/short acceptance case.
 
-The loaded-session fault driver runs on Linux and macOS with an explicit Qwen model:
+The loaded-session fault driver runs on Linux and macOS with an explicit Qwen model. Build the daemon, WAV helper, and test harness in the same isolated target directory before running it:
 
 ```bash
+cargo build --bin parakit --example transcribe-file
+cargo test --test native_correctness_build --no-run
 python tests/native/run_qwen_faults.py \
   --native-build <isolated-target>/debug/build/parakit-<id>/out/build \
   --binary-dir <isolated-target>/debug \
@@ -406,7 +410,7 @@ python tests/native/run_qwen_faults.py \
   --output target/tmp/qwen-native-faults
 ```
 
-First run `cargo test --test native_correctness_build` in the same isolated target directory to build the loaded-session test harness. Run its ignored Qwen cases through the driver, which supplies native defaults in each test process's launch environment. Use the matching completed native build directory containing `compile_commands.json`, and a fresh output directory. CPU is the default; for a GPU run, build both binaries and the harness with the matching accelerator feature, then pass `--device gpu`. On macOS the driver preserves the dylib basename and version aliases and sets `DYLD_LIBRARY_PATH` to load its private fault library. It compiles a separate corrected C API copy and relinks its own test library; normal binaries and vendor sources are unchanged.
+Run the ignored Qwen cases through the driver, which supplies native defaults in each test process's launch environment. Use the matching completed native build directory containing `compile_commands.json`, and a fresh output directory. CPU is the default; for a GPU run, add the matching accelerator feature to both Cargo commands, then pass `--device gpu`. On macOS the driver preserves the dylib basename and version aliases and sets `DYLD_LIBRARY_PATH` to load its private fault library. It compiles a separate corrected C API copy and relinks its own test library; normal binaries and vendor sources are unchanged.
 
 The driver checks:
 
