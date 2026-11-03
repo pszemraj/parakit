@@ -394,10 +394,10 @@ fn run_daemon(cli: &Cli, start: &StartCli) -> Result<()> {
         recipe,
     } = open_cli_engine(start, &config, verbose, cli.quiet, &log)?;
     let model_dtype = model_dtype_label(&model_path);
-    let context_enabled = engine.qwen_options().is_some()
+    let context_shortcut_enabled = engine.qwen_options().is_some()
         && config
             .qwen
-            .context_enabled(config.daemon.effective_transcript_history());
+            .context_shortcut_enabled(config.daemon.effective_transcript_history());
 
     // Resolve startup metadata once for the banner and IPC status.
     let model_name = model_file_name(&model_path);
@@ -516,13 +516,17 @@ fn run_daemon(cli: &Cli, start: &StartCli) -> Result<()> {
     ipc_state.activity.ready();
     #[cfg(target_os = "linux")]
     if let Some(client) = &focus_source.client {
-        client.set_ptt_sender(Some(hotkey_tx.clone()), context_enabled);
+        client.set_ptt_sender(Some(hotkey_tx.clone()), context_shortcut_enabled);
         client.set_ready(true);
     }
     log.ready();
 
-    let hotkey_result =
-        daemon::hotkey::run_grab_loop(hotkey_tx, hotkey_backend, context_enabled, Arc::clone(&log));
+    let hotkey_result = daemon::hotkey::run_grab_loop(
+        hotkey_tx,
+        hotkey_backend,
+        context_shortcut_enabled,
+        Arc::clone(&log),
+    );
     finish_hotkey_loop(hotkey_result, &ipc_state);
 
     #[cfg(target_os = "linux")]

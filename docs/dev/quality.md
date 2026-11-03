@@ -307,7 +307,8 @@ Check:
 - releasing Control before Space, and Space before Control, each stops recording once;
 - releasing Alt or Option during contextual recording preserves the press-time mode and recording;
 - an occupied optional context shortcut warns without disabling the original shortcut on registered backends;
-- enabling `qwen.context_on_default_hotkey` and restarting applies context to the original shortcut; disabling it and restarting restores ordinary dictation;
+- enabling `qwen.context_on_default_hotkey` and restarting applies context to the original shortcut and leaves the extra shortcut unregistered; disabling it and restarting restores ordinary dictation and the extra shortcut;
+- on Windows, `Ctrl+Right Alt+Space` and, on AltGr layouts, `AltGr+Space` are consumed without recording while the extra shortcut is registered;
 - focus changes do not paste into the new target;
 - short speech is padded and transcribed, with ordinary inference below one second; silence leaves history and the receiving application unchanged;
 - `--quiet` emits no stdout;

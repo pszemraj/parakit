@@ -16,7 +16,7 @@ An older `parakit-ibus` helper cannot attach to a daemon using a newer bridge pr
 
 ## Qwen Context Has No Effect
 
-Confirm a Qwen3-ASR model is active and that `parakit history --plain` contains recent dictations. Inspect `parakit config show` and the [context settings and eligibility rules](models/qwen3-asr.md#prior-dictation-context), then restart the daemon after any configuration change. On registered X11 or Windows, use `parakit --verbose doctor` before startup to inspect the optional context shortcut.
+Confirm a Qwen3-ASR model is active and that `parakit history --plain` contains recent dictations. Inspect `parakit config show` and the [context settings and eligibility rules](models/qwen3-asr.md#prior-dictation-context), then restart the daemon after any configuration change. Request context with `Ctrl+Left Alt+Space` on Linux and Windows, or with `Ctrl+Space` when `qwen.context_on_default_hotkey = true`, which leaves the extra shortcut inactive. On registered X11 or Windows, use `parakit --verbose doctor` before startup to inspect the optional context shortcut.
 
 ## Literal Space Appears
 

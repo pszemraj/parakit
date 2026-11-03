@@ -35,13 +35,13 @@ Hold the shortcut while speaking:
 | Intent | Linux and Windows | macOS |
 | --- | --- | --- |
 | Ordinary dictation, ignoring prior context | `Ctrl+Space` | `Left Control+Space` |
-| Request prior-dictation context | `Ctrl+Alt+Space` | `Left Control+Left Option+Space` |
+| Request prior-dictation context | `Ctrl+Left Alt+Space` | `Left Control+Left Option+Space` |
 
-These are the defaults. Set `context_on_default_hotkey = true` to request context with the original shortcut too; both shortcuts then request context.
+These are the defaults. Set `context_on_default_hotkey = true` to request context with the original shortcut instead; the extra shortcut then adds nothing, so Parakit leaves it unregistered and does not intercept it.
 
 Context intent is fixed when Space is pressed, so releasing Alt or Option while speaking does not change it or stop recording. Releasing Control or Space stops recording.
 
-On Windows, registering the context shortcut also consumes `AltGr+Space` on AltGr layouts, although it does not start recording. To preserve `AltGr+Space`, set `context_dictations = 0` and restart; ordinary dictation remains available.
+Use the left Alt key on Linux and Windows. On Windows, `Ctrl+Right Alt+Space` is consumed without starting recording, because Windows reports AltGr as Left Control plus Right Alt; registering the context shortcut also consumes `AltGr+Space` on AltGr layouts. To preserve `AltGr+Space`, set `context_on_default_hotkey = true` to keep context on the original shortcut, or set `context_dictations = 0` to disable context; restart either way, and ordinary dictation remains available.
 
 The worker selects prior dictations across all apps using the configured count and age limits, orders them oldest first, and keeps the newest 1,500 Unicode characters, including newline separators. Age includes time spent suspended. It uses stored cleaned text, or raw text when cleaning is disabled.
 
@@ -53,7 +53,7 @@ Qwen can copy earlier text instead of recognizing the audio, including on longer
 
 Use `--verbose` or the [inference log fields](../logging.md#transcription-record-fields) to inspect the shortcut mode, context length, and whether a retry occurred.
 
-The extra shortcut is inactive for other models. If its registered chord is already owned, Parakit warns and keeps the original shortcut usable; the original-shortcut configuration flag remains available. Linux IBus upgrades need the matching `parakit-ibus` helper and an [engine reload](../linux-desktop.md#ibus-setup).
+The extra shortcut is inactive for other models and when `context_on_default_hotkey = true`. If its registered chord is already owned, Parakit warns and keeps the original shortcut usable; `context_on_default_hotkey = true` requests context there instead. Linux IBus upgrades need the matching `parakit-ibus` helper and an [engine reload](../linux-desktop.md#ibus-setup).
 
 ## Long Audio And Inference
 

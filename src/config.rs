@@ -135,6 +135,13 @@ impl QwenConfig {
     }
 
     /// # Returns
+    /// Whether the extra context shortcut adds a mode: context is available and
+    /// the original shortcut does not already request it.
+    pub(crate) fn context_shortcut_enabled(&self, history_limit: usize) -> bool {
+        self.context_enabled(history_limit) && !self.context_on_default_hotkey()
+    }
+
+    /// # Returns
     /// Maximum context age in minutes, defaulting to ten.
     pub(crate) fn context_max_age_minutes(&self) -> u64 {
         self.context_max_age_minutes.unwrap_or(10)
@@ -376,7 +383,7 @@ pub(crate) const TEMPLATE: &str = r#"# parakit config.toml
 # Applies only to Qwen3-ASR. CLI --qwen-max-new-tokens overrides it.
 # max_new_tokens = 512
 
-# Use recent dictations with the original Ctrl+Space shortcut too.
+# Use recent dictations with the original Ctrl+Space shortcut; the extra context shortcut is then inactive.
 # context_on_default_hotkey = false
 
 # Prior dictations to use as context, limited by daemon.transcript_history; 0 disables context.
