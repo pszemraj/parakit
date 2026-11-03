@@ -1,13 +1,13 @@
 [package]
 name = "parakit"
-version = "0.5.2"
+version = "0.5.3"
 edition = "2021"
 rust-version = "1.87"
-description = "Push-to-talk desktop dictation daemon backed by NVIDIA Parakeet through CrispASR."
+description = "Push-to-talk desktop dictation daemon running local Parakeet and Qwen3-ASR models through CrispASR."
 license = "MIT"
 readme = "README.md"
 repository = "https://github.com/pszemraj/parakit.git"
-keywords = ["asr", "dictation", "parakeet", "speech-to-text"]
+keywords = ["asr", "dictation", "parakeet", "qwen3-asr", "speech-to-text"]
 categories = ["command-line-utilities", "multimedia::audio"]
 publish = false
 default-run = "parakit"
