@@ -84,7 +84,7 @@ pub struct InferenceLogFields {
     /// absent for other backends.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub context_chars: Option<usize>,
-    /// Whether copied context caused an ordinary inference retry; absent for other backends.
+    /// Whether a contextual error, empty output, or copied context caused an ordinary inference retry; absent for other backends.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub context_retried: Option<bool>,
     /// Version reported by the linked native C API.

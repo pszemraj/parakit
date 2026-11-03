@@ -110,10 +110,13 @@ fn context_probe(
             !usage.retried,
             "{label}: ordinary inference cannot retry context"
         );
-    } else if std::env::var("PARAKIT_TEST_QWEN_FAILURE").as_deref() == Ok("context-copy") {
+    } else if matches!(
+        std::env::var("PARAKIT_TEST_QWEN_FAILURE").as_deref(),
+        Ok("context-copy" | "context-embed")
+    ) {
         assert!(
             usage.retried,
-            "{label}: copied context must trigger a retry"
+            "{label}: copied or failed context must trigger a retry"
         );
     }
     Ok(text)
@@ -151,7 +154,20 @@ fn qwen_context_is_scoped_to_each_transcription() {
 
 #[test]
 #[ignore = "run through tests/native/run_qwen_faults.py with an explicit Qwen model"]
-fn qwen_context_error_does_not_affect_next_transcription() {
+fn qwen_context_error_retries_without_context() {
+    let (engine, audio, context) = qwen_context_fixture();
+    let ordinary = context_probe(&engine, &audio.samples, "ordinary-baseline", None).unwrap();
+    assert!(!ordinary.trim().is_empty());
+    // The probe asserts that the failed contextual call was retried.
+    let retried = context_probe(&engine, &audio.samples, "context-error", Some(&context)).unwrap();
+    assert_eq!(retried, ordinary, "the retry must be ordinary inference");
+    let after = context_probe(&engine, &audio.samples, "ordinary-after-retry", None).unwrap();
+    assert_eq!(after, ordinary);
+}
+
+#[test]
+#[ignore = "run through tests/native/run_qwen_faults.py with an explicit Qwen model"]
+fn qwen_context_clear_failure_is_not_retried() {
     let (engine, audio, context) = qwen_context_fixture();
     let error =
         context_probe(&engine, &audio.samples, "context-failure", Some(&context)).unwrap_err();

@@ -254,9 +254,9 @@ def execute(native_build: Path, binary_dir: Path, model: Path, audio_path: Path,
         ("context-success", "qwen_context_is_scoped_to_each_transcription", "",
          {"ordinary-baseline": "", "context-first": context, "ordinary-after-success": "", "context-again": context,
           "invalid-context-fallback": ""}),
-        ("context-failure", "qwen_context_error_does_not_affect_next_transcription", "context-embed",
-         {"context-failure": context, "ordinary-after-failure": ""}),
-        ("context-cleanup-failure", "qwen_context_error_does_not_affect_next_transcription", "context-embed-clear",
+        ("context-error-retry", "qwen_context_error_retries_without_context", "context-embed",
+         {"ordinary-baseline": "", "context-error": context, "ordinary-after-retry": ""}),
+        ("context-cleanup-failure", "qwen_context_clear_failure_is_not_retried", "context-embed-clear",
          {"context-failure": context, "ordinary-after-failure": ""}),
         ("context-copy", "qwen_context_is_scoped_to_each_transcription", "context-copy",
          {"ordinary-baseline": "", "context-first": context, "ordinary-after-success": "", "context-again": context,
@@ -267,7 +267,7 @@ def execute(native_build: Path, binary_dir: Path, model: Path, audio_path: Path,
         if status or "1 passed" not in stdout:
             raise RuntimeError(f"{label}: loaded context test failed: {stderr[-1000:]}")
         check_context_trace(stderr, expected, chunked=context_audio == long_audio,
-                            retry=mode == "context-copy")
+                            retry=mode in ("context-copy", "context-embed"))
         if mode.startswith("context-embed") and "PARAKIT_TEST: embed failure" not in stderr:
             raise RuntimeError(f"{label}: contextual inference failure was not injected")
         if mode == "context-embed-clear" and ("PARAKIT_TEST: clear failure" not in stderr or

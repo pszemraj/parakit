@@ -47,9 +47,9 @@ The worker selects prior dictations across all apps using the configured count a
 
 Context draws only from [daemon history](../running.md#daemon-control); it neither increases retention nor loads prior text from JSONL logs. Setting either `context_dictations` or `daemon.transcript_history` to zero disables context and its extra shortcut.
 
-Empty, expired, disabled, or unusable context falls back to ordinary dictation. Captures shorter than one second also use ordinary transcription, retaining the existing silence padding.
+Empty, expired, disabled, or unusable context falls back to ordinary dictation, which is never rerun. Captures shorter than one second also use ordinary transcription, retaining the existing silence padding.
 
-Qwen can copy earlier text instead of recognizing the audio, including on longer recordings. After contextual inference, Parakit reruns the capture once without context if the output is wholly contained in the prior text or shares at least five consecutive words with it. Matching compares lowercase Unicode alphanumeric words, ignoring punctuation. This can also rerun genuinely repeated phrases, and it does not catch every substitution caused by context; earlier mistranscriptions and unrelated context can still bias recognition.
+Qwen can copy earlier text instead of recognizing the audio, including on longer recordings, and a long context can push generation past its token budget. After contextual inference, Parakit reruns the capture once without context if inference fails, the output is empty, or the output is wholly contained in the prior text or shares at least five consecutive words with it. Matching compares lowercase Unicode alphanumeric words, ignoring punctuation. This can also rerun genuinely repeated phrases, and it does not catch every substitution caused by context; earlier mistranscriptions and unrelated context can still bias recognition. If clearing the context fails, the session state is uncertain and Parakit reports the error without a rerun. The rerun result is used as is, so a capture that stays empty is reported as no speech detected.
 
 Use `--verbose` or the [inference log fields](../logging.md#transcription-record-fields) to inspect the shortcut mode, context length, and whether a retry occurred.
 

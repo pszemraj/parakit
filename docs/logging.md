@@ -62,7 +62,7 @@ The daemon supplies an `inference` object on each successful transcription:
 | `qwen_max_new_tokens` | Effective per-chunk generation budget; Qwen only. |
 | `context_mode` | Shortcut intent latched on press: `plain` for the original shortcut or `with_context` for the context shortcut. The default-hotkey setting can enable context for `plain`. Qwen only. |
 | `context_chars` | Unicode characters actually supplied as prior context, including separators. Zero when history is unavailable or context is discarded before inference. Retains the initial count after a retry. Qwen only. |
-| `context_retried` | Whether copied output triggered an ordinary transcription retry. `infer_ms` includes both attempts. Qwen only. |
+| `context_retried` | Whether contextual inference that failed, returned no text, or copied the context triggered an ordinary transcription retry. `infer_ms` includes both attempts. Qwen only. |
 | `native_api_version` | Linked native C API version, when reported. |
 
 The quantization label summarizes the artifact recipe rather than every tensor: F32 biases and normalization tensors can coexist with a reported `F16` model. See [model presets](running.md#model-presets) for Q6_K precision choices.
