@@ -417,7 +417,7 @@ The driver checks:
 
 - First/middle/last chunk and greedy embedding/forward failures through file and worker paths. Failed worker input must preserve the preceding successful transcript and produce no successful log or insertion.
 - Native English, Cantonese, and Filipino assistant prefills, forced on English audio to inspect prompt construction rather than multilingual quality.
-- Exact context prompt bytes and session setters: raw system text and forced-English prefills across chunks, contextual/ordinary/contextual calls on one session, unusable-context fallback, and clearing after success or failure.
+- Exact context prompt bytes and session setters: raw system text and forced-English prefills across chunks, contextual/ordinary/contextual calls on one session, unusable-context fallback, an ordinary retry after a contextual inference failure, no retry after a failed clear, and clearing after success or failure.
 - Worker history handoff using two disjoint JFK phrases: context without a retry, forced-copy retry, JSONL/verbose telemetry matching native use, and silence reaching neither contextual inference nor successful history.
 - Direct-engine silence output and subsecond ordinary fallback. Direct calls do not use the worker's silence filter.
 
