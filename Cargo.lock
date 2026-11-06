@@ -760,14 +760,14 @@ dependencies = [
 
 [[package]]
 name = "crispasr"
-version = "0.8.42"
+version = "0.8.49"
 dependencies = [
  "crispasr-sys",
 ]
 
 [[package]]
 name = "crispasr-sys"
-version = "0.8.42"
+version = "0.8.49"
 
 [[package]]
 name = "crossbeam-channel"
@@ -2253,7 +2253,7 @@ dependencies = [
 
 [[package]]
 name = "parakit"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "anstream",
  "anstyle",

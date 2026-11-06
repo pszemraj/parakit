@@ -190,6 +190,18 @@ fn print_config_show(quiet: bool) -> Result<()> {
             .unwrap_or("auto")
     )?;
     outln!("    max_new_tokens: {}", qwen.max_new_tokens)?;
+    outln!(
+        "    context_on_default_hotkey: {}",
+        config.qwen.context_on_default_hotkey()
+    )?;
+    outln!(
+        "    context_dictations: {}",
+        config.qwen.context_dictations()
+    )?;
+    outln!(
+        "    context_max_age_minutes: {}",
+        config.qwen.context_max_age_minutes()
+    )?;
     outln!("  cleaning:")?;
     outln!("    enabled: {}", config.cleaning.enabled())?;
     outln!("    profile: {}", config.cleaning.effective_profile())?;

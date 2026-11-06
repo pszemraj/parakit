@@ -3,7 +3,7 @@
 use anyhow::Result;
 use crossbeam_channel::{Receiver, Sender};
 use parakit::data_log::{CleaningLogFields, DataLogger, InferenceLogFields};
-use parakit::inference::Engine;
+use parakit::inference::{ContextUsage, Engine};
 use parakit::rules::{Cleaner, RuleHit, CLEANER_VERSION};
 use std::cell::Cell;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -17,6 +17,7 @@ use super::ipc::SharedState;
 use super::logging::Logger;
 use super::model_lifecycle::{ActivityGuard, ModelSlot};
 use super::notifications::Notifier;
+use super::recording::DictationMode;
 use super::sounds::Sounds;
 
 mod insertion;
@@ -46,6 +47,8 @@ pub(crate) enum WorkerEvent {
     },
     /// Recording ended and the captured PCM moved out of the audio buffer.
     Stopped {
+        /// Context intent latched when the dictation shortcut was pressed.
+        mode: DictationMode,
         /// Monotonic timestamp captured when recording started.
         started_at: Instant,
         /// Monotonic timestamp captured when recording stopped.
@@ -72,6 +75,12 @@ pub(crate) struct WorkerSettings {
     /// Leave transcript text on the clipboard after paste/fallback instead of
     /// restoring previous supported clipboard contents.
     pub(crate) keep_transcript_clipboard: bool,
+    /// Apply recent context to the original shortcut as well as the context shortcut.
+    pub(crate) context_on_default_hotkey: bool,
+    /// Maximum number of prior dictations to include; zero disables context.
+    pub(crate) context_dictations: usize,
+    /// Maximum age of a prior dictation included in context.
+    pub(crate) context_max_age: Duration,
 }
 
 /// Dependencies owned by the transcription worker thread.
@@ -102,6 +111,7 @@ pub(crate) struct WorkerCtx<E = Engine> {
 
 struct TranscriptResult {
     raw: String,
+    context_usage: ContextUsage,
     cleaned: String,
     /// Cleaning passes that changed the transcript, in application order.
     /// Empty when cleaning is disabled or when cleaning failed open.
@@ -118,14 +128,26 @@ struct TranscriptResult {
 trait WorkerEngine {
     /// Transcribe one owned PCM capture.
     ///
+    /// # Arguments
+    /// * `pcm` - Mono 16 kHz capture.
+    /// * `context` - Eligible prior dictation text, absent for ordinary inference.
+    ///
     /// # Returns
     ///
-    /// The raw transcript from the inference session.
+    /// The raw transcript and actual context use from the inference session.
     ///
     /// # Errors
     ///
     /// Reports session or inference failures to the worker's completion path.
-    fn transcribe(&self, pcm: &[f32]) -> Result<String>;
+    fn transcribe(&self, pcm: &[f32], context: Option<&str>) -> Result<(String, ContextUsage)>;
+
+    /// Whether this engine supports prior-dictation context.
+    ///
+    /// # Returns
+    /// True only for Qwen3-ASR sessions.
+    fn supports_context(&self) -> bool {
+        false
+    }
 
     /// Identity of the current session, absent for model-free test engines.
     ///
@@ -137,8 +159,12 @@ trait WorkerEngine {
 }
 
 impl WorkerEngine for Engine {
-    fn transcribe(&self, pcm: &[f32]) -> Result<String> {
-        Self::transcribe(self, pcm)
+    fn transcribe(&self, pcm: &[f32], context: Option<&str>) -> Result<(String, ContextUsage)> {
+        self.transcribe_with_context(pcm, context)
+    }
+
+    fn supports_context(&self) -> bool {
+        self.qwen_options().is_some()
     }
 
     fn inference_metadata(&self, recipe: &EngineRecipe) -> Option<InferenceLogFields> {
@@ -163,6 +189,9 @@ impl WorkerEngine for Engine {
                     .unwrap_or_else(|| "auto".to_owned())
             }),
             qwen_max_new_tokens: self.qwen_options().map(|options| options.max_new_tokens),
+            context_mode: None,
+            context_chars: None,
+            context_retried: None,
             native_api_version: self.native_api_version(),
         })
     }
@@ -211,6 +240,9 @@ where
                 data_log,
                 paste_mode,
                 keep_transcript_clipboard,
+                context_on_default_hotkey,
+                context_dictations,
+                context_max_age,
             },
         cleaner,
         sounds,
@@ -321,6 +353,7 @@ where
                 sounds.error();
             }
             WorkerEvent::Stopped {
+                mode,
                 started_at,
                 stopped_at,
                 pcm,
@@ -369,7 +402,13 @@ where
                 state.set_phase("transcribing");
                 log.transcribing(secs, wall_secs);
 
-                let transcription = transcribe_clean(engine, &pcm, cleaner.as_deref());
+                let supports_context = engine.supports_context();
+                let context = (supports_context
+                    && (mode == DictationMode::WithContext || context_on_default_hotkey))
+                    .then(|| state.recent_context(context_dictations, context_max_age))
+                    .flatten();
+                let transcription =
+                    transcribe_clean(engine, &pcm, cleaner.as_deref(), context.as_deref());
                 // Inference is the last PCM consumer. Release the potentially
                 // maximum-length capture before modifier-release and paste
                 // acknowledgement waits keep the worker occupied.
@@ -381,6 +420,21 @@ where
 
                 match transcription {
                     Ok(Some(transcript)) => {
+                        // Like the other Qwen fields, context telemetry is absent
+                        // for sessions that cannot take context.
+                        let context_telemetry = supports_context.then(|| {
+                            let context_mode = match mode {
+                                DictationMode::Plain => "plain",
+                                DictationMode::WithContext => "with_context",
+                            };
+                            (context_mode, transcript.context_usage)
+                        });
+                        if let Some((context_mode, usage)) = context_telemetry {
+                            log.verbose(format!(
+                                "parakit: context_mode={context_mode} context_chars={} context_retried={}",
+                                usage.chars, usage.retried
+                            ));
+                        }
                         completion.succeed();
                         // Count the dictation itself, once, regardless of how
                         // many insertion attempts or outcomes follow below.
@@ -406,7 +460,14 @@ where
                                     rules_fired: &transcript.rules_fired,
                                     failure: transcript.cleaning_failure.as_deref(),
                                 },
-                                inference_metadata.clone(),
+                                inference_metadata.clone().map(|mut fields| {
+                                    if let Some((context_mode, usage)) = context_telemetry {
+                                        fields.context_mode = Some(context_mode);
+                                        fields.context_chars = Some(usage.chars);
+                                        fields.context_retried = Some(usage.retried);
+                                    }
+                                    fields
+                                }),
                             )
                         });
                         let transcript_chars = transcript.cleaned.chars().count();
@@ -569,9 +630,10 @@ fn transcribe_clean<E: WorkerEngine>(
     engine: &E,
     pcm: &[f32],
     cleaner: Option<&Cleaner>,
+    context: Option<&str>,
 ) -> Result<Option<TranscriptResult>> {
     let infer_started = Instant::now();
-    let raw = engine.transcribe(pcm)?;
+    let (raw, context_usage) = engine.transcribe(pcm, context)?;
     let infer_elapsed = infer_started.elapsed();
     if raw.trim().is_empty() {
         return Ok(None);
@@ -590,6 +652,7 @@ fn transcribe_clean<E: WorkerEngine>(
     };
     Ok(Some(TranscriptResult {
         raw,
+        context_usage,
         cleaned,
         rules_fired,
         cleaning_failure,

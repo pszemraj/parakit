@@ -1,7 +1,7 @@
 //! macOS CoreGraphics push-to-talk hotkey tap.
 
 use super::{
-    send_hotkey_transition, HotkeyAction, HotkeyBackend, HotkeyState, ModifierState,
+    send_hotkey_transition, HotkeyAction, HotkeyBackend, HotkeyState, Key, ModifierState,
     MACOS_LEFT_COMMAND_KEYCODE, MACOS_LEFT_OPTION_KEYCODE, MACOS_LEFT_SHIFT_KEYCODE,
     MACOS_PTT_LEFT_CONTROL_KEYCODE, MACOS_PTT_SPACE_KEYCODE, MACOS_RIGHT_COMMAND_KEYCODE,
     MACOS_RIGHT_CONTROL_KEYCODE, MACOS_RIGHT_OPTION_KEYCODE, MACOS_RIGHT_SHIFT_KEYCODE,
@@ -14,7 +14,6 @@ use crate::daemon::macos::cgevent_ffi::{
 };
 use crate::daemon::recording::HotkeyTransition;
 use crossbeam_channel::Sender;
-use rdev::Key;
 use std::ffi::c_void;
 use std::ptr;
 use std::sync::atomic::{AtomicPtr, Ordering};
@@ -46,6 +45,7 @@ const MACOS_KEY_RIGHT_CONTROL: i64 = MACOS_RIGHT_CONTROL_KEYCODE as i64;
 ///
 /// * `tx` - Coordinator channel used to post logical hotkey transitions.
 /// * `_backend` - Ignored backend preference on macOS.
+/// * `context_enabled` - Enable Left Control+Left Option+Space for Qwen context.
 /// * `log` - Logger used for backend diagnostics.
 ///
 /// # Returns
@@ -58,21 +58,22 @@ const MACOS_KEY_RIGHT_CONTROL: i64 = MACOS_RIGHT_CONTROL_KEYCODE as i64;
 pub(crate) fn run_grab_loop(
     tx: Sender<HotkeyTransition>,
     _backend: HotkeyBackend,
+    context_enabled: bool,
     log: Arc<Logger>,
 ) -> Result<(), super::HotkeyLoopFailed> {
     log.verbose("parakit: macOS hotkey backend: CoreGraphics session event tap Left Control+Space");
     super::report_hotkey_loop_failure(
-        run_event_tap_loop(tx),
+        run_event_tap_loop(tx, context_enabled),
         "macOS hotkey event tap",
         crate::daemon::hotkey_help::macos_failure_help,
     )
 }
 
-fn run_event_tap_loop(tx: Sender<HotkeyTransition>) -> anyhow::Result<()> {
+fn run_event_tap_loop(tx: Sender<HotkeyTransition>, context_enabled: bool) -> anyhow::Result<()> {
     crate::daemon::macos::event_tap_preflight()?;
 
     let state = Box::new(MacOsHotkeyTapState {
-        hotkey: Arc::new(Mutex::new(HotkeyState::default())),
+        hotkey: Arc::new(Mutex::new(HotkeyState::new(context_enabled))),
         tx,
         tap: AtomicPtr::new(ptr::null_mut()),
     });

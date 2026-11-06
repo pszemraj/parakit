@@ -17,9 +17,7 @@ use std::sync::Arc;
 use std::thread;
 #[cfg(any(unix, target_os = "windows"))]
 use std::thread::JoinHandle;
-#[cfg(any(unix, target_os = "windows"))]
-use std::time::Duration;
-use std::time::Instant;
+use std::time::{Duration, Instant, SystemTime};
 
 #[cfg(any(unix, target_os = "windows"))]
 use super::preflight;
@@ -346,6 +344,19 @@ struct TranscriptEntry {
     chars: usize,
     preview: String,
     at: Instant,
+    /// Wall-clock timestamp for displayed age and expiration across suspend.
+    recorded_at: SystemTime,
+}
+
+impl TranscriptEntry {
+    /// Age from whichever clock has advanced further, including system suspend.
+    fn age_at(&self, monotonic_now: Instant, wall_now: SystemTime) -> Duration {
+        monotonic_now.saturating_duration_since(self.at).max(
+            wall_now
+                .duration_since(self.recorded_at)
+                .unwrap_or_default(),
+        )
+    }
 }
 
 impl SharedState {
@@ -355,6 +366,7 @@ impl SharedState {
     /// # Returns
     ///
     /// Shared state with no remembered transcripts.
+    #[cfg(test)]
     pub(crate) fn new() -> Self {
         Self::with_history_limit(DEFAULT_TRANSCRIPT_HISTORY)
     }
@@ -365,7 +377,7 @@ impl SharedState {
     /// # Arguments
     ///
     /// * `limit` - Maximum number of transcripts kept in memory. `0`
-    ///   disables `copy-last` and `history`.
+    ///   disables `copy-last`, `history`, and prior-dictation context.
     ///
     /// # Returns
     ///
@@ -439,6 +451,7 @@ impl SharedState {
             chars,
             preview,
             at: Instant::now(),
+            recorded_at: SystemTime::now(),
         });
         inner.history.truncate(self.history_limit);
     }
@@ -600,8 +613,18 @@ impl SharedState {
     /// Entries with 1-based `index` counting back from the most recent.
     #[cfg(any(unix, target_os = "windows", test))]
     fn history_snapshot(&self, limit: Option<usize>) -> Vec<HistoryEntry> {
+        self.history_snapshot_at(limit, Instant::now(), SystemTime::now())
+    }
+
+    /// Snapshot history using supplied clocks for deterministic age calculations.
+    #[cfg(any(unix, target_os = "windows", test))]
+    fn history_snapshot_at(
+        &self,
+        limit: Option<usize>,
+        monotonic_now: Instant,
+        wall_now: SystemTime,
+    ) -> Vec<HistoryEntry> {
         let inner = self.inner.lock();
-        let now = Instant::now();
         inner
             .history
             .iter()
@@ -613,7 +636,7 @@ impl SharedState {
                     entry: entry.id,
                 },
                 index: position + 1,
-                age_secs: now.saturating_duration_since(entry.at).as_secs(),
+                age_secs: entry.age_at(monotonic_now, wall_now).as_secs(),
                 chars: entry.chars,
                 preview: entry.preview.clone(),
             })

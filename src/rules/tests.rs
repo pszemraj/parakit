@@ -7,7 +7,6 @@ use super::engine::CLEANUP_BOUNDARY_RULE_NAME;
 use super::passes::capitalize_sentence_starts;
 use super::*;
 
-mod config_reference;
 mod spoken_numbers;
 mod user_rules;
 

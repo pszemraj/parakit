@@ -369,6 +369,39 @@ fn history_snapshot_matrix() {
         failures.len(),
         failures.join("\n")
     );
+
+    for (active_secs, wall_secs, future_wall, expected_age) in [
+        (2, 3600, false, 3600),
+        (1200, 300, false, 1200),
+        (20, 300, true, 20),
+    ] {
+        let state = SharedState::new();
+        state.remember_transcript("clock example".into());
+        let monotonic_start = Instant::now();
+        let wall_start = SystemTime::now();
+        let wall_age = Duration::from_secs(wall_secs);
+        {
+            let mut inner = state.inner.lock();
+            inner.history[0].at = monotonic_start;
+            inner.history[0].recorded_at = if future_wall {
+                wall_start + wall_age
+            } else {
+                wall_start
+            };
+        }
+        let wall_now = if future_wall {
+            wall_start
+        } else {
+            wall_start + wall_age
+        };
+        let age = state.history_snapshot_at(
+            None,
+            monotonic_start + Duration::from_secs(active_secs),
+            wall_now,
+        )[0]
+        .age_secs;
+        assert_eq!(age, expected_age);
+    }
 }
 
 #[cfg(any(unix, target_os = "windows"))]

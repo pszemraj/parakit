@@ -84,7 +84,7 @@ CUDA_VISIBLE_DEVICES=0 GGML_VK_VISIBLE_DEVICES= \
 
 For Vulkan, replace the CUDA environment prefix on both commands with `env -u GGML_VK_VISIBLE_DEVICES CUDA_VISIBLE_DEVICES=` or pin a Vulkan device explicitly. Apply these commands to the matrix and acceptance cases in [native model validation](model-validation.md). The worker's two idle waits take at least 126 seconds per model/backend pair.
 
-Retain commands, device diagnostics, raw transcripts, exit statuses, timings, and per-process memory samples under the ignored `target/tmp/` tree. Follow the [reload measurement checklist](model-validation.md#qwen-options-long-input-and-reload); the earlier [Linux measurements](memory.md#qwen-gpu-reload-measurements) record baseline conditions and limits.
+Retain commands, device diagnostics, raw transcripts, exit statuses, timings, and per-process memory samples under the ignored `target/tmp/` tree. Follow the [reload measurement checklist](model-validation.md#qwen-options-long-input-and-reload) and [memory accounting guidance](memory.md#measuring-memory).
 
 ## Rust Source Coverage
 
@@ -149,11 +149,13 @@ XDG_CACHE_HOME=$PWD/target/tmp/ptt-cache \
   --model-idle-minutes 1 --simulate-ptt-repeat 2 --simulate-ptt-idle-seconds 61
 ```
 
-The empty config file keeps your own `config.toml` out of the run; `PARAKIT_CONFIG_PATH` must name a file that exists. Use a real WAV with a known transcript. The pinned Juniper voice memo is 55.36 seconds with SHA256 `d79d7f729b192642b91aef5e1486b97c1cb7f4c34f6ce4a0d45199a9ff23ab5f`; its local filename can vary by machine. Verify the hash to confirm input identity, then compare the readable transcript with task-appropriate tolerance to check recognition. The command resamples it to the model rate and sends worker start/stop events with owned PCM. `--no-cleaning` exposes raw output for comparison; omit it to exercise cleanup too. Add the build feature and `--device` for the backend being tested. On PowerShell, create the empty file with `New-Item -ItemType File -Force target/tmp/ptt-empty.toml`, set the environment variables with `$env:NAME = ...`, and use the Windows WAV path.
+The empty config file keeps your own `config.toml` out of the run; `PARAKIT_CONFIG_PATH` must name a file that exists. Use a real WAV with a known transcript. The pinned Juniper voice memo is 55.36 seconds; its local filename can vary by machine. Compare raw output with the readable reference transcript using task-appropriate tolerance. The command resamples it to the model rate and sends worker start/stop events with owned PCM. `--no-cleaning` exposes raw output for comparison; omit it to exercise cleanup too. Add the build feature and `--device` for the backend being tested. On PowerShell, create the empty file with `New-Item -ItemType File -Force target/tmp/ptt-empty.toml`, set the environment variables with `$env:NAME = ...`, and use the Windows WAV path.
 
 Simulation bypasses the daemon singleton and opens no control endpoint. It uses the same resolved worker settings as normal startup, but disables insertion, sounds, and desktop notifications. Avoid concurrent inference when measuring timings; simulation does not pause an already-running daemon.
 
-The worker acknowledges each required transcript, checks exact parity across repeats in the same process, and verifies the expected residency after each wait (including the last). This parity check verifies that reloading recreates the same session; it is not a cross-build reference-transcript comparison. Missing transcripts, reload failures, or missed offloads return a failure exit status. An immediate simulated release exercises queuing while reload is busy. Use `--model-idle-minutes 0` to check disabled offloading. For one dictation without an idle wait, omit `--simulate-ptt-repeat` and `--simulate-ptt-idle-seconds`; both options require `--simulate-ptt-audio`.
+The worker acknowledges each required transcript and verifies the expected residency after each wait (including the last). With history enabled and context disabled, repeated transcripts must match within the same process; this verifies reload behavior rather than recognition quality across builds. Context-enabled repetitions can differ as prior history changes. Missing transcripts, reload failures, or missed offloads return a failure exit status. An immediate simulated release exercises queuing while reload is busy. Use `--model-idle-minutes 0` to check disabled offloading. For one dictation without an idle wait, omit `--simulate-ptt-repeat` and `--simulate-ptt-idle-seconds`; both options require `--simulate-ptt-audio`.
+
+Simulation requests the original shortcut's mode. To compare Qwen context, set `context_on_default_hotkey = true` under `[qwen]` in the isolated configuration, with nonzero `context_dictations` and `daemon.transcript_history`; the first successful capture supplies history for later captures. Keep context disabled for ordinary reload-parity checks.
 
 ## NeMo Reference Helper
 
@@ -192,7 +194,7 @@ Compare against:
 2. parakit with an F16 GGUF model.
 3. parakit with the cached Q8_0 GGUF model.
 
-Use the official implementation's output as the model reference. Previous Parakit/CrispASR output is a regression baseline, not ground truth; matching it does not establish correct recognition. Label human audio-reviewed transcripts separately, and use the recording to adjudicate what was actually spoken when outputs differ. A full-recording transcript does not establish recognition at the boundaries of a shorter crop.
+Compare raw transcripts, checking omissions, negations, numbers, and entities. Use the official implementation's output as the model reference. Previous Parakit/CrispASR output is a regression baseline, not ground truth; matching it does not establish correct recognition. Label human audio-reviewed transcripts separately, and use the recording to adjudicate what was actually spoken when outputs differ. A full-recording transcript does not establish recognition at the boundaries of a shorter crop.
 
 Acceptable differences:
 
@@ -252,21 +254,13 @@ Keep context, system text and hotwords empty, with batch size one and greedy dec
 
 For [Ultra](https://huggingface.co/moondream/parakeet-ultra) and [Redux](https://huggingface.co/moondream/parakeet-redux), compare the Q8_0 presets with the original checkpoints through CrispASR's existing Hugging Face reference helpers and a short independent Photon run. Photon's packed Redux implementation and VAD segmentation differ from the GGUF runtime; record those conditions rather than attributing their speed or memory figures to parakit.
 
-Record raw transcripts, omissions, negation and number/entity disagreements, failures, cold/warm latency, and host/GPU memory. Listen to consequential disagreements and label human-reviewed text separately. Keep downloaded reference weights, dependencies, and generated evidence under ignored scratch directories. Check for active training or other GPU jobs before each hardware run and defer GPU tests while they occupy the device.
+Record failures, cold/warm latency, and host/GPU memory. Keep downloaded reference weights, dependencies, and generated evidence under ignored scratch directories. Check for active training or other GPU jobs before each hardware run and defer GPU tests while they occupy the device.
 
 ### Parakeet CPU Comparison
 
-An acceptance run on October 14, 2026 compared the three Parakeet Q8_0 presets on an AMD Ryzen 7 7700X, using eight inference and OpenMP/BLAS threads, OpenBLAS, and the CPU-only bundled build. The native C++ library was optimized; the Rust file helper was a debug build. Each model transcribed the same 55.36-second Juniper memo twice after loading.
+Use the [WAV quality target](#wav-quality-target) with `--device cpu --repeat 3` and each `--model-preset` on the same recordings. Keep the build profile, native libraries, thread counts, and BLAS settings fixed. Record loading separately from inference, and distinguish the first inference from repeated calls on one loaded engine.
 
-| Preset | First inference | Repeat inference | Peak process RSS |
-| --- | ---: | ---: | ---: |
-| `parakeet-v3` | 5.60 s | 5.33 s | 1.56 GiB |
-| `parakeet-ultra` | 5.00 s | 4.60 s | 1.49 GiB |
-| `parakeet-redux` | 6.12 s | 5.66 s | 1.49 GiB |
-
-Inference times exclude model loading. RSS includes loading and both passes; it is not the model's download size. Filesystem caches were not flushed, and other host processes were present. These two runs on one recording do not establish a general speed ranking or transcription-quality advantage. Redux did not provide a CPU speed or memory advantage over Ultra in this check.
-
-Use the [WAV quality target](#wav-quality-target) with `--device cpu --repeat 3` and each `--model-preset` to compare your own CPU and recordings. Check raw-text fidelity alongside timing, especially omissions, negations, numbers, and names.
+Measure peak process RSS across loading and inference; model download size does not describe runtime memory. Check raw-text fidelity alongside timing, especially omissions, negations, numbers, and names. Keep the per-run results under ignored `target/tmp/`.
 
 ### Checkpoint Conversion Acceptance
 
@@ -307,20 +301,26 @@ Run the daemon in foreground mode and exercise real applications:
 
 Check:
 
-- the platform push-to-talk chord does not leak a literal space;
-- holding the platform push-to-talk chord for 3 to 5 seconds produces exactly one recording start and one stop;
+- both Qwen [dictation shortcuts](../models/qwen3-asr.md#prior-dictation-context) suppress literal Space; the extra shortcut stays inactive for Parakeet;
+- holding each shortcut for 3 to 5 seconds produces exactly one recording start and one stop;
 - rapid double-presses do not wedge the state machine;
-- releasing the push-to-talk modifier before Space stops recording;
+- releasing Control before Space, and Space before Control, each stops recording once;
+- releasing Alt or Option during contextual recording preserves the press-time mode and recording;
+- an occupied optional context shortcut warns without disabling the original shortcut on registered backends;
+- enabling `qwen.context_on_default_hotkey` and restarting applies context to the original shortcut and leaves the extra shortcut unregistered; disabling it and restarting restores ordinary dictation and the extra shortcut;
+- on Windows, `Ctrl+Right Alt+Space` and, on AltGr layouts, `AltGr+Space` are consumed without recording while the extra shortcut is registered;
 - focus changes do not paste into the new target;
-- very short captures are padded and transcribed instead of rejected;
+- short speech is padded and transcribed, with ordinary inference below one second; silence leaves history and the receiving application unchanged;
 - `--quiet` emits no stdout;
 - warnings still go to stderr in quiet mode;
 - sounds still play in quiet mode unless `--no-sounds` is set;
 - logging writes raw and cleaned text without crashing the daemon.
 
-Run daemon/IPC checks sequentially with isolated config, cache/runtime paths, and a model copy. Exercise [idle offload and reload](../running.md#idle-model-offload), including a missing model restored before the next PTT, then check status and history. Check stop/restart and sleep/wake on the native desktop. Verify [sound cues](../running.md#logging-and-sounds) while holding and releasing PTT during reload, on failed readiness and silence, and with `--no-sounds`. Headless tests verify cue ordering and cancellation, but do not validate audible playback, physical input, or insertion. Record unobserved human checks and unavailable backend runs as pending.
+Run daemon/IPC checks sequentially with isolated config, cache/runtime paths, and a model copy. After [idle offload](../running.md#idle-model-offload), hold PTT through reload, speak, and release: early speech must be retained, readiness must precede the listening cue, and insertion must occur once. Release PTT immediately during a separate reload: the queued capture must complete once without a late listening cue. Restore a missing model before the next PTT, then check status and history. Check stop/restart and sleep/wake on the native desktop. Verify [sound cues](../running.md#logging-and-sounds) on failed readiness and silence, and with `--no-sounds`. Headless tests verify cue ordering and cancellation; audible playback, physical input, and insertion require native observation. Mark unobserved checks and unavailable backends pending.
 
-On macOS, an opt-in acoustic control plays two WAVs through the speakers and records them through the production CPAL/Rubato microphone path. It checks three successive captures (first WAV, second WAV, first WAV), retains only text and signal measurements, and can measure the real speaker cues. This does not synthesize or validate the physical global hotkey. Use public speech WAVs, an active desktop with microphone permission, and repository-local model, WAV, and report paths. The report file must already exist:
+On macOS, an opt-in acoustic control plays two WAVs through the speakers and records them through the production CPAL/Rubato microphone path. It checks three successive captures (first WAV, second WAV, first WAV), retains only text and signal measurements, and can measure the real speaker cues. This does not synthesize or validate the physical global hotkey. Use public speech WAVs, an active desktop with microphone permission, and repository-local model, WAV, and report paths. The report file must already exist.
+
+Check fixture signal levels before acoustic runs: the WAV helper can recognize files that are too quiet for speaker playback. Use level-adjusted playback copies as needed and record the source hash and gain.
 
 ```bash
 mkdir -p target/tmp/live-audio
@@ -357,7 +357,9 @@ cargo test --features metal --bin parakit \
 
 Select `gpu` and a fresh report path for Metal. `PARAKIT_LIVE_SECOND_WAV` optionally adds another loaded/offloaded pair. Inspect the recorded transcripts and speech-boundary result.
 
-For allocation context, see the [Linux reload measurements and ownership notes](memory.md).
+Set `PARAKIT_LIVE_REQUIRE_MATCHING_EDGES=1` to fail the test when the first or last recognized words change after reload. Without it, boundary matching is reported separately from pipeline acceptance.
+
+For allocation context, see [memory accounting and measurement](memory.md).
 
 ### Clipboard Checks
 
@@ -367,7 +369,7 @@ Use controlled text, HTML/text alternatives, images, copied files, and an empty 
 
 TODO: Reproduce a hung X11 clipboard owner and design bounded snapshot reads that preserve the prior clipboard. Arboard reads formats sequentially and its public API does not distinguish a read timeout from an unavailable format.
 
-TODO: On a native Linux desktop, exercise direct typing and guarded paste with physical modifier/focus changes, key-probe failures, keyboard-map changes, readiness-error reconnection and clipboard-manager handoffs. Closure tests and Mac runs do not establish those X11 results. Windows generation changes and delayed rendering also need native clipboard-manager or RDP verification.
+On a native Linux desktop, exercise direct typing and guarded paste with physical modifier/focus changes, key-probe failures, keyboard-map changes, readiness-error reconnection and clipboard-manager handoffs. On Windows, include clipboard-generation changes and delayed rendering with a native clipboard manager or RDP.
 
 ### Linux IBus and X11
 
@@ -375,9 +377,10 @@ Prepare an isolated GNOME Wayland session using the [Linux input-source setup](.
 
 Use private D-Bus/IBus and XDG state. Register components with the binary under test's `ibus install --component-dir target/tmp/ibus-components` and point the private IBus process's `IBUS_COMPONENT_PATH` at that directory. Exercise installation, upgrade, and removal there; compare unrelated input sources and shortcuts before and after.
 
-The opt-in worker checks use controlled inference with production insertion. Run the native check in that private IBus session and the X11 check separately on an isolated X11 display:
+The opt-in attach/input regression compiles `tests/native/ibus_attach.c` with `cc` and `pkg-config`; it needs IBus development headers but no session bus. The worker checks use controlled inference with production insertion: run the native worker in that private IBus session and the X11 worker separately on an isolated X11 display.
 
 ```bash
+cargo test --bin parakit daemon::desktop::ibus::native::tests::native_attach_errors_warn_once_and_allow_recovery -- --ignored --exact
 env -u DISPLAY cargo test --bin parakit daemon::worker::tests::live_native_worker_inserts_without_x11 -- --ignored --exact
 cargo test --bin parakit daemon::worker::tests::live_x11_worker_pastes_into_focused_field -- --ignored --exact
 ```
@@ -394,9 +397,11 @@ While one entry is selected, add dictations and confirm preview and clipboard co
 
 Repeat `transcribe-file --audio` to run ordered inputs on one loaded engine. [Worker simulation](#ptt-worker-simulation) accepts repeated `--simulate-ptt-audio` paths; it replays the full sequence per cycle before the idle interval. Its failure path reads history back and rejects replacement of the preceding successful transcript. See the [native Qwen sequence](model-validation.md#qwen-options-long-input-and-reload) for the short/long/short acceptance case.
 
-The loaded-session fault driver runs on Linux and macOS with an explicit Qwen model:
+The loaded-session fault driver runs on Linux and macOS with an explicit Qwen model. Build the daemon, WAV helper, and test harness in the same isolated target directory before running it:
 
 ```bash
+cargo build --bin parakit --example transcribe-file
+cargo test --test native_correctness_build --no-run
 python tests/native/run_qwen_faults.py \
   --native-build <isolated-target>/debug/build/parakit-<id>/out/build \
   --binary-dir <isolated-target>/debug \
@@ -406,4 +411,14 @@ python tests/native/run_qwen_faults.py \
   --output target/tmp/qwen-native-faults
 ```
 
-First run `cargo test --test native_correctness_build` in the same isolated target directory to build the readiness-restoration test harness. Use the matching completed native build directory containing `compile_commands.json`, and a fresh output directory. CPU is the default; to test Metal, build both binaries and the readiness harness with `--features metal`, then pass `--device gpu`. On macOS the driver preserves the dylib basename and version aliases and sets `DYLD_LIBRARY_PATH` to load its private fault library. The driver compiles a separate corrected C API copy and relinks its own test library. Only that library contains fault controls; normal binaries and vendor sources are unchanged. First/middle/last chunk failures and greedy embedding/forward failures run through both file and worker paths. The worker first remembers a successful dictation, then checks history preservation and absence of successful logging/insertion for the failed input. Separate prefix cases inspect actual native English, Cantonese, and Filipino assistant prefills. They force those languages on English fixture audio to inspect prompt construction, not to measure multilingual recognition quality.
+Run the ignored Qwen cases through the driver, which supplies native defaults in each test process's launch environment. Use the matching completed native build directory containing `compile_commands.json`, and a fresh output directory. CPU is the default; for a GPU run, add the matching accelerator feature to both Cargo commands, then pass `--device gpu`. On macOS the driver preserves the dylib basename and version aliases and sets `DYLD_LIBRARY_PATH` to load its private fault library. It compiles a separate corrected C API copy and relinks its own test library; normal binaries and vendor sources are unchanged.
+
+The driver checks:
+
+- First/middle/last chunk and greedy embedding/forward failures through file and worker paths. Failed worker input must preserve the preceding successful transcript and produce no successful log or insertion.
+- Native English, Cantonese, and Filipino assistant prefills, forced on English audio to inspect prompt construction rather than multilingual quality.
+- Exact context prompt bytes and session setters: raw system text and forced-English prefills across chunks, contextual/ordinary/contextual calls on one session, unusable-context fallback, an ordinary retry after a contextual inference failure, no retry after a failed clear, and clearing after success or failure.
+- Worker history handoff using two disjoint JFK phrases: context without a retry, forced-copy retry, JSONL/verbose telemetry matching native use, and silence reaching neither contextual inference nor successful history.
+- Direct-engine silence output and subsecond ordinary fallback. Direct calls do not use the worker's silence filter.
+
+`PARAKIT_TEST_QWEN_AUDIO` and `PARAKIT_TEST_QWEN_CONTEXT` override the context probes' WAV and prior text; defaults are the constructed long fixture and a vocabulary sample. Each call prints a `PARAKIT_TEST_RESULT` JSON record with raw text, elapsed inference seconds, context character count, retry status, and any error. Compare it with the recording and a readable reference; prompt-routing checks alone do not establish quality.

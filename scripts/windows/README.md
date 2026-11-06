@@ -23,9 +23,7 @@ Windows builds need an installed runnable directory, not only `parakit.exe`. Cri
 
 The script creates `target\parakit-windows-x86_64-<backend>`, installs it to `%LOCALAPPDATA%\Programs\parakit`, and adds that install directory to the Windows User `PATH`.
 
-The scripts do not edit the system `PATH`, create firewall rules, open TCP ports, create symlinks or junctions, map temporary drive letters, require Windows Developer Mode, or require administrator rights.
-
-The installer is intentionally per-user. It refuses system locations such as `C:\Windows` and `C:\Program Files\...`; those paths require admin rights on normal Windows systems and are the wrong default for a developer or corporate laptop.
+Installation uses the User `PATH` and requires neither administrator rights nor Windows Developer Mode. It refuses system locations such as `C:\Windows` and `C:\Program Files\...`. The scripts leave the system `PATH` unchanged and use ordinary directories, without symlinks, junctions, drive mappings, firewall rules, or TCP listeners.
 
 ## Backend Selection
 
@@ -146,12 +144,3 @@ For loader failures, check the [backend requirements](#backend-requirements). On
 If Group Policy blocks User `PATH` writes, the install still succeeds and prints a warning. Run `%LOCALAPPDATA%\Programs\parakit\parakit.exe` directly, add the directory through your approved endpoint-management path, or rerun with `--no-user-path` when PATH changes are not allowed.
 
 For TLS interception and proxy setup, see [download troubleshooting](../../docs/troubleshooting.md#downloads-behind-a-corporate-proxy).
-
-For development-only bundle checks without installing:
-
-```bat
-scripts\windows\build.bat --backend cpu --no-install
-scripts\windows\build.bat --backend cuda --no-install
-scripts\windows\build.bat --backend vulkan --no-install
-scripts\windows\build.bat -Profile debug --backend cpu --no-install
-```

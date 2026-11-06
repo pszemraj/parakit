@@ -2,7 +2,7 @@
 
 parakit reads an optional TOML file for daemon defaults, cleaning behavior, transcription logging, Linux insertion and hotkey backends, and user-defined cleaning rules. A missing file is valid and selects built-in defaults.
 
-A small config that keeps the trailing period that cleanup drops by default and leaves spoken single-digit numbers below five as the model produced them:
+For example, keep sentence-final periods and raise the isolated-number cutoff to five:
 
 ```toml
 [cleaning]
@@ -10,7 +10,7 @@ keep_trailing_period = true
 number_threshold = 5
 ```
 
-Save this [starter config](example.toml) as `config.toml` at the path printed by `parakit config path`. The [annotated reference](config_reference.toml) lists every key, default, accepted value, interaction, and environment variable.
+Save this [starter config](example.toml) at the path printed by `parakit config path`. The [annotated reference](config_reference.toml) lists every key, default, accepted value, interaction, and environment variable.
 
 > [!IMPORTANT]
 > The daemon reads this file once at startup and does not watch it. Restart the daemon after every edit.
@@ -54,31 +54,9 @@ The editor can repair a broken config, but its exit does not validate the file. 
 
 ## Precedence and Loading
 
-The usual precedence is:
+The [config reference](config_reference.toml) describes precedence, CLI overrides, and settings available only in the file. Use `parakit start` for daemon flags. The profile, trailing-period, and disable-rule flags also work on `parakit rules list` and `parakit rules test` so you can check cleaning changes before restarting; the profile flag is `--profile` there instead of `--cleaning-profile`.
 
-```text
-CLI flag > config value > built-in default
-```
-
-These daemon and cleaning flags live on `parakit start`. The profile, trailing-period, and disable-rule flags also work the same way on `parakit rules list`/`parakit rules test` for checking a change before restarting the daemon (`cleaning.profile`'s flag is spelled `--profile` there instead of `--cleaning-profile`); `--cleaning`/`--no-cleaning` exist only on `start`.
-
-Boolean flag pairs, merged disabled-rule names, and config-only settings have per-key interactions described in [config_reference.toml](config_reference.toml).
-
-To configure Qwen persistently, select a preset and set the language and token budget:
-
-```toml
-[daemon]
-model_preset = "qwen3-asr-1.7b"
-
-[qwen]
-language = "auto"
-max_new_tokens = 512
-
-[cleaning]
-enabled = false
-```
-
-Available models and Qwen controls are under [model presets](running.md#model-presets). See [cleaning profiles](cleaning-rules.md#profiles) for the example's disabled cleaning and [config_reference.toml](config_reference.toml) for accepted values.
+For Qwen model selection, language hints, and context, see the [Qwen3-ASR guide](models/qwen3-asr.md). Other presets are listed under [model selection](running.md#model-presets).
 
 TOML, unknown-key, invalid-value, and rule-validation errors name the config path.
 
@@ -97,11 +75,6 @@ parakit rules test "A representative dictation to clean."
 parakit rules list
 ```
 
-When the result is right, stop the daemon and start it again with the startup command you normally use:
-
-```bash
-parakit stop
-parakit start --log-dir "$HOME/.parakit/logs" --quiet & disown
-```
+When the result is right, run `parakit stop`, then start it with your usual [foreground or background command](running.md#background-use), including any CLI overrides you normally use.
 
 A broken config does not block repair or control commands that do not need daemon settings: `fetch`, `cache`, `config path`, `config init`, `config edit`, `status`, `stop`, `copy-last`, `history`, `test-paste`, and Linux `ibus` commands. `config show`, `doctor`, `rules list`, `rules test`, PTT simulation, and daemon startup do load it.

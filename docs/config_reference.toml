@@ -1,35 +1,24 @@
-# config_reference.toml: every key parakit accepts in config.toml, with its type, default, and behavior.
-# Form: loadable. This file is itself a valid config.toml, and loading it gives exactly the built-in defaults.
-# An uncommented key is set to its literal default.
-# A commented-out key has no literal default (it is unset, depends on the platform, or is computed), and the value shown is only an example.
-# To start a config of your own, copy example.toml. Use this file to look keys up.
-#
-# File locations and config-command workflows: [configuration](configuration.md).
-#
+# config_reference.toml: accepted config keys, types, defaults, and behavior.
+# Form: loadable. Loading this file selects the built-in defaults. Start from example.toml for a small config.
+# Uncommented keys carry literal defaults. Commented-out keys show examples for unset, computed, or platform-dependent values.
+# Config paths and commands: [configuration](configuration.md).
+# Read once per process at startup; restart the daemon after edits. [Validation and recovery](configuration.md#validation-and-recovery).
 # Precedence, highest first: a command-line flag, this file, the built-in default.
-# The flags named on each key belong to `parakit start` unless stated otherwise. A bare `parakit` is `parakit start` with no flags, so it cannot take them.
-# Boolean flag pairs are mutually exclusive and force either value; cleaning.disabled_rules is merged with --disable-rule instead of being replaced.
-#
-# Unknown keys are rejected at every level: at the top level, in every table, and inside every [[rules.user]] entry.
-# An unknown key, invalid TOML, a wrong type, an unknown enum string, or a failed validation is a hard error that names the config file.
+# Flags belong to `parakit start` unless stated otherwise. Bare `parakit` selects `start` without accepting its flags.
+# Boolean flag pairs are mutually exclusive and force either value.
+# Unknown keys at any nesting, invalid TOML, wrong types, and failed validation are errors naming the config file.
 # Enum strings are lowercase and case-sensitive, except qwen.language accepts case-insensitive codes and names.
-#
-# When it is read: once per process, at startup. The daemon never watches the file, so restart it after every edit.
-# Commands that load it and commands available for repair: [configuration](configuration.md#validation-and-recovery).
-#
-# Value conventions: paths are used literally, with no ~ and no environment-variable expansion.
-# A relative path resolves against the working directory of the process that reads it, not against the directory of this file.
-# A whole-number key needs a TOML integer. A fraction such as 1.5 is rejected.
-#
+# Paths are literal: no ~ or environment-variable expansion. Relative paths resolve against the process working directory, not this file.
+# Whole-number keys require TOML integers; fractions are rejected.
 # No key is deprecated or internal. The value "evdev-proxy-experimental" of hotkey.backend is experimental.
-# The environment variables that parakit reads or sets are listed at the end of this file. They are not config keys.
+# Environment variables below are inherited process settings, not config keys. Parakit does not load a .env file.
 
 
 # ---------- [daemon]: model, device, insertion, and daemon behavior ----------
 
 [daemon]
 # path string (optional). Path to the GGUF speech-model file that the daemon loads.
-# Unset: daemon.model_preset selects the model and daemon.quantize selects its precision; when both selectors are absent, the model is parakeet-ultra in Q8_0 by default.
+# Unset: daemon.model_preset selects a preset at daemon.quantize precision.
 # Conflicts with: daemon.model_preset and daemon.quantize; setting either with daemon.model fails config load even when a CLI model selection overrides them.
 # Overridden by: -m/--model or --model-preset. When either flag is given, the path in this key is never checked for a file or used, so a wrong path here is harmless.
 # An empty string fails config load with "daemon.model is set but empty", even when -m is given.
@@ -38,26 +27,25 @@
 # This check runs right after the config loads, before the hotkey and microphone checks.
 # The path must also be valid UTF-8, or startup fails with "model path is not valid UTF-8" when the model is opened.
 # The contents are not checked until the model is opened. A file that is not a usable supported GGUF fails then with "could not open model".
-# A relative path resolves against the working directory of the daemon process at startup. It is converted to an absolute path once, and that path is reused for every idle reload.
+# The path becomes absolute at startup and is reused for every idle reload.
 # Setting this key turns off the automatic download. Models fetched with `parakit fetch <repo-or-url>` are never used unless they are named here or with -m.
 # `parakit doctor` does not check this key.
 # model = "/path/to/model.gguf"
 
-# "parakeet-v2" | "parakeet-v3" | "qwen3-asr-0.6b" | "qwen3-asr-1.7b" | "parakeet-ultra" | "parakeet-redux" (optional). Model preset to load; daemon.quantize defaults to hosted Q8_0. V2 is English-only.
+# "parakeet-v2" | "parakeet-v3" | "qwen3-asr-0.6b" | "qwen3-asr-1.7b" | "parakeet-ultra" | "parakeet-redux" (optional). Model preset to load. V2 is English-only.
 # Experimental: Qwen presets. Redux is for testing/comparison only and is not recommended for normal dictation.
-# Unset: daemon.model selects a local GGUF; when both selectors are absent, the daemon uses parakeet-ultra at daemon.quantize precision (Q8_0 by default).
+# Unset: parakeet-ultra, unless daemon.model selects a local GGUF.
 # Overridden by: -m/--model or --model-preset; either CLI selection replaces the configured selection.
-# The exact preset artifact is downloaded when absent, using the model cache, HF_ENDPOINT, and HF_TOKEN. A cached artifact is used without network access.
-# parakeet-v3 keeps its existing top-level cache path. Other presets use the separate Hub cache directories.
-# Reload reuses the resolved local file and never downloads it again. `parakit fetch` never reads this key.
+# `parakit fetch` does not read this key.
+# See: [preset acquisition, revisions, cache paths, and offline use](running.md#model-presets).
 # model_preset = "qwen3-asr-1.7b"
 
 # "q8_0" | "q6_k" (optional). Precision acquired for daemon.model_preset, or for parakeet-ultra when the preset is unset.
-# Unset: q8_0, the provider's hosted artifact. q6_k downloads F16 if needed and runs the quantizer locally before readiness; subsequent starts reuse cached Q6_K offline.
+# Unset: q8_0, the provider's hosted artifact.
 # Explicit CLI --quantize conflicts with -m/--model; configured model-selection conflicts are listed under daemon.model.
 # Overridden by: --quantize. An explicit CLI -m/--model ignores this configured precision and loads that file as it is.
 # Warning: a first Q6_K preparation can download several GB and take minutes; a preparation notice is printed to stderr even with --quiet. Windows needs a compatible crispasr-quantize.exe on PATH.
-# This only selects the acquisition format; it does not requantize an existing -m file or change a running daemon. Restart after edits. Idle reload reuses the resolved path without fetching or quantizing again.
+# See: [Q6_K preparation and reuse](running.md#model-presets).
 # quantize = "q6_k"
 
 # "auto" | "cpu" | "gpu". Where speech recognition runs.
@@ -136,7 +124,7 @@ sounds = true
 verbose = false
 
 # integer, 0 to 100. How many recent transcripts the daemon keeps in memory for `parakit copy-last` and `parakit history`, newest first.
-# 0 disables both commands: they fail with "transcript history is disabled (daemon.transcript_history = 0)", and `parakit status` reports "last transcript: history disabled".
+# 0 disables Qwen context and both commands: they fail with "transcript history is disabled (daemon.transcript_history = 0)", and `parakit status` reports "last transcript: history disabled".
 # The history exists only in daemon memory. It is cleared when the daemon stops and is never written to disk by this key.
 # Every transcript that reaches insertion is remembered, including one whose paste was blocked or failed. A transcript skipped as whitespace-only is not.
 # logging.dir is independent: it can persist the same transcripts to disk.
@@ -144,7 +132,7 @@ verbose = false
 transcript_history = 10
 
 
-# ---------- [qwen]: language hints and generation limits ----------
+# ---------- [qwen]: language, generation, and prior context ----------
 # These settings apply only to Qwen3-ASR GGUFs; other models ignore them after config validation.
 # Explicit Qwen CLI controls fail with a non-Qwen model.
 
@@ -160,8 +148,20 @@ language = "auto"
 # integer, 1 to 4096. Maximum generated tokens per native Qwen audio chunk, including the token that ends decoding.
 # An utterance fails if any chunk reaches the budget without EOS, or another native decoding error occurs; incomplete text is not inserted or added as a successful transcript.
 # Overridden by: --qwen-max-new-tokens.
-# The same budget is reapplied on every idle reload. 0, fractions, negative values, and values above 4096 fail config load.
+# See: [long audio and readiness controls](models/qwen3-asr.md#long-audio-and-inference).
 max_new_tokens = 512
+
+# bool. Request prior-dictation context with the original push-to-talk shortcut. The extra context shortcut then adds nothing and is not registered or intercepted.
+# See: [Qwen context](models/qwen3-asr.md#prior-dictation-context) for shortcuts and ordinary-dictation fallback.
+context_on_default_hotkey = false
+
+# integer, 0 or greater. Maximum prior dictations used as context; 0 disables context.
+# Requires: retained daemon.transcript_history entries; this setting never increases retention.
+context_dictations = 3
+
+# positive integer. Maximum age in minutes of prior dictations selected at inference time.
+# Values whose conversion to seconds overflows fail config load.
+context_max_age_minutes = 10
 
 
 # ---------- [cleaning]: transcript cleanup ----------
@@ -176,13 +176,13 @@ enabled = true
 
 # "safe" | "aggressive". Cleanup tier.
 # "safe" runs mechanical cleanup and high-confidence normalization.
-# "aggressive" additionally runs the rules marked aggressive in the inventory below.
-# Five of those delete discourse markers such as filler "like", "you know", and "I mean", which can change meaning. One collapses repeats of that, no, can, had, and do.
+# "aggressive" additionally removes discourse markers and collapses ambiguous repetitions, which can change meaning.
 # Does not gate [[rules.user]] entries, which run under both profiles.
 # Only used when: cleaning.enabled is true. The value is still validated otherwise.
 # Overridden by: the --cleaning-profile flag of `parakit start`. On `parakit rules list` and `parakit rules test` the flag is --profile.
 # Only lowercase is accepted in this file ("Safe" fails config load), while the command-line flags accept any case.
 # Recommended: "safe", unless you want discourse markers deleted and accept that it can change meaning.
+# See: [profile behavior and pass inspection](cleaning-rules.md#profiles).
 profile = "safe"
 
 # bool. Keep the single final period of a transcript. false removes it, which suits messaging-style dictation. Only a single final period is removed: a final "?" or "!" is kept, and so is a final period that directly follows another period, so the ellipsis in "Wait..." survives.
@@ -202,64 +202,26 @@ keep_trailing_period = false
 # There is no command-line flag. `parakit rules test` honors this key, and `parakit rules list` does not use it.
 number_threshold = 4
 
-# list of strings. Names of rules to turn off. A name is a built-in rule from the inventory below or a [[rules.user]] entry.
+# list of strings. Built-in or [[rules.user]] names to disable; list names and descriptions with `parakit rules list`.
 # Each name is matched exactly, case-sensitively and without trimming.
 # An unknown name fails config load with "no rule named '<name>'", even when cleaning.enabled is false.
 # The name of a rule that is not active under the current profile is valid, and disabling it does nothing.
 # A disabled [[rules.user]] entry must still have a valid name and a regex that compiles.
 # The --disable-rule flag (repeatable) is merged with this list as a union without duplicates. No flag can re-enable a rule disabled here.
 # Names given by the flag are checked only when the cleaner is built (daemon start, `rules list`, `rules test`), not by `parakit config show`.
-# Naming fix-trailing-period here has the same visible effect as cleaning.keep_trailing_period = true.
-# Naming spoken-numbers here makes cleaning.number_threshold inert, though the threshold is still validated.
 # Disabling a built-in rule changes the rule-set id recorded in transcription logs.
-# Built-in rule inventory, in the order the rules run and `parakit rules list` prints them.
-# The tier in parentheses is the tier column of `parakit rules list`. "safe" rules are always on, "aggressive" rules run only when cleaning.profile is "aggressive", and "messaging-default" runs only while cleaning.keep_trailing_period is false.
-#   lead-discourse-comma (aggressive): remove comma-delimited discourse markers at the start of the text or of a sentence.
-#   lead-discourse-word (aggressive): remove a leading so, well, or like before a common continuation.
-#   mid-like-discourse (aggressive): remove comma-delimited "like" followed by "you know" or "I mean" filler.
-#   mid-discourse-parenthetical (aggressive): remove fully comma-delimited discourse phrases such as "you know", "I mean", "like", and "I don't know".
-#   mid-filler-like (aggressive): remove "like" used as filler after a recognized context or a comma.
-#   filled-pauses (safe): remove standalone um, uh, and erm variants (uh, um, uhh, umm, uhm, erm, errm) and the commas next to them. A sentence made only of them, such as "Um." or "Uh, um.", is removed together with its final punctuation.
-#   stutter-i (safe): collapse a run of two or more "I" into one uppercase "I".
-#   stutter-safe-words (safe): collapse repeats of high-confidence function words such as the, a, and, to, of, we, you, it.
-#   contracted-have-restart (safe): remove the repeated subject from a restart such as "I've I've" (subjects I, we, you, they).
-#   stutter-ambiguous-words (aggressive): collapse repeats of that, no, can, had, and do.
-#   repeated-prefix-stutter (safe): remove a repeated one-letter or consonant-digraph start before the word it begins.
-#   spaced-acronyms (safe): join runs of standalone uppercase ASCII letters separated by single spaces ("A P I" becomes "API").
-#   spoken-version-numbers (safe): render multi-point spoken versions ("one point two point three") as digits.
-#   numeric-point-suffixes (safe): append spoken point parts to an existing number.
-#   spoken-numbers (safe): convert spoken English numbers to digits, keeping large magnitudes as words, subject to cleaning.number_threshold.
-#   compact-parameter-counts (safe): render parameter counts with K, M, or B suffixes.
-#   numeric-identifier-groups (safe): join split digit groups in uppercase identifiers.
-#   numeric-magnitude-suffixes (safe): join a number to an uppercase K, M, or B suffix.
-#   compact-version-prefix (safe): join a standalone V or v to a following dotted version, producing a lowercase "v".
-#   compact-short-identifier (safe): join one uppercase letter, or the stem SM, to a following number.
-#   cause-to-because (safe): turn the apostrophe form 'cause into "because".
-#   casual-em-til-round (safe): separate attached 'em, 'til, 'round, 'bout, 'cept, and 'nother.
-#   casual-gonna (safe): expand gonna and gunna to "going to".
-#   casual-gotta (safe): expand gotta to "got to".
-#   casual-wanna (safe): expand wanna and wana to "want to".
-#   casual-kinda (safe): expand kinda to "kind of".
-#   casual-gimme (safe): expand gimme to "give me".
-#   drop-right-tag-question (safe): replace a ", right?" tag question with a period.
-#   drop-dangling-connective (safe): remove a trailing so, but, and, or, or because, promoting a comma, semicolon, or colon before it to a period.
-#   fix-space-before-punct (safe): remove whitespace (including newlines) before , . ; : ! or ?.
-#   fix-collapse-spaces (safe): collapse runs of spaces and tabs.
-#   fix-trim (safe): trim leading and trailing whitespace.
-#   fix-leading-comma (safe): remove one comma left at the start.
-#   capitalize-sentence-starts (safe): capitalize sentence starts, leaving tokens that contain "." or "@", URLs, and tokens with inner capitals alone.
-#   fix-trailing-period (messaging-default): remove one final "." unless it directly follows another "." (an ellipsis is kept); "?" and "!" are kept.
+# See: [inspecting, testing, and disabling passes](cleaning-rules.md#inspect-and-test).
 disabled_rules = []
 
 
 # ---------- [logging]: transcription log ----------
 
 [logging]
-# path string (optional). Directory for JSONL transcription logs: one record per completed dictation (raw and cleaned text, model filename/preset, quantization, device policy, effective Qwen controls, cleaning metadata and timings) and one per insertion attempt (outcome and clipboard telemetry).
+# path string (optional). Directory for JSONL transcription and insertion records.
 # Unset: transcription logging is off.
 # Overridden by: the --log-dir flag. No flag turns a configured directory off.
 # The directory is created on the first write, so neither `parakit config show` nor daemon startup can prove it is writable.
-# A write failure prints `parakit: transcription log write failed: ...` (or `insertion log write failed`) to stderr, which --quiet does not suppress. Dictation continues, and the next dictation tries again.
+# Write failures go to stderr without stopping dictation; the next dictation tries again.
 # This is independent of daemon.transcript_history, which keeps recent transcripts in daemon memory only.
 # An empty string fails config load with "logging.dir is set but empty".
 # An empty --log-dir value is a command-line parse error.
@@ -328,8 +290,6 @@ backend = "auto"
 
 # ---------- Environment variables ----------
 #
-# These are process environment variables, not config keys, and they cannot be set in this file.
-# parakit inherits them from whatever launches it and does not read a .env file.
 # Variables that matter only when building from source are outside this reference.
 
 # PARAKIT_CONFIG_PATH
@@ -399,6 +359,10 @@ backend = "auto"
 # Unset: windowed attention using the model's inference windows. Parakeet models do not use this control.
 # A value parsed as a nonzero integer enables windowing; 0, an empty value or a nonnumeric value keeps the native dense path for models without windowed-attention metadata. Models with explicit windowed-attention metadata retain that behavior.
 # Override it in the launching environment for reference comparisons; restart after changes. There is no config key or command-line flag for it.
+
+# CRISPASR_QWEN3_HOTWORDS_AS_CONTEXT
+# All platforms. Parakit defaults this to 1 at startup so Qwen session hotwords carry free-form context; an existing value is preserved.
+# A nonzero integer enables raw context. Zero, empty, or nonnumeric values make Parakit transcribe without prior context.
 
 # CUDA_VISIBLE_DEVICES
 # CUDA builds. Read by the CUDA runtime, not by parakit. A comma-separated list of NVIDIA GPU indices or UUIDs that CUDA may use; an empty value hides all CUDA devices.

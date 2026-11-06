@@ -54,7 +54,7 @@ parakit fetch --from-source --model-preset qwen3-asr-1.7b \
 
 This directory must contain the original checkpoint and tokenizer/configuration files, not a GGUF. It requires `--from-source` with a Qwen or Moondream preset. The pipeline never removes the supplied directory.
 
-A completed Q8_0 artifact in the preset cache is reused before checking Python dependencies or accessing the network. `--keep-f16` does not create a missing F16 intermediate on that cache hit. If only F16 is cached, it is quantized without re-reading the checkpoint, including a supplied `--checkpoint-dir`. Add `--force` to repeat conversion and quantization; for downloaded checkpoints this also refreshes the selected source commit. Qwen and Moondream presets record fixed provider and source commits in the model catalog, so refresh does not silently select a newer upstream revision. A new catalog revision uses a separate checkpoint directory, preventing stale shards from another revision entering conversion. Rebuilt Q8_0 goes to the same destination as the hosted preset: `parakit start --model-preset NAME` selects it without changing daemon configuration or the application default. Source rebuilding produces Q8_0; the [cached Q6_K workflow](../running.md#model-presets) uses provider F16 instead.
+A completed Q8_0 artifact in the preset cache is reused before checking Python dependencies or accessing the network. `--keep-f16` does not create a missing F16 intermediate on that cache hit. If only F16 is cached, it is quantized without re-reading the checkpoint, including a supplied `--checkpoint-dir`. Add `--force` to repeat conversion and quantization; downloaded checkpoints are refreshed from the same pinned source revision. Qwen and Moondream presets record fixed provider and source commits in the model catalog. A new catalog revision uses a separate checkpoint directory, preventing stale shards from another revision entering conversion. Rebuilt Q8_0 goes to the same destination as the hosted preset: `parakit start --model-preset NAME` selects it without changing daemon configuration or the application default. Source rebuilding produces Q8_0; the [cached Q6_K workflow](../running.md#model-presets) uses provider F16 instead.
 
 Redux conversion reconstructs its packed ternary weights into F16 before Q8_0 quantization. See the [Redux limitations](../running.md#model-presets) and [conversion acceptance checks](quality.md#checkpoint-conversion-acceptance).
 
@@ -64,13 +64,13 @@ GPU build and runtime checks are in [quality.md#gpu-feature-validation](quality.
 
 ## Deferred Runtime Work
 
-TODO: Config does not yet support remapping the actual PTT chord (e.g. a custom macOS fallback of right Command alone, or right Command plus right Option). Keep the default chords as-is until that lands: Linux/Windows use `Ctrl+Space`, and macOS uses `Left Control+Space`.
+TODO: Config does not yet support remapping the actual PTT chords (e.g. right Command alone, or right Command plus right Option on macOS). Keep the [documented platform shortcuts](../running.md) until that lands.
 
 TODO: Keep the direct platform-hotkey path available when configurable chords land. On macOS, extend the existing CoreGraphics event-tap backend so it owns the selected chord, suppresses only that chord, and handles tap-disabled callbacks. On Linux, preserve the [session-specific backends](../linux-desktop.md) and keep the evdev/uinput proxy opt-in. On Windows, `RegisterHotKey` already gives a clear conflict/error boundary.
 
 TODO: Detect configured Linux input-source shortcut conflicts automatically; diagnostics currently provide a [manual-check advisory](../linux-desktop.md#shortcut-conflicts).
 
-TODO: Remove the [Unix source-install dependency on the repository `target/` library tree](../build.md#install) in a dedicated follow-up PR. First try to work upstream with CrispASR for static/manual linking support; if that is not viable, revisit full vendoring or an aggregate static-link strategy in parakit. Do not patch the CrispASR submodule locally for this.
+TODO: Remove the [Unix source-install dependency on Cargo's native build output](../build.md#install) in a dedicated follow-up PR. First try to work upstream with CrispASR for static/manual linking support; if that is not viable, revisit full vendoring or an aggregate static-link strategy in parakit. Do not patch the CrispASR submodule locally for this.
 
 TODO: Revisit Linux/macOS microphone idle policy. Either move them to the same pause/resume default as Windows or keep 350 ms warm pre-roll only with measured idle CPU and first-syllable evidence that justifies the cost.
 
@@ -94,4 +94,20 @@ TODO: Complete the remaining [native model and physical desktop checks](model-va
 
 ## Updating [CrispASR](https://github.com/CrispStrobe/CrispASR)
 
-Use the [dependency update procedure](crispasr-upgrade.md#updating-crispasr) to keep native sources, Rust bindings, and the lockfile aligned.
+Update the native source, its nested submodules, both Rust path crates, and `Cargo.lock` together. Review upstream changes to the session ABI, model setters, ggml device registry, loader, and platform-specific link behavior before changing the pin. Run Cargo from the repository root so `.cargo/config.toml` selects Parakit's native-build owner.
+
+```bash
+git submodule update --init --recursive
+cd vendor/CrispASR
+git fetch --tags
+git checkout '<tag-or-commit>'
+git submodule update --init --recursive
+cd ../..
+cargo check
+git add vendor/CrispASR Cargo.lock
+cargo check --locked
+```
+
+The submodule contains the two Rust path crates. The root `cargo check` refreshes `Cargo.lock`; stage it with the changed CrispASR gitlink, then use `cargo check --locked` to verify the lockfile. Review each source anchor in `build/native_correctness.rs` against the new native source, retaining corrections until upstream provides equivalent behavior. Rebuild the native library for validation; an older cached library cannot exercise the upgraded source. Keep the C++ device adapter aligned with the selected ggml headers and libraries. See the [build guide](../build.md#crispasr-and-backends) for bundled corrections, supported CMake settings, external-library requirements, and the matching ABI, and [architecture](architecture.md) for worker ownership and reload behavior.
+
+Check the PCM input contract, segment-text handling, runtime defaults, and model preprocessing/orchestration when upstream behavior changes. The daemon and `transcribe-file` initialize native defaults before threads or model opening. Library callers can call `initialize_crispasr_runtime_defaults` at that point or set the equivalent environment variables before native initialization. See the [model validation guide](model-validation.md) for current build, inference, and desktop checks.

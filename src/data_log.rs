@@ -76,6 +76,17 @@ pub struct InferenceLogFields {
     /// Per-chunk generation budget; absent for other backends.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub qwen_max_new_tokens: Option<usize>,
+    /// Latched shortcut intent: `plain` or `with_context`, independent of default policy;
+    /// absent for other backends.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_mode: Option<&'static str>,
+    /// Unicode characters actually supplied to inference, including before a retry;
+    /// absent for other backends.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_chars: Option<usize>,
+    /// Whether a contextual error, empty output, or copied context caused an ordinary inference retry; absent for other backends.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_retried: Option<bool>,
     /// Version reported by the linked native C API.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub native_api_version: Option<String>,

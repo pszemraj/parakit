@@ -499,6 +499,20 @@ fn hotkey_report(backend: HotkeyBackend, _prompt_accessibility: bool) -> HotkeyR
         }
         None => writeln!(&mut details, "  registered:     not selected").unwrap(),
     }
+    if registered.is_some() {
+        match super::hotkey::context_hotkey_probe() {
+            Ok(()) => writeln!(
+                &mut details,
+                "  context hotkey: Ctrl+Alt+Space available (Qwen only)"
+            )
+            .unwrap(),
+            Err(err) => writeln!(
+                &mut details,
+                "  context hotkey: unavailable ({err:#}); ordinary dictation remains available"
+            )
+            .unwrap(),
+        }
+    }
     match x11_listen.as_ref() {
         Some(Ok(())) => writeln!(&mut details, "  x11-listen:     session available").unwrap(),
         Some(Err(err)) => {
@@ -835,6 +849,18 @@ fn hotkey_report(_backend: HotkeyBackend, _prompt_accessibility: bool) -> Hotkey
     match &registered {
         Ok(()) => writeln!(&mut details, "  registered:     Ctrl+Space available").unwrap(),
         Err(err) => writeln!(&mut details, "  registered:     unavailable ({err:#})").unwrap(),
+    }
+    match super::windows_input::context_hotkey_probe() {
+        Ok(()) => writeln!(
+            &mut details,
+            "  context hotkey: Ctrl+Alt+Space available (Qwen only)"
+        )
+        .unwrap(),
+        Err(err) => writeln!(
+            &mut details,
+            "  context hotkey: unavailable ({err:#}); ordinary dictation remains available"
+        )
+        .unwrap(),
     }
     writeln!(
         &mut details,

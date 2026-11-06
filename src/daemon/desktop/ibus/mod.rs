@@ -110,7 +110,16 @@ impl IbusClient {
     pub(crate) fn set_ready(&self, _ready: bool) {}
 
     /// Ignore the native PTT channel for a feature-disabled build.
-    pub(crate) fn set_ptt_sender(&self, _sender: Option<Sender<HotkeyTransition>>) {}
+    ///
+    /// # Arguments
+    /// * `_sender` - Unused coordinator channel.
+    /// * `_context_enabled` - Unused context chord setting.
+    pub(crate) fn set_ptt_sender(
+        &self,
+        _sender: Option<Sender<HotkeyTransition>>,
+        _context_enabled: bool,
+    ) {
+    }
 
     /// Reject before submission when the native backend is not compiled.
     ///

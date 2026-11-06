@@ -13,6 +13,8 @@ typedef struct {
     uint64_t revision;
     gboolean ready;
     gboolean ptt;
+    gboolean context_enabled;
+    gboolean attach_warned;
     gboolean held;
     gboolean stopping;
     guint pending;
@@ -54,15 +56,27 @@ typedef struct {
 static void attached(GObject *object, GAsyncResult *result, gpointer user) {
     AttachRequest *request = user;
     PkClient *client = request->client;
-    GVariant *reply = g_dbus_connection_call_finish(G_DBUS_CONNECTION(object), result, NULL);
+    GError *error = NULL;
+    GVariant *reply = g_dbus_connection_call_finish(G_DBUS_CONNECTION(object), result, &error);
     --client->pending;
-    if (!client->stopping && reply && request->revision == client->revision &&
+    if (!client->stopping && request->revision == client->revision &&
         g_strcmp0(request->owner, client->owner) == 0) {
-        GVariant *value = g_variant_get_child_value(reply, 0);
-        client->target = pk_target_read(value);
-        g_variant_unref(value);
-        notify(client, 0, &client->target);
+        if (reply) {
+            client->attach_warned = FALSE;
+            GVariant *value = g_variant_get_child_value(reply, 0);
+            client->target = pk_target_read(value);
+            g_variant_unref(value);
+            notify(client, 0, &client->target);
+        } else if (!client->attach_warned &&
+                   !g_error_matches(error, G_IO_ERROR, G_IO_ERROR_CANCELLED)) {
+            client->attach_warned = TRUE;
+            g_printerr("parakit: warning: could not attach to parakit-ibus: %s; "
+                       "reinstall matching parakit and parakit-ibus binaries, then "
+                       "log out and back in to reload the helper\n",
+                       error->message);
+        }
     }
+    g_clear_error(&error);
     if (reply)
         g_variant_unref(reply);
     g_free(request->owner);
@@ -78,7 +92,7 @@ static void attach(PkClient *client) {
     request->revision = ++client->revision;
     ++client->pending;
     g_dbus_connection_call(client->connection, client->owner, PK_BRIDGE_PATH,
-        PK_BRIDGE_INTERFACE, "Attach", g_variant_new("(bb)", client->ready, client->ptt),
+        PK_BRIDGE_INTERFACE, "Attach", g_variant_new("(bbb)", client->ready, client->ptt, client->context_enabled),
         G_VARIANT_TYPE("(" PK_TARGET_TYPE ")"), G_DBUS_CALL_FLAGS_NO_AUTO_START,
         2000, client->cancel, attached, request);
 }
@@ -99,13 +113,13 @@ static void bridge_signal(GDBusConnection *connection, const gchar *sender,
         g_variant_unref(value);
         notify(client, 0, &client->target);
     } else if (g_str_equal(name, "Ptt")) {
-        gboolean pressed;
-        g_variant_get(parameters, "(b@" PK_TARGET_TYPE ")", &pressed, &value);
+        gboolean pressed, with_context;
+        g_variant_get(parameters, "(bb@" PK_TARGET_TYPE ")", &pressed, &with_context, &value);
         PkTarget target = pk_target_read(value);
         g_variant_unref(value);
         if (pressed && client->ready && client->ptt && target.engine_id) {
             client->held = TRUE;
-            notify(client, 1, &target);
+            notify(client, with_context ? 4 : 1, &target);
         } else if (!pressed && client->held) {
             client->held = FALSE;
             notify(client, 2, NULL);
@@ -195,13 +209,15 @@ void parakit_ibus_client_run(void *pointer) {
     g_main_context_pop_thread_default(client->context);
 }
 
-typedef struct { PkClient *client; gboolean ready; gboolean ptt; } Configure;
+typedef struct { PkClient *client; gboolean ready; gboolean ptt; gboolean context_enabled; } Configure;
 static gboolean configure(gpointer user) {
     Configure *request = user;
     PkClient *client = request->client;
-    if (client->ready != request->ready || client->ptt != request->ptt) {
+    if (client->ready != request->ready || client->ptt != request->ptt ||
+        client->context_enabled != request->context_enabled) {
         client->ready = request->ready;
         client->ptt = request->ptt;
+        client->context_enabled = request->context_enabled;
         clear_target(client);
         if (client->ready) {
             attach(client);
@@ -215,9 +231,9 @@ static gboolean configure(gpointer user) {
     return G_SOURCE_REMOVE;
 }
 
-void parakit_ibus_client_configure(void *pointer, int ready, int ptt) {
+void parakit_ibus_client_configure(void *pointer, int ready, int ptt, int context_enabled) {
     Configure *request = g_new(Configure, 1);
-    *request = (Configure){pointer, ready, ptt};
+    *request = (Configure){pointer, ready, ptt, context_enabled};
     g_main_context_invoke_full(request->client->context, G_PRIORITY_DEFAULT,
                                configure, request, g_free);
 }

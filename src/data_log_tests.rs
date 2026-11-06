@@ -654,6 +654,9 @@ fn inference_metadata_preserves_requested_policy_across_cpu_reload() {
                         .then(|| "cpu".into()),
                     qwen_language: Some("Cantonese".into()),
                     qwen_max_new_tokens: Some(4096),
+                    context_mode: None,
+                    context_chars: None,
+                    context_retried: None,
                     native_api_version: Some("0.7.0".into()),
                 }),
             )

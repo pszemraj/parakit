@@ -27,6 +27,10 @@ typedef struct {
     uint64_t next_engine;
     gboolean ready;
     gboolean ptt;
+    gboolean context_enabled;
+    /* IBus exposes neither physical key state nor a repeat flag. Elapsed time
+       cannot distinguish delayed repeat from a fresh press after missed release. */
+    gboolean space_held;
     /* Focus/source changes must not rearm a physically held dictation chord. */
     gboolean ptt_inhibited;
     PkEngine *focused;
@@ -74,7 +78,7 @@ static void release_held(void) {
         return;
     helper->held = NULL;
     PkTarget empty = {0};
-    emit_signal("Ptt", g_variant_new("(b@" PK_TARGET_TYPE ")", FALSE,
+    emit_signal("Ptt", g_variant_new("(bb@" PK_TARGET_TYPE ")", FALSE, FALSE,
                                     pk_target_variant(&empty)));
 }
 
@@ -100,9 +104,13 @@ static void change_focus(PkEngine *engine) {
 static gboolean process_key(IBusEngine *base, guint keyval, guint keycode, guint state) {
     PkEngine *engine = (PkEngine *)base;
     gboolean release = (state & IBUS_RELEASE_MASK) != 0;
-    if (keyval == IBUS_KEY_Control_L || keyval == IBUS_KEY_Control_R ||
-        (release && keyval == IBUS_KEY_space) ||
-        (!release && !(state & IBUS_CONTROL_MASK)))
+    gboolean space_was_held = helper->space_held;
+    if (keyval == IBUS_KEY_space)
+        helper->space_held = !release;
+    if (!helper->space_held &&
+        (keyval == IBUS_KEY_Control_L || keyval == IBUS_KEY_Control_R ||
+         (release && keyval == IBUS_KEY_space) ||
+         (!release && !(state & IBUS_CONTROL_MASK))))
         helper->ptt_inhibited = FALSE;
     if (keyval == IBUS_KEY_space && engine->space_consumed) {
         if (release) {
@@ -121,19 +129,23 @@ static gboolean process_key(IBusEngine *base, guint keyval, guint keycode, guint
     guint modifiers = state & (IBUS_CONTROL_MASK | IBUS_SHIFT_MASK |
                                IBUS_MOD1_MASK | IBUS_MOD4_MASK | IBUS_MOD5_MASK |
                                IBUS_SUPER_MASK | IBUS_META_MASK | IBUS_HYPER_MASK);
+    gboolean with_context = helper->context_enabled &&
+        modifiers == (IBUS_CONTROL_MASK | IBUS_MOD1_MASK);
     if (helper->ptt && !release && keyval == IBUS_KEY_space &&
-        modifiers == IBUS_CONTROL_MASK && helper->focused == engine) {
+        (modifiers == IBUS_CONTROL_MASK || with_context) && helper->focused == engine) {
         if (helper->ptt_inhibited)
             return TRUE;
-        PkTarget target = current_target();
-        if (target_is_eligible(&target)) {
-            engine->space_consumed = TRUE;
-            if (!helper->held) {
-                helper->held = engine;
-                emit_signal("Ptt", g_variant_new("(b@" PK_TARGET_TYPE ")", TRUE,
-                                                pk_target_variant(&target)));
+        if (!space_was_held) {
+            PkTarget target = current_target();
+            if (target_is_eligible(&target)) {
+                engine->space_consumed = TRUE;
+                if (!helper->held) {
+                    helper->held = engine;
+                    emit_signal("Ptt", g_variant_new("(bb@" PK_TARGET_TYPE ")", TRUE, with_context,
+                                                    pk_target_variant(&target)));
+                }
+                return TRUE;
             }
-            return TRUE;
         }
     }
     return IBUS_ENGINE_CLASS(pk_engine_parent_class)->process_key_event(
@@ -270,13 +282,15 @@ static void bridge_call(GDBusConnection *connection, const gchar *sender,
     (void)interface;
     (void)data;
     if (g_str_equal(method, "Attach")) {
-        gboolean ready, ptt;
-        g_variant_get(parameters, "(bb)", &ready, &ptt);
-        if (g_strcmp0(helper->daemon, sender) || helper->ready != ready || helper->ptt != ptt) {
+        gboolean ready, ptt, context_enabled;
+        g_variant_get(parameters, "(bbb)", &ready, &ptt, &context_enabled);
+        if (g_strcmp0(helper->daemon, sender) || helper->ready != ready || helper->ptt != ptt ||
+            helper->context_enabled != context_enabled) {
             detach_daemon();
             helper->daemon = g_strdup(sender);
             helper->ready = ready;
             helper->ptt = ptt;
+            helper->context_enabled = context_enabled;
             helper->daemon_watch = g_bus_watch_name_on_connection(connection, sender,
                 G_BUS_NAME_WATCHER_FLAGS_NONE, NULL, daemon_vanished, NULL, NULL);
         }
@@ -306,13 +320,13 @@ static void bridge_call(GDBusConnection *connection, const gchar *sender,
 static const GDBusInterfaceVTable bridge_vtable = {bridge_call, NULL, NULL, {0}};
 static const gchar bridge_xml[] =
     "<node><interface name='" PK_BRIDGE_INTERFACE "'>"
-    "<method name='Attach'><arg type='b' direction='in'/><arg type='b' direction='in'/>"
+    "<method name='Attach'><arg type='b' direction='in'/><arg type='b' direction='in'/><arg type='b' direction='in'/>"
     "<arg type='" PK_TARGET_TYPE "' direction='out'/></method>"
     "<method name='Detach'/>"
     "<method name='Commit'><arg type='" PK_TARGET_TYPE "' direction='in'/>"
     "<arg type='s' direction='in'/><arg type='b' direction='out'/></method>"
     "<signal name='TargetChanged'><arg type='" PK_TARGET_TYPE "'/></signal>"
-    "<signal name='Ptt'><arg type='b'/><arg type='" PK_TARGET_TYPE "'/></signal>"
+    "<signal name='Ptt'><arg type='b'/><arg type='b'/><arg type='" PK_TARGET_TYPE "'/></signal>"
     "</interface></node>";
 
 static void disconnected(IBusBus *bus, gpointer data) {

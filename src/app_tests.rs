@@ -481,6 +481,33 @@ fn worker_settings_preserve_defaults_config_and_cli_precedence() {
         );
         assert_eq!(log_summary.as_deref(), expected_log, "{args:?}");
     }
+
+    // (dictations, history, on_default_hotkey, context enabled, extra shortcut enabled)
+    for (dictations, history, on_default, expected, expected_shortcut) in [
+        (None, None, None, true, true),
+        (Some(0), None, None, false, false),
+        (None, Some(0), None, false, false),
+        (Some(0), Some(0), None, false, false),
+        (Some(2), Some(5), None, true, true),
+        (None, None, Some(false), true, true),
+        (None, None, Some(true), true, false),
+        (Some(2), Some(5), Some(true), true, false),
+        (Some(0), None, Some(true), false, false),
+        (None, Some(0), Some(true), false, false),
+    ] {
+        let mut config = ConfigFile::default();
+        config.qwen.context_dictations = dictations;
+        config.qwen.context_on_default_hotkey = on_default;
+        config.daemon.transcript_history = history;
+        let limit = config.daemon.effective_transcript_history();
+        let case = (dictations, history, on_default);
+        assert_eq!(config.qwen.context_enabled(limit), expected, "{case:?}");
+        assert_eq!(
+            config.qwen.context_shortcut_enabled(limit),
+            expected_shortcut,
+            "{case:?}"
+        );
+    }
 }
 
 #[test]

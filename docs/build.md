@@ -1,6 +1,6 @@
 # Build
 
-parakit is a Rust binary that links to the vendored [CrispASR](https://github.com/CrispStrobe/CrispASR) submodule. The default build is CPU-only and may use detected CPU BLAS libraries.
+Parakit is a Rust application that links to the vendored [CrispASR](https://github.com/CrispStrobe/CrispASR) submodule. The default build is CPU-only and may use detected CPU BLAS libraries.
 
 Command examples use a POSIX shell unless the surrounding section is Windows-specific. Windows-only commands are shown as `bat` or `powershell`.
 
@@ -44,9 +44,12 @@ Linux developer install:
 cargo install --locked --path .
 ```
 
-`cargo install --locked --path .` installs the release executables to Cargo's bin directory, usually `~/.cargo/bin`, using the validated `Cargo.lock` dependency set that supports the declared Rust 1.87 minimum.
+This installs the release build to Cargo's bin directory, usually `~/.cargo/bin`, using the committed `Cargo.lock`. Default Linux features install and update two executables together:
 
-Linux builds enable IBus by default. Complete the one-time [IBus registration and input-source setup](linux-desktop.md#ibus-setup) after installing. To build an X11-only daemon without the IBus dependency:
+- `parakit`: the CLI and dictation daemon.
+- `parakit-ibus`: the input-method helper; see [automatic startup and upgrades](linux-desktop.md#ibus-setup).
+
+Linux builds enable IBus by default, including when adding `--features cuda`. The IBus development package in the [native dependency table](#native-dependencies) is required even when upgrading an existing X11 installation. Follow the [IBus setup](linux-desktop.md#ibus-setup) when choosing native input. To build an X11-only daemon without IBus support:
 
 ```bash
 cargo install --locked --path . --no-default-features --features bundled,daemon
@@ -57,7 +60,7 @@ That build retains X11 clipboard paste and direct typing, and cannot provide nat
 Install behavior:
 
 - Windows installs need the generated CrispASR/ggml DLLs alongside `parakit.exe`; use the [Windows bundle procedure](../scripts/windows/README.md).
-- Linux and macOS source installs currently depend on the generated CrispASR shared libraries under Cargo's build output. Do not delete the repository `target/` tree.
+- Linux and macOS source installs currently depend on the generated CrispASR shared libraries under Cargo's build output. Retain that build-output directory after installation, including when choosing a separate `CARGO_TARGET_DIR`.
 - GitHub auto-generated source archives are unsupported because they do not include the CrispASR submodule. A public release must ship either a source archive with submodules or a binary bundle whose shared libraries are colocated with the executable.
 
 Optional accelerator builds:
@@ -67,8 +70,6 @@ cargo install --locked --path . --features cuda
 cargo install --locked --path . --features vulkan
 cargo install --locked --path . --features metal  # Apple targets only
 ```
-
-For Windows bundles, use the [backend selector and requirements](../scripts/windows/README.md#backend-requirements).
 
 On macOS, `aarch64-apple-darwin` is the supported target. Build from a native arm64 terminal; an x86_64/Rosetta build may not expose the Metal backend to ggml.
 
@@ -133,7 +134,7 @@ Supported values:
 | `generic`, `system`, `blas`, `on`, `yes`, `true`, `1` | `GGML_BLAS=ON`, `GGML_BLAS_VENDOR=Generic`. |
 | `accelerate`, `apple` | Apple Accelerate. Apple targets only. |
 
-Windows OpenBLAS layout and bundling behavior are in [../scripts/windows/README.md#blas](../scripts/windows/README.md#blas).
+Windows OpenBLAS layout and bundling behavior are in the [Windows build guide](../scripts/windows/README.md#blas).
 
 Ubuntu/Debian OpenBLAS:
 
@@ -148,15 +149,15 @@ Explicit `PARAKIT_BLAS` builds print the requested and selected modes as a Cargo
 
 ## CrispASR And Backends
 
-The repository vendors [CrispASR](https://github.com/CrispStrobe/CrispASR) as a git submodule. `build.rs` owns its CMake build and installs shared libraries under `target/<profile>/build/parakit-*/out/lib`. Concrete target overrides in `.cargo/config.toml` suppress the sys crate's competing native build. Run Cargo from the repository root so this configuration is loaded; an outside-directory `cargo build --manifest-path ...` does not load it. Source rebuild requirements are in [dev/README.md#source-rebuild](dev/README.md#source-rebuild).
+The repository vendors [CrispASR v0.8.49](https://github.com/CrispStrobe/CrispASR/tree/d94264379dada437aa4ea9163eb34ffe4554422a) at `d94264379dada437aa4ea9163eb34ffe4554422a` as a git submodule. `build.rs` owns its CMake build and installs shared libraries under `target/<profile>/build/parakit-*/out/lib`. Concrete target overrides in `.cargo/config.toml` suppress the sys crate's competing native build. Run Cargo from the repository root so this configuration is loaded; an outside-directory `cargo build --manifest-path ...` does not load it. Source rebuild requirements are in [dev/README.md#source-rebuild](dev/README.md#source-rebuild).
 
-The bundled build compiles patched copies of CrispASR's session and Parakeet orchestration sources under Cargo's `OUT_DIR`; it leaves the submodule unchanged. The patches make chunk failures fail the whole utterance, require Qwen decoding to reach EOS, and restrict language-metadata parsing to the output header. Qwen's energy filter also retains recoverable quiet clauses around louder speech. The orchestration copy removes the informational gap-recovery notice while preserving warnings, including the streamed-encoding fallback after an allocation failure. A deferred CMake hook substitutes these two translation units, which requires CMake 3.19+.
+The bundled build compiles patched copies of CrispASR's session and Parakeet orchestration sources under Cargo's `OUT_DIR`; it leaves the submodule unchanged. The patches make chunk failures fail the whole utterance, require Qwen decoding to reach EOS, and restrict language-metadata parsing to the output header. Qwen's energy filter also retains recoverable quiet clauses around louder speech. The orchestration copy removes the informational gap-recovery notice while preserving warnings, including the streamed-encoding fallback after an allocation failure. A deferred CMake hook substitutes these two translation units.
 
 `CRISPASR_LIB_DIR` is for advanced local experiments with an already-built compatible CrispASR tree. The library must match the pinned C ABI, including `crispasr_session_open_with_params`. Bundled builds must also provide compatible ggml libraries with the exported device registry entry points used by `parakit doctor` and `--device gpu` preflight. Parakit compiles its device-query adapter against the selected native source headers, including when `CRISPASR_LIB_DIR` skips native compilation; those headers must match the supplied libraries.
 
-External libraries must also supply the Qwen language/token setters and equivalent native correctness fixes before using Qwen. Selecting an external library skips the bundled source patches; the bundled build is the initial Qwen acceptance target.
+External libraries must also supply the Qwen language/token setters, free-form context routing through `CRISPASR_QWEN3_HOTWORDS_AS_CONTEXT=1`, and equivalent native correctness fixes before using Qwen. Selecting an external library skips the bundled source patches; the bundled build is the initial Qwen acceptance target.
 
-`CRISPASR_SRC_DIR` is an optional path to another CrispASR source tree containing `CMakeLists.txt`; by default, the bundled CMake build uses the vendored tree. An alternative tree must remain ABI-compatible with the vendored Rust crates; this override changes native sources and headers only, not the Rust path dependencies. It cannot replace a missing submodule because Cargo resolves those path dependencies before `build.rs` runs.
+`CRISPASR_SRC_DIR` is an optional path to another CrispASR source tree containing `CMakeLists.txt`; by default, the bundled CMake build uses the vendored tree. An alternative tree must remain ABI-compatible with the vendored Rust crates and retain the reviewed source anchors used by the bundled correctness patches. This override changes native sources and headers only, not the Rust path dependencies. It cannot replace a missing submodule because Cargo resolves those path dependencies before `build.rs` runs.
 
 For CUDA builds, `PARAKIT_CUDA_ARCHS` is trimmed and, when nonempty, passed as `CMAKE_CUDA_ARCHITECTURES`; omission or a blank value keeps ggml's native selection. CMake accepts values such as `89-real` and semicolon-separated architecture lists.
 

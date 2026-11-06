@@ -156,6 +156,26 @@ impl OwnedSession {
         Ok(())
     }
 
+    /// Set Qwen context text, or clear it with an empty string.
+    ///
+    /// # Arguments
+    /// * `text` - UTF-8 text retained by the native session until replaced.
+    ///
+    /// # Returns
+    /// Success after the native session accepts the text.
+    ///
+    /// # Errors
+    /// Returns an error for an interior NUL or a native setter failure.
+    pub(crate) fn set_hotwords(&self, text: &str) -> Result<(), String> {
+        let text = CString::new(text).map_err(|err| err.to_string())?;
+        let rc =
+            unsafe { crispasr_sys::crispasr_session_set_hotwords(self.handle, text.as_ptr(), 1.0) };
+        if rc != 0 {
+            return Err(format!("set_hotwords failed (rc={rc})"));
+        }
+        Ok(())
+    }
+
     /// Transcribe 16 kHz mono PCM through the raw session.
     ///
     /// # Returns
