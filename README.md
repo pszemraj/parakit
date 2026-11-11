@@ -28,13 +28,24 @@ cd parakit
 cargo install --locked --path .
 ```
 
+```bash
+# Direct Git install (CPU):
+cargo install --locked --git https://github.com/pszemraj/parakit.git parakit
+# Linux CUDA:
+# cargo install --locked --git https://github.com/pszemraj/parakit.git --features cuda parakit
+# Linux Vulkan:
+# cargo install --locked --git https://github.com/pszemraj/parakit.git --features vulkan parakit
+# Apple Silicon Metal:
+# cargo install --locked --git https://github.com/pszemraj/parakit.git --features metal parakit
+```
+
 The default build is CPU-only. Append `--features cuda` or `--features vulkan` on Linux, or `--features metal` on Apple Silicon macOS.
 
-On Linux/macOS, keep the native build directory.[^3]
+Bundled builds link CrispASR/ggml statically.[^3]
 
-[^3]: The installed binary loads CrispASR/ggml shared libraries from Cargo's build output (`target/` by default). See [install behavior](docs/build.md#install).
+[^3]: Native OS and accelerator runtime prerequisites still apply. See [install behavior](docs/build.md#install).
 
-On Windows, use the bundle script instead of `cargo install` when you want a runnable app directory. See [scripts/windows/README.md](scripts/windows/README.md).
+On Windows, the bundle script packages an app directory with optional runtime DLLs. See [scripts/windows/README.md](scripts/windows/README.md).
 
 Make sure Cargo's bin directory is on `PATH`:
 
