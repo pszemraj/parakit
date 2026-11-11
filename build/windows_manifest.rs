@@ -81,6 +81,7 @@ impl RuntimeManifest {
 ///
 /// Flat DLL file names that should be removed before staging the current
 /// bundle, or an empty vector when the previous manifest cannot be read.
+#[cfg(test)]
 pub(crate) fn stale_runtime_dlls(previous_json: &str, current_dlls: &[String]) -> Vec<String> {
     let Ok(manifest) = serde_json::from_str::<Value>(previous_json) else {
         return Vec::new();

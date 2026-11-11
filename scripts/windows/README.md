@@ -75,7 +75,7 @@ All backends need Rust, CMake on `PATH`, and Visual Studio 2022 with the "Deskto
 
 | Backend | Command | Build-time requirements | Runtime expectation |
 | --- | --- | --- | --- |
-| CPU | `build.ps1 --backend cpu` | No additional SDK. | Generated CrispASR/ggml DLLs are bundled. BLAS is autodetected unless overridden. |
+| CPU | `build.ps1 --backend cpu` | No additional SDK. | CrispASR/ggml are linked statically. Optional BLAS runtimes are bundled. |
 | CUDA | `build.ps1 --backend cuda` | NVIDIA CUDA Toolkit with `nvcc`; `CUDA_PATH` may be inferred from `nvcc.exe` on `PATH` | NVIDIA-only. CUDA runtime and cuBLAS DLLs must be found from the installed app directory or `PATH`, unless `--bundle-cuda-dlls` is used. |
 | Vulkan | `build.ps1 --backend vulkan` | LunarG Vulkan SDK with `glslc`; `VULKAN_SDK` may be autodetected from `C:\VulkanSDK\*` or inferred from `glslc.exe` on `PATH` | Recommended Windows GPU backend for NVIDIA, AMD, and Intel. Install a compatible GPU driver; its `vulkan-1.dll` must be present through System32 or `PATH`. |
 
@@ -122,7 +122,7 @@ The build script checks whether `vendor\CrispASR` is already populated before to
 
 ## Runtime Manifest
 
-The build writes `parakit-runtime-manifest.json` beside `parakit.exe`. The bundle copies every file in `required_files`, and the installer validates those entries before installing.
+Cargo's build script writes `parakit-runtime-manifest.json` and external runtime DLLs under `OUT_DIR/bin`. The bundle script discovers that directory from Cargo's JSON build messages, then copies the executable and every file in `required_files` into the app directory. The installer validates those entries before installing. Native CrispASR/ggml archives are linked into the executable and are not bundle files.
 
 `install.ps1` checks external CUDA/Vulkan runtime DLLs, copies the bundle into a sibling staging directory, and runs `parakit --version` there before replacing an existing installation. It keeps the old directory as a backup until a second loader check at the installed path passes. On failure, it restores the backup; if rollback itself fails, the error reports the backup's location.
 

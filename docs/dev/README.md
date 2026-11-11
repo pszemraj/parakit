@@ -10,6 +10,26 @@ The Parakeet converter, loader, and `crispasr-quantize` path are built around F1
 
 ## Source Rebuild
 
+Conversion tools are installed separately from Parakit. `fetch --quantize q6_k` needs `crispasr-quantize` (`crispasr-quantize.exe` on Windows) on `PATH`. `fetch --from-source` also needs the applicable `convert-parakeet-to-gguf.py` or `convert-qwen3-asr-to-gguf.py` on `PATH`; automatic Qwen/Moondream checkpoint downloading needs `download_asr_checkpoint.py`. Scripts are found as files on `PATH` and run with Python, so they do not need executable permissions.
+
+From a checkout with the pinned submodule, build the optional quantizer explicitly and copy the tools to a separately maintained directory. This example uses a prefix of your choice:
+
+```bash
+cmake -S vendor/CrispASR -B target/conversion-tools \
+  -DBUILD_SHARED_LIBS=OFF -DCRISPASR_BUILD_TESTS=OFF \
+  -DCRISPASR_BUILD_EXAMPLES=ON -DCRISPASR_BUILD_SERVER=OFF
+cmake --build target/conversion-tools --config Release --target crispasr-quantize --parallel
+tool_prefix="$HOME/.local"
+mkdir -p "$tool_prefix/bin"
+cp target/conversion-tools/bin/crispasr-quantize "$tool_prefix/bin/"
+cp vendor/CrispASR/models/convert-parakeet-to-gguf.py \
+  vendor/CrispASR/models/convert-qwen3-asr-to-gguf.py \
+  scripts/download_asr_checkpoint.py "$tool_prefix/bin/"
+export PATH="$tool_prefix/bin:$PATH"
+```
+
+On Windows, build the same CMake target and copy its `crispasr-quantize.exe` plus the Python scripts to a directory on `PATH`; a multi-config generator can put the executable under `bin/Release/`. Native quantizer and accelerator prerequisites remain those of the selected CrispASR build. These installed tools do not depend on the original Parakit checkout. Ordinary builds do not compile the CrispASR examples.
+
 Install the conversion dependencies once in the Python environment used by `fetch`:
 
 ```bash
@@ -28,7 +48,7 @@ Select `parakeet-v3` explicitly to rebuild from NVIDIA's `.nemo` checkpoint:
 parakit fetch --from-source --model-preset parakeet-v3 --keep-f16 --keep-nemo
 ```
 
-That path downloads [NVIDIA's official `.nemo`](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3), converts it with `vendor/CrispASR/models/convert-parakeet-to-gguf.py`, and quantizes the intermediate GGUF with `crispasr-quantize`.
+That path downloads [NVIDIA's official `.nemo`](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3), converts it with the installed `convert-parakeet-to-gguf.py`, and quantizes the intermediate GGUF with `crispasr-quantize`.
 
 Rebuild a Qwen or Moondream preset from its original Hugging Face checkpoint:
 
@@ -43,7 +63,7 @@ parakit fetch --from-source --model-preset qwen3-asr-1.7b --keep-f16
 | `parakeet-ultra` | [moondream/parakeet-ultra](https://huggingface.co/moondream/parakeet-ultra) |
 | `parakeet-redux` | [moondream/parakeet-redux](https://huggingface.co/moondream/parakeet-redux) |
 
-The pipeline downloads and retains the original snapshot under `<model cache>/checkpoints/<preset-id>/<source-commit>/`, converts it to F16 with the vendored model converter, then runs the built `crispasr-quantize` with `q8_0`. `--keep-f16` retains the intermediate GGUF beside the final Q8_0; without it the intermediate is removed once Q8_0 is ready, including on a completed Q8_0 cache hit. `--keep-nemo` applies only to the original Parakeet v3 path.
+The pipeline downloads and retains the original snapshot under `<model cache>/checkpoints/<preset-id>/<source-commit>/`, converts it to F16 with the installed model converter, then runs `crispasr-quantize` with `q8_0`. `--keep-f16` retains the intermediate GGUF beside the final Q8_0; without it the intermediate is removed once Q8_0 is ready, including on a completed Q8_0 cache hit. `--keep-nemo` applies only to the original Parakeet v3 path.
 
 For an existing original Hugging Face snapshot, add `--checkpoint-dir`:
 
@@ -58,7 +78,7 @@ A completed Q8_0 artifact in the preset cache is reused before checking Python d
 
 Redux conversion reconstructs its packed ternary weights into F16 before Q8_0 quantization. See the [Redux limitations](../running.md#model-presets) and [conversion acceptance checks](quality.md#checkpoint-conversion-acceptance).
 
-On Windows, the hosted Q8_0 path is the normal model setup. `fetch --from-source` requires a compatible `crispasr-quantize.exe` on `PATH` because bundled CPU builds skip the CrispASR examples tree under MSVC.
+Hosted Q8_0 downloads and completed model-cache reuse do not need conversion tools or Python. Missing tools report their filename and installation guidance before starting conversion.
 
 GPU build and runtime checks are in [quality.md#gpu-feature-validation](quality.md#gpu-feature-validation).
 
@@ -94,7 +114,7 @@ TODO: Complete the remaining [native model and physical desktop checks](model-va
 
 ## Updating [CrispASR](https://github.com/CrispStrobe/CrispASR)
 
-Update the native source, its nested submodules, both Rust path crates, and `Cargo.lock` together. Review upstream changes to the session ABI, model setters, ggml device registry, loader, and platform-specific link behavior before changing the pin. Run Cargo from the repository root so `.cargo/config.toml` selects Parakit's native-build owner.
+Update the native source, its nested submodules, both local binding manifests, and `Cargo.lock` together. Review upstream changes to the session ABI, model setters, ggml device registry, loader, and platform-specific link behavior before changing the pin. Parakit owns native compilation independently of local Cargo configuration.
 
 ```bash
 git submodule update --init --recursive
@@ -108,6 +128,6 @@ git add vendor/CrispASR Cargo.lock
 cargo check --locked
 ```
 
-The submodule contains the two Rust path crates. The root `cargo check` refreshes `Cargo.lock`; stage it with the changed CrispASR gitlink, then use `cargo check --locked` to verify the lockfile. Review each source anchor in `build/native_correctness.rs` against the new native source, retaining corrections until upstream provides equivalent behavior. Rebuild the native library for validation; an older cached library cannot exercise the upgraded source. Keep the C++ device adapter aligned with the selected ggml headers and libraries. See the [build guide](../build.md#crispasr-and-backends) for bundled corrections, supported CMake settings, external-library requirements, and the matching ABI, and [architecture](architecture.md) for worker ownership and reload behavior.
+The manifests under `native/` compile the submodule's Rust sources. When changing the upstream pin, keep their package versions aligned with the upstream crates. The root `cargo check` refreshes `Cargo.lock`; stage it with the changed CrispASR gitlink, then use `cargo check --locked` to verify the lockfile. Review each source anchor in `build/native_correctness.rs` against the new native source, retaining corrections until upstream provides equivalent behavior. Rebuild the native library for validation; an older cached library cannot exercise the upgraded source. Keep the C++ device adapter aligned with the selected ggml headers and libraries. See the [build guide](../build.md#crispasr-and-backends) for bundled corrections, supported CMake settings, external-library requirements, and the matching ABI, and [architecture](architecture.md) for worker ownership and reload behavior.
 
 Check the PCM input contract, segment-text handling, runtime defaults, and model preprocessing/orchestration when upstream behavior changes. The daemon and `transcribe-file` initialize native defaults before threads or model opening. Library callers can call `initialize_crispasr_runtime_defaults` at that point or set the equivalent environment variables before native initialization. See the [model validation guide](model-validation.md) for current build, inference, and desktop checks.

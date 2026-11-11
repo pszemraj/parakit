@@ -6,13 +6,9 @@
 //!     dependency.
 //!   - Configure & build via the `cmake` crate. Output is cached in
 //!     `OUT_DIR` so subsequent `cargo build` invocations are incremental.
-//!   - Backend selection (`cuda` / `metal` / `vulkan`) is driven by parakit's
-//!     own cargo features. The repository's Cargo links overrides suppress
-//!     `crispasr-sys`'s independent native build script on supported targets.
-//!   - Emits a `rustc-link-search` so `crispasr-sys`'s `link-lib=crispasr`
-//!     resolves to our just-built library.
-//!   - Emits an rpath on Unix so the binary finds the dylib at runtime
-//!     without needing LD_LIBRARY_PATH.
+//!   - Backend selection (`cuda` / `metal` / `vulkan`) is driven by Parakit's
+//!     own Cargo features. Its local binding manifests have no build scripts.
+//!   - Bundles the CMake-resolved static archives into the Rust library.
 //!
 //! External-library modes (either skips the bundled build):
 //!   - `--no-default-features`              : the user takes responsibility for
@@ -37,6 +33,8 @@ use native_link::cmake_bool;
 mod native_correctness;
 #[path = "build/openblas_roots.rs"]
 mod openblas_roots;
+#[path = "build/static_link.rs"]
+mod static_link;
 use openblas_roots::{
     configured_openblas_roots, conventional_openblas_roots, env_path, OPENBLAS_DISCOVERY_ENV_VARS,
 };
@@ -72,6 +70,7 @@ fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=build/ibus.rs");
     println!("cargo:rerun-if-changed=build/native_link.rs");
+    println!("cargo:rerun-if-changed=build/static_link.rs");
     println!("cargo:rerun-if-changed=build/native_correctness.rs");
     println!("cargo:rerun-if-changed=build/native_correctness.cmake");
     println!("cargo:rerun-if-changed=build/native/qwen_correctness.hpp");
@@ -86,15 +85,18 @@ fn main() {
     build_alsa_silencer(cargo_feature("daemon"));
     ibus::build();
     native_link::emit_cpp_runtime();
-    native_link::warn_if_sys_native_build_ran();
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
     if bundled {
-        native_link::build_device_shim(&locate_source(&manifest_dir));
+        native_link::build_device_shim(
+            &locate_source(&manifest_dir),
+            env::var_os("CRISPASR_LIB_DIR").is_some(),
+        );
     }
 
     // 1. Honor an explicit lib-dir override regardless of feature flags.
     if let Ok(dir) = env::var("CRISPASR_LIB_DIR") {
         native_link::emit_external_search_paths(Some(Path::new(&dir)));
+        println!("cargo:rustc-link-lib=dylib=crispasr");
         emit_rpath(Path::new(&dir));
         native_link::emit_direct_ggml_link_if_bundled(bundled);
         return;
@@ -103,6 +105,7 @@ fn main() {
     // 2. Without `bundled`, resolve the installed library without building it.
     if !bundled {
         native_link::emit_external_search_paths(None);
+        println!("cargo:rustc-link-lib=dylib=crispasr");
         return;
     }
 
@@ -122,7 +125,8 @@ fn main() {
     // 4. Run cmake. The `cmake` crate handles incremental builds, MSVC
     //    detection on Windows, generator selection, parallelism, and
     //    install-step plumbing.
-    let build_crispasr_examples = !target_is_windows();
+    let out_dir = PathBuf::from(env::var_os("OUT_DIR").unwrap());
+    static_link::request(&out_dir).unwrap_or_else(|err| panic!("CMake link query: {err}"));
     let mut cfg = cmake::Config::new(&src_dir);
     cfg.profile("Release")
         .define(
@@ -135,7 +139,7 @@ fn main() {
             "PARAKIT_NATIVE_CORRECTNESS_INCLUDE",
             manifest_dir.join("build/native"),
         )
-        .define("BUILD_SHARED_LIBS", "ON")
+        .define("BUILD_SHARED_LIBS", "OFF")
         // parakit is normally built from source for the machine it runs on.
         // Make the CPU policy explicit instead of relying on ggml defaults.
         .define("GGML_NATIVE", "ON")
@@ -143,26 +147,14 @@ fn main() {
         .define("GGML_OPENMP", "ON")
         .define("GGML_CPU_REPACK", "ON")
         .define("GGML_BACKEND_DL", "OFF")
-        // Skip tests. On Unix we build examples because CrispASR's quantizer
-        // lives there. On Windows, the pinned CrispASR examples tree also
-        // builds the server target, which currently fails under MSVC before
-        // parakit can link; hosted Q8 remains the Windows CPU-first path.
+        // Optional conversion tools are installed separately on PATH.
         .define("CRISPASR_BUILD_TESTS", "OFF")
-        .define(
-            "CRISPASR_BUILD_EXAMPLES",
-            cmake_bool(build_crispasr_examples),
-        )
+        .define("CRISPASR_BUILD_EXAMPLES", "OFF")
         .define("GGML_BUILD_TESTS", "OFF")
         .define("GGML_BUILD_EXAMPLES", "OFF")
-        // Bake an `$ORIGIN` (Linux/BSD) or `@loader_path` (macOS) rpath into
-        // the installed shared libraries so each library finds its siblings
-        // (libcrispasr.so → libggml.so → libggml-cpu.so) without LD_LIBRARY_PATH.
-        // Without this, libcrispasr.so's transitive deps (libggml*.so) fail to
-        // resolve at load time even when the binary's own rpath points at
-        // the right directory — Linux's DT_RUNPATH doesn't apply transitively.
-        .define("CMAKE_INSTALL_RPATH", install_rpath_token())
-        .define("CMAKE_BUILD_WITH_INSTALL_RPATH", "ON")
-        .define("CMAKE_INSTALL_RPATH_USE_LINK_PATH", "ON");
+        .define("CMAKE_INSTALL_RPATH", "")
+        .define("CMAKE_BUILD_WITH_INSTALL_RPATH", "OFF")
+        .define("CMAKE_INSTALL_RPATH_USE_LINK_PATH", "OFF");
 
     configure_windows_msvc_release(&mut cfg);
     let accelerators = AcceleratorConfig::from_env();
@@ -196,77 +188,13 @@ fn main() {
     let install_dir = cfg.build();
     emit_build_report(&install_dir, &accelerators);
 
-    // 5. CrispASR installs `libcrispasr` as the umbrella library.
-    //    `crispasr-sys` links that exact name, so fail clearly if the pinned
-    //    submodule stops producing it.
-    let lib_dir = install_dir.join("lib");
-    let lib_dir_alt = install_dir.join("lib64");
-    let final_lib_dir = if lib_dir.is_dir() {
-        lib_dir
-    } else if lib_dir_alt.is_dir() {
-        lib_dir_alt
-    } else if target_is_windows() {
-        std::fs::create_dir_all(&lib_dir).unwrap_or_else(|err| {
-            panic!(
-                "failed to create Windows import-library dir {}: {err}",
-                lib_dir.display()
-            )
-        });
-        lib_dir
-    } else {
-        panic!(
-            "expected install dir to contain lib/ or lib64/, got {}",
-            install_dir.display()
-        );
-    };
-
+    // CMake supplies every archive and external runtime in the consumer graph.
+    static_link::emit(&install_dir, target_is_windows())
+        .unwrap_or_else(|err| panic!("CMake static linkage: {err}"));
     let bin_dir = install_dir.join("bin");
     if target_is_windows() {
-        windows_artifacts::prepare_windows_artifacts(
-            &install_dir,
-            &final_lib_dir,
-            &bin_dir,
-            &blas,
-            &accelerators,
-        );
-    } else {
-        assert_crispasr_library_exists(&final_lib_dir);
-        assert_apple_metal_library(&final_lib_dir, accelerators.metal_enabled);
+        windows_artifacts::prepare_windows_artifacts(&install_dir, &bin_dir, &blas, &accelerators);
     }
-
-    println!("cargo:rustc-link-search=native={}", final_lib_dir.display());
-    native_link::emit_direct_ggml_link_if_bundled(bundled);
-
-    // Windows DLLs land in bin/, not lib/. Add it for completeness.
-    if bin_dir.is_dir() {
-        println!("cargo:rustc-link-search=native={}", bin_dir.display());
-    }
-
-    let quantize_bin = bin_dir.join(exe_name("crispasr-quantize"));
-    if quantize_bin.is_file() {
-        println!(
-            "cargo:rustc-env=CRISPASR_QUANTIZE_BIN={}",
-            quantize_bin.display()
-        );
-    } else if !target_is_windows() {
-        println!(
-            "cargo:warning=crispasr-quantize was not installed at {}; source rebuilds will look on PATH",
-            quantize_bin.display()
-        );
-    }
-
-    // 6. Bake the lib path into the binary's rpath so we don't need
-    //    LD_LIBRARY_PATH / DYLD_FALLBACK_LIBRARY_PATH at runtime.
-    //    No-op on Windows; DLLs are copied into the profile dir above.
-    emit_rpath(&final_lib_dir);
-
-    // 7. Re-export the install path. Useful for `cargo run` on macOS
-    //    (where DYLD_LIBRARY_PATH is hostile) and for downstream tooling
-    //    that wants to copy the dylib into a release artifact.
-    println!(
-        "cargo:rustc-env=CRISPASR_INSTALL_DIR={}",
-        install_dir.display()
-    );
 }
 
 fn build_alsa_silencer(daemon_enabled: bool) {
@@ -762,14 +690,6 @@ fn target_is_linux() -> bool {
     env::var("CARGO_CFG_TARGET_OS").unwrap_or_default() == "linux"
 }
 
-fn exe_name(name: &str) -> String {
-    if target_is_windows() {
-        format!("{name}.exe")
-    } else {
-        name.to_string()
-    }
-}
-
 /// Find the CrispASR source. Order:
 ///   1. CRISPASR_SRC_DIR (explicit override)
 ///   2. vendor/CrispASR (git submodule)
@@ -912,13 +832,8 @@ fn manual_blas_path_overrides_are_set() -> bool {
 }
 
 /// Tell the linker to bake `dir` into the binary's rpath.
-/// On Linux/BSD we ALSO emit `--disable-new-dtags` so the resulting
-/// DT_RPATH (rather than DT_RUNPATH) applies transitively to the
-/// binary's transitive shared-library dependencies. This is belt-and-
-/// suspenders insurance — `CMAKE_INSTALL_RPATH=$ORIGIN` should already
-/// make libcrispasr.so find its own ggml siblings, but `--disable-new-dtags`
-/// keeps things working even on systems where the cmake rpath setting
-/// gets stripped.
+/// Used only for an explicitly selected external shared library. On Linux/BSD,
+/// DT_RPATH applies transitively to its sibling shared dependencies.
 ///
 /// macOS: @rpath/install_name resolution is naturally transitive via the
 /// dyld machinery; rpath alone is sufficient.
@@ -938,56 +853,4 @@ fn emit_rpath(dir: &Path) {
             // Windows / WASM / other — no-op.
         }
     }
-}
-
-/// Returns the right "$ORIGIN-style" token for `CMAKE_INSTALL_RPATH`.
-/// Linux/BSD: `$ORIGIN` — the dynamic linker substitutes it with the
-/// directory of the loading binary at runtime.
-/// macOS: `@loader_path` — same idea, dyld syntax.
-fn install_rpath_token() -> &'static str {
-    let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
-    match target_os.as_str() {
-        "macos" | "ios" => "@loader_path",
-        _ => "$ORIGIN",
-    }
-}
-
-/// Ensure `lib_dir` contains the pinned CrispASR shared library name.
-fn assert_crispasr_library_exists(lib_dir: &Path) {
-    let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
-
-    let lib_name = match target_os.as_str() {
-        "macos" | "ios" => "libcrispasr.dylib",
-        _ => "libcrispasr.so",
-    };
-
-    let lib_path = lib_dir.join(lib_name);
-    if lib_path.exists() {
-        return;
-    }
-
-    panic!(
-        "CrispASR build did not produce {}. \
-         cmake build may have failed silently — \
-         check `cargo build -vv` output.",
-        lib_path.display()
-    );
-}
-
-/// Ensure Apple Metal builds installed the Metal backend sibling dylib.
-fn assert_apple_metal_library(lib_dir: &Path, metal_enabled: bool) {
-    if !target_is_apple() || !metal_enabled {
-        return;
-    }
-
-    let lib_path = lib_dir.join("libggml-metal.dylib");
-    if lib_path.exists() {
-        return;
-    }
-
-    panic!(
-        "Metal build did not produce {}. \
-         GGML_METAL is enabled, but the runtime Metal backend dylib is missing.",
-        lib_path.display()
-    );
 }
