@@ -82,7 +82,9 @@ Safe casual-form normalization expands `gonna` and `gunna` to `going to`, `gotta
 
 Safe dangling-connective removal drops a trailing `so`, `but`, `and`, `or`, or `because` (case-insensitive) when it is the transcript's final word and the text underneath still ends in sentence punctuation, so `The build is green. But` becomes `The build is green.`, which the default terminal-period pass then trims to `The build is green` the same way it trims `, right?`. A trailing `,`, `;`, or `:` left under the removed word is promoted to `.`, a trailing `.`, `!`, or `?` is kept as-is, and the rule chains, so `It works. And so.` loses both dangling words and becomes `It works.`. It needs punctuation to fall back on: `I like cats and dogs and` has no preceding sentence punctuation, so the rule cannot distinguish a stranded conjunction from an unfinished thought and leaves the text alone.
 
-The safe repeated-word rule remains intentionally conservative. A bounded backreference consolidates a small set of high-confidence function-word stutters, while valid or ambiguous repetition such as `that that` and emphatic `no no` survives. The aggressive profile can opt into collapsing the ambiguous set.
+The safe `stutter-safe-words` pass collapses adjacent identical words, ignoring case and keeping the first word's spelling: `where where` becomes `where`, and `I'm I'm` becomes `I'm`. Only spaces and tabs join a run; punctuation and line breaks preserve the repetition. Numbers, spelling letters other than `I` and `a`, spoken symbols, and common repetition idioms and intensifiers are protected. For example, `five five five`, `C plus plus`, and `very very` stay intact. The short exception list lives beside the scanner in `src/rules/stutters.rs`.
+
+Repeated `I` and `a` retain their existing treatment, including uppercase-I normalization. Repeated `is` collapses in normal mode. The aggressive profile additionally collapses `that`, `had`, `do`, `can`, and `no`; both profiles preserve punctuation-delimited forms such as `No, no`. Use punctuation or disable the rule to retain other deliberate repetitions such as `tomato tomato`.
 
 ## Inspect And Test
 
@@ -117,11 +119,11 @@ The same names can be set persistently:
 disabled_rules = ["filled-pauses"]
 ```
 
-Stutter handling is grouped by shape. Use `stutter-i` for repeated first-person pronouns, `stutter-safe-words` for conservative repeated words, `contracted-have-restart` for false starts such as `I've I already have`, `repeated-prefix-stutter` for repeated letters or `sh`/`th`/`ch` starts before a matching word, and `stutter-ambiguous-words` for the aggressive-only `that`, `no`, `can`, `had`, and `do` set.
+Stutter handling is grouped by shape. Use `stutter-i` for repeated first-person pronouns, `stutter-safe-words` for whole-word restarts, `contracted-have-restart` for false starts such as `I've I already have`, `repeated-prefix-stutter` for repeated letters or `sh`/`th`/`ch` starts before a matching word, and `stutter-ambiguous-words` for the aggressive-only set.
 
 ## Rule Order
 
-Built-in passes run in the order shown by the built-in section of `parakit rules list`. User rules run in their configured position slot even though the command prints them together in a trailing `(user)` section. The output of one pass is the input to the next. Aggressive discourse edits run first. Stutter handling precedes acronym collapsing. `text2num` conversion precedes structural identifier formatting. Whitespace cleanup and capitalization run near the end, followed by the default terminal-period removal.
+Built-in passes run in the order shown by the built-in section of `parakit rules list`. User rules run in their configured position slot even though the command prints them together in a trailing `(user)` section. The output of one pass is the input to the next. Aggressive discourse edits run first. Partial-word restarts precede whole-word collapse so `sh sh should` becomes `should`. All stutter handling precedes acronym collapsing. `text2num` conversion precedes structural identifier formatting. Whitespace cleanup and capitalization run near the end, followed by the default terminal-period removal.
 
 A pass should be moved only with regression evidence. Reordering can change downstream matches even when every individual expression remains unchanged.
 

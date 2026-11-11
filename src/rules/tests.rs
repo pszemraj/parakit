@@ -8,6 +8,7 @@ use super::passes::capitalize_sentence_starts;
 use super::*;
 
 mod spoken_numbers;
+mod stutters;
 mod user_rules;
 
 fn build_cleaner_for_test(
@@ -199,7 +200,7 @@ fn standalone_filler_sentences_leave_no_orphaned_punctuation() {
 }
 
 #[test]
-fn fancy_regex_collapses_only_safe_repeated_words_by_default() {
+fn normal_profile_collapses_repeated_words() {
     assert_clean_cases(
         CleaningProfile::Safe,
         &[
@@ -216,7 +217,7 @@ fn fancy_regex_collapses_only_safe_repeated_words_by_default() {
                 "No no no, we are not doing that.",
             ),
             ("Can can we split this?", "Can can we split this?"),
-            ("We should be be better.", "We should be be better."),
+            ("We should be be better.", "We should be better."),
         ],
     );
 }
@@ -762,12 +763,12 @@ fn fancy_regex_failure_fails_open_to_the_original_transcript() {
     // A backtrack limit of zero fails on the very first backtrack step
     // (`fancy_regex::vm` errors as soon as `backtrack_count > limit`), so
     // any input requiring more than a single deterministic pass through the
-    // `stutter-safe-words` pattern's unanchored search must error.
+    // `repeated-prefix-stutter` pattern's unanchored search must error.
     let cleaner =
         Cleaner::new_with_backtrack_limit(CleaningProfile::Safe, false, &HashSet::new(), &[], 0)
             .expect("rule patterns must still compile with a zero backtrack limit");
 
-    let input = "the the the cat sat on the the mat";
+    let input = "we sh sh should and d d definitely change";
     let try_clean_err = cleaner
         .try_clean(input)
         .expect_err("a backtrack limit of 0 must exhaust during matching");

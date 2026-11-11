@@ -52,6 +52,7 @@ mod defaults;
 mod engine;
 mod numbers;
 mod passes;
+mod stutters;
 #[cfg(test)]
 mod tests;
 mod user;
@@ -61,7 +62,7 @@ pub use user::{RulePosition, UserRule};
 
 /// Schema/behavior version recorded in transcription logs.
 /// Keep revisions distinct even when their package version is unchanged.
-pub const CLEANER_VERSION: u32 = 32;
+pub const CLEANER_VERSION: u32 = 33;
 
 /// Default minimum isolated number converted to digits when
 /// `cleaning.number_threshold` is left unset.

@@ -22,6 +22,7 @@ use super::passes::{
     normalize_numeric_point_suffixes, normalize_parameter_counts, normalize_spaced_acronyms,
     normalize_spoken_versions,
 };
+use super::stutters::collapse_repeated_words;
 
 macro_rules! regex_rule {
     ($name:expr, $description:expr, $activation:expr, $pattern:expr, $replacement:expr) => {
@@ -119,21 +120,27 @@ pub(crate) const DEFAULT_RULES: &[Rule] = &[
         r#"(^|[.!?])(?:\s*\b(?i:u[hm]+|er+m+)\b(?:,?\s+\b(?i:u[hm]+|er+m+)\b)*[.!?]+)+|,?\s*\b(?i:u[hm]+|er+m+)\b\s*,?"#,
         "$1 "
     ),
-    // Consolidated duplicate-token handling. The safe list deliberately omits
-    // valid/ambiguous repetitions such as that-that and emphatic no-no.
+    // Partial starts run before whole-word collapse: `sh sh should` must not
+    // first turn into `sh should`, which is no longer a repeated-prefix run.
     regex_rule!(
         "stutter-i",
         "Collapse repeated first-person pronouns and restore uppercase I",
         Activation::Safe,
-        r#"(?i)\bi\b(?:\s+i\b)+"#,
+        r#"(?i)\bi\b(?:[ \t]+i\b)+"#,
         "I"
     ),
     fancy_rule!(
-        "stutter-safe-words",
-        "Collapse repeated high-confidence function words with a backreference",
+        "repeated-prefix-stutter",
+        "Strip repeated one-letter or consonant-digraph starts before a matching word",
         Activation::Safe,
-        r#"(?i)\b(the|a|an|and|but|or|so|to|of|in|on|we|you|he|she|they|it|this|my|is|was|are|were|did|will|has|have)\b(?:\s+\1\b)+"#,
-        "$1"
+        r#"(?i)\b([a-z]|sh|th|ch)(?:[- ]+\1){1,3}[- ]+(\1[a-z][a-z'-]*)\b"#,
+        "$2"
+    ),
+    procedural_rule!(
+        "stutter-safe-words",
+        "Collapse adjacent repeated words, preserving deliberate doubles and numbers",
+        Activation::Safe,
+        collapse_repeated_words
     ),
     fancy_rule!(
         "contracted-have-restart",
@@ -146,15 +153,8 @@ pub(crate) const DEFAULT_RULES: &[Rule] = &[
         "stutter-ambiguous-words",
         "Collapse repeated that/no/can/had/do only in aggressive mode",
         Activation::Aggressive,
-        r#"(?i)\b(that|no|can|had|do)\b(?:\s+\1\b)+"#,
+        r#"(?i)\b(that|no|can|had|do)\b(?:[ \t]+\1\b)+"#,
         "$1"
-    ),
-    fancy_rule!(
-        "repeated-prefix-stutter",
-        "Strip repeated one-letter or consonant-digraph starts before a matching word",
-        Activation::Safe,
-        r#"(?i)\b([a-z]|sh|th|ch)(?:[- ]+\1){1,3}[- ]+(\1[a-z][a-z'-]*)\b"#,
-        "$2"
     ),
     // General orthographic invariants. No technical-vocabulary allowlist is
     // involved: any run of two or more standalone uppercase letters collapses.
