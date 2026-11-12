@@ -215,7 +215,7 @@ Read by the HTTP client library (reqwest's system-proxy support), in upper and l
 
 ### `SSL_CERT_FILE`, `SSL_CERT_DIR`
 
-Read by the TLS library for additional trusted certificates when downloading models.
+`SSL_CERT_FILE` names a PEM certificate bundle. `SSL_CERT_DIR` names a colon-separated list of certificate directories. When either is set, the TLS library loads roots only from those locations instead of the operating system trust store. Without them, it uses the native store. See [rustls-native-certs](https://docs.rs/rustls-native-certs/0.8.3/rustls_native_certs/fn.load_native_certs.html).
 
 ### `PATH`
 

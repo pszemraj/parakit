@@ -79,11 +79,9 @@ For a missing CrispASR path dependency, follow [submodule setup](build.md#instal
 
 `parakit fetch` (the hosted default, `--from-source`, a Hugging Face repo, or a direct URL) fails with a TLS or connection error, or cannot reach `huggingface.co` at all.
 
-1. parakit builds `reqwest` with `rustls-tls-native-roots`, so the operating system's certificate store is used natively - no bundled CA list to fall out of date, and a corporate TLS-intercepting proxy's CA is trusted automatically once it is installed in that OS store. If you manage certificates through a separate PEM bundle instead, point `SSL_CERT_FILE` (or `SSL_CERT_DIR`) at it.
-2. parakit also builds with the `system-proxy` feature, so `HTTPS_PROXY`, `HTTP_PROXY`, and `NO_PROXY` are honored the same way most other CLI tools read them. Set them if an egress proxy is required to reach the internet at all.
-3. If the download fails with a certificate-shaped error (mentions `certificate`, an unknown issuer, an invalid peer certificate, or a failed TLS handshake), parakit appends a hint to the error covering steps 1 and 2 automatically - read the full error text, not just the first line.
-4. If `huggingface.co` is blocked outright, set `HF_ENDPOINT` to an internal Nexus/Artifactory-style Hugging Face mirror. It is honored for hosted preset downloads, `--from-source` checkpoint downloads (including NVIDIA's `.nemo` with `--model-preset parakeet-v3`), and every `parakit fetch <owner>/<repo>` lookup.
-5. If the mirror (or a specific repo) requires authentication, set `HF_TOKEN` to a bearer token. It is only ever attached to requests that target the resolved `HF_ENDPOINT` host, never to an arbitrary `parakit fetch <url>` host.
+1. Read the full error: certificate or TLS failures may include a hint about trust and proxy configuration.
+2. Install your organization's CA in the operating system trust store, or configure a certificate file or directory. If your network requires an egress proxy, configure it as well. See [environment variables](configuration.md#environment-variables) for the supported settings and their effects.
+3. If `huggingface.co` is blocked, configure an internal Hugging Face mirror and, if needed, its token. The same [environment variable reference](configuration.md#environment-variables) explains which fetch requests use them.
 
 ```bash
 export HF_ENDPOINT=https://artifactory.example.com/huggingface
