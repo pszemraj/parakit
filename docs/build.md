@@ -101,7 +101,7 @@ cargo build --locked --features cuda,vulkan --bin parakit --bin parakit-ibus --e
 
 Use the architecture supported by your GPU and toolkit. Reuse the same directory, feature set, profile, and native build settings for subsequent builds. Changing them can require another native compile; `cargo check` does not produce the runnable binaries. An existing directory built with `--all-features` should keep that feature set when rebuilding; Linux intentionally ignores the unsupported Metal feature.
 
-These builds do not install a binary or restart a running daemon. Verify [runtime library paths](#runtime-library-paths) against the isolated directory, then follow the [Linux GPU procedure](dev/quality.md#linux-cudavulkan) for isolated configuration and model state.
+These builds do not install a binary or restart a running daemon. Verify [runtime library paths](#runtime-library-paths), substituting the isolated binary path for `$(command -v parakit)`, then follow the [Linux GPU procedure](dev/quality.md#linux-cudavulkan) for isolated configuration and model state.
 
 ## CPU Builds
 
@@ -180,8 +180,6 @@ On macOS, `libomp` is optional; ggml's OpenMP path degrades when OpenMP is not a
 ## Runtime Library Paths
 
 Bundled builds must not load CrispASR or ggml from a build directory. On Linux, inspect the installed executable:
-
-Verify:
 
 ```bash
 ldd "$(command -v parakit)"

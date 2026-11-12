@@ -224,7 +224,7 @@ parakit start -m /path/printed/by/fetch/qwen3-asr-1.7b-q6_k.gguf --device gpu
 
 This accepts every preset above and uses its provider revision with `crispasr-quantize`; no Python environment or upload is needed. `--force` rebuilds Q6_K. Qwen retains a Q8_0-or-higher audio encoder, while Parakeet quantizes eligible encoder and decoder matrices to Q6_K; unsupported tensors keep higher precision. Validate recognition on your own recordings before relying on a new quantization.
 
-`fetch --quantize q6_k` conflicts with `--from-source`. GGUF Q6_K differs from [MLX's affine 6-bit quantization](https://ml-explore.github.io/mlx/build/html/python/_autosummary/mlx.core.quantize.html), so evaluate them separately. Windows requires a compatible external `crispasr-quantize.exe` on `PATH`; see [source rebuild](dev/README.md#source-rebuild).
+`fetch --quantize q6_k` conflicts with `--from-source`. GGUF Q6_K differs from [MLX's affine 6-bit quantization](https://ml-explore.github.io/mlx/build/html/python/_autosummary/mlx.core.quantize.html), so evaluate them separately. Every OS requires a compatible external `crispasr-quantize` on `PATH` (`crispasr-quantize.exe` on Windows); see [source rebuild](dev/README.md#source-rebuild).
 
 Qwen setup, language controls, and prior-dictation context are covered in the [Qwen3-ASR guide](models/qwen3-asr.md). For multilingual dictation, follow the [cleaning profile guidance](cleaning-rules.md#profiles).
 

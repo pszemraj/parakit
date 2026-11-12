@@ -44,7 +44,8 @@
 # Unset: q8_0, the provider's hosted artifact.
 # Explicit CLI --quantize conflicts with -m/--model; configured model-selection conflicts are listed under daemon.model.
 # Overridden by: --quantize. An explicit CLI -m/--model ignores this configured precision and loads that file as it is.
-# Warning: a first Q6_K preparation can download several GB and take minutes; a preparation notice is printed to stderr even with --quiet. Windows needs a compatible crispasr-quantize.exe on PATH.
+# Warning: a first Q6_K preparation can download several GB and take minutes; a preparation notice is printed to stderr even with --quiet.
+# Requires: a compatible crispasr-quantize on PATH on every OS (crispasr-quantize.exe on Windows).
 # See: [Q6_K preparation and reuse](running.md#model-presets).
 # quantize = "q6_k"
 
@@ -401,9 +402,5 @@ backend = "auto"
 # Read by the TLS library for additional trusted certificates when downloading models.
 
 # PATH
-# `parakit fetch --from-source` searches it for python3 or python. Both source rebuilds and Q6_K preparation search it for crispasr-quantize when the tool is not at the location built into the binary.
+# `parakit fetch --from-source` searches it for python3 or python. Both source rebuilds and Q6_K preparation require crispasr-quantize here (crispasr-quantize.exe on Windows).
 # `parakit config edit` relies on it to find the editor program.
-
-# LD_LIBRARY_PATH, DYLD_LIBRARY_PATH
-# LD_LIBRARY_PATH on Linux and DYLD_LIBRARY_PATH on macOS. Source rebuilds and Q6_K preparation prepend a quantizer's accompanying lib directory to the existing value for the quantizer child process only.
-# On Windows the same prepending is done to PATH.
