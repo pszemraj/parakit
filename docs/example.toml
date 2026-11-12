@@ -8,5 +8,5 @@
 # Delete this line if you dictate short chat-style messages and prefer no trailing period.
 keep_trailing_period = true
 
-# Use five instead of the default cutoff of four for every spoken number: "four" stays a word, and "five" becomes 5.
+# Keep ordinary "four" as a word while converting eligible "five" to 5; other numeric structures follow their own rules.
 number_threshold = 5

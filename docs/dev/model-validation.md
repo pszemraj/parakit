@@ -2,7 +2,9 @@
 
 Run this checklist on the checked-out commit under test on each available Mac and Windows laptop. Record the commit, OS, hardware, backend, command logs, and physical observations. Linux results do not establish Metal or Windows behavior. A missing device or an unperformed physical check stays pending.
 
-Use a full checkout with initialized submodules. Supply the public fixture ZIP separately in the ignored checkout, and set the fixture ZIP variable below to its path. It must contain the named speech, resampling, boundary, silence, and noise fixtures used here, including public FLEURS clips and constructed controls. Preserve its README attribution. Keep downloaded models and test state inside the checkout.
+Use a full checkout with initialized submodules. Supply the prepared fixture ZIP separately in the ignored checkout, and set the fixture ZIP variable below to its path. It must contain the named speech, resampling, boundary, silence, and noise fixtures used here, including public FLEURS clips and constructed controls. Preserve its README attribution. Keep downloaded models and test state inside the checkout.
+
+TODO: provide an acquisition URL or construction recipe for `laptop-fixtures.zip`. The checkout does not include the bundle, so obtain it from the person coordinating native validation before running these matrices.
 
 ## macOS CPU and Metal
 
@@ -12,11 +14,10 @@ Install the [native build prerequisites](../build.md). These commands build an i
 export CARGO_TARGET_DIR="$PWD/target/tmp/new-models/cargo-macos"
 export XDG_CACHE_HOME="$PWD/target/nm-cache"
 export XDG_CONFIG_HOME="$PWD/target/tmp/new-models/macos/config"
-export XDG_RUNTIME_DIR="$PWD/target/tmp/new-models/macos/runtime"
 export PARAKIT_MODELS_DIR="$PWD/target/tmp/new-models/macos/models"
 export PARAKIT_CONFIG_PATH="$PWD/target/tmp/new-models/macos/config.toml"
 export GGML_METAL_PIPELINE_CACHE="$PWD/target/tmp/new-models/macos/metal-cache"
-mkdir -p "$XDG_CACHE_HOME" "$XDG_CONFIG_HOME" "$XDG_RUNTIME_DIR" "$PARAKIT_MODELS_DIR" "$GGML_METAL_PIPELINE_CACHE" target/tmp/new-models/macos
+mkdir -p "$XDG_CACHE_HOME" "$XDG_CONFIG_HOME" "$PARAKIT_MODELS_DIR" "$GGML_METAL_PIPELINE_CACHE" target/tmp/new-models/macos
 printf '# Isolated native validation\n' > "$PARAKIT_CONFIG_PATH"
 git rev-parse HEAD > target/tmp/new-models/macos/commit.txt
 sw_vers > target/tmp/new-models/macos/os.txt

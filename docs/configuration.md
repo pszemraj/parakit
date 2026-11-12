@@ -68,7 +68,7 @@ Add literal words or phrases to the built-in repetition exceptions. For example,
 
 ```toml
 [cleaning]
-repetition_exceptions = ["something", "hee", "bang", "tomato", "paddle", "chinny chin chin"]
+repetition_exceptions = ["tomato", "paddle", "chinny chin chin"]
 ```
 
 Merge the assignment into your existing `[cleaning]` section if you already have one. The [repetition-exception constraints](config_reference.toml) apply to each literal entry.
@@ -117,7 +117,7 @@ On Linux and macOS, `XDG_CONFIG_HOME` supplies the [config base](#file-location)
 ### `XDG_RUNTIME_DIR`
 
 Linux. Directory whose parakit subdirectory holds the daemon lock file (parakit.lock) and control socket (control.sock). An empty value counts as unset.
-Fallback: $XDG_CACHE_HOME/parakit/run, or $HOME/.cache/parakit/run. macOS always uses that fallback. Windows keeps the lock in parakit\run inside Local AppData and talks over a named pipe.
+Fallback: `$XDG_CACHE_HOME/parakit/run`, or `$HOME/.cache/parakit/run`. macOS always uses that fallback. Windows keeps the lock in `parakit\run` inside Local AppData and talks over a named pipe.
 The control commands (`status`, `stop`, `copy-last`, `history`, `test-paste`) and the daemon must resolve the same directory to find each other.
 The socket directory must be owned by you, and parakit sets it to mode 0700.
 
@@ -215,7 +215,7 @@ Read by the HTTP client library (reqwest's system-proxy support), in upper and l
 
 ### `SSL_CERT_FILE`, `SSL_CERT_DIR`
 
-`SSL_CERT_FILE` names a PEM certificate bundle. `SSL_CERT_DIR` names a colon-separated list of certificate directories. When either is set, the TLS library loads roots only from those locations instead of the operating system trust store. Without them, it uses the native store. See [rustls-native-certs](https://docs.rs/rustls-native-certs/0.8.3/rustls_native_certs/fn.load_native_certs.html).
+`SSL_CERT_FILE` names a PEM certificate bundle. `SSL_CERT_DIR` names certificate directories separated by `:` on Unix or `;` on Windows. When either is set, the TLS library loads roots only from those locations instead of the operating system trust store. Without them, it uses the native store. See [rustls-native-certs](https://docs.rs/rustls-native-certs/0.8.3/rustls_native_certs/fn.load_native_certs.html).
 
 ### `PATH`
 

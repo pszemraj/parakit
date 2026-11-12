@@ -88,7 +88,7 @@ Transcripts under 12 normalized characters require an exact baseline-to-current 
 
 ## Metal Verification
 
-The installed executable's dependency and loader-path checks are in [build.md#runtime-library-paths](build.md#runtime-library-paths). Bundled Metal builds link the backend statically and embed its shader source in the executable. To inspect the embedded section and device visibility:
+See the [Metal build](build.md#crispasr-and-backends) and [loader-path checks](build.md#runtime-library-paths). To inspect the embedded shader section and device visibility:
 
 ```bash
 parakit doctor --verbose
