@@ -69,6 +69,8 @@ The filter covers chunk/tail drain, reset/reuse, callback parity, recording boun
 
 Use the [Windows prerequisites and build scripts](../../scripts/windows/README.md) from an x64 Visual Studio developer PowerShell, with a short checkout path for Vulkan. CPU is required. Add Vulkan when its SDK/device is available, and CUDA on a supported NVIDIA/CUDA setup. Record unavailable backends and their hardware/toolkit reason as pending.
 
+TODO (native Windows): verify `cargo run -- --help` and `cargo test resampl` from a fresh developer shell without a bundle or native build directory on the inherited PATH. Cargo should find staged runtime DLLs through the build script's `OUT_DIR/bin` link-search directive. Keep separately installed toolkit runtimes on PATH when the build does not bundle them. The bundle checks below add a DLL directory explicitly, so they do not validate this Cargo loader path.
+
 The simulated worker does not acquire the daemon singleton lock. A real daemon uses the same user's lock and named pipe even with separate model and configuration paths, and `doctor` checks that lock. Stop an existing same-user daemon before those checks and preserve its settings.
 
 ~~~powershell

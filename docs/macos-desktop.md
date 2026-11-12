@@ -88,12 +88,11 @@ Transcripts under 12 normalized characters require an exact baseline-to-current 
 
 ## Metal Verification
 
-The shared library and run-path checks are in [build.md#runtime-library-paths](build.md#runtime-library-paths). To confirm Metal library presence and device visibility:
+The installed executable's dependency and loader-path checks are in [build.md#runtime-library-paths](build.md#runtime-library-paths). Bundled Metal builds link the backend statically and embed its shader source in the executable. To inspect the embedded section and device visibility:
 
 ```bash
 parakit doctor --verbose
-ls target/release/build/parakit-*/out/lib/libggml-metal.dylib
-otool -s __DATA __ggml_metallib target/release/build/parakit-*/out/lib/libggml-metal.dylib | head
+otool -s __DATA __ggml_metallib "$(command -v parakit)" | head
 ```
 
 Build success and device visibility alone do not establish inference acceptance. Use the [model-validation checklist](dev/model-validation.md#macos-cpu-and-metal) and [quality procedures](dev/quality.md#qwen-and-moondream-comparisons) to check CPU/Metal inference and physical desktop behavior.

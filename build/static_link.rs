@@ -85,6 +85,14 @@ pub(crate) fn emit(out_dir: &Path, windows: bool) -> Result<(), String> {
         .as_array()
         .ok_or("CMake consumer link fragments missing")?;
     let mut directives = Vec::new();
+    if windows {
+        // Cargo adds OUT_DIR link-search paths to PATH for run/test. The
+        // staged external DLLs live beside the runtime manifest in bin/.
+        directives.push(format!(
+            "rustc-link-search=native={}",
+            out_dir.join("bin").display()
+        ));
+    }
     for fragment in fragments {
         let role = fragment["role"].as_str().unwrap_or("");
         // CMake's driver optimization/debug flags are not library usage
