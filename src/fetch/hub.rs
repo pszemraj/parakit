@@ -493,18 +493,26 @@ mod tests {
             assert_eq!(std::fs::read(dest).unwrap(), b"cached model");
             return;
         }
-        let root = crate::test_support::fixture_root("hub-cache", "explicit-file");
+        let root = std::env::current_dir()
+            .unwrap()
+            .join(crate::test_support::fixture_root(
+                "hub-cache",
+                "explicit-file",
+            ));
+        let models = root.join("models");
         let output = crate::test_support::exact_test_command(
             "fetch::hub::tests::explicit_cached_file_needs_no_hub_request",
         )
         .env(CHILD, "1")
-        .env(
-            "XDG_CACHE_HOME",
-            std::env::current_dir().unwrap().join(root),
-        )
+        .env("XDG_CACHE_HOME", root.join("cache"))
+        .env(crate::model::MODELS_DIR_ENV, &models)
         .output()
         .unwrap();
         assert!(output.status.success(), "{output:?}");
+        let dest = hub_cache_dir(&models, "owner", "repo", "main", "nested/model-Q8_0.gguf")
+            .join("model-Q8_0.gguf");
+        assert_eq!(std::fs::read(dest).unwrap(), b"cached model");
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
