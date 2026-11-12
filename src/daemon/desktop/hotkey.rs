@@ -618,5 +618,10 @@ fn send_hotkey_transition(action: HotkeyAction, tx: &Sender<HotkeyTransition>) {
 }
 
 #[cfg(test)]
+fn at(start: Instant, millis: u64) -> Instant {
+    start + Duration::from_millis(millis)
+}
+
+#[cfg(test)]
 #[path = "hotkey_tests.rs"]
 mod tests;
