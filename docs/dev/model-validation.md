@@ -6,7 +6,7 @@ Use a full checkout with initialized submodules. Supply the public fixture ZIP s
 
 ## macOS CPU and Metal
 
-Use a full checkout with initialized submodules and the [native build prerequisites](../build.md). These commands build an isolated Metal-capable release binary and WAV helper. Select cpu for CPU inference and gpu for Metal.
+Install the [native build prerequisites](../build.md). These commands build an isolated Metal-capable release binary and WAV helper. Select cpu for CPU inference and gpu for Metal.
 
 ~~~bash
 export CARGO_TARGET_DIR="$PWD/target/tmp/new-models/cargo-macos"
@@ -33,7 +33,7 @@ unzip -o "$FIXTURE_ZIP" -d "$FIXTURES"
 
 Keep the cache root short enough for macOS's Unix-socket pathname limit. macOS places the control socket under `XDG_CACHE_HOME`, regardless of `XDG_RUNTIME_DIR`. The Metal cache override isolates the shader archive from the installed daemon's cache.
 
-Run both precisions for all six presets on CPU and Metal. Install a compatible `crispasr-quantize` on `PATH` first; Cargo does not build the tool. Start with the isolated empty model directory: Q6_K fetch downloads the preset's F16 file and invokes the local quantizer, so its first run records cold quantization. Keep each command's output and exit status.
+Run both precisions for all six presets on CPU and Metal. Install a compatible `crispasr-quantize` on `PATH` first; see [source rebuild](README.md#source-rebuild). Start with the isolated empty model directory: Q6_K fetch downloads the preset's F16 file and invokes the local quantizer, so its first run records cold quantization. Keep each command's output and exit status.
 
 ~~~bash
 PRESETS=(parakeet-v2 parakeet-v3 parakeet-ultra parakeet-redux qwen3-asr-0.6b qwen3-asr-1.7b)

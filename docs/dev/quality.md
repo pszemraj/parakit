@@ -62,7 +62,7 @@ env -u GGML_VK_VISIBLE_DEVICES CUDA_VISIBLE_DEVICES= \
   "$CARGO_TARGET_DIR/debug/parakit" --verbose doctor
 ```
 
-The first command exposes CUDA and hides Vulkan; the second hides CUDA and lets Vulkan select a discrete GPU. Check the device name in the native diagnostics. Use `GGML_VK_VISIBLE_DEVICES` to pin a Vulkan device when necessary, as described in [the environment reference](../config_reference.toml). `--device gpu` alone does not distinguish CUDA from Vulkan in a build containing both.
+The first command exposes CUDA and hides Vulkan; the second hides CUDA and lets Vulkan select a discrete GPU. Check the device name in the native diagnostics. Use `GGML_VK_VISIBLE_DEVICES` to pin a Vulkan device when necessary, as described in [environment variables](../configuration.md#environment-variables). `--device gpu` alone does not distinguish CUDA from Vulkan in a build containing both.
 
 A verbose Vulkan run in a dual-backend build can report `no CUDA-capable device is detected` because CUDA was deliberately hidden. Confirm that the selected device is Vulkan on the intended GPU.
 
@@ -260,7 +260,7 @@ Record failures, cold/warm latency, and host/GPU memory. Keep downloaded referen
 
 Use the [WAV quality target](#wav-quality-target) with `--device cpu --repeat 3` and each `--model-preset` on the same recordings. Keep the build profile, native libraries, thread counts, and BLAS settings fixed. Record loading separately from inference, and distinguish the first inference from repeated calls on one loaded engine.
 
-Measure peak process RSS across loading and inference; model download size does not describe runtime memory. Check raw-text fidelity alongside timing, especially omissions, negations, numbers, and names. Keep the per-run results under ignored `target/tmp/`.
+Measure peak process RSS across loading and inference; see [memory measurement](memory.md#measuring-memory). Check raw-text fidelity alongside timing, especially omissions, negations, numbers, and names. Keep the per-run results under ignored `target/tmp/`.
 
 ### Checkpoint Conversion Acceptance
 

@@ -69,7 +69,7 @@ Close existing application instances before changing their launch options. Chrom
 
 `--insertion-backend ibus` requires engine-owned IBus push-to-talk. `--insertion-backend x11` selects X11 clipboard paste or direct typing. The default `auto` follows the hotkey route: native delivery for IBus hotkeys and X11 for all others, including the evdev proxy. To use native delivery on X11, select `--hotkey-backend ibus`; a registered X11 grab can invalidate an input-method target. Set `daemon.insertion_backend` to keep the transport choice across starts. Explicit `direct` mode retains X11 typing with automatic transport selection and conflicts with forced IBus insertion.
 
-Clipboard recovery needs XWayland clipboard access; native IBus submission itself does not. Inspect the [insertion outcome](logging.md#insertion-outcomes) before retrying native delivery. [Paste modes](running.md#insertion) control terminal tabs and newlines; use [daemon history](running.md#daemon-control) for blocked text and explicit copying.
+Clipboard recovery needs XWayland clipboard access; native IBus submission itself does not. [Paste modes](running.md#insertion) control terminal tabs and newlines; use [daemon history](running.md#daemon-control) for blocked text and explicit copying.
 
 ## X11 Sessions
 

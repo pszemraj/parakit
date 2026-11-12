@@ -78,7 +78,7 @@ A completed Q8_0 artifact in the preset cache is reused before checking Python d
 
 Redux conversion reconstructs its packed ternary weights into F16 before Q8_0 quantization. See the [Redux limitations](../running.md#model-presets) and [conversion acceptance checks](quality.md#checkpoint-conversion-acceptance).
 
-Hosted Q8_0 downloads and completed model-cache reuse do not need conversion tools or Python. Missing tools report their filename and installation guidance before starting conversion.
+Missing tools report their filename and installation guidance before starting conversion.
 
 GPU build and runtime checks are in [quality.md#gpu-feature-validation](quality.md#gpu-feature-validation).
 

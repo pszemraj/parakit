@@ -175,7 +175,7 @@ Stutter handling is grouped by shape. Use `stutter-i` for repeated first-person 
 
 ## Rule Order
 
-Built-in passes run in the order shown by the built-in section of `parakit rules list`. User rules run in their configured position slot even though the command prints them together in a trailing `(user)` section. The output of one pass is the input to the next. Aggressive discourse edits run first. Partial-word restarts precede whole-word collapse so `sh sh should` becomes `should`. All stutter handling precedes acronym collapsing. The five contiguous numeric categories share one classification/rendering pass over its original input and report hits in metadata order. Whitespace cleanup and capitalization run near the end, followed by the default terminal-period removal.
+Built-in passes run in the order shown by the built-in section of `parakit rules list`. User rules run in their configured position slot even though the command prints them together in a trailing `(user)` section. The output of one pass is the input to the next. Aggressive discourse edits run first. Partial-word restarts precede whole-word collapse so `sh sh should` becomes `should`. [Stutter handling](#casual-forms-and-stutters) precedes acronym collapsing. The [numeric group](#numeric-controls-and-migration) reports hits in metadata order. Whitespace cleanup and capitalization run near the end, followed by the default terminal-period removal.
 
 A pass should be moved only with regression evidence. Reordering can change downstream matches even when every individual expression remains unchanged.
 

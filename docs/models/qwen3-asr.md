@@ -58,7 +58,7 @@ With the 1.7B model, related context helps and unrelated context hurts. Context 
 
 Use `--verbose` or the [inference log fields](../logging.md#transcription-record-fields) to inspect the shortcut mode, context length, and whether a retry occurred.
 
-The extra shortcut is inactive for other models and when `context_on_default_hotkey = true`. If its registered chord is already owned, Parakit warns and keeps the original shortcut usable; `context_on_default_hotkey = true` requests context there instead. Linux IBus upgrades need the matching `parakit-ibus` helper and an [engine reload](../linux-desktop.md#ibus-setup).
+The extra shortcut is inactive for other models. If its registered chord is already owned, Parakit warns and keeps the original shortcut usable. Linux IBus upgrades need the matching `parakit-ibus` helper and an [engine reload](../linux-desktop.md#ibus-setup).
 
 ## Long Audio And Inference
 

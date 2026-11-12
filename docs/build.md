@@ -60,7 +60,7 @@ That build retains X11 clipboard paste and direct typing, and cannot provide nat
 
 Install behavior:
 
-- Bundled builds link CrispASR and ggml statically. Installed executables do not need the checkout, Cargo Git cache, or native build directory. Custom `--root` installations can be moved together with their `bin` directory.
+- [Bundled builds](#crispasr-and-backends) produce executables that do not need the checkout, Cargo Git cache, or native build directory. Custom `--root` installations can be moved together with their `bin` directory.
 - Native OS libraries and selected BLAS, OpenMP, GPU runtimes, and drivers remain prerequisites. On Windows, the [bundle procedure](../scripts/windows/README.md) can package optional runtime DLLs.
 - Q6_K preparation and source rebuilding require [separately installed tools](dev/README.md#source-rebuild). Hosted Q8_0 downloads and dictation do not use them.
 - GitHub auto-generated source archives are unsupported because they do not include the CrispASR submodule.
