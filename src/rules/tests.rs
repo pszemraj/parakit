@@ -8,6 +8,7 @@ use super::passes::capitalize_sentence_starts;
 use super::*;
 
 mod calendar_numbers;
+mod model_numbers;
 mod numeric_contexts;
 mod numeric_suffixes;
 mod spoken_numbers;

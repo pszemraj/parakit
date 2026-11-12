@@ -457,6 +457,9 @@ pub(crate) fn normalize_numeric_identifier_groups(input: &str) -> TransformResul
     for found in re.find_iter(input) {
         let mut parts = found.as_str().split_ascii_whitespace();
         let prefix = parts.next().expect("identifier match has a prefix");
+        if super::number_context::identifier_group_continues(prefix, &input[found.end()..]) {
+            continue;
+        }
         let groups: Vec<&str> = parts.collect();
         // Keep in sync with `compact-short-identifier` in defaults.rs, whose
         // `[B-HJ-Z]` class gap encodes this same A/I-ambiguity exclusion for

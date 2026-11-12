@@ -63,6 +63,7 @@ pub(crate) fn normalize_spoken_numbers(input: &str, threshold: f64) -> Transform
         .split('\n')
         .map(|line| {
             let contextual = super::number_context::normalize_calendar(line, &language);
+            let contextual = super::number_context::normalize_model_numbers(&contextual, &language);
             render_signed_numbers(replace_numbers_in_segments(
                 &contextual,
                 &language,
