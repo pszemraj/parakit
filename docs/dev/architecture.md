@@ -63,8 +63,6 @@ The Linux daemon attaches to the helper over IBus's private bus and advertises r
 
 ## Module Map
 
-Size exception: `src/app.rs` keeps command dispatch and shared daemon orchestration together.
-
 | Path | Responsibility |
 | --- | --- |
 | `src/{main,cli,app}.rs` | Binary entrypoint, CLI definitions and precedence merge, command dispatch, daemon setup, and batch PTT simulation helper. |
@@ -81,6 +79,7 @@ Size exception: `src/app.rs` keeps command dispatch and shared daemon orchestrat
 | `src/daemon/worker_shutdown.rs` | Worker lifetime and bounded IPC shutdown handshake. |
 | `src/app/simulation.rs` | Acknowledged WAV dictations and configured idle/reload validation. |
 | `src/app/config_command.rs` | `parakit config` subcommands: show, path, init, and edit. |
+| `src/app/cache_command.rs` | `parakit cache` listing and directory commands. |
 | `src/ibus_command.rs`, `src/ibus_main.rs` | Linux IBus registration, removal, read-only setup status, and the standalone engine executable. |
 | `src/daemon/desktop/ibus/` | Native IBus engine/factory, daemon GDBus client, target lifetimes, and submission evidence. |
 | `src/daemon/desktop/linux_insertion.rs` | Linux insertion-backend selection and recording target capture independent of clipboard paste mode. |
@@ -97,14 +96,16 @@ Size exception: `src/app.rs` keeps command dispatch and shared daemon orchestrat
 | `src/{build_info,gpu,warmup,ffi_util}.rs`, `src/ggml_device_shim.cpp` | Build diagnostics, bundled ggml device listing through the C++ device shim, Qwen speech and Parakeet synthetic readiness probes, and local FFI helpers. |
 | `src/inference.rs`, `src/crispasr_ext.rs` | [CrispASR](https://github.com/CrispStrobe/CrispASR) session ownership, startup defaults (explicit overrides retained), scoped Qwen context, short-audio padding, and raw-ABI CPU/GPU session opening. See the [Qwen comparison guide](quality.md#qwen-and-moondream-comparisons) for windowed audio attention. |
 | `src/{lib,checksum,constants,test_support}.rs` | Library crate root, digest helpers, shared audio and inference constants, and unit-test fixtures. |
-| `src/rules/` | Transcript cleanup pipeline: profiles, the built-in rule table, procedural passes, and user rules from `config.toml`. |
+| `src/rules/{engine,defaults,passes,user}.rs` | Transcript cleanup pipeline, profiles, built-in rule table, procedural passes, and user rules from `config.toml`. |
+| `src/rules/{numbers,number_guards,number_labels,number_versions,number_words}.rs` | Shared numeric tokenization and rendering, protected quantities, calendar years, versions, and number-word/unit vocabulary. |
+| `src/rules/stutters.rs` | Contextual repeated-word collapsing and configured repetition exceptions. |
 | `src/daemon/desktop/{inject,focus_snapshot,clipboard_store,paste_transaction,clipboard_guard,x11_paste,direct,clipboard_restore}.rs` | Insertion contract and injector, focus snapshots, clipboard backend and snapshots, the guarded paste transaction and change detection, X11/XTest paste chord, guarded direct insertion, and restore timing. |
 | `src/data_log.rs` | JSONL transcription and insertion-outcome logging. |
 | `src/audio_file.rs` | WAV decoding and mono mixing; shared Rubato target-rate resampler used by file input and live capture on every platform. See [microphone behavior](../running.md#microphone). |
 | `examples/transcribe_file.rs` | Raw file-based inference smoke and quality checks. |
 | `examples/audit_cleaning.rs` | Built-in cleaner replay over historical JSONL logs. |
 | `scripts/transcribe_nemo_parakeet.py` | NeMo reference transcription helper. |
-| `build.rs`, `build/{native_link,openblas_roots,unix_openblas,windows_openblas}.rs` | CrispASR CMake orchestration, accelerator selection, runtime paths, C++ runtime linkage and device-shim compilation, and cross-platform BLAS discovery. |
+| `build.rs`, `build/{native_link,static_link,openblas_roots,unix_openblas,windows_openblas}.rs` | CrispASR CMake orchestration, accelerator selection, static archive linkage and external-library runtime paths, C++ runtime linkage and device-shim compilation, and cross-platform BLAS discovery. |
 | `build/native_correctness.{rs,cmake}`, `build/native/qwen_correctness.hpp` | [Bundled native corrections](../build.md#crispasr-and-backends) compiled from generated source copies. |
 | `build/windows_{artifacts,cuda,manifest}.rs`, `scripts/windows/{build,common,toolchains,install}.ps1` | Windows toolchain discovery, runtime-manifest generation, bundle assembly, and per-user installation. |
 
