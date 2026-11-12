@@ -199,7 +199,11 @@ fn main() {
             .output()
             .unwrap();
         assert!(compiled.status.success(), "{compiled:?}");
-        let path = joined_path_with_prepended(&bin, std::env::var_os("PATH")).unwrap();
+        let mut paths = vec![bin];
+        if let Some(existing) = std::env::var_os("PATH") {
+            paths.extend(std::env::split_paths(&existing));
+        }
+        let path = std::env::join_paths(paths).unwrap();
         for case in ["cached", "cold", "force"] {
             let output = crate::test_support::exact_test_command(
                 "fetch::tests::q6_acquisition_preserves_cached_models_and_reports_preparation",
@@ -441,18 +445,6 @@ fn move_into_place_replaces_existing_file() {
 
     assert!(!src.exists());
     assert_eq!(std::fs::read(&dst).unwrap(), b"new");
-}
-
-#[test]
-fn prepend_env_path_keeps_existing_entries() {
-    let dir = Path::new("target/tmp/parakit-fetch-tests/lib");
-    let existing = env::join_paths([Path::new("target/tmp/a"), Path::new("target/tmp/b")]).unwrap();
-    let joined = joined_path_with_prepended(dir, Some(existing)).unwrap();
-    let paths: Vec<_> = env::split_paths(&joined).collect();
-
-    assert_eq!(paths[0], dir);
-    assert_eq!(paths[1], Path::new("target/tmp/a"));
-    assert_eq!(paths[2], Path::new("target/tmp/b"));
 }
 
 #[test]

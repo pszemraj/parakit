@@ -19,8 +19,6 @@ use reqwest::blocking::Client;
 use sha2::{Digest, Sha256};
 use std::env;
 use std::ffi::OsStr;
-#[cfg(test)]
-use std::ffi::OsString;
 use std::fs::{File, OpenOptions};
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -708,15 +706,6 @@ fn tool_path(name: &str) -> Result<PathBuf> {
     find_on_path(name.to_string()).with_context(|| format!(
         "{name} was not found on PATH. Install the optional conversion tools described in docs/dev/README.md#source-rebuild. Hosted Q8_0 downloads do not need them."
     ))
-}
-
-#[cfg(test)]
-fn joined_path_with_prepended(dir: &Path, existing: Option<OsString>) -> Option<OsString> {
-    let mut paths = vec![dir.to_path_buf()];
-    if let Some(existing) = existing {
-        paths.extend(env::split_paths(&existing));
-    }
-    env::join_paths(paths).ok()
 }
 
 fn run_command(command: &mut Command, label: &str) -> Result<()> {
