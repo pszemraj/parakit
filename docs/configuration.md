@@ -62,6 +62,19 @@ TOML, unknown-key, invalid-value, and rule-validation errors name the config pat
 
 For `daemon.model_idle_minutes` behavior, see [idle model offload](running.md#idle-model-offload).
 
+## Preserving Repeated Words
+
+Add literal words or phrases to the built-in repetition exceptions:
+
+```toml
+[cleaning]
+repetition_exceptions = ["something", "hee", "bang", "tomato", "paddle", "chinny chin chin"]
+```
+
+Merge the assignment into your existing `[cleaning]` section if you already have one. Matching ignores case and accepts spaces or tabs between words, without crossing punctuation or line breaks. Contractions such as `it's` are valid words. Empty entries, other punctuation, newlines, and regex syntax are rejected.
+
+These additional exceptions affect only `stutter-safe-words` under both profiles. Other cleaning rules still apply, including the aggressive profile's separate ambiguous-repetition pass. This setting has no CLI flag; `parakit rules test` uses it from the config file.
+
 ## Validation and Recovery
 
 `parakit config show` catches TOML and configuration errors. Daemon startup additionally checks machine-dependent resources such as the model file, compute device, insertion backend, hotkey, audio, and permissions. The log directory is created and checked on the first transcription write, so neither `config show` nor startup can prove it is writable.

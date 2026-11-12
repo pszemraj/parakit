@@ -94,6 +94,8 @@ Safe dangling-connective removal drops a trailing `so`, `but`, `and`, `or`, or `
 
 The safe `stutter-safe-words` pass collapses adjacent identical words, ignoring case and keeping the first word's spelling: `where where` becomes `where`, and `I'm I'm` becomes `I'm`. Only spaces and tabs join a run; punctuation and line breaks preserve the repetition. Numbers, spelling letters other than `I` and `a`, spoken symbols, and common repetition idioms and intensifiers are protected. For example, `five five five`, `C plus plus`, and `very very` stay intact. The short exception list lives beside the scanner in `src/rules/stutters.rs`.
 
+Recognized grammatical contexts also preserve distinct uses of the same word, such as `get to control control T` and `calling something that isn't science science`. Add your own words or literal phrases with [`cleaning.repetition_exceptions`](configuration.md#preserving-repeated-words); these supplement the built-in list.
+
 Repeated `I` and `a` retain their existing treatment, including uppercase-I normalization. Repeated `is` collapses in normal mode. The aggressive profile additionally collapses `that`, `had`, `do`, `can`, and `no`; both profiles preserve punctuation-delimited forms such as `No, no`. Use punctuation or disable the rule to retain other deliberate repetitions such as `tomato tomato`.
 
 ## Inspect And Test

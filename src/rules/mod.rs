@@ -63,7 +63,7 @@ pub use user::{RulePosition, UserRule};
 
 /// Schema/behavior version recorded in transcription logs.
 /// Keep revisions distinct even when their package version is unchanged.
-pub const CLEANER_VERSION: u32 = 35;
+pub const CLEANER_VERSION: u32 = 36;
 
 /// Default minimum isolated number converted to digits when
 /// `cleaning.number_threshold` is left unset.
@@ -232,6 +232,17 @@ pub fn build_enabled_cleaner(
         &disabled,
         user_rules,
     )
+}
+
+/// Validate extra literal word/phrase exceptions for repeated-word cleaning.
+///
+/// # Returns
+/// Success when every entry contains whole words separated by whitespace.
+///
+/// # Errors
+/// Returns an error for an empty entry, non-word text, or an invalid matcher.
+pub fn validate_repetition_exceptions(entries: &[String]) -> Result<()> {
+    stutters::compile_repetition_exceptions(entries).map(|_| ())
 }
 
 /// Validate config-backed rule inputs without compiling the built-in pipeline.

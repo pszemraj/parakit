@@ -7,6 +7,33 @@ const GGML_LOG_LEVEL_INFO: i32 = 2;
 const GGML_LOG_LEVEL_ERROR: i32 = 4;
 
 #[test]
+fn configured_repetition_exceptions_reach_daemon_and_rules_cleaners() {
+    for profile in ["safe", "aggressive"] {
+        let path = crate::test_support::write_config_fixture(
+            "parakit-app-test",
+            &format!("repetition-exceptions-{profile}"),
+            &format!(
+                "[cleaning]\nprofile = '{profile}'\nrepetition_exceptions = ['Paddle', 'chinny chin chin']\n"
+            ),
+        );
+        let config = config::load_from_path(&path).unwrap();
+        let cli = Cli::parse_from(["parakit", "start"]);
+        let Some(Commands::Start(start)) = cli.command else {
+            panic!("expected start");
+        };
+        let daemon_cleaner = build_cli_cleaner(&start, &config).unwrap().unwrap();
+        let rules_cleaner = build_rules_cleaner(&RulesArgs::default(), &config).unwrap();
+        for cleaner in [daemon_cleaner, rules_cleaner] {
+            assert_eq!(
+                cleaner.clean_text("Um, paddle paddle chinny chin chin where where."),
+                "Paddle paddle chinny chin chin where",
+                "{profile}"
+            );
+        }
+    }
+}
+
+#[test]
 fn source_rebuild_dispatch_preserves_legacy_and_selects_new_checkpoints() {
     fn source(args: &[&str]) -> Result<FetchSource> {
         let cli = Cli::parse_from(["parakit", "fetch"].into_iter().chain(args.iter().copied()));

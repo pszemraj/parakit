@@ -63,6 +63,8 @@ The Linux daemon attaches to the helper over IBus's private bus and advertises r
 
 ## Module Map
 
+Size exceptions: `src/config.rs` includes the shipped TOML template alongside its loader, and `src/app.rs` keeps command dispatch and shared daemon orchestration together.
+
 | Path | Responsibility |
 | --- | --- |
 | `src/{main,cli,app}.rs` | Binary entrypoint, CLI definitions and precedence merge, command dispatch, daemon setup, and batch PTT simulation helper. |

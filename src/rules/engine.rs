@@ -125,6 +125,7 @@ pub(crate) enum RuleKind {
     },
     Procedural(fn(&str) -> TransformResult<'_>),
     SpokenNumbers,
+    RepeatedWords,
 }
 
 impl RuleKind {
@@ -135,7 +136,9 @@ impl RuleKind {
         match self {
             Self::Regex { .. } => EngineKind::Regex,
             Self::FancyRegex { .. } => EngineKind::FancyRegex,
-            Self::Procedural(_) | Self::SpokenNumbers => EngineKind::Procedural,
+            Self::Procedural(_) | Self::SpokenNumbers | Self::RepeatedWords => {
+                EngineKind::Procedural
+            }
         }
     }
 }
@@ -169,6 +172,9 @@ enum CompiledTransform {
     SpokenNumbers {
         threshold: f64,
     },
+    RepeatedWords {
+        exceptions: Vec<Regex>,
+    },
 }
 
 impl CompiledTransform {
@@ -176,7 +182,9 @@ impl CompiledTransform {
         match self {
             Self::Regex { .. } => EngineKind::Regex,
             Self::FancyRegex { .. } => EngineKind::FancyRegex,
-            Self::Procedural(_) | Self::SpokenNumbers { .. } => EngineKind::Procedural,
+            Self::Procedural(_) | Self::SpokenNumbers { .. } | Self::RepeatedWords { .. } => {
+                EngineKind::Procedural
+            }
         }
     }
 
@@ -187,7 +195,7 @@ impl CompiledTransform {
         match self {
             Self::Regex { re, replacement } => Some((re.as_str(), replacement.as_ref())),
             Self::FancyRegex { re, replacement } => Some((re.as_str(), replacement)),
-            Self::Procedural(_) | Self::SpokenNumbers { .. } => None,
+            Self::Procedural(_) | Self::SpokenNumbers { .. } | Self::RepeatedWords { .. } => None,
         }
     }
 }
@@ -256,6 +264,9 @@ impl CompiledRule {
             CompiledTransform::SpokenNumbers { threshold } => {
                 Ok(super::numbers::normalize_spoken_numbers(input, *threshold))
             }
+            CompiledTransform::RepeatedWords { exceptions } => {
+                Ok(super::stutters::collapse_repeated_words(input, exceptions))
+            }
         }
     }
 }
@@ -275,6 +286,25 @@ pub struct Cleaner {
 }
 
 impl Cleaner {
+    /// Set additional literal word/phrase exceptions for `stutter-safe-words`.
+    ///
+    /// # Returns
+    /// Success after replacing the extra exceptions and refreshing the rule-set ID.
+    ///
+    /// # Errors
+    /// Returns an error for an empty or non-word exception entry.
+    pub fn set_repetition_exceptions(&mut self, entries: &[String]) -> Result<()> {
+        let compiled = super::stutters::compile_repetition_exceptions(entries)?;
+        for rule in &mut self.rules {
+            if let CompiledTransform::RepeatedWords { exceptions } = &mut rule.transform {
+                *exceptions = compiled;
+                break;
+            }
+        }
+        self.ruleset_id = compute_ruleset_id(self.profile, self.drop_trailing_period, &self.rules);
+        Ok(())
+    }
+
     /// Build a cleaner after rule metadata and numeric inputs have already
     /// been validated by the public rules facade.
     ///
@@ -575,6 +605,9 @@ fn compile_default_rule(
         RuleKind::SpokenNumbers => CompiledTransform::SpokenNumbers {
             threshold: number_threshold,
         },
+        RuleKind::RepeatedWords => CompiledTransform::RepeatedWords {
+            exceptions: Vec::new(),
+        },
     };
     Ok(CompiledRule {
         name: def.name.to_string(),
@@ -644,6 +677,13 @@ fn compute_ruleset_id(
             hasher.update([0]);
             hasher.update(b"number-threshold");
             hasher.update(threshold.to_bits().to_le_bytes());
+        }
+        if let CompiledTransform::RepeatedWords { exceptions } = &rule.transform {
+            for pattern in exceptions {
+                hasher.update([0]);
+                hasher.update(b"repetition-exception");
+                hasher.update(pattern.as_str().as_bytes());
+            }
         }
         if let Some(position) = rule.position {
             hasher.update([0]);

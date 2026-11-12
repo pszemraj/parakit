@@ -232,6 +232,8 @@ pub(crate) struct CleaningConfig {
     /// Unset resolves to the built-in default of 4, so isolated zero through three stay as produced.
     /// `0` converts every isolated single-digit cardinal and ordinal, while unmarked adjacent small-number runs, plural magnitudes, fractions, and the time unit "second" still stay as words.
     pub(crate) number_threshold: Option<f64>,
+    /// Additional literal words or phrases protected from whole-word repetition collapse.
+    pub(crate) repetition_exceptions: Vec<String>,
     /// Rule names to disable. Merged with CLI `--disable-rule` flags.
     pub(crate) disabled_rules: Vec<String>,
 }
@@ -417,6 +419,10 @@ pub(crate) const TEMPLATE: &str = r#"# parakit config.toml
 # Set to 0 to convert every isolated single-digit number and ordinal.
 # Even at 0, unmarked adjacent small-number runs ("one two three"), plural magnitudes, fractions, and the time unit "second" stay as words.
 # number_threshold = 5
+
+# Additional literal words or phrases to preserve in the repeated-word pass.
+# Matching ignores case; other cleaning rules still apply. No CLI flag.
+# repetition_exceptions = ["something", "hee", "bang", "tomato", "paddle", "chinny chin chin"]
 
 # Rule names to disable.
 # Merged with any CLI --disable-rule flags.
@@ -627,6 +633,13 @@ pub(crate) fn load_from_path(path: &Path) -> Result<ConfigFile> {
         &config.rules.user,
     )
     .with_context(|| format!("invalid config in {}", path.display()))?;
+    parakit::rules::validate_repetition_exceptions(&config.cleaning.repetition_exceptions)
+        .with_context(|| {
+            format!(
+                "invalid config in {}: cleaning.repetition_exceptions",
+                path.display()
+            )
+        })?;
 
     Ok(config)
 }
@@ -702,6 +715,10 @@ mod tests {
                 config.cleaning.number_threshold.is_none(),
                 "{label}: cleaning.number_threshold"
             );
+            assert!(
+                config.cleaning.repetition_exceptions.is_empty(),
+                "{label}: cleaning.repetition_exceptions"
+            );
         }
     }
 
@@ -723,6 +740,7 @@ enabled = false
 profile = "aggressive"
 keep_trailing_period = true
 number_threshold = 5
+repetition_exceptions = ["paddle", "chinny chin chin"]
 disabled_rules = ["fix-trailing-period", "filled-pauses"]
 
 [logging]
@@ -754,6 +772,10 @@ position = "first"
         assert_eq!(config.cleaning.profile, Some(CleaningProfile::Aggressive));
         assert_eq!(config.cleaning.keep_trailing_period, Some(true));
         assert_eq!(config.cleaning.number_threshold, Some(5.0));
+        assert_eq!(
+            config.cleaning.repetition_exceptions,
+            ["paddle", "chinny chin chin"]
+        );
         assert_eq!(
             config.cleaning.disabled_rules,
             vec![

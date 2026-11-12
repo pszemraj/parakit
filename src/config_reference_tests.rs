@@ -236,6 +236,36 @@ fn write_fixture(name: &str, contents: &str) -> PathBuf {
     crate::test_support::write_config_fixture("parakit-config-reference-test", name, contents)
 }
 
+#[test]
+fn repetition_exceptions_validate_even_when_cleaning_is_disabled() {
+    let path = write_fixture(
+        "repetition-exceptions-valid",
+        "[cleaning]\nenabled = false\nrepetition_exceptions = [\"Paddle\", \"chinny\\tchin chin\"]\n",
+    );
+    assert_eq!(
+        load_from_path(&path)
+            .unwrap()
+            .cleaning
+            .repetition_exceptions,
+        ["Paddle", "chinny\tchin chin"]
+    );
+    for (slug, value) in [
+        ("empty", r#"[""]"#),
+        ("blank", r#"[" \t "]"#),
+        ("regex", r#"["paddle.*"]"#),
+        ("punctuation", r#"["chinny, chin chin"]"#),
+        ("newline", r#"["chinny\nchin chin"]"#),
+    ] {
+        let path = write_fixture(
+            &format!("repetition-exceptions-{slug}"),
+            &format!("[cleaning]\nenabled = false\nrepetition_exceptions = {value}\n"),
+        );
+        let error = format!("{:#}", load_from_path(&path).unwrap_err());
+        assert!(error.contains("repetition_exceptions"), "{error}");
+        assert!(error.contains(&path.display().to_string()), "{error}");
+    }
+}
+
 /// Render every effective value of the config, one entry per scalar key,
 /// resolved the way the daemon resolves it with no CLI flags.
 fn effective_snapshot(config: &ConfigFile) -> BTreeMap<&'static str, String> {
@@ -329,6 +359,10 @@ fn effective_snapshot(config: &ConfigFile) -> BTreeMap<&'static str, String> {
     put(
         "cleaning.number_threshold",
         cleaner.number_threshold().to_string(),
+    );
+    put(
+        "cleaning.repetition_exceptions",
+        format!("{:?}", config.cleaning.repetition_exceptions),
     );
     put(
         "cleaning.disabled_rules",

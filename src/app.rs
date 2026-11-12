@@ -709,7 +709,7 @@ fn resolve_worker_settings(
 }
 
 fn build_cli_cleaner(start: &StartCli, config: &ConfigFile) -> Result<Option<rules::Cleaner>> {
-    rules::build_cleaner(
+    let mut cleaner = rules::build_cleaner(
         !start.effective_cleaning_enabled(config),
         start.effective_cleaning_profile(config),
         start
@@ -718,7 +718,11 @@ fn build_cli_cleaner(start: &StartCli, config: &ConfigFile) -> Result<Option<rul
         config.cleaning.number_threshold,
         &start.cleaning_overrides.effective_disabled_rules(config),
         &config.rules.user,
-    )
+    )?;
+    if let Some(cleaner) = &mut cleaner {
+        cleaner.set_repetition_exceptions(&config.cleaning.repetition_exceptions)?;
+    }
+    Ok(cleaner)
 }
 
 /// Build the cleaner for `rules list`/`rules test`. Unlike [`build_cli_cleaner`],
@@ -726,14 +730,16 @@ fn build_cli_cleaner(start: &StartCli, config: &ConfigFile) -> Result<Option<rul
 /// under `rules`, since testing or listing rules with cleaning off is
 /// meaningless.
 fn build_rules_cleaner(args: &RulesArgs, config: &ConfigFile) -> Result<rules::Cleaner> {
-    rules::build_enabled_cleaner(
+    let mut cleaner = rules::build_enabled_cleaner(
         args.effective_cleaning_profile(config),
         args.cleaning_overrides
             .effective_drops_trailing_period(config),
         config.cleaning.number_threshold,
         &args.cleaning_overrides.effective_disabled_rules(config),
         &config.rules.user,
-    )
+    )?;
+    cleaner.set_repetition_exceptions(&config.cleaning.repetition_exceptions)?;
+    Ok(cleaner)
 }
 
 fn model_dtype_label(path: &std::path::Path) -> String {

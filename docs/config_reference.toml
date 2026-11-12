@@ -170,7 +170,7 @@ context_max_age_minutes = 10
 # bool. Run the cleaning pipeline on each transcript. false inserts the model's raw transcript unchanged: no built-in rule and no [[rules.user]] entry runs.
 # Overridden by: --cleaning or --no-cleaning.
 # Recommended: false for multilingual dictation when English cleanup could alter the transcript; --no-cleaning has the same effect for one start command.
-# Validation still happens when false: cleaning.disabled_rules, cleaning.number_threshold, and every [[rules.user]] entry (including each regex) must be valid or the config fails to load.
+# Validation still happens when false: cleaning.disabled_rules, cleaning.number_threshold, cleaning.repetition_exceptions, and every [[rules.user]] entry (including each regex) must be valid or the config fails to load.
 # `parakit rules test` and `parakit rules list` ignore this key and always apply or list the rules.
 enabled = true
 
@@ -201,6 +201,13 @@ keep_trailing_period = false
 # The structural number rules (spoken-version-numbers, numeric-point-suffixes, compact-parameter-counts, and the other numeric rules) do not read it.
 # There is no command-line flag. `parakit rules test` honors this key, and `parakit rules list` does not use it.
 number_threshold = 4
+
+# list of strings. Extra word or phrase exceptions for stutter-safe-words, alongside built-ins.
+# A word protects all its repeats; a phrase protects only its complete match.
+# Words (including contractions) are separated by spaces or tabs. Empty entries, other punctuation, newlines, and regex syntax fail config load.
+# Matching ignores case and protects only stutter-safe-words under both profiles; other cleaning rules still apply.
+# See: [preserving repeated words](configuration.md#preserving-repeated-words) for an example. There is no command-line flag.
+repetition_exceptions = []
 
 # list of strings. Built-in or [[rules.user]] names to disable; list names and descriptions with `parakit rules list`.
 # Each name is matched exactly, case-sensitively and without trimming.

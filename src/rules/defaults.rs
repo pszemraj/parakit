@@ -22,7 +22,6 @@ use super::passes::{
     normalize_numeric_point_suffixes, normalize_parameter_counts, normalize_spaced_acronyms,
     normalize_spoken_versions,
 };
-use super::stutters::collapse_repeated_words;
 
 macro_rules! regex_rule {
     ($name:expr, $description:expr, $activation:expr, $pattern:expr, $replacement:expr) => {
@@ -136,12 +135,12 @@ pub(crate) const DEFAULT_RULES: &[Rule] = &[
         r#"(?i)\b([a-z]|sh|th|ch)(?:[- ]+\1){1,3}[- ]+(\1[a-z][a-z'-]*)\b"#,
         "$2"
     ),
-    procedural_rule!(
-        "stutter-safe-words",
-        "Collapse adjacent repeated words, preserving deliberate doubles and numbers",
-        Activation::Safe,
-        collapse_repeated_words
-    ),
+    Rule {
+        name: "stutter-safe-words",
+        description: "Collapse adjacent repeated words, preserving deliberate doubles, numbers, and configured exceptions",
+        activation: Activation::Safe,
+        kind: RuleKind::RepeatedWords,
+    },
     fancy_rule!(
         "contracted-have-restart",
         "Remove a repeated subject from contracted-have restarts",
