@@ -32,16 +32,16 @@ sudo apt install libvulkan-dev vulkan-tools glslc spirv-tools spirv-headers mesa
 
 ## Install
 
-Clone with submodules first:
-
-```text
-git submodule update --init --recursive
-```
-
-Install directly from Git, or from a checkout with its submodules:
+On Linux and Apple Silicon macOS, install directly from Git after installing the native dependencies above:
 
 ```bash
 cargo install --locked --git https://github.com/pszemraj/parakit.git parakit
+```
+
+For a local checkout, initialize its submodules before installing:
+
+```bash
+git submodule update --init --recursive
 cargo install --locked --path .
 ```
 

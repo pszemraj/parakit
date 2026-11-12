@@ -90,8 +90,6 @@ TODO: Keep the direct platform-hotkey path available when configurable chords la
 
 TODO: Detect configured Linux input-source shortcut conflicts automatically; diagnostics currently provide a [manual-check advisory](../linux-desktop.md#shortcut-conflicts).
 
-TODO: Remove the [Unix source-install dependency on Cargo's native build output](../build.md#install) in a dedicated follow-up PR. First try to work upstream with CrispASR for static/manual linking support; if that is not viable, revisit full vendoring or an aggregate static-link strategy in parakit. Do not patch the CrispASR submodule locally for this.
-
 TODO: Revisit Linux/macOS microphone idle policy. Either move them to the same pause/resume default as Windows or keep 350 ms warm pre-roll only with measured idle CPU and first-syllable evidence that justifies the cost.
 
 TODO: Replace fallback microphone device polling with platform event notifications when the audio layer is split: Windows `IMMNotificationClient`, PipeWire/PulseAudio registry events, and macOS `AudioObject` property listeners. Expose stream state, callback drops, and recovery counters through daemon status at the same time.

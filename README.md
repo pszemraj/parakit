@@ -18,15 +18,11 @@ Transcription runs locally via [Moondream Parakeet Ultra](https://huggingface.co
 
 ## Install
 
-You need Rust 1.87+, CMake 3.19+, and a C/C++ toolchain. Linux also needs audio, IBus, and X11 development packages (including `libibus-1.0-dev` on Debian/Ubuntu); macOS needs Xcode command line tools; Windows needs Visual Studio's C++ workload. Install the native, OS-specific packages needed[^2] as explained in [docs/build.md](docs/build.md), then:
+You need Rust 1.87+, CMake 3.19+, and a C/C++ toolchain. Linux also needs audio, IBus, and X11 development packages (including `libibus-1.0-dev` on Debian/Ubuntu); macOS needs Xcode command line tools; Windows needs Visual Studio's C++ workload. Install the native, OS-specific packages needed[^2] as explained in [docs/build.md](docs/build.md).
 
 [^2]: These are mostly for audio streaming, hotkey monitoring, and text insertion.
 
-```bash
-git clone --recurse-submodules https://github.com/pszemraj/parakit.git
-cd parakit
-cargo install --locked --path .
-```
+On Linux and Apple Silicon macOS, the recommended installation is directly from Git:
 
 ```bash
 # Direct Git install (CPU):
@@ -41,11 +37,19 @@ cargo install --locked --git https://github.com/pszemraj/parakit.git parakit
 
 The default build is CPU-only. Append `--features cuda` or `--features vulkan` on Linux, or `--features metal` on Apple Silicon macOS.
 
+To install from a local checkout instead:
+
+```bash
+git clone --recurse-submodules https://github.com/pszemraj/parakit.git
+cd parakit
+cargo install --locked --path .
+```
+
 Bundled builds link CrispASR/ggml statically.[^3]
 
 [^3]: Native OS and accelerator runtime prerequisites still apply. See [install behavior](docs/build.md#install).
 
-On Windows, the bundle script packages an app directory with optional runtime DLLs. See [scripts/windows/README.md](scripts/windows/README.md).
+On Windows, clone with submodules and use the [bundle script](scripts/windows/README.md). It configures the native build tools and packages an app directory with optional runtime DLLs.
 
 Make sure Cargo's bin directory is on `PATH`:
 

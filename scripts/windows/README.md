@@ -15,11 +15,9 @@ From PowerShell, use `.\scripts\windows\build.ps1 ...` instead of `build.bat`. F
 
 ## Why The Script Exists
 
-Windows builds need an installed runnable directory, not only `parakit.exe`. CrispASR and ggml build shared DLLs, and Windows loads those DLLs from the executable directory or `PATH`.
+Bundled builds link CrispASR and ggml statically. Optional BLAS and CUDA runtimes can require DLLs beside `parakit.exe` or on `PATH`.
 
-`cargo build` works for development because `build.rs` copies the generated DLLs next to `parakit.exe` in the active Cargo target directory. That is normally `target\debug` or `target\release`, but `CARGO_TARGET_DIR` can move it.
-
-`cargo install --path .` is different: Cargo installs executables into Cargo's bin directory but does not copy the generated CrispASR, ggml, or OpenBLAS DLLs. Use `build.ps1` when you want a normal Windows install.
+`cargo install` installs executables but does not copy external runtime DLLs. The bundle script configures the native toolchain and backend, packages optional runtime DLLs, and installs an app directory. Use `build.ps1` for the recommended Windows install.
 
 The script creates `target\parakit-windows-x86_64-<backend>`, installs it to `%LOCALAPPDATA%\Programs\parakit`, and adds that install directory to the Windows User `PATH`.
 
