@@ -733,14 +733,9 @@ fn compute_ruleset_id(
             hasher.update([0]);
             hasher.update(replacement.as_bytes());
         }
-        if let CompiledTransform::Numbers {
-            kind: NumberKind::Spoken,
-            threshold,
-        } = &rule.transform
-        {
-            // Procedural functions have no pattern text to fingerprint. Hash
-            // this configurable input so behaviorally different number
-            // policies can never share a ruleset identifier.
+        if let CompiledTransform::Numbers { threshold, .. } = &rule.transform {
+            // Numeric passes share threshold-sensitive mixed-run guards,
+            // even when spoken-number conversion is disabled.
             hasher.update([0]);
             hasher.update(b"number-threshold");
             hasher.update(threshold.to_bits().to_le_bytes());

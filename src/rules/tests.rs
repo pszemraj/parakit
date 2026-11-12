@@ -513,18 +513,39 @@ fn standard_user_rule_cleanup_boundary_exists_in_defaults() {
 }
 
 #[test]
-fn disabled_spoken_number_rule_ignores_threshold_in_ruleset_id() {
-    let disabled = HashSet::from(["spoken-numbers".to_string()]);
-    let all =
+fn numeric_rules_fingerprint_threshold_even_without_spoken_conversion() {
+    let mut disabled = HashSet::from(["spoken-numbers".to_string()]);
+    let defaults =
         build_cleaner_for_test_with_threshold(CleaningProfile::Safe, false, None, &disabled, &[]);
-    let threshold = build_cleaner_for_test_with_threshold(
+    let zero = build_cleaner_for_test_with_threshold(
         CleaningProfile::Safe,
         false,
-        Some(5.0),
+        Some(0.0),
         &disabled,
         &[],
     );
-    assert_eq!(all.ruleset_id(), threshold.ruleset_id());
+    // The shared mixed-run guard still affects size compaction without
+    // converting any spoken counts, so these policies must have distinct IDs.
+    assert_eq!(defaults.clean_text("three 50 K"), "Three 50 K");
+    assert_eq!(zero.clean_text("three 50 K"), "Three 50K");
+    assert_ne!(defaults.ruleset_id(), zero.ruleset_id());
+
+    disabled.extend(
+        DEFAULT_RULES
+            .iter()
+            .filter(|rule| matches!(rule.kind, super::engine::RuleKind::Numbers(_)))
+            .map(|rule| rule.name.to_string()),
+    );
+    let defaults =
+        build_cleaner_for_test_with_threshold(CleaningProfile::Safe, false, None, &disabled, &[]);
+    let zero = build_cleaner_for_test_with_threshold(
+        CleaningProfile::Safe,
+        false,
+        Some(0.0),
+        &disabled,
+        &[],
+    );
+    assert_eq!(defaults.ruleset_id(), zero.ruleset_id());
 }
 
 #[test]

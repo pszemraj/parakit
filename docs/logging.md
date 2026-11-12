@@ -38,7 +38,7 @@ Fields, in serialization order:
 | `rules_active` | integer | Enabled pass count after profile and disable filtering. |
 | `cleaner_version` | integer | Procedural cleaner behavior revision. |
 | `cleaning_profile` | string | `safe`, `aggressive`, or `disabled`. |
-| `ruleset_id` | string | Identifier of the ordered enabled pass set and configurable cleaning behavior, including user rules, repetition exceptions when `stutter-safe-words` is enabled, and the number threshold whenever `spoken-numbers` is enabled. User-rule identity includes name, pattern, replacement, position, and order, excluding descriptions and disabled rules. Omitted when cleaning is disabled. |
+| `ruleset_id` | string | Identifier of the ordered enabled pass set and configurable cleaning behavior, including user rules, repetition exceptions when `stutter-safe-words` is enabled, and the number threshold whenever any numeric pass is enabled. User-rule identity includes name, pattern, replacement, position, and order, excluding descriptions and disabled rules. Omitted when cleaning is disabled. |
 | `drops_trailing_period` | boolean | Whether the messaging-style terminal-period pass was enabled. |
 | `number_threshold` | number or null | The [number-conversion threshold](cleaning-rules.md#numbers) in effect for digit conversion; `null` when cleaning is disabled. |
 | `rules_fired` | array | Passes that changed text, in application order, as `{"name":...,"matches":...}` objects. |

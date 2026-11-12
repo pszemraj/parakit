@@ -46,7 +46,7 @@ English cardinal and ordinal recognition uses [`text2num`](https://crates.io/cra
 
 #### Threshold And Adjacent Numbers
 
-The number threshold is 4 by default and applies to every cardinal and ordinal value. A value at or above it renders as digits; one below it retains the model's wording. At the default, `zero` through `three` and `first` through `third` stay as produced. A threshold of `100`, for example, also leaves `fifty` as a word. Set `cleaning.number_threshold = 0` to convert every eligible value. Plural magnitudes, fractions, bare scale words, and the time unit `second` remain protected at `0`. Omission and an explicit `0` produce different behavior and `ruleset_id` values when `spoken-numbers` is enabled.
+The number threshold is 4 by default and applies to every cardinal and ordinal value. A value at or above it renders as digits; one below it retains the model's wording. At the default, `zero` through `three` and `first` through `third` stay as produced. A threshold of `100`, for example, also leaves `fifty` as a word. Set `cleaning.number_threshold = 0` to convert every eligible value. Plural magnitudes, fractions, bare scale words, and the time unit `second` remain protected at `0`. The threshold also gates mixed-run compaction when `spoken-numbers` is disabled: `three 50 K` stays separate at `4` but becomes `three 50K` at `0`. Any enabled numeric pass includes the threshold in `ruleset_id`; with all numeric passes disabled, the threshold is irrelevant.
 
 Adjacent parsed counts keep their separators when they all meet the threshold: `fifty ninety` becomes `50 90`, `five thirty` becomes `5 30`, and `five five five twenty twelve` becomes `5 5 5 20 12`. Nearby labels do not combine them: `GPU fifty ninety` becomes `GPU 50 90`.
 
