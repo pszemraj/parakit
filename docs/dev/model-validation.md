@@ -33,7 +33,7 @@ unzip -o "$FIXTURE_ZIP" -d "$FIXTURES"
 
 Keep the cache root short enough for macOS's Unix-socket pathname limit. macOS places the control socket under `XDG_CACHE_HOME`, regardless of `XDG_RUNTIME_DIR`. The Metal cache override isolates the shader archive from the installed daemon's cache.
 
-Run both precisions for all six presets on CPU and Metal. Start with the isolated empty model directory: Q6_K fetch downloads the preset's F16 file and invokes the local quantizer, so its first run records cold quantization. Keep each command's output and exit status.
+Run both precisions for all six presets on CPU and Metal. Install a compatible `crispasr-quantize` on `PATH` first; Cargo does not build the tool. Start with the isolated empty model directory: Q6_K fetch downloads the preset's F16 file and invokes the local quantizer, so its first run records cold quantization. Keep each command's output and exit status.
 
 ~~~bash
 PRESETS=(parakeet-v2 parakeet-v3 parakeet-ultra parakeet-redux qwen3-asr-0.6b qwen3-asr-1.7b)
@@ -165,7 +165,7 @@ done
 
 Also record default auto/512, forced German on `fleurs-de_de-0.wav`, and forced English on `fleurs-en_us-422.wav` (containing the spoken word "language"). Use a budget of 1 for a separate failure-path check: readiness should complete, while actual transcription fails without a successful JSONL row or history entry.
 
-Run the [loaded-context checks](quality.md#ordered-audio-and-loaded-qwen-failures) on supported native hosts, then the [physical shortcut checks](quality.md#runtime-smoke-checks) with Qwen and Parakeet. Compare prior-context quality separately from ordinary repeat/reload invariance, using the [context configuration](../models/qwen3-asr.md#prior-dictation-context).
+Run the [ordered-audio checks](quality.md#ordered-audio) on supported native hosts, then the [physical shortcut checks](quality.md#runtime-smoke-checks) with Qwen and Parakeet. Compare prior-context quality separately from ordinary repeat/reload invariance, using the [context configuration](../models/qwen3-asr.md#prior-dictation-context).
 
 For every preset and precision, also check representative longer speech, silence, repeats, and idle offload/reload through the helper and worker. Use the 29/30/31-second boundary fixtures for both Qwen sizes. Save exit statuses alongside output for each additional command, as in the matrix. A worker no-speech error is expected for silence; it must not become a successful transcript or insertion. Repeat completed Q6 acquisition with network access disabled and the F16/quantizer unavailable to confirm cached startup needs neither. On Windows, separately record the first-generation result with the external quantizer available.
 

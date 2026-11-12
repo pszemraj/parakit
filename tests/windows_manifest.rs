@@ -38,13 +38,13 @@ fn serializes_runtime_manifest_cases() {
         Case {
             name: "cpu-manifest",
             manifest: RuntimeManifest {
-                required_files: vec!["parakit.exe".to_string(), "crispasr.dll".to_string()],
+                required_files: vec!["parakit.exe".to_string(), "openblas.dll".to_string()],
                 accelerator: Accelerator::Cpu,
                 cuda: None,
                 vulkan: None,
             },
             expect_json_fields: vec![
-                ("/required_files/0", json!("parakit.exe")),
+                ("/required_files", json!(["parakit.exe", "openblas.dll"])),
                 ("/cuda", Value::Null),
                 ("/vulkan", Value::Null),
             ],
@@ -52,7 +52,7 @@ fn serializes_runtime_manifest_cases() {
         Case {
             name: "cuda-external-dll-contract",
             manifest: RuntimeManifest {
-                required_files: vec!["parakit.exe".to_string(), "ggml-cuda.dll".to_string()],
+                required_files: vec!["parakit.exe".to_string()],
                 accelerator: Accelerator::Cuda,
                 cuda: Some(CudaManifest {
                     toolkit_version: "13.2".to_string(),
@@ -67,6 +67,7 @@ fn serializes_runtime_manifest_cases() {
                 vulkan: None,
             },
             expect_json_fields: vec![
+                ("/required_files", json!(["parakit.exe"])),
                 ("/cuda/toolkit_version", json!("13.2")),
                 ("/cuda/architectures", json!("89-real")),
                 ("/cuda/external_dlls/0", json!("cudart64_13.dll")),
@@ -79,7 +80,7 @@ fn serializes_runtime_manifest_cases() {
         Case {
             name: "vulkan-system-loader-contract",
             manifest: RuntimeManifest {
-                required_files: vec!["parakit.exe".to_string(), "ggml-vulkan.dll".to_string()],
+                required_files: vec!["parakit.exe".to_string()],
                 accelerator: Accelerator::Vulkan,
                 cuda: None,
                 vulkan: Some(VulkanManifest {
@@ -90,6 +91,7 @@ fn serializes_runtime_manifest_cases() {
             },
             expect_json_fields: vec![
                 ("/cuda", Value::Null),
+                ("/required_files", json!(["parakit.exe"])),
                 ("/vulkan/sdk_version", json!("1.4.321.1")),
                 ("/vulkan/external_dlls/0", json!("vulkan-1.dll")),
                 ("/vulkan/external_dlls_bundled", json!(false)),

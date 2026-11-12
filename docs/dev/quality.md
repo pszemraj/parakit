@@ -22,7 +22,7 @@ The all-features check can request accelerator toolchains that the current host 
 
 Use the [Windows scripts](../../scripts/windows/README.md) for native CUDA/Vulkan builds. Raw `cargo check --workspace --all-targets --all-features` may still enter CMake's Visual Studio generator and fail before Rust typechecking if Visual Studio CUDA BuildCustomizations are stale. A known failure leaves `CudaToolkitDir` empty and reports `CUDA Toolkit directory '' does not exist`.
 
-When that happens, record the exact CUDA/MSBuild error, then validate the Rust all-features surface with an existing bundled library directory:
+When that happens, record the exact CUDA/MSBuild error, then validate the Rust all-features surface with an existing bundled archive directory:
 
 ```powershell
 $env:CRISPASR_LIB_DIR = (Resolve-Path 'target\debug\build\parakit-<hash>\out\lib').Path
@@ -30,16 +30,16 @@ cargo check --workspace --all-targets --all-features
 Remove-Item Env:\CRISPASR_LIB_DIR
 ```
 
-This fallback does not replace the [native Windows build and inference checks](model-validation.md#windows-cpu-and-supported-gpu-backends).
+This is a typechecking-only fallback. `CRISPASR_LIB_DIR` requests dynamic linkage, while the bundled directory contains static archives; it cannot be used for `cargo build`, `cargo test`, or a runnable binary. It does not replace the [native Windows build and inference checks](model-validation.md#windows-cpu-and-supported-gpu-backends).
 
-On macOS, raw `--all-features` also enables CUDA and can fail in CMake before Rust typechecking when the CUDA Toolkit is not installed. Use the same `CRISPASR_LIB_DIR` fallback to validate the Rust all-features surface; validate Metal with the native macOS build and `doctor`.
+On macOS, raw `--all-features` also enables CUDA and can fail in CMake before Rust typechecking when the CUDA Toolkit is not installed. Use the same typechecking-only `CRISPASR_LIB_DIR` fallback to validate the Rust all-features surface; validate Metal with the native macOS build and `doctor`.
 
 ```bash
 CRISPASR_LIB_DIR="$PWD/target/debug/build/parakit-<hash>/out/lib" \
   cargo check --workspace --all-targets --all-features
 ```
 
-Replace `<hash>` with the directory from the successful native build; do not point the fallback at an unrelated or stale library.
+Replace `<hash>` with the directory from the successful native build; do not point the fallback at unrelated or stale archives. Unset `CRISPASR_LIB_DIR` before the next native build or runtime check.
 
 ### Linux CUDA/Vulkan
 
@@ -393,32 +393,6 @@ Use an isolated daemon with non-sensitive transcripts and exercise the [history 
 
 While one entry is selected, add dictations and confirm preview and clipboard copy still refer to that entry. Check disabled/empty history, eviction, daemon restart, and oversized full-text responses without truncation or substitution. An oversized preview must still allow copying the selected entry with Enter. Force a clipboard failure, verify the picker remains open, retry, and independently read the actual clipboard through its supported platform route.
 
-### Ordered audio and loaded Qwen failures
+### Ordered audio
 
 Repeat `transcribe-file --audio` to run ordered inputs on one loaded engine. [Worker simulation](#ptt-worker-simulation) accepts repeated `--simulate-ptt-audio` paths; it replays the full sequence per cycle before the idle interval. Its failure path reads history back and rejects replacement of the preceding successful transcript. See the [native Qwen sequence](model-validation.md#qwen-options-long-input-and-reload) for the short/long/short acceptance case.
-
-The loaded-session fault driver runs on Linux and macOS with an explicit Qwen model. Build the daemon, WAV helper, and test harness in the same isolated target directory before running it:
-
-```bash
-cargo build --bin parakit --example transcribe-file
-cargo test --test native_correctness_build --no-run
-python tests/native/run_qwen_faults.py \
-  --native-build <isolated-target>/debug/build/parakit-<id>/out/build \
-  --binary-dir <isolated-target>/debug \
-  --model <qwen-q8.gguf> \
-  --device cpu \
-  --audio vendor/CrispASR/bindings/go/samples/jfk.wav \
-  --output target/tmp/qwen-native-faults
-```
-
-Run the ignored Qwen cases through the driver, which supplies native defaults in each test process's launch environment. Use the matching completed native build directory containing `compile_commands.json`, and a fresh output directory. CPU is the default; for a GPU run, add the matching accelerator feature to both Cargo commands, then pass `--device gpu`. On macOS the driver preserves the dylib basename and version aliases and sets `DYLD_LIBRARY_PATH` to load its private fault library. It compiles a separate corrected C API copy and relinks its own test library; normal binaries and vendor sources are unchanged.
-
-The driver checks:
-
-- First/middle/last chunk and greedy embedding/forward failures through file and worker paths. Failed worker input must preserve the preceding successful transcript and produce no successful log or insertion.
-- Native English, Cantonese, and Filipino assistant prefills, forced on English audio to inspect prompt construction rather than multilingual quality.
-- Exact context prompt bytes and session setters: raw system text and forced-English prefills across chunks, contextual/ordinary/contextual calls on one session, unusable-context fallback, an ordinary retry after a contextual inference failure, no retry after a failed clear, and clearing after success or failure.
-- Worker history handoff using two disjoint JFK phrases: context without a retry, forced-copy retry, JSONL/verbose telemetry matching native use, and silence reaching neither contextual inference nor successful history.
-- Direct-engine silence output and subsecond ordinary fallback. Direct calls do not use the worker's silence filter.
-
-`PARAKIT_TEST_QWEN_AUDIO` and `PARAKIT_TEST_QWEN_CONTEXT` override the context probes' WAV and prior text; defaults are the constructed long fixture and a vocabulary sample. Each call prints a `PARAKIT_TEST_RESULT` JSON record with raw text, elapsed inference seconds, context character count, retry status, and any error. Compare it with the recording and a readable reference; prompt-routing checks alone do not establish quality.
