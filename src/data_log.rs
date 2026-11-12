@@ -42,7 +42,7 @@ pub struct CleaningLogFields<'a> {
     pub ruleset_id: Option<&'a str>,
     /// Whether the messaging-style terminal-period pass was enabled.
     pub drops_trailing_period: bool,
-    /// Minimum isolated number converted to digits; `None` when cleaning is disabled.
+    /// Minimum spoken cardinal/ordinal value converted to digits; `None` when cleaning is disabled.
     pub number_threshold: Option<f64>,
     /// Transformations that actually changed the transcript, in application order.
     pub rules_fired: &'a [RuleHit],
