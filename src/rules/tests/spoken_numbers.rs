@@ -14,17 +14,14 @@ fn text2num_handles_documented_cardinals_groups_and_decimals() {
                 "The value is 3.1415.",
             ),
             (
-                // A comma-delimited group converts as a whole regardless of
-                // the default threshold; text2num does not treat these
-                // members as "isolated" values.
+                // Each comma-separated number follows the threshold.
                 "Groups like one, two, three are digits.",
-                "Groups like 1, 2, 3 are digits.",
+                "Groups like one, two, three are digits.",
             ),
-            ("Zero, one, two, three, four.", "0, 1, 2, 3, 4."),
+            ("Zero, one, two, three, four.", "Zero, one, two, three, 4."),
             (
-                // Unlike the comma-delimited group above, the trailing
-                // "three" here is an isolated value below the default
-                // threshold of 4, so it is left as text2num produced it.
+                // Existing digits stay digits; spoken values below the
+                // threshold retain their spelling.
                 "When it asks you to press 0, 1, 2, or three.",
                 "When it asks you to press 0, 1, 2, or three.",
             ),
@@ -38,6 +35,18 @@ fn text2num_renders_signed_numbers() {
         CleaningProfile::Safe,
         &[
             ("The offset is negative five.", "The offset is -5."),
+            ("The exponent is 2e minus 7.", "The exponent is 2e -7."),
+            ("Use minus hundred twenty eight K.", "Use -128K."),
+            (
+                "Use a two thousand character limit.",
+                "Use a 2000 character limit.",
+            ),
+            (
+                "Keep the first five hundred rows.",
+                "Keep the first 500 rows.",
+            ),
+            ("Keep the hundred thirty K count.", "Keep the 130K count."),
+            ("A hundred trillion parameters.", "100 trillion parameters."),
             (
                 "The temperature is minus twenty degrees.",
                 "The temperature is -20 degrees.",
@@ -93,17 +102,17 @@ fn text2num_renders_ordinals_and_spoken_years() {
             ("Use twenty point zero twenty point zero.", "Use 20.0 20.0."),
             ("Use twenty twenty point zero.", "Use 20 20.0."),
             ("Use twenty point zero twenty.", "Use 20.0 20."),
-            ("Meet at ten thirty.", "Meet at ten thirty."),
-            ("Meet at five thirty.", "Meet at five thirty."),
+            ("Meet at ten thirty.", "Meet at 10 30."),
+            ("Meet at five thirty.", "Meet at 5 30."),
             ("Meet at one thirty.", "Meet at one thirty."),
             (
                 "My number is five five five twenty twelve.",
-                "My number is five five five twenty twelve.",
+                "My number is 5 5 5 20 12.",
             ),
             ("Use five, thirty.", "Use 5, 30."),
             (
                 "Use five thirty files and six rows.",
-                "Use five thirty files and 6 rows.",
+                "Use 5 30 files and 6 rows.",
             ),
             ("Use two point zero two point zero.", "Use 2.02.0."),
             ("Use two point zero three point zero.", "Use 2.03.0."),
@@ -113,11 +122,11 @@ fn text2num_renders_ordinals_and_spoken_years() {
             ("Use two point zero, three point zero.", "Use 2.0, 3.0."),
             (
                 "We need twenty ten-cent stamps.",
-                "We need 20 ten-cent stamps.",
+                "We need 20 10-cent stamps.",
             ),
             (
                 "We need twenty twenty-two-cent stamps.",
-                "We need 20 twenty-two-cent stamps.",
+                "We need 20 22-cent stamps.",
             ),
         ],
     );
@@ -188,7 +197,7 @@ fn long_equal_scale_sequences_preserve_every_segment_and_the_final_compound() {
     expected.push_str("120500");
 
     assert_eq!(
-        super::numbers::normalize_spoken_numbers(&input, DEFAULT_NUMBER_THRESHOLD).text,
+        normalize_spoken_numbers(&input, DEFAULT_NUMBER_THRESHOLD).text,
         expected
     );
 }
@@ -196,10 +205,10 @@ fn long_equal_scale_sequences_preserve_every_segment_and_the_final_compound() {
 #[test]
 fn repeated_non_number_conjunction_tails_do_not_split_quantities() {
     let input = "thousand and ordinary prose ".repeat(512);
-    let expected = "1000 and ordinary prose ".repeat(512);
+    let expected = input.clone();
 
     assert_eq!(
-        super::numbers::normalize_spoken_numbers(&input, DEFAULT_NUMBER_THRESHOLD).text,
+        normalize_spoken_numbers(&input, DEFAULT_NUMBER_THRESHOLD).text,
         expected
     );
 }
@@ -265,10 +274,6 @@ fn and_after_a_count_starts_another_number() {
             "Between two hundred and fifty and three hundred and fifty dollars.",
             "Between 250 and 350 dollars.",
         ),
-        (
-            "Between twenty and five degrees.",
-            "Between 20 and 5 degrees.",
-        ),
         ("Use fifty and two hundred.", "Use 50 and 200."),
         (
             "Use one hundred and twenty and five hundred.",
@@ -278,16 +283,27 @@ fn and_after_a_count_starts_another_number() {
             "Use fifty and two point five million.",
             "Use 50 and 2.5 million.",
         ),
-        // Without the article, text2num scaled the count itself: 2000, 1500.
+        // A bare scale is not a coefficient for the earlier count.
         (
             "Somewhere between twenty and hundred.",
-            "Somewhere between 20 and 100.",
+            "Somewhere between 20 and hundred.",
         ),
         (
             "Between fifteen and hundred rows.",
-            "Between 15 and 100 rows.",
+            "Between 15 and hundred rows.",
         ),
     ]);
+    for threshold in [0.0, 4.0, 10.0] {
+        assert_eq!(
+            cleaner_with_number_threshold(Some(threshold))
+                .clean_text("Between twenty and five degrees."),
+            if threshold <= 5.0 {
+                "Between 20 and 5 degrees."
+            } else {
+                "Between 20 and five degrees."
+            },
+        );
+    }
 }
 
 #[test]
@@ -436,7 +452,7 @@ fn parameter_counts_use_compact_magnitude_suffixes() {
             ),
             (
                 "The dataset has a million examples.",
-                "The dataset has 1 million examples.",
+                "The dataset has a million examples.",
             ),
         ],
     );
@@ -488,11 +504,11 @@ fn fraction_guards_preserve_numerators_without_absorbing_independent_counts() {
             ("four fifths of a million", "four fifths of a million"),
             (
                 "ten seconds of a million rows",
-                "10 seconds of 1 million rows",
+                "10 seconds of a million rows",
             ),
             (
                 "ten SECONDS of a billion rows",
-                "10 SECONDS of 1 billion rows",
+                "10 SECONDS of a billion rows",
             ),
             (
                 "ten seconds and five thirds of a million",
@@ -514,7 +530,7 @@ fn fraction_guards_preserve_numerators_without_absorbing_independent_counts() {
                 "in the last six quarters a million users joined",
                 "in the last six quarters a million users joined",
             ),
-            ("six quarters, a million", "6 quarters, 1 million"),
+            ("six quarters, a million", "6 quarters, a million"),
             (
                 "between two hundred and half a million",
                 "between two hundred and half a million",
@@ -534,9 +550,9 @@ fn fraction_guards_preserve_numerators_without_absorbing_independent_counts() {
             (
                 "In the fourth quarter, a million users signed up",
                 if threshold > 4.0 {
-                    "In the fourth quarter, 1 million users signed up"
+                    "In the fourth quarter, a million users signed up"
                 } else {
-                    "In the 4th quarter, 1 million users signed up"
+                    "In the 4th quarter, a million users signed up"
                 },
             ),
             (
@@ -550,9 +566,9 @@ fn fraction_guards_preserve_numerators_without_absorbing_independent_counts() {
             (
                 "In the second half, a million users signed up",
                 if threshold > 2.0 {
-                    "In the second half, 1 million users signed up"
+                    "In the second half, a million users signed up"
                 } else {
-                    "In the 2nd half, 1 million users signed up"
+                    "In the 2nd half, a million users signed up"
                 },
             ),
             ("a quarter a million rows", "a quarter a million rows"),
@@ -685,7 +701,7 @@ fn fraction_guards_preserve_numerators_without_absorbing_independent_counts() {
                 "chapter five a twenty first of a million words",
                 "chapter 5 a twenty first of a million words",
             ),
-            ("a group of a million rows", "a group of 1 million rows"),
+            ("a group of a million rows", "a group of a million rows"),
             (
                 "hundreds million and a half rows",
                 "hundreds million and a half rows",
@@ -700,10 +716,10 @@ fn fraction_guards_preserve_numerators_without_absorbing_independent_counts() {
             ),
             (
                 "nineteen hundreds of a million",
-                "nineteen hundreds of 1 million",
+                "nineteen hundreds of a million",
             ),
-            ("five millions of a billion", "five millions of 1 billion"),
-            ("a hundreds of a million", "a hundreds of 1 million"),
+            ("five millions of a billion", "five millions of a billion"),
+            ("a hundreds of a million", "a hundreds of a million"),
             (
                 "half a million both five and a half million",
                 "half a million both five and a half million",
@@ -726,15 +742,14 @@ fn fraction_guards_preserve_numerators_without_absorbing_independent_counts() {
             ),
         ] {
             assert_eq!(
-                super::numbers::normalize_spoken_numbers(input, threshold).text,
+                normalize_spoken_numbers(input, threshold).text,
                 expected,
                 "{threshold}: {input}"
             );
         }
     }
     assert_eq!(
-        super::numbers::normalize_spoken_numbers("chapter five half a million words long", 10.0)
-            .text,
+        normalize_spoken_numbers("chapter five half a million words long", 10.0).text,
         "chapter five half a million words long"
     );
 }
@@ -751,13 +766,13 @@ fn line_breaks_end_spoken_numbers_and_their_guards() {
                 "a few hundred\nthousands of people",
                 "a few hundred\nthousands of people",
             ),
-            ("seven hundred\nthousand people", "700\n1000 people"),
+            ("seven hundred\nthousand people", "700\nthousand people"),
             ("twenty\nfive people", "20\n5 people"),
-            ("seven hundred\r\nthousand people", "700\r\n1000 people"),
+            ("seven hundred\r\nthousand people", "700\r\nthousand people"),
             ("minus\nfive", "minus\n5"),
         ] {
             assert_eq!(
-                super::numbers::normalize_spoken_numbers(input, threshold).text,
+                normalize_spoken_numbers(input, threshold).text,
                 expected,
                 "{threshold}: {input:?}"
             );

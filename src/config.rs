@@ -227,10 +227,10 @@ pub(crate) struct CleaningConfig {
     /// CLI `--keep-trailing-period` forces this on, and `--no-keep-trailing-period` forces it off.
     pub(crate) keep_trailing_period: Option<bool>,
     /// Threshold of the spoken-numbers rule.
-    /// Only isolated single-digit cardinals ("zero" to "nine") and isolated ordinals are compared with it: below it they stay exactly as the ASR model produced them, and at or above it they become digits.
-    /// Cardinals of 10 or more always convert.
-    /// Unset resolves to the built-in default of 4, so isolated zero through three stay as produced.
-    /// `0` converts every isolated single-digit cardinal and ordinal, while unmarked adjacent small-number runs, plural magnitudes, fractions, and the time unit "second" still stay as words.
+    /// Every spoken cardinal and ordinal is compared with it, including larger values and lists: below it they retain the ASR wording, and at or above it they become digits.
+    /// A run of adjacent spoken counts containing any value below the threshold retains its complete wording, including a final size suffix. Otherwise its counts render separately.
+    /// Unset resolves to the built-in default of 4, so zero through three and first through third stay as produced.
+    /// `0` converts every eligible value, while plural magnitudes, fractions, bare scales, and the time unit "second" retain their wording.
     pub(crate) number_threshold: Option<f64>,
     /// Additional literal words or phrases protected from whole-word repetition collapse.
     pub(crate) repetition_exceptions: Vec<String>,
@@ -411,13 +411,15 @@ pub(crate) const TEMPLATE: &str = r#"# parakit config.toml
 # keep_trailing_period = false
 
 # Threshold of the spoken-numbers rule, 0 or more.
-# Only isolated single-digit numbers ("zero" to "nine") and isolated ordinals ("first", "twenty first") are compared with it.
+# Every spoken cardinal and ordinal is compared with it, including values of 10 or more and values in lists.
 # One below the threshold is left exactly as the ASR model produced it, never forced to words or digits, and one at or above it becomes digits.
-# Cardinal numbers of 10 or more always convert, and so do numbers listed next to other numbers.
-# Leave unset to use the built-in default of 4, which leaves isolated zero through three as produced.
-# For example, 5 also leaves isolated four as produced and converts five and up.
-# Set to 0 to convert every isolated single-digit number and ordinal.
-# Even at 0, unmarked adjacent small-number runs ("one two three"), plural magnitudes, fractions, and the time unit "second" stay as words.
+# A run of adjacent spoken counts containing any value below the threshold retains its whole wording, including a final size suffix.
+# Otherwise the counts render separately with their spaces retained: "fifty ninety" becomes "50 90".
+# Leave unset to use the built-in default of 4, which leaves zero through three and first through third as produced.
+# For example, 100 also leaves fifty as a word.
+# Set to 0 to convert every eligible value, including each separate count in a mixed run.
+# Even at 0, plural magnitudes, fractions, bare scales (including "a million"), and the time unit "second" retain their wording.
+# Year/version structures have separate rules. Identifier compaction grants no threshold bypass for spoken counts and also works on existing digits.
 # number_threshold = 5
 
 # Additional literal words or phrases to preserve in the repeated-word pass.

@@ -1,17 +1,10 @@
-//! Calendar and identifier formatting without changing ordinary number policy.
+//! Century pairs form years without calendar or product context cues.
 
 use super::*;
 
 #[test]
-fn quarters_and_years_bypass_the_threshold_without_changing_prose() {
-    let input = "In Q two of twenty twenty six. Of which they're the only occupant, and I'm talking about Colossus one";
+fn century_pairs_form_years_without_context_or_threshold_bypasses() {
     for profile in [CleaningProfile::Safe, CleaningProfile::Aggressive] {
-        let cleaner = cleaner_keep_period(profile);
-        assert_eq!(cleaner.number_threshold(), 4.0);
-        assert_eq!(
-            cleaner.clean_text(input),
-            "In Q2 of 2026. Of which they're the only occupant, and I'm talking about Colossus one"
-        );
         for threshold in [0.0, 4.0, 10.0] {
             let cleaner = build_cleaner_for_test_with_threshold(
                 profile,
@@ -21,44 +14,36 @@ fn quarters_and_years_bypass_the_threshold_without_changing_prose() {
                 &[],
             );
             for (input, expected) in [
-                ("In Q one of twenty twenty six.", "In Q1 of 2026."),
-                ("In Q two of twenty twenty six.", "In Q2 of 2026."),
-                ("In Q three of twenty twenty six.", "In Q3 of 2026."),
-                ("In Q four of twenty twenty six.", "In Q4 of 2026."),
-                ("Q two twenty twenty six.", "Q2 2026."),
-                ("Q2 of nineteen ninety-nine.", "Q2 of 1999."),
-                ("Q 2 of twenty twenty six.", "Q2 of 2026."),
-                ("Q two of 20 twenty six.", "Q2 of 2026."),
-                ("Q two of twenty 26.", "Q2 of 2026."),
-                ("Q two of 20 26.", "Q2 of 2026."),
-                ("The year 19 06.", "The year 1906."),
+                ("Twenty twenty six.", "2026."),
+                ("Record twenty twenty six.", "Record 2026."),
+                ("Nineteen ninety-nine.", "1999."),
+                ("Eighteen seventy six.", "1876."),
+                ("Nineteen oh five.", "1905."),
+                ("Twenty o six.", "2006."),
+                ("Twenty oh zero.", "2000."),
+                ("Use 20 twenty six.", "Use 2026."),
+                ("Use twenty 26.", "Use 2026."),
+                ("Use 20 26.", "Use 20 26."),
+                ("Use 19 oh 5.", "Use 1905."),
+                ("Use 18 76.", "Use 18 76."),
                 (
-                    "During the first quarter of twenty twenty six.",
-                    if threshold <= 1.0 {
-                        "During the 1st quarter of 2026."
-                    } else {
-                        "During the first quarter of 2026."
-                    },
-                ),
-                ("The year seventeen seventy-six.", "The year 1776."),
-                (
-                    "It happened in nineteen ninety-nine.",
-                    "It happened in 1999.",
+                    "In twenty twenty five and twenty twenty.",
+                    "In 2025 and 2020.",
                 ),
                 (
-                    "The release is from twenty twenty two.",
-                    "The release is from 2022.",
+                    "From nineteen thirty until twenty fifteen.",
+                    "From 1930 until 2015.",
                 ),
-                ("Since eighteen forty-two.", "Since 1842."),
-                ("The year nineteen oh five.", "The year 1905."),
-                ("In Q two of twenty zero six.", "In Q2 of 2006."),
-                ("In Q two of twenty o six.", "In Q2 of 2006."),
-                ("March fifth, twenty twenty six.", "March 5th, 2026."),
-                ("March first twenty twenty six.", "March 1st 2026."),
-                ("May five twenty twenty six.", "May 5 2026."),
-                ("FY twenty twenty six.", "FY 2026."),
-                ("Use B two and SM one.", "Use B2 and SM1."),
-                ("Q nine and B zero.", "Q9 and B0."),
+                ("Use twenty twenty six files.", "Use 2026 files."),
+                ("The year seventeen seventy-six.", "The year 17 76."),
+                ("The year 19 06.", "The year 19 06."),
+                ("The year 020 26.", "The year 020 26."),
+                ("The year 20 026.", "The year 20 026."),
+                ("In twenty\nthirty.", "In 20\n30."),
+                (
+                    "The year twenty point zero twenty six.",
+                    "The year 20.0 26.",
+                ),
             ] {
                 assert_eq!(
                     cleaner.clean_text(input),
@@ -71,91 +56,111 @@ fn quarters_and_years_bypass_the_threshold_without_changing_prose() {
 }
 
 #[test]
-fn calendar_context_does_not_reinterpret_unmarked_numeric_runs() {
+fn following_time_and_measurement_units_block_year_joining() {
+    let cleaner = cleaner_keep_period(CleaningProfile::Safe);
+    for (input, expected) in [
+        ("In twenty thirty minutes.", "In 20 30 minutes."),
+        ("Use twenty thirty weeks.", "Use 20 30 weeks."),
+        ("Use twenty thirty months.", "Use 20 30 months."),
+        ("Use twenty thirty years.", "Use 20 30 years."),
+        ("Use twenty thirty meters.", "Use 20 30 meters."),
+        ("Use twenty thirty kilograms.", "Use 20 30 kilograms."),
+        ("Until nineteen thirty pm.", "Until 19 30 pm."),
+        ("Until nineteen thirty p.m.", "Until 19 30 p.m."),
+        ("Until nineteen thirty am.", "Until 19 30 am."),
+        ("Use twenty thirty K.", "Use 20 30K."),
+        ("Use twenty thirty M.", "Use 20 30M."),
+        ("Use twenty thirty B.", "Use 20 30B."),
+        (
+            "A twenty thirty-minute interval.",
+            "A 20 30-minute interval.",
+        ),
+    ] {
+        assert_eq!(cleaner.clean_text(input), expected, "{input}");
+    }
+}
+
+#[test]
+fn dates_and_identifier_words_follow_the_number_threshold() {
     for threshold in [0.0, 4.0, 10.0] {
         let cleaner = cleaner_with_number_threshold(Some(threshold));
         for (input, expected) in [
-            ("The year 020 26.", "The year 020 26."),
-            ("The year 20 026.", "The year 20 026."),
             (
-                "The year twenty point zero twenty six.",
-                "The year 20.0 26.",
+                "Q two of twenty twenty six.",
+                if threshold <= 2.0 {
+                    "Q2 of 2026."
+                } else {
+                    "Q two of 2026."
+                },
+            ),
+            ("Q five.", if threshold <= 5.0 { "Q5." } else { "Q five." }),
+            (
+                "April first, twenty twenty four.",
+                if threshold <= 1.0 {
+                    "April 1st, 2024."
+                } else {
+                    "April first, 2024."
+                },
+            ),
+            ("May twenty sixth.", "May 26th."),
+            (
+                "Use B two and SM one.",
+                if threshold <= 1.0 {
+                    "Use B2 and SM1."
+                } else {
+                    "Use B two and SM one."
+                },
             ),
             (
-                "Q two of nineteen ninety nine point zero.",
-                "Q2 of 19 99.0.",
-            ),
-        ] {
-            assert_eq!(cleaner.clean_text(input), expected, "{threshold}: {input}");
-        }
-        for (input, expected) in [
-            ("Meet at ten thirty.", "Meet at ten thirty."),
-            ("Wait until ten thirty.", "Wait until ten thirty."),
-            ("Call at nineteen thirty.", "Call at nineteen thirty."),
-            ("Until nineteen thirty p.m.", "Until nineteen thirty p.m."),
-            (
-                "The score was nineteen ninety nine.",
-                "The score was nineteen ninety nine.",
+                "Wait five o'clock.",
+                if threshold <= 5.0 {
+                    "Wait 5 o'clock."
+                } else {
+                    "Wait five o'clock."
+                },
             ),
             (
-                "Use twenty twenty six files.",
-                "Use twenty twenty six files.",
+                "Wait two o'clock.",
+                if threshold <= 2.0 {
+                    "Wait 2 o'clock."
+                } else {
+                    "Wait two o'clock."
+                },
             ),
-            (
-                "My number is five five five twenty twelve.",
-                "My number is five five five twenty twelve.",
-            ),
-            ("Llama thirteen seventy B.", "Llama thirteen seventy B."),
-            (
-                "Use one twenty eight K context.",
-                "Use one twenty eight K context.",
-            ),
-            ("SM one twenty.", "SM one twenty."),
-            ("Q two-year term.", "Q two-year term."),
-            ("B two thirds of the whole.", "B two thirds of the whole."),
-            (
-                "B three quarters of a dollar.",
-                "B three quarters of a dollar.",
-            ),
-            (
-                "B five hundredths of a second.",
-                "B five hundredths of a second.",
-            ),
-            (
-                "We work from nineteen thirty until twenty fifteen.",
-                "We work from nineteen thirty until twenty fifteen.",
-            ),
-            (
-                "Until nineteen thirty tonight.",
-                "Until nineteen thirty tonight.",
-            ),
-            (
-                "In twenty twenty six K context.",
-                "In twenty twenty six K context.",
-            ),
-            ("Q two\nof twenty twenty six.", "Q2\nof twenty twenty six."),
         ] {
             assert_eq!(cleaner.clean_text(input), expected, "{threshold}: {input}");
         }
     }
-    assert_eq!(
-        cleaner_with_number_threshold(None).clean_text("A two and I one. Colossus one."),
-        "A two and I one. Colossus one."
-    );
 }
 
 #[test]
-fn contextual_numbers_respect_existing_rule_controls() {
+fn calendar_and_identifier_renderers_have_independent_controls() {
     let disabled = HashSet::from(["spoken-numbers".to_string()]);
     let cleaner = build_cleaner_for_test(CleaningProfile::Safe, false, &disabled, &[]);
     assert_eq!(
-        cleaner.clean_text("In Q two of twenty twenty six."),
-        "In Q two of twenty twenty six."
+        cleaner.clean_text("Q two of twenty twenty six."),
+        "Q two of 2026."
     );
-    let disabled = HashSet::from(["compact-short-identifier".to_string()]);
+    assert_eq!(
+        cleaner.clean_text("Q five of twenty twenty six."),
+        "Q five of 2026."
+    );
+    assert_eq!(
+        cleaner.clean_text("Q 5 of twenty twenty six."),
+        "Q5 of 2026."
+    );
+
+    let disabled = HashSet::from(["numeric-identifiers".to_string()]);
     let cleaner = build_cleaner_for_test(CleaningProfile::Safe, false, &disabled, &[]);
     assert_eq!(
-        cleaner.clean_text("In Q two of twenty twenty six."),
-        "In Q 2 of 2026."
+        cleaner.clean_text("Q five of twenty twenty six."),
+        "Q 5 of 2026."
+    );
+
+    let disabled = HashSet::from(["calendar-years".to_string()]);
+    let cleaner = build_cleaner_for_test(CleaningProfile::Safe, false, &disabled, &[]);
+    assert_eq!(
+        cleaner.clean_text("Q five of twenty twenty six."),
+        "Q5 of 20 26."
     );
 }

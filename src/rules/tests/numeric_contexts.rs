@@ -123,15 +123,123 @@ fn ordinal_before_second_does_not_convert_the_time_unit() {
 fn ordinal_lists_remain_ordinal_lists() {
     for threshold in [0.0, 4.0, 10.0] {
         let cleaner = cleaner_with_number_threshold(Some(threshold));
+        let first = if threshold <= 1.0 { "1st" } else { "first" };
+        let second = if threshold <= 2.0 { "2nd" } else { "second" };
+        let third = if threshold <= 3.0 { "3rd" } else { "third" };
         for (input, expected) in [
-            ("She came first second third.", "She came 1st 2nd 3rd."),
-            ("She came first, second, third.", "She came 1st, 2nd, 3rd."),
+            (
+                "She came first second third.",
+                format!("She came {first} {second} {third}."),
+            ),
+            (
+                "She came first, second, third.",
+                format!("She came {first}, {second}, {third}."),
+            ),
             (
                 "The first second third arrived.",
-                "The 1st 2nd 3rd arrived.",
+                format!("The {first} {second} {third} arrived."),
             ),
         ] {
             assert_eq!(cleaner.clean_text(input), expected, "threshold {threshold}");
         }
+    }
+}
+
+#[test]
+fn identifier_stems_join_only_numbers_already_rendered_as_digits() {
+    assert_clean_cases(
+        CleaningProfile::Safe,
+        &[
+            ("OS twenty seven.", "OS 27."),
+            ("FP thirty two.", "FP 32."),
+            ("BM twenty five.", "BM 25."),
+            ("B two.", "B two."),
+            ("F thirty two.", "F32."),
+            ("SM thirty two.", "SM32."),
+            ("OK five minutes ago.", "OK 5 minutes ago."),
+            ("B 2 weeks.", "B2 weeks."),
+            ("C 1 more time.", "C1 more time."),
+            ("D 3 times.", "D3 times."),
+            ("Gen Z 2 years.", "Gen Z2 years."),
+            ("B two weeks.", "B two weeks."),
+            ("C one more time.", "C one more time."),
+            ("D three times.", "D three times."),
+            ("Gen Z two years.", "Gen Z two years."),
+        ],
+    );
+}
+
+#[test]
+fn articles_and_bare_scale_words_stay_worded() {
+    for threshold in [0.0, 4.0, 10.0] {
+        let cleaner = cleaner_with_number_threshold(Some(threshold));
+        for input in [
+            "A million examples.",
+            "A billion rows.",
+            "A thousand files.",
+            "A hundred entries.",
+            "Use thousand examples.",
+            "Use million examples.",
+            "Several thousand examples.",
+        ] {
+            assert_eq!(cleaner.clean_text(input), input, "{threshold}: {input}");
+        }
+        assert_eq!(
+            cleaner.clean_text("One million examples."),
+            "1 million examples."
+        );
+        assert_eq!(cleaner.clean_text("Five thousand files."), "5000 files.");
+    }
+}
+
+#[test]
+fn typed_renderers_work_without_general_spoken_number_rendering() {
+    use super::super::numbers::NumberKind;
+
+    for (input, kind, expected) in [
+        (
+            "Python three point twelve.",
+            NumberKind::Version,
+            "Python 3.12.",
+        ),
+        ("In twenty twenty five.", NumberKind::Year, "In 2025."),
+        ("F 32.", NumberKind::Identifier, "F32."),
+        ("Capacity 7 B.", NumberKind::Size, "Capacity 7B."),
+    ] {
+        assert_eq!(
+            numeric_test(input, 10.0, &[kind]).text,
+            expected,
+            "{kind:?}: {input}"
+        );
+    }
+}
+
+#[test]
+fn adjacent_spoken_runs_preserve_every_word_when_any_count_is_below_threshold() {
+    for threshold in [0.0, 4.0, 10.0] {
+        let cleaner = cleaner_with_number_threshold(Some(threshold));
+        for (input, digits) in [
+            ("Use three twenty billion.", "Use 3 20 billion."),
+            ("Use three fifty K.", "Use 3 50K."),
+            ("Use one twenty eight K.", "Use 1 28K."),
+            ("SM one twenty.", "SM1 20."),
+            ("Use two thirty.", "Use 2 30."),
+            ("Use sixteen three eighty four.", "Use 16 3 84."),
+        ] {
+            assert_eq!(
+                cleaner.clean_text(input),
+                if threshold == 0.0 { digits } else { input },
+                "{threshold}: {input}"
+            );
+        }
+        assert_eq!(cleaner.clean_text("Use fifty ninety."), "Use 50 90.");
+        assert_eq!(
+            cleaner.clean_text("Use five thirty."),
+            if threshold <= 5.0 {
+                "Use 5 30."
+            } else {
+                "Use five thirty."
+            }
+        );
     }
 }

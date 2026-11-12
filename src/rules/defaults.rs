@@ -16,11 +16,10 @@
 //! `crate::rules::engine::FANCY_BACKTRACK_LIMIT`).
 
 use super::engine::{Activation, Rule, RuleKind};
+use super::numbers::NumberKind;
 use super::passes::{
     capitalize_sentence_starts, drop_dangling_connective, normalize_apostrophe_cause,
-    normalize_magnitude_suffixes, normalize_numeric_identifier_groups,
-    normalize_numeric_point_suffixes, normalize_parameter_counts, normalize_spaced_acronyms,
-    normalize_spoken_versions,
+    normalize_spaced_acronyms,
 };
 
 macro_rules! regex_rule {
@@ -163,61 +162,38 @@ pub(crate) const DEFAULT_RULES: &[Rule] = &[
         Activation::Safe,
         normalize_spaced_acronyms
     ),
-    // Natural-language number parsing is delegated to text2num. The adjacent
-    // passes only format structural version and identifier notation.
-    procedural_rule!(
-        "spoken-version-numbers",
-        "Render multi-point spoken versions using text2num for every component",
-        Activation::Safe,
-        normalize_spoken_versions
-    ),
-    procedural_rule!(
-        "numeric-point-suffixes",
-        "Append spoken point-components to an existing numeric token using text2num",
-        Activation::Safe,
-        normalize_numeric_point_suffixes
-    ),
+    // These categories share one tokenization and edit pass. Keep them
+    // contiguous so the engine can normalize the enabled group together.
     Rule {
         name: "spoken-numbers",
-        description: "Convert recognized English numbers, retaining readable large-magnitude words",
+        description: "Render cardinal and ordinal quantities at or above the configured threshold",
         activation: Activation::Safe,
-        kind: RuleKind::SpokenNumbers,
+        kind: RuleKind::Numbers(NumberKind::Spoken),
     },
-    procedural_rule!(
-        "compact-parameter-counts",
-        "Render parameter counts with K/M/B magnitude suffixes",
-        Activation::Safe,
-        normalize_parameter_counts
-    ),
-    procedural_rule!(
-        "numeric-identifier-groups",
-        "Join split digit groups in structurally recognizable uppercase identifiers",
-        Activation::Safe,
-        normalize_numeric_identifier_groups
-    ),
-    procedural_rule!(
-        "numeric-magnitude-suffixes",
-        "Join numeric groups to uppercase K/M/B magnitude suffixes",
-        Activation::Safe,
-        normalize_magnitude_suffixes
-    ),
-    regex_rule!(
-        "compact-version-prefix",
-        "Join a standalone V prefix to a dotted version",
-        Activation::Safe,
-        r#"\b[Vv]\s+(\d+(?:\.\d+)+)\b"#,
-        "v$1"
-    ),
-    // The `[B-HJ-Z]` class gap excludes standalone "A" and "I". Arbitrary
-    // two-letter prefixes are ambiguous with common uppercase words; SM is
-    // retained as the known identifier stem exercised by the cleaning corpus.
-    regex_rule!(
-        "compact-short-identifier",
-        "Join one unambiguous uppercase letter or the SM identifier stem to a number",
-        Activation::Safe,
-        r#"\b([B-HJ-Z]|SM)\s+(\d+(?:\.\d+)*)\b"#,
-        "$1$2"
-    ),
+    Rule {
+        name: "spoken-versions",
+        description: "Render spoken decimals and dotted versions; compact version prefixes",
+        activation: Activation::Safe,
+        kind: RuleKind::Numbers(NumberKind::Version),
+    },
+    Rule {
+        name: "calendar-years",
+        description: "Join spoken century pairs beginning with eighteen, nineteen, or twenty",
+        activation: Activation::Safe,
+        kind: RuleKind::Numbers(NumberKind::Year),
+    },
+    Rule {
+        name: "numeric-identifiers",
+        description: "Compact numeric values after single-letter or SM identifier prefixes",
+        activation: Activation::Safe,
+        kind: RuleKind::Numbers(NumberKind::Identifier),
+    },
+    Rule {
+        name: "size-suffixes",
+        description: "Render explicit K/M/B sizes and compact parameter counts",
+        activation: Activation::Safe,
+        kind: RuleKind::Numbers(NumberKind::Size),
+    },
     // High-confidence casual-form normalization.
     procedural_rule!(
         "cause-to-because",

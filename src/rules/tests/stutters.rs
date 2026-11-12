@@ -95,7 +95,7 @@ fn general_stutters_work_before_number_and_acronym_formatting() {
                 "C plus plus and dash dash verbose",
                 "C plus plus and dash dash verbose",
             ),
-            ("five five five", "Five five five"),
+            ("five five five", "5 5 5"),
             ("B B C", "BBC"),
             ("the\nthe test", "The\nthe test"),
         ],

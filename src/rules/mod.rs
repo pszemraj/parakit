@@ -50,7 +50,10 @@ macro_rules! regex_static {
 
 mod defaults;
 mod engine;
-mod number_context;
+mod number_guards;
+mod number_labels;
+mod number_versions;
+mod number_words;
 mod numbers;
 mod passes;
 mod stutters;
@@ -63,15 +66,15 @@ pub use user::{RulePosition, UserRule};
 
 /// Schema/behavior version recorded in transcription logs.
 /// Keep revisions distinct even when their package version is unchanged.
-pub const CLEANER_VERSION: u32 = 36;
+pub const CLEANER_VERSION: u32 = 37;
 
-/// Default minimum isolated number converted to digits when
+/// Default minimum spoken cardinal or ordinal converted to digits when
 /// `cleaning.number_threshold` is left unset.
 ///
-/// An isolated number at or above this value is rendered as digits; a value
-/// strictly below it is left exactly as the ASR model produced it (never
-/// forced to words, never forced to digits). Configuring an explicit
-/// `Some(0.0)` is the opt-out that converts every recognized number.
+/// An eligible value at or above this threshold renders as digits. A run of
+/// adjacent spoken numbers containing a value below it retains its complete
+/// wording. Configuring `Some(0.0)` permits every eligible cardinal and ordinal;
+/// fractions and indefinite quantities retain their wording.
 pub const DEFAULT_NUMBER_THRESHOLD: f64 = 4.0;
 
 /// Built-in cleanup behavior tiers.
@@ -161,7 +164,10 @@ pub struct CleanResult {
 /// * `profile` - Selected [`CleaningProfile`].
 /// * `drop_trailing_period` - Enable the messaging-style terminal-period
 ///   removal rule.
-/// * `number_threshold` - Value at or above which isolated single-digit cardinals and ordinals become digits. `None` resolves to [`DEFAULT_NUMBER_THRESHOLD`]; `Some(0.0)` converts every isolated single digit and ordinal.
+/// * `number_threshold` - Minimum spoken cardinal/ordinal value rendered as
+///   digits. Adjacent runs containing a value below it retain their wording.
+///   `None` resolves to [`DEFAULT_NUMBER_THRESHOLD`]; `Some(0.0)` permits every
+///   eligible value.
 /// * `repetition_exceptions` - Additional literal words/phrases preserved by
 ///   repeated-word cleaning.
 /// * `disabled_rules` - Rule names supplied by repeated `--disable-rule`
@@ -258,7 +264,7 @@ pub fn build_enabled_cleaner(
 ///
 /// # Arguments
 ///
-/// * `number_threshold` - Optional isolated-number conversion threshold.
+/// * `number_threshold` - Optional spoken cardinal/ordinal conversion threshold.
 /// * `repetition_exceptions` - Additional literal repeated-word exceptions.
 /// * `disabled_rules` - Built-in or user rule names to disable.
 /// * `user_rules` - User-defined regex rules.

@@ -2,7 +2,7 @@
 
 parakit reads an optional TOML file for daemon defaults, cleaning behavior, transcription logging, Linux insertion and hotkey backends, and user-defined cleaning rules. A missing file is valid and selects built-in defaults.
 
-For example, keep sentence-final periods and raise the isolated-number cutoff to five:
+For example, keep sentence-final periods and raise the number-conversion threshold to five:
 
 ```toml
 [cleaning]
@@ -74,6 +74,8 @@ repetition_exceptions = ["something", "hee", "bang", "tomato", "paddle", "chinny
 Merge the assignment into your existing `[cleaning]` section if you already have one. Matching ignores case and accepts spaces or tabs between words, without crossing punctuation or line breaks. Contractions such as `it's` are valid words. Empty entries, other punctuation, newlines, and regex syntax are rejected.
 
 These additional exceptions affect only `stutter-safe-words` under both profiles. Other cleaning rules still apply, including the aggressive profile's separate ambiguous-repetition pass. This setting has no CLI flag; `parakit rules test` uses it from the config file.
+
+Library callers pass `repetition_exceptions: &[String]` immediately after `number_threshold` in `build_cleaner`, `build_enabled_cleaner`, and `validate_configured_rules`. Pass `&[]` to retain the defaults; exceptions are validated and compiled through the same construction path as the other rule inputs.
 
 ## Validation and Recovery
 

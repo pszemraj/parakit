@@ -40,7 +40,7 @@ Fields, in serialization order:
 | `cleaning_profile` | string | `safe`, `aggressive`, or `disabled`. |
 | `ruleset_id` | string | Identifier of the ordered enabled pass set and configurable cleaning behavior, including user rules and a non-default number threshold. Omitted when cleaning is disabled. |
 | `drops_trailing_period` | boolean | Whether the messaging-style terminal-period pass was enabled. |
-| `number_threshold` | number or null | The [isolated-value cutoff](cleaning-rules.md#numbers) in effect for digit conversion; `null` when cleaning is disabled. |
+| `number_threshold` | number or null | The [number-conversion threshold](cleaning-rules.md#numbers) in effect for digit conversion; `null` when cleaning is disabled. |
 | `rules_fired` | array | Passes that changed text, in application order, as `{"name":...,"matches":...}` objects. |
 | `cleaning_failure` | string | Error text from a bounded matcher that exceeded its limit; the cleaner then keeps the original transcript instead of inserting a partial transformation. Omitted when cleaning succeeded. |
 | `inference` | object | Model identity and controls for this transcription. Absent in older rows and when a library caller provides no metadata. |

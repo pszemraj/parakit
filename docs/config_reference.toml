@@ -193,12 +193,14 @@ profile = "safe"
 keep_trailing_period = false
 
 # number, 0 or more (integer or float). Decides which spoken numbers the spoken-numbers rule turns into digits.
-# Only isolated single-digit numbers ("zero" to "nine") and isolated ordinals ("first", "twenty first") are compared with the threshold.
+# Every spoken cardinal and ordinal is compared with the threshold, including values of 10 or more and values in comma-delimited or ordinal lists.
 # One whose value is below the threshold is left exactly as the model produced it, neither forced to words nor to digits. One at or above it becomes digits.
+# Adjacent spoken counts keep their separators when they all meet the threshold. If any is below it, the whole run retains its wording, including a final size suffix: "three fifty K" stays as spoken at 4 and becomes "3 50K" at 0.
+# Fractions, plural magnitudes, bare scales (including "a million"), and the time unit "second" retain their wording even at 0.
 # See: [conversion examples, preserved expressions, and the difference between absent and zero](cleaning-rules.md#numbers).
 # Negative, infinite, and NaN values fail config load with "number threshold must be a finite value greater than or equal to 0".
 # Only used when: cleaning.enabled is true and the spoken-numbers rule is not disabled. The value is validated either way.
-# The structural number rules (spoken-version-numbers, numeric-point-suffixes, compact-parameter-counts, and the other numeric rules) do not read it.
+# Year/version structures have separate rendering rules. Identifier compaction does not bypass the threshold for spoken counts; it also works independently on existing digits.
 # There is no command-line flag. `parakit rules test` honors this key, and `parakit rules list` does not use it.
 number_threshold = 4
 

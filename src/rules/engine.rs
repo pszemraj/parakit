@@ -16,6 +16,7 @@ use std::borrow::Cow;
 use std::collections::HashSet;
 
 use super::defaults::DEFAULT_RULES;
+use super::numbers::NumberKind;
 #[cfg(test)]
 use super::user::validate_user_rules;
 use super::user::{compile_user_regex, RulePosition, UserRule};
@@ -112,7 +113,7 @@ impl EngineKind {
 
 /// How a built-in [`Rule`] is compiled and applied: a linear-time `regex`
 /// pattern, a bounded `fancy-regex` pattern, a procedural transform function,
-/// or the configurable spoken-number transform.
+/// or a configurable number category.
 #[derive(Clone, Copy)]
 pub(crate) enum RuleKind {
     Regex {
@@ -124,7 +125,7 @@ pub(crate) enum RuleKind {
         replacement: &'static str,
     },
     Procedural(fn(&str) -> TransformResult<'_>),
-    SpokenNumbers,
+    Numbers(NumberKind),
     RepeatedWords,
 }
 
@@ -136,9 +137,7 @@ impl RuleKind {
         match self {
             Self::Regex { .. } => EngineKind::Regex,
             Self::FancyRegex { .. } => EngineKind::FancyRegex,
-            Self::Procedural(_) | Self::SpokenNumbers | Self::RepeatedWords => {
-                EngineKind::Procedural
-            }
+            Self::Procedural(_) | Self::Numbers(_) | Self::RepeatedWords => EngineKind::Procedural,
         }
     }
 }
@@ -169,7 +168,8 @@ enum CompiledTransform {
         replacement: &'static str,
     },
     Procedural(fn(&str) -> TransformResult<'_>),
-    SpokenNumbers {
+    Numbers {
+        kind: NumberKind,
         threshold: f64,
     },
     RepeatedWords {
@@ -182,7 +182,7 @@ impl CompiledTransform {
         match self {
             Self::Regex { .. } => EngineKind::Regex,
             Self::FancyRegex { .. } => EngineKind::FancyRegex,
-            Self::Procedural(_) | Self::SpokenNumbers { .. } | Self::RepeatedWords { .. } => {
+            Self::Procedural(_) | Self::Numbers { .. } | Self::RepeatedWords { .. } => {
                 EngineKind::Procedural
             }
         }
@@ -195,7 +195,7 @@ impl CompiledTransform {
         match self {
             Self::Regex { re, replacement } => Some((re.as_str(), replacement.as_ref())),
             Self::FancyRegex { re, replacement } => Some((re.as_str(), replacement)),
-            Self::Procedural(_) | Self::SpokenNumbers { .. } | Self::RepeatedWords { .. } => None,
+            Self::Procedural(_) | Self::Numbers { .. } | Self::RepeatedWords { .. } => None,
         }
     }
 }
@@ -261,8 +261,12 @@ impl CompiledRule {
                 Ok(TransformResult { text, matches })
             }
             CompiledTransform::Procedural(transform) => Ok(transform(input)),
-            CompiledTransform::SpokenNumbers { threshold } => {
-                Ok(super::numbers::normalize_spoken_numbers(input, *threshold))
+            CompiledTransform::Numbers { kind, threshold } => {
+                let (text, hits) = super::numbers::normalize(input, *threshold, &[*kind]);
+                Ok(TransformResult {
+                    text,
+                    matches: hits.iter().map(|(_, matches)| matches).sum(),
+                })
             }
             CompiledTransform::RepeatedWords { exceptions } => {
                 Ok(super::stutters::collapse_repeated_words(input, exceptions))
@@ -293,7 +297,7 @@ impl Cleaner {
     ///
     /// * `profile` - Selected cleanup behavior tier.
     /// * `drop_trailing_period` - Whether terminal periods are removed.
-    /// * `number_threshold` - Optional isolated-number conversion threshold.
+    /// * `number_threshold` - Optional spoken cardinal/ordinal conversion threshold.
     /// * `repetition_exceptions` - Validated literal repeated-word exceptions.
     /// * `disabled` - Validated names excluded from the pipeline.
     /// * `user_rules` - Validated user-defined rules.
@@ -376,10 +380,10 @@ impl Cleaner {
         backtrack_limit: usize,
     ) -> Result<Self> {
         // `None` (the key left unset) resolves to `DEFAULT_NUMBER_THRESHOLD`.
-        // An explicit `Some(0.0)` is preserved verbatim as the opt-out that
-        // converts every recognized number and has a different ruleset id
-        // than an unset threshold. Validation has already
-        // rejected negative and non-finite values.
+        // An explicit `Some(0.0)` permits every eligible cardinal/ordinal and
+        // has a different ruleset id than an unset threshold when spoken
+        // conversion is enabled. Validation has already rejected negative
+        // and non-finite values.
         let number_threshold = number_threshold.unwrap_or(DEFAULT_NUMBER_THRESHOLD);
         let mut enabled_defaults = Vec::with_capacity(DEFAULT_RULES.len());
         let mut cleanup_idx = None;
@@ -443,7 +447,37 @@ impl Cleaner {
         let mut text = Cow::Borrowed(input);
         let mut rules_fired = Vec::new();
 
-        for rule in &self.rules {
+        let mut index = 0;
+        while let Some(rule) = self.rules.get(index) {
+            if let CompiledTransform::Numbers { threshold, .. } = &rule.transform {
+                let mut enabled = Vec::new();
+                while let Some(CompiledRule {
+                    transform: CompiledTransform::Numbers { kind, .. },
+                    ..
+                }) = self.rules.get(index)
+                {
+                    enabled.push(*kind);
+                    index += 1;
+                }
+                let (normalized, hits) =
+                    super::numbers::normalize(text.as_ref(), *threshold, &enabled);
+                if normalized.as_ref() != text.as_ref() {
+                    for kind in enabled {
+                        if let Some((_, matches)) = hits
+                            .iter()
+                            .find(|(candidate, matches)| *candidate == kind && *matches > 0)
+                        {
+                            rules_fired.push(RuleHit {
+                                name: kind.name().to_string(),
+                                matches: *matches,
+                            });
+                        }
+                    }
+                    text = Cow::Owned(normalized.into_owned());
+                }
+                continue;
+            }
+            index += 1;
             let transformed = rule.apply(text.as_ref())?;
             if transformed.matches == 0 || transformed.text.as_ref() == text.as_ref() {
                 continue;
@@ -537,13 +571,13 @@ impl Cleaner {
         self.drop_trailing_period
     }
 
-    /// Effective minimum isolated number converted to digits.
+    /// Effective minimum spoken cardinal or ordinal converted to digits.
     ///
     /// # Returns
     ///
     /// [`DEFAULT_NUMBER_THRESHOLD`] when the configured threshold was
     /// unset, otherwise the configured value verbatim (including an
-    /// explicit `0.0`, which converts every recognized number).
+    /// explicit `0.0`, which permits every eligible cardinal and ordinal).
     #[must_use]
     pub const fn number_threshold(&self) -> f64 {
         self.number_threshold
@@ -591,7 +625,8 @@ fn compile_default_rule(
             replacement,
         },
         RuleKind::Procedural(transform) => CompiledTransform::Procedural(transform),
-        RuleKind::SpokenNumbers => CompiledTransform::SpokenNumbers {
+        RuleKind::Numbers(kind) => CompiledTransform::Numbers {
+            kind,
             threshold: number_threshold,
         },
         RuleKind::RepeatedWords => CompiledTransform::RepeatedWords {
@@ -659,7 +694,11 @@ fn compute_ruleset_id(
             hasher.update([0]);
             hasher.update(replacement.as_bytes());
         }
-        if let CompiledTransform::SpokenNumbers { threshold } = &rule.transform {
+        if let CompiledTransform::Numbers {
+            kind: NumberKind::Spoken,
+            threshold,
+        } = &rule.transform
+        {
             // Procedural functions have no pattern text to fingerprint. Hash
             // this configurable input so behaviorally different number
             // policies can never share a ruleset identifier.
@@ -685,11 +724,11 @@ fn compute_ruleset_id(
     format!("v{CLEANER_VERSION}-{}-{short_hash}", profile.as_str())
 }
 
-/// Validate the optional isolated-number conversion threshold.
+/// Validate the optional spoken cardinal/ordinal conversion threshold.
 ///
 /// # Arguments
 ///
-/// * `threshold` - Value at or above which isolated single-digit cardinals and ordinals become digits, or `None` to resolve to [`DEFAULT_NUMBER_THRESHOLD`].
+/// * `threshold` - Minimum eligible spoken cardinal/ordinal value rendered as digits, or `None` to resolve to [`DEFAULT_NUMBER_THRESHOLD`].
 ///
 /// # Returns
 ///
@@ -712,6 +751,60 @@ pub(crate) fn validate_number_threshold(threshold: Option<f64>) -> Result<()> {
 #[cfg(test)]
 mod rule_application_tests {
     use super::*;
+
+    #[test]
+    fn numeric_group_reports_categories_in_metadata_order() {
+        let cleaner = Cleaner::new_prevalidated(
+            CleaningProfile::Safe,
+            false,
+            None,
+            &[],
+            &HashSet::new(),
+            &[],
+        )
+        .unwrap();
+        let result = cleaner
+            .try_clean("Python three point one two point four, Q five, five records")
+            .unwrap();
+
+        assert_eq!(result.text, "Python 3.12.4, Q5, 5 records");
+        assert_eq!(
+            result.rules_fired,
+            [
+                RuleHit {
+                    name: "spoken-numbers".to_string(),
+                    matches: 1,
+                },
+                RuleHit {
+                    name: "spoken-versions".to_string(),
+                    matches: 1,
+                },
+                RuleHit {
+                    name: "numeric-identifiers".to_string(),
+                    matches: 1,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn single_numeric_rule_borrows_no_op_and_counts_its_category() {
+        let rule = CompiledRule {
+            name: NumberKind::Spoken.name().to_string(),
+            position: None,
+            transform: CompiledTransform::Numbers {
+                kind: NumberKind::Spoken,
+                threshold: DEFAULT_NUMBER_THRESHOLD,
+            },
+        };
+        let unchanged = rule.apply("plain words").unwrap();
+        assert!(matches!(unchanged.text, Cow::Borrowed("plain words")));
+        assert_eq!(unchanged.matches, 0);
+
+        let changed = rule.apply("five records").unwrap();
+        assert_eq!(changed.text, "5 records");
+        assert_eq!(changed.matches, 1);
+    }
 
     #[test]
     fn regex_rules_borrow_unmatched_input_and_count_replacements() {

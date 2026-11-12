@@ -8,12 +8,27 @@ use super::passes::capitalize_sentence_starts;
 use super::*;
 
 mod calendar_numbers;
-mod model_numbers;
 mod numeric_contexts;
 mod numeric_suffixes;
 mod spoken_numbers;
 mod stutters;
 mod user_rules;
+
+fn numeric_test<'a>(
+    input: &'a str,
+    threshold: f64,
+    kinds: &[super::numbers::NumberKind],
+) -> super::engine::TransformResult<'a> {
+    let (text, counts) = super::numbers::normalize(input, threshold, kinds);
+    super::engine::TransformResult {
+        text,
+        matches: counts.iter().map(|(_, count)| count).sum(),
+    }
+}
+
+fn normalize_spoken_numbers(input: &str, threshold: f64) -> super::engine::TransformResult<'_> {
+    numeric_test(input, threshold, &[super::numbers::NumberKind::Spoken])
+}
 
 fn build_cleaner_for_test(
     profile: CleaningProfile,
@@ -332,22 +347,22 @@ fn identifier_formatting_uses_structural_rules_not_vocabulary_lists() {
     assert_clean_cases(
         CleaningProfile::Safe,
         &[
-            ("RTX 50 90 release.", "RTX 5090 release."),
-            ("S M 1 20 support.", "SM120 support."),
+            ("RTX 50 90 release.", "RTX 50 90 release."),
+            ("S M 1 20 support.", "SM1 20 support."),
             ("Use F 32 and H 100.", "Use F32 and H100."),
             ("SM 120 is supported.", "SM120 is supported."),
             ("OK five minutes ago.", "OK 5 minutes ago."),
             ("US 30 remains open.", "US 30 remains open."),
             ("TV four is available.", "TV 4 is available."),
-            ("About 3 50 K lines.", "About 350K lines."),
+            ("About 3 50 K lines.", "About 3 50K lines."),
             (
                 "Use one twenty eight K context.",
                 "Use one twenty eight K context.",
             ),
             ("Llama three seventy B.", "Llama three seventy B."),
             ("GPT two one twenty four M.", "GPT two one twenty four M."),
-            ("OK five thirty.", "OK five thirty."),
-            ("RTX fifty ninety.", "RTX fifty ninety."),
+            ("OK five thirty.", "OK 5 30."),
+            ("RTX fifty ninety.", "RTX 50 90."),
             ("SM one twenty.", "SM one twenty."),
             ("GPT 5 5 stays split.", "GPT 5 5 stays split."),
             ("I 5 stays separate.", "I 5 stays separate."),
@@ -528,14 +543,9 @@ fn procedural_noops_borrow_the_original_text() {
     use super::passes::*;
     use std::borrow::Cow;
 
-    let transforms: [fn(&str) -> TransformResult<'_>; 9] = [
+    let transforms: [fn(&str) -> TransformResult<'_>; 4] = [
         normalize_apostrophe_cause,
         normalize_spaced_acronyms,
-        normalize_spoken_versions,
-        normalize_numeric_point_suffixes,
-        normalize_numeric_identifier_groups,
-        normalize_magnitude_suffixes,
-        normalize_parameter_counts,
         drop_dangling_connective,
         capitalize_sentence_starts,
     ];
@@ -546,13 +556,8 @@ fn procedural_noops_borrow_the_original_text() {
         assert!(matches!(result.text, Cow::Borrowed(text) if std::ptr::eq(text, input)));
     }
     assert!(matches!(
-        super::numbers::normalize_spoken_numbers(input, DEFAULT_NUMBER_THRESHOLD).text,
+        normalize_spoken_numbers(input, DEFAULT_NUMBER_THRESHOLD).text,
         Cow::Borrowed(text) if std::ptr::eq(text, input)
-    ));
-    let one_point = "Version one point two needs attention.";
-    assert!(matches!(
-        normalize_spoken_versions(one_point).text,
-        Cow::Borrowed(text) if std::ptr::eq(text, one_point)
     ));
 }
 
