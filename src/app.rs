@@ -143,14 +143,14 @@ pub(crate) fn run() -> Result<()> {
 fn run_doctor(cli: &Cli, doctor_cli: &DoctorCli) -> Result<()> {
     let config = config::load()?;
     configure_native_logging(cli.effective_verbose(&config));
-    let paste_mode = doctor_cli.effective_paste_mode(&config);
+    let paste_mode = doctor_cli.desktop.effective_paste_mode(&config);
     #[cfg(target_os = "linux")]
-    let hotkey_backend = doctor_cli.effective_hotkey_backend(&config);
+    let hotkey_backend = doctor_cli.desktop.effective_hotkey_backend(&config);
     #[cfg(not(target_os = "linux"))]
     let hotkey_backend = HotkeyBackend::Auto;
     #[cfg(target_os = "linux")]
     let focus_source = daemon::inject::FocusSource {
-        backend: doctor_cli.effective_insertion_backend(&config),
+        backend: doctor_cli.desktop.effective_insertion_backend(&config),
         mode: paste_mode,
         hotkey_route: hotkey_backend.linux_route(),
         client: None,
@@ -296,7 +296,7 @@ fn run_daemon(cli: &Cli, start: &StartCli) -> Result<()> {
     configure_native_logging(verbose);
     let log = Arc::new(Logger::new(log_level(cli, &config)));
     #[cfg(target_os = "linux")]
-    let hotkey_backend = start.effective_hotkey_backend(&config);
+    let hotkey_backend = start.desktop.effective_hotkey_backend(&config);
     #[cfg(not(target_os = "linux"))]
     let hotkey_backend = HotkeyBackend::Auto;
     let (worker_settings, log_summary) = resolve_worker_settings(start, &config);
@@ -325,7 +325,7 @@ fn run_daemon(cli: &Cli, start: &StartCli) -> Result<()> {
 
     #[cfg(target_os = "linux")]
     let mut focus_source = daemon::inject::FocusSource {
-        backend: start.effective_insertion_backend(&config),
+        backend: start.desktop.effective_insertion_backend(&config),
         mode: paste_mode,
         hotkey_route: hotkey_backend.linux_route(),
         client: None,
@@ -697,7 +697,7 @@ fn resolve_worker_settings(
         WorkerSettings {
             model_idle_minutes: start.effective_model_idle_minutes(config),
             data_log: log_dir.map(|dir| Arc::new(DataLogger::new(dir))),
-            paste_mode: start.effective_paste_mode(config),
+            paste_mode: start.desktop.effective_paste_mode(config),
             keep_transcript_clipboard: start.effective_keep_transcript_clipboard(config),
             context_on_default_hotkey: config.qwen.context_on_default_hotkey(),
             context_dictations: config.qwen.context_dictations(),
