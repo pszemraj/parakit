@@ -42,7 +42,7 @@ Spaced acronyms follow one invariant: a run of two or more standalone uppercase 
 
 ### Numbers
 
-English cardinal and ordinal recognition uses [`text2num`](https://crates.io/crates/text2num). The numeric core tokenizes the original input once, classifies its parsed spans, and renders accepted edits without parsing earlier output. Quantities, versions, calendar years, identifiers, and sizes share those token boundaries. Fractions and indefinite quantities retain their wording; a shared unit vocabulary prevents measurements from being joined as years.
+English cardinal and ordinal recognition uses [`text2num`](https://crates.io/crates/text2num). After stutter handling and acronym collapsing, the numeric core tokenizes its input once, classifies its parsed spans, and renders accepted edits without parsing earlier numeric output. Quantities, versions, calendar years, identifiers, and sizes share those token boundaries. Filled pauses immediately between numeric tokens remain until this group finishes parsing, then `filled-pauses` removes them: `twenty uh twenty layers` becomes `20 20 layers` instead of creating a year. Other filled pauses are removed before stutter handling. Fractions and indefinite quantities retain their wording; a shared unit vocabulary prevents measurements from being joined as years.
 
 #### Threshold And Adjacent Numbers
 
@@ -52,7 +52,7 @@ Adjacent parsed counts keep their separators when they all meet the threshold: `
 
 If a run of directly adjacent spoken cardinal counts contains any value below the threshold, the entire run retains its original wording, including a final size suffix. Only spaces or tabs connect such a run. At the default, `three twenty billion`, `three fifty K`, `one twenty eight K`, `SM one twenty`, `two thirty`, `Llama three seventy B`, and `sixteen three eighty four` stay as spoken. At threshold `0`, these runs render each parsed count separately instead of joining their values: `one twenty eight K` becomes `1 28K`. Ordinal modifiers remain separate: `first five hundred rows` becomes `first 500 rows` at the default.
 
-Punctuation separates independent values, and lists do not bypass the threshold: `zero, one, two, three, four` becomes `zero, one, two, three, 4` at the default. Unknown runs containing `oh` or `o`, such as `fifty oh five`, stay intact unless they form a recognized year or version. The dedicated year and version structures below retain their separate rendering rules.
+Punctuation separates independent values, and lists do not bypass the threshold: `zero, one, two, three, four` becomes `zero, one, two, three, 4` at the default. Unknown runs containing `oh` or `o`, such as `fifty oh five`, stay intact unless they form a recognized year or version. Unsupported scientific notation such as `three e minus four` also retains its wording. The dedicated year and version structures below retain their separate rendering rules.
 
 #### Magnitudes And Parameter Counts
 
@@ -68,7 +68,7 @@ A scale word takes the count spoken directly before it as its coefficient instea
 
 Parameter-count compaction supports written numeric counts and explicit quantities using `thousand`, `million`, or `billion`, with exact `K`/`M`/`B` notation. The word `trillion` retains its wording. Disable `size-suffixes` to retain the general quantity rendering instead.
 
-An explicit uppercase `K`, `M`, or `B` binds only the last parsed count, provided spoken conversion is eligible: `2.5 seven B` becomes `2.5 7B`, and `thirteen seventy B` becomes `13 70B`. It does not concatenate independent numbers or partly convert a protected mixed run such as `three seventy B`. A digit-by-digit decimal remains one expression: `two point five seven B` becomes `2.57B`. Existing numeric values follow the same boundary rule, so `2.5 7 B` becomes `2.5 7B`.
+An explicit uppercase `K`, `M`, or `B` binds only the last parsed count, provided spoken conversion is eligible: `2.5 seven B` becomes `2.5 7B`, and `thirteen seventy B` becomes `13 70B`. A scale word directly before the suffix also renders as a size: `a hundred K` becomes `100K`. It does not concatenate independent numbers or partly convert a protected mixed run such as `three seventy B`. A digit-by-digit decimal remains one expression: `two point five seven B` becomes `2.57B`. Existing numeric values follow the same boundary rule, so `2.5 7 B` becomes `2.5 7B`.
 
 #### Preserved Quantities And Times
 
@@ -80,15 +80,15 @@ A separate exact quantity before an indefinite phrase still follows the threshol
 
 Ambiguous quantities keep their wording. A count joined to a fraction by `and` stays with it even after `both` or `between`: `between two hundred and half a million` remains words. Without punctuation, `half a million` and `quarter a million` remain protected even after an ordinal, and `six quarters a million` stays intact. A comma separates an independent count: `six quarters, a million` becomes `6 quarters, a million`, retaining the bare article-plus-scale phrase.
 
-The ambiguous word `second` remains a word when context identifies it as a time unit (`one second`, `the fifth second`, `per second`, `a split-second`), while genuine ordinals follow the threshold, including in lists. Plural elapsed `seconds` also stays a time unit: `ten seconds of a million rows` becomes `10 seconds of a million rows` at the default. Clock expressions have no separate preservation rule: `five o'clock` becomes `5 o'clock`, while `two o'clock` keeps its wording at the default threshold.
+The ambiguous word `second` defaults to a time unit after a number: `a thirty second timeout` becomes `a 30 second timeout`, while `one second`, `the fifth second`, `per second`, and `a split-second` retain the unit word. A following `of` or preceding month identifies the ordinal reading: `the twenty second of May` becomes `the 22nd of May`, and `May twenty second` becomes `May 22nd`. Other genuine ordinals follow the threshold, including in lists. Plural elapsed `seconds` also stays a time unit: `ten seconds of a million rows` becomes `10 seconds of a million rows` at the default. Clock expressions have no separate preservation rule: `five o'clock` becomes `5 o'clock`, while `two o'clock` keeps its wording at the default threshold.
 
 #### Calendar Years
 
 `Eighteen`, `nineteen`, or `twenty` followed by a two-digit count, or by `oh`/`o` and a digit, renders as one year without surrounding cue words: `twenty twenty six` becomes `2026`, `nineteen oh five` becomes `1905`, and `Lord, twenty twenty six` becomes `Lord, 2026`.
 
-A pair needs at least one spoken component; mixed word/digit forms can join, while existing `20 22` stays separate. A pair inside a longer adjacent numeric run also stays separate, so `five five five twenty twelve` becomes `5 5 5 20 12` at the default threshold.
+A pair needs at least one spoken component; mixed word/digit forms can join, while existing `20 22` stays separate. A pair inside a longer adjacent numeric run also stays separate, so `five five five twenty twelve` becomes `5 5 5 20 12` at the default threshold. A preceding ordinal day or joined identifier is separate from that run.
 
-A following time or measurement unit, `am`/`pm`, or uppercase `K`/`M`/`B` blocks year joining. The ordinary adjacent-count policy then applies: `in twenty thirty minutes` becomes `in 20 30 minutes`. There are no month, quarter, or nearby-word special cases. `in twenty twenty five and twenty twenty` becomes `in 2025 and 2020` because each pair independently has the year shape. This also means `from nineteen thirty until twenty fifteen` becomes `from 1930 until 2015`.
+A following whole-word time or measurement unit, case-sensitive abbreviation such as `GB`, `MB`, or `Hz`, uppercase `AM`, case-insensitive `pm`, dotted `a.m.`/`p.m.`, or uppercase `K`/`M`/`B` blocks year joining. The ordinary adjacent-count policy then applies: `in twenty thirty minutes` becomes `in 20 30 minutes`. Prose words such as `in`, `a`, `am`, and `us` do not block a year. `in twenty twenty five and twenty twenty` becomes `in 2025 and 2020` because each pair independently has the year shape. This also means `from nineteen thirty until twenty fifteen` becomes `from 1930 until 2015`.
 
 Date days follow the ordinary threshold: `April first, twenty twenty four` becomes `April first, 2024`, and `May twenty sixth` becomes `May 26th`. At the default, `Q two of twenty twenty six` becomes `Q two of 2026`. An explicit scale-based year such as `two thousand twenty two` is an ordinary quantity and becomes `2022` at the default threshold.
 
@@ -98,7 +98,7 @@ Multi-point versions are parsed component by component through `text2num` and re
 
 The same component parsing applies to numeric prefixes: `Version 2 point twenty five` becomes `Version 2.25`, and `Version 2 point zero five` becomes `Version 2.05`. A following scale can start a separate coefficient (`2 point five two thousand` becomes `2.5 2000`). A standalone `V` or `v` before a dotted version is joined as a lowercase `v` prefix.
 
-`numeric-identifiers` joins an uppercase single letter other than `A` or `I`, or the stem `SM`, to a number already written as digits or rendered by `spoken-numbers`. It grants no threshold bypass: at the default, `Q five` becomes `Q5` and `F thirty two` becomes `F32`, while `Q two`, `plan B two weeks`, and `vitamin D three times a day` keep their spoken counts. Other two-letter stems do not join, so `FP thirty two` becomes `FP 32`. The mixed-run protection also keeps `SM one twenty` intact at the default threshold.
+`numeric-identifiers` joins an uppercase single letter other than `A` or `I`, or the stem `SM`, to a number already written as digits or rendered by `spoken-numbers` or `spoken-versions`. It grants no threshold bypass: at the default, `Q five` becomes `Q5` and `F thirty two` becomes `F32`, while `Q two`, `plan B two weeks`, and `vitamin D three times a day` keep their spoken counts. Other two-letter stems do not join, so `FP thirty two` becomes `FP 32`. The number must be the whole run: `SM eight nine` becomes `SM 8 9`. The mixed-run protection also keeps `SM one twenty` intact at the default threshold.
 
 This compaction can be used independently on existing numeric text: with `spoken-numbers` disabled, `numeric-identifiers` can still turn `Q 2` into `Q2`.
 
@@ -118,9 +118,10 @@ The former eight numeric passes have been replaced by these five controls. Updat
 
 | Previous control | Current control |
 | --- | --- |
-| `spoken-numbers` | `spoken-numbers` for quantities; `spoken-versions` for decimals; `calendar-years` for century-pair year assembly. |
+| `spoken-numbers` | `spoken-numbers` for quantities; `spoken-versions` for decimals. Disable the new `calendar-years` control too to retain separate century-pair counts. |
 | `spoken-version-numbers`, `numeric-point-suffixes`, `compact-version-prefix` | `spoken-versions` |
-| `numeric-identifier-groups`, `compact-short-identifier` | `numeric-identifiers` |
+| `compact-short-identifier` | `numeric-identifiers` |
+| `numeric-identifier-groups` | Removed; adjacent digit groups remain separate. |
 | `compact-parameter-counts`, `numeric-magnitude-suffixes` | `size-suffixes` |
 
 Disabling `spoken-numbers` leaves the other four categories available. After updating the config, run `parakit config show`, inspect `parakit rules list`, and check representative text with `parakit rules test`. Restart the daemon to load the new settings.
@@ -131,7 +132,7 @@ Safe casual-form normalization expands `gonna` and `gunna` to `going to`, `gotta
 
 Safe dangling-connective removal drops a trailing `so`, `but`, `and`, `or`, or `because` (case-insensitive) when it is the transcript's final word and the text underneath still ends in sentence punctuation, so `The build is green. But` becomes `The build is green.`, which the default terminal-period pass then trims to `The build is green` the same way it trims `, right?`. A trailing `,`, `;`, or `:` left under the removed word is promoted to `.`, a trailing `.`, `!`, or `?` is kept as-is, and the rule chains, so `It works. And so.` loses both dangling words and becomes `It works.`. It needs punctuation to fall back on: `I like cats and dogs and` has no preceding sentence punctuation, so the rule cannot distinguish a stranded conjunction from an unfinished thought and leaves the text alone.
 
-The safe `stutter-safe-words` pass collapses adjacent identical words, ignoring case and keeping the first word's spelling: `where where` becomes `where`, and `I'm I'm` becomes `I'm`. Only spaces and tabs join a run; punctuation and line breaks preserve the repetition. Numbers, spelling letters other than `I` and `a`, and the built-in repetition exceptions are protected. The supported spoken-symbol words are `plus`, `dash`, `equals`, `slash`, `dot`, `star`, `underscore`, `colon`, and `pipe`; other symbol names follow the ordinary repeated-word rule. The built-ins also preserve common repetition idioms and intensifiers. For example, the pass retains all three occurrences in `five five five`; numeric formatting can then produce `5 5 5`. `C plus plus` and `very very` stay intact. The short exception list lives beside the scanner in `src/rules/stutters.rs`.
+The safe `stutter-safe-words` pass runs before acronym collapsing and numeric rendering. It collapses adjacent identical words, ignoring case and keeping the first word's spelling: `where where` becomes `where`, and `I'm I'm` becomes `I'm`. Only spaces and tabs join a run; punctuation and line breaks preserve the repetition. Numbers, spelling letters other than `I` and `a`, and the built-in repetition exceptions are protected. The supported spoken-symbol words are `plus`, `dash`, `equals`, `slash`, `dot`, `star`, `underscore`, `colon`, and `pipe`; other symbol names follow the ordinary repeated-word rule. The built-ins also preserve common repetition idioms and intensifiers. For example, `five five five` renders as `5 5 5` without losing a repetition. `C plus plus` and `very very` stay intact. The short exception list lives beside the scanner in `src/rules/stutters.rs`.
 
 Recognized grammatical contexts also preserve distinct uses of the same word, such as `get to control control T` and `calling something that isn't science science`. Add your own words or literal phrases with [`cleaning.repetition_exceptions`](configuration.md#preserving-repeated-words); these supplement the built-in list.
 

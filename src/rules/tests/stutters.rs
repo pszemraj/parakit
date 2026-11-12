@@ -14,6 +14,19 @@ fn whole_words_keep_the_first_spelling_and_count_runs() {
         ("hello hello, hello hello.", "hello, hello.", 2),
         ("is is useful", "is useful", 1),
         ("a a test", "a test", 1),
+        ("It it's fine", "It's fine", 1),
+        ("it it'll work", "it'll work", 1),
+        ("he he's ready", "he's ready", 1),
+        ("she she’ll join", "she’ll join", 1),
+        ("you you're ready", "you're ready", 1),
+        ("we we're ready", "we're ready", 1),
+        ("they they're ready", "they're ready", 1),
+        ("IT it it's fine", "IT's fine", 1),
+        ("It\t it's fine", "It's fine", 1),
+        ("that that's fine", "that that's fine", 0),
+        ("there there's hope", "there there's hope", 0),
+        ("it\nit's fine", "it\nit's fine", 0),
+        ("it, it's fine", "it, it's fine", 0),
         ("the\nthe", "the\nthe", 0),
         ("where, where", "where, where", 0),
         ("what—what", "what—what", 0),
@@ -57,6 +70,9 @@ fn deliberate_repeats_and_number_words_are_preserved() {
         "yada",
         "ha",
         "heh",
+        "hee",
+        "bang",
+        "poo",
         "la",
         "bye",
         "yeah",
@@ -90,6 +106,8 @@ fn general_stutters_work_before_number_and_acronym_formatting() {
                 "I'm ready and it's useful.",
             ),
             ("we i i think", "We I think"),
+            ("It it's fine", "It's fine"),
+            ("he he's and you you're ready", "He's and you're ready"),
             ("sh sh should and th-th-the test", "Should and the test"),
             (
                 "C plus plus and dash dash verbose",
@@ -108,6 +126,75 @@ fn general_stutters_work_before_number_and_acronym_formatting() {
             ("had\nhad", "Had\nhad"),
         ],
     );
+}
+
+#[test]
+fn year_fillers_keep_boundaries_without_reordering_stutters() {
+    for profile in [CleaningProfile::Safe, CleaningProfile::Aggressive] {
+        assert_clean_cases(
+            profile,
+            &[
+                ("twenty uh twenty layers", "20 20 layers"),
+                ("twenty uh twenty.", "20 20."),
+                ("twenty uh um twenty layers", "20 20 layers"),
+                ("twenty uh, um twenty layers", "20 20 layers"),
+                ("20 uh twenty layers", "20 20 layers"),
+                ("nineteen uh nineteen layers", "19 19 layers"),
+                ("19 uh 19 layers", "19 19 layers"),
+                ("eighteen uh eighteen layers", "18 18 layers"),
+                ("one uh hundred", "100"),
+                ("twenty uh five layers", "25 layers"),
+                ("twenty twenty uh minutes", "20 20 minutes"),
+                ("the um the test", "The test"),
+                ("I uh I think", "I think"),
+                ("T T testing", "Testing"),
+                ("B B build", "Build"),
+                ("f f four", "4"),
+                ("f uh f four", "4"),
+                ("S S seven", "7"),
+                ("G uh P U", "GPU"),
+                ("G uh P uh U", "GPU"),
+                ("and uh and", "And"),
+                ("point uh point", "Point"),
+            ],
+        );
+    }
+    let result = cleaner_keep_period(CleaningProfile::Safe)
+        .try_clean("um, twenty uh twenty layers")
+        .unwrap();
+    let hits = &result.rules_fired;
+    assert_eq!(result.text, "20 20 layers");
+    assert_eq!(hits[0].name, "filled-pauses");
+    assert_eq!(hits[0].matches, 2);
+    assert_eq!(
+        hits.iter()
+            .filter(|hit| hit.name == "filled-pauses")
+            .count(),
+        1
+    );
+
+    let disabled = HashSet::from([
+        "spoken-numbers".to_string(),
+        "spoken-versions".to_string(),
+        "calendar-years".to_string(),
+        "numeric-identifiers".to_string(),
+        "size-suffixes".to_string(),
+    ]);
+    let cleaner = build_cleaner_for_test(CleaningProfile::Safe, false, &disabled, &[]);
+    assert_eq!(
+        cleaner.clean_text("twenty uh twenty layers"),
+        "Twenty twenty layers"
+    );
+    let disabled = HashSet::from(["filled-pauses".to_string()]);
+    let cleaner = build_cleaner_for_test(CleaningProfile::Safe, false, &disabled, &[]);
+    assert_eq!(
+        cleaner.clean_text("twenty uh twenty layers"),
+        "20 uh 20 layers"
+    );
+
+    let cleaner =
+        cleaner_with_repetition_exceptions(CleaningProfile::Safe, &["model model four".into()]);
+    assert_eq!(cleaner.clean_text("model model four"), "Model model 4");
 }
 
 #[test]
@@ -262,7 +349,7 @@ fn repetition_exceptions_have_canonical_identity_and_respect_disabled_rules() {
     );
     let empty = cleaner_with_repetition_exceptions(CleaningProfile::Safe, &[]);
     assert_eq!(empty.ruleset_id(), baseline);
-    assert_eq!(cleaner.clean_text("Bang bang."), "Bang.");
+    assert_eq!(cleaner.clean_text("Bang bang."), "Bang bang.");
 
     let disabled = ["stutter-safe-words".to_string()];
     let disabled_cleaner =

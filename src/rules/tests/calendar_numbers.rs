@@ -35,6 +35,28 @@ fn century_pairs_form_years_without_context_or_threshold_bypasses() {
                     "From 1930 until 2015.",
                 ),
                 ("Use twenty twenty six files.", "Use 2026 files."),
+                ("In twenty twenty six in May.", "In 2026 in May."),
+                (
+                    "Born in nineteen ninety one in Ohio.",
+                    "Born in 1991 in Ohio.",
+                ),
+                (
+                    "In twenty twenty six a new era began.",
+                    "In 2026 a new era began.",
+                ),
+                ("In twenty twenty six am I ready?", "In 2026 am I ready?"),
+                ("In twenty twenty six us too.", "In 2026 us too."),
+                ("May twenty sixth twenty twenty six.", "May 26th 2026."),
+                (
+                    "Q four twenty twenty five.",
+                    if threshold <= 4.0 {
+                        "Q4 2025."
+                    } else {
+                        "Q four 2025."
+                    },
+                ),
+                ("Q4 twenty twenty five.", "Q4 2025."),
+                ("Twenty uh twenty layers.", "20 20 layers."),
                 ("The year seventeen seventy-six.", "The year 17 76."),
                 ("The year 19 06.", "The year 19 06."),
                 ("The year 020 26.", "The year 020 26."),
@@ -65,9 +87,14 @@ fn following_time_and_measurement_units_block_year_joining() {
         ("Use twenty thirty years.", "Use 20 30 years."),
         ("Use twenty thirty meters.", "Use 20 30 meters."),
         ("Use twenty thirty kilograms.", "Use 20 30 kilograms."),
-        ("Until nineteen thirty pm.", "Until 19 30 pm."),
+        ("Until nineteen thirty PM.", "Until 19 30 PM."),
         ("Until nineteen thirty p.m.", "Until 19 30 p.m."),
-        ("Until nineteen thirty am.", "Until 19 30 am."),
+        ("Until nineteen thirty AM.", "Until 19 30 AM."),
+        ("Use twenty twenty six GB.", "Use 20 26 GB."),
+        ("Use twenty twenty six MB.", "Use 20 26 MB."),
+        ("Use twenty twenty six Hz.", "Use 20 26 Hz."),
+        ("Use twenty twenty six gigabytes.", "Use 20 26 gigabytes."),
+        ("Use twenty twenty six percent.", "Use 20 26 percent."),
         ("Use twenty thirty K.", "Use 20 30K."),
         ("Use twenty thirty M.", "Use 20 30M."),
         ("Use twenty thirty B.", "Use 20 30B."),
@@ -162,5 +189,9 @@ fn calendar_and_identifier_renderers_have_independent_controls() {
     assert_eq!(
         cleaner.clean_text("Q five of twenty twenty six."),
         "Q5 of 20 26."
+    );
+    assert_eq!(
+        cleaner.clean_text("Q four twenty twenty five."),
+        "Q 4 20 25."
     );
 }

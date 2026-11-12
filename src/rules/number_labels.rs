@@ -34,7 +34,10 @@ pub(super) fn classify(
                 || !matches!(century.value as u32, 18..=20)
                 || !integer(tail)
                 || century.literal && tail.literal && century.end == tail.start
-                || index > 0 && spans[index - 1].end == century.start
+                || index > 0
+                    && spans[index - 1].end == century.start
+                    && !spans[index - 1].ordinal
+                    && !super::numbers::identifier_stem(input, tokens, spans[index - 1].start)
                 || spans
                     .get(index + 2)
                     .is_some_and(|next| next.start == tail.end)
@@ -75,9 +78,10 @@ fn integer(number: &NumberSpan) -> bool {
 fn unit_after(tokens: &[NumberToken<'_>], end: usize) -> bool {
     let end = end + usize::from(tokens.get(end).is_some_and(|token| token.text == "-"));
     tokens.get(end).is_some_and(|next| {
-        is_unit(&next.lowercase)
+        is_unit(next.text)
             || matches!(next.text, "K" | "M" | "B")
-            || matches!(next.lowercase.as_str(), "am" | "pm")
+            || matches!(next.text, "AM" | "PM")
+            || next.lowercase == "pm"
             || matches!(next.lowercase.as_str(), "a" | "p")
                 && tokens.get(end + 1).is_some_and(|token| token.text == ".")
                 && tokens

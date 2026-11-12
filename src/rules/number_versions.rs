@@ -107,9 +107,12 @@ fn candidate(
     }
     // The shared parser has already separated independent counts, including
     // "fifty and two point five". A version base cannot join them again.
-    if spans
+    if !tokens[start..point]
         .iter()
-        .any(|span| start < span.start && span.start < point)
+        .all(|token| token.text == "-" || digit(token, language).is_some())
+        && spans
+            .iter()
+            .any(|span| start < span.start && span.start < point)
     {
         return None;
     }
@@ -225,6 +228,9 @@ fn component_prefix(
 
 /// Keep digit-by-digit components, including leading zeros, in their spoken order.
 fn component(tokens: &[NumberToken<'_>], language: &Language) -> Option<String> {
+    if !tokens.iter().all(|token| number_word(token, language)) {
+        return None;
+    }
     let words: Vec<_> = tokens.iter().filter(|token| token.text != "-").collect();
     let first = *words.first()?;
     if words.len() == 1 && integer(first.text) {
@@ -259,6 +265,9 @@ fn digit(token: &NumberToken<'_>, language: &Language) -> Option<String> {
     if text.len() == 1 && integer(text) {
         return Some(text.to_string());
     }
+    if !super::number_words::number_word(text) {
+        return None;
+    }
     text2digits(text, language)
         .ok()
         .filter(|value| value.len() == 1 && integer(value))
@@ -275,7 +284,7 @@ fn number_word(token: &NumberToken<'_>, language: &Language) -> bool {
     matches!(token.text, "-")
         || token.lowercase == "and"
         || integer(token.text)
-        || token.text.bytes().all(|byte| byte.is_ascii_alphabetic())
+        || super::number_words::number_word(alias(&token.lowercase))
             && text2digits(alias(&token.lowercase), language).is_ok_and(|value| integer(&value))
 }
 

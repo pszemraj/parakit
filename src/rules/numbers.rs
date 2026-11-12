@@ -1,6 +1,6 @@
 //! Parse original numeric spans, classify them, then render without re-reading output.
 
-use super::number_words::scale;
+use super::number_words::{number_word, scale};
 use std::borrow::Cow;
 use std::ops::Range;
 use text2num::{find_numbers, Language, Token};
@@ -41,12 +41,12 @@ impl Token for &NumberToken<'_> {
         self.text.into()
     }
     fn text_lowercase(&self) -> Cow<'_, str> {
-        // text2num accepts o/os as zero; aliases belong only inside an
-        // explicitly recognized version or year, never in an outside word.
-        if matches!(self.lowercase.as_str(), "o" | "os") {
-            "~".into()
-        } else {
+        // text2num strips a trailing s even from nouns ("ones", "OSS").
+        // Zero aliases belong only inside an explicitly recognized structure.
+        if number_word(&self.lowercase) || self.text.parse::<f64>().is_ok() {
             self.lowercase.as_str().into()
+        } else {
+            "~".into()
         }
     }
 }
@@ -139,16 +139,7 @@ pub(super) fn normalize<'a>(
         .iter_mut()
         .filter(|p| p.kind == NumberKind::Version)
     {
-        if proposal.start > 0
-            && matches!(
-                tokens[proposal.start - 1].lowercase.as_str(),
-                "minus" | "negative"
-            )
-            && (proposal.start < 2 || tokens[proposal.start - 2].text != "-")
-        {
-            proposal.start -= 1;
-            proposal.text.insert(0, '-');
-        }
+        apply_sign(input, &tokens, &spans, proposal);
     }
     let versions: Vec<_> = proposals
         .iter()
@@ -235,7 +226,13 @@ pub(super) fn normalize<'a>(
             && (!bare_scale || end > span.start + 1)
             && span.value >= threshold;
         let rendered = span.literal || eligible && enabled.contains(&NumberKind::Spoken);
-        if eligible && article && bare_scale {
+        if eligible
+            && article
+            && bare_scale
+            && tokens
+                .get(end)
+                .is_none_or(|token| !matches!(token.lowercase.as_str(), "second" | "seconds"))
+        {
             start -= 1;
         }
         let parameter_range = quantities.iter().any(|next| {
@@ -251,6 +248,7 @@ pub(super) fn normalize<'a>(
                 })
         });
         if rendered
+            && !span.ordinal
             && !tokens[span.start..end]
                 .iter()
                 .any(|token| token.lowercase == "trillion")
@@ -276,30 +274,38 @@ pub(super) fn normalize<'a>(
             .get(end)
             .is_some_and(|token| matches!(token.text, "K" | "M" | "B"))
             && !span.ordinal
-            && (!bare_scale || end > span.start + 1)
-            && rendered
+            && (rendered
+                || bare_scale && span.value >= threshold && enabled.contains(&NumberKind::Spoken))
         {
             proposals.push(Replacement {
-                start: span.start,
+                start: span.start - usize::from(article && bare_scale),
                 end: end + 1,
-                text: format!("{}{}", text, tokens[end].text),
+                text: format!(
+                    "{}{}",
+                    text.split_whitespace().next().unwrap(),
+                    tokens[end].text
+                ),
                 kind: NumberKind::Size,
             });
         }
-        if rendered && span.start > 0 && !span.ordinal {
+        if rendered
+            && identifier_stem(input, &tokens, span.start)
+            && !span.ordinal
+            && !quantities.iter().any(|next| {
+                next.start == span.end
+                    && !next.ordinal
+                    && !proposals.iter().any(|proposal| {
+                        enabled.contains(&NumberKind::Year)
+                            && proposal.kind == NumberKind::Year
+                            && proposal.start == next.start
+                    })
+            })
+        {
             let stem = &tokens[span.start - 1];
-            if (stem.text == "SM"
-                || stem.text.len() == 1
-                    && stem.text.bytes().all(|byte| byte.is_ascii_uppercase())
-                    && !matches!(stem.text, "A" | "I"))
-                && stem.end < tokens[span.start].start
-                && input[stem.end..tokens[span.start].start]
-                    .bytes()
-                    .all(|byte| matches!(byte, b' ' | b'\t'))
-                && span
-                    .text
-                    .bytes()
-                    .all(|byte| byte.is_ascii_digit() || byte == b'.')
+            if span
+                .text
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || byte == b'.')
             {
                 proposals.push(Replacement {
                     start: span.start - 1,
@@ -317,13 +323,6 @@ pub(super) fn normalize<'a>(
                     "minus" | "negative"
                 )
         {
-            if start > 0
-                && matches!(tokens[start - 1].lowercase.as_str(), "minus" | "negative")
-                && (start < 2 || tokens[start - 2].text != "-")
-            {
-                start -= 1;
-                text.insert(0, '-');
-            }
             proposals.push(Replacement {
                 start,
                 end,
@@ -366,8 +365,10 @@ pub(super) fn normalize<'a>(
     // Unknown zero aliases stay as a complete original run. Only an explicit
     // version or a recognized century pair may interpret the alias as zero.
     for (index, pair) in spans.windows(2).enumerate() {
-        if pair[0].end + 1 != pair[1].start
-            || !matches!(tokens[pair[0].end].lowercase.as_str(), "oh" | "o")
+        if pair[0].end >= pair[1].start
+            || !tokens[pair[0].end..pair[1].start]
+                .iter()
+                .all(|token| matches!(token.lowercase.as_str(), "oh" | "o"))
         {
             continue;
         }
@@ -381,19 +382,68 @@ pub(super) fn normalize<'a>(
         }
         mixed.push(spans[first].start..spans[last].end);
     }
+    // Include leading aliases too ("double oh seven", "oh oh seven").
+    for span in &spans {
+        let mut start = span.start;
+        while start > 0 && matches!(tokens[start - 1].lowercase.as_str(), "oh" | "o") {
+            start -= 1;
+        }
+        if start < span.start {
+            mixed.push(start..span.end);
+        }
+    }
+    // A bare point is prose, not permission to convert only its trailing digits.
+    for (at, token) in tokens.iter().enumerate() {
+        if token.lowercase == "point"
+            && !proposals
+                .iter()
+                .any(|p| p.kind == NumberKind::Version && p.start < at && at < p.end)
+        {
+            let mut end = at + 1;
+            while end < tokens.len() && number_word(&tokens[end].lowercase) {
+                end += 1;
+            }
+            protected.push(at..end);
+        }
+        // Scientific notation is not a supported numeric structure. Keep the
+        // entire expression readable instead of converting only its exponent.
+        if token.lowercase == "e" && at > 0 {
+            let exponent = at
+                + 1
+                + usize::from(tokens.get(at + 1).is_some_and(|t| {
+                    matches!(t.lowercase.as_str(), "minus" | "negative" | "plus")
+                }));
+            if let (Some(base), Some(power)) = (
+                spans.iter().find(|s| s.end == at),
+                spans.iter().find(|s| s.start == exponent),
+            ) {
+                protected.push(base.start..power.end);
+            }
+        }
+    }
+    // Spoken decimal versions participate in the same identifier join as
+    // literal decimals, while keeping their attribution to spoken-versions.
+    for proposal in &mut proposals {
+        if enabled.contains(&NumberKind::Identifier)
+            && proposal.kind == NumberKind::Version
+            && identifier_stem(input, &tokens, proposal.start)
+            && !spans
+                .iter()
+                .any(|next| next.start == proposal.end && !next.ordinal)
+        {
+            proposal.start -= 1;
+            proposal.text.insert_str(0, tokens[proposal.start].text);
+        }
+    }
     // Literal dotted versions need no f64 value to compact a prefix.
     for (at, token) in tokens.iter().enumerate().skip(1) {
         let stem = &tokens[at - 1];
         if token.text.starts_with(|ch: char| ch.is_ascii_digit())
             && token.text.contains('.')
-            && (stem.text == "SM"
-                || stem.text.len() == 1
-                    && stem.text.bytes().all(|byte| byte.is_ascii_uppercase())
-                    && !matches!(stem.text, "A" | "I"))
-            && stem.end < token.start
-            && input[stem.end..token.start]
-                .bytes()
-                .all(|byte| matches!(byte, b' ' | b'\t'))
+            && !spans
+                .iter()
+                .any(|next| next.start == at + 1 && !next.ordinal)
+            && identifier_stem(input, &tokens, at)
         {
             proposals.push(Replacement {
                 start: at - 1,
@@ -405,18 +455,9 @@ pub(super) fn normalize<'a>(
     }
     for proposal in proposals
         .iter_mut()
-        .filter(|proposal| proposal.kind == NumberKind::Size)
+        .filter(|proposal| matches!(proposal.kind, NumberKind::Size | NumberKind::Spoken))
     {
-        if proposal.start > 0
-            && matches!(
-                tokens[proposal.start - 1].lowercase.as_str(),
-                "minus" | "negative"
-            )
-            && (proposal.start < 2 || tokens[proposal.start - 2].text != "-")
-        {
-            proposal.start -= 1;
-            proposal.text.insert(0, '-');
-        }
+        apply_sign(input, &tokens, &spans, proposal);
     }
     let priority = |kind| match kind {
         NumberKind::Size => 5,
@@ -479,6 +520,52 @@ pub(super) fn normalize<'a>(
     )
 }
 
+fn apply_sign(
+    input: &str,
+    tokens: &[NumberToken<'_>],
+    spans: &[NumberSpan],
+    proposal: &mut Replacement,
+) {
+    let start = proposal.start;
+    if start == 0
+        || proposal.text.starts_with('v')
+        || !matches!(tokens[start - 1].lowercase.as_str(), "minus" | "negative")
+        || start >= 2
+            && (tokens[start - 2].text == "-" || spans.iter().any(|span| span.end == start - 1))
+        || !input[tokens[start - 1].end..tokens[start].start]
+            .bytes()
+            .all(|byte| matches!(byte, b' ' | b'\t'))
+    {
+        return;
+    }
+    proposal.start -= 1;
+    proposal.text.insert(0, '-');
+}
+
+/// # Arguments
+/// * `input` - Original transcript text.
+/// * `tokens` - Original tokens and byte boundaries.
+/// * `start` - Index of the numeric token after the possible stem.
+///
+/// # Returns
+/// Whether a token has an uppercase identifier stem immediately before it.
+///
+/// # Panics
+/// Panics if `start` or token boundaries do not index the supplied input.
+pub(super) fn identifier_stem(input: &str, tokens: &[NumberToken<'_>], start: usize) -> bool {
+    start > 0 && {
+        let stem = &tokens[start - 1];
+        (stem.text == "SM"
+            || stem.text.len() == 1
+                && stem.text.bytes().all(|byte| byte.is_ascii_uppercase())
+                && !matches!(stem.text, "A" | "I"))
+            && stem.end <= tokens[start].start
+            && input[stem.end..tokens[start].start]
+                .bytes()
+                .all(|byte| matches!(byte, b' ' | b'\t'))
+    }
+}
+
 fn compact_size(value: f64) -> Option<String> {
     for (scale, suffix) in [(1e9, 'B'), (1e6, 'M'), (1e3, 'K')] {
         if value >= scale && value % (scale / 10.0) == 0.0 {
@@ -508,13 +595,22 @@ fn parse_range(
 ) -> Vec<NumberSpan> {
     let mut spans: Vec<_> = find_numbers(tokens[range.clone()].iter(), language, 0.0)
         .into_iter()
-        .map(|n| NumberSpan {
-            start: range.start + n.start,
-            end: range.start + n.end,
-            text: n.text,
-            value: n.value,
-            ordinal: n.is_ordinal,
-            literal: false,
+        .map(|n| {
+            let zero_scale = tokens[range.start + n.start].lowercase == "zero"
+                && tokens
+                    .get(range.start + n.start + 1)
+                    .is_some_and(|t| scale(&t.lowercase).is_some())
+                && tokens[range.start + n.start + 1..range.start + n.end]
+                    .iter()
+                    .all(|t| scale(&t.lowercase).is_some());
+            NumberSpan {
+                start: range.start + n.start,
+                end: range.start + n.end,
+                text: if zero_scale { "0".to_string() } else { n.text },
+                value: if zero_scale { 0.0 } else { n.value },
+                ordinal: n.is_ordinal,
+                literal: false,
+            }
         })
         .collect();
     for (at, token) in tokens.iter().enumerate().take(range.end).skip(range.start) {
@@ -556,7 +652,11 @@ fn parse_spans(
         if pair[1].lowercase != "and" {
             continue;
         }
-        let following = &tokens[at + 2..];
+        let limit = tokens[at + 2..]
+            .iter()
+            .position(|token| !number_word(&token.lowercase) && token.text.parse::<f64>().is_err())
+            .map_or(tokens.len(), |end| at + 2 + end);
+        let following = &tokens[at + 2..limit];
         let Some(next) = find_numbers(following.iter(), language, 0.0)
             .into_iter()
             .next()

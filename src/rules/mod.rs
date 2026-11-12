@@ -22,9 +22,14 @@
 //!
 //! * [`engine`] - the compiled [`Cleaner`] pipeline and rule/activation types.
 //! * [`defaults`] - the built-in `DEFAULT_RULES` table.
-//! * [`numbers`] - spoken-number parsing policy and magnitude formatting.
-//! * [`passes`] - other procedural transforms (acronyms, versions,
-//!   capitalization).
+//! * [`numbers`] - shared numeric tokenization, classification, and rendering.
+//! * [`number_guards`] - protected quantities and ambiguous numeric contexts.
+//! * [`number_labels`] - century-pair calendar years.
+//! * [`number_versions`] - decimals and dotted versions.
+//! * [`number_words`] - shared number-word and unit vocabulary.
+//! * [`stutters`] - contextual repeated-word collapsing and exceptions.
+//! * [`passes`] - other procedural transforms, including acronyms and
+//!   capitalization.
 //! * [`user`] - user-defined rules loaded from `config.toml`.
 //!
 //! ## How to disable a rule at runtime
@@ -66,7 +71,7 @@ pub use user::{RulePosition, UserRule};
 
 /// Schema/behavior version recorded in transcription logs.
 /// Keep revisions distinct even when their package version is unchanged.
-pub const CLEANER_VERSION: u32 = 37;
+pub const CLEANER_VERSION: u32 = 38;
 
 /// Default minimum spoken cardinal or ordinal converted to digits when
 /// `cleaning.number_threshold` is left unset.
@@ -329,13 +334,30 @@ pub fn assert_rule_name_exists(name: &str, user_rules: &[UserRule]) -> Result<()
     if defaults::DEFAULT_RULES.iter().any(|rule| rule.name == name)
         || user_rules.iter().any(|rule| rule.name == name)
     {
-        Ok(())
-    } else {
-        Err(anyhow!(
-            "no rule named '{}'. Run `parakit rules list` to see all rules.",
-            name
-        ))
+        return Ok(());
     }
+    let replacement = match name {
+        "spoken-version-numbers" | "numeric-point-suffixes" | "compact-version-prefix" => {
+            Some("spoken-versions")
+        }
+        "compact-short-identifier" => Some("numeric-identifiers"),
+        "compact-parameter-counts" | "numeric-magnitude-suffixes" => Some("size-suffixes"),
+        _ => None,
+    };
+    if let Some(replacement) = replacement {
+        return Err(anyhow!(
+            "rule '{name}' was renamed to '{replacement}'; see docs/cleaning-rules.md"
+        ));
+    }
+    if name == "numeric-identifier-groups" {
+        return Err(anyhow!(
+            "rule '{name}' was removed; digit groups remain separate; see docs/cleaning-rules.md"
+        ));
+    }
+    Err(anyhow!(
+        "no rule named '{}'. Run `parakit rules list` to see all rules.",
+        name
+    ))
 }
 
 /// Print all built-in and user passes and whether they are active for the

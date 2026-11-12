@@ -446,7 +446,7 @@ fn adjacent_numeric_runs_convert_together_at_the_configured_threshold() {
         (
             "SM one twenty.",
             [
-                "SM1 20.",
+                "SM 1 20.",
                 "SM one twenty.",
                 "SM one twenty.",
                 "SM one twenty.",

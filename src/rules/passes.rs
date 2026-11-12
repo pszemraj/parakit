@@ -1,6 +1,6 @@
-//! Procedural cleaning passes: acronyms, structural numbers/versions, and
-//! sentence capitalization. Spoken cardinal parsing lives in the sibling
-//! `numbers` module.
+//! Procedural cleaning passes: acronyms, casual forms, punctuation, and
+//! sentence capitalization. Numeric transforms live in the sibling `numbers`
+//! and `number_*` modules; repeated-word handling lives in `stutters`.
 //!
 //! These transforms are used as [`crate::rules::engine::RuleKind::Procedural`]
 //! entries in [`crate::rules::defaults::DEFAULT_RULES`] because they need
@@ -11,6 +11,69 @@
 use std::borrow::Cow;
 
 use super::engine::TransformResult;
+
+/// Remove fillers, deferring those between repeated century components until parsing.
+///
+/// # Arguments
+/// * `input` - Transcript before stutter and numeric formatting.
+/// * `re` - Compiled built-in filled-pause matcher.
+/// * `replacement` - Built-in replacement preserving sentence boundaries.
+///
+/// # Returns
+/// Text with ordinary fillers removed and the number of removed matches.
+///
+/// # Errors
+/// This transform is infallible; it returns text and a match count directly.
+///
+/// # Panics
+/// Panics only if the supplied regex reports invalid capture boundaries.
+pub(crate) fn defer_year_fillers<'a>(
+    input: &'a str,
+    re: &regex::Regex,
+    replacement: &str,
+) -> TransformResult<'a> {
+    let captures: Vec<_> = re.captures_iter(input).collect();
+    let mut replacements = Vec::new();
+    let mut first = 0;
+    while first < captures.len() {
+        let mut end = first + 1;
+        while end < captures.len()
+            && input[captures[end - 1].get(0).unwrap().end()..captures[end].get(0).unwrap().start()]
+                .bytes()
+                .all(|byte| matches!(byte, b' ' | b'\t'))
+        {
+            end += 1;
+        }
+        let start_byte = captures[first].get(0).unwrap().start();
+        let end_byte = captures[end - 1].get(0).unwrap().end();
+        let prefix = input[..start_byte].trim_end_matches([' ', '\t']);
+        let suffix = input[end_byte..].trim_start_matches([' ', '\t']);
+        let before = prefix
+            .rsplit(|ch: char| !ch.is_ascii_alphanumeric() && ch != '.')
+            .next()
+            .unwrap_or_default();
+        let after = suffix
+            .split(|ch: char| !ch.is_ascii_alphanumeric() && ch != '.')
+            .next()
+            .unwrap_or_default();
+        let century = |word: &str| match word.trim_end_matches('.').to_ascii_lowercase().as_str() {
+            "eighteen" | "18" => Some(18),
+            "nineteen" | "19" => Some(19),
+            "twenty" | "20" => Some(20),
+            _ => None,
+        };
+        if century(before).is_none() || century(before) != century(after) {
+            for found in &captures[first..end] {
+                let whole = found.get(0).unwrap();
+                let mut text = String::new();
+                found.expand(replacement, &mut text);
+                replacements.push((whole.start(), whole.end(), text));
+            }
+        }
+        first = end;
+    }
+    apply_replacements(input, replacements)
+}
 
 /// Expand apostrophe-cause while preserving exactly the spacing already
 /// present around standalone forms and inserting one space for attached forms.

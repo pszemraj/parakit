@@ -348,7 +348,7 @@ fn identifier_formatting_uses_structural_rules_not_vocabulary_lists() {
         CleaningProfile::Safe,
         &[
             ("RTX 50 90 release.", "RTX 50 90 release."),
-            ("S M 1 20 support.", "SM1 20 support."),
+            ("S M 1 20 support.", "SM 1 20 support."),
             ("Use F 32 and H 100.", "Use F32 and H100."),
             ("SM 120 is supported.", "SM120 is supported."),
             ("OK five minutes ago.", "OK 5 minutes ago."),

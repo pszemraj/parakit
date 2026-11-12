@@ -8,14 +8,117 @@
 pub(super) fn is_unit(word: &str) -> bool {
     let unit = regex_static!(
         concat!(
-            r"(?i)^(?:[kmunpgtpe]?(?:g|m|s|a|w|v|b)|[kmgtp]?ib|[kmgt]?hz|[a-z]p[smh]|[kmg]?px|",
-            r"bit|mol|amp|ton|bar|rad|lux|db|lb|lbs|oz|ft|yd|in|usd|eur|gbp|jpy|cad|aud|chf|cny|",
+            r"^(?:[kmunpgtpeKMGTPE]?(?:G|M|S|A|W|V|B)|[KMGTPE]?iB|[kKMGT]?Hz|[A-Z]P[SMH]|[kKMGT]?px|",
+            r"(?i:bit|mol|amp|ton|bar|rad|lux|db|lb|lbs|oz|ft|yd|usd|eur|gbp|jpy|cad|aud|chf|cny|",
             r"(?:nano|micro|milli|centi|deci|kilo|mega|giga|tera)?(?:meter|metre|gram|second)s?|",
-            r"seconds?|secs?|minutes?|mins?|hours?|days?|weeks?|months?|years?|degrees?|percent|cents?|dollars?|euros?|pounds?|watts?|bytes?|bits?)$"
+            r"seconds?|secs?|minutes?|mins?|hours?|days?|weeks?|months?|years?|degrees?|percent|cents?|dollars?|euros?|pounds?|watts?|(?:kilo|mega|giga|tera)?(?:bytes?|bits?)))$"
         ),
         "numeric unit regex must compile"
     );
     unit.is_match(word)
+}
+
+/// # Returns
+/// Whether a lowercase word is an exact English number-parser token.
+pub(super) fn number_word(word: &str) -> bool {
+    matches!(
+        word,
+        "zero"
+            | "one"
+            | "two"
+            | "three"
+            | "four"
+            | "five"
+            | "six"
+            | "seven"
+            | "eight"
+            | "nine"
+            | "ten"
+            | "eleven"
+            | "twelve"
+            | "thirteen"
+            | "fourteen"
+            | "fifteen"
+            | "sixteen"
+            | "seventeen"
+            | "eighteen"
+            | "nineteen"
+            | "twenty"
+            | "thirty"
+            | "forty"
+            | "fifty"
+            | "sixty"
+            | "seventy"
+            | "eighty"
+            | "ninety"
+            | "hundred"
+            | "thousand"
+            | "million"
+            | "billion"
+            | "trillion"
+            | "hundreds"
+            | "thousands"
+            | "millions"
+            | "billions"
+            | "trillions"
+            | "first"
+            | "second"
+            | "third"
+            | "fourth"
+            | "fifth"
+            | "sixth"
+            | "seventh"
+            | "eighth"
+            | "ninth"
+            | "tenth"
+            | "eleventh"
+            | "twelfth"
+            | "thirteenth"
+            | "fourteenth"
+            | "fifteenth"
+            | "sixteenth"
+            | "seventeenth"
+            | "eighteenth"
+            | "nineteenth"
+            | "twentieth"
+            | "thirtieth"
+            | "fortieth"
+            | "fiftieth"
+            | "sixtieth"
+            | "seventieth"
+            | "eightieth"
+            | "ninetieth"
+            | "hundredth"
+            | "thousandth"
+            | "millionth"
+            | "billionth"
+            | "trillionth"
+            | "and"
+            | "point"
+            | "-"
+    )
+}
+
+/// # Arguments
+/// * `tokens` - Original numeric tokens and prose boundaries.
+/// * `end` - Exclusive end of the run to inspect.
+///
+/// # Returns
+/// Start of the contiguous numeric vocabulary ending at `end`.
+///
+/// # Panics
+/// Panics if `end` exceeds the token count.
+pub(super) fn run_start(tokens: &[super::numbers::NumberToken<'_>], end: usize) -> usize {
+    tokens[..end]
+        .iter()
+        .rposition(|token| {
+            let word = token.lowercase.as_str();
+            !number_word(word)
+                && !word.strip_suffix('s').is_some_and(number_word)
+                && !matches!(word, "oh" | "o")
+                && token.text.parse::<f64>().is_err()
+        })
+        .map_or(0, |index| index + 1)
 }
 
 /// # Returns

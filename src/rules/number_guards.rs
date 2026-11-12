@@ -4,7 +4,7 @@ use std::borrow::Cow;
 use std::ops::Range;
 use text2num::{find_numbers, Language, Token};
 
-use super::number_words::scale;
+use super::number_words::{run_start, scale};
 use super::numbers::{NumberSpan, NumberToken};
 
 /// Find phrases whose number words must retain their original spelling.
@@ -16,6 +16,9 @@ use super::numbers::{NumberSpan, NumberToken};
 ///
 /// # Returns
 /// Sorted, disjoint token ranges to exclude from numeric rendering.
+///
+/// # Panics
+/// Panics if supplied span boundaries do not index the supplied tokens.
 pub(super) fn protected(
     tokens: &[NumberToken<'_>],
     spans: &[NumberSpan],
@@ -24,6 +27,26 @@ pub(super) fn protected(
     let mut ranges = Vec::new();
     for (index, token) in tokens.iter().enumerate() {
         let word = token.lowercase.as_str();
+        if word == "zero"
+            && !spans
+                .iter()
+                .any(|span| span.start < index && index < span.end)
+            && tokens
+                .get(index + 1)
+                .is_some_and(|t| scale(&t.lowercase).is_some())
+        {
+            let end = (index + 1..tokens.len())
+                .find(|&at| !super::number_words::number_word(&tokens[at].lowercase))
+                .unwrap_or(tokens.len());
+            if tokens[index + 1..end]
+                .iter()
+                .any(|t| scale(&t.lowercase).is_none())
+            {
+                // Do not let the parser's implicit coefficient replace zero
+                // or discard an additive remainder in a compound quantity.
+                ranges.push(index..end);
+            }
+        }
         if matches!(word, "second" | "seconds") && second_is_time_unit(tokens, index, language) {
             ranges.push(index..index + 1);
             continue;
@@ -56,7 +79,7 @@ pub(super) fn protected(
             }
             continue;
         }
-        if at(tokens, index + 1, "of") {
+        if at(tokens, index + 1, "of") || word.ends_with('s') {
             let plural = word.ends_with('s');
             if let Some(denominator) = ordinal_ending(tokens, index + 1, plural, language) {
                 if let Some(range) = fraction(tokens, spans, index, Some(denominator), language) {
@@ -81,13 +104,6 @@ fn at(tokens: &[NumberToken<'_>], index: usize, word: &str) -> bool {
     tokens
         .get(index)
         .is_some_and(|token| token.lowercase == word)
-}
-
-fn line_start(tokens: &[NumberToken<'_>], end: usize) -> usize {
-    tokens[..end]
-        .iter()
-        .rposition(|token| matches!(token.text, "\r" | "\n"))
-        .map_or(0, |index| index + 1)
 }
 
 fn plural_magnitude(word: &str) -> bool {
@@ -142,7 +158,7 @@ fn fraction(
         start -= 1;
     }
     let scale_first = joined && start > 0 && scale(&tokens[start - 1].lowercase).is_some();
-    if !of && !has_scale && !scale_first {
+    if !of && !has_scale && !scale_first && !(plural && ordinal.is_some()) {
         return None;
     }
     if ordinal.is_some() && !plural && !has_scale {
@@ -182,7 +198,7 @@ fn cardinal_chain(
     end: usize,
     language: &Language,
 ) -> Option<(Range<usize>, f64, bool)> {
-    let offset = line_start(tokens, end);
+    let offset = run_start(tokens, end);
     let parsed = find_numbers(tokens[offset..end].iter(), language, 0.0);
     let mut numbers: Vec<_> = parsed
         .into_iter()
@@ -250,7 +266,7 @@ fn ordinal_ending(
     plural: bool,
     language: &Language,
 ) -> Option<Range<usize>> {
-    let offset = line_start(tokens, end);
+    let offset = run_start(tokens, end);
     let view = tokens[offset..end]
         .iter()
         .enumerate()
@@ -282,10 +298,30 @@ fn second_is_time_unit(tokens: &[NumberToken<'_>], index: usize, language: &Lang
     {
         return true;
     }
-    if ordinal_ending(tokens, index + 1, false, language).is_some_and(|range| range.start < index) {
-        return false;
+    if let Some(range) =
+        ordinal_ending(tokens, index + 1, false, language).filter(|range| range.start < index)
+    {
+        // Unhyphenated "thirty second" is a duration unless a date cue
+        // selects the ordinal reading. Hyphenated ordinals are handled above.
+        return !at(tokens, index + 1, "of")
+            && !(range.start > 0
+                && matches!(
+                    tokens[range.start - 1].lowercase.as_str(),
+                    "january"
+                        | "february"
+                        | "march"
+                        | "april"
+                        | "may"
+                        | "june"
+                        | "july"
+                        | "august"
+                        | "september"
+                        | "october"
+                        | "november"
+                        | "december"
+                ));
     }
-    let offset = line_start(tokens, index);
+    let offset = run_start(tokens, index);
     let previous = find_numbers(tokens[offset..index].iter(), language, 0.0);
     let Some(previous) = previous.last().filter(|span| span.end + offset == index) else {
         return false;
@@ -302,6 +338,6 @@ fn second_is_time_unit(tokens: &[NumberToken<'_>], index: usize, language: &Lang
     }) {
         return false;
     }
-    previous.start > 0 && at(tokens, previous.start + offset - 1, "the")
+    previous.start + offset > 0 && at(tokens, previous.start + offset - 1, "the")
         || at(tokens, index + 1, "of")
 }

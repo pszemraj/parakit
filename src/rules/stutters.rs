@@ -27,6 +27,9 @@ const KEEP_REPEATED: &[&str] = &[
     "yada",
     "ha",
     "heh",
+    "hee",
+    "bang",
+    "poo",
     "la",
     "bye",
     "yeah",
@@ -39,7 +42,9 @@ const KEEP_REPEATED: &[&str] = &[
 
 /// Collapse identical adjacent words separated only by ASCII spaces or tabs.
 ///
-/// Contractions stay whole, the first word's spelling is retained, and
+/// Contractions stay whole, except that a pronoun restarted as its own
+/// contraction joins the first spelling to the contraction suffix. Otherwise
+/// the first word's spelling is retained, and
 /// punctuation or a line break ends a run. Number words, digits, spelling
 /// letters other than I/a, and deliberate doubles are protected.
 ///
@@ -84,7 +89,11 @@ pub(crate) fn collapse_repeated_words<'a>(
         let lowercase = found.as_str().to_lowercase();
         if let Some((end, prior)) = &previous {
             let gap = &input[*end..found.start()];
-            if prior == &lowercase
+            let contraction = matches!(prior.as_str(), "it" | "he" | "she" | "you" | "we" | "they")
+                && lowercase
+                    .strip_prefix(prior)
+                    .is_some_and(|suffix| suffix.starts_with(['\'', '’']));
+            if (prior == &lowercase || contraction)
                 && !gap.is_empty()
                 && gap.bytes().all(|byte| matches!(byte, b' ' | b'\t'))
                 && !protected(&lowercase, &language)
@@ -93,10 +102,17 @@ pub(crate) fn collapse_repeated_words<'a>(
                     .any(|span| span.start <= found.start() && found.end() <= span.end)
                 && !distinct_grammatical_roles(&input[..*end], &input[found.end()..], &lowercase)
             {
-                if let Some((_, last_end)) = removals.last_mut().filter(|(_, last)| last == end) {
-                    *last_end = found.end();
+                // Keep the first pronoun's spelling and the restarted suffix:
+                // `It it's` becomes `It's`, including after `it it it's`.
+                let removal_end = if contraction {
+                    found.start() + prior.len()
                 } else {
-                    removals.push((*end, found.end()));
+                    found.end()
+                };
+                if let Some((_, last_end)) = removals.last_mut().filter(|(_, last)| last == end) {
+                    *last_end = removal_end;
+                } else {
+                    removals.push((*end, removal_end));
                 }
             }
         }

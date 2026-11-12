@@ -35,7 +35,13 @@ fn text2num_renders_signed_numbers() {
         CleaningProfile::Safe,
         &[
             ("The offset is negative five.", "The offset is -5."),
-            ("The exponent is 2e minus 7.", "The exponent is 2e -7."),
+            ("The exponent is 2e minus 7.", "The exponent is 2e minus 7."),
+            ("Three e minus four.", "Three e minus four."),
+            ("400 minus 128.", "400 minus 128."),
+            ("Ten minus five is five.", "10 minus 5 is 5."),
+            ("Ten minus five point six.", "10 minus 5.6."),
+            ("400 minus 128 K.", "400 minus 128K."),
+            ("Minus v one point six.", "Minus v1.6."),
             ("Use minus hundred twenty eight K.", "Use -128K."),
             (
                 "Use a two thousand character limit.",
@@ -46,6 +52,10 @@ fn text2num_renders_signed_numbers() {
                 "Keep the first 500 rows.",
             ),
             ("Keep the hundred thirty K count.", "Keep the 130K count."),
+            ("The hundred K difference.", "The 100K difference."),
+            ("A hundred K steps.", "100K steps."),
+            ("A hundred B tokens.", "100B tokens."),
+            ("A seventy billion B model.", "A 70B model."),
             ("A hundred trillion parameters.", "100 trillion parameters."),
             (
                 "The temperature is minus twenty degrees.",
@@ -155,6 +165,43 @@ fn large_spoken_magnitudes_use_readable_hybrid_notation() {
             ),
         ],
     );
+}
+
+#[test]
+fn numeric_nouns_and_unsupported_runs_keep_their_words() {
+    assert_clean_at_thresholds(&[
+        ("All fours.", "All fours."),
+        ("High fives.", "High fives."),
+        ("Dressed to the nines.", "Dressed to the nines."),
+        ("The ones I like.", "The ones I like."),
+        ("GPT OSS twenty B.", "GPT OSS 20B."),
+        ("Two oh oh seven.", "Two oh oh seven."),
+        ("Double oh seven.", "Double oh seven."),
+        ("Top P point nine five.", "Top P point nine five."),
+        ("All fours point five.", "All fours point five."),
+        ("GPT OSS twenty point six.", "GPT OSS 20.6."),
+        (
+            "Zero million five hundred dollars.",
+            "Zero million five hundred dollars.",
+        ),
+        ("Zero hundred twenty hours.", "Zero hundred twenty hours."),
+    ]);
+}
+
+#[test]
+fn zero_scale_coefficients_keep_their_value_and_follow_the_threshold() {
+    for threshold in [0.0, 4.0, 10.0] {
+        let cleaner = cleaner_with_number_threshold(Some(threshold));
+        for (input, digits) in [
+            ("Zero million dollars.", "0 million dollars."),
+            ("Zero hundred hours.", "0 hours."),
+        ] {
+            assert_eq!(
+                cleaner.clean_text(input),
+                if threshold == 0.0 { digits } else { input }
+            );
+        }
+    }
 }
 
 #[test]
@@ -426,6 +473,7 @@ fn parameter_counts_use_compact_magnitude_suffixes() {
     assert_clean_cases(
         CleaningProfile::Safe,
         &[
+            ("The thousandth parameter.", "The 1000th parameter."),
             (
                 "Use a hundred million up to one billion parameters.",
                 "Use 100M up to 1B parameters.",
@@ -845,6 +893,12 @@ fn text2num_preserves_second_when_it_is_a_time_unit() {
             // threshold of 4, so it is left as-is.
             ("Open the second file.", "Open the second file."),
             ("This is the twenty-second file.", "This is the 22nd file."),
+            ("A thirty second timeout.", "A 30 second timeout."),
+            ("A sixty second clip.", "A 60 second clip."),
+            ("A hundred twenty second timeout.", "A 120 second timeout."),
+            ("RTX fifty ninety second vert.", "RTX 50 90 second vert."),
+            ("The twenty second of May.", "The 22nd of May."),
+            ("May twenty second.", "May 22nd."),
         ],
     );
 }
@@ -865,6 +919,14 @@ fn version_components_use_text2num_without_a_custom_number_parser() {
                 "Ubuntu 22.04.3.",
             ),
             ("Python three point one two point four.", "Python 3.12.4."),
+            (
+                "One nine two point one six eight point one point one.",
+                "192.168.1.1.",
+            ),
+            (
+                "One two seven point zero point zero point one.",
+                "127.0.0.1.",
+            ),
             (
                 "Use one hundred ninety two point one hundred sixty eight point zero point one.",
                 "Use 192.168.0.1.",

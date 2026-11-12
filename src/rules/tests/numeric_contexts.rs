@@ -34,6 +34,8 @@ fn plural_fractions_remain_worded_before_any_noun() {
             "Three quarters of a dollar.",
             "Three-quarters of a dollar.",
             "Five hundredths of a million dollars.",
+            "Two fifths.",
+            "Nine tenths done.",
         ] {
             assert_eq!(cleaner.clean_text(input), input, "threshold {threshold}");
         }
@@ -117,6 +119,11 @@ fn ordinal_before_second_does_not_convert_the_time_unit() {
             "The 22nd file."
         );
     }
+    let input = "Wait thirty second timeout. ".repeat(512);
+    assert_eq!(
+        normalize_spoken_numbers(&input, DEFAULT_NUMBER_THRESHOLD).text,
+        "Wait 30 second timeout. ".repeat(512)
+    );
 }
 
 #[test]
@@ -165,6 +172,11 @@ fn identifier_stems_join_only_numbers_already_rendered_as_digits() {
             ("C one more time.", "C one more time."),
             ("D three times.", "D three times."),
             ("Gen Z two years.", "Gen Z two years."),
+            ("SM eight nine.", "SM 8 9."),
+            ("Arc B five eighty.", "Arc B 5 80."),
+            ("R five nine five.", "R 5 9 5."),
+            ("P 99.9 five.", "P 99.9 5."),
+            ("SM 8.2 nine.", "SM 8.2 9."),
         ],
     );
 }
@@ -222,7 +234,7 @@ fn adjacent_spoken_runs_preserve_every_word_when_any_count_is_below_threshold() 
             ("Use three twenty billion.", "Use 3 20 billion."),
             ("Use three fifty K.", "Use 3 50K."),
             ("Use one twenty eight K.", "Use 1 28K."),
-            ("SM one twenty.", "SM1 20."),
+            ("SM one twenty.", "SM 1 20."),
             ("Use two thirty.", "Use 2 30."),
             ("Use sixteen three eighty four.", "Use 16 3 84."),
         ] {

@@ -10,6 +10,8 @@ fn numeric_prefixes_accept_multiword_components() {
             ("Version 2 point twenty five.", "Version 2.25."),
             ("Use V 2.4.6.", "Use v2.4.6."),
             ("Use D 2.4.6.", "Use D2.4.6."),
+            ("P ninety nine point nine.", "P99.9."),
+            ("SM ninety nine point nine.", "SM99.9."),
             ("Version 2 point zero five.", "Version 2.05."),
             ("Version 2 point one two point four.", "Version 2.12.4."),
             ("Version 2 point twenty-five.", "Version 2.25."),
@@ -60,4 +62,11 @@ fn version_components_do_not_absorb_a_following_size() {
             ("About 1 5 M parameters.", "About 1 5M parameters."),
         ],
     );
+}
+
+#[test]
+fn spoken_versions_respect_the_identifier_control() {
+    let disabled = HashSet::from(["numeric-identifiers".to_string()]);
+    let cleaner = build_cleaner_for_test(CleaningProfile::Safe, false, &disabled, &[]);
+    assert_eq!(cleaner.clean_text("P ninety nine point nine."), "P 99.9.");
 }

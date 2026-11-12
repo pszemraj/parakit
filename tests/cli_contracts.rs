@@ -270,14 +270,38 @@ fn quiet_path_commands_still_report_resolution_and_parse_errors() {
 
 #[test]
 fn quiet_rules_list_still_validates_disabled_rule_names() {
-    let output = isolated_parakit_with_empty_config("quiet-rules-validation")
-        .args(["--quiet", "rules", "list", "--disable-rule", "typo"])
-        .output()
-        .expect("parakit should run");
+    for (name, expected) in [
+        ("typo", "no rule named 'typo'"),
+        ("spoken-version-numbers", "renamed to 'spoken-versions'"),
+        ("numeric-point-suffixes", "renamed to 'spoken-versions'"),
+        ("compact-version-prefix", "renamed to 'spoken-versions'"),
+        (
+            "compact-short-identifier",
+            "renamed to 'numeric-identifiers'",
+        ),
+        ("compact-parameter-counts", "renamed to 'size-suffixes'"),
+        ("numeric-magnitude-suffixes", "renamed to 'size-suffixes'"),
+        (
+            "numeric-identifier-groups",
+            "was removed; digit groups remain separate",
+        ),
+    ] {
+        let output = isolated_parakit_with_empty_config("quiet-rules-validation")
+            .args(["--quiet", "rules", "list", "--disable-rule", name])
+            .output()
+            .expect("parakit should run");
 
-    assert!(!output.status.success());
-    assert!(output.stdout.is_empty());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("no rule named 'typo'"));
+        assert!(!output.status.success(), "{name}");
+        assert!(output.stdout.is_empty(), "{name}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains(name) && stderr.contains(expected),
+            "{stderr}"
+        );
+        if name != "typo" {
+            assert!(stderr.contains("docs/cleaning-rules.md"), "{stderr}");
+        }
+    }
 }
 
 #[test]
