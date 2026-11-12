@@ -64,7 +64,7 @@ For `daemon.model_idle_minutes` behavior, see [idle model offload](running.md#id
 
 ## Preserving Repeated Words
 
-Add literal words or phrases to the built-in repetition exceptions:
+Add literal words or phrases to the built-in repetition exceptions. For example, `bang` extends the [supported spoken-symbol words](cleaning-rules.md#casual-forms-and-stutters), and `tomato` preserves deliberate `tomato tomato` dictation:
 
 ```toml
 [cleaning]

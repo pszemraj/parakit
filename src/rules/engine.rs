@@ -286,25 +286,6 @@ pub struct Cleaner {
 }
 
 impl Cleaner {
-    /// Set additional literal word/phrase exceptions for `stutter-safe-words`.
-    ///
-    /// # Returns
-    /// Success after replacing the extra exceptions and refreshing the rule-set ID.
-    ///
-    /// # Errors
-    /// Returns an error for an empty or non-word exception entry.
-    pub fn set_repetition_exceptions(&mut self, entries: &[String]) -> Result<()> {
-        let compiled = super::stutters::compile_repetition_exceptions(entries)?;
-        for rule in &mut self.rules {
-            if let CompiledTransform::RepeatedWords { exceptions } = &mut rule.transform {
-                *exceptions = compiled;
-                break;
-            }
-        }
-        self.ruleset_id = compute_ruleset_id(self.profile, self.drop_trailing_period, &self.rules);
-        Ok(())
-    }
-
     /// Build a cleaner after rule metadata and numeric inputs have already
     /// been validated by the public rules facade.
     ///
@@ -313,6 +294,7 @@ impl Cleaner {
     /// * `profile` - Selected cleanup behavior tier.
     /// * `drop_trailing_period` - Whether terminal periods are removed.
     /// * `number_threshold` - Optional isolated-number conversion threshold.
+    /// * `repetition_exceptions` - Validated literal repeated-word exceptions.
     /// * `disabled` - Validated names excluded from the pipeline.
     /// * `user_rules` - Validated user-defined rules.
     ///
@@ -327,6 +309,7 @@ impl Cleaner {
         profile: CleaningProfile,
         drop_trailing_period: bool,
         number_threshold: Option<f64>,
+        repetition_exceptions: &[String],
         disabled: &HashSet<String>,
         user_rules: &[UserRule],
     ) -> Result<Self> {
@@ -334,6 +317,7 @@ impl Cleaner {
             profile,
             drop_trailing_period,
             number_threshold,
+            repetition_exceptions,
             disabled,
             user_rules,
             FANCY_BACKTRACK_LIMIT,
@@ -375,6 +359,7 @@ impl Cleaner {
             profile,
             drop_trailing_period,
             None,
+            &[],
             disabled,
             user_rules,
             backtrack_limit,
@@ -385,6 +370,7 @@ impl Cleaner {
         profile: CleaningProfile,
         drop_trailing_period: bool,
         number_threshold: Option<f64>,
+        repetition_exceptions: &[String],
         disabled: &HashSet<String>,
         user_rules: &[UserRule],
         backtrack_limit: usize,
@@ -415,6 +401,7 @@ impl Cleaner {
                 def,
                 backtrack_limit,
                 number_threshold,
+                repetition_exceptions,
             )?);
         }
         push_user_rules(&mut rules, user_rules, RulePosition::Standard, disabled)?;
@@ -423,6 +410,7 @@ impl Cleaner {
                 def,
                 backtrack_limit,
                 number_threshold,
+                repetition_exceptions,
             )?);
         }
         push_user_rules(&mut rules, user_rules, RulePosition::Last, disabled)?;
@@ -578,6 +566,7 @@ fn compile_default_rule(
     def: &'static Rule,
     backtrack_limit: usize,
     number_threshold: f64,
+    repetition_exceptions: &[String],
 ) -> Result<CompiledRule> {
     let transform = match def.kind {
         RuleKind::Regex {
@@ -606,7 +595,7 @@ fn compile_default_rule(
             threshold: number_threshold,
         },
         RuleKind::RepeatedWords => CompiledTransform::RepeatedWords {
-            exceptions: Vec::new(),
+            exceptions: super::stutters::compile_repetition_exceptions(repetition_exceptions)?,
         },
     };
     Ok(CompiledRule {

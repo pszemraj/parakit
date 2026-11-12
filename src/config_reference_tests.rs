@@ -273,6 +273,7 @@ fn effective_snapshot(config: &ConfigFile) -> BTreeMap<&'static str, String> {
         config.cleaning.effective_profile(),
         !config.cleaning.keep_trailing_period(),
         config.cleaning.number_threshold,
+        &config.cleaning.repetition_exceptions,
         &config.cleaning.merged_disabled_rules(&[]),
         &config.rules.user,
     )

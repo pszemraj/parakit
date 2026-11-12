@@ -4,7 +4,7 @@ use parakit::rules::{build_cleaner, CleaningProfile};
 
 #[test]
 fn public_builder_runs_the_shipped_default_pipeline() {
-    let cleaner = build_cleaner(false, CleaningProfile::Safe, true, None, &[], &[])
+    let cleaner = build_cleaner(false, CleaningProfile::Safe, true, None, &[], &[], &[])
         .expect("cleaner should compile")
         .expect("cleaning should be enabled");
 
@@ -159,7 +159,7 @@ fn plural_magnitudes_preserve_words_in_both_profiles_and_thresholds() {
     ];
     for profile in [CleaningProfile::Safe, CleaningProfile::Aggressive] {
         for threshold in [None, Some(5.0)] {
-            let cleaner = build_cleaner(false, profile, false, threshold, &[], &[])
+            let cleaner = build_cleaner(false, profile, false, threshold, &[], &[], &[])
                 .unwrap()
                 .unwrap();
             for (input, expected) in cases {
@@ -170,7 +170,7 @@ fn plural_magnitudes_preserve_words_in_both_profiles_and_thresholds() {
                 );
             }
         }
-        let all_numbers = build_cleaner(false, profile, false, Some(0.0), &[], &[])
+        let all_numbers = build_cleaner(false, profile, false, Some(0.0), &[], &[], &[])
             .unwrap()
             .unwrap();
         for (input, expected) in [
@@ -372,7 +372,7 @@ fn ambiguous_quantities_remain_words_across_profiles_and_thresholds() {
     ];
     for profile in [CleaningProfile::Safe, CleaningProfile::Aggressive] {
         for threshold in [0.0, 4.0, 5.0] {
-            let cleaner = build_cleaner(false, profile, false, Some(threshold), &[], &[])
+            let cleaner = build_cleaner(false, profile, false, Some(threshold), &[], &[], &[])
                 .unwrap()
                 .unwrap();
             for (input, expected) in cases {
@@ -394,6 +394,7 @@ fn disabling_spoken_numbers_preserves_both_plural_and_exact_quantities() {
             profile,
             false,
             Some(0.0),
+            &[],
             &["spoken-numbers".into()],
             &[],
         )

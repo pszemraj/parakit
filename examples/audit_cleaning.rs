@@ -108,6 +108,7 @@ fn run() -> Result<()> {
         cli.profile,
         !cli.keep_trailing_period,
         cli.number_threshold,
+        &[],
         &cli.disable_rule,
         &[],
     )?

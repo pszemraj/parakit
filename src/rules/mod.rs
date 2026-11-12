@@ -33,7 +33,7 @@
 //! `cleaning.disabled_rules` in `config.toml`; pass `--no-cleaning` to skip
 //! everything. `<name>` may name either a built-in or a user rule.
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fmt;
@@ -149,9 +149,9 @@ pub struct CleanResult {
 
 /// Build the cleaner selected by CLI/runtime options.
 ///
-/// Rule-name, user-rule metadata, and threshold validation always run before
+/// Rule-name, user-rule, repetition-exception, and threshold validation run before
 /// the `no_cleaning` check. Config loading separately calls
-/// [`validate_configured_rules`] so enabled user regexes are also checked
+/// [`validate_configured_rules`] so user regexes are also checked
 /// eagerly without compiling the built-in pipeline.
 ///
 /// # Arguments
@@ -162,6 +162,8 @@ pub struct CleanResult {
 /// * `drop_trailing_period` - Enable the messaging-style terminal-period
 ///   removal rule.
 /// * `number_threshold` - Value at or above which isolated single-digit cardinals and ordinals become digits. `None` resolves to [`DEFAULT_NUMBER_THRESHOLD`]; `Some(0.0)` converts every isolated single digit and ordinal.
+/// * `repetition_exceptions` - Additional literal words/phrases preserved by
+///   repeated-word cleaning.
 /// * `disabled_rules` - Rule names supplied by repeated `--disable-rule`
 ///   and/or `cleaning.disabled_rules` in `config.toml`. May name a built-in
 ///   or a user rule.
@@ -176,17 +178,24 @@ pub struct CleanResult {
 /// Returns an error for a negative or non-finite `number_threshold`, an unknown
 /// disabled rule name, an invalid built-in pattern, an empty or non-canonical
 /// user rule name, an empty user rule pattern, a user rule name colliding with
-/// a built-in name, a duplicate user rule name, or an invalid user rule regex.
+/// a built-in name, a duplicate user rule name, an invalid user rule regex,
+/// or an empty or non-word repetition exception.
 pub fn build_cleaner(
     no_cleaning: bool,
     profile: CleaningProfile,
     drop_trailing_period: bool,
     number_threshold: Option<f64>,
+    repetition_exceptions: &[String],
     disabled_rules: &[String],
     user_rules: &[UserRule],
 ) -> Result<Option<Cleaner>> {
     if no_cleaning {
-        validate_rule_inputs(number_threshold, disabled_rules, user_rules)?;
+        validate_rule_inputs(
+            number_threshold,
+            repetition_exceptions,
+            disabled_rules,
+            user_rules,
+        )?;
         return Ok(None);
     }
 
@@ -194,6 +203,7 @@ pub fn build_cleaner(
         profile,
         drop_trailing_period,
         number_threshold,
+        repetition_exceptions,
         disabled_rules,
         user_rules,
     )
@@ -221,37 +231,35 @@ pub fn build_enabled_cleaner(
     profile: CleaningProfile,
     drop_trailing_period: bool,
     number_threshold: Option<f64>,
+    repetition_exceptions: &[String],
     disabled_rules: &[String],
     user_rules: &[UserRule],
 ) -> Result<Cleaner> {
-    let disabled = validate_rule_inputs(number_threshold, disabled_rules, user_rules)?;
+    let disabled = validate_rule_inputs(
+        number_threshold,
+        repetition_exceptions,
+        disabled_rules,
+        user_rules,
+    )?;
     engine::Cleaner::new_prevalidated(
         profile,
         drop_trailing_period,
         number_threshold,
+        repetition_exceptions,
         &disabled,
         user_rules,
     )
 }
 
-/// Validate extra literal word/phrase exceptions for repeated-word cleaning.
-///
-/// # Returns
-/// Success when every entry contains whole words separated by whitespace.
-///
-/// # Errors
-/// Returns an error for an empty entry, non-word text, or an invalid matcher.
-pub fn validate_repetition_exceptions(entries: &[String]) -> Result<()> {
-    stutters::compile_repetition_exceptions(entries).map(|_| ())
-}
-
 /// Validate config-backed rule inputs without compiling the built-in pipeline.
 ///
-/// User regexes are compiled so a broken config still fails at load time.
+/// User regexes and repetition exceptions are compiled so a broken config
+/// still fails at load time.
 ///
 /// # Arguments
 ///
 /// * `number_threshold` - Optional isolated-number conversion threshold.
+/// * `repetition_exceptions` - Additional literal repeated-word exceptions.
 /// * `disabled_rules` - Built-in or user rule names to disable.
 /// * `user_rules` - User-defined regex rules.
 ///
@@ -264,15 +272,22 @@ pub fn validate_repetition_exceptions(entries: &[String]) -> Result<()> {
 /// See [`build_cleaner`].
 pub fn validate_configured_rules(
     number_threshold: Option<f64>,
+    repetition_exceptions: &[String],
     disabled_rules: &[String],
     user_rules: &[UserRule],
 ) -> Result<()> {
-    validate_rule_inputs(number_threshold, disabled_rules, user_rules)?;
+    validate_rule_inputs(
+        number_threshold,
+        repetition_exceptions,
+        disabled_rules,
+        user_rules,
+    )?;
     Ok(())
 }
 
 fn validate_rule_inputs(
     number_threshold: Option<f64>,
+    repetition_exceptions: &[String],
     disabled_rules: &[String],
     user_rules: &[UserRule],
 ) -> Result<HashSet<String>> {
@@ -280,6 +295,8 @@ fn validate_rule_inputs(
         assert_rule_name_exists(name, user_rules)?;
     }
     engine::validate_number_threshold(number_threshold)?;
+    stutters::compile_repetition_exceptions(repetition_exceptions)
+        .context("cleaning.repetition_exceptions")?;
     user::validate_user_rules(user_rules)?;
     for rule in user_rules {
         user::compile_user_regex(rule)?;
@@ -352,7 +369,7 @@ pub fn print_rule_list(
     user_rules: &[UserRule],
     quiet: bool,
 ) -> Result<()> {
-    validate_rule_inputs(None, disabled_rules, user_rules)?;
+    validate_rule_inputs(None, &[], disabled_rules, user_rules)?;
     if quiet {
         return Ok(());
     }

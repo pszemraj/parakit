@@ -202,8 +202,7 @@ fn configured_repetition_exceptions_preserve_words_and_literal_phrases() {
     ]
     .map(str::to_string);
     for profile in [CleaningProfile::Safe, CleaningProfile::Aggressive] {
-        let mut cleaner = cleaner_keep_period(profile);
-        cleaner.set_repetition_exceptions(&entries).unwrap();
+        let cleaner = cleaner_with_repetition_exceptions(profile, &entries);
         for input in [
             "Something something, selling tools.",
             "Hee hee, do you get it?",
@@ -245,30 +244,47 @@ fn configured_repetition_exceptions_preserve_words_and_literal_phrases() {
 
 #[test]
 fn repetition_exceptions_have_canonical_identity_and_respect_disabled_rules() {
-    let mut cleaner = cleaner_keep_period(CleaningProfile::Safe);
+    let cleaner = cleaner_keep_period(CleaningProfile::Safe);
     let baseline = cleaner.ruleset_id().to_string();
-    cleaner
-        .set_repetition_exceptions(&["BANG".into(), "chinny  chin\tchin".into(), "bang".into()])
-        .unwrap();
-    let configured = cleaner.ruleset_id().to_string();
-    assert_ne!(baseline, configured);
-    cleaner
-        .set_repetition_exceptions(&["chinny chin chin".into(), "bang".into()])
-        .unwrap();
-    assert_eq!(cleaner.ruleset_id(), configured);
-    cleaner.set_repetition_exceptions(&[]).unwrap();
-    assert_eq!(cleaner.ruleset_id(), baseline);
+    let configured = cleaner_with_repetition_exceptions(
+        CleaningProfile::Safe,
+        &["BANG".into(), "chinny  chin\tchin".into(), "bang".into()],
+    );
+    assert_ne!(baseline, configured.ruleset_id());
+    let canonical = cleaner_with_repetition_exceptions(
+        CleaningProfile::Safe,
+        &["chinny chin chin".into(), "bang".into()],
+    );
+    assert_eq!(canonical.ruleset_id(), configured.ruleset_id());
+    assert_eq!(
+        canonical.clean_text("Bang bang chinny chin chin where where."),
+        configured.clean_text("Bang bang chinny chin chin where where.")
+    );
+    let empty = cleaner_with_repetition_exceptions(CleaningProfile::Safe, &[]);
+    assert_eq!(empty.ruleset_id(), baseline);
     assert_eq!(cleaner.clean_text("Bang bang."), "Bang.");
 
-    let disabled = HashSet::from(["stutter-safe-words".to_string()]);
-    let mut cleaner = build_cleaner_for_test(CleaningProfile::Safe, false, &disabled, &[]);
-    let disabled_id = cleaner.ruleset_id().to_string();
-    cleaner.set_repetition_exceptions(&["bang".into()]).unwrap();
-    assert_eq!(cleaner.ruleset_id(), disabled_id);
+    let disabled = ["stutter-safe-words".to_string()];
+    let disabled_cleaner =
+        build_enabled_cleaner(CleaningProfile::Safe, false, None, &[], &disabled, &[]).unwrap();
+    let cleaner = build_enabled_cleaner(
+        CleaningProfile::Safe,
+        false,
+        None,
+        &["bang".into()],
+        &disabled,
+        &[],
+    )
+    .unwrap();
+    assert_eq!(cleaner.ruleset_id(), disabled_cleaner.ruleset_id());
     assert_eq!(
         cleaner.clean_text("Bang bang where where."),
         "Bang bang where where."
     );
+}
+
+#[test]
+fn builders_validate_repetition_exceptions_even_when_cleaning_or_the_rule_is_disabled() {
     for invalid in [
         "",
         " ",
@@ -277,25 +293,38 @@ fn repetition_exceptions_have_canonical_identity_and_respect_disabled_rules() {
         "word\nword",
         "word\u{a0}word",
     ] {
-        assert!(
-            super::super::validate_repetition_exceptions(&[invalid.into()]).is_err(),
-            "{invalid:?}"
-        );
-        assert!(
-            cleaner
-                .set_repetition_exceptions(&[invalid.into()])
-                .is_err(),
-            "{invalid:?}"
-        );
+        let exceptions = [invalid.into()];
+        for disabled in [vec![], vec!["stutter-safe-words".into()]] {
+            assert!(
+                validate_configured_rules(None, &exceptions, &disabled, &[]).is_err(),
+                "{invalid:?}"
+            );
+            for no_cleaning in [false, true] {
+                let err = build_cleaner(
+                    no_cleaning,
+                    CleaningProfile::Safe,
+                    false,
+                    None,
+                    &exceptions,
+                    &disabled,
+                    &[],
+                )
+                .unwrap_err();
+                assert!(
+                    format!("{err:#}").contains("cleaning.repetition_exceptions"),
+                    "{invalid:?}: {err:#}"
+                );
+            }
+        }
     }
 }
 
 #[test]
 fn repetition_exceptions_keep_contractions_whole_and_do_not_match_substrings() {
-    let mut cleaner = cleaner_keep_period(CleaningProfile::Safe);
-    cleaner
-        .set_repetition_exceptions(&["I'm".into(), "café".into(), "cat".into()])
-        .unwrap();
+    let cleaner = cleaner_with_repetition_exceptions(
+        CleaningProfile::Safe,
+        &["I'm".into(), "café".into(), "cat".into()],
+    );
     assert_eq!(
         cleaner.clean_text("I'm I'm visiting café CAFÉ."),
         "I'm I'm visiting café CAFÉ."
@@ -304,17 +333,27 @@ fn repetition_exceptions_keep_contractions_whole_and_do_not_match_substrings() {
         cleaner.clean_text("Cat cat and catalog catalog."),
         "Cat cat and catalog."
     );
-    cleaner
-        .set_repetition_exceptions(&["alpha beta".into(), "beta beta gamma".into()])
-        .unwrap();
+    let cleaner = cleaner_with_repetition_exceptions(
+        CleaningProfile::Safe,
+        &["alpha beta".into(), "beta beta gamma".into()],
+    );
     assert_eq!(
         cleaner.clean_text("Alpha beta beta gamma."),
         "Alpha beta beta gamma."
     );
-    cleaner
-        .set_repetition_exceptions(&["chinny chin chin".into(), "alpha alpha beta".into()])
-        .unwrap();
+    let cleaner = cleaner_with_repetition_exceptions(
+        CleaningProfile::Safe,
+        &["chinny chin chin".into(), "alpha alpha beta".into()],
+    );
     assert_eq!(cleaner.clean_text("O'Chinny chin chin."), "O'Chinny chin.");
     assert_eq!(cleaner.clean_text("O’Chinny chin chin."), "O’Chinny chin.");
     assert_eq!(cleaner.clean_text("Alpha alpha beta's."), "Alpha beta's.");
+}
+
+fn cleaner_with_repetition_exceptions(
+    profile: CleaningProfile,
+    repetition_exceptions: &[String],
+) -> Cleaner {
+    build_enabled_cleaner(profile, false, None, repetition_exceptions, &[], &[])
+        .expect("repetition exceptions must compile")
 }

@@ -47,6 +47,7 @@ fn build_cleaner_for_test_with_threshold(
         profile,
         drop_trailing_period,
         number_threshold,
+        &[],
         &disabled,
         user_rules,
     )

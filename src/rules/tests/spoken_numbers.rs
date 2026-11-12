@@ -789,8 +789,8 @@ fn unset_and_explicit_zero_number_thresholds_now_produce_different_ruleset_ids()
 #[test]
 fn invalid_number_thresholds_are_rejected_even_when_cleaning_is_disabled() {
     for threshold in [Some(-1.0), Some(f64::NAN), Some(f64::INFINITY)] {
-        let err =
-            build_cleaner(true, CleaningProfile::Safe, false, threshold, &[], &[]).unwrap_err();
+        let err = build_cleaner(true, CleaningProfile::Safe, false, threshold, &[], &[], &[])
+            .unwrap_err();
         assert!(
             err.to_string()
                 .contains("number threshold must be a finite value"),
