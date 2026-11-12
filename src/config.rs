@@ -230,7 +230,7 @@ pub(crate) struct CleaningConfig {
     /// Only isolated single-digit cardinals ("zero" to "nine") and isolated ordinals are compared with it: below it they stay exactly as the ASR model produced them, and at or above it they become digits.
     /// Cardinals of 10 or more always convert.
     /// Unset resolves to the built-in default of 4, so isolated zero through three stay as produced.
-    /// `0` converts every isolated single-digit cardinal and ordinal, while adjacent small-number runs, plural magnitudes, fractions, and the time unit "second" still stay as words.
+    /// `0` converts every isolated single-digit cardinal and ordinal, while unmarked adjacent small-number runs, plural magnitudes, fractions, and the time unit "second" still stay as words.
     pub(crate) number_threshold: Option<f64>,
     /// Rule names to disable. Merged with CLI `--disable-rule` flags.
     pub(crate) disabled_rules: Vec<String>,
@@ -415,7 +415,7 @@ pub(crate) const TEMPLATE: &str = r#"# parakit config.toml
 # Leave unset to use the built-in default of 4, which leaves isolated zero through three as produced.
 # For example, 5 also leaves isolated four as produced and converts five and up.
 # Set to 0 to convert every isolated single-digit number and ordinal.
-# Even at 0, adjacent small-number runs ("one two three"), plural magnitudes, fractions, and the time unit "second" stay as words.
+# Even at 0, unmarked adjacent small-number runs ("one two three"), plural magnitudes, fractions, and the time unit "second" stay as words.
 # number_threshold = 5
 
 # Rule names to disable.

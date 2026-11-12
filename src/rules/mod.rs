@@ -50,6 +50,7 @@ macro_rules! regex_static {
 
 mod defaults;
 mod engine;
+mod number_context;
 mod numbers;
 mod passes;
 mod stutters;
@@ -62,7 +63,7 @@ pub use user::{RulePosition, UserRule};
 
 /// Schema/behavior version recorded in transcription logs.
 /// Keep revisions distinct even when their package version is unchanged.
-pub const CLEANER_VERSION: u32 = 33;
+pub const CLEANER_VERSION: u32 = 34;
 
 /// Default minimum isolated number converted to digits when
 /// `cleaning.number_threshold` is left unset.

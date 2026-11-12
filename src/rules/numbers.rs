@@ -9,12 +9,13 @@ use text2num::{
 
 use super::engine::TransformResult;
 
+/// Token text and byte spans shared with contextual numeric formatting.
 #[derive(Debug)]
-struct NumberToken<'a> {
-    text: &'a str,
-    lowercase: String,
-    start: usize,
-    end: usize,
+pub(super) struct NumberToken<'a> {
+    pub(super) text: &'a str,
+    pub(super) lowercase: String,
+    pub(super) start: usize,
+    pub(super) end: usize,
 }
 
 impl Token for &NumberToken<'_> {
@@ -60,7 +61,14 @@ pub(crate) fn normalize_spoken_numbers(input: &str, threshold: f64) -> Transform
     // absorb a count from the previous paragraph.
     let text = input
         .split('\n')
-        .map(|line| render_signed_numbers(replace_numbers_in_segments(line, &language, threshold)))
+        .map(|line| {
+            let contextual = super::number_context::normalize_calendar(line, &language);
+            render_signed_numbers(replace_numbers_in_segments(
+                &contextual,
+                &language,
+                threshold,
+            ))
+        })
         .collect::<Vec<_>>()
         .join("\n");
     let matches = usize::from(text != input);
@@ -176,7 +184,8 @@ fn replace_numbers_preserving_literals(input: &str, language: &Language, thresho
             r"(?:and[ \t]+)?(?:a[ \t]+)?(?:half|quarter)(?:[ \t]+of)?(?:[ \t]+a)?[ \t]+(?:hundred|thousand|million|billion|trillion)|",
             r"(?:halves|quarters)(?:[ \t]+of)?(?:[ \t]+a)?[ \t]+(?:hundred|thousand|million|billion|trillion)|",
             r"(?:(?:a[ \t]+)?few|several|(?:a[ \t]+)?couple(?:[ \t]+of)?)[ \t]+(?:hundred|thousand|million|billion|trillion)|",
-            r"(?P<denominator>[a-z]+(?:-[a-z]+)*)[ \t]+of(?:[ \t]+a)?[ \t]+(?:hundred|thousand|million|billion|trillion)|",
+            r"(?:half|halves|quarter|quarters)[ \t]+of\b|",
+            r"(?P<denominator>[a-z]+(?:-[a-z]+)*)(?:[ \t]+of(?:[ \t]+a)?[ \t]+(?:hundred|thousand|million|billion|trillion)|(?P<general_fraction>[ \t]+of)\b)|",
             r"second|tens|hundreds|thousands|millions|billions|trillions)\b",
         ),
         "protected number-word regex must compile"
@@ -202,6 +211,7 @@ fn replace_numbers_preserving_literals(input: &str, language: &Language, thresho
                 // text2num recognizes singular ordinals. Classify a plural
                 // denominator through its singular form while preserving the
                 // original text and byte positions for the literal span.
+                let mut plural = false;
                 if let Some(last) = tokens.last_mut() {
                     if is_plural_ordinal(
                         &last.lowercase,
@@ -209,6 +219,7 @@ fn replace_numbers_preserving_literals(input: &str, language: &Language, thresho
                         previous_re,
                         language,
                     ) {
+                        plural = true;
                         last.lowercase.pop();
                     }
                 }
@@ -240,6 +251,24 @@ fn replace_numbers_preserving_literals(input: &str, language: &Language, thresho
                         None,
                     ));
                 };
+                if captures.name("general_fraction").is_some() && !plural {
+                    if denominator.as_str().eq_ignore_ascii_case("second")
+                        && second_is_time_unit(
+                            &input[..denominator.start()],
+                            &input[denominator.end()..],
+                            previous_re,
+                            language,
+                        )
+                    {
+                        return Some((denominator, false, None));
+                    }
+                    let numerator = tokens[ordinal.start].lowercase == "one"
+                        || ordinal.start > 0
+                            && matches!(tokens[ordinal.start - 1].lowercase.as_str(), "a" | "one");
+                    if !numerator {
+                        return None;
+                    }
+                }
                 let mut start = ordinal.start;
                 // Include only the adjacent fraction connectors; text2num
                 // remains responsible for every word inside the denominator.
@@ -256,7 +285,12 @@ fn replace_numbers_preserving_literals(input: &str, language: &Language, thresho
                 ordinal_start = Some(tokens[start].start.min(found.start()));
             }
             if found.as_str().eq_ignore_ascii_case("second")
-                && !second_is_time_unit(&input[..found.start()], previous_re, language)
+                && !second_is_time_unit(
+                    &input[..found.start()],
+                    &input[found.end()..],
+                    previous_re,
+                    language,
+                )
             {
                 return None;
             }
@@ -437,7 +471,7 @@ fn is_plural_ordinal(word: &str, prefix: &str, previous_re: &Regex, language: &L
     let Some(singular) = word.strip_suffix('s') else {
         return false;
     };
-    if singular == "second" && second_is_time_unit(prefix, previous_re, language) {
+    if singular == "second" && second_is_time_unit(prefix, "", previous_re, language) {
         return false;
     }
     let tokens = number_tokens(singular);
@@ -446,7 +480,12 @@ fn is_plural_ordinal(word: &str, prefix: &str, previous_re: &Regex, language: &L
         .is_some_and(|number| number.is_ordinal && number.end == tokens.len())
 }
 
-fn number_tokens(input: &str) -> Vec<NumberToken<'_>> {
+/// # Returns
+/// Number-parser tokens with their original byte boundaries.
+///
+/// # Panics
+/// Panics only if the built-in token regex cannot compile.
+pub(super) fn number_tokens(input: &str) -> Vec<NumberToken<'_>> {
     let token_re = regex_static!(r"[A-Za-z0-9]+|[^\s]", "number token regex");
 
     token_re
@@ -476,6 +515,8 @@ fn replace_numbers_with_hybrid_magnitudes(
     language: &Language,
     threshold: f64,
 ) -> String {
+    let contextual = super::number_context::normalize_identifiers(input, language);
+    let input = contextual.as_ref();
     // Text that already holds the marker cannot be marked; a stranded scale
     // there keeps its wording instead.
     if input.contains(NUMBER_BREAK) {
@@ -621,7 +662,7 @@ fn is_one_number(tokens: &[NumberToken<'_>], language: &Language) -> bool {
 
 fn render_hybrid_magnitudes(input: &str, language: &Language, threshold: f64) -> String {
     let numeric_re = regex_static!(
-        r"(?i)\b\d+(?:\.\d+)?[ \t]+(?:million|billion)\b",
+        r"(?i)\b\d+(?:\.\d+)?[ \t]+(?:hundred|thousand|million|billion)\b",
         "numeric magnitude regex"
     );
 
@@ -632,8 +673,8 @@ fn render_hybrid_magnitudes(input: &str, language: &Language, threshold: f64) ->
         .map(|found| (found.start(), found.end(), found.as_str().to_string()))
         .collect();
 
-    // Adjacent spoken small integers can name a year, time, phone number, or
-    // separate values. Preserve the entire run rather than interpreting it.
+    // Contextual years and identifiers have already been rendered. Other
+    // adjacent small counts can name times, phone numbers, or separate values.
     // Punctuation, explicit scales, decimals, and existing digits are boundaries.
     let mut index = 0;
     while index + 1 < occurrences.len() {
@@ -800,7 +841,12 @@ fn magnitude_scale(token: &str) -> Option<(&'static str, f64)> {
     }
 }
 
-fn second_is_time_unit(prefix: &str, previous_re: &Regex, language: &Language) -> bool {
+fn second_is_time_unit(
+    prefix: &str,
+    suffix: &str,
+    previous_re: &Regex,
+    language: &Language,
+) -> bool {
     let Some(captures) = previous_re.captures(prefix) else {
         return false;
     };
@@ -813,14 +859,46 @@ fn second_is_time_unit(prefix: &str, previous_re: &Regex, language: &Language) -
         return text2digits(&candidate, language).is_err();
     }
 
-    matches!(
+    if matches!(
         previous.to_ascii_lowercase().as_str(),
         "a" | "per" | "every" | "each"
     ) || previous.chars().all(|character| character.is_ascii_digit())
-        || text2digits(previous, language).is_ok_and(|rendered| {
-            !rendered.ends_with("st")
-                && !rendered.ends_with("nd")
-                && !rendered.ends_with("rd")
-                && !rendered.ends_with("th")
+    {
+        return true;
+    }
+    let Ok(rendered) = text2digits(previous, language) else {
+        return false;
+    };
+    if !["st", "nd", "rd", "th"]
+        .iter()
+        .any(|ending| rendered.ends_with(ending))
+    {
+        return true;
+    }
+
+    // Ordinals can also form lists ("first second third"). Treat the
+    // following word as a time unit only with an article or "of" context,
+    // and leave an immediately continuing ordinal list to the parser.
+    let following = number_tokens(suffix);
+    let next = following
+        .iter()
+        .find(|token| token.text != "," && token.lowercase != "and");
+    if next.is_some_and(|token| {
+        text2digits(token.text, language).is_ok_and(|value| {
+            ["st", "nd", "rd", "th"]
+                .iter()
+                .any(|ending| value.ends_with(ending))
         })
+    }) {
+        return false;
+    }
+    let tokens = number_tokens(prefix);
+    let numbers = find_numbers(tokens.iter(), language, 0.0);
+    let ordinal = numbers
+        .last()
+        .filter(|number| number.is_ordinal && number.end == tokens.len());
+    ordinal.is_some_and(|number| number.start > 0 && tokens[number.start - 1].lowercase == "the")
+        || following
+            .first()
+            .is_some_and(|token| token.lowercase == "of")
 }

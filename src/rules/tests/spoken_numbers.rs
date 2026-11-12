@@ -74,11 +74,11 @@ fn text2num_renders_ordinals_and_spoken_years() {
             ),
             (
                 "The release is from twenty twenty two.",
-                "The release is from twenty twenty two.",
+                "The release is from 2022.",
             ),
             (
                 "It happened in nineteen ninety-nine.",
-                "It happened in nineteen ninety-nine.",
+                "It happened in 1999.",
             ),
             (
                 "Use twenty, twenty two, and ninety nine.",
@@ -377,7 +377,7 @@ fn scale_coefficient_splits_leave_valid_compounds_alone() {
             "Windows ten point zero point nineteen thousand forty five.",
             "Windows 10.0.19045.",
         ),
-        ("The year twenty twenty two.", "The year twenty twenty two."),
+        ("The year twenty twenty two.", "The year 2022."),
         ("Use twenty and a half.", "Use 20 and a half."),
         (
             "About two and a half million users.",

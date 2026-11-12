@@ -296,7 +296,7 @@ fn canonicalize_number_aliases(input: &str) -> String {
 /// component.
 ///
 /// Repeatedly matches a numeric prefix followed by `"point"` and a spoken
-/// word component, converting the component to digits with `text2num` and
+/// component, converting the component to digits with `text2num` and
 /// appending it to the prefix with a `.` separator; a non-numeric
 /// conversion leaves that occurrence unchanged. Runs up to 8 passes so a
 /// chain such as `"12 point three point five"` is fully resolved, since
@@ -325,6 +325,12 @@ pub(crate) fn normalize_numeric_point_suffixes(input: &str) -> TransformResult<'
         r"(?i)(\d+(?:\.\d+)*)[ \t]+point[ \t]+([A-Za-z]+(?:-[A-Za-z]+)?)\b",
         "numeric point suffix regex must compile"
     );
+    let word_re = regex_static!(r"[A-Za-z]+(?:-[A-Za-z]+)*", "word span regex must compile");
+    let next_point = regex_static!(r"(?i)^[ \t]+point\b", "next point regex must compile");
+    let next_scale = regex_static!(
+        r"(?i)^[ \t]+(?:hundred|thousand|million|billion|trillion)\b",
+        "next scale regex must compile"
+    );
 
     let mut text = Cow::Borrowed(input);
     let mut total_matches = 0;
@@ -337,16 +343,61 @@ pub(crate) fn normalize_numeric_point_suffixes(input: &str) -> TransformResult<'
         for captures in re.captures_iter(&text) {
             let found = captures.get(0).expect("full point-suffix match");
             let numeric = captures.get(1).expect("numeric point prefix").as_str();
-            let Some(rendered) =
-                render_number_component(captures.get(2).expect("spoken point component").as_str())
-            else {
+            let component = captures.get(2).expect("spoken point component");
+            let mut end = component.start();
+            let mut rendered = None;
+            for word in word_re.find_iter(&text[component.start()..]).take(16) {
+                let start = component.start() + word.start();
+                let word_end = component.start() + word.end();
+                if !text[end..start].chars().all(|ch| matches!(ch, ' ' | '\t'))
+                    || [
+                        "point", "hundred", "thousand", "million", "billion", "trillion",
+                    ]
+                    .iter()
+                    .any(|stop| word.as_str().eq_ignore_ascii_case(stop))
+                {
+                    break;
+                }
+                // A multi-digit count followed by another "point" can start
+                // a separate decimal: "20 point zero twenty point zero".
+                if rendered.is_some()
+                    && next_point.is_match(&text[word_end..])
+                    && render_number_component(word.as_str())
+                        .and_then(|value| value.parse::<u32>().ok())
+                        .is_some_and(|value| value >= 10)
+                {
+                    break;
+                }
+                end = word_end;
+                if let Some(value) = render_number_component(&text[component.start()..end]) {
+                    rendered = Some((end, value));
+                }
+            }
+            // Keep the old split when a later spoken digit could be the
+            // coefficient of a following scale ("five two thousand").
+            if let Some((component_end, _)) = &rendered {
+                let phrase = &text[component.start()..*component_end];
+                let mut words = phrase.split_ascii_whitespace();
+                if let Some(first) = words.next() {
+                    if words.clone().next().is_some()
+                        && next_scale.is_match(&text[*component_end..])
+                        && phrase.split_ascii_whitespace().all(|word| {
+                            render_number_component(word).is_some_and(|value| value.len() == 1)
+                        })
+                    {
+                        rendered = render_number_component(first)
+                            .map(|value| (component.start() + first.len(), value));
+                    }
+                }
+            }
+            let Some((component_end, rendered)) = rendered else {
                 continue;
             };
 
             let output = output.get_or_insert_with(|| String::with_capacity(text.len()));
             output.push_str(&text[last_end..found.start()]);
             write!(output, "{numeric}.{rendered}").expect("writing to String cannot fail");
-            last_end = found.end();
+            last_end = component_end;
             pass_matches += 1;
         }
 

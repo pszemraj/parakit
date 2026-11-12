@@ -293,11 +293,11 @@ fn ambiguous_quantities_remain_words_across_profiles_and_thresholds() {
         ),
         (
             "The release was in twenty twenty two.",
-            "The release was in twenty twenty two.",
+            "The release was in 2022.",
         ),
         (
             "It happened in nineteen ninety-nine.",
-            "It happened in nineteen ninety-nine.",
+            "It happened in 1999.",
         ),
         (
             "Six quarters, a million users joined.",

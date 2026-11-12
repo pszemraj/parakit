@@ -7,6 +7,9 @@ use super::engine::CLEANUP_BOUNDARY_RULE_NAME;
 use super::passes::capitalize_sentence_starts;
 use super::*;
 
+mod calendar_numbers;
+mod numeric_contexts;
+mod numeric_suffixes;
 mod spoken_numbers;
 mod stutters;
 mod user_rules;
