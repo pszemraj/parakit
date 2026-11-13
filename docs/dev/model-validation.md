@@ -145,11 +145,24 @@ foreach ($Backend in $Backends) {
 
 Run `cargo test resampl` in the Windows checkout too. The DLL path is restored after each backend. Fixture rates and test interpretation match macOS. Keep each extracted directory fresh on reruns so stale DLLs cannot mask bundle omissions.
 
+### Windows installation lifecycle
+
+Complete these checks natively for CPU and each available GPU backend, in addition to the bundle/model matrix above. Use disposable source checkouts, separate Cargo homes and targets, custom install roots, and existing isolated configuration files. Set `PARAKIT_MODELS_DIR` explicitly for every test process; XDG overrides alone do not isolate the Windows model cache. Keep the ordinary installation and User PATH out of these checks.
+
+- Install from Git and from a populated local checkout with `cargo install --locked`, using the backend's toolchain and features. Unset `CRISPASR_LIB_DIR` and `CRISPASR_SRC_DIR` for the bundled case. Record the source revision, Cargo installation metadata, commands, and exit statuses. Cargo installs executables only; retain required external BLAS/CUDA runtimes on the test process's PATH, or validate their packaging through the bundle route separately.
+- Move each install prefix to a path containing spaces. From outside the disposable checkout, with test processes stopped, temporarily rename its original source checkout, Cargo home, and build directories, restoring them afterward. Remove those build/bundle directories and explicit CrispASR library overrides from the test environment while retaining approved system/toolkit runtime paths. Inspect direct and transitive PE dependencies: bundled inference must not import CrispASR/ggml DLLs or resolve dependencies from hidden build paths.
+- Invoke the relocated executable by its full path for `--version`, hosted fetching, and the real WAV worker simulation. Record native backend/device diagnostics and JSONL `inference.session_device`; inventory or a version check alone does not establish inference. A CPU-only build must reject an explicit GPU request. Verify the pinned Juniper transcript, quiet stdout/stderr, skipped simulation insertion records, and unchanged history after rejected nonspeech.
+- Exercise cold hosted Q8_0 acquisition without Python/conversion tools on PATH, preserving required runtime DLL paths. Cold Q6_K preparation requires the separately installed quantizer. Then make the endpoint unavailable and remove conversion tools from the process PATH: completed Q6_K and `--from-source` caches must remain usable without new downloads or preparation.
+- Compare the isolated model directory before and after the Rust suite and acquisition checks. The Rust suite and failed preparation must preserve existing cached artifacts; test fixtures must stay in their private directories. Successful acquisition must leave no partial-download or quantization staging files. Read back the installed executable's `cache list`; an empty or unknown mock GGUF entry is not a prepared model.
+- Reinstall into the relocated Cargo root, confirm replacement by invoking the resulting executable, then uninstall and verify that Cargo's installation list and executable paths are clear. For [bundle installation](../../scripts/windows/README.md#runtime-manifest), use `--install-dir` and `--no-user-path` with the test prefix; check manifest files, removal of stale backend DLLs on upgrade, and preservation of the previous test installation after a failed replacement.
+
+Mac/Linux results do not complete this Windows acceptance. Keep physical hotkey, microphone, clipboard, and receiving-application checks separate from unattended worker simulation.
+
 ## Qwen options, long input, and reload
 
 Use the language, token, and chunking controls described in the [Qwen3-ASR guide](../models/qwen3-asr.md). Keep Qwen attention overrides unset for acceptance; the default and diagnostic alternatives are described in the [Qwen comparison procedure](quality.md#qwen-and-moondream-comparisons).
 
-For both Qwen sizes, both precisions, and each native device path, run the helper on short/270-second/short inputs at forced English and a 4096-token budget. Then run two simulated captures with a 63-second idle wait and a one-minute offload setting to verify reload and option restoration. The long fixture repeats public JFK speech for long-input/memory stress, not natural long-form quality.
+For both Qwen sizes, both precisions, and each native device path, run the helper on short/270-second/short inputs at forced English and a 4096-token budget. Then run two simulated captures with a 63-second idle wait and a one-minute offload setting to verify reload and option restoration. The long fixture repeats public JFK speech for long-input/memory stress, not natural long-form quality. Inspect its clipped final phrase separately: Mac Qwen 1.7B runs produced different completions of that tail. Retain the raw differences for comparison with the waveform/reference, while checking short-input parity and reload state independently.
 
 ~~~bash
 for preset in qwen3-asr-0.6b qwen3-asr-1.7b; do

@@ -6,6 +6,8 @@ parakit runs from a Windows terminal and installs as a per-user bundle. Its hotk
 
 Build and install with the [Windows bundle scripts](../scripts/windows/README.md). Shared native dependencies are in [build.md#native-dependencies](build.md#native-dependencies). Native model and resampler checks are in [model validation](dev/model-validation.md#windows-cpu-and-supported-gpu-backends).
 
+For release acceptance, also run the [Windows installation lifecycle checks](dev/model-validation.md#windows-installation-lifecycle) for isolated Cargo installs and relocated bundles.
+
 ## Microphone Permissions
 
 In Windows 11, open Settings > Privacy & security > Microphone and enable microphone access for desktop apps. On Windows 10, use Settings > Privacy > Microphone. See [Microsoft's permission instructions](https://support.microsoft.com/en-us/windows/privacy/turn-on-app-permissions-for-your-microphone-in-windows), then rerun `parakit doctor`.
