@@ -36,7 +36,7 @@ Install the conversion dependencies once in the Python environment used by `fetc
 python -m pip install -r scripts/requirements-convert.txt
 ```
 
-Rebuild Ultra, NVIDIA v3, or Qwen from its original checkpoint:
+Rebuild Ultra, Redux, NVIDIA v3, or Qwen from its original checkpoint:
 
 ```bash
 # Default Ultra, from Moondream.
@@ -46,6 +46,8 @@ parakit fetch --from-source --model-preset parakeet-v3 --keep-f16 --keep-nemo
 # Original Hugging Face Qwen checkpoint.
 parakit fetch --from-source --model-preset qwen3-asr-1.7b --keep-f16
 ```
+
+`parakeet-v2` has no source-rebuild path; use its hosted Q8_0 artifact or `--quantize q6_k` instead.
 
 The v3 path downloads [NVIDIA's official `.nemo`](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3), converts it with `convert-parakeet-to-gguf.py`, then quantizes it with `crispasr-quantize`. Other source presets use these Hugging Face checkpoints:
 
