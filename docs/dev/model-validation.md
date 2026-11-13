@@ -8,7 +8,7 @@ TODO: provide an acquisition URL or construction recipe for `laptop-fixtures.zip
 
 ## macOS CPU and Metal
 
-Install the [native build prerequisites](../build.md). These commands build an isolated Metal-capable release binary and WAV helper. Select cpu for CPU inference and gpu for Metal.
+Install the [native build prerequisites](../build.md). These commands build an isolated Metal-capable release binary and WAV helper. Test Metal (`gpu`) first, then CPU (`cpu`).
 
 ~~~bash
 export CARGO_TARGET_DIR="$PWD/target/tmp/new-models/cargo-macos"
@@ -39,7 +39,7 @@ Run both precisions for all six presets on CPU and Metal. Install a compatible `
 ~~~bash
 PRESETS=(parakeet-v2 parakeet-v3 parakeet-ultra parakeet-redux qwen3-asr-0.6b qwen3-asr-1.7b)
 QUANTS=(q8_0 q6_k)
-DEVICES=(cpu gpu)
+DEVICES=(gpu cpu)
 record() {
   name=$1
   shift
@@ -53,18 +53,22 @@ for preset in "${PRESETS[@]}"; do
     for device in "${DEVICES[@]}"; do
       record "$device-file" "$HELPER" --model-preset "$preset" --quantize "$quant" --device "$device" --threads 8 --warmup --repeat 2 --audio "$FIXTURES/short.wav" --audio "$FIXTURES/resample-44100-mono.wav" --audio "$FIXTURES/resample-48000-stereo.wav" --audio "$FIXTURES/resample-full-block-48000.wav" --audio "$FIXTURES/resample-partial-block-48000.wav"
       record "$device-worker" "$BIN" --verbose start --model-preset "$preset" --quantize "$quant" --device "$device" --threads 8 --no-cleaning --no-sounds --model-idle-minutes 0 --simulate-ptt-audio "$FIXTURES/short.wav" --simulate-ptt-audio "$FIXTURES/resample-44100-mono.wav" --simulate-ptt-audio "$FIXTURES/resample-48000-stereo.wav" --simulate-ptt-audio "$FIXTURES/resample-full-block-48000.wav" --simulate-ptt-audio "$FIXTURES/resample-partial-block-48000.wav" --log-dir "$RUN/$device-jsonl"
+      if [[ $preset == qwen3-asr-* ]]; then
+        record "$device-sequence" "$HELPER" --model-preset "$preset" --quantize "$quant" --device "$device" --threads 8 --qwen-language en --qwen-max-new-tokens 4096 --warmup --audio "$FIXTURES/short.wav" --audio "$FIXTURES/repeated-speech-270s.wav" --audio "$FIXTURES/short.wav"
+        record "$device-reload" "$BIN" --verbose start --model-preset "$preset" --quantize "$quant" --device "$device" --threads 8 --qwen-language en --qwen-max-new-tokens 4096 --no-cleaning --no-sounds --model-idle-minutes 1 --simulate-ptt-repeat 2 --simulate-ptt-idle-seconds 63 --simulate-ptt-audio "$FIXTURES/short.wav" --log-dir "$RUN/$device-reload-jsonl"
+      fi
     done
   done
 done
 ~~~
 
-The fixture-rate files are upsampled constructions from public `short.wav`, not independent native-rate recordings. They cover 44.1 kHz mono, 48 kHz stereo/downmix, and full/partial 1024-frame source blocks; `short.wav` is 16 kHz and bypasses resampling. Follow the [WAV helper](quality.md#wav-quality-target) and [worker simulation](quality.md#ptt-worker-simulation) procedures; microphone capture needs the physical checks below. Compare their transcripts and run the existing resampler tests on each host:
+The fixture-rate files are upsampled constructions from public `short.wav`, not independent native-rate recordings. They cover 44.1 kHz mono, 48 kHz stereo/downmix, and full/partial 1024-frame source blocks; `short.wav` is 16 kHz and bypasses resampling. Compare helper and worker transcripts using the [WAV helper](quality.md#wav-quality-target) and [worker simulation](quality.md#ptt-worker-simulation) procedures, and run the resampler tests on each host:
 
 ~~~bash
 cargo test resampl
 ~~~
 
-The filter covers chunk/tail drain, reset/reuse, callback parity, recording boundaries, and the 16 kHz bypass. Retain build and doctor output; device inventory alone does not prove that inference used the accelerator.
+The filter covers chunk/tail drain, reset/reuse, callback parity, recording boundaries, and the 16 kHz bypass. Retain build and doctor output, native inference diagnostics, and [JSONL session-device metadata](../logging.md#transcription-record-fields); device inventory alone does not prove accelerator use.
 
 ## Windows CPU and supported GPU backends
 
@@ -72,7 +76,7 @@ Use the [Windows prerequisites and build scripts](../../scripts/windows/README.m
 
 TODO (native Windows): verify `cargo run -- --help` and `cargo test resampl` from a fresh developer shell without a bundle or native build directory on the inherited PATH. Cargo should find staged runtime DLLs through the build script's `OUT_DIR/bin` link-search directive. Keep separately installed toolkit runtimes on PATH when the build does not bundle them. The bundle checks below add a DLL directory explicitly, so they do not validate this Cargo loader path.
 
-The simulated worker does not acquire the daemon singleton lock. A real daemon uses the same user's lock and named pipe even with separate model and configuration paths, and `doctor` checks that lock. Stop an existing same-user daemon before those checks and preserve its settings.
+A real Windows daemon uses the same user's lock and named pipe even with separate model and configuration paths, and `doctor` checks that lock. Stop an existing same-user daemon before those checks and preserve its settings; [worker simulation](quality.md#ptt-worker-simulation) bypasses them.
 
 ~~~powershell
 $env:CARGO_TARGET_DIR = Join-Path $PWD "target\native"
@@ -162,20 +166,7 @@ Mac/Linux results do not complete this Windows acceptance. Keep physical hotkey,
 
 Use the language, token, and chunking controls described in the [Qwen3-ASR guide](../models/qwen3-asr.md). Keep Qwen attention overrides unset for acceptance; the default and diagnostic alternatives are described in the [Qwen comparison procedure](quality.md#qwen-and-moondream-comparisons).
 
-For both Qwen sizes, both precisions, and each native device path, run the helper on short/270-second/short inputs at forced English and a 4096-token budget. Then run two simulated captures with a 63-second idle wait and a one-minute offload setting to verify reload and option restoration. The long fixture repeats public JFK speech for long-input/memory stress, not natural long-form quality. Inspect its clipped final phrase separately: Mac Qwen 1.7B runs produced different completions of that tail. Retain the raw differences for comparison with the waveform/reference, while checking short-input parity and reload state independently.
-
-~~~bash
-for preset in qwen3-asr-0.6b qwen3-asr-1.7b; do
-  for quant in q8_0 q6_k; do
-    for device in cpu gpu; do
-      RUN="target/tmp/new-models/macos/qwen-$preset-$quant-$device"
-      mkdir -p "$RUN"
-      record sequence "$HELPER" --model-preset "$preset" --quantize "$quant" --device "$device" --threads 8 --qwen-language en --qwen-max-new-tokens 4096 --warmup --audio "$FIXTURES/short.wav" --audio "$FIXTURES/repeated-speech-270s.wav" --audio "$FIXTURES/short.wav"
-      record reload "$BIN" --verbose start --model-preset "$preset" --quantize "$quant" --device "$device" --threads 8 --qwen-language en --qwen-max-new-tokens 4096 --no-cleaning --no-sounds --model-idle-minutes 1 --simulate-ptt-repeat 2 --simulate-ptt-idle-seconds 63 --simulate-ptt-audio "$FIXTURES/short.wav" --log-dir "$RUN/reload-jsonl"
-    done
-  done
-done
-~~~
+The platform matrices above run both Qwen sizes and precisions through short/270-second/short inputs at forced English and a 4096-token budget, then two simulated captures with a 63-second idle wait and a one-minute offload setting. Check option restoration and reload state independently of recognition. The long fixture repeats public JFK speech for long-input/memory stress, not natural long-form quality. Inspect its clipped final phrase separately: Mac Qwen 1.7B runs produced different completions of that tail. Retain the raw differences for comparison with the waveform/reference while checking short-input parity.
 
 Also record default auto/512, forced German on `fleurs-de_de-0.wav`, and forced English on `fleurs-en_us-422.wav` (containing the spoken word "language"). Use a budget of 1 for a separate failure-path check: readiness should complete, while actual transcription fails without a successful JSONL row or history entry.
 

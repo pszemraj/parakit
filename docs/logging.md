@@ -4,7 +4,7 @@ parakit can write JSONL records for completed dictations: model output, inferenc
 
 Audio and redirected console output are never logged, but the raw and cleaned transcript text is, in plaintext, with no built-in retention or size cap. Protect the log directory and rotate or delete old files to match the sensitivity of your dictation.
 
-Transcriptions are appended to `parakit-YYYY-MM-DD.jsonl` using their local date. Each insertion record stays in its transcription's file, even when insertion finishes after midnight. Each JSON object is written and flushed synchronously before the worker continues. There is no filesystem sync guarantee; an interrupted write can leave a partial final line.
+The log directory is created on the first write. Transcriptions append to `parakit-YYYY-MM-DD.jsonl` using their local date. Each insertion record stays in its transcription's file, even when insertion finishes after midnight. Each JSON object is written and flushed synchronously before the worker continues. There is no filesystem sync guarantee; an interrupted write can leave a partial final line.
 
 Independent logger instances sharing a daily file take an exclusive file lock for each append and any failed-write rollback, so their records cannot overwrite each other.
 
@@ -67,7 +67,7 @@ The daemon supplies an `inference` object on each successful transcription:
 
 The quantization label summarizes the artifact recipe rather than every tensor: F32 biases and normalization tensors can coexist with a reported `F16` model. See [model presets](running.md#model-presets) for Q6_K precision choices.
 
-The requested device policy remains fixed; the session policy reflects an Auto reload on CPU. GPU execution backend (CUDA/Vulkan/Metal) and GPU name are not confirmed by these JSONL fields. Status labels GPU inventory separately from confirmed execution.
+These fields do not confirm a GPU execution backend (CUDA/Vulkan/Metal) or GPU name. Status labels inventory separately from execution; [device selection and reload policy](running.md#device-selection) explain the runtime behavior.
 
 Qwen controls describe user inference after readiness, not temporary warmup options or a detected language. `native_api_version` is not the CrispASR release tag. No model-parent directory is recorded. Readers should accept older rows without `inference` and ignore unfamiliar fields.
 

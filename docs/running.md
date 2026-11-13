@@ -44,7 +44,7 @@ parakit start --threads 8 --verbose
 
 `daemon.verbose = true` enables diagnostics for startup and detailed doctor output; for `rules`, it affects only the native-library log filter. Other commands do not use that setting; pass `--verbose` to the command when needed. `--quiet` overrides the configured setting. Without diagnostics, a model-open failure suggests rerunning with `--verbose`.
 
-Without `--threads` or `daemon.threads`, inference uses half the logical CPUs available to the process, with a minimum of two, or one on a single-CPU system. If detection fails, it assumes four CPUs and uses two threads. CPU quotas and affinity can reduce the available count. An explicit thread count is not clamped to available CPUs and can oversubscribe the machine. [Windows runtime defaults](configuration.md#environment-variables) also use this count.
+Inference uses the [configured or computed thread count](config_reference.toml). CPU quotas and affinity can reduce the available count; an explicit `--threads` value is not clamped and can oversubscribe the machine. [Windows runtime defaults](configuration.md#environment-variables) also use this count.
 
 For a completed transcription, verbose output reports `release_to_worker`, `infer`, `clean`, `insert`, `worker`, and `total` in milliseconds. `release_to_worker` includes audio finalization and queue wait; `worker` includes any reload, inference, cleaning, logging, and insertion. `total` spans hotkey release or forced capture stop to worker completion, including blocked or copied-only insertion. These timings do not confirm when the receiving application displays the text.
 
@@ -52,7 +52,7 @@ For a completed transcription, verbose output reports `release_to_worker`, `infe
 
 GPU-capable builds default to `--device auto`. In `auto`, CrispASR asks ggml for the best backend device and falls back to CPU when no GPU backend is available. On hybrid laptops, ggml prefers a discrete GPU over an integrated GPU.
 
-Choose the build backend with the [Windows bundle scripts](../scripts/windows/README.md#backend-requirements). At runtime, `--device` controls CPU/GPU use inside the installed build.
+Select a [backend when building](build.md#crispasr-and-backends). At runtime, `--device` controls CPU/GPU use inside the installed build.
 
 ```bash
 parakit start --device auto
@@ -136,13 +136,13 @@ Use `--verbose` to inspect the daemon's process, uptime, dictation count, microp
 parakit --verbose status
 ```
 
-Selected presets and Qwen controls appear when applicable; Linux adds the hotkey and insertion backend. Model residency and reload errors are described under [idle offload](#idle-model-offload). These values reflect the running daemon. `daemon.verbose = true` does not expand `parakit status`; pass `--verbose` to the status command itself. Before startup details are available, it prints `detail unavailable (daemon starting)`.
+Selected presets and Qwen controls appear when applicable; Linux adds the hotkey and insertion backend. Model residency and reload errors are described under [idle offload](#idle-model-offload). These values reflect the running daemon. Before startup details are available, it prints `detail unavailable (daemon starting)`.
 
 ## Idle Model Offload
 
-The model loads and warms at startup, then releases its inference session after ten uninterrupted idle minutes. Set `[daemon] model_idle_minutes = N` in the config, or run `parakit start --model-idle-minutes N`. The flag overrides the config. Nonnegative whole minutes are required; `0` keeps the model resident. The CLI accepts up to 18446744073709551615 minutes, while TOML integers stop at 9223372036854775807; an unrepresentably long idle interval never offloads.
+The model loads and warms at startup, then releases its inference session after the configured idle interval. Set `daemon.model_idle_minutes` or pass `parakit start --model-idle-minutes N`; defaults, bounds, and precedence are in the [configuration reference](config_reference.toml).
 
-The idle interval uses monotonic elapsed time, not calendar time. Whether system sleep counts toward it depends on the OS and Rust's [clock implementation](https://doc.rust-lang.org/std/time/struct.Instant.html). On clocks that pause during suspend, the remaining idle interval continues after wake; sleeping for ten minutes does not itself make the model eligible for offload.
+The idle interval uses monotonic elapsed time, not calendar time. Whether system sleep counts toward it depends on the OS and Rust's [clock implementation](https://doc.rust-lang.org/std/time/struct.Instant.html). On clocks that pause during suspend, the remaining idle interval continues after wake; sleeping for ten minutes does not itself make the model eligible for offload. An interval too large for the runtime's deadline representation never offloads.
 
 Recording, queued dictations, transcription, and insertion prevent offloading. The interval restarts when all work finishes, including silent captures and failures. Hotkeys, microphone policy, IPC, and transcript history remain available. Reading status or browsing history does not postpone offloading; copying a transcript counts as insertion activity.
 
@@ -173,7 +173,7 @@ parakit cache dir
 parakit start -m /path/to/model.gguf
 ```
 
-`-m <path>` disables automatic fetch. It conflicts with `--model-preset` in the same command. Either CLI selection overrides both configured model selectors; `daemon.model` and `daemon.model_preset` conflict with each other even when a CLI selection is supplied.
+For model selection precedence and incompatible selectors, see the daemon section of the [configuration reference](config_reference.toml).
 
 For a selected local model, startup checks that the path is a regular file before hotkey and microphone checks; a symlink to a file is accepted. The path must be valid UTF-8, and the contents are validated when the model opens. Startup resolves the path to an absolute path for idle reloads. `parakit doctor` does not check the model path.
 
@@ -194,7 +194,7 @@ parakit start --model-preset parakeet-ultra --quantize q6_k \
   --log-dir "$HOME/.parakit/logs" --quiet & disown
 ```
 
-Use `parakeet-v2` for English-only v2, `parakeet-v3` for the original NVIDIA model, or either Qwen name in the table below. With no CLI or configured model selection, `--quantize q6_k` prepares Ultra. Preparing a missing Q6_K prints a notice to stderr even with `--quiet`, since a larger download and local quantization may be needed. It reuses an explicitly fetched F16 when available; otherwise it downloads a private F16 intermediate. That private file is removed after success and kept after failure for retry. Explicitly fetched F16 files are preserved, including during `--force` rebuilds, which download a fresh private intermediate. Wait for readiness before dictating. Cached Q6_K starts work offline and idle reload reuses the resolved file.
+Preparing a missing Q6_K prints a notice to stderr even with `--quiet`, since a larger download and local quantization may be needed. It reuses an explicitly fetched F16 when available; otherwise it downloads a private F16 intermediate. That private file is removed after success and kept after failure for retry. Explicitly fetched F16 files are preserved, including during `--force` rebuilds, which download a fresh private intermediate. Cached Q6_K starts work offline and idle reload reuses the resolved file.
 
 Interactive downloads show a progress bar with bytes downloaded, transfer speed, and ETA. If the server omits the file size, a byte counter is shown instead. Progress bars are hidden with `--quiet` or when stderr is redirected. Quantization is a separate stage announced after the download. URLs and native converter output require `--verbose`; failed tools report a short diagnostic. An explicit `fetch` confirms the cached model and prints its startup command, while daemon startup continues directly to loading.
 
@@ -221,7 +221,7 @@ Apply the settings with the [configuration restart workflow](configuration.md#va
 
 Presets use the exact file above and check the local cache before contacting Hugging Face. Once fetched, they work offline. All presets except v3 select fixed provider commits from the model catalog; `--force` downloads that selected revision again. Parakeet v3 keeps its existing revision policy and top-level cache path; the other presets use the revision-specific Hub cache layout described below. Previously downloaded files remain usable with `-m`; changing a preset revision selects a separate cache destination. `fetch --model-preset` does not read daemon configuration. It accepts `--force` and conflicts with a custom source, `--file`, and `--sha256`.
 
-Qwen, Moondream, and NVIDIA v3 checkpoints can also be [rebuilt from source](dev/README.md#source-rebuild). Source rebuilds use the preset's normal Q8_0 cache destination; v2 has no source-rebuild path.
+For original checkpoints, see [source rebuilds](dev/README.md#source-rebuild).
 
 To prepare Q6_K without starting the daemon:
 

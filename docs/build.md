@@ -38,6 +38,12 @@ On Linux and Apple Silicon macOS, install directly from Git after installing the
 cargo install --locked --git https://github.com/pszemraj/parakit.git parakit
 ```
 
+On Apple Silicon, add `--features metal` to enable GPU inference:
+
+```bash
+cargo install --locked --git https://github.com/pszemraj/parakit.git parakit --features metal
+```
+
 For a local checkout, initialize its submodules before installing:
 
 ```bash
@@ -70,10 +76,9 @@ Optional accelerator builds:
 ```bash
 cargo install --locked --path . --features cuda
 cargo install --locked --path . --features vulkan
-cargo install --locked --path . --features metal  # Apple targets only
 ```
 
-On macOS, `aarch64-apple-darwin` is the supported target. Build from a native arm64 terminal; an x86_64/Rosetta build may not expose the Metal backend to ggml.
+For a local Metal build, use `cargo install --locked --path . --features metal`. On macOS, `aarch64-apple-darwin` is the supported target. Build from a native arm64 terminal; an x86_64/Rosetta build may not expose the Metal backend to ggml.
 
 ## Isolated Development Builds
 

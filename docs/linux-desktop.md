@@ -77,7 +77,7 @@ Start Parakit from a terminal opened in the current graphical login. Use the [ba
 
 Tmux is fine when the tmux server was started from the current desktop login. A tmux server that survived a GNOME logout/login can keep stale `DISPLAY` or `XAUTHORITY` values from the old session. In that case, `parakit doctor` may report an X11 error such as `Connection refused`.
 
-Start a new terminal or tmux server from the current desktop session, rerun `parakit doctor`, then use the [background commands](running.md#background-use).
+Start a new terminal or tmux server from the current desktop session, then rerun `parakit doctor` before starting the daemon.
 
 For registration failures or an intermittent shortcut after login, suspend, or an input-method change, follow [shortcut conflicts](#shortcut-conflicts).
 

@@ -54,17 +54,13 @@ The editor can repair a broken config, but its exit does not validate the file. 
 
 ## Precedence and Loading
 
-The [config reference](config_reference.toml) describes precedence, CLI overrides, and settings available only in the file. Use `parakit start` for daemon flags. The profile, trailing-period, and disable-rule flags also work on `parakit rules list` and `parakit rules test` so you can check cleaning changes before restarting; the profile flag is `--profile` there instead of `--cleaning-profile`.
-
-`rules test` applies the configured `cleaning.number_threshold`. `rules list` describes the passes and their activation without applying that threshold to text.
+The [config reference](config_reference.toml) describes precedence, CLI overrides, and settings available only in the file. Check cleaning changes with the [rules commands](cleaning-rules.md#inspect-and-test) before restarting.
 
 For Qwen model selection, language hints, and context, see the [Qwen3-ASR guide](models/qwen3-asr.md). Other presets are listed under [model selection](running.md#model-presets).
 
 TOML, unknown-key, invalid-value, and rule-validation errors name the config path.
 
 A negative or non-finite number threshold reports `number threshold must be a finite value greater than or equal to 0 (got <value>)`. Empty CLI paths (`-m ""` and `--log-dir ""`) are rejected during argument parsing, before configuration is loaded.
-
-For `daemon.model_idle_minutes` behavior, see [idle model offload](running.md#idle-model-offload).
 
 ## Preserving Repeated Words
 
@@ -79,11 +75,9 @@ Merge the assignment into your existing `[cleaning]` section if you already have
 
 Other cleaning rules still apply, including the aggressive profile's separate ambiguous-repetition pass. Use `parakit rules test` to check the result before restarting.
 
-Library callers pass `repetition_exceptions: &[String]` immediately after `number_threshold` in `build_cleaner`, `build_enabled_cleaner`, and `validate_configured_rules`. Pass `&[]` to retain the defaults; exceptions are validated and compiled through the same construction path as the other rule inputs.
-
 ## Validation and Recovery
 
-`parakit config show` catches TOML and configuration errors. Daemon startup additionally checks machine-dependent resources such as the model file, compute device, insertion backend, hotkey, audio, and permissions. The log directory is created and checked on the first transcription write, so neither `config show` nor startup can prove it is writable.
+`parakit config show` catches TOML and configuration errors. Daemon startup additionally checks machine-dependent resources such as the model file, compute device, insertion backend, hotkey, audio, and permissions. The [log directory is opened lazily](logging.md), so neither `config show` nor startup can prove it is writable.
 
 Use this edit loop for cleaning and user-rule changes:
 

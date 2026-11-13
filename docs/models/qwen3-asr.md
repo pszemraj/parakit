@@ -64,6 +64,6 @@ The extra shortcut is inactive for other models. If its registered chord is alre
 
 By default, Qwen splits long audio into native chunks of at most 30 seconds, choosing quiet split points and resetting the decoder for each chunk. Every chunk receives the same prior-dictation context; a preceding chunk's new text is not passed to the next. The model's published 1,200-second input capability does not extend [Parakit's recording limit](../running.md#microphone).
 
-An incomplete decode fails the dictation instead of inserting partial text. Language hints and token budgets are restored after the [readiness and idle-reload flow](../running.md#idle-model-offload). Windowed audio attention is enabled by default; its environment override and reference-comparison settings are covered by the [Qwen validation procedure](../dev/quality.md#qwen-and-moondream-comparisons).
+An incomplete decode fails the dictation instead of inserting partial text. Language hints and token budgets are restored after the [readiness and idle-reload flow](../running.md#idle-model-offload). Audio-attention defaults and overrides are in [native inference controls](../configuration.md#native-inference-controls); use the [Qwen validation procedure](../dev/quality.md#qwen-and-moondream-comparisons) for reference comparisons.
 
 For inactive history or shortcut conflicts, follow [context troubleshooting](../troubleshooting.md#qwen-context-has-no-effect). If recognition changes unexpectedly, compare ordinary dictation and the selected [cleaning profile](../cleaning-rules.md#profiles).

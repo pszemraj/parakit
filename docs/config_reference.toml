@@ -14,7 +14,7 @@
 
 # ---------- Daemon ----------
 # CLI model selection replaces configured selection. Configured conflicts still fail load.
-# daemon.model conflicts with daemon.model_preset and daemon.quantize.
+# Config: daemon.model conflicts with daemon.model_preset and daemon.quantize. CLI: --model conflicts with --model-preset and --quantize.
 # Daemon keys take matching CLI overrides except transcript_history. Global diagnostics are described under verbose.
 # doctor also accepts --paste-mode, --insertion-backend, and --hotkey-backend for that check only.
 
@@ -39,10 +39,11 @@
 device = "auto"
 
 # integer, 1 to 2147483647 (optional). CPU inference threads in every device mode.
-# Unset: [CPU-based thread count](running.md#first-run).
+# Unset: half the available logical CPUs, minimum 2 (1 on a single-CPU system). Detection failure uses 2.
+# See: [CPU limits and overrides](running.md#first-run).
 # threads = 4
 
-# integer, 0 to 9223372036854775807. Idle minutes before offload, or 0 to keep the model resident.
+# integer idle minutes, 0 to 9223372036854775807 (CLI max 18446744073709551615). 0 keeps the model resident.
 # See: [timing, reload failures, and GPU memory](running.md#idle-model-offload).
 model_idle_minutes = 10
 
@@ -99,7 +100,6 @@ context_max_age_minutes = 10
 
 # ---------- Cleaning ----------
 # --cleaning/--no-cleaning override enabled. --cleaning-profile overrides profile (`rules --profile`).
-# Other CLI overrides are stated per key. Number threshold and repetition exceptions have none.
 # `rules list` and `rules test` always list or apply rules, regardless of cleaning.enabled.
 
 [cleaning]
@@ -115,11 +115,11 @@ profile = "safe"
 # See: [punctuation](cleaning-rules.md#profiles).
 keep_trailing_period = false
 
-# number, finite and 0 or greater (integer or float). Spoken-number conversion cutoff.
+# number, finite and 0 or greater (integer or float). Spoken-number conversion cutoff. No CLI flag.
 # See: [threshold, adjacent counts, and separate year/version rules](cleaning-rules.md#numbers).
 number_threshold = 4
 
-# list of strings. Case-insensitive literal word/phrase exceptions for stutter-safe-words under both profiles.
+# list of strings. Case-insensitive literal word/phrase exceptions for stutter-safe-words under both profiles. No CLI flag.
 # Words, including contractions, may be separated by spaces or tabs. Empty entries, other punctuation, and newlines fail load.
 # A word protects all its repeats. A phrase protects only the complete matching span.
 repetition_exceptions = []

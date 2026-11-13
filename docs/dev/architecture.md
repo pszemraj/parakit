@@ -59,6 +59,8 @@ Cross-thread communication uses atomics, mutex-protected buffers, and channels.
 
 Configuration sections provide built-in fallbacks; CLI resolvers apply overrides. Normal startup and WAV simulation share resolved idle, logging, paste-mode, clipboard-retention, and context settings through `WorkerSettings`. The banner borrows the `DaemonInfo` stored for IPC status. Mode-specific resources remain explicit in `WorkerCtx`: simulation has a silent notifier, disabled sounds and insertion, and no daemon singleton or control endpoint. Normal startup exposes IPC before cleaner/model initialization; the worker lifetime still follows native-session ownership.
 
+Library cleaner constructors `build_cleaner`, `build_enabled_cleaner`, and `validate_configured_rules` take `repetition_exceptions: &[String]` immediately after `number_threshold`; `&[]` retains the built-in defaults. All three use the same input-validation path, including when cleaning is disabled.
+
 The Linux daemon attaches to the helper over IBus's private bus and advertises recording readiness. Input callbacks emit directed PTT signals without waiting for daemon work. At the actual PTT press, the engine captures a token containing helper/attachment lifetime, engine identity, and focus generation. The coordinator carries it unchanged through capture and inference. Validation and `commit_text` run together on the helper's owning loop. See [focus changes](../running.md#focus-changes) for delivery policy.
 
 ## Module Map
@@ -86,7 +88,7 @@ The Linux daemon attaches to the helper over IBus's private bus and advertises r
 | `src/daemon/ipc.rs`, `src/daemon/ipc/{client,unix_socket,windows_pipe}.rs` | Local IPC for `status`, `stop`, `copy-last`, `history`, and `test-paste`: shared protocol and in-memory transcript ring buffer, the control client, and the Unix-socket and Windows named-pipe transports. |
 | `src/daemon/ipc/{history,history_picker}.rs` | Prior-context selection, full-text lookup/copy by daemon-session and entry reference, and the terminal picker. |
 | `src/daemon/desktop/windows_{clipboard_history,focus,input,paste_smoke,security}.rs` | Windows clipboard-history acknowledgement, foreground checks, `SendInput` helpers, deep paste smoke test, and privilege diagnostics. |
-| `src/daemon/{preflight,audio/alsa,desktop/session,desktop/wsl,desktop/x11,desktop/inject_smoke}.rs`, `src/daemon/audio/alsa_silence.c`, `src/daemon/macos.rs`, `src/daemon/macos/{permissions,focus,insertion_cgevent,cgevent_ffi,pasteboard,diagnostics}.rs` | Startup checks, macOS TCC/focus/insertion/acknowledgement helpers and event-tap FFI, the macOS and X11 deep paste smoke tests, ALSA stderr suppression, X11/Wayland session and WSL checks, and X11 helpers. |
+| `src/daemon/{preflight,preflight_ibus,audio/alsa,desktop/session,desktop/wsl,desktop/x11,desktop/inject_smoke}.rs`, `src/daemon/audio/alsa_silence.c`, `src/daemon/macos.rs`, `src/daemon/macos/{permissions,focus,insertion_cgevent,cgevent_ffi,pasteboard,diagnostics}.rs` | Startup checks, macOS TCC/focus/insertion/acknowledgement helpers and event-tap FFI, the macOS and X11 deep paste smoke tests, ALSA stderr suppression, X11/Wayland session and WSL checks, and X11 helpers. |
 | `src/daemon/{logging,notifications,sounds}.rs` | Runtime logging, desktop notifications, and generated audio cues. |
 | `src/daemon/{stderr,subprocess}.rs` | Native stderr suppression and the reload loader-line filter, and bounded waits for desktop helper commands. |
 | `src/fetch/` | Preset Q8_0 downloads, cached Q6_K generation, Hugging Face repo and direct-URL sources, source rebuilds, and explicit `--sha256` checks. |
@@ -106,6 +108,7 @@ The Linux daemon attaches to the helper over IBus's private bus and advertises r
 | `examples/audit_cleaning.rs` | Built-in cleaner replay over historical JSONL logs. |
 | `scripts/transcribe_nemo_parakeet.py` | NeMo reference transcription helper. |
 | `build.rs`, `build/{native_link,static_link,openblas_roots,unix_openblas,windows_openblas}.rs` | CrispASR CMake orchestration, accelerator selection, static archive linkage and external-library runtime paths, C++ runtime linkage and device-shim compilation, and cross-platform BLAS discovery. |
+| `build/ibus.rs` | Linux IBus C bridge compilation and target-specific system linkage. |
 | `build/native_correctness.{rs,cmake}`, `build/native/qwen_correctness.hpp` | [Bundled native corrections](../build.md#crispasr-and-backends) compiled from generated source copies. |
 | `build/windows_{artifacts,cuda,manifest}.rs`, `scripts/windows/{build,common,toolchains,install}.ps1` | Windows toolchain discovery, runtime-manifest generation, bundle assembly, and per-user installation. |
 

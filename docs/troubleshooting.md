@@ -8,7 +8,7 @@ If push-to-talk does nothing or another desktop action happens, read `hotkey` in
 
 For desktop-session or permission failures, follow the [X11 session checks](linux-desktop.md#x11-sessions) or [macOS permission recovery](macos-desktop.md#permissions).
 
-WSL is not the native Windows daemon path. Check Windows hotkeys, focus, and paste from native PowerShell with the Windows bundle.
+On Windows, use the [native desktop setup](windows-desktop.md#build).
 
 ## IBus Dictation Stops After An Upgrade
 

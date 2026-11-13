@@ -36,25 +36,18 @@ Install the conversion dependencies once in the Python environment used by `fetc
 python -m pip install -r scripts/requirements-convert.txt
 ```
 
-With no preset, rebuild Ultra from its original Moondream checkpoint:
+Rebuild Ultra, NVIDIA v3, or Qwen from its original checkpoint:
 
 ```bash
+# Default Ultra, from Moondream.
 parakit fetch --from-source --keep-f16
-```
-
-Select `parakeet-v3` explicitly to rebuild from NVIDIA's `.nemo` checkpoint:
-
-```bash
+# Original NVIDIA .nemo checkpoint.
 parakit fetch --from-source --model-preset parakeet-v3 --keep-f16 --keep-nemo
-```
-
-That path downloads [NVIDIA's official `.nemo`](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3), converts it with the installed `convert-parakeet-to-gguf.py`, and quantizes the intermediate GGUF with `crispasr-quantize`.
-
-Rebuild a Qwen or Moondream preset from its original Hugging Face checkpoint:
-
-```bash
+# Original Hugging Face Qwen checkpoint.
 parakit fetch --from-source --model-preset qwen3-asr-1.7b --keep-f16
 ```
+
+The v3 path downloads [NVIDIA's official `.nemo`](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3), converts it with `convert-parakeet-to-gguf.py`, then quantizes it with `crispasr-quantize`. Other source presets use these Hugging Face checkpoints:
 
 | Preset | Original checkpoint |
 | --- | --- |
@@ -112,7 +105,7 @@ TODO: Complete the remaining [native model and physical desktop checks](model-va
 
 ## Updating [CrispASR](https://github.com/CrispStrobe/CrispASR)
 
-Update the native source, its nested submodules, both local binding manifests, and `Cargo.lock` together. Review upstream changes to the session ABI, model setters, ggml device registry, loader, and platform-specific link behavior before changing the pin. Parakit owns native compilation independently of local Cargo configuration.
+Update the native source, its nested submodules, both local binding manifests, and `Cargo.lock` together. Keep the binding package versions aligned with upstream. Review changes to the session ABI, model setters, ggml device registry, loader, and platform-specific linkage before changing the pin.
 
 ```bash
 git submodule update --init --recursive
@@ -122,10 +115,10 @@ git checkout '<tag-or-commit>'
 git submodule update --init --recursive
 cd ../..
 cargo check
-git add vendor/CrispASR Cargo.lock
+git add vendor/CrispASR native/crispasr/Cargo.toml native/crispasr-sys/Cargo.toml Cargo.lock
 cargo check --locked
 ```
 
-The manifests under `native/` compile the submodule's Rust sources. When changing the upstream pin, keep their package versions aligned with the upstream crates. The root `cargo check` refreshes `Cargo.lock`; stage it with the changed CrispASR gitlink, then use `cargo check --locked` to verify the lockfile. Review each source anchor in `build/native_correctness.rs` against the new native source, retaining corrections until upstream provides equivalent behavior. Rebuild the native library for validation; an older cached library cannot exercise the upgraded source. Keep the C++ device adapter aligned with the selected ggml headers and libraries. See the [build guide](../build.md#crispasr-and-backends) for bundled corrections, supported CMake settings, external-library requirements, and the matching ABI, and [architecture](architecture.md) for worker ownership and reload behavior.
+The root `cargo check` refreshes `Cargo.lock`; `cargo check --locked` verifies it. Review each source anchor in `build/native_correctness.rs` against the new native source, retaining corrections until upstream provides equivalent behavior. Rebuild the native library for validation; an older cached library cannot exercise the upgraded source. Follow the [build guide's ABI, header, and bundled-correction requirements](../build.md#crispasr-and-backends), then the [Rust validation loop](quality.md#rust-validation-loop) before committing.
 
 Check the PCM input contract, segment-text handling, runtime defaults, and model preprocessing/orchestration when upstream behavior changes. The daemon and `transcribe-file` initialize native defaults before threads or model opening. Library callers can call `initialize_crispasr_runtime_defaults` at that point or set the equivalent environment variables before native initialization. See the [model validation guide](model-validation.md) for current build, inference, and desktop checks.
