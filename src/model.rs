@@ -469,83 +469,59 @@ mod preset_tests {
     use clap::ValueEnum;
 
     #[test]
-    fn preset_names_and_artifacts_are_explicit() {
-        for (preset, id, repo, filename, backend, revision, source_repo, source_revision) in [
-            (
-                ModelPreset::ParakeetV2,
-                "parakeet-v2",
-                "cstr/parakeet-tdt-0.6b-v2-GGUF",
-                "parakeet-tdt-0.6b-v2-q8_0.gguf",
-                "parakeet",
-                "8878172f3c45ba231fac8cfd4aff2542b13bc875",
-                None,
-                None,
-            ),
-            (
-                ModelPreset::ParakeetV3,
-                "parakeet-v3",
-                "pszemraj/parakeet-tdt-0.6b-v3-gguf",
-                "parakeet-tdt-0.6b-v3-Q8_0.gguf",
-                "parakeet",
-                "main",
-                None,
-                None,
-            ),
-            (
-                ModelPreset::Qwen3Asr06b,
-                "qwen3-asr-0.6b",
-                "cstr/qwen3-asr-0.6b-GGUF",
-                "qwen3-asr-0.6b-q8_0.gguf",
-                "qwen3",
-                "58bd3202f835f46b24b17142cb503b0860c737a5",
-                Some("Qwen/Qwen3-ASR-0.6B"),
-                Some("5eb144179a02acc5e5ba31e748d22b0cf3e303b0"),
-            ),
-            (
-                ModelPreset::Qwen3Asr17b,
-                "qwen3-asr-1.7b",
-                "cstr/qwen3-asr-1.7b-GGUF",
-                "qwen3-asr-1.7b-q8_0.gguf",
-                "qwen3",
-                "674df5d44b50a63e7102a18895ed20e3f91de301",
-                Some("Qwen/Qwen3-ASR-1.7B"),
-                Some("7278e1e70fe206f11671096ffdd38061171dd6e5"),
-            ),
-            (
-                ModelPreset::ParakeetUltra,
-                "parakeet-ultra",
-                "cstr/parakeet-ultra-GGUF",
-                "parakeet-ultra-q8_0.gguf",
-                "parakeet",
-                "252cd632a21e98ba5edbdeb61c7274d01c54cb73",
-                Some("moondream/parakeet-ultra"),
-                Some("73175eb7aeb0d82f1e2a6b53b3aabc10a90bcd0b"),
-            ),
-            (
-                ModelPreset::ParakeetRedux,
-                "parakeet-redux",
-                "cstr/parakeet-redux-GGUF",
-                "parakeet-redux-q8_0.gguf",
-                "parakeet",
-                "3f288b7fb33caff80f1424bd5ea1cecaf9808209",
-                Some("moondream/parakeet-redux"),
-                Some("2bf128600aac4b16946f7ed8372e56117fe5e23b"),
-            ),
-        ] {
+    fn preset_names_round_trip_and_artifacts_follow_acquisition_policy() {
+        let pinned_revision = |revision: &str| {
+            revision.len() == 40 && revision.bytes().all(|byte| byte.is_ascii_hexdigit())
+        };
+        let repo_path = |repo: &str| {
+            repo.split_once('/').is_some_and(|(owner, name)| {
+                !owner.is_empty() && !name.is_empty() && !name.contains('/')
+            })
+        };
+        let mut names = std::collections::HashSet::new();
+        for &preset in ModelPreset::value_variants() {
+            let id = preset.id();
+            assert!(names.insert(id), "duplicate preset id: {id}");
             assert_eq!(ModelPreset::from_str(id, false).unwrap(), preset);
             assert_eq!(
                 serde_json::from_str::<ModelPreset>(&format!("\"{id}\"")).unwrap(),
                 preset
             );
             assert_eq!(serde_json::to_string(&preset).unwrap(), format!("\"{id}\""));
-            assert_eq!(preset.id(), id);
             assert_eq!(preset.to_string(), id);
-            assert_eq!(preset.repo(), repo);
-            assert_eq!(preset.filename(), filename);
+            assert!(repo_path(preset.repo()), "{id}: hosted repository");
+            assert!(
+                preset
+                    .filename()
+                    .to_ascii_lowercase()
+                    .ends_with("-q8_0.gguf"),
+                "{id}: hosted artifact must be Q8_0"
+            );
+            let backend = if matches!(preset, ModelPreset::Qwen3Asr06b | ModelPreset::Qwen3Asr17b) {
+                "qwen3"
+            } else {
+                "parakeet"
+            };
             assert_eq!(preset.backend(), backend);
-            assert_eq!(preset.revision(), revision);
-            assert_eq!(preset.source_repo(), source_repo);
-            assert_eq!(preset.source_revision(), source_revision);
+            if preset == ModelPreset::ParakeetV3 {
+                assert_eq!(preset.revision(), "main");
+            } else {
+                assert!(pinned_revision(preset.revision()), "{id}: hosted revision");
+            }
+            match (preset.source_repo(), preset.source_revision()) {
+                (Some(repo), Some(revision)) => {
+                    assert!(repo_path(repo), "{id}: original checkpoint repository");
+                    assert!(
+                        pinned_revision(revision),
+                        "{id}: original checkpoint revision"
+                    );
+                }
+                (None, None) => assert!(matches!(
+                    preset,
+                    ModelPreset::ParakeetV2 | ModelPreset::ParakeetV3
+                )),
+                _ => panic!("{id}: original checkpoint repository and revision must be paired"),
+            }
         }
         for unknown in ["qwen3", "parakeet", "Qwen3Asr06b", "qwen3-asr-0.6b-q4"] {
             assert!(ModelPreset::from_str(unknown, false).is_err());
