@@ -109,6 +109,10 @@ fn general_stutters_work_before_number_and_acronym_formatting() {
             ("It it's fine", "It's fine"),
             ("he he's and you you're ready", "He's and you're ready"),
             ("sh sh should and th-th-the test", "Should and the test"),
+            // Repeated initials before a matching word are ambiguous with
+            // spelled letters, including uppercase ASR output. The existing
+            // prefix-stutter policy consistently treats these as restarts.
+            ("T T ten", "10"),
             (
                 "C plus plus and dash dash verbose",
                 "C plus plus and dash dash verbose",
@@ -129,19 +133,17 @@ fn general_stutters_work_before_number_and_acronym_formatting() {
 }
 
 #[test]
-fn year_fillers_keep_boundaries_without_reordering_stutters() {
+fn filler_removal_feeds_year_parsing_without_reordering_stutters() {
     for profile in [CleaningProfile::Safe, CleaningProfile::Aggressive] {
         assert_clean_cases(
             profile,
             &[
-                ("twenty uh twenty layers", "20 20 layers"),
-                ("twenty uh twenty.", "20 20."),
-                ("twenty uh um twenty layers", "20 20 layers"),
-                ("twenty uh, um twenty layers", "20 20 layers"),
-                ("20 uh twenty layers", "20 20 layers"),
-                ("nineteen uh nineteen layers", "19 19 layers"),
-                ("19 uh 19 layers", "19 19 layers"),
-                ("eighteen uh eighteen layers", "18 18 layers"),
+                ("twenty uh twenty layers", "2020 layers"),
+                ("twenty uh twenty.", "2020."),
+                ("twenty uh um twenty layers", "2020 layers"),
+                ("twenty uh, um twenty layers", "2020 layers"),
+                ("In twenty uh twenty six", "In 2026"),
+                ("Twenty, uh, twenty five", "2025"),
                 ("one uh hundred", "100"),
                 ("twenty uh five layers", "25 layers"),
                 ("twenty twenty uh minutes", "20 20 minutes"),
@@ -163,7 +165,7 @@ fn year_fillers_keep_boundaries_without_reordering_stutters() {
         .try_clean("um, twenty uh twenty layers")
         .unwrap();
     let hits = &result.rules_fired;
-    assert_eq!(result.text, "20 20 layers");
+    assert_eq!(result.text, "2020 layers");
     assert_eq!(hits[0].name, "filled-pauses");
     assert_eq!(hits[0].matches, 2);
     assert_eq!(

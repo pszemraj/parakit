@@ -8,14 +8,36 @@
 pub(super) fn is_unit(word: &str) -> bool {
     let unit = regex_static!(
         concat!(
-            r"^(?:[kmunpgtpeKMGTPE]?(?:G|M|S|A|W|V|B)|[KMGTPE]?iB|[kKMGT]?Hz|[A-Z]P[SMH]|[kKMGT]?px|",
-            r"(?i:bit|mol|amp|ton|bar|rad|lux|db|lb|lbs|oz|ft|yd|usd|eur|gbp|jpy|cad|aud|chf|cny|",
+            r"(?i)^(?:ms|ns|gb|mb|kb|tb|gib|mib|kib|hz|khz|mhz|ghz|kg|km|cm|mm|fps|kw|mw|gw|px|",
+            r"bit|mol|amp|ton|bar|rad|lux|db|lb|lbs|oz|ft|yd|usd|eur|gbp|jpy|cad|aud|chf|cny|",
             r"(?:nano|micro|milli|centi|deci|kilo|mega|giga|tera)?(?:meter|metre|gram|second)s?|",
-            r"seconds?|secs?|minutes?|mins?|hours?|days?|weeks?|months?|years?|degrees?|percent|cents?|dollars?|euros?|pounds?|watts?|(?:kilo|mega|giga|tera)?(?:bytes?|bits?)))$"
+            r"seconds?|secs?|minutes?|mins?|hours?|degrees?|percent|cents?|dollars?|euros?|pounds?|watts?|(?:kilo|mega|giga|tera)?(?:bytes?|bits?))$"
         ),
         "numeric unit regex must compile"
     );
-    unit.is_match(word)
+    unit.is_match(word) || is_calendar_unit(&word.to_ascii_lowercase())
+}
+
+/// # Returns
+/// Whether a lowercase word names a calendar division that can take an ordinal.
+pub(super) fn is_calendar_unit(word: &str) -> bool {
+    matches!(
+        word,
+        "day"
+            | "days"
+            | "week"
+            | "weeks"
+            | "month"
+            | "months"
+            | "year"
+            | "years"
+            | "decade"
+            | "decades"
+            | "century"
+            | "centuries"
+            | "millennium"
+            | "millennia"
+    )
 }
 
 /// # Returns
@@ -24,6 +46,7 @@ pub(super) fn number_word(word: &str) -> bool {
     matches!(
         word,
         "zero"
+            | "nought"
             | "one"
             | "two"
             | "three"
@@ -97,6 +120,12 @@ pub(super) fn number_word(word: &str) -> bool {
             | "point"
             | "-"
     )
+}
+
+/// # Returns
+/// Whether a word may mean zero inside an explicitly recognized numeric structure.
+pub(super) fn zero_alias(word: &str) -> bool {
+    matches!(word, "oh" | "o" | "nought")
 }
 
 /// # Arguments

@@ -59,7 +59,27 @@ fn version_components_do_not_absorb_a_following_size() {
             ("Capacity 2.5 seven B.", "Capacity 2.5 7B."),
             ("Llama three point one seventy B.", "Llama 3.1 70B."),
             ("Llama 3.1 seventy B.", "Llama 3.1 70B."),
+            ("Llama seventy B three point one.", "Llama 70B 3.1."),
+            ("Granite thirty B four point one.", "Granite 30B 4.1."),
+            ("Mistral seven B v zero point three.", "Mistral 7B v0.3."),
+            ("Plan B v two point oh.", "Plan B v2.0."),
             ("About 1 5 M parameters.", "About 1 5M parameters."),
+        ],
+    );
+}
+
+#[test]
+fn size_suffixes_preserve_unmatched_scale_values() {
+    assert_clean_cases(
+        CleaningProfile::Safe,
+        &[
+            ("Use 5 hundred K.", "Use 500K."),
+            ("Use five hundred K.", "Use 500K."),
+            ("Use two point five million B.", "Use 2500000B."),
+            ("Use five thousand M.", "Use 5000M."),
+            ("Use two point five million M.", "Use 2.5M."),
+            ("Use five hundred thousand K.", "Use 500K."),
+            ("Use seventy billion B.", "Use 70B."),
         ],
     );
 }

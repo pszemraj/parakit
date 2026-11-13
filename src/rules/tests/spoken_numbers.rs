@@ -40,6 +40,9 @@ fn text2num_renders_signed_numbers() {
             ("400 minus 128.", "400 minus 128."),
             ("Ten minus five is five.", "10 minus 5 is 5."),
             ("Ten minus five point six.", "10 minus 5.6."),
+            ("Plus or minus five.", "Plus or minus 5."),
+            ("Plus or minus five point six.", "Plus or minus 5.6."),
+            ("Plus or minus five K.", "Plus or minus 5K."),
             ("400 minus 128 K.", "400 minus 128K."),
             ("Minus v one point six.", "Minus v1.6."),
             ("Use minus hundred twenty eight K.", "Use -128K."),
@@ -171,12 +174,17 @@ fn large_spoken_magnitudes_use_readable_hybrid_notation() {
 fn numeric_nouns_and_unsupported_runs_keep_their_words() {
     assert_clean_at_thresholds(&[
         ("All fours.", "All fours."),
+        // Plural number nouns do not become identifier suffixes.
+        ("Q fours.", "Q fours."),
         ("High fives.", "High fives."),
         ("Dressed to the nines.", "Dressed to the nines."),
         ("The ones I like.", "The ones I like."),
         ("GPT OSS twenty B.", "GPT OSS 20B."),
         ("Two oh oh seven.", "Two oh oh seven."),
         ("Double oh seven.", "Double oh seven."),
+        ("Four nought seven.", "Four nought seven."),
+        ("Wake up at oh six forty.", "Wake up at oh six forty."),
+        ("Meet at oh eight thirty.", "Meet at oh eight thirty."),
         ("Top P point nine five.", "Top P point nine five."),
         ("All fours point five.", "All fours point five."),
         ("GPT OSS twenty point six.", "GPT OSS 20.6."),
@@ -189,17 +197,16 @@ fn numeric_nouns_and_unsupported_runs_keep_their_words() {
 }
 
 #[test]
-fn zero_scale_coefficients_keep_their_value_and_follow_the_threshold() {
+fn zero_scale_coefficients_retain_their_complete_wording() {
     for threshold in [0.0, 4.0, 10.0] {
         let cleaner = cleaner_with_number_threshold(Some(threshold));
-        for (input, digits) in [
-            ("Zero million dollars.", "0 million dollars."),
-            ("Zero hundred hours.", "0 hours."),
+        for input in [
+            "Zero million dollars.",
+            "Zero hundred hours.",
+            "Zero thousand rows.",
+            "Nought hundred hours.",
         ] {
-            assert_eq!(
-                cleaner.clean_text(input),
-                if threshold == 0.0 { digits } else { input }
-            );
+            assert_eq!(cleaner.clean_text(input), input, "{threshold}: {input}");
         }
     }
 }
@@ -910,6 +917,28 @@ fn version_components_use_text2num_without_a_custom_number_parser() {
         &[
             ("V zero point five point two.", "v0.5.2."),
             ("PyTorch two point thirteen point oh.", "PyTorch 2.13.0."),
+            (
+                "PyTorch two point seven point oh plus cuda twelve point eight.",
+                "PyTorch 2.7.0 plus cuda 12.8.",
+            ),
+            (
+                "PyTorch two point seven point oh and Python three point twelve.",
+                "PyTorch 2.7.0 and Python 3.12.",
+            ),
+            ("Qwen three one point seven B.", "Qwen three 1.7B."),
+            ("Qwen three zero point six B.", "Qwen three 0.6B."),
+            (
+                "Beta one zero point nine, beta two zero point nine five.",
+                "Beta one 0.9, beta two 0.95.",
+            ),
+            ("Python three three point twelve.", "Python three 3.12."),
+            ("Opus four five point five.", "Opus 4 5.5."),
+            ("Ubuntu two four point oh four.", "Ubuntu two 4.04."),
+            ("twenty five two point five liter.", "25 2.5 liter."),
+            (
+                "arXiv twenty four oh one point oh one two three four.",
+                "arXiv twenty four oh 1.01234.",
+            ),
             (
                 "Windows ten point zero point nineteen thousand forty five.",
                 "Windows 10.0.19045.",

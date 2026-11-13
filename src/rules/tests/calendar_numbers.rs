@@ -56,7 +56,7 @@ fn century_pairs_form_years_without_context_or_threshold_bypasses() {
                     },
                 ),
                 ("Q4 twenty twenty five.", "Q4 2025."),
-                ("Twenty uh twenty layers.", "20 20 layers."),
+                ("Twenty uh twenty layers.", "2020 layers."),
                 ("The year seventeen seventy-six.", "The year 17 76."),
                 ("The year 19 06.", "The year 19 06."),
                 ("The year 020 26.", "The year 020 26."),
@@ -105,6 +105,18 @@ fn following_time_and_measurement_units_block_year_joining() {
     ] {
         assert_eq!(cleaner.clean_text(input), expected, "{input}");
     }
+    for unit in "ms ns gb mb kb tb gib mib kib hz khz mhz ghz kg km cm mm fps kw mw gw px db"
+        .split_whitespace()
+    {
+        for unit in [unit.to_string(), unit.to_uppercase()] {
+            let input = format!("It took twenty thirty {unit}.");
+            assert_eq!(cleaner.clean_text(&input), format!("It took 20 30 {unit}."));
+        }
+    }
+    for noun in ["TV shows", "EV sales", "PS games", "A", "S", "V", "W", "G"] {
+        let input = format!("In twenty twenty six {noun}.");
+        assert_eq!(cleaner.clean_text(&input), format!("In 2026 {noun}."));
+    }
 }
 
 #[test]
@@ -112,6 +124,13 @@ fn dates_and_identifier_words_follow_the_number_threshold() {
     for threshold in [0.0, 4.0, 10.0] {
         let cleaner = cleaner_with_number_threshold(Some(threshold));
         for (input, expected) in [
+            ("Ship it on the twenty second.", "Ship it on the 22nd."),
+            ("The twenty second century.", "The 22nd century."),
+            ("The one hundred and second.", "The 102nd."),
+            (
+                "Ship it on twenty second, please.",
+                "Ship it on 22nd, please.",
+            ),
             (
                 "Q two of twenty twenty six.",
                 if threshold <= 2.0 {

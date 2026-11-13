@@ -2,7 +2,7 @@
 
 use text2num::Language;
 
-use super::number_words::is_unit;
+use super::number_words::{is_unit, zero_alias};
 use super::numbers::{NumberKind, NumberSpan, NumberToken, Replacement};
 
 /// Propose century-pair years independently of surrounding prose or thresholds.
@@ -50,7 +50,7 @@ pub(super) fn classify(
                 && (10.0..100.0).contains(&tail.value)
                 && horizontal_gap(input, tokens[century.end - 1].end, tokens[tail.start].start);
             let zero = between.len() == 1
-                && matches!(between[0].lowercase.as_str(), "oh" | "o")
+                && zero_alias(&between[0].lowercase)
                 && tail.value < 10.0
                 && tail.text.len() == 1
                 && horizontal_gap(input, tokens[century.end - 1].end, between[0].start)

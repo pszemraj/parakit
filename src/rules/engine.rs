@@ -446,12 +446,10 @@ impl Cleaner {
     ///
     /// # Panics
     ///
-    /// Does not panic: deferred filler hits are inserted at a position
-    /// recorded before subsequent rule hits are appended.
+    /// Does not panic; passes are applied in their compiled order.
     pub fn try_clean(&self, input: &str) -> Result<CleanResult> {
         let mut text = Cow::Borrowed(input);
         let mut rules_fired = Vec::new();
-        let mut deferred_pauses: Option<(&CompiledRule, usize)> = None;
 
         let mut index = 0;
         while let Some(rule) = self.rules.get(index) {
@@ -481,43 +479,10 @@ impl Cleaner {
                     }
                     text = Cow::Owned(normalized.into_owned());
                 }
-                if let Some((pauses, hit_index)) = deferred_pauses.take() {
-                    let transformed = pauses.apply(text.as_ref())?;
-                    if transformed.matches > 0 && transformed.text.as_ref() != text.as_ref() {
-                        if let Some(hit) = rules_fired
-                            .get_mut(hit_index)
-                            .filter(|hit| hit.name == pauses.name)
-                        {
-                            hit.matches += transformed.matches;
-                        } else {
-                            rules_fired.insert(
-                                hit_index,
-                                RuleHit {
-                                    name: pauses.name.clone(),
-                                    matches: transformed.matches,
-                                },
-                            );
-                        }
-                        text = Cow::Owned(transformed.text.into_owned());
-                    }
-                }
                 continue;
             }
             index += 1;
-            let transformed = match &rule.transform {
-                CompiledTransform::Regex { re, replacement }
-                    if rule.name == "filled-pauses"
-                        && self.rules[index..].iter().any(|later| {
-                            matches!(later.transform, CompiledTransform::Numbers { .. })
-                        }) =>
-                {
-                    // Keep a filler between repeated century components until
-                    // parsing, without changing other stutter/acronym ordering.
-                    deferred_pauses = Some((rule, rules_fired.len()));
-                    super::passes::defer_year_fillers(text.as_ref(), re, replacement)
-                }
-                _ => rule.apply(text.as_ref())?,
-            };
+            let transformed = rule.apply(text.as_ref())?;
             if transformed.matches == 0 || transformed.text.as_ref() == text.as_ref() {
                 continue;
             }

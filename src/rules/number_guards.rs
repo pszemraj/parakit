@@ -4,7 +4,7 @@ use std::borrow::Cow;
 use std::ops::Range;
 use text2num::{find_numbers, Language, Token};
 
-use super::number_words::{run_start, scale};
+use super::number_words::{is_calendar_unit, run_start, scale};
 use super::numbers::{NumberSpan, NumberToken};
 
 /// Find phrases whose number words must retain their original spelling.
@@ -27,7 +27,7 @@ pub(super) fn protected(
     let mut ranges = Vec::new();
     for (index, token) in tokens.iter().enumerate() {
         let word = token.lowercase.as_str();
-        if word == "zero"
+        if matches!(word, "zero" | "nought")
             && !spans
                 .iter()
                 .any(|span| span.start < index && index < span.end)
@@ -38,14 +38,9 @@ pub(super) fn protected(
             let end = (index + 1..tokens.len())
                 .find(|&at| !super::number_words::number_word(&tokens[at].lowercase))
                 .unwrap_or(tokens.len());
-            if tokens[index + 1..end]
-                .iter()
-                .any(|t| scale(&t.lowercase).is_none())
-            {
-                // Do not let the parser's implicit coefficient replace zero
-                // or discard an additive remainder in a compound quantity.
-                ranges.push(index..end);
-            }
+            // Zero does not supply the parser's implicit coefficient of one.
+            // Keep the complete phrase, including any additive remainder.
+            ranges.push(index..end);
         }
         if matches!(word, "second" | "seconds") && second_is_time_unit(tokens, index, language) {
             ranges.push(index..index + 1);
@@ -79,7 +74,12 @@ pub(super) fn protected(
             }
             continue;
         }
-        if at(tokens, index + 1, "of") || word.ends_with('s') {
+        if at(tokens, index + 1, "of")
+            || word.ends_with('s')
+            || spans
+                .iter()
+                .any(|span| span.ordinal && span.end == index + 1)
+        {
             let plural = word.ends_with('s');
             if let Some(denominator) = ordinal_ending(tokens, index + 1, plural, language) {
                 if let Some(range) = fraction(tokens, spans, index, Some(denominator), language) {
@@ -158,7 +158,15 @@ fn fraction(
         start -= 1;
     }
     let scale_first = joined && start > 0 && scale(&tokens[start - 1].lowercase).is_some();
-    if !of && !has_scale && !scale_first && !(plural && ordinal.is_some()) {
+    // A singular denominator following a separate "one" is a fraction even
+    // without "of". The one inside "one hundredth" belongs to the ordinal.
+    let singular_numerator = ordinal.is_some()
+        && (start > 0 && at(tokens, start - 1, "one")
+            || article_before
+                && tokens
+                    .get(end)
+                    .is_none_or(|token| !token.text.chars().any(char::is_alphanumeric)));
+    if !of && !has_scale && !scale_first && !singular_numerator && !(plural && ordinal.is_some()) {
         return None;
     }
     if ordinal.is_some() && !plural && !has_scale {
@@ -301,9 +309,16 @@ fn second_is_time_unit(tokens: &[NumberToken<'_>], index: usize, language: &Lang
     if let Some(range) =
         ordinal_ending(tokens, index + 1, false, language).filter(|range| range.start < index)
     {
-        // Unhyphenated "thirty second" is a duration unless a date cue
-        // selects the ordinal reading. Hyphenated ordinals are handled above.
-        return !at(tokens, index + 1, "of")
+        // Phrase endings and calendar divisions select the ordinal reading.
+        // Otherwise a following noun keeps the duration reading, even after
+        // "the" ("the thirty second timeout").
+        return tokens
+            .get(index + 1)
+            .is_some_and(|token| token.text.chars().any(char::is_alphanumeric))
+            && !at(tokens, index + 1, "of")
+            && !tokens
+                .get(index + 1)
+                .is_some_and(|token| is_calendar_unit(&token.lowercase))
             && !(range.start > 0
                 && matches!(
                     tokens[range.start - 1].lowercase.as_str(),

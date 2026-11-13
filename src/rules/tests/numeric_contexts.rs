@@ -62,6 +62,9 @@ fn singular_fractions_remain_worded_without_hiding_ordinal_dates() {
         for input in [
             "A fifth of a dollar.",
             "One fifth of the total.",
+            "One fifth.",
+            "A fifth.",
+            "One twenty-first.",
             "One hundredth of a second.",
             "A twenty-first of the total.",
             "One twenty-first of the total.",
@@ -118,6 +121,15 @@ fn ordinal_before_second_does_not_convert_the_time_unit() {
             cleaner.clean_text("The twenty-second file."),
             "The 22nd file."
         );
+        assert_eq!(
+            cleaner.clean_text("The thirty second timeout."),
+            "The 30 second timeout."
+        );
+        let fifth = if threshold > 5.0 { "fifth" } else { "5th" };
+        assert_eq!(
+            cleaner.clean_text("A fifth customer."),
+            format!("A {fifth} customer.")
+        );
     }
     let input = "Wait thirty second timeout. ".repeat(512);
     assert_eq!(
@@ -162,6 +174,7 @@ fn identifier_stems_join_only_numbers_already_rendered_as_digits() {
             ("BM twenty five.", "BM 25."),
             ("B two.", "B two."),
             ("F thirty two.", "F32."),
+            ("O seven.", "O7."),
             ("SM thirty two.", "SM32."),
             ("OK five minutes ago.", "OK 5 minutes ago."),
             ("B 2 weeks.", "B2 weeks."),
@@ -177,6 +190,31 @@ fn identifier_stems_join_only_numbers_already_rendered_as_digits() {
             ("R five nine five.", "R 5 9 5."),
             ("P 99.9 five.", "P 99.9 5."),
             ("SM 8.2 nine.", "SM 8.2 9."),
+        ],
+    );
+}
+
+#[test]
+fn prose_point_does_not_hide_an_independent_number() {
+    assert_clean_cases(
+        CleaningProfile::Safe,
+        &[
+            (
+                "At this point ten GPUs were idle.",
+                "At this point 10 GPUs were idle.",
+            ),
+            (
+                "At this point five jobs finished.",
+                "At this point 5 jobs finished.",
+            ),
+            (
+                "At this point twenty five jobs finished.",
+                "At this point 25 jobs finished.",
+            ),
+            ("Use point nine five.", "Use point nine five."),
+            ("Use point oh five.", "Use point oh five."),
+            ("Use point zero five.", "Use point zero five."),
+            ("Use nought point five.", "Use 0.5."),
         ],
     );
 }

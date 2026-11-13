@@ -170,7 +170,7 @@ fn you_know_requires_full_comma_delimiting() {
 }
 
 #[test]
-fn filled_pauses_are_removed_without_matching_er_acronym() {
+fn filled_pauses_are_removed_before_acronyms_are_collapsed() {
     assert_clean_cases(
         CleaningProfile::Safe,
         &[
@@ -179,6 +179,9 @@ fn filled_pauses_are_removed_without_matching_er_acronym() {
             ("I, erm, agree.", "I agree."),
             ("Erm, I agree.", "I agree."),
             ("The ER team arrived.", "The ER team arrived."),
+            ("I went to U M last year", "I went to UM last year"),
+            ("our E R M framework", "Our ERM framework"),
+            ("U H M", "UHM"),
         ],
     );
 }

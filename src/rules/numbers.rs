@@ -1,6 +1,6 @@
 //! Parse original numeric spans, classify them, then render without re-reading output.
 
-use super::number_words::{number_word, scale};
+use super::number_words::{number_word, scale, zero_alias};
 use std::borrow::Cow;
 use std::ops::Range;
 use text2num::{find_numbers, Language, Token};
@@ -43,7 +43,9 @@ impl Token for &NumberToken<'_> {
     fn text_lowercase(&self) -> Cow<'_, str> {
         // text2num strips a trailing s even from nouns ("ones", "OSS").
         // Zero aliases belong only inside an explicitly recognized structure.
-        if number_word(&self.lowercase) || self.text.parse::<f64>().is_ok() {
+        if number_word(&self.lowercase) && !zero_alias(&self.lowercase)
+            || self.text.parse::<f64>().is_ok()
+        {
             self.lowercase.as_str().into()
         } else {
             "~".into()
@@ -277,14 +279,27 @@ pub(super) fn normalize<'a>(
             && (rendered
                 || bare_scale && span.value >= threshold && enabled.contains(&NumberKind::Spoken))
         {
+            let suffix = tokens[end].text;
+            let suffix_scale = match suffix {
+                "K" => 1e3,
+                "M" => 1e6,
+                "B" => 1e9,
+                _ => unreachable!("size suffix checked above"),
+            };
+            // A repeated scale is redundant ("seventy billion B"). Other
+            // scale words still contribute to the coefficient ("5 hundred K").
+            let coefficient =
+                if end > span.start && scale(&tokens[end - 1].lowercase) == Some(suffix_scale) {
+                    (value / suffix_scale).to_string()
+                } else if scaled || !scales.is_empty() {
+                    value.to_string()
+                } else {
+                    text.clone()
+                };
             proposals.push(Replacement {
                 start: span.start - usize::from(article && bare_scale),
                 end: end + 1,
-                text: format!(
-                    "{}{}",
-                    text.split_whitespace().next().unwrap(),
-                    tokens[end].text
-                ),
+                text: format!("{coefficient}{suffix}"),
                 kind: NumberKind::Size,
             });
         }
@@ -368,7 +383,7 @@ pub(super) fn normalize<'a>(
         if pair[0].end >= pair[1].start
             || !tokens[pair[0].end..pair[1].start]
                 .iter()
-                .all(|token| matches!(token.lowercase.as_str(), "oh" | "o"))
+                .all(|token| zero_alias(&token.lowercase))
         {
             continue;
         }
@@ -383,16 +398,24 @@ pub(super) fn normalize<'a>(
         mixed.push(spans[first].start..spans[last].end);
     }
     // Include leading aliases too ("double oh seven", "oh oh seven").
-    for span in &spans {
+    for (index, span) in spans.iter().enumerate() {
         let mut start = span.start;
-        while start > 0 && matches!(tokens[start - 1].lowercase.as_str(), "oh" | "o") {
+        while start > 0
+            && zero_alias(&tokens[start - 1].lowercase)
+            && !identifier_stem(input, &tokens, start)
+        {
             start -= 1;
         }
         if start < span.start {
-            mixed.push(start..span.end);
+            let mut last = index;
+            while last + 1 < spans.len() && spans[last].end == spans[last + 1].start {
+                last += 1;
+            }
+            mixed.push(start..spans[last].end);
         }
     }
-    // A bare point is prose, not permission to convert only its trailing digits.
+    // Protect unsupported leading decimals, but not prose such as "at this
+    // point ten GPUs". A decimal tail is digit-spelled or has a leading zero.
     for (at, token) in tokens.iter().enumerate() {
         if token.lowercase == "point"
             && !proposals
@@ -400,10 +423,39 @@ pub(super) fn normalize<'a>(
                 .any(|p| p.kind == NumberKind::Version && p.start < at && at < p.end)
         {
             let mut end = at + 1;
-            while end < tokens.len() && number_word(&tokens[end].lowercase) {
+            while end < tokens.len()
+                && (number_word(&tokens[end].lowercase) || zero_alias(&tokens[end].lowercase))
+            {
                 end += 1;
             }
-            protected.push(at..end);
+            let tail = &tokens[at + 1..end];
+            let digit = |token: &NumberToken<'_>| {
+                matches!(
+                    token.lowercase.as_str(),
+                    "zero"
+                        | "one"
+                        | "two"
+                        | "three"
+                        | "four"
+                        | "five"
+                        | "six"
+                        | "seven"
+                        | "eight"
+                        | "nine"
+                ) || zero_alias(&token.lowercase)
+            };
+            if tail
+                .first()
+                .is_some_and(|t| t.lowercase == "zero" || zero_alias(&t.lowercase))
+                || tail.len() >= 2 && tail.iter().all(digit)
+                || at > 0
+                    && tokens[at - 1]
+                        .lowercase
+                        .strip_suffix('s')
+                        .is_some_and(number_word)
+            {
+                protected.push(at..end);
+            }
         }
         // Scientific notation is not a supported numeric structure. Keep the
         // entire expression readable instead of converting only its exponent.
@@ -423,10 +475,19 @@ pub(super) fn normalize<'a>(
     }
     // Spoken decimal versions participate in the same identifier join as
     // literal decimals, while keeping their attribution to spoken-versions.
+    let occupied: Vec<_> = proposals
+        .iter()
+        .filter(|p| enabled.contains(&p.kind))
+        .map(|p| p.start..p.end)
+        .collect();
     for proposal in &mut proposals {
         if enabled.contains(&NumberKind::Identifier)
             && proposal.kind == NumberKind::Version
+            && !proposal.text.starts_with('v')
             && identifier_stem(input, &tokens, proposal.start)
+            && !occupied
+                .iter()
+                .any(|range| range.end == proposal.start && range.contains(&(proposal.start - 1)))
             && !spans
                 .iter()
                 .any(|next| next.start == proposal.end && !next.ordinal)
@@ -531,7 +592,8 @@ fn apply_sign(
         || proposal.text.starts_with('v')
         || !matches!(tokens[start - 1].lowercase.as_str(), "minus" | "negative")
         || start >= 2
-            && (tokens[start - 2].text == "-" || spans.iter().any(|span| span.end == start - 1))
+            && (matches!(tokens[start - 2].lowercase.as_str(), "-" | "or")
+                || spans.iter().any(|span| span.end == start - 1))
         || !input[tokens[start - 1].end..tokens[start].start]
             .bytes()
             .all(|byte| matches!(byte, b' ' | b'\t'))
@@ -595,22 +657,13 @@ fn parse_range(
 ) -> Vec<NumberSpan> {
     let mut spans: Vec<_> = find_numbers(tokens[range.clone()].iter(), language, 0.0)
         .into_iter()
-        .map(|n| {
-            let zero_scale = tokens[range.start + n.start].lowercase == "zero"
-                && tokens
-                    .get(range.start + n.start + 1)
-                    .is_some_and(|t| scale(&t.lowercase).is_some())
-                && tokens[range.start + n.start + 1..range.start + n.end]
-                    .iter()
-                    .all(|t| scale(&t.lowercase).is_some());
-            NumberSpan {
-                start: range.start + n.start,
-                end: range.start + n.end,
-                text: if zero_scale { "0".to_string() } else { n.text },
-                value: if zero_scale { 0.0 } else { n.value },
-                ordinal: n.is_ordinal,
-                literal: false,
-            }
+        .map(|n| NumberSpan {
+            start: range.start + n.start,
+            end: range.start + n.end,
+            text: n.text,
+            value: n.value,
+            ordinal: n.is_ordinal,
+            literal: false,
         })
         .collect();
     for (at, token) in tokens.iter().enumerate().take(range.end).skip(range.start) {

@@ -2,7 +2,7 @@
 
 use text2num::{text2digits, Language};
 
-use super::number_words::scale;
+use super::number_words::{scale, zero_alias};
 use super::numbers::{NumberKind, NumberSpan, NumberToken, Replacement};
 
 /// Propose dotted numeric expressions without changing the original tokens.
@@ -31,13 +31,28 @@ pub(super) fn classify(
         let starts_number =
             (token.text != "-" && token.lowercase != "and" && number_word(token, language))
                 || literal(token.text)
-                || matches!(token.lowercase.as_str(), "oh" | "o")
+                || zero_alias(&token.lowercase)
                 || spans
                     .iter()
                     .any(|span| span.start == cursor && !span.ordinal);
-        let candidate = starts_number
-            .then(|| candidate(input, tokens, spans, cursor, language))
-            .flatten();
+        // A recognized version establishes a new boundary even when the
+        // general parser absorbed its fraction and the next quantity together.
+        let mut consumed = replacements
+            .last()
+            .map_or(0, |value: &Replacement| value.end);
+        while consumed > 0
+            && tokens
+                .get(consumed)
+                .is_some_and(|token| scale(&token.lowercase).is_some())
+        {
+            consumed += 1;
+        }
+        let candidate = (starts_number
+            && !spans
+                .iter()
+                .any(|span| span.start >= consumed && span.start < cursor && cursor < span.end))
+        .then(|| candidate(input, tokens, spans, cursor, language))
+        .flatten();
         let Some((end, mut text)) = candidate else {
             cursor += 1;
             continue;
@@ -105,15 +120,33 @@ fn candidate(
     {
         return None;
     }
-    // The shared parser has already separated independent counts, including
-    // "fifty and two point five". A version base cannot join them again.
-    if !tokens[start..point]
+    // A later version in the same prose run is independent. Only collect
+    // points whose intervening component is itself a complete number.
+    let mut points = vec![point];
+    for next in point + 1..run_end {
+        if tokens[next].lowercase == "point" {
+            let previous = *points.last()?;
+            if component(&tokens[previous + 1..next], language).is_none() {
+                break;
+            }
+            points.push(next);
+        }
+    }
+    // Shared spans separate independent counts. Digit-by-digit bases may
+    // cross those boundaries only for an IPv4-shaped dotted expression.
+    let digit_base = tokens[start..point]
         .iter()
-        .all(|token| token.text == "-" || digit(token, language).is_some())
-        && spans
+        .all(|token| token.text == "-" || digit(token, language).is_some());
+    let digit_sequence = digit_base
+        && tokens[start..point]
             .iter()
-            .any(|span| start < span.start && span.start < point)
-    {
+            .filter(|token| token.text != "-")
+            .count()
+            > 1;
+    let crosses_numbers = spans
+        .iter()
+        .any(|span| start < span.start && span.start < point);
+    if (digit_sequence || crosses_numbers) && !(digit_base && points.len() >= 3) {
         return None;
     }
     let base = if literal_end > start {
@@ -121,13 +154,13 @@ fn candidate(
     } else {
         component(&tokens[start..point], language)?
     };
-    let points: Vec<_> = (point..run_end)
-        .filter(|&index| tokens[index].lowercase == "point")
-        .collect();
     if points.len() > 1 {
         if let Some(version) = dotted(input, tokens, &points, run_end, &base, language) {
             return Some(version);
         }
+    }
+    if digit_sequence {
+        return None;
     }
     let (end, fraction) = component_prefix(input, tokens, point + 1, run_end, false, language)?;
     Some((end, format!("{base}.{fraction}")))
@@ -274,9 +307,10 @@ fn digit(token: &NumberToken<'_>, language: &Language) -> Option<String> {
 }
 
 fn alias(word: &str) -> &str {
-    match word {
-        "oh" | "o" => "zero",
-        _ => word,
+    if zero_alias(word) {
+        "zero"
+    } else {
+        word
     }
 }
 
