@@ -18,6 +18,8 @@ cargo check --workspace --all-targets --all-features
 
 The all-features check can request accelerator toolchains that the current host does not have. Follow [GPU Feature Validation](#gpu-feature-validation) for the host-specific fallback, then run the native GPU build and runtime checks on each supported platform.
 
+`tests/native_correctness_build.rs` verifies bundled source-patch application and the CMake hook that compiles the generated copies. It does not run live Qwen inference; validate that behavior with the [Qwen comparisons](#qwen-and-moondream-comparisons) and [native acceptance cases](model-validation.md#qwen-options-long-input-and-reload).
+
 ## GPU Feature Validation
 
 Use the [Windows scripts](../../scripts/windows/README.md) for native CUDA/Vulkan builds. Raw `cargo check --workspace --all-targets --all-features` may still enter CMake's Visual Studio generator and fail before Rust typechecking if Visual Studio CUDA BuildCustomizations are stale. A known failure leaves `CudaToolkitDir` empty and reports `CUDA Toolkit directory '' does not exist`.

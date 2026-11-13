@@ -112,6 +112,8 @@ When the control endpoint is absent and the singleton lock is free, `status` and
 
 The daemon keeps a ring buffer of recent transcripts in memory (`daemon.transcript_history` entries, 10 by default). It retains transcripts even when insertion is blocked or fails, but skips those left whitespace-only by sanitization. `copy-last` acts on the most recent one by default; pass `N` (1-based, counting back from the most recent) to reach further back, e.g. `parakit copy-last 3` for the third-most-recent transcript. The ring disappears when the daemon stops, so treat it as a same-session convenience.
 
+With `daemon.transcript_history = 0`, `history` and `copy-last` report `transcript history is disabled (daemon.transcript_history = 0)`, and `status` shows `last transcript: history disabled`.
+
 In a terminal, `parakit history` opens a picker with the newest transcript selected. Up/Down selects an entry and shows its full text; PageUp/PageDown scrolls long previews. Enter copies the selected entry and closes the picker after success. Escape or Ctrl+C closes it without copying. A copy failure stays visible in the picker. New dictations cannot silently change which entry is selected; an entry evicted from the ring or lost in a daemon restart reports that it is no longer available.
 
 Piped or redirected `history` output stays a plain newest-first list. Use `--plain` to request that list in a terminal, `--limit N` to limit the entries shown, or `--text N` to print one full transcript without clipboard access. `--quiet` never opens the picker. Full-text previews and output respect the control protocol's 64 KiB response limit; oversized text reports an error without truncation, but Enter can still copy the selected picker entry.

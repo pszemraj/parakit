@@ -56,9 +56,13 @@ The editor can repair a broken config, but its exit does not validate the file. 
 
 The [config reference](config_reference.toml) describes precedence, CLI overrides, and settings available only in the file. Use `parakit start` for daemon flags. The profile, trailing-period, and disable-rule flags also work on `parakit rules list` and `parakit rules test` so you can check cleaning changes before restarting; the profile flag is `--profile` there instead of `--cleaning-profile`.
 
+`rules test` applies the configured `cleaning.number_threshold`. `rules list` describes the passes and their activation without applying that threshold to text.
+
 For Qwen model selection, language hints, and context, see the [Qwen3-ASR guide](models/qwen3-asr.md). Other presets are listed under [model selection](running.md#model-presets).
 
 TOML, unknown-key, invalid-value, and rule-validation errors name the config path.
+
+A negative or non-finite number threshold reports `number threshold must be a finite value greater than or equal to 0 (got <value>)`. Empty CLI paths (`-m ""` and `--log-dir ""`) are rejected during argument parsing, before configuration is loaded.
 
 For `daemon.model_idle_minutes` behavior, see [idle model offload](running.md#idle-model-offload).
 
@@ -219,5 +223,5 @@ Read by the HTTP client library (reqwest's system-proxy support), in upper and l
 
 ### `PATH`
 
-`parakit fetch --from-source` searches it for python3 or python. Both source rebuilds and Q6_K preparation require crispasr-quantize here (crispasr-quantize.exe on Windows).
+`parakit fetch --from-source` searches it for `python3` or `python`, the model's converter (`convert-parakeet-to-gguf.py` or `convert-qwen3-asr-to-gguf.py`), and `download_asr_checkpoint.py` when downloading an original Hugging Face checkpoint. Both source rebuilds and Q6_K preparation require `crispasr-quantize` here (`crispasr-quantize.exe` on Windows).
 `parakit config edit` relies on it to find the editor program.

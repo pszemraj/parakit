@@ -226,7 +226,7 @@ pub(crate) struct CleaningConfig {
     /// Keep the single terminal period that cleanup removes by default.
     /// CLI `--keep-trailing-period` forces this on, and `--no-keep-trailing-period` forces it off.
     pub(crate) keep_trailing_period: Option<bool>,
-    /// Threshold of the spoken-numbers rule.
+    /// Conversion threshold shared by the numeric rules.
     /// Every spoken cardinal and ordinal is compared with it, including larger values and lists: below it they retain the ASR wording, and at or above it they become digits.
     /// A run of adjacent spoken counts containing any value below the threshold retains its complete wording, including a final size suffix. Otherwise its counts render separately.
     /// Unset resolves to the built-in default of 4, so zero through three and first through third stay as produced.
@@ -410,7 +410,7 @@ pub(crate) const TEMPLATE: &str = r#"# parakit config.toml
 # CLI --keep-trailing-period forces this on, and --no-keep-trailing-period forces it off.
 # keep_trailing_period = false
 
-# Threshold of the spoken-numbers rule, 0 or more.
+# Conversion threshold shared by the numeric rules, 0 or more.
 # Every spoken cardinal and ordinal is compared with it, including values of 10 or more and values in lists.
 # One below the threshold is left exactly as the ASR model produced it, never forced to words or digits, and one at or above it becomes digits.
 # A run of adjacent spoken counts containing any value below the threshold retains its whole wording, including a final size suffix.
@@ -424,7 +424,7 @@ pub(crate) const TEMPLATE: &str = r#"# parakit config.toml
 
 # Additional literal words or phrases to preserve in the repeated-word pass.
 # Matching ignores case; other cleaning rules still apply. No CLI flag.
-# repetition_exceptions = ["something", "hee", "bang", "tomato", "paddle", "chinny chin chin"]
+# repetition_exceptions = ["something", "tomato", "paddle", "chinny chin chin"]
 
 # Rule names to disable.
 # Merged with any CLI --disable-rule flags.

@@ -739,8 +739,8 @@ mod tests {
                 let result = select_gguf_file(&refs, case.requested);
                 match result {
                     Ok(selection) => {
-                        // Exhaustive match on the real Selection (hub.rs:169,
-                        // Picked/AutoQ8 are its only two variants): a 3rd
+                        // Exhaustive match on Selection (Picked/AutoQ8 are
+                        // its only two variants): a third
                         // variant added there must fail compilation here.
                         let (is_auto_q8, picked) = match selection {
                             Selection::Picked(s) => (false, s),

@@ -112,7 +112,7 @@ profile = "safe"
 
 # bool. Keep a single final period instead of applying fix-trailing-period.
 # Overridden by: --keep-trailing-period/--no-keep-trailing-period (also on rules).
-# See: [punctuation](cleaning-rules.md#general-invariants).
+# See: [punctuation](cleaning-rules.md#profiles).
 keep_trailing_period = false
 
 # number, finite and 0 or greater (integer or float). Spoken-number conversion cutoff.
