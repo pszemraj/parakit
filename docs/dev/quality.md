@@ -159,6 +159,14 @@ The worker acknowledges each required transcript and verifies the expected resid
 
 Simulation requests the original shortcut's mode. To compare Qwen context, set `context_on_default_hotkey = true` under `[qwen]` in the isolated configuration, with nonzero `context_dictations` and `daemon.transcript_history`; the first successful capture supplies history for later captures. Keep context disabled for ordinary reload-parity checks.
 
+### Cleaned Worker Parity
+
+Use the same installed executable and isolated configuration for worker simulation, `config show`, and `rules test`. Start with defaults, then repeat with an aggressive profile, configured threshold, repetition exceptions, and disabled numeric passes; use the existing [cleaner unit tests](../../src/rules/tests.rs) and [pipeline regressions](../../tests/cleaning_regressions.rs) for text-level boundaries instead of maintaining a separate platform-specific list.
+
+Run the pinned WAV with `--no-cleaning` to check recognition, then with `--cleaning` and `--log-dir` to check post-processing. Feed the latter run's exact JSONL `raw` text to `rules test`; its `Clean:` result must equal JSONL `cleaned`, and the changing-rule names and order must agree. This comparison uses the same recognized text even if separate inference runs differ.
+
+Restart the process with the same configuration and verify config read-back and [cleaning metadata](../logging.md#transcription-record-fields), including `ruleset_id` and `cleaner_version`, remain consistent. On a successful cached-model `--quiet` run, verify empty stdout/stderr while JSONL still records the cleaned transcript and skipped simulation insertion without a paste event. Keep recognition quality, cleaning parity, and physical insertion results separate.
+
 ## NeMo Reference Helper
 
 The Python helper runs NVIDIA NeMo's official [Parakeet-TDT-0.6B-v3](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3) path:
