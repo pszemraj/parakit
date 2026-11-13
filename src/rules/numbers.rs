@@ -1,116 +1,771 @@
-//! Spoken-number formatting layered around the `text2num` English parser.
+//! Parse original numeric spans, classify them, then render without re-reading output.
 
-use regex::Regex;
+use super::number_words::{number_word, scale, zero_alias};
 use std::borrow::Cow;
-use text2num::{
-    find_numbers, find_numbers_iter, replace_numbers_in_text, text2digits, Language, Occurence,
-    Token,
-};
+use std::ops::Range;
+use text2num::{find_numbers, Language, Token};
 
-use super::engine::TransformResult;
-
-#[derive(Debug)]
-struct NumberToken<'a> {
-    text: &'a str,
-    lowercase: String,
-    start: usize,
-    end: usize,
+/// Independently configurable numeric renderers sharing one parsed transcript.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum NumberKind {
+    Spoken,
+    Version,
+    Year,
+    Identifier,
+    Size,
+}
+impl NumberKind {
+    /// # Returns
+    /// The configuration and reporting name for this numeric type.
+    pub(super) const fn name(self) -> &'static str {
+        match self {
+            Self::Spoken => "spoken-numbers",
+            Self::Version => "spoken-versions",
+            Self::Year => "calendar-years",
+            Self::Identifier => "numeric-identifiers",
+            Self::Size => "size-suffixes",
+        }
+    }
 }
 
+/// A token and its byte boundaries in the original transcript.
+#[derive(Debug)]
+pub(super) struct NumberToken<'a> {
+    pub(super) text: &'a str,
+    pub(super) lowercase: String,
+    pub(super) start: usize,
+    pub(super) end: usize,
+}
 impl Token for &NumberToken<'_> {
     fn text(&self) -> Cow<'_, str> {
         self.text.into()
     }
-
     fn text_lowercase(&self) -> Cow<'_, str> {
-        self.lowercase.as_str().into()
+        // text2num strips a trailing s even from nouns ("ones", "OSS").
+        // Nought is unambiguously numeric; oh/o need an explicit structure.
+        if self.lowercase == "nought" {
+            "zero".into()
+        } else if number_word(&self.lowercase) && !zero_alias(&self.lowercase)
+            || self.text.parse::<f64>().is_ok()
+        {
+            self.lowercase.as_str().into()
+        } else {
+            "~".into()
+        }
     }
 }
 
-/// Convert English number expressions to digits by delegating to `text2num`.
-///
-/// `threshold` gates only isolated single-digit cardinals and ordinals: those below it keep their wording, and cardinals of 10 or more always convert.
-/// Expressions ending in one explicit `million` or `billion` scale retain
-/// that word with a numeric coefficient for readability (e.g. `"three
-/// billion"` becomes `"3 billion"`). Multi-scale expressions retain
-/// `text2num`'s full-digit rendering. Contexts where `"second"` is a time
-/// unit rather than an ordinal, indefinite magnitudes such as `"hundreds"`
-/// and `"a few million"`, and fractional quantities such as `"half a
-/// million"`, are protected from conversion. A line break ends every
-/// expression: each line is converted independently and every break is kept.
+/// One parsed value with start/end indexing the original token array.
+#[derive(Clone, Debug)]
+pub(super) struct NumberSpan {
+    pub(super) start: usize,
+    pub(super) end: usize,
+    pub(super) text: String,
+    pub(super) value: f64,
+    pub(super) ordinal: bool,
+    pub(super) literal: bool,
+}
+
+/// A typed rendering proposal whose range indexes original tokens.
+#[derive(Debug)]
+pub(super) struct Replacement {
+    pub(super) start: usize,
+    pub(super) end: usize,
+    pub(super) text: String,
+    pub(super) kind: NumberKind,
+}
+
+/// Classify and render enabled numeric types without re-reading rendered text.
 ///
 /// # Arguments
-///
-/// * `input` - Transcript text to normalize.
-/// * `threshold` - Value at or above which isolated single-digit cardinals and ordinals become digits.
+/// * `input` - Original transcript text.
+/// * `threshold` - Minimum value rendered by the general spoken-number rule.
+/// * `enabled` - Numeric categories enabled in the compiled cleaner.
 ///
 /// # Returns
+/// Rendered text and per-type counts, retaining text outside accepted spans.
 ///
-/// A [`TransformResult`] with `matches` set to `1` if the text changed and
-/// `0` otherwise.
-///
-/// # Errors
-///
-/// This function is infallible: it returns [`TransformResult`], not
-/// `Result`, and never returns an `Err`.
-pub(crate) fn normalize_spoken_numbers(input: &str, threshold: f64) -> TransformResult<'_> {
+/// # Panics
+/// Panics only if the built-in token regex cannot compile.
+pub(super) fn normalize<'a>(
+    input: &'a str,
+    threshold: f64,
+    enabled: &[NumberKind],
+) -> (Cow<'a, str>, Vec<(NumberKind, usize)>) {
+    let re = regex_static!(
+        r"[A-Za-z]+|[0-9]+(?:\.[0-9]+)*|[^\t ]",
+        "numeric token regex"
+    );
+    let tokens: Vec<_> = re
+        .find_iter(input)
+        .map(|found| NumberToken {
+            text: found.as_str(),
+            lowercase: found.as_str().to_ascii_lowercase(),
+            start: found.start(),
+            end: found.end(),
+        })
+        .collect();
+    if tokens.is_empty() {
+        return (Cow::Borrowed(input), Vec::new());
+    }
     let language = Language::english();
-    // text2num tokenizes across all whitespace, so a multi-line input would
-    // join "twenty\nfive" into "25" and drop the break. Guards would likewise
-    // absorb a count from the previous paragraph.
-    let text = input
-        .split('\n')
-        .map(|line| render_signed_numbers(replace_numbers_in_segments(line, &language, threshold)))
-        .collect::<Vec<_>>()
-        .join("\n");
-    let matches = usize::from(text != input);
-    TransformResult {
-        text: if matches == 0 {
+    let (initial, mut protected) = parse_spans(&tokens, &language);
+    protected.extend(super::number_guards::protected(
+        &tokens, &initial, &language,
+    ));
+    let mut spans = Vec::new();
+    let mut start = 0;
+    // Reparse around protected ranges on the same tokens, so a fractional
+    // numerator cannot absorb an adjacent independent exact quantity.
+    let mut ambiguous = Vec::new();
+    for end in 0..=tokens.len() {
+        if end == tokens.len() || protected.iter().any(|range| range.contains(&end)) {
+            if start < end {
+                let (mut parsed, ranges) = parse_spans(&tokens[start..end], &language);
+                for span in &mut parsed {
+                    span.start += start;
+                    span.end += start;
+                }
+                spans.extend(parsed);
+                ambiguous.extend(ranges.into_iter().map(|r| r.start + start..r.end + start));
+            }
+            start = end + 1;
+        }
+    }
+    protected.extend(ambiguous);
+    let mut proposals = super::number_versions::classify(input, &tokens, &spans, &language);
+    proposals.extend(super::number_labels::classify(
+        input, &tokens, &spans, &language,
+    ));
+    // Version boundaries split parser spans before quantities are classified.
+    // This operates on original tokens, including a remaining scale coefficient.
+    for proposal in proposals
+        .iter_mut()
+        .filter(|p| p.kind == NumberKind::Version)
+    {
+        apply_sign(input, &tokens, &spans, proposal);
+    }
+    let versions: Vec<_> = proposals
+        .iter()
+        .filter(|p| p.kind == NumberKind::Version && enabled.contains(&p.kind))
+        .collect();
+    let mut quantities = if versions.is_empty() {
+        spans.clone()
+    } else {
+        Vec::new()
+    };
+    let mut position = 0;
+    for version in &versions {
+        if position < version.start {
+            quantities.extend(parsed_slice(&tokens, position..version.start, &language));
+        }
+        position = version.end;
+        if let Ok(value) = version.text.parse::<f64>() {
+            let mut end = version.end;
+            while tokens
+                .get(end)
+                .is_some_and(|token| scale(&token.lowercase).is_some())
+            {
+                end += 1;
+            }
+            quantities.push(NumberSpan {
+                start: version.start,
+                end: version.end,
+                text: version.text.clone(),
+                value,
+                ordinal: false,
+                literal: true,
+            });
+            position = end;
+        }
+    }
+    if !versions.is_empty() && position < tokens.len() {
+        quantities.extend(parsed_slice(&tokens, position..tokens.len(), &language));
+    }
+    quantities.retain(|span| {
+        !protected
+            .iter()
+            .any(|r| r.start < span.end && span.start < r.end)
+    });
+    quantities.sort_by_key(|span| span.start);
+    for span in &quantities {
+        let words = &tokens[span.start..span.end];
+        let bare_scale = scale(&words[0].lowercase).is_some();
+        let article = span.start > 0 && tokens[span.start - 1].lowercase == "a";
+        let mut start = span.start;
+        let mut end = span.end;
+        let mut text = span.text.clone();
+        let mut value = span.value;
+        let mut scaled = false;
+        while !span.ordinal
+            && tokens
+                .get(end)
+                .is_some_and(|token| scale(&token.lowercase).is_some())
+        {
+            let magnitude = &tokens[end].lowercase;
+            text.push(' ');
+            text.push_str(magnitude);
+            value *= scale(magnitude).unwrap();
+            end += 1;
+            scaled = true;
+        }
+        let scales: Vec<_> = words
+            .iter()
+            .filter_map(|word| scale(&word.lowercase).map(|value| (word.lowercase.as_str(), value)))
+            .collect();
+        let large: Vec<_> = scales
+            .iter()
+            .filter(|(name, _)| matches!(*name, "million" | "billion"))
+            .collect();
+        if !scaled
+            && large.len() == 1
+            && words
+                .last()
+                .is_some_and(|word| matches!(word.lowercase.as_str(), "million" | "billion"))
+            && (!bare_scale || end > span.start + 1)
+        {
+            text = format!("{} {}", span.value / large[0].1, large[0].0);
+        }
+        let eligible = !span.literal
+            && !words.iter().any(|word| word.lowercase == "point")
+            && (!bare_scale || end > span.start + 1)
+            && span.value >= threshold;
+        let rendered = span.literal || eligible && enabled.contains(&NumberKind::Spoken);
+        if eligible
+            && article
+            && bare_scale
+            && tokens
+                .get(end)
+                .is_none_or(|token| !matches!(token.lowercase.as_str(), "second" | "seconds"))
+        {
+            start -= 1;
+        }
+        let parameter_range = quantities.iter().any(|next| {
+            next.start > end
+                && tokens.get(next.end).is_some_and(|token| {
+                    matches!(token.lowercase.as_str(), "parameter" | "parameters")
+                })
+                && tokens[end..next.start].iter().all(|token| {
+                    matches!(
+                        token.lowercase.as_str(),
+                        "up" | "to" | "through" | "and" | "maybe" | "about" | "roughly"
+                    )
+                })
+        });
+        if rendered
+            && !span.ordinal
+            && !tokens[span.start..end]
+                .iter()
+                .any(|token| token.lowercase == "trillion")
+            && !(span.literal
+                && tokens
+                    .get(span.end)
+                    .is_some_and(|token| token.lowercase == "hundred"))
+            && (parameter_range
+                || tokens.get(end).is_some_and(|token| {
+                    matches!(token.lowercase.as_str(), "parameter" | "parameters")
+                }))
+        {
+            if let Some(compact) = compact_size(value) {
+                proposals.push(Replacement {
+                    start,
+                    end,
+                    text: compact,
+                    kind: NumberKind::Size,
+                });
+            }
+        }
+        if tokens
+            .get(end)
+            .is_some_and(|token| matches!(token.text, "K" | "M" | "B"))
+            && !span.ordinal
+            && !(bare_scale
+                && quantities
+                    .iter()
+                    .any(|previous| previous.end == span.start && !previous.ordinal))
+            && (rendered
+                || bare_scale && span.value >= threshold && enabled.contains(&NumberKind::Spoken))
+        {
+            let suffix = tokens[end].text;
+            let suffix_scale = match suffix {
+                "K" => 1_000,
+                "M" => 1_000_000,
+                "B" => 1_000_000_000,
+                _ => unreachable!("size suffix checked above"),
+            };
+            if let Some(coefficient) = size_suffix_coefficient(span, &tokens, end, suffix_scale) {
+                proposals.push(Replacement {
+                    start: span.start - usize::from(article && bare_scale),
+                    end: end + 1,
+                    text: format!("{coefficient}{suffix}"),
+                    kind: NumberKind::Size,
+                });
+            }
+        }
+        if rendered
+            && identifier_stem(input, &tokens, span.start)
+            && !span.ordinal
+            && !quantities.iter().any(|next| {
+                next.start == span.end
+                    && !next.ordinal
+                    && !proposals.iter().any(|proposal| {
+                        enabled.contains(&NumberKind::Year)
+                            && proposal.kind == NumberKind::Year
+                            && proposal.start == next.start
+                    })
+            })
+        {
+            let stem = &tokens[span.start - 1];
+            if span
+                .text
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || byte == b'.')
+            {
+                proposals.push(Replacement {
+                    start: span.start - 1,
+                    end: span.end,
+                    text: format!("{}{}", stem.text, span.text),
+                    kind: NumberKind::Identifier,
+                });
+            }
+        }
+        if eligible
+            || span.literal
+                && span.start > 0
+                && matches!(
+                    tokens[span.start - 1].lowercase.as_str(),
+                    "minus" | "negative"
+                )
+        {
+            proposals.push(Replacement {
+                start,
+                end,
+                text,
+                kind: NumberKind::Spoken,
+            });
+        }
+    }
+    // A low spoken member makes an adjacent run ambiguous as a whole.
+    // A decimal/version or a year remains its own explicitly classified type.
+    let mut mixed = Vec::new();
+    let mut at = 0;
+    while at < spans.len() {
+        let mut end = at + 1;
+        while end < spans.len()
+            && !spans[end - 1].ordinal
+            && !spans[end].ordinal
+            && spans[end - 1].end == spans[end].start
+            && input[tokens[spans[end - 1].end - 1].end..tokens[spans[end].start].start]
+                .bytes()
+                .all(|byte| matches!(byte, b' ' | b'\t'))
+            && !tokens[spans[end - 1].start..spans[end - 1].end]
+                .iter()
+                .any(|t| t.lowercase == "point")
+            && !tokens[spans[end].start..spans[end].end]
+                .iter()
+                .any(|t| t.lowercase == "point")
+        {
+            end += 1;
+        }
+        if end > at + 1
+            && spans[at..end]
+                .iter()
+                .any(|span| !span.literal && span.value < threshold)
+        {
+            mixed.push(spans[at].start..spans[end - 1].end);
+        }
+        at = end;
+    }
+    // Unknown zero aliases stay as a complete original run. Only an explicit
+    // version or a recognized century pair may interpret the alias as zero.
+    for (index, pair) in spans.windows(2).enumerate() {
+        if pair[0].end >= pair[1].start
+            || !tokens[pair[0].end..pair[1].start]
+                .iter()
+                .all(|token| zero_alias(&token.lowercase))
+        {
+            continue;
+        }
+        let mut first = index;
+        let mut last = index + 1;
+        while first > 0 && spans[first - 1].end == spans[first].start {
+            first -= 1;
+        }
+        while last + 1 < spans.len() && spans[last].end == spans[last + 1].start {
+            last += 1;
+        }
+        mixed.push(spans[first].start..spans[last].end);
+    }
+    // Include leading aliases too ("double oh seven", "oh oh seven").
+    for (index, span) in spans.iter().enumerate() {
+        let mut start = span.start;
+        while start > 0
+            && zero_alias(&tokens[start - 1].lowercase)
+            && !identifier_stem(input, &tokens, start)
+        {
+            start -= 1;
+        }
+        if start < span.start {
+            let mut last = index;
+            while last + 1 < spans.len() && spans[last].end == spans[last + 1].start {
+                last += 1;
+            }
+            mixed.push(start..spans[last].end);
+        }
+    }
+    // Protect unsupported leading decimals, but not prose such as "at this
+    // point ten GPUs". A decimal tail is digit-spelled or has a leading zero.
+    for (at, token) in tokens.iter().enumerate() {
+        if token.lowercase == "point"
+            && !proposals
+                .iter()
+                .any(|p| p.kind == NumberKind::Version && p.start < at && at < p.end)
+        {
+            let mut end = at + 1;
+            while end < tokens.len()
+                && (number_word(&tokens[end].lowercase) || zero_alias(&tokens[end].lowercase))
+            {
+                end += 1;
+            }
+            let tail = &tokens[at + 1..end];
+            let digit = |token: &NumberToken<'_>| {
+                matches!(
+                    token.lowercase.as_str(),
+                    "zero"
+                        | "one"
+                        | "two"
+                        | "three"
+                        | "four"
+                        | "five"
+                        | "six"
+                        | "seven"
+                        | "eight"
+                        | "nine"
+                ) || zero_alias(&token.lowercase)
+            };
+            if tail
+                .first()
+                .is_some_and(|t| t.lowercase == "zero" || zero_alias(&t.lowercase))
+                || tail.len() >= 2 && tail.iter().all(digit)
+                || at > 0
+                    && tokens[at - 1]
+                        .lowercase
+                        .strip_suffix('s')
+                        .is_some_and(number_word)
+            {
+                protected.push(at..end);
+            }
+        }
+        // Scientific notation is not a supported numeric structure. Keep the
+        // entire expression readable instead of converting only its exponent.
+        if token.lowercase == "e" && at > 0 {
+            let exponent = at
+                + 1
+                + usize::from(tokens.get(at + 1).is_some_and(|t| {
+                    matches!(t.lowercase.as_str(), "minus" | "negative" | "plus")
+                }));
+            if let (Some(base), Some(power)) = (
+                spans.iter().find(|s| s.end == at),
+                spans.iter().find(|s| s.start == exponent),
+            ) {
+                protected.push(base.start..power.end);
+            }
+        }
+    }
+    // Spoken decimal versions participate in the same identifier join as
+    // literal decimals, while keeping their attribution to spoken-versions.
+    let occupied: Vec<_> = proposals
+        .iter()
+        .filter(|p| enabled.contains(&p.kind))
+        .map(|p| p.start..p.end)
+        .collect();
+    for proposal in &mut proposals {
+        if enabled.contains(&NumberKind::Identifier)
+            && proposal.kind == NumberKind::Version
+            && !proposal.text.starts_with('v')
+            && identifier_stem(input, &tokens, proposal.start)
+            && !occupied
+                .iter()
+                .any(|range| range.end == proposal.start && range.contains(&(proposal.start - 1)))
+            && !spans
+                .iter()
+                .any(|next| next.start == proposal.end && !next.ordinal)
+        {
+            proposal.start -= 1;
+            proposal.text.insert_str(0, tokens[proposal.start].text);
+        }
+    }
+    // Literal dotted versions need no f64 value to compact a prefix.
+    for (at, token) in tokens.iter().enumerate().skip(1) {
+        let stem = &tokens[at - 1];
+        if token.text.starts_with(|ch: char| ch.is_ascii_digit())
+            && token.text.contains('.')
+            && !spans
+                .iter()
+                .any(|next| next.start == at + 1 && !next.ordinal)
+            && identifier_stem(input, &tokens, at)
+        {
+            proposals.push(Replacement {
+                start: at - 1,
+                end: at + 1,
+                text: format!("{}{}", stem.text, token.text),
+                kind: NumberKind::Identifier,
+            });
+        }
+    }
+    for proposal in proposals
+        .iter_mut()
+        .filter(|proposal| matches!(proposal.kind, NumberKind::Size | NumberKind::Spoken))
+    {
+        apply_sign(input, &tokens, &spans, proposal);
+    }
+    let priority = |kind| match kind {
+        NumberKind::Size => 5,
+        NumberKind::Version => 4,
+        NumberKind::Year => 3,
+        NumberKind::Identifier => 2,
+        NumberKind::Spoken => 1,
+    };
+    proposals.sort_by_key(|p| {
+        (
+            std::cmp::Reverse(priority(p.kind)),
+            p.start,
+            std::cmp::Reverse(p.end),
+        )
+    });
+    let mut accepted: Vec<Replacement> = Vec::new();
+    for proposal in proposals {
+        if !enabled.contains(&proposal.kind)
+            || !matches!(proposal.kind, NumberKind::Version | NumberKind::Year)
+                && mixed
+                    .iter()
+                    .any(|range| range.start < proposal.end && proposal.start < range.end)
+            || protected
+                .iter()
+                .any(|r| r.start < proposal.end && proposal.start < r.end)
+            || accepted
+                .iter()
+                .any(|p| p.start < proposal.end && proposal.start < p.end)
+        {
+            continue;
+        }
+        accepted.push(proposal);
+    }
+    accepted.sort_by_key(|p| p.start);
+    let mut output = String::with_capacity(input.len());
+    let mut cursor = 0;
+    let mut counts: Vec<(NumberKind, usize)> = Vec::new();
+    for proposal in accepted {
+        let start = tokens[proposal.start].start;
+        let end = tokens[proposal.end - 1].end;
+        output.push_str(&input[cursor..start]);
+        output.push_str(&proposal.text);
+        cursor = end;
+        if input[start..end] != proposal.text {
+            if let Some((_, count)) = counts.iter_mut().find(|(kind, _)| *kind == proposal.kind) {
+                *count += 1;
+            } else {
+                counts.push((proposal.kind, 1));
+            }
+        }
+    }
+    output.push_str(&input[cursor..]);
+    (
+        if output == input {
             Cow::Borrowed(input)
         } else {
-            Cow::Owned(text)
+            Cow::Owned(output)
         },
-        matches,
+        counts,
+    )
+}
+
+fn apply_sign(
+    input: &str,
+    tokens: &[NumberToken<'_>],
+    spans: &[NumberSpan],
+    proposal: &mut Replacement,
+) {
+    let start = proposal.start;
+    if start == 0
+        || proposal.text.starts_with('v')
+        || !matches!(tokens[start - 1].lowercase.as_str(), "minus" | "negative")
+        || start >= 2
+            && (tokens[start - 2].text == "-"
+                || start >= 3
+                    && tokens[start - 3].lowercase == "plus"
+                    && tokens[start - 2].lowercase == "or"
+                    && tokens[start - 1].lowercase == "minus"
+                || spans.iter().any(|span| span.end == start - 1))
+        || !input[tokens[start - 1].end..tokens[start].start]
+            .bytes()
+            .all(|byte| matches!(byte, b' ' | b'\t'))
+    {
+        return;
+    }
+    proposal.start -= 1;
+    proposal.text.insert(0, '-');
+}
+
+/// # Arguments
+/// * `input` - Original transcript text.
+/// * `tokens` - Original tokens and byte boundaries.
+/// * `start` - Index of the numeric token after the possible stem.
+///
+/// # Returns
+/// Whether a token has an uppercase identifier stem immediately before it.
+///
+/// # Panics
+/// Panics if `start` or token boundaries do not index the supplied input.
+pub(super) fn identifier_stem(input: &str, tokens: &[NumberToken<'_>], start: usize) -> bool {
+    start > 0 && {
+        let stem = &tokens[start - 1];
+        (stem.text == "SM"
+            || stem.text.len() == 1
+                && stem.text.bytes().all(|byte| byte.is_ascii_uppercase())
+                && !matches!(stem.text, "A" | "I"))
+            && stem.end <= tokens[start].start
+            && input[stem.end..tokens[start].start]
+                .bytes()
+                .all(|byte| matches!(byte, b' ' | b'\t'))
     }
 }
 
-/// Convert a line in segments separated by `and` between equal scales.
-///
-/// text2num reads "five thousand and ten thousand" as 5010 and 1000, but a
-/// quantity whose largest scale equals the one before `and` cannot continue
-/// that number. Other scales still join: "one hundred and twenty thousand five
-/// hundred" is 120500, and "two thousand and five hundred" is 2500.
-fn replace_numbers_in_segments(line: &str, language: &Language, threshold: f64) -> String {
-    let tokens = number_tokens(line);
-    let mut output = None;
-    let mut segment_start = 0;
-    for (index, pair) in tokens.windows(2).enumerate() {
-        let [scale, conjunction] = pair else {
+fn size_suffix_coefficient(
+    span: &NumberSpan,
+    tokens: &[NumberToken<'_>],
+    end: usize,
+    suffix_scale: u128,
+) -> Option<String> {
+    let repeated = scale(&tokens[end - 1].lowercase) == Some(suffix_scale as f64);
+    let scales: Vec<_> = tokens[span.start..end]
+        .iter()
+        .filter_map(|token| scale(&token.lowercase))
+        .collect();
+    if scales.is_empty() {
+        return Some(span.text.clone());
+    }
+    // A matching suffix abbreviates the final scale. Mismatched scales fold
+    // only whole coefficients with smaller scales; preserve other wording.
+    if !repeated && scales.iter().any(|&value| value >= suffix_scale as f64) {
+        return None;
+    }
+    let appended_end = end - usize::from(repeated && span.end < end);
+    if repeated && span.end == appended_end && span.end < end {
+        return Some(span.text.clone());
+    }
+    // Render from exact parsed digits, never from the floating-point value
+    // used for threshold comparisons and general magnitude classification.
+    let mut coefficient = span.text.parse::<u128>().ok()?;
+    for token in &tokens[span.end..appended_end] {
+        coefficient = coefficient.checked_mul(scale(&token.lowercase)? as u128)?;
+    }
+    if repeated && span.end == end {
+        if coefficient % suffix_scale != 0 {
+            return None;
+        }
+        coefficient /= suffix_scale;
+    }
+    Some(coefficient.to_string())
+}
+
+fn compact_size(value: f64) -> Option<String> {
+    for (scale, suffix) in [(1e9, 'B'), (1e6, 'M'), (1e3, 'K')] {
+        if value >= scale && value % (scale / 10.0) == 0.0 {
+            return Some(format!("{}{suffix}", value / scale));
+        }
+    }
+    None
+}
+
+fn parsed_slice(
+    tokens: &[NumberToken<'_>],
+    range: Range<usize>,
+    language: &Language,
+) -> Vec<NumberSpan> {
+    let (mut spans, _) = parse_spans(&tokens[range.clone()], language);
+    for span in &mut spans {
+        span.start += range.start;
+        span.end += range.start;
+    }
+    spans
+}
+
+fn parse_range(
+    tokens: &[NumberToken<'_>],
+    range: Range<usize>,
+    language: &Language,
+) -> Vec<NumberSpan> {
+    let mut spans: Vec<_> = find_numbers(tokens[range.clone()].iter(), language, 0.0)
+        .into_iter()
+        .map(|n| NumberSpan {
+            start: range.start + n.start,
+            end: range.start + n.end,
+            text: n.text,
+            value: n.value,
+            ordinal: n.is_ordinal,
+            literal: false,
+        })
+        .collect();
+    for (at, token) in tokens.iter().enumerate().take(range.end).skip(range.start) {
+        if token.text.starts_with(|ch: char| ch.is_ascii_digit())
+            && !spans.iter().any(|n| n.start <= at && at < n.end)
+        {
+            if let Ok(value) = token.text.parse::<f64>() {
+                spans.push(NumberSpan {
+                    start: at,
+                    end: at + 1,
+                    text: token.text.into(),
+                    value,
+                    ordinal: false,
+                    literal: true,
+                });
+            }
+        }
+    }
+    spans.sort_by_key(|span| span.start);
+    spans
+}
+
+fn parse_spans(
+    tokens: &[NumberToken<'_>],
+    language: &Language,
+) -> (Vec<NumberSpan>, Vec<Range<usize>>) {
+    let mut boundaries = vec![0, tokens.len()];
+    for (at, token) in tokens.iter().enumerate() {
+        if matches!(token.text, "\n" | "\r") {
+            boundaries.extend([at, at + 1]);
+        }
+    }
+    // An equal scale after "and" starts a separate quantity. Establish
+    // these boundaries before a greedy parse can absorb the next coefficient.
+    for (at, pair) in tokens.windows(2).enumerate() {
+        let Some(rank) = scale(&pair[0].lowercase) else {
             continue;
         };
-        let Some(rank) = scale_rank(&scale.lowercase) else {
-            continue;
-        };
-        if conjunction.lowercase != "and" {
+        if pair[1].lowercase != "and" {
             continue;
         }
-        let following = &tokens[index + 2..];
-        let Some(next) = find_numbers_iter(following.iter(), language, 0.0).next() else {
+        let limit = tokens[at + 2..]
+            .iter()
+            .position(|token| !number_word(&token.lowercase) && token.text.parse::<f64>().is_err())
+            .map_or(tokens.len(), |end| at + 2 + end);
+        let following = &tokens[at + 2..limit];
+        let Some(next) = find_numbers(following.iter(), language, 0.0)
+            .into_iter()
+            .next()
+        else {
             continue;
         };
         if next.start != 0 {
             continue;
         }
-        // Within one number, "and" follows a scale ("two hundred and fifty
-        // thousand"). Greedy parsing can also carry the next quantity across an
-        // "and" after a plain count ("fifty and two hundred"); stop there.
         let lead = (1..next.end)
-            .find(|&at| {
-                following[at].lowercase == "and"
-                    && scale_rank(&following[at - 1].lowercase).is_none()
+            .find(|&index| {
+                following[index].lowercase == "and"
+                    && scale(&following[index - 1].lowercase).is_none()
             })
             .unwrap_or(next.end);
-        // text2num ends a decimal before its scale: "three point six" then "million".
         let decimal = following[..lead]
             .iter()
             .any(|token| token.lowercase == "point");
@@ -119,708 +774,103 @@ fn replace_numbers_in_segments(line: &str, language: &Language, threshold: f64) 
         } else {
             lead
         };
-        let largest = following[..end]
+        if following[..end]
             .iter()
-            .filter_map(|token| scale_rank(&token.lowercase))
-            .max();
-        if largest != Some(rank) {
-            continue;
+            .filter_map(|token| scale(&token.lowercase))
+            .fold(0.0, f64::max)
+            == rank
+        {
+            boundaries.push(at + 2);
         }
-        let output = output.get_or_insert_with(|| String::with_capacity(line.len()));
-        output.push_str(&replace_numbers_preserving_literals(
-            &line[segment_start..conjunction.start],
-            language,
-            threshold,
-        ));
-        output.push_str(&line[conjunction.start..conjunction.end]);
-        segment_start = conjunction.end;
     }
-    let tail = replace_numbers_preserving_literals(&line[segment_start..], language, threshold);
-    match output {
-        Some(mut output) => {
-            output.push_str(&tail);
-            output
-        }
-        None => tail,
-    }
-}
-
-/// Order of magnitude for the scale words that can close a spoken quantity.
-fn scale_rank(word: &str) -> Option<u8> {
-    match word {
-        "hundred" => Some(2),
-        "thousand" => Some(3),
-        "million" => Some(6),
-        "billion" => Some(9),
-        _ => None,
-    }
-}
-
-/// Replace a spoken sign immediately before a number rendered by `text2num`.
-fn render_signed_numbers(input: String) -> String {
-    let signed_number = regex_static!(
-        r"(?i)(^|[^[:alnum:]_-])(?:negative|minus)[ \t]+(\d+(?:\.\d+)?(?:[ \t]+(?:million|billion))?)\b",
-        "signed-number regex must compile"
-    );
-    if !signed_number.is_match(&input) {
-        return input;
-    }
-    signed_number.replace_all(&input, "${1}-${2}").into_owned()
-}
-
-fn replace_numbers_preserving_literals(input: &str, language: &Language, threshold: f64) -> String {
-    let protected_re = regex_static!(
-        concat!(
-            r"(?i)\b(?:",
-            r"(?P<scale_first>(?:a[ \t]+)?(?:hundred|thousand|million|billion|trillion)[ \t]+and[ \t]+a[ \t]+(?:half|quarter))|",
-            r"(?:and[ \t]+)?(?:a[ \t]+)?(?:half|quarter)(?:[ \t]+of)?(?:[ \t]+a)?[ \t]+(?:hundred|thousand|million|billion|trillion)|",
-            r"(?:halves|quarters)(?:[ \t]+of)?(?:[ \t]+a)?[ \t]+(?:hundred|thousand|million|billion|trillion)|",
-            r"(?:(?:a[ \t]+)?few|several|(?:a[ \t]+)?couple(?:[ \t]+of)?)[ \t]+(?:hundred|thousand|million|billion|trillion)|",
-            r"(?P<denominator>[a-z]+(?:-[a-z]+)*)[ \t]+of(?:[ \t]+a)?[ \t]+(?:hundred|thousand|million|billion|trillion)|",
-            r"second|tens|hundreds|thousands|millions|billions|trillions)\b",
-        ),
-        "protected number-word regex must compile"
-    );
-    let previous_re = regex_static!(
-        r"(?i)([a-z0-9]+)([-\s]+)$",
-        "previous-token regex must compile"
-    );
-    let following_scale_re = regex_static!(
-        r"(?i)^(?:[-\s]+(?:hundred|thousand|million|billion|trillion)\b)+",
-        "following-scale regex must compile"
-    );
-
-    let protected_words: Vec<_> = protected_re
-        .captures_iter(input)
-        .filter_map(|captures| {
-            let found = captures.get(0).expect("whole match is required");
-            let mut ordinal_start = None;
-            if let Some(denominator) = captures.name("denominator") {
-                // Use the parser's full ordinal boundary, including spaced
-                // compounds such as "twenty first" or "one hundredth".
-                let mut tokens = number_tokens(&input[..denominator.end()]);
-                // text2num recognizes singular ordinals. Classify a plural
-                // denominator through its singular form while preserving the
-                // original text and byte positions for the literal span.
-                if let Some(last) = tokens.last_mut() {
-                    if is_plural_ordinal(
-                        &last.lowercase,
-                        &input[..last.start],
-                        previous_re,
-                        language,
-                    ) {
-                        last.lowercase.pop();
-                    }
-                }
-                let occurrences = find_numbers(tokens.iter(), language, 0.0);
-                let ordinal = occurrences
-                    .last()
-                    .filter(|number| number.end == tokens.len() && number.is_ordinal);
-                let Some(ordinal) = ordinal else {
-                    // The broad denominator candidate starts at the numerator
-                    // of "three-quarters" or "one-half". Retry its last word
-                    // so that it cannot hide an ordinary fraction guard.
-                    if let Some((_, suffix)) = denominator.as_str().rsplit_once('-') {
-                        let start = denominator.end() - suffix.len();
-                        if protected_re.captures_at(input, start).is_some_and(|retry| {
-                            retry.name("denominator").is_none()
-                                && retry.get(0).is_some_and(|fraction| {
-                                    fraction.start() == start && fraction.end() == found.end()
-                                })
-                        }) {
-                            return Some((found, false, Some(found.start())));
-                        }
-                    }
-                    // A rejected fraction candidate can contain a literal
-                    // plural magnitude. Preserve that original guard instead
-                    // of letting this broader candidate hide it.
-                    return plural_magnitude(denominator.as_str()).then_some((
-                        denominator,
-                        false,
-                        None,
-                    ));
-                };
-                let mut start = ordinal.start;
-                // Include only the adjacent fraction connectors; text2num
-                // remains responsible for every word inside the denominator.
-                for connector in ["a", "and"] {
-                    if start > 0
-                        && tokens[start - 1].lowercase == connector
-                        && input[tokens[start - 1].end..tokens[start].start]
-                            .bytes()
-                            .all(|byte| matches!(byte, b' ' | b'\t'))
-                    {
-                        start -= 1;
-                    }
-                }
-                ordinal_start = Some(tokens[start].start.min(found.start()));
-            }
-            if found.as_str().eq_ignore_ascii_case("second")
-                && !second_is_time_unit(&input[..found.start()], previous_re, language)
-            {
-                return None;
-            }
-            Some((found, captures.name("scale_first").is_some(), ordinal_start))
-        })
-        .collect();
-    if protected_words.is_empty() {
-        return replace_numbers_with_hybrid_magnitudes(input, language, threshold);
-    }
-
-    // Parse independently around literal spans. This preserves plural grammar
-    // and time units while exact quantities elsewhere still convert normally.
-    let mut output = String::with_capacity(input.len());
-    let mut last_end = 0;
-    for (index, (found, scale_first, ordinal_start)) in protected_words.iter().enumerate() {
-        let phrase_start = ordinal_start.unwrap_or(found.start()).max(last_end);
-        let prefix = &input[last_end..phrase_start];
-        let phrase = &input[phrase_start..found.end()];
-        let is_plural_magnitude = plural_magnitude(phrase);
-        let is_fraction = ordinal_start.is_some()
-            || phrase.split_ascii_whitespace().any(|word| {
-                matches!(
-                    word.to_ascii_lowercase().as_str(),
-                    "half" | "quarter" | "halves" | "quarters"
-                )
-            });
-        let protected_start = if is_plural_magnitude || is_fraction {
-            let preceding = if *scale_first
-                && phrase
-                    .split_ascii_whitespace()
-                    .next()
-                    .is_some_and(|word| word.eq_ignore_ascii_case("a"))
-            {
-                // The article already starts this quantity; a preceding year
-                // or chapter count is independent and must remain convertible.
-                None
-            } else if is_fraction && !scale_first {
-                preceding_fraction_start(prefix, phrase, previous_re, language)
-            } else {
-                preceding_number_start(prefix, language)
-            };
-            last_end + preceding.unwrap_or(prefix.len())
-        } else {
-            phrase_start
-        };
-        // Adjacent singular scales belong to the same indefinite quantity:
-        // parsing a later scale separately invents an exact count.
-        let protected_end = if !phrase.eq_ignore_ascii_case("second") {
-            found.end()
-                + following_scale_re
-                    .find(&input[found.end()..])
-                    .map_or(0, |following| following.end())
-        } else {
-            found.end()
-        };
-        // A following-scale extension must not swallow the beginning of the
-        // next protected phrase (e.g. "hundreds million and a half").
-        let protected_end =
-            protected_words
-                .get(index + 1)
-                .map_or(protected_end, |(next, _, ordinal_start)| {
-                    protected_end.min(ordinal_start.unwrap_or(next.start()).max(found.end()))
-                });
-        output.push_str(&replace_numbers_with_hybrid_magnitudes(
-            &input[last_end..protected_start],
-            language,
-            threshold,
-        ));
-        output.push_str(&input[protected_start..protected_end]);
-        last_end = protected_end;
-    }
-    output.push_str(&replace_numbers_with_hybrid_magnitudes(
-        &input[last_end..],
-        language,
-        threshold,
-    ));
-    output
-}
-
-/// Whether a word is one of the literal plural magnitude guards.
-fn plural_magnitude(phrase: &str) -> bool {
-    matches!(
-        phrase.to_ascii_lowercase().as_str(),
-        "tens" | "hundreds" | "thousands" | "millions" | "billions" | "trillions"
-    )
-}
-
-/// Return the start of the contiguous trailing cardinal phrases in a text slice,
-/// when followed only by whitespace. The caller keeps that raw span
-/// with the adjacent plural magnitude instead of converting it separately.
-fn preceding_number_start(input: &str, language: &Language) -> Option<usize> {
-    let tokens = number_tokens(input);
-    let occurrences = find_numbers(tokens.iter(), language, 0.0);
-    let last = occurrences.last()?;
-    if last.start == last.end
-        || last.is_ordinal
-        || last.end != tokens.len()
-        || !input[tokens[last.end - 1].end..]
-            .chars()
-            .all(char::is_whitespace)
-    {
-        return None;
-    }
-    let mut start = last.start;
-    for previous in occurrences.iter().rev().skip(1) {
-        // A preceding date/chapter ordinal is an independent exact quantity,
-        // even beside a plural magnitude or a phrase such as "quarter million".
-        if previous.is_ordinal {
-            break;
-        }
-        let adjacent = previous.end == start
-            && input[tokens[previous.end - 1].end..tokens[start].start]
-                .chars()
-                .all(char::is_whitespace);
-        let joined_fraction = previous.end + 1 == start
-            && tokens[previous.end].lowercase == "and"
-            && input[tokens[previous.end - 1].end..tokens[previous.end].start]
-                .chars()
-                .all(char::is_whitespace)
-            && input[tokens[previous.end].end..tokens[start].start]
-                .chars()
-                .all(char::is_whitespace);
-        if !adjacent && !joined_fraction {
-            break;
-        }
-        start = previous.start;
-    }
-    Some(tokens[start].start)
-}
-
-/// Keep a fraction's numerator or mixed count, but leave independent exact
-/// counts available for conversion before a singular fraction.
-fn preceding_fraction_start(
-    input: &str,
-    phrase: &str,
-    previous_re: &Regex,
-    language: &Language,
-) -> Option<usize> {
-    let input = input.strip_suffix('-').unwrap_or(input);
-    let start = preceding_number_start(input, language)?;
-    let joined = phrase
-        .split_ascii_whitespace()
-        .next()
-        .is_some_and(|word| word.eq_ignore_ascii_case("and"));
-    let plural = number_tokens(phrase).iter().any(|token| {
-        matches!(token.lowercase.as_str(), "halves" | "quarters")
-            || is_plural_ordinal(
-                &token.lowercase,
-                &format!("{input}{}", &phrase[..token.start]),
-                previous_re,
-                language,
-            )
-    });
-    // A conjunction can introduce either a mixed fraction or independent
-    // quantities. Preserve it with the count instead of guessing from nearby
-    // words such as "both" or "between".
-    if joined || plural {
-        return Some(start);
-    }
-    let numerator = number_tokens(&input[start..]);
-    let occurrences = find_numbers(numerator.iter(), language, 0.0);
-    let has_article = phrase
-        .split_ascii_whitespace()
-        .any(|word| word.eq_ignore_ascii_case("a"));
-    // An article already supplies the singular fraction's numerator. Preserve
-    // an explicit "one", but do not absorb a nearby chapter or year count.
-    let singular_numerator = numerator.len() == 1
-        && (!has_article || occurrences.last().is_some_and(|number| number.value == 1.0));
-    // `text2num` recognizes a compound count such as "two thousand and five"
-    // as one expression. Separate counts joined by "and" form a mixed fraction.
-    let mixed_numerator =
-        occurrences.len() > 1 && numerator.iter().any(|token| token.lowercase == "and");
-    (singular_numerator || mixed_numerator).then_some(start)
-}
-
-/// Classify plural denominators without mistaking elapsed seconds for fractions.
-fn is_plural_ordinal(word: &str, prefix: &str, previous_re: &Regex, language: &Language) -> bool {
-    let Some(singular) = word.strip_suffix('s') else {
-        return false;
-    };
-    if singular == "second" && second_is_time_unit(prefix, previous_re, language) {
-        return false;
-    }
-    let tokens = number_tokens(singular);
-    find_numbers(tokens.iter(), language, 0.0)
-        .last()
-        .is_some_and(|number| number.is_ordinal && number.end == tokens.len())
-}
-
-fn number_tokens(input: &str) -> Vec<NumberToken<'_>> {
-    let token_re = regex_static!(r"[A-Za-z0-9]+|[^\s]", "number token regex");
-
-    token_re
-        .find_iter(input)
-        .map(|found| NumberToken {
-            text: found.as_str(),
-            lowercase: found.as_str().to_ascii_lowercase(),
-            start: found.start(),
-            end: found.end(),
-        })
-        .collect()
-}
-
-/// Private-use character that makes text2num end a number before the next
-/// word. Like punctuation it ends the number without breaking a listing, so the
-/// next value keeps its threshold context. It never leaves this module.
-const NUMBER_BREAK: char = '\u{E000}';
-
-/// Convert a span after moving the ends that text2num's greedy parse misplaces.
-///
-/// text2num extends a number with every word that still fits. It reads "two
-/// hundred three hundred" as 203 and a bare 100, and "fifty and three" as 53.
-/// Each round marks where a new number starts and parses again, because a
-/// break after "and" can expose a count that the following scale then takes.
-fn replace_numbers_with_hybrid_magnitudes(
-    input: &str,
-    language: &Language,
-    threshold: f64,
-) -> String {
-    // Text that already holds the marker cannot be marked; a stranded scale
-    // there keeps its wording instead.
-    if input.contains(NUMBER_BREAK) {
-        return render_hybrid_magnitudes(input, language, threshold);
-    }
-    let mut marked: Option<String> = None;
-    // "and" breaks come first and stranded scales second, so two rounds
-    // suffice; the bound only guards against a cycle.
     for _ in 0..4 {
-        let text = marked.as_deref().unwrap_or(input);
-        let breaks = number_breaks(text, language);
-        if breaks.is_empty() {
-            break;
-        }
-        let mut next = String::with_capacity(text.len() + breaks.len() * NUMBER_BREAK.len_utf8());
-        let mut last = 0;
-        for at in breaks {
-            next.push_str(&text[last..at]);
-            next.push(NUMBER_BREAK);
-            last = at;
-        }
-        next.push_str(&text[last..]);
-        marked = Some(next);
-    }
-    match marked {
-        Some(text) => {
-            render_hybrid_magnitudes(&text, language, threshold).replace(NUMBER_BREAK, "")
-        }
-        None => render_hybrid_magnitudes(input, language, threshold),
-    }
-}
-
-/// Byte offsets, ascending, where a new number starts inside a text2num match.
-fn number_breaks(input: &str, language: &Language) -> Vec<usize> {
-    let tokens = number_tokens(input);
-    let occurrences = find_numbers(tokens.iter(), language, 0.0);
-    // "and" continues a number after a scale ("two hundred and fifty"), never
-    // after a count: "fifty and three" is two numbers, not 53.
-    let mut breaks: Vec<usize> = occurrences
-        .iter()
-        .filter(|number| !number.is_ordinal)
-        .flat_map(|number| number.start + 1..number.end.saturating_sub(1))
-        .filter(|&at| {
-            tokens[at].lowercase == "and" && scale_rank(&tokens[at - 1].lowercase).is_none()
-        })
-        .map(|at| tokens[at + 1].start)
-        .collect();
-    if breaks.is_empty() {
-        breaks = occurrences
+        let mut protected = Vec::new();
+        boundaries.sort_unstable();
+        boundaries.dedup();
+        let spans: Vec<_> = boundaries
             .windows(2)
-            .filter_map(|pair| {
-                let [count, scale] = pair else {
-                    return None;
-                };
-                match stranded_scale(input, &tokens, count, scale, language)? {
-                    StrandedScale::Coefficient(at) => Some(tokens[at].start),
-                    StrandedScale::Decimal(end) if end < scale.end => Some(tokens[end].start),
-                    StrandedScale::Decimal(_) | StrandedScale::Ambiguous => None,
-                }
-            })
+            .flat_map(|w| parse_range(tokens, w[0]..w[1], language))
             .collect();
+        let mut added = Vec::new();
+        for span in &spans {
+            for at in span.start + 1..span.end.saturating_sub(1) {
+                if tokens[at].lowercase == "and" && scale(&tokens[at - 1].lowercase).is_none() {
+                    added.push(at + 1);
+                }
+            }
+        }
+        for pair in spans.windows(2) {
+            let (count, next) = (&pair[0], &pair[1]);
+            if count.end + 1 == next.start && tokens[count.end].lowercase == "and" {
+                let before = tokens[count.start..count.end]
+                    .iter()
+                    .filter_map(|t| scale(&t.lowercase))
+                    .fold(0.0, f64::max);
+                let after = tokens[next.start..next.end]
+                    .iter()
+                    .filter_map(|t| scale(&t.lowercase))
+                    .fold(0.0, f64::max);
+                if before > 0.0 && before == after {
+                    added.push(next.start);
+                }
+            }
+            if count.end != next.start
+                || count.ordinal
+                || next.ordinal
+                || count.literal
+                || scale(&tokens[next.start].lowercase).is_none()
+            {
+                continue;
+            }
+            if tokens[count.start..count.end]
+                .iter()
+                .any(|t| t.lowercase == "point")
+            {
+                continue;
+            }
+            if scale(&tokens[count.end - 1].lowercase).is_some()
+                && tokens[count.start..count.end]
+                    .iter()
+                    .filter_map(|token| scale(&token.lowercase))
+                    .fold(0.0, f64::max)
+                    < scale(&tokens[next.start].lowercase).unwrap()
+            {
+                protected.push(count.start..next.end);
+                continue;
+            }
+            let splits: Vec<_> = (count.start + 1..count.end)
+                .filter(|&at| {
+                    let head = at - usize::from(tokens[at - 1].lowercase == "and");
+                    scale(&tokens[at].lowercase).is_none()
+                        && !matches!(tokens[at].text, "-" | "and")
+                        && tokens[at - 1].text != "-"
+                        && one_cardinal(&tokens[count.start..head], language)
+                        && one_cardinal(&tokens[at..next.end], language)
+                })
+                .collect();
+            if let [at] = splits.as_slice() {
+                added.push(*at);
+            } else {
+                protected.push(count.start..next.end);
+            }
+        }
+        added.retain(|at| !boundaries.contains(at));
+        if added.is_empty() {
+            return (spans, protected);
+        }
+        boundaries.extend(added);
     }
-    breaks
-}
-
-/// How to read a scale word that text2num could not apply to the number before it.
-enum StrandedScale {
-    /// The count starting at this token is the scale's coefficient.
-    Coefficient(usize),
-    /// A decimal coefficient takes the scale words before this token, which
-    /// starts the next number.
-    Decimal(usize),
-    /// More than one split is grammatical, or the scales may stack.
-    Ambiguous,
-}
-
-/// Classify a number that starts with a bare scale word right after another.
-///
-/// text2num cannot apply "hundred" to 203 or "thousand" to 1502, so it ends
-/// the first number and gives the scale an implicit coefficient of 1. The
-/// trailing count of the first number is the coefficient that was spoken. A
-/// split is accepted only when exactly one count position leaves two complete
-/// numbers.
-fn stranded_scale(
-    input: &str,
-    tokens: &[NumberToken<'_>],
-    count: &Occurence,
-    scale: &Occurence,
-    language: &Language,
-) -> Option<StrandedScale> {
-    let rank = scale_rank(&tokens[scale.start].lowercase)?;
-    if count.is_ordinal
-        || scale.is_ordinal
-        || count.end != scale.start
-        || !input[tokens[count.end - 1].end..tokens[scale.start].start]
-            .chars()
-            .all(char::is_whitespace)
-    {
-        return None;
-    }
-    let words = &tokens[count.start..count.end];
-    // text2num cannot scale a decimal at all; its scale words end the quantity.
-    if words.iter().any(|token| token.lowercase == "point") {
-        let end = (scale.start..scale.end)
-            .find(|&at| tokens[at].lowercase != "-" && scale_rank(&tokens[at].lowercase).is_none())
-            .unwrap_or(scale.end);
-        return Some(StrandedScale::Decimal(end));
-    }
-    // "fifteen hundred thousand" can stack its scales into 1500000.
-    let largest = words
-        .iter()
-        .filter_map(|token| scale_rank(&token.lowercase))
-        .max();
-    if scale_rank(&words.last()?.lowercase).is_some()
-        && largest.is_some_and(|largest| largest < rank)
-    {
-        return Some(StrandedScale::Ambiguous);
-    }
-    let mut splits = (count.start + 1..count.end).filter(|&at| {
-        let previous = &tokens[at - 1].lowercase;
-        let head_end = if previous == "and" { at - 1 } else { at };
-        tokens[at].lowercase != "and"
-            && scale_rank(&tokens[at].lowercase).is_none()
-            && previous != "-"
-            && is_one_number(&tokens[count.start..head_end], language)
-            && is_one_number(&tokens[at..scale.end], language)
-    });
-    let first = splits.next()?;
-    Some(if splits.next().is_some() {
-        StrandedScale::Ambiguous
-    } else {
-        StrandedScale::Coefficient(first)
-    })
-}
-
-/// Whether text2num reads all of `tokens` as exactly one cardinal.
-fn is_one_number(tokens: &[NumberToken<'_>], language: &Language) -> bool {
-    matches!(
-        find_numbers(tokens.iter(), language, 0.0).as_slice(),
-        [number] if number.start == 0 && number.end == tokens.len() && !number.is_ordinal
+    boundaries.sort_unstable();
+    boundaries.dedup();
+    (
+        boundaries
+            .windows(2)
+            .flat_map(|w| parse_range(tokens, w[0]..w[1], language))
+            .collect(),
+        Vec::new(),
     )
 }
 
-fn render_hybrid_magnitudes(input: &str, language: &Language, threshold: f64) -> String {
-    let numeric_re = regex_static!(
-        r"(?i)\b\d+(?:\.\d+)?[ \t]+(?:million|billion)\b",
-        "numeric magnitude regex"
-    );
-
-    let tokens = number_tokens(input);
-    let occurrences = find_numbers(tokens.iter(), language, 0.0);
-    let mut replacements: Vec<_> = numeric_re
-        .find_iter(input)
-        .map(|found| (found.start(), found.end(), found.as_str().to_string()))
-        .collect();
-
-    // Adjacent spoken small integers can name a year, time, phone number, or
-    // separate values. Preserve the entire run rather than interpreting it.
-    // Punctuation, explicit scales, decimals, and existing digits are boundaries.
-    let mut index = 0;
-    while index + 1 < occurrences.len() {
-        let first = &occurrences[index];
-        let mut end = index;
-        while let Some(next) = occurrences.get(end + 1) {
-            let previous = &occurrences[end];
-            if [previous, next].iter().any(|number| {
-                number.is_ordinal
-                    || !(0.0..100.0).contains(&number.value)
-                    || number.value.fract() != 0.0
-                    || tokens[number.start..number.end]
-                        .iter()
-                        .any(|token| token.lowercase == "point")
-                    || input[tokens[number.end - 1].end..].starts_with('-')
-            }) || previous.end != next.start
-                || !input[tokens[previous.start].start..tokens[next.end - 1].end]
-                    .chars()
-                    .all(|ch| ch.is_ascii_alphabetic() || matches!(ch, ' ' | '\t' | '-'))
-            {
-                break;
-            }
-            end += 1;
-        }
-        if end > index {
-            // A suffix such as "K" or "B" does not disambiguate the run either:
-            // "Llama three seventy B" names version 3 at 70B, not 370B.
-            let start = tokens[first.start].start;
-            let end = tokens[occurrences[end].end - 1].end;
-            replacements.push((start, end, input[start..end].to_owned()));
-        }
-        index = end + 1;
-    }
-
-    // A decimal coefficient keeps its scale words, as text2num cannot scale it:
-    // "two point five thousand" is 2.5 thousand. Breaks already gave every
-    // other unambiguous stranded scale its coefficient. One that remains would
-    // render as a bare 100 or 1000, so keep the words.
-    for pair in occurrences.windows(2) {
-        let [count, scale] = pair else {
-            continue;
-        };
-        let Some(stranded) = stranded_scale(input, &tokens, count, scale, language) else {
-            continue;
-        };
-        let start = tokens[count.start].start;
-        let end = tokens[scale.end - 1].end;
-        let replacement = match stranded {
-            StrandedScale::Decimal(scale_end) if scale_end == scale.end => {
-                let scales: Vec<_> = tokens[scale.start..scale.end]
-                    .iter()
-                    .filter(|token| scale_rank(&token.lowercase).is_some())
-                    .map(|token| token.lowercase.as_str())
-                    .collect();
-                format!("{} {}", count.text, scales.join(" "))
-            }
-            _ => input[start..end].to_owned(),
-        };
-        replacements.push((start, end, replacement));
-    }
-
-    for (scale_index, scale_token) in tokens.iter().enumerate() {
-        let Some((scale_word, scale_value)) = magnitude_scale(&scale_token.lowercase) else {
-            continue;
-        };
-        if replacements
-            .iter()
-            .any(|(start, end, _)| *start <= scale_token.start && scale_token.end <= *end)
-        {
-            continue;
-        }
-
-        let Some(scale_occurrence) = occurrences.iter().find(|occurrence| {
-            occurrence.start <= scale_index && occurrence.end == scale_index + 1
-        }) else {
-            continue;
-        };
-        if scale_occurrence.is_ordinal {
-            continue;
-        }
-
-        let (mut start_index, coefficient) = if scale_occurrence.start < scale_index {
-            (scale_occurrence.start, scale_occurrence.value / scale_value)
-        } else {
-            match occurrences.iter().rev().find(|occurrence| {
-                occurrence.end == scale_index
-                    && !occurrence.is_ordinal
-                    && input[tokens[occurrence.end - 1].end..scale_token.start]
-                        .chars()
-                        .all(char::is_whitespace)
-            }) {
-                Some(previous) => (previous.start, previous.value),
-                None if preceding_article_is_adjacent(input, &tokens, scale_index) => {
-                    (scale_index - 1, 1.0)
-                }
-                None => continue,
-            }
-        };
-
-        if preceding_article_is_adjacent(input, &tokens, start_index) {
-            start_index -= 1;
-        }
-
-        if tokens[start_index..=scale_index]
-            .iter()
-            .filter(|token| magnitude_scale(&token.lowercase).is_some())
-            .count()
-            != 1
-        {
-            continue;
-        }
-
-        let rendered = coefficient.to_string();
-        if !coefficient.is_finite() || rendered.contains(['e', 'E']) {
-            continue;
-        }
-        replacements.push((
-            tokens[start_index].start,
-            scale_token.end,
-            format!("{rendered} {scale_word}"),
-        ));
-    }
-
-    if replacements.is_empty() {
-        return replace_numbers_in_text(input, language, threshold);
-    }
-    replacements.sort_by_key(|(start, end, _)| (*start, *end));
-
-    let mut output = String::with_capacity(input.len());
-    let mut last_end = 0;
-    for (start, end, replacement) in replacements {
-        if start < last_end {
-            continue;
-        }
-        output.push_str(&replace_numbers_in_text(
-            &input[last_end..start],
-            language,
-            threshold,
-        ));
-        output.push_str(&replacement);
-        last_end = end;
-    }
-    output.push_str(&replace_numbers_in_text(
-        &input[last_end..],
-        language,
-        threshold,
-    ));
-    output
-}
-
-fn preceding_article_is_adjacent(input: &str, tokens: &[NumberToken<'_>], index: usize) -> bool {
-    index > 0
-        && tokens[index - 1].lowercase == "a"
-        && input[tokens[index - 1].end..tokens[index].start]
-            .chars()
-            .all(char::is_whitespace)
-}
-
-fn magnitude_scale(token: &str) -> Option<(&'static str, f64)> {
-    match token {
-        "million" => Some(("million", 1_000_000.0)),
-        "billion" => Some(("billion", 1_000_000_000.0)),
-        _ => None,
-    }
-}
-
-fn second_is_time_unit(prefix: &str, previous_re: &Regex, language: &Language) -> bool {
-    let Some(captures) = previous_re.captures(prefix) else {
-        return false;
-    };
-    let previous = captures.get(1).expect("capture 1 is required").as_str();
-    let separator = captures.get(2).expect("capture 2 is required").as_str();
-
-    if separator.contains('-') {
-        let candidate = format!("{previous}-second");
-        // Recognized compounds such as "twenty-second" are genuine ordinals.
-        return text2digits(&candidate, language).is_err();
-    }
-
-    matches!(
-        previous.to_ascii_lowercase().as_str(),
-        "a" | "per" | "every" | "each"
-    ) || previous.chars().all(|character| character.is_ascii_digit())
-        || text2digits(previous, language).is_ok_and(|rendered| {
-            !rendered.ends_with("st")
-                && !rendered.ends_with("nd")
-                && !rendered.ends_with("rd")
-                && !rendered.ends_with("th")
-        })
+fn one_cardinal(tokens: &[NumberToken<'_>], language: &Language) -> bool {
+    matches!(find_numbers(tokens.iter(), language, 0.0).as_slice(), [number] if number.start == 0 && number.end == tokens.len() && !number.is_ordinal)
 }

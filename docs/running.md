@@ -1,6 +1,6 @@
 # Running parakit
 
-parakit runs in the foreground by default. Use that mode once after install, then run it quietly in the background for daily use.
+parakit runs in the foreground by default. Bare `parakit` selects `start` with defaults; daemon flags require the explicit `parakit start` form. Use foreground mode once after install, then run it quietly in the background for daily use.
 
 ## First Run
 
@@ -42,13 +42,17 @@ parakit --verbose
 parakit start --threads 8 --verbose
 ```
 
+`daemon.verbose = true` enables diagnostics for startup and detailed doctor output; for `rules`, it affects only the native-library log filter. Other commands do not use that setting; pass `--verbose` to the command when needed. `--quiet` overrides the configured setting. Without diagnostics, a model-open failure suggests rerunning with `--verbose`.
+
+Inference uses the [configured or computed thread count](config_reference.toml). CPU quotas and affinity can reduce the available count; an explicit `--threads` value is not clamped and can oversubscribe the machine. [Windows runtime defaults](configuration.md#environment-variables) also use this count.
+
 For a completed transcription, verbose output reports `release_to_worker`, `infer`, `clean`, `insert`, `worker`, and `total` in milliseconds. `release_to_worker` includes audio finalization and queue wait; `worker` includes any reload, inference, cleaning, logging, and insertion. `total` spans hotkey release or forced capture stop to worker completion, including blocked or copied-only insertion. These timings do not confirm when the receiving application displays the text.
 
 ## Device Selection
 
 GPU-capable builds default to `--device auto`. In `auto`, CrispASR asks ggml for the best backend device and falls back to CPU when no GPU backend is available. On hybrid laptops, ggml prefers a discrete GPU over an integrated GPU.
 
-Choose the build backend with the [Windows bundle scripts](../scripts/windows/README.md#backend-requirements). At runtime, `--device` controls CPU/GPU use inside the installed build.
+Select a [backend when building](build.md#crispasr-and-backends). At runtime, `--device` controls CPU/GPU use inside the installed build.
 
 ```bash
 parakit start --device auto
@@ -58,7 +62,7 @@ parakit start --device gpu
 
 `--device cpu` opens the session with GPU use disabled. `--device gpu` requests the GPU path and, on bundled builds, fails before model load if ggml reports no discrete or integrated GPU device. On system-library builds without the bundled ggml probe, `--device gpu` continues with a warning because parakit cannot verify device visibility before opening the session.
 
-Per-device selection has no flag or config key because the Parakeet backend ignores CrispASR's `gpu_device` field. Pin a device with the backend's environment variable, whose format is in [config_reference.toml](config_reference.toml):
+Per-device selection has no flag or config key because the Parakeet backend ignores CrispASR's `gpu_device` field. Pin a device with a [backend environment variable](configuration.md#environment-variables):
 
 ```bash
 CUDA_VISIBLE_DEVICES=0 parakit start --device gpu
@@ -106,7 +110,9 @@ parakit test-paste "hello from parakit"
 
 When the control endpoint is absent and the singleton lock is free, `status` and `stop` print `parakit: not running` or `parakit: not running; nothing to stop` and exit successfully. If the endpoint is absent while the lock remains held, `status` reports that the daemon may still be starting or stopping; `stop` waits within its remaining deadline, sending the request if startup exposes the endpoint and confirming that the lock releases. Commands that need daemon state (`history`, `copy-last`, and `test-paste`) instead report that the daemon is not running and point to `parakit start`.
 
-The daemon keeps a ring buffer of recent transcripts in memory (`daemon.transcript_history` entries, 10 by default). `copy-last` acts on the most recent one by default; pass `N` (1-based, counting back from the most recent) to reach further back, e.g. `parakit copy-last 3` for the third-most-recent transcript. The ring disappears when the daemon stops, so treat it as a same-session convenience.
+The daemon keeps a ring buffer of recent transcripts in memory (`daemon.transcript_history` entries, 10 by default). It retains transcripts even when insertion is blocked or fails, but skips those left whitespace-only by sanitization. `copy-last` acts on the most recent one by default; pass `N` (1-based, counting back from the most recent) to reach further back, e.g. `parakit copy-last 3` for the third-most-recent transcript. The ring disappears when the daemon stops, so treat it as a same-session convenience.
+
+With `daemon.transcript_history = 0`, `history` and `copy-last` report `transcript history is disabled (daemon.transcript_history = 0)`, and `status` shows `last transcript: history disabled`.
 
 In a terminal, `parakit history` opens a picker with the newest transcript selected. Up/Down selects an entry and shows its full text; PageUp/PageDown scrolls long previews. Enter copies the selected entry and closes the picker after success. Escape or Ctrl+C closes it without copying. A copy failure stays visible in the picker. New dictations cannot silently change which entry is selected; an entry evicted from the ring or lost in a daemon restart reports that it is no longer available.
 
@@ -130,13 +136,13 @@ Use `--verbose` to inspect the daemon's process, uptime, dictation count, microp
 parakit --verbose status
 ```
 
-Selected presets and Qwen controls appear when applicable; Linux adds the hotkey and insertion backend. Model residency and reload errors are described under [idle offload](#idle-model-offload). These values reflect the running daemon. `daemon.verbose = true` does not expand `parakit status`; pass `--verbose` to the status command itself. Before startup details are available, it prints `detail unavailable (daemon starting)`.
+Selected presets and Qwen controls appear when applicable; Linux adds the hotkey and insertion backend. Model residency and reload errors are described under [idle offload](#idle-model-offload). These values reflect the running daemon. Before startup details are available, it prints `detail unavailable (daemon starting)`.
 
 ## Idle Model Offload
 
-The model loads and warms at startup, then releases its inference session after ten uninterrupted idle minutes. Set `[daemon] model_idle_minutes = N` in the config, or run `parakit start --model-idle-minutes N`. The flag overrides the config. Nonnegative whole minutes are required; `0` keeps the model resident.
+The model loads and warms at startup, then releases its inference session after the configured idle interval. Set `daemon.model_idle_minutes` or pass `parakit start --model-idle-minutes N`; defaults, bounds, and precedence are in the [configuration reference](config_reference.toml).
 
-The idle interval uses monotonic elapsed time, not calendar time. Whether system sleep counts toward it depends on the OS and Rust's [clock implementation](https://doc.rust-lang.org/std/time/struct.Instant.html). On clocks that pause during suspend, the remaining idle interval continues after wake; sleeping for ten minutes does not itself make the model eligible for offload.
+The idle interval uses monotonic elapsed time, not calendar time. Whether system sleep counts toward it depends on the OS and Rust's [clock implementation](https://doc.rust-lang.org/std/time/struct.Instant.html). On clocks that pause during suspend, the remaining idle interval continues after wake; sleeping for ten minutes does not itself make the model eligible for offload. An interval too large for the runtime's deadline representation never offloads.
 
 Recording, queued dictations, transcription, and insertion prevent offloading. The interval restarts when all work finishes, including silent captures and failures. Hotkeys, microphone policy, IPC, and transcript history remain available. Reading status or browsing history does not postpone offloading; copying a transcript counts as insertion activity.
 
@@ -144,7 +150,7 @@ Press PTT normally after an idle period. A three-note cue announces model reload
 
 Other programs can fill the GPU while the model is offloaded. Before a bundled build reloads on a GPU, parakit checks free memory for the model and its working space. Qwen on Metal requires twice the model file size plus 2 GiB, accounting for its main-model and audio-tower mappings. Other Qwen GPU backends require one model file size plus 2 GiB; other models require one file size plus 1 GiB. If there is insufficient room, `auto` reloads on CPU until the next offload and says so in a warning and a desktop notification; `--device gpu` fails the reload with the free and needed amounts.
 
-This check does not reserve memory or bound the workspace for long audio. Later allocations can still exhaust memory and abort the daemon; `model_idle_minutes = 0` avoids repeated offload/reload but does not prevent out-of-memory failures.
+This check does not reserve memory or bound the workspace for long audio. Later allocations can still exhaust memory and abort the daemon; `model_idle_minutes = 0` avoids repeated offload/reload but does not prevent out-of-memory failures. Use it when reload delays are unwelcome or another GPU workload could claim the freed memory before a required GPU reload.
 
 Parakeet startup warms one second of synthetic audio on CPU, or five seconds on GPU; reload uses one second. Qwen startup and reload instead transcribe an embedded 11-second human speech sample with automatic language and a fixed 512-token budget. Readiness text is discarded and the user's language and token budget are restored before dictation. A deliberately tiny user budget can therefore fail the actual transcription without preventing readiness. Longer dictations allocate larger buffers as needed; the first use of a new shape can also incur backend compilation work.
 
@@ -167,7 +173,9 @@ parakit cache dir
 parakit start -m /path/to/model.gguf
 ```
 
-`-m <path>` disables automatic fetch. It conflicts with `--model-preset` in the same command. Either CLI selection overrides both configured model selectors; `daemon.model` and `daemon.model_preset` conflict with each other even when a CLI selection is supplied.
+For model selection precedence and incompatible selectors, see the daemon section of the [configuration reference](config_reference.toml).
+
+For a selected local model, startup checks that the path is a regular file before hotkey and microphone checks; a symlink to a file is accepted. The path must be valid UTF-8, and the contents are validated when the model opens. Startup resolves the path to an absolute path for idle reloads. `parakit doctor` does not check the model path.
 
 For locked-down or offline machines, run `parakit fetch` on a connected machine and copy the directory printed by `parakit cache dir`, preserving its `hub/` layout, to the target machine's model cache. Alternatively, load an approved GGUF directly with `-m <path>`. Use `PARAKIT_MODELS_DIR` when the approved model location is managed by IT or shared across a build image.
 
@@ -186,7 +194,7 @@ parakit start --model-preset parakeet-ultra --quantize q6_k \
   --log-dir "$HOME/.parakit/logs" --quiet & disown
 ```
 
-Use `parakeet-v2` for English-only v2, `parakeet-v3` for the original NVIDIA model, or either Qwen name in the table below. With no CLI or configured model selection, `--quantize q6_k` prepares Ultra. Preparing a missing Q6_K prints a notice to stderr even with `--quiet`, since a larger download and local quantization may be needed. It reuses an explicitly fetched F16 when available; otherwise it downloads a private F16 intermediate. That private file is removed after success and kept after failure for retry. Explicitly fetched F16 files are preserved, including during `--force` rebuilds, which download a fresh private intermediate. Wait for readiness before dictating. Cached Q6_K starts work offline and idle reload reuses the resolved file.
+Preparing a missing Q6_K prints a notice to stderr even with `--quiet`, since a larger download and local quantization may be needed. It reuses an explicitly fetched F16 when available; otherwise it downloads a private F16 intermediate. That private file is removed after success and kept after failure for retry. Explicitly fetched F16 files are preserved, including during `--force` rebuilds, which download a fresh private intermediate. Cached Q6_K starts work offline and idle reload reuses the resolved file.
 
 Interactive downloads show a progress bar with bytes downloaded, transfer speed, and ETA. If the server omits the file size, a byte counter is shown instead. Progress bars are hidden with `--quiet` or when stderr is redirected. Quantization is a separate stage announced after the download. URLs and native converter output require `--verbose`; failed tools report a short diagnostic. An explicit `fetch` confirms the cached model and prints its startup command, while daemon startup continues directly to loading.
 
@@ -213,7 +221,7 @@ Apply the settings with the [configuration restart workflow](configuration.md#va
 
 Presets use the exact file above and check the local cache before contacting Hugging Face. Once fetched, they work offline. All presets except v3 select fixed provider commits from the model catalog; `--force` downloads that selected revision again. Parakeet v3 keeps its existing revision policy and top-level cache path; the other presets use the revision-specific Hub cache layout described below. Previously downloaded files remain usable with `-m`; changing a preset revision selects a separate cache destination. `fetch --model-preset` does not read daemon configuration. It accepts `--force` and conflicts with a custom source, `--file`, and `--sha256`.
 
-Qwen, Moondream, and NVIDIA v3 checkpoints can also be [rebuilt from source](dev/README.md#source-rebuild). Source rebuilds use the preset's normal Q8_0 cache destination; v2 has no source-rebuild path.
+For original checkpoints, see [source rebuilds](dev/README.md#source-rebuild).
 
 To prepare Q6_K without starting the daemon:
 
@@ -224,7 +232,7 @@ parakit start -m /path/printed/by/fetch/qwen3-asr-1.7b-q6_k.gguf --device gpu
 
 This accepts every preset above and uses its provider revision with `crispasr-quantize`; no Python environment or upload is needed. `--force` rebuilds Q6_K. Qwen retains a Q8_0-or-higher audio encoder, while Parakeet quantizes eligible encoder and decoder matrices to Q6_K; unsupported tensors keep higher precision. Validate recognition on your own recordings before relying on a new quantization.
 
-`fetch --quantize q6_k` conflicts with `--from-source`. GGUF Q6_K differs from [MLX's affine 6-bit quantization](https://ml-explore.github.io/mlx/build/html/python/_autosummary/mlx.core.quantize.html), so evaluate them separately. Windows requires a compatible external `crispasr-quantize.exe` on `PATH`; see [source rebuild](dev/README.md#source-rebuild).
+`fetch --quantize q6_k` conflicts with `--from-source`. GGUF Q6_K differs from [MLX's affine 6-bit quantization](https://ml-explore.github.io/mlx/build/html/python/_autosummary/mlx.core.quantize.html), so evaluate them separately. Every OS requires a compatible external `crispasr-quantize` on `PATH` (`crispasr-quantize.exe` on Windows); see [source rebuild](dev/README.md#source-rebuild).
 
 Qwen setup, language controls, and prior-dictation context are covered in the [Qwen3-ASR guide](models/qwen3-asr.md). For multilingual dictation, follow the [cleaning profile guidance](cleaning-rules.md#profiles).
 
@@ -241,7 +249,7 @@ parakit fetch handy-computer/parakeet-tdt-0.6b-v3-gguf@main
 parakit fetch https://example.com/models/parakeet-q8.gguf --sha256 '<64-hex-sha256>'
 ```
 
-The first positional argument is either a Hugging Face repo (`owner/repo`, optionally `owner/repo@revision`) or a direct `http://`/`https://` URL. Other URL schemes are rejected before any request. For a repo source, `--file` selects a specific `.gguf` file when the repo publishes more than one and none of them is uniquely named `q8_0`; otherwise parakit auto-selects the sole `.gguf` file, or the sole `q8_0` file among several. `--sha256` checks the completed download when you explicitly supply it; parakit does not otherwise hash models or turn an unpinned URL into a persistent checksum policy. Resumed downloads use the server's strong ETag or Last-Modified value through `If-Range`; a partial with no usable validator restarts instead of being appended blindly. `--force` discards any partial and replaces the cached file.
+The first positional argument is either a Hugging Face repo (`owner/repo`, optionally `owner/repo@revision`) or a direct `http://`/`https://` URL. Other URL schemes are rejected before any request. For a repo source, `--file` selects the exact named `.gguf` file. Without it, parakit excludes `.imatrix.gguf` calibration files and selects the sole remaining `.gguf`, or the sole file whose name contains `q8_0` (case-insensitive) among several. If selection remains ambiguous, specify `--file`; it can also select a calibration file explicitly. `--sha256` checks the completed download when you explicitly supply it; parakit does not otherwise hash models or turn an unpinned URL into a persistent checksum policy. Resumed downloads use the server's strong ETag or Last-Modified value through `If-Range`; a partial with no usable validator restarts instead of being appended blindly. `--force` discards any partial and replaces the cached file.
 
 Repo fetches land under `<cache dir>/hub/<owner>--<repo>--<key>/<file>`, where the key hashes the repo, revision, and file path; URL fetches land under `<cache dir>/url/<url-key>/<file>`, where the key separates exact source URLs that share a filename. Different revisions and URLs therefore cannot overwrite or resume onto one another. Both source classes are separate from the original v3 top-level `parakeet-tdt-0.6b-v3-Q8_0.gguf`, and different repos remain separate even when they publish identically named files. `parakit cache list` shows each model's path, GGUF type, and size without reading every model to compute hashes; it marks the pinned Ultra Q8_0 artifact as `default`. Custom fetches are never picked up automatically: activate one with `parakit start -m <path>` or by setting `daemon.model = "<path>"` in `config.toml`, exactly as with any other custom GGUF. A preset selects its matching cached artifact.
 
@@ -311,7 +319,9 @@ parakit start --log-dir "$HOME/.parakit/logs"
 
 Set the same directory persistently with `logging.dir`. File layout, privacy implications, record correlation, and the complete schema are in [logging.md](logging.md).
 
-A capture with no detectable speech inserts nothing, so it plays the two-pulse error cue instead of the completion cue. Disable cue tones:
+Sound cues mark listening, successful transcription, and errors. Silent captures, failed reloads or transcriptions, and [alerting insertion outcomes](logging.md#insertion-outcomes) play the two-pulse error cue. The listening cue plays only while the key is still held; the [reload cue](#idle-model-offload) signals an offloaded model reopening. `--quiet` does not silence cues. If playback fails, parakit writes `parakit: sound cue dropped: <error>` to stderr and continues even in quiet mode. Cues can also be dropped when the queue is full.
+
+Disable cue tones:
 
 ```bash
 parakit start --no-sounds

@@ -12,9 +12,7 @@ A model file's size does not bound runtime memory. Loading, readiness, and infer
 
 ## GPU Reload Accounting
 
-Bundled builds compare the preferred GPU's reported free memory with a backend-specific model-and-workspace requirement before reloading. The policy and allowances are documented under [idle model offload](../running.md#idle-model-offload); the implementation is in `src/daemon/engine_runtime.rs`.
-
-This check does not reserve memory or bound later allocations. Other workloads can consume the remaining budget after the check, and a longer dictation can require more workspace. Keep startup, reload, and long-input checks separate.
+Use the [reload requirements and preflight limitations](../running.md#idle-model-offload), implemented in `src/daemon/engine_runtime.rs`, to interpret measurements. Keep startup, reload, and long-input checks separate.
 
 ### Metal Qwen Reload Accounting
 

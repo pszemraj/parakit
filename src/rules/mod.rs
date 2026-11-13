@@ -22,9 +22,14 @@
 //!
 //! * [`engine`] - the compiled [`Cleaner`] pipeline and rule/activation types.
 //! * [`defaults`] - the built-in `DEFAULT_RULES` table.
-//! * [`numbers`] - spoken-number parsing policy and magnitude formatting.
-//! * [`passes`] - other procedural transforms (acronyms, versions,
-//!   capitalization).
+//! * [`numbers`] - shared numeric tokenization, classification, and rendering.
+//! * [`number_guards`] - protected quantities and ambiguous numeric contexts.
+//! * [`number_labels`] - century-pair calendar years.
+//! * [`number_versions`] - decimals and dotted versions.
+//! * [`number_words`] - shared number-word and unit vocabulary.
+//! * [`stutters`] - contextual repeated-word collapsing and exceptions.
+//! * [`passes`] - other procedural transforms, including acronyms and
+//!   capitalization.
 //! * [`user`] - user-defined rules loaded from `config.toml`.
 //!
 //! ## How to disable a rule at runtime
@@ -33,7 +38,7 @@
 //! `cleaning.disabled_rules` in `config.toml`; pass `--no-cleaning` to skip
 //! everything. `<name>` may name either a built-in or a user rule.
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fmt;
@@ -50,8 +55,13 @@ macro_rules! regex_static {
 
 mod defaults;
 mod engine;
+mod number_guards;
+mod number_labels;
+mod number_versions;
+mod number_words;
 mod numbers;
 mod passes;
+mod stutters;
 #[cfg(test)]
 mod tests;
 mod user;
@@ -61,15 +71,15 @@ pub use user::{RulePosition, UserRule};
 
 /// Schema/behavior version recorded in transcription logs.
 /// Keep revisions distinct even when their package version is unchanged.
-pub const CLEANER_VERSION: u32 = 32;
+pub const CLEANER_VERSION: u32 = 41;
 
-/// Default minimum isolated number converted to digits when
+/// Default minimum spoken cardinal or ordinal converted to digits when
 /// `cleaning.number_threshold` is left unset.
 ///
-/// An isolated number at or above this value is rendered as digits; a value
-/// strictly below it is left exactly as the ASR model produced it (never
-/// forced to words, never forced to digits). Configuring an explicit
-/// `Some(0.0)` is the opt-out that converts every recognized number.
+/// An eligible value at or above this threshold renders as digits. A run of
+/// adjacent spoken numbers containing a value below it retains its complete
+/// wording. Configuring `Some(0.0)` permits every eligible cardinal and ordinal;
+/// fractions and indefinite quantities retain their wording.
 pub const DEFAULT_NUMBER_THRESHOLD: f64 = 4.0;
 
 /// Built-in cleanup behavior tiers.
@@ -147,9 +157,9 @@ pub struct CleanResult {
 
 /// Build the cleaner selected by CLI/runtime options.
 ///
-/// Rule-name, user-rule metadata, and threshold validation always run before
+/// Rule-name, user-rule, repetition-exception, and threshold validation run before
 /// the `no_cleaning` check. Config loading separately calls
-/// [`validate_configured_rules`] so enabled user regexes are also checked
+/// [`validate_configured_rules`] so user regexes are also checked
 /// eagerly without compiling the built-in pipeline.
 ///
 /// # Arguments
@@ -159,7 +169,12 @@ pub struct CleanResult {
 /// * `profile` - Selected [`CleaningProfile`].
 /// * `drop_trailing_period` - Enable the messaging-style terminal-period
 ///   removal rule.
-/// * `number_threshold` - Value at or above which isolated single-digit cardinals and ordinals become digits. `None` resolves to [`DEFAULT_NUMBER_THRESHOLD`]; `Some(0.0)` converts every isolated single digit and ordinal.
+/// * `number_threshold` - Minimum spoken cardinal/ordinal value rendered as
+///   digits. Adjacent runs containing a value below it retain their wording.
+///   `None` resolves to [`DEFAULT_NUMBER_THRESHOLD`]; `Some(0.0)` permits every
+///   eligible value.
+/// * `repetition_exceptions` - Additional literal words/phrases preserved by
+///   repeated-word cleaning.
 /// * `disabled_rules` - Rule names supplied by repeated `--disable-rule`
 ///   and/or `cleaning.disabled_rules` in `config.toml`. May name a built-in
 ///   or a user rule.
@@ -174,17 +189,24 @@ pub struct CleanResult {
 /// Returns an error for a negative or non-finite `number_threshold`, an unknown
 /// disabled rule name, an invalid built-in pattern, an empty or non-canonical
 /// user rule name, an empty user rule pattern, a user rule name colliding with
-/// a built-in name, a duplicate user rule name, or an invalid user rule regex.
+/// a built-in name, a duplicate user rule name, an invalid user rule regex,
+/// or an empty or non-word repetition exception.
 pub fn build_cleaner(
     no_cleaning: bool,
     profile: CleaningProfile,
     drop_trailing_period: bool,
     number_threshold: Option<f64>,
+    repetition_exceptions: &[String],
     disabled_rules: &[String],
     user_rules: &[UserRule],
 ) -> Result<Option<Cleaner>> {
     if no_cleaning {
-        validate_rule_inputs(number_threshold, disabled_rules, user_rules)?;
+        validate_rule_inputs(
+            number_threshold,
+            repetition_exceptions,
+            disabled_rules,
+            user_rules,
+        )?;
         return Ok(None);
     }
 
@@ -192,6 +214,7 @@ pub fn build_cleaner(
         profile,
         drop_trailing_period,
         number_threshold,
+        repetition_exceptions,
         disabled_rules,
         user_rules,
     )
@@ -219,14 +242,21 @@ pub fn build_enabled_cleaner(
     profile: CleaningProfile,
     drop_trailing_period: bool,
     number_threshold: Option<f64>,
+    repetition_exceptions: &[String],
     disabled_rules: &[String],
     user_rules: &[UserRule],
 ) -> Result<Cleaner> {
-    let disabled = validate_rule_inputs(number_threshold, disabled_rules, user_rules)?;
+    let disabled = validate_rule_inputs(
+        number_threshold,
+        repetition_exceptions,
+        disabled_rules,
+        user_rules,
+    )?;
     engine::Cleaner::new_prevalidated(
         profile,
         drop_trailing_period,
         number_threshold,
+        repetition_exceptions,
         &disabled,
         user_rules,
     )
@@ -234,11 +264,13 @@ pub fn build_enabled_cleaner(
 
 /// Validate config-backed rule inputs without compiling the built-in pipeline.
 ///
-/// User regexes are compiled so a broken config still fails at load time.
+/// User regexes and repetition exceptions are compiled so a broken config
+/// still fails at load time.
 ///
 /// # Arguments
 ///
-/// * `number_threshold` - Optional isolated-number conversion threshold.
+/// * `number_threshold` - Optional spoken cardinal/ordinal conversion threshold.
+/// * `repetition_exceptions` - Additional literal repeated-word exceptions.
 /// * `disabled_rules` - Built-in or user rule names to disable.
 /// * `user_rules` - User-defined regex rules.
 ///
@@ -251,15 +283,22 @@ pub fn build_enabled_cleaner(
 /// See [`build_cleaner`].
 pub fn validate_configured_rules(
     number_threshold: Option<f64>,
+    repetition_exceptions: &[String],
     disabled_rules: &[String],
     user_rules: &[UserRule],
 ) -> Result<()> {
-    validate_rule_inputs(number_threshold, disabled_rules, user_rules)?;
+    validate_rule_inputs(
+        number_threshold,
+        repetition_exceptions,
+        disabled_rules,
+        user_rules,
+    )?;
     Ok(())
 }
 
 fn validate_rule_inputs(
     number_threshold: Option<f64>,
+    repetition_exceptions: &[String],
     disabled_rules: &[String],
     user_rules: &[UserRule],
 ) -> Result<HashSet<String>> {
@@ -267,6 +306,8 @@ fn validate_rule_inputs(
         assert_rule_name_exists(name, user_rules)?;
     }
     engine::validate_number_threshold(number_threshold)?;
+    stutters::compile_repetition_exceptions(repetition_exceptions)
+        .context("cleaning.repetition_exceptions")?;
     user::validate_user_rules(user_rules)?;
     for rule in user_rules {
         user::compile_user_regex(rule)?;
@@ -293,13 +334,30 @@ pub fn assert_rule_name_exists(name: &str, user_rules: &[UserRule]) -> Result<()
     if defaults::DEFAULT_RULES.iter().any(|rule| rule.name == name)
         || user_rules.iter().any(|rule| rule.name == name)
     {
-        Ok(())
-    } else {
-        Err(anyhow!(
-            "no rule named '{}'. Run `parakit rules list` to see all rules.",
-            name
-        ))
+        return Ok(());
     }
+    let replacement = match name {
+        "spoken-version-numbers" | "numeric-point-suffixes" | "compact-version-prefix" => {
+            Some("spoken-versions")
+        }
+        "compact-short-identifier" => Some("numeric-identifiers"),
+        "compact-parameter-counts" | "numeric-magnitude-suffixes" => Some("size-suffixes"),
+        _ => None,
+    };
+    if let Some(replacement) = replacement {
+        return Err(anyhow!(
+            "rule '{name}' was renamed to '{replacement}'; see docs/cleaning-rules.md"
+        ));
+    }
+    if name == "numeric-identifier-groups" {
+        return Err(anyhow!(
+            "rule '{name}' was removed; digit groups remain separate; see docs/cleaning-rules.md"
+        ));
+    }
+    Err(anyhow!(
+        "no rule named '{}'. Run `parakit rules list` to see all rules.",
+        name
+    ))
 }
 
 /// Print all built-in and user passes and whether they are active for the
@@ -339,7 +397,7 @@ pub fn print_rule_list(
     user_rules: &[UserRule],
     quiet: bool,
 ) -> Result<()> {
-    validate_rule_inputs(None, disabled_rules, user_rules)?;
+    validate_rule_inputs(None, &[], disabled_rules, user_rules)?;
     if quiet {
         return Ok(());
     }

@@ -69,7 +69,7 @@ Close existing application instances before changing their launch options. Chrom
 
 `--insertion-backend ibus` requires engine-owned IBus push-to-talk. `--insertion-backend x11` selects X11 clipboard paste or direct typing. The default `auto` follows the hotkey route: native delivery for IBus hotkeys and X11 for all others, including the evdev proxy. To use native delivery on X11, select `--hotkey-backend ibus`; a registered X11 grab can invalidate an input-method target. Set `daemon.insertion_backend` to keep the transport choice across starts. Explicit `direct` mode retains X11 typing with automatic transport selection and conflicts with forced IBus insertion.
 
-Clipboard recovery needs XWayland clipboard access; native IBus submission itself does not. Inspect the [insertion outcome](logging.md#insertion-outcomes) before retrying native delivery. [Paste modes](running.md#insertion) control terminal tabs and newlines; use [daemon history](running.md#daemon-control) for blocked text and explicit copying.
+Clipboard recovery needs XWayland clipboard access; native IBus submission itself does not. [Paste modes](running.md#insertion) control terminal tabs and newlines; use [daemon history](running.md#daemon-control) for blocked text and explicit copying.
 
 ## X11 Sessions
 
@@ -77,7 +77,7 @@ Start Parakit from a terminal opened in the current graphical login. Use the [ba
 
 Tmux is fine when the tmux server was started from the current desktop login. A tmux server that survived a GNOME logout/login can keep stale `DISPLAY` or `XAUTHORITY` values from the old session. In that case, `parakit doctor` may report an X11 error such as `Connection refused`.
 
-Start a new terminal or tmux server from the current desktop session, rerun `parakit doctor`, then use the [background commands](running.md#background-use).
+Start a new terminal or tmux server from the current desktop session, then rerun `parakit doctor` before starting the daemon.
 
 For registration failures or an intermittent shortcut after login, suspend, or an input-method change, follow [shortcut conflicts](#shortcut-conflicts).
 

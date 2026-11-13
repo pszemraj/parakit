@@ -1,0 +1,11 @@
+[package]
+name = "crispasr-sys"
+version = "0.8.49"
+edition = "2021"
+license = "MIT"
+publish = false
+build = false
+
+# The original FFI declarations are used unchanged. Root build.rs links them.
+[lib]
+path = "../../vendor/CrispASR/crispasr-sys/src/lib.rs"

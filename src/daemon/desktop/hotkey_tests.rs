@@ -2,14 +2,6 @@
 
 use super::*;
 
-fn base_time() -> Instant {
-    Instant::now()
-}
-
-fn at(start: Instant, millis: u64) -> Instant {
-    start + Duration::from_millis(millis)
-}
-
 #[test]
 fn hotkey_loop_failure_returns_to_daemon_owner_instead_of_exiting() {
     assert!(report_hotkey_loop_failure(Ok(()), "test hotkey", || unreachable!()).is_ok());
@@ -25,7 +17,7 @@ fn hotkey_loop_failure_returns_to_daemon_owner_instead_of_exiting() {
 
 #[test]
 fn ctrl_space_starts_and_stops() {
-    let now = base_time();
+    let now = Instant::now();
     let mut state = HotkeyState::default();
     assert_eq!(state.press(Key::ControlLeft, now), (None, false));
     assert_eq!(
@@ -51,7 +43,7 @@ fn ctrl_space_starts_and_stops() {
 
 #[test]
 fn context_chord_keeps_recording_after_alt_release() {
-    let now = base_time();
+    let now = Instant::now();
     let mut state = HotkeyState::new(true);
     state.press(Key::ControlLeft, now);
     state.press(Key::Alt, now);
@@ -81,7 +73,7 @@ fn context_chord_keeps_recording_after_alt_release() {
 
 #[test]
 fn context_chord_rejects_disabled_context_and_extra_modifiers() {
-    let now = base_time();
+    let now = Instant::now();
     for (context_enabled, extra) in [
         (false, None),
         (true, Some(Key::ShiftLeft)),
@@ -101,7 +93,7 @@ fn context_chord_rejects_disabled_context_and_extra_modifiers() {
 
 #[test]
 fn context_chord_ctrl_release_does_not_rearm_held_space() {
-    let now = base_time();
+    let now = Instant::now();
     let mut state = HotkeyState::new(true);
     state.press(Key::ControlLeft, now);
     state.press(Key::Alt, now);
@@ -124,7 +116,7 @@ fn context_chord_ctrl_release_does_not_rearm_held_space() {
 #[cfg(target_os = "macos")]
 #[test]
 fn macos_right_control_space_does_not_start() {
-    let now = base_time();
+    let now = Instant::now();
     let mut state = HotkeyState::default();
     assert_eq!(state.press(Key::ControlRight, now), (None, false));
     assert_eq!(state.press(Key::Space, at(now, 10)), (None, false));
@@ -135,7 +127,7 @@ fn macos_right_control_space_does_not_start() {
 #[cfg(target_os = "macos")]
 #[test]
 fn macos_left_control_release_stops_even_if_right_control_is_held() {
-    let now = base_time();
+    let now = Instant::now();
     let mut state = HotkeyState::default();
     state.press(Key::ControlLeft, now);
     state.press(Key::Space, at(now, 10));
@@ -157,7 +149,7 @@ fn macos_left_control_release_stops_even_if_right_control_is_held() {
 #[cfg(target_os = "macos")]
 #[test]
 fn macos_tap_disabled_resets_state_and_allows_next_ptt_cycle() {
-    let now = base_time();
+    let now = Instant::now();
     let mut state = HotkeyState::default();
     state.press(Key::ControlLeft, now);
     state.press(Key::Space, at(now, 10));
@@ -188,7 +180,7 @@ fn macos_tap_disabled_resets_state_and_allows_next_ptt_cycle() {
 #[cfg(target_os = "macos")]
 #[test]
 fn macos_physical_left_control_release_stops_active_recording() {
-    let now = base_time();
+    let now = Instant::now();
     let mut state = HotkeyState::default();
     state.press(Key::ControlLeft, now);
     state.press(Key::Space, at(now, 10));
@@ -213,7 +205,7 @@ fn macos_physical_left_control_release_stops_active_recording() {
 #[cfg(target_os = "macos")]
 #[test]
 fn macos_stale_left_control_state_does_not_start_on_plain_space() {
-    let now = base_time();
+    let now = Instant::now();
     let mut state = HotkeyState::default();
     state.press(Key::ControlLeft, now);
     assert!(state.modifiers.ctrl_left);
@@ -230,7 +222,7 @@ fn macos_stale_left_control_state_does_not_start_on_plain_space() {
 #[cfg(target_os = "macos")]
 #[test]
 fn macos_physical_left_control_state_can_start_next_space_press() {
-    let now = base_time();
+    let now = Instant::now();
     let mut state = HotkeyState::default();
 
     assert_eq!(
@@ -259,7 +251,7 @@ fn macos_physical_left_control_state_can_start_next_space_press() {
 #[cfg(target_os = "macos")]
 #[test]
 fn macos_modified_space_tap_does_not_start_or_suppress() {
-    let now = base_time();
+    let now = Instant::now();
     let mut state = HotkeyState::default();
     let modifiers = ModifierState {
         ctrl_left: true,
@@ -283,7 +275,7 @@ fn macos_modified_space_tap_does_not_start_or_suppress() {
 #[cfg(target_os = "macos")]
 #[test]
 fn macos_flags_changed_tracks_right_control_as_extra_modifier() {
-    let now = base_time();
+    let now = Instant::now();
     let mut state = HotkeyState::default();
 
     assert_eq!(
@@ -322,7 +314,7 @@ fn macos_flags_changed_tracks_right_control_as_extra_modifier() {
 #[cfg(not(target_os = "macos"))]
 #[test]
 fn non_macos_right_control_space_starts_and_stops() {
-    let now = base_time();
+    let now = Instant::now();
     let mut state = HotkeyState::default();
     assert_eq!(state.press(Key::ControlRight, now), (None, false));
     assert_eq!(
@@ -348,7 +340,7 @@ fn non_macos_right_control_space_starts_and_stops() {
 
 #[test]
 fn ctrl_repress_while_space_held_does_not_restart_recording() {
-    let now = base_time();
+    let now = Instant::now();
     let mut state = HotkeyState::default();
 
     state.press(Key::ControlLeft, now);
@@ -386,7 +378,7 @@ fn ctrl_repress_while_space_held_does_not_restart_recording() {
 
 #[test]
 fn repeated_space_press_while_held_is_suppressed_without_restart() {
-    let now = base_time();
+    let now = Instant::now();
     let mut state = HotkeyState::default();
     state.press(Key::ControlLeft, now);
     assert_eq!(
@@ -405,7 +397,7 @@ fn repeated_space_press_while_held_is_suppressed_without_restart() {
 
 #[test]
 fn standalone_space_auto_repeat_passes_through() {
-    let now = base_time();
+    let now = Instant::now();
     let mut state = HotkeyState::default();
 
     assert_eq!(state.press(Key::Space, now), (None, false));
@@ -416,7 +408,7 @@ fn standalone_space_auto_repeat_passes_through() {
 
 #[test]
 fn space_held_before_ctrl_does_not_start_or_suppress_repeat() {
-    let now = base_time();
+    let now = Instant::now();
     let mut state = HotkeyState::default();
 
     assert_eq!(state.press(Key::Space, now), (None, false));
@@ -427,7 +419,7 @@ fn space_held_before_ctrl_does_not_start_or_suppress_repeat() {
 
 #[test]
 fn registered_hotkey_press_release_starts_and_stops_once() {
-    let now = base_time();
+    let now = Instant::now();
     let mut state = RecordingLatch::default();
     assert_eq!(
         state.start(now, DictationMode::Plain),
@@ -448,7 +440,7 @@ fn registered_hotkey_press_release_starts_and_stops_once() {
 
 #[test]
 fn hotkey_actions_emit_logical_transitions_only() {
-    let now = base_time();
+    let now = Instant::now();
     let (tx, rx) = crossbeam_channel::unbounded();
 
     send_hotkey_transition(
@@ -481,7 +473,7 @@ fn hotkey_actions_emit_logical_transitions_only() {
 
 #[test]
 fn rapid_double_press_is_ignored_and_suppressed() {
-    let now = base_time();
+    let now = Instant::now();
     let mut state = HotkeyState::default();
     state.press(Key::ControlLeft, now);
     state.press(Key::Space, at(now, 10));
@@ -493,7 +485,7 @@ fn rapid_double_press_is_ignored_and_suppressed() {
 
 #[test]
 fn ctrl_shift_space_does_not_start_or_suppress() {
-    let now = base_time();
+    let now = Instant::now();
     let mut state = HotkeyState::default();
     state.press(Key::ControlLeft, now);
     state.press(Key::ShiftLeft, at(now, 5));
@@ -503,7 +495,7 @@ fn ctrl_shift_space_does_not_start_or_suppress() {
 
 #[test]
 fn unrelated_keys_pass_through() {
-    let now = base_time();
+    let now = Instant::now();
     let mut state = HotkeyState::default();
     assert_eq!(state.press(Key::Other, now), (None, false));
     assert_eq!(state.release(Key::Other, at(now, 10)), (None, false));

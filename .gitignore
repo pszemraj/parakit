@@ -9,6 +9,7 @@
 !/build/
 /build/*
 !/build/native_link.rs
+!/build/static_link.rs
 !/build/native_correctness.rs
 !/build/native_correctness.cmake
 !/build/native/

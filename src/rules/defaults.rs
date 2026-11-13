@@ -16,11 +16,10 @@
 //! `crate::rules::engine::FANCY_BACKTRACK_LIMIT`).
 
 use super::engine::{Activation, Rule, RuleKind};
+use super::numbers::NumberKind;
 use super::passes::{
     capitalize_sentence_starts, drop_dangling_connective, normalize_apostrophe_cause,
-    normalize_magnitude_suffixes, normalize_numeric_identifier_groups,
-    normalize_numeric_point_suffixes, normalize_parameter_counts, normalize_spaced_acronyms,
-    normalize_spoken_versions,
+    normalize_spaced_acronyms,
 };
 
 macro_rules! regex_rule {
@@ -119,22 +118,28 @@ pub(crate) const DEFAULT_RULES: &[Rule] = &[
         r#"(^|[.!?])(?:\s*\b(?i:u[hm]+|er+m+)\b(?:,?\s+\b(?i:u[hm]+|er+m+)\b)*[.!?]+)+|,?\s*\b(?i:u[hm]+|er+m+)\b\s*,?"#,
         "$1 "
     ),
-    // Consolidated duplicate-token handling. The safe list deliberately omits
-    // valid/ambiguous repetitions such as that-that and emphatic no-no.
+    // Partial starts run before whole-word collapse: `sh sh should` must not
+    // first turn into `sh should`, which is no longer a repeated-prefix run.
     regex_rule!(
         "stutter-i",
         "Collapse repeated first-person pronouns and restore uppercase I",
         Activation::Safe,
-        r#"(?i)\bi\b(?:\s+i\b)+"#,
+        r#"(?i)\bi\b(?:[ \t]+i\b)+"#,
         "I"
     ),
     fancy_rule!(
-        "stutter-safe-words",
-        "Collapse repeated high-confidence function words with a backreference",
+        "repeated-prefix-stutter",
+        "Strip repeated one-letter or consonant-digraph starts before a matching word",
         Activation::Safe,
-        r#"(?i)\b(the|a|an|and|but|or|so|to|of|in|on|we|you|he|she|they|it|this|my|is|was|are|were|did|will|has|have)\b(?:\s+\1\b)+"#,
-        "$1"
+        r#"(?i)\b([a-z]|sh|th|ch)(?:[- ]+\1){1,3}[- ]+(\1[a-z][a-z'-]*)\b"#,
+        "$2"
     ),
+    Rule {
+        name: "stutter-safe-words",
+        description: "Collapse adjacent repeated words, preserving deliberate doubles, numbers, and configured exceptions",
+        activation: Activation::Safe,
+        kind: RuleKind::RepeatedWords,
+    },
     fancy_rule!(
         "contracted-have-restart",
         "Remove a repeated subject from contracted-have restarts",
@@ -146,15 +151,8 @@ pub(crate) const DEFAULT_RULES: &[Rule] = &[
         "stutter-ambiguous-words",
         "Collapse repeated that/no/can/had/do only in aggressive mode",
         Activation::Aggressive,
-        r#"(?i)\b(that|no|can|had|do)\b(?:\s+\1\b)+"#,
+        r#"(?i)\b(that|no|can|had|do)\b(?:[ \t]+\1\b)+"#,
         "$1"
-    ),
-    fancy_rule!(
-        "repeated-prefix-stutter",
-        "Strip repeated one-letter or consonant-digraph starts before a matching word",
-        Activation::Safe,
-        r#"(?i)\b([a-z]|sh|th|ch)(?:[- ]+\1){1,3}[- ]+(\1[a-z][a-z'-]*)\b"#,
-        "$2"
     ),
     // General orthographic invariants. No technical-vocabulary allowlist is
     // involved: any run of two or more standalone uppercase letters collapses.
@@ -164,61 +162,38 @@ pub(crate) const DEFAULT_RULES: &[Rule] = &[
         Activation::Safe,
         normalize_spaced_acronyms
     ),
-    // Natural-language number parsing is delegated to text2num. The adjacent
-    // passes only format structural version and identifier notation.
-    procedural_rule!(
-        "spoken-version-numbers",
-        "Render multi-point spoken versions using text2num for every component",
-        Activation::Safe,
-        normalize_spoken_versions
-    ),
-    procedural_rule!(
-        "numeric-point-suffixes",
-        "Append spoken point-components to an existing numeric token using text2num",
-        Activation::Safe,
-        normalize_numeric_point_suffixes
-    ),
+    // These categories share one tokenization and edit pass. Keep them
+    // contiguous so the engine can normalize the enabled group together.
     Rule {
         name: "spoken-numbers",
-        description: "Convert recognized English numbers, retaining readable large-magnitude words",
+        description: "Render cardinal and ordinal quantities at or above the configured threshold",
         activation: Activation::Safe,
-        kind: RuleKind::SpokenNumbers,
+        kind: RuleKind::Numbers(NumberKind::Spoken),
     },
-    procedural_rule!(
-        "compact-parameter-counts",
-        "Render parameter counts with K/M/B magnitude suffixes",
-        Activation::Safe,
-        normalize_parameter_counts
-    ),
-    procedural_rule!(
-        "numeric-identifier-groups",
-        "Join split digit groups in structurally recognizable uppercase identifiers",
-        Activation::Safe,
-        normalize_numeric_identifier_groups
-    ),
-    procedural_rule!(
-        "numeric-magnitude-suffixes",
-        "Join numeric groups to uppercase K/M/B magnitude suffixes",
-        Activation::Safe,
-        normalize_magnitude_suffixes
-    ),
-    regex_rule!(
-        "compact-version-prefix",
-        "Join a standalone V prefix to a dotted version",
-        Activation::Safe,
-        r#"\b[Vv]\s+(\d+(?:\.\d+)+)\b"#,
-        "v$1"
-    ),
-    // The `[B-HJ-Z]` class gap excludes standalone "A" and "I". Arbitrary
-    // two-letter prefixes are ambiguous with common uppercase words; SM is
-    // retained as the known identifier stem exercised by the cleaning corpus.
-    regex_rule!(
-        "compact-short-identifier",
-        "Join one unambiguous uppercase letter or the SM identifier stem to a number",
-        Activation::Safe,
-        r#"\b([B-HJ-Z]|SM)\s+(\d+(?:\.\d+)*)\b"#,
-        "$1$2"
-    ),
+    Rule {
+        name: "spoken-versions",
+        description: "Render spoken decimals and dotted versions; compact version prefixes",
+        activation: Activation::Safe,
+        kind: RuleKind::Numbers(NumberKind::Version),
+    },
+    Rule {
+        name: "calendar-years",
+        description: "Join spoken century pairs beginning with eighteen, nineteen, or twenty",
+        activation: Activation::Safe,
+        kind: RuleKind::Numbers(NumberKind::Year),
+    },
+    Rule {
+        name: "numeric-identifiers",
+        description: "Compact numeric values after single-letter or SM identifier prefixes",
+        activation: Activation::Safe,
+        kind: RuleKind::Numbers(NumberKind::Identifier),
+    },
+    Rule {
+        name: "size-suffixes",
+        description: "Render explicit K/M/B sizes and compact parameter counts",
+        activation: Activation::Safe,
+        kind: RuleKind::Numbers(NumberKind::Size),
+    },
     // High-confidence casual-form normalization.
     procedural_rule!(
         "cause-to-because",

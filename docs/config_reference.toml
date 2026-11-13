@@ -1,400 +1,173 @@
-# config_reference.toml: accepted config keys, types, defaults, and behavior.
-# Form: loadable. Loading this file selects the built-in defaults. Start from example.toml for a small config.
-# Uncommented keys carry literal defaults. Commented-out keys show examples for unset, computed, or platform-dependent values.
-# Config paths and commands: [configuration](configuration.md).
-# Read once per process at startup; restart the daemon after edits. [Validation and recovery](configuration.md#validation-and-recovery).
-# Precedence, highest first: a command-line flag, this file, the built-in default.
-# Flags belong to `parakit start` unless stated otherwise. Bare `parakit` selects `start` without accepting its flags.
-# Boolean flag pairs are mutually exclusive and force either value.
-# Unknown keys at any nesting, invalid TOML, wrong types, and failed validation are errors naming the config file.
-# Enum strings are lowercase and case-sensitive, except qwen.language accepts case-insensitive codes and names.
-# Paths are literal: no ~ or environment-variable expansion. Relative paths resolve against the process working directory, not this file.
-# Whole-number keys require TOML integers; fractions are rejected.
-# No key is deprecated or internal. The value "evdev-proxy-experimental" of hotkey.backend is experimental.
-# Environment variables below are inherited process settings, not config keys. Parakit does not load a .env file.
+# config_reference.toml: every accepted TOML key. Form: loadable, using the built-in defaults.
+# Commented keys show examples for optional or computed values. Start from [example.toml](example.toml).
+# Config location and commands: [configuration](configuration.md#file-location).
+# Read once at startup. Restart the daemon after edits.
+# Precedence: command-line flags > this file > built-in defaults. Flags below belong to `parakit start` unless stated.
+# Unknown keys, wrong types, invalid TOML, and constraints fail load with the config path, except stated startup checks.
+# Constraints are checked even for disabled features, unused model settings, and disabled user rules.
+# Enum strings are lowercase and case-sensitive, except the language hints below.
+# Paths are literal: no ~ or environment expansion. Relative paths use the process working directory.
+# Integer keys reject fractions and are limited by TOML's signed 64-bit range and the bounds below.
+# Optional paths must be nonempty. No key is deprecated or internal.
+# CLI names replace underscores with hyphens. Where offered, boolean --name/--no-name pairs force either value and conflict.
+# Environment-only settings: [environment variables](configuration.md#environment-variables).
 
-
-# ---------- [daemon]: model, device, insertion, and daemon behavior ----------
+# ---------- Daemon ----------
+# CLI model selection replaces configured selection. Configured conflicts still fail load.
+# Config: daemon.model conflicts with daemon.model_preset and daemon.quantize. CLI: --model conflicts with --model-preset and --quantize.
+# Daemon keys take matching CLI overrides except transcript_history. Global diagnostics are described under verbose.
+# doctor also accepts --paste-mode, --insertion-backend, and --hotkey-backend for that check only.
 
 [daemon]
-# path string (optional). Path to the GGUF speech-model file that the daemon loads.
-# Unset: daemon.model_preset selects a preset at daemon.quantize precision.
-# Conflicts with: daemon.model_preset and daemon.quantize; setting either with daemon.model fails config load even when a CLI model selection overrides them.
-# Overridden by: -m/--model or --model-preset. When either flag is given, the path in this key is never checked for a file or used, so a wrong path here is harmless.
-# An empty string fails config load with "daemon.model is set but empty", even when -m is given.
-# An empty -m or --model value is a command-line parse error.
-# The file must exist and be a regular file (a symlink to one is fine). Otherwise startup fails with "model path is not a file".
-# This check runs right after the config loads, before the hotkey and microphone checks.
-# The path must also be valid UTF-8, or startup fails with "model path is not valid UTF-8" when the model is opened.
-# The contents are not checked until the model is opened. A file that is not a usable supported GGUF fails then with "could not open model".
-# The path becomes absolute at startup and is reused for every idle reload.
-# Setting this key turns off the automatic download. Models fetched with `parakit fetch <repo-or-url>` are never used unless they are named here or with -m.
-# `parakit doctor` does not check this key.
+# path string (optional). Local GGUF, disabling automatic acquisition.
+# Unset: use the preset. CLI -m aliases --model.
+# See: [file checks and reload paths](running.md#model-cache).
 # model = "/path/to/model.gguf"
 
-# "parakeet-v2" | "parakeet-v3" | "qwen3-asr-0.6b" | "qwen3-asr-1.7b" | "parakeet-ultra" | "parakeet-redux" (optional). Model preset to load. V2 is English-only.
-# Experimental: Qwen presets. Redux is for testing/comparison only and is not recommended for normal dictation.
-# Unset: parakeet-ultra, unless daemon.model selects a local GGUF.
-# Overridden by: -m/--model or --model-preset; either CLI selection replaces the configured selection.
-# `parakit fetch` does not read this key.
-# See: [preset acquisition, revisions, cache paths, and offline use](running.md#model-presets).
+# "parakeet-v2" | "parakeet-v3" | "qwen3-asr-0.6b" | "qwen3-asr-1.7b" | "parakeet-ultra" | "parakeet-redux" (optional). Preset.
+# Unset: parakeet-ultra. `fetch` does not read this key.
+# Experimental: Qwen presets. Redux is for testing only. [Acquisition and revisions](running.md#model-presets).
 # model_preset = "qwen3-asr-1.7b"
 
-# "q8_0" | "q6_k" (optional). Precision acquired for daemon.model_preset, or for parakeet-ultra when the preset is unset.
-# Unset: q8_0, the provider's hosted artifact.
-# Explicit CLI --quantize conflicts with -m/--model; configured model-selection conflicts are listed under daemon.model.
-# Overridden by: --quantize. An explicit CLI -m/--model ignores this configured precision and loads that file as it is.
-# Warning: a first Q6_K preparation can download several GB and take minutes; a preparation notice is printed to stderr even with --quiet. Windows needs a compatible crispasr-quantize.exe on PATH.
-# See: [Q6_K preparation and reuse](running.md#model-presets).
+# "q8_0" | "q6_k" (optional). Preset precision, ignored with CLI -m/--model.
+# Unset: hosted q8_0. CLI --quantize conflicts with -m/--model.
+# Warning: q6_k needs an external quantizer and a large first download. [Preparation](running.md#model-presets).
 # quantize = "q6_k"
 
-# "auto" | "cpu" | "gpu". Where speech recognition runs.
-# "auto" uses the best GPU when one is available and the CPU otherwise. The daemon banner and `parakit --verbose status` show which one was chosen.
-# "cpu" never uses a GPU.
-# "gpu" requires a GPU. In the default build (Cargo feature `bundled`), startup fails before the model is fetched or opened when ggml reports no GPU or iGPU device.
-# That startup message, and the failed-reload message below, name the value as device "gpu" (from --device or daemon.device), because either one can set it.
-# In a build without the `bundled` feature (an external libcrispasr) there is no device probe. Startup only warns and still opens the model with the GPU requested, and the CrispASR library decides what happens without one.
-# Overridden by: the --device flag.
-# Only used when: the model is opened. The policy is applied again on every idle reload (see daemon.model_idle_minutes).
-# See: [idle reload device selection and memory limits](running.md#idle-model-offload).
-# Recommended: "auto".
+# "auto" | "cpu" | "gpu". Compute policy, reapplied on every model open.
+# See: [selection and unavailable GPUs](running.md#device-selection).
 device = "auto"
 
-# integer, 1 to 2147483647 (optional). Number of CPU threads used for inference. The value is passed to the engine in every device mode.
-# Unset: computed from the number of logical CPUs the process may use. One CPU gives 1 thread, otherwise half the CPUs with a minimum of 2.
-# If the CPU count cannot be detected, 4 is assumed, which gives 2 threads. Examples: 4 CPUs give 2 threads, 8 give 4, 16 give 8.
-# Under a container CPU quota or a CPU affinity mask the process may see fewer CPUs than the machine has.
-# Overridden by: the --threads flag.
-# 0, negative values, non-integers, and values above 2147483647 (the C int that the engine takes) fail config load, before any model is fetched. The --threads flag rejects the same values.
-# Warning: an explicit value is not clamped to the CPU count, so a large value oversubscribes the machine.
-# See: Windows OMP/OpenBLAS environment defaults below.
+# integer, 1 to 2147483647 (optional). CPU inference threads in every device mode.
+# Unset: half the available logical CPUs, minimum 2 (1 on a single-CPU system). Detection failure uses 2.
+# See: [CPU limits and overrides](running.md#first-run).
 # threads = 4
 
-# integer, 0 to 9223372036854775807. Minutes of uninterrupted idleness after which the daemon releases the speech model from memory. 0 disables offloading, so the model stays loaded.
-# See: [idle timing, recording, reload, and failure recovery](running.md#idle-model-offload).
-# Overridden by: the --model-idle-minutes flag. An explicit flag value of 0 wins over a nonzero value here.
-# Negative values, fractions, non-integers, and integers above 9223372036854775807 fail config load. The flag accepts integers up to 18446744073709551615.
-# A huge value is not rejected at runtime: the model simply never offloads.
-# Recommended: 0 when you share the GPU with other programs and use daemon.device "gpu", because another program can take the freed GPU memory and make the reload fail.
-# Recommended: 0 also when the reload delay after a pause is unwelcome. Keep 10, or another value, to free memory during long idle periods.
+# integer idle minutes, 0 to 9223372036854775807 (CLI max 18446744073709551615). 0 keeps the model resident.
+# See: [timing, reload failures, and GPU memory](running.md#idle-model-offload).
 model_idle_minutes = 10
 
-# "auto" | "ibus" | "x11". Linux transcript insertion transport.
-# "auto" uses IBus for engine-owned PTT unless daemon.paste_mode is "direct"; other combinations use X11. Native failures never trigger another paste.
-# "ibus" requires IBus hotkeys (set hotkey.backend = "ibus" on X11). "x11" requires an X11 session.
-# Only used when: Linux. macOS and Windows accept any string for dotfile portability, but do not read or validate it.
-# Overridden by: --insertion-backend. `parakit doctor --insertion-backend` overrides it for that check only.
-# See: [Linux setup and native target handling](linux-desktop.md#ibus-setup).
+# "auto" | "ibus" | "x11". Linux insertion transport. Any string is accepted and ignored on other systems.
+# See: [selection](linux-desktop.md#insertion-selection-and-recovery).
 insertion_backend = "auto"
 
-# "terminal" | "standard" | "direct" (optional). Transcript content policy and the legacy paste shortcut.
-# Unset: "terminal" on Linux, "standard" on macOS and Windows.
-# See: [mode selection, normalization, and content policy](running.md#insertion).
-# Conflicts with: daemon.insertion_backend = "ibus" when this mode is "direct"; startup fails.
-# See: [Linux direct-typing focus and modifier checks](linux-desktop.md#focus-guard).
-# Requires: on Linux, an X11 session for clipboard paste and direct typing, plus the XTest extension for clipboard paste. Native IBus does not require DISPLAY.
-# Requires: on macOS, Accessibility permission for every mode.
-# Overridden by: the --paste-mode flag. `parakit doctor --paste-mode` overrides this key for that one check only.
+# "terminal" | "standard" | "direct" (optional). Transcript content policy and legacy paste shortcut.
+# Unset: terminal on Linux, standard elsewhere.
+# Conflicts with: daemon.insertion_backend = "ibus" in direct mode (Linux startup/doctor, after CLI overrides).
+# See: [insertion requirements](running.md#insertion).
 # paste_mode = "standard"
 
-# bool. Whether the dictated text stays on the clipboard after it is pasted.
-# false requests restoration of the previous supported clipboard payload; true retains the transcript without reading or restoring the previous contents.
-# Only used when: clipboard insertion. Native recovery always retains text; "direct" never touches the clipboard.
-# Overridden by: --keep-transcript-clipboard or --no-keep-transcript-clipboard.
-# See: [staging, recovery exceptions, and supported restore formats](running.md#clipboard-staging-and-restore).
-# Warning: legacy staging may replace a competing clipboard copy to deliver or retain the transcript. Restoration preserves newer contents that supersede the staged transcript.
+# bool. Retain pasted text instead of restoring the prior clipboard payload.
+# Only used when: clipboard insertion. [Recovery and competing copies](running.md#clipboard-staging-and-restore).
 keep_transcript_clipboard = false
 
-# bool. Play short tones for dictation events.
-# The cues are a start tone when listening begins (only if the key is still held), a three-note cue while the model reloads after an idle offload, a completion tone, and a two-tone error cue.
-# Silent captures, failed reloads/transcriptions, and [alerting insertion outcomes](logging.md#insertion-outcomes) play the error cue.
-# Overridden by: --sounds or --no-sounds.
-# The global --quiet flag does not silence the cues.
-# If a cue cannot be played, `parakit: sound cue dropped: <error>` is written to stderr, which --quiet does not suppress, and dictation continues.
-# Cues that pile up faster than they play are dropped.
+# bool. Play dictation cues independently of --quiet.
+# See: [cue timing and playback failures](running.md#logging-and-sounds).
 sounds = true
 
-# bool. Print diagnostics: model path, microphone and backend details, timings, clipboard diagnostics, and the native inference library's own log messages. Without it only that library's warnings and errors are shown.
-# Overridden by: the global --quiet flag, which always wins.
-# The global --verbose flag turns diagnostics on whatever this key says. The effective value is on when either is set and --quiet is absent.
-# Applies to `parakit start`, to `parakit doctor` (detailed instead of summary output), and to `parakit rules` (native-library log filter only).
-# It does not apply to fetch, cache, config, status, stop, copy-last, history, or test-paste. Pass --verbose to those.
-# `parakit status` detail depends only on the --verbose flag given to that status command.
-# Without diagnostics, a model that fails to load reports an error that suggests rerunning with --verbose.
+# bool. Enable [diagnostics](running.md#first-run) for start, doctor, and rules. Global --verbose enables them and --quiet wins.
 verbose = false
 
-# integer, 0 to 100. How many recent transcripts the daemon keeps in memory for `parakit copy-last` and `parakit history`, newest first.
-# 0 disables Qwen context and both commands: they fail with "transcript history is disabled (daemon.transcript_history = 0)", and `parakit status` reports "last transcript: history disabled".
-# The history exists only in daemon memory. It is cleared when the daemon stops and is never written to disk by this key.
-# Every transcript that reaches insertion is remembered, including one whose paste was blocked or failed. A transcript skipped as whitespace-only is not.
-# logging.dir is independent: it can persist the same transcripts to disk.
-# Values above 100, negative values, and non-integers fail config load. There is no command-line flag.
+# integer in [0, 100]. Retained transcripts in memory, cleared on stop.
+# 0 disables history commands and Qwen context. [History and copying](running.md#daemon-control).
 transcript_history = 10
 
-
-# ---------- [qwen]: language, generation, and prior context ----------
-# These settings apply only to Qwen3-ASR GGUFs; other models ignore them after config validation.
-# Explicit Qwen CLI controls fail with a non-Qwen model.
+# ---------- Qwen ----------
+# Validated for every model but used only by Qwen3-ASR. Explicit Qwen CLI flags require a Qwen model.
+# --qwen-language and --qwen-max-new-tokens override the first two settings. Context controls have no CLI flags.
+# See: [context selection and fallback](models/qwen3-asr.md#prior-dictation-context).
 
 [qwen]
-# string. "auto" detects the source language; otherwise a supported language code or English name forces it.
-# Supported codes/names (case-insensitive, surrounding whitespace ignored): zh/Chinese, en/English, yue/Cantonese, ar/Arabic, de/German, fr/French, es/Spanish, pt/Portuguese, id/Indonesian, it/Italian, ko/Korean, ru/Russian, th/Thai, vi/Vietnamese, ja/Japanese, tr/Turkish, hi/Hindi, ms/Malay, nl/Dutch, sv/Swedish, da/Danish, fi/Finnish, pl/Polish, cs/Czech, fil/Filipino, fa/Persian, el/Greek, hu/Hungarian, mk/Macedonian, ro/Romanian.
-# Empty strings and unsupported names/codes fail config load; regional codes such as en-US are not accepted.
-# Overridden by: --qwen-language.
-# The normalized canonical name is reapplied on every idle reload.
-# See: cleaning.enabled for multilingual cleanup.
+# string. Source language, or auto for detection. Codes and English names ignore case and surrounding whitespace.
+# Codes ar-fr: ar/Arabic, cs/Czech, da/Danish, de/German, el/Greek, en/English, es/Spanish, fa/Persian, fi/Finnish, fil/Filipino, fr/French.
+# Codes hi-pt: hi/Hindi, hu/Hungarian, id/Indonesian, it/Italian, ja/Japanese, ko/Korean, mk/Macedonian, ms/Malay, nl/Dutch, pl/Polish, pt/Portuguese.
+# Codes ro-zh: ro/Romanian, ru/Russian, sv/Swedish, th/Thai, tr/Turkish, vi/Vietnamese, yue/Cantonese, zh/Chinese.
+# Empty or unsupported hints, including regional codes such as en-US, fail load.
 language = "auto"
 
-# integer, 1 to 4096. Maximum generated tokens per native Qwen audio chunk, including the token that ends decoding.
-# An utterance fails if any chunk reaches the budget without EOS, or another native decoding error occurs; incomplete text is not inserted or added as a successful transcript.
-# Overridden by: --qwen-max-new-tokens.
-# See: [long audio and readiness controls](models/qwen3-asr.md#long-audio-and-inference).
+# integer, 1 to 4096 generated tokens per native chunk, including EOS.
+# See: [budget exhaustion and long audio](models/qwen3-asr.md#long-audio-and-inference).
 max_new_tokens = 512
 
-# bool. Request prior-dictation context with the original push-to-talk shortcut. The extra context shortcut then adds nothing and is not registered or intercepted.
-# See: [Qwen context](models/qwen3-asr.md#prior-dictation-context) for shortcuts and ordinary-dictation fallback.
+# bool. Request context on the original shortcut, leaving the extra context shortcut inactive.
 context_on_default_hotkey = false
 
-# integer, 0 or greater. Maximum prior dictations used as context; 0 disables context.
-# Requires: retained daemon.transcript_history entries; this setting never increases retention.
+# nonnegative integer. Prior dictations to use, limited by daemon.transcript_history. 0 disables context.
 context_dictations = 3
 
-# positive integer. Maximum age in minutes of prior dictations selected at inference time.
-# Values whose conversion to seconds overflows fail config load.
+# integer, 1 to 307445734561825860. Maximum context age in minutes, evaluated at inference (must fit in seconds).
 context_max_age_minutes = 10
 
-
-# ---------- [cleaning]: transcript cleanup ----------
+# ---------- Cleaning ----------
+# --cleaning/--no-cleaning override enabled. --cleaning-profile overrides profile (`rules --profile`).
+# `rules list` and `rules test` always list or apply rules, regardless of cleaning.enabled.
 
 [cleaning]
-# bool. Run the cleaning pipeline on each transcript. false inserts the model's raw transcript unchanged: no built-in rule and no [[rules.user]] entry runs.
-# Overridden by: --cleaning or --no-cleaning.
-# Recommended: false for multilingual dictation when English cleanup could alter the transcript; --no-cleaning has the same effect for one start command.
-# Validation still happens when false: cleaning.disabled_rules, cleaning.number_threshold, and every [[rules.user]] entry (including each regex) must be valid or the config fails to load.
-# `parakit rules test` and `parakit rules list` ignore this key and always apply or list the rules.
+# bool. Apply built-in and user rules. false preserves raw model text, useful for multilingual dictation.
 enabled = true
 
-# "safe" | "aggressive". Cleanup tier.
-# "safe" runs mechanical cleanup and high-confidence normalization.
-# "aggressive" additionally removes discourse markers and collapses ambiguous repetitions, which can change meaning.
-# Does not gate [[rules.user]] entries, which run under both profiles.
-# Only used when: cleaning.enabled is true. The value is still validated otherwise.
-# Overridden by: the --cleaning-profile flag of `parakit start`. On `parakit rules list` and `parakit rules test` the flag is --profile.
-# Only lowercase is accepted in this file ("Safe" fails config load), while the command-line flags accept any case.
-# Recommended: "safe", unless you want discourse markers deleted and accept that it can change meaning.
-# See: [profile behavior and pass inspection](cleaning-rules.md#profiles).
+# "safe" | "aggressive". Cleanup tier, independent of user rules.
+# See: [profile behavior](cleaning-rules.md#profiles). CLI profile values accept either case.
 profile = "safe"
 
-# bool. Keep the single final period of a transcript. false removes it, which suits messaging-style dictation. Only a single final period is removed: a final "?" or "!" is kept, and so is a final period that directly follows another period, so the ellipsis in "Wait..." survives.
-# This is the built-in rule fix-trailing-period. It is in the pipeline only when this key is false and the rule is not named in cleaning.disabled_rules.
-# Disabling that rule by name has the same visible effect as setting this key to true.
-# Only used when: cleaning.enabled is true.
-# Overridden by: --keep-trailing-period or --no-keep-trailing-period, also available on `parakit rules list` and `parakit rules test`.
+# bool. Keep a single final period instead of applying fix-trailing-period.
+# Overridden by: --keep-trailing-period/--no-keep-trailing-period (also on rules).
+# See: [punctuation](cleaning-rules.md#profiles).
 keep_trailing_period = false
 
-# number, 0 or more (integer or float). Decides which spoken numbers the spoken-numbers rule turns into digits.
-# Only isolated single-digit numbers ("zero" to "nine") and isolated ordinals ("first", "twenty first") are compared with the threshold.
-# One whose value is below the threshold is left exactly as the model produced it, neither forced to words nor to digits. One at or above it becomes digits.
-# See: [conversion examples, preserved expressions, and the difference between absent and zero](cleaning-rules.md#numbers).
-# Negative, infinite, and NaN values fail config load with "number threshold must be a finite value greater than or equal to 0".
-# Only used when: cleaning.enabled is true and the spoken-numbers rule is not disabled. The value is validated either way.
-# The structural number rules (spoken-version-numbers, numeric-point-suffixes, compact-parameter-counts, and the other numeric rules) do not read it.
-# There is no command-line flag. `parakit rules test` honors this key, and `parakit rules list` does not use it.
+# number, finite and 0 or greater (integer or float). Spoken-number conversion cutoff. No CLI flag.
+# See: [threshold, adjacent counts, and separate year/version rules](cleaning-rules.md#numbers).
 number_threshold = 4
 
-# list of strings. Built-in or [[rules.user]] names to disable; list names and descriptions with `parakit rules list`.
-# Each name is matched exactly, case-sensitively and without trimming.
-# An unknown name fails config load with "no rule named '<name>'", even when cleaning.enabled is false.
-# The name of a rule that is not active under the current profile is valid, and disabling it does nothing.
-# A disabled [[rules.user]] entry must still have a valid name and a regex that compiles.
-# The --disable-rule flag (repeatable) is merged with this list as a union without duplicates. No flag can re-enable a rule disabled here.
-# Names given by the flag are checked only when the cleaner is built (daemon start, `rules list`, `rules test`), not by `parakit config show`.
-# Disabling a built-in rule changes the rule-set id recorded in transcription logs.
-# See: [inspecting, testing, and disabling passes](cleaning-rules.md#inspect-and-test).
+# list of strings. Case-insensitive literal word/phrase exceptions for stutter-safe-words under both profiles. No CLI flag.
+# Words, including contractions, may be separated by spaces or tabs. Empty entries, other punctuation, and newlines fail load.
+# A word protects all its repeats. A phrase protects only the complete matching span.
+repetition_exceptions = []
+
+# list of strings. Exact, case-sensitive, untrimmed rule names. An unknown name fails load.
+# Merged as a union with repeatable --disable-rule, which cannot re-enable entries and is checked when building the cleaner.
+# Inactive rules are valid no-ops. [Pass inspection](cleaning-rules.md#inspect-and-test).
 disabled_rules = []
 
-
-# ---------- [logging]: transcription log ----------
+# ---------- Logging ----------
 
 [logging]
-# path string (optional). Directory for JSONL transcription and insertion records.
-# Unset: transcription logging is off.
-# Overridden by: the --log-dir flag. No flag turns a configured directory off.
-# The directory is created on the first write, so neither `parakit config show` nor daemon startup can prove it is writable.
-# Write failures go to stderr without stopping dictation; the next dictation tries again.
-# This is independent of daemon.transcript_history, which keeps recent transcripts in daemon memory only.
-# An empty string fails config load with "logging.dir is set but empty".
-# An empty --log-dir value is a command-line parse error.
-# Warning: the log holds the raw and cleaned dictated text in plain text.
-# See: [file layout, record fields, and write behavior](logging.md).
+# path string (optional). Directory for plain-text JSONL dictation records.
+# Unset: logging is off.
+# Overridden by: --log-dir. No CLI flag disables a configured directory.
+# See: [file creation, privacy, and write failures](logging.md).
 # dir = "/home/user/.parakit/logs"
 
-
-# ---------- [hotkey]: Linux push-to-talk capture ----------
+# ---------- Linux Hotkey ----------
 
 [hotkey]
-# "auto" | "desktop" | "ibus" | "x11-global-hotkey" | "x11-listen" | "evdev-proxy-experimental". Linux capture mechanism for the Ctrl+Space push-to-talk chord.
-# Linux only. macOS and Windows accept this key so that one config file works everywhere, but they never read it and do not validate its value: any string loads there.
-# On Linux an unknown name fails config load.
-# "auto" and "desktop" register a global X11 shortcut on X11 and use the Parakit IBus engine on Wayland.
-# "ibus" captures press/release only in a focused editable field while the Parakit input source is selected. It does not provide global Wayland PTT.
-# "x11-global-hotkey" forces registered X11 capture. Registration failure, such as another application owning Ctrl+Space, stops startup.
-# "x11-listen" passively watches X11 key events. It grabs and suppresses nothing, so Ctrl+Space still reaches the focused application.
-# Experimental: "evdev-proxy-experimental" grabs every readable /dev/input event device that has both a Space key and a Ctrl key (devices already grabbed elsewhere are skipped) and re-emits their input through /dev/uinput.
-# Requires: for "evdev-proxy-experimental", read access to /dev/input and write access to /dev/uinput. `parakit doctor` checks both. The backend logs a warning at startup because it grabs devices.
-# The evdev route remains an X11-only experimental backend. Native Wayland support uses IBus.
-# Warning: do not run parakit with sudo to get those permissions. Audio, the clipboard, and text insertion must stay in the desktop-user session.
-# Machine availability is not checked at config load. Run `parakit doctor`. Daemon startup performs the final check.
-# If the hotkey loop fails while the daemon runs, the daemon exits with code 2.
-# Overridden by: the --hotkey-backend flag (Linux only). `parakit doctor --hotkey-backend` overrides this key for that one check only.
+# "auto" | "desktop" | "ibus" | "x11-global-hotkey" | "x11-listen" | "evdev-proxy-experimental". Linux PTT capture.
+# Only used when: Linux. Other systems accept and ignore any string.
+# Overridden by: --hotkey-backend.
+# Experimental: evdev-proxy-experimental. [Backend behavior and permissions](linux-desktop.md).
 backend = "auto"
 
-
-# ---------- [[rules.user]]: your own cleaning rules ----------
-
-# Each [[rules.user]] table is one regex replacement applied to every transcript alongside the built-in rules. Repeat the header for each rule. The default is no user rules.
-# The example entry below is commented out. Uncomment the [[rules.user]] header together with its keys, or the keys land in the preceding table.
-# Entries run only through the cleaning pipeline, so they follow cleaning.enabled, and they are never gated by cleaning.profile. Within one position they run in file order.
-# Every entry is validated when the config loads. The daemon reuses compiled patterns for enabled entries across dictations.
-# An invalid entry makes every command that reads the config fail with an error that names the config file and the rule.
-# A rule that changes the text is recorded with its name and its count of non-overlapping matches in the transcription log and in the "Rules:" line of `parakit rules test`.
-# The name, pattern, replacement, position, and order of enabled entries are part of the rule-set id recorded in transcription logs. A description and disabled entries are not.
+# ---------- User Rules ----------
+# Repeat [[rules.user]] for each regex replacement. The default is no user rules.
+# Uncomment the table header with its keys, or they land in the preceding table.
+# Entries follow cleaning.enabled, not cleaning.profile. Within each position they run in file order.
+# Enabled patterns are compiled once and reused across dictations.
+# Changes are logged by rule name and non-overlapping match count. [Log identity](logging.md#transcription-record-fields).
 
 # [[rules.user]]
-# string (required). Identifier of the rule. It is the name that cleaning.disabled_rules and --disable-rule take, and the name `parakit rules list` shows.
-# It must not be empty or whitespace-only, must have no leading or trailing whitespace, must differ from every built-in rule name, and must be unique among user rules. Names are case-sensitive.
+# string (required). Nonblank name without edge whitespace, unique among user and built-in rule names. Case-sensitive.
 # name = "weights-and-biases-to-wandb"
-# string (optional). Human-readable description. Any string, including an empty one.
-# Unset: `parakit rules list` shows a blank description. The description is shown nowhere else and does not affect behavior.
+# string (optional). Description displayed by `rules list`, without behavioral effect.
+# Unset: blank.
 # description = "Map 'weights and biases' to 'wandb'"
-# string (required). Regular expression to match, in the syntax of the Rust `regex` crate: no lookahead, lookbehind, or backreferences.
-# It is case-sensitive unless it carries (?i). The anchors ^ and $ match the start and end of the whole transcript unless (?m) is set.
-# It must not be the empty string. A whitespace-only pattern is legal and matches those characters.
-# It must compile. A pattern that does not fails config load even when the rule is listed in cleaning.disabled_rules.
-# In a TOML basic string ("...") write every regex backslash twice, as in "\\bword\\b". A TOML literal string ('...') needs no doubling.
-# All non-overlapping matches are replaced.
+# string (required). Nonempty Rust regex (whitespace-only is legal), case-sensitive unless (?i). No lookaround or backreferences.
+# Anchors ^/$ match the whole transcript unless (?m). All non-overlapping matches are replaced.
+# Escape backslashes twice in TOML basic strings ("\\bword\\b"), or use literal strings ('\bword\b').
 # pattern = "(?i)\\bweights and biases\\b"
-# string (required). Replacement text for each match. An empty string is allowed and deletes the match.
-# It supports $0, $1, $name, ${name}, and $$ for a literal dollar sign.
-# The name after a $ is the longest run of letters, digits, and underscores, so "$1b" means a group named "1b" (which does not exist) and not group 1 followed by "b". Write "${1}b" instead.
-# Warning: a reference to a group that does not exist expands to empty text without an error, so a typo silently removes text.
+# string (required). Replacement text, empty to delete. Supports $0, $1, $name, ${name}, and $$ for a dollar sign.
+# Warning: missing groups expand to empty. Use ${1}b for group 1 followed by b ($1b names group 1b).
 # replacement = "wandb"
-# "first" | "standard" | "last". Default: "standard". Where the rule runs relative to the built-in rules.
-# "first" runs before every built-in rule.
-# "standard" runs immediately before the built-in fix-space-before-punct rule, even when that rule is disabled.
-# That is after the number, casual-form, tag-question, and dangling-connective rules, and before the whitespace and punctuation cleanup, capitalization, and terminal-period rules.
-# "last" runs after every built-in rule, including capitalize-sentence-starts and fix-trailing-period, so no later cleanup repairs its output.
-# Recommended: "standard" for ordinary substitutions.
+# "first" | "standard" | "last". Default: "standard". Placement relative to built-ins.
+# first precedes all built-ins. last follows all built-ins, so no later cleanup repairs its output.
+# standard runs before fix-space-before-punct even when disabled. [Order](cleaning-rules.md#rule-order).
 # position = "standard"
-
-
-# ---------- Environment variables ----------
-#
-# Variables that matter only when building from source are outside this reference.
-
-# PARAKIT_CONFIG_PATH
-# Config-file override; path selection and missing-file behavior are in [configuration](configuration.md#file-location).
-
-# PARAKIT_MODELS_DIR
-# Directory that holds downloaded models. Used verbatim when set. Empty is an error. A relative path is relative to the working directory.
-# Default on Linux and macOS: $XDG_CACHE_HOME/parakit/models, or $HOME/.cache/parakit/models. Default on Windows: parakit\Cache\models inside the Local AppData folder.
-# Read only by commands that touch the model cache: `fetch`, `cache`, and daemon startup when a preset or the default model is selected. It is not consulted when the selected model is an explicit local path.
-
-# XDG_CONFIG_HOME
-# Linux and macOS. Base of the default config path. A relative value is used as given, and an empty value counts as unset. Ignored when PARAKIT_CONFIG_PATH is set.
-
-# XDG_CACHE_HOME
-# Linux and macOS. Base of the default model cache, and of the daemon runtime directory where XDG_RUNTIME_DIR does not apply. A relative value is used as given, and an empty value counts as unset.
-
-# HOME
-# Linux and macOS. Fallback for XDG_CONFIG_HOME and XDG_CACHE_HOME.
-# An empty value counts as unset.
-# When it is unset or empty and the XDG variable gives no base, those paths cannot be resolved and the command fails with "HOME is unset or empty".
-
-# XDG_RUNTIME_DIR
-# Linux. Directory whose parakit subdirectory holds the daemon lock file (parakit.lock) and control socket (control.sock). An empty value counts as unset.
-# Fallback: $XDG_CACHE_HOME/parakit/run, or $HOME/.cache/parakit/run. macOS always uses that fallback. Windows keeps the lock in parakit\run inside Local AppData and talks over a named pipe.
-# The control commands (`status`, `stop`, `copy-last`, `history`, `test-paste`) and the daemon must resolve the same directory to find each other.
-# The socket directory must be owned by you, and parakit sets it to mode 0700.
-
-# VISUAL
-# Editor for `parakit config edit`, tried before EDITOR; [selection and command parsing](configuration.md#editor).
-
-# EDITOR
-# Editor fallback for `parakit config edit`; see VISUAL above.
-
-# DISPLAY
-# Linux. Required by X11 hotkeys, clipboard paste, direct typing, and the existing clipboard-copy backend. Native IBus insertion and focused-field PTT do not require it.
-# Inherit it from the desktop session. An XWayland DISPLAY never enables XTest insertion into native Wayland applications.
-
-# XDG_SESSION_TYPE
-# Linux. A value of "wayland" in any case selects Wayland session handling: automatic hotkeys use IBus and X11 insertion is unavailable.
-# An empty value counts as present, so it also disables the WAYLAND_DISPLAY fallback below.
-
-# WAYLAND_DISPLAY
-# Linux. Consulted only when XDG_SESSION_TYPE is absent. A nonempty value is then treated as a Wayland session.
-
-# XAUTHORITY
-# Linux. Only reported by `parakit doctor --verbose` and by startup failure messages. parakit makes no decision from it. The X11 libraries read it themselves.
-
-# USER
-# Linux. Only fills in the user name in the permission fix shown for the evdev-proxy-experimental backend. It has no other effect.
-
-# OMP_NUM_THREADS, OPENBLAS_NUM_THREADS, OMP_WAIT_POLICY
-# Windows. Each model open sets these to the effective daemon.threads count, 1, and PASSIVE respectively, unless already present, including an empty string. Linux and macOS leave them unchanged.
-
-# The two CRISPASR_FC controls below apply on every platform. Neither has a config key or command-line flag.
-# Every parakit command sets them to 0 at process start unless already present, including an empty string.
-# The native library caches them after the first read; override them in the launching environment and restart after changes.
-# CRISPASR_FC_PW_Q8
-# Controls whether native model loading repacks the F16 convolution pointwise weights of each layer into an extra Q8_0 copy.
-# The library treats a value starting with 0 as off, any other nonempty value as on, and an empty or absent value as automatic, which repacks only a model that is already quantized.
-
-# CRISPASR_FC_FUSED_QKV
-# Controls whether native model loading concatenates each layer's attention query, key, and value weights into an extra fused copy.
-# The library treats a value starting with 0 as off, and any other value, including an empty string or an absent variable, as on.
-
-# CRISP_AUDIO_WINDOWED_ATTN
-# All platforms. Native Qwen audio-encoder attention control. Parakit sets it to 1 before native initialization unless it is already present, including an empty string.
-# Unset: windowed attention using the model's inference windows. Parakeet models do not use this control.
-# A value parsed as a nonzero integer enables windowing; 0, an empty value or a nonnumeric value keeps the native dense path for models without windowed-attention metadata. Models with explicit windowed-attention metadata retain that behavior.
-# Override it in the launching environment for reference comparisons; restart after changes. There is no config key or command-line flag for it.
-
-# CRISPASR_QWEN3_HOTWORDS_AS_CONTEXT
-# All platforms. Parakit defaults this to 1 at startup so Qwen session hotwords carry free-form context; an existing value is preserved.
-# A nonzero integer enables raw context. Zero, empty, or nonnumeric values make Parakit transcribe without prior context.
-
-# CUDA_VISIBLE_DEVICES
-# CUDA builds. Read by the CUDA runtime, not by parakit. A comma-separated list of NVIDIA GPU indices or UUIDs that CUDA may use; an empty value hides all CUDA devices.
-# Visibility controls affect only their named backend. In bundled builds, daemon.device "auto" falls back to CPU and "gpu" fails at startup only when no GPU remains visible across enabled backends. `parakit --verbose doctor` lists visible devices.
-# There is no per-device config key or command-line flag, because the Parakeet backend ignores CrispASR's device index.
-
-# GGML_VK_VISIBLE_DEVICES
-# Vulkan builds. Read by ggml's Vulkan backend, not by parakit. A comma-separated list of indices into the Vulkan driver's physical-device list (the GPU0, GPU1 order of `vulkaninfo --summary`) limits which devices Vulkan may use.
-# The Vulkan0, Vulkan1 names in `parakit --verbose doctor` number only the visible devices, so they can differ from these indices.
-# An empty value hides all Vulkan devices; an invalid index disables the Vulkan backend. Other backends follow the visibility rule above.
-
-# CRISPASR_QWEN3ASR_QUANT_AUDIO
-# Native Qwen quantizer override. A nonempty value not starting with 0 allows audio-encoder tensors to use the target quantization below the normal Q8_0 floor.
-# `parakit fetch --from-source` and Q6_K preparation (`fetch` or automatic startup) set it to 0 for the quantizer child process, preserving the native audio-encoder precision policy regardless of the launching environment. It does not change the parent environment or runtime inference.
-
-# HF_ENDPOINT
-# Base URL that replaces https://huggingface.co for default/preset model downloads, `parakit fetch <repo>`, and `parakit fetch --from-source`. This includes automatic startup downloads.
-# A blank value means the default. Trailing slashes are trimmed. It does not apply to `parakit fetch <url>`.
-
-# HF_TOKEN
-# Bearer token sent to the Hugging Face endpoint (HF_ENDPOINT or the default) for those downloads. Blank means none. It is never sent for a direct URL fetch.
-
-# HTTPS_PROXY, HTTP_PROXY, ALL_PROXY, NO_PROXY
-# Read by the HTTP client library (reqwest's system-proxy support), in upper and lower case, for model downloads. They affect `fetch` and the automatic download only.
-
-# SSL_CERT_FILE, SSL_CERT_DIR
-# Read by the TLS library for additional trusted certificates when downloading models.
-
-# PATH
-# `parakit fetch --from-source` searches it for python3 or python. Both source rebuilds and Q6_K preparation search it for crispasr-quantize when the tool is not at the location built into the binary.
-# `parakit config edit` relies on it to find the editor program.
-
-# LD_LIBRARY_PATH, DYLD_LIBRARY_PATH
-# LD_LIBRARY_PATH on Linux and DYLD_LIBRARY_PATH on macOS. Source rebuilds and Q6_K preparation prepend a quantizer's accompanying lib directory to the existing value for the quantizer child process only.
-# On Windows the same prepending is done to PATH.

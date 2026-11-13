@@ -72,21 +72,86 @@ pub enum ModelPreset {
     ParakeetRedux,
 }
 
+/// Hosted and original-checkpoint metadata for one named preset.
+struct PresetMetadata {
+    id: &'static str,
+    repo: &'static str,
+    filename: &'static str,
+    revision: &'static str,
+    source_revision: Option<&'static str>,
+    source_repo: Option<&'static str>,
+    backend: &'static str,
+}
+
 impl ModelPreset {
+    /// # Returns
+    /// The complete hosted/source recipe for this preset.
+    const fn metadata(self) -> &'static PresetMetadata {
+        match self {
+            Self::ParakeetV2 => &PresetMetadata {
+                id: "parakeet-v2",
+                repo: "cstr/parakeet-tdt-0.6b-v2-GGUF",
+                filename: "parakeet-tdt-0.6b-v2-q8_0.gguf",
+                revision: "8878172f3c45ba231fac8cfd4aff2542b13bc875",
+                source_revision: None,
+                source_repo: None,
+                backend: "parakeet",
+            },
+            Self::ParakeetV3 => &PresetMetadata {
+                id: "parakeet-v3",
+                repo: "pszemraj/parakeet-tdt-0.6b-v3-gguf",
+                filename: Q8_FILENAME,
+                revision: "main",
+                source_revision: None,
+                source_repo: None,
+                backend: "parakeet",
+            },
+            Self::Qwen3Asr06b => &PresetMetadata {
+                id: "qwen3-asr-0.6b",
+                repo: "cstr/qwen3-asr-0.6b-GGUF",
+                filename: "qwen3-asr-0.6b-q8_0.gguf",
+                revision: "58bd3202f835f46b24b17142cb503b0860c737a5",
+                source_revision: Some("5eb144179a02acc5e5ba31e748d22b0cf3e303b0"),
+                source_repo: Some("Qwen/Qwen3-ASR-0.6B"),
+                backend: "qwen3",
+            },
+            Self::Qwen3Asr17b => &PresetMetadata {
+                id: "qwen3-asr-1.7b",
+                repo: "cstr/qwen3-asr-1.7b-GGUF",
+                filename: "qwen3-asr-1.7b-q8_0.gguf",
+                revision: "674df5d44b50a63e7102a18895ed20e3f91de301",
+                source_revision: Some("7278e1e70fe206f11671096ffdd38061171dd6e5"),
+                source_repo: Some("Qwen/Qwen3-ASR-1.7B"),
+                backend: "qwen3",
+            },
+            Self::ParakeetUltra => &PresetMetadata {
+                id: "parakeet-ultra",
+                repo: "cstr/parakeet-ultra-GGUF",
+                filename: "parakeet-ultra-q8_0.gguf",
+                revision: "252cd632a21e98ba5edbdeb61c7274d01c54cb73",
+                source_revision: Some("73175eb7aeb0d82f1e2a6b53b3aabc10a90bcd0b"),
+                source_repo: Some("moondream/parakeet-ultra"),
+                backend: "parakeet",
+            },
+            Self::ParakeetRedux => &PresetMetadata {
+                id: "parakeet-redux",
+                repo: "cstr/parakeet-redux-GGUF",
+                filename: "parakeet-redux-q8_0.gguf",
+                revision: "3f288b7fb33caff80f1424bd5ea1cecaf9808209",
+                source_revision: Some("2bf128600aac4b16946f7ed8372e56117fe5e23b"),
+                source_repo: Some("moondream/parakeet-redux"),
+                backend: "parakeet",
+            },
+        }
+    }
+
     /// Return the spelling accepted by the CLI and configuration file.
     ///
     /// # Returns
     ///
     /// The preset's stable identifier.
     pub const fn id(self) -> &'static str {
-        match self {
-            Self::ParakeetV2 => "parakeet-v2",
-            Self::ParakeetV3 => "parakeet-v3",
-            Self::Qwen3Asr06b => "qwen3-asr-0.6b",
-            Self::Qwen3Asr17b => "qwen3-asr-1.7b",
-            Self::ParakeetUltra => "parakeet-ultra",
-            Self::ParakeetRedux => "parakeet-redux",
-        }
+        self.metadata().id
     }
 
     /// Return the Hugging Face repository that hosts this preset's GGUF.
@@ -95,14 +160,7 @@ impl ModelPreset {
     ///
     /// The hosted artifact's `owner/repo` identifier.
     pub const fn repo(self) -> &'static str {
-        match self {
-            Self::ParakeetV2 => "cstr/parakeet-tdt-0.6b-v2-GGUF",
-            Self::ParakeetV3 => "pszemraj/parakeet-tdt-0.6b-v3-gguf",
-            Self::Qwen3Asr06b => "cstr/qwen3-asr-0.6b-GGUF",
-            Self::Qwen3Asr17b => "cstr/qwen3-asr-1.7b-GGUF",
-            Self::ParakeetUltra => "cstr/parakeet-ultra-GGUF",
-            Self::ParakeetRedux => "cstr/parakeet-redux-GGUF",
-        }
+        self.metadata().repo
     }
 
     /// Return the exact hosted Q8_0 filename; presets never auto-select a quant.
@@ -111,14 +169,7 @@ impl ModelPreset {
     ///
     /// The filename inside the hosted repository.
     pub const fn filename(self) -> &'static str {
-        match self {
-            Self::ParakeetV2 => "parakeet-tdt-0.6b-v2-q8_0.gguf",
-            Self::ParakeetV3 => Q8_FILENAME,
-            Self::Qwen3Asr06b => "qwen3-asr-0.6b-q8_0.gguf",
-            Self::Qwen3Asr17b => "qwen3-asr-1.7b-q8_0.gguf",
-            Self::ParakeetUltra => "parakeet-ultra-q8_0.gguf",
-            Self::ParakeetRedux => "parakeet-redux-q8_0.gguf",
-        }
+        self.metadata().filename
     }
 
     /// Return the selected hosted artifact revision.
@@ -126,14 +177,7 @@ impl ModelPreset {
     /// # Returns
     /// A fixed provider commit for new presets, or the existing v3 `main`.
     pub const fn revision(self) -> &'static str {
-        match self {
-            Self::ParakeetV2 => "8878172f3c45ba231fac8cfd4aff2542b13bc875",
-            Self::ParakeetV3 => "main",
-            Self::Qwen3Asr06b => "58bd3202f835f46b24b17142cb503b0860c737a5",
-            Self::Qwen3Asr17b => "674df5d44b50a63e7102a18895ed20e3f91de301",
-            Self::ParakeetUltra => "252cd632a21e98ba5edbdeb61c7274d01c54cb73",
-            Self::ParakeetRedux => "3f288b7fb33caff80f1424bd5ea1cecaf9808209",
-        }
+        self.metadata().revision
     }
 
     /// Return the original checkpoint revision used by source rebuilding.
@@ -142,13 +186,7 @@ impl ModelPreset {
     /// A fixed source commit for Qwen/Moondream; v3 uses its existing Nemo URL,
     /// and v2 has no source-rebuild path.
     pub const fn source_revision(self) -> Option<&'static str> {
-        match self {
-            Self::ParakeetV2 | Self::ParakeetV3 => None,
-            Self::Qwen3Asr06b => Some("5eb144179a02acc5e5ba31e748d22b0cf3e303b0"),
-            Self::Qwen3Asr17b => Some("7278e1e70fe206f11671096ffdd38061171dd6e5"),
-            Self::ParakeetUltra => Some("73175eb7aeb0d82f1e2a6b53b3aabc10a90bcd0b"),
-            Self::ParakeetRedux => Some("2bf128600aac4b16946f7ed8372e56117fe5e23b"),
-        }
+        self.metadata().source_revision
     }
 
     /// Return the original Hugging Face checkpoint used for source conversion.
@@ -158,13 +196,7 @@ impl ModelPreset {
     /// The checkpoint repository for Qwen and Moondream. V3 uses NVIDIA's
     /// `.nemo` workflow; v2 supports hosted GGUF acquisition only.
     pub const fn source_repo(self) -> Option<&'static str> {
-        match self {
-            Self::ParakeetV2 | Self::ParakeetV3 => None,
-            Self::Qwen3Asr06b => Some("Qwen/Qwen3-ASR-0.6B"),
-            Self::Qwen3Asr17b => Some("Qwen/Qwen3-ASR-1.7B"),
-            Self::ParakeetUltra => Some("moondream/parakeet-ultra"),
-            Self::ParakeetRedux => Some("moondream/parakeet-redux"),
-        }
+        self.metadata().source_repo
     }
 
     /// Return the CrispASR backend expected for this preset.
@@ -173,12 +205,7 @@ impl ModelPreset {
     ///
     /// `qwen3` for Qwen3-ASR or `parakeet` for the Parakeet models.
     pub const fn backend(self) -> &'static str {
-        match self {
-            Self::Qwen3Asr06b | Self::Qwen3Asr17b => "qwen3",
-            Self::ParakeetV2 | Self::ParakeetV3 | Self::ParakeetUltra | Self::ParakeetRedux => {
-                "parakeet"
-            }
-        }
+        self.metadata().backend
     }
 }
 
@@ -442,62 +469,59 @@ mod preset_tests {
     use clap::ValueEnum;
 
     #[test]
-    fn preset_names_and_artifacts_are_explicit() {
-        for (preset, id, repo, filename, backend) in [
-            (
-                ModelPreset::ParakeetV2,
-                "parakeet-v2",
-                "cstr/parakeet-tdt-0.6b-v2-GGUF",
-                "parakeet-tdt-0.6b-v2-q8_0.gguf",
-                "parakeet",
-            ),
-            (
-                ModelPreset::ParakeetV3,
-                "parakeet-v3",
-                "pszemraj/parakeet-tdt-0.6b-v3-gguf",
-                "parakeet-tdt-0.6b-v3-Q8_0.gguf",
-                "parakeet",
-            ),
-            (
-                ModelPreset::Qwen3Asr06b,
-                "qwen3-asr-0.6b",
-                "cstr/qwen3-asr-0.6b-GGUF",
-                "qwen3-asr-0.6b-q8_0.gguf",
-                "qwen3",
-            ),
-            (
-                ModelPreset::Qwen3Asr17b,
-                "qwen3-asr-1.7b",
-                "cstr/qwen3-asr-1.7b-GGUF",
-                "qwen3-asr-1.7b-q8_0.gguf",
-                "qwen3",
-            ),
-            (
-                ModelPreset::ParakeetUltra,
-                "parakeet-ultra",
-                "cstr/parakeet-ultra-GGUF",
-                "parakeet-ultra-q8_0.gguf",
-                "parakeet",
-            ),
-            (
-                ModelPreset::ParakeetRedux,
-                "parakeet-redux",
-                "cstr/parakeet-redux-GGUF",
-                "parakeet-redux-q8_0.gguf",
-                "parakeet",
-            ),
-        ] {
+    fn preset_names_round_trip_and_artifacts_follow_acquisition_policy() {
+        let pinned_revision = |revision: &str| {
+            revision.len() == 40 && revision.bytes().all(|byte| byte.is_ascii_hexdigit())
+        };
+        let repo_path = |repo: &str| {
+            repo.split_once('/').is_some_and(|(owner, name)| {
+                !owner.is_empty() && !name.is_empty() && !name.contains('/')
+            })
+        };
+        let mut names = std::collections::HashSet::new();
+        for &preset in ModelPreset::value_variants() {
+            let id = preset.id();
+            assert!(names.insert(id), "duplicate preset id: {id}");
             assert_eq!(ModelPreset::from_str(id, false).unwrap(), preset);
             assert_eq!(
                 serde_json::from_str::<ModelPreset>(&format!("\"{id}\"")).unwrap(),
                 preset
             );
             assert_eq!(serde_json::to_string(&preset).unwrap(), format!("\"{id}\""));
-            assert_eq!(preset.id(), id);
             assert_eq!(preset.to_string(), id);
-            assert_eq!(preset.repo(), repo);
-            assert_eq!(preset.filename(), filename);
+            assert!(repo_path(preset.repo()), "{id}: hosted repository");
+            assert!(
+                preset
+                    .filename()
+                    .to_ascii_lowercase()
+                    .ends_with("-q8_0.gguf"),
+                "{id}: hosted artifact must be Q8_0"
+            );
+            let backend = if matches!(preset, ModelPreset::Qwen3Asr06b | ModelPreset::Qwen3Asr17b) {
+                "qwen3"
+            } else {
+                "parakeet"
+            };
             assert_eq!(preset.backend(), backend);
+            if preset == ModelPreset::ParakeetV3 {
+                assert_eq!(preset.revision(), "main");
+            } else {
+                assert!(pinned_revision(preset.revision()), "{id}: hosted revision");
+            }
+            match (preset.source_repo(), preset.source_revision()) {
+                (Some(repo), Some(revision)) => {
+                    assert!(repo_path(repo), "{id}: original checkpoint repository");
+                    assert!(
+                        pinned_revision(revision),
+                        "{id}: original checkpoint revision"
+                    );
+                }
+                (None, None) => assert!(matches!(
+                    preset,
+                    ModelPreset::ParakeetV2 | ModelPreset::ParakeetV3
+                )),
+                _ => panic!("{id}: original checkpoint repository and revision must be paired"),
+            }
         }
         for unknown in ["qwen3", "parakeet", "Qwen3Asr06b", "qwen3-asr-0.6b-q4"] {
             assert!(ModelPreset::from_str(unknown, false).is_err());

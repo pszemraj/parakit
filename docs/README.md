@@ -12,10 +12,10 @@
 
 - [running.md](running.md) - running the daemon, daemon control, the model cache, and paste modes.
 - [models/qwen3-asr.md](models/qwen3-asr.md) - Qwen model setup, language controls, prior-dictation context, and long-audio behavior.
-- [configuration.md](configuration.md) - the config file, CLI/config precedence, and user-defined cleaning rules.
+- [configuration.md](configuration.md) - the config file, CLI precedence, and inherited environment variables.
 - [example.toml](example.toml) - a minimal starter config with a comment on each choice.
 - [config_reference.toml](config_reference.toml) - the per-key configuration reference, itself a loadable config that holds every default.
-- [cleaning-rules.md](cleaning-rules.md) - the built-in transcript cleanup passes and profiles.
+- [cleaning-rules.md](cleaning-rules.md) - transcript cleanup profiles, built-in passes, and user-defined rules.
 - [logging.md](logging.md) - the JSONL transcription and insertion log schema.
 - [troubleshooting.md](troubleshooting.md) - symptom-first fixes for common problems.
 

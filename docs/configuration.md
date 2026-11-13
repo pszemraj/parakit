@@ -2,7 +2,7 @@
 
 parakit reads an optional TOML file for daemon defaults, cleaning behavior, transcription logging, Linux insertion and hotkey backends, and user-defined cleaning rules. A missing file is valid and selects built-in defaults.
 
-For example, keep sentence-final periods and raise the isolated-number cutoff to five:
+For example, keep sentence-final periods and raise the number-conversion threshold to five:
 
 ```toml
 [cleaning]
@@ -10,7 +10,7 @@ keep_trailing_period = true
 number_threshold = 5
 ```
 
-Save this [starter config](example.toml) at the path printed by `parakit config path`. The [annotated reference](config_reference.toml) lists every key, default, accepted value, interaction, and environment variable.
+Save this [starter config](example.toml) at the path printed by `parakit config path`. The [annotated reference](config_reference.toml) lists the keys, defaults, accepted values, and interactions. Inherited process settings are listed under [environment variables](#environment-variables).
 
 > [!IMPORTANT]
 > The daemon reads this file once at startup and does not watch it. Restart the daemon after every edit.
@@ -54,17 +54,30 @@ The editor can repair a broken config, but its exit does not validate the file. 
 
 ## Precedence and Loading
 
-The [config reference](config_reference.toml) describes precedence, CLI overrides, and settings available only in the file. Use `parakit start` for daemon flags. The profile, trailing-period, and disable-rule flags also work on `parakit rules list` and `parakit rules test` so you can check cleaning changes before restarting; the profile flag is `--profile` there instead of `--cleaning-profile`.
+The [config reference](config_reference.toml) describes precedence, CLI overrides, and settings available only in the file. Check cleaning changes with the [rules commands](cleaning-rules.md#inspect-and-test) before restarting.
 
 For Qwen model selection, language hints, and context, see the [Qwen3-ASR guide](models/qwen3-asr.md). Other presets are listed under [model selection](running.md#model-presets).
 
 TOML, unknown-key, invalid-value, and rule-validation errors name the config path.
 
-For `daemon.model_idle_minutes` behavior, see [idle model offload](running.md#idle-model-offload).
+A negative or non-finite number threshold reports `number threshold must be a finite value greater than or equal to 0 (got <value>)`. Empty CLI paths (`-m ""` and `--log-dir ""`) are rejected during argument parsing, before configuration is loaded.
+
+## Preserving Repeated Words
+
+Add literal words or phrases to the built-in repetition exceptions. For example, `tomato` preserves deliberate `tomato tomato` dictation:
+
+```toml
+[cleaning]
+repetition_exceptions = ["tomato", "paddle", "chinny chin chin"]
+```
+
+Merge the assignment into your existing `[cleaning]` section if you already have one. The [repetition-exception constraints](config_reference.toml) apply to each literal entry.
+
+Other cleaning rules still apply, including the aggressive profile's separate ambiguous-repetition pass. Use `parakit rules test` to check the result before restarting.
 
 ## Validation and Recovery
 
-`parakit config show` catches TOML and configuration errors. Daemon startup additionally checks machine-dependent resources such as the model file, compute device, insertion backend, hotkey, audio, and permissions. The log directory is created and checked on the first transcription write, so neither `config show` nor startup can prove it is writable.
+`parakit config show` catches TOML and configuration errors. Daemon startup additionally checks machine-dependent resources such as the model file, compute device, insertion backend, hotkey, audio, and permissions. The [log directory is opened lazily](logging.md), so neither `config show` nor startup can prove it is writable.
 
 Use this edit loop for cleaning and user-rule changes:
 
@@ -78,3 +91,131 @@ parakit rules list
 When the result is right, run `parakit stop`, then start it with your usual [foreground or background command](running.md#background-use), including any CLI overrides you normally use.
 
 A broken config does not block repair or control commands that do not need daemon settings: `fetch`, `cache`, `config path`, `config init`, `config edit`, `status`, `stop`, `copy-last`, `history`, `test-paste`, and Linux `ibus` commands. `config show`, `doctor`, `rules list`, `rules test`, PTT simulation, and daemon startup do load it.
+
+## Environment Variables
+
+These are inherited process settings, not TOML keys. Parakit does not load a `.env` file.
+
+For build-time settings, see [building](build.md).
+
+### `PARAKIT_CONFIG_PATH`
+
+Config-file override. See [path selection and missing-file behavior](#file-location).
+
+### `PARAKIT_MODELS_DIR`
+
+Directory that holds downloaded models. Used verbatim when set. Empty is an error. A relative path is relative to the working directory.
+The default paths are listed under [model cache](running.md#model-cache).
+Read only by commands that touch the model cache: `fetch`, `cache`, and daemon startup when a preset or the default model is selected. It is not consulted when the selected model is an explicit local path.
+
+### `XDG_CONFIG_HOME`, `XDG_CACHE_HOME`, `HOME`
+
+On Linux and macOS, `XDG_CONFIG_HOME` supplies the [config base](#file-location), while `XDG_CACHE_HOME` supplies the [model cache base](running.md#model-cache) and the runtime fallback below. Relative values are used as given, and empty values count as unset. `HOME` supplies the fallback base when the relevant XDG variable is absent or empty; without either base, path resolution fails with `HOME is unset or empty`. An explicit `PARAKIT_CONFIG_PATH` bypasses config-base resolution.
+
+### `XDG_RUNTIME_DIR`
+
+Linux. Directory whose parakit subdirectory holds the daemon lock file (parakit.lock) and control socket (control.sock). An empty value counts as unset.
+Fallback: `$XDG_CACHE_HOME/parakit/run`, or `$HOME/.cache/parakit/run`. macOS always uses that fallback. Windows keeps the lock in `parakit\run` inside Local AppData and talks over a named pipe.
+The control commands (`status`, `stop`, `copy-last`, `history`, `test-paste`) and the daemon must resolve the same directory to find each other.
+The socket directory must be owned by you, and parakit sets it to mode 0700.
+
+### `VISUAL`
+
+Editor for `parakit config edit`, tried before EDITOR; [selection and command parsing](configuration.md#editor).
+
+### `EDITOR`
+
+Editor fallback for `parakit config edit`; see VISUAL above.
+
+### `DISPLAY`
+
+Linux. Required by X11 hotkeys, clipboard paste, direct typing, and the existing clipboard-copy backend. Native IBus insertion and focused-field PTT do not require it.
+Inherit it from the desktop session. An XWayland DISPLAY never enables XTest insertion into native Wayland applications.
+
+### `XDG_SESSION_TYPE`
+
+Linux. A value of "wayland" in any case selects Wayland session handling: automatic hotkeys use IBus and X11 insertion is unavailable.
+An empty value counts as present, so it also disables the WAYLAND_DISPLAY fallback below.
+
+### `WAYLAND_DISPLAY`
+
+Linux. Consulted only when XDG_SESSION_TYPE is absent. A nonempty value is then treated as a Wayland session.
+
+### `XAUTHORITY`
+
+Linux. Only reported by `parakit --verbose doctor` and by startup failure messages. parakit makes no decision from it. The X11 libraries read it themselves.
+
+### `USER`
+
+Linux. Only fills in the user name in the permission fix shown for the evdev-proxy-experimental backend. It has no other effect.
+
+### `OMP_NUM_THREADS`, `OPENBLAS_NUM_THREADS`, `OMP_WAIT_POLICY`
+
+Windows. Each model open sets these to the effective daemon.threads count, 1, and PASSIVE respectively, unless already present, including an empty string. Linux and macOS leave them unchanged.
+
+### Native Inference Controls
+
+These controls have no TOML keys or CLI flags. Parakit preserves existing values, including empty strings. Set overrides in the launching environment and restart after changes.
+
+Every command defaults `CRISPASR_FC_PW_Q8` and `CRISPASR_FC_FUSED_QKV` to `0` at process start. The native library caches these two controls after the first read.
+
+#### `CRISPASR_FC_PW_Q8`
+
+Controls whether native model loading repacks the F16 convolution pointwise weights of each layer into an extra Q8_0 copy.
+The library treats a value starting with 0 as off, any other nonempty value as on, and an empty or absent value as automatic, which repacks only a model that is already quantized.
+
+#### `CRISPASR_FC_FUSED_QKV`
+
+Controls whether native model loading concatenates each layer's attention query, key, and value weights into an extra fused copy.
+The library treats a value starting with 0 as off, and any other value, including an empty string or an absent variable, as on.
+
+#### `CRISP_AUDIO_WINDOWED_ATTN`
+
+Native Qwen audio-encoder attention control, defaulted to `1` before initialization.
+Unset: windowed attention using the model's inference windows. Parakeet models do not use this control.
+A value parsed as a nonzero integer enables windowing; 0, an empty value or a nonnumeric value keeps the native dense path for models without windowed-attention metadata. Models with explicit windowed-attention metadata retain that behavior.
+Use an override for [reference comparisons](dev/quality.md#qwen-and-moondream-comparisons).
+
+#### `CRISPASR_QWEN3_HOTWORDS_AS_CONTEXT`
+
+Defaults to `1` at startup so Qwen session hotwords carry free-form context.
+A nonzero integer enables raw context. Zero, empty, or nonnumeric values make Parakit transcribe without prior context.
+
+#### `CRISPASR_QWEN3ASR_QUANT_AUDIO`
+
+Native Qwen quantizer override. A nonempty value not starting with 0 allows audio-encoder tensors to use the target quantization below the normal Q8_0 floor.
+`parakit fetch --from-source` and Q6_K preparation (`fetch` or automatic startup) set it to 0 for the quantizer child process, preserving the native audio-encoder precision policy regardless of the launching environment. It does not change the parent environment or runtime inference.
+
+### `CUDA_VISIBLE_DEVICES`
+
+CUDA builds. Read by the CUDA runtime, not by parakit. A comma-separated list of NVIDIA GPU indices or UUIDs that CUDA may use; an empty value hides all CUDA devices.
+Visibility controls affect only their named backend. In bundled builds, daemon.device "auto" falls back to CPU and "gpu" fails at startup only when no GPU remains visible across enabled backends. `parakit --verbose doctor` lists visible devices.
+There is no per-device config key or command-line flag, because the Parakeet backend ignores CrispASR's device index.
+
+### `GGML_VK_VISIBLE_DEVICES`
+
+Vulkan builds. Read by ggml's Vulkan backend, not by parakit. A comma-separated list of indices into the Vulkan driver's physical-device list (the GPU0, GPU1 order of `vulkaninfo --summary`) limits which devices Vulkan may use.
+The Vulkan0, Vulkan1 names in `parakit --verbose doctor` number only the visible devices, so they can differ from these indices.
+An empty value hides all Vulkan devices; an invalid index disables the Vulkan backend. Other backends follow the visibility rule above.
+
+### `HF_ENDPOINT`
+
+Base URL that replaces https://huggingface.co for default/preset model downloads, `parakit fetch <repo>`, and `parakit fetch --from-source`. This includes automatic startup downloads.
+A blank value means the default. Trailing slashes are trimmed. It does not apply to `parakit fetch <url>`.
+
+### `HF_TOKEN`
+
+Bearer token sent to the Hugging Face endpoint (HF_ENDPOINT or the default) for those downloads. Blank means none. It is never sent for a direct URL fetch.
+
+### `HTTPS_PROXY`, `HTTP_PROXY`, `ALL_PROXY`, `NO_PROXY`
+
+Read by the HTTP client library (reqwest's system-proxy support), in upper and lower case, for model downloads. They affect `fetch` and the automatic download only.
+
+### `SSL_CERT_FILE`, `SSL_CERT_DIR`
+
+`SSL_CERT_FILE` names a PEM certificate bundle. `SSL_CERT_DIR` names certificate directories separated by `:` on Unix or `;` on Windows. When either is set, the TLS library loads roots only from those locations instead of the operating system trust store. Without them, it uses the native store. See [rustls-native-certs](https://docs.rs/rustls-native-certs/0.8.3/rustls_native_certs/fn.load_native_certs.html).
+
+### `PATH`
+
+`parakit fetch --from-source` searches it for `python3` or `python`, the model's converter (`convert-parakeet-to-gguf.py` or `convert-qwen3-asr-to-gguf.py`), and `download_asr_checkpoint.py` when downloading an original Hugging Face checkpoint. Both source rebuilds and Q6_K preparation require `crispasr-quantize` here (`crispasr-quantize.exe` on Windows).
+`parakit config edit` relies on it to find the editor program.

@@ -204,7 +204,7 @@ fn removes_stale_openblas_runtimes_without_touching_other_dlls() {
             "bin/openblas.dll",
             "bin/libgfortran-5.dll",
             "bin/libwinpthread-1.dll",
-            "bin/crispasr.dll",
+            "bin/cudart64_13.dll",
             "bin/unrelated.dll",
         ],
     );
@@ -216,6 +216,6 @@ fn removes_stale_openblas_runtimes_without_touching_other_dlls() {
     assert!(!bin.join("openblas.dll").exists());
     assert!(!bin.join("libgfortran-5.dll").exists());
     assert!(!bin.join("libwinpthread-1.dll").exists());
-    assert!(bin.join("crispasr.dll").is_file());
+    assert!(bin.join("cudart64_13.dll").is_file());
     assert!(bin.join("unrelated.dll").is_file());
 }

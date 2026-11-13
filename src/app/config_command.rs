@@ -217,6 +217,10 @@ fn print_config_show(quiet: bool) -> Result<()> {
             .map(|value| value.to_string())
             .unwrap_or_else(|| format!("(default: {})", rules::DEFAULT_NUMBER_THRESHOLD))
     )?;
+    outln!(
+        "    repetition_exceptions: {:?}",
+        config.cleaning.repetition_exceptions
+    )?;
     outln!("    disabled_rules: {:?}", config.cleaning.disabled_rules)?;
     outln!("  logging:")?;
     outln!(

@@ -38,90 +38,128 @@ The default pipeline favors structural rules over product- or vocabulary-specifi
 
 ### Acronyms
 
-Spaced acronyms follow one invariant: a run of two or more standalone uppercase ASCII letters separated by exactly one ASCII space is collapsed without separators. For example, `O C R` becomes `OCR`, `R L H F` becomes `RLHF`, and `A B` becomes `AB`. There is no acronym allowlist, so an unfamiliar initialism collapses exactly like a familiar one. Repeated-word stutter handling runs before acronym collapsing, so `I I think` still becomes `I think` rather than `II think`.
+Any run of two or more standalone uppercase ASCII letters separated by exactly one ASCII space collapses without separators: `O C R` becomes `OCR`. There is no acronym allowlist. [Stutter handling runs first](#rule-order), so `I I think` becomes `I think`.
 
 ### Numbers
 
-English number recognition and conversion is delegated to [`text2num`](https://crates.io/crates/text2num). parakit adds bounded preservation guards for ambiguous time units, indefinite quantities and fractions, plus structural formatting for versions and identifiers. These guards may use small context word lists and `text2num`'s parsed numbers; they do not define a second cardinal grammar.
+English cardinal and ordinal recognition uses [`text2num`](https://crates.io/crates/text2num). Quantities, versions, years, identifiers, and sizes share one tokenization and classification pass; numeric output is never reparsed by a later numeric category. Their [controls](#numeric-controls-and-migration) are independent, with shared boundaries and protections.
 
-#### Isolated Values
+#### Threshold And Adjacent Numbers
 
-The isolated-number threshold is 4 by default. The threshold applies only to an isolated single-digit cardinal (`zero` to `nine`) or an isolated ordinal (`first`, `twenty first`). One at or above the threshold renders as digits, and one below it is left exactly as the model produced it: parakit forces it neither to a word nor to a digit. Cardinals of 10 or more convert at every threshold. At the default, isolated `zero` through `three` and the ordinals `first` through `third` stay as produced. Set `cleaning.number_threshold = 0` to convert those as well; the ambiguity protections below still apply, so adjacent small-number runs, plural magnitudes, fractions, and the time unit `second` stay as words even at `0`. Omission and an explicit `0` are not equivalent and produce different `ruleset_id` values.
+`cleaning.number_threshold` defaults to 4. Every cardinal and ordinal value at or above it renders as digits; smaller values retain the model's wording, so `zero` through `three` and `first` through `third` stay as produced. A threshold of `100` also leaves `fifty` as a word. At `0`, every eligible value converts, including a leading zero (`zero one` becomes `01`); the [protected quantities](#preserved-quantities-and-times) below still remain words.
 
-The threshold gates isolated values only, so a comma-delimited listing such as `Zero, one, two, three, four.` still converts every member whatever the threshold is, because `text2num` does not treat listed values as isolated. The same applies to grouped and structural expressions, which may render components below the cutoff numerically.
+Adjacent parsed cardinal counts connected by spaces or tabs keep their separators when all meet the threshold: `GPU fifty ninety` becomes `GPU 50 90`. If any count is below it, the entire run retains its wording, including a final size suffix: `one twenty eight K` stays words at the default and becomes `1 28K` at `0`. Ordinal modifiers remain separate (`first five hundred rows` becomes `first 500 rows`). This protection also gates compaction when `spoken-numbers` is disabled: `three 50 K` stays separate at `4` but becomes `three 50K` at `0`.
+
+Punctuation separates values; lists and nearby labels never bypass the threshold. `Nought` is recognized as an unambiguous zero under the ordinary numeric rules. Unknown runs containing the contextual zero aliases `oh` or `o`, such as `fifty oh five`, remain intact unless they form a recognized year or version. Unsupported scientific notation (`three e minus four`) also stays words. [Years](#calendar-years) and [versions](#versions-and-identifiers) use their own rendering rules.
 
 #### Magnitudes And Parameter Counts
 
-For readability, a recognized expression ending in one explicit `million` or `billion` scale keeps that word with a numeric coefficient: `three billion` becomes `3 billion`, `a million` becomes `1 million`, and `three point five billion` becomes `3.5 billion`. A decimal coefficient keeps every scale word after it, whichever scale it is, and its digits exactly as spoken: `two point five thousand` becomes `2.5 thousand`, `one point five hundred` becomes `1.5 hundred`, and `three point zero million` becomes `3.0 million`. A count after those scale words starts another number: `two point five million three point six million` becomes `2.5 million 3.6 million`. Multi-scale compounds such as `three billion five hundred million` retain the unambiguous full-digit rendering.
+An explicit quantity ending in one `million` or `billion` scale keeps the scale word (`three billion` becomes `3 billion`). Bare scales, with or without an article, remain words. A compound with an explicit remainder can consume its article: `a thousand five hundred` becomes `1500`.
 
-An `and` after a scale word separates two quantities when the one that follows has that same largest scale: `between five thousand and ten thousand five hundred` becomes `between 5000 and 10500`, and `two point five million and three point six million` becomes `2.5 million and 3.6 million`. Otherwise it continues the number: `one hundred and five thousand` becomes `105000`, and `one hundred and twenty thousand five hundred` becomes `120500`. An `and` after a count never continues it, so `between two hundred and fifty and three hundred` becomes `between 250 and 300`, and `twenty and five` becomes `20 and 5`.
+A decimal coefficient keeps its scale words and spoken precision (`three point zero million` becomes `3.0 million`), and a count after those words starts another number. Unambiguous non-decimal compounds with multiple scales use their full-digit value. Existing digit-plus-scale forms such as `5 hundred` retain their value and wording instead of being reparsed as two numbers.
 
-A scale word takes the count spoken directly before it as its coefficient instead of rendering as a bare `100` or `1000`: `two hundred three hundred` becomes `200 300`, and `fifteen hundred and two thousand five hundred` becomes `1500 and 2500`. When more than one count could be that coefficient, or the scales could stack, the words stay: `one hundred twenty three hundred` (`100 2300` or `120 300`) and `fifteen hundred thousand` remain words.
+After a scale word, `and` separates quantities when the next has the same largest scale (`five thousand and ten thousand five hundred` becomes `5000 and 10500`); otherwise it continues the number (`one hundred and five thousand` becomes `105000`). After a count, it always separates: `twenty and five` becomes `20 and 5`.
 
-Counts explicitly tied to `parameter` or `parameters` use compact `K`/`M`/`B` notation, including both bounds of a range: `one hundred million up to one billion parameters` becomes `100M up to 1B parameters`. Disable `compact-parameter-counts` to keep the general magnitude-word form. Existing numeric hybrids are preserved, and digit-only input is inferred as a magnitude only in that explicit parameter-count context.
+A scale takes the immediately preceding count as its coefficient (`two hundred three hundred` becomes `200 300`). Ambiguous coefficient boundaries or stacked scales remain words, as in `one hundred twenty three hundred` and `fifteen hundred thousand`.
+
+`size-suffixes` compacts written counts and explicit `thousand`/`million`/`billion` quantities to exact `K`/`M`/`B` notation; `trillion` retains its wording. An explicit uppercase suffix binds only the last eligible count (`2.5 seven B` becomes `2.5 7B`), including its scale (`a hundred K` becomes `100K`). Independent counts never concatenate, protected mixed runs stay intact, and digit-by-digit decimals remain one expression (`two point five seven B` becomes `2.57B`). Disable this control for the general quantity rendering.
+
+Spoken cardinal counts require `spoken-numbers`: disabling it keeps `a seven B model` as words, while existing `7 B` can still become `7B`. Decimals rendered by an enabled `spoken-versions` pass also remain eligible.
+
+A matching scale and suffix drop the redundant scale (`2.5 million M` becomes `2.5M`). Mismatched scales fold only for integer coefficients when every scale is smaller than the suffix (`5 hundred K` becomes `500K`). Decimal coefficients or a scale at least as large as a mismatching suffix stay spaced, preserving `2.2 hundred K` and `2.5 million B`.
 
 #### Preserved Quantities And Times
 
-Indefinite quantities remain words. This includes plural magnitudes such as `hundreds`, `thousands`, `millions`, and `billions` (also `tens` and `trillions`); qualified compounds such as `a few hundred thousand` and `a few hundred-thousand`; and fractions such as `half a million`, `quarter of a billion`, `three quarters of a million`, `a third of a million`, `a million and a half`, and `two and a half million`. A directly preceding number-word phrase remains part of a plural magnitude or actual fraction numerator, so `nineteen hundreds`, `five millions`, `one half million`, `five thirds of a million`, and `four fifths of a million` retain their wording, capitalization, and adjacent punctuation at every threshold and in both profiles.
+At every threshold and in both profiles, indefinite quantities preserve wording, capitalization, and adjacent punctuation. These include plural magnitudes (`tens` through `trillions`), qualified scale compounds such as `a few hundred-thousand`, and fractions with numerators, articles, `of`, or a mixed-number `and`: `nineteen hundreds`, `half a million`, `a third of a million`, and `two and a half million` stay words. A zero coefficient before a scale also remains words, including any additive remainder.
 
-A separate exact quantity before an indefinite phrase still converts: `year two thousand a few hundred` becomes `year 2000 a few hundred`, and `year two thousand and five half a million` becomes `year 2005 half a million`. The isolated threshold still applies to a separate count: `chapter five half a million words long` becomes `chapter 5 half a million words long` at the default threshold. Exact quantities also convert normally: `three hundred records` becomes `300 records`, and `five million rows` becomes `5 million rows`. Other enabled cleanup rules, including sentence capitalization and trailing-period handling, continue to apply.
+Fractions before ordinary nouns are protected too (`five hundredths of a second`), while genuine ordinals follow the threshold (`the five hundredth customer` becomes `the 500th customer`).
 
-Ambiguous quantities keep their wording. A count joined to a fraction by `and` stays with it even after `both` or `between`: `between two hundred and half a million` remains words. Without punctuation, `half a million` and `quarter a million` remain protected even after an ordinal, and `six quarters a million` stays intact. A comma separates an independent count: `six quarters, a million` becomes `6 quarters, 1 million`.
+A separate exact quantity before an indefinite phrase still follows the threshold (`year two thousand a few hundred` becomes `year 2000 a few hundred`). A count joined to a fraction by `and` stays with it, including after `both` or `between`. Without punctuation, a following article-plus-scale phrase can belong to the fraction even after an ordinal; a comma separates it: `six quarters a million` stays intact, but `six quarters, a million` becomes `6 quarters, a million`. Other enabled cleanup still applies.
 
-Likewise, adjacent spoken counts below a hundred such as `twenty twenty two`, `five thirty`, or `five five five twenty twelve` remain words at every threshold, including `0`, because they may denote a year, time, phone number, or separate values. Times ending in `o'clock` also retain their wording. Neither identifier prefixes nor size suffixes disambiguate such a run: `OK five thirty`, `RTX fifty ninety`, `SM one twenty`, `one twenty eight K`, and `Llama three seventy B` (version 3 at 70B, not 370B) stay words. Explicit years such as `two thousand twenty two` still become `2022`, and `twenty, twenty two` becomes `20, 22`.
+`Second` defaults to a time unit after a number, including before a noun (`the thirty second timeout` becomes `the 30 second timeout`). `One second`, `the fifth second`, `per second`, `split-second`, and elapsed plural `seconds` retain the unit. A compound ordinal is selected by a following `of` or supported calendar word (`day`, `week`, `month`, `year`, `decade`, `century`, `millennium`, or their plurals), preceding month, or phrase-ending punctuation/end: `May twenty second` becomes `May 22nd`, and `the twenty second century` becomes `the 22nd century`. Before the entire numeric phrase, `every`, `each`, `per`, `a`, or `an` selects a duration even at phrase end, unless a stronger `of`, calendar-word, or month cue applies. A definite article alone does not select the ordinal. Genuine ordinals, including lists, follow the threshold. Clock expressions have no separate threshold bypass: `five o'clock` becomes `5 o'clock`, while `two o'clock` stays words at the default.
 
-The ambiguous word `second` remains a word when context identifies it as a time unit (`one second`, `per second`, `a split-second`), while genuine ordinals still render numerically. Plural elapsed `seconds` also stays a time unit: `ten seconds of a million rows` becomes `10 seconds of 1 million rows`.
+#### Calendar Years
+
+`Eighteen`, `nineteen`, or `twenty` followed by a two-digit count, or by a zero alias and a digit, renders as one year without cue words: `twenty twenty six` becomes `2026`, and `nineteen oh five` becomes `1905`.
+
+A pair needs at least one spoken component; existing `20 22` stays separate. Pairs inside longer adjacent numeric runs also stay separate. A preceding ordinal day or joined identifier starts a separate run.
+
+A following whole-word time or measurement unit, case-insensitive unit abbreviation (`GB`, `ms`, `Hz`), uppercase `AM`, case-insensitive `pm`, dotted `a.m.`/`p.m.`, or uppercase `K`/`M`/`B` blocks joining; ordinary adjacent-count handling applies instead. Single-letter units, unrelated uppercase abbreviations (`TV`), and prose words (`in`, `a`, `am`, `us`) do not block it. Each pair is classified independently, so `in twenty twenty five and twenty twenty` becomes `in 2025 and 2020`.
+
+Date days, identifier counts, and scale-based years use the ordinary threshold: `April first, twenty twenty four` becomes `April first, 2024`, while `two thousand twenty two` becomes `2022` at the default.
 
 #### Versions And Identifiers
 
-Multi-point versions are parsed component by component through `text2num`; parakit then joins those validated components with periods regardless of the isolated-value threshold or an explicit version cue. `Ubuntu twenty two point zero four point three` becomes `Ubuntu 22.04.3`, and `Python three point one two point four` becomes `Python 3.12.4`. Without punctuation, adjacent decimals spoken as `two point zero three point zero` are ambiguous with a version and become `2.03.0`; a comma separates them (`two point zero, three point zero` becomes `2.0, 3.0`). Single decimals spoken digit by digit still convert normally (`three point one four one five` becomes `3.1415`). Generic formatting passes compact unambiguous single-letter identifiers, the corpus-backed `SM` stem, and split digit groups without maintaining a list of product names.
+Multi-point versions render component by component with periods, regardless of the prose threshold or a version cue: `Ubuntu twenty two point zero four point three` becomes `Ubuntu 22.04.3`. Digit-by-digit components retain their digits, including leading zeros; `two point zero three point zero` becomes `2.03.0`, and a single decimal such as `three point one four one five` becomes `3.1415`. Punctuation separates decimal values (`two point zero, three point zero` becomes `2.0, 3.0`).
+
+A base spoken digit by digit is joined only in an IPv4-shaped run with at least three `point` separators, such as `one nine two point one six eight point one point one` becoming `192.168.1.1`. Other version bases use ordinary cardinal parsing, preserving the boundary between adjacent independent counts.
+
+Numeric prefixes use the same component parsing (`Version 2 point zero five` becomes `Version 2.05`). A following scale can start a separate coefficient (`2 point five two thousand` becomes `2.5 2000`). Standalone `V` or `v` joins a dotted version as lowercase `v`.
+
+`numeric-identifiers` joins an uppercase single letter other than `A` or `I`, or `SM`, to one complete numeric run. That run may be existing digits or output eligible for `spoken-numbers` or `spoken-versions`; there is no threshold bypass. At the default, `Q five` becomes `Q5`, `Q two` stays words, and `SM eight nine` becomes `SM 8 9`. Other two-letter stems do not join (`FP thirty two` becomes `FP 32`). A letter already bound to another conversion, such as a size suffix, is not reused. With `spoken-numbers` disabled, existing `Q 2` can still become `Q2`.
+
+#### Numeric Controls And Migration
+
+The five numeric controls are independently disabled through `cleaning.disabled_rules` or `--disable-rule`. They share one classification/rendering group and report separate rule hits:
+
+| Control | Rendering |
+| --- | --- |
+| `spoken-numbers` | Ordinary cardinal and ordinal quantities, using `cleaning.number_threshold`. |
+| `spoken-versions` | Spoken decimal components, dotted versions, numeric point suffixes, and `v` prefixes. |
+| `calendar-years` | Century pairs beginning with 18, 19, or 20, except before a unit or AM/PM/size marker. |
+| `numeric-identifiers` | A single uppercase letter other than A/I, or SM, joined to an existing or threshold-rendered number. |
+| `size-suffixes` | Explicit `K`/`M`/`B` suffixes and compact parameter counts. |
+
+The former eight numeric passes have been replaced by these five controls. Update existing disabled-rule settings using this mapping; removed names have no aliases and fail configuration validation:
+
+| Previous control | Current control |
+| --- | --- |
+| `spoken-numbers` | `spoken-numbers` for quantities; `spoken-versions` for decimals. Disable the new `calendar-years` control too to retain separate century-pair counts. |
+| `spoken-version-numbers`, `numeric-point-suffixes`, `compact-version-prefix` | `spoken-versions` |
+| `compact-short-identifier` | `numeric-identifiers` |
+| `numeric-identifier-groups` | Removed; adjacent digit groups remain separate. |
+| `compact-parameter-counts`, `numeric-magnitude-suffixes` | `size-suffixes` |
+
+Disabling `spoken-numbers` leaves the other four categories available. After updating the config, run `parakit config show`, inspect `parakit rules list`, and check representative text with `parakit rules test`. Restart the daemon to load the new settings.
 
 ### Casual Forms And Stutters
 
-Safe casual-form normalization expands `gonna` and `gunna` to `going to`, `gotta` to `got to`, `wanna` and `wana` to `want to`, `kinda` to `kind of`, and `gimme` to `give me`. The complete tag question `, right?` becomes a period, while ordinary questions such as `Did I turn right?` and `Is that right?` remain unchanged. When the replacement is the dictation's final character, the default terminal-period pass removes it unless `--keep-trailing-period` is set.
+Safe casual-form normalization expands `gonna`/`gunna` to `going to`, `gotta` to `got to`, `wanna`/`wana` to `want to`, `kinda` to `kind of`, and `gimme` to `give me`. The complete tag question `, right?` becomes a period; ordinary questions such as `Is that right?` stay unchanged. The [terminal-period setting](#profiles) applies to the replacement.
 
-Safe dangling-connective removal drops a trailing `so`, `but`, `and`, `or`, or `because` (case-insensitive) when it is the transcript's final word and the text underneath still ends in sentence punctuation, so `The build is green. But` becomes `The build is green.`, which the default terminal-period pass then trims to `The build is green` the same way it trims `, right?`. A trailing `,`, `;`, or `:` left under the removed word is promoted to `.`, a trailing `.`, `!`, or `?` is kept as-is, and the rule chains, so `It works. And so.` loses both dangling words and becomes `It works.`. It needs punctuation to fall back on: `I like cats and dogs and` has no preceding sentence punctuation, so the rule cannot distinguish a stranded conjunction from an unfinished thought and leaves the text alone.
+Dangling-connective removal drops final `so`, `but`, `and`, `or`, or `because` case-insensitively only when punctuation remains underneath. It preserves `.`, `!`, and `?`, promotes `,`, `;`, or `:` to `.`, and can remove a chain (`It works. And so.` becomes `It works.` before terminal-period handling). Without that boundary, `I like cats and dogs and` stays unchanged because the unfinished thought is ambiguous.
 
-The safe repeated-word rule remains intentionally conservative. A bounded backreference consolidates a small set of high-confidence function-word stutters, while valid or ambiguous repetition such as `that that` and emphatic `no no` survives. The aggressive profile can opt into collapsing the ambiguous set.
+`stutter-safe-words` collapses adjacent identical words case-insensitively, keeping the first spelling (`where where` becomes `where`). A pronoun restarted as its contraction keeps the suffix (`it it's` becomes `it's`). Only spaces and tabs join a run; punctuation and line breaks preserve repetitions. Numbers, spelling letters other than `I`/`a`, and the built-in exceptions remain intact. Exceptions include common idioms and intensifiers (`hee`, `bang`, `poo`, `very`) and the symbol words `plus`, `dash`, `equals`, `slash`, `dot`, `star`, `underscore`, `colon`, and `pipe`. Other symbol names follow ordinary repetition handling. The complete list lives beside the scanner in `src/rules/stutters.rs`.
+
+Recognized grammatical contexts also preserve distinct uses of the same word, such as `get to control control T` and `calling something that isn't science science`. Add your own words or literal phrases with [`cleaning.repetition_exceptions`](configuration.md#preserving-repeated-words); these supplement the built-in list.
+
+Repeated `I` and `a` retain their existing treatment, including uppercase-I normalization. Repeated `is` collapses in normal mode. The aggressive profile additionally collapses `that`, `had`, `do`, `can`, and `no`; both profiles preserve punctuation-delimited forms such as `No, no`. Add a repetition exception, use punctuation, or disable the rule to retain other deliberate repetitions such as `tomato tomato`.
 
 ## Inspect And Test
 
-Show every pass, its engine, behavior tier, and whether it is active for the selected options:
+`rules list` shows every pass, its engine, tier, and activation for the selected options. `rules test` applies the configured threshold and reports each pass that changed its input; listing does not apply that threshold to text.
 
 ```bash
 parakit rules list
-parakit rules list --profile aggressive
-parakit rules list --keep-trailing-period
-```
-
-Test one input. The output lists each pass that changed the text:
-
-```bash
+parakit rules list --profile aggressive --keep-trailing-period
 parakit rules test "um, the the G P T model is gonna work."
 parakit rules test "So, it's like, you know, hard." --profile aggressive
 ```
 
-Disable one or more named passes:
+The profile flag is `--profile` here and `--cleaning-profile` on `start`. Trailing-period and repeatable disable-rule flags work on both commands. To disable passes for a daemon run:
 
 ```bash
-parakit start --disable-rule casual-gonna
 parakit start \
   --disable-rule spaced-acronyms \
   --disable-rule filled-pauses
 ```
 
-The same names can be set persistently:
+Set the same names persistently with [`cleaning.disabled_rules`](config_reference.toml). Both rules commands inspect or apply cleaning even when `cleaning.enabled = false`.
 
-```toml
-[cleaning]
-disabled_rules = ["filled-pauses"]
-```
-
-Stutter handling is grouped by shape. Use `stutter-i` for repeated first-person pronouns, `stutter-safe-words` for conservative repeated words, `contracted-have-restart` for false starts such as `I've I already have`, `repeated-prefix-stutter` for repeated letters or `sh`/`th`/`ch` starts before a matching word, and `stutter-ambiguous-words` for the aggressive-only `that`, `no`, `can`, `had`, and `do` set.
+Stutter handling is grouped by shape. Use `stutter-i` for repeated first-person pronouns, `stutter-safe-words` for whole-word restarts, `contracted-have-restart` for false starts such as `I've I already have`, `repeated-prefix-stutter` for repeated letters or `sh`/`th`/`ch` starts before a matching word, and `stutter-ambiguous-words` for the aggressive-only set.
 
 ## Rule Order
 
-Built-in passes run in the order shown by the built-in section of `parakit rules list`. User rules run in their configured position slot even though the command prints them together in a trailing `(user)` section. The output of one pass is the input to the next. Aggressive discourse edits run first. Stutter handling precedes acronym collapsing. `text2num` conversion precedes structural identifier formatting. Whitespace cleanup and capitalization run near the end, followed by the default terminal-period removal.
+Built-ins run in the order shown by `rules list`; user rules occupy their configured slots even though the command prints them together in a trailing `(user)` section. Each pass receives the previous pass's output. Aggressive discourse edits and filled-pause removal run first, then partial-word restarts, whole-word collapse, acronyms, and numbers. Thus `sh sh should` becomes `should`, and removing a pause in `twenty uh twenty layers` can create the year `2020`. The [numeric group](#numeric-controls-and-migration) reports hits in metadata order. Whitespace cleanup and capitalization run near the end, followed by terminal-period removal.
 
 A pass should be moved only with regression evidence. Reordering can change downstream matches even when every individual expression remains unchanged.
 
@@ -139,39 +177,32 @@ Every pass must have a stable name, explicit activation tier, tests, and rule-hi
 
 Add an entry to `DEFAULT_RULES` in `src/rules/defaults.rs` using the `regex_rule!`, `fancy_rule!`, or `procedural_rule!` macro, and pick an activation tier: `Activation::Safe` for mechanical or high-confidence work, `Activation::Aggressive` for anything that can change meaning.
 
-`spoken-numbers` is the single exception: it is a raw `Rule` literal because its dedicated `RuleKind::SpokenNumbers` is compiled with the configured number threshold.
+The five numeric categories use raw `Rule` literals with `RuleKind::Numbers(NumberKind)`. Keep them contiguous so the engine can invoke their shared numeric core once with the enabled categories.
 
-Rules use Rust's `regex` crate dialect:
-
-- no lookaround;
-- no regex backreferences such as `\1` in a standard `regex` pattern;
-- capture replacement uses `$1`, `$2`, and so on;
-- use `(?i)` for case-insensitive matches.
+Standard patterns and replacements use the same [Rust regex syntax documented for user rules](config_reference.toml); use the bounded `fancy-regex` path only when advanced matching is required.
 
 Increment `CLEANER_VERSION` whenever built-in behavior, rule identity, or ordering changes so historical logs continue to identify the cleaner that produced a transcript.
 
 ## User Rules
 
-For rules that are personal (your vocabulary, your projects, your typing quirks) rather than generally useful, define them in `config.toml` instead of editing `src/rules/`. User rules run alongside the built-in rules in the same cleaning pass, and are never filtered by the profile since you asked for them explicitly.
+For personal vocabulary or typing quirks, define rules in `config.toml` instead of editing Rust. User rules run alongside the built-ins and are not filtered by the profile.
 
 Run `parakit config init` to create a config file with a commented template, then add a `[[rules.user]]` table per rule:
 
 ```toml
 [[rules.user]]
 name = "weights-and-biases-to-wandb"
-description = "Map 'weights and biases' to 'wandb'"   # optional
 pattern = "(?i)\\bweights and biases\\b"
 replacement = "wandb"
-position = "standard"   # "first", "standard" (default), or "last"
 ```
 
-The key contracts, validation constraints, replacement syntax, and exact splice points for `first`, `standard`, and `last` are in [config_reference.toml](config_reference.toml). Use `standard` for ordinary vocabulary substitutions.
+The [reference](config_reference.toml) defines optional descriptions, validation, replacement syntax, and the exact splice points for `first`, `standard`, and `last`. The default `standard` position fits ordinary vocabulary substitutions.
 
 Disable user rules with the same [named-pass controls](#inspect-and-test) as built-in rules.
 
 ### Edit Rules Without Rebuilding
 
-User rules are runtime configuration, not compiled into the parakit binary. Follow the [edit, validation, and restart workflow](configuration.md#validation-and-recovery); no Cargo build, model download, or conversion is needed.
+Follow the [edit, validation, and restart workflow](configuration.md#validation-and-recovery). User rules need no Cargo build, model download, or conversion.
 
 A built-in rule can be replaced without rebuilding by listing its name in `cleaning.disabled_rules` and adding a differently named `[[rules.user]]` replacement. Runtime user rules deliberately use the standard Rust `regex` dialect. Context-sensitive procedural transforms such as number/version parsing and sentence capitalization remain Rust code unless they expose a specific config setting such as `cleaning.number_threshold`.
 
@@ -182,7 +213,7 @@ When a cleanup worsens a transcript:
 1. Capture the raw ASR output.
 2. Reproduce with `parakit rules test "<raw text>"`.
 3. Disable candidate passes one at a time with `--disable-rule`.
-4. Narrow the pattern or add a more specific rule before the generic one.
+4. Fix the parsing or matching rule, checking related inputs that should remain unchanged.
 5. Add a case to the `rules` unit tests or `tests/cleaning_regressions.rs`.
 
 For historical JSONL replay, use [dev/quality.md#cleaning-corpus-replay](dev/quality.md#cleaning-corpus-replay).

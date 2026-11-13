@@ -7,10 +7,45 @@ use std::sync::{mpsc, Arc, Barrier};
 use std::time::{Duration, Instant};
 
 #[test]
+fn optional_conversion_tools_use_only_path() {
+    const MODE: &str = "PARAKIT_TOOL_LOOKUP_TEST";
+    if let Ok(mode) = env::var(MODE) {
+        let result = tool_path("convert-parakeet-to-gguf.py");
+        if mode == "found" {
+            assert_eq!(
+                result.unwrap(),
+                PathBuf::from(env::var_os("PATH").unwrap()).join("convert-parakeet-to-gguf.py")
+            );
+        } else {
+            let error = result.unwrap_err().to_string();
+            assert!(error.contains("convert-parakeet-to-gguf.py was not found on PATH"));
+            assert!(error.contains("optional conversion tools"));
+        }
+        return;
+    }
+    let root = crate::test_support::fixture_root("parakit-fetch-tests", "tool-lookup");
+    std::fs::create_dir_all(&root).unwrap();
+    let root = root.canonicalize().unwrap();
+    std::fs::write(
+        root.join("convert-parakeet-to-gguf.py"),
+        "# separately installed script\n",
+    )
+    .unwrap();
+    for (mode, path) in [("found", root.clone()), ("missing", root.join("absent"))] {
+        let output = crate::test_support::exact_test_command(
+            "fetch::tests::optional_conversion_tools_use_only_path",
+        )
+        .env(MODE, mode)
+        .env("PATH", path)
+        .output()
+        .unwrap();
+        assert!(output.status.success(), "{mode}: {output:?}");
+    }
+}
+
+#[test]
 fn q6_acquisition_preserves_cached_models_and_reports_preparation() {
-    #[cfg(target_os = "windows")]
     const CASE: &str = "PARAKIT_Q6_ACQUISITION_CASE";
-    #[cfg(target_os = "windows")]
     if let Ok(case) = std::env::var(CASE) {
         let dir = crate::test_support::fixture_root("parakit-fetch-tests", &case);
         let preset = ModelPreset::ParakeetV3;
@@ -142,8 +177,7 @@ fn q6_acquisition_preserves_cached_models_and_reports_preparation() {
         assert_eq!(std::fs::read(q8).unwrap(), b"existing Q8");
     }
 
-    // Unix prefers its bundled quantizer over PATH; this stand-in is Windows-only.
-    #[cfg(target_os = "windows")]
+    // The installed quantizer is resolved from PATH on every platform.
     {
         let bin = dir.join("bin");
         std::fs::create_dir_all(&bin).unwrap();
@@ -165,7 +199,11 @@ fn main() {
             .output()
             .unwrap();
         assert!(compiled.status.success(), "{compiled:?}");
-        let path = joined_path_with_prepended(&bin, std::env::var_os("PATH")).unwrap();
+        let mut paths = vec![bin];
+        if let Some(existing) = std::env::var_os("PATH") {
+            paths.extend(std::env::split_paths(&existing));
+        }
+        let path = std::env::join_paths(paths).unwrap();
         for case in ["cached", "cold", "force"] {
             let output = crate::test_support::exact_test_command(
                 "fetch::tests::q6_acquisition_preserves_cached_models_and_reports_preparation",
@@ -407,18 +445,6 @@ fn move_into_place_replaces_existing_file() {
 
     assert!(!src.exists());
     assert_eq!(std::fs::read(&dst).unwrap(), b"new");
-}
-
-#[test]
-fn prepend_env_path_keeps_existing_entries() {
-    let dir = Path::new("target/tmp/parakit-fetch-tests/lib");
-    let existing = env::join_paths([Path::new("target/tmp/a"), Path::new("target/tmp/b")]).unwrap();
-    let joined = joined_path_with_prepended(dir, Some(existing)).unwrap();
-    let paths: Vec<_> = env::split_paths(&joined).collect();
-
-    assert_eq!(paths[0], dir);
-    assert_eq!(paths[1], Path::new("target/tmp/a"));
-    assert_eq!(paths[2], Path::new("target/tmp/b"));
 }
 
 #[test]

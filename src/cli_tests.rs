@@ -18,6 +18,18 @@ fn cli_from(args: &[&str]) -> Cli {
     Cli::parse_from(full)
 }
 
+fn desktop_options(args: &[&str]) -> [DesktopOptions; 2] {
+    ["start", "doctor"].map(|command| {
+        let mut full = vec![command];
+        full.extend_from_slice(args);
+        match cli_from(&full).command {
+            Some(Commands::Start(start)) => start.desktop,
+            Some(Commands::Doctor(doctor)) => doctor.desktop,
+            other => panic!("expected desktop command, got {other:?}"),
+        }
+    })
+}
+
 #[test]
 fn bare_parakit_parses_with_no_command() {
     let cli = Cli::parse_from(["parakit"]);
@@ -30,6 +42,7 @@ fn startup_options_are_recognized_as_settings_for_a_new_instance() {
     assert!(!start_from(&["--quiet"]).has_runtime_overrides());
     for args in [
         &["--device", "cpu"][..],
+        &["--paste-mode", "direct"],
         &["--threads", "2"],
         &["--no-sounds"],
         &["--qwen-language", "en"],
@@ -37,6 +50,13 @@ fn startup_options_are_recognized_as_settings_for_a_new_instance() {
         &["--quantize", "q6_k"],
     ] {
         assert!(start_from(args).has_runtime_overrides(), "{args:?}");
+    }
+    #[cfg(target_os = "linux")]
+    for args in [
+        ["--hotkey-backend", "x11-listen"],
+        ["--insertion-backend", "x11"],
+    ] {
+        assert!(start_from(&args).has_runtime_overrides(), "{args:?}");
     }
 }
 
@@ -266,87 +286,59 @@ fn effective_device_prefers_cli_then_config_then_default() {
 #[test]
 fn effective_paste_mode_prefers_cli_then_config_then_platform_default() {
     let mut config = ConfigFile::default();
-    assert_eq!(
-        start_from(&[]).effective_paste_mode(&config),
-        crate::config::default_paste_mode()
-    );
-
+    for desktop in desktop_options(&[]) {
+        assert_eq!(
+            desktop.effective_paste_mode(&config),
+            crate::config::default_paste_mode()
+        );
+    }
     config.daemon.paste_mode = Some(PasteMode::Direct);
-    assert_eq!(
-        start_from(&[]).effective_paste_mode(&config),
-        PasteMode::Direct
-    );
-
-    assert_eq!(
-        start_from(&["--paste-mode", "standard"]).effective_paste_mode(&config),
-        PasteMode::Standard
-    );
+    for desktop in desktop_options(&[]) {
+        assert_eq!(desktop.effective_paste_mode(&config), PasteMode::Direct);
+    }
+    for desktop in desktop_options(&["--paste-mode", "standard"]) {
+        assert_eq!(desktop.effective_paste_mode(&config), PasteMode::Standard);
+    }
 }
 
 #[cfg(target_os = "linux")]
 #[test]
 fn effective_hotkey_backend_prefers_cli_then_config_then_auto() {
-    let mut config = ConfigFile::default();
-    assert_eq!(
-        start_from(&[]).effective_hotkey_backend(&config),
-        HotkeyBackend::Auto
-    );
+    use crate::daemon::desktop::linux_insertion::InsertionBackend;
 
+    let mut config = ConfigFile::default();
+    for desktop in desktop_options(&[]) {
+        assert_eq!(
+            desktop.effective_hotkey_backend(&config),
+            HotkeyBackend::Auto
+        );
+        assert_eq!(
+            desktop.effective_insertion_backend(&config),
+            InsertionBackend::Auto
+        );
+    }
     config.hotkey.backend = Some(HotkeyBackend::X11Listen);
-    assert_eq!(
-        start_from(&[]).effective_hotkey_backend(&config),
-        HotkeyBackend::X11Listen
-    );
-    assert_eq!(
-        start_from(&["--hotkey-backend", "desktop"]).effective_hotkey_backend(&config),
-        HotkeyBackend::Desktop
-    );
-
-    let doctor = |args: &[&str]| {
-        let mut full = vec!["parakit", "doctor"];
-        full.extend_from_slice(args);
-        match Cli::parse_from(full).command {
-            Some(Commands::Doctor(doctor)) => doctor,
-            other => panic!("expected Commands::Doctor, got {other:?}"),
-        }
-    };
-    assert_eq!(
-        doctor(&[]).effective_hotkey_backend(&config),
-        HotkeyBackend::X11Listen
-    );
-    assert_eq!(
-        doctor(&["--hotkey-backend", "desktop"]).effective_hotkey_backend(&config),
-        HotkeyBackend::Desktop
-    );
-}
-
-#[test]
-fn doctor_effective_paste_mode_prefers_cli_then_config_then_platform_default() {
-    let mut config = ConfigFile::default();
-    let doctor_cli = |args: &[&str]| -> DoctorCli {
-        let mut full = vec!["parakit", "doctor"];
-        full.extend_from_slice(args);
-        match Cli::parse_from(full).command {
-            Some(Commands::Doctor(doctor)) => doctor,
-            other => panic!("expected Commands::Doctor, got {other:?}"),
-        }
-    };
-
-    assert_eq!(
-        doctor_cli(&[]).effective_paste_mode(&config),
-        crate::config::default_paste_mode()
-    );
-
-    config.daemon.paste_mode = Some(PasteMode::Direct);
-    assert_eq!(
-        doctor_cli(&[]).effective_paste_mode(&config),
-        PasteMode::Direct,
-        "config value must win when no CLI flag is given"
-    );
-    assert_eq!(
-        doctor_cli(&["--paste-mode", "standard"]).effective_paste_mode(&config),
-        PasteMode::Standard
-    );
+    config.daemon.insertion_backend = Some(InsertionBackend::Ibus);
+    for desktop in desktop_options(&[]) {
+        assert_eq!(
+            desktop.effective_hotkey_backend(&config),
+            HotkeyBackend::X11Listen
+        );
+        assert_eq!(
+            desktop.effective_insertion_backend(&config),
+            InsertionBackend::Ibus
+        );
+    }
+    for desktop in desktop_options(&["--hotkey-backend", "desktop", "--insertion-backend", "x11"]) {
+        assert_eq!(
+            desktop.effective_hotkey_backend(&config),
+            HotkeyBackend::Desktop
+        );
+        assert_eq!(
+            desktop.effective_insertion_backend(&config),
+            InsertionBackend::X11
+        );
+    }
 }
 
 #[test]

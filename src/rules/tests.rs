@@ -7,8 +7,28 @@ use super::engine::CLEANUP_BOUNDARY_RULE_NAME;
 use super::passes::capitalize_sentence_starts;
 use super::*;
 
+mod calendar_numbers;
+mod numeric_contexts;
+mod numeric_suffixes;
 mod spoken_numbers;
+mod stutters;
 mod user_rules;
+
+fn numeric_test<'a>(
+    input: &'a str,
+    threshold: f64,
+    kinds: &[super::numbers::NumberKind],
+) -> super::engine::TransformResult<'a> {
+    let (text, counts) = super::numbers::normalize(input, threshold, kinds);
+    super::engine::TransformResult {
+        text,
+        matches: counts.iter().map(|(_, count)| count).sum(),
+    }
+}
+
+fn normalize_spoken_numbers(input: &str, threshold: f64) -> super::engine::TransformResult<'_> {
+    numeric_test(input, threshold, &[super::numbers::NumberKind::Spoken])
+}
 
 fn build_cleaner_for_test(
     profile: CleaningProfile,
@@ -42,6 +62,7 @@ fn build_cleaner_for_test_with_threshold(
         profile,
         drop_trailing_period,
         number_threshold,
+        &[],
         &disabled,
         user_rules,
     )
@@ -149,7 +170,7 @@ fn you_know_requires_full_comma_delimiting() {
 }
 
 #[test]
-fn filled_pauses_are_removed_without_matching_er_acronym() {
+fn filled_pauses_are_removed_before_acronyms_are_collapsed() {
     assert_clean_cases(
         CleaningProfile::Safe,
         &[
@@ -158,6 +179,9 @@ fn filled_pauses_are_removed_without_matching_er_acronym() {
             ("I, erm, agree.", "I agree."),
             ("Erm, I agree.", "I agree."),
             ("The ER team arrived.", "The ER team arrived."),
+            ("I went to U M last year", "I went to UM last year"),
+            ("our E R M framework", "Our ERM framework"),
+            ("U H M", "UHM"),
         ],
     );
 }
@@ -199,7 +223,7 @@ fn standalone_filler_sentences_leave_no_orphaned_punctuation() {
 }
 
 #[test]
-fn fancy_regex_collapses_only_safe_repeated_words_by_default() {
+fn normal_profile_collapses_repeated_words() {
     assert_clean_cases(
         CleaningProfile::Safe,
         &[
@@ -216,7 +240,7 @@ fn fancy_regex_collapses_only_safe_repeated_words_by_default() {
                 "No no no, we are not doing that.",
             ),
             ("Can can we split this?", "Can can we split this?"),
-            ("We should be be better.", "We should be be better."),
+            ("We should be be better.", "We should be better."),
         ],
     );
 }
@@ -326,22 +350,22 @@ fn identifier_formatting_uses_structural_rules_not_vocabulary_lists() {
     assert_clean_cases(
         CleaningProfile::Safe,
         &[
-            ("RTX 50 90 release.", "RTX 5090 release."),
-            ("S M 1 20 support.", "SM120 support."),
+            ("RTX 50 90 release.", "RTX 50 90 release."),
+            ("S M 1 20 support.", "SM 1 20 support."),
             ("Use F 32 and H 100.", "Use F32 and H100."),
             ("SM 120 is supported.", "SM120 is supported."),
             ("OK five minutes ago.", "OK 5 minutes ago."),
             ("US 30 remains open.", "US 30 remains open."),
             ("TV four is available.", "TV 4 is available."),
-            ("About 3 50 K lines.", "About 350K lines."),
+            ("About 3 50 K lines.", "About 3 50K lines."),
             (
                 "Use one twenty eight K context.",
                 "Use one twenty eight K context.",
             ),
             ("Llama three seventy B.", "Llama three seventy B."),
             ("GPT two one twenty four M.", "GPT two one twenty four M."),
-            ("OK five thirty.", "OK five thirty."),
-            ("RTX fifty ninety.", "RTX fifty ninety."),
+            ("OK five thirty.", "OK 5 30."),
+            ("RTX fifty ninety.", "RTX 50 90."),
             ("SM one twenty.", "SM one twenty."),
             ("GPT 5 5 stays split.", "GPT 5 5 stays split."),
             ("I 5 stays separate.", "I 5 stays separate."),
@@ -492,18 +516,39 @@ fn standard_user_rule_cleanup_boundary_exists_in_defaults() {
 }
 
 #[test]
-fn disabled_spoken_number_rule_ignores_threshold_in_ruleset_id() {
-    let disabled = HashSet::from(["spoken-numbers".to_string()]);
-    let all =
+fn numeric_rules_fingerprint_threshold_even_without_spoken_conversion() {
+    let mut disabled = HashSet::from(["spoken-numbers".to_string()]);
+    let defaults =
         build_cleaner_for_test_with_threshold(CleaningProfile::Safe, false, None, &disabled, &[]);
-    let threshold = build_cleaner_for_test_with_threshold(
+    let zero = build_cleaner_for_test_with_threshold(
         CleaningProfile::Safe,
         false,
-        Some(5.0),
+        Some(0.0),
         &disabled,
         &[],
     );
-    assert_eq!(all.ruleset_id(), threshold.ruleset_id());
+    // The shared mixed-run guard still affects size compaction without
+    // converting any spoken counts, so these policies must have distinct IDs.
+    assert_eq!(defaults.clean_text("three 50 K"), "Three 50 K");
+    assert_eq!(zero.clean_text("three 50 K"), "Three 50K");
+    assert_ne!(defaults.ruleset_id(), zero.ruleset_id());
+
+    disabled.extend(
+        DEFAULT_RULES
+            .iter()
+            .filter(|rule| matches!(rule.kind, super::engine::RuleKind::Numbers(_)))
+            .map(|rule| rule.name.to_string()),
+    );
+    let defaults =
+        build_cleaner_for_test_with_threshold(CleaningProfile::Safe, false, None, &disabled, &[]);
+    let zero = build_cleaner_for_test_with_threshold(
+        CleaningProfile::Safe,
+        false,
+        Some(0.0),
+        &disabled,
+        &[],
+    );
+    assert_eq!(defaults.ruleset_id(), zero.ruleset_id());
 }
 
 #[test]
@@ -522,14 +567,9 @@ fn procedural_noops_borrow_the_original_text() {
     use super::passes::*;
     use std::borrow::Cow;
 
-    let transforms: [fn(&str) -> TransformResult<'_>; 9] = [
+    let transforms: [fn(&str) -> TransformResult<'_>; 4] = [
         normalize_apostrophe_cause,
         normalize_spaced_acronyms,
-        normalize_spoken_versions,
-        normalize_numeric_point_suffixes,
-        normalize_numeric_identifier_groups,
-        normalize_magnitude_suffixes,
-        normalize_parameter_counts,
         drop_dangling_connective,
         capitalize_sentence_starts,
     ];
@@ -540,13 +580,8 @@ fn procedural_noops_borrow_the_original_text() {
         assert!(matches!(result.text, Cow::Borrowed(text) if std::ptr::eq(text, input)));
     }
     assert!(matches!(
-        super::numbers::normalize_spoken_numbers(input, DEFAULT_NUMBER_THRESHOLD).text,
+        normalize_spoken_numbers(input, DEFAULT_NUMBER_THRESHOLD).text,
         Cow::Borrowed(text) if std::ptr::eq(text, input)
-    ));
-    let one_point = "Version one point two needs attention.";
-    assert!(matches!(
-        normalize_spoken_versions(one_point).text,
-        Cow::Borrowed(text) if std::ptr::eq(text, one_point)
     ));
 }
 
@@ -762,12 +797,12 @@ fn fancy_regex_failure_fails_open_to_the_original_transcript() {
     // A backtrack limit of zero fails on the very first backtrack step
     // (`fancy_regex::vm` errors as soon as `backtrack_count > limit`), so
     // any input requiring more than a single deterministic pass through the
-    // `stutter-safe-words` pattern's unanchored search must error.
+    // `repeated-prefix-stutter` pattern's unanchored search must error.
     let cleaner =
         Cleaner::new_with_backtrack_limit(CleaningProfile::Safe, false, &HashSet::new(), &[], 0)
             .expect("rule patterns must still compile with a zero backtrack limit");
 
-    let input = "the the the cat sat on the the mat";
+    let input = "we sh sh should and d d definitely change";
     let try_clean_err = cleaner
         .try_clean(input)
         .expect_err("a backtrack limit of 0 must exhaust during matching");

@@ -59,6 +59,8 @@ Cross-thread communication uses atomics, mutex-protected buffers, and channels.
 
 Configuration sections provide built-in fallbacks; CLI resolvers apply overrides. Normal startup and WAV simulation share resolved idle, logging, paste-mode, clipboard-retention, and context settings through `WorkerSettings`. The banner borrows the `DaemonInfo` stored for IPC status. Mode-specific resources remain explicit in `WorkerCtx`: simulation has a silent notifier, disabled sounds and insertion, and no daemon singleton or control endpoint. Normal startup exposes IPC before cleaner/model initialization; the worker lifetime still follows native-session ownership.
 
+Library cleaner constructors `build_cleaner`, `build_enabled_cleaner`, and `validate_configured_rules` take `repetition_exceptions: &[String]` immediately after `number_threshold`; `&[]` retains the built-in defaults. All three use the same input-validation path, including when cleaning is disabled.
+
 The Linux daemon attaches to the helper over IBus's private bus and advertises recording readiness. Input callbacks emit directed PTT signals without waiting for daemon work. At the actual PTT press, the engine captures a token containing helper/attachment lifetime, engine identity, and focus generation. The coordinator carries it unchanged through capture and inference. Validation and `commit_text` run together on the helper's owning loop. See [focus changes](../running.md#focus-changes) for delivery policy.
 
 ## Module Map
@@ -79,13 +81,14 @@ The Linux daemon attaches to the helper over IBus's private bus and advertises r
 | `src/daemon/worker_shutdown.rs` | Worker lifetime and bounded IPC shutdown handshake. |
 | `src/app/simulation.rs` | Acknowledged WAV dictations and configured idle/reload validation. |
 | `src/app/config_command.rs` | `parakit config` subcommands: show, path, init, and edit. |
+| `src/app/cache_command.rs` | `parakit cache` listing and directory commands. |
 | `src/ibus_command.rs`, `src/ibus_main.rs` | Linux IBus registration, removal, read-only setup status, and the standalone engine executable. |
 | `src/daemon/desktop/ibus/` | Native IBus engine/factory, daemon GDBus client, target lifetimes, and submission evidence. |
 | `src/daemon/desktop/linux_insertion.rs` | Linux insertion-backend selection and recording target capture independent of clipboard paste mode. |
 | `src/daemon/ipc.rs`, `src/daemon/ipc/{client,unix_socket,windows_pipe}.rs` | Local IPC for `status`, `stop`, `copy-last`, `history`, and `test-paste`: shared protocol and in-memory transcript ring buffer, the control client, and the Unix-socket and Windows named-pipe transports. |
 | `src/daemon/ipc/{history,history_picker}.rs` | Prior-context selection, full-text lookup/copy by daemon-session and entry reference, and the terminal picker. |
 | `src/daemon/desktop/windows_{clipboard_history,focus,input,paste_smoke,security}.rs` | Windows clipboard-history acknowledgement, foreground checks, `SendInput` helpers, deep paste smoke test, and privilege diagnostics. |
-| `src/daemon/{preflight,audio/alsa,desktop/session,desktop/wsl,desktop/x11,desktop/inject_smoke}.rs`, `src/daemon/audio/alsa_silence.c`, `src/daemon/macos.rs`, `src/daemon/macos/{permissions,focus,insertion_cgevent,cgevent_ffi,pasteboard,diagnostics}.rs` | Startup checks, macOS TCC/focus/insertion/acknowledgement helpers and event-tap FFI, the macOS and X11 deep paste smoke tests, ALSA stderr suppression, X11/Wayland session and WSL checks, and X11 helpers. |
+| `src/daemon/{preflight,preflight_ibus,audio/alsa,desktop/session,desktop/wsl,desktop/x11,desktop/inject_smoke}.rs`, `src/daemon/audio/alsa_silence.c`, `src/daemon/macos.rs`, `src/daemon/macos/{permissions,focus,insertion_cgevent,cgevent_ffi,pasteboard,diagnostics}.rs` | Startup checks, macOS TCC/focus/insertion/acknowledgement helpers and event-tap FFI, the macOS and X11 deep paste smoke tests, ALSA stderr suppression, X11/Wayland session and WSL checks, and X11 helpers. |
 | `src/daemon/{logging,notifications,sounds}.rs` | Runtime logging, desktop notifications, and generated audio cues. |
 | `src/daemon/{stderr,subprocess}.rs` | Native stderr suppression and the reload loader-line filter, and bounded waits for desktop helper commands. |
 | `src/fetch/` | Preset Q8_0 downloads, cached Q6_K generation, Hugging Face repo and direct-URL sources, source rebuilds, and explicit `--sha256` checks. |
@@ -95,14 +98,17 @@ The Linux daemon attaches to the helper over IBus's private bus and advertises r
 | `src/{build_info,gpu,warmup,ffi_util}.rs`, `src/ggml_device_shim.cpp` | Build diagnostics, bundled ggml device listing through the C++ device shim, Qwen speech and Parakeet synthetic readiness probes, and local FFI helpers. |
 | `src/inference.rs`, `src/crispasr_ext.rs` | [CrispASR](https://github.com/CrispStrobe/CrispASR) session ownership, startup defaults (explicit overrides retained), scoped Qwen context, short-audio padding, and raw-ABI CPU/GPU session opening. See the [Qwen comparison guide](quality.md#qwen-and-moondream-comparisons) for windowed audio attention. |
 | `src/{lib,checksum,constants,test_support}.rs` | Library crate root, digest helpers, shared audio and inference constants, and unit-test fixtures. |
-| `src/rules/` | Transcript cleanup pipeline: profiles, the built-in rule table, procedural passes, and user rules from `config.toml`. |
+| `src/rules/{engine,defaults,passes,user}.rs` | Transcript cleanup pipeline, profiles, built-in rule table, procedural passes, and user rules from `config.toml`. |
+| `src/rules/{numbers,number_guards,number_labels,number_versions,number_words}.rs` | Shared numeric tokenization and rendering, protected quantities, calendar years, versions, and number-word/unit vocabulary. |
+| `src/rules/stutters.rs` | Contextual repeated-word collapsing and configured repetition exceptions. |
 | `src/daemon/desktop/{inject,focus_snapshot,clipboard_store,paste_transaction,clipboard_guard,x11_paste,direct,clipboard_restore}.rs` | Insertion contract and injector, focus snapshots, clipboard backend and snapshots, the guarded paste transaction and change detection, X11/XTest paste chord, guarded direct insertion, and restore timing. |
 | `src/data_log.rs` | JSONL transcription and insertion-outcome logging. |
 | `src/audio_file.rs` | WAV decoding and mono mixing; shared Rubato target-rate resampler used by file input and live capture on every platform. See [microphone behavior](../running.md#microphone). |
 | `examples/transcribe_file.rs` | Raw file-based inference smoke and quality checks. |
 | `examples/audit_cleaning.rs` | Built-in cleaner replay over historical JSONL logs. |
 | `scripts/transcribe_nemo_parakeet.py` | NeMo reference transcription helper. |
-| `build.rs`, `build/{native_link,openblas_roots,unix_openblas,windows_openblas}.rs` | CrispASR CMake orchestration, accelerator selection, runtime paths, C++ runtime linkage and device-shim compilation, and cross-platform BLAS discovery. |
+| `build.rs`, `build/{native_link,static_link,openblas_roots,unix_openblas,windows_openblas}.rs` | CrispASR CMake orchestration, accelerator selection, static archive linkage and external-library runtime paths, C++ runtime linkage and device-shim compilation, and cross-platform BLAS discovery. |
+| `build/ibus.rs` | Linux IBus C bridge compilation and target-specific system linkage. |
 | `build/native_correctness.{rs,cmake}`, `build/native/qwen_correctness.hpp` | [Bundled native corrections](../build.md#crispasr-and-backends) compiled from generated source copies. |
 | `build/windows_{artifacts,cuda,manifest}.rs`, `scripts/windows/{build,common,toolchains,install}.ps1` | Windows toolchain discovery, runtime-manifest generation, bundle assembly, and per-user installation. |
 

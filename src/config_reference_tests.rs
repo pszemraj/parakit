@@ -181,8 +181,6 @@ fn set_key_paths(text: &str) -> BTreeSet<String> {
 
 /// One key of the reference and the comment lines directly above it.
 struct KeyBlock {
-    /// Whether the key line is commented out in the file.
-    commented_out: bool,
     /// Comment lines above the key, without the leading `# `.
     comments: Vec<String>,
 }
@@ -202,9 +200,9 @@ fn key_blocks(text: &str) -> BTreeMap<String, KeyBlock> {
     let mut table = String::new();
     let mut comments: Vec<String> = Vec::new();
     for line in text.lines() {
-        let (commented_out, body) = match line.strip_prefix("# ") {
-            Some(rest) if is_key_assignment(rest) || is_table_header(rest) => (true, rest),
-            _ => (false, line),
+        let body = match line.strip_prefix("# ") {
+            Some(rest) if is_key_assignment(rest) || is_table_header(rest) => rest,
+            _ => line,
         };
         if is_table_header(body) {
             table = header_path(body);
@@ -214,7 +212,6 @@ fn key_blocks(text: &str) -> BTreeMap<String, KeyBlock> {
             let previous = blocks.insert(
                 join(&table, name),
                 KeyBlock {
-                    commented_out,
                     comments: std::mem::take(&mut comments),
                 },
             );
@@ -236,6 +233,36 @@ fn write_fixture(name: &str, contents: &str) -> PathBuf {
     crate::test_support::write_config_fixture("parakit-config-reference-test", name, contents)
 }
 
+#[test]
+fn repetition_exceptions_validate_even_when_cleaning_is_disabled() {
+    let path = write_fixture(
+        "repetition-exceptions-valid",
+        "[cleaning]\nenabled = false\nrepetition_exceptions = [\"Paddle\", \"chinny\\tchin chin\"]\n",
+    );
+    assert_eq!(
+        load_from_path(&path)
+            .unwrap()
+            .cleaning
+            .repetition_exceptions,
+        ["Paddle", "chinny\tchin chin"]
+    );
+    for (slug, value) in [
+        ("empty", r#"[""]"#),
+        ("blank", r#"[" \t "]"#),
+        ("regex", r#"["paddle.*"]"#),
+        ("punctuation", r#"["chinny, chin chin"]"#),
+        ("newline", r#"["chinny\nchin chin"]"#),
+    ] {
+        let path = write_fixture(
+            &format!("repetition-exceptions-{slug}"),
+            &format!("[cleaning]\nenabled = false\nrepetition_exceptions = {value}\n"),
+        );
+        let error = format!("{:#}", load_from_path(&path).unwrap_err());
+        assert!(error.contains("repetition_exceptions"), "{error}");
+        assert!(error.contains(&path.display().to_string()), "{error}");
+    }
+}
+
 /// Render every effective value of the config, one entry per scalar key,
 /// resolved the way the daemon resolves it with no CLI flags.
 fn effective_snapshot(config: &ConfigFile) -> BTreeMap<&'static str, String> {
@@ -243,6 +270,7 @@ fn effective_snapshot(config: &ConfigFile) -> BTreeMap<&'static str, String> {
         config.cleaning.effective_profile(),
         !config.cleaning.keep_trailing_period(),
         config.cleaning.number_threshold,
+        &config.cleaning.repetition_exceptions,
         &config.cleaning.merged_disabled_rules(&[]),
         &config.rules.user,
     )
@@ -329,6 +357,10 @@ fn effective_snapshot(config: &ConfigFile) -> BTreeMap<&'static str, String> {
     put(
         "cleaning.number_threshold",
         cleaner.number_threshold().to_string(),
+    );
+    put(
+        "cleaning.repetition_exceptions",
+        format!("{:?}", config.cleaning.repetition_exceptions),
     );
     put(
         "cleaning.disabled_rules",
@@ -515,41 +547,6 @@ fn effective_snapshot_covers_every_key() {
         covered, accepted,
         "effective_snapshot must report one entry per accepted key, so a new key cannot skip the default check"
     );
-}
-
-#[test]
-fn every_reference_key_has_a_description_and_a_status() {
-    let blocks = key_blocks(REFERENCE);
-    let documented = documented_key_paths(REFERENCE);
-    for key in &documented {
-        let block = blocks
-            .get(key)
-            .unwrap_or_else(|| panic!("{key}: no key line found in docs/config_reference.toml"));
-        let first = block.first_line();
-        assert!(
-            block.comments.len() >= 2,
-            "{key}: needs a type line and a description above it"
-        );
-        let required = first.contains("(required)");
-        let optional = first.contains("(optional)");
-        if block.commented_out {
-            assert!(
-                required || optional || first.contains("Default:"),
-                "{key}: a commented-out key must lead with (required), (optional), or Default: ({first})"
-            );
-        } else {
-            assert!(
-                !required && !optional,
-                "{key}: an uncommented key carries its default, not (required) or (optional) ({first})"
-            );
-        }
-        if optional {
-            assert!(
-                block.comments.iter().any(|line| line.starts_with("Unset:")),
-                "{key}: an (optional) key needs an Unset: line"
-            );
-        }
-    }
 }
 
 /// Return the strings a user types for every variant of a `ValueEnum`.

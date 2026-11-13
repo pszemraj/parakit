@@ -4,7 +4,7 @@
 fn windows_bundle_cargo_build_uses_the_committed_lockfile() {
     let script = include_str!("../scripts/windows/build.ps1");
     assert!(
-        script.contains(r#"$cargoArgs = @("build", "--locked", "--target-dir", $cargoTargetRoot)"#)
+        script.contains(r#"$cargoArgs = @("build", "--locked", "--target-dir", $cargoTargetRoot,"#)
     );
 }
 

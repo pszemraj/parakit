@@ -18,7 +18,7 @@ use fs2::FileExt;
 use reqwest::blocking::Client;
 use sha2::{Digest, Sha256};
 use std::env;
-use std::ffi::{OsStr, OsString};
+use std::ffi::OsStr;
 use std::fs::{File, OpenOptions};
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -361,13 +361,6 @@ fn run_official_nemo_with_paths(
         return Ok(paths.q8);
     }
 
-    let converter_script = converter_script_path();
-    if !converter_script.is_file() {
-        bail!(
-            "converter script not found at {}. Run from a full parakit checkout with the CrispASR submodule initialized.",
-            converter_script.display()
-        );
-    }
     let quantize_bin = quantize_bin_path()?;
     let nemo_url = net::rewrite_pinned_url(OFFICIAL_NEMO_URL, endpoint);
 
@@ -376,20 +369,24 @@ fn run_official_nemo_with_paths(
         remove_if_exists(&paths.f16)?;
     }
 
-    let preflight_python = if paths.f16.is_file() {
-        None
+    if paths.f16.is_file() {
+        options.status(format_args!(
+            "parakit: using cached F16 GGUF: {}",
+            paths.f16.display()
+        ));
     } else {
+        let converter = converter_script_path()?;
         let python = python_with_converter_deps()?;
         ensure_nemo(&paths, options, &nemo_url, endpoint, token)?;
-        Some(python)
-    };
-
-    ensure_f16(
-        &paths,
-        &converter_script,
-        preflight_python.as_deref(),
-        options,
-    )?;
+        convert_f16(
+            "--nemo",
+            &paths.nemo,
+            &paths.f16,
+            &python,
+            &converter,
+            options,
+        )?;
+    }
     ensure_q8(&paths.f16, &paths.q8, &quantize_bin, options)?;
 
     cleanup_intermediates(&paths, keep_nemo, keep_f16)?;
@@ -607,36 +604,6 @@ fn ensure_nemo(
     Ok(())
 }
 
-fn ensure_f16(
-    paths: &FetchPaths,
-    converter_script: &Path,
-    preflight_python: Option<&Path>,
-    options: &FetchOptions,
-) -> Result<()> {
-    if paths.f16.is_file() {
-        options.status(format_args!(
-            "parakit: using cached F16 GGUF: {}",
-            paths.f16.display()
-        ));
-        return Ok(());
-    }
-
-    // TODO(convert-rust-port): replace the Python converter when the Parakeet
-    // `.nemo` to GGUF path has a maintained Rust implementation.
-    let python = match preflight_python {
-        Some(path) => path.to_path_buf(),
-        None => python_with_converter_deps()?,
-    };
-    convert_f16(
-        "--nemo",
-        &paths.nemo,
-        &paths.f16,
-        &python,
-        converter_script,
-        options,
-    )
-}
-
 fn convert_f16(
     input_flag: &str,
     checkpoint: &Path,
@@ -680,7 +647,6 @@ fn quantize_gguf(
         .arg(&staging)
         .arg(quant)
         .env("CRISPASR_QWEN3ASR_QUANT_AUDIO", "0");
-    add_bundled_library_path(&mut command, quantize_bin);
     if let Err(err) = options.run_command(
         &mut command,
         &format!("preparing {} model", quant.to_ascii_uppercase()),
@@ -729,77 +695,17 @@ fn find_python() -> Result<PathBuf> {
 }
 
 fn quantize_bin_path() -> Result<PathBuf> {
-    if let Some(path) = option_env!("CRISPASR_QUANTIZE_BIN") {
-        let path = PathBuf::from(path);
-        if path.is_file() {
-            return Ok(path);
-        }
-    }
-
-    if let Some(install_dir) = option_env!("CRISPASR_INSTALL_DIR") {
-        let candidate = PathBuf::from(install_dir)
-            .join("bin")
-            .join(exe_name("crispasr-quantize"));
-        if candidate.is_file() {
-            return Ok(candidate);
-        }
-    }
-
-    if let Some(path) = find_on_path(exe_name("crispasr-quantize")) {
-        return Ok(path);
-    }
-
-    #[cfg(target_os = "windows")]
-    bail!(
-        "crispasr-quantize.exe was not found. Windows bundled CPU builds skip the CrispASR examples tree because the pinned server example does not compile under MSVC. Use the hosted Q8 model, or put a compatible crispasr-quantize.exe on PATH before running fetch --from-source or --quantize q6_k."
-    );
-
-    #[cfg(not(target_os = "windows"))]
-    bail!(
-        "crispasr-quantize was not found. Rebuild parakit with bundled CrispASR enabled, or put crispasr-quantize on PATH."
-    );
+    tool_path(&exe_name("crispasr-quantize"))
 }
 
-fn converter_script_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("vendor")
-        .join("CrispASR")
-        .join("models")
-        .join("convert-parakeet-to-gguf.py")
+fn converter_script_path() -> Result<PathBuf> {
+    tool_path("convert-parakeet-to-gguf.py")
 }
 
-fn add_bundled_library_path(command: &mut Command, executable: &Path) {
-    let Some(install_dir) = executable.parent().and_then(Path::parent) else {
-        return;
-    };
-    let lib_dir = install_dir.join("lib");
-    if lib_dir.is_dir() {
-        prepend_env_path(command, dynamic_library_path_var(), &lib_dir);
-    }
-}
-
-fn dynamic_library_path_var() -> &'static str {
-    if cfg!(target_os = "windows") {
-        "PATH"
-    } else if cfg!(target_os = "macos") {
-        "DYLD_LIBRARY_PATH"
-    } else {
-        "LD_LIBRARY_PATH"
-    }
-}
-
-fn prepend_env_path(command: &mut Command, key: &str, dir: &Path) {
-    if let Some(joined) = joined_path_with_prepended(dir, env::var_os(key)) {
-        command.env(key, joined);
-    }
-}
-
-fn joined_path_with_prepended(dir: &Path, existing: Option<OsString>) -> Option<OsString> {
-    let mut paths = vec![dir.to_path_buf()];
-    if let Some(existing) = existing {
-        paths.extend(env::split_paths(&existing));
-    }
-    env::join_paths(paths).ok()
+fn tool_path(name: &str) -> Result<PathBuf> {
+    find_on_path(name.to_string()).with_context(|| format!(
+        "{name} was not found on PATH. Install the optional conversion tools described in docs/dev/README.md#source-rebuild. Hosted Q8_0 downloads do not need them."
+    ))
 }
 
 fn run_command(command: &mut Command, label: &str) -> Result<()> {
