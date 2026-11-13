@@ -57,79 +57,174 @@ fn plural_fractions_remain_worded_before_any_noun() {
 
 #[test]
 fn singular_fractions_remain_worded_without_hiding_ordinal_dates() {
-    for threshold in [0.0, 4.0, 10.0] {
-        let cleaner = cleaner_with_number_threshold(Some(threshold));
-        for input in [
-            "A fifth of a dollar.",
-            "One fifth of the total.",
-            "One fifth.",
-            "A fifth.",
-            "One twenty-first.",
-            "One hundredth of a second.",
-            "A twenty-first of the total.",
-            "One twenty-first of the total.",
-            "A fifth of a million dollars.",
-        ] {
-            assert_eq!(cleaner.clean_text(input), input, "threshold {threshold}");
+    for profile in [CleaningProfile::Safe, CleaningProfile::Aggressive] {
+        for threshold in [0.0, 4.0, 10.0] {
+            let cleaner = build_cleaner_for_test_with_threshold(
+                profile,
+                false,
+                Some(threshold),
+                &HashSet::new(),
+                &[],
+            );
+            for input in [
+                "A fifth of a dollar.",
+                "One fifth of the total.",
+                "One fifth.",
+                "A fifth.",
+                "An eighth.",
+                "One twenty-first.",
+                "One hundredth of a second.",
+                "A twenty-first of the total.",
+                "One twenty-first of the total.",
+                "A fifth of a million dollars.",
+            ] {
+                assert_eq!(cleaner.clean_text(input), input, "threshold {threshold}");
+            }
+            let fifth = if threshold > 5.0 { "fifth" } else { "5th" };
+            assert_eq!(
+                cleaner.clean_text("The fifth of May."),
+                format!("The {fifth} of May.")
+            );
+            assert_eq!(
+                cleaner.clean_text("The twenty-first of May."),
+                "The 21st of May."
+            );
+            for (input, expected) in [
+                (
+                    "Keep first hundred fifty rows.",
+                    if threshold <= 1.0 {
+                        "Keep 1st 150 rows."
+                    } else {
+                        "Keep first 150 rows."
+                    },
+                ),
+                (
+                    "Keep the eighth hundred fifty rows.",
+                    if threshold <= 8.0 {
+                        "Keep the 8th 150 rows."
+                    } else {
+                        "Keep the eighth 150 rows."
+                    },
+                ),
+                (
+                    "Keep the fifth hundred fifty rows.",
+                    if threshold <= 5.0 {
+                        "Keep the 5th 150 rows."
+                    } else {
+                        "Keep the fifth 150 rows."
+                    },
+                ),
+                (
+                    "The first hundred and sixteen pages.",
+                    if threshold <= 1.0 {
+                        "The 1st 116 pages."
+                    } else {
+                        "The first 116 pages."
+                    },
+                ),
+                (
+                    "The first hundred fifty steps.",
+                    if threshold <= 1.0 {
+                        "The 1st 150 steps."
+                    } else {
+                        "The first 150 steps."
+                    },
+                ),
+                (
+                    "The second hundred twenty rows.",
+                    if threshold <= 2.0 {
+                        "The 2nd 120 rows."
+                    } else {
+                        "The second 120 rows."
+                    },
+                ),
+            ] {
+                assert_eq!(
+                    cleaner.clean_text(input),
+                    expected,
+                    "threshold {threshold}: {input}"
+                );
+            }
+            let one = if threshold > 1.0 { "one" } else { "1" };
+            assert_eq!(
+                cleaner.clean_text("Wait one second of audio."),
+                format!("Wait {one} second of audio.")
+            );
         }
-        let fifth = if threshold > 5.0 { "fifth" } else { "5th" };
-        assert_eq!(
-            cleaner.clean_text("The fifth of May."),
-            format!("The {fifth} of May.")
-        );
-        assert_eq!(
-            cleaner.clean_text("The twenty-first of May."),
-            "The 21st of May."
-        );
-        let one = if threshold > 1.0 { "one" } else { "1" };
-        assert_eq!(
-            cleaner.clean_text("Wait one second of audio."),
-            format!("Wait {one} second of audio.")
-        );
     }
 }
 
 #[test]
 fn ordinal_before_second_does_not_convert_the_time_unit() {
-    for threshold in [0.0, 4.0, 10.0] {
-        let cleaner = cleaner_with_number_threshold(Some(threshold));
-        let fifth = if threshold > 5.0 { "fifth" } else { "5th" };
-        assert_eq!(
-            cleaner.clean_text("The fifth second of audio."),
-            format!("The {fifth} second of audio.")
-        );
-        assert_eq!(
-            cleaner.clean_text("Fifth second of audio."),
-            format!(
-                "{} second of audio.",
-                if threshold > 5.0 { "Fifth" } else { "5th" }
-            )
-        );
-        assert_eq!(
-            cleaner.clean_text("The fifth second was silent."),
-            format!("The {fifth} second was silent.")
-        );
-        assert_eq!(
-            cleaner.clean_text("The fifty third second was silent."),
-            "The 53rd second was silent."
-        );
-        assert_eq!(
-            cleaner.clean_text("It was a split-second choice."),
-            "It was a split-second choice."
-        );
-        assert_eq!(
-            cleaner.clean_text("The twenty-second file."),
-            "The 22nd file."
-        );
-        assert_eq!(
-            cleaner.clean_text("The thirty second timeout."),
-            "The 30 second timeout."
-        );
-        let fifth = if threshold > 5.0 { "fifth" } else { "5th" };
-        assert_eq!(
-            cleaner.clean_text("A fifth customer."),
-            format!("A {fifth} customer.")
-        );
+    for profile in [CleaningProfile::Safe, CleaningProfile::Aggressive] {
+        for threshold in [0.0, 4.0, 10.0] {
+            let cleaner = build_cleaner_for_test_with_threshold(
+                profile,
+                false,
+                Some(threshold),
+                &HashSet::new(),
+                &[],
+            );
+            for (input, expected) in [
+                ("Retry every sixty second.", "Retry every 60 second."),
+                ("Retry each thirty second.", "Retry each 30 second."),
+                (
+                    "One event per sixty second.",
+                    if threshold == 0.0 {
+                        "1 event per 60 second."
+                    } else {
+                        "One event per 60 second."
+                    },
+                ),
+                ("Wait a sixty second.", "Wait a 60 second."),
+                ("Wait an eighty second.", "Wait an 80 second."),
+                ("The twenty second.", "The 22nd."),
+                ("May twenty second.", "May 22nd."),
+            ] {
+                assert_eq!(
+                    cleaner.clean_text(input),
+                    expected,
+                    "{profile:?}/{threshold}: {input}"
+                );
+            }
+            let fifth = if threshold > 5.0 { "fifth" } else { "5th" };
+            assert_eq!(
+                cleaner.clean_text("The fifth second of audio."),
+                format!("The {fifth} second of audio.")
+            );
+            assert_eq!(
+                cleaner.clean_text("Fifth second of audio."),
+                format!(
+                    "{} second of audio.",
+                    if threshold > 5.0 { "Fifth" } else { "5th" }
+                )
+            );
+            assert_eq!(
+                cleaner.clean_text("The fifth second was silent."),
+                format!("The {fifth} second was silent.")
+            );
+            assert_eq!(
+                cleaner.clean_text("The fifty third second was silent."),
+                "The 53rd second was silent."
+            );
+            assert_eq!(
+                cleaner.clean_text("It was a split-second choice."),
+                "It was a split-second choice."
+            );
+            assert_eq!(
+                cleaner.clean_text("The twenty-second file."),
+                "The 22nd file."
+            );
+            assert_eq!(
+                cleaner.clean_text("The thirty second timeout."),
+                "The 30 second timeout."
+            );
+            let fifth = if threshold > 5.0 { "fifth" } else { "5th" };
+            assert_eq!(
+                cleaner.clean_text("A fifth customer."),
+                format!("A {fifth} customer.")
+            );
+        }
     }
     let input = "Wait thirty second timeout. ".repeat(512);
     assert_eq!(
@@ -175,6 +270,8 @@ fn identifier_stems_join_only_numbers_already_rendered_as_digits() {
             ("B two.", "B two."),
             ("F thirty two.", "F32."),
             ("O seven.", "O7."),
+            // Uppercase O follows the same identifier rule as other letters.
+            ("Agent double O seven.", "Agent double O7."),
             ("SM thirty two.", "SM32."),
             ("OK five minutes ago.", "OK 5 minutes ago."),
             ("B 2 weeks.", "B2 weeks."),

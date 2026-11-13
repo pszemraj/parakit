@@ -6,9 +6,12 @@
 /// # Panics
 /// Panics only if the built-in unit regex cannot compile.
 pub(super) fn is_unit(word: &str) -> bool {
+    // Single letters also name identifiers, so this vocabulary requires
+    // explicit unit words or multi-letter abbreviations. K/M/B sizes have
+    // their own classification.
     let unit = regex_static!(
         concat!(
-            r"(?i)^(?:ms|ns|gb|mb|kb|tb|gib|mib|kib|hz|khz|mhz|ghz|kg|km|cm|mm|fps|kw|mw|gw|px|",
+            r"(?i)^(?:ms|ns|gb|mb|kb|tb|pb|gib|mib|kib|tib|hz|khz|mhz|ghz|kg|km|cm|mm|fps|rpm|mph|bpm|mah|ma|mv|kv|kw|mw|gw|px|",
             r"bit|mol|amp|ton|bar|rad|lux|db|lb|lbs|oz|ft|yd|usd|eur|gbp|jpy|cad|aud|chf|cny|",
             r"(?:nano|micro|milli|centi|deci|kilo|mega|giga|tera)?(?:meter|metre|gram|second)s?|",
             r"seconds?|secs?|minutes?|mins?|hours?|degrees?|percent|cents?|dollars?|euros?|pounds?|watts?|(?:kilo|mega|giga|tera)?(?:bytes?|bits?))$"

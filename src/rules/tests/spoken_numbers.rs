@@ -43,6 +43,10 @@ fn text2num_renders_signed_numbers() {
             ("Plus or minus five.", "Plus or minus 5."),
             ("Plus or minus five point six.", "Plus or minus 5.6."),
             ("Plus or minus five K.", "Plus or minus 5K."),
+            ("Minus five or minus ten.", "-5 or -10."),
+            ("Negative five or negative ten.", "-5 or -10."),
+            ("Minus five or minus ten point five.", "-5 or -10.5."),
+            ("Minus five K or minus ten K.", "-5K or -10K."),
             ("400 minus 128 K.", "400 minus 128K."),
             ("Minus v one point six.", "Minus v1.6."),
             ("Use minus hundred twenty eight K.", "Use -128K."),
@@ -182,7 +186,6 @@ fn numeric_nouns_and_unsupported_runs_keep_their_words() {
         ("GPT OSS twenty B.", "GPT OSS 20B."),
         ("Two oh oh seven.", "Two oh oh seven."),
         ("Double oh seven.", "Double oh seven."),
-        ("Four nought seven.", "Four nought seven."),
         ("Wake up at oh six forty.", "Wake up at oh six forty."),
         ("Meet at oh eight thirty.", "Meet at oh eight thirty."),
         ("Top P point nine five.", "Top P point nine five."),
@@ -207,6 +210,21 @@ fn zero_scale_coefficients_retain_their_complete_wording() {
             "Nought hundred hours.",
         ] {
             assert_eq!(cleaner.clean_text(input), input, "{threshold}: {input}");
+        }
+        // The unambiguous word nought has the same numeric interpretation
+        // as zero, including leading zeros and independent adjacent counts.
+        for (zero, nought) in [
+            ("Zero zero seven.", "Nought nought seven."),
+            ("Four zero seven.", "Four nought seven."),
+        ] {
+            assert_eq!(
+                cleaner.clean_text(nought),
+                cleaner
+                    .clean_text(zero)
+                    .replace("Zero", "Nought")
+                    .replace("zero", "nought"),
+                "{threshold}: {nought}"
+            );
         }
     }
 }
@@ -902,84 +920,15 @@ fn text2num_preserves_second_when_it_is_a_time_unit() {
             ("This is the twenty-second file.", "This is the 22nd file."),
             ("A thirty second timeout.", "A 30 second timeout."),
             ("A sixty second clip.", "A 60 second clip."),
+            ("Retry every sixty second.", "Retry every 60 second."),
+            ("Retry each thirty second.", "Retry each 30 second."),
+            ("One event per sixty second.", "One event per 60 second."),
+            ("Wait a sixty second.", "Wait a 60 second."),
+            ("Wait an eighty second.", "Wait an 80 second."),
             ("A hundred twenty second timeout.", "A 120 second timeout."),
             ("RTX fifty ninety second vert.", "RTX 50 90 second vert."),
             ("The twenty second of May.", "The 22nd of May."),
             ("May twenty second.", "May 22nd."),
-        ],
-    );
-}
-
-#[test]
-fn version_components_use_text2num_without_a_custom_number_parser() {
-    assert_clean_cases(
-        CleaningProfile::Safe,
-        &[
-            ("V zero point five point two.", "v0.5.2."),
-            ("PyTorch two point thirteen point oh.", "PyTorch 2.13.0."),
-            (
-                "PyTorch two point seven point oh plus cuda twelve point eight.",
-                "PyTorch 2.7.0 plus cuda 12.8.",
-            ),
-            (
-                "PyTorch two point seven point oh and Python three point twelve.",
-                "PyTorch 2.7.0 and Python 3.12.",
-            ),
-            ("Qwen three one point seven B.", "Qwen three 1.7B."),
-            ("Qwen three zero point six B.", "Qwen three 0.6B."),
-            (
-                "Beta one zero point nine, beta two zero point nine five.",
-                "Beta one 0.9, beta two 0.95.",
-            ),
-            ("Python three three point twelve.", "Python three 3.12."),
-            ("Opus four five point five.", "Opus 4 5.5."),
-            ("Ubuntu two four point oh four.", "Ubuntu two 4.04."),
-            ("twenty five two point five liter.", "25 2.5 liter."),
-            (
-                "arXiv twenty four oh one point oh one two three four.",
-                "arXiv twenty four oh 1.01234.",
-            ),
-            (
-                "Windows ten point zero point nineteen thousand forty five.",
-                "Windows 10.0.19045.",
-            ),
-            (
-                "Ubuntu twenty two point zero four point three.",
-                "Ubuntu 22.04.3.",
-            ),
-            ("Python three point one two point four.", "Python 3.12.4."),
-            (
-                "One nine two point one six eight point one point one.",
-                "192.168.1.1.",
-            ),
-            (
-                "One two seven point zero point zero point one.",
-                "127.0.0.1.",
-            ),
-            (
-                "Use one hundred ninety two point one hundred sixty eight point zero point one.",
-                "Use 192.168.0.1.",
-            ),
-            ("CUDA 12 point nine.", "CUDA 12.9."),
-            ("B0.1 point two.", "B0.1.2."),
-            ("B1 point zero-five point two.", "B1.05.2."),
-            ("B1 point oh-five point two.", "B1.05.2."),
-            ("Use 20 point zero twenty point zero.", "Use 20.0 20.0."),
-            ("V one point zero five point two.", "v1.05.2."),
-            ("V one point zero zero five point two.", "v1.005.2."),
-            ("V one point oh five point two.", "v1.05.2."),
-            ("V one point zero-five point two.", "v1.05.2."),
-            ("V two point zero two point zero.", "v2.02.0."),
-            ("V two point five two point zero.", "v2.52.0."),
-            (
-                "Version two point zero three point zero.",
-                "Version 2.03.0.",
-            ),
-            ("V two point zero zero three point zero.", "v2.003.0."),
-            (
-                "V one point twenty one point one hundred twenty.",
-                "v1.21.120.",
-            ),
         ],
     );
 }

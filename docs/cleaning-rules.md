@@ -50,7 +50,7 @@ English cardinal and ordinal recognition uses [`text2num`](https://crates.io/cra
 
 Adjacent parsed cardinal counts connected by spaces or tabs keep their separators when all meet the threshold: `GPU fifty ninety` becomes `GPU 50 90`. If any count is below it, the entire run retains its wording, including a final size suffix: `one twenty eight K` stays words at the default and becomes `1 28K` at `0`. Ordinal modifiers remain separate (`first five hundred rows` becomes `first 500 rows`). This protection also gates compaction when `spoken-numbers` is disabled: `three 50 K` stays separate at `4` but becomes `three 50K` at `0`.
 
-Punctuation separates values; lists and nearby labels never bypass the threshold. Unknown runs containing the contextual zero aliases `oh`, `o`, or `nought`, such as `fifty oh five`, remain intact unless they form a recognized year or version. Unsupported scientific notation (`three e minus four`) also stays words. [Years](#calendar-years) and [versions](#versions-and-identifiers) use their own rendering rules.
+Punctuation separates values; lists and nearby labels never bypass the threshold. `Nought` is recognized as an unambiguous zero under the ordinary numeric rules. Unknown runs containing the contextual zero aliases `oh` or `o`, such as `fifty oh five`, remain intact unless they form a recognized year or version. Unsupported scientific notation (`three e minus four`) also stays words. [Years](#calendar-years) and [versions](#versions-and-identifiers) use their own rendering rules.
 
 #### Magnitudes And Parameter Counts
 
@@ -64,7 +64,9 @@ A scale takes the immediately preceding count as its coefficient (`two hundred t
 
 `size-suffixes` compacts written counts and explicit `thousand`/`million`/`billion` quantities to exact `K`/`M`/`B` notation; `trillion` retains its wording. An explicit uppercase suffix binds only the last eligible count (`2.5 seven B` becomes `2.5 7B`), including its scale (`a hundred K` becomes `100K`). Independent counts never concatenate, protected mixed runs stay intact, and digit-by-digit decimals remain one expression (`two point five seven B` becomes `2.57B`). Disable this control for the general quantity rendering.
 
-A scale word is dropped only when it agrees with the suffix; otherwise the full value precedes it: `5 hundred K` becomes `500K`, and `two point five million B` becomes `2500000B`.
+Spoken cardinal counts require `spoken-numbers`: disabling it keeps `a seven B model` as words, while existing `7 B` can still become `7B`. Decimals rendered by an enabled `spoken-versions` pass also remain eligible.
+
+A matching scale and suffix drop the redundant scale (`2.5 million M` becomes `2.5M`). Mismatched scales fold only for integer coefficients when every scale is smaller than the suffix (`5 hundred K` becomes `500K`). Decimal coefficients or a scale at least as large as a mismatching suffix stay spaced, preserving `2.2 hundred K` and `2.5 million B`.
 
 #### Preserved Quantities And Times
 
@@ -74,11 +76,11 @@ Fractions before ordinary nouns are protected too (`five hundredths of a second`
 
 A separate exact quantity before an indefinite phrase still follows the threshold (`year two thousand a few hundred` becomes `year 2000 a few hundred`). A count joined to a fraction by `and` stays with it, including after `both` or `between`. Without punctuation, a following article-plus-scale phrase can belong to the fraction even after an ordinal; a comma separates it: `six quarters a million` stays intact, but `six quarters, a million` becomes `6 quarters, a million`. Other enabled cleanup still applies.
 
-`Second` defaults to a time unit after a number, including before a noun (`the thirty second timeout` becomes `the 30 second timeout`). `One second`, `the fifth second`, `per second`, `split-second`, and elapsed plural `seconds` retain the unit. A compound ordinal is selected by a following `of` or calendar division, preceding month, or phrase-ending punctuation/end: `May twenty second` becomes `May 22nd`, and `the twenty second century` becomes `the 22nd century`. A definite article alone does not select it. Genuine ordinals, including lists, follow the threshold. Clock expressions have no separate threshold bypass: `five o'clock` becomes `5 o'clock`, while `two o'clock` stays words at the default.
+`Second` defaults to a time unit after a number, including before a noun (`the thirty second timeout` becomes `the 30 second timeout`). `One second`, `the fifth second`, `per second`, `split-second`, and elapsed plural `seconds` retain the unit. A compound ordinal is selected by a following `of` or supported calendar word (`day`, `week`, `month`, `year`, `decade`, `century`, `millennium`, or their plurals), preceding month, or phrase-ending punctuation/end: `May twenty second` becomes `May 22nd`, and `the twenty second century` becomes `the 22nd century`. Before the entire numeric phrase, `every`, `each`, `per`, `a`, or `an` selects a duration even at phrase end, unless a stronger `of`, calendar-word, or month cue applies. A definite article alone does not select the ordinal. Genuine ordinals, including lists, follow the threshold. Clock expressions have no separate threshold bypass: `five o'clock` becomes `5 o'clock`, while `two o'clock` stays words at the default.
 
 #### Calendar Years
 
-`Eighteen`, `nineteen`, or `twenty` followed by a two-digit count, or by a contextual zero alias and a digit, renders as one year without cue words: `twenty twenty six` becomes `2026`, and `nineteen oh five` becomes `1905`.
+`Eighteen`, `nineteen`, or `twenty` followed by a two-digit count, or by a zero alias and a digit, renders as one year without cue words: `twenty twenty six` becomes `2026`, and `nineteen oh five` becomes `1905`.
 
 A pair needs at least one spoken component; existing `20 22` stays separate. Pairs inside longer adjacent numeric runs also stay separate. A preceding ordinal day or joined identifier starts a separate run.
 

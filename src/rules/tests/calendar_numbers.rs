@@ -105,7 +105,7 @@ fn following_time_and_measurement_units_block_year_joining() {
     ] {
         assert_eq!(cleaner.clean_text(input), expected, "{input}");
     }
-    for unit in "ms ns gb mb kb tb gib mib kib hz khz mhz ghz kg km cm mm fps kw mw gw px db"
+    for unit in "ms ns gb mb kb tb pb gib mib kib tib hz khz mhz ghz kg km cm mm fps rpm mph bpm mah ma mv kv kw mw gw px db"
         .split_whitespace()
     {
         for unit in [unit.to_string(), unit.to_uppercase()] {

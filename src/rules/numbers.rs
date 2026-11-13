@@ -42,8 +42,10 @@ impl Token for &NumberToken<'_> {
     }
     fn text_lowercase(&self) -> Cow<'_, str> {
         // text2num strips a trailing s even from nouns ("ones", "OSS").
-        // Zero aliases belong only inside an explicitly recognized structure.
-        if number_word(&self.lowercase) && !zero_alias(&self.lowercase)
+        // Nought is unambiguously numeric; oh/o need an explicit structure.
+        if self.lowercase == "nought" {
+            "zero".into()
+        } else if number_word(&self.lowercase) && !zero_alias(&self.lowercase)
             || self.text.parse::<f64>().is_ok()
         {
             self.lowercase.as_str().into()
@@ -195,9 +197,10 @@ pub(super) fn normalize<'a>(
         let mut text = span.text.clone();
         let mut value = span.value;
         let mut scaled = false;
-        while tokens
-            .get(end)
-            .is_some_and(|token| scale(&token.lowercase).is_some())
+        while !span.ordinal
+            && tokens
+                .get(end)
+                .is_some_and(|token| scale(&token.lowercase).is_some())
         {
             let magnitude = &tokens[end].lowercase;
             text.push(' ');
@@ -276,32 +279,28 @@ pub(super) fn normalize<'a>(
             .get(end)
             .is_some_and(|token| matches!(token.text, "K" | "M" | "B"))
             && !span.ordinal
+            && !(bare_scale
+                && quantities
+                    .iter()
+                    .any(|previous| previous.end == span.start && !previous.ordinal))
             && (rendered
                 || bare_scale && span.value >= threshold && enabled.contains(&NumberKind::Spoken))
         {
             let suffix = tokens[end].text;
             let suffix_scale = match suffix {
-                "K" => 1e3,
-                "M" => 1e6,
-                "B" => 1e9,
+                "K" => 1_000,
+                "M" => 1_000_000,
+                "B" => 1_000_000_000,
                 _ => unreachable!("size suffix checked above"),
             };
-            // A repeated scale is redundant ("seventy billion B"). Other
-            // scale words still contribute to the coefficient ("5 hundred K").
-            let coefficient =
-                if end > span.start && scale(&tokens[end - 1].lowercase) == Some(suffix_scale) {
-                    (value / suffix_scale).to_string()
-                } else if scaled || !scales.is_empty() {
-                    value.to_string()
-                } else {
-                    text.clone()
-                };
-            proposals.push(Replacement {
-                start: span.start - usize::from(article && bare_scale),
-                end: end + 1,
-                text: format!("{coefficient}{suffix}"),
-                kind: NumberKind::Size,
-            });
+            if let Some(coefficient) = size_suffix_coefficient(span, &tokens, end, suffix_scale) {
+                proposals.push(Replacement {
+                    start: span.start - usize::from(article && bare_scale),
+                    end: end + 1,
+                    text: format!("{coefficient}{suffix}"),
+                    kind: NumberKind::Size,
+                });
+            }
         }
         if rendered
             && identifier_stem(input, &tokens, span.start)
@@ -592,7 +591,11 @@ fn apply_sign(
         || proposal.text.starts_with('v')
         || !matches!(tokens[start - 1].lowercase.as_str(), "minus" | "negative")
         || start >= 2
-            && (matches!(tokens[start - 2].lowercase.as_str(), "-" | "or")
+            && (tokens[start - 2].text == "-"
+                || start >= 3
+                    && tokens[start - 3].lowercase == "plus"
+                    && tokens[start - 2].lowercase == "or"
+                    && tokens[start - 1].lowercase == "minus"
                 || spans.iter().any(|span| span.end == start - 1))
         || !input[tokens[start - 1].end..tokens[start].start]
             .bytes()
@@ -626,6 +629,44 @@ pub(super) fn identifier_stem(input: &str, tokens: &[NumberToken<'_>], start: us
                 .bytes()
                 .all(|byte| matches!(byte, b' ' | b'\t'))
     }
+}
+
+fn size_suffix_coefficient(
+    span: &NumberSpan,
+    tokens: &[NumberToken<'_>],
+    end: usize,
+    suffix_scale: u128,
+) -> Option<String> {
+    let repeated = scale(&tokens[end - 1].lowercase) == Some(suffix_scale as f64);
+    let scales: Vec<_> = tokens[span.start..end]
+        .iter()
+        .filter_map(|token| scale(&token.lowercase))
+        .collect();
+    if scales.is_empty() {
+        return Some(span.text.clone());
+    }
+    // A matching suffix abbreviates the final scale. Mismatched scales fold
+    // only whole coefficients with smaller scales; preserve other wording.
+    if !repeated && scales.iter().any(|&value| value >= suffix_scale as f64) {
+        return None;
+    }
+    let appended_end = end - usize::from(repeated && span.end < end);
+    if repeated && span.end == appended_end && span.end < end {
+        return Some(span.text.clone());
+    }
+    // Render from exact parsed digits, never from the floating-point value
+    // used for threshold comparisons and general magnitude classification.
+    let mut coefficient = span.text.parse::<u128>().ok()?;
+    for token in &tokens[span.end..appended_end] {
+        coefficient = coefficient.checked_mul(scale(&token.lowercase)? as u128)?;
+    }
+    if repeated && span.end == end {
+        if coefficient % suffix_scale != 0 {
+            return None;
+        }
+        coefficient /= suffix_scale;
+    }
+    Some(coefficient.to_string())
 }
 
 fn compact_size(value: f64) -> Option<String> {

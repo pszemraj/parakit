@@ -76,9 +76,15 @@ pub(super) fn protected(
         }
         if at(tokens, index + 1, "of")
             || word.ends_with('s')
-            || spans
-                .iter()
-                .any(|span| span.ordinal && span.end == index + 1)
+            || spans.iter().any(|span| {
+                span.ordinal
+                    && span.end == index + 1
+                    && span.start > 0
+                    && matches!(
+                        tokens[span.start - 1].lowercase.as_str(),
+                        "one" | "a" | "an"
+                    )
+            })
         {
             let plural = word.ends_with('s');
             if let Some(denominator) = ordinal_ending(tokens, index + 1, plural, language) {
@@ -149,7 +155,7 @@ fn fraction(
     if has_scale {
         end = scales_end;
     }
-    let article_before = start > 0 && at(tokens, start - 1, "a");
+    let article_before = start > 0 && matches!(tokens[start - 1].lowercase.as_str(), "a" | "an");
     if article_before {
         start -= 1;
     }
@@ -309,12 +315,19 @@ fn second_is_time_unit(tokens: &[NumberToken<'_>], index: usize, language: &Lang
     if let Some(range) =
         ordinal_ending(tokens, index + 1, false, language).filter(|range| range.start < index)
     {
+        let duration_context = range.start > 0
+            && matches!(
+                tokens[range.start - 1].lowercase.as_str(),
+                "a" | "an" | "per" | "every" | "each"
+            );
         // Phrase endings and calendar divisions select the ordinal reading.
+        // A duration determiner selects the unit even at a phrase ending.
         // Otherwise a following noun keeps the duration reading, even after
         // "the" ("the thirty second timeout").
-        return tokens
-            .get(index + 1)
-            .is_some_and(|token| token.text.chars().any(char::is_alphanumeric))
+        return (duration_context
+            || tokens
+                .get(index + 1)
+                .is_some_and(|token| token.text.chars().any(char::is_alphanumeric)))
             && !at(tokens, index + 1, "of")
             && !tokens
                 .get(index + 1)
