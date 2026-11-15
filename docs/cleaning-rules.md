@@ -94,7 +94,7 @@ Multi-point versions render component by component with periods, regardless of t
 
 A base spoken digit by digit is joined only in an IPv4-shaped run with at least three `point` separators, such as `one nine two point one six eight point one point one` becoming `192.168.1.1`. Other version bases use ordinary cardinal parsing, preserving the boundary between adjacent independent counts.
 
-Numeric prefixes use the same component parsing (`Version 2 point zero five` becomes `Version 2.05`). A following scale can start a separate coefficient (`2 point five two thousand` becomes `2.5 2000`). Standalone `V` or `v` joins a dotted version as lowercase `v`.
+Numeric prefixes use the same component parsing (`Version 2 point zero five` becomes `Version 2.05`). Before `hundred` or `thousand`, the last spaced digit of a digit-by-digit fraction starts a separate coefficient unless the fraction begins with zero (`2 point five two thousand` becomes `2.5 2000`); before `million` and larger scales the fraction stays whole (`2 point five two million` becomes `2.52 million`). Standalone `V` or `v` joins a dotted version as lowercase `v`.
 
 `numeric-identifiers` joins an uppercase single letter other than `A` or `I`, or `SM`, to one complete numeric run. That run may be existing digits or output eligible for `spoken-numbers` or `spoken-versions`; there is no threshold bypass. At the default, `Q five` becomes `Q5`, `Q two` stays words, and `SM eight nine` becomes `SM 8 9`. Other two-letter stems do not join (`FP thirty two` becomes `FP 32`). A letter already bound to another conversion, such as a size suffix, is not reused. With `spoken-numbers` disabled, existing `Q 2` can still become `Q2`.
 
