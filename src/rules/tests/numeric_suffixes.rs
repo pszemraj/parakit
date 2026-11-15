@@ -106,6 +106,24 @@ fn size_suffixes_preserve_unmatched_scale_values() {
         ("Use three point five thousand K.", "Use 3.5K."),
         ("Use five hundred thousand K.", "Use 500K."),
         ("Use seventy billion B.", "Use 70B."),
+        // Scales inside an exact integer do not block a mismatched suffix.
+        (
+            "The context is one thousand twenty four K tokens.",
+            "The context is 1024K tokens.",
+        ),
+        (
+            "It uses a two thousand forty eight K vocabulary.",
+            "It uses a 2048K vocabulary.",
+        ),
+        ("Use two thousand seven hundred K.", "Use 2700K."),
+        // A written coefficient keeps its following scale words.
+        (
+            "Use 5 hundred thousand dollars.",
+            "Use 5 hundred thousand dollars.",
+        ),
+        ("Use 5 hundred billion K.", "Use 5 hundred billion K."),
+        ("Use 8 hundred million K.", "Use 8 hundred million K."),
+        ("Use 1.5 hundred thousand K.", "Use 1.5 hundred thousand K."),
         (
             "Use 9007199254740993 hundred K.",
             "Use 900719925474099300K.",

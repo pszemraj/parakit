@@ -56,7 +56,7 @@ Punctuation separates values; lists and nearby labels never bypass the threshold
 
 An explicit quantity ending in one `million` or `billion` scale keeps the scale word (`three billion` becomes `3 billion`). Bare scales, with or without an article, remain words. A compound with an explicit remainder can consume its article: `a thousand five hundred` becomes `1500`.
 
-A decimal coefficient keeps its scale words and spoken precision (`three point zero million` becomes `3.0 million`), and a count after those words starts another number. Unambiguous non-decimal compounds with multiple scales use their full-digit value. Existing digit-plus-scale forms such as `5 hundred` retain their value and wording instead of being reparsed as two numbers.
+A decimal coefficient keeps its scale words and spoken precision (`three point zero million` becomes `3.0 million`), and a count after those words starts another number. Unambiguous non-decimal compounds with multiple scales use their full-digit value. Existing digit-plus-scale forms such as `5 hundred` or `5 hundred thousand` retain their value and wording instead of being reparsed as two numbers.
 
 After a scale word, `and` separates quantities when the next has the same largest scale (`five thousand and ten thousand five hundred` becomes `5000 and 10500`); otherwise it continues the number (`one hundred and five thousand` becomes `105000`). After a count, it always separates: `twenty and five` becomes `20 and 5`.
 
@@ -66,7 +66,7 @@ A scale takes the immediately preceding count as its coefficient (`two hundred t
 
 Spoken cardinal counts require `spoken-numbers`: disabling it keeps `a seven B model` as words, while existing `7 B` can still become `7B`. Decimals rendered by an enabled `spoken-versions` pass also remain eligible.
 
-A matching scale and suffix drop the redundant scale (`2.5 million M` becomes `2.5M`). Mismatched scales fold only for integer coefficients when every scale is smaller than the suffix (`5 hundred K` becomes `500K`). Decimal coefficients or a scale at least as large as a mismatching suffix stay spaced, preserving `2.2 hundred K` and `2.5 million B`.
+A matching scale and suffix drop the redundant scale (`2.5 million M` becomes `2.5M`). A mismatched suffix folds an integer coefficient unless the number ends in a scale larger than the suffix; scales earlier in the integer do not count (`5 hundred K` becomes `500K`, `one thousand twenty four K` becomes `1024K`, and `five hundred billion K` becomes `500 billion K`). Decimal coefficients stay spaced, preserving `2.2 hundred K` and `2.5 million B`.
 
 #### Preserved Quantities And Times
 

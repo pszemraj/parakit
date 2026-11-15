@@ -189,6 +189,12 @@ pub(super) fn normalize<'a>(
     for span in &quantities {
         let words = &tokens[span.start..span.end];
         let bare_scale = scale(&words[0].lowercase).is_some();
+        // A bare scale right after a cardinal belongs to that quantity
+        // ("5 hundred thousand") and is not rendered as its own number.
+        let tail = bare_scale
+            && quantities
+                .iter()
+                .any(|previous| previous.end == span.start && !previous.ordinal);
         let article = span.start > 0 && tokens[span.start - 1].lowercase == "a";
         let mut start = span.start;
         let mut end = span.end;
@@ -225,6 +231,7 @@ pub(super) fn normalize<'a>(
             text = format!("{} {}", span.value / large[0].1, large[0].0);
         }
         let eligible = !span.literal
+            && !tail
             && !words.iter().any(|word| word.lowercase == "point")
             && (!bare_scale || end > span.start + 1)
             && span.value >= threshold;
@@ -277,10 +284,7 @@ pub(super) fn normalize<'a>(
             .get(end)
             .is_some_and(|token| matches!(token.text, "K" | "M" | "B"))
             && !span.ordinal
-            && !(bare_scale
-                && quantities
-                    .iter()
-                    .any(|previous| previous.end == span.start && !previous.ordinal))
+            && !tail
             && (rendered
                 || bare_scale && span.value >= threshold && enabled.contains(&NumberKind::Spoken))
         {
@@ -635,17 +639,18 @@ fn size_suffix_coefficient(
     end: usize,
     suffix_scale: u128,
 ) -> Option<String> {
-    let repeated = scale(&tokens[end - 1].lowercase) == Some(suffix_scale as f64);
-    let scales: Vec<_> = tokens[span.start..end]
+    let final_scale = scale(&tokens[end - 1].lowercase);
+    let repeated = final_scale == Some(suffix_scale as f64);
+    if !tokens[span.start..end]
         .iter()
-        .filter_map(|token| scale(&token.lowercase))
-        .collect();
-    if scales.is_empty() {
+        .any(|token| scale(&token.lowercase).is_some())
+    {
         return Some(span.text.clone());
     }
-    // A matching suffix abbreviates the final scale. Mismatched scales fold
-    // only whole coefficients with smaller scales; preserve other wording.
-    if !repeated && scales.iter().any(|&value| value >= suffix_scale as f64) {
+    // A matching suffix abbreviates the final scale; a larger final scale
+    // keeps its wording. Scales inside an exact integer ("one thousand
+    // twenty four") are already folded. Decimals fail the parse below.
+    if final_scale.is_some_and(|value| value > suffix_scale as f64) {
         return None;
     }
     let appended_end = end - usize::from(repeated && span.end < end);
