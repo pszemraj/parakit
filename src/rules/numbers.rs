@@ -109,7 +109,11 @@ pub(super) fn normalize<'a>(
     let language = Language::english();
     let (initial, mut protected) = parse_spans(&tokens, &language);
     protected.extend(super::number_guards::protected(
-        &tokens, &initial, &language,
+        input,
+        &tokens,
+        &initial,
+        enabled.contains(&NumberKind::Version),
+        &language,
     ));
     let (spans, ambiguous) = parsed_slice(&tokens, 0..tokens.len(), &protected, &language);
     let mut proposals = super::number_versions::classify(input, &tokens, &spans, &language);
@@ -356,7 +360,14 @@ pub(super) fn normalize<'a>(
         }
     }
     // A low spoken member makes an adjacent run ambiguous as a whole.
-    // A decimal/version or a year remains its own explicitly classified type.
+    // A decimal/version or a year remains its own explicitly classified type,
+    // including fraction digits parsed as separate counts ("2.50K").
+    let in_version = |at: usize| {
+        enabled.contains(&NumberKind::Version)
+            && proposals
+                .iter()
+                .any(|p| p.kind == NumberKind::Version && p.start < at && at < p.end)
+    };
     let mut mixed = Vec::new();
     let mut at = 0;
     while at < spans.len() {
@@ -374,6 +385,8 @@ pub(super) fn normalize<'a>(
             && !tokens[spans[end].start..spans[end].end]
                 .iter()
                 .any(|t| t.lowercase == "point")
+            && !in_version(spans[end - 1].start)
+            && !in_version(spans[end].start)
         {
             end += 1;
         }
@@ -389,13 +402,7 @@ pub(super) fn normalize<'a>(
     // Unknown zero aliases stay as a complete original run. Only an explicit
     // version or a recognized century pair may interpret the alias as zero;
     // an alias inside an enabled version is already zero ("2.05K").
-    let unknown_alias = |at: usize| {
-        zero_alias(&tokens[at].lowercase)
-            && !(enabled.contains(&NumberKind::Version)
-                && proposals
-                    .iter()
-                    .any(|p| p.kind == NumberKind::Version && p.start <= at && at < p.end))
-    };
+    let unknown_alias = |at: usize| zero_alias(&tokens[at].lowercase) && !in_version(at);
     for (index, pair) in spans.windows(2).enumerate() {
         if pair[0].end >= pair[1].start || !(pair[0].end..pair[1].start).all(unknown_alias) {
             continue;

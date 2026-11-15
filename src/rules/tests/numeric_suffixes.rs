@@ -30,6 +30,25 @@ fn numeric_prefixes_accept_multiword_components() {
             ("One point five zero five thousand.", "1.50 5000."),
             ("Two point zero zero thousand.", "2.00 thousand."),
             ("Two point five five hundred.", "2.5 500."),
+            // A zero fraction digit is not a zero coefficient of the scale.
+            ("Use 2 point five zero thousand.", "Use 2.50 thousand."),
+            ("Use 2 point zero million.", "Use 2.0 million."),
+            ("One point two nought thousand.", "1.20 thousand."),
+            ("Two point five nought million.", "2.50 million."),
+            (
+                "Oh point nine zero three zero thousand workers.",
+                "0.9030 thousand workers.",
+            ),
+            ("Use 2 point five zero K.", "Use 2.50K."),
+            ("Use 2 point one two thousand.", "Use 2.1 2000."),
+            (
+                "It has 2 point five zero million parameters.",
+                "It has 2.50M parameters.",
+            ),
+            ("Zero thousand.", "Zero thousand."),
+            ("Five zero thousand.", "5 zero thousand."),
+            ("2.5 zero thousand.", "2.5 zero thousand."),
+            ("Point zero thousand.", "Point zero thousand."),
             ("Use 2 point five two million.", "Use 2.52 million."),
             ("Two point two five million.", "2.25 million."),
             ("One point two three four million.", "1.234 million."),
@@ -202,6 +221,23 @@ fn spoken_versions_respect_the_identifier_control() {
     let disabled = HashSet::from(["numeric-identifiers".to_string()]);
     let cleaner = build_cleaner_for_test(CleaningProfile::Safe, false, &disabled, &[]);
     assert_eq!(cleaner.clean_text("P ninety nine point nine."), "P 99.9.");
+}
+
+#[test]
+fn zero_before_a_scale_stays_a_coefficient_without_spoken_versions() {
+    let disabled = HashSet::from(["spoken-versions".to_string()]);
+    let cleaner = build_cleaner_for_test(CleaningProfile::Safe, false, &disabled, &[]);
+    for input in [
+        "2 point zero million.",
+        "One point two nought thousand.",
+        "Zero thousand.",
+    ] {
+        assert_eq!(cleaner.clean_text(input), input);
+    }
+    assert_eq!(
+        cleaner.clean_text("2 point five zero thousand."),
+        "2 point 5 zero thousand."
+    );
 }
 
 #[test]

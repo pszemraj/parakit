@@ -70,7 +70,7 @@ A matching scale and suffix drop the redundant scale (`2.5 million M` becomes `2
 
 #### Preserved Quantities And Times
 
-At every threshold and in both profiles, indefinite quantities preserve wording, capitalization, and adjacent punctuation. These include plural magnitudes (`tens` through `trillions`), qualified scale compounds such as `a few hundred-thousand`, and fractions with numerators, articles, `of`, or a mixed-number `and`: `nineteen hundreds`, `half a million`, `a third of a million`, and `two and a half million` stay words. A zero coefficient before a scale also remains words, including any additive remainder.
+At every threshold and in both profiles, indefinite quantities preserve wording, capitalization, and adjacent punctuation. These include plural magnitudes (`tens` through `trillions`), qualified scale compounds such as `a few hundred-thousand`, and fractions with numerators, articles, `of`, or a mixed-number `and`: `nineteen hundreds`, `half a million`, `a third of a million`, and `two and a half million` stay words. A zero coefficient before a scale also remains words, including any additive remainder; a zero fraction digit is not a coefficient (`2 point five zero thousand` becomes `2.50 thousand`).
 
 Fractions before ordinary nouns are protected too (`five hundredths of a second`), while genuine ordinals follow the threshold (`the five hundredth customer` becomes `the 500th customer`).
 

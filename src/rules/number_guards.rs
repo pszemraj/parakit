@@ -10,8 +10,10 @@ use super::numbers::{NumberSpan, NumberToken};
 /// Find phrases whose number words must retain their original spelling.
 ///
 /// # Arguments
+/// * `input` - Original transcript text.
 /// * `tokens` - Original transcript tokens, including punctuation and line breaks.
 /// * `spans` - Parsed spoken numbers and literal numeric tokens.
+/// * `versions` - Whether spoken decimals and versions are rendered.
 /// * `language` - Shared English number parser.
 ///
 /// # Returns
@@ -20,8 +22,10 @@ use super::numbers::{NumberSpan, NumberToken};
 /// # Panics
 /// Panics if supplied span boundaries do not index the supplied tokens.
 pub(super) fn protected(
+    input: &str,
     tokens: &[NumberToken<'_>],
     spans: &[NumberSpan],
+    versions: bool,
     language: &Language,
 ) -> Vec<Range<usize>> {
     let mut ranges = Vec::new();
@@ -34,6 +38,12 @@ pub(super) fn protected(
             && tokens
                 .get(index + 1)
                 .is_some_and(|t| scale(&t.lowercase).is_some())
+            // A fraction digit of a rendered spoken decimal is not a
+            // coefficient ("2 point five zero thousand" is 2.50 thousand).
+            && !(versions
+                && super::number_versions::classify(input, tokens, spans, language)
+                    .iter()
+                    .any(|version| version.start < index && index < version.end))
         {
             let end = (index + 1..tokens.len())
                 .find(|&at| !super::number_words::number_word(&tokens[at].lowercase))
