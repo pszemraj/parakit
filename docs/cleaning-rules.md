@@ -50,7 +50,7 @@ English cardinal and ordinal recognition uses [`text2num`](https://crates.io/cra
 
 Adjacent parsed cardinal counts connected by spaces or tabs keep their separators when all meet the threshold: `GPU fifty ninety` becomes `GPU 50 90`. If any count is below it, the entire run retains its wording, including a final size suffix: `one twenty eight K` stays words at the default and becomes `1 28K` at `0`. Ordinal modifiers remain separate (`first five hundred rows` becomes `first 500 rows`). This protection also gates compaction when `spoken-numbers` is disabled: `three 50 K` stays separate at `4` but becomes `three 50K` at `0`.
 
-Punctuation separates values; lists and nearby labels never bypass the threshold. `Nought` is recognized as an unambiguous zero under the ordinary numeric rules. Unknown runs containing the contextual zero aliases `oh` or `o`, such as `fifty oh five`, remain intact unless they form a recognized year or version. Unsupported scientific notation (`three e minus four`) also stays words. [Years](#calendar-years) and [versions](#versions-and-identifiers) use their own rendering rules.
+Punctuation separates values; lists and nearby labels never bypass the threshold. Unknown runs containing the contextual zero aliases `oh`, `o`, or `nought`, such as `fifty oh five`, remain intact unless they form a recognized year or version. Unsupported scientific notation (`three e minus four`) also stays words. [Years](#calendar-years) and [versions](#versions-and-identifiers) use their own rendering rules.
 
 #### Magnitudes And Parameter Counts
 
@@ -80,7 +80,7 @@ A separate exact quantity before an indefinite phrase still follows the threshol
 
 #### Calendar Years
 
-`Eighteen`, `nineteen`, or `twenty` followed by a two-digit count, or by a zero alias and a digit, renders as one year without cue words: `twenty twenty six` becomes `2026`, and `nineteen oh five` becomes `1905`.
+`Eighteen`, `nineteen`, or `twenty` followed by a two-digit count, or by a contextual zero alias and a digit, renders as one year without cue words: `twenty twenty six` becomes `2026`, and `nineteen oh five` becomes `1905`.
 
 A pair needs at least one spoken component; existing `20 22` stays separate. Pairs inside longer adjacent numeric runs also stay separate. A preceding ordinal day or joined identifier starts a separate run.
 

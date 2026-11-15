@@ -20,6 +20,8 @@ fn century_pairs_form_years_without_context_or_threshold_bypasses() {
                 ("Eighteen seventy six.", "1876."),
                 ("Nineteen oh five.", "1905."),
                 ("Twenty o six.", "2006."),
+                ("Nineteen nought five.", "1905."),
+                ("Twenty nought six.", "2006."),
                 ("Twenty oh zero.", "2000."),
                 ("Use 20 twenty six.", "Use 2026."),
                 ("Use twenty 26.", "Use 2026."),

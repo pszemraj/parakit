@@ -186,6 +186,8 @@ fn numeric_nouns_and_unsupported_runs_keep_their_words() {
         ("GPT OSS twenty B.", "GPT OSS 20B."),
         ("Two oh oh seven.", "Two oh oh seven."),
         ("Double oh seven.", "Double oh seven."),
+        ("Four nought seven.", "Four nought seven."),
+        ("It all came to nought.", "It all came to nought."),
         ("Wake up at oh six forty.", "Wake up at oh six forty."),
         ("Meet at oh eight thirty.", "Meet at oh eight thirty."),
         ("Top P point nine five.", "Top P point nine five."),
@@ -210,21 +212,6 @@ fn zero_scale_coefficients_retain_their_complete_wording() {
             "Nought hundred hours.",
         ] {
             assert_eq!(cleaner.clean_text(input), input, "{threshold}: {input}");
-        }
-        // The unambiguous word nought has the same numeric interpretation
-        // as zero, including leading zeros and independent adjacent counts.
-        for (zero, nought) in [
-            ("Zero zero seven.", "Nought nought seven."),
-            ("Four zero seven.", "Four nought seven."),
-        ] {
-            assert_eq!(
-                cleaner.clean_text(nought),
-                cleaner
-                    .clean_text(zero)
-                    .replace("Zero", "Nought")
-                    .replace("zero", "nought"),
-                "{threshold}: {nought}"
-            );
         }
     }
 }

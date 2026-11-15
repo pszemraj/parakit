@@ -42,10 +42,8 @@ impl Token for &NumberToken<'_> {
     }
     fn text_lowercase(&self) -> Cow<'_, str> {
         // text2num strips a trailing s even from nouns ("ones", "OSS").
-        // Nought is unambiguously numeric; oh/o need an explicit structure.
-        if self.lowercase == "nought" {
-            "zero".into()
-        } else if number_word(&self.lowercase) && !zero_alias(&self.lowercase)
+        // Zero aliases belong only inside an explicitly recognized structure.
+        if number_word(&self.lowercase) && !zero_alias(&self.lowercase)
             || self.text.parse::<f64>().is_ok()
         {
             self.lowercase.as_str().into()
