@@ -77,6 +77,10 @@ fn singular_fractions_remain_worded_without_hiding_ordinal_dates() {
                 "A twenty-first of the total.",
                 "One twenty-first of the total.",
                 "A fifth of a million dollars.",
+                "It's about one-fifth of the cost.",
+                "Roughly one-tenth of users churn.",
+                "Only one-eighth of an inch.",
+                "One-twentieth of the total.",
             ] {
                 assert_eq!(cleaner.clean_text(input), input, "threshold {threshold}");
             }

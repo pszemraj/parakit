@@ -77,13 +77,11 @@ pub(super) fn protected(
         if at(tokens, index + 1, "of")
             || word.ends_with('s')
             || spans.iter().any(|span| {
+                let start = before_hyphen(tokens, span.start);
                 span.ordinal
                     && span.end == index + 1
-                    && span.start > 0
-                    && matches!(
-                        tokens[span.start - 1].lowercase.as_str(),
-                        "one" | "a" | "an"
-                    )
+                    && start > 0
+                    && matches!(tokens[start - 1].lowercase.as_str(), "one" | "a" | "an")
             })
         {
             let plural = word.ends_with('s');
@@ -117,6 +115,16 @@ fn plural_magnitude(word: &str) -> bool {
         word,
         "tens" | "hundreds" | "thousands" | "millions" | "billions" | "trillions"
     )
+}
+
+/// Step back over a hyphen joining a numerator to its denominator, so
+/// "one-fifth" has the same look-back as "one fifth".
+fn before_hyphen(tokens: &[NumberToken<'_>], start: usize) -> usize {
+    if start > 0 && at(tokens, start - 1, "-") {
+        start - 1
+    } else {
+        start
+    }
 }
 
 /// Extend only across adjacent scale words and scale-to-scale hyphens.
@@ -164,10 +172,11 @@ fn fraction(
         start -= 1;
     }
     let scale_first = joined && start > 0 && scale(&tokens[start - 1].lowercase).is_some();
+    let prefix_end = before_hyphen(tokens, start);
     // A singular denominator following a separate "one" is a fraction even
     // without "of". The one inside "one hundredth" belongs to the ordinal.
     let singular_numerator = ordinal.is_some()
-        && (start > 0 && at(tokens, start - 1, "one")
+        && (prefix_end > 0 && at(tokens, prefix_end - 1, "one")
             || article_before
                 && tokens
                     .get(end)
@@ -178,17 +187,13 @@ fn fraction(
     if ordinal.is_some() && !plural && !has_scale {
         // "The fifth of May" remains an ordinal; "a fifth" and "one
         // hundredth" supply an explicit singular fraction numerator.
-        let numerator =
-            article_before || at(tokens, start, "one") || start > 0 && at(tokens, start - 1, "one");
+        let numerator = article_before
+            || at(tokens, start, "one")
+            || prefix_end > 0 && at(tokens, prefix_end - 1, "one");
         if !numerator {
             return None;
         }
     }
-    let prefix_end = if start > 0 && at(tokens, start - 1, "-") {
-        start - 1
-    } else {
-        start
-    };
     if let Some((previous, value, mixed)) = cardinal_chain(tokens, spans, prefix_end, language) {
         let has_article = article_before || article_after;
         let singular = previous.len() == 1 && (!has_article || value == 1.0);
