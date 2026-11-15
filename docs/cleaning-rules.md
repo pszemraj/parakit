@@ -62,7 +62,7 @@ After a scale word, `and` separates quantities when the next has the same larges
 
 A scale takes the immediately preceding count as its coefficient (`two hundred three hundred` becomes `200 300`). Ambiguous coefficient boundaries or stacked scales remain words, as in `one hundred twenty three hundred` and `fifteen hundred thousand`.
 
-`size-suffixes` compacts written counts and explicit `thousand`/`million`/`billion` quantities to exact `K`/`M`/`B` notation; `trillion` retains its wording. An explicit uppercase suffix binds only the last eligible count (`2.5 seven B` becomes `2.5 7B`), including its scale (`a hundred K` becomes `100K`). Independent counts never concatenate, protected mixed runs stay intact, and digit-by-digit decimals remain one expression (`two point five seven B` becomes `2.57B`). Disable this control for the general quantity rendering.
+`size-suffixes` compacts written counts and explicit `thousand`/`million`/`billion` quantities to exact `K`/`M`/`B` notation, keeping a decimal coefficient before one scale with that scale's suffix (`1.55 billion parameters` becomes `1.55B parameters`); `trillion` retains its wording. An explicit uppercase suffix binds only the last eligible count (`2.5 seven B` becomes `2.5 7B`), including its scale (`a hundred K` becomes `100K`). Independent counts never concatenate, protected mixed runs stay intact, and digit-by-digit decimals remain one expression (`two point five seven B` becomes `2.57B`). Disable this control for the general quantity rendering.
 
 Spoken cardinal counts require `spoken-numbers`: disabling it keeps `a seven B model` as words, while existing `7 B` can still become `7B`. Decimals rendered by an enabled `spoken-versions` pass also remain eligible.
 

@@ -232,9 +232,17 @@ pub(super) fn normalize<'a>(
         {
             start -= 1;
         }
+        // The later bound's own scale words sit between it and "parameters".
+        // A trillion bound keeps its wording, so its range stays as spoken.
         let parameter_range = quantities.iter().any(|next| {
+            let scales = tokens[next.end..]
+                .iter()
+                .take_while(|token| {
+                    scale(&token.lowercase).is_some() && token.lowercase != "trillion"
+                })
+                .count();
             next.start > end
-                && tokens.get(next.end).is_some_and(|token| {
+                && tokens.get(next.end + scales).is_some_and(|token| {
                     matches!(token.lowercase.as_str(), "parameter" | "parameters")
                 })
                 && tokens[end..next.start].iter().all(|token| {
@@ -258,7 +266,20 @@ pub(super) fn normalize<'a>(
                     matches!(token.lowercase.as_str(), "parameter" | "parameters")
                 }))
         {
-            if let Some(compact) = compact_size(value) {
+            // A decimal coefficient keeps its stated precision and takes its
+            // one scale's suffix, as before an explicit suffix: 1.55B, not 1550M.
+            let stated = SIZE_SUFFIXES
+                .iter()
+                .find(|(magnitude, _)| {
+                    span.text.contains('.')
+                        && end == span.end + 1
+                        && scale(&tokens[span.end].lowercase) == Some(*magnitude)
+                })
+                .and_then(|&(magnitude, suffix)| {
+                    size_suffix_coefficient(span, &tokens, end, magnitude as u128)
+                        .map(|coefficient| format!("{coefficient}{suffix}"))
+                });
+            if let Some(compact) = stated.or_else(|| compact_size(value)) {
                 proposals.push(Replacement {
                     start,
                     end,
@@ -662,8 +683,11 @@ fn size_suffix_coefficient(
     Some(coefficient.to_string())
 }
 
+/// Compact size magnitudes and their suffixes, largest first.
+const SIZE_SUFFIXES: [(f64, char); 3] = [(1e9, 'B'), (1e6, 'M'), (1e3, 'K')];
+
 fn compact_size(value: f64) -> Option<String> {
-    for (scale, suffix) in [(1e9, 'B'), (1e6, 'M'), (1e3, 'K')] {
+    for (scale, suffix) in SIZE_SUFFIXES {
         if value >= scale && value % (scale / 10.0) == 0.0 {
             return Some(format!("{}{suffix}", value / scale));
         }

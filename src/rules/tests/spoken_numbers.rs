@@ -517,6 +517,35 @@ fn parameter_counts_use_compact_magnitude_suffixes() {
                 "The model has 123456789 parameters.",
                 "The model has 123456789 parameters.",
             ),
+            // A decimal coefficient keeps its precision and its scale's suffix.
+            (
+                "It has 1.55 billion parameters.",
+                "It has 1.55B parameters.",
+            ),
+            (
+                "It has one point two five million parameters.",
+                "It has 1.25M parameters.",
+            ),
+            ("It has 3.0 million parameters.", "It has 3.0M parameters."),
+            (
+                "1.25 million up to 1.55 billion parameters.",
+                "1.25M up to 1.55B parameters.",
+            ),
+            (
+                "A 1.55 billion parameter model.",
+                "A 1.55B parameter model.",
+            ),
+            ("It has 2.5 thousand parameters.", "It has 2.5K parameters."),
+            ("It has 1550000000 parameters.", "It has 1550M parameters."),
+            ("It has 1.55 billion users.", "It has 1.55 billion users."),
+            (
+                "1 billion up to 1.5 trillion parameters.",
+                "1 billion up to 1.5 trillion parameters.",
+            ),
+            (
+                "7 billion up to 70 billion parameters.",
+                "7B up to 70B parameters.",
+            ),
             (
                 "The company is worth three billion dollars.",
                 "The company is worth 3 billion dollars.",
