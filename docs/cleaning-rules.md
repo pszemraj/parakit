@@ -66,7 +66,7 @@ A scale takes the immediately preceding count as its coefficient (`two hundred t
 
 Spoken cardinal counts require `spoken-numbers`: disabling it keeps `a seven B model` as words, while existing `7 B` can still become `7B`. Decimals rendered by an enabled `spoken-versions` pass also remain eligible.
 
-A matching scale and suffix drop the redundant scale (`2.5 million M` becomes `2.5M`). A mismatched suffix folds an integer coefficient unless the number ends in a scale larger than the suffix; scales earlier in the integer do not count (`5 hundred K` becomes `500K`, `one thousand twenty four K` becomes `1024K`, and `five hundred billion K` becomes `500 billion K`). Decimal coefficients stay spaced, preserving `2.2 hundred K` and `2.5 million B`.
+A matching scale and suffix drop the redundant scale (`2.5 million M` becomes `2.5M`). A mismatched suffix folds an integer coefficient unless the number ends in a scale larger than the suffix; scales earlier in the integer do not count (`5 hundred K` becomes `500K`, `one thousand twenty four K` becomes `1024K`, and `five hundred billion K` becomes `500 billion K`). A decimal coefficient of a mismatched scale stays spaced, preserving `2.2 hundred K` and `2.5 million B`; a scale inside the whole part of a decimal does not count (`one hundred point five K` becomes `100.5K`).
 
 #### Preserved Quantities And Times
 

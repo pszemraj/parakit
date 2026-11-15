@@ -143,6 +143,13 @@ fn size_suffixes_preserve_unmatched_scale_values() {
             "It uses a 2048K vocabulary.",
         ),
         ("Use two thousand seven hundred K.", "Use 2700K."),
+        // Nor do scales in the whole part of a decimal.
+        ("Use one hundred point five K.", "Use 100.5K."),
+        ("Use one hundred twenty eight point five K.", "Use 128.5K."),
+        (
+            "Use seven hundred two point three four six B.",
+            "Use 702.346B.",
+        ),
         // A written coefficient keeps its following scale words.
         (
             "Use 5 hundred thousand dollars.",

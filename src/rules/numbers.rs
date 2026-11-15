@@ -659,15 +659,15 @@ fn size_suffix_coefficient(
 ) -> Option<String> {
     let final_scale = scale(&tokens[end - 1].lowercase);
     let repeated = final_scale == Some(suffix_scale as f64);
-    if !tokens[span.start..end]
-        .iter()
-        .any(|token| scale(&token.lowercase).is_some())
-    {
+    // Without a final scale the rendered number is complete: scales earlier
+    // in it ("one thousand twenty four", "one hundred point five") are
+    // already folded into its digits.
+    if final_scale.is_none() {
         return Some(span.text.clone());
     }
     // A matching suffix abbreviates the final scale; a larger final scale
-    // keeps its wording. Scales inside an exact integer ("one thousand
-    // twenty four") are already folded. Decimals fail the parse below.
+    // keeps its wording. A decimal before another scale fails the parse
+    // below and stays spaced.
     if final_scale.is_some_and(|value| value > suffix_scale as f64) {
         return None;
     }
