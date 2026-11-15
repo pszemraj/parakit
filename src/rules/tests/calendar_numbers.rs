@@ -107,7 +107,7 @@ fn following_time_and_measurement_units_block_year_joining() {
     ] {
         assert_eq!(cleaner.clean_text(input), expected, "{input}");
     }
-    for unit in "ms ns gb mb kb tb pb gib mib kib tib hz khz mhz ghz kg km cm mm fps rpm mph bpm mah ma mv kv kw mw gw px db"
+    for unit in "ms ns gb mb kb tb gib mib kib tib hz khz mhz ghz kg km cm mm fps rpm mph bpm mah kw mw gw px db"
         .split_whitespace()
     {
         for unit in [unit.to_string(), unit.to_uppercase()] {
@@ -118,6 +118,32 @@ fn following_time_and_measurement_units_block_year_joining() {
     for noun in ["TV shows", "EV sales", "PS games", "A", "S", "V", "W", "G"] {
         let input = format!("In twenty twenty six {noun}.");
         assert_eq!(cleaner.clean_text(&input), format!("In 2026 {noun}."));
+    }
+    // Abbreviations that double as names, honorifics, or initialisms are not units.
+    for (input, expected) in [
+        (
+            "In twenty nineteen Ma moved in with us.",
+            "In 2019 Ma moved in with us.",
+        ),
+        ("Yes, twenty twenty ma'am.", "Yes, 2020 ma'am."),
+        (
+            "My twenty twenty four PB was three hours.",
+            "My 2024 PB was three hours.",
+        ),
+        (
+            "Her twenty twenty three MA thesis was good.",
+            "Her 2023 MA thesis was good.",
+        ),
+        (
+            "The twenty twenty KV cache paper.",
+            "The 2020 KV cache paper.",
+        ),
+        (
+            "The twenty twenty four MV came out.",
+            "The 2024 MV came out.",
+        ),
+    ] {
+        assert_eq!(cleaner.clean_text(input), expected, "{input}");
     }
 }
 
