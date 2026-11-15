@@ -594,10 +594,11 @@ fn apply_sign(
         || !matches!(tokens[start - 1].lowercase.as_str(), "minus" | "negative")
         || start >= 2
             && (tokens[start - 2].text == "-"
+                // Spoken plus-minus: "plus minus", "positive or negative".
+                || matches!(tokens[start - 2].lowercase.as_str(), "plus" | "positive")
                 || start >= 3
-                    && tokens[start - 3].lowercase == "plus"
                     && tokens[start - 2].lowercase == "or"
-                    && tokens[start - 1].lowercase == "minus"
+                    && matches!(tokens[start - 3].lowercase.as_str(), "plus" | "positive")
                 || spans.iter().any(|span| span.end == start - 1))
         || !input[tokens[start - 1].end..tokens[start].start]
             .bytes()

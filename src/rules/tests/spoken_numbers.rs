@@ -43,6 +43,13 @@ fn text2num_renders_signed_numbers() {
             ("Plus or minus five.", "Plus or minus 5."),
             ("Plus or minus five point six.", "Plus or minus 5.6."),
             ("Plus or minus five K.", "Plus or minus 5K."),
+            (
+                "The bias can be positive or negative ten.",
+                "The bias can be positive or negative 10.",
+            ),
+            ("Plus or negative five.", "Plus or negative 5."),
+            ("Positive or minus five.", "Positive or minus 5."),
+            ("Plus minus five percent.", "Plus minus 5 percent."),
             ("Minus five or minus ten.", "-5 or -10."),
             ("Negative five or negative ten.", "-5 or -10."),
             ("Minus five or minus ten point five.", "-5 or -10.5."),
