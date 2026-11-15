@@ -279,7 +279,7 @@ function Invoke-InstallSmoke {
         throw "Installed parakit.exe failed to start. This usually means a runtime DLL is missing. $($_.Exception.Message)"
     }
 
-    if ($code -eq -1073741515 -or ([uint32]$code) -eq 0xC0000135) {
+    if ($code -eq -1073741515 -or $code -eq 3221225781) {
         throw "Installed parakit.exe failed to start with 0xC0000135 (STATUS_DLL_NOT_FOUND). A required runtime DLL is missing; check the bundle manifest external_dlls entries."
     }
     if ($code -ne 0) {

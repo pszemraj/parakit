@@ -298,3 +298,60 @@ fn installer_preserves_existing_bundle_when_staged_smoke_fails() {
         .collect::<Vec<_>>();
     assert!(leftovers.is_empty(), "staging leftovers: {leftovers:?}");
 }
+
+#[cfg(windows)]
+#[test]
+fn installer_reports_signed_loader_exit_codes() {
+    use std::fs;
+
+    let root = common::fixture_root("windows-bundle-guard", "signed-loader-exit");
+    let bundle = root.join("bundle");
+    let install = root.join("install");
+    fs::create_dir_all(&bundle).unwrap();
+    fs::create_dir_all(&install).unwrap();
+    fs::write(install.join(".parakit-install"), "parakit windows install").unwrap();
+    fs::write(install.join("keep.txt"), "previous install").unwrap();
+    fs::write(
+        bundle.join("parakit-runtime-manifest.json"),
+        r#"{"required_files":["parakit.exe"],"accelerator":"cpu"}"#,
+    )
+    .unwrap();
+    let source = root.join("main.rs");
+    fs::write(
+        &source,
+        r#"fn main() {
+    std::process::exit(std::env::var("PARAKIT_INSTALL_TEST_EXIT").unwrap().parse().unwrap());
+}"#,
+    )
+    .unwrap();
+    let compiled = std::process::Command::new("rustc")
+        .arg(&source)
+        .arg("-o")
+        .arg(bundle.join("parakit.exe"))
+        .output()
+        .unwrap();
+    assert!(
+        compiled.status.success(),
+        "probe compile failed: {compiled:?}"
+    );
+
+    for (code, expected) in [
+        (
+            "-1073741819",
+            "loader smoke test failed with exit code -1073741819",
+        ),
+        ("-1073741515", "0xC0000135 (STATUS_DLL_NOT_FOUND)"),
+    ] {
+        let output = installer_command(&bundle, &install)
+            .env("PARAKIT_INSTALL_TEST_EXIT", code)
+            .output()
+            .unwrap();
+        let diagnostic = String::from_utf8_lossy(&output.stderr);
+        assert!(!output.status.success());
+        assert!(diagnostic.contains(expected), "{code}: {diagnostic}");
+        assert_eq!(
+            fs::read_to_string(install.join("keep.txt")).unwrap(),
+            "previous install"
+        );
+    }
+}
