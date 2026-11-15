@@ -440,11 +440,7 @@ fn period_is_sentence_boundary(input: &str, period_index: usize) -> bool {
         "a.m.", "dr.", "e.g.", "etc.", "fig.", "i.e.", "jr.", "mr.", "mrs.", "ms.", "no.", "p.m.",
         "prof.", "sr.", "st.", "vs.",
     ];
-    if ABBREVIATIONS.contains(&dotted_token.as_str()) || is_initialism(&dotted_token) {
-        return false;
-    }
-
-    true
+    !(ABBREVIATIONS.contains(&dotted_token.as_str()) || is_initialism(&dotted_token))
 }
 
 fn is_initialism(token: &str) -> bool {
