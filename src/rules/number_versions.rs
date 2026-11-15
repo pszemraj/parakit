@@ -238,8 +238,9 @@ fn component_prefix(
     }
     let (mut end, mut value) = rendered?;
     // In "five two thousand", the final digit belongs to the scaled count.
-    // A leading zero instead marks a digit-spelled fractional component, and
-    // a million or larger scale takes the whole fraction ("2.25 million").
+    // A leading zero instead marks a digit-spelled fractional component, a
+    // final zero cannot start a count ("1.20 thousand"), and a million or
+    // larger scale takes the whole fraction ("2.25 million").
     if !scales
         && digit(&tokens[start], language).as_deref() != Some("0")
         && tokens
@@ -252,8 +253,9 @@ fn component_prefix(
             .filter(|token| token.text != "-")
             .all(|token| digit(token, language).is_some());
         if digits {
-            if let Some(split) =
-                (start + 1..end).rfind(|&index| spaced(input, &tokens[index - 1], &tokens[index]))
+            if let Some(split) = (start + 1..end)
+                .rfind(|&index| spaced(input, &tokens[index - 1], &tokens[index]))
+                .filter(|&split| digit(&tokens[split], language).as_deref() != Some("0"))
             {
                 end = split;
                 value = component(&tokens[start..end], language)?;
