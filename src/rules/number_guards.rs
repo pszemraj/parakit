@@ -121,9 +121,14 @@ fn plural_magnitude(word: &str) -> bool {
 }
 
 /// Step back over a hyphen joining a numerator to its denominator, so
-/// "one-fifth" has the same look-back as "one fifth".
+/// "one-fifth" and "a-fifth" have the same look-back as "one fifth" and
+/// "a fifth". A spaced dash ("a - fifth") joins nothing.
 fn before_hyphen(tokens: &[NumberToken<'_>], start: usize) -> usize {
-    if start > 0 && at(tokens, start - 1, "-") {
+    if start > 1
+        && at(tokens, start - 1, "-")
+        && tokens[start - 2].end == tokens[start - 1].start
+        && tokens[start - 1].end == tokens[start].start
+    {
         start - 1
     } else {
         start
@@ -166,9 +171,11 @@ fn fraction(
     if has_scale {
         end = scales_end;
     }
-    let article_before = start > 0 && matches!(tokens[start - 1].lowercase.as_str(), "a" | "an");
+    let article = before_hyphen(tokens, start);
+    let article_before =
+        article > 0 && matches!(tokens[article - 1].lowercase.as_str(), "a" | "an");
     if article_before {
-        start -= 1;
+        start = article - 1;
     }
     let joined = start > 0 && at(tokens, start - 1, "and");
     if joined {

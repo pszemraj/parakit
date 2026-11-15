@@ -81,6 +81,11 @@ fn singular_fractions_remain_worded_without_hiding_ordinal_dates() {
                 "Roughly one-tenth of users churn.",
                 "Only one-eighth of an inch.",
                 "One-twentieth of the total.",
+                "A-fifth of the cost.",
+                "An-eighth of an inch.",
+                "A-tenth.",
+                "A-twenty-fifth of the total.",
+                "A-fifth-generation chip.",
             ] {
                 assert_eq!(cleaner.clean_text(input), input, "threshold {threshold}");
             }
@@ -89,6 +94,14 @@ fn singular_fractions_remain_worded_without_hiding_ordinal_dates() {
                 cleaner.clean_text("The fifth of May."),
                 format!("The {fifth} of May.")
             );
+            // A spaced dash does not join an article or numerator to the ordinal.
+            let one = if threshold > 1.0 { "One" } else { "1" };
+            for (joiner, rendered) in [("A", "A"), ("One", one)] {
+                assert_eq!(
+                    cleaner.clean_text(&format!("{joiner} - fifth.")),
+                    format!("{rendered} - {fifth}.")
+                );
+            }
             assert_eq!(
                 cleaner.clean_text("The twenty-first of May."),
                 "The 21st of May."
