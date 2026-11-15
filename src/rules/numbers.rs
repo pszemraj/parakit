@@ -111,26 +111,7 @@ pub(super) fn normalize<'a>(
     protected.extend(super::number_guards::protected(
         &tokens, &initial, &language,
     ));
-    let mut spans = Vec::new();
-    let mut start = 0;
-    // Reparse around protected ranges on the same tokens, so a fractional
-    // numerator cannot absorb an adjacent independent exact quantity.
-    let mut ambiguous = Vec::new();
-    for end in 0..=tokens.len() {
-        if end == tokens.len() || protected.iter().any(|range| range.contains(&end)) {
-            if start < end {
-                let (mut parsed, ranges) = parse_spans(&tokens[start..end], &language);
-                for span in &mut parsed {
-                    span.start += start;
-                    span.end += start;
-                }
-                spans.extend(parsed);
-                ambiguous.extend(ranges.into_iter().map(|r| r.start + start..r.end + start));
-            }
-            start = end + 1;
-        }
-    }
-    protected.extend(ambiguous);
+    let (spans, ambiguous) = parsed_slice(&tokens, 0..tokens.len(), &protected, &language);
     let mut proposals = super::number_versions::classify(input, &tokens, &spans, &language);
     proposals.extend(super::number_labels::classify(
         input, &tokens, &spans, &language,
@@ -155,7 +136,8 @@ pub(super) fn normalize<'a>(
     let mut position = 0;
     for version in &versions {
         if position < version.start {
-            quantities.extend(parsed_slice(&tokens, position..version.start, &language));
+            let range = position..version.start;
+            quantities.extend(parsed_slice(&tokens, range, &protected, &language).0);
         }
         position = version.end;
         if let Ok(value) = version.text.parse::<f64>() {
@@ -178,8 +160,10 @@ pub(super) fn normalize<'a>(
         }
     }
     if !versions.is_empty() && position < tokens.len() {
-        quantities.extend(parsed_slice(&tokens, position..tokens.len(), &language));
+        let range = position..tokens.len();
+        quantities.extend(parsed_slice(&tokens, range, &protected, &language).0);
     }
+    protected.extend(ambiguous);
     quantities.retain(|span| {
         !protected
             .iter()
@@ -682,17 +666,33 @@ fn compact_size(value: f64) -> Option<String> {
     None
 }
 
+/// Parse a token range in pieces between protected ranges, so a greedy span
+/// cannot absorb a protected word ("thirty second" as 32nd) and an adjacent
+/// independent quantity cannot join a fractional numerator.
 fn parsed_slice(
     tokens: &[NumberToken<'_>],
     range: Range<usize>,
+    protected: &[Range<usize>],
     language: &Language,
-) -> Vec<NumberSpan> {
-    let (mut spans, _) = parse_spans(&tokens[range.clone()], language);
-    for span in &mut spans {
-        span.start += range.start;
-        span.end += range.start;
+) -> (Vec<NumberSpan>, Vec<Range<usize>>) {
+    let mut spans = Vec::new();
+    let mut ambiguous = Vec::new();
+    let mut start = range.start;
+    for end in range.start..=range.end {
+        if end == range.end || protected.iter().any(|r| r.contains(&end)) {
+            if start < end {
+                let (mut parsed, ranges) = parse_spans(&tokens[start..end], language);
+                for span in &mut parsed {
+                    span.start += start;
+                    span.end += start;
+                }
+                spans.extend(parsed);
+                ambiguous.extend(ranges.into_iter().map(|r| r.start + start..r.end + start));
+            }
+            start = end + 1;
+        }
     }
-    spans
+    (spans, ambiguous)
 }
 
 fn parse_range(

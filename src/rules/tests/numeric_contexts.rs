@@ -394,3 +394,26 @@ fn adjacent_spoken_runs_preserve_every_word_when_any_count_is_below_threshold() 
         );
     }
 }
+
+#[test]
+fn an_earlier_spoken_decimal_leaves_later_numbers_unchanged() {
+    for threshold in [0.0, 4.0, 10.0] {
+        let cleaner = cleaner_with_number_threshold(Some(threshold));
+        for tail in [
+            "a thirty second timeout.",
+            "retry every sixty second.",
+            "wait sixty seconds.",
+            "the first hundred fifty steps.",
+            "ship it on the twenty second.",
+        ] {
+            let alone = cleaner.clean_text(tail);
+            // The tail starts mid-sentence, so its first letter stays lowercase.
+            let expected = format!("Use 0.5 then {}{}", alone[..1].to_lowercase(), &alone[1..]);
+            assert_eq!(
+                cleaner.clean_text(&format!("Use zero point five then {tail}")),
+                expected,
+                "{threshold}: {tail}"
+            );
+        }
+    }
+}
