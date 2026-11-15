@@ -220,9 +220,12 @@ pub(super) fn normalize<'a>(
             && (!bare_scale || end > span.start + 1)
             && span.value >= threshold;
         let rendered = span.literal || eligible && enabled.contains(&NumberKind::Spoken);
+        // A cardinal takes its article as the coefficient ("a thousand five
+        // hundred"); an ordinal keeps it as a determiner ("a 101st time").
         if eligible
             && article
             && bare_scale
+            && !span.ordinal
             && tokens
                 .get(end)
                 .is_none_or(|token| !matches!(token.lowercase.as_str(), "second" | "seconds"))

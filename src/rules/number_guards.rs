@@ -78,10 +78,13 @@ pub(super) fn protected(
             || word.ends_with('s')
             || spans.iter().any(|span| {
                 let start = before_hyphen(tokens, span.start);
+                // An article before a bare scale is its coefficient ("a
+                // hundred and second"), not a fraction numerator.
                 span.ordinal
                     && span.end == index + 1
                     && start > 0
                     && matches!(tokens[start - 1].lowercase.as_str(), "one" | "a" | "an")
+                    && scale(&tokens[span.start].lowercase).is_none()
             })
         {
             let plural = word.ends_with('s');
@@ -320,6 +323,11 @@ fn second_is_time_unit(tokens: &[NumberToken<'_>], index: usize, language: &Lang
     if let Some(range) =
         ordinal_ending(tokens, index + 1, false, language).filter(|range| range.start < index)
     {
+        // A compound joined by "and" ends only in an ordinal: "one hundred
+        // and second" is 102nd, never a count of 100 and a time unit.
+        if at(tokens, index - 1, "and") {
+            return false;
+        }
         let duration_context = range.start > 0
             && matches!(
                 tokens[range.start - 1].lowercase.as_str(),

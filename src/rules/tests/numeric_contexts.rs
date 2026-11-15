@@ -184,6 +184,17 @@ fn ordinal_before_second_does_not_convert_the_time_unit() {
                 ("Wait an eighty second.", "Wait an 80 second."),
                 ("The twenty second.", "The 22nd."),
                 ("May twenty second.", "May 22nd."),
+                // A compound joined by "and" ends in an ordinal.
+                ("The one hundred and second file.", "The 102nd file."),
+                ("Each one hundred and second.", "Each 102nd."),
+                ("Every two hundred and second row.", "Every 202nd row."),
+                ("The thousand and second night.", "The 1002nd night."),
+                ("A hundred and second time.", "A 102nd time."),
+                ("Wait a hundred and second.", "Wait a 102nd."),
+                ("A hundred and first time.", "A 101st time."),
+                ("Each one hundred and twenty second.", "Each 120 second."),
+                ("Wait one hundred and one second.", "Wait 101 second."),
+                ("A one hundred second timeout.", "A 100 second timeout."),
             ] {
                 assert_eq!(
                     cleaner.clean_text(input),
