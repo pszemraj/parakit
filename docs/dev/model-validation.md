@@ -74,7 +74,7 @@ The filter covers chunk/tail drain, reset/reuse, callback parity, recording boun
 
 Use the [Windows prerequisites and build scripts](../../scripts/windows/README.md) from an x64 Visual Studio developer PowerShell, with a short checkout path for Vulkan. CPU is required. Add Vulkan when its SDK/device is available, and CUDA on a supported NVIDIA/CUDA setup. Record unavailable backends and their hardware/toolkit reason as pending.
 
-TODO (native Windows): verify `cargo run -- --help` and `cargo test resampl` from a fresh developer shell without a bundle or native build directory on the inherited PATH. Cargo should find staged runtime DLLs through the build script's `OUT_DIR/bin` link-search directive. Keep separately installed toolkit runtimes on PATH when the build does not bundle them. The bundle checks below add a DLL directory explicitly, so they do not validate this Cargo loader path.
+Verify `cargo run -- --help` and `cargo test resampl` from a fresh developer shell without a Parakit installation, bundle, native build directory, or external BLAS runtime directory on the inherited PATH. Cargo supplies staged runtime DLLs through the build script's `OUT_DIR/bin` link-search directive. Keep separately installed toolkit runtimes on PATH when the build does not bundle them. The bundle checks below add a DLL directory explicitly, so they do not validate this Cargo loader path.
 
 A real Windows daemon uses the same user's lock and named pipe even with separate model and configuration paths, and `doctor` checks that lock. Stop an existing same-user daemon before those checks and preserve its settings; [worker simulation](quality.md#ptt-worker-simulation) bypasses them.
 
@@ -152,6 +152,8 @@ Run the [Rust validation loop](quality.md#rust-validation-loop) in the Windows c
 ### Windows installation lifecycle
 
 Complete these checks natively for CPU and each available GPU backend, in addition to the bundle/model matrix above. Use disposable source checkouts, separate Cargo homes and targets, custom install roots, and existing isolated configuration files. Set `PARAKIT_MODELS_DIR` explicitly for every test process; XDG overrides alone do not isolate the Windows model cache. Keep the ordinary installation and User PATH out of these checks.
+
+Keep the isolated `CARGO_HOME` short too: Cargo nests Git checkouts and submodules beneath it, which can exceed Windows path limits before compilation. For example, use `target\h` instead of nesting the Cargo home under the evidence directory.
 
 - Install from Git and from a populated local checkout with `cargo install --locked`, using the backend's toolchain and features. Unset `CRISPASR_LIB_DIR` and `CRISPASR_SRC_DIR` for the bundled case. Record the source revision, Cargo installation metadata, commands, and exit statuses. Cargo installs executables only; retain required external BLAS/CUDA runtimes on the test process's PATH, or validate their packaging through the bundle route separately.
 - Move each install prefix to a path containing spaces. From outside the disposable checkout, with test processes stopped, temporarily rename its original source checkout, Cargo home, and build directories, restoring them afterward. Remove those build/bundle directories and explicit CrispASR library overrides from the test environment while retaining approved system/toolkit runtime paths. Inspect direct and transitive PE dependencies: bundled inference must not import CrispASR/ggml DLLs or resolve dependencies from hidden build paths.

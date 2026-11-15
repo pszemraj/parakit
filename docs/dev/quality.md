@@ -27,12 +27,14 @@ Use the [Windows scripts](../../scripts/windows/README.md) for native CUDA/Vulka
 When that happens, record the exact CUDA/MSBuild error, then validate the Rust all-features surface with an existing bundled archive directory:
 
 ```powershell
-$env:CRISPASR_LIB_DIR = (Resolve-Path 'target\debug\build\parakit-<hash>\out\lib').Path
+$env:CRISPASR_LIB_DIR = (Resolve-Path 'target\debug\build\parakit\<hash>\out\lib').Path
 cargo check --workspace --all-targets --all-features
 Remove-Item Env:\CRISPASR_LIB_DIR
 ```
 
 This is a typechecking-only fallback. `CRISPASR_LIB_DIR` requests dynamic linkage, while the bundled directory contains static archives; it cannot be used for `cargo build`, `cargo test`, or a runnable binary. It does not replace the [native Windows build and inference checks](model-validation.md#windows-cpu-and-supported-gpu-backends).
+
+Use the actual output directory from the successful native build, including any custom target directory and profile. The Windows example uses Cargo 1.100's layout; earlier Cargo versions use `build\parakit-<hash>\out\lib`.
 
 On macOS, raw `--all-features` also enables CUDA and can fail in CMake before Rust typechecking when the CUDA Toolkit is not installed. Use the same typechecking-only `CRISPASR_LIB_DIR` fallback to validate the Rust all-features surface; validate Metal with the native macOS build and `doctor`.
 
