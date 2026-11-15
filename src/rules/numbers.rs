@@ -366,13 +366,17 @@ pub(super) fn normalize<'a>(
         at = end;
     }
     // Unknown zero aliases stay as a complete original run. Only an explicit
-    // version or a recognized century pair may interpret the alias as zero.
+    // version or a recognized century pair may interpret the alias as zero;
+    // an alias inside an enabled version is already zero ("2.05K").
+    let unknown_alias = |at: usize| {
+        zero_alias(&tokens[at].lowercase)
+            && !(enabled.contains(&NumberKind::Version)
+                && proposals
+                    .iter()
+                    .any(|p| p.kind == NumberKind::Version && p.start <= at && at < p.end))
+    };
     for (index, pair) in spans.windows(2).enumerate() {
-        if pair[0].end >= pair[1].start
-            || !tokens[pair[0].end..pair[1].start]
-                .iter()
-                .all(|token| zero_alias(&token.lowercase))
-        {
+        if pair[0].end >= pair[1].start || !(pair[0].end..pair[1].start).all(unknown_alias) {
             continue;
         }
         let mut first = index;
@@ -388,10 +392,7 @@ pub(super) fn normalize<'a>(
     // Include leading aliases too ("double oh seven", "oh oh seven").
     for (index, span) in spans.iter().enumerate() {
         let mut start = span.start;
-        while start > 0
-            && zero_alias(&tokens[start - 1].lowercase)
-            && !identifier_stem(input, &tokens, start)
-        {
+        while start > 0 && unknown_alias(start - 1) && !identifier_stem(input, &tokens, start) {
             start -= 1;
         }
         if start < span.start {

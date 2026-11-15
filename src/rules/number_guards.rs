@@ -4,7 +4,7 @@ use std::borrow::Cow;
 use std::ops::Range;
 use text2num::{find_numbers, Language, Token};
 
-use super::number_words::{is_calendar_unit, run_start, scale};
+use super::number_words::{is_calendar_unit, run_start, scale, zero_alias};
 use super::numbers::{NumberSpan, NumberToken};
 
 /// Find phrases whose number words must retain their original spelling.
@@ -281,8 +281,15 @@ impl Token for OrdinalToken<'_, '_> {
 
     fn text_lowercase(&self) -> Cow<'_, str> {
         let word = self.token.lowercase.as_str();
-        if self.singular {
-            word.strip_suffix('s').unwrap_or(word).into()
+        let word = if self.singular {
+            word.strip_suffix('s').unwrap_or(word)
+        } else {
+            word
+        };
+        // As in the shared token view, a zero alias is never a parser number
+        // ("point nought seconds" holds no ordinal "nought second").
+        if zero_alias(word) {
+            "~".into()
         } else {
             word.into()
         }

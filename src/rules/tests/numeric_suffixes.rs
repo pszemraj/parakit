@@ -238,6 +238,18 @@ fn version_components_use_text2num_without_a_custom_number_parser() {
             ("Zero point zero five million.", "0.05 million."),
             ("Nought point nought five million.", "0.05 million."),
             ("Two point oh five billion.", "2.05 billion."),
+            // An alias inside the decimal is zero, so the suffix still folds.
+            ("Zero point oh five K.", "0.05K."),
+            ("Oh point oh five K.", "0.05K."),
+            ("Nought point nought five K.", "0.05K."),
+            ("Two point oh five K.", "2.05K."),
+            ("O point o five B.", "0.05B."),
+            ("Zero point zero five K.", "0.05K."),
+            ("Two point five oh K.", "2.50K."),
+            ("417 point nought seconds.", "417.0 seconds."),
+            ("417 point oh seconds.", "417.0 seconds."),
+            ("Four point nought seconds.", "4.0 seconds."),
+            ("Room four oh seven.", "Room four oh seven."),
             ("twenty five two point five liter.", "25 2.5 liter."),
             (
                 "arXiv twenty four oh one point oh one two three four.",
