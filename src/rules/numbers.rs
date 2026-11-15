@@ -583,7 +583,8 @@ fn apply_sign(
         || start >= 2
             && (tokens[start - 2].text == "-"
                 // Spoken plus-minus: "plus minus", "positive or negative".
-                || matches!(tokens[start - 2].lowercase.as_str(), "plus" | "positive")
+                // Any other sign word after "plus" applies ("5 plus -10").
+                || tokens[start - 2].lowercase == "plus" && tokens[start - 1].lowercase == "minus"
                 || start >= 3
                     && tokens[start - 2].lowercase == "or"
                     && matches!(tokens[start - 3].lowercase.as_str(), "plus" | "positive")
