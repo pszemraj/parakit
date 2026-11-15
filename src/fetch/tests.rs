@@ -9,7 +9,10 @@ use std::time::{Duration, Instant};
 #[test]
 fn optional_conversion_tools_use_only_path() {
     const MODE: &str = "PARAKIT_TOOL_LOOKUP_TEST";
+    const LOOKUP_PATH: &str = "PARAKIT_TOOL_LOOKUP_PATH";
     if let Ok(mode) = env::var(MODE) {
+        // Keep loader DLL paths until this isolated child has started.
+        env::set_var("PATH", env::var_os(LOOKUP_PATH).unwrap());
         let result = tool_path("convert-parakeet-to-gguf.py");
         if mode == "found" {
             assert_eq!(
@@ -36,7 +39,7 @@ fn optional_conversion_tools_use_only_path() {
             "fetch::tests::optional_conversion_tools_use_only_path",
         )
         .env(MODE, mode)
-        .env("PATH", path)
+        .env(LOOKUP_PATH, path)
         .output()
         .unwrap();
         assert!(output.status.success(), "{mode}: {output:?}");

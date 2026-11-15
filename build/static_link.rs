@@ -273,16 +273,20 @@ mod tests {
             false,
         )
         .unwrap();
-        let result = translate(&words, "libraries", Path::new("/native/build")).unwrap();
+        let build = Path::new("/native/build");
+        let result = translate(&words, "libraries", build).unwrap();
         assert_eq!(
             result,
             [
-                "rustc-link-search=native=/native/build/src",
-                "rustc-link-lib=static=crispasr",
-                "rustc-link-search=native=/native/build/models with spaces",
-                "rustc-link-lib=static=parakeet",
-                "rustc-link-lib=framework=Accelerate",
-                "rustc-link-lib=m",
+                format!("rustc-link-search=native={}", build.join("src").display()),
+                "rustc-link-lib=static=crispasr".into(),
+                format!(
+                    "rustc-link-search=native={}",
+                    build.join("models with spaces").display()
+                ),
+                "rustc-link-lib=static=parakeet".into(),
+                "rustc-link-lib=framework=Accelerate".into(),
+                "rustc-link-lib=m".into(),
             ]
         );
     }
@@ -305,6 +309,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn keeps_external_runtime_rpath_without_build_or_driver_stubs() {
         let words = vec!["-Wl,-rpath,/opt/cuda/lib:/opt/cuda/stubs:/native/build/lib".to_string()];
         assert_eq!(
