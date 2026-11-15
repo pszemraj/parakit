@@ -36,6 +36,8 @@ This is a typechecking-only fallback. `CRISPASR_LIB_DIR` requests dynamic linkag
 
 Use the actual output directory from the successful native build, including any custom target directory and profile. The Windows example uses Cargo 1.100's layout; earlier Cargo versions use `build\parakit-<hash>\out\lib`.
 
+On the tested CUDA 13.1/MSVC 14.44 toolset, the SDK's `cuda.lib` driver-loader object requests `LIBCMT` and emits `LNK4098` with `/MD` consumers. The same warning reproduces in a standalone driver-API program. Record this verified SDK warning exception with the validation evidence and complete the native CUDA inference checks.
+
 On macOS, raw `--all-features` also enables CUDA and can fail in CMake before Rust typechecking when the CUDA Toolkit is not installed. Use the same typechecking-only `CRISPASR_LIB_DIR` fallback to validate the Rust all-features surface; validate Metal with the native macOS build and `doctor`.
 
 ```bash
