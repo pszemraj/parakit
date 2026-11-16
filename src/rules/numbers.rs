@@ -374,19 +374,21 @@ pub(super) fn normalize<'a>(
                 .any(|p| p.kind == NumberKind::Year && p.start <= at && at < p.end)
     };
     let mut mixed = Vec::new();
-    let joined = |left: &NumberSpan, right: &NumberSpan| match &tokens[left.end..right.start] {
-        [] => {
-            left.ordinal == right.ordinal
-                && input[tokens[left.end - 1].end..tokens[right.start].start]
+    let joined = |left: &NumberSpan, right: &NumberSpan| {
+        left.ordinal == right.ordinal
+            && match &tokens[left.end..right.start] {
+                [] => input[tokens[left.end - 1].end..tokens[right.start].start]
                     .bytes()
-                    .all(|byte| matches!(byte, b' ' | b'\t'))
-        }
-        [joiner] => matches!(
-            joiner.lowercase.as_str(),
-            "," | "and" | "or" | "to" | "through"
-        ),
-        [comma, joiner] => comma.text == "," && matches!(joiner.lowercase.as_str(), "and" | "or"),
-        _ => false,
+                    .all(|byte| matches!(byte, b' ' | b'\t')),
+                [joiner] => matches!(
+                    joiner.lowercase.as_str(),
+                    "," | "and" | "or" | "to" | "through"
+                ),
+                [comma, joiner] => {
+                    comma.text == "," && matches!(joiner.lowercase.as_str(), "and" | "or")
+                }
+                _ => false,
+            }
     };
     let mut at = 0;
     while at < spans.len() {
@@ -406,10 +408,31 @@ pub(super) fn normalize<'a>(
         {
             end += 1;
         }
-        if end > at + 1
-            && spans[at..end]
-                .iter()
-                .any(|span| !span.literal && span.value < threshold)
+        let run = &spans[at..end];
+        // A lone comma can start a new clause ("day one, twenty people").
+        // Three members or an explicit conjunction establish a list.
+        let comma_pair = run.len() == 2
+            && matches!(&tokens[run[0].end..run[1].start], [comma] if comma.text == ",");
+        // An unscaled bound can share the later bound's scale. Rendering
+        // "five or six hundred" as "5 or 600" changes the possible value.
+        let shared_scale = run.windows(2).any(|pair| {
+            !pair[0].ordinal
+                && pair[0].end < pair[1].start
+                && scale(&tokens[pair[1].start].lowercase).is_none()
+                && pair[0].value < pair[1].value
+                && !tokens[pair[0].start..pair[0].end]
+                    .iter()
+                    .any(|t| scale(&t.lowercase).is_some())
+                && tokens[pair[1].start..pair[1].end]
+                    .iter()
+                    .any(|t| scale(&t.lowercase).is_some())
+        });
+        if run.len() > 1
+            && !comma_pair
+            && (shared_scale
+                || run
+                    .iter()
+                    .any(|span| !span.literal && span.value < threshold))
         {
             mixed.push(spans[at].start..spans[end - 1].end);
         }

@@ -21,46 +21,133 @@ pub(super) fn clock_times(
     tokens: &[NumberToken<'_>],
     spans: &[NumberSpan],
 ) -> Vec<Range<usize>> {
-    let mut previous_clock_end = None;
-    spans
-        .windows(2)
-        .enumerate()
-        .filter_map(|(index, pair)| {
-            let (hour, minute) = (&pair[0], &pair[1]);
-            if !integer(hour)
-                || !integer(minute)
-                || hour.value > 23.0
-                || minute.value > 59.0
-                || hour.end != minute.start
-                || index > 0 && spans[index - 1].end == hour.start && !spans[index - 1].ordinal
-                || spans
+    // Classify the whole connected expression before protecting it. A cue or
+    // meridiem can belong to either end, and an endpoint can be a whole hour.
+    let mut candidates = Vec::new();
+    let mut index = 0;
+    while index < spans.len() {
+        let hour = &spans[index];
+        if !integer(hour) || hour.literal || hour.value > 23.0 {
+            index += 1;
+            continue;
+        }
+        let minute = spans.get(index + 1).filter(|minute| {
+            integer(minute)
+                && !minute.literal
+                && minute.value <= 59.0
+                && hour.end == minute.start
+                && !(index > 0 && spans[index - 1].end == hour.start && !spans[index - 1].ordinal)
+                && !spans
                     .get(index + 2)
                     .is_some_and(|next| next.start == minute.end && !next.ordinal)
-                || !horizontal_gap(input, tokens[hour.end - 1].end, tokens[minute.start].start)
-            {
-                return None;
-            }
-            // Without a clock cue, nineteen thirty remains the year 1930.
-            let cue = hour.value <= 12.0
-                && hour.start > 0
-                && (matches!(
-                    tokens[hour.start - 1].lowercase.as_str(),
-                    "at" | "from" | "to" | "until" | "between"
-                ) || tokens[hour.start - 1].lowercase == "and"
-                    && previous_clock_end == Some(hour.start - 1))
-                && horizontal_gap(input, tokens[hour.start - 1].end, tokens[hour.start].start);
-            let am = hour.value <= 12.0
-                && tokens
-                    .get(minute.end)
-                    .is_some_and(|next| next.lowercase == "am");
-            if cue || am || meridiem_after(tokens, minute.end) {
-                previous_clock_end = Some(minute.end);
-                Some(hour.start..minute.end)
-            } else {
-                None
-            }
-        })
-        .collect()
+                && horizontal_gap(input, tokens[hour.end - 1].end, tokens[minute.start].start)
+        });
+        let end = minute.map_or(hour.end, |minute| minute.end);
+        let meridiem = meridiem_after(tokens, end)
+            || hour.value <= 12.0 && tokens.get(end).is_some_and(|t| t.lowercase == "am");
+        let cue = hour.value <= 12.0 && clock_cue(input, tokens, hour.start);
+        // Whole hours only participate as endpoints, not as counts before a
+        // noun ("at seven thirty and eight files").
+        if minute.is_some()
+            || hour.value <= 12.0
+                && (meridiem
+                    || tokens.get(end).is_none_or(|t| {
+                        matches!(
+                            t.lowercase.as_str(),
+                            "and"
+                                | "or"
+                                | "to"
+                                | "until"
+                                | "till"
+                                | "through"
+                                | "today"
+                                | "tomorrow"
+                                | "tonight"
+                                | "yesterday"
+                                | "on"
+                                | "in"
+                                | "at"
+                                | "for"
+                                | "every"
+                                | "each"
+                                | "this"
+                                | "next"
+                                | "last"
+                                | "daily"
+                                | "nightly"
+                                | "sharp"
+                                | "."
+                                | ","
+                                | "!"
+                                | "?"
+                                | ";"
+                        )
+                    }))
+        {
+            candidates.push((hour.start..end, cue || meridiem, minute.is_some()));
+        }
+        index += if minute.is_some() { 2 } else { 1 };
+    }
+    let mut protected = Vec::new();
+    let mut at = 0;
+    while at < candidates.len() {
+        let mut end = at + 1;
+        while end < candidates.len()
+            && clock_joiner(tokens, candidates[end - 1].0.end, candidates[end].0.start)
+        {
+            end += 1;
+        }
+        let run = &candidates[at..end];
+        if run.iter().any(|(_, cue, _)| *cue) && run.iter().any(|(_, _, pair)| *pair) {
+            protected.push(run[0].0.start..run[run.len() - 1].0.end);
+        }
+        at = end;
+    }
+    protected
+}
+
+fn clock_cue(input: &str, tokens: &[NumberToken<'_>], start: usize) -> bool {
+    if start == 0 || !horizontal_gap(input, tokens[start - 1].end, tokens[start].start) {
+        return false;
+    }
+    matches!(
+        tokens[start - 1].lowercase.as_str(),
+        "at" | "from"
+            | "to"
+            | "until"
+            | "between"
+            | "by"
+            | "before"
+            | "after"
+            | "around"
+            | "about"
+            | "till"
+            | "past"
+            | "since"
+    ) || start >= 2 && tokens[start - 2].lowercase == "it" && tokens[start - 1].lowercase == "is"
+        || start >= 3
+            && tokens[start - 3].lowercase == "it"
+            && matches!(tokens[start - 2].text, "'" | "’")
+            && tokens[start - 1].lowercase == "s"
+}
+
+fn clock_joiner(tokens: &[NumberToken<'_>], mut start: usize, end: usize) -> bool {
+    if tokens
+        .get(start)
+        .is_some_and(|t| matches!(t.lowercase.as_str(), "am" | "pm"))
+    {
+        start += 1;
+    } else if meridiem_after(tokens, start) {
+        start += 3;
+        if tokens.get(start).is_some_and(|t| t.text == ".") {
+            start += 1;
+        }
+    }
+    start + 1 == end
+        && matches!(
+            tokens[start].lowercase.as_str(),
+            "and" | "or" | "to" | "until" | "till" | "through"
+        )
 }
 
 /// Propose century-pair years independently of surrounding prose or thresholds.
@@ -87,7 +174,7 @@ pub(super) fn classify(
             let (century, tail) = (&pair[0], &pair[1]);
             if !integer(century)
                 || century.text.len() != 2
-                || !matches!(century.value as u32, 18..=20)
+                || !matches!(century.value as u32, 13..=20)
                 || !integer(tail)
                 || century.literal && tail.literal && century.end == tail.start
                 || index > 0

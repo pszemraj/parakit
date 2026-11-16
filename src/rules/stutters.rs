@@ -186,6 +186,18 @@ pub(super) fn compile_repetition_exceptions(entries: &[String]) -> Result<Vec<Re
 // Identical words can finish an object clause and supply its predicate label,
 // or act as both a verb and the Control modifier in a keyboard shortcut.
 fn distinct_grammatical_roles(prefix: &str, suffix: &str, word: &str) -> bool {
+    if word == "you" || word.starts_with("you'") || word.starts_with("you’") {
+        // A reporting verb can take an object followed by a subject clause:
+        // "I told you you were right" and "I told you you're right".
+        // Match only the first pair so additional subject restarts still collapse.
+        let reporting = regex_static!(
+            r"(?i)\b(?:tell(?:s|ing)?|told|warn(?:s|ed|ing)?|remind(?:s|ed|ing)?|assur(?:e|es|ed|ing)|inform(?:s|ed|ing)?|teach(?:es|ing)?|taught|show(?:s|ed|ing|n)?|convinc(?:e|es|ed|ing)|promis(?:e|es|ed|ing))[ \t]+you$",
+            "object-subject pronoun repetition regex must compile"
+        );
+        if reporting.is_match(prefix) {
+            return true;
+        }
+    }
     let naming = regex_static!(
         concat!(
             r"(?i)\b(?:call(?:s|ed|ing)?|label(?:s|ed|led|ing|ling)?|nam(?:e|es|ed|ing)|consider(?:s|ed|ing)?)\b[^.!?;\n]*",

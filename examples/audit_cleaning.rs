@@ -34,7 +34,7 @@ struct Cli {
     #[arg(long)]
     keep_trailing_period: bool,
 
-    /// Minimum spoken cardinal or ordinal value rendered as digits (default 4). An adjacent run containing any value below it retains its wording; otherwise its counts render separately. Pass 0 to render every eligible value. Protected quantities retain their wording.
+    /// Minimum eligible cardinal or ordinal value rendered as digits (default 4). A connected list or range containing any value below it retains its wording. Pass 0 to render every eligible value; protected quantities, shared-scale bounds, and clock expressions stay worded.
     #[arg(long, value_name = "VALUE")]
     number_threshold: Option<f64>,
 

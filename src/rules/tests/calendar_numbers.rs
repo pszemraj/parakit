@@ -59,7 +59,17 @@ fn century_pairs_form_years_without_context_or_threshold_bypasses() {
                 ),
                 ("Q4 twenty twenty five.", "Q4 2025."),
                 ("Twenty uh twenty layers.", "2020 layers."),
-                ("The year seventeen seventy-six.", "The year 17 76."),
+                ("The year seventeen seventy-six.", "The year 1776."),
+                (
+                    "Columbus sailed in fourteen ninety two.",
+                    "Columbus sailed in 1492.",
+                ),
+                ("In thirteen oh five.", "In 1305."),
+                ("In fifteen sixty four.", "In 1564."),
+                ("In sixteen sixty six.", "In 1666."),
+                ("At nineteen thirty.", "At 1930."),
+                ("Use 14 92.", "Use 14 92."),
+                ("Use twelve ninety two.", "Use 12 92."),
                 ("The year 19 06.", "The year 19 06."),
                 ("The year 020 26.", "The year 020 26."),
                 ("The year 20 026.", "The year 20 026."),
@@ -127,6 +137,32 @@ fn following_time_and_measurement_units_block_year_joining() {
                 "Seven thirty PM.",
                 "Seven thirty Am.",
                 "Seven thirty aM.",
+                "By seven thirty.",
+                "Before seven thirty.",
+                "After seven thirty.",
+                "Around nine fifteen.",
+                "About nine fifteen.",
+                "Till nine fifteen.",
+                "Past nine fifteen.",
+                "Since nine fifteen.",
+                "It's ten forty five.",
+                "It is ten forty five.",
+                "Starting at nine thirty or ten thirty.",
+                "From nine to ten thirty.",
+                "Meet at seven thirty or eight.",
+                "Between nine and ten thirty.",
+                "From nine or ten thirty.",
+                "Nine thirty or ten thirty pm.",
+                "Nine or ten thirty pm.",
+                "From nine thirty pm to ten.",
+                "From nine thirty p.m. to ten.",
+                "From nine through ten thirty or eleven.",
+                "From nine thirty till ten.",
+                "From nine till ten thirty.",
+                "From nine thirty to ten tomorrow.",
+                "From nine thirty to ten on Monday.",
+                "From nine thirty to ten every day.",
+                "Meet at seven thirty or eight tonight.",
             ] {
                 assert_eq!(
                     cleaner.clean_text(input),
@@ -134,7 +170,55 @@ fn following_time_and_measurement_units_block_year_joining() {
                     "{profile:?}/{threshold}: {input}"
                 );
             }
+            for (input, expected) in [
+                (
+                    "At 7 thirty pm.",
+                    if threshold <= 30.0 {
+                        "At 7 30 pm."
+                    } else {
+                        "At 7 thirty pm."
+                    },
+                ),
+                (
+                    "At seven 30 pm.",
+                    if threshold <= 7.0 {
+                        "At 7 30 pm."
+                    } else {
+                        "At seven 30 pm."
+                    },
+                ),
+                ("At 7 30 pm.", "At 7 30 pm."),
+            ] {
+                assert_eq!(
+                    cleaner.clean_text(input),
+                    expected,
+                    "{profile:?}/{threshold}: {input}"
+                );
+            }
         }
+    }
+    for (input, expected) in [
+        ("At 7 thirty pm.", "At 7 30 pm."),
+        ("At seven 30 pm.", "At 7 30 pm."),
+        ("At 7 30 pm.", "At 7 30 pm."),
+        ("By 7 thirty.", "By 7 30."),
+        ("Use five thirty files.", "Use 5 30 files."),
+        ("Use nine or ten thirty files.", "Use 9 or 10 30 files."),
+        (
+            "Meet at seven thirty. Eight files.",
+            "Meet at seven thirty. 8 files.",
+        ),
+        (
+            "Meet at seven thirty, eight files.",
+            "Meet at seven thirty, 8 files.",
+        ),
+        (
+            "At seven thirty and eight files.",
+            "At seven thirty and 8 files.",
+        ),
+        ("In fourteen thirty minutes.", "In 14 30 minutes."),
+    ] {
+        assert_eq!(cleaner.clean_text(input), expected, "{input}");
     }
     for unit in "ms ns gb mb kb tb gib mib kib tib hz khz mhz ghz kg km cm mm fps rpm mph bpm mah kw mw gw px db"
         .split_whitespace()

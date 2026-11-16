@@ -347,7 +347,8 @@ fn and_after_a_count_starts_another_number() {
             "Between two hundred and fifty and three hundred and fifty dollars.",
             "Between 250 and 350 dollars.",
         ),
-        ("Use fifty and two hundred.", "Use 50 and 200."),
+        // The scale may apply to both bounds; retain that ambiguity.
+        ("Use fifty and two hundred.", "Use fifty and two hundred."),
         (
             "Use one hundred and twenty and five hundred.",
             "Use 120 and 500.",

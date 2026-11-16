@@ -378,6 +378,94 @@ fn adjacent_numeric_runs_convert_together_at_the_configured_threshold() {
         ("Meet at five thirty.", ["Meet at five thirty."; 4]),
         ("Meet at one thirty.", ["Meet at one thirty."; 4]),
         (
+            "It costs four or five thousand dollars.",
+            ["It costs four or five thousand dollars."; 4],
+        ),
+        (
+            "Five or six hundred people.",
+            ["Five or six hundred people."; 4],
+        ),
+        (
+            "Between five and six hundred.",
+            ["Between five and six hundred."; 4],
+        ),
+        ("Three or four hundred.", ["Three or four hundred."; 4]),
+        ("Five to six hundred.", ["Five to six hundred."; 4]),
+        (
+            "Five through six hundred.",
+            ["Five through six hundred."; 4],
+        ),
+        (
+            "Five, six, or seven hundred.",
+            ["Five, six, or seven hundred."; 4],
+        ),
+        (
+            "Five or six million parameters.",
+            ["Five or six million parameters."; 4],
+        ),
+        ("Five hundred or six hundred.", ["500 or 600."; 4]),
+        (
+            "Use 5 or six hundred people.",
+            ["Use 5 or six hundred people."; 4],
+        ),
+        (
+            "Use 5 or 600 million parameters.",
+            ["Use 5 or 600M parameters."; 4],
+        ),
+        (
+            "Five files or six hundred rows.",
+            [
+                "5 files or 600 rows.",
+                "5 files or 600 rows.",
+                "5 files or 600 rows.",
+                "Five files or 600 rows.",
+            ],
+        ),
+        (
+            "On day one, twenty people came.",
+            [
+                "On day 1, 20 people came.",
+                "On day one, 20 people came.",
+                "On day one, 20 people came.",
+                "On day one, 20 people came.",
+            ],
+        ),
+        (
+            "First, twenty people signed up.",
+            [
+                "1st, 20 people signed up.",
+                "First, 20 people signed up.",
+                "First, 20 people signed up.",
+                "First, 20 people signed up.",
+            ],
+        ),
+        (
+            "Second, fifty percent of users churned.",
+            [
+                "2nd, 50 percent of users churned.",
+                "Second, 50 percent of users churned.",
+                "Second, 50 percent of users churned.",
+                "Second, 50 percent of users churned.",
+            ],
+        ),
+        (
+            "Step one, five minutes of stretching.",
+            [
+                "Step 1, 5 minutes of stretching.",
+                "Step one, 5 minutes of stretching.",
+                "Step one, 5 minutes of stretching.",
+                "Step one, five minutes of stretching.",
+            ],
+        ),
+        (
+            "Three, four hundred.",
+            ["3, 400.", "Three, 400.", "Three, 400.", "Three, 400."],
+        ),
+        (
+            "Three, four, five hundred.",
+            ["Three, four, five hundred."; 4],
+        ),
+        (
             "Meet at five six seven.",
             [
                 "Meet at 5 6 7.",
@@ -489,8 +577,8 @@ fn cardinal_and_ordinal_thresholds_apply_to_lists_and_multi_digit_values() {
     for profile in [CleaningProfile::Safe, CleaningProfile::Aggressive] {
         for (threshold, expected) in [
             (0.0, "1, 2, 3, 4, 5th, 6th."),
-            (4.0, "One, two, three, four, fifth, sixth."),
-            (5.0, "One, two, three, four, fifth, sixth."),
+            (4.0, "One, two, three, four, 5th, 6th."),
+            (5.0, "One, two, three, four, 5th, 6th."),
             (10.0, "One, two, three, four, fifth, sixth."),
         ] {
             let cleaner = build_cleaner(false, profile, false, Some(threshold), &[], &[], &[])
