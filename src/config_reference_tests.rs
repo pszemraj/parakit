@@ -6,6 +6,8 @@
 //! unknown-key error lists the names a table accepts. The comparisons fail in
 //! both directions, so a key added to or removed from the schema cannot go
 //! undocumented, and a documented key cannot outlive its removal.
+//! Descriptions may live in shared section comments; tests enforce schema and
+//! effective values rather than requiring repeated prose above each key.
 
 use super::*;
 use clap::ValueEnum;

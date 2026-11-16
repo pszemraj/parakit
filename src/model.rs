@@ -530,6 +530,48 @@ mod preset_tests {
     }
 
     #[test]
+    #[ignore = "requires access to the public Hugging Face Hub"]
+    fn preset_artifacts_and_source_revisions_exist_on_hub() {
+        let client = reqwest::blocking::Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+            .unwrap();
+        for &preset in ModelPreset::value_variants() {
+            for (repo, revision, filename) in
+                std::iter::once((preset.repo(), preset.revision(), Some(preset.filename()))).chain(
+                    preset
+                        .source_repo()
+                        .zip(preset.source_revision())
+                        .map(|(repo, revision)| (repo, revision, None)),
+                )
+            {
+                let url = format!("{HF_DEFAULT_ENDPOINT}/api/models/{repo}/revision/{revision}");
+                let response = client
+                    .get(&url)
+                    .send()
+                    .and_then(reqwest::blocking::Response::error_for_status)
+                    .unwrap_or_else(|error| panic!("{}: {url}: {error}", preset.id()));
+                let metadata: serde_json::Value =
+                    serde_json::from_str(&response.text().unwrap()).unwrap();
+                if revision != "main" {
+                    assert_eq!(metadata["sha"].as_str(), Some(revision), "{url}");
+                }
+                if let Some(filename) = filename {
+                    assert!(
+                        metadata["siblings"]
+                            .as_array()
+                            .expect("Hub model metadata lists its files")
+                            .iter()
+                            .any(|file| file["rfilename"].as_str() == Some(filename)),
+                        "{}: {filename} is absent from {url}",
+                        preset.id()
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn selection_uses_cli_then_config_then_ultra_default() {
         let cli_path = Path::new("cli.gguf");
         let config_path = Path::new("config.gguf");

@@ -16,7 +16,7 @@
 # CLI model selection replaces configured selection. Configured conflicts still fail load.
 # Config: daemon.model conflicts with daemon.model_preset and daemon.quantize. CLI: --model conflicts with --model-preset and --quantize.
 # Daemon keys take matching CLI overrides except transcript_history. Global diagnostics are described under verbose.
-# doctor also accepts --paste-mode, --insertion-backend, and --hotkey-backend for that check only.
+# doctor also accepts --paste-mode and, on Linux, --insertion-backend and --hotkey-backend for that check only.
 
 [daemon]
 # path string (optional). Local GGUF, disabling automatic acquisition.

@@ -18,7 +18,9 @@ cargo check --workspace --all-targets --all-features
 
 The all-features check can request accelerator toolchains that the current host does not have. Follow [GPU Feature Validation](#gpu-feature-validation) for the host-specific fallback, then run the native GPU build and runtime checks on each supported platform.
 
-`tests/native_correctness_build.rs` verifies bundled source-patch application and the CMake hook that compiles the generated copies. It does not run live Qwen inference; validate that behavior with the [Qwen comparisons](#qwen-and-moondream-comparisons) and [native acceptance cases](model-validation.md#qwen-options-long-input-and-reload).
+Run `cargo test --lib preset_artifacts_and_source_revisions_exist_on_hub -- --ignored` when changing preset metadata. This opt-in network test checks every hosted Q8_0 filename and original checkpoint revision against the public Hugging Face Hub without downloading model weights.
+
+`tests/native_correctness_build.rs` verifies bundled source-patch application, the CMake hook that compiles the generated copies, and model-free native decoder fault and correctness checks. Readiness option restoration on success and failure is covered by the Rust inference tests. These tests do not inject faults into a loaded Qwen model; validate live inference with the [Qwen comparisons](#qwen-and-moondream-comparisons) and [native acceptance cases](model-validation.md#qwen-options-long-input-and-reload).
 
 ## GPU Feature Validation
 
@@ -43,7 +45,7 @@ On the tested CUDA 13.1/MSVC 14.44 toolset, the SDK's `cuda.lib` driver-loader o
 On macOS, raw `--all-features` also enables CUDA and can fail in CMake before Rust typechecking when the CUDA Toolkit is not installed. Use the same typechecking-only `CRISPASR_LIB_DIR` fallback to validate the Rust all-features surface; validate Metal with the native macOS build and `doctor`.
 
 ```bash
-CRISPASR_LIB_DIR="$PWD/target/debug/build/parakit-<hash>/out/lib" \
+CRISPASR_LIB_DIR="$PWD/target/debug/build/parakit/<hash>/out/lib" \
   cargo check --workspace --all-targets --all-features
 ```
 
