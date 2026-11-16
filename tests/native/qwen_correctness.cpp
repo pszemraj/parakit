@@ -265,12 +265,15 @@ int main(int argc, char** argv) {
     std::vector<float> long_pcm;
     for (int i = 0; i < 3; ++i)
         long_pcm.insert(long_pcm.end(), pcm.begin(), pcm.end());
+    const auto long_baseline = result_text(
+        crispasr_session_transcribe(session, long_pcm.data(), static_cast<int>(long_pcm.size())));
     parakit_test::reset(parakit_test::Fault::LaterChunk);
     auto* failed = crispasr_session_transcribe(session, long_pcm.data(), static_cast<int>(long_pcm.size()));
     assert(parakit_test::injected && !failed);
     assert(parakit_test::chunks == 2 && parakit_test::completed_chunks == 1);
     parakit_test::reset(parakit_test::Fault::None);
-    result_text(crispasr_session_transcribe(session, long_pcm.data(), static_cast<int>(long_pcm.size())));
+    assert(result_text(crispasr_session_transcribe(session, long_pcm.data(), static_cast<int>(long_pcm.size()))) ==
+           long_baseline);
     assert(parakit_test::chunks >= 2 && parakit_test::completed_chunks == parakit_test::chunks);
     assert(result_text(transcribe()) == baseline);
     crispasr_session_close(session);
