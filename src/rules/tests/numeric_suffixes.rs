@@ -342,3 +342,36 @@ fn version_components_use_text2num_without_a_custom_number_parser() {
         ],
     );
 }
+
+#[test]
+fn written_coefficients_keep_suffix_compaction_in_connected_ranges() {
+    use super::super::numbers::NumberKind;
+
+    for threshold in [0.0, 4.0, 10.0, 100.0] {
+        for enabled in [
+            &[NumberKind::Size][..],
+            &[NumberKind::Spoken, NumberKind::Size][..],
+        ] {
+            for (input, expected) in [
+                ("Use 10 or 20 K.", "Use 10 or 20K."),
+                ("Use 20 to 10 M.", "Use 20 to 10M."),
+                (
+                    "Use 5 or 600 million parameters.",
+                    "Use 5 or 600M parameters.",
+                ),
+                ("Use 5 hundred K.", "Use 500K."),
+                ("Use 2.50 M.", "Use 2.50M."),
+                (
+                    "Use 9007199254740993 hundred K.",
+                    "Use 900719925474099300K.",
+                ),
+            ] {
+                assert_eq!(
+                    numeric_test(input, threshold, enabled).text,
+                    expected,
+                    "{threshold}: {input}"
+                );
+            }
+        }
+    }
+}

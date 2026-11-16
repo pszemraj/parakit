@@ -25,6 +25,7 @@
 //! * [`numbers`] - shared numeric tokenization, classification, and rendering.
 //! * [`number_guards`] - protected quantities and ambiguous numeric contexts.
 //! * [`number_labels`] - century-pair calendar years.
+//! * [`number_quantities`] - quantity extents, rendering, and connected bounds.
 //! * [`number_versions`] - decimals and dotted versions.
 //! * [`number_words`] - shared number-word and unit vocabulary.
 //! * [`stutters`] - contextual repeated-word collapsing and exceptions.
@@ -57,6 +58,7 @@ mod defaults;
 mod engine;
 mod number_guards;
 mod number_labels;
+mod number_quantities;
 mod number_versions;
 mod number_words;
 mod numbers;
@@ -71,7 +73,7 @@ pub use user::{RulePosition, UserRule};
 
 /// Schema/behavior version recorded in transcription logs.
 /// Keep revisions distinct even when their package version is unchanged.
-pub const CLEANER_VERSION: u32 = 45;
+pub const CLEANER_VERSION: u32 = 46;
 
 /// Default minimum spoken cardinal or ordinal converted to digits when
 /// `cleaning.number_threshold` is left unset.

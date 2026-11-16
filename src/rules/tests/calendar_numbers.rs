@@ -118,7 +118,7 @@ fn following_time_and_measurement_units_block_year_joining() {
         assert_eq!(cleaner.clean_text(input), expected, "{input}");
     }
     for profile in [CleaningProfile::Safe, CleaningProfile::Aggressive] {
-        for threshold in [0.0, 4.0, 100.0] {
+        for threshold in [0.0, 4.0, 10.0, 100.0] {
             let cleaner = build_cleaner_for_test_with_threshold(
                 profile,
                 false,
@@ -163,6 +163,18 @@ fn following_time_and_measurement_units_block_year_joining() {
                 "From nine thirty to ten on Monday.",
                 "From nine thirty to ten every day.",
                 "Meet at seven thirty or eight tonight.",
+                "At seven thirty, eight thirty, and nine thirty.",
+                "At seven thirty, eight thirty, nine thirty.",
+                "Seven thirty, eight thirty, or nine thirty pm.",
+                "Seven thirty a.m., eight thirty, and nine thirty.",
+                "Meet at seven thirty or eight o'clock.",
+                "Meet at seven thirty or eight o’clock.",
+                "From seven o'clock to eight thirty.",
+                "Seven thirty or eight o'clock.",
+                "Meet at seven thirty hours.",
+                "At seven thirty hours on Monday.",
+                "At seven thirty hours or eight thirty hours.",
+                "At seven thirty hours, eight thirty hours, and nine thirty hours.",
             ] {
                 assert_eq!(
                     cleaner.clean_text(input),
@@ -188,6 +200,22 @@ fn following_time_and_measurement_units_block_year_joining() {
                     },
                 ),
                 ("At 7 30 pm.", "At 7 30 pm."),
+                (
+                    "I bought about five thirty-dollar gift cards.",
+                    if threshold <= 5.0 {
+                        "I bought about 5 30-dollar gift cards."
+                    } else {
+                        "I bought about five thirty-dollar gift cards."
+                    },
+                ),
+                (
+                    "I ordered around five thirty kilogram bags.",
+                    if threshold <= 5.0 {
+                        "I ordered around 5 30 kilogram bags."
+                    } else {
+                        "I ordered around five thirty kilogram bags."
+                    },
+                ),
             ] {
                 assert_eq!(
                     cleaner.clean_text(input),
@@ -203,6 +231,7 @@ fn following_time_and_measurement_units_block_year_joining() {
         ("At 7 30 pm.", "At 7 30 pm."),
         ("By 7 thirty.", "By 7 30."),
         ("Use five thirty files.", "Use 5 30 files."),
+        ("Use five thirty hours.", "Use 5 30 hours."),
         ("Use nine or ten thirty files.", "Use 9 or 10 30 files."),
         (
             "Meet at seven thirty. Eight files.",
@@ -217,6 +246,10 @@ fn following_time_and_measurement_units_block_year_joining() {
             "At seven thirty and 8 files.",
         ),
         ("In fourteen thirty minutes.", "In 14 30 minutes."),
+        (
+            "At seven thirty, nine people arrived.",
+            "At seven thirty, 9 people arrived.",
+        ),
     ] {
         assert_eq!(cleaner.clean_text(input), expected, "{input}");
     }

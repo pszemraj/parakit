@@ -441,3 +441,73 @@ fn an_earlier_spoken_decimal_leaves_later_numbers_unchanged() {
         }
     }
 }
+
+#[test]
+fn shared_scales_use_complete_quantities_in_both_bound_orders() {
+    for profile in [CleaningProfile::Safe, CleaningProfile::Aggressive] {
+        for threshold in [0.0, 4.0, 10.0, 100.0] {
+            let cleaner = build_cleaner_for_test_with_threshold(
+                profile,
+                false,
+                Some(threshold),
+                &HashSet::new(),
+                &[],
+            );
+            for scale in [
+                "K", "M", "B", "hundred", "thousand", "million", "billion", "trillion",
+            ] {
+                for (left, right) in [("fifty", "sixty"), ("sixty", "fifty"), ("5", "six")] {
+                    for joiner in ["or", "to", "through", "and"] {
+                        let input = format!("Use {left} {joiner} {right} {scale} dollars.");
+                        assert_eq!(
+                            cleaner.clean_text(&input),
+                            input,
+                            "{profile:?}/{threshold}: {input}"
+                        );
+                    }
+                }
+            }
+            for input in [
+                "Use fifty, sixty, and seventy K dollars.",
+                "Use fifty, sixty, and seventy trillion dollars.",
+                "Use 5 or six hundred K dollars.",
+                "Use five or 600 million parameters.",
+            ] {
+                assert_eq!(
+                    cleaner.clean_text(input),
+                    input,
+                    "{profile:?}/{threshold}: {input}"
+                );
+            }
+            for (input, digits, minimum) in [
+                (
+                    "Use fifty K or sixty M dollars.",
+                    "Use 50K or 60M dollars.",
+                    50.0,
+                ),
+                (
+                    "Use sixty M to fifty K dollars.",
+                    "Use 60M to 50K dollars.",
+                    50.0,
+                ),
+                (
+                    "Use fifty thousand or sixty thousand dollars.",
+                    "Use 50000 or 60000 dollars.",
+                    50_000.0,
+                ),
+                (
+                    "Use fifty files or sixty K dollars.",
+                    "Use 50 files or 60K dollars.",
+                    50.0,
+                ),
+                ("Use fifty, sixty K dollars.", "Use 50, 60K dollars.", 50.0),
+            ] {
+                assert_eq!(
+                    cleaner.clean_text(input),
+                    if threshold <= minimum { digits } else { input },
+                    "{profile:?}/{threshold}: {input}",
+                );
+            }
+        }
+    }
+}

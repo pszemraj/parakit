@@ -1,6 +1,6 @@
 //! Parse original numeric spans, classify them, then render without re-reading output.
 
-use super::number_words::{number_word, scale, zero_alias};
+use super::number_words::{horizontal_gap, number_word, scale, zero_alias};
 use std::borrow::Cow;
 use std::ops::Range;
 use text2num::{find_numbers, Language, Token};
@@ -173,271 +173,20 @@ pub(super) fn normalize<'a>(
             .any(|r| r.start < span.end && span.start < r.end)
     });
     quantities.sort_by_key(|span| span.start);
-    for span in &quantities {
-        let words = &tokens[span.start..span.end];
-        let bare_scale = scale(&words[0].lowercase).is_some();
-        // A bare scale right after a cardinal belongs to that quantity
-        // ("5 hundred thousand") and is not rendered as its own number.
-        let tail = bare_scale
-            && quantities
-                .iter()
-                .any(|previous| previous.end == span.start && !previous.ordinal);
-        let article = span.start > 0 && tokens[span.start - 1].lowercase == "a";
-        let mut start = span.start;
-        let mut end = span.end;
-        let mut text = span.text.clone();
-        let mut value = span.value;
-        let mut scaled = false;
-        while !span.ordinal
-            && tokens
-                .get(end)
-                .is_some_and(|token| scale(&token.lowercase).is_some())
-        {
-            let magnitude = &tokens[end].lowercase;
-            text.push(' ');
-            text.push_str(magnitude);
-            value *= scale(magnitude).unwrap();
-            end += 1;
-            scaled = true;
-        }
-        let scales: Vec<_> = words
-            .iter()
-            .filter_map(|word| scale(&word.lowercase).map(|value| (word.lowercase.as_str(), value)))
-            .collect();
-        let large: Vec<_> = scales
-            .iter()
-            .filter(|(name, _)| matches!(*name, "million" | "billion"))
-            .collect();
-        if !scaled
-            && large.len() == 1
-            && words
-                .last()
-                .is_some_and(|word| matches!(word.lowercase.as_str(), "million" | "billion"))
-            && (!bare_scale || end > span.start + 1)
-        {
-            text = format!("{} {}", span.value / large[0].1, large[0].0);
-        }
-        let eligible = !span.literal
-            && !tail
-            && !words.iter().any(|word| word.lowercase == "point")
-            && (!bare_scale || end > span.start + 1)
-            && span.value >= threshold;
-        let rendered = span.literal || eligible && enabled.contains(&NumberKind::Spoken);
-        // A cardinal takes its article as the coefficient ("a thousand five
-        // hundred"); an ordinal keeps it as a determiner ("a 101st time").
-        if eligible
-            && article
-            && bare_scale
-            && !span.ordinal
-            && tokens
-                .get(end)
-                .is_none_or(|token| !matches!(token.lowercase.as_str(), "second" | "seconds"))
-        {
-            start -= 1;
-        }
-        // The later bound's own scale words sit between it and "parameters".
-        // A trillion bound keeps its wording, so its range stays as spoken.
-        let parameter_range = quantities.iter().any(|next| {
-            let scales = tokens[next.end..]
-                .iter()
-                .take_while(|token| {
-                    scale(&token.lowercase).is_some() && token.lowercase != "trillion"
-                })
-                .count();
-            next.start > end
-                && tokens.get(next.end + scales).is_some_and(|token| {
-                    matches!(token.lowercase.as_str(), "parameter" | "parameters")
-                })
-                && tokens[end..next.start].iter().all(|token| {
-                    matches!(
-                        token.lowercase.as_str(),
-                        "up" | "to" | "through" | "and" | "maybe" | "about" | "roughly"
-                    )
-                })
-        });
-        if rendered
-            && !span.ordinal
-            && !tokens[span.start..end]
-                .iter()
-                .any(|token| token.lowercase == "trillion")
-            && !(span.literal
-                && tokens
-                    .get(span.end)
-                    .is_some_and(|token| token.lowercase == "hundred"))
-            && (parameter_range
-                || tokens.get(end).is_some_and(|token| {
-                    matches!(token.lowercase.as_str(), "parameter" | "parameters")
-                }))
-        {
-            // A decimal coefficient keeps its stated precision and takes its
-            // one scale's suffix, as before an explicit suffix: 1.55B, not 1550M.
-            let stated = SIZE_SUFFIXES
-                .iter()
-                .find(|(magnitude, _)| {
-                    span.text.contains('.')
-                        && end == span.end + 1
-                        && scale(&tokens[span.end].lowercase) == Some(*magnitude)
-                })
-                .and_then(|&(magnitude, suffix)| {
-                    size_suffix_coefficient(span, &tokens, end, magnitude as u128)
-                        .map(|coefficient| format!("{coefficient}{suffix}"))
-                });
-            if let Some(compact) = stated.or_else(|| compact_size(value)) {
-                proposals.push(Replacement {
-                    start,
-                    end,
-                    text: compact,
-                    kind: NumberKind::Size,
-                });
-            }
-        }
-        if tokens
-            .get(end)
-            .is_some_and(|token| matches!(token.text, "K" | "M" | "B"))
-            && !span.ordinal
-            && !tail
-            && (rendered
-                || bare_scale && span.value >= threshold && enabled.contains(&NumberKind::Spoken))
-        {
-            let suffix = tokens[end].text;
-            let suffix_scale = match suffix {
-                "K" => 1_000,
-                "M" => 1_000_000,
-                "B" => 1_000_000_000,
-                _ => unreachable!("size suffix checked above"),
-            };
-            if let Some(coefficient) = size_suffix_coefficient(span, &tokens, end, suffix_scale) {
-                proposals.push(Replacement {
-                    start: span.start - usize::from(article && bare_scale),
-                    end: end + 1,
-                    text: format!("{coefficient}{suffix}"),
-                    kind: NumberKind::Size,
-                });
-            }
-        }
-        if rendered
-            && identifier_stem(input, &tokens, span.start)
-            && !span.ordinal
-            && !quantities.iter().any(|next| {
-                next.start == span.end
-                    && !next.ordinal
-                    && !proposals.iter().any(|proposal| {
-                        enabled.contains(&NumberKind::Year)
-                            && proposal.kind == NumberKind::Year
-                            && proposal.start == next.start
-                    })
-            })
-        {
-            let stem = &tokens[span.start - 1];
-            if span
-                .text
-                .bytes()
-                .all(|byte| byte.is_ascii_digit() || byte == b'.')
-            {
-                proposals.push(Replacement {
-                    start: span.start - 1,
-                    end: span.end,
-                    text: format!("{}{}", stem.text, span.text),
-                    kind: NumberKind::Identifier,
-                });
-            }
-        }
-        if eligible
-            || span.literal
-                && span.start > 0
-                && matches!(
-                    tokens[span.start - 1].lowercase.as_str(),
-                    "minus" | "negative"
-                )
-        {
-            proposals.push(Replacement {
-                start,
-                end,
-                text,
-                kind: NumberKind::Spoken,
-            });
-        }
-    }
-    // A low spoken member keeps a connected list or range worded as a whole.
-    // A decimal/version or a year remains its own explicitly classified type,
-    // including fraction digits parsed as separate counts ("2.50K").
+    let mut mixed = super::number_quantities::classify(
+        input,
+        &tokens,
+        &quantities,
+        threshold,
+        enabled,
+        &mut proposals,
+    );
     let in_version = |at: usize| {
         enabled.contains(&NumberKind::Version)
             && proposals
                 .iter()
                 .any(|p| p.kind == NumberKind::Version && p.start < at && at < p.end)
     };
-    let in_year = |at: usize| {
-        enabled.contains(&NumberKind::Year)
-            && proposals
-                .iter()
-                .any(|p| p.kind == NumberKind::Year && p.start <= at && at < p.end)
-    };
-    let mut mixed = Vec::new();
-    let joined = |left: &NumberSpan, right: &NumberSpan| {
-        left.ordinal == right.ordinal
-            && match &tokens[left.end..right.start] {
-                [] => input[tokens[left.end - 1].end..tokens[right.start].start]
-                    .bytes()
-                    .all(|byte| matches!(byte, b' ' | b'\t')),
-                [joiner] => matches!(
-                    joiner.lowercase.as_str(),
-                    "," | "and" | "or" | "to" | "through"
-                ),
-                [comma, joiner] => {
-                    comma.text == "," && matches!(joiner.lowercase.as_str(), "and" | "or")
-                }
-                _ => false,
-            }
-    };
-    let mut at = 0;
-    while at < spans.len() {
-        let mut end = at + 1;
-        while end < spans.len()
-            && joined(&spans[end - 1], &spans[end])
-            && !tokens[spans[end - 1].start..spans[end - 1].end]
-                .iter()
-                .any(|t| t.lowercase == "point")
-            && !tokens[spans[end].start..spans[end].end]
-                .iter()
-                .any(|t| t.lowercase == "point")
-            && !in_version(spans[end - 1].start)
-            && !in_version(spans[end].start)
-            && !in_year(spans[end - 1].start)
-            && !in_year(spans[end].start)
-        {
-            end += 1;
-        }
-        let run = &spans[at..end];
-        // A lone comma can start a new clause ("day one, twenty people").
-        // Three members or an explicit conjunction establish a list.
-        let comma_pair = run.len() == 2
-            && matches!(&tokens[run[0].end..run[1].start], [comma] if comma.text == ",");
-        // An unscaled bound can share the later bound's scale. Rendering
-        // "five or six hundred" as "5 or 600" changes the possible value.
-        let shared_scale = run.windows(2).any(|pair| {
-            !pair[0].ordinal
-                && pair[0].end < pair[1].start
-                && scale(&tokens[pair[1].start].lowercase).is_none()
-                && pair[0].value < pair[1].value
-                && !tokens[pair[0].start..pair[0].end]
-                    .iter()
-                    .any(|t| scale(&t.lowercase).is_some())
-                && tokens[pair[1].start..pair[1].end]
-                    .iter()
-                    .any(|t| scale(&t.lowercase).is_some())
-        });
-        if run.len() > 1
-            && !comma_pair
-            && (shared_scale
-                || run
-                    .iter()
-                    .any(|span| !span.literal && span.value < threshold))
-        {
-            mixed.push(spans[at].start..spans[end - 1].end);
-        }
-        at = end;
-    }
     // Unknown zero aliases stay as a complete original run. Only an explicit
     // version or a recognized century pair may interpret the alias as zero;
     // an alias inside an enabled version is already zero ("2.05K").
@@ -656,9 +405,7 @@ fn apply_sign(
                     && tokens[start - 2].lowercase == "or"
                     && matches!(tokens[start - 3].lowercase.as_str(), "plus" | "positive")
                 || spans.iter().any(|span| span.end == start - 1))
-        || !input[tokens[start - 1].end..tokens[start].start]
-            .bytes()
-            .all(|byte| matches!(byte, b' ' | b'\t'))
+        || !horizontal_gap(input, tokens[start - 1].end, tokens[start].start)
     {
         return;
     }
@@ -684,61 +431,8 @@ pub(super) fn identifier_stem(input: &str, tokens: &[NumberToken<'_>], start: us
                 && stem.text.bytes().all(|byte| byte.is_ascii_uppercase())
                 && !matches!(stem.text, "A" | "I"))
             && stem.end <= tokens[start].start
-            && input[stem.end..tokens[start].start]
-                .bytes()
-                .all(|byte| matches!(byte, b' ' | b'\t'))
+            && horizontal_gap(input, stem.end, tokens[start].start)
     }
-}
-
-fn size_suffix_coefficient(
-    span: &NumberSpan,
-    tokens: &[NumberToken<'_>],
-    end: usize,
-    suffix_scale: u128,
-) -> Option<String> {
-    let final_scale = scale(&tokens[end - 1].lowercase);
-    let repeated = final_scale == Some(suffix_scale as f64);
-    // Without a final scale the rendered number is complete: scales earlier
-    // in it ("one thousand twenty four", "one hundred point five") are
-    // already folded into its digits.
-    if final_scale.is_none() {
-        return Some(span.text.clone());
-    }
-    // A matching suffix abbreviates the final scale; a larger final scale
-    // keeps its wording. A decimal before another scale fails the parse
-    // below and stays spaced.
-    if final_scale.is_some_and(|value| value > suffix_scale as f64) {
-        return None;
-    }
-    let appended_end = end - usize::from(repeated && span.end < end);
-    if repeated && span.end == appended_end && span.end < end {
-        return Some(span.text.clone());
-    }
-    // Render from exact parsed digits, never from the floating-point value
-    // used for threshold comparisons and general magnitude classification.
-    let mut coefficient = span.text.parse::<u128>().ok()?;
-    for token in &tokens[span.end..appended_end] {
-        coefficient = coefficient.checked_mul(scale(&token.lowercase)? as u128)?;
-    }
-    if repeated && span.end == end {
-        if coefficient % suffix_scale != 0 {
-            return None;
-        }
-        coefficient /= suffix_scale;
-    }
-    Some(coefficient.to_string())
-}
-
-/// Compact size magnitudes and their suffixes, largest first.
-const SIZE_SUFFIXES: [(f64, char); 3] = [(1e9, 'B'), (1e6, 'M'), (1e3, 'K')];
-
-fn compact_size(value: f64) -> Option<String> {
-    for (scale, suffix) in SIZE_SUFFIXES {
-        if value >= scale && value % (scale / 10.0) == 0.0 {
-            return Some(format!("{}{suffix}", value / scale));
-        }
-    }
-    None
 }
 
 /// Parse a token range in pieces between protected ranges, so a greedy span

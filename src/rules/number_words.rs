@@ -1,5 +1,50 @@
 //! Shared vocabulary for numeric boundaries and contextual labels.
 
+use super::numbers::NumberToken;
+
+/// Whether the original byte gap contains only horizontal whitespace.
+///
+/// # Arguments
+/// * `input` - Original transcript text.
+/// * `start` - Inclusive byte boundary of the gap.
+/// * `end` - Exclusive byte boundary of the gap.
+///
+/// # Returns
+/// True for spaces, tabs, or an empty gap.
+///
+/// # Panics
+/// Panics if the boundaries do not index the input string.
+pub(super) fn horizontal_gap(input: &str, start: usize, end: usize) -> bool {
+    input[start..end]
+        .bytes()
+        .all(|byte| matches!(byte, b' ' | b'\t'))
+}
+
+/// Whether tokens connect members of a numeric list or range.
+///
+/// Adjacency and clock-only range words remain policies of their classifiers.
+///
+/// # Arguments
+/// * `tokens` - Original numeric tokens and prose boundaries.
+/// * `start` - Inclusive token boundary after the left member.
+/// * `end` - Exclusive token boundary before the right member.
+///
+/// # Returns
+/// True for a comma, conjunction, range word, or Oxford comma separator.
+///
+/// # Panics
+/// Panics if the boundaries do not index the token array.
+pub(super) fn list_joiner(tokens: &[NumberToken<'_>], start: usize, end: usize) -> bool {
+    match &tokens[start..end] {
+        [joiner] => matches!(
+            joiner.lowercase.as_str(),
+            "," | "and" | "or" | "to" | "through"
+        ),
+        [comma, joiner] => comma.text == "," && matches!(joiner.lowercase.as_str(), "and" | "or"),
+        _ => false,
+    }
+}
+
 /// # Returns
 /// Whether a word names a time, measurement, or currency unit.
 ///

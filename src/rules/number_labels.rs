@@ -1,6 +1,6 @@
 //! Clock protections and century-pair years over the original numeric spans.
 
-use super::number_words::{is_unit, zero_alias};
+use super::number_words::{horizontal_gap, is_unit, list_joiner, zero_alias};
 use super::numbers::{NumberKind, NumberSpan, NumberToken, Replacement};
 use std::ops::Range;
 
@@ -31,10 +31,15 @@ pub(super) fn clock_times(
             index += 1;
             continue;
         }
+        let cue = hour.value <= 12.0 && clock_cue(input, tokens, hour.start);
         let minute = spans.get(index + 1).filter(|minute| {
             integer(minute)
                 && !minute.literal
                 && minute.value <= 59.0
+                // "At seven thirty hours" is a clock; a following measurement
+                // such as "about five thirty-dollar cards" is a quantity.
+                && (!unit_after(tokens, minute.end)
+                    || tokens.get(minute.end).is_some_and(|t| t.lowercase == "hours"))
                 && hour.end == minute.start
                 && !(index > 0 && spans[index - 1].end == hour.start && !spans[index - 1].ordinal)
                 && !spans
@@ -43,14 +48,21 @@ pub(super) fn clock_times(
                 && horizontal_gap(input, tokens[hour.end - 1].end, tokens[minute.start].start)
         });
         let end = minute.map_or(hour.end, |minute| minute.end);
-        let meridiem = meridiem_after(tokens, end)
-            || hour.value <= 12.0 && tokens.get(end).is_some_and(|t| t.lowercase == "am");
-        let cue = hour.value <= 12.0 && clock_cue(input, tokens, hour.start);
+        let marked_end = clock_marker_end(tokens, end, hour.value <= 12.0);
+        let marked = marked_end > end;
+        // "Hours" belongs to a clock's extent but needs a cue from the phrase;
+        // it must not turn ordinary quantities into clocks on its own.
+        let extent_end =
+            if minute.is_some() && tokens.get(end).is_some_and(|t| t.lowercase == "hours") {
+                end + 1
+            } else {
+                marked_end
+            };
         // Whole hours only participate as endpoints, not as counts before a
         // noun ("at seven thirty and eight files").
         if minute.is_some()
             || hour.value <= 12.0
-                && (meridiem
+                && (marked
                     || tokens.get(end).is_none_or(|t| {
                         matches!(
                             t.lowercase.as_str(),
@@ -84,7 +96,7 @@ pub(super) fn clock_times(
                         )
                     }))
         {
-            candidates.push((hour.start..end, cue || meridiem, minute.is_some()));
+            candidates.push((hour.start..extent_end, cue || marked, minute.is_some()));
         }
         index += if minute.is_some() { 2 } else { 1 };
     }
@@ -131,23 +143,22 @@ fn clock_cue(input: &str, tokens: &[NumberToken<'_>], start: usize) -> bool {
             && tokens[start - 1].lowercase == "s"
 }
 
-fn clock_joiner(tokens: &[NumberToken<'_>], mut start: usize, end: usize) -> bool {
-    if tokens
-        .get(start)
-        .is_some_and(|t| matches!(t.lowercase.as_str(), "am" | "pm"))
-    {
-        start += 1;
-    } else if meridiem_after(tokens, start) {
-        start += 3;
-        if tokens.get(start).is_some_and(|t| t.text == ".") {
-            start += 1;
+fn clock_joiner(tokens: &[NumberToken<'_>], start: usize, end: usize) -> bool {
+    list_joiner(tokens, start, end)
+        || matches!(&tokens[start..end], [joiner] if matches!(joiner.lowercase.as_str(), "until" | "till"))
+}
+
+fn clock_marker_end(tokens: &[NumberToken<'_>], end: usize, twelve_hour: bool) -> usize {
+    meridiem_end(tokens, end, twelve_hour).unwrap_or_else(|| {
+        if twelve_hour
+            && matches!(tokens.get(end..end + 3), Some([o, apostrophe, clock])
+                if o.lowercase == "o" && matches!(apostrophe.text, "'" | "’") && clock.lowercase == "clock")
+        {
+            end + 3
+        } else {
+            end
         }
-    }
-    start + 1 == end
-        && matches!(
-            tokens[start].lowercase.as_str(),
-            "and" | "or" | "to" | "until" | "till" | "through"
-        )
+    })
 }
 
 /// Propose century-pair years independently of surrounding prose or thresholds.
@@ -198,7 +209,12 @@ pub(super) fn classify(
                 && tail.text.len() == 1
                 && horizontal_gap(input, tokens[century.end - 1].end, between[0].start)
                 && horizontal_gap(input, between[0].end, tokens[tail.start].start);
-            if (!plain && !zero) || unit_after(tokens, tail.end) {
+            let suffix =
+                tail.end + usize::from(tokens.get(tail.end).is_some_and(|token| token.text == "-"));
+            if (!plain && !zero)
+                || unit_after(tokens, tail.end)
+                || meridiem_end(tokens, suffix, false).is_some()
+            {
                 return None;
             }
             Some(Replacement {
@@ -220,25 +236,23 @@ fn integer(number: &NumberSpan) -> bool {
 
 fn unit_after(tokens: &[NumberToken<'_>], end: usize) -> bool {
     let end = end + usize::from(tokens.get(end).is_some_and(|token| token.text == "-"));
-    tokens.get(end).is_some_and(|next| {
-        is_unit(next.text) || matches!(next.text, "K" | "M" | "B") || meridiem_after(tokens, end)
-    })
+    tokens
+        .get(end)
+        .is_some_and(|next| is_unit(next.text) || matches!(next.text, "K" | "M" | "B"))
 }
 
-fn meridiem_after(tokens: &[NumberToken<'_>], end: usize) -> bool {
-    tokens.get(end).is_some_and(|next| {
-        matches!(next.text, "AM" | "PM")
-            || next.lowercase == "pm"
-            || matches!(next.lowercase.as_str(), "a" | "p")
-                && tokens.get(end + 1).is_some_and(|token| token.text == ".")
-                && tokens
-                    .get(end + 2)
-                    .is_some_and(|token| token.lowercase == "m")
-    })
-}
-
-fn horizontal_gap(input: &str, start: usize, end: usize) -> bool {
-    input[start..end]
-        .bytes()
-        .all(|byte| matches!(byte, b' ' | b'\t'))
+fn meridiem_end(tokens: &[NumberToken<'_>], end: usize, lower_am: bool) -> Option<usize> {
+    let next = tokens.get(end)?;
+    if next.text == "AM" || next.lowercase == "pm" || lower_am && next.lowercase == "am" {
+        Some(end + 1)
+    } else if matches!(next.lowercase.as_str(), "a" | "p")
+        && tokens.get(end + 1).is_some_and(|token| token.text == ".")
+        && tokens
+            .get(end + 2)
+            .is_some_and(|token| token.lowercase == "m")
+    {
+        Some(end + 3 + usize::from(tokens.get(end + 3).is_some_and(|t| t.text == ".")))
+    } else {
+        None
+    }
 }

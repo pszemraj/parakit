@@ -2,7 +2,7 @@
 
 use text2num::{text2digits, Language};
 
-use super::number_words::{scale, zero_alias};
+use super::number_words::{horizontal_gap, scale, zero_alias};
 use super::numbers::{NumberKind, NumberSpan, NumberToken, Replacement};
 
 /// Propose dotted numeric expressions without changing the original tokens.
@@ -327,10 +327,7 @@ fn number_word(token: &NumberToken<'_>, language: &Language) -> bool {
 fn word_run_end(input: &str, tokens: &[NumberToken<'_>], start: usize) -> usize {
     let mut end = start;
     while end < tokens.len()
-        && (end == 0
-            || input[tokens[end - 1].end..tokens[end].start]
-                .bytes()
-                .all(|byte| matches!(byte, b' ' | b'\t')))
+        && (end == 0 || horizontal_gap(input, tokens[end - 1].end, tokens[end].start))
         && (inline_hyphen(tokens, end)
             || tokens[end]
                 .text
@@ -344,8 +341,7 @@ fn word_run_end(input: &str, tokens: &[NumberToken<'_>], start: usize) -> usize 
 }
 
 fn spaced(input: &str, left: &NumberToken<'_>, right: &NumberToken<'_>) -> bool {
-    let gap = &input[left.end..right.start];
-    !gap.is_empty() && gap.bytes().all(|byte| matches!(byte, b' ' | b'\t'))
+    left.end < right.start && horizontal_gap(input, left.end, right.start)
 }
 
 fn integer(text: &str) -> bool {
