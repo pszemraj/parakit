@@ -1,7 +1,5 @@
 //! Century-pair years over the original numeric spans.
 
-use text2num::Language;
-
 use super::number_words::{is_unit, zero_alias};
 use super::numbers::{NumberKind, NumberSpan, NumberToken, Replacement};
 
@@ -11,7 +9,6 @@ use super::numbers::{NumberKind, NumberSpan, NumberToken, Replacement};
 /// * `input` - Original transcript text.
 /// * `tokens` - Original tokens with byte positions.
 /// * `spans` - Parsed numbers with token-index boundaries.
-/// * `_language` - Shared number-parser language.
 ///
 /// # Returns
 /// Year proposals in original-token coordinates.
@@ -22,7 +19,6 @@ pub(super) fn classify(
     input: &str,
     tokens: &[NumberToken<'_>],
     spans: &[NumberSpan],
-    _language: &Language,
 ) -> Vec<Replacement> {
     spans
         .windows(2)

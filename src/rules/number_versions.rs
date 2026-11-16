@@ -230,13 +230,9 @@ fn component_prefix(
             end = index;
         }
     }
-    let mut rendered = None;
-    for candidate_end in start + 1..=end {
-        if let Some(value) = component(&tokens[start..candidate_end], language) {
-            rendered = Some((candidate_end, value));
-        }
-    }
-    let (mut end, mut value) = rendered?;
+    let (mut end, mut value) = (start + 1..=end).rev().find_map(|candidate_end| {
+        component(&tokens[start..candidate_end], language).map(|value| (candidate_end, value))
+    })?;
     // In "five two thousand", the final digit belongs to the scaled count.
     // A leading zero instead marks a digit-spelled fractional component, a
     // final zero cannot start a count ("1.20 thousand"), and a million or

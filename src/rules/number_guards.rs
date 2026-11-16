@@ -29,6 +29,7 @@ pub(super) fn protected(
     language: &Language,
 ) -> Vec<Range<usize>> {
     let mut ranges = Vec::new();
+    let mut version_spans = None;
     for (index, token) in tokens.iter().enumerate() {
         let word = token.lowercase.as_str();
         if matches!(word, "zero" | "nought")
@@ -41,7 +42,10 @@ pub(super) fn protected(
             // A fraction digit of a rendered spoken decimal is not a
             // coefficient ("2 point five zero thousand" is 2.50 thousand).
             && !(versions
-                && super::number_versions::classify(input, tokens, spans, language)
+                && version_spans
+                    .get_or_insert_with(|| {
+                        super::number_versions::classify(input, tokens, spans, language)
+                    })
                     .iter()
                     .any(|version| version.start < index && index < version.end))
         {

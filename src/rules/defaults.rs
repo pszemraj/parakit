@@ -165,31 +165,31 @@ pub(crate) const DEFAULT_RULES: &[Rule] = &[
     // These categories share one tokenization and edit pass. Keep them
     // contiguous so the engine can normalize the enabled group together.
     Rule {
-        name: "spoken-numbers",
+        name: NumberKind::Spoken.name(),
         description: "Render cardinal and ordinal quantities at or above the configured threshold",
         activation: Activation::Safe,
         kind: RuleKind::Numbers(NumberKind::Spoken),
     },
     Rule {
-        name: "spoken-versions",
+        name: NumberKind::Version.name(),
         description: "Render spoken decimals and dotted versions; compact version prefixes",
         activation: Activation::Safe,
         kind: RuleKind::Numbers(NumberKind::Version),
     },
     Rule {
-        name: "calendar-years",
+        name: NumberKind::Year.name(),
         description: "Join spoken century pairs beginning with eighteen, nineteen, or twenty",
         activation: Activation::Safe,
         kind: RuleKind::Numbers(NumberKind::Year),
     },
     Rule {
-        name: "numeric-identifiers",
+        name: NumberKind::Identifier.name(),
         description: "Compact numeric values after single-letter or SM identifier prefixes",
         activation: Activation::Safe,
         kind: RuleKind::Numbers(NumberKind::Identifier),
     },
     Rule {
-        name: "size-suffixes",
+        name: NumberKind::Size.name(),
         description: "Render explicit K/M/B sizes and compact parameter counts",
         activation: Activation::Safe,
         kind: RuleKind::Numbers(NumberKind::Size),

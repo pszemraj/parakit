@@ -117,9 +117,7 @@ pub(super) fn normalize<'a>(
     ));
     let (spans, ambiguous) = parsed_slice(&tokens, 0..tokens.len(), &protected, &language);
     let mut proposals = super::number_versions::classify(input, &tokens, &spans, &language);
-    proposals.extend(super::number_labels::classify(
-        input, &tokens, &spans, &language,
-    ));
+    proposals.extend(super::number_labels::classify(input, &tokens, &spans));
     // Version boundaries split parser spans before quantities are classified.
     // This operates on original tokens, including a remaining scale coefficient.
     for proposal in proposals
