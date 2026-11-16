@@ -38,6 +38,8 @@ Use the actual output directory from the successful native build, including any 
 
 On the tested CUDA 13.1/MSVC 14.44 toolset, the SDK's `cuda.lib` driver-loader object requests `LIBCMT` and emits `LNK4098` with `/MD` consumers. The same warning reproduces in a standalone driver-API program. Record this verified SDK warning exception with the validation evidence and complete the native CUDA inference checks.
 
+[CUDA 13 on Windows uses the runtime supplied with the display driver](https://docs.nvidia.com/cuda/cuda-runtime-api/cuda_runtime_api/group__CUDART____VERSION.html), which can report a different minor version from the build toolkit. Preserve native version-mismatch warnings in the evidence; quiet mode still reports warnings.
+
 On macOS, raw `--all-features` also enables CUDA and can fail in CMake before Rust typechecking when the CUDA Toolkit is not installed. Use the same typechecking-only `CRISPASR_LIB_DIR` fallback to validate the Rust all-features surface; validate Metal with the native macOS build and `doctor`.
 
 ```bash
@@ -169,7 +171,7 @@ Use the same installed executable and isolated configuration for worker simulati
 
 Run the pinned WAV with `--no-cleaning` to check recognition, then with `--cleaning` and `--log-dir` to check post-processing. Feed the latter run's exact JSONL `raw` text to `rules test`; its `Clean:` result must equal JSONL `cleaned`, and the changing-rule names and order must agree. This comparison uses the same recognized text even if separate inference runs differ.
 
-Restart the process with the same configuration and verify config read-back and [cleaning metadata](../logging.md#transcription-record-fields), including `ruleset_id` and `cleaner_version`, remain consistent. On a successful cached-model `--quiet` run, verify empty stdout/stderr while JSONL still records the cleaned transcript and skipped simulation insertion without a paste event. Keep recognition quality, cleaning parity, and physical insertion results separate.
+Restart the process with the same configuration and verify config read-back and [cleaning metadata](../logging.md#transcription-record-fields), including `ruleset_id` and `cleaner_version`, remain consistent. On a successful cached-model `--quiet` run without runtime warnings, verify empty stdout/stderr while JSONL still records the cleaned transcript and skipped simulation insertion without a paste event. Record any warnings separately. Keep recognition quality, cleaning parity, and physical insertion results separate.
 
 ## NeMo Reference Helper
 
