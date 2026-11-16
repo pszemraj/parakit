@@ -20,7 +20,19 @@ The all-features check can request accelerator toolchains that the current host 
 
 Run `cargo test --lib preset_artifacts_and_source_revisions_exist_on_hub -- --ignored` when changing preset metadata. This opt-in network test checks every hosted Q8_0 filename and original checkpoint revision against the public Hugging Face Hub without downloading model weights.
 
-`tests/native_correctness_build.rs` verifies bundled source-patch application, the CMake hook that compiles the generated copies, and model-free native decoder fault and correctness checks. Readiness option restoration on success and failure is covered by the Rust inference tests. These tests do not inject faults into a loaded Qwen model; validate live inference with the [Qwen comparisons](#qwen-and-moondream-comparisons) and [native acceptance cases](model-validation.md#qwen-options-long-input-and-reload).
+`tests/native_correctness_build.rs` verifies bundled source-patch application, the CMake hook that compiles the generated copies, and model-free native decoder fault and correctness checks. Readiness option restoration on success and failure is covered by the Rust inference tests. The opt-in loaded-Qwen test checks that readiness restores a one-token budget, incomplete decodes return errors, and the same session recovers with a sufficient budget and repeats its complete transcript. Point `PARAKIT_LIVE_MODEL` at a Qwen GGUF inside the checkout and run:
+
+```sh
+cargo test --lib inference::tests::loaded_qwen_restores_budget_and_recovers_after_incomplete_decode -- --ignored --exact --test-threads=1
+```
+
+The native opt-in test builds a separate CPU library using the production source corrections and CMake hook. Only that generated source copy calls the test fault wrappers. It injects decoder embedding and forward-pass failures, invalid EOS tokenizations, and a second-chunk embedding failure after a completed first chunk. Each failure must return no C API result, and the same loaded session must recover without changing its complete transcript. With the same repo-local `PARAKIT_LIVE_MODEL`, run:
+
+```sh
+cargo test --test native_correctness_build loaded_qwen_session_faults_discard_partial_text_and_recover -- --ignored --exact --nocapture
+```
+
+These opt-in CPU checks complement the [Qwen comparisons](#qwen-and-moondream-comparisons) and [native acceptance cases](model-validation.md#qwen-options-long-input-and-reload), which cover recognition quality and the supported devices.
 
 ## GPU Feature Validation
 

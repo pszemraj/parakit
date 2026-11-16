@@ -363,6 +363,50 @@ fn panicking_readiness_still_restores_user_options() {
 }
 
 #[test]
+#[ignore = "loads the repo-local Qwen model named by PARAKIT_LIVE_MODEL and runs CPU inference"]
+fn loaded_qwen_restores_budget_and_recovers_after_incomplete_decode() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .canonicalize()
+        .unwrap();
+    let model = std::path::PathBuf::from(
+        std::env::var_os("PARAKIT_LIVE_MODEL").expect("PARAKIT_LIVE_MODEL"),
+    )
+    .canonicalize()
+    .unwrap();
+    assert!(
+        model.starts_with(&root),
+        "model must be inside the checkout"
+    );
+    let pcm = crate::audio_file::prepare_wav_for_model(
+        &root.join("vendor/CrispASR/bindings/go/samples/jfk.wav"),
+    )
+    .unwrap()
+    .samples;
+    let options = user_qwen_options();
+    let engine = Engine::open_with_options(model, 8, DeviceMode::Cpu, &options).unwrap();
+    assert_eq!(engine.backend(), "qwen3");
+
+    // Readiness temporarily raises a budget that cannot transcribe this speech.
+    // Exercise it again after failure on the same native session.
+    for _ in 0..2 {
+        crate::warmup::run(&engine, &[]).unwrap();
+        let error = engine.transcribe(&pcm).unwrap_err().to_string();
+        assert!(
+            error.contains("crispasr_session_transcribe failed"),
+            "{error}"
+        );
+    }
+
+    configure_qwen(&engine.session, "English", 512).unwrap();
+    let expected = engine.transcribe(&pcm).unwrap();
+    assert!(!expected.trim().is_empty());
+    configure_qwen(&engine.session, "English", 1).unwrap();
+    assert!(engine.transcribe(&pcm).is_err());
+    configure_qwen(&engine.session, "English", 512).unwrap();
+    assert_eq!(engine.transcribe(&pcm).unwrap(), expected);
+}
+
+#[test]
 fn device_mode_labels_are_stable() {
     // Exhaustive over ValueEnum::value_variants() with no wildcard arm:
     // adding a DeviceMode variant without a matching label here is a

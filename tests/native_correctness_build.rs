@@ -176,12 +176,140 @@ add_test(NAME qwen-correctness COMMAND qwen-correctness)
             .arg(&build)
             .args(["--config", "Release"]),
     );
-    checked(Command::new("ctest").arg("--test-dir").arg(&build).args([
+    checked(Command::new("ctest").current_dir(&build).args([
         "--build-config",
         "Release",
         "--output-on-failure",
     ]));
 }
+
+#[test]
+#[ignore = "rebuilds the native CPU library and injects faults into the repo-local Qwen model named by PARAKIT_LIVE_MODEL"]
+fn loaded_qwen_session_faults_discard_partial_text_and_recover() {
+    // Pass normal absolute paths to CMake; Windows verbatim paths produced by
+    // canonicalize become invalid source paths in the MSVC generator.
+    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let model =
+        std::path::absolute(std::env::var_os("PARAKIT_LIVE_MODEL").expect("PARAKIT_LIVE_MODEL"))
+            .unwrap();
+    assert!(
+        model
+            .canonicalize()
+            .unwrap()
+            .starts_with(manifest.canonicalize().unwrap()),
+        "model must be inside the checkout"
+    );
+    let scratch = Scratch::new();
+    let (api, parakeet) =
+        native_correctness::prepare(&manifest.join("vendor/CrispASR"), &scratch.0).unwrap();
+    let source = fs::read_to_string(&api).unwrap();
+    let source = source
+        .replace("qwen3_asr_embed_tokens", "parakit_test::embed")
+        .replace("qwen3_asr_run_llm_kv", "parakit_test::forward")
+        .replace("qwen3_asr_tokenize", "parakit_test::tokenize");
+    let call = "            return transcribe_single(s, pcm + b, (int)(e - b), language);";
+    assert_eq!(source.matches(call).count(), 1);
+    let source = source.replace(call, "            parakit_test::begin_chunk();\n            auto* part = transcribe_single(s, pcm + b, (int)(e - b), language);\n            parakit_test::end_chunk(part && !part->segments.empty() && !part->segments[0].text.empty());\n            return part;");
+    fs::write(&api, format!("{LOADED_FAULT_DECLARATIONS}\n{source}")).unwrap();
+    fs::write(
+        scratch.0.join("project-hook.cmake"),
+        r#"include("${PARAKIT_ROOT}/build/native_correctness.cmake")
+# The pinned project has four targets whose input paths assume a top-level
+# build. Repair just those targets after declaration, keeping vendor read-only.
+function(parakit_test_subproject_paths)
+    foreach(target crispasr_c2pa_native crispasr-llama-core index_echo webrtc-vad)
+        foreach(property SOURCES INCLUDE_DIRECTORIES INTERFACE_INCLUDE_DIRECTORIES)
+            get_target_property(paths ${target} ${property})
+            if(paths)
+                string(REPLACE "${CMAKE_SOURCE_DIR}/" "${PROJECT_SOURCE_DIR}/" paths "${paths}")
+                set_property(TARGET ${target} PROPERTY ${property} "${paths}")
+            endif()
+        endforeach()
+    endforeach()
+    # Their original globs searched the wrapper root and found no sources.
+    file(GLOB models "${PROJECT_SOURCE_DIR}/examples/talk-llama/models/*.cpp")
+    target_sources(crispasr-llama-core PRIVATE ${models})
+    file(GLOB_RECURSE webrtc "${PROJECT_SOURCE_DIR}/third_party/webrtc/*.c")
+    target_sources(webrtc-vad PRIVATE ${webrtc})
+endfunction()
+cmake_language(DEFER CALL parakit_test_subproject_paths)
+"#,
+    )
+    .unwrap();
+    fs::write(scratch.0.join("CMakeLists.txt"), r#"cmake_minimum_required(VERSION 3.19)
+project(parakit_loaded_faults LANGUAGES C CXX)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_MSVC_RUNTIME_LIBRARY MultiThreadedDLL)
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+set(GGML_NATIVE ON CACHE BOOL "" FORCE)
+set(GGML_BACKEND_DL OFF CACHE BOOL "" FORCE)
+set(GGML_OPENMP ON CACHE BOOL "" FORCE)
+set(GGML_BLAS OFF CACHE BOOL "" FORCE)
+set(GGML_CUDA OFF CACHE BOOL "" FORCE)
+set(GGML_VULKAN OFF CACHE BOOL "" FORCE)
+set(GGML_METAL OFF CACHE BOOL "" FORCE)
+set(CRISPASR_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(CRISPASR_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(CRISPASR_BUILD_SERVER OFF CACHE BOOL "" FORCE)
+set(CRISPASR_OPUS OFF CACHE BOOL "" FORCE)
+set(CRISPASR_AMR OFF CACHE BOOL "" FORCE)
+set(CRISPASR_MEL_BLAS OFF CACHE BOOL "" FORCE)
+set(CMAKE_PROJECT_crispasr_INCLUDE "${CMAKE_CURRENT_SOURCE_DIR}/project-hook.cmake")
+add_subdirectory("${PARAKIT_ROOT}/vendor/CrispASR" crispasr)
+add_executable(qwen-loaded-faults "${PARAKIT_ROOT}/tests/native/qwen_correctness.cpp")
+target_compile_definitions(qwen-loaded-faults PRIVATE PARAKIT_LOADED_QWEN_FAULTS)
+target_include_directories(qwen-loaded-faults PRIVATE "${PARAKIT_ROOT}/build/native" "${PARAKIT_ROOT}/vendor/CrispASR/src")
+target_link_libraries(qwen-loaded-faults PRIVATE crispasr-lib)
+if(MSVC)
+    target_compile_options(qwen-loaded-faults PRIVATE /utf-8)
+endif()
+enable_testing()
+add_test(NAME qwen-loaded-faults COMMAND qwen-loaded-faults "${PARAKIT_MODEL}" "${PARAKIT_ROOT}/vendor/CrispASR/bindings/go/samples/jfk.wav")
+"#).unwrap();
+    let build = scratch.0.join("build");
+    checked(
+        Command::new("cmake")
+            .arg("-S")
+            .arg(&scratch.0)
+            .arg("-B")
+            .arg(&build)
+            .arg(format!("-DPARAKIT_ROOT={}", manifest.display()))
+            .arg(format!("-DPARAKIT_MODEL={}", model.display()))
+            .arg(format!("-DPARAKIT_CRISPASR_C_API_SOURCE={}", api.display()))
+            .arg(format!("-DPARAKIT_PARAKEET_SOURCE={}", parakeet.display()))
+            .arg(format!(
+                "-DPARAKIT_NATIVE_CORRECTNESS_INCLUDE={}",
+                manifest.join("build/native").display()
+            ))
+            .arg("-DCMAKE_BUILD_TYPE=Release"),
+    );
+    checked(Command::new("cmake").arg("--build").arg(&build).args([
+        "--config",
+        "Release",
+        "--target",
+        "qwen-loaded-faults",
+        "--parallel",
+        "4",
+    ]));
+    checked(
+        Command::new("ctest")
+            .current_dir(&build)
+            .args(["--build-config", "Release", "--output-on-failure"])
+            .env("CRISPASR_FC_PW_Q8", "0")
+            .env("CRISPASR_FC_FUSED_QKV", "0")
+            .env("CRISP_AUDIO_WINDOWED_ATTN", "1"),
+    );
+}
+
+const LOADED_FAULT_DECLARATIONS: &str = r#"#include "qwen3_asr.h"
+namespace parakit_test {
+float* embed(qwen3_asr_context*, const int32_t*, int);
+float* forward(qwen3_asr_context*, const float*, int, int, int*, int*);
+int32_t* tokenize(qwen3_asr_context*, const char*, int*);
+void begin_chunk();
+void end_chunk(bool);
+}
+"#;
 
 #[test]
 fn cmake_hook_compiles_the_copy_and_excludes_the_original() {
