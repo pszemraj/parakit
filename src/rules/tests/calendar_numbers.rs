@@ -89,9 +89,9 @@ fn following_time_and_measurement_units_block_year_joining() {
         ("Use twenty thirty years.", "Use 20 30 years."),
         ("Use twenty thirty meters.", "Use 20 30 meters."),
         ("Use twenty thirty kilograms.", "Use 20 30 kilograms."),
-        ("Until nineteen thirty PM.", "Until 19 30 PM."),
-        ("Until nineteen thirty p.m.", "Until 19 30 p.m."),
-        ("Until nineteen thirty AM.", "Until 19 30 AM."),
+        ("Until nineteen thirty PM.", "Until nineteen thirty PM."),
+        ("Until nineteen thirty p.m.", "Until nineteen thirty p.m."),
+        ("Until nineteen thirty AM.", "Until nineteen thirty AM."),
         ("Use twenty twenty six GB.", "Use 20 26 GB."),
         ("Use twenty twenty six MB.", "Use 20 26 MB."),
         ("Use twenty twenty six Hz.", "Use 20 26 Hz."),
@@ -106,6 +106,35 @@ fn following_time_and_measurement_units_block_year_joining() {
         ),
     ] {
         assert_eq!(cleaner.clean_text(input), expected, "{input}");
+    }
+    for profile in [CleaningProfile::Safe, CleaningProfile::Aggressive] {
+        for threshold in [0.0, 4.0, 100.0] {
+            let cleaner = build_cleaner_for_test_with_threshold(
+                profile,
+                false,
+                Some(threshold),
+                &HashSet::new(),
+                &[],
+            );
+            for input in [
+                "Meet at seven thirty pm.",
+                "Meet at seven thirty am.",
+                "Meet at seven thirty a.m.",
+                "Meet at seven thirty p.m.",
+                "Meet at seven thirty.",
+                "From nine thirty to ten forty five.",
+                "Between nine thirty and ten forty five.",
+                "Seven thirty PM.",
+                "Seven thirty Am.",
+                "Seven thirty aM.",
+            ] {
+                assert_eq!(
+                    cleaner.clean_text(input),
+                    input,
+                    "{profile:?}/{threshold}: {input}"
+                );
+            }
+        }
     }
     for unit in "ms ns gb mb kb tb gib mib kib tib hz khz mhz ghz kg km cm mm fps rpm mph bpm mah kw mw gw px db"
         .split_whitespace()

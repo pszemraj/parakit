@@ -57,6 +57,7 @@ fn deliberate_repeats_and_number_words_are_preserved() {
         "do",
         "can",
         "no",
+        "her",
         "plus",
         "dash",
         "equals",
@@ -225,6 +226,18 @@ fn identical_words_can_have_distinct_grammatical_roles() {
         assert_clean_cases(
             profile,
             &[
+                ("I gave her her keys back.", "I gave her her keys back."),
+                ("I asked her her name.", "I asked her her name."),
+                (
+                    "He told her her idea was good.",
+                    "He told her her idea was good.",
+                ),
+                ("I sent her her ticket.", "I sent her her ticket."),
+                ("I owe her her deposit.", "I owe her her deposit."),
+                ("I handed her her coat.", "I handed her her coat."),
+                ("I bought her her lunch.", "I bought her her lunch."),
+                ("Tell her her taxi is here.", "Tell her her taxi is here."),
+                ("Give HER\ther keys back.", "Give HER\ther keys back."),
                 (
                     "You don't get to control control T and control W.",
                     "You don't get to control control T and control W.",

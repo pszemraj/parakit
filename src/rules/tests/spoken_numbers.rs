@@ -14,11 +14,14 @@ fn text2num_handles_documented_cardinals_groups_and_decimals() {
                 "The value is 3.1415.",
             ),
             (
-                // Each comma-separated number follows the threshold.
+                // A list with a low member keeps its complete wording.
                 "Groups like one, two, three are digits.",
                 "Groups like one, two, three are digits.",
             ),
-            ("Zero, one, two, three, four.", "Zero, one, two, three, 4."),
+            (
+                "Zero, one, two, three, four.",
+                "Zero, one, two, three, four.",
+            ),
             (
                 // Existing digits stay digits; spoken values below the
                 // threshold retain their spelling.
@@ -130,8 +133,8 @@ fn text2num_renders_ordinals_and_spoken_years() {
             ("Use twenty point zero twenty point zero.", "Use 20.0 20.0."),
             ("Use twenty twenty point zero.", "Use 20 20.0."),
             ("Use twenty point zero twenty.", "Use 20.0 20."),
-            ("Meet at ten thirty.", "Meet at 10 30."),
-            ("Meet at five thirty.", "Meet at 5 30."),
+            ("Meet at ten thirty.", "Meet at ten thirty."),
+            ("Meet at five thirty.", "Meet at five thirty."),
             ("Meet at one thirty.", "Meet at one thirty."),
             (
                 "My number is five five five twenty twelve.",
@@ -370,7 +373,7 @@ fn and_after_a_count_starts_another_number() {
             if threshold <= 5.0 {
                 "Between 20 and 5 degrees."
             } else {
-                "Between 20 and five degrees."
+                "Between twenty and five degrees."
             },
         );
     }

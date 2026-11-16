@@ -374,23 +374,25 @@ fn protected_phrases_and_structured_numbers_follow_the_public_policy() {
 #[test]
 fn adjacent_numeric_runs_convert_together_at_the_configured_threshold() {
     let cases = [
-        ("Meet at ten thirty.", ["Meet at 10 30."; 4]),
+        ("Meet at ten thirty.", ["Meet at ten thirty."; 4]),
+        ("Meet at five thirty.", ["Meet at five thirty."; 4]),
+        ("Meet at one thirty.", ["Meet at one thirty."; 4]),
         (
-            "Meet at five thirty.",
+            "Meet at five six seven.",
             [
-                "Meet at 5 30.",
-                "Meet at 5 30.",
-                "Meet at 5 30.",
-                "Meet at five thirty.",
+                "Meet at 5 6 7.",
+                "Meet at 5 6 7.",
+                "Meet at 5 6 7.",
+                "Meet at five six seven.",
             ],
         ),
         (
-            "Meet at one thirty.",
+            "Code five seven thirty pm.",
             [
-                "Meet at 1 30.",
-                "Meet at one thirty.",
-                "Meet at one thirty.",
-                "Meet at one thirty.",
+                "Code 5 7 30 pm.",
+                "Code 5 7 30 pm.",
+                "Code 5 7 30 pm.",
+                "Code five seven thirty pm.",
             ],
         ),
         (
@@ -487,8 +489,8 @@ fn cardinal_and_ordinal_thresholds_apply_to_lists_and_multi_digit_values() {
     for profile in [CleaningProfile::Safe, CleaningProfile::Aggressive] {
         for (threshold, expected) in [
             (0.0, "1, 2, 3, 4, 5th, 6th."),
-            (4.0, "One, two, three, 4, 5th, 6th."),
-            (5.0, "One, two, three, four, 5th, 6th."),
+            (4.0, "One, two, three, four, fifth, sixth."),
+            (5.0, "One, two, three, four, fifth, sixth."),
             (10.0, "One, two, three, four, fifth, sixth."),
         ] {
             let cleaner = build_cleaner(false, profile, false, Some(threshold), &[], &[], &[])
@@ -506,8 +508,48 @@ fn cardinal_and_ordinal_thresholds_apply_to_lists_and_multi_digit_values() {
         assert_eq!(
             cleaner
                 .clean_text("Twenty files and thirty rows. The twentieth and thirtieth entries."),
-            "Twenty files and 30 rows. The twentieth and 30th entries."
+            "Twenty files and 30 rows. The twentieth and thirtieth entries."
         );
+        for threshold in [0.0, 4.0, 10.0] {
+            let cleaner = build_cleaner(false, profile, false, Some(threshold), &[], &[], &[])
+                .unwrap()
+                .unwrap();
+            for (input, digits) in [
+                ("One, two, three, four, five.", "1, 2, 3, 4, 5."),
+                (
+                    "First, second, third, fourth, and fifth.",
+                    "1st, 2nd, 3rd, 4th, and 5th.",
+                ),
+                ("Between three and five days.", "Between 3 and 5 days."),
+                ("From three to five days.", "From 3 to 5 days."),
+                ("Three through five days.", "3 through 5 days."),
+                ("Three or five days.", "3 or 5 days."),
+                ("First second third fourth.", "1st 2nd 3rd 4th."),
+            ] {
+                assert_eq!(
+                    cleaner.clean_text(input),
+                    if threshold == 0.0 { digits } else { input },
+                    "{profile:?}/{threshold}: {input}"
+                );
+            }
+        }
+        let cleaner = build_cleaner(false, profile, false, Some(4.0), &[], &[], &[])
+            .unwrap()
+            .unwrap();
+        for (input, expected) in [
+            ("Four, five, and six.", "4, 5, and 6."),
+            ("First five hundred rows.", "First 500 rows."),
+            ("One, 2, and five.", "One, 2, and five."),
+            ("Three; five.", "Three; 5."),
+            ("Three. Five.", "Three. 5."),
+            ("Three,\nfive.", "Three,\n5."),
+            (
+                "Three files and five folders.",
+                "Three files and 5 folders.",
+            ),
+        ] {
+            assert_eq!(cleaner.clean_text(input), expected, "{profile:?}: {input}");
+        }
     }
 }
 
@@ -526,7 +568,7 @@ fn year_pairs_require_year_values_and_stay_separate_in_longer_runs() {
             ("Code five nineteen ninety-nine.", "Code 5 19 99."),
             ("Code twenty-six oh four.", "Code twenty-six oh four."),
             ("Wait nineteen twenty minutes.", "Wait 19 20 minutes."),
-            ("Meet at nineteen twenty pm.", "Meet at 19 20 pm."),
+            ("Meet at nineteen twenty pm.", "Meet at nineteen twenty pm."),
             ("Use nineteen twenty K context.", "Use 19 20K context."),
         ] {
             assert_eq!(cleaner.clean_text(input), expected, "{profile:?}: {input}");
@@ -538,6 +580,17 @@ fn year_pairs_require_year_values_and_stay_separate_in_longer_runs() {
             high_threshold.clean_text("Release nineteen oh five and twenty twenty-two."),
             "Release 1905 and 2022."
         );
+        for (input, expected) in [
+            ("Twenty twenty and one hundred.", "2020 and 100."),
+            ("Twenty twenty, one hundred.", "2020, 100."),
+            ("One and twenty twenty.", "One and 2020."),
+        ] {
+            assert_eq!(
+                high_threshold.clean_text(input),
+                expected,
+                "{profile:?}: {input}"
+            );
+        }
     }
 }
 

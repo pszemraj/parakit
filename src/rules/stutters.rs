@@ -7,13 +7,15 @@ use text2num::{text2digits, Language};
 
 use super::engine::TransformResult;
 
-// Grammar-dependent doubles remain the aggressive rule's responsibility.
+// Grammar-dependent doubles are preserved here; the aggressive rule opts into
+// collapsing a subset. `her her` can be an indirect object plus a possessive.
 const KEEP_REPEATED: &[&str] = &[
     "that",
     "had",
     "do",
     "can",
     "no",
+    "her",
     "plus",
     "dash",
     "equals",

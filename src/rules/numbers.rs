@@ -108,6 +108,7 @@ pub(super) fn normalize<'a>(
     }
     let language = Language::english();
     let (initial, mut protected) = parse_spans(&tokens, &language);
+    protected.extend(super::number_labels::clock_times(input, &tokens, &initial));
     protected.extend(super::number_guards::protected(
         input,
         &tokens,
@@ -357,7 +358,7 @@ pub(super) fn normalize<'a>(
             });
         }
     }
-    // A low spoken member makes an adjacent run ambiguous as a whole.
+    // A low spoken member keeps a connected list or range worded as a whole.
     // A decimal/version or a year remains its own explicitly classified type,
     // including fraction digits parsed as separate counts ("2.50K").
     let in_version = |at: usize| {
@@ -366,17 +367,32 @@ pub(super) fn normalize<'a>(
                 .iter()
                 .any(|p| p.kind == NumberKind::Version && p.start < at && at < p.end)
     };
+    let in_year = |at: usize| {
+        enabled.contains(&NumberKind::Year)
+            && proposals
+                .iter()
+                .any(|p| p.kind == NumberKind::Year && p.start <= at && at < p.end)
+    };
     let mut mixed = Vec::new();
+    let joined = |left: &NumberSpan, right: &NumberSpan| match &tokens[left.end..right.start] {
+        [] => {
+            left.ordinal == right.ordinal
+                && input[tokens[left.end - 1].end..tokens[right.start].start]
+                    .bytes()
+                    .all(|byte| matches!(byte, b' ' | b'\t'))
+        }
+        [joiner] => matches!(
+            joiner.lowercase.as_str(),
+            "," | "and" | "or" | "to" | "through"
+        ),
+        [comma, joiner] => comma.text == "," && matches!(joiner.lowercase.as_str(), "and" | "or"),
+        _ => false,
+    };
     let mut at = 0;
     while at < spans.len() {
         let mut end = at + 1;
         while end < spans.len()
-            && !spans[end - 1].ordinal
-            && !spans[end].ordinal
-            && spans[end - 1].end == spans[end].start
-            && input[tokens[spans[end - 1].end - 1].end..tokens[spans[end].start].start]
-                .bytes()
-                .all(|byte| matches!(byte, b' ' | b'\t'))
+            && joined(&spans[end - 1], &spans[end])
             && !tokens[spans[end - 1].start..spans[end - 1].end]
                 .iter()
                 .any(|t| t.lowercase == "point")
@@ -385,6 +401,8 @@ pub(super) fn normalize<'a>(
                 .any(|t| t.lowercase == "point")
             && !in_version(spans[end - 1].start)
             && !in_version(spans[end].start)
+            && !in_year(spans[end - 1].start)
+            && !in_year(spans[end].start)
         {
             end += 1;
         }
