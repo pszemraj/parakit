@@ -99,8 +99,8 @@ The Linux daemon attaches to the helper over IBus's private bus and advertises r
 | `src/inference.rs`, `src/crispasr_ext.rs` | [CrispASR](https://github.com/CrispStrobe/CrispASR) session ownership, startup defaults (explicit overrides retained), scoped Qwen context, short-audio padding, and raw-ABI CPU/GPU session opening. See the [Qwen comparison guide](quality.md#qwen-and-moondream-comparisons) for windowed audio attention. |
 | `src/{lib,checksum,constants,test_support}.rs` | Library crate root, digest helpers, shared audio and inference constants, and unit-test fixtures. |
 | `src/rules/{engine,defaults,passes,user}.rs` | Transcript cleanup pipeline, profiles, built-in rule table, procedural passes, and user rules from `config.toml`. |
-| `src/rules/{numbers,number_guards,number_labels,number_versions,number_words}.rs` | Shared numeric tokenization and rendering, protected quantities, calendar years, versions, and number-word/unit vocabulary. |
-| `src/rules/stutters.rs` | Contextual repeated-word collapsing and configured repetition exceptions. |
+| `src/rules/{numbers,number_guards,number_labels,number_quantities,number_versions,number_words}.rs` | Shared numeric tokenization and rendering, quantity extents and connected bounds, protected quantities, calendar years, versions, and number-word/unit vocabulary. |
+| `src/rules/stutters.rs` | Adjacent repeated-word collapsing and configured repetition exceptions. |
 | `src/daemon/desktop/{inject,focus_snapshot,clipboard_store,paste_transaction,clipboard_guard,x11_paste,direct,clipboard_restore}.rs` | Insertion contract and injector, focus snapshots, clipboard backend and snapshots, the guarded paste transaction and change detection, X11/XTest paste chord, guarded direct insertion, and restore timing. |
 | `src/data_log.rs` | JSONL transcription and insertion-outcome logging. |
 | `src/audio_file.rs` | WAV decoding and mono mixing; shared Rubato target-rate resampler used by file input and live capture on every platform. See [microphone behavior](../running.md#microphone). |

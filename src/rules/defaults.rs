@@ -178,7 +178,7 @@ pub(crate) const DEFAULT_RULES: &[Rule] = &[
     },
     Rule {
         name: NumberKind::Year.name(),
-        description: "Join spoken century pairs beginning with eighteen, nineteen, or twenty",
+        description: "Join spoken century pairs beginning with nineteen or twenty",
         activation: Activation::Safe,
         kind: RuleKind::Numbers(NumberKind::Year),
     },
