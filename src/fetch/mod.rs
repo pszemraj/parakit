@@ -363,20 +363,18 @@ fn run_official_nemo_with_paths(
 
     let quantize_bin = quantize_bin_path()?;
     let nemo_url = net::rewrite_pinned_url(OFFICIAL_NEMO_URL, endpoint);
+    let conversion_tools = if options.force || !paths.f16.is_file() {
+        Some((converter_script_path()?, python_with_converter_deps()?))
+    } else {
+        None
+    };
 
     if options.force {
         remove_if_exists(&paths.nemo)?;
         remove_if_exists(&paths.f16)?;
     }
 
-    if paths.f16.is_file() {
-        options.status(format_args!(
-            "parakit: using cached F16 GGUF: {}",
-            paths.f16.display()
-        ));
-    } else {
-        let converter = converter_script_path()?;
-        let python = python_with_converter_deps()?;
+    if let Some((converter, python)) = conversion_tools {
         ensure_nemo(&paths, options, &nemo_url, endpoint, token)?;
         convert_f16(
             "--nemo",
@@ -386,6 +384,11 @@ fn run_official_nemo_with_paths(
             &converter,
             options,
         )?;
+    } else {
+        options.status(format_args!(
+            "parakit: using cached F16 GGUF: {}",
+            paths.f16.display()
+        ));
     }
     ensure_q8(&paths.f16, &paths.q8, &quantize_bin, options)?;
 
@@ -641,6 +644,7 @@ fn quantize_gguf(
 ) -> Result<()> {
     let staging = dest.with_extension("gguf.quantizing");
     remove_if_exists(&staging)?;
+    // Separately installed conversion tools inherit their own loader environment.
     let mut command = Command::new(quantize_bin);
     command
         .arg(f16)

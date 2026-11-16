@@ -13,6 +13,46 @@ fn optional_conversion_tools_use_only_path() {
     if let Ok(mode) = env::var(MODE) {
         // Keep loader DLL paths until this isolated child has started.
         env::set_var("PATH", env::var_os(LOOKUP_PATH).unwrap());
+        if mode.starts_with("force") {
+            let dir = PathBuf::from(env::var_os("PATH").unwrap());
+            let paths = FetchPaths {
+                nemo: dir.join(NEMO_FILENAME),
+                f16: dir.join(F16_FILENAME),
+                q8: dir.join(Q8_FILENAME),
+            };
+            for path in [&paths.nemo, &paths.f16, &paths.q8] {
+                std::fs::write(path, b"cached artifact").unwrap();
+            }
+            let options = FetchOptions {
+                force: true,
+                quiet: true,
+                verbose: false,
+                source: FetchSource::OfficialNemo {
+                    keep_nemo: true,
+                    keep_f16: true,
+                },
+            };
+            let cached = [paths.nemo.clone(), paths.f16.clone(), paths.q8.clone()];
+            let error = run_official_nemo_with_paths(
+                &options,
+                "https://example.invalid",
+                None,
+                true,
+                true,
+                paths,
+            )
+            .unwrap_err();
+            let expected = if mode == "force" {
+                "convert-parakeet-to-gguf.py was not found on PATH"
+            } else {
+                "Conversion requires Python 3"
+            };
+            assert!(error.to_string().contains(expected), "{error:#}");
+            for path in cached {
+                assert_eq!(std::fs::read(path).unwrap(), b"cached artifact");
+            }
+            return;
+        }
         let result = tool_path("convert-parakeet-to-gguf.py");
         if mode == "found" {
             assert_eq!(
@@ -34,7 +74,19 @@ fn optional_conversion_tools_use_only_path() {
         "# separately installed script\n",
     )
     .unwrap();
-    for (mode, path) in [("found", root.clone()), ("missing", root.join("absent"))] {
+    let force = root.join("force");
+    std::fs::create_dir_all(&force).unwrap();
+    std::fs::write(force.join(exe_name("crispasr-quantize")), b"unused").unwrap();
+    let no_python = root.join("force-no-python");
+    std::fs::create_dir_all(&no_python).unwrap();
+    std::fs::write(no_python.join(exe_name("crispasr-quantize")), b"unused").unwrap();
+    std::fs::write(no_python.join("convert-parakeet-to-gguf.py"), b"unused").unwrap();
+    for (mode, path) in [
+        ("found", root.clone()),
+        ("missing", root.join("absent")),
+        ("force", force),
+        ("force-no-python", no_python),
+    ] {
         let output = crate::test_support::exact_test_command(
             "fetch::tests::optional_conversion_tools_use_only_path",
         )
