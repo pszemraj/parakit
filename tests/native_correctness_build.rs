@@ -144,6 +144,46 @@ fn checked(command: &mut Command) {
 }
 
 #[test]
+fn native_decoder_faults_and_correctness_helpers_execute() {
+    let scratch = Scratch::new();
+    fs::write(
+        scratch.0.join("CMakeLists.txt"),
+        r#"cmake_minimum_required(VERSION 3.19)
+project(native_correctness LANGUAGES CXX)
+set(CMAKE_CXX_STANDARD 17)
+add_executable(qwen-correctness "${PARAKIT_ROOT}/tests/native/qwen_correctness.cpp")
+target_include_directories(qwen-correctness PRIVATE "${PARAKIT_ROOT}/build/native" "${PARAKIT_ROOT}/vendor/CrispASR/src")
+if(MSVC)
+    target_compile_options(qwen-correctness PRIVATE /utf-8)
+endif()
+enable_testing()
+add_test(NAME qwen-correctness COMMAND qwen-correctness)
+"#,
+    )
+    .unwrap();
+    let build = scratch.0.join("build");
+    checked(
+        Command::new("cmake")
+            .arg("-S")
+            .arg(&scratch.0)
+            .arg("-B")
+            .arg(&build)
+            .arg(format!("-DPARAKIT_ROOT={}", env!("CARGO_MANIFEST_DIR"))),
+    );
+    checked(
+        Command::new("cmake")
+            .arg("--build")
+            .arg(&build)
+            .args(["--config", "Release"]),
+    );
+    checked(Command::new("ctest").arg("--test-dir").arg(&build).args([
+        "--build-config",
+        "Release",
+        "--output-on-failure",
+    ]));
+}
+
+#[test]
 fn cmake_hook_compiles_the_copy_and_excludes_the_original() {
     let scratch = Scratch::new();
     let root = &scratch.0;
