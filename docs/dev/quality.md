@@ -319,6 +319,10 @@ The audit applies built-in rules only. It does not load `config.toml` or `[[rule
 
 Number-rule invariants and personal vocabulary handling are in [cleaning rules](../cleaning-rules.md#numbers). Cover both preservation and nearby exact counts in the existing regression matrix.
 
+Before adding a built-in rule or exception, report its actual hit count from a log replay. For merge acceptance, compare the released 0.5.x cleaner with the candidate over the full same corpus using identical profile, threshold, trailing-period, and rule settings. Retain every changed row and review them all for meaning; compare with the current branch baseline too when simplifying existing behavior. Unit tests alone do not establish acceptance, and agreement with an older cleaner is not ground truth.
+
+TODO: Review the existing backtracking-regex path in a separate follow-up, including the `fancy-regex` dependency, backtrack limits, fail-open behavior, and failure log field. Keep that work separate from numeric and repetition-rule simplification.
+
 ## Runtime Smoke Checks
 
 Run the daemon in foreground mode and exercise real applications:
