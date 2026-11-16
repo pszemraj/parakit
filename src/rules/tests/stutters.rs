@@ -20,13 +20,9 @@ fn whole_words_keep_the_first_spelling_and_count_runs() {
         ("she she’ll join", "she’ll join", 1),
         ("you you're ready", "you're ready", 1),
         ("you you would regret it", "you would regret it", 1),
-        ("I told you you were right", "I told you you were right", 0),
-        ("I told you you're right", "I told you you're right", 0),
-        (
-            "I told you you you were right",
-            "I told you you were right",
-            1,
-        ),
+        ("I told you you were right", "I told you were right", 1),
+        ("I told you you're right", "I told you're right", 1),
+        ("I told you you you were right", "I told you were right", 1),
         ("we we're ready", "we're ready", 1),
         ("they they're ready", "they're ready", 1),
         ("IT it it's fine", "IT's fine", 1),
@@ -126,7 +122,7 @@ fn general_stutters_work_before_number_and_acronym_formatting() {
                 "C plus plus and dash dash verbose",
                 "C plus plus and dash dash verbose",
             ),
-            ("five five five", "5 5 5"),
+            ("five five five", "Five five five"),
             ("B B C", "BBC"),
             ("the\nthe test", "The\nthe test"),
         ],
@@ -155,7 +151,7 @@ fn filler_removal_feeds_year_parsing_without_reordering_stutters() {
                 ("Twenty, uh, twenty five", "2025"),
                 ("one uh hundred", "100"),
                 ("twenty uh five layers", "25 layers"),
-                ("twenty twenty uh minutes", "20 20 minutes"),
+                ("twenty twenty uh minutes", "Twenty twenty minutes"),
                 ("the um the test", "The test"),
                 ("I uh I think", "I think"),
                 ("T T testing", "Testing"),
@@ -229,97 +225,29 @@ fn general_rule_remains_disableable_and_reports_runs() {
 }
 
 #[test]
-fn identical_words_can_have_distinct_grammatical_roles() {
+fn ordinary_repeats_collapse_without_contextual_exceptions() {
     for profile in [CleaningProfile::Safe, CleaningProfile::Aggressive] {
         assert_clean_cases(
             profile,
             &[
                 ("I gave her her keys back.", "I gave her her keys back."),
-                ("I asked her her name.", "I asked her her name."),
-                (
-                    "He told her her idea was good.",
-                    "He told her her idea was good.",
-                ),
-                ("I sent her her ticket.", "I sent her her ticket."),
-                ("I owe her her deposit.", "I owe her her deposit."),
-                ("I handed her her coat.", "I handed her her coat."),
-                ("I bought her her lunch.", "I bought her her lunch."),
-                ("Tell her her taxi is here.", "Tell her her taxi is here."),
-                ("Give HER\ther keys back.", "Give HER\ther keys back."),
-                (
-                    "I warned you you would regret it.",
-                    "I warned you you would regret it.",
-                ),
-                ("I told you you were right.", "I told you you were right."),
-                ("I tell you you are right.", "I tell you you are right."),
-                ("She tells you you can go.", "She tells you you can go."),
-                (
-                    "They reminded you you forgot.",
-                    "They reminded you you forgot.",
-                ),
-                (
-                    "We assured you you'd be safe.",
-                    "We assured you you'd be safe.",
-                ),
-                ("I told YOU\tyou're right.", "I told YOU\tyou're right."),
-                (
-                    "I told you you you were right.",
-                    "I told you you were right.",
-                ),
-                ("I told you you you're right.", "I told you you're right."),
+                ("I told you you were right.", "I told you were right."),
+                ("I told you you're right.", "I told you're right."),
+                ("I told you you you were right.", "I told you were right."),
                 ("You you would regret it.", "You would regret it."),
-                ("I think you you were right.", "I think you were right."),
-                ("I warned you. You you left.", "I warned you. You left."),
-                ("I warned you; you you left.", "I warned you; you left."),
-                ("I told you, you you left.", "I told you, you left."),
                 (
                     "You don't get to control control T and control W.",
-                    "You don't get to control control T and control W.",
+                    "You don't get to control T and control W.",
                 ),
-                (
-                    "You can control control control T.",
-                    "You can control control T.",
-                ),
+                ("You can control control control T.", "You can control T."),
                 (
                     "Calling something that isn't AGI AGI changes its label.",
-                    "Calling something that isn't AGI AGI changes its label.",
-                ),
-                (
-                    "Call something that is art art.",
-                    "Call something that is art art.",
-                ),
-                (
-                    "Don't label something that is not science science.",
-                    "Don't label something that is not science science.",
-                ),
-                (
-                    "Call someone who is a doctor doctor.",
-                    "Call someone who is a doctor doctor.",
-                ),
-                (
-                    "Calling something that isn't AGI AGI AGI changes its label.",
-                    "Calling something that isn't AGI AGI changes its label.",
+                    "Calling something that isn't AGI changes its label.",
                 ),
                 ("Press control control T.", "Press control T."),
                 (
                     "We call something that is is is not not a a label.",
                     "We call something that is not a label.",
-                ),
-                (
-                    "You can control control the cursor.",
-                    "You can control the cursor.",
-                ),
-                (
-                    "We discussed calling it. This isn't AGI AGI.",
-                    "We discussed calling it. This isn't AGI.",
-                ),
-                (
-                    "We discussed calling it; this isn't AGI AGI.",
-                    "We discussed calling it; this isn't AGI.",
-                ),
-                (
-                    "Calling it now.\nThat isn't AGI AGI.",
-                    "Calling it now.\nThat isn't AGI.",
                 ),
             ],
         );

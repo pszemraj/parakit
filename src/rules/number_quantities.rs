@@ -230,14 +230,7 @@ pub(super) fn classify(
                 });
             }
         }
-        if eligible
-            || span.literal
-                && span.start > 0
-                && matches!(
-                    tokens[span.start - 1].lowercase.as_str(),
-                    "minus" | "negative"
-                )
-        {
+        if eligible {
             proposals.push(Replacement {
                 start,
                 end,
@@ -299,9 +292,10 @@ fn connected(
             end += 1;
         }
         let run = &members[at..end];
-        // Two comma-separated values may belong to separate prose clauses.
-        let comma_pair = run.len() == 2
-            && matches!(&tokens[run[0].end..run[1].span.start], [comma] if comma.text == ",");
+        // Adjacent counts are ambiguous spoken groups ("fifty ninety", "five
+        // thirty"). Preserve them at every threshold; only typed year/version
+        // proposals may interpret their structure.
+        let adjacent = run.windows(2).any(|pair| pair[0].end == pair[1].span.start);
         // A following scale can apply to both bounds. Inspect the complete
         // quantity, including scales outside the parser span and K/M/B.
         let shared_scale = run.windows(2).any(|pair| {
@@ -313,8 +307,8 @@ fn connected(
                 && pair[1].has_scale
         });
         if run.len() > 1
-            && !comma_pair
-            && (shared_scale
+            && (adjacent
+                || shared_scale
                 || run
                     .iter()
                     .any(|quantity| !quantity.span.literal && quantity.span.value < threshold))

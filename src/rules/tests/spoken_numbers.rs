@@ -33,11 +33,11 @@ fn text2num_handles_documented_cardinals_groups_and_decimals() {
 }
 
 #[test]
-fn text2num_renders_signed_numbers() {
+fn sign_words_remain_words_while_quantities_render() {
     assert_clean_cases(
         CleaningProfile::Safe,
         &[
-            ("The offset is negative five.", "The offset is -5."),
+            ("The offset is negative five.", "The offset is negative 5."),
             ("The exponent is 2e minus 7.", "The exponent is 2e minus 7."),
             ("Three e minus four.", "Three e minus four."),
             ("400 minus 128.", "400 minus 128."),
@@ -54,16 +54,22 @@ fn text2num_renders_signed_numbers() {
             ("Positive or minus five.", "Positive or minus 5."),
             ("Plus minus five percent.", "Plus minus 5 percent."),
             ("Five plus minus ten.", "5 plus minus 10."),
-            ("Five plus negative ten.", "5 plus -10."),
-            ("Positive negative ten.", "Positive -10."),
-            ("It is positive minus five.", "It is positive -5."),
-            ("Minus five or minus ten.", "-5 or -10."),
-            ("Negative five or negative ten.", "-5 or -10."),
-            ("Minus five or minus ten point five.", "-5 or -10.5."),
-            ("Minus five K or minus ten K.", "-5K or -10K."),
+            ("Five plus negative ten.", "5 plus negative 10."),
+            ("Positive negative ten.", "Positive negative 10."),
+            ("It is positive minus five.", "It is positive minus 5."),
+            ("Minus five or minus ten.", "Minus 5 or minus 10."),
+            (
+                "Negative five or negative ten.",
+                "Negative 5 or negative 10.",
+            ),
+            (
+                "Minus five or minus ten point five.",
+                "Minus 5 or minus 10.5.",
+            ),
+            ("Minus five K or minus ten K.", "Minus 5K or minus 10K."),
             ("400 minus 128 K.", "400 minus 128K."),
             ("Minus v one point six.", "Minus v1.6."),
-            ("Use minus hundred twenty eight K.", "Use -128K."),
+            ("Use minus hundred twenty eight K.", "Use minus 128K."),
             (
                 "Use a two thousand character limit.",
                 "Use a 2000 character limit.",
@@ -80,7 +86,7 @@ fn text2num_renders_signed_numbers() {
             ("A hundred trillion parameters.", "100 trillion parameters."),
             (
                 "The temperature is minus twenty degrees.",
-                "The temperature is -20 degrees.",
+                "The temperature is minus 20 degrees.",
             ),
             (
                 "The bound is non-negative five.",
@@ -138,12 +144,12 @@ fn text2num_renders_ordinals_and_spoken_years() {
             ("Meet at one thirty.", "Meet at one thirty."),
             (
                 "My number is five five five twenty twelve.",
-                "My number is 5 5 5 20 12.",
+                "My number is five five five twenty twelve.",
             ),
             ("Use five, thirty.", "Use 5, 30."),
             (
                 "Use five thirty files and six rows.",
-                "Use 5 30 files and 6 rows.",
+                "Use five thirty files and 6 rows.",
             ),
             ("Use two point zero two point zero.", "Use 2.02.0."),
             ("Use two point zero three point zero.", "Use 2.03.0."),
@@ -153,11 +159,11 @@ fn text2num_renders_ordinals_and_spoken_years() {
             ("Use two point zero, three point zero.", "Use 2.0, 3.0."),
             (
                 "We need twenty ten-cent stamps.",
-                "We need 20 10-cent stamps.",
+                "We need twenty ten-cent stamps.",
             ),
             (
                 "We need twenty twenty-two-cent stamps.",
-                "We need 20 22-cent stamps.",
+                "We need twenty twenty-two-cent stamps.",
             ),
         ],
     );
@@ -304,9 +310,9 @@ fn assert_clean_at_thresholds(cases: &[(&str, &str)]) {
 }
 
 #[test]
-fn a_scale_takes_the_count_spoken_before_it() {
-    // text2num ends a number at the first scale it cannot apply, which left
-    // that scale bare: "1502 1500" and "203 100".
+fn adjacent_scaled_counts_stay_worded_but_conjoined_counts_render() {
+    // Preserve adjacent parsed counts instead of choosing a split. An explicit
+    // conjunction still separates complete quantities and their coefficients.
     assert_clean_at_thresholds(&[
         (
             "Fifteen hundred and two thousand five hundred.",
@@ -314,20 +320,35 @@ fn a_scale_takes_the_count_spoken_before_it() {
         ),
         (
             "It costs fifteen hundred two thousand five hundred.",
-            "It costs 1500 2500.",
+            "It costs fifteen hundred two thousand five hundred.",
         ),
-        ("Rows two hundred three hundred.", "Rows 200 300."),
-        ("Rows five hundred five hundred.", "Rows 500 500."),
-        ("Use one thousand two thousand.", "Use 1000 2000."),
-        ("Use ten thousand two thousand.", "Use 10000 2000."),
+        (
+            "Rows two hundred three hundred.",
+            "Rows two hundred three hundred.",
+        ),
+        (
+            "Rows five hundred five hundred.",
+            "Rows five hundred five hundred.",
+        ),
+        (
+            "Use one thousand two thousand.",
+            "Use one thousand two thousand.",
+        ),
+        (
+            "Use ten thousand two thousand.",
+            "Use ten thousand two thousand.",
+        ),
         (
             "Use two hundred thousand three hundred thousand.",
-            "Use 200000 300000.",
+            "Use two hundred thousand three hundred thousand.",
         ),
-        ("Use two hundred five hundred thousand.", "Use 200 500000."),
+        (
+            "Use two hundred five hundred thousand.",
+            "Use two hundred five hundred thousand.",
+        ),
         (
             "Use five million three million.",
-            "Use 5 million 3 million.",
+            "Use five million three million.",
         ),
         (
             "Use twenty-five hundred and two thousand.",
@@ -428,7 +449,7 @@ fn a_decimal_coefficient_keeps_its_scale_words() {
             "Use two point five thousand five hundred.",
             "Use 2.5 thousand 500.",
         ),
-        ("Minus two point five thousand.", "-2.5 thousand."),
+        ("Minus two point five thousand.", "Minus 2.5 thousand."),
         (
             "The model has two point five thousand parameters.",
             "The model has 2.5K parameters.",
@@ -885,7 +906,7 @@ fn line_breaks_end_spoken_numbers_and_their_guards() {
 }
 
 #[test]
-fn explicit_zero_number_threshold_is_the_opt_out_that_converts_every_value() {
+fn explicit_zero_number_threshold_renders_each_standalone_value() {
     let cleaner = cleaner_with_number_threshold(Some(0.0));
     assert_eq!(
         cleaner.clean_text("Zero files. One folder. Four notes."),
@@ -957,7 +978,10 @@ fn text2num_preserves_second_when_it_is_a_time_unit() {
             ("Wait a sixty second.", "Wait a 60 second."),
             ("Wait an eighty second.", "Wait an 80 second."),
             ("A hundred twenty second timeout.", "A 120 second timeout."),
-            ("RTX fifty ninety second vert.", "RTX 50 90 second vert."),
+            (
+                "RTX fifty ninety second vert.",
+                "RTX fifty ninety second vert.",
+            ),
             ("The twenty second of May.", "The 22nd of May."),
             ("May twenty second.", "May 22nd."),
         ],

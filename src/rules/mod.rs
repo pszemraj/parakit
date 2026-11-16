@@ -28,7 +28,7 @@
 //! * [`number_quantities`] - quantity extents, rendering, and connected bounds.
 //! * [`number_versions`] - decimals and dotted versions.
 //! * [`number_words`] - shared number-word and unit vocabulary.
-//! * [`stutters`] - contextual repeated-word collapsing and exceptions.
+//! * [`stutters`] - repeated-word collapsing and configured exceptions.
 //! * [`passes`] - other procedural transforms, including acronyms and
 //!   capitalization.
 //! * [`user`] - user-defined rules loaded from `config.toml`.
@@ -73,15 +73,16 @@ pub use user::{RulePosition, UserRule};
 
 /// Schema/behavior version recorded in transcription logs.
 /// Keep revisions distinct even when their package version is unchanged.
-pub const CLEANER_VERSION: u32 = 46;
+pub const CLEANER_VERSION: u32 = 47;
 
 /// Default minimum spoken cardinal or ordinal converted to digits when
 /// `cleaning.number_threshold` is left unset.
 ///
 /// An eligible value at or above this threshold renders as digits. A connected
-/// list or range containing a value below it retains its complete
-/// wording. Configuring `Some(0.0)` permits every eligible cardinal and ordinal;
-/// protected quantities, shared-scale bounds, and clock expressions retain their wording.
+/// list or range containing a value below it retains its complete wording.
+/// Adjacent counts stay intact at every threshold. Configuring `Some(0.0)` permits
+/// every eligible standalone cardinal and ordinal; protected quantities and
+/// shared-scale bounds retain their wording.
 pub const DEFAULT_NUMBER_THRESHOLD: f64 = 4.0;
 
 /// Built-in cleanup behavior tiers.

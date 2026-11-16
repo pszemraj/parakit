@@ -102,7 +102,6 @@ pub(crate) fn collapse_repeated_words<'a>(
                 && !protected_spans
                     .iter()
                     .any(|span| span.start <= found.start() && found.end() <= span.end)
-                && !distinct_grammatical_roles(&input[..*end], &input[found.end()..], &lowercase)
             {
                 // Keep the first pronoun's spelling and the restarted suffix:
                 // `It it's` becomes `It's`, including after `it it it's`.
@@ -181,68 +180,6 @@ pub(super) fn compile_repetition_exceptions(entries: &[String]) -> Result<Vec<Re
                 .context("could not compile repetition exception")
         })
         .collect()
-}
-
-// Identical words can finish an object clause and supply its predicate label,
-// or act as both a verb and the Control modifier in a keyboard shortcut.
-fn distinct_grammatical_roles(prefix: &str, suffix: &str, word: &str) -> bool {
-    if word == "you" || word.starts_with("you'") || word.starts_with("you’") {
-        // A reporting verb can take an object followed by a subject clause:
-        // "I told you you were right" and "I told you you're right".
-        // Match only the first pair so additional subject restarts still collapse.
-        let reporting = regex_static!(
-            r"(?i)\b(?:tell(?:s|ing)?|told|warn(?:s|ed|ing)?|remind(?:s|ed|ing)?|assur(?:e|es|ed|ing)|inform(?:s|ed|ing)?|teach(?:es|ing)?|taught|show(?:s|ed|ing|n)?|convinc(?:e|es|ed|ing)|promis(?:e|es|ed|ing))[ \t]+you$",
-            "object-subject pronoun repetition regex must compile"
-        );
-        if reporting.is_match(prefix) {
-            return true;
-        }
-    }
-    let naming = regex_static!(
-        concat!(
-            r"(?i)\b(?:call(?:s|ed|ing)?|label(?:s|ed|led|ing|ling)?|nam(?:e|es|ed|ing)|consider(?:s|ed|ing)?)\b[^.!?;\n]*",
-            r"\b(?:that|which|who)[ \t]+(?:is|are|was|were|isn['’]t|aren['’]t|wasn['’]t|weren['’]t)",
-            r"(?:[ \t]+not)?(?:[ \t]+(?:a|an))?[ \t]+[\p{L}\p{M}\p{N}_]+(?:['’][\p{L}\p{M}\p{N}_]+)*$"
-        ),
-        "object-label repetition regex must compile"
-    );
-    if !matches!(
-        word,
-        "is" | "are"
-            | "was"
-            | "were"
-            | "not"
-            | "a"
-            | "an"
-            | "the"
-            | "it"
-            | "its"
-            | "he"
-            | "she"
-            | "we"
-            | "you"
-            | "they"
-            | "and"
-            | "or"
-            | "to"
-            | "of"
-            | "in"
-    ) && naming.is_match(prefix)
-    {
-        return true;
-    }
-    if word != "control" {
-        return false;
-    }
-    let governing_verb = regex_static!(
-        r"(?i)\b(?:to|can|could|cannot|can['’]t|may|might|must|should|will|would|won['’]t|don['’]t|didn['’]t|doesn['’]t)[ \t]+control$",
-        "governing control verb regex must compile"
-    );
-    let key = regex_static!(
-        r"(?i)^[ \t]+(?:control[ \t]+)*(?:[a-z0-9]|f(?:[1-9]|1[0-9]|2[0-4])|alt|shift|tab|enter|esc(?:ape)?|space|backspace|delete|home|end|page[ \t]+(?:up|down))\b",
-        "keyboard shortcut tail regex must compile"
-    );
-    governing_verb.is_match(prefix) && key.is_match(suffix)
 }
 
 fn protected(word: &str, language: &Language) -> bool {

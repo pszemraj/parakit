@@ -230,7 +230,8 @@ pub(crate) struct CleaningConfig {
     /// Eligible cardinal and ordinal values at or above it become digits; smaller values retain the ASR wording.
     /// A connected list or range containing a value below it retains its complete wording, including a final size suffix.
     /// Unset resolves to the built-in default of 4, so zero through three and first through third stay as produced.
-    /// `0` converts every eligible value; protected quantities, shared-scale bounds, clock expressions, and the time unit "second" retain their wording.
+    /// Adjacent parsed counts stay intact at every threshold, including mixed digits and words.
+    /// `0` converts every eligible standalone value; protected quantities, shared-scale bounds, and the time unit "second" retain their wording.
     pub(crate) number_threshold: Option<f64>,
     /// Additional literal words or phrases protected from whole-word repetition collapse.
     pub(crate) repetition_exceptions: Vec<String>,
@@ -413,12 +414,12 @@ pub(crate) const TEMPLATE: &str = r#"# parakit config.toml
 # Conversion threshold shared by the numeric rules, 0 or more.
 # Eligible cardinal and ordinal values at or above it become digits; smaller values retain the ASR wording.
 # A connected list or range containing a value below it retains its whole wording, including a final size suffix.
-# Otherwise the counts render separately with their spaces retained: "fifty ninety" becomes "50 90".
+# Adjacent parsed counts stay intact at every threshold, including mixed digits and words and a final size suffix.
 # Leave unset to use the built-in default of 4, which leaves zero through three and first through third as produced.
 # For example, 100 also leaves fifty as a word.
-# Set to 0 to convert every eligible value.
-# Even at 0, plural magnitudes, fractions, bare scales (including "a million"), shared-scale bounds, clock expressions, and the time unit "second" retain their wording.
-# A lone comma separates two counts; lists of three or more or with and/or stay connected. Cardinal/ordinal boundaries separate runs.
+# Set to 0 to convert every eligible standalone value.
+# Even at 0, plural magnitudes, fractions, bare scales (including "a million"), shared-scale bounds, and the time unit "second" retain their wording.
+# Commas connect even two counts of the same kind. Cardinal/ordinal boundaries separate runs.
 # Year/version structures have separate rules. Identifier compaction grants no threshold bypass for spoken counts and also works on existing digits.
 # number_threshold = 5
 

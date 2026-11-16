@@ -104,14 +104,14 @@ fn version_components_do_not_absorb_a_following_size() {
         CleaningProfile::Safe,
         &[
             ("Python three point twelve.", "Python 3.12."),
-            ("Capacity 2.5 seven B.", "Capacity 2.5 7B."),
+            ("Capacity 2.5 seven B.", "Capacity 2.5 seven B."),
             ("Llama three point one seventy B.", "Llama 3.1 70B."),
-            ("Llama 3.1 seventy B.", "Llama 3.1 70B."),
+            ("Llama 3.1 seventy B.", "Llama 3.1 seventy B."),
             ("Llama seventy B three point one.", "Llama 70B 3.1."),
             ("Granite thirty B four point one.", "Granite 30B 4.1."),
             ("Mistral seven B v zero point three.", "Mistral 7B v0.3."),
             ("Plan B v two point oh.", "Plan B v2.0."),
-            ("About 1 5 M parameters.", "About 1 5M parameters."),
+            ("About 1 5 M parameters.", "About 1 5 M parameters."),
         ],
     );
 }
@@ -271,7 +271,7 @@ fn version_components_use_text2num_without_a_custom_number_parser() {
             ("Python three three point twelve.", "Python three 3.12."),
             ("Opus four five point five.", "Opus 4 5.5."),
             ("Ubuntu two four point oh four.", "Ubuntu two 4.04."),
-            // Multiword digit bases remain ambiguous outside IPv4 shapes.
+            // Multiword digit bases remain separate counts before the version.
             (
                 "Version one two point three point four.",
                 "Version one 2.3.4.",
@@ -309,16 +309,20 @@ fn version_components_use_text2num_without_a_custom_number_parser() {
             ("Python three point one two point four.", "Python 3.12.4."),
             (
                 "One nine two point one six eight point one point one.",
-                "192.168.1.1.",
+                "One nine 2.168.1.1.",
             ),
             (
                 "One two seven point zero point zero point one.",
-                "127.0.0.1.",
+                "One two 7.0.0.1.",
             ),
             (
                 "Use one hundred ninety two point one hundred sixty eight point zero point one.",
                 "Use 192.168.0.1.",
             ),
+            // Ordinary cardinal components and literal dotted strings need no
+            // digit-spelled-base exception, regardless of component count.
+            ("Use 192.168.0.1.", "Use 192.168.0.1."),
+            ("V 192.168.0.1.", "v192.168.0.1."),
             ("CUDA 12 point nine.", "CUDA 12.9."),
             ("B0.1 point two.", "B0.1.2."),
             ("B1 point zero-five point two.", "B1.05.2."),

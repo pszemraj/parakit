@@ -22,7 +22,7 @@ pub(super) fn horizontal_gap(input: &str, start: usize, end: usize) -> bool {
 
 /// Whether tokens connect members of a numeric list or range.
 ///
-/// Adjacency and clock-only range words remain policies of their classifiers.
+/// Adjacency is handled separately by the quantity classifier.
 ///
 /// # Arguments
 /// * `tokens` - Original numeric tokens and prose boundaries.

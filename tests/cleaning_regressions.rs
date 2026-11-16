@@ -330,7 +330,7 @@ fn protected_phrases_and_structured_numbers_follow_the_public_policy() {
             "Use one hundred ninety two point one hundred sixty eight point zero point one.",
             "Use 192.168.0.1.",
         ),
-        ("RTX fifty ninety.", "RTX 50 90."),
+        ("RTX fifty ninety.", "RTX fifty ninety."),
         (
             "The value is three point one four one five.",
             "The value is 3.1415.",
@@ -348,11 +348,11 @@ fn protected_phrases_and_structured_numbers_follow_the_public_policy() {
         ),
         (
             "We need twenty ten-cent stamps.",
-            "We need 20 10-cent stamps.",
+            "We need twenty ten-cent stamps.",
         ),
         (
             "We need twenty twenty-two-cent stamps.",
-            "We need 20 22-cent stamps.",
+            "We need twenty twenty-two-cent stamps.",
         ),
     ];
     for profile in [CleaningProfile::Safe, CleaningProfile::Aggressive] {
@@ -372,7 +372,7 @@ fn protected_phrases_and_structured_numbers_follow_the_public_policy() {
 }
 
 #[test]
-fn adjacent_numeric_runs_convert_together_at_the_configured_threshold() {
+fn adjacent_runs_stay_worded_while_separated_lists_follow_the_threshold() {
     let cases = [
         ("Meet at ten thirty.", ["Meet at ten thirty."; 4]),
         ("Meet at five thirty.", ["Meet at five thirty."; 4]),
@@ -425,9 +425,9 @@ fn adjacent_numeric_runs_convert_together_at_the_configured_threshold() {
             "On day one, twenty people came.",
             [
                 "On day 1, 20 people came.",
-                "On day one, 20 people came.",
-                "On day one, 20 people came.",
-                "On day one, 20 people came.",
+                "On day one, twenty people came.",
+                "On day one, twenty people came.",
+                "On day one, twenty people came.",
             ],
         ),
         (
@@ -452,105 +452,39 @@ fn adjacent_numeric_runs_convert_together_at_the_configured_threshold() {
             "Step one, five minutes of stretching.",
             [
                 "Step 1, 5 minutes of stretching.",
-                "Step one, 5 minutes of stretching.",
-                "Step one, 5 minutes of stretching.",
+                "Step one, five minutes of stretching.",
+                "Step one, five minutes of stretching.",
                 "Step one, five minutes of stretching.",
             ],
         ),
-        (
-            "Three, four hundred.",
-            ["3, 400.", "Three, 400.", "Three, 400.", "Three, 400."],
-        ),
+        ("Three, four hundred.", ["Three, four hundred."; 4]),
         (
             "Three, four, five hundred.",
             ["Three, four, five hundred."; 4],
         ),
-        (
-            "Meet at five six seven.",
-            [
-                "Meet at 5 6 7.",
-                "Meet at 5 6 7.",
-                "Meet at 5 6 7.",
-                "Meet at five six seven.",
-            ],
-        ),
+        ("Meet at five six seven.", ["Meet at five six seven."; 4]),
         (
             "Code five seven thirty pm.",
-            [
-                "Code 5 7 30 pm.",
-                "Code 5 7 30 pm.",
-                "Code 5 7 30 pm.",
-                "Code five seven thirty pm.",
-            ],
+            ["Code five seven thirty pm."; 4],
         ),
         (
             "My number is five five five twenty twelve.",
-            [
-                "My number is 5 5 5 20 12.",
-                "My number is 5 5 5 20 12.",
-                "My number is 5 5 5 20 12.",
-                "My number is five five five twenty twelve.",
-            ],
+            ["My number is five five five twenty twelve."; 4],
         ),
         (
             "Use one twenty eight K context.",
-            [
-                "Use 1 28K context.",
-                "Use one twenty eight K context.",
-                "Use one twenty eight K context.",
-                "Use one twenty eight K context.",
-            ],
+            ["Use one twenty eight K context."; 4],
         ),
-        ("Use 1 thirty K context.", ["Use 1 30K context."; 4]),
-        (
-            "Use one 30 K context.",
-            [
-                "Use 1 30K context.",
-                "Use one 30 K context.",
-                "Use one 30 K context.",
-                "Use one 30 K context.",
-            ],
-        ),
-        (
-            "Llama three seventy B.",
-            [
-                "Llama 3 70B.",
-                "Llama three seventy B.",
-                "Llama three seventy B.",
-                "Llama three seventy B.",
-            ],
-        ),
+        ("Use 1 thirty K context.", ["Use 1 thirty K context."; 4]),
+        ("Use one 30 K context.", ["Use one 30 K context."; 4]),
+        ("Llama three seventy B.", ["Llama three seventy B."; 4]),
         (
             "GPT two one twenty four M.",
-            [
-                "GPT 2 1 24M.",
-                "GPT two one twenty four M.",
-                "GPT two one twenty four M.",
-                "GPT two one twenty four M.",
-            ],
+            ["GPT two one twenty four M."; 4],
         ),
-        (
-            "OK five thirty.",
-            ["OK 5 30.", "OK 5 30.", "OK 5 30.", "OK five thirty."],
-        ),
-        (
-            "SM one twenty.",
-            [
-                "SM 1 20.",
-                "SM one twenty.",
-                "SM one twenty.",
-                "SM one twenty.",
-            ],
-        ),
-        (
-            "Use first second third.",
-            [
-                "Use 1st 2nd 3rd.",
-                "Use first second third.",
-                "Use first second third.",
-                "Use first second third.",
-            ],
-        ),
+        ("OK five thirty.", ["OK five thirty."; 4]),
+        ("SM one twenty.", ["SM one twenty."; 4]),
+        ("Use first second third.", ["Use first second third."; 4]),
     ];
     let mut failures = Vec::new();
     for profile in [CleaningProfile::Safe, CleaningProfile::Aggressive] {
@@ -573,7 +507,7 @@ fn adjacent_numeric_runs_convert_together_at_the_configured_threshold() {
 }
 
 #[test]
-fn cardinal_and_ordinal_thresholds_apply_to_lists_and_multi_digit_values() {
+fn cardinal_and_ordinal_lists_follow_thresholds_while_adjacent_runs_stay_worded() {
     for profile in [CleaningProfile::Safe, CleaningProfile::Aggressive] {
         for (threshold, expected) in [
             (0.0, "1, 2, 3, 4, 5th, 6th."),
@@ -612,7 +546,7 @@ fn cardinal_and_ordinal_thresholds_apply_to_lists_and_multi_digit_values() {
                 ("From three to five days.", "From 3 to 5 days."),
                 ("Three through five days.", "3 through 5 days."),
                 ("Three or five days.", "3 or 5 days."),
-                ("First second third fourth.", "1st 2nd 3rd 4th."),
+                ("First second third fourth.", "First second third fourth."),
             ] {
                 assert_eq!(
                     cleaner.clean_text(input),
@@ -642,22 +576,34 @@ fn cardinal_and_ordinal_thresholds_apply_to_lists_and_multi_digit_values() {
 }
 
 #[test]
-fn year_pairs_require_year_values_and_stay_separate_in_longer_runs() {
+fn nineteen_and_twenty_year_pairs_stay_separate_from_adjacent_counts() {
     for profile in [CleaningProfile::Safe, CleaningProfile::Aggressive] {
         let cleaner = build_cleaner(false, profile, false, Some(4.0), &[], &[], &[])
             .unwrap()
             .unwrap();
         for (input, expected) in [
-            ("Release eighteen ninety-nine.", "Release 1899."),
+            (
+                "Release eighteen ninety-nine.",
+                "Release eighteen ninety-nine.",
+            ),
             ("Release nineteen oh five.", "Release 1905."),
             ("Release twenty twenty-two.", "Release 2022."),
             ("Release 19 ninety-nine.", "Release 1999."),
             ("Release 19 99.", "Release 19 99."),
-            ("Code five nineteen ninety-nine.", "Code 5 19 99."),
+            (
+                "Code five nineteen ninety-nine.",
+                "Code five nineteen ninety-nine.",
+            ),
             ("Code twenty-six oh four.", "Code twenty-six oh four."),
-            ("Wait nineteen twenty minutes.", "Wait 19 20 minutes."),
+            (
+                "Wait nineteen twenty minutes.",
+                "Wait nineteen twenty minutes.",
+            ),
             ("Meet at nineteen twenty pm.", "Meet at nineteen twenty pm."),
-            ("Use nineteen twenty K context.", "Use 19 20K context."),
+            (
+                "Use nineteen twenty K context.",
+                "Use nineteen twenty K context.",
+            ),
         ] {
             assert_eq!(cleaner.clean_text(input), expected, "{profile:?}: {input}");
         }

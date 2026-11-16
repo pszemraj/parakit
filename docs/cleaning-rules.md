@@ -46,11 +46,11 @@ English cardinal and ordinal recognition uses [`text2num`](https://crates.io/cra
 
 #### Threshold And Adjacent Numbers
 
-`cleaning.number_threshold` defaults to 4. Eligible cardinal and ordinal values at or above it render as digits; smaller values retain the model's wording, so `zero` through `three` and `first` through `third` stay as produced. A threshold of `100` also leaves `fifty` as a word. At `0`, every eligible value converts, including a leading zero (`zero one` becomes `01`); shared-scale bounds and the [protected quantities and clocks](#preserved-quantities-and-times) below still remain words.
+`cleaning.number_threshold` defaults to 4. Eligible cardinal and ordinal values at or above it render as digits; smaller values retain the model's wording, so `zero` through `three` and `first` through `third` stay as produced. A threshold of `100` also leaves `fifty` as a word. At `0`, every eligible standalone value converts; adjacent groups, shared-scale bounds, and the [protected quantities](#preserved-quantities-and-times) below still retain their wording.
 
-Adjacent parsed cardinal counts connected by spaces or tabs keep their separators when all meet the threshold: `GPU fifty ninety` becomes `GPU 50 90`. If any count is below it, the entire run retains its wording, including a final size suffix: `one twenty eight K` stays words at the default and becomes `1 28K` at `0`. The same protection applies to cardinal and ordinal lists or ranges joined by commas, `and`, `or`, `to`, or `through`: `one, two, three, four, five` and `between three and five days` stay words at the default. Ordinal modifiers remain separate (`first five hundred rows` becomes `first 500 rows`). This protection also gates compaction when `spoken-numbers` is disabled: `three 50 K` stays separate at `4` but becomes `three 50K` at `0`.
+Adjacent parsed counts connected by spaces or tabs stay intact at every threshold, including mixed digits and words and a final size suffix: `GPU fifty ninety`, `one twenty eight K`, and `three 50 K` retain their wording. This also gates compaction when `spoken-numbers` is disabled. Cardinal and ordinal lists or ranges joined by commas, `and`, `or`, `to`, or `through` retain their wording when any member is below the threshold: `one, two, three, four, five` and `between three and five days` stay words at the default.
 
-A cardinal/ordinal boundary always separates runs, including across a comma: `first, twenty people` becomes `first, 20 people`. A lone comma between two values also separates them (`on day one, twenty people` becomes `on day one, 20 people`); comma lists stay connected with three or more members or an explicit `and`/`or`.
+A cardinal/ordinal boundary separates runs, including across a comma: `first five hundred rows` becomes `first 500 rows`, and `first, twenty people` becomes `first, 20 people`. A comma connects even two counts of the same kind, so `on day one, twenty people` stays worded at the default.
 
 Sentence punctuation, semicolons, line breaks, and intervening prose separate runs; nearby labels never bypass the threshold. Existing digits stay digits even within a protected list. Unknown runs containing the contextual zero aliases `oh`, `o`, or `nought`, such as `fifty oh five`, remain intact unless they form a recognized year or version. Unsupported scientific notation (`three e minus four`) also stays words. [Years](#calendar-years) and [versions](#versions-and-identifiers) use their own rendering rules.
 
@@ -64,9 +64,9 @@ After a scale word, `and` separates quantities when the next has the same larges
 
 In a connected list or range, an unscaled bound before a larger explicit scaled count can share that scale. The entire expression stays worded at every threshold: `four or five thousand dollars` and `between five and six hundred` retain their meaning. Separate explicit scales still render independently (`five hundred or six hundred` becomes `500 or 600`).
 
-A scale takes the immediately preceding count as its coefficient (`two hundred three hundred` becomes `200 300`). Ambiguous coefficient boundaries or stacked scales remain words, as in `one hundred twenty three hundred` and `fifteen hundred thousand`.
+A scale takes the immediately preceding count as its coefficient. Separate adjacent counts stay intact (`two hundred three hundred`); ambiguous coefficient boundaries or stacked scales also remain words, as in `one hundred twenty three hundred` and `fifteen hundred thousand`. Sign words such as `minus` and `negative` retain their wording while eligible numbers follow the ordinary rules.
 
-`size-suffixes` compacts written counts and explicit `thousand`/`million`/`billion` quantities to exact `K`/`M`/`B` notation, keeping a decimal coefficient before one scale with that scale's suffix (`1.55 billion parameters` becomes `1.55B parameters`); `trillion` retains its wording. An explicit uppercase suffix binds only the last eligible count (`2.5 seven B` becomes `2.5 7B`), including its scale (`a hundred K` becomes `100K`). Independent counts never concatenate, protected mixed runs stay intact, and digit-by-digit decimals remain one expression (`two point five seven B` becomes `2.57B`). Disable this control for the general quantity rendering.
+`size-suffixes` compacts written counts and explicit `thousand`/`million`/`billion` quantities to exact `K`/`M`/`B` notation, keeping a decimal coefficient before one scale with that scale's suffix (`1.55 billion parameters` becomes `1.55B parameters`); `trillion` retains its wording. An explicit uppercase suffix binds one eligible count, including its scale (`a hundred K` becomes `100K`). Independent counts never concatenate, protected mixed runs stay intact, and digit-by-digit decimals remain one expression (`two point five seven B` becomes `2.57B`). Disable this control for the general quantity rendering.
 
 Spoken cardinal counts require `spoken-numbers`: disabling it keeps `a seven B model` as words, while existing `7 B` can still become `7B`. Decimals rendered by an enabled `spoken-versions` pass also remain eligible.
 
@@ -82,17 +82,15 @@ A separate exact quantity before an indefinite phrase still follows the threshol
 
 `Second` defaults to a time unit after a number, including before a noun (`the thirty second timeout` becomes `the 30 second timeout`). `One second`, `the fifth second`, `per second`, `split-second`, and elapsed plural `seconds` retain the unit. A compound ordinal is selected by a following `of` or supported calendar word (`day`, `week`, `month`, `year`, `decade`, `century`, `millennium`, or their plurals), preceding month, an `and` directly before `second`, or phrase-ending punctuation/end: `May twenty second` becomes `May 22nd`, `the one hundred and second file` becomes `the 102nd file`, and `the twenty second century` becomes `the 22nd century`. Before the entire numeric phrase, `every`, `each`, `per`, `a`, or `an` selects a duration even at phrase end, unless a stronger `of`, calendar-word, month, or `and` cue applies. A definite article alone does not select the ordinal. Genuine ordinals, including lists, follow the threshold. Single-count clock expressions have no separate threshold bypass: `five o'clock` becomes `5 o'clock`, while `two o'clock` stays words at the default.
 
-Fully spoken hour/minute pairs preserve their wording at every threshold when followed by `AM`, `pm` (case-insensitive), or dotted `a.m.`/`p.m.`. Twelve-hour pairs also stay words after `at`, `from`, `to`, `until`, `between`, `by`, `before`, `after`, `around`, `about`, `till`, `past`, `since`, `it is`, or `it's`, or before case-insensitive `am`. Connected clock endpoints joined by `and`, `or`, `to`, `until`, `till`, or `through` share the cue or meridiem, including whole-hour endpoints: `from nine to ten thirty`, `seven thirty or eight pm`, and `nine thirty or ten thirty pm` stay worded. A whole hour before an ordinary noun remains a count (`at seven thirty and eight files` becomes `at seven thirty and 8 files`).
-
-Pairs already containing digits follow ordinary number rendering (`at 7 thirty pm` becomes `at 7 30 pm`). A bare century pair still follows the year rule, and other adjacent counts such as `use five thirty files` remain `use 5 30 files` when they meet the threshold.
+Hour/minute pairs follow the same adjacent-count protection as other groups: `at seven thirty pm`, `at 7 thirty pm`, and `use five thirty files` stay intact at every threshold.
 
 #### Calendar Years
 
-`Thirteen` through `twenty` followed by a two-digit count, or by a contextual zero alias and a digit, renders as one year without cue words: `fourteen ninety two` becomes `1492`, `twenty twenty six` becomes `2026`, and `nineteen oh five` becomes `1905`.
+`Nineteen` or `twenty` followed by a two-digit count, or by a contextual zero alias and a digit, renders as one year without cue words: `twenty twenty six` becomes `2026`, and `nineteen oh five` becomes `1905`. Earlier century pairs such as `fourteen ninety two` stay intact.
 
 A pair needs at least one spoken component; existing `20 22` stays separate. Pairs inside longer adjacent numeric runs also stay separate. A preceding ordinal day or joined identifier starts a separate run.
 
-A following whole-word time, measurement, or currency unit, `percent`, case-insensitive unit abbreviation (`GB`, `ms`, `Hz`), uppercase `AM`, case-insensitive `pm`, dotted `a.m.`/`p.m.`, or uppercase `K`/`M`/`B` blocks joining; ordinary adjacent-count handling applies unless the pair is a protected clock expression. Single-letter units, unrelated uppercase abbreviations (`TV`), and prose words (`in`, `a`, `am`, `us`) do not block it. Each pair is classified independently, so `in twenty twenty five and twenty twenty` becomes `in 2025 and 2020`.
+A following time, measurement, or currency unit, recognized unit abbreviation, meridiem, or uppercase `K`/`M`/`B` blocks joining; ordinary adjacent-count protection applies. Unrelated uppercase abbreviations (`TV`) and prose words do not block it. Each pair is classified independently, so `in twenty twenty five and twenty twenty` becomes `in 2025 and 2020`.
 
 Date days, identifier counts, and scale-based years use the ordinary threshold: `April first, twenty twenty four` becomes `April first, 2024`, while `two thousand twenty two` becomes `2022` at the default.
 
@@ -100,11 +98,11 @@ Date days, identifier counts, and scale-based years use the ordinary threshold: 
 
 Multi-point versions render component by component with periods, regardless of the prose threshold or a version cue: `Ubuntu twenty two point zero four point three` becomes `Ubuntu 22.04.3`. Digit-by-digit components retain their digits, including leading zeros; `two point zero three point zero` becomes `2.03.0`, and a single decimal such as `three point one four one five` becomes `3.1415`. Punctuation separates decimal values (`two point zero, three point zero` becomes `2.0, 3.0`).
 
-A base spoken digit by digit is joined only in an IPv4-shaped run with at least three `point` separators, such as `one nine two point one six eight point one point one` becoming `192.168.1.1`. Other version bases use ordinary cardinal parsing, preserving the boundary between adjacent independent counts.
+Version bases use ordinary cardinal parsing, preserving the boundary between adjacent independent counts. There is no special joining of a base spoken digit by digit. Ordinary versions can have four or more components (`one point two point three point four` becomes `1.2.3.4`).
 
 Numeric prefixes use the same component parsing (`Version 2 point zero five` becomes `Version 2.05`). Before `hundred` or `thousand`, the last spaced digit of a digit-by-digit fraction starts a separate coefficient unless that digit or the first digit is zero (`2 point five two thousand` becomes `2.5 2000`, `one point two zero thousand` becomes `1.20 thousand`); before `million` and larger scales the fraction stays whole (`2 point five two million` becomes `2.52 million`). Standalone `V` or `v` joins a dotted version as lowercase `v`.
 
-`numeric-identifiers` joins an uppercase single letter other than `A` or `I`, or `SM`, to one complete numeric run. That run may be existing digits or output eligible for `spoken-numbers` or `spoken-versions`; there is no threshold bypass. At the default, `Q five` becomes `Q5`, `Q two` stays words, and `SM eight nine` becomes `SM 8 9`. Other two-letter stems do not join (`FP thirty two` becomes `FP 32`). A letter already bound to another conversion, such as a size suffix, is not reused. With `spoken-numbers` disabled, existing `Q 2` can still become `Q2`.
+`numeric-identifiers` joins an uppercase single letter other than `A` or `I`, or `SM`, to one complete numeric run. That run may be existing digits or output eligible for `spoken-numbers` or `spoken-versions`; there is no threshold bypass. At the default, `Q five` becomes `Q5`, while `Q two` and the adjacent group `SM eight nine` stay intact. Other two-letter stems do not join (`FP thirty two` becomes `FP 32`). A letter already bound to another conversion, such as a size suffix, is not reused. With `spoken-numbers` disabled, existing `Q 2` can still become `Q2`.
 
 #### Numeric Controls And Migration
 
@@ -114,7 +112,7 @@ The five numeric controls are independently disabled through `cleaning.disabled_
 | --- | --- |
 | `spoken-numbers` | Ordinary cardinal and ordinal quantities, using `cleaning.number_threshold`. |
 | `spoken-versions` | Spoken decimal components, dotted versions, numeric point suffixes, and `v` prefixes. |
-| `calendar-years` | Century pairs beginning with 18, 19, or 20, except before a unit or AM/PM/size marker. |
+| `calendar-years` | Century pairs beginning with 19 or 20, except before a unit or AM/PM/size marker. |
 | `numeric-identifiers` | A single uppercase letter other than A/I, or SM, joined to an existing or threshold-rendered number. |
 | `size-suffixes` | Explicit `K`/`M`/`B` suffixes and compact parameter counts. |
 
@@ -138,7 +136,7 @@ Dangling-connective removal drops final `so`, `but`, `and`, `or`, or `because` c
 
 `stutter-safe-words` collapses adjacent identical words case-insensitively, keeping the first spelling (`where where` becomes `where`). A pronoun restarted as its contraction keeps the suffix (`it it's` becomes `it's`). Only spaces and tabs join a run; punctuation and line breaks preserve repetitions. Numbers, spelling letters other than `I`/`a`, and the built-in exceptions remain intact. Exceptions include common idioms and intensifiers (`hee`, `bang`, `poo`, `very`) and the symbol words `plus`, `dash`, `equals`, `slash`, `dot`, `star`, `underscore`, `colon`, and `pipe`. Other symbol names follow ordinary repetition handling. The complete list lives beside the scanner in `src/rules/stutters.rs`.
 
-Recognized grammatical contexts also preserve distinct uses of the same word, such as `get to control control T` and `calling something that isn't science science`. Both profiles preserve `her her`, as in `I gave her her keys back`. Add your own words or literal phrases with [`cleaning.repetition_exceptions`](configuration.md#preserving-repeated-words); these supplement the built-in list.
+Both profiles preserve the built-in exception `her her`, as in `I gave her her keys back`. Add your own words or literal phrases with [`cleaning.repetition_exceptions`](configuration.md#preserving-repeated-words); these supplement the built-in list.
 
 Repeated `I` and `a` retain their existing treatment, including uppercase-I normalization. Repeated `is` collapses in normal mode. The aggressive profile additionally collapses `that`, `had`, `do`, `can`, and `no`; both profiles preserve punctuation-delimited forms such as `No, no`. Add a repetition exception, use punctuation, or disable the rule to retain other deliberate repetitions such as `tomato tomato`.
 

@@ -262,28 +262,24 @@ fn ordinal_before_second_does_not_convert_the_time_unit() {
 }
 
 #[test]
-fn ordinal_lists_remain_ordinal_lists() {
+fn ordinal_runs_preserve_adjacency_and_apply_list_threshold_as_a_whole() {
     for threshold in [0.0, 4.0, 10.0] {
         let cleaner = cleaner_with_number_threshold(Some(threshold));
-        let first = if threshold <= 1.0 { "1st" } else { "first" };
-        let second = if threshold <= 2.0 { "2nd" } else { "second" };
-        let third = if threshold <= 3.0 { "3rd" } else { "third" };
-        for (input, expected) in [
-            (
-                "She came first second third.",
-                format!("She came {first} {second} {third}."),
-            ),
-            (
-                "She came first, second, third.",
-                format!("She came {first}, {second}, {third}."),
-            ),
-            (
-                "The first second third arrived.",
-                format!("The {first} {second} {third} arrived."),
-            ),
+        for input in [
+            "She came first second third.",
+            "The first second third arrived.",
         ] {
-            assert_eq!(cleaner.clean_text(input), expected, "threshold {threshold}");
+            assert_eq!(cleaner.clean_text(input), input, "threshold {threshold}");
         }
+        assert_eq!(
+            cleaner.clean_text("She came first, second, third."),
+            if threshold <= 1.0 {
+                "She came 1st, 2nd, 3rd."
+            } else {
+                "She came first, second, third."
+            },
+            "threshold {threshold}",
+        );
     }
 }
 
@@ -310,11 +306,11 @@ fn identifier_stems_join_only_numbers_already_rendered_as_digits() {
             ("C one more time.", "C one more time."),
             ("D three times.", "D three times."),
             ("Gen Z two years.", "Gen Z two years."),
-            ("SM eight nine.", "SM 8 9."),
-            ("Arc B five eighty.", "Arc B 5 80."),
-            ("R five nine five.", "R 5 9 5."),
-            ("P 99.9 five.", "P 99.9 5."),
-            ("SM 8.2 nine.", "SM 8.2 9."),
+            ("SM eight nine.", "SM eight nine."),
+            ("Arc B five eighty.", "Arc B five eighty."),
+            ("R five nine five.", "R five nine five."),
+            ("P 99.9 five.", "P 99.9 five."),
+            ("SM 8.2 nine.", "SM 8.2 nine."),
         ],
     );
 }
@@ -390,32 +386,21 @@ fn typed_renderers_work_without_general_spoken_number_rendering() {
 }
 
 #[test]
-fn adjacent_spoken_runs_preserve_every_word_when_any_count_is_below_threshold() {
+fn adjacent_numeric_runs_keep_their_original_representation_at_every_threshold() {
     for threshold in [0.0, 4.0, 10.0] {
         let cleaner = cleaner_with_number_threshold(Some(threshold));
-        for (input, digits) in [
-            ("Use three twenty billion.", "Use 3 20 billion."),
-            ("Use three fifty K.", "Use 3 50K."),
-            ("Use one twenty eight K.", "Use 1 28K."),
-            ("SM one twenty.", "SM 1 20."),
-            ("Use two thirty.", "Use 2 30."),
-            ("Use sixteen three eighty four.", "Use 16 3 84."),
+        for input in [
+            "Use three twenty billion.",
+            "Use three fifty K.",
+            "Use one twenty eight K.",
+            "SM one twenty.",
+            "Use two thirty.",
+            "Use sixteen three eighty four.",
+            "Use fifty ninety.",
+            "Use five thirty.",
         ] {
-            assert_eq!(
-                cleaner.clean_text(input),
-                if threshold == 0.0 { digits } else { input },
-                "{threshold}: {input}"
-            );
+            assert_eq!(cleaner.clean_text(input), input, "{threshold}: {input}");
         }
-        assert_eq!(cleaner.clean_text("Use fifty ninety."), "Use 50 90.");
-        assert_eq!(
-            cleaner.clean_text("Use five thirty."),
-            if threshold <= 5.0 {
-                "Use 5 30."
-            } else {
-                "Use five thirty."
-            }
-        );
     }
 }
 
@@ -472,6 +457,7 @@ fn shared_scales_use_complete_quantities_in_both_bound_orders() {
                 "Use fifty, sixty, and seventy trillion dollars.",
                 "Use 5 or six hundred K dollars.",
                 "Use five or 600 million parameters.",
+                "Use fifty, sixty K dollars.",
             ] {
                 assert_eq!(
                     cleaner.clean_text(input),
@@ -500,7 +486,6 @@ fn shared_scales_use_complete_quantities_in_both_bound_orders() {
                     "Use 50 files or 60K dollars.",
                     50.0,
                 ),
-                ("Use fifty, sixty K dollars.", "Use 50, 60K dollars.", 50.0),
             ] {
                 assert_eq!(
                     cleaner.clean_text(input),

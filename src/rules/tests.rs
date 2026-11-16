@@ -357,15 +357,15 @@ fn identifier_formatting_uses_structural_rules_not_vocabulary_lists() {
             ("OK five minutes ago.", "OK 5 minutes ago."),
             ("US 30 remains open.", "US 30 remains open."),
             ("TV four is available.", "TV 4 is available."),
-            ("About 3 50 K lines.", "About 3 50K lines."),
+            ("About 3 50 K lines.", "About 3 50 K lines."),
             (
                 "Use one twenty eight K context.",
                 "Use one twenty eight K context.",
             ),
             ("Llama three seventy B.", "Llama three seventy B."),
             ("GPT two one twenty four M.", "GPT two one twenty four M."),
-            ("OK five thirty.", "OK 5 30."),
-            ("RTX fifty ninety.", "RTX 50 90."),
+            ("OK five thirty.", "OK five thirty."),
+            ("RTX fifty ninety.", "RTX fifty ninety."),
             ("SM one twenty.", "SM one twenty."),
             ("GPT 5 5 stays split.", "GPT 5 5 stays split."),
             ("I 5 stays separate.", "I 5 stays separate."),
@@ -529,8 +529,8 @@ fn numeric_rules_fingerprint_threshold_even_without_spoken_conversion() {
     );
     // The shared mixed-run guard still affects size compaction without
     // converting any spoken counts, so these policies must have distinct IDs.
-    assert_eq!(defaults.clean_text("three 50 K"), "Three 50 K");
-    assert_eq!(zero.clean_text("three 50 K"), "Three 50K");
+    assert_eq!(defaults.clean_text("50 K or three"), "50 K or three");
+    assert_eq!(zero.clean_text("50 K or three"), "50K or three");
     assert_ne!(defaults.ruleset_id(), zero.ruleset_id());
 
     disabled.extend(

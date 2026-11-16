@@ -108,7 +108,6 @@ pub(super) fn normalize<'a>(
     }
     let language = Language::english();
     let (initial, mut protected) = parse_spans(&tokens, &language);
-    protected.extend(super::number_labels::clock_times(input, &tokens, &initial));
     protected.extend(super::number_guards::protected(
         input,
         &tokens,
@@ -121,12 +120,6 @@ pub(super) fn normalize<'a>(
     proposals.extend(super::number_labels::classify(input, &tokens, &spans));
     // Version boundaries split parser spans before quantities are classified.
     // This operates on original tokens, including a remaining scale coefficient.
-    for proposal in proposals
-        .iter_mut()
-        .filter(|p| p.kind == NumberKind::Version)
-    {
-        apply_sign(input, &tokens, &spans, proposal);
-    }
     let versions: Vec<_> = proposals
         .iter()
         .filter(|p| p.kind == NumberKind::Version && enabled.contains(&p.kind))
@@ -319,12 +312,6 @@ pub(super) fn normalize<'a>(
             });
         }
     }
-    for proposal in proposals
-        .iter_mut()
-        .filter(|proposal| matches!(proposal.kind, NumberKind::Size | NumberKind::Spoken))
-    {
-        apply_sign(input, &tokens, &spans, proposal);
-    }
     let priority = |kind| match kind {
         NumberKind::Size => 5,
         NumberKind::Version => 4,
@@ -384,33 +371,6 @@ pub(super) fn normalize<'a>(
         },
         counts,
     )
-}
-
-fn apply_sign(
-    input: &str,
-    tokens: &[NumberToken<'_>],
-    spans: &[NumberSpan],
-    proposal: &mut Replacement,
-) {
-    let start = proposal.start;
-    if start == 0
-        || proposal.text.starts_with('v')
-        || !matches!(tokens[start - 1].lowercase.as_str(), "minus" | "negative")
-        || start >= 2
-            && (tokens[start - 2].text == "-"
-                // Spoken plus-minus: "plus minus", "positive or negative".
-                // Any other sign word after "plus" applies ("5 plus -10").
-                || tokens[start - 2].lowercase == "plus" && tokens[start - 1].lowercase == "minus"
-                || start >= 3
-                    && tokens[start - 2].lowercase == "or"
-                    && matches!(tokens[start - 3].lowercase.as_str(), "plus" | "positive")
-                || spans.iter().any(|span| span.end == start - 1))
-        || !horizontal_gap(input, tokens[start - 1].end, tokens[start].start)
-    {
-        return;
-    }
-    proposal.start -= 1;
-    proposal.text.insert(0, '-');
 }
 
 /// # Arguments

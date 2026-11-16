@@ -17,7 +17,7 @@ fn century_pairs_form_years_without_context_or_threshold_bypasses() {
                 ("Twenty twenty six.", "2026."),
                 ("Record twenty twenty six.", "Record 2026."),
                 ("Nineteen ninety-nine.", "1999."),
-                ("Eighteen seventy six.", "1876."),
+                ("Eighteen seventy six.", "Eighteen seventy six."),
                 ("Nineteen oh five.", "1905."),
                 ("Twenty o six.", "2006."),
                 ("Nineteen nought five.", "1905."),
@@ -59,17 +59,20 @@ fn century_pairs_form_years_without_context_or_threshold_bypasses() {
                 ),
                 ("Q4 twenty twenty five.", "Q4 2025."),
                 ("Twenty uh twenty layers.", "2020 layers."),
-                ("The year seventeen seventy-six.", "The year 1776."),
+                (
+                    "The year seventeen seventy-six.",
+                    "The year seventeen seventy-six.",
+                ),
                 (
                     "Columbus sailed in fourteen ninety two.",
-                    "Columbus sailed in 1492.",
+                    "Columbus sailed in fourteen ninety two.",
                 ),
-                ("In thirteen oh five.", "In 1305."),
-                ("In fifteen sixty four.", "In 1564."),
-                ("In sixteen sixty six.", "In 1666."),
+                ("In thirteen oh five.", "In thirteen oh five."),
+                ("In fifteen sixty four.", "In fifteen sixty four."),
+                ("In sixteen sixty six.", "In sixteen sixty six."),
                 ("At nineteen thirty.", "At 1930."),
                 ("Use 14 92.", "Use 14 92."),
-                ("Use twelve ninety two.", "Use 12 92."),
+                ("Use twelve ninety two.", "Use twelve ninety two."),
                 ("The year 19 06.", "The year 19 06."),
                 ("The year 020 26.", "The year 020 26."),
                 ("The year 20 026.", "The year 20 026."),
@@ -92,173 +95,40 @@ fn century_pairs_form_years_without_context_or_threshold_bypasses() {
 #[test]
 fn following_time_and_measurement_units_block_year_joining() {
     let cleaner = cleaner_keep_period(CleaningProfile::Safe);
-    for (input, expected) in [
-        ("In twenty thirty minutes.", "In 20 30 minutes."),
-        ("Use twenty thirty weeks.", "Use 20 30 weeks."),
-        ("Use twenty thirty months.", "Use 20 30 months."),
-        ("Use twenty thirty years.", "Use 20 30 years."),
-        ("Use twenty thirty meters.", "Use 20 30 meters."),
-        ("Use twenty thirty kilograms.", "Use 20 30 kilograms."),
-        ("Until nineteen thirty PM.", "Until nineteen thirty PM."),
-        ("Until nineteen thirty p.m.", "Until nineteen thirty p.m."),
-        ("Until nineteen thirty AM.", "Until nineteen thirty AM."),
-        ("Use twenty twenty six GB.", "Use 20 26 GB."),
-        ("Use twenty twenty six MB.", "Use 20 26 MB."),
-        ("Use twenty twenty six Hz.", "Use 20 26 Hz."),
-        ("Use twenty twenty six gigabytes.", "Use 20 26 gigabytes."),
-        ("Use twenty twenty six percent.", "Use 20 26 percent."),
-        ("Use twenty thirty K.", "Use 20 30K."),
-        ("Use twenty thirty M.", "Use 20 30M."),
-        ("Use twenty thirty B.", "Use 20 30B."),
-        (
-            "A twenty thirty-minute interval.",
-            "A 20 30-minute interval.",
-        ),
+    // Blocked year candidates use the same adjacent-run preservation as other
+    // quantities, without clock cues or a separate clock grammar.
+    for input in [
+        "In twenty thirty minutes.",
+        "Use twenty thirty weeks.",
+        "Use twenty thirty months.",
+        "Use twenty thirty years.",
+        "Use twenty thirty meters.",
+        "Use twenty thirty kilograms.",
+        "Until nineteen thirty PM.",
+        "Until nineteen thirty p.m.",
+        "Until nineteen thirty AM.",
+        "Use twenty twenty six GB.",
+        "Use twenty twenty six MB.",
+        "Use twenty twenty six Hz.",
+        "Use twenty twenty six gigabytes.",
+        "Use twenty twenty six percent.",
+        "Use twenty thirty K.",
+        "Use twenty thirty M.",
+        "Use twenty thirty B.",
+        "A twenty thirty-minute interval.",
+        "At seven thirty.",
+        "At 7 thirty pm.",
+        "At seven 30 pm.",
+        "I bought about five thirty-dollar gift cards.",
     ] {
-        assert_eq!(cleaner.clean_text(input), expected, "{input}");
-    }
-    for profile in [CleaningProfile::Safe, CleaningProfile::Aggressive] {
-        for threshold in [0.0, 4.0, 10.0, 100.0] {
-            let cleaner = build_cleaner_for_test_with_threshold(
-                profile,
-                false,
-                Some(threshold),
-                &HashSet::new(),
-                &[],
-            );
-            for input in [
-                "Meet at seven thirty pm.",
-                "Meet at seven thirty am.",
-                "Meet at seven thirty a.m.",
-                "Meet at seven thirty p.m.",
-                "Meet at seven thirty.",
-                "From nine thirty to ten forty five.",
-                "Between nine thirty and ten forty five.",
-                "Seven thirty PM.",
-                "Seven thirty Am.",
-                "Seven thirty aM.",
-                "By seven thirty.",
-                "Before seven thirty.",
-                "After seven thirty.",
-                "Around nine fifteen.",
-                "About nine fifteen.",
-                "Till nine fifteen.",
-                "Past nine fifteen.",
-                "Since nine fifteen.",
-                "It's ten forty five.",
-                "It is ten forty five.",
-                "Starting at nine thirty or ten thirty.",
-                "From nine to ten thirty.",
-                "Meet at seven thirty or eight.",
-                "Between nine and ten thirty.",
-                "From nine or ten thirty.",
-                "Nine thirty or ten thirty pm.",
-                "Nine or ten thirty pm.",
-                "From nine thirty pm to ten.",
-                "From nine thirty p.m. to ten.",
-                "From nine through ten thirty or eleven.",
-                "From nine thirty till ten.",
-                "From nine till ten thirty.",
-                "From nine thirty to ten tomorrow.",
-                "From nine thirty to ten on Monday.",
-                "From nine thirty to ten every day.",
-                "Meet at seven thirty or eight tonight.",
-                "At seven thirty, eight thirty, and nine thirty.",
-                "At seven thirty, eight thirty, nine thirty.",
-                "Seven thirty, eight thirty, or nine thirty pm.",
-                "Seven thirty a.m., eight thirty, and nine thirty.",
-                "Meet at seven thirty or eight o'clock.",
-                "Meet at seven thirty or eight o’clock.",
-                "From seven o'clock to eight thirty.",
-                "Seven thirty or eight o'clock.",
-                "Meet at seven thirty hours.",
-                "At seven thirty hours on Monday.",
-                "At seven thirty hours or eight thirty hours.",
-                "At seven thirty hours, eight thirty hours, and nine thirty hours.",
-            ] {
-                assert_eq!(
-                    cleaner.clean_text(input),
-                    input,
-                    "{profile:?}/{threshold}: {input}"
-                );
-            }
-            for (input, expected) in [
-                (
-                    "At 7 thirty pm.",
-                    if threshold <= 30.0 {
-                        "At 7 30 pm."
-                    } else {
-                        "At 7 thirty pm."
-                    },
-                ),
-                (
-                    "At seven 30 pm.",
-                    if threshold <= 7.0 {
-                        "At 7 30 pm."
-                    } else {
-                        "At seven 30 pm."
-                    },
-                ),
-                ("At 7 30 pm.", "At 7 30 pm."),
-                (
-                    "I bought about five thirty-dollar gift cards.",
-                    if threshold <= 5.0 {
-                        "I bought about 5 30-dollar gift cards."
-                    } else {
-                        "I bought about five thirty-dollar gift cards."
-                    },
-                ),
-                (
-                    "I ordered around five thirty kilogram bags.",
-                    if threshold <= 5.0 {
-                        "I ordered around 5 30 kilogram bags."
-                    } else {
-                        "I ordered around five thirty kilogram bags."
-                    },
-                ),
-            ] {
-                assert_eq!(
-                    cleaner.clean_text(input),
-                    expected,
-                    "{profile:?}/{threshold}: {input}"
-                );
-            }
-        }
-    }
-    for (input, expected) in [
-        ("At 7 thirty pm.", "At 7 30 pm."),
-        ("At seven 30 pm.", "At 7 30 pm."),
-        ("At 7 30 pm.", "At 7 30 pm."),
-        ("By 7 thirty.", "By 7 30."),
-        ("Use five thirty files.", "Use 5 30 files."),
-        ("Use five thirty hours.", "Use 5 30 hours."),
-        ("Use nine or ten thirty files.", "Use 9 or 10 30 files."),
-        (
-            "Meet at seven thirty. Eight files.",
-            "Meet at seven thirty. 8 files.",
-        ),
-        (
-            "Meet at seven thirty, eight files.",
-            "Meet at seven thirty, 8 files.",
-        ),
-        (
-            "At seven thirty and eight files.",
-            "At seven thirty and 8 files.",
-        ),
-        ("In fourteen thirty minutes.", "In 14 30 minutes."),
-        (
-            "At seven thirty, nine people arrived.",
-            "At seven thirty, 9 people arrived.",
-        ),
-    ] {
-        assert_eq!(cleaner.clean_text(input), expected, "{input}");
+        assert_eq!(cleaner.clean_text(input), input, "{input}");
     }
     for unit in "ms ns gb mb kb tb gib mib kib tib hz khz mhz ghz kg km cm mm fps rpm mph bpm mah kw mw gw px db"
         .split_whitespace()
     {
         for unit in [unit.to_string(), unit.to_uppercase()] {
             let input = format!("It took twenty thirty {unit}.");
-            assert_eq!(cleaner.clean_text(&input), format!("It took 20 30 {unit}."));
+            assert_eq!(cleaner.clean_text(&input), input);
         }
     }
     for noun in ["TV shows", "EV sales", "PS games", "A", "S", "V", "W", "G"] {
@@ -381,10 +251,10 @@ fn calendar_and_identifier_renderers_have_independent_controls() {
     let cleaner = build_cleaner_for_test(CleaningProfile::Safe, false, &disabled, &[]);
     assert_eq!(
         cleaner.clean_text("Q five of twenty twenty six."),
-        "Q5 of 20 26."
+        "Q5 of twenty twenty six."
     );
     assert_eq!(
         cleaner.clean_text("Q four twenty twenty five."),
-        "Q 4 20 25."
+        "Q four twenty twenty five."
     );
 }

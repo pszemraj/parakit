@@ -132,12 +132,10 @@ fn candidate(
             points.push(next);
         }
     }
-    // Shared spans separate independent counts. Digit-by-digit bases may
-    // cross those boundaries only for an IPv4-shaped dotted expression.
-    let digit_base = tokens[start..point]
+    // Shared spans separate independent counts from the version base.
+    let digit_sequence = tokens[start..point]
         .iter()
-        .all(|token| token.text == "-" || digit(token, language).is_some());
-    let digit_sequence = digit_base
+        .all(|token| token.text == "-" || digit(token, language).is_some())
         && tokens[start..point]
             .iter()
             .filter(|token| token.text != "-")
@@ -146,7 +144,7 @@ fn candidate(
     let crosses_numbers = spans
         .iter()
         .any(|span| start < span.start && span.start < point);
-    if (digit_sequence || crosses_numbers) && !(digit_base && points.len() >= 3) {
+    if digit_sequence || crosses_numbers {
         return None;
     }
     let base = if literal_end > start {
@@ -158,9 +156,6 @@ fn candidate(
         if let Some(version) = dotted(input, tokens, &points, run_end, &base, language) {
             return Some(version);
         }
-    }
-    if digit_sequence {
-        return None;
     }
     let (end, fraction) = component_prefix(input, tokens, point + 1, run_end, false, language)?;
     Some((end, format!("{base}.{fraction}")))
