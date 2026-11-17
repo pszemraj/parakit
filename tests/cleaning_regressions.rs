@@ -4,7 +4,7 @@ use parakit::rules::{build_cleaner, CleaningProfile};
 
 #[test]
 fn public_builder_runs_the_shipped_default_pipeline() {
-    let cleaner = build_cleaner(false, CleaningProfile::Safe, true, None, &[], &[])
+    let cleaner = build_cleaner(false, CleaningProfile::Safe, true, None, &[], &[], &[])
         .expect("cleaner should compile")
         .expect("cleaning should be enabled");
 
@@ -33,7 +33,7 @@ fn plural_magnitudes_preserve_words_in_both_profiles_and_thresholds() {
         ),
         (
             "Seven hundreds, million parameters.",
-            "Seven hundreds, 1M parameters.",
+            "Seven hundreds, million parameters.",
         ),
         (
             "There are thousands of people.",
@@ -159,7 +159,7 @@ fn plural_magnitudes_preserve_words_in_both_profiles_and_thresholds() {
     ];
     for profile in [CleaningProfile::Safe, CleaningProfile::Aggressive] {
         for threshold in [None, Some(5.0)] {
-            let cleaner = build_cleaner(false, profile, false, threshold, &[], &[])
+            let cleaner = build_cleaner(false, profile, false, threshold, &[], &[], &[])
                 .unwrap()
                 .unwrap();
             for (input, expected) in cases {
@@ -170,7 +170,7 @@ fn plural_magnitudes_preserve_words_in_both_profiles_and_thresholds() {
                 );
             }
         }
-        let all_numbers = build_cleaner(false, profile, false, Some(0.0), &[], &[])
+        let all_numbers = build_cleaner(false, profile, false, Some(0.0), &[], &[], &[])
             .unwrap()
             .unwrap();
         for (input, expected) in [
@@ -265,7 +265,7 @@ fn plural_magnitudes_preserve_words_in_both_profiles_and_thresholds() {
 }
 
 #[test]
-fn ambiguous_quantities_remain_words_across_profiles_and_thresholds() {
+fn protected_phrases_and_structured_numbers_follow_the_public_policy() {
     let cases = [
         (
             "Five thirds of a million rows.",
@@ -293,15 +293,15 @@ fn ambiguous_quantities_remain_words_across_profiles_and_thresholds() {
         ),
         (
             "The release was in twenty twenty two.",
-            "The release was in twenty twenty two.",
+            "The release was in 2022.",
         ),
         (
             "It happened in nineteen ninety-nine.",
-            "It happened in nineteen ninety-nine.",
+            "It happened in 1999.",
         ),
         (
             "Six quarters, a million users joined.",
-            "6 quarters, 1 million users joined.",
+            "6 quarters, a million users joined.",
         ),
         (
             "Use twenty, twenty two, and ninety nine.",
@@ -313,14 +313,7 @@ fn ambiguous_quantities_remain_words_across_profiles_and_thresholds() {
         ),
         ("Use twenty point five twenty point six.", "Use 20.5 20.6."),
         ("Use twenty point zero twenty point zero.", "Use 20.0 20.0."),
-        ("Meet at ten thirty.", "Meet at ten thirty."),
-        ("Meet at five thirty.", "Meet at five thirty."),
-        ("Meet at one thirty.", "Meet at one thirty."),
-        ("Meet at five o'clock.", "Meet at five o'clock."),
-        (
-            "My number is five five five twenty twelve.",
-            "My number is five five five twenty twelve.",
-        ),
+        ("Meet at five o'clock.", "Meet at 5 o'clock."),
         ("Use two point zero two point zero.", "Use 2.02.0."),
         ("Use two point zero three point zero.", "Use 2.03.0."),
         ("Use two point oh three point five.", "Use 2.03.5."),
@@ -337,15 +330,7 @@ fn ambiguous_quantities_remain_words_across_profiles_and_thresholds() {
             "Use one hundred ninety two point one hundred sixty eight point zero point one.",
             "Use 192.168.0.1.",
         ),
-        (
-            "Use one twenty eight K context.",
-            "Use one twenty eight K context.",
-        ),
-        ("Llama three seventy B.", "Llama three seventy B."),
-        ("GPT two one twenty four M.", "GPT two one twenty four M."),
-        ("OK five thirty.", "OK five thirty."),
         ("RTX fifty ninety.", "RTX fifty ninety."),
-        ("SM one twenty.", "SM one twenty."),
         (
             "The value is three point one four one five.",
             "The value is 3.1415.",
@@ -359,20 +344,20 @@ fn ambiguous_quantities_remain_words_across_profiles_and_thresholds() {
         ("B1 point zero-three point zero.", "B1.03.0."),
         (
             "Ten seconds of a million rows.",
-            "10 seconds of 1 million rows.",
+            "10 seconds of a million rows.",
         ),
         (
             "We need twenty ten-cent stamps.",
-            "We need 20 ten-cent stamps.",
+            "We need twenty ten-cent stamps.",
         ),
         (
             "We need twenty twenty-two-cent stamps.",
-            "We need 20 twenty-two-cent stamps.",
+            "We need twenty twenty-two-cent stamps.",
         ),
     ];
     for profile in [CleaningProfile::Safe, CleaningProfile::Aggressive] {
         for threshold in [0.0, 4.0, 5.0] {
-            let cleaner = build_cleaner(false, profile, false, Some(threshold), &[], &[])
+            let cleaner = build_cleaner(false, profile, false, Some(threshold), &[], &[], &[])
                 .unwrap()
                 .unwrap();
             for (input, expected) in cases {
@@ -387,6 +372,313 @@ fn ambiguous_quantities_remain_words_across_profiles_and_thresholds() {
 }
 
 #[test]
+fn adjacent_runs_stay_worded_while_separated_lists_follow_the_threshold() {
+    let cases = [
+        ("Meet at ten thirty.", ["Meet at ten thirty."; 4]),
+        ("Meet at five thirty.", ["Meet at five thirty."; 4]),
+        ("Meet at one thirty.", ["Meet at one thirty."; 4]),
+        (
+            "It costs four or five thousand dollars.",
+            ["It costs four or five thousand dollars."; 4],
+        ),
+        (
+            "Five or six hundred people.",
+            ["Five or six hundred people."; 4],
+        ),
+        (
+            "Between five and six hundred.",
+            ["Between five and six hundred."; 4],
+        ),
+        ("Three or four hundred.", ["Three or four hundred."; 4]),
+        ("Five to six hundred.", ["Five to six hundred."; 4]),
+        (
+            "Five through six hundred.",
+            ["Five through six hundred."; 4],
+        ),
+        (
+            "Five, six, or seven hundred.",
+            ["Five, six, or seven hundred."; 4],
+        ),
+        (
+            "Five or six million parameters.",
+            ["Five or six million parameters."; 4],
+        ),
+        ("Five hundred or six hundred.", ["500 or 600."; 4]),
+        (
+            "Use 5 or six hundred people.",
+            ["Use 5 or six hundred people."; 4],
+        ),
+        (
+            "Use 5 or 600 million parameters.",
+            ["Use 5 or 600M parameters."; 4],
+        ),
+        (
+            "Five files or six hundred rows.",
+            [
+                "5 files or 600 rows.",
+                "5 files or 600 rows.",
+                "5 files or 600 rows.",
+                "Five files or 600 rows.",
+            ],
+        ),
+        (
+            "On day one, twenty people came.",
+            [
+                "On day 1, 20 people came.",
+                "On day one, twenty people came.",
+                "On day one, twenty people came.",
+                "On day one, twenty people came.",
+            ],
+        ),
+        (
+            "First, twenty people signed up.",
+            [
+                "1st, 20 people signed up.",
+                "First, 20 people signed up.",
+                "First, 20 people signed up.",
+                "First, 20 people signed up.",
+            ],
+        ),
+        (
+            "Second, fifty percent of users churned.",
+            [
+                "2nd, 50 percent of users churned.",
+                "Second, 50 percent of users churned.",
+                "Second, 50 percent of users churned.",
+                "Second, 50 percent of users churned.",
+            ],
+        ),
+        (
+            "Step one, five minutes of stretching.",
+            [
+                "Step 1, 5 minutes of stretching.",
+                "Step one, five minutes of stretching.",
+                "Step one, five minutes of stretching.",
+                "Step one, five minutes of stretching.",
+            ],
+        ),
+        ("Three, four hundred.", ["Three, four hundred."; 4]),
+        (
+            "Three, four, five hundred.",
+            ["Three, four, five hundred."; 4],
+        ),
+        ("Meet at five six seven.", ["Meet at five six seven."; 4]),
+        (
+            "Code five seven thirty pm.",
+            ["Code five seven thirty pm."; 4],
+        ),
+        (
+            "My number is five five five twenty twelve.",
+            ["My number is five five five twenty twelve."; 4],
+        ),
+        (
+            "Use one twenty eight K context.",
+            ["Use one twenty eight K context."; 4],
+        ),
+        ("Use 1 thirty K context.", ["Use 1 thirty K context."; 4]),
+        ("Use one 30 K context.", ["Use one 30 K context."; 4]),
+        ("Llama three seventy B.", ["Llama three seventy B."; 4]),
+        (
+            "GPT two one twenty four M.",
+            ["GPT two one twenty four M."; 4],
+        ),
+        ("OK five thirty.", ["OK five thirty."; 4]),
+        ("SM one twenty.", ["SM one twenty."; 4]),
+        ("Use first second third.", ["Use first second third."; 4]),
+    ];
+    let mut failures = Vec::new();
+    for profile in [CleaningProfile::Safe, CleaningProfile::Aggressive] {
+        for (index, threshold) in [0.0, 4.0, 5.0, 10.0].into_iter().enumerate() {
+            let cleaner = build_cleaner(false, profile, false, Some(threshold), &[], &[], &[])
+                .unwrap()
+                .unwrap();
+            for (input, expected) in cases {
+                let actual = cleaner.clean_text(input);
+                if actual != expected[index] {
+                    failures.push(format!(
+                        "{profile:?} {threshold}: {input:?}: expected {:?}, got {actual:?}",
+                        expected[index]
+                    ));
+                }
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn cardinal_and_ordinal_lists_follow_thresholds_while_adjacent_runs_stay_worded() {
+    for profile in [CleaningProfile::Safe, CleaningProfile::Aggressive] {
+        for (threshold, expected) in [
+            (0.0, "1, 2, 3, 4, 5th, 6th."),
+            (4.0, "One, two, three, four, 5th, 6th."),
+            (5.0, "One, two, three, four, 5th, 6th."),
+            (10.0, "One, two, three, four, fifth, sixth."),
+        ] {
+            let cleaner = build_cleaner(false, profile, false, Some(threshold), &[], &[], &[])
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                cleaner.clean_text("One, two, three, four, fifth, sixth."),
+                expected,
+                "{profile:?} {threshold}"
+            );
+        }
+        let cleaner = build_cleaner(false, profile, false, Some(25.0), &[], &[], &[])
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            cleaner
+                .clean_text("Twenty files and thirty rows. The twentieth and thirtieth entries."),
+            "Twenty files and 30 rows. The twentieth and thirtieth entries."
+        );
+        for threshold in [0.0, 4.0, 10.0] {
+            let cleaner = build_cleaner(false, profile, false, Some(threshold), &[], &[], &[])
+                .unwrap()
+                .unwrap();
+            for (input, digits) in [
+                ("One, two, three, four, five.", "1, 2, 3, 4, 5."),
+                (
+                    "First, second, third, fourth, and fifth.",
+                    "1st, 2nd, 3rd, 4th, and 5th.",
+                ),
+                ("Between three and five days.", "Between 3 and 5 days."),
+                ("From three to five days.", "From 3 to 5 days."),
+                ("Three through five days.", "3 through 5 days."),
+                ("Three or five days.", "3 or 5 days."),
+                ("First second third fourth.", "First second third fourth."),
+            ] {
+                assert_eq!(
+                    cleaner.clean_text(input),
+                    if threshold == 0.0 { digits } else { input },
+                    "{profile:?}/{threshold}: {input}"
+                );
+            }
+        }
+        let cleaner = build_cleaner(false, profile, false, Some(4.0), &[], &[], &[])
+            .unwrap()
+            .unwrap();
+        for (input, expected) in [
+            ("Four, five, and six.", "4, 5, and 6."),
+            ("First five hundred rows.", "First 500 rows."),
+            ("One, 2, and five.", "One, 2, and five."),
+            ("Three; five.", "Three; 5."),
+            ("Three. Five.", "Three. 5."),
+            ("Three,\nfive.", "Three,\n5."),
+            (
+                "Three files and five folders.",
+                "Three files and 5 folders.",
+            ),
+        ] {
+            assert_eq!(cleaner.clean_text(input), expected, "{profile:?}: {input}");
+        }
+    }
+}
+
+#[test]
+fn nineteen_and_twenty_year_pairs_stay_separate_from_adjacent_counts() {
+    for profile in [CleaningProfile::Safe, CleaningProfile::Aggressive] {
+        let cleaner = build_cleaner(false, profile, false, Some(4.0), &[], &[], &[])
+            .unwrap()
+            .unwrap();
+        for (input, expected) in [
+            (
+                "Release eighteen ninety-nine.",
+                "Release eighteen ninety-nine.",
+            ),
+            ("Release nineteen oh five.", "Release 1905."),
+            ("Release twenty twenty-two.", "Release 2022."),
+            ("Release 19 ninety-nine.", "Release 1999."),
+            ("Release 19 99.", "Release 19 99."),
+            (
+                "Code five nineteen ninety-nine.",
+                "Code five nineteen ninety-nine.",
+            ),
+            ("Code twenty-six oh four.", "Code twenty-six oh four."),
+            (
+                "Wait nineteen twenty minutes.",
+                "Wait nineteen twenty minutes.",
+            ),
+            ("Meet at nineteen twenty pm.", "Meet at nineteen twenty pm."),
+            (
+                "Use nineteen twenty K context.",
+                "Use nineteen twenty K context.",
+            ),
+        ] {
+            assert_eq!(cleaner.clean_text(input), expected, "{profile:?}: {input}");
+        }
+        let high_threshold = build_cleaner(false, profile, false, Some(100.0), &[], &[], &[])
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            high_threshold.clean_text("Release nineteen oh five and twenty twenty-two."),
+            "Release 1905 and 2022."
+        );
+        for (input, expected) in [
+            ("Twenty twenty and one hundred.", "2020 and 100."),
+            ("Twenty twenty, one hundred.", "2020, 100."),
+            ("One and twenty twenty.", "One and 2020."),
+        ] {
+            assert_eq!(
+                high_threshold.clean_text(input),
+                expected,
+                "{profile:?}: {input}"
+            );
+        }
+    }
+}
+
+#[test]
+fn identifier_compaction_depends_on_stem_and_number_eligibility() {
+    for profile in [CleaningProfile::Safe, CleaningProfile::Aggressive] {
+        for (threshold, input, expected) in [
+            (0.0, "Use F three.", "Use F3."),
+            (4.0, "Use F three.", "Use F three."),
+            (4.0, "Use X five.", "Use X5."),
+            (10.0, "Use X five.", "Use X five."),
+            (4.0, "Use SM five.", "Use SM5."),
+            (10.0, "Use SM five.", "Use SM five."),
+            (4.0, "Use FP five.", "Use FP 5."),
+            (10.0, "Use FP five.", "Use FP five."),
+            (4.0, "Use A five and I five.", "Use A 5 and I 5."),
+            (4.0, "Use F thirty-two.", "Use F32."),
+            (100.0, "Use F thirty-two.", "Use F thirty-two."),
+            (100.0, "Use F 32 and SM 32.", "Use F32 and SM32."),
+            (100.0, "Use FP 32 and OK 32.", "Use FP 32 and OK 32."),
+        ] {
+            let cleaner = build_cleaner(false, profile, false, Some(threshold), &[], &[], &[])
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                cleaner.clean_text(input),
+                expected,
+                "{profile:?} {threshold}: {input}"
+            );
+        }
+    }
+}
+
+#[test]
+fn bare_scales_stay_worded_while_literal_parameter_counts_compact() {
+    for profile in [CleaningProfile::Safe, CleaningProfile::Aggressive] {
+        let cleaner = build_cleaner(false, profile, false, Some(4.0), &[], &[], &[])
+            .unwrap()
+            .unwrap();
+        for (input, expected) in [
+            (
+                "A million examples and a billion rows.",
+                "A million examples and a billion rows.",
+            ),
+            ("Use million parameters.", "Use million parameters."),
+            ("Use 125 million parameters.", "Use 125M parameters."),
+            ("Use a hundred million parameters.", "Use 100M parameters."),
+        ] {
+            assert_eq!(cleaner.clean_text(input), expected, "{profile:?}: {input}");
+        }
+    }
+}
+
+#[test]
 fn disabling_spoken_numbers_preserves_both_plural_and_exact_quantities() {
     for profile in [CleaningProfile::Safe, CleaningProfile::Aggressive] {
         let cleaner = build_cleaner(
@@ -394,6 +686,7 @@ fn disabling_spoken_numbers_preserves_both_plural_and_exact_quantities() {
             profile,
             false,
             Some(0.0),
+            &[],
             &["spoken-numbers".into()],
             &[],
         )

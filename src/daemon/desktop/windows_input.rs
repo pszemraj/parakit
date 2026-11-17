@@ -36,10 +36,7 @@ const VK_V: VIRTUAL_KEY = VIRTUAL_KEY(0x56);
 ///
 /// Returns an error when Ctrl+Space is already owned or cannot be registered.
 pub(crate) fn registered_hotkey_probe() -> Result<()> {
-    register_ctrl_space(PARAKIT_HOTKEY_PROBE_ID, false)?;
-    let _guard = RegisteredHotkeyGuard {
-        id: PARAKIT_HOTKEY_PROBE_ID,
-    };
+    let _guard = register_ctrl_space(PARAKIT_HOTKEY_PROBE_ID, false)?;
     Ok(())
 }
 
@@ -51,10 +48,7 @@ pub(crate) fn registered_hotkey_probe() -> Result<()> {
 /// # Errors
 /// Returns an error if another application owns the chord.
 pub(crate) fn context_hotkey_probe() -> Result<()> {
-    register_ctrl_space(PARAKIT_CONTEXT_PROBE_ID, true)?;
-    let _guard = RegisteredHotkeyGuard {
-        id: PARAKIT_CONTEXT_PROBE_ID,
-    };
+    let _guard = register_ctrl_space(PARAKIT_CONTEXT_PROBE_ID, true)?;
     Ok(())
 }
 
@@ -79,15 +73,10 @@ pub(super) fn run_registered_hotkey_loop(
     context_enabled: bool,
     log: &Logger,
 ) -> Result<()> {
-    register_ctrl_space(PARAKIT_HOTKEY_ID, false)?;
-    let _registration = RegisteredHotkeyGuard {
-        id: PARAKIT_HOTKEY_ID,
-    };
+    let _registration = register_ctrl_space(PARAKIT_HOTKEY_ID, false)?;
     let context_registration = if context_enabled {
         match register_ctrl_space(PARAKIT_CONTEXT_HOTKEY_ID, true) {
-            Ok(()) => Some(RegisteredHotkeyGuard {
-                id: PARAKIT_CONTEXT_HOTKEY_ID,
-            }),
+            Ok(registration) => Some(registration),
             Err(err) => {
                 log.warn(format!(
                     "could not register Ctrl+Alt+Space: {err}; Ctrl+Space remains available"
@@ -139,7 +128,7 @@ pub(super) fn run_registered_hotkey_loop(
     }
 }
 
-fn register_ctrl_space(id: i32, context: bool) -> Result<()> {
+fn register_ctrl_space(id: i32, context: bool) -> Result<RegisteredHotkeyGuard> {
     let modifiers: HOT_KEY_MODIFIERS = MOD_CONTROL
         | MOD_NOREPEAT
         | if context {
@@ -156,7 +145,8 @@ fn register_ctrl_space(id: i32, context: bool) -> Result<()> {
                 "Ctrl+Space"
             }
         )
-    })
+    })?;
+    Ok(RegisteredHotkeyGuard { id })
 }
 
 struct RegisteredHotkeyGuard {

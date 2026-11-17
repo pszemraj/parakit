@@ -1,203 +1,10 @@
-//! Bundled native corrections and opt-in loaded Qwen session checks.
+//! Bundled native correction source patches and CMake integration checks.
 
 #[path = "../build/native_correctness.rs"]
 mod native_correctness;
 
 use std::fs;
 use std::path::{Path, PathBuf};
-
-#[test]
-#[ignore = "run through tests/native/run_qwen_faults.py with an explicit Qwen model"]
-fn qwen_readiness_error_restores_user_options() {
-    let model = std::env::var("PARAKIT_TEST_QWEN_MODEL").expect("explicit Qwen model");
-    let device = qwen_test_device();
-    let engine = parakit::inference::Engine::open_with_options(
-        model,
-        8,
-        device,
-        &parakit::qwen::QwenOptions {
-            language: Some("English".into()),
-            max_new_tokens: 1,
-        },
-    )
-    .unwrap();
-    assert_eq!(engine.device_mode(), device);
-    assert!(parakit::warmup::run(&engine, &[1]).is_err());
-    let wav = parakit::audio_file::prepare_wav_for_model(Path::new(
-        "vendor/CrispASR/bindings/go/samples/jfk.wav",
-    ))
-    .unwrap();
-    assert!(
-        engine.transcribe(&wav.samples[..16_000]).is_err(),
-        "the user's one-token budget must be restored after failed readiness"
-    );
-}
-
-/// Select the native device explicitly requested for a loaded-model test.
-fn qwen_test_device() -> parakit::inference::DeviceMode {
-    match std::env::var("PARAKIT_TEST_QWEN_DEVICE")
-        .unwrap_or_else(|_| "cpu".into())
-        .as_str()
-    {
-        "auto" => parakit::inference::DeviceMode::Auto,
-        "cpu" => parakit::inference::DeviceMode::Cpu,
-        "gpu" => parakit::inference::DeviceMode::Gpu,
-        _ => panic!("PARAKIT_TEST_QWEN_DEVICE must be auto, cpu, or gpu"),
-    }
-}
-
-/// Load the runner's explicit model, audio, and context fixtures.
-fn qwen_context_fixture() -> (
-    parakit::inference::Engine,
-    parakit::audio_file::PreparedWav,
-    String,
-) {
-    let model = std::env::var("PARAKIT_TEST_QWEN_MODEL").expect("explicit Qwen model");
-    let audio = std::env::var_os("PARAKIT_TEST_QWEN_AUDIO")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("vendor/CrispASR/bindings/go/samples/jfk.wav"));
-    let context = std::env::var("PARAKIT_TEST_QWEN_CONTEXT").unwrap_or_else(|_| {
-        "CrispASR, Qwen3-ASR, ParaKit.\nPrevious dictation: café and naïve.".into()
-    });
-    let engine = parakit::inference::Engine::open_with_options(
-        model,
-        8,
-        qwen_test_device(),
-        &parakit::qwen::QwenOptions {
-            language: Some("English".into()),
-            max_new_tokens: 512,
-        },
-    )
-    .unwrap();
-    let audio = parakit::audio_file::prepare_wav_for_model(&audio).unwrap();
-    (engine, audio, context)
-}
-
-/// Record one actual transcription and its latency for inspection with native traces.
-fn context_probe(
-    engine: &parakit::inference::Engine,
-    pcm: &[f32],
-    label: &str,
-    context: Option<&str>,
-) -> anyhow::Result<String> {
-    eprintln!("PARAKIT_TEST_CALL:{label}");
-    let started = std::time::Instant::now();
-    let result = engine.transcribe_with_context(pcm, context);
-    println!(
-        "PARAKIT_TEST_RESULT:{}",
-        serde_json::json!({
-            "case": label,
-            "seconds": started.elapsed().as_secs_f64(),
-            "raw": result.as_ref().ok().map(|(text, _)| text),
-            "context_chars": result.as_ref().ok().map(|(_, usage)| usage.chars),
-            "context_retried": result.as_ref().ok().map(|(_, usage)| usage.retried),
-            "error": result.as_ref().err().map(ToString::to_string),
-        })
-    );
-    let (text, usage) = result?;
-    let expected = context.filter(|prior| {
-        pcm.len() >= 16_000
-            && !prior.contains('\0')
-            && std::env::var("CRISPASR_QWEN3_HOTWORDS_AS_CONTEXT").as_deref() == Ok("1")
-    });
-    assert_eq!(
-        usage.chars,
-        expected.map_or(0, |prior| prior.chars().count()),
-        "{label}"
-    );
-    if usage.chars == 0 {
-        assert!(
-            !usage.retried,
-            "{label}: ordinary inference cannot retry context"
-        );
-    } else if matches!(
-        std::env::var("PARAKIT_TEST_QWEN_FAILURE").as_deref(),
-        Ok("context-copy" | "context-embed")
-    ) {
-        assert!(
-            usage.retried,
-            "{label}: copied or failed context must trigger a retry"
-        );
-    }
-    Ok(text)
-}
-
-#[test]
-#[ignore = "run through tests/native/run_qwen_faults.py with an explicit Qwen model"]
-fn qwen_context_is_scoped_to_each_transcription() {
-    let (engine, audio, context) = qwen_context_fixture();
-    let forced_copy = std::env::var("PARAKIT_TEST_QWEN_FAILURE").as_deref() == Ok("context-copy");
-    let mut ordinary = None;
-    for (label, prior) in [
-        ("ordinary-baseline", None),
-        ("context-first", Some(context.as_str())),
-        ("ordinary-after-success", None),
-        ("context-again", Some(context.as_str())),
-        ("invalid-context-fallback", Some("unusable\0context")),
-    ] {
-        let transcript = context_probe(&engine, &audio.samples, label, prior).unwrap();
-        assert!(
-            !transcript.trim().is_empty(),
-            "{label}: empty speech transcript"
-        );
-        if label == "ordinary-baseline" {
-            ordinary = Some(transcript.clone());
-        } else if forced_copy {
-            assert_eq!(
-                Some(&transcript),
-                ordinary.as_ref(),
-                "{label}: copied context must retry ordinary inference"
-            );
-        }
-    }
-}
-
-#[test]
-#[ignore = "run through tests/native/run_qwen_faults.py with an explicit Qwen model"]
-fn qwen_context_error_retries_without_context() {
-    let (engine, audio, context) = qwen_context_fixture();
-    let ordinary = context_probe(&engine, &audio.samples, "ordinary-baseline", None).unwrap();
-    assert!(!ordinary.trim().is_empty());
-    // The probe asserts that the failed contextual call was retried.
-    let retried = context_probe(&engine, &audio.samples, "context-error", Some(&context)).unwrap();
-    assert_eq!(retried, ordinary, "the retry must be ordinary inference");
-    let after = context_probe(&engine, &audio.samples, "ordinary-after-retry", None).unwrap();
-    assert_eq!(after, ordinary);
-}
-
-#[test]
-#[ignore = "run through tests/native/run_qwen_faults.py with an explicit Qwen model"]
-fn qwen_context_clear_failure_is_not_retried() {
-    let (engine, audio, context) = qwen_context_fixture();
-    let error =
-        context_probe(&engine, &audio.samples, "context-failure", Some(&context)).unwrap_err();
-    assert!(error.to_string().contains("crispasr transcribe failed"));
-    let transcript =
-        context_probe(&engine, &audio.samples, "ordinary-after-failure", None).unwrap();
-    assert!(!transcript.trim().is_empty());
-}
-
-#[test]
-#[ignore = "run through tests/native/run_qwen_faults.py with an explicit Qwen model"]
-/// Report native outputs; the daemon rejects silent captures before inference.
-fn qwen_context_handles_silent_and_short_audio() {
-    let (engine, audio, context) = qwen_context_fixture();
-    let silence = vec![0.0; 16_000];
-    for (label, prior) in [
-        ("silence-ordinary", None),
-        ("silence-context", Some(context.as_str())),
-    ] {
-        context_probe(&engine, &silence, label, prior).unwrap();
-    }
-    let short = &audio.samples[..audio.samples.len().min(8_000)];
-    let ordinary = context_probe(&engine, short, "short-ordinary", None).unwrap();
-    let contextual = context_probe(&engine, short, "short-context", Some(&context)).unwrap();
-    assert_eq!(
-        contextual, ordinary,
-        "subsecond audio must use ordinary inference"
-    );
-}
-
 use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -335,6 +142,174 @@ fn checked(command: &mut Command) {
         String::from_utf8_lossy(&output.stderr)
     );
 }
+
+#[test]
+fn native_decoder_faults_and_correctness_helpers_execute() {
+    let scratch = Scratch::new();
+    fs::write(
+        scratch.0.join("CMakeLists.txt"),
+        r#"cmake_minimum_required(VERSION 3.19)
+project(native_correctness LANGUAGES CXX)
+set(CMAKE_CXX_STANDARD 17)
+add_executable(qwen-correctness "${PARAKIT_ROOT}/tests/native/qwen_correctness.cpp")
+target_include_directories(qwen-correctness PRIVATE "${PARAKIT_ROOT}/build/native" "${PARAKIT_ROOT}/vendor/CrispASR/src")
+if(MSVC)
+    target_compile_options(qwen-correctness PRIVATE /utf-8)
+endif()
+enable_testing()
+add_test(NAME qwen-correctness COMMAND qwen-correctness)
+"#,
+    )
+    .unwrap();
+    let build = scratch.0.join("build");
+    checked(
+        Command::new("cmake")
+            .arg("-S")
+            .arg(&scratch.0)
+            .arg("-B")
+            .arg(&build)
+            .arg(format!("-DPARAKIT_ROOT={}", env!("CARGO_MANIFEST_DIR"))),
+    );
+    checked(
+        Command::new("cmake")
+            .arg("--build")
+            .arg(&build)
+            .args(["--config", "Release"]),
+    );
+    checked(Command::new("ctest").current_dir(&build).args([
+        "--build-config",
+        "Release",
+        "--output-on-failure",
+    ]));
+}
+
+#[test]
+#[ignore = "rebuilds the native CPU library and injects faults into the repo-local Qwen model named by PARAKIT_LIVE_MODEL"]
+fn loaded_qwen_session_faults_discard_partial_text_and_recover() {
+    // Pass normal absolute paths to CMake; Windows verbatim paths produced by
+    // canonicalize become invalid source paths in the MSVC generator.
+    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let model =
+        std::path::absolute(std::env::var_os("PARAKIT_LIVE_MODEL").expect("PARAKIT_LIVE_MODEL"))
+            .unwrap();
+    assert!(
+        model
+            .canonicalize()
+            .unwrap()
+            .starts_with(manifest.canonicalize().unwrap()),
+        "model must be inside the checkout"
+    );
+    let scratch = Scratch::new();
+    let (api, parakeet) =
+        native_correctness::prepare(&manifest.join("vendor/CrispASR"), &scratch.0).unwrap();
+    let source = fs::read_to_string(&api).unwrap();
+    let source = source
+        .replace("qwen3_asr_embed_tokens", "parakit_test::embed")
+        .replace("qwen3_asr_run_llm_kv", "parakit_test::forward")
+        .replace("qwen3_asr_tokenize", "parakit_test::tokenize");
+    let call = "            return transcribe_single(s, pcm + b, (int)(e - b), language);";
+    assert_eq!(source.matches(call).count(), 1);
+    let source = source.replace(call, "            parakit_test::begin_chunk();\n            auto* part = transcribe_single(s, pcm + b, (int)(e - b), language);\n            parakit_test::end_chunk(part && !part->segments.empty() && !part->segments[0].text.empty());\n            return part;");
+    fs::write(&api, format!("{LOADED_FAULT_DECLARATIONS}\n{source}")).unwrap();
+    fs::write(
+        scratch.0.join("project-hook.cmake"),
+        r#"include("${PARAKIT_ROOT}/build/native_correctness.cmake")
+# The pinned project has four targets whose input paths assume a top-level
+# build. Repair just those targets after declaration, keeping vendor read-only.
+function(parakit_test_subproject_paths)
+    foreach(target crispasr_c2pa_native crispasr-llama-core index_echo webrtc-vad)
+        foreach(property SOURCES INCLUDE_DIRECTORIES INTERFACE_INCLUDE_DIRECTORIES)
+            get_target_property(paths ${target} ${property})
+            if(paths)
+                string(REPLACE "${CMAKE_SOURCE_DIR}/" "${PROJECT_SOURCE_DIR}/" paths "${paths}")
+                set_property(TARGET ${target} PROPERTY ${property} "${paths}")
+            endif()
+        endforeach()
+    endforeach()
+    # Their original globs searched the wrapper root and found no sources.
+    file(GLOB models "${PROJECT_SOURCE_DIR}/examples/talk-llama/models/*.cpp")
+    target_sources(crispasr-llama-core PRIVATE ${models})
+    file(GLOB_RECURSE webrtc "${PROJECT_SOURCE_DIR}/third_party/webrtc/*.c")
+    target_sources(webrtc-vad PRIVATE ${webrtc})
+endfunction()
+cmake_language(DEFER CALL parakit_test_subproject_paths)
+"#,
+    )
+    .unwrap();
+    fs::write(scratch.0.join("CMakeLists.txt"), r#"cmake_minimum_required(VERSION 3.19)
+project(parakit_loaded_faults LANGUAGES C CXX)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_MSVC_RUNTIME_LIBRARY MultiThreadedDLL)
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+set(GGML_NATIVE ON CACHE BOOL "" FORCE)
+set(GGML_BACKEND_DL OFF CACHE BOOL "" FORCE)
+set(GGML_OPENMP ON CACHE BOOL "" FORCE)
+set(GGML_BLAS OFF CACHE BOOL "" FORCE)
+set(GGML_CUDA OFF CACHE BOOL "" FORCE)
+set(GGML_VULKAN OFF CACHE BOOL "" FORCE)
+set(GGML_METAL OFF CACHE BOOL "" FORCE)
+set(CRISPASR_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(CRISPASR_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(CRISPASR_BUILD_SERVER OFF CACHE BOOL "" FORCE)
+set(CRISPASR_OPUS OFF CACHE BOOL "" FORCE)
+set(CRISPASR_AMR OFF CACHE BOOL "" FORCE)
+set(CRISPASR_MEL_BLAS OFF CACHE BOOL "" FORCE)
+set(CMAKE_PROJECT_crispasr_INCLUDE "${CMAKE_CURRENT_SOURCE_DIR}/project-hook.cmake")
+add_subdirectory("${PARAKIT_ROOT}/vendor/CrispASR" crispasr)
+add_executable(qwen-loaded-faults "${PARAKIT_ROOT}/tests/native/qwen_correctness.cpp")
+target_compile_definitions(qwen-loaded-faults PRIVATE PARAKIT_LOADED_QWEN_FAULTS)
+target_include_directories(qwen-loaded-faults PRIVATE "${PARAKIT_ROOT}/build/native" "${PARAKIT_ROOT}/vendor/CrispASR/src")
+target_link_libraries(qwen-loaded-faults PRIVATE crispasr-lib)
+if(MSVC)
+    target_compile_options(qwen-loaded-faults PRIVATE /utf-8)
+endif()
+enable_testing()
+add_test(NAME qwen-loaded-faults COMMAND qwen-loaded-faults "${PARAKIT_MODEL}" "${PARAKIT_ROOT}/vendor/CrispASR/bindings/go/samples/jfk.wav")
+"#).unwrap();
+    let build = scratch.0.join("build");
+    checked(
+        Command::new("cmake")
+            .arg("-S")
+            .arg(&scratch.0)
+            .arg("-B")
+            .arg(&build)
+            .arg(format!("-DPARAKIT_ROOT={}", manifest.display()))
+            .arg(format!("-DPARAKIT_MODEL={}", model.display()))
+            .arg(format!("-DPARAKIT_CRISPASR_C_API_SOURCE={}", api.display()))
+            .arg(format!("-DPARAKIT_PARAKEET_SOURCE={}", parakeet.display()))
+            .arg(format!(
+                "-DPARAKIT_NATIVE_CORRECTNESS_INCLUDE={}",
+                manifest.join("build/native").display()
+            ))
+            .arg("-DCMAKE_BUILD_TYPE=Release"),
+    );
+    checked(Command::new("cmake").arg("--build").arg(&build).args([
+        "--config",
+        "Release",
+        "--target",
+        "qwen-loaded-faults",
+        "--parallel",
+        "4",
+    ]));
+    checked(
+        Command::new("ctest")
+            .current_dir(&build)
+            .args(["--build-config", "Release", "--output-on-failure"])
+            .env("CRISPASR_FC_PW_Q8", "0")
+            .env("CRISPASR_FC_FUSED_QKV", "0")
+            .env("CRISP_AUDIO_WINDOWED_ATTN", "1"),
+    );
+}
+
+const LOADED_FAULT_DECLARATIONS: &str = r#"#include "qwen3_asr.h"
+namespace parakit_test {
+float* embed(qwen3_asr_context*, const int32_t*, int);
+float* forward(qwen3_asr_context*, const float*, int, int, int*, int*);
+int32_t* tokenize(qwen3_asr_context*, const char*, int*);
+void begin_chunk();
+void end_chunk(bool);
+}
+"#;
 
 #[test]
 fn cmake_hook_compiles_the_copy_and_excludes_the_original() {

@@ -32,15 +32,22 @@ sudo apt install libvulkan-dev vulkan-tools glslc spirv-tools spirv-headers mesa
 
 ## Install
 
-Clone with submodules first:
-
-```text
-git submodule update --init --recursive
-```
-
-Linux developer install:
+On Linux and Apple Silicon macOS, install directly from Git after installing the native dependencies above:
 
 ```bash
+cargo install --locked --git https://github.com/pszemraj/parakit.git parakit
+```
+
+On Apple Silicon, add `--features metal` to enable GPU inference:
+
+```bash
+cargo install --locked --git https://github.com/pszemraj/parakit.git parakit --features metal
+```
+
+For a local checkout, initialize its submodules before installing:
+
+```bash
+git submodule update --init --recursive
 cargo install --locked --path .
 ```
 
@@ -59,19 +66,19 @@ That build retains X11 clipboard paste and direct typing, and cannot provide nat
 
 Install behavior:
 
-- Windows installs need the generated CrispASR/ggml DLLs alongside `parakit.exe`; use the [Windows bundle procedure](../scripts/windows/README.md).
-- Linux and macOS source installs currently depend on the generated CrispASR shared libraries under Cargo's build output. Retain that build-output directory after installation, including when choosing a separate `CARGO_TARGET_DIR`.
-- GitHub auto-generated source archives are unsupported because they do not include the CrispASR submodule. A public release must ship either a source archive with submodules or a binary bundle whose shared libraries are colocated with the executable.
+- [Bundled builds](#crispasr-and-backends) produce executables that do not need the checkout, Cargo Git cache, or native build directory. Custom `--root` installations can be moved together with their `bin` directory.
+- Native OS libraries and selected BLAS, OpenMP, GPU runtimes, and drivers remain prerequisites. On Windows, the [bundle procedure](../scripts/windows/README.md) can package optional runtime DLLs.
+- Q6_K preparation and source rebuilding require [separately installed tools](dev/README.md#source-rebuild). Hosted Q8_0 downloads and dictation do not use them.
+- GitHub auto-generated source archives are unsupported because they do not include the CrispASR submodule.
 
 Optional accelerator builds:
 
 ```bash
 cargo install --locked --path . --features cuda
 cargo install --locked --path . --features vulkan
-cargo install --locked --path . --features metal  # Apple targets only
 ```
 
-On macOS, `aarch64-apple-darwin` is the supported target. Build from a native arm64 terminal; an x86_64/Rosetta build may not expose the Metal backend to ggml.
+For a local Metal build, use `cargo install --locked --path . --features metal`. On macOS, `aarch64-apple-darwin` is the supported target. Build from a native arm64 terminal; an x86_64/Rosetta build may not expose the Metal backend to ggml.
 
 ## Isolated Development Builds
 
@@ -99,7 +106,7 @@ cargo build --locked --features cuda,vulkan --bin parakit --bin parakit-ibus --e
 
 Use the architecture supported by your GPU and toolkit. Reuse the same directory, feature set, profile, and native build settings for subsequent builds. Changing them can require another native compile; `cargo check` does not produce the runnable binaries. An existing directory built with `--all-features` should keep that feature set when rebuilding; Linux intentionally ignores the unsupported Metal feature.
 
-These builds do not install a binary or restart a running daemon. Verify [runtime library paths](#runtime-library-paths) against the isolated directory, then follow the [Linux GPU procedure](dev/quality.md#linux-cudavulkan) for isolated configuration and model state.
+These builds do not install a binary or restart a running daemon. Verify [runtime library paths](#runtime-library-paths), substituting the isolated binary path for `$(command -v parakit)`, then follow the [Linux GPU procedure](dev/quality.md#linux-cudavulkan) for isolated configuration and model state.
 
 ## CPU Builds
 
@@ -149,7 +156,7 @@ Explicit `PARAKIT_BLAS` builds print the requested and selected modes as a Cargo
 
 ## CrispASR And Backends
 
-The repository vendors [CrispASR v0.8.49](https://github.com/CrispStrobe/CrispASR/tree/d94264379dada437aa4ea9163eb34ffe4554422a) at `d94264379dada437aa4ea9163eb34ffe4554422a` as a git submodule. `build.rs` owns its CMake build and installs shared libraries under `target/<profile>/build/parakit-*/out/lib`. Concrete target overrides in `.cargo/config.toml` suppress the sys crate's competing native build. Run Cargo from the repository root so this configuration is loaded; an outside-directory `cargo build --manifest-path ...` does not load it. Source rebuild requirements are in [dev/README.md#source-rebuild](dev/README.md#source-rebuild).
+The repository vendors [CrispASR v0.8.49](https://github.com/CrispStrobe/CrispASR/tree/d94264379dada437aa4ea9163eb34ffe4554422a) at `d94264379dada437aa4ea9163eb34ffe4554422a` as a git submodule. Small manifests under `native/` compile its Rust binding sources unchanged, without upstream build scripts. Parakit's `build.rs` owns the single native build, including Git installs that do not discover local Cargo configuration. It asks CMake's File API for a consumer target's complete archive and runtime dependencies, then bundles the archives into Parakit's Rust library. The standalone IBus helper does not link this library.
 
 The bundled build compiles patched copies of CrispASR's session and Parakeet orchestration sources under Cargo's `OUT_DIR`; it leaves the submodule unchanged. The patches make chunk failures fail the whole utterance, require Qwen decoding to reach EOS, and restrict language-metadata parsing to the output header. Qwen's energy filter also retains recoverable quiet clauses around louder speech. The orchestration copy removes the informational gap-recovery notice while preserving warnings, including the streamed-encoding fallback after an allocation failure. A deferred CMake hook substitutes these two translation units.
 
@@ -171,28 +178,26 @@ Feature mapping:
 
 CUDA builds also force `GGML_CUDA_NCCL=OFF`.
 
-Metal builds embed the shader source into `libggml-metal.dylib`, so there is no loose `default.metallib` to carry with the binary. The first GPU use still pays normal Metal runtime compilation/warmup cost.
+Metal builds embed the shader source into the static Metal backend, so there is no loose `default.metallib` to carry with the binary. The first GPU use still pays normal Metal runtime compilation/warmup cost.
 
 On macOS, `libomp` is optional; ggml's OpenMP path degrades when OpenMP is not available, and Metal handles GPU offload separately.
 
 ## Runtime Library Paths
 
-Linux builds must use transitive `RPATH`, not `RUNPATH`, so `libcrispasr.so` can find sibling `libggml*.so` files.
-
-Verify:
+Bundled builds must not load CrispASR or ggml from a build directory. On Linux, inspect the installed executable:
 
 ```bash
-ldd target/debug/parakit | grep -E "crispasr|ggml"
-readelf -d target/debug/parakit | grep -E "RPATH|RUNPATH"
+ldd "$(command -v parakit)"
+readelf -d "$(command -v parakit)" | grep -E "NEEDED|RPATH|RUNPATH"
 ```
 
-The library paths should point into `target/debug/build/parakit-*/out/lib`, and `readelf` should report `RPATH`.
+There should be no CrispASR/ggml shared dependencies or RPATH/RUNPATH entries into the checkout or Cargo build output. System libraries such as OpenBLAS and OpenMP are expected when selected.
 
-macOS uses `@rpath` and sibling dylib install names. Verify:
+On macOS, inspect the installed executable and its loader paths:
 
 ```bash
-otool -L target/debug/build/parakit-*/out/lib/libggml.dylib
-otool -l target/debug/parakit | grep -A2 LC_RPATH
+otool -L "$(command -v parakit)"
+otool -l "$(command -v parakit)" | grep -A2 LC_RPATH
 ```
 
-See [macOS CPU and Metal validation](dev/model-validation.md#macos-cpu-and-metal) for build and runtime checks.
+Apple frameworks and separately installed runtimes are expected; build-directory CrispASR/ggml dylibs are not. Explicit external-library builds retain their dynamic-library search paths. See [macOS CPU and Metal validation](dev/model-validation.md#macos-cpu-and-metal) for native checks.

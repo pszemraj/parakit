@@ -34,7 +34,7 @@ struct Cli {
     #[arg(long)]
     keep_trailing_period: bool,
 
-    /// Value at or above which isolated single-digit numbers and ordinals become digits; larger cardinals always convert. Omit to use the built-in default of 4; pass 0 to convert every isolated single digit and ordinal.
+    /// Minimum eligible cardinal or ordinal value rendered as digits (default 4). Adjacent parsed counts stay intact at every threshold. A connected list or range containing any value below it retains its wording. Pass 0 to render every eligible standalone value; protected quantities and shared-scale bounds stay worded.
     #[arg(long, value_name = "VALUE")]
     number_threshold: Option<f64>,
 
@@ -108,6 +108,7 @@ fn run() -> Result<()> {
         cli.profile,
         !cli.keep_trailing_period,
         cli.number_threshold,
+        &[],
         &cli.disable_rule,
         &[],
     )?

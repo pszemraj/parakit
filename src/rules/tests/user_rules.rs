@@ -225,9 +225,11 @@ fn user_rule_validation_rejections() {
                 .map(|(name, pattern)| user_rule(name, pattern, "x", RulePosition::Standard))
                 .collect();
             let err = if case.cleaning_disabled {
-                build_cleaner(true, CleaningProfile::Safe, false, None, &[], &rules).unwrap_err()
+                build_cleaner(true, CleaningProfile::Safe, false, None, &[], &[], &rules)
+                    .unwrap_err()
             } else {
-                build_enabled_cleaner(CleaningProfile::Safe, false, None, &[], &rules).unwrap_err()
+                build_enabled_cleaner(CleaningProfile::Safe, false, None, &[], &[], &rules)
+                    .unwrap_err()
             };
             let msg = err.to_string();
             case.expect_substrings
@@ -264,7 +266,7 @@ fn whitespace_only_user_rule_pattern_is_accepted_as_a_literal_pattern() {
 fn valid_zero_width_user_regexes_are_not_treated_as_missing_patterns() {
     for (name, pattern) in [("group", "()"), ("repeat", "a*"), ("boundary", r"\b")] {
         let rule = user_rule(name, pattern, "x", RulePosition::Standard);
-        build_enabled_cleaner(CleaningProfile::Safe, false, None, &[], &[rule])
+        build_enabled_cleaner(CleaningProfile::Safe, false, None, &[], &[], &[rule])
             .unwrap_or_else(|err| panic!("{pattern:?} is a valid configured regex: {err:#}"));
     }
 }
@@ -292,7 +294,15 @@ fn build_cleaner_validates_regex_for_a_disabled_user_rule() {
         RulePosition::Standard,
     )];
     let disabled = vec!["broken-regex".to_string()];
-    let result = build_cleaner(false, CleaningProfile::Safe, false, None, &disabled, &rules);
+    let result = build_cleaner(
+        false,
+        CleaningProfile::Safe,
+        false,
+        None,
+        &[],
+        &disabled,
+        &rules,
+    );
     let err = result.expect_err("disabled rules still need valid configuration");
     assert!(format!("{err:#}").contains("invalid regex"));
 }

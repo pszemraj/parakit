@@ -1,0 +1,14 @@
+[package]
+name = "crispasr"
+version = "0.8.49"
+edition = "2021"
+license = "MIT"
+publish = false
+build = false
+
+# Compile upstream sources without running its native-link build script.
+[lib]
+path = "../../vendor/CrispASR/crispasr/src/lib.rs"
+
+[dependencies]
+crispasr-sys = { path = "../crispasr-sys" }

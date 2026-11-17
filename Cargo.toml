@@ -1,6 +1,6 @@
 [package]
 name = "parakit"
-version = "0.5.3"
+version = "0.5.4"
 edition = "2021"
 rust-version = "1.87"
 description = "Push-to-talk desktop dictation daemon running local Parakeet and Qwen3-ASR models through CrispASR."
@@ -40,10 +40,9 @@ directories = "6"
 anstream = "1.0"
 anstyle = "1.0"
 
-# Inference runtime. CrispASR's Rust crates are supplied by the pinned
-# submodule rather than crates.io.
-crispasr = { path = "vendor/CrispASR/crispasr", default-features = false }
-crispasr-sys = { path = "vendor/CrispASR/crispasr-sys" }
+# Reuse the pinned Rust sources; Parakit owns native compilation and linkage.
+crispasr = { path = "native/crispasr", default-features = false }
+crispasr-sys = { path = "native/crispasr-sys" }
 
 # Audio capture
 cpal = { version = "0.15", optional = true }
@@ -175,10 +174,7 @@ ibus = ["daemon"]
 # library is not in the platform linker search path.
 bundled = []
 
-# GPU backends are selected by parakit's build.rs when it configures the
-# pinned CrispASR CMake tree. Do not forward these to crispasr-sys: its
-# fallback build script treats them as native CMake toggles too, which makes
-# `--all-features` non-portable across host platforms.
+# GPU backends are selected by Parakit's single native CMake build.
 cuda    = ["bundled"]
 metal   = ["bundled"]
 vulkan  = ["bundled"]
@@ -188,6 +184,7 @@ cc = "1"
 cmake = "0.1"
 serde_json = "1"
 pkg-config = "0.3"
+shlex = "1.3"
 
 [profile.release]
 opt-level = 3

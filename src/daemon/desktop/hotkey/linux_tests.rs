@@ -1,14 +1,7 @@
 //! Linux hotkey backend regression tests.
 
+use super::super::at;
 use super::*;
-
-fn base_time() -> Instant {
-    Instant::now()
-}
-
-fn at(start: Instant, millis: u64) -> Instant {
-    start + Duration::from_millis(millis)
-}
 
 fn physical(ctrl: bool, space: bool) -> PhysicalHotkeyState {
     PhysicalHotkeyState {
@@ -20,7 +13,7 @@ fn physical(ctrl: bool, space: bool) -> PhysicalHotkeyState {
 
 #[test]
 fn registered_hotkey_physical_poll_keeps_recording_while_chord_is_down() {
-    let now = base_time();
+    let now = Instant::now();
     let mut state = RegisteredHotkeyLatch::default();
 
     state.event(
@@ -36,7 +29,7 @@ fn registered_hotkey_physical_poll_keeps_recording_while_chord_is_down() {
 
 #[test]
 fn registered_hotkey_release_is_ignored_while_physical_chord_is_still_down() {
-    let now = base_time();
+    let now = Instant::now();
     let mut state = RegisteredHotkeyLatch::default();
 
     state.event(
@@ -60,7 +53,7 @@ fn registered_hotkey_release_is_ignored_while_physical_chord_is_still_down() {
 
 #[test]
 fn registered_hotkey_stale_press_waits_for_physical_rearm() {
-    let now = base_time();
+    let now = Instant::now();
     for mode in [DictationMode::Plain, DictationMode::WithContext] {
         for (ctrl_held, space_held) in [(false, false), (false, true), (true, false)] {
             let mut state = RegisteredHotkeyLatch::default();
@@ -122,7 +115,7 @@ fn registered_hotkey_stale_press_waits_for_physical_rearm() {
 
 #[test]
 fn registered_hotkey_waits_for_space_release_after_ctrl_first_stop() {
-    let now = base_time();
+    let now = Instant::now();
     let mut state = RegisteredHotkeyLatch::default();
 
     state.event(
@@ -207,7 +200,7 @@ fn passive_listen_handler_emits_transitions_without_returning_suppression() {
 
 #[test]
 fn registered_hotkey_press_uses_ordinary_capture_transitions() {
-    let now = base_time();
+    let now = Instant::now();
     let mut latch = RegisteredHotkeyLatch::default();
     let (tx, rx) = crossbeam_channel::unbounded();
     let pressed = latch
@@ -243,7 +236,7 @@ fn registered_hotkey_press_uses_ordinary_capture_transitions() {
 
 #[test]
 fn registered_context_chord_does_not_restart_when_alt_changes() {
-    let now = base_time();
+    let now = Instant::now();
     let mut latch = RegisteredHotkeyLatch::default();
     assert_eq!(
         latch.event(
@@ -285,7 +278,7 @@ fn registered_context_chord_does_not_restart_when_alt_changes() {
 
 #[test]
 fn registered_context_chord_rejects_alt_gr() {
-    let now = base_time();
+    let now = Instant::now();
     let mut latch = RegisteredHotkeyLatch::default();
     assert_eq!(
         latch.event(

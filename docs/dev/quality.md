@@ -18,28 +18,50 @@ cargo check --workspace --all-targets --all-features
 
 The all-features check can request accelerator toolchains that the current host does not have. Follow [GPU Feature Validation](#gpu-feature-validation) for the host-specific fallback, then run the native GPU build and runtime checks on each supported platform.
 
+Run `cargo test --lib preset_artifacts_and_source_revisions_exist_on_hub -- --ignored` when changing preset metadata. This opt-in network test checks every hosted Q8_0 filename and original checkpoint revision against the public Hugging Face Hub without downloading model weights.
+
+`tests/native_correctness_build.rs` verifies bundled source-patch application, the CMake hook that compiles the generated copies, and model-free native decoder fault and correctness checks. Readiness option restoration on success and failure is covered by the Rust inference tests. The opt-in loaded-Qwen test checks that readiness restores a one-token budget, incomplete decodes return errors, and the same session recovers with a sufficient budget and repeats its complete transcript. Point `PARAKIT_LIVE_MODEL` at a Qwen GGUF inside the checkout and run:
+
+```sh
+cargo test --lib inference::tests::loaded_qwen_restores_budget_and_recovers_after_incomplete_decode -- --ignored --exact --test-threads=1
+```
+
+The native opt-in test builds a separate CPU library using the production source corrections and CMake hook. Only that generated source copy calls the test fault wrappers. It injects decoder embedding and forward-pass failures, invalid EOS tokenizations, and a second-chunk embedding failure after a completed first chunk. Each failure must return no C API result, and the same loaded session must recover without changing its complete transcript. With the same repo-local `PARAKIT_LIVE_MODEL`, run:
+
+```sh
+cargo test --test native_correctness_build loaded_qwen_session_faults_discard_partial_text_and_recover -- --ignored --exact --nocapture
+```
+
+These opt-in CPU checks complement the [Qwen comparisons](#qwen-and-moondream-comparisons) and [native acceptance cases](model-validation.md#qwen-options-long-input-and-reload), which cover recognition quality and the supported devices.
+
 ## GPU Feature Validation
 
 Use the [Windows scripts](../../scripts/windows/README.md) for native CUDA/Vulkan builds. Raw `cargo check --workspace --all-targets --all-features` may still enter CMake's Visual Studio generator and fail before Rust typechecking if Visual Studio CUDA BuildCustomizations are stale. A known failure leaves `CudaToolkitDir` empty and reports `CUDA Toolkit directory '' does not exist`.
 
-When that happens, record the exact CUDA/MSBuild error, then validate the Rust all-features surface with an existing bundled library directory:
+When that happens, record the exact CUDA/MSBuild error, then validate the Rust all-features surface with an existing bundled archive directory:
 
 ```powershell
-$env:CRISPASR_LIB_DIR = (Resolve-Path 'target\debug\build\parakit-<hash>\out\lib').Path
+$env:CRISPASR_LIB_DIR = (Resolve-Path 'target\debug\build\parakit\<hash>\out\lib').Path
 cargo check --workspace --all-targets --all-features
 Remove-Item Env:\CRISPASR_LIB_DIR
 ```
 
-This fallback does not replace the [native Windows build and inference checks](model-validation.md#windows-cpu-and-supported-gpu-backends).
+This is a typechecking-only fallback. `CRISPASR_LIB_DIR` requests dynamic linkage, while the bundled directory contains static archives; it cannot be used for `cargo build`, `cargo test`, or a runnable binary. It does not replace the [native Windows build and inference checks](model-validation.md#windows-cpu-and-supported-gpu-backends).
 
-On macOS, raw `--all-features` also enables CUDA and can fail in CMake before Rust typechecking when the CUDA Toolkit is not installed. Use the same `CRISPASR_LIB_DIR` fallback to validate the Rust all-features surface; validate Metal with the native macOS build and `doctor`.
+Use the actual output directory from the successful native build, including any custom target directory and profile. The Windows example uses Cargo 1.100's layout; earlier Cargo versions use `build\parakit-<hash>\out\lib`.
+
+On the tested CUDA 13.1/MSVC 14.44 toolset, the SDK's `cuda.lib` driver-loader object requests `LIBCMT` and emits `LNK4098` with `/MD` consumers. The same warning reproduces in a standalone driver-API program. Record this verified SDK warning exception with the validation evidence and complete the native CUDA inference checks.
+
+[CUDA 13 on Windows uses the runtime supplied with the display driver](https://docs.nvidia.com/cuda/cuda-runtime-api/cuda_runtime_api/group__CUDART____VERSION.html), which can report a different minor version from the build toolkit. Preserve native version-mismatch warnings in the evidence; quiet mode still reports warnings.
+
+On macOS, raw `--all-features` also enables CUDA and can fail in CMake before Rust typechecking when the CUDA Toolkit is not installed. Use the same typechecking-only `CRISPASR_LIB_DIR` fallback to validate the Rust all-features surface; validate Metal with the native macOS build and `doctor`.
 
 ```bash
-CRISPASR_LIB_DIR="$PWD/target/debug/build/parakit-<hash>/out/lib" \
+CRISPASR_LIB_DIR="$PWD/target/debug/build/parakit/<hash>/out/lib" \
   cargo check --workspace --all-targets --all-features
 ```
 
-Replace `<hash>` with the directory from the successful native build; do not point the fallback at an unrelated or stale library.
+Replace `<hash>` with the directory from the successful native build; do not point the fallback at unrelated or stale archives. Unset `CRISPASR_LIB_DIR` before the next native build or runtime check.
 
 ### Linux CUDA/Vulkan
 
@@ -62,7 +84,7 @@ env -u GGML_VK_VISIBLE_DEVICES CUDA_VISIBLE_DEVICES= \
   "$CARGO_TARGET_DIR/debug/parakit" --verbose doctor
 ```
 
-The first command exposes CUDA and hides Vulkan; the second hides CUDA and lets Vulkan select a discrete GPU. Check the device name in the native diagnostics. Use `GGML_VK_VISIBLE_DEVICES` to pin a Vulkan device when necessary, as described in [the environment reference](../config_reference.toml). `--device gpu` alone does not distinguish CUDA from Vulkan in a build containing both.
+The first command exposes CUDA and hides Vulkan; the second hides CUDA and lets Vulkan select a discrete GPU. Check the device name in the native diagnostics. Use `GGML_VK_VISIBLE_DEVICES` to pin a Vulkan device when necessary, as described in [environment variables](../configuration.md#environment-variables). `--device gpu` alone does not distinguish CUDA from Vulkan in a build containing both.
 
 A verbose Vulkan run in a dual-backend build can report `no CUDA-capable device is detected` because CUDA was deliberately hidden. Confirm that the selected device is Vulkan on the intended GPU.
 
@@ -151,11 +173,19 @@ XDG_CACHE_HOME=$PWD/target/tmp/ptt-cache \
 
 The empty config file keeps your own `config.toml` out of the run; `PARAKIT_CONFIG_PATH` must name a file that exists. Use a real WAV with a known transcript. The pinned Juniper voice memo is 55.36 seconds; its local filename can vary by machine. Compare raw output with the readable reference transcript using task-appropriate tolerance. The command resamples it to the model rate and sends worker start/stop events with owned PCM. `--no-cleaning` exposes raw output for comparison; omit it to exercise cleanup too. Add the build feature and `--device` for the backend being tested. On PowerShell, create the empty file with `New-Item -ItemType File -Force target/tmp/ptt-empty.toml`, set the environment variables with `$env:NAME = ...`, and use the Windows WAV path.
 
-Simulation bypasses the daemon singleton and opens no control endpoint. It uses the same resolved worker settings as normal startup, but disables insertion, sounds, and desktop notifications. Avoid concurrent inference when measuring timings; simulation does not pause an already-running daemon.
+Simulation uses the [shared worker settings with desktop resources disabled](architecture.md#ownership-constraints), bypassing the singleton and control endpoint. Avoid concurrent inference when measuring timings; it does not pause an already-running daemon.
 
 The worker acknowledges each required transcript and verifies the expected residency after each wait (including the last). With history enabled and context disabled, repeated transcripts must match within the same process; this verifies reload behavior rather than recognition quality across builds. Context-enabled repetitions can differ as prior history changes. Missing transcripts, reload failures, or missed offloads return a failure exit status. An immediate simulated release exercises queuing while reload is busy. Use `--model-idle-minutes 0` to check disabled offloading. For one dictation without an idle wait, omit `--simulate-ptt-repeat` and `--simulate-ptt-idle-seconds`; both options require `--simulate-ptt-audio`.
 
 Simulation requests the original shortcut's mode. To compare Qwen context, set `context_on_default_hotkey = true` under `[qwen]` in the isolated configuration, with nonzero `context_dictations` and `daemon.transcript_history`; the first successful capture supplies history for later captures. Keep context disabled for ordinary reload-parity checks.
+
+### Cleaned Worker Parity
+
+Use the same installed executable and isolated configuration for worker simulation, `config show`, and `rules test`. Start with defaults, then repeat with an aggressive profile, configured threshold, repetition exceptions, and disabled numeric passes; use the existing [cleaner unit tests](../../src/rules/tests.rs) and [pipeline regressions](../../tests/cleaning_regressions.rs) for text-level boundaries instead of maintaining a separate platform-specific list.
+
+Run the pinned WAV with `--no-cleaning` to check recognition, then with `--cleaning` and `--log-dir` to check post-processing. Feed the latter run's exact JSONL `raw` text to `rules test`; its `Clean:` result must equal JSONL `cleaned`, and the changing-rule names and order must agree. This comparison uses the same recognized text even if separate inference runs differ.
+
+Restart the process with the same configuration and verify config read-back and [cleaning metadata](../logging.md#transcription-record-fields), including `ruleset_id` and `cleaner_version`, remain consistent. On a successful cached-model `--quiet` run without runtime warnings, verify empty stdout/stderr while JSONL still records the cleaned transcript and skipped simulation insertion without a paste event. Record any warnings separately. Keep recognition quality, cleaning parity, and physical insertion results separate.
 
 ## NeMo Reference Helper
 
@@ -225,7 +255,7 @@ parakit fetch cstr/qwen3-asr-0.6b-GGUF --file qwen3-asr-0.6b.gguf
 
 Use the resulting printed model paths with `transcribe-file --model`. Compare against the [official Qwen implementation](https://huggingface.co/Qwen/Qwen3-ASR-0.6B#python-package-usage) as a separate reference. Keep forced language and token budget the same across comparisons; automatic detection and forced English are distinct cases. Include short speech, silence, the pinned Juniper recording, and speech spanning a 30-second Qwen chunk boundary. Use raw output (`--no-cleaning` in daemon simulation), then verify repeated inference and idle offload/reload preserve the options and transcript.
 
-The legacy `qwen-asr` 0.0.6 eager/SDPA audio encoder computes window boundaries but does not apply its window mask. CrispASR's dense audio attention matches that path, so agreement between these implementations can reproduce shared attention behavior. Parakit enables windowed Qwen audio attention by default; explicit environment overrides are retained. [Qwen PR #103](https://github.com/QwenLM/Qwen3-ASR/pull/103) passes the mask to the encoder layers. The native Qwen implementation in Transformers 5.13.0 instead splits eager/SDPA attention into separate audio windows; use the official [`-hf` checkpoints](https://huggingface.co/Qwen/Qwen3-ASR-1.7B-hf) for that reference.
+The legacy `qwen-asr` 0.0.6 eager/SDPA audio encoder computes window boundaries but does not apply its window mask. CrispASR's dense audio attention matches that path, so agreement between these implementations can reproduce shared attention behavior. Parakit's [attention default and override semantics](../configuration.md#crisp_audio_windowed_attn) differ from that legacy path. [Qwen PR #103](https://github.com/QwenLM/Qwen3-ASR/pull/103) passes the mask to the encoder layers. The native Qwen implementation in Transformers 5.13.0 instead splits eager/SDPA attention into separate audio windows; use the official [`-hf` checkpoints](https://huggingface.co/Qwen/Qwen3-ASR-1.7B-hf) for that reference.
 
 To investigate a consequential disagreement, compare F16 with dense and windowed audio attention using CrispASR's existing environment switch. Disable its repetition repair in both diagnostic arms so the generated output remains observable:
 
@@ -260,7 +290,7 @@ Record failures, cold/warm latency, and host/GPU memory. Keep downloaded referen
 
 Use the [WAV quality target](#wav-quality-target) with `--device cpu --repeat 3` and each `--model-preset` on the same recordings. Keep the build profile, native libraries, thread counts, and BLAS settings fixed. Record loading separately from inference, and distinguish the first inference from repeated calls on one loaded engine.
 
-Measure peak process RSS across loading and inference; model download size does not describe runtime memory. Check raw-text fidelity alongside timing, especially omissions, negations, numbers, and names. Keep the per-run results under ignored `target/tmp/`.
+Measure peak process RSS across loading and inference; see [memory measurement](memory.md#measuring-memory). Check raw-text fidelity alongside timing, especially omissions, negations, numbers, and names. Keep the per-run results under ignored `target/tmp/`.
 
 ### Checkpoint Conversion Acceptance
 
@@ -283,11 +313,15 @@ cargo run --no-default-features --features bundled --example audit-cleaning -- \
 
 Run it again with `--profile aggressive` when changing an aggressive-only pass. Compare record counts, changed-from-raw counts, agreement with historical output, per-pass activation counts, and every retained difference example. A lower rule count or a larger changed-text count is not a quality metric; preservation of intended meaning and per-pass precision are.
 
-The audit removes one terminal period by default, matching daemon behavior. Add `--keep-trailing-period` when comparing prose-oriented output separately, and use `--number-threshold VALUE` to replay a non-default isolated-number threshold.
+The audit removes one terminal period by default, matching daemon behavior. Add `--keep-trailing-period` when comparing prose-oriented output separately, and use `--number-threshold VALUE` to replay a non-default number-conversion threshold.
 
 The audit applies built-in rules only. It does not load `config.toml` or `[[rules.user]]`; pass profile, threshold, trailing-period, and disabled-rule choices explicitly. Use `parakit rules test` to validate the currently configured user rules.
 
 Number-rule invariants and personal vocabulary handling are in [cleaning rules](../cleaning-rules.md#numbers). Cover both preservation and nearby exact counts in the existing regression matrix.
+
+Before adding a built-in rule or exception, report its actual hit count from a log replay. For merge acceptance, compare the released 0.5.x cleaner with the candidate over the full same corpus using identical profile, threshold, trailing-period, and rule settings. Retain every changed row and review them all for meaning; compare with the current branch baseline too when simplifying existing behavior. Unit tests alone do not establish acceptance, and agreement with an older cleaner is not ground truth.
+
+TODO: Review the existing backtracking-regex path in a separate follow-up, including the `fancy-regex` dependency, backtrack limits, fail-open behavior, and failure log field. Keep that work separate from numeric and repetition-rule simplification.
 
 ## Runtime Smoke Checks
 
@@ -393,32 +427,6 @@ Use an isolated daemon with non-sensitive transcripts and exercise the [history 
 
 While one entry is selected, add dictations and confirm preview and clipboard copy still refer to that entry. Check disabled/empty history, eviction, daemon restart, and oversized full-text responses without truncation or substitution. An oversized preview must still allow copying the selected entry with Enter. Force a clipboard failure, verify the picker remains open, retry, and independently read the actual clipboard through its supported platform route.
 
-### Ordered audio and loaded Qwen failures
+### Ordered audio
 
 Repeat `transcribe-file --audio` to run ordered inputs on one loaded engine. [Worker simulation](#ptt-worker-simulation) accepts repeated `--simulate-ptt-audio` paths; it replays the full sequence per cycle before the idle interval. Its failure path reads history back and rejects replacement of the preceding successful transcript. See the [native Qwen sequence](model-validation.md#qwen-options-long-input-and-reload) for the short/long/short acceptance case.
-
-The loaded-session fault driver runs on Linux and macOS with an explicit Qwen model. Build the daemon, WAV helper, and test harness in the same isolated target directory before running it:
-
-```bash
-cargo build --bin parakit --example transcribe-file
-cargo test --test native_correctness_build --no-run
-python tests/native/run_qwen_faults.py \
-  --native-build <isolated-target>/debug/build/parakit-<id>/out/build \
-  --binary-dir <isolated-target>/debug \
-  --model <qwen-q8.gguf> \
-  --device cpu \
-  --audio vendor/CrispASR/bindings/go/samples/jfk.wav \
-  --output target/tmp/qwen-native-faults
-```
-
-Run the ignored Qwen cases through the driver, which supplies native defaults in each test process's launch environment. Use the matching completed native build directory containing `compile_commands.json`, and a fresh output directory. CPU is the default; for a GPU run, add the matching accelerator feature to both Cargo commands, then pass `--device gpu`. On macOS the driver preserves the dylib basename and version aliases and sets `DYLD_LIBRARY_PATH` to load its private fault library. It compiles a separate corrected C API copy and relinks its own test library; normal binaries and vendor sources are unchanged.
-
-The driver checks:
-
-- First/middle/last chunk and greedy embedding/forward failures through file and worker paths. Failed worker input must preserve the preceding successful transcript and produce no successful log or insertion.
-- Native English, Cantonese, and Filipino assistant prefills, forced on English audio to inspect prompt construction rather than multilingual quality.
-- Exact context prompt bytes and session setters: raw system text and forced-English prefills across chunks, contextual/ordinary/contextual calls on one session, unusable-context fallback, an ordinary retry after a contextual inference failure, no retry after a failed clear, and clearing after success or failure.
-- Worker history handoff using two disjoint JFK phrases: context without a retry, forced-copy retry, JSONL/verbose telemetry matching native use, and silence reaching neither contextual inference nor successful history.
-- Direct-engine silence output and subsecond ordinary fallback. Direct calls do not use the worker's silence filter.
-
-`PARAKIT_TEST_QWEN_AUDIO` and `PARAKIT_TEST_QWEN_CONTEXT` override the context probes' WAV and prior text; defaults are the constructed long fixture and a vocabulary sample. Each call prints a `PARAKIT_TEST_RESULT` JSON record with raw text, elapsed inference seconds, context character count, retry status, and any error. Compare it with the recording and a readable reference; prompt-routing checks alone do not establish quality.

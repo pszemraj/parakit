@@ -7,10 +7,100 @@ use std::sync::{mpsc, Arc, Barrier};
 use std::time::{Duration, Instant};
 
 #[test]
+fn optional_conversion_tools_use_only_path() {
+    const MODE: &str = "PARAKIT_TOOL_LOOKUP_TEST";
+    const LOOKUP_PATH: &str = "PARAKIT_TOOL_LOOKUP_PATH";
+    if let Ok(mode) = env::var(MODE) {
+        // Keep loader DLL paths until this isolated child has started.
+        env::set_var("PATH", env::var_os(LOOKUP_PATH).unwrap());
+        if mode.starts_with("force") {
+            let dir = PathBuf::from(env::var_os("PATH").unwrap());
+            let paths = FetchPaths {
+                nemo: dir.join(NEMO_FILENAME),
+                f16: dir.join(F16_FILENAME),
+                q8: dir.join(Q8_FILENAME),
+            };
+            for path in [&paths.nemo, &paths.f16, &paths.q8] {
+                std::fs::write(path, b"cached artifact").unwrap();
+            }
+            let options = FetchOptions {
+                force: true,
+                quiet: true,
+                verbose: false,
+                source: FetchSource::OfficialNemo {
+                    keep_nemo: true,
+                    keep_f16: true,
+                },
+            };
+            let cached = [paths.nemo.clone(), paths.f16.clone(), paths.q8.clone()];
+            let error = run_official_nemo_with_paths(
+                &options,
+                "https://example.invalid",
+                None,
+                true,
+                true,
+                paths,
+            )
+            .unwrap_err();
+            let expected = if mode == "force" {
+                "convert-parakeet-to-gguf.py was not found on PATH"
+            } else {
+                "Conversion requires Python 3"
+            };
+            assert!(error.to_string().contains(expected), "{error:#}");
+            for path in cached {
+                assert_eq!(std::fs::read(path).unwrap(), b"cached artifact");
+            }
+            return;
+        }
+        let result = tool_path("convert-parakeet-to-gguf.py");
+        if mode == "found" {
+            assert_eq!(
+                result.unwrap(),
+                PathBuf::from(env::var_os("PATH").unwrap()).join("convert-parakeet-to-gguf.py")
+            );
+        } else {
+            let error = result.unwrap_err().to_string();
+            assert!(error.contains("convert-parakeet-to-gguf.py was not found on PATH"));
+            assert!(error.contains("optional conversion tools"));
+        }
+        return;
+    }
+    let root = crate::test_support::fixture_root("parakit-fetch-tests", "tool-lookup");
+    std::fs::create_dir_all(&root).unwrap();
+    let root = root.canonicalize().unwrap();
+    std::fs::write(
+        root.join("convert-parakeet-to-gguf.py"),
+        "# separately installed script\n",
+    )
+    .unwrap();
+    let force = root.join("force");
+    std::fs::create_dir_all(&force).unwrap();
+    std::fs::write(force.join(exe_name("crispasr-quantize")), b"unused").unwrap();
+    let no_python = root.join("force-no-python");
+    std::fs::create_dir_all(&no_python).unwrap();
+    std::fs::write(no_python.join(exe_name("crispasr-quantize")), b"unused").unwrap();
+    std::fs::write(no_python.join("convert-parakeet-to-gguf.py"), b"unused").unwrap();
+    for (mode, path) in [
+        ("found", root.clone()),
+        ("missing", root.join("absent")),
+        ("force", force),
+        ("force-no-python", no_python),
+    ] {
+        let output = crate::test_support::exact_test_command(
+            "fetch::tests::optional_conversion_tools_use_only_path",
+        )
+        .env(MODE, mode)
+        .env(LOOKUP_PATH, path)
+        .output()
+        .unwrap();
+        assert!(output.status.success(), "{mode}: {output:?}");
+    }
+}
+
+#[test]
 fn q6_acquisition_preserves_cached_models_and_reports_preparation() {
-    #[cfg(target_os = "windows")]
     const CASE: &str = "PARAKIT_Q6_ACQUISITION_CASE";
-    #[cfg(target_os = "windows")]
     if let Ok(case) = std::env::var(CASE) {
         let dir = crate::test_support::fixture_root("parakit-fetch-tests", &case);
         let preset = ModelPreset::ParakeetV3;
@@ -142,8 +232,7 @@ fn q6_acquisition_preserves_cached_models_and_reports_preparation() {
         assert_eq!(std::fs::read(q8).unwrap(), b"existing Q8");
     }
 
-    // Unix prefers its bundled quantizer over PATH; this stand-in is Windows-only.
-    #[cfg(target_os = "windows")]
+    // The installed quantizer is resolved from PATH on every platform.
     {
         let bin = dir.join("bin");
         std::fs::create_dir_all(&bin).unwrap();
@@ -165,7 +254,11 @@ fn main() {
             .output()
             .unwrap();
         assert!(compiled.status.success(), "{compiled:?}");
-        let path = joined_path_with_prepended(&bin, std::env::var_os("PATH")).unwrap();
+        let mut paths = vec![bin];
+        if let Some(existing) = std::env::var_os("PATH") {
+            paths.extend(std::env::split_paths(&existing));
+        }
+        let path = std::env::join_paths(paths).unwrap();
         for case in ["cached", "cold", "force"] {
             let output = crate::test_support::exact_test_command(
                 "fetch::tests::q6_acquisition_preserves_cached_models_and_reports_preparation",
@@ -407,18 +500,6 @@ fn move_into_place_replaces_existing_file() {
 
     assert!(!src.exists());
     assert_eq!(std::fs::read(&dst).unwrap(), b"new");
-}
-
-#[test]
-fn prepend_env_path_keeps_existing_entries() {
-    let dir = Path::new("target/tmp/parakit-fetch-tests/lib");
-    let existing = env::join_paths([Path::new("target/tmp/a"), Path::new("target/tmp/b")]).unwrap();
-    let joined = joined_path_with_prepended(dir, Some(existing)).unwrap();
-    let paths: Vec<_> = env::split_paths(&joined).collect();
-
-    assert_eq!(paths[0], dir);
-    assert_eq!(paths[1], Path::new("target/tmp/a"));
-    assert_eq!(paths[2], Path::new("target/tmp/b"));
 }
 
 #[test]

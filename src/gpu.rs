@@ -319,15 +319,14 @@ mod tests {
 
     #[test]
     fn maps_ggml_device_types() {
-        // Codes 3 (Accel) and 4 (Meta) were previously untested; the
-        // `From<c_int>` impl (gpu.rs:69-79) maps all six DeviceKind cases:
+        // The `From<c_int>` impl maps all six DeviceKind cases:
         // 0-4 explicitly, and anything else falls through to Unknown.
         for (code, expected) in [
             (0, DeviceKind::Cpu),
             (1, DeviceKind::Gpu),
             (2, DeviceKind::IGpu),
-            (3, DeviceKind::Accel), // previously uncovered
-            (4, DeviceKind::Meta),  // previously uncovered
+            (3, DeviceKind::Accel),
+            (4, DeviceKind::Meta),
             (9, DeviceKind::Unknown(9)),
         ] {
             assert_eq!(DeviceKind::from(code), expected, "code {code}");
@@ -389,9 +388,8 @@ mod tests {
                 expect_name: Some("Vulkan0"),
             },
             PreferredGpuCase {
-                // New coverage: preferred_gpu_device_in's final `None` path
-                // (gpu.rs:191, falling off both `find` calls) was previously
-                // never exercised by a test.
+                // Exercise preferred_gpu_device_in's final `None` path
+                // after both `find` calls fail.
                 label: "no gpu-like device present returns None",
                 devices: vec![device("BLAS", DeviceKind::Accel)],
                 expect_name: None,

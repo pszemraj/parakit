@@ -4,7 +4,9 @@ parakit runs from a Windows terminal and installs as a per-user bundle. Its hotk
 
 ## Build
 
-Build and install with the [Windows bundle scripts](../scripts/windows/README.md). Shared native dependencies are in [build.md#native-dependencies](build.md#native-dependencies). Native model and resampler checks are in [model validation](dev/model-validation.md#windows-cpu-and-supported-gpu-backends).
+Build and install with the [Windows bundle scripts](../scripts/windows/README.md), or [install an existing bundle](../scripts/windows/README.md#install-an-existing-bundle). The script guide lists native toolchain and backend requirements. After installation, follow [first run](running.md#first-run) from a native Windows terminal; WSL is not the Windows desktop daemon path.
+
+For release acceptance, run the [native model and resampler checks](dev/model-validation.md#windows-cpu-and-supported-gpu-backends) and [installation lifecycle checks](dev/model-validation.md#windows-installation-lifecycle) for isolated Cargo installs and relocated bundles.
 
 ## Microphone Permissions
 

@@ -222,20 +222,7 @@ impl Engine {
     /// Reports inference, configuration, or option-restoration errors.
     pub(crate) fn transcribe_readiness(&self, pcm: &[f32]) -> Result<()> {
         let options = self.qwen.as_ref().context("readiness requires Qwen")?;
-        let language = options.normalized_language().map_err(anyhow::Error::msg)?;
-        let restore = QwenOptionRestore {
-            session: &self.session,
-            language: language.unwrap_or_default(),
-            budget: options.max_new_tokens as i32,
-            active: true,
-        };
-        let result = configure_qwen(&self.session, "", 512)
-            .map_err(anyhow::Error::msg)
-            .and_then(|()| self.transcribe(pcm).map(|_| ()));
-        restore
-            .restore()
-            .context("restore Qwen options after readiness")?;
-        result
+        with_readiness_options(&self.session, options, || self.transcribe(pcm).map(|_| ()))
     }
 
     /// Return the CrispASR backend used for this model.
@@ -486,7 +473,7 @@ impl<S: ContextSession> Drop for QwenContextRestore<'_, S> {
 
 /// Apply Qwen's language hint before its validated generation budget.
 fn configure_qwen(
-    session: &OwnedSession,
+    session: &impl QwenOptionSession,
     language: &str,
     max_new_tokens: i32,
 ) -> Result<(), String> {
@@ -494,21 +481,75 @@ fn configure_qwen(
     session.set_max_new_tokens(max_new_tokens)
 }
 
-struct QwenOptionRestore<'a> {
-    session: &'a OwnedSession,
+/// Session controls temporarily changed by readiness inference.
+trait QwenOptionSession {
+    /// Set the native source-language hint; an empty hint enables detection.
+    ///
+    /// # Returns
+    /// Success after applying the hint.
+    ///
+    /// # Errors
+    /// Reports a native option-setting failure.
+    fn set_source_language(&self, language: &str) -> Result<(), String>;
+    /// Set the native generation budget for the next transcription.
+    ///
+    /// # Returns
+    /// Success after applying the budget.
+    ///
+    /// # Errors
+    /// Reports a native option-setting failure.
+    fn set_max_new_tokens(&self, budget: i32) -> Result<(), String>;
+}
+
+impl QwenOptionSession for OwnedSession {
+    fn set_source_language(&self, language: &str) -> Result<(), String> {
+        OwnedSession::set_source_language(self, language)
+    }
+
+    fn set_max_new_tokens(&self, budget: i32) -> Result<(), String> {
+        OwnedSession::set_max_new_tokens(self, budget)
+    }
+}
+
+/// Restore user controls after readiness setup, inference failure, or unwinding.
+fn with_readiness_options(
+    session: &impl QwenOptionSession,
+    options: &QwenOptions,
+    infer: impl FnOnce() -> Result<()>,
+) -> Result<()> {
+    let restore = QwenOptionRestore {
+        session,
+        language: options
+            .normalized_language()
+            .map_err(anyhow::Error::msg)?
+            .unwrap_or_default(),
+        budget: options.max_new_tokens as i32,
+        active: true,
+    };
+    let result = configure_qwen(session, "", 512)
+        .map_err(anyhow::Error::msg)
+        .and_then(|()| infer());
+    restore
+        .restore()
+        .context("restore Qwen options after readiness")?;
+    result
+}
+
+struct QwenOptionRestore<'a, S: QwenOptionSession> {
+    session: &'a S,
     language: String,
     budget: i32,
     active: bool,
 }
 
-impl QwenOptionRestore<'_> {
+impl<S: QwenOptionSession> QwenOptionRestore<'_, S> {
     fn restore(mut self) -> Result<()> {
         self.active = false;
         configure_qwen(self.session, &self.language, self.budget).map_err(anyhow::Error::msg)
     }
 }
 
-impl Drop for QwenOptionRestore<'_> {
+impl<S: QwenOptionSession> Drop for QwenOptionRestore<'_, S> {
     fn drop(&mut self) {
         if self.active {
             let _ = configure_qwen(self.session, &self.language, self.budget);

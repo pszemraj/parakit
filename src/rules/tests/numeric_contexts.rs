@@ -1,0 +1,498 @@
+//! Full-cleaner tests for numeric literals, fractions, and time units.
+
+use super::*;
+
+#[test]
+fn existing_numeric_magnitudes_are_not_reparsed() {
+    for threshold in [0.0, 4.0, 10.0] {
+        let cleaner = cleaner_with_number_threshold(Some(threshold));
+        for input in [
+            "Existing 5 hundred people.",
+            "Existing 5 thousand people.",
+            "Existing 5.5 hundred people.",
+            "Existing 5 million people.",
+            "Existing 5 billion people.",
+        ] {
+            assert_eq!(cleaner.clean_text(input), input, "threshold {threshold}");
+        }
+        assert_eq!(
+            cleaner.clean_text("Five hundred people arrived."),
+            "500 people arrived."
+        );
+    }
+}
+
+#[test]
+fn plural_fractions_remain_worded_before_any_noun() {
+    for threshold in [0.0, 4.0, 10.0] {
+        let cleaner = cleaner_with_number_threshold(Some(threshold));
+        for input in [
+            "Five hundredths of a second.",
+            "Three thousandths of a gram.",
+            "Twenty thirds of the whole.",
+            "Two thirds of a dollar.",
+            "Three quarters of a dollar.",
+            "Three-quarters of a dollar.",
+            "Five hundredths of a million dollars.",
+            "Two fifths.",
+            "Nine tenths done.",
+        ] {
+            assert_eq!(cleaner.clean_text(input), input, "threshold {threshold}");
+        }
+        assert_eq!(
+            cleaner.clean_text("The five hundredth customer arrived."),
+            "The 500th customer arrived."
+        );
+        assert_eq!(
+            cleaner.clean_text("The twenty-first of May."),
+            "The 21st of May."
+        );
+        let elapsed = if threshold > 5.0 { "five" } else { "5" };
+        assert_eq!(
+            cleaner.clean_text("Wait five seconds of audio."),
+            format!("Wait {elapsed} seconds of audio.")
+        );
+    }
+}
+
+#[test]
+fn singular_fractions_remain_worded_without_hiding_ordinal_dates() {
+    for profile in [CleaningProfile::Safe, CleaningProfile::Aggressive] {
+        for threshold in [0.0, 4.0, 10.0] {
+            let cleaner = build_cleaner_for_test_with_threshold(
+                profile,
+                false,
+                Some(threshold),
+                &HashSet::new(),
+                &[],
+            );
+            for input in [
+                "A fifth of a dollar.",
+                "One fifth of the total.",
+                "One fifth.",
+                "A fifth.",
+                "An eighth.",
+                "One twenty-first.",
+                "One hundredth of a second.",
+                "A twenty-first of the total.",
+                "One twenty-first of the total.",
+                "A fifth of a million dollars.",
+                "It's about one-fifth of the cost.",
+                "Roughly one-tenth of users churn.",
+                "Only one-eighth of an inch.",
+                "One-twentieth of the total.",
+                "A-fifth of the cost.",
+                "An-eighth of an inch.",
+                "A-tenth.",
+                "A-twenty-fifth of the total.",
+                "A-fifth-generation chip.",
+            ] {
+                assert_eq!(cleaner.clean_text(input), input, "threshold {threshold}");
+            }
+            let fifth = if threshold > 5.0 { "fifth" } else { "5th" };
+            assert_eq!(
+                cleaner.clean_text("The fifth of May."),
+                format!("The {fifth} of May.")
+            );
+            // A spaced dash does not join an article or numerator to the ordinal.
+            let one = if threshold > 1.0 { "One" } else { "1" };
+            for (joiner, rendered) in [("A", "A"), ("One", one)] {
+                assert_eq!(
+                    cleaner.clean_text(&format!("{joiner} - fifth.")),
+                    format!("{rendered} - {fifth}.")
+                );
+            }
+            assert_eq!(
+                cleaner.clean_text("The twenty-first of May."),
+                "The 21st of May."
+            );
+            for (input, expected) in [
+                (
+                    "Keep first hundred fifty rows.",
+                    if threshold <= 1.0 {
+                        "Keep 1st 150 rows."
+                    } else {
+                        "Keep first 150 rows."
+                    },
+                ),
+                (
+                    "Keep the eighth hundred fifty rows.",
+                    if threshold <= 8.0 {
+                        "Keep the 8th 150 rows."
+                    } else {
+                        "Keep the eighth 150 rows."
+                    },
+                ),
+                (
+                    "Keep the fifth hundred fifty rows.",
+                    if threshold <= 5.0 {
+                        "Keep the 5th 150 rows."
+                    } else {
+                        "Keep the fifth 150 rows."
+                    },
+                ),
+                (
+                    "The first hundred and sixteen pages.",
+                    if threshold <= 1.0 {
+                        "The 1st 116 pages."
+                    } else {
+                        "The first 116 pages."
+                    },
+                ),
+                (
+                    "The first hundred fifty steps.",
+                    if threshold <= 1.0 {
+                        "The 1st 150 steps."
+                    } else {
+                        "The first 150 steps."
+                    },
+                ),
+                (
+                    "The second hundred twenty rows.",
+                    if threshold <= 2.0 {
+                        "The 2nd 120 rows."
+                    } else {
+                        "The second 120 rows."
+                    },
+                ),
+            ] {
+                assert_eq!(
+                    cleaner.clean_text(input),
+                    expected,
+                    "threshold {threshold}: {input}"
+                );
+            }
+            let one = if threshold > 1.0 { "one" } else { "1" };
+            assert_eq!(
+                cleaner.clean_text("Wait one second of audio."),
+                format!("Wait {one} second of audio.")
+            );
+        }
+    }
+}
+
+#[test]
+fn ordinal_before_second_does_not_convert_the_time_unit() {
+    for profile in [CleaningProfile::Safe, CleaningProfile::Aggressive] {
+        for threshold in [0.0, 4.0, 10.0] {
+            let cleaner = build_cleaner_for_test_with_threshold(
+                profile,
+                false,
+                Some(threshold),
+                &HashSet::new(),
+                &[],
+            );
+            for (input, expected) in [
+                ("Retry every sixty second.", "Retry every 60 second."),
+                ("Retry each thirty second.", "Retry each 30 second."),
+                (
+                    "One event per sixty second.",
+                    if threshold == 0.0 {
+                        "1 event per 60 second."
+                    } else {
+                        "One event per 60 second."
+                    },
+                ),
+                ("Wait a sixty second.", "Wait a 60 second."),
+                ("Wait an eighty second.", "Wait an 80 second."),
+                ("The twenty second.", "The 22nd."),
+                ("May twenty second.", "May 22nd."),
+                // A compound joined by "and" ends in an ordinal.
+                ("The one hundred and second file.", "The 102nd file."),
+                ("Each one hundred and second.", "Each 102nd."),
+                ("Every two hundred and second row.", "Every 202nd row."),
+                ("The thousand and second night.", "The 1002nd night."),
+                ("A hundred and second time.", "A 102nd time."),
+                ("Wait a hundred and second.", "Wait a 102nd."),
+                ("A hundred and first time.", "A 101st time."),
+                ("Each one hundred and twenty second.", "Each 120 second."),
+                ("Wait one hundred and one second.", "Wait 101 second."),
+                ("A one hundred second timeout.", "A 100 second timeout."),
+            ] {
+                assert_eq!(
+                    cleaner.clean_text(input),
+                    expected,
+                    "{profile:?}/{threshold}: {input}"
+                );
+            }
+            let fifth = if threshold > 5.0 { "fifth" } else { "5th" };
+            assert_eq!(
+                cleaner.clean_text("The fifth second of audio."),
+                format!("The {fifth} second of audio.")
+            );
+            assert_eq!(
+                cleaner.clean_text("Fifth second of audio."),
+                format!(
+                    "{} second of audio.",
+                    if threshold > 5.0 { "Fifth" } else { "5th" }
+                )
+            );
+            assert_eq!(
+                cleaner.clean_text("The fifth second was silent."),
+                format!("The {fifth} second was silent.")
+            );
+            assert_eq!(
+                cleaner.clean_text("The fifty third second was silent."),
+                "The 53rd second was silent."
+            );
+            assert_eq!(
+                cleaner.clean_text("It was a split-second choice."),
+                "It was a split-second choice."
+            );
+            assert_eq!(
+                cleaner.clean_text("The twenty-second file."),
+                "The 22nd file."
+            );
+            assert_eq!(
+                cleaner.clean_text("The thirty second timeout."),
+                "The 30 second timeout."
+            );
+            let fifth = if threshold > 5.0 { "fifth" } else { "5th" };
+            assert_eq!(
+                cleaner.clean_text("A fifth customer."),
+                format!("A {fifth} customer.")
+            );
+        }
+    }
+    let input = "Wait thirty second timeout. ".repeat(512);
+    assert_eq!(
+        normalize_spoken_numbers(&input, DEFAULT_NUMBER_THRESHOLD).text,
+        "Wait 30 second timeout. ".repeat(512)
+    );
+}
+
+#[test]
+fn ordinal_runs_preserve_adjacency_and_apply_list_threshold_as_a_whole() {
+    for threshold in [0.0, 4.0, 10.0] {
+        let cleaner = cleaner_with_number_threshold(Some(threshold));
+        for input in [
+            "She came first second third.",
+            "The first second third arrived.",
+        ] {
+            assert_eq!(cleaner.clean_text(input), input, "threshold {threshold}");
+        }
+        assert_eq!(
+            cleaner.clean_text("She came first, second, third."),
+            if threshold <= 1.0 {
+                "She came 1st, 2nd, 3rd."
+            } else {
+                "She came first, second, third."
+            },
+            "threshold {threshold}",
+        );
+    }
+}
+
+#[test]
+fn identifier_stems_join_only_numbers_already_rendered_as_digits() {
+    assert_clean_cases(
+        CleaningProfile::Safe,
+        &[
+            ("OS twenty seven.", "OS 27."),
+            ("FP thirty two.", "FP 32."),
+            ("BM twenty five.", "BM 25."),
+            ("B two.", "B two."),
+            ("F thirty two.", "F32."),
+            ("O seven.", "O7."),
+            // Uppercase O follows the same identifier rule as other letters.
+            ("Agent double O seven.", "Agent double O7."),
+            ("SM thirty two.", "SM32."),
+            ("OK five minutes ago.", "OK 5 minutes ago."),
+            ("B 2 weeks.", "B2 weeks."),
+            ("C 1 more time.", "C1 more time."),
+            ("D 3 times.", "D3 times."),
+            ("Gen Z 2 years.", "Gen Z2 years."),
+            ("B two weeks.", "B two weeks."),
+            ("C one more time.", "C one more time."),
+            ("D three times.", "D three times."),
+            ("Gen Z two years.", "Gen Z two years."),
+            ("SM eight nine.", "SM eight nine."),
+            ("Arc B five eighty.", "Arc B five eighty."),
+            ("R five nine five.", "R five nine five."),
+            ("P 99.9 five.", "P 99.9 five."),
+            ("SM 8.2 nine.", "SM 8.2 nine."),
+        ],
+    );
+}
+
+#[test]
+fn prose_point_does_not_hide_an_independent_number() {
+    assert_clean_cases(
+        CleaningProfile::Safe,
+        &[
+            (
+                "At this point ten GPUs were idle.",
+                "At this point 10 GPUs were idle.",
+            ),
+            (
+                "At this point five jobs finished.",
+                "At this point 5 jobs finished.",
+            ),
+            (
+                "At this point twenty five jobs finished.",
+                "At this point 25 jobs finished.",
+            ),
+            ("Use point nine five.", "Use point nine five."),
+            ("Use point oh five.", "Use point oh five."),
+            ("Use point zero five.", "Use point zero five."),
+            ("Use nought point five.", "Use 0.5."),
+        ],
+    );
+}
+
+#[test]
+fn articles_and_bare_scale_words_stay_worded() {
+    for threshold in [0.0, 4.0, 10.0] {
+        let cleaner = cleaner_with_number_threshold(Some(threshold));
+        for input in [
+            "A million examples.",
+            "A billion rows.",
+            "A thousand files.",
+            "A hundred entries.",
+            "Use thousand examples.",
+            "Use million examples.",
+            "Several thousand examples.",
+        ] {
+            assert_eq!(cleaner.clean_text(input), input, "{threshold}: {input}");
+        }
+        assert_eq!(
+            cleaner.clean_text("One million examples."),
+            "1 million examples."
+        );
+        assert_eq!(cleaner.clean_text("Five thousand files."), "5000 files.");
+    }
+}
+
+#[test]
+fn typed_renderers_work_without_general_spoken_number_rendering() {
+    use super::super::numbers::NumberKind;
+
+    for (input, kind, expected) in [
+        (
+            "Python three point twelve.",
+            NumberKind::Version,
+            "Python 3.12.",
+        ),
+        ("In twenty twenty five.", NumberKind::Year, "In 2025."),
+        ("F 32.", NumberKind::Identifier, "F32."),
+        ("Capacity 7 B.", NumberKind::Size, "Capacity 7B."),
+    ] {
+        assert_eq!(
+            numeric_test(input, 10.0, &[kind]).text,
+            expected,
+            "{kind:?}: {input}"
+        );
+    }
+}
+
+#[test]
+fn adjacent_numeric_runs_keep_their_original_representation_at_every_threshold() {
+    for threshold in [0.0, 4.0, 10.0] {
+        let cleaner = cleaner_with_number_threshold(Some(threshold));
+        for input in [
+            "Use three twenty billion.",
+            "Use three fifty K.",
+            "Use one twenty eight K.",
+            "SM one twenty.",
+            "Use two thirty.",
+            "Use sixteen three eighty four.",
+            "Use fifty ninety.",
+            "Use five thirty.",
+        ] {
+            assert_eq!(cleaner.clean_text(input), input, "{threshold}: {input}");
+        }
+    }
+}
+
+#[test]
+fn an_earlier_spoken_decimal_leaves_later_numbers_unchanged() {
+    for threshold in [0.0, 4.0, 10.0] {
+        let cleaner = cleaner_with_number_threshold(Some(threshold));
+        for tail in [
+            "a thirty second timeout.",
+            "retry every sixty second.",
+            "wait sixty seconds.",
+            "the first hundred fifty steps.",
+            "ship it on the twenty second.",
+        ] {
+            let alone = cleaner.clean_text(tail);
+            // The tail starts mid-sentence, so its first letter stays lowercase.
+            let expected = format!("Use 0.5 then {}{}", alone[..1].to_lowercase(), &alone[1..]);
+            assert_eq!(
+                cleaner.clean_text(&format!("Use zero point five then {tail}")),
+                expected,
+                "{threshold}: {tail}"
+            );
+        }
+    }
+}
+
+#[test]
+fn shared_scales_use_complete_quantities_in_both_bound_orders() {
+    for profile in [CleaningProfile::Safe, CleaningProfile::Aggressive] {
+        for threshold in [0.0, 4.0, 10.0, 100.0] {
+            let cleaner = build_cleaner_for_test_with_threshold(
+                profile,
+                false,
+                Some(threshold),
+                &HashSet::new(),
+                &[],
+            );
+            for scale in [
+                "K", "M", "B", "hundred", "thousand", "million", "billion", "trillion",
+            ] {
+                for (left, right) in [("fifty", "sixty"), ("sixty", "fifty"), ("5", "six")] {
+                    for joiner in ["or", "to", "through", "and"] {
+                        let input = format!("Use {left} {joiner} {right} {scale} dollars.");
+                        assert_eq!(
+                            cleaner.clean_text(&input),
+                            input,
+                            "{profile:?}/{threshold}: {input}"
+                        );
+                    }
+                }
+            }
+            for input in [
+                "Use fifty, sixty, and seventy K dollars.",
+                "Use fifty, sixty, and seventy trillion dollars.",
+                "Use 5 or six hundred K dollars.",
+                "Use five or 600 million parameters.",
+                "Use fifty, sixty K dollars.",
+            ] {
+                assert_eq!(
+                    cleaner.clean_text(input),
+                    input,
+                    "{profile:?}/{threshold}: {input}"
+                );
+            }
+            for (input, digits, minimum) in [
+                (
+                    "Use fifty K or sixty M dollars.",
+                    "Use 50K or 60M dollars.",
+                    50.0,
+                ),
+                (
+                    "Use sixty M to fifty K dollars.",
+                    "Use 60M to 50K dollars.",
+                    50.0,
+                ),
+                (
+                    "Use fifty thousand or sixty thousand dollars.",
+                    "Use 50000 or 60000 dollars.",
+                    50_000.0,
+                ),
+                (
+                    "Use fifty files or sixty K dollars.",
+                    "Use 50 files or 60K dollars.",
+                    50.0,
+                ),
+            ] {
+                assert_eq!(
+                    cleaner.clean_text(input),
+                    if threshold <= minimum { digits } else { input },
+                    "{profile:?}/{threshold}: {input}",
+                );
+            }
+        }
+    }
+}

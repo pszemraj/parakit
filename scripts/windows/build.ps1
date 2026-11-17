@@ -403,7 +403,7 @@ try {
 
     Write-Host "Building $Profile ($Backend)"
     $cargoTargetRoot = Get-CargoTargetRoot
-    $cargoArgs = @("build", "--locked", "--target-dir", $cargoTargetRoot)
+    $cargoArgs = @("build", "--locked", "--target-dir", $cargoTargetRoot, "--message-format=json-render-diagnostics")
     if ($Profile -eq "release") {
         $cargoArgs += "--release"
     }
@@ -411,7 +411,16 @@ try {
         $cargoArgs += @("--features", $Backend)
     }
     Clear-StaleCMakePathAliasCaches
-    Invoke-Checked "cargo" @cargoArgs
+    $nativeOutDir = $null
+    & cargo @cargoArgs | ForEach-Object {
+        $message = $_ | ConvertFrom-Json
+        if ($message.reason -eq "build-script-executed" -and $message.package_id -match '[/#]parakit[@#]') {
+            $nativeOutDir = $message.out_dir
+        }
+    }
+    if ($LASTEXITCODE -ne 0) {
+        throw "cargo build failed with exit code $LASTEXITCODE"
+    }
 } finally {
     if ($hadCrispAsrLibDir) {
         $env:CRISPASR_LIB_DIR = $previousCrispAsrLibDir
@@ -427,7 +436,11 @@ try {
 
 $profileDir = Join-Path $cargoTargetRoot $Profile
 $exe = Join-Path $profileDir "parakit.exe"
-$runtimeManifest = Join-Path $profileDir "parakit-runtime-manifest.json"
+if ([string]::IsNullOrWhiteSpace($nativeOutDir)) {
+    throw "Cargo did not report Parakit's native output directory"
+}
+$nativeBinDir = Join-Path $nativeOutDir "bin"
+$runtimeManifest = Join-Path $nativeBinDir "parakit-runtime-manifest.json"
 
 if (-not (Test-Path -LiteralPath $exe)) {
     throw "parakit.exe was not produced at $exe"
@@ -460,7 +473,7 @@ Copy-Item -LiteralPath $runtimeManifest -Destination $bundleDir -Force
 
 foreach ($required in @($manifest.required_files)) {
     Assert-FlatBundleFileName -Name $required -Context "Runtime manifest required file"
-    $source = Join-Path $profileDir $required
+    $source = if ($required -ieq "parakit.exe") { $exe } else { Join-Path $nativeBinDir $required }
     if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
         throw "Runtime manifest required file was not produced: $required"
     }

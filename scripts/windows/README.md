@@ -9,17 +9,13 @@
 - Recommended Windows GPU install: run `scripts\windows\build.bat --backend vulkan`.
 - CUDA install: run `scripts\windows\build.bat --backend cuda` only when you specifically need NVIDIA CUDA.
 - Build without replacing the installed command: add `--no-install`.
-- After install, follow the [runtime checks](#runtime-manifest).
+- After install, open a new terminal and follow [first run](../../docs/running.md#first-run).
 
-From PowerShell, use `.\scripts\windows\build.ps1 ...` instead of `build.bat`. For debug builds, use `-Profile debug`.
+`build.bat` is a `cmd.exe` wrapper around the PowerShell implementation. From PowerShell, use `.\scripts\windows\build.ps1 ...`; pass `--help` for live options or `-Profile debug` for debug builds.
 
 ## Why The Script Exists
 
-Windows builds need an installed runnable directory, not only `parakit.exe`. CrispASR and ggml build shared DLLs, and Windows loads those DLLs from the executable directory or `PATH`.
-
-`cargo build` works for development because `build.rs` copies the generated DLLs next to `parakit.exe` in the active Cargo target directory. That is normally `target\debug` or `target\release`, but `CARGO_TARGET_DIR` can move it.
-
-`cargo install --path .` is different: Cargo installs executables into Cargo's bin directory but does not copy the generated CrispASR, ggml, or OpenBLAS DLLs. Use `build.ps1` when you want a normal Windows install.
+`cargo install` installs executables but does not copy external runtime DLLs. The bundle script configures the native toolchain and backend, links CrispASR/ggml statically, packages optional BLAS/CUDA runtime DLLs, and installs an app directory.
 
 The script creates `target\parakit-windows-x86_64-<backend>`, installs it to `%LOCALAPPDATA%\Programs\parakit`, and adds that install directory to the Windows User `PATH`.
 
@@ -28,8 +24,6 @@ Installation uses the User `PATH` and requires neither administrator rights nor 
 ## Backend Selection
 
 If you omit `--backend`, the script opens a keyboard menu. It accepts Up/Down, `1`/`2`/`3`, and Enter. CPU starts highlighted, so pressing Enter selects CPU.
-
-`build.bat` is a `cmd.exe` wrapper around the PowerShell implementation. In PowerShell, invoke `build.ps1` directly; pass `--help` for the script's live options.
 
 ## Build Options
 
@@ -75,7 +69,7 @@ All backends need Rust, CMake on `PATH`, and Visual Studio 2022 with the "Deskto
 
 | Backend | Command | Build-time requirements | Runtime expectation |
 | --- | --- | --- | --- |
-| CPU | `build.ps1 --backend cpu` | No additional SDK. | Generated CrispASR/ggml DLLs are bundled. BLAS is autodetected unless overridden. |
+| CPU | `build.ps1 --backend cpu` | No additional SDK. | CrispASR/ggml are linked statically. Optional BLAS runtimes are bundled. |
 | CUDA | `build.ps1 --backend cuda` | NVIDIA CUDA Toolkit with `nvcc`; `CUDA_PATH` may be inferred from `nvcc.exe` on `PATH` | NVIDIA-only. CUDA runtime and cuBLAS DLLs must be found from the installed app directory or `PATH`, unless `--bundle-cuda-dlls` is used. |
 | Vulkan | `build.ps1 --backend vulkan` | LunarG Vulkan SDK with `glslc`; `VULKAN_SDK` may be autodetected from `C:\VulkanSDK\*` or inferred from `glslc.exe` on `PATH` | Recommended Windows GPU backend for NVIDIA, AMD, and Intel. Install a compatible GPU driver; its `vulkan-1.dll` must be present through System32 or `PATH`. |
 
@@ -106,36 +100,31 @@ If path shortening does not fix a Vulkan shader-gen failure, capture the exact `
 
 ## Build Process
 
-`build.ps1` runs this sequence:
-
-1. Gives the backend its own Cargo target directory and, for Vulkan, checks the shader-generator path depth.
-2. Checks `vendor\CrispASR` and initializes it when needed.
-3. Configures BLAS.
-4. Ignores `CRISPASR_LIB_DIR` for the bundled build so it produces a fresh runtime manifest and colocated DLL staging directory, then restores the inherited value.
-5. Configures the selected accelerator, including the MSVC environment, Ninja, and the CUDA or Vulkan toolkit checks for GPU builds, then runs `cargo build` with the requested profile and backend feature.
-6. Creates `target\parakit-windows-x86_64-<backend>` and copies the runtime manifest, its required files, `LICENSE`, and `README.md`.
-7. Calls `install.ps1` unless `--no-install` is set.
-
-The default install directory is dedicated to parakit. An existing non-empty custom destination must carry `.parakit-install`; otherwise installation is refused. Bundles replace the directory rather than merging files, so stale accelerator DLLs cannot remain.
+`build.ps1` selects the backend's Cargo target directory, checks Vulkan path depth, prepares submodules, BLAS, and the selected accelerator toolchain, then runs `cargo build` with the requested profile and backend feature. It ignores `CRISPASR_LIB_DIR` during the bundled build and restores the inherited value afterward. The resulting bundle contains the executable, runtime manifest and required files, `LICENSE`, and `README.md`; installation calls `install.ps1` unless `--no-install` is set.
 
 The build script checks whether `vendor\CrispASR` is already populated before touching submodules. If the checkout is present, the script does not contact GitHub or require the repository-pinned revision. If it must initialize the submodule, it runs Git non-interactively so firewalled machines fail instead of opening credential prompts. On a firewalled machine, use a checkout or source archive that already includes `vendor\CrispASR`, or pass `--no-submodules` to fail fast instead of trying to initialize it.
 
+## Install An Existing Bundle
+
+Keep the complete bundle directory together when copying it to another Windows machine. From a checkout containing the installer scripts, install that directory with:
+
+```powershell
+.\scripts\windows\install.ps1 -BundleDir .\target\parakit-windows-x86_64-cpu -InstallDir "$env:LOCALAPPDATA\Programs\parakit"
+```
+
+Use the copied bundle's actual path and backend; the target needs the [runtime dependencies](#backend-requirements), without the build toolchain. Add `-NoUserPath` to leave User `PATH` unchanged. Stop a running daemon with `parakit stop` before replacing its installation, then open a new terminal for [first run](../../docs/running.md#first-run).
+
+The default install directory is dedicated to parakit. An existing non-empty custom destination must carry `.parakit-install`; otherwise installation is refused. Bundles replace the directory rather than merging files, so stale accelerator DLLs cannot remain.
+
 ## Runtime Manifest
 
-The build writes `parakit-runtime-manifest.json` beside `parakit.exe`. The bundle copies every file in `required_files`, and the installer validates those entries before installing.
+Cargo's build script writes `parakit-runtime-manifest.json` and external runtime DLLs under `OUT_DIR/bin`. The bundle script discovers that directory from Cargo's JSON build messages, then copies the executable and every file in `required_files` into the app directory. The installer validates those entries before installing. Native CrispASR/ggml archives are linked into the executable and are not bundle files.
 
 `install.ps1` checks external CUDA/Vulkan runtime DLLs, copies the bundle into a sibling staging directory, and runs `parakit --version` there before replacing an existing installation. It keeps the old directory as a backup until a second loader check at the installed path passes. On failure, it restores the backup; if rollback itself fails, the error reports the backup's location.
 
 The manifest records the selected accelerator and external runtime DLLs required by each [backend](#backend-requirements).
 
-After installing, open a new terminal and run:
-
-```text
-parakit doctor --deep
-parakit
-```
-
-What `doctor --deep` actually does on Windows is described in [windows-desktop.md#doctor---deep](../../docs/windows-desktop.md#doctor---deep).
+For desktop checks after installation, follow [first run](../../docs/running.md#first-run) and the [Windows deep insertion check](../../docs/windows-desktop.md#doctor---deep).
 
 The version smoke test does not touch the hotkey, microphone, daemon lock, model cache, or clipboard. If Windows reports `0xC0000135`, the installer translates it to a missing-runtime-DLL message before PATH updates.
 

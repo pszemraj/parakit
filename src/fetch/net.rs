@@ -157,7 +157,7 @@ pub(super) fn build_client() -> Result<Client> {
         .context("build HTTP client")
 }
 
-const CERT_HINT: &str = "parakit trusts the operating-system certificate store (rustls-tls-native-roots). Behind a TLS-intercepting proxy: install the proxy's CA into the OS trust store, or point SSL_CERT_FILE (or SSL_CERT_DIR) at the corporate PEM bundle. If an egress proxy is required, set HTTPS_PROXY/HTTP_PROXY (system proxy settings are already honored). If huggingface.co is blocked outright, set HF_ENDPOINT to an internal mirror.";
+const CERT_HINT: &str = "parakit trusts the operating-system certificate store (rustls-tls-native-roots). Behind a TLS-intercepting proxy: install the proxy's CA into the OS trust store, or set SSL_CERT_FILE to a PEM bundle or SSL_CERT_DIR to certificate directories. These environment overrides replace native-store lookup. If an egress proxy is required, set HTTPS_PROXY/HTTP_PROXY (system proxy settings are already honored). If huggingface.co is blocked outright, set HF_ENDPOINT to an internal mirror.";
 
 /// Append [`CERT_HINT`] to the error chain when `result` failed with what
 /// looks like a TLS/certificate failure, otherwise return it unchanged.

@@ -1,7 +1,7 @@
 //! Inference padding, context fallback, and runtime default regressions.
 
 use super::*;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 
 #[test]
@@ -254,7 +254,7 @@ fn failed_clear_never_triggers_a_retry() {
         ..FakeSession::with_outputs(&[Err("context overran")])
     };
     assert_eq!(scoped(&session).unwrap_err().to_string(), "context overran");
-    // Drop repeats the failed clear; the native fault runner expects that final clear.
+    // Drop repeats the failed clear before relinquishing the session.
     assert_eq!(session.log(), [SET_PRIOR, "infer", "set:", "set:"]);
 }
 
@@ -266,6 +266,144 @@ fn panicking_inference_still_clears_the_context() {
     }));
     assert!(outcome.is_err());
     assert_eq!(session.log(), [SET_PRIOR, "infer", "set:"]);
+}
+
+#[derive(Default)]
+struct FakeOptionSession {
+    language: RefCell<String>,
+    budget: Cell<i32>,
+    log: RefCell<Vec<String>>,
+    reject_budget: Option<i32>,
+}
+
+impl QwenOptionSession for FakeOptionSession {
+    fn set_source_language(&self, language: &str) -> Result<(), String> {
+        self.log.borrow_mut().push(format!("language:{language}"));
+        *self.language.borrow_mut() = language.into();
+        Ok(())
+    }
+
+    fn set_max_new_tokens(&self, budget: i32) -> Result<(), String> {
+        self.log.borrow_mut().push(format!("budget:{budget}"));
+        if self.reject_budget == Some(budget) {
+            return Err("budget setter failed".into());
+        }
+        self.budget.set(budget);
+        Ok(())
+    }
+}
+
+fn user_qwen_options() -> QwenOptions {
+    QwenOptions {
+        language: Some("en".into()),
+        max_new_tokens: 1,
+    }
+}
+
+#[test]
+fn readiness_restores_options_after_success_inference_error_and_setup_error() {
+    for failure in ["none", "inference", "setup"] {
+        let session = FakeOptionSession {
+            reject_budget: (failure == "setup").then_some(512),
+            ..FakeOptionSession::default()
+        };
+        let result = with_readiness_options(&session, &user_qwen_options(), || {
+            assert_ne!(failure, "setup", "failed setup must not run inference");
+            assert_eq!(*session.language.borrow(), "");
+            assert_eq!(session.budget.get(), 512);
+            if failure == "inference" {
+                anyhow::bail!("readiness inference failed");
+            }
+            Ok(())
+        });
+        assert_eq!(result.is_err(), failure != "none", "{failure}");
+        if let Err(error) = result {
+            assert_eq!(
+                error.to_string(),
+                if failure == "setup" {
+                    "budget setter failed"
+                } else {
+                    "readiness inference failed"
+                }
+            );
+        }
+        assert_eq!(*session.language.borrow(), "English", "{failure}");
+        assert_eq!(session.budget.get(), 1, "{failure}");
+        assert_eq!(
+            *session.log.borrow(),
+            ["language:", "budget:512", "language:English", "budget:1"]
+        );
+    }
+}
+
+#[test]
+fn readiness_restoration_failure_is_reported() {
+    let session = FakeOptionSession {
+        reject_budget: Some(1),
+        ..FakeOptionSession::default()
+    };
+    let error = with_readiness_options(&session, &user_qwen_options(), || Ok(())).unwrap_err();
+    let message = format!("{error:#}");
+    assert!(
+        message.contains("restore Qwen options after readiness"),
+        "{message}"
+    );
+    assert!(message.contains("budget setter failed"), "{message}");
+}
+
+#[test]
+fn panicking_readiness_still_restores_user_options() {
+    let session = FakeOptionSession::default();
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = with_readiness_options(&session, &user_qwen_options(), || panic!("native panic"));
+    }));
+    assert!(outcome.is_err());
+    assert_eq!(*session.language.borrow(), "English");
+    assert_eq!(session.budget.get(), 1);
+}
+
+#[test]
+#[ignore = "loads the repo-local Qwen model named by PARAKIT_LIVE_MODEL and runs CPU inference"]
+fn loaded_qwen_restores_budget_and_recovers_after_incomplete_decode() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .canonicalize()
+        .unwrap();
+    let model = std::path::PathBuf::from(
+        std::env::var_os("PARAKIT_LIVE_MODEL").expect("PARAKIT_LIVE_MODEL"),
+    )
+    .canonicalize()
+    .unwrap();
+    assert!(
+        model.starts_with(&root),
+        "model must be inside the checkout"
+    );
+    let pcm = crate::audio_file::prepare_wav_for_model(
+        &root.join("vendor/CrispASR/bindings/go/samples/jfk.wav"),
+    )
+    .unwrap()
+    .samples;
+    let options = user_qwen_options();
+    let engine = Engine::open_with_options(model, 8, DeviceMode::Cpu, &options).unwrap();
+    assert_eq!(engine.backend(), "qwen3");
+
+    // Readiness temporarily raises a budget that cannot transcribe this speech.
+    // Exercise it again after failure on the same native session.
+    for _ in 0..2 {
+        crate::warmup::run(&engine, &[]).unwrap();
+        let error = engine.transcribe(&pcm).unwrap_err().to_string();
+        assert!(
+            error.contains("crispasr_session_transcribe failed"),
+            "{error}"
+        );
+    }
+
+    configure_qwen(&engine.session, "English", 512).unwrap();
+    let expected = engine.transcribe(&pcm).unwrap();
+    assert!(!expected.trim().is_empty());
+    configure_qwen(&engine.session, "English", 1).unwrap();
+    assert!(engine.transcribe(&pcm).is_err());
+    configure_qwen(&engine.session, "English", 512).unwrap();
+    assert_eq!(engine.transcribe(&pcm).unwrap(), expected);
 }
 
 #[test]

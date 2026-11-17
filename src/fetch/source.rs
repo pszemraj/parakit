@@ -2,7 +2,7 @@
 
 use super::{
     acquire_artifact_lock, convert_f16, ensure_q8, preset_cache_path, python_with_imports,
-    quantize_bin_path, remove_if_exists, run_command, FetchOptions,
+    quantize_bin_path, remove_if_exists, run_command, tool_path, FetchOptions,
 };
 use crate::model::{ModelPreset, HF_ENDPOINT_ENV, HF_TOKEN_ENV};
 use anyhow::{bail, Context, Result};
@@ -75,17 +75,10 @@ pub(super) fn run(
                 checkpoint.display()
             );
         }
-        let converter = converter_path(preset);
-        if !converter.is_file() {
-            bail!(
-                "converter script not found at {}. Run from a full parakit checkout with the CrispASR submodule initialized.",
-                converter.display()
-            );
-        }
+        let converter = converter_path(preset)?;
         let python = conversion_python(preset, checkpoint_dir.is_none())?;
         if checkpoint_dir.is_none() {
-            let downloader =
-                Path::new(env!("CARGO_MANIFEST_DIR")).join("scripts/download_asr_checkpoint.py");
+            let downloader = tool_path("download_asr_checkpoint.py")?;
             options.status(format_args!("parakit: downloading checkpoint {repo}"));
             let mut command = Command::new(&python);
             command
@@ -130,15 +123,16 @@ fn f16_path(q8: &Path) -> PathBuf {
     q8.with_file_name(filename.replace("-q8_0.gguf", "-f16.gguf"))
 }
 
-fn converter_path(preset: ModelPreset) -> PathBuf {
-    let filename = if preset.backend() == "qwen3" {
+fn converter_path(preset: ModelPreset) -> Result<PathBuf> {
+    tool_path(converter_filename(preset))
+}
+
+fn converter_filename(preset: ModelPreset) -> &'static str {
+    if preset.backend() == "qwen3" {
         "convert-qwen3-asr-to-gguf.py"
     } else {
         "convert-parakeet-to-gguf.py"
-    };
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("vendor/CrispASR/models")
-        .join(filename)
+    }
 }
 
 fn conversion_python(preset: ModelPreset, download: bool) -> Result<PathBuf> {
@@ -198,7 +192,7 @@ mod tests {
             ),
         ] {
             assert_eq!(preset.source_repo(), Some(repo));
-            assert!(converter_path(preset).ends_with(converter));
+            assert_eq!(converter_filename(preset), converter);
             let q8 = preset_cache_path(Path::new("models"), preset);
             assert_eq!(
                 f16_path(&q8).file_name().unwrap(),

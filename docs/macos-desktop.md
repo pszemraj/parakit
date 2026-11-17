@@ -4,7 +4,7 @@ parakit supports Apple Silicon macOS as a terminal-run CLI. Build from source, g
 
 ## Build
 
-Install the native Apple Silicon Metal build using [build.md#install](build.md#install). Build dependencies, source-install library paths, and Rosetta constraints are covered there.
+Follow the [Apple Silicon installation instructions](build.md#install), selecting `--features metal` for GPU inference. Metal is opt-in; a default build runs on CPU. Build dependencies, installed-library checks, and Rosetta constraints are covered in the build guide.
 
 ## Permissions
 
@@ -17,11 +17,10 @@ Parakit uses a modifying CoreGraphics event tap to suppress the hotkey. [Apple d
 
 For ordinary terminal launches, macOS attributes permission requests to the terminal application, such as Terminal.app, iTerm2, or Ghostty. Run `doctor` from the same app you use to launch parakit; results from another terminal, an editor, or a coding agent do not establish that launcher's access.
 
-First-run flow:
+From that terminal, check readiness before the [first run](running.md#first-run):
 
 ```bash
 parakit doctor
-parakit
 ```
 
 If Accessibility is missing, `doctor` can trigger the macOS prompt. After granting it, restart parakit and rerun `parakit doctor`. If Microphone is not determined yet, the first capture may trigger its prompt; rerun parakit after granting it.
@@ -44,7 +43,7 @@ These commands remove Terminal.app's saved decision; they do not grant access. R
 
 ### `doctor --deep`
 
-`parakit doctor --deep` runs a deeper insertion smoke test than plain `doctor`. For the `standard`/`terminal` paste modes it runs two stages and reports which one failed:
+For the `standard`/`terminal` paste modes, `parakit doctor --deep` runs two stages and reports which one failed:
 
 1. A suppressed Cmd+V event-tap smoke test: parakit posts a synthetic paste chord and confirms, via a CoreGraphics event tap that suppresses the chord before it reaches any app, that the chord was actually posted.
 2. A real end-to-end paste-transaction smoke test: parakit briefly opens a small titled window with a text view, pastes a unique sentinel through the production clipboard-swap/paste/`AXValue` path, then reads the text back and verifies clipboard restoration under the [shared policy](running.md#clipboard-staging-and-restore). Accessibility acknowledgement is required when the probe exposes a focused AX element; otherwise an unverified outcome is accepted only if the sentinel still lands.
@@ -88,12 +87,11 @@ Transcripts under 12 normalized characters require an exact baseline-to-current 
 
 ## Metal Verification
 
-The shared library and run-path checks are in [build.md#runtime-library-paths](build.md#runtime-library-paths). To confirm Metal library presence and device visibility:
+See the [Metal build](build.md#crispasr-and-backends) and [loader-path checks](build.md#runtime-library-paths). To inspect the embedded shader section and device visibility:
 
 ```bash
 parakit doctor --verbose
-ls target/release/build/parakit-*/out/lib/libggml-metal.dylib
-otool -s __DATA __ggml_metallib target/release/build/parakit-*/out/lib/libggml-metal.dylib | head
+otool -s __DATA __ggml_metallib "$(command -v parakit)" | head
 ```
 
 Build success and device visibility alone do not establish inference acceptance. Use the [model-validation checklist](dev/model-validation.md#macos-cpu-and-metal) and [quality procedures](dev/quality.md#qwen-and-moondream-comparisons) to check CPU/Metal inference and physical desktop behavior.

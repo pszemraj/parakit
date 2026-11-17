@@ -4,7 +4,7 @@ parakit can write JSONL records for completed dictations: model output, inferenc
 
 Audio and redirected console output are never logged, but the raw and cleaned transcript text is, in plaintext, with no built-in retention or size cap. Protect the log directory and rotate or delete old files to match the sensitivity of your dictation.
 
-Transcriptions are appended to `parakit-YYYY-MM-DD.jsonl` using their local date. Each insertion record stays in its transcription's file, even when insertion finishes after midnight. Each JSON object is written and flushed synchronously before the worker continues. There is no filesystem sync guarantee; an interrupted write can leave a partial final line.
+The log directory is created on the first write. Transcriptions append to `parakit-YYYY-MM-DD.jsonl` using their local date. Each insertion record stays in its transcription's file, even when insertion finishes after midnight. Each JSON object is written and flushed synchronously before the worker continues. There is no filesystem sync guarantee; an interrupted write can leave a partial final line.
 
 Independent logger instances sharing a daily file take an exclusive file lock for each append and any failed-write rollback, so their records cannot overwrite each other.
 
@@ -38,9 +38,9 @@ Fields, in serialization order:
 | `rules_active` | integer | Enabled pass count after profile and disable filtering. |
 | `cleaner_version` | integer | Procedural cleaner behavior revision. |
 | `cleaning_profile` | string | `safe`, `aggressive`, or `disabled`. |
-| `ruleset_id` | string | Identifier of the ordered enabled pass set and configurable cleaning behavior, including user rules and a non-default number threshold. Omitted when cleaning is disabled. |
+| `ruleset_id` | string | Identifier of the ordered enabled pass set and configurable cleaning behavior, including user rules, repetition exceptions when `stutter-safe-words` is enabled, and the number threshold whenever any numeric pass is enabled. User-rule identity includes name, pattern, replacement, position, and order, excluding descriptions and disabled rules. Omitted when cleaning is disabled. |
 | `drops_trailing_period` | boolean | Whether the messaging-style terminal-period pass was enabled. |
-| `number_threshold` | number or null | The [isolated-value cutoff](cleaning-rules.md#numbers) in effect for digit conversion; `null` when cleaning is disabled. |
+| `number_threshold` | number or null | The [number-conversion threshold](cleaning-rules.md#numbers) in effect for digit conversion; `null` when cleaning is disabled. |
 | `rules_fired` | array | Passes that changed text, in application order, as `{"name":...,"matches":...}` objects. |
 | `cleaning_failure` | string | Error text from a bounded matcher that exceeded its limit; the cleaner then keeps the original transcript instead of inserting a partial transformation. Omitted when cleaning succeeded. |
 | `inference` | object | Model identity and controls for this transcription. Absent in older rows and when a library caller provides no metadata. |
@@ -67,7 +67,7 @@ The daemon supplies an `inference` object on each successful transcription:
 
 The quantization label summarizes the artifact recipe rather than every tensor: F32 biases and normalization tensors can coexist with a reported `F16` model. See [model presets](running.md#model-presets) for Q6_K precision choices.
 
-The requested device policy remains fixed; the session policy reflects an Auto reload on CPU. GPU execution backend (CUDA/Vulkan/Metal) and GPU name are not confirmed by these JSONL fields. Status labels GPU inventory separately from confirmed execution.
+These fields do not confirm a GPU execution backend (CUDA/Vulkan/Metal) or GPU name. Status labels inventory separately from execution; [device selection and reload policy](running.md#device-selection) explain the runtime behavior.
 
 Qwen controls describe user inference after readiness, not temporary warmup options or a detected language. `native_api_version` is not the CrispASR release tag. No model-parent directory is recorded. Readers should accept older rows without `inference` and ignore unfamiliar fields.
 
@@ -93,9 +93,9 @@ Fields, in serialization order:
 | `acknowledgement_kind` | string | `ibus_submitted`, `ibus_rejected`, `ibus_uncertain`, `ax_confirmed`, `unverified_timeout`, `unverified_no_baseline`, `unverified_short_transcript`, `unverified_focus_lost`, `no_evidence`, or `not_applicable`. |
 | `acknowledgement_ms` | integer or null | Milliseconds of the post-paste wait: the Accessibility acknowledgement poll on macOS, or the clipboard-restore wait on Linux and Windows; `null` when that wait did not run. |
 | `clipboard_restored` | boolean or null | `true` when supported prior contents were restored or an unsupported payload's staged replacement was cleared; `false` for retained transcript text or a failed restore; `null` when unknown or inapplicable, including successful native delivery or a competing or unreadable clipboard left untouched. |
-| `failure_reason` | string or null | Error or degraded-outcome detail. On Linux, a blocked partial direct insertion records how many characters completed before typing stopped. An unreadable clipboard records the failed observation; when the previous clipboard could not be saved, the transcript is still pasted and kept on the clipboard (`clipboard_restored: false`). |
+| `failure_reason` | string or null | Error or degraded-outcome detail. An unreadable clipboard records the failed observation; when the previous clipboard could not be saved, the transcript is still pasted and kept on the clipboard (`clipboard_restored: false`). |
 
-Current insertion records include every field above; absent values serialize as `null`. Most `error` records have no completed insertion report, so `clipboard_restored` is `null` and `paste_event_posted` is `false` even though the clipboard may have been touched. On Linux, a direct-typing backend error after partial input retains its completed character count and reports `paste_event_posted: true`.
+Current insertion records include every field above; absent values serialize as `null`. Most `error` records have no completed insertion report, so `clipboard_restored` is `null` and `paste_event_posted` is `false` even though the clipboard may have been touched. On Linux, a direct-typing block or error after partial input retains its completed character count in `failure_reason` and reports `paste_event_posted: true`.
 
 ## Insertion Outcomes
 
@@ -113,7 +113,7 @@ Current insertion records include every field above; absent values serialize as 
 
   `unverified_timeout`, `unverified_no_baseline`, and `unverified_short_transcript` apply the restore policy only while the staged clipboard still matches, as with `pasted`. `unverified_focus_lost` skips restoration: the transcript remains if still current (`clipboard_restored: false`), otherwise the competing or unreadable clipboard is preserved (`null`). This is not a restore failure and prints no restore warning.
 - **`copied_only`** - the transcript remains active on the clipboard because automatic insertion did not complete. With `paste_event_posted: false`, this covers terminal-mode multiline text and pre-paste fallbacks such as held modifiers, an unavailable backend, or focus rejection when the transcript-retention policy applies. Pre-chord paths that restore or preserve another clipboard payload report `blocked` instead. With `paste_event_posted: true` on macOS and `acknowledgement_kind: no_evidence`, the chord was sent but never confirmed, so parakit keeps the transcript active, plays the error tone, and asks you to inspect the target before pasting manually.
-- **`blocked`** - a target, content, or clipboard guard prevented completion, and Parakit plays the error tone. Native IBus rejection uses `acknowledgement_kind: ibus_rejected`; a successful recovery copy changes its outcome to `copied_only`. On the clipboard route, a competing or unverifiable clipboard is preserved with `clipboard_restored: null`; otherwise restoration follows policy. Linux direct-typing guards also report `blocked`; `failure_reason` gives the completed character count. Enabled daemon history retains the full transcript for recovery.
+- **`blocked`** - a target, content, or clipboard guard prevented completion, and Parakit plays the error tone. Native IBus rejection uses `acknowledgement_kind: ibus_rejected`; a successful recovery copy changes its outcome to `copied_only`. On the clipboard route, a competing or unverifiable clipboard is preserved with `clipboard_restored: null`; otherwise restoration follows policy. Linux direct-typing guards also report `blocked`. Enabled daemon history retains the full transcript for recovery.
 - **`skipped`** - insertion was intentionally omitted. This means either nothing printable survived sanitization or the WAV worker simulation disabled desktop insertion; no paste or clipboard action occurs. When sanitization leaves no printable text, parakit plays the error tone, leaves transcript history unchanged, and prints no recovery hint for that dictation. The simulation path retains its transcript in history.
 - **`error`** - insertion actually failed: the platform backend could not be prepared, the paste chord could not be sent, or a clipboard restore failed on a path that never reached a landed paste. `failure_reason` carries the error text.
 

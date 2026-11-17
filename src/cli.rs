@@ -90,6 +90,59 @@ pub(crate) enum Commands {
     TestPaste(TestPasteCli),
 }
 
+/// Desktop options shared by daemon startup and prerequisite checks.
+#[derive(Args, Debug, Default, PartialEq)]
+pub(crate) struct DesktopOptions {
+    /// Batch insertion style. Defaults to terminal paste on Linux and standard paste elsewhere.
+    #[arg(long, value_enum)]
+    paste_mode: Option<PasteMode>,
+
+    /// Linux insertion transport: follow the hotkey backend, require IBus PTT, or use X11.
+    #[cfg(target_os = "linux")]
+    #[arg(long, value_enum)]
+    insertion_backend: Option<crate::daemon::desktop::linux_insertion::InsertionBackend>,
+
+    /// Linux hotkey backend. `auto` uses IBus on Wayland and registers Ctrl+Space on X11.
+    /// Defaults to `config.toml`'s `hotkey.backend`, then `auto`.
+    #[cfg(target_os = "linux")]
+    #[arg(long, value_enum)]
+    hotkey_backend: Option<HotkeyBackend>,
+}
+
+impl DesktopOptions {
+    /// Resolve the paste mode using CLI, config, then the platform default.
+    ///
+    /// # Returns
+    /// The selected batch insertion style.
+    pub(crate) fn effective_paste_mode(&self, config: &ConfigFile) -> PasteMode {
+        self.paste_mode
+            .unwrap_or_else(|| config.daemon.effective_paste_mode())
+    }
+
+    /// Resolve Linux insertion transport using CLI, config, then automatic selection.
+    ///
+    /// # Returns
+    /// The selected transport preference.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn effective_insertion_backend(
+        &self,
+        config: &ConfigFile,
+    ) -> crate::daemon::desktop::linux_insertion::InsertionBackend {
+        self.insertion_backend
+            .unwrap_or_else(|| config.daemon.effective_insertion_backend())
+    }
+
+    /// Resolve the Linux hotkey backend using CLI, config, then automatic selection.
+    ///
+    /// # Returns
+    /// The selected hotkey backend.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn effective_hotkey_backend(&self, config: &ConfigFile) -> HotkeyBackend {
+        self.hotkey_backend
+            .unwrap_or_else(|| config.hotkey.effective_backend())
+    }
+}
+
 /// Arguments for starting the push-to-talk daemon.
 #[derive(Args, Debug, Default, PartialEq)]
 pub(crate) struct StartCli {
@@ -131,14 +184,9 @@ pub(crate) struct StartCli {
     #[arg(long, value_enum)]
     pub(crate) device: Option<DeviceMode>,
 
-    /// Batch insertion style. Defaults to terminal paste on Linux and standard paste elsewhere.
-    #[arg(long, value_enum)]
-    pub(crate) paste_mode: Option<PasteMode>,
-
-    /// Linux insertion transport: follow the hotkey backend, require IBus PTT, or use X11.
-    #[cfg(target_os = "linux")]
-    #[arg(long, value_enum)]
-    pub(crate) insertion_backend: Option<crate::daemon::desktop::linux_insertion::InsertionBackend>,
+    /// Desktop transport and hotkey options.
+    #[command(flatten)]
+    pub(crate) desktop: DesktopOptions,
 
     /// Leave dictated text on the clipboard after paste instead of restoring
     /// previous clipboard contents. Overrides a configured
@@ -185,13 +233,6 @@ pub(crate) struct StartCli {
     #[command(flatten)]
     pub(crate) cleaning_overrides: CleaningOverrides,
 
-    /// Linux hotkey backend. `auto` uses IBus on Wayland and registers
-    /// Ctrl+Space on X11.
-    /// Defaults to `config.toml`'s `hotkey.backend`, then `auto`.
-    #[cfg(target_os = "linux")]
-    #[arg(long, value_enum)]
-    pub(crate) hotkey_backend: Option<HotkeyBackend>,
-
     /// Directory for JSONL transcription logs. One file is written per local day.
     #[arg(long, value_name = "DIR")]
     pub(crate) log_dir: Option<PathBuf>,
@@ -215,18 +256,6 @@ pub(crate) struct StartCli {
 }
 
 impl StartCli {
-    /// Resolve Linux insertion transport using CLI, config, then automatic selection.
-    ///
-    /// # Returns
-    /// The effective transport preference for this daemon invocation.
-    #[cfg(target_os = "linux")]
-    pub(crate) fn effective_insertion_backend(
-        &self,
-        config: &ConfigFile,
-    ) -> crate::daemon::desktop::linux_insertion::InsertionBackend {
-        self.insertion_backend
-            .unwrap_or_else(|| config.daemon.effective_insertion_backend())
-    }
     /// Return whether this invocation supplies settings for a new daemon.
     ///
     /// # Returns
@@ -252,17 +281,6 @@ impl StartCli {
         self.model_idle_minutes
             .unwrap_or_else(|| config.daemon.effective_model_idle_minutes())
     }
-    /// Return the selected paste mode: CLI flag, then config, then the
-    /// platform default.
-    ///
-    /// # Returns
-    ///
-    /// Returns the explicitly configured paste mode or the default for the current platform.
-    pub(crate) fn effective_paste_mode(&self, config: &ConfigFile) -> PasteMode {
-        self.paste_mode
-            .unwrap_or_else(|| config.daemon.effective_paste_mode())
-    }
-
     /// Resolve the CLI model choice before the configured choice and default.
     ///
     /// # Returns
@@ -342,18 +360,6 @@ impl StartCli {
     /// The effective log directory, if any.
     pub(crate) fn effective_log_dir(&self, config: &ConfigFile) -> Option<PathBuf> {
         self.log_dir.clone().or_else(|| config.logging.dir.clone())
-    }
-
-    /// Return the selected Linux hotkey backend: CLI `--hotkey-backend`,
-    /// then config `hotkey.backend`, then [`HotkeyBackend::Auto`].
-    ///
-    /// # Returns
-    ///
-    /// The effective hotkey backend.
-    #[cfg(target_os = "linux")]
-    pub(crate) fn effective_hotkey_backend(&self, config: &ConfigFile) -> HotkeyBackend {
-        self.hotkey_backend
-            .unwrap_or_else(|| config.hotkey.effective_backend())
     }
 
     /// Return whether audio cues are enabled: explicit `--sounds` forces
@@ -603,10 +609,9 @@ fn parse_thread_count(value: &str) -> Result<NonZeroUsize, String> {
 /// Arguments for runtime prerequisite checks.
 #[derive(Args, Debug)]
 pub(crate) struct DoctorCli {
-    /// Linux insertion transport to check instead of the configured preference.
-    #[cfg(target_os = "linux")]
-    #[arg(long, value_enum)]
-    pub(crate) insertion_backend: Option<crate::daemon::desktop::linux_insertion::InsertionBackend>,
+    /// Desktop options to check without changing a running or future daemon.
+    #[command(flatten)]
+    pub(crate) desktop: DesktopOptions,
     /// Run active smoke tests in addition to passive preflight checks.
     ///
     /// Opens a throwaway probe window and takes focus for a moment:
@@ -615,57 +620,6 @@ pub(crate) struct DoctorCli {
     /// probe window closes itself.
     #[arg(long)]
     pub(crate) deep: bool,
-
-    /// Batch insertion style to check. Overrides config for this check only.
-    /// Defaults to `config.toml`'s `daemon.paste_mode`, then the platform
-    /// default.
-    #[arg(long, value_enum)]
-    pub(crate) paste_mode: Option<PasteMode>,
-
-    /// Linux hotkey backend to check. Overrides config for this check only.
-    /// Defaults to `config.toml`'s `hotkey.backend`, then `auto`.
-    #[cfg(target_os = "linux")]
-    #[arg(long, value_enum)]
-    pub(crate) hotkey_backend: Option<HotkeyBackend>,
-}
-
-impl DoctorCli {
-    /// Resolve Linux insertion transport for this diagnostic invocation.
-    ///
-    /// # Returns
-    /// The effective transport preference without changing daemon configuration.
-    #[cfg(target_os = "linux")]
-    pub(crate) fn effective_insertion_backend(
-        &self,
-        config: &ConfigFile,
-    ) -> crate::daemon::desktop::linux_insertion::InsertionBackend {
-        self.insertion_backend
-            .unwrap_or_else(|| config.daemon.effective_insertion_backend())
-    }
-    /// Return the paste mode this check should validate: CLI flag, then
-    /// config, then the platform default. Overrides config for this check
-    /// only; does not affect a subsequently started daemon.
-    ///
-    /// # Returns
-    ///
-    /// Returns the explicitly configured paste mode or the default for the current platform.
-    pub(crate) fn effective_paste_mode(&self, config: &ConfigFile) -> PasteMode {
-        self.paste_mode
-            .unwrap_or_else(|| config.daemon.effective_paste_mode())
-    }
-
-    /// Return the Linux hotkey backend this check should validate: CLI flag,
-    /// then config, then [`HotkeyBackend::Auto`]. Overrides config for this
-    /// check only; does not affect a subsequently started daemon.
-    ///
-    /// # Returns
-    ///
-    /// The effective hotkey backend.
-    #[cfg(target_os = "linux")]
-    pub(crate) fn effective_hotkey_backend(&self, config: &ConfigFile) -> HotkeyBackend {
-        self.hotkey_backend
-            .unwrap_or_else(|| config.hotkey.effective_backend())
-    }
 }
 
 /// Arguments for testing the daemon paste path.

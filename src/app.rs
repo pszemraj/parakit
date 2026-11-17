@@ -4,8 +4,10 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use crossbeam_channel::{bounded, unbounded};
 
+mod cache_command;
 mod config_command;
 mod simulation;
+use cache_command::run_cache_command;
 use config_command::run_config_command;
 use parakit::data_log::DataLogger;
 use parakit::fetch::{self, FetchOptions, FetchSource};
@@ -24,10 +26,7 @@ use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crate::cli::{
-    CacheCli, CacheCommand, Cli, Commands, DoctorCli, FetchCli, RulesArgs, RulesCli, RulesCommand,
-    StartCli,
-};
+use crate::cli::{Cli, Commands, DoctorCli, FetchCli, RulesArgs, RulesCli, RulesCommand, StartCli};
 use crate::config::{self, ConfigFile};
 use crate::daemon;
 use crate::daemon::audio::AudioCapture;
@@ -144,14 +143,14 @@ pub(crate) fn run() -> Result<()> {
 fn run_doctor(cli: &Cli, doctor_cli: &DoctorCli) -> Result<()> {
     let config = config::load()?;
     configure_native_logging(cli.effective_verbose(&config));
-    let paste_mode = doctor_cli.effective_paste_mode(&config);
+    let paste_mode = doctor_cli.desktop.effective_paste_mode(&config);
     #[cfg(target_os = "linux")]
-    let hotkey_backend = doctor_cli.effective_hotkey_backend(&config);
+    let hotkey_backend = doctor_cli.desktop.effective_hotkey_backend(&config);
     #[cfg(not(target_os = "linux"))]
     let hotkey_backend = HotkeyBackend::Auto;
     #[cfg(target_os = "linux")]
     let focus_source = daemon::inject::FocusSource {
-        backend: doctor_cli.effective_insertion_backend(&config),
+        backend: doctor_cli.desktop.effective_insertion_backend(&config),
         mode: paste_mode,
         hotkey_route: hotkey_backend.linux_route(),
         client: None,
@@ -297,7 +296,7 @@ fn run_daemon(cli: &Cli, start: &StartCli) -> Result<()> {
     configure_native_logging(verbose);
     let log = Arc::new(Logger::new(log_level(cli, &config)));
     #[cfg(target_os = "linux")]
-    let hotkey_backend = start.effective_hotkey_backend(&config);
+    let hotkey_backend = start.desktop.effective_hotkey_backend(&config);
     #[cfg(not(target_os = "linux"))]
     let hotkey_backend = HotkeyBackend::Auto;
     let (worker_settings, log_summary) = resolve_worker_settings(start, &config);
@@ -326,7 +325,7 @@ fn run_daemon(cli: &Cli, start: &StartCli) -> Result<()> {
 
     #[cfg(target_os = "linux")]
     let mut focus_source = daemon::inject::FocusSource {
-        backend: start.effective_insertion_backend(&config),
+        backend: start.desktop.effective_insertion_backend(&config),
         mode: paste_mode,
         hotkey_route: hotkey_backend.linux_route(),
         client: None,
@@ -698,7 +697,7 @@ fn resolve_worker_settings(
         WorkerSettings {
             model_idle_minutes: start.effective_model_idle_minutes(config),
             data_log: log_dir.map(|dir| Arc::new(DataLogger::new(dir))),
-            paste_mode: start.effective_paste_mode(config),
+            paste_mode: start.desktop.effective_paste_mode(config),
             keep_transcript_clipboard: start.effective_keep_transcript_clipboard(config),
             context_on_default_hotkey: config.qwen.context_on_default_hotkey(),
             context_dictations: config.qwen.context_dictations(),
@@ -716,6 +715,7 @@ fn build_cli_cleaner(start: &StartCli, config: &ConfigFile) -> Result<Option<rul
             .cleaning_overrides
             .effective_drops_trailing_period(config),
         config.cleaning.number_threshold,
+        &config.cleaning.repetition_exceptions,
         &start.cleaning_overrides.effective_disabled_rules(config),
         &config.rules.user,
     )
@@ -731,6 +731,7 @@ fn build_rules_cleaner(args: &RulesArgs, config: &ConfigFile) -> Result<rules::C
         args.cleaning_overrides
             .effective_drops_trailing_period(config),
         config.cleaning.number_threshold,
+        &config.cleaning.repetition_exceptions,
         &args.cleaning_overrides.effective_disabled_rules(config),
         &config.rules.user,
     )
@@ -887,105 +888,6 @@ fn model_file_name(path: &Path) -> String {
         .and_then(|name| name.to_str())
         .map(str::to_string)
         .unwrap_or_else(|| path.display().to_string())
-}
-
-fn run_cache_command(cache: &CacheCli, quiet: bool) -> Result<()> {
-    match cache.command.as_ref().unwrap_or(&CacheCommand::List) {
-        CacheCommand::Dir => {
-            let dir = model::models_dir()?;
-            if !quiet {
-                outln!("{}", dir.display())?;
-            }
-        }
-        CacheCommand::List => print_cache_list(quiet)?,
-    }
-    Ok(())
-}
-
-fn print_cache_list(quiet: bool) -> Result<()> {
-    let dir = model::models_dir()?;
-    if quiet {
-        return Ok(());
-    }
-    outln!("parakit cache")?;
-    outln!("  dir: {}", dir.display())?;
-    if !dir.is_dir() {
-        outln!("  models: none")?;
-        return Ok(());
-    }
-
-    let top_level = list_gguf_files(&dir);
-    let mut extra = list_nested_gguf_files(&dir.join("hub"));
-    extra.extend(list_nested_gguf_files(&dir.join("url")));
-    extra.sort();
-
-    if top_level.is_empty() && extra.is_empty() {
-        outln!("  models: none")?;
-        return Ok(());
-    }
-
-    outln!("  models:")?;
-    for path in &top_level {
-        print_cache_entry(&dir, path, &model_file_name(path))?;
-    }
-    for path in &extra {
-        print_cache_entry(&dir, path, &relative_cache_display(&dir, path))?;
-    }
-    Ok(())
-}
-
-/// List `.gguf` files directly inside `dir`, sorted.
-fn list_gguf_files(dir: &Path) -> Vec<PathBuf> {
-    let Ok(read) = std::fs::read_dir(dir) else {
-        return Vec::new();
-    };
-    let mut entries: Vec<_> = read
-        .filter_map(Result::ok)
-        .map(|entry| entry.path())
-        .filter(|path| {
-            path.is_file()
-                && path
-                    .extension()
-                    .is_some_and(|ext| ext.eq_ignore_ascii_case("gguf"))
-        })
-        .collect();
-    entries.sort();
-    entries
-}
-
-/// List `.gguf` files one level below `parent` (`parent/*/*.gguf`), sorted.
-/// Used for revision-keyed Hub entries and URL-keyed direct downloads.
-fn list_nested_gguf_files(parent: &Path) -> Vec<PathBuf> {
-    let Ok(read) = std::fs::read_dir(parent) else {
-        return Vec::new();
-    };
-    let mut entries: Vec<_> = read
-        .filter_map(Result::ok)
-        .map(|entry| entry.path())
-        .filter(|path| path.is_dir())
-        .flat_map(|sub| list_gguf_files(&sub))
-        .collect();
-    entries.sort();
-    entries
-}
-
-/// Display a `hub/…`/`url/…` cache entry by its path relative to `dir`,
-/// with `/` separators regardless of platform.
-fn relative_cache_display(dir: &Path, path: &Path) -> String {
-    path.strip_prefix(dir)
-        .map(model::slash_joined)
-        .unwrap_or_else(|_| model_file_name(path))
-}
-
-fn print_cache_entry(dir: &Path, path: &Path, display_name: &str) -> Result<()> {
-    let dtype = gguf::dtype_label(path);
-    let size = path
-        .metadata()
-        .map(|meta| format_file_size(meta.len()))
-        .unwrap_or_else(|_| "unknown size".to_string());
-    let is_default_q8 = path == fetch::preset_cache_path(dir, ModelPreset::default());
-    let default_marker = if is_default_q8 { " default" } else { "" };
-    outln!("    {display_name}{default_marker}: {dtype}, {size}")
 }
 
 fn format_file_size(bytes: u64) -> String {

@@ -24,21 +24,6 @@ pub(crate) fn emit_cpp_runtime() {
     }
 }
 
-/// Warn when crispasr-sys located or built its own CrispASR library.
-///
-/// Only crispasr-sys's build script publishes `LIB_DIR` link metadata, and
-/// the repository's Cargo `links` override replaces that script. The
-/// variable therefore means Cargo did not load `.cargo/config.toml`, usually
-/// because it ran outside the repository root.
-pub(crate) fn warn_if_sys_native_build_ran() {
-    if let Some(dir) = env::var_os("DEP_CRISPASR_LIB_DIR") {
-        println!(
-            "cargo:warning=crispasr-sys used its own CrispASR build at {}; run Cargo from the parakit repository root so .cargo/config.toml leaves native compilation to parakit",
-            Path::new(&dir).display()
-        );
-    }
-}
-
 /// Emit the explicit external library directory followed by system prefixes.
 ///
 /// # Arguments
@@ -89,7 +74,8 @@ pub(crate) fn configure_pcm_runtime(cfg: &mut cmake::Config, blas_enabled: bool)
 /// # Arguments
 ///
 /// * `src_dir` - CrispASR source tree selected by the bundled build.
-pub(crate) fn build_device_shim(src_dir: &Path) {
+/// * `shared` - Whether an external shared library supplies ggml.
+pub(crate) fn build_device_shim(src_dir: &Path, shared: bool) {
     println!("cargo:rerun-if-changed=src/ggml_device_shim.cpp");
     for header in [
         "include/ggml.h",
@@ -101,11 +87,13 @@ pub(crate) fn build_device_shim(src_dir: &Path) {
             src_dir.join("ggml").join(header).display()
         );
     }
-    cc::Build::new()
+    let mut build = cc::Build::new();
+    if shared {
+        build.define("GGML_SHARED", None);
+    }
+    build
         .cpp(true)
         .std("c++17")
-        // CrispASR is shared; Windows declarations use its import library.
-        .define("GGML_SHARED", None)
         .include(src_dir.join("ggml/include"))
         .include(src_dir.join("ggml/src"))
         .file("src/ggml_device_shim.cpp")
