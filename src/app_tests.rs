@@ -7,6 +7,83 @@ const GGML_LOG_LEVEL_INFO: i32 = 2;
 const GGML_LOG_LEVEL_ERROR: i32 = 4;
 
 #[test]
+fn phrase_repairs_follow_loaded_backend_and_explicit_overrides() {
+    for (qwen, setting, flags, expected) in [
+        (false, None, vec![], "Use our. Setup and their, defaults"),
+        (true, None, vec![], "Use our setup and their defaults"),
+        (
+            false,
+            Some(true),
+            vec![],
+            "Use our setup and their defaults",
+        ),
+        (
+            true,
+            Some(false),
+            vec![],
+            "Use our. Setup and their, defaults",
+        ),
+        (
+            false,
+            Some(false),
+            vec!["--phrase-breaks", "true"],
+            "Use our setup and their defaults",
+        ),
+        (
+            true,
+            Some(true),
+            vec!["--phrase-breaks", "false"],
+            "Use our. Setup and their, defaults",
+        ),
+        (
+            true,
+            None,
+            vec!["--disable-rule", "merge-sentence-breaks"],
+            "Use our. Setup and their defaults",
+        ),
+    ] {
+        let mut config = ConfigFile::default();
+        config.cleaning.phrase_breaks = setting;
+        let cli = Cli::parse_from(["parakit", "start"].into_iter().chain(flags));
+        let Some(Commands::Start(start)) = cli.command else {
+            panic!("expected start")
+        };
+        let cleaner = build_cli_cleaner(&start, &config, qwen).unwrap().unwrap();
+        assert_eq!(
+            cleaner.clean_text("Use our. Setup and their, defaults."),
+            expected
+        );
+        assert_eq!(
+            cleaner.clean_text("In my um. Main config."),
+            "In my main config"
+        );
+    }
+}
+
+#[test]
+fn rules_inspection_uses_configured_qwen_defaults_and_cli_overrides() {
+    for preset in [
+        ModelPreset::Qwen3Asr06b,
+        ModelPreset::Qwen3Asr17b,
+        ModelPreset::ParakeetUltra,
+    ] {
+        let mut config = ConfigFile::default();
+        config.daemon.model_preset = Some(preset);
+        let cleaner = build_rules_cleaner(&RulesArgs::default(), &config).unwrap();
+        let expected = if preset.backend() == "qwen3" {
+            "Use our setup"
+        } else {
+            "Use our. Setup"
+        };
+        assert_eq!(cleaner.clean_text("Use our. Setup."), expected);
+        let mut args = RulesArgs::default();
+        args.cleaning_overrides.phrase_breaks = Some(true);
+        let cleaner = build_rules_cleaner(&args, &config).unwrap();
+        assert_eq!(cleaner.clean_text("Use our. Setup."), "Use our setup");
+    }
+}
+
+#[test]
 fn configured_repetition_exceptions_reach_daemon_and_rules_cleaners() {
     for profile in ["safe", "aggressive"] {
         let path = crate::test_support::write_config_fixture(
@@ -21,7 +98,7 @@ fn configured_repetition_exceptions_reach_daemon_and_rules_cleaners() {
         let Some(Commands::Start(start)) = cli.command else {
             panic!("expected start");
         };
-        let daemon_cleaner = build_cli_cleaner(&start, &config).unwrap().unwrap();
+        let daemon_cleaner = build_cli_cleaner(&start, &config, false).unwrap().unwrap();
         let rules_cleaner = build_rules_cleaner(&RulesArgs::default(), &config).unwrap();
         for cleaner in [daemon_cleaner, rules_cleaner] {
             assert_eq!(

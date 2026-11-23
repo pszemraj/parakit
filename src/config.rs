@@ -223,6 +223,8 @@ pub(crate) struct CleaningConfig {
     /// Cleanup behavior tier: `safe` (default) or `aggressive`. Overridden by
     /// CLI `--cleaning-profile`.
     pub(crate) profile: Option<CleaningProfile>,
+    /// Repair function-word punctuation. Unset enables it only for Qwen models.
+    pub(crate) phrase_breaks: Option<bool>,
     /// Keep the single terminal period that cleanup removes by default.
     /// CLI `--keep-trailing-period` forces this on, and `--no-keep-trailing-period` forces it off.
     pub(crate) keep_trailing_period: Option<bool>,
@@ -405,6 +407,10 @@ pub(crate) const TEMPLATE: &str = r#"# parakit config.toml
 # Aggressive additionally deletes discourse markers such as filler "like", "you know", and "I mean", which can change meaning, and collapses repeats of that, no, can, had, and do.
 # Overridden by CLI --cleaning-profile.
 # profile = "safe"
+
+# Repair function-word sentence breaks and commas. Unset enables this only for Qwen.
+# Set true to use it with any model, or false to disable it. CLI --phrase-breaks overrides this.
+# phrase_breaks = true
 
 # Keep the single terminal period.
 # Cleanup drops it by default because parakit is used mostly for messaging-style dictation.

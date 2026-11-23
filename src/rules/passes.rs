@@ -95,7 +95,21 @@ pub(crate) fn normalize_spaced_acronyms(input: &str) -> TransformResult<'_> {
     apply_replacements(input, replacements)
 }
 
-fn apply_replacements(
+/// Apply ordered, non-overlapping UTF-8 edits and count replacements.
+///
+/// # Arguments
+/// * `input` - Original text.
+/// * `replacements` - Ordered byte ranges and their replacement strings.
+///
+/// # Returns
+/// Transformed text and the number of replacements, borrowing when empty.
+///
+/// # Errors
+/// Infallible; the return value is a transformation, not a fallible result.
+///
+/// # Panics
+/// Panics for overlapping ranges or offsets that are not UTF-8 boundaries.
+pub(super) fn apply_replacements(
     input: &str,
     replacements: Vec<(usize, usize, String)>,
 ) -> TransformResult<'_> {
@@ -367,7 +381,11 @@ fn preserve_sentence_start_token_case(input: &str, byte_index: usize) -> bool {
     protected_token_case(token)
 }
 
-fn protected_token_case(token: &str) -> bool {
+/// Whether mixed case or token structure makes case normalization unsafe.
+///
+/// # Returns
+/// True for mixed-case, dotted, address, URL, or version tokens.
+pub(super) fn protected_token_case(token: &str) -> bool {
     let token = token.trim_matches(|character: char| {
         matches!(
             character,

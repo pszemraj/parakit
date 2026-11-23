@@ -32,6 +32,16 @@ Cleaning includes English rules. For multilingual dictation, disable built-in an
 parakit start --no-cleaning
 ```
 
+### Function-word punctuation
+
+For Qwen models, both profiles also enable `merge-sentence-breaks` and `function-word-commas`. The loaded backend selects this default, including custom model files. Set `cleaning.phrase_breaks = true` to enable these passes with any model, or `false` to disable them. `--phrase-breaks true/false` overrides the setting on `start`, `rules list`, and `rules test`; individual `--disable-rule` entries still take precedence. Rule inspection uses `daemon.model_preset` when the setting is unset.
+
+Sentence merging removes a period or question mark after `an`, `your`, `our`, `their`, `its`, `his`, `and`, `or`, or `but`, when another word follows on the same line. For example, `does the hard things well and. Fails` becomes `does the hard things well and fails`. The continuation is lowercased except for `I`, its contractions, acronyms, mixed-case or dotted tokens, and corpus-derived proper names.
+
+Comma removal uses the narrower list `an`, `our`, `their`, `its`, and `his`. The two lists exclude words whose candidate repairs changed legitimate sentence boundaries, list labels, restarts, or parenthetical commas in historical dictations. In particular, stranded prepositions such as `to`, `of`, `from`, `into`, `with`, and `by` remain untouched. Conjunction commas also remain, including `And, as I just realized, ...`. Adjective-noun breaks such as `logical. Pieces` are outside these passes.
+
+For every model, `filled-pauses` removes punctuation carried by a deleted filler and uses the same capitalization exceptions: `in my um. Main config` becomes `in my main config`. A preceding sentence terminator survives: `Review came back. Um. This was` becomes `Review came back. This was`.
+
 ## General Invariants
 
 The default pipeline favors structural rules over product- or vocabulary-specific substitutions.

@@ -670,9 +670,13 @@ pub(crate) struct RulesArgs {
     pub(crate) cleaning_overrides: CleaningOverrides,
 }
 
-/// Common rule-disable and terminal-period flags for `start` and `rules`.
+/// Common phrase repair, rule-disable, and terminal-period overrides.
 #[derive(Args, Debug, Default, PartialEq)]
 pub(crate) struct CleaningOverrides {
+    /// Repair function-word punctuation (default: enabled only for Qwen models).
+    /// Overrides cleaning.phrase_breaks; use true to enable it for any model.
+    #[arg(long, value_name = "BOOL", action = clap::ArgAction::Set)]
+    pub(crate) phrase_breaks: Option<bool>,
     /// Keep the single terminal period that messaging-style cleanup removes by
     /// default. Overrides a configured `cleaning.keep_trailing_period = false`;
     /// conflicts with `--no-keep-trailing-period`.
@@ -720,14 +724,29 @@ impl CleaningOverrides {
         )
     }
 
-    /// Return the union of CLI `--disable-rule` names and config
-    /// `cleaning.disabled_rules`, without duplicates.
+    /// Merge explicit disabled rules with the model-dependent phrase-break setting.
+    ///
+    /// # Arguments
+    /// * `config` - Loaded cleaning defaults.
+    /// * `qwen` - Whether the selected model uses the Qwen backend.
     ///
     /// # Returns
     ///
-    /// The merged list of rule names to disable.
-    pub(crate) fn effective_disabled_rules(&self, config: &ConfigFile) -> Vec<String> {
-        config.cleaning.merged_disabled_rules(&self.disable_rule)
+    /// The rule names to disable, including phrase repair when it is inactive.
+    pub(crate) fn effective_disabled_rules(&self, config: &ConfigFile, qwen: bool) -> Vec<String> {
+        let mut disabled = config.cleaning.merged_disabled_rules(&self.disable_rule);
+        if !self
+            .phrase_breaks
+            .or(config.cleaning.phrase_breaks)
+            .unwrap_or(qwen)
+        {
+            for name in parakit::rules::PHRASE_BREAK_RULES {
+                if !disabled.iter().any(|entry| entry == name) {
+                    disabled.push((*name).to_owned());
+                }
+            }
+        }
+        disabled
     }
 }
 

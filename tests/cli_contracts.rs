@@ -114,6 +114,23 @@ fn simulated_ptt_rejects_missing_model_before_loading_output() {
 }
 
 #[test]
+fn simulated_ptt_validates_rule_names_before_audio_or_model_loading() {
+    let output = isolated_parakit_with_empty_config("invalid-simulated-rule")
+        .args([
+            "start",
+            "--disable-rule",
+            "typo",
+            "--simulate-ptt-audio",
+            "target/tmp/nonexistent-audio.wav",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("no rule named 'typo'"));
+}
+
+#[test]
 fn broken_config_does_not_block_documented_control_and_repair_commands() {
     let root = common::fixture_root("cli-contracts", "broken-config-control");
     std::fs::create_dir_all(&root).expect("fixture root should be created");

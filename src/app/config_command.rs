@@ -206,6 +206,13 @@ fn print_config_show(quiet: bool) -> Result<()> {
     outln!("    enabled: {}", config.cleaning.enabled())?;
     outln!("    profile: {}", config.cleaning.effective_profile())?;
     outln!(
+        "    phrase_breaks: {}",
+        config.cleaning.phrase_breaks.map_or_else(
+            || "(default: Qwen only)".to_owned(),
+            |value| value.to_string()
+        )
+    )?;
+    outln!(
         "    keep_trailing_period: {}",
         config.cleaning.keep_trailing_period()
     )?;

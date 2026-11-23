@@ -110,6 +110,11 @@ enabled = true
 # See: [profile behavior](cleaning-rules.md#profiles). CLI profile values accept either case.
 profile = "safe"
 
+# bool (optional). Repair function-word sentence breaks and commas.
+# Unset: enabled for Qwen models only. true enables it for every model, false disables it.
+# Overridden by: --phrase-breaks true/false (also on rules). disabled_rules still takes precedence.
+# phrase_breaks = true
+
 # bool. Keep a single final period instead of applying fix-trailing-period.
 # Overridden by: --keep-trailing-period/--no-keep-trailing-period (also on rules).
 # See: [punctuation](cleaning-rules.md#profiles).
