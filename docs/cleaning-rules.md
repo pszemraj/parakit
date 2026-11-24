@@ -46,6 +46,8 @@ For every model, `filled-pauses` removes punctuation carried by a deleted filler
 
 The default pipeline favors structural rules over product- or vocabulary-specific substitutions.
 
+Sentence capitalization changes only the first letter of a whitespace-delimited token, allowing opening quotes, brackets, or a leading dash before it. It preserves case inside dotfiles, filenames, paths, URLs, and identifiers, including `__init__.py` and `.gitignore`. It does not lowercase capitalization already supplied by the model or translate literal spoken `dot`/`point` into punctuation.
+
 ### Acronyms
 
 Any run of two or more standalone uppercase ASCII letters separated by exactly one ASCII space collapses without separators: `O C R` becomes `OCR`. There is no acronym allowlist. [Stutter handling runs first](#rule-order), so `I I think` becomes `I think`.

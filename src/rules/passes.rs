@@ -259,11 +259,11 @@ pub(crate) fn drop_dangling_connective(input: &str) -> TransformResult<'_> {
 /// (via [`preserve_sentence_start_token_case`]'s dot/`@`/scheme checks), so
 /// those are never corrupted. Existing mixed-case tokens such as `macOS`,
 /// `iOS`, and `eBay` are also preserved. A `.`, `!`, or `?` opens a new
-/// sentence only when [`punctuation_is_sentence_boundary`] agrees; that helper
-/// keeps URL query/path punctuation, decimals, semvers, domains, ellipses, and
-/// known abbreviations/initialisms (e.g. `"e.g."`, `"U.S."`) from being
-/// treated as sentence ends, so a protected token is never split into two
-/// sentences and its next character is never capitalized.
+/// sentence only when [`punctuation_is_sentence_boundary`] agrees. Only the
+/// first letter of a whitespace-delimited token, optionally preceded by opening
+/// quotes, brackets, or a leading dash, may be capitalized. Embedded punctuation
+/// never changes case inside a filename, path, URL, or identifier. Decimal,
+/// version, and abbreviation periods do not start a new sentence.
 ///
 /// # Returns
 ///
@@ -337,16 +337,12 @@ pub(crate) fn capitalize_sentence_starts(input: &str) -> TransformResult<'_> {
 fn punctuation_is_sentence_boundary(input: &str, byte_index: usize, character: char) -> bool {
     match character {
         '.' => period_is_sentence_boundary(input, byte_index),
-        '!' | '?' => !punctuation_is_inside_protected_token(input, byte_index, character),
+        '!' | '?' => true,
         _ => false,
     }
 }
 
-fn punctuation_is_inside_protected_token(
-    input: &str,
-    byte_index: usize,
-    punctuation: char,
-) -> bool {
+fn preserve_sentence_start_token_case(input: &str, byte_index: usize) -> bool {
     let token_start = input[..byte_index]
         .char_indices()
         .rev()
@@ -356,23 +352,15 @@ fn punctuation_is_inside_protected_token(
                 .then_some(index + character.len_utf8())
         })
         .unwrap_or(0);
-    let after_punctuation = byte_index + punctuation.len_utf8();
-    let token_end = input[after_punctuation..]
-        .char_indices()
-        .find_map(|(offset, character)| {
-            character
-                .is_whitespace()
-                .then_some(after_punctuation + offset)
-        })
-        .unwrap_or(input.len());
-
-    input[after_punctuation..token_end]
-        .chars()
-        .any(char::is_alphanumeric)
-        && protected_token_case(&input[token_start..token_end])
-}
-
-fn preserve_sentence_start_token_case(input: &str, byte_index: usize) -> bool {
+    let prefix = input[token_start..byte_index].trim_start_matches(|character| {
+        matches!(
+            character,
+            '\'' | '"' | '(' | '[' | '{' | '<' | '‘' | '“' | '«'
+        )
+    });
+    if !matches!(prefix, "" | "-" | "–" | "—") {
+        return true;
+    }
     let tail = &input[byte_index..];
     let token = tail
         .split(|character: char| character.is_whitespace())

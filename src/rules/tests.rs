@@ -428,6 +428,59 @@ fn capitalization_protects_decimals_versions_and_dotted_tokens() {
 }
 
 #[test]
+fn capitalization_never_changes_letters_inside_technical_tokens() {
+    use std::borrow::Cow;
+
+    for input in [
+        ".gitignore contains the config.",
+        ".config/parakit.toml contains the config.",
+        "__init__.py contains the module.",
+        "Read config_.toml and __init__.py.",
+        "/usr/bin/parakit starts the daemon.",
+        "~/Projects/parakit contains the source.",
+        "--config selects a file.",
+        "Use foo!bar and foo?bar identifiers.",
+        "Use foo!\"bar and foo?'bar identifiers.",
+        "Visit https://example.com/.config and https://example.com/a!b.",
+        "About gemini.google.com and config.toml.",
+        "About Gemini.Google.com and config.Toml.",
+    ] {
+        let result = capitalize_sentence_starts(input);
+        assert_eq!(result.text, input, "{input}");
+        assert_eq!(result.matches, 0, "{input}");
+        assert!(matches!(result.text, Cow::Borrowed(_)), "{input}");
+    }
+}
+
+#[test]
+fn capitalization_keeps_real_sentence_starts_after_separators_and_opening_quotes() {
+    for profile in [CleaningProfile::Safe, CleaningProfile::Aggressive] {
+        assert_clean_cases(
+            profile,
+            &[
+                (
+                    "Read config_.toml. then continue.",
+                    "Read config_.toml. Then continue.",
+                ),
+                ("done! next? yes.", "Done! Next? Yes."),
+                ("done!\nnext.", "Done!\nNext."),
+                ("done. \"next\"", "Done. \"Next\""),
+                ("done. (next)", "Done. (Next)"),
+                ("done. [next]", "Done. [Next]"),
+                ("done. “next”", "Done. “Next”"),
+                ("done. 'next'", "Done. 'Next'"),
+                ("-oh. yes.", "-Oh. Yes."),
+                ("—oh. yes.", "—Oh. Yes."),
+                (
+                    "say config dot toml or config point toml.",
+                    "Say config dot toml or config point toml.",
+                ),
+            ],
+        );
+    }
+}
+
+#[test]
 fn trace_reports_ordered_rule_hits_and_counts() {
     let result = cleaner_keep_period(CleaningProfile::Safe)
         .try_clean("um, the the G P T model is gonna work.")
