@@ -266,6 +266,7 @@ fn shared_state_reports_phase_and_newest_transcript_byte_length() {
             phase,
             last_transcript_len: Some(11),
             detail: None,
+            ..
         } if phase == "recording"
     ));
 }
@@ -564,13 +565,40 @@ fn sample_daemon_info() -> DaemonInfo {
 }
 
 #[test]
-fn shared_state_status_is_bare_until_info_is_set() {
+fn shared_state_status_reports_versions_before_runtime_details_are_set() {
     let state = SharedState::new();
 
-    let IpcResponse::Status { detail, .. } = state.status() else {
+    let IpcResponse::Status {
+        parakit_version,
+        cleaner_version,
+        detail,
+        ..
+    } = state.status()
+    else {
         panic!("expected a Status response");
     };
+    assert_eq!(
+        parakit_version.as_deref(),
+        Some(parakit::build_info::PACKAGE_VERSION)
+    );
+    assert_eq!(cleaner_version, Some(parakit::rules::CLEANER_VERSION));
     assert!(detail.is_none());
+}
+
+#[test]
+fn legacy_status_without_versions_deserializes_as_unreported() {
+    let response: IpcResponse = serde_json::from_str(
+        r#"{"status":{"phase":"idle","last_transcript_len":12,"detail":null}}"#,
+    )
+    .unwrap();
+    assert!(matches!(
+        response,
+        IpcResponse::Status {
+            parakit_version: None,
+            cleaner_version: None,
+            ..
+        }
+    ));
 }
 
 #[test]
@@ -629,6 +657,8 @@ fn status_detail_serde_round_trips() {
     let response = IpcResponse::Status {
         phase: "idle".to_string(),
         last_transcript_len: Some(12),
+        parakit_version: Some(parakit::build_info::PACKAGE_VERSION.to_owned()),
+        cleaner_version: Some(parakit::rules::CLEANER_VERSION),
         detail: Some(Box::new(detail.clone())),
     };
 

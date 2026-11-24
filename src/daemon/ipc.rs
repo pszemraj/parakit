@@ -172,6 +172,12 @@ pub(crate) enum IpcResponse {
     Status {
         phase: String,
         last_transcript_len: Option<usize>,
+        /// Package version of the process serving this response; absent on older daemons.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        parakit_version: Option<String>,
+        /// Cleaner revision compiled into that daemon process.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cleaner_version: Option<u32>,
         /// Extended runtime detail for `--verbose status`. `None` covers the
         /// startup window before
         /// [`SharedState::set_info`] has run. Boxed because `StatusDetail` is
@@ -531,6 +537,8 @@ impl SharedState {
         IpcResponse::Status {
             phase: inner.phase.clone(),
             last_transcript_len: inner.history.front().map(|entry| entry.text.len()),
+            parakit_version: Some(parakit::build_info::PACKAGE_VERSION.to_owned()),
+            cleaner_version: Some(parakit::rules::CLEANER_VERSION),
             detail,
         }
     }

@@ -66,16 +66,18 @@ pub(crate) fn run_client(command: IpcCommand, quiet: bool, verbose: bool) -> Res
         IpcResponse::Status {
             phase,
             last_transcript_len,
+            parakit_version,
+            cleaner_version,
             detail,
         } => {
             if !quiet {
-                // These two lines must stay byte-identical to the pre-verbose
-                // output: existing scripts parse them.
+                // Keep phase and transcript summary first for scripts reading those lines.
                 outln!("parakit: {phase}")?;
                 outln!(
                     "last transcript: {}",
                     last_transcript_summary(last_transcript_len, detail.as_deref())
                 )?;
+                print_status_versions(parakit_version.as_deref(), cleaner_version)?;
                 if verbose {
                     print_status_detail(detail.as_deref())?;
                 }
@@ -96,6 +98,32 @@ pub(crate) fn run_client(command: IpcCommand, quiet: bool, verbose: bool) -> Res
         }
         IpcResponse::Err { message } => bail!("{message}"),
     }
+}
+
+/// Print the CLI and responding daemon versions, with upgrade guidance when needed.
+///
+/// # Arguments
+/// * `daemon_version` - Package version supplied by the daemon, if supported.
+/// * `daemon_cleaner` - Cleaner revision supplied by the daemon, if supported.
+///
+/// # Errors
+/// Returns an error when stdout cannot be written.
+fn print_status_versions(daemon_version: Option<&str>, daemon_cleaner: Option<u32>) -> Result<()> {
+    let cli_version = parakit::build_info::PACKAGE_VERSION;
+    let cli_cleaner = parakit::rules::CLEANER_VERSION;
+    outln!("CLI version: {cli_version} (cleaner {cli_cleaner})")?;
+    match daemon_version {
+        Some(version) => {
+            let cleaner =
+                daemon_cleaner.map_or_else(|| "unreported".to_owned(), |value| value.to_string());
+            outln!("daemon version: {version} (cleaner {cleaner})")?;
+            if version != cli_version || daemon_cleaner.is_some_and(|value| value != cli_cleaner) {
+                outln!("parakit: CLI and daemon versions differ; run `parakit stop`, then start again with your usual options")?;
+            }
+        }
+        None => outln!("daemon version: unreported (restart the daemon after upgrading)")?,
+    }
+    Ok(())
 }
 
 /// List remembered transcripts, print one in full, or browse them in a terminal.

@@ -96,6 +96,8 @@ Stop it with [`parakit stop`](#daemon-control).
 
 When the daemon is running, these commands talk to it through local per-user IPC. Unix-like systems use a Unix socket under the parakit runtime directory; Windows uses a named pipe. Restart the daemon after upgrading parakit in place (`parakit stop`, then start it again).
 
+`parakit --version` reports the CLI binary launched from your shell. Installing a new binary leaves an existing daemon running its original code. `parakit status` shows the CLI and daemon package versions and cleaner revisions separately, with a restart hint when they differ. Older daemons that do not report their versions appear as `unreported`.
+
 ```text
 parakit status
 parakit stop
@@ -122,12 +124,14 @@ Explicit copying uses the existing platform clipboard backend. On GNOME Wayland,
 
 `test-paste` runs the configured insertion path, including content policy and target checks, without recording microphone audio. The native IBus route submits a commit; the legacy clipboard route stages text and sends its paste chord.
 
-Plain `parakit status` prints the current phase and last transcript size:
+Plain `parakit status` prints the current phase, last transcript size, and CLI/daemon versions:
 
 ```text
 $ parakit status
 parakit: idle
 last transcript: 42 bytes
+CLI version: 0.5.4 (cleaner 48)
+daemon version: 0.5.4 (cleaner 48)
 ```
 
 Use `--verbose` to inspect the daemon's process, uptime, dictation count, microphone, model and device settings, paste mode, sounds, cleaning, logging, and history capacity:

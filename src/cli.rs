@@ -20,7 +20,8 @@ use crate::daemon::inject::PasteMode;
 #[derive(Parser, Debug)]
 #[command(
     name = "parakit",
-    version,
+    version = concat!(env!("CARGO_PKG_VERSION"), " (CLI binary)"),
+    long_version = concat!(env!("CARGO_PKG_VERSION"), " (CLI binary)\nRun `parakit status` to compare with the running daemon."),
     about = "Push-to-talk dictation daemon backed by CrispASR.",
     long_about = "Local push-to-talk dictation. Hold the hotkey to record, then release to insert the transcript.\n\nRun `parakit` to start. The default model downloads automatically on first use. Run `parakit doctor` if setup is blocked, and `parakit stop` to stop a running instance. Use --verbose for diagnostics or --quiet for background use."
 )]
