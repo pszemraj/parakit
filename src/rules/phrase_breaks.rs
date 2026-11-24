@@ -6,7 +6,6 @@ use super::passes::{apply_replacements, protected_token_case};
 const SENTENCE_WORDS: &[&str] = &[
     "an", "your", "our", "their", "its", "his", "and", "or", "but",
 ];
-const COMMA_WORDS: &[&str] = &["an", "our", "their", "its", "his"];
 
 /// Merge a period or question mark after an eligible function word.
 ///
@@ -26,13 +25,19 @@ pub(super) fn merge_sentence_breaks(input: &str) -> TransformResult<'_> {
     let mut edits = Vec::new();
     for captures in re.captures_iter(input) {
         let word = captures.name("word").unwrap();
-        if !SENTENCE_WORDS.contains(&word.as_str().to_ascii_lowercase().as_str())
-            || attached_word(input, word.start())
-        {
+        if attached_word(input, word.start()) || word.as_str().len() == 1 {
             continue;
         }
         let mark = captures.name("mark").unwrap();
         let end = captures.get(0).unwrap().end();
+        let tail = &input[end..];
+        let direct = SENTENCE_WORDS.contains(&word.as_str().to_ascii_lowercase().as_str())
+            && (coordinator(word.as_str()) || nominal_start(tail));
+        if !(direct || (mark.as_str() == "." && continues_phrase(word.as_str(), tail)))
+            || coordinator_restart(word.as_str(), first_word(tail))
+        {
+            continue;
+        }
         let Some((word_end, next)) = continuation(input, end) else {
             continue;
         };
@@ -65,15 +70,17 @@ pub(super) fn remove_function_word_commas(input: &str) -> TransformResult<'_> {
         .filter_map(|captures| {
             let word = captures.name("word").unwrap();
             let mark = captures.name("mark").unwrap();
-            (COMMA_WORDS.contains(&word.as_str().to_ascii_lowercase().as_str())
-                && !attached_word(input, word.start()))
-            .then(|| (mark.start(), mark.end(), String::new()))
+            let tail = &input[captures.get(0).unwrap().end()..];
+            (continues_phrase(word.as_str(), tail)
+                && !attached_word(input, word.start())
+                && word.as_str().len() != 1)
+                .then(|| (mark.start(), mark.end(), String::new()))
         })
         .collect();
     apply_replacements(input, edits)
 }
 
-/// Remove filled pauses, retaining boundaries supplied by preceding sentences.
+/// Remove filled pauses while retaining sentence boundaries and likely clause restarts.
 ///
 /// # Returns
 /// Text without fillers or their orphaned punctuation, and the removal count.
@@ -94,7 +101,7 @@ pub(super) fn remove_filled_pauses(input: &str) -> TransformResult<'_> {
         let whole = captures.get(0).unwrap();
         let mut end = whole.end();
         let mut replacement = format!("{} ", captures.get(1).map_or("", |m| m.as_str()));
-        if captures.name("terminal").is_some() {
+        if let Some(terminal) = captures.name("terminal") {
             let tail = &input[end..];
             let gap = tail.len() - tail.trim_start_matches([' ', '\t']).len();
             let next_start = end + gap;
@@ -102,16 +109,181 @@ pub(super) fn remove_filled_pauses(input: &str) -> TransformResult<'_> {
                 .peek()
                 .is_none_or(|next| next.get(0).unwrap().start() > next_start)
             {
-                if let Some((word_end, next)) = continuation(input, next_start) {
+                let previous = input[..whole.start()]
+                    .split_whitespace()
+                    .rev()
+                    .map(first_word)
+                    .find(|word| !word.is_empty() && !re.is_match(word))
+                    .unwrap_or("");
+                let tail = &input[next_start..];
+                let restart = (starts_clause(tail) && !clause_link(previous))
+                    || coordinator_restart(previous, first_word(tail));
+                if let Some((word_end, next)) = continuation(input, next_start).filter(|_| !restart)
+                {
                     replacement.push_str(&input[end..next_start]);
                     replacement.push_str(&next);
                     end = word_end;
+                } else {
+                    replacement = format!("{} ", terminal.as_str());
                 }
             }
         }
         edits.push((whole.start(), end, replacement));
     }
     apply_replacements(input, edits)
+}
+
+fn first_word(text: &str) -> &str {
+    text.split(|c: char| !c.is_alphabetic())
+        .next()
+        .unwrap_or("")
+}
+
+fn coordinator(word: &str) -> bool {
+    matches!(word.to_ascii_lowercase().as_str(), "and" | "or" | "but")
+}
+
+fn coordinator_restart(previous: &str, next: &str) -> bool {
+    coordinator(previous) && coordinator(next) && !previous.eq_ignore_ascii_case(next)
+}
+
+fn clause_link(word: &str) -> bool {
+    coordinator(word)
+        || matches!(
+            word.to_ascii_lowercase().as_str(),
+            "if" | "when"
+                | "while"
+                | "because"
+                | "although"
+                | "unless"
+                | "whether"
+                | "what"
+                | "which"
+                | "who"
+                | "where"
+                | "how"
+                | "why"
+        )
+}
+
+/// Recognize subject-led clauses and auxiliary questions, without inferring verb vocabulary.
+fn starts_clause(text: &str) -> bool {
+    let mut words = text.split_whitespace();
+    let first_token = words.next().unwrap_or("");
+    let first = first_word(first_token).to_ascii_lowercase();
+    let second = first_word(words.next().unwrap_or("")).to_ascii_lowercase();
+    let subject = |word: &str| matches!(word, "i" | "we" | "you" | "he" | "she" | "they");
+    let auxiliary = |word: &str| {
+        matches!(
+            word,
+            "am" | "is"
+                | "are"
+                | "was"
+                | "were"
+                | "have"
+                | "has"
+                | "had"
+                | "do"
+                | "does"
+                | "did"
+                | "can"
+                | "could"
+                | "will"
+                | "would"
+                | "shall"
+                | "should"
+                | "may"
+                | "might"
+                | "must"
+        )
+    };
+    subject(&first)
+        || (matches!(
+            first.as_str(),
+            "it" | "this" | "that" | "these" | "those" | "there"
+        ) && (auxiliary(&second) || first_token.contains(['\'', '’'])))
+        || (auxiliary(&first)
+            && (subject(&second) || matches!(second.as_str(), "it" | "this" | "that" | "there")))
+        || matches!(
+            first.as_str(),
+            "if" | "unless" | "although" | "while" | "when"
+        )
+}
+
+/// Bound determiners that expect a following nominal, also used after prepositions.
+fn determiner(word: &str) -> bool {
+    matches!(
+        word.to_ascii_lowercase().as_str(),
+        "a" | "an" | "the" | "my" | "your" | "our" | "their" | "its" | "his"
+    )
+}
+
+/// Prepositions repaired only when an explicit determiner phrase follows.
+fn preposition(word: &str) -> bool {
+    matches!(
+        word.to_ascii_lowercase().as_str(),
+        "to" | "of" | "into" | "from" | "with" | "by"
+    )
+}
+
+/// Exclude clause starts, asides, and nested determiner or partitive restarts.
+fn nominal_start(text: &str) -> bool {
+    let word = first_word(text);
+    let second = first_word(text.split_whitespace().nth(1).unwrap_or(""));
+    let partitive = second.eq_ignore_ascii_case("of")
+        && matches!(
+            word.to_ascii_lowercase().as_str(),
+            "all"
+                | "any"
+                | "both"
+                | "each"
+                | "either"
+                | "few"
+                | "many"
+                | "most"
+                | "much"
+                | "neither"
+                | "none"
+                | "one"
+                | "several"
+                | "some"
+        );
+    !word.is_empty()
+        && !partitive
+        && !starts_clause(text)
+        && !clause_link(word)
+        && !determiner(word)
+        && !preposition(word)
+        && !matches!(
+            word.to_ascii_lowercase().as_str(),
+            "in" | "on"
+                | "at"
+                | "as"
+                | "after"
+                | "before"
+                | "until"
+                | "like"
+                | "then"
+                | "so"
+                | "please"
+                | "this"
+                | "that"
+                | "these"
+                | "those"
+        )
+}
+
+/// Require a bound determiner or a preposition with an explicit determiner complement.
+fn continues_phrase(previous: &str, text: &str) -> bool {
+    if determiner(previous) {
+        return nominal_start(text);
+    }
+    let next = first_word(text);
+    if !preposition(previous) || !determiner(next) || starts_clause(text) {
+        return false;
+    }
+    text.split_once(char::is_whitespace)
+        .is_some_and(|(_, tail)| nominal_start(tail.trim_start_matches([' ', '\t'])))
 }
 
 fn attached_word(input: &str, start: usize) -> bool {
