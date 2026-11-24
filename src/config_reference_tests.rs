@@ -149,6 +149,11 @@ fn uncomment_examples(text: &str) -> String {
 
 /// Flatten parsed TOML into the key paths used by [`accepted_key_paths`].
 fn flatten(value: &toml::Value, path: &str, keys: &mut BTreeSet<String>) {
+    // Replacement words are user-chosen map keys, not fixed schema fields.
+    if path == "replacements" {
+        keys.insert(path.to_owned());
+        return;
+    }
     match value {
         toml::Value::Table(table) => {
             for (name, child) in table {
@@ -274,7 +279,9 @@ fn effective_snapshot(config: &ConfigFile) -> BTreeMap<&'static str, String> {
         config.cleaning.number_threshold,
         &config.cleaning.repetition_exceptions,
         &config.cleaning.merged_disabled_rules(&[]),
-        &config.rules.user,
+        &config
+            .effective_user_rules()
+            .expect("configured replacements must be valid"),
     )
     .expect("a loaded config builds a cleaner");
 
@@ -382,6 +389,7 @@ fn effective_snapshot(config: &ConfigFile) -> BTreeMap<&'static str, String> {
     #[cfg(not(target_os = "linux"))]
     put("hotkey.backend", "ignored".to_owned());
     put("rules.user[]", config.rules.user.len().to_string());
+    put("replacements", format!("{:?}", config.replacements));
     snapshot
 }
 
@@ -398,6 +406,7 @@ fn accepted_keys_are_listed_per_table() {
         "hotkey.backend",
         "rules.user[].name",
         "rules.user[].position",
+        "replacements",
     ] {
         assert!(accepted.contains(key), "{key} missing from {accepted:?}");
     }

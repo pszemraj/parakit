@@ -19,8 +19,9 @@ use anyhow::{Context, Result};
 use parakit::inference::DeviceMode;
 use parakit::model::{ModelPreset, ModelQuantization};
 use parakit::qwen::QwenOptions;
-use parakit::rules::{CleaningProfile, UserRule};
+use parakit::rules::{CleaningProfile, RulePosition, UserRule};
 use serde::Deserialize;
+use std::collections::BTreeMap;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 
@@ -45,6 +46,41 @@ pub(crate) struct ConfigFile {
     pub(crate) hotkey: HotkeyConfig,
     pub(crate) rules: RulesConfig,
     pub(crate) qwen: QwenConfig,
+    /// Case-insensitive whole-word corrections with literal replacement text.
+    pub(crate) replacements: BTreeMap<String, String>,
+}
+
+impl ConfigFile {
+    /// Combine regex rules with literal word corrections in their application order.
+    ///
+    /// # Returns
+    /// User rules followed by word corrections, which run after built-in cleaning.
+    ///
+    /// # Errors
+    /// Returns an error when a replacement key is not one nonempty word.
+    ///
+    /// # Panics
+    /// The fixed word-validation regex is valid.
+    pub(crate) fn effective_user_rules(&self) -> Result<Vec<UserRule>> {
+        let mut rules = self.rules.user.clone();
+        if self.replacements.is_empty() {
+            return Ok(rules);
+        }
+        let word = regex::Regex::new(r"^\w+$").expect("word pattern must compile");
+        for (source, target) in &self.replacements {
+            if !word.is_match(source) {
+                anyhow::bail!("replacements key {source:?} must be one nonempty word");
+            }
+            rules.push(UserRule {
+                name: format!("replace-word:{}", source.to_lowercase()),
+                description: Some(format!("Replace {source:?} with {target:?}")),
+                pattern: format!(r"(?i)\b{}\b", regex::escape(source)),
+                replacement: target.replace('$', "$$"),
+                position: RulePosition::Last,
+            });
+        }
+        Ok(rules)
+    }
 }
 
 /// `[daemon]` section: daemon runtime defaults.
@@ -460,6 +496,11 @@ pub(crate) const TEMPLATE: &str = r#"# parakit config.toml
 # pattern = "(?i)\\bweights and biases\\b"
 # replacement = "wandb"
 # position = "standard"  # "first", "standard" (default), or "last"
+
+# Case-insensitive whole-word corrections. Values are literal and retain their case.
+# Applied in key order after all other cleaning and user rules. No regular expressions needed.
+[replacements]
+# quan = "Qwen"
 "#;
 
 /// Return the resolved config file path.
@@ -640,7 +681,9 @@ pub(crate) fn load_from_path(path: &Path) -> Result<ConfigFile> {
         config.cleaning.number_threshold,
         &config.cleaning.repetition_exceptions,
         &config.cleaning.disabled_rules,
-        &config.rules.user,
+        &config
+            .effective_user_rules()
+            .with_context(|| format!("invalid config in {}", path.display()))?,
     )
     .with_context(|| format!("invalid config in {}", path.display()))?;
     Ok(config)

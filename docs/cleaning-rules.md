@@ -201,9 +201,22 @@ Standard patterns and replacements use the same [Rust regex syntax documented fo
 
 Increment `CLEANER_VERSION` whenever built-in behavior, rule identity, or ordering changes so historical logs continue to identify the cleaner that produced a transcript.
 
+## Word Replacements
+
+For frequently mistranscribed words, add simple corrections to `config.toml`:
+
+```toml
+[replacements]
+quan = "Qwen"
+```
+
+Each entry matches a complete word without regard to case: `quan`, `QUAN`, and `qUaN` all become `Qwen`, while `quandary` stays unchanged. Replacement text is literal and keeps the spelling and capitalization you specify. The [reference](config_reference.toml) documents accepted keys and application order. Like other config changes, test with `parakit rules test`, then restart the daemon to apply them to dictation.
+
+Corrections use the existing user-rule engine and appear in `rules list` and transcription logs as `replace-word:<lowercase source>`. That name also works with `--disable-rule`. Entries run in key order, so a replacement can feed a later entry.
+
 ## User Rules
 
-For personal vocabulary or typing quirks, define rules in `config.toml` instead of editing Rust. User rules run alongside the built-ins and are not filtered by the profile.
+For phrases or more complex matching, define regex rules in `config.toml`. User rules run alongside the built-ins and are not filtered by the profile.
 
 Run `parakit config init` to create a config file with a commented template, then add a `[[rules.user]]` table per rule:
 

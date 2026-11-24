@@ -160,7 +160,7 @@ backend = "auto"
 # Changes are logged by rule name and non-overlapping match count. [Log identity](logging.md#transcription-record-fields).
 
 # [[rules.user]]
-# string (required). Nonblank name without edge whitespace, unique among user and built-in rule names. Case-sensitive.
+# string (required). Nonblank name without edge whitespace, unique among user, built-in and generated word-replacement names. Case-sensitive.
 # name = "weights-and-biases-to-wandb"
 # string (optional). Description displayed by `rules list`, without behavioral effect.
 # Unset: blank.
@@ -176,3 +176,11 @@ backend = "auto"
 # first precedes all built-ins. last follows all built-ins, so no later cleanup repairs its output.
 # standard runs before fix-space-before-punct even when disabled. [Order](cleaning-rules.md#rule-order).
 # position = "standard"
+
+# ---------- Word Replacements ----------
+# Table of source words to literal strings (default empty). Whole-word matching ignores case.
+# Keys contain letters, marks, digits or underscores; empty keys and case-only duplicates fail load.
+# Applied in key order after all other rules, retaining replacement case and literal $ characters.
+# See: [word corrections](cleaning-rules.md#word-replacements).
+[replacements]
+# quan = "Qwen"

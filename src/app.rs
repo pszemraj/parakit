@@ -197,7 +197,7 @@ fn run_rules_command(cli: &Cli, rules_cli: &RulesCli) -> Result<()> {
                 &args
                     .cleaning_overrides
                     .effective_disabled_rules(&config, configured_qwen(&config)),
-                &config.rules.user,
+                &config.effective_user_rules()?,
                 cli.quiet,
             )?;
             Ok(())
@@ -310,7 +310,7 @@ fn run_daemon(cli: &Cli, start: &StartCli) -> Result<()> {
     }
 
     for name in &start.cleaning_overrides.disable_rule {
-        rules::assert_rule_name_exists(name, &config.rules.user)?;
+        rules::assert_rule_name_exists(name, &config.effective_user_rules()?)?;
     }
 
     if !start.simulate_ptt_audio.is_empty() {
@@ -729,7 +729,7 @@ fn build_cli_cleaner(
         &start
             .cleaning_overrides
             .effective_disabled_rules(config, qwen),
-        &config.rules.user,
+        &config.effective_user_rules()?,
     )
 }
 
@@ -747,7 +747,7 @@ fn build_rules_cleaner(args: &RulesArgs, config: &ConfigFile) -> Result<rules::C
         &args
             .cleaning_overrides
             .effective_disabled_rules(config, configured_qwen(config)),
-        &config.rules.user,
+        &config.effective_user_rules()?,
     )
 }
 

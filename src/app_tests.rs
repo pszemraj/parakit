@@ -7,6 +7,76 @@ const GGML_LOG_LEVEL_INFO: i32 = 2;
 const GGML_LOG_LEVEL_ERROR: i32 = 4;
 
 #[test]
+fn word_replacements_reach_rules_and_both_daemon_backends() {
+    let variants: Vec<String> = (0..16)
+        .map(|mask| {
+            "quan"
+                .chars()
+                .enumerate()
+                .map(|(index, ch)| {
+                    if mask & (1 << index) == 0 {
+                        ch
+                    } else {
+                        ch.to_ascii_uppercase()
+                    }
+                })
+                .collect()
+        })
+        .collect();
+    let input = format!("{}; quandary aquan quan_thing cost", variants.join(", "));
+    let expected = format!("{}; quandary aquan quan_thing $5", ["Qwen"; 16].join(", "));
+    for profile in ["safe", "aggressive"] {
+        let path = crate::test_support::write_config_fixture(
+            "parakit-app-test",
+            profile,
+            &format!(
+                "[cleaning]\nprofile = '{profile}'\n[replacements]\nquan = 'Qwen'\ncost = '$5'\n"
+            ),
+        );
+        let config = config::load_from_path(&path).unwrap();
+        let cli = Cli::parse_from(["parakit", "start"]);
+        let Some(Commands::Start(start)) = cli.command else {
+            panic!("expected start")
+        };
+        for qwen in [false, true] {
+            let cleaner = build_cli_cleaner(&start, &config, qwen).unwrap().unwrap();
+            assert_eq!(cleaner.clean_text(&input), expected, "{profile}/{qwen}");
+        }
+        let cleaner = build_rules_cleaner(&RulesArgs::default(), &config).unwrap();
+        let result = cleaner.clean(&input);
+        assert_eq!(result.text, expected);
+        assert!(result
+            .rules_fired
+            .iter()
+            .any(|hit| hit.name == "replace-word:quan" && hit.matches == 16));
+    }
+}
+
+#[test]
+fn word_replacements_keep_exact_output_case_and_obey_cleaning_controls() {
+    let mut config = ConfigFile::default();
+    config.replacements.insert("quan".into(), "qwen".into());
+    let cli = Cli::parse_from(["parakit", "start"]);
+    let Some(Commands::Start(start)) = cli.command else {
+        panic!("expected start")
+    };
+    let cleaner = build_cli_cleaner(&start, &config, false).unwrap().unwrap();
+    assert_eq!(cleaner.clean_text("quan"), "qwen");
+    let identity = cleaner.ruleset_id().to_owned();
+    config.replacements.insert("quan".into(), "Qwen".into());
+    let cleaner = build_cli_cleaner(&start, &config, false).unwrap().unwrap();
+    assert_ne!(cleaner.ruleset_id(), identity);
+    config
+        .cleaning
+        .disabled_rules
+        .push("replace-word:quan".into());
+    let cleaner = build_cli_cleaner(&start, &config, false).unwrap().unwrap();
+    assert_eq!(cleaner.clean_text("quan"), "Quan");
+    config.cleaning.enabled = Some(false);
+    assert!(build_cli_cleaner(&start, &config, false).unwrap().is_none());
+}
+
+#[test]
 fn calendar_years_convert_before_earlier_with_either_model_backend() {
     for profile in [
         rules::CleaningProfile::Safe,
