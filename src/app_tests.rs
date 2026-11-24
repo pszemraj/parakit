@@ -7,6 +7,35 @@ const GGML_LOG_LEVEL_INFO: i32 = 2;
 const GGML_LOG_LEVEL_ERROR: i32 = 4;
 
 #[test]
+fn calendar_years_convert_before_earlier_with_either_model_backend() {
+    for profile in [
+        rules::CleaningProfile::Safe,
+        rules::CleaningProfile::Aggressive,
+    ] {
+        for qwen in [false, true] {
+            for threshold in [4.0, 10.0, 10_000.0] {
+                let mut config = ConfigFile::default();
+                config.cleaning.profile = Some(profile);
+                config.cleaning.number_threshold = Some(threshold);
+                let cli = Cli::parse_from(["parakit", "start"]);
+                let Some(Commands::Start(start)) = cli.command else {
+                    panic!("expected start");
+                };
+                let cleaner = build_cli_cleaner(&start, &config, qwen).unwrap().unwrap();
+                let result = cleaner.clean("In twenty twenty five and earlier");
+                assert_eq!(
+                    result.text, "In 2025 and earlier",
+                    "{profile:?}/{qwen}/{threshold}"
+                );
+                assert_eq!(result.rules_fired.len(), 1);
+                assert_eq!(result.rules_fired[0].name, "calendar-years");
+                assert_eq!(result.rules_fired[0].matches, 1);
+            }
+        }
+    }
+}
+
+#[test]
 fn phrase_repairs_follow_loaded_backend_and_explicit_overrides() {
     for (qwen, setting, flags, expected) in [
         (false, None, vec![], "Use our. Setup and their, defaults"),
