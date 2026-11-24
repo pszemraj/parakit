@@ -12,6 +12,8 @@ number_threshold = 5
 
 Save this [starter config](example.toml) at the path printed by `parakit config path`. The [annotated reference](config_reference.toml) lists the keys, defaults, accepted values, and interactions. Inherited process settings are listed under [environment variables](#environment-variables).
 
+To fix a word parakit often transcribes incorrectly, follow the [word replacement recipe](cleaning-rules.md#word-replacements).
+
 > [!IMPORTANT]
 > The daemon reads this file once at startup and does not watch it. Restart the daemon after every edit.
 
@@ -34,7 +36,7 @@ parakit config show
 parakit config edit
 ```
 
-`config path` prints the resolved path without reading the file. `config init` creates any missing parent directories and writes the fully commented template. `config show`, which is also what bare `parakit config` runs, loads and validates the file and prints the resolved path plus the effective value of every key. `config edit` writes the template first when the file is missing, then opens the file with the [configured editor](#editor).
+`config path` prints the resolved path without reading the file. `config init` creates any missing parent directories and writes a template with commented examples. `config show`, which is also what bare `parakit config` runs, loads and validates the file and prints the resolved path plus the effective value of every key. `config edit` writes the template first when the file is missing, then opens the file with the [configured editor](#editor).
 
 On Linux, `config show` also includes the selected insertion and hotkey backends. See [Linux desktop input](linux-desktop.md#insertion-selection-and-recovery) for transport selection and setup.
 

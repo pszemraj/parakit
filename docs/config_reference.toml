@@ -1,5 +1,5 @@
 # config_reference.toml: every accepted TOML key. Form: loadable, using the built-in defaults.
-# Commented keys show examples for optional or computed values. Start from [example.toml](example.toml).
+# Commented assignments show examples. Start from [example.toml](example.toml).
 # Config location and commands: [configuration](configuration.md#file-location).
 # Read once at startup. Restart the daemon after edits.
 # Precedence: command-line flags > this file > built-in defaults. Flags below belong to `parakit start` unless stated.
@@ -31,7 +31,7 @@
 
 # "q8_0" | "q6_k" (optional). Preset precision, ignored with CLI -m/--model.
 # Unset: hosted q8_0. CLI --quantize conflicts with -m/--model.
-# Warning: q6_k needs an external quantizer and a large first download. [Preparation](running.md#model-presets).
+# Warning: preparing q6_k needs an external quantizer and may download a large F16 model. [Preparation](running.md#model-presets).
 # quantize = "q6_k"
 
 # "auto" | "cpu" | "gpu". Compute policy, reapplied on every model open.
@@ -48,6 +48,7 @@ device = "auto"
 model_idle_minutes = 10
 
 # "auto" | "ibus" | "x11". Linux insertion transport. Any string is accepted and ignored on other systems.
+# Requires: hotkey.backend resolving to ibus when set to ibus (Linux startup/doctor, after CLI overrides).
 # See: [selection](linux-desktop.md#insertion-selection-and-recovery).
 insertion_backend = "auto"
 
@@ -103,7 +104,7 @@ context_max_age_minutes = 10
 # `rules list` and `rules test` always list or apply rules, regardless of cleaning.enabled.
 
 [cleaning]
-# bool. Apply built-in and user rules. false preserves raw model text, useful for multilingual dictation.
+# bool. Apply all cleaning, including regex and word replacements. false preserves raw model text, useful for multilingual dictation.
 enabled = true
 
 # "safe" | "aggressive". Cleanup tier, independent of user rules.
@@ -156,8 +157,7 @@ backend = "auto"
 # Repeat [[rules.user]] for each regex replacement. The default is no user rules.
 # Uncomment the table header with its keys, or they land in the preceding table.
 # Entries follow cleaning.enabled, not cleaning.profile. Within each position they run in file order.
-# Enabled patterns are compiled once and reused across dictations.
-# Changes are logged by rule name and non-overlapping match count. [Log identity](logging.md#transcription-record-fields).
+# Enabled patterns compile once. Hits are logged by rule name and non-overlapping count. [Log identity](logging.md#transcription-record-fields).
 
 # [[rules.user]]
 # string (required). Nonblank name without edge whitespace, unique among user, built-in and generated word-replacement names. Case-sensitive.
@@ -173,16 +173,18 @@ backend = "auto"
 # Warning: missing groups expand to empty. Use ${1}b for group 1 followed by b ($1b names group 1b).
 # replacement = "wandb"
 # "first" | "standard" | "last". Default: "standard". Placement relative to built-ins.
-# first precedes all built-ins. last follows all built-ins, so no later cleanup repairs its output.
+# first precedes all built-ins. last follows all built-ins.
 # standard runs before fix-space-before-punct even when disabled. [Order](cleaning-rules.md#rule-order).
 # position = "standard"
 
 # ---------- Word Replacements ----------
-# Table of words to literal strings or inline tables (default empty). Whole-word matching ignores case by default.
-# Inline tables require replacement (string); case_sensitive (boolean, default false) requires exact case when true.
-# Keys contain letters, marks, digits or underscores; empty keys and case-only duplicates fail load.
-# Applied in key order after all other rules, retaining replacement case and literal $ characters.
-# See: [word corrections](cleaning-rules.md#word-replacements).
+# Table of source words to strings or inline tables. Default: empty. Applies to every model and profile.
+# Source keys are nonempty words (letters, marks, digits or underscores) with distinct lowercase forms.
+# Entries run in sorted key order after all other rules, so later entries can match earlier output.
+# Disable as replace-word:<lowercase source> through cleaning.disabled_rules.
+# See: [matching and preview](cleaning-rules.md#word-replacements).
 [replacements]
+# string. Literal output retaining case and $ characters, empty to delete. Whole-word matching ignores case.
 # quan = "Qwen"
+# inline table. Required replacement (literal string, as above). case_sensitive (bool, default false) matches exact case when true.
 # rust = { replacement = "Rust", case_sensitive = true }

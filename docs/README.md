@@ -15,7 +15,7 @@
 - [configuration.md](configuration.md) - the config file, CLI precedence, and inherited environment variables.
 - [example.toml](example.toml) - a minimal starter config with a comment on each choice.
 - [config_reference.toml](config_reference.toml) - the per-key configuration reference, itself a loadable config that holds every default.
-- [cleaning-rules.md](cleaning-rules.md) - transcript cleanup profiles, built-in passes, and user-defined rules.
+- [cleaning-rules.md](cleaning-rules.md) - word replacements, transcript cleanup profiles, and regex rules.
 - [logging.md](logging.md) - the JSONL transcription and insertion log schema.
 - [troubleshooting.md](troubleshooting.md) - symptom-first fixes for common problems.
 

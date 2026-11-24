@@ -1,8 +1,31 @@
 # Cleaning Rules
 
-parakit applies a typed, deterministic cleanup pipeline after ASR and before text insertion. Built-in passes use the [engines described below](#choosing-an-engine).
+parakit cleans ASR transcripts before inserting them.
 
-Built-in passes are code in `src/rules/`. Personal, non-generalizable rules can be added without editing code via `config.toml`; see [User Rules](#user-rules) below.
+## Word Replacements
+
+Use `parakit config edit` to open `config.toml`. In a single `[replacements]` section, add one line per correction with the word parakit transcribes on the left and the text you want on the right. If the section already exists, add your entries there.
+
+```toml
+[replacements]
+quan = "Qwen"
+rust = { replacement = "Rust", case_sensitive = true }
+```
+
+A plain string matches the whole word regardless of case. `quan` and `QUAN` both become `Qwen`, while `quandary` stays as written. The inline table with `case_sensitive = true` matches `rust` and leaves `RUST` alone. Omit `case_sensitive` or set it to `false` to ignore case. parakit uses the replacement text exactly as you set it.
+
+Save the file, then check the settings and preview the result.
+
+```bash
+parakit config show
+parakit rules test "Try QUAN, quandary, rust and RUST"
+```
+
+With default cleaning settings, the `Clean:` line reads `Try Qwen, quandary, Rust and RUST`. Replacements run after the other cleaning rules, so sentence capitalization can affect an exact case match.
+
+The test command always runs cleaning. For dictation, keep cleaning enabled and [restart the daemon](configuration.md#validation-and-recovery) to apply the edits.
+
+Use `parakit rules list` to find a correction's name, such as `replace-word:quan`, for `--disable-rule` or to recognize it in transcription logs. See the [config reference](config_reference.toml) for accepted values and order, or use [regex rules](#user-rules) for phrases and patterns.
 
 ## Profiles
 
@@ -173,6 +196,8 @@ parakit start \
 
 Set the same names persistently with [`cleaning.disabled_rules`](config_reference.toml). Both rules commands inspect or apply cleaning even when `cleaning.enabled = false`.
 
+Rule previews infer the Qwen phrase-break default from `daemon.model_preset`. If you use a local Qwen file through `daemon.model`, pass `--phrase-breaks true` to preview its automatic repairs.
+
 Stutter handling is grouped by shape. Use `stutter-i` for repeated first-person pronouns, `stutter-safe-words` for whole-word restarts, `contracted-have-restart` for false starts such as `I've I already have`, `repeated-prefix-stutter` for repeated letters or `sh`/`th`/`ch` starts before a matching word, and `stutter-ambiguous-words` for the aggressive-only set.
 
 ## Rule Order
@@ -200,22 +225,6 @@ The five numeric categories use raw `Rule` literals with `RuleKind::Numbers(Numb
 Standard patterns and replacements use the same [Rust regex syntax documented for user rules](config_reference.toml); use the bounded `fancy-regex` path only when advanced matching is required.
 
 Increment `CLEANER_VERSION` whenever built-in behavior, rule identity, or ordering changes so historical logs continue to identify the cleaner that produced a transcript.
-
-## Word Replacements
-
-For frequently mistranscribed words, add simple corrections to `config.toml`:
-
-```toml
-[replacements]
-quan = "Qwen"
-rust = { replacement = "Rust", case_sensitive = true }
-```
-
-Each entry matches a complete word. String values ignore case: `quan`, `QUAN`, and `qUaN` all become `Qwen`, while `quandary` stays unchanged. An inline table with `case_sensitive = true` matches the key's exact capitalization: `rust` becomes `Rust`, while `RUST` stays unchanged. Omitting `case_sensitive` or setting it to `false` ignores case. Matching sees the text after other cleaning rules, including sentence capitalization.
-
-Replacement text is literal and keeps the spelling and capitalization you specify. The [reference](config_reference.toml) documents accepted keys and application order. Like other config changes, test with `parakit rules test`, then restart the daemon to apply them to dictation.
-
-Corrections use the existing user-rule engine and appear in `rules list` and transcription logs as `replace-word:<lowercase source>`. That name also works with `--disable-rule`. Entries run in key order, so a replacement can feed a later entry.
 
 ## User Rules
 

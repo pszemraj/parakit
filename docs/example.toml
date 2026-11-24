@@ -1,5 +1,5 @@
 # example.toml: keep sentence-final periods and raise the number-conversion threshold to five.
-# Every key is optional; an empty file uses the built-in defaults.
+# An empty file uses the built-in defaults.
 # Save it at the path printed by `parakit config path`, check it with `parakit config show`, then restart the daemon, which reads the config once at startup.
 # Other settings and defaults: config_reference.toml.
 
