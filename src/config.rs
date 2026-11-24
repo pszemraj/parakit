@@ -46,8 +46,44 @@ pub(crate) struct ConfigFile {
     pub(crate) hotkey: HotkeyConfig,
     pub(crate) rules: RulesConfig,
     pub(crate) qwen: QwenConfig,
-    /// Case-insensitive whole-word corrections with literal replacement text.
-    pub(crate) replacements: BTreeMap<String, String>,
+    /// Whole-word corrections with literal text and optional case sensitivity.
+    pub(crate) replacements: BTreeMap<String, WordReplacement>,
+}
+
+/// A simple correction or an inline table with explicit matching options.
+#[derive(Debug, Deserialize)]
+#[serde(untagged, deny_unknown_fields)]
+pub(crate) enum WordReplacement {
+    /// Literal replacement text, matched without regard to case.
+    Text(String),
+    /// Literal replacement text with optional case-sensitive matching.
+    Options {
+        /// Literal output text.
+        replacement: String,
+        /// Require the source word's exact capitalization; defaults to false.
+        #[serde(default)]
+        case_sensitive: bool,
+    },
+}
+
+impl WordReplacement {
+    /// # Returns
+    /// Literal output text, preserving its configured capitalization.
+    pub(crate) fn replacement(&self) -> &str {
+        match self {
+            Self::Text(text) => text,
+            Self::Options { replacement, .. } => replacement,
+        }
+    }
+
+    /// # Returns
+    /// Whether matching requires the source word's exact capitalization; defaults to false.
+    pub(crate) fn case_sensitive(&self) -> bool {
+        match self {
+            Self::Text(_) => false,
+            Self::Options { case_sensitive, .. } => *case_sensitive,
+        }
+    }
 }
 
 impl ConfigFile {
@@ -71,11 +107,16 @@ impl ConfigFile {
             if !word.is_match(source) {
                 anyhow::bail!("replacements key {source:?} must be one nonempty word");
             }
+            let flags = if target.case_sensitive() { "" } else { "(?i)" };
+            let replacement = target.replacement();
             rules.push(UserRule {
                 name: format!("replace-word:{}", source.to_lowercase()),
-                description: Some(format!("Replace {source:?} with {target:?}")),
-                pattern: format!(r"(?i)\b{}\b", regex::escape(source)),
-                replacement: target.replace('$', "$$"),
+                description: Some(format!(
+                    "Replace {source:?} with {replacement:?} (case sensitive: {})",
+                    target.case_sensitive()
+                )),
+                pattern: format!(r"{flags}\b{}\b", regex::escape(source)),
+                replacement: replacement.replace('$', "$$"),
                 position: RulePosition::Last,
             });
         }
@@ -497,10 +538,11 @@ pub(crate) const TEMPLATE: &str = r#"# parakit config.toml
 # replacement = "wandb"
 # position = "standard"  # "first", "standard" (default), or "last"
 
-# Case-insensitive whole-word corrections. Values are literal and retain their case.
+# Whole-word corrections, case insensitive by default. Output is literal and retains its case.
 # Applied in key order after all other cleaning and user rules. No regular expressions needed.
 [replacements]
 # quan = "Qwen"
+# rust = { replacement = "Rust", case_sensitive = true }
 "#;
 
 /// Return the resolved config file path.

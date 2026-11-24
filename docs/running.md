@@ -130,8 +130,8 @@ Plain `parakit status` prints the current phase, last transcript size, and CLI/d
 $ parakit status
 parakit: idle
 last transcript: 42 bytes
-CLI version: 0.5.4 (cleaner 50)
-daemon version: 0.5.4 (cleaner 50)
+CLI version: 0.5.4 (cleaner 51)
+daemon version: 0.5.4 (cleaner 51)
 ```
 
 Use `--verbose` to inspect the daemon's process, uptime, dictation count, microphone, model and device settings, paste mode, sounds, cleaning, logging, and history capacity:

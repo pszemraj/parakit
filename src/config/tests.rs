@@ -36,7 +36,17 @@ fn invalid_word_replacements_fail_load_even_when_cleaning_is_disabled() {
         ("empty", "'' = 'Qwen'", "one nonempty word"),
         ("phrase", "'some word' = 'Qwen'", "one nonempty word"),
         ("pattern", "'quan.*' = 'Qwen'", "one nonempty word"),
-        ("type", "quan = 3", "string"),
+        ("type", "quan = 3", "WordReplacement"),
+        (
+            "missing-target",
+            "quan = { case_sensitive = true }",
+            "WordReplacement",
+        ),
+        (
+            "unknown-option",
+            "quan = { replacement = 'Qwen', case_sensitiv = true }",
+            "WordReplacement",
+        ),
         (
             "case-duplicate",
             "quan = 'Qwen'\nQUAN = 'Other'",

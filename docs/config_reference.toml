@@ -178,9 +178,11 @@ backend = "auto"
 # position = "standard"
 
 # ---------- Word Replacements ----------
-# Table of source words to literal strings (default empty). Whole-word matching ignores case.
+# Table of words to literal strings or inline tables (default empty). Whole-word matching ignores case by default.
+# Inline tables require replacement (string); case_sensitive (boolean, default false) requires exact case when true.
 # Keys contain letters, marks, digits or underscores; empty keys and case-only duplicates fail load.
 # Applied in key order after all other rules, retaining replacement case and literal $ characters.
 # See: [word corrections](cleaning-rules.md#word-replacements).
 [replacements]
 # quan = "Qwen"
+# rust = { replacement = "Rust", case_sensitive = true }

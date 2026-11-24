@@ -258,7 +258,11 @@ fn print_config_show(quiet: bool) -> Result<()> {
     }
     outln!("  replacements:")?;
     for (source, target) in &config.replacements {
-        outln!("    {source:?} -> {target:?}")?;
+        outln!(
+            "    {source:?} -> {:?} (case sensitive: {})",
+            target.replacement(),
+            target.case_sensitive()
+        )?;
     }
     Ok(())
 }

@@ -208,9 +208,12 @@ For frequently mistranscribed words, add simple corrections to `config.toml`:
 ```toml
 [replacements]
 quan = "Qwen"
+rust = { replacement = "Rust", case_sensitive = true }
 ```
 
-Each entry matches a complete word without regard to case: `quan`, `QUAN`, and `qUaN` all become `Qwen`, while `quandary` stays unchanged. Replacement text is literal and keeps the spelling and capitalization you specify. The [reference](config_reference.toml) documents accepted keys and application order. Like other config changes, test with `parakit rules test`, then restart the daemon to apply them to dictation.
+Each entry matches a complete word. String values ignore case: `quan`, `QUAN`, and `qUaN` all become `Qwen`, while `quandary` stays unchanged. An inline table with `case_sensitive = true` matches the key's exact capitalization: `rust` becomes `Rust`, while `RUST` stays unchanged. Omitting `case_sensitive` or setting it to `false` ignores case. Matching sees the text after other cleaning rules, including sentence capitalization.
+
+Replacement text is literal and keeps the spelling and capitalization you specify. The [reference](config_reference.toml) documents accepted keys and application order. Like other config changes, test with `parakit rules test`, then restart the daemon to apply them to dictation.
 
 Corrections use the existing user-rule engine and appear in `rules list` and transcription logs as `replace-word:<lowercase source>`. That name also works with `--disable-rule`. Entries run in key order, so a replacement can feed a later entry.
 

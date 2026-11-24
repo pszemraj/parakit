@@ -23,14 +23,20 @@ fn word_replacements_reach_rules_and_both_daemon_backends() {
                 .collect()
         })
         .collect();
-    let input = format!("{}; quandary aquan quan_thing cost", variants.join(", "));
-    let expected = format!("{}; quandary aquan quan_thing $5", ["Qwen"; 16].join(", "));
+    let input = format!(
+        "{}; quandary aquan quan_thing cost rust and RUST or Rust",
+        variants.join(", ")
+    );
+    let expected = format!(
+        "{}; quandary aquan quan_thing $5 Rust and RUST or Rust",
+        ["Qwen"; 16].join(", ")
+    );
     for profile in ["safe", "aggressive"] {
         let path = crate::test_support::write_config_fixture(
             "parakit-app-test",
             profile,
             &format!(
-                "[cleaning]\nprofile = '{profile}'\n[replacements]\nquan = 'Qwen'\ncost = '$5'\n"
+                "[cleaning]\nprofile = '{profile}'\n[replacements]\nquan = 'Qwen'\ncost = {{ replacement = '$5' }}\nrust = {{ replacement = 'Rust', case_sensitive = true }}\n"
             ),
         );
         let config = config::load_from_path(&path).unwrap();
@@ -49,13 +55,19 @@ fn word_replacements_reach_rules_and_both_daemon_backends() {
             .rules_fired
             .iter()
             .any(|hit| hit.name == "replace-word:quan" && hit.matches == 16));
+        assert!(result
+            .rules_fired
+            .iter()
+            .any(|hit| hit.name == "replace-word:rust" && hit.matches == 1));
     }
 }
 
 #[test]
 fn word_replacements_keep_exact_output_case_and_obey_cleaning_controls() {
     let mut config = ConfigFile::default();
-    config.replacements.insert("quan".into(), "qwen".into());
+    config
+        .replacements
+        .insert("quan".into(), config::WordReplacement::Text("qwen".into()));
     let cli = Cli::parse_from(["parakit", "start"]);
     let Some(Commands::Start(start)) = cli.command else {
         panic!("expected start")
@@ -63,8 +75,21 @@ fn word_replacements_keep_exact_output_case_and_obey_cleaning_controls() {
     let cleaner = build_cli_cleaner(&start, &config, false).unwrap().unwrap();
     assert_eq!(cleaner.clean_text("quan"), "qwen");
     let identity = cleaner.ruleset_id().to_owned();
-    config.replacements.insert("quan".into(), "Qwen".into());
+    config
+        .replacements
+        .insert("quan".into(), config::WordReplacement::Text("Qwen".into()));
     let cleaner = build_cli_cleaner(&start, &config, false).unwrap().unwrap();
+    assert_ne!(cleaner.ruleset_id(), identity);
+    let identity = cleaner.ruleset_id().to_owned();
+    config.replacements.insert(
+        "quan".into(),
+        config::WordReplacement::Options {
+            replacement: "Qwen".into(),
+            case_sensitive: true,
+        },
+    );
+    let cleaner = build_cli_cleaner(&start, &config, false).unwrap().unwrap();
+    assert_eq!(cleaner.clean_text("Try quan and QUAN"), "Try Qwen and QUAN");
     assert_ne!(cleaner.ruleset_id(), identity);
     config
         .cleaning
