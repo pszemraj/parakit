@@ -315,7 +315,11 @@ Run it again with `--profile aggressive` when changing an aggressive-only pass. 
 
 The audit removes one terminal period by default, matching daemon behavior. Add `--keep-trailing-period` when comparing prose-oriented output separately, and use `--number-threshold VALUE` to replay a non-default number-conversion threshold.
 
-The audit applies built-in rules only. It does not load `config.toml` or `[[rules.user]]`; pass profile, threshold, trailing-period, and disabled-rule choices explicitly. Use `parakit rules test` to validate the currently configured user rules.
+Phrase repair defaults to `--phrase-breaks false`. Pass `--phrase-breaks true` for Qwen logs. The switch applies to the whole input, so replay separate model subsets when comparing the daemon's model-dependent defaults.
+
+The audit applies built-in rules only and does not load `config.toml`, including `[[rules.user]]` and `[replacements]`. Pass profile, phrase-repair, threshold, trailing-period, and disabled-rule choices explicitly. Use `parakit rules test` to validate configured personal replacements.
+
+The default `--max-examples 40` limits retained examples, not aggregate counts. Raise it to retain every changed row for review.
 
 Number-rule invariants and personal vocabulary handling are in [cleaning rules](../cleaning-rules.md#numbers). Cover both preservation and nearby exact counts in the existing regression matrix.
 
